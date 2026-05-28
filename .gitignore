@@ -1,0 +1,70 @@
+# Environment / secrets
+.env
+.env.*
+!.env.example
+docker-compose.yml
+!docker-compose.example.yml
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# Databases / runtime data
+*.db
+*.sqlite
+*.sqlite3
+backend/*.db
+backend/*.sqlite
+backend/*.sqlite3
+backups/
+
+# Python
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+**/.pytest_cache/
+.ruff_cache/
+**/.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+.venv/
+.venv*/
+venv/
+
+# Node / frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
+
+# Local agent/tooling state
+.agents/
+.codex/
+.learnings/
+
+# Local/private migration references
+references/
+
+# Local/private project notes
+info.txt

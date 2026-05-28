@@ -1,0 +1,114 @@
+from fastapi import HTTPException
+from sqlalchemy import delete, func, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.rule import Rule
+from app.models.rule_category import RuleCategory
+from app.schemas.rule_category import (
+    RuleCategoryCreate,
+    RuleCategoryReorder,
+    RuleCategoryUpdate,
+)
+
+
+def _normalize_name(name: str) -> str:
+    value = str(name or "").strip()
+    if not value:
+        raise HTTPException(status_code=400, detail="Category name is required")
+    return value
+
+
+async def list_rule_categories(db: AsyncSession) -> list[dict]:
+    result = await db.execute(
+        select(
+            RuleCategory,
+            func.count(Rule.id).label("rule_count"),
+        )
+        .outerjoin(Rule, Rule.category == RuleCategory.name)
+        .group_by(RuleCategory.id)
+        .order_by(RuleCategory.sort_order.asc(), RuleCategory.id.asc())
+    )
+    return [
+        {
+            "id": category.id,
+            "name": category.name,
+            "sort_order": category.sort_order,
+            "rule_count": int(rule_count or 0),
+        }
+        for category, rule_count in result.all()
+    ]
+
+
+async def ensure_rule_category(db: AsyncSession, name: str) -> RuleCategory:
+    category_name = _normalize_name(name)
+    result = await db.execute(select(RuleCategory).where(RuleCategory.name == category_name))
+    item = result.scalar_one_or_none()
+    if item:
+        return item
+    max_order = await db.scalar(select(func.max(RuleCategory.sort_order)))
+    item = RuleCategory(name=category_name, sort_order=int(max_order or 0) + 10)
+    db.add(item)
+    await db.commit()
+    await db.refresh(item)
+    return item
+
+
+async def create_rule_category(db: AsyncSession, payload: RuleCategoryCreate) -> RuleCategory:
+    name = _normalize_name(payload.name)
+    existing = await db.scalar(select(RuleCategory.id).where(RuleCategory.name == name))
+    if existing:
+        raise HTTPException(status_code=400, detail="Category already exists")
+    item = RuleCategory(name=name, sort_order=payload.sort_order)
+    db.add(item)
+    await db.commit()
+    await db.refresh(item)
+    return item
+
+
+async def get_rule_category(db: AsyncSession, category_id: int) -> RuleCategory | None:
+    return await db.get(RuleCategory, category_id)
+
+
+async def update_rule_category(
+    db: AsyncSession, item: RuleCategory, payload: RuleCategoryUpdate
+) -> RuleCategory:
+    data = payload.model_dump(exclude_unset=True)
+    old_name = item.name
+    if "name" in data and data["name"] is not None:
+        new_name = _normalize_name(data["name"])
+        existing = await db.scalar(
+            select(RuleCategory.id).where(
+                RuleCategory.name == new_name,
+                RuleCategory.id != item.id,
+            )
+        )
+        if existing:
+            raise HTTPException(status_code=400, detail="Category already exists")
+        item.name = new_name
+        await db.execute(update(Rule).where(Rule.category == old_name).values(category=new_name))
+    if "sort_order" in data and data["sort_order"] is not None:
+        item.sort_order = int(data["sort_order"])
+    db.add(item)
+    await db.commit()
+    await db.refresh(item)
+    return item
+
+
+async def delete_rule_category(db: AsyncSession, item: RuleCategory) -> None:
+    await db.execute(delete(Rule).where(Rule.category == item.name))
+    await db.delete(item)
+    await db.commit()
+
+
+async def reorder_rule_categories(
+    db: AsyncSession, payload: RuleCategoryReorder
+) -> list[dict]:
+    ids = [entry.id for entry in payload.items]
+    result = await db.execute(select(RuleCategory).where(RuleCategory.id.in_(ids)))
+    mapping = {item.id: item for item in result.scalars().all()}
+    for entry in payload.items:
+        if entry.id in mapping:
+            mapping[entry.id].sort_order = entry.sort_order
+            db.add(mapping[entry.id])
+    await db.commit()
+    return await list_rule_categories(db)

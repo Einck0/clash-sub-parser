@@ -8,7 +8,7 @@ Runtime data is stored in the database. Private migration material, local backup
 
 ## Demo
 
-This repository includes a static GitHub Pages demo under `demo/`. After GitHub Pages is enabled with the "GitHub Actions" source, the demo will be available at:
+This repository includes a GitHub Pages demo that builds the real Vue frontend in mock-data mode. After GitHub Pages is enabled with the "GitHub Actions" source, the demo will be available at:
 
 ```text
 https://<your-github-username>.github.io/clash-sub-parser/

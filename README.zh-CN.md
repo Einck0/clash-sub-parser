@@ -8,7 +8,7 @@ Clash Subscription Parser 是一个单容器 Web 应用，用于可视化管理 
 
 ## Demo
 
-仓库内置了一个位于 `demo/` 的静态 GitHub Pages Demo。启用 GitHub Pages 并选择 "GitHub Actions" 作为发布来源后，Demo 地址通常是：
+仓库内置 GitHub Pages Demo，会以 mock 数据模式构建真实 Vue 前端。启用 GitHub Pages 并选择 "GitHub Actions" 作为发布来源后，Demo 地址通常是：
 
 ```text
 https://<your-github-username>.github.io/clash-sub-parser/

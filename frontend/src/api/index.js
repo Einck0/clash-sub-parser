@@ -1,6 +1,8 @@
 import { authHeaders } from '../auth'
+import { mockFetchExport, mockRequest } from './mock'
 
 const API_BASE = '/api'
+const DEMO_MODE = import.meta.env.VITE_DEMO_MODE === 'true'
 
 async function parseResponse(response) {
   const contentType = response.headers.get('content-type') || ''
@@ -20,6 +22,8 @@ function buildErrorMessage(data, fallback) {
 }
 
 async function request(method, url, data) {
+  if (DEMO_MODE) return mockRequest(method, url, data)
+
   const headers = { 'Content-Type': 'application/json', ...authHeaders() }
   if (!['GET', 'HEAD', 'OPTIONS'].includes(method.toUpperCase())) {
     headers['X-Clash-CSRF'] = '1'
@@ -108,10 +112,13 @@ export const checkAuthToken = (token) => api.post('/settings/auth/check', { toke
 export const checkAuthSession = () => api.post('/settings/auth/check')
 export const loginAuthToken = (token) => api.post('/settings/auth/login', { token })
 export const logoutAuthToken = () => api.post('/settings/auth/logout')
-export const exportAppConfig = (includeSubscriptions = true) => fetch(`/api/settings/export?include_subscriptions=${includeSubscriptions ? 'true' : 'false'}`, {
-  headers: { ...authHeaders() },
-  credentials: 'same-origin',
-})
+export const exportAppConfig = (includeSubscriptions = true) => {
+  if (DEMO_MODE) return mockFetchExport(includeSubscriptions)
+  return fetch(`/api/settings/export?include_subscriptions=${includeSubscriptions ? 'true' : 'false'}`, {
+    headers: { ...authHeaders() },
+    credentials: 'same-origin',
+  })
+}
 export const resetAppConfig = () => api.post('/settings/reset')
 export const importAppConfig = (data) => api.post('/settings/import', data)
 

@@ -70,3 +70,29 @@ git ls-files docker-compose.yml info.txt backups references .learnings .pytest_c
 - 节点组高级参数可视化。
 - DNS 字段校验与 Raw YAML / 可视化模式差异提示。
 - Python 依赖锁定或版本 pinning，提升可复现构建能力。
+
+## 2026-05-29 客户端下载功能
+
+- 在设置页新增“客户端下载”卡片：支持一键从 GitHub latest release 下载 Clash Verge Rev Windows x64、Clash Meta for Android arm64，并支持自定义 URL 下载。
+- 后端新增 `/api/downloads`：列出已下载文件；`/api/downloads/preset`：按预设拉取 GitHub 最新 release asset；`/api/downloads/custom`：下载自定义 URL；`/api/downloads/files/{filename}`：提供本地文件下载。
+- 下载目录默认 `/data/downloads`，使用现有 Docker volume `backend-data` 持久化；默认单文件上限 300MB、超时 300s。
+- 下载 URL 复用现有 `validate_fetch_url` SSRF 防护，默认不允许私网/localhost 目标。
+- 已验证：`python -m compileall backend/app`、`npm run build`、`PYTHONPATH=backend pytest -q`、Docker compose rebuild/up。
+
+### 2026-05-29 下载失败修复
+
+- 原因：下载功能只在订阅拉取中使用了运行时“订阅拉取代理”，新增的 GitHub latest API / asset 下载没有读取该代理设置；容器内直连 GitHub 在当前网络环境下会超时或 502。
+- 修复：下载服务复用 `security_settings.fetch_proxy_enabled/fetch_proxy_url`；`docker-compose.yml` 增加 `host.docker.internal:host-gateway`，当前运行时代理设为 `http://host.docker.internal:7890`。
+- 验证：容器内可解析并连接 `host.docker.internal:7890`；`download_preset('clash-meta-android-arm64')` 成功下载 `cmfa-2.11.28-meta-arm64-v8a-release.apk`。
+
+### 2026-05-29 下载缓存与单文件控制
+
+- 预设下载使用 `cache_prefix` 标记（如 `clash-meta-android-arm64-`），下载新版时自动删除同前缀旧文件，每个预设只保留一份。
+- 文件存放在容器内 `/data/downloads`，对应 docker volume `backend-data`，重启不丢失。
+- 设置页 `onMounted` 自动加载已有缓存列表，无需手动刷新。
+
+### 2026-05-29 客户端刷新语义调整
+
+- 设置页打开时只读取本地 `/data/downloads` 缓存列表，不请求 GitHub、不下载。
+- “重新读取本地缓存”仅刷新本地文件列表。
+- “刷新最新版客户端”才会依次拉取 Clash Verge Rev Windows x64 与 Clash Meta for Android arm64 的 GitHub latest release 并下载覆盖缓存。

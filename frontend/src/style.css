@@ -2026,6 +2026,37 @@ button.danger {
   grid-column: 1 / -1;
 }
 
+.download-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.download-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid rgba(219, 229, 239, 0.86);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.62);
+  padding: 10px 12px;
+}
+
+.download-row strong,
+.download-row small {
+  display: block;
+}
+
+.download-row strong {
+  overflow-wrap: anywhere;
+}
+
+.download-row small {
+  margin-top: 3px;
+  color: var(--ink-soft);
+}
+
 .settings-toggle-list {
   display: grid;
   gap: 10px;

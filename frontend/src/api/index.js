@@ -122,6 +122,11 @@ export const exportAppConfig = (includeSubscriptions = true) => {
 export const resetAppConfig = () => api.post('/settings/reset')
 export const importAppConfig = (data) => api.post('/settings/import', data)
 
+// Downloads
+export const getDownloads = () => api.get('/downloads')
+export const downloadPresetAsset = (presetId) => api.post('/downloads/preset', { preset_id: presetId })
+export const downloadCustomAsset = (url) => api.post('/downloads/custom', { url })
+
 // Generate
 export const getGenerateSettings = () => api.get('/generate/settings')
 export const updateGenerateSettings = (data) => api.patch('/generate/settings', data)

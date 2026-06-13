@@ -13,7 +13,7 @@ class Subscription(Base):
     name: Mapped[str] = mapped_column(String(120), unique=True, nullable=False)
     url: Mapped[str] = mapped_column(Text, nullable=False)
     update_interval: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    is_primary: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
     node_prefix: Mapped[str | None] = mapped_column(String(120), nullable=True)
     filter_regex: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     include_node_names: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)

@@ -51,7 +51,7 @@ async def _bootstrap_schema(conn) -> None:
         if "add_fallback" not in columns:
             await conn.execute(
                 text(
-                    "ALTER TABLE node_groups ADD COLUMN add_fallback BOOLEAN NOT NULL DEFAULT 0"
+                    "ALTER TABLE node_groups ADD COLUMN add_fallback BOOLEAN NOT NULL DEFAULT 1"
                 )
             )
 

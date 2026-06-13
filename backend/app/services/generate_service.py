@@ -1,4 +1,5 @@
 import json
+import re
 
 import yaml
 from sqlalchemy import select
@@ -181,8 +182,6 @@ async def _collect_node_groups(db: AsyncSession, all_nodes: list[dict]) -> list[
 
         for regex_rule in group.regex_rules or []:
             try:
-                import re
-
                 pattern = re.compile(regex_rule)
             except Exception:
                 continue
@@ -194,7 +193,7 @@ async def _collect_node_groups(db: AsyncSession, all_nodes: list[dict]) -> list[
         trail.remove(group_id)
         return merged
 
-    groups = []
+    result_groups = []
     for group in mapping.values():
         proxies = _with_fallback(_dedup_names(resolve_group_nodes(group.id, set())), group.add_fallback)
 
@@ -213,8 +212,8 @@ async def _collect_node_groups(db: AsyncSession, all_nodes: list[dict]) -> list[
             payload["tolerance"] = int(
                 (group.url_test_config or {}).get("tolerance", 50)
             )
-        groups.append(payload)
-    return groups
+        result_groups.append(payload)
+    return result_groups
 
 
 async def _collect_rules(db: AsyncSession) -> list[str]:

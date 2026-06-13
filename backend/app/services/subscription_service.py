@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 import re
 from urllib.parse import urljoin
@@ -80,7 +80,7 @@ async def create_manual_node_subscription(
         source_nodes=[],
         manual_nodes=selected_nodes,
         raw_nodes=deduplicate_nodes(prefixed_nodes),
-        last_fetched_at=datetime.utcnow(),
+        last_fetched_at=datetime.now(timezone.utc),
         last_fetch_error=None,
         fetch_failed_count=0,
         fetch_comments=[] if payload.is_primary else [],
@@ -168,7 +168,7 @@ async def fetch_subscription_nodes(
         )
 
         item.raw_nodes = deduplicate_nodes(prefixed_nodes)
-        item.last_fetched_at = datetime.utcnow()
+        item.last_fetched_at = datetime.now(timezone.utc)
         item.last_fetch_error = None
         item.fetch_failed_count = 0
         item.fetch_comments = comments if item.is_primary else []
@@ -366,7 +366,7 @@ async def _clear_primary(db: AsyncSession) -> None:
 async def fetch_due_subscriptions(db: AsyncSession) -> int:
     result = await db.execute(select(Subscription))
     all_subs = list(result.scalars().all())
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     fetched = 0
 
     for item in all_subs:

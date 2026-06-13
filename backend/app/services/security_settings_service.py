@@ -1,4 +1,5 @@
 import hashlib
+import secrets
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,7 +17,8 @@ def hash_token(token: str) -> str:
 def token_matches(raw_token: str, token_hash: str) -> bool:
     if not raw_token or not token_hash:
         return False
-    return hashlib.sha256(raw_token.encode("utf-8")).hexdigest() == token_hash
+    computed = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+    return secrets.compare_digest(computed, token_hash)
 
 
 async def get_security_settings(db: AsyncSession) -> SecuritySettings:

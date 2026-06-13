@@ -6,11 +6,19 @@ from app.services.subscription_service import fetch_due_subscriptions
 
 scheduler = AsyncIOScheduler()
 settings = get_settings()
+_running = False
 
 
 async def _poll_subscriptions() -> None:
-    async with AsyncSessionLocal() as session:
-        await fetch_due_subscriptions(session)
+    global _running
+    if _running:
+        return
+    _running = True
+    try:
+        async with AsyncSessionLocal() as session:
+            await fetch_due_subscriptions(session)
+    finally:
+        _running = False
 
 
 def start_scheduler() -> None:

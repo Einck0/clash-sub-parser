@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db, init_db
 from app.database import AsyncSessionLocal
-from app.routers import dns, generate, node_groups, rule_categories, rules, settings as settings_router, subscriptions
+from app.routers import dns, downloads, generate, node_groups, rule_categories, rules, settings as settings_router, subscriptions
 from app.services.generate_config_service import generate_config_to_switches, get_generate_config
 from app.services.generate_service import generate_script, generate_yaml, get_primary_subscription_headers
 from app.services.scheduler import shutdown_scheduler, start_scheduler
@@ -48,6 +48,10 @@ app.add_middleware(
 @app.middleware("http")
 async def token_auth_middleware(request, call_next):
     if is_public_path(request.url.path):
+        return await call_next(request)
+
+    needs_auth = is_api_path(request.url.path) or is_export_path(request.url.path)
+    if not needs_auth:
         return await call_next(request)
 
     async with AsyncSessionLocal() as db:
@@ -88,6 +92,7 @@ app.include_router(rule_categories.router, prefix=settings.api_prefix)
 app.include_router(rules.router, prefix=settings.api_prefix)
 app.include_router(dns.router, prefix=settings.api_prefix)
 app.include_router(generate.router, prefix=settings.api_prefix)
+app.include_router(downloads.router, prefix=settings.api_prefix)
 app.include_router(settings_router.router, prefix=settings.api_prefix)
 
 
@@ -103,6 +108,8 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+# NOTE: /yaml and /script are protected via token_auth_middleware → is_export_path.
+# They must stay in EXPORT_PATHS set in app/utils/auth.py to remain protected.
 @app.get("/yaml")
 async def root_yaml(db: AsyncSession = Depends(get_db)) -> PlainTextResponse:
     config = await get_generate_config(db)

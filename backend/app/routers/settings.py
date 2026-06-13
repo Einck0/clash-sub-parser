@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, UploadFile
@@ -114,7 +114,7 @@ async def export_config_endpoint(
 ) -> JSONResponse:
     data: dict[str, object] = {
         "version": 1,
-        "exported_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "exported_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
         "include_subscriptions": include_subscriptions,
         "tables": {},
     }

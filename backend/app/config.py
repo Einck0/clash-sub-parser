@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:////data/clash_sub_parser.db"
     request_timeout_seconds: int = 30
     request_max_bytes: int = 5 * 1024 * 1024
+    download_dir: str = "/data/downloads"
+    download_timeout_seconds: int = 300
+    download_max_bytes: int = 300 * 1024 * 1024
     request_user_agent: str = "ClashforWindows/0.20"
     request_trust_env: bool = False
     allow_private_fetch_urls: bool = False
@@ -23,9 +26,9 @@ class Settings(BaseSettings):
     auth_enabled: bool = False
     auth_token: str = ""
     auth_cookie_secure: bool = False
-    cors_allow_origins: list[str] = []
-    cors_allow_methods: list[str] = ["*"]
-    cors_allow_headers: list[str] = ["*"]
+    cors_allow_origins: list[str] = []  # empty = same-origin only; set CLASH_CORS_ALLOW_ORIGINS for cross-origin
+    cors_allow_methods: list[str] = ["*"]  # tighten to ["GET", "POST", "PATCH", "DELETE"] in production
+    cors_allow_headers: list[str] = ["*"]  # tighten to specific headers in production
 
     model_config = SettingsConfigDict(
         env_file=".env",

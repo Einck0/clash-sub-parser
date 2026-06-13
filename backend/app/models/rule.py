@@ -9,7 +9,7 @@ class Rule(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     name: Mapped[str] = mapped_column(String(160), default="", nullable=False)
-    category: Mapped[str] = mapped_column(String(80), default="default", nullable=False)
+    category: Mapped[str] = mapped_column(String(80), default="default", nullable=False, index=True)
     type: Mapped[str] = mapped_column(String(40), nullable=False)
     value: Mapped[str] = mapped_column(String(512), default="", nullable=False)
     proxy: Mapped[str] = mapped_column(String(160), nullable=False)

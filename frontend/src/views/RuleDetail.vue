@@ -20,7 +20,7 @@
       <div style="display:grid;grid-template-columns: 140px 1fr;gap:10px;align-items:center">
         <label>分类</label><input v-model="rule.category" />
         <label>名称</label><input v-model="rule.name" placeholder="可选" />
-        <label>类型</label><input v-model="rule.type" list="rule-type-options" />
+        <label>类型</label><select v-model="rule.type"><option v-for="type in ruleTypes" :key="type" :value="type">{{ type }}</option></select>
         <label>规则值</label><input v-model="rule.value" :disabled="normalizeRuleType(rule.type)==='MATCH'" />
         <label>目标</label>
         <select v-model="rule.proxy">
@@ -29,9 +29,7 @@
         </select>
         <label>额外参数</label><input v-model="rule.optionsText" placeholder="逗号分隔" />
       </div>
-      <datalist id="rule-type-options">
-        <option v-for="type in ruleTypes" :key="type" :value="type" />
-      </datalist>
+
     </div>
   </section>
 </template>

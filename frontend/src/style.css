@@ -21,47 +21,184 @@
   --radius-md: 14px;
 }
 
-/* Dark mode */
+/* Dark mode — all driven by [data-theme="dark"] for manual toggle */
 [data-theme="dark"] {
   --bg-0: #0f172a;
   --bg-1: #1e293b;
-  --surface: rgba(30, 41, 59, 0.95);
+  --surface: rgba(30, 41, 59, 0.92);
   --surface-2: rgba(30, 41, 59, 0.86);
   --surface-3: rgba(30, 41, 59, 0.72);
   --border: #334155;
   --border-strong: #475569;
   --ink: #f1f5f9;
   --ink-soft: #94a3b8;
-  --brand: #818cf8;
-  --brand-2: #2dd4bf;
+  --brand: #60a5fa;
+  --brand-2: #34d399;
   --brand-warm: #fb923c;
   --ok: #34d399;
   --danger: #f87171;
   --warning: #fbbf24;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
-  --shadow-md: 0 12px 30px rgba(0, 0, 0, 0.3);
-  --shadow-lg: 0 24px 60px rgba(0, 0, 0, 0.4);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 12px 30px rgba(0, 0, 0, 0.25);
+  --shadow-lg: 0 24px 60px rgba(0, 0, 0, 0.35);
 }
 
 [data-theme="dark"] body {
   background:
-    radial-gradient(900px 420px at 8% -8%, rgba(99, 102, 241, 0.15), transparent 60%),
-    radial-gradient(900px 420px at 92% 0%, rgba(45, 212, 191, 0.1), transparent 58%),
+    radial-gradient(900px 420px at 8% -8%, rgba(96, 165, 250, 0.12), transparent 60%),
+    radial-gradient(900px 420px at 92% 0%, rgba(52, 211, 153, 0.1), transparent 58%),
     linear-gradient(180deg, #0f172a 0%, #1e293b 52%, #0f172a 100%);
+  color: var(--ink);
 }
 
-[data-theme="dark"] input,
-[data-theme="dark"] textarea,
-[data-theme="dark"] select {
-  background: #1e293b;
-  color: #f1f5f9;
-  border-color: #334155;
+[data-theme="dark"] .topbar {
+  background: linear-gradient(135deg, rgba(30, 41, 59, 0.9), rgba(30, 41, 59, 0.78));
+}
+
+[data-theme="dark"] .tabs {
+  background: rgba(30, 41, 59, 0.68);
+}
+
+[data-theme="dark"] .tab:hover {
+  background: rgba(51, 65, 85, 0.86);
+}
+
+[data-theme="dark"] .page {
+  background: linear-gradient(180deg, rgba(30, 41, 59, 0.94), rgba(30, 41, 59, 0.88));
 }
 
 [data-theme="dark"] .card,
+[data-theme="dark"] .category-card,
+[data-theme="dark"] .subscription-card,
+[data-theme="dark"] .node-group-card,
+[data-theme="dark"] .preview-card,
+[data-theme="dark"] .dns-section,
+[data-theme="dark"] .link-card,
+[data-theme="dark"] .result-card,
+[data-theme="dark"] .toolbar-card,
+[data-theme="dark"] .pager-card,
+[data-theme="dark"] .table-card,
+[data-theme="dark"] .raw-dns-card,
+[data-theme="dark"] .traffic-block,
+[data-theme="dark"] .node-preview-item,
+[data-theme="dark"] .rule-result-card,
+[data-theme="dark"] .download-row,
+[data-theme="dark"] .settings-toggle,
+[data-theme="dark"] .sub-info-grid > div,
+[data-theme="dark"] .node-group-meta > div,
+[data-theme="dark"] .metric-card,
+[data-theme="dark"] .manual-node-panel,
+[data-theme="dark"] .selector-section,
+[data-theme="dark"] .mobile-rule-card,
+[data-theme="dark"] .list-editor {
+  background: linear-gradient(180deg, rgba(30, 41, 59, 0.86), rgba(30, 41, 59, 0.82));
+  border-color: rgba(51, 65, 85, 0.9);
+}
+
+[data-theme="dark"] input,
+[data-theme="dark"] select,
+[data-theme="dark"] textarea {
+  background: rgba(15, 23, 42, 0.6);
+  border-color: var(--border);
+  color: var(--ink);
+}
+
+[data-theme="dark"] button {
+  background: rgba(30, 41, 59, 0.8);
+  border-color: var(--border);
+  color: var(--ink);
+}
+
+[data-theme="dark"] button.primary {
+  background: linear-gradient(135deg, var(--brand), var(--brand-2));
+}
+
+[data-theme="dark"] button.danger {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(248, 113, 113, 0.3);
+  color: var(--danger);
+}
+
+[data-theme="dark"] .quick-link {
+  background: rgba(30, 41, 59, 0.75);
+  border-color: rgba(96, 165, 250, 0.3);
+}
+
+[data-theme="dark"] .badge,
+[data-theme="dark"] .count-pill,
+[data-theme="dark"] .node-count,
+[data-theme="dark"] .master-switch,
+[data-theme="dark"] .sync-pill {
+  background: rgba(30, 41, 59, 0.82);
+  border-color: var(--border);
+}
+
+[data-theme="dark"] .empty-mini,
+[data-theme="dark"] .node-select-list {
+  background: rgba(15, 23, 42, 0.5);
+  border-color: rgba(51, 65, 85, 0.85);
+}
+
+[data-theme="dark"] .rules-table thead th {
+  background: rgba(30, 41, 59, 0.96);
+}
+
+[data-theme="dark"] .rules-table tbody tr:hover {
+  background: rgba(96, 165, 250, 0.08);
+}
+
+[data-theme="dark"] .sticky-head {
+  background: rgba(15, 23, 42, 0.94);
+}
+
+[data-theme="dark"] .alert {
+  background: rgba(30, 41, 59, 0.86);
+}
+
+[data-theme="dark"] .alert.success {
+  background: rgba(6, 95, 70, 0.2);
+}
+
+[data-theme="dark"] .alert.error {
+  background: rgba(127, 29, 29, 0.2);
+}
+
 [data-theme="dark"] .modal {
-  background: #1e293b;
-  border-color: #334155;
+  background: linear-gradient(180deg, rgba(30, 41, 59, 0.98), rgba(15, 23, 42, 0.95));
+}
+
+[data-theme="dark"] .auth-card {
+  background: linear-gradient(180deg, rgba(30, 41, 59, 0.96), rgba(15, 23, 42, 0.9));
+}
+
+[data-theme="dark"] .confirm-dialog {
+  background: linear-gradient(180deg, rgba(30, 41, 59, 0.98), rgba(15, 23, 42, 0.95));
+}
+
+[data-theme="dark"] .confirm-body p {
+  color: var(--ink-soft);
+}
+
+[data-theme="dark"] .generate-control-card {
+  background: linear-gradient(180deg, rgba(30, 41, 59, 0.92), rgba(30, 41, 59, 0.82));
+}
+
+[data-theme="dark"] .node-type-pill {
+  background: rgba(96, 165, 250, 0.12);
+  border-color: rgba(96, 165, 250, 0.25);
+}
+
+[data-theme="dark"] .traffic-bar {
+  background: rgba(15, 23, 42, 0.6);
+}
+
+[data-theme="dark"] .dns-raw-textarea,
+[data-theme="dark"] .result-card textarea {
+  background: rgba(15, 23, 42, 0.4);
+}
+
+[data-theme="dark"] .link-button {
+  color: var(--brand);
 }
 
 [data-theme="dark"] code {
@@ -73,9 +210,40 @@
   color: #818cf8;
 }
 
-[data-theme="dark"] .badge {
-  background: #334155;
-  color: #e2e8f0;
+[data-theme="dark"] .latency-pill.good {
+  background: rgba(34, 197, 94, 0.2);
+  color: #4ade80;
+}
+
+[data-theme="dark"] .latency-pill.ok {
+  background: rgba(245, 158, 11, 0.2);
+  color: #fbbf24;
+}
+
+[data-theme="dark"] .latency-pill.bad {
+  background: rgba(239, 68, 68, 0.2);
+  color: #f87171;
+}
+
+[data-theme="dark"] .snapshot-card {
+  border-color: #334155;
+}
+
+[data-theme="dark"] .snapshot-header:hover {
+  background: rgba(30, 41, 59, 0.6);
+}
+
+[data-theme="dark"] .preset-card {
+  border-color: #334155;
+}
+
+[data-theme="dark"] .preset-card.selected {
+  background: rgba(96, 165, 250, 0.12);
+  border-color: var(--brand);
+}
+
+[data-theme="dark"] .qr-image {
+  border-color: #334155;
 }
 
 * {
@@ -2234,187 +2402,3 @@ button.danger {
 /* =====================================================
    Dark Mode — follows OS preference
    ===================================================== */
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg-0: #0f172a;
-    --bg-1: #1e293b;
-    --surface: rgba(30, 41, 59, 0.92);
-    --surface-2: rgba(30, 41, 59, 0.86);
-    --surface-3: rgba(30, 41, 59, 0.72);
-    --border: #334155;
-    --border-strong: #475569;
-    --ink: #f1f5f9;
-    --ink-soft: #94a3b8;
-    --brand: #60a5fa;
-    --brand-2: #34d399;
-    --brand-warm: #fb923c;
-    --ok: #34d399;
-    --danger: #f87171;
-    --warning: #fbbf24;
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-    --shadow-md: 0 12px 30px rgba(0, 0, 0, 0.25);
-    --shadow-lg: 0 24px 60px rgba(0, 0, 0, 0.35);
-  }
-
-  body {
-    background:
-      radial-gradient(900px 420px at 8% -8%, rgba(96, 165, 250, 0.12), transparent 60%),
-      radial-gradient(900px 420px at 92% 0%, rgba(52, 211, 153, 0.1), transparent 58%),
-      linear-gradient(180deg, #0f172a 0%, #1e293b 52%, #0f172a 100%);
-    color: var(--ink);
-  }
-
-  .topbar {
-    background: linear-gradient(135deg, rgba(30, 41, 59, 0.9), rgba(30, 41, 59, 0.78));
-  }
-
-  .tabs {
-    background: rgba(30, 41, 59, 0.68);
-  }
-
-  .tab:hover {
-    background: rgba(51, 65, 85, 0.86);
-  }
-
-  .page {
-    background: linear-gradient(180deg, rgba(30, 41, 59, 0.94), rgba(30, 41, 59, 0.88));
-  }
-
-  .card,
-  .category-card,
-  .subscription-card,
-  .node-group-card,
-  .preview-card,
-  .dns-section,
-  .link-card,
-  .result-card,
-  .toolbar-card,
-  .pager-card,
-  .table-card,
-  .raw-dns-card,
-  .traffic-block,
-  .node-preview-item,
-  .rule-result-card,
-  .download-row,
-  .settings-toggle,
-  .sub-info-grid > div,
-  .node-group-meta > div,
-  .metric-card,
-  .manual-node-panel,
-  .selector-section,
-  .mobile-rule-card,
-  .list-editor {
-    background: linear-gradient(180deg, rgba(30, 41, 59, 0.86), rgba(30, 41, 59, 0.82));
-    border-color: rgba(51, 65, 85, 0.9);
-  }
-
-  input,
-  select,
-  textarea {
-    background: rgba(15, 23, 42, 0.6);
-    border-color: var(--border);
-    color: var(--ink);
-  }
-
-  button {
-    background: rgba(30, 41, 59, 0.8);
-    border-color: var(--border);
-    color: var(--ink);
-  }
-
-  button.primary {
-    background: linear-gradient(135deg, var(--brand), var(--brand-2));
-  }
-
-  button.danger {
-    background: rgba(239, 68, 68, 0.15);
-    border-color: rgba(248, 113, 113, 0.3);
-    color: var(--danger);
-  }
-
-  .quick-link {
-    background: rgba(30, 41, 59, 0.75);
-    border-color: rgba(96, 165, 250, 0.3);
-  }
-
-  .badge,
-  .count-pill,
-  .node-count,
-  .master-switch,
-  .sync-pill {
-    background: rgba(30, 41, 59, 0.82);
-    border-color: var(--border);
-  }
-
-  .empty-mini,
-  .node-select-list {
-    background: rgba(15, 23, 42, 0.5);
-    border-color: rgba(51, 65, 85, 0.85);
-  }
-
-  .rules-table thead th {
-    background: rgba(30, 41, 59, 0.96);
-  }
-
-  .rules-table tbody tr:hover {
-    background: rgba(96, 165, 250, 0.08);
-  }
-
-  .sticky-head {
-    background: rgba(15, 23, 42, 0.94);
-  }
-
-  .alert {
-    background: rgba(30, 41, 59, 0.86);
-  }
-
-  .alert.success {
-    background: rgba(6, 95, 70, 0.2);
-  }
-
-  .alert.error {
-    background: rgba(127, 29, 29, 0.2);
-  }
-
-  .modal {
-    background: linear-gradient(180deg, rgba(30, 41, 59, 0.98), rgba(15, 23, 42, 0.95));
-  }
-
-  .auth-card {
-    background: linear-gradient(180deg, rgba(30, 41, 59, 0.96), rgba(15, 23, 42, 0.9));
-  }
-
-  .confirm-dialog {
-    background: linear-gradient(180deg, rgba(30, 41, 59, 0.98), rgba(15, 23, 42, 0.95));
-  }
-
-  .confirm-body p {
-    color: var(--ink-soft);
-  }
-
-  .generate-control-card {
-    background: linear-gradient(180deg, rgba(30, 41, 59, 0.92), rgba(30, 41, 59, 0.82));
-  }
-
-  textarea {
-    background: rgba(15, 23, 42, 0.5);
-  }
-
-  .node-type-pill {
-    background: rgba(96, 165, 250, 0.12);
-    border-color: rgba(96, 165, 250, 0.25);
-  }
-
-  .traffic-bar {
-    background: rgba(15, 23, 42, 0.6);
-  }
-
-  .dns-raw-textarea,
-  .result-card textarea {
-    background: rgba(15, 23, 42, 0.4);
-  }
-
-  .link-button {
-    color: var(--brand);
-  }
-}

@@ -101,7 +101,7 @@
             <td class="col-index muted"><span class="drag-mini">☰</span> {{ pageStart + idx + 1 }}</td>
             <td class="col-enabled"><input type="checkbox" v-model="item.enabled" /></td>
             <td><input v-model="item.name" placeholder="可选" /></td>
-            <td><input v-model="item.type" list="rule-type-options" /></td>
+            <td><select v-model="item.type"><option v-for="type in ruleTypes" :key="type" :value="type">{{ type }}</option></select></td>
             <td>
               <input
                 v-model="item.value"
@@ -130,9 +130,7 @@
 
       <div v-if="pagedRules.length === 0" class="empty-state">没有匹配的规则</div>
 
-      <datalist id="rule-type-options">
-        <option v-for="type in ruleTypes" :key="type" :value="type" />
-      </datalist>
+
     </div>
 
     <div class="mobile-rule-list">
@@ -160,7 +158,7 @@
 
         <div class="mobile-rule-fields">
           <label class="field"><span>名称</span><input v-model="item.name" placeholder="可选" /></label>
-          <label class="field"><span>类型</span><input v-model="item.type" list="rule-type-options" /></label>
+          <label class="field"><span>类型</span><select v-model="item.type"><option v-for="type in ruleTypes" :key="type" :value="type">{{ type }}</option></select></label>
           <label class="field wide-field">
             <span>规则值</span>
             <input

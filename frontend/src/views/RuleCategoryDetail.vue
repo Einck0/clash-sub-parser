@@ -299,7 +299,10 @@ async function saveAllRules() {
   sorted.forEach((rule, index) => { rule.sort_order = index })
 
   try {
-    for (const id of deletedRuleIds.value) {
+    // Process pending deletes, then clear the list immediately (idempotent)
+    const toDelete = [...deletedRuleIds.value]
+    deletedRuleIds.value = []
+    for (const id of toDelete) {
       await deleteRule(id)
     }
 

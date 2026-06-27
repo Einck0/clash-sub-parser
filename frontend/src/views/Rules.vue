@@ -219,6 +219,7 @@ async function saveAllCategories() {
     for (const id of deletedCategoryIds.value) {
       await deleteRuleCategory(id)
     }
+    deletedCategoryIds.value = []
 
     const failed = []
     for (const cat of sorted) {

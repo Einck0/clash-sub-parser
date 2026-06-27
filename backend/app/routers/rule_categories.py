@@ -56,9 +56,8 @@ async def delete_rule_category_endpoint(
     db: AsyncSession = Depends(get_db),
 ) -> None:
     item = await get_rule_category(db, category_id)
-    if not item:
-        raise HTTPException(status_code=404, detail="Rule category not found")
-    await delete_rule_category(db, item)
+    if item:
+        await delete_rule_category(db, item)
 
 
 @router.post("/reorder", response_model=list[RuleCategoryRead])

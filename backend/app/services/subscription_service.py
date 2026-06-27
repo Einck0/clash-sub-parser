@@ -354,7 +354,9 @@ async def _clear_primary(db: AsyncSession) -> None:
 
 async def fetch_due_subscriptions(db: AsyncSession) -> int:
     now = datetime.now(timezone.utc)
-    cutoff = now - __import__('datetime').timedelta(minutes=1)
+    # Strip timezone for comparison with SQLite naive datetimes
+    now_naive = now.replace(tzinfo=None)
+    cutoff = now_naive - __import__('datetime').timedelta(minutes=1)
     # Only fetch subscriptions that need updating (filter at SQL level)
     result = await db.execute(
         select(Subscription).where(
@@ -369,7 +371,8 @@ async def fetch_due_subscriptions(db: AsyncSession) -> int:
         if not item.update_interval or item.update_interval <= 0:
             continue
         if item.last_fetched_at:
-            delta = (now - item.last_fetched_at).total_seconds() / 60
+            last_at = item.last_fetched_at.replace(tzinfo=None) if item.last_fetched_at.tzinfo else item.last_fetched_at
+            delta = (now_naive - last_at).total_seconds() / 60
             if delta < item.update_interval:
                 continue
         try:

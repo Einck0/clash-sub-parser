@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     cors_allow_origins: list[str] = []  # empty = same-origin only; set CLASH_CORS_ALLOW_ORIGINS for cross-origin
     cors_allow_methods: list[str] = ["GET", "POST", "PATCH", "DELETE", "OPTIONS"]
     cors_allow_headers: list[str] = ["Content-Type", "X-Clash-Token", "X-Clash-CSRF", "Authorization"]
+    log_level: str = "INFO"  # from env CLASH_LOG_LEVEL
+    log_json: bool = False   # from env CLASH_LOG_JSON
 
     model_config = SettingsConfigDict(
         env_file=".env",

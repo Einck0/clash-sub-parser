@@ -2,12 +2,14 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 import logging
 import secrets
+import time
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 
 from app.config import get_settings
+from app.logging_config import setup_logging
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db, init_db
@@ -30,6 +32,7 @@ FRONTEND_INDEX_FILE = FRONTEND_DIST_DIR / "index.html"
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    setup_logging(json_mode=settings.log_json, level=settings.log_level)
     await init_db()
     start_scheduler()
     yield
@@ -96,6 +99,31 @@ async def token_auth_middleware(request, call_next):
             )
 
     response = await call_next(request)
+    return response
+
+
+@app.middleware("http")
+async def request_logging_middleware(request, call_next):
+    if is_public_path(request.url.path):
+        return await call_next(request)
+    
+    start = time.monotonic()
+    response = await call_next(request)
+    duration_ms = round((time.monotonic() - start) * 1000, 1)
+    
+    logger.info(
+        "%s %s -> %s (%.1fms)",
+        request.method,
+        request.url.path,
+        response.status_code,
+        duration_ms,
+        extra={
+            "method": request.method,
+            "path": request.url.path,
+            "status_code": response.status_code,
+            "duration_ms": duration_ms,
+        },
+    )
     return response
 
 

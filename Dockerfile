@@ -9,6 +9,8 @@ RUN npm run build
 
 FROM python:3.10-slim AS runtime
 
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 ARG PIP_INDEX_URL
 ARG PIP_TRUSTED_HOST

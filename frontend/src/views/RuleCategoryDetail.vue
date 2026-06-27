@@ -208,7 +208,8 @@ import { useAppStore } from '../stores/app'
 import { useUrlState } from '../utils/urlState'
 
 const store = useAppStore()
-import { createRule, deleteRule, getApiErrorMessage, getNodeGroups, getRules, reorderRules, updateRule, batchRules } from '../api'
+import { createRule, deleteRule, getApiErrorMessage, getNodeGroups, getRules, updateRule, batchRules } from '../api'
+import { BUILTINS, RULE_TYPES, normalizeRuleType, parseOptions, proxyTargetsFromGroups } from '../utils/ruleUtils'
 import RulePresetsModal from '../components/RulePresetsModal.vue'
 import RuleImportModal from '../components/RuleImportModal.vue'
 import FabSave from '../components/FabSave.vue'
@@ -234,9 +235,9 @@ const showPresets = ref(false)
 const showImport = ref(false)
 let clientIdSeq = 1
 
-const builtins = ['DIRECT', 'PASS', 'REJECT']
-const ruleTypes = ['DOMAIN', 'DOMAIN-SUFFIX', 'DOMAIN-KEYWORD', 'DOMAIN-REGEX', 'PROCESS-NAME', 'PROCESS-PATH', 'IP-CIDR', 'IP-CIDR6', 'GEOIP', 'GEOSITE', 'DST-PORT', 'SRC-IP-CIDR', 'SRC-PORT', 'RULE-SET', 'MATCH']
-const proxyTargets = computed(() => [...builtins, ...nodeGroups.value.map((group) => group.name)])
+const builtins = BUILTINS
+const ruleTypes = RULE_TYPES
+const proxyTargets = computed(() => proxyTargetsFromGroups(nodeGroups.value))
 const saveStatus = computed(() => saving.value ? '正在同步' : (hasUnsavedChanges.value ? '有未保存更改' : '已同步'))
 
 onMounted(() => {
@@ -478,9 +479,6 @@ function normalizePayload(item) {
 function compareRuleOrder(a, b) {
   return (a.sort_order ?? 0) - (b.sort_order ?? 0) || (a.id ?? Number.MAX_SAFE_INTEGER) - (b.id ?? Number.MAX_SAFE_INTEGER)
 }
-
-function normalizeRuleType(type) { return String(type || '').trim().toUpperCase() }
-function parseOptions(text) { return String(text || '').split(',').map((item) => item.trim()).filter(Boolean) }
 
 function applyPresets(presetRules) {
   for (const rule of presetRules) {

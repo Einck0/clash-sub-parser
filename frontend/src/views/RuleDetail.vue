@@ -40,6 +40,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { getApiErrorMessage, getNodeGroups, getRule, updateRule } from '../api'
+import { BUILTINS, RULE_TYPES, normalizeRuleType, parseOptions, proxyTargetsFromGroups } from '../utils/ruleUtils'
 
 const route = useRoute()
 const router = useRouter()
@@ -49,9 +50,9 @@ const error = ref('')
 const loading = ref(false)
 const rule = ref({ name: '', category: 'default', type: 'MATCH', value: '', proxy: 'DIRECT', optionsText: '', sort_order: 0, enabled: true })
 
-const builtins = ['DIRECT', 'PASS', 'REJECT']
-const ruleTypes = ['DOMAIN', 'DOMAIN-SUFFIX', 'DOMAIN-KEYWORD', 'DOMAIN-REGEX', 'PROCESS-NAME', 'PROCESS-PATH', 'IP-CIDR', 'IP-CIDR6', 'GEOIP', 'GEOSITE', 'DST-PORT', 'SRC-IP-CIDR', 'SRC-PORT', 'RULE-SET', 'MATCH']
-const proxyTargets = computed(() => [...builtins, ...nodeGroups.value.map((group) => group.name)])
+const builtins = BUILTINS
+const ruleTypes = RULE_TYPES
+const proxyTargets = computed(() => proxyTargetsFromGroups(nodeGroups.value))
 
 onMounted(load)
 
@@ -89,7 +90,4 @@ async function save() {
     error.value = getApiErrorMessage(err, '保存规则失败')
   }
 }
-
-function normalizeRuleType(type) { return String(type || '').trim().toUpperCase() }
-function parseOptions(text) { return String(text || '').split(',').map((item) => item.trim()).filter(Boolean) }
 </script>

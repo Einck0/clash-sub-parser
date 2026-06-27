@@ -22,6 +22,7 @@ async def _request_with_redirect_validation(
     max_redirects: int = 10,
 ) -> httpx.Response:
     """Follow redirects manually, validating each URL against SSRF rules."""
+    from urllib.parse import urljoin
     current_url = url
     for _ in range(max_redirects + 1):
         response = await client.send(
@@ -32,11 +33,9 @@ async def _request_with_redirect_validation(
             location = response.headers.get("location")
             if not location:
                 return response
-            current_url = validate_fetch_url(
-                str(response.url).rsplit("/", 1)[0] + "/" + location if not location.startswith("http") else location,
-                allow_private_hosts=allow_private,
-            )
-            response.close()
+            resolved = urljoin(str(response.url), location)
+            current_url = validate_fetch_url(resolved, allow_private_hosts=allow_private)
+            await response.aclose()
             continue
         return response
     raise HTTPException(status_code=502, detail="Too many redirects")

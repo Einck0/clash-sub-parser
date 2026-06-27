@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 import logging
+import secrets
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -68,7 +69,6 @@ async def token_auth_middleware(request, call_next):
     if not token_ok:
         hash_cookie = request.cookies.get(AUTH_HASH_COOKIE)
         if hash_cookie and security.token_hash:
-            import secrets
             token_ok = secrets.compare_digest(hash_cookie, security.token_hash)
 
     if request_needs_auth(request.url.path, security):

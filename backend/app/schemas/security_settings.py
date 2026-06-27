@@ -12,7 +12,7 @@ class SecuritySettingsRead(BaseModel):
 
 
 class AuthCheckRequest(BaseModel):
-    token: str = Field(min_length=1, max_length=256)
+    token: str = Field(default="", max_length=256)
 
 
 class AuthCheckRead(BaseModel):

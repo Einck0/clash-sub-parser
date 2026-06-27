@@ -346,10 +346,13 @@ async function saveAllRules() {
 
     const { data } = await batchRules(batch)
     // Sync local state with server response - filter to current category only
+    suppressDirty.value = true
     const allRules = (data || []).map(toEditableRule)
     rules.value = allRules.filter((r) => (r.category || 'default') === categoryName.value)
     deletedRuleIds.value = []
     hasUnsavedChanges.value = false
+    await nextTick()
+    suppressDirty.value = false
     store.success(`已保存 ${sorted.length} 条规则`)
   } catch (err) {
     error.value = getApiErrorMessage(err, '保存全部规则失败')

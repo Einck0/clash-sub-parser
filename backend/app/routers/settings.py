@@ -147,6 +147,7 @@ async def reset_config_endpoint(response: Response, db: AsyncSession = Depends(g
     db.add(GenerateConfig(id=1))
     await db.commit()
     response.delete_cookie(AUTH_COOKIE, samesite="lax")
+    response.delete_cookie(AUTH_HASH_COOKIE, samesite="lax")
     return AuthCheckRead(ok=True)
 
 

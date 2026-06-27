@@ -58,7 +58,7 @@ function cancel() { resolveConfirm(false) }
   width: min(440px, 92vw);
   border: 1px solid rgba(219, 229, 239, 0.9);
   border-radius: 20px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.95));
+  background: var(--surface, linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.95)));
   box-shadow: 0 24px 60px rgba(15, 23, 42, 0.18);
   padding: 24px;
 }

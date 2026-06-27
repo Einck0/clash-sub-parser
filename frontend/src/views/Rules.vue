@@ -121,6 +121,7 @@ import { useAppStore } from '../stores/app'
 
 const store = useAppStore()
 import {
+  batchRuleCategories,
   createRuleCategory,
   deleteRuleCategory,
   getApiErrorMessage,
@@ -216,33 +217,26 @@ async function saveAllCategories() {
       }
     }
 
-    for (const id of deletedCategoryIds.value) {
-      await deleteRuleCategory(id)
-    }
+    const batch = { delete: [], create: [], update: [], reorder: [] }
+
+    batch.delete = [...deletedCategoryIds.value]
     deletedCategoryIds.value = []
 
-    const failed = []
     for (const cat of sorted) {
       const payload = { name: String(cat.name || '').trim(), sort_order: cat.sort_order ?? 0 }
-      try {
-        if (cat.id) {
-          await updateRuleCategory(cat.id, payload)
-        } else {
-          const { data } = await createRuleCategory(payload)
-          cat.id = data.id
-          cat._clientId = `cat-${data.id}`
-        }
-      } catch (e) {
-        failed.push(`${cat.name}: ${e.message}`)
+      if (cat.id) {
+        batch.update.push({ id: cat.id, ...payload })
+      } else {
+        batch.create.push(payload)
       }
     }
 
-    const reorderItems = sorted.filter((cat) => cat.id).map((cat) => ({ id: cat.id, sort_order: cat.sort_order }))
-    if (reorderItems.length) await reorderRuleCategories(reorderItems)
+    batch.reorder = sorted
+      .filter((cat) => cat.id)
+      .map((cat) => ({ id: cat.id, sort_order: cat.sort_order }))
 
-    if (failed.length) {
-      store.warning(`部分保存失败（${failed.length} 个），建议刷新页面。失败项：${failed.join('；')}`)
-    }
+    await batchRuleCategories(batch)
+    store.success(`已保存 ${sorted.length} 个分类`)
     await load()
   } catch (err) {
     error.value = err?.userMessage || err?.message || getApiErrorMessage(err, '保存分类失败')

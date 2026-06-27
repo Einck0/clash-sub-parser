@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.schemas.rule import RuleCreate, RuleRead, RuleReorder, RuleUpdate
 from app.services.rule_service import (
+    batch_rules,
     create_rule,
     delete_rule,
     get_rule,
@@ -65,3 +66,20 @@ async def reorder_rules_endpoint(
     payload: RuleReorder, db: AsyncSession = Depends(get_db)
 ) -> list[RuleRead]:
     return await reorder_rules(db, payload)
+
+
+@router.post("/batch")
+async def batch_rules_endpoint(
+    payload: dict, db: AsyncSession = Depends(get_db)
+) -> list[RuleRead]:
+    """Batch create/update/delete rules in a single request.
+    
+    Payload format:
+    {
+        "delete": [id1, id2, ...],
+        "create": [{...RuleCreate fields...}, ...],
+        "update": [{"id": 1, ...RuleUpdate fields...}, ...],
+        "reorder": [{"id": 1, "sort_order": 0}, ...]
+    }
+    """
+    return await batch_rules(db, payload)

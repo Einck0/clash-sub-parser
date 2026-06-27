@@ -11,6 +11,7 @@
       </div>
       <div class="head-actions">
         <button @click="loadWithConfirm">刷新</button>
+        <button @click="showPresets = true">规则模板</button>
         <button @click="createRuleRow">新增规则</button>
         <button class="primary" @click="saveAllRules" :disabled="saving || !rules.length">
           {{ saving ? '保存中...' : '保存全部' }}
@@ -178,6 +179,14 @@
       </article>
       <div v-if="pagedRules.length === 0" class="empty-state">没有匹配的规则</div>
     </div>
+
+    <RulePresetsModal
+      v-if="showPresets"
+      :proxy-options="proxyTargets"
+      :categories="[]"
+      @apply="applyPresets"
+      @close="showPresets = false"
+    />
   </section>
 </template>
 
@@ -187,7 +196,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { useAppStore } from '../stores/app'
 
 const store = useAppStore()
-import { createRule, deleteRule, getApiErrorMessage, getNodeGroups, getRules, reorderRules, updateRule } from '../api'
+import { createRule, deleteRule, getApiErrorMessage, getNodeGroups, getRules, reorderRules, updateRule, batchRules } from '../api'
+import RulePresetsModal from '../components/RulePresetsModal.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -206,6 +216,7 @@ const hasUnsavedChanges = ref(false)
 const saving = ref(false)
 const suppressDirty = ref(false)
 const draggingRuleKey = ref(null)
+const showPresets = ref(false)
 let clientIdSeq = 1
 
 const builtins = ['DIRECT', 'PASS', 'REJECT']
@@ -299,27 +310,32 @@ async function saveAllRules() {
   sorted.forEach((rule, index) => { rule.sort_order = index })
 
   try {
-    // Process pending deletes, then clear the list immediately (idempotent)
+    const batch = { delete: [], create: [], update: [], reorder: [] }
+
+    // Pending deletes
     const toDelete = [...deletedRuleIds.value]
     deletedRuleIds.value = []
-    for (const id of toDelete) {
-      await deleteRule(id)
-    }
+    batch.delete = toDelete
 
     for (const item of sorted) {
       const payload = normalizePayload(item)
       if (item.id) {
-        await updateRule(item.id, payload)
+        batch.update.push({ id: item.id, ...payload })
       } else {
-        const { data } = await createRule(payload)
-        item.id = data.id
-        item._clientId = `rule-${data.id}`
+        batch.create.push(payload)
       }
     }
 
-    const reorderItems = sorted.filter((rule) => rule.id).map((rule) => ({ id: rule.id, sort_order: rule.sort_order }))
-    if (reorderItems.length) await reorderRules(reorderItems)
-    await load()
+    batch.reorder = sorted
+      .filter((rule) => rule.id)
+      .map((rule) => ({ id: rule.id, sort_order: rule.sort_order }))
+
+    const { data } = await batchRules(batch)
+    // Sync local state with server response
+    rules.value = (data || []).map(toEditableRule)
+    deletedRuleIds.value = []
+    hasUnsavedChanges.value = false
+    store.success(`已保存 ${sorted.length} 条规则`)
   } catch (err) {
     error.value = getApiErrorMessage(err, '保存全部规则失败')
   } finally {
@@ -435,4 +451,24 @@ function compareRuleOrder(a, b) {
 
 function normalizeRuleType(type) { return String(type || '').trim().toUpperCase() }
 function parseOptions(text) { return String(text || '').split(',').map((item) => item.trim()).filter(Boolean) }
+
+function applyPresets(presetRules) {
+  for (const rule of presetRules) {
+    rules.value.push({
+      id: null,
+      _clientId: `preset-${clientIdSeq++}`,
+      name: rule.name || '',
+      category: categoryName.value,
+      type: rule.type,
+      value: rule.value,
+      proxy: rule.proxy,
+      options: rule.options || [],
+      optionsText: (rule.options || []).join(','),
+      sort_order: rules.value.length,
+      enabled: true,
+    })
+  }
+  hasUnsavedChanges.value = true
+  store.success(`已添加 ${presetRules.length} 条规则，记得点"保存全部"同步到服务端`)
+}
 </script>

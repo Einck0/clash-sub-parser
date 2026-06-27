@@ -95,6 +95,7 @@ export const createRuleCategory = (data) => api.post('/rule-categories', data)
 export const updateRuleCategory = (id, data) => api.patch(`/rule-categories/${id}`, data)
 export const deleteRuleCategory = (id) => api.delete(`/rule-categories/${id}`)
 export const reorderRuleCategories = (items) => api.post('/rule-categories/reorder', { items })
+export const batchRuleCategories = (payload) => api.post('/rule-categories/batch', payload)
 
 // Rules
 export const getRules = () => api.get('/rules')
@@ -103,6 +104,7 @@ export const createRule = (data) => api.post('/rules', data)
 export const updateRule = (id, data) => api.patch(`/rules/${id}`, data)
 export const deleteRule = (id) => api.delete(`/rules/${id}`)
 export const reorderRules = (items) => api.post('/rules/reorder', { items })
+export const batchRules = (payload) => api.post('/rules/batch', payload)
 
 // DNS
 export const getDns = () => api.get('/dns')

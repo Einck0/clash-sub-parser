@@ -57,6 +57,9 @@
             </div>
             <LinkRow label="YAML" :value="yamlCurrentUrl" @copy="copy" />
             <LinkRow label="Script" :value="scriptCurrentUrl" @copy="copy" />
+            <div class="qr-row" v-if="yamlCurrentUrl">
+              <QrCode :url="yamlCurrentUrl" :size="120" />
+            </div>
           </div>
 
           <div class="link-card">
@@ -111,6 +114,7 @@
 import { computed, defineComponent, h, onMounted, reactive, ref, watch } from 'vue'
 import { useAppStore } from '../stores/app'
 import { withAuthToken } from '../auth'
+import QrCode from '../components/QrCode.vue'
 
 const store = useAppStore()
 import {
@@ -312,3 +316,11 @@ function download(content, filename, mimeType) {
   URL.revokeObjectURL(url)
 }
 </script>
+
+<style scoped>
+.qr-row {
+  margin-top: 10px;
+  display: flex;
+  justify-content: center;
+}
+</style>

@@ -9,6 +9,7 @@ from app.schemas.rule_category import (
     RuleCategoryUpdate,
 )
 from app.services.rule_category_service import (
+    batch_rule_categories,
     create_rule_category,
     delete_rule_category,
     get_rule_category,
@@ -66,3 +67,20 @@ async def reorder_rule_categories_endpoint(
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
     return await reorder_rule_categories(db, payload)
+
+
+@router.post("/batch")
+async def batch_rule_categories_endpoint(
+    payload: dict, db: AsyncSession = Depends(get_db)
+) -> list[dict]:
+    """Batch create/update/delete rule categories.
+    
+    Payload format:
+    {
+        "delete": [id1, id2, ...],
+        "create": [{...RuleCategoryCreate fields...}, ...],
+        "update": [{"id": 1, ...RuleCategoryUpdate fields...}, ...],
+        "reorder": [{"id": 1, "sort_order": 0}, ...]
+    }
+    """
+    return await batch_rule_categories(db, payload)

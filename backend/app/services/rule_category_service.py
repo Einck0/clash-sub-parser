@@ -132,3 +132,54 @@ async def reorder_rule_categories(
             db.add(mapping[entry.id])
     await db.commit()
     return await list_rule_categories(db)
+
+
+async def batch_rule_categories(db: AsyncSession, payload: dict) -> list[dict]:
+    """Process a batch of category operations atomically."""
+    # 1. Deletes (with cascade)
+    delete_ids = payload.get("delete", [])
+    for cat_id in delete_ids:
+        item = await db.get(RuleCategory, cat_id)
+        if item:
+            await db.execute(delete(Rule).where(Rule.category == item.name))
+            await db.delete(item)
+    
+    # 2. Creates
+    for item_data in payload.get("create", []):
+        name = _normalize_name(item_data.get("name", ""))
+        existing = await db.scalar(select(RuleCategory.id).where(RuleCategory.name == name))
+        if existing:
+            continue
+        item = RuleCategory(name=name, sort_order=item_data.get("sort_order", 0))
+        db.add(item)
+    
+    # 3. Updates
+    for item_data in payload.get("update", []):
+        cat_id = item_data.get("id")
+        if not cat_id:
+            continue
+        item = await db.get(RuleCategory, cat_id)
+        if not item:
+            continue
+        old_name = item.name
+        if "name" in item_data and item_data["name"]:
+            new_name = _normalize_name(item_data["name"])
+            item.name = new_name
+            await db.execute(update(Rule).where(Rule.category == old_name).values(category=new_name))
+        if "sort_order" in item_data and item_data["sort_order"] is not None:
+            item.sort_order = int(item_data["sort_order"])
+        db.add(item)
+    
+    # 4. Reorder
+    reorder_items = payload.get("reorder", [])
+    if reorder_items:
+        ids = [entry["id"] for entry in reorder_items]
+        result = await db.execute(select(RuleCategory).where(RuleCategory.id.in_(ids)))
+        mapping = {item.id: item for item in result.scalars().all()}
+        for entry in reorder_items:
+            if entry["id"] in mapping:
+                mapping[entry["id"]].sort_order = entry.get("sort_order", 0)
+                db.add(mapping[entry["id"]])
+    
+    await db.commit()
+    return await list_rule_categories(db)

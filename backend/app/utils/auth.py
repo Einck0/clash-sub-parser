@@ -93,6 +93,9 @@ def is_frontend_path(path: str) -> bool:
     """Non-API, non-export, non-public paths (i.e. frontend SPA routes)."""
     if is_public_path(path) or is_api_path(path) or is_export_path(path):
         return False
+    # SPA entry point must always be loadable so AuthGate can render
+    if path in ("/", "/index.html", ""):
+        return False
     # All remaining paths are frontend routes (static assets already excluded by is_public_path)
     return True
 

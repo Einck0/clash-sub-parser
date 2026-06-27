@@ -15,6 +15,33 @@ from app.services.security_settings_service import get_fetch_proxy_config, get_s
 from app.database import AsyncSessionLocal
 from app.utils.validators import validate_fetch_url
 
+async def _request_with_redirect_validation(
+    client: httpx.AsyncClient,
+    url: str,
+    allow_private: bool,
+    max_redirects: int = 10,
+) -> httpx.Response:
+    """Follow redirects manually, validating each URL against SSRF rules."""
+    current_url = url
+    for _ in range(max_redirects + 1):
+        response = await client.send(
+            client.build_request("GET", current_url),
+            stream=True,
+        )
+        if response.is_redirect:
+            location = response.headers.get("location")
+            if not location:
+                return response
+            current_url = validate_fetch_url(
+                str(response.url).rsplit("/", 1)[0] + "/" + location if not location.startswith("http") else location,
+                allow_private_hosts=allow_private,
+            )
+            response.close()
+            continue
+        return response
+    raise HTTPException(status_code=502, detail="Too many redirects")
+
+
 settings = get_settings()
 DOWNLOAD_DIR = Path(settings.download_dir)
 GITHUB_API = "https://api.github.com/repos/{owner}/{repo}/releases/latest"
@@ -87,7 +114,7 @@ async def download_url(url: str, expected_name: str | None = None, source: str =
     fetch_proxy_enabled, fetch_proxy_url = await _runtime_proxy_config()
     client_kwargs = {
         "timeout": httpx.Timeout(settings.download_timeout_seconds, connect=20),
-        "follow_redirects": True,
+        "follow_redirects": False,
         "trust_env": settings.request_trust_env if not fetch_proxy_enabled else False,
         "headers": {"User-Agent": settings.request_user_agent, "Accept": "*/*"},
     }
@@ -97,7 +124,8 @@ async def download_url(url: str, expected_name: str | None = None, source: str =
     written = 0
     try:
         async with httpx.AsyncClient(**client_kwargs) as client:
-            async with client.stream("GET", normalized) as response:
+            response = await _request_with_redirect_validation(client, normalized, settings.allow_private_fetch_urls)
+            async with response:
                 response.raise_for_status()
                 content_length = response.headers.get("content-length")
                 if content_length and int(content_length) > max_bytes:

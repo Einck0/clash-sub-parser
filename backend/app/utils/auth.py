@@ -89,6 +89,15 @@ def validate_token(raw_token: str, expected_token: str) -> bool:
     return secrets.compare_digest(str(raw_token), str(expected_token))
 
 
+def is_frontend_path(path: str) -> bool:
+    """Non-API, non-export, non-public paths (i.e. frontend SPA routes)."""
+    if is_public_path(path) or is_api_path(path) or is_export_path(path):
+        return False
+    return path == "/" or not path.startswith("/") or any(
+        path.startswith(p) for p in ("/node-groups", "/rules", "/dns", "/generate", "/settings")
+    )
+
+
 def request_needs_auth(path: str, security) -> bool:
     if not security.auth_enabled:
         return False
@@ -96,4 +105,6 @@ def request_needs_auth(path: str, security) -> bool:
         return security.protect_exports
     if is_api_path(path):
         return security.protect_api
+    if is_frontend_path(path):
+        return security.protect_frontend
     return False

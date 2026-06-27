@@ -177,7 +177,8 @@ watch(
 watch(
   form,
   (value) => {
-    rawJson.value = JSON.stringify(value, null, 2)
+    // Only sync raw JSON when raw editor is visible (avoid expensive stringify on every keystroke)
+    if (showRaw.value) rawJson.value = JSON.stringify(value, null, 2)
   },
   { deep: true }
 )
@@ -318,13 +319,18 @@ async function save() {
     exclude_nodes: uniq(form.value.exclude_nodes || []),
   }
 
-  if (payload.id) {
-    await updateNodeGroup(payload.id, payload)
-  } else {
-    await createNodeGroup(payload)
+  try {
+    if (payload.id) {
+      await updateNodeGroup(payload.id, payload)
+    } else {
+      await createNodeGroup(payload)
+    }
+    emit('saved')
+    emit('close')
+  } catch (err) {
+    // Error is already handled by the API layer and shown as toast
+    console.error('Failed to save node group:', err)
   }
-  emit('saved')
-  emit('close')
 }
 
 async function loadSources() {

@@ -6,10 +6,11 @@ export function syncTokenFromUrl() {
   const token = url.searchParams.get(TOKEN_PARAM)
   if (!token) return getAuthToken()
 
+  setAuthToken(token)  // Store token from URL
   url.searchParams.delete(TOKEN_PARAM)
   const clean = `${url.pathname}${url.search}${url.hash}`
   window.history.replaceState({}, '', clean || '/')
-  return ''
+  return token
 }
 
 export function getAuthToken() {

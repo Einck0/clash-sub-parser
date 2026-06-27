@@ -1,5 +1,7 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
+import hashlib
+import logging
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,7 +17,10 @@ from app.services.generate_config_service import generate_config_to_switches, ge
 from app.services.generate_service import generate_script, generate_yaml, get_primary_subscription_headers
 from app.services.scheduler import shutdown_scheduler, start_scheduler
 from app.services.security_settings_service import get_security_settings, token_matches
-from app.utils.auth import extract_request_token, is_api_path, is_export_path, is_public_path, is_unsafe_method, request_has_csrf_header, request_needs_auth, request_uses_cookie_auth
+from app.utils.auth import extract_request_token, is_api_path, is_export_path, is_frontend_path, is_public_path, is_unsafe_method, request_has_csrf_header, request_needs_auth, request_uses_cookie_auth
+
+logger = logging.getLogger(__name__)
+AUTH_HASH_COOKIE = "clash_auth_hash"
 
 settings = get_settings()
 FRONTEND_DIST_DIR = Path(__file__).resolve().parents[1] / "frontend_dist"
@@ -50,7 +55,7 @@ async def token_auth_middleware(request, call_next):
     if is_public_path(request.url.path):
         return await call_next(request)
 
-    needs_auth = is_api_path(request.url.path) or is_export_path(request.url.path)
+    needs_auth = is_api_path(request.url.path) or is_export_path(request.url.path) or is_frontend_path(request.url.path)
     if not needs_auth:
         return await call_next(request)
 
@@ -59,6 +64,15 @@ async def token_auth_middleware(request, call_next):
 
     raw_token = extract_request_token(request, allow_query=is_export_path(request.url.path))
     token_ok = token_matches(raw_token, security.token_hash)
+
+    # If not matched via header/query, try hash cookie (SHA-256 of raw token)
+    if not token_ok:
+        hash_cookie = request.cookies.get(AUTH_HASH_COOKIE)
+        if hash_cookie and security.token_hash:
+            computed_hash = hashlib.sha256(security.token_hash.encode()).hexdigest()
+            import secrets
+            token_ok = secrets.compare_digest(hash_cookie, computed_hash)
+
     if request_needs_auth(request.url.path, security):
         if security.auth_enabled and not security.token_hash:
             return JSONResponse(
@@ -84,6 +98,15 @@ async def token_auth_middleware(request, call_next):
 
     response = await call_next(request)
     return response
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    logger.exception("Unhandled exception on %s %s: %s", request.method, request.url.path, exc)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"},
+    )
 
 
 app.include_router(subscriptions.router, prefix=settings.api_prefix)

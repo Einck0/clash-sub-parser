@@ -8,9 +8,9 @@ def normalize_rule_type(value: str) -> str:
 class RuleBase(BaseModel):
     name: str = ""
     category: str = "default"
-    type: str
-    value: str = ""
-    proxy: str
+    type: str = Field(max_length=40)
+    value: str = Field(default="", max_length=512)
+    proxy: str = Field(max_length=160)
     options: list[str] = Field(default_factory=list)
     sort_order: int = 0
     enabled: bool = True

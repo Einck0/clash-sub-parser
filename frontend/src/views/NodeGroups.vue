@@ -18,7 +18,6 @@
         <button @click="load">重新加载</button>
       </template>
     </UiState>
-    <UiState v-if="message" type="success" title="操作完成" :description="message" compact />
     <UiState v-if="loading && !groups.length" type="loading" title="正在加载节点组" description="正在同步策略组和预览数据。" />
 
     <template v-else>
@@ -33,7 +32,7 @@
       </div>
       <div class="metric-card wide">
         <span class="metric-label">说明</span>
-        <span class="metric-tip">“节点组引用”输出策略组名；“节点组节点”会展开引用组内的节点。</span>
+        <span class="metric-tip">"节点组引用"输出策略组名；"节点组节点"会展开引用组内的节点。</span>
       </div>
     </div>
 
@@ -104,16 +103,19 @@
 
     </template>
 
-    <NodeGroupModal v-if="showModal" :group="editing" @saved="load" @close="showModal = false" />
+    <NodeGroupModal v-if="showModal" :group="editing" @saved="onSaved" @close="showModal = false" />
   </section>
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { useAppStore } from '../stores/app'
 import { deleteNodeGroup, getApiErrorMessage, getNodeGroups, previewNodeGroups, reorderNodeGroups, validateNodeGroups } from '../api'
 import NodePreviewList from '../components/NodePreviewList.vue'
 import UiState from '../components/UiState.vue'
 import NodeGroupModal from './NodeGroupModal.vue'
+
+const store = useAppStore()
 
 const groups = ref([])
 const previews = ref([])
@@ -122,9 +124,15 @@ const editing = ref(null)
 const loading = ref(false)
 const working = ref('')
 const error = ref('')
-const message = ref('')
 
 onMounted(load)
+
+// Esc to close modal
+function onKeydown(e) {
+  if (e.key === 'Escape' && showModal.value) showModal.value = false
+}
+window.addEventListener('keydown', onKeydown)
+onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 
 const previewMap = computed(() => new Map(previews.value.map((item) => [item.id, item])))
 function previewById(id) { return previewMap.value.get(id) }
@@ -132,7 +140,6 @@ function previewById(id) { return previewMap.value.get(id) }
 async function load() {
   loading.value = true
   error.value = ''
-  message.value = ''
   try {
     const [groupsRes, previewsRes] = await Promise.all([getNodeGroups(), previewNodeGroups()])
     groups.value = groupsRes.data
@@ -147,11 +154,10 @@ async function load() {
 async function loadPreview() {
   working.value = 'preview'
   error.value = ''
-  message.value = ''
   try {
     const { data } = await previewNodeGroups()
     previews.value = data
-    message.value = '预览已刷新'
+    store.success('预览已刷新')
   } catch (err) {
     error.value = getApiErrorMessage(err, '刷新预览失败')
   } finally {
@@ -169,13 +175,24 @@ function openEdit(group) {
   showModal.value = true
 }
 
+function onSaved() {
+  showModal.value = false
+  store.success('节点组已保存')
+  load()
+}
+
 async function remove(group) {
-  if (!confirm(`删除节点组 ${group.name} ?`)) return
+  const ok = await store.confirm({
+    title: '删除节点组',
+    message: `确定要删除节点组 "${group.name}" 吗？`,
+    confirmText: '删除',
+    danger: true,
+  })
+  if (!ok) return
   error.value = ''
-  message.value = ''
   try {
     await deleteNodeGroup(group.id)
-    message.value = `已删除节点组 ${group.name}`
+    store.success(`已删除节点组 ${group.name}`)
     await load()
   } catch (err) {
     error.value = getApiErrorMessage(err, '删除节点组失败')
@@ -187,7 +204,6 @@ async function move(index, delta) {
   const to = index + delta
   if (to < 0 || to >= copy.length) return
   error.value = ''
-  message.value = ''
   try {
     ;[copy[index], copy[to]] = [copy[to], copy[index]]
     const items = copy.map((group, i) => ({ id: group.id, sort_order: i }))
@@ -201,10 +217,9 @@ async function move(index, delta) {
 async function validateRefs() {
   working.value = 'validate'
   error.value = ''
-  message.value = ''
   try {
     await validateNodeGroups()
-    message.value = '节点组引用校验通过'
+    store.success('节点组引用校验通过')
   } catch (err) {
     error.value = getApiErrorMessage(err, '校验失败')
   } finally {

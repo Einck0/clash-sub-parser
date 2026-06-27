@@ -117,6 +117,9 @@
 <script setup>
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import { useAppStore } from '../stores/app'
+
+const store = useAppStore()
 import {
   createRuleCategory,
   deleteRuleCategory,
@@ -154,10 +157,16 @@ const sortedCategories = computed(() => [...categories.value].sort(compareCatego
 const totalRules = computed(() => allRules.value.length || sortedCategories.value.reduce((sum, cat) => sum + Number(cat.rule_count || 0), 0))
 const saveStatus = computed(() => saving.value ? '正在同步' : (hasUnsavedChanges.value ? '有未保存更改' : '已同步'))
 const ruleSearchResults = computed(() => {
-  const q = ruleSearch.value.trim().toLowerCase()
+  const q = debouncedRuleSearch.value.trim().toLowerCase()
   if (!q) return []
   return allRules.value.filter((rule) => ruleSearchText(rule).includes(q))
 })
+const debouncedRuleSearch = ref('')
+let _searchTimer = null
+watch(ruleSearch, (val) => {
+  clearTimeout(_searchTimer)
+  _searchTimer = setTimeout(() => { debouncedRuleSearch.value = val }, 250)
+}, { immediate: true })
 const limitedRuleSearchResults = computed(() => ruleSearchResults.value.slice(0, 80))
 
 async function load() {
@@ -177,8 +186,16 @@ async function load() {
   }
 }
 
-function loadWithConfirm() {
-  if (hasUnsavedChanges.value && !confirm('刷新会丢弃当前未保存的分类草稿，确定刷新吗？')) return
+async function loadWithConfirm() {
+  if (hasUnsavedChanges.value) {
+    const ok = await store.confirm({
+      title: '刷新确认',
+      message: '刷新会丢弃当前未保存的分类草稿，确定刷新吗？',
+      confirmText: '刷新',
+      danger: true,
+    })
+    if (!ok) return
+  }
   load()
 }
 
@@ -203,19 +220,28 @@ async function saveAllCategories() {
       await deleteRuleCategory(id)
     }
 
+    const failed = []
     for (const cat of sorted) {
       const payload = { name: String(cat.name || '').trim(), sort_order: cat.sort_order ?? 0 }
-      if (cat.id) {
-        await updateRuleCategory(cat.id, payload)
-      } else {
-        const { data } = await createRuleCategory(payload)
-        cat.id = data.id
-        cat._clientId = `cat-${data.id}`
+      try {
+        if (cat.id) {
+          await updateRuleCategory(cat.id, payload)
+        } else {
+          const { data } = await createRuleCategory(payload)
+          cat.id = data.id
+          cat._clientId = `cat-${data.id}`
+        }
+      } catch (e) {
+        failed.push(`${cat.name}: ${e.message}`)
       }
     }
 
     const reorderItems = sorted.filter((cat) => cat.id).map((cat) => ({ id: cat.id, sort_order: cat.sort_order }))
     if (reorderItems.length) await reorderRuleCategories(reorderItems)
+
+    if (failed.length) {
+      store.warning(`部分保存失败（${failed.length} 个），建议刷新页面。失败项：${failed.join('；')}`)
+    }
     await load()
   } catch (err) {
     error.value = err?.userMessage || err?.message || getApiErrorMessage(err, '保存分类失败')
@@ -224,12 +250,13 @@ async function saveAllCategories() {
   }
 }
 
-function removeCategoryRow(cat) {
+async function removeCategoryRow(cat) {
   const count = cat.rule_count || 0
-  const message = cat.id && count > 0
+  const msg = cat.id && count > 0
     ? `从草稿中移除类别 ${cat.name}。点击“保存全部”后会同时删除其中 ${count} 条规则，确定继续？`
-    : `从草稿中移除类别 ${cat.name || '未命名类别'} ?`
-  if (!confirm(message)) return
+    : `从草稿中移除类别 ${cat.name || '未命名类别'}？`
+  const ok = await store.confirm({ title: '移除类别', message: msg, confirmText: '移除', danger: true })
+  if (!ok) return
   if (cat.id && !deletedCategoryIds.value.includes(cat.id)) deletedCategoryIds.value.push(cat.id)
   categories.value = categories.value.filter((item) => item !== cat)
   normalizeSortOrder()
@@ -280,15 +307,23 @@ function compareCategoryOrder(a, b) {
 
 function openCategory(cat) {
   if (!cat.id) {
-    alert('请先点击“保存全部”保存新类别')
+    store.warning('请先点击“保存全部”保存新类别')
     return
   }
   openCategoryByName(cat.name)
 }
 
-function openCategoryByName(categoryName) {
+async function openCategoryByName(categoryName) {
   if (!categoryName) return
-  if (hasUnsavedChanges.value && !confirm('当前分类页有未保存更改，进入编辑前建议先保存。仍要进入吗？')) return
+  if (hasUnsavedChanges.value) {
+    const ok = await store.confirm({
+      title: '未保存更改',
+      message: '当前分类页有未保存更改，进入编辑前建议先保存。仍要进入吗？',
+      confirmText: '继续进入',
+      danger: true,
+    })
+    if (!ok) return
+  }
   router.push(`/rules/category/${encodeURIComponent(categoryName)}`)
 }
 

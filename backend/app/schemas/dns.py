@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class DnsConfigRead(BaseModel):
@@ -10,5 +10,5 @@ class DnsConfigRead(BaseModel):
 
 
 class DnsConfigUpdate(BaseModel):
-    raw_yaml: str
+    raw_yaml: str = Field(default="", max_length=65536)
     enabled: bool = True

@@ -216,17 +216,6 @@ async def _fetch_subscription_text(
         allow_private_hosts=settings.allow_private_fetch_urls,
     )
     for _ in range(max_redirects + 1):
-        if not hasattr(client, "stream"):
-            response = await client.get(current_url)
-            response.raise_for_status()
-            raw_text = getattr(response, "text", "")
-            if len(raw_text.encode("utf-8")) > settings.request_max_bytes:
-                raise HTTPException(
-                    status_code=413,
-                    detail="Subscription response is too large",
-                )
-            return response, raw_text
-
         async with client.stream("GET", current_url) as response:
             if response.is_redirect:
                 location = response.headers.get("location")
@@ -364,9 +353,16 @@ async def _clear_primary(db: AsyncSession) -> None:
 
 
 async def fetch_due_subscriptions(db: AsyncSession) -> int:
-    result = await db.execute(select(Subscription))
-    all_subs = list(result.scalars().all())
     now = datetime.now(timezone.utc)
+    cutoff = now - __import__('datetime').timedelta(minutes=1)
+    # Only fetch subscriptions that need updating (filter at SQL level)
+    result = await db.execute(
+        select(Subscription).where(
+            Subscription.update_interval > 0,
+            (Subscription.last_fetched_at.is_(None)) | (Subscription.last_fetched_at < cutoff),
+        )
+    )
+    all_subs = list(result.scalars().all())
     fetched = 0
 
     for item in all_subs:

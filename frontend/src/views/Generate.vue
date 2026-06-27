@@ -109,7 +109,10 @@
 
 <script setup>
 import { computed, defineComponent, h, onMounted, reactive, ref, watch } from 'vue'
+import { useAppStore } from '../stores/app'
 import { withAuthToken } from '../auth'
+
+const store = useAppStore()
 import {
   generateScript,
   generateSubscriptionYaml,
@@ -226,9 +229,9 @@ async function buildScript() {
     if (!(await saveSettings())) return
     const { data } = await generateScript({ ...switches, exclude_node_proxies: true })
     scriptResult.value = data.script || ''
-    setMessage('Script.js 已生成，可以复制或下载。', 'success')
+    store.success('Script.js 已生成')
   } catch (err) {
-    setMessage(getApiErrorMessage(err, '生成 Script.js 失败'), 'error')
+    store.error(getApiErrorMessage(err, '生成 Script.js 失败'))
   } finally {
     working.value = ''
   }
@@ -241,9 +244,9 @@ async function buildYaml() {
     if (!(await saveSettings())) return
     const { data } = await generateYaml({ ...switches })
     yamlResult.value = data.yaml || ''
-    setMessage('YAML 已生成，可以复制或下载。', 'success')
+    store.success('YAML 已生成')
   } catch (err) {
-    setMessage(getApiErrorMessage(err, '生成 YAML 失败'), 'error')
+    store.error(getApiErrorMessage(err, '生成 YAML 失败'))
   } finally {
     working.value = ''
   }
@@ -255,9 +258,9 @@ async function buildSubscription() {
   try {
     const { data } = await generateSubscriptionYaml(selectedSubscriptionId.value)
     subscriptionResult.value = data.yaml || ''
-    setMessage('单独订阅已生成。', 'success')
+    store.success('单独订阅已生成')
   } catch (err) {
-    setMessage(getApiErrorMessage(err, '生成单独订阅失败'), 'error')
+    store.error(getApiErrorMessage(err, '生成单独订阅失败'))
   } finally {
     working.value = ''
   }
@@ -265,8 +268,25 @@ async function buildSubscription() {
 
 async function copy(text) {
   if (!text) return
-  await navigator.clipboard.writeText(text)
-  setMessage('已复制到剪贴板。', 'success')
+  try {
+    await navigator.clipboard.writeText(text)
+    store.success('已复制到剪贴板')
+  } catch {
+    // Fallback for HTTP environments where clipboard API is unavailable
+    const textarea = document.createElement('textarea')
+    textarea.value = text
+    textarea.style.cssText = 'position:fixed;opacity:0;left:-9999px'
+    document.body.appendChild(textarea)
+    textarea.select()
+    try {
+      document.execCommand('copy')
+      store.success('已复制到剪贴板')
+    } catch {
+      store.error('复制失败，请手动复制')
+    } finally {
+      document.body.removeChild(textarea)
+    }
+  }
 }
 
 function setStatus(text, type = '') {

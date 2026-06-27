@@ -12,7 +12,7 @@
       </div>
     </div>
 
-    <UiState v-if="message" :type="messageType" :title="messageTitle" :description="message" compact />
+    <UiState v-if="message" :type="messageType" :title="messageType === 'error' ? '保存失败' : '设置已更新'" :description="message" compact />
 
     <div class="settings-layout">
       <div class="dns-section settings-card">
@@ -157,9 +157,13 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useAppStore } from '../stores/app'
+import { formatBytes, formatDate } from '../utils/format'
 import { exportAppConfig, getApiErrorMessage, getDownloads, getSecuritySettings, importAppConfig, loginAuthToken, resetAppConfig, updateSecuritySettings, downloadCustomAsset, downloadPresetAsset } from '../api'
 import { setAuthToken, withAuthToken } from '../auth'
 import UiState from '../components/UiState.vue'
+
+const store = useAppStore()
 
 const settings = reactive({
   auth_enabled: false,
@@ -182,7 +186,6 @@ const customDownloadUrl = ref('')
 const downloadItems = ref([])
 
 const isBusy = computed(() => Boolean(working.value))
-const messageTitle = computed(() => messageType.value === 'error' ? '保存失败' : '设置已更新')
 const uiUrlExample = computed(() => `${window.location.origin}/（页面输入框填写 token）`)
 const exportNeedsToken = computed(() => Boolean(settings.auth_enabled && settings.protect_exports))
 const yamlUrlExample = computed(() => withAuthToken(`${window.location.origin}/yaml`, exportNeedsToken.value))
@@ -226,9 +229,9 @@ async function save() {
     }
     newToken.value = ''
     showToken.value = false
-    setMessage('安全设置已保存。管理界面已使用 HttpOnly cookie 登录；导出链接仅在本次页面会话中使用当前 token。', 'success')
+    store.success('安全设置已保存')
   } catch (err) {
-    setMessage(getApiErrorMessage(err, '保存安全设置失败'), 'error')
+    store.error(getApiErrorMessage(err, '保存安全设置失败'))
   } finally {
     saving.value = false
   }
@@ -254,9 +257,9 @@ async function refreshPresetDownloads() {
       results.push(`${data.filename}（${formatBytes(data.size)}）`)
     }
     await loadDownloads()
-    setMessage(`客户端已刷新：${results.join('、')}。`, 'success')
+    store.success(`客户端已刷新：${results.join('、')}`)
   } catch (err) {
-    setMessage(getApiErrorMessage(err, '刷新最新版客户端失败'), 'error')
+    store.error(getApiErrorMessage(err, '刷新最新版客户端失败'))
   } finally {
     working.value = ''
   }
@@ -271,25 +274,12 @@ async function downloadCustom() {
     const { data } = await downloadCustomAsset(url)
     customDownloadUrl.value = ''
     await loadDownloads()
-    setMessage(`已下载：${data.filename}（${formatBytes(data.size)}）。`, 'success')
+    store.success(`已下载：${data.filename}（${formatBytes(data.size)}）`)
   } catch (err) {
-    setMessage(getApiErrorMessage(err, '下载失败'), 'error')
+    store.error(getApiErrorMessage(err, '下载失败'))
   } finally {
     working.value = ''
   }
-}
-
-function formatBytes(value) {
-  const size = Number(value || 0)
-  if (size < 1024) return `${size} B`
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
-  if (size < 1024 * 1024 * 1024) return `${(size / 1024 / 1024).toFixed(1)} MB`
-  return `${(size / 1024 / 1024 / 1024).toFixed(1)} GB`
-}
-
-function formatDate(value) {
-  if (!value) return '-'
-  return new Date(value).toLocaleString()
 }
 
 function setMessage(text, type) {
@@ -308,7 +298,6 @@ async function downloadConfig(includeSubscriptions) {
       throw new Error(errData?.detail || `HTTP ${response.status}`)
     }
     const blob = await response.blob()
-    // Get filename from Content-Disposition header, or use default
     const disposition = response.headers.get('content-disposition') || ''
     const match = disposition.match(/filename="?([^"\s]+)"?/)
     const filename = match ? match[1] : (includeSubscriptions ? 'clash-sub-parser-full.json' : 'clash-sub-parser-no-subscriptions.json')
@@ -320,23 +309,33 @@ async function downloadConfig(includeSubscriptions) {
     link.click()
     document.body.removeChild(link)
     URL.revokeObjectURL(url)
-    setMessage('配置已导出。', 'success')
+    store.success('配置已导出')
   } catch (err) {
-    setMessage(getApiErrorMessage(err, '导出配置失败'), 'error')
+    store.error(getApiErrorMessage(err, '导出配置失败'))
   } finally {
     working.value = ''
   }
 }
 
-function onImportFile(event) {
+async function onImportFile(event) {
   const file = event.target.files?.[0]
   if (!file) return
-  const ok = confirm(`确定要导入配置文件 “${file.name}” 吗？\n\n导入会覆盖当前配置中对应的数据表（订阅、节点组、规则、DNS、生成设置等）。建议先导出备份。`)
+  const ok = await store.confirm({
+    title: '导入配置',
+    message: `确定要导入配置文件 "${file.name}" 吗？\n\n导入会覆盖当前配置中对应的数据表（订阅、节点组、规则、DNS、生成设置等）。建议先导出备份。`,
+    confirmText: '继续导入',
+    danger: true,
+  })
   if (!ok) {
     if (importInput.value) importInput.value.value = ''
     return
   }
-  const ok2 = confirm('最后确认：导入后会覆盖当前配置，无法从界面撤销。确定继续吗？')
+  const ok2 = await store.confirm({
+    title: '最终确认',
+    message: '导入后会覆盖当前配置，无法从界面撤销。确定继续吗？',
+    confirmText: '确认导入',
+    danger: true,
+  })
   if (!ok2) {
     if (importInput.value) importInput.value.value = ''
     return
@@ -345,6 +344,11 @@ function onImportFile(event) {
 }
 
 async function doImport(file) {
+  const MAX_IMPORT_SIZE = 50 * 1024 * 1024 // 50MB safety limit
+  if (file.size > MAX_IMPORT_SIZE) {
+    store.error('文件过大，请检查是否选择了正确的文件（最大 50MB）')
+    return
+  }
   working.value = 'import'
   message.value = ''
   try {
@@ -371,11 +375,10 @@ async function doImport(file) {
         .join('；')
       msg += `。部分失败：${errSummary}`
     }
-    setMessage(msg, errors ? 'info' : 'success')
-    // Reload settings in case security_settings was imported
+    store.success(msg)
     await load()
   } catch (err) {
-    setMessage(getApiErrorMessage(err, '导入配置失败'), 'error')
+    store.error(getApiErrorMessage(err, '导入配置失败'))
   } finally {
     working.value = ''
     if (importInput.value) importInput.value.value = ''
@@ -383,9 +386,19 @@ async function doImport(file) {
 }
 
 async function resetAllConfig() {
-  const ok = confirm('确定要重置所有配置吗？\n\n这会清空订阅、节点组、规则、DNS、生成和安全设置，覆盖当前配置，无法从界面撤销。建议先导出备份。')
+  const ok = await store.confirm({
+    title: '重置所有配置',
+    message: '这会清空订阅、节点组、规则、DNS、生成和安全设置，覆盖当前配置，无法从界面撤销。建议先导出备份。',
+    confirmText: '继续重置',
+    danger: true,
+  })
   if (!ok) return
-  const ok2 = confirm('最后确认：真的要清空并恢复成新安装状态吗？这会覆盖当前配置。')
+  const ok2 = await store.confirm({
+    title: '最终确认',
+    message: '真的要清空并恢复成新安装状态吗？这会覆盖当前配置。',
+    confirmText: '确认重置',
+    danger: true,
+  })
   if (!ok2) return
   working.value = 'reset'
   message.value = ''
@@ -401,9 +414,9 @@ async function resetAllConfig() {
       fetch_proxy_enabled: false,
       fetch_proxy_url: '',
     })
-    setMessage('所有配置已重置为新安装状态。', 'success')
+    store.success('所有配置已重置为新安装状态')
   } catch (err) {
-    setMessage(getApiErrorMessage(err, '重置配置失败'), 'error')
+    store.error(getApiErrorMessage(err, '重置配置失败'))
   } finally {
     working.value = ''
   }

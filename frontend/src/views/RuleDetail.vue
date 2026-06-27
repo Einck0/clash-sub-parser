@@ -46,6 +46,7 @@ const router = useRouter()
 const ruleId = computed(() => Number(route.params.id))
 const nodeGroups = ref([])
 const error = ref('')
+const loading = ref(false)
 const rule = ref({ name: '', category: 'default', type: 'MATCH', value: '', proxy: 'DIRECT', optionsText: '', sort_order: 0, enabled: true })
 
 const builtins = ['DIRECT', 'PASS', 'REJECT']
@@ -56,12 +57,15 @@ onMounted(load)
 
 async function load() {
   error.value = ''
+  loading.value = true
   try {
     const [ruleRes, groupsRes] = await Promise.all([getRule(ruleId.value), getNodeGroups()])
     nodeGroups.value = groupsRes.data
     rule.value = { ...ruleRes.data, optionsText: (ruleRes.data.options || []).join(',') }
   } catch (err) {
     error.value = getApiErrorMessage(err, '加载规则失败')
+  } finally {
+    loading.value = false
   }
 }
 

@@ -1,0 +1,37 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NPM_CONFIG_REGISTRY: https://registry.npmmirror.com
+        PIP_INDEX_URL: https://pypi.tuna.tsinghua.edu.cn/simple
+        PIP_TRUSTED_HOST: pypi.tuna.tsinghua.edu.cn
+    container_name: ${CLASH_CONTAINER_NAME:-clash-sub-parser}
+    environment:
+      CLASH_DATABASE_URL: ${CLASH_DATABASE_URL:-sqlite+aiosqlite:////data/clash_sub_parser.db}
+      CLASH_REQUEST_TRUST_ENV: ${CLASH_REQUEST_TRUST_ENV:-false}
+      CLASH_REQUEST_TIMEOUT_SECONDS: ${CLASH_REQUEST_TIMEOUT_SECONDS:-30}
+      CLASH_REQUEST_MAX_BYTES: ${CLASH_REQUEST_MAX_BYTES:-5242880}
+      CLASH_REQUEST_USER_AGENT: ${CLASH_REQUEST_USER_AGENT:-ClashforWindows/0.20}
+      CLASH_ALLOW_PRIVATE_FETCH_URLS: ${CLASH_ALLOW_PRIVATE_FETCH_URLS:-false}
+      CLASH_DEFAULT_PROXY_TEST_URL: ${CLASH_DEFAULT_PROXY_TEST_URL:-http://www.gstatic.com/generate_204}
+      CLASH_SCHEDULER_ENABLED: ${CLASH_SCHEDULER_ENABLED:-true}
+      CLASH_AUTH_ENABLED: ${CLASH_AUTH_ENABLED:-false}
+      CLASH_AUTH_TOKEN: ${CLASH_AUTH_TOKEN:-}
+      CLASH_AUTH_COOKIE_SECURE: ${CLASH_AUTH_COOKIE_SECURE:-false}
+      HTTP_PROXY: ${CLASH_HTTP_PROXY:-}
+      HTTPS_PROXY: ${CLASH_HTTPS_PROXY:-}
+      ALL_PROXY: ${CLASH_ALL_PROXY:-}
+      NO_PROXY: ${CLASH_NO_PROXY:-localhost,127.0.0.1}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "${CLASH_PORT:-127.0.0.1:18080}:18080"
+      - "${CLASH_COMPAT_PORT:-127.0.0.1:20000}:18080"
+    volumes:
+      - backend-data:/data
+    restart: unless-stopped
+
+volumes:
+  backend-data:

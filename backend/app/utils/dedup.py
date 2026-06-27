@@ -20,4 +20,7 @@ def _build_signature(node: dict) -> str:
     server = str(node.get("server", "")).strip().lower()
     port = str(node.get("port", "")).strip()
     identity = str(node.get("uuid") or node.get("password") or "").strip().lower()
-    return "|".join([node_type, server, port, identity])
+    tls = str(node.get("tls", "")).strip().lower()
+    network = str(node.get("network", "")).strip().lower()
+    sni = str(node.get("servername") or node.get("sni") or "").strip().lower()
+    return "|".join([node_type, server, port, identity, tls, network, sni])

@@ -21,30 +21,43 @@
 
     <nav class="tabs" aria-label="主导航">
       <router-link v-for="item in navItems" :key="item.to" :to="item.to" class="tab">
-        <span>{{ item.label }}</span>
+        <span class="tab-icon" aria-hidden="true">{{ item.icon }}</span>
+        <span class="tab-label">{{ item.label }}</span>
         <small>{{ item.hint }}</small>
       </router-link>
     </nav>
 
     <main class="page-wrap" aria-live="polite">
-      <router-view />
+      <router-view v-slot="{ Component, route }">
+        <Transition name="page-fade" mode="out-in">
+          <component :is="Component" :key="route.path" />
+        </Transition>
+      </router-view>
     </main>
   </div>
+
+  <ToastContainer />
+  <ConfirmDialog />
 </template>
 
 <script setup>
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { checkAuthSession, getSecuritySettings, loginAuthToken } from './api'
 import { setAuthToken, withAuthToken } from './auth'
 import AuthGate from './components/AuthGate.vue'
+import ToastContainer from './components/ToastContainer.vue'
+import ConfirmDialog from './components/ConfirmDialog.vue'
+import { useAppStore } from './stores/app'
+
+const store = useAppStore()
 
 const navItems = [
-  { to: '/', label: 'Subscriptions', hint: '订阅' },
-  { to: '/node-groups', label: 'Node Groups', hint: '策略组' },
-  { to: '/rules', label: 'Rules', hint: '规则' },
-  { to: '/dns', label: 'DNS', hint: '解析' },
-  { to: '/generate', label: 'Generate', hint: '导出' },
-  { to: '/settings', label: 'Settings', hint: '设置' },
+  { to: '/', label: 'Subscriptions', hint: '订阅', icon: '📡' },
+  { to: '/node-groups', label: 'Node Groups', hint: '策略组', icon: '🔀' },
+  { to: '/rules', label: 'Rules', hint: '规则', icon: '📋' },
+  { to: '/dns', label: 'DNS', hint: '解析', icon: '🌐' },
+  { to: '/generate', label: 'Generate', hint: '导出', icon: '⚙' },
+  { to: '/settings', label: 'Settings', hint: '设置', icon: '🔒' },
 ]
 
 const showAuthGate = ref(false)
@@ -53,10 +66,6 @@ const exportNeedsToken = ref(false)
 onMounted(() => {
   window.addEventListener('auth:unauthorized', handleUnauthorized)
   checkFrontendAccess()
-})
-
-onBeforeUnmount(() => {
-  window.removeEventListener('auth:unauthorized', handleUnauthorized)
 })
 
 async function checkFrontendAccess() {
@@ -74,12 +83,14 @@ async function checkFrontendAccess() {
     }
     showAuthGate.value = false
   } catch (err) {
+    // If 401 and protect_frontend is on, show auth gate; otherwise allow access
     if (err?.response?.status === 401) {
       setAuthToken('')
       exportNeedsToken.value = true
       showAuthGate.value = true
       return
     }
+    // Non-auth error (e.g. server down) - don't block the UI
     showAuthGate.value = false
   }
 }
@@ -97,3 +108,32 @@ function handleUnauthorized() {
   showAuthGate.value = true
 }
 </script>
+
+<style scoped>
+/* Page transition */
+.page-fade-enter-active {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+.page-fade-leave-active {
+  transition: opacity 0.12s ease;
+}
+.page-fade-enter-from {
+  opacity: 0;
+  transform: translateY(6px);
+}
+.page-fade-leave-to {
+  opacity: 0;
+}
+
+/* Tab icons */
+.tab-icon {
+  display: inline-block;
+  margin-right: 4px;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.tab-label {
+  display: inline;
+}
+</style>

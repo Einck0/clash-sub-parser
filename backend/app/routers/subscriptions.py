@@ -84,6 +84,11 @@ async def fetch_subscription_endpoint(
         raise HTTPException(status_code=502, detail=detail) from exc
 
 
+@router.get("/nodes/all", response_model=list[dict])
+async def get_all_subscription_nodes(db: AsyncSession = Depends(get_db)) -> list[dict]:
+    return await collect_all_subscription_nodes(db)
+
+
 @router.get("/{subscription_id}/nodes", response_model=list[dict])
 async def get_subscription_nodes(
     subscription_id: int, db: AsyncSession = Depends(get_db)
@@ -92,8 +97,3 @@ async def get_subscription_nodes(
     if not item:
         raise HTTPException(status_code=404, detail="Subscription not found")
     return item.raw_nodes or []
-
-
-@router.get("/nodes/all", response_model=list[dict])
-async def get_all_subscription_nodes(db: AsyncSession = Depends(get_db)) -> list[dict]:
-    return await collect_all_subscription_nodes(db)

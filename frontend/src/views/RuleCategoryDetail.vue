@@ -184,6 +184,9 @@
 <script setup>
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useAppStore } from '../stores/app'
+
+const store = useAppStore()
 import { createRule, deleteRule, getApiErrorMessage, getNodeGroups, getRules, reorderRules, updateRule } from '../api'
 
 const route = useRoute()
@@ -321,8 +324,14 @@ async function saveAllRules() {
   }
 }
 
-function deleteRuleRow(item) {
-  if (!confirm(`从当前草稿移除规则 ${item.name || item.type || ''} ?\n点击“保存全部”后才会真正同步删除。`)) return
+async function deleteRuleRow(item) {
+  const ok = await store.confirm({
+    title: '移除规则',
+    message: `从当前草稿移除规则 ${item.name || item.type || ''}？点击“保存全部”后才会真正同步删除。`,
+    confirmText: '移除',
+    danger: true,
+  })
+  if (!ok) return
   if (item.id && !deletedRuleIds.value.includes(item.id)) deletedRuleIds.value.push(item.id)
   rules.value = rules.value.filter((rule) => rule !== item)
   normalizeSortOrder()
@@ -360,8 +369,11 @@ function reorderRulesLocal(sorted, from, to) {
 }
 
 function ruleIndex(item) {
-  return [...rules.value].sort(compareRuleOrder).findIndex((rule) => rule === item || rule._clientId === item._clientId)
+  // Cache: use the pre-computed sorted array instead of sorting on every call
+  return sortedRules.value.findIndex((rule) => rule === item || rule._clientId === item._clientId)
 }
+
+const sortedRules = computed(() => [...rules.value].sort(compareRuleOrder))
 
 function normalizeSortOrder() {
   rules.value.sort(compareRuleOrder).forEach((rule, index) => { rule.sort_order = index })
@@ -374,13 +386,29 @@ function resetFilters() {
   enabledFilter.value = ''
 }
 
-function goBack() {
-  if (hasUnsavedChanges.value && !confirm('有未保存更改，确定返回吗？')) return
+async function goBack() {
+  if (hasUnsavedChanges.value) {
+    const ok = await store.confirm({
+      title: '未保存更改',
+      message: '有未保存更改，确定返回吗？',
+      confirmText: '返回',
+      danger: true,
+    })
+    if (!ok) return
+  }
   router.push('/rules')
 }
 
-function loadWithConfirm() {
-  if (hasUnsavedChanges.value && !confirm('刷新会丢弃当前未保存更改，确定刷新吗？')) return
+async function loadWithConfirm() {
+  if (hasUnsavedChanges.value) {
+    const ok = await store.confirm({
+      title: '刷新确认',
+      message: '刷新会丢弃当前未保存更改，确定刷新吗？',
+      confirmText: '刷新',
+      danger: true,
+    })
+    if (!ok) return
+  }
   load()
 }
 

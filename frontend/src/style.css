@@ -2173,3 +2173,191 @@ button.danger {
 .auth-form button {
   min-height: 42px;
 }
+
+/* =====================================================
+   Dark Mode — follows OS preference
+   ===================================================== */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg-0: #0f172a;
+    --bg-1: #1e293b;
+    --surface: rgba(30, 41, 59, 0.92);
+    --surface-2: rgba(30, 41, 59, 0.86);
+    --surface-3: rgba(30, 41, 59, 0.72);
+    --border: #334155;
+    --border-strong: #475569;
+    --ink: #f1f5f9;
+    --ink-soft: #94a3b8;
+    --brand: #60a5fa;
+    --brand-2: #34d399;
+    --brand-warm: #fb923c;
+    --ok: #34d399;
+    --danger: #f87171;
+    --warning: #fbbf24;
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --shadow-md: 0 12px 30px rgba(0, 0, 0, 0.25);
+    --shadow-lg: 0 24px 60px rgba(0, 0, 0, 0.35);
+  }
+
+  body {
+    background:
+      radial-gradient(900px 420px at 8% -8%, rgba(96, 165, 250, 0.12), transparent 60%),
+      radial-gradient(900px 420px at 92% 0%, rgba(52, 211, 153, 0.1), transparent 58%),
+      linear-gradient(180deg, #0f172a 0%, #1e293b 52%, #0f172a 100%);
+    color: var(--ink);
+  }
+
+  .topbar {
+    background: linear-gradient(135deg, rgba(30, 41, 59, 0.9), rgba(30, 41, 59, 0.78));
+  }
+
+  .tabs {
+    background: rgba(30, 41, 59, 0.68);
+  }
+
+  .tab:hover {
+    background: rgba(51, 65, 85, 0.86);
+  }
+
+  .page {
+    background: linear-gradient(180deg, rgba(30, 41, 59, 0.94), rgba(30, 41, 59, 0.88));
+  }
+
+  .card,
+  .category-card,
+  .subscription-card,
+  .node-group-card,
+  .preview-card,
+  .dns-section,
+  .link-card,
+  .result-card,
+  .toolbar-card,
+  .pager-card,
+  .table-card,
+  .raw-dns-card,
+  .traffic-block,
+  .node-preview-item,
+  .rule-result-card,
+  .download-row,
+  .settings-toggle,
+  .sub-info-grid > div,
+  .node-group-meta > div,
+  .metric-card,
+  .manual-node-panel,
+  .selector-section,
+  .mobile-rule-card,
+  .list-editor {
+    background: linear-gradient(180deg, rgba(30, 41, 59, 0.86), rgba(30, 41, 59, 0.82));
+    border-color: rgba(51, 65, 85, 0.9);
+  }
+
+  input,
+  select,
+  textarea {
+    background: rgba(15, 23, 42, 0.6);
+    border-color: var(--border);
+    color: var(--ink);
+  }
+
+  button {
+    background: rgba(30, 41, 59, 0.8);
+    border-color: var(--border);
+    color: var(--ink);
+  }
+
+  button.primary {
+    background: linear-gradient(135deg, var(--brand), var(--brand-2));
+  }
+
+  button.danger {
+    background: rgba(239, 68, 68, 0.15);
+    border-color: rgba(248, 113, 113, 0.3);
+    color: var(--danger);
+  }
+
+  .quick-link {
+    background: rgba(30, 41, 59, 0.75);
+    border-color: rgba(96, 165, 250, 0.3);
+  }
+
+  .badge,
+  .count-pill,
+  .node-count,
+  .master-switch,
+  .sync-pill {
+    background: rgba(30, 41, 59, 0.82);
+    border-color: var(--border);
+  }
+
+  .empty-mini,
+  .node-select-list {
+    background: rgba(15, 23, 42, 0.5);
+    border-color: rgba(51, 65, 85, 0.85);
+  }
+
+  .rules-table thead th {
+    background: rgba(30, 41, 59, 0.96);
+  }
+
+  .rules-table tbody tr:hover {
+    background: rgba(96, 165, 250, 0.08);
+  }
+
+  .sticky-head {
+    background: rgba(15, 23, 42, 0.94);
+  }
+
+  .alert {
+    background: rgba(30, 41, 59, 0.86);
+  }
+
+  .alert.success {
+    background: rgba(6, 95, 70, 0.2);
+  }
+
+  .alert.error {
+    background: rgba(127, 29, 29, 0.2);
+  }
+
+  .modal {
+    background: linear-gradient(180deg, rgba(30, 41, 59, 0.98), rgba(15, 23, 42, 0.95));
+  }
+
+  .auth-card {
+    background: linear-gradient(180deg, rgba(30, 41, 59, 0.96), rgba(15, 23, 42, 0.9));
+  }
+
+  .confirm-dialog {
+    background: linear-gradient(180deg, rgba(30, 41, 59, 0.98), rgba(15, 23, 42, 0.95));
+  }
+
+  .confirm-body p {
+    color: var(--ink-soft);
+  }
+
+  .generate-control-card {
+    background: linear-gradient(180deg, rgba(30, 41, 59, 0.92), rgba(30, 41, 59, 0.82));
+  }
+
+  textarea {
+    background: rgba(15, 23, 42, 0.5);
+  }
+
+  .node-type-pill {
+    background: rgba(96, 165, 250, 0.12);
+    border-color: rgba(96, 165, 250, 0.25);
+  }
+
+  .traffic-bar {
+    background: rgba(15, 23, 42, 0.6);
+  }
+
+  .dns-raw-textarea,
+  .result-card textarea {
+    background: rgba(15, 23, 42, 0.4);
+  }
+
+  .link-button {
+    color: var(--brand);
+  }
+}

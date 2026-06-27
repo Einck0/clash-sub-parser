@@ -87,7 +87,7 @@
         </div>
       </article>
 
-      <UiState v-if="!subscriptions.length" type="empty" title="暂无订阅" description="添加第一个订阅后，就能拉取节点、查看流量和配置筛选规则。">
+      <UiState v-if="!subscriptions.length && !loading" type="empty" title="暂无订阅" description="添加第一个订阅后，就能拉取节点、查看流量和配置筛选规则。">
         <template #actions>
           <button class="primary" @click="openCreate">添加订阅</button>
         </template>
@@ -122,7 +122,9 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
+import { useAppStore } from '../stores/app'
+import { formatBytes, short, formatLocalTime } from '../utils/format'
 import NodePreviewList from '../components/NodePreviewList.vue'
 import SubscriptionForm from '../components/SubscriptionForm.vue'
 import UiState from '../components/UiState.vue'
@@ -137,6 +139,8 @@ import {
   updateSubscription,
 } from '../api'
 
+const store = useAppStore()
+
 const subscriptions = ref([])
 const allNodes = ref([])
 const viewingNodes = ref([])
@@ -148,6 +152,16 @@ const loading = ref(false)
 const error = ref('')
 
 onMounted(load)
+
+// Esc to close modals
+function onKeydown(e) {
+  if (e.key === 'Escape') {
+    if (showForm.value) showForm.value = false
+    else if (viewingNodes.value.length) closeNodePreview()
+  }
+}
+window.addEventListener('keydown', onKeydown)
+onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 
 async function load() {
   loading.value = true
@@ -184,9 +198,10 @@ async function save(payload) {
       await createSubscription(payload)
     }
     showForm.value = false
+    store.success('订阅已保存')
     await load()
   } catch (err) {
-    error.value = getApiErrorMessage(err, '保存订阅失败')
+    store.error(getApiErrorMessage(err, '保存订阅失败'))
   }
 }
 
@@ -195,8 +210,9 @@ async function doFetch(id) {
   error.value = ''
   try {
     await fetchSubscription(id)
+    store.success('订阅拉取成功')
   } catch (err) {
-    error.value = getApiErrorMessage(err, '拉取订阅失败')
+    store.error(getApiErrorMessage(err, '拉取订阅失败'))
   } finally {
     loadingFetchId.value = null
   }
@@ -204,13 +220,20 @@ async function doFetch(id) {
 }
 
 async function remove(item) {
-  if (!confirm(`删除订阅 ${item.name} ?`)) return
+  const ok = await store.confirm({
+    title: '删除订阅',
+    message: `确定要删除订阅 "${item.name}" 吗？此操作不可撤销。`,
+    confirmText: '删除',
+    danger: true,
+  })
+  if (!ok) return
   error.value = ''
   try {
     await deleteSubscription(item.id)
+    store.success(`已删除订阅 ${item.name}`)
     await load()
   } catch (err) {
-    error.value = getApiErrorMessage(err, '删除订阅失败')
+    store.error(getApiErrorMessage(err, '删除订阅失败'))
   }
 }
 
@@ -221,7 +244,7 @@ async function showNodes(item) {
     viewingNodes.value = res.data
     nodePreviewTitle.value = `${item.name || '订阅'}节点预览`
   } catch (err) {
-    error.value = getApiErrorMessage(err, '加载节点失败')
+    store.error(getApiErrorMessage(err, '加载节点失败'))
   }
 }
 
@@ -232,6 +255,9 @@ function closeNodePreview() {
 
 function parseUserinfo(value) {
   if (!value) return null
+  // Return cached result if available
+  const cacheKey = value
+  if (_userinfoCache.has(cacheKey)) return _userinfoCache.get(cacheKey)
   const result = {}
   for (const part of String(value).split(';')) {
     const [key, raw] = part.split('=').map((item) => item && item.trim())
@@ -239,8 +265,11 @@ function parseUserinfo(value) {
     const number = Number(raw)
     result[key] = Number.isFinite(number) ? number : raw
   }
-  return Object.keys(result).length ? result : null
+  const parsed = Object.keys(result).length ? result : null
+  _userinfoCache.set(cacheKey, parsed)
+  return parsed
 }
+const _userinfoCache = new Map()
 
 function usedTraffic(sub) {
   const info = parseUserinfo(sub.subscription_userinfo)
@@ -274,25 +303,5 @@ function expireText(sub) {
   const days = Math.ceil((date.getTime() - Date.now()) / 86400000)
   const suffix = days >= 0 ? `剩 ${days} 天` : `已过期 ${Math.abs(days)} 天`
   return `${date.toLocaleDateString()}（${suffix}）`
-}
-
-function formatBytes(value) {
-  const n = Number(value || 0)
-  if (!Number.isFinite(n) || n <= 0) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
-  const idx = Math.min(units.length - 1, Math.floor(Math.log(n) / Math.log(1024)))
-  return `${(n / Math.pow(1024, idx)).toFixed(idx === 0 ? 0 : 2)} ${units[idx]}`
-}
-
-function short(value, length = 44) {
-  if (!value) return ''
-  return value.length > length ? `${value.slice(0, length)}...` : value
-}
-
-function formatLocalTime(utcString) {
-  if (!utcString) return '-'
-  const d = new Date(String(utcString).endsWith('Z') ? utcString : utcString + 'Z')
-  if (Number.isNaN(d.getTime())) return '-'
-  return d.toLocaleString()
 }
 </script>

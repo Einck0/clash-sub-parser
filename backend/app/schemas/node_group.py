@@ -2,7 +2,7 @@ from pydantic import BaseModel, Field
 
 
 class NodeGroupBase(BaseModel):
-    name: str
+    name: str = Field(max_length=120)
     kind: str = Field(default="manual", pattern="^(regex|manual|other)$")
     group_type: str = Field(
         default="select", pattern="^(select|url-test|fallback|load-balance)$"

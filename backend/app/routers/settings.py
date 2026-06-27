@@ -1,6 +1,8 @@
 from datetime import datetime, timezone
 from typing import Any
 
+import hashlib
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, UploadFile
 from fastapi.responses import JSONResponse
 from sqlalchemy import DateTime, delete, select
@@ -19,6 +21,8 @@ from app.models.subscription import Subscription
 from app.schemas.security_settings import AuthCheckRead, AuthCheckRequest, SecuritySettingsRead, SecuritySettingsUpdate
 from app.services.security_settings_service import get_security_settings, to_read, token_matches, update_security_settings
 from app.utils.auth import AUTH_COOKIE, extract_request_token
+
+AUTH_HASH_COOKIE = "clash_auth_hash"
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 settings = get_settings()
@@ -90,9 +94,11 @@ async def login_auth_token_endpoint(
     item = await get_security_settings(db)
     if item.auth_enabled and not token_matches(payload.token, item.token_hash):
         raise HTTPException(status_code=401, detail="Invalid token")
+    # Store SHA-256 hash of token instead of raw token (prevent credential theft via XSS)
+    token_hash = hashlib.sha256(payload.token.encode()).hexdigest()
     response.set_cookie(
-        AUTH_COOKIE,
-        payload.token,
+        AUTH_HASH_COOKIE,
+        token_hash,
         httponly=True,
         secure=settings.auth_cookie_secure or request.url.scheme == "https",
         samesite="lax",
@@ -104,6 +110,7 @@ async def login_auth_token_endpoint(
 @router.post("/auth/logout", response_model=AuthCheckRead)
 async def logout_auth_token_endpoint(response: Response) -> AuthCheckRead:
     response.delete_cookie(AUTH_COOKIE, samesite="lax")
+    response.delete_cookie(AUTH_HASH_COOKIE, samesite="lax")
     return AuthCheckRead(ok=True)
 
 
@@ -154,6 +161,9 @@ async def import_config_endpoint(
     Clears existing data in imported tables, then inserts rows.
     All-or-nothing: if any table fails, the entire import is rolled back.
     """
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > settings.request_max_bytes:
+        raise HTTPException(status_code=413, detail="Import payload too large")
     try:
         body: dict[str, Any] = await request.json()
     except Exception:
@@ -232,6 +242,13 @@ async def import_config_endpoint(
         raise HTTPException(status_code=400, detail=f"数据库错误：{exc}") from exc
 
     await db.commit()
+
+    # Prevent auth lock: check for auth_enabled=True with empty token_hash
+    auth_check = await db.execute(select(SecuritySettings).where(SecuritySettings.id == 1))
+    auth_row = auth_check.scalar_one_or_none()
+    if auth_row and auth_row.auth_enabled and not auth_row.token_hash:
+        auth_row.auth_enabled = False
+        await db.commit()
 
     return JSONResponse(content={
         "ok": True,

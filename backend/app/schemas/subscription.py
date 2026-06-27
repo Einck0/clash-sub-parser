@@ -4,8 +4,8 @@ from pydantic import BaseModel, Field
 
 
 class SubscriptionBase(BaseModel):
-    name: str
-    url: str
+    name: str = Field(max_length=120)
+    url: str = Field(max_length=2048)
     update_interval: int | None = Field(default=None, ge=1)
     is_primary: bool = False
     node_prefix: str | None = None

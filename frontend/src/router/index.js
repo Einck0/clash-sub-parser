@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { useAppStore } from '../stores/app'
 
 const routes = [
   { path: '/', name: 'Subscriptions', component: () => import('../views/Subscriptions.vue') },
@@ -14,6 +15,14 @@ const routes = [
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes,
+})
+
+router.beforeEach((to, from, next) => {
+  const store = useAppStore()
+  if (store.confirmState.open) {
+    store.cancelPendingConfirm()
+  }
+  next()
 })
 
 export default router

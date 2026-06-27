@@ -1,3 +1,5 @@
+import asyncio
+
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.config import get_settings
@@ -6,19 +8,19 @@ from app.services.subscription_service import fetch_due_subscriptions
 
 scheduler = AsyncIOScheduler()
 settings = get_settings()
-_running = False
+_lock = asyncio.Lock()
 
 
 async def _poll_subscriptions() -> None:
-    global _running
-    if _running:
+    if _lock.locked():
         return
-    _running = True
-    try:
-        async with AsyncSessionLocal() as session:
-            await fetch_due_subscriptions(session)
-    finally:
-        _running = False
+    async with _lock:
+        try:
+            async with AsyncSessionLocal() as session:
+                await fetch_due_subscriptions(session)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("Scheduled subscription poll failed")
 
 
 def start_scheduler() -> None:
@@ -32,6 +34,7 @@ def start_scheduler() -> None:
         minutes=1,
         id="subscription-poller",
         replace_existing=True,
+        max_instances=1,
     )
     scheduler.start()
 

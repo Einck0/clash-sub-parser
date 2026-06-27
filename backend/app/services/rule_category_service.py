@@ -1,5 +1,6 @@
 from fastapi import HTTPException
 from sqlalchemy import delete, func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.rule import Rule
@@ -48,8 +49,16 @@ async def ensure_rule_category(db: AsyncSession, name: str) -> RuleCategory:
     max_order = await db.scalar(select(func.max(RuleCategory.sort_order)))
     item = RuleCategory(name=category_name, sort_order=int(max_order or 0) + 10)
     db.add(item)
-    await db.commit()
-    await db.refresh(item)
+    try:
+        await db.commit()
+        await db.refresh(item)
+    except IntegrityError:
+        await db.rollback()
+        # Another request created it concurrently; re-fetch
+        result = await db.execute(select(RuleCategory).where(RuleCategory.name == category_name))
+        item = result.scalar_one_or_none()
+        if not item:
+            raise
     return item
 
 
@@ -94,10 +103,21 @@ async def update_rule_category(
     return item
 
 
-async def delete_rule_category(db: AsyncSession, item: RuleCategory) -> None:
-    await db.execute(delete(Rule).where(Rule.category == item.name))
+async def delete_rule_category(db: AsyncSession, item: RuleCategory, delete_rules: bool = True) -> int:
+    """Delete a rule category. Returns the number of associated rules affected."""
+    rule_count_result = await db.execute(
+        select(func.count(Rule.id)).where(Rule.category == item.name)
+    )
+    rule_count = rule_count_result.scalar() or 0
+    if delete_rules:
+        await db.execute(delete(Rule).where(Rule.category == item.name))
+    else:
+        await db.execute(
+            update(Rule).where(Rule.category == item.name).values(category="default")
+        )
     await db.delete(item)
     await db.commit()
+    return rule_count
 
 
 async def reorder_rule_categories(

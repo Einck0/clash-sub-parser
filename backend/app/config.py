@@ -27,8 +27,8 @@ class Settings(BaseSettings):
     auth_token: str = ""
     auth_cookie_secure: bool = False
     cors_allow_origins: list[str] = []  # empty = same-origin only; set CLASH_CORS_ALLOW_ORIGINS for cross-origin
-    cors_allow_methods: list[str] = ["*"]  # tighten to ["GET", "POST", "PATCH", "DELETE"] in production
-    cors_allow_headers: list[str] = ["*"]  # tighten to specific headers in production
+    cors_allow_methods: list[str] = ["GET", "POST", "PATCH", "DELETE", "OPTIONS"]
+    cors_allow_headers: list[str] = ["Content-Type", "X-Clash-Token", "X-Clash-CSRF", "Authorization"]
 
     model_config = SettingsConfigDict(
         env_file=".env",

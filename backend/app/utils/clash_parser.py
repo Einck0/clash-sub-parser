@@ -195,7 +195,8 @@ def _parse_vmess(link: str) -> dict | None:
     try:
         payload = try_base64_decode(link[8:])
         data = json.loads(payload)
-        return {
+        network = data.get("net", "tcp")
+        node = {
             "name": data.get("ps") or f"vmess-{data.get('add')}:{data.get('port')}",
             "type": "vmess",
             "server": data.get("add"),
@@ -203,10 +204,34 @@ def _parse_vmess(link: str) -> dict | None:
             "uuid": data.get("id"),
             "alterId": int(data.get("aid", 0)),
             "cipher": data.get("scy", "auto"),
-            "network": data.get("net", "tcp"),
+            "network": network,
             "tls": str(data.get("tls", "")).lower() == "tls",
             "servername": data.get("sni") or data.get("host"),
         }
+        # Transport layer parameters
+        if network == "ws":
+            ws_opts = {}
+            if path := data.get("path"):
+                ws_opts["path"] = path
+            if host := data.get("host"):
+                ws_opts["headers"] = {"Host": host}
+            if ws_opts:
+                node["ws-opts"] = ws_opts
+        elif network == "grpc":
+            grpc_opts = {}
+            if service_name := data.get("path") or data.get("serviceName"):
+                grpc_opts["grpc-service-name"] = service_name
+            if grpc_opts:
+                node["grpc-opts"] = grpc_opts
+        elif network in ("h2", "http"):
+            h2_opts = {}
+            if path := data.get("path"):
+                h2_opts["path"] = path
+            if host := data.get("host"):
+                h2_opts["host"] = [host]
+            if h2_opts:
+                node["h2-opts"] = h2_opts
+        return node
     except Exception:
         return None
 

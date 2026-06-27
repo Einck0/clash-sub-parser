@@ -25,6 +25,9 @@ async function request(method, url, data) {
   if (DEMO_MODE) return mockRequest(method, url, data)
 
   const headers = { 'Content-Type': 'application/json', ...authHeaders() }
+  // CSRF defense-in-depth: custom header ensures browsers won't send this cross-origin.
+  // The fixed value '1' is intentional - protection comes from the header being custom,
+  // not from the value being secret. Cookie auth + CSRF header = safe combo.
   if (!['GET', 'HEAD', 'OPTIONS'].includes(method.toUpperCase())) {
     headers['X-Clash-CSRF'] = '1'
   }

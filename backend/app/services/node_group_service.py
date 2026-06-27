@@ -1,3 +1,5 @@
+import re
+
 from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -157,8 +159,6 @@ async def preview_node_groups(db: AsyncSession) -> list[dict]:
 
         for regex_rule in group.regex_rules or []:
             try:
-                import re
-
                 pattern = re.compile(regex_rule)
             except Exception:
                 continue

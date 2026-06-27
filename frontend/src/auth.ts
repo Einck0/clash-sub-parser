@@ -1,12 +1,15 @@
+const TOKEN_KEY = '***'
 const TOKEN_PARAM = 'token'
 let sessionToken = ''
 
 export function getAuthToken(): string {
-  return sessionToken
+  if (sessionToken) return sessionToken
+  return localStorage.getItem(TOKEN_KEY) || ''
 }
 
 export function setAuthToken(token: string): void {
   sessionToken = token || ''
+  localStorage.setItem(TOKEN_KEY, token || '')
 }
 
 export function authHeaders(): Record<string, string> {

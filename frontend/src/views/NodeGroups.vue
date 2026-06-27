@@ -7,8 +7,8 @@
         <p class="page-desc">按输出顺序管理策略组；预览区展示最终解析后的节点与引用关系。</p>
       </div>
       <div class="head-actions">
-        <button @click="validateRefs" :disabled="loading || working">{{ working === 'validate' ? '校验中...' : '校验引用' }}</button>
-        <button @click="loadPreview" :disabled="loading || working">{{ working === 'preview' ? '刷新中...' : '刷新预览' }}</button>
+        <button @click="validateRefs" :disabled="loading || !!working">{{ working === 'validate' ? '校验中...' : '校验引用' }}</button>
+        <button @click="loadPreview" :disabled="loading || !!working">{{ working === 'preview' ? '刷新中...' : '刷新预览' }}</button>
         <button class="primary" @click="openCreate">添加节点组</button>
       </div>
     </div>

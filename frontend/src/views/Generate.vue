@@ -26,9 +26,9 @@
             <label><input type="checkbox" v-model="switches.dns" :disabled="!switches.enabled" /> DNS</label>
           </div>
           <div class="template-actions" style="margin-top:10px">
-            <button class="primary" @click="buildYaml" :disabled="working">{{ working === 'yaml' ? '生成中...' : '生成 YAML' }}</button>
-            <button class="primary" @click="buildScript" :disabled="working">{{ working === 'script' ? '生成中...' : '生成 Script.js' }}</button>
-            <button @click="buildAll" :disabled="working">{{ working === 'all' ? '生成中...' : '⚡ 全部生成' }}</button>
+            <button class="primary" @click="buildYaml" :disabled="!!working">{{ working === 'yaml' ? '生成中...' : '生成 YAML' }}</button>
+            <button class="primary" @click="buildScript" :disabled="!!working">{{ working === 'script' ? '生成中...' : '生成 Script.js' }}</button>
+            <button @click="buildAll" :disabled="!!working">{{ working === 'all' ? '生成中...' : '⚡ 全部生成' }}</button>
           </div>
         </div>
 

@@ -150,9 +150,20 @@ async def test_fetch_subscription_nodes_supports_redirects_and_filters(monkeypat
     class MockResponse:
         def __init__(self, text: str):
             self.text = text
+            self.is_redirect = False
+            self.status_code = 200
+            self.headers = {}
+            self.url = "https://example.com"
+            self.encoding = "utf-8"
 
         def raise_for_status(self):
             return None
+
+        async def aiter_bytes(self):
+            if hasattr(self, 'text'):
+                yield self.text.encode()
+            else:
+                yield b
 
     class MockClient:
         def __init__(self, *args, **kwargs):
@@ -164,6 +175,14 @@ async def test_fetch_subscription_nodes_supports_redirects_and_filters(monkeypat
 
         async def __aexit__(self, exc_type, exc, tb):
             return False
+
+        def stream(self, method, url, **kwargs):
+            import contextlib
+            @contextlib.asynccontextmanager
+            async def _ctx():
+                resp = await self.get(url)
+                yield resp
+            return _ctx()
 
         async def get(self, url):
             assert url == "https://example.com/sub"
@@ -201,6 +220,11 @@ async def test_fetch_subscription_nodes_supports_redirects_and_filters(monkeypat
 @pytest.mark.asyncio
 async def test_fetch_subscription_empty_regex_selects_all_then_manual_excludes(monkeypatch, db_session):
     class MockResponse:
+        is_redirect = False
+        status_code = 200
+        headers = {}
+        url = "https://example.com"
+        encoding = "utf-8"
         text = (
             "proxies:\n"
             "  - name: HK-1\n"
@@ -220,8 +244,18 @@ async def test_fetch_subscription_empty_regex_selects_all_then_manual_excludes(m
         def raise_for_status(self):
             return None
 
+        async def aiter_bytes(self):
+            if hasattr(self, 'text'):
+                yield self.text.encode()
+            else:
+                yield b
+
     class MockClient:
         def __init__(self, *args, **kwargs):
+            self.is_redirect = False
+            self.status_code = 200
+            self.headers = {}
+            self.url = "https://example.com"
             pass
 
         async def __aenter__(self):
@@ -229,6 +263,14 @@ async def test_fetch_subscription_empty_regex_selects_all_then_manual_excludes(m
 
         async def __aexit__(self, exc_type, exc, tb):
             return False
+
+        def stream(self, method, url, **kwargs):
+            import contextlib
+            @contextlib.asynccontextmanager
+            async def _ctx():
+                resp = await self.get(url)
+                yield resp
+            return _ctx()
 
         async def get(self, url):
             return MockResponse()
@@ -347,6 +389,14 @@ async def test_fetch_failure_records_error(monkeypatch, db_session):
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
+        def stream(self, method, url, **kwargs):
+            import contextlib
+            @contextlib.asynccontextmanager
+            async def _ctx():
+                resp = await self.get(url)
+                yield resp
+            return _ctx()
+
         async def get(self, url):
             raise RuntimeError("network down")
 
@@ -409,6 +459,11 @@ async def test_create_manual_node_subscription_parses_links_without_storing_raw_
 @pytest.mark.asyncio
 async def test_subscription_manual_nodes_are_merged_with_fetched_nodes(monkeypatch, db_session):
     class MockResponse:
+        is_redirect = False
+        status_code = 200
+        headers = {}
+        url = "https://example.com"
+        encoding = "utf-8"
         text = (
             "proxies:\n"
             "  - name: HK-1\n"
@@ -420,8 +475,18 @@ async def test_subscription_manual_nodes_are_merged_with_fetched_nodes(monkeypat
         def raise_for_status(self):
             return None
 
+        async def aiter_bytes(self):
+            if hasattr(self, 'text'):
+                yield self.text.encode()
+            else:
+                yield b
+
     class MockClient:
         def __init__(self, *args, **kwargs):
+            self.is_redirect = False
+            self.status_code = 200
+            self.headers = {}
+            self.url = "https://example.com"
             pass
 
         async def __aenter__(self):
@@ -429,6 +494,14 @@ async def test_subscription_manual_nodes_are_merged_with_fetched_nodes(monkeypat
 
         async def __aexit__(self, exc_type, exc, tb):
             return False
+
+        def stream(self, method, url, **kwargs):
+            import contextlib
+            @contextlib.asynccontextmanager
+            async def _ctx():
+                resp = await self.get(url)
+                yield resp
+            return _ctx()
 
         async def get(self, url):
             return MockResponse()
@@ -478,6 +551,11 @@ async def test_fetch_subscription_nodes_uses_runtime_proxy_setting(monkeypatch, 
     from app.models.security_settings import SecuritySettings
 
     class MockResponse:
+        is_redirect = False
+        status_code = 200
+        headers = {}
+        url = "https://example.com"
+        encoding = "utf-8"
         text = (
             "proxies:\n"
             "  - name: HK-1\n"
@@ -486,12 +564,23 @@ async def test_fetch_subscription_nodes_uses_runtime_proxy_setting(monkeypatch, 
             "    port: 443\n"
         )
         headers = {}
+        encoding = "utf-8"
 
         def raise_for_status(self):
             return None
 
+        async def aiter_bytes(self):
+            if hasattr(self, 'text'):
+                yield self.text.encode()
+            else:
+                yield b
+
     class MockClient:
         def __init__(self, *args, **kwargs):
+            self.is_redirect = False
+            self.status_code = 200
+            self.headers = {}
+            self.url = "https://example.com"
             assert kwargs.get("proxy") == "http://127.0.0.1:7890"
             assert kwargs.get("trust_env") is False
 
@@ -500,6 +589,14 @@ async def test_fetch_subscription_nodes_uses_runtime_proxy_setting(monkeypatch, 
 
         async def __aexit__(self, exc_type, exc, tb):
             return False
+
+        def stream(self, method, url, **kwargs):
+            import contextlib
+            @contextlib.asynccontextmanager
+            async def _ctx():
+                resp = await self.get(url)
+                yield resp
+            return _ctx()
 
         async def get(self, url):
             return MockResponse()

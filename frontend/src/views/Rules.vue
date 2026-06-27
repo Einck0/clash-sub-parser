@@ -204,7 +204,7 @@ async function loadWithConfirm() {
   if (hasUnsavedChanges.value) {
     const ok = await store.confirm({
       title: '刷新确认',
-      message: '刷新会丢弃当前未保存的分类草稿，确定刷新吗？',
+      message: '刷新会丢弃当前未保存更改，确定刷新吗？',
       confirmText: '刷新',
       danger: true,
     })

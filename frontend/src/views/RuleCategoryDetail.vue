@@ -12,6 +12,7 @@
       <div class="head-actions">
         <button @click="loadWithConfirm">刷新</button>
         <button @click="showPresets = true">规则模板</button>
+        <button @click="showImport = true">批量导入</button>
         <button @click="createRuleRow">新增规则</button>
         <button class="primary" @click="saveAllRules" :disabled="saving || !rules.length">
           {{ saving ? '保存中...' : '保存全部' }}
@@ -188,6 +189,14 @@
       @close="showPresets = false"
     />
 
+    <RuleImportModal
+      v-if="showImport"
+      :proxy-options="proxyTargets"
+      :categories="[]"
+      @apply="applyPresets"
+      @close="showImport = false"
+    />
+
     <FabSave :visible="hasUnsavedChanges" :saving="saving" @save="saveAllRules" />
   </section>
 </template>
@@ -196,10 +205,12 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAppStore } from '../stores/app'
+import { useUrlState } from '../utils/urlState'
 
 const store = useAppStore()
 import { createRule, deleteRule, getApiErrorMessage, getNodeGroups, getRules, reorderRules, updateRule, batchRules } from '../api'
 import RulePresetsModal from '../components/RulePresetsModal.vue'
+import RuleImportModal from '../components/RuleImportModal.vue'
 import FabSave from '../components/FabSave.vue'
 
 const route = useRoute()
@@ -209,10 +220,10 @@ const rules = ref([])
 const nodeGroups = ref([])
 const deletedRuleIds = ref([])
 const error = ref('')
-const search = ref('')
-const typeFilter = ref('')
-const proxyFilter = ref('')
-const enabledFilter = ref('')
+const search = useUrlState('q', '')
+const typeFilter = useUrlState('type', '')
+const proxyFilter = useUrlState('proxy', '')
+const enabledFilter = useUrlState('status', '')
 const page = ref(1)
 const pageSize = ref(50)
 const hasUnsavedChanges = ref(false)
@@ -220,6 +231,7 @@ const saving = ref(false)
 const suppressDirty = ref(false)
 const draggingRuleKey = ref(null)
 const showPresets = ref(false)
+const showImport = ref(false)
 let clientIdSeq = 1
 
 const builtins = ['DIRECT', 'PASS', 'REJECT']

@@ -211,12 +211,12 @@ async function doFetch(id) {
   try {
     await fetchSubscription(id)
     store.success('订阅拉取成功')
+    await load() // Auto-refresh to show updated nodes
   } catch (err) {
     store.error(getApiErrorMessage(err, '拉取订阅失败'))
   } finally {
     loadingFetchId.value = null
   }
-  await load()
 }
 
 async function remove(item) {

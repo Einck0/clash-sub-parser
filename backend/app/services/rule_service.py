@@ -135,6 +135,13 @@ def _validate_rule_item(rule_type: str, value: str, proxy: str) -> None:
 
 async def batch_rules(db: AsyncSession, payload: dict) -> list[Rule]:
     """Process a batch of rule operations atomically."""
+    # Auto-snapshot before batch changes
+    from app.services.snapshot_service import create_snapshot
+    try:
+        await create_snapshot(db, label="auto-before-batch-rules")
+    except Exception:
+        pass  # Don't fail the actual operation if snapshot fails
+
     # 1. Deletes
     delete_ids = payload.get("delete", [])
     if delete_ids:

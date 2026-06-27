@@ -139,4 +139,15 @@ export const generateScript = (data) => api.post('/generate/script', data)
 export const generateYaml = (data) => api.post('/generate/yaml', data)
 export const generateSubscriptionYaml = (id) => api.post(`/generate/subscription/${id}`)
 
+// Snapshots
+export const getSnapshots = () => api.get('/snapshots')
+export const createSnapshot = (data) => api.post('/snapshots', data)
+export const getSnapshot = (id) => api.get(`/snapshots/${id}`)
+export const getSnapshotData = (id) => api.get(`/snapshots/${id}/data`)
+export const restoreSnapshot = (id) => api.post(`/snapshots/${id}/restore`)
+export const deleteSnapshot = (id) => api.delete(`/snapshots/${id}`)
+
+// Latency
+export const checkLatency = (hosts, timeoutMs = 3000) => api.post('/latency/check', { hosts, timeout_ms: timeoutMs })
+
 export default api

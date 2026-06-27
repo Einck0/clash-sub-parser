@@ -136,6 +136,13 @@ async def reorder_rule_categories(
 
 async def batch_rule_categories(db: AsyncSession, payload: dict) -> list[dict]:
     """Process a batch of category operations atomically."""
+    # Auto-snapshot before batch changes
+    from app.services.snapshot_service import create_snapshot
+    try:
+        await create_snapshot(db, label="auto-before-batch-categories")
+    except Exception:
+        pass
+
     # 1. Deletes (with cascade)
     delete_ids = payload.get("delete", [])
     for cat_id in delete_ids:

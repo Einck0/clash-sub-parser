@@ -10,6 +10,7 @@ const routes = [
   { path: '/dns', name: 'DnsSettings', component: () => import('../views/DnsSettings.vue') },
   { path: '/generate', name: 'Generate', component: () => import('../views/Generate.vue') },
   { path: '/settings', name: 'Settings', component: () => import('../views/Settings.vue') },
+  { path: '/history', name: 'ConfigHistory', component: () => import('../views/ConfigHistory.vue') },
 ]
 
 const router = createRouter({

@@ -14,6 +14,9 @@
         <p class="brand-sub">统一管理订阅、策略组、规则、DNS 与最终导出配置。</p>
       </div>
       <div class="topbar-actions" aria-label="快捷输出">
+        <button class="quick-link" @click="toggleTheme" :title="theme === 'dark' ? '切换浅色' : '切换深色'">
+          {{ theme === 'dark' ? '☀️' : '🌙' }}
+        </button>
         <a class="quick-link" :href="withAuthToken('/yaml', exportNeedsToken)" target="_blank" rel="noreferrer">YAML</a>
         <a class="quick-link" :href="withAuthToken('/script', exportNeedsToken)" target="_blank" rel="noreferrer">Script.js</a>
       </div>
@@ -48,8 +51,10 @@ import AuthGate from './components/AuthGate.vue'
 import ToastContainer from './components/ToastContainer.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import { useAppStore } from './stores/app'
+import { useTheme } from './utils/theme'
 
 const store = useAppStore()
+const { theme, toggle: toggleTheme } = useTheme()
 
 const navItems = [
   { to: '/', label: 'Subscriptions', hint: '订阅', icon: '📡' },
@@ -58,6 +63,7 @@ const navItems = [
   { to: '/dns', label: 'DNS', hint: '解析', icon: '🌐' },
   { to: '/generate', label: 'Generate', hint: '导出', icon: '⚙' },
   { to: '/settings', label: 'Settings', hint: '设置', icon: '🔒' },
+  { to: '/history', label: 'History', hint: '历史', icon: '📜' },
 ]
 
 const showAuthGate = ref(false)

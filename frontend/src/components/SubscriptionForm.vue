@@ -130,6 +130,28 @@ const regexText = ref('')
 const regexError = ref('')
 const nodeSearch = ref('')
 const manualNodeLinks = ref('')
+const nameEdited = ref(false)
+
+// Auto-extract name from URL when name is empty
+watch(
+  () => form.value.url,
+  (url) => {
+    if (nameEdited.value || form.value.name || !url) return
+    try {
+      const parsed = new URL(url)
+      // Extract meaningful name from hostname: sub.example.com → example
+      const parts = parsed.hostname.split('.')
+      const name = parts.length >= 2 ? parts[parts.length - 2] : parsed.hostname
+      form.value.name = name.charAt(0).toUpperCase() + name.slice(1)
+    } catch {}
+  }
+)
+
+// Track if user manually edited the name
+watch(
+  () => form.value.name,
+  () => { if (form.value.name) nameEdited.value = true }
+)
 
 watch(
   () => props.subscription,

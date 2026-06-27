@@ -211,7 +211,10 @@ async function doFetch(id) {
   try {
     await fetchSubscription(id)
     store.success('订阅拉取成功')
-    await load() // Auto-refresh to show updated nodes
+    await load()
+    // Auto-show nodes after successful fetch
+    const sub = subscriptions.value.find((s) => s.id === id)
+    if (sub) await showNodes(sub)
   } catch (err) {
     store.error(getApiErrorMessage(err, '拉取订阅失败'))
   } finally {

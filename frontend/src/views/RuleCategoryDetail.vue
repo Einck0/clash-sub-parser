@@ -314,20 +314,21 @@ function toEditableRule(item) {
 }
 
 function createRuleRow() {
-  rules.value.push({
+  rules.value.unshift({
     id: null,
     _clientId: `new-${clientIdSeq++}`,
     name: '',
     category: categoryName.value,
-    type: 'MATCH',
+    type: 'DOMAIN-SUFFIX',
     value: '',
-    proxy: 'DIRECT',
+    proxy: 'PROXY',
     options: [],
     optionsText: '',
-    sort_order: rules.value.length,
+    sort_order: 0,
     enabled: true,
   })
-  page.value = totalPages.value
+  normalizeSortOrder()
+  page.value = 1
 }
 
 async function saveAllRules() {

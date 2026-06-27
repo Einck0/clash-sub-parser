@@ -28,6 +28,7 @@
           <div class="template-actions" style="margin-top:10px">
             <button class="primary" @click="buildYaml" :disabled="working">{{ working === 'yaml' ? '生成中...' : '生成 YAML' }}</button>
             <button class="primary" @click="buildScript" :disabled="working">{{ working === 'script' ? '生成中...' : '生成 Script.js' }}</button>
+            <button @click="buildAll" :disabled="working">{{ working === 'all' ? '生成中...' : '⚡ 全部生成' }}</button>
           </div>
         </div>
 
@@ -251,6 +252,25 @@ async function buildYaml() {
     store.success('YAML 已生成')
   } catch (err) {
     store.error(getApiErrorMessage(err, '生成 YAML 失败'))
+  } finally {
+    working.value = ''
+  }
+}
+
+async function buildAll() {
+  working.value = 'all'
+  setMessage('', '')
+  try {
+    if (!(await saveSettings())) return
+    const [yamlRes, scriptRes] = await Promise.all([
+      generateYaml({ ...switches }),
+      generateScript({ ...switches, exclude_node_proxies: true }),
+    ])
+    yamlResult.value = yamlRes.data.yaml || ''
+    scriptResult.value = scriptRes.data.script || ''
+    store.success('YAML 和 Script.js 已全部生成')
+  } catch (err) {
+    store.error(getApiErrorMessage(err, '生成失败'))
   } finally {
     working.value = ''
   }

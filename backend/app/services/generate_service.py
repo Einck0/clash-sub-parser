@@ -12,6 +12,7 @@ from app.models.rule import Rule
 from app.models.rule_category import RuleCategory
 from app.models.subscription import Subscription
 from app.utils.dedup import deduplicate_nodes
+from app.utils.group_utils import dedup_names, with_fallback, resolve_entries
 
 settings = get_settings()
 BUILTIN_PROXIES = ["DIRECT", "PASS", "REJECT"]
@@ -160,7 +161,7 @@ async def _collect_node_groups(db: AsyncSession, all_nodes: list[dict]) -> list[
 
         selected: list[str] = []
 
-        entries = _resolve_entries(group)
+        entries = resolve_entries(group)
         for entry in entries:
             entry_type = entry.get("type")
             entry_value = entry.get("value")
@@ -188,14 +189,14 @@ async def _collect_node_groups(db: AsyncSession, all_nodes: list[dict]) -> list[
             selected.extend([name for name in all_node_names if pattern.search(name)])
 
         excluded = set(group.exclude_nodes or [])
-        merged = [item for item in _dedup_names(selected) if item not in excluded]
+        merged = [item for item in dedup_names(selected) if item not in excluded]
         resolved_cache[group_id] = merged
         trail.remove(group_id)
         return merged
 
     result_groups = []
     for group in mapping.values():
-        proxies = _with_fallback(_dedup_names(resolve_group_nodes(group.id, set())), group.add_fallback)
+        proxies = with_fallback(dedup_names(resolve_group_nodes(group.id, set())), group.add_fallback)
 
         payload = {
             "name": group.name,
@@ -305,34 +306,4 @@ async def get_primary_subscription_headers(db: AsyncSession) -> dict[str, str]:
     return headers
 
 
-def _dedup_names(items: list[str]) -> list[str]:
-    seen: set[str] = set()
-    result: list[str] = []
-    for item in items:
-        value = str(item).strip()
-        if not value or value in seen:
-            continue
-        seen.add(value)
-        result.append(value)
-    return result
-
-
-def _with_fallback(names: list[str], enabled: bool) -> list[str]:
-    if not enabled:
-        return names
-    return [name for name in names if name != "REJECT"] + ["REJECT"]
-
-
-def _resolve_entries(group: NodeGroup) -> list[dict]:
-    entries = list(group.include_entries or [])
-    if entries:
-        return entries
-
-    fallback: list[dict] = []
-    for name in group.include_nodes or []:
-        fallback.append({"type": "node", "value": name})
-    for group_id in group.include_group_ids or []:
-        fallback.append({"type": "group", "value": group_id})
-    for group_id in group.include_group_nodes_ids or []:
-        fallback.append({"type": "group_nodes", "value": group_id})
-    return fallback
+    return dedup_names(items)

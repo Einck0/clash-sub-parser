@@ -7,6 +7,7 @@ from app.models.rule import Rule
 from app.models.subscription import Subscription
 from app.utils.dedup import deduplicate_nodes
 from app.schemas.node_group import NodeGroupCreate, NodeGroupReorder, NodeGroupUpdate
+from app.utils.group_utils import dedup_names, with_fallback, resolve_entries
 from app.utils.validators import ensure_group_ids_exist, validate_no_circular_reference
 
 BUILTIN_GROUPS = ["DIRECT", "REJECT", "PASS"]
@@ -134,7 +135,7 @@ async def preview_node_groups(db: AsyncSession) -> list[dict]:
 
         selected: list[str] = []
 
-        entries = _resolve_entries_from_group(group)
+        entries = resolve_entries(group)
         for entry in entries:
             entry_type = entry.get("type")
             entry_value = entry.get("value")
@@ -164,7 +165,7 @@ async def preview_node_groups(db: AsyncSession) -> list[dict]:
             selected.extend([name for name in node_names if pattern.search(name)])
 
         excluded = set(group.exclude_nodes or [])
-        merged = [name for name in _uniq(selected) if name not in excluded]
+        merged = [name for name in dedup_names(selected) if name not in excluded]
         cache[group_id] = merged
         trail.remove(group_id)
         return merged
@@ -173,7 +174,7 @@ async def preview_node_groups(db: AsyncSession) -> list[dict]:
     for group in groups:
         include_group_names: list[str] = []
         include_group_nodes_names: list[str] = []
-        entries = _resolve_entries_from_group(group)
+        entries = resolve_entries(group)
         for entry in entries:
             entry_type = entry.get("type")
             entry_value = entry.get("value")
@@ -181,7 +182,7 @@ async def preview_node_groups(db: AsyncSession) -> list[dict]:
                 include_group_names.append(group_map[entry_value].name)
             if entry_type == "group_nodes" and entry_value in group_map:
                 include_group_nodes_names.append(group_map[entry_value].name)
-        resolved_nodes = _with_fallback(resolve_nodes(group.id, set()), group.add_fallback)
+        resolved_nodes = with_fallback(resolve_nodes(group.id, set()), group.add_fallback)
         preview.append(
             {
                 "id": group.id,
@@ -289,7 +290,7 @@ async def _ensure_group_not_referenced(db: AsyncSession, item: NodeGroup) -> Non
         )
 
 
-def _uniq(items: list[str]) -> list[str]:
+def dedup_names(items: list[str]) -> list[str]:
     seen: set[str] = set()
     result: list[str] = []
     for item in items:
@@ -329,13 +330,13 @@ def _normalize_entries(entries: list[dict]) -> list[dict]:
     return normalized
 
 
-def _with_fallback(names: list[str], enabled: bool) -> list[str]:
+def with_fallback(names: list[str], enabled: bool) -> list[str]:
     if not enabled:
         return names
     return [name for name in names if name != "REJECT"] + ["REJECT"]
 
 
-def _resolve_entries_from_group(group: NodeGroup) -> list[dict]:
+def resolve_entries(group: NodeGroup) -> list[dict]:
     entries = list(group.include_entries or [])
     if entries:
         return entries

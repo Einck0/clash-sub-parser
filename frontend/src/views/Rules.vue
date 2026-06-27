@@ -111,11 +111,13 @@
         </div>
       </article>
     </div>
+
+    <FabSave :visible="hasUnsavedChanges" :saving="saving" @save="saveAllCategories" />
   </section>
 </template>
 
 <script setup>
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '../stores/app'
 
@@ -131,6 +133,7 @@ import {
   updateRuleCategory,
 } from '../api'
 import UiState from '../components/UiState.vue'
+import FabSave from '../components/FabSave.vue'
 
 const router = useRouter()
 const categories = ref([])
@@ -144,7 +147,17 @@ const saving = ref(false)
 const suppressDirty = ref(false)
 let clientIdSeq = 1
 
-onMounted(load)
+function handleGlobalKeydown(e) {
+  if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+    e.preventDefault()
+    if (hasUnsavedChanges.value && !saving.value) saveAllCategories()
+  }
+}
+onMounted(() => {
+  load()
+  window.addEventListener('keydown', handleGlobalKeydown)
+})
+onUnmounted(() => window.removeEventListener('keydown', handleGlobalKeydown))
 
 watch(
   categories,

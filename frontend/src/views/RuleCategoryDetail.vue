@@ -187,17 +187,20 @@
       @apply="applyPresets"
       @close="showPresets = false"
     />
+
+    <FabSave :visible="hasUnsavedChanges" :saving="saving" @save="saveAllRules" />
   </section>
 </template>
 
 <script setup>
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAppStore } from '../stores/app'
 
 const store = useAppStore()
 import { createRule, deleteRule, getApiErrorMessage, getNodeGroups, getRules, reorderRules, updateRule, batchRules } from '../api'
 import RulePresetsModal from '../components/RulePresetsModal.vue'
+import FabSave from '../components/FabSave.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -224,7 +227,18 @@ const ruleTypes = ['DOMAIN', 'DOMAIN-SUFFIX', 'DOMAIN-KEYWORD', 'DOMAIN-REGEX', 
 const proxyTargets = computed(() => [...builtins, ...nodeGroups.value.map((group) => group.name)])
 const saveStatus = computed(() => saving.value ? '正在同步' : (hasUnsavedChanges.value ? '有未保存更改' : '已同步'))
 
-onMounted(load)
+onMounted(() => {
+  load()
+  window.addEventListener('keydown', handleGlobalKeydown)
+})
+onUnmounted(() => window.removeEventListener('keydown', handleGlobalKeydown))
+
+function handleGlobalKeydown(e) {
+  if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+    e.preventDefault()
+    if (hasUnsavedChanges.value && !saving.value) saveAllRules()
+  }
+}
 watch([search, typeFilter, proxyFilter, enabledFilter, pageSize], () => { page.value = 1 })
 watch(categoryName, () => load())
 watch(
@@ -331,8 +345,9 @@ async function saveAllRules() {
       .map((rule) => ({ id: rule.id, sort_order: rule.sort_order }))
 
     const { data } = await batchRules(batch)
-    // Sync local state with server response
-    rules.value = (data || []).map(toEditableRule)
+    // Sync local state with server response - filter to current category only
+    const allRules = (data || []).map(toEditableRule)
+    rules.value = allRules.filter((r) => (r.category || 'default') === categoryName.value)
     deletedRuleIds.value = []
     hasUnsavedChanges.value = false
     store.success(`已保存 ${sorted.length} 条规则`)

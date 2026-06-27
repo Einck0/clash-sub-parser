@@ -77,7 +77,7 @@ async def update_rule(db: AsyncSession, item: Rule, payload: RuleUpdate) -> Rule
     return item
 
 
-async function delete_rule(db: AsyncSession, item: Rule) -> None:
+async def delete_rule(db: AsyncSession, item: Rule) -> None:
     await db.delete(item)
     await db.commit()
 

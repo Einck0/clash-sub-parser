@@ -322,21 +322,11 @@ async function onImportFile(event) {
   if (!file) return
   const ok = await store.confirm({
     title: '导入配置',
-    message: `确定要导入配置文件 "${file.name}" 吗？\n\n导入会覆盖当前配置中对应的数据表（订阅、节点组、规则、DNS、生成设置等）。建议先导出备份。`,
-    confirmText: '继续导入',
-    danger: true,
-  })
-  if (!ok) {
-    if (importInput.value) importInput.value.value = ''
-    return
-  }
-  const ok2 = await store.confirm({
-    title: '最终确认',
-    message: '导入后会覆盖当前配置，无法从界面撤销。确定继续吗？',
+    message: `确定要导入 "${file.name}" 吗？\n\n导入会覆盖当前配置（订阅、节点组、规则、DNS 等），无法撤销。建议先导出备份。`,
     confirmText: '确认导入',
     danger: true,
   })
-  if (!ok2) {
+  if (!ok) {
     if (importInput.value) importInput.value.value = ''
     return
   }
@@ -388,18 +378,11 @@ async function doImport(file) {
 async function resetAllConfig() {
   const ok = await store.confirm({
     title: '重置所有配置',
-    message: '这会清空订阅、节点组、规则、DNS、生成和安全设置，覆盖当前配置，无法从界面撤销。建议先导出备份。',
-    confirmText: '继续重置',
-    danger: true,
-  })
-  if (!ok) return
-  const ok2 = await store.confirm({
-    title: '最终确认',
-    message: '真的要清空并恢复成新安装状态吗？这会覆盖当前配置。',
+    message: '确定要清空所有配置并恢复成新安装状态吗？\n\n会清空订阅、节点组、规则、DNS、生成和安全设置，无法撤销。建议先导出备份。',
     confirmText: '确认重置',
     danger: true,
   })
-  if (!ok2) return
+  if (!ok) return
   working.value = 'reset'
   message.value = ''
   try {

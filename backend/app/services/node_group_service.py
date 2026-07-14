@@ -54,7 +54,17 @@ async def update_node_group(
 ) -> NodeGroup:
     data = payload.model_dump(exclude_unset=True)
     _normalize_group_payload(data)
+
+    # When UI sends include_entries without any regex entries and without
+    # regex_rules, preserve existing DB regex instead of wiping them.
     if "include_entries" in data:
+        incoming_entries = data.get("include_entries") or []
+        has_regex_entry = any(
+            isinstance(entry, dict) and entry.get("type") == "regex"
+            for entry in incoming_entries
+        )
+        if "regex_rules" not in data and not has_regex_entry and (item.regex_rules or []):
+            data["regex_rules"] = list(item.regex_rules or [])
         _sync_entry_derived_fields(data)
 
     include_group_ids = data.get("include_group_ids", item.include_group_ids)
@@ -280,8 +290,8 @@ def _sync_entry_derived_fields(data: dict) -> None:
             if rule:
                 regex_from_entries.append(rule)
 
-    # If caller still passed legacy regex_rules and entries have no regex item,
-    # promote those rules into virtual regex entries (do NOT freeze matched nodes).
+    # Preserve/promote legacy regex_rules when entries do not yet contain regex items.
+    # Critical: never blank out existing regex_rules just because include_entries is present.
     legacy_rules = [
         str(rule).strip()
         for rule in (data.get("regex_rules") or [])
@@ -296,9 +306,21 @@ def _sync_entry_derived_fields(data: dict) -> None:
     data["include_nodes"] = include_nodes
     data["include_group_ids"] = include_group_ids
     data["include_group_nodes_ids"] = include_group_nodes_ids
-    # Mirror regex_rules from virtual regex entries for compatibility.
-    if "include_entries" in data or regex_from_entries or legacy_rules:
-        data["regex_rules"] = regex_from_entries or legacy_rules
+
+    # Mirror regex_rules:
+    # - if virtual regex entries exist, they are the source of truth
+    # - else keep explicit legacy regex_rules from payload
+    # - only write empty list when payload intentionally has neither
+    if regex_from_entries:
+        data["regex_rules"] = regex_from_entries
+    elif "regex_rules" in data:
+        data["regex_rules"] = legacy_rules
+    elif "include_entries" in data:
+        # entries provided without regex entries and without regex_rules field:
+        # do not invent rules, but also do not force-clear unless caller included
+        # an explicit empty regex_rules. Leaving key absent preserves DB value
+        # on partial updates.
+        pass
 
 
 async def _ensure_group_not_referenced(db: AsyncSession, item: NodeGroup) -> None:

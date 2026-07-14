@@ -117,17 +117,27 @@
       </UiState>
     </div>
 
-    <div class="modal-backdrop" v-if="viewingNodes.length" @click.self="closeNodePreview">
+    <div class="modal-backdrop" v-if="viewingSub" @click.self="closeNodePreview">
       <div class="modal node-preview-modal" role="dialog" aria-modal="true" :aria-label="nodePreviewTitle || '节点预览'">
         <div class="row space preview-title">
           <div>
             <p class="eyebrow">Node Preview</p>
             <h3>{{ nodePreviewTitle || '节点预览' }}（{{ viewingNodes.length }}）</h3>
-            <p class="section-hint">支持按节点名、协议、服务器或端口搜索。点背景或关闭按钮即可返回订阅页。</p>
+            <p class="section-hint">
+              支持搜索、归属国、测速；可点「改名」直接修改前缀后的最终节点名。
+            </p>
           </div>
           <button @click="closeNodePreview">关闭</button>
         </div>
-        <NodePreviewList :nodes="viewingNodes" :collapsed-limit="60" :auto-geo="true" />
+        <NodePreviewList
+          :nodes="viewingBaseNodes"
+          :collapsed-limit="60"
+          :auto-geo="true"
+          :editable="true"
+          :renames="viewingSub.node_renames || {}"
+          :saving="renamingSaving"
+          @save-renames="saveNodeRenames"
+        />
       </div>
     </div>
 
@@ -145,7 +155,7 @@
 </template>
 
 <script setup>
-import { onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useAppStore } from '../stores/app'
 import { formatBytes, short, formatLocalTime } from '../utils/format'
 import NodePreviewList from '../components/NodePreviewList.vue'
@@ -165,14 +175,53 @@ const store = useAppStore()
 
 const subscriptions = ref([])
 const viewingNodes = ref([])
+const viewingSub = ref(null)
 const nodePreviewTitle = ref('')
 const showForm = ref(false)
 const editing = ref(null)
 const loadingFetchId = ref(null)
 const loadingPrimaryId = ref(null)
 const loadingToggleId = ref(null)
+const renamingSaving = ref(false)
 const loading = ref(false)
 const error = ref('')
+
+// Build post-prefix base names for rename editor. Keys in node_renames are
+// always these base names, never already-renamed display names.
+const viewingBaseNodes = computed(() => {
+  if (!viewingSub.value) return viewingNodes.value
+  const sub = viewingSub.value
+  const prefix = resolvePrefix(sub)
+  const source = (sub.source_nodes || []).length
+    ? sub.source_nodes
+    : (sub.manual_nodes || []).length
+      ? sub.manual_nodes
+      : null
+  if (source && source.length) {
+    return source.map((node) => {
+      const original = String(node?.name || '').trim()
+      const baseName = prefix ? `${prefix}-${original}` : original
+      return { ...node, name: baseName }
+    })
+  }
+  // Fallback: invert existing renames so editor shows base keys when possible.
+  const reverse = {}
+  for (const [base, finalName] of Object.entries(sub.node_renames || {})) {
+    if (base && finalName) reverse[String(finalName)] = String(base)
+  }
+  return (viewingNodes.value || []).map((node) => {
+    const current = String(node?.name || '').trim()
+    const baseName = reverse[current] || current
+    return { ...node, name: baseName }
+  })
+})
+
+function resolvePrefix(sub) {
+  const custom = String(sub?.node_prefix || '').trim()
+  if (custom) return custom
+  if (sub?.is_primary) return ''
+  return String(sub?.name || '').trim()
+}
 
 onMounted(load)
 
@@ -306,6 +355,8 @@ async function showNodes(item) {
   try {
     const res = await getSubscriptionNodes(item.id)
     viewingNodes.value = res.data
+    // Keep full subscription context so renames can be saved as post-prefix map.
+    viewingSub.value = { ...item }
     nodePreviewTitle.value = `${item.name || '订阅'}节点预览`
   } catch (err) {
     store.error(getApiErrorMessage(err, '加载节点失败'))
@@ -314,7 +365,41 @@ async function showNodes(item) {
 
 function closeNodePreview() {
   viewingNodes.value = []
+  viewingSub.value = null
   nodePreviewTitle.value = ''
+  renamingSaving.value = false
+}
+
+async function saveNodeRenames(renames) {
+  if (!viewingSub.value?.id || renamingSaving.value) return
+  renamingSaving.value = true
+  error.value = ''
+  try {
+    // renames keys are post-prefix base names from viewingBaseNodes.
+    await updateSubscription(viewingSub.value.id, {
+      node_renames: renames || {},
+    })
+    // Rebuild final names from source + prefix + renames when possible.
+    if ((viewingSub.value.source_nodes || []).length || (viewingSub.value.manual_nodes || []).length) {
+      try {
+        await fetchSubscription(viewingSub.value.id)
+      } catch (_) {
+        // rename already saved; fetch failure shouldn't block UI refresh
+      }
+    }
+    store.success('节点名称已保存')
+    await load()
+    const latest = subscriptions.value.find((item) => item.id === viewingSub.value.id)
+    if (latest) {
+      viewingSub.value = { ...latest }
+      const res = await getSubscriptionNodes(latest.id)
+      viewingNodes.value = res.data
+    }
+  } catch (err) {
+    store.error(getApiErrorMessage(err, '保存节点名称失败'))
+  } finally {
+    renamingSaving.value = false
+  }
 }
 
 function parseUserinfo(value) {

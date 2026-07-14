@@ -354,30 +354,27 @@ def _apply_selection(
 
 def _refresh_selected_nodes(item: Subscription) -> None:
     source_nodes = _combined_source_nodes(item.source_nodes or [], item.manual_nodes or [])
-    fallback_to_current = False
-    if not source_nodes and item.raw_nodes:
-        source_nodes = item.raw_nodes
-        fallback_to_current = True
-    if not source_nodes:
+    if source_nodes:
+        selected_nodes = _apply_selection(
+            source_nodes,
+            compile_regex(item.filter_regex),
+            item.include_node_names or [],
+            item.exclude_node_names or [],
+        )
+        prefixed_nodes = _apply_prefix(
+            selected_nodes,
+            _resolve_prefix(item.name, item.node_prefix, item.is_primary),
+        )
+        renamed_nodes = _apply_renames(prefixed_nodes, item.node_renames or {})
+        item.raw_nodes = deduplicate_nodes(renamed_nodes)
         return
 
-    selected_nodes = _apply_selection(
-        source_nodes,
-        compile_regex(item.filter_regex),
-        item.include_node_names or [],
-        item.exclude_node_names or [],
-    )
-    if fallback_to_current:
-        # raw_nodes already include prefix/rename; re-apply only renames on current names.
-        item.raw_nodes = deduplicate_nodes(_apply_renames(selected_nodes, item.node_renames or {}))
-        return
-
-    prefixed_nodes = _apply_prefix(
-        selected_nodes,
-        _resolve_prefix(item.name, item.node_prefix, item.is_primary),
-    )
-    renamed_nodes = _apply_renames(prefixed_nodes, item.node_renames or {})
-    item.raw_nodes = deduplicate_nodes(renamed_nodes)
+    # No upstream/manual source available: treat current raw_nodes as already
+    # post-prefix names and apply rename map directly onto them.
+    if item.raw_nodes:
+        item.raw_nodes = deduplicate_nodes(
+            _apply_renames(item.raw_nodes or [], item.node_renames or {})
+        )
 
 
 def _merge_manual_nodes(existing_nodes: list[dict], node_links: str | None) -> list[dict]:
@@ -411,7 +408,11 @@ def _apply_prefix(nodes: list[dict], prefix: str) -> list[dict]:
 
 
 def _apply_renames(nodes: list[dict], renames: dict | None) -> list[dict]:
-    """Rename nodes after prefixing. Keys are post-prefix names."""
+    """Rename nodes after prefixing.
+
+    Keys are post-prefix names. When the caller passes a new full rename map
+    from an already-renamed raw_nodes list, keys refer to the current names.
+    """
     mapping = _normalize_node_renames(renames or {})
     if not mapping:
         return nodes

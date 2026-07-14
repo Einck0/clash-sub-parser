@@ -29,18 +29,7 @@ async def get_node_group(db: AsyncSession, node_group_id: int) -> NodeGroup | No
 async def create_node_group(db: AsyncSession, payload: NodeGroupCreate) -> NodeGroup:
     data = payload.model_dump()
     _normalize_group_payload(data)
-    # Promote any leftover top-level regex_rules into virtual entries once,
-    # then include_entries becomes the only source of truth.
-    if data.get("regex_rules") and not any(
-        isinstance(e, dict) and e.get("type") == "regex"
-        for e in (data.get("include_entries") or [])
-    ):
-        entries = list(data.get("include_entries") or [])
-        for rule in data.get("regex_rules") or []:
-            text = str(rule or "").strip()
-            if text:
-                entries.append({"type": "regex", "value": text})
-        data["include_entries"] = entries
+    # include_entries is source of truth; regex_rules is only a derived mirror.
     _sync_entry_derived_fields(data)
     await _validate_node_group_relations(
         db,
@@ -263,10 +252,10 @@ def _normalize_group_payload(data: dict) -> None:
 
 
 def _sync_entry_derived_fields(data: dict) -> None:
-    """Derive legacy fields from include_entries.
+    """Derive mirrored fields from include_entries.
 
-    After migration, virtual `regex` entries are the only source of truth.
-    `regex_rules` is mirrored for list badges / old readers, not preserved from DB.
+    Virtual `regex` entries are the only source of truth for matchers.
+    `regex_rules` / kind / include_* are derived mirrors for list badges.
     """
     entries = list(data.get("include_entries") or [])
     include_nodes: list[str] = []
@@ -292,7 +281,7 @@ def _sync_entry_derived_fields(data: dict) -> None:
     data["include_group_ids"] = include_group_ids
     data["include_group_nodes_ids"] = include_group_nodes_ids
     data["regex_rules"] = regex_from_entries
-    data["kind"] = "regex" if regex_from_entries else data.get("kind") or "manual"
+    data["kind"] = "regex" if regex_from_entries else "manual"
 
 
 async def _ensure_group_not_referenced(db: AsyncSession, item: NodeGroup) -> None:
@@ -319,18 +308,6 @@ async def _ensure_group_not_referenced(db: AsyncSession, item: NodeGroup) -> Non
             status_code=400,
             detail=f"Node group is referenced by rule '{rule_name or item.name}'",
         )
-
-
-def dedup_names(items: list[str]) -> list[str]:
-    seen: set[str] = set()
-    result: list[str] = []
-    for item in items:
-        value = str(item).strip()
-        if not value or value in seen:
-            continue
-        seen.add(value)
-        result.append(value)
-    return result
 
 
 def _normalize_entries(entries: list[dict]) -> list[dict]:
@@ -373,25 +350,3 @@ def _normalize_entries(entries: list[dict]) -> list[dict]:
         normalized.append({"type": entry_type, "value": group_id})
 
     return normalized
-
-
-def with_fallback(names: list[str], enabled: bool) -> list[str]:
-    if not enabled:
-        return names
-    cleaned = [name for name in names if name != "PASS"]
-    return cleaned + ["PASS"]
-
-
-def resolve_entries(group: NodeGroup) -> list[dict]:
-    entries = list(group.include_entries or [])
-    if entries:
-        return entries
-
-    fallback: list[dict] = []
-    for node in group.include_nodes or []:
-        fallback.append({"type": "node", "value": node})
-    for group_id in group.include_group_ids or []:
-        fallback.append({"type": "group", "value": group_id})
-    for group_id in group.include_group_nodes_ids or []:
-        fallback.append({"type": "group_nodes", "value": group_id})
-    return fallback

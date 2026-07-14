@@ -2637,3 +2637,107 @@ button.danger {
   font-family: var(--mono);
   font-size: 12px;
 }
+
+
+/* ---- Dark mode polish for recently added UI ---- */
+[data-theme="dark"] .rule-search-card {
+  background: linear-gradient(180deg, rgba(30, 41, 59, 0.92), rgba(30, 41, 59, 0.86));
+  border-color: rgba(71, 85, 105, 0.95);
+  box-shadow: var(--shadow-sm);
+}
+
+[data-theme="dark"] .rule-search-input {
+  background: rgba(15, 23, 42, 0.72);
+  border-color: var(--border);
+  color: var(--ink);
+}
+
+[data-theme="dark"] .rule-search-input::placeholder {
+  color: rgba(148, 163, 184, 0.85);
+}
+
+[data-theme="dark"] .rule-search-results {
+  background: rgba(15, 23, 42, 0.42);
+  border-color: rgba(71, 85, 105, 0.9);
+}
+
+[data-theme="dark"] .rule-result-card {
+  background: linear-gradient(180deg, rgba(30, 41, 59, 0.95), rgba(30, 41, 59, 0.88));
+  border-color: rgba(71, 85, 105, 0.95);
+}
+
+[data-theme="dark"] .rule-result-main code {
+  background: rgba(15, 23, 42, 0.72);
+  border-color: rgba(71, 85, 105, 0.9);
+  color: #e2e8f0;
+}
+
+[data-theme="dark"] .feature-chip {
+  background: rgba(15, 23, 42, 0.55);
+  border-color: var(--border);
+  color: var(--ink-soft);
+}
+
+[data-theme="dark"] .feature-chip.active {
+  background: rgba(96, 165, 250, 0.16);
+  border-color: rgba(96, 165, 250, 0.45);
+  color: #93c5fd;
+}
+
+[data-theme="dark"] .form-alert-error {
+  background: rgba(248, 113, 113, 0.12);
+  border-color: rgba(248, 113, 113, 0.35);
+  color: #fca5a5;
+}
+
+[data-theme="dark"] .rename-list,
+[data-theme="dark"] .final-preview {
+  background: rgba(15, 23, 42, 0.5);
+  border-color: rgba(71, 85, 105, 0.9);
+}
+
+[data-theme="dark"] .rename-from,
+[data-theme="dark"] .rename-arrow {
+  color: var(--ink-soft);
+}
+
+[data-theme="dark"] .regex-edit-input {
+  background: rgba(15, 23, 42, 0.72);
+  border-color: var(--border);
+  color: var(--ink);
+}
+
+[data-theme="dark"] .node-group-modal .form-header,
+[data-theme="dark"] .node-group-modal .form-footer {
+  background: rgba(30, 41, 59, 0.96);
+  border-color: rgba(71, 85, 105, 0.95);
+}
+
+[data-theme="dark"] .geo-pill {
+  color: #93c5fd;
+  background: rgba(96, 165, 250, 0.14);
+  border-color: rgba(96, 165, 250, 0.28);
+}
+
+[data-theme="dark"] .subscription-card.is-primary-card {
+  border-color: rgba(251, 146, 60, 0.55);
+  box-shadow: 0 0 0 1px rgba(251, 146, 60, 0.16);
+}
+
+[data-theme="dark"] .badge-primary {
+  background: rgba(251, 146, 60, 0.14);
+  border-color: rgba(251, 146, 60, 0.35);
+  color: #fdba74;
+}
+
+[data-theme="dark"] .badge-danger {
+  background: rgba(248, 113, 113, 0.12);
+  border-color: rgba(248, 113, 113, 0.35);
+  color: #fca5a5;
+}
+
+[data-theme="dark"] .node-rename-input {
+  background: rgba(15, 23, 42, 0.72);
+  border-color: var(--border);
+  color: var(--ink);
+}

@@ -485,18 +485,11 @@ async function save() {
     }
   }
 
-  const regexRules = entries
-    .filter((item) => item.type === 'regex')
-    .map((item) => String(item.value).trim())
-    .filter(Boolean)
-
   const payload = {
     name,
-    kind: regexRules.length ? 'regex' : 'manual',
     group_type: form.value.group_type || 'select',
     sort_order: form.value.sort_order || 0,
-    // mirrored for compatibility; backend also derives from include_entries
-    regex_rules: regexRules,
+    // include_entries is source of truth; backend derives regex_rules/kind.
     include_entries: entries,
     add_fallback: form.value.add_fallback !== false,
     exclude_nodes: uniq(form.value.exclude_nodes || []),
@@ -570,18 +563,11 @@ function normalizeEntries(entries) {
 }
 
 function buildEntriesFallback(value) {
+  // Data already migrated to include_entries. Keep a tiny fallback for empty groups.
   const entries = []
   for (const name of value.include_nodes || []) entries.push({ type: 'node', value: name })
   for (const id of value.include_group_ids || []) entries.push({ type: 'group', value: id })
   for (const id of value.include_group_nodes_ids || []) entries.push({ type: 'group_nodes', value: id })
-  // Old groups stored regex only in regex_rules; migrate them into virtual entries.
-  const hasRegexEntry = (value.include_entries || []).some((item) => item?.type === 'regex')
-  if (!hasRegexEntry) {
-    for (const rule of value.regex_rules || []) {
-      const text = String(rule || '').trim()
-      if (text) entries.push({ type: 'regex', value: text })
-    }
-  }
   return entries
 }
 

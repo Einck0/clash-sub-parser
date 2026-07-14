@@ -26,16 +26,17 @@ def with_fallback(names: list[str], enabled: bool) -> list[str]:
 
 
 def resolve_entries(group: NodeGroup) -> list[dict]:
-    """Resolve group include_entries with fallback to legacy fields.
+    """Resolve group include_entries.
 
     Supports entry types:
     - node: static node name
     - group: reference another proxy-group by id (insert group name)
     - group_nodes: expand another group's resolved nodes
     - regex: virtual dynamic matcher (value is regex string). Not a frozen node.
+
+    After migration, include_entries is the source of truth. Keep a tiny
+    fallback only for completely empty groups with legacy include_* fields.
     """
-    # After migration, include_entries is the source of truth.
-    # Keep a minimal fallback only for completely empty groups.
     entries = list(group.include_entries or [])
     if entries:
         return entries

@@ -334,11 +334,11 @@ function onUrlInput() {
 }
 
 /**
- * Prefer full hostname as the auto name.
+ * Auto name from URL hostname second-level label.
  * Examples:
- *   msub.xn--m7r52rosihxm.com -> msub.xn--m7r52rosihxm.com
- *   z.7li7li.com -> z.7li7li.com
- * Strip www. only.
+ *   z.7li7li.com -> 7li7li
+ *   msub.example.com -> example
+ *   www.example.com -> example
  */
 function nameFromUrl(url) {
   try {
@@ -346,7 +346,10 @@ function nameFromUrl(url) {
     let host = (parsed.hostname || '').trim().toLowerCase()
     if (!host) return ''
     if (host.startsWith('www.')) host = host.slice(4)
-    return host
+    const parts = host.split('.').filter(Boolean)
+    const name = parts.length >= 2 ? parts[parts.length - 2] : host
+    if (!name) return ''
+    return name.charAt(0).toUpperCase() + name.slice(1)
   } catch {
     return ''
   }

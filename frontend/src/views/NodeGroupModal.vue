@@ -121,21 +121,47 @@
             v-for="(entry, idx) in form.include_entries"
             :key="`${entry.type}-${entry.value}-${idx}`"
             class="node-select-row"
+            :class="{ 'regex-entry-row': entry.type === 'regex' }"
             draggable="true"
             @dragstart="onDragStart(idx)"
             @dragover.prevent
             @drop="onDrop(idx)"
           >
-            <div class="node-select-name mono">
-              <strong>{{ idx + 1 }}. {{ formatEntry(entry) }}</strong>
-              <span>
-                {{ typeLabel(entry.type) }}
-                <template v-if="entry.type === 'regex'">
-                  · 动态匹配 {{ countRegexMatches(entry.value) }} 个
-                </template>
-              </span>
+            <div class="node-select-name mono" style="width:100%">
+              <template v-if="entry.type === 'regex' && editingRegexIndex === idx">
+                <div class="regex-edit-box">
+                  <input
+                    v-model="editingRegexValue"
+                    class="regex-edit-input"
+                    placeholder="输入正则，例如 香港 或 ^(?!.*(官网|套餐)).*$"
+                    @keyup.enter="saveRegexEdit(idx)"
+                    @keyup.escape="cancelRegexEdit"
+                  />
+                  <div class="row" style="gap:6px;margin-top:6px;flex-wrap:wrap">
+                    <button class="primary" @click="saveRegexEdit(idx)" :disabled="!!editingRegexError || !editingRegexValue.trim()">
+                      确定
+                    </button>
+                    <button @click="previewEditingRegex" :disabled="!!editingRegexError || !editingRegexValue.trim()">预览</button>
+                    <button @click="cancelRegexEdit">取消</button>
+                    <span v-if="editingRegexError" class="form-alert form-alert-error" style="margin:0;padding:4px 8px">
+                      {{ editingRegexError }}
+                    </span>
+                    <span v-else class="muted">动态匹配 {{ countRegexMatches(editingRegexValue) }} 个</span>
+                  </div>
+                </div>
+              </template>
+              <template v-else>
+                <strong>{{ idx + 1 }}. {{ formatEntry(entry) }}</strong>
+                <span>
+                  {{ typeLabel(entry.type) }}
+                  <template v-if="entry.type === 'regex'">
+                    · 动态匹配 {{ countRegexMatches(entry.value) }} 个
+                  </template>
+                </span>
+              </template>
             </div>
-            <div class="node-select-actions">
+            <div class="node-select-actions" v-if="!(entry.type === 'regex' && editingRegexIndex === idx)">
+              <button v-if="entry.type === 'regex'" class="primary" @click="startRegexEdit(idx)">编辑</button>
               <button v-if="entry.type === 'regex'" @click="previewEntryRegex(entry.value)">预览</button>
               <button :disabled="idx === 0" @click="moveEntry(idx, -1)">上</button>
               <button :disabled="idx === form.include_entries.length - 1" @click="moveEntry(idx, 1)">下</button>
@@ -200,6 +226,9 @@ const regexDraft = ref('')
 const regexDraftError = ref('')
 const draftMatches = ref([])
 const previewMatches = ref([])
+const editingRegexIndex = ref(-1)
+const editingRegexValue = ref('')
+const editingRegexError = ref('')
 const draggingIndex = ref(-1)
 const saving = ref(false)
 const error = ref('')
@@ -213,6 +242,7 @@ watch(
     previewMatches.value = []
     regexDraft.value = ''
     regexDraftError.value = ''
+    cancelRegexEdit()
     await loadSources()
     if (value) {
       const entries = normalizeEntries(value.include_entries || buildEntriesFallback(value))
@@ -248,6 +278,10 @@ watch(
 watch(regexDraft, () => {
   regexDraftError.value = validateRegex(regexDraft.value.trim())
   draftMatches.value = []
+})
+
+watch(editingRegexValue, () => {
+  editingRegexError.value = validateRegex(editingRegexValue.value.trim())
 })
 
 const selectableGroups = computed(() => allGroups.value.filter((item) => item.id !== form.value.id))
@@ -295,6 +329,46 @@ function previewDraftRegex() {
 
 function previewEntryRegex(rule) {
   previewMatches.value = collectRegexMatches(rule)
+}
+
+function startRegexEdit(index) {
+  const entry = form.value.include_entries[index]
+  if (!entry || entry.type !== 'regex') return
+  editingRegexIndex.value = index
+  editingRegexValue.value = String(entry.value || '')
+  editingRegexError.value = validateRegex(editingRegexValue.value.trim())
+}
+
+function cancelRegexEdit() {
+  editingRegexIndex.value = -1
+  editingRegexValue.value = ''
+  editingRegexError.value = ''
+}
+
+function previewEditingRegex() {
+  editingRegexError.value = validateRegex(editingRegexValue.value.trim())
+  if (editingRegexError.value) return
+  previewMatches.value = collectRegexMatches(editingRegexValue.value.trim())
+}
+
+function saveRegexEdit(index) {
+  const next = editingRegexValue.value.trim()
+  editingRegexError.value = validateRegex(next)
+  if (!next || editingRegexError.value) return
+
+  const exists = form.value.include_entries.some(
+    (item, i) => i !== index && item.type === 'regex' && String(item.value) === next
+  )
+  if (exists) {
+    editingRegexError.value = '已存在相同正则条目'
+    return
+  }
+
+  const copy = [...form.value.include_entries]
+  copy[index] = { type: 'regex', value: next }
+  form.value.include_entries = copy
+  previewMatches.value = collectRegexMatches(next)
+  cancelRegexEdit()
 }
 
 function addRegexEntry() {

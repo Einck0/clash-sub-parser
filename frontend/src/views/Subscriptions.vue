@@ -128,6 +128,7 @@
           :subscription="editing"
           @save="save"
           @cancel="showForm = false"
+          @fetched="onFormFetched"
         />
       </div>
     </div>
@@ -215,6 +216,15 @@ async function save(payload) {
   } catch (err) {
     store.error(getApiErrorMessage(err, '保存订阅失败'))
   }
+}
+
+async function onFormFetched(data) {
+  // Keep list cache in sync when user fetches inside the edit form.
+  if (data?.id) {
+    editing.value = { ...editing.value, ...data }
+  }
+  store.success('订阅拉取成功')
+  await load()
 }
 
 async function doFetch(id) {

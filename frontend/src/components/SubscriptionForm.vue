@@ -22,10 +22,33 @@
     </div>
 
     <p class="section-hint" style="margin-top:10px">
-      主订阅请在订阅列表卡片上设置，不在这里勾选。YAML 头部注释与流量响应头只取自主订阅。
+      主订阅请在订阅列表卡片上设置。下面三个能力默认关闭，只有打开后才显示对应输入区。
     </p>
 
-    <div class="selector-section">
+    <div class="selector-stats" style="margin-top:10px">
+      <label class="badge" style="cursor:pointer">
+        <input type="checkbox" v-model="featureManual" style="margin-right:4px" />
+        手动节点
+      </label>
+      <label class="badge" style="cursor:pointer">
+        <input type="checkbox" v-model="featureRegex" style="margin-right:4px" />
+        初筛正则
+      </label>
+      <label class="badge" style="cursor:pointer">
+        <input type="checkbox" v-model="featureRefine" style="margin-right:4px" />
+        精修包含/排除
+      </label>
+    </div>
+
+    <div v-if="form.id" class="row" style="margin-top:12px;gap:8px;align-items:center">
+      <button @click="handleFetch" :disabled="fetching || saveDisabled">
+        {{ fetching ? '拉取中...' : '拉取节点' }}
+      </button>
+      <span class="muted">拉取后候选节点会更新到当前订阅，不会混入其他订阅。</span>
+    </div>
+    <div v-if="fetchError" class="muted" style="color: var(--danger); margin-top: 6px">{{ fetchError }}</div>
+
+    <div v-if="featureManual" class="selector-section">
       <div class="row space">
         <div>
           <strong>手动节点</strong>
@@ -53,13 +76,13 @@
       </label>
     </div>
 
-    <div class="selector-section">
+    <div v-if="featureRegex" class="selector-section">
       <div class="row space">
         <div>
           <strong>粗筛：正则</strong>
           <p class="section-hint">
             每行一条，按节点名匹配。留空 = 默认全选。
-            候选节点只来自「当前订阅已拉取的上游节点 + 本订阅手动节点」；新建订阅时若还没拉取，这里会是空的。
+            候选节点只来自「当前订阅已拉取的上游节点 + 本订阅手动节点」。
           </p>
         </div>
         <span class="muted">粗筛 {{ coarseNodes.length }} / {{ candidateNodes.length }}</span>
@@ -68,7 +91,7 @@
       <div class="muted" style="color: var(--danger); margin-top: 6px" v-if="regexError">{{ regexError }}</div>
     </div>
 
-    <div class="selector-section">
+    <div v-if="featureRefine" class="selector-section">
       <div class="row space">
         <div>
           <strong>精修：手动包含 / 排除</strong>
@@ -90,8 +113,8 @@
 
       <div v-if="!candidateNodes.length" class="empty-mini">
         {{ form.id
-          ? '当前订阅还没有候选节点。先保存后点「拉取」，或在上面添加手动节点。'
-          : '新订阅还没有自己的节点。先保存并拉取当前订阅，或直接添加手动节点；不会显示其他订阅的节点。' }}
+          ? '当前订阅还没有候选节点。点上面的「拉取节点」，或打开手动节点添加。'
+          : '新订阅还没有自己的节点。先保存后编辑并拉取，或打开手动节点添加。' }}
       </div>
       <div v-else class="node-select-list">
         <div v-for="node in visibleCandidateNodes" :key="nodeName(node)" class="node-select-row">
@@ -116,7 +139,7 @@
     </div>
 
     <div class="row" style="margin-top:12px">
-      <button class="primary" @click="handleSave" :disabled="saveDisabled">保存</button>
+      <button class="primary" @click="handleSave" :disabled="saveDisabled || fetching">保存</button>
       <button @click="$emit('cancel')">取消</button>
     </div>
   </div>
@@ -124,11 +147,12 @@
 
 <script setup>
 import { computed, ref, watch } from 'vue'
+import { fetchSubscription, getApiErrorMessage } from '../api'
 
 const props = defineProps({
   subscription: { type: Object, default: null },
 })
-const emit = defineEmits(['save', 'cancel'])
+const emit = defineEmits(['save', 'cancel', 'fetched'])
 
 const form = ref(createDefault())
 const regexText = ref('')
@@ -140,9 +164,16 @@ const nameEdited = ref(false)
 /** last auto-filled name, so URL changes can overwrite auto names but not manual ones */
 const lastAutoName = ref('')
 
+const featureManual = ref(false)
+const featureRegex = ref(false)
+const featureRefine = ref(false)
+const fetching = ref(false)
+const fetchError = ref('')
+
 watch(
   () => props.subscription,
   (value) => {
+    fetchError.value = ''
     if (!value) {
       form.value = createDefault()
       regexText.value = ''
@@ -151,6 +182,9 @@ watch(
       manualNodeLinks.value = ''
       nameEdited.value = false
       lastAutoName.value = ''
+      featureManual.value = false
+      featureRegex.value = false
+      featureRefine.value = false
       return
     }
     form.value = {
@@ -172,6 +206,11 @@ watch(
     // Existing subscription name is treated as user-owned; don't overwrite on URL tweak.
     nameEdited.value = true
     lastAutoName.value = ''
+    // Auto-open feature panels when the subscription already has related data.
+    featureManual.value = (value.manual_nodes || []).length > 0
+    featureRegex.value = (value.filter_regex || []).length > 0
+    featureRefine.value =
+      (value.include_node_names || []).length > 0 || (value.exclude_node_names || []).length > 0
   },
   { immediate: true }
 )
@@ -208,6 +247,7 @@ const candidateNodes = computed(() => {
 })
 
 const regexPatterns = computed(() => {
+  if (!featureRegex.value) return []
   const patterns = []
   for (const item of form.value.filter_regex || []) {
     try {
@@ -220,19 +260,21 @@ const regexPatterns = computed(() => {
 })
 
 const coarseNodes = computed(() => {
-  if (!regexPatterns.value.length) return candidateNodes.value
+  if (!featureRegex.value || !regexPatterns.value.length) return candidateNodes.value
   return candidateNodes.value.filter((node) => regexPatterns.value.some((p) => p.test(nodeName(node))))
 })
 
 const finalPreviewNodes = computed(() => {
   const selected = new Map(coarseNodes.value.map((node) => [nodeName(node), node]))
-  const include = new Set(form.value.include_node_names || [])
-  const exclude = new Set(form.value.exclude_node_names || [])
-  for (const node of candidateNodes.value) {
-    const name = nodeName(node)
-    if (include.has(name)) selected.set(name, node)
+  if (featureRefine.value) {
+    const include = new Set(form.value.include_node_names || [])
+    const exclude = new Set(form.value.exclude_node_names || [])
+    for (const node of candidateNodes.value) {
+      const name = nodeName(node)
+      if (include.has(name)) selected.set(name, node)
+    }
+    for (const name of exclude) selected.delete(name)
   }
-  for (const name of exclude) selected.delete(name)
   return [...selected.values()]
 })
 
@@ -323,6 +365,28 @@ function maybeAutofillNameFromUrl(url) {
   nameEdited.value = false
 }
 
+async function handleFetch() {
+  if (!form.value.id || fetching.value) return
+  fetching.value = true
+  fetchError.value = ''
+  try {
+    const res = await fetchSubscription(form.value.id)
+    const data = res.data || {}
+    form.value.source_nodes = data.source_nodes || []
+    form.value.raw_nodes = data.raw_nodes || []
+    form.value.manual_nodes = data.manual_nodes || form.value.manual_nodes || []
+    form.value.filter_regex = data.filter_regex || form.value.filter_regex || []
+    form.value.include_node_names = data.include_node_names || form.value.include_node_names || []
+    form.value.exclude_node_names = data.exclude_node_names || form.value.exclude_node_names || []
+    regexText.value = (form.value.filter_regex || []).join('\n')
+    emit('fetched', data)
+  } catch (err) {
+    fetchError.value = getApiErrorMessage(err, '拉取订阅失败')
+  } finally {
+    fetching.value = false
+  }
+}
+
 function handleSave() {
   if (saveDisabled.value) return
   const payload = {
@@ -331,11 +395,12 @@ function handleSave() {
     update_interval: form.value.update_interval || null,
     // Primary is managed on the list page only.
     node_prefix: form.value.node_prefix?.trim() || null,
-    filter_regex: form.value.filter_regex || [],
-    include_node_names: form.value.include_node_names || [],
-    exclude_node_names: form.value.exclude_node_names || [],
-    manual_nodes: form.value.manual_nodes || [],
-    manual_node_links: manualNodeLinks.value.trim() || null,
+    // Closed feature panels clear related config so disabled features don't keep old filters.
+    filter_regex: featureRegex.value ? (form.value.filter_regex || []) : [],
+    include_node_names: featureRefine.value ? (form.value.include_node_names || []) : [],
+    exclude_node_names: featureRefine.value ? (form.value.exclude_node_names || []) : [],
+    manual_nodes: featureManual.value ? (form.value.manual_nodes || []) : [],
+    manual_node_links: featureManual.value ? (manualNodeLinks.value.trim() || null) : null,
   }
   emit('save', payload)
 }

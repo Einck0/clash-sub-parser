@@ -1,15 +1,21 @@
 <template>
-  <div class="modal-backdrop" @click.self="$emit('close')">
-    <div class="modal">
-      <div class="row space">
-        <h3 style="margin:0">{{ group?.id ? '编辑节点组' : '新增节点组' }}</h3>
-        <button @click="$emit('close')">关闭</button>
+  <div class="modal-backdrop" @click.self="close">
+    <div class="modal node-group-modal" role="dialog" aria-modal="true">
+      <div class="form-header">
+        <div>
+          <p class="eyebrow">{{ group?.id ? 'Edit Group' : 'New Group' }}</p>
+          <h3 style="margin:0">{{ group?.id ? '编辑节点组' : '新增节点组' }}</h3>
+          <p class="section-hint">正则改完后直接点底部「保存」即可，不必再单独点“保存正则”。</p>
+        </div>
+        <button @click="close">关闭</button>
       </div>
+
+      <div v-if="error" class="form-alert form-alert-error">{{ error }}</div>
 
       <div class="grid-2" style="margin-top:10px">
         <label>
           <div class="muted">名称</div>
-          <input v-model="form.name" />
+          <input v-model="form.name" placeholder="例如：自动选择" />
         </label>
         <label>
           <div class="muted">类型</div>
@@ -22,93 +28,109 @@
         </label>
       </div>
 
-      <div class="card" style="margin-top:10px">
+      <div class="selector-section">
         <div class="row space">
-          <strong>正则来源</strong>
-          <span class="muted">默认作为动态匹配规则，不再自动写入静态节点</span>
+          <div>
+            <strong>正则来源</strong>
+            <p class="section-hint">按节点最终名动态匹配。编辑后保存整组即可生效。</p>
+          </div>
+          <span class="muted">匹配 {{ regexMatches.length }}</span>
         </div>
-        <textarea v-model="regexText" placeholder="香港\n美国|US"></textarea>
-        <div class="row" style="margin-top:6px">
-          <button @click="previewRegexMatches">预览正则匹配</button>
-          <button @click="applyRegexRules">保存正则规则</button>
-          <button @click="freezeRegexMatchesAsEntries" :disabled="!regexMatches.length">将匹配结果冻结为静态节点</button>
-          <span class="muted">当前匹配 {{ regexMatches.length }} 项</span>
+        <textarea
+          v-model="regexText"
+          placeholder="香港\n美国|US\n^(?!.*(官网|套餐)).*$"
+          @input="onRegexInput"
+        ></textarea>
+        <div class="row" style="margin-top:8px;gap:8px;flex-wrap:wrap">
+          <button @click="previewRegexMatches" :disabled="!!regexError">预览匹配</button>
+          <button @click="freezeRegexMatchesAsEntries" :disabled="!regexMatches.length">冻结为静态节点</button>
+          <span v-if="regexError" class="form-alert form-alert-error" style="margin:0;padding:6px 8px">{{ regexError }}</span>
         </div>
-        <div class="mono" v-if="regexMatches.length" style="margin-top:8px;max-height:120px;overflow:auto;font-size:12px">
-          {{ regexMatches.join(' | ') }}
+        <div v-if="regexMatches.length" class="mono final-preview" style="margin-top:8px">
+          {{ regexMatches.slice(0, 80).join(' | ') }}
+          <span v-if="regexMatches.length > 80"> … +{{ regexMatches.length - 80 }}</span>
         </div>
       </div>
 
-      <div class="card" style="margin-top:10px">
+      <div class="selector-section">
         <div class="row space">
-          <strong>兜底节点</strong>
-          <span class="muted">开启后会在最终所有节点之后追加 REJECT</span>
+          <div>
+            <strong>兜底节点</strong>
+            <p class="section-hint">开启后在组末尾追加 REJECT，避免空组误放行。</p>
+          </div>
         </div>
         <label class="settings-toggle" style="margin-top:8px">
           <input type="checkbox" v-model="form.add_fallback" />
-          <span><strong>添加兜底 REJECT</strong><small>默认开启；用于避免策略组无可用节点时继续放行。</small></span>
+          <span>
+            <strong>添加兜底 REJECT</strong>
+            <small>默认开启</small>
+          </span>
         </label>
       </div>
 
-      <div class="card" style="margin-top:10px">
+      <div class="selector-section">
         <div class="row space">
-          <strong>添加来源条目</strong>
-          <span class="muted">节点 / 节点组 / 节点组节点 统一排序</span>
-        </div>
-
-        <div style="margin-top:8px">
-          <div class="muted">添加节点</div>
-          <div class="row">
-            <select v-model="selectedNodeName" style="min-width:320px">
-              <option value="">选择节点</option>
-              <option v-for="name in selectableNodeNames" :key="name" :value="name">{{ name }}</option>
-            </select>
-            <button @click="addNode">加入节点</button>
-            <button @click="addBuiltin('DIRECT')">DIRECT</button>
-            <button @click="addBuiltin('PASS')">PASS</button>
-            <button @click="addBuiltin('REJECT')">REJECT</button>
+          <div>
+            <strong>添加来源条目</strong>
+            <p class="section-hint">节点 / 节点组引用 / 节点组节点，可统一排序。</p>
           </div>
         </div>
 
-        <div style="margin-top:8px">
-          <div class="muted">添加节点组</div>
-          <div class="row">
-            <select v-model.number="selectedGroupId" style="min-width:320px">
-              <option :value="null">选择节点组</option>
-              <option v-for="g in selectableGroups" :key="g.id" :value="g.id">{{ g.name }}</option>
-            </select>
-            <button @click="addGroupRef">添加节点组引用</button>
-            <button @click="addGroupNodes">添加节点组节点</button>
+        <div class="node-search-row" style="margin-top:8px">
+          <select v-model="selectedNodeName">
+            <option value="">选择节点</option>
+            <option v-for="name in selectableNodeNames" :key="name" :value="name">{{ name }}</option>
+          </select>
+          <button @click="addNode" :disabled="!selectedNodeName">加入节点</button>
+        </div>
+        <div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:8px">
+          <button @click="addBuiltin('DIRECT')">DIRECT</button>
+          <button @click="addBuiltin('PASS')">PASS</button>
+          <button @click="addBuiltin('REJECT')">REJECT</button>
+        </div>
+
+        <div class="node-search-row">
+          <select v-model.number="selectedGroupId">
+            <option :value="null">选择节点组</option>
+            <option v-for="g in selectableGroups" :key="g.id" :value="g.id">{{ g.name }}</option>
+          </select>
+          <div class="row" style="gap:6px">
+            <button @click="addGroupRef" :disabled="!selectedGroupId">添加组引用</button>
+            <button @click="addGroupNodes" :disabled="!selectedGroupId">添加组节点</button>
           </div>
         </div>
       </div>
 
-      <div class="card" style="margin-top:10px">
+      <div class="selector-section">
         <div class="row space">
           <strong>统一排序条目</strong>
           <span class="muted">{{ form.include_entries.length }} 项</span>
         </div>
-        <div class="mono" style="font-size:12px;max-height:260px;overflow:auto;margin-top:8px">
-          <div v-for="(entry, idx) in form.include_entries" :key="`${entry.type}-${entry.value}-${idx}`" class="row space" style="padding:4px 0;border-bottom:1px solid var(--border)">
-            <span
-              draggable="true"
-              style="cursor:grab"
-              @dragstart="onDragStart(idx)"
-              @dragover.prevent
-              @drop="onDrop(idx)"
-            >
-              {{ idx + 1 }}. <span class="badge">{{ typeLabel(entry.type) }}</span> {{ formatEntry(entry) }}
-            </span>
-            <div class="row">
-              <button :disabled="idx===0" @click="moveEntry(idx,-1)">上移</button>
-              <button :disabled="idx===form.include_entries.length-1" @click="moveEntry(idx,1)">下移</button>
-              <button class="danger" @click="removeEntry(idx)">删除</button>
+        <div v-if="!form.include_entries.length" class="empty-mini">暂无静态条目，可只靠正则动态匹配。</div>
+        <div v-else class="node-select-list">
+          <div
+            v-for="(entry, idx) in form.include_entries"
+            :key="`${entry.type}-${entry.value}-${idx}`"
+            class="node-select-row"
+            draggable="true"
+            @dragstart="onDragStart(idx)"
+            @dragover.prevent
+            @drop="onDrop(idx)"
+          >
+            <div class="node-select-name mono">
+              <strong>{{ idx + 1 }}. {{ formatEntry(entry) }}</strong>
+              <span>{{ typeLabel(entry.type) }}</span>
+            </div>
+            <div class="node-select-actions">
+              <button :disabled="idx === 0" @click="moveEntry(idx, -1)">上</button>
+              <button :disabled="idx === form.include_entries.length - 1" @click="moveEntry(idx, 1)">下</button>
+              <button class="danger" @click="removeEntry(idx)">删</button>
             </div>
           </div>
         </div>
       </div>
 
-      <div class="card" style="margin-top:10px" v-if="showRaw">
+      <div class="selector-section" v-if="showRaw">
         <div class="row space">
           <strong>Raw JSON</strong>
           <button @click="syncFromRaw">应用 Raw</button>
@@ -116,9 +138,12 @@
         <textarea v-model="rawJson"></textarea>
       </div>
 
-      <div class="row" style="margin-top:12px">
-        <button class="primary" @click="save">保存</button>
+      <div class="form-footer">
+        <button class="primary" @click="save" :disabled="saving || !!regexError || !form.name.trim()">
+          {{ saving ? '保存中...' : '保存' }}
+        </button>
         <button @click="showRaw = !showRaw">{{ showRaw ? '隐藏 Raw' : '显示 Raw' }}</button>
+        <button @click="close">取消</button>
       </div>
     </div>
   </div>
@@ -126,10 +151,18 @@
 
 <script setup>
 import { computed, ref, watch } from 'vue'
-import { createNodeGroup, getAllSubscriptionNodes, getNodeGroups, updateNodeGroup } from '../api'
+import {
+  createNodeGroup,
+  getAllSubscriptionNodes,
+  getApiErrorMessage,
+  getNodeGroups,
+  updateNodeGroup,
+} from '../api'
+import { useAppStore } from '../stores/app'
 
 const props = defineProps({ group: { type: Object, default: null } })
 const emit = defineEmits(['saved', 'close'])
+const store = useAppStore()
 
 const allGroups = ref([])
 const allNodes = ref([])
@@ -139,13 +172,16 @@ const showRaw = ref(false)
 const rawJson = ref('')
 const regexText = ref('')
 const regexMatches = ref([])
+const regexError = ref('')
 const draggingIndex = ref(-1)
-
+const saving = ref(false)
+const error = ref('')
 const form = ref(defaultForm())
 
 watch(
   () => props.group,
   async (value) => {
+    error.value = ''
     await loadSources()
     if (value) {
       form.value = {
@@ -163,11 +199,13 @@ watch(
         fallback_config: value.fallback_config || {},
       }
       regexText.value = form.value.regex_rules.join('\n')
+      validateRegexText()
       regexMatches.value = collectRegexMatches(form.value.regex_rules)
     } else {
       form.value = defaultForm()
       regexText.value = ''
       regexMatches.value = []
+      regexError.value = ''
     }
     rawJson.value = JSON.stringify(form.value, null, 2)
   },
@@ -177,14 +215,46 @@ watch(
 watch(
   form,
   (value) => {
-    // Only sync raw JSON when raw editor is visible (avoid expensive stringify on every keystroke)
     if (showRaw.value) rawJson.value = JSON.stringify(value, null, 2)
   },
   { deep: true }
 )
 
 const selectableGroups = computed(() => allGroups.value.filter((item) => item.id !== form.value.id))
-const selectableNodeNames = computed(() => allNodes.value.map((node) => String(node.name || '').trim()).filter(Boolean))
+const selectableNodeNames = computed(() =>
+  allNodes.value.map((node) => String(node.name || '').trim()).filter(Boolean)
+)
+
+function onRegexInput() {
+  validateRegexText()
+}
+
+function validateRegexText() {
+  regexError.value = ''
+  const rules = parseRegexText()
+  for (const [idx, rule] of rules.entries()) {
+    try {
+      new RegExp(rule)
+    } catch (err) {
+      regexError.value = `第 ${idx + 1} 条正则无效：${err.message}`
+      return
+    }
+  }
+}
+
+function parseRegexText() {
+  return regexText.value
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+}
+
+function syncRegexIntoForm() {
+  const rules = parseRegexText()
+  form.value.regex_rules = rules
+  form.value.kind = rules.length ? 'regex' : 'manual'
+  return rules
+}
 
 function collectRegexMatches(rules) {
   const matches = []
@@ -206,14 +276,9 @@ function collectRegexMatches(rules) {
 }
 
 function previewRegexMatches() {
-  const rules = regexText.value.split('\n').map((line) => line.trim()).filter(Boolean)
-  regexMatches.value = collectRegexMatches(rules)
-}
-
-function applyRegexRules() {
-  const rules = regexText.value.split('\n').map((line) => line.trim()).filter(Boolean)
-  form.value.regex_rules = rules
-  form.value.kind = rules.length ? 'regex' : 'manual'
+  validateRegexText()
+  if (regexError.value) return
+  const rules = parseRegexText()
   regexMatches.value = collectRegexMatches(rules)
 }
 
@@ -244,7 +309,9 @@ function addGroupNodes() {
 }
 
 function pushEntry(entry) {
-  const exists = form.value.include_entries.some((item) => item.type === entry.type && String(item.value) === String(entry.value))
+  const exists = form.value.include_entries.some(
+    (item) => item.type === entry.type && String(item.value) === String(entry.value)
+  )
   if (exists) return
   form.value.include_entries.push(entry)
 }
@@ -303,33 +370,58 @@ function syncFromRaw() {
       exclude_nodes: uniq(parsed.exclude_nodes || []),
     }
     regexText.value = form.value.regex_rules.join('\n')
+    validateRegexText()
     regexMatches.value = collectRegexMatches(form.value.regex_rules)
   } catch (err) {
-    alert(`Raw JSON 格式错误: ${err.message}`)
+    error.value = `Raw JSON 格式错误: ${err.message}`
   }
 }
 
 async function save() {
-  const payload = {
-    ...form.value,
-    name: String(form.value.name || '').trim(),
-    kind: (form.value.regex_rules || []).length ? 'regex' : 'manual',
-    regex_rules: uniq(form.value.regex_rules || []),
-    include_entries: normalizeEntries(form.value.include_entries || []),
-    exclude_nodes: uniq(form.value.exclude_nodes || []),
+  if (saving.value) return
+  validateRegexText()
+  if (regexError.value) {
+    error.value = regexError.value
+    return
+  }
+  const name = String(form.value.name || '').trim()
+  if (!name) {
+    error.value = '名称不能为空'
+    return
   }
 
+  // Critical: always sync textarea regex into payload on save.
+  const rules = syncRegexIntoForm()
+  const payload = {
+    name,
+    kind: rules.length ? 'regex' : 'manual',
+    group_type: form.value.group_type || 'select',
+    sort_order: form.value.sort_order || 0,
+    regex_rules: rules,
+    include_entries: normalizeEntries(form.value.include_entries || []),
+    add_fallback: form.value.add_fallback !== false,
+    exclude_nodes: uniq(form.value.exclude_nodes || []),
+    url_test_config: form.value.url_test_config || {},
+    load_balance_config: form.value.load_balance_config || {},
+    fallback_config: form.value.fallback_config || {},
+  }
+
+  saving.value = true
+  error.value = ''
   try {
-    if (payload.id) {
-      await updateNodeGroup(payload.id, payload)
+    if (form.value.id) {
+      await updateNodeGroup(form.value.id, payload)
     } else {
       await createNodeGroup(payload)
     }
+    store.success(form.value.id ? '节点组已保存' : '节点组已创建')
     emit('saved')
     emit('close')
   } catch (err) {
-    // Error is already handled by the API layer and shown as toast
-    console.error('Failed to save node group:', err)
+    error.value = getApiErrorMessage(err, '保存节点组失败')
+    store.error(error.value)
+  } finally {
+    saving.value = false
   }
 }
 
@@ -337,6 +429,10 @@ async function loadSources() {
   const [groupsRes, nodesRes] = await Promise.all([getNodeGroups(), getAllSubscriptionNodes()])
   allGroups.value = groupsRes.data
   allNodes.value = nodesRes.data
+}
+
+function close() {
+  emit('close')
 }
 
 function defaultForm() {

@@ -165,4 +165,7 @@ export const deleteSnapshot = (id: number) => api.delete(`/snapshots/${id}`)
 export const checkLatency = (hosts: string[], timeoutMs: number = 3000) =>
   api.post('/latency/check', { hosts, timeout_ms: timeoutMs })
 
+// GeoIP
+export const lookupGeoIp = (hosts: string[]) => api.post('/geoip/lookup', { hosts })
+
 export default api

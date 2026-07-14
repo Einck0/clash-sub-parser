@@ -113,7 +113,9 @@ async def preview_node_groups(db: AsyncSession) -> list[dict]:
     groups = await list_node_groups(db)
     group_map = {group.id: group for group in groups}
 
-    node_result = await db.execute(select(Subscription.raw_nodes))
+    node_result = await db.execute(
+        select(Subscription.raw_nodes).where(Subscription.enabled.is_(True))
+    )
     all_nodes: list[dict] = []
     for nodes in node_result.scalars().all():
         all_nodes.extend(nodes or [])

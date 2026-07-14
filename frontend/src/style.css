@@ -2596,3 +2596,29 @@ button.danger {
     display: none;
   }
 }
+
+/* ---- Node group modal polish ---- */
+.node-group-modal {
+  width: min(920px, 96vw);
+  max-height: 92vh;
+  overflow: auto;
+}
+
+.node-group-modal .form-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface);
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 8px;
+}
+
+.node-group-modal .form-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  background: var(--surface);
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}

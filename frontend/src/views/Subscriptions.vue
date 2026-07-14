@@ -127,7 +127,7 @@
           </div>
           <button @click="closeNodePreview">关闭</button>
         </div>
-        <NodePreviewList :nodes="viewingNodes" :collapsed-limit="60" />
+        <NodePreviewList :nodes="viewingNodes" :collapsed-limit="60" :auto-geo="true" />
       </div>
     </div>
 

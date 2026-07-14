@@ -140,6 +140,7 @@ async def preview_node_groups(db: AsyncSession) -> list[dict]:
         selected: list[str] = []
 
         entries = resolve_entries(group)
+        has_regex_entry = False
         for entry in entries:
             entry_type = entry.get("type")
             entry_value = entry.get("value")
@@ -158,13 +159,26 @@ async def preview_node_groups(db: AsyncSession) -> list[dict]:
                 except Exception:
                     continue
                 selected.extend(resolve_nodes(ref_id, trail))
+            elif entry_type == "regex":
+                has_regex_entry = True
+                pattern_text = str(entry_value or "").strip()
+                if not pattern_text:
+                    continue
+                try:
+                    pattern = re.compile(pattern_text)
+                except Exception:
+                    continue
+                # Virtual matcher: expand to currently available node names.
+                selected.extend([name for name in node_names if pattern.search(name)])
 
-        for regex_rule in group.regex_rules or []:
-            try:
-                pattern = re.compile(regex_rule)
-            except Exception:
-                continue
-            selected.extend([name for name in node_names if pattern.search(name)])
+        # Backward compatible: old groups keep regex_rules outside entries.
+        if not has_regex_entry:
+            for regex_rule in group.regex_rules or []:
+                try:
+                    pattern = re.compile(regex_rule)
+                except Exception:
+                    continue
+                selected.extend([name for name in node_names if pattern.search(name)])
 
         excluded = set(group.exclude_nodes or [])
         merged = [name for name in dedup_names(selected) if name not in excluded]
@@ -246,10 +260,11 @@ def _normalize_group_payload(data: dict) -> None:
 
 
 def _sync_entry_derived_fields(data: dict) -> None:
-    entries = data.get("include_entries") or []
+    entries = list(data.get("include_entries") or [])
     include_nodes: list[str] = []
     include_group_ids: list[int] = []
     include_group_nodes_ids: list[int] = []
+    regex_from_entries: list[str] = []
 
     for entry in entries:
         entry_type = entry.get("type")
@@ -260,10 +275,30 @@ def _sync_entry_derived_fields(data: dict) -> None:
             include_group_ids.append(int(value))
         elif entry_type == "group_nodes":
             include_group_nodes_ids.append(int(value))
+        elif entry_type == "regex":
+            rule = str(value or "").strip()
+            if rule:
+                regex_from_entries.append(rule)
+
+    # If caller still passed legacy regex_rules and entries have no regex item,
+    # promote those rules into virtual regex entries (do NOT freeze matched nodes).
+    legacy_rules = [
+        str(rule).strip()
+        for rule in (data.get("regex_rules") or [])
+        if str(rule).strip()
+    ]
+    if not regex_from_entries and legacy_rules:
+        for rule in legacy_rules:
+            entries.append({"type": "regex", "value": rule})
+            regex_from_entries.append(rule)
+        data["include_entries"] = entries
 
     data["include_nodes"] = include_nodes
     data["include_group_ids"] = include_group_ids
     data["include_group_nodes_ids"] = include_group_nodes_ids
+    # Mirror regex_rules from virtual regex entries for compatibility.
+    if "include_entries" in data or regex_from_entries or legacy_rules:
+        data["regex_rules"] = regex_from_entries or legacy_rules
 
 
 async def _ensure_group_not_referenced(db: AsyncSession, item: NodeGroup) -> None:
@@ -305,7 +340,7 @@ def dedup_names(items: list[str]) -> list[str]:
 
 
 def _normalize_entries(entries: list[dict]) -> list[dict]:
-    allowed_types = {"node", "group", "group_nodes"}
+    allowed_types = {"node", "group", "group_nodes", "regex"}
     normalized: list[dict] = []
     for item in entries:
         if hasattr(item, "model_dump"):
@@ -321,6 +356,20 @@ def _normalize_entries(entries: list[dict]) -> list[dict]:
             value = str(raw.get("value", "")).strip()
             if value:
                 normalized.append({"type": "node", "value": value})
+            continue
+
+        if entry_type == "regex":
+            value = str(raw.get("value", "")).strip()
+            if not value:
+                continue
+            try:
+                re.compile(value)
+            except re.error as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid regex entry: {exc}",
+                ) from exc
+            normalized.append({"type": "regex", "value": value})
             continue
 
         try:

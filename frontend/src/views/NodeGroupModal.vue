@@ -5,7 +5,9 @@
         <div>
           <p class="eyebrow">{{ group?.id ? 'Edit Group' : 'New Group' }}</p>
           <h3 style="margin:0">{{ group?.id ? '编辑节点组' : '新增节点组' }}</h3>
-          <p class="section-hint">正则改完后直接点底部「保存」即可，不必再单独点“保存正则”。</p>
+          <p class="section-hint">
+            正则是<strong>虚拟筛选</strong>：加入条目列表后会按最终节点名动态匹配，不会冻结成静态节点。
+          </p>
         </div>
         <button @click="close">关闭</button>
       </div>
@@ -31,30 +33,6 @@
       <div class="selector-section">
         <div class="row space">
           <div>
-            <strong>正则来源</strong>
-            <p class="section-hint">按节点最终名动态匹配。编辑后保存整组即可生效。</p>
-          </div>
-          <span class="muted">匹配 {{ regexMatches.length }}</span>
-        </div>
-        <textarea
-          v-model="regexText"
-          placeholder="香港\n美国|US\n^(?!.*(官网|套餐)).*$"
-          @input="onRegexInput"
-        ></textarea>
-        <div class="row" style="margin-top:8px;gap:8px;flex-wrap:wrap">
-          <button @click="previewRegexMatches" :disabled="!!regexError">预览匹配</button>
-          <button @click="freezeRegexMatchesAsEntries" :disabled="!regexMatches.length">冻结为静态节点</button>
-          <span v-if="regexError" class="form-alert form-alert-error" style="margin:0;padding:6px 8px">{{ regexError }}</span>
-        </div>
-        <div v-if="regexMatches.length" class="mono final-preview" style="margin-top:8px">
-          {{ regexMatches.slice(0, 80).join(' | ') }}
-          <span v-if="regexMatches.length > 80"> … +{{ regexMatches.length - 80 }}</span>
-        </div>
-      </div>
-
-      <div class="selector-section">
-        <div class="row space">
-          <div>
             <strong>兜底节点</strong>
             <p class="section-hint">开启后在组末尾追加 REJECT，避免空组误放行。</p>
           </div>
@@ -72,7 +50,10 @@
         <div class="row space">
           <div>
             <strong>添加来源条目</strong>
-            <p class="section-hint">节点 / 节点组引用 / 节点组节点，可统一排序。</p>
+            <p class="section-hint">
+              可添加：静态节点、节点组引用、节点组节点、正则筛选（虚拟）。
+              正则只记录规则本身，输出时动态展开匹配到的节点。
+            </p>
           </div>
         </div>
 
@@ -81,7 +62,7 @@
             <option value="">选择节点</option>
             <option v-for="name in selectableNodeNames" :key="name" :value="name">{{ name }}</option>
           </select>
-          <button @click="addNode" :disabled="!selectedNodeName">加入节点</button>
+          <button @click="addNode" :disabled="!selectedNodeName">加入静态节点</button>
         </div>
         <div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:8px">
           <button @click="addBuiltin('DIRECT')">DIRECT</button>
@@ -99,14 +80,42 @@
             <button @click="addGroupNodes" :disabled="!selectedGroupId">添加组节点</button>
           </div>
         </div>
+
+        <div style="margin-top:10px">
+          <div class="muted">添加正则筛选（虚拟）</div>
+          <div class="node-search-row" style="margin-top:6px">
+            <input
+              v-model="regexDraft"
+              placeholder="例如：香港  或  ^(?!.*(官网|套餐|流量)).*$"
+              @keyup.enter="addRegexEntry"
+            />
+            <button @click="addRegexEntry" :disabled="!regexDraft.trim() || !!regexDraftError">加入正则</button>
+          </div>
+          <div v-if="regexDraftError" class="form-alert form-alert-error" style="margin-top:6px">
+            {{ regexDraftError }}
+          </div>
+          <div class="row" style="margin-top:6px;gap:8px;flex-wrap:wrap">
+            <button @click="previewDraftRegex" :disabled="!regexDraft.trim() || !!regexDraftError">
+              预览该正则匹配
+            </button>
+            <span class="muted">匹配 {{ draftMatches.length }}</span>
+          </div>
+          <div v-if="draftMatches.length" class="mono final-preview" style="margin-top:8px">
+            {{ draftMatches.slice(0, 60).join(' | ') }}
+            <span v-if="draftMatches.length > 60"> … +{{ draftMatches.length - 60 }}</span>
+          </div>
+        </div>
       </div>
 
       <div class="selector-section">
         <div class="row space">
-          <strong>统一排序条目</strong>
+          <div>
+            <strong>统一排序条目</strong>
+            <p class="section-hint">拖拽/上下调整顺序。正则项显示为虚拟筛选，不是冻结节点列表。</p>
+          </div>
           <span class="muted">{{ form.include_entries.length }} 项</span>
         </div>
-        <div v-if="!form.include_entries.length" class="empty-mini">暂无静态条目，可只靠正则动态匹配。</div>
+        <div v-if="!form.include_entries.length" class="empty-mini">还没有条目。可先加正则筛选或静态节点。</div>
         <div v-else class="node-select-list">
           <div
             v-for="(entry, idx) in form.include_entries"
@@ -119,14 +128,31 @@
           >
             <div class="node-select-name mono">
               <strong>{{ idx + 1 }}. {{ formatEntry(entry) }}</strong>
-              <span>{{ typeLabel(entry.type) }}</span>
+              <span>
+                {{ typeLabel(entry.type) }}
+                <template v-if="entry.type === 'regex'">
+                  · 动态匹配 {{ countRegexMatches(entry.value) }} 个
+                </template>
+              </span>
             </div>
             <div class="node-select-actions">
+              <button v-if="entry.type === 'regex'" @click="previewEntryRegex(entry.value)">预览</button>
               <button :disabled="idx === 0" @click="moveEntry(idx, -1)">上</button>
               <button :disabled="idx === form.include_entries.length - 1" @click="moveEntry(idx, 1)">下</button>
               <button class="danger" @click="removeEntry(idx)">删</button>
             </div>
           </div>
+        </div>
+      </div>
+
+      <div class="selector-section" v-if="previewMatches.length">
+        <div class="row space">
+          <strong>正则预览结果</strong>
+          <span class="muted">{{ previewMatches.length }} 个</span>
+        </div>
+        <div class="mono final-preview">
+          {{ previewMatches.slice(0, 100).join(' | ') }}
+          <span v-if="previewMatches.length > 100"> … +{{ previewMatches.length - 100 }}</span>
         </div>
       </div>
 
@@ -139,7 +165,7 @@
       </div>
 
       <div class="form-footer">
-        <button class="primary" @click="save" :disabled="saving || !!regexError || !form.name.trim()">
+        <button class="primary" @click="save" :disabled="saving || !form.name.trim()">
           {{ saving ? '保存中...' : '保存' }}
         </button>
         <button @click="showRaw = !showRaw">{{ showRaw ? '隐藏 Raw' : '显示 Raw' }}</button>
@@ -170,9 +196,10 @@ const selectedGroupId = ref(null)
 const selectedNodeName = ref('')
 const showRaw = ref(false)
 const rawJson = ref('')
-const regexText = ref('')
-const regexMatches = ref([])
-const regexError = ref('')
+const regexDraft = ref('')
+const regexDraftError = ref('')
+const draftMatches = ref([])
+const previewMatches = ref([])
 const draggingIndex = ref(-1)
 const saving = ref(false)
 const error = ref('')
@@ -182,30 +209,28 @@ watch(
   () => props.group,
   async (value) => {
     error.value = ''
+    draftMatches.value = []
+    previewMatches.value = []
+    regexDraft.value = ''
+    regexDraftError.value = ''
     await loadSources()
     if (value) {
+      const entries = normalizeEntries(value.include_entries || buildEntriesFallback(value))
       form.value = {
         id: value.id,
         name: value.name || '',
         kind: value.kind || 'manual',
         group_type: value.group_type || 'select',
         sort_order: value.sort_order || 0,
-        regex_rules: [...(value.regex_rules || [])],
-        include_entries: normalizeEntries(value.include_entries || buildEntriesFallback(value)),
+        include_entries: entries,
         add_fallback: value.add_fallback !== false,
         exclude_nodes: [...(value.exclude_nodes || [])],
         url_test_config: value.url_test_config || {},
         load_balance_config: value.load_balance_config || {},
         fallback_config: value.fallback_config || {},
       }
-      regexText.value = form.value.regex_rules.join('\n')
-      validateRegexText()
-      regexMatches.value = collectRegexMatches(form.value.regex_rules)
     } else {
       form.value = defaultForm()
-      regexText.value = ''
-      regexMatches.value = []
-      regexError.value = ''
     }
     rawJson.value = JSON.stringify(form.value, null, 2)
   },
@@ -220,73 +245,65 @@ watch(
   { deep: true }
 )
 
+watch(regexDraft, () => {
+  regexDraftError.value = validateRegex(regexDraft.value.trim())
+  draftMatches.value = []
+})
+
 const selectableGroups = computed(() => allGroups.value.filter((item) => item.id !== form.value.id))
 const selectableNodeNames = computed(() =>
   allNodes.value.map((node) => String(node.name || '').trim()).filter(Boolean)
 )
 
-function onRegexInput() {
-  validateRegexText()
-}
-
-function validateRegexText() {
-  regexError.value = ''
-  const rules = parseRegexText()
-  for (const [idx, rule] of rules.entries()) {
-    try {
-      new RegExp(rule)
-    } catch (err) {
-      regexError.value = `第 ${idx + 1} 条正则无效：${err.message}`
-      return
-    }
+function validateRegex(rule) {
+  if (!rule) return ''
+  try {
+    new RegExp(rule)
+    return ''
+  } catch (err) {
+    return `正则无效：${err.message}`
   }
 }
 
-function parseRegexText() {
-  return regexText.value
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-}
-
-function syncRegexIntoForm() {
-  const rules = parseRegexText()
-  form.value.regex_rules = rules
-  form.value.kind = rules.length ? 'regex' : 'manual'
-  return rules
-}
-
-function collectRegexMatches(rules) {
+function collectRegexMatches(rule) {
+  const text = String(rule || '').trim()
+  if (!text) return []
+  let pattern
+  try {
+    pattern = new RegExp(text, 'i')
+  } catch (_) {
+    return []
+  }
   const matches = []
   for (const node of allNodes.value) {
     const name = String(node.name || '')
-    if (!name) continue
-    for (const rule of rules) {
-      try {
-        if (new RegExp(rule, 'i').test(name)) {
-          matches.push(name)
-          break
-        }
-      } catch (_) {
-        continue
-      }
-    }
+    if (name && pattern.test(name)) matches.push(name)
   }
   return uniq(matches)
 }
 
-function previewRegexMatches() {
-  validateRegexText()
-  if (regexError.value) return
-  const rules = parseRegexText()
-  regexMatches.value = collectRegexMatches(rules)
+function countRegexMatches(rule) {
+  return collectRegexMatches(rule).length
 }
 
-function freezeRegexMatchesAsEntries() {
-  previewRegexMatches()
-  for (const name of regexMatches.value) {
-    pushEntry({ type: 'node', value: name })
-  }
+function previewDraftRegex() {
+  regexDraftError.value = validateRegex(regexDraft.value.trim())
+  if (regexDraftError.value) return
+  draftMatches.value = collectRegexMatches(regexDraft.value.trim())
+  previewMatches.value = draftMatches.value
+}
+
+function previewEntryRegex(rule) {
+  previewMatches.value = collectRegexMatches(rule)
+}
+
+function addRegexEntry() {
+  const rule = regexDraft.value.trim()
+  regexDraftError.value = validateRegex(rule)
+  if (!rule || regexDraftError.value) return
+  pushEntry({ type: 'regex', value: rule })
+  regexDraft.value = ''
+  draftMatches.value = []
 }
 
 function addNode() {
@@ -342,9 +359,10 @@ function onDrop(targetIndex) {
 }
 
 function typeLabel(type) {
-  if (type === 'node') return '节点'
-  if (type === 'group') return '节点组'
+  if (type === 'node') return '静态节点'
+  if (type === 'group') return '节点组引用'
   if (type === 'group_nodes') return '节点组节点'
+  if (type === 'regex') return '正则筛选(虚拟)'
   return type
 }
 
@@ -352,6 +370,7 @@ function formatEntry(entry) {
   if (entry.type === 'node') return `${entry.value}`
   if (entry.type === 'group') return `${groupNameById(Number(entry.value))}`
   if (entry.type === 'group_nodes') return `${groupNameById(Number(entry.value))}(节点)`
+  if (entry.type === 'regex') return `/${entry.value}/`
   return JSON.stringify(entry)
 }
 
@@ -365,13 +384,9 @@ function syncFromRaw() {
     form.value = {
       ...defaultForm(),
       ...parsed,
-      regex_rules: uniq(parsed.regex_rules || []),
-      include_entries: normalizeEntries(parsed.include_entries || []),
+      include_entries: normalizeEntries(parsed.include_entries || buildEntriesFallback(parsed)),
       exclude_nodes: uniq(parsed.exclude_nodes || []),
     }
-    regexText.value = form.value.regex_rules.join('\n')
-    validateRegexText()
-    regexMatches.value = collectRegexMatches(form.value.regex_rules)
   } catch (err) {
     error.value = `Raw JSON 格式错误: ${err.message}`
   }
@@ -379,26 +394,36 @@ function syncFromRaw() {
 
 async function save() {
   if (saving.value) return
-  validateRegexText()
-  if (regexError.value) {
-    error.value = regexError.value
-    return
-  }
   const name = String(form.value.name || '').trim()
   if (!name) {
     error.value = '名称不能为空'
     return
   }
 
-  // Critical: always sync textarea regex into payload on save.
-  const rules = syncRegexIntoForm()
+  const entries = normalizeEntries(form.value.include_entries || [])
+  // Validate all regex entries before save.
+  for (const [idx, entry] of entries.entries()) {
+    if (entry.type !== 'regex') continue
+    const err = validateRegex(String(entry.value || ''))
+    if (err) {
+      error.value = `第 ${idx + 1} 条正则无效：${err}`
+      return
+    }
+  }
+
+  const regexRules = entries
+    .filter((item) => item.type === 'regex')
+    .map((item) => String(item.value).trim())
+    .filter(Boolean)
+
   const payload = {
     name,
-    kind: rules.length ? 'regex' : 'manual',
+    kind: regexRules.length ? 'regex' : 'manual',
     group_type: form.value.group_type || 'select',
     sort_order: form.value.sort_order || 0,
-    regex_rules: rules,
-    include_entries: normalizeEntries(form.value.include_entries || []),
+    // mirrored for compatibility; backend also derives from include_entries
+    regex_rules: regexRules,
+    include_entries: entries,
     add_fallback: form.value.add_fallback !== false,
     exclude_nodes: uniq(form.value.exclude_nodes || []),
     url_test_config: form.value.url_test_config || {},
@@ -442,7 +467,6 @@ function defaultForm() {
     kind: 'manual',
     group_type: 'select',
     sort_order: 0,
-    regex_rules: [],
     include_entries: [],
     add_fallback: true,
     exclude_nodes: [],
@@ -453,19 +477,19 @@ function defaultForm() {
 }
 
 function normalizeEntries(entries) {
-  const allowed = new Set(['node', 'group', 'group_nodes'])
+  const allowed = new Set(['node', 'group', 'group_nodes', 'regex'])
   const out = []
   for (const item of entries) {
     const type = String(item?.type || '').trim()
     if (!allowed.has(type)) continue
-    let value = item?.value
-    if (type === 'node') {
-      value = String(value || '').trim()
+    if (type === 'node' || type === 'regex') {
+      const value = String(item?.value || '').trim()
       if (!value) continue
-    } else {
-      value = Number(value)
-      if (!Number.isInteger(value)) continue
+      out.push({ type, value })
+      continue
     }
+    const value = Number(item?.value)
+    if (!Number.isInteger(value)) continue
     out.push({ type, value })
   }
   return uniqBy(out, (item) => `${item.type}:${item.value}`)
@@ -476,6 +500,14 @@ function buildEntriesFallback(value) {
   for (const name of value.include_nodes || []) entries.push({ type: 'node', value: name })
   for (const id of value.include_group_ids || []) entries.push({ type: 'group', value: id })
   for (const id of value.include_group_nodes_ids || []) entries.push({ type: 'group_nodes', value: id })
+  // Old groups stored regex only in regex_rules; migrate them into virtual entries.
+  const hasRegexEntry = (value.include_entries || []).some((item) => item?.type === 'regex')
+  if (!hasRegexEntry) {
+    for (const rule of value.regex_rules || []) {
+      const text = String(rule || '').trim()
+      if (text) entries.push({ type: 'regex', value: text })
+    }
+  }
   return entries
 }
 

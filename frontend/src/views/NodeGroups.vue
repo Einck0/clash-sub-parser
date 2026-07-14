@@ -58,6 +58,7 @@
           <span v-for="entry in previewById(group.id).include_entries.slice(0, 6)" :key="`${entry.type}-${entry.value}`" class="badge">
             {{ formatEntry(entry) }}
           </span>
+          <span v-if="(group.regex_rules || []).length" class="badge">正则 {{ (group.regex_rules || []).length }}</span>
           <span v-if="previewById(group.id).include_entries.length > 6" class="badge">+{{ previewById(group.id).include_entries.length - 6 }}</span>
         </div>
 
@@ -237,6 +238,7 @@ function formatEntry(entry) {
     const g = groups.value.find((item) => item.id === entry.value)
     return `组节点:${g ? g.name : `#${entry.value}`}`
   }
+  if (entry.type === 'regex') return `正则:/${entry.value}/`
   return JSON.stringify(entry)
 }
 </script>

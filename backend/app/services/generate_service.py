@@ -164,6 +164,7 @@ async def _collect_node_groups(db: AsyncSession, all_nodes: list[dict]) -> list[
         selected: list[str] = []
 
         entries = resolve_entries(group)
+        has_regex_entry = False
         for entry in entries:
             entry_type = entry.get("type")
             entry_value = entry.get("value")
@@ -182,13 +183,25 @@ async def _collect_node_groups(db: AsyncSession, all_nodes: list[dict]) -> list[
                     continue
                 if ref_id in mapping:
                     selected.append(mapping[ref_id].name)
+            elif entry_type == "regex":
+                has_regex_entry = True
+                pattern_text = str(entry_value or "").strip()
+                if not pattern_text:
+                    continue
+                try:
+                    pattern = re.compile(pattern_text)
+                except Exception:
+                    continue
+                # Virtual dynamic matcher, not a frozen static node list.
+                selected.extend([name for name in all_node_names if pattern.search(name)])
 
-        for regex_rule in group.regex_rules or []:
-            try:
-                pattern = re.compile(regex_rule)
-            except Exception:
-                continue
-            selected.extend([name for name in all_node_names if pattern.search(name)])
+        if not has_regex_entry:
+            for regex_rule in group.regex_rules or []:
+                try:
+                    pattern = re.compile(regex_rule)
+                except Exception:
+                    continue
+                selected.extend([name for name in all_node_names if pattern.search(name)])
 
         excluded = set(group.exclude_nodes or [])
         merged = [item for item in dedup_names(selected) if item not in excluded]

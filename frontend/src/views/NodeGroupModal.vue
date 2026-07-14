@@ -34,13 +34,13 @@
         <div class="row space">
           <div>
             <strong>兜底节点</strong>
-            <p class="section-hint">开启后在组末尾追加 REJECT，避免空组误放行。</p>
+            <p class="section-hint">开启后在组末尾追加 PASS，空组时走直连放行。</p>
           </div>
         </div>
         <label class="settings-toggle" style="margin-top:8px">
           <input type="checkbox" v-model="form.add_fallback" />
           <span>
-            <strong>添加兜底 REJECT</strong>
+            <strong>添加兜底 PASS</strong>
             <small>默认开启</small>
           </span>
         </label>

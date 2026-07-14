@@ -17,10 +17,12 @@ def dedup_names(items: list[str]) -> list[str]:
 
 
 def with_fallback(names: list[str], enabled: bool) -> list[str]:
-    """Append REJECT as fallback node when enabled."""
+    """Append PASS as fallback node when enabled."""
     if not enabled:
         return names
-    return [name for name in names if name != "REJECT"] + ["REJECT"]
+    # Keep a single trailing PASS for empty/failed group selection.
+    cleaned = [name for name in names if name != "PASS"]
+    return cleaned + ["PASS"]
 
 
 def resolve_entries(group: NodeGroup) -> list[dict]:

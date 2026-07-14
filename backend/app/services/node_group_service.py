@@ -384,7 +384,8 @@ def _normalize_entries(entries: list[dict]) -> list[dict]:
 def with_fallback(names: list[str], enabled: bool) -> list[str]:
     if not enabled:
         return names
-    return [name for name in names if name != "REJECT"] + ["REJECT"]
+    cleaned = [name for name in names if name != "PASS"]
+    return cleaned + ["PASS"]
 
 
 def resolve_entries(group: NodeGroup) -> list[dict]:

@@ -51,7 +51,7 @@
           <div><span>静态节点</span><strong>{{ (group.include_nodes || []).length }}</strong></div>
           <div><span>组引用</span><strong>{{ (group.include_group_ids || []).length }}</strong></div>
           <div><span>组节点</span><strong>{{ (group.include_group_nodes_ids || []).length }}</strong></div>
-          <div><span>兜底</span><strong>{{ group.add_fallback === false ? '关闭' : 'REJECT' }}</strong></div>
+          <div><span>兜底</span><strong>{{ group.add_fallback === false ? '关闭' : 'PASS' }}</strong></div>
         </div>
 
         <div class="node-group-tags" v-if="previewById(group.id)?.include_entries?.length">

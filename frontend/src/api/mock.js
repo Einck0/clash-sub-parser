@@ -172,7 +172,7 @@ function buildPreview(group) {
     include_entries: group.include_entries || [],
     include_group_names: [],
     include_group_nodes_names: [],
-    resolved_nodes: group.add_fallback === false ? nodes : [...nodes, { name: 'REJECT', type: 'builtin' }],
+    resolved_nodes: group.add_fallback === false ? nodes : [...nodes, { name: 'PASS', type: 'builtin' }],
     resolved_count: group.add_fallback === false ? nodes.length : nodes.length + 1,
   }
 }

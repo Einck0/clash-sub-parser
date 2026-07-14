@@ -45,8 +45,10 @@ async def test_generate_yaml_and_script_respect_switches(db_session):
     group = NodeGroup(
         name="Proxy",
         group_type="select",
-        regex_rules=["HK"],
-        include_entries=[{"type": "node", "value": "DIRECT"}],
+        include_entries=[
+            {"type": "node", "value": "DIRECT"},
+            {"type": "regex", "value": "HK"},
+        ],
     )
     db_session.add_all([sub, group])
     await db_session.commit()
@@ -101,8 +103,10 @@ async def test_node_group_preview_keeps_regex_dynamic_and_group_entries(db_sessi
         db_session,
         NodeGroupCreate(
             name="Mixed",
-            regex_rules=["HK"],
-            include_entries=[{"type": "group", "value": base_group.id}],
+            include_entries=[
+                {"type": "group", "value": base_group.id},
+                {"type": "regex", "value": "HK"},
+            ],
         ),
     )
 
@@ -127,8 +131,7 @@ async def test_url_test_group_contains_only_regex_matched_nodes(db_session):
     group = NodeGroup(
         name="香港",
         group_type="url-test",
-        regex_rules=["香港"],
-        include_entries=[],
+        include_entries=[{"type": "regex", "value": "香港"}],
         add_fallback=False,
     )
     db_session.add_all([sub, group])

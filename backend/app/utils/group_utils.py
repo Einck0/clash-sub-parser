@@ -34,6 +34,8 @@ def resolve_entries(group: NodeGroup) -> list[dict]:
     - group_nodes: expand another group's resolved nodes
     - regex: virtual dynamic matcher (value is regex string). Not a frozen node.
     """
+    # After migration, include_entries is the source of truth.
+    # Keep a minimal fallback only for completely empty groups.
     entries = list(group.include_entries or [])
     if entries:
         return entries
@@ -45,10 +47,4 @@ def resolve_entries(group: NodeGroup) -> list[dict]:
         fallback.append({"type": "group", "value": group_id})
     for group_id in group.include_group_nodes_ids or []:
         fallback.append({"type": "group_nodes", "value": group_id})
-    # Legacy regex_rules become virtual regex entries so ordering can be edited
-    # in the unified entry list without freezing matched nodes.
-    for rule in group.regex_rules or []:
-        rule_text = str(rule or "").strip()
-        if rule_text:
-            fallback.append({"type": "regex", "value": rule_text})
     return fallback

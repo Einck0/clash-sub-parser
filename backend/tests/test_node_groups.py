@@ -6,11 +6,13 @@ async def test_create_node_group(client):
     response = await client.post("/api/node-groups", json={
         "name": "test-group",
         "group_type": "select",
-        "regex_rules": ["香港"],
+        "include_entries": [{"type": "regex", "value": "香港"}],
     })
     assert response.status_code == 201
     data = response.json()
     assert data["name"] == "test-group"
+    assert data["regex_rules"] == ["香港"]
+    assert data["include_entries"] == [{"type": "regex", "value": "香港"}]
 
 
 @pytest.mark.asyncio

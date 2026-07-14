@@ -83,6 +83,13 @@
           <button @click="openEdit(sub)">编辑</button>
           <button @click="doFetch(sub.id)" :disabled="loadingFetchId === sub.id">{{ loadingFetchId === sub.id ? '拉取中...' : '拉取' }}</button>
           <button @click="showNodes(sub)">节点</button>
+          <button
+            :class="{ primary: sub.is_primary }"
+            :disabled="sub.is_primary || loadingPrimaryId === sub.id"
+            @click="setPrimary(sub)"
+          >
+            {{ sub.is_primary ? '主订阅' : (loadingPrimaryId === sub.id ? '设置中...' : '设为主订阅') }}
+          </button>
           <button class="danger" @click="remove(sub)">删除</button>
         </div>
       </article>
@@ -112,7 +119,6 @@
       <div class="modal">
         <SubscriptionForm
           :subscription="editing"
-          :all-nodes="allNodes"
           @save="save"
           @cancel="showForm = false"
         />
@@ -132,7 +138,6 @@ import {
   createSubscription,
   deleteSubscription,
   fetchSubscription,
-  getAllSubscriptionNodes,
   getApiErrorMessage,
   getSubscriptionNodes,
   getSubscriptions,
@@ -142,12 +147,12 @@ import {
 const store = useAppStore()
 
 const subscriptions = ref([])
-const allNodes = ref([])
 const viewingNodes = ref([])
 const nodePreviewTitle = ref('')
 const showForm = ref(false)
 const editing = ref(null)
 const loadingFetchId = ref(null)
+const loadingPrimaryId = ref(null)
 const loading = ref(false)
 const error = ref('')
 
@@ -167,9 +172,8 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const [sRes, nRes] = await Promise.all([getSubscriptions(), getAllSubscriptionNodes()])
+    const sRes = await getSubscriptions()
     subscriptions.value = sRes.data
-    allNodes.value = nRes.data
   } catch (err) {
     error.value = getApiErrorMessage(err, '加载订阅失败')
   } finally {
@@ -219,6 +223,21 @@ async function doFetch(id) {
     store.error(getApiErrorMessage(err, '拉取订阅失败'))
   } finally {
     loadingFetchId.value = null
+  }
+}
+
+async function setPrimary(item) {
+  if (!item?.id || item.is_primary) return
+  loadingPrimaryId.value = item.id
+  error.value = ''
+  try {
+    await updateSubscription(item.id, { is_primary: true })
+    store.success(`已将 ${item.name} 设为主订阅`)
+    await load()
+  } catch (err) {
+    store.error(getApiErrorMessage(err, '设置主订阅失败'))
+  } finally {
+    loadingPrimaryId.value = null
   }
 }
 

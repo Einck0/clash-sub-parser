@@ -7,6 +7,7 @@ import httpx
 from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.exc import StaleDataError
 
 from app.config import get_settings
 from app.models.subscription import Subscription
@@ -29,6 +30,15 @@ async def get_subscription(
     db: AsyncSession, subscription_id: int
 ) -> Subscription | None:
     return await db.get(Subscription, subscription_id)
+
+
+async def _require_subscription(
+    db: AsyncSession, subscription_id: int
+) -> Subscription:
+    item = await db.get(Subscription, subscription_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Subscription not found")
+    return item
 
 
 async def create_subscription(
@@ -127,13 +137,25 @@ async def update_subscription(
 
 
 async def delete_subscription(db: AsyncSession, item: Subscription) -> None:
-    await db.delete(item)
+    """Delete a subscription by primary key.
+
+    Re-load by id so concurrent scheduler/fetch sessions don't leave us
+    holding a detached or already-removed instance.
+    """
+    target = await db.get(Subscription, item.id)
+    if target is None:
+        return
+    await db.delete(target)
     await db.commit()
 
 
 async def fetch_subscription_nodes(
     db: AsyncSession, item: Subscription
 ) -> Subscription:
+    # Capture identity early: concurrent delete may expire/detach the ORM row.
+    sub_id = item.id
+    sub_name = item.name
+
     try:
         runtime_security = await get_security_settings(db)
         fetch_proxy_enabled, fetch_proxy_url = get_fetch_proxy_config(runtime_security)
@@ -151,45 +173,76 @@ async def fetch_subscription_nodes(
         async with httpx.AsyncClient(**client_kwargs) as client:
             response, raw_text = await _fetch_subscription_text(client, item.url)
 
+        # Row may have been deleted while the HTTP request was in flight.
+        live = await _require_subscription(db, sub_id)
+
         fetched_nodes, comments = parse_subscription_content(raw_text)
-        item.source_nodes = deduplicate_nodes(fetched_nodes)
-        all_source_nodes = _combined_source_nodes(item.source_nodes, item.manual_nodes or [])
-        regex_patterns = compile_regex(item.filter_regex)
+        live.source_nodes = deduplicate_nodes(fetched_nodes)
+        all_source_nodes = _combined_source_nodes(live.source_nodes, live.manual_nodes or [])
+        regex_patterns = compile_regex(live.filter_regex)
         selected_nodes = _apply_selection(
             all_source_nodes,
             regex_patterns,
-            item.include_node_names or [],
-            item.exclude_node_names or [],
+            live.include_node_names or [],
+            live.exclude_node_names or [],
         )
 
         prefixed_nodes = _apply_prefix(
             selected_nodes,
-            _resolve_prefix(item.name, item.node_prefix, item.is_primary),
+            _resolve_prefix(live.name, live.node_prefix, live.is_primary),
         )
 
-        item.raw_nodes = deduplicate_nodes(prefixed_nodes)
-        item.last_fetched_at = datetime.now(timezone.utc)
-        item.last_fetch_error = None
-        item.fetch_failed_count = 0
-        item.fetch_comments = comments if item.is_primary else []
+        live.raw_nodes = deduplicate_nodes(prefixed_nodes)
+        live.last_fetched_at = datetime.now(timezone.utc)
+        live.last_fetch_error = None
+        live.fetch_failed_count = 0
+        live.fetch_comments = comments if live.is_primary else []
         response_headers = getattr(response, "headers", {}) or {}
-        item.subscription_userinfo = response_headers.get("subscription-userinfo")
-        item.profile_update_interval = response_headers.get("profile-update-interval")
-        item.profile_web_page_url = response_headers.get("profile-web-page-url")
+        live.subscription_userinfo = response_headers.get("subscription-userinfo")
+        live.profile_update_interval = response_headers.get("profile-update-interval")
+        live.profile_web_page_url = response_headers.get("profile-web-page-url")
+        db.add(live)
+        await db.commit()
+        await db.refresh(live)
+        return live
+    except HTTPException:
+        raise
     except Exception as exc:
         error_message = _format_fetch_error(exc)
-        item.last_fetch_error = error_message
-        item.fetch_failed_count = int(item.fetch_failed_count or 0) + 1
-        db.add(item)
-        await db.commit()
-        await db.refresh(item)
-        logger.exception("Failed to fetch subscription %s (%s): %s", item.id, item.name, error_message)
-        raise
+        try:
+            live = await db.get(Subscription, sub_id)
+            if live is None:
+                logger.info(
+                    "Subscription %s was deleted during failed fetch; ignoring update",
+                    sub_id,
+                )
+                raise HTTPException(status_code=404, detail="Subscription not found") from exc
 
-    db.add(item)
-    await db.commit()
-    await db.refresh(item)
-    return item
+            # Always stamp last_fetched_at on failure so the scheduler
+            # respects update_interval instead of retrying every minute.
+            live.last_fetch_error = error_message
+            live.fetch_failed_count = int(live.fetch_failed_count or 0) + 1
+            live.last_fetched_at = datetime.now(timezone.utc)
+            db.add(live)
+            await db.commit()
+            await db.refresh(live)
+        except HTTPException:
+            raise
+        except StaleDataError:
+            await db.rollback()
+            logger.info(
+                "Subscription %s was deleted during failed fetch; ignoring update",
+                sub_id,
+            )
+            raise HTTPException(status_code=404, detail="Subscription not found") from exc
+
+        logger.error(
+            "Failed to fetch subscription %s (%s): %s",
+            sub_id,
+            sub_name,
+            error_message,
+        )
+        raise
 
 
 def _format_fetch_error(exc: Exception) -> str:
@@ -368,19 +421,35 @@ async def fetch_due_subscriptions(db: AsyncSession) -> int:
     fetched = 0
 
     for item in all_subs:
-        if not item.update_interval or item.update_interval <= 0:
+        # Re-load each row just before fetch so a UI delete between select and
+        # fetch does not leave us mutating a deleted subscription.
+        current = await db.get(Subscription, item.id)
+        if current is None:
             continue
-        if item.last_fetched_at:
-            last_at = item.last_fetched_at.replace(tzinfo=None) if item.last_fetched_at.tzinfo else item.last_fetched_at
+        if not current.update_interval or current.update_interval <= 0:
+            continue
+        if current.last_fetched_at:
+            last_at = (
+                current.last_fetched_at.replace(tzinfo=None)
+                if current.last_fetched_at.tzinfo
+                else current.last_fetched_at
+            )
             delta = (now_naive - last_at).total_seconds() / 60
-            if delta < item.update_interval:
+            if delta < current.update_interval:
                 continue
         try:
-            await fetch_subscription_nodes(db, item)
+            await fetch_subscription_nodes(db, current)
             fetched += 1
+        except HTTPException as exc:
+            if exc.status_code == 404:
+                continue
+            logger.warning(
+                "Scheduled subscription fetch failed: id=%s name=%s", current.id, current.name
+            )
+            continue
         except Exception:
             logger.warning(
-                "Scheduled subscription fetch failed: id=%s name=%s", item.id, item.name
+                "Scheduled subscription fetch failed: id=%s name=%s", current.id, current.name
             )
             continue
 

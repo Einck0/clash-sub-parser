@@ -53,9 +53,9 @@ def test_export_path_detection() -> None:
 
 
 def test_granular_auth_flags() -> None:
-    # Frontend routes must be served so the app can show a token input box.
+    # SPA entry must always load so AuthGate can render the token input.
     # protect_frontend is enforced by the SPA gate, not by blocking index.html.
-    assert request_needs_auth("/", security(protect_frontend=True))
+    assert not request_needs_auth("/", security(protect_frontend=True))
     assert not request_needs_auth("/", security(protect_frontend=False))
     assert request_needs_auth("/api/subscriptions", security(protect_api=True))
     assert not request_needs_auth("/api/subscriptions", security(protect_api=False))

@@ -12,7 +12,19 @@ class Base(DeclarativeBase):
 
 
 settings = get_settings()
-engine = create_async_engine(settings.database_url, echo=False)
+
+
+def _sqlite_connect_args(database_url: str) -> dict:
+    if database_url.startswith("sqlite"):
+        return {"timeout": 30}
+    return {}
+
+
+engine = create_async_engine(
+    settings.database_url,
+    echo=False,
+    connect_args=_sqlite_connect_args(settings.database_url),
+)
 AsyncSessionLocal = async_sessionmaker(
     engine, class_=AsyncSession, expire_on_commit=False
 )
@@ -23,11 +35,21 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
         yield session
 
 
+async def _configure_sqlite(conn) -> None:
+    """Enable WAL + busy timeout so scheduler fetch and UI delete can coexist."""
+    if conn.dialect.name != "sqlite":
+        return
+    await conn.execute(text("PRAGMA journal_mode=WAL"))
+    await conn.execute(text("PRAGMA busy_timeout=30000"))
+    await conn.execute(text("PRAGMA synchronous=NORMAL"))
+
+
 async def init_db() -> None:
     from app.models import dns, generate_config, node_group, rule, rule_category, security_settings, subscription  # noqa: F401
     from app.models import config_snapshot  # noqa: F401
 
     async with engine.begin() as conn:
+        await _configure_sqlite(conn)
         await conn.run_sync(Base.metadata.create_all)
         await _bootstrap_schema(conn)
 

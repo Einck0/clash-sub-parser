@@ -5,11 +5,11 @@
     <div class="grid-2">
       <label>
         <div class="muted">订阅名</div>
-        <input v-model="form.name" placeholder="例如：主订阅" />
+        <input v-model="form.name" placeholder="粘贴 URL 后会自动填域名，也可手动改" @input="onNameInput" />
       </label>
       <label>
         <div class="muted">URL</div>
-        <input v-model="form.url" placeholder="https://..." />
+        <input v-model="form.url" placeholder="https://..." @input="onUrlInput" />
       </label>
       <label>
         <div class="muted">更新周期（分钟）</div>
@@ -21,10 +21,9 @@
       </label>
     </div>
 
-    <label style="display:block;margin-top:10px">
-      <input type="checkbox" v-model="form.is_primary" />
-      <span>设为主订阅（最终 YAML 头部注释与流量响应头来源）</span>
-    </label>
+    <p class="section-hint" style="margin-top:10px">
+      主订阅请在订阅列表卡片上设置，不在这里勾选。YAML 头部注释与流量响应头只取自主订阅。
+    </p>
 
     <div class="selector-section">
       <div class="row space">
@@ -58,7 +57,10 @@
       <div class="row space">
         <div>
           <strong>粗筛：正则</strong>
-          <p class="section-hint">每行一条，按节点名匹配。留空 = 默认全选。候选节点 = 上游订阅节点 + 手动节点。</p>
+          <p class="section-hint">
+            每行一条，按节点名匹配。留空 = 默认全选。
+            候选节点只来自「当前订阅已拉取的上游节点 + 本订阅手动节点」；新建订阅时若还没拉取，这里会是空的。
+          </p>
         </div>
         <span class="muted">粗筛 {{ coarseNodes.length }} / {{ candidateNodes.length }}</span>
       </div>
@@ -70,7 +72,7 @@
       <div class="row space">
         <div>
           <strong>精修：手动包含 / 排除</strong>
-          <p class="section-hint">最终节点 = 正则粗筛 + 手动包含 - 手动排除。按上游/手动节点原始节点名保存。</p>
+          <p class="section-hint">最终节点 = 正则粗筛 + 手动包含 - 手动排除。按当前订阅原始节点名保存。</p>
         </div>
         <span class="muted">最终 {{ finalPreviewNodes.length }} 个节点</span>
       </div>
@@ -86,7 +88,11 @@
         <button @click="clearManualSelection" :disabled="!form.include_node_names.length && !form.exclude_node_names.length">清空手动选择</button>
       </div>
 
-      <div v-if="!candidateNodes.length" class="empty-mini">暂无候选节点。先保存订阅并拉取一次，或添加手动节点。</div>
+      <div v-if="!candidateNodes.length" class="empty-mini">
+        {{ form.id
+          ? '当前订阅还没有候选节点。先保存后点「拉取」，或在上面添加手动节点。'
+          : '新订阅还没有自己的节点。先保存并拉取当前订阅，或直接添加手动节点；不会显示其他订阅的节点。' }}
+      </div>
       <div v-else class="node-select-list">
         <div v-for="node in visibleCandidateNodes" :key="nodeName(node)" class="node-select-row">
           <div class="node-select-name mono">
@@ -121,7 +127,6 @@ import { computed, ref, watch } from 'vue'
 
 const props = defineProps({
   subscription: { type: Object, default: null },
-  allNodes: { type: Array, default: () => [] },
 })
 const emit = defineEmits(['save', 'cancel'])
 
@@ -130,28 +135,10 @@ const regexText = ref('')
 const regexError = ref('')
 const nodeSearch = ref('')
 const manualNodeLinks = ref('')
+/** true only after user manually edits the name field */
 const nameEdited = ref(false)
-
-// Auto-extract name from URL when name is empty
-watch(
-  () => form.value.url,
-  (url) => {
-    if (nameEdited.value || form.value.name || !url) return
-    try {
-      const parsed = new URL(url)
-      // Extract meaningful name from hostname: sub.example.com → example
-      const parts = parsed.hostname.split('.')
-      const name = parts.length >= 2 ? parts[parts.length - 2] : parsed.hostname
-      form.value.name = name.charAt(0).toUpperCase() + name.slice(1)
-    } catch {}
-  }
-)
-
-// Track if user manually edited the name
-watch(
-  () => form.value.name,
-  () => { if (form.value.name) nameEdited.value = true }
-)
+/** last auto-filled name, so URL changes can overwrite auto names but not manual ones */
+const lastAutoName = ref('')
 
 watch(
   () => props.subscription,
@@ -162,6 +149,8 @@ watch(
       regexError.value = ''
       nodeSearch.value = ''
       manualNodeLinks.value = ''
+      nameEdited.value = false
+      lastAutoName.value = ''
       return
     }
     form.value = {
@@ -169,7 +158,6 @@ watch(
       name: value.name || '',
       url: value.url || '',
       update_interval: value.update_interval,
-      is_primary: !!value.is_primary,
       node_prefix: value.node_prefix || '',
       filter_regex: value.filter_regex || [],
       include_node_names: value.include_node_names || [],
@@ -181,6 +169,9 @@ watch(
     regexText.value = (value.filter_regex || []).join('\n')
     nodeSearch.value = ''
     manualNodeLinks.value = ''
+    // Existing subscription name is treated as user-owned; don't overwrite on URL tweak.
+    nameEdited.value = true
+    lastAutoName.value = ''
   },
   { immediate: true }
 )
@@ -202,10 +193,17 @@ watch(regexText, (value) => {
   form.value.filter_regex = lines
 })
 
+/**
+ * Candidate nodes are scoped to the current subscription only:
+ * 1. source_nodes (upstream after fetch)
+ * 2. else raw_nodes for this subscription
+ * 3. plus manual_nodes for this subscription
+ * Never fall back to global allNodes from other subscriptions.
+ */
 const candidateNodes = computed(() => {
   const upstream = form.value.source_nodes?.length
     ? form.value.source_nodes
-    : (form.value.raw_nodes?.length ? form.value.raw_nodes : props.allNodes)
+    : (form.value.raw_nodes || [])
   return uniqueNodesByName([...(upstream || []), ...(form.value.manual_nodes || [])])
 })
 
@@ -285,13 +283,53 @@ function clearManualSelection() {
   form.value.exclude_node_names = []
 }
 
+function onNameInput() {
+  nameEdited.value = true
+}
+
+function onUrlInput() {
+  maybeAutofillNameFromUrl(form.value.url)
+}
+
+/**
+ * Prefer full hostname as the auto name.
+ * Examples:
+ *   msub.xn--m7r52rosihxm.com -> msub.xn--m7r52rosihxm.com
+ *   z.7li7li.com -> z.7li7li.com
+ * Strip www. only.
+ */
+function nameFromUrl(url) {
+  try {
+    const parsed = new URL(url)
+    let host = (parsed.hostname || '').trim().toLowerCase()
+    if (!host) return ''
+    if (host.startsWith('www.')) host = host.slice(4)
+    return host
+  } catch {
+    return ''
+  }
+}
+
+function maybeAutofillNameFromUrl(url) {
+  if (!url) return
+  // Only overwrite when name is empty or still equal to previous auto name.
+  const current = (form.value.name || '').trim()
+  if (nameEdited.value && current && current !== lastAutoName.value) return
+
+  const auto = nameFromUrl(url)
+  if (!auto) return
+  form.value.name = auto
+  lastAutoName.value = auto
+  nameEdited.value = false
+}
+
 function handleSave() {
   if (saveDisabled.value) return
   const payload = {
     name: form.value.name?.trim(),
     url: form.value.url?.trim(),
     update_interval: form.value.update_interval || null,
-    is_primary: !!form.value.is_primary,
+    // Primary is managed on the list page only.
     node_prefix: form.value.node_prefix?.trim() || null,
     filter_regex: form.value.filter_regex || [],
     include_node_names: form.value.include_node_names || [],
@@ -320,7 +358,6 @@ function createDefault() {
     name: '',
     url: '',
     update_interval: null,
-    is_primary: false,
     node_prefix: '',
     filter_regex: [],
     include_node_names: [],

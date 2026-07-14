@@ -19,6 +19,8 @@ class Subscription(Base):
     filter_regex: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     include_node_names: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     exclude_node_names: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    # Maps post-prefix node name -> final display name. Applied after prefixing.
+    node_renames: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     source_nodes: Mapped[list[dict]] = mapped_column(JSON, default=list, nullable=False)
     manual_nodes: Mapped[list[dict]] = mapped_column(JSON, default=list, nullable=False)
     raw_nodes: Mapped[list[dict]] = mapped_column(JSON, default=list, nullable=False)

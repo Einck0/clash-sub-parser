@@ -21,13 +21,18 @@
     <UiState v-if="loading && !subscriptions.length" type="loading" title="正在加载订阅" description="正在读取订阅列表和节点缓存，请稍等。" />
 
     <div class="subscription-grid" v-else>
-      <article v-for="sub in subscriptions" :key="sub.id" class="subscription-card">
+      <article
+        v-for="sub in subscriptions"
+        :key="sub.id"
+        class="subscription-card"
+        :class="{ 'is-disabled': !sub.enabled, 'is-primary-card': sub.is_primary }"
+      >
         <div class="subscription-card-head">
           <div>
-            <div class="row" style="gap:6px">
+            <div class="row" style="gap:6px;flex-wrap:wrap">
               <h3>{{ sub.name }}</h3>
-              <span class="badge" v-if="sub.is_primary">主订阅</span>
-              <span class="badge" v-if="!sub.enabled" style="background:var(--danger);color:#fff">已禁用</span>
+              <span class="badge badge-primary" v-if="sub.is_primary">主订阅</span>
+              <span class="badge badge-danger" v-if="!sub.enabled">已禁用</span>
             </div>
             <div class="mono sub-url" :title="sub.url">{{ short(sub.url, 72) }}</div>
           </div>
@@ -52,9 +57,10 @@
 
         <div class="sub-selection-line">
           <span class="badge">候选 {{ (sub.source_nodes || []).length || (sub.raw_nodes || []).length }}</span>
+          <span class="badge">正则 {{ (sub.filter_regex || []).length || '全选' }}</span>
           <span class="badge">包含 {{ (sub.include_node_names || []).length }}</span>
           <span class="badge">排除 {{ (sub.exclude_node_names || []).length }}</span>
-          <span class="badge">正则 {{ (sub.filter_regex || []).length || '全选' }}</span>
+          <span class="badge">重命名 {{ Object.keys(sub.node_renames || {}).length }}</span>
         </div>
 
         <div class="sub-info-grid">
@@ -80,18 +86,21 @@
           <a v-if="sub.profile_web_page_url" :href="sub.profile_web_page_url" target="_blank" rel="noreferrer">订阅主页</a>
         </div>
 
-        <div class="action-row compact-actions">
-          <button @click="openEdit(sub)">编辑</button>
-          <button @click="doFetch(sub.id)" :disabled="loadingFetchId === sub.id">{{ loadingFetchId === sub.id ? '拉取中...' : '拉取' }}</button>
+        <div class="action-row compact-actions sub-actions">
+          <button class="primary" @click="openEdit(sub)">编辑</button>
+          <button @click="doFetch(sub.id)" :disabled="loadingFetchId === sub.id">
+            {{ loadingFetchId === sub.id ? '拉取中...' : '拉取' }}
+          </button>
           <button @click="showNodes(sub)">节点</button>
           <button
-            :class="{ primary: sub.is_primary }"
+            :class="{ primary: !sub.is_primary }"
             :disabled="sub.is_primary || loadingPrimaryId === sub.id"
             @click="setPrimary(sub)"
           >
-            {{ sub.is_primary ? '主订阅' : (loadingPrimaryId === sub.id ? '设置中...' : '设为主订阅') }}
+            {{ sub.is_primary ? '当前主订阅' : (loadingPrimaryId === sub.id ? '设置中...' : '设为主订阅') }}
           </button>
           <button
+            :class="{ danger: sub.enabled }"
             :disabled="loadingToggleId === sub.id"
             @click="toggleEnabled(sub)"
           >

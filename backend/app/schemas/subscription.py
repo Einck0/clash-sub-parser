@@ -13,6 +13,8 @@ class SubscriptionBase(BaseModel):
     filter_regex: list[str] = Field(default_factory=list)
     include_node_names: list[str] = Field(default_factory=list)
     exclude_node_names: list[str] = Field(default_factory=list)
+    # Post-prefix rename map: {"Dogegg-hk-1": "香港-1"}
+    node_renames: dict[str, str] = Field(default_factory=dict)
     manual_nodes: list[dict] = Field(default_factory=list)
 
 
@@ -30,6 +32,7 @@ class SubscriptionUpdate(BaseModel):
     filter_regex: list[str] | None = None
     include_node_names: list[str] | None = None
     exclude_node_names: list[str] | None = None
+    node_renames: dict[str, str] | None = None
     manual_nodes: list[dict] | None = None
     manual_node_links: str | None = None
 

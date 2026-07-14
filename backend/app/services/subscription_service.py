@@ -52,6 +52,7 @@ async def create_subscription(
     data["filter_regex"] = _normalize_and_validate_regex(data.get("filter_regex", []))
     data["include_node_names"] = _normalize_node_names(data.get("include_node_names", []))
     data["exclude_node_names"] = _normalize_node_names(data.get("exclude_node_names", []))
+    data["node_renames"] = _normalize_node_renames(data.get("node_renames", {}))
     data["manual_nodes"] = _merge_manual_nodes(data.get("manual_nodes") or [], manual_node_links)
     item = Subscription(**data)
     _refresh_selected_nodes(item)
@@ -83,10 +84,12 @@ async def create_manual_node_subscription(
         url="manual://nodes",
         update_interval=None,
         is_primary=payload.is_primary,
+        enabled=getattr(payload, "enabled", True),
         node_prefix=prefix,
         filter_regex=[],
         include_node_names=[],
         exclude_node_names=[],
+        node_renames={},
         source_nodes=[],
         manual_nodes=selected_nodes,
         raw_nodes=deduplicate_nodes(prefixed_nodes),
@@ -114,13 +117,24 @@ async def update_subscription(
         data["include_node_names"] = _normalize_node_names(data["include_node_names"])
     if "exclude_node_names" in data and data["exclude_node_names"] is not None:
         data["exclude_node_names"] = _normalize_node_names(data["exclude_node_names"])
+    if "node_renames" in data and data["node_renames"] is not None:
+        data["node_renames"] = _normalize_node_renames(data["node_renames"])
     if "manual_nodes" in data and data["manual_nodes"] is not None:
         data["manual_nodes"] = deduplicate_nodes(data["manual_nodes"] or [])
     if manual_node_links is not None:
         data["manual_nodes"] = _merge_manual_nodes(data.get("manual_nodes", item.manual_nodes or []), manual_node_links)
 
     selection_changed = bool(
-        {"filter_regex", "include_node_names", "exclude_node_names", "manual_nodes", "node_prefix", "is_primary", "name"}
+        {
+            "filter_regex",
+            "include_node_names",
+            "exclude_node_names",
+            "node_renames",
+            "manual_nodes",
+            "node_prefix",
+            "is_primary",
+            "name",
+        }
         & set(data.keys())
     ) or manual_node_links is not None
 
@@ -191,8 +205,9 @@ async def fetch_subscription_nodes(
             selected_nodes,
             _resolve_prefix(live.name, live.node_prefix, live.is_primary),
         )
+        renamed_nodes = _apply_renames(prefixed_nodes, live.node_renames or {})
 
-        live.raw_nodes = deduplicate_nodes(prefixed_nodes)
+        live.raw_nodes = deduplicate_nodes(renamed_nodes)
         live.last_fetched_at = datetime.now(timezone.utc)
         live.last_fetch_error = None
         live.fetch_failed_count = 0
@@ -353,14 +368,16 @@ def _refresh_selected_nodes(item: Subscription) -> None:
         item.exclude_node_names or [],
     )
     if fallback_to_current:
-        item.raw_nodes = deduplicate_nodes(selected_nodes)
+        # raw_nodes already include prefix/rename; re-apply only renames on current names.
+        item.raw_nodes = deduplicate_nodes(_apply_renames(selected_nodes, item.node_renames or {}))
         return
 
     prefixed_nodes = _apply_prefix(
         selected_nodes,
         _resolve_prefix(item.name, item.node_prefix, item.is_primary),
     )
-    item.raw_nodes = deduplicate_nodes(prefixed_nodes)
+    renamed_nodes = _apply_renames(prefixed_nodes, item.node_renames or {})
+    item.raw_nodes = deduplicate_nodes(renamed_nodes)
 
 
 def _merge_manual_nodes(existing_nodes: list[dict], node_links: str | None) -> list[dict]:
@@ -391,6 +408,21 @@ def _apply_prefix(nodes: list[dict], prefix: str) -> list[dict]:
         copied["name"] = f"{prefix}-{raw_name}" if raw_name else prefix
         prefixed.append(copied)
     return prefixed
+
+
+def _apply_renames(nodes: list[dict], renames: dict | None) -> list[dict]:
+    """Rename nodes after prefixing. Keys are post-prefix names."""
+    mapping = _normalize_node_renames(renames or {})
+    if not mapping:
+        return nodes
+    renamed: list[dict] = []
+    for node in nodes:
+        copied = dict(node)
+        current = str(copied.get("name", "")).strip()
+        if current in mapping:
+            copied["name"] = mapping[current]
+        renamed.append(copied)
+    return renamed
 
 
 async def _clear_primary(db: AsyncSession) -> None:
@@ -489,4 +521,17 @@ def _normalize_node_names(names: list[str]) -> list[str]:
             continue
         seen.add(name)
         normalized.append(name)
+    return normalized
+
+
+def _normalize_node_renames(renames: dict | None) -> dict[str, str]:
+    normalized: dict[str, str] = {}
+    if not isinstance(renames, dict):
+        return normalized
+    for key, value in renames.items():
+        source = str(key or "").strip()
+        target = str(value or "").strip()
+        if not source or not target or source == target:
+            continue
+        normalized[source] = target
     return normalized

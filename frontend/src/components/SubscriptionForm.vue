@@ -1,11 +1,25 @@
 <template>
   <div class="card subscription-form-card">
-    <h3>{{ form.id ? '编辑订阅' : '添加订阅' }}</h3>
+    <div class="form-header">
+      <div>
+        <p class="eyebrow">{{ form.id ? 'Edit' : 'Create' }}</p>
+        <h3>{{ form.id ? '编辑订阅' : '添加订阅' }}</h3>
+        <p class="section-hint">主订阅在列表卡片设置。高级能力默认收起，打开后才显示对应配置。</p>
+      </div>
+      <button
+        v-if="form.id"
+        class="primary"
+        @click="handleFetch"
+        :disabled="fetching || saveDisabled"
+      >
+        {{ fetching ? '拉取中...' : '拉取节点' }}
+      </button>
+    </div>
 
     <div class="grid-2">
       <label>
         <div class="muted">订阅名</div>
-        <input v-model="form.name" placeholder="粘贴 URL 后会自动填域名，也可手动改" @input="onNameInput" />
+        <input v-model="form.name" placeholder="粘贴 URL 后自动填二级域名" @input="onNameInput" />
       </label>
       <label>
         <div class="muted">URL</div>
@@ -21,40 +35,51 @@
       </label>
     </div>
 
-    <p class="section-hint" style="margin-top:10px">
-      主订阅请在订阅列表卡片上设置。下面三个能力默认关闭，只有打开后才显示对应输入区。
-    </p>
+    <div v-if="fetchError" class="form-alert form-alert-error">{{ fetchError }}</div>
 
-    <div class="selector-stats" style="margin-top:10px">
-      <label class="badge" style="cursor:pointer">
-        <input type="checkbox" v-model="featureManual" style="margin-right:4px" />
+    <div class="feature-toggle-row">
+      <button
+        type="button"
+        class="feature-chip"
+        :class="{ active: featureManual }"
+        @click="featureManual = !featureManual"
+      >
         手动节点
-      </label>
-      <label class="badge" style="cursor:pointer">
-        <input type="checkbox" v-model="featureRegex" style="margin-right:4px" />
-        初筛正则
-      </label>
-      <label class="badge" style="cursor:pointer">
-        <input type="checkbox" v-model="featureRefine" style="margin-right:4px" />
-        精修包含/排除
-      </label>
-    </div>
-
-    <div v-if="form.id" class="row" style="margin-top:12px;gap:8px;align-items:center">
-      <button @click="handleFetch" :disabled="fetching || saveDisabled">
-        {{ fetching ? '拉取中...' : '拉取节点' }}
       </button>
-      <span class="muted">拉取后候选节点会更新到当前订阅，不会混入其他订阅。</span>
+      <button
+        type="button"
+        class="feature-chip"
+        :class="{ active: featureRegex }"
+        @click="featureRegex = !featureRegex"
+      >
+        初筛正则
+      </button>
+      <button
+        type="button"
+        class="feature-chip"
+        :class="{ active: featureRefine }"
+        @click="featureRefine = !featureRefine"
+      >
+        精修筛选
+      </button>
+      <button
+        type="button"
+        class="feature-chip"
+        :class="{ active: featureRename }"
+        @click="featureRename = !featureRename"
+      >
+        节点重命名
+      </button>
     </div>
-    <div v-if="fetchError" class="muted" style="color: var(--danger); margin-top: 6px">{{ fetchError }}</div>
+    <p class="section-hint">节点重命名作用在「加前缀之后」的名字上，策略组匹配的也是最终名。</p>
 
     <div v-if="featureManual" class="selector-section">
       <div class="row space">
         <div>
           <strong>手动节点</strong>
-          <p class="section-hint">可给当前订阅额外添加节点。节点链接是隐私内容：保存后不会在页面展示原始链接，只保留解析后的节点配置。</p>
+          <p class="section-hint">额外节点链接仅在保存时解析，不会回显原始链接。</p>
         </div>
-        <span class="muted">手动 {{ form.manual_nodes.length }} 个</span>
+        <span class="muted">{{ form.manual_nodes.length }} 个</span>
       </div>
 
       <div v-if="form.manual_nodes.length" class="node-select-list manual-node-list">
@@ -68,11 +93,15 @@
           </div>
         </div>
       </div>
-      <div v-else class="empty-mini">暂无手动节点。可以在下面粘贴分享链接添加到这个订阅。</div>
+      <div v-else class="empty-mini">暂无手动节点</div>
 
       <label style="display:block;margin-top:10px">
         <div class="muted">新增节点链接</div>
-        <textarea v-model="manualNodeLinks" class="secret-textarea" placeholder="支持 ss://、trojan://、vless://、vmess:// 等常见分享链接；可一行一个。保存后自动解析并加入当前订阅。"></textarea>
+        <textarea
+          v-model="manualNodeLinks"
+          class="secret-textarea"
+          placeholder="ss:// / trojan:// / vless:// / vmess://，一行一个"
+        ></textarea>
       </label>
     </div>
 
@@ -80,24 +109,21 @@
       <div class="row space">
         <div>
           <strong>粗筛：正则</strong>
-          <p class="section-hint">
-            每行一条，按节点名匹配。留空 = 默认全选。
-            候选节点只来自「当前订阅已拉取的上游节点 + 本订阅手动节点」。
-          </p>
+          <p class="section-hint">每行一条，按上游原始节点名匹配。留空 = 全选。</p>
         </div>
         <span class="muted">粗筛 {{ coarseNodes.length }} / {{ candidateNodes.length }}</span>
       </div>
-      <textarea v-model="regexText" placeholder="留空表示全选\n香港\n日本.*Premium"></textarea>
-      <div class="muted" style="color: var(--danger); margin-top: 6px" v-if="regexError">{{ regexError }}</div>
+      <textarea v-model="regexText" placeholder="香港\n日本.*Premium"></textarea>
+      <div class="form-alert form-alert-error" v-if="regexError">{{ regexError }}</div>
     </div>
 
     <div v-if="featureRefine" class="selector-section">
       <div class="row space">
         <div>
-          <strong>精修：手动包含 / 排除</strong>
-          <p class="section-hint">最终节点 = 正则粗筛 + 手动包含 - 手动排除。按当前订阅原始节点名保存。</p>
+          <strong>精修：包含 / 排除</strong>
+          <p class="section-hint">最终候选 = 正则粗筛 + 手动包含 − 手动排除（按原始名）。</p>
         </div>
-        <span class="muted">最终 {{ finalPreviewNodes.length }} 个节点</span>
+        <span class="muted">最终 {{ selectedOriginalNodes.length }} 个</span>
       </div>
 
       <div class="selector-stats">
@@ -108,19 +134,22 @@
 
       <div class="node-search-row">
         <input v-model="nodeSearch" placeholder="搜索节点名" />
-        <button @click="clearManualSelection" :disabled="!form.include_node_names.length && !form.exclude_node_names.length">清空手动选择</button>
+        <button
+          @click="clearManualSelection"
+          :disabled="!form.include_node_names.length && !form.exclude_node_names.length"
+        >
+          清空手动选择
+        </button>
       </div>
 
       <div v-if="!candidateNodes.length" class="empty-mini">
-        {{ form.id
-          ? '当前订阅还没有候选节点。点上面的「拉取节点」，或打开手动节点添加。'
-          : '新订阅还没有自己的节点。先保存后编辑并拉取，或打开手动节点添加。' }}
+        {{ form.id ? '先点「拉取节点」或添加手动节点。' : '先保存并编辑后拉取，或添加手动节点。' }}
       </div>
       <div v-else class="node-select-list">
         <div v-for="node in visibleCandidateNodes" :key="nodeName(node)" class="node-select-row">
           <div class="node-select-name mono">
             <strong>{{ nodeName(node) }}</strong>
-            <span>{{ node.type || '-' }} {{ node.server ? `| ${node.server}:${node.port || ''}` : '' }}</span>
+            <span>{{ node.type || '-' }}</span>
           </div>
           <div class="node-select-actions">
             <button :class="{ primary: nodeMode(node) === 'auto' }" @click="setNodeMode(node, 'auto')">自动</button>
@@ -129,16 +158,54 @@
           </div>
         </div>
       </div>
+    </div>
 
-      <div class="card" style="margin-top:10px">
-        <div class="muted" style="margin-bottom:6px">最终预览（前 120 条）</div>
-        <div class="mono" style="font-size:12px;max-height:220px;overflow:auto">
-          <div v-for="(node, idx) in finalPreviewNodes.slice(0, 120)" :key="idx">{{ nodeName(node) || '(无名节点)' }}</div>
+    <div v-if="featureRename" class="selector-section">
+      <div class="row space">
+        <div>
+          <strong>节点重命名（前缀后）</strong>
+          <p class="section-hint">
+            左侧是加前缀后的名字，右侧是最终输出名。策略组按最终名匹配。
+            当前前缀：<code>{{ effectivePrefix || '(无)' }}</code>
+          </p>
+        </div>
+        <span class="muted">已改名 {{ renameCount }}</span>
+      </div>
+
+      <div class="node-search-row">
+        <input v-model="renameSearch" placeholder="搜索前缀后名称" />
+        <button @click="clearRenames" :disabled="!renameCount">清空重命名</button>
+      </div>
+
+      <div v-if="!prefixedPreviewNodes.length" class="empty-mini">
+        还没有可选节点。先拉取订阅，或打开手动节点/筛选拿到候选。
+      </div>
+      <div v-else class="rename-list">
+        <div v-for="item in visiblePrefixedNodes" :key="item.prefixed" class="rename-row">
+          <div class="rename-from mono" :title="item.prefixed">{{ item.prefixed }}</div>
+          <span class="rename-arrow">→</span>
+          <input
+            class="rename-to"
+            :value="form.node_renames[item.prefixed] || item.prefixed"
+            :placeholder="item.prefixed"
+            @input="setRename(item.prefixed, $event.target.value)"
+          />
         </div>
       </div>
     </div>
 
-    <div class="row" style="margin-top:12px">
+    <div class="selector-section">
+      <div class="row space">
+        <strong>最终节点预览</strong>
+        <span class="muted">{{ finalPreviewNames.length }} 个</span>
+      </div>
+      <div class="mono final-preview">
+        <div v-for="(name, idx) in finalPreviewNames.slice(0, 120)" :key="idx">{{ name }}</div>
+        <div v-if="!finalPreviewNames.length" class="empty-mini">暂无节点</div>
+      </div>
+    </div>
+
+    <div class="form-footer">
       <button class="primary" @click="handleSave" :disabled="saveDisabled || fetching">保存</button>
       <button @click="$emit('cancel')">取消</button>
     </div>
@@ -158,15 +225,15 @@ const form = ref(createDefault())
 const regexText = ref('')
 const regexError = ref('')
 const nodeSearch = ref('')
+const renameSearch = ref('')
 const manualNodeLinks = ref('')
-/** true only after user manually edits the name field */
 const nameEdited = ref(false)
-/** last auto-filled name, so URL changes can overwrite auto names but not manual ones */
 const lastAutoName = ref('')
 
 const featureManual = ref(false)
 const featureRegex = ref(false)
 const featureRefine = ref(false)
+const featureRename = ref(false)
 const fetching = ref(false)
 const fetchError = ref('')
 
@@ -179,12 +246,14 @@ watch(
       regexText.value = ''
       regexError.value = ''
       nodeSearch.value = ''
+      renameSearch.value = ''
       manualNodeLinks.value = ''
       nameEdited.value = false
       lastAutoName.value = ''
       featureManual.value = false
       featureRegex.value = false
       featureRefine.value = false
+      featureRename.value = false
       return
     }
     form.value = {
@@ -192,25 +261,27 @@ watch(
       name: value.name || '',
       url: value.url || '',
       update_interval: value.update_interval,
+      is_primary: !!value.is_primary,
       node_prefix: value.node_prefix || '',
       filter_regex: value.filter_regex || [],
       include_node_names: value.include_node_names || [],
       exclude_node_names: value.exclude_node_names || [],
+      node_renames: { ...(value.node_renames || {}) },
       manual_nodes: value.manual_nodes || [],
       source_nodes: value.source_nodes || [],
       raw_nodes: value.raw_nodes || [],
     }
     regexText.value = (value.filter_regex || []).join('\n')
     nodeSearch.value = ''
+    renameSearch.value = ''
     manualNodeLinks.value = ''
-    // Existing subscription name is treated as user-owned; don't overwrite on URL tweak.
     nameEdited.value = true
     lastAutoName.value = ''
-    // Auto-open feature panels when the subscription already has related data.
     featureManual.value = (value.manual_nodes || []).length > 0
     featureRegex.value = (value.filter_regex || []).length > 0
     featureRefine.value =
       (value.include_node_names || []).length > 0 || (value.exclude_node_names || []).length > 0
+    featureRename.value = Object.keys(value.node_renames || {}).length > 0
   },
   { immediate: true }
 )
@@ -232,17 +303,12 @@ watch(regexText, (value) => {
   form.value.filter_regex = lines
 })
 
-/**
- * Candidate nodes are scoped to the current subscription only:
- * 1. source_nodes (upstream after fetch)
- * 2. else raw_nodes for this subscription
- * 3. plus manual_nodes for this subscription
- * Never fall back to global allNodes from other subscriptions.
- */
 const candidateNodes = computed(() => {
   const upstream = form.value.source_nodes?.length
     ? form.value.source_nodes
     : (form.value.raw_nodes || [])
+  // When using raw_nodes fallback, names may already include prefix/rename.
+  // Prefer source_nodes after fetch for correct selection/rename keys.
   return uniqueNodesByName([...(upstream || []), ...(form.value.manual_nodes || [])])
 })
 
@@ -264,7 +330,7 @@ const coarseNodes = computed(() => {
   return candidateNodes.value.filter((node) => regexPatterns.value.some((p) => p.test(nodeName(node))))
 })
 
-const finalPreviewNodes = computed(() => {
+const selectedOriginalNodes = computed(() => {
   const selected = new Map(coarseNodes.value.map((node) => [nodeName(node), node]))
   if (featureRefine.value) {
     const include = new Set(form.value.include_node_names || [])
@@ -278,6 +344,37 @@ const finalPreviewNodes = computed(() => {
   return [...selected.values()]
 })
 
+const effectivePrefix = computed(() => {
+  const custom = (form.value.node_prefix || '').trim()
+  if (custom) return custom
+  if (form.value.is_primary) return ''
+  return (form.value.name || '').trim()
+})
+
+const prefixedPreviewNodes = computed(() => {
+  const prefix = effectivePrefix.value
+  return selectedOriginalNodes.value
+    .map((node) => {
+      const original = nodeName(node)
+      if (!original) return null
+      const prefixed = prefix ? `${prefix}-${original}` : original
+      return { original, prefixed, node }
+    })
+    .filter(Boolean)
+})
+
+const finalPreviewNames = computed(() => {
+  const renames = featureRename.value ? form.value.node_renames || {} : {}
+  return prefixedPreviewNodes.value.map((item) => {
+    const mapped = String(renames[item.prefixed] || '').trim()
+    return mapped || item.prefixed
+  })
+})
+
+const renameCount = computed(() =>
+  Object.entries(form.value.node_renames || {}).filter(([k, v]) => k && v && k !== v).length
+)
+
 const saveDisabled = computed(() => {
   return !!regexError.value || !form.value.name.trim() || !form.value.url.trim()
 })
@@ -287,6 +384,18 @@ const visibleCandidateNodes = computed(() => {
   const nodes = candidateNodes.value
   if (!q) return nodes.slice(0, 240)
   return nodes.filter((node) => nodeName(node).toLowerCase().includes(q)).slice(0, 240)
+})
+
+const visiblePrefixedNodes = computed(() => {
+  const q = renameSearch.value.trim().toLowerCase()
+  const nodes = prefixedPreviewNodes.value
+  if (!q) return nodes.slice(0, 240)
+  return nodes
+    .filter((item) => {
+      const to = String(form.value.node_renames[item.prefixed] || item.prefixed).toLowerCase()
+      return item.prefixed.toLowerCase().includes(q) || to.includes(q)
+    })
+    .slice(0, 240)
 })
 
 function nodeName(node) {
@@ -325,6 +434,18 @@ function clearManualSelection() {
   form.value.exclude_node_names = []
 }
 
+function setRename(prefixed, value) {
+  const next = { ...(form.value.node_renames || {}) }
+  const target = String(value || '').trim()
+  if (!target || target === prefixed) delete next[prefixed]
+  else next[prefixed] = target
+  form.value.node_renames = next
+}
+
+function clearRenames() {
+  form.value.node_renames = {}
+}
+
 function onNameInput() {
   nameEdited.value = true
 }
@@ -333,13 +454,6 @@ function onUrlInput() {
   maybeAutofillNameFromUrl(form.value.url)
 }
 
-/**
- * Auto name from URL hostname second-level label.
- * Examples:
- *   z.7li7li.com -> 7li7li
- *   msub.example.com -> example
- *   www.example.com -> example
- */
 function nameFromUrl(url) {
   try {
     const parsed = new URL(url)
@@ -357,10 +471,8 @@ function nameFromUrl(url) {
 
 function maybeAutofillNameFromUrl(url) {
   if (!url) return
-  // Only overwrite when name is empty or still equal to previous auto name.
   const current = (form.value.name || '').trim()
   if (nameEdited.value && current && current !== lastAutoName.value) return
-
   const auto = nameFromUrl(url)
   if (!auto) return
   form.value.name = auto
@@ -381,6 +493,9 @@ async function handleFetch() {
     form.value.filter_regex = data.filter_regex || form.value.filter_regex || []
     form.value.include_node_names = data.include_node_names || form.value.include_node_names || []
     form.value.exclude_node_names = data.exclude_node_names || form.value.exclude_node_names || []
+    form.value.node_renames = { ...(data.node_renames || form.value.node_renames || {}) }
+    form.value.is_primary = !!data.is_primary
+    form.value.node_prefix = data.node_prefix || form.value.node_prefix || ''
     regexText.value = (form.value.filter_regex || []).join('\n')
     emit('fetched', data)
   } catch (err) {
@@ -396,16 +511,26 @@ function handleSave() {
     name: form.value.name?.trim(),
     url: form.value.url?.trim(),
     update_interval: form.value.update_interval || null,
-    // Primary is managed on the list page only.
     node_prefix: form.value.node_prefix?.trim() || null,
-    // Closed feature panels clear related config so disabled features don't keep old filters.
     filter_regex: featureRegex.value ? (form.value.filter_regex || []) : [],
     include_node_names: featureRefine.value ? (form.value.include_node_names || []) : [],
     exclude_node_names: featureRefine.value ? (form.value.exclude_node_names || []) : [],
+    node_renames: featureRename.value ? normalizeRenames(form.value.node_renames || {}) : {},
     manual_nodes: featureManual.value ? (form.value.manual_nodes || []) : [],
     manual_node_links: featureManual.value ? (manualNodeLinks.value.trim() || null) : null,
   }
   emit('save', payload)
+}
+
+function normalizeRenames(renames) {
+  const out = {}
+  for (const [key, value] of Object.entries(renames || {})) {
+    const from = String(key || '').trim()
+    const to = String(value || '').trim()
+    if (!from || !to || from === to) continue
+    out[from] = to
+  }
+  return out
 }
 
 function uniqueNodesByName(nodes) {
@@ -426,10 +551,12 @@ function createDefault() {
     name: '',
     url: '',
     update_interval: null,
+    is_primary: false,
     node_prefix: '',
     filter_regex: [],
     include_node_names: [],
     exclude_node_names: [],
+    node_renames: {},
     manual_nodes: [],
     source_nodes: [],
     raw_nodes: [],

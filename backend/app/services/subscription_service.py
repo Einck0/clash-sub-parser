@@ -410,9 +410,10 @@ async def fetch_due_subscriptions(db: AsyncSession) -> int:
     # Strip timezone for comparison with SQLite naive datetimes
     now_naive = now.replace(tzinfo=None)
     cutoff = now_naive - __import__('datetime').timedelta(minutes=1)
-    # Only fetch subscriptions that need updating (filter at SQL level)
+    # Only fetch enabled subscriptions that need updating
     result = await db.execute(
         select(Subscription).where(
+            Subscription.enabled.is_(True),
             Subscription.update_interval > 0,
             (Subscription.last_fetched_at.is_(None)) | (Subscription.last_fetched_at < cutoff),
         )
@@ -457,7 +458,9 @@ async def fetch_due_subscriptions(db: AsyncSession) -> int:
 
 
 async def collect_all_subscription_nodes(db: AsyncSession) -> list[dict]:
-    result = await db.execute(select(Subscription.raw_nodes))
+    result = await db.execute(
+        select(Subscription.raw_nodes).where(Subscription.enabled.is_(True))
+    )
     merged: list[dict] = []
     for nodes in result.scalars().all():
         merged.extend(nodes or [])

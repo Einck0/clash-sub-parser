@@ -8,6 +8,7 @@ class SubscriptionBase(BaseModel):
     url: str = Field(max_length=2048)
     update_interval: int | None = Field(default=None, ge=1)
     is_primary: bool = False
+    enabled: bool = True
     node_prefix: str | None = None
     filter_regex: list[str] = Field(default_factory=list)
     include_node_names: list[str] = Field(default_factory=list)
@@ -24,6 +25,7 @@ class SubscriptionUpdate(BaseModel):
     url: str | None = None
     update_interval: int | None = Field(default=None, ge=1)
     is_primary: bool | None = None
+    enabled: bool | None = None
     node_prefix: str | None = None
     filter_regex: list[str] | None = None
     include_node_names: list[str] | None = None
@@ -37,10 +39,12 @@ class ManualNodeCreate(BaseModel):
     node_links: str
     node_prefix: str | None = None
     is_primary: bool = False
+    enabled: bool = True
 
 
 class SubscriptionRead(SubscriptionBase):
     id: int
+    enabled: bool = True
     source_nodes: list[dict] = Field(default_factory=list)
     raw_nodes: list[dict] = Field(default_factory=list)
     last_fetched_at: datetime | None = None

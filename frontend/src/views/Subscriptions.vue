@@ -27,6 +27,7 @@
             <div class="row" style="gap:6px">
               <h3>{{ sub.name }}</h3>
               <span class="badge" v-if="sub.is_primary">主订阅</span>
+              <span class="badge" v-if="!sub.enabled" style="background:var(--danger);color:#fff">已禁用</span>
             </div>
             <div class="mono sub-url" :title="sub.url">{{ short(sub.url, 72) }}</div>
           </div>
@@ -89,6 +90,12 @@
             @click="setPrimary(sub)"
           >
             {{ sub.is_primary ? '主订阅' : (loadingPrimaryId === sub.id ? '设置中...' : '设为主订阅') }}
+          </button>
+          <button
+            :disabled="loadingToggleId === sub.id"
+            @click="toggleEnabled(sub)"
+          >
+            {{ loadingToggleId === sub.id ? '...' : (sub.enabled ? '禁用' : '启用') }}
           </button>
           <button class="danger" @click="remove(sub)">删除</button>
         </div>
@@ -153,6 +160,7 @@ const showForm = ref(false)
 const editing = ref(null)
 const loadingFetchId = ref(null)
 const loadingPrimaryId = ref(null)
+const loadingToggleId = ref(null)
 const loading = ref(false)
 const error = ref('')
 
@@ -238,6 +246,21 @@ async function setPrimary(item) {
     store.error(getApiErrorMessage(err, '设置主订阅失败'))
   } finally {
     loadingPrimaryId.value = null
+  }
+}
+
+async function toggleEnabled(item) {
+  if (!item?.id) return
+  loadingToggleId.value = item.id
+  error.value = ''
+  try {
+    await updateSubscription(item.id, { enabled: !item.enabled })
+    store.success(item.enabled ? `已禁用 ${item.name}` : `已启用 ${item.name}`)
+    await load()
+  } catch (err) {
+    store.error(getApiErrorMessage(err, '切换启用状态失败'))
+  } finally {
+    loadingToggleId.value = null
   }
 }
 

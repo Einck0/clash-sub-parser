@@ -128,6 +128,12 @@ async def _bootstrap_schema(conn) -> None:
             await conn.execute(
                 text("ALTER TABLE subscriptions ADD COLUMN manual_nodes JSON NOT NULL DEFAULT '[]'")
             )
+        if "enabled" not in sub_columns:
+            await conn.execute(
+                text(
+                    "ALTER TABLE subscriptions ADD COLUMN enabled BOOLEAN NOT NULL DEFAULT 1"
+                )
+            )
 
         sec_result = await conn.execute(text("PRAGMA table_info(security_settings)"))
         sec_columns = {row[1] for row in sec_result.fetchall()}
@@ -190,6 +196,9 @@ async def _bootstrap_schema(conn) -> None:
         )
         await conn.execute(
             text("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS manual_nodes JSON NOT NULL DEFAULT '[]'")
+        )
+        await conn.execute(
+            text("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT TRUE")
         )
         await conn.execute(
             text("ALTER TABLE security_settings ADD COLUMN IF NOT EXISTS fetch_proxy_enabled BOOLEAN NOT NULL DEFAULT FALSE")

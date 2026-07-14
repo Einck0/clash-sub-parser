@@ -131,7 +131,9 @@ async def generate_subscription_payload(db: AsyncSession, subscription_id: int) 
 
 
 async def _collect_all_nodes(db: AsyncSession) -> list[dict]:
-    result = await db.execute(select(Subscription.raw_nodes))
+    result = await db.execute(
+        select(Subscription.raw_nodes).where(Subscription.enabled.is_(True))
+    )
     nodes: list[dict] = []
     for row in result.scalars().all():
         nodes.extend(row or [])
@@ -278,7 +280,10 @@ def _unwrap_dns_object(data: dict) -> dict:
 
 async def _get_primary_comments(db: AsyncSession) -> list[str]:
     result = await db.execute(
-        select(Subscription.fetch_comments).where(Subscription.is_primary.is_(True))
+        select(Subscription.fetch_comments).where(
+            Subscription.is_primary.is_(True),
+            Subscription.enabled.is_(True),
+        )
     )
     comments = result.scalar_one_or_none()
     return comments or []
@@ -290,7 +295,10 @@ async def get_primary_subscription_headers(db: AsyncSession) -> dict[str, str]:
             Subscription.subscription_userinfo,
             Subscription.profile_update_interval,
             Subscription.profile_web_page_url,
-        ).where(Subscription.is_primary.is_(True))
+        ).where(
+            Subscription.is_primary.is_(True),
+            Subscription.enabled.is_(True),
+        )
     )
     row = result.first()
     if not row:

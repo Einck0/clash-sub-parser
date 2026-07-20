@@ -181,6 +181,34 @@
         </div>
       </div>
 
+      <div class="selector-section">
+        <div class="row space">
+          <div>
+            <strong>减去策略组节点</strong>
+            <p class="section-hint">选择其他策略组后，会把该组最终解析出的节点从本组合并结果里排除（不删除对方策略组）。</p>
+          </div>
+        </div>
+        <div class="node-search-row" style="margin-top:8px">
+          <select v-model.number="excludeGroupId">
+            <option :value="null">选择要减去的策略组</option>
+            <option v-for="g in selectableGroups" :key="`ex-${g.id}`" :value="g.id">{{ g.name }}</option>
+          </select>
+          <button @click="addExcludeGroup" :disabled="!excludeGroupId">减去该组节点</button>
+        </div>
+        <div v-if="(form.exclude_nodes || []).length" class="node-select-list" style="margin-top:8px">
+          <div v-for="(name, idx) in form.exclude_nodes" :key="`exnode-${name}-${idx}`" class="node-select-row">
+            <div class="node-select-name mono">
+              <strong>{{ name }}</strong>
+              <span>排除节点</span>
+            </div>
+            <div class="node-select-actions">
+              <button class="danger" @click="removeExcludeNode(idx)">删</button>
+            </div>
+          </div>
+        </div>
+        <div v-else class="empty-mini" style="margin-top:8px">暂无排除节点。可从上方选择策略组批量减去。</div>
+      </div>
+
       <div class="selector-section" v-if="previewMatches.length">
         <div class="row space">
           <strong>正则预览结果</strong>
@@ -229,6 +257,7 @@ const store = useAppStore()
 const allGroups = ref([])
 const allNodes = ref([])
 const selectedGroupId = ref(null)
+const excludeGroupId = ref(null)
 const selectedNodeName = ref('')
 const showRaw = ref(false)
 const rawJson = ref('')
@@ -454,6 +483,61 @@ function addGroupNodes() {
   pushEntry({ type: 'group_nodes', value: Number(selectedGroupId.value) })
 }
 
+function removeExcludeNode(index) {
+  const copy = [...(form.value.exclude_nodes || [])]
+  copy.splice(index, 1)
+  form.value.exclude_nodes = copy
+}
+
+function collectGroupResolvedNames(groupId, trail = new Set()) {
+  const id = Number(groupId)
+  if (!Number.isInteger(id) || trail.has(id)) return []
+  const group = allGroups.value.find((item) => item.id === id)
+  if (!group) return []
+  trail.add(id)
+  const entries = normalizeEntries(group.include_entries || buildEntriesFallback(group))
+  const names = []
+  const nodePool = allNodes.value.map((n) => String(n.name || '').trim()).filter(Boolean)
+  for (const entry of entries) {
+    if (entry.type === 'node') {
+      names.push(String(entry.value || '').trim())
+      continue
+    }
+    if (entry.type === 'group_nodes') {
+      names.push(...collectGroupResolvedNames(entry.value, trail))
+      continue
+    }
+    if (entry.type === 'regex') {
+      const rule = String(entry.value || '').trim()
+      if (!rule) continue
+      let pattern
+      try {
+        pattern = new RegExp(rule, 'i')
+      } catch (_) {
+        continue
+      }
+      for (const name of nodePool) {
+        if (pattern.test(name)) names.push(name)
+      }
+    }
+  }
+  // also honor target group's own excludes
+  const excluded = new Set(group.exclude_nodes || [])
+  return uniq(names.filter((name) => name && !excluded.has(name)))
+}
+
+function addExcludeGroup() {
+  if (!excludeGroupId.value) return
+  const names = collectGroupResolvedNames(excludeGroupId.value)
+  if (!names.length) {
+    error.value = '该策略组当前没有可减去的节点'
+    return
+  }
+  form.value.exclude_nodes = uniq([...(form.value.exclude_nodes || []), ...names])
+  excludeGroupId.value = null
+  error.value = ''
+}
+
 function pushEntry(entry) {
   const exists = form.value.include_entries.some(
     (item) => item.type === entry.type && String(item.value) === String(entry.value)
@@ -564,8 +648,8 @@ async function save() {
     } else {
       await createNodeGroup(payload)
     }
-    store.success(form.value.id ? '节点组已保存' : '节点组已创建')
-    emit('saved')
+    // Parent page owns the success toast to avoid double notifications.
+    emit('saved', { created: !form.value.id, name })
     emit('close')
   } catch (err) {
     error.value = getApiErrorMessage(err, '保存节点组失败')

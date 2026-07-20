@@ -9,7 +9,6 @@
       <div class="head-actions">
         <button @click="validateRefs" :disabled="loading || !!working">{{ working === 'validate' ? '校验中...' : '校验引用' }}</button>
         <button @click="loadPreview" :disabled="loading || !!working">{{ working === 'preview' ? '刷新中...' : '刷新预览' }}</button>
-        <button @click="pruneLeaves" :disabled="loading || !!working">{{ working === 'prune' ? '清理中...' : '清理未引用叶子组' }}</button>
         <button class="primary" @click="openCreate">添加节点组</button>
       </div>
     </div>
@@ -111,7 +110,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useAppStore } from '../stores/app'
-import { deleteNodeGroup, getApiErrorMessage, getNodeGroups, previewNodeGroups, pruneUnreferencedLeafGroups, reorderNodeGroups, validateNodeGroups } from '../api'
+import { deleteNodeGroup, getApiErrorMessage, getNodeGroups, previewNodeGroups, reorderNodeGroups, validateNodeGroups } from '../api'
 import NodePreviewList from '../components/NodePreviewList.vue'
 import UiState from '../components/UiState.vue'
 import NodeGroupModal from './NodeGroupModal.vue'
@@ -176,9 +175,9 @@ function openEdit(group) {
   showModal.value = true
 }
 
-function onSaved() {
+function onSaved(payload = {}) {
   showModal.value = false
-  store.success('节点组已保存')
+  store.success(payload.created ? '节点组已创建' : '节点组已保存')
   load()
 }
 
@@ -281,25 +280,4 @@ function formatEntry(entry) {
   return truncateText(JSON.stringify(entry), 24)
 }
 
-async function pruneLeaves() {
-  const ok = await store.confirm({
-    title: '清理未引用叶子组',
-    message: '将删除「仅含静态节点、且未被其他策略组/规则引用」的叶子策略组。检测循环引用：引用图已做环检测，叶子组本身无组引用，删除安全。',
-    confirmText: '清理',
-    danger: true,
-  })
-  if (!ok) return
-  working.value = 'prune'
-  error.value = ''
-  try {
-    const { data } = await pruneUnreferencedLeafGroups()
-    const count = data?.count || 0
-    store.success(count ? `已删除 ${count} 个未引用叶子组` : '没有可清理的未引用叶子组')
-    await load()
-  } catch (err) {
-    error.value = getApiErrorMessage(err, '清理失败')
-  } finally {
-    working.value = ''
-  }
-}
 </script>

@@ -194,6 +194,15 @@ async def _collect_node_groups(db: AsyncSession, all_nodes: list[dict]) -> list[
                 selected.extend([name for name in all_node_names if pattern.search(name)])
 
         excluded = set(group.exclude_nodes or [])
+        for raw_id in group.exclude_group_ids or []:
+            try:
+                exclude_id = int(raw_id)
+            except Exception:
+                continue
+            if exclude_id == group_id:
+                continue
+            # Dynamic subtract: expand target group nodes at resolve-time.
+            excluded.update(resolve_group_nodes(exclude_id, set(trail)))
         merged = [item for item in dedup_names(selected) if item not in excluded]
         resolved_cache[group_id] = merged
         trail.remove(group_id)

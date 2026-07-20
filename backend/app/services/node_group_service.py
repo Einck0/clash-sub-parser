@@ -37,6 +37,7 @@ async def create_node_group(db: AsyncSession, payload: NodeGroupCreate) -> NodeG
         data["include_group_ids"],
         data["include_group_nodes_ids"],
         None,
+        data.get("exclude_group_ids") or [],
     )
     item = NodeGroup(**data)
     db.add(item)
@@ -82,11 +83,13 @@ async def update_node_group(
     include_group_nodes_ids = data.get(
         "include_group_nodes_ids", item.include_group_nodes_ids
     )
+    exclude_group_ids = data.get("exclude_group_ids", item.exclude_group_ids)
     await _validate_node_group_relations(
         db,
         include_group_ids,
         include_group_nodes_ids,
         item.id,
+        exclude_group_ids or [],
     )
 
     for key, value in data.items():
@@ -190,6 +193,14 @@ async def preview_node_groups(db: AsyncSession) -> list[dict]:
                 selected.extend([name for name in node_names if pattern.search(name)])
 
         excluded = set(group.exclude_nodes or [])
+        for raw_id in group.exclude_group_ids or []:
+            try:
+                exclude_id = int(raw_id)
+            except Exception:
+                continue
+            if exclude_id == group_id:
+                continue
+            excluded.update(resolve_nodes(exclude_id, set(trail)))
         merged = [name for name in dedup_names(selected) if name not in excluded]
         cache[group_id] = merged
         trail.remove(group_id)
@@ -207,6 +218,14 @@ async def preview_node_groups(db: AsyncSession) -> list[dict]:
                 include_group_names.append(group_map[entry_value].name)
             if entry_type == "group_nodes" and entry_value in group_map:
                 include_group_nodes_names.append(group_map[entry_value].name)
+        exclude_group_names: list[str] = []
+        for raw_id in group.exclude_group_ids or []:
+            try:
+                exclude_id = int(raw_id)
+            except Exception:
+                continue
+            if exclude_id in group_map:
+                exclude_group_names.append(group_map[exclude_id].name)
         resolved_nodes = with_fallback(resolve_nodes(group.id, set()), group.add_fallback)
         preview.append(
             {
@@ -216,6 +235,8 @@ async def preview_node_groups(db: AsyncSession) -> list[dict]:
                 "resolved_count": len(resolved_nodes),
                 "include_group_names": include_group_names,
                 "include_group_nodes_names": include_group_nodes_names,
+                "exclude_group_ids": list(group.exclude_group_ids or []),
+                "exclude_group_names": exclude_group_names,
                 "include_entries": entries,
             }
         )
@@ -228,13 +249,17 @@ async def _validate_node_group_relations(
     include_group_ids: list[int],
     include_group_nodes_ids: list[int],
     self_id: int | None,
+    exclude_group_ids: list[int] | None = None,
 ) -> None:
     result = await db.execute(select(NodeGroup.id))
     existing_ids = set(result.scalars().all())
     ensure_group_ids_exist(include_group_ids, existing_ids)
     ensure_group_ids_exist(include_group_nodes_ids, existing_ids)
+    ensure_group_ids_exist(exclude_group_ids or [], existing_ids)
     if self_id is not None and (
-        self_id in include_group_ids or self_id in include_group_nodes_ids
+        self_id in include_group_ids
+        or self_id in include_group_nodes_ids
+        or self_id in (exclude_group_ids or [])
     ):
         raise HTTPException(status_code=400, detail="Node group cannot include itself")
 
@@ -264,6 +289,19 @@ def _normalize_group_payload(data: dict) -> None:
         data["exclude_nodes"] = [
             i.strip() for i in (data.get("exclude_nodes") or []) if i and i.strip()
         ]
+    if "exclude_group_ids" in data:
+        normalized_ids: list[int] = []
+        seen: set[int] = set()
+        for raw in data.get("exclude_group_ids") or []:
+            try:
+                gid = int(raw)
+            except Exception:
+                continue
+            if gid in seen:
+                continue
+            seen.add(gid)
+            normalized_ids.append(gid)
+        data["exclude_group_ids"] = normalized_ids
     if "include_entries" in data:
         data["include_entries"] = _normalize_entries(data.get("include_entries") or [])
 

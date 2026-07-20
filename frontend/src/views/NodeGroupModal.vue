@@ -184,29 +184,32 @@
       <div class="selector-section">
         <div class="row space">
           <div>
-            <strong>减去策略组节点</strong>
-            <p class="section-hint">选择其他策略组后，会把该组最终解析出的节点从本组合并结果里排除（不删除对方策略组）。</p>
+            <strong>减去策略组（动态）</strong>
+            <p class="section-hint">
+              保存的是策略组引用，不是当时节点快照。预览/生成时会实时展开该组当前节点并从本组合并结果中排除。
+              「添加组节点」同样是动态展开。
+            </p>
           </div>
         </div>
         <div class="node-search-row" style="margin-top:8px">
           <select v-model.number="excludeGroupId">
             <option :value="null">选择要减去的策略组</option>
-            <option v-for="g in selectableGroups" :key="`ex-${g.id}`" :value="g.id">{{ g.name }}</option>
+            <option v-for="g in selectableExcludeGroups" :key="`ex-${g.id}`" :value="g.id">{{ g.name }}</option>
           </select>
-          <button @click="addExcludeGroup" :disabled="!excludeGroupId">减去该组节点</button>
+          <button @click="addExcludeGroup" :disabled="!excludeGroupId">减去该策略组</button>
         </div>
-        <div v-if="(form.exclude_nodes || []).length" class="node-select-list" style="margin-top:8px">
-          <div v-for="(name, idx) in form.exclude_nodes" :key="`exnode-${name}-${idx}`" class="node-select-row">
+        <div v-if="(form.exclude_group_ids || []).length" class="node-select-list" style="margin-top:8px">
+          <div v-for="(gid, idx) in form.exclude_group_ids" :key="`exg-${gid}-${idx}`" class="node-select-row">
             <div class="node-select-name mono">
-              <strong>{{ name }}</strong>
-              <span>排除节点</span>
+              <strong>{{ groupNameById(Number(gid)) }}</strong>
+              <span>动态排除 · 当前约 {{ countExcludeGroupMatches(Number(gid)) }} 个节点</span>
             </div>
             <div class="node-select-actions">
-              <button class="danger" @click="removeExcludeNode(idx)">删</button>
+              <button class="danger" @click="removeExcludeGroup(idx)">删</button>
             </div>
           </div>
         </div>
-        <div v-else class="empty-mini" style="margin-top:8px">暂无排除节点。可从上方选择策略组批量减去。</div>
+        <div v-else class="empty-mini" style="margin-top:8px">暂无动态排除策略组。</div>
       </div>
 
       <div class="selector-section" v-if="previewMatches.length">
@@ -297,6 +300,7 @@ watch(
         include_entries: entries,
         add_fallback: value.add_fallback === true,
         exclude_nodes: [...(value.exclude_nodes || [])],
+        exclude_group_ids: [...(value.exclude_group_ids || [])].map((id) => Number(id)).filter((id) => Number.isInteger(id)),
         url_test_config: value.url_test_config || {},
         load_balance_config: value.load_balance_config || {},
         fallback_config: value.fallback_config || {},
@@ -327,8 +331,11 @@ watch(editingRegexValue, () => {
 })
 
 const selectableGroups = computed(() => allGroups.value.filter((item) => item.id !== form.value.id))
+const selectableExcludeGroups = computed(() =>
+  selectableGroups.value.filter((item) => !(form.value.exclude_group_ids || []).includes(item.id)),
+)
 const selectableNodeNames = computed(() =>
-  allNodes.value.map((node) => String(node.name || '').trim()).filter(Boolean)
+  allNodes.value.map((node) => String(node.name || '').trim()).filter(Boolean),
 )
 
 function validateRegex(rule) {
@@ -483,13 +490,14 @@ function addGroupNodes() {
   pushEntry({ type: 'group_nodes', value: Number(selectedGroupId.value) })
 }
 
-function removeExcludeNode(index) {
-  const copy = [...(form.value.exclude_nodes || [])]
+function removeExcludeGroup(index) {
+  const copy = [...(form.value.exclude_group_ids || [])]
   copy.splice(index, 1)
-  form.value.exclude_nodes = copy
+  form.value.exclude_group_ids = copy
 }
 
 function collectGroupResolvedNames(groupId, trail = new Set()) {
+  // Preview helper only: same dynamic semantics as backend group_nodes / exclude_group_ids.
   const id = Number(groupId)
   if (!Number.isInteger(id) || trail.has(id)) return []
   const group = allGroups.value.find((item) => item.id === id)
@@ -504,7 +512,7 @@ function collectGroupResolvedNames(groupId, trail = new Set()) {
       continue
     }
     if (entry.type === 'group_nodes') {
-      names.push(...collectGroupResolvedNames(entry.value, trail))
+      names.push(...collectGroupResolvedNames(entry.value, new Set(trail)))
       continue
     }
     if (entry.type === 'regex') {
@@ -521,19 +529,33 @@ function collectGroupResolvedNames(groupId, trail = new Set()) {
       }
     }
   }
-  // also honor target group's own excludes
   const excluded = new Set(group.exclude_nodes || [])
+  for (const rawId of group.exclude_group_ids || []) {
+    for (const name of collectGroupResolvedNames(rawId, new Set(trail))) {
+      excluded.add(name)
+    }
+  }
   return uniq(names.filter((name) => name && !excluded.has(name)))
+}
+
+function countExcludeGroupMatches(groupId) {
+  return collectGroupResolvedNames(groupId).length
 }
 
 function addExcludeGroup() {
   if (!excludeGroupId.value) return
-  const names = collectGroupResolvedNames(excludeGroupId.value)
-  if (!names.length) {
-    error.value = '该策略组当前没有可减去的节点'
+  const gid = Number(excludeGroupId.value)
+  if (!Number.isInteger(gid)) return
+  if (gid === form.value.id) {
+    error.value = '不能减去自己'
     return
   }
-  form.value.exclude_nodes = uniq([...(form.value.exclude_nodes || []), ...names])
+  const current = [...(form.value.exclude_group_ids || [])]
+  if (current.includes(gid)) {
+    excludeGroupId.value = null
+    return
+  }
+  form.value.exclude_group_ids = [...current, gid]
   excludeGroupId.value = null
   error.value = ''
 }
@@ -602,6 +624,7 @@ function syncFromRaw() {
       ...parsed,
       include_entries: normalizeEntries(parsed.include_entries || buildEntriesFallback(parsed)),
       exclude_nodes: uniq(parsed.exclude_nodes || []),
+      exclude_group_ids: uniqNumbers(parsed.exclude_group_ids || []),
     }
   } catch (err) {
     error.value = `Raw JSON 格式错误: ${err.message}`
@@ -635,6 +658,7 @@ async function save() {
     include_entries: entries,
     add_fallback: form.value.add_fallback === true,
     exclude_nodes: uniq(form.value.exclude_nodes || []),
+    exclude_group_ids: uniqNumbers(form.value.exclude_group_ids || []),
     url_test_config: form.value.url_test_config || {},
     load_balance_config: form.value.load_balance_config || {},
     fallback_config: form.value.fallback_config || {},
@@ -679,6 +703,7 @@ function defaultForm() {
     include_entries: [],
     add_fallback: false,
     exclude_nodes: [],
+    exclude_group_ids: [],
     url_test_config: {},
     load_balance_config: {},
     fallback_config: {},
@@ -724,6 +749,18 @@ function buildEntriesFallback(value) {
 
 function uniq(items) {
   return [...new Set(items)]
+}
+
+function uniqNumbers(items) {
+  const out = []
+  const seen = new Set()
+  for (const raw of items || []) {
+    const n = Number(raw)
+    if (!Number.isInteger(n) || seen.has(n)) continue
+    seen.add(n)
+    out.push(n)
+  }
+  return out
 }
 
 function uniqBy(items, getKey) {

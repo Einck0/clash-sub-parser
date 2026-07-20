@@ -96,6 +96,9 @@
           <div class="muted small-line" v-if="preview.include_group_nodes_names?.length">
             引入节点组节点：{{ preview.include_group_nodes_names.map((n) => `${n}(节点)`).join('、') }}
           </div>
+          <div class="muted small-line" v-if="preview.exclude_group_names?.length">
+            动态减去策略组：{{ preview.exclude_group_names.join('、') }}
+          </div>
           <NodePreviewList :nodes="preview.resolved_nodes || []" :collapsed-limit="18" placeholder="搜索此组节点" />
         </article>
       </div>

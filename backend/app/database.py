@@ -77,6 +77,12 @@ async def _bootstrap_schema(conn) -> None:
                     "ALTER TABLE node_groups ADD COLUMN add_fallback BOOLEAN NOT NULL DEFAULT 0"
                 )
             )
+        if "exclude_group_ids" not in columns:
+            await conn.execute(
+                text(
+                    "ALTER TABLE node_groups ADD COLUMN exclude_group_ids JSON NOT NULL DEFAULT '[]'"
+                )
+            )
 
         rule_result = await conn.execute(text("PRAGMA table_info(rules)"))
         rule_columns = {row[1] for row in rule_result.fetchall()}
@@ -164,6 +170,11 @@ async def _bootstrap_schema(conn) -> None:
         await conn.execute(
             text(
                 "ALTER TABLE node_groups ADD COLUMN IF NOT EXISTS add_fallback BOOLEAN NOT NULL DEFAULT FALSE"
+            )
+        )
+        await conn.execute(
+            text(
+                "ALTER TABLE node_groups ADD COLUMN IF NOT EXISTS exclude_group_ids JSON NOT NULL DEFAULT '[]'"
             )
         )
         # Keep SQLite/Postgres defaults aligned: new groups default false unless UI sets true.

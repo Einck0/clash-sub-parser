@@ -15,6 +15,7 @@ class NodeGroupBase(BaseModel):
     include_entries: list[dict] = Field(default_factory=list)
     add_fallback: bool = False
     exclude_nodes: list[str] = Field(default_factory=list)
+    exclude_group_ids: list[int] = Field(default_factory=list)
     url_test_config: dict = Field(default_factory=dict)
     load_balance_config: dict = Field(default_factory=dict)
     fallback_config: dict = Field(default_factory=dict)
@@ -38,6 +39,7 @@ class NodeGroupUpdate(BaseModel):
     include_entries: list[dict] | None = None
     add_fallback: bool | None = None
     exclude_nodes: list[str] | None = None
+    exclude_group_ids: list[int] | None = None
     url_test_config: dict | None = None
     load_balance_config: dict | None = None
     fallback_config: dict | None = None

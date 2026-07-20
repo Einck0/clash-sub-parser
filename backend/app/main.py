@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db, init_db
 from app.models.config_snapshot import ConfigSnapshot  # ensure model is registered
 from app.database import AsyncSessionLocal
-from app.routers import dns, downloads, generate, geoip, latency, node_groups, rule_categories, rules, settings as settings_router, snapshots, subscriptions
+from app.routers import dns, downloads, generate, node_groups, rule_categories, rules, settings as settings_router, snapshots, subscriptions
 from app.services.generate_config_service import generate_config_to_switches, get_generate_config
 from app.services.generate_service import generate_script, generate_yaml, get_primary_subscription_headers
 from app.services.scheduler import shutdown_scheduler, start_scheduler
@@ -145,8 +145,6 @@ app.include_router(generate.router, prefix=settings.api_prefix)
 app.include_router(downloads.router, prefix=settings.api_prefix)
 app.include_router(settings_router.router, prefix=settings.api_prefix)
 app.include_router(snapshots.router, prefix=settings.api_prefix)
-app.include_router(latency.router, prefix=settings.api_prefix)
-app.include_router(geoip.router, prefix=settings.api_prefix)
 
 
 @app.get("/")

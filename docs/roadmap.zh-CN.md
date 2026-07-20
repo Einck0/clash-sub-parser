@@ -161,7 +161,7 @@ git ls-files docker-compose.yml info.txt backups references .learnings .pytest_c
 - 默认拉取 UA 改为 `clash.meta`，避免机场按旧 UA 只下发部分协议节点（7li 从 ~23 恢复到完整集合）。
 - 节点组更新：拒绝把已有 `include_entries` 存成空数组；更新前自动 snapshot。
 - 订阅表单功能 chip 只控制显示，关闭不再清空已保存配置。
-- 延迟检测优先走 mihomo external-controller，按节点名测到 `google generate_204` 的往返；Geo 优先查代理出口 IP 归属。
+。
 - `add_fallback` 语义统一为追加 PASS；默认 false。
 
 ### 2026-05-28：节点组兜底与配置备份/重置/导入

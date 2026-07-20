@@ -17,12 +17,6 @@ class Settings(BaseSettings):
     download_timeout_seconds: int = 300
     download_max_bytes: int = 300 * 1024 * 1024
     request_user_agent: str = "clash.meta"
-    # Optional external controller for real proxy latency / exit-IP checks.
-    # Example: http://host.docker.internal:19090
-    mihomo_api_url: str = ""
-    mihomo_api_secret: str = ""
-    mihomo_test_url: str = "https://www.google.com/generate_204"
-    mihomo_timeout_ms: int = 8000
     request_trust_env: bool = False
     allow_private_fetch_urls: bool = False
     fetch_proxy_enabled: bool = False

@@ -58,3 +58,48 @@ async def test_update_rejects_empty_include_entries_wipe(client):
     item = next(g for g in listed.json() if g["id"] == group_id)
     assert item["include_entries"] == [{"type": "regex", "value": "香港"}]
     assert item["regex_rules"] == ["香港"]
+
+
+@pytest.mark.asyncio
+async def test_exclude_group_cycle_rejected(client):
+    a = await client.post(
+        "/api/node-groups",
+        json={
+            "name": "group-a",
+            "group_type": "select",
+            "include_entries": [{"type": "node", "value": "n1"}],
+        },
+    )
+    b = await client.post(
+        "/api/node-groups",
+        json={
+            "name": "group-b",
+            "group_type": "select",
+            "include_entries": [{"type": "node", "value": "n2"}],
+        },
+    )
+    assert a.status_code == 201
+    assert b.status_code == 201
+    a_id = a.json()["id"]
+    b_id = b.json()["id"]
+
+    # A includes B's nodes, B excludes A -> cycle across add/subtract edges
+    ok = await client.patch(
+        f"/api/node-groups/{a_id}",
+        json={
+            "include_entries": [{"type": "group_nodes", "value": b_id}],
+        },
+    )
+    assert ok.status_code == 200
+
+    cycle = await client.patch(
+        f"/api/node-groups/{b_id}",
+        json={
+            "include_entries": [{"type": "node", "value": "n2"}],
+            "exclude_group_ids": [a_id],
+        },
+    )
+    assert cycle.status_code == 400
+    detail = str(cycle.json().get("detail") or "")
+    assert "循环" in detail or "Circular" in detail
+

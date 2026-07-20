@@ -265,15 +265,41 @@ async def _validate_node_group_relations(
 
 
 async def _validate_cycles_or_raise(db: AsyncSession) -> None:
+    """Build one directed graph for all group references and detect cycles.
+
+    Edges include:
+    - include group / group_nodes (add)
+    - exclude_group_ids (subtract)
+
+    Same graph, same cycle check. Saving with a cycle is rejected.
+    """
     result = await db.execute(
         select(
-            NodeGroup.id, NodeGroup.include_group_ids, NodeGroup.include_group_nodes_ids
+            NodeGroup.id,
+            NodeGroup.name,
+            NodeGroup.include_group_ids,
+            NodeGroup.include_group_nodes_ids,
+            NodeGroup.exclude_group_ids,
         )
     )
-    graph = {}
+    graph: dict[int, list[int]] = {}
+    id_to_name: dict[int, str] = {}
     for row in result.all():
-        graph[row[0]] = (row[1] or []) + (row[2] or [])
-    validate_no_circular_reference(graph)
+        group_id = int(row[0])
+        id_to_name[group_id] = str(row[1] or "")
+        edges: list[int] = []
+        seen: set[int] = set()
+        for raw in list(row[2] or []) + list(row[3] or []) + list(row[4] or []):
+            try:
+                child = int(raw)
+            except Exception:
+                continue
+            if child in seen:
+                continue
+            seen.add(child)
+            edges.append(child)
+        graph[group_id] = edges
+    validate_no_circular_reference(graph, id_to_name=id_to_name)
 
 
 def _normalize_group_payload(data: dict) -> None:
@@ -346,15 +372,21 @@ async def _ensure_group_not_referenced(db: AsyncSession, item: NodeGroup) -> Non
             NodeGroup.name,
             NodeGroup.include_group_ids,
             NodeGroup.include_group_nodes_ids,
+            NodeGroup.exclude_group_ids,
         ).where(NodeGroup.id != item.id)
     )
     for row in group_result.all():
         include_group_ids = row[2] or []
         include_group_nodes_ids = row[3] or []
-        if item.id in include_group_ids or item.id in include_group_nodes_ids:
+        exclude_group_ids = row[4] or []
+        if (
+            item.id in include_group_ids
+            or item.id in include_group_nodes_ids
+            or item.id in exclude_group_ids
+        ):
             raise HTTPException(
                 status_code=400,
-                detail=f"Node group is referenced by '{row[1]}'",
+                detail=f"策略组仍被「{row[1]}」引用（加/减引用都算），请先移除引用再删除。",
             )
 
     rule_result = await db.execute(select(Rule.name, Rule.proxy).where(Rule.proxy == item.name))

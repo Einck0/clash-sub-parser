@@ -631,6 +631,84 @@ function syncFromRaw() {
   }
 }
 
+
+function detectReferenceCycle(entries, excludeGroupIds = []) {
+  // Client-side soft check. Backend still enforces the same graph.
+  const selfId = form.value.id == null ? null : Number(form.value.id)
+  const graph = new Map()
+  for (const group of allGroups.value) {
+    const edges = []
+    const seen = new Set()
+    const push = (raw) => {
+      const id = Number(raw)
+      if (!Number.isInteger(id) || seen.has(id)) return
+      seen.add(id)
+      edges.push(id)
+    }
+    const sourceEntries =
+      selfId != null && group.id === selfId
+        ? entries
+        : normalizeEntries(group.include_entries || buildEntriesFallback(group))
+    for (const entry of sourceEntries) {
+      if (entry.type === 'group' || entry.type === 'group_nodes') push(entry.value)
+    }
+    const excludes =
+      selfId != null && group.id === selfId
+        ? excludeGroupIds
+        : group.exclude_group_ids || []
+    for (const raw of excludes) push(raw)
+    graph.set(group.id, edges)
+  }
+  // New group not yet in allGroups
+  if (selfId == null) {
+    const edges = []
+    const seen = new Set()
+    const push = (raw) => {
+      const id = Number(raw)
+      if (!Number.isInteger(id) || seen.has(id)) return
+      seen.add(id)
+      edges.push(id)
+    }
+    for (const entry of entries) {
+      if (entry.type === 'group' || entry.type === 'group_nodes') push(entry.value)
+    }
+    for (const raw of excludeGroupIds) push(raw)
+    // use temporary id 0 for draft
+    graph.set(0, edges)
+  }
+
+  const visiting = new Set()
+  const visited = new Set()
+  const path = []
+  const label = (id) => {
+    if (id === 0) return form.value.name || '当前策略组'
+    return groupNameById(id)
+  }
+  const dfs = (node) => {
+    if (visited.has(node)) return null
+    if (visiting.has(node)) {
+      const start = path.indexOf(node)
+      const cycle = path.slice(start >= 0 ? start : 0).concat(node)
+      return `策略组引用存在循环：${cycle.map(label).join(' → ')}。加/减策略组引用都不能形成环。`
+    }
+    visiting.add(node)
+    path.push(node)
+    for (const child of graph.get(node) || []) {
+      const hit = dfs(child)
+      if (hit) return hit
+    }
+    path.pop()
+    visiting.delete(node)
+    visited.add(node)
+    return null
+  }
+  for (const node of graph.keys()) {
+    const hit = dfs(node)
+    if (hit) return hit
+  }
+  return ''
+}
+
 async function save() {
   if (saving.value) return
   const name = String(form.value.name || '').trim()
@@ -648,6 +726,14 @@ async function save() {
       error.value = `第 ${idx + 1} 条正则无效：${err}`
       return
     }
+  }
+
+  // Same graph check as backend: include edges + exclude edges.
+  const cycleHint = detectReferenceCycle(entries, form.value.exclude_group_ids || [])
+  if (cycleHint) {
+    error.value = cycleHint
+    store.error(cycleHint)
+    return
   }
 
   const payload = {

@@ -80,8 +80,28 @@ const api = {
 }
 
 export function getApiErrorMessage(err: any, fallback: string = '请求失败'): string {
-  if (err?.userMessage) return err.userMessage
-  return buildErrorMessage(err?.response?.data, err?.message || fallback)
+  if (err?.userMessage) {
+    return humanizeGroupError(err.userMessage)
+  }
+  return humanizeGroupError(buildErrorMessage(err?.response?.data, err?.message || fallback))
+}
+
+function humanizeGroupError(message: string): string {
+  const text = String(message || '')
+  if (!text) return text
+  if (text.includes('Circular node group reference detected')) {
+    return text.replace(
+      'Circular node group reference detected',
+      '策略组引用存在循环',
+    ) + '。加/减策略组引用都不能形成环。'
+  }
+  if (text.includes('Node group cannot include itself')) {
+    return '策略组不能引用自己（加/减都不行）。'
+  }
+  if (text.includes('Referenced node groups do not exist')) {
+    return text.replace('Referenced node groups do not exist', '引用的策略组不存在')
+  }
+  return text
 }
 
 // Subscriptions

@@ -81,9 +81,23 @@ def ensure_group_ids_exist(
         )
 
 
-def validate_no_circular_reference(graph: dict[int, list[int]]) -> None:
+def validate_no_circular_reference(
+    graph: dict[int, list[int]],
+    *,
+    id_to_name: dict[int, str] | None = None,
+) -> None:
+    """Detect cycles in a directed reference graph.
+
+    Used for both include edges (group / group_nodes) and exclude edges
+    (exclude_group_ids). Same graph algorithm; edge meaning is caller's concern.
+    """
     visiting: set[int] = set()
     visited: set[int] = set()
+    names = id_to_name or {}
+
+    def label(node: int) -> str:
+        name = str(names.get(node) or "").strip()
+        return f"{name}#{node}" if name else f"#{node}"
 
     def dfs(node: int, path: list[int]) -> None:
         if node in visited:
@@ -91,9 +105,10 @@ def validate_no_circular_reference(graph: dict[int, list[int]]) -> None:
         if node in visiting:
             cycle_start = path.index(node) if node in path else 0
             cycle = path[cycle_start:] + [node]
+            pretty = " → ".join(label(item) for item in cycle)
             raise HTTPException(
                 status_code=400,
-                detail=f"Circular node group reference detected: {cycle}",
+                detail=f"策略组引用存在循环：{pretty}。加/减策略组引用都不能形成环，请先断开环上的引用。",
             )
 
         visiting.add(node)

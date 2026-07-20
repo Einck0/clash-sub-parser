@@ -24,7 +24,7 @@ def test_validate_cycle_detected() -> None:
     try:
         validate_no_circular_reference(graph)
     except Exception as exc:
-        assert "Circular" in str(exc)
+        assert "循环" in str(exc) or "Circular" in str(exc)
         return
     raise AssertionError("Expected circular reference exception")
 

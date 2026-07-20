@@ -507,17 +507,18 @@ async function handleFetch() {
 
 function handleSave() {
   if (saveDisabled.value) return
+  // Feature chips only hide UI. Closing a chip no longer wipes saved config.
   const payload = {
     name: form.value.name?.trim(),
     url: form.value.url?.trim(),
     update_interval: form.value.update_interval || null,
     node_prefix: form.value.node_prefix?.trim() || null,
-    filter_regex: featureRegex.value ? (form.value.filter_regex || []) : [],
-    include_node_names: featureRefine.value ? (form.value.include_node_names || []) : [],
-    exclude_node_names: featureRefine.value ? (form.value.exclude_node_names || []) : [],
-    node_renames: featureRename.value ? normalizeRenames(form.value.node_renames || {}) : {},
-    manual_nodes: featureManual.value ? (form.value.manual_nodes || []) : [],
-    manual_node_links: featureManual.value ? (manualNodeLinks.value.trim() || null) : null,
+    filter_regex: form.value.filter_regex || [],
+    include_node_names: form.value.include_node_names || [],
+    exclude_node_names: form.value.exclude_node_names || [],
+    node_renames: normalizeRenames(form.value.node_renames || {}),
+    manual_nodes: form.value.manual_nodes || [],
+    manual_node_links: manualNodeLinks.value.trim() || null,
   }
   emit('save', payload)
 }

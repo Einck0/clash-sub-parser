@@ -442,13 +442,12 @@ async def fetch_due_subscriptions(db: AsyncSession) -> int:
     now = datetime.now(timezone.utc)
     # Strip timezone for comparison with SQLite naive datetimes
     now_naive = now.replace(tzinfo=None)
-    cutoff = now_naive - __import__('datetime').timedelta(minutes=1)
-    # Only fetch enabled subscriptions that need updating
+    # Only load enabled subscriptions with a positive interval; due-ness is
+    # decided per-row with the real update_interval (no fake 1-minute prefilter).
     result = await db.execute(
         select(Subscription).where(
             Subscription.enabled.is_(True),
             Subscription.update_interval > 0,
-            (Subscription.last_fetched_at.is_(None)) | (Subscription.last_fetched_at < cutoff),
         )
     )
     all_subs = list(result.scalars().all())

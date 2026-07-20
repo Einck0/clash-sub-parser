@@ -13,7 +13,7 @@ class NodeGroupBase(BaseModel):
     include_group_ids: list[int] = Field(default_factory=list)
     include_group_nodes_ids: list[int] = Field(default_factory=list)
     include_entries: list[dict] = Field(default_factory=list)
-    add_fallback: bool = True
+    add_fallback: bool = False
     exclude_nodes: list[str] = Field(default_factory=list)
     url_test_config: dict = Field(default_factory=dict)
     load_balance_config: dict = Field(default_factory=dict)

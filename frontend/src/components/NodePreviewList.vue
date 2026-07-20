@@ -57,8 +57,8 @@
         </div>
         <span v-if="geoLabel(node)" class="geo-pill" :title="geoTitle(node)">{{ geoLabel(node) }}</span>
         <span v-if="node.type" class="node-type-pill">{{ node.type }}</span>
-        <span v-if="latencyMap[node.meta] !== undefined" class="latency-pill" :class="latencyClass(node.meta)">
-          {{ latencyMap[node.meta] === null ? '超时' : latencyMap[node.meta] + 'ms' }}
+        <span v-if="latencyOf(node) !== undefined" class="latency-pill" :class="latencyClassValue(latencyOf(node))">
+          {{ latencyOf(node) === null ? '超时' : latencyOf(node) + 'ms' }}
         </span>
         <button
           v-if="editable && editMode && displayName(node) !== node.baseName"
@@ -103,8 +103,8 @@ const checking = ref(false)
 const loadingGeo = ref(false)
 const editMode = ref(false)
 const draftRenames = ref({})
-const latencyMap = ref({})  // { "host:port": ms|null }
-const geoMap = ref({}) // { host: {country, country_code, ip, error} }
+const latencyMap = ref({})  // key: node final name or host:port -> ms|null
+const geoMap = ref({}) // key: node final name or host -> {country, country_code, ip, error, mode}
 let lastAutoKey = ''
 
 const normalizedNodes = computed(() => props.nodes.map(normalizeNode).filter(Boolean))
@@ -224,9 +224,17 @@ function hostOf(node) {
   return String(node?.server || '').trim() || String(node?.meta || '').split(':')[0] || ''
 }
 
+function nodeKey(node) {
+  return displayName(node) || node?.baseName || hostOf(node) || node?.meta || ''
+}
+
+function geoInfo(node) {
+  const key = nodeKey(node)
+  return geoMap.value[key] || geoMap.value[hostOf(node)] || null
+}
+
 function geoLabel(node) {
-  const host = hostOf(node)
-  const info = geoMap.value[host]
+  const info = geoInfo(node)
   if (!info) return ''
   if (info.country_code && info.country_code !== 'LAN') return info.country_code
   if (info.country) return info.country
@@ -235,30 +243,61 @@ function geoLabel(node) {
 }
 
 function geoTitle(node) {
-  const host = hostOf(node)
-  const info = geoMap.value[host]
+  const info = geoInfo(node)
   if (!info) return ''
-  const parts = [info.country, info.country_code, info.ip, info.error].filter(Boolean)
+  const mode = info.mode === 'exit' ? '出口IP' : '服务器IP'
+  const parts = [mode, info.country, info.country_code, info.ip, info.error].filter(Boolean)
   return parts.join(' / ')
+}
+
+function latencyOf(node) {
+  const key = nodeKey(node)
+  if (Object.prototype.hasOwnProperty.call(latencyMap.value, key)) return latencyMap.value[key]
+  if (node?.meta && Object.prototype.hasOwnProperty.call(latencyMap.value, node.meta)) {
+    return latencyMap.value[node.meta]
+  }
+  return undefined
 }
 
 async function loadCountries() {
   if (loadingGeo.value) return
-  const hosts = [...new Set(normalizedNodes.value.map((n) => hostOf(n)).filter(Boolean))]
-  if (!hosts.length) return
+  const nodes = normalizedNodes.value.filter((n) => nodeKey(n))
+  if (!nodes.length) return
   loadingGeo.value = true
   try {
     const map = { ...geoMap.value }
-    for (let i = 0; i < hosts.length; i += 40) {
-      const chunk = hosts.slice(i, i + 40)
-      const { data } = await lookupGeoIp(chunk)
-      for (const item of data || []) {
-        if (!item?.host) continue
-        map[item.host] = {
-          country: item.country || null,
-          country_code: item.country_code || null,
-          ip: item.ip || null,
-          error: item.error || null,
+    // Prefer exit-IP via mihomo when names exist; otherwise server-IP fallback.
+    const names = [...new Set(nodes.map((n) => displayName(n) || n.baseName).filter(Boolean))]
+    if (names.length) {
+      for (let i = 0; i < names.length; i += 20) {
+        const chunk = names.slice(i, i + 20)
+        const { data } = await lookupGeoIp({ names: chunk })
+        for (const item of data || []) {
+          const key = item?.name || item?.host
+          if (!key) continue
+          map[key] = {
+            country: item.country || null,
+            country_code: item.country_code || null,
+            ip: item.ip || null,
+            error: item.error || null,
+            mode: item.mode || 'exit',
+          }
+        }
+      }
+    } else {
+      const hosts = [...new Set(nodes.map((n) => hostOf(n)).filter(Boolean))]
+      for (let i = 0; i < hosts.length; i += 40) {
+        const chunk = hosts.slice(i, i + 40)
+        const { data } = await lookupGeoIp({ hosts: chunk })
+        for (const item of data || []) {
+          if (!item?.host) continue
+          map[item.host] = {
+            country: item.country || null,
+            country_code: item.country_code || null,
+            ip: item.ip || null,
+            error: item.error || null,
+            mode: item.mode || 'server',
+          }
         }
       }
     }
@@ -272,19 +311,29 @@ async function loadCountries() {
 
 async function checkLatencies() {
   checking.value = true
-  const hosts = normalizedNodes.value
-    .map((n) => n.meta)
-    .filter((m) => m && m.includes(':'))
-  if (!hosts.length) {
-    checking.value = false
-    return
-  }
   try {
-    const { data } = await checkLatency(hosts.slice(0, 30), 5000)
+    const names = [
+      ...new Set(
+        normalizedNodes.value
+          .map((n) => displayName(n) || n.baseName)
+          .filter(Boolean),
+      ),
+    ].slice(0, 30)
     const map = {}
-    for (const r of data) {
-      const key = `${r.host}:${r.port}`
-      map[key] = r.latency_ms ?? null
+    if (names.length) {
+      const { data } = await checkLatency({ names, timeoutMs: 8000 })
+      for (const r of data || []) {
+        if (!r?.name) continue
+        map[r.name] = r.latency_ms ?? null
+      }
+    } else {
+      const hosts = normalizedNodes.value.map((n) => n.meta).filter((m) => m && m.includes(':')).slice(0, 30)
+      if (!hosts.length) return
+      const { data } = await checkLatency({ hosts, timeoutMs: 5000 })
+      for (const r of data || []) {
+        if (r?.host == null) continue
+        map[`${r.host}:${r.port}`] = r.latency_ms ?? null
+      }
     }
     latencyMap.value = map
   } catch {
@@ -294,8 +343,7 @@ async function checkLatencies() {
   }
 }
 
-function latencyClass(meta) {
-  const ms = latencyMap.value[meta]
+function latencyClassValue(ms) {
   if (ms === null || ms === undefined) return ''
   if (ms < 200) return 'good'
   if (ms < 500) return 'ok'

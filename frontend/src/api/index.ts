@@ -162,10 +162,37 @@ export const restoreSnapshot = (id: number) => api.post(`/snapshots/${id}/restor
 export const deleteSnapshot = (id: number) => api.delete(`/snapshots/${id}`)
 
 // Latency
-export const checkLatency = (hosts: string[], timeoutMs: number = 3000) =>
-  api.post('/latency/check', { hosts, timeout_ms: timeoutMs })
+// Prefer proxy names (mihomo delay to google). hosts remains TCP fallback.
+export const checkLatency = (
+  hostsOrOptions: string[] | { hosts?: string[]; names?: string[]; timeoutMs?: number; testUrl?: string } = [],
+  timeoutMs: number = 5000,
+) => {
+  if (Array.isArray(hostsOrOptions)) {
+    return api.post('/latency/check', { hosts: hostsOrOptions, timeout_ms: timeoutMs })
+  }
+  const opts = hostsOrOptions || {}
+  return api.post('/latency/check', {
+    hosts: opts.hosts || [],
+    names: opts.names || [],
+    timeout_ms: opts.timeoutMs ?? timeoutMs,
+    test_url: opts.testUrl,
+  })
+}
 
 // GeoIP
-export const lookupGeoIp = (hosts: string[]) => api.post('/geoip/lookup', { hosts })
+// Prefer proxy names (exit IP via mihomo). hosts remains server-IP fallback.
+export const lookupGeoIp = (
+  hostsOrOptions: string[] | { hosts?: string[]; names?: string[]; exitProxyUrl?: string } = [],
+) => {
+  if (Array.isArray(hostsOrOptions)) {
+    return api.post('/geoip/lookup', { hosts: hostsOrOptions })
+  }
+  const opts = hostsOrOptions || {}
+  return api.post('/geoip/lookup', {
+    hosts: opts.hosts || [],
+    names: opts.names || [],
+    exit_proxy_url: opts.exitProxyUrl,
+  })
+}
 
 export default api

@@ -25,7 +25,7 @@ class NodeGroup(Base):
     include_entries: Mapped[list[dict]] = mapped_column(
         JSON, default=list, nullable=False
     )
-    add_fallback: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    add_fallback: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     exclude_nodes: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     url_test_config: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     load_balance_config: Mapped[dict] = mapped_column(

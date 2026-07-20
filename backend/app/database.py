@@ -74,7 +74,7 @@ async def _bootstrap_schema(conn) -> None:
         if "add_fallback" not in columns:
             await conn.execute(
                 text(
-                    "ALTER TABLE node_groups ADD COLUMN add_fallback BOOLEAN NOT NULL DEFAULT 1"
+                    "ALTER TABLE node_groups ADD COLUMN add_fallback BOOLEAN NOT NULL DEFAULT 0"
                 )
             )
 
@@ -166,6 +166,7 @@ async def _bootstrap_schema(conn) -> None:
                 "ALTER TABLE node_groups ADD COLUMN IF NOT EXISTS add_fallback BOOLEAN NOT NULL DEFAULT FALSE"
             )
         )
+        # Keep SQLite/Postgres defaults aligned: new groups default false unless UI sets true.
         await conn.execute(
             text(
                 "ALTER TABLE rules ADD COLUMN IF NOT EXISTS category VARCHAR(80) NOT NULL DEFAULT 'default'"

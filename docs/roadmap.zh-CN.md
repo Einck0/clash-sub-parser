@@ -36,7 +36,7 @@
    正则是粗筛，手动包含/排除是最终精修层。
 
 7. 节点组正则保持动态
-   不默认把匹配结果混入静态节点；如需固化，必须显式冻结。
+   `include_entries.regex` 是虚拟匹配器，按最终节点名动态展开；不做冻结静态节点。
 
 8. 导出鉴权使用 URL query
    Clash 客户端订阅通常无法携带自定义 header，因此 `/yaml`、`/script` 和下载地址启用鉴权时支持 `?token=...`。
@@ -156,9 +156,17 @@ git ls-files docker-compose.yml info.txt backups references .learnings .pytest_c
 - 设置页增加随机 token 生成功能。
 - 订阅拉取增加 URL scheme、私网地址、重定向目标和响应大小限制。
 
+### 2026-07-20：订阅 UA、防误清、测速与出口 IP
+
+- 默认拉取 UA 改为 `clash.meta`，避免机场按旧 UA 只下发部分协议节点（7li 从 ~23 恢复到完整集合）。
+- 节点组更新：拒绝把已有 `include_entries` 存成空数组；更新前自动 snapshot。
+- 订阅表单功能 chip 只控制显示，关闭不再清空已保存配置。
+- 延迟检测优先走 mihomo external-controller，按节点名测到 `google generate_204` 的往返；Geo 优先查代理出口 IP 归属。
+- `add_fallback` 语义统一为追加 PASS；默认 false。
+
 ### 2026-05-28：节点组兜底与配置备份/重置/导入
 
-- 节点组支持 `add_fallback` 配置，可在解析节点末尾追加 `REJECT`。历史组默认 `add_fallback=false`；新建组默认 `true`。
+- 节点组支持 `add_fallback` 配置，可在解析节点末尾追加 **PASS**。默认 `false`；需要时再打开。
 - 设置页提供导出配置（含/不含订阅）、导入配置和重置配置入口。
 - 导出 JSON 排除访问 token/hash；导入时保留当前 token_hash，不会因导入而丢失鉴权。
 - 导入会按表清空后写入，datetime 字段自动从 ISO 字符串还原；支持部分表导入和错误回报。

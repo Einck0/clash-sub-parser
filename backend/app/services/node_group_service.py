@@ -9,6 +9,7 @@ from app.models.rule import Rule
 from app.models.subscription import Subscription
 from app.utils.dedup import deduplicate_nodes
 from app.schemas.node_group import NodeGroupCreate, NodeGroupReorder, NodeGroupUpdate
+from app.services.snapshot_service import create_snapshot
 from app.utils.group_utils import dedup_names, with_fallback, resolve_entries
 from app.utils.validators import ensure_group_ids_exist, validate_no_circular_reference
 
@@ -57,6 +58,23 @@ async def update_node_group(
     _normalize_group_payload(data)
     if "include_entries" in data:
         # include_entries is source of truth after migration.
+        # Reject accidental empty saves that would wipe existing matchers.
+        new_entries = list(data.get("include_entries") or [])
+        old_entries = list(item.include_entries or [])
+        if not new_entries and old_entries:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "include_entries cannot be empty while the group already has entries; "
+                    "refusing to wipe matchers"
+                ),
+            )
+        # Snapshot before structural changes so wipe accidents are recoverable.
+        await create_snapshot(
+            db,
+            label=f"auto-before-node-group-{item.id}",
+            description=f"Auto snapshot before updating node group {item.name}",
+        )
         # regex entries drive regex_rules; no DB-side legacy preserve.
         _sync_entry_derived_fields(data)
 

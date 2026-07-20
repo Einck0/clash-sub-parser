@@ -105,10 +105,10 @@ backend/app/
 
 设计说明：
 
-- `include_entries` 统一表示静态节点、内建目标、节点组引用和节点组节点展开。
-- `regex_rules` 表示动态匹配规则。
-- 正则匹配结果默认不固化为静态节点；如需固化，必须显式冻结。
-- `add_fallback` 用于在解析节点末尾追加 `REJECT` 兜底。历史迁移组默认 `false`；新建组默认 `true`。
+- `include_entries` 是节点组真源：支持 `node` / `group` / `group_nodes` / `regex`。
+- `regex` 条目是虚拟动态匹配器，按**最终节点名**（前缀后 + 重命名后）展开；不做“冻结为静态节点”。
+- `regex_rules` / `include_nodes` / `include_group_*` 只是从 `include_entries` 派生的镜像字段，供列表徽章与兼容读取。
+- `add_fallback` 在解析节点末尾追加 **PASS**（不是 REJECT）。默认 `false`；地区 `url-test` 组建议关闭，让空匹配暴露配置问题。
 
 ### RuleCategory 与 Rule
 

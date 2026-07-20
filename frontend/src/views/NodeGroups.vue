@@ -9,6 +9,7 @@
       <div class="head-actions">
         <button @click="validateRefs" :disabled="loading || !!working">{{ working === 'validate' ? '校验中...' : '校验引用' }}</button>
         <button @click="loadPreview" :disabled="loading || !!working">{{ working === 'preview' ? '刷新中...' : '刷新预览' }}</button>
+        <button @click="pruneLeaves" :disabled="loading || !!working">{{ working === 'prune' ? '清理中...' : '清理未引用叶子组' }}</button>
         <button class="primary" @click="openCreate">添加节点组</button>
       </div>
     </div>
@@ -51,11 +52,11 @@
           <div><span>静态节点</span><strong>{{ (group.include_nodes || []).length }}</strong></div>
           <div><span>组引用</span><strong>{{ (group.include_group_ids || []).length }}</strong></div>
           <div><span>组节点</span><strong>{{ (group.include_group_nodes_ids || []).length }}</strong></div>
-          <div><span>兜底</span><strong>{{ group.add_fallback === false ? '关闭' : 'PASS' }}</strong></div>
+          <div><span>兜底</span><strong>{{ group.add_fallback === true ? '空组PASS' : '关闭' }}</strong></div>
         </div>
 
         <div class="node-group-tags" v-if="previewById(group.id)?.include_entries?.length">
-          <span v-for="entry in previewById(group.id).include_entries.slice(0, 6)" :key="`${entry.type}-${entry.value}`" class="badge">
+          <span v-for="(entry, eidx) in previewById(group.id).include_entries.slice(0, 6)" :key="`${entry.type}-${entry.value}-${eidx}`" class="badge" :title="formatEntryFull(entry)">
             {{ formatEntry(entry) }}
           </span>
           <span v-if="previewById(group.id).include_entries.length > 6" class="badge">+{{ previewById(group.id).include_entries.length - 6 }}</span>
@@ -110,7 +111,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useAppStore } from '../stores/app'
-import { deleteNodeGroup, getApiErrorMessage, getNodeGroups, previewNodeGroups, reorderNodeGroups, validateNodeGroups } from '../api'
+import { deleteNodeGroup, getApiErrorMessage, getNodeGroups, previewNodeGroups, pruneUnreferencedLeafGroups, reorderNodeGroups, validateNodeGroups } from '../api'
 import NodePreviewList from '../components/NodePreviewList.vue'
 import UiState from '../components/UiState.vue'
 import NodeGroupModal from './NodeGroupModal.vue'
@@ -227,7 +228,25 @@ async function validateRefs() {
   }
 }
 
-function formatEntry(entry) {
+function truncateText(text, max = 28) {
+  const value = String(text || '')
+  if (value.length <= max) return value
+  return `${value.slice(0, Math.max(1, max - 1))}…`
+}
+
+function regexLabel(entry, allEntries = []) {
+  const label = String(entry?.name || entry?.label || '').trim()
+  if (label) return label
+  let n = 0
+  for (const item of allEntries || []) {
+    if (item?.type !== 'regex') continue
+    n += 1
+    if (item === entry || String(item?.value) === String(entry?.value)) return `正则${n}`
+  }
+  return '正则'
+}
+
+function formatEntryFull(entry) {
   if (entry.type === 'node') return `节点:${entry.value}`
   if (entry.type === 'group') {
     const g = groups.value.find((item) => item.id === entry.value)
@@ -237,7 +256,50 @@ function formatEntry(entry) {
     const g = groups.value.find((item) => item.id === entry.value)
     return `组节点:${g ? g.name : `#${entry.value}`}`
   }
-  if (entry.type === 'regex') return `正则:/${entry.value}/`
+  if (entry.type === 'regex') {
+    const entries = []
+    // best-effort label without full group context
+    return `${regexLabel(entry)} · /${entry.value}/`
+  }
   return JSON.stringify(entry)
+}
+
+function formatEntry(entry) {
+  if (entry.type === 'node') return truncateText(`节点:${entry.value}`, 24)
+  if (entry.type === 'group') {
+    const g = groups.value.find((item) => item.id === entry.value)
+    return truncateText(`组:${g ? g.name : `#${entry.value}`}`, 24)
+  }
+  if (entry.type === 'group_nodes') {
+    const g = groups.value.find((item) => item.id === entry.value)
+    return truncateText(`组节点:${g ? g.name : `#${entry.value}`}`, 24)
+  }
+  if (entry.type === 'regex') {
+    // list page: show short name only, not the full regex blob
+    return regexLabel(entry)
+  }
+  return truncateText(JSON.stringify(entry), 24)
+}
+
+async function pruneLeaves() {
+  const ok = await store.confirm({
+    title: '清理未引用叶子组',
+    message: '将删除「仅含静态节点、且未被其他策略组/规则引用」的叶子策略组。检测循环引用：引用图已做环检测，叶子组本身无组引用，删除安全。',
+    confirmText: '清理',
+    danger: true,
+  })
+  if (!ok) return
+  working.value = 'prune'
+  error.value = ''
+  try {
+    const { data } = await pruneUnreferencedLeafGroups()
+    const count = data?.count || 0
+    store.success(count ? `已删除 ${count} 个未引用叶子组` : '没有可清理的未引用叶子组')
+    await load()
+  } catch (err) {
+    error.value = getApiErrorMessage(err, '清理失败')
+  } finally {
+    working.value = ''
+  }
 }
 </script>

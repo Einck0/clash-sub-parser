@@ -13,7 +13,9 @@ from app.services.node_group_service import (
     delete_node_group,
     get_node_group,
     list_node_groups,
+    list_unreferenced_leaf_groups,
     preview_node_groups,
+    prune_unreferenced_leaf_groups,
     reorder_node_groups,
     update_node_group,
     validate_node_groups,
@@ -77,3 +79,19 @@ async def preview_node_group_endpoint(
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
     return await preview_node_groups(db)
+
+
+@router.get("/_unreferenced-leaf")
+async def list_unreferenced_leaf_endpoint(
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    items = await list_unreferenced_leaf_groups(db)
+    return [{"id": item.id, "name": item.name} for item in items]
+
+
+@router.post("/_prune-unreferenced-leaf")
+async def prune_unreferenced_leaf_endpoint(
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    return await prune_unreferenced_leaf_groups(db)
+

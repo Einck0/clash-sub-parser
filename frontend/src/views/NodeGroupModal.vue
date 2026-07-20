@@ -34,14 +34,14 @@
         <div class="row space">
           <div>
             <strong>兜底节点</strong>
-            <p class="section-hint">开启后在组末尾追加 PASS，空组时走直连放行。</p>
+            <p class="section-hint">仅当策略组最终没有任何节点时才追加 PASS；有节点时不会加。</p>
           </div>
         </div>
         <label class="settings-toggle" style="margin-top:8px">
           <input type="checkbox" v-model="form.add_fallback" />
           <span>
-            <strong>添加兜底 PASS</strong>
-            <small>默认开启</small>
+            <strong>空组时追加 PASS</strong>
+            <small>默认关闭</small>
           </span>
         </label>
       </div>
@@ -83,12 +83,15 @@
 
         <div style="margin-top:10px">
           <div class="muted">添加正则筛选（虚拟）</div>
-          <div class="node-search-row" style="margin-top:6px">
+          <div class="grid-2" style="margin-top:6px;gap:8px">
+            <input v-model="regexDraftName" placeholder="名称（可选，空则自动 正则1/正则2）" />
             <input
               v-model="regexDraft"
-              placeholder="例如：香港  或  ^(?!.*(官网|套餐|流量)).*$"
+              placeholder="正则，例如：香港  或  ^(?!.*(官网|套餐)).*$"
               @keyup.enter="addRegexEntry"
             />
+          </div>
+          <div class="node-search-row" style="margin-top:6px">
             <button @click="addRegexEntry" :disabled="!regexDraft.trim() || !!regexDraftError">加入正则</button>
           </div>
           <div v-if="regexDraftError" class="form-alert form-alert-error" style="margin-top:6px">
@@ -131,6 +134,12 @@
               <template v-if="entry.type === 'regex' && editingRegexIndex === idx">
                 <div class="regex-edit-box">
                   <input
+                    v-model="editingRegexName"
+                    class="regex-edit-input"
+                    placeholder="名称（可选）"
+                    style="margin-bottom:6px"
+                  />
+                  <input
                     v-model="editingRegexValue"
                     class="regex-edit-input"
                     placeholder="输入正则，例如 香港 或 ^(?!.*(官网|套餐)).*$"
@@ -151,11 +160,12 @@
                 </div>
               </template>
               <template v-else>
-                <strong>{{ idx + 1 }}. {{ formatEntry(entry) }}</strong>
+                <strong>{{ idx + 1 }}. {{ formatEntryTitle(entry, idx) }}</strong>
                 <span>
                   {{ typeLabel(entry.type) }}
                   <template v-if="entry.type === 'regex'">
-                    · 动态匹配 {{ countRegexMatches(entry.value) }} 个
+                    · {{ truncateText(String(entry.value || ''), 48) }}
+                    · 匹配 {{ countRegexMatches(entry.value) }} 个
                   </template>
                 </span>
               </template>
@@ -223,11 +233,13 @@ const selectedNodeName = ref('')
 const showRaw = ref(false)
 const rawJson = ref('')
 const regexDraft = ref('')
+const regexDraftName = ref('')
 const regexDraftError = ref('')
 const draftMatches = ref([])
 const previewMatches = ref([])
 const editingRegexIndex = ref(-1)
 const editingRegexValue = ref('')
+const editingRegexName = ref('')
 const editingRegexError = ref('')
 const draggingIndex = ref(-1)
 const saving = ref(false)
@@ -241,6 +253,7 @@ watch(
     draftMatches.value = []
     previewMatches.value = []
     regexDraft.value = ''
+    regexDraftName.value = ''
     regexDraftError.value = ''
     cancelRegexEdit()
     await loadSources()
@@ -336,12 +349,14 @@ function startRegexEdit(index) {
   if (!entry || entry.type !== 'regex') return
   editingRegexIndex.value = index
   editingRegexValue.value = String(entry.value || '')
+  editingRegexName.value = String(entry.name || entry.label || '')
   editingRegexError.value = validateRegex(editingRegexValue.value.trim())
 }
 
 function cancelRegexEdit() {
   editingRegexIndex.value = -1
   editingRegexValue.value = ''
+  editingRegexName.value = ''
   editingRegexError.value = ''
 }
 
@@ -365,7 +380,10 @@ function saveRegexEdit(index) {
   }
 
   const copy = [...form.value.include_entries]
-  copy[index] = { type: 'regex', value: next }
+  const label = String(editingRegexName.value || '').trim()
+  const item = { type: 'regex', value: next }
+  if (label) item.name = label
+  copy[index] = item
   form.value.include_entries = copy
   previewMatches.value = collectRegexMatches(next)
   cancelRegexEdit()
@@ -375,9 +393,46 @@ function addRegexEntry() {
   const rule = regexDraft.value.trim()
   regexDraftError.value = validateRegex(rule)
   if (!rule || regexDraftError.value) return
-  pushEntry({ type: 'regex', value: rule })
+  const label = String(regexDraftName.value || '').trim() || nextRegexLabel()
+  pushEntry({ type: 'regex', value: rule, name: label })
   regexDraft.value = ''
+  regexDraftName.value = ''
   draftMatches.value = []
+}
+
+function nextRegexLabel() {
+  const used = new Set(
+    (form.value.include_entries || [])
+      .filter((item) => item.type === 'regex')
+      .map((item) => String(item.name || '').trim())
+      .filter(Boolean),
+  )
+  let i = 1
+  while (used.has(`正则${i}`)) i += 1
+  return `正则${i}`
+}
+
+function truncateText(text, max = 40) {
+  const value = String(text || '')
+  if (value.length <= max) return value
+  return `${value.slice(0, Math.max(1, max - 1))}…`
+}
+
+function formatEntryTitle(entry, idx = 0) {
+  if (entry.type === 'regex') {
+    return String(entry.name || entry.label || '').trim() || `正则${regexIndex(entry, idx)}`
+  }
+  return formatEntry(entry)
+}
+
+function regexIndex(entry, fallbackIdx = 0) {
+  let n = 0
+  for (const item of form.value.include_entries || []) {
+    if (item.type !== 'regex') continue
+    n += 1
+    if (item === entry) return n
+  }
+  return fallbackIdx + 1
 }
 
 function addNode() {
@@ -444,7 +499,10 @@ function formatEntry(entry) {
   if (entry.type === 'node') return `${entry.value}`
   if (entry.type === 'group') return `${groupNameById(Number(entry.value))}`
   if (entry.type === 'group_nodes') return `${groupNameById(Number(entry.value))}(节点)`
-  if (entry.type === 'regex') return `/${entry.value}/`
+  if (entry.type === 'regex') {
+    const label = String(entry.name || entry.label || '').trim() || '正则'
+    return `${label} · ${truncateText(String(entry.value || ''), 48)}`
+  }
   return JSON.stringify(entry)
 }
 
@@ -491,7 +549,7 @@ async function save() {
     sort_order: form.value.sort_order || 0,
     // include_entries is source of truth; backend derives regex_rules/kind.
     include_entries: entries,
-    add_fallback: form.value.add_fallback !== false,
+    add_fallback: form.value.add_fallback === true,
     exclude_nodes: uniq(form.value.exclude_nodes || []),
     url_test_config: form.value.url_test_config || {},
     load_balance_config: form.value.load_balance_config || {},
@@ -549,10 +607,19 @@ function normalizeEntries(entries) {
   for (const item of entries) {
     const type = String(item?.type || '').trim()
     if (!allowed.has(type)) continue
-    if (type === 'node' || type === 'regex') {
+    if (type === 'node') {
       const value = String(item?.value || '').trim()
       if (!value) continue
       out.push({ type, value })
+      continue
+    }
+    if (type === 'regex') {
+      const value = String(item?.value || '').trim()
+      if (!value) continue
+      const name = String(item?.name || item?.label || '').trim()
+      const row = { type, value }
+      if (name) row.name = name
+      out.push(row)
       continue
     }
     const value = Number(item?.value)

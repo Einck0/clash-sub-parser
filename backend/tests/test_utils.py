@@ -83,3 +83,15 @@ def test_parse_vless_reality_link_keeps_reality_options() -> None:
         "short-id": "abcd",
         "spider-x": "/",
     }
+
+
+def test_with_fallback_only_when_empty() -> None:
+    from app.utils.group_utils import with_fallback
+
+    assert with_fallback(["a", "b"], True) == ["a", "b"]
+    assert with_fallback(["a", "PASS", "b"], True) == ["a", "b"]
+    assert with_fallback([], True) == ["PASS"]
+    assert with_fallback(["PASS"], True) == ["PASS"]
+    assert with_fallback([], False) == []
+    assert with_fallback(["a"], False) == ["a"]
+

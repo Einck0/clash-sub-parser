@@ -144,6 +144,8 @@ async def preview_node_groups(db: AsyncSession) -> list[dict]:
         str(node.get("name", "")).strip() for node in deduplicate_nodes(all_nodes)
     ]
     node_names = [name for name in node_names if name]
+    leaf_static_nodes = _leaf_static_node_names(groups)
+    regex_pool = [name for name in node_names if name not in leaf_static_nodes]
 
     cache: dict[int, list[str]] = {}
 
@@ -187,8 +189,7 @@ async def preview_node_groups(db: AsyncSession) -> list[dict]:
                     pattern = re.compile(pattern_text)
                 except Exception:
                     continue
-                # Virtual matcher: expand to currently available node names.
-                selected.extend([name for name in node_names if pattern.search(name)])
+                selected.extend([name for name in regex_pool if pattern.search(name)])
 
         excluded = set(group.exclude_nodes or [])
         merged = [name for name in dedup_names(selected) if name not in excluded]
@@ -328,6 +329,97 @@ async def _ensure_group_not_referenced(db: AsyncSession, item: NodeGroup) -> Non
         )
 
 
+
+def _leaf_static_node_names(groups: list[NodeGroup]) -> set[str]:
+    """Nodes owned by leaf groups (static-only entries, no refs/regex)."""
+    reserved: set[str] = set()
+    for group in groups:
+        entries = resolve_entries(group)
+        if not entries:
+            continue
+        if any(entry.get("type") in {"group", "group_nodes", "regex"} for entry in entries):
+            continue
+        for entry in entries:
+            if entry.get("type") != "node":
+                continue
+            name = str(entry.get("value") or "").strip()
+            if name and name not in BUILTIN_GROUPS:
+                reserved.add(name)
+    return reserved
+
+
+def _is_leaf_static_group(group: NodeGroup) -> bool:
+    entries = resolve_entries(group)
+    if not entries:
+        return False
+    return not any(entry.get("type") in {"group", "group_nodes", "regex"} for entry in entries)
+
+
+def _group_reference_ids(group: NodeGroup) -> set[int]:
+    refs: set[int] = set()
+    for entry in resolve_entries(group):
+        if entry.get("type") not in {"group", "group_nodes"}:
+            continue
+        try:
+            refs.add(int(entry.get("value")))
+        except Exception:
+            continue
+    # legacy mirrors
+    for value in group.include_group_ids or []:
+        try:
+            refs.add(int(value))
+        except Exception:
+            continue
+    for value in group.include_group_nodes_ids or []:
+        try:
+            refs.add(int(value))
+        except Exception:
+            continue
+    return refs
+
+
+async def list_unreferenced_leaf_groups(db: AsyncSession) -> list[NodeGroup]:
+    """Leaf static groups not referenced by other groups or rules."""
+    groups = await list_node_groups(db)
+    referenced: set[int] = set()
+    for group in groups:
+        referenced |= _group_reference_ids(group)
+
+    rule_result = await db.execute(select(Rule.proxy).where(Rule.enabled.is_(True)))
+    rule_proxies = {str(name).strip() for (name,) in rule_result.all() if name}
+
+    candidates: list[NodeGroup] = []
+    for group in groups:
+        if group.name in BUILTIN_GROUPS:
+            continue
+        if not _is_leaf_static_group(group):
+            continue
+        if group.id in referenced:
+            continue
+        if group.name in rule_proxies:
+            continue
+        candidates.append(group)
+    return candidates
+
+
+async def prune_unreferenced_leaf_groups(db: AsyncSession) -> dict:
+    """Delete unreferenced leaf static groups. Safe: cycle-free by leaf definition."""
+    candidates = await list_unreferenced_leaf_groups(db)
+    deleted: list[dict] = []
+    for item in candidates:
+        # re-check references right before delete
+        try:
+            await _ensure_group_not_referenced(db, item)
+        except HTTPException:
+            continue
+        deleted.append({"id": item.id, "name": item.name})
+        await db.delete(item)
+    if deleted:
+        await db.commit()
+    return {"deleted": deleted, "count": len(deleted)}
+
+
+
 def _normalize_entries(entries: list[dict]) -> list[dict]:
     allowed_types = {"node", "group", "group_nodes", "regex"}
     normalized: list[dict] = []
@@ -358,7 +450,11 @@ def _normalize_entries(entries: list[dict]) -> list[dict]:
                     status_code=400,
                     detail=f"Invalid regex entry: {exc}",
                 ) from exc
-            normalized.append({"type": "regex", "value": value})
+            label = str(raw.get("name") or raw.get("label") or "").strip()
+            entry = {"type": "regex", "value": value}
+            if label:
+                entry["name"] = label
+            normalized.append(entry)
             continue
 
         try:

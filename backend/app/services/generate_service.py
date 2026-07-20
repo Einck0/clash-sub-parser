@@ -147,6 +147,22 @@ async def _collect_node_groups(db: AsyncSession, all_nodes: list[dict]) -> list[
     groups = list(result.scalars().all())
     mapping = {group.id: group for group in groups}
     all_node_names = [node.get("name", "") for node in all_nodes if node.get("name")]
+    # Leaf groups = only static nodes / builtins, no group refs / group_nodes / regex.
+    # Their nodes are reserved for explicit membership and excluded from other groups'
+    # regex expansion so A (regex) does not swallow B (leaf-only) nodes.
+    leaf_static_nodes: set[str] = set()
+    for group in groups:
+        entries = resolve_entries(group)
+        if not entries:
+            continue
+        if any(e.get("type") in {"group", "group_nodes", "regex"} for e in entries):
+            continue
+        for entry in entries:
+            if entry.get("type") == "node":
+                name = str(entry.get("value") or "").strip()
+                if name and name not in {"DIRECT", "REJECT", "PASS"}:
+                    leaf_static_nodes.add(name)
+    regex_pool = [n for n in all_node_names if n and n not in leaf_static_nodes]
 
     resolved_cache: dict[int, list[str]] = {}
 
@@ -190,8 +206,8 @@ async def _collect_node_groups(db: AsyncSession, all_nodes: list[dict]) -> list[
                     pattern = re.compile(pattern_text)
                 except Exception:
                     continue
-                # Virtual dynamic matcher, not a frozen static node list.
-                selected.extend([name for name in all_node_names if pattern.search(name)])
+                # Virtual dynamic matcher over non-leaf-reserved node names.
+                selected.extend([name for name in regex_pool if pattern.search(name)])
 
         excluded = set(group.exclude_nodes or [])
         merged = [item for item in dedup_names(selected) if item not in excluded]

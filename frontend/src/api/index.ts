@@ -102,6 +102,8 @@ export const deleteNodeGroup = (id: number) => api.delete(`/node-groups/${id}`)
 export const reorderNodeGroups = (items: any[]) => api.post('/node-groups/reorder', { items })
 export const validateNodeGroups = () => api.post('/node-groups/validate')
 export const previewNodeGroups = () => api.get('/node-groups/_preview')
+export const listUnreferencedLeafGroups = () => api.get('/node-groups/_unreferenced-leaf')
+export const pruneUnreferencedLeafGroups = () => api.post('/node-groups/_prune-unreferenced-leaf')
 
 // Rule Categories
 export const getRuleCategories = () => api.get('/rule-categories')

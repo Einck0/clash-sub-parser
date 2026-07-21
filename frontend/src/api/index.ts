@@ -117,6 +117,13 @@ export const getAllSubscriptionNodes = () => api.get('/subscriptions/nodes/all')
 export const probeTcp = (payload: { nodes: any[]; timeout_ms?: number; concurrency?: number }) =>
   api.post('/probe/tcp', payload)
 
+// Proxy chains (post-process dialer bindings)
+export const getProxyChains = () => api.get('/proxy-chains')
+export const createProxyChain = (data: any) => api.post('/proxy-chains', data)
+export const updateProxyChain = (id: number, data: any) => api.patch(`/proxy-chains/${id}`, data)
+export const deleteProxyChain = (id: number) => api.delete(`/proxy-chains/${id}`)
+export const getFinalNodes = () => api.get('/proxy-chains/meta/final-nodes')
+
 // Node Groups
 export const getNodeGroups = () => api.get('/node-groups')
 export const createNodeGroup = (data: any) => api.post('/node-groups', data)

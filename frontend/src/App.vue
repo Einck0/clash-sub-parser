@@ -59,6 +59,7 @@ const { theme, toggle: toggleTheme } = useTheme()
 const navItems = [
   { to: '/', label: 'Subscriptions', hint: '订阅', icon: '📡' },
   { to: '/node-groups', label: 'Node Groups', hint: '策略组', icon: '🔀' },
+  { to: '/proxy-chains', label: 'Proxy Chains', hint: '链式', icon: '🔗' },
   { to: '/rules', label: 'Rules', hint: '规则', icon: '📋' },
   { to: '/dns', label: 'DNS', hint: '解析', icon: '🌐' },
   { to: '/generate', label: 'Generate', hint: '导出', icon: '⚙' },

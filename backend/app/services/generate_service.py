@@ -13,6 +13,7 @@ from app.models.rule_category import RuleCategory
 from app.models.subscription import Subscription
 from app.utils.dedup import deduplicate_nodes
 from app.utils.group_utils import dedup_names, with_fallback, resolve_entries
+from app.services.proxy_chain_service import apply_bindings_to_nodes
 
 settings = get_settings()
 BUILTIN_PROXIES = ["DIRECT", "PASS", "REJECT"]
@@ -126,7 +127,9 @@ async def generate_subscription_payload(db: AsyncSession, subscription_id: int) 
     item = await db.get(Subscription, subscription_id)
     if not item:
         return {"yaml": ""}
-    payload = {"proxies": item.raw_nodes or []}
+    # Single-sub export still applies global bindings that hit these nodes.
+    nodes = await apply_bindings_to_nodes(db, list(item.raw_nodes or []))
+    payload = {"proxies": nodes}
     return {"yaml": yaml.safe_dump(payload, allow_unicode=True, sort_keys=False)}
 
 
@@ -137,7 +140,8 @@ async def _collect_all_nodes(db: AsyncSession) -> list[dict]:
     nodes: list[dict] = []
     for row in result.scalars().all():
         nodes.extend(row or [])
-    return deduplicate_nodes(nodes)
+    # Post-process: apply proxy-chain bindings after nodes are settled.
+    return await apply_bindings_to_nodes(db, deduplicate_nodes(nodes))
 
 
 async def _collect_node_groups(db: AsyncSession, all_nodes: list[dict]) -> list[dict]:

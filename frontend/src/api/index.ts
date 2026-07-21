@@ -113,6 +113,9 @@ export const deleteSubscription = (id: number) => api.delete(`/subscriptions/${i
 export const fetchSubscription = (id: number) => api.post(`/subscriptions/${id}/fetch`)
 export const getSubscriptionNodes = (id: number) => api.get(`/subscriptions/${id}/nodes`)
 export const getAllSubscriptionNodes = () => api.get('/subscriptions/nodes/all')
+// TCP reachability only (not proxy latency / protocol handshake)
+export const probeTcp = (payload: { nodes: any[]; timeout_ms?: number; concurrency?: number }) =>
+  api.post('/probe/tcp', payload)
 
 // Node Groups
 export const getNodeGroups = () => api.get('/node-groups')

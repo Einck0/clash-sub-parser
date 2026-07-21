@@ -124,7 +124,8 @@
             <p class="eyebrow">Node Preview</p>
             <h3>{{ nodePreviewTitle || '节点预览' }}（{{ viewingNodes.length }}）</h3>
             <p class="section-hint">
-              支持搜索、归属国、测速；可点「改名」直接修改前缀后的最终节点名。
+              支持搜索、TCP 端口探活；可点「改名」直接修改前缀后的最终节点名。
+              TCP 通 ≠ 代理可用。
             </p>
           </div>
           <button @click="closeNodePreview">关闭</button>

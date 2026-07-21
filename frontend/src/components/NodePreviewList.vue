@@ -7,6 +7,9 @@
       </label>
       <div class="node-preview-summary">
         <span class="count-pill">{{ filteredNodes.length }} / {{ normalizedNodes.length }}</span>
+        <button @click="runTcpProbe" :disabled="probing || !normalizedNodes.length">
+          {{ probing ? '探活中…' : 'TCP 探活' }}
+        </button>
         <button v-if="editable" @click="toggleEditMode" :class="{ primary: editMode }">
           {{ editMode ? '完成改名' : '改名' }}
         </button>
@@ -15,6 +18,12 @@
         </button>
       </div>
     </div>
+
+    <p v-if="probeSummary" class="section-hint" style="margin: 0 0 8px">
+      TCP 探活：ok {{ probeSummary.ok }} / fail {{ probeSummary.fail }} / timeout {{ probeSummary.timeout }} / skip {{ probeSummary.skip }}
+      · 仅测端口可达，不是代理延迟
+    </p>
+    <p v-if="probeError" class="form-alert form-alert-error" style="margin: 0 0 8px">{{ probeError }}</p>
 
     <p v-if="editable && editMode" class="section-hint" style="margin: 0 0 8px">
       这里改的是<strong>前缀后的最终节点名</strong>。保存后策略组按新名字匹配。
@@ -50,6 +59,14 @@
           </template>
         </div>
         <span v-if="node.type" class="node-type-pill">{{ node.type }}</span>
+        <span
+          v-if="probeStatus(node)"
+          class="probe-pill"
+          :class="`probe-${probeStatus(node).status}`"
+          :title="probeTitle(node)"
+        >
+          {{ probeLabel(node) }}
+        </span>
         <button
           v-if="editable && editMode && displayName(node) !== node.baseName"
           class="danger"
@@ -71,6 +88,7 @@
 
 <script setup>
 import { computed, ref, watch } from 'vue'
+import { getApiErrorMessage, probeTcp } from '../api'
 
 const props = defineProps({
   nodes: { type: Array, default: () => [] },
@@ -89,6 +107,11 @@ const query = ref('')
 const expanded = ref(false)
 const editMode = ref(false)
 const draftRenames = ref({})
+const probing = ref(false)
+const probeError = ref('')
+const probeSummary = ref(null)
+// key: name|server|port -> result
+const probeMap = ref({})
 
 const normalizedNodes = computed(() => props.nodes.map(normalizeNode).filter(Boolean))
 const filteredNodes = computed(() => {
@@ -185,6 +208,59 @@ function saveRenames() {
   }
   emit('save-renames', payload)
 }
+
+function probeKey(node) {
+  return `${node.baseName || node.name || ''}|${node.server || ''}|${node.port || ''}`
+}
+
+function probeStatus(node) {
+  return probeMap.value[probeKey(node)] || null
+}
+
+function probeLabel(node) {
+  const item = probeStatus(node)
+  if (!item) return ''
+  if (item.status === 'ok') return item.connect_ms != null ? `ok ${item.connect_ms}ms` : 'ok'
+  if (item.status === 'timeout') return 'timeout'
+  if (item.status === 'skip') return 'skip'
+  return 'fail'
+}
+
+function probeTitle(node) {
+  const item = probeStatus(node)
+  if (!item) return ''
+  const parts = [`TCP ${item.status}`]
+  if (item.connect_ms != null) parts.push(`${item.connect_ms}ms`)
+  if (item.error) parts.push(item.error)
+  parts.push('仅端口可达，不是代理延迟')
+  return parts.join(' · ')
+}
+
+async function runTcpProbe() {
+  if (probing.value || !normalizedNodes.value.length) return
+  probing.value = true
+  probeError.value = ''
+  try {
+    const payloadNodes = normalizedNodes.value.map((node) => ({
+      name: node.baseName || node.name,
+      server: node.server,
+      port: node.port ? Number(node.port) : undefined,
+      type: node.type,
+    }))
+    const { data } = await probeTcp({ nodes: payloadNodes, timeout_ms: 2000, concurrency: 20 })
+    const next = {}
+    for (const item of data.results || []) {
+      const key = `${item.name || ''}|${item.server || ''}|${item.port || ''}`
+      next[key] = item
+    }
+    probeMap.value = next
+    probeSummary.value = data.summary || null
+  } catch (err) {
+    probeError.value = getApiErrorMessage(err)
+  } finally {
+    probing.value = false
+  }
+}
 </script>
 
 <style scoped>
@@ -197,5 +273,27 @@ function saveRenames() {
   display: flex;
   gap: 8px;
   margin-top: 10px;
+}
+.probe-pill {
+  flex: 0 0 auto;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border, #334155);
+}
+.probe-ok {
+  color: #16a34a;
+  border-color: color-mix(in srgb, #16a34a 40%, transparent);
+}
+.probe-fail {
+  color: #dc2626;
+  border-color: color-mix(in srgb, #dc2626 40%, transparent);
+}
+.probe-timeout {
+  color: #d97706;
+  border-color: color-mix(in srgb, #d97706 40%, transparent);
+}
+.probe-skip {
+  color: #64748b;
 }
 </style>

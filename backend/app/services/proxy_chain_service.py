@@ -104,8 +104,78 @@ async def list_final_nodes(db: AsyncSession) -> list[dict[str, Any]]:
                     "name": name,
                     "subscription_id": sub.id,
                     "subscription_name": sub.name,
+                    "type": str(node.get("type") or "") or None,
+                    "server": str(node.get("server") or "") or None,
                 }
             )
+    return out
+
+
+async def list_node_ledger(db: AsyncSession) -> list[dict[str, Any]]:
+    """Final nodes + effective dialer (after priority merge) for the ledger page."""
+    nodes = await list_final_nodes(db)
+    if not nodes:
+        return []
+
+    # Build proxy dicts so apply_bindings_to_nodes can attach dialer-proxy.
+    proxies = [{"name": n["name"]} for n in nodes]
+    applied = await apply_bindings_to_nodes(db, proxies)
+    dialer_by_name = {
+        str(p.get("name") or "").strip(): str(p.get("dialer-proxy") or "").strip() or None
+        for p in applied
+        if isinstance(p, dict) and p.get("name")
+    }
+
+    # Annotate which binding scope won for each node (best-effort).
+    bindings = [b for b in await list_bindings(db) if b.enabled]
+    sub_result = await db.execute(select(Subscription).where(Subscription.enabled.is_(True)))
+    subs = list(sub_result.scalars().all())
+    node_to_sub_ids: dict[str, set[int]] = {}
+    all_node_names: list[str] = []
+    for sub in subs:
+        for node in sub.raw_nodes or []:
+            if not isinstance(node, dict):
+                continue
+            name = str(node.get("name") or "").strip()
+            if not name:
+                continue
+            all_node_names.append(name)
+            node_to_sub_ids.setdefault(name, set()).add(sub.id)
+    groups = list(
+        (
+            await db.execute(
+                select(NodeGroup).order_by(NodeGroup.sort_order.asc(), NodeGroup.id.asc())
+            )
+        ).scalars().all()
+    )
+    group_leaves = resolve_group_members(groups, all_node_names, leaves_only=True)
+    known_proxy_names = set(all_node_names)
+    source_by_name: dict[str, str] = {}
+    ordered = sorted(
+        bindings,
+        key=lambda b: (TARGET_PRIORITY.get(b.target_type, 0), b.sort_order, b.id or 0),
+    )
+    for binding in ordered:
+        targets = _expand_targets(
+            binding,
+            node_to_sub_ids=node_to_sub_ids,
+            group_leaves=group_leaves,
+            known_proxy_names=known_proxy_names,
+        )
+        for name in targets:
+            source_by_name[name] = binding.target_type
+
+    out: list[dict[str, Any]] = []
+    for item in nodes:
+        name = item["name"]
+        dialer = dialer_by_name.get(name)
+        out.append(
+            {
+                **item,
+                "dialer_proxy": dialer,
+                "chain_source": source_by_name.get(name) if dialer else None,
+            }
+        )
     return out
 
 

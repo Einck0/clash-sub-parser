@@ -1,9 +1,9 @@
 # 链式代理设计（Proxy Chain）v2
 
-> 状态：**设计中（v2）** — 旧 P0 实现已回退（`f776049`）  
+> 状态：**已落地（v2）** — 独立绑定表 + 生成后置单跳 + 环检测 + 预览/台账  
 > 代码回滚点：`pre-proxy-chain-design` @ `d0988c4`（TCP 探活 + 统一减组）  
-> 旧设计问题：链绑在「订阅编辑中途」、只能订阅/节点两级、UI 手打最终名难用  
-> 新目标：在**一切设置结束后**再配置链式；支持订阅 / 策略组 / 节点三级；跳板可以是节点或策略组
+> 旧 P0（订阅表单中途塞链）已回退：`f776049`  
+> 现设计：一切设置结束后再配链；目标 = 订阅 / 策略组 / 节点；跳板 = 节点或策略组
 
 ---
 
@@ -189,8 +189,9 @@ GET    /api/proxy-chains
 POST   /api/proxy-chains
 PATCH  /api/proxy-chains/{id}
 DELETE /api/proxy-chains/{id}
-POST   /api/proxy-chains/validate   # 可选：未知名、冲突预览
-GET    /api/nodes/final             # 可选：所有最终节点名（供下拉）
+GET    /api/proxy-chains/meta/final-nodes   # 最终节点（下拉）
+GET    /api/proxy-chains/meta/node-ledger   # 台账：最终节点 + 生效 dialer
+POST   /api/proxy-chains/meta/preview       # 挂链/跳过计数预览
 ```
 
 生成仍走现有 `/api/generate`；bindings 在服务端生成时自动应用。
@@ -201,9 +202,9 @@ GET    /api/nodes/final             # 可选：所有最终节点名（供下拉
 
 | 阶段 | 内容 |
 |---|---|
-| **P0** | 表 + API + 生成后置单跳；目标：订阅 / 节点 / 策略组；跳板：节点或策略组；独立简陋 UI |
-| **P1** | 节点台账页（最终节点浏览/搜索/快捷设链）；冲突预览 |
-| **P2** | 多跳 hop 列表 + 中间包装节点 `__chain/...` |
+| **P0** | ✅ 表 + API + 生成后置单跳；目标：订阅 / 节点 / 策略组；跳板：节点或策略组；独立 UI |
+| **P1** | ✅ 预览 API + 可搜索链式 UI；✅ 节点台账页（浏览/搜索/快捷设链） |
+| **P2** | 多跳 hop 列表 + 中间包装节点 `__chain/...`（未做） |
 | **不做** | 自动猜入口、整链延迟、relay 双轨存储、订阅表单中途塞链 |
 
 ---
@@ -228,9 +229,9 @@ GET    /api/nodes/final             # 可选：所有最终节点名（供下拉
 
 | 项 | 状态 |
 |---|---|
-| 代码 | `f776049` Revert P0；`origin/dev` 已推；容器 healthy |
-| 模型 | 不再含 chain 字段 |
-| DB | 可能残留空 JSON 列，无害；v2 用新表 |
+| 代码 | v2 已落地（绑定表 / 预览 / 台账 / 环检测）；旧订阅表单 P0 已 `f776049` 回退 |
+| 模型 | 独立 `proxy_chain_bindings`；订阅不再含 chain 字段 |
+| DB | v2 用新表；可能残留空 JSON 列无害 |
 | 旧 tag | `pre-proxy-chain-design` @ `d0988c4` 仍可用 |
 
 ```bash

@@ -288,3 +288,50 @@ async def test_proxy_chain_partial_overlap_allowed_and_skips_members(client):
     proxies = {p["name"]: p for p in data.get("proxies") or []}
     assert "dialer-proxy" not in proxies["入口A"]
     assert proxies["落地B"].get("dialer-proxy") == "入口组"
+
+
+@pytest.mark.asyncio
+async def test_proxy_chain_preview_and_node_ledger(client):
+    sub, group = await _seed_nodes(client)
+
+    created = await client.post(
+        "/api/proxy-chains",
+        json={
+            "target_type": "node",
+            "target_name": "美国落地",
+            "dialer_type": "node",
+            "dialer_ref": "香港入口",
+            "enabled": True,
+        },
+    )
+    assert created.status_code == 201, created.text
+
+    preview = await client.post(
+        "/api/proxy-chains/meta/preview",
+        json={
+            "target_type": "subscription",
+            "target_id": sub["id"],
+            "dialer_type": "node",
+            "dialer_ref": "香港入口",
+        },
+    )
+    assert preview.status_code == 200, preview.text
+    body = preview.json()
+    assert body["target_count"] >= 3
+    assert body["chain_count"] >= 2
+    assert body["skip_count"] >= 1
+    assert "香港入口" in body["skip_samples"]
+
+    ledger = await client.get("/api/proxy-chains/meta/node-ledger")
+    assert ledger.status_code == 200, ledger.text
+    rows = {row["name"]: row for row in ledger.json()}
+    assert "美国落地" in rows
+    assert rows["美国落地"]["dialer_proxy"] == "香港入口"
+    assert rows["美国落地"]["chain_source"] == "node"
+    assert rows["美国落地"]["subscription_name"] == "chain-sub"
+    assert rows["香港入口"].get("dialer_proxy") in (None, "")
+
+    finals = await client.get("/api/proxy-chains/meta/final-nodes")
+    assert finals.status_code == 200, finals.text
+    names = {row["name"] for row in finals.json()}
+    assert {"香港入口", "美国落地", "日本落地"} <= names

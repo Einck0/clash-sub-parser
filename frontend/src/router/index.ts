@@ -5,6 +5,7 @@ const routes = [
   { path: '/', name: 'Subscriptions', component: () => import('../views/Subscriptions.vue') },
   { path: '/node-groups', name: 'NodeGroups', component: () => import('../views/NodeGroups.vue') },
   { path: '/proxy-chains', name: 'ProxyChains', component: () => import('../views/ProxyChains.vue') },
+  { path: '/nodes', name: 'NodeLedger', component: () => import('../views/NodeLedger.vue') },
   { path: '/rules', name: 'Rules', component: () => import('../views/Rules.vue') },
   { path: '/rules/category/:name', name: 'RuleCategoryDetail', component: () => import('../views/RuleCategoryDetail.vue') },
   { path: '/rules/:id', name: 'RuleDetail', component: () => import('../views/RuleDetail.vue') },

@@ -123,3 +123,10 @@ class FinalNodeItem(BaseModel):
     name: str
     subscription_id: int | None = None
     subscription_name: str | None = None
+    type: str | None = None
+    server: str | None = None
+
+
+class NodeLedgerItem(FinalNodeItem):
+    dialer_proxy: str | None = None
+    chain_source: str | None = None  # node | node_group | subscription

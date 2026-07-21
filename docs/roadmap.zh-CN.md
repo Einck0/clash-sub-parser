@@ -51,11 +51,11 @@
 
 ### P0：稳定性与防误操作
 
-- [ ] 给规则分类首页和规则详情页增加更明确的保存结果提示，例如 toast 或顶部状态条。
-- [ ] 保存全部前做基础校验：空类型、空目标、非 `MATCH` 规则空 value。
-- [ ] 规则保存失败时保留草稿，不自动刷新页面。
-- [ ] 类别删除和节点组删除增加依赖影响提示。
-- [ ] 重置配置前展示影响范围，并要求明确确认。
+- [x] 给规则分类首页和规则详情页增加更明确的保存结果提示，例如 toast 或顶部状态条。
+- [x] 保存全部前做基础校验：空类型、空目标、非 `MATCH` 规则空 value。
+- [x] 规则保存失败时保留草稿，不自动刷新页面。
+- [x] 类别删除和节点组删除增加依赖影响提示。
+- [x] 重置配置前展示影响范围，并要求明确确认。
 
 ### P1：批量编辑
 
@@ -67,9 +67,9 @@
 
 ### P1：节点组能力增强
 
-- [ ] 将 `url-test`、`fallback`、`load-balance` 的参数做成可视化表单。
+- [x] 将 `url-test`、`fallback`、`load-balance` 的参数做成可视化表单。
 - [ ] 支持节点组拖拽排序或移动到指定位置。
-- [ ] 节点组预览增加引用来源解释，帮助理解最终节点来自哪里。
+- [x] 节点组预览增加引用来源解释，帮助理解最终节点来自哪里。
 
 ### P2：DNS 体验增强
 
@@ -79,9 +79,9 @@
 
 ### P2：测试、安全和可复现构建
 
-- [ ] 增加更多 API 路由级测试，覆盖主要 CRUD 路由。
+- [x] 增加更多 API 路由级测试（generate settings / settings export-reset / proxy-chain preview+ledger）。
 - [ ] 增加端到端 UI smoke test。
-- [ ] 增加依赖版本 pinning 或 Python lock 文件。
+- [x] 增加依赖版本 pinning 或 Python lock 文件（requirements 最低版本 pin）。
 - [ ] 增加发布前 secret scan 和 compose config scan。
 - [ ] 如果暴露公网，建议同时使用 HTTPS 反代；token 保护用于轻量访问控制，不替代完整账号体系。
 
@@ -137,11 +137,13 @@ git ls-files docker-compose.yml info.txt backups references .learnings .pytest_c
 - 订阅拉取默认拒绝 localhost、私网、链路本地和保留地址；如需拉取内网源，必须显式启用 `CLASH_ALLOW_PRIVATE_FETCH_URLS`。
 - Compose 使用 `CLASH_HTTP_PROXY` / `CLASH_HTTPS_PROXY` / `CLASH_ALL_PROXY`，避免宿主机普通 `HTTP_PROXY` 被意外写入项目配置。
 
-## 计划中：链式代理
+## 链式代理
 
 - 设计文档：[proxy-chain.zh-CN.md](./proxy-chain.zh-CN.md)
 - 回滚 tag：`pre-proxy-chain-design` @ `d0988c4`
-- P0：订阅级 + 节点级单跳 `dialer-proxy`；P1：多跳包装节点
+- ✅ v2 后置绑定（订阅/策略组/节点）+ 生成单跳 `dialer-proxy` + 环检测
+- ✅ 预览 API / 可搜索链式 UI / 节点台账快捷设链
+- 未做：多跳 hop 列表 + 中间包装节点
 
 ## 近期变更摘要
 
@@ -161,6 +163,14 @@ git ls-files docker-compose.yml info.txt backups references .learnings .pytest_c
 - 导出地址在启用保护时继续支持 query token，以兼容 Clash 客户端。
 - 设置页增加随机 token 生成功能。
 - 订阅拉取增加 URL scheme、私网地址、重定向目标和响应大小限制。
+
+### 2026-07-21：优化批 + 节点台账 + 链式可观测
+
+- 组解析单源：`resolve_group_members` 供 generate / proxy-chain / 组预览共用。
+- 链式：预览 API、可搜索 UI、Generate 页 dialer 统计、节点台账页（`/nodes`）。
+- 防误：规则草稿校验、删组/重置影响文案、url-test 参数表单。
+- 测试：generate settings / settings export-reset / chain preview+ledger。
+- 按产品要求：未改「便宜」正则。
 
 ### 2026-07-20：订阅 UA、防误清、测速与出口 IP
 

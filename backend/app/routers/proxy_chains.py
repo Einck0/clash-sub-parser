@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.schemas.proxy_chain import (
     FinalNodeItem,
+    NodeLedgerItem,
     ProxyChainBindingCreate,
     ProxyChainBindingRead,
     ProxyChainBindingUpdate,
@@ -61,6 +62,12 @@ async def delete_proxy_chain(binding_id: int, db: AsyncSession = Depends(get_db)
 async def list_final_nodes(db: AsyncSession = Depends(get_db)):
     """All processed final node names from enabled subscriptions (for pickers)."""
     return await service.list_final_nodes(db)
+
+
+@router.get("/meta/node-ledger", response_model=list[NodeLedgerItem])
+async def list_node_ledger(db: AsyncSession = Depends(get_db)):
+    """Final nodes with effective dialer-proxy after priority merge."""
+    return await service.list_node_ledger(db)
 
 
 @router.post("/meta/preview")

@@ -13,6 +13,7 @@ from app.models.rule_category import RuleCategory
 from app.models.subscription import Subscription
 from app.utils.dedup import deduplicate_nodes
 from app.utils.group_utils import dedup_names, with_fallback, resolve_entries
+from app.utils.proxy_chain import apply_subscription_chains, normalize_chain, normalize_node_proxy_chains
 
 settings = get_settings()
 BUILTIN_PROXIES = ["DIRECT", "PASS", "REJECT"]
@@ -126,18 +127,47 @@ async def generate_subscription_payload(db: AsyncSession, subscription_id: int) 
     item = await db.get(Subscription, subscription_id)
     if not item:
         return {"yaml": ""}
-    payload = {"proxies": item.raw_nodes or []}
+    nodes = apply_subscription_chains(
+        list(item.raw_nodes or []),
+        subscription_chain=getattr(item, "proxy_chain", None),
+        node_chains=getattr(item, "node_proxy_chains", None),
+    )
+    payload = {"proxies": nodes}
     return {"yaml": yaml.safe_dump(payload, allow_unicode=True, sort_keys=False)}
 
 
 async def _collect_all_nodes(db: AsyncSession) -> list[dict]:
-    result = await db.execute(
-        select(Subscription.raw_nodes).where(Subscription.enabled.is_(True))
-    )
-    nodes: list[dict] = []
-    for row in result.scalars().all():
-        nodes.extend(row or [])
-    return deduplicate_nodes(nodes)
+    """Collect enabled subscription nodes and apply dialer-proxy chains."""
+    result = await db.execute(select(Subscription).where(Subscription.enabled.is_(True)))
+    subs = list(result.scalars().all())
+
+    # First pass: gather raw names so hops that are peer nodes resolve.
+    raw_nodes: list[dict] = []
+    for sub in subs:
+        raw_nodes.extend(list(sub.raw_nodes or []))
+    deduped_preview = deduplicate_nodes(raw_nodes)
+    known = {
+        str(n.get("name") or "").strip()
+        for n in deduped_preview
+        if n.get("name")
+    }
+    # Group names are also valid dialer targets.
+    group_result = await db.execute(select(NodeGroup.name))
+    for gname in group_result.scalars().all():
+        if gname:
+            known.add(str(gname).strip())
+
+    chained: list[dict] = []
+    for sub in subs:
+        chained.extend(
+            apply_subscription_chains(
+                list(sub.raw_nodes or []),
+                subscription_chain=getattr(sub, "proxy_chain", None) or [],
+                node_chains=getattr(sub, "node_proxy_chains", None) or {},
+                known_names=known,
+            )
+        )
+    return deduplicate_nodes(chained)
 
 
 async def _collect_node_groups(db: AsyncSession, all_nodes: list[dict]) -> list[dict]:

@@ -21,6 +21,10 @@ class Subscription(Base):
     exclude_node_names: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     # Maps post-prefix node name -> final display name. Applied after prefixing.
     node_renames: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    # Default dialer chain for this subscription's final nodes (hop names).
+    proxy_chain: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    # Per final-node chain override: name -> hop list; missing key follows proxy_chain; [] disables.
+    node_proxy_chains: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     source_nodes: Mapped[list[dict]] = mapped_column(JSON, default=list, nullable=False)
     manual_nodes: Mapped[list[dict]] = mapped_column(JSON, default=list, nullable=False)
     raw_nodes: Mapped[list[dict]] = mapped_column(JSON, default=list, nullable=False)

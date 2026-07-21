@@ -199,25 +199,10 @@ async def test_proxy_chain_crud_list_delete(client):
 
 
 @pytest.mark.asyncio
-async def test_proxy_chain_rejects_group_membership_cycle(client):
-    """subscription/group targets cannot dialer a group that contains them."""
+async def test_proxy_chain_rejects_full_group_membership_cycle(client):
+    """Reject only when every target is inside the dialer group."""
     sub, group = await _seed_nodes(client)
-    # group "美国组" contains 美国落地/日本落地
-    # binding whole subscription to dialer group 美国组 => membership cycle
-    bad = await client.post(
-        "/api/proxy-chains",
-        json={
-            "target_type": "subscription",
-            "target_id": sub["id"],
-            "dialer_type": "node_group",
-            "dialer_ref": group["name"],
-            "enabled": True,
-        },
-    )
-    assert bad.status_code == 400, bad.text
-    assert "环" in bad.json()["detail"]
-
-    # same group dialer to itself
+    # 美国组 only has 美国落地/日本落地. Binding that group to itself is full loop.
     bad2 = await client.post(
         "/api/proxy-chains",
         json={
@@ -229,3 +214,77 @@ async def test_proxy_chain_rejects_group_membership_cycle(client):
         },
     )
     assert bad2.status_code == 400, bad2.text
+    assert "环" in bad2.json()["detail"]
+
+    # Single node that is a member of 美国组 dialer to 美国组 -> full loop for that target
+    bad_node = await client.post(
+        "/api/proxy-chains",
+        json={
+            "target_type": "node",
+            "target_name": "美国落地",
+            "dialer_type": "node_group",
+            "dialer_ref": group["name"],
+            "enabled": True,
+        },
+    )
+    assert bad_node.status_code == 400, bad_node.text
+
+
+@pytest.mark.asyncio
+async def test_proxy_chain_partial_overlap_allowed_and_skips_members(client):
+    """Target set may partially overlap dialer group; only non-members get dialer."""
+    sub = await client.post(
+        "/api/subscriptions",
+        json={
+            "name": "mix-sub",
+            "url": "https://example.com/mix",
+            "is_primary": True,
+            "node_prefix": "",
+            "manual_nodes": [
+                {"name": "入口A", "type": "ss", "server": "1.1.1.1", "port": 1},
+                {"name": "落地B", "type": "vmess", "server": "2.2.2.2", "port": 2},
+            ],
+        },
+    )
+    assert sub.status_code == 201, sub.text
+    sub_id = sub.json()["id"]
+
+    entry_group = await client.post(
+        "/api/node-groups",
+        json={
+            "name": "入口组",
+            "kind": "manual",
+            "group_type": "select",
+            "include_entries": [{"type": "node", "value": "入口A"}],
+        },
+    )
+    assert entry_group.status_code == 201, entry_group.text
+
+    # Whole subscription -> 入口组: 入口A overlaps (skip), 落地B safe (chain)
+    ok = await client.post(
+        "/api/proxy-chains",
+        json={
+            "target_type": "subscription",
+            "target_id": sub_id,
+            "dialer_type": "node_group",
+            "dialer_ref": "入口组",
+            "enabled": True,
+        },
+    )
+    assert ok.status_code == 201, ok.text
+
+    gen = await client.post(
+        "/api/generate/yaml",
+        json={
+            "enabled": True,
+            "subscriptions": True,
+            "node_groups": True,
+            "rules": False,
+            "dns": False,
+        },
+    )
+    assert gen.status_code == 200, gen.text
+    data = yaml.safe_load(gen.json()["yaml"])
+    proxies = {p["name"]: p for p in data.get("proxies") or []}
+    assert "dialer-proxy" not in proxies["入口A"]
+    assert proxies["落地B"].get("dialer-proxy") == "入口组"

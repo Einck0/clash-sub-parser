@@ -330,24 +330,30 @@ async def _validate_no_cycle(
         g = next((x for x in groups if x.name == dialer_ref), None)
         if g is None:
             return
-        leaves = set(group_leaves.get(g.id, []))
-        overlap = sorted(targets & leaves)
-        if overlap:
-            sample = "、".join(overlap[:5])
-            more = f" 等 {len(overlap)} 个" if len(overlap) > 5 else ""
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"会形成环：目标节点会 dialer 到策略组「{dialer_ref}」，"
-                    f"但该组包含这些目标节点（{sample}{more}）。"
-                    "跳板组必须是「入口集合」，不能包含被挂链的出口节点。"
-                ),
-            )
-        # Also forbid target group == dialer group.
+        # Target group cannot dialer itself (always a full loop).
         if data.get("target_type") == "node_group" and data.get("target_id") == g.id:
             raise HTTPException(
                 status_code=400,
                 detail=f"会形成环：策略组「{dialer_ref}」不能把自己当跳板",
+            )
+        leaves = set(group_leaves.get(g.id, []))
+        overlap = targets & leaves
+        safe = targets - leaves
+        # Hard-reject only when every target would loop. Partial overlap is OK:
+        # generate skips members of the dialer group and still chains the rest.
+        if targets and not safe:
+            sample = "、".join(sorted(overlap)[:5])
+            more = f" 等 {len(overlap)} 个" if len(overlap) > 5 else ""
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"会形成环：目标里的节点全部属于跳板策略组「{dialer_ref}」"
+                    f"（{sample}{more}），没有可安全挂链的出口。"
+                    "常见原因：落地订阅节点名命中了入口组的正则（如名字含「便宜」），"
+                    "或入口组直接 include 了这批落地。"
+                    "做法：入口请用「只含入口」的节点/策略组，且与落地节点集合不相交；"
+                    "例如单独建入口组，不要用包含落地的「便宜/链式」。"
+                ),
             )
 
 

@@ -4,7 +4,7 @@
       <div>
         <p class="eyebrow">Rules</p>
         <h2>规则分类</h2>
-        <p class="page-desc">按用途管理规则。拖动卡片可排序；改名、新增、移除和排序都会先进入草稿。</p>
+        <p class="page-desc">按用途管理规则。按住 ☰ 拖拽排序；改名、新增、移除和排序都会先进入草稿。输入框上不会触发拖拽。</p>
       </div>
       <div class="head-actions">
         <button @click="loadWithConfirm">刷新</button>
@@ -76,14 +76,14 @@
         class="category-card sortable-card"
         :class="{ dragging: draggingCategoryKey === categoryKey(cat) }"
         draggable="true"
-        @dragstart="onCategoryDragStart(cat)"
+        @dragstart="onCategoryDragStart($event, cat)"
         @dragover.prevent
         @drop="onCategoryDrop(cat)"
         @dragend="draggingCategoryKey = null"
       >
         <div class="category-top" @click="cat.id && openCategory(cat)">
           <div class="sortable-title">
-            <button class="drag-handle" title="拖拽排序" @click.stop>☰</button>
+            <button type="button" class="drag-handle" title="拖拽排序" data-drag-handle @click.stop @mousedown.stop>☰</button>
             <div>
               <span class="category-index">#{{ idx + 1 }}</span>
               <h3>{{ cat.name || '未命名类别' }}</h3>
@@ -93,9 +93,9 @@
         </div>
 
         <label class="field-label">类别名</label>
-        <input v-model="cat.name" placeholder="类别名" />
+        <input v-model="cat.name" class="no-drag" placeholder="类别名" @dragstart.stop.prevent />
 
-        <div class="sort-control-row">
+        <div class="sort-control-row no-drag">
           <span class="muted">位置：第 {{ idx + 1 }} 位</span>
           <label class="move-select">
             <span>移动到</span>
@@ -134,6 +134,7 @@ import {
 } from '../api'
 import UiState from '../components/UiState.vue'
 import FabSave from '../components/FabSave.vue'
+import { setDragGhost, shouldAllowDragStart } from '../utils/drag'
 
 const router = useRouter()
 const categories = ref([])
@@ -271,8 +272,14 @@ async function removeCategoryRow(cat) {
   hasUnsavedChanges.value = true
 }
 
-function onCategoryDragStart(cat) {
+function onCategoryDragStart(event, cat) {
+  if (!shouldAllowDragStart(event, { requireHandle: true })) {
+    event.preventDefault()
+    draggingCategoryKey.value = null
+    return
+  }
   draggingCategoryKey.value = categoryKey(cat)
+  setDragGhost(event, cat.name || '分类排序')
 }
 
 function onCategoryDrop(targetCat) {

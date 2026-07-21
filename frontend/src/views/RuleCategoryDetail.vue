@@ -93,30 +93,34 @@
             :key="item._clientId"
             :class="{ dragging: draggingRuleKey === item._clientId }"
             draggable="true"
-            @dragstart="onRuleDragStart(item)"
+            @dragstart="onRuleDragStart($event, item)"
             @dragover.prevent
             @drop="onRuleDrop(item)"
             @dragend="draggingRuleKey = null"
           >
-            <td class="col-index muted"><span class="drag-mini">☰</span> {{ pageStart + idx + 1 }}</td>
-            <td class="col-enabled"><input type="checkbox" v-model="item.enabled" /></td>
-            <td><input v-model="item.name" placeholder="可选" /></td>
-            <td><select v-model="item.type"><option v-for="type in ruleTypes" :key="type" :value="type">{{ type }}</option></select></td>
-            <td>
+            <td class="col-index muted">
+              <button type="button" class="drag-handle drag-mini" title="拖拽排序" data-drag-handle @click.stop @mousedown.stop>☰</button>
+              {{ pageStart + idx + 1 }}
+            </td>
+            <td class="col-enabled no-drag"><input type="checkbox" v-model="item.enabled" @dragstart.stop.prevent /></td>
+            <td class="no-drag"><input v-model="item.name" placeholder="可选" @dragstart.stop.prevent /></td>
+            <td class="no-drag"><select v-model="item.type"><option v-for="type in ruleTypes" :key="type" :value="type">{{ type }}</option></select></td>
+            <td class="no-drag">
               <input
                 v-model="item.value"
                 :disabled="normalizeRuleType(item.type) === 'MATCH'"
                 :placeholder="normalizeRuleType(item.type) === 'MATCH' ? 'MATCH 无需值' : '规则值'"
+                @dragstart.stop.prevent
               />
             </td>
-            <td>
+            <td class="no-drag">
               <select v-model="item.proxy">
                 <option value="">选择目标</option>
                 <option v-for="target in proxyTargets" :key="target" :value="target">{{ target }}</option>
               </select>
             </td>
-            <td><input v-model="item.optionsText" placeholder="逗号分隔" /></td>
-            <td>
+            <td class="no-drag"><input v-model="item.optionsText" placeholder="逗号分隔" @dragstart.stop.prevent /></td>
+            <td class="no-drag">
               <div class="action-row compact-actions no-wrap">
                 <select class="inline-move-select" :value="ruleIndex(item)" @change="moveRuleToIndex(item, Number($event.target.value))">
                   <option v-for="(_, targetIdx) in rules" :key="targetIdx" :value="targetIdx">#{{ targetIdx + 1 }}</option>
@@ -140,24 +144,24 @@
         class="mobile-rule-card sortable-card"
         :class="{ dragging: draggingRuleKey === item._clientId }"
         draggable="true"
-        @dragstart="onRuleDragStart(item)"
+        @dragstart="onRuleDragStart($event, item)"
         @dragover.prevent
         @drop="onRuleDrop(item)"
         @dragend="draggingRuleKey = null"
       >
         <div class="mobile-rule-head">
           <div class="sortable-title">
-            <button class="drag-handle" title="拖拽排序" @click.stop>☰</button>
+            <button type="button" class="drag-handle" title="拖拽排序" data-drag-handle @click.stop @mousedown.stop>☰</button>
             <div>
               <span class="category-index">#{{ pageStart + idx + 1 }}</span>
               <strong>{{ item.name || item.type || '未命名规则' }}</strong>
             </div>
           </div>
-          <label class="switch-line"><input type="checkbox" v-model="item.enabled" /> 启用</label>
+          <label class="switch-line no-drag"><input type="checkbox" v-model="item.enabled" @dragstart.stop.prevent /> 启用</label>
         </div>
 
-        <div class="mobile-rule-fields">
-          <label class="field"><span>名称</span><input v-model="item.name" placeholder="可选" /></label>
+        <div class="mobile-rule-fields no-drag">
+          <label class="field"><span>名称</span><input v-model="item.name" placeholder="可选" @dragstart.stop.prevent /></label>
           <label class="field"><span>类型</span><select v-model="item.type"><option v-for="type in ruleTypes" :key="type" :value="type">{{ type }}</option></select></label>
           <label class="field wide-field">
             <span>规则值</span>
@@ -165,10 +169,11 @@
               v-model="item.value"
               :disabled="normalizeRuleType(item.type) === 'MATCH'"
               :placeholder="normalizeRuleType(item.type) === 'MATCH' ? 'MATCH 无需值' : '规则值'"
+              @dragstart.stop.prevent
             />
           </label>
           <label class="field"><span>目标</span><select v-model="item.proxy"><option value="">选择目标</option><option v-for="target in proxyTargets" :key="target" :value="target">{{ target }}</option></select></label>
-          <label class="field"><span>参数</span><input v-model="item.optionsText" placeholder="逗号分隔" /></label>
+          <label class="field"><span>参数</span><input v-model="item.optionsText" placeholder="逗号分隔" @dragstart.stop.prevent /></label>
           <label class="field"><span>移动到</span><select :value="ruleIndex(item)" @change="moveRuleToIndex(item, Number($event.target.value))"><option v-for="(_, targetIdx) in rules" :key="targetIdx" :value="targetIdx">第 {{ targetIdx + 1 }} 位</option></select></label>
         </div>
 
@@ -208,6 +213,7 @@ import { useUrlState } from '../utils/urlState'
 const store = useAppStore()
 import { createRule, deleteRule, getApiErrorMessage, getNodeGroups, getRules, updateRule, batchRules } from '../api'
 import { BUILTINS, RULE_TYPES, normalizeRuleType, parseOptions, proxyTargetsFromGroups } from '../utils/ruleUtils'
+import { setDragGhost, shouldAllowDragStart } from '../utils/drag'
 import RulePresetsModal from '../components/RulePresetsModal.vue'
 import RuleImportModal from '../components/RuleImportModal.vue'
 import FabSave from '../components/FabSave.vue'
@@ -406,8 +412,14 @@ async function deleteRuleRow(item) {
   hasUnsavedChanges.value = true
 }
 
-function onRuleDragStart(item) {
+function onRuleDragStart(event, item) {
+  if (!shouldAllowDragStart(event, { requireHandle: true })) {
+    event.preventDefault()
+    draggingRuleKey.value = null
+    return
+  }
   draggingRuleKey.value = item._clientId
+  setDragGhost(event, item.name || item.type || '规则排序')
 }
 
 function onRuleDrop(targetItem) {

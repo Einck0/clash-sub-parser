@@ -150,16 +150,30 @@
           <div
             v-for="(entry, idx) in form.include_entries"
             :key="`${entry.type}-${entry.value}-${idx}`"
-            class="node-select-row"
-            :class="{ 'regex-entry-row': entry.type === 'regex' }"
-            draggable="true"
-            @dragstart="onDragStart(idx)"
+            class="node-select-row sortable-card"
+            :class="{
+              'regex-entry-row': entry.type === 'regex',
+              dragging: draggingIndex === idx,
+              'is-editing': entry.type === 'regex' && editingRegexIndex === idx,
+            }"
+            :draggable="entry.type === 'regex' && editingRegexIndex === idx ? false : true"
+            @dragstart="onDragStart($event, idx)"
             @dragover.prevent
             @drop="onDrop(idx)"
+            @dragend="draggingIndex = -1"
           >
+            <button
+              v-if="!(entry.type === 'regex' && editingRegexIndex === idx)"
+              type="button"
+              class="drag-handle"
+              title="拖拽排序"
+              data-drag-handle
+              @click.stop
+              @mousedown.stop
+            >☰</button>
             <div class="node-select-name mono" style="width:100%">
               <template v-if="entry.type === 'regex' && editingRegexIndex === idx">
-                <div class="regex-edit-box">
+                <div class="regex-edit-box no-drag">
                   <input
                     v-model="editingRegexName"
                     class="regex-edit-input"
@@ -255,6 +269,7 @@ import {
   updateNodeGroup,
 } from '../api'
 import { useAppStore } from '../stores/app'
+import { setDragGhost, shouldAllowDragStart } from '../utils/drag'
 
 const props = defineProps({ group: { type: Object, default: null } })
 const emit = defineEmits(['saved', 'close'])
@@ -552,12 +567,26 @@ function removeEntry(index) {
   form.value.include_entries.splice(index, 1)
 }
 
-function onDragStart(index) {
+function onDragStart(event, index) {
+  if (editingRegexIndex.value === index) {
+    event.preventDefault()
+    return
+  }
+  if (!shouldAllowDragStart(event, { requireHandle: true })) {
+    event.preventDefault()
+    draggingIndex.value = -1
+    return
+  }
   draggingIndex.value = index
+  setDragGhost(event, `条目 #${index + 1}`)
 }
 
 function onDrop(targetIndex) {
   if (draggingIndex.value < 0 || draggingIndex.value === targetIndex) return
+  if (editingRegexIndex.value >= 0) {
+    draggingIndex.value = -1
+    return
+  }
   const copy = [...form.value.include_entries]
   const [moved] = copy.splice(draggingIndex.value, 1)
   copy.splice(targetIndex, 0, moved)

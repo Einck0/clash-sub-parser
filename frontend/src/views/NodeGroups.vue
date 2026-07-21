@@ -4,7 +4,7 @@
       <div>
         <p class="eyebrow">Proxy Groups</p>
         <h2>策略组</h2>
-        <p class="page-desc">编辑、排序在列表完成；解析预览点「预览」弹窗查看，不占主页面。</p>
+        <p class="page-desc">编辑、排序在列表完成；按住 ☰ 拖拽或用上移/下移调整顺序。解析预览点「预览」弹窗查看。</p>
       </div>
       <div class="head-actions">
         <button @click="validateRefs" :disabled="loading || !!working">
@@ -59,7 +59,7 @@
         <div class="metric-card wide">
           <span class="metric-label">心智</span>
           <span class="metric-tip">
-            组引用 = 输出策略组名；组节点 = 展开叶子节点。点卡片上「预览」弹窗查节点。
+            组引用 = 输出策略组名；组节点 = 展开叶子节点。排序请拖 ☰ 或上移/下移；点「预览」弹窗查节点。
           </span>
         </div>
       </div>
@@ -68,11 +68,28 @@
         <article
           v-for="(group, idx) in filteredGroups"
           :key="group.id"
-          class="group-card"
-          :class="{ 'is-empty': (previewById(group.id)?.resolved_count || 0) === 0 }"
+          class="group-card sortable-card"
+          :class="{
+            'is-empty': (previewById(group.id)?.resolved_count || 0) === 0,
+            dragging: draggingGroupId === group.id,
+          }"
+          :draggable="canReorderGroups"
+          @dragstart="onGroupDragStart($event, group)"
+          @dragover.prevent
+          @drop="onGroupDrop(group)"
+          @dragend="draggingGroupId = null"
         >
           <div class="group-card-head">
             <div class="group-title-block">
+              <button
+                type="button"
+                class="drag-handle"
+                :title="canReorderGroups ? '拖拽排序' : '清空筛选后再拖拽排序'"
+                data-drag-handle
+                :disabled="!canReorderGroups"
+                @click.stop
+                @mousedown.stop
+              >☰</button>
               <span class="category-index">#{{ originalIndex(group.id) + 1 }}</span>
               <div>
                 <h3>{{ group.name }}</h3>
@@ -86,12 +103,15 @@
                 </div>
               </div>
             </div>
-            <div class="group-head-actions">
+            <div class="group-head-actions no-drag">
               <button @click="openPreview(group)">预览</button>
-              <button @click="moveById(group.id, -1)" :disabled="originalIndex(group.id) === 0">上移</button>
+              <button
+                @click="moveById(group.id, -1)"
+                :disabled="!canReorderGroups || originalIndex(group.id) === 0 || reordering"
+              >上移</button>
               <button
                 @click="moveById(group.id, 1)"
-                :disabled="originalIndex(group.id) === groups.length - 1"
+                :disabled="!canReorderGroups || originalIndex(group.id) === groups.length - 1 || reordering"
               >
                 下移
               </button>
@@ -194,6 +214,7 @@ import NodePreviewList from '../components/NodePreviewList.vue'
 import PageToolbar from '../components/PageToolbar.vue'
 import UiState from '../components/UiState.vue'
 import NodeGroupModal from './NodeGroupModal.vue'
+import { setDragGhost, shouldAllowDragStart } from '../utils/drag'
 
 const store = useAppStore()
 
@@ -208,6 +229,8 @@ const search = ref('')
 const typeFilter = ref('')
 const onlyEmpty = ref(false)
 const previewGroup = ref(null)
+const draggingGroupId = ref(null)
+const reordering = ref(false)
 
 const previewTitle = computed(() => {
   if (!previewGroup.value) return '组预览'
@@ -263,6 +286,15 @@ const filteredGroups = computed(() => {
     return hay.includes(q)
   })
 })
+
+// Filtering hides neighbors; only reorder against the full ordered list.
+const canReorderGroups = computed(
+  () =>
+    !String(search.value || '').trim()
+    && !typeFilter.value
+    && !onlyEmpty.value
+    && filteredGroups.value.length === groups.value.length,
+)
 
 function openPreview(group) {
   previewGroup.value = group
@@ -342,20 +374,53 @@ async function remove(group) {
   }
 }
 
+function onGroupDragStart(event, group) {
+  if (!canReorderGroups.value || !shouldAllowDragStart(event, { requireHandle: true })) {
+    event.preventDefault()
+    draggingGroupId.value = null
+    return
+  }
+  draggingGroupId.value = group.id
+  setDragGhost(event, group.name || '策略组排序')
+}
+
+async function onGroupDrop(targetGroup) {
+  const fromId = draggingGroupId.value
+  draggingGroupId.value = null
+  if (!fromId || fromId === targetGroup.id) return
+  const from = originalIndex(fromId)
+  const to = originalIndex(targetGroup.id)
+  if (from < 0 || to < 0 || from === to) return
+  await applyGroupOrder(from, to)
+}
+
 async function moveById(id, delta) {
   const index = originalIndex(id)
   if (index < 0) return
-  const copy = [...groups.value]
   const to = index + delta
-  if (to < 0 || to >= copy.length) return
+  if (to < 0 || to >= groups.value.length) return
+  await applyGroupOrder(index, to)
+}
+
+async function applyGroupOrder(from, to) {
+  if (reordering.value) return
+  const copy = [...groups.value]
+  if (from < 0 || to < 0 || from >= copy.length || to >= copy.length || from === to) return
   error.value = ''
+  reordering.value = true
   try {
-    ;[copy[index], copy[to]] = [copy[to], copy[index]]
+    const [moved] = copy.splice(from, 1)
+    copy.splice(to, 0, moved)
+    // Optimistic local order so the list does not jump back while reloading.
+    groups.value = copy
     const items = copy.map((group, i) => ({ id: group.id, sort_order: i }))
     await reorderNodeGroups(items)
     await load()
   } catch (err) {
     error.value = getApiErrorMessage(err, '排序失败')
+    await load()
+  } finally {
+    reordering.value = false
   }
 }
 

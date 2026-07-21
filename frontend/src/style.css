@@ -1697,7 +1697,7 @@ button:disabled {
 
 .node-select-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 10px;
   align-items: center;
   padding: 8px;
@@ -1706,6 +1706,55 @@ button:disabled {
 
 .node-select-row:last-child {
   border-bottom: 0;
+}
+
+.node-select-row.is-editing {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.node-select-row .drag-handle {
+  width: 32px;
+  height: 32px;
+  cursor: grab;
+}
+
+.node-select-row.dragging {
+  opacity: 0.55;
+}
+
+.group-card.sortable-card .group-title-block {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.group-card.sortable-card .drag-handle {
+  margin-top: 2px;
+}
+
+.group-card.sortable-card.dragging {
+  opacity: 0.55;
+}
+
+.no-drag {
+  user-select: text;
+}
+
+.rules-table tr.dragging td.no-drag input,
+.rules-table tr.dragging td.no-drag select {
+  pointer-events: none;
+}
+
+.drag-handle.drag-mini {
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  padding: 0;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  vertical-align: middle;
+  margin-right: 4px;
 }
 
 .node-select-name {
@@ -1737,8 +1786,19 @@ button:disabled {
 }
 
 @media (max-width: 720px) {
-  .node-search-row,
+  .node-search-row {
+    grid-template-columns: 1fr;
+  }
+
   .node-select-row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .node-select-row .node-select-actions {
+    grid-column: 1 / -1;
+  }
+
+  .node-select-row.is-editing {
     grid-template-columns: 1fr;
   }
 

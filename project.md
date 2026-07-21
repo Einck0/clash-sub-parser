@@ -13,6 +13,7 @@
 - [README.md](README.md)：英文入口文档，面向首次部署和开源用户。
 - [README.zh-CN.md](README.zh-CN.md)：中文入口文档。
 - [docs/design.zh-CN.md](docs/design.zh-CN.md)：架构、数据模型、生成链路、鉴权和前端交互设计。
+- [docs/proxy-chain.zh-CN.md](docs/proxy-chain.zh-CN.md)：链式代理（节点/订阅级 dialer-proxy）设计。
 - [docs/roadmap.zh-CN.md](docs/roadmap.zh-CN.md)：当前状态、关键决策、后续计划、发布约束和变更摘要。
 - [CONTRIBUTING.md](CONTRIBUTING.md)：开发、测试和贡献约定。
 - [SECURITY.md](SECURITY.md)：漏洞报告和敏感数据处理说明。

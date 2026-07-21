@@ -105,10 +105,11 @@ backend/app/
 
 设计说明：
 
-- `include_entries` 是节点组真源：支持 `node` / `group` / `group_nodes` / `regex`。
+- `include_entries` 是节点组真源：支持 `node` / `group` / `group_nodes` / `exclude_group_nodes` / `regex`。
 - `regex` 条目是虚拟动态匹配器，按**最终节点名**（前缀后 + 重命名后）展开；不做“冻结为静态节点”。
-- `regex_rules` / `include_nodes` / `include_group_*` 只是从 `include_entries` 派生的镜像字段，供列表徽章与兼容读取。
+- `regex_rules` / `include_nodes` / `include_group_*` / `exclude_group_ids` 只是从 `include_entries` 派生的镜像字段，供列表徽章与兼容读取。
 - `add_fallback` 在解析节点末尾追加 **PASS**（不是 REJECT）。默认 `false`；地区 `url-test` 组建议关闭，让空匹配暴露配置问题。
+- 链式代理（`dialer-proxy`）设计见 [proxy-chain.zh-CN.md](./proxy-chain.zh-CN.md)；数据挂在 Subscription 的 `proxy_chain` / `node_proxy_chains`，不在 NodeGroup 上再开一套。
 
 ### RuleCategory 与 Rule
 

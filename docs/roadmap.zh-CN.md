@@ -137,6 +137,12 @@ git ls-files docker-compose.yml info.txt backups references .learnings .pytest_c
 - 订阅拉取默认拒绝 localhost、私网、链路本地和保留地址；如需拉取内网源，必须显式启用 `CLASH_ALLOW_PRIVATE_FETCH_URLS`。
 - Compose 使用 `CLASH_HTTP_PROXY` / `CLASH_HTTPS_PROXY` / `CLASH_ALL_PROXY`，避免宿主机普通 `HTTP_PROXY` 被意外写入项目配置。
 
+## 计划中：链式代理
+
+- 设计文档：[proxy-chain.zh-CN.md](./proxy-chain.zh-CN.md)
+- 回滚 tag：`pre-proxy-chain-design` @ `d0988c4`
+- P0：订阅级 + 节点级单跳 `dialer-proxy`；P1：多跳包装节点
+
 ## 近期变更摘要
 
 ### 2026-05-28：开源发布整理

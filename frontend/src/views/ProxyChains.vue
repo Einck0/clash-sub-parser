@@ -167,10 +167,15 @@
       </div>
     </div>
 
+    <PageToolbar
+      v-model="listSearch"
+      placeholder="搜索目标 / 跳板 / 备注"
+      :count-text="`${filteredBindings.length} / ${bindings.length} 条绑定`"
+    />
+
     <div class="dns-section">
       <div class="row space filter-bar">
         <h3>绑定列表</h3>
-        <input v-model="listSearch" placeholder="筛选目标 / 跳板 / 备注" class="filter-input" />
       </div>
 
       <div v-if="!filteredBindings.length" class="empty-mini">
@@ -227,6 +232,7 @@ import {
   previewProxyChain,
   updateProxyChain,
 } from '../api'
+import PageToolbar from '../components/PageToolbar.vue'
 
 const loading = ref(false)
 const saving = ref(false)

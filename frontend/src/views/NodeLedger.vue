@@ -32,37 +32,27 @@
       </div>
     </div>
 
-    <div class="dns-section filters">
-      <div class="filter-grid">
-        <label class="field">
-          <span>搜索</span>
-          <input v-model="search" placeholder="节点 / 订阅 / 地址 / 跳板 / 组" />
-        </label>
-        <label class="field">
-          <span>订阅</span>
-          <select v-model="subFilter">
-            <option value="">全部</option>
-            <option v-for="s in subOptions" :key="s" :value="s">{{ s }}</option>
-          </select>
-        </label>
-        <label class="field">
-          <span>协议</span>
-          <select v-model="typeFilter">
-            <option value="">全部</option>
-            <option v-for="t in typeOptions" :key="t" :value="t">{{ t }}</option>
-          </select>
-        </label>
-        <label class="field">
-          <span>链式</span>
-          <select v-model="chainFilter">
-            <option value="all">全部</option>
-            <option value="chained">仅已挂链</option>
-            <option value="plain">仅未挂链</option>
-          </select>
-        </label>
-      </div>
-      <div class="muted count-line">显示 {{ filtered.length }} / {{ rows.length }}</div>
-    </div>
+    <PageToolbar
+      v-model="search"
+      placeholder="搜索节点 / 订阅 / 地址 / 跳板 / 组"
+      :count-text="`${filtered.length} / ${rows.length}`"
+    >
+      <template #filters>
+        <select v-model="subFilter">
+          <option value="">全部订阅</option>
+          <option v-for="s in subOptions" :key="s" :value="s">{{ s }}</option>
+        </select>
+        <select v-model="typeFilter">
+          <option value="">全部协议</option>
+          <option v-for="t in typeOptions" :key="t" :value="t">{{ t }}</option>
+        </select>
+        <select v-model="chainFilter">
+          <option value="all">全部链式</option>
+          <option value="chained">仅已挂链</option>
+          <option value="plain">仅未挂链</option>
+        </select>
+      </template>
+    </PageToolbar>
 
     <div v-if="loading && !rows.length" class="empty-mini">加载中…</div>
     <div v-else-if="!filtered.length" class="empty-mini">没有匹配的节点。</div>
@@ -187,6 +177,7 @@ import {
   getNodeLedger,
   getProxyChains,
 } from '../api'
+import PageToolbar from '../components/PageToolbar.vue'
 
 const loading = ref(false)
 const saving = ref(false)

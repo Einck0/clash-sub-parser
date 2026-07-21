@@ -20,9 +20,24 @@
 
     <UiState v-if="loading && !subscriptions.length" type="loading" title="正在加载订阅" description="正在读取订阅列表和节点缓存，请稍等。" />
 
-    <div class="subscription-grid" v-else>
+    <template v-else>
+    <PageToolbar
+      v-model="search"
+      placeholder="搜索订阅名 / URL / 节点数…"
+      :count-text="`${filteredSubscriptions.length} / ${subscriptions.length}`"
+    >
+      <template #filters>
+        <select v-model="enabledFilter">
+          <option value="">全部状态</option>
+          <option value="enabled">仅启用</option>
+          <option value="disabled">仅禁用</option>
+        </select>
+      </template>
+    </PageToolbar>
+
+    <div class="subscription-grid">
       <article
-        v-for="sub in subscriptions"
+        v-for="sub in filteredSubscriptions"
         :key="sub.id"
         class="subscription-card"
         :class="{ 'is-disabled': !sub.enabled, 'is-primary-card': sub.is_primary }"
@@ -115,7 +130,18 @@
           <button class="primary" @click="openCreate">添加订阅</button>
         </template>
       </UiState>
+      <UiState
+        v-else-if="subscriptions.length && !filteredSubscriptions.length"
+        type="empty"
+        title="没有匹配的订阅"
+        description="换个关键词或清空筛选。"
+      >
+        <template #actions>
+          <button @click="search = ''; enabledFilter = ''">清空筛选</button>
+        </template>
+      </UiState>
     </div>
+    </template>
 
     <div class="modal-backdrop" v-if="viewingSub" @click.self="closeNodePreview">
       <div class="modal node-preview-modal" role="dialog" aria-modal="true" :aria-label="nodePreviewTitle || '节点预览'">
@@ -160,6 +186,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useAppStore } from '../stores/app'
 import { formatBytes, short, formatLocalTime } from '../utils/format'
 import NodePreviewList from '../components/NodePreviewList.vue'
+import PageToolbar from '../components/PageToolbar.vue'
 import SubscriptionForm from '../components/SubscriptionForm.vue'
 import UiState from '../components/UiState.vue'
 import {
@@ -186,6 +213,21 @@ const loadingToggleId = ref(null)
 const renamingSaving = ref(false)
 const loading = ref(false)
 const error = ref('')
+const search = ref('')
+const enabledFilter = ref('')
+
+const filteredSubscriptions = computed(() => {
+  const q = String(search.value || '').trim().toLowerCase()
+  return (subscriptions.value || []).filter((sub) => {
+    if (enabledFilter.value === 'enabled' && !sub.enabled) return false
+    if (enabledFilter.value === 'disabled' && sub.enabled) return false
+    if (!q) return true
+    const hay = [sub.name, sub.url, String((sub.raw_nodes || []).length)]
+      .join(' ')
+      .toLowerCase()
+    return hay.includes(q)
+  })
+})
 
 // Build post-prefix base names for rename editor. Keys in node_renames are
 // always these base names, never already-renamed display names.

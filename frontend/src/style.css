@@ -2645,13 +2645,37 @@ button.danger {
   margin-bottom: 8px;
 }
 
-.node-group-modal .form-footer {
+.node-group-modal .form-footer,
+.node-group-modal .sticky-save-bar {
   position: sticky;
   bottom: 0;
   z-index: 2;
   background: var(--surface);
-  padding-top: 10px;
+  padding: 12px 0 4px;
   border-top: 1px solid var(--border);
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.node-group-modal .sticky-save-bar .primary {
+  min-width: 120px;
+  min-height: 40px;
+}
+
+.inline-regex-preview {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--brand) 8%, transparent);
+}
+
+.inline-regex-preview .final-preview {
+  margin-top: 6px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  max-height: 160px;
+  overflow: auto;
 }
 
 /* ---- Regex entry inline edit ---- */

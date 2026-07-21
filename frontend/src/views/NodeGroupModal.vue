@@ -206,16 +206,16 @@
             </div>
           </div>
         </div>
-      </div>
 
-      <div class="selector-section" v-if="previewMatches.length">
-        <div class="row space">
-          <strong>正则预览结果</strong>
-          <span class="muted">{{ previewMatches.length }} 个</span>
-        </div>
-        <div class="mono final-preview">
-          {{ previewMatches.slice(0, 100).join(' | ') }}
-          <span v-if="previewMatches.length > 100"> … +{{ previewMatches.length - 100 }}</span>
+        <div v-if="previewMatches.length" class="inline-regex-preview">
+          <div class="row space">
+            <strong>正则预览（贴在条目区）</strong>
+            <span class="muted">{{ previewMatches.length }} 个</span>
+          </div>
+          <div class="mono final-preview">
+            {{ previewMatches.slice(0, 80).join(' | ') }}
+            <span v-if="previewMatches.length > 80"> … +{{ previewMatches.length - 80 }}</span>
+          </div>
         </div>
       </div>
 
@@ -227,7 +227,7 @@
         <textarea v-model="rawJson"></textarea>
       </div>
 
-      <div class="form-footer">
+      <div class="form-footer sticky-save-bar">
         <button class="primary" @click="save" :disabled="saving || !form.name.trim()">
           {{ saving ? '保存中...' : '保存' }}
         </button>

@@ -378,7 +378,7 @@ async function doImport(file) {
 async function resetAllConfig() {
   const ok = await store.confirm({
     title: '重置所有配置',
-    message: '确定要清空所有配置并恢复成新安装状态吗？\n\n会清空订阅、节点组、规则、DNS、生成和安全设置，无法撤销。建议先导出备份。',
+    message: '确定要清空所有配置并恢复成新安装状态吗？\n\n影响范围：\n- 订阅 / 节点 / 策略组\n- 规则分类与规则\n- DNS / 生成开关\n- 安全设置（token 等）\n- 链式绑定\n\n无法撤销。建议先导出备份。',
     confirmText: '确认重置',
     danger: true,
   })

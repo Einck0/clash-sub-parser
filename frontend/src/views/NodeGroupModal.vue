@@ -46,6 +46,32 @@
         </label>
       </div>
 
+      <div
+        class="selector-section"
+        v-if="['url-test', 'fallback', 'load-balance'].includes(form.group_type)"
+      >
+        <div class="row space">
+          <div>
+            <strong>{{ form.group_type }} 参数</strong>
+            <p class="section-hint">导出到 Clash 时写入对应字段；空值用默认。</p>
+          </div>
+        </div>
+        <div class="grid-2" style="margin-top:8px;gap:8px">
+          <label>
+            <div class="muted">url</div>
+            <input v-model="urlTestUrl" placeholder="https://www.gstatic.com/generate_204" />
+          </label>
+          <label>
+            <div class="muted">interval (秒)</div>
+            <input v-model.number="urlTestInterval" type="number" min="1" placeholder="300" />
+          </label>
+          <label>
+            <div class="muted">tolerance (ms)</div>
+            <input v-model.number="urlTestTolerance" type="number" min="0" placeholder="50" />
+          </label>
+        </div>
+      </div>
+
       <div class="selector-section">
         <div class="row space">
           <div>
@@ -246,6 +272,25 @@ const draggingIndex = ref(-1)
 const saving = ref(false)
 const error = ref('')
 const form = ref(defaultForm())
+
+const urlTestUrl = computed({
+  get: () => form.value.url_test_config?.url || '',
+  set: (v) => {
+    form.value.url_test_config = { ...(form.value.url_test_config || {}), url: v }
+  },
+})
+const urlTestInterval = computed({
+  get: () => form.value.url_test_config?.interval ?? '',
+  set: (v) => {
+    form.value.url_test_config = { ...(form.value.url_test_config || {}), interval: v }
+  },
+})
+const urlTestTolerance = computed({
+  get: () => form.value.url_test_config?.tolerance ?? '',
+  set: (v) => {
+    form.value.url_test_config = { ...(form.value.url_test_config || {}), tolerance: v }
+  },
+})
 
 watch(
   () => props.group,
@@ -648,6 +693,14 @@ async function save() {
     return
   }
 
+  const urlCfg = { ...(form.value.url_test_config || {}) }
+  if (urlTestUrl.value) urlCfg.url = String(urlTestUrl.value).trim()
+  if (urlTestInterval.value !== '' && urlTestInterval.value != null) {
+    urlCfg.interval = Number(urlTestInterval.value) || 300
+  }
+  if (urlTestTolerance.value !== '' && urlTestTolerance.value != null) {
+    urlCfg.tolerance = Number(urlTestTolerance.value) || 0
+  }
   const payload = {
     name,
     group_type: form.value.group_type || 'select',
@@ -656,7 +709,7 @@ async function save() {
     include_entries: entries,
     add_fallback: form.value.add_fallback === true,
     exclude_nodes: uniq(form.value.exclude_nodes || []),
-    url_test_config: form.value.url_test_config || {},
+    url_test_config: urlCfg,
     load_balance_config: form.value.load_balance_config || {},
     fallback_config: form.value.fallback_config || {},
   }

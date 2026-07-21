@@ -10,7 +10,7 @@ from app.models.subscription import Subscription
 from app.utils.dedup import deduplicate_nodes
 from app.schemas.node_group import NodeGroupCreate, NodeGroupReorder, NodeGroupUpdate
 from app.services.snapshot_service import create_snapshot
-from app.utils.group_utils import dedup_names, with_fallback, resolve_entries
+from app.utils.group_utils import resolve_entries, resolve_group_members, with_fallback
 from app.utils.validators import ensure_group_ids_exist, validate_no_circular_reference
 
 BUILTIN_GROUPS = ["DIRECT", "REJECT", "PASS"]
@@ -147,75 +147,7 @@ async def preview_node_groups(db: AsyncSession) -> list[dict]:
         str(node.get("name", "")).strip() for node in deduplicate_nodes(all_nodes)
     ]
     node_names = [name for name in node_names if name]
-
-    cache: dict[int, list[str]] = {}
-
-    def resolve_nodes(group_id: int, trail: set[int]) -> list[str]:
-        if group_id in cache:
-            return cache[group_id]
-        if group_id in trail:
-            return []
-        trail.add(group_id)
-        group = group_map.get(group_id)
-        if not group:
-            trail.remove(group_id)
-            return []
-
-        selected: list[str] = []
-        excluded: set[str] = set(group.exclude_nodes or [])
-
-        entries = resolve_entries(group)
-        # Ordered ops: add/subtract share one entry list.
-        for entry in entries:
-            entry_type = entry.get("type")
-            entry_value = entry.get("value")
-            if entry_type == "node":
-                selected.append(str(entry_value))
-            elif entry_type == "group":
-                try:
-                    ref_id = int(entry_value)
-                except Exception:
-                    continue
-                if ref_id in group_map:
-                    selected.append(group_map[ref_id].name)
-            elif entry_type == "group_nodes":
-                try:
-                    ref_id = int(entry_value)
-                except Exception:
-                    continue
-                selected.extend(resolve_nodes(ref_id, trail))
-            elif entry_type == "exclude_group_nodes":
-                try:
-                    ref_id = int(entry_value)
-                except Exception:
-                    continue
-                if ref_id == group_id:
-                    continue
-                excluded.update(resolve_nodes(ref_id, set(trail)))
-            elif entry_type == "regex":
-                pattern_text = str(entry_value or "").strip()
-                if not pattern_text:
-                    continue
-                try:
-                    pattern = re.compile(pattern_text)
-                except Exception:
-                    continue
-                selected.extend([name for name in node_names if pattern.search(name)])
-
-        # Legacy mirror field still honored if present
-        for raw_id in group.exclude_group_ids or []:
-            try:
-                exclude_id = int(raw_id)
-            except Exception:
-                continue
-            if exclude_id == group_id:
-                continue
-            excluded.update(resolve_nodes(exclude_id, set(trail)))
-
-        merged = [name for name in dedup_names(selected) if name not in excluded]
-        cache[group_id] = merged
-        trail.remove(group_id)
-        return merged
+    resolved_map = resolve_group_members(groups, node_names, leaves_only=False)
 
     preview: list[dict] = []
     for group in groups:
@@ -223,17 +155,30 @@ async def preview_node_groups(db: AsyncSession) -> list[dict]:
         include_group_nodes_names: list[str] = []
         exclude_group_names: list[str] = []
         exclude_ids: list[int] = []
+        reasons: list[str] = []
         entries = resolve_entries(group)
         for entry in entries:
             entry_type = entry.get("type")
             entry_value = entry.get("value")
-            if entry_type == "group" and entry_value in group_map:
-                include_group_names.append(group_map[entry_value].name)
-            if entry_type == "group_nodes" and entry_value in group_map:
-                include_group_nodes_names.append(group_map[entry_value].name)
-            if entry_type == "exclude_group_nodes" and entry_value in group_map:
+            if entry_type == "node":
+                reasons.append(f"+ 静态节点 {entry_value}")
+            elif entry_type == "group" and entry_value in group_map:
+                gname = group_map[entry_value].name
+                include_group_names.append(gname)
+                reasons.append(f"+ 组引用 {gname}")
+            elif entry_type == "group_nodes" and entry_value in group_map:
+                gname = group_map[entry_value].name
+                include_group_nodes_names.append(gname)
+                reasons.append(f"+ 展开组节点 {gname}")
+            elif entry_type == "exclude_group_nodes" and entry_value in group_map:
                 exclude_ids.append(int(entry_value))
-                exclude_group_names.append(group_map[entry_value].name)
+                gname = group_map[entry_value].name
+                exclude_group_names.append(gname)
+                reasons.append(f"- 减去组节点 {gname}")
+            elif entry_type == "regex":
+                label = str(entry.get("name") or entry.get("label") or "").strip()
+                pattern = str(entry_value or "").strip()
+                reasons.append(f"+ 正则 {label or pattern}")
         # Legacy mirror field still shown if present.
         for raw_id in group.exclude_group_ids or []:
             try:
@@ -245,7 +190,14 @@ async def preview_node_groups(db: AsyncSession) -> list[dict]:
             if exclude_id in group_map:
                 exclude_ids.append(exclude_id)
                 exclude_group_names.append(group_map[exclude_id].name)
-        resolved_nodes = with_fallback(resolve_nodes(group.id, set()), group.add_fallback)
+                reasons.append(f"- legacy 减组 {group_map[exclude_id].name}")
+        if group.exclude_nodes:
+            reasons.append(f"- 排除节点 {len(group.exclude_nodes)} 个")
+        if group.add_fallback:
+            reasons.append("空组时追加 PASS")
+        resolved_nodes = with_fallback(
+            list(resolved_map.get(group.id, [])), group.add_fallback
+        )
         preview.append(
             {
                 "id": group.id,
@@ -257,6 +209,7 @@ async def preview_node_groups(db: AsyncSession) -> list[dict]:
                 "exclude_group_ids": exclude_ids,
                 "exclude_group_names": exclude_group_names,
                 "include_entries": entries,
+                "resolve_reasons": reasons,
             }
         )
 

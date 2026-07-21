@@ -331,17 +331,36 @@ function createRuleRow() {
 
 async function saveAllRules() {
   error.value = ''
-  saving.value = true
   const sorted = [...rules.value].sort(compareRuleOrder)
   sorted.forEach((rule, index) => { rule.sort_order = index })
 
+  // Validate draft before any server call; keep draft on failure.
+  for (const item of sorted) {
+    const type = normalizeRuleType(item.type)
+    if (!type) {
+      error.value = `规则「${item.name || '未命名'}」类型不能为空`
+      store.error(error.value)
+      return
+    }
+    if (!String(item.proxy || '').trim()) {
+      error.value = `规则「${item.name || type}」目标 proxy 不能为空`
+      store.error(error.value)
+      return
+    }
+    if (type !== 'MATCH' && !String(item.value || '').trim()) {
+      error.value = `规则「${item.name || type}」value 不能为空（MATCH 除外）`
+      store.error(error.value)
+      return
+    }
+  }
+
+  saving.value = true
+  // Keep pending deletes until server succeeds so draft can be retried.
+  const pendingDeletes = [...deletedRuleIds.value]
+
   try {
     const batch = { delete: [], create: [], update: [], reorder: [] }
-
-    // Pending deletes
-    const toDelete = [...deletedRuleIds.value]
-    deletedRuleIds.value = []
-    batch.delete = toDelete
+    batch.delete = pendingDeletes
 
     for (const item of sorted) {
       const payload = normalizePayload(item)

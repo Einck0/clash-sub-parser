@@ -28,19 +28,22 @@
 
         <label v-if="form.target_type === 'node'" class="field">
           <span>目标节点</span>
+          <input v-model="nodeSearch" placeholder="搜索节点名" class="search-input" />
           <select v-model="form.target_name">
             <option value="">选择最终节点</option>
-            <option v-for="n in finalNodes" :key="n.name" :value="n.name">
-              {{ n.name }} <template v-if="n.subscription_name">({{ n.subscription_name }})</template>
+            <option v-for="n in filteredTargetNodes" :key="n.name" :value="n.name">
+              {{ n.name }}
+              <template v-if="n.subscription_name">({{ n.subscription_name }})</template>
             </option>
           </select>
         </label>
 
         <label v-else-if="form.target_type === 'node_group'" class="field">
           <span>目标策略组</span>
+          <input v-model="groupSearch" placeholder="搜索策略组" class="search-input" />
           <select v-model.number="form.target_id">
             <option :value="null">选择策略组</option>
-            <option v-for="g in nodeGroups" :key="g.id" :value="g.id">{{ g.name }}</option>
+            <option v-for="g in filteredGroups" :key="g.id" :value="g.id">{{ g.name }}</option>
           </select>
         </label>
 
@@ -62,16 +65,18 @@
 
         <label v-if="form.dialer_type === 'node'" class="field">
           <span>跳板节点</span>
+          <input v-model="dialerNodeSearch" placeholder="搜索跳板节点" class="search-input" />
           <select v-model="form.dialer_ref">
             <option value="">选择节点</option>
-            <option v-for="n in finalNodes" :key="'d-' + n.name" :value="n.name">{{ n.name }}</option>
+            <option v-for="n in filteredDialerNodes" :key="'d-' + n.name" :value="n.name">{{ n.name }}</option>
           </select>
         </label>
         <label v-else class="field">
           <span>跳板策略组</span>
+          <input v-model="dialerGroupSearch" placeholder="搜索跳板组" class="search-input" />
           <select v-model="form.dialer_ref">
             <option value="">选择策略组</option>
-            <option v-for="g in nodeGroups" :key="'dg-' + g.id" :value="g.name">{{ g.name }}</option>
+            <option v-for="g in filteredDialerGroups" :key="'dg-' + g.id" :value="g.name">{{ g.name }}</option>
           </select>
         </label>
 
@@ -80,7 +85,27 @@
           <input v-model="form.note" placeholder="可选" />
         </label>
       </div>
+
+      <div v-if="preview" class="preview-box">
+        <strong>生效预览</strong>
+        <p class="section-hint">
+          目标 {{ preview.target_count }} 个 · 将挂链
+          <b>{{ preview.chain_count }}</b>
+          · 跳过自环/成员
+          <b>{{ preview.skip_count }}</b>
+        </p>
+        <div v-if="preview.chain_samples?.length" class="muted small-line">
+          挂链样例：{{ preview.chain_samples.slice(0, 5).join('、') }}
+        </div>
+        <div v-if="preview.skip_samples?.length" class="muted small-line">
+          跳过样例：{{ preview.skip_samples.slice(0, 5).join('、') }}
+        </div>
+      </div>
+
       <div class="template-actions" style="margin-top: 12px">
+        <button @click="runPreview" :disabled="!canCreate || previewing">
+          {{ previewing ? '预览中…' : '预览生效' }}
+        </button>
         <button class="primary" @click="createBinding" :disabled="saving || !canCreate">
           {{ saving ? '保存中…' : '添加绑定' }}
         </button>
@@ -113,7 +138,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import {
   createProxyChain,
   deleteProxyChain,
@@ -122,16 +147,24 @@ import {
   getNodeGroups,
   getProxyChains,
   getSubscriptions,
+  previewProxyChain,
   updateProxyChain,
 } from '../api'
 
 const loading = ref(false)
 const saving = ref(false)
+const previewing = ref(false)
 const error = ref('')
 const bindings = ref([])
 const finalNodes = ref([])
 const nodeGroups = ref([])
 const subscriptions = ref([])
+const preview = ref(null)
+
+const nodeSearch = ref('')
+const groupSearch = ref('')
+const dialerNodeSearch = ref('')
+const dialerGroupSearch = ref('')
 
 const form = reactive({
   target_type: 'node',
@@ -149,7 +182,19 @@ const canCreate = computed(() => {
   return form.target_id != null
 })
 
+const filteredTargetNodes = computed(() => filterNodes(finalNodes.value, nodeSearch.value))
+const filteredDialerNodes = computed(() => filterNodes(finalNodes.value, dialerNodeSearch.value))
+const filteredGroups = computed(() => filterGroups(nodeGroups.value, groupSearch.value))
+const filteredDialerGroups = computed(() => filterGroups(nodeGroups.value, dialerGroupSearch.value))
+
 onMounted(reload)
+
+watch(
+  () => [form.target_type, form.target_id, form.target_name, form.dialer_type, form.dialer_ref],
+  () => {
+    preview.value = null
+  },
+)
 
 async function reload() {
   loading.value = true
@@ -172,9 +217,22 @@ async function reload() {
   }
 }
 
+function filterNodes(list, q) {
+  const query = String(q || '').trim().toLowerCase()
+  if (!query) return list
+  return (list || []).filter((n) => String(n.name || '').toLowerCase().includes(query))
+}
+
+function filterGroups(list, q) {
+  const query = String(q || '').trim().toLowerCase()
+  if (!query) return list
+  return (list || []).filter((g) => String(g.name || '').toLowerCase().includes(query))
+}
+
 function onTargetTypeChange() {
   form.target_id = null
   form.target_name = ''
+  preview.value = null
 }
 
 function targetLabel(item) {
@@ -188,28 +246,48 @@ function dialerLabel(item) {
   return `跳板(${kind}): ${item.dialer_ref}`
 }
 
+function buildPayload() {
+  const payload = {
+    target_type: form.target_type,
+    dialer_type: form.dialer_type,
+    dialer_ref: form.dialer_ref,
+    enabled: true,
+    note: form.note || null,
+  }
+  if (form.target_type === 'node') {
+    payload.target_name = form.target_name
+  } else {
+    payload.target_id = form.target_id
+  }
+  return payload
+}
+
+async function runPreview() {
+  if (!canCreate.value || previewing.value) return
+  previewing.value = true
+  error.value = ''
+  try {
+    const { data } = await previewProxyChain(buildPayload())
+    preview.value = data
+  } catch (err) {
+    error.value = getApiErrorMessage(err, '预览失败')
+    preview.value = null
+  } finally {
+    previewing.value = false
+  }
+}
+
 async function createBinding() {
   if (!canCreate.value || saving.value) return
   saving.value = true
   error.value = ''
   try {
-    const payload = {
-      target_type: form.target_type,
-      dialer_type: form.dialer_type,
-      dialer_ref: form.dialer_ref,
-      enabled: true,
-      note: form.note || null,
-    }
-    if (form.target_type === 'node') {
-      payload.target_name = form.target_name
-    } else {
-      payload.target_id = form.target_id
-    }
-    await createProxyChain(payload)
+    await createProxyChain(buildPayload())
     form.target_name = ''
     form.target_id = null
     form.dialer_ref = ''
     form.note = ''
+    preview.value = null
     await reload()
   } catch (err) {
     error.value = getApiErrorMessage(err, '创建失败')
@@ -243,6 +321,16 @@ async function removeBinding(item) {
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 12px;
 }
+.search-input {
+  margin-bottom: 6px;
+}
+.preview-box {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border, #3333);
+  background: color-mix(in srgb, var(--primary, #4f8cff) 8%, transparent);
+}
 .chain-row {
   display: flex;
   justify-content: space-between;
@@ -272,5 +360,9 @@ async function removeBinding(item) {
 }
 .table-like {
   margin-top: 8px;
+}
+.small-line {
+  font-size: 12px;
+  margin-top: 4px;
 }
 </style>

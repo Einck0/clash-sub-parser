@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from fastapi import HTTPException
@@ -13,7 +12,7 @@ from app.models.node_group import NodeGroup
 from app.models.proxy_chain import ProxyChainBinding
 from app.models.subscription import Subscription
 from app.schemas.proxy_chain import ProxyChainBindingCreate, ProxyChainBindingUpdate
-from app.utils.group_utils import dedup_names, resolve_entries
+from app.utils.group_utils import resolve_group_members
 
 FORBIDDEN_DIALERS = frozenset({"DIRECT", "REJECT", "PASS"})
 TARGET_PRIORITY = {"subscription": 1, "node_group": 2, "node": 3}
@@ -202,7 +201,7 @@ async def apply_bindings_to_nodes(db: AsyncSession, nodes: list[dict]) -> list[d
         for n in nodes
         if isinstance(n, dict) and n.get("name")
     ]
-    group_leaves = _resolve_all_group_leaves(groups, all_node_names)
+    group_leaves = resolve_group_members(groups, all_node_names, leaves_only=True)
 
     known_proxy_names = {n for n in all_node_names if n}
     known_group_names = {g.name for g in groups if g.name}
@@ -293,7 +292,7 @@ async def _validate_no_cycle(
 
     group_result = await db.execute(select(NodeGroup))
     groups = list(group_result.scalars().all())
-    group_leaves = _resolve_all_group_leaves(groups, all_node_names)
+    group_leaves = resolve_group_members(groups, all_node_names, leaves_only=True)
     known_proxy_names = set(known_nodes) | {n for n in all_node_names if n}
 
     # Temporary binding-like object for expand.
@@ -387,85 +386,81 @@ def _expand_targets(
     return []
 
 
-def _resolve_all_group_leaves(
-    groups: list[NodeGroup], all_node_names: list[str]
-) -> dict[int, list[str]]:
-    mapping = {g.id: g for g in groups}
-    group_names = {g.id: g.name for g in groups}
-    name_to_id = {g.name: g.id for g in groups if g.name}
-    cache: dict[int, list[str]] = {}
-
-    def resolve(group_id: int, trail: set[int]) -> list[str]:
-        if group_id in cache:
-            return cache[group_id]
-        if group_id in trail:
-            return []
-        trail.add(group_id)
-        group = mapping.get(group_id)
-        if not group:
-            trail.remove(group_id)
-            return []
-
-        selected: list[str] = []
-        excluded: set[str] = set(group.exclude_nodes or [])
-        for entry in resolve_entries(group):
-            entry_type = entry.get("type")
-            entry_value = entry.get("value")
-            if entry_type == "node":
-                selected.append(str(entry_value))
-            elif entry_type == "group_nodes":
-                try:
-                    child_id = int(entry_value)
-                except Exception:
-                    continue
-                selected.extend(resolve(child_id, trail))
-            elif entry_type == "exclude_group_nodes":
-                try:
-                    child_id = int(entry_value)
-                except Exception:
-                    continue
-                if child_id == group_id:
-                    continue
-                excluded.update(resolve(child_id, set(trail)))
-            elif entry_type == "group":
-                # Inserted as group name in export; for dialer targets expand leaves.
-                try:
-                    ref_id = int(entry_value)
-                except Exception:
-                    # maybe already a name
-                    ref_id = name_to_id.get(str(entry_value))
-                if ref_id is not None:
-                    selected.extend(resolve(ref_id, trail))
-            elif entry_type == "regex":
-                pattern_text = str(entry_value or "").strip()
-                if not pattern_text:
-                    continue
-                try:
-                    pattern = re.compile(pattern_text)
-                except Exception:
-                    continue
-                selected.extend([n for n in all_node_names if pattern.search(n)])
-
-        for raw_id in group.exclude_group_ids or []:
-            try:
-                exclude_id = int(raw_id)
-            except Exception:
+async def preview_binding_effect(
+    db: AsyncSession,
+    *,
+    target_type: str,
+    target_id: int | None = None,
+    target_name: str | None = None,
+    dialer_type: str,
+    dialer_ref: str,
+) -> dict[str, Any]:
+    """Preview how many targets would chain / skip for a draft binding."""
+    sub_result = await db.execute(select(Subscription).where(Subscription.enabled.is_(True)))
+    subs = list(sub_result.scalars().all())
+    node_to_sub_ids: dict[str, set[int]] = {}
+    all_node_names: list[str] = []
+    for sub in subs:
+        for node in sub.raw_nodes or []:
+            if not isinstance(node, dict):
                 continue
-            if exclude_id == group_id:
+            name = str(node.get("name") or "").strip()
+            if not name:
                 continue
-            excluded.update(resolve(exclude_id, set(trail)))
+            all_node_names.append(name)
+            node_to_sub_ids.setdefault(name, set()).add(sub.id)
 
-        # Keep only real proxy node names (drop nested group labels if any slipped in).
-        group_label_set = set(group_names.values())
-        merged = [
-            item
-            for item in dedup_names(selected)
-            if item not in excluded and item not in group_label_set
-        ]
-        cache[group_id] = merged
-        trail.remove(group_id)
-        return merged
+    groups = list(
+        (
+            await db.execute(
+                select(NodeGroup).order_by(NodeGroup.sort_order.asc(), NodeGroup.id.asc())
+            )
+        ).scalars().all()
+    )
+    group_leaves = resolve_group_members(groups, all_node_names, leaves_only=True)
+    known_proxy_names = {n for n in all_node_names if n}
 
-    for gid in mapping:
-        resolve(gid, set())
-    return cache
+    class _Tmp:
+        pass
+
+    tmp = _Tmp()
+    tmp.target_type = target_type
+    tmp.target_id = target_id
+    tmp.target_name = target_name
+    targets = _expand_targets(
+        tmp,  # type: ignore[arg-type]
+        node_to_sub_ids=node_to_sub_ids,
+        group_leaves=group_leaves,
+        known_proxy_names=known_proxy_names,
+    )
+    dialer = str(dialer_ref or "").strip()
+    skipped: list[str] = []
+    chained: list[str] = []
+    if dialer_type == "node_group":
+        dialer_group_id = next((g.id for g in groups if g.name == dialer), None)
+        dialer_leaves = (
+            set(group_leaves.get(dialer_group_id, []))
+            if dialer_group_id is not None
+            else set()
+        )
+        for name in targets:
+            if name == dialer or name in dialer_leaves:
+                skipped.append(name)
+            else:
+                chained.append(name)
+    else:
+        for name in targets:
+            if name == dialer:
+                skipped.append(name)
+            else:
+                chained.append(name)
+
+    return {
+        "target_count": len(targets),
+        "chain_count": len(chained),
+        "skip_count": len(skipped),
+        "chain_samples": chained[:12],
+        "skip_samples": skipped[:12],
+        "dialer_ref": dialer,
+        "dialer_type": dialer_type,
+    }

@@ -12,7 +12,7 @@ from app.models.rule import Rule
 from app.models.rule_category import RuleCategory
 from app.models.subscription import Subscription
 from app.utils.dedup import deduplicate_nodes
-from app.utils.group_utils import dedup_names, with_fallback, resolve_entries
+from app.utils.group_utils import resolve_group_members, with_fallback
 from app.services.proxy_chain_service import apply_bindings_to_nodes
 
 settings = get_settings()
@@ -59,7 +59,14 @@ async def generate_yaml(db: AsyncSession, switches: dict | None = None) -> dict:
         return {
             "yaml": yaml.safe_dump(
                 {"proxies": [], "proxy-groups": [], "rules": []}, allow_unicode=True
-            )
+            ),
+            "stats": {
+                "proxies": 0,
+                "proxy_groups": 0,
+                "rules": 0,
+                "dialer_proxy": 0,
+                "dialer_samples": [],
+            },
         }
 
     output: dict = {}
@@ -80,11 +87,25 @@ async def generate_yaml(db: AsyncSession, switches: dict | None = None) -> dict:
             if dns_raw:
                 output["dns_raw"] = dns_raw
 
+    proxies = output.get("proxies") or []
+    dialered = [
+        {"name": p.get("name"), "dialer-proxy": p.get("dialer-proxy")}
+        for p in proxies
+        if isinstance(p, dict) and p.get("dialer-proxy") and p.get("name")
+    ]
+    stats = {
+        "proxies": len(proxies),
+        "proxy_groups": len(output.get("proxy-groups") or []),
+        "rules": len(output.get("rules") or []),
+        "dialer_proxy": len(dialered),
+        "dialer_samples": dialered[:8],
+    }
+
     primary_comments = await _get_primary_comments(db)
     body = yaml.safe_dump(output, sort_keys=False, allow_unicode=True)
     if primary_comments:
-        return {"yaml": "\n".join(primary_comments) + "\n" + body}
-    return {"yaml": body}
+        return {"yaml": "\n".join(primary_comments) + "\n" + body, "stats": stats}
+    return {"yaml": body, "stats": stats}
 
 
 async def generate_script(db: AsyncSession, switches: dict | None = None) -> dict:
@@ -149,83 +170,16 @@ async def _collect_node_groups(db: AsyncSession, all_nodes: list[dict]) -> list[
         select(NodeGroup).order_by(NodeGroup.sort_order.asc(), NodeGroup.id.asc())
     )
     groups = list(result.scalars().all())
-    mapping = {group.id: group for group in groups}
-    all_node_names = [node.get("name", "") for node in all_nodes if node.get("name")]
-
-    resolved_cache: dict[int, list[str]] = {}
-
-    def resolve_group_nodes(group_id: int, trail: set[int]) -> list[str]:
-        if group_id in resolved_cache:
-            return resolved_cache[group_id]
-        if group_id in trail:
-            return []
-        trail.add(group_id)
-        group = mapping.get(group_id)
-        if not group:
-            trail.remove(group_id)
-            return []
-
-        selected: list[str] = []
-        excluded: set[str] = set(group.exclude_nodes or [])
-
-        entries = resolve_entries(group)
-        # Ordered ops: add/subtract share one entry list.
-        # exclude_group_nodes is the subtract counterpart of group_nodes.
-        for entry in entries:
-            entry_type = entry.get("type")
-            entry_value = entry.get("value")
-            if entry_type == "node":
-                selected.append(str(entry_value))
-            elif entry_type == "group_nodes":
-                try:
-                    child_id = int(entry_value)
-                except Exception:
-                    continue
-                selected.extend(resolve_group_nodes(child_id, trail))
-            elif entry_type == "exclude_group_nodes":
-                try:
-                    child_id = int(entry_value)
-                except Exception:
-                    continue
-                if child_id == group_id:
-                    continue
-                excluded.update(resolve_group_nodes(child_id, set(trail)))
-            elif entry_type == "group":
-                try:
-                    ref_id = int(entry_value)
-                except Exception:
-                    continue
-                if ref_id in mapping:
-                    selected.append(mapping[ref_id].name)
-            elif entry_type == "regex":
-                pattern_text = str(entry_value or "").strip()
-                if not pattern_text:
-                    continue
-                try:
-                    pattern = re.compile(pattern_text)
-                except Exception:
-                    continue
-                # Virtual dynamic matcher, not a frozen static node list.
-                selected.extend([name for name in all_node_names if pattern.search(name)])
-
-        # Legacy mirror field still honored if present.
-        for raw_id in group.exclude_group_ids or []:
-            try:
-                exclude_id = int(raw_id)
-            except Exception:
-                continue
-            if exclude_id == group_id:
-                continue
-            excluded.update(resolve_group_nodes(exclude_id, set(trail)))
-
-        merged = [item for item in dedup_names(selected) if item not in excluded]
-        resolved_cache[group_id] = merged
-        trail.remove(group_id)
-        return merged
+    all_node_names = [
+        str(node.get("name", "")).strip()
+        for node in all_nodes
+        if node.get("name")
+    ]
+    resolved = resolve_group_members(groups, all_node_names, leaves_only=False)
 
     result_groups = []
-    for group in mapping.values():
-        proxies = with_fallback(dedup_names(resolve_group_nodes(group.id, set())), group.add_fallback)
+    for group in groups:
+        proxies = with_fallback(list(resolved.get(group.id, [])), group.add_fallback)
 
         payload = {
             "name": group.name,

@@ -99,6 +99,10 @@
           <div class="muted small-line" v-if="preview.exclude_group_names?.length">
             动态减去策略组：{{ preview.exclude_group_names.join('、') }}
           </div>
+          <div class="muted small-line" v-if="preview.resolve_reasons?.length">
+            解析：{{ preview.resolve_reasons.slice(0, 6).join('；') }}
+            <span v-if="preview.resolve_reasons.length > 6"> …</span>
+          </div>
           <NodePreviewList :nodes="preview.resolved_nodes || []" :collapsed-limit="18" placeholder="搜索此组节点" />
         </article>
       </div>
@@ -185,9 +189,13 @@ function onSaved(payload = {}) {
 }
 
 async function remove(group) {
+  const preview = previewById(group.id)
+  const refs = []
+  if (preview?.include_group_names?.length) refs.push(`被/含组引用: ${preview.include_group_names.join('、')}`)
+  if (preview?.resolved_count) refs.push(`当前解析 ${preview.resolved_count} 个节点`)
   const ok = await store.confirm({
     title: '删除节点组',
-    message: `确定要删除节点组 "${group.name}" 吗？`,
+    message: `确定要删除节点组 "${group.name}" 吗？${refs.length ? '\n\n' + refs.join('\n') : '\n\n若仍被其他策略组或规则引用，后端会拒绝删除。'}`,
     confirmText: '删除',
     danger: true,
   })

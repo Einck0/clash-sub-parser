@@ -30,6 +30,12 @@
             <button class="primary" @click="buildScript" :disabled="!!working">{{ working === 'script' ? '生成中...' : '生成 Script.js' }}</button>
             <button @click="buildAll" :disabled="!!working">{{ working === 'all' ? '生成中...' : '⚡ 全部生成' }}</button>
           </div>
+          <div v-if="yamlStats" class="section-hint" style="margin-top:10px">
+            最近 YAML：节点 {{ yamlStats.proxies }} · 组 {{ yamlStats.proxy_groups }} · 规则 {{ yamlStats.rules }} · dialer-proxy {{ yamlStats.dialer_proxy }}
+            <div v-if="yamlStats.dialer_samples?.length" class="muted" style="margin-top:4px">
+              样例：{{ yamlStats.dialer_samples.map((x) => `${x.name}→${x['dialer-proxy']}`).slice(0, 4).join('；') }}
+            </div>
+          </div>
         </div>
 
         <div class="alert compact-alert" :class="messageType" v-if="message" :role="messageType === 'error' ? 'alert' : 'status'" aria-live="polite">{{ message }}</div>
@@ -151,6 +157,7 @@ const switches = reactive({
 
 const scriptResult = ref('')
 const yamlResult = ref('')
+const yamlStats = ref(null)
 const subscriptions = ref([])
 const selectedSubscriptionId = ref(null)
 const subscriptionResult = ref('')
@@ -249,7 +256,9 @@ async function buildYaml() {
     if (!(await saveSettings())) return
     const { data } = await generateYaml({ ...switches })
     yamlResult.value = data.yaml || ''
-    store.success('YAML 已生成')
+    yamlStats.value = data.stats || null
+    const dialer = data.stats?.dialer_proxy
+    store.success(typeof dialer === 'number' ? `YAML 已生成（dialer-proxy ${dialer}）` : 'YAML 已生成')
   } catch (err) {
     store.error(getApiErrorMessage(err, '生成 YAML 失败'))
   } finally {
@@ -267,8 +276,10 @@ async function buildAll() {
       generateScript({ ...switches, exclude_node_proxies: true }),
     ])
     yamlResult.value = yamlRes.data.yaml || ''
+    yamlStats.value = yamlRes.data.stats || null
     scriptResult.value = scriptRes.data.script || ''
-    store.success('YAML 和 Script.js 已全部生成')
+    const dialer = yamlRes.data.stats?.dialer_proxy
+    store.success(typeof dialer === 'number' ? `YAML/Script 已生成（dialer-proxy ${dialer}）` : 'YAML 和 Script.js 已全部生成')
   } catch (err) {
     store.error(getApiErrorMessage(err, '生成失败'))
   } finally {

@@ -123,6 +123,7 @@ export const createProxyChain = (data: any) => api.post('/proxy-chains', data)
 export const updateProxyChain = (id: number, data: any) => api.patch(`/proxy-chains/${id}`, data)
 export const deleteProxyChain = (id: number) => api.delete(`/proxy-chains/${id}`)
 export const getFinalNodes = () => api.get('/proxy-chains/meta/final-nodes')
+export const previewProxyChain = (data: any) => api.post('/proxy-chains/meta/preview', data)
 
 // Node Groups
 export const getNodeGroups = () => api.get('/node-groups')

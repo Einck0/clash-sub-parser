@@ -139,24 +139,6 @@
         </div>
       </div>
 
-      <div v-if="preview" class="preview-box">
-        <div class="preview-head">
-          <strong>生效预览</strong>
-          <span class="muted">
-            目标 {{ preview.target_count }} · 挂链
-            <b>{{ preview.chain_count }}</b>
-            · 跳过
-            <b>{{ preview.skip_count }}</b>
-          </span>
-        </div>
-        <div v-if="preview.chain_samples?.length" class="sample-line">
-          挂链：{{ preview.chain_samples.slice(0, 4).join('、') }}
-        </div>
-        <div v-if="preview.skip_samples?.length" class="sample-line muted">
-          跳过：{{ preview.skip_samples.slice(0, 4).join('、') }}
-        </div>
-      </div>
-
       <div class="template-actions composer-actions">
         <button @click="runPreview" :disabled="!canCreate || previewing">
           {{ previewing ? '预览中…' : '预览' }}
@@ -164,6 +146,33 @@
         <button class="primary" @click="createBinding" :disabled="saving || !canCreate">
           {{ saving ? '保存中…' : '保存绑定' }}
         </button>
+      </div>
+    </div>
+
+    <div v-if="showPreviewModal && preview" class="modal-backdrop" @click.self="closePreviewModal">
+      <div class="modal preview-modal" role="dialog" aria-modal="true" aria-label="链式生效预览">
+        <div class="row space preview-modal-head">
+          <div>
+            <p class="eyebrow">Chain Preview</p>
+            <h3>生效预览</h3>
+            <p class="section-hint">
+              目标 {{ preview.target_count }} · 挂链 <b>{{ preview.chain_count }}</b> · 跳过
+              <b>{{ preview.skip_count }}</b>
+            </p>
+          </div>
+          <button @click="closePreviewModal">关闭</button>
+        </div>
+        <div v-if="preview.chain_samples?.length" class="sample-block">
+          <strong>挂链样例</strong>
+          <div class="sample-line">{{ preview.chain_samples.slice(0, 12).join('、') }}</div>
+        </div>
+        <div v-if="preview.skip_samples?.length" class="sample-block">
+          <strong>跳过样例</strong>
+          <div class="sample-line muted">{{ preview.skip_samples.slice(0, 12).join('、') }}</div>
+        </div>
+        <div v-if="!preview.chain_samples?.length && !preview.skip_samples?.length" class="empty-mini">
+          没有可展示的样例节点。
+        </div>
       </div>
     </div>
 
@@ -244,6 +253,7 @@ const finalNodes = ref([])
 const nodeGroups = ref([])
 const subscriptions = ref([])
 const preview = ref(null)
+const showPreviewModal = ref(false)
 const listSearch = ref('')
 
 const nodeSearch = ref('')
@@ -395,12 +405,18 @@ async function runPreview() {
   try {
     const { data } = await previewProxyChain(buildPayload())
     preview.value = data
+    showPreviewModal.value = true
   } catch (err) {
     error.value = getApiErrorMessage(err, '预览失败')
     preview.value = null
+    showPreviewModal.value = false
   } finally {
     previewing.value = false
   }
+}
+
+function closePreviewModal() {
+  showPreviewModal.value = false
 }
 
 async function createBinding() {
@@ -414,6 +430,7 @@ async function createBinding() {
     form.dialer_ref = ''
     form.note = ''
     preview.value = null
+    showPreviewModal.value = false
     showComposer.value = false
     await reload()
   } catch (err) {
@@ -509,22 +526,21 @@ async function removeBinding(item) {
   gap: 6px;
   margin-top: 8px;
 }
-.preview-box {
-  margin-top: 12px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  border: 1px solid var(--border, #3333);
-  background: color-mix(in srgb, #22c55e 8%, transparent);
+.preview-modal {
+  width: min(720px, 96vw);
+  max-height: 90vh;
+  overflow: auto;
+  display: grid;
+  gap: 12px;
 }
-.preview-head {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  justify-content: space-between;
-  align-items: center;
+.preview-modal-head h3 {
+  margin: 0 0 4px;
+}
+.sample-block {
+  display: grid;
+  gap: 6px;
 }
 .sample-line {
-  margin-top: 6px;
   font-size: 12px;
   overflow-wrap: anywhere;
 }

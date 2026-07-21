@@ -207,16 +207,6 @@
           </div>
         </div>
 
-        <div v-if="previewMatches.length" class="inline-regex-preview">
-          <div class="row space">
-            <strong>正则预览（贴在条目区）</strong>
-            <span class="muted">{{ previewMatches.length }} 个</span>
-          </div>
-          <div class="mono final-preview">
-            {{ previewMatches.slice(0, 80).join(' | ') }}
-            <span v-if="previewMatches.length > 80"> … +{{ previewMatches.length - 80 }}</span>
-          </div>
-        </div>
       </div>
 
       <div class="selector-section" v-if="showRaw">
@@ -233,6 +223,23 @@
         </button>
         <button @click="showRaw = !showRaw">{{ showRaw ? '隐藏 Raw' : '显示 Raw' }}</button>
         <button @click="close">取消</button>
+      </div>
+
+      <div v-if="showRegexPreview" class="regex-preview-layer" @click.self="closeRegexPreview">
+        <div class="regex-preview-card" role="dialog" aria-modal="true" aria-label="正则预览">
+          <div class="row space">
+            <div>
+              <strong>正则预览</strong>
+              <div class="muted">{{ previewMatches.length }} 个匹配</div>
+            </div>
+            <button @click="closeRegexPreview">关闭</button>
+          </div>
+          <div v-if="previewMatches.length" class="mono final-preview">
+            {{ previewMatches.slice(0, 120).join(' | ') }}
+            <span v-if="previewMatches.length > 120"> … +{{ previewMatches.length - 120 }}</span>
+          </div>
+          <div v-else class="empty-mini">没有匹配节点</div>
+        </div>
       </div>
     </div>
   </div>
@@ -264,6 +271,7 @@ const regexDraftName = ref('')
 const regexDraftError = ref('')
 const draftMatches = ref([])
 const previewMatches = ref([])
+const showRegexPreview = ref(false)
 const editingRegexIndex = ref(-1)
 const editingRegexValue = ref('')
 const editingRegexName = ref('')
@@ -379,15 +387,24 @@ function countRegexMatches(rule) {
   return collectRegexMatches(rule).length
 }
 
+function openRegexPreview(matches) {
+  previewMatches.value = matches || []
+  showRegexPreview.value = true
+}
+
+function closeRegexPreview() {
+  showRegexPreview.value = false
+}
+
 function previewDraftRegex() {
   regexDraftError.value = validateRegex(regexDraft.value.trim())
   if (regexDraftError.value) return
   draftMatches.value = collectRegexMatches(regexDraft.value.trim())
-  previewMatches.value = draftMatches.value
+  openRegexPreview(draftMatches.value)
 }
 
 function previewEntryRegex(rule) {
-  previewMatches.value = collectRegexMatches(rule)
+  openRegexPreview(collectRegexMatches(rule))
 }
 
 function startRegexEdit(index) {
@@ -409,7 +426,7 @@ function cancelRegexEdit() {
 function previewEditingRegex() {
   editingRegexError.value = validateRegex(editingRegexValue.value.trim())
   if (editingRegexError.value) return
-  previewMatches.value = collectRegexMatches(editingRegexValue.value.trim())
+  openRegexPreview(collectRegexMatches(editingRegexValue.value.trim()))
 }
 
 function saveRegexEdit(index) {
@@ -431,7 +448,6 @@ function saveRegexEdit(index) {
   if (label) item.name = label
   copy[index] = item
   form.value.include_entries = copy
-  previewMatches.value = collectRegexMatches(next)
   cancelRegexEdit()
 }
 

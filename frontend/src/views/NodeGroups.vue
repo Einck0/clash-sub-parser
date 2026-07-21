@@ -4,7 +4,7 @@
       <div>
         <p class="eyebrow">Proxy Groups</p>
         <h2>策略组</h2>
-        <p class="page-desc">预览贴在每组上；编辑、排序、看解析结果都在同一张卡里完成。</p>
+        <p class="page-desc">编辑、排序在列表完成；解析预览点「预览」弹窗查看，不占主页面。</p>
       </div>
       <div class="head-actions">
         <button @click="validateRefs" :disabled="loading || !!working">
@@ -44,10 +44,6 @@
             <input v-model="onlyEmpty" type="checkbox" />
             <span>仅空组</span>
           </label>
-          <label class="toolbar-check">
-            <input v-model="expandAllPreview" type="checkbox" />
-            <span>默认展开预览</span>
-          </label>
         </template>
       </PageToolbar>
 
@@ -63,7 +59,7 @@
         <div class="metric-card wide">
           <span class="metric-label">心智</span>
           <span class="metric-tip">
-            组引用 = 输出策略组名；组节点 = 展开叶子节点。预览就在本组下方，不用滚到页面底部。
+            组引用 = 输出策略组名；组节点 = 展开叶子节点。点卡片上「预览」弹窗查节点。
           </span>
         </div>
       </div>
@@ -91,6 +87,7 @@
               </div>
             </div>
             <div class="group-head-actions">
+              <button @click="openPreview(group)">预览</button>
               <button @click="moveById(group.id, -1)" :disabled="originalIndex(group.id) === 0">上移</button>
               <button
                 @click="moveById(group.id, 1)"
@@ -129,43 +126,13 @@
               +{{ (previewById(group.id)?.include_entries || group.include_entries || []).length - 8 }}
             </span>
           </div>
-
-          <div class="inline-preview">
-            <button class="preview-toggle" type="button" @click="togglePreview(group.id)">
-              <span>{{ isPreviewOpen(group.id) ? '收起预览' : '展开预览' }}</span>
-              <span class="muted">{{ resolvedCount(group.id) }} 个解析节点</span>
-            </button>
-
-            <div v-if="isPreviewOpen(group.id)" class="preview-body">
-              <div class="muted small-line" v-if="previewById(group.id)?.include_group_names?.length">
-                引用组：{{ previewById(group.id).include_group_names.join('、') }}
-              </div>
-              <div class="muted small-line" v-if="previewById(group.id)?.include_group_nodes_names?.length">
-                展开组节点：{{
-                  previewById(group.id).include_group_nodes_names.map((n) => `${n}`).join('、')
-                }}
-              </div>
-              <div class="muted small-line" v-if="previewById(group.id)?.exclude_group_names?.length">
-                减去：{{ previewById(group.id).exclude_group_names.join('、') }}
-              </div>
-              <div class="muted small-line" v-if="previewById(group.id)?.resolve_reasons?.length">
-                解析：{{ previewById(group.id).resolve_reasons.slice(0, 4).join('；') }}
-                <span v-if="previewById(group.id).resolve_reasons.length > 4"> …</span>
-              </div>
-              <NodePreviewList
-                :nodes="previewById(group.id)?.resolved_nodes || []"
-                :collapsed-limit="12"
-                placeholder="在本组内搜索节点"
-              />
-            </div>
-          </div>
         </article>
 
         <UiState
           v-if="!filteredGroups.length"
           type="empty"
           :title="groups.length ? '没有匹配的策略组' : '暂无策略组'"
-          :description="groups.length ? '换个关键词或筛选条件试试。' : '创建后可直接在卡片上展开解析预览。'"
+          :description="groups.length ? '换个关键词或筛选条件试试。' : '创建后点「预览」弹窗查解析节点。'"
         >
           <template #actions>
             <button v-if="!groups.length" class="primary" @click="openCreate">添加策略组</button>
@@ -176,11 +143,44 @@
     </template>
 
     <NodeGroupModal v-if="showModal" :group="editing" @saved="onSaved" @close="showModal = false" />
+
+    <div v-if="previewGroup" class="modal-backdrop" @click.self="closePreview">
+      <div class="modal preview-modal" role="dialog" aria-modal="true" :aria-label="previewTitle">
+        <div class="row space preview-modal-head">
+          <div>
+            <p class="eyebrow">Group Preview</p>
+            <h3>{{ previewTitle }}</h3>
+            <p class="section-hint">{{ resolvedCount(previewGroup.id) }} 个解析节点</p>
+          </div>
+          <button @click="closePreview">关闭</button>
+        </div>
+
+        <div class="muted small-line" v-if="previewById(previewGroup.id)?.include_group_names?.length">
+          引用组：{{ previewById(previewGroup.id).include_group_names.join('、') }}
+        </div>
+        <div class="muted small-line" v-if="previewById(previewGroup.id)?.include_group_nodes_names?.length">
+          展开组节点：{{ previewById(previewGroup.id).include_group_nodes_names.join('、') }}
+        </div>
+        <div class="muted small-line" v-if="previewById(previewGroup.id)?.exclude_group_names?.length">
+          减去：{{ previewById(previewGroup.id).exclude_group_names.join('、') }}
+        </div>
+        <div class="muted small-line" v-if="previewById(previewGroup.id)?.resolve_reasons?.length">
+          解析：{{ previewById(previewGroup.id).resolve_reasons.slice(0, 6).join('；') }}
+          <span v-if="previewById(previewGroup.id).resolve_reasons.length > 6"> …</span>
+        </div>
+
+        <NodePreviewList
+          :nodes="previewById(previewGroup.id)?.resolved_nodes || []"
+          :collapsed-limit="40"
+          placeholder="在本组内搜索节点"
+        />
+      </div>
+    </div>
   </section>
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useAppStore } from '../stores/app'
 import {
   deleteNodeGroup,
@@ -207,13 +207,22 @@ const error = ref('')
 const search = ref('')
 const typeFilter = ref('')
 const onlyEmpty = ref(false)
-const expandAllPreview = ref(false)
-const openPreviewIds = ref(new Set())
+const previewGroup = ref(null)
+
+const previewTitle = computed(() => {
+  if (!previewGroup.value) return '组预览'
+  return `${previewGroup.value.name} · 解析预览`
+})
 
 onMounted(load)
 
 function onKeydown(e) {
-  if (e.key === 'Escape' && showModal.value) showModal.value = false
+  if (e.key !== 'Escape') return
+  if (previewGroup.value) {
+    closePreview()
+    return
+  }
+  if (showModal.value) showModal.value = false
 }
 window.addEventListener('keydown', onKeydown)
 onUnmounted(() => window.removeEventListener('keydown', onKeydown))
@@ -255,23 +264,12 @@ const filteredGroups = computed(() => {
   })
 })
 
-watch(expandAllPreview, (on) => {
-  if (on) {
-    openPreviewIds.value = new Set(groups.value.map((g) => g.id))
-  } else {
-    openPreviewIds.value = new Set()
-  }
-})
-
-function isPreviewOpen(id) {
-  return openPreviewIds.value.has(id)
+function openPreview(group) {
+  previewGroup.value = group
 }
 
-function togglePreview(id) {
-  const next = new Set(openPreviewIds.value)
-  if (next.has(id)) next.delete(id)
-  else next.add(id)
-  openPreviewIds.value = next
+function closePreview() {
+  previewGroup.value = null
 }
 
 function originalIndex(id) {
@@ -285,9 +283,6 @@ async function load() {
     const [groupsRes, previewsRes] = await Promise.all([getNodeGroups(), previewNodeGroups()])
     groups.value = groupsRes.data || []
     previews.value = previewsRes.data || []
-    if (expandAllPreview.value) {
-      openPreviewIds.value = new Set(groups.value.map((g) => g.id))
-    }
   } catch (err) {
     error.value = getApiErrorMessage(err, '加载策略组失败')
   } finally {
@@ -480,23 +475,16 @@ function formatEntry(entry) {
   flex-wrap: wrap;
   gap: 6px;
 }
-.inline-preview {
-  border-top: 1px dashed var(--border);
-  padding-top: 10px;
-}
-.preview-toggle {
-  width: 100%;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 8px;
-  text-align: left;
-  min-height: 40px;
-}
-.preview-body {
-  margin-top: 10px;
+.preview-modal {
+  width: min(920px, 96vw);
+  max-height: 90vh;
+  overflow: auto;
   display: grid;
-  gap: 6px;
+  gap: 10px;
+}
+.preview-modal-head h3 {
+  margin: 0 0 4px;
+  overflow-wrap: anywhere;
 }
 .badge-ok {
   background: color-mix(in srgb, var(--ok, #0f8a5f) 18%, transparent);

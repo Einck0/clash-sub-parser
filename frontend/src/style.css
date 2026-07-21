@@ -2662,20 +2662,52 @@ button.danger {
   min-height: 40px;
 }
 
-.inline-regex-preview {
-  margin-top: 10px;
-  padding: 10px 12px;
-  border-radius: 12px;
+.regex-preview-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(15, 23, 42, 0.48);
+}
+
+.regex-preview-card {
+  width: min(720px, 96vw);
+  max-height: 80vh;
+  overflow: auto;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  padding: 14px;
+  display: grid;
+  gap: 10px;
+  box-shadow: var(--shadow-lg);
+}
+
+.regex-preview-card .final-preview {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  max-height: 50vh;
+  overflow: auto;
+  padding: 10px;
+  border-radius: 10px;
   border: 1px solid var(--border);
   background: color-mix(in srgb, var(--brand) 8%, transparent);
 }
 
-.inline-regex-preview .final-preview {
-  margin-top: 6px;
-  font-size: 12px;
-  overflow-wrap: anywhere;
-  max-height: 160px;
-  overflow: auto;
+@media (max-width: 720px) {
+  .regex-preview-layer {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .regex-preview-card {
+    width: 100%;
+    max-height: 85vh;
+    border-radius: 16px 16px 0 0;
+  }
 }
 
 /* ---- Regex entry inline edit ---- */

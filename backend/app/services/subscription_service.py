@@ -15,7 +15,6 @@ from app.schemas.subscription import ManualNodeCreate, SubscriptionCreate, Subsc
 from app.services.security_settings_service import get_fetch_proxy_config, get_security_settings
 from app.utils.clash_parser import compile_regex, parse_node_links, parse_subscription_content
 from app.utils.dedup import deduplicate_nodes
-from app.utils.proxy_chain import normalize_chain, normalize_node_proxy_chains
 from app.utils.validators import validate_fetch_url
 
 settings = get_settings()
@@ -54,8 +53,6 @@ async def create_subscription(
     data["include_node_names"] = _normalize_node_names(data.get("include_node_names", []))
     data["exclude_node_names"] = _normalize_node_names(data.get("exclude_node_names", []))
     data["node_renames"] = _normalize_node_renames(data.get("node_renames", {}))
-    data["proxy_chain"] = normalize_chain(data.get("proxy_chain", []))
-    data["node_proxy_chains"] = normalize_node_proxy_chains(data.get("node_proxy_chains", {}))
     data["manual_nodes"] = _merge_manual_nodes(data.get("manual_nodes") or [], manual_node_links)
     item = Subscription(**data)
     _refresh_selected_nodes(item)
@@ -93,8 +90,6 @@ async def create_manual_node_subscription(
         include_node_names=[],
         exclude_node_names=[],
         node_renames={},
-        proxy_chain=[],
-        node_proxy_chains={},
         source_nodes=[],
         manual_nodes=selected_nodes,
         raw_nodes=deduplicate_nodes(prefixed_nodes),
@@ -124,10 +119,6 @@ async def update_subscription(
         data["exclude_node_names"] = _normalize_node_names(data["exclude_node_names"])
     if "node_renames" in data and data["node_renames"] is not None:
         data["node_renames"] = _normalize_node_renames(data["node_renames"])
-    if "proxy_chain" in data and data["proxy_chain"] is not None:
-        data["proxy_chain"] = normalize_chain(data["proxy_chain"])
-    if "node_proxy_chains" in data and data["node_proxy_chains"] is not None:
-        data["node_proxy_chains"] = normalize_node_proxy_chains(data["node_proxy_chains"])
     if "manual_nodes" in data and data["manual_nodes"] is not None:
         data["manual_nodes"] = deduplicate_nodes(data["manual_nodes"] or [])
     if manual_node_links is not None:

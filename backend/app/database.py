@@ -145,18 +145,6 @@ async def _bootstrap_schema(conn) -> None:
                 text(
                     "ALTER TABLE subscriptions ADD COLUMN node_renames JSON NOT NULL DEFAULT '{}'")
             )
-        if "proxy_chain" not in sub_columns:
-            await conn.execute(
-                text(
-                    "ALTER TABLE subscriptions ADD COLUMN proxy_chain JSON NOT NULL DEFAULT '[]'"
-                )
-            )
-        if "node_proxy_chains" not in sub_columns:
-            await conn.execute(
-                text(
-                    "ALTER TABLE subscriptions ADD COLUMN node_proxy_chains JSON NOT NULL DEFAULT '{}'"
-                )
-            )
 
         sec_result = await conn.execute(text("PRAGMA table_info(security_settings)"))
         sec_columns = {row[1] for row in sec_result.fetchall()}
@@ -231,12 +219,6 @@ async def _bootstrap_schema(conn) -> None:
         )
         await conn.execute(
             text("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS node_renames JSON NOT NULL DEFAULT '{}'")
-        )
-        await conn.execute(
-            text("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS proxy_chain JSON NOT NULL DEFAULT '[]'")
-        )
-        await conn.execute(
-            text("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS node_proxy_chains JSON NOT NULL DEFAULT '{}'")
         )
         await conn.execute(
             text("ALTER TABLE security_settings ADD COLUMN IF NOT EXISTS fetch_proxy_enabled BOOLEAN NOT NULL DEFAULT FALSE")

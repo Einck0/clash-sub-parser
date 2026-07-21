@@ -70,44 +70,8 @@
       >
         节点重命名
       </button>
-      <button
-        type="button"
-        class="feature-chip"
-        :class="{ active: featureChain }"
-        @click="featureChain = !featureChain"
-      >
-        链式代理
-      </button>
     </div>
     <p class="section-hint">节点重命名作用在「加前缀之后」的名字上，策略组匹配的也是最终名。</p>
-
-    <div v-if="featureChain" class="selector-section">
-      <div class="row space">
-        <div>
-          <strong>链式代理（dialer-proxy）</strong>
-          <p class="section-hint">
-            订阅默认链：本订阅节点建连前先走这些 hop（P0 取最后一跳写入 dialer-proxy）。
-            节点覆盖：每行 <code>最终节点名=hop</code>；空 hop 表示强制不链。
-          </p>
-        </div>
-      </div>
-      <label style="display:block;margin-top:8px">
-        <div class="muted">订阅默认链（逗号/换行分隔 hop 名）</div>
-        <textarea
-          v-model="proxyChainText"
-          rows="2"
-          placeholder="例如：香港  或  手动选择"
-        />
-      </label>
-      <label style="display:block;margin-top:8px">
-        <div class="muted">节点覆盖（每行 节点名=hop，空 hop=不链）</div>
-        <textarea
-          v-model="nodeProxyChainsText"
-          rows="4"
-          placeholder="美国落地=香港入口\n观察节点="
-        />
-      </label>
-    </div>
 
     <div v-if="featureManual" class="selector-section">
       <div class="row space">
@@ -270,9 +234,6 @@ const featureManual = ref(false)
 const featureRegex = ref(false)
 const featureRefine = ref(false)
 const featureRename = ref(false)
-const featureChain = ref(false)
-const proxyChainText = ref('')
-const nodeProxyChainsText = ref('')
 const fetching = ref(false)
 const fetchError = ref('')
 
@@ -287,15 +248,12 @@ watch(
       nodeSearch.value = ''
       renameSearch.value = ''
       manualNodeLinks.value = ''
-      proxyChainText.value = ''
-      nodeProxyChainsText.value = ''
       nameEdited.value = false
       lastAutoName.value = ''
       featureManual.value = false
       featureRegex.value = false
       featureRefine.value = false
       featureRename.value = false
-      featureChain.value = false
       return
     }
     form.value = {
@@ -309,14 +267,10 @@ watch(
       include_node_names: value.include_node_names || [],
       exclude_node_names: value.exclude_node_names || [],
       node_renames: { ...(value.node_renames || {}) },
-      proxy_chain: [...(value.proxy_chain || [])],
-      node_proxy_chains: { ...(value.node_proxy_chains || {}) },
       manual_nodes: value.manual_nodes || [],
       source_nodes: value.source_nodes || [],
       raw_nodes: value.raw_nodes || [],
     }
-    proxyChainText.value = chainToText(value.proxy_chain || [])
-    nodeProxyChainsText.value = nodeChainsToText(value.node_proxy_chains || {})
     regexText.value = (value.filter_regex || []).join('\n')
     nodeSearch.value = ''
     renameSearch.value = ''
@@ -328,8 +282,6 @@ watch(
     featureRefine.value =
       (value.include_node_names || []).length > 0 || (value.exclude_node_names || []).length > 0
     featureRename.value = Object.keys(value.node_renames || {}).length > 0
-    featureChain.value =
-      (value.proxy_chain || []).length > 0 || Object.keys(value.node_proxy_chains || {}).length > 0
   },
   { immediate: true }
 )
@@ -565,68 +517,10 @@ function handleSave() {
     include_node_names: form.value.include_node_names || [],
     exclude_node_names: form.value.exclude_node_names || [],
     node_renames: normalizeRenames(form.value.node_renames || {}),
-    proxy_chain: parseProxyChainText(proxyChainText.value),
-    node_proxy_chains: parseNodeProxyChainsText(nodeProxyChainsText.value),
     manual_nodes: form.value.manual_nodes || [],
     manual_node_links: manualNodeLinks.value.trim() || null,
   }
   emit('save', payload)
-}
-
-function chainToText(chain) {
-  return (chain || []).map((item) => String(item || '').trim()).filter(Boolean).join('\n')
-}
-
-function nodeChainsToText(mapping) {
-  const lines = []
-  for (const [key, value] of Object.entries(mapping || {})) {
-    const name = String(key || '').trim()
-    if (!name) continue
-    if (Array.isArray(value)) {
-      lines.push(`${name}=${value.map((v) => String(v || '').trim()).filter(Boolean).join(',')}`)
-    } else if (value == null) {
-      continue
-    } else {
-      lines.push(`${name}=${String(value).trim()}`)
-    }
-  }
-  return lines.join('\n')
-}
-
-function parseProxyChainText(text) {
-  const raw = String(text || '')
-  const parts = raw
-    .split(/[\n,，]/)
-    .map((item) => item.trim())
-    .filter(Boolean)
-  const out = []
-  for (const part of parts) {
-    if (out.length && out[out.length - 1] === part) continue
-    out.push(part)
-  }
-  return out
-}
-
-function parseNodeProxyChainsText(text) {
-  const out = {}
-  for (const line of String(text || '').split('\n')) {
-    const trimmed = line.trim()
-    if (!trimmed) continue
-    const eq = trimmed.indexOf('=')
-    if (eq < 0) continue
-    const name = trimmed.slice(0, eq).trim()
-    if (!name) continue
-    const hopPart = trimmed.slice(eq + 1).trim()
-    if (!hopPart) {
-      out[name] = []
-      continue
-    }
-    out[name] = hopPart
-      .split(/[,，]/)
-      .map((item) => item.trim())
-      .filter(Boolean)
-  }
-  return out
 }
 
 function normalizeRenames(renames) {
@@ -664,8 +558,6 @@ function createDefault() {
     include_node_names: [],
     exclude_node_names: [],
     node_renames: {},
-    proxy_chain: [],
-    node_proxy_chains: {},
     manual_nodes: [],
     source_nodes: [],
     raw_nodes: [],

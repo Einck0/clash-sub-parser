@@ -162,8 +162,11 @@ async def _collect_node_groups(db: AsyncSession, all_nodes: list[dict]) -> list[
             return []
 
         selected: list[str] = []
+        excluded: set[str] = set(group.exclude_nodes or [])
 
         entries = resolve_entries(group)
+        # Ordered ops: add/subtract share one entry list.
+        # exclude_group_nodes is the subtract counterpart of group_nodes.
         for entry in entries:
             entry_type = entry.get("type")
             entry_value = entry.get("value")
@@ -175,6 +178,14 @@ async def _collect_node_groups(db: AsyncSession, all_nodes: list[dict]) -> list[
                 except Exception:
                     continue
                 selected.extend(resolve_group_nodes(child_id, trail))
+            elif entry_type == "exclude_group_nodes":
+                try:
+                    child_id = int(entry_value)
+                except Exception:
+                    continue
+                if child_id == group_id:
+                    continue
+                excluded.update(resolve_group_nodes(child_id, set(trail)))
             elif entry_type == "group":
                 try:
                     ref_id = int(entry_value)
@@ -193,7 +204,7 @@ async def _collect_node_groups(db: AsyncSession, all_nodes: list[dict]) -> list[
                 # Virtual dynamic matcher, not a frozen static node list.
                 selected.extend([name for name in all_node_names if pattern.search(name)])
 
-        excluded = set(group.exclude_nodes or [])
+        # Legacy mirror field still honored if present.
         for raw_id in group.exclude_group_ids or []:
             try:
                 exclude_id = int(raw_id)
@@ -201,8 +212,8 @@ async def _collect_node_groups(db: AsyncSession, all_nodes: list[dict]) -> list[
                 continue
             if exclude_id == group_id:
                 continue
-            # Dynamic subtract: expand target group nodes at resolve-time.
             excluded.update(resolve_group_nodes(exclude_id, set(trail)))
+
         merged = [item for item in dedup_names(selected) if item not in excluded]
         resolved_cache[group_id] = merged
         trail.remove(group_id)

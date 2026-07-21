@@ -162,8 +162,10 @@ async def preview_node_groups(db: AsyncSession) -> list[dict]:
             return []
 
         selected: list[str] = []
+        excluded: set[str] = set(group.exclude_nodes or [])
 
         entries = resolve_entries(group)
+        # Ordered ops: add/subtract share one entry list.
         for entry in entries:
             entry_type = entry.get("type")
             entry_value = entry.get("value")
@@ -182,6 +184,14 @@ async def preview_node_groups(db: AsyncSession) -> list[dict]:
                 except Exception:
                     continue
                 selected.extend(resolve_nodes(ref_id, trail))
+            elif entry_type == "exclude_group_nodes":
+                try:
+                    ref_id = int(entry_value)
+                except Exception:
+                    continue
+                if ref_id == group_id:
+                    continue
+                excluded.update(resolve_nodes(ref_id, set(trail)))
             elif entry_type == "regex":
                 pattern_text = str(entry_value or "").strip()
                 if not pattern_text:
@@ -192,7 +202,7 @@ async def preview_node_groups(db: AsyncSession) -> list[dict]:
                     continue
                 selected.extend([name for name in node_names if pattern.search(name)])
 
-        excluded = set(group.exclude_nodes or [])
+        # Legacy mirror field still honored if present
         for raw_id in group.exclude_group_ids or []:
             try:
                 exclude_id = int(raw_id)
@@ -201,6 +211,7 @@ async def preview_node_groups(db: AsyncSession) -> list[dict]:
             if exclude_id == group_id:
                 continue
             excluded.update(resolve_nodes(exclude_id, set(trail)))
+
         merged = [name for name in dedup_names(selected) if name not in excluded]
         cache[group_id] = merged
         trail.remove(group_id)
@@ -210,6 +221,8 @@ async def preview_node_groups(db: AsyncSession) -> list[dict]:
     for group in groups:
         include_group_names: list[str] = []
         include_group_nodes_names: list[str] = []
+        exclude_group_names: list[str] = []
+        exclude_ids: list[int] = []
         entries = resolve_entries(group)
         for entry in entries:
             entry_type = entry.get("type")
@@ -218,13 +231,19 @@ async def preview_node_groups(db: AsyncSession) -> list[dict]:
                 include_group_names.append(group_map[entry_value].name)
             if entry_type == "group_nodes" and entry_value in group_map:
                 include_group_nodes_names.append(group_map[entry_value].name)
-        exclude_group_names: list[str] = []
+            if entry_type == "exclude_group_nodes" and entry_value in group_map:
+                exclude_ids.append(int(entry_value))
+                exclude_group_names.append(group_map[entry_value].name)
+        # Legacy mirror field still shown if present.
         for raw_id in group.exclude_group_ids or []:
             try:
                 exclude_id = int(raw_id)
             except Exception:
                 continue
+            if exclude_id in exclude_ids:
+                continue
             if exclude_id in group_map:
+                exclude_ids.append(exclude_id)
                 exclude_group_names.append(group_map[exclude_id].name)
         resolved_nodes = with_fallback(resolve_nodes(group.id, set()), group.add_fallback)
         preview.append(
@@ -235,7 +254,7 @@ async def preview_node_groups(db: AsyncSession) -> list[dict]:
                 "resolved_count": len(resolved_nodes),
                 "include_group_names": include_group_names,
                 "include_group_nodes_names": include_group_nodes_names,
-                "exclude_group_ids": list(group.exclude_group_ids or []),
+                "exclude_group_ids": exclude_ids,
                 "exclude_group_names": exclude_group_names,
                 "include_entries": entries,
             }
@@ -269,36 +288,40 @@ async def _validate_cycles_or_raise(db: AsyncSession) -> None:
 
     Edges include:
     - include group / group_nodes (add)
-    - exclude_group_ids (subtract)
+    - exclude_group_nodes entries (subtract)
+    - legacy exclude_group_ids mirror (compat)
 
     Same graph, same cycle check. Saving with a cycle is rejected.
     """
-    result = await db.execute(
-        select(
-            NodeGroup.id,
-            NodeGroup.name,
-            NodeGroup.include_group_ids,
-            NodeGroup.include_group_nodes_ids,
-            NodeGroup.exclude_group_ids,
-        )
-    )
+    result = await db.execute(select(NodeGroup))
+    all_groups = list(result.scalars().all())
     graph: dict[int, list[int]] = {}
     id_to_name: dict[int, str] = {}
-    for row in result.all():
-        group_id = int(row[0])
-        id_to_name[group_id] = str(row[1] or "")
+    for g in all_groups:
+        id_to_name[g.id] = g.name or ""
         edges: list[int] = []
         seen: set[int] = set()
-        for raw in list(row[2] or []) + list(row[3] or []) + list(row[4] or []):
+        # From ordered entries (primary)
+        for entry in resolve_entries(g):
+            t = entry.get("type")
+            if t in ("group", "group_nodes", "exclude_group_nodes"):
+                try:
+                    child = int(entry.get("value"))
+                except Exception:
+                    continue
+                if child not in seen:
+                    seen.add(child)
+                    edges.append(child)
+        # Legacy mirrors
+        for raw in list(g.include_group_ids or []) + list(g.include_group_nodes_ids or []) + list(g.exclude_group_ids or []):
             try:
                 child = int(raw)
             except Exception:
                 continue
-            if child in seen:
-                continue
-            seen.add(child)
-            edges.append(child)
-        graph[group_id] = edges
+            if child not in seen:
+                seen.add(child)
+                edges.append(child)
+        graph[g.id] = edges
     validate_no_circular_reference(graph, id_to_name=id_to_name)
 
 
@@ -342,6 +365,7 @@ def _sync_entry_derived_fields(data: dict) -> None:
     include_nodes: list[str] = []
     include_group_ids: list[int] = []
     include_group_nodes_ids: list[int] = []
+    exclude_group_ids: list[int] = []
     regex_from_entries: list[str] = []
 
     for entry in entries:
@@ -353,6 +377,8 @@ def _sync_entry_derived_fields(data: dict) -> None:
             include_group_ids.append(int(value))
         elif entry_type == "group_nodes":
             include_group_nodes_ids.append(int(value))
+        elif entry_type == "exclude_group_nodes":
+            exclude_group_ids.append(int(value))
         elif entry_type == "regex":
             rule = str(value or "").strip()
             if rule:
@@ -361,32 +387,47 @@ def _sync_entry_derived_fields(data: dict) -> None:
     data["include_nodes"] = include_nodes
     data["include_group_ids"] = include_group_ids
     data["include_group_nodes_ids"] = include_group_nodes_ids
+    # Keep legacy mirror field in sync for old readers / badges.
+    data["exclude_group_ids"] = exclude_group_ids
     data["regex_rules"] = regex_from_entries
     data["kind"] = "regex" if regex_from_entries else "manual"
 
 
 async def _ensure_group_not_referenced(db: AsyncSession, item: NodeGroup) -> None:
-    group_result = await db.execute(
-        select(
-            NodeGroup.id,
-            NodeGroup.name,
-            NodeGroup.include_group_ids,
-            NodeGroup.include_group_nodes_ids,
-            NodeGroup.exclude_group_ids,
-        ).where(NodeGroup.id != item.id)
-    )
-    for row in group_result.all():
-        include_group_ids = row[2] or []
-        include_group_nodes_ids = row[3] or []
-        exclude_group_ids = row[4] or []
-        if (
-            item.id in include_group_ids
-            or item.id in include_group_nodes_ids
-            or item.id in exclude_group_ids
-        ):
+    """Check ordered entries and legacy mirrors for any group reference."""
+    all_groups = (
+        await db.execute(select(NodeGroup).where(NodeGroup.id != item.id))
+    ).scalars().all()
+    for g in all_groups:
+        for entry in resolve_entries(g):
+            t = entry.get("type")
+            if t not in ("group", "group_nodes", "exclude_group_nodes"):
+                continue
+            try:
+                if int(entry.get("value")) == item.id:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"策略组仍被「{g.name}」引用（加/减引用都算），"
+                            "请先移除引用再删除。"
+                        ),
+                    )
+            except (TypeError, ValueError):
+                continue
+        if item.id in (g.include_group_ids or []):
             raise HTTPException(
                 status_code=400,
-                detail=f"策略组仍被「{row[1]}」引用（加/减引用都算），请先移除引用再删除。",
+                detail=f"策略组仍被「{g.name}」引用，请先移除引用再删除。",
+            )
+        if item.id in (g.include_group_nodes_ids or []):
+            raise HTTPException(
+                status_code=400,
+                detail=f"策略组仍被「{g.name}」引用，请先移除引用再删除。",
+            )
+        if item.id in (g.exclude_group_ids or []):
+            raise HTTPException(
+                status_code=400,
+                detail=f"策略组仍被「{g.name}」引用，请先移除引用再删除。",
             )
 
     rule_result = await db.execute(select(Rule.name, Rule.proxy).where(Rule.proxy == item.name))
@@ -400,7 +441,7 @@ async def _ensure_group_not_referenced(db: AsyncSession, item: NodeGroup) -> Non
 
 
 def _normalize_entries(entries: list[dict]) -> list[dict]:
-    allowed_types = {"node", "group", "group_nodes", "regex"}
+    allowed_types = {"node", "group", "group_nodes", "exclude_group_nodes", "regex"}
     normalized: list[dict] = []
     for item in entries:
         if hasattr(item, "model_dump"):

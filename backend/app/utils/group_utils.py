@@ -35,6 +35,7 @@ def resolve_entries(group: NodeGroup) -> list[dict]:
     - group: reference another proxy-group by id (insert group name)
     - group_nodes: expand another group's resolved nodes
     - regex: virtual dynamic matcher (value is regex string). Not a frozen node.
+    - exclude_group_nodes: expand another group's resolved nodes and subtract them (ordered)
 
     After migration, include_entries is the source of truth. Keep a tiny
     fallback only for completely empty groups with legacy include_* fields.
@@ -50,4 +51,6 @@ def resolve_entries(group: NodeGroup) -> list[dict]:
         fallback.append({"type": "group", "value": group_id})
     for group_id in group.include_group_nodes_ids or []:
         fallback.append({"type": "group_nodes", "value": group_id})
+    for group_id in group.exclude_group_ids or []:
+        fallback.append({"type": "exclude_group_nodes", "value": group_id})
     return fallback

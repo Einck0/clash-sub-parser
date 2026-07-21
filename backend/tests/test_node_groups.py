@@ -95,11 +95,51 @@ async def test_exclude_group_cycle_rejected(client):
     cycle = await client.patch(
         f"/api/node-groups/{b_id}",
         json={
-            "include_entries": [{"type": "node", "value": "n2"}],
-            "exclude_group_ids": [a_id],
+            "include_entries": [
+                {"type": "node", "value": "n2"},
+                {"type": "exclude_group_nodes", "value": a_id},
+            ],
         },
     )
     assert cycle.status_code == 400
     detail = str(cycle.json().get("detail") or "")
     assert "循环" in detail or "Circular" in detail
+
+
+@pytest.mark.asyncio
+async def test_exclude_group_nodes_entry_resolves(client):
+    base = await client.post(
+        "/api/node-groups",
+        json={
+            "name": "cheap",
+            "group_type": "select",
+            "include_entries": [{"type": "node", "value": "cheap-1"}],
+        },
+    )
+    region = await client.post(
+        "/api/node-groups",
+        json={
+            "name": "usa",
+            "group_type": "select",
+            "include_entries": [
+                {"type": "node", "value": "us-1"},
+                {"type": "node", "value": "cheap-1"},
+                {"type": "exclude_group_nodes", "value": base.json()["id"]},
+            ],
+        },
+    )
+    assert base.status_code == 201
+    assert region.status_code == 201
+    data = region.json()
+    assert data["exclude_group_ids"] == [base.json()["id"]]
+    assert any(
+        e.get("type") == "exclude_group_nodes" and e.get("value") == base.json()["id"]
+        for e in data["include_entries"]
+    )
+
+    preview = await client.get("/api/node-groups/_preview")
+    assert preview.status_code == 200
+    item = next(g for g in preview.json() if g["id"] == data["id"])
+    assert "us-1" in item["resolved_nodes"]
+    assert "cheap-1" not in item["resolved_nodes"]
 

@@ -78,6 +78,7 @@
           <div class="row" style="gap:6px">
             <button @click="addGroupRef" :disabled="!selectedGroupId">添加组引用</button>
             <button @click="addGroupNodes" :disabled="!selectedGroupId">添加组节点</button>
+            <button @click="addExcludeGroupNodes" :disabled="!selectedGroupId">减去组节点</button>
           </div>
         </div>
 
@@ -181,37 +182,6 @@
         </div>
       </div>
 
-      <div class="selector-section">
-        <div class="row space">
-          <div>
-            <strong>减去策略组（动态）</strong>
-            <p class="section-hint">
-              保存的是策略组引用，不是当时节点快照。预览/生成时会实时展开该组当前节点并从本组合并结果中排除。
-              「添加组节点」同样是动态展开。
-            </p>
-          </div>
-        </div>
-        <div class="node-search-row" style="margin-top:8px">
-          <select v-model.number="excludeGroupId">
-            <option :value="null">选择要减去的策略组</option>
-            <option v-for="g in selectableExcludeGroups" :key="`ex-${g.id}`" :value="g.id">{{ g.name }}</option>
-          </select>
-          <button @click="addExcludeGroup" :disabled="!excludeGroupId">减去该策略组</button>
-        </div>
-        <div v-if="(form.exclude_group_ids || []).length" class="node-select-list" style="margin-top:8px">
-          <div v-for="(gid, idx) in form.exclude_group_ids" :key="`exg-${gid}-${idx}`" class="node-select-row">
-            <div class="node-select-name mono">
-              <strong>{{ groupNameById(Number(gid)) }}</strong>
-              <span>动态排除 · 当前约 {{ countExcludeGroupMatches(Number(gid)) }} 个节点</span>
-            </div>
-            <div class="node-select-actions">
-              <button class="danger" @click="removeExcludeGroup(idx)">删</button>
-            </div>
-          </div>
-        </div>
-        <div v-else class="empty-mini" style="margin-top:8px">暂无动态排除策略组。</div>
-      </div>
-
       <div class="selector-section" v-if="previewMatches.length">
         <div class="row space">
           <strong>正则预览结果</strong>
@@ -260,7 +230,6 @@ const store = useAppStore()
 const allGroups = ref([])
 const allNodes = ref([])
 const selectedGroupId = ref(null)
-const excludeGroupId = ref(null)
 const selectedNodeName = ref('')
 const showRaw = ref(false)
 const rawJson = ref('')
@@ -300,7 +269,6 @@ watch(
         include_entries: entries,
         add_fallback: value.add_fallback === true,
         exclude_nodes: [...(value.exclude_nodes || [])],
-        exclude_group_ids: [...(value.exclude_group_ids || [])].map((id) => Number(id)).filter((id) => Number.isInteger(id)),
         url_test_config: value.url_test_config || {},
         load_balance_config: value.load_balance_config || {},
         fallback_config: value.fallback_config || {},
@@ -331,9 +299,6 @@ watch(editingRegexValue, () => {
 })
 
 const selectableGroups = computed(() => allGroups.value.filter((item) => item.id !== form.value.id))
-const selectableExcludeGroups = computed(() =>
-  selectableGroups.value.filter((item) => !(form.value.exclude_group_ids || []).includes(item.id)),
-)
 const selectableNodeNames = computed(() =>
   allNodes.value.map((node) => String(node.name || '').trim()).filter(Boolean),
 )
@@ -490,74 +455,20 @@ function addGroupNodes() {
   pushEntry({ type: 'group_nodes', value: Number(selectedGroupId.value) })
 }
 
-function removeExcludeGroup(index) {
-  const copy = [...(form.value.exclude_group_ids || [])]
-  copy.splice(index, 1)
-  form.value.exclude_group_ids = copy
-}
-
-function collectGroupResolvedNames(groupId, trail = new Set()) {
-  // Preview helper only: same dynamic semantics as backend group_nodes / exclude_group_ids.
-  const id = Number(groupId)
-  if (!Number.isInteger(id) || trail.has(id)) return []
-  const group = allGroups.value.find((item) => item.id === id)
-  if (!group) return []
-  trail.add(id)
-  const entries = normalizeEntries(group.include_entries || buildEntriesFallback(group))
-  const names = []
-  const nodePool = allNodes.value.map((n) => String(n.name || '').trim()).filter(Boolean)
-  for (const entry of entries) {
-    if (entry.type === 'node') {
-      names.push(String(entry.value || '').trim())
-      continue
-    }
-    if (entry.type === 'group_nodes') {
-      names.push(...collectGroupResolvedNames(entry.value, new Set(trail)))
-      continue
-    }
-    if (entry.type === 'regex') {
-      const rule = String(entry.value || '').trim()
-      if (!rule) continue
-      let pattern
-      try {
-        pattern = new RegExp(rule, 'i')
-      } catch (_) {
-        continue
-      }
-      for (const name of nodePool) {
-        if (pattern.test(name)) names.push(name)
-      }
-    }
-  }
-  const excluded = new Set(group.exclude_nodes || [])
-  for (const rawId of group.exclude_group_ids || []) {
-    for (const name of collectGroupResolvedNames(rawId, new Set(trail))) {
-      excluded.add(name)
-    }
-  }
-  return uniq(names.filter((name) => name && !excluded.has(name)))
-}
-
-function countExcludeGroupMatches(groupId) {
-  return collectGroupResolvedNames(groupId).length
-}
-
-function addExcludeGroup() {
-  if (!excludeGroupId.value) return
-  const gid = Number(excludeGroupId.value)
-  if (!Number.isInteger(gid)) return
+function addExcludeGroupNodes() {
+  if (!selectedGroupId.value) return
+  const gid = Number(selectedGroupId.value)
   if (gid === form.value.id) {
     error.value = '不能减去自己'
     return
   }
-  const current = [...(form.value.exclude_group_ids || [])]
-  if (current.includes(gid)) {
-    excludeGroupId.value = null
-    return
+  const entry = { type: 'exclude_group_nodes', value: gid }
+  const exists = form.value.include_entries.some(
+    (item) => item.type === entry.type && String(item.value) === String(entry.value)
+  )
+  if (!exists) {
+    form.value.include_entries.push(entry)
   }
-  form.value.exclude_group_ids = [...current, gid]
-  excludeGroupId.value = null
-  error.value = ''
 }
 
 function pushEntry(entry) {
@@ -597,6 +508,7 @@ function typeLabel(type) {
   if (type === 'node') return '静态节点'
   if (type === 'group') return '节点组引用'
   if (type === 'group_nodes') return '节点组节点'
+  if (type === 'exclude_group_nodes') return '减去组节点(动态)'
   if (type === 'regex') return '正则筛选(虚拟)'
   return type
 }
@@ -605,6 +517,7 @@ function formatEntry(entry) {
   if (entry.type === 'node') return `${entry.value}`
   if (entry.type === 'group') return `${groupNameById(Number(entry.value))}`
   if (entry.type === 'group_nodes') return `${groupNameById(Number(entry.value))}(节点)`
+  if (entry.type === 'exclude_group_nodes') return `减${groupNameById(Number(entry.value))}节点`
   if (entry.type === 'regex') {
     const label = String(entry.name || entry.label || '').trim() || '正则'
     return `${label} · ${truncateText(String(entry.value || ''), 48)}`
@@ -624,7 +537,6 @@ function syncFromRaw() {
       ...parsed,
       include_entries: normalizeEntries(parsed.include_entries || buildEntriesFallback(parsed)),
       exclude_nodes: uniq(parsed.exclude_nodes || []),
-      exclude_group_ids: uniqNumbers(parsed.exclude_group_ids || []),
     }
   } catch (err) {
     error.value = `Raw JSON 格式错误: ${err.message}`
@@ -632,7 +544,7 @@ function syncFromRaw() {
 }
 
 
-function detectReferenceCycle(entries, excludeGroupIds = []) {
+function detectReferenceCycle(entries) {
   // Client-side soft check. Backend still enforces the same graph.
   const selfId = form.value.id == null ? null : Number(form.value.id)
   const graph = new Map()
@@ -650,13 +562,8 @@ function detectReferenceCycle(entries, excludeGroupIds = []) {
         ? entries
         : normalizeEntries(group.include_entries || buildEntriesFallback(group))
     for (const entry of sourceEntries) {
-      if (entry.type === 'group' || entry.type === 'group_nodes') push(entry.value)
+      if (entry.type === 'group' || entry.type === 'group_nodes' || entry.type === 'exclude_group_nodes') push(entry.value)
     }
-    const excludes =
-      selfId != null && group.id === selfId
-        ? excludeGroupIds
-        : group.exclude_group_ids || []
-    for (const raw of excludes) push(raw)
     graph.set(group.id, edges)
   }
   // New group not yet in allGroups
@@ -670,9 +577,14 @@ function detectReferenceCycle(entries, excludeGroupIds = []) {
       edges.push(id)
     }
     for (const entry of entries) {
-      if (entry.type === 'group' || entry.type === 'group_nodes') push(entry.value)
+      if (
+        entry.type === 'group'
+        || entry.type === 'group_nodes'
+        || entry.type === 'exclude_group_nodes'
+      ) {
+        push(entry.value)
+      }
     }
-    for (const raw of excludeGroupIds) push(raw)
     // use temporary id 0 for draft
     graph.set(0, edges)
   }
@@ -729,7 +641,7 @@ async function save() {
   }
 
   // Same graph check as backend: include edges + exclude edges.
-  const cycleHint = detectReferenceCycle(entries, form.value.exclude_group_ids || [])
+  const cycleHint = detectReferenceCycle(entries)
   if (cycleHint) {
     error.value = cycleHint
     store.error(cycleHint)
@@ -744,7 +656,6 @@ async function save() {
     include_entries: entries,
     add_fallback: form.value.add_fallback === true,
     exclude_nodes: uniq(form.value.exclude_nodes || []),
-    exclude_group_ids: uniqNumbers(form.value.exclude_group_ids || []),
     url_test_config: form.value.url_test_config || {},
     load_balance_config: form.value.load_balance_config || {},
     fallback_config: form.value.fallback_config || {},
@@ -789,7 +700,6 @@ function defaultForm() {
     include_entries: [],
     add_fallback: false,
     exclude_nodes: [],
-    exclude_group_ids: [],
     url_test_config: {},
     load_balance_config: {},
     fallback_config: {},
@@ -797,7 +707,7 @@ function defaultForm() {
 }
 
 function normalizeEntries(entries) {
-  const allowed = new Set(['node', 'group', 'group_nodes', 'regex'])
+  const allowed = new Set(['node', 'group', 'group_nodes', 'exclude_group_nodes', 'regex'])
   const out = []
   for (const item of entries) {
     const type = String(item?.type || '').trim()
@@ -830,6 +740,7 @@ function buildEntriesFallback(value) {
   for (const name of value.include_nodes || []) entries.push({ type: 'node', value: name })
   for (const id of value.include_group_ids || []) entries.push({ type: 'group', value: id })
   for (const id of value.include_group_nodes_ids || []) entries.push({ type: 'group_nodes', value: id })
+  for (const id of value.exclude_group_ids || []) entries.push({ type: 'exclude_group_nodes', value: id })
   return entries
 }
 
@@ -837,17 +748,6 @@ function uniq(items) {
   return [...new Set(items)]
 }
 
-function uniqNumbers(items) {
-  const out = []
-  const seen = new Set()
-  for (const raw of items || []) {
-    const n = Number(raw)
-    if (!Number.isInteger(n) || seen.has(n)) continue
-    seen.add(n)
-    out.push(n)
-  }
-  return out
-}
 
 function uniqBy(items, getKey) {
   const seen = new Set()

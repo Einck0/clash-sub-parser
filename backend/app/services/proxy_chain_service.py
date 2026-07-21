@@ -133,7 +133,7 @@ async def _validate_binding_refs(db: AsyncSession, data: dict[str, Any]) -> None
         data["target_name"] = name
         data["target_id"] = None
         if name == dialer_ref and data.get("dialer_type") == "node":
-            raise HTTPException(status_code=400, detail="node cannot dialer itself")
+            raise HTTPException(status_code=400, detail="节点不能把跳板设为自己")
 
     # Soft existence check for dialer (warn via 400 if completely unknown).
     known_nodes, known_groups = await _known_names(db)
@@ -141,6 +141,9 @@ async def _validate_binding_refs(db: AsyncSession, data: dict[str, Any]) -> None
         raise HTTPException(status_code=400, detail=f"dialer node not found: {dialer_ref}")
     if data["dialer_type"] == "node_group" and dialer_ref not in known_groups:
         raise HTTPException(status_code=400, detail=f"dialer group not found: {dialer_ref}")
+
+    # Membership / dialer cycle: target leaves must not include or depend on dialer.
+    await _validate_no_cycle(db, data, known_nodes=known_nodes)
 
 
 async def _known_names(db: AsyncSession) -> tuple[set[str], set[str]]:
@@ -227,6 +230,11 @@ async def apply_bindings_to_nodes(db: AsyncSession, nodes: list[dict]) -> list[d
             group_leaves=group_leaves,
             known_proxy_names=known_proxy_names,
         )
+        # Skip nodes that would form dialer membership loops with group dialers.
+        if binding.dialer_type == "node_group":
+            dialer_group_id = next((g.id for g in groups if g.name == dialer), None)
+            dialer_leaves = set(group_leaves.get(dialer_group_id, [])) if dialer_group_id is not None else set()
+            targets = [n for n in targets if n not in dialer_leaves and n != dialer]
         prio = TARGET_PRIORITY.get(binding.target_type, 0)
         for name in targets:
             if name == dialer:
@@ -247,6 +255,101 @@ async def apply_bindings_to_nodes(db: AsyncSession, nodes: list[dict]) -> list[d
             copied["dialer-proxy"] = hit[1]
         out.append(copied)
     return out
+
+
+async def _validate_no_cycle(
+    db: AsyncSession,
+    data: dict[str, Any],
+    *,
+    known_nodes: set[str],
+) -> None:
+    """Reject bindings that would make targets dial through a group containing themselves.
+
+    Classic bad case:
+      subscription 7li -> dialer group "链式"
+      group "链式" expands to many 7li nodes
+      => those nodes get dialer-proxy: 链式 while also being members of 链式
+      => Clash client loop
+    """
+    dialer_type = data.get("dialer_type")
+    dialer_ref = str(data.get("dialer_ref") or "").strip()
+    if not dialer_ref:
+        return
+
+    # Build current world names for target expansion.
+    sub_result = await db.execute(select(Subscription).where(Subscription.enabled.is_(True)))
+    subs = list(sub_result.scalars().all())
+    node_to_sub_ids: dict[str, set[int]] = {}
+    all_node_names: list[str] = []
+    for sub in subs:
+        for node in sub.raw_nodes or []:
+            if not isinstance(node, dict):
+                continue
+            name = str(node.get("name") or "").strip()
+            if not name:
+                continue
+            all_node_names.append(name)
+            node_to_sub_ids.setdefault(name, set()).add(sub.id)
+
+    group_result = await db.execute(select(NodeGroup))
+    groups = list(group_result.scalars().all())
+    group_leaves = _resolve_all_group_leaves(groups, all_node_names)
+    known_proxy_names = set(known_nodes) | {n for n in all_node_names if n}
+
+    # Temporary binding-like object for expand.
+    class _Tmp:
+        pass
+
+    tmp = _Tmp()
+    tmp.target_type = data["target_type"]
+    tmp.target_id = data.get("target_id")
+    tmp.target_name = data.get("target_name")
+    targets = set(
+        _expand_targets(
+            tmp,  # type: ignore[arg-type]
+            node_to_sub_ids=node_to_sub_ids,
+            group_leaves=group_leaves,
+            known_proxy_names=known_proxy_names,
+        )
+    )
+    if not targets:
+        return
+
+    if dialer_type == "node":
+        # Subscription/group targets may include the entry node itself; that is OK.
+        # Generate already skips self dialer. Only pure node-target self-ref is fatal
+        # (already checked above). Reject only when target_type=node and names match.
+        if data.get("target_type") == "node" and dialer_ref in targets:
+            raise HTTPException(
+                status_code=400,
+                detail="节点不能把跳板设为自己",
+            )
+        return
+
+    if dialer_type == "node_group":
+        g = next((x for x in groups if x.name == dialer_ref), None)
+        if g is None:
+            return
+        leaves = set(group_leaves.get(g.id, []))
+        overlap = sorted(targets & leaves)
+        if overlap:
+            sample = "、".join(overlap[:5])
+            more = f" 等 {len(overlap)} 个" if len(overlap) > 5 else ""
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"会形成环：目标节点会 dialer 到策略组「{dialer_ref}」，"
+                    f"但该组包含这些目标节点（{sample}{more}）。"
+                    "跳板组必须是「入口集合」，不能包含被挂链的出口节点。"
+                ),
+            )
+        # Also forbid target group == dialer group.
+        if data.get("target_type") == "node_group" and data.get("target_id") == g.id:
+            raise HTTPException(
+                status_code=400,
+                detail=f"会形成环：策略组「{dialer_ref}」不能把自己当跳板",
+            )
+
 
 
 def _expand_targets(

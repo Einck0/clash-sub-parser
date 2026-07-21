@@ -69,14 +69,15 @@ async def test_proxy_chain_node_binding_and_priority(client):
     )
     assert sub_bind.status_code == 201, sub_bind.text
 
-    gname = group["name"]
+    # Japan uses a different entry node (still a node dialer); group dialer that
+    # contains the target itself is a cycle and is covered by a separate test.
     jp = await client.post(
         "/api/proxy-chains",
         json={
             "target_type": "node",
             "target_name": exit_jp,
-            "dialer_type": "node_group",
-            "dialer_ref": gname,
+            "dialer_type": "node",
+            "dialer_ref": entry,
             "enabled": True,
         },
     )
@@ -96,7 +97,8 @@ async def test_proxy_chain_node_binding_and_priority(client):
     data = yaml.safe_load(gen.json()["yaml"])
     proxies = {p["name"]: p for p in data.get("proxies") or []}
     assert proxies[exit_us].get("dialer-proxy") == entry
-    assert proxies[exit_jp].get("dialer-proxy") == gname
+    assert proxies[exit_jp].get("dialer-proxy") == entry
+    # entry may be in subscription target set, but must not self-dialer
     assert proxies.get(entry, {}).get("dialer-proxy") != entry
 
 
@@ -194,3 +196,36 @@ async def test_proxy_chain_crud_list_delete(client):
     assert patched.json()["enabled"] is False
     deleted = await client.delete(f"/api/proxy-chains/{bid}")
     assert deleted.status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_proxy_chain_rejects_group_membership_cycle(client):
+    """subscription/group targets cannot dialer a group that contains them."""
+    sub, group = await _seed_nodes(client)
+    # group "美国组" contains 美国落地/日本落地
+    # binding whole subscription to dialer group 美国组 => membership cycle
+    bad = await client.post(
+        "/api/proxy-chains",
+        json={
+            "target_type": "subscription",
+            "target_id": sub["id"],
+            "dialer_type": "node_group",
+            "dialer_ref": group["name"],
+            "enabled": True,
+        },
+    )
+    assert bad.status_code == 400, bad.text
+    assert "环" in bad.json()["detail"]
+
+    # same group dialer to itself
+    bad2 = await client.post(
+        "/api/proxy-chains",
+        json={
+            "target_type": "node_group",
+            "target_id": group["id"],
+            "dialer_type": "node_group",
+            "dialer_ref": group["name"],
+            "enabled": True,
+        },
+    )
+    assert bad2.status_code == 400, bad2.text

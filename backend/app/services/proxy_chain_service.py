@@ -85,6 +85,38 @@ async def delete_binding(db: AsyncSession, item: ProxyChainBinding) -> None:
     await db.commit()
 
 
+def _node_meta(node: dict[str, Any]) -> dict[str, Any]:
+    port = node.get("port")
+    try:
+        port_val = int(port) if port is not None and str(port).strip() != "" else None
+    except Exception:
+        port_val = None
+    tls = node.get("tls")
+    if isinstance(tls, str):
+        tls_val = tls.strip().lower() in {"1", "true", "yes", "on"}
+    elif tls is None:
+        tls_val = None
+    else:
+        tls_val = bool(tls)
+    udp = node.get("udp")
+    if isinstance(udp, str):
+        udp_val = udp.strip().lower() in {"1", "true", "yes", "on"}
+    elif udp is None:
+        udp_val = None
+    else:
+        udp_val = bool(udp)
+    return {
+        "type": str(node.get("type") or "") or None,
+        "server": str(node.get("server") or "") or None,
+        "port": port_val,
+        "udp": udp_val,
+        "cipher": str(node.get("cipher") or "") or None,
+        "network": str(node.get("network") or node.get("net") or "") or None,
+        "tls": tls_val,
+        "sni": str(node.get("sni") or node.get("servername") or "") or None,
+    }
+
+
 async def list_final_nodes(db: AsyncSession) -> list[dict[str, Any]]:
     result = await db.execute(
         select(Subscription).where(Subscription.enabled.is_(True)).order_by(Subscription.id.asc())
@@ -104,15 +136,14 @@ async def list_final_nodes(db: AsyncSession) -> list[dict[str, Any]]:
                     "name": name,
                     "subscription_id": sub.id,
                     "subscription_name": sub.name,
-                    "type": str(node.get("type") or "") or None,
-                    "server": str(node.get("server") or "") or None,
+                    **_node_meta(node),
                 }
             )
     return out
 
 
 async def list_node_ledger(db: AsyncSession) -> list[dict[str, Any]]:
-    """Final nodes + effective dialer (after priority merge) for the ledger page."""
+    """Final nodes + effective dialer + group membership for node management."""
     nodes = await list_final_nodes(db)
     if not nodes:
         return []
@@ -165,6 +196,12 @@ async def list_node_ledger(db: AsyncSession) -> list[dict[str, Any]]:
         for name in targets:
             source_by_name[name] = binding.target_type
 
+    # Reverse map: node -> group names that contain it as a leaf.
+    groups_by_node: dict[str, list[str]] = {}
+    for group in groups:
+        for leaf in group_leaves.get(group.id, []):
+            groups_by_node.setdefault(leaf, []).append(group.name)
+
     out: list[dict[str, Any]] = []
     for item in nodes:
         name = item["name"]
@@ -174,6 +211,7 @@ async def list_node_ledger(db: AsyncSession) -> list[dict[str, Any]]:
                 **item,
                 "dialer_proxy": dialer,
                 "chain_source": source_by_name.get(name) if dialer else None,
+                "group_names": groups_by_node.get(name, []),
             }
         )
     return out

@@ -329,9 +329,16 @@ async def test_proxy_chain_preview_and_node_ledger(client):
     assert rows["美国落地"]["dialer_proxy"] == "香港入口"
     assert rows["美国落地"]["chain_source"] == "node"
     assert rows["美国落地"]["subscription_name"] == "chain-sub"
+    assert rows["美国落地"].get("type") == "vmess"
+    assert rows["美国落地"].get("server") == "2.2.2.2"
+    assert rows["美国落地"].get("port") == 2
+    assert "美国组" in (rows["美国落地"].get("group_names") or [])
     assert rows["香港入口"].get("dialer_proxy") in (None, "")
 
     finals = await client.get("/api/proxy-chains/meta/final-nodes")
     assert finals.status_code == 200, finals.text
     names = {row["name"] for row in finals.json()}
     assert {"香港入口", "美国落地", "日本落地"} <= names
+    us = next(row for row in finals.json() if row["name"] == "美国落地")
+    assert us.get("type") == "vmess"
+    assert us.get("port") == 2

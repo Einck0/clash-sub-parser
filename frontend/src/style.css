@@ -379,7 +379,7 @@ body {
   z-index: 5;
   margin-top: 14px;
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(88px, 1fr));
   gap: 8px;
   border: 1px solid rgba(219, 229, 239, 0.78);
   border-radius: 18px;
@@ -1504,14 +1504,53 @@ button:disabled {
   }
 
   .tabs {
+    display: flex;
     flex-wrap: nowrap;
     overflow-x: auto;
+    gap: 6px;
     padding-bottom: 2px;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .tabs::-webkit-scrollbar {
+    display: none;
   }
 
   .tab {
     flex: 0 0 auto;
-    padding: 8px 11px;
+    min-width: 64px;
+    padding: 8px 10px;
+    text-align: center;
+  }
+
+  .tab-label {
+    display: none;
+  }
+
+  .tab small {
+    margin-top: 0;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--ink);
+  }
+
+  .tab-icon {
+    font-size: 16px;
+    line-height: 1.1;
+  }
+
+  .page-desc {
+    display: none;
+  }
+
+  .page-head {
+    gap: 10px;
+  }
+
+  .page-head .primary,
+  .page-head button {
+    min-height: 40px;
   }
 
   .head-actions,
@@ -1918,7 +1957,11 @@ button.danger {
   }
 
   .tab {
-    min-width: 128px;
+    min-width: 64px;
+  }
+
+  .tab-label {
+    display: none;
   }
 }
 

@@ -192,22 +192,17 @@ async def fetch_subscription_nodes(
 
         fetched_nodes, comments = parse_subscription_content(raw_text)
         live.source_nodes = deduplicate_nodes(fetched_nodes)
-        all_source_nodes = _combined_source_nodes(live.source_nodes, live.manual_nodes or [])
-        regex_patterns = compile_regex(live.filter_regex)
-        selected_nodes = _apply_selection(
-            all_source_nodes,
-            regex_patterns,
-            live.include_node_names or [],
-            live.exclude_node_names or [],
+        live.raw_nodes = _materialize_raw_nodes(
+            live.source_nodes,
+            live.manual_nodes or [],
+            filter_regex=live.filter_regex,
+            include_node_names=live.include_node_names or [],
+            exclude_node_names=live.exclude_node_names or [],
+            name=live.name,
+            node_prefix=live.node_prefix,
+            is_primary=live.is_primary,
+            node_renames=live.node_renames or {},
         )
-
-        prefixed_nodes = _apply_prefix(
-            selected_nodes,
-            _resolve_prefix(live.name, live.node_prefix, live.is_primary),
-        )
-        renamed_nodes = _apply_renames(prefixed_nodes, live.node_renames or {})
-
-        live.raw_nodes = deduplicate_nodes(renamed_nodes)
         live.last_fetched_at = datetime.now(timezone.utc)
         live.last_fetch_error = None
         live.fetch_failed_count = 0
@@ -316,6 +311,38 @@ async def _fetch_subscription_text(
     raise HTTPException(status_code=502, detail="Too many subscription redirects")
 
 
+
+def _materialize_raw_nodes(
+    source_nodes: list[dict],
+    manual_nodes: list[dict],
+    *,
+    filter_regex,
+    include_node_names: list[str] | None,
+    exclude_node_names: list[str] | None,
+    name: str,
+    node_prefix: str | None,
+    is_primary: bool,
+    node_renames: dict | None,
+) -> list[dict]:
+    """源节点到 raw_nodes 的固定管线: 合并筛选前缀改名去重
+
+    fetch 与本地刷新共用, 顺序不要改: 正则与 include 按上游名, renames 按加前缀后的名
+    """
+    all_source_nodes = _combined_source_nodes(source_nodes or [], manual_nodes or [])
+    selected_nodes = _apply_selection(
+        all_source_nodes,
+        compile_regex(filter_regex),
+        include_node_names or [],
+        exclude_node_names or [],
+    )
+    prefixed_nodes = _apply_prefix(
+        selected_nodes,
+        _resolve_prefix(name, node_prefix, is_primary),
+    )
+    renamed_nodes = _apply_renames(prefixed_nodes, node_renames or {})
+    return deduplicate_nodes(renamed_nodes)
+
+
 def _apply_selection(
     nodes: list[dict],
     regex_patterns: list,
@@ -353,24 +380,23 @@ def _apply_selection(
 
 
 def _refresh_selected_nodes(item: Subscription) -> None:
-    source_nodes = _combined_source_nodes(item.source_nodes or [], item.manual_nodes or [])
-    if source_nodes:
-        selected_nodes = _apply_selection(
+    source_nodes = item.source_nodes or []
+    manual_nodes = item.manual_nodes or []
+    if source_nodes or manual_nodes:
+        item.raw_nodes = _materialize_raw_nodes(
             source_nodes,
-            compile_regex(item.filter_regex),
-            item.include_node_names or [],
-            item.exclude_node_names or [],
+            manual_nodes,
+            filter_regex=item.filter_regex,
+            include_node_names=item.include_node_names or [],
+            exclude_node_names=item.exclude_node_names or [],
+            name=item.name,
+            node_prefix=item.node_prefix,
+            is_primary=item.is_primary,
+            node_renames=item.node_renames or {},
         )
-        prefixed_nodes = _apply_prefix(
-            selected_nodes,
-            _resolve_prefix(item.name, item.node_prefix, item.is_primary),
-        )
-        renamed_nodes = _apply_renames(prefixed_nodes, item.node_renames or {})
-        item.raw_nodes = deduplicate_nodes(renamed_nodes)
         return
 
-    # No upstream/manual source available: treat current raw_nodes as already
-    # post-prefix names and apply rename map directly onto them.
+    # 没有上游与手动源时, 把当前 raw_nodes 当已加前缀名, 只套 renames
     if item.raw_nodes:
         item.raw_nodes = deduplicate_nodes(
             _apply_renames(item.raw_nodes or [], item.node_renames or {})

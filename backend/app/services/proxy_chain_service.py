@@ -18,6 +18,62 @@ FORBIDDEN_DIALERS = frozenset({"DIRECT", "REJECT", "PASS"})
 TARGET_PRIORITY = {"subscription": 1, "node_group": 2, "node": 3}
 
 
+async def _load_chain_world(
+    db: AsyncSession,
+    *,
+    all_node_names: list[str] | None = None,
+    known_nodes_extra: set[str] | None = None,
+    order_groups: bool = True,
+) -> dict[str, Any]:
+    """加载链式绑定共用的订阅节点与策略组叶子
+
+    台账预览环检测应用绑定都走这里, 避免各写一套扫库逻辑
+    """
+    sub_result = await db.execute(select(Subscription).where(Subscription.enabled.is_(True)))
+    subs = list(sub_result.scalars().all())
+    node_to_sub_ids: dict[str, set[int]] = {}
+    names_from_subs: list[str] = []
+    for sub in subs:
+        for node in sub.raw_nodes or []:
+            if not isinstance(node, dict):
+                continue
+            name = str(node.get("name") or "").strip()
+            if not name:
+                continue
+            names_from_subs.append(name)
+            node_to_sub_ids.setdefault(name, set()).add(sub.id)
+
+    if order_groups:
+        group_result = await db.execute(
+            select(NodeGroup).order_by(NodeGroup.sort_order.asc(), NodeGroup.id.asc())
+        )
+    else:
+        group_result = await db.execute(select(NodeGroup))
+    groups = list(group_result.scalars().all())
+
+    if all_node_names is None:
+        resolve_names = list(names_from_subs)
+    else:
+        resolve_names = list(all_node_names)
+
+    group_leaves = resolve_group_members(groups, resolve_names, leaves_only=True)
+    known_proxy_names = {n for n in resolve_names if n}
+    if known_nodes_extra:
+        known_proxy_names |= set(known_nodes_extra)
+    known_group_names = {g.name for g in groups if g.name}
+
+    return {
+        "subs": subs,
+        "groups": groups,
+        "node_to_sub_ids": node_to_sub_ids,
+        "all_node_names": names_from_subs,
+        "group_leaves": group_leaves,
+        "known_proxy_names": known_proxy_names,
+        "known_group_names": known_group_names,
+    }
+
+
+
 async def list_bindings(db: AsyncSession) -> list[ProxyChainBinding]:
     result = await db.execute(
         select(ProxyChainBinding).order_by(
@@ -159,28 +215,11 @@ async def list_node_ledger(db: AsyncSession) -> list[dict[str, Any]]:
 
     # Annotate which binding scope won for each node (best-effort).
     bindings = [b for b in await list_bindings(db) if b.enabled]
-    sub_result = await db.execute(select(Subscription).where(Subscription.enabled.is_(True)))
-    subs = list(sub_result.scalars().all())
-    node_to_sub_ids: dict[str, set[int]] = {}
-    all_node_names: list[str] = []
-    for sub in subs:
-        for node in sub.raw_nodes or []:
-            if not isinstance(node, dict):
-                continue
-            name = str(node.get("name") or "").strip()
-            if not name:
-                continue
-            all_node_names.append(name)
-            node_to_sub_ids.setdefault(name, set()).add(sub.id)
-    groups = list(
-        (
-            await db.execute(
-                select(NodeGroup).order_by(NodeGroup.sort_order.asc(), NodeGroup.id.asc())
-            )
-        ).scalars().all()
-    )
-    group_leaves = resolve_group_members(groups, all_node_names, leaves_only=True)
-    known_proxy_names = set(all_node_names)
+    world = await _load_chain_world(db)
+    node_to_sub_ids = world["node_to_sub_ids"]
+    groups = world["groups"]
+    group_leaves = world["group_leaves"]
+    known_proxy_names = world["known_proxy_names"]
     source_by_name: dict[str, str] = {}
     ordered = sorted(
         bindings,
@@ -286,33 +325,18 @@ async def apply_bindings_to_nodes(db: AsyncSession, nodes: list[dict]) -> list[d
             cleaned.append(copied)
         return cleaned
 
-    # Map final node name -> subscription ids that contributed it (first wins for ownership).
-    sub_result = await db.execute(select(Subscription).where(Subscription.enabled.is_(True)))
-    subs = list(sub_result.scalars().all())
-    node_to_sub_ids: dict[str, set[int]] = {}
-    for sub in subs:
-        for node in sub.raw_nodes or []:
-            if not isinstance(node, dict):
-                continue
-            name = str(node.get("name") or "").strip()
-            if not name:
-                continue
-            node_to_sub_ids.setdefault(name, set()).add(sub.id)
-
-    group_result = await db.execute(
-        select(NodeGroup).order_by(NodeGroup.sort_order.asc(), NodeGroup.id.asc())
-    )
-    groups = list(group_result.scalars().all())
-    group_mapping = {g.id: g for g in groups}
+    # 最终节点名来自入参 proxies, 订阅归属仍从库扫
     all_node_names = [
         str(n.get("name") or "").strip()
         for n in nodes
         if isinstance(n, dict) and n.get("name")
     ]
-    group_leaves = resolve_group_members(groups, all_node_names, leaves_only=True)
-
-    known_proxy_names = {n for n in all_node_names if n}
-    known_group_names = {g.name for g in groups if g.name}
+    world = await _load_chain_world(db, all_node_names=all_node_names)
+    node_to_sub_ids = world["node_to_sub_ids"]
+    groups = world["groups"]
+    group_leaves = world["group_leaves"]
+    known_proxy_names = world["known_proxy_names"]
+    known_group_names = world["known_group_names"]
 
     # effective[name] = (priority, dialer_ref)
     effective: dict[str, tuple[int, str]] = {}
@@ -383,25 +407,16 @@ async def _validate_no_cycle(
     if not dialer_ref:
         return
 
-    # Build current world names for target expansion.
-    sub_result = await db.execute(select(Subscription).where(Subscription.enabled.is_(True)))
-    subs = list(sub_result.scalars().all())
-    node_to_sub_ids: dict[str, set[int]] = {}
-    all_node_names: list[str] = []
-    for sub in subs:
-        for node in sub.raw_nodes or []:
-            if not isinstance(node, dict):
-                continue
-            name = str(node.get("name") or "").strip()
-            if not name:
-                continue
-            all_node_names.append(name)
-            node_to_sub_ids.setdefault(name, set()).add(sub.id)
-
-    group_result = await db.execute(select(NodeGroup))
-    groups = list(group_result.scalars().all())
-    group_leaves = resolve_group_members(groups, all_node_names, leaves_only=True)
-    known_proxy_names = set(known_nodes) | {n for n in all_node_names if n}
+    # 环检测用当前启用订阅与策略组叶子
+    world = await _load_chain_world(
+        db,
+        known_nodes_extra=set(known_nodes),
+        order_groups=False,
+    )
+    node_to_sub_ids = world["node_to_sub_ids"]
+    groups = world["groups"]
+    group_leaves = world["group_leaves"]
+    known_proxy_names = world["known_proxy_names"]
 
     # Temporary binding-like object for expand.
     class _Tmp:
@@ -504,29 +519,11 @@ async def preview_binding_effect(
     dialer_ref: str,
 ) -> dict[str, Any]:
     """Preview how many targets would chain / skip for a draft binding."""
-    sub_result = await db.execute(select(Subscription).where(Subscription.enabled.is_(True)))
-    subs = list(sub_result.scalars().all())
-    node_to_sub_ids: dict[str, set[int]] = {}
-    all_node_names: list[str] = []
-    for sub in subs:
-        for node in sub.raw_nodes or []:
-            if not isinstance(node, dict):
-                continue
-            name = str(node.get("name") or "").strip()
-            if not name:
-                continue
-            all_node_names.append(name)
-            node_to_sub_ids.setdefault(name, set()).add(sub.id)
-
-    groups = list(
-        (
-            await db.execute(
-                select(NodeGroup).order_by(NodeGroup.sort_order.asc(), NodeGroup.id.asc())
-            )
-        ).scalars().all()
-    )
-    group_leaves = resolve_group_members(groups, all_node_names, leaves_only=True)
-    known_proxy_names = {n for n in all_node_names if n}
+    world = await _load_chain_world(db)
+    node_to_sub_ids = world["node_to_sub_ids"]
+    groups = world["groups"]
+    group_leaves = world["group_leaves"]
+    known_proxy_names = world["known_proxy_names"]
 
     class _Tmp:
         pass

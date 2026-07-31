@@ -68,3 +68,6 @@ references/
 
 # Local/private project notes
 info.txt
+
+# Graphify local knowledge graph (do not commit)
+graphify-out/

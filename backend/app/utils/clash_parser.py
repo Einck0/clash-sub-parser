@@ -239,12 +239,14 @@ def _parse_vmess(link: str) -> dict | None:
 
 
 def _parse_wireguard(link: str) -> dict | None:
-    """wireguard://private-key@server:port/?public-key=..&ip=..&ipv6=..&reserved=..&mtu=.."""
+    """解析 wireguard 分享链接，取私钥、对端、ip 等字段
+
+    形如 wireguard 私钥@服务器:端口 问号后带 public-key 和 ip 等参数"""
     try:
         parsed = urlparse(link)
         server = parsed.hostname or ""
         port = parsed.port or 2408
-        private_key = parsed.username or ""
+        private_key = unquote(parsed.username or "")
         query = parse_qs(parsed.query)
         ip = _pick_first(query, "ip")
         if not private_key or not server or not ip:

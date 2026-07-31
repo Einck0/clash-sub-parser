@@ -100,7 +100,7 @@
         <textarea
           v-model="manualNodeLinks"
           class="secret-textarea"
-          placeholder="ss:// / trojan:// / vless:// / vmess://，一行一个"
+          placeholder="ss:// / trojan:// / vless:// / vmess:// / wireguard://，一行一个"
         ></textarea>
       </label>
     </div>

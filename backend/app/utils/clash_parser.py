@@ -71,6 +71,8 @@ def _parse_protocol_links(content: str) -> list[dict]:
             parsed = _parse_vless(item)
         elif item.startswith("vmess://"):
             parsed = _parse_vmess(item)
+        elif item.startswith("wireguard://"):
+            parsed = _parse_wireguard(item)
         else:
             parsed = None
         if parsed:
@@ -231,6 +233,41 @@ def _parse_vmess(link: str) -> dict | None:
                 h2_opts["host"] = [host]
             if h2_opts:
                 node["h2-opts"] = h2_opts
+        return node
+    except Exception:
+        return None
+
+
+def _parse_wireguard(link: str) -> dict | None:
+    """wireguard://private-key@server:port/?public-key=..&ip=..&ipv6=..&reserved=..&mtu=.."""
+    try:
+        parsed = urlparse(link)
+        server = parsed.hostname or ""
+        port = parsed.port or 2408
+        private_key = parsed.username or ""
+        query = parse_qs(parsed.query)
+        ip = _pick_first(query, "ip")
+        if not private_key or not server or not ip:
+            return None
+        node = {
+            "name": unquote(parsed.fragment) if parsed.fragment else f"wg-{server}:{port}",
+            "type": "wireguard",
+            "server": server,
+            "port": port,
+            "ip": ip,
+            "private-key": private_key,
+        }
+        if v6 := _pick_first(query, "ipv6"):
+            node["ipv6"] = v6
+        if pub := _pick_first(query, "public-key", "publickey"):
+            node["public-key"] = pub
+        if reserved := _pick_first(query, "reserved"):
+            node["reserved"] = [int(x) for x in reserved.split(",") if x.strip()]
+        if mtu := _pick_first(query, "mtu"):
+            try:
+                node["mtu"] = int(mtu)
+            except ValueError:
+                pass
         return node
     except Exception:
         return None

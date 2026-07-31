@@ -85,6 +85,39 @@ def test_parse_vless_reality_link_keeps_reality_options() -> None:
     }
 
 
+def test_parse_wireguard_link_keeps_wg_fields() -> None:
+    from app.utils.clash_parser import parse_node_links
+
+    link = (
+        "wireguard://test-private-key@engage.cloudflareclient.com:2408/"
+        "?ip=172.16.0.2"
+        "&ipv6=2606%3A4700%3A110%3A8d16%3A7b4f%3Ad1b%3A871%3Abeab"
+        "&public-key=bmXOC%2BF1FxEMF9dyiK2H5%2F1SUtzH0JuVo51h2wPfgyo%3D"
+        "&reserved=0%2C0%2C0&mtu=1280#WARP%E9%93%BE-%E9%A6%99%E6%B8%AF"
+    )
+
+    nodes = parse_node_links(link)
+    assert len(nodes) == 1
+    node = nodes[0]
+    assert node["name"] == "WARP链-香港"
+    assert node["type"] == "wireguard"
+    assert node["server"] == "engage.cloudflareclient.com"
+    assert node["port"] == 2408
+    assert node["ip"] == "172.16.0.2"
+    assert node["private-key"] == "test-private-key"
+    assert node["ipv6"] == "2606:4700:110:8d16:7b4f:d1b:871:beab"
+    assert node["public-key"] == "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+    assert node["reserved"] == [0, 0, 0]
+    assert node["mtu"] == 1280
+
+
+def test_parse_wireguard_link_requires_key_and_ip() -> None:
+    from app.utils.clash_parser import parse_node_links
+
+    assert parse_node_links("wireguard://engage.cloudflareclient.com:2408/?ip=172.16.0.2") == []
+    assert parse_node_links("wireguard://key@engage.cloudflareclient.com:2408/") == []
+
+
 def test_with_fallback_only_when_empty() -> None:
     from app.utils.group_utils import with_fallback
 

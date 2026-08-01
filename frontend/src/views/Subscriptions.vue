@@ -185,28 +185,29 @@
         <div class="card subscription-form-card">
           <div class="form-header">
             <div>
-              <p class="eyebrow">Manual Node</p>
-              <h3>添加自定义节点</h3>
-              <p class="section-hint">不走订阅拉取，直接把节点链接解析成一个订阅。</p>
+              <p class="eyebrow">Manual Node / Raw Mode</p>
+              <h3>添加自定义节点（支持 Raw 模式）</h3>
+              <p class="section-hint">支持粘贴多行分享链接、Base64 编码订阅内容或 YAML 节点配置。</p>
             </div>
             <button @click="showManualNode = false">关闭</button>
           </div>
           <div class="grid-2">
             <label>
-              <div class="muted">订阅名</div>
-              <input v-model="manualForm.name" placeholder="留空默认「手动节点」" />
+              <div class="muted">节点/订阅名称</div>
+              <input v-model="manualForm.name" placeholder="请输入名称，例：我的WARP节点" />
             </label>
             <label>
               <div class="muted">节点前缀（可选）</div>
-              <input v-model="manualForm.node_prefix" placeholder="留空用订阅名" />
+              <input v-model="manualForm.node_prefix" placeholder="留空则使用订阅名" />
             </label>
           </div>
-          <label style="display:block;margin-top:10px">
-            <div class="muted">节点链接（一行一个）</div>
+          <label style="display:block;margin-top:12px">
+            <div class="muted">Raw 节点内容 / 链接文本</div>
             <textarea
               v-model="manualForm.node_links"
               class="secret-textarea"
-              placeholder="ss:// / trojan:// / vless:// / vmess:// / wireguard://"
+              style="min-height:160px"
+              placeholder="支持 ss://, trojan://, vless://, vmess://, wireguard://，或粘贴 Base64 / YAML 原始内容"
             ></textarea>
           </label>
           <p v-if="manualFormError" class="form-alert form-alert-error">{{ manualFormError }}</p>
@@ -216,7 +217,7 @@
               :disabled="manualSaving || !manualForm.node_links.trim()"
               @click="saveManualNode"
             >
-              {{ manualSaving ? '保存中...' : '保存' }}
+              {{ manualSaving ? '保存中...' : '保存并解析' }}
             </button>
             <button @click="showManualNode = false">取消</button>
           </div>

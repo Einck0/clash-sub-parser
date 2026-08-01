@@ -118,6 +118,18 @@ def test_parse_wireguard_link_requires_key_and_ip() -> None:
     assert parse_node_links("wireguard://key@engage.cloudflareclient.com:2408/") == []
 
 
+def test_parse_wireguard_link_keeps_raw_plus_in_query() -> None:
+    from app.utils.clash_parser import parse_node_links
+
+    link = (
+        "wireguard://key@engage.cloudflareclient.com:2408/?"
+        "ip=172.16.0.2&public-key=bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+    )
+
+    nodes = parse_node_links(link)
+    assert nodes[0]["public-key"] == "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+
+
 def test_with_fallback_only_when_empty() -> None:
     from app.utils.group_utils import with_fallback
 

@@ -68,9 +68,14 @@ async def create_manual_node_subscription(
     if payload.is_primary:
         await _clear_primary(db)
 
-    nodes = parse_node_links(payload.node_links)
+    # 支持 raw 模式、base64 解码、yaml 或直接链接解析
+    try:
+        proxies, _ = parse_subscription_content(payload.node_links)
+        nodes = proxies
+    except Exception:
+        nodes = parse_node_links(payload.node_links)
     if not nodes:
-        raise HTTPException(status_code=400, detail="No supported node links found")
+        raise HTTPException(status_code=400, detail="未找到支持的节点链接或原始内容")
 
     name = payload.name.strip()
     prefix = payload.node_prefix.strip() if payload.node_prefix else None

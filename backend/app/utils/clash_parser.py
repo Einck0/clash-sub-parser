@@ -247,7 +247,7 @@ def _parse_wireguard(link: str) -> dict | None:
         server = parsed.hostname or ""
         port = parsed.port or 2408
         private_key = unquote(parsed.username or "")
-        query = parse_qs(parsed.query)
+        query = _parse_wireguard_query(parsed.query)
         ip = _pick_first(query, "ip")
         if not private_key or not server or not ip:
             return None
@@ -273,6 +273,18 @@ def _parse_wireguard(link: str) -> dict | None:
         return node
     except Exception:
         return None
+
+
+def _parse_wireguard_query(query_string: str) -> dict[str, list[str]]:
+    query: dict[str, list[str]] = {}
+    for item in query_string.split("&"):
+        if not item:
+            continue
+        key, separator, value = item.partition("=")
+        decoded_key = unquote(key)
+        decoded_value = unquote(value) if separator else ""
+        query.setdefault(decoded_key, []).append(decoded_value)
+    return query
 
 
 def _pick_first(query: dict[str, list[str]], *keys: str) -> str | None:

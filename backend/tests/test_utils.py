@@ -101,6 +101,7 @@ def test_parse_wireguard_link_keeps_wg_fields() -> None:
     node = nodes[0]
     assert node["name"] == "WARP链-香港"
     assert node["type"] == "wireguard"
+    assert node["udp"] is True
     assert node["server"] == "engage.cloudflareclient.com"
     assert node["port"] == 2408
     assert node["ip"] == "172.16.0.2"

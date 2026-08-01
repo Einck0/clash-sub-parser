@@ -254,6 +254,7 @@ def _parse_wireguard(link: str) -> dict | None:
         node = {
             "name": unquote(parsed.fragment) if parsed.fragment else f"wg-{server}:{port}",
             "type": "wireguard",
+            "udp": True,
             "server": server,
             "port": port,
             "ip": ip,

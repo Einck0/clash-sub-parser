@@ -1,3 +1,5 @@
+import yaml from 'js-yaml'
+
 const now = new Date().toISOString()
 
 const sampleNodes = [
@@ -6,6 +8,32 @@ const sampleNodes = [
   { name: '美国 01 · Sample', type: 'trojan', server: 'us.example.net', port: 443 },
   { name: '新加坡 01 · Sample', type: 'ss', server: 'sg.example.net', port: 443 },
 ]
+
+function parseMockManualNodes(content) {
+  try {
+    const parsed = yaml.load(content)
+    if (Array.isArray(parsed)) return parsed.filter((item) => item && typeof item === 'object')
+    if (parsed && Array.isArray(parsed.proxies)) return parsed.proxies.filter((item) => item && typeof item === 'object')
+  } catch (_) {
+  }
+  return String(content).split(/\r?\n/).map((line, index) => {
+    const value = line.trim()
+    if (!value) return null
+    const type = value.split('://')[0]
+    if (!['ss', 'trojan', 'vless', 'vmess', 'wireguard'].includes(type)) return null
+    try {
+      const parsed = new URL(value)
+      return {
+        name: decodeURIComponent(parsed.hash.slice(1)) || `${type} ${index + 1}`,
+        type,
+        server: parsed.hostname || 'demo.example.net',
+        port: Number(parsed.port) || 443,
+      }
+    } catch (_) {
+      return { name: `${type} ${index + 1}`, type, server: 'demo.example.net', port: 443 }
+    }
+  }).filter(Boolean)
+}
 
 let subscriptions = [
   {
@@ -185,6 +213,33 @@ export async function mockRequest(method, url, data) {
   if (method === 'GET' && cleanUrl.startsWith('/subscriptions/') && cleanUrl.endsWith('/nodes')) {
     const id = Number(cleanUrl.split('/')[2])
     return response(subscriptions.find((sub) => sub.id === id)?.raw_nodes || [])
+  }
+  if (method === 'POST' && cleanUrl === '/subscriptions/manual-node') {
+    const nodes = parseMockManualNodes(data?.node_links || '').map((node) => ({ ...node }))
+    const prefix = String(data?.node_prefix || data?.name || '').trim()
+    const rawNodes = nodes.map((node) => ({ ...node, name: prefix ? `${prefix}-${node.name}` : node.name }))
+    const item = {
+      id: nextId(subscriptions),
+      name: data?.name || '手动节点',
+      url: 'manual://nodes',
+      update_interval: null,
+      is_primary: false,
+      enabled: true,
+      node_prefix: data?.node_prefix || null,
+      filter_regex: [],
+      include_node_names: [],
+      exclude_node_names: [],
+      node_renames: {},
+      manual_nodes: nodes,
+      source_nodes: [],
+      raw_nodes: rawNodes,
+      last_fetched_at: now,
+      last_fetch_error: null,
+      fetch_failed_count: 0,
+      fetch_comments: [],
+    }
+    subscriptions.push(item)
+    return response(item, 201)
   }
   if (method === 'POST' && cleanUrl === '/subscriptions') {
     const item = { id: nextId(subscriptions), raw_nodes: [], source_nodes: [], fetch_failed_count: 0, ...data }

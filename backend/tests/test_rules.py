@@ -28,6 +28,33 @@ async def test_list_rules(client):
 
 
 @pytest.mark.asyncio
+async def test_reorder_rules_persists_order(client):
+    first = await client.post(
+        "/api/rules",
+        json={"type": "DOMAIN", "value": "first.example", "proxy": "DIRECT", "category": "default"},
+    )
+    second = await client.post(
+        "/api/rules",
+        json={"type": "DOMAIN", "value": "second.example", "proxy": "DIRECT", "category": "default"},
+    )
+    assert first.status_code == 201
+    assert second.status_code == 201
+
+    reordered = await client.post(
+        "/api/rules/reorder",
+        json={
+            "items": [
+                {"id": second.json()["id"], "sort_order": 0},
+                {"id": first.json()["id"], "sort_order": 1},
+            ]
+        },
+    )
+    assert reordered.status_code == 200
+    selected = [item for item in reordered.json() if item["id"] in {first.json()["id"], second.json()["id"]}]
+    assert [item["id"] for item in selected] == [second.json()["id"], first.json()["id"]]
+
+
+@pytest.mark.asyncio
 async def test_batch_rules(client):
     response = await client.post("/api/rules/batch", json={
         "delete": [],

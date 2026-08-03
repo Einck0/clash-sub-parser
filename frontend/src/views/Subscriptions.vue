@@ -182,46 +182,13 @@
 
     <div class="modal-backdrop" v-if="showManualNode" @click.self="showManualNode = false">
       <div class="modal">
-        <div class="card subscription-form-card">
-          <div class="form-header">
-            <div>
-              <p class="eyebrow">Manual Node / Raw Mode</p>
-              <h3>添加自定义节点（支持 Raw 模式）</h3>
-              <p class="section-hint">支持粘贴多行分享链接、Base64 编码订阅内容或 YAML 节点配置。</p>
-            </div>
-            <button @click="showManualNode = false">关闭</button>
-          </div>
-          <div class="grid-2">
-            <label>
-              <div class="muted">节点/订阅名称</div>
-              <input v-model="manualForm.name" placeholder="请输入名称，例：我的WARP节点" />
-            </label>
-            <label>
-              <div class="muted">节点前缀（可选）</div>
-              <input v-model="manualForm.node_prefix" placeholder="留空则使用订阅名" />
-            </label>
-          </div>
-          <label style="display:block;margin-top:12px">
-            <div class="muted">Raw 节点内容 / 链接文本</div>
-            <textarea
-              v-model="manualForm.node_links"
-              class="secret-textarea"
-              style="min-height:160px"
-              placeholder="支持 ss://, trojan://, vless://, vmess://, wireguard://，或粘贴 Base64 / YAML 原始内容"
-            ></textarea>
-          </label>
-          <p v-if="manualFormError" class="form-alert form-alert-error">{{ manualFormError }}</p>
-          <div class="form-footer">
-            <button
-              class="primary"
-              :disabled="manualSaving || !manualForm.node_links.trim()"
-              @click="saveManualNode"
-            >
-              {{ manualSaving ? '保存中...' : '保存并解析' }}
-            </button>
-            <button @click="showManualNode = false">取消</button>
-          </div>
-        </div>
+        <ManualNodeEditor
+          :key="manualEditorKey"
+          :saving="manualSaving"
+          :error="manualFormError"
+          @save="saveManualNode"
+          @cancel="showManualNode = false"
+        />
       </div>
     </div>
   </section>
@@ -231,6 +198,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useAppStore } from '../stores/app'
 import { formatBytes, short, formatLocalTime } from '../utils/format'
+import ManualNodeEditor from '../components/ManualNodeEditor.vue'
 import NodePreviewList from '../components/NodePreviewList.vue'
 import PageToolbar from '../components/PageToolbar.vue'
 import SubscriptionForm from '../components/SubscriptionForm.vue'
@@ -255,7 +223,7 @@ const nodePreviewTitle = ref('')
 const showForm = ref(false)
 const editing = ref(null)
 const showManualNode = ref(false)
-const manualForm = ref({ name: '', node_prefix: '', node_links: '' })
+const manualEditorKey = ref(0)
 const manualFormError = ref('')
 const manualSaving = ref(false)
 const loadingFetchId = ref(null)
@@ -356,22 +324,17 @@ function openEdit(item) {
 }
 
 function openManualNode() {
-  manualForm.value = { name: '', node_prefix: '', node_links: '' }
   manualFormError.value = ''
+  manualEditorKey.value += 1
   showManualNode.value = true
 }
 
-async function saveManualNode() {
-  const links = manualForm.value.node_links.trim()
-  if (!links || manualSaving.value) return
+async function saveManualNode(payload) {
+  if (!payload?.node_links?.trim() || manualSaving.value) return
   manualSaving.value = true
   manualFormError.value = ''
   try {
-    await createManualNodeSubscription({
-      name: manualForm.value.name.trim() || '手动节点',
-      node_prefix: manualForm.value.node_prefix.trim() || null,
-      node_links: links,
-    })
+    await createManualNodeSubscription(payload)
     showManualNode.value = false
     store.success('自定义节点已保存')
     await load()

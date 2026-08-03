@@ -22,6 +22,35 @@ async def test_list_node_groups(client):
 
 
 @pytest.mark.asyncio
+async def test_reorder_node_groups_persists_order(client):
+    first = await client.post(
+        "/api/node-groups",
+        json={"name": "first", "group_type": "select", "include_entries": [{"type": "node", "value": "a"}]},
+    )
+    second = await client.post(
+        "/api/node-groups",
+        json={"name": "second", "group_type": "select", "include_entries": [{"type": "node", "value": "b"}]},
+    )
+    assert first.status_code == 201
+    assert second.status_code == 201
+
+    reordered = await client.post(
+        "/api/node-groups/reorder",
+        json={
+            "items": [
+                {"id": second.json()["id"], "sort_order": 0},
+                {"id": first.json()["id"], "sort_order": 1},
+            ]
+        },
+    )
+    assert reordered.status_code == 200
+    assert [item["name"] for item in reordered.json() if item["name"] in {"first", "second"}] == ["second", "first"]
+
+    listed = await client.get("/api/node-groups")
+    assert [item["name"] for item in listed.json() if item["name"] in {"first", "second"}] == ["second", "first"]
+
+
+@pytest.mark.asyncio
 async def test_preview_node_groups(client):
     response = await client.get("/api/node-groups/_preview")
     assert response.status_code == 200

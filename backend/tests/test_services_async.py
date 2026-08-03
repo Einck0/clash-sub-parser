@@ -550,6 +550,31 @@ async def test_create_subscription_accepts_manual_node_links(db_session):
 
 
 @pytest.mark.asyncio
+async def test_manual_node_yaml_keeps_node_order(db_session):
+    from app.schemas.subscription import ManualNodeCreate
+    from app.services.subscription_service import create_manual_node_subscription
+
+    content = """proxies:
+  - name: first
+    type: ss
+    server: first.example
+    port: 443
+  - name: second
+    type: trojan
+    server: second.example
+    port: 443
+    password: secret
+"""
+    item = await create_manual_node_subscription(
+        db_session,
+        ManualNodeCreate(name="ordered-manual", node_links=content),
+    )
+
+    assert [node["name"] for node in item.manual_nodes] == ["first", "second"]
+    assert [node["name"] for node in item.raw_nodes] == ["ordered-manual-first", "ordered-manual-second"]
+
+
+@pytest.mark.asyncio
 async def test_fetch_subscription_nodes_uses_runtime_proxy_setting(monkeypatch, db_session):
     from app.models.security_settings import SecuritySettings
 

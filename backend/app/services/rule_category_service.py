@@ -124,13 +124,27 @@ async def reorder_rule_categories(
     db: AsyncSession, payload: RuleCategoryReorder
 ) -> list[dict]:
     ids = [entry.id for entry in payload.items]
-    result = await db.execute(select(RuleCategory).where(RuleCategory.id.in_(ids)))
-    mapping = {item.id: item for item in result.scalars().all()}
+    sort_orders = [entry.sort_order for entry in payload.items]
+    if len(ids) != len(set(ids)):
+        raise HTTPException(status_code=400, detail="重排列表包含重复分类 ID")
+    if len(sort_orders) != len(set(sort_orders)):
+        raise HTTPException(status_code=400, detail="重排列表包含重复排序值")
+
+    result = await db.execute(select(RuleCategory))
+    categories = list(result.scalars().all())
+    stored_ids = {item.id for item in categories}
+    if set(ids) != stored_ids:
+        raise HTTPException(status_code=400, detail="重排列表必须包含全部现有分类，且不能包含未知 ID")
+
+    mapping = {item.id: item for item in categories}
     for entry in payload.items:
-        if entry.id in mapping:
-            mapping[entry.id].sort_order = entry.sort_order
-            db.add(mapping[entry.id])
-    await db.commit()
+        mapping[entry.id].sort_order = entry.sort_order
+        db.add(mapping[entry.id])
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
     return await list_rule_categories(db)
 
 

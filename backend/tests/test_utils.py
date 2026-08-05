@@ -19,6 +19,31 @@ def test_deduplicate_nodes_by_name_and_signature() -> None:
     assert [item["name"] for item in result] == ["A", "C"]
 
 
+def test_deduplicate_wireguard_nodes_keeps_distinct_peers() -> None:
+    nodes = [
+        {
+            "name": "WARP A",
+            "type": "wireguard",
+            "server": "engage.cloudflareclient.com",
+            "port": 2408,
+            "ip": "172.16.0.2/32",
+            "private-key": "private",
+            "public-key": "peer-a",
+        },
+        {
+            "name": "WARP B",
+            "type": "wireguard",
+            "server": "engage.cloudflareclient.com",
+            "port": 2408,
+            "ip": "172.16.0.2/32",
+            "private-key": "private",
+            "public-key": "peer-b",
+        },
+    ]
+
+    assert [item["name"] for item in deduplicate_nodes(nodes)] == ["WARP A", "WARP B"]
+
+
 def test_validate_cycle_detected() -> None:
     graph = {1: [2], 2: [3], 3: [1]}
     try:
@@ -129,6 +154,16 @@ def test_parse_wireguard_link_keeps_raw_plus_in_query() -> None:
 
     nodes = parse_node_links(link)
     assert nodes[0]["public-key"] == "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+
+
+def test_parse_wireguard_link_ignores_invalid_reserved_value() -> None:
+    from app.utils.clash_parser import parse_node_links
+
+    link = "wireguard://key@engage.cloudflareclient.com:2408/?ip=172.16.0.2&reserved=bad"
+
+    nodes = parse_node_links(link)
+    assert len(nodes) == 1
+    assert "reserved" not in nodes[0]
 
 
 def test_with_fallback_only_when_empty() -> None:

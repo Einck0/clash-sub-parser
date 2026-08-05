@@ -265,7 +265,10 @@ def _parse_wireguard(link: str) -> dict | None:
         if pub := _pick_first(query, "public-key", "publickey"):
             node["public-key"] = pub
         if reserved := _pick_first(query, "reserved"):
-            node["reserved"] = [int(x) for x in reserved.split(",") if x.strip()]
+            try:
+                node["reserved"] = [int(x) for x in reserved.split(",") if x.strip()]
+            except ValueError:
+                pass
         if mtu := _pick_first(query, "mtu"):
             try:
                 node["mtu"] = int(mtu)

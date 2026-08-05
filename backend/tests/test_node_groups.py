@@ -51,6 +51,62 @@ async def test_reorder_node_groups_persists_order(client):
 
 
 @pytest.mark.asyncio
+async def test_reorder_node_groups_rejects_unknown_id(client):
+    created = await client.post(
+        "/api/node-groups",
+        json={"name": "known", "group_type": "select", "include_entries": [{"type": "node", "value": "a"}]},
+    )
+    assert created.status_code == 201
+
+    response = await client.post(
+        "/api/node-groups/reorder",
+        json={"items": [{"id": created.json()["id"], "sort_order": 0}, {"id": 99999, "sort_order": 1}]},
+    )
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_reorder_node_groups_rejects_duplicate_order(client):
+    first = await client.post(
+        "/api/node-groups",
+        json={"name": "first-order", "group_type": "select", "include_entries": [{"type": "node", "value": "a"}]},
+    )
+    second = await client.post(
+        "/api/node-groups",
+        json={"name": "second-order", "group_type": "select", "include_entries": [{"type": "node", "value": "b"}]},
+    )
+    assert first.status_code == 201
+    assert second.status_code == 201
+
+    response = await client.post(
+        "/api/node-groups/reorder",
+        json={
+            "items": [
+                {"id": first.json()["id"], "sort_order": 0},
+                {"id": second.json()["id"], "sort_order": 0},
+            ]
+        },
+    )
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_reorder_node_groups_rejects_duplicate_id(client):
+    created = await client.post(
+        "/api/node-groups",
+        json={"name": "duplicate-id", "group_type": "select", "include_entries": [{"type": "node", "value": "a"}]},
+    )
+    assert created.status_code == 201
+    group_id = created.json()["id"]
+
+    response = await client.post(
+        "/api/node-groups/reorder",
+        json={"items": [{"id": group_id, "sort_order": 0}, {"id": group_id, "sort_order": 1}]},
+    )
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
 async def test_preview_node_groups(client):
     response = await client.get("/api/node-groups/_preview")
     assert response.status_code == 200

@@ -44,9 +44,6 @@ async def _require_subscription(
 async def create_subscription(
     db: AsyncSession, payload: SubscriptionCreate
 ) -> Subscription:
-    if payload.is_primary:
-        await _clear_primary(db)
-
     data = payload.model_dump()
     manual_node_links = data.pop("manual_node_links", None)
     data["filter_regex"] = _normalize_and_validate_regex(data.get("filter_regex", []))
@@ -54,6 +51,8 @@ async def create_subscription(
     data["exclude_node_names"] = _normalize_node_names(data.get("exclude_node_names", []))
     data["node_renames"] = _normalize_node_renames(data.get("node_renames", {}))
     data["manual_nodes"] = _merge_manual_nodes(data.get("manual_nodes") or [], manual_node_links)
+    if data.get("is_primary"):
+        await _clear_primary(db)
     item = Subscription(**data)
     _refresh_selected_nodes(item)
     db.add(item)
@@ -65,9 +64,6 @@ async def create_subscription(
 async def create_manual_node_subscription(
     db: AsyncSession, payload: ManualNodeCreate
 ) -> Subscription:
-    if payload.is_primary:
-        await _clear_primary(db)
-
     # 支持 raw 模式、base64 解码、yaml 或直接链接解析
     try:
         proxies, _ = parse_subscription_content(payload.node_links)
@@ -84,6 +80,8 @@ async def create_manual_node_subscription(
         selected_nodes,
         _resolve_prefix(name, prefix, payload.is_primary),
     )
+    if payload.is_primary:
+        await _clear_primary(db)
     item = Subscription(
         name=name,
         url="manual://nodes",
@@ -128,6 +126,9 @@ async def update_subscription(
         data["manual_nodes"] = deduplicate_nodes(data["manual_nodes"] or [])
     if manual_node_links is not None:
         data["manual_nodes"] = _merge_manual_nodes(data.get("manual_nodes", item.manual_nodes or []), manual_node_links)
+
+    if data.get("is_primary"):
+        await _clear_primary(db)
 
     selection_changed = bool(
         {
@@ -220,8 +221,6 @@ async def fetch_subscription_nodes(
         await db.commit()
         await db.refresh(live)
         return live
-    except HTTPException:
-        raise
     except Exception as exc:
         error_message = _format_fetch_error(exc)
         try:
@@ -257,6 +256,8 @@ async def fetch_subscription_nodes(
             sub_name,
             error_message,
         )
+        if isinstance(exc, HTTPException):
+            raise exc
         raise
 
 
@@ -409,7 +410,14 @@ def _refresh_selected_nodes(item: Subscription) -> None:
 
 
 def _merge_manual_nodes(existing_nodes: list[dict], node_links: str | None) -> list[dict]:
-    parsed_nodes = parse_node_links(node_links or "") if node_links else []
+    if not node_links or not node_links.strip():
+        return deduplicate_nodes(existing_nodes or [])
+    try:
+        parsed_nodes, _ = parse_subscription_content(node_links)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="未找到支持的节点链接或原始内容") from exc
+    if not parsed_nodes:
+        raise HTTPException(status_code=400, detail="未找到支持的节点链接或原始内容")
     return deduplicate_nodes([*(existing_nodes or []), *parsed_nodes])
 
 

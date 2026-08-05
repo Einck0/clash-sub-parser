@@ -221,6 +221,39 @@ async def test_fetch_subscription_nodes_supports_redirects_and_filters(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_fetch_subscription_http_failure_is_recorded(monkeypatch, db_session):
+    class MockClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    async def fail_fetch(*args, **kwargs):
+        raise HTTPException(status_code=413, detail="Subscription response is too large")
+
+    monkeypatch.setattr("app.services.subscription_service.httpx.AsyncClient", MockClient)
+    monkeypatch.setattr("app.services.subscription_service._fetch_subscription_text", fail_fetch)
+
+    item = Subscription(name="sub-http-error", url="https://example.com/sub")
+    db_session.add(item)
+    await db_session.commit()
+    await db_session.refresh(item)
+
+    with pytest.raises(HTTPException) as error:
+        await fetch_subscription_nodes(db_session, item)
+
+    assert error.value.status_code == 413
+    assert error.value.detail == "Subscription response is too large"
+    assert item.last_fetch_error == "413: Subscription response is too large"
+    assert item.fetch_failed_count == 1
+    assert item.last_fetched_at is not None
+
+
+@pytest.mark.asyncio
 async def test_fetch_subscription_empty_regex_selects_all_then_manual_excludes(monkeypatch, db_session):
     class MockResponse:
         is_redirect = False
@@ -457,6 +490,44 @@ async def test_create_manual_node_subscription_parses_links_without_storing_raw_
     assert [node["name"] for node in item.manual_nodes] == ["Manual Node"]
     assert [node["name"] for node in item.raw_nodes] == ["MN-Manual Node"]
     assert item.raw_nodes[0]["reality-opts"]["public-key"] == "key"
+
+
+@pytest.mark.asyncio
+async def test_create_subscription_rejects_invalid_manual_links(db_session):
+    with pytest.raises(HTTPException) as error:
+        await create_subscription(
+            db_session,
+            SubscriptionCreate(
+                name="invalid-manual",
+                url="https://example.com/sub",
+                manual_node_links="not-a-node-link",
+            ),
+        )
+
+    assert error.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_create_subscription_invalid_primary_keeps_existing_primary(db_session):
+    primary = await create_subscription(
+        db_session,
+        SubscriptionCreate(name="old-primary", url="https://example.com/old", is_primary=True),
+    )
+
+    with pytest.raises(HTTPException):
+        await create_subscription(
+            db_session,
+            SubscriptionCreate(
+                name="invalid-primary",
+                url="https://example.com/new",
+                is_primary=True,
+                filter_regex=["["],
+            ),
+        )
+
+    await db_session.commit()
+    await db_session.refresh(primary)
+    assert primary.is_primary is True
 
 
 @pytest.mark.asyncio

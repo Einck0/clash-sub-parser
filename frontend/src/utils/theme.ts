@@ -1,16 +1,18 @@
 import { ref, watch } from 'vue'
 
+type Theme = 'light' | 'dark'
+
 const THEME_KEY = 'clash-sub-theme'
 
-const theme = ref(loadTheme())
+const theme = ref<Theme>(loadTheme())
 
-function loadTheme() {
+function loadTheme(): Theme {
   const saved = localStorage.getItem(THEME_KEY)
   if (saved === 'light' || saved === 'dark') return saved
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
 }
 
-function applyTheme(t) {
+function applyTheme(t: Theme) {
   document.documentElement.setAttribute('data-theme', t)
   localStorage.setItem(THEME_KEY, t)
 }
@@ -26,7 +28,7 @@ export function useTheme() {
     theme.value = theme.value === 'dark' ? 'light' : 'dark'
   }
 
-  function setTheme(t) {
+  function setTheme(t: Theme) {
     theme.value = t
   }
 

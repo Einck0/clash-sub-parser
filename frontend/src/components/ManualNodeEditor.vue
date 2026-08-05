@@ -114,7 +114,8 @@
             </label>
             <label v-if="draft.type === 'trojan' || draft.type === 'vless' || draft.type === 'vmess'">
               <div class="muted">SNI</div>
-              <input v-model="draft.servername" placeholder="可选" />
+              <input v-if="draft.type === 'trojan'" v-model="draft.sni" placeholder="可选" />
+              <input v-else v-model="draft.servername" placeholder="可选" />
             </label>
             <label v-if="draft.type === 'vless'">
               <div class="muted">Flow</div>
@@ -275,6 +276,7 @@ function createDraft(type) {
     network: 'tcp',
     security: 'none',
     servername: '',
+    sni: '',
     flow: '',
     'client-fingerprint': '',
     'reality-public-key': '',

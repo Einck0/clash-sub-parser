@@ -19,8 +19,21 @@ def _build_signature(node: dict) -> str:
     node_type = str(node.get("type", "")).strip().lower()
     server = str(node.get("server", "")).strip().lower()
     port = str(node.get("port", "")).strip()
-    identity = str(node.get("uuid") or node.get("password") or "").strip().lower()
+    if node_type == "wireguard":
+        identity = str(node.get("private-key") or node.get("ip") or "").strip()
+        peer = str(node.get("public-key") or "").strip().lower()
+        wireguard_options = "|".join(
+            [
+                str(node.get("ipv6") or "").strip().lower(),
+                str(node.get("reserved") or "").strip().lower(),
+                str(node.get("mtu") or "").strip(),
+            ]
+        )
+    else:
+        identity = str(node.get("uuid") or node.get("password") or "").strip().lower()
+        peer = ""
+        wireguard_options = ""
     tls = str(node.get("tls", "")).strip().lower()
     network = str(node.get("network", "")).strip().lower()
     sni = str(node.get("servername") or node.get("sni") or "").strip().lower()
-    return "|".join([node_type, server, port, identity, tls, network, sni])
+    return "|".join([node_type, server, port, identity, peer, wireguard_options, tls, network, sni])

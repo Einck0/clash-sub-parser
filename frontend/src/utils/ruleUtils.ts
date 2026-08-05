@@ -11,14 +11,14 @@ export const RULE_TYPES = [
   'RULE-SET', 'MATCH',
 ]
 
-export function normalizeRuleType(type) {
+export function normalizeRuleType(type: unknown): string {
   return String(type || '').trim().toUpperCase()
 }
 
-export function parseOptions(text) {
+export function parseOptions(text: unknown): string[] {
   return String(text || '').split(',').map((s) => s.trim()).filter(Boolean)
 }
 
-export function proxyTargetsFromGroups(groups) {
-  return [...BUILTINS, ...groups.map((g) => g.name)]
+export function proxyTargetsFromGroups(groups: Array<{ name: string }>): string[] {
+  return [...BUILTINS, ...groups.map((g: { name: string }) => g.name)]
 }

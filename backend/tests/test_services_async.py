@@ -80,6 +80,35 @@ async def test_generate_yaml_and_script_respect_switches(db_session):
 
 
 @pytest.mark.asyncio
+async def test_generate_yaml_quotes_reality_short_id_that_looks_like_scientific_notation(db_session):
+    db_session.add(
+        Subscription(
+            name="reality",
+            url="https://example.com/reality",
+            raw_nodes=[
+                {
+                    "name": "reality-node",
+                    "type": "vless",
+                    "server": "example.com",
+                    "port": 443,
+                    "uuid": "00000000-0000-0000-0000-000000000000",
+                    "tls": True,
+                    "reality-opts": {
+                        "public-key": "example-public-key",
+                        "short-id": "815458e4",
+                    },
+                }
+            ],
+        )
+    )
+    await db_session.commit()
+
+    result = await generate_yaml(db_session, {"enabled": True, "rules": False, "dns": False})
+
+    assert "short-id: '815458e4'" in result["yaml"]
+
+
+@pytest.mark.asyncio
 async def test_node_group_preview_keeps_regex_dynamic_and_group_entries(db_session):
     sub = Subscription(
         name="sub1",
@@ -115,6 +144,33 @@ async def test_node_group_preview_keeps_regex_dynamic_and_group_entries(db_sessi
     assert "HK-Node" in mixed["resolved_nodes"]
     assert "Base" in mixed["resolved_nodes"]
     assert mixed["include_group_names"] == ["Base"]
+
+
+@pytest.mark.asyncio
+async def test_explicit_pass_member_survives_preview_and_yaml_export(db_session):
+    group = NodeGroup(
+        name="下载节点",
+        group_type="select",
+        include_entries=[
+            {"type": "node", "value": "DIRECT"},
+            {"type": "node", "value": "PASS"},
+        ],
+        add_fallback=False,
+    )
+    db_session.add(group)
+    await db_session.commit()
+
+    preview = await preview_node_groups(db_session)
+    item = next(entry for entry in preview if entry["name"] == "下载节点")
+    assert item["resolved_nodes"] == ["DIRECT", "PASS"]
+
+    result = await generate_yaml(
+        db_session,
+        {"enabled": True, "rules": False, "dns": False},
+    )
+    config = yaml.safe_load(result["yaml"])
+    exported = next(entry for entry in config["proxy-groups"] if entry["name"] == "下载节点")
+    assert exported["proxies"] == ["DIRECT", "PASS"]
 
 
 @pytest.mark.asyncio

@@ -1,3 +1,4 @@
+from copy import deepcopy
 import json
 import re
 
@@ -18,6 +19,37 @@ from app.services.proxy_chain_service import apply_bindings_to_nodes
 settings = get_settings()
 BUILTIN_PROXIES = ["DIRECT", "PASS", "REJECT"]
 MATCH_RULE_TYPES = {"MATCH"}
+
+
+class _QuotedYamlString(str):
+    pass
+
+
+class _ClashYamlDumper(yaml.SafeDumper):
+    pass
+
+
+def _represent_quoted_yaml_string(dumper, value):
+    return dumper.represent_scalar("tag:yaml.org,2002:str", str(value), style="'")
+
+
+_ClashYamlDumper.add_representer(_QuotedYamlString, _represent_quoted_yaml_string)
+
+
+def _dump_clash_yaml(payload: dict) -> str:
+    output = deepcopy(payload)
+    for proxy in output.get("proxies") or []:
+        if not isinstance(proxy, dict):
+            continue
+        reality_opts = proxy.get("reality-opts")
+        if not isinstance(reality_opts, dict):
+            continue
+        short_id = reality_opts.get("short-id")
+        if isinstance(short_id, str):
+            reality_opts["short-id"] = _QuotedYamlString(short_id)
+    return yaml.dump(output, Dumper=_ClashYamlDumper, sort_keys=False, allow_unicode=True)
+
+
 VALUE_RULE_TYPES = {
     "DOMAIN",
     "DOMAIN-SUFFIX",
@@ -102,7 +134,7 @@ async def generate_yaml(db: AsyncSession, switches: dict | None = None) -> dict:
     }
 
     primary_comments = await _get_primary_comments(db)
-    body = yaml.safe_dump(output, sort_keys=False, allow_unicode=True)
+    body = _dump_clash_yaml(output)
     if primary_comments:
         return {"yaml": "\n".join(primary_comments) + "\n" + body, "stats": stats}
     return {"yaml": body, "stats": stats}
@@ -151,7 +183,7 @@ async def generate_subscription_payload(db: AsyncSession, subscription_id: int) 
     # Single-sub export still applies global bindings that hit these nodes.
     nodes = await apply_bindings_to_nodes(db, list(item.raw_nodes or []))
     payload = {"proxies": nodes}
-    return {"yaml": yaml.safe_dump(payload, allow_unicode=True, sort_keys=False)}
+    return {"yaml": _dump_clash_yaml(payload)}
 
 
 async def _collect_all_nodes(db: AsyncSession) -> list[dict]:

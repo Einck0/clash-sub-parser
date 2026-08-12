@@ -22,12 +22,9 @@ def dedup_names(items: list[str]) -> list[str]:
 
 
 def with_fallback(names: list[str], enabled: bool) -> list[str]:
-    """Append PASS only when enabled AND the group has no real nodes."""
-    cleaned = [name for name in names if name and name != "PASS"]
-    if not enabled:
-        return cleaned
-    # Fallback means: empty group gets PASS; non-empty groups stay as-is.
-    if cleaned:
+    """Preserve explicit members and append PASS only when the group is empty."""
+    cleaned = dedup_names([name for name in names if name])
+    if not enabled or cleaned:
         return cleaned
     return ["PASS"]
 

@@ -3,12 +3,16 @@ FROM node:20-alpine AS frontend-build
 WORKDIR /frontend
 ARG NPM_CONFIG_REGISTRY
 COPY frontend/package*.json ./
-RUN npm ci ${NPM_CONFIG_REGISTRY:+--registry=$NPM_CONFIG_REGISTRY}
+RUN HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= npm ci ${NPM_CONFIG_REGISTRY:+--registry=$NPM_CONFIG_REGISTRY}
 COPY frontend/ ./
 RUN npm run build
 
 FROM python:3.10-slim AS runtime
 
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG ALL_PROXY
+ARG NO_PROXY
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

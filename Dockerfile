@@ -1,4 +1,4 @@
-FROM node:20-alpine AS frontend-build
+FROM node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293 AS frontend-build
 
 WORKDIR /frontend
 ARG NPM_CONFIG_REGISTRY
@@ -7,7 +7,7 @@ RUN HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= npm 
 COPY frontend/ ./
 RUN npm run build
 
-FROM python:3.10-slim AS runtime
+FROM python:3.10-slim@sha256:c1e4e6c01eb489c422288b2de34b0761ca316f7a2d98e2c33f47659a73ed108a AS runtime
 
 ARG HTTP_PROXY
 ARG HTTPS_PROXY

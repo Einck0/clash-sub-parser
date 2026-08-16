@@ -12,7 +12,7 @@
     <div class="grid-2">
       <label>
         <div class="muted">节点或订阅名称</div>
-        <input v-model="name" placeholder="例如：我的 WARP 节点" />
+        <input data-testid="manual-subscription-name" v-model="name" placeholder="例如：我的 WARP 节点" />
       </label>
       <label>
         <div class="muted">节点前缀（可选）</div>
@@ -44,23 +44,23 @@
         <div class="grid-2">
           <label>
             <div class="muted">节点名称</div>
-            <input v-model="draft.name" placeholder="例如：香港 01" />
+            <input data-testid="manual-node-name" v-model="draft.name" placeholder="例如：香港 01" />
           </label>
           <label>
             <div class="muted">服务器</div>
-            <input v-model="draft.server" placeholder="example.com 或 IP" />
+            <input data-testid="manual-node-server" v-model="draft.server" placeholder="example.com 或 IP" />
           </label>
           <label>
             <div class="muted">端口</div>
-            <input v-model.number="draft.port" type="number" min="1" max="65535" placeholder="443" />
+            <input data-testid="manual-node-port" v-model.number="draft.port" type="number" min="1" max="65535" placeholder="443" />
           </label>
           <label v-if="draft.type === 'ss'">
             <div class="muted">加密方式</div>
-            <input v-model="draft.cipher" placeholder="例如：chacha20-ietf-poly1305" />
+            <input data-testid="manual-node-cipher" v-model="draft.cipher" placeholder="例如：chacha20-ietf-poly1305" />
           </label>
           <label v-if="draft.type === 'ss'">
             <div class="muted">密码</div>
-            <input v-model="draft.password" type="password" autocomplete="new-password" />
+            <input data-testid="manual-node-password" v-model="draft.password" type="password" autocomplete="new-password" />
           </label>
           <label v-if="draft.type === 'trojan' || draft.type === 'vless'">
             <div class="muted">{{ draft.type === 'vless' ? 'UUID' : '密码' }}</div>
@@ -172,7 +172,7 @@
 
         <div v-if="formError" class="form-alert form-alert-error">{{ formError }}</div>
         <div class="form-footer">
-          <button type="button" class="primary" @click="addDraftNode">加入待保存列表</button>
+          <button type="button" class="primary" data-testid="manual-add-draft" @click="addDraftNode">加入待保存列表</button>
           <span class="muted">已添加 {{ draftNodes.length }} 个</span>
         </div>
       </div>
@@ -222,7 +222,7 @@
 
     <p v-if="props.error" class="form-alert form-alert-error">{{ props.error }}</p>
     <div class="form-footer">
-      <button type="button" class="primary" :disabled="props.saving" @click="submit">{{ props.saving ? '保存中...' : '保存并解析' }}</button>
+      <button type="button" class="primary" data-testid="manual-save" :disabled="props.saving" @click="submit">{{ props.saving ? '保存中...' : '保存并解析' }}</button>
       <button type="button" @click="$emit('cancel')">取消</button>
     </div>
   </div>

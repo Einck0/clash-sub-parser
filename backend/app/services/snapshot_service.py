@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timezone
+from datetime import datetime
 from sqlalchemy import DateTime, select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.config_snapshot import ConfigSnapshot
@@ -9,7 +9,7 @@ from app.models.node_group import NodeGroup
 from app.models.rule import Rule
 from app.models.rule_category import RuleCategory
 from app.models.subscription import Subscription
-from app.models.security_settings import SecuritySettings
+
 
 KEEP_COUNT = 50  # Maximum snapshots to keep
 

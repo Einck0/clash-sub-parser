@@ -7,7 +7,6 @@ It only answers: can we open a TCP connection to server:port in time?
 from __future__ import annotations
 
 import asyncio
-import socket
 import time
 from typing import Any
 

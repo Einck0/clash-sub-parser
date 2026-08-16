@@ -32,10 +32,13 @@ def validate_fetch_url(url: str, allow_private_hosts: bool = False) -> str:
         addresses = [ipaddress.ip_address(host)]
     except ValueError:
         try:
-            # Use SOCK_STREAM to get only the address types relevant for TCP connections
-            # Resolve twice with a short delay to detect DNS rebinding (TTL=0 attacks)
+            # 两次解析并合并结果，避免单次公共地址掩盖私网地址
             resolved = socket.getaddrinfo(host, parsed.port, type=socket.SOCK_STREAM)
-            addresses = list({ipaddress.ip_address(item[4][0]) for item in resolved})
+            resolved_again = socket.getaddrinfo(host, parsed.port, type=socket.SOCK_STREAM)
+            addresses = {
+                ipaddress.ip_address(item[4][0])
+                for item in (*resolved, *resolved_again)
+            }
             if not addresses:
                 raise HTTPException(status_code=400, detail="Subscription URL host could not be resolved")
         except socket.gaierror as exc:

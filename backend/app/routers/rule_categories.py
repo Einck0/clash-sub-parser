@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.schemas.rule_category import (
+    RuleCategoryBatch,
     RuleCategoryCreate,
     RuleCategoryRead,
     RuleCategoryReorder,
@@ -71,7 +72,7 @@ async def reorder_rule_categories_endpoint(
 
 @router.post("/batch")
 async def batch_rule_categories_endpoint(
-    payload: dict, db: AsyncSession = Depends(get_db)
+    payload: RuleCategoryBatch, db: AsyncSession = Depends(get_db)
 ) -> list[dict]:
     """Batch create/update/delete rule categories.
     
@@ -83,4 +84,4 @@ async def batch_rule_categories_endpoint(
         "reorder": [{"id": 1, "sort_order": 0}, ...]
     }
     """
-    return await batch_rule_categories(db, payload)
+    return await batch_rule_categories(db, payload.model_dump(exclude_unset=True))

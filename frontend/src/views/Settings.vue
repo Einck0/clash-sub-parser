@@ -225,7 +225,6 @@ async function save() {
     Object.assign(settings, data)
     if (newToken.value) {
       await loginAuthToken(newToken.value)
-      setAuthToken(newToken.value)
     }
     newToken.value = ''
     showToken.value = false

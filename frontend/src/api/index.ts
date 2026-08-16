@@ -1,5 +1,6 @@
 import { authHeaders } from '../auth'
 import { mockFetchExport, mockRequest } from './mock'
+import { buildErrorMessage, parseResponse } from './response'
 
 const API_BASE = '/api'
 const DEMO_MODE = import.meta.env.VITE_DEMO_MODE === 'true'
@@ -13,29 +14,6 @@ interface ApiResponse<T = any> {
 interface ApiError extends Error {
   response?: { status: number; data: any }
   userMessage?: string
-}
-
-async function parseResponse(response: Response): Promise<any> {
-  // 204/205 have no body; some browsers still advertise application/json.
-  if (response.status === 204 || response.status === 205) {
-    return null
-  }
-  const contentType = response.headers.get('content-type') || ''
-  if (contentType.includes('application/json')) {
-    const text = await response.text()
-    if (!text) return null
-    return JSON.parse(text)
-  }
-  return response.text()
-}
-
-function buildErrorMessage(data: any, fallback: string): string {
-  const detail = data?.detail
-  if (Array.isArray(detail)) {
-    return detail.map((item: any) => item.msg || JSON.stringify(item)).join('; ')
-  }
-  if (detail) return String(detail)
-  return fallback
 }
 
 async function request(method: string, url: string, data?: any): Promise<ApiResponse> {

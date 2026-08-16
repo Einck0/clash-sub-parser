@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class RuleCategoryBase(BaseModel):
@@ -29,3 +29,14 @@ class RuleCategoryReorderItem(BaseModel):
 
 class RuleCategoryReorder(BaseModel):
     items: list[RuleCategoryReorderItem]
+
+
+class RuleCategoryBatchUpdate(RuleCategoryUpdate):
+    id: int
+
+
+class RuleCategoryBatch(BaseModel):
+    delete: list[int] = Field(default_factory=list)
+    create: list[RuleCategoryCreate] = Field(default_factory=list)
+    update: list[RuleCategoryBatchUpdate] = Field(default_factory=list)
+    reorder: list[RuleCategoryReorderItem] = Field(default_factory=list)

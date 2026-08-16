@@ -141,3 +141,30 @@ async def test_get_nodes_empty(client):
     response = await client.get(f"/api/subscriptions/{sub_id}/nodes")
     assert response.status_code == 200
     assert response.json() == []
+
+
+@pytest.mark.asyncio
+async def test_fetch_manual_subscription_refreshes_saved_nodes_without_http_fetch(client):
+    created = await client.post(
+        "/api/subscriptions",
+        json={
+            "name": "manual-sub",
+            "url": "manual://nodes",
+            "manual_nodes": [
+                {
+                    "name": "manual-node",
+                    "type": "ss",
+                    "server": "127.0.0.1",
+                    "port": 8388,
+                    "cipher": "aes-128-gcm",
+                    "password": "test-password",
+                }
+            ],
+        },
+    )
+    assert created.status_code == 201
+
+    refreshed = await client.post(f"/api/subscriptions/{created.json()['id']}/fetch")
+
+    assert refreshed.status_code == 200
+    assert refreshed.json()["raw_nodes"] == created.json()["raw_nodes"]

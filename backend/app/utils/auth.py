@@ -5,11 +5,13 @@ from fastapi import Request
 
 AUTH_QUERY_PARAM = "token"
 AUTH_COOKIE = "clash_auth_token"
+AUTH_HASH_COOKIE = "clash_auth_hash"
 AUTH_HEADER = "x-clash-token"
 CSRF_HEADER = "x-clash-csrf"
 UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 PUBLIC_PATHS = {
     "/health",
+    "/ready",
     "/favicon.ico",
     "/robots.txt",
     "/api/settings/auth/check",
@@ -50,13 +52,20 @@ def is_unsafe_method(method: str) -> bool:
 
 
 def request_uses_cookie_auth(request: Request) -> bool:
-    if not request.cookies.get(AUTH_COOKIE):
+    if not (request.cookies.get(AUTH_COOKIE) or request.cookies.get(AUTH_HASH_COOKIE)):
         return False
     if request.headers.get(AUTH_HEADER):
         return False
     authorization = request.headers.get("authorization", "")
     scheme, _, value = authorization.partition(" ")
     return not (scheme.lower() == "bearer" and value)
+
+
+def request_hash_cookie_matches(request: Request, expected_hash: str) -> bool:
+    cookie_hash = request.cookies.get(AUTH_HASH_COOKIE, "")
+    if not cookie_hash or not expected_hash:
+        return False
+    return secrets.compare_digest(cookie_hash, expected_hash)
 
 
 def request_has_csrf_header(request: Request) -> bool:

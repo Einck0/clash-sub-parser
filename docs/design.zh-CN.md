@@ -272,8 +272,8 @@ CLASH_ALLOW_PRIVATE_FETCH_URLS=true
 ```text
 frontend/src/
 ├── App.vue                         # 全局布局与导航
-├── auth.js                         # 页面会话 token、API header、导出 URL 拼接
-├── api/index.js                    # API 封装与错误处理
+├── auth.ts                         # 页面会话 token、API header、导出 URL 拼接
+├── api/index.ts                    # API 封装与错误处理
 ├── components/
 │   ├── UiState.vue                 # loading / empty / error / success 状态组件
 │   └── NodePreviewList.vue         # 可搜索、可展开的节点预览组件

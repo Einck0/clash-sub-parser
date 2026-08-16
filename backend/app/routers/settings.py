@@ -3,7 +3,7 @@ from typing import Any
 
 import hashlib
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy import DateTime, delete, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
@@ -20,9 +20,8 @@ from app.models.security_settings import SecuritySettings
 from app.models.subscription import Subscription
 from app.schemas.security_settings import AuthCheckRead, AuthCheckRequest, SecuritySettingsRead, SecuritySettingsUpdate
 from app.services.security_settings_service import get_security_settings, to_read, token_matches, update_security_settings
-from app.utils.auth import AUTH_COOKIE, extract_request_token
+from app.utils.auth import AUTH_COOKIE, AUTH_HASH_COOKIE, extract_request_token, request_hash_cookie_matches
 
-AUTH_HASH_COOKIE = "clash_auth_hash"
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 settings = get_settings()
@@ -79,7 +78,8 @@ async def check_auth_token_endpoint(
 ) -> AuthCheckRead:
     item = await get_security_settings(db)
     raw_token = payload.token if payload else extract_request_token(request, allow_query=False)
-    if item.auth_enabled and not token_matches(raw_token, item.token_hash):
+    token_ok = token_matches(raw_token, item.token_hash) or request_hash_cookie_matches(request, item.token_hash)
+    if item.auth_enabled and not token_ok:
         raise HTTPException(status_code=401, detail="Invalid token")
     return AuthCheckRead(ok=True)
 

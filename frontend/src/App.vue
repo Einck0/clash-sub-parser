@@ -23,7 +23,13 @@
     </header>
 
     <nav class="tabs" aria-label="主导航">
-      <router-link v-for="item in navItems" :key="item.to" :to="item.to" class="tab">
+      <router-link
+        v-for="item in navItems"
+        :key="item.to"
+        :to="item.to"
+        class="tab"
+        :data-testid="`nav-${item.to === '/' ? 'subscriptions' : item.to.slice(1)}`"
+      >
         <span class="tab-icon" aria-hidden="true">{{ item.icon }}</span>
         <span class="tab-label">{{ item.label }}</span>
         <small>{{ item.hint }}</small>
@@ -46,7 +52,7 @@
 <script setup>
 import { onMounted, ref } from 'vue'
 import { checkAuthSession, getSecuritySettings, loginAuthToken } from './api'
-import { setAuthToken, withAuthToken } from './auth'
+import { setAuthToken, syncTokenFromUrl, withAuthToken } from './auth'
 import AuthGate from './components/AuthGate.vue'
 import ToastContainer from './components/ToastContainer.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
@@ -72,6 +78,7 @@ const showAuthGate = ref(false)
 const exportNeedsToken = ref(false)
 
 onMounted(() => {
+  syncTokenFromUrl()
   window.addEventListener('auth:unauthorized', handleUnauthorized)
   checkFrontendAccess()
 })
@@ -106,7 +113,8 @@ async function checkFrontendAccess() {
 async function handleAuthSubmit(token) {
   const { data } = await loginAuthToken(token)
   if (!data?.ok) throw new Error('Token 无效')
-  setAuthToken(token)
+  // 登录只依赖后端设置的 HttpOnly 哈希 Cookie
+  // 导出 URL 中的原始 token 只在内存中短暂保留
   await checkFrontendAccess()
 }
 

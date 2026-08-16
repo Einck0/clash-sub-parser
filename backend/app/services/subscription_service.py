@@ -172,6 +172,17 @@ async def delete_subscription(db: AsyncSession, item: Subscription) -> None:
 async def fetch_subscription_nodes(
     db: AsyncSession, item: Subscription
 ) -> Subscription:
+    # 手动节点没有远端 URL，点击刷新只重新计算当前保存的节点
+    if item.url == "manual://nodes":
+        _refresh_selected_nodes(item)
+        item.last_fetched_at = datetime.now(timezone.utc)
+        item.last_fetch_error = None
+        item.fetch_failed_count = 0
+        db.add(item)
+        await db.commit()
+        await db.refresh(item)
+        return item
+
     # Capture identity early: concurrent delete may expire/detach the ORM row.
     sub_id = item.id
     sub_name = item.name
@@ -388,6 +399,19 @@ def _apply_selection(
 def _refresh_selected_nodes(item: Subscription) -> None:
     source_nodes = item.source_nodes or []
     manual_nodes = item.manual_nodes or []
+    if item.url == "manual://nodes":
+        item.raw_nodes = _materialize_raw_nodes(
+            source_nodes,
+            manual_nodes,
+            filter_regex=item.filter_regex,
+            include_node_names=item.include_node_names or [],
+            exclude_node_names=item.exclude_node_names or [],
+            name=item.name,
+            node_prefix=item.node_prefix,
+            is_primary=item.is_primary,
+            node_renames=item.node_renames or {},
+        )
+        return
     if source_nodes or manual_nodes:
         item.raw_nodes = _materialize_raw_nodes(
             source_nodes,

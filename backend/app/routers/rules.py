@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.schemas.rule import RuleCreate, RuleRead, RuleReorder, RuleUpdate
+from app.schemas.rule import RuleBatch, RuleCreate, RuleRead, RuleReorder, RuleUpdate
 from app.services.rule_service import (
     batch_rules,
     create_rule,
@@ -70,7 +70,7 @@ async def reorder_rules_endpoint(
 
 @router.post("/batch")
 async def batch_rules_endpoint(
-    payload: dict, db: AsyncSession = Depends(get_db)
+    payload: RuleBatch, db: AsyncSession = Depends(get_db)
 ) -> list[RuleRead]:
     """Batch create/update/delete rules in a single request.
     
@@ -82,4 +82,4 @@ async def batch_rules_endpoint(
         "reorder": [{"id": 1, "sort_order": 0}, ...]
     }
     """
-    return await batch_rules(db, payload)
+    return await batch_rules(db, payload.model_dump(exclude_unset=True))

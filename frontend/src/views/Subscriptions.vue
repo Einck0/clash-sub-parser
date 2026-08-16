@@ -8,7 +8,7 @@
       </div>
       <div class="head-actions">
         <button class="primary" @click="openCreate">添加订阅</button>
-        <button @click="openManualNode">添加自定义节点</button>
+        <button data-testid="add-manual-node" @click="openManualNode">添加自定义节点</button>
         <button @click="load" :disabled="loading">{{ loading ? '刷新中...' : '刷新' }}</button>
       </div>
     </div>
@@ -42,6 +42,7 @@
         :key="sub.id"
         class="subscription-card"
         :class="{ 'is-disabled': !sub.enabled, 'is-primary-card': sub.is_primary }"
+        data-testid="subscription-card"
       >
         <div class="subscription-card-head">
           <div>
@@ -69,7 +70,9 @@
             <span>剩余 {{ remainingTraffic(sub) }}</span>
           </div>
         </div>
-        <div v-else class="empty-mini">暂无流量信息，拉取成功后如果上游返回 header 会显示在这里</div>
+        <div v-else class="empty-mini">
+          {{ isManualSubscription(sub) ? '本地手动节点，编辑后保存即生效' : '暂无流量信息，拉取成功后如果上游返回 header 会显示在这里' }}
+        </div>
 
         <div class="sub-selection-line">
           <span class="badge">候选 {{ (sub.source_nodes || []).length || (sub.raw_nodes || []).length }}</span>
@@ -89,7 +92,7 @@
             <strong>{{ sub.update_interval ? `${sub.update_interval} 分钟` : '-' }}</strong>
           </div>
           <div>
-            <span class="metric-label">上次拉取</span>
+            <span class="metric-label">{{ isManualSubscription(sub) ? '本地更新' : '上次拉取' }}</span>
             <strong>{{ sub.last_fetched_at ? formatLocalTime(sub.last_fetched_at) : '-' }}</strong>
           </div>
         </div>
@@ -98,14 +101,14 @@
           <span v-if="sub.last_fetch_error" class="status-error" :title="sub.last_fetch_error">
             失败 {{ sub.fetch_failed_count || 1 }} 次：{{ short(sub.last_fetch_error, 80) }}
           </span>
-          <span v-else class="status-ok">拉取正常</span>
+          <span v-else class="status-ok">{{ isManualSubscription(sub) ? '本地节点正常' : '拉取正常' }}</span>
           <a v-if="sub.profile_web_page_url" :href="sub.profile_web_page_url" target="_blank" rel="noreferrer">订阅主页</a>
         </div>
 
         <div class="action-row compact-actions sub-actions">
-          <button class="primary" @click="openEdit(sub)">编辑</button>
+          <button class="primary" data-testid="subscription-edit" @click="openEdit(sub)">编辑</button>
           <button @click="doFetch(sub.id)" :disabled="loadingFetchId === sub.id">
-            {{ loadingFetchId === sub.id ? '拉取中...' : '拉取' }}
+            {{ loadingFetchId === sub.id ? (isManualSubscription(sub) ? '刷新中...' : '拉取中...') : (isManualSubscription(sub) ? '刷新节点' : '拉取') }}
           </button>
           <button @click="showNodes(sub)">节点</button>
           <button
@@ -277,6 +280,10 @@ const viewingBaseNodes = computed(() => {
     return { ...node, name: baseName }
   })
 })
+
+function isManualSubscription(sub) {
+  return sub?.url === 'manual://nodes'
+}
 
 function resolvePrefix(sub) {
   const custom = String(sub?.node_prefix || '').trim()

@@ -7,7 +7,7 @@
         <p class="section-hint">主订阅在列表卡片设置。高级能力默认收起，打开后才显示对应配置。</p>
       </div>
       <button
-        v-if="form.id"
+        v-if="form.id && form.url !== 'manual://nodes'"
         class="primary"
         @click="handleFetch"
         :disabled="fetching || saveDisabled"
@@ -42,6 +42,7 @@
         type="button"
         class="feature-chip"
         :class="{ active: featureManual }"
+        data-testid="subscription-feature-manual"
         @click="featureManual = !featureManual"
       >
         手动节点
@@ -83,13 +84,14 @@
       </div>
 
       <div v-if="form.manual_nodes.length" class="node-select-list manual-node-list">
-        <div v-for="node in form.manual_nodes" :key="nodeName(node)" class="node-select-row">
+        <div v-for="(node, index) in form.manual_nodes" :key="nodeName(node)" class="node-select-row">
           <div class="node-select-name mono">
             <strong>{{ nodeName(node) }}</strong>
             <span>{{ node.type || '-' }} {{ node.server ? `| ${node.server}:${node.port || ''}` : '' }}</span>
           </div>
           <div class="node-select-actions">
-            <button class="danger" @click="removeManualNode(node)">移除</button>
+            <button data-testid="manual-node-edit" @click="openManualNodeEdit(index)">编辑</button>
+            <button class="danger" data-testid="manual-node-remove" @click="removeManualNode(node)">移除</button>
           </div>
         </div>
       </div>
@@ -199,14 +201,33 @@
         <strong>最终节点预览</strong>
         <span class="muted">{{ finalPreviewNames.length }} 个</span>
       </div>
-      <div class="mono final-preview">
+      <div class="mono final-preview" data-testid="manual-node-preview">
         <div v-for="(name, idx) in finalPreviewNames.slice(0, 120)" :key="idx">{{ name }}</div>
         <div v-if="!finalPreviewNames.length" class="empty-mini">暂无节点</div>
       </div>
     </div>
 
+    <div v-if="manualNodeEditIndex !== null" class="modal-backdrop manual-node-edit-backdrop">
+      <div class="modal" role="dialog" aria-modal="true" aria-label="编辑手动节点">
+        <div class="row space">
+          <div>
+            <p class="eyebrow">Manual Node</p>
+            <h3>编辑节点配置</h3>
+            <p class="section-hint">直接编辑 YAML，未修改的协议字段会原样保留。</p>
+          </div>
+          <button @click="closeManualNodeEdit">关闭</button>
+        </div>
+        <textarea data-testid="manual-node-yaml" v-model="manualNodeYaml" class="secret-textarea" style="min-height:260px"></textarea>
+        <p v-if="manualNodeEditError" class="form-alert form-alert-error">{{ manualNodeEditError }}</p>
+        <div class="form-footer">
+          <button class="primary" data-testid="manual-node-yaml-apply" @click="saveManualNodeEdit">应用修改</button>
+          <button @click="closeManualNodeEdit">取消</button>
+        </div>
+      </div>
+    </div>
+
     <div class="form-footer">
-      <button class="primary" @click="handleSave" :disabled="saveDisabled || fetching">保存</button>
+      <button class="primary" data-testid="subscription-save" @click="handleSave" :disabled="saveDisabled || fetching">保存</button>
       <button @click="$emit('cancel')">取消</button>
     </div>
   </div>
@@ -214,6 +235,7 @@
 
 <script setup>
 import { computed, ref, watch } from 'vue'
+import { parseManualNodeYaml, serializeManualNode } from '../utils/manualNodeYaml'
 import { fetchSubscription, getApiErrorMessage } from '../api'
 
 const props = defineProps({
@@ -227,6 +249,9 @@ const regexError = ref('')
 const nodeSearch = ref('')
 const renameSearch = ref('')
 const manualNodeLinks = ref('')
+const manualNodeEditIndex = ref(null)
+const manualNodeYaml = ref('')
+const manualNodeEditError = ref('')
 const nameEdited = ref(false)
 const lastAutoName = ref('')
 
@@ -248,6 +273,7 @@ watch(
       nodeSearch.value = ''
       renameSearch.value = ''
       manualNodeLinks.value = ''
+      closeManualNodeEdit()
       nameEdited.value = false
       lastAutoName.value = ''
       featureManual.value = false
@@ -275,6 +301,7 @@ watch(
     nodeSearch.value = ''
     renameSearch.value = ''
     manualNodeLinks.value = ''
+    closeManualNodeEdit()
     nameEdited.value = true
     lastAutoName.value = ''
     featureManual.value = (value.manual_nodes || []).length > 0
@@ -304,12 +331,15 @@ watch(regexText, (value) => {
 })
 
 const candidateNodes = computed(() => {
+  const manualNodes = form.value.manual_nodes || []
   const upstream = form.value.source_nodes?.length
     ? form.value.source_nodes
-    : (form.value.raw_nodes || [])
-  // When using raw_nodes fallback, names may already include prefix/rename.
-  // Prefer source_nodes after fetch for correct selection/rename keys.
-  return uniqueNodesByName([...(upstream || []), ...(form.value.manual_nodes || [])])
+    : manualNodes.length
+      ? []
+      : (form.value.raw_nodes || [])
+  // raw_nodes 已经经过前缀与重命名。手动节点存在时必须以原始 manual_nodes
+  // 作为候选源，不能同时回退 raw_nodes，否则编辑预览会重复加前缀。
+  return uniqueNodesByName([...(upstream || []), ...manualNodes])
 })
 
 const regexPatterns = computed(() => {
@@ -427,6 +457,34 @@ function removeManualNode(node) {
   form.value.manual_nodes = (form.value.manual_nodes || []).filter((item) => nodeName(item) !== name)
   form.value.include_node_names = (form.value.include_node_names || []).filter((item) => item !== name)
   form.value.exclude_node_names = (form.value.exclude_node_names || []).filter((item) => item !== name)
+}
+
+function openManualNodeEdit(index) {
+  const node = form.value.manual_nodes?.[index]
+  if (!node) return
+  manualNodeEditIndex.value = index
+  manualNodeYaml.value = serializeManualNode(node)
+  manualNodeEditError.value = ''
+}
+
+function closeManualNodeEdit() {
+  manualNodeEditIndex.value = null
+  manualNodeYaml.value = ''
+  manualNodeEditError.value = ''
+}
+
+function saveManualNodeEdit() {
+  const index = manualNodeEditIndex.value
+  if (!Number.isInteger(index)) return
+  try {
+    const edited = parseManualNodeYaml(manualNodeYaml.value)
+    const next = [...(form.value.manual_nodes || [])]
+    next[index] = edited
+    form.value.manual_nodes = next
+    closeManualNodeEdit()
+  } catch (error) {
+    manualNodeEditError.value = error.message || '节点配置无法保存'
+  }
 }
 
 function clearManualSelection() {

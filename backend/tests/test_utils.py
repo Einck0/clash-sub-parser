@@ -1,3 +1,7 @@
+import socket
+
+import pytest
+
 from app.utils.base64_decode import try_base64_decode
 from app.utils.dedup import deduplicate_nodes
 from app.utils.validators import ensure_group_ids_exist, validate_fetch_url, validate_no_circular_reference
@@ -80,6 +84,21 @@ def test_validate_fetch_url_rejects_unsafe_targets() -> None:
 
 def test_validate_fetch_url_allows_private_targets_when_configured() -> None:
     assert validate_fetch_url("http://127.0.0.1/sub", allow_private_hosts=True) == "http://127.0.0.1/sub"
+
+
+def test_validate_fetch_url_checks_dns_against_rebinding(monkeypatch) -> None:
+    answers = [
+        [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("1.1.1.1", 80))],
+        [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 80))],
+    ]
+
+    def fake_getaddrinfo(*args, **kwargs):
+        return answers.pop(0)
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+
+    with pytest.raises(Exception, match="private"):
+        validate_fetch_url("http://example.test/sub")
 
 
 def test_parse_vless_reality_link_keeps_reality_options() -> None:

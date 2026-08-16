@@ -2,7 +2,7 @@ from starlette.requests import Request
 
 from app.models.security_settings import SecuritySettings
 from app.services.security_settings_service import hash_token, token_matches
-from app.utils.auth import extract_request_token, request_has_csrf_header, request_uses_cookie_auth, is_export_path, is_public_path, request_needs_auth, validate_token
+from app.utils.auth import AUTH_HASH_COOKIE, extract_request_token, request_has_csrf_header, request_uses_cookie_auth, is_export_path, is_public_path, request_needs_auth, validate_token
 
 
 def make_request(query: str = "", headers: dict | None = None):
@@ -103,3 +103,10 @@ def test_cookie_auth_requires_explicit_csrf_header_for_unsafe_api_requests() -> 
         headers={"Cookie": "clash_auth_token=cookie-token", "X-Clash-Token": "header-token"}
     )
     assert not request_uses_cookie_auth(header_request)
+
+
+def test_hash_cookie_is_cookie_auth_without_being_treated_as_raw_token() -> None:
+    request = make_request(headers={"Cookie": f"{AUTH_HASH_COOKIE}=hashed-token"})
+
+    assert extract_request_token(request) == ""
+    assert request_uses_cookie_auth(request)

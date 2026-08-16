@@ -1,7 +1,7 @@
 from copy import deepcopy
 import json
-import re
 
+from fastapi import HTTPException
 import yaml
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -179,7 +179,7 @@ async def generate_script(db: AsyncSession, switches: dict | None = None) -> dic
 async def generate_subscription_payload(db: AsyncSession, subscription_id: int) -> dict:
     item = await db.get(Subscription, subscription_id)
     if not item:
-        return {"yaml": ""}
+        raise HTTPException(status_code=404, detail="Subscription not found")
     # Single-sub export still applies global bindings that hit these nodes.
     nodes = await apply_bindings_to_nodes(db, list(item.raw_nodes or []))
     payload = {"proxies": nodes}
@@ -325,6 +325,3 @@ async def get_primary_subscription_headers(db: AsyncSession) -> dict[str, str]:
     if profile_web_page_url:
         headers["Profile-Web-Page-Url"] = profile_web_page_url
     return headers
-
-
-    return dedup_names(items)

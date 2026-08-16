@@ -38,3 +38,35 @@ async def test_export_and_reset_config(client):
     subs = await client.get("/api/subscriptions")
     assert subs.status_code == 200
     assert subs.json() == []
+
+
+@pytest.mark.asyncio
+async def test_login_session_uses_hash_cookie_and_enforces_csrf(client):
+    configured = await client.patch(
+        "/api/settings/security",
+        json={"auth_enabled": True, "token": "secret-token"},
+    )
+    assert configured.status_code == 200, configured.text
+
+    login = await client.post(
+        "/api/settings/auth/login",
+        json={"token": "secret-token"},
+    )
+    assert login.status_code == 200, login.text
+    assert "clash_auth_hash=" in login.headers.get("set-cookie", "")
+
+    session = await client.post("/api/settings/auth/check")
+    assert session.status_code == 200, session.text
+
+    without_csrf = await client.post(
+        "/api/subscriptions",
+        json={"name": "csrf-blocked", "url": "https://example.com/sub"},
+    )
+    assert without_csrf.status_code == 403, without_csrf.text
+
+    with_csrf = await client.post(
+        "/api/subscriptions",
+        headers={"X-Clash-CSRF": "1"},
+        json={"name": "csrf-accepted", "url": "https://example.com/sub"},
+    )
+    assert with_csrf.status_code == 201, with_csrf.text

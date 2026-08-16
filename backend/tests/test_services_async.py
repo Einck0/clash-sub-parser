@@ -10,11 +10,11 @@ from app.models.node_group import NodeGroup
 from app.models.subscription import Subscription
 from app.schemas.node_group import NodeGroupCreate
 from app.schemas.rule import RuleCreate
-from app.schemas.subscription import SubscriptionCreate
-from app.services.generate_service import generate_script, generate_yaml
+from app.schemas.subscription import SubscriptionCreate, SubscriptionUpdate
+from app.services.generate_service import generate_script, generate_subscription_payload, generate_yaml
 from app.services.node_group_service import create_node_group, preview_node_groups
 from app.services.rule_service import create_rule
-from app.services.subscription_service import create_subscription, fetch_subscription_nodes
+from app.services.subscription_service import create_subscription, fetch_subscription_nodes, update_subscription
 
 
 @pytest_asyncio.fixture
@@ -106,6 +106,14 @@ async def test_generate_yaml_quotes_reality_short_id_that_looks_like_scientific_
     result = await generate_yaml(db_session, {"enabled": True, "rules": False, "dns": False})
 
     assert "short-id: '815458e4'" in result["yaml"]
+
+
+@pytest.mark.asyncio
+async def test_generate_subscription_payload_returns_not_found_for_unknown_subscription(db_session):
+    with pytest.raises(HTTPException) as error:
+        await generate_subscription_payload(db_session, 999999)
+
+    assert error.value.status_code == 404
 
 
 @pytest.mark.asyncio
@@ -222,7 +230,7 @@ async def test_fetch_subscription_nodes_supports_redirects_and_filters(monkeypat
             if hasattr(self, 'text'):
                 yield self.text.encode()
             else:
-                yield b
+                return
 
     class MockClient:
         def __init__(self, *args, **kwargs):
@@ -340,7 +348,7 @@ async def test_fetch_subscription_empty_regex_selects_all_then_manual_excludes(m
             if hasattr(self, 'text'):
                 yield self.text.encode()
             else:
-                yield b
+                return
 
     class MockClient:
         def __init__(self, *args, **kwargs):
@@ -609,7 +617,7 @@ async def test_subscription_manual_nodes_are_merged_with_fetched_nodes(monkeypat
             if hasattr(self, 'text'):
                 yield self.text.encode()
             else:
-                yield b
+                return
 
     class MockClient:
         def __init__(self, *args, **kwargs):
@@ -652,6 +660,32 @@ async def test_subscription_manual_nodes_are_merged_with_fetched_nodes(monkeypat
     assert [node["name"] for node in updated.source_nodes] == ["HK-1"]
     assert [node["name"] for node in updated.manual_nodes] == ["Manual-1"]
     assert [node["name"] for node in updated.raw_nodes] == ["SUB-HK-1", "SUB-Manual-1"]
+
+
+@pytest.mark.asyncio
+async def test_clearing_manual_subscription_nodes_clears_materialized_nodes(db_session):
+    item = Subscription(
+        name="manual-clear",
+        url="manual://nodes",
+        manual_nodes=[
+            {"name": "Manual-1", "type": "ss", "server": "manual.example", "port": 443},
+        ],
+        raw_nodes=[
+            {"name": "manual-clear-Manual-1", "type": "ss", "server": "manual.example", "port": 443},
+        ],
+    )
+    db_session.add(item)
+    await db_session.commit()
+    await db_session.refresh(item)
+
+    updated = await update_subscription(
+        db_session,
+        item,
+        SubscriptionUpdate(manual_nodes=[]),
+    )
+
+    assert updated.manual_nodes == []
+    assert updated.raw_nodes == []
 
 
 @pytest.mark.asyncio
@@ -728,7 +762,7 @@ async def test_fetch_subscription_nodes_uses_runtime_proxy_setting(monkeypatch, 
             if hasattr(self, 'text'):
                 yield self.text.encode()
             else:
-                yield b
+                return
 
     class MockClient:
         def __init__(self, *args, **kwargs):

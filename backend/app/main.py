@@ -1,29 +1,28 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 import logging
-import secrets
 import time
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from sqlalchemy import text
 
 from app.config import get_settings
 from app.logging_config import setup_logging
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db, init_db
-from app.models.config_snapshot import ConfigSnapshot  # ensure model is registered
+from app.models.config_snapshot import ConfigSnapshot  # noqa: F401
 from app.database import AsyncSessionLocal
 from app.routers import dns, downloads, generate, node_groups, probe, proxy_chains, rule_categories, rules, settings as settings_router, snapshots, subscriptions
 from app.services.generate_config_service import generate_config_to_switches, get_generate_config
 from app.services.generate_service import generate_script, generate_yaml, get_primary_subscription_headers
 from app.services.scheduler import shutdown_scheduler, start_scheduler
 from app.services.security_settings_service import get_security_settings, token_matches
-from app.utils.auth import extract_request_token, is_api_path, is_export_path, is_frontend_path, is_public_path, is_unsafe_method, request_has_csrf_header, request_needs_auth, request_uses_cookie_auth
+from app.utils.auth import extract_request_token, is_api_path, is_export_path, is_frontend_path, is_public_path, is_unsafe_method, request_has_csrf_header, request_hash_cookie_matches, request_needs_auth, request_uses_cookie_auth
 
 logger = logging.getLogger(__name__)
-AUTH_HASH_COOKIE = "clash_auth_hash"
 
 settings = get_settings()
 FRONTEND_DIST_DIR = Path(__file__).resolve().parents[1] / "frontend_dist"
@@ -69,11 +68,9 @@ async def token_auth_middleware(request, call_next):
     raw_token = extract_request_token(request, allow_query=is_export_path(request.url.path))
     token_ok = token_matches(raw_token, security.token_hash)
 
-    # If not matched via header/query, try hash cookie (SHA-256 of raw token)
+    # If not matched via header/query, try the HttpOnly hash cookie.
     if not token_ok:
-        hash_cookie = request.cookies.get(AUTH_HASH_COOKIE)
-        if hash_cookie and security.token_hash:
-            token_ok = secrets.compare_digest(hash_cookie, security.token_hash)
+        token_ok = request_hash_cookie_matches(request, security.token_hash)
 
     if request_needs_auth(request.url.path, security):
         if security.auth_enabled and not security.token_hash:
@@ -159,6 +156,12 @@ async def root():
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/ready")
+async def readiness(db: AsyncSession = Depends(get_db)) -> dict[str, str]:
+    await db.execute(text("SELECT 1"))
+    return {"status": "ready"}
 
 
 # NOTE: /yaml and /script are protected via token_auth_middleware → is_export_path.

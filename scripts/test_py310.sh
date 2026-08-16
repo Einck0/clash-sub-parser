@@ -30,5 +30,7 @@ case "$MAJOR_MINOR" in
 esac
 
 echo "[test] using interpreter: $PY"
-"$PY" -m pip install -r requirements.txt
+if [ "${INSTALL_DEPS:-1}" = "1" ]; then
+  "$PY" -m pip install -r requirements-dev.txt
+fi
 "$PY" -m pytest -q

@@ -56,3 +56,14 @@ class RuleReorderItem(BaseModel):
 
 class RuleReorder(BaseModel):
     items: list[RuleReorderItem]
+
+
+class RuleBatchUpdate(RuleUpdate):
+    id: int
+
+
+class RuleBatch(BaseModel):
+    delete: list[int] = Field(default_factory=list)
+    create: list[RuleCreate] = Field(default_factory=list)
+    update: list[RuleBatchUpdate] = Field(default_factory=list)
+    reorder: list[RuleReorderItem] = Field(default_factory=list)

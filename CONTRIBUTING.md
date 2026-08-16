@@ -12,7 +12,7 @@ Use Python 3.10. Do not rely on system Python when a virtual environment is avai
 cd backend
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 python -m app.main
 ```
 

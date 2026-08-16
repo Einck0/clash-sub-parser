@@ -26,7 +26,7 @@
             <label><input type="checkbox" v-model="switches.dns" :disabled="!switches.enabled" /> DNS</label>
           </div>
           <div class="template-actions" style="margin-top:10px">
-            <button class="primary" @click="buildYaml" :disabled="!!working">{{ working === 'yaml' ? '生成中...' : '生成 YAML' }}</button>
+            <button class="primary" data-testid="generate-yaml" @click="buildYaml" :disabled="!!working">{{ working === 'yaml' ? '生成中...' : '生成 YAML' }}</button>
             <button class="primary" @click="buildScript" :disabled="!!working">{{ working === 'script' ? '生成中...' : '生成 Script.js' }}</button>
             <button @click="buildAll" :disabled="!!working">{{ working === 'all' ? '生成中...' : '⚡ 全部生成' }}</button>
           </div>
@@ -87,7 +87,7 @@
                 <button @click="download(yamlResult, 'generated-config.yaml', 'text/yaml')">下载</button>
               </div>
             </div>
-            <textarea v-model="yamlResult" placeholder="点击“生成 YAML”后显示"></textarea>
+            <textarea data-testid="generated-yaml-output" v-model="yamlResult" placeholder="点击“生成 YAML”后显示"></textarea>
           </div>
 
           <div class="result-card">

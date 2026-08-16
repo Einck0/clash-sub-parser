@@ -81,7 +81,7 @@
 
 - [x] 增加更多 API 路由级测试（generate settings / settings export-reset / proxy-chain preview+ledger）。
 - [ ] 增加端到端 UI smoke test。
-- [x] 增加依赖版本 pinning 或 Python lock 文件（requirements 最低版本 pin）。
+- [x] 固定 Python runtime 与 dev 直接依赖版本，拆分运行时和开发测试依赖。
 - [ ] 增加发布前 secret scan 和 compose config scan。
 - [ ] 如果暴露公网，建议同时使用 HTTPS 反代；token 保护用于轻量访问控制，不替代完整账号体系。
 

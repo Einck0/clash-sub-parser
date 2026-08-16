@@ -73,11 +73,8 @@
             'is-empty': (previewById(group.id)?.resolved_count || 0) === 0,
             dragging: draggingGroupId === group.id,
           }"
-          :draggable="canReorderGroups"
-          @dragstart="onGroupDragStart($event, group)"
           @dragover.prevent
           @drop="onGroupDrop(group)"
-          @dragend="draggingGroupId = null"
         >
           <div class="group-card-head">
             <div class="group-title-block">
@@ -87,6 +84,9 @@
                 :title="canReorderGroups ? '拖拽排序' : '清空筛选后再拖拽排序'"
                 data-drag-handle
                 :disabled="!canReorderGroups"
+                :draggable="canReorderGroups"
+                @dragstart="onGroupDragStart($event, group)"
+                @dragend="draggingGroupId = null"
                 @click.stop
                 @mousedown.stop
               >☰</button>

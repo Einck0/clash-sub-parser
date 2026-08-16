@@ -75,15 +75,12 @@
         :key="cat._clientId || cat.id || `new-${idx}`"
         class="category-card sortable-card"
         :class="{ dragging: draggingCategoryKey === categoryKey(cat) }"
-        draggable="true"
-        @dragstart="onCategoryDragStart($event, cat)"
         @dragover.prevent
         @drop="onCategoryDrop(cat)"
-        @dragend="draggingCategoryKey = null"
       >
         <div class="category-top" @click="cat.id && openCategory(cat)">
           <div class="sortable-title">
-            <button type="button" class="drag-handle" title="拖拽排序" data-drag-handle @click.stop @mousedown.stop>☰</button>
+            <button type="button" class="drag-handle" title="拖拽排序" data-drag-handle draggable="true" @dragstart="onCategoryDragStart($event, cat)" @dragend="draggingCategoryKey = null" @click.stop @mousedown.stop>☰</button>
             <div>
               <span class="category-index">#{{ idx + 1 }}</span>
               <h3>{{ cat.name || '未命名类别' }}</h3>

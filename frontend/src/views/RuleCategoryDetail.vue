@@ -92,14 +92,11 @@
             v-for="(item, idx) in pagedRules"
             :key="item._clientId"
             :class="{ dragging: draggingRuleKey === item._clientId }"
-            draggable="true"
-            @dragstart="onRuleDragStart($event, item)"
             @dragover.prevent
             @drop="onRuleDrop(item)"
-            @dragend="draggingRuleKey = null"
           >
             <td class="col-index muted">
-              <button type="button" class="drag-handle drag-mini" title="拖拽排序" data-drag-handle @click.stop @mousedown.stop>☰</button>
+              <button type="button" class="drag-handle drag-mini" title="拖拽排序" data-drag-handle draggable="true" @dragstart="onRuleDragStart($event, item)" @dragend="draggingRuleKey = null" @click.stop @mousedown.stop>☰</button>
               {{ pageStart + idx + 1 }}
             </td>
             <td class="col-enabled no-drag"><input type="checkbox" v-model="item.enabled" @dragstart.stop.prevent /></td>
@@ -143,15 +140,12 @@
         :key="`mobile-${item._clientId}`"
         class="mobile-rule-card sortable-card"
         :class="{ dragging: draggingRuleKey === item._clientId }"
-        draggable="true"
-        @dragstart="onRuleDragStart($event, item)"
         @dragover.prevent
         @drop="onRuleDrop(item)"
-        @dragend="draggingRuleKey = null"
       >
         <div class="mobile-rule-head">
           <div class="sortable-title">
-            <button type="button" class="drag-handle" title="拖拽排序" data-drag-handle @click.stop @mousedown.stop>☰</button>
+            <button type="button" class="drag-handle" title="拖拽排序" data-drag-handle draggable="true" @dragstart="onRuleDragStart($event, item)" @dragend="draggingRuleKey = null" @click.stop @mousedown.stop>☰</button>
             <div>
               <span class="category-index">#{{ pageStart + idx + 1 }}</span>
               <strong>{{ item.name || item.type || '未命名规则' }}</strong>

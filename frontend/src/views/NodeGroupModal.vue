@@ -156,11 +156,8 @@
               dragging: draggingIndex === idx,
               'is-editing': entry.type === 'regex' && editingRegexIndex === idx,
             }"
-            :draggable="entry.type === 'regex' && editingRegexIndex === idx ? false : true"
-            @dragstart="onDragStart($event, idx)"
             @dragover.prevent
             @drop="onDrop(idx)"
-            @dragend="draggingIndex = -1"
           >
             <button
               v-if="!(entry.type === 'regex' && editingRegexIndex === idx)"
@@ -168,6 +165,9 @@
               class="drag-handle"
               title="拖拽排序"
               data-drag-handle
+              draggable="true"
+              @dragstart="onDragStart($event, idx)"
+              @dragend="draggingIndex = -1"
               @click.stop
               @mousedown.stop
             >☰</button>

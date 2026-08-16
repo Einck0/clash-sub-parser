@@ -84,12 +84,32 @@
       </div>
 
       <div v-if="form.manual_nodes.length" class="node-select-list manual-node-list">
-        <div v-for="(node, index) in form.manual_nodes" :key="nodeName(node)" class="node-select-row">
+        <div
+          v-for="(node, index) in form.manual_nodes"
+          :key="nodeName(node)"
+          class="node-select-row"
+          :class="{ dragging: draggingManualNodeIndex === index }"
+          data-testid="manual-saved-node-row"
+          @dragover.prevent
+          @drop="dropManualNode(index)"
+        >
+          <button
+            type="button"
+            class="drag-handle"
+            data-drag-handle
+            data-testid="manual-saved-node-drag-handle"
+            draggable="true"
+            aria-label="拖动排序"
+            @dragstart="startManualNodeDrag($event, index)"
+            @dragend="draggingManualNodeIndex = null"
+          >⠿</button>
           <div class="node-select-name mono">
             <strong>{{ nodeName(node) }}</strong>
             <span>{{ node.type || '-' }} {{ node.server ? `| ${node.server}:${node.port || ''}` : '' }}</span>
           </div>
           <div class="node-select-actions">
+            <button type="button" title="上移" :disabled="index === 0" @click="moveManualNode(index, -1)">↑</button>
+            <button type="button" title="下移" :disabled="index === form.manual_nodes.length - 1" @click="moveManualNode(index, 1)">↓</button>
             <button data-testid="manual-node-edit" @click="openManualNodeEdit(index)">编辑</button>
             <button class="danger" data-testid="manual-node-remove" @click="removeManualNode(node)">移除</button>
           </div>
@@ -236,6 +256,7 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { parseManualNodeYaml, serializeManualNode } from '../utils/manualNodeYaml'
+import { setDragGhost } from '../utils/drag'
 import { fetchSubscription, getApiErrorMessage } from '../api'
 
 const props = defineProps({
@@ -250,6 +271,7 @@ const nodeSearch = ref('')
 const renameSearch = ref('')
 const manualNodeLinks = ref('')
 const manualNodeEditIndex = ref(null)
+const draggingManualNodeIndex = ref(null)
 const manualNodeYaml = ref('')
 const manualNodeEditError = ref('')
 const nameEdited = ref(false)
@@ -450,6 +472,31 @@ function setNodeMode(node, mode) {
   if (mode === 'exclude') exclude.add(name)
   form.value.include_node_names = [...include]
   form.value.exclude_node_names = [...exclude]
+}
+
+function startManualNodeDrag(event, index) {
+  draggingManualNodeIndex.value = index
+  setDragGhost(event, `节点 #${index + 1}`)
+}
+
+function dropManualNode(targetIndex) {
+  const sourceIndex = draggingManualNodeIndex.value
+  draggingManualNodeIndex.value = null
+  if (!Number.isInteger(sourceIndex) || sourceIndex === targetIndex) return
+  reorderManualNodes(sourceIndex, targetIndex)
+}
+
+function moveManualNode(index, direction) {
+  const targetIndex = index + direction
+  if (targetIndex < 0 || targetIndex >= form.value.manual_nodes.length) return
+  reorderManualNodes(index, targetIndex)
+}
+
+function reorderManualNodes(sourceIndex, targetIndex) {
+  const next = [...(form.value.manual_nodes || [])]
+  const [node] = next.splice(sourceIndex, 1)
+  next.splice(targetIndex, 0, node)
+  form.value.manual_nodes = next
 }
 
 function removeManualNode(node) {

@@ -3,7 +3,7 @@ FROM node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb836
 WORKDIR /frontend
 ARG NPM_CONFIG_REGISTRY
 COPY frontend/package*.json ./
-RUN HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= npm ci --fetch-retries=5 --fetch-retry-factor=2 --fetch-retry-mintimeout=10000 --fetch-retry-maxtimeout=120000 ${NPM_CONFIG_REGISTRY:+--registry=$NPM_CONFIG_REGISTRY}
+RUN HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= npm ci --no-audit --no-fund --fetch-retries=5 --fetch-retry-factor=2 --fetch-retry-mintimeout=10000 --fetch-retry-maxtimeout=120000 ${NPM_CONFIG_REGISTRY:+--registry=$NPM_CONFIG_REGISTRY}
 COPY frontend/ ./
 RUN npm run build
 

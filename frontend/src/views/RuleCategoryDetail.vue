@@ -200,7 +200,7 @@
 
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router'
 import { useAppStore } from '../stores/app'
 import { useUrlState } from '../utils/urlState'
 
@@ -241,8 +241,28 @@ const saveStatus = computed(() => saving.value ? '正在同步' : (hasUnsavedCha
 onMounted(() => {
   load()
   window.addEventListener('keydown', handleGlobalKeydown)
+  window.addEventListener('beforeunload', handleBeforeUnload)
 })
-onUnmounted(() => window.removeEventListener('keydown', handleGlobalKeydown))
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleGlobalKeydown)
+  window.removeEventListener('beforeunload', handleBeforeUnload)
+})
+
+// 有未保存草稿时拦截页内导航和刷新，防静默丢失
+onBeforeRouteLeave(async () => {
+  if (!hasUnsavedChanges.value) return true
+  const ok = await store.confirm({
+    title: '未保存更改',
+    message: '有未保存的规则更改，离开将丢失。确定离开吗？',
+    confirmText: '丢弃并离开',
+    danger: true,
+  })
+  return ok
+})
+
+function handleBeforeUnload(e) {
+  if (hasUnsavedChanges.value) e.preventDefault()
+}
 
 function handleGlobalKeydown(e) {
   if ((e.ctrlKey || e.metaKey) && e.key === 's') {

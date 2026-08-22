@@ -116,6 +116,7 @@
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import { onBeforeRouteLeave } from 'vue-router'
 import { useAppStore } from '../stores/app'
 
 const store = useAppStore()
@@ -154,8 +155,28 @@ function handleGlobalKeydown(e) {
 onMounted(() => {
   load()
   window.addEventListener('keydown', handleGlobalKeydown)
+  window.addEventListener('beforeunload', handleBeforeUnload)
 })
-onUnmounted(() => window.removeEventListener('keydown', handleGlobalKeydown))
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleGlobalKeydown)
+  window.removeEventListener('beforeunload', handleBeforeUnload)
+})
+
+// 有未保存草稿时拦截页内导航和刷新，防静默丢失
+onBeforeRouteLeave(async () => {
+  if (!hasUnsavedChanges.value) return true
+  const ok = await store.confirm({
+    title: '未保存更改',
+    message: '有未保存的分类更改，离开将丢失。确定离开吗？',
+    confirmText: '丢弃并离开',
+    danger: true,
+  })
+  return ok
+})
+
+function handleBeforeUnload(e) {
+  if (hasUnsavedChanges.value) e.preventDefault()
+}
 
 watch(
   categories,

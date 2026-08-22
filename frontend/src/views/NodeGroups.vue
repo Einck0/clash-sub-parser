@@ -202,6 +202,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useAppStore } from '../stores/app'
+import { useUrlState } from '../utils/urlState'
 import {
   deleteNodeGroup,
   getApiErrorMessage,
@@ -225,8 +226,8 @@ const editing = ref(null)
 const loading = ref(false)
 const working = ref('')
 const error = ref('')
-const search = ref('')
-const typeFilter = ref('')
+const search = useUrlState('q', '')
+const typeFilter = useUrlState('type', '')
 const onlyEmpty = ref(false)
 const previewGroup = ref(null)
 const draggingGroupId = ref(null)
@@ -272,6 +273,22 @@ const totalResolved = computed(() =>
   previews.value.reduce((sum, p) => sum + (p.resolved_count || 0), 0),
 )
 
+// 搜索文本随 previews/groups 变化预计算，避免每次按键重拼 resolved_nodes 大字符串
+const groupSearchIndex = computed(() => {
+  const map = new Map()
+  for (const group of groups.value) {
+    const preview = previewMap.value.get(group.id)
+    const entryText = (preview?.include_entries || group.include_entries || [])
+      .map((e) => `${e.type}:${e.value}:${e.name || ''}`)
+      .join(' ')
+    const nodes = (preview?.resolved_nodes || [])
+      .map((n) => (typeof n === 'string' ? n : n?.name || ''))
+      .join(' ')
+    map.set(group.id, [group.name, group.group_type, group.kind, entryText, nodes].join(' ').toLowerCase())
+  }
+  return map
+})
+
 const filteredGroups = computed(() => {
   const q = String(search.value || '').trim().toLowerCase()
   return groups.value.filter((group) => {
@@ -279,16 +296,7 @@ const filteredGroups = computed(() => {
     const preview = previewById(group.id)
     if (onlyEmpty.value && (preview?.resolved_count || 0) > 0) return false
     if (!q) return true
-    const entryText = (preview?.include_entries || group.include_entries || [])
-      .map((e) => `${e.type}:${e.value}:${e.name || ''}`)
-      .join(' ')
-    const nodes = (preview?.resolved_nodes || [])
-      .map((n) => (typeof n === 'string' ? n : n?.name || ''))
-      .join(' ')
-    const hay = [group.name, group.group_type, group.kind, entryText, nodes]
-      .join(' ')
-      .toLowerCase()
-    return hay.includes(q)
+    return (groupSearchIndex.value.get(group.id) || '').includes(q)
   })
 })
 

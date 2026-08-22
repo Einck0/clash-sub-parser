@@ -187,8 +187,9 @@
         <h3>绑定列表</h3>
       </div>
 
-      <div v-if="!filteredBindings.length" class="empty-mini">
-        {{ bindings.length ? '没有匹配的绑定。' : '还没有链式绑定。点「新建绑定」开始。' }}
+      <div v-if="!filteredBindings.length" class="empty-mini empty-with-action">
+        {{ bindings.length ? '没有匹配的绑定。' : '还没有链式绑定。' }}
+        <button v-if="!bindings.length" class="primary" @click="showComposer = true">新建绑定</button>
       </div>
 
       <div v-else class="bind-list">
@@ -245,6 +246,7 @@ import {
 } from '../api'
 import PageToolbar from '../components/PageToolbar.vue'
 import { useAppStore } from '../stores/app'
+import { useUrlState } from '../utils/urlState'
 
 const store = useAppStore()
 
@@ -259,7 +261,7 @@ const nodeGroups = ref([])
 const subscriptions = ref([])
 const preview = ref(null)
 const showPreviewModal = ref(false)
-const listSearch = ref('')
+const listSearch = useUrlState('q', '')
 const workingId = ref(null)
 
 const nodeSearch = ref('')
@@ -480,6 +482,11 @@ async function removeBinding(item) {
 </script>
 
 <style scoped>
+.empty-with-action {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
 .stats-row {
   display: flex;
   flex-wrap: wrap;

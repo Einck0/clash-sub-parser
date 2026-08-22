@@ -200,6 +200,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useAppStore } from '../stores/app'
+import { useUrlState } from '../utils/urlState'
 import { formatBytes, short, formatLocalTime } from '../utils/format'
 import ManualNodeEditor from '../components/ManualNodeEditor.vue'
 import NodePreviewList from '../components/NodePreviewList.vue'
@@ -235,8 +236,8 @@ const loadingToggleId = ref(null)
 const renamingSaving = ref(false)
 const loading = ref(false)
 const error = ref('')
-const search = ref('')
-const enabledFilter = ref('')
+const search = useUrlState('q', '')
+const enabledFilter = useUrlState('status', '')
 
 const filteredSubscriptions = computed(() => {
   const q = String(search.value || '').trim().toLowerCase()

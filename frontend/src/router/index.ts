@@ -8,7 +8,6 @@ const routes = [
   { path: '/nodes', name: 'NodeLedger', component: () => import('../views/NodeLedger.vue') },
   { path: '/rules', name: 'Rules', component: () => import('../views/Rules.vue') },
   { path: '/rules/category/:name', name: 'RuleCategoryDetail', component: () => import('../views/RuleCategoryDetail.vue') },
-  { path: '/rules/:id', name: 'RuleDetail', component: () => import('../views/RuleDetail.vue') },
   { path: '/dns', name: 'DnsSettings', component: () => import('../views/DnsSettings.vue') },
   { path: '/generate', name: 'Generate', component: () => import('../views/Generate.vue') },
   { path: '/settings', name: 'Settings', component: () => import('../views/Settings.vue') },

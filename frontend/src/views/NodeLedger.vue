@@ -224,6 +224,7 @@ import {
 } from '../api'
 import PageToolbar from '../components/PageToolbar.vue'
 import { useAppStore } from '../stores/app'
+import { useUrlState } from '../utils/urlState'
 
 const store = useAppStore()
 
@@ -233,9 +234,9 @@ const error = ref('')
 const rows = ref([])
 const bindings = ref([])
 const nodeGroups = ref([])
-const search = ref('')
-const subFilter = ref('')
-const typeFilter = ref('')
+const search = useUrlState('q', '')
+const subFilter = useUrlState('sub', '')
+const typeFilter = useUrlState('type', '')
 const chainFilter = ref('all')
 const page = ref(1)
 const pageSize = ref(50)

@@ -123,7 +123,6 @@ export const batchRuleCategories = (payload: any) => api.post('/rule-categories/
 
 // Rules
 export const getRules = () => api.get('/rules')
-export const getRule = (id: number) => api.get(`/rules/${id}`)
 export const createRule = (data: any) => api.post('/rules', data)
 export const updateRule = (id: number, data: any) => api.patch(`/rules/${id}`, data)
 export const deleteRule = (id: number) => api.delete(`/rules/${id}`)

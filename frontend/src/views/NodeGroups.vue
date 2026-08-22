@@ -251,8 +251,13 @@ window.addEventListener('keydown', onKeydown)
 onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 
 const previewMap = computed(() => new Map(previews.value.map((item) => [item.id, item])))
+// 模板每张卡片要查预览和原始序号，预构建避免 O(n²) findIndex
+const indexMap = computed(() => new Map(groups.value.map((g, i) => [g.id, i])))
 function previewById(id) {
   return previewMap.value.get(id)
+}
+function originalIndex(id) {
+  return indexMap.value.get(id) ?? -1
 }
 function resolvedCount(id) {
   return previewById(id)?.resolved_count || 0
@@ -302,10 +307,6 @@ function openPreview(group) {
 
 function closePreview() {
   previewGroup.value = null
-}
-
-function originalIndex(id) {
-  return groups.value.findIndex((g) => g.id === id)
 }
 
 async function load() {

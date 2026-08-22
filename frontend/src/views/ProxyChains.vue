@@ -219,8 +219,10 @@
           </div>
 
           <div class="action-row compact-actions">
-            <button @click="toggleEnabled(item)">{{ item.enabled ? '禁用' : '启用' }}</button>
-            <button class="danger" @click="removeBinding(item)">删除</button>
+            <button @click="toggleEnabled(item)" :disabled="workingId === item.id">
+              {{ workingId === item.id ? '…' : (item.enabled ? '禁用' : '启用') }}
+            </button>
+            <button class="danger" @click="removeBinding(item)" :disabled="workingId === item.id">删除</button>
           </div>
         </article>
       </div>
@@ -242,6 +244,9 @@ import {
   updateProxyChain,
 } from '../api'
 import PageToolbar from '../components/PageToolbar.vue'
+import { useAppStore } from '../stores/app'
+
+const store = useAppStore()
 
 const loading = ref(false)
 const saving = ref(false)
@@ -255,6 +260,7 @@ const subscriptions = ref([])
 const preview = ref(null)
 const showPreviewModal = ref(false)
 const listSearch = ref('')
+const workingId = ref(null)
 
 const nodeSearch = ref('')
 const groupSearch = ref('')
@@ -441,20 +447,34 @@ async function createBinding() {
 }
 
 async function toggleEnabled(item) {
+  if (workingId.value) return
+  workingId.value = item.id
   try {
     await updateProxyChain(item.id, { enabled: !item.enabled })
     await reload()
   } catch (err) {
     error.value = getApiErrorMessage(err, '更新失败')
+  } finally {
+    workingId.value = null
   }
 }
 
 async function removeBinding(item) {
+  const ok = await store.confirm({
+    title: '删除链式绑定',
+    message: `确定删除「${targetName(item)} → ${item.dialer_ref}」的绑定吗？`,
+    confirmText: '删除',
+    danger: true,
+  })
+  if (!ok || workingId.value) return
+  workingId.value = item.id
   try {
     await deleteProxyChain(item.id)
     await reload()
   } catch (err) {
     error.value = getApiErrorMessage(err, '删除失败')
+  } finally {
+    workingId.value = null
   }
 }
 </script>

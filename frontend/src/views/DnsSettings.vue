@@ -8,7 +8,7 @@
       </div>
       <div class="head-actions">
         <label class="switch-line"><input type="checkbox" v-model="enabled" /> 启用 DNS</label>
-        <button @click="load">刷新</button>
+        <button @click="load" :disabled="saving || loading">{{ loading ? '刷新中...' : '刷新' }}</button>
         <button class="primary" @click="save" :disabled="saving">{{ saving ? '保存中...' : '保存' }}</button>
       </div>
     </div>
@@ -147,6 +147,7 @@ const ListEditor = defineComponent({
 const rawYaml = ref('')
 const enabled = ref(true)
 const saving = ref(false)
+const loading = ref(false)
 const message = ref('')
 const messageType = ref('')
 const activeTab = ref('visual')
@@ -163,6 +164,7 @@ watch([dns, policyRows, fallbackFilter], () => {
 }, { deep: true })
 
 async function load() {
+  loading.value = true
   try {
     const { data } = await getDns()
     rawYaml.value = data.raw_yaml || dumpObject(defaultDns())
@@ -171,6 +173,8 @@ async function load() {
     setMessage('', '')
   } catch (err) {
     setMessage(getApiErrorMessage(err, '加载 DNS 配置失败'), 'error')
+  } finally {
+    loading.value = false
   }
 }
 

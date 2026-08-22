@@ -91,6 +91,8 @@ const deleting = ref(null)
 const expandedId = ref(null)
 const snapData = ref(null)
 const loadingData = ref(false)
+// 请求代次守卫：快速展开另一条时丢弃旧请求的响应
+let snapDataSeq = 0
 const error = ref('')
 
 onMounted(load)
@@ -126,18 +128,21 @@ async function toggleExpand(id) {
   if (expandedId.value === id) {
     expandedId.value = null
     snapData.value = null
+    snapDataSeq += 1
     return
   }
   expandedId.value = id
   snapData.value = null
   loadingData.value = true
+  const seq = ++snapDataSeq
   try {
     const { data } = await getSnapshotData(id)
+    if (seq !== snapDataSeq) return
     snapData.value = data
   } catch (err) {
-    store.error(getApiErrorMessage(err, '加载快照数据失败'))
+    if (seq === snapDataSeq) store.error(getApiErrorMessage(err, '加载快照数据失败'))
   } finally {
-    loadingData.value = false
+    if (seq === snapDataSeq) loadingData.value = false
   }
 }
 

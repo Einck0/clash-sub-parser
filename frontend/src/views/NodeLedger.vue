@@ -54,11 +54,25 @@
       </template>
     </PageToolbar>
 
+    <div class="pager-card">
+      <div class="action-row">
+        <button :disabled="page <= 1" @click="page--">上一页</button>
+        <span class="muted">第 {{ normalizedPage }} / {{ totalPages }} 页</span>
+        <button :disabled="page >= totalPages" @click="page++">下一页</button>
+        <span class="muted">每页</span>
+        <select v-model.number="pageSize" class="page-size-select">
+          <option :value="50">50</option>
+          <option :value="100">100</option>
+          <option :value="200">200</option>
+        </select>
+      </div>
+    </div>
+
     <div v-if="loading && !rows.length" class="empty-mini">加载中…</div>
     <div v-else-if="!filtered.length" class="empty-mini">没有匹配的节点。</div>
 
     <div v-else class="node-list">
-      <article v-for="item in filtered" :key="item.name" class="node-card">
+      <article v-for="item in pagedRows" :key="item.name" class="node-card">
         <div class="node-top">
           <div class="node-title mono">{{ item.name }}</div>
           <div class="badge-row">
@@ -168,7 +182,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import {
   createProxyChain,
   deleteProxyChain,
@@ -192,6 +206,8 @@ const search = ref('')
 const subFilter = ref('')
 const typeFilter = ref('')
 const chainFilter = ref('all')
+const page = ref(1)
+const pageSize = ref(50)
 const chainTarget = ref(null)
 const dialerSearch = ref('')
 const chainForm = reactive({
@@ -216,6 +232,13 @@ const typeOptions = computed(() => {
 })
 
 const chainedCount = computed(() => rows.value.filter((r) => r.dialer_proxy).length)
+
+const totalPages = computed(() => Math.max(1, Math.ceil(filtered.value.length / pageSize.value)))
+const normalizedPage = computed(() => Math.min(page.value, totalPages.value))
+const pagedRows = computed(() =>
+  filtered.value.slice((normalizedPage.value - 1) * pageSize.value, normalizedPage.value * pageSize.value),
+)
+watch([search, subFilter, typeFilter, chainFilter, pageSize], () => { page.value = 1 })
 
 const filtered = computed(() => {
   const q = String(search.value || '').trim().toLowerCase()

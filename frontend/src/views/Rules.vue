@@ -171,7 +171,13 @@ const saveStatus = computed(() => saving.value ? '正在同步' : (hasUnsavedCha
 const ruleSearchResults = computed(() => {
   const q = debouncedRuleSearch.value.trim().toLowerCase()
   if (!q) return []
-  return allRules.value.filter((rule) => ruleSearchText(rule).includes(q))
+  return allRules.value.filter((rule) => (searchIndex.value.get(rule.id) || ruleSearchText(rule)).includes(q))
+})
+// 搜索文本只随 allRules 变化预计算一次，不在每次按键时重拼
+const searchIndex = computed(() => {
+  const map = new Map()
+  for (const rule of allRules.value) map.set(rule.id, ruleSearchText(rule))
+  return map
 })
 const debouncedRuleSearch = ref('')
 let _searchTimer = null

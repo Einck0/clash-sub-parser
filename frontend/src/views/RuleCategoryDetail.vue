@@ -520,6 +520,9 @@ function applyPresets(presetRules) {
       enabled: true,
     })
   }
+  normalizeSortOrder()
+  // 新规则追加到列表尾部，跳到最后一页让用户立刻看到
+  page.value = totalPages.value
   hasUnsavedChanges.value = true
   store.success(`已添加 ${presetRules.length} 条规则，记得点"保存全部"同步到服务端`)
 }

@@ -13,6 +13,7 @@
       </div>
 
       <div v-if="error" class="form-alert form-alert-error">{{ error }}</div>
+      <div v-if="sourcesLoading" class="section-hint" style="margin:6px 0">正在加载可选节点与策略组…</div>
 
       <div class="grid-2" style="margin-top:10px">
         <label>
@@ -294,6 +295,7 @@ const editingRegexError = ref('')
 const draggingIndex = ref(-1)
 const saving = ref(false)
 const error = ref('')
+const sourcesLoading = ref(false)
 const form = ref(defaultForm())
 
 const urlTestUrl = computed({
@@ -779,9 +781,16 @@ async function save() {
 }
 
 async function loadSources() {
-  const [groupsRes, nodesRes] = await Promise.all([getNodeGroups(), getAllSubscriptionNodes()])
-  allGroups.value = groupsRes.data
-  allNodes.value = nodesRes.data
+  sourcesLoading.value = true
+  try {
+    const [groupsRes, nodesRes] = await Promise.all([getNodeGroups(), getAllSubscriptionNodes()])
+    allGroups.value = groupsRes.data
+    allNodes.value = nodesRes.data
+  } catch (err) {
+    error.value = getApiErrorMessage(err, '加载可选节点与策略组失败，请关闭后重试')
+  } finally {
+    sourcesLoading.value = false
+  }
 }
 
 function close() {

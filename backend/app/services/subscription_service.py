@@ -99,7 +99,7 @@ async def create_manual_node_subscription(
         last_fetched_at=datetime.now(timezone.utc),
         last_fetch_error=None,
         fetch_failed_count=0,
-        fetch_comments=[] if payload.is_primary else [],
+        fetch_comments=[],
     )
     db.add(item)
     await db.commit()
@@ -126,9 +126,6 @@ async def update_subscription(
         data["manual_nodes"] = deduplicate_nodes(data["manual_nodes"] or [])
     if manual_node_links is not None:
         data["manual_nodes"] = _merge_manual_nodes(data.get("manual_nodes", item.manual_nodes or []), manual_node_links)
-
-    if data.get("is_primary"):
-        await _clear_primary(db)
 
     selection_changed = bool(
         {
@@ -399,20 +396,9 @@ def _apply_selection(
 def _refresh_selected_nodes(item: Subscription) -> None:
     source_nodes = item.source_nodes or []
     manual_nodes = item.manual_nodes or []
-    if item.url == "manual://nodes":
-        item.raw_nodes = _materialize_raw_nodes(
-            source_nodes,
-            manual_nodes,
-            filter_regex=item.filter_regex,
-            include_node_names=item.include_node_names or [],
-            exclude_node_names=item.exclude_node_names or [],
-            name=item.name,
-            node_prefix=item.node_prefix,
-            is_primary=item.is_primary,
-            node_renames=item.node_renames or {},
-        )
-        return
-    if source_nodes or manual_nodes:
+
+    # 有上游或手动源时走完整管线；两者皆空时把当前 raw_nodes 当已加前缀名, 只套 renames
+    if item.url == "manual://nodes" or source_nodes or manual_nodes:
         item.raw_nodes = _materialize_raw_nodes(
             source_nodes,
             manual_nodes,
@@ -426,7 +412,6 @@ def _refresh_selected_nodes(item: Subscription) -> None:
         )
         return
 
-    # 没有上游与手动源时, 把当前 raw_nodes 当已加前缀名, 只套 renames
     if item.raw_nodes:
         item.raw_nodes = deduplicate_nodes(
             _apply_renames(item.raw_nodes or [], item.node_renames or {})

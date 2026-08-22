@@ -45,13 +45,16 @@ async def create_snapshot(db: AsyncSession, label: str = "", description: str = 
     await db.commit()
     await db.refresh(snapshot)
 
-    # Prune old snapshots
-    count_result = await db.execute(select(ConfigSnapshot.id).order_by(desc(ConfigSnapshot.id)))
-    all_ids = [row[0] for row in count_result.all()]
-    if len(all_ids) > KEEP_COUNT:
-        old_ids = all_ids[KEEP_COUNT:]
+    # Prune old snapshots: keep the newest KEEP_COUNT rows
+    cutoff = await db.scalar(
+        select(ConfigSnapshot.id)
+        .order_by(desc(ConfigSnapshot.id))
+        .offset(KEEP_COUNT)
+        .limit(1)
+    )
+    if cutoff is not None:
         await db.execute(
-            ConfigSnapshot.__table__.delete().where(ConfigSnapshot.id.in_(old_ids))
+            ConfigSnapshot.__table__.delete().where(ConfigSnapshot.id <= cutoff)
         )
         await db.commit()
 

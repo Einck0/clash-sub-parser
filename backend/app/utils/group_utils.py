@@ -3,9 +3,18 @@
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 from typing import Iterable
 
 from app.models.node_group import NodeGroup
+
+
+@lru_cache(maxsize=256)
+def _compile_pattern(pattern_text: str) -> re.Pattern | None:
+    try:
+        return re.compile(pattern_text)
+    except Exception:
+        return None
 
 
 def dedup_names(items: list[str]) -> list[str]:
@@ -127,9 +136,8 @@ def resolve_group_members(
                 pattern_text = str(entry_value or "").strip()
                 if not pattern_text:
                     continue
-                try:
-                    pattern = re.compile(pattern_text)
-                except Exception:
+                pattern = _compile_pattern(pattern_text)
+                if pattern is None:
                     continue
                 selected.extend(
                     [name for name in all_node_names if name and pattern.search(name)]

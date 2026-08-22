@@ -204,13 +204,13 @@ async def import_config_endpoint(
                 for col in model.__table__.columns:
                     if isinstance(col.type, DateTime):
                         datetime_columns.add(col.name)
+                valid_columns = {c.name for c in model.__table__.columns}
 
                 inserted = 0
                 for row_data in rows:
                     if not isinstance(row_data, dict):
                         continue
                     # Filter out skip fields and unknown columns
-                    valid_columns = {c.name for c in model.__table__.columns}
                     filtered: dict[str, Any] = {}
                     for k, v in row_data.items():
                         if k not in valid_columns or k in skip_fields:

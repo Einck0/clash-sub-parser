@@ -114,6 +114,9 @@
 import { computed, defineComponent, h, onMounted, reactive, ref, watch } from 'vue'
 import yaml from 'js-yaml'
 import { getApiErrorMessage, getDns, updateDns } from '../api'
+import { useAppStore } from '../stores/app'
+
+const store = useAppStore()
 
 const ListEditor = defineComponent({
   name: 'ListEditor',
@@ -226,7 +229,13 @@ function formatRaw() {
   rawYaml.value = dumpDns()
 }
 
-function applyTemplate(name) {
+async function applyTemplate(name) {
+  const ok = await store.confirm({
+    title: '应用快速模板',
+    message: '模板会覆盖当前可视化表单里的 DNS 服务器配置（default-nameserver / nameserver / fallback / proxy-server-nameserver），确定继续吗？',
+    confirmText: '应用',
+  })
+  if (!ok) return
   const templates = {
     current: {
       'default-nameserver': ['8.8.8.8', '223.5.5.5', '114.114.114.114'],

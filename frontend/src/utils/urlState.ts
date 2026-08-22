@@ -1,4 +1,4 @@
-import { ref, watch, onMounted, type Ref } from 'vue'
+import { ref, watch, type Ref } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 
 type UrlValue = string | string[] | null
@@ -6,12 +6,6 @@ type UrlValue = string | string[] | null
 type UrlTransform<T> = {
   from?: (value: unknown) => T
   to?: (value: T) => UrlValue
-}
-
-type UrlStateEntry = {
-  state: Ref<unknown>
-  defaultValue: unknown
-  transform?: UrlTransform<unknown>
 }
 
 /**
@@ -49,38 +43,4 @@ export function useUrlState<T>(key: string, defaultValue: T, options: { transfor
   })
 
   return state
-}
-
-/**
- * Batch sync multiple URL state refs
- */
-export function useUrlStates(states: Record<string, UrlStateEntry>) {
-  const router = useRouter()
-  const route = useRoute()
-
-  onMounted(() => {
-    // Restore from URL on mount
-    for (const [key, { state, transform }] of Object.entries(states)) {
-      const val = route.query[key]
-      if (val !== undefined) {
-        state.value = transform?.from ? transform.from(val) : val
-      }
-    }
-  })
-
-  // Watch each state and update URL
-  for (const { state } of Object.values(states)) {
-    watch(state, () => {
-      const query = { ...route.query }
-      for (const [key, { state: currentState, defaultValue, transform }] of Object.entries(states)) {
-        const value = currentState.value
-        if (value === defaultValue || value === '' || value === null || value === undefined) {
-          delete query[key]
-        } else {
-          query[key] = transform?.to ? transform.to(value) : String(value)
-        }
-      }
-      router.replace({ query })
-    })
-  }
 }

@@ -104,8 +104,8 @@ async def update_binding(
     data = payload.model_dump(exclude_unset=True)
     merged = {
         "target_type": data.get("target_type", item.target_type),
-        "target_id": data.get("target_id", item.target_id) if "target_id" in data or "target_type" not in data else data.get("target_id", item.target_id),
-        "target_name": data.get("target_name", item.target_name) if "target_name" in data or "target_type" not in data else data.get("target_name", item.target_name),
+        "target_id": data.get("target_id", item.target_id),
+        "target_name": data.get("target_name", item.target_name),
         "dialer_type": data.get("dialer_type", item.dialer_type),
         "dialer_ref": data.get("dialer_ref", item.dialer_ref),
         "enabled": data.get("enabled", item.enabled),

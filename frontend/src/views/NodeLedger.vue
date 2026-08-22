@@ -178,6 +178,9 @@ import {
   getProxyChains,
 } from '../api'
 import PageToolbar from '../components/PageToolbar.vue'
+import { useAppStore } from '../stores/app'
+
+const store = useAppStore()
 
 const loading = ref(false)
 const saving = ref(false)
@@ -303,9 +306,8 @@ async function saveChain() {
     const existing = (bindings.value || []).filter(
       (b) => b.target_type === 'node' && b.target_name === chainTarget.value.name,
     )
-    for (const b of existing) {
-      await deleteProxyChain(b.id)
-    }
+    // 旧绑定可能已被其他会话删除，逐条失败不阻断保存
+    await Promise.allSettled(existing.map((b) => deleteProxyChain(b.id)))
     await createProxyChain({
       target_type: 'node',
       target_name: chainTarget.value.name,
@@ -324,14 +326,19 @@ async function saveChain() {
 }
 
 async function clearNodeChain(item) {
+  const ok = await store.confirm({
+    title: '清除节点跳板',
+    message: `确定要清除节点「${item.name}」的跳板绑定吗？`,
+    confirmText: '清除',
+    danger: true,
+  })
+  if (!ok) return
   error.value = ''
   try {
     const existing = (bindings.value || []).filter(
       (b) => b.target_type === 'node' && b.target_name === item.name,
     )
-    for (const b of existing) {
-      await deleteProxyChain(b.id)
-    }
+    await Promise.allSettled(existing.map((b) => deleteProxyChain(b.id)))
     await reload()
   } catch (err) {
     error.value = getApiErrorMessage(err, '清除失败')

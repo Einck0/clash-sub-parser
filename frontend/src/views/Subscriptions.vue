@@ -471,14 +471,6 @@ async function saveNodeRenames(renames) {
     await updateSubscription(viewingSub.value.id, {
       node_renames: renames || {},
     })
-    // Rebuild final names from source + prefix + renames when possible.
-    if ((viewingSub.value.source_nodes || []).length || (viewingSub.value.manual_nodes || []).length) {
-      try {
-        await fetchSubscription(viewingSub.value.id)
-      } catch (_) {
-        // rename already saved; fetch failure shouldn't block UI refresh
-      }
-    }
     store.success('节点名称已保存')
     await load()
     const latest = subscriptions.value.find((item) => item.id === viewingSub.value.id)

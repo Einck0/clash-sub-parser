@@ -47,6 +47,7 @@
         <div class="row space">
           <strong>解析结果：{{ parsed.length }} 条规则</strong>
           <div class="row" style="gap:6px">
+            <span v-if="parseSkipped" class="muted">{{ parseSkipped }} 行无法解析已跳过</span>
             <button @click="selectAll">全选</button>
             <button @click="deselectAll">全不选</button>
           </div>
@@ -92,6 +93,7 @@ const proxy = ref('PROXY')
 const category = ref('')
 const parsed = ref([])
 const selected = ref(new Set())
+const parseSkipped = ref(0)
 
 const placeholders = {
   yaml: `粘贴 Clash YAML 格式的 rules:\n\nrules:\n  - DOMAIN-SUFFIX,google.com,PROXY\n  - DOMAIN-KEYWORD,facebook,PROXY\n  - GEOIP,CN,DIRECT\n  - MATCH,PROXY`,
@@ -104,6 +106,7 @@ function parseInput() {
   if (!text) return
 
   const rules = []
+  let skipped = 0
 
   if (mode.value === 'yaml') {
     // Parse Clash YAML rules format
@@ -145,19 +148,24 @@ function parseInput() {
       if (!trimmed) continue
       try {
         const url = new URL(trimmed.split('#')[0])
-        if (url.hostname) {
+        if (url.hostname && /^[a-z0-9.-]+$/i.test(url.hostname)) {
           rules.push({
             type: 'DOMAIN-SUFFIX',
             value: url.hostname,
             proxy: proxy.value,
             options: [],
           })
+        } else {
+          skipped += 1
         }
-      } catch {}
+      } catch {
+        skipped += 1
+      }
     }
   }
 
   parsed.value = rules
+  parseSkipped.value = skipped
   selected.value = new Set(rules.map((_, i) => i))
 }
 

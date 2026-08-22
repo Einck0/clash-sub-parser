@@ -71,65 +71,96 @@
     <div v-if="loading && !rows.length" class="empty-mini">加载中…</div>
     <div v-else-if="!filtered.length" class="empty-mini">没有匹配的节点。</div>
 
-    <div v-else class="node-list">
-      <article v-for="item in pagedRows" :key="item.name" class="node-card">
-        <div class="node-top">
-          <div class="node-title mono">{{ item.name }}</div>
-          <div class="badge-row">
-            <span v-if="item.type" class="pill">{{ item.type }}</span>
-            <span v-if="item.subscription_name" class="pill soft">{{ item.subscription_name }}</span>
-            <span v-if="item.udp" class="pill soft">UDP</span>
-            <span v-if="item.tls" class="pill soft">TLS</span>
-          </div>
-        </div>
+    <template v-else>
+      <div class="table-card node-table-card desktop-node-table">
+        <table class="rules-table node-table">
+          <thead>
+            <tr>
+              <th class="col-node-name">节点名称</th>
+              <th class="col-node-type">协议</th>
+              <th class="col-node-sub">订阅</th>
+              <th class="col-node-server">地址</th>
+              <th class="col-node-chain">链路</th>
+              <th class="col-node-actions">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="item in pagedRows" :key="item.name">
+              <td class="mono col-node-name" :title="item.name">{{ item.name }}</td>
+              <td class="col-node-type">
+                <span v-if="item.type" class="pill">{{ item.type }}</span>
+                <span v-else class="muted">-</span>
+              </td>
+              <td class="col-node-sub muted" :title="item.subscription_name || ''">{{ item.subscription_name || '-' }}</td>
+              <td class="mono col-node-server muted" :title="item.server ? `${item.server}:${item.port || ''}` : ''">
+                {{ item.server ? `${item.server}:${item.port || ''}` : '-' }}
+              </td>
+              <td class="col-node-chain">
+                <template v-if="item.dialer_proxy">
+                  <span class="pill ok">via {{ item.dialer_proxy }}</span>
+                  <span v-if="item.chain_source" class="chain-src" :title="sourceLabel(item.chain_source)">{{ sourceLabel(item.chain_source) }}</span>
+                </template>
+                <span v-else class="muted">未挂链</span>
+              </td>
+              <td class="col-node-actions">
+                <div class="action-row compact-actions no-wrap">
+                  <button @click="openChain(item)">设跳板</button>
+                  <button
+                    v-if="item.dialer_proxy && item.chain_source === 'node'"
+                    class="danger"
+                    @click="clearNodeChain(item)"
+                  >
+                    清链
+                  </button>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
 
-        <div class="meta-grid">
-          <div v-if="item.server" class="meta-item">
-            <span class="meta-label">地址</span>
-            <span class="meta-value mono">{{ item.server }}<template v-if="item.port">:{{ item.port }}</template></span>
+      <div class="mobile-node-list">
+        <article v-for="item in pagedRows" :key="`m-${item.name}`" class="node-card">
+          <div class="node-top">
+            <div class="node-title mono">{{ item.name }}</div>
+            <div class="badge-row">
+              <span v-if="item.type" class="pill">{{ item.type }}</span>
+              <span v-if="item.subscription_name" class="pill soft">{{ item.subscription_name }}</span>
+            </div>
           </div>
-          <div v-if="item.cipher" class="meta-item">
-            <span class="meta-label">加密</span>
-            <span class="meta-value">{{ item.cipher }}</span>
+          <div class="meta-grid">
+            <div v-if="item.server" class="meta-item">
+              <span class="meta-label">地址</span>
+              <span class="meta-value mono">{{ item.server }}<template v-if="item.port">:{{ item.port }}</template></span>
+            </div>
+            <div v-if="item.cipher" class="meta-item">
+              <span class="meta-label">加密</span>
+              <span class="meta-value">{{ item.cipher }}</span>
+            </div>
+            <div v-if="item.sni" class="meta-item">
+              <span class="meta-label">SNI</span>
+              <span class="meta-value mono">{{ item.sni }}</span>
+            </div>
           </div>
-          <div v-if="item.network" class="meta-item">
-            <span class="meta-label">传输</span>
-            <span class="meta-value">{{ item.network }}</span>
+          <div class="chain-line">
+            <template v-if="item.dialer_proxy">
+              <span class="pill ok">dialer → {{ item.dialer_proxy }}</span>
+            </template>
+            <span v-else class="muted">未挂链</span>
           </div>
-          <div v-if="item.sni" class="meta-item">
-            <span class="meta-label">SNI</span>
-            <span class="meta-value mono">{{ item.sni }}</span>
+          <div class="action-row compact-actions">
+            <button @click="openChain(item)">设跳板</button>
+            <button
+              v-if="item.dialer_proxy && item.chain_source === 'node'"
+              class="danger"
+              @click="clearNodeChain(item)"
+            >
+              清链
+            </button>
           </div>
-        </div>
-
-        <div v-if="item.group_names?.length" class="groups-line">
-          <span class="meta-label">策略组</span>
-          <div class="badge-row">
-            <span v-for="g in item.group_names.slice(0, 8)" :key="g" class="pill soft">{{ g }}</span>
-            <span v-if="item.group_names.length > 8" class="muted">+{{ item.group_names.length - 8 }}</span>
-          </div>
-        </div>
-
-        <div class="chain-line">
-          <template v-if="item.dialer_proxy">
-            <span class="pill ok">dialer → {{ item.dialer_proxy }}</span>
-            <span v-if="item.chain_source" class="pill">来源: {{ sourceLabel(item.chain_source) }}</span>
-          </template>
-          <span v-else class="muted">未挂链</span>
-        </div>
-
-        <div class="action-row compact-actions">
-          <button @click="openChain(item)">设跳板</button>
-          <button
-            v-if="item.dialer_proxy && item.chain_source === 'node'"
-            class="danger"
-            @click="clearNodeChain(item)"
-          >
-            清节点链
-          </button>
-        </div>
-      </article>
-    </div>
+        </article>
+      </div>
+    </template>
 
     <div v-if="chainTarget" class="modal-mask" @click.self="closeChain">
       <div class="modal-card">
@@ -370,6 +401,38 @@ async function clearNodeChain(item) {
 </script>
 
 <style scoped>
+.desktop-node-table {
+  display: block;
+}
+.mobile-node-list {
+  display: none;
+}
+.node-table {
+  min-width: 960px;
+  table-layout: fixed;
+}
+.node-table thead th {
+  background: #fff7ed;
+}
+.node-table td {
+  font-size: 12px;
+}
+.col-node-name {
+  width: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.col-node-type { width: 90px; }
+.col-node-sub { width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.col-node-server { width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.col-node-chain { width: 200px; }
+.col-node-actions { width: 150px; }
+.chain-src {
+  margin-left: 6px;
+  font-size: 11px;
+  color: var(--ink-soft, #888);
+}
 .stats-row {
   display: flex;
   flex-wrap: wrap;
@@ -515,6 +578,13 @@ async function clearNodeChain(item) {
   }
 }
 @media (max-width: 760px) {
+  .desktop-node-table {
+    display: none;
+  }
+  .mobile-node-list {
+    display: grid;
+    gap: 10px;
+  }
   .action-row {
     width: 100%;
   }

@@ -13,32 +13,8 @@ from fastapi.responses import FileResponse
 from app.config import get_settings
 from app.services.security_settings_service import get_fetch_proxy_config, get_security_settings
 from app.database import AsyncSessionLocal
+from app.utils.http_fetch import stream_fetch
 from app.utils.validators import validate_fetch_url
-
-async def _request_with_redirect_validation(
-    client: httpx.AsyncClient,
-    url: str,
-    allow_private: bool,
-    max_redirects: int = 10,
-) -> httpx.Response:
-    """Follow redirects manually, validating each URL against SSRF rules."""
-    from urllib.parse import urljoin
-    current_url = url
-    for _ in range(max_redirects + 1):
-        response = await client.send(
-            client.build_request("GET", current_url),
-            stream=True,
-        )
-        if response.is_redirect:
-            location = response.headers.get("location")
-            if not location:
-                return response
-            resolved = urljoin(str(response.url), location)
-            current_url = validate_fetch_url(resolved, allow_private_hosts=allow_private)
-            await response.aclose()
-            continue
-        return response
-    raise HTTPException(status_code=502, detail="Too many redirects")
 
 
 settings = get_settings()
@@ -123,7 +99,9 @@ async def download_url(url: str, expected_name: str | None = None, source: str =
     written = 0
     try:
         async with httpx.AsyncClient(**client_kwargs) as client:
-            response = await _request_with_redirect_validation(client, normalized, settings.allow_private_fetch_urls)
+            response = await stream_fetch(
+                client, normalized, allow_private=settings.allow_private_fetch_urls, max_redirects=10
+            )
             async with response:
                 response.raise_for_status()
                 content_length = response.headers.get("content-length")

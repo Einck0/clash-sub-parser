@@ -1,7 +1,6 @@
 from datetime import datetime, timezone
 import logging
 import re
-from urllib.parse import urljoin
 
 import httpx
 from fastapi import HTTPException
@@ -15,7 +14,7 @@ from app.schemas.subscription import ManualNodeCreate, SubscriptionCreate, Subsc
 from app.services.security_settings_service import get_fetch_proxy_config, get_security_settings
 from app.utils.clash_parser import compile_regex, parse_node_links, parse_subscription_content
 from app.utils.dedup import deduplicate_nodes
-from app.utils.validators import validate_fetch_url
+from app.utils.http_fetch import stream_fetch
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -288,41 +287,29 @@ async def _fetch_subscription_text(
     url: str,
     max_redirects: int = 5,
 ) -> tuple[httpx.Response, str]:
-    current_url = validate_fetch_url(
+    response = await stream_fetch(
+        client,
         url,
-        allow_private_hosts=settings.allow_private_fetch_urls,
+        allow_private=settings.allow_private_fetch_urls,
+        max_redirects=max_redirects,
     )
-    for _ in range(max_redirects + 1):
-        async with client.stream("GET", current_url) as response:
-            if response.is_redirect:
-                location = response.headers.get("location")
-                if not location:
-                    raise HTTPException(
-                        status_code=502,
-                        detail="Subscription redirect is missing Location header",
-                    )
-                current_url = validate_fetch_url(
-                    urljoin(str(response.url), location),
-                    allow_private_hosts=settings.allow_private_fetch_urls,
+    try:
+        response.raise_for_status()
+        chunks: list[bytes] = []
+        total = 0
+        async for chunk in response.aiter_bytes():
+            total += len(chunk)
+            if total > settings.request_max_bytes:
+                raise HTTPException(
+                    status_code=413,
+                    detail="Subscription response is too large",
                 )
-                continue
-
-            response.raise_for_status()
-            chunks: list[bytes] = []
-            total = 0
-            async for chunk in response.aiter_bytes():
-                total += len(chunk)
-                if total > settings.request_max_bytes:
-                    raise HTTPException(
-                        status_code=413,
-                        detail="Subscription response is too large",
-                    )
-                chunks.append(chunk)
-            content = b"".join(chunks)
-            encoding = response.encoding or "utf-8"
-            return response, content.decode(encoding, errors="replace")
-
-    raise HTTPException(status_code=502, detail="Too many subscription redirects")
+            chunks.append(chunk)
+        content = b"".join(chunks)
+        encoding = response.encoding or "utf-8"
+        return response, content.decode(encoding, errors="replace")
+    finally:
+        await response.aclose()
 
 
 

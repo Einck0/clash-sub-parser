@@ -232,6 +232,9 @@ async def test_fetch_subscription_nodes_supports_redirects_and_filters(monkeypat
             else:
                 return
 
+        async def aclose(self):
+            return None
+
     class MockClient:
         def __init__(self, *args, **kwargs):
             assert "follow_redirects" not in kwargs
@@ -243,13 +246,11 @@ async def test_fetch_subscription_nodes_supports_redirects_and_filters(monkeypat
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-        def stream(self, method, url, **kwargs):
-            import contextlib
-            @contextlib.asynccontextmanager
-            async def _ctx():
-                resp = await self.get(url)
-                yield resp
-            return _ctx()
+        def build_request(self, method, url):
+            return url
+
+        async def send(self, request, stream=False):
+            return await self.get(request)
 
         async def get(self, url):
             assert url == "https://example.com/sub"
@@ -350,6 +351,9 @@ async def test_fetch_subscription_empty_regex_selects_all_then_manual_excludes(m
             else:
                 return
 
+        async def aclose(self):
+            return None
+
     class MockClient:
         def __init__(self, *args, **kwargs):
             self.is_redirect = False
@@ -364,13 +368,11 @@ async def test_fetch_subscription_empty_regex_selects_all_then_manual_excludes(m
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-        def stream(self, method, url, **kwargs):
-            import contextlib
-            @contextlib.asynccontextmanager
-            async def _ctx():
-                resp = await self.get(url)
-                yield resp
-            return _ctx()
+        def build_request(self, method, url):
+            return url
+
+        async def send(self, request, stream=False):
+            return await self.get(request)
 
         async def get(self, url):
             return MockResponse()
@@ -489,13 +491,11 @@ async def test_fetch_failure_records_error(monkeypatch, db_session):
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-        def stream(self, method, url, **kwargs):
-            import contextlib
-            @contextlib.asynccontextmanager
-            async def _ctx():
-                resp = await self.get(url)
-                yield resp
-            return _ctx()
+        def build_request(self, method, url):
+            return url
+
+        async def send(self, request, stream=False):
+            return await self.get(request)
 
         async def get(self, url):
             raise RuntimeError("network down")
@@ -619,6 +619,9 @@ async def test_subscription_manual_nodes_are_merged_with_fetched_nodes(monkeypat
             else:
                 return
 
+        async def aclose(self):
+            return None
+
     class MockClient:
         def __init__(self, *args, **kwargs):
             self.is_redirect = False
@@ -633,13 +636,11 @@ async def test_subscription_manual_nodes_are_merged_with_fetched_nodes(monkeypat
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-        def stream(self, method, url, **kwargs):
-            import contextlib
-            @contextlib.asynccontextmanager
-            async def _ctx():
-                resp = await self.get(url)
-                yield resp
-            return _ctx()
+        def build_request(self, method, url):
+            return url
+
+        async def send(self, request, stream=False):
+            return await self.get(request)
 
         async def get(self, url):
             return MockResponse()
@@ -764,6 +765,9 @@ async def test_fetch_subscription_nodes_uses_runtime_proxy_setting(monkeypatch, 
             else:
                 return
 
+        async def aclose(self):
+            return None
+
     class MockClient:
         def __init__(self, *args, **kwargs):
             self.is_redirect = False
@@ -779,13 +783,11 @@ async def test_fetch_subscription_nodes_uses_runtime_proxy_setting(monkeypatch, 
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-        def stream(self, method, url, **kwargs):
-            import contextlib
-            @contextlib.asynccontextmanager
-            async def _ctx():
-                resp = await self.get(url)
-                yield resp
-            return _ctx()
+        def build_request(self, method, url):
+            return url
+
+        async def send(self, request, stream=False):
+            return await self.get(request)
 
         async def get(self, url):
             return MockResponse()

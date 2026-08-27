@@ -1,26 +1,36 @@
+from __future__ import annotations
+
 from contextlib import asynccontextmanager
-from pathlib import Path
 import logging
+from pathlib import Path
 import time
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from sqlalchemy import text
-
-from app.config import get_settings
-from app.logging_config import setup_logging
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.database import get_db, init_db
-from app.models.config_snapshot import ConfigSnapshot  # noqa: F401
-from app.database import AsyncSessionLocal
-from app.routers import dns, downloads, generate, node_groups, probe, proxy_chains, rule_categories, rules, settings as settings_router, snapshots, subscriptions
-from app.services.generate_config_service import generate_config_to_switches, get_generate_config
-from app.services.generate_service import generate_script, generate_yaml, get_primary_subscription_headers
+from app.logging_config import setup_logging
+from app.middleware.auth import token_auth_middleware
+from app.routers import (
+    dns,
+    downloads,
+    generate,
+    node_groups,
+    probe,
+    proxy_chains,
+    rule_categories,
+    rules,
+    settings as settings_router,
+    snapshots,
+    subscriptions,
+)
+from app.services.generate_service import file_response, render_current
 from app.services.scheduler import shutdown_scheduler, start_scheduler
-from app.services.security_settings_service import get_security_settings, token_matches
-from app.utils.auth import extract_request_token, is_api_path, is_export_path, is_frontend_path, is_public_path, is_unsafe_method, request_has_csrf_header, request_hash_cookie_matches, request_needs_auth, request_uses_cookie_auth
+from app.utils.auth import is_public_path
 
 logger = logging.getLogger(__name__)
 
@@ -54,60 +64,19 @@ app.add_middleware(
 
 
 @app.middleware("http")
-async def token_auth_middleware(request, call_next):
-    if is_public_path(request.url.path):
-        return await call_next(request)
-
-    needs_auth = is_api_path(request.url.path) or is_export_path(request.url.path) or is_frontend_path(request.url.path)
-    if not needs_auth:
-        return await call_next(request)
-
-    async with AsyncSessionLocal() as db:
-        security = await get_security_settings(db)
-
-    raw_token = extract_request_token(request, allow_query=is_export_path(request.url.path))
-    token_ok = token_matches(raw_token, security.token_hash)
-
-    # If not matched via header/query, try the HttpOnly hash cookie.
-    if not token_ok:
-        token_ok = request_hash_cookie_matches(request, security.token_hash)
-
-    if request_needs_auth(request.url.path, security):
-        if security.auth_enabled and not security.token_hash:
-            return JSONResponse(
-                status_code=503,
-                content={"detail": "Auth is enabled but token is not configured"},
-            )
-        if not token_ok:
-            return JSONResponse(
-                status_code=401,
-                content={"detail": "Invalid or missing token"},
-            )
-        if (
-            is_api_path(request.url.path)
-            and not is_export_path(request.url.path)
-            and is_unsafe_method(request.method)
-            and request_uses_cookie_auth(request)
-            and not request_has_csrf_header(request)
-        ):
-            return JSONResponse(
-                status_code=403,
-                content={"detail": "Missing CSRF header"},
-            )
-
-    response = await call_next(request)
-    return response
+async def auth_middleware(request, call_next):
+    return await token_auth_middleware(request, call_next)
 
 
 @app.middleware("http")
 async def request_logging_middleware(request, call_next):
     if is_public_path(request.url.path):
         return await call_next(request)
-    
+
     start = time.monotonic()
     response = await call_next(request)
     duration_ms = round((time.monotonic() - start) * 1000, 1)
-    
+
     logger.info(
         "%s %s -> %s (%.1fms)",
         request.method,
@@ -164,30 +133,17 @@ async def readiness(db: AsyncSession = Depends(get_db)) -> dict[str, str]:
     return {"status": "ready"}
 
 
-# NOTE: /yaml and /script are protected via token_auth_middleware → is_export_path.
-# They must stay in EXPORT_PATHS set in app/utils/auth.py to remain protected.
+# NOTE: /yaml and /script are protected via token_auth_middleware -> is_export_path.
 @app.get("/yaml")
 async def root_yaml(db: AsyncSession = Depends(get_db)) -> PlainTextResponse:
-    config = await get_generate_config(db)
-    result = await generate_yaml(db, generate_config_to_switches(config))
-    headers = {"Content-Disposition": 'inline; filename="config.yaml"'}
-    headers.update(await get_primary_subscription_headers(db))
-    return PlainTextResponse(
-        content=result.get("yaml", ""),
-        media_type="application/x-yaml",
-        headers=headers,
-    )
+    content = await render_current(db, "yaml")
+    return await file_response(db, content, "yaml", disposition="inline")
 
 
 @app.get("/script")
 async def root_script(db: AsyncSession = Depends(get_db)) -> PlainTextResponse:
-    config = await get_generate_config(db)
-    result = await generate_script(db, generate_config_to_switches(config))
-    return PlainTextResponse(
-        content=result.get("script", ""),
-        media_type="text/javascript",
-        headers={"Content-Disposition": 'inline; filename="script.js"'},
-    )
+    content = await render_current(db, "script")
+    return await file_response(db, content, "script", disposition="inline")
 
 
 @app.get("/{full_path:path}", include_in_schema=False)

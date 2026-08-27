@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sess
 from app.database import Base, get_db
 import app.main as app_main
 import app.database as app_database
+import app.middleware.auth as app_auth_middleware
 
 TEST_DB_URL = "sqlite+aiosqlite:///file::memory:?cache=shared&uri=true"
 engine = create_async_engine(TEST_DB_URL, connect_args={"check_same_thread": False})
@@ -21,6 +22,7 @@ app_main.app.dependency_overrides[get_db] = override_get_db
 # Patch AsyncSessionLocal so the auth middleware also uses the test DB
 app_main.AsyncSessionLocal = TestSession
 app_database.AsyncSessionLocal = TestSession
+app_auth_middleware.AsyncSessionLocal = TestSession
 
 
 @pytest_asyncio.fixture(autouse=True)

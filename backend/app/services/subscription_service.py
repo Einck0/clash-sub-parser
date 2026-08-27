@@ -20,6 +20,16 @@ settings = get_settings()
 logger = logging.getLogger(__name__)
 
 
+class SubscriptionFetchError(Exception):
+    """订阅抓取领域异常，解耦调度器与 HTTP 传输层。"""
+
+    def __init__(self, message: str, status_code: int = 502):
+        super().__init__(message)
+        self.message = message
+        self.status_code = status_code
+
+
+
 async def list_subscriptions(db: AsyncSession) -> list[Subscription]:
     result = await db.execute(select(Subscription).order_by(Subscription.id.asc()))
     return list(result.scalars().all())
@@ -508,16 +518,23 @@ async def fetch_due_subscriptions(db: AsyncSession) -> int:
         try:
             await fetch_subscription_nodes(db, current)
             fetched += 1
-        except HTTPException as exc:
-            if exc.status_code == 404:
+        except (HTTPException, SubscriptionFetchError) as exc:
+            status = getattr(exc, "status_code", None)
+            if status == 404:
                 continue
             logger.warning(
-                "Scheduled subscription fetch failed: id=%s name=%s", current.id, current.name
+                "Scheduled subscription fetch failed: id=%s name=%s, error=%s",
+                current.id,
+                current.name,
+                getattr(exc, "message", getattr(exc, "detail", str(exc))),
             )
             continue
-        except Exception:
+        except Exception as exc:
             logger.warning(
-                "Scheduled subscription fetch failed: id=%s name=%s", current.id, current.name
+                "Scheduled subscription fetch failed: id=%s name=%s, unexpected=%s",
+                current.id,
+                current.name,
+                exc,
             )
             continue
 

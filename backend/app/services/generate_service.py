@@ -1,7 +1,9 @@
 from copy import deepcopy
 import json
+from typing import Literal
 
 from fastapi import HTTPException
+from fastapi.responses import PlainTextResponse
 import yaml
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -325,3 +327,45 @@ async def get_primary_subscription_headers(db: AsyncSession) -> dict[str, str]:
     if profile_web_page_url:
         headers["Profile-Web-Page-Url"] = profile_web_page_url
     return headers
+
+
+async def render_current(db: AsyncSession, kind: Literal["yaml", "script"]) -> str:
+    """根据当前数据库中的 generate_config 配置渲染 YAML 或 JS 脚本。"""
+    from app.services.generate_config_service import generate_config_to_switches, get_generate_config
+
+    config = await get_generate_config(db)
+    switches = generate_config_to_switches(config)
+    if kind == "yaml":
+        res = await generate_yaml(db, switches)
+        return res.get("yaml", "")
+    if kind == "script":
+        res = await generate_script(db, switches)
+        return res.get("script", "")
+    raise ValueError(f"Unknown render kind: {kind}")
+
+
+async def file_response(
+    db: AsyncSession,
+    content: str,
+    kind: Literal["yaml", "script"],
+    disposition: Literal["inline", "attachment"] = "inline",
+) -> PlainTextResponse:
+    """构建统一的 YAML / Script HTTP 响应，包含文件名、Content-Type 与主订阅透传头。"""
+    from fastapi.responses import PlainTextResponse
+
+    if kind == "yaml":
+        headers = {"Content-Disposition": f'{disposition}; filename="config.yaml"'}
+        headers.update(await get_primary_subscription_headers(db))
+        return PlainTextResponse(
+            content=content,
+            media_type="application/x-yaml",
+            headers=headers,
+        )
+    if kind == "script":
+        return PlainTextResponse(
+            content=content,
+            media_type="text/javascript",
+            headers={"Content-Disposition": f'{disposition}; filename="script.js"'},
+        )
+    raise ValueError(f"Unknown file kind: {kind}")
+

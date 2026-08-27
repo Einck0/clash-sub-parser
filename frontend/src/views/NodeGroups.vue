@@ -214,7 +214,7 @@ import {
 import NodePreviewList from '../components/NodePreviewList.vue'
 import PageToolbar from '../components/PageToolbar.vue'
 import UiState from '../components/UiState.vue'
-import NodeGroupModal from './NodeGroupModal.vue'
+import NodeGroupModal from '../components/NodeGroupModal.vue'
 import { setDragGhost, shouldAllowDragStart } from '../utils/drag'
 
 const store = useAppStore()

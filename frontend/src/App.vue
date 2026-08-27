@@ -14,7 +14,11 @@
         <p class="brand-sub">统一管理订阅、策略组、规则、DNS 与最终导出配置。</p>
       </div>
       <div class="topbar-actions" aria-label="快捷输出">
-        <button class="quick-link" @click="toggleTheme" :title="theme === 'dark' ? '切换浅色' : '切换深色'">
+        <button class="quick-export-btn" @click="showQuickExport = true" title="生成订阅链接与二维码">
+          <span class="btn-icon">⚡</span>
+          <span>快速订阅</span>
+        </button>
+        <button class="quick-link theme-btn" @click="toggleTheme" :title="theme === 'dark' ? '切换浅色' : '切换深色'">
           {{ theme === 'dark' ? '☀️' : '🌙' }}
         </button>
         <a class="quick-link" :href="withAuthToken('/yaml', exportNeedsToken)" target="_blank" rel="noreferrer">YAML</a>
@@ -47,6 +51,7 @@
 
   <ToastContainer />
   <ConfirmDialog />
+  <QuickExportModal :open="showQuickExport" :needs-token="exportNeedsToken" @close="showQuickExport = false" />
 </template>
 
 <script setup>
@@ -56,11 +61,13 @@ import { setAuthToken, syncTokenFromUrl, withAuthToken } from './auth'
 import AuthGate from './components/AuthGate.vue'
 import ToastContainer from './components/ToastContainer.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
+import QuickExportModal from './components/QuickExportModal.vue'
 import { useAppStore } from './stores/app'
 import { useTheme } from './utils/theme'
 
 const store = useAppStore()
 const { theme, toggle: toggleTheme } = useTheme()
+const showQuickExport = ref(false)
 
 const navItems = [
   { to: '/', label: 'Subscriptions', hint: '订阅', icon: '📡' },

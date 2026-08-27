@@ -22,6 +22,32 @@
     <UiState v-if="loading && !subscriptions.length" type="loading" title="正在加载订阅" description="正在读取订阅列表和节点缓存，请稍等。" />
 
     <template v-else>
+    <div class="stats-overview-grid" v-if="subscriptions.length">
+      <div class="stat-card">
+        <span class="stat-icon">📡</span>
+        <div>
+          <div class="stat-label">总订阅数</div>
+          <div class="stat-val">{{ subscriptions.length }} <small>({{ enabledSubs }} 启用)</small></div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <span class="stat-icon">⚡</span>
+        <div>
+          <div class="stat-label">总节点数</div>
+          <div class="stat-val">{{ totalNodes }}</div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <span class="stat-icon">👑</span>
+        <div>
+          <div class="stat-label">当前主订阅</div>
+          <div class="stat-val stat-primary-val" :title="primarySub ? primarySub.name : '未设置'">
+            {{ primarySub ? primarySub.name : '未设置' }}
+          </div>
+        </div>
+      </div>
+    </div>
+
     <PageToolbar
       v-model="search"
       placeholder="搜索订阅名 / URL / 节点数…"
@@ -251,6 +277,28 @@ const filteredSubscriptions = computed(() => {
     return hay.includes(q)
   })
 })
+
+const totalNodes = computed(() => {
+  return (subscriptions.value || []).reduce((acc, s) => acc + (s.raw_nodes?.length || 0), 0)
+})
+
+const enabledSubs = computed(() => {
+  return (subscriptions.value || []).filter((s) => s.enabled).length
+})
+
+const primarySub = computed(() => {
+  return (subscriptions.value || []).find((s) => s.is_primary)
+})
+
+async function copyText(text, msg = '已复制') {
+  if (!text) return
+  try {
+    await navigator.clipboard.writeText(text)
+    store.showToast(msg, 'success')
+  } catch {
+    store.showToast('复制失败', 'error')
+  }
+}
 
 // Build post-prefix base names for rename editor. Keys in node_renames are
 // always these base names, never already-renamed display names.

@@ -47,6 +47,7 @@
             <span v-if="node.meta" class="node-preview-meta" :title="node.meta">{{ node.meta }}</span>
           </template>
           <template v-else>
+            <span class="node-flag">{{ getNodeFlag(displayName(node)) }}</span>
             <strong :title="displayName(node)">{{ displayName(node) || '(无名节点)' }}</strong>
             <span
               v-if="displayName(node) !== node.baseName"
@@ -89,6 +90,7 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { getApiErrorMessage, probeTcp } from '../api'
+import { getNodeFlag } from '../utils/format'
 
 const props = defineProps({
   nodes: { type: Array, default: () => [] },

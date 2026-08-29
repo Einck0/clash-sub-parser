@@ -86,7 +86,10 @@
           </thead>
           <tbody>
             <tr v-for="item in pagedRows" :key="item.name">
-              <td class="mono col-node-name" :title="item.name">{{ item.name }}</td>
+              <td class="mono col-node-name" :title="item.name">
+                <span class="node-flag" style="margin-right: 6px">{{ getNodeFlag(item.name) }}</span>
+                {{ item.name }}
+              </td>
               <td class="col-node-type">
                 <span v-if="item.type" class="pill">{{ item.type }}</span>
                 <span v-else class="muted">-</span>
@@ -214,6 +217,7 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { getNodeFlag } from '../utils/format'
 import {
   createProxyChain,
   deleteProxyChain,

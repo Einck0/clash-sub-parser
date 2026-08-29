@@ -47,10 +47,16 @@
 
               <div class="action-grid" v-if="activeTab === 'yaml'">
                 <a :href="clashSchemeUrl" class="scheme-btn">
-                  🚀 一键导入 Clash
+                  🚀 导入 Clash / Mihomo
+                </a>
+                <a :href="stashSchemeUrl" class="scheme-btn stash-btn">
+                  💎 导入 Stash
+                </a>
+                <a :href="shadowrocketSchemeUrl" class="scheme-btn sr-btn">
+                  🚀 导入 Shadowrocket
                 </a>
                 <a :href="currentUrl" target="_blank" class="download-link-btn" rel="noreferrer">
-                  ⬇️ 直接打开 YAML
+                  ⬇️ 查看原始 YAML
                 </a>
               </div>
               <div class="action-grid" v-else>
@@ -92,6 +98,18 @@ const currentUrl = computed(() => {
 
 const clashSchemeUrl = computed(() => {
   return `clash://install-config?url=${encodeURIComponent(currentUrl.value)}&name=ClashSubParser`
+})
+
+const stashSchemeUrl = computed(() => {
+  return `stash://install-config?url=${encodeURIComponent(currentUrl.value)}&name=ClashSubParser`
+})
+
+const shadowrocketSchemeUrl = computed(() => {
+  try {
+    return `sub://${btoa(currentUrl.value)}`
+  } catch {
+    return currentUrl.value
+  }
 })
 
 watch(() => props.open, (val) => {
@@ -277,8 +295,19 @@ async function copyUrl() {
   color: #fff;
 }
 
+.stash-btn {
+  background: #7c3aed;
+  color: #fff;
+}
+
+.sr-btn {
+  background: #ea580c;
+  color: #fff;
+}
+
 .scheme-btn:hover {
   opacity: 0.92;
+  transform: translateY(-1px);
 }
 
 .download-link-btn {

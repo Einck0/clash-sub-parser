@@ -28,15 +28,6 @@
         "Profile-Update-Interval": "30",
         "Profile-Web-Page-Url": "https://fixtures.invalid/profile"
       }
-    },
-    {
-      "kind": "script",
-      "path": "/script",
-      "missing_token_status": 401,
-      "authorized_status": 200,
-      "content_type": "text/javascript",
-      "content_disposition": "inline; filename=\"script.js\"",
-      "headers": {}
     }
   ]
 }

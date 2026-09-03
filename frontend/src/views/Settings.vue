@@ -41,7 +41,7 @@
           </label>
           <label class="settings-toggle">
             <input type="checkbox" v-model="settings.protect_exports" :disabled="!settings.auth_enabled" />
-            <span><strong>保护导出/订阅地址</strong><small>/yaml、/script 和下载地址需要 URL query token。</small></span>
+            <span><strong>保护导出/订阅地址</strong><small>/yaml 和下载地址需要 URL query token。</small></span>
           </label>
         </div>
       </div>

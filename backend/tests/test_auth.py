@@ -46,9 +46,9 @@ def test_public_assets_and_health_skip_auth() -> None:
 
 def test_export_path_detection() -> None:
     assert is_export_path("/yaml")
-    assert is_export_path("/script")
+    assert not is_export_path("/script")
     assert is_export_path("/api/generate/yaml/download")
-    assert is_export_path("/api/generate/script/current")
+    assert not is_export_path("/api/generate/script/current")
     assert not is_export_path("/api/generate/yaml")
 
 

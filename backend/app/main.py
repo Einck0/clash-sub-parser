@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 import time
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -144,9 +144,8 @@ async def root_yaml(db: AsyncSession = Depends(get_db)) -> PlainTextResponse:
 
 
 @app.get("/script")
-async def root_script(db: AsyncSession = Depends(get_db)) -> PlainTextResponse:
-    content = await render_current(db, "script")
-    return await file_response(db, content, "script", disposition="inline")
+async def root_script() -> PlainTextResponse:
+    raise HTTPException(status_code=404, detail="SCRIPT format has been deprecated and removed")
 
 
 @app.get("/{full_path:path}", include_in_schema=False)

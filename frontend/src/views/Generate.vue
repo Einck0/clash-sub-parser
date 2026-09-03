@@ -4,7 +4,7 @@
       <div>
         <p class="eyebrow">Generate</p>
         <h2>生成与订阅地址</h2>
-        <p class="page-desc">保存开关后，短链接 `/yaml` 和 `/script` 会按当前配置输出。</p>
+        <p class="page-desc">保存开关后，短链接 `/yaml` 会按当前配置输出。</p>
       </div>
       <label class="switch-line master-switch"><input type="checkbox" v-model="switches.enabled" /> 总开关</label>
     </div>
@@ -26,9 +26,7 @@
             <label><input type="checkbox" v-model="switches.dns" :disabled="!switches.enabled" /> DNS</label>
           </div>
           <div class="template-actions" style="margin-top:10px">
-            <button class="primary" data-testid="generate-yaml" @click="buildYaml" :disabled="!!working">{{ working === 'yaml' ? '生成中...' : '生成 YAML' }}</button>
-            <button class="primary" @click="buildScript" :disabled="!!working">{{ working === 'script' ? '生成中...' : '生成 Script.js' }}</button>
-            <button @click="buildAll" :disabled="!!working">{{ working === 'all' ? '生成中...' : '⚡ 全部生成' }}</button>
+            <button class="primary" data-testid="generate-yaml" @click="buildYaml" :disabled="!!working">{{ working === 'yaml' ? '生成中...' : '⚡ 立即生成 YAML' }}</button>
           </div>
           <div v-if="yamlStats" class="section-hint" style="margin-top:10px">
             最近 YAML：节点 {{ yamlStats.proxies }} · 组 {{ yamlStats.proxy_groups }} · 规则 {{ yamlStats.rules }} · dialer-proxy {{ yamlStats.dialer_proxy }}
@@ -63,7 +61,6 @@
               <div><strong>短订阅地址</strong><p class="section-hint">不带 query，使用当前保存配置</p></div>
             </div>
             <LinkRow label="YAML" :value="yamlCurrentUrl" @copy="copy" />
-            <LinkRow label="Script" :value="scriptCurrentUrl" @copy="copy" />
             <div class="qr-row" v-if="yamlCurrentUrl">
               <QrCode :url="yamlCurrentUrl" :size="120" />
             </div>
@@ -74,7 +71,6 @@
               <div><strong>完整订阅地址</strong><p class="section-hint">带 query，适合临时覆盖</p></div>
             </div>
             <LinkRow label="YAML" :value="yamlSubscribeUrl" @copy="copy" />
-            <LinkRow label="Script" :value="scriptSubscribeUrl" @copy="copy" />
           </div>
         </div>
 
@@ -88,17 +84,6 @@
               </div>
             </div>
             <textarea data-testid="generated-yaml-output" v-model="yamlResult" placeholder="点击“生成 YAML”后显示"></textarea>
-          </div>
-
-          <div class="result-card">
-            <div class="row space result-head">
-              <strong>Script.js</strong>
-              <div class="action-row compact-actions">
-                <button @click="copy(scriptResult)">复制</button>
-                <button @click="download(scriptResult, 'generated-script.js', 'text/javascript')">下载</button>
-              </div>
-            </div>
-            <textarea v-model="scriptResult" placeholder="点击“生成 Script.js”后显示"></textarea>
           </div>
         </div>
 
@@ -125,7 +110,6 @@ import QrCode from '../components/QrCode.vue'
 
 const store = useAppStore()
 import {
-  generateScript,
   generateSubscriptionYaml,
   generateYaml,
   getApiErrorMessage,
@@ -155,7 +139,6 @@ const switches = reactive({
   dns: true,
 })
 
-const scriptResult = ref('')
 const yamlResult = ref('')
 const yamlStats = ref(null)
 const subscriptions = ref([])
@@ -196,9 +179,7 @@ const switchQuery = computed(() => {
 })
 
 const yamlCurrentUrl = computed(() => withAuthToken(`${window.location.origin}/yaml`, exportNeedsToken.value))
-const scriptCurrentUrl = computed(() => withAuthToken(`${window.location.origin}/script`, exportNeedsToken.value))
 const yamlSubscribeUrl = computed(() => withAuthToken(`${window.location.origin}/api/generate/yaml/download?${switchQuery.value}`, exportNeedsToken.value))
-const scriptSubscribeUrl = computed(() => withAuthToken(`${window.location.origin}/api/generate/script/download?${switchQuery.value}`, exportNeedsToken.value))
 
 async function load() {
   setStatus('加载中', 'busy')
@@ -234,21 +215,6 @@ async function saveSettings() {
   }
 }
 
-async function buildScript() {
-  working.value = 'script'
-  setMessage('', '')
-  try {
-    if (!(await saveSettings())) return
-    const { data } = await generateScript({ ...switches, exclude_node_proxies: true })
-    scriptResult.value = data.script || ''
-    store.success('Script.js 已生成')
-  } catch (err) {
-    store.error(getApiErrorMessage(err, '生成 Script.js 失败'))
-  } finally {
-    working.value = ''
-  }
-}
-
 async function buildYaml() {
   working.value = 'yaml'
   setMessage('', '')
@@ -261,27 +227,6 @@ async function buildYaml() {
     store.success(typeof dialer === 'number' ? `YAML 已生成（dialer-proxy ${dialer}）` : 'YAML 已生成')
   } catch (err) {
     store.error(getApiErrorMessage(err, '生成 YAML 失败'))
-  } finally {
-    working.value = ''
-  }
-}
-
-async function buildAll() {
-  working.value = 'all'
-  setMessage('', '')
-  try {
-    if (!(await saveSettings())) return
-    const [yamlRes, scriptRes] = await Promise.all([
-      generateYaml({ ...switches }),
-      generateScript({ ...switches, exclude_node_proxies: true }),
-    ])
-    yamlResult.value = yamlRes.data.yaml || ''
-    yamlStats.value = yamlRes.data.stats || null
-    scriptResult.value = scriptRes.data.script || ''
-    const dialer = yamlRes.data.stats?.dialer_proxy
-    store.success(typeof dialer === 'number' ? `YAML/Script 已生成（dialer-proxy ${dialer}）` : 'YAML 和 Script.js 已全部生成')
-  } catch (err) {
-    store.error(getApiErrorMessage(err, '生成失败'))
   } finally {
     working.value = ''
   }

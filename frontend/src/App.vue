@@ -22,7 +22,6 @@
           {{ theme === 'dark' ? '☀️' : '🌙' }}
         </button>
         <a class="quick-link" :href="withAuthToken('/yaml', exportNeedsToken)" target="_blank" rel="noreferrer">YAML</a>
-        <a class="quick-link" :href="withAuthToken('/script', exportNeedsToken)" target="_blank" rel="noreferrer">Script.js</a>
       </div>
     </header>
 

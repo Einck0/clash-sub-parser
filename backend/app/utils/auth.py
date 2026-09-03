@@ -19,8 +19,8 @@ PUBLIC_PATHS = {
     "/api/settings/auth/logout",
 }
 PUBLIC_PREFIXES = ("/assets/",)
-EXPORT_PATHS = {"/yaml", "/script"}
-EXPORT_PREFIXES = ("/api/generate/yaml/", "/api/generate/script/")
+EXPORT_PATHS = {"/yaml"}
+EXPORT_PREFIXES = ("/api/generate/yaml/",)
 EXPORT_SUFFIXES = ("/download", "/current")
 
 

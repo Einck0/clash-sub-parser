@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,7 +10,6 @@ from app.schemas.generate_config import GenerateConfigRead, GenerateConfigUpdate
 from app.services.generate_config_service import get_generate_config, update_generate_config
 from app.services.generate_service import (
     file_response,
-    generate_script,
     generate_subscription_payload,
     generate_yaml,
     render_current,
@@ -41,24 +40,10 @@ async def update_generate_settings_endpoint(
     return await update_generate_config(db, payload)
 
 
-@router.get("/script")
-async def get_current_script_endpoint(db: AsyncSession = Depends(get_db)) -> PlainTextResponse:
-    content = await render_current(db, "script")
-    return await file_response(db, content, "script", disposition="inline")
-
-
 @router.get("/yaml")
 async def get_current_yaml_endpoint(db: AsyncSession = Depends(get_db)) -> PlainTextResponse:
     content = await render_current(db, "yaml")
     return await file_response(db, content, "yaml", disposition="inline")
-
-
-@router.post("/script")
-async def generate_script_endpoint(
-    switches: GenerateSwitches,
-    db: AsyncSession = Depends(get_db),
-) -> dict:
-    return await generate_script(db, switches.model_dump())
 
 
 @router.post("/yaml")
@@ -69,25 +54,18 @@ async def generate_yaml_endpoint(
     return await generate_yaml(db, switches.model_dump())
 
 
-@router.get("/script/current")
-async def download_current_script_endpoint(db: AsyncSession = Depends(get_db)) -> PlainTextResponse:
-    content = await render_current(db, "script")
-    return await file_response(db, content, "script", disposition="attachment")
-
-
 @router.get("/yaml/current")
 async def download_current_yaml_endpoint(db: AsyncSession = Depends(get_db)) -> PlainTextResponse:
     content = await render_current(db, "yaml")
     return await file_response(db, content, "yaml", disposition="attachment")
 
 
+@router.get("/script")
+@router.post("/script")
+@router.get("/script/current")
 @router.get("/script/download")
-async def download_script_endpoint(
-    switches: GenerateSwitches = Depends(),
-    db: AsyncSession = Depends(get_db),
-) -> PlainTextResponse:
-    result = await generate_script(db, switches.model_dump())
-    return await file_response(db, result.get("script", ""), "script", disposition="attachment")
+async def script_endpoints_removed():
+    raise HTTPException(status_code=404, detail="SCRIPT format has been deprecated and removed")
 
 
 @router.get("/yaml/download")

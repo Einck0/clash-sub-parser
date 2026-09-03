@@ -12,23 +12,6 @@
           </div>
 
           <div class="modal-body">
-            <div class="export-tabs">
-              <button
-                class="export-tab-btn"
-                :class="{ active: activeTab === 'yaml' }"
-                @click="activeTab = 'yaml'"
-              >
-                YAML 配置
-              </button>
-              <button
-                class="export-tab-btn"
-                :class="{ active: activeTab === 'script' }"
-                @click="activeTab = 'script'"
-              >
-                Script.js 脚本
-              </button>
-            </div>
-
             <div class="export-content">
               <div class="url-card">
                 <span class="url-label">完整订阅链接</span>
@@ -89,7 +72,7 @@ const store = useAppStore()
 const activeTab = ref('yaml')
 const copied = ref(false)
 
-const currentPath = computed(() => (activeTab.value === 'yaml' ? '/yaml' : '/script'))
+const currentPath = computed(() => '/yaml')
 
 const currentUrl = computed(() => {
   const rel = withAuthToken(currentPath.value, props.needsToken)

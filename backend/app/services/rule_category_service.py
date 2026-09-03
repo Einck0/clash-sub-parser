@@ -54,7 +54,7 @@ async def ensure_rule_category(db: AsyncSession, name: str) -> RuleCategory:
         await db.refresh(item)
     except IntegrityError:
         await db.rollback()
-        # Another request created it concurrently; re-fetch
+        # 并发创建冲突时重新获取
         result = await db.execute(select(RuleCategory).where(RuleCategory.name == category_name))
         item = result.scalar_one_or_none()
         if not item:
@@ -149,15 +149,15 @@ async def reorder_rule_categories(
 
 
 async def batch_rule_categories(db: AsyncSession, payload: dict) -> list[dict]:
-    """Process a batch of category operations atomically."""
-    # Auto-snapshot before batch changes
+    """原子化处理规则分类批量操作"""
+    # 批量变更前自动创建快照
     from app.services.snapshot_service import create_snapshot
     try:
         await create_snapshot(db, label="auto-before-batch-categories")
     except Exception:
         pass
 
-    # 1. Deletes (with cascade)
+    # 1 删除级联
     delete_ids = payload.get("delete", [])
     for cat_id in delete_ids:
         item = await db.get(RuleCategory, cat_id)
@@ -165,7 +165,7 @@ async def batch_rule_categories(db: AsyncSession, payload: dict) -> list[dict]:
             await db.execute(delete(Rule).where(Rule.category == item.name))
             await db.delete(item)
     
-    # 2. Creates
+    # 2 新建
     for item_data in payload.get("create", []):
         name = _normalize_name(item_data.get("name", ""))
         existing = await db.scalar(select(RuleCategory.id).where(RuleCategory.name == name))
@@ -174,7 +174,7 @@ async def batch_rule_categories(db: AsyncSession, payload: dict) -> list[dict]:
         item = RuleCategory(name=name, sort_order=item_data.get("sort_order", 0))
         db.add(item)
     
-    # 3. Updates
+    # 3 更新
     for item_data in payload.get("update", []):
         cat_id = item_data.get("id")
         if not cat_id:
@@ -191,7 +191,7 @@ async def batch_rule_categories(db: AsyncSession, payload: dict) -> list[dict]:
             item.sort_order = int(item_data["sort_order"])
         db.add(item)
     
-    # 4. Reorder
+    # 4 重新排序
     reorder_items = payload.get("reorder", [])
     if reorder_items:
         ids = [entry["id"] for entry in reorder_items]

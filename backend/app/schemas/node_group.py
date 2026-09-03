@@ -9,6 +9,8 @@ class NodeGroupBase(BaseModel):
     )
     sort_order: int = 0
     regex_rules: list[str] = Field(default_factory=list)
+    filter_min_speed_mbps: float | None = Field(default=None, ge=0.0)
+    filter_media_unlock: list[str] = Field(default_factory=list)
     include_nodes: list[str] = Field(default_factory=list)
     include_group_ids: list[int] = Field(default_factory=list)
     include_group_nodes_ids: list[int] = Field(default_factory=list)
@@ -33,6 +35,8 @@ class NodeGroupUpdate(BaseModel):
     )
     sort_order: int | None = None
     regex_rules: list[str] | None = None
+    filter_min_speed_mbps: float | None = None
+    filter_media_unlock: list[str] | None = None
     include_nodes: list[str] | None = None
     include_group_ids: list[int] | None = None
     include_group_nodes_ids: list[int] | None = None

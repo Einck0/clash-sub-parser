@@ -126,30 +126,29 @@ def _validate_rule_item(rule_type: str, value: str, proxy: str) -> None:
     if not proxy:
         raise HTTPException(status_code=400, detail="Rule proxy is required")
     if rule_type not in KNOWN_RULE_TYPES:
-        # Clash supports custom providers/types in some clients. Keep this permissive
-        # but normalized, instead of rejecting user-imported rules.
+        # 兼容客户端自定义规则类型，宽松放行但不校验特定格式
         return
     if rule_type not in MATCH_RULE_TYPES and not value:
         raise HTTPException(status_code=400, detail="Rule value is required")
 
 
 async def batch_rules(db: AsyncSession, payload: dict) -> list[Rule]:
-    """Process a batch of rule operations atomically."""
-    # Auto-snapshot before batch changes
+    """原子化处理规则批量操作"""
+    # 批量变更前自动创建快照
     from app.services.snapshot_service import create_snapshot
     try:
         await create_snapshot(db, label="auto-before-batch-rules")
     except Exception:
-        pass  # Don't fail the actual operation if snapshot fails
+        pass
 
-    # 1. Deletes
+    # 1 删除
     delete_ids = payload.get("delete", [])
     if delete_ids:
         result = await db.execute(select(Rule).where(Rule.id.in_(delete_ids)))
         for item in result.scalars().all():
             await db.delete(item)
     
-    # 2. Creates
+    # 2 新建
     create_items = payload.get("create", [])
     created = []
     for item_data in create_items:
@@ -160,7 +159,7 @@ async def batch_rules(db: AsyncSession, payload: dict) -> list[Rule]:
         db.add(item)
         created.append(item)
     
-    # 3. Updates
+    # 3 更新
     update_items = payload.get("update", [])
     for item_data in update_items:
         rule_id = item_data.get("id")
@@ -182,7 +181,7 @@ async def batch_rules(db: AsyncSession, payload: dict) -> list[Rule]:
             setattr(item, key, value)
         db.add(item)
     
-    # 4. Reorder
+    # 4 重新排序
     reorder_items = payload.get("reorder", [])
     if reorder_items:
         ids = [entry["id"] for entry in reorder_items]

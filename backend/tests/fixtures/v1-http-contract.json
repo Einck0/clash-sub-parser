@@ -1,0 +1,42 @@
+{
+  "management_api": {
+    "path": "/api/subscriptions",
+    "statuses": {
+      "missing_token": 401,
+      "query_token": 401,
+      "header_token": 200
+    },
+    "required_item_fields": [
+      "id",
+      "name",
+      "url",
+      "is_primary",
+      "enabled",
+      "raw_nodes"
+    ]
+  },
+  "exports": [
+    {
+      "kind": "yaml",
+      "path": "/yaml",
+      "missing_token_status": 401,
+      "authorized_status": 200,
+      "content_type": "application/x-yaml",
+      "content_disposition": "inline; filename=\"config.yaml\"",
+      "headers": {
+        "Subscription-Userinfo": "upload=1; download=2; total=3; expire=4",
+        "Profile-Update-Interval": "30",
+        "Profile-Web-Page-Url": "https://fixtures.invalid/profile"
+      }
+    },
+    {
+      "kind": "script",
+      "path": "/script",
+      "missing_token_status": 401,
+      "authorized_status": 200,
+      "content_type": "text/javascript",
+      "content_disposition": "inline; filename=\"script.js\"",
+      "headers": {}
+    }
+  ]
+}

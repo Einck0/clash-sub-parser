@@ -1,0 +1,158 @@
+{
+  "fingerprint": "cee4078941a1471bc3f908dc7e6c018d4c10e6f68c88d03435e03ac617e4c5b3",
+  "manifest": {
+    "indexes": [
+      {"name": "ix_config_snapshots_id", "sql": "CREATE INDEX ix_config_snapshots_id ON config_snapshots (id)", "table": "config_snapshots"},
+      {"name": "ix_node_groups_id", "sql": "CREATE INDEX ix_node_groups_id ON node_groups (id)", "table": "node_groups"},
+      {"name": "ix_node_probe_results_checked_at", "sql": "CREATE INDEX ix_node_probe_results_checked_at ON node_probe_results (checked_at)", "table": "node_probe_results"},
+      {"name": "ix_node_probe_results_name", "sql": "CREATE INDEX ix_node_probe_results_name ON node_probe_results (name)", "table": "node_probe_results"},
+      {"name": "ix_node_probe_results_node_key", "sql": "CREATE UNIQUE INDEX ix_node_probe_results_node_key ON node_probe_results (node_key)", "table": "node_probe_results"},
+      {"name": "ix_node_probe_results_server", "sql": "CREATE INDEX ix_node_probe_results_server ON node_probe_results (server)", "table": "node_probe_results"},
+      {"name": "ix_proxy_chain_bindings_id", "sql": "CREATE INDEX ix_proxy_chain_bindings_id ON proxy_chain_bindings (id)", "table": "proxy_chain_bindings"},
+      {"name": "ix_proxy_chain_bindings_target_id", "sql": "CREATE INDEX ix_proxy_chain_bindings_target_id ON proxy_chain_bindings (target_id)", "table": "proxy_chain_bindings"},
+      {"name": "ix_proxy_chain_bindings_target_type", "sql": "CREATE INDEX ix_proxy_chain_bindings_target_type ON proxy_chain_bindings (target_type)", "table": "proxy_chain_bindings"},
+      {"name": "ix_rule_categories_id", "sql": "CREATE INDEX ix_rule_categories_id ON rule_categories (id)", "table": "rule_categories"},
+      {"name": "ix_subscriptions_id", "sql": "CREATE INDEX ix_subscriptions_id ON subscriptions (id)", "table": "subscriptions"}
+    ],
+    "tables": {
+      "config_snapshots": [
+        {"default": null, "name": "created_at", "notnull": false, "pk": false, "type": "DATETIME"},
+        {"default": null, "name": "description", "notnull": false, "pk": false, "type": "VARCHAR(500)"},
+        {"default": null, "name": "id", "notnull": true, "pk": true, "type": "INTEGER"},
+        {"default": null, "name": "label", "notnull": false, "pk": false, "type": "VARCHAR(200)"},
+        {"default": null, "name": "snapshot_data", "notnull": true, "pk": false, "type": "TEXT"}
+      ],
+      "dns_config": [
+        {"default": null, "name": "enabled", "notnull": true, "pk": false, "type": "BOOLEAN"},
+        {"default": null, "name": "id", "notnull": true, "pk": true, "type": "INTEGER"},
+        {"default": null, "name": "raw_yaml", "notnull": true, "pk": false, "type": "TEXT"}
+      ],
+      "generate_config": [
+        {"default": null, "name": "dns", "notnull": true, "pk": false, "type": "BOOLEAN"},
+        {"default": null, "name": "enabled", "notnull": true, "pk": false, "type": "BOOLEAN"},
+        {"default": null, "name": "exclude_node_proxies", "notnull": true, "pk": false, "type": "BOOLEAN"},
+        {"default": null, "name": "id", "notnull": true, "pk": true, "type": "INTEGER"},
+        {"default": null, "name": "node_groups", "notnull": true, "pk": false, "type": "BOOLEAN"},
+        {"default": null, "name": "rules", "notnull": true, "pk": false, "type": "BOOLEAN"},
+        {"default": null, "name": "subscriptions", "notnull": true, "pk": false, "type": "BOOLEAN"}
+      ],
+      "node_groups": [
+        {"default": "0", "name": "add_fallback", "notnull": true, "pk": false, "type": "BOOLEAN"},
+        {"default": "'[]'", "name": "exclude_group_ids", "notnull": true, "pk": false, "type": "JSON"},
+        {"default": null, "name": "exclude_nodes", "notnull": true, "pk": false, "type": "JSON"},
+        {"default": null, "name": "fallback_config", "notnull": true, "pk": false, "type": "JSON"},
+        {"default": "'[]'", "name": "filter_media_unlock", "notnull": true, "pk": false, "type": "JSON"},
+        {"default": null, "name": "filter_min_speed_mbps", "notnull": false, "pk": false, "type": "FLOAT"},
+        {"default": null, "name": "group_type", "notnull": true, "pk": false, "type": "VARCHAR(20)"},
+        {"default": null, "name": "id", "notnull": true, "pk": true, "type": "INTEGER"},
+        {"default": "'[]'", "name": "include_entries", "notnull": true, "pk": false, "type": "JSON"},
+        {"default": null, "name": "include_group_ids", "notnull": true, "pk": false, "type": "JSON"},
+        {"default": "'[]'", "name": "include_group_nodes_ids", "notnull": true, "pk": false, "type": "JSON"},
+        {"default": null, "name": "include_nodes", "notnull": true, "pk": false, "type": "JSON"},
+        {"default": null, "name": "kind", "notnull": true, "pk": false, "type": "VARCHAR(20)"},
+        {"default": null, "name": "load_balance_config", "notnull": true, "pk": false, "type": "JSON"},
+        {"default": null, "name": "name", "notnull": true, "pk": false, "type": "VARCHAR(120)"},
+        {"default": null, "name": "regex_rules", "notnull": true, "pk": false, "type": "JSON"},
+        {"default": null, "name": "sort_order", "notnull": true, "pk": false, "type": "INTEGER"},
+        {"default": null, "name": "url_test_config", "notnull": true, "pk": false, "type": "JSON"}
+      ],
+      "node_probe_results": [
+        {"default": null, "name": "asn", "notnull": false, "pk": false, "type": "INTEGER"},
+        {"default": null, "name": "checked_at", "notnull": true, "pk": false, "type": "INTEGER"},
+        {"default": null, "name": "country", "notnull": false, "pk": false, "type": "VARCHAR(32)"},
+        {"default": null, "name": "error", "notnull": false, "pk": false, "type": "TEXT"},
+        {"default": null, "name": "id", "notnull": true, "pk": true, "type": "INTEGER"},
+        {"default": null, "name": "ip", "notnull": false, "pk": false, "type": "VARCHAR(128)"},
+        {"default": null, "name": "latency_ms", "notnull": false, "pk": false, "type": "INTEGER"},
+        {"default": null, "name": "media", "notnull": true, "pk": false, "type": "JSON"},
+        {"default": null, "name": "name", "notnull": true, "pk": false, "type": "VARCHAR(255)"},
+        {"default": null, "name": "node_key", "notnull": true, "pk": false, "type": "VARCHAR(255)"},
+        {"default": null, "name": "organization", "notnull": false, "pk": false, "type": "VARCHAR(255)"},
+        {"default": null, "name": "port", "notnull": false, "pk": false, "type": "INTEGER"},
+        {"default": null, "name": "server", "notnull": true, "pk": false, "type": "VARCHAR(255)"},
+        {"default": null, "name": "speed_mbps", "notnull": false, "pk": false, "type": "FLOAT"},
+        {"default": null, "name": "status", "notnull": true, "pk": false, "type": "VARCHAR(32)"},
+        {"default": null, "name": "type", "notnull": true, "pk": false, "type": "VARCHAR(64)"}
+      ],
+      "probe_config": [
+        {"default": null, "name": "id", "notnull": true, "pk": true, "type": "INTEGER"},
+        {"default": null, "name": "media_check_enabled", "notnull": true, "pk": false, "type": "BOOLEAN"},
+        {"default": null, "name": "media_platforms", "notnull": true, "pk": false, "type": "JSON"},
+        {"default": null, "name": "media_timeout_s", "notnull": true, "pk": false, "type": "INTEGER"},
+        {"default": null, "name": "probe_concurrency", "notnull": true, "pk": false, "type": "INTEGER"},
+        {"default": null, "name": "probe_enabled", "notnull": true, "pk": false, "type": "BOOLEAN"},
+        {"default": "0", "name": "probe_interval_minutes", "notnull": true, "pk": false, "type": "INTEGER"},
+        {"default": null, "name": "probe_timeout_ms", "notnull": true, "pk": false, "type": "INTEGER"},
+        {"default": null, "name": "speedtest_enabled", "notnull": true, "pk": false, "type": "BOOLEAN"},
+        {"default": null, "name": "speedtest_max_bytes", "notnull": true, "pk": false, "type": "INTEGER"},
+        {"default": null, "name": "speedtest_min_speed_mbps", "notnull": true, "pk": false, "type": "FLOAT"},
+        {"default": null, "name": "speedtest_timeout_s", "notnull": true, "pk": false, "type": "INTEGER"},
+        {"default": null, "name": "speedtest_url", "notnull": true, "pk": false, "type": "VARCHAR(512)"}
+      ],
+      "proxy_chain_bindings": [
+        {"default": null, "name": "dialer_ref", "notnull": true, "pk": false, "type": "VARCHAR(255)"},
+        {"default": null, "name": "dialer_type", "notnull": true, "pk": false, "type": "VARCHAR(20)"},
+        {"default": null, "name": "enabled", "notnull": true, "pk": false, "type": "BOOLEAN"},
+        {"default": null, "name": "id", "notnull": true, "pk": true, "type": "INTEGER"},
+        {"default": null, "name": "note", "notnull": false, "pk": false, "type": "TEXT"},
+        {"default": null, "name": "sort_order", "notnull": true, "pk": false, "type": "INTEGER"},
+        {"default": null, "name": "target_id", "notnull": false, "pk": false, "type": "INTEGER"},
+        {"default": null, "name": "target_name", "notnull": false, "pk": false, "type": "VARCHAR(255)"},
+        {"default": null, "name": "target_type", "notnull": true, "pk": false, "type": "VARCHAR(20)"}
+      ],
+      "rule_categories": [
+        {"default": null, "name": "id", "notnull": true, "pk": true, "type": "INTEGER"},
+        {"default": null, "name": "name", "notnull": true, "pk": false, "type": "VARCHAR(80)"},
+        {"default": "0", "name": "sort_order", "notnull": true, "pk": false, "type": "INTEGER"}
+      ],
+      "rules": [
+        {"default": "'default'", "name": "category", "notnull": true, "pk": false, "type": "VARCHAR(80)"},
+        {"default": "1", "name": "enabled", "notnull": true, "pk": false, "type": "BOOLEAN"},
+        {"default": null, "name": "id", "notnull": true, "pk": true, "type": "INTEGER"},
+        {"default": "''", "name": "name", "notnull": true, "pk": false, "type": "VARCHAR(160)"},
+        {"default": "'[]'", "name": "options", "notnull": true, "pk": false, "type": "JSON"},
+        {"default": null, "name": "proxy", "notnull": true, "pk": false, "type": "VARCHAR(160)"},
+        {"default": "0", "name": "sort_order", "notnull": true, "pk": false, "type": "INTEGER"},
+        {"default": null, "name": "type", "notnull": true, "pk": false, "type": "VARCHAR(40)"},
+        {"default": "''", "name": "value", "notnull": true, "pk": false, "type": "VARCHAR(512)"}
+      ],
+      "security_settings": [
+        {"default": null, "name": "auth_enabled", "notnull": true, "pk": false, "type": "BOOLEAN"},
+        {"default": "0", "name": "fetch_proxy_enabled", "notnull": true, "pk": false, "type": "BOOLEAN"},
+        {"default": "''", "name": "fetch_proxy_url", "notnull": true, "pk": false, "type": "VARCHAR(512)"},
+        {"default": null, "name": "id", "notnull": true, "pk": true, "type": "INTEGER"},
+        {"default": null, "name": "protect_api", "notnull": true, "pk": false, "type": "BOOLEAN"},
+        {"default": null, "name": "protect_exports", "notnull": true, "pk": false, "type": "BOOLEAN"},
+        {"default": null, "name": "protect_frontend", "notnull": true, "pk": false, "type": "BOOLEAN"},
+        {"default": null, "name": "token_hash", "notnull": true, "pk": false, "type": "VARCHAR(128)"}
+      ],
+      "subscriptions": [
+        {"default": "1", "name": "enabled", "notnull": true, "pk": false, "type": "BOOLEAN"},
+        {"default": "'[]'", "name": "exclude_node_names", "notnull": true, "pk": false, "type": "JSON"},
+        {"default": null, "name": "fetch_comments", "notnull": true, "pk": false, "type": "JSON"},
+        {"default": "0", "name": "fetch_failed_count", "notnull": true, "pk": false, "type": "INTEGER"},
+        {"default": "'[]'", "name": "filter_media_unlock", "notnull": true, "pk": false, "type": "JSON"},
+        {"default": null, "name": "filter_min_speed_mbps", "notnull": false, "pk": false, "type": "FLOAT"},
+        {"default": null, "name": "filter_regex", "notnull": true, "pk": false, "type": "JSON"},
+        {"default": null, "name": "id", "notnull": true, "pk": true, "type": "INTEGER"},
+        {"default": "'[]'", "name": "include_node_names", "notnull": true, "pk": false, "type": "JSON"},
+        {"default": null, "name": "is_primary", "notnull": true, "pk": false, "type": "BOOLEAN"},
+        {"default": null, "name": "last_fetch_error", "notnull": false, "pk": false, "type": "TEXT"},
+        {"default": null, "name": "last_fetched_at", "notnull": false, "pk": false, "type": "DATETIME"},
+        {"default": "'[]'", "name": "manual_nodes", "notnull": true, "pk": false, "type": "JSON"},
+        {"default": null, "name": "name", "notnull": true, "pk": false, "type": "VARCHAR(120)"},
+        {"default": null, "name": "node_prefix", "notnull": false, "pk": false, "type": "VARCHAR(120)"},
+        {"default": "'{}'", "name": "node_proxy_chains", "notnull": true, "pk": false, "type": "JSON"},
+        {"default": "'{}'", "name": "node_renames", "notnull": true, "pk": false, "type": "JSON"},
+        {"default": null, "name": "profile_update_interval", "notnull": false, "pk": false, "type": "VARCHAR(40)"},
+        {"default": null, "name": "profile_web_page_url", "notnull": false, "pk": false, "type": "TEXT"},
+        {"default": "'[]'", "name": "proxy_chain", "notnull": true, "pk": false, "type": "JSON"},
+        {"default": null, "name": "raw_nodes", "notnull": true, "pk": false, "type": "JSON"},
+        {"default": "'[]'", "name": "source_nodes", "notnull": true, "pk": false, "type": "JSON"},
+        {"default": null, "name": "subscription_userinfo", "notnull": false, "pk": false, "type": "TEXT"},
+        {"default": null, "name": "update_interval", "notnull": false, "pk": false, "type": "INTEGER"},
+        {"default": null, "name": "url", "notnull": true, "pk": false, "type": "TEXT"}
+      ]
+    }
+  }
+}

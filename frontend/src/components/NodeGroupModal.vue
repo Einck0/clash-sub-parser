@@ -141,6 +141,49 @@
       <div class="selector-section">
         <div class="row space">
           <div>
+            <strong>⚡ 节点质检与流媒体/AI 过滤（可选）</strong>
+            <p class="section-hint">
+              满足条件的节点才会进入此策略组。测速门槛和流媒体解锁要求需在节点探测中测得有效结果。
+            </p>
+          </div>
+        </div>
+        <div class="grid-2" style="margin-top:8px;gap:8px">
+          <label>
+            <div class="muted">测速最低门槛 (Mbps)</div>
+            <input
+              type="number"
+              min="0"
+              step="0.5"
+              v-model.number="form.filter_min_speed_mbps"
+              placeholder="例如 5.0，留空或 0 为不限制"
+            />
+          </label>
+        </div>
+        <div style="margin-top:10px">
+          <div class="muted" style="margin-bottom:6px">必须解锁的流媒体 / AI 平台（多选）</div>
+          <div class="platform-chips" style="display: flex; gap: 8px; flex-wrap: wrap;">
+            <label
+              v-for="p in availablePlatforms"
+              :key="p.id"
+              class="platform-chip"
+              :class="{ active: (form.filter_media_unlock || []).includes(p.id) }"
+              style="cursor: pointer; padding: 5px 10px; border-radius: 6px; border: 1px solid var(--border-color, #333); font-size: 0.85rem; display: flex; align-items: center; gap: 6px;"
+            >
+              <input
+                type="checkbox"
+                :value="p.id"
+                v-model="form.filter_media_unlock"
+                style="display: none;"
+              />
+              <span>{{ p.name }}</span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div class="selector-section">
+        <div class="row space">
+          <div>
             <strong>统一排序条目</strong>
             <p class="section-hint">拖拽/上下调整顺序。正则项显示为虚拟筛选，不是冻结节点列表。</p>
           </div>
@@ -276,6 +319,16 @@ const props = defineProps({ group: { type: Object, default: null } })
 const emit = defineEmits(['saved', 'close'])
 const store = useAppStore()
 
+const availablePlatforms = [
+  { id: 'youtube', name: 'YouTube' },
+  { id: 'netflix', name: 'Netflix' },
+  { id: 'disney', name: 'Disney+' },
+  { id: 'chatgpt', name: 'ChatGPT' },
+  { id: 'gemini', name: 'Gemini' },
+  { id: 'meta_ai', name: 'Meta AI' },
+  { id: 'bilibili', name: 'Bilibili' },
+]
+
 const allGroups = ref([])
 const allNodes = ref([])
 const selectedGroupId = ref(null)
@@ -339,6 +392,8 @@ watch(
         include_entries: entries,
         add_fallback: value.add_fallback === true,
         exclude_nodes: [...(value.exclude_nodes || [])],
+        filter_min_speed_mbps: value.filter_min_speed_mbps ?? null,
+        filter_media_unlock: [...(value.filter_media_unlock || [])],
         url_test_config: value.url_test_config || {},
         load_balance_config: value.load_balance_config || {},
         fallback_config: value.fallback_config || {},
@@ -752,10 +807,12 @@ async function save() {
     name,
     group_type: form.value.group_type || 'select',
     sort_order: form.value.sort_order || 0,
-    // include_entries is source of truth; backend derives regex_rules/kind.
+    // include_entries 为唯一数据源，后端自动推导正则与类型
     include_entries: entries,
     add_fallback: form.value.add_fallback === true,
     exclude_nodes: uniq(form.value.exclude_nodes || []),
+    filter_min_speed_mbps: form.value.filter_min_speed_mbps || null,
+    filter_media_unlock: form.value.filter_media_unlock || [],
     url_test_config: urlCfg,
     load_balance_config: form.value.load_balance_config || {},
     fallback_config: form.value.fallback_config || {},
@@ -769,7 +826,7 @@ async function save() {
     } else {
       await createNodeGroup(payload)
     }
-    // Parent page owns the success toast to avoid double notifications.
+    // 由父页面统一触发成功提示，避免重复弹窗通知
     emit('saved', { created: !form.value.id, name })
     emit('close')
   } catch (err) {
@@ -807,6 +864,8 @@ function defaultForm() {
     include_entries: [],
     add_fallback: false,
     exclude_nodes: [],
+    filter_min_speed_mbps: null,
+    filter_media_unlock: [],
     url_test_config: {},
     load_balance_config: {},
     fallback_config: {},

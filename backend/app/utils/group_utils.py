@@ -72,16 +72,9 @@ def resolve_group_members(
     all_node_names: list[str],
     *,
     leaves_only: bool = False,
+    probe_map: dict[str, dict] | None = None,
 ) -> dict[int, list[str]]:
-    """Resolve every group's ordered member list from include_entries.
-
-    Shared by generate, preview, and proxy-chain cycle checks.
-
-    - leaves_only=False: export/preview mode — `group` entries keep nested
-      group names as members (Clash proxy-group references).
-    - leaves_only=True: expand nested groups to leaf proxy names only (for
-      dialer target expansion / membership cycle checks).
-    """
+    """Resolve every group's ordered member list from include_entries."""
     group_list = list(groups)
     mapping = {g.id: g for g in group_list}
     name_to_id = {g.name: g.id for g in group_list if g.name}
@@ -154,6 +147,25 @@ def resolve_group_members(
             excluded.update(resolve(exclude_id, set(trail)))
 
         merged = [item for item in dedup_names(selected) if item not in excluded]
+
+        # 针对叶子节点应用当前策略组设置的能力与测速过滤
+        if probe_map and (group.filter_min_speed_mbps or group.filter_media_unlock):
+            from app.utils.capability_filter import is_node_capability_qualified
+            filtered_merged = []
+            for item in merged:
+                # 如果是嵌套策略组名，直接保留；如果是节点名，执行探针能力筛选
+                if item in group_label_set:
+                    filtered_merged.append(item)
+                else:
+                    node_probe = probe_map.get(item)
+                    if is_node_capability_qualified(
+                        node_probe,
+                        min_speed_mbps=group.filter_min_speed_mbps,
+                        required_media=group.filter_media_unlock,
+                    ):
+                        filtered_merged.append(item)
+            merged = filtered_merged
+
         if leaves_only:
             merged = [item for item in merged if item not in group_label_set]
         cache[group_id] = merged

@@ -168,7 +168,7 @@ async def test_exclude_group_cycle_rejected(client):
     a_id = a.json()["id"]
     b_id = b.json()["id"]
 
-    # A includes B's nodes, B excludes A -> cycle across add/subtract edges
+    # A 包含 B 且 B 排除 A 构成循环引用
     ok = await client.patch(
         f"/api/node-groups/{a_id}",
         json={

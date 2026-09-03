@@ -1,0 +1,29 @@
+{
+  "metadata_create_all": {
+    "revision": "csp_legacy_schema_baseline",
+    "tables": {
+      "config_snapshots": ["id", "label", "description", "snapshot_data", "created_at"],
+      "dns_config": ["id", "raw_yaml", "enabled"],
+      "generate_config": ["id", "enabled", "subscriptions", "node_groups", "rules", "dns", "exclude_node_proxies"],
+      "node_groups": ["id", "name", "kind", "group_type", "sort_order", "regex_rules", "filter_min_speed_mbps", "filter_media_unlock", "include_nodes", "include_group_ids", "include_group_nodes_ids", "include_entries", "add_fallback", "exclude_nodes", "exclude_group_ids", "url_test_config", "load_balance_config", "fallback_config"],
+      "node_probe_results": ["id", "node_key", "name", "server", "port", "type", "status", "latency_ms", "speed_mbps", "ip", "country", "asn", "organization", "media", "error", "checked_at"],
+      "probe_config": ["id", "probe_enabled", "probe_interval_minutes", "speedtest_enabled", "speedtest_url", "speedtest_timeout_s", "speedtest_max_bytes", "speedtest_min_speed_mbps", "media_check_enabled", "media_platforms", "media_timeout_s", "probe_concurrency", "probe_timeout_ms"],
+      "proxy_chain_bindings": ["id", "target_type", "target_id", "target_name", "dialer_type", "dialer_ref", "enabled", "sort_order", "note"],
+      "rule_categories": ["id", "name", "sort_order"],
+      "rules": ["id", "name", "category", "type", "value", "proxy", "options", "sort_order", "enabled"],
+      "security_settings": ["id", "auth_enabled", "protect_frontend", "protect_api", "protect_exports", "token_hash", "fetch_proxy_enabled", "fetch_proxy_url"],
+      "subscriptions": ["id", "name", "url", "update_interval", "is_primary", "enabled", "node_prefix", "filter_regex", "filter_min_speed_mbps", "filter_media_unlock", "include_node_names", "exclude_node_names", "node_renames", "source_nodes", "manual_nodes", "raw_nodes", "last_fetched_at", "last_fetch_error", "fetch_failed_count", "fetch_comments", "subscription_userinfo", "profile_update_interval", "profile_web_page_url"]
+    }
+  },
+  "bootstrap_schema": {
+    "revision": "csp_legacy_bootstrap_bridge",
+    "columns": {
+      "node_groups": ["add_fallback", "exclude_group_ids", "filter_media_unlock", "filter_min_speed_mbps", "include_entries", "include_group_nodes_ids"],
+      "probe_config": ["probe_interval_minutes"],
+      "rules": ["category"],
+      "security_settings": ["fetch_proxy_enabled", "fetch_proxy_url"],
+      "subscriptions": ["enabled", "exclude_node_names", "fetch_failed_count", "filter_media_unlock", "filter_min_speed_mbps", "include_node_names", "last_fetch_error", "manual_nodes", "node_renames", "profile_update_interval", "profile_web_page_url", "source_nodes", "subscription_userinfo"]
+    },
+    "backfills": ["rule_categories"]
+  }
+}

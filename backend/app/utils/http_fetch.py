@@ -1,6 +1,6 @@
-"""统一的流式 HTTP 抓取管线：redirect 逐跳 SSRF 校验 + 字节限长 + 深度上限。
+"""统一的流式 HTTP 抓取管线：redirect 逐跳 SSRF 校验 + 字节限长 + 深度上限
 
-订阅拉取与资产下载共用此单点实现，保证两条路径的安全行为一致。
+订阅拉取与资产下载共用此单点实现，保证两条路径的安全行为一致
 """
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from app.utils.validators import validate_fetch_url
 
 @dataclass
 class FetchResult:
-    """stream_fetch 的返回：最终响应与实际读取字节数。"""
+    """stream_fetch 的返回：最终响应与实际读取字节数"""
 
     response: httpx.Response
     final_url: str
@@ -29,7 +29,7 @@ async def stream_fetch(
     max_redirects: int = 5,
     max_bytes: int | None = None,
 ) -> httpx.Response:
-    """GET url 并手动跟随重定向，每一跳做 SSRF 校验。
+    """GET url 并手动跟随重定向，每一跳做 SSRF 校验
 
     - 重定向缺 Location、超深度、目标不合法均抛 HTTPException
     - 返回的响应为流式，调用方负责 async with 关闭并自行限长读取

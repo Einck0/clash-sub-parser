@@ -91,6 +91,92 @@
       <div class="dns-section settings-card wide">
         <div class="section-title-row">
           <div>
+            <h3>⚡ 节点检测与测速设置</h3>
+            <p class="section-hint">配置全协议代理握手、真实出口 IP/国家识别、流媒体与 AI 解锁测试及受控带宽测速。</p>
+          </div>
+          <span class="sync-pill" :class="{ ok: probeConfig.probe_enabled }">
+            {{ probeConfig.probe_enabled ? '质检已开启' : '质检已暂停' }}
+          </span>
+        </div>
+
+        <div class="settings-toggle-list" style="margin-bottom: 16px;">
+          <label class="settings-toggle">
+            <input type="checkbox" v-model="probeConfig.probe_enabled" />
+            <span><strong>开启节点出站校验</strong><small>通过 sing-box 建立独立通道验证真实代理协议握手与延迟（不仅是 TCP 端口）。</small></span>
+          </label>
+          <label class="settings-toggle">
+            <input type="checkbox" v-model="probeConfig.media_check_enabled" :disabled="!probeConfig.probe_enabled" />
+            <span><strong>开启流媒体与 AI 解锁检测</strong><small>通过待测节点探测 YouTube、Netflix、Disney+、ChatGPT 等平台的解锁能力。</small></span>
+          </label>
+          <label class="settings-toggle">
+            <input type="checkbox" v-model="probeConfig.speedtest_enabled" :disabled="!probeConfig.probe_enabled" />
+            <span><strong>开启下载带宽测速</strong><small>通过小样本流量分块（受控流量）测量节点的实际下载速度 (Mbps)。</small></span>
+          </label>
+        </div>
+
+        <div v-if="probeConfig.media_check_enabled" class="settings-sub-panel" style="margin-bottom: 16px;">
+          <h4 style="margin: 0 0 8px; font-size: 0.95rem;">检测的流媒体 / AI 平台</h4>
+          <div class="platform-chips" style="display: flex; gap: 8px; flex-wrap: wrap;">
+            <label
+              v-for="p in availablePlatforms"
+              :key="p.id"
+              class="platform-chip"
+              :class="{ active: probeConfig.media_platforms.includes(p.id) }"
+              style="cursor: pointer; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border-color, #333); font-size: 0.85rem; display: flex; align-items: center; gap: 6px;"
+            >
+              <input
+                type="checkbox"
+                :value="p.id"
+                v-model="probeConfig.media_platforms"
+                style="display: none;"
+              />
+              <span>{{ p.name }}</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="settings-grid-2" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin-bottom: 12px;">
+          <label class="field">
+            <span class="field-title-hint">后台自动探测周期（分钟）</span>
+            <input type="number" min="0" max="1440" v-model.number="probeConfig.probe_interval_minutes" placeholder="0 为仅手动探测" />
+            <small style="color: var(--text-muted); font-size: 0.8rem;">设置为 0 表示仅手动探测，大于 0 则后台按设定周期自动对所有节点进行探测与测速</small>
+          </label>
+          <label class="field">
+            <span class="field-title-hint">测速目标 URL</span>
+            <input v-model="probeConfig.speedtest_url" placeholder="https://speed.cloudflare.com/__down?bytes=5000000" />
+          </label>
+          <label class="field">
+            <span>最大测速样本流量 (MB)</span>
+            <input
+              type="number"
+              min="1"
+              max="50"
+              :value="Math.round(probeConfig.speedtest_max_bytes / 1048576)"
+              @input="probeConfig.speedtest_max_bytes = Math.max(1, Number($event.target.value || 5)) * 1048576"
+            />
+          </label>
+          <label class="field">
+            <span>测速超时时间 (秒)</span>
+            <input type="number" min="2" max="30" v-model.number="probeConfig.speedtest_timeout_s" />
+          </label>
+          <label class="field">
+            <span>测速达标过滤阈值 (Mbps)</span>
+            <input type="number" min="0" step="0.5" v-model.number="probeConfig.speedtest_min_speed_mbps" placeholder="0 表示不设门槛" />
+          </label>
+          <label class="field">
+            <span>探测并发数</span>
+            <input type="number" min="1" max="20" v-model.number="probeConfig.probe_concurrency" />
+          </label>
+          <label class="field">
+            <span>单次探测超时 (毫秒)</span>
+            <input type="number" min="500" max="15000" step="500" v-model.number="probeConfig.probe_timeout_ms" />
+          </label>
+        </div>
+      </div>
+
+      <div class="dns-section settings-card wide">
+        <div class="section-title-row">
+          <div>
             <h3>客户端下载</h3>
             <p class="section-hint">从 GitHub 拉取 Clash Verge Rev Windows x64 和 Clash Meta for Android arm64 最新版；也可以输入自定义 URL 下载到服务端后再从这里取回。</p>
           </div>
@@ -159,7 +245,20 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useAppStore } from '../stores/app'
 import { formatBytes, formatDate } from '../utils/format'
-import { exportAppConfig, getApiErrorMessage, getDownloads, getSecuritySettings, importAppConfig, loginAuthToken, resetAppConfig, updateSecuritySettings, downloadCustomAsset, downloadPresetAsset } from '../api'
+import {
+  exportAppConfig,
+  getApiErrorMessage,
+  getDownloads,
+  getProbeSettings,
+  getSecuritySettings,
+  importAppConfig,
+  loginAuthToken,
+  resetAppConfig,
+  updateProbeSettings,
+  updateSecuritySettings,
+  downloadCustomAsset,
+  downloadPresetAsset,
+} from '../api'
 import { setAuthToken, withAuthToken } from '../auth'
 import UiState from '../components/UiState.vue'
 
@@ -174,6 +273,32 @@ const settings = reactive({
   fetch_proxy_enabled: false,
   fetch_proxy_url: '',
 })
+
+const probeConfig = reactive({
+  probe_enabled: true,
+  probe_interval_minutes: 0,
+  speedtest_enabled: false,
+  speedtest_url: 'https://speed.cloudflare.com/__down?bytes=5000000',
+  speedtest_timeout_s: 5,
+  speedtest_max_bytes: 5242880,
+  speedtest_min_speed_mbps: 0.0,
+  media_check_enabled: true,
+  media_platforms: ['youtube', 'netflix', 'disney', 'chatgpt', 'bilibili', 'meta_ai', 'gemini'],
+  media_timeout_s: 5,
+  probe_concurrency: 5,
+  probe_timeout_ms: 3000,
+})
+
+const availablePlatforms = [
+  { id: 'youtube', name: 'YouTube Premium' },
+  { id: 'netflix', name: 'Netflix' },
+  { id: 'disney', name: 'Disney+' },
+  { id: 'chatgpt', name: 'ChatGPT / OpenAI' },
+  { id: 'gemini', name: 'Google Gemini' },
+  { id: 'meta_ai', name: 'Meta AI' },
+  { id: 'bilibili', name: 'Bilibili 港澳台' },
+]
+
 const newToken = ref('')
 const showToken = ref(false)
 const loading = ref(false)
@@ -199,10 +324,14 @@ async function load() {
   loading.value = true
   message.value = ''
   try {
-    const { data } = await getSecuritySettings()
-    Object.assign(settings, data)
+    const [secRes, probeRes] = await Promise.all([
+      getSecuritySettings(),
+      getProbeSettings().catch(() => ({ data: null })),
+    ])
+    if (secRes?.data) Object.assign(settings, secRes.data)
+    if (probeRes?.data) Object.assign(probeConfig, probeRes.data)
   } catch (err) {
-    setMessage(getApiErrorMessage(err, '加载安全设置失败'), 'error')
+    setMessage(getApiErrorMessage(err, '加载设置失败'), 'error')
   } finally {
     loading.value = false
   }
@@ -212,7 +341,7 @@ async function save() {
   saving.value = true
   message.value = ''
   try {
-    const payload = {
+    const secPayload = {
       auth_enabled: settings.auth_enabled,
       protect_frontend: settings.protect_frontend,
       protect_api: settings.protect_api,
@@ -220,17 +349,24 @@ async function save() {
       fetch_proxy_enabled: settings.fetch_proxy_enabled,
       fetch_proxy_url: settings.fetch_proxy_url?.trim() || '',
     }
-    if (newToken.value) payload.token = newToken.value
-    const { data } = await updateSecuritySettings(payload)
-    Object.assign(settings, data)
+    if (newToken.value) secPayload.token = newToken.value
+
+    const [secRes, probeRes] = await Promise.all([
+      updateSecuritySettings(secPayload),
+      updateProbeSettings(probeConfig),
+    ])
+
+    if (secRes?.data) Object.assign(settings, secRes.data)
+    if (probeRes?.data) Object.assign(probeConfig, probeRes.data)
+
     if (newToken.value) {
       await loginAuthToken(newToken.value)
     }
     newToken.value = ''
     showToken.value = false
-    store.success('安全设置已保存')
+    store.success('所有设置已保存')
   } catch (err) {
-    store.error(getApiErrorMessage(err, '保存安全设置失败'))
+    store.error(getApiErrorMessage(err, '保存设置失败'))
   } finally {
     saving.value = false
   }

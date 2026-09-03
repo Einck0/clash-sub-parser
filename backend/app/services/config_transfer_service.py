@@ -1,7 +1,7 @@
-"""配置导出/导入/重置的领域逻辑。
+"""配置导出/导入/重置的领域逻辑
 
 从 routers/settings.py 下沉：事务边界、外键顺序、敏感字段保留等规则单点在此，
-router 只做参数解析与状态码映射。纯数据进出，可被 CLI 等非 HTTP 场景复用。
+router 只做参数解析与状态码映射。纯数据进出，可被 CLI 等非 HTTP 场景复用
 """
 from __future__ import annotations
 
@@ -16,6 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.dns import DnsConfig
 from app.models.generate_config import GenerateConfig
 from app.models.node_group import NodeGroup
+from app.models.node_probe_result import NodeProbeResult
+from app.models.probe_config import ProbeConfig
 from app.models.rule import Rule
 from app.models.rule_category import RuleCategory
 from app.models.security_settings import SecuritySettings
@@ -29,6 +31,7 @@ EXPORT_MODELS = {
     "dns_config": DnsConfig,
     "generate_config": GenerateConfig,
     "security_settings": SecuritySettings,
+    "probe_config": ProbeConfig,
 }
 
 # Import order: parent tables first, children after
@@ -40,6 +43,7 @@ IMPORT_TABLE_ORDER = [
     "dns_config",
     "generate_config",
     "security_settings",
+    "probe_config",
 ]
 
 # Fields to skip during import (auto-managed or sensitive)
@@ -62,7 +66,7 @@ def _serialize_model(item) -> dict:
 
 
 async def export_data(db: AsyncSession, include_subscriptions: bool = True) -> dict:
-    """按外键安全顺序序列化全部业务表，敏感字段（token_hash）不导出。"""
+    """按外键安全顺序序列化全部业务表，敏感字段（token_hash）不导出"""
     data: dict[str, object] = {
         "version": 1,
         "exported_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
@@ -79,20 +83,21 @@ async def export_data(db: AsyncSession, include_subscriptions: bool = True) -> d
 
 
 async def reset_data(db: AsyncSession) -> None:
-    """按外键安全顺序清空业务表并恢复初始行；认证凭据重置为未设置。"""
-    for model in (Rule, RuleCategory, NodeGroup, Subscription, DnsConfig, GenerateConfig, SecuritySettings):
+    """按外键安全顺序清空业务表并恢复初始行；认证凭据重置为未设置"""
+    for model in (Rule, RuleCategory, NodeGroup, Subscription, DnsConfig, GenerateConfig, SecuritySettings, ProbeConfig, NodeProbeResult):
         await db.execute(delete(model))
     db.add(SecuritySettings(id=1))
     db.add(DnsConfig(id=1, raw_yaml="", enabled=True))
     db.add(GenerateConfig(id=1))
+    db.add(ProbeConfig(id=1))
     await db.commit()
 
 
 async def import_data(db: AsyncSession, body: dict[str, Any]) -> dict[str, int]:
-    """导入导出文档中的 tables 字段。
+    """导入导出文档中的 tables 字段
 
-    全部成功或整体回滚；security_settings.token_hash 保留当前值不被覆盖。
-    返回 {table_name: inserted_count}。
+    全部成功或整体回滚；security_settings.token_hash 保留当前值不被覆盖
+    返回 {table_name: inserted_count}
     """
     tables = body.get("tables")
     if not isinstance(tables, dict):
@@ -171,7 +176,7 @@ async def import_data(db: AsyncSession, body: dict[str, Any]) -> dict[str, int]:
 
 
 def validate_import_payload(tables: Any) -> tuple[dict[str, int], dict[str, str]]:
-    """不写库的导入预检：返回 (summary, errors)。"""
+    """不写库的导入预检：返回 (summary, errors)"""
     summary: dict[str, int] = {}
     errors: dict[str, str] = {}
     if not isinstance(tables, dict):

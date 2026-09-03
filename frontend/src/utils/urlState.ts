@@ -36,7 +36,7 @@ export function useUrlState<T>(key: string, defaultValue: T, options: { transfor
     router.replace({ query })
   })
 
-  // Sync from URL on popstate (browser back/forward)
+  // 浏览器前进后退时从地址栏同步状态
   watch(() => route.query[key], (val) => {
     const newVal = val === undefined ? defaultValue : (transform?.from ? transform.from(val) : val as T)
     if (newVal !== state.value) state.value = newVal

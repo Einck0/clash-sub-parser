@@ -1,4 +1,4 @@
-from sqlalchemy import JSON, Boolean, Integer, String
+from sqlalchemy import JSON, Boolean, Float, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -15,6 +15,8 @@ class NodeGroup(Base):
     )
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     regex_rules: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    filter_min_speed_mbps: Mapped[float | None] = mapped_column(Float, nullable=True)
+    filter_media_unlock: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     include_nodes: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     include_group_ids: Mapped[list[int]] = mapped_column(
         JSON, default=list, nullable=False

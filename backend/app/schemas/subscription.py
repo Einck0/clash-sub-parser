@@ -11,6 +11,8 @@ class SubscriptionBase(BaseModel):
     enabled: bool = True
     node_prefix: str | None = None
     filter_regex: list[str] = Field(default_factory=list)
+    filter_min_speed_mbps: float | None = Field(default=None, ge=0.0)
+    filter_media_unlock: list[str] = Field(default_factory=list)
     include_node_names: list[str] = Field(default_factory=list)
     exclude_node_names: list[str] = Field(default_factory=list)
     # Post-prefix rename map: {"Dogegg-hk-1": "香港-1"}
@@ -30,6 +32,8 @@ class SubscriptionUpdate(BaseModel):
     enabled: bool | None = None
     node_prefix: str | None = None
     filter_regex: list[str] | None = None
+    filter_min_speed_mbps: float | None = None
+    filter_media_unlock: list[str] | None = None
     include_node_names: list[str] | None = None
     exclude_node_names: list[str] | None = None
     node_renames: dict[str, str] | None = None

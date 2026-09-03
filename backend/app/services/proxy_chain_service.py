@@ -1,5 +1,3 @@
-"""Proxy-chain v2: post-process dialer bindings over settled nodes/groups."""
-
 from __future__ import annotations
 
 from typing import Any
@@ -112,7 +110,7 @@ async def update_binding(
         "sort_order": data.get("sort_order", item.sort_order),
         "note": data.get("note", item.note),
     }
-    # When target_type changes, clear the irrelevant key.
+    # 目标类型变更时清理无关键
     if "target_type" in data:
         if merged["target_type"] == "node":
             merged["target_id"] = data.get("target_id", None)
@@ -127,7 +125,7 @@ async def update_binding(
     await _validate_binding_refs(db, merged)
     for key, value in data.items():
         setattr(item, key, value)
-    # Normalize cleared fields after type switch
+    # 类型切换后重置多余字段
     if item.target_type == "node":
         item.target_id = None
     db.add(item)
@@ -199,12 +197,12 @@ async def list_final_nodes(db: AsyncSession) -> list[dict[str, Any]]:
 
 
 async def list_node_ledger(db: AsyncSession) -> list[dict[str, Any]]:
-    """Final nodes + effective dialer + group membership for node management."""
+    """汇总最终节点、前置代理绑定与所属策略组"""
     nodes = await list_final_nodes(db)
     if not nodes:
         return []
 
-    # Build proxy dicts so apply_bindings_to_nodes can attach dialer-proxy.
+    # 构建代理字典并附加 dialer-proxy
     proxies = [{"name": n["name"]} for n in nodes]
     applied = await apply_bindings_to_nodes(db, proxies)
     dialer_by_name = {
@@ -213,7 +211,7 @@ async def list_node_ledger(db: AsyncSession) -> list[dict[str, Any]]:
         if isinstance(p, dict) and p.get("name")
     }
 
-    # Annotate which binding scope won for each node (best-effort).
+    # 标记每个节点的生效绑定来源范围
     bindings = [b for b in await list_bindings(db) if b.enabled]
     world = await _load_chain_world(db)
     node_to_sub_ids = world["node_to_sub_ids"]
@@ -235,7 +233,7 @@ async def list_node_ledger(db: AsyncSession) -> list[dict[str, Any]]:
         for name in targets:
             source_by_name[name] = binding.target_type
 
-    # Reverse map: node -> group names that contain it as a leaf.
+    # 反向映射：节点至包含该节点的策略组列表
     groups_by_node: dict[str, list[str]] = {}
     for group in groups:
         for leaf in group_leaves.get(group.id, []):
@@ -281,14 +279,14 @@ async def _validate_binding_refs(db: AsyncSession, data: dict[str, Any]) -> None
         if name == dialer_ref and data.get("dialer_type") == "node":
             raise HTTPException(status_code=400, detail="节点不能把跳板设为自己")
 
-    # Soft existence check for dialer (warn via 400 if completely unknown).
+    # 前置代理软校验，完全未知时提示错误
     known_nodes, known_groups = await _known_names(db)
     if data["dialer_type"] == "node" and dialer_ref not in known_nodes:
         raise HTTPException(status_code=400, detail=f"dialer node not found: {dialer_ref}")
     if data["dialer_type"] == "node_group" and dialer_ref not in known_groups:
         raise HTTPException(status_code=400, detail=f"dialer group not found: {dialer_ref}")
 
-    # Membership / dialer cycle: target leaves must not include or depend on dialer.
+    # 成员与前置拨号节点循环校验，目标叶子节点不得包含或依赖前置拨号
     await _validate_no_cycle(db, data, known_nodes=known_nodes)
 
 
@@ -305,17 +303,13 @@ async def _known_names(db: AsyncSession) -> tuple[set[str], set[str]]:
 
 
 async def apply_bindings_to_nodes(db: AsyncSession, nodes: list[dict]) -> list[dict]:
-    """Apply enabled bindings onto final proxy list (P0 single hop).
-
-    Priority: node > node_group > subscription.
-    Only leaf proxy nodes receive dialer-proxy.
-    """
+    """将生效的前置代理绑定应用到最终节点列表"""
     if not nodes:
         return nodes
 
     bindings = [b for b in await list_bindings(db) if b.enabled]
     if not bindings:
-        # Strip any accidental dialer fields from stored nodes.
+        # 清理多余的前置代理字段
         cleaned = []
         for node in nodes:
             if not isinstance(node, dict):
@@ -325,7 +319,7 @@ async def apply_bindings_to_nodes(db: AsyncSession, nodes: list[dict]) -> list[d
             cleaned.append(copied)
         return cleaned
 
-    # 最终节点名来自入参 proxies, 订阅归属仍从库扫
+    # 最终节点名来自入参 proxies，订阅归属仍从数据库扫描
     all_node_names = [
         str(n.get("name") or "").strip()
         for n in nodes
@@ -338,10 +332,10 @@ async def apply_bindings_to_nodes(db: AsyncSession, nodes: list[dict]) -> list[d
     known_proxy_names = world["known_proxy_names"]
     known_group_names = world["known_group_names"]
 
-    # effective[name] = (priority, dialer_ref)
+    # 记录生效的优先级与前置拨号
     effective: dict[str, tuple[int, str]] = {}
 
-    # Apply low priority first so higher can overwrite.
+    # 低优先级优先应用，高优先级覆盖
     ordered = sorted(
         bindings,
         key=lambda b: (TARGET_PRIORITY.get(b.target_type, 0), b.sort_order, b.id or 0),
@@ -361,7 +355,7 @@ async def apply_bindings_to_nodes(db: AsyncSession, nodes: list[dict]) -> list[d
             group_leaves=group_leaves,
             known_proxy_names=known_proxy_names,
         )
-        # Skip nodes that would form dialer membership loops with group dialers.
+        # 跳过与前置组构成成员环路的节点
         if binding.dialer_type == "node_group":
             dialer_group_id = next((g.id for g in groups if g.name == dialer), None)
             dialer_leaves = set(group_leaves.get(dialer_group_id, [])) if dialer_group_id is not None else set()
@@ -418,7 +412,7 @@ async def _validate_no_cycle(
     group_leaves = world["group_leaves"]
     known_proxy_names = world["known_proxy_names"]
 
-    # Temporary binding-like object for expand.
+    # 构造临时对象用于目标展开
     class _Tmp:
         pass
 
@@ -438,9 +432,7 @@ async def _validate_no_cycle(
         return
 
     if dialer_type == "node":
-        # Subscription/group targets may include the entry node itself; that is OK.
-        # Generate already skips self dialer. Only pure node-target self-ref is fatal
-        # (already checked above). Reject only when target_type=node and names match.
+        # 目标类型为单节点且与前置拨号相同时拒绝
         if data.get("target_type") == "node" and dialer_ref in targets:
             raise HTTPException(
                 status_code=400,
@@ -452,7 +444,7 @@ async def _validate_no_cycle(
         g = next((x for x in groups if x.name == dialer_ref), None)
         if g is None:
             return
-        # Target group cannot dialer itself (always a full loop).
+        # 目标策略组不能将自身作为前置拨号
         if data.get("target_type") == "node_group" and data.get("target_id") == g.id:
             raise HTTPException(
                 status_code=400,
@@ -461,8 +453,7 @@ async def _validate_no_cycle(
         leaves = set(group_leaves.get(g.id, []))
         overlap = targets & leaves
         safe = targets - leaves
-        # Hard-reject only when every target would loop. Partial overlap is OK:
-        # generate skips members of the dialer group and still chains the rest.
+        # 当所有目标节点均属于跳板组时硬性拒绝
         if targets and not safe:
             sample = "、".join(sorted(overlap)[:5])
             more = f" 等 {len(overlap)} 个" if len(overlap) > 5 else ""
@@ -503,7 +494,7 @@ def _expand_targets(
         gid = binding.target_id
         if gid is None:
             return []
-        # Only leaf proxy names, not nested group names.
+        # 仅包含叶子代理节点名，不包含嵌套策略组名
         leaves = group_leaves.get(int(gid), [])
         return [n for n in leaves if n in known_proxy_names]
     return []
@@ -518,7 +509,7 @@ async def preview_binding_effect(
     dialer_type: str,
     dialer_ref: str,
 ) -> dict[str, Any]:
-    """Preview how many targets would chain / skip for a draft binding."""
+    """预览草稿绑定的前置代理与跳过效果"""
     world = await _load_chain_world(db)
     node_to_sub_ids = world["node_to_sub_ids"]
     groups = world["groups"]

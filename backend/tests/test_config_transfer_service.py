@@ -1,6 +1,6 @@
-"""config_transfer_service 的领域行为测试：直接打 service 层，不经过 HTTP。
+"""config_transfer_service 的领域行为测试：直接打 service 层，不经过 HTTP
 
-覆盖导出敏感字段剥离、导入 token_hash 保留、整体回滚、重置与预检。
+覆盖导出敏感字段剥离、导入 token_hash 保留、整体回滚、重置与预检
 """
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ async def db_session():
 
 
 def _seed(db) -> None:
-    """一组带父子关系的最小数据：分组挂在分类下，外加 DNS 与安全配置。"""
+    """一组带父子关系的最小数据：分组挂在分类下，外加 DNS 与安全配置"""
     db.add(RuleCategory(name="cat1"))
     db.add(NodeGroup(name="grp1"))
     db.add(DnsConfig(id=1, raw_yaml="nameserver: 1.1.1.1", enabled=True))

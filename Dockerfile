@@ -7,6 +7,8 @@ RUN HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= npm 
 COPY frontend/ ./
 RUN npm run build
 
+FROM ghcr.io/sagernet/sing-box:latest AS singbox-bin
+
 FROM python:3.10-slim@sha256:c1e4e6c01eb489c422288b2de34b0761ca316f7a2d98e2c33f47659a73ed108a AS runtime
 
 ARG HTTP_PROXY
@@ -16,6 +18,10 @@ ARG NO_PROXY
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
+
+# 复制 sing-box 静态二进制用于节点握手与测速
+COPY --from=singbox-bin /usr/local/bin/sing-box /usr/local/bin/sing-box
+RUN chmod +x /usr/local/bin/sing-box
 
 WORKDIR /app
 ARG PIP_INDEX_URL

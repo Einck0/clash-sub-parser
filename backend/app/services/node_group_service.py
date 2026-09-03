@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.node_group import NodeGroup
 from app.models.rule import Rule
 from app.models.subscription import Subscription
+from app.services.probe.service import get_all_db_probe_results
 from app.utils.dedup import deduplicate_nodes
 from app.schemas.node_group import NodeGroupCreate, NodeGroupReorder, NodeGroupUpdate
 from app.services.snapshot_service import create_snapshot
@@ -30,7 +31,7 @@ async def get_node_group(db: AsyncSession, node_group_id: int) -> NodeGroup | No
 async def create_node_group(db: AsyncSession, payload: NodeGroupCreate) -> NodeGroup:
     data = payload.model_dump()
     _normalize_group_payload(data)
-    # include_entries is source of truth; regex_rules is only a derived mirror.
+    # include_entries 为唯一数据源，regex_rules 仅为派生镜像
     _sync_entry_derived_fields(data)
     await _validate_node_group_relations(
         db,
@@ -58,8 +59,7 @@ async def update_node_group(
     data = payload.model_dump(exclude_unset=True)
     _normalize_group_payload(data)
     if "include_entries" in data:
-        # include_entries is source of truth after migration.
-        # Reject accidental empty saves that would wipe existing matchers.
+        # include_entries 为迁移后的权威数据源，拒绝意外清空匹配项
         new_entries = list(data.get("include_entries") or [])
         old_entries = list(item.include_entries or [])
         if not new_entries and old_entries:
@@ -70,13 +70,13 @@ async def update_node_group(
                     "refusing to wipe matchers"
                 ),
             )
-        # Snapshot before structural changes so wipe accidents are recoverable.
+        # 结构变更前自动快照
         await create_snapshot(
             db,
             label=f"auto-before-node-group-{item.id}",
             description=f"Auto snapshot before updating node group {item.name}",
         )
-        # regex entries drive regex_rules; no DB-side legacy preserve.
+        # 正则条目驱动 regex_rules 派生
         _sync_entry_derived_fields(data)
 
     include_group_ids = data.get("include_group_ids", item.include_group_ids)
@@ -161,7 +161,8 @@ async def preview_node_groups(db: AsyncSession) -> list[dict]:
         str(node.get("name", "")).strip() for node in deduplicate_nodes(all_nodes)
     ]
     node_names = [name for name in node_names if name]
-    resolved_map = resolve_group_members(groups, node_names, leaves_only=False)
+    probe_map = await get_all_db_probe_results(db)
+    resolved_map = resolve_group_members(groups, node_names, leaves_only=False, probe_map=probe_map)
 
     preview: list[dict] = []
     for group in groups:
@@ -193,7 +194,7 @@ async def preview_node_groups(db: AsyncSession) -> list[dict]:
                 label = str(entry.get("name") or entry.get("label") or "").strip()
                 pattern = str(entry_value or "").strip()
                 reasons.append(f"+ 正则 {label or pattern}")
-        # Legacy mirror field still shown if present.
+        # 旧版镜像字段存在时仍展示
         for raw_id in group.exclude_group_ids or []:
             try:
                 exclude_id = int(raw_id)
@@ -268,7 +269,7 @@ async def _validate_cycles_or_raise(db: AsyncSession) -> None:
         id_to_name[g.id] = g.name or ""
         edges: list[int] = []
         seen: set[int] = set()
-        # From ordered entries (primary)
+        # 来自有序条目（主要）
         for entry in resolve_entries(g):
             t = entry.get("type")
             if t in ("group", "group_nodes", "exclude_group_nodes"):
@@ -279,7 +280,7 @@ async def _validate_cycles_or_raise(db: AsyncSession) -> None:
                 if child not in seen:
                     seen.add(child)
                     edges.append(child)
-        # Legacy mirrors
+        # 旧版镜像字段
         for raw in list(g.include_group_ids or []) + list(g.include_group_nodes_ids or []) + list(g.exclude_group_ids or []):
             try:
                 child = int(raw)
@@ -354,14 +355,14 @@ def _sync_entry_derived_fields(data: dict) -> None:
     data["include_nodes"] = include_nodes
     data["include_group_ids"] = include_group_ids
     data["include_group_nodes_ids"] = include_group_nodes_ids
-    # Keep legacy mirror field in sync for old readers / badges.
+    # 同步旧版镜像字段供旧阅读器或徽标使用
     data["exclude_group_ids"] = exclude_group_ids
     data["regex_rules"] = regex_from_entries
     data["kind"] = "regex" if regex_from_entries else "manual"
 
 
 async def _ensure_group_not_referenced(db: AsyncSession, item: NodeGroup) -> None:
-    """Check ordered entries and legacy mirrors for any group reference."""
+    """检查有序条目与旧版镜像以确认未被其他策略组引用"""
     all_groups = (
         await db.execute(select(NodeGroup).where(NodeGroup.id != item.id))
     ).scalars().all()

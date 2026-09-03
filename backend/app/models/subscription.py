@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, Float, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -17,6 +17,8 @@ class Subscription(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
     node_prefix: Mapped[str | None] = mapped_column(String(120), nullable=True)
     filter_regex: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    filter_min_speed_mbps: Mapped[float | None] = mapped_column(Float, nullable=True)
+    filter_media_unlock: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     include_node_names: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     exclude_node_names: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     # Maps post-prefix node name -> final display name. Applied after prefixing.

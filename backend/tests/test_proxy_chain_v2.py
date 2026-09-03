@@ -202,7 +202,7 @@ async def test_proxy_chain_crud_list_delete(client):
 async def test_proxy_chain_rejects_full_group_membership_cycle(client):
     """Reject only when every target is inside the dialer group."""
     sub, group = await _seed_nodes(client)
-    # 美国组 only has 美国落地/日本落地. Binding that group to itself is full loop.
+    # 策略组仅包含相关落地节点，绑定自身形成全环
     bad2 = await client.post(
         "/api/proxy-chains",
         json={

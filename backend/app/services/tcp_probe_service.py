@@ -44,7 +44,7 @@ async def _probe_one(
 ) -> dict[str, Any]:
     started = time.monotonic()
     try:
-        # asyncio.open_connection covers DNS + TCP connect.
+        # 同时覆盖 DNS 解析与 TCP 握手
         reader, writer = await asyncio.wait_for(
             asyncio.open_connection(server, port),
             timeout=timeout_s,

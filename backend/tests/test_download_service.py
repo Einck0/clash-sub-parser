@@ -1,8 +1,7 @@
-"""download_service 的安全与抓取测试：redirect 逐跳校验、内网拒绝、超限长截断。"""
+"""download_service 的安全与抓取测试：redirect 逐跳校验、内网拒绝、超限长截断"""
 from __future__ import annotations
 
 import pytest
-import pytest_asyncio
 from fastapi import HTTPException
 
 from app.services.download_service import download_url

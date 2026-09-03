@@ -71,6 +71,14 @@
       >
         节点重命名
       </button>
+      <button
+        type="button"
+        class="feature-chip"
+        :class="{ active: featureProbe }"
+        @click="featureProbe = !featureProbe"
+      >
+        ⚡ 质检筛选
+      </button>
     </div>
     <p class="section-hint">节点重命名作用在「加前缀之后」的名字上，策略组匹配的也是最终名。</p>
 
@@ -216,6 +224,47 @@
       </div>
     </div>
 
+    <div v-if="featureProbe" class="selector-section">
+      <div class="row space">
+        <div>
+          <strong>⚡ 节点质检与流媒体/AI 过滤</strong>
+          <p class="section-hint">满足要求的节点才会进入本订阅的节点池。测速与流媒体需在节点测试中获得有效状态。</p>
+        </div>
+      </div>
+      <div class="grid-2" style="margin-top:10px;gap:10px">
+        <label>
+          <div class="muted">测速最低达标门槛 (Mbps)</div>
+          <input
+            type="number"
+            min="0"
+            step="0.5"
+            v-model.number="form.filter_min_speed_mbps"
+            placeholder="例如 5.0，留空或 0 为不限制"
+          />
+        </label>
+      </div>
+      <div style="margin-top:10px">
+        <div class="muted" style="margin-bottom:6px">必须解锁的流媒体 / AI 平台（多选）</div>
+        <div class="platform-chips" style="display: flex; gap: 8px; flex-wrap: wrap;">
+          <label
+            v-for="p in availablePlatforms"
+            :key="p.id"
+            class="platform-chip"
+            :class="{ active: (form.filter_media_unlock || []).includes(p.id) }"
+            style="cursor: pointer; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border-color, #333); font-size: 0.85rem; display: flex; align-items: center; gap: 6px;"
+          >
+            <input
+              type="checkbox"
+              :value="p.id"
+              v-model="form.filter_media_unlock"
+              style="display: none;"
+            />
+            <span>{{ p.name }}</span>
+          </label>
+        </div>
+      </div>
+    </div>
+
     <div class="selector-section">
       <div class="row space">
         <strong>最终节点预览</strong>
@@ -281,8 +330,19 @@ const featureManual = ref(false)
 const featureRegex = ref(false)
 const featureRefine = ref(false)
 const featureRename = ref(false)
+const featureProbe = ref(false)
 const fetching = ref(false)
 const fetchError = ref('')
+
+const availablePlatforms = [
+  { id: 'youtube', name: 'YouTube' },
+  { id: 'netflix', name: 'Netflix' },
+  { id: 'disney', name: 'Disney+' },
+  { id: 'chatgpt', name: 'ChatGPT' },
+  { id: 'gemini', name: 'Gemini' },
+  { id: 'meta_ai', name: 'Meta AI' },
+  { id: 'bilibili', name: 'Bilibili' },
+]
 
 watch(
   () => props.subscription,
@@ -312,6 +372,8 @@ watch(
       is_primary: !!value.is_primary,
       node_prefix: value.node_prefix || '',
       filter_regex: value.filter_regex || [],
+      filter_min_speed_mbps: value.filter_min_speed_mbps ?? null,
+      filter_media_unlock: value.filter_media_unlock || [],
       include_node_names: value.include_node_names || [],
       exclude_node_names: value.exclude_node_names || [],
       node_renames: { ...(value.node_renames || {}) },
@@ -331,6 +393,9 @@ watch(
     featureRefine.value =
       (value.include_node_names || []).length > 0 || (value.exclude_node_names || []).length > 0
     featureRename.value = Object.keys(value.node_renames || {}).length > 0
+    featureProbe.value =
+      (value.filter_min_speed_mbps !== null && value.filter_min_speed_mbps !== undefined && Number(value.filter_min_speed_mbps) > 0) ||
+      (value.filter_media_unlock && value.filter_media_unlock.length > 0)
   },
   { immediate: true }
 )
@@ -359,8 +424,8 @@ const candidateNodes = computed(() => {
     : manualNodes.length
       ? []
       : (form.value.raw_nodes || [])
-  // raw_nodes 已经经过前缀与重命名。手动节点存在时必须以原始 manual_nodes
-  // 作为候选源，不能同时回退 raw_nodes，否则编辑预览会重复加前缀。
+  // raw_nodes 已经经过前缀与重命名，手动节点存在时必须以原始 manual_nodes
+  // 作为候选源，不能同时回退 raw_nodes 避免编辑预览重复加前缀
   return uniqueNodesByName([...(upstream || []), ...manualNodes])
 })
 
@@ -619,6 +684,8 @@ function handleSave() {
     update_interval: form.value.update_interval || null,
     node_prefix: form.value.node_prefix?.trim() || null,
     filter_regex: form.value.filter_regex || [],
+    filter_min_speed_mbps: form.value.filter_min_speed_mbps || null,
+    filter_media_unlock: form.value.filter_media_unlock || [],
     include_node_names: form.value.include_node_names || [],
     exclude_node_names: form.value.exclude_node_names || [],
     node_renames: normalizeRenames(form.value.node_renames || {}),
@@ -660,6 +727,8 @@ function createDefault() {
     is_primary: false,
     node_prefix: '',
     filter_regex: [],
+    filter_min_speed_mbps: null,
+    filter_media_unlock: [],
     include_node_names: [],
     exclude_node_names: [],
     node_renames: {},

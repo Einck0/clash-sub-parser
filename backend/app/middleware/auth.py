@@ -37,7 +37,7 @@ async def token_auth_middleware(request: Request, call_next):
     raw_token = extract_request_token(request, allow_query=is_export_path(request.url.path))
     token_ok = token_matches(raw_token, security.token_hash)
 
-    # If not matched via header/query, try the HttpOnly hash cookie.
+    # 请求头或参数未命中时尝试验证 HttpOnly cookie
     if not token_ok:
         token_ok = request_hash_cookie_matches(request, security.token_hash)
 

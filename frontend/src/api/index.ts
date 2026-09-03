@@ -82,7 +82,7 @@ function humanizeGroupError(message: string): string {
   return text
 }
 
-// Subscriptions
+// 订阅管理
 export const getSubscriptions = () => api.get('/subscriptions')
 export const createSubscription = (data: any) => api.post('/subscriptions', data)
 export const createManualNodeSubscription = (data: any) => api.post('/subscriptions/manual-node', data)
@@ -91,11 +91,38 @@ export const deleteSubscription = (id: number) => api.delete(`/subscriptions/${i
 export const fetchSubscription = (id: number) => api.post(`/subscriptions/${id}/fetch`)
 export const getSubscriptionNodes = (id: number) => api.get(`/subscriptions/${id}/nodes`)
 export const getAllSubscriptionNodes = () => api.get('/subscriptions/nodes/all')
-// TCP reachability only (not proxy latency / protocol handshake)
+// 仅测试 TCP 连通性，非代理延迟或协议握手
 export const probeTcp = (payload: { nodes: any[]; timeout_ms?: number; concurrency?: number }) =>
   api.post('/probe/tcp', payload)
 
-// Proxy chains (post-process dialer bindings)
+// 节点深度能力与测速探针
+export const getProbeSettings = () => api.get('/probe/settings')
+export const updateProbeSettings = (data: any) => api.patch('/probe/settings', data)
+export const probeNode = (data: { node: any; include_speed?: boolean; include_media?: boolean; use_cache?: boolean }) =>
+  api.post('/probe/node', data)
+export const probeBatch = (data: {
+  nodes: any[]
+  include_speed?: boolean
+  include_media?: boolean
+  concurrency?: number
+  use_cache?: boolean
+  timeout_ms?: number
+}) => api.post('/probe/batch', data)
+export const probeNodesFull = (data: {
+  nodes: any[]
+  use_settings?: boolean
+  include_speed?: boolean
+  include_media?: boolean
+  concurrency?: number
+  use_cache?: boolean
+  timeout_ms?: number
+}) => api.post('/probe/batch', data)
+export const getProbeCache = () => api.get('/probe/cache')
+export const getProbeResults = () => api.get('/probe/results')
+export const clearProbeCache = () => api.delete('/probe/cache')
+export const clearProbeResults = () => api.delete('/probe/results')
+
+// 前置代理链
 export const getProxyChains = () => api.get('/proxy-chains')
 export const createProxyChain = (data: any) => api.post('/proxy-chains', data)
 export const updateProxyChain = (id: number, data: any) => api.patch(`/proxy-chains/${id}`, data)
@@ -104,7 +131,7 @@ export const getFinalNodes = () => api.get('/proxy-chains/meta/final-nodes')
 export const getNodeLedger = () => api.get('/proxy-chains/meta/node-ledger')
 export const previewProxyChain = (data: any) => api.post('/proxy-chains/meta/preview', data)
 
-// Node Groups
+// 策略组
 export const getNodeGroups = () => api.get('/node-groups')
 export const createNodeGroup = (data: any) => api.post('/node-groups', data)
 export const updateNodeGroup = (id: number, data: any) => api.patch(`/node-groups/${id}`, data)
@@ -169,5 +196,32 @@ export const getSnapshot = (id: number) => api.get(`/snapshots/${id}`)
 export const getSnapshotData = (id: number) => api.get(`/snapshots/${id}/data`)
 export const restoreSnapshot = (id: number) => api.post(`/snapshots/${id}/restore`)
 export const deleteSnapshot = (id: number) => api.delete(`/snapshots/${id}`)
+
+// v2 规范化接口
+export const getInventoryNodesV2 = (params?: { limit?: number; offset?: number; search?: string }) => {
+  const query = new URLSearchParams()
+  if (params?.limit) query.set('limit', String(params.limit))
+  if (params?.offset) query.set('offset', String(params.offset))
+  if (params?.search) query.set('search', params.search)
+  const qs = query.toString()
+  return api.get(`/v2/inventory/nodes${qs ? '?' + qs : ''}`)
+}
+export const getInventorySourcesV2 = () => api.get('/v2/inventory/sources')
+export const preflightBundleV2 = (bundle: any) => api.post('/v2/bundle/preflight', bundle)
+export const compileBundleV2 = (bundle: any) => api.post('/v2/compile', bundle)
+export const getRevisionsV2 = () => api.get('/v2/revisions')
+export const createRevisionV2 = (bundle: any, author: string = 'web-ui', changeSummary: string = 'web update') =>
+  api.post('/v2/revisions', bundle)
+export const rollbackRevisionV2 = (id: string) => api.post(`/v2/revisions/${id}/rollback`)
+export const getProbeProfilesV2 = () => api.get('/v2/probe/profiles')
+export const getProbeJobsV2 = () => api.get('/v2/probe/jobs')
+export const getProbeObservationsV2 = (params?: { node_id?: string; limit?: number }) => {
+  const query = new URLSearchParams()
+  if (params?.node_id) query.set('node_id', params.node_id)
+  if (params?.limit) query.set('limit', String(params.limit))
+  const qs = query.toString()
+  return api.get(`/v2/probe/observations${qs ? '?' + qs : ''}`)
+}
+export const getReadinessV2 = () => api.get('/v2/readiness')
 
 export default api

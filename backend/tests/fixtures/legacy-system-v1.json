@@ -1,0 +1,226 @@
+{
+  "fixture_version": 1,
+  "tables": {
+    "subscriptions": [
+      {
+        "id": 101,
+        "name": "fixture-source-a",
+        "url": "https://fixtures.invalid/subscriptions/a",
+        "is_primary": true,
+        "enabled": true,
+        "node_prefix": "A-",
+        "node_renames": {
+          "旧标签": "当前标签"
+        },
+        "source_nodes": [
+          {
+            "name": "同名节点",
+            "type": "ss",
+            "server": "198.51.100.10",
+            "port": 443
+          }
+        ],
+        "manual_nodes": [
+          {
+            "name": "手工入口",
+            "type": "trojan",
+            "server": "198.51.100.11",
+            "port": 443
+          }
+        ],
+        "raw_nodes": [
+          {
+            "name": "同名节点",
+            "type": "ss",
+            "server": "198.51.100.10",
+            "port": 443
+          },
+          {
+            "name": "当前标签",
+            "type": "trojan",
+            "server": "198.51.100.11",
+            "port": 443
+          }
+        ]
+      },
+      {
+        "id": 202,
+        "name": "fixture-source-b",
+        "url": "https://fixtures.invalid/subscriptions/b",
+        "is_primary": false,
+        "enabled": true,
+        "node_prefix": "B-",
+        "source_nodes": [
+          {
+            "name": "同名节点",
+            "type": "vmess",
+            "server": "198.51.100.20",
+            "port": 8443
+          }
+        ],
+        "manual_nodes": [],
+        "raw_nodes": [
+          {
+            "name": "同名节点",
+            "type": "vmess",
+            "server": "198.51.100.20",
+            "port": 8443
+          }
+        ]
+      }
+    ],
+    "node_groups": [
+      {
+        "id": 11,
+        "name": "入口组",
+        "kind": "manual",
+        "group_type": "select",
+        "sort_order": 10,
+        "include_entries": [
+          {
+            "type": "node",
+            "value": "手工入口"
+          }
+        ]
+      },
+      {
+        "id": 29,
+        "name": "出口组",
+        "kind": "manual",
+        "group_type": "url-test",
+        "sort_order": 20,
+        "include_entries": [
+          {
+            "type": "group",
+            "value": 11
+          }
+        ],
+        "exclude_group_ids": [11],
+        "url_test_config": {
+          "url": "https://fixtures.invalid/generate_204",
+          "interval": 120,
+          "tolerance": 25
+        },
+        "filter_min_speed_mbps": 8.5,
+        "filter_media_unlock": [
+          "chatgpt",
+          "gemini"
+        ]
+      }
+    ],
+    "rule_categories": [
+      {
+        "id": 1,
+        "name": "fixture-category",
+        "sort_order": 1
+      }
+    ],
+    "rules": [
+      {
+        "id": 1,
+        "name": "fixture-domain-rule",
+        "category": "fixture-category",
+        "type": "DOMAIN-SUFFIX",
+        "value": "fixtures.invalid",
+        "proxy": "出口组",
+        "options": [
+          "no-resolve"
+        ],
+        "sort_order": 1,
+        "enabled": true
+      }
+    ],
+    "dns_config": [
+      {
+        "id": 1,
+        "raw_yaml": "nameserver:\n  - 192.0.2.53",
+        "enabled": true
+      }
+    ],
+    "generate_config": [
+      {
+        "id": 1,
+        "enabled": true,
+        "subscriptions": true,
+        "node_groups": true,
+        "rules": true,
+        "dns": true,
+        "exclude_node_proxies": false
+      }
+    ],
+    "proxy_chain_bindings": [
+      {
+        "id": 1,
+        "target_type": "subscription",
+        "target_id": 202,
+        "target_name": "fixture-source-b",
+        "dialer_type": "node_group",
+        "dialer_ref": "入口组",
+        "enabled": true,
+        "sort_order": 1,
+        "note": "fixture binding"
+      }
+    ],
+    "probe_config": [
+      {
+        "id": 1,
+        "probe_enabled": true,
+        "probe_interval_minutes": 30,
+        "speedtest_enabled": true,
+        "speedtest_url": "https://fixtures.invalid/probe-bytes",
+        "speedtest_timeout_s": 5,
+        "speedtest_max_bytes": 1024,
+        "speedtest_min_speed_mbps": 5.0,
+        "media_check_enabled": true,
+        "media_platforms": [
+          "chatgpt",
+          "gemini"
+        ],
+        "media_timeout_s": 5,
+        "probe_concurrency": 2,
+        "probe_timeout_ms": 3000
+      }
+    ],
+    "node_probe_results": [
+      {
+        "id": 1,
+        "node_key": "fixture:ss:198.51.100.10:443",
+        "name": "同名节点",
+        "server": "198.51.100.10",
+        "port": 443,
+        "type": "ss",
+        "status": "ok",
+        "latency_ms": 120,
+        "speed_mbps": 12.5,
+        "ip": "203.0.113.10",
+        "country": "US",
+        "asn": 64500,
+        "organization": "fixture-network",
+        "media": {
+          "chatgpt": "ok",
+          "gemini": "ok"
+        },
+        "error": null,
+        "checked_at": 1700000000
+      },
+      {
+        "id": 2,
+        "node_key": "fixture:vmess:198.51.100.20:8443",
+        "name": "同名节点",
+        "server": "198.51.100.20",
+        "port": 8443,
+        "type": "vmess",
+        "status": "fail",
+        "latency_ms": null,
+        "speed_mbps": null,
+        "ip": null,
+        "country": null,
+        "asn": null,
+        "organization": "",
+        "media": {},
+        "error": "fixture timeout",
+        "checked_at": 1700000300
+      }
+    ]
+  }
+}

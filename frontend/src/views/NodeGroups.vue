@@ -273,7 +273,7 @@ const totalResolved = computed(() =>
   previews.value.reduce((sum, p) => sum + (p.resolved_count || 0), 0),
 )
 
-// 搜索文本随 previews/groups 变化预计算，避免每次按键重拼 resolved_nodes 大字符串
+// 搜索文本随预览与分组变化预计算，避免每次按键重拼节点大字符串
 const groupSearchIndex = computed(() => {
   const map = new Map()
   for (const group of groups.value) {

@@ -14,6 +14,7 @@ from app.models.node_group import NodeGroup
 from app.models.rule import Rule
 from app.models.rule_category import RuleCategory
 from app.models.subscription import Subscription
+from app.services.probe.service import get_all_db_probe_results
 from app.utils.dedup import deduplicate_nodes
 from app.utils.group_utils import resolve_group_members, with_fallback
 from app.services.proxy_chain_service import apply_bindings_to_nodes
@@ -182,20 +183,42 @@ async def generate_subscription_payload(db: AsyncSession, subscription_id: int) 
     item = await db.get(Subscription, subscription_id)
     if not item:
         raise HTTPException(status_code=404, detail="Subscription not found")
-    # Single-sub export still applies global bindings that hit these nodes.
-    nodes = await apply_bindings_to_nodes(db, list(item.raw_nodes or []))
+    sub_nodes = list(item.raw_nodes or [])
+    if item.filter_min_speed_mbps is not None or item.filter_media_unlock:
+        probe_map = await get_all_db_probe_results(db)
+        from app.utils.capability_filter import is_node_capability_qualified
+        sub_nodes = [
+            n for n in sub_nodes
+            if is_node_capability_qualified(
+                probe_map.get(str(n.get("name", "")).strip()),
+                min_speed_mbps=item.filter_min_speed_mbps,
+                required_media=item.filter_media_unlock,
+            )
+        ]
+    nodes = await apply_bindings_to_nodes(db, sub_nodes)
     payload = {"proxies": nodes}
     return {"yaml": _dump_clash_yaml(payload)}
 
 
 async def _collect_all_nodes(db: AsyncSession) -> list[dict]:
     result = await db.execute(
-        select(Subscription.raw_nodes).where(Subscription.enabled.is_(True))
+        select(Subscription).where(Subscription.enabled.is_(True))
     )
+    probe_map = await get_all_db_probe_results(db)
+    from app.utils.capability_filter import is_node_capability_qualified
     nodes: list[dict] = []
-    for row in result.scalars().all():
-        nodes.extend(row or [])
-    # Post-process: apply proxy-chain bindings after nodes are settled.
+    for sub in result.scalars().all():
+        sub_nodes = list(sub.raw_nodes or [])
+        if sub.filter_min_speed_mbps is not None or sub.filter_media_unlock:
+            sub_nodes = [
+                n for n in sub_nodes
+                if is_node_capability_qualified(
+                    probe_map.get(str(n.get("name", "")).strip()),
+                    min_speed_mbps=sub.filter_min_speed_mbps,
+                    required_media=sub.filter_media_unlock,
+                )
+            ]
+        nodes.extend(sub_nodes)
     return await apply_bindings_to_nodes(db, deduplicate_nodes(nodes))
 
 
@@ -209,7 +232,8 @@ async def _collect_node_groups(db: AsyncSession, all_nodes: list[dict]) -> list[
         for node in all_nodes
         if node.get("name")
     ]
-    resolved = resolve_group_members(groups, all_node_names, leaves_only=False)
+    probe_map = await get_all_db_probe_results(db)
+    resolved = resolve_group_members(groups, all_node_names, leaves_only=False, probe_map=probe_map)
 
     result_groups = []
     for group in groups:
@@ -330,7 +354,7 @@ async def get_primary_subscription_headers(db: AsyncSession) -> dict[str, str]:
 
 
 async def render_current(db: AsyncSession, kind: Literal["yaml", "script"]) -> str:
-    """根据当前数据库中的 generate_config 配置渲染 YAML 或 JS 脚本。"""
+    """根据当前数据库中的 generate_config 配置渲染 YAML 或 JS 脚本"""
     from app.services.generate_config_service import generate_config_to_switches, get_generate_config
 
     config = await get_generate_config(db)
@@ -350,7 +374,7 @@ async def file_response(
     kind: Literal["yaml", "script"],
     disposition: Literal["inline", "attachment"] = "inline",
 ) -> PlainTextResponse:
-    """构建统一的 YAML / Script HTTP 响应，包含文件名、Content-Type 与主订阅透传头。"""
+    """构建统一的 YAML 或 Script HTTP 响应，包含文件名、Content-Type 与主订阅透传头"""
     from fastapi.responses import PlainTextResponse
 
     if kind == "yaml":

@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 class SubscriptionFetchError(Exception):
-    """订阅抓取领域异常，解耦调度器与 HTTP 传输层。"""
+    """订阅抓取领域异常，解耦调度器与 HTTP 传输层"""
 
     def __init__(self, message: str, status_code: int = 502):
         super().__init__(message)
@@ -189,7 +189,7 @@ async def fetch_subscription_nodes(
         await db.refresh(item)
         return item
 
-    # Capture identity early: concurrent delete may expire/detach the ORM row.
+    # 提前记录标识避免并发删除导致 ORM 行失效或游离
     sub_id = item.id
     sub_name = item.name
 
@@ -237,6 +237,26 @@ async def fetch_subscription_nodes(
         db.add(live)
         await db.commit()
         await db.refresh(live)
+
+        # 同步发布规范化库存新世代
+        try:
+            from app.repositories.source_repository import SourceRepository
+            from app.services.source_refresh_reconciler import reconcile_source_refresh
+
+            src = await SourceRepository.get_by_name(db, live.name)
+            if not src:
+                src = await SourceRepository.create_source(
+                    db,
+                    name=live.name,
+                    kind="subscription",
+                    url=live.url,
+                    update_interval=live.update_interval,
+                    enabled=live.enabled,
+                )
+            await reconcile_source_refresh(db, src.logical_id, raw_content=raw_text)
+        except Exception as sync_exc:
+            logger.warning("同步源库存失败: %s", sync_exc)
+
         return live
     except Exception as exc:
         error_message = _format_fetch_error(exc)
@@ -257,6 +277,17 @@ async def fetch_subscription_nodes(
             db.add(live)
             await db.commit()
             await db.refresh(live)
+
+            # 同步失败状态至源修订历史
+            try:
+                from app.repositories.source_repository import SourceRepository
+                from app.services.source_refresh_reconciler import reconcile_source_refresh
+
+                src = await SourceRepository.get_by_name(db, sub_name)
+                if src:
+                    await reconcile_source_refresh(db, src.logical_id, error=error_message)
+            except Exception as sync_exc:
+                logger.warning("记录失败修订至源库存失败: %s", sync_exc)
         except HTTPException:
             raise
         except StaleDataError:
@@ -543,11 +574,24 @@ async def fetch_due_subscriptions(db: AsyncSession) -> int:
 
 async def collect_all_subscription_nodes(db: AsyncSession) -> list[dict]:
     result = await db.execute(
-        select(Subscription.raw_nodes).where(Subscription.enabled.is_(True))
+        select(Subscription).where(Subscription.enabled.is_(True))
     )
+    from app.services.probe.service import get_all_db_probe_results
+    from app.utils.capability_filter import is_node_capability_qualified
+    probe_map = await get_all_db_probe_results(db)
     merged: list[dict] = []
-    for nodes in result.scalars().all():
-        merged.extend(nodes or [])
+    for sub in result.scalars().all():
+        sub_nodes = list(sub.raw_nodes or [])
+        if sub.filter_min_speed_mbps is not None or sub.filter_media_unlock:
+            sub_nodes = [
+                n for n in sub_nodes
+                if is_node_capability_qualified(
+                    probe_map.get(str(n.get("name", "")).strip()),
+                    min_speed_mbps=sub.filter_min_speed_mbps,
+                    required_media=sub.filter_media_unlock,
+                )
+            ]
+        merged.extend(sub_nodes)
     return deduplicate_nodes(merged)
 
 

@@ -6,6 +6,8 @@ from app.database import Base, get_db
 import app.main as app_main
 import app.database as app_database
 import app.middleware.auth as app_auth_middleware
+from app.services.schema_readiness import get_target_head_revision
+from sqlalchemy import text
 
 TEST_DB_URL = "sqlite+aiosqlite:///file::memory:?cache=shared&uri=true"
 engine = create_async_engine(TEST_DB_URL, connect_args={"check_same_thread": False})
@@ -27,11 +29,24 @@ app_auth_middleware.AsyncSessionLocal = TestSession
 
 @pytest_asyncio.fixture(autouse=True)
 async def setup_db():
+    target = get_target_head_revision()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.execute(
+            text(
+                "CREATE TABLE IF NOT EXISTS alembic_version "
+                "(version_num VARCHAR(32) NOT NULL PRIMARY KEY)"
+            )
+        )
+        await conn.execute(
+            text(
+                f"INSERT OR REPLACE INTO alembic_version (version_num) VALUES ('{target}')"
+            )
+        )
     yield
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
+        await conn.execute(text("DROP TABLE IF EXISTS alembic_version"))
 
 
 @pytest_asyncio.fixture

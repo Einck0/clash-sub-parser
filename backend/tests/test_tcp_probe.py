@@ -19,7 +19,7 @@ async def test_probe_nodes_ok_fail_skip(monkeypatch):
             {"name": "a", "server": "good.example", "port": 443, "type": "ss"},
             {"name": "b", "server": "bad.example", "port": 1, "type": "ss"},
             {"name": "c", "server": "slow.example", "port": 80, "type": "vmess"},
-            {"name": "broken", "type": "ss"},  # missing server/port
+            {"name": "broken", "type": "ss"},  # 缺少 server 或 port
         ],
         timeout_ms=500,
         concurrency=5,

@@ -8,13 +8,13 @@ import time
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.database import get_db, init_db
 from app.logging_config import setup_logging
 from app.middleware.auth import token_auth_middleware
+from app.services.schema_readiness import check_database_readiness
 from app.routers import (
     dns,
     downloads,
@@ -27,6 +27,7 @@ from app.routers import (
     settings as settings_router,
     snapshots,
     subscriptions,
+    v2,
 )
 from app.services.generate_service import file_response, render_current
 from app.services.scheduler import shutdown_scheduler, start_scheduler
@@ -113,6 +114,7 @@ app.include_router(generate.router, prefix=settings.api_prefix)
 app.include_router(downloads.router, prefix=settings.api_prefix)
 app.include_router(settings_router.router, prefix=settings.api_prefix)
 app.include_router(snapshots.router, prefix=settings.api_prefix)
+app.include_router(v2.router)
 
 
 @app.get("/")
@@ -128,12 +130,13 @@ async def health() -> dict[str, str]:
 
 
 @app.get("/ready")
-async def readiness(db: AsyncSession = Depends(get_db)) -> dict[str, str]:
-    await db.execute(text("SELECT 1"))
-    return {"status": "ready"}
+async def readiness(db: AsyncSession = Depends(get_db)) -> JSONResponse:
+    report = await check_database_readiness(db)
+    status_code = 200 if report["ready"] else 503
+    return JSONResponse(status_code=status_code, content=report)
 
 
-# NOTE: /yaml and /script are protected via token_auth_middleware -> is_export_path.
+# yaml 与 script 路由由 token_auth_middleware 进行鉴权保护
 @app.get("/yaml")
 async def root_yaml(db: AsyncSession = Depends(get_db)) -> PlainTextResponse:
     content = await render_current(db, "yaml")

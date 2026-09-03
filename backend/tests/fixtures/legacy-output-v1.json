@@ -1,0 +1,150 @@
+{
+  "node_group_preview": [
+    {
+      "exclude_group_ids": [],
+      "exclude_group_names": [],
+      "id": 11,
+      "include_entries": [
+        {
+          "type": "node",
+          "value": "手工入口"
+        }
+      ],
+      "include_group_names": [],
+      "include_group_nodes_names": [],
+      "name": "入口组",
+      "resolve_reasons": [
+        "+ 静态节点 手工入口"
+      ],
+      "resolved_count": 1,
+      "resolved_nodes": [
+        "手工入口"
+      ]
+    },
+    {
+      "exclude_group_ids": [
+        11
+      ],
+      "exclude_group_names": [
+        "入口组"
+      ],
+      "id": 29,
+      "include_entries": [
+        {
+          "type": "group",
+          "value": 11
+        }
+      ],
+      "include_group_names": [
+        "入口组"
+      ],
+      "include_group_nodes_names": [],
+      "name": "出口组",
+      "resolve_reasons": [
+        "+ 组引用 入口组",
+        "- legacy 减组 入口组"
+      ],
+      "resolved_count": 1,
+      "resolved_nodes": [
+        "入口组"
+      ]
+    }
+  ],
+  "script_modules": {
+    "dns": {
+      "nameserver": [
+        "192.0.2.53"
+      ]
+    },
+    "moduleSwitches": {
+      "dns": true,
+      "enabled": true,
+      "node_groups": true,
+      "rules": true,
+      "subscriptions": true
+    },
+    "proxyGroups": [
+      {
+        "name": "入口组",
+        "proxies": [
+          "手工入口"
+        ],
+        "type": "select"
+      },
+      {
+        "interval": 120,
+        "name": "出口组",
+        "proxies": [
+          "入口组"
+        ],
+        "tolerance": 25,
+        "type": "url-test",
+        "url": "https://fixtures.invalid/generate_204"
+      }
+    ],
+    "rules": [
+      "DOMAIN-SUFFIX,fixtures.invalid,出口组,no-resolve"
+    ]
+  },
+  "subscription_yaml": {
+    "proxies": [
+      {
+        "dialer-proxy": "入口组",
+        "name": "同名节点",
+        "port": 443,
+        "server": "198.51.100.10",
+        "type": "ss"
+      },
+      {
+        "name": "当前标签",
+        "port": 443,
+        "server": "198.51.100.11",
+        "type": "trojan"
+      }
+    ]
+  },
+  "yaml": {
+    "dns": {
+      "nameserver": [
+        "192.0.2.53"
+      ]
+    },
+    "proxies": [
+      {
+        "dialer-proxy": "入口组",
+        "name": "同名节点",
+        "port": 443,
+        "server": "198.51.100.10",
+        "type": "ss"
+      },
+      {
+        "name": "当前标签",
+        "port": 443,
+        "server": "198.51.100.11",
+        "type": "trojan"
+      }
+    ],
+    "proxy-groups": [
+      {
+        "name": "入口组",
+        "proxies": [
+          "手工入口"
+        ],
+        "type": "select"
+      },
+      {
+        "interval": 120,
+        "name": "出口组",
+        "proxies": [
+          "入口组"
+        ],
+        "tolerance": 25,
+        "type": "url-test",
+        "url": "https://fixtures.invalid/generate_204"
+      }
+    ],
+    "rules": [
+      "DOMAIN-SUFFIX,fixtures.invalid,出口组,no-resolve"
+    ]
+  }
+}

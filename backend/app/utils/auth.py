@@ -14,6 +14,7 @@ PUBLIC_PATHS = {
     "/ready",
     "/favicon.ico",
     "/robots.txt",
+    "/script",
     "/api/settings/auth/check",
     "/api/settings/auth/login",
     "/api/settings/auth/logout",

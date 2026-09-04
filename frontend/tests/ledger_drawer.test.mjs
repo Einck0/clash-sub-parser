@@ -10,4 +10,7 @@ test('LedgerDrawer component exists and handles node inspection', () => {
   assert.match(content, /BaseDrawer/)
   assert.match(content, /OUTBOUND IP/)
   assert.match(content, /probe-single/)
+  assert.match(content, /save-chain/)
+  assert.match(content, /clear-chain/)
+  assert.match(content, /STREAMING & AI UNLOCKS/)
 })

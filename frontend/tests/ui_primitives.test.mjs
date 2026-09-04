@@ -18,4 +18,7 @@ test('Tailwind theme and UI primitives exist and conform to design tokens', () =
 
   const virtualTablePath = path.resolve(import.meta.dirname, '../src/components/ui/VirtualNodeTable.vue')
   assert.ok(fs.existsSync(virtualTablePath), 'VirtualNodeTable.vue should exist')
+  const virtualTableContent = fs.readFileSync(virtualTablePath, 'utf8')
+  assert.match(virtualTableContent, /role="table"/)
+  assert.match(virtualTableContent, /role="row"/)
 })

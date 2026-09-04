@@ -15,4 +15,7 @@ test('Ledger components (MetricsBar, SearchFilter) exist and define contract int
   const filterContent = fs.readFileSync(filterPath, 'utf8')
   assert.match(filterContent, /全部协议/)
   assert.match(filterContent, /change-view/)
+  assert.match(filterContent, /解锁过滤/)
+  assert.match(filterContent, /快捷地区/)
+  assert.match(filterContent, /包含测速/)
 })

@@ -1,51 +1,28 @@
 <template>
   <AuthGate v-if="showAuthGate" :authenticate="handleAuthSubmit" />
 
-  <div v-else class="app-shell">
-    <header class="topbar">
-      <div class="brand-block">
-        <div class="brand">
-          <span class="brand-dot" aria-hidden="true"></span>
-          <div>
-            <p class="eyebrow app-eyebrow">Config Studio</p>
-            <h1>Clash Subscription Parser</h1>
-          </div>
-        </div>
-        <p class="brand-sub">统一管理订阅、策略组、规则、DNS 与最终导出配置。</p>
-      </div>
-      <div class="topbar-actions" aria-label="快捷输出">
-        <button class="quick-export-btn" @click="showQuickExport = true" title="生成订阅链接与二维码">
-          <span class="btn-icon">⚡</span>
-          <span>快速订阅</span>
-        </button>
-        <button class="quick-link theme-btn" @click="toggleTheme" :title="theme === 'dark' ? '切换浅色' : '切换深色'">
-          {{ theme === 'dark' ? '☀️' : '🌙' }}
-        </button>
-        <a class="quick-link" :href="withAuthToken('/yaml', exportNeedsToken)" target="_blank" rel="noreferrer">YAML</a>
-      </div>
-    </header>
+  <div v-else class="flex min-h-screen flex-col bg-[#090D16] text-[#F8FAFC]">
+    <!-- Top Workbench Header -->
+    <WorkbenchHeader
+      :total-nodes="store.nodes?.length || 0"
+      :probed-count="probedCount"
+      @open-export="showQuickExport = true"
+    />
 
-    <nav class="tabs" aria-label="主导航">
-      <router-link
-        v-for="item in navItems"
-        :key="item.to"
-        :to="item.to"
-        class="tab"
-        :data-testid="`nav-${item.to === '/' ? 'subscriptions' : item.to.slice(1)}`"
-      >
-        <span class="tab-icon" aria-hidden="true">{{ item.icon }}</span>
-        <span class="tab-label">{{ item.label }}</span>
-        <small>{{ item.hint }}</small>
-      </router-link>
-    </nav>
+    <!-- Main Workspace Body -->
+    <div class="flex flex-1 overflow-hidden">
+      <!-- Left Sidebar Nav -->
+      <WorkbenchSidebar />
 
-    <main class="page-wrap" aria-live="polite">
-      <router-view v-slot="{ Component, route }">
-        <Transition name="page-fade" mode="out-in">
-          <component :is="Component" :key="route.path" />
-        </Transition>
-      </router-view>
-    </main>
+      <!-- Content Area -->
+      <main class="flex-1 overflow-y-auto p-6" aria-live="polite">
+        <router-view v-slot="{ Component, route }">
+          <Transition name="page-fade" mode="out-in">
+            <component :is="Component" :key="route.path" />
+          </Transition>
+        </router-view>
+      </main>
+    </div>
   </div>
 
   <ToastContainer />
@@ -54,31 +31,23 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { checkAuthSession, getSecuritySettings, loginAuthToken } from './api'
-import { setAuthToken, syncTokenFromUrl, withAuthToken } from './auth'
+import { setAuthToken, syncTokenFromUrl } from './auth'
 import AuthGate from './components/AuthGate.vue'
 import ToastContainer from './components/ToastContainer.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import QuickExportModal from './components/QuickExportModal.vue'
+import WorkbenchHeader from './components/workbench/WorkbenchHeader.vue'
+import WorkbenchSidebar from './components/workbench/WorkbenchSidebar.vue'
 import { useAppStore } from './stores/app'
-import { useTheme } from './utils/theme'
 
 const store = useAppStore()
-const { theme, toggle: toggleTheme } = useTheme()
 const showQuickExport = ref(false)
 
-const navItems = [
-  { to: '/', label: 'Subscriptions', hint: '订阅', icon: '📡' },
-  { to: '/node-groups', label: 'Node Groups', hint: '策略组', icon: '🔀' },
-  { to: '/nodes', label: 'Nodes', hint: '节点', icon: '📑' },
-  { to: '/proxy-chains', label: 'Proxy Chains', hint: '链式', icon: '🔗' },
-  { to: '/rules', label: 'Rules', hint: '规则', icon: '📋' },
-  { to: '/dns', label: 'DNS', hint: '解析', icon: '🌐' },
-  { to: '/generate', label: 'Generate', hint: '导出', icon: '⚙' },
-  { to: '/settings', label: 'Settings', hint: '设置', icon: '🔒' },
-  { to: '/history', label: 'History', hint: '历史', icon: '📜' },
-]
+const probedCount = computed(() => {
+  return store.nodes?.filter(n => n.probe_status === 'success')?.length || 0
+})
 
 const showAuthGate = ref(false)
 const exportNeedsToken = ref(false)

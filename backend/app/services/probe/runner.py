@@ -141,7 +141,14 @@ async def spawn_node_runner(
 
     outbound = clash_to_singbox_outbound(node)
     if not outbound:
-        raise ValueError(f"Unsupported node configuration or invalid parameters: {node.get('name')}")
+        name = node.get("name") or "unnamed"
+        ntype = node.get("type") or "unknown"
+        server = node.get("server") or "none"
+        port = node.get("port") or "none"
+        raise ValueError(
+            f"Unsupported node configuration or invalid parameters: '{name}' "
+            f"(type={ntype}, server={server}:{port})"
+        )
 
     async with port_pool.acquire() as listen_port:
         config_dict = generate_singbox_config(outbound, listen_port=listen_port)

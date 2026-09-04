@@ -1,205 +1,364 @@
 <template>
-  <section class="page subscriptions-page">
-    <div class="page-head">
+  <section class="space-y-6">
+    <!-- Top Header -->
+    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pb-4 border-b border-white/10">
       <div>
-        <p class="eyebrow">Subscriptions</p>
-        <h2>订阅管理</h2>
-        <p class="page-desc">拉取订阅时会保留上游流量/到期响应头，并在这里展示。</p>
+        <p class="text-xs font-mono text-blue-400 uppercase tracking-wider">Subscription Management</p>
+        <h2 class="text-xl font-bold text-white tracking-tight">订阅管理</h2>
+        <p class="text-xs text-slate-400 mt-1">
+          拉取订阅时会保留上游流量与到期响应头，支持多源合并、初筛正则与重命名。
+        </p>
       </div>
-      <div class="head-actions">
-        <button class="primary" @click="openCreate">添加订阅</button>
-        <button data-testid="add-manual-node" @click="openManualNode">添加自定义节点</button>
-        <button @click="load" :disabled="loading">{{ loading ? '刷新中...' : '刷新' }}</button>
+      <div class="flex flex-wrap items-center gap-2.5 w-full sm:w-auto">
+        <button
+          class="inline-flex items-center justify-center min-h-[44px] gap-1.5 rounded-lg border border-blue-500/40 bg-blue-600/20 px-4 py-2 text-xs font-medium text-blue-400 hover:bg-blue-600/30 transition-colors cursor-pointer flex-1 sm:flex-initial"
+          @click="openCreate"
+        >
+          添加订阅
+        </button>
+        <button
+          data-testid="add-manual-node"
+          class="inline-flex items-center justify-center min-h-[44px] gap-1.5 rounded-lg border border-white/10 bg-slate-800/40 px-3.5 py-2 text-xs font-medium text-slate-300 hover:bg-slate-800 transition-colors cursor-pointer flex-1 sm:flex-initial"
+          @click="openManualNode"
+        >
+          添加自定义节点
+        </button>
+        <button
+          class="inline-flex items-center justify-center min-h-[44px] gap-1.5 rounded-lg border border-white/10 bg-slate-800/40 px-3.5 py-2 text-xs font-medium text-slate-300 hover:bg-slate-800 transition-colors cursor-pointer flex-1 sm:flex-initial"
+          :disabled="loading"
+          @click="load"
+        >
+          {{ loading ? '刷新中...' : '刷新' }}
+        </button>
       </div>
     </div>
 
+    <!-- Alert / Error Message -->
     <UiState v-if="error" type="error" title="订阅加载失败" :description="error" compact>
       <template #actions>
-        <button @click="load">重试</button>
+        <button
+          class="min-h-[44px] px-4 py-2 rounded-lg bg-blue-600 text-white text-xs font-medium cursor-pointer"
+          @click="load"
+        >
+          重试
+        </button>
       </template>
     </UiState>
 
-    <UiState v-if="loading && !subscriptions.length" type="loading" title="正在加载订阅" description="正在读取订阅列表和节点缓存，请稍等。" />
+    <UiState
+      v-if="loading && !subscriptions.length"
+      type="loading"
+      title="正在加载订阅"
+      description="正在读取订阅列表和节点缓存，请稍等。"
+    />
 
     <template v-else>
-    <div class="stats-overview-grid" v-if="subscriptions.length">
-      <div class="stat-card">
-        <span class="stat-icon">📡</span>
-        <div>
-          <div class="stat-label">总订阅数</div>
-          <div class="stat-val">{{ subscriptions.length }} <small>({{ enabledSubs }} 启用)</small></div>
-        </div>
-      </div>
-      <div class="stat-card">
-        <span class="stat-icon">⚡</span>
-        <div>
-          <div class="stat-label">总节点数</div>
-          <div class="stat-val">{{ totalNodes }}</div>
-        </div>
-      </div>
-      <div class="stat-card">
-        <span class="stat-icon">👑</span>
-        <div>
-          <div class="stat-label">当前主订阅</div>
-          <div class="stat-val stat-primary-val" :title="primarySub ? primarySub.name : '未设置'">
-            {{ primarySub ? primarySub.name : '未设置' }}
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <PageToolbar
-      v-model="search"
-      placeholder="搜索订阅名 / URL / 节点数…"
-      :count-text="`${filteredSubscriptions.length} / ${subscriptions.length}`"
-    >
-      <template #filters>
-        <select v-model="enabledFilter">
-          <option value="">全部状态</option>
-          <option value="enabled">仅启用</option>
-          <option value="disabled">仅禁用</option>
-        </select>
-      </template>
-    </PageToolbar>
-
-    <div class="subscription-grid">
-      <article
-        v-for="sub in filteredSubscriptions"
-        :key="sub.id"
-        class="subscription-card"
-        :class="{ 'is-disabled': !sub.enabled, 'is-primary-card': sub.is_primary }"
-        data-testid="subscription-card"
-      >
-        <div class="subscription-card-head">
-          <div>
-            <div class="row" style="gap:6px;flex-wrap:wrap">
-              <h3>{{ sub.name }}</h3>
-              <span class="badge badge-primary" v-if="sub.is_primary">主订阅</span>
-              <span class="badge badge-danger" v-if="!sub.enabled">已禁用</span>
-            </div>
-            <div class="mono sub-url" :title="sub.url">{{ short(sub.url, 72) }}</div>
-          </div>
-          <span class="node-count">{{ (sub.raw_nodes || []).length }} 节点</span>
-        </div>
-
-        <div class="traffic-block" v-if="parseUserinfo(sub.subscription_userinfo)">
-          <div class="traffic-top">
-            <strong>{{ trafficSummary(sub) }}</strong>
-            <span>{{ trafficPercent(sub) }}%</span>
-          </div>
-          <div class="traffic-bar">
-            <span :style="{ width: `${trafficPercent(sub)}%` }"></span>
-          </div>
-          <div class="traffic-meta">
-            <span>上传 {{ formatBytes(parseUserinfo(sub.subscription_userinfo).upload) }}</span>
-            <span>下载 {{ formatBytes(parseUserinfo(sub.subscription_userinfo).download) }}</span>
-            <span>剩余 {{ remainingTraffic(sub) }}</span>
-          </div>
-        </div>
-        <div v-else class="empty-mini">
-          {{ isManualSubscription(sub) ? '本地手动节点，编辑后保存即生效' : '暂无流量信息，拉取成功后如果上游返回 header 会显示在这里' }}
-        </div>
-
-        <div class="sub-selection-line">
-          <span class="badge">候选 {{ (sub.source_nodes || []).length || (sub.raw_nodes || []).length }}</span>
-          <span class="badge">正则 {{ (sub.filter_regex || []).length || '全选' }}</span>
-          <span class="badge">包含 {{ (sub.include_node_names || []).length }}</span>
-          <span class="badge">排除 {{ (sub.exclude_node_names || []).length }}</span>
-          <span class="badge">重命名 {{ Object.keys(sub.node_renames || {}).length }}</span>
-        </div>
-
-        <div class="sub-info-grid">
-          <div>
-            <span class="metric-label">过期时间</span>
-            <strong>{{ expireText(sub) }}</strong>
-          </div>
-          <div>
-            <span class="metric-label">更新周期</span>
-            <strong>{{ sub.update_interval ? `${sub.update_interval} 分钟` : '-' }}</strong>
-          </div>
-          <div>
-            <span class="metric-label">{{ isManualSubscription(sub) ? '本地更新' : '上次拉取' }}</span>
-            <strong>{{ sub.last_fetched_at ? formatLocalTime(sub.last_fetched_at) : '-' }}</strong>
-          </div>
-        </div>
-
-        <div class="status-line">
-          <span v-if="sub.last_fetch_error" class="status-error" :title="sub.last_fetch_error">
-            失败 {{ sub.fetch_failed_count || 1 }} 次：{{ short(sub.last_fetch_error, 80) }}
-          </span>
-          <span v-else class="status-ok">{{ isManualSubscription(sub) ? '本地节点正常' : '拉取正常' }}</span>
-          <a v-if="sub.profile_web_page_url" :href="sub.profile_web_page_url" target="_blank" rel="noreferrer">订阅主页</a>
-        </div>
-
-        <div class="action-row compact-actions sub-actions">
-          <button class="primary" data-testid="subscription-edit" @click="openEdit(sub)">编辑</button>
-          <button @click="doFetch(sub.id)" :disabled="loadingFetchId === sub.id">
-            {{ loadingFetchId === sub.id ? (isManualSubscription(sub) ? '刷新中...' : '拉取中...') : (isManualSubscription(sub) ? '刷新节点' : '拉取') }}
-          </button>
-          <button @click="showNodes(sub)">节点</button>
-          <button
-            :class="{ primary: !sub.is_primary }"
-            :disabled="sub.is_primary || loadingPrimaryId === sub.id"
-            @click="setPrimary(sub)"
-          >
-            {{ sub.is_primary ? '当前主订阅' : (loadingPrimaryId === sub.id ? '设置中...' : '设为主订阅') }}
-          </button>
-          <button
-            :class="{ danger: sub.enabled }"
-            :disabled="loadingToggleId === sub.id"
-            @click="toggleEnabled(sub)"
-          >
-            {{ loadingToggleId === sub.id ? '...' : (sub.enabled ? '禁用' : '启用') }}
-          </button>
-          <button class="danger" @click="remove(sub)">删除</button>
-        </div>
-      </article>
-
-      <UiState v-if="!subscriptions.length && !loading" type="empty" title="暂无订阅" description="添加第一个订阅后，就能拉取节点、查看流量和配置筛选规则。">
-        <template #actions>
-          <button class="primary" @click="openCreate">添加订阅</button>
-        </template>
-      </UiState>
-      <UiState
-        v-else-if="subscriptions.length && !filteredSubscriptions.length"
-        type="empty"
-        title="没有匹配的订阅"
-        description="换个关键词或清空筛选。"
-      >
-        <template #actions>
-          <button @click="search = ''; enabledFilter = ''">清空筛选</button>
-        </template>
-      </UiState>
-    </div>
-    </template>
-
-    <div class="modal-backdrop" v-if="viewingSub" @click.self="closeNodePreview">
-      <div class="modal node-preview-modal" role="dialog" aria-modal="true" :aria-label="nodePreviewTitle || '节点预览'">
-        <div class="row space preview-title">
-          <div>
-            <p class="eyebrow">Node Preview</p>
-            <h3>{{ nodePreviewTitle || '节点预览' }}（{{ viewingNodes.length }}）</h3>
-            <p class="section-hint">
-              支持搜索、TCP 端口探活；可点「改名」直接修改前缀后的最终节点名。
-              TCP 通 ≠ 代理可用。
-            </p>
-          </div>
-          <button @click="closeNodePreview">关闭</button>
-        </div>
-        <NodePreviewList
-          :nodes="viewingBaseNodes"
-          :collapsed-limit="60"
-          :auto-geo="true"
-          :editable="true"
-          :renames="viewingSub.node_renames || {}"
-          :saving="renamingSaving"
-          @save-renames="saveNodeRenames"
+      <!-- Industrial MetricCards Grid (Responsive: 1 col on mobile, 2 cols on sm, 3 cols on md+) -->
+      <div v-if="subscriptions.length" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 sm:gap-4">
+        <MetricCard
+          label="TOTAL SUBSCRIPTIONS"
+          :value="subscriptions.length"
+          :subtext="`${enabledSubs} 个已启用`"
+          status="info"
+        />
+        <MetricCard
+          label="TOTAL NODES"
+          :value="totalNodes"
+          subtext="已同步节点总数"
+          status="success"
+        />
+        <MetricCard
+          label="PRIMARY SUBSCRIPTION"
+          :value="primarySub ? primarySub.name : '未设置'"
+          :subtext="primarySub ? `${(primarySub.raw_nodes || []).length} 节点` : '点击列表卡片设置'"
+          :status="primarySub ? 'warning' : 'neutral'"
         />
       </div>
+
+      <!-- Action Toolbar with Search & Status Filter -->
+      <PageToolbar
+        v-model="search"
+        placeholder="搜索订阅名 / URL / 节点数…"
+        :count-text="`${filteredSubscriptions.length} / ${subscriptions.length}`"
+      >
+        <template #filters>
+          <select
+            v-model="enabledFilter"
+            class="min-h-[44px] rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-slate-300 focus:border-blue-500 focus:outline-hidden font-mono cursor-pointer"
+          >
+            <option value="">全部状态</option>
+            <option value="enabled">仅启用</option>
+            <option value="disabled">仅禁用</option>
+          </select>
+        </template>
+      </PageToolbar>
+
+      <!-- Subscriptions Grid (Responsive: 1 col on mobile, 2 cols on lg) -->
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <article
+          v-for="sub in filteredSubscriptions"
+          :key="sub.id"
+          class="flex flex-col justify-between p-4 sm:p-5 rounded-xl border transition-all backdrop-blur-md space-y-4"
+          :class="[
+            !sub.enabled
+              ? 'border-white/5 bg-slate-900/30 opacity-75'
+              : sub.is_primary
+                ? 'border-amber-500/40 bg-slate-900/70 shadow-xs shadow-amber-500/10 ring-1 ring-amber-500/20'
+                : 'border-white/10 bg-slate-900/60 hover:border-white/20'
+          ]"
+          data-testid="subscription-card"
+        >
+          <!-- Card Header -->
+          <div class="flex items-start justify-between gap-3 pb-3 border-b border-white/5">
+            <div class="min-w-0 flex-1 space-y-1">
+              <div class="flex items-center gap-2 flex-wrap">
+                <h3 class="text-base font-semibold text-white tracking-tight truncate" :title="sub.name">
+                  {{ sub.name }}
+                </h3>
+                <span
+                  v-if="sub.is_primary"
+                  class="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-mono font-medium border border-amber-500/40 bg-amber-500/10 text-amber-300"
+                >
+                  主订阅
+                </span>
+                <span
+                  v-if="!sub.enabled"
+                  class="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-mono font-medium border border-rose-500/40 bg-rose-500/10 text-rose-300"
+                >
+                  已禁用
+                </span>
+              </div>
+              <div class="text-xs font-mono text-slate-400 truncate" :title="sub.url">
+                {{ short(sub.url, 72) }}
+              </div>
+            </div>
+            <span class="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-mono font-medium bg-blue-500/10 text-blue-400 border border-blue-500/20 whitespace-nowrap">
+              {{ (sub.raw_nodes || []).length }} 节点
+            </span>
+          </div>
+
+          <!-- Traffic Details (if userinfo exists) -->
+          <div v-if="parseUserinfo(sub.subscription_userinfo)" class="rounded-xl border border-white/5 bg-slate-950/50 p-3.5 space-y-2.5">
+            <div class="flex items-center justify-between text-xs font-mono">
+              <span class="text-white font-medium">{{ trafficSummary(sub) }}</span>
+              <span class="text-blue-400 font-semibold">{{ trafficPercent(sub) }}%</span>
+            </div>
+            <div class="h-1.5 w-full rounded-full bg-slate-800 overflow-hidden">
+              <div
+                class="h-full bg-gradient-to-r from-blue-500 to-cyan-400 rounded-full transition-all duration-300"
+                :style="{ width: `${trafficPercent(sub)}%` }"
+              />
+            </div>
+            <div class="flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono text-slate-400 pt-0.5">
+              <span>上传: {{ formatBytes(parseUserinfo(sub.subscription_userinfo).upload) }}</span>
+              <span>下载: {{ formatBytes(parseUserinfo(sub.subscription_userinfo).download) }}</span>
+              <span class="text-emerald-400 font-medium">剩余: {{ remainingTraffic(sub) }}</span>
+            </div>
+          </div>
+          <div v-else class="text-xs font-mono text-slate-500 bg-slate-950/30 rounded-xl border border-white/5 p-3">
+            {{ isManualSubscription(sub) ? '本地手动节点，编辑后保存即生效' : '暂无流量信息，拉取成功后如果上游返回 header 会显示在这里' }}
+          </div>
+
+          <!-- Sub Selection Filter Badges -->
+          <div class="flex flex-wrap gap-1.5 text-xs font-mono">
+            <span class="px-2 py-0.5 rounded bg-slate-800/60 border border-white/5 text-slate-300">
+              候选: {{ (sub.source_nodes || []).length || (sub.raw_nodes || []).length }}
+            </span>
+            <span class="px-2 py-0.5 rounded bg-slate-800/60 border border-white/5 text-slate-300">
+              正则: {{ (sub.filter_regex || []).length || '全选' }}
+            </span>
+            <span class="px-2 py-0.5 rounded bg-slate-800/60 border border-white/5 text-slate-300">
+              包含: {{ (sub.include_node_names || []).length }}
+            </span>
+            <span class="px-2 py-0.5 rounded bg-slate-800/60 border border-white/5 text-slate-300">
+              排除: {{ (sub.exclude_node_names || []).length }}
+            </span>
+            <span class="px-2 py-0.5 rounded bg-slate-800/60 border border-white/5 text-slate-300">
+              重命名: {{ Object.keys(sub.node_renames || {}).length }}
+            </span>
+          </div>
+
+          <!-- Sub Info Grid -->
+          <div class="grid grid-cols-2 sm:grid-cols-3 gap-2.5 py-2.5 border-t border-b border-white/5 text-xs font-mono">
+            <div>
+              <span class="block text-[10px] text-slate-500 uppercase">过期时间</span>
+              <strong class="text-slate-300 font-medium truncate block">{{ expireText(sub) }}</strong>
+            </div>
+            <div>
+              <span class="block text-[10px] text-slate-500 uppercase">更新周期</span>
+              <strong class="text-slate-300 font-medium truncate block">{{ sub.update_interval ? `${sub.update_interval} 分钟` : '-' }}</strong>
+            </div>
+            <div class="col-span-2 sm:col-span-1">
+              <span class="block text-[10px] text-slate-500 uppercase">{{ isManualSubscription(sub) ? '本地更新' : '上次拉取' }}</span>
+              <strong class="text-slate-300 font-medium truncate block">{{ sub.last_fetched_at ? formatLocalTime(sub.last_fetched_at) : '-' }}</strong>
+            </div>
+          </div>
+
+          <!-- Fetch Status Line -->
+          <div class="flex items-center justify-between text-xs font-mono">
+            <span v-if="sub.last_fetch_error" class="text-rose-400 truncate" :title="sub.last_fetch_error">
+              失败 {{ sub.fetch_failed_count || 1 }} 次: {{ short(sub.last_fetch_error, 50) }}
+            </span>
+            <span v-else class="text-emerald-400 flex items-center gap-1.5">
+              <span class="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+              {{ isManualSubscription(sub) ? '本地节点正常' : '拉取正常' }}
+            </span>
+            <a
+              v-if="sub.profile_web_page_url"
+              :href="sub.profile_web_page_url"
+              target="_blank"
+              rel="noreferrer"
+              class="text-blue-400 hover:text-blue-300 hover:underline transition-colors"
+            >
+              订阅主页 ↗
+            </a>
+          </div>
+
+          <!-- Action Buttons (Responsive: min 44px touch height) -->
+          <div class="grid grid-cols-2 sm:grid-cols-3 md:flex md:flex-wrap items-center gap-2 pt-2 border-t border-white/5">
+            <button
+              class="min-h-[44px] px-3 py-2 rounded-lg border border-blue-500/40 bg-blue-600/20 text-xs font-medium text-blue-400 hover:bg-blue-600/30 transition-colors cursor-pointer flex-1 justify-center"
+              data-testid="subscription-edit"
+              @click="openEdit(sub)"
+            >
+              编辑
+            </button>
+            <button
+              class="min-h-[44px] px-3 py-2 rounded-lg border border-white/10 bg-slate-800/40 text-xs font-medium text-slate-300 hover:bg-slate-800 transition-colors cursor-pointer flex-1 justify-center"
+              :disabled="loadingFetchId === sub.id"
+              @click="doFetch(sub.id)"
+            >
+              {{ loadingFetchId === sub.id ? (isManualSubscription(sub) ? '刷新中...' : '拉取中...') : (isManualSubscription(sub) ? '刷新节点' : '拉取') }}
+            </button>
+            <button
+              class="min-h-[44px] px-3 py-2 rounded-lg border border-white/10 bg-slate-800/40 text-xs font-medium text-slate-300 hover:bg-slate-800 transition-colors cursor-pointer flex-1 justify-center"
+              @click="showNodes(sub)"
+            >
+              节点
+            </button>
+            <button
+              class="min-h-[44px] px-3 py-2 rounded-lg border text-xs font-medium transition-colors cursor-pointer flex-1 justify-center"
+              :class="[
+                sub.is_primary
+                  ? 'border-amber-500/30 bg-amber-500/10 text-amber-300 cursor-default'
+                  : 'border-white/10 bg-slate-800/40 text-slate-300 hover:bg-slate-800'
+              ]"
+              :disabled="sub.is_primary || loadingPrimaryId === sub.id"
+              @click="setPrimary(sub)"
+            >
+              {{ sub.is_primary ? '当前主订阅' : (loadingPrimaryId === sub.id ? '设置中...' : '设为主订阅') }}
+            </button>
+            <button
+              class="min-h-[44px] px-3 py-2 rounded-lg border text-xs font-medium transition-colors cursor-pointer flex-1 justify-center"
+              :class="[
+                sub.enabled
+                  ? 'border-white/10 bg-slate-800/40 text-slate-300 hover:bg-slate-800'
+                  : 'border-emerald-500/40 bg-emerald-600/20 text-emerald-400 hover:bg-emerald-600/30'
+              ]"
+              :disabled="loadingToggleId === sub.id"
+              @click="toggleEnabled(sub)"
+            >
+              {{ loadingToggleId === sub.id ? '...' : (sub.enabled ? '禁用' : '启用') }}
+            </button>
+            <button
+              class="min-h-[44px] px-3 py-2 rounded-lg border border-rose-500/40 bg-rose-600/20 text-xs font-medium text-rose-400 hover:bg-rose-600/30 transition-colors cursor-pointer flex-1 justify-center"
+              @click="remove(sub)"
+            >
+              删除
+            </button>
+          </div>
+        </article>
+
+        <!-- Empty States -->
+        <div v-if="!subscriptions.length && !loading" class="col-span-full">
+          <UiState type="empty" title="暂无订阅" description="添加第一个订阅后，就能拉取节点、查看流量和配置筛选规则。">
+            <template #actions>
+              <button
+                class="min-h-[44px] px-4 py-2 rounded-lg bg-blue-600 text-white text-xs font-medium cursor-pointer"
+                @click="openCreate"
+              >
+                添加订阅
+              </button>
+            </template>
+          </UiState>
+        </div>
+        <div v-else-if="subscriptions.length && !filteredSubscriptions.length" class="col-span-full">
+          <UiState
+            type="empty"
+            title="没有匹配的订阅"
+            description="换个关键词或清空筛选。"
+          >
+            <template #actions>
+              <button
+                class="min-h-[44px] px-4 py-2 rounded-lg border border-white/10 bg-slate-800 text-slate-300 text-xs font-medium cursor-pointer"
+                @click="search = ''; enabledFilter = ''"
+              >
+                清空筛选
+              </button>
+            </template>
+          </UiState>
+        </div>
+      </div>
+    </template>
+
+    <!-- Node Preview Modal (Adaptive Bottom Sheet on Mobile) -->
+    <div
+      v-if="viewingSub"
+      class="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm p-0 sm:p-4"
+      @click.self="closeNodePreview"
+    >
+      <div
+        class="relative flex w-full max-w-4xl flex-col rounded-t-2xl sm:rounded-2xl border border-white/10 bg-[#0F172A] text-[#F8FAFC] shadow-2xl overflow-hidden max-h-[90vh] sm:max-h-[85vh] pb-safe"
+        role="dialog"
+        aria-modal="true"
+        :aria-label="nodePreviewTitle || '节点预览'"
+      >
+        <!-- Mobile drag indicator -->
+        <div class="sm:hidden mx-auto my-2.5 h-1 w-12 rounded-full bg-white/20" aria-hidden="true" />
+
+        <div class="flex items-center justify-between border-b border-white/10 px-6 py-4">
+          <div>
+            <p class="text-[10px] font-mono tracking-wider text-blue-400 uppercase">Node Preview</p>
+            <h3 class="text-base font-semibold text-white tracking-tight">
+              {{ nodePreviewTitle || '节点预览' }}（{{ viewingNodes.length }}）
+            </h3>
+            <p class="text-xs text-slate-400 mt-0.5">
+              支持搜索、TCP 端口探活；可点「改名」直接修改前缀后的最终节点名。
+            </p>
+          </div>
+          <button
+            class="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-slate-400 hover:bg-slate-800 hover:text-white cursor-pointer transition-colors"
+            @click="closeNodePreview"
+          >
+            ✕
+          </button>
+        </div>
+        <div class="p-4 sm:p-6 overflow-y-auto flex-1">
+          <NodePreviewList
+            :nodes="viewingBaseNodes"
+            :collapsed-limit="60"
+            :auto-geo="true"
+            :editable="true"
+            :renames="viewingSub.node_renames || {}"
+            :saving="renamingSaving"
+            @save-renames="saveNodeRenames"
+          />
+        </div>
+      </div>
     </div>
 
-    <div class="modal-backdrop" v-if="showForm" @click.self="showForm = false">
-      <div class="modal">
+    <!-- Subscription Form Modal (Adaptive Bottom Sheet on Mobile) -->
+    <div
+      v-if="showForm"
+      class="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm p-0 sm:p-4"
+      @click.self="showForm = false"
+    >
+      <div
+        class="relative flex w-full max-w-2xl flex-col rounded-t-2xl sm:rounded-2xl border border-white/10 bg-[#0F172A] text-[#F8FAFC] shadow-2xl overflow-hidden max-h-[90vh] sm:max-h-[85vh] pb-safe p-4 sm:p-6 overflow-y-auto"
+        role="dialog"
+        aria-modal="true"
+      >
+        <div class="sm:hidden mx-auto mb-3 h-1 w-12 rounded-full bg-white/20" aria-hidden="true" />
         <SubscriptionForm
           :subscription="editing"
           @save="save"
@@ -209,8 +368,18 @@
       </div>
     </div>
 
-    <div class="modal-backdrop" v-if="showManualNode" @click.self="showManualNode = false">
-      <div class="modal">
+    <!-- Manual Node Editor Modal (Adaptive Bottom Sheet on Mobile) -->
+    <div
+      v-if="showManualNode"
+      class="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm p-0 sm:p-4"
+      @click.self="showManualNode = false"
+    >
+      <div
+        class="relative flex w-full max-w-2xl flex-col rounded-t-2xl sm:rounded-2xl border border-white/10 bg-[#0F172A] text-[#F8FAFC] shadow-2xl overflow-hidden max-h-[90vh] sm:max-h-[85vh] pb-safe p-4 sm:p-6 overflow-y-auto"
+        role="dialog"
+        aria-modal="true"
+      >
+        <div class="sm:hidden mx-auto mb-3 h-1 w-12 rounded-full bg-white/20" aria-hidden="true" />
         <ManualNodeEditor
           :key="manualEditorKey"
           :saving="manualSaving"
@@ -233,6 +402,7 @@ import NodePreviewList from '../components/NodePreviewList.vue'
 import PageToolbar from '../components/PageToolbar.vue'
 import SubscriptionForm from '../components/SubscriptionForm.vue'
 import UiState from '../components/UiState.vue'
+import MetricCard from '../components/ui/MetricCard.vue'
 import {
   createManualNodeSubscription,
   createSubscription,
@@ -358,10 +528,11 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const sRes = await getSubscriptions()
-    subscriptions.value = sRes.data
+    const data = await getSubscriptions()
+    subscriptions.value = data || []
+    store.setSubscriptions(subscriptions.value)
   } catch (err) {
-    error.value = getApiErrorMessage(err, '加载订阅失败')
+    error.value = getApiErrorMessage(err, '加载订阅列表失败')
   } finally {
     loading.value = false
   }
@@ -369,73 +540,74 @@ async function load() {
 
 function openCreate() {
   editing.value = null
-  error.value = ''
   showForm.value = true
 }
 
-function openEdit(item) {
-  editing.value = { ...item }
-  error.value = ''
+function openEdit(sub) {
+  editing.value = sub
   showForm.value = true
 }
 
 function openManualNode() {
-  manualFormError.value = ''
   manualEditorKey.value += 1
+  manualFormError.value = ''
   showManualNode.value = true
 }
 
+async function save(payload) {
+  const isCreate = !editing.value?.id
+  const actionText = isCreate ? '创建订阅' : '保存订阅'
+  try {
+    let saved
+    if (isCreate) {
+      saved = await createSubscription(payload)
+    } else {
+      saved = await updateSubscription(editing.value.id, payload)
+    }
+    showForm.value = false
+    editing.value = null
+    await load()
+    store.toast(`${actionText}成功`, 'success')
+    return saved
+  } catch (err) {
+    store.error(getApiErrorMessage(err, `${actionText}失败`))
+    throw err
+  }
+}
+
 async function saveManualNode(payload) {
-  if (!payload?.node_links?.trim() || manualSaving.value) return
   manualSaving.value = true
   manualFormError.value = ''
   try {
-    await createManualNodeSubscription(payload)
+    const created = await createManualNodeSubscription({
+      name: payload.name,
+      manual_nodes: payload.manual_nodes,
+      enabled: payload.enabled,
+    })
     showManualNode.value = false
-    store.success('自定义节点已保存')
     await load()
+    store.toast(`手动节点订阅「${created?.name || payload.name}」已添加`, 'success')
   } catch (err) {
-    manualFormError.value = getApiErrorMessage(err, '保存自定义节点失败')
+    manualFormError.value = getApiErrorMessage(err, '保存手动节点失败')
   } finally {
     manualSaving.value = false
   }
 }
 
-async function save(payload) {
-  error.value = ''
-  try {
-    if (editing.value?.id) {
-      await updateSubscription(editing.value.id, payload)
-    } else {
-      await createSubscription(payload)
-    }
-    showForm.value = false
-    store.success('订阅已保存')
-    await load()
-  } catch (err) {
-    store.error(getApiErrorMessage(err, '保存订阅失败'))
-  }
-}
-
-async function onFormFetched(data) {
-  // Keep list cache in sync when user fetches inside the edit form.
-  if (data?.id) {
-    editing.value = { ...editing.value, ...data }
-  }
-  store.success('订阅拉取成功')
+async function onFormFetched(saved) {
   await load()
+  if (saved?.id) {
+    const fresh = subscriptions.value.find((s) => s.id === saved.id)
+    if (fresh) editing.value = fresh
+  }
 }
 
 async function doFetch(id) {
   loadingFetchId.value = id
-  error.value = ''
   try {
     await fetchSubscription(id)
-    store.success('订阅拉取成功')
     await load()
-    // Auto-show nodes after successful fetch
-    const sub = subscriptions.value.find((s) => s.id === id)
-    if (sub) await showNodes(sub)
+    store.toast('拉取完成', 'success')
   } catch (err) {
     store.error(getApiErrorMessage(err, '拉取订阅失败'))
   } finally {
@@ -443,91 +615,76 @@ async function doFetch(id) {
   }
 }
 
-async function setPrimary(item) {
-  if (!item?.id || item.is_primary) return
-  loadingPrimaryId.value = item.id
-  error.value = ''
+async function setPrimary(sub) {
+  if (sub.is_primary) return
+  loadingPrimaryId.value = sub.id
   try {
-    await updateSubscription(item.id, { is_primary: true })
-    store.success(`已将 ${item.name} 设为主订阅`)
+    await updateSubscription(sub.id, { is_primary: true })
     await load()
+    store.toast(`已将「${sub.name}」设为主订阅`, 'success')
   } catch (err) {
-    store.error(getApiErrorMessage(err, '设置主订阅失败'))
+    store.error(getApiErrorMessage(err, '设为主订阅失败'))
   } finally {
     loadingPrimaryId.value = null
   }
 }
 
-async function toggleEnabled(item) {
-  if (!item?.id) return
-  loadingToggleId.value = item.id
-  error.value = ''
+async function toggleEnabled(sub) {
+  loadingToggleId.value = sub.id
   try {
-    await updateSubscription(item.id, { enabled: !item.enabled })
-    store.success(item.enabled ? `已禁用 ${item.name}` : `已启用 ${item.name}`)
+    await updateSubscription(sub.id, { enabled: !sub.enabled })
     await load()
+    store.toast(sub.enabled ? '已禁用' : '已启用', 'success')
   } catch (err) {
-    store.error(getApiErrorMessage(err, '切换启用状态失败'))
+    store.error(getApiErrorMessage(err, '切换状态失败'))
   } finally {
     loadingToggleId.value = null
   }
 }
 
-async function remove(item) {
+async function remove(sub) {
   const ok = await store.confirm({
     title: '删除订阅',
-    message: `确定要删除订阅 "${item.name}" 吗？此操作不可撤销。`,
+    message: `确定要删除订阅「${sub.name}」吗？关联的节点缓存也将被清除。`,
     confirmText: '删除',
     danger: true,
   })
   if (!ok) return
-  error.value = ''
   try {
-    await deleteSubscription(item.id)
-    store.success(`已删除订阅 ${item.name}`)
+    await deleteSubscription(sub.id)
     await load()
+    store.toast('已删除', 'success')
   } catch (err) {
     store.error(getApiErrorMessage(err, '删除订阅失败'))
   }
 }
 
-async function showNodes(item) {
-  error.value = ''
+async function showNodes(sub) {
+  viewingSub.value = sub
+  nodePreviewTitle.value = sub.name
   try {
-    const res = await getSubscriptionNodes(item.id)
-    viewingNodes.value = res.data
-    // Keep full subscription context so renames can be saved as post-prefix map.
-    viewingSub.value = { ...item }
-    nodePreviewTitle.value = `${item.name || '订阅'}节点预览`
+    const data = await getSubscriptionNodes(sub.id)
+    viewingNodes.value = data || []
   } catch (err) {
-    store.error(getApiErrorMessage(err, '加载节点失败'))
+    store.error(getApiErrorMessage(err, '获取节点列表失败'))
   }
 }
 
 function closeNodePreview() {
-  viewingNodes.value = []
   viewingSub.value = null
+  viewingNodes.value = []
   nodePreviewTitle.value = ''
-  renamingSaving.value = false
 }
 
 async function saveNodeRenames(renames) {
-  if (!viewingSub.value?.id || renamingSaving.value) return
+  if (!viewingSub.value) return
   renamingSaving.value = true
-  error.value = ''
   try {
-    // renames keys are post-prefix base names from viewingBaseNodes.
-    await updateSubscription(viewingSub.value.id, {
-      node_renames: renames || {},
-    })
-    store.success('节点名称已保存')
-    await load()
-    const latest = subscriptions.value.find((item) => item.id === viewingSub.value.id)
-    if (latest) {
-      viewingSub.value = { ...latest }
-      const res = await getSubscriptionNodes(latest.id)
-      viewingNodes.value = res.data
-    }
+    await updateSubscription(viewingSub.value.id, { node_renames: renames })
+    viewingSub.value = { ...viewingSub.value, node_renames: renames }
+    store.toast('重命名规则已保存', 'success')
+    const match = subscriptions.value.find((s) => s.id === viewingSub.value.id)
+    if (match) match.node_renames = renames
   } catch (err) {
     store.error(getApiErrorMessage(err, '保存节点名称失败'))
   } finally {
@@ -537,7 +694,6 @@ async function saveNodeRenames(renames) {
 
 function parseUserinfo(value) {
   if (!value) return null
-  // Return cached result if available
   const cacheKey = value
   if (_userinfoCache.has(cacheKey)) return _userinfoCache.get(cacheKey)
   const result = {}

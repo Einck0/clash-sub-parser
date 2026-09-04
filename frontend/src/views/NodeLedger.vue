@@ -9,9 +9,9 @@
           查看所有订阅与手动节点，进行真实出站握手测速、流媒体与 AI 解锁全项质检，以及配置跳板代理链路。
         </p>
       </div>
-      <div class="flex items-center gap-3">
+      <div class="flex flex-wrap items-center gap-2.5 w-full sm:w-auto">
         <button
-          class="inline-flex items-center gap-1.5 rounded-lg border border-blue-500/40 bg-blue-600/20 px-4 py-2 text-xs font-medium text-blue-400 hover:bg-blue-600/30 transition-colors cursor-pointer"
+          class="inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg border border-blue-500/40 bg-blue-600/20 px-4 py-2 text-xs font-medium text-blue-400 hover:bg-blue-600/30 transition-colors cursor-pointer flex-1 sm:flex-initial"
           :disabled="probing || !rows.length"
           @click="startProbeBatch(effectiveBatchTargets)"
         >
@@ -20,13 +20,13 @@
         </button>
         <button
           v-if="probing"
-          class="inline-flex items-center gap-1.5 rounded-lg border border-rose-500/40 bg-rose-600/20 px-3.5 py-2 text-xs font-medium text-rose-400 hover:bg-rose-600/30 transition-colors cursor-pointer"
+          class="inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg border border-rose-500/40 bg-rose-600/20 px-3.5 py-2 text-xs font-medium text-rose-400 hover:bg-rose-600/30 transition-colors cursor-pointer flex-1 sm:flex-initial"
           @click="cancelProbeBatch"
         >
           停止探测
         </button>
         <button
-          class="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-slate-800/40 px-3.5 py-2 text-xs font-medium text-slate-300 hover:bg-slate-800 transition-colors cursor-pointer"
+          class="inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg border border-white/10 bg-slate-800/40 px-3.5 py-2 text-xs font-medium text-slate-300 hover:bg-slate-800 transition-colors cursor-pointer flex-1 sm:flex-initial"
           :disabled="loading"
           @click="reload"
         >
@@ -164,21 +164,21 @@
             @click="inspectNode(item)"
           >
             <!-- Checkbox & Node Name & Protocol -->
-            <div class="flex items-center gap-3 min-w-[280px] flex-1">
+            <div class="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
               <input
                 type="checkbox"
                 :checked="isSelected"
-                class="rounded border-white/20 bg-slate-900 text-blue-500 focus:ring-0 cursor-pointer"
+                class="rounded border-white/20 bg-slate-900 text-blue-500 focus:ring-0 cursor-pointer shrink-0"
                 @click.stop="toggleSelectNode(item.name)"
               />
-              <span class="text-sm">{{ getNodeFlagEmoji(item) }}</span>
+              <span class="text-sm shrink-0">{{ getNodeFlagEmoji(item) }}</span>
               <span
-                class="text-xs font-mono font-bold text-white hover:text-blue-400 transition-colors truncate max-w-xs"
+                class="text-xs font-mono font-bold text-white hover:text-blue-400 transition-colors truncate max-w-[140px] sm:max-w-xs"
                 :title="item.name"
               >
                 {{ item.name }}
               </span>
-              <StatusBadge type="info" :text="(item.type || 'RAW').toUpperCase()" />
+              <StatusBadge type="info" :text="(item.type || 'RAW').toUpperCase()" class="shrink-0" />
             </div>
 
             <!-- Server & Port -->
@@ -231,7 +231,7 @@
               </span>
 
               <button
-                class="rounded border border-white/10 bg-slate-800/40 px-2 py-1 text-[11px] text-slate-300 hover:bg-slate-800 hover:text-white cursor-pointer"
+                class="min-h-[36px] min-w-[36px] sm:min-h-[32px] sm:min-w-[32px] rounded border border-white/10 bg-slate-800/40 px-2 py-1 text-[11px] text-slate-300 hover:bg-slate-800 hover:text-white cursor-pointer flex items-center justify-center transition-colors"
                 title="单节点测速"
                 :disabled="probingSingleNodeKey === item.name"
                 @click.stop="handleProbeSingle(item)"

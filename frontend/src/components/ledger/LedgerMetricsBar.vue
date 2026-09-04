@@ -1,5 +1,5 @@
 <template>
-  <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6">
     <!-- Total Nodes Metric -->
     <div
       class="flex flex-col p-4 rounded-xl border transition-all cursor-pointer bg-slate-900/60 backdrop-blur-md"
@@ -16,7 +16,7 @@
     >
       <div class="flex justify-between items-center">
         <span class="text-xs font-mono text-slate-400">TOTAL NODES</span>
-        <span class="text-sm">🌐</span>
+        <span class="h-2 w-2 rounded-full bg-blue-400 ring-2 ring-blue-500/20"></span>
       </div>
       <div class="flex items-baseline gap-2 mt-1">
         <span class="text-2xl font-mono font-bold text-white">{{ total }}</span>
@@ -45,7 +45,7 @@
     >
       <div class="flex justify-between items-center">
         <span class="text-xs font-mono text-slate-400">HEALTHY (ONLINE)</span>
-        <span class="text-sm">🟢</span>
+        <span class="h-2 w-2 rounded-full bg-emerald-400 ring-2 ring-emerald-500/20 animate-pulse"></span>
       </div>
       <div class="flex items-baseline gap-2 mt-1">
         <span class="text-2xl font-mono font-bold text-emerald-400">{{ healthy }}</span>
@@ -75,7 +75,7 @@
     >
       <div class="flex justify-between items-center">
         <span class="text-xs font-mono text-slate-400">FAST (> 10 Mbps)</span>
-        <span class="text-sm">🚀</span>
+        <span class="h-2 w-2 rounded-full bg-cyan-400 ring-2 ring-cyan-500/20"></span>
       </div>
       <div class="flex items-baseline gap-2 mt-1">
         <span class="text-2xl font-mono font-bold text-cyan-400">{{ fast }}</span>
@@ -104,7 +104,7 @@
     >
       <div class="flex justify-between items-center">
         <span class="text-xs font-mono text-slate-400">PROXY CHAINED</span>
-        <span class="text-sm">🔗</span>
+        <span class="h-2 w-2 rounded-full bg-purple-400 ring-2 ring-purple-500/20"></span>
       </div>
       <div class="flex items-baseline gap-2 mt-1">
         <span class="text-2xl font-mono font-bold text-purple-400">{{ chained }}</span>

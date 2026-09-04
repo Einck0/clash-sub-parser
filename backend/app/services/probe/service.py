@@ -171,6 +171,280 @@ async def get_all_db_probe_results(db: AsyncSession) -> dict[str, dict[str, Any]
     return results_map
 
 
+def is_node_credential_missing(node: dict[str, Any]) -> bool:
+    """Check whether a proxy node dictionary is missing critical credentials or has redacted secrets."""
+    if not isinstance(node, dict):
+        return False
+
+    for _, v in node.items():
+        if isinstance(v, str) and ("[REDACTED]" in v or "[REDACTED_UUID]" in v):
+            return True
+        if isinstance(v, dict):
+            for _, sub_v in v.items():
+                if isinstance(sub_v, str) and ("[REDACTED]" in sub_v or "[REDACTED_UUID]" in sub_v):
+                    return True
+
+    node_type = str(node.get("type") or "").strip().lower()
+
+    if node_type in ("ss", "shadowsocks"):
+        return not bool(node.get("password")) or not bool(node.get("cipher"))
+
+    if node_type == "vmess":
+        return not bool(node.get("uuid"))
+
+    if node_type == "vless":
+        if not node.get("uuid"):
+            return True
+        reality = node.get("reality-opts") or node.get("reality_opts")
+        if isinstance(reality, dict):
+            pub_key = (
+                reality.get("public-key")
+                or reality.get("public_key")
+                or reality.get("publicKey")
+                or node.get("public-key")
+                or node.get("public_key")
+            )
+            if not pub_key:
+                return True
+        return False
+
+    if node_type == "trojan":
+        return not bool(node.get("password"))
+
+    if node_type in ("hysteria2", "hy2"):
+        return not bool(
+            node.get("password")
+            or node.get("auth")
+            or node.get("token")
+            or node.get("auth-str")
+            or node.get("auth_str")
+        )
+
+    if node_type == "tuic":
+        has_uuid = bool(node.get("uuid"))
+        has_pwd = bool(node.get("password") or node.get("token"))
+        return not (has_uuid or has_pwd)
+
+    if node_type == "wireguard":
+        has_priv = bool(node.get("private-key") or node.get("private_key"))
+        has_pub = bool(node.get("public-key") or node.get("public_key"))
+        return not (has_priv and has_pub)
+
+    return False
+
+
+def _merge_candidate_with_node(candidate: dict[str, Any], node: dict[str, Any]) -> dict[str, Any]:
+    """Merge database candidate configuration into incoming node, restoring credentials."""
+    merged = dict(candidate)
+    for k, v in node.items():
+        if v is None or v == "" or v in ("[REDACTED]", "[REDACTED_UUID]"):
+            continue
+        if isinstance(v, dict) and isinstance(candidate.get(k), dict):
+            sub_merged = dict(candidate[k])
+            for sub_k, sub_v in v.items():
+                if sub_v not in (None, "", "[REDACTED]", "[REDACTED_UUID]"):
+                    sub_merged[sub_k] = sub_v
+            merged[k] = sub_merged
+        else:
+            merged[k] = v
+    return merged
+
+
+class _CandidateIndex:
+    """In-memory multi-index for fast candidate node resolution without N+1 queries."""
+
+    def __init__(self) -> None:
+        self.by_logical_id: dict[str, dict[str, Any]] = {}
+        self.by_fingerprint: dict[str, dict[str, Any]] = {}
+        self.by_sub_name: dict[tuple[int, str], dict[str, Any]] = {}
+        self.by_sub_server_port: dict[tuple[int, str, int], dict[str, Any]] = {}
+        self.by_name_server_port: dict[tuple[str, str, int], dict[str, Any]] = {}
+        self.by_name: dict[str, dict[str, Any]] = {}
+        self.by_server_port: dict[tuple[str, int], dict[str, Any]] = {}
+
+    def add_candidate(
+        self,
+        cand: dict[str, Any],
+        sub_id: int | None = None,
+        logical_id: str | None = None,
+        fingerprint: str | None = None,
+    ) -> None:
+        if not isinstance(cand, dict):
+            return
+        name = str(cand.get("name") or "").strip()
+        server = str(cand.get("server") or "").strip()
+        port = cand.get("port")
+        port_int = 0
+        if port is not None:
+            try:
+                port_int = int(port)
+            except (ValueError, TypeError):
+                port_int = 0
+
+        lid = logical_id or cand.get("logical_id") or cand.get("id")
+        if lid:
+            self.by_logical_id[str(lid)] = cand
+
+        fp = fingerprint or cand.get("payload_fingerprint")
+        if fp:
+            self.by_fingerprint[str(fp)] = cand
+
+        if sub_id is not None:
+            if name:
+                self.by_sub_name[(sub_id, name)] = cand
+            if server and port_int:
+                self.by_sub_server_port[(sub_id, server, port_int)] = cand
+
+        if name and server and port_int:
+            self.by_name_server_port[(name, server, port_int)] = cand
+
+        if name and name not in self.by_name:
+            self.by_name[name] = cand
+
+        if server and port_int and (server, port_int) not in self.by_server_port:
+            self.by_server_port[(server, port_int)] = cand
+
+    def find_match(self, node: dict[str, Any]) -> dict[str, Any] | None:
+        lid = node.get("logical_id") or node.get("id")
+        if lid and str(lid) in self.by_logical_id:
+            return self.by_logical_id[str(lid)]
+
+        fp = node.get("payload_fingerprint")
+        if fp and str(fp) in self.by_fingerprint:
+            return self.by_fingerprint[str(fp)]
+
+        sub_id = node.get("subscription_id")
+        name = str(node.get("name") or "").strip()
+        server = str(node.get("server") or "").strip()
+        port = node.get("port")
+        port_int = 0
+        if port is not None:
+            try:
+                port_int = int(port)
+            except (ValueError, TypeError):
+                port_int = 0
+
+        if sub_id is not None:
+            try:
+                sub_id_int = int(sub_id)
+                if name and (sub_id_int, name) in self.by_sub_name:
+                    return self.by_sub_name[(sub_id_int, name)]
+                if server and port_int and (sub_id_int, server, port_int) in self.by_sub_server_port:
+                    return self.by_sub_server_port[(sub_id_int, server, port_int)]
+            except (ValueError, TypeError):
+                pass
+
+        if name and server and port_int and (name, server, port_int) in self.by_name_server_port:
+            return self.by_name_server_port[(name, server, port_int)]
+
+        if name and name in self.by_name:
+            return self.by_name[name]
+
+        if server and port_int and (server, port_int) in self.by_server_port:
+            return self.by_server_port[(server, port_int)]
+
+        return None
+
+
+async def _do_hydrate_nodes(
+    nodes: list[dict[str, Any]],
+    missing_indices: list[int],
+    session: AsyncSession,
+) -> list[dict[str, Any]]:
+    index = _CandidateIndex()
+
+    # 1. Query Node table (if available)
+    try:
+        from app.models.node import Node
+        node_stmt = select(Node).where(Node.lifecycle_state == "active")
+        res = await session.execute(node_stmt)
+        for item in res.scalars().all():
+            payload = item.normalized_payload
+            if isinstance(payload, dict):
+                index.add_candidate(
+                    payload,
+                    logical_id=item.logical_id,
+                    fingerprint=item.payload_fingerprint,
+                )
+    except Exception as exc:
+        logger.debug("Node table not available or error during candidate indexing: %s", exc)
+
+    # 2. Query Subscription table
+    try:
+        from app.models.subscription import Subscription
+        sub_stmt = select(Subscription).where(Subscription.enabled.is_(True))
+        sub_res = await session.execute(sub_stmt)
+        for sub in sub_res.scalars().all():
+            for raw in (sub.raw_nodes or []):
+                if isinstance(raw, dict):
+                    index.add_candidate(raw, sub_id=sub.id)
+            for raw in (sub.manual_nodes or []):
+                if isinstance(raw, dict):
+                    index.add_candidate(raw, sub_id=sub.id)
+            for raw in (sub.source_nodes or []):
+                if isinstance(raw, dict):
+                    index.add_candidate(raw, sub_id=sub.id)
+    except Exception as exc:
+        logger.debug("Subscription table not available or error during candidate indexing: %s", exc)
+
+    # 3. Perform hydration for each node with missing credentials
+    hydrated_nodes = list(nodes)
+    for idx in missing_indices:
+        target_node = nodes[idx]
+        candidate = index.find_match(target_node)
+        if candidate:
+            hydrated = _merge_candidate_with_node(candidate, target_node)
+            hydrated_nodes[idx] = hydrated
+            logger.info(
+                "Successfully hydrated credentials for node '%s' (%s:%s)",
+                target_node.get("name"),
+                target_node.get("server"),
+                target_node.get("port"),
+            )
+        else:
+            logger.warning(
+                "Could not find matching candidate in database to hydrate node '%s' (%s:%s)",
+                target_node.get("name"),
+                target_node.get("server"),
+                target_node.get("port"),
+            )
+
+    return hydrated_nodes
+
+
+async def hydrate_nodes_batch(
+    nodes: list[dict[str, Any]],
+    db: AsyncSession | None = None,
+) -> list[dict[str, Any]]:
+    """Batch hydrate missing connection credentials for nodes from local storage.
+
+    Inspects each node in the list. If any node lacks required secrets (uuid,
+    password, reality-opts, etc.), retrieves full configurations from Subscription
+    and Node tables in a single batch query, avoiding N+1 lookups.
+    """
+    if not nodes:
+        return []
+
+    missing_indices = [i for i, n in enumerate(nodes) if is_node_credential_missing(n)]
+    if not missing_indices:
+        return nodes
+
+    if db is not None:
+        try:
+            return await _do_hydrate_nodes(nodes, missing_indices, db)
+        except Exception as exc:
+            logger.warning("Error during batch credential hydration with provided db session: %s", exc)
+            return nodes
+
+    try:
+        from app.database import AsyncSessionLocal
+        async with AsyncSessionLocal() as session:
+            return await _do_hydrate_nodes(nodes, missing_indices, session)
+    except Exception as exc:
+        logger.warning("Error opening session for batch credential hydration: %s", exc)
+        return nodes
+
+
 async def probe_single_node(
     node: dict[str, Any],
     *,
@@ -186,6 +460,11 @@ async def probe_single_node(
     db: AsyncSession | None = None,
 ) -> dict[str, Any]:
     """对单个节点执行完整能力探测"""
+    if is_node_credential_missing(node):
+        hydrated_nodes = await hydrate_nodes_batch([node], db=db)
+        if hydrated_nodes:
+            node = hydrated_nodes[0]
+
     if use_cache:
         cached = get_cached_result(node)
         if cached:
@@ -292,6 +571,9 @@ async def probe_batch_nodes(
     db: AsyncSession | None = None,
 ) -> dict[str, Any]:
     """批量并发探测节点能力"""
+    # 批量凭据回填：在并发执行前单次完成数据库检索，避免循环 N+1 查询与并发 session 争用
+    hydrated_nodes = await hydrate_nodes_batch(nodes, db=db)
+
     sem = asyncio.Semaphore(max(1, min(concurrency, 20)))
 
     async def _worker(n: dict[str, Any]) -> dict[str, Any]:
@@ -310,7 +592,7 @@ async def probe_batch_nodes(
                 db=None,
             )
 
-    results = await asyncio.gather(*[_worker(n) for n in nodes], return_exceptions=False)
+    results = await asyncio.gather(*[_worker(n) for n in hydrated_nodes], return_exceptions=False)
 
     if db:
         try:

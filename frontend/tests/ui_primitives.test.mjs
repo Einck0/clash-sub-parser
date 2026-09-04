@@ -16,6 +16,13 @@ test('Tailwind theme and UI primitives exist and conform to design tokens', () =
   const badgePath = path.resolve(import.meta.dirname, '../src/components/ui/StatusBadge.vue')
   assert.ok(fs.existsSync(badgePath), 'StatusBadge.vue should exist')
 
+  const metricCardPath = path.resolve(import.meta.dirname, '../src/components/ui/MetricCard.vue')
+  assert.ok(fs.existsSync(metricCardPath), 'MetricCard.vue should exist')
+  const metricCardContent = fs.readFileSync(metricCardPath, 'utf8')
+  assert.match(metricCardContent, /label/)
+  assert.match(metricCardContent, /status/)
+  assert.match(metricCardContent, /font-mono/)
+
   const virtualTablePath = path.resolve(import.meta.dirname, '../src/components/ui/VirtualNodeTable.vue')
   assert.ok(fs.existsSync(virtualTablePath), 'VirtualNodeTable.vue should exist')
   const virtualTableContent = fs.readFileSync(virtualTablePath, 'utf8')

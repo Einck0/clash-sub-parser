@@ -6,7 +6,7 @@
         <button
           v-for="tab in tabs"
           :key="tab.id"
-          class="rounded-lg px-3 py-1.5 text-xs font-medium transition-colors cursor-pointer"
+          class="min-h-[44px] rounded-lg px-3.5 py-2 text-xs font-medium transition-colors cursor-pointer flex items-center justify-center"
           :class="[
             activeTab === tab.id
               ? 'border border-blue-500/40 bg-blue-600/20 text-blue-400'
@@ -158,7 +158,7 @@
             <div class="flex gap-2">
               <button
                 type="button"
-                class="flex-1 py-1.5 rounded-lg border text-xs cursor-pointer transition-colors"
+                class="flex-1 min-h-[44px] py-1.5 rounded-lg border text-xs cursor-pointer transition-colors flex items-center justify-center"
                 :class="chainForm.dialer_type === 'node' ? 'border-blue-500 bg-blue-600/20 text-white font-bold' : 'border-white/10 text-slate-400 hover:text-white'"
                 @click="chainForm.dialer_type = 'node'"
               >
@@ -166,7 +166,7 @@
               </button>
               <button
                 type="button"
-                class="flex-1 py-1.5 rounded-lg border text-xs cursor-pointer transition-colors"
+                class="flex-1 min-h-[44px] py-1.5 rounded-lg border text-xs cursor-pointer transition-colors flex items-center justify-center"
                 :class="chainForm.dialer_type === 'node_group' ? 'border-blue-500 bg-blue-600/20 text-white font-bold' : 'border-white/10 text-slate-400 hover:text-white'"
                 @click="chainForm.dialer_type = 'node_group'"
               >
@@ -181,11 +181,11 @@
               v-model.trim="dialerSearch"
               type="text"
               placeholder="搜索可用跳板名称..."
-              class="w-full rounded-lg border border-white/10 bg-slate-950/60 px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:border-blue-500 focus:outline-hidden font-mono"
+              class="w-full min-h-[44px] rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-white placeholder-slate-500 focus:border-blue-500 focus:outline-hidden font-mono"
             />
             <select
               v-model="chainForm.dialer_ref"
-              class="w-full rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-slate-200 focus:border-blue-500 focus:outline-hidden font-mono"
+              class="w-full min-h-[44px] rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-slate-200 focus:border-blue-500 focus:outline-hidden font-mono"
             >
               <option value="">-- 请选择跳板目标 --</option>
               <template v-if="chainForm.dialer_type === 'node'">
@@ -202,7 +202,7 @@
           </div>
 
           <button
-            class="w-full py-2.5 rounded-lg border border-blue-500/40 bg-blue-600/30 text-blue-300 font-medium hover:bg-blue-600/40 transition-colors cursor-pointer text-center mt-2"
+            class="w-full min-h-[44px] py-2.5 rounded-lg border border-blue-500/40 bg-blue-600/30 text-blue-300 font-medium hover:bg-blue-600/40 transition-colors cursor-pointer text-center mt-2 flex items-center justify-center"
             :disabled="!chainForm.dialer_ref || savingChain"
             @click="submitSaveChain"
           >

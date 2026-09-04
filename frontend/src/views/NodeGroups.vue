@@ -1,27 +1,50 @@
 <template>
-  <section class="page node-groups-page">
-    <div class="page-head">
+  <section class="space-y-6">
+    <!-- Top Header -->
+    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pb-4 border-b border-white/10">
       <div>
-        <p class="eyebrow">Proxy Groups</p>
-        <h2>策略组</h2>
-        <p class="page-desc">编辑、排序在列表完成；按住 ☰ 拖拽或用上移/下移调整顺序。解析预览点「预览」弹窗查看。</p>
+        <p class="text-xs font-mono text-blue-400 uppercase tracking-wider">Proxy Policy Groups</p>
+        <h2 class="text-xl font-bold text-white tracking-tight">策略组</h2>
+        <p class="text-xs text-slate-400 mt-1">
+          编辑与排序在列表完成。按住 ☰ 拖拽或用上移/下移调整顺序，解析预览点「预览」查看。
+        </p>
       </div>
-      <div class="head-actions">
-        <button @click="validateRefs" :disabled="loading || !!working">
+      <div class="flex flex-wrap items-center gap-2.5 w-full sm:w-auto">
+        <button
+          class="inline-flex items-center justify-center min-h-[44px] gap-1.5 rounded-lg border border-white/10 bg-slate-800/40 px-3.5 py-2 text-xs font-medium text-slate-300 hover:bg-slate-800 transition-colors cursor-pointer flex-1 sm:flex-initial"
+          :disabled="loading || !!working"
+          @click="validateRefs"
+        >
           {{ working === 'validate' ? '校验中…' : '校验引用' }}
         </button>
-        <button @click="loadPreview" :disabled="loading || !!working">
+        <button
+          class="inline-flex items-center justify-center min-h-[44px] gap-1.5 rounded-lg border border-white/10 bg-slate-800/40 px-3.5 py-2 text-xs font-medium text-slate-300 hover:bg-slate-800 transition-colors cursor-pointer flex-1 sm:flex-initial"
+          :disabled="loading || !!working"
+          @click="loadPreview"
+        >
           {{ working === 'preview' ? '刷新中…' : '刷新解析' }}
         </button>
-        <button class="primary" @click="openCreate">添加策略组</button>
+        <button
+          class="inline-flex items-center justify-center min-h-[44px] gap-1.5 rounded-lg border border-blue-500/40 bg-blue-600/20 px-4 py-2 text-xs font-medium text-blue-400 hover:bg-blue-600/30 transition-colors cursor-pointer flex-1 sm:flex-initial"
+          @click="openCreate"
+        >
+          添加策略组
+        </button>
       </div>
     </div>
 
+    <!-- Alert / Error Message -->
     <UiState v-if="error" type="error" title="策略组操作失败" :description="error" compact>
       <template #actions>
-        <button @click="load">重新加载</button>
+        <button
+          class="min-h-[44px] px-4 py-2 rounded-lg bg-blue-600 text-white text-xs font-medium cursor-pointer"
+          @click="load"
+        >
+          重新加载
+        </button>
       </template>
     </UiState>
+
     <UiState
       v-if="loading && !groups.length"
       type="loading"
@@ -30,57 +53,74 @@
     />
 
     <template v-else>
+      <!-- Industrial MetricCards Grid (Responsive: 1 col mobile, 2 cols sm, 3 cols md+) -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 sm:gap-4">
+        <MetricCard
+          label="POLICY GROUPS"
+          :value="groups.length"
+          subtext="已配置策略组数量"
+          status="info"
+        />
+        <MetricCard
+          label="RESOLVED NODES"
+          :value="totalResolved"
+          subtext="全组解析叶子节点总数"
+          status="success"
+        />
+        <MetricCard
+          label="ROUTING MINDSET"
+          value="引用与展开"
+          description="组引用 = 输出策略组名；组节点 = 展开叶子节点。排序请拖 ☰ 或上移/下移；点「预览」弹窗查节点。"
+          status="neutral"
+        />
+      </div>
+
+      <!-- Action Toolbar with Search & Filter -->
       <PageToolbar
         v-model="search"
         placeholder="搜索组名 / 类型 / 条目 / 节点…"
         :count-text="`${filteredGroups.length} / ${groups.length} 组`"
       >
         <template #filters>
-          <select v-model="typeFilter" class="toolbar-select">
+          <select
+            v-model="typeFilter"
+            class="min-h-[44px] rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-slate-300 focus:border-blue-500 focus:outline-hidden font-mono cursor-pointer"
+          >
             <option value="">全部类型</option>
             <option v-for="t in typeOptions" :key="t" :value="t">{{ t }}</option>
           </select>
-          <label class="toolbar-check">
-            <input v-model="onlyEmpty" type="checkbox" />
+          <label class="min-h-[44px] inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-white/10 bg-slate-950/60 text-xs text-slate-300 cursor-pointer select-none">
+            <input
+              v-model="onlyEmpty"
+              type="checkbox"
+              class="rounded border-white/20 bg-slate-900 text-blue-500 focus:ring-0"
+            />
             <span>仅空组</span>
           </label>
         </template>
       </PageToolbar>
 
-      <div class="summary-grid node-summary">
-        <div class="metric-card">
-          <span class="metric-label">策略组</span>
-          <strong>{{ groups.length }}</strong>
-        </div>
-        <div class="metric-card">
-          <span class="metric-label">总解析节点</span>
-          <strong>{{ totalResolved }}</strong>
-        </div>
-        <div class="metric-card wide">
-          <span class="metric-label">心智</span>
-          <span class="metric-tip">
-            组引用 = 输出策略组名；组节点 = 展开叶子节点。排序请拖 ☰ 或上移/下移；点「预览」弹窗查节点。
-          </span>
-        </div>
-      </div>
-
-      <div class="group-list">
+      <!-- Group Cards List -->
+      <div class="space-y-3">
         <article
-          v-for="(group, idx) in filteredGroups"
+          v-for="group in filteredGroups"
           :key="group.id"
-          class="group-card sortable-card"
-          :class="{
-            'is-empty': (previewById(group.id)?.resolved_count || 0) === 0,
-            dragging: draggingGroupId === group.id,
-          }"
+          class="flex flex-col justify-between p-4 sm:p-5 rounded-xl border transition-all backdrop-blur-md space-y-3.5"
+          :class="[
+            (previewById(group.id)?.resolved_count || 0) === 0
+              ? 'border-amber-500/30 bg-amber-950/10'
+              : 'border-white/10 bg-slate-900/60 hover:border-white/20',
+            draggingGroupId === group.id ? 'opacity-50 ring-2 ring-blue-500/40' : ''
+          ]"
           @dragover.prevent
           @drop="onGroupDrop(group)"
         >
-          <div class="group-card-head">
-            <div class="group-title-block">
+          <!-- Head of Group Card -->
+          <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 pb-3 border-b border-white/5">
+            <div class="flex items-start gap-3 min-w-0 flex-1">
               <button
                 type="button"
-                class="drag-handle"
+                class="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg border border-white/10 bg-slate-800/60 text-slate-300 hover:text-white transition-colors cursor-grab active:cursor-grabbing select-none"
                 :title="canReorderGroups ? '拖拽排序' : '清空筛选后再拖拽排序'"
                 data-drag-handle
                 :disabled="!canReorderGroups"
@@ -89,65 +129,104 @@
                 @dragend="draggingGroupId = null"
                 @click.stop
                 @mousedown.stop
-              >☰</button>
-              <span class="category-index">#{{ originalIndex(group.id) + 1 }}</span>
-              <div>
-                <h3>{{ group.name }}</h3>
-                <div class="badge-row">
-                  <span class="count-pill">{{ group.group_type }}</span>
-                  <span class="badge">{{ group.kind || 'manual' }}</span>
-                  <span class="badge" :class="resolvedCount(group.id) ? 'badge-ok' : 'badge-warn'">
+              >
+                ☰
+              </button>
+              <div class="min-w-0 space-y-1">
+                <div class="flex items-center gap-2 flex-wrap">
+                  <span class="text-xs font-mono text-slate-500">#{{ originalIndex(group.id) + 1 }}</span>
+                  <h3 class="text-base font-semibold text-white tracking-tight truncate" :title="group.name">
+                    {{ group.name }}
+                  </h3>
+                </div>
+                <div class="flex items-center gap-1.5 flex-wrap text-xs font-mono">
+                  <span class="px-2 py-0.5 rounded text-[11px] bg-blue-500/10 text-blue-400 border border-blue-500/20 uppercase font-semibold">
+                    {{ group.group_type }}
+                  </span>
+                  <span class="px-2 py-0.5 rounded text-[11px] bg-slate-800/60 text-slate-300 border border-white/5">
+                    {{ group.kind || 'manual' }}
+                  </span>
+                  <span
+                    class="px-2 py-0.5 rounded text-[11px] border font-medium"
+                    :class="resolvedCount(group.id) ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-amber-500/10 text-amber-400 border-amber-500/20'"
+                  >
                     {{ resolvedCount(group.id) }} 节点
                   </span>
-                  <span v-if="group.add_fallback" class="badge">空组 PASS</span>
+                  <span v-if="group.add_fallback" class="px-2 py-0.5 rounded text-[11px] bg-purple-500/10 text-purple-400 border border-purple-500/20">
+                    空组 PASS
+                  </span>
                 </div>
               </div>
             </div>
-            <div class="group-head-actions no-drag">
-              <button @click="openPreview(group)">预览</button>
+
+            <!-- Group Card Actions -->
+            <div class="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2 w-full sm:w-auto">
               <button
-                @click="moveById(group.id, -1)"
+                class="min-h-[44px] px-3 py-1.5 rounded-lg border border-white/10 bg-slate-800/40 text-xs font-medium text-slate-300 hover:bg-slate-800 transition-colors cursor-pointer flex-1 sm:flex-initial text-center justify-center"
+                @click="openPreview(group)"
+              >
+                预览
+              </button>
+              <button
+                class="min-h-[44px] px-3 py-1.5 rounded-lg border border-white/10 bg-slate-800/40 text-xs font-medium text-slate-300 hover:bg-slate-800 transition-colors cursor-pointer flex-1 sm:flex-initial text-center justify-center"
                 :disabled="!canReorderGroups || originalIndex(group.id) === 0 || reordering"
-              >上移</button>
+                @click="moveById(group.id, -1)"
+              >
+                上移
+              </button>
               <button
-                @click="moveById(group.id, 1)"
+                class="min-h-[44px] px-3 py-1.5 rounded-lg border border-white/10 bg-slate-800/40 text-xs font-medium text-slate-300 hover:bg-slate-800 transition-colors cursor-pointer flex-1 sm:flex-initial text-center justify-center"
                 :disabled="!canReorderGroups || originalIndex(group.id) === groups.length - 1 || reordering"
+                @click="moveById(group.id, 1)"
               >
                 下移
               </button>
-              <button class="primary" @click="openEdit(group)">编辑</button>
-              <button class="danger" @click="remove(group)">删除</button>
+              <button
+                class="min-h-[44px] px-3.5 py-1.5 rounded-lg border border-blue-500/40 bg-blue-600/20 text-xs font-medium text-blue-400 hover:bg-blue-600/30 transition-colors cursor-pointer flex-1 sm:flex-initial text-center justify-center"
+                @click="openEdit(group)"
+              >
+                编辑
+              </button>
+              <button
+                class="min-h-[44px] px-3.5 py-1.5 rounded-lg border border-rose-500/40 bg-rose-600/20 text-xs font-medium text-rose-400 hover:bg-rose-600/30 transition-colors cursor-pointer flex-1 sm:flex-initial text-center justify-center col-span-2 sm:col-span-1"
+                @click="remove(group)"
+              >
+                删除
+              </button>
             </div>
           </div>
 
-          <div class="group-meta-line">
-            <span>静态 {{ (group.include_nodes || []).length }}</span>
-            <span>组引用 {{ (group.include_group_ids || []).length }}</span>
-            <span>组节点 {{ (group.include_group_nodes_ids || []).length }}</span>
-            <span>条目 {{ (previewById(group.id)?.include_entries || group.include_entries || []).length }}</span>
+          <!-- Group Meta Stats Line -->
+          <div class="flex flex-wrap gap-x-4 gap-y-1.5 text-xs font-mono text-slate-400">
+            <span>静态节点: <strong class="text-slate-300 font-medium">{{ (group.include_nodes || []).length }}</strong></span>
+            <span>组引用: <strong class="text-slate-300 font-medium">{{ (group.include_group_ids || []).length }}</strong></span>
+            <span>展开组节点: <strong class="text-slate-300 font-medium">{{ (group.include_group_nodes_ids || []).length }}</strong></span>
+            <span>条目总数: <strong class="text-slate-300 font-medium">{{ (previewById(group.id)?.include_entries || group.include_entries || []).length }}</strong></span>
           </div>
 
+          <!-- Entry Tags -->
           <div
-            class="entry-tags"
             v-if="(previewById(group.id)?.include_entries || group.include_entries || []).length"
+            class="flex flex-wrap gap-1.5 text-xs font-mono pt-1"
           >
             <span
               v-for="(entry, eidx) in (previewById(group.id)?.include_entries || group.include_entries || []).slice(0, 8)"
               :key="`${entry.type}-${entry.value}-${eidx}`"
-              class="badge"
+              class="px-2 py-0.5 rounded bg-slate-950/60 border border-white/5 text-slate-300"
               :title="formatEntryFull(entry)"
             >
               {{ formatEntry(entry) }}
             </span>
             <span
               v-if="(previewById(group.id)?.include_entries || group.include_entries || []).length > 8"
-              class="badge"
+              class="px-2 py-0.5 rounded bg-blue-500/10 border border-blue-500/20 text-blue-400 font-medium"
             >
               +{{ (previewById(group.id)?.include_entries || group.include_entries || []).length - 8 }}
             </span>
           </div>
         </article>
 
+        <!-- Empty States -->
         <UiState
           v-if="!filteredGroups.length"
           type="empty"
@@ -155,45 +234,82 @@
           :description="groups.length ? '换个关键词或筛选条件试试。' : '创建后点「预览」弹窗查解析节点。'"
         >
           <template #actions>
-            <button v-if="!groups.length" class="primary" @click="openCreate">添加策略组</button>
-            <button v-else @click="search = ''; typeFilter = ''; onlyEmpty = false">清空筛选</button>
+            <button
+              v-if="!groups.length"
+              class="min-h-[44px] px-4 py-2 rounded-lg bg-blue-600 text-white text-xs font-medium cursor-pointer"
+              @click="openCreate"
+            >
+              添加策略组
+            </button>
+            <button
+              v-else
+              class="min-h-[44px] px-4 py-2 rounded-lg border border-white/10 bg-slate-800 text-slate-300 text-xs font-medium cursor-pointer"
+              @click="search = ''; typeFilter = ''; onlyEmpty = false"
+            >
+              清空筛选
+            </button>
           </template>
         </UiState>
       </div>
     </template>
 
+    <!-- Node Group Edit/Create Modal -->
     <NodeGroupModal v-if="showModal" :group="editing" @saved="onSaved" @close="showModal = false" />
 
-    <div v-if="previewGroup" class="modal-backdrop" @click.self="closePreview">
-      <div class="modal preview-modal" role="dialog" aria-modal="true" :aria-label="previewTitle">
-        <div class="row space preview-modal-head">
+    <!-- Preview Modal (Adaptive Bottom Sheet on Mobile) -->
+    <div
+      v-if="previewGroup"
+      class="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm p-0 sm:p-4"
+      @click.self="closePreview"
+    >
+      <div
+        class="relative flex w-full max-w-4xl flex-col rounded-t-2xl sm:rounded-2xl border border-white/10 bg-[#0F172A] text-[#F8FAFC] shadow-2xl overflow-hidden max-h-[90vh] sm:max-h-[85vh] pb-safe"
+        role="dialog"
+        aria-modal="true"
+        :aria-label="previewTitle"
+      >
+        <!-- Mobile drag indicator -->
+        <div class="sm:hidden mx-auto my-2.5 h-1 w-12 rounded-full bg-white/20" aria-hidden="true" />
+
+        <div class="flex items-center justify-between border-b border-white/10 px-6 py-4">
           <div>
-            <p class="eyebrow">Group Preview</p>
-            <h3>{{ previewTitle }}</h3>
-            <p class="section-hint">{{ resolvedCount(previewGroup.id) }} 个解析节点</p>
+            <p class="text-[10px] font-mono tracking-wider text-blue-400 uppercase">Group Preview</p>
+            <h3 class="text-base font-semibold text-white tracking-tight">
+              {{ previewTitle }}
+            </h3>
+            <p class="text-xs text-slate-400 mt-0.5">
+              {{ resolvedCount(previewGroup.id) }} 个解析节点
+            </p>
           </div>
-          <button @click="closePreview">关闭</button>
+          <button
+            class="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-slate-400 hover:bg-slate-800 hover:text-white cursor-pointer transition-colors"
+            @click="closePreview"
+          >
+            ✕
+          </button>
         </div>
 
-        <div class="muted small-line" v-if="previewById(previewGroup.id)?.include_group_names?.length">
-          引用组：{{ previewById(previewGroup.id).include_group_names.join('、') }}
-        </div>
-        <div class="muted small-line" v-if="previewById(previewGroup.id)?.include_group_nodes_names?.length">
-          展开组节点：{{ previewById(previewGroup.id).include_group_nodes_names.join('、') }}
-        </div>
-        <div class="muted small-line" v-if="previewById(previewGroup.id)?.exclude_group_names?.length">
-          减去：{{ previewById(previewGroup.id).exclude_group_names.join('、') }}
-        </div>
-        <div class="muted small-line" v-if="previewById(previewGroup.id)?.resolve_reasons?.length">
-          解析：{{ previewById(previewGroup.id).resolve_reasons.slice(0, 6).join('；') }}
-          <span v-if="previewById(previewGroup.id).resolve_reasons.length > 6"> …</span>
-        </div>
+        <div class="p-4 sm:p-6 overflow-y-auto flex-1 space-y-3">
+          <div v-if="previewById(previewGroup.id)?.include_group_names?.length" class="text-xs font-mono text-slate-400">
+            引用组：{{ previewById(previewGroup.id).include_group_names.join('、') }}
+          </div>
+          <div v-if="previewById(previewGroup.id)?.include_group_nodes_names?.length" class="text-xs font-mono text-slate-400">
+            展开组节点：{{ previewById(previewGroup.id).include_group_nodes_names.join('、') }}
+          </div>
+          <div v-if="previewById(previewGroup.id)?.exclude_group_names?.length" class="text-xs font-mono text-slate-400">
+            减去：{{ previewById(previewGroup.id).exclude_group_names.join('、') }}
+          </div>
+          <div v-if="previewById(previewGroup.id)?.resolve_reasons?.length" class="text-xs font-mono text-slate-400">
+            解析：{{ previewById(previewGroup.id).resolve_reasons.slice(0, 6).join('；') }}
+            <span v-if="previewById(previewGroup.id).resolve_reasons.length > 6"> …</span>
+          </div>
 
-        <NodePreviewList
-          :nodes="previewById(previewGroup.id)?.resolved_nodes || []"
-          :collapsed-limit="40"
-          placeholder="在本组内搜索节点"
-        />
+          <NodePreviewList
+            :nodes="previewById(previewGroup.id)?.resolved_nodes || []"
+            :collapsed-limit="40"
+            placeholder="在本组内搜索节点"
+          />
+        </div>
       </div>
     </div>
   </section>
@@ -215,6 +331,7 @@ import NodePreviewList from '../components/NodePreviewList.vue'
 import PageToolbar from '../components/PageToolbar.vue'
 import UiState from '../components/UiState.vue'
 import NodeGroupModal from '../components/NodeGroupModal.vue'
+import MetricCard from '../components/ui/MetricCard.vue'
 import { setDragGhost, shouldAllowDragStart } from '../utils/drag'
 
 const store = useAppStore()
@@ -252,14 +369,16 @@ window.addEventListener('keydown', onKeydown)
 onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 
 const previewMap = computed(() => new Map(previews.value.map((item) => [item.id, item])))
-// 模板每张卡片要查预览和原始序号，预构建避免 O(n²) findIndex
 const indexMap = computed(() => new Map(groups.value.map((g, i) => [g.id, i])))
+
 function previewById(id) {
   return previewMap.value.get(id)
 }
+
 function originalIndex(id) {
   return indexMap.value.get(id) ?? -1
 }
+
 function resolvedCount(id) {
   return previewById(id)?.resolved_count || 0
 }
@@ -273,7 +392,6 @@ const totalResolved = computed(() =>
   previews.value.reduce((sum, p) => sum + (p.resolved_count || 0), 0),
 )
 
-// 搜索文本随预览与分组变化预计算，避免每次按键重拼节点大字符串
 const groupSearchIndex = computed(() => {
   const map = new Map()
   for (const group of groups.value) {
@@ -300,7 +418,6 @@ const filteredGroups = computed(() => {
   })
 })
 
-// Filtering hides neighbors; only reorder against the full ordered list.
 const canReorderGroups = computed(
   () =>
     !String(search.value || '').trim()
@@ -420,7 +537,6 @@ async function applyGroupOrder(from, to) {
   try {
     const [moved] = copy.splice(from, 1)
     copy.splice(to, 0, moved)
-    // Optimistic local order so the list does not jump back while reloading.
     groups.value = copy
     const items = copy.map((group, i) => ({ id: group.id, sort_order: i }))
     await reorderNodeGroups(items)
@@ -494,95 +610,3 @@ function formatEntry(entry) {
   return truncateText(JSON.stringify(entry), 24)
 }
 </script>
-
-<style scoped>
-.group-list {
-  display: grid;
-  gap: 12px;
-}
-.group-card {
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  padding: 14px;
-  background: var(--surface);
-  display: grid;
-  gap: 10px;
-}
-.group-card.is-empty {
-  border-color: color-mix(in srgb, var(--warning, #b45309) 35%, var(--border));
-}
-.group-card-head {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: flex-start;
-  flex-wrap: wrap;
-}
-.group-title-block {
-  display: flex;
-  gap: 10px;
-  min-width: 0;
-}
-.group-title-block h3 {
-  margin: 0 0 6px;
-  overflow-wrap: anywhere;
-}
-.badge-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.group-head-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.group-meta-line {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  font-size: 12px;
-  color: var(--ink-soft);
-}
-.entry-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.preview-modal {
-  width: min(920px, 96vw);
-  max-height: 90vh;
-  overflow: auto;
-  display: grid;
-  gap: 10px;
-}
-.preview-modal-head h3 {
-  margin: 0 0 4px;
-  overflow-wrap: anywhere;
-}
-.badge-ok {
-  background: color-mix(in srgb, var(--ok, #0f8a5f) 18%, transparent);
-}
-.badge-warn {
-  background: color-mix(in srgb, var(--warning, #b45309) 18%, transparent);
-}
-.toolbar-select {
-  min-width: 120px;
-}
-.toolbar-check {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  color: var(--ink-soft);
-}
-@media (max-width: 760px) {
-  .group-head-actions {
-    width: 100%;
-  }
-  .group-head-actions button {
-    flex: 1 1 calc(50% - 6px);
-    min-height: 40px;
-  }
-}
-</style>

@@ -3,12 +3,12 @@
     <Transition name="modal-fade">
       <div
         v-if="open"
-        class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
+        class="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm p-0 sm:p-4"
         @click.self="close"
         @keydown.esc="close"
       >
         <div
-          class="relative flex w-full max-w-lg flex-col rounded-2xl border border-white/10 bg-[#0F172A] text-[#F8FAFC] shadow-2xl overflow-hidden"
+          class="relative flex w-full max-w-lg flex-col rounded-t-2xl sm:rounded-2xl border border-white/10 bg-[#0F172A] text-[#F8FAFC] shadow-2xl overflow-hidden pb-safe"
           role="dialog"
           aria-modal="true"
           aria-labelledby="export-modal-title"
@@ -21,7 +21,7 @@
             </div>
             <button
               type="button"
-              class="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-800 hover:text-white cursor-pointer transition-colors"
+              class="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-slate-400 hover:bg-slate-800 hover:text-white cursor-pointer transition-colors"
               aria-label="关闭导出弹窗"
               @click="close"
             >
@@ -143,10 +143,10 @@
             </div>
 
             <!-- Action Grid: Scheme Wakeup, Download Raw -->
-            <div class="grid grid-cols-2 gap-2.5 pt-1">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
               <a
                 :href="currentSchemeUrl"
-                class="flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 px-4 py-2.5 text-xs font-semibold text-white shadow-md hover:from-blue-500 hover:to-indigo-500 transition-all cursor-pointer text-center"
+                class="flex min-h-[44px] items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 px-4 py-2.5 text-xs font-semibold text-white shadow-md hover:from-blue-500 hover:to-indigo-500 transition-all cursor-pointer text-center"
               >
                 <span>{{ clientWakeupLabel }}</span>
               </a>
@@ -155,7 +155,7 @@
                 :href="currentExportUrl"
                 target="_blank"
                 rel="noreferrer"
-                class="flex items-center justify-center gap-1.5 rounded-xl border border-white/10 bg-[#1E293B] px-4 py-2.5 text-xs font-medium text-slate-200 hover:bg-slate-700/60 hover:text-white transition-all cursor-pointer text-center"
+                class="flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border border-white/10 bg-[#1E293B] px-4 py-2.5 text-xs font-medium text-slate-200 hover:bg-slate-700/60 hover:text-white transition-all cursor-pointer text-center"
               >
                 <span>⬇️ 下载 / 查看 {{ currentTargetDef.format }}</span>
               </a>

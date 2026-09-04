@@ -1736,6 +1736,21 @@ button:disabled {
 
   .modal-backdrop {
     align-items: flex-end;
+    padding: 0;
+  }
+
+  .modal {
+    width: 100% !important;
+    max-width: 100% !important;
+    max-height: 88vh !important;
+    border-bottom-left-radius: 0 !important;
+    border-bottom-right-radius: 0 !important;
+    border-top-left-radius: 20px !important;
+    border-top-right-radius: 20px !important;
+    border-left: none !important;
+    border-right: none !important;
+    border-bottom: none !important;
+    padding-bottom: max(1.25rem, env(safe-area-inset-bottom, 1.25rem)) !important;
   }
 
   input,
@@ -1743,12 +1758,19 @@ button:disabled {
   textarea,
   button {
     font-size: 16px;
+    min-height: 44px;
+  }
+
+  input[type="checkbox"],
+  input[type="radio"] {
+    min-height: auto;
   }
 
   .compact-actions button,
   .list-row button,
   .list-editor-head button {
     font-size: 14px;
+    min-height: 44px;
   }
 }
 

@@ -3,6 +3,7 @@ import { createPinia } from 'pinia'
 import router from './router'
 import App from './App.vue'
 import { syncTokenFromUrl } from './auth'
+import './assets/theme.css'
 import './style.css'
 
 syncTokenFromUrl()

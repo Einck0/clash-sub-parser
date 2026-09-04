@@ -73,11 +73,12 @@
       </button>
       <button
         type="button"
-        class="feature-chip"
+        class="feature-chip inline-flex items-center gap-1.5"
         :class="{ active: featureProbe }"
         @click="featureProbe = !featureProbe"
       >
-        ⚡ 质检筛选
+        <Zap class="h-3.5 w-3.5" aria-hidden="true" />
+        <span>质检筛选</span>
       </button>
     </div>
     <p class="section-hint">节点重命名作用在「加前缀之后」的名字上，策略组匹配的也是最终名。</p>
@@ -227,7 +228,10 @@
     <div v-if="featureProbe" class="selector-section">
       <div class="row space">
         <div>
-          <strong>⚡ 节点质检与流媒体/AI 过滤</strong>
+          <strong class="inline-flex items-center gap-1.5">
+            <Zap class="h-4 w-4 text-accent" aria-hidden="true" />
+            <span>节点质检与流媒体/AI 过滤</span>
+          </strong>
           <p class="section-hint">满足要求的节点才会进入本订阅的节点池。测速与流媒体需在节点测试中获得有效状态。</p>
         </div>
       </div>
@@ -249,9 +253,8 @@
           <label
             v-for="p in availablePlatforms"
             :key="p.id"
-            class="platform-chip"
+            class="platform-chip min-h-[36px] px-3 py-1.5 rounded-md border border-border-subtle text-xs flex items-center gap-1.5 cursor-pointer select-none transition-colors"
             :class="{ active: (form.filter_media_unlock || []).includes(p.id) }"
-            style="cursor: pointer; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border-color, #333); font-size: 0.85rem; display: flex; align-items: center; gap: 6px;"
           >
             <input
               type="checkbox"
@@ -304,6 +307,7 @@
 
 <script setup>
 import { computed, ref, watch } from 'vue'
+import { Zap } from 'lucide-vue-next'
 import { parseManualNodeYaml, serializeManualNode } from '../utils/manualNodeYaml'
 import { setDragGhost } from '../utils/drag'
 import { fetchSubscription, getApiErrorMessage } from '../api'

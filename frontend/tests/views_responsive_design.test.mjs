@@ -48,7 +48,7 @@ test('BaseDrawer and QuickExportModal adapt to Bottom Sheet on mobile with pb-sa
   assert.ok(fs.existsSync(drawerPath), 'BaseDrawer.vue should exist')
   const drawerContent = fs.readFileSync(drawerPath, 'utf8')
   assert.match(drawerContent, /pb-safe/, 'BaseDrawer should include pb-safe')
-  assert.match(drawerContent, /rounded-t-2xl/, 'BaseDrawer should have rounded top corners on mobile')
+  assert.match(drawerContent, /rounded-t-(?:2xl|lg)/, 'BaseDrawer should have rounded top corners on mobile')
   assert.match(drawerContent, /sm:hidden.*rounded-full/, 'BaseDrawer should have drag indicator on mobile')
 
   const exportPath = path.resolve(import.meta.dirname, '../src/components/QuickExportModal.vue')
@@ -56,7 +56,7 @@ test('BaseDrawer and QuickExportModal adapt to Bottom Sheet on mobile with pb-sa
   const exportContent = fs.readFileSync(exportPath, 'utf8')
   assert.match(exportContent, /pb-safe/, 'QuickExportModal should include pb-safe')
   assert.match(exportContent, /items-end sm:items-center/, 'QuickExportModal should align to bottom on mobile')
-  assert.match(exportContent, /rounded-t-2xl sm:rounded-2xl/, 'QuickExportModal should adapt to rounded top on mobile')
+  assert.match(exportContent, /rounded-t-(?:2xl|lg) sm:rounded-(?:2xl|lg)/, 'QuickExportModal should adapt to rounded top on mobile')
 })
 
 test('PageToolbar provides modern responsive input with min-height touch target', () => {

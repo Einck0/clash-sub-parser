@@ -1,31 +1,38 @@
 <template>
   <Teleport to="body">
-    <Transition name="modal-fade">
+    <Transition
+      enter-active-class="transition-opacity duration-200 ease-out"
+      enter-from-class="opacity-0"
+      enter-to-class="opacity-100"
+      leave-active-class="transition-opacity duration-150 ease-in"
+      leave-from-class="opacity-100"
+      leave-to-class="opacity-0"
+    >
       <div
         v-if="open"
-        class="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm p-0 sm:p-4"
+        class="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/75 p-0 sm:p-4"
         @click.self="close"
         @keydown.esc="close"
       >
         <div
-          class="relative flex w-full max-w-lg flex-col rounded-t-2xl sm:rounded-2xl border border-white/10 bg-[#0F172A] text-[#F8FAFC] shadow-2xl overflow-hidden pb-safe"
+          class="relative flex w-full max-w-lg flex-col rounded-t-lg sm:rounded-lg border border-border-subtle bg-surface-base text-text-main shadow-md overflow-hidden pb-safe"
           role="dialog"
           aria-modal="true"
           aria-labelledby="export-modal-title"
         >
           <!-- Header -->
-          <div class="flex items-center justify-between border-b border-white/10 px-6 py-4">
+          <div class="flex items-center justify-between border-b border-border-subtle px-6 py-4">
             <div>
-              <div class="text-[10px] font-mono tracking-wider text-blue-400 uppercase">Quick Export</div>
-              <h3 id="export-modal-title" class="text-lg font-semibold tracking-tight text-white">快速订阅与导出</h3>
+              <div class="text-[10px] font-mono tracking-wider text-accent uppercase">Quick Export</div>
+              <h3 id="export-modal-title" class="text-lg font-semibold tracking-tight text-text-main">快速订阅与导出</h3>
             </div>
             <button
               type="button"
-              class="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-slate-400 hover:bg-slate-800 hover:text-white cursor-pointer transition-colors"
+              class="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-text-muted hover:bg-surface-hover hover:text-text-main cursor-pointer transition-colors"
               aria-label="关闭导出弹窗"
               @click="close"
             >
-              ✕
+              <X class="h-4 w-4" aria-hidden="true" />
             </button>
           </div>
 
@@ -33,42 +40,44 @@
           <div class="flex flex-col gap-5 p-6 overflow-y-auto max-h-[85vh]">
             <!-- Mode Switcher: Merged vs Single Subscription -->
             <div class="flex flex-col gap-2">
-              <label class="text-xs font-medium text-slate-400">导出模式</label>
-              <div class="grid grid-cols-2 gap-2 rounded-xl bg-slate-900/60 p-1 border border-white/5">
+              <label class="text-xs font-medium text-text-muted">导出模式</label>
+              <div class="grid grid-cols-2 gap-2 rounded-lg bg-surface-base p-1 border border-border-subtle">
                 <button
                   type="button"
                   :class="[
-                    'flex items-center justify-center gap-2 rounded-lg py-2 text-xs font-medium transition-all cursor-pointer',
+                    'flex items-center justify-center gap-2 rounded-md py-2 text-xs font-medium transition-colors cursor-pointer',
                     exportMode === 'merged'
-                      ? 'bg-blue-600 text-white shadow-xs'
-                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
+                      ? 'bg-accent text-white shadow-xs'
+                      : 'text-text-muted hover:text-text-main hover:bg-surface-hover'
                   ]"
                   @click="exportMode = 'merged'"
                 >
-                  <span>🌐 合并配置</span>
+                  <Globe class="h-3.5 w-3.5" aria-hidden="true" />
+                  <span>合并配置</span>
                   <span class="text-[10px] opacity-80">(全部节点)</span>
                 </button>
                 <button
                   type="button"
                   :class="[
-                    'flex items-center justify-center gap-2 rounded-lg py-2 text-xs font-medium transition-all cursor-pointer',
+                    'flex items-center justify-center gap-2 rounded-md py-2 text-xs font-medium transition-colors cursor-pointer',
                     exportMode === 'subscription'
-                      ? 'bg-blue-600 text-white shadow-xs'
-                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
+                      ? 'bg-accent text-white shadow-xs'
+                      : 'text-text-muted hover:text-text-main hover:bg-surface-hover'
                   ]"
                   @click="exportMode = 'subscription'"
                 >
-                  <span>📋 单订阅独立导出</span>
+                  <FileText class="h-3.5 w-3.5" aria-hidden="true" />
+                  <span>单订阅独立导出</span>
                 </button>
               </div>
             </div>
 
             <!-- Single Subscription Dropdown (when mode is 'subscription') -->
-            <div v-if="exportMode === 'subscription'" class="flex flex-col gap-1.5 rounded-xl bg-slate-900/40 p-3 border border-white/5">
-              <label class="text-xs font-medium text-slate-300">选择订阅源</label>
+            <div v-if="exportMode === 'subscription'" class="flex flex-col gap-1.5 rounded-lg bg-surface-base p-3 border border-border-subtle">
+              <label class="text-xs font-medium text-text-muted">选择订阅源</label>
               <select
                 v-model="selectedSubscriptionId"
-                class="w-full rounded-lg border border-white/10 bg-[#1E293B] px-3 py-2 text-xs text-white focus:border-blue-500 focus:outline-hidden"
+                class="w-full rounded-md border border-border-subtle bg-surface-hover px-3 py-2 text-xs text-text-main focus:border-accent focus:outline-hidden"
               >
                 <option v-if="!subscriptionsList.length" :value="null">暂无可用的有效订阅</option>
                 <option
@@ -84,19 +93,19 @@
             <!-- Target Selection Tabs (5 Targets) -->
             <div class="flex flex-col gap-2">
               <div class="flex items-center justify-between">
-                <label class="text-xs font-medium text-slate-400">导出目标核心</label>
-                <span class="text-[10px] font-mono text-slate-500">{{ currentTargetDef.desc }}</span>
+                <label class="text-xs font-medium text-text-muted">导出目标核心</label>
+                <span class="text-[10px] font-mono text-text-muted">{{ currentTargetDef.desc }}</span>
               </div>
-              <div class="grid grid-cols-5 gap-1.5 rounded-xl bg-slate-900/60 p-1 border border-white/5">
+              <div class="grid grid-cols-5 gap-1.5 rounded-lg bg-surface-base p-1 border border-border-subtle">
                 <button
                   v-for="t in TARGET_DEFS"
                   :key="t.key"
                   type="button"
                   :class="[
-                    'flex flex-col items-center justify-center py-2 px-1 rounded-lg text-xs font-medium transition-all cursor-pointer',
+                    'flex flex-col items-center justify-center py-2 px-1 rounded-md text-xs font-medium transition-colors cursor-pointer',
                     selectedTarget === t.key
-                      ? 'bg-blue-600/20 text-blue-400 border border-blue-500/30 shadow-xs'
-                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 border border-transparent'
+                      ? 'bg-accent/15 text-accent border border-accent/30 shadow-xs'
+                      : 'text-text-muted hover:text-text-main hover:bg-surface-hover border border-transparent'
                   ]"
                   @click="selectedTarget = t.key"
                 >
@@ -108,37 +117,39 @@
 
             <!-- URL Input & One-click Copy -->
             <div class="flex flex-col gap-2">
-              <label class="flex items-center justify-between text-xs font-medium text-slate-400">
+              <label class="flex items-center justify-between text-xs font-medium text-text-muted">
                 <span>完整订阅链接</span>
-                <span class="font-mono text-[10px] text-slate-500">{{ currentTargetDef.badge }}</span>
+                <span class="font-mono text-[10px] text-text-muted">{{ currentTargetDef.badge }}</span>
               </label>
               <div class="flex gap-2">
                 <input
                   :value="currentExportUrl"
                   readonly
-                  class="flex-1 rounded-lg border border-white/10 bg-[#1E293B] px-3 py-2 font-mono text-xs text-slate-200 select-all focus:border-blue-500 focus:outline-hidden"
+                  class="flex-1 rounded-md border border-border-subtle bg-surface-hover px-3 py-2 font-mono text-xs text-text-main select-all focus:border-accent focus:outline-hidden"
                   @focus="($event.target as HTMLInputElement).select()"
                 />
                 <button
                   type="button"
                   :class="[
-                    'inline-flex items-center justify-center rounded-lg px-4 py-2 text-xs font-medium transition-all cursor-pointer shrink-0',
+                    'inline-flex items-center justify-center gap-1.5 rounded-md px-4 py-2 text-xs font-medium transition-colors cursor-pointer shrink-0',
                     copied
-                      ? 'bg-emerald-600 text-white'
-                      : 'bg-blue-600 text-white hover:bg-blue-500 active:scale-95'
+                      ? 'bg-success text-white'
+                      : 'bg-accent text-white hover:bg-accent-hover active:bg-accent-active'
                   ]"
                   @click="copyUrl"
                 >
-                  {{ copied ? '已复制！' : '复制链接' }}
+                  <Check v-if="copied" class="h-3.5 w-3.5" aria-hidden="true" />
+                  <Copy v-else class="h-3.5 w-3.5" aria-hidden="true" />
+                  <span>{{ copied ? '已复制！' : '复制链接' }}</span>
                 </button>
               </div>
             </div>
 
             <!-- QR Code Section -->
-            <div class="flex flex-col items-center justify-center rounded-xl bg-slate-900/40 p-4 border border-white/5 gap-2">
+            <div class="flex flex-col items-center justify-center rounded-lg bg-surface-base p-4 border border-border-subtle gap-2">
               <QrCode :url="currentQrPayload" :size="150" />
-              <p class="text-xs text-slate-400 text-center">
-                客户端扫码直接导入 <span class="text-blue-400 font-medium">{{ currentTargetDef.name }}</span>
+              <p class="text-xs text-text-muted text-center">
+                客户端扫码直接导入 <span class="text-accent font-medium">{{ currentTargetDef.name }}</span>
               </p>
             </div>
 
@@ -146,8 +157,9 @@
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
               <a
                 :href="currentSchemeUrl"
-                class="flex min-h-[44px] items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 px-4 py-2.5 text-xs font-semibold text-white shadow-md hover:from-blue-500 hover:to-indigo-500 transition-all cursor-pointer text-center"
+                class="flex min-h-[44px] items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 text-xs font-medium text-white shadow-xs hover:bg-accent-hover transition-colors cursor-pointer text-center"
               >
+                <ExternalLink class="h-4 w-4" aria-hidden="true" />
                 <span>{{ clientWakeupLabel }}</span>
               </a>
 
@@ -155,9 +167,10 @@
                 :href="currentExportUrl"
                 target="_blank"
                 rel="noreferrer"
-                class="flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border border-white/10 bg-[#1E293B] px-4 py-2.5 text-xs font-medium text-slate-200 hover:bg-slate-700/60 hover:text-white transition-all cursor-pointer text-center"
+                class="flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg border border-border-subtle bg-surface-base px-4 py-2.5 text-xs font-medium text-text-main hover:bg-surface-hover transition-colors cursor-pointer text-center"
               >
-                <span>⬇️ 下载 / 查看 {{ currentTargetDef.format }}</span>
+                <Download class="h-4 w-4" aria-hidden="true" />
+                <span>下载 / 查看 {{ currentTargetDef.format }}</span>
               </a>
             </div>
           </div>
@@ -169,6 +182,15 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import {
+  X,
+  Globe,
+  FileText,
+  Check,
+  Copy,
+  ExternalLink,
+  Download,
+} from 'lucide-vue-next'
 import { getQuickExport, getSubscriptions } from '../api'
 import { getAuthToken, withAuthToken } from '../auth'
 import { useAppStore } from '../stores/app'
@@ -309,17 +331,17 @@ const currentQrPayload = computed(() => {
 const clientWakeupLabel = computed(() => {
   switch (selectedTarget.value) {
     case 'clash':
-      return '🚀 一键导入 Clash'
+      return '一键导入 Clash'
     case 'mihomo':
-      return '🚀 一键导入 Mihomo'
+      return '一键导入 Mihomo'
     case 'stash':
-      return '💎 一键导入 Stash'
+      return '一键导入 Stash'
     case 'shadowrocket':
-      return '🚀 唤醒 Shadowrocket'
+      return '唤醒 Shadowrocket'
     case 'sing-box':
-      return '📦 一键导入 Sing-box'
+      return '一键导入 Sing-box'
     default:
-      return '🚀 唤醒客户端导入'
+      return '唤醒客户端导入'
   }
 })
 
@@ -405,14 +427,3 @@ async function copyUrl() {
   }
 }
 </script>
-
-<style scoped>
-.modal-fade-enter-active,
-.modal-fade-leave-active {
-  transition: opacity 0.2s ease;
-}
-.modal-fade-enter-from,
-.modal-fade-leave-to {
-  opacity: 0;
-}
-</style>

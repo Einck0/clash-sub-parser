@@ -1,60 +1,78 @@
 <template>
   <section class="page nodes-page p-2 space-y-6">
     <!-- Top Header -->
-    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pb-4 border-b border-white/10">
+    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pb-4 border-b border-border-subtle">
       <div>
-        <p class="text-xs font-mono text-blue-400 uppercase tracking-wider">Node Quality Control & Routing Ledger</p>
-        <h2 class="text-xl font-bold text-white tracking-tight">节点管理与质检中心</h2>
-        <p class="text-xs text-slate-400 mt-1">
+        <p class="text-xs font-mono text-accent uppercase tracking-wider">Node Quality Control & Routing Ledger</p>
+        <h2 class="text-xl font-bold text-text-main tracking-tight">节点管理与质检中心</h2>
+        <p class="text-xs text-text-muted mt-1">
           查看所有订阅与手动节点，进行真实出站握手测速、流媒体与 AI 解锁全项质检，以及配置跳板代理链路。
         </p>
       </div>
       <div class="flex flex-wrap items-center gap-2.5 w-full sm:w-auto">
-        <button
-          class="inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg border border-blue-500/40 bg-blue-600/20 px-4 py-2 text-xs font-medium text-blue-400 hover:bg-blue-600/30 transition-colors cursor-pointer flex-1 sm:flex-initial"
+        <Button
+          variant="primary"
+          size="md"
+          class="flex-1 sm:flex-initial"
           :disabled="probing || !rows.length"
+          :loading="probing"
+          :icon="Zap"
           @click="startProbeBatch(effectiveBatchTargets)"
         >
-          <span v-if="probing" class="inline-block h-3 w-3 animate-spin rounded-full border-2 border-solid border-current border-r-transparent"></span>
-          {{ probing ? `质检中 (${probeProgress.done}/${probeProgress.total})…` : '⚡ 综合质检' }}
-        </button>
-        <button
+          {{ probing ? `质检中 (${probeProgress.done}/${probeProgress.total})…` : '综合质检' }}
+        </Button>
+        <Button
           v-if="probing"
-          class="inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg border border-rose-500/40 bg-rose-600/20 px-3.5 py-2 text-xs font-medium text-rose-400 hover:bg-rose-600/30 transition-colors cursor-pointer flex-1 sm:flex-initial"
+          variant="danger"
+          size="md"
+          class="flex-1 sm:flex-initial"
+          :icon="Square"
           @click="cancelProbeBatch"
         >
           停止探测
-        </button>
-        <button
-          class="inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg border border-white/10 bg-slate-800/40 px-3.5 py-2 text-xs font-medium text-slate-300 hover:bg-slate-800 transition-colors cursor-pointer flex-1 sm:flex-initial"
+        </Button>
+        <Button
+          variant="secondary"
+          size="md"
+          class="flex-1 sm:flex-initial"
           :disabled="loading"
+          :icon="RefreshCw"
           @click="reload"
         >
-          🔄 刷新
-        </button>
+          刷新
+        </Button>
       </div>
     </div>
 
     <!-- Alert / Error Message -->
-    <div v-if="error" class="p-4 rounded-xl border border-rose-500/30 bg-rose-500/10 text-xs font-mono text-rose-400">
+    <div v-if="error" class="p-4 rounded-lg border border-status-danger/30 bg-status-danger/10 text-xs font-mono text-status-danger">
       {{ error }}
     </div>
 
     <!-- Live Probe Progress Banner -->
-    <div v-if="probing" class="p-4 rounded-xl border border-blue-500/30 bg-slate-900/60 backdrop-blur-md space-y-2">
+    <div v-if="probing" class="p-4 rounded-lg border border-accent/40 bg-surface-base space-y-2 shadow-xs">
       <div class="flex justify-between items-center text-xs font-mono">
-        <span class="text-blue-400 font-semibold">
-          全协议深度质检进行中: {{ probeProgress.done }} / {{ probeProgress.total }} ({{ probeProgressPercent }}%)
+        <span class="text-accent font-semibold">
+          全协议深度质检进行中: <span class="tabular-nums">{{ probeProgress.done }}</span> / <span class="tabular-nums">{{ probeProgress.total }}</span> (<span class="tabular-nums">{{ probeProgressPercent }}%</span>)
         </span>
-        <div class="flex gap-3">
-          <span class="text-emerald-400">🟢 正常: {{ probeProgress.ok }}</span>
-          <span class="text-rose-400">🔴 失败: {{ probeProgress.fail }}</span>
-          <span v-if="includeSpeedtest" class="text-cyan-400">🚀 测速中</span>
+        <div class="flex items-center gap-3">
+          <span class="text-status-success flex items-center gap-1">
+            <span class="h-1.5 w-1.5 rounded-full bg-status-success"></span>
+            正常: <span class="tabular-nums">{{ probeProgress.ok }}</span>
+          </span>
+          <span class="text-status-danger flex items-center gap-1">
+            <span class="h-1.5 w-1.5 rounded-full bg-status-danger"></span>
+            失败: <span class="tabular-nums">{{ probeProgress.fail }}</span>
+          </span>
+          <span v-if="includeSpeedtest" class="text-status-info flex items-center gap-1">
+            <Gauge class="h-3 w-3" aria-hidden="true" />
+            测速中
+          </span>
         </div>
       </div>
-      <div class="h-1.5 w-full overflow-hidden rounded-full bg-slate-800">
+      <div class="h-1.5 w-full overflow-hidden rounded-full bg-surface-active">
         <div
-          class="h-full bg-blue-500 transition-all duration-300"
+          class="h-full bg-accent duration-150"
           :style="{ width: `${probeProgressPercent}%` }"
         ></div>
       </div>
@@ -101,33 +119,33 @@
     />
 
     <!-- Selection indicator & quick select-all toolbar -->
-    <div class="flex items-center justify-between text-xs font-mono text-slate-400 px-1">
+    <div class="flex items-center justify-between text-xs font-mono text-text-muted px-1">
       <div class="flex items-center gap-3">
         <label class="inline-flex items-center gap-1.5 cursor-pointer select-none">
           <input
             type="checkbox"
             :checked="isAllFilteredSelected"
-            class="rounded border-white/20 bg-slate-900 text-blue-500 focus:ring-0"
+            class="rounded-sm border-border-strong bg-canvas text-accent focus:ring-0"
             @change="toggleSelectAllFiltered"
           />
-          <span>全选当前筛选节点 ({{ filteredRows.length }})</span>
+          <span>全选当前筛选节点 (<span class="tabular-nums">{{ filteredRows.length }}</span>)</span>
         </label>
-        <span v-if="selectedNodeNames.size > 0" class="text-blue-400">
-          已跨视口选中 {{ selectedNodeNames.size }} 个节点
+        <span v-if="selectedNodeNames.size > 0" class="text-accent">
+          已跨视口选中 <span class="tabular-nums font-semibold">{{ selectedNodeNames.size }}</span> 个节点
         </span>
       </div>
 
       <div v-if="viewMode === 'grid'" class="flex items-center gap-2">
         <button
-          class="px-2 py-1 rounded border border-white/10 bg-slate-800/40 text-slate-300 disabled:opacity-40"
+          class="px-2 py-1 rounded-md border border-border-subtle bg-surface-hover text-text-main disabled:opacity-40 cursor-pointer focus-ring"
           :disabled="gridPage <= 1"
           @click="gridPage--"
         >
           上一页
         </button>
-        <span>第 {{ gridPage }} / {{ totalGridPages }} 页</span>
+        <span class="tabular-nums">第 {{ gridPage }} / {{ totalGridPages }} 页</span>
         <button
-          class="px-2 py-1 rounded border border-white/10 bg-slate-800/40 text-slate-300 disabled:opacity-40"
+          class="px-2 py-1 rounded-md border border-border-subtle bg-surface-hover text-text-main disabled:opacity-40 cursor-pointer focus-ring"
           :disabled="gridPage >= totalGridPages"
           @click="gridPage++"
         >
@@ -139,41 +157,64 @@
     <!-- Empty State -->
     <div
       v-if="!filteredRows.length && !loading"
-      class="p-12 rounded-xl border border-dashed border-white/10 bg-slate-900/30 text-center space-y-3"
+      class="p-12 rounded-lg border border-dashed border-border-subtle bg-surface-base text-center space-y-3"
     >
-      <span class="text-3xl">🔍</span>
-      <p class="text-sm text-slate-300">没有找到符合当前筛选条件的节点</p>
-      <button
-        class="inline-flex items-center gap-1.5 rounded-lg border border-blue-500/40 bg-blue-600/20 px-3 py-1.5 text-xs text-blue-400 hover:bg-blue-600/30 cursor-pointer"
+      <Search class="h-8 w-8 text-text-sub mx-auto" aria-hidden="true" />
+      <p class="text-sm text-text-muted">没有找到符合当前筛选条件的节点</p>
+      <Button
+        variant="secondary"
+        size="sm"
         @click="resetFilters"
       >
         清空所有筛选条件
-      </button>
+      </Button>
     </div>
 
-    <!-- Node Virtual Table View (High Performance Virtualized for 2000+ Nodes) -->
-    <div v-else-if="viewMode === 'table'" class="space-y-4">
+    <!-- Node Virtual Table View (High Performance Virtualized for 2000+ Nodes, 36px Density) -->
+    <div v-else-if="viewMode === 'table'" class="space-y-1">
+      <!-- Table Column Headers -->
+      <div class="flex items-center justify-between px-4 py-2 border-b border-border-subtle bg-surface-hover/60 rounded-t-lg text-[11px] font-mono text-text-muted select-none uppercase tracking-wider">
+        <div class="flex items-center gap-3 min-w-0 flex-1">
+          <span class="w-4"></span>
+          <span>节点名称 / 协议</span>
+        </div>
+        <div class="hidden md:flex items-center gap-2 flex-1 min-w-0">
+          <span>服务器与端口</span>
+        </div>
+        <div class="hidden lg:flex items-center gap-2 flex-1 min-w-0">
+          <span>跳板链路</span>
+        </div>
+        <div class="flex items-center justify-end gap-4 shrink-0 text-right">
+          <span>状态 / 延迟</span>
+          <span class="hidden sm:inline">测速</span>
+          <span class="w-8">操作</span>
+        </div>
+      </div>
+
       <VirtualNodeTable
         :items="filteredRows"
-        :estimate-size="52"
+        :estimate-size="36"
         :selected-keys="selectedNodeNames"
+        class="border-t-0 rounded-t-none"
       >
         <template #default="{ item, isSelected }">
           <div
-            class="flex w-full items-center justify-between py-1.5 cursor-pointer select-none"
+            class="flex w-full h-[36px] items-center justify-between py-1 cursor-pointer select-none text-xs font-mono table-row-dense"
             @click="inspectNode(item)"
           >
-            <!-- Checkbox & Node Name & Protocol -->
-            <div class="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
+            <!-- Checkbox & Country Code & Node Name & Protocol -->
+            <div class="flex items-center gap-2 sm:gap-2.5 min-w-0 flex-1">
               <input
                 type="checkbox"
                 :checked="isSelected"
-                class="rounded border-white/20 bg-slate-900 text-blue-500 focus:ring-0 cursor-pointer shrink-0"
+                class="rounded-sm border-border-strong bg-canvas text-accent focus:ring-0 cursor-pointer shrink-0"
                 @click.stop="toggleSelectNode(item.name)"
               />
-              <span class="text-sm shrink-0">{{ getNodeFlagEmoji(item) }}</span>
+              <span class="px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-surface-active text-text-muted border border-border-subtle shrink-0 tabular-nums">
+                {{ resolveCountryCode(item) }}
+              </span>
               <span
-                class="text-xs font-mono font-bold text-white hover:text-blue-400 transition-colors truncate max-w-[140px] sm:max-w-xs"
+                class="font-medium text-text-main hover:text-accent transition-colors truncate max-w-[140px] sm:max-w-xs"
                 :title="item.name"
               >
                 {{ item.name }}
@@ -181,63 +222,65 @@
               <StatusBadge type="info" :text="(item.type || 'RAW').toUpperCase()" class="shrink-0" />
             </div>
 
-            <!-- Server & Port -->
-            <div class="hidden md:flex items-center gap-2 text-xs font-mono text-slate-400 flex-1">
-              <span class="truncate max-w-[180px]">{{ item.server }}</span>
-              <span class="text-slate-500">:{{ item.port }}</span>
-              <span v-if="item.subscription_name" class="text-[10px] text-slate-500 truncate max-w-[100px]">
+            <!-- Server & Port (Desktop) -->
+            <div class="hidden md:flex items-center gap-2 text-xs font-mono text-text-muted flex-1 min-w-0">
+              <span class="truncate max-w-[180px] tabular-nums">{{ item.server }}</span>
+              <span class="text-text-sub tabular-nums">:{{ item.port }}</span>
+              <span v-if="item.subscription_name" class="text-[10px] text-text-sub truncate max-w-[100px]">
                 [{{ item.subscription_name }}]
               </span>
             </div>
 
-            <!-- Dialer Chain Badge -->
-            <div class="hidden lg:flex items-center gap-2 flex-1">
+            <!-- Dialer Chain Badge (Large Desktop) -->
+            <div class="hidden lg:flex items-center gap-2 flex-1 min-w-0">
               <span
                 v-if="item.dialer_proxy"
-                class="inline-flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-mono border"
-                :class="item.chain_source === 'node' ? 'border-blue-500/30 bg-blue-500/10 text-blue-400' : 'border-purple-500/30 bg-purple-500/10 text-purple-400'"
+                class="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-mono border"
+                :class="item.chain_source === 'node' ? 'border-accent/30 bg-accent-subtle text-accent' : 'border-purple-500/30 bg-purple-500/10 text-purple-400'"
               >
-                🔗 {{ item.dialer_proxy }}
+                链: {{ item.dialer_proxy }}
               </span>
             </div>
 
             <!-- Probe Metrics & Quick Actions -->
-            <div class="flex items-center gap-3 font-mono text-xs">
+            <div class="flex items-center justify-end gap-3 font-mono text-xs shrink-0">
               <span
                 v-if="getProbe(item.name)?.status === 'ok'"
-                class="text-emerald-400 font-semibold"
+                class="text-status-success font-semibold tabular-nums"
               >
-                ⚡ {{ getProbe(item.name)?.latency_ms }}ms
+                {{ getProbe(item.name)?.latency_ms }}ms
               </span>
               <span
                 v-else-if="getProbe(item.name)?.status === 'fail'"
-                class="text-rose-400 font-semibold"
+                class="text-status-danger font-medium"
               >
-                🔴 失败
+                失败
               </span>
               <span
                 v-else-if="getProbe(item.name)?.status === 'timeout'"
-                class="text-amber-400 font-semibold"
+                class="text-status-warning font-medium"
               >
-                ⏱️ 超时
+                超时
               </span>
-              <span v-else class="text-slate-600">⚪ 未测</span>
+              <span v-else class="text-text-sub">
+                未测
+              </span>
 
               <span
                 v-if="getProbe(item.name)?.speed_mbps"
-                class="text-cyan-400 hidden sm:inline font-semibold"
+                class="text-status-info hidden sm:inline font-semibold tabular-nums"
               >
-                🚀 {{ getProbe(item.name)?.speed_mbps }}M
+                {{ getProbe(item.name)?.speed_mbps }}M
               </span>
 
-              <button
-                class="min-h-[36px] min-w-[36px] sm:min-h-[32px] sm:min-w-[32px] rounded border border-white/10 bg-slate-800/40 px-2 py-1 text-[11px] text-slate-300 hover:bg-slate-800 hover:text-white cursor-pointer flex items-center justify-center transition-colors"
-                title="单节点测速"
-                :disabled="probingSingleNodeKey === item.name"
+              <IconButton
+                :icon="Zap"
+                label="单节点测速"
+                size="sm"
+                variant="ghost"
+                :loading="probingSingleNodeKey === item.name"
                 @click.stop="handleProbeSingle(item)"
-              >
-                {{ probingSingleNodeKey === item.name ? '…' : '⚡' }}
-              </button>
+              />
             </div>
           </div>
         </template>
@@ -249,11 +292,11 @@
       <div
         v-for="item in pagedGridRows"
         :key="item.name"
-        class="flex flex-col justify-between p-4 rounded-xl border bg-slate-900/50 transition-all cursor-pointer backdrop-blur-md space-y-3"
+        class="flex flex-col justify-between p-4 rounded-lg border bg-surface-base transition-colors cursor-pointer space-y-3"
         :class="[
           selectedNodeNames.has(item.name)
-            ? 'border-blue-500/60 bg-blue-950/20'
-            : 'border-white/10 hover:border-blue-500/40'
+            ? 'border-accent bg-accent-subtle ring-1 ring-accent/30'
+            : 'border-border-subtle hover:border-border-strong hover:bg-surface-hover'
         ]"
         @click="inspectNode(item)"
       >
@@ -263,55 +306,63 @@
             <input
               type="checkbox"
               :checked="selectedNodeNames.has(item.name)"
-              class="rounded border-white/20 bg-slate-900 text-blue-500 focus:ring-0 cursor-pointer"
+              class="rounded-sm border-border-strong bg-canvas text-accent focus:ring-0 cursor-pointer shrink-0"
               @click.stop="toggleSelectNode(item.name)"
             />
-            <span class="text-sm">{{ getNodeFlagEmoji(item) }}</span>
-            <span class="text-sm font-semibold text-white truncate" :title="item.name">{{ item.name }}</span>
+            <span class="px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-surface-active text-text-muted border border-border-subtle shrink-0 tabular-nums">
+              {{ resolveCountryCode(item) }}
+            </span>
+            <span class="text-sm font-semibold text-text-main truncate" :title="item.name">{{ item.name }}</span>
           </div>
           <StatusBadge type="info" :text="(item.type || 'RAW').toUpperCase()" />
         </div>
 
         <!-- Endpoint & Subscription -->
-        <div class="text-xs font-mono text-slate-400 truncate flex justify-between">
+        <div class="text-xs font-mono text-text-muted truncate flex justify-between tabular-nums">
           <span>{{ item.server }}:{{ item.port }}</span>
-          <span v-if="item.subscription_name" class="text-slate-500">📁 {{ item.subscription_name }}</span>
+          <span v-if="item.subscription_name" class="text-text-sub truncate max-w-[120px]">[{{ item.subscription_name }}]</span>
         </div>
 
         <!-- Dialer Chain if set -->
-        <div v-if="item.dialer_proxy" class="text-xs font-mono text-blue-400 flex items-center gap-1">
-          <span>🔗 跳板: {{ item.dialer_proxy }}</span>
+        <div v-if="item.dialer_proxy" class="text-xs font-mono text-accent flex items-center gap-1">
+          <span>跳板: {{ item.dialer_proxy }}</span>
         </div>
 
         <!-- Probe Metrics Strip -->
-        <div class="flex items-center justify-between pt-2 border-t border-white/5 text-xs font-mono">
-          <span v-if="getProbe(item.name)?.status === 'ok'" class="text-emerald-400 font-semibold">
-            ⚡ {{ getProbe(item.name)?.latency_ms }}ms
+        <div class="flex items-center justify-between pt-2 border-t border-border-subtle text-xs font-mono">
+          <span v-if="getProbe(item.name)?.status === 'ok'" class="text-status-success font-semibold tabular-nums">
+            {{ getProbe(item.name)?.latency_ms }}ms
           </span>
-          <span v-else-if="getProbe(item.name)?.status === 'fail'" class="text-rose-400">🔴 失败</span>
-          <span v-else-if="getProbe(item.name)?.status === 'timeout'" class="text-amber-400">⏱️ 超时</span>
-          <span v-else class="text-slate-600">⚪ 未测</span>
+          <span v-else-if="getProbe(item.name)?.status === 'fail'" class="text-status-danger">失败</span>
+          <span v-else-if="getProbe(item.name)?.status === 'timeout'" class="text-status-warning">超时</span>
+          <span v-else class="text-text-sub">未测</span>
 
-          <span v-if="getProbe(item.name)?.speed_mbps" class="text-cyan-400 font-semibold">
-            🚀 {{ getProbe(item.name)?.speed_mbps }} Mbps
+          <span v-if="getProbe(item.name)?.speed_mbps" class="text-status-info font-semibold tabular-nums">
+            {{ getProbe(item.name)?.speed_mbps }} Mbps
           </span>
         </div>
 
         <!-- Footer Actions -->
-        <div class="flex gap-2 pt-2 border-t border-white/5">
-          <button
-            class="flex-1 py-1.5 rounded-lg border border-white/10 bg-slate-800/40 text-xs font-mono text-slate-300 hover:bg-slate-800 hover:text-white cursor-pointer text-center"
+        <div class="flex gap-2 pt-2 border-t border-border-subtle">
+          <Button
+            variant="secondary"
+            size="sm"
+            class="flex-1"
             @click.stop="inspectNode(item)"
           >
-            🔍 详情
-          </button>
-          <button
-            class="flex-1 py-1.5 rounded-lg border border-blue-500/30 bg-blue-600/20 text-xs font-mono text-blue-400 hover:bg-blue-600/30 cursor-pointer text-center"
+            详情
+          </Button>
+          <Button
+            variant="primary"
+            size="sm"
+            class="flex-1"
             :disabled="probingSingleNodeKey === item.name"
+            :loading="probingSingleNodeKey === item.name"
+            :icon="Zap"
             @click.stop="handleProbeSingle(item)"
           >
-            {{ probingSingleNodeKey === item.name ? '探测中…' : '⚡ 测速' }}
-          </button>
+            测速
+          </Button>
         </div>
       </div>
     </div>
@@ -337,6 +388,13 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import {
+  Gauge,
+  RefreshCw,
+  Search,
+  Square,
+  Zap,
+} from 'lucide-vue-next'
+import {
   clearProbeResults,
   createProxyChain,
   deleteProxyChain,
@@ -351,6 +409,8 @@ import {
 import LedgerDrawer from '../components/ledger/LedgerDrawer.vue'
 import LedgerMetricsBar from '../components/ledger/LedgerMetricsBar.vue'
 import LedgerSearchFilter from '../components/ledger/LedgerSearchFilter.vue'
+import Button from '../components/ui/Button.vue'
+import IconButton from '../components/ui/IconButton.vue'
 import StatusBadge from '../components/ui/StatusBadge.vue'
 import VirtualNodeTable from '../components/ui/VirtualNodeTable.vue'
 import { useAppStore } from '../stores/app'
@@ -359,7 +419,6 @@ import {
   buildEffectiveBatchTargets,
   clearNodeDialerProxy,
   computeFilterOptions,
-  COUNTRY_FLAG_MAP,
   filterAndSortNodes,
   getProbeForNode,
   MEDIA_PLATFORMS,
@@ -518,10 +577,10 @@ function getProbe(name: string): ProbeRecord | undefined {
   return probes.value[name]
 }
 
-function getNodeFlagEmoji(node: LedgerNodeItem): string {
+function resolveCountryCode(node: LedgerNodeItem): string {
   const p = getProbeForNode(probes.value, node)
   const code = resolveNodeCountryCode(node, p)
-  return COUNTRY_FLAG_MAP[code] || '🌐'
+  return code === 'OTHER' ? '--' : code
 }
 
 function toggleSelectNode(name: string) {

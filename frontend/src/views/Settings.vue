@@ -91,7 +91,7 @@
       <div class="dns-section settings-card wide">
         <div class="section-title-row">
           <div>
-            <h3>⚡ 节点检测与测速设置</h3>
+            <h3><Activity :size="16" aria-hidden="true" /> 节点检测与测速设置</h3>
             <p class="section-hint">配置全协议代理握手、真实出口 IP/国家识别、流媒体与 AI 解锁测试及受控带宽测速。</p>
           </div>
           <span class="sync-pill" :class="{ ok: probeConfig.probe_enabled }">
@@ -122,7 +122,6 @@
               :key="p.id"
               class="platform-chip"
               :class="{ active: probeConfig.media_platforms.includes(p.id) }"
-              style="cursor: pointer; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border-color, #333); font-size: 0.85rem; display: flex; align-items: center; gap: 6px;"
             >
               <input
                 type="checkbox"
@@ -243,6 +242,7 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
+import { Activity } from 'lucide-vue-next'
 import { useAppStore } from '../stores/app'
 import { formatBytes, formatDate } from '../utils/format'
 import {
@@ -549,10 +549,20 @@ function generateToken() {
 }
 </script>
 
-<style scoped>
+<style>
 .import-label {
   display: inline-flex;
   cursor: pointer;
+}
+.platform-chip {
+  cursor: pointer;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  font-size: 0.85rem;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 .import-label input[type="file"] {
   display: none;
@@ -562,8 +572,8 @@ function generateToken() {
   padding: 6px 14px;
   border: 1px solid var(--color-border, #444);
   border-radius: 6px;
-  background: var(--color-bg-secondary, #2a2a2a);
-  color: var(--color-text, #eee);
+  background: var(--color-surface-base);
+  color: var(--color-text-main);
   font-size: 0.875rem;
   line-height: 1.4;
   text-align: center;
@@ -571,7 +581,7 @@ function generateToken() {
   user-select: none;
 }
 .button-like:hover {
-  background: var(--color-bg-tertiary, #333);
+  background: var(--color-surface-hover);
 }
 .import-label.disabled {
   pointer-events: none;

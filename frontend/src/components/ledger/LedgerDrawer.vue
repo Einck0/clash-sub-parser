@@ -2,101 +2,99 @@
   <BaseDrawer :model-value="open" :title="node ? node.name : '节点详情'" @close="$emit('close')">
     <div v-if="node" class="space-y-6 text-xs font-mono">
       <!-- Tabs header -->
-      <div class="flex items-center gap-2 border-b border-white/10 pb-2">
+      <div class="flex items-center gap-2 border-b border-border-subtle pb-2">
         <button
           v-for="tab in tabs"
           :key="tab.id"
-          class="min-h-[44px] rounded-lg px-3.5 py-2 text-xs font-medium transition-colors cursor-pointer flex items-center justify-center"
+          class="min-h-[44px] rounded-md px-3.5 py-2 text-xs font-medium transition-colors cursor-pointer flex items-center justify-center gap-1.5 focus-ring"
           :class="[
             activeTab === tab.id
-              ? 'border border-blue-500/40 bg-blue-600/20 text-blue-400'
-              : 'border border-transparent text-slate-400 hover:text-white'
+              ? 'border border-accent/40 bg-accent-subtle text-accent font-semibold'
+              : 'border border-transparent text-text-muted hover:text-text-main hover:bg-surface-hover'
           ]"
           @click="activeTab = tab.id"
         >
-          {{ tab.name }}
+          <component :is="tab.icon" class="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          <span>{{ tab.name }}</span>
         </button>
       </div>
 
       <!-- Tab 1: Diagnostics -->
       <div v-if="activeTab === 'diagnostics'" class="space-y-4">
         <!-- Node Basic Info -->
-        <div class="rounded-xl border border-white/10 bg-slate-900/60 p-4 space-y-2">
-          <div class="flex justify-between items-center pb-2 border-b border-white/5">
-            <span class="text-slate-400">PROTOCOL</span>
+        <div class="rounded-lg border border-border-subtle bg-surface-base p-4 space-y-2">
+          <div class="flex justify-between items-center pb-2 border-b border-border-subtle">
+            <span class="text-text-muted uppercase">PROTOCOL</span>
             <StatusBadge type="info" :text="(node.type || 'unknown').toUpperCase()" />
           </div>
           <div class="flex justify-between items-center py-1">
-            <span class="text-slate-400">SERVER</span>
-            <span class="text-white select-all">{{ node.server }}</span>
+            <span class="text-text-muted uppercase">SERVER</span>
+            <span class="text-text-main select-all tabular-nums">{{ node.server }}</span>
           </div>
           <div class="flex justify-between items-center py-1">
-            <span class="text-slate-400">PORT</span>
-            <span class="text-white">{{ node.port }}</span>
+            <span class="text-text-muted uppercase">PORT</span>
+            <span class="text-text-main tabular-nums">{{ node.port }}</span>
           </div>
           <div v-if="node.subscription_name" class="flex justify-between items-center py-1">
-            <span class="text-slate-400">SUBSCRIPTION</span>
-            <span class="text-slate-300">📁 {{ node.subscription_name }}</span>
+            <span class="text-text-muted uppercase">SUBSCRIPTION</span>
+            <span class="text-text-muted truncate max-w-[200px]">{{ node.subscription_name }}</span>
           </div>
         </div>
 
         <!-- Outbound & Probing Results -->
-        <div class="rounded-xl border border-white/10 bg-slate-900/60 p-4 space-y-3">
-          <div class="text-slate-300 font-semibold border-b border-white/5 pb-2 flex items-center justify-between">
-            <span>PROBE & CAPABILITIES</span>
+        <div class="rounded-lg border border-border-subtle bg-surface-base p-4 space-y-3">
+          <div class="text-text-main font-semibold border-b border-border-subtle pb-2 flex items-center justify-between">
+            <span class="uppercase">PROBE & CAPABILITIES</span>
             <StatusBadge
               :type="probe?.status === 'ok' ? 'success' : (probe?.status === 'fail' ? 'danger' : 'neutral')"
               :text="probe?.status ? probe.status.toUpperCase() : 'UNTESTED'"
             />
           </div>
           <div class="flex justify-between items-center py-1">
-            <span class="text-slate-400">LATENCY</span>
-            <span :class="probe?.latency_ms ? 'text-emerald-400 font-bold' : 'text-slate-500'">
+            <span class="text-text-muted uppercase">LATENCY</span>
+            <span :class="probe?.latency_ms ? 'text-status-success font-bold tabular-nums' : 'text-text-sub'">
               {{ probe?.latency_ms ? `${probe.latency_ms} ms` : 'N/A' }}
             </span>
           </div>
           <div class="flex justify-between items-center py-1">
-            <span class="text-slate-400">OUTBOUND IP</span>
-            <span class="text-white font-mono select-all">{{ probe?.ip || probe?.outbound_ip || 'N/A' }}</span>
+            <span class="text-text-muted uppercase">OUTBOUND IP</span>
+            <span class="text-text-main font-mono tabular-nums select-all">{{ probe?.ip || probe?.outbound_ip || 'N/A' }}</span>
           </div>
           <div class="flex justify-between items-center py-1">
-            <span class="text-slate-400">COUNTRY / REGION</span>
-            <span class="text-white">{{ probe?.country || nodeCountry || 'N/A' }}</span>
+            <span class="text-text-muted uppercase">COUNTRY / REGION</span>
+            <span class="text-text-main">{{ probe?.country || nodeCountry || 'N/A' }}</span>
           </div>
           <div class="flex justify-between items-center py-1">
-            <span class="text-slate-400">ASN & ORG</span>
-            <span class="text-slate-300 truncate max-w-[220px]" :title="probeOrgText">
+            <span class="text-text-muted uppercase">ASN & ORG</span>
+            <span class="text-text-muted truncate max-w-[220px]" :title="probeOrgText">
               {{ probeOrgText }}
             </span>
           </div>
           <div class="flex justify-between items-center py-1">
-            <span class="text-slate-400">SPEED (DOWN)</span>
-            <span :class="probe?.speed_mbps ? 'text-cyan-400 font-bold' : 'text-slate-500'">
+            <span class="text-text-muted uppercase">SPEED (DOWN)</span>
+            <span :class="probe?.speed_mbps ? 'text-status-info font-bold tabular-nums' : 'text-text-sub'">
               {{ probe?.speed_mbps ? `${probe.speed_mbps} Mbps` : 'N/A' }}
             </span>
           </div>
-          <div v-if="probe?.error" class="p-2.5 rounded-lg border border-rose-500/20 bg-rose-500/10 text-rose-400">
+          <div v-if="probe?.error" class="p-2.5 rounded-md border border-status-danger/30 bg-status-danger/10 text-status-danger">
             {{ probe.error }}
           </div>
         </div>
 
         <!-- Media Unlocks List -->
-        <div class="rounded-xl border border-white/10 bg-slate-900/60 p-4 space-y-2.5">
-          <span class="text-slate-300 font-semibold block pb-1 border-b border-white/5">
-            🎬 STREAMING & AI UNLOCKS
+        <div class="rounded-lg border border-border-subtle bg-surface-base p-4 space-y-2.5">
+          <span class="text-text-main font-semibold block pb-1 border-b border-border-subtle uppercase">
+            STREAMING & AI UNLOCKS
           </span>
           <div class="grid grid-cols-2 gap-2 pt-1">
             <div
               v-for="platform in mediaPlatformList"
               :key="platform.key"
-              class="flex items-center justify-between p-2 rounded-lg border border-white/5 bg-slate-950/40"
+              class="flex items-center justify-between p-2 rounded-md border border-border-subtle bg-canvas"
             >
-              <div class="flex items-center gap-1.5">
-                <span>{{ platform.icon }}</span>
-                <span class="text-slate-300">{{ platform.name }}</span>
-              </div>
+              <span class="text-text-main font-medium">{{ platform.name }}</span>
               <span
-                class="rounded px-1.5 py-0.5 text-[10px] font-bold"
+                class="rounded px-1.5 py-0.5 text-[10px] font-bold font-mono"
                 :class="getMediaStatusBadgeClass(probe?.media?.[platform.key])"
               >
                 {{ getMediaStatusLabel(probe?.media?.[platform.key]) }}
@@ -109,65 +107,69 @@
       <!-- Tab 2: Dialer Chain Management -->
       <div v-else-if="activeTab === 'chain'" class="space-y-4">
         <!-- Current Effective Chain Card -->
-        <div class="rounded-xl border border-white/10 bg-slate-900/60 p-4 space-y-3">
-          <div class="flex justify-between items-center border-b border-white/5 pb-2">
-            <span class="text-slate-300 font-semibold">当前生效跳板链路</span>
+        <div class="rounded-lg border border-border-subtle bg-surface-base p-4 space-y-3">
+          <div class="flex justify-between items-center border-b border-border-subtle pb-2">
+            <span class="text-text-main font-semibold">当前生效跳板链路</span>
             <span
               v-if="node.dialer_proxy"
-              class="rounded-full px-2 py-0.5 text-[10px] font-mono"
-              :class="node.chain_source === 'node' ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30' : 'bg-purple-500/20 text-purple-400 border border-purple-500/30'"
+              class="rounded-full px-2 py-0.5 text-[10px] font-mono border"
+              :class="node.chain_source === 'node' ? 'bg-accent-subtle text-accent border-accent/30' : 'bg-purple-500/20 text-purple-400 border-purple-500/30'"
             >
               {{ sourceLabel(node.chain_source) }}
             </span>
-            <span v-else class="text-slate-500 text-xs">直连 (未挂链)</span>
+            <span v-else class="text-text-sub text-xs">直连 (未挂链)</span>
           </div>
 
           <div v-if="node.dialer_proxy" class="flex justify-between items-center py-1">
-            <span class="text-slate-400">DIALER PROXY</span>
-            <strong class="text-blue-400 select-all font-mono">🔗 {{ node.dialer_proxy }}</strong>
+            <span class="text-text-muted">DIALER PROXY</span>
+            <strong class="text-accent select-all font-mono">{{ node.dialer_proxy }}</strong>
           </div>
 
           <!-- Notice if inherited -->
           <div
             v-if="node.dialer_proxy && node.chain_source !== 'node'"
-            class="p-2.5 rounded-lg border border-purple-500/30 bg-purple-950/20 text-purple-300 text-[11px]"
+            class="p-2.5 rounded-md border border-purple-500/30 bg-purple-950/20 text-purple-300 text-[11px]"
           >
-            ℹ️ 当前跳板继承自{{ sourceLabel(node.chain_source) }}。若在此处保存新跳板，将创建专属节点级绑定并优先覆盖继承。
+            当前跳板继承自{{ sourceLabel(node.chain_source) }}。若在此处保存新跳板，将创建专属节点级绑定并优先覆盖继承。
           </div>
 
           <!-- Clear chain button (only if node-level) -->
-          <div v-if="node.dialer_proxy && node.chain_source === 'node'" class="pt-2 border-t border-white/5">
-            <button
-              class="w-full py-2 rounded-lg border border-rose-500/30 bg-rose-600/20 text-rose-400 font-medium hover:bg-rose-600/30 transition-colors cursor-pointer text-center"
+          <div v-if="node.dialer_proxy && node.chain_source === 'node'" class="pt-2 border-t border-border-subtle">
+            <Button
+              variant="danger"
+              size="md"
+              class="w-full"
               :disabled="clearingChain"
+              :loading="clearingChain"
+              :icon="Trash2"
               @click="$emit('clear-chain', node)"
             >
-              {{ clearingChain ? '正在清链…' : '🗑️ 清除专属节点级跳板' }}
-            </button>
+              {{ clearingChain ? '正在清链…' : '清除专属节点级跳板' }}
+            </Button>
           </div>
         </div>
 
         <!-- Configure New / Replace Chain Card -->
-        <div class="rounded-xl border border-white/10 bg-slate-900/60 p-4 space-y-3">
-          <span class="text-slate-300 font-semibold block pb-1 border-b border-white/5">
+        <div class="rounded-lg border border-border-subtle bg-surface-base p-4 space-y-3">
+          <span class="text-text-main font-semibold block pb-1 border-b border-border-subtle">
             设置 / 替换跳板
           </span>
 
           <div class="space-y-2">
-            <label class="text-slate-400 block">跳板目标类型</label>
+            <label class="text-text-muted block">跳板目标类型</label>
             <div class="flex gap-2">
               <button
                 type="button"
-                class="flex-1 min-h-[44px] py-1.5 rounded-lg border text-xs cursor-pointer transition-colors flex items-center justify-center"
-                :class="chainForm.dialer_type === 'node' ? 'border-blue-500 bg-blue-600/20 text-white font-bold' : 'border-white/10 text-slate-400 hover:text-white'"
+                class="flex-1 min-h-[44px] py-1.5 rounded-md border text-xs cursor-pointer transition-colors flex items-center justify-center focus-ring"
+                :class="chainForm.dialer_type === 'node' ? 'border-accent bg-accent-subtle text-accent font-bold ring-1 ring-accent/30' : 'border-border-subtle text-text-muted hover:text-text-main hover:bg-surface-hover'"
                 @click="chainForm.dialer_type = 'node'"
               >
                 节点 (Node)
               </button>
               <button
                 type="button"
-                class="flex-1 min-h-[44px] py-1.5 rounded-lg border text-xs cursor-pointer transition-colors flex items-center justify-center"
-                :class="chainForm.dialer_type === 'node_group' ? 'border-blue-500 bg-blue-600/20 text-white font-bold' : 'border-white/10 text-slate-400 hover:text-white'"
+                class="flex-1 min-h-[44px] py-1.5 rounded-md border text-xs cursor-pointer transition-colors flex items-center justify-center focus-ring"
+                :class="chainForm.dialer_type === 'node_group' ? 'border-accent bg-accent-subtle text-accent font-bold ring-1 ring-accent/30' : 'border-border-subtle text-text-muted hover:text-text-main hover:bg-surface-hover'"
                 @click="chainForm.dialer_type = 'node_group'"
               >
                 策略组 (Node Group)
@@ -176,16 +178,16 @@
           </div>
 
           <div class="space-y-2">
-            <label class="text-slate-400 block">选择前置跳板代理</label>
+            <label class="text-text-muted block">选择前置跳板代理</label>
             <input
               v-model.trim="dialerSearch"
               type="text"
               placeholder="搜索可用跳板名称..."
-              class="w-full min-h-[44px] rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-white placeholder-slate-500 focus:border-blue-500 focus:outline-hidden font-mono"
+              class="w-full min-h-[44px] rounded-md border border-border-subtle bg-canvas px-3 py-2 text-xs text-text-main placeholder:text-text-sub focus:border-accent focus:outline-hidden font-mono"
             />
             <select
               v-model="chainForm.dialer_ref"
-              class="w-full min-h-[44px] rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-slate-200 focus:border-blue-500 focus:outline-hidden font-mono"
+              class="w-full min-h-[44px] rounded-md border border-border-subtle bg-surface-hover px-3 py-2 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono cursor-pointer"
             >
               <option value="">-- 请选择跳板目标 --</option>
               <template v-if="chainForm.dialer_type === 'node'">
@@ -201,29 +203,33 @@
             </select>
           </div>
 
-          <button
-            class="w-full min-h-[44px] py-2.5 rounded-lg border border-blue-500/40 bg-blue-600/30 text-blue-300 font-medium hover:bg-blue-600/40 transition-colors cursor-pointer text-center mt-2 flex items-center justify-center"
+          <Button
+            variant="primary"
+            size="md"
+            class="w-full mt-2"
             :disabled="!chainForm.dialer_ref || savingChain"
+            :loading="savingChain"
+            :icon="LinkIcon"
             @click="submitSaveChain"
           >
-            {{ savingChain ? '保存中…' : '🔗 保存跳板配置' }}
-          </button>
+            {{ savingChain ? '保存中…' : '保存跳板配置' }}
+          </Button>
         </div>
       </div>
 
       <!-- Tab 3: Node Raw Parameters -->
       <div v-else-if="activeTab === 'params'" class="space-y-4">
-        <div class="rounded-xl border border-white/10 bg-slate-900/60 p-4 space-y-2">
-          <span class="text-slate-300 font-semibold block pb-2 border-b border-white/5">
+        <div class="rounded-lg border border-border-subtle bg-surface-base p-4 space-y-2">
+          <span class="text-text-main font-semibold block pb-2 border-b border-border-subtle uppercase">
             NODE PARAMETERS
           </span>
           <div
             v-for="(val, key) in cleanNodeParams"
             :key="key"
-            class="flex justify-between items-center py-1 border-b border-white/5"
+            class="flex justify-between items-center py-1 border-b border-border-subtle"
           >
-            <span class="text-slate-400">{{ key }}</span>
-            <span class="text-white font-mono select-all truncate max-w-[260px]" :title="String(val)">
+            <span class="text-text-muted">{{ key }}</span>
+            <span class="text-text-main font-mono tabular-nums select-all truncate max-w-[260px]" :title="String(val)">
               {{ typeof val === 'object' ? JSON.stringify(val) : String(val) }}
             </span>
           </div>
@@ -232,43 +238,50 @@
 
       <!-- Tab 4: JSON Previews -->
       <div v-else-if="activeTab === 'json'" class="space-y-4">
-        <div class="rounded-xl border border-white/10 bg-slate-900/60 p-4 space-y-3">
-          <div class="flex justify-between items-center border-b border-white/5 pb-2">
-            <span class="text-slate-300 font-semibold">SING-BOX OUTBOUND JSON</span>
-            <button
-              class="rounded-md border border-white/10 bg-slate-800/60 px-2.5 py-1 text-slate-300 hover:text-white cursor-pointer"
+        <div class="rounded-lg border border-border-subtle bg-surface-base p-4 space-y-3">
+          <div class="flex justify-between items-center border-b border-border-subtle pb-2">
+            <span class="text-text-main font-semibold uppercase">SING-BOX OUTBOUND JSON</span>
+            <Button
+              variant="secondary"
+              size="sm"
+              :icon="Copy"
               @click="copyText(singboxJsonPreview)"
             >
-              📋 复制
-            </button>
+              复制
+            </Button>
           </div>
-          <pre class="rounded-lg bg-slate-950 p-3 text-[11px] text-sky-400 overflow-auto max-h-60 font-mono">{{ singboxJsonPreview }}</pre>
+          <pre class="rounded-md bg-canvas p-3 text-[11px] text-accent overflow-auto max-h-60 font-mono tabular-nums border border-border-subtle">{{ singboxJsonPreview }}</pre>
         </div>
 
-        <div class="rounded-xl border border-white/10 bg-slate-900/60 p-4 space-y-3">
-          <div class="flex justify-between items-center border-b border-white/5 pb-2">
-            <span class="text-slate-300 font-semibold">CLASH PROXY JSON</span>
-            <button
-              class="rounded-md border border-white/10 bg-slate-800/60 px-2.5 py-1 text-slate-300 hover:text-white cursor-pointer"
+        <div class="rounded-lg border border-border-subtle bg-surface-base p-4 space-y-3">
+          <div class="flex justify-between items-center border-b border-border-subtle pb-2">
+            <span class="text-text-main font-semibold uppercase">CLASH PROXY JSON</span>
+            <Button
+              variant="secondary"
+              size="sm"
+              :icon="Copy"
               @click="copyText(clashJsonPreview)"
             >
-              📋 复制
-            </button>
+              复制
+            </Button>
           </div>
-          <pre class="rounded-lg bg-slate-950 p-3 text-[11px] text-cyan-400 overflow-auto max-h-60 font-mono">{{ clashJsonPreview }}</pre>
+          <pre class="rounded-md bg-canvas p-3 text-[11px] text-text-muted overflow-auto max-h-60 font-mono tabular-nums border border-border-subtle">{{ clashJsonPreview }}</pre>
         </div>
       </div>
 
       <!-- Footer Action: Probe Single Node -->
-      <div class="pt-2 border-t border-white/10">
-        <button
-          class="w-full py-2.5 rounded-lg border border-blue-500/40 bg-blue-600/20 text-blue-400 font-medium hover:bg-blue-600/30 transition-colors cursor-pointer text-center inline-flex items-center justify-center gap-2"
+      <div class="pt-2 border-t border-border-subtle">
+        <Button
+          variant="primary"
+          size="lg"
+          class="w-full"
           :disabled="probingSingle"
+          :loading="probingSingle"
+          :icon="Zap"
           @click="$emit('probe-single', node)"
         >
-          <span v-if="probingSingle" class="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-solid border-current border-r-transparent"></span>
-          {{ probingSingle ? '质检探测执行中…' : '⚡ 单节点测速质检' }}
-        </button>
+          {{ probingSingle ? '质检探测执行中…' : '单节点测速质检' }}
+        </Button>
       </div>
     </div>
   </BaseDrawer>
@@ -276,7 +289,17 @@
 
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
+import {
+  Activity,
+  Copy,
+  FileCode,
+  Link as LinkIcon,
+  Sliders,
+  Trash2,
+  Zap,
+} from 'lucide-vue-next'
 import BaseDrawer from '../ui/BaseDrawer.vue'
+import Button from '../ui/Button.vue'
 import StatusBadge from '../ui/StatusBadge.vue'
 import {
   COUNTRY_NAME_MAP,
@@ -315,10 +338,10 @@ const emit = defineEmits<{
 }>()
 
 const tabs = [
-  { id: 'diagnostics', name: '📊 真实诊断' },
-  { id: 'chain', name: '🔗 跳板设置' },
-  { id: 'params', name: '⚙️ 原始参数' },
-  { id: 'json', name: '📦 JSON预览' },
+  { id: 'diagnostics', name: '真实诊断', icon: Activity },
+  { id: 'chain', name: '跳板设置', icon: LinkIcon },
+  { id: 'params', name: '原始参数', icon: Sliders },
+  { id: 'json', name: 'JSON预览', icon: FileCode },
 ]
 
 const activeTab = ref('diagnostics')
@@ -422,14 +445,14 @@ function getMediaStatusLabel(m: any): string {
 }
 
 function getMediaStatusBadgeClass(m: any): string {
-  if (!m) return 'bg-white/5 text-slate-500'
+  if (!m) return 'bg-surface-active text-text-sub border border-border-subtle'
   if (m.status === 'ok' || m.status === 'full' || m.unlocked === true) {
-    return 'bg-emerald-500/20 text-emerald-400'
+    return 'bg-status-success/15 text-status-success border border-status-success/30'
   }
   if (m.status === 'originals') {
-    return 'bg-amber-500/20 text-amber-400'
+    return 'bg-status-warning/15 text-status-warning border border-status-warning/30'
   }
-  return 'bg-rose-500/20 text-rose-400'
+  return 'bg-status-danger/15 text-status-danger border border-status-danger/30'
 }
 
 function submitSaveChain() {

@@ -5,7 +5,8 @@
     aria-label="节点质检与路由账本表格"
     :aria-rowcount="items.length"
     tabindex="0"
-    class="relative h-[650px] overflow-auto border border-white/10 rounded-xl bg-slate-900/60 backdrop-blur-md focus:outline-hidden focus:ring-1 focus:ring-blue-500/30"
+    class="relative h-[650px] overflow-auto border border-border-subtle rounded-lg bg-surface-base focus:outline-hidden focus-visible:ring-2 focus-visible:ring-accent"
+    @keydown="handleKeyDown"
   >
     <div
       role="rowgroup"
@@ -29,7 +30,7 @@
           height: `${virtualRow.size}px`,
           transform: `translateY(${virtualRow.start}px)`,
         }"
-        class="flex items-center px-4 border-b border-white/5 hover:bg-slate-800/40 transition-colors text-sm"
+        class="flex items-center px-4 border-b border-border-subtle/50 hover:bg-surface-hover transition-colors text-sm"
       >
         <slot
           :item="items[virtualRow.index]"
@@ -74,5 +75,40 @@ const rowVirtualizer = useVirtualizer({
 function getItemKey(item: T): string {
   if (!item) return ''
   return item[props.keyField] || ''
+}
+
+function handleKeyDown(e: KeyboardEvent) {
+  const el = containerRef.value
+  if (!el) return
+
+  const step = props.estimateSize
+  const pageStep = el.clientHeight || step * 10
+
+  switch (e.key) {
+    case 'ArrowDown':
+      e.preventDefault()
+      el.scrollTop += step
+      break
+    case 'ArrowUp':
+      e.preventDefault()
+      el.scrollTop -= step
+      break
+    case 'PageDown':
+      e.preventDefault()
+      el.scrollTop += pageStep
+      break
+    case 'PageUp':
+      e.preventDefault()
+      el.scrollTop -= pageStep
+      break
+    case 'Home':
+      e.preventDefault()
+      el.scrollTop = 0
+      break
+    case 'End':
+      e.preventDefault()
+      el.scrollTop = el.scrollHeight
+      break
+  }
 }
 </script>

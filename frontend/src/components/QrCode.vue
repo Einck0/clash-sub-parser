@@ -1,44 +1,29 @@
 <template>
-  <div class="qr-wrapper" v-if="url">
+  <div v-if="url" class="inline-flex items-center justify-center">
     <img
       v-if="!error"
       :src="qrUrl"
       :alt="'QR Code for ' + url"
-      class="qr-image"
+      class="rounded-md border border-border-subtle"
       @error="error = true"
     />
-    <div v-else class="qr-fallback muted">QR 加载失败</div>
+    <div v-else class="text-xs p-2 text-text-muted">QR 加载失败</div>
   </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { computed, ref } from 'vue'
 
-const props = defineProps({
-  url: { type: String, default: '' },
-  size: { type: Number, default: 160 },
-})
+const props = defineProps<{
+  url?: string
+  size?: number
+}>()
 
 const error = ref(false)
 
 const qrUrl = computed(() => {
   if (!props.url) return ''
-  return `https://api.qrserver.com/v1/create-qr-code/?size=${props.size}x${props.size}&data=${encodeURIComponent(props.url)}&margin=4`
+  const size = props.size || 160
+  return `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(props.url)}&margin=4`
 })
 </script>
-
-<style scoped>
-.qr-wrapper {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-.qr-image {
-  border-radius: 6px;
-  border: 1px solid var(--border, #e2e8f0);
-}
-.qr-fallback {
-  font-size: 12px;
-  padding: 8px;
-}
-</style>

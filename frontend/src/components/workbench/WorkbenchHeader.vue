@@ -1,10 +1,10 @@
 <template>
-  <header class="sticky top-0 z-40 flex h-14 items-center justify-between border-b border-white/10 bg-[#090D16]/80 px-4 sm:px-6 backdrop-blur-md">
+  <header class="sticky top-0 z-40 flex h-12 items-center justify-between border-b border-border-subtle bg-surface-base px-4 sm:px-6">
     <!-- Left: Brand / Title + Mobile Menu Toggle -->
     <div class="flex items-center gap-3">
       <button
         type="button"
-        class="flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-slate-800/40 text-slate-300 hover:bg-slate-800 hover:text-white transition-colors md:hidden cursor-pointer"
+        class="flex h-8 w-8 min-h-[32px] min-w-[32px] items-center justify-center rounded-md border border-border-subtle bg-surface-hover text-text-muted hover:bg-surface-active hover:text-text-main transition-colors md:hidden cursor-pointer"
         aria-label="打开导航菜单"
         @click="$emit('toggle-sidebar')"
       >
@@ -13,33 +13,48 @@
         </svg>
       </button>
 
-      <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600/20 text-blue-400 border border-blue-500/30">
-        <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <div class="flex h-7 w-7 items-center justify-center rounded-md bg-accent-subtle text-accent border border-accent/20">
+        <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
         </svg>
       </div>
-      <span class="font-mono text-sm font-semibold tracking-wider text-white">CSP // WORKBENCH</span>
+      <span class="font-mono text-xs font-semibold tracking-wider text-text-main">CSP // WORKBENCH</span>
     </div>
 
     <!-- Center: Global Quick Stats -->
-    <div class="hidden md:flex items-center gap-6 text-xs font-mono text-slate-400">
+    <div class="hidden md:flex items-center gap-6 text-xs font-mono text-text-muted">
       <div class="flex items-center gap-2">
-        <span class="h-2 w-2 rounded-full bg-emerald-400"></span>
-        <span>GATEWAY: <span class="text-emerald-400">ONLINE</span></span>
+        <span class="h-2 w-2 rounded-full bg-status-success"></span>
+        <span>GATEWAY: <span class="text-status-success font-medium">ONLINE</span></span>
       </div>
       <div class="flex items-center gap-2">
-        <span>NODES: <span class="text-white">{{ totalNodes }}</span></span>
+        <span>NODES: <span class="text-text-main font-medium tabular-nums">{{ totalNodes }}</span></span>
       </div>
       <div class="flex items-center gap-2">
-        <span>PROBED: <span class="text-cyan-400">{{ probedCount }}</span></span>
+        <span>PROBED: <span class="text-status-info font-medium tabular-nums">{{ probedCount }}</span></span>
       </div>
     </div>
 
-    <!-- Right: Quick Actions -->
-    <div class="flex items-center gap-3">
+    <!-- Right: Quick Actions & Theme Toggle -->
+    <div class="flex items-center gap-2.5">
       <button
         type="button"
-        class="inline-flex items-center gap-1.5 rounded-lg border border-blue-500/30 bg-blue-600/10 px-3 py-1.5 text-xs font-medium text-blue-400 hover:bg-blue-600/20 transition-colors cursor-pointer"
+        class="flex h-7 w-7 items-center justify-center rounded-md border border-border-subtle bg-surface-hover text-text-muted hover:text-text-main transition-colors cursor-pointer"
+        :aria-label="theme === 'dark' ? '切换为浅色主题' : '切换为暗色主题'"
+        :title="theme === 'dark' ? '切换为浅色主题' : '切换为暗色主题'"
+        @click="toggle"
+      >
+        <svg v-if="theme === 'dark'" class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+        </svg>
+        <svg v-else class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+        </svg>
+      </button>
+
+      <button
+        type="button"
+        class="inline-flex items-center gap-1.5 rounded-md border border-accent/30 bg-accent-subtle px-2.5 py-1 text-xs font-medium text-accent hover:bg-accent/20 transition-colors cursor-pointer"
         @click="$emit('open-export')"
       >
         <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -52,6 +67,10 @@
 </template>
 
 <script setup lang="ts">
+import { useTheme } from '../../utils/theme'
+
+const { theme, toggle } = useTheme()
+
 withDefaults(
   defineProps<{
     totalNodes?: number

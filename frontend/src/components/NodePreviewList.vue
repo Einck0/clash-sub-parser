@@ -7,8 +7,9 @@
       </label>
       <div class="node-preview-summary">
         <span class="count-pill">{{ filteredNodes.length }} / {{ normalizedNodes.length }}</span>
-        <button @click="runFullProbe" :disabled="probing || !normalizedNodes.length" class="primary">
-          {{ probing ? '探测中…' : '⚡ 综合探测' }}
+        <button @click="runFullProbe" :disabled="probing || !normalizedNodes.length" class="primary inline-flex items-center gap-1">
+          <Zap class="h-3.5 w-3.5" aria-hidden="true" />
+          <span>{{ probing ? '探测中…' : '综合探测' }}</span>
         </button>
         <button @click="runTcpProbe" :disabled="probing || !normalizedNodes.length">
           TCP 探活
@@ -23,7 +24,10 @@
     </div>
 
     <p v-if="probeSummary" class="section-hint" style="margin: 0 0 8px">
-      {{ isFullProbe ? '⚡ 出口探测' : 'TCP 探活' }}：ok {{ probeSummary.ok }} / fail {{ probeSummary.fail }} / timeout {{ probeSummary.timeout }} / skip {{ probeSummary.skip }}
+      <span class="inline-flex items-center gap-1">
+        <Zap v-if="isFullProbe" class="h-3.5 w-3.5 text-accent" aria-hidden="true" />
+        <span>{{ isFullProbe ? '出口探测' : 'TCP 探活' }}</span>
+      </span>：ok {{ probeSummary.ok }} / fail {{ probeSummary.fail }} / timeout {{ probeSummary.timeout }} / skip {{ probeSummary.skip }}
       <span v-if="isFullProbe">· 经隔离 sing-box 验证握手、落地地区、流媒体与测速</span>
       <span v-else>· 仅测端口可达，不是代理延迟</span>
     </p>
@@ -69,21 +73,22 @@
         <template v-if="probeStatus(node) && (probeStatus(node).latency_ms !== undefined || probeStatus(node).handshake_ms !== undefined)">
           <span
             v-if="probeStatus(node).status === 'ok'"
-            class="probe-pill probe-ok"
+            class="probe-pill probe-ok shrink-0 text-[11px] px-1.5 py-0.5 rounded-full border text-status-success border-status-success/30 bg-status-success/10 inline-flex items-center gap-0.5"
             :title="`握手延迟: ${probeStatus(node).latency_ms ?? probeStatus(node).handshake_ms}ms | 出口 IP: ${probeStatus(node).ip || probeStatus(node).outbound_ip || '-'} (${probeStatus(node).country || probeStatus(node).country_code || '-'})`"
           >
-            ⚡ {{ probeStatus(node).latency_ms ?? probeStatus(node).handshake_ms }}ms
+            <Zap class="h-3 w-3 inline text-accent" aria-hidden="true" />
+            <span class="tabular-nums">{{ probeStatus(node).latency_ms ?? probeStatus(node).handshake_ms }}ms</span>
           </span>
           <span
             v-else-if="probeStatus(node).status === 'timeout'"
-            class="probe-pill probe-timeout"
+            class="probe-pill probe-timeout shrink-0 text-[11px] px-1.5 py-0.5 rounded-full border text-status-warning border-status-warning/30 bg-status-warning/10"
             :title="probeStatus(node).error || '握手超时'"
           >
             timeout
           </span>
           <span
             v-else
-            class="probe-pill probe-fail"
+            class="probe-pill probe-fail shrink-0 text-[11px] px-1.5 py-0.5 rounded-full border text-status-danger border-status-danger/30 bg-status-danger/10"
             :title="probeStatus(node).error || '握手失败'"
           >
             fail
@@ -91,59 +96,60 @@
 
           <span
             v-if="probeStatus(node).speed_mbps || probeStatus(node).download_speed_mbps"
-            class="probe-pill probe-speed"
+            class="probe-pill probe-speed shrink-0 text-[11px] px-1.5 py-0.5 rounded-full border text-status-info border-status-info/30 bg-status-info/10 font-semibold inline-flex items-center gap-0.5"
             :title="`测速: ${probeStatus(node).speed_mbps ?? probeStatus(node).download_speed_mbps} Mbps`"
           >
-            🚀 {{ probeStatus(node).speed_mbps ?? probeStatus(node).download_speed_mbps }}M
+            <Gauge class="h-3 w-3 inline text-status-info" aria-hidden="true" />
+            <span class="tabular-nums">{{ probeStatus(node).speed_mbps ?? probeStatus(node).download_speed_mbps }}M</span>
           </span>
 
           <!-- 流媒体徽标 -->
           <template v-if="probeStatus(node).media || probeStatus(node).streaming_unlock">
             <span
               v-if="(probeStatus(node).media?.youtube || probeStatus(node).streaming_unlock?.youtube)?.status === 'ok' || (probeStatus(node).media?.youtube || probeStatus(node).streaming_unlock?.youtube)?.unlocked"
-              class="probe-tag tag-yt"
+              class="probe-tag tag-yt text-[10px] px-1.5 py-0.5 rounded font-bold bg-status-danger/15 text-status-danger border border-status-danger/30"
               :title="`YouTube: ${(probeStatus(node).media?.youtube || probeStatus(node).streaming_unlock?.youtube)?.region || 'OK'}`"
             >
               YT:{{ (probeStatus(node).media?.youtube || probeStatus(node).streaming_unlock?.youtube)?.region || 'OK' }}
             </span>
             <span
               v-if="(probeStatus(node).media?.netflix || probeStatus(node).streaming_unlock?.netflix)?.status === 'full' || (probeStatus(node).media?.netflix || probeStatus(node).streaming_unlock?.netflix)?.status === 'originals' || (probeStatus(node).media?.netflix || probeStatus(node).streaming_unlock?.netflix)?.unlocked"
-              class="probe-tag tag-nf"
+              class="probe-tag tag-nf text-[10px] px-1.5 py-0.5 rounded font-bold bg-status-danger/20 text-status-danger border border-status-danger/40"
               :title="`Netflix: ${(probeStatus(node).media?.netflix || probeStatus(node).streaming_unlock?.netflix)?.label || (probeStatus(node).media?.netflix || probeStatus(node).streaming_unlock?.netflix)?.region || 'OK'}`"
             >
               NF:{{ (probeStatus(node).media?.netflix || probeStatus(node).streaming_unlock?.netflix)?.region || 'OK' }}
             </span>
             <span
               v-if="(probeStatus(node).media?.chatgpt || probeStatus(node).streaming_unlock?.chatgpt)?.status === 'ok' || (probeStatus(node).media?.chatgpt || probeStatus(node).streaming_unlock?.chatgpt)?.unlocked"
-              class="probe-tag tag-gpt"
+              class="probe-tag tag-gpt text-[10px] px-1.5 py-0.5 rounded font-bold bg-status-success/15 text-status-success border border-status-success/30"
               title="ChatGPT 解锁正常"
             >
               GPT
             </span>
             <span
               v-if="(probeStatus(node).media?.gemini || probeStatus(node).streaming_unlock?.gemini)?.status === 'ok' || (probeStatus(node).media?.gemini || probeStatus(node).streaming_unlock?.gemini)?.unlocked"
-              class="probe-tag tag-gemini"
+              class="probe-tag tag-gemini text-[10px] px-1.5 py-0.5 rounded font-bold bg-accent/15 text-accent border border-accent/30"
               title="Google Gemini 解锁正常"
             >
               Gemini
             </span>
             <span
               v-if="(probeStatus(node).media?.disney || probeStatus(node).streaming_unlock?.disney)?.status === 'ok' || (probeStatus(node).media?.disney || probeStatus(node).streaming_unlock?.disney)?.unlocked"
-              class="probe-tag tag-disney"
+              class="probe-tag tag-disney text-[10px] px-1.5 py-0.5 rounded font-bold bg-status-info/15 text-status-info border border-status-info/30"
               title="Disney+ 解锁正常"
             >
               Disney
             </span>
             <span
               v-if="(probeStatus(node).media?.meta_ai || probeStatus(node).streaming_unlock?.meta_ai)?.status === 'ok' || (probeStatus(node).media?.meta_ai || probeStatus(node).streaming_unlock?.meta_ai)?.unlocked"
-              class="probe-tag tag-meta"
+              class="probe-tag tag-meta text-[10px] px-1.5 py-0.5 rounded font-bold bg-status-info/15 text-status-info border border-status-info/30"
               title="Meta AI 解锁正常"
             >
               Meta
             </span>
             <span
               v-if="(probeStatus(node).media?.bilibili || probeStatus(node).streaming_unlock?.bilibili)?.status === 'ok' || (probeStatus(node).media?.bilibili || probeStatus(node).streaming_unlock?.bilibili)?.unlocked"
-              class="probe-tag tag-bili"
+              class="probe-tag tag-bili text-[10px] px-1.5 py-0.5 rounded font-bold bg-status-warning/15 text-status-warning border border-status-warning/30"
               title="Bilibili 港澳台解锁正常"
             >
               Bili
@@ -154,8 +160,8 @@
         <!-- 普通 TCP 探活徽标 -->
         <span
           v-else-if="probeStatus(node)"
-          class="probe-pill"
-          :class="`probe-${probeStatus(node).status}`"
+          class="probe-pill shrink-0 text-[11px] px-1.5 py-0.5 rounded-full border border-border-subtle"
+          :class="probeStatus(node).status === 'ok' ? 'text-status-success border-status-success/30 bg-status-success/10' : (probeStatus(node).status === 'timeout' ? 'text-status-warning border-status-warning/30 bg-status-warning/10' : 'text-status-danger border-status-danger/30 bg-status-danger/10')"
           :title="probeTitle(node)"
         >
           {{ probeLabel(node) }}
@@ -181,6 +187,7 @@
 
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
+import { Zap, Gauge } from 'lucide-vue-next'
 import { getApiErrorMessage, getProbeResults, probeNodesFull, probeTcp } from '../api'
 import { getNodeFlag } from '../utils/format'
 
@@ -400,74 +407,3 @@ async function runFullProbe() {
   }
 }
 </script>
-
-<style scoped>
-.node-rename-input {
-  width: 100%;
-  min-width: 0;
-  font-size: 13px;
-}
-.node-rename-actions {
-  display: flex;
-  gap: 8px;
-  margin-top: 10px;
-}
-.probe-pill {
-  flex: 0 0 auto;
-  font-size: 11px;
-  padding: 2px 6px;
-  border-radius: 999px;
-  border: 1px solid var(--border, #334155);
-}
-.probe-ok {
-  color: #16a34a;
-  border-color: color-mix(in srgb, #16a34a 40%, transparent);
-}
-.probe-fail {
-  color: #dc2626;
-  border-color: color-mix(in srgb, #dc2626 40%, transparent);
-}
-.probe-timeout {
-  color: #d97706;
-  border-color: color-mix(in srgb, #d97706 40%, transparent);
-}
-.probe-skip {
-  color: #64748b;
-}
-.probe-speed {
-  color: #38bdf8;
-  border-color: color-mix(in srgb, #38bdf8 40%, transparent);
-  font-weight: 600;
-}
-.probe-tag {
-  font-size: 10px;
-  padding: 1px 5px;
-  border-radius: 4px;
-  font-weight: bold;
-}
-.tag-yt {
-  background: rgba(239, 68, 68, 0.15);
-  color: #f87171;
-  border: 1px solid rgba(239, 68, 68, 0.3);
-}
-.tag-nf {
-  background: rgba(220, 38, 38, 0.2);
-  color: #ef4444;
-  border: 1px solid rgba(220, 38, 38, 0.4);
-}
-.tag-gpt {
-  background: rgba(16, 185, 129, 0.15);
-  color: #34d399;
-  border: 1px solid rgba(16, 185, 129, 0.3);
-}
-.tag-gemini {
-  background: rgba(59, 130, 246, 0.15);
-  color: #60a5fa;
-  border: 1px solid rgba(59, 130, 246, 0.3);
-}
-.tag-meta {
-  background: rgba(168, 85, 247, 0.15);
-  color: #c084fc;
-  border: 1px solid rgba(168, 85, 247, 0.3);
-}
-</style>

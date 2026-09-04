@@ -9,7 +9,9 @@
     "preview": "vite preview",
     "typecheck": "vue-tsc --noEmit",
     "test": "node --experimental-strip-types --test tests/*.mjs",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "audit:visual": "node scripts/visual_audit.mjs",
+    "audit:visual:strict": "node scripts/visual_audit.mjs --strict"
   },
   "dependencies": {
     "js-yaml": "^4.3.1",

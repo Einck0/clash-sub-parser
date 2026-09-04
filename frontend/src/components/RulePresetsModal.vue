@@ -31,7 +31,6 @@
       <div class="preset-grid">
         <div v-for="cat in filteredCategories" :key="cat.id" class="preset-category">
           <div class="preset-category-header">
-            <span class="preset-cat-icon">{{ cat.icon }}</span>
             <strong>{{ cat.name }}</strong>
           </div>
           <div class="preset-list">
@@ -141,7 +140,7 @@ function applySelected() {
 }
 </script>
 
-<style scoped>
+<style>
 .preset-modal {
   max-width: 860px;
   max-height: 85vh;
@@ -169,9 +168,6 @@ function applySelected() {
   align-items: center;
   gap: 6px;
   margin-bottom: 8px;
-}
-.preset-cat-icon {
-  font-size: 18px;
 }
 .preset-list {
   display: grid;

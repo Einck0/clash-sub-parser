@@ -1,8 +1,16 @@
 <template>
+  <!-- Full-screen Skip Link for Keyboard Accessibility -->
+  <a
+    href="#main-content"
+    class="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:rounded-md focus:bg-accent focus:px-4 focus:py-2 focus:text-xs focus:font-medium focus:text-white focus:shadow-xs focus:outline-hidden focus-ring"
+  >
+    跳转至主工作区
+  </a>
+
   <AuthGate v-if="showAuthGate" :authenticate="handleAuthSubmit" />
 
-  <div v-else class="flex min-h-screen flex-col bg-[#090D16] text-[#F8FAFC]">
-    <!-- Top Workbench Header -->
+  <div v-else class="flex min-h-screen flex-col bg-canvas text-text-main">
+    <!-- Top Workbench Header (48px) -->
     <WorkbenchHeader
       :total-nodes="store.nodes?.length || 0"
       :probed-count="probedCount"
@@ -28,7 +36,7 @@
       </BaseDrawer>
 
       <!-- Content Area -->
-      <main class="flex-1 overflow-y-auto p-4 md:p-6" aria-live="polite">
+      <main id="main-content" class="flex-1 overflow-y-auto p-4 md:p-6" aria-live="polite" tabindex="-1">
         <router-view v-slot="{ Component, route }">
           <Transition name="page-fade" mode="out-in">
             <component :is="Component" :key="route.path" />
@@ -43,7 +51,7 @@
   <QuickExportModal :open="showQuickExport" :needs-token="exportNeedsToken" @close="showQuickExport = false" />
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { checkAuthSession, getSecuritySettings, loginAuthToken } from './api'
 import { setAuthToken, syncTokenFromUrl } from './auth'
@@ -56,12 +64,12 @@ import WorkbenchSidebar from './components/workbench/WorkbenchSidebar.vue'
 import BaseDrawer from './components/ui/BaseDrawer.vue'
 import { useAppStore } from './stores/app'
 
-const store = useAppStore()
+const store = useAppStore() as any
 const showQuickExport = ref(false)
 const mobileSidebarOpen = ref(false)
 
 const probedCount = computed(() => {
-  return store.nodes?.filter(n => n.probe_status === 'success')?.length || 0
+  return store.nodes?.filter((n: any) => n.probe_status === 'success')?.length || 0
 })
 
 const showAuthGate = ref(false)
@@ -87,7 +95,7 @@ async function checkFrontendAccess() {
       }
     }
     showAuthGate.value = false
-  } catch (err) {
+  } catch (err: any) {
     if (err?.response?.status === 401) {
       setAuthToken('')
       exportNeedsToken.value = true
@@ -98,7 +106,7 @@ async function checkFrontendAccess() {
   }
 }
 
-async function handleAuthSubmit(token) {
+async function handleAuthSubmit(token: string) {
   const { data } = await loginAuthToken(token)
   if (!data?.ok) throw new Error('Token 无效')
   await checkFrontendAccess()
@@ -110,20 +118,3 @@ function handleUnauthorized() {
   showAuthGate.value = true
 }
 </script>
-
-<style scoped>
-/* Page transition */
-.page-fade-enter-active {
-  transition: opacity 0.2s ease, transform 0.2s ease;
-}
-.page-fade-leave-active {
-  transition: opacity 0.12s ease;
-}
-.page-fade-enter-from {
-  opacity: 0;
-  transform: translateY(6px);
-}
-.page-fade-leave-to {
-  opacity: 0;
-}
-</style>

@@ -194,7 +194,7 @@ function formatTime(iso) {
 }
 </script>
 
-<style scoped>
+<style>
 .snapshot-timeline {
   display: flex;
   flex-direction: column;

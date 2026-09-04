@@ -1,94 +1,39 @@
 <template>
-  <Transition name="fab">
+  <Transition
+    enter-active-class="transition-opacity transition-transform duration-200 ease-out"
+    enter-from-class="opacity-0 translate-y-4 scale-95"
+    enter-to-class="opacity-100 translate-y-0 scale-100"
+    leave-active-class="transition-opacity transition-transform duration-150 ease-in"
+    leave-from-class="opacity-100 translate-y-0 scale-100"
+    leave-to-class="opacity-0 translate-y-4 scale-95"
+  >
     <button
       v-if="visible"
-      class="fab-save"
-      :class="{ saving: saving }"
-      @click="$emit('save')"
+      type="button"
+      class="fixed bottom-6 right-6 z-50 flex items-center gap-2 rounded-lg border border-accent/40 bg-accent px-4 py-2.5 sm:px-5 sm:py-3 text-sm font-medium text-white shadow-md hover:bg-accent-hover active:bg-accent-active disabled:opacity-60 disabled:cursor-not-allowed transition-colors cursor-pointer"
       :disabled="saving"
       title="保存全部 (Ctrl+S)"
+      @click="$emit('save')"
     >
-      <span v-if="saving" class="fab-spinner"></span>
-      <span v-else class="fab-icon">💾</span>
-      <span class="fab-text">{{ saving ? '保存中...' : '保存全部' }}</span>
+      <Loader2 v-if="saving" class="h-4 w-4 animate-spin shrink-0" aria-hidden="true" />
+      <Save v-else class="h-4 w-4 shrink-0" aria-hidden="true" />
+      <span class="hidden sm:inline font-mono">{{ saving ? '保存中…' : '保存全部' }}</span>
     </button>
   </Transition>
 </template>
 
-<script setup>
-defineProps({
-  visible: { type: Boolean, default: false },
-  saving: { type: Boolean, default: false },
-})
-defineEmits(['save'])
-</script>
+<script setup lang="ts">
+import { Save, Loader2 } from 'lucide-vue-next'
 
-<style scoped>
-.fab-save {
-  position: fixed;
-  bottom: 24px;
-  right: 24px;
-  z-index: 1000;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 20px;
-  border: none;
-  border-radius: 28px;
-  background: linear-gradient(135deg, #6366f1, #8b5cf6);
-  color: #fff;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  box-shadow: 0 4px 16px rgba(99, 102, 241, 0.4);
-  transition: all 0.2s ease;
-}
-.fab-save:hover:not(:disabled) {
-  transform: translateY(-2px);
-  box-shadow: 0 6px 20px rgba(99, 102, 241, 0.5);
-}
-.fab-save:active:not(:disabled) {
-  transform: translateY(0);
-}
-.fab-save.saving {
-  opacity: 0.8;
-  cursor: wait;
-}
-.fab-save:disabled {
-  cursor: not-allowed;
-}
-.fab-icon {
-  font-size: 18px;
-  line-height: 1;
-}
-.fab-spinner {
-  width: 16px;
-  height: 16px;
-  border: 2px solid rgba(255, 255, 255, 0.3);
-  border-top-color: #fff;
-  border-radius: 50%;
-  animation: spin 0.6s linear infinite;
-}
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-.fab-enter-active,
-.fab-leave-active {
-  transition: all 0.3s ease;
-}
-.fab-enter-from,
-.fab-leave-to {
-  opacity: 0;
-  transform: translateY(20px) scale(0.9);
-}
-@media (max-width: 640px) {
-  .fab-save {
-    bottom: 16px;
-    right: 16px;
-    padding: 10px 16px;
-  }
-  .fab-text {
-    display: none;
-  }
-}
-</style>
+withDefaults(defineProps<{
+  visible?: boolean
+  saving?: boolean
+}>(), {
+  visible: false,
+  saving: false,
+})
+
+defineEmits<{
+  (e: 'save'): void
+}>()
+</script>

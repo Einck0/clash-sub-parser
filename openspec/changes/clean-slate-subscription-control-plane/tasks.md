@@ -27,14 +27,14 @@
 
 ## 5. 前端 Workbench、视觉系统与交互回归
 
-- [x] 5.1 将 Tailwind v4/Vite、Headless UI、TanStack Virtual 和 lucide-vue-next 纳入受控前端依赖，建立暗色优先的语义 token、字体与密度基线；验证 tokens 同时生成可用的浅色主题、36px 表格行和 110px 节点卡，且不残留未令牌化的全局视觉规则
-- [x] 5.2 实现 AppShell、响应式导航、全局命令区和共享 `ui/` 原语；验证现有路由、Quick Export、认证门和主题入口保持可达，Dialog/Drawer/Menu/Combobox 支持键盘、焦点陷阱、Escape、焦点恢复和可访问名称
-- [ ] 5.3 按领域迁移 API client、Pinia 查询/命令 store 与草稿 composable；验证认证/CSRF/错误处理/请求取消集中在 `core/api`，后台刷新或晚到响应不覆盖编辑草稿和新查询
-- [ ] 5.4 实现 NodeLedger 服务端查询窗口与稳定 snapshot/cursor 契约；验证关键字、来源、协议、状态、跳板、速度、能力和排序可组合，响应提供 totals/metrics/facets，过期窗口安全重载且不下载全量节点、探测和跳板记录
-- [ ] 5.5 按设计拆分 NodeLedgerView、指标、筛选、工具栏、选择栏、卡片、紧凑表格、虚拟窗口、详情抽屉、Probe 与跳板组件；验证卡片/表格共享 query、`node_id` 选择集和可见锚点，10 项 overscan 下滚动仅渲染窗口，当前窗口选择与“全部当前筛选结果减排除项”的批量 Job 均在确认后使用冻结 snapshot 语义
-- [ ] 5.6 完成批量/单节点探测、详情预览、复制、取消、清缓存与链路绑定 UI；验证并发按钮防重、Job 的失败/取消/部分完成可恢复、详情只刷新受影响节点且抽屉草稿不丢失
-- [ ] 5.7 重组订阅、策略组、规则、DNS、导出、设置和快照领域视图；验证订阅自动命名、候选节点隔离、动态 regex、快照恢复、QuickExport 五目标/单订阅/合并订阅/Scheme/二维码和危险操作确认回归通过
-- [ ] 5.8 编写前端 unit、类型、可访问性和 Playwright 回归；验证两种主题、窄屏工作台、键盘 Dialog、NodeLedger 双视图/虚拟窗口/快速筛选、Job 取消与 QuickExport 的关键路径通过
+- [x] 5.1 建立前端视觉基线审计与 CI 负面清单，扫描领域组件的硬编码色值、渐变、模糊背景、emoji 图标、`transition: all`、宽度动画、过大圆角/阴影和 scoped style；验证审计对已知违规样本失败、对主题入口和共享原语 allowlist 通过
+- [x] 5.2 重建 Design Tokens 与应用壳：定义暗浅主题的语义色、层级、间距、圆角、运动、focus 和 tabular-nums token，替换玻璃背景与卡片堆叠为不透明表面/hairline；验证 48px 顶栏、8px 栅格、36px 表格密度、浅色等价主题、skip link 和 `prefers-reduced-motion` 均通过静态及浏览器检查
+- [x] 5.3 实现并验证共享可访问交互原语（Button/IconButton、Field、Select/Combobox、Badge/Status、Dialog/Drawer、Confirm、Toast、表格壳），统一 Lucide 图标；验证 Dialog/Drawer 的初始焦点、焦点陷阱、Escape、背景 inert、滚动锁、关闭焦点恢复、44px 移动热区与 safe area
+- [ ] 5.4 按领域迁移 API client、Pinia 查询/命令 store 与草稿 composable；实现 AbortSignal/请求身份和编辑草稿隔离；验证认证/CSRF/错误处理集中在 `core/api`，后台刷新或晚到响应不覆盖编辑草稿和新查询
+- [ ] 5.5 实现 NodeLedger 服务端查询窗口与稳定 snapshot/cursor 契约；验证关键字、来源、协议、状态、跳板、速度、能力和排序可组合，响应提供 totals/metrics/facets，过期窗口安全重载且不下载全量节点、探测和跳板记录
+- [ ] 5.6 按设计拆分 NodeLedgerView、指标、筛选、工具栏、选择栏、卡片、紧凑表格、虚拟窗口、详情抽屉、Probe 与跳板组件；验证卡片/表格共享 query、`node_id` 选择集和可见锚点，10 项 overscan 下滚动仅渲染窗口，当前窗口选择与“全部当前筛选结果减排除项”的批量 Job 均在确认后使用冻结 snapshot 语义
+- [x] 5.7 重组订阅、策略组、规则、DNS、导出、设置和快照领域视图，使默认路径为工具栏、列表/表格和内联状态而非卡片网格；验证订阅自动命名、候选节点隔离、动态 regex、快照恢复、QuickExport 五目标/单订阅/合并订阅/Scheme/二维码和危险操作确认回归通过
+- [ ] 5.8 编写前端 unit、类型、可访问性、Playwright 和视觉门禁回归；验证两种主题、375/768/1024/1440px、键盘 Dialog、NodeLedger 双视图/虚拟窗口/快速筛选、Job 取消、QuickExport 及静态设计禁令关键路径通过
 
 ## 6. SQLite 迁移、演练与发布门禁
 

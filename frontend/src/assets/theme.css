@@ -2,24 +2,137 @@
 
 @theme {
   --color-canvas: #090D16;
+  --color-surface: #0F172A;
   --color-surface-base: #0F172A;
   --color-surface-hover: #1E293B;
   --color-surface-active: #334155;
+  --color-raised: #1E293B;
+  --color-raised-hover: #334155;
+  --color-inset: #050811;
+  --color-border: #1E293B;
+  --color-border-subtle: rgba(255, 255, 255, 0.08);
+  --color-border-active: rgba(59, 130, 246, 0.35);
+  --color-border-strong: #334155;
+  --color-text-main: #F8FAFC;
+  --color-text-muted: #94A3B8;
+  --color-text-sub: #64748B;
+  --color-muted: #94A3B8;
+  --color-accent: #3B82F6;
+  --color-accent-hover: #2563EB;
+  --color-accent-subtle: rgba(59, 130, 246, 0.12);
   --color-brand-primary: #3B82F6;
   --color-brand-accent: #06B6D4;
   --color-status-success: #10B981;
   --color-status-warning: #F59E0B;
   --color-status-danger: #EF4444;
-  --color-text-main: #F8FAFC;
-  --color-text-muted: #94A3B8;
-  --color-text-sub: #64748B;
-  --color-border-subtle: rgba(255, 255, 255, 0.08);
-  --color-border-active: rgba(59, 130, 246, 0.35);
+  --color-status-info: #06B6D4;
 
   --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
   --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
 }
 
+/* Semantic Design Tokens for Workbench UI (Default Dark & Light) */
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+  --color-canvas: #090D16;
+  --color-surface: #0F172A;
+  --color-surface-base: #0F172A;
+  --color-surface-hover: #1E293B;
+  --color-surface-active: #334155;
+  --color-raised: #1E293B;
+  --color-raised-hover: #334155;
+  --color-inset: #050811;
+  --color-border: #1E293B;
+  --color-border-subtle: rgba(255, 255, 255, 0.08);
+  --color-border-active: rgba(59, 130, 246, 0.35);
+  --color-border-strong: #334155;
+  --color-text-main: #F8FAFC;
+  --color-text-muted: #94A3B8;
+  --color-text-sub: #64748B;
+  --color-muted: #94A3B8;
+  --color-accent: #3B82F6;
+  --color-accent-hover: #2563EB;
+  --color-accent-subtle: rgba(59, 130, 246, 0.12);
+  --color-brand-primary: #3B82F6;
+  --color-brand-accent: #06B6D4;
+  --color-status-success: #10B981;
+  --color-status-warning: #F59E0B;
+  --color-status-danger: #EF4444;
+  --color-status-info: #06B6D4;
+  --focus-ring: rgba(59, 130, 246, 0.5);
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+  --color-canvas: #F8FAFC;
+  --color-surface: #FFFFFF;
+  --color-surface-base: #FFFFFF;
+  --color-surface-hover: #F1F5F9;
+  --color-surface-active: #E2E8F0;
+  --color-raised: #FFFFFF;
+  --color-raised-hover: #F8FAFC;
+  --color-inset: #F1F5F9;
+  --color-border: #E2E8F0;
+  --color-border-subtle: rgba(0, 0, 0, 0.08);
+  --color-border-active: rgba(37, 99, 235, 0.4);
+  --color-border-strong: #CBD5E1;
+  --color-text-main: #0F172A;
+  --color-text-muted: #475569;
+  --color-text-sub: #64748B;
+  --color-muted: #475569;
+  --color-accent: #2563EB;
+  --color-accent-hover: #1D4ED8;
+  --color-accent-subtle: rgba(37, 99, 235, 0.08);
+  --color-brand-primary: #2563EB;
+  --color-brand-accent: #0891B2;
+  --color-status-success: #059669;
+  --color-status-warning: #D97706;
+  --color-status-danger: #DC2626;
+  --color-status-info: #0891B2;
+  --focus-ring: rgba(37, 99, 235, 0.5);
+}
+
+/* Tabular figures for data tracks (numbers, IP, ports, latency, dates) */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* 1px Hairline border token utilities */
+.border-hairline {
+  border-width: 1px;
+  border-color: var(--color-border-subtle);
+}
+
+/* Standard Focus Visible ring */
+.focus-ring {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+}
+.focus-ring:focus-visible {
+  outline: 2px solid var(--focus-ring, rgba(59, 130, 246, 0.5));
+  outline-offset: 2px;
+}
+
+/* Industrial Workbench Data Table Density (36px row height) */
+.table-dense tr,
+.table-dense .table-row,
+.table-row-dense {
+  height: 36px;
+  min-height: 36px;
+}
+.table-dense td,
+.table-dense th {
+  padding-top: 0.375rem;
+  padding-bottom: 0.375rem;
+}
+
+/* Safe area insets */
 @utility pb-safe {
   padding-bottom: max(1rem, env(safe-area-inset-bottom, 1rem));
 }
@@ -30,4 +143,83 @@
 
 .safe-area-inset-bottom {
   padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* Page fade transition */
+.page-fade-enter-active {
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+.page-fade-leave-active {
+  transition: opacity 0.1s ease;
+}
+.page-fade-enter-from {
+  opacity: 0;
+  transform: translateY(4px);
+}
+.page-fade-leave-to {
+  opacity: 0;
+}
+
+/* Drawer & Sheet transitions (A11y & Visual Gate compliant) */
+.drawer-slide-right {
+  animation: drawerSlideRightIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.drawer-slide-left {
+  animation: drawerSlideLeftIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes drawerSlideRightIn {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@keyframes drawerSlideLeftIn {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@media (max-width: 639px) {
+  .drawer-slide-right {
+    animation: drawerSlideUpIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  @keyframes drawerSlideUpIn {
+    from {
+      transform: translateY(100%);
+    }
+    to {
+      transform: translateY(0);
+    }
+  }
+}
+
+/* Global prefers-reduced-motion adherence */
+@media (prefers-reduced-motion: reduce) {
+  .drawer-slide-right,
+  .drawer-slide-left {
+    animation: none !important;
+  }
+  .page-fade-enter-active,
+  .page-fade-leave-active {
+    transition: none !important;
+  }
+  .page-fade-enter-from,
+  .page-fade-leave-to {
+    transform: none !important;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

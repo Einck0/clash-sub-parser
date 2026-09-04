@@ -1,238 +1,527 @@
 <template>
-  <section class="page chain-page">
-    <div class="page-head">
+  <section class="page chain-page p-2 space-y-6">
+    <!-- Top Header -->
+    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pb-4 border-b border-border-subtle">
       <div>
-        <p class="eyebrow">Proxy Chain</p>
-        <h2>链式代理</h2>
-        <p class="page-desc">
-          后置挂跳板。优先级：节点 &gt; 策略组 &gt; 订阅。单节点快捷操作请到「节点」。
+        <p class="text-xs font-mono text-accent uppercase tracking-wider">Proxy Chains</p>
+        <h2 class="text-xl font-bold text-text-main tracking-tight">链式代理</h2>
+        <p class="text-xs text-text-muted mt-1">
+          后置挂跳板。优先级：节点 &gt; 策略组 &gt; 订阅。单节点快捷操作请到「节点」台账。
         </p>
       </div>
-      <div class="head-actions">
-        <button @click="showComposer = !showComposer">
+      <div class="flex flex-wrap items-center gap-2.5 w-full sm:w-auto">
+        <Button
+          variant="secondary"
+          size="md"
+          class="flex-1 sm:flex-initial min-h-[44px]"
+          :disabled="loading"
+          :icon="RefreshCw"
+          @click="reload"
+        >
+          刷新
+        </Button>
+        <Button
+          variant="primary"
+          size="md"
+          class="flex-1 sm:flex-initial min-h-[44px]"
+          :icon="Plus"
+          @click="showComposer = !showComposer"
+        >
           {{ showComposer ? '收起新建' : '新建绑定' }}
-        </button>
-        <button class="primary" @click="reload" :disabled="loading">刷新</button>
+        </Button>
       </div>
     </div>
 
-    <div v-if="error" class="alert error">{{ error }}</div>
+    <!-- Alert / Error Message -->
+    <UiState v-if="error" type="error" title="链式绑定操作失败" :description="error" compact>
+      <template #actions>
+        <Button variant="primary" size="sm" class="min-h-[44px]" @click="reload">
+          重试
+        </Button>
+      </template>
+    </UiState>
 
-    <div class="stats-row">
-      <div class="stat-chip">
-        <strong>{{ bindings.length }}</strong>
-        <span>绑定</span>
-      </div>
-      <div class="stat-chip">
-        <strong>{{ enabledCount }}</strong>
-        <span>启用</span>
-      </div>
-      <div class="stat-chip">
-        <strong>{{ subscriptionBindCount }}</strong>
-        <span>订阅级</span>
-      </div>
-      <div class="stat-chip">
-        <strong>{{ groupBindCount }}</strong>
-        <span>组级</span>
-      </div>
-      <div class="stat-chip">
-        <strong>{{ nodeBindCount }}</strong>
-        <span>节点级</span>
-      </div>
+    <!-- Industrial MetricCards Grid -->
+    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4 font-mono">
+      <MetricCard
+        label="TOTAL BINDINGS"
+        :value="bindings.length"
+        subtext="已配置链式总数"
+        status="neutral"
+      />
+      <MetricCard
+        label="ENABLED"
+        :value="enabledCount"
+        subtext="生效中链路"
+        status="success"
+      />
+      <MetricCard
+        label="SUBSCRIPTION LEVEL"
+        :value="subscriptionBindCount"
+        subtext="订阅整包跳板"
+        status="info"
+      />
+      <MetricCard
+        label="GROUP LEVEL"
+        :value="groupBindCount"
+        subtext="策略组跳板"
+        status="info"
+      />
+      <MetricCard
+        label="NODE LEVEL"
+        :value="nodeBindCount"
+        subtext="单节点跳板"
+        status="info"
+      />
     </div>
 
-    <div v-if="showComposer" class="dns-section composer">
-      <h3>新建绑定</h3>
-      <p class="section-hint">先选「给谁挂」，再选「经谁出去」。保存前可预览会挂多少、跳过多少。</p>
+    <!-- Composer Section (Inline Accordion/Panel) -->
+    <div
+      v-if="showComposer"
+      class="rounded-lg border border-border-subtle bg-surface-base p-4 sm:p-5 space-y-4 shadow-xs"
+    >
+      <div class="flex items-center justify-between border-b border-border-subtle pb-3">
+        <div>
+          <h3 class="text-sm font-semibold text-text-main">新建链式绑定</h3>
+          <p class="text-xs text-text-muted mt-0.5">先选「给谁挂」，再选「经谁出去」。保存前可预览会挂多少、跳过多少。</p>
+        </div>
+      </div>
 
-      <div class="composer-steps">
-        <div class="step-card">
-          <div class="step-title">1. 目标（出口）</div>
-          <div class="seg">
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 lg:gap-6">
+        <!-- Step 1: Target (Exit) -->
+        <div class="rounded-lg border border-border-subtle bg-surface p-4 space-y-3">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-mono font-semibold text-accent uppercase tracking-wider">1. 目标（出口）</span>
+            <span class="text-[11px] text-text-sub font-mono">流量最终由其流向目标网站</span>
+          </div>
+
+          <!-- Target Type Segmented Control -->
+          <div class="grid grid-cols-3 gap-1 rounded-lg bg-surface-base p-1 border border-border-subtle">
             <button
               v-for="opt in targetTypeOptions"
               :key="opt.value"
               type="button"
-              :class="{ active: form.target_type === opt.value }"
+              class="min-h-[36px] rounded-md text-xs font-medium transition-colors cursor-pointer"
+              :class="form.target_type === opt.value ? 'bg-accent text-white font-semibold' : 'text-text-muted hover:text-text-main'"
               @click="setTargetType(opt.value)"
             >
               {{ opt.label }}
             </button>
           </div>
 
-          <label v-if="form.target_type === 'node'" class="field">
-            <span>目标节点</span>
-            <input v-model="nodeSearch" placeholder="搜索节点名" />
-            <select v-model="form.target_name">
+          <!-- Target Select Controls -->
+          <div v-if="form.target_type === 'node'" class="space-y-2">
+            <label class="block text-xs font-medium text-text-muted">选择目标节点</label>
+            <input
+              v-model="nodeSearch"
+              placeholder="过滤节点名…"
+              class="w-full min-h-[36px] rounded-md border border-border-subtle bg-surface-base px-3 py-1.5 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono"
+            />
+            <select
+              v-model="form.target_name"
+              aria-label="选择最终节点"
+              class="w-full min-h-[38px] rounded-md border border-border-subtle bg-surface-base px-3 py-1.5 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono"
+            >
               <option value="">选择最终节点</option>
               <option v-for="n in filteredTargetNodes" :key="n.name" :value="n.name">
-                {{ n.name }}
-                <template v-if="n.subscription_name"> · {{ n.subscription_name }}</template>
+                {{ n.name }}{{ n.subscription_name ? ` · ${n.subscription_name}` : '' }}
               </option>
             </select>
-          </label>
+          </div>
 
-          <label v-else-if="form.target_type === 'node_group'" class="field">
-            <span>目标策略组</span>
-            <input v-model="groupSearch" placeholder="搜索策略组" />
-            <select v-model.number="form.target_id">
+          <div v-else-if="form.target_type === 'node_group'" class="space-y-2">
+            <label class="block text-xs font-medium text-text-muted">选择目标策略组</label>
+            <input
+              v-model="groupSearch"
+              placeholder="过滤策略组…"
+              class="w-full min-h-[36px] rounded-md border border-border-subtle bg-surface-base px-3 py-1.5 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono"
+            />
+            <select
+              v-model.number="form.target_id"
+              aria-label="选择目标策略组"
+              class="w-full min-h-[38px] rounded-md border border-border-subtle bg-surface-base px-3 py-1.5 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono"
+            >
               <option :value="null">选择策略组</option>
               <option v-for="g in filteredGroups" :key="g.id" :value="g.id">{{ g.name }}</option>
             </select>
-          </label>
+          </div>
 
-          <label v-else class="field">
-            <span>目标订阅</span>
-            <select v-model.number="form.target_id">
+          <div v-else class="space-y-2">
+            <label class="block text-xs font-medium text-text-muted">选择目标订阅</label>
+            <select
+              v-model.number="form.target_id"
+              aria-label="选择目标订阅"
+              class="w-full min-h-[38px] rounded-md border border-border-subtle bg-surface-base px-3 py-1.5 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono"
+            >
               <option :value="null">选择订阅</option>
               <option v-for="s in subscriptions" :key="s.id" :value="s.id">{{ s.name }}</option>
             </select>
-          </label>
+          </div>
         </div>
 
-        <div class="step-arrow" aria-hidden="true">→</div>
+        <!-- Step 2: Dialer (Entry / Jump) -->
+        <div class="rounded-lg border border-border-subtle bg-surface p-4 space-y-3">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-mono font-semibold text-accent uppercase tracking-wider">2. 跳板（入口）</span>
+            <span class="text-[11px] text-text-sub font-mono">前置代理 / 流量先经此跳板发出</span>
+          </div>
 
-        <div class="step-card">
-          <div class="step-title">2. 跳板（入口）</div>
-          <div class="seg">
+          <!-- Dialer Type Segmented Control -->
+          <div class="grid grid-cols-2 gap-1 rounded-lg bg-surface-base p-1 border border-border-subtle">
             <button
               type="button"
-              :class="{ active: form.dialer_type === 'node' }"
-              @click="form.dialer_type = 'node'; form.dialer_ref = ''"
-            >
-              节点
-            </button>
-            <button
-              type="button"
-              :class="{ active: form.dialer_type === 'node_group' }"
+              class="min-h-[36px] rounded-md text-xs font-medium transition-colors cursor-pointer"
+              :class="form.dialer_type === 'node_group' ? 'bg-accent text-white font-semibold' : 'text-text-muted hover:text-text-main'"
               @click="form.dialer_type = 'node_group'; form.dialer_ref = ''"
             >
               策略组
             </button>
+            <button
+              type="button"
+              class="min-h-[36px] rounded-md text-xs font-medium transition-colors cursor-pointer"
+              :class="form.dialer_type === 'node' ? 'bg-accent text-white font-semibold' : 'text-text-muted hover:text-text-main'"
+              @click="form.dialer_type = 'node'; form.dialer_ref = ''"
+            >
+              节点
+            </button>
           </div>
 
-          <label v-if="form.dialer_type === 'node'" class="field">
-            <span>跳板节点</span>
-            <input v-model="dialerNodeSearch" placeholder="搜索跳板节点" />
-            <select v-model="form.dialer_ref">
+          <div v-if="form.dialer_type === 'node'" class="space-y-2">
+            <label class="block text-xs font-medium text-text-muted">选择跳板节点</label>
+            <input
+              v-model="dialerNodeSearch"
+              placeholder="过滤跳板节点…"
+              class="w-full min-h-[36px] rounded-md border border-border-subtle bg-surface-base px-3 py-1.5 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono"
+            />
+            <select
+              v-model="form.dialer_ref"
+              aria-label="选择跳板节点"
+              class="w-full min-h-[38px] rounded-md border border-border-subtle bg-surface-base px-3 py-1.5 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono"
+            >
               <option value="">选择节点</option>
               <option v-for="n in filteredDialerNodes" :key="'d-' + n.name" :value="n.name">
                 {{ n.name }}
               </option>
             </select>
-          </label>
-          <label v-else class="field">
-            <span>跳板策略组</span>
-            <input v-model="dialerGroupSearch" placeholder="搜索跳板组" />
-            <select v-model="form.dialer_ref">
+          </div>
+
+          <div v-else class="space-y-2">
+            <label class="block text-xs font-medium text-text-muted">选择跳板策略组</label>
+            <input
+              v-model="dialerGroupSearch"
+              placeholder="过滤跳板组…"
+              class="w-full min-h-[36px] rounded-md border border-border-subtle bg-surface-base px-3 py-1.5 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono"
+            />
+            <select
+              v-model="form.dialer_ref"
+              aria-label="选择跳板策略组"
+              class="w-full min-h-[38px] rounded-md border border-border-subtle bg-surface-base px-3 py-1.5 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono"
+            >
               <option value="">选择策略组</option>
               <option v-for="g in filteredDialerGroups" :key="'dg-' + g.id" :value="g.name">
                 {{ g.name }}
               </option>
             </select>
-          </label>
-
-          <label class="field">
-            <span>备注</span>
-            <input v-model="form.note" placeholder="可选" />
-          </label>
-        </div>
-      </div>
-
-      <div class="template-actions composer-actions">
-        <button @click="runPreview" :disabled="!canCreate || previewing">
-          {{ previewing ? '预览中…' : '预览' }}
-        </button>
-        <button class="primary" @click="createBinding" :disabled="saving || !canCreate">
-          {{ saving ? '保存中…' : '保存绑定' }}
-        </button>
-      </div>
-    </div>
-
-    <div v-if="showPreviewModal && preview" class="modal-backdrop" @click.self="closePreviewModal">
-      <div class="modal preview-modal" role="dialog" aria-modal="true" aria-label="链式生效预览">
-        <div class="row space preview-modal-head">
-          <div>
-            <p class="eyebrow">Chain Preview</p>
-            <h3>生效预览</h3>
-            <p class="section-hint">
-              目标 {{ preview.target_count }} · 挂链 <b>{{ preview.chain_count }}</b> · 跳过
-              <b>{{ preview.skip_count }}</b>
-            </p>
           </div>
-          <button @click="closePreviewModal">关闭</button>
+
+          <div class="space-y-2">
+            <label class="block text-xs font-medium text-text-muted">备注说明（可选）</label>
+            <input
+              v-model="form.note"
+              placeholder="如：HK落地配日本前置…"
+              class="w-full min-h-[36px] rounded-md border border-border-subtle bg-surface-base px-3 py-1.5 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono"
+            />
+          </div>
         </div>
-        <div v-if="preview.chain_samples?.length" class="sample-block">
-          <strong>挂链样例</strong>
-          <div class="sample-line">{{ preview.chain_samples.slice(0, 12).join('、') }}</div>
-        </div>
-        <div v-if="preview.skip_samples?.length" class="sample-block">
-          <strong>跳过样例</strong>
-          <div class="sample-line muted">{{ preview.skip_samples.slice(0, 12).join('、') }}</div>
-        </div>
-        <div v-if="!preview.chain_samples?.length && !preview.skip_samples?.length" class="empty-mini">
-          没有可展示的样例节点。
-        </div>
+      </div>
+
+      <!-- Actions bar -->
+      <div class="flex items-center justify-end gap-2.5 pt-2 border-t border-border-subtle">
+        <Button
+          variant="secondary"
+          size="md"
+          class="min-h-[44px]"
+          :icon="Eye"
+          :disabled="!canCreate || previewing"
+          @click="runPreview"
+        >
+          {{ previewing ? '预览中…' : '预览生效' }}
+        </Button>
+        <Button
+          variant="primary"
+          size="md"
+          class="min-h-[44px]"
+          :disabled="saving || !canCreate"
+          @click="createBinding"
+        >
+          {{ saving ? '保存中…' : '保存绑定' }}
+        </Button>
       </div>
     </div>
 
+    <!-- Search Toolbar -->
     <PageToolbar
       v-model="listSearch"
-      placeholder="搜索目标 / 跳板 / 备注"
+      placeholder="搜索目标 / 跳板 / 备注…"
       :count-text="`${filteredBindings.length} / ${bindings.length} 条绑定`"
     />
 
-    <div class="dns-section">
-      <div class="row space filter-bar">
-        <h3>绑定列表</h3>
+    <!-- Empty State -->
+    <div v-if="!filteredBindings.length">
+      <UiState
+        type="empty"
+        :title="bindings.length ? '没有匹配的链式绑定' : '暂无链式代理绑定'"
+        :description="bindings.length ? '换个搜索关键词试试。' : '链式绑定允许后置挂跳板，实现入口与出口节点分流。'"
+      >
+        <template #actions>
+          <Button
+            v-if="!bindings.length"
+            variant="primary"
+            size="md"
+            class="min-h-[44px]"
+            :icon="Plus"
+            @click="showComposer = true"
+          >
+            新建绑定
+          </Button>
+          <Button
+            v-else
+            variant="secondary"
+            size="md"
+            class="min-h-[44px]"
+            @click="listSearch = ''"
+          >
+            清空搜索
+          </Button>
+        </template>
+      </UiState>
+    </div>
+
+    <div v-else class="space-y-4">
+      <!-- High-Density Structured Table (Desktop) -->
+      <div class="hidden md:block overflow-hidden rounded-lg border border-border-subtle bg-surface-base shadow-xs">
+        <table class="w-full text-left border-collapse font-mono text-xs">
+          <thead>
+            <tr class="border-b border-border-subtle bg-surface-hover/50 text-[11px] uppercase tracking-wider text-text-muted select-none">
+              <th scope="col" class="py-2.5 px-4 font-semibold min-w-[200px]">目标（出口）</th>
+              <th scope="col" class="py-2.5 px-3 font-semibold text-center w-24">跳板链路</th>
+              <th scope="col" class="py-2.5 px-4 font-semibold min-w-[200px]">跳板（入口）</th>
+              <th scope="col" class="py-2.5 px-4 font-semibold">备注</th>
+              <th scope="col" class="py-2.5 px-4 font-semibold w-24 text-center">状态</th>
+              <th scope="col" class="py-2.5 px-4 font-semibold text-right w-44">操作</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-border-subtle">
+            <tr
+              v-for="item in filteredBindings"
+              :key="item.id"
+              class="hover:bg-surface-hover/60 transition-colors h-[48px]"
+              :class="!item.enabled ? 'opacity-60 bg-surface/40' : ''"
+            >
+              <!-- Target -->
+              <td class="py-2 px-4">
+                <div class="flex items-center gap-2">
+                  <span class="px-1.5 py-0.5 rounded bg-surface-active text-text-sub border border-border-subtle text-[10px] uppercase font-semibold">
+                    {{ targetKind(item) }}
+                  </span>
+                  <strong class="text-text-main font-semibold tracking-tight truncate max-w-[240px]" :title="targetName(item)">
+                    {{ targetName(item) }}
+                  </strong>
+                </div>
+              </td>
+
+              <!-- Flow Arrow / Connector -->
+              <td class="py-2 px-3 text-center whitespace-nowrap">
+                <span class="inline-flex items-center gap-1 text-[11px] text-accent font-semibold px-2 py-0.5 rounded bg-accent/10 border border-accent/20">
+                  via
+                  <ArrowRight class="h-3 w-3" aria-hidden="true" />
+                </span>
+              </td>
+
+              <!-- Dialer -->
+              <td class="py-2 px-4">
+                <div class="flex items-center gap-2">
+                  <span class="px-1.5 py-0.5 rounded bg-accent/10 text-accent border border-accent/20 text-[10px] font-semibold">
+                    {{ dialerKind(item) }}
+                  </span>
+                  <strong class="text-text-main font-semibold tracking-tight truncate max-w-[240px]" :title="item.dialer_ref">
+                    {{ item.dialer_ref }}
+                  </strong>
+                </div>
+              </td>
+
+              <!-- Note -->
+              <td class="py-2 px-4 text-text-muted truncate max-w-[200px]" :title="item.note || '-'">
+                {{ item.note || '-' }}
+              </td>
+
+              <!-- Status Badge -->
+              <td class="py-2 px-4 text-center whitespace-nowrap">
+                <StatusBadge
+                  :type="item.enabled ? 'success' : 'neutral'"
+                  :text="item.enabled ? '已启用' : '已禁用'"
+                />
+              </td>
+
+              <!-- Actions -->
+              <td class="py-2 px-4 text-right whitespace-nowrap">
+                <div class="inline-flex items-center gap-1.5">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    :disabled="workingId === item.id"
+                    @click="toggleEnabled(item)"
+                  >
+                    {{ workingId === item.id ? '…' : (item.enabled ? '禁用' : '启用') }}
+                  </Button>
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    :icon="Trash2"
+                    :disabled="workingId === item.id"
+                    @click="removeBinding(item)"
+                  >
+                    删除
+                  </Button>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
       </div>
 
-      <div v-if="!filteredBindings.length" class="empty-mini empty-with-action">
-        {{ bindings.length ? '没有匹配的绑定。' : '还没有链式绑定。' }}
-        <button v-if="!bindings.length" class="primary" @click="showComposer = true">新建绑定</button>
-      </div>
-
-      <div v-else class="bind-list">
+      <!-- Mobile Responsive List Cards -->
+      <div class="md:hidden space-y-3">
         <article
           v-for="item in filteredBindings"
           :key="item.id"
-          class="bind-card"
-          :class="{ disabled: !item.enabled }"
+          class="rounded-lg border border-border-subtle bg-surface-base p-4 space-y-3 shadow-xs font-mono"
+          :class="!item.enabled ? 'opacity-70 bg-surface/30' : ''"
         >
-          <div class="bind-flow">
-            <div class="endpoint">
-              <span class="endpoint-kind">{{ targetKind(item) }}</span>
-              <strong class="endpoint-name">{{ targetName(item) }}</strong>
+          <!-- Flow representation -->
+          <div class="space-y-2">
+            <div class="flex items-center justify-between gap-2">
+              <div class="flex items-center gap-1.5 min-w-0">
+                <span class="px-1.5 py-0.5 rounded bg-surface-active text-text-sub border border-border-subtle text-[10px]">
+                  {{ targetKind(item) }}
+                </span>
+                <span class="text-xs font-semibold text-text-main truncate max-w-[180px]">
+                  {{ targetName(item) }}
+                </span>
+              </div>
+              <StatusBadge
+                :type="item.enabled ? 'success' : 'neutral'"
+                :text="item.enabled ? '启用' : '禁用'"
+              />
             </div>
-            <div class="flow-mid">
-              <span class="flow-arrow">via</span>
+
+            <div class="flex items-center gap-2 pl-2 text-xs text-text-muted border-l-2 border-accent/40 my-1">
+              <span class="text-[10px] text-accent font-semibold">via 跳板</span>
+              <span class="text-xs font-medium text-text-main truncate">
+                {{ item.dialer_ref }}
+              </span>
+              <span class="text-[10px] text-text-sub">({{ dialerKind(item) }})</span>
             </div>
-            <div class="endpoint dialer">
-              <span class="endpoint-kind">{{ dialerKind(item) }}</span>
-              <strong class="endpoint-name">{{ item.dialer_ref }}</strong>
+
+            <div v-if="item.note" class="text-xs text-text-muted italic pt-1">
+              备注：{{ item.note }}
             </div>
           </div>
 
-          <div class="bind-meta">
-            <span v-if="!item.enabled" class="pill danger">已禁用</span>
-            <span v-else class="pill ok">启用</span>
-            <span v-if="item.note" class="muted note">{{ item.note }}</span>
-          </div>
-
-          <div class="action-row compact-actions">
-            <button @click="toggleEnabled(item)" :disabled="workingId === item.id">
-              {{ workingId === item.id ? '…' : (item.enabled ? '禁用' : '启用') }}
-            </button>
-            <button class="danger" @click="removeBinding(item)" :disabled="workingId === item.id">删除</button>
+          <!-- Actions -->
+          <div class="flex items-center justify-end gap-2 pt-2 border-t border-border-subtle">
+            <Button
+              variant="secondary"
+              size="md"
+              class="flex-1 min-h-[44px] justify-center"
+              :disabled="workingId === item.id"
+              @click="toggleEnabled(item)"
+            >
+              {{ workingId === item.id ? '处理中…' : (item.enabled ? '禁用' : '启用') }}
+            </Button>
+            <Button
+              variant="danger"
+              size="md"
+              class="flex-1 min-h-[44px] justify-center"
+              :icon="Trash2"
+              :disabled="workingId === item.id"
+              @click="removeBinding(item)"
+            >
+              删除
+            </Button>
           </div>
         </article>
       </div>
     </div>
+
+    <!-- Preview BaseDrawer (Adaptive Bottom Sheet on Mobile with pb-safe) -->
+    <BaseDrawer
+      :model-value="showPreviewModal && !!preview"
+      title="链式代理生效预览"
+      @close="closePreviewModal"
+    >
+      <div v-if="preview" class="space-y-4 text-xs font-mono">
+        <!-- Preview Stats -->
+        <div class="grid grid-cols-3 gap-2 p-3 rounded-lg bg-surface border border-border-subtle text-center">
+          <div>
+            <div class="text-[11px] text-text-sub uppercase">目标匹配</div>
+            <div class="text-base font-bold text-text-main tabular-nums mt-0.5">{{ preview.target_count }}</div>
+          </div>
+          <div>
+            <div class="text-[11px] text-status-success uppercase font-semibold">挂链生效</div>
+            <div class="text-base font-bold text-status-success tabular-nums mt-0.5">{{ preview.chain_count }}</div>
+          </div>
+          <div>
+            <div class="text-[11px] text-text-muted uppercase">跳过忽略</div>
+            <div class="text-base font-bold text-text-muted tabular-nums mt-0.5">{{ preview.skip_count }}</div>
+          </div>
+        </div>
+
+        <!-- Samples: Chain -->
+        <div v-if="preview.chain_samples?.length" class="space-y-2">
+          <strong class="text-text-main flex items-center gap-1.5">
+            <span class="inline-block w-2 h-2 rounded-full bg-status-success"></span>
+            挂链样例节点
+          </strong>
+          <div class="flex flex-wrap gap-1.5 p-2.5 rounded-lg bg-surface border border-border-subtle">
+            <span
+              v-for="sample in preview.chain_samples.slice(0, 16)"
+              :key="sample"
+              class="px-1.5 py-0.5 rounded bg-surface-active text-text-main border border-border-subtle text-[11px]"
+            >
+              {{ sample }}
+            </span>
+          </div>
+        </div>
+
+        <!-- Samples: Skipped -->
+        <div v-if="preview.skip_samples?.length" class="space-y-2">
+          <strong class="text-text-muted flex items-center gap-1.5">
+            <span class="inline-block w-2 h-2 rounded-full bg-text-sub"></span>
+            跳过样例节点
+          </strong>
+          <div class="flex flex-wrap gap-1.5 p-2.5 rounded-lg bg-surface border border-border-subtle">
+            <span
+              v-for="sample in preview.skip_samples.slice(0, 16)"
+              :key="sample"
+              class="px-1.5 py-0.5 rounded bg-surface-active text-text-sub border border-border-subtle text-[11px]"
+            >
+              {{ sample }}
+            </span>
+          </div>
+        </div>
+
+        <div v-if="!preview.chain_samples?.length && !preview.skip_samples?.length" class="text-text-sub italic py-4 text-center">
+          没有可展示的样例节点。
+        </div>
+      </div>
+    </BaseDrawer>
   </section>
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { Plus, RefreshCw, Trash2, ArrowRight, Eye } from 'lucide-vue-next'
 import {
   createProxyChain,
   deleteProxyChain,
@@ -245,6 +534,8 @@ import {
   updateProxyChain,
 } from '../api'
 import PageToolbar from '../components/PageToolbar.vue'
+import UiState from '../components/UiState.vue'
+import { Button, StatusBadge, MetricCard, BaseDrawer } from '../components/ui'
 import { useAppStore } from '../stores/app'
 import { useUrlState } from '../utils/urlState'
 
@@ -328,6 +619,14 @@ onMounted(async () => {
   await reload()
   if (!bindings.value.length) showComposer.value = true
 })
+
+function onKeydown(e) {
+  if (e.key === 'Escape' && showPreviewModal.value) {
+    closePreviewModal()
+  }
+}
+window.addEventListener('keydown', onKeydown)
+onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 
 watch(
   () => [form.target_type, form.target_id, form.target_name, form.dialer_type, form.dialer_ref],
@@ -441,6 +740,7 @@ async function createBinding() {
     showPreviewModal.value = false
     showComposer.value = false
     await reload()
+    store.toast('链式绑定已创建', 'success')
   } catch (err) {
     error.value = getApiErrorMessage(err, '创建失败')
   } finally {
@@ -453,6 +753,7 @@ async function toggleEnabled(item) {
   workingId.value = item.id
   try {
     await updateProxyChain(item.id, { enabled: !item.enabled })
+    store.toast(item.enabled ? '已禁用绑定' : '已启用绑定', 'success')
     await reload()
   } catch (err) {
     error.value = getApiErrorMessage(err, '更新失败')
@@ -472,6 +773,7 @@ async function removeBinding(item) {
   workingId.value = item.id
   try {
     await deleteProxyChain(item.id)
+    store.toast('链式绑定已删除', 'success')
     await reload()
   } catch (err) {
     error.value = getApiErrorMessage(err, '删除失败')
@@ -480,196 +782,3 @@ async function removeBinding(item) {
   }
 }
 </script>
-
-<style scoped>
-.empty-with-action {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.stats-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin: 12px 0;
-}
-.stat-chip {
-  display: flex;
-  flex-direction: column;
-  min-width: 72px;
-  padding: 8px 12px;
-  border-radius: 12px;
-  border: 1px solid var(--border, #3333);
-  background: color-mix(in srgb, var(--primary, #4f8cff) 6%, transparent);
-}
-.stat-chip strong {
-  font-size: 18px;
-  line-height: 1.1;
-}
-.stat-chip span {
-  font-size: 12px;
-  opacity: 0.75;
-}
-.composer-steps {
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  gap: 12px;
-  align-items: stretch;
-  margin-top: 12px;
-}
-.step-card {
-  border: 1px solid var(--border, #3333);
-  border-radius: 14px;
-  padding: 12px;
-  background: color-mix(in srgb, var(--surface, #fff) 90%, transparent);
-}
-.step-title {
-  font-weight: 700;
-  margin-bottom: 10px;
-}
-.step-arrow {
-  align-self: center;
-  opacity: 0.55;
-  font-weight: 700;
-}
-.seg {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 10px;
-}
-.seg button {
-  border-radius: 999px;
-  min-height: 36px;
-}
-.seg button.active {
-  background: color-mix(in srgb, var(--primary, #4f8cff) 22%, transparent);
-  border-color: color-mix(in srgb, var(--primary, #4f8cff) 45%, transparent);
-  font-weight: 700;
-}
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-top: 8px;
-}
-.preview-modal {
-  width: min(720px, 96vw);
-  max-height: 90vh;
-  overflow: auto;
-  display: grid;
-  gap: 12px;
-}
-.preview-modal-head h3 {
-  margin: 0 0 4px;
-}
-.sample-block {
-  display: grid;
-  gap: 6px;
-}
-.sample-line {
-  font-size: 12px;
-  overflow-wrap: anywhere;
-}
-.composer-actions {
-  margin-top: 12px;
-}
-.filter-bar {
-  gap: 10px;
-  flex-wrap: wrap;
-}
-.filter-input {
-  min-width: min(100%, 240px);
-  flex: 1;
-}
-.bind-list {
-  display: grid;
-  gap: 10px;
-  margin-top: 10px;
-}
-.bind-card {
-  border: 1px solid var(--border, #3333);
-  border-radius: 14px;
-  padding: 12px;
-  display: grid;
-  gap: 10px;
-}
-.bind-card.disabled {
-  opacity: 0.72;
-}
-.bind-flow {
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  gap: 8px;
-  align-items: center;
-}
-.endpoint {
-  min-width: 0;
-  padding: 8px 10px;
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--primary, #4f8cff) 10%, transparent);
-}
-.endpoint.dialer {
-  background: color-mix(in srgb, #22c55e 12%, transparent);
-}
-.endpoint-kind {
-  display: block;
-  font-size: 11px;
-  opacity: 0.7;
-  margin-bottom: 2px;
-}
-.endpoint-name {
-  display: block;
-  overflow-wrap: anywhere;
-  font-size: 13px;
-}
-.flow-mid {
-  text-align: center;
-  opacity: 0.65;
-  font-size: 12px;
-  font-weight: 700;
-}
-.bind-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-}
-.note {
-  overflow-wrap: anywhere;
-}
-.pill {
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: 999px;
-  font-size: 12px;
-  background: color-mix(in srgb, var(--primary, #4f8cff) 16%, transparent);
-}
-.pill.ok {
-  background: color-mix(in srgb, #22c55e 18%, transparent);
-}
-.pill.danger {
-  background: color-mix(in srgb, #ef4444 22%, transparent);
-}
-@media (max-width: 760px) {
-  .composer-steps {
-    grid-template-columns: 1fr;
-  }
-  .step-arrow {
-    display: none;
-  }
-  .bind-flow {
-    grid-template-columns: 1fr;
-  }
-  .flow-mid {
-    text-align: left;
-  }
-  .action-row {
-    width: 100%;
-  }
-  .action-row button {
-    flex: 1 1 auto;
-    min-height: 40px;
-  }
-}
-</style>

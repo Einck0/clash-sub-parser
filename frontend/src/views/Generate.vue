@@ -22,7 +22,7 @@
     <!-- Alert / Message Banner -->
     <div
       v-if="message"
-      class="p-4 rounded-xl border text-xs font-mono"
+      class="p-4 rounded-lg border text-xs font-mono"
       :class="messageType === 'error' ? 'border-rose-500/30 bg-rose-500/10 text-rose-400' : 'border-blue-500/30 bg-blue-500/10 text-blue-300'"
       :role="messageType === 'error' ? 'alert' : 'status'"
       aria-live="polite"
@@ -63,7 +63,7 @@
       <!-- Left Column: Controls & Single Export -->
       <aside class="lg:col-span-5 space-y-6">
         <!-- Module Toggles Card -->
-        <div class="rounded-xl border border-white/10 bg-slate-900/60 backdrop-blur-md p-4 sm:p-5 space-y-4">
+        <div class="rounded-lg border border-white/10 bg-slate-900 p-4 sm:p-5 space-y-4">
           <div class="flex items-center justify-between pb-3 border-b border-white/5">
             <div>
               <h3 class="text-sm font-semibold text-white tracking-tight">生成模块</h3>
@@ -125,13 +125,13 @@
 
           <!-- Build Button -->
           <button
-            class="w-full min-h-[44px] inline-flex items-center justify-center gap-2 rounded-lg border border-blue-500/40 bg-blue-600 px-4 py-2.5 text-xs font-semibold text-white shadow-md hover:bg-blue-500 transition-all cursor-pointer disabled:opacity-50"
+            class="w-full min-h-[44px] inline-flex items-center justify-center gap-2 rounded-lg border border-blue-500/40 bg-blue-600 px-4 py-2.5 text-xs font-semibold text-white shadow-md hover:bg-blue-500 transition-colors cursor-pointer disabled:opacity-50"
             data-testid="generate-yaml"
             :disabled="!!working"
             @click="buildYaml"
           >
-            <span v-if="working === 'yaml'" class="h-3.5 w-3.5 animate-spin rounded-full border-2 border-solid border-current border-r-transparent"></span>
-            {{ working === 'yaml' ? '正在编译生成 YAML…' : '⚡ 立即生成 YAML' }}
+            <Play :size="14" aria-hidden="true" />
+            {{ working === 'yaml' ? '正在编译生成 YAML…' : '立即生成 YAML' }}
           </button>
 
           <!-- Samples hint if present -->
@@ -144,7 +144,7 @@
         </div>
 
         <!-- Single Subscription Export Card -->
-        <div class="rounded-xl border border-white/10 bg-slate-900/60 backdrop-blur-md p-4 sm:p-5 space-y-4">
+        <div class="rounded-lg border border-white/10 bg-slate-900 p-4 sm:p-5 space-y-4">
           <div class="pb-3 border-b border-white/5">
             <h3 class="text-sm font-semibold text-white tracking-tight">按订阅单独导出</h3>
             <p class="text-xs text-slate-400 mt-0.5">选择单个订阅导出其专有配置。</p>
@@ -184,24 +184,135 @@
 
       <!-- Right Column: Subscription Links & Output -->
       <main class="lg:col-span-7 space-y-6">
+        <!-- 5-Target Export Center Card -->
+        <div class="rounded-lg border border-white/10 bg-slate-900 p-4 sm:p-5 space-y-4">
+          <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 pb-3 border-b border-white/5">
+            <div>
+              <h3 class="text-sm font-semibold text-white tracking-tight">多客户端订阅与导出</h3>
+              <p class="text-xs text-slate-400 mt-0.5">支持 5 大客户端格式与 Scheme 协议自动分发。</p>
+            </div>
+            <div class="grid grid-cols-2 gap-1 rounded-lg bg-slate-950/60 p-1 border border-white/5 text-xs">
+              <button
+                type="button"
+                :class="[
+                  'px-3 py-1.5 rounded-md font-medium transition-colors cursor-pointer',
+                  exportMode === 'merged' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'
+                ]"
+                @click="exportMode = 'merged'"
+              >
+                合并配置
+              </button>
+              <button
+                type="button"
+                :class="[
+                  'px-3 py-1.5 rounded-md font-medium transition-colors cursor-pointer',
+                  exportMode === 'subscription' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'
+                ]"
+                @click="exportMode = 'subscription'"
+              >
+                单订阅导出
+              </button>
+            </div>
+          </div>
+
+          <!-- Single Subscription Select if exportMode === 'subscription' -->
+          <div v-if="exportMode === 'subscription'" class="space-y-1.5 p-3 rounded-lg bg-slate-950/40 border border-white/5">
+            <label class="text-xs font-mono text-slate-400">选择单订阅数据源</label>
+            <select
+              v-model="selectedExportSubId"
+              class="w-full min-h-[44px] rounded-lg border border-white/10 bg-slate-950/60 px-3.5 py-2 text-xs text-white font-mono focus:border-blue-500 focus:outline-hidden cursor-pointer"
+            >
+              <option v-for="sub in subscriptions" :key="sub.id" :value="sub.id">
+                {{ sub.name }} (ID: {{ sub.id }})
+              </option>
+            </select>
+          </div>
+
+          <!-- 5 Target Selector Tabs -->
+          <div class="grid grid-cols-5 gap-1.5 rounded-lg bg-slate-950/60 p-1.5 border border-white/5">
+            <button
+              v-for="t in TARGET_DEFS"
+              :key="t.key"
+              type="button"
+              :class="[
+                'flex flex-col items-center justify-center py-2 px-1 rounded-md text-xs font-medium transition-colors cursor-pointer min-h-[44px]',
+                selectedTarget === t.key
+                  ? 'bg-blue-600/20 text-blue-400 border border-blue-500/40'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 border border-transparent'
+              ]"
+              @click="selectedTarget = t.key"
+            >
+              <span class="font-semibold">{{ t.name }}</span>
+              <span class="text-[10px] font-mono opacity-70">{{ t.format }}</span>
+            </button>
+          </div>
+
+          <!-- Target Description & Badge -->
+          <div class="flex items-center justify-between text-xs font-mono text-slate-400 px-1">
+            <span>{{ currentTargetDef.desc }}</span>
+            <span class="px-2 py-0.5 rounded bg-slate-800 border border-white/5 text-blue-300 text-[10px]">{{ currentTargetDef.badge }}</span>
+          </div>
+
+          <!-- Export URL Row -->
+          <div class="space-y-1.5">
+            <div class="flex items-center gap-2">
+              <input
+                :value="currentExportUrl"
+                readonly
+                class="flex-1 min-h-[44px] rounded-lg border border-white/10 bg-slate-950/80 px-3.5 py-2 text-xs font-mono text-slate-200 select-all focus:border-blue-500 focus:outline-hidden"
+              />
+              <button
+                type="button"
+                class="min-h-[44px] px-4 py-2 rounded-lg border border-blue-500/40 bg-blue-600/20 text-xs font-medium text-blue-400 hover:bg-blue-600/30 transition-colors cursor-pointer whitespace-nowrap"
+                @click="copy(currentExportUrl)"
+              >
+                复制链接
+              </button>
+            </div>
+          </div>
+
+          <!-- Actions & QR Code Grid -->
+          <div class="grid grid-cols-1 sm:grid-cols-12 gap-4 pt-1 items-center">
+            <div class="sm:col-span-8 flex flex-col gap-2.5">
+              <a
+                :href="currentSchemeUrl"
+                class="flex min-h-[44px] items-center justify-center gap-2 rounded-lg border border-blue-500/40 bg-blue-600 px-4 py-2.5 text-xs font-semibold text-white shadow-md hover:bg-blue-500 transition-colors cursor-pointer text-center"
+              >
+                <span>{{ clientWakeupLabel }}</span>
+              </a>
+              <a
+                :href="currentExportUrl"
+                target="_blank"
+                rel="noreferrer"
+                class="flex min-h-[44px] items-center justify-center gap-2 rounded-lg border border-white/10 bg-slate-800/60 px-4 py-2.5 text-xs font-medium text-slate-200 hover:bg-slate-800 hover:text-white transition-colors cursor-pointer text-center"
+              >
+                <span>下载 / 查看 {{ currentTargetDef.format }}</span>
+              </a>
+            </div>
+            <div class="sm:col-span-4 flex flex-col items-center justify-center p-2 bg-white rounded-lg shadow-md">
+              <QrCode :url="currentQrPayload" :size="100" />
+            </div>
+          </div>
+        </div>
+
         <!-- Links Grid -->
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <!-- Short URL Card -->
-          <div class="flex flex-col justify-between p-4 sm:p-5 rounded-xl border border-white/10 bg-slate-900/60 backdrop-blur-md space-y-3">
+          <div class="flex flex-col justify-between p-4 sm:p-5 rounded-lg border border-white/10 bg-slate-900 space-y-3">
             <div>
               <strong class="text-sm font-semibold text-white block">短订阅地址</strong>
               <p class="text-xs text-slate-400 mt-0.5">不带 query，使用当前保存配置</p>
             </div>
             <LinkRow label="YAML" :value="yamlCurrentUrl" @copy="copy" />
             <div v-if="yamlCurrentUrl" class="flex justify-center pt-2">
-              <div class="p-2 bg-white rounded-xl shadow-md">
+              <div class="p-2 bg-white rounded-lg shadow-md">
                 <QrCode :url="yamlCurrentUrl" :size="120" />
               </div>
             </div>
           </div>
 
           <!-- Full URL Card -->
-          <div class="flex flex-col justify-between p-4 sm:p-5 rounded-xl border border-white/10 bg-slate-900/60 backdrop-blur-md space-y-3">
+          <div class="flex flex-col justify-between p-4 sm:p-5 rounded-lg border border-white/10 bg-slate-900 space-y-3">
             <div>
               <strong class="text-sm font-semibold text-white block">完整订阅地址</strong>
               <p class="text-xs text-slate-400 mt-0.5">带 query，适合临时覆盖</p>
@@ -214,7 +325,7 @@
         </div>
 
         <!-- Compiled Result Output Card -->
-        <div class="rounded-xl border border-white/10 bg-slate-900/60 backdrop-blur-md p-4 sm:p-5 space-y-3">
+        <div class="rounded-lg border border-white/10 bg-slate-900 p-4 sm:p-5 space-y-3">
           <div class="flex items-center justify-between pb-3 border-b border-white/5">
             <strong class="text-sm font-semibold text-white">YAML 预览</strong>
             <div class="flex items-center gap-2">
@@ -237,13 +348,13 @@
           <textarea
             data-testid="generated-yaml-output"
             v-model="yamlResult"
-            placeholder="点击“⚡ 立即生成 YAML”后显示生成的内容…"
+            placeholder="点击“立即生成 YAML”后显示生成的内容…"
             class="w-full h-80 rounded-lg border border-white/10 bg-slate-950/80 p-3.5 text-xs text-slate-300 font-mono focus:border-blue-500 focus:outline-hidden resize-y"
           ></textarea>
         </div>
 
         <!-- Separate Subscription Output Card (if generated) -->
-        <div v-if="subscriptionResult" class="rounded-xl border border-white/10 bg-slate-900/60 backdrop-blur-md p-4 sm:p-5 space-y-3">
+        <div v-if="subscriptionResult" class="rounded-lg border border-white/10 bg-slate-900 p-4 sm:p-5 space-y-3">
           <div class="flex items-center justify-between pb-3 border-b border-white/5">
             <strong class="text-sm font-semibold text-white">单独订阅内容</strong>
             <div class="flex items-center gap-2">
@@ -273,8 +384,9 @@
 
 <script setup>
 import { computed, defineComponent, h, onMounted, reactive, ref, watch } from 'vue'
+import { Play } from 'lucide-vue-next'
 import { useAppStore } from '../stores/app'
-import { withAuthToken } from '../auth'
+import { getAuthToken, withAuthToken } from '../auth'
 import QrCode from '../components/QrCode.vue'
 import MetricCard from '../components/ui/MetricCard.vue'
 import {
@@ -282,6 +394,7 @@ import {
   generateYaml,
   getApiErrorMessage,
   getGenerateSettings,
+  getQuickExport,
   getSecuritySettings,
   getSubscriptions,
   updateGenerateSettings,
@@ -334,6 +447,130 @@ const working = ref('')
 const settingsLoaded = ref(false)
 const exportNeedsToken = ref(false)
 let saveTimer = null
+
+const TARGET_DEFS = [
+  { key: 'clash', name: 'Clash', format: 'YAML', badge: 'Clash 官方', ext: 'yaml', desc: 'Clash Verge / ClashX' },
+  { key: 'mihomo', name: 'Mihomo', format: 'YAML', badge: 'Meta 内核', ext: 'yaml', desc: 'Mihomo Party / Flclash' },
+  { key: 'stash', name: 'Stash', format: 'YAML', badge: 'Stash iOS', ext: 'yaml', desc: 'Stash iOS / macOS' },
+  { key: 'shadowrocket', name: 'Shadowrocket', format: 'TXT', badge: '小火箭', ext: 'txt', desc: '小火箭扫码与节点列表' },
+  { key: 'sing-box', name: 'Sing-box', format: 'JSON', badge: 'sing-box 1.8+', ext: 'json', desc: 'sing-box 远程 Profile' },
+]
+
+const exportMode = ref('merged')
+const selectedTarget = ref('clash')
+const selectedExportSubId = ref(null)
+const remoteTargets = ref(null)
+
+function safeBtoa(str) {
+  try {
+    return btoa(encodeURIComponent(str).replace(/%([0-9A-F]{2})/g, (_, p1) => String.fromCharCode(parseInt(p1, 16))))
+  } catch {
+    return btoa(str)
+  }
+}
+
+const currentTargetDef = computed(() => {
+  return TARGET_DEFS.find(t => t.key === selectedTarget.value) || TARGET_DEFS[0]
+})
+
+const selectedExportSubName = computed(() => {
+  if (exportMode.value !== 'subscription' || !selectedExportSubId.value) {
+    return 'ClashSubParser'
+  }
+  const match = subscriptions.value.find(s => s.id === selectedExportSubId.value)
+  return match?.name || `Sub-${selectedExportSubId.value}`
+})
+
+const fallbackExportUrl = computed(() => {
+  const origin = typeof window !== 'undefined' && window.location?.origin ? window.location.origin : ''
+  const tKey = selectedTarget.value
+
+  if (exportMode.value === 'subscription') {
+    const subId = selectedExportSubId.value || (subscriptions.value[0]?.id ?? 1)
+    const base = `${origin}/api/generate/subscription/${subId}?target=${tKey}`
+    return withAuthToken(base, exportNeedsToken.value || Boolean(getAuthToken()))
+  } else {
+    const base = `${origin}/api/generate/${tKey}`
+    return withAuthToken(base, exportNeedsToken.value || Boolean(getAuthToken()))
+  }
+})
+
+const currentExportUrl = computed(() => {
+  if (remoteTargets.value && remoteTargets.value[selectedTarget.value]?.url) {
+    return remoteTargets.value[selectedTarget.value].url
+  }
+  return fallbackExportUrl.value
+})
+
+const currentSchemeUrl = computed(() => {
+  if (remoteTargets.value && remoteTargets.value[selectedTarget.value]?.scheme_url) {
+    return remoteTargets.value[selectedTarget.value].scheme_url
+  }
+
+  const url = currentExportUrl.value
+  const name = selectedExportSubName.value
+  const tKey = selectedTarget.value
+
+  if (tKey === 'clash' || tKey === 'mihomo') {
+    return `clash://install-config?url=${encodeURIComponent(url)}&name=${encodeURIComponent(name)}`
+  }
+  if (tKey === 'stash') {
+    return `stash://install-config?url=${encodeURIComponent(url)}&name=${encodeURIComponent(name)}`
+  }
+  if (tKey === 'shadowrocket') {
+    return `sub://${safeBtoa(url)}`
+  }
+  if (tKey === 'sing-box') {
+    return `sing-box://import-remote-profile?url=${encodeURIComponent(url)}#${encodeURIComponent(name)}`
+  }
+  return url
+})
+
+const currentQrPayload = computed(() => {
+  if (remoteTargets.value && remoteTargets.value[selectedTarget.value]?.qrcode_payload) {
+    return remoteTargets.value[selectedTarget.value].qrcode_payload
+  }
+  if (selectedTarget.value === 'shadowrocket') {
+    return currentSchemeUrl.value
+  }
+  return currentExportUrl.value
+})
+
+const clientWakeupLabel = computed(() => {
+  switch (selectedTarget.value) {
+    case 'clash':
+      return '一键导入 Clash'
+    case 'mihomo':
+      return '一键导入 Mihomo'
+    case 'stash':
+      return '一键导入 Stash'
+    case 'shadowrocket':
+      return '唤醒 Shadowrocket'
+    case 'sing-box':
+      return '一键导入 Sing-box'
+    default:
+      return '一键唤醒客户端'
+  }
+})
+
+async function refreshQuickExport() {
+  try {
+    const subId = exportMode.value === 'subscription' ? (selectedExportSubId.value || undefined) : undefined
+    const res = await getQuickExport({
+      target: selectedTarget.value,
+      subscription_id: subId,
+    })
+    if (res?.data?.targets) {
+      remoteTargets.value = res.data.targets
+    }
+  } catch {
+    // fallback will take over
+  }
+}
+
+watch([exportMode, selectedTarget, selectedExportSubId], () => {
+  refreshQuickExport()
+})
 
 onMounted(load)
 

@@ -11,15 +11,27 @@
   </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { computed } from 'vue'
 
-const props = defineProps({
-  type: { type: String, default: 'info' },
-  title: { type: String, required: true },
-  description: { type: String, default: '' },
-  compact: { type: Boolean, default: false },
-})
+const props = withDefaults(
+  defineProps<{
+    type?: string
+    title: string
+    description?: string
+    compact?: boolean
+  }>(),
+  {
+    type: 'info',
+    description: '',
+    compact: false,
+  }
+)
+
+defineSlots<{
+  default?: () => any
+  actions?: () => any
+}>()
 
 const icon = computed(() => {
   if (props.type === 'loading') return '…'

@@ -204,7 +204,7 @@ function applySelected() {
 }
 </script>
 
-<style scoped>
+<style>
 .import-modal {
   max-width: 700px;
   max-height: 85vh;

@@ -141,7 +141,10 @@
       <div class="selector-section">
         <div class="row space">
           <div>
-            <strong>⚡ 节点质检与流媒体/AI 过滤（可选）</strong>
+            <strong class="inline-flex items-center gap-1.5">
+            <Zap class="h-4 w-4 text-accent" aria-hidden="true" />
+            <span>节点质检与流媒体或 AI 过滤（可选）</span>
+          </strong>
             <p class="section-hint">
               满足条件的节点才会进入此策略组。测速门槛和流媒体解锁要求需在节点探测中测得有效结果。
             </p>
@@ -165,9 +168,8 @@
             <label
               v-for="p in availablePlatforms"
               :key="p.id"
-              class="platform-chip"
+              class="platform-chip min-h-[36px] px-3 py-1.5 rounded-md border border-border-subtle text-xs flex items-center gap-1.5 cursor-pointer select-none transition-colors"
               :class="{ active: (form.filter_media_unlock || []).includes(p.id) }"
-              style="cursor: pointer; padding: 5px 10px; border-radius: 6px; border: 1px solid var(--border-color, #333); font-size: 0.85rem; display: flex; align-items: center; gap: 6px;"
             >
               <input
                 type="checkbox"
@@ -206,7 +208,7 @@
             <button
               v-if="!(entry.type === 'regex' && editingRegexIndex === idx)"
               type="button"
-              class="drag-handle"
+              class="drag-handle inline-flex items-center justify-center p-1 text-text-muted hover:text-text-main"
               title="拖拽排序"
               data-drag-handle
               draggable="true"
@@ -214,7 +216,7 @@
               @dragend="draggingIndex = -1"
               @click.stop
               @mousedown.stop
-            >☰</button>
+            ><GripVertical class="h-4 w-4" aria-hidden="true" /></button>
             <div class="node-select-name mono" style="width:100%">
               <template v-if="entry.type === 'regex' && editingRegexIndex === idx">
                 <div class="regex-edit-box no-drag">
@@ -305,6 +307,7 @@
 
 <script setup>
 import { computed, ref, watch } from 'vue'
+import { Zap, GripVertical } from 'lucide-vue-next'
 import {
   createNodeGroup,
   getAllSubscriptionNodes,

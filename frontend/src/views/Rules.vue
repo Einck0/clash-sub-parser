@@ -6,7 +6,7 @@
         <p class="text-xs font-mono text-blue-400 uppercase tracking-wider">Routing Rules Matrix</p>
         <h2 class="text-xl font-bold text-white tracking-tight">规则分类</h2>
         <p class="text-xs text-slate-400 mt-1">
-          按用途管理规则。按住 ☰ 拖拽排序；改名、新增、移除和排序都会先进入草稿，确认后点击“保存全部”。
+          按用途管理规则。按住拖拽柄排序；改名、新增、移除和排序都会先进入草稿，确认后点击“保存全部”。
         </p>
       </div>
       <div class="flex flex-wrap items-center gap-2.5 w-full sm:w-auto">
@@ -35,7 +35,7 @@
     <!-- Alert / Status Notice -->
     <div
       v-if="error"
-      class="p-4 rounded-xl border border-rose-500/30 bg-rose-500/10 text-xs font-mono text-rose-400"
+      class="p-4 rounded-lg border border-rose-500/30 bg-rose-500/10 text-xs font-mono text-rose-400"
       role="alert"
       aria-live="assertive"
     >
@@ -43,7 +43,7 @@
     </div>
     <div
       v-if="hasUnsavedChanges && !error"
-      class="p-4 rounded-xl border border-amber-500/30 bg-amber-500/10 text-xs font-mono text-amber-300 flex items-center gap-2"
+      class="p-4 rounded-lg border border-amber-500/30 bg-amber-500/10 text-xs font-mono text-amber-300 flex items-center gap-2"
       role="status"
       aria-live="polite"
     >
@@ -68,13 +68,13 @@
       <MetricCard
         label="SYNC STATUS"
         :value="saveStatus"
-        description="点击卡片进入详情编辑；按住左侧 ☰ 拖拽柄或使用下拉位置选择器调整顺序。"
+        description="点击列表进入详情编辑；按住左侧拖拽柄或使用下拉位置选择器调整顺序。"
         :status="hasUnsavedChanges ? 'warning' : 'neutral'"
       />
     </div>
 
     <!-- Global Rule Search Card -->
-    <section class="rounded-xl border border-white/10 bg-slate-900/60 backdrop-blur-md p-4 sm:p-5 space-y-4" aria-label="规则搜索">
+    <section class="rounded-lg border border-white/10 bg-slate-900 p-4 sm:p-5 space-y-4" aria-label="规则搜索">
       <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
         <div>
           <h3 class="text-sm font-semibold text-white tracking-tight">全局规则搜索</h3>
@@ -159,7 +159,7 @@
       <article
         v-for="(cat, idx) in sortedCategories"
         :key="cat._clientId || cat.id || `new-${idx}`"
-        class="flex flex-col justify-between p-4 sm:p-5 rounded-xl border transition-all backdrop-blur-md space-y-4"
+        class="flex flex-col justify-between p-4 sm:p-5 rounded-lg border space-y-4"
         :class="[
           draggingCategoryKey === categoryKey(cat)
             ? 'opacity-50 ring-2 ring-blue-500/40 border-blue-500'
@@ -182,7 +182,7 @@
               @click.stop
               @mousedown.stop
             >
-              ☰
+              <GripVertical :size="16" aria-hidden="true" />
             </button>
             <div class="min-w-0">
               <span class="text-xs font-mono text-slate-500">#{{ idx + 1 }}</span>
@@ -262,6 +262,7 @@ import {
   reorderRuleCategories,
   updateRuleCategory,
 } from '../api'
+import { GripVertical } from 'lucide-vue-next'
 import UiState from '../components/UiState.vue'
 import FabSave from '../components/FabSave.vue'
 import MetricCard from '../components/ui/MetricCard.vue'

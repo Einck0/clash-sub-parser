@@ -96,7 +96,9 @@
             @drop="onRuleDrop(item)"
           >
             <td class="col-index muted">
-              <button type="button" class="drag-handle drag-mini" title="拖拽排序" data-drag-handle draggable="true" @dragstart="onRuleDragStart($event, item)" @dragend="draggingRuleKey = null" @click.stop @mousedown.stop>☰</button>
+              <button type="button" class="drag-handle drag-mini" title="拖拽排序" data-drag-handle draggable="true" @dragstart="onRuleDragStart($event, item)" @dragend="draggingRuleKey = null" @click.stop @mousedown.stop>
+                <GripVertical :size="16" aria-hidden="true" />
+              </button>
               {{ pageStart + idx + 1 }}
             </td>
             <td class="col-enabled no-drag"><input type="checkbox" v-model="item.enabled" @dragstart.stop.prevent /></td>
@@ -145,7 +147,9 @@
       >
         <div class="mobile-rule-head">
           <div class="sortable-title">
-            <button type="button" class="drag-handle" title="拖拽排序" data-drag-handle draggable="true" @dragstart="onRuleDragStart($event, item)" @dragend="draggingRuleKey = null" @click.stop @mousedown.stop>☰</button>
+            <button type="button" class="drag-handle" title="拖拽排序" data-drag-handle draggable="true" @dragstart="onRuleDragStart($event, item)" @dragend="draggingRuleKey = null" @click.stop @mousedown.stop>
+              <GripVertical :size="16" aria-hidden="true" />
+            </button>
             <div>
               <span class="category-index">#{{ pageStart + idx + 1 }}</span>
               <strong>{{ item.name || item.type || '未命名规则' }}</strong>
@@ -208,6 +212,7 @@ const store = useAppStore()
 import { createRule, deleteRule, getApiErrorMessage, getNodeGroups, getRules, updateRule, batchRules } from '../api'
 import { BUILTINS, RULE_TYPES, normalizeRuleType, parseOptions, proxyTargetsFromGroups } from '../utils/ruleUtils'
 import { setDragGhost, shouldAllowDragStart } from '../utils/drag'
+import { GripVertical } from 'lucide-vue-next'
 import RulePresetsModal from '../components/RulePresetsModal.vue'
 import RuleImportModal from '../components/RuleImportModal.vue'
 import FabSave from '../components/FabSave.vue'

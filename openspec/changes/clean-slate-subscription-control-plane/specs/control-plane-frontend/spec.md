@@ -40,8 +40,12 @@ NodeLedger SHALL 支持名称/地址/端口关键字、来源、协议、探测�
 - **WHEN** 操作者从任一已认证工作台页面打开 QuickExport，选择一个目标和单订阅或合并订阅
 - **THEN** 页面展示与该修订一致的订阅 URL、适用客户端 Scheme 和二维码，且切换目标不会丢失已选发布范围
 
-### Requirement: Workbench 视觉一致性与可访问交互
-控制台 SHALL 以一致的 Workbench 壳承载订阅、策略组、NodeLedger、跳板链、规则、DNS、导出、设置和快照入口，并保留既有路由与 Quick Export 入口。暗色和浅色主题 MUST 使用同一套语义色、文字层级、密度和状态表达；密集数据表 MUST 保持可辨识的行、列标题、焦点和状态，而卡片视图 MUST 提供等价操作入口
+### Requirement: Workbench 视觉一致性、密度与可访问交互
+控制台 SHALL 以一致的 Workbench 壳承载订阅、策略组、NodeLedger、跳板链、规则、DNS、导出、设置和快照入口，并保留既有路由与 Quick Export 入口。它 SHALL 以 token 驱动的暗色默认和等价浅色主题呈现，采用不透明表面、1px hairline 分区、8px 栅格、明确文本层级和等宽数据轨；数字、IP、端口、延迟、速度、流量和日期 MUST 使用 tabular figures。密集数据表 MUST 保持 36px 行高、可辨识列标题、焦点和状态，节点卡 MUST 是有界的小屏或替代视图而不是默认库存容器。
+
+工作台 MUST 禁止 Card Soup、glassmorphism、紫色或荧光渐变、居中 Hero、无意义留白、装饰性 emoji 图标、过大圆角与阴影堆叠。领域模板和 scoped styles 不得私自定义颜色、阴影、圆角、渐变或像素密度；它们 MUST 消费共享语义 token/原语。状态色不能是唯一传达信息的途径，图标 MUST 来自统一图标集并附带文字、title 或可访问名称。
+
+所有键盘可操作元素 MUST 有可见 `:focus-visible` 焦点样式；页面 MUST 提供 skip link。Dialog、Drawer、Menu 和 Confirm MUST 保持可感知标题、可访问名称、焦点陷阱、Escape/取消、背景不可交互、初始焦点和关闭后的焦点恢复。窄屏交互目标至少为 44px、底部 sheet 适配 safe area；数据表必须降级为可读卡片或可横滚的语义表格。动画 MUST 使用统一短时缓动和 reduced-motion 回退，且不得使用 `transition: all`、宽度动画或持续闪烁作为状态表达
 
 #### Scenario: 键盘操作对话框
 - **WHEN** 操作者用键盘打开详情、跳板配置、导出或危险操作确认界面
@@ -51,8 +55,12 @@ NodeLedger SHALL 支持名称/地址/端口关键字、来源、协议、探测�
 - **WHEN** 操作者在窄屏设备访问 NodeLedger 或其他高密度管理视图
 - **THEN** 页面提供可读的卡片或可横向浏览的语义表格，不隐藏操作、不把状态仅用颜色表达，也不使焦点落入不可见区域
 
-### Requirement: 前端领域切片与草稿安全
-NodeLedger、Subscriptions、NodeGroups、Rules、ProxyChains、Dns、Generate/QuickExport、Settings 和 ConfigHistory SHALL 按领域组件、查询状态和编辑草稿组织。远端刷新、路由切换和失败响应不得覆盖未保存的编辑草稿；危险操作需明确确认、取消后恢复焦点。领域组件只能经统一 API client 与领域状态读取服务端结果，不得在浏览器复制协议解析、节点能力判定、策略动态展开或配置编译规则
+#### Scenario: 高密度视觉门禁
+- **WHEN** CI 扫描领域视图和共享组件
+- **THEN** 扫描拒绝未映射的颜色、渐变、模糊背景、emoji 交互图标、`transition: all`、宽度动画和不受 token 控制的 Card Soup 样式，同时允许主题入口和共享原语中经记录的 token 映射
+
+### Requirement: 前端领域切片、草稿安全与请求一致性
+NodeLedger、Subscriptions、NodeGroups、Rules、ProxyChains、Dns、Generate/QuickExport、Settings 和 ConfigHistory SHALL 按领域组件、查询状态和编辑草稿组织。远端刷新、路由切换和失败响应不得覆盖未保存的编辑草稿；危险操作需明确确认、取消后恢复焦点。领域组件只能经统一 API client 与领域状态读取服务端结果，不得在浏览器复制协议解析、节点能力判定、策略动态展开或配置编译规则。统一 API client MUST 支持 AbortSignal/请求身份，以保证晚到的旧查询不能覆盖更新筛选后的结果
 
 #### Scenario: 编辑策略时后台刷新
 - **WHEN** 操作者编辑策略组且节点查询返回新数据

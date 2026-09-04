@@ -1,5 +1,5 @@
 <template>
-  <div class="sticky top-14 sm:top-16 z-10 mb-5 flex flex-wrap items-center gap-3 rounded-xl border border-white/10 bg-slate-900/70 p-3 sm:p-3.5 backdrop-blur-md shadow-sm transition-all">
+  <div class="sticky top-14 sm:top-16 z-10 mb-5 flex flex-wrap items-center gap-3 rounded-lg border border-white/10 bg-slate-900/70 p-3 sm:p-3.5 shadow-sm transition-colors">
     <!-- Search Box -->
     <div v-if="showSearch !== false" class="relative flex-1 min-w-[200px] sm:min-w-[240px]">
       <input

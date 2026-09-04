@@ -42,19 +42,31 @@
 
 ### D4. Workbench 前端架构、视觉系统与状态边界
 
-前端保持 Vue 3 + Vite，升级为“应用壳 + 领域切片 + 共享原语”的 Workbench，而不是把旧页面换一层样式。`AppShell` 由紧凑顶栏、主导航、命令区、路由工作区及可选上下文检查器组成：桌面宽度保留可见导航；窄屏将导航折叠为受控抽屉，数据表退化为卡片或可横滚的语义表格，抽屉/对话框全屏化。现有 `/`、`/nodes`、`/node-groups`、`/proxy-chains`、`/rules`、`/dns`、`/generate`、`/settings`、`/history` 路由和 Quick Export 入口维持，不建立第二套控制台。
+前端保持 Vue 3 + Vite，采用“应用壳 + 领域切片 + 共享原语”的 Workbench，而不是把旧页面换一层样式。`AppShell` 由 48px 紧凑顶栏、桌面侧栏、主导航、全局命令区、路由工作区及可选上下文检查器组成：桌面保留可见导航；窄屏将导航折叠为受控抽屉，数据表退化为卡片或可横滚的语义表格，抽屉/对话框以 mobile bottom sheet 呈现。现有 `/`、`/nodes`、`/subscriptions`、`/node-groups`、`/proxy-chains`、`/rules`、`/dns`、`/generate`、`/settings`、`/history` 路由和 Quick Export 入口维持，不建立第二套控制台。
 
-样式使用 Tailwind v4 与 Vite 集成，但业务组件只消费语义化原语，不能散落任意颜色、尺寸或状态判断。Design Token 的基线为：画布 `#090D16`，面板阶梯 `#0F172A/#1E293B`，主色 `#3B82F6`，成功 `#10B981`，测速 `#06B6D4`，告警 `#F59E0B`，失败 `#EF4444`，主/次/弱文本 `#F8FAFC/#94A3B8/#64748B`，边框 `rgba(255,255,255,.08)`；数字、IP、端口、延迟和速度使用 JetBrains Mono 或 Fira Code。令牌必须同时提供暗色默认与等价浅色主题，状态色不能是唯一传达信息的途径。密集表格行高 36px、节点卡 110px、常规交互过渡 150ms ease-out；禁止未经过令牌的全局大面积玻璃效果，避免可读性和滚动性能退化。
+#### D4.1 乔木横评的负面清单先行
 
-共享 `ui/` 仅承载 Button、IconButton、Field、Combobox、Tabs、Switch、Badge、Status、Tooltip、Menu、Dialog/Drawer、Confirm、Toast、Empty/Loading 和数据表壳。Headless UI 负责 Dialog、Menu、Listbox/Combobox、Tabs、Switch 等焦点与键盘语义，Vue 组件负责 CSP 领域组合；图标统一来自 lucide-vue-next。任何对话框和抽屉均须有可感知标题、焦点圈、焦点陷阱、Escape/取消、关闭后焦点恢复和不可点击的背景层。可删除/清缓存/恢复等命令必须经统一 Confirm 原语，运行中命令在原始按钮和重复入口同时禁用。
+以乔木《前端设计 Skill 横评实验室》的“禁令优先、视觉与工程双轨”结论作为系统级门禁，而不是追加一份主观美化清单。禁止在数据后台出现 Card Soup：列表、表单和表格不得被大圆角、悬浮阴影、模糊背景的卡片层层包裹；禁止 glassmorphism、廉价紫色或荧光渐变、居中 Hero、装饰性 emoji、无意义大留白和仅靠颜色表达状态。控制台不追求营销页的高刺激，而以密集、克制、可扫读的工业工具感为审美目标。
 
-按 `features/<domain>/` 组织 `api/`、`stores/`、`components/`、`composables/` 和 `views/`：领域包括 subscriptions、nodes、probes、node-groups、rules、proxy-chains、dns、generate、settings、history。`core/api` 统一认证、CSRF、响应错误和请求取消；领域 store 只保存远端缓存、查询和命令状态；表单草稿、未保存标记和校验状态属于编辑器组件/草稿 composable，不能被轮询或列表刷新覆盖。路由 query 保存可分享且可恢复的筛选、排序、视图与窗口锚点；本地偏好只保存主题、密度等非业务 UI 设置。组件不得复制协议解析、能力判定、策略展开、导出编译或敏感字段处理。
+视觉的单一可信源是语义 token。基础层定义暗色默认与等价浅色主题的 `canvas`、`surface`、`raised`、`inset`、`border`、`text`、`muted`、`accent`、`success`、`warning`、`danger`、`focus`、间距、圆角、层级、阴影和运动 token；业务组件只可组合语义 class 或共享原语，不能在模板、`<style scoped>`、`style=` 中自行写颜色、像素尺寸、渐变或阴影。为避免 Tailwind utility 成为另一套隐性设计系统，静态 token 映射只允许出现在主题入口和共享 `ui/` 原语；领域组件不得出现 `bg-[#…]`、`text-[#…]`、`border-[#…]`、`bg-gradient-*`、`backdrop-blur-*`、`rounded-xl/2xl`、`shadow-lg/xl` 等视觉私货。
 
-`NodeLedgerView` 由 `LedgerMetrics`、`LedgerFilterBar`、`LedgerToolbar`、`LedgerSelectionBar`、`LedgerCardGrid`、`LedgerCompactTable`、`LedgerVirtualWindow`、`NodeDetailDrawer`、`ProbeDialog` 与 `ProxyChainDialog` 组合。它们共享不可变 query、稳定的 `node_id` 选择集和当前窗口锚点，卡片/表格切换只改变渲染器而不清空任何一种状态；选择模型必须同时支持当前窗口全选/反选、显式 `node_id` 集合，以及“当前筛选的全部结果”。后者以 `query_snapshot_id + query_fingerprint + excluded_node_ids` 表达，工具栏显示实际匹配计数和排除数，并在批量探测前确认。创建 Job 时后端将该 snapshot 范围解析为不可变目标集合并持久化，之后的筛选变化、节点刷新和窗口切换不得改变正在运行的 Job；绝不用可变节点名称作身份。列表读取由服务端执行搜索、组合筛选、排序、统计及 facets，响应返回稳定 snapshot/cursor 和最小公开摘要；前端以 TanStack Virtual 的固定高度窗口渲染表格和卡片，overscan 为 10。筛选、排序或数据 snapshot 变化时取消旧请求、重置到首窗口；同一 snapshot 内视图切换以可见 node_id 为锚点恢复语义位置。这样既保留原“未显式选择即批量探测全部筛选结果”的操作语义，也避免一次取得节点、探测和跳板全量后在模板内重复筛选/排序。
+默认画布为近黑蓝灰，面板采用不透明的低对比阶梯表面，以 1px hairline 分区而非堆叠投影；品牌色限于活动导航、主命令和键盘焦点，状态色同时配合文字、图标或状态标签。字体采用系统 sans 与 JetBrains Mono/Fira Code 的等宽数据轨，数字、IP、端口、延迟、流量、速度和日期必须启用 `font-variant-numeric: tabular-nums`。紧凑表格标准行高 36px，节点卡仅作为小屏或补充浏览的有界替代，不得用来承载默认的大规模库存；常规内容区使用 8px 栅格与 8px 圆角，顶层应用壳最多 12px 圆角，不产生“圆角套圆角”。
+
+#### D4.2 交互原语、无障碍和运动工艺
+
+共享 `ui/` 承载 `Button`、`IconButton`、`Field`、`Select/Combobox`、`Tabs`、`Switch`、`Badge/Status`、`Tooltip`、`Menu`、`Dialog/Drawer`、`Confirm`、`Toast`、`Empty/Loading` 和数据表壳。图标统一来自已安装的 `lucide-vue-next`；不得用 emoji 充当交互或状态图标。不存在已安装的 Headless UI 依赖时，不得在计划或实现中假称其提供行为；焦点陷阱、Escape、背景 inert、初始焦点、关闭后焦点恢复和滚动锁必须由已验证的共享原语实现，或在显式依赖审查后添加并实际采用一个可访问的原语库。
+
+所有交互可被键盘到达，`:focus-visible` 焦点环全局统一且不以 `outline: none` 取代。对话框/抽屉必须具有可感知标题、`role=dialog`、`aria-modal`、关闭控件与完整焦点生命周期；危险命令通过统一 Confirm，运行中命令在原按钮和所有重复入口禁用。移动端可触发元素最小 44px，底部 sheet 使用 safe area，语义表格必须保留表头与可读列关系。页面提供 skip link；实时 Job/Toast/错误状态按合适的 live region 公告。动画只用于交互反馈：统一 160ms `cubic-bezier(0.16, 1, 0.3, 1)`，可点按钮可有 `:active` 0.98 按压，抽屉/对话框可有短距离进场；不得 `transition: all`、不得做宽度动画、不得以循环闪烁替代状态、不得让 hover transform 改变信息布局。全局 `prefers-reduced-motion` 下禁用非必要动画。
+
+#### D4.3 领域状态和性能边界
+
+按 `features/<domain>/` 组织 `api/`、`stores/`、`components/`、`composables/` 和 `views/`：领域包括 subscriptions、nodes、probes、node-groups、rules、proxy-chains、dns、generate、settings、history。`core/api` 统一认证、CSRF、响应错误、AbortSignal 与请求身份；领域 store 只保存远端缓存、查询和命令状态；表单草稿、未保存标记和校验状态属于编辑器组件/草稿 composable，不能被轮询或列表刷新覆盖。路由 query 保存可分享且可恢复的筛选、排序、视图与窗口锚点；本地偏好只保存主题、密度等非业务 UI 设置。组件不得复制协议解析、能力判定、策略展开、导出编译或敏感字段处理。
+
+`NodeLedgerView` 由 `LedgerMetrics`、`LedgerFilterBar`、`LedgerToolbar`、`LedgerSelectionBar`、`LedgerCardGrid`、`LedgerCompactTable`、`LedgerVirtualWindow`、`NodeDetailDrawer`、`ProbeDialog` 与 `ProxyChainDialog` 组合。它们共享不可变 query、稳定的 `node_id` 选择集和当前窗口锚点，卡片/表格切换只改变渲染器而不清空任何一种状态；选择模型必须同时支持当前窗口全选/反选、显式 `node_id` 集合，以及“当前筛选的全部结果”。后者以 `query_snapshot_id + query_fingerprint + excluded_node_ids` 表达，工具栏显示实际匹配计数和排除数，并在批量探测前确认。创建 Job 时后端将该 snapshot 范围解析为不可变目标集合并持久化，之后的筛选变化、节点刷新和窗口切换不得改变正在运行的 Job；绝不用可变节点名称作身份。列表读取由服务端执行搜索、组合筛选、排序、统计及 facets，响应返回稳定 snapshot/cursor 和最小公开摘要；前端以 TanStack Virtual 的固定高度窗口渲染表格和卡片，overscan 为 10。筛选、排序或数据 snapshot 变化时取消旧请求、重置到首窗口；同一 snapshot 内视图切换以可见 node_id 为锚点恢复语义位置。
 
 实时探测/刷新呈现为可恢复 Job 状态而不是前端遍历节点：命令返回 Job 标识，store 以可取消的查询更新进度和已完成摘要，详情抽屉仅刷新受影响 node_id；失败、取消、部分完成和超时都有不同的可读状态及重试入口。QuickExport 继续是共享全局命令，保留单订阅/合并订阅、Clash、Mihomo、Stash、Shadowrocket、Sing-box、Scheme 与二维码；其 UI 仅消费服务端已编译的发布结果。
 
-选择 Tailwind + Headless UI + TanStack Virtual，是为了分别解决可维护样式、可访问行为和大列表渲染，三者不承担领域状态。拒绝继续扩展 2461 行单文件与 scoped CSS，因为其查询、选择、探测和视觉职责已相互耦合；也拒绝把筛选/导出规则搬进 Pinia 或浏览器，以免与 canonical compiler 产生第二个真相来源。
+选择 Tailwind + TanStack Virtual + 显式可访问共享原语，是为了分别解决可维护样式、大列表渲染和交互语义，三者不承担领域状态。拒绝继续扩展单文件样式表与 scoped CSS，因为其查询、选择、探测和视觉职责已相互耦合；也拒绝把筛选/导出规则搬进 Pinia 或浏览器，以免与 canonical compiler 产生第二个真相来源。
 
 ### D5. SQLite 到目标库的有限、可核验迁移
 

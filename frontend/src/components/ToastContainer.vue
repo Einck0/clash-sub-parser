@@ -1,134 +1,89 @@
 <template>
   <Teleport to="body">
-    <div class="toast-container" aria-live="polite" aria-atomic="false">
-      <TransitionGroup name="toast">
+    <div
+      class="fixed top-4 right-4 z-50 flex flex-col gap-2 max-w-sm w-full pointer-events-none px-3 sm:px-0"
+      aria-live="polite"
+      aria-atomic="false"
+    >
+      <TransitionGroup
+        enter-active-class="transition-opacity duration-200 ease-out"
+        enter-from-class="opacity-0 translate-y-2"
+        enter-to-class="opacity-100 translate-y-0"
+        leave-active-class="transition-opacity duration-150 ease-in"
+        leave-from-class="opacity-100"
+        leave-to-class="opacity-0 translate-y-1"
+      >
         <div
           v-for="t in toasts"
           :key="t.id"
-          class="toast-item"
-          :class="`toast-${t.type}`"
           role="status"
+          tabindex="0"
+          :class="[
+            'pointer-events-auto flex items-start justify-between gap-3 rounded-lg border bg-surface-base p-3.5 shadow-md transition-colors cursor-pointer select-none',
+            'focus:outline-hidden focus-visible:ring-2 focus-visible:ring-accent',
+            getToastClass(t.type),
+          ]"
           @click="dismissToast(t.id)"
+          @keydown.enter="dismissToast(t.id)"
+          @keydown.space.prevent="dismissToast(t.id)"
         >
-          <span class="toast-icon">{{ icons[t.type] || 'i' }}</span>
-          <span class="toast-text">{{ t.message }}</span>
+          <!-- Left Status Icon -->
+          <div class="flex items-center gap-2.5 min-w-0 flex-1">
+            <component :is="getIcon(t.type)" class="h-4 w-4 shrink-0 mt-0.5" aria-hidden="true" />
+            <span class="text-xs sm:text-sm text-text-main leading-snug break-words">
+              {{ t.message }}
+            </span>
+          </div>
+
+          <!-- Dismiss Button -->
+          <button
+            type="button"
+            class="flex h-5 w-5 shrink-0 items-center justify-center rounded text-text-muted hover:text-text-main transition-colors cursor-pointer"
+            aria-label="关闭通知"
+            @click.stop="dismissToast(t.id)"
+          >
+            <X class="h-3.5 w-3.5" aria-hidden="true" />
+          </button>
         </div>
       </TransitionGroup>
     </div>
   </Teleport>
 </template>
 
-<script setup>
-import { useAppStore } from '../stores/app'
+<script setup lang="ts">
 import { storeToRefs } from 'pinia'
+import { CheckCircle2, AlertCircle, AlertTriangle, Info, X } from 'lucide-vue-next'
+import { useAppStore } from '../stores/app'
 
 const store = useAppStore()
 const { toasts } = storeToRefs(store)
 const { dismissToast } = store
 
-const icons = {
-  success: '✓',
-  error: '✕',
-  warning: '⚠',
-  info: 'ℹ',
+function getIcon(type?: string) {
+  switch (type) {
+    case 'success':
+      return CheckCircle2
+    case 'error':
+      return AlertCircle
+    case 'warning':
+      return AlertTriangle
+    case 'info':
+    default:
+      return Info
+  }
+}
+
+function getToastClass(type?: string) {
+  switch (type) {
+    case 'success':
+      return 'border-status-success/30 text-status-success'
+    case 'error':
+      return 'border-status-danger/30 text-status-danger'
+    case 'warning':
+      return 'border-status-warning/30 text-status-warning'
+    case 'info':
+    default:
+      return 'border-status-info/30 text-status-info'
+  }
 }
 </script>
-
-<style scoped>
-.toast-container {
-  position: fixed;
-  top: 16px;
-  right: 16px;
-  z-index: 9999;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  pointer-events: none;
-  max-width: 400px;
-}
-
-.toast-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 16px;
-  border-radius: 12px;
-  border: 1px solid;
-  font-size: 14px;
-  line-height: 1.4;
-  cursor: pointer;
-  pointer-events: auto;
-  backdrop-filter: blur(12px);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
-}
-
-.toast-icon {
-  flex-shrink: 0;
-  width: 22px;
-  height: 22px;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  font-size: 12px;
-  font-weight: 900;
-}
-
-.toast-success {
-  border-color: rgba(15, 138, 95, 0.3);
-  background: rgba(236, 253, 245, 0.95);
-  color: #065f46;
-}
-.toast-success .toast-icon {
-  background: rgba(15, 138, 95, 0.15);
-  color: #0f8a5f;
-}
-
-.toast-error {
-  border-color: rgba(220, 38, 38, 0.3);
-  background: rgba(254, 242, 242, 0.95);
-  color: #991b1b;
-}
-.toast-error .toast-icon {
-  background: rgba(220, 38, 38, 0.15);
-  color: #dc2626;
-}
-
-.toast-warning {
-  border-color: rgba(180, 83, 9, 0.3);
-  background: rgba(255, 251, 235, 0.95);
-  color: #92400e;
-}
-.toast-warning .toast-icon {
-  background: rgba(180, 83, 9, 0.15);
-  color: #b45309;
-}
-
-.toast-info {
-  border-color: rgba(37, 99, 235, 0.3);
-  background: rgba(239, 246, 255, 0.95);
-  color: #1e40af;
-}
-.toast-info .toast-icon {
-  background: rgba(37, 99, 235, 0.15);
-  color: #2563eb;
-}
-
-/* Transitions */
-.toast-enter-active {
-  transition: all 0.25s ease-out;
-}
-.toast-leave-active {
-  transition: all 0.2s ease-in;
-}
-.toast-enter-from {
-  opacity: 0;
-  transform: translateX(40px) scale(0.95);
-}
-.toast-leave-to {
-  opacity: 0;
-  transform: translateX(40px) scale(0.95);
-}
-.toast-move {
-  transition: transform 0.2s ease;
-}
-</style>

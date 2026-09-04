@@ -188,6 +188,14 @@ export const updateGenerateSettings = (data: any) => api.patch('/generate/settin
 export const generateScript = (data: any) => api.post('/generate/script', data)
 export const generateYaml = (data: any) => api.post('/generate/yaml', data)
 export const generateSubscriptionYaml = (id: number) => api.post(`/generate/subscription/${id}`)
+export const getQuickExport = (params?: { subscription_id?: number; target?: string; token?: string }) => {
+  const query = new URLSearchParams()
+  if (params?.subscription_id) query.set('subscription_id', String(params.subscription_id))
+  if (params?.target) query.set('target', params.target)
+  if (params?.token) query.set('token', params.token)
+  const qs = query.toString()
+  return api.get(`/generate/quick-export${qs ? '?' + qs : ''}`)
+}
 
 // Snapshots
 export const getSnapshots = () => api.get('/snapshots')

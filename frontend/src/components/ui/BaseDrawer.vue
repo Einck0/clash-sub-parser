@@ -3,16 +3,26 @@
     <transition name="drawer-fade">
       <div
         v-if="modelValue"
-        class="fixed inset-0 z-50 flex justify-end bg-black/60 backdrop-blur-xs transition-opacity"
+        :class="[
+          'fixed inset-0 z-50 flex bg-black/60 backdrop-blur-xs transition-opacity',
+          placement === 'left' ? 'justify-start' : 'justify-end'
+        ]"
         @click.self="handleClose"
       >
         <div
-          class="relative flex h-full w-full max-w-xl flex-col border-l border-white/10 bg-[#0F172A] text-[#F8FAFC] shadow-2xl transition-transform"
+          :class="[
+            'relative flex h-full w-full flex-col bg-[#0F172A] text-[#F8FAFC] shadow-2xl transition-transform',
+            placement === 'left'
+              ? 'max-w-xs sm:max-w-sm border-r border-white/10 drawer-slide-left'
+              : 'max-w-xl border-l border-white/10 drawer-slide-right'
+          ]"
         >
           <div class="flex items-center justify-between border-b border-white/10 px-6 py-4">
             <h3 class="text-base font-medium tracking-wide text-white">{{ title }}</h3>
             <button
-              class="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-800 hover:text-white"
+              type="button"
+              class="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-800 hover:text-white cursor-pointer transition-colors"
+              aria-label="关闭抽屉"
               @click="handleClose"
             >
               ✕
@@ -31,10 +41,16 @@
 </template>
 
 <script setup lang="ts">
-defineProps<{
-  modelValue: boolean
-  title: string
-}>()
+withDefaults(
+  defineProps<{
+    modelValue: boolean
+    title: string
+    placement?: 'left' | 'right'
+  }>(),
+  {
+    placement: 'right'
+  }
+)
 
 const emit = defineEmits<{
   (e: 'update:modelValue', val: boolean): void
@@ -55,5 +71,19 @@ function handleClose() {
 .drawer-fade-enter-from,
 .drawer-fade-leave-to {
   opacity: 0;
+}
+.drawer-slide-right {
+  animation: slideRightIn 0.2s ease-out;
+}
+.drawer-slide-left {
+  animation: slideLeftIn 0.2s ease-out;
+}
+@keyframes slideRightIn {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+@keyframes slideLeftIn {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
 }
 </style>

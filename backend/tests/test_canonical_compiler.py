@@ -19,7 +19,7 @@ from app.schemas.logical_config import (
 from app.services.canonical_compiler import CanonicalGraphResolver
 from app.services.compiler_cache import compiler_cache
 from app.services.compiler_target_adapters import (
-    render_compiled_script,
+    render_compiled_singbox,
     render_compiled_yaml,
 )
 from app.services.legacy_config_importer import build_logical_bundle_from_db
@@ -178,9 +178,9 @@ def test_deterministic_semantic_fingerprint_and_adapters():
     assert "google.com,PROXY" in yaml_out
     assert "8.8.8.8" in yaml_out
 
-    script_out = render_compiled_script(res1, bundle)
-    assert "function main(config)" in script_out
-    assert "PROXY" in script_out
+    sb_out = render_compiled_singbox(res1, bundle, nodes)
+    assert "PROXY" in sb_out
+    assert "inbounds" in sb_out
 
 
 def test_compiler_cache_behavior():

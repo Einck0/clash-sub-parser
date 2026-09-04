@@ -76,3 +76,8 @@ info.txt
 
 # Graphify local knowledge graph (do not commit)
 graphify-out/
+
+# Temporary files & local migration snapshots
+tmp/
+data-safe-snapshots/
+control-plane/

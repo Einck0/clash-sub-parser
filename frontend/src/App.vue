@@ -7,15 +7,28 @@
       :total-nodes="store.nodes?.length || 0"
       :probed-count="probedCount"
       @open-export="showQuickExport = true"
+      @toggle-sidebar="mobileSidebarOpen = !mobileSidebarOpen"
     />
 
     <!-- Main Workspace Body -->
-    <div class="flex flex-1 overflow-hidden">
-      <!-- Left Sidebar Nav -->
-      <WorkbenchSidebar />
+    <div class="flex flex-1 overflow-hidden relative">
+      <!-- Desktop Sidebar Nav (Fixed on md+) -->
+      <div class="hidden md:flex">
+        <WorkbenchSidebar />
+      </div>
+
+      <!-- Mobile Sidebar Drawer (Narrow / Mobile Screens) -->
+      <BaseDrawer
+        v-model="mobileSidebarOpen"
+        title="CSP // WORKBENCH"
+        placement="left"
+        @close="mobileSidebarOpen = false"
+      >
+        <WorkbenchSidebar :mobile="true" @navigate="mobileSidebarOpen = false" />
+      </BaseDrawer>
 
       <!-- Content Area -->
-      <main class="flex-1 overflow-y-auto p-6" aria-live="polite">
+      <main class="flex-1 overflow-y-auto p-4 md:p-6" aria-live="polite">
         <router-view v-slot="{ Component, route }">
           <Transition name="page-fade" mode="out-in">
             <component :is="Component" :key="route.path" />
@@ -40,10 +53,12 @@ import ConfirmDialog from './components/ConfirmDialog.vue'
 import QuickExportModal from './components/QuickExportModal.vue'
 import WorkbenchHeader from './components/workbench/WorkbenchHeader.vue'
 import WorkbenchSidebar from './components/workbench/WorkbenchSidebar.vue'
+import BaseDrawer from './components/ui/BaseDrawer.vue'
 import { useAppStore } from './stores/app'
 
 const store = useAppStore()
 const showQuickExport = ref(false)
+const mobileSidebarOpen = ref(false)
 
 const probedCount = computed(() => {
   return store.nodes?.filter(n => n.probe_status === 'success')?.length || 0
@@ -73,14 +88,12 @@ async function checkFrontendAccess() {
     }
     showAuthGate.value = false
   } catch (err) {
-    // If 401 and protect_frontend is on, show auth gate; otherwise allow access
     if (err?.response?.status === 401) {
       setAuthToken('')
       exportNeedsToken.value = true
       showAuthGate.value = true
       return
     }
-    // Non-auth error (e.g. server down) - don't block the UI
     showAuthGate.value = false
   }
 }
@@ -88,8 +101,6 @@ async function checkFrontendAccess() {
 async function handleAuthSubmit(token) {
   const { data } = await loginAuthToken(token)
   if (!data?.ok) throw new Error('Token 无效')
-  // 登录只依赖后端设置的 HttpOnly 哈希 Cookie
-  // 导出 URL 中的原始 token 只在内存中短暂保留
   await checkFrontendAccess()
 }
 
@@ -114,17 +125,5 @@ function handleUnauthorized() {
 }
 .page-fade-leave-to {
   opacity: 0;
-}
-
-/* Tab icons */
-.tab-icon {
-  display: inline-block;
-  margin-right: 4px;
-  font-size: 15px;
-  line-height: 1;
-}
-
-.tab-label {
-  display: inline;
 }
 </style>

@@ -20,8 +20,21 @@ PUBLIC_PATHS = {
     "/api/settings/auth/logout",
 }
 PUBLIC_PREFIXES = ("/assets/",)
-EXPORT_PATHS = {"/yaml"}
-EXPORT_PREFIXES = ("/api/generate/yaml/",)
+EXPORT_PATHS = {"/yaml", "/clash", "/mihomo", "/stash", "/shadowrocket", "/sing-box"}
+EXPORT_PREFIXES = (
+    "/api/generate/yaml/",
+    "/api/generate/clash/",
+    "/api/generate/mihomo/",
+    "/api/generate/stash/",
+    "/api/generate/shadowrocket/",
+    "/api/generate/sing-box/",
+    "/generate/yaml/",
+    "/generate/clash/",
+    "/generate/mihomo/",
+    "/generate/stash/",
+    "/generate/shadowrocket/",
+    "/generate/sing-box/",
+)
 EXPORT_SUFFIXES = ("/download", "/current")
 
 

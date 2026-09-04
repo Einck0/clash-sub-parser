@@ -111,6 +111,7 @@ app.include_router(rule_categories.router, prefix=settings.api_prefix)
 app.include_router(rules.router, prefix=settings.api_prefix)
 app.include_router(dns.router, prefix=settings.api_prefix)
 app.include_router(generate.router, prefix=settings.api_prefix)
+app.include_router(generate.router)
 app.include_router(downloads.router, prefix=settings.api_prefix)
 app.include_router(settings_router.router, prefix=settings.api_prefix)
 app.include_router(snapshots.router, prefix=settings.api_prefix)
@@ -136,11 +137,41 @@ async def readiness(db: AsyncSession = Depends(get_db)) -> JSONResponse:
     return JSONResponse(status_code=status_code, content=report)
 
 
-# yaml 与 script 路由由 token_auth_middleware 进行鉴权保护
+# 五目标及 yaml 导出路由由 token_auth_middleware 进行鉴权保护
 @app.get("/yaml")
 async def root_yaml(db: AsyncSession = Depends(get_db)) -> PlainTextResponse:
     content = await render_current(db, "yaml")
     return await file_response(db, content, "yaml", disposition="inline")
+
+
+@app.get("/clash")
+async def root_clash(db: AsyncSession = Depends(get_db)) -> PlainTextResponse:
+    content = await render_current(db, "clash")
+    return await file_response(db, content, "clash", disposition="inline")
+
+
+@app.get("/mihomo")
+async def root_mihomo(db: AsyncSession = Depends(get_db)) -> PlainTextResponse:
+    content = await render_current(db, "mihomo")
+    return await file_response(db, content, "mihomo", disposition="inline")
+
+
+@app.get("/stash")
+async def root_stash(db: AsyncSession = Depends(get_db)) -> PlainTextResponse:
+    content = await render_current(db, "stash")
+    return await file_response(db, content, "stash", disposition="inline")
+
+
+@app.get("/shadowrocket")
+async def root_shadowrocket(db: AsyncSession = Depends(get_db)) -> PlainTextResponse:
+    content = await render_current(db, "shadowrocket")
+    return await file_response(db, content, "shadowrocket", disposition="inline")
+
+
+@app.get("/sing-box")
+async def root_singbox(db: AsyncSession = Depends(get_db)) -> PlainTextResponse:
+    content = await render_current(db, "sing-box")
+    return await file_response(db, content, "sing-box", disposition="inline")
 
 
 @app.get("/script")

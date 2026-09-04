@@ -329,6 +329,22 @@ export async function mockRequest(method, url, data) {
   if (method === 'POST' && cleanUrl === '/generate/yaml') return response({ yaml: sampleYaml() })
   if (method === 'POST' && cleanUrl === '/generate/script') return response({ script: sampleScript() })
   if (method === 'POST' && cleanUrl.startsWith('/generate/subscription/')) return response({ yaml: sampleYaml(true) })
+  if (method === 'GET' && cleanUrl.startsWith('/generate/quick-export')) {
+    const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8000'
+    const targets = {
+      clash: { target: 'clash', name: 'Clash', url: `${origin}/api/generate/clash`, scheme_url: `clash://install-config?url=${encodeURIComponent(`${origin}/api/generate/clash`)}&name=ClashSubParser`, qrcode_payload: `${origin}/api/generate/clash` },
+      mihomo: { target: 'mihomo', name: 'Mihomo', url: `${origin}/api/generate/mihomo`, scheme_url: `clash://install-config?url=${encodeURIComponent(`${origin}/api/generate/mihomo`)}&name=ClashSubParser`, qrcode_payload: `${origin}/api/generate/mihomo` },
+      stash: { target: 'stash', name: 'Stash', url: `${origin}/api/generate/stash`, scheme_url: `stash://install-config?url=${encodeURIComponent(`${origin}/api/generate/stash`)}&name=ClashSubParser`, qrcode_payload: `${origin}/api/generate/stash` },
+      shadowrocket: { target: 'shadowrocket', name: 'Shadowrocket', url: `${origin}/api/generate/shadowrocket`, scheme_url: `sub://${btoa(`${origin}/api/generate/shadowrocket`)}`, qrcode_payload: `sub://${btoa(`${origin}/api/generate/shadowrocket`)}` },
+      'sing-box': { target: 'sing-box', name: 'Sing-box', url: `${origin}/api/generate/sing-box`, scheme_url: `sing-box://import-remote-profile?url=${encodeURIComponent(`${origin}/api/generate/sing-box`)}#ClashSubParser`, qrcode_payload: `${origin}/api/generate/sing-box` },
+    }
+    return response({
+      scope: 'merged',
+      subscription_id: null,
+      targets,
+      items: Object.values(targets),
+    })
+  }
 
   if (method === 'GET' && cleanUrl === '/settings/security') return response(security)
   if (method === 'PATCH' && cleanUrl === '/settings/security') {

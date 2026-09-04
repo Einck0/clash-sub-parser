@@ -1,5 +1,10 @@
 <template>
-  <aside class="flex w-56 flex-col border-r border-white/10 bg-[#090D16]/90 p-4 text-slate-300">
+  <aside
+    :class="[
+      'flex flex-col bg-[#090D16]/90 text-slate-300',
+      mobile ? 'w-full p-2' : 'w-56 border-r border-white/10 p-4 shrink-0'
+    ]"
+  >
     <div class="mb-4 px-2 text-[10px] font-mono tracking-wider text-slate-500 uppercase">Control Center</div>
     <nav class="space-y-1">
       <router-link
@@ -10,16 +15,17 @@
         custom
       >
         <button
+          type="button"
           :class="[
-            'flex w-full items-center gap-3 rounded-lg px-3 py-2 text-xs font-medium transition-all cursor-pointer',
+            'flex w-full items-center gap-3 rounded-lg px-3 py-2 text-xs font-medium transition-all cursor-pointer text-left',
             isActive
               ? 'bg-blue-600/15 text-blue-400 border border-blue-500/20 shadow-xs'
               : 'text-slate-400 hover:bg-slate-800/50 hover:text-slate-200 border border-transparent'
           ]"
-          @click="navigate"
+          @click="handleClick(navigate)"
         >
-          <component :is="item.icon" class="h-4 w-4" />
-          <span>{{ item.label }}</span>
+          <component :is="item.icon" class="h-4 w-4 shrink-0" />
+          <span class="truncate">{{ item.label }}</span>
         </button>
       </router-link>
     </nav>
@@ -27,9 +33,34 @@
 </template>
 
 <script setup lang="ts">
-import { h } from 'vue'
+import { h, type VNode } from 'vue'
 
-const navItems = [
+interface NavItem {
+  path: string
+  alias?: string
+  label: string
+  icon: () => VNode
+}
+
+withDefaults(
+  defineProps<{
+    mobile?: boolean
+  }>(),
+  {
+    mobile: false
+  }
+)
+
+const emit = defineEmits<{
+  (e: 'navigate'): void
+}>()
+
+function handleClick(navigate: () => void) {
+  navigate()
+  emit('navigate')
+}
+
+const navItems: NavItem[] = [
   {
     path: '/nodes',
     label: 'Node Ledger',
@@ -45,7 +76,8 @@ const navItems = [
     ])
   },
   {
-    path: '/groups',
+    path: '/node-groups',
+    alias: '/groups',
     label: 'Policy Groups',
     icon: () => h('svg', { fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor', class: 'h-4 w-4' }, [
       h('path', { 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'stroke-width': '2', d: 'M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z' })
@@ -59,10 +91,18 @@ const navItems = [
     ])
   },
   {
-    path: '/chains',
+    path: '/proxy-chains',
+    alias: '/chains',
     label: 'Proxy Chains',
     icon: () => h('svg', { fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor', class: 'h-4 w-4' }, [
       h('path', { 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'stroke-width': '2', d: 'M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1' })
+    ])
+  },
+  {
+    path: '/dns',
+    label: 'DNS Settings',
+    icon: () => h('svg', { fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor', class: 'h-4 w-4' }, [
+      h('path', { 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'stroke-width': '2', d: 'M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9' })
     ])
   },
   {
@@ -78,6 +118,13 @@ const navItems = [
     icon: () => h('svg', { fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor', class: 'h-4 w-4' }, [
       h('path', { 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'stroke-width': '2', d: 'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z' }),
       h('path', { 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'stroke-width': '2', d: 'M15 12a3 3 0 11-6 0 3 3 0 016 0z' })
+    ])
+  },
+  {
+    path: '/history',
+    label: 'Config History',
+    icon: () => h('svg', { fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor', class: 'h-4 w-4' }, [
+      h('path', { 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'stroke-width': '2', d: 'M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z' })
     ])
   }
 ]

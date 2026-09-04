@@ -19,8 +19,12 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",
+    "@tailwindcss/vite": "^4.3.3",
+    "@tanstack/vue-virtual": "^3.13.36",
     "@types/js-yaml": "^4.0.9",
     "@vitejs/plugin-vue": "^6.0.6",
+    "lucide-vue-next": "^1.0.0",
+    "tailwindcss": "^4.3.3",
     "typescript": "^6.0.3",
     "vite": "^6.4.3",
     "vue-tsc": "^3.3.5"

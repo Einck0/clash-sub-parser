@@ -22,14 +22,19 @@
 
 - [ ] 4.1 实现唯一 canonical config graph 与节点选择解释；验证订阅候选、regex、探测门槛、跳板和规则在预览/发布中结果一致
 - [ ] 4.2 实现 Clash、Mihomo、Stash、Shadowrocket、Sing-box renderer；验证五目标 golden 输出、节点集合、规则组、DNS 和敏感字段边界通过
-- [ ] 4.3 实现 subscriptions、nodes、probes、groups、rules、chains、settings、snapshots 和 downloads 的领域 router；验证现有客户端关键请求、异步 Job 查询/取消和 SCRIPT 404 回归通过
-- [ ] 4.4 保留 Quick Export 的单订阅/合并链接、客户端 Scheme 与二维码；验证每个支持目标可从 UI 和 API 获取正确分发内容
+- [ ] 4.3 实现 subscriptions、nodes、probes、groups、rules、chains、settings、snapshots 和 downloads 的领域 router；实现 snapshot 范围的显式/当前窗口/全筛选批量 Job 输入并在创建时冻结目标集合；验证现有客户端关键请求、异步 Job 查询/取消、全筛选探测语义和 SCRIPT 404 回归通过
+- [ ] 4.4 保留 Quick Export 的单订阅/合并链接、客户端 Scheme 与二维码；为 Clash、Mihomo、Stash、Shadowrocket、Sing-box 返回关联修订的 URL、Scheme 和二维码负载；验证每个支持目标可从 UI 和 API 获取正确分发内容且 SCRIPT 不可选
 
-## 5. 前端重构与交互回归
+## 5. 前端 Workbench、视觉系统与交互回归
 
-- [ ] 5.1 按设计拆分 NodeLedgerView 与子组件，保持一个筛选 query/选择集；验证卡片/紧凑表格切换、组合筛选、分页/虚拟窗口和排序结果一致
-- [ ] 5.2 完成批量/单节点探测、详情预览、复制、取消、清缓存与链路绑定 UI；验证并发按钮防重、错误反馈和抽屉草稿不丢失
-- [ ] 5.3 重组订阅、策略组、规则、DNS、导出、设置和快照视图；验证订阅自动命名、候选节点隔离、动态 regex、快照恢复和危险操作确认回归通过
+- [ ] 5.1 将 Tailwind v4/Vite、Headless UI、TanStack Virtual 和 lucide-vue-next 纳入受控前端依赖，建立暗色优先的语义 token、字体与密度基线；验证 tokens 同时生成可用的浅色主题、36px 表格行和 110px 节点卡，且不残留未令牌化的全局视觉规则
+- [ ] 5.2 实现 AppShell、响应式导航、全局命令区和共享 `ui/` 原语；验证现有路由、Quick Export、认证门和主题入口保持可达，Dialog/Drawer/Menu/Combobox 支持键盘、焦点陷阱、Escape、焦点恢复和可访问名称
+- [ ] 5.3 按领域迁移 API client、Pinia 查询/命令 store 与草稿 composable；验证认证/CSRF/错误处理/请求取消集中在 `core/api`，后台刷新或晚到响应不覆盖编辑草稿和新查询
+- [ ] 5.4 实现 NodeLedger 服务端查询窗口与稳定 snapshot/cursor 契约；验证关键字、来源、协议、状态、跳板、速度、能力和排序可组合，响应提供 totals/metrics/facets，过期窗口安全重载且不下载全量节点、探测和跳板记录
+- [ ] 5.5 按设计拆分 NodeLedgerView、指标、筛选、工具栏、选择栏、卡片、紧凑表格、虚拟窗口、详情抽屉、Probe 与跳板组件；验证卡片/表格共享 query、`node_id` 选择集和可见锚点，10 项 overscan 下滚动仅渲染窗口，当前窗口选择与“全部当前筛选结果减排除项”的批量 Job 均在确认后使用冻结 snapshot 语义
+- [ ] 5.6 完成批量/单节点探测、详情预览、复制、取消、清缓存与链路绑定 UI；验证并发按钮防重、Job 的失败/取消/部分完成可恢复、详情只刷新受影响节点且抽屉草稿不丢失
+- [ ] 5.7 重组订阅、策略组、规则、DNS、导出、设置和快照领域视图；验证订阅自动命名、候选节点隔离、动态 regex、快照恢复、QuickExport 五目标/单订阅/合并订阅/Scheme/二维码和危险操作确认回归通过
+- [ ] 5.8 编写前端 unit、类型、可访问性和 Playwright 回归；验证两种主题、窄屏工作台、键盘 Dialog、NodeLedger 双视图/虚拟窗口/快速筛选、Job 取消与 QuickExport 的关键路径通过
 
 ## 6. SQLite 迁移、演练与发布门禁
 

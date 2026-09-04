@@ -40,11 +40,21 @@
 
 探测和刷新使用可查询、可取消的 Job 资源；列表查询支持原有 NodeLedger 的 keyword、source、protocol、probe、chain、speed、capability、排序和分页/窗口参数。配置预览/下载使用目标 `clash`、`mihomo`、`stash`、`shadowrocket`、`sing-box`，而不是让前端拼接配置。SCRIPT 路由和导出类型在第一阶段删除并以 404/不可选项明确终结。
 
-### D4. NodeLedger 与控制台组件树
+### D4. Workbench 前端架构、视觉系统与状态边界
 
-前端保留 Vue 3 + Vite。领域 store 仅维护其查询、缓存和命令状态；表单草稿与远端查询状态分离。`NodeLedgerView` 组合 `LedgerMetrics`、`LedgerFilterBar`、`LedgerToolbar`、`LedgerCardGrid`、`LedgerCompactTable`、`LedgerPager/VirtualWindow`、`NodeDetailDrawer`、`ProbeDialog`、`ProxyChainDialog`。它们共同使用同一个筛选 query 与选择集，切换视图不得改变筛选或选择。
+前端保持 Vue 3 + Vite，升级为“应用壳 + 领域切片 + 共享原语”的 Workbench，而不是把旧页面换一层样式。`AppShell` 由紧凑顶栏、主导航、命令区、路由工作区及可选上下文检查器组成：桌面宽度保留可见导航；窄屏将导航折叠为受控抽屉，数据表退化为卡片或可横滚的语义表格，抽屉/对话框全屏化。现有 `/`、`/nodes`、`/node-groups`、`/proxy-chains`、`/rules`、`/dns`、`/generate`、`/settings`、`/history` 路由和 Quick Export 入口维持，不建立第二套控制台。
 
-其余视图分别组织为 Subscription、NodeGroup、Rule/RuleCategory、ProxyChains、Dns、Generate/QuickExport、Settings、ConfigHistory。QuickExport 保留单订阅/合并订阅切换、五目标选择、客户端 Scheme 和二维码。组件只能调用 API client/领域 store，不能复制解析、筛选或编译规则。
+样式使用 Tailwind v4 与 Vite 集成，但业务组件只消费语义化原语，不能散落任意颜色、尺寸或状态判断。Design Token 的基线为：画布 `#090D16`，面板阶梯 `#0F172A/#1E293B`，主色 `#3B82F6`，成功 `#10B981`，测速 `#06B6D4`，告警 `#F59E0B`，失败 `#EF4444`，主/次/弱文本 `#F8FAFC/#94A3B8/#64748B`，边框 `rgba(255,255,255,.08)`；数字、IP、端口、延迟和速度使用 JetBrains Mono 或 Fira Code。令牌必须同时提供暗色默认与等价浅色主题，状态色不能是唯一传达信息的途径。密集表格行高 36px、节点卡 110px、常规交互过渡 150ms ease-out；禁止未经过令牌的全局大面积玻璃效果，避免可读性和滚动性能退化。
+
+共享 `ui/` 仅承载 Button、IconButton、Field、Combobox、Tabs、Switch、Badge、Status、Tooltip、Menu、Dialog/Drawer、Confirm、Toast、Empty/Loading 和数据表壳。Headless UI 负责 Dialog、Menu、Listbox/Combobox、Tabs、Switch 等焦点与键盘语义，Vue 组件负责 CSP 领域组合；图标统一来自 lucide-vue-next。任何对话框和抽屉均须有可感知标题、焦点圈、焦点陷阱、Escape/取消、关闭后焦点恢复和不可点击的背景层。可删除/清缓存/恢复等命令必须经统一 Confirm 原语，运行中命令在原始按钮和重复入口同时禁用。
+
+按 `features/<domain>/` 组织 `api/`、`stores/`、`components/`、`composables/` 和 `views/`：领域包括 subscriptions、nodes、probes、node-groups、rules、proxy-chains、dns、generate、settings、history。`core/api` 统一认证、CSRF、响应错误和请求取消；领域 store 只保存远端缓存、查询和命令状态；表单草稿、未保存标记和校验状态属于编辑器组件/草稿 composable，不能被轮询或列表刷新覆盖。路由 query 保存可分享且可恢复的筛选、排序、视图与窗口锚点；本地偏好只保存主题、密度等非业务 UI 设置。组件不得复制协议解析、能力判定、策略展开、导出编译或敏感字段处理。
+
+`NodeLedgerView` 由 `LedgerMetrics`、`LedgerFilterBar`、`LedgerToolbar`、`LedgerSelectionBar`、`LedgerCardGrid`、`LedgerCompactTable`、`LedgerVirtualWindow`、`NodeDetailDrawer`、`ProbeDialog` 与 `ProxyChainDialog` 组合。它们共享不可变 query、稳定的 `node_id` 选择集和当前窗口锚点，卡片/表格切换只改变渲染器而不清空任何一种状态；选择模型必须同时支持当前窗口全选/反选、显式 `node_id` 集合，以及“当前筛选的全部结果”。后者以 `query_snapshot_id + query_fingerprint + excluded_node_ids` 表达，工具栏显示实际匹配计数和排除数，并在批量探测前确认。创建 Job 时后端将该 snapshot 范围解析为不可变目标集合并持久化，之后的筛选变化、节点刷新和窗口切换不得改变正在运行的 Job；绝不用可变节点名称作身份。列表读取由服务端执行搜索、组合筛选、排序、统计及 facets，响应返回稳定 snapshot/cursor 和最小公开摘要；前端以 TanStack Virtual 的固定高度窗口渲染表格和卡片，overscan 为 10。筛选、排序或数据 snapshot 变化时取消旧请求、重置到首窗口；同一 snapshot 内视图切换以可见 node_id 为锚点恢复语义位置。这样既保留原“未显式选择即批量探测全部筛选结果”的操作语义，也避免一次取得节点、探测和跳板全量后在模板内重复筛选/排序。
+
+实时探测/刷新呈现为可恢复 Job 状态而不是前端遍历节点：命令返回 Job 标识，store 以可取消的查询更新进度和已完成摘要，详情抽屉仅刷新受影响 node_id；失败、取消、部分完成和超时都有不同的可读状态及重试入口。QuickExport 继续是共享全局命令，保留单订阅/合并订阅、Clash、Mihomo、Stash、Shadowrocket、Sing-box、Scheme 与二维码；其 UI 仅消费服务端已编译的发布结果。
+
+选择 Tailwind + Headless UI + TanStack Virtual，是为了分别解决可维护样式、可访问行为和大列表渲染，三者不承担领域状态。拒绝继续扩展 2461 行单文件与 scoped CSS，因为其查询、选择、探测和视觉职责已相互耦合；也拒绝把筛选/导出规则搬进 Pinia 或浏览器，以免与 canonical compiler 产生第二个真相来源。
 
 ### D5. SQLite 到目标库的有限、可核验迁移
 

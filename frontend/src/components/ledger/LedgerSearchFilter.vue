@@ -1,19 +1,20 @@
 <template>
   <div class="p-4 rounded-lg border border-border-subtle bg-surface-base space-y-3.5 mb-6">
-    <!-- Top Row: Main Filters & Controls -->
-    <div class="flex flex-wrap items-center gap-3">
+    <!-- Top Row: Search Box, Subscription Select & Collapsible Facet Buttons -->
+    <div class="flex flex-wrap items-center gap-2.5">
       <!-- Search Box -->
-      <div class="relative min-w-[240px] flex-1 max-w-md">
+      <div class="relative min-w-[220px] flex-1 max-w-sm">
         <input
           :value="modelValue.keyword"
           type="text"
-          placeholder="搜索节点名 / 出口 IP / 服务器 / 端口 / 协议 / 跳板 / 策略组…"
+          placeholder="搜索节点 / IP / 端口 / 协议 / 跳板…"
           class="w-full rounded-md border border-border-subtle bg-canvas px-3.5 py-2 pl-9 pr-8 text-xs text-text-main placeholder:text-text-sub focus:border-accent focus:outline-hidden font-mono"
           @input="updateField('keyword', ($event.target as HTMLInputElement).value)"
         />
         <Search class="absolute left-3 top-2.5 h-3.5 w-3.5 text-text-muted" aria-hidden="true" />
         <button
           v-if="modelValue.keyword"
+          type="button"
           class="absolute right-2.5 top-2 p-0.5 text-text-muted hover:text-text-main cursor-pointer"
           title="清空搜索"
           aria-label="清空搜索"
@@ -26,7 +27,7 @@
       <!-- Subscription Dropdown -->
       <select
         :value="modelValue.subscription"
-        class="rounded-md border border-border-subtle bg-surface-hover px-3 py-2 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono cursor-pointer"
+        class="min-h-[44px] sm:min-h-[36px] rounded-md border border-border-subtle bg-surface-base px-3 py-1.5 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono cursor-pointer"
         title="按订阅来源筛选"
         @change="updateField('subscription', ($event.target as HTMLSelectElement).value)"
       >
@@ -34,48 +35,75 @@
         <option v-for="s in subscriptions" :key="s" :value="s">{{ s }}</option>
       </select>
 
-      <!-- Protocol Dropdown -->
-      <select
-        :value="modelValue.protocol"
-        class="rounded-md border border-border-subtle bg-surface-hover px-3 py-2 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono cursor-pointer"
-        title="按节点协议筛选"
-        @change="updateField('protocol', ($event.target as HTMLSelectElement).value)"
-      >
-        <option value="">全部协议</option>
-        <option v-for="t in protocols" :key="t" :value="t">{{ t.toUpperCase() }}</option>
-      </select>
+      <!-- Collapsible Facet 1: 快捷地区 (Countries) -->
+      <LedgerFacetSelect
+        title="快捷地区"
+        :icon="Globe"
+        :selected="modelValue.countries"
+        :options="countryFacetOptions"
+        :is-open="activeFacet === 'countries'"
+        @toggle="toggleFacet('countries')"
+        @close="closeFacet"
+        @change="updateField('countries', $event)"
+        @clear="updateField('countries', [])"
+      />
 
-      <!-- Health Status Filter -->
-      <select
-        :value="modelValue.status"
-        class="rounded-md border border-border-subtle bg-surface-hover px-3 py-2 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono cursor-pointer"
-        title="按健康状态筛选"
-        @change="updateField('status', ($event.target as HTMLSelectElement).value)"
-      >
-        <option value="all">全部状态</option>
-        <option value="ok">正常可用</option>
-        <option value="fast">低延极速 (&lt;300ms)</option>
-        <option value="medium">普通延迟 (300-800ms)</option>
-        <option value="fail">离线失败</option>
-        <option value="untested">尚未探测</option>
-      </select>
+      <!-- Collapsible Facet 2: 全部协议 (Protocols) -->
+      <LedgerFacetSelect
+        title="全部协议"
+        :icon="Network"
+        :selected="modelValue.protocols"
+        :options="protocolFacetOptions"
+        :is-open="activeFacet === 'protocols'"
+        @toggle="toggleFacet('protocols')"
+        @close="closeFacet"
+        @change="updateField('protocols', $event)"
+        @clear="updateField('protocols', [])"
+      />
 
-      <!-- Dialer Chain Filter -->
-      <select
-        :value="modelValue.chain"
-        class="rounded-md border border-border-subtle bg-surface-hover px-3 py-2 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono cursor-pointer"
-        title="按链路跳板筛选"
-        @change="updateField('chain', ($event.target as HTMLSelectElement).value)"
-      >
-        <option value="all">全部链路</option>
-        <option value="chained">仅看已挂链</option>
-        <option value="plain">仅看直连 (未挂链)</option>
-      </select>
+      <!-- Collapsible Facet 3: 健康状态 (Statuses) -->
+      <LedgerFacetSelect
+        title="健康状态"
+        :icon="Activity"
+        :selected="modelValue.statuses"
+        :options="statusFacetOptions"
+        :is-open="activeFacet === 'statuses'"
+        @toggle="toggleFacet('statuses')"
+        @close="closeFacet"
+        @change="updateField('statuses', $event)"
+        @clear="updateField('statuses', [])"
+      />
+
+      <!-- Collapsible Facet 4: 解锁过滤 (Media Platforms) -->
+      <LedgerFacetSelect
+        title="解锁过滤"
+        :icon="Film"
+        :selected="modelValue.mediaPlatforms"
+        :options="mediaFacetOptions"
+        :is-open="activeFacet === 'media'"
+        @toggle="toggleFacet('media')"
+        @close="closeFacet"
+        @change="updateField('mediaPlatforms', $event)"
+        @clear="updateField('mediaPlatforms', [])"
+      />
+
+      <!-- Collapsible Facet 5: 链路跳板 (Chains) -->
+      <LedgerFacetSelect
+        title="链路跳板"
+        :icon="GitFork"
+        :selected="modelValue.chain === 'all' ? [] : [modelValue.chain]"
+        :options="chainFacetOptions"
+        :is-open="activeFacet === 'chain'"
+        @toggle="toggleFacet('chain')"
+        @close="closeFacet"
+        @change="handleChainFacetChange"
+        @clear="updateField('chain', 'all')"
+      />
 
       <!-- Sort Options -->
       <select
         :value="modelValue.sortBy"
-        class="rounded-md border border-border-subtle bg-surface-hover px-3 py-2 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono cursor-pointer"
+        class="min-h-[44px] sm:min-h-[36px] rounded-md border border-border-subtle bg-surface-base px-3 py-1.5 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono cursor-pointer"
         title="排序规则"
         @change="updateField('sortBy', ($event.target as HTMLSelectElement).value)"
       >
@@ -89,70 +117,167 @@
       </select>
     </div>
 
-    <!-- Media & AI Unlock Matrix Chips -->
-    <div class="flex flex-wrap items-center gap-2 pt-2 border-t border-border-subtle">
-      <span class="text-xs font-mono text-text-muted mr-1 flex items-center gap-1.5">
-        <Film class="h-3.5 w-3.5 text-accent" aria-hidden="true" />
-        <span>解锁过滤:</span>
+    <!-- Bounded Active-Filter Summary Strip: Only renders when active filters exist -->
+    <div
+      v-if="hasActiveFilters"
+      class="flex flex-wrap items-center gap-1.5 pt-2 border-t border-border-subtle text-xs font-mono min-w-0 max-w-full overflow-hidden"
+      role="region"
+      aria-label="已生效筛选条件"
+    >
+      <span class="text-text-muted text-[11px] shrink-0 mr-1 flex items-center gap-1">
+        <Filter class="h-3 w-3 text-accent" aria-hidden="true" />
+        <span>已选条件:</span>
       </span>
-      <button
-        v-for="platform in mediaPlatforms"
-        :key="platform.key"
-        class="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-mono transition-colors cursor-pointer select-none"
-        :class="[
-          modelValue.mediaPlatforms.includes(platform.key)
-            ? 'border-accent bg-accent-subtle text-accent font-semibold ring-1 ring-accent/30'
-            : (mediaStats?.[platform.key] || 0) > 0
-              ? 'border-border-subtle bg-surface-hover text-text-main hover:border-accent/40'
-              : 'border-border-subtle/50 bg-canvas text-text-sub hover:border-border-subtle'
-        ]"
-        :title="`点击筛选支持 ${platform.name} 的节点`"
-        @click="toggleMedia(platform.key)"
-      >
-        <span>{{ platform.name }}</span>
-        <span
-          class="rounded-full px-1.5 py-0.2 text-[10px] font-mono tabular-nums"
-          :class="[
-            (mediaStats?.[platform.key] || 0) > 0
-              ? 'bg-status-success/15 text-status-success font-bold'
-              : 'bg-surface-active text-text-sub'
-          ]"
-        >
-          {{ mediaStats?.[platform.key] || 0 }}
-        </span>
-      </button>
-    </div>
 
-    <!-- Quick Country / Region Pills -->
-    <div v-if="countries && countries.length" class="flex flex-wrap items-center gap-1.5 pt-2 border-t border-border-subtle">
-      <span class="text-xs font-mono text-text-muted mr-1 flex items-center gap-1.5">
-        <Globe class="h-3.5 w-3.5 text-accent" aria-hidden="true" />
-        <span>快捷地区:</span>
+      <!-- Keyword chip -->
+      <span
+        v-if="modelValue.keyword"
+        class="inline-flex items-center gap-1 rounded-full border border-border-subtle bg-surface-hover px-2.5 py-0.5 text-xs text-text-main max-w-[200px] truncate"
+      >
+        <span class="truncate">搜索: {{ modelValue.keyword }}</span>
+        <button
+          type="button"
+          class="text-text-muted hover:text-text-main p-0.5 cursor-pointer"
+          title="移除关键词"
+          aria-label="移除关键词"
+          @click="updateField('keyword', '')"
+        >
+          <X class="h-3 w-3" aria-hidden="true" />
+        </button>
       </span>
-      <button
-        class="rounded-full border px-2.5 py-0.5 text-xs font-mono transition-colors cursor-pointer"
-        :class="[
-          !modelValue.country
-            ? 'border-accent bg-accent-subtle text-accent font-semibold ring-1 ring-accent/30'
-            : 'border-border-subtle bg-surface-hover text-text-muted hover:text-text-main'
-        ]"
-        @click="updateField('country', '')"
+
+      <!-- Subscription chip -->
+      <span
+        v-if="modelValue.subscription"
+        class="inline-flex items-center gap-1 rounded-full border border-border-subtle bg-surface-hover px-2.5 py-0.5 text-xs text-text-main max-w-[200px] truncate"
       >
-        全部 ({{ totalCount }})
-      </button>
-      <button
-        v-for="c in countries"
-        :key="c.code"
-        class="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-mono transition-colors cursor-pointer"
-        :class="[
-          modelValue.country === c.code
-            ? 'border-accent bg-accent-subtle text-accent font-semibold ring-1 ring-accent/30'
-            : 'border-border-subtle bg-surface-hover text-text-muted hover:border-accent/30 hover:text-text-main'
-        ]"
-        @click="updateField('country', modelValue.country === c.code ? '' : c.code)"
+        <span class="truncate">订阅: {{ modelValue.subscription }}</span>
+        <button
+          type="button"
+          class="text-text-muted hover:text-text-main p-0.5 cursor-pointer"
+          title="移除订阅筛选"
+          aria-label="移除订阅筛选"
+          @click="updateField('subscription', '')"
+        >
+          <X class="h-3 w-3" aria-hidden="true" />
+        </button>
+      </span>
+
+      <!-- Country chips -->
+      <span
+        v-for="c in modelValue.countries"
+        :key="'c-' + c"
+        class="inline-flex items-center gap-1 rounded-full border border-border-subtle bg-surface-hover px-2.5 py-0.5 text-xs text-text-main max-w-[200px] truncate"
       >
-        <span>{{ c.name }}</span>
-        <span class="text-[10px] tabular-nums text-text-sub">({{ c.count }})</span>
+        <span class="truncate">地区: {{ getCountryLabel(c) }}</span>
+        <button
+          type="button"
+          class="text-text-muted hover:text-text-main p-0.5 cursor-pointer"
+          :title="`移除地区 ${getCountryLabel(c)}`"
+          :aria-label="`移除地区 ${getCountryLabel(c)}`"
+          @click="removeCountry(c)"
+        >
+          <X class="h-3 w-3" aria-hidden="true" />
+        </button>
+      </span>
+
+      <!-- Protocol chips -->
+      <span
+        v-for="p in modelValue.protocols"
+        :key="'p-' + p"
+        class="inline-flex items-center gap-1 rounded-full border border-border-subtle bg-surface-hover px-2.5 py-0.5 text-xs text-text-main max-w-[200px] truncate"
+      >
+        <span class="truncate">协议: {{ p.toUpperCase() }}</span>
+        <button
+          type="button"
+          class="text-text-muted hover:text-text-main p-0.5 cursor-pointer"
+          :title="`移除协议 ${p}`"
+          :aria-label="`移除协议 ${p}`"
+          @click="removeProtocol(p)"
+        >
+          <X class="h-3 w-3" aria-hidden="true" />
+        </button>
+      </span>
+
+      <!-- Status chips -->
+      <span
+        v-for="s in modelValue.statuses"
+        :key="'s-' + s"
+        class="inline-flex items-center gap-1 rounded-full border border-border-subtle bg-surface-hover px-2.5 py-0.5 text-xs text-text-main max-w-[200px] truncate"
+      >
+        <span class="truncate">状态: {{ getStatusLabel(s) }}</span>
+        <button
+          type="button"
+          class="text-text-muted hover:text-text-main p-0.5 cursor-pointer"
+          :title="`移除状态 ${getStatusLabel(s)}`"
+          :aria-label="`移除状态 ${getStatusLabel(s)}`"
+          @click="removeStatus(s)"
+        >
+          <X class="h-3 w-3" aria-hidden="true" />
+        </button>
+      </span>
+
+      <!-- Chain chip -->
+      <span
+        v-if="modelValue.chain && modelValue.chain !== 'all'"
+        class="inline-flex items-center gap-1 rounded-full border border-border-subtle bg-surface-hover px-2.5 py-0.5 text-xs text-text-main max-w-[200px] truncate"
+      >
+        <span class="truncate">链路: {{ modelValue.chain === 'chained' ? '已挂链' : '直连' }}</span>
+        <button
+          type="button"
+          class="text-text-muted hover:text-text-main p-0.5 cursor-pointer"
+          title="移除链路筛选"
+          aria-label="移除链路筛选"
+          @click="updateField('chain', 'all')"
+        >
+          <X class="h-3 w-3" aria-hidden="true" />
+        </button>
+      </span>
+
+      <!-- Speed chip -->
+      <span
+        v-if="modelValue.minSpeed > 0"
+        class="inline-flex items-center gap-1 rounded-full border border-border-subtle bg-surface-hover px-2.5 py-0.5 text-xs text-text-main max-w-[200px] truncate"
+      >
+        <span class="truncate">门槛: ≥{{ modelValue.minSpeed }}M</span>
+        <button
+          type="button"
+          class="text-text-muted hover:text-text-main p-0.5 cursor-pointer"
+          title="移除测速门槛"
+          aria-label="移除测速门槛"
+          @click="updateField('minSpeed', 0)"
+        >
+          <X class="h-3 w-3" aria-hidden="true" />
+        </button>
+      </span>
+
+      <!-- Media chips -->
+      <span
+        v-for="m in modelValue.mediaPlatforms"
+        :key="'m-' + m"
+        class="inline-flex items-center gap-1 rounded-full border border-accent/40 bg-accent-subtle px-2.5 py-0.5 text-xs text-accent max-w-[200px] truncate"
+      >
+        <span class="truncate">解锁: {{ getMediaPlatformLabel(m) }}</span>
+        <button
+          type="button"
+          class="text-accent hover:text-accent p-0.5 cursor-pointer"
+          :title="`移除解锁 ${getMediaPlatformLabel(m)}`"
+          :aria-label="`移除解锁 ${getMediaPlatformLabel(m)}`"
+          @click="removeMediaPlatform(m)"
+        >
+          <X class="h-3 w-3" aria-hidden="true" />
+        </button>
+      </span>
+
+      <!-- Reset all filters button -->
+      <button
+        type="button"
+        class="inline-flex items-center gap-1 text-xs text-text-muted hover:text-status-danger cursor-pointer ml-auto px-2 py-1 transition-colors min-h-[32px] sm:min-h-[28px]"
+        title="清空所有筛选条件"
+        @click="resetAllFilters"
+      >
+        <RotateCcw class="h-3 w-3" aria-hidden="true" />
+        <span>清空所有</span>
       </button>
     </div>
 
@@ -164,7 +289,7 @@
           <input
             type="checkbox"
             :checked="includeSpeed"
-            class="rounded-sm border-border-strong bg-canvas text-accent focus:ring-0"
+            class="rounded-xs border-border-strong bg-canvas text-accent focus:ring-0"
             @change="$emit('update:includeSpeed', ($event.target as HTMLInputElement).checked)"
           />
           <Gauge class="h-3.5 w-3.5 text-accent" aria-hidden="true" />
@@ -175,7 +300,7 @@
           <input
             type="checkbox"
             :checked="includeMedia"
-            class="rounded-sm border-border-strong bg-canvas text-accent focus:ring-0"
+            class="rounded-xs border-border-strong bg-canvas text-accent focus:ring-0"
             @change="$emit('update:includeMedia', ($event.target as HTMLInputElement).checked)"
           />
           <Tv class="h-3.5 w-3.5 text-accent" aria-hidden="true" />
@@ -299,11 +424,17 @@
 </template>
 
 <script setup lang="ts">
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
+  Activity,
   Film,
+  Filter,
   Gauge,
+  GitFork,
   Globe,
   LayoutGrid,
+  Network,
+  RotateCcw,
   Search,
   Table,
   Target,
@@ -313,11 +444,21 @@ import {
   Zap,
 } from 'lucide-vue-next'
 import Button from '../ui/Button.vue'
-import type { CountryOption, FilterState, MediaPlatformDef } from '../../views/nodeLedgerDomain'
+import LedgerFacetSelect, { type FacetOption } from './LedgerFacetSelect.vue'
+import {
+  CHAIN_FACET_OPTIONS,
+  createDefaultFacetFilterState,
+  STATUS_FACET_OPTIONS,
+  type CountryOption,
+  type FacetFilterState,
+  type MediaPlatformDef,
+} from '../../views/nodeLedgerDomain'
+
+type FacetId = 'countries' | 'protocols' | 'statuses' | 'media' | 'chain' | null
 
 const props = withDefaults(
   defineProps<{
-    modelValue: FilterState
+    modelValue: FacetFilterState
     viewMode: 'table' | 'grid'
     subscriptions?: string[]
     protocols?: string[]
@@ -349,7 +490,7 @@ const props = withDefaults(
 )
 
 const emit = defineEmits<{
-  (e: 'update:modelValue', val: FilterState): void
+  (e: 'update:modelValue', val: FacetFilterState): void
   (e: 'change-view', mode: 'table' | 'grid'): void
   (e: 'update:includeSpeed', val: boolean): void
   (e: 'update:includeMedia', val: boolean): void
@@ -360,21 +501,150 @@ const emit = defineEmits<{
   (e: 'reset-filters'): void
 }>()
 
-function updateField<K extends keyof FilterState>(key: K, value: FilterState[K]) {
+const activeFacet = ref<FacetId>(null)
+
+function toggleFacet(id: FacetId) {
+  activeFacet.value = activeFacet.value === id ? null : id
+}
+
+function closeFacet() {
+  activeFacet.value = null
+}
+
+function onDocumentClick(e: MouseEvent) {
+  const target = e.target as HTMLElement
+  if (!target.closest?.('.facet-controller-container')) {
+    activeFacet.value = null
+  }
+}
+
+function onDocumentKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape' && activeFacet.value) {
+    activeFacet.value = null
+  }
+}
+
+onMounted(() => {
+  document.addEventListener('click', onDocumentClick)
+  document.addEventListener('keydown', onDocumentKeydown)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('click', onDocumentClick)
+  document.removeEventListener('keydown', onDocumentKeydown)
+})
+
+// Options for facets
+const countryFacetOptions = computed<FacetOption[]>(() => {
+  return (props.countries || []).map((c) => ({
+    key: c.code,
+    name: c.name,
+    count: c.count,
+  }))
+})
+
+const protocolFacetOptions = computed<FacetOption[]>(() => {
+  return (props.protocols || []).map((p) => ({
+    key: p.toLowerCase(),
+    name: p.toUpperCase(),
+  }))
+})
+
+const statusFacetOptions = computed<FacetOption[]>(() => {
+  return STATUS_FACET_OPTIONS.map((s) => ({
+    key: s.key,
+    name: s.name,
+    short: s.short,
+  }))
+})
+
+const mediaFacetOptions = computed<FacetOption[]>(() => {
+  return (props.mediaPlatforms || []).map((m) => ({
+    key: m.key,
+    name: m.name,
+    count: props.mediaStats?.[m.key] || 0,
+    short: m.short,
+  }))
+})
+
+const chainFacetOptions = computed<FacetOption[]>(() => {
+  return CHAIN_FACET_OPTIONS.filter((c) => c.key !== 'all').map((c) => ({
+    key: c.key,
+    name: c.name,
+  }))
+})
+
+function handleChainFacetChange(keys: string[]) {
+  const val = keys.length > 0 ? (keys[keys.length - 1] as 'chained' | 'plain') : 'all'
+  updateField('chain', val)
+}
+
+function updateField<K extends keyof FacetFilterState>(key: K, value: FacetFilterState[K]) {
   emit('update:modelValue', {
     ...props.modelValue,
     [key]: value,
   })
 }
 
-function toggleMedia(key: string) {
-  const current = [...props.modelValue.mediaPlatforms]
-  const idx = current.indexOf(key)
-  if (idx >= 0) {
-    current.splice(idx, 1)
-  } else {
-    current.push(key)
-  }
-  updateField('mediaPlatforms', current)
+const hasActiveFilters = computed(() => {
+  const v = props.modelValue
+  return Boolean(
+    v.keyword ||
+      v.subscription ||
+      v.countries.length > 0 ||
+      v.protocols.length > 0 ||
+      v.statuses.length > 0 ||
+      (v.chain && v.chain !== 'all') ||
+      v.minSpeed > 0 ||
+      v.mediaPlatforms.length > 0
+  )
+})
+
+function getCountryLabel(code: string): string {
+  const c = props.countries?.find((item) => item.code === code)
+  return c?.name || code
+}
+
+function getStatusLabel(st: string): string {
+  const s = STATUS_FACET_OPTIONS.find((item) => item.key === st)
+  return s?.name || st
+}
+
+function getMediaPlatformLabel(key: string): string {
+  const m = props.mediaPlatforms?.find((item) => item.key === key)
+  return m?.name || key
+}
+
+function removeCountry(code: string) {
+  updateField(
+    'countries',
+    props.modelValue.countries.filter((c) => c !== code)
+  )
+}
+
+function removeProtocol(proto: string) {
+  updateField(
+    'protocols',
+    props.modelValue.protocols.filter((p) => p !== proto)
+  )
+}
+
+function removeStatus(st: string) {
+  updateField(
+    'statuses',
+    props.modelValue.statuses.filter((s) => s !== st)
+  )
+}
+
+function removeMediaPlatform(key: string) {
+  updateField(
+    'mediaPlatforms',
+    props.modelValue.mediaPlatforms.filter((m) => m !== key)
+  )
+}
+
+function resetAllFilters() {
+  emit('update:modelValue', createDefaultFacetFilterState())
+  emit('reset-filters')
 }
 </script>

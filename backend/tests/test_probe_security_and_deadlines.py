@@ -7,6 +7,7 @@ and service deadline enforcement preserving sibling results.
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
@@ -226,3 +227,144 @@ async def test_node_liveness_authority_preserved_on_platform_failure():
         assert res["latency_ms"] == 45
         assert res["media"]["youtube"]["status"] == "timeout"
         assert res["media"]["netflix"]["status"] == "transport_error"
+
+
+@pytest.mark.asyncio
+async def test_shared_media_session_constructs_single_client():
+    """One healthy node probing multiple media platforms must create exactly ONE AsyncClient."""
+    mock_runner_url = "http://127.0.0.1:21000"
+    created_clients: list[dict[str, Any]] = []
+    original_init = httpx.AsyncClient.__init__
+
+    def intercept_init(self, *args, **kwargs):
+        created_clients.append({
+            "proxy": kwargs.get("proxy"),
+            "trust_env": kwargs.get("trust_env"),
+            "follow_redirects": kwargs.get("follow_redirects"),
+            "headers": kwargs.get("headers"),
+        })
+        original_init(self, *args, **kwargs)
+
+    async def mock_eval_fn(client, timeout_s=2.0, deadline_monotonic=None):
+        from app.services.probe.models import ProviderResult
+        return ProviderResult(
+            status="verified",
+            verdict="available",
+            unlocked=True,
+            evidence={"http_status": 200, "signals": [], "elapsed_ms": 10},
+        )
+
+    with patch.object(httpx.AsyncClient, "__init__", side_effect=intercept_init, autospec=True), \
+         patch("app.services.probe.providers.eval_youtube", side_effect=mock_eval_fn), \
+         patch("app.services.probe.providers.eval_netflix", side_effect=mock_eval_fn), \
+         patch("app.services.probe.providers.eval_gemini", side_effect=mock_eval_fn):
+
+        res = await check_media_unlock(mock_runner_url, platforms=["youtube", "netflix", "gemini"], timeout_s=2.0)
+
+        # Must create EXACTLY ONE client for all platforms
+        assert len(created_clients) == 1, f"Expected 1 AsyncClient for shared session, got {len(created_clients)}"
+        client_cfg = created_clients[0]
+        assert client_cfg["trust_env"] is False, "trust_env must be False"
+        assert str(client_cfg["proxy"]) == mock_runner_url, f"proxy must be {mock_runner_url}"
+        assert client_cfg["follow_redirects"] is True
+        assert client_cfg["headers"] == {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"}
+        assert len(res) == 3
+        assert res["youtube"]["status"] == "verified"
+        assert res["netflix"]["status"] == "verified"
+        assert res["gemini"]["status"] == "verified"
+
+
+@pytest.mark.asyncio
+async def test_transport_handshake_failure_never_opens_media_session():
+    """When transport handshake fails, media unlock check must NEVER be called or open clients."""
+    node = {
+        "name": "failing-handshake-node",
+        "server": "1.2.3.4",
+        "port": 443,
+        "type": "ss",
+        "password": "pass",
+        "cipher": "aes-128-gcm",
+    }
+    mock_runner_ctx = {"proxy_url": "http://127.0.0.1:21000", "port": 21000, "is_runner": True}
+    from contextlib import asynccontextmanager
+    @asynccontextmanager
+    async def mock_spawn(n, **kwargs):
+        yield mock_runner_ctx
+
+    mock_failed_transport = {"status": "fail", "latency_ms": None, "target": "https://cp.cloudflare.com/generate_204", "error": "Handshake failed"}
+    mock_media_unlock = AsyncMock()
+
+    with patch("app.services.probe.service.spawn_node_runner", side_effect=mock_spawn), \
+         patch("app.services.probe.service.check_transport", return_value=mock_failed_transport), \
+         patch("app.services.probe.service.check_media_unlock", mock_media_unlock):
+
+        resolved = ResolvedProbeConfig(
+            service_timeout_s=2.0,
+            media_check_enabled=True,
+            media_platforms=("youtube", "netflix", "gemini"),
+        )
+        res = await probe_single_node(node, resolved_config=resolved, use_cache=False)
+
+        assert res["status"] == "fail"
+        assert mock_media_unlock.call_count == 0, "check_media_unlock must NEVER be called when transport handshake fails"
+
+
+@pytest.mark.asyncio
+async def test_media_timeout_s_threaded_and_bounded_by_node_budget():
+    """media_timeout_s must be passed to check_media_unlock and bounded by remaining node_timeout_s."""
+    node = {
+        "name": "timeout-bounded-node",
+        "server": "1.2.3.4",
+        "port": 443,
+        "type": "ss",
+        "password": "pass",
+        "cipher": "aes-128-gcm",
+    }
+    mock_runner_ctx = {"proxy_url": "http://127.0.0.1:21000", "port": 21000, "is_runner": True}
+    from contextlib import asynccontextmanager
+    @asynccontextmanager
+    async def mock_spawn(n, **kwargs):
+        yield mock_runner_ctx
+
+    mock_transport = {"status": "ok", "latency_ms": 50, "target": "https://cp.cloudflare.com/generate_204", "error": None}
+    mock_geo = {"status": "ok", "ip": "1.2.3.4", "country": "US"}
+    captured_media_timeouts: list[float] = []
+
+    async def mock_check_media(proxy_url, platforms, timeout_s=2.0):
+        captured_media_timeouts.append(timeout_s)
+        return {p: {"status": "verified", "unlocked": True} for p in platforms}
+
+    # Case 1: Configured media_timeout_s=8.0 with ample node budget
+    with patch("app.services.probe.service.spawn_node_runner", side_effect=mock_spawn), \
+         patch("app.services.probe.service.check_transport", return_value=mock_transport), \
+         patch("app.services.probe.service.check_geo_identity", return_value=mock_geo), \
+         patch("app.services.probe.service.check_media_unlock", side_effect=mock_check_media):
+
+        resolved = ResolvedProbeConfig(
+            service_timeout_s=2.0,
+            media_timeout_s=8.0,
+            node_timeout_s=30.0,
+            media_platforms=("youtube", "netflix"),
+        )
+        res = await probe_single_node(node, resolved_config=resolved, use_cache=False)
+        assert res["status"] == "ok"
+        assert len(captured_media_timeouts) == 1
+        assert abs(captured_media_timeouts[0] - 8.0) < 0.2, f"Expected media_timeout_s ~ 8.0, got {captured_media_timeouts[0]}"
+
+    # Case 2: Configured media_timeout_s=10.0 but remaining node budget is small (0.5s)
+    captured_media_timeouts.clear()
+    with patch("app.services.probe.service.spawn_node_runner", side_effect=mock_spawn), \
+         patch("app.services.probe.service.check_transport", return_value=mock_transport), \
+         patch("app.services.probe.service.check_geo_identity", return_value=mock_geo), \
+         patch("app.services.probe.service.check_media_unlock", side_effect=mock_check_media):
+
+        resolved = ResolvedProbeConfig(
+            service_timeout_s=2.0,
+            media_timeout_s=10.0,
+            node_timeout_s=0.5,
+            media_platforms=("youtube", "netflix"),
+        )
+        res = await probe_single_node(node, resolved_config=resolved, use_cache=False)
+        assert res["status"] == "ok"
+        assert len(captured_media_timeouts) == 1
+        assert captured_media_timeouts[0] <= 0.5, f"Media timeout {captured_media_timeouts[0]} must not exceed remaining node budget 0.5"

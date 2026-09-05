@@ -33,6 +33,25 @@ DEFAULT_UA = (
     "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 )
 
+NETFLIX_FAST_PATH_ENDPOINT = "https://api.fast.com/netflix/speedtest/v2"
+NETFLIX_FAST_PATH_ENABLED = False  # Disabled by default per Task 2.5 because unauthenticated endpoint requires an app token
+
+AISTUDIO_API_URL = "https://generativelanguage.googleapis.com/v1beta/models?key=AIzaSyDummyCheckKey"
+AISTUDIO_PORTAL_URL = "https://aistudio.google.com/"
+
+GEMINI_ALPHA3_RE = re.compile(r',2,1,200,"([A-Z]{3})"')
+GEMINI_BLOCKED_ALPHA3 = {
+    "CHN", "RUS", "BLR", "CUB", "IRN", "PRK", "SYR", "HKG", "MAC",
+}
+ALPHA3_TO_ALPHA2 = {
+    "USA": "US", "GBR": "GB", "JPN": "JP", "SGP": "SG", "DEU": "DE",
+    "FRA": "FR", "CAN": "CA", "AUS": "AU", "TWN": "TW", "KOR": "KR",
+    "IND": "IN", "NLD": "NL", "SWE": "SE", "CHE": "CH", "HKG": "HK",
+    "CHN": "CN", "MAC": "MO", "RUS": "RU", "BRA": "BR", "ZAF": "ZA",
+    "MEX": "MX", "MYS": "MY", "THA": "TH", "VNM": "VN", "IDN": "ID",
+    "PHL": "PH", "NZL": "NZ", "IRL": "IE", "ITA": "IT", "ESP": "ES",
+}
+
 
 async def execute_request_with_retry(
     client: httpx.AsyncClient,
@@ -134,10 +153,12 @@ def _classify_error_outcome(
 async def eval_netflix(
     client: httpx.AsyncClient,
     timeout_s: float = 2.0,
+    deadline_monotonic: float | None = None,
+    enable_fast_path: bool | None = None,
 ) -> ProviderResult:
     """Evaluate Netflix streaming capability (full catalogue vs originals-only)."""
     started = time.monotonic()
-    deadline = started + timeout_s
+    deadline = min(deadline_monotonic, started + timeout_s) if deadline_monotonic is not None else (started + timeout_s)
 
     non_orig_available = False
     orig_available = False
@@ -145,7 +166,98 @@ async def eval_netflix(
     final_host: str | None = "www.netflix.com"
     last_status: int | None = None
 
+    if enable_fast_path is None:
+        enable_fast_path = NETFLIX_FAST_PATH_ENABLED
+
+    if enable_fast_path:
+        try:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise asyncio.TimeoutError("deadline exceeded before fast path dispatch")
+
+            resp_fast = await execute_request_with_retry(
+                client,
+                "GET",
+                NETFLIX_FAST_PATH_ENDPOINT,
+                deadline_monotonic=deadline,
+            )
+            elapsed_ms = int((time.monotonic() - started) * 1000)
+            final_host = resp_fast.url.host if resp_fast.url else "api.fast.com"
+
+            if resp_fast.status_code == 403:
+                return ProviderResult(
+                    status="ip_blocked",
+                    verdict="blocked",
+                    unlocked=False,
+                    confidence="verified",
+                    evidence=ProviderEvidence(
+                        http_status=403,
+                        final_host=final_host,
+                        signals=["fast_com_blocked"],
+                        elapsed_ms=elapsed_ms,
+                    ).to_dict(),
+                    label="IP被阻断",
+                )
+            elif resp_fast.status_code == 200:
+                try:
+                    data = resp_fast.json()
+                    country: str | None = None
+                    if isinstance(data, dict):
+                        targets = data.get("targets")
+                        if isinstance(targets, list) and len(targets) > 0 and isinstance(targets[0], dict):
+                            loc = targets[0].get("location")
+                            if isinstance(loc, dict):
+                                c = loc.get("country")
+                                if isinstance(c, str) and len(c.strip()) == 2 and c.strip().isalpha():
+                                    country = c.strip().upper()
+                        if not country:
+                            client_info = data.get("client")
+                            if isinstance(client_info, dict):
+                                loc = client_info.get("location")
+                                if isinstance(loc, dict):
+                                    c = loc.get("country")
+                                    if isinstance(c, str) and len(c.strip()) == 2 and c.strip().isalpha():
+                                        country = c.strip().upper()
+
+                    if country:
+                        return ProviderResult(
+                            status="verified",
+                            verdict="full",
+                            unlocked=True,
+                            region=country,
+                            confidence="verified",
+                            evidence=ProviderEvidence(
+                                http_status=200,
+                                final_host=final_host,
+                                signals=["fast_com_verified", f"fast_com_region_{country.lower()}"],
+                                elapsed_ms=elapsed_ms,
+                            ).to_dict(),
+                            label="原生全解锁",
+                        )
+                except Exception:
+                    pass
+        except (asyncio.TimeoutError, httpx.TimeoutException):
+            elapsed_ms = int((time.monotonic() - started) * 1000)
+            return ProviderResult(
+                status="timeout",
+                verdict="unknown",
+                unlocked=False,
+                confidence="unavailable",
+                evidence=ProviderEvidence(
+                    final_host=final_host,
+                    elapsed_ms=elapsed_ms,
+                    error_code="timeout",
+                ).to_dict(),
+                error="netflix fast path probe timed out",
+            )
+        except Exception:
+            pass
+
     try:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise asyncio.TimeoutError("deadline exceeded before title check")
+
         # 1. Non-original licensed title (Breaking Bad: 70143836)
         resp_non = await execute_request_with_retry(
             client,
@@ -281,10 +393,11 @@ async def eval_netflix(
 async def eval_youtube(
     client: httpx.AsyncClient,
     timeout_s: float = 2.0,
+    deadline_monotonic: float | None = None,
 ) -> ProviderResult:
     """Evaluate YouTube Premium unlock capability and detected region."""
     started = time.monotonic()
-    deadline = started + timeout_s
+    deadline = min(deadline_monotonic, started + timeout_s) if deadline_monotonic is not None else (started + timeout_s)
     final_host = "www.youtube.com"
 
     try:
@@ -373,10 +486,11 @@ async def eval_youtube(
 async def eval_disney(
     client: httpx.AsyncClient,
     timeout_s: float = 2.0,
+    deadline_monotonic: float | None = None,
 ) -> ProviderResult:
     """Evaluate Disney+ streaming capability through credential-free landing redirect."""
     started = time.monotonic()
-    deadline = started + timeout_s
+    deadline = min(deadline_monotonic, started + timeout_s) if deadline_monotonic is not None else (started + timeout_s)
     final_host = "www.disneyplus.com"
 
     try:
@@ -449,10 +563,11 @@ async def eval_disney(
 async def eval_chatgpt(
     client: httpx.AsyncClient,
     timeout_s: float = 2.0,
+    deadline_monotonic: float | None = None,
 ) -> ProviderResult:
     """Evaluate ChatGPT / OpenAI API accessibility."""
     started = time.monotonic()
-    deadline = started + timeout_s
+    deadline = min(deadline_monotonic, started + timeout_s) if deadline_monotonic is not None else (started + timeout_s)
     final_host = "ios.chat.openai.com"
 
     try:
@@ -516,10 +631,11 @@ async def eval_chatgpt(
 async def eval_bilibili(
     client: httpx.AsyncClient,
     timeout_s: float = 2.0,
+    deadline_monotonic: float | None = None,
 ) -> ProviderResult:
     """Evaluate Bilibili HK/MO/TW versus Mainland regional availability."""
     started = time.monotonic()
-    deadline = started + timeout_s
+    deadline = min(deadline_monotonic, started + timeout_s) if deadline_monotonic is not None else (started + timeout_s)
     final_host = "api.bilibili.com"
 
     try:
@@ -595,10 +711,11 @@ async def eval_bilibili(
 async def eval_meta_ai(
     client: httpx.AsyncClient,
     timeout_s: float = 2.0,
+    deadline_monotonic: float | None = None,
 ) -> ProviderResult:
     """Evaluate Meta AI service accessibility."""
     started = time.monotonic()
-    deadline = started + timeout_s
+    deadline = min(deadline_monotonic, started + timeout_s) if deadline_monotonic is not None else (started + timeout_s)
     final_host = "www.meta.ai"
 
     try:
@@ -674,10 +791,11 @@ async def eval_meta_ai(
 async def eval_gemini(
     client: httpx.AsyncClient,
     timeout_s: float = 2.0,
+    deadline_monotonic: float | None = None,
 ) -> ProviderResult:
-    """Evaluate Google Gemini service accessibility."""
+    """Evaluate Google Gemini service accessibility with fast 3-letter country code matching."""
     started = time.monotonic()
-    deadline = started + timeout_s
+    deadline = min(deadline_monotonic, started + timeout_s) if deadline_monotonic is not None else (started + timeout_s)
     final_host = "gemini.google.com"
 
     try:
@@ -713,6 +831,43 @@ async def eval_gemini(
         loc = str(resp.headers.get("location") or "")
         text = resp.text
         url_str = str(resp.url)
+
+        # 1. Fast subcheck 3-letter country code match
+        match = GEMINI_ALPHA3_RE.search(text)
+        if match:
+            alpha3 = match.group(1).upper()
+            if alpha3 in GEMINI_BLOCKED_ALPHA3:
+                return ProviderResult(
+                    status="restricted",
+                    verdict="unsupported_region",
+                    unlocked=False,
+                    region=ALPHA3_TO_ALPHA2.get(alpha3, alpha3),
+                    confidence="verified",
+                    evidence=ProviderEvidence(
+                        http_status=resp.status_code,
+                        final_host=final_host,
+                        signals=["country_unsupported", f"alpha3_{alpha3.lower()}"],
+                        elapsed_ms=elapsed_ms,
+                    ).to_dict(),
+                    label="未支持地区",
+                )
+            region_code = ALPHA3_TO_ALPHA2.get(alpha3, alpha3)
+            return ProviderResult(
+                status="verified",
+                verdict="available",
+                unlocked=True,
+                region=region_code,
+                confidence="verified",
+                evidence=ProviderEvidence(
+                    http_status=resp.status_code,
+                    final_host=final_host,
+                    signals=["gemini_available", f"alpha3_{alpha3.lower()}"],
+                    elapsed_ms=elapsed_ms,
+                ).to_dict(),
+                label="可用",
+            )
+
+        # 2. Existing fallback checks
         if (
             "unavailable" in loc
             or "sorry" in url_str
@@ -751,13 +906,177 @@ async def eval_gemini(
         return _classify_error_outcome(exc, elapsed_ms, final_host)
 
 
+async def eval_aistudio(
+    client: httpx.AsyncClient,
+    timeout_s: float = 2.0,
+    deadline_monotonic: float | None = None,
+) -> ProviderResult:
+    """Evaluate Google AI Studio service accessibility through zero-credential geofence probe."""
+    started = time.monotonic()
+    deadline = min(deadline_monotonic, started + timeout_s) if deadline_monotonic is not None else (started + timeout_s)
+    final_host = "generativelanguage.googleapis.com"
+
+    try:
+        resp = await execute_request_with_retry(
+            client,
+            "GET",
+            AISTUDIO_API_URL,
+            deadline_monotonic=deadline,
+        )
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        if resp.url:
+            final_host = resp.url.host
+
+        if resp.status_code == 429:
+            return ProviderResult(
+                status="rate_limited",
+                verdict="rate_limited",
+                unlocked=False,
+                confidence="verified",
+                evidence=ProviderEvidence(
+                    http_status=429,
+                    final_host=final_host,
+                    signals=["rate_limited"],
+                    elapsed_ms=elapsed_ms,
+                ).to_dict(),
+                label="限流",
+            )
+        if resp.status_code == 403:
+            return ProviderResult(
+                status="challenged",
+                verdict="challenge",
+                unlocked=False,
+                confidence="verified",
+                evidence=ProviderEvidence(
+                    http_status=403,
+                    final_host=final_host,
+                    signals=["challenge_detected"],
+                    elapsed_ms=elapsed_ms,
+                ).to_dict(),
+                label="被风控或阻断",
+            )
+
+        text = resp.text
+        if resp.status_code == 400:
+            if "API_KEY_INVALID" in text or "API key not valid" in text:
+                return ProviderResult(
+                    status="verified",
+                    verdict="available",
+                    unlocked=True,
+                    confidence="verified",
+                    evidence=ProviderEvidence(
+                        http_status=400,
+                        final_host=final_host,
+                        signals=["geofence_passed", "api_key_invalid"],
+                        elapsed_ms=elapsed_ms,
+                    ).to_dict(),
+                    label="可用",
+                )
+            if "FAILED_PRECONDITION" in text or "User location is not supported" in text:
+                return ProviderResult(
+                    status="restricted",
+                    verdict="unsupported_region",
+                    unlocked=False,
+                    confidence="verified",
+                    evidence=ProviderEvidence(
+                        http_status=400,
+                        final_host=final_host,
+                        signals=["user_location_unsupported"],
+                        elapsed_ms=elapsed_ms,
+                    ).to_dict(),
+                    label="未支持地区",
+                )
+
+        if resp.status_code == 200:
+            return ProviderResult(
+                status="verified",
+                verdict="available",
+                unlocked=True,
+                confidence="verified",
+                evidence=ProviderEvidence(
+                    http_status=200,
+                    final_host=final_host,
+                    signals=["api_available"],
+                    elapsed_ms=elapsed_ms,
+                ).to_dict(),
+                label="可用",
+            )
+
+        # Auxiliary Web Portal check if primary API inconclusive and deadline permits
+        remaining = deadline - time.monotonic()
+        if remaining > 0.1:
+            try:
+                portal_resp = await execute_request_with_retry(
+                    client,
+                    "GET",
+                    AISTUDIO_PORTAL_URL,
+                    deadline_monotonic=deadline,
+                    follow_redirects=True,
+                )
+                elapsed_ms = int((time.monotonic() - started) * 1000)
+                portal_host = portal_resp.url.host if portal_resp.url else "aistudio.google.com"
+                portal_url_str = str(portal_resp.url)
+                portal_text = portal_resp.text
+
+                if "sorry" in portal_url_str or "unavailable" in portal_url_str or "not supported" in portal_text.lower():
+                    return ProviderResult(
+                        status="restricted",
+                        verdict="unsupported_region",
+                        unlocked=False,
+                        confidence="verified",
+                        evidence=ProviderEvidence(
+                            http_status=portal_resp.status_code,
+                            final_host=portal_host,
+                            signals=["portal_unsupported"],
+                            elapsed_ms=elapsed_ms,
+                        ).to_dict(),
+                        label="未支持地区",
+                    )
+                if portal_resp.status_code in (200, 302, 303) and ("welcome" in portal_url_str or "aistudio" in portal_url_str or "MakerSuite" in portal_text):
+                    return ProviderResult(
+                        status="verified",
+                        verdict="available",
+                        unlocked=True,
+                        confidence="verified",
+                        evidence=ProviderEvidence(
+                            http_status=portal_resp.status_code,
+                            final_host=portal_host,
+                            signals=["portal_available"],
+                            elapsed_ms=elapsed_ms,
+                        ).to_dict(),
+                        label="可用",
+                    )
+            except Exception:
+                pass
+
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        return ProviderResult(
+            status="inconclusive",
+            verdict="unknown",
+            unlocked=False,
+            confidence="unavailable",
+            evidence=ProviderEvidence(
+                http_status=resp.status_code,
+                final_host=final_host,
+                signals=["contract_drift"],
+                elapsed_ms=elapsed_ms,
+            ).to_dict(),
+            label="未知",
+        )
+
+    except Exception as exc:
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        return _classify_error_outcome(exc, elapsed_ms, final_host)
+
+
 async def eval_youtube_cdn(
     client: httpx.AsyncClient,
     timeout_s: float = 2.0,
+    deadline_monotonic: float | None = None,
 ) -> CdnRoutingObservation:
     """Evaluate YouTube CDN mapping hint independently from node exit identity."""
     started = time.monotonic()
-    deadline = started + timeout_s
+    deadline = min(deadline_monotonic, started + timeout_s) if deadline_monotonic is not None else (started + timeout_s)
 
     try:
         resp = await execute_request_with_retry(

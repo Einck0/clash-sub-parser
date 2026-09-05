@@ -5,10 +5,13 @@ import {
   buildEffectiveBatchTargets,
   chunkItems,
   computeFilterOptions,
+  createDefaultFacetFilterState,
   createDrawerDetailSession,
   filterAndSortNodes,
   getProbeForNode,
   mergeNodeLedgerProbePages,
+  nodeMatchesStatus,
+  normalizeFacetFilterState,
   normalizeNodeLedgerMap,
   planDialerReplacement,
   replaceNodeDialerProxy,
@@ -106,9 +109,9 @@ test('1.1 node-to-probe matching, multi-field search, multi-media AND filtering,
   const baseFilters = {
     keyword: 'hk.example.com',
     subscription: '',
-    protocol: '',
-    status: 'all',
-    country: '',
+    protocols: [],
+    statuses: [],
+    countries: [],
     chain: 'all',
     minSpeed: 0,
     mediaPlatforms: [],
@@ -121,7 +124,7 @@ test('1.1 node-to-probe matching, multi-field search, multi-media AND filtering,
   const res2 = filterAndSortNodes(mockNodes, mockProbes, {
     ...baseFilters,
     keyword: '',
-    protocol: 'ss',
+    protocols: ['ss'],
   })
   assert.equal(res2.length, 1)
   assert.equal(res2[0].name, 'US-01')
@@ -139,13 +142,13 @@ test('1.1 node-to-probe matching, multi-field search, multi-media AND filtering,
 
   // Metric shortcuts
   const shortcutHealthy = applyMetricShortcut(baseFilters, 'healthy')
-  assert.equal(shortcutHealthy.status, 'ok')
+  assert.deepEqual(shortcutHealthy.statuses, ['ok'])
   const shortcutFast = applyMetricShortcut(baseFilters, 'fast')
   assert.equal(shortcutFast.minSpeed, 10)
   const shortcutChained = applyMetricShortcut(baseFilters, 'chained')
   assert.equal(shortcutChained.chain, 'chained')
   const shortcutReset = applyMetricShortcut(shortcutHealthy, 'all')
-  assert.equal(shortcutReset.status, 'all')
+  assert.deepEqual(shortcutReset.statuses, [])
 
   // Sorting
   const sortedLatencyAsc = filterAndSortNodes(mockNodes, mockProbes, { ...baseFilters, keyword: '', sortBy: 'latency_asc' })
@@ -153,6 +156,130 @@ test('1.1 node-to-probe matching, multi-field search, multi-media AND filtering,
 
   const sortedSpeedDesc = filterAndSortNodes(mockNodes, mockProbes, { ...baseFilters, keyword: '', sortBy: 'speed_desc' })
   assert.deepEqual(sortedSpeedDesc.map((n) => n.name), ['HK-01', 'US-01', 'JP-01'])
+})
+
+test('1.1-facet: normalizeFacetFilterState produces canonical, deduplicated, uppercase-country, lowercase-protocol state', () => {
+  const defaults = createDefaultFacetFilterState()
+  assert.deepEqual(defaults, {
+    keyword: '',
+    subscription: '',
+    protocols: [],
+    statuses: [],
+    countries: [],
+    chain: 'all',
+    minSpeed: 0,
+    mediaPlatforms: [],
+    sortBy: 'default',
+  })
+
+  const raw = {
+    keyword: '  my-node  ',
+    subscription: '  Sub-Alpha  ',
+    protocols: [' VMESS ', 'ss', 'vmess', '', '  TROJAN  '],
+    statuses: [' OK ', 'fail', 'ok', 'ALL', '  fast '],
+    countries: [' hk ', 'us', 'HK', '  ', 'jp '],
+    chain: 'chained',
+    minSpeed: -5,
+    mediaPlatforms: [' NETFLIX ', 'chatgpt', 'netflix', ' '],
+    sortBy: '  latency_asc  ',
+  }
+
+  const normalized = normalizeFacetFilterState(raw)
+  assert.equal(normalized.keyword, 'my-node')
+  assert.equal(normalized.subscription, 'Sub-Alpha')
+  assert.deepEqual(normalized.protocols, ['vmess', 'ss', 'trojan'])
+  assert.deepEqual(normalized.statuses, ['ok', 'fail', 'fast'])
+  assert.deepEqual(normalized.countries, ['HK', 'US', 'JP'])
+  assert.equal(normalized.chain, 'chained')
+  assert.equal(normalized.minSpeed, 0)
+  assert.deepEqual(normalized.mediaPlatforms, ['netflix', 'chatgpt'])
+  assert.equal(normalized.sortBy, 'latency_asc')
+
+  // Defensive against null/undefined
+  const emptyNorm = normalizeFacetFilterState(null)
+  assert.deepEqual(emptyNorm, defaults)
+})
+
+test('1.1-facet: FacetFilterState composable multi-selection (OR within facet, AND across facets, media verified-full AND)', () => {
+  const baseFacet = createDefaultFacetFilterState()
+
+  // 1. Empty facets: no constraints, all 3 nodes returned
+  const allNodes = filterAndSortNodes(mockNodes, mockProbes, baseFacet)
+  assert.equal(allNodes.length, 3)
+
+  // 2. Protocols OR: ['vmess', 'ss'] matches HK-01 and US-01, excludes JP-01
+  const protoOr = filterAndSortNodes(mockNodes, mockProbes, {
+    ...baseFacet,
+    protocols: ['vmess', 'ss'],
+  })
+  assert.equal(protoOr.length, 2)
+  assert.deepEqual(protoOr.map((n) => n.name), ['HK-01', 'US-01'])
+
+  // 3. Countries OR: ['HK', 'JP'] matches HK-01 and JP-01, excludes US-01
+  const countryOr = filterAndSortNodes(mockNodes, mockProbes, {
+    ...baseFacet,
+    countries: ['HK', 'JP'],
+  })
+  assert.equal(countryOr.length, 2)
+  assert.deepEqual(countryOr.map((n) => n.name), ['HK-01', 'JP-01'])
+
+  // 4. Statuses OR: ['fail'] matches only JP-01
+  const statusFail = filterAndSortNodes(mockNodes, mockProbes, {
+    ...baseFacet,
+    statuses: ['fail'],
+  })
+  assert.equal(statusFail.length, 1)
+  assert.equal(statusFail[0].name, 'JP-01')
+
+  // Statuses OR: ['ok', 'fail'] matches HK-01, US-01, JP-01
+  const statusOkFail = filterAndSortNodes(mockNodes, mockProbes, {
+    ...baseFacet,
+    statuses: ['ok', 'fail'],
+  })
+  assert.equal(statusOkFail.length, 3)
+
+  // Status fast: HK-01 (45ms) and US-01 (180ms) both have latency <= 300ms
+  const statusFast = filterAndSortNodes(mockNodes, mockProbes, {
+    ...baseFacet,
+    statuses: ['fast'],
+  })
+  assert.equal(statusFast.length, 2)
+  assert.deepEqual(statusFast.map((n) => n.name), ['HK-01', 'US-01'])
+
+  // 5. Cross-facet AND: Countries ['HK', 'US'] AND Protocols ['ss'] -> Only US-01
+  const crossAnd = filterAndSortNodes(mockNodes, mockProbes, {
+    ...baseFacet,
+    countries: ['HK', 'US'],
+    protocols: ['ss'],
+  })
+  assert.equal(crossAnd.length, 1)
+  assert.equal(crossAnd[0].name, 'US-01')
+
+  // 6. Cross-facet AND with media full unlock:
+  // Both HK-01 and US-01 have chatgpt: full
+  // But only HK-01 has netflix: full
+  const mediaAnd = filterAndSortNodes(mockNodes, mockProbes, {
+    ...baseFacet,
+    countries: ['HK', 'US'],
+    mediaPlatforms: ['chatgpt', 'netflix'],
+  })
+  assert.equal(mediaAnd.length, 1)
+  assert.equal(mediaAnd[0].name, 'HK-01')
+
+  // 7. Metric shortcut with FacetFilterState
+  const shortcutHealthy = applyMetricShortcut(baseFacet, 'healthy')
+  assert.deepEqual(shortcutHealthy.statuses, ['ok'])
+
+  const shortcutHealthyToggle = applyMetricShortcut(shortcutHealthy, 'healthy')
+  assert.deepEqual(shortcutHealthyToggle.statuses, [])
+
+  const shortcutResetAll = applyMetricShortcut(shortcutHealthy, 'all')
+  assert.deepEqual(shortcutResetAll.statuses, [])
+  assert.deepEqual(shortcutResetAll.countries, [])
+  assert.deepEqual(shortcutResetAll.protocols, [])
+  assert.deepEqual(shortcutResetAll.mediaPlatforms, [])
+  assert.equal(shortcutResetAll.minSpeed, 0)
+  assert.equal(shortcutResetAll.chain, 'all')
 })
 
 test('1.2 batch probe target selection uses all filtered rows when no row is selected and uses selected rows regardless of virtual-table mounted positions', () => {

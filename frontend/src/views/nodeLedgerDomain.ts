@@ -41,16 +41,125 @@ export interface ProbeRecord {
   [key: string]: any
 }
 
-export interface FilterState {
+export interface FacetFilterState {
   keyword: string
   subscription: string
-  protocol: string
-  status: string
-  country: string
-  chain: string
+  protocols: string[]
+  statuses: string[]
+  countries: string[]
+  chain: 'all' | 'chained' | 'plain'
   minSpeed: number
   mediaPlatforms: string[]
   sortBy: string
+}
+
+export type FilterState = FacetFilterState
+
+export interface StatusOption {
+  key: string
+  name: string
+  short: string
+}
+
+export const STATUS_FACET_OPTIONS: StatusOption[] = [
+  { key: 'ok', name: '正常可用', short: '可用' },
+  { key: 'fast', name: '低延极速 (<300ms)', short: '极速' },
+  { key: 'medium', name: '普通延迟 (300-800ms)', short: '普通' },
+  { key: 'fail', name: '离线失败', short: '失败' },
+  { key: 'untested', name: '尚未探测', short: '未测' },
+]
+
+export interface ChainOption {
+  key: 'all' | 'chained' | 'plain'
+  name: string
+  short: string
+}
+
+export const CHAIN_FACET_OPTIONS: ChainOption[] = [
+  { key: 'all', name: '全部链路', short: '全部' },
+  { key: 'chained', name: '仅看已挂链', short: '挂链' },
+  { key: 'plain', name: '仅看直连 (未挂链)', short: '直连' },
+]
+
+export function createDefaultFacetFilterState(): FacetFilterState {
+  return {
+    keyword: '',
+    subscription: '',
+    protocols: [],
+    statuses: [],
+    countries: [],
+    chain: 'all',
+    minSpeed: 0,
+    mediaPlatforms: [],
+    sortBy: 'default',
+  }
+}
+
+export const createDefaultFilterState = createDefaultFacetFilterState
+
+export function normalizeFacetFilterState(
+  input?: Partial<FacetFilterState> | any | null
+): FacetFilterState {
+  const keyword = typeof input?.keyword === 'string' ? input.keyword.trim() : ''
+  const subscription = typeof input?.subscription === 'string' ? input.subscription.trim() : ''
+
+  const normalizeList = (items: any, transform: (s: string) => string): string[] => {
+    if (!Array.isArray(items)) return []
+    const seen = new Set<string>()
+    const result: string[] = []
+    for (const raw of items) {
+      if (typeof raw !== 'string') continue
+      const val = transform(raw.trim())
+      if (val && !seen.has(val)) {
+        seen.add(val)
+        result.push(val)
+      }
+    }
+    return result
+  }
+
+  const protocols = normalizeList(input?.protocols, (s) => s.toLowerCase())
+  const statuses = normalizeList(input?.statuses, (s) => s.toLowerCase()).filter((s) => s !== 'all')
+  const countries = normalizeList(input?.countries, (s) => s.toUpperCase())
+  const mediaPlatforms = normalizeList(input?.mediaPlatforms, (s) => s.toLowerCase())
+
+  let chain: 'all' | 'chained' | 'plain' = 'all'
+  if (input?.chain === 'chained' || input?.chain === 'plain') {
+    chain = input.chain
+  }
+
+  const minSpeed = Math.max(0, Number(input?.minSpeed) || 0)
+  const sortBy = typeof input?.sortBy === 'string' && input.sortBy.trim() ? input.sortBy.trim() : 'default'
+
+  return {
+    keyword,
+    subscription,
+    protocols,
+    statuses,
+    countries,
+    chain,
+    minSpeed,
+    mediaPlatforms,
+    sortBy,
+  }
+}
+
+export function nodeMatchesStatus(probe: ProbeRecord | undefined, st: string): boolean {
+  const norm = (st || '').toLowerCase().trim()
+  if (norm === 'all') return true
+  if (norm === 'ok') return probe?.status === 'ok'
+  if (norm === 'fast') return probe?.status === 'ok' && (probe?.latency_ms ?? 9999) <= 300
+  if (norm === 'medium') {
+    return (
+      probe?.status === 'ok' &&
+      probe?.latency_ms != null &&
+      probe.latency_ms > 300 &&
+      probe.latency_ms <= 800
+    )
+  }
+  if (norm === 'fail') return probe?.status === 'fail' || probe?.status === 'timeout'
+  if (norm === 'untested') return !probe?.status || probe.status === 'untested'
+  return probe?.status === norm
 }
 
 export interface CountryOption {
@@ -583,17 +692,18 @@ export function getFlagEmoji(countryCode: string): string {
 export function filterAndSortNodes(
   nodes: LedgerNodeItem[],
   probes: Record<string, ProbeRecord>,
-  filters: FilterState
+  filters: Partial<FacetFilterState> | any
 ): LedgerNodeItem[] {
   if (!Array.isArray(nodes)) return []
-  const kw = String(filters?.keyword || '').trim().toLowerCase()
-  const sub = filters.subscription
-  const proto = (filters.protocol || '').toLowerCase()
-  const status = filters.status
-  const country = (filters.country || '').toUpperCase()
-  const chain = filters.chain
-  const minSpeed = filters.minSpeed || 0
-  const mediaList = filters.mediaPlatforms || []
+  const normFilters = normalizeFacetFilterState(filters)
+  const kw = normFilters.keyword.toLowerCase()
+  const sub = normFilters.subscription
+  const protoList = normFilters.protocols
+  const statusList = normFilters.statuses
+  const countryList = normFilters.countries
+  const chain = normFilters.chain
+  const minSpeed = normFilters.minSpeed
+  const mediaList = normFilters.mediaPlatforms
 
   const filtered = nodes.filter(item => {
     const probe = getProbeForNode(probes, item)
@@ -601,30 +711,21 @@ export function filterAndSortNodes(
     // Subscription
     if (sub && item.subscription_name !== sub) return false
 
-    // Protocol
-    if (proto && (item.type || '').toLowerCase() !== proto) return false
-
-    // Status
-    if (status && status !== 'all') {
-      if (status === 'ok' && probe?.status !== 'ok') return false
-      if (status === 'fail' && probe?.status !== 'fail' && probe?.status !== 'timeout') return false
-      if (status === 'untested' && probe?.status && probe.status !== 'untested') return false
-      if (status === 'fast' && (probe?.status !== 'ok' || (probe?.latency_ms || 9999) > 300)) return false
-      if (
-        status === 'medium' &&
-        (probe?.status !== 'ok' ||
-          !probe?.latency_ms ||
-          probe.latency_ms <= 300 ||
-          probe.latency_ms > 800)
-      ) {
-        return false
-      }
+    // Protocol (OR within facet)
+    if (protoList.length > 0) {
+      const nodeProto = (item.type || '').toLowerCase().trim()
+      if (!protoList.includes(nodeProto)) return false
     }
 
-    // Country
-    if (country) {
+    // Status (OR within facet)
+    if (statusList.length > 0) {
+      if (!statusList.some(st => nodeMatchesStatus(probe, st))) return false
+    }
+
+    // Country (OR within facet)
+    if (countryList.length > 0) {
       const c = resolveNodeCountryCode(item, probe)
-      if (c !== country) return false
+      if (!countryList.includes(c)) return false
     }
 
     // Chain
@@ -634,7 +735,7 @@ export function filterAndSortNodes(
     // Min Speed
     if (minSpeed > 0 && (!probe?.speed_mbps || probe.speed_mbps < minSpeed)) return false
 
-    // Media and AI unlocks (AND logic)
+    // Media and AI unlocks (AND logic across selected platforms)
     if (mediaList.length > 0) {
       if (!probe?.media) return false
       for (const mKey of mediaList) {
@@ -676,7 +777,7 @@ export function filterAndSortNodes(
     const pA = getProbeForNode(probes, a)
     const pB = getProbeForNode(probes, b)
 
-    switch (filters.sortBy) {
+    switch (normFilters.sortBy) {
       case 'latency_asc': {
         const latA = pA?.status === 'ok' ? pA.latency_ms ?? 99999 : 999999
         const latB = pB?.status === 'ok' ? pB.latency_ms ?? 99999 : 999999
@@ -713,21 +814,15 @@ export function filterAndSortNodes(
  * Toggles or applies metrics shortcut filters.
  */
 export function applyMetricShortcut(
-  filters: FilterState,
+  filters: FacetFilterState,
   metric: 'all' | 'healthy' | 'fast' | 'chained'
-): FilterState {
-  const next = { ...filters }
+): FacetFilterState {
+  const next = normalizeFacetFilterState(filters)
   if (metric === 'all') {
-    next.status = 'all'
-    next.chain = 'all'
-    next.minSpeed = 0
-    next.country = ''
-    next.keyword = ''
-    next.subscription = ''
-    next.protocol = ''
-    next.mediaPlatforms = []
+    return createDefaultFacetFilterState()
   } else if (metric === 'healthy') {
-    next.status = next.status === 'ok' ? 'all' : 'ok'
+    const hasOnlyOk = next.statuses.length === 1 && next.statuses[0] === 'ok'
+    next.statuses = hasOnlyOk ? [] : ['ok']
   } else if (metric === 'fast') {
     next.minSpeed = next.minSpeed > 0 ? 0 : 10
   } else if (metric === 'chained') {

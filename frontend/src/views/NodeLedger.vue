@@ -90,7 +90,7 @@
       :chained="chainedCount"
       :sub-count="filterOptions.subscriptions.length"
       :proto-count="filterOptions.protocols.length"
-      :active-filter="filters"
+      :active-filter="metricsActiveFilter"
       @filter-metric="handleMetricFilter"
     />
 
@@ -454,6 +454,7 @@ import {
   buildEffectiveBatchTargets,
   clearNodeDialerProxy,
   computeFilterOptions,
+  createDefaultFacetFilterState,
   filterAndSortNodes,
   getProbeForNode,
   isMediaFullUnlocked,
@@ -462,6 +463,7 @@ import {
   normalizeNodeLedgerMap,
   replaceNodeDialerProxy,
   resolveNodeCountryCode,
+  type FacetFilterState,
   type FilterState,
   type LedgerNodeItem,
   type ProbeRecord,
@@ -502,17 +504,18 @@ const includeMediaCheck = ref(true)
 const probeProgress = reactive({ done: 0, total: 0, ok: 0, fail: 0 })
 let probeAbortController: AbortController | null = null
 
-const filters = ref<FilterState>({
-  keyword: '',
-  subscription: '',
-  protocol: '',
-  status: 'all',
-  country: '',
-  chain: 'all',
-  minSpeed: 0,
-  mediaPlatforms: [],
-  sortBy: 'default',
-})
+const filters = ref<FacetFilterState>(createDefaultFacetFilterState())
+
+const metricsActiveFilter = computed(() => ({
+  status:
+    filters.value.statuses.length === 0
+      ? 'all'
+      : filters.value.statuses.length === 1 && filters.value.statuses[0] === 'ok'
+        ? 'ok'
+        : filters.value.statuses.join(','),
+  minSpeed: filters.value.minSpeed,
+  chain: filters.value.chain,
+}))
 
 const mediaPlatformList = MEDIA_PLATFORMS
 
@@ -645,17 +648,7 @@ function handleMetricFilter(type: 'all' | 'healthy' | 'fast' | 'chained') {
 }
 
 function resetFilters() {
-  filters.value = {
-    keyword: '',
-    subscription: '',
-    protocol: '',
-    status: 'all',
-    country: '',
-    chain: 'all',
-    minSpeed: 0,
-    mediaPlatforms: [],
-    sortBy: 'default',
-  }
+  filters.value = createDefaultFacetFilterState()
   selectedNodeNames.clear()
 }
 

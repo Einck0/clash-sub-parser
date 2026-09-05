@@ -5,6 +5,7 @@ result taxonomy, secret-free evidence boundaries, and contract drift handling.
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -19,6 +20,7 @@ from app.services.probe.catalogue import (
     eval_chatgpt,
     eval_disney,
     eval_gemini,
+    eval_aistudio,
     eval_meta_ai,
     eval_netflix,
     eval_youtube,
@@ -455,3 +457,144 @@ async def test_youtube_cdn_evaluator_outcomes():
     assert res_drift.verdict == "unknown"
     assert res_drift.route_hint is None
     assert res_drift.iata_code is None
+
+
+@pytest.mark.asyncio
+async def test_netflix_fast_path_outcomes():
+    """Verify Fast.com fast conclusion and safe fallback branches."""
+    # 1. Fast path 200 with valid country -> verified full with country
+    client_fast_ok = AsyncMock(spec=httpx.AsyncClient)
+    fast_json = {
+        "client": {"ip": "1.2.3.4", "location": {"country": "US"}},
+        "targets": [{"name": "target-1", "url": "https://example.com", "location": {"country": "US"}}],
+    }
+    client_fast_ok.get = AsyncMock(return_value=_build_mock_response(200, json_data=fast_json, url="https://api.fast.com/netflix/speedtest/v2"))
+    res_fast_ok = await eval_netflix(client_fast_ok, enable_fast_path=True)
+    assert res_fast_ok.status == "verified"
+    assert res_fast_ok.verdict == "full"
+    assert res_fast_ok.unlocked is True
+    assert res_fast_ok.region == "US"
+    assert any("fast_com" in s for s in res_fast_ok.evidence.get("signals", []))
+
+    # 2. Fast path 403 -> IP blocked
+    client_fast_403 = AsyncMock(spec=httpx.AsyncClient)
+    client_fast_403.get = AsyncMock(return_value=_build_mock_response(403, text="Forbidden", url="https://api.fast.com/netflix/speedtest/v2"))
+    res_fast_403 = await eval_netflix(client_fast_403, enable_fast_path=True)
+    assert res_fast_403.status == "ip_blocked"
+    assert res_fast_403.verdict == "blocked"
+    assert res_fast_403.unlocked is False
+
+    # 3. Fast path 500 error -> falls back to title check (where title check succeeds)
+    client_fallback = AsyncMock(spec=httpx.AsyncClient)
+    calls = 0
+    async def mock_fallback_get(url, *args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if "fast.com" in str(url):
+            return _build_mock_response(500, text="Server Error", url="https://api.fast.com/netflix/speedtest/v2")
+        if "70143836" in str(url):
+            return _build_mock_response(200, text=_read_fixture("netflix_full_non_original.html"), url="https://www.netflix.com/title/70143836")
+        if "80018499" in str(url):
+            return _build_mock_response(200, text=_read_fixture("netflix_full_original.html"), url="https://www.netflix.com/title/80018499")
+        return _build_mock_response(404, text="Not Found")
+
+    client_fallback.get = AsyncMock(side_effect=mock_fallback_get)
+    res_fallback = await eval_netflix(client_fallback, enable_fast_path=True)
+    assert res_fallback.error is None, f"Error: {res_fallback.error}"
+    assert res_fallback.status == "verified"
+    assert res_fallback.verdict == "full"
+    assert res_fallback.unlocked is True
+    assert calls >= 3, "Must request fast path then both title fallback endpoints"
+
+
+@pytest.mark.asyncio
+async def test_aistudio_evaluator_outcomes():
+    """Verify Google AI Studio zero-credential geofence probe outcomes."""
+    # 1. 400 with API_KEY_INVALID -> Geofence passed, full unlock
+    client_ok = AsyncMock(spec=httpx.AsyncClient)
+    api_key_invalid_body = json.dumps({
+        "error": {
+            "code": 400,
+            "message": "API key not valid. Please pass a valid API key.",
+            "status": "INVALID_ARGUMENT",
+            "details": [{"reason": "API_KEY_INVALID"}],
+        }
+    })
+    client_ok.get = AsyncMock(return_value=_build_mock_response(
+        400,
+        text=api_key_invalid_body,
+        url="https://generativelanguage.googleapis.com/v1beta/models?key=AIzaSyDummyCheckKey",
+    ))
+    res_ok = await eval_aistudio(client_ok)
+    assert res_ok.status == "verified"
+    assert res_ok.verdict == "available"
+    assert res_ok.unlocked is True
+    assert res_ok.label == "可用"
+
+    # 2. 400 with FAILED_PRECONDITION / User location is not supported -> Restricted
+    client_restr = AsyncMock(spec=httpx.AsyncClient)
+    location_unsupported_body = json.dumps({
+        "error": {
+            "code": 400,
+            "message": "User location is not supported for the API use without a project.",
+            "status": "FAILED_PRECONDITION",
+        }
+    })
+    client_restr.get = AsyncMock(return_value=_build_mock_response(
+        400,
+        text=location_unsupported_body,
+        url="https://generativelanguage.googleapis.com/v1beta/models?key=AIzaSyDummyCheckKey",
+    ))
+    res_restr = await eval_aistudio(client_restr)
+    assert res_restr.status == "restricted"
+    assert res_restr.verdict == "unsupported_region"
+    assert res_restr.unlocked is False
+    assert res_restr.label == "未支持地区"
+
+    # 3. 429 Rate limited
+    client_429 = AsyncMock(spec=httpx.AsyncClient)
+    client_429.get = AsyncMock(return_value=_build_mock_response(429, text="Too Many Requests"))
+    res_429 = await eval_aistudio(client_429)
+    assert res_429.status == "rate_limited"
+    assert res_429.verdict == "rate_limited"
+
+    # 4. 403 Challenge
+    client_403 = AsyncMock(spec=httpx.AsyncClient)
+    client_403.get = AsyncMock(return_value=_build_mock_response(403, text="Forbidden"))
+    res_403 = await eval_aistudio(client_403)
+    assert res_403.status == "challenged"
+    assert res_403.verdict == "challenge"
+
+
+@pytest.mark.asyncio
+async def test_gemini_alpha3_fast_optimization():
+    """Verify Gemini fast 3-letter country code match and blocked country interception."""
+    # 1. Supported 3-letter country code (USA -> US)
+    client_us = AsyncMock(spec=httpx.AsyncClient)
+    us_body = '<html><script>window.DATA = [1,2,1,200,"USA",10];</script></html>'
+    client_us.get = AsyncMock(return_value=_build_mock_response(200, text=us_body, url="https://gemini.google.com/"))
+    res_us = await eval_gemini(client_us)
+    assert res_us.status == "verified"
+    assert res_us.verdict == "available"
+    assert res_us.unlocked is True
+    assert res_us.region == "US"
+
+    # 2. Blocked 3-letter country code (HKG -> HK, restricted)
+    client_hk = AsyncMock(spec=httpx.AsyncClient)
+    hk_body = '<html><script>window.DATA = [1,2,1,200,"HKG",10];</script></html>'
+    client_hk.get = AsyncMock(return_value=_build_mock_response(200, text=hk_body, url="https://gemini.google.com/"))
+    res_hk = await eval_gemini(client_hk)
+    assert res_hk.status == "restricted"
+    assert res_hk.verdict == "unsupported_region"
+    assert res_hk.unlocked is False
+    assert res_hk.region == "HK"
+
+    # 3. Blocked 3-letter country code (CHN -> CN, restricted)
+    client_cn = AsyncMock(spec=httpx.AsyncClient)
+    cn_body = '<html><script>window.DATA = [1,2,1,200,"CHN",10];</script></html>'
+    client_cn.get = AsyncMock(return_value=_build_mock_response(200, text=cn_body, url="https://gemini.google.com/"))
+    res_cn = await eval_gemini(client_cn)
+    assert res_cn.status == "restricted"
+    assert res_cn.verdict == "unsupported_region"
+    assert res_cn.unlocked is False
+    assert res_cn.region == "CN"

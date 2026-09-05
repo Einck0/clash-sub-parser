@@ -14,6 +14,7 @@ import httpx
 
 from app.services.probe.catalogue import (
     EVIDENCE_VERSION,
+    eval_aistudio,
     eval_bilibili,
     eval_chatgpt,
     eval_disney,
@@ -93,52 +94,68 @@ async def check_geo_identity(
     return obs.to_dict()
 
 
-async def check_youtube(client: httpx.AsyncClient, timeout_s: float = 2.0) -> dict[str, Any]:
+async def _call_eval(fn: Any, client: httpx.AsyncClient, timeout_s: float = 2.0, deadline_monotonic: float | None = None) -> Any:
+    sig = inspect.signature(fn)
+    kwargs: dict[str, Any] = {}
+    if "timeout_s" in sig.parameters or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
+        kwargs["timeout_s"] = timeout_s
+    if deadline_monotonic is not None and (
+        "deadline_monotonic" in sig.parameters or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+    ):
+        kwargs["deadline_monotonic"] = deadline_monotonic
+    try:
+        res = await fn(client, **kwargs)
+    except TypeError:
+        try:
+            res = await fn(client, timeout_s=timeout_s)
+        except TypeError:
+            res = await fn(client)
+    return res.to_dict() if hasattr(res, "to_dict") else res
+
+
+async def check_youtube(client: httpx.AsyncClient, timeout_s: float = 2.0, deadline_monotonic: float | None = None) -> dict[str, Any]:
     """检测 YouTube Premium 解锁状态与地区"""
-    res = await eval_youtube(client, timeout_s=timeout_s)
-    return res.to_dict()
+    return await _call_eval(eval_youtube, client, timeout_s=timeout_s, deadline_monotonic=deadline_monotonic)
 
 
-async def check_netflix(client: httpx.AsyncClient, timeout_s: float = 2.0) -> dict[str, Any]:
+async def check_netflix(client: httpx.AsyncClient, timeout_s: float = 2.0, deadline_monotonic: float | None = None) -> dict[str, Any]:
     """检测 Netflix 解锁状态（Full 完整片库 或 Originals 仅自制剧 或 Blocked 被阻断）"""
-    res = await eval_netflix(client, timeout_s=timeout_s)
-    return res.to_dict()
+    return await _call_eval(eval_netflix, client, timeout_s=timeout_s, deadline_monotonic=deadline_monotonic)
 
 
-async def check_disney(client: httpx.AsyncClient, timeout_s: float = 2.0) -> dict[str, Any]:
+async def check_disney(client: httpx.AsyncClient, timeout_s: float = 2.0, deadline_monotonic: float | None = None) -> dict[str, Any]:
     """检测 Disney+ 解锁状态"""
-    res = await eval_disney(client, timeout_s=timeout_s)
-    return res.to_dict()
+    return await _call_eval(eval_disney, client, timeout_s=timeout_s, deadline_monotonic=deadline_monotonic)
 
 
-async def check_chatgpt(client: httpx.AsyncClient, timeout_s: float = 2.0) -> dict[str, Any]:
+async def check_chatgpt(client: httpx.AsyncClient, timeout_s: float = 2.0, deadline_monotonic: float | None = None) -> dict[str, Any]:
     """检测 OpenAI 或 ChatGPT 出口访问权限"""
-    res = await eval_chatgpt(client, timeout_s=timeout_s)
-    return res.to_dict()
+    return await _call_eval(eval_chatgpt, client, timeout_s=timeout_s, deadline_monotonic=deadline_monotonic)
 
 
-async def check_bilibili(client: httpx.AsyncClient, timeout_s: float = 2.0) -> dict[str, Any]:
+async def check_bilibili(client: httpx.AsyncClient, timeout_s: float = 2.0, deadline_monotonic: float | None = None) -> dict[str, Any]:
     """检测 Bilibili 港澳台与大陆限定区域解锁"""
-    res = await eval_bilibili(client, timeout_s=timeout_s)
-    return res.to_dict()
+    return await _call_eval(eval_bilibili, client, timeout_s=timeout_s, deadline_monotonic=deadline_monotonic)
 
 
-async def check_meta_ai(client: httpx.AsyncClient, timeout_s: float = 2.0) -> dict[str, Any]:
+async def check_meta_ai(client: httpx.AsyncClient, timeout_s: float = 2.0, deadline_monotonic: float | None = None) -> dict[str, Any]:
     """检测 Meta AI (meta.ai 或 Imagine) 地区访问权限"""
-    res = await eval_meta_ai(client, timeout_s=timeout_s)
-    return res.to_dict()
+    return await _call_eval(eval_meta_ai, client, timeout_s=timeout_s, deadline_monotonic=deadline_monotonic)
 
 
-async def check_gemini(client: httpx.AsyncClient, timeout_s: float = 2.0) -> dict[str, Any]:
+async def check_gemini(client: httpx.AsyncClient, timeout_s: float = 2.0, deadline_monotonic: float | None = None) -> dict[str, Any]:
     """检测 Google Gemini (gemini.google.com) 出口访问权限"""
-    res = await eval_gemini(client, timeout_s=timeout_s)
-    return res.to_dict()
+    return await _call_eval(eval_gemini, client, timeout_s=timeout_s, deadline_monotonic=deadline_monotonic)
 
 
-async def check_youtube_cdn(client: httpx.AsyncClient, timeout_s: float = 2.0) -> dict[str, Any]:
+async def check_aistudio(client: httpx.AsyncClient, timeout_s: float = 2.0, deadline_monotonic: float | None = None) -> dict[str, Any]:
+    """检测 Google AI Studio (generativelanguage.googleapis.com) 出口访问权限"""
+    return await _call_eval(eval_aistudio, client, timeout_s=timeout_s, deadline_monotonic=deadline_monotonic)
+
+
+async def check_youtube_cdn(client: httpx.AsyncClient, timeout_s: float = 2.0, deadline_monotonic: float | None = None) -> dict[str, Any]:
     """检测 YouTube CDN mapping 路由提示（独立于 exit identity）"""
-    res = await eval_youtube_cdn(client, timeout_s=timeout_s)
-    return res.to_dict()
+    return await _call_eval(eval_youtube_cdn, client, timeout_s=timeout_s, deadline_monotonic=deadline_monotonic)
 
 
 PROBE_MEDIA_DISPATCH = {
@@ -149,6 +166,7 @@ PROBE_MEDIA_DISPATCH = {
     "bilibili": check_bilibili,
     "meta_ai": check_meta_ai,
     "gemini": check_gemini,
+    "aistudio": check_aistudio,
     "youtube_cdn": check_youtube_cdn,
 }
 
@@ -158,39 +176,71 @@ async def check_media_unlock(
     platforms: list[str],
     timeout_s: float = 2.0,
 ) -> dict[str, Any]:
-    """针对指定流媒体与 AI 平台执行出站能力检测（各平台独立并发发起）"""
+    """针对指定流媒体与 AI 平台执行出站能力检测（单节点共享单个 HTTP 连接池，各平台并发发起）"""
     results: dict[str, Any] = {}
     valid_platforms = [p for p in platforms if p.lower().strip() in PROBE_MEDIA_DISPATCH]
     if not valid_platforms:
         return results
 
-    async def _check_one(p_name: str) -> tuple[str, dict[str, Any]]:
+    if timeout_s <= 0:
+        for p in valid_platforms:
+            results[p] = {
+                "status": "timeout",
+                "verdict": "unknown",
+                "unlocked": False,
+                "confidence": "unavailable",
+                "evidence": {
+                    "http_status": None,
+                    "signals": [],
+                    "elapsed_ms": 0,
+                    "error_code": "timeout",
+                },
+                "error": f"{p} probe timed out",
+            }
+        return results
+
+    stage_deadline = time.monotonic() + timeout_s
+
+    async def _check_one(p_name: str, client: httpx.AsyncClient) -> tuple[str, dict[str, Any]]:
+        remaining = stage_deadline - time.monotonic()
+        if remaining <= 0:
+            return p_name, {
+                "status": "timeout",
+                "verdict": "unknown",
+                "unlocked": False,
+                "confidence": "unavailable",
+                "evidence": {
+                    "http_status": None,
+                    "signals": [],
+                    "elapsed_ms": int(timeout_s * 1000),
+                    "error_code": "timeout",
+                },
+                "error": f"{p_name} probe timed out",
+            }
+
         fn = PROBE_MEDIA_DISPATCH[p_name.lower().strip()]
         try:
-            async with httpx.AsyncClient(
-                proxy=proxy_url,
-                trust_env=False,
-                timeout=timeout_s,
-                follow_redirects=True,
-                headers={"User-Agent": DEFAULT_UA},
-            ) as client:
-                try:
-                    sig = inspect.signature(fn)
-                    if "timeout_s" in sig.parameters or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
-                        coro = fn(client, timeout_s=timeout_s)
-                    else:
-                        coro = fn(client)
-                except (ValueError, TypeError):
-                    coro = fn(client)
-                res = await asyncio.wait_for(coro, timeout=timeout_s)
-                return p_name, res
+            sig = inspect.signature(fn)
+            kwargs: dict[str, Any] = {}
+            if "timeout_s" in sig.parameters:
+                kwargs["timeout_s"] = remaining
+            if "deadline_monotonic" in sig.parameters:
+                kwargs["deadline_monotonic"] = stage_deadline
+            coro = fn(client, **kwargs)
+            res = await asyncio.wait_for(coro, timeout=max(0.01, remaining))
+            return p_name, res
         except (asyncio.TimeoutError, httpx.TimeoutException):
             return p_name, {
                 "status": "timeout",
                 "verdict": "unknown",
                 "unlocked": False,
                 "confidence": "unavailable",
-                "evidence": {"http_status": None, "signals": [], "elapsed_ms": int(timeout_s * 1000), "error_code": "timeout"},
+                "evidence": {
+                    "http_status": None,
+                    "signals": [],
+                    "elapsed_ms": int(timeout_s * 1000),
+                    "error_code": "timeout",
+                },
                 "error": f"{p_name} probe timed out",
             }
         except Exception as exc:
@@ -199,15 +249,45 @@ async def check_media_unlock(
                 "verdict": "unknown",
                 "unlocked": False,
                 "confidence": "unavailable",
-                "evidence": {"http_status": None, "signals": [], "elapsed_ms": 0, "error_code": "transport_error"},
+                "evidence": {
+                    "http_status": None,
+                    "signals": [],
+                    "elapsed_ms": 0,
+                    "error_code": "transport_error",
+                },
                 "error": str(exc),
             }
 
-    gathered = await asyncio.gather(*[_check_one(p) for p in valid_platforms], return_exceptions=True)
-    for item in gathered:
-        if isinstance(item, tuple):
-            p_name, res = item
-            results[p_name] = res
+    async with httpx.AsyncClient(
+        proxy=proxy_url,
+        trust_env=False,
+        follow_redirects=True,
+        headers={"User-Agent": DEFAULT_UA},
+    ) as client:
+        gathered = await asyncio.gather(
+            *[_check_one(p, client) for p in valid_platforms],
+            return_exceptions=True,
+        )
+        for idx, item in enumerate(gathered):
+            if isinstance(item, tuple):
+                p_name, res = item
+                results[p_name] = res
+            elif isinstance(item, Exception):
+                p_name = valid_platforms[idx]
+                results[p_name] = {
+                    "status": "transport_error",
+                    "verdict": "unknown",
+                    "unlocked": False,
+                    "confidence": "unavailable",
+                    "evidence": {
+                        "http_status": None,
+                        "signals": [],
+                        "elapsed_ms": 0,
+                        "error_code": "transport_error",
+                    },
+                    "error": str(item),
+                }
+
     return results
 
 

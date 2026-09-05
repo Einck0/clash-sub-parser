@@ -748,6 +748,12 @@ async def probe_single_node(
         return base_result
 
     async def _execute_probe() -> None:
+        node_started = time.monotonic()
+        node_deadline = (
+            node_started + resolved_config.node_timeout_s
+            if resolved_config.node_timeout_s is not None and resolved_config.node_timeout_s > 0
+            else None
+        )
         try:
             import inspect
             runner_kwargs: dict[str, Any] = {}
@@ -786,12 +792,22 @@ async def probe_single_node(
                 if geo.get("confidence"):
                     base_result["identity_confidence"] = geo.get("confidence")
 
-                # 3. 流媒体与 AI 解锁探测（各平台独立 service_timeout_s）
+                # 3. 流媒体与 AI 解锁探测（单会话多路复用，受 media_timeout_s 与剩余 node_timeout_s 约束）
                 if resolved_config.media_check_enabled and resolved_config.media_platforms:
+                    configured_media_timeout = float(
+                        getattr(resolved_config, "media_timeout_s", None)
+                        or resolved_config.service_timeout_s
+                    )
+                    if node_deadline is not None:
+                        remaining_node_budget = max(0.01, node_deadline - time.monotonic())
+                        effective_media_timeout = min(configured_media_timeout, remaining_node_budget)
+                    else:
+                        effective_media_timeout = configured_media_timeout
+
                     media_res = await check_media_unlock(
                         proxy_url,
                         platforms=list(resolved_config.media_platforms),
-                        timeout_s=resolved_config.service_timeout_s,
+                        timeout_s=effective_media_timeout,
                     )
                     base_result["media"] = media_res
 

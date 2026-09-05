@@ -151,6 +151,168 @@ test('Task 1.3: Node Ledger Visual, Elevation & Reduced-Motion Browser Gate (375
 
       await page.close()
     })
+
+    // 3. Facet Collapsible Architecture: No candidate options mounted when closed, preserves workspace
+    await t.test('Facet collapsible: options not mounted when closed, preserves workspace', async () => {
+      const page = await browser.newPage({
+        viewport: { width: 1024, height: 900 },
+      })
+
+      await page.route('/api/**', async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify([
+            {
+              name: 'HK-Test-Node',
+              node_key: 'hk-1',
+              type: 'vmess',
+              server: '1.2.3.4',
+              port: 443,
+              subscription_name: 'Sub-A',
+            },
+          ]),
+        })
+      })
+
+      await page.goto(`${baseUrl}/nodes`, { waitUntil: 'domcontentloaded' })
+      await page.waitForTimeout(150)
+
+      // Verify no candidate option is mounted while facets are closed
+      const unmountedCount = await page.evaluate(() => {
+        return document.querySelectorAll('.facet-candidate-option').length
+      })
+      assert.equal(unmountedCount, 0, 'Candidate options must NOT be mounted in DOM when facets are closed')
+
+      // Verify all facet buttons have aria-expanded="false"
+      const expandedButtons = await page.evaluate(() => {
+        return Array.from(document.querySelectorAll('.facet-controller-container button'))
+          .map((b) => b.getAttribute('aria-expanded'))
+      })
+      assert.ok(expandedButtons.length >= 4, 'Must have at least 4 facet controller buttons')
+      assert.ok(expandedButtons.every((exp) => exp === 'false'), 'All facet triggers must initially have aria-expanded="false"')
+
+      await page.close()
+    })
+
+    // 4. Keyboard accessibility & click-outside lifecycle on facets
+    await t.test('Facet keyboard accessibility & click-outside lifecycle (Enter/Space/Escape)', async () => {
+      const page = await browser.newPage({
+        viewport: { width: 1024, height: 900 },
+      })
+
+      await page.route('/api/**', async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify([
+            {
+              name: 'HK-01',
+              type: 'vmess',
+              subscription_name: 'Sub-A',
+            },
+          ]),
+        })
+      })
+
+      await page.goto(`${baseUrl}/nodes`, { waitUntil: 'domcontentloaded' })
+      await page.waitForTimeout(150)
+
+      // Find health status facet button (has static options)
+      const statusFacetBtn = page.locator('.facet-controller-container button').nth(2)
+      await statusFacetBtn.focus()
+
+      // Press Enter to open
+      await page.keyboard.press('Enter')
+      await page.waitForTimeout(50)
+
+      let mountedCount = await page.evaluate(() => document.querySelectorAll('.facet-candidate-option').length)
+      assert.ok(mountedCount > 0, 'Candidate options must mount into DOM upon pressing Enter')
+
+      let isExpanded = await statusFacetBtn.getAttribute('aria-expanded')
+      assert.equal(isExpanded, 'true', 'Trigger must have aria-expanded="true" when open')
+
+      // Press Escape to close
+      await page.keyboard.press('Escape')
+      await page.waitForTimeout(50)
+
+      mountedCount = await page.evaluate(() => document.querySelectorAll('.facet-candidate-option').length)
+      assert.equal(mountedCount, 0, 'Candidate options must unmount upon pressing Escape')
+
+      isExpanded = await statusFacetBtn.getAttribute('aria-expanded')
+      assert.equal(isExpanded, 'false', 'Trigger must have aria-expanded="false" after Escape')
+
+      // Click to open, then click outside to close
+      await statusFacetBtn.click()
+      await page.waitForTimeout(50)
+      mountedCount = await page.evaluate(() => document.querySelectorAll('.facet-candidate-option').length)
+      assert.ok(mountedCount > 0, 'Candidate options must mount upon click')
+
+      // Click outside on main heading or body
+      await page.locator('h1, h2, body').first().click({ position: { x: 10, y: 10 } })
+      await page.waitForTimeout(50)
+      mountedCount = await page.evaluate(() => document.querySelectorAll('.facet-candidate-option').length)
+      assert.equal(mountedCount, 0, 'Candidate options must unmount upon clicking outside')
+
+      await page.close()
+    })
+
+    // 5. Active-filter summary strip token lifecycle & reset
+    await t.test('Active-filter summary strip: token display, removal, and reset all', async () => {
+      const page = await browser.newPage({
+        viewport: { width: 1024, height: 900 },
+      })
+
+      await page.route('/api/**', async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify([
+            {
+              name: 'HK-01',
+              type: 'vmess',
+              subscription_name: 'Sub-A',
+            },
+          ]),
+        })
+      })
+
+      await page.goto(`${baseUrl}/nodes`, { waitUntil: 'domcontentloaded' })
+      await page.waitForTimeout(150)
+
+      // Initially no active filter summary strip
+      let hasSummary = await page.evaluate(() => Boolean(document.querySelector('[aria-label="已生效筛选条件"]')))
+      assert.equal(hasSummary, false, 'Summary strip must not render when no filter is active')
+
+      // Open health status facet (3rd facet)
+      const statusFacet = page.locator('.facet-controller-container button').nth(2)
+      await statusFacet.click()
+      await page.waitForTimeout(50)
+
+      // Click first option (正常可用)
+      const firstOption = page.locator('.facet-candidate-option').first()
+      await firstOption.click()
+      await page.waitForTimeout(50)
+
+      // Now summary strip should be mounted
+      hasSummary = await page.evaluate(() => Boolean(document.querySelector('[aria-label="已生效筛选条件"]')))
+      assert.equal(hasSummary, true, 'Summary strip must render after selecting a facet option')
+
+      // Check badge shows "1"
+      const badgeText = await statusFacet.locator('span.rounded-full').textContent()
+      assert.equal(badgeText?.trim(), '1', 'Facet trigger badge should display selected count 1')
+
+      // Click the Reset All button in the summary strip
+      const resetBtn = page.locator('[aria-label="已生效筛选条件"] button:has-text("清空所有")')
+      await resetBtn.click()
+      await page.waitForTimeout(50)
+
+      // Summary strip should unmount again
+      hasSummary = await page.evaluate(() => Boolean(document.querySelector('[aria-label="已生效筛选条件"]')))
+      assert.equal(hasSummary, false, 'Summary strip must unmount after reset-all')
+
+      await page.close()
+    })
   } finally {
     if (browser) await browser.close()
     await new Promise((resolve) => server.close(resolve))

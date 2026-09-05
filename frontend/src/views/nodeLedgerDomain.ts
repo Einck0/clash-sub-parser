@@ -371,41 +371,132 @@ export const COUNTRY_FLAG_MAP: Record<string, string> = {
 }
 
 /**
- * Normalizes probe results by dual-indexing on name and node_key.
+ * Normalizes probe results by indexing on node_key (and fallback name if present).
+ * Handles paged envelope { results: Record<string, ProbeRecord>, next_cursor, has_more },
+ * raw object dictionary, or array of records.
  */
 export function normalizeNodeLedgerMap(
-  data: any[] | Record<string, any> | undefined | null
+  data: any[] | Record<string, any> | undefined | null,
+  targetMap?: Record<string, ProbeRecord>
 ): Record<string, ProbeRecord> {
-  const map: Record<string, ProbeRecord> = {}
+  const map: Record<string, ProbeRecord> = targetMap ? { ...targetMap } : {}
   if (!data) return map
 
-  if (Array.isArray(data)) {
-    for (const item of data) {
+  const source =
+    data && typeof data === 'object' && 'results' in data && typeof data.results === 'object' && data.results !== null
+      ? data.results
+      : data
+
+  if (Array.isArray(source)) {
+    for (const item of source) {
       if (!item || typeof item !== 'object') continue
-      if (item.name) map[item.name] = item
       if (item.node_key) map[item.node_key] = item
+      if (item.name) map[item.name] = item
     }
-  } else if (typeof data === 'object') {
-    for (const [k, v] of Object.entries(data)) {
+  } else if (typeof source === 'object') {
+    for (const [k, v] of Object.entries(source)) {
       if (!v || typeof v !== 'object') continue
-      map[k] = v as ProbeRecord
-      if ((v as any).name) map[(v as any).name] = v as ProbeRecord
-      if ((v as any).node_key) map[(v as any).node_key] = v as ProbeRecord
+      const record = v as ProbeRecord
+      map[k] = record
+      if ((v as any).node_key) map[(v as any).node_key] = record
+      if ((v as any).name) map[(v as any).name] = record
     }
   }
   return map
 }
 
 /**
- * Gets probe record for a given node by name or node_key.
+ * Merges a newly received probe summary page envelope or map into an existing probe map by node_key.
+ */
+export function mergeNodeLedgerProbePages(
+  existingMap: Record<string, ProbeRecord>,
+  newPage: any
+): Record<string, ProbeRecord> {
+  return normalizeNodeLedgerMap(newPage, existingMap)
+}
+
+export type DrawerDetailStatus = 'idle' | 'loading' | 'ready' | 'unavailable'
+
+export interface DrawerDetailSession {
+  nodeKey: string | null
+  status: DrawerDetailStatus
+  probe: any | null
+  abortController: AbortController | null
+}
+
+export function createDrawerDetailSession(): DrawerDetailSession {
+  return {
+    nodeKey: null,
+    status: 'idle',
+    probe: null,
+    abortController: null,
+  }
+}
+
+export function startDrawerDetailFetch(
+  session: DrawerDetailSession,
+  node: { node_key?: string } | null
+): { controller: AbortController | null; shouldFetch: boolean } {
+  if (session.abortController) {
+    session.abortController.abort()
+    session.abortController = null
+  }
+
+  if (!node) {
+    session.nodeKey = null
+    session.status = 'idle'
+    session.probe = null
+    return { controller: null, shouldFetch: false }
+  }
+
+  if (!node.node_key) {
+    session.nodeKey = null
+    session.status = 'unavailable'
+    session.probe = null
+    return { controller: null, shouldFetch: false }
+  }
+
+  session.nodeKey = node.node_key
+  session.status = 'loading'
+  session.probe = null
+  session.abortController = new AbortController()
+  return { controller: session.abortController, shouldFetch: true }
+}
+
+export function resolveDrawerDetailFetch(
+  session: DrawerDetailSession,
+  requestedKey: string,
+  result: { data?: any } | null,
+  error?: any
+): void {
+  if (session.nodeKey !== requestedKey) {
+    return
+  }
+  if (error) {
+    if (error?.name === 'AbortError' || session.abortController?.signal?.aborted) {
+      return
+    }
+    session.status = 'unavailable'
+    return
+  }
+  if (result && result.data) {
+    session.probe = result.data
+    session.status = 'ready'
+  } else {
+    session.status = 'unavailable'
+  }
+}
+
+/**
+ * Gets probe record for a given node by node_key or name.
  */
 export function getProbeForNode(
   probes: Record<string, ProbeRecord>,
   node: { name?: string; node_key?: string }
 ): ProbeRecord | undefined {
   if (!probes || !node) return undefined
-  if (node.name && probes[node.name]) return probes[node.name]
   if (node.node_key && probes[node.node_key]) return probes[node.node_key]
+  if (node.name && probes[node.name]) return probes[node.name]
   return undefined
 }
 
@@ -494,7 +585,8 @@ export function filterAndSortNodes(
   probes: Record<string, ProbeRecord>,
   filters: FilterState
 ): LedgerNodeItem[] {
-  const kw = String(filters.keyword || '').trim().toLowerCase()
+  if (!Array.isArray(nodes)) return []
+  const kw = String(filters?.keyword || '').trim().toLowerCase()
   const sub = filters.subscription
   const proto = (filters.protocol || '').toLowerCase()
   const status = filters.status

@@ -61,7 +61,7 @@ export const useAppStore = defineStore('app', () => {
 
       let probed = 0
       for (const node of nodes) {
-        const p = probeMap[node.name] || (node.node_key ? probeMap[node.node_key] : null)
+        const p = (node.node_key ? probeMap[node.node_key] : null) || probeMap[node.name]
         if (p?.status === 'ok' || p?.probe_status === 'success') {
           probed++
         }

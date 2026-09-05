@@ -197,77 +197,100 @@
         </div>
       </div>
 
-      <!-- Right: Selection actions & View Switcher -->
-      <div class="flex items-center gap-3">
-        <!-- If items are selected -->
-        <div v-if="selectedCount && selectedCount > 0" class="flex items-center gap-2">
-          <span class="text-xs font-mono text-accent">
-            已选 <strong class="tabular-nums">{{ selectedCount }}</strong> 项
-          </span>
-          <Button
-            variant="primary"
-            size="sm"
-            :disabled="probing"
-            :icon="Zap"
-            @click="$emit('probe-selected')"
-          >
-            质检选中
-          </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            @click="$emit('clear-selection')"
-          >
-            取消选择
-          </Button>
+      <!-- Right: Action Bar & View Switcher -->
+      <div class="flex flex-wrap items-center gap-3">
+        <!-- Action Bar: Batch actions with programmatic label -->
+        <div class="flex flex-wrap items-center gap-2" role="toolbar" aria-label="节点质检操作">
+          <!-- If items are selected -->
+          <div v-if="selectedCount && selectedCount > 0" class="flex items-center gap-2">
+            <span class="text-xs font-mono text-accent">
+              已选 <strong class="tabular-nums">{{ selectedCount }}</strong> 项
+            </span>
+            <Button
+              variant="primary"
+              size="sm"
+              :disabled="probing"
+              :icon="Zap"
+              @click="$emit('probe-selected')"
+            >
+              质检选中
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              @click="$emit('clear-selection')"
+            >
+              取消选择
+            </Button>
+          </div>
+
+          <!-- If no items selected: quick batch helpers -->
+          <div v-else class="flex flex-wrap items-center gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              :disabled="probing || !untestedOrFailedCount"
+              :icon="Target"
+              title="仅对尚未测试或上次失败的节点发起探测"
+              @click="$emit('probe-untested')"
+            >
+              仅测未测/失败 ({{ untestedOrFailedCount }})
+            </Button>
+            <Button
+              variant="danger"
+              size="sm"
+              :icon="Trash2"
+              title="清空所有已持久化的节点测速与解锁记录"
+              @click="$emit('clear-probe-data')"
+            >
+              清除质检
+            </Button>
+          </div>
         </div>
 
-        <!-- If no items selected: quick batch helpers -->
-        <div v-else class="flex items-center gap-2">
-          <Button
-            variant="secondary"
-            size="sm"
-            :disabled="probing || !untestedOrFailedCount"
-            :icon="Target"
-            title="仅对尚未测试或上次失败的节点发起探测"
-            @click="$emit('probe-untested')"
-          >
-            仅测未测/失败 ({{ untestedOrFailedCount }})
-          </Button>
-          <Button
-            variant="danger"
-            size="sm"
-            :icon="Trash2"
-            title="清空所有已持久化的节点测速与解锁记录"
-            @click="$emit('clear-probe-data')"
-          >
-            清除质检
-          </Button>
-        </div>
-
-        <!-- View mode switcher -->
-        <div class="flex items-center gap-1 border-l border-border-subtle pl-3">
+        <!-- View mode switcher: Accessible Segmented Control -->
+        <div
+          class="inline-flex items-center rounded-lg border border-border-subtle bg-surface-base p-0.5"
+          role="radiogroup"
+          aria-label="视图模式切换"
+        >
           <button
+            type="button"
+            role="radio"
+            :aria-checked="viewMode === 'table'"
             :class="[
-              'flex h-7 w-7 items-center justify-center rounded-md border transition-colors cursor-pointer text-xs focus-ring',
-              viewMode === 'table' ? 'border-accent bg-accent-subtle text-accent' : 'border-border-subtle bg-surface-hover text-text-muted hover:text-text-main'
+              'inline-flex min-h-[44px] min-w-[44px] sm:min-h-[40px] sm:min-w-[40px] items-center justify-center rounded-md text-xs font-medium transition-colors cursor-pointer focus-ring',
+              viewMode === 'table'
+                ? 'bg-accent text-white font-semibold shadow-xs'
+                : 'text-text-muted hover:text-text-main hover:bg-surface-hover'
             ]"
             title="表格模式"
             aria-label="表格模式"
             @click="$emit('change-view', 'table')"
+            @keydown.left.prevent="$emit('change-view', 'grid')"
+            @keydown.right.prevent="$emit('change-view', 'grid')"
           >
-            <Table class="h-3.5 w-3.5" aria-hidden="true" />
+            <Table class="h-4 w-4" aria-hidden="true" />
+            <span class="sr-only">表格模式</span>
           </button>
           <button
+            type="button"
+            role="radio"
+            :aria-checked="viewMode === 'grid'"
             :class="[
-              'flex h-7 w-7 items-center justify-center rounded-md border transition-colors cursor-pointer text-xs focus-ring',
-              viewMode === 'grid' ? 'border-accent bg-accent-subtle text-accent' : 'border-border-subtle bg-surface-hover text-text-muted hover:text-text-main'
+              'inline-flex min-h-[44px] min-w-[44px] sm:min-h-[40px] sm:min-w-[40px] items-center justify-center rounded-md text-xs font-medium transition-colors cursor-pointer focus-ring',
+              viewMode === 'grid'
+                ? 'bg-accent text-white font-semibold shadow-xs'
+                : 'text-text-muted hover:text-text-main hover:bg-surface-hover'
             ]"
             title="卡片模式"
             aria-label="卡片模式"
             @click="$emit('change-view', 'grid')"
+            @keydown.left.prevent="$emit('change-view', 'table')"
+            @keydown.right.prevent="$emit('change-view', 'table')"
           >
-            <LayoutGrid class="h-3.5 w-3.5" aria-hidden="true" />
+            <LayoutGrid class="h-4 w-4" aria-hidden="true" />
+            <span class="sr-only">卡片模式</span>
           </button>
         </div>
       </div>

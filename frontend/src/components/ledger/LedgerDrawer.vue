@@ -2,17 +2,29 @@
   <BaseDrawer :model-value="open" :title="node ? node.name : '节点详情'" @close="$emit('close')">
     <div v-if="node" class="space-y-6 text-xs font-mono">
       <!-- Tabs header -->
-      <div class="flex items-center gap-2 border-b border-border-subtle pb-2">
+      <div
+        class="flex items-center gap-2 border-b border-border-subtle pb-2"
+        role="tablist"
+        aria-label="详情面板标签"
+      >
         <button
-          v-for="tab in tabs"
+          v-for="(tab, index) in tabs"
           :key="tab.id"
-          class="min-h-[44px] rounded-md px-3.5 py-2 text-xs font-medium transition-colors cursor-pointer flex items-center justify-center gap-1.5 focus-ring"
+          :id="`tab-${tab.id}`"
+          type="button"
+          role="tab"
+          :aria-selected="activeTab === tab.id"
+          :aria-controls="`panel-${tab.id}`"
+          :tabindex="activeTab === tab.id ? 0 : -1"
+          class="min-h-[44px] sm:min-h-[40px] rounded-md px-3.5 py-2 text-xs font-medium transition-colors cursor-pointer flex items-center justify-center gap-1.5 focus-ring"
           :class="[
             activeTab === tab.id
               ? 'border border-accent/40 bg-accent-subtle text-accent font-semibold'
               : 'border border-transparent text-text-muted hover:text-text-main hover:bg-surface-hover'
           ]"
           @click="activeTab = tab.id"
+          @keydown.arrow-right.prevent="onTabKeydown(index, 1)"
+          @keydown.arrow-left.prevent="onTabKeydown(index, -1)"
         >
           <component :is="tab.icon" class="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
           <span>{{ tab.name }}</span>
@@ -20,7 +32,7 @@
       </div>
 
       <!-- Tab 1: Diagnostics -->
-      <div v-if="activeTab === 'diagnostics'" class="space-y-4">
+      <div v-if="activeTab === 'diagnostics'" id="panel-diagnostics" role="tabpanel" aria-labelledby="tab-diagnostics" class="space-y-4">
         <!-- Node Basic Info -->
         <div class="rounded-lg border border-border-subtle bg-surface-base p-4 space-y-2">
           <div class="flex justify-between items-center pb-2 border-b border-border-subtle">
@@ -46,23 +58,23 @@
           <div class="text-text-main font-semibold border-b border-border-subtle pb-2 flex items-center justify-between">
             <span class="uppercase">PROBE & CAPABILITIES</span>
             <StatusBadge
-              :type="probe?.status === 'ok' ? 'success' : (probe?.status === 'fail' ? 'danger' : 'neutral')"
-              :text="probe?.status ? probe.status.toUpperCase() : 'UNTESTED'"
+              :type="effectiveProbe?.status === 'ok' ? 'success' : (effectiveProbe?.status === 'fail' ? 'danger' : 'neutral')"
+              :text="effectiveProbe?.status ? effectiveProbe.status.toUpperCase() : 'UNTESTED'"
             />
           </div>
           <div class="flex justify-between items-center py-1">
             <span class="text-text-muted uppercase">LATENCY</span>
-            <span :class="probe?.latency_ms ? 'text-status-success font-bold tabular-nums' : 'text-text-sub'">
-              {{ probe?.latency_ms ? `${probe.latency_ms} ms` : 'N/A' }}
+            <span :class="effectiveProbe?.latency_ms ? 'text-status-success font-bold tabular-nums' : 'text-text-sub'">
+              {{ effectiveProbe?.latency_ms ? `${effectiveProbe.latency_ms} ms` : 'N/A' }}
             </span>
           </div>
           <div class="flex justify-between items-center py-1">
             <span class="text-text-muted uppercase">OUTBOUND IP</span>
-            <span class="text-text-main font-mono tabular-nums select-all">{{ probe?.ip || probe?.outbound_ip || 'N/A' }}</span>
+            <span class="text-text-main font-mono tabular-nums select-all">{{ effectiveProbe?.ip || effectiveProbe?.outbound_ip || 'N/A' }}</span>
           </div>
           <div class="flex justify-between items-center py-1">
             <span class="text-text-muted uppercase">COUNTRY / REGION</span>
-            <span class="text-text-main">{{ probe?.country || nodeCountry || 'N/A' }}</span>
+            <span class="text-text-main">{{ effectiveProbe?.country || nodeCountry || 'N/A' }}</span>
           </div>
           <div class="flex justify-between items-center py-1">
             <span class="text-text-muted uppercase">ASN & ORG</span>
@@ -72,12 +84,12 @@
           </div>
           <div class="flex justify-between items-center py-1">
             <span class="text-text-muted uppercase">SPEED (DOWN)</span>
-            <span :class="probe?.speed_mbps ? 'text-status-info font-bold tabular-nums' : 'text-text-sub'">
-              {{ probe?.speed_mbps ? `${probe.speed_mbps} Mbps` : 'N/A' }}
+            <span :class="effectiveProbe?.speed_mbps ? 'text-status-info font-bold tabular-nums' : 'text-text-sub'">
+              {{ effectiveProbe?.speed_mbps ? `${effectiveProbe.speed_mbps} Mbps` : 'N/A' }}
             </span>
           </div>
-          <div v-if="probe?.error" class="p-2.5 rounded-md border border-status-danger/30 bg-status-danger/10 text-status-danger">
-            {{ probe.error }}
+          <div v-if="effectiveProbe?.error" class="p-2.5 rounded-md border border-status-danger/30 bg-status-danger/10 text-status-danger">
+            {{ effectiveProbe.error }}
           </div>
         </div>
 
@@ -87,13 +99,46 @@
             <span class="text-text-main font-semibold uppercase tracking-wider">
               STREAMING & AI UNLOCKS · PROBE EVIDENCE (流媒体与 AI 证据诊断)
             </span>
-            <span class="text-[10px] text-text-sub font-mono tabular-nums">
-              {{ mediaPlatformList.length }} 平台
-            </span>
+            <div class="flex items-center gap-2">
+              <span v-if="detailStatus === 'loading'" class="text-[10px] text-accent flex items-center gap-1 font-mono">
+                <Loader2 class="h-3 w-3 animate-spin" />
+                正在拉取完整证据链…
+              </span>
+              <span class="text-[10px] text-text-sub font-mono tabular-nums">
+                {{ mediaPlatformList.length }} 平台
+              </span>
+            </div>
+          </div>
+
+          <!-- Loading Skeleton State -->
+          <div v-if="detailStatus === 'loading'" class="space-y-2 py-2" aria-busy="true">
+            <div
+              v-for="idx in 3"
+              :key="idx"
+              class="h-16 rounded-md border border-border-subtle/50 bg-surface-hover/50 animate-pulse"
+            />
+          </div>
+
+          <!-- Unavailable State with Retry -->
+          <div
+            v-else-if="detailStatus === 'unavailable'"
+            class="rounded-md border border-border-subtle bg-surface-hover/60 p-3 text-xs space-y-2"
+          >
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <span class="text-text-muted">当前节点未返回详细证据诊断链或详情请求不可用</span>
+              <Button
+                variant="ghost"
+                size="sm"
+                :icon="RotateCcw"
+                @click="$emit('retry-detail')"
+              >
+                重试获取详情
+              </Button>
+            </div>
           </div>
 
           <!-- Dense Bordered Diagnostic Rows -->
-          <div class="space-y-2 pt-1">
+          <div v-else class="space-y-2 pt-1">
             <div
               v-for="platform in mediaPlatformList"
               :key="platform.key"
@@ -122,24 +167,24 @@
               </div>
 
               <!-- Row 2: Diagnostic Attributes (Verdict, Confidence, Version, Timestamp) -->
-              <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] text-text-muted border-t border-border-subtle/60 pt-2">
-                <div>
+              <div class="grid grid-cols-2 gap-x-3 gap-y-2 text-[11px] text-text-muted border-t border-border-subtle/60 pt-2">
+                <div class="min-w-0">
                   <span class="text-text-sub text-[10px] uppercase block">VERDICT</span>
-                  <span class="text-text-main font-medium">{{ getPlatformPres(platform).verdict || (getPlatformPres(platform).isFullUnlocked ? 'full' : (getPlatformPres(platform).isPartial ? 'originals_only' : 'unknown')) }}</span>
+                  <span class="text-text-main font-medium block truncate">{{ getPlatformPres(platform).verdict || (getPlatformPres(platform).isFullUnlocked ? 'full' : (getPlatformPres(platform).isPartial ? 'originals_only' : 'unknown')) }}</span>
                 </div>
-                <div>
+                <div class="min-w-0">
                   <span class="text-text-sub text-[10px] uppercase block">CONFIDENCE</span>
-                  <span class="text-text-main font-medium">{{ getPlatformPres(platform).confidence || (probe?.media?.[platform.key] ? 'verified' : 'unavailable') }}</span>
+                  <span class="text-text-main font-medium block truncate">{{ getPlatformPres(platform).confidence || (probe?.media?.[platform.key] ? 'verified' : 'unavailable') }}</span>
                 </div>
-                <div>
+                <div class="min-w-0">
                   <span class="text-text-sub text-[10px] uppercase block">VERSION</span>
-                  <span class="text-text-main font-medium truncate" :title="getPlatformPres(platform).evidenceVersion || 'catalogue-2026-09-05'">
+                  <span class="text-text-main font-medium block truncate" :title="getPlatformPres(platform).evidenceVersion || 'catalogue-2026-09-05'">
                     {{ getPlatformPres(platform).evidenceVersion || 'catalogue-2026-09-05' }}
                   </span>
                 </div>
-                <div>
+                <div class="min-w-0">
                   <span class="text-text-sub text-[10px] uppercase block">TIMESTAMP</span>
-                  <span class="text-text-main font-medium tabular-nums">
+                  <span class="text-text-main font-medium tabular-nums block truncate">
                     {{ formatTimestamp(getPlatformPres(platform).checkedAt || probe?.checked_at) }}
                   </span>
                 </div>
@@ -159,7 +204,7 @@
       </div>
 
       <!-- Tab 2: Dialer Chain Management -->
-      <div v-else-if="activeTab === 'chain'" class="space-y-4">
+      <div v-else-if="activeTab === 'chain'" id="panel-chain" role="tabpanel" aria-labelledby="tab-chain" class="space-y-4">
         <!-- Current Effective Chain Card -->
         <div class="rounded-lg border border-border-subtle bg-surface-base p-4 space-y-3">
           <div class="flex justify-between items-center border-b border-border-subtle pb-2">
@@ -272,7 +317,7 @@
       </div>
 
       <!-- Tab 3: Node Raw Parameters -->
-      <div v-else-if="activeTab === 'params'" class="space-y-4">
+      <div v-else-if="activeTab === 'params'" id="panel-params" role="tabpanel" aria-labelledby="tab-params" class="space-y-4">
         <div class="rounded-lg border border-border-subtle bg-surface-base p-4 space-y-2">
           <span class="text-text-main font-semibold block pb-2 border-b border-border-subtle uppercase">
             NODE PARAMETERS
@@ -291,7 +336,7 @@
       </div>
 
       <!-- Tab 4: JSON Previews -->
-      <div v-else-if="activeTab === 'json'" class="space-y-4">
+      <div v-else-if="activeTab === 'json'" id="panel-json" role="tabpanel" aria-labelledby="tab-json" class="space-y-4">
         <div class="rounded-lg border border-border-subtle bg-surface-base p-4 space-y-3">
           <div class="flex justify-between items-center border-b border-border-subtle pb-2">
             <span class="text-text-main font-semibold uppercase">SING-BOX OUTBOUND JSON</span>
@@ -348,6 +393,8 @@ import {
   Copy,
   FileCode,
   Link as LinkIcon,
+  Loader2,
+  RotateCcw,
   Sliders,
   Trash2,
   Zap,
@@ -370,6 +417,8 @@ const props = withDefaults(
     open: boolean
     node: LedgerNodeItem | null
     probe?: ProbeRecord | null
+    detailProbe?: ProbeRecord | null
+    detailStatus?: 'idle' | 'loading' | 'ready' | 'unavailable'
     nodeCandidates?: LedgerNodeItem[]
     groupCandidates?: any[]
     probingSingle?: boolean
@@ -378,6 +427,8 @@ const props = withDefaults(
   }>(),
   {
     probe: null,
+    detailProbe: null,
+    detailStatus: 'idle',
     nodeCandidates: () => [],
     groupCandidates: () => [],
     probingSingle: false,
@@ -388,10 +439,13 @@ const props = withDefaults(
 
 const emit = defineEmits<{
   (e: 'close'): void
+  (e: 'retry-detail'): void
   (e: 'probe-single', node: LedgerNodeItem): void
   (e: 'save-chain', payload: { nodeName: string; dialerType: string; dialerRef: string }): void
   (e: 'clear-chain', node: LedgerNodeItem): void
 }>()
+
+const effectiveProbe = computed(() => props.detailProbe || props.probe)
 
 const tabs = [
   { id: 'diagnostics', name: '真实诊断', icon: Activity },
@@ -402,6 +456,13 @@ const tabs = [
 
 const activeTab = ref('diagnostics')
 const mediaPlatformList = MEDIA_PLATFORMS
+
+function onTabKeydown(currentIndex: number, direction: number) {
+  const nextIndex = (currentIndex + direction + tabs.length) % tabs.length
+  activeTab.value = tabs[nextIndex].id
+  const el = document.getElementById(`tab-${tabs[nextIndex].id}`)
+  el?.focus()
+}
 
 const chainForm = reactive({
   dialer_type: 'node',
@@ -424,13 +485,13 @@ watch(
 
 const nodeCountry = computed(() => {
   if (!props.node) return ''
-  const code = resolveNodeCountryCode(props.node, props.probe || undefined)
+  const code = resolveNodeCountryCode(props.node, effectiveProbe.value || undefined)
   return COUNTRY_NAME_MAP[code] || code
 })
 
 const probeOrgText = computed(() => {
-  if (!props.probe) return 'N/A'
-  const p = props.probe
+  if (!effectiveProbe.value) return 'N/A'
+  const p = effectiveProbe.value
   const parts = []
   if (p.asn) parts.push(`AS${p.asn}`)
   if (p.organization) parts.push(p.organization)
@@ -491,7 +552,7 @@ function sourceLabel(src?: string | null): string {
 }
 
 function getPlatformPres(platform: { key: string; name: string; short: string }): MediaSemanticPresentation {
-  const item = props.probe?.media?.[platform.key]
+  const item = effectiveProbe.value?.media?.[platform.key]
   return getMediaSemanticPresentation(item, platform)
 }
 

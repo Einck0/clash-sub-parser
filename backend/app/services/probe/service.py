@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import json
 import logging
 import re
 import time
@@ -21,6 +22,7 @@ from app.services.probe.providers import (
     check_transport,
 )
 from app.services.probe.runner import spawn_node_runner
+from app.utils.capability_filter import is_media_full_unlocked
 
 logger = logging.getLogger(__name__)
 
@@ -274,6 +276,132 @@ async def get_all_db_probe_results(db: AsyncSession) -> dict[str, dict[str, Any]
         if item.name:
             results_map[item.name] = data
     return results_map
+
+
+MAX_SUMMARY_PAYLOAD_BYTES = 51200
+STANDARD_MEDIA_PLATFORMS = (
+    "youtube",
+    "netflix",
+    "disney",
+    "chatgpt",
+    "bilibili",
+    "meta_ai",
+    "gemini",
+)
+
+
+def serialize_probe_summary_item(item: NodeProbeResult) -> dict[str, Any]:
+    """序列化单个节点的轻量级摘要（严格仅包含状态、时延、测速、国家、IP 与流媒体布尔摘要）"""
+    media_dict = item.media if isinstance(item.media, dict) else {}
+    platforms = list(STANDARD_MEDIA_PLATFORMS)
+    for k in media_dict.keys():
+        if not k.startswith("_") and k not in platforms:
+            platforms.append(k)
+
+    media_matrix = {
+        p: is_media_full_unlocked(media_dict.get(p))
+        for p in platforms
+    }
+
+    return {
+        "status": item.status or "unknown",
+        "latency_ms": item.latency_ms,
+        "speed_mbps": round(item.speed_mbps, 2) if item.speed_mbps is not None else None,
+        "country": item.country,
+        "ip": item.ip,
+        "media": media_matrix,
+    }
+
+
+def serialize_probe_detail_item(item: NodeProbeResult) -> dict[str, Any]:
+    """序列化单个节点的完整详细探测记录，包含诊断证据链，并执行全量敏感凭据脱敏"""
+    media_val = item.media or {}
+    data: dict[str, Any] = {
+        "node_key": item.node_key,
+        "name": item.name,
+        "server": item.server,
+        "port": item.port,
+        "type": item.type,
+        "status": item.status,
+        "latency_ms": item.latency_ms,
+        "speed_mbps": round(item.speed_mbps, 2) if item.speed_mbps is not None else None,
+        "ip": item.ip,
+        "country": item.country,
+        "asn": item.asn,
+        "organization": item.organization,
+        "media": sanitize_probe_evidence(media_val),
+        "error": item.error,
+        "checked_at": item.checked_at,
+    }
+    if "_identity" in media_val and isinstance(media_val["_identity"], dict):
+        ident = media_val["_identity"]
+        if "identity_evidence" in ident:
+            data["identity_evidence"] = sanitize_probe_evidence(ident["identity_evidence"])
+        if "confidence" in ident:
+            data["identity_confidence"] = ident["confidence"]
+    return sanitize_probe_evidence(data)
+
+
+async def get_db_probe_detail(db: AsyncSession, node_key: str) -> dict[str, Any] | None:
+    """通过精确 node_key 查询单个节点的完整探测详情"""
+    res = await db.execute(select(NodeProbeResult).where(NodeProbeResult.node_key == node_key))
+    item = res.scalar_one_or_none()
+    if not item:
+        return None
+    return serialize_probe_detail_item(item)
+
+
+async def get_paged_db_probe_summary(
+    db: AsyncSession,
+    cursor: str | None = None,
+    limit: int = 100,
+) -> dict[str, Any]:
+    """从数据库按游标与分页限额加载节点轻量级摘要，确保 UTF-8 字节不超过 51,200 字节"""
+    stmt = select(NodeProbeResult).order_by(NodeProbeResult.node_key.asc())
+    if cursor:
+        stmt = stmt.where(NodeProbeResult.node_key > cursor)
+    stmt = stmt.limit(limit + 1)
+    res = await db.execute(stmt)
+    candidates = list(res.scalars().all())
+
+    results_map: dict[str, dict[str, Any]] = {}
+    last_key: str | None = None
+    has_more = False
+
+    for item in candidates:
+        if len(results_map) >= limit:
+            has_more = True
+            break
+        summary = serialize_probe_summary_item(item)
+        candidate_map = {**results_map, item.node_key: summary}
+        candidate_envelope = {
+            "results": candidate_map,
+            "next_cursor": item.node_key,
+            "has_more": True,
+        }
+        candidate_bytes = len(json.dumps(candidate_envelope, ensure_ascii=False).encode("utf-8"))
+        if candidate_bytes > MAX_SUMMARY_PAYLOAD_BYTES:
+            if not results_map:
+                from fastapi import HTTPException
+                raise HTTPException(
+                    status_code=500,
+                    detail="Single probe summary exceeds maximum payload budget",
+                )
+            has_more = True
+            break
+        results_map = candidate_map
+        last_key = item.node_key
+
+    if not has_more:
+        next_cursor = None
+    else:
+        next_cursor = last_key
+
+    return {
+        "results": results_map,
+        "next_cursor": next_cursor,
+        "has_more": has_more,
+    }
 
 
 def is_node_credential_missing(node: dict[str, Any]) -> bool:

@@ -5,11 +5,16 @@ import {
   buildEffectiveBatchTargets,
   chunkItems,
   computeFilterOptions,
+  createDrawerDetailSession,
   filterAndSortNodes,
+  getProbeForNode,
+  mergeNodeLedgerProbePages,
   normalizeNodeLedgerMap,
   planDialerReplacement,
   replaceNodeDialerProxy,
+  resolveDrawerDetailFetch,
   runChunkedBatchProbe,
+  startDrawerDetailFetch,
 } from '../src/views/nodeLedgerDomain.ts'
 
 const mockNodes = [
@@ -245,4 +250,144 @@ test('1.4 node-level dialer replacement deletes matching node-level bindings bef
   assert.equal(createdRecord.target_name, 'US-01')
   assert.equal(createdRecord.dialer_ref, 'New-Dialer')
   assert.equal(result.id, 201)
+})
+
+test('3.1 probe summary pagination page merge and boolean media filtering', () => {
+  // Page 1 envelope
+  const page1 = {
+    results: {
+      'node:001': {
+        status: 'ok',
+        latency_ms: 40,
+        speed_mbps: 50.0,
+        country: 'JP',
+        ip: '198.51.100.1',
+        media: { youtube: true, netflix: true, disney: false },
+      },
+      'node:002': {
+        status: 'ok',
+        latency_ms: 85,
+        speed_mbps: 15.0,
+        country: 'US',
+        ip: '198.51.100.2',
+        media: { youtube: true, netflix: false, disney: false },
+      },
+    },
+    next_cursor: 'node:002',
+    has_more: true,
+  }
+
+  // Normalize page 1
+  const mapP1 = normalizeNodeLedgerMap(page1)
+  assert.equal(Object.keys(mapP1).length, 2)
+  assert.equal(mapP1['node:001']?.status, 'ok')
+  assert.equal(mapP1['node:001']?.latency_ms, 40)
+  assert.equal(mapP1['node:001']?.media?.youtube, true)
+
+  // Page 2 envelope
+  const page2 = {
+    results: {
+      'node:003': {
+        status: 'fail',
+        latency_ms: null,
+        speed_mbps: null,
+        country: 'SG',
+        ip: null,
+        media: { youtube: false, netflix: false, disney: false },
+      },
+    },
+    next_cursor: null,
+    has_more: false,
+  }
+
+  // Merge page 2 into mapP1
+  const mergedMap = mergeNodeLedgerProbePages(mapP1, page2)
+  assert.equal(Object.keys(mergedMap).length, 3)
+  assert.equal(mergedMap['node:001']?.status, 'ok')
+  assert.equal(mergedMap['node:002']?.status, 'ok')
+  assert.equal(mergedMap['node:003']?.status, 'fail')
+
+  // Verify getProbeForNode lookup by node_key and name fallback
+  const testNode1 = { name: 'Japan-01', node_key: 'node:001' }
+  const probeFound = getProbeForNode(mergedMap, testNode1)
+  assert.equal(probeFound?.country, 'JP')
+
+  // Verify filterAndSortNodes with boolean media summaries
+  const sampleNodes = [
+    { name: 'Japan-01', node_key: 'node:001', type: 'vmess' },
+    { name: 'US-02', node_key: 'node:002', type: 'ss' },
+    { name: 'SG-03', node_key: 'node:003', type: 'trojan' },
+  ]
+
+  // Verify filterAndSortNodes defensive non-array resilience
+  assert.deepEqual(filterAndSortNodes(null, mergedMap, {}), [])
+  assert.deepEqual(filterAndSortNodes(undefined, mergedMap, {}), [])
+  assert.deepEqual(filterAndSortNodes('not-an-array', mergedMap, {}), [])
+
+  // Filter for youtube AND netflix full unlock
+  const filteredDoubleUnlock = filterAndSortNodes(sampleNodes, mergedMap, {
+    keyword: '',
+    subscription: '',
+    protocol: '',
+    status: 'all',
+    country: '',
+    chain: 'all',
+    minSpeed: 0,
+    mediaPlatforms: ['youtube', 'netflix'],
+    sortBy: 'default',
+  })
+  assert.equal(filteredDoubleUnlock.length, 1)
+  assert.equal(filteredDoubleUnlock[0].node_key, 'node:001')
+
+  // Filter for youtube only
+  const filteredYoutubeOnly = filterAndSortNodes(sampleNodes, mergedMap, {
+    keyword: '',
+    subscription: '',
+    protocol: '',
+    status: 'all',
+    country: '',
+    chain: 'all',
+    minSpeed: 0,
+    mediaPlatforms: ['youtube'],
+    sortBy: 'default',
+  })
+  assert.equal(filteredYoutubeOnly.length, 2)
+  assert.deepEqual(filteredYoutubeOnly.map((n) => n.node_key), ['node:001', 'node:002'])
+
+  // 3.2 Drawer detail session state machine & race suppression
+  const session = createDrawerDetailSession()
+  assert.equal(session.status, 'idle')
+
+  // Node with no key transitions to unavailable
+  const noKeyRes = startDrawerDetailFetch(session, { name: 'unkeyed' })
+  assert.equal(noKeyRes.shouldFetch, false)
+  assert.equal(session.status, 'unavailable')
+
+  // Selecting node 1 transitions to loading with new abort controller
+  const fetch1 = startDrawerDetailFetch(session, { node_key: 'node:001' })
+  assert.equal(fetch1.shouldFetch, true)
+  assert.equal(session.status, 'loading')
+  assert.equal(session.nodeKey, 'node:001')
+  const ctrl1 = fetch1.controller
+
+  // Switching to node 2 aborts previous controller and starts new loading
+  const fetch2 = startDrawerDetailFetch(session, { node_key: 'node:002' })
+  assert.equal(fetch2.shouldFetch, true)
+  assert.equal(ctrl1.signal.aborted, true)
+  assert.equal(session.status, 'loading')
+  assert.equal(session.nodeKey, 'node:002')
+
+  // Outdated response for node 1 arrives late -> discarded, does not mutate session
+  resolveDrawerDetailFetch(session, 'node:001', { data: { latency_ms: 40 } })
+  assert.equal(session.status, 'loading')
+  assert.equal(session.probe, null)
+
+  // Current response for node 2 arrives -> ready
+  resolveDrawerDetailFetch(session, 'node:002', { data: { latency_ms: 85 } })
+  assert.equal(session.status, 'ready')
+  assert.equal(session.probe?.latency_ms, 85)
+
+  // Error on node 2 retry -> unavailable
+  resolveDrawerDetailFetch(session, 'node:002', null, new Error('network down'))
+  assert.equal(session.status, 'unavailable')
 })

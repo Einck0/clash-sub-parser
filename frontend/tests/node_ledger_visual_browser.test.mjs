@@ -103,12 +103,12 @@ test('Task 1.3: Node Ledger Visual, Elevation & Reduced-Motion Browser Gate (375
         })
         assert.equal(overflow.hasOverflow, false, `Viewport ${vp.name} must not have document horizontal overflow`)
 
-        // Check canvas dark token resolves to #08090a
+        // Check canvas dark token resolves to #0F172A
         const canvasColor = await page.evaluate(() => {
           return window.getComputedStyle(document.body).backgroundColor
         })
-        // rgb(8, 9, 10) corresponds to #08090a
-        assert.equal(canvasColor, 'rgb(8, 9, 10)', `Viewport ${vp.name} document body background must resolve to rgb(8, 9, 10) [#08090a], got ${canvasColor}`)
+        // rgb(15, 23, 42) corresponds to #0F172A
+        assert.equal(canvasColor, 'rgb(15, 23, 42)', `Viewport ${vp.name} document body background must resolve to rgb(15, 23, 42) [#0F172A], got ${canvasColor}`)
 
         await page.close()
       })

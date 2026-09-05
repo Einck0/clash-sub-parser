@@ -54,24 +54,24 @@ const variantClasses = computed(() => {
     case 'primary':
       return 'bg-accent text-white hover:bg-accent-hover active:bg-accent-hover border border-transparent shadow-xs'
     case 'danger':
-      return 'bg-status-danger text-white hover:bg-red-600 active:bg-red-700 border border-transparent shadow-xs'
+      return 'bg-status-danger text-white hover:opacity-90 active:opacity-80 border border-transparent shadow-xs'
     case 'ghost':
       return 'bg-transparent text-text-muted hover:text-text-main hover:bg-surface-hover border border-transparent'
     case 'secondary':
     default:
-      return 'bg-surface-hover text-text-main hover:bg-surface-active hover:text-white border border-border-subtle'
+      return 'bg-surface-hover text-text-main hover:bg-surface-active border border-border-subtle'
   }
 })
 
 const sizeClasses = computed(() => {
   switch (props.size) {
     case 'sm':
-      return 'px-2.5 py-1 text-xs min-h-[44px] sm:min-h-[32px] gap-1.5 rounded-md'
+      return 'px-2.5 py-1 text-xs min-h-[44px] min-w-[44px] sm:min-h-[40px] sm:min-w-[40px] gap-1.5 rounded-md'
     case 'lg':
-      return 'px-4.5 py-2.5 text-sm sm:text-base min-h-[44px] gap-2.5 rounded-lg'
+      return 'px-4.5 py-2.5 text-sm sm:text-base min-h-[44px] min-w-[44px] sm:min-h-[44px] gap-2.5 rounded-lg'
     case 'md':
     default:
-      return 'px-3.5 py-2 text-xs sm:text-sm min-h-[44px] sm:min-h-[36px] gap-2 rounded-md'
+      return 'px-3.5 py-2 text-xs sm:text-sm min-h-[44px] min-w-[44px] sm:min-h-[40px] sm:min-w-[40px] gap-2 rounded-md'
   }
 })
 </script>

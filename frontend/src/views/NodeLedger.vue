@@ -118,6 +118,17 @@
       @reset-filters="resetFilters"
     />
 
+    <!-- Progressive Loading Indicator for Background Probe Pages -->
+    <div
+      v-if="probeLoadingMore"
+      class="flex items-center gap-2 px-3 py-1.5 rounded-md bg-accent-subtle text-accent text-xs font-mono"
+      role="status"
+      aria-live="polite"
+    >
+      <RefreshCw class="h-3.5 w-3.5 animate-spin shrink-0" aria-hidden="true" />
+      <span>正在按需分页同步后续节点质检数据…</span>
+    </div>
+
     <!-- Selection indicator & quick select-all toolbar -->
     <div class="flex flex-wrap items-center justify-between text-xs font-mono text-text-muted px-1 gap-2">
       <div class="flex items-center gap-3">
@@ -390,13 +401,16 @@
     <LedgerDrawer
       :open="drawerOpen"
       :node="selectedNode"
-      :probe="selectedNode ? getProbe(selectedNode.name) : null"
+      :probe="selectedNode ? getProbeForNode(probes, selectedNode) : null"
+      :detail-probe="drawerDetailProbe"
+      :detail-status="drawerDetailStatus"
       :node-candidates="rows"
       :group-candidates="nodeGroups"
       :probing-single="selectedNode ? probingSingleNodeKey === selectedNode.name : false"
       :saving-chain="savingChain"
       :clearing-chain="clearingChain"
       @close="drawerOpen = false"
+      @retry-detail="() => loadNodeDetail(selectedNode)"
       @probe-single="handleProbeSingle"
       @save-chain="handleSaveChain"
       @clear-chain="handleClearChain"
@@ -405,7 +419,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import {
   Gauge,
   RefreshCw,
@@ -420,6 +434,7 @@ import {
   getApiErrorMessage,
   getNodeGroups,
   getNodeLedger,
+  getProbeResultDetail,
   getProbeResults,
   getProxyChains,
   probeNode,
@@ -443,6 +458,7 @@ import {
   getProbeForNode,
   isMediaFullUnlocked,
   MEDIA_PLATFORMS,
+  mergeNodeLedgerProbePages,
   normalizeNodeLedgerMap,
   replaceNodeDialerProxy,
   resolveNodeCountryCode,
@@ -472,6 +488,11 @@ const gridPageSize = 48
 
 const drawerOpen = ref(false)
 const selectedNode = ref<LedgerNodeItem | null>(null)
+const drawerDetailProbe = ref<ProbeRecord | null>(null)
+const drawerDetailStatus = ref<'idle' | 'loading' | 'ready' | 'unavailable'>('idle')
+let detailAbortController: AbortController | null = null
+let pagedProbeAbortController: AbortController | null = null
+const probeLoadingMore = ref(false)
 
 const selectedNodeNames = reactive<Set<string>>(new Set())
 
@@ -638,25 +659,127 @@ function resetFilters() {
   selectedNodeNames.clear()
 }
 
+async function loadNodeDetail(node: LedgerNodeItem | null) {
+  if (detailAbortController) {
+    detailAbortController.abort()
+    detailAbortController = null
+  }
+
+  if (!node) {
+    drawerDetailProbe.value = null
+    drawerDetailStatus.value = 'idle'
+    return
+  }
+
+  if (!node.node_key) {
+    drawerDetailProbe.value = null
+    drawerDetailStatus.value = 'unavailable'
+    return
+  }
+
+  const requestedKey = node.node_key
+  drawerDetailStatus.value = 'loading'
+  drawerDetailProbe.value = null
+  detailAbortController = new AbortController()
+
+  try {
+    const res = await getProbeResultDetail(requestedKey, { signal: detailAbortController.signal })
+    if (selectedNode.value?.node_key === requestedKey) {
+      if (res?.data) {
+        drawerDetailProbe.value = res.data
+        drawerDetailStatus.value = 'ready'
+        probes.value = {
+          ...probes.value,
+          [requestedKey]: res.data,
+        }
+      } else {
+        drawerDetailStatus.value = 'unavailable'
+      }
+    }
+  } catch (err: any) {
+    if (err?.name === 'AbortError' || detailAbortController?.signal?.aborted) {
+      return
+    }
+    if (selectedNode.value?.node_key === requestedKey) {
+      drawerDetailStatus.value = 'unavailable'
+    }
+  } finally {
+    if (selectedNode.value?.node_key === requestedKey && drawerDetailStatus.value === 'loading') {
+      drawerDetailStatus.value = 'unavailable'
+    }
+  }
+}
+
 function inspectNode(node: LedgerNodeItem) {
   selectedNode.value = node
   drawerOpen.value = true
+  loadNodeDetail(node)
+}
+
+watch(drawerOpen, (isOpen) => {
+  if (!isOpen) {
+    if (detailAbortController) {
+      detailAbortController.abort()
+      detailAbortController = null
+    }
+    drawerDetailStatus.value = 'idle'
+    drawerDetailProbe.value = null
+  }
+})
+
+// Progressive background loader for subsequent probe summary pages
+async function fetchRemainingProbePages(initialCursor: string | null) {
+  if (!initialCursor) return
+  if (pagedProbeAbortController) {
+    pagedProbeAbortController.abort()
+  }
+  pagedProbeAbortController = new AbortController()
+  probeLoadingMore.value = true
+  let cursor: string | null = initialCursor
+
+  try {
+    while (cursor && !pagedProbeAbortController.signal.aborted) {
+      const res = await getProbeResults({ cursor, limit: 100 })
+      if (pagedProbeAbortController.signal.aborted) break
+      const pageData = res?.data
+      if (!pageData) break
+      probes.value = mergeNodeLedgerProbePages(probes.value, pageData)
+      store.setNodeSummary({
+        status: 'ready',
+        total: rows.value.length,
+        probed: rows.value.filter((r) => getProbeForNode(probes.value, r)?.status === 'ok').length,
+      })
+      if (pageData.has_more && pageData.next_cursor) {
+        cursor = pageData.next_cursor
+      } else {
+        cursor = null
+      }
+    }
+  } catch {
+    // Aborted or fetch error
+  } finally {
+    probeLoadingMore.value = false
+  }
 }
 
 // Data Load
 async function reload() {
   loading.value = true
   error.value = ''
+  if (pagedProbeAbortController) {
+    pagedProbeAbortController.abort()
+    pagedProbeAbortController = null
+  }
   try {
     const [ledgerRes, chainsRes, groupsRes, probeRes] = await Promise.all([
       getNodeLedger(),
       getProxyChains(),
       getNodeGroups(),
-      getProbeResults().catch(() => ({ data: {} })),
+      getProbeResults({ limit: 100 }).catch(() => ({ data: {} })),
     ])
-    rows.value = ledgerRes?.data || []
-    bindings.value = chainsRes?.data || []
-    nodeGroups.value = groupsRes?.data || []
+    rows.value = Array.isArray(ledgerRes?.data) ? ledgerRes.data : []
+    bindings.value = Array.isArray(chainsRes?.data) ? chainsRes.data : []
+    nodeGroups.value = Array.isArray(groupsRes?.data) ? groupsRes.data : []
 
     const rawProbeData = probeRes?.data?.results || probeRes?.data
     probes.value = normalizeNodeLedgerMap(rawProbeData)
@@ -666,6 +789,10 @@ async function reload() {
       total: rows.value.length,
       probed: rows.value.filter((r) => getProbeForNode(probes.value, r)?.status === 'ok').length,
     })
+
+    if (probeRes?.data?.has_more && probeRes?.data?.next_cursor) {
+      fetchRemainingProbePages(probeRes.data.next_cursor)
+    }
   } catch (err: any) {
     error.value = getApiErrorMessage(err, '加载节点与跳板数据失败')
   } finally {
@@ -839,5 +966,17 @@ async function handleClearChain(node: LedgerNodeItem) {
 
 onMounted(() => {
   reload()
+})
+
+onUnmounted(() => {
+  if (pagedProbeAbortController) {
+    pagedProbeAbortController.abort()
+  }
+  if (detailAbortController) {
+    detailAbortController.abort()
+  }
+  if (probeAbortController) {
+    probeAbortController.abort()
+  }
 })
 </script>

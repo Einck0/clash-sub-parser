@@ -62,11 +62,11 @@ test.describe('Node Ledger Multi-Viewport Visual & Interaction Gate', () => {
       })
       expect(overflow).toBeFalsy()
 
-      // Verify dark canvas color is #08090a
+      // Verify dark canvas color is #0F172A
       const bodyBg = await page.evaluate(() => {
         return window.getComputedStyle(document.body).backgroundColor
       })
-      expect(bodyBg).toBe('rgb(8, 9, 10)')
+      expect(bodyBg).toBe('rgb(15, 23, 42)')
     })
   }
 

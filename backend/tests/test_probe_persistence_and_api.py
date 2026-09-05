@@ -329,16 +329,30 @@ class TestProbeSecretRedactionAndAPIRegression:
 
     @pytest.mark.asyncio
     async def test_api_results_endpoint_backward_compatible_and_redacted(self):
-        """Verify GET /api/probe/results returns valid data without any secrets."""
+        """Verify GET /api/probe/results returns valid data without any secrets and paged envelope."""
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             res = await ac.get("/api/probe/results")
             assert res.status_code == 200
             data = res.json()
             assert isinstance(data, dict)
+            assert "results" in data
+            assert "next_cursor" in data
+            assert "has_more" in data
+            assert isinstance(data["results"], dict)
 
             # Secret redaction scan across all returned items
             violations = _scan_for_secrets(data)
             assert not violations, f"API response contains forbidden secret artifacts: {violations}"
+
+            # Detail route secret scan
+            if data["results"]:
+                first_key = next(iter(data["results"].keys()))
+                import urllib.parse
+                detail_res = await ac.get(f"/api/probe/results/detail?node_key={urllib.parse.quote(first_key)}")
+                if detail_res.status_code == 200:
+                    detail_data = detail_res.json()
+                    detail_violations = _scan_for_secrets(detail_data)
+                    assert not detail_violations, f"Detail API response leaked secrets: {detail_violations}"
 
     @pytest.mark.asyncio
     async def test_api_single_node_probe_request_shape_preserved(self):

@@ -11,43 +11,41 @@ const drawerPath = path.resolve(import.meta.dirname, '../src/components/ui/BaseD
 const filterPath = path.resolve(import.meta.dirname, '../src/components/ledger/LedgerSearchFilter.vue')
 const ledgerPath = path.resolve(import.meta.dirname, '../src/views/NodeLedger.vue')
 
-test('Task 1.2 / D1: Frozen Dark Elevation Token Ladder in theme.css', () => {
+test('Task 4.1 / D4: Frozen AxonHub Dual-Mode Tokens in theme.css', () => {
   assert.ok(fs.existsSync(themePath), 'theme.css must exist')
   const content = fs.readFileSync(themePath, 'utf8')
 
-  // Elevation Ladder tokens: canvas #08090a, panel #0d0f12, card #121417, raised #181b20, inset #090b0d
-  assert.match(content, /--color-canvas:\s*#08090a/i, 'theme.css must define canvas #08090a')
-  assert.match(content, /--color-surface(?:-panel)?:\s*#0d0f12/i, 'theme.css must define panel surface #0d0f12')
-  assert.match(content, /--color-surface-(?:card|base):\s*#121417/i, 'theme.css must define card surface #121417')
-  assert.match(content, /--color-raised:\s*#181b20/i, 'theme.css must define raised surface #181b20')
-  assert.match(content, /--color-inset:\s*#090b0d/i, 'theme.css must define inset surface #090b0d')
+  // Elevation Ladder tokens: canvas #0F172A, panel #111C31, card #16233A, raised #1E293B, inset #0B1324
+  assert.match(content, /--color-canvas:\s*#0F172A/i, 'theme.css must define dark canvas #0F172A')
+  assert.match(content, /--color-surface(?:-panel)?:\s*#111C31/i, 'theme.css must define panel surface #111C31')
+  assert.match(content, /--color-surface-(?:card|base):\s*#16233A/i, 'theme.css must define card surface #16233A')
+  assert.match(content, /--color-raised:\s*#1E293B/i, 'theme.css must define raised surface #1E293B')
+  assert.match(content, /--color-inset:\s*#0B1324/i, 'theme.css must define inset surface #0B1324')
 
-  // Hairline border and inset highlight
-  assert.match(content, /--color-border-subtle:\s*rgba\(255,\s*255,\s*255,\s*0\.07\)/i, 'theme.css must define hairline border rgba(255, 255, 255, 0.07)')
-  assert.match(content, /rgba\(255,\s*255,\s*255,\s*0\.055\)/i, 'theme.css must define top edge inset highlight rgba(255, 255, 255, 0.055)')
+  // Light theme tokens
+  assert.match(content, /--color-canvas:\s*#F8FAFC/i, 'theme.css must define light canvas #F8FAFC')
+  assert.match(content, /--color-surface(?:-panel)?:\s*#FFFFFF/i, 'theme.css must define light panel #FFFFFF')
 
   // Text hierarchy
-  assert.match(content, /--color-text-main:\s*#f1f3f5/i, 'theme.css must define primary text #f1f3f5')
-  assert.match(content, /--color-text-muted:\s*#8b919a/i, 'theme.css must define muted text #8b919a')
-  assert.match(content, /--color-text-sub:\s*#626870/i, 'theme.css must define sub/disabled text #626870')
+  assert.match(content, /--color-text-main:\s*#E2E8F0/i, 'theme.css must define primary text #E2E8F0 in dark')
+  assert.match(content, /--color-text-muted:\s*#94A3B8/i, 'theme.css must define muted text #94A3B8 in dark')
 
-  // Accent: cool indigo only (not generic saturated blue #3B82F6)
-  assert.match(content, /--color-accent:\s*#6366f1/i, 'theme.css must define accent as cool indigo #6366f1')
+  // Accent: Emerald/Teal
+  assert.match(content, /--color-accent:\s*#2DD4BF/i, 'theme.css must define dark accent as teal #2DD4BF')
+  assert.match(content, /--color-accent:\s*#0F766E/i, 'theme.css must define light accent as teal #0F766E')
 
-  // Rejection of legacy Slate visual values in theme.css
-  assert.doesNotMatch(content, /#090D16/i, 'theme.css must NOT contain legacy Slate-blue canvas #090D16')
-  assert.doesNotMatch(content, /#0F172A/i, 'theme.css must NOT contain legacy Slate-blue surface #0F172A')
-  assert.doesNotMatch(content, /#1E293B/i, 'theme.css must NOT contain legacy Slate-blue raised #1E293B')
+  // Rejection of near-black void
+  assert.doesNotMatch(content, /--color-canvas:\s*#000000/i, 'theme.css must NOT contain black canvas #000000')
+  assert.doesNotMatch(content, /--color-canvas:\s*#08090A/i, 'theme.css must NOT contain near-black canvas #08090A')
 })
 
-test('Task 1.2 / D1: Rejection of legacy Slate visual values in style.css modified paths', () => {
+test('Task 4.1 / D4: Rejection of near-black canvas in style.css modified paths', () => {
   assert.ok(fs.existsSync(stylePath), 'style.css must exist')
   const content = fs.readFileSync(stylePath, 'utf8')
 
-  // style.css must not fall back to old slate colors
-  assert.doesNotMatch(content, /#090D16/i, 'style.css must NOT contain legacy #090D16')
-  assert.doesNotMatch(content, /#0F172A/i, 'style.css must NOT contain legacy #0F172A')
-  assert.doesNotMatch(content, /#1E293B/i, 'style.css must NOT contain legacy #1E293B')
+  // style.css must not fall back to old near-black colors
+  assert.doesNotMatch(content, /var\(--color-canvas,\s*#000000\)/i, 'style.css must NOT fall back to #000000')
+  assert.doesNotMatch(content, /var\(--color-canvas,\s*#08090a\)/i, 'style.css must NOT fall back to #08090a')
 })
 
 test('Task 1.2 / D2: Governed Overlay-Only Backdrop Blur in visual audit', () => {

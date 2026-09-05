@@ -7,7 +7,7 @@ test('Tailwind theme and UI primitives exist and conform to design tokens', () =
   const themePath = path.resolve(import.meta.dirname, '../src/assets/theme.css')
   assert.ok(fs.existsSync(themePath), 'theme.css should exist')
   const themeContent = fs.readFileSync(themePath, 'utf8')
-  assert.match(themeContent, /--color-canvas: #(?:08090a|090D16)/i)
+  assert.match(themeContent, /--color-canvas:\s*#(?:08090a|090D16|0F172A)/i)
   assert.match(themeContent, /--font-mono: 'JetBrains Mono'/)
 
   const drawerPath = path.resolve(import.meta.dirname, '../src/components/ui/BaseDrawer.vue')

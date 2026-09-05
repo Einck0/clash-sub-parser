@@ -5,8 +5,8 @@ body {
 }
 
 [data-theme="dark"] body {
-  background: var(--color-canvas, #08090a);
-  color: var(--color-text-main, #F8FAFC);
+  background: var(--color-canvas, #0F172A);
+  color: var(--color-text-main, #E2E8F0);
 }
 
 [data-theme="dark"] .topbar {
@@ -248,9 +248,9 @@ body {
 
 body {
   margin: 0;
-  color: var(--color-text-main, #f8fafc);
+  color: var(--color-text-main, #E2E8F0);
   font-family: Inter, "IBM Plex Sans", "Noto Sans SC", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-  background: var(--color-canvas, #08090a);
+  background: var(--color-canvas, #0F172A);
 }
 
 #app {

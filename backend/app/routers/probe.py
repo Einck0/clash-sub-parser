@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,6 +19,8 @@ from app.services.probe.service import (
     delete_all_db_probe_results,
     get_all_cached_results,
     get_all_db_probe_results,
+    get_db_probe_detail,
+    get_paged_db_probe_summary,
     probe_batch_nodes,
     probe_single_node,
 )
@@ -78,12 +80,28 @@ async def probe_tcp(payload: TcpProbeRequest) -> dict[str, Any]:
     )
 
 
-@router.get("/results")
-async def get_probe_results_endpoint(
+@router.get("/results/detail")
+async def get_probe_result_detail_endpoint(
+    node_key: str = Query(..., description="精确节点唯一标识"),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
-    """获取所有已持久化的最新节点探测结果"""
-    return await get_all_db_probe_results(db)
+    """获取指定单个节点的完整探测与证据链详情"""
+    if not node_key or not node_key.strip():
+        raise HTTPException(status_code=422, detail="node_key must not be blank")
+    detail = await get_db_probe_detail(db, node_key=node_key)
+    if not detail:
+        raise HTTPException(status_code=404, detail="Probe result not found")
+    return detail
+
+
+@router.get("/results")
+async def get_probe_results_endpoint(
+    cursor: str | None = None,
+    limit: int = Query(default=100, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """获取所有已持久化的最新节点探测结果轻量级摘要（带分页与 50KB 严格限额）"""
+    return await get_paged_db_probe_summary(db, cursor=cursor, limit=limit)
 
 
 @router.delete("/results")

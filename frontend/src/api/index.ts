@@ -16,7 +16,7 @@ interface ApiError extends Error {
   userMessage?: string
 }
 
-async function request(method: string, url: string, data?: any): Promise<ApiResponse> {
+async function request(method: string, url: string, data?: any, extraOptions?: { signal?: AbortSignal }): Promise<ApiResponse> {
   if (DEMO_MODE) return mockRequest(method, url, data) as Promise<ApiResponse>
 
   const headers: Record<string, string> = { 'Content-Type': 'application/json', ...authHeaders() }
@@ -28,6 +28,7 @@ async function request(method: string, url: string, data?: any): Promise<ApiResp
     method,
     headers,
     credentials: 'same-origin',
+    signal: extraOptions?.signal,
   }
 
   if (data !== undefined) {
@@ -51,7 +52,7 @@ async function request(method: string, url: string, data?: any): Promise<ApiResp
 }
 
 const api = {
-  get: (url: string) => request('GET', url),
+  get: (url: string, options?: { signal?: AbortSignal }) => request('GET', url, undefined, options),
   post: (url: string, data?: any) => request('POST', url, data),
   patch: (url: string, data?: any) => request('PATCH', url, data),
   delete: (url: string) => request('DELETE', url),
@@ -118,7 +119,16 @@ export const probeNodesFull = (data: {
   timeout_ms?: number
 }) => api.post('/probe/batch', data)
 export const getProbeCache = () => api.get('/probe/cache')
-export const getProbeResults = () => api.get('/probe/results')
+export const getProbeResults = (params?: { cursor?: string | null; limit?: number }) => {
+  const query = new URLSearchParams()
+  if (params?.cursor) query.set('cursor', params.cursor)
+  if (params?.limit) query.set('limit', String(params.limit))
+  const qs = query.toString()
+  return api.get(`/probe/results${qs ? '?' + qs : ''}`)
+}
+export const getProbeResultDetail = (nodeKey: string, options?: { signal?: AbortSignal }) => {
+  return api.get(`/probe/results/detail?node_key=${encodeURIComponent(nodeKey)}`, options)
+}
 export const clearProbeCache = () => api.delete('/probe/cache')
 export const clearProbeResults = () => api.delete('/probe/results')
 

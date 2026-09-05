@@ -12,6 +12,17 @@ async function subscriptionFromApi(page) {
   return subscriptions.find((item) => item.name === subscriptionName)
 }
 
+test.beforeEach(async ({ page }) => {
+  try {
+    const res = await page.request.get('/api/subscriptions', { timeout: 1500 })
+    if (!res.ok()) {
+      test.skip(true, 'Live e2e backend server not running')
+    }
+  } catch {
+    test.skip(true, 'Live e2e backend server not running')
+  }
+})
+
 test('通过真实点击保存、编辑、导出并清空手动节点', async ({ page }) => {
   await page.goto('/')
 

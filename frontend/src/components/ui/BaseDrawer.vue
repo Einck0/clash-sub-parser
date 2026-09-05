@@ -11,7 +11,7 @@
       <div
         v-if="modelValue"
         :class="[
-          'fixed inset-0 z-50 flex bg-black/70 transition-opacity',
+          'fixed inset-0 z-50 flex bg-black/80 backdrop-blur-[4px] transition-opacity',
           placement === 'left' ? 'justify-start items-stretch' : 'items-end sm:items-stretch justify-end'
         ]"
         @click.self="handleClose"
@@ -23,7 +23,7 @@
           :aria-labelledby="titleId"
           tabindex="-1"
           :class="[
-            'relative flex w-full flex-col bg-surface-base text-text-main shadow-md transition-transform focus:outline-hidden',
+            'relative flex w-full flex-col bg-surface-base text-text-main shadow-md highlight-top transition-transform focus:outline-hidden',
             placement === 'left'
               ? 'h-full max-w-[320px] border-r border-border-subtle drawer-slide-left'
               : 'h-auto max-h-[88vh] sm:h-full sm:max-w-[480px] rounded-t-lg sm:rounded-none border-t sm:border-t-0 sm:border-l border-border-subtle drawer-slide-right pb-safe'

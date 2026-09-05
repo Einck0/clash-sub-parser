@@ -10,7 +10,7 @@
     >
       <div
         v-if="modelValue"
-        class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 transition-opacity"
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-[4px] p-4 transition-opacity"
         @click.self="handleClose"
       >
         <div
@@ -20,7 +20,7 @@
           :aria-labelledby="titleId"
           tabindex="-1"
           :class="[
-            'relative flex w-[calc(100%-32px)] max-h-[calc(100dvh-64px)] flex-col rounded-lg border border-border-subtle bg-surface-base text-text-main shadow-md focus:outline-hidden',
+            'relative flex w-[calc(100%-32px)] max-h-[calc(100dvh-64px)] flex-col rounded-lg border border-border-subtle bg-surface-base text-text-main shadow-md highlight-top focus:outline-hidden',
             sizeClass
           ]"
         >

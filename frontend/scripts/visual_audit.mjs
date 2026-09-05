@@ -125,14 +125,17 @@ export const RULES = [
   {
     id: 'no-glassmorphism',
     name: '磨砂玻璃与背景模糊',
-    description: '禁止使用 backdrop-blur 或 backdrop-filter 玻璃拟态，采用不透明阶梯表面',
+    description: '禁止在非共享遮罩使用 backdrop-blur 或 backdrop-filter；仅 AppModal 与 BaseDrawer 共享 overlay backdrop 允许受控 4px blur',
     severity: 'error',
     check(content, file) {
       const violations = []
       const lines = content.split('\n')
-      const twBlurRegex = /\bbackdrop-blur(?:-[a-z0-9]+)?\b/g
+      const normPath = (file || '').replace(/\\/g, '/')
+      const isGovernedOverlay = normPath.endsWith('components/ui/AppModal.vue') || normPath.endsWith('components/ui/BaseDrawer.vue')
+
+      const twBlurRegex = /\bbackdrop-blur(?:-\[[^\]]+\]|-[a-z0-9]+)?(?=[\s"'>]|$)/g
       const twFilterRegex = /\bbackdrop-filter\b/g
-      const cssBackdropRegex = /\bbackdrop-filter\s*:/g
+      const cssBackdropRegex = /(?:-webkit-)?backdrop-filter\s*:\s*([^;]+)/g
 
       lines.forEach((line, idx) => {
         const lineNum = idx + 1
@@ -142,34 +145,55 @@ export const RULES = [
         let match
         twBlurRegex.lastIndex = 0
         while ((match = twBlurRegex.exec(line)) !== null) {
+          const blurClass = match[0]
+          // Governed overlay allows backdrop-blur-[4px]
+          if (isGovernedOverlay && (blurClass === 'backdrop-blur-[4px]' || blurClass === 'backdrop-blur-xs')) {
+            continue
+          }
           violations.push({
             ruleId: 'no-glassmorphism',
             line: lineNum,
             column: match.index + 1,
-            match: match[0],
-            message: `发现玻璃拟态背景模糊 '${match[0]}'，必须使用不透明表面`
+            match: blurClass,
+            message: isGovernedOverlay
+              ? `共享遮罩仅允许受控 4px 模糊 (backdrop-blur-[4px])，发现 '${blurClass}'`
+              : `发现玻璃拟态背景模糊 '${blurClass}'，页面与业务组件必须使用不透明阶梯表面`
           })
         }
 
-        twFilterRegex.lastIndex = 0
-        while ((match = twFilterRegex.exec(line)) !== null) {
-          violations.push({
-            ruleId: 'no-glassmorphism',
-            line: lineNum,
-            column: match.index + 1,
-            match: match[0],
-            message: `发现 backdrop-filter 类 '${match[0]}'`
-          })
+        if (!/(?:-webkit-)?backdrop-filter\s*:/i.test(line)) {
+          twFilterRegex.lastIndex = 0
+          while ((match = twFilterRegex.exec(line)) !== null) {
+            if (isGovernedOverlay && line.includes('backdrop-blur-[4px]')) {
+              continue
+            }
+            violations.push({
+              ruleId: 'no-glassmorphism',
+              line: lineNum,
+              column: match.index + 1,
+              match: match[0],
+              message: `发现 backdrop-filter 类 '${match[0]}'`
+            })
+          }
         }
 
         cssBackdropRegex.lastIndex = 0
         while ((match = cssBackdropRegex.exec(line)) !== null) {
+          const filterVal = (match[1] || '').trim().toLowerCase()
+          if (filterVal.startsWith('none')) {
+            continue
+          }
+          if (isGovernedOverlay && (filterVal === 'blur(4px)' || filterVal.startsWith('blur(4px)'))) {
+            continue
+          }
           violations.push({
             ruleId: 'no-glassmorphism',
             line: lineNum,
             column: match.index + 1,
             match: match[0],
-            message: `发现 backdrop-filter CSS 属性 '${match[0]}'`
+            message: isGovernedOverlay
+              ? `共享遮罩仅允许受控 blur(4px)，发现 '${match[0]}'`
+              : `发现 backdrop-filter CSS 属性 '${match[0]}'`
           })
         }
       })

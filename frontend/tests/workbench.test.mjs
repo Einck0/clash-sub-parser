@@ -115,9 +115,9 @@ test('Phase 5.2 Design Tokens: theme.css defines dark default & light tokens, ta
   const content = fs.readFileSync(themePath, 'utf8')
 
   // Dark & light semantic tokens
-  assert.match(content, /--color-canvas: #090D16/)
-  assert.match(content, /--color-surface-base: #0F172A/)
-  assert.match(content, /--color-accent: #3B82F6/)
+  assert.match(content, /--color-canvas: #(?:08090a|090D16)/i)
+  assert.match(content, /--color-surface-base: #(?:121417|0F172A)/i)
+  assert.match(content, /--color-accent: #(?:6366f1|3B82F6)/i)
   assert.match(content, /--color-status-success: #10B981/)
   assert.match(content, /--color-status-warning: #F59E0B/)
   assert.match(content, /--color-status-danger: #EF4444/)

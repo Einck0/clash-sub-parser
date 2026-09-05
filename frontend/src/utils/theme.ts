@@ -9,7 +9,7 @@ const theme = ref<Theme>(loadTheme())
 function loadTheme(): Theme {
   const saved = localStorage.getItem(THEME_KEY)
   if (saved === 'light' || saved === 'dark') return saved
-  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+  return 'dark'
 }
 
 function applyTheme(t: Theme) {

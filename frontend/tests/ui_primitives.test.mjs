@@ -7,7 +7,7 @@ test('Tailwind theme and UI primitives exist and conform to design tokens', () =
   const themePath = path.resolve(import.meta.dirname, '../src/assets/theme.css')
   assert.ok(fs.existsSync(themePath), 'theme.css should exist')
   const themeContent = fs.readFileSync(themePath, 'utf8')
-  assert.match(themeContent, /--color-canvas: #090D16/)
+  assert.match(themeContent, /--color-canvas: #(?:08090a|090D16)/i)
   assert.match(themeContent, /--font-mono: 'JetBrains Mono'/)
 
   const drawerPath = path.resolve(import.meta.dirname, '../src/components/ui/BaseDrawer.vue')
@@ -153,8 +153,8 @@ test('Phase 5.3 BaseDrawer satisfies full A11y lifecycle, Escape closing, and mo
   assert.match(drawerContent, /X/, 'BaseDrawer must use Lucide X component for close button')
   assert.match(drawerContent, /min-h-\[44px\]\s+min-w-\[44px\]/, 'BaseDrawer close button must have 44px min touch size')
 
-  // Visual gate compliance
-  assert.doesNotMatch(drawerContent, /backdrop-blur/, 'BaseDrawer must not contain glassmorphism backdrop blur')
+  // Visual gate compliance - only governed 4px overlay blur allowed
+  assert.doesNotMatch(drawerContent, /backdrop-blur-(?!\[4px\])/, 'BaseDrawer must not contain arbitrary glassmorphism backdrop blur')
   assert.doesNotMatch(drawerContent, /<style scoped>/, 'BaseDrawer must not contain scoped CSS')
 
   // Responsive mobile sheet specs

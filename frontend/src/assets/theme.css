@@ -1,27 +1,29 @@
 @import "tailwindcss";
 
 @theme {
-  --color-canvas: #090D16;
-  --color-surface: #0F172A;
-  --color-surface-base: #0F172A;
-  --color-surface-hover: #1E293B;
-  --color-surface-active: #334155;
-  --color-raised: #1E293B;
-  --color-raised-hover: #334155;
-  --color-inset: #050811;
-  --color-border: #1E293B;
-  --color-border-subtle: rgba(255, 255, 255, 0.08);
-  --color-border-active: rgba(59, 130, 246, 0.35);
-  --color-border-strong: #334155;
-  --color-text-main: #F8FAFC;
-  --color-text-muted: #94A3B8;
-  --color-text-sub: #64748B;
-  --color-muted: #94A3B8;
-  --color-accent: #3B82F6;
-  --color-accent-hover: #2563EB;
-  --color-accent-subtle: rgba(59, 130, 246, 0.12);
-  --color-brand-primary: #3B82F6;
-  --color-brand-accent: #06B6D4;
+  --color-canvas: #08090a;
+  --color-surface: #0d0f12;
+  --color-surface-panel: #0d0f12;
+  --color-surface-base: #121417;
+  --color-surface-card: #121417;
+  --color-surface-hover: #181b20;
+  --color-surface-active: #22262d;
+  --color-raised: #181b20;
+  --color-raised-hover: #22262d;
+  --color-inset: #090b0d;
+  --color-border: rgba(255, 255, 255, 0.1);
+  --color-border-subtle: rgba(255, 255, 255, 0.07);
+  --color-border-active: rgba(99, 102, 241, 0.4);
+  --color-border-strong: rgba(255, 255, 255, 0.14);
+  --color-text-main: #f1f3f5;
+  --color-text-muted: #8b919a;
+  --color-text-sub: #626870;
+  --color-muted: #8b919a;
+  --color-accent: #6366f1;
+  --color-accent-hover: #4f46e5;
+  --color-accent-subtle: rgba(99, 102, 241, 0.15);
+  --color-brand-primary: #6366f1;
+  --color-brand-accent: #818cf8;
   --color-status-success: #10B981;
   --color-status-warning: #F59E0B;
   --color-status-danger: #EF4444;
@@ -83,32 +85,35 @@ body {
 :root,
 [data-theme="dark"] {
   color-scheme: dark;
-  --color-canvas: #090D16;
-  --color-surface: #0F172A;
-  --color-surface-base: #0F172A;
-  --color-surface-hover: #1E293B;
-  --color-surface-active: #334155;
-  --color-raised: #1E293B;
-  --color-raised-hover: #334155;
-  --color-inset: #050811;
-  --color-border: #1E293B;
-  --color-border-subtle: rgba(255, 255, 255, 0.08);
-  --color-border-active: rgba(59, 130, 246, 0.35);
-  --color-border-strong: #334155;
-  --color-text-main: #F8FAFC;
-  --color-text-muted: #94A3B8;
-  --color-text-sub: #64748B;
-  --color-muted: #94A3B8;
-  --color-accent: #3B82F6;
-  --color-accent-hover: #2563EB;
-  --color-accent-subtle: rgba(59, 130, 246, 0.12);
-  --color-brand-primary: #3B82F6;
-  --color-brand-accent: #06B6D4;
+  --color-canvas: #08090a;
+  --color-surface: #0d0f12;
+  --color-surface-panel: #0d0f12;
+  --color-surface-base: #121417;
+  --color-surface-card: #121417;
+  --color-surface-hover: #181b20;
+  --color-surface-active: #22262d;
+  --color-raised: #181b20;
+  --color-raised-hover: #22262d;
+  --color-inset: #090b0d;
+  --color-border: rgba(255, 255, 255, 0.1);
+  --color-border-subtle: rgba(255, 255, 255, 0.07);
+  --color-border-active: rgba(99, 102, 241, 0.4);
+  --color-border-strong: rgba(255, 255, 255, 0.14);
+  --color-text-main: #f1f3f5;
+  --color-text-muted: #8b919a;
+  --color-text-sub: #626870;
+  --color-muted: #8b919a;
+  --color-accent: #6366f1;
+  --color-accent-hover: #4f46e5;
+  --color-accent-subtle: rgba(99, 102, 241, 0.15);
+  --color-brand-primary: #6366f1;
+  --color-brand-accent: #818cf8;
   --color-status-success: #10B981;
   --color-status-warning: #F59E0B;
   --color-status-danger: #EF4444;
   --color-status-info: #06B6D4;
-  --focus-ring: rgba(59, 130, 246, 0.5);
+  --focus-ring: rgba(99, 102, 241, 0.5);
+  --highlight-top: inset 0 1px 0 rgba(255, 255, 255, 0.055);
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.25);
@@ -160,7 +165,7 @@ body {
   --color-border-subtle: rgba(0, 0, 0, 0.08);
   --color-border-active: rgba(37, 99, 235, 0.4);
   --color-border-strong: #CBD5E1;
-  --color-text-main: #0F172A;
+  --color-text-main: #111827;
   --color-text-muted: #475569;
   --color-text-sub: #64748B;
   --color-muted: #475569;
@@ -314,6 +319,20 @@ body {
   }
 }
 
+/* Controlled Highlight & Elevation utilities */
+.highlight-top {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.055);
+}
+
+.surface-panel {
+  background-color: var(--color-surface-panel, #0d0f12);
+}
+
+.surface-card {
+  background-color: var(--color-surface-card, #121417);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.055);
+}
+
 /* Global prefers-reduced-motion adherence */
 @media (prefers-reduced-motion: reduce) {
   .drawer-slide-right,
@@ -335,5 +354,7 @@ body {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
   }
 }

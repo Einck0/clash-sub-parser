@@ -27,7 +27,54 @@ type ConfirmState = {
   _resolve: ((result: boolean) => void) | null
 }
 
+export type NodeSummaryStatus = 'idle' | 'loading' | 'ready' | 'error'
+
+export interface NodeSummary {
+  status: NodeSummaryStatus
+  total: number
+  probed: number
+}
+
 export const useAppStore = defineStore('app', () => {
+  // --- Node summary lifecycle ---
+  const nodeSummary = reactive<NodeSummary>({
+    status: 'idle',
+    total: 0,
+    probed: 0,
+  })
+
+  function setNodeSummary(summary: Partial<NodeSummary>) {
+    Object.assign(nodeSummary, summary)
+  }
+
+  async function refreshNodeSummary() {
+    nodeSummary.status = 'loading'
+    try {
+      const { getNodeLedger, getProbeResults } = await import('../api')
+      const [ledgerRes, probeRes] = await Promise.all([
+        getNodeLedger(),
+        getProbeResults().catch(() => ({ data: {} })),
+      ])
+      const nodes = Array.isArray(ledgerRes?.data) ? ledgerRes.data : []
+      const rawProbeData = probeRes?.data?.results || probeRes?.data || {}
+      const probeMap = typeof rawProbeData === 'object' && rawProbeData !== null ? rawProbeData : {}
+
+      let probed = 0
+      for (const node of nodes) {
+        const p = probeMap[node.name] || (node.node_key ? probeMap[node.node_key] : null)
+        if (p?.status === 'ok' || p?.probe_status === 'success') {
+          probed++
+        }
+      }
+
+      nodeSummary.status = 'ready'
+      nodeSummary.total = nodes.length
+      nodeSummary.probed = probed
+    } catch {
+      nodeSummary.status = 'error'
+    }
+  }
+
   // --- Toast system ---
   const toasts = ref<Toast[]>([])
   let toastId = 0
@@ -99,6 +146,10 @@ export const useAppStore = defineStore('app', () => {
   }
 
   return {
+    // Node Summary
+    nodeSummary,
+    setNodeSummary,
+    refreshNodeSummary,
     // Toast
     toasts,
     toast,

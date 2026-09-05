@@ -1,5 +1,5 @@
 <template>
-  <section class="page chain-page p-2 space-y-6">
+  <section class="page chain-page p-2 space-y-6 min-w-0 max-w-full overflow-x-hidden">
     <!-- Top Header -->
     <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pb-4 border-b border-border-subtle">
       <div>
@@ -42,7 +42,7 @@
     </UiState>
 
     <!-- Industrial MetricCards Grid -->
-    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4 font-mono">
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-4 font-mono">
       <MetricCard
         label="TOTAL BINDINGS"
         :value="bindings.length"
@@ -101,7 +101,7 @@
               v-for="opt in targetTypeOptions"
               :key="opt.value"
               type="button"
-              class="min-h-[36px] rounded-md text-xs font-medium transition-colors cursor-pointer"
+              class="min-h-[44px] rounded-md text-xs font-medium transition-colors cursor-pointer"
               :class="form.target_type === opt.value ? 'bg-accent text-white font-semibold' : 'text-text-muted hover:text-text-main'"
               @click="setTargetType(opt.value)"
             >
@@ -115,12 +115,12 @@
             <input
               v-model="nodeSearch"
               placeholder="过滤节点名…"
-              class="w-full min-h-[36px] rounded-md border border-border-subtle bg-surface-base px-3 py-1.5 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono"
+              class="w-full min-h-[44px] rounded-md border border-border-subtle bg-surface-base px-3 py-2 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono"
             />
             <select
               v-model="form.target_name"
               aria-label="选择最终节点"
-              class="w-full min-h-[38px] rounded-md border border-border-subtle bg-surface-base px-3 py-1.5 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono"
+              class="w-full min-h-[44px] rounded-md border border-border-subtle bg-surface-base px-3 py-2 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono"
             >
               <option value="">选择最终节点</option>
               <option v-for="n in filteredTargetNodes" :key="n.name" :value="n.name">
@@ -134,12 +134,12 @@
             <input
               v-model="groupSearch"
               placeholder="过滤策略组…"
-              class="w-full min-h-[36px] rounded-md border border-border-subtle bg-surface-base px-3 py-1.5 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono"
+              class="w-full min-h-[44px] rounded-md border border-border-subtle bg-surface-base px-3 py-2 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono"
             />
             <select
               v-model.number="form.target_id"
               aria-label="选择目标策略组"
-              class="w-full min-h-[38px] rounded-md border border-border-subtle bg-surface-base px-3 py-1.5 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono"
+              class="w-full min-h-[44px] rounded-md border border-border-subtle bg-surface-base px-3 py-2 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono"
             >
               <option :value="null">选择策略组</option>
               <option v-for="g in filteredGroups" :key="g.id" :value="g.id">{{ g.name }}</option>
@@ -151,7 +151,7 @@
             <select
               v-model.number="form.target_id"
               aria-label="选择目标订阅"
-              class="w-full min-h-[38px] rounded-md border border-border-subtle bg-surface-base px-3 py-1.5 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono"
+              class="w-full min-h-[44px] rounded-md border border-border-subtle bg-surface-base px-3 py-2 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono"
             >
               <option :value="null">选择订阅</option>
               <option v-for="s in subscriptions" :key="s.id" :value="s.id">{{ s.name }}</option>
@@ -170,7 +170,7 @@
           <div class="grid grid-cols-2 gap-1 rounded-lg bg-surface-base p-1 border border-border-subtle">
             <button
               type="button"
-              class="min-h-[36px] rounded-md text-xs font-medium transition-colors cursor-pointer"
+              class="min-h-[44px] rounded-md text-xs font-medium transition-colors cursor-pointer"
               :class="form.dialer_type === 'node_group' ? 'bg-accent text-white font-semibold' : 'text-text-muted hover:text-text-main'"
               @click="form.dialer_type = 'node_group'; form.dialer_ref = ''"
             >
@@ -178,7 +178,7 @@
             </button>
             <button
               type="button"
-              class="min-h-[36px] rounded-md text-xs font-medium transition-colors cursor-pointer"
+              class="min-h-[44px] rounded-md text-xs font-medium transition-colors cursor-pointer"
               :class="form.dialer_type === 'node' ? 'bg-accent text-white font-semibold' : 'text-text-muted hover:text-text-main'"
               @click="form.dialer_type = 'node'; form.dialer_ref = ''"
             >
@@ -191,12 +191,12 @@
             <input
               v-model="dialerNodeSearch"
               placeholder="过滤跳板节点…"
-              class="w-full min-h-[36px] rounded-md border border-border-subtle bg-surface-base px-3 py-1.5 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono"
+              class="w-full min-h-[44px] rounded-md border border-border-subtle bg-surface-base px-3 py-2 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono"
             />
             <select
               v-model="form.dialer_ref"
               aria-label="选择跳板节点"
-              class="w-full min-h-[38px] rounded-md border border-border-subtle bg-surface-base px-3 py-1.5 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono"
+              class="w-full min-h-[44px] rounded-md border border-border-subtle bg-surface-base px-3 py-2 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono"
             >
               <option value="">选择节点</option>
               <option v-for="n in filteredDialerNodes" :key="'d-' + n.name" :value="n.name">
@@ -210,12 +210,12 @@
             <input
               v-model="dialerGroupSearch"
               placeholder="过滤跳板组…"
-              class="w-full min-h-[36px] rounded-md border border-border-subtle bg-surface-base px-3 py-1.5 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono"
+              class="w-full min-h-[44px] rounded-md border border-border-subtle bg-surface-base px-3 py-2 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono"
             />
             <select
               v-model="form.dialer_ref"
               aria-label="选择跳板策略组"
-              class="w-full min-h-[38px] rounded-md border border-border-subtle bg-surface-base px-3 py-1.5 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono"
+              class="w-full min-h-[44px] rounded-md border border-border-subtle bg-surface-base px-3 py-2 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono"
             >
               <option value="">选择策略组</option>
               <option v-for="g in filteredDialerGroups" :key="'dg-' + g.id" :value="g.name">
@@ -229,7 +229,7 @@
             <input
               v-model="form.note"
               placeholder="如：HK落地配日本前置…"
-              class="w-full min-h-[36px] rounded-md border border-border-subtle bg-surface-base px-3 py-1.5 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono"
+              class="w-full min-h-[44px] rounded-md border border-border-subtle bg-surface-base px-3 py-2 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono"
             />
           </div>
         </div>

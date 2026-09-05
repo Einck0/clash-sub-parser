@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
+import re
 import time
 from typing import Any
 
@@ -10,6 +12,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.node_probe_result import NodeProbeResult
+from app.schemas.probe import ResolvedProbeConfig
+from app.services.probe.models import ALLOWED_EVIDENCE_KEYS
 from app.services.probe.providers import (
     check_download_speed,
     check_geo_identity,
@@ -19,6 +23,95 @@ from app.services.probe.providers import (
 from app.services.probe.runner import spawn_node_runner
 
 logger = logging.getLogger(__name__)
+
+FORBIDDEN_SECRET_KEYS = {
+    "cookie",
+    "cookies",
+    "authorization",
+    "proxy-authorization",
+    "proxy_authorization",
+    "token",
+    "access_token",
+    "refresh_token",
+    "secret",
+    "password",
+    "proxy_password",
+    "raw_body",
+    "body",
+    "response_body",
+    "request_body",
+}
+
+_URL_CRED_REGEX = re.compile(r"https?://([^:]+):([^@]+)@", re.IGNORECASE)
+_BEARER_REGEX = re.compile(r"Bearer\s+[a-zA-Z0-9_\-\.]{10,}", re.IGNORECASE)
+
+
+def _sanitize_string(s: str) -> str:
+    s = _URL_CRED_REGEX.sub(r"http://[REDACTED]@", s)
+    s = _BEARER_REGEX.sub(r"Bearer [REDACTED]", s)
+    return s
+
+
+def sanitize_probe_evidence(data: Any) -> Any:
+    """Recursively scrub forbidden secret keys, credentials, and non-allowlisted evidence keys."""
+    if isinstance(data, dict):
+        cleaned: dict[str, Any] = {}
+        for k, v in data.items():
+            k_str = str(k)
+            k_lower = k_str.lower().strip()
+            if k_lower in FORBIDDEN_SECRET_KEYS:
+                continue
+
+            if k_lower == "evidence" and isinstance(v, dict):
+                ev_clean = {
+                    ev_k: (_sanitize_string(ev_v) if isinstance(ev_v, str) else ev_v)
+                    for ev_k, ev_v in v.items()
+                    if ev_k in ALLOWED_EVIDENCE_KEYS
+                }
+                if "signals" in ev_clean and isinstance(ev_clean["signals"], list):
+                    ev_clean["signals"] = [
+                        _sanitize_string(sig) if isinstance(sig, str) else sig
+                        for sig in ev_clean["signals"]
+                    ]
+                cleaned[k_str] = ev_clean
+            elif isinstance(v, str):
+                cleaned[k_str] = _sanitize_string(v)
+            elif isinstance(v, (dict, list)):
+                cleaned[k_str] = sanitize_probe_evidence(v)
+            else:
+                cleaned[k_str] = v
+        return cleaned
+    elif isinstance(data, list):
+        return [
+            _sanitize_string(item) if isinstance(item, str) else sanitize_probe_evidence(item)
+            for item in data
+        ]
+    elif isinstance(data, str):
+        return _sanitize_string(data)
+    return data
+
+
+def merge_probe_media(
+    existing_media: dict[str, Any] | None,
+    new_media: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Perform structural additive merge of probe media JSON payloads.
+
+    Retains existing platform observations and legacy simple keys while atomically
+    updating probed platforms with sanitized evidence-grade results.
+    """
+    merged: dict[str, Any] = copy.deepcopy(existing_media or {})
+    if not new_media:
+        return merged
+
+    for plat_key, new_val in new_media.items():
+        if isinstance(new_val, dict):
+            sanitized_val = sanitize_probe_evidence(new_val)
+            merged[plat_key] = sanitized_val
+        else:
+            merged[plat_key] = new_val
+
+    return merged
 
 # 内存快速缓存
 _PROBE_CACHE: dict[str, dict[str, Any]] = {}
@@ -92,7 +185,12 @@ async def save_probe_results_batch_to_db(db: AsyncSession, results: list[dict[st
         country = result.get("country")
         asn = result.get("asn")
         organization = result.get("organization")
-        media = result.get("media") or {}
+        media = copy.deepcopy(result.get("media") or {})
+        if result.get("identity_evidence") and "_identity" not in media:
+            media["_identity"] = {
+                "confidence": result.get("identity_confidence") or "verified",
+                "identity_evidence": result["identity_evidence"],
+            }
         error = result.get("error")
         checked_at = result.get("checked_at") or int(time.time())
 
@@ -106,8 +204,8 @@ async def save_probe_results_batch_to_db(db: AsyncSession, results: list[dict[st
             existing.country = country
             existing.asn = asn
             existing.organization = organization
-            existing.media = media
-            existing.error = error
+            existing.media = merge_probe_media(existing.media, media)
+            existing.error = _sanitize_string(error) if isinstance(error, str) else error
             existing.checked_at = checked_at
             db.add(existing)
         else:
@@ -124,8 +222,8 @@ async def save_probe_results_batch_to_db(db: AsyncSession, results: list[dict[st
                 country=country,
                 asn=asn,
                 organization=organization,
-                media=media,
-                error=error,
+                media=merge_probe_media(None, media),
+                error=_sanitize_string(error) if isinstance(error, str) else error,
                 checked_at=checked_at,
             )
             db.add(new_row)
@@ -148,6 +246,7 @@ async def get_all_db_probe_results(db: AsyncSession) -> dict[str, dict[str, Any]
     items = res.scalars().all()
     results_map: dict[str, dict[str, Any]] = {}
     for item in items:
+        media_val = item.media or {}
         data = {
             "node_key": item.node_key,
             "name": item.name,
@@ -161,10 +260,16 @@ async def get_all_db_probe_results(db: AsyncSession) -> dict[str, dict[str, Any]
             "country": item.country,
             "asn": item.asn,
             "organization": item.organization,
-            "media": item.media or {},
+            "media": media_val,
             "error": item.error,
             "checked_at": item.checked_at,
         }
+        if "_identity" in media_val and isinstance(media_val["_identity"], dict):
+            ident = media_val["_identity"]
+            if "identity_evidence" in ident:
+                data["identity_evidence"] = ident["identity_evidence"]
+            if "confidence" in ident:
+                data["identity_confidence"] = ident["confidence"]
         results_map[item.node_key] = data
         if item.name:
             results_map[item.name] = data
@@ -448,6 +553,7 @@ async def hydrate_nodes_batch(
 async def probe_single_node(
     node: dict[str, Any],
     *,
+    resolved_config: ResolvedProbeConfig | None = None,
     probe_enabled: bool = True,
     speedtest_enabled: bool = False,
     media_check_enabled: bool = True,
@@ -460,6 +566,20 @@ async def probe_single_node(
     db: AsyncSession | None = None,
 ) -> dict[str, Any]:
     """对单个节点执行完整能力探测"""
+    if resolved_config is None:
+        node_budget_s = (probe_timeout_ms / 1000.0) if (probe_timeout_ms and probe_timeout_ms > 0) else None
+        resolved_config = ResolvedProbeConfig(
+            probe_enabled=probe_enabled,
+            speedtest_enabled=speedtest_enabled,
+            speedtest_url=speedtest_url,
+            speedtest_max_bytes=speedtest_max_bytes,
+            speedtest_timeout_s=speedtest_timeout_s,
+            media_check_enabled=media_check_enabled,
+            media_platforms=tuple(media_platforms if media_platforms is not None else ["youtube", "netflix", "disney", "chatgpt", "bilibili", "meta_ai", "gemini"]),
+            service_timeout_s=2.0,
+            node_timeout_s=node_budget_s,
+        )
+
     if is_node_credential_missing(node):
         hydrated_nodes = await hydrate_nodes_batch([node], db=db)
         if hydrated_nodes:
@@ -469,7 +589,7 @@ async def probe_single_node(
         cached = get_cached_result(node)
         if cached:
             # 如果请求要求测速但缓存没有测速数据，则继续执行
-            if not (speedtest_enabled and cached.get("speed_mbps") is None):
+            if not (resolved_config.speedtest_enabled and cached.get("speed_mbps") is None):
                 return cached
 
     name = str(node.get("name") or "").strip()
@@ -495,62 +615,99 @@ async def probe_single_node(
         "checked_at": int(time.time()),
     }
 
-    if not probe_enabled:
+    if not resolved_config.probe_enabled:
         base_result["status"] = "skipped"
         return base_result
 
-    timeout_s = max(probe_timeout_ms / 1000.0, 1.0)
-    platforms = media_platforms if media_platforms is not None else ["youtube", "netflix", "disney", "chatgpt", "bilibili", "meta_ai", "gemini"]
+    async def _execute_probe() -> None:
+        try:
+            import inspect
+            runner_kwargs: dict[str, Any] = {}
+            try:
+                sig = inspect.signature(spawn_node_runner)
+                if "service_timeout_s" in sig.parameters or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
+                    runner_kwargs["service_timeout_s"] = resolved_config.service_timeout_s
+            except (ValueError, TypeError):
+                runner_kwargs["service_timeout_s"] = resolved_config.service_timeout_s
+
+            async with spawn_node_runner(node, **runner_kwargs) as runner_ctx:
+                proxy_url = runner_ctx["proxy_url"]
+
+                # 1. 基础握手与 204 往返延迟（独立 service_timeout_s）
+                transport = await check_transport(proxy_url, timeout_s=resolved_config.service_timeout_s)
+                base_result["latency_ms"] = transport.get("latency_ms")
+                if transport.get("status") == "timeout":
+                    base_result["status"] = "timeout"
+                    base_result["error"] = transport.get("error") or "Transport timed out"
+                    return
+                elif transport.get("status") != "ok":
+                    base_result["status"] = "fail"
+                    base_result["error"] = transport.get("error") or "Transport 204 failed"
+                    return
+
+                base_result["status"] = "ok"
+
+                # 2. 真实出口 IP 与地理位置共识（独立 service_timeout_s）
+                geo = await check_geo_identity(proxy_url, timeout_s=resolved_config.service_timeout_s)
+                base_result["ip"] = geo.get("ip") or None
+                base_result["country"] = geo.get("country") or None
+                base_result["asn"] = geo.get("asn")
+                base_result["organization"] = geo.get("organization") or None
+                if geo.get("identity_evidence"):
+                    base_result["identity_evidence"] = geo.get("identity_evidence")
+                if geo.get("confidence"):
+                    base_result["identity_confidence"] = geo.get("confidence")
+
+                # 3. 流媒体与 AI 解锁探测（各平台独立 service_timeout_s）
+                if resolved_config.media_check_enabled and resolved_config.media_platforms:
+                    media_res = await check_media_unlock(
+                        proxy_url,
+                        platforms=list(resolved_config.media_platforms),
+                        timeout_s=resolved_config.service_timeout_s,
+                    )
+                    base_result["media"] = media_res
+
+                # 4. 可选带宽测速（受 min(speedtest_timeout_s, service_timeout_s) 约束）
+                if resolved_config.speedtest_enabled:
+                    effective_speed_timeout = min(
+                        resolved_config.speedtest_timeout_s,
+                        resolved_config.service_timeout_s,
+                    )
+                    speed_res = await check_download_speed(
+                        proxy_url,
+                        speedtest_url=resolved_config.speedtest_url,
+                        max_bytes=resolved_config.speedtest_max_bytes,
+                        timeout_s=effective_speed_timeout,
+                    )
+                    base_result["speed_mbps"] = speed_res.get("speed_mbps")
+
+        except (asyncio.TimeoutError, TimeoutError) as exc:
+            base_result["status"] = "timeout"
+            base_result["error"] = str(exc)
+        except Exception as exc:
+            base_result["status"] = "fail"
+            base_result["error"] = str(exc)
 
     try:
-        async with spawn_node_runner(node) as runner_ctx:
-            proxy_url = runner_ctx["proxy_url"]
-
-            # 1. 基础握手与 204 往返延迟
-            transport = await check_transport(proxy_url, timeout_s=timeout_s)
-            base_result["latency_ms"] = transport.get("latency_ms")
-            if transport.get("status") != "ok":
-                base_result["status"] = "fail"
-                base_result["error"] = transport.get("error") or "Transport 204 failed"
-                set_cached_result(node, base_result)
-                if db:
-                    await save_probe_result_to_db(db, base_result)
-                return base_result
-
-            base_result["status"] = "ok"
-
-            # 2. 真实出口 IP 与地理位置共识
-            geo = await check_geo_identity(proxy_url, timeout_s=timeout_s)
-            base_result["ip"] = geo.get("ip")
-            base_result["country"] = geo.get("country")
-            base_result["asn"] = geo.get("asn")
-            base_result["organization"] = geo.get("organization")
-
-            # 3. 流媒体与 AI 解锁探测
-            if media_check_enabled and platforms:
-                media_res = await check_media_unlock(proxy_url, platforms=platforms, timeout_s=timeout_s)
-                base_result["media"] = media_res
-
-            # 4. 可选带宽测速
-            if speedtest_enabled:
-                speed_res = await check_download_speed(
-                    proxy_url,
-                    speedtest_url=speedtest_url,
-                    max_bytes=speedtest_max_bytes,
-                    timeout_s=speedtest_timeout_s,
-                )
-                base_result["speed_mbps"] = speed_res.get("speed_mbps")
-
-            set_cached_result(node, base_result)
-            if db:
-                await save_probe_result_to_db(db, base_result)
-
-    except Exception as exc:
-        base_result["status"] = "fail"
-        base_result["error"] = str(exc)
+        if resolved_config.node_timeout_s is not None and resolved_config.node_timeout_s > 0:
+            try:
+                await asyncio.wait_for(_execute_probe(), timeout=resolved_config.node_timeout_s)
+            except (asyncio.TimeoutError, TimeoutError):
+                base_result["status"] = "timeout"
+                base_result["error"] = f"Node probe exceeded total budget of {int(resolved_config.node_timeout_s * 1000)}ms"
+        else:
+            await _execute_probe()
+    except asyncio.CancelledError:
+        base_result["status"] = "timeout"
+        base_result["error"] = "Node probe cancelled"
+        raise
+    finally:
         set_cached_result(node, base_result)
         if db:
-            await save_probe_result_to_db(db, base_result)
+            try:
+                await save_probe_result_to_db(db, base_result)
+            except Exception as exc:
+                logger.debug("Failed saving single probe result to db: %s", exc)
 
     return base_result
 
@@ -558,6 +715,7 @@ async def probe_single_node(
 async def probe_batch_nodes(
     nodes: list[dict[str, Any]],
     *,
+    resolved_config: ResolvedProbeConfig | None = None,
     probe_enabled: bool = True,
     speedtest_enabled: bool = False,
     media_check_enabled: bool = True,
@@ -566,28 +724,36 @@ async def probe_batch_nodes(
     speedtest_max_bytes: int = 5242880,
     speedtest_timeout_s: float = 5.0,
     probe_timeout_ms: int = 4000,
-    concurrency: int = 5,
+    concurrency: int = 10,
     use_cache: bool = True,
     db: AsyncSession | None = None,
 ) -> dict[str, Any]:
     """批量并发探测节点能力"""
+    if resolved_config is None:
+        node_budget_s = (probe_timeout_ms / 1000.0) if (probe_timeout_ms and probe_timeout_ms > 0) else None
+        resolved_config = ResolvedProbeConfig(
+            probe_enabled=probe_enabled,
+            speedtest_enabled=speedtest_enabled,
+            speedtest_url=speedtest_url,
+            speedtest_max_bytes=speedtest_max_bytes,
+            speedtest_timeout_s=speedtest_timeout_s,
+            media_check_enabled=media_check_enabled,
+            media_platforms=tuple(media_platforms if media_platforms is not None else ["youtube", "netflix", "disney", "chatgpt", "bilibili", "meta_ai", "gemini"]),
+            concurrency=concurrency,
+            service_timeout_s=2.0,
+            node_timeout_s=node_budget_s,
+        )
+
     # 批量凭据回填：在并发执行前单次完成数据库检索，避免循环 N+1 查询与并发 session 争用
     hydrated_nodes = await hydrate_nodes_batch(nodes, db=db)
 
-    sem = asyncio.Semaphore(max(1, min(concurrency, 20)))
+    sem = asyncio.Semaphore(max(1, min(resolved_config.concurrency, 20)))
 
     async def _worker(n: dict[str, Any]) -> dict[str, Any]:
         async with sem:
             return await probe_single_node(
                 n,
-                probe_enabled=probe_enabled,
-                speedtest_enabled=speedtest_enabled,
-                media_check_enabled=media_check_enabled,
-                media_platforms=media_platforms,
-                speedtest_url=speedtest_url,
-                speedtest_max_bytes=speedtest_max_bytes,
-                speedtest_timeout_s=speedtest_timeout_s,
-                probe_timeout_ms=probe_timeout_ms,
+                resolved_config=resolved_config,
                 use_cache=use_cache,
                 db=None,
             )

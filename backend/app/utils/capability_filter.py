@@ -4,6 +4,81 @@ from __future__ import annotations
 from typing import Any
 
 
+DISQUALIFIED_VERDICTS = {
+    "originals_only",
+    "unsupported_region",
+    "blocked",
+    "challenge",
+    "rate_limited",
+    "unknown",
+}
+
+DISQUALIFIED_STATUSES = {
+    "partial",
+    "originals",
+    "originals_only",
+    "restricted",
+    "ip_blocked",
+    "challenged",
+    "rate_limited",
+    "timeout",
+    "transport_error",
+    "inconclusive",
+    "disabled",
+    "fail",
+    "failed",
+    "blocked",
+    "unknown",
+}
+
+DISQUALIFIED_CONFIDENCES = {
+    "conflicted",
+    "unavailable",
+}
+
+
+def is_media_full_unlocked(item: Any) -> bool:
+    """Check whether a platform probe outcome satisfies the full-unlock requirement.
+
+    Conforms to OpenSpec evidence-grade capability probing:
+    - Verified full or generic available passes.
+    - Historical accepted full and generic ok values pass until superseded.
+    - Netflix partial/originals_only, restricted, ip_blocked, challenged,
+      rate_limited, timeout, transport_error, and inconclusive never pass.
+    - Conflicted or unavailable confidence never passes.
+    """
+    if not isinstance(item, dict):
+        return bool(item is True)
+
+    status = str(item.get("status") or "").lower().strip()
+    verdict = str(item.get("verdict") or "").lower().strip()
+    confidence = str(item.get("confidence") or "").lower().strip()
+    unlocked = item.get("unlocked")
+
+    # 1. Explicit disqualifications
+    if verdict in DISQUALIFIED_VERDICTS:
+        return False
+    if status in DISQUALIFIED_STATUSES:
+        return False
+    if confidence in DISQUALIFIED_CONFIDENCES:
+        return False
+
+    # 2. Evidence-grade verified checks
+    if status == "verified" and verdict in ("full", "available"):
+        return True
+
+    # 3. Legacy compatibility (status == "full" or status == "ok")
+    if status in ("full", "ok"):
+        return True
+
+    # 4. Fallback unlocked flag when no negative verdict/status
+    if unlocked is True:
+        if verdict in ("full", "available") or not verdict:
+            return True
+
+    return False
+
+
 def is_node_capability_qualified(
     probe_data: dict[str, Any] | None,
     *,
@@ -33,12 +108,9 @@ def is_node_capability_qualified(
         for platform in required_media or []:
             plat_key = platform.lower().strip()
             item = media_map.get(plat_key)
-            if not item:
-                return False
-            # 判断解锁状态：status 为 ok、full、originals 或 unlocked 为 True
-            status = item.get("status")
-            unlocked = item.get("unlocked")
-            if status not in ("ok", "full", "originals") and not unlocked:
+            if item is None and platform in media_map:
+                item = media_map.get(platform)
+            if not is_media_full_unlocked(item):
                 return False
 
     return True

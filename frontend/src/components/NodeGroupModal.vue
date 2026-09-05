@@ -1,28 +1,37 @@
 <template>
-  <div class="modal-backdrop" @click.self="close">
-    <div class="modal node-group-modal" role="dialog" aria-modal="true">
-      <div class="form-header">
-        <div>
-          <p class="eyebrow">{{ group?.id ? 'Edit Group' : 'New Group' }}</p>
-          <h3 style="margin:0">{{ group?.id ? '编辑节点组' : '新增节点组' }}</h3>
-          <p class="section-hint">
-            正则是<strong>虚拟筛选</strong>：加入条目列表后会按最终节点名动态匹配，不会冻结成静态节点。
-          </p>
-        </div>
-        <button @click="close">关闭</button>
+  <AppModal
+    :model-value="true"
+    size="lg"
+    :title="group?.id ? '编辑节点组' : '新增节点组'"
+    @update:model-value="(val) => !val && close()"
+    @close="close"
+  >
+    <div class="flex flex-col gap-4">
+      <div class="text-xs text-text-muted">
+        正则是<strong>虚拟筛选</strong>：加入条目列表后会按最终节点名动态匹配，不会冻结成静态节点。
       </div>
 
-      <div v-if="error" class="form-alert form-alert-error">{{ error }}</div>
-      <div v-if="sourcesLoading" class="section-hint" style="margin:6px 0">正在加载可选节点与策略组…</div>
+      <div v-if="error" class="rounded-md border border-status-danger/40 bg-status-danger/10 p-3 text-xs text-status-danger">
+        {{ error }}
+      </div>
+      <div v-if="sourcesLoading" class="text-xs text-text-muted">正在加载可选节点与策略组…</div>
 
-      <div class="grid-2" style="margin-top:10px">
-        <label>
-          <div class="muted">名称</div>
-          <input v-model="form.name" placeholder="例如：自动选择" />
+      <!-- Basic Info (Name, Type) -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <label class="flex flex-col gap-1 text-xs text-text-muted">
+          <span>名称</span>
+          <input
+            v-model="form.name"
+            placeholder="例如：自动选择"
+            class="rounded-md border border-border-subtle bg-surface-hover px-3 py-2 text-xs text-text-main focus:border-accent focus:outline-hidden"
+          />
         </label>
-        <label>
-          <div class="muted">类型</div>
-          <select v-model="form.group_type">
+        <label class="flex flex-col gap-1 text-xs text-text-muted">
+          <span>类型</span>
+          <select
+            v-model="form.group_type"
+            class="rounded-md border border-border-subtle bg-surface-hover px-3 py-2 text-xs text-text-main focus:border-accent focus:outline-hidden"
+          >
             <option value="select">select</option>
             <option value="url-test">url-test</option>
             <option value="fallback">fallback</option>
@@ -31,151 +40,270 @@
         </label>
       </div>
 
-      <div class="selector-section">
-        <div class="row space">
-          <div>
-            <strong>兜底节点</strong>
-            <p class="section-hint">仅当策略组最终没有任何节点时才追加 PASS；有节点时不会加。</p>
-          </div>
+      <!-- Fallback PASS section -->
+      <div class="rounded-lg border border-border-subtle bg-surface-base p-3 flex flex-col gap-2">
+        <div class="flex items-center justify-between">
+          <strong class="text-xs text-text-main">兜底节点</strong>
+          <span class="text-[11px] text-text-muted">仅当策略组最终没有任何节点时才追加 PASS；有节点时不会加。</span>
         </div>
-        <label class="settings-toggle" style="margin-top:8px">
-          <input type="checkbox" v-model="form.add_fallback" />
-          <span>
-            <strong>空组时追加 PASS</strong>
-            <small>默认关闭</small>
-          </span>
+        <label class="flex items-center gap-2 cursor-pointer text-xs text-text-main pt-1">
+          <input type="checkbox" v-model="form.add_fallback" class="accent-accent cursor-pointer" />
+          <span>空组时追加 PASS <span class="text-text-muted text-[11px]">(默认关闭)</span></span>
         </label>
       </div>
 
+      <!-- URL-Test / Fallback / Load-Balance config -->
       <div
-        class="selector-section"
         v-if="['url-test', 'fallback', 'load-balance'].includes(form.group_type)"
+        class="rounded-lg border border-border-subtle bg-surface-base p-3 flex flex-col gap-3"
       >
-        <div class="row space">
-          <div>
-            <strong>{{ form.group_type }} 参数</strong>
-            <p class="section-hint">导出到 Clash 时写入对应字段；空值用默认。</p>
-          </div>
+        <div>
+          <strong class="text-xs text-text-main">{{ form.group_type }} 参数</strong>
+          <p class="text-[11px] text-text-muted m-0">导出到 Clash 时写入对应字段；空值用默认。</p>
         </div>
-        <div class="grid-2" style="margin-top:8px;gap:8px">
-          <label>
-            <div class="muted">url</div>
-            <input v-model="urlTestUrl" placeholder="https://www.gstatic.com/generate_204" />
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <label class="flex flex-col gap-1 text-xs text-text-muted">
+            <span>url</span>
+            <input
+              v-model="urlTestUrl"
+              placeholder="https://www.gstatic.com/generate_204"
+              class="rounded-md border border-border-subtle bg-surface-hover px-3 py-2 text-xs text-text-main focus:border-accent focus:outline-hidden"
+            />
           </label>
-          <label>
-            <div class="muted">interval (秒)</div>
-            <input v-model.number="urlTestInterval" type="number" min="1" placeholder="300" />
+          <label class="flex flex-col gap-1 text-xs text-text-muted">
+            <span>interval (秒)</span>
+            <input
+              v-model.number="urlTestInterval"
+              type="number"
+              min="1"
+              placeholder="300"
+              class="rounded-md border border-border-subtle bg-surface-hover px-3 py-2 text-xs text-text-main focus:border-accent focus:outline-hidden"
+            />
           </label>
-          <label>
-            <div class="muted">tolerance (ms)</div>
-            <input v-model.number="urlTestTolerance" type="number" min="0" placeholder="50" />
+          <label class="flex flex-col gap-1 text-xs text-text-muted">
+            <span>tolerance (ms)</span>
+            <input
+              v-model.number="urlTestTolerance"
+              type="number"
+              min="0"
+              placeholder="50"
+              class="rounded-md border border-border-subtle bg-surface-hover px-3 py-2 text-xs text-text-main focus:border-accent focus:outline-hidden"
+            />
           </label>
         </div>
       </div>
 
-      <div class="selector-section">
-        <div class="row space">
-          <div>
-            <strong>添加来源条目</strong>
-            <p class="section-hint">
-              可添加：静态节点、节点组引用、节点组节点、正则筛选（虚拟）。
-              正则只记录规则本身，输出时动态展开匹配到的节点。
-            </p>
-          </div>
+      <!-- Add Source Entries -->
+      <div class="rounded-lg border border-border-subtle bg-surface-base p-3 flex flex-col gap-3">
+        <div>
+          <strong class="text-xs text-text-main">添加来源条目</strong>
+          <p class="text-[11px] text-text-muted m-0">
+            可添加：静态节点、节点组引用、节点组节点、正则筛选（虚拟）。
+            正则只记录规则本身，输出时动态展开匹配到的节点。
+          </p>
         </div>
 
-        <div class="node-search-row" style="margin-top:8px">
-          <select v-model="selectedNodeName">
+        <!-- Static Node and Builtin row -->
+        <div class="flex flex-wrap gap-2 items-center">
+          <select
+            v-model="selectedNodeName"
+            class="flex-1 min-w-[180px] rounded-md border border-border-subtle bg-surface-hover px-3 py-2 text-xs text-text-main focus:border-accent focus:outline-hidden"
+          >
             <option value="">选择节点</option>
             <option v-for="name in selectableNodeNames" :key="name" :value="name">{{ name }}</option>
           </select>
-          <button @click="addNode" :disabled="!selectedNodeName">加入静态节点</button>
-        </div>
-        <div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:8px">
-          <button @click="addBuiltin('DIRECT')">DIRECT</button>
-          <button @click="addBuiltin('PASS')">PASS</button>
-          <button @click="addBuiltin('REJECT')">REJECT</button>
+          <button
+            type="button"
+            class="px-3 py-2 rounded-md border border-border-subtle text-xs text-text-main hover:bg-surface-hover disabled:opacity-50 cursor-pointer"
+            :disabled="!selectedNodeName"
+            @click="addNode"
+          >
+            加入静态节点
+          </button>
+          <button
+            type="button"
+            class="px-2.5 py-2 rounded-md border border-border-subtle text-xs text-text-muted hover:text-text-main hover:bg-surface-hover cursor-pointer font-mono"
+            @click="addBuiltin('DIRECT')"
+          >
+            DIRECT
+          </button>
+          <button
+            type="button"
+            class="px-2.5 py-2 rounded-md border border-border-subtle text-xs text-text-muted hover:text-text-main hover:bg-surface-hover cursor-pointer font-mono"
+            @click="addBuiltin('PASS')"
+          >
+            PASS
+          </button>
+          <button
+            type="button"
+            class="px-2.5 py-2 rounded-md border border-border-subtle text-xs text-text-muted hover:text-text-main hover:bg-surface-hover cursor-pointer font-mono"
+            @click="addBuiltin('REJECT')"
+          >
+            REJECT
+          </button>
         </div>
 
-        <div class="node-search-row">
-          <select v-model.number="selectedGroupId">
+        <!-- Node Group reference row -->
+        <div class="flex flex-wrap gap-2 items-center">
+          <select
+            v-model.number="selectedGroupId"
+            class="flex-1 min-w-[180px] rounded-md border border-border-subtle bg-surface-hover px-3 py-2 text-xs text-text-main focus:border-accent focus:outline-hidden"
+          >
             <option :value="null">选择节点组</option>
             <option v-for="g in selectableGroups" :key="g.id" :value="g.id">{{ g.name }}</option>
           </select>
-          <div class="row" style="gap:6px">
-            <button @click="addGroupRef" :disabled="!selectedGroupId">添加组引用</button>
-            <button @click="addGroupNodes" :disabled="!selectedGroupId">添加组节点</button>
-            <button @click="addExcludeGroupNodes" :disabled="!selectedGroupId">减去组节点</button>
+          <div class="flex gap-1.5 flex-wrap">
+            <button
+              type="button"
+              class="px-3 py-2 rounded-md border border-border-subtle text-xs text-text-main hover:bg-surface-hover disabled:opacity-50 cursor-pointer"
+              :disabled="!selectedGroupId"
+              @click="addGroupRef"
+            >
+              添加组引用
+            </button>
+            <button
+              type="button"
+              class="px-3 py-2 rounded-md border border-border-subtle text-xs text-text-main hover:bg-surface-hover disabled:opacity-50 cursor-pointer"
+              :disabled="!selectedGroupId"
+              @click="addGroupNodes"
+            >
+              添加组节点
+            </button>
+            <button
+              type="button"
+              class="px-3 py-2 rounded-md border border-border-subtle text-xs text-text-main hover:bg-surface-hover disabled:opacity-50 cursor-pointer"
+              :disabled="!selectedGroupId"
+              @click="addExcludeGroupNodes"
+            >
+              减去组节点
+            </button>
           </div>
         </div>
 
-        <div style="margin-top:10px">
-          <div class="muted">添加正则筛选（虚拟）</div>
-          <div class="grid-2" style="margin-top:6px;gap:8px">
-            <input v-model="regexDraftName" placeholder="名称（可选，空则自动 正则1/正则2）" />
+        <!-- Regex filter draft row -->
+        <div class="flex flex-col gap-2 pt-2 border-t border-border-subtle/50">
+          <div class="text-xs text-text-muted">添加正则筛选（虚拟）</div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <input
+              v-model="regexDraftName"
+              placeholder="名称（可选，空则自动 正则1/正则2）"
+              class="rounded-md border border-border-subtle bg-surface-hover px-3 py-2 text-xs text-text-main focus:border-accent focus:outline-hidden"
+            />
             <input
               v-model="regexDraft"
               placeholder="正则，例如：香港  或  ^(?!.*(官网|套餐)).*$"
+              class="rounded-md border border-border-subtle bg-surface-hover px-3 py-2 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono"
               @keyup.enter="addRegexEntry"
             />
           </div>
-          <div class="node-search-row" style="margin-top:6px">
-            <button @click="addRegexEntry" :disabled="!regexDraft.trim() || !!regexDraftError">加入正则</button>
-          </div>
-          <div v-if="regexDraftError" class="form-alert form-alert-error" style="margin-top:6px">
-            {{ regexDraftError }}
-          </div>
-          <div class="row" style="margin-top:6px;gap:8px;flex-wrap:wrap">
-            <button @click="previewDraftRegex" :disabled="!regexDraft.trim() || !!regexDraftError">
+          <div class="flex items-center gap-2 flex-wrap">
+            <button
+              type="button"
+              class="px-3 py-1.5 rounded-md bg-accent text-xs font-medium text-white hover:bg-accent-hover disabled:opacity-50 cursor-pointer"
+              :disabled="!regexDraft.trim() || !!regexDraftError"
+              @click="addRegexEntry"
+            >
+              加入正则
+            </button>
+            <button
+              type="button"
+              class="px-3 py-1.5 rounded-md border border-border-subtle text-xs text-text-main hover:bg-surface-hover disabled:opacity-50 cursor-pointer"
+              :disabled="!regexDraft.trim() || !!regexDraftError"
+              @click="previewDraftRegex"
+            >
               预览该正则匹配
             </button>
-            <span class="muted">匹配 {{ draftMatches.length }}</span>
+            <span class="text-xs text-text-muted">匹配 {{ draftMatches.length }}</span>
           </div>
-          <div v-if="draftMatches.length" class="mono final-preview" style="margin-top:8px">
+          <div v-if="regexDraftError" class="text-xs text-status-danger">
+            {{ regexDraftError }}
+          </div>
+          <div
+            v-if="draftMatches.length"
+            class="max-h-24 overflow-y-auto rounded bg-surface-hover p-2 font-mono text-[11px] text-text-muted leading-relaxed"
+          >
             {{ draftMatches.slice(0, 60).join(' | ') }}
-            <span v-if="draftMatches.length > 60"> … +{{ draftMatches.length - 60 }}</span>
+            <span v-if="draftMatches.length > 60" class="text-accent font-medium"> … +{{ draftMatches.length - 60 }}</span>
           </div>
         </div>
       </div>
 
-      <div class="selector-section">
-        <div class="row space">
-          <div>
-            <strong class="inline-flex items-center gap-1.5">
+      <!-- In-Modal Regex Preview Panel (Governed, accessible in-modal region) -->
+      <div
+        v-if="showRegexPreview"
+        class="rounded-lg border border-accent/40 bg-surface-base p-4 shadow-sm"
+        role="region"
+        aria-label="正则预览"
+      >
+        <div class="flex items-center justify-between pb-2 border-b border-border-subtle">
+          <div class="flex items-center gap-2">
+            <strong class="text-xs font-semibold text-text-main">正则预览</strong>
+            <span class="rounded bg-accent/15 px-2 py-0.5 text-[11px] font-medium text-accent">
+              {{ previewMatches.length }} 个匹配
+            </span>
+          </div>
+          <button
+            type="button"
+            class="text-xs text-text-muted hover:text-text-main cursor-pointer"
+            @click="closeRegexPreview"
+          >
+            关闭预览
+          </button>
+        </div>
+        <div
+          v-if="previewMatches.length"
+          class="mt-2 max-h-40 overflow-y-auto font-mono text-xs text-text-muted leading-relaxed"
+        >
+          {{ previewMatches.slice(0, 120).join(' | ') }}
+          <span v-if="previewMatches.length > 120" class="text-accent font-medium"> … +{{ previewMatches.length - 120 }}</span>
+        </div>
+        <div v-else class="mt-2 text-xs text-text-muted">没有匹配节点</div>
+      </div>
+
+      <!-- Probe & Media Filtering -->
+      <div class="rounded-lg border border-border-subtle bg-surface-base p-3 flex flex-col gap-3">
+        <div>
+          <strong class="inline-flex items-center gap-1.5 text-xs text-text-main">
             <Zap class="h-4 w-4 text-accent" aria-hidden="true" />
             <span>节点质检与流媒体或 AI 过滤（可选）</span>
           </strong>
-            <p class="section-hint">
-              满足条件的节点才会进入此策略组。测速门槛和流媒体解锁要求需在节点探测中测得有效结果。
-            </p>
-          </div>
+          <p class="text-[11px] text-text-muted m-0">
+            满足条件的节点才会进入此策略组。测速门槛和流媒体解锁要求需在节点探测中测得有效结果。
+          </p>
         </div>
-        <div class="grid-2" style="margin-top:8px;gap:8px">
-          <label>
-            <div class="muted">测速最低门槛 (Mbps)</div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <label class="flex flex-col gap-1 text-xs text-text-muted">
+            <span>测速最低门槛 (Mbps)</span>
             <input
               type="number"
               min="0"
               step="0.5"
               v-model.number="form.filter_min_speed_mbps"
               placeholder="例如 5.0，留空或 0 为不限制"
+              class="rounded-md border border-border-subtle bg-surface-hover px-3 py-2 text-xs text-text-main focus:border-accent focus:outline-hidden"
             />
           </label>
         </div>
-        <div style="margin-top:10px">
-          <div class="muted" style="margin-bottom:6px">必须解锁的流媒体 / AI 平台（多选）</div>
-          <div class="platform-chips" style="display: flex; gap: 8px; flex-wrap: wrap;">
+
+        <div class="flex flex-col gap-2">
+          <div class="text-xs text-text-muted">必须解锁的流媒体 / AI 平台（多选）</div>
+          <div class="flex flex-wrap gap-2">
             <label
               v-for="p in availablePlatforms"
               :key="p.id"
-              class="platform-chip min-h-[36px] px-3 py-1.5 rounded-md border border-border-subtle text-xs flex items-center gap-1.5 cursor-pointer select-none transition-colors"
-              :class="{ active: (form.filter_media_unlock || []).includes(p.id) }"
+              :class="[
+                'min-h-[36px] px-3 py-1.5 rounded-md border text-xs flex items-center gap-1.5 cursor-pointer select-none transition-colors',
+                (form.filter_media_unlock || []).includes(p.id)
+                  ? 'border-accent bg-accent/15 text-accent font-medium'
+                  : 'border-border-subtle bg-surface-hover text-text-muted hover:text-text-main'
+              ]"
             >
               <input
                 type="checkbox"
                 :value="p.id"
                 v-model="form.filter_media_unlock"
-                style="display: none;"
+                class="sr-only"
               />
               <span>{{ p.name }}</span>
             </label>
@@ -183,32 +311,35 @@
         </div>
       </div>
 
-      <div class="selector-section">
-        <div class="row space">
+      <!-- Sorted Entry List -->
+      <div class="rounded-lg border border-border-subtle bg-surface-base p-3 flex flex-col gap-2">
+        <div class="flex items-center justify-between">
           <div>
-            <strong>统一排序条目</strong>
-            <p class="section-hint">拖拽/上下调整顺序。正则项显示为虚拟筛选，不是冻结节点列表。</p>
+            <strong class="text-xs text-text-main">统一排序条目</strong>
+            <p class="text-[11px] text-text-muted m-0">拖拽/上下调整顺序。正则项显示为虚拟筛选，不是冻结节点列表。</p>
           </div>
-          <span class="muted">{{ form.include_entries.length }} 项</span>
+          <span class="text-xs text-text-muted">{{ form.include_entries.length }} 项</span>
         </div>
-        <div v-if="!form.include_entries.length" class="empty-mini">还没有条目。可先加正则筛选或静态节点。</div>
-        <div v-else class="node-select-list">
+
+        <div v-if="!form.include_entries.length" class="text-xs text-text-muted py-3 text-center">
+          还没有条目。可先加正则筛选或静态节点。
+        </div>
+        <div v-else class="flex flex-col gap-1.5 max-h-72 overflow-y-auto">
           <div
             v-for="(entry, idx) in form.include_entries"
             :key="`${entry.type}-${entry.value}-${idx}`"
-            class="node-select-row sortable-card"
-            :class="{
-              'regex-entry-row': entry.type === 'regex',
-              dragging: draggingIndex === idx,
-              'is-editing': entry.type === 'regex' && editingRegexIndex === idx,
-            }"
+            :class="[
+              'flex items-center gap-2 rounded-md border p-2 text-xs transition-colors',
+              entry.type === 'regex' ? 'border-accent/30 bg-accent/5' : 'border-border-subtle bg-surface-base',
+              draggingIndex === idx ? 'opacity-50' : ''
+            ]"
             @dragover.prevent
             @drop="onDrop(idx)"
           >
             <button
               v-if="!(entry.type === 'regex' && editingRegexIndex === idx)"
               type="button"
-              class="drag-handle inline-flex items-center justify-center p-1 text-text-muted hover:text-text-main"
+              class="drag-handle inline-flex items-center justify-center p-1 text-text-muted hover:text-text-main cursor-grab"
               title="拖拽排序"
               data-drag-handle
               draggable="true"
@@ -216,98 +347,170 @@
               @dragend="draggingIndex = -1"
               @click.stop
               @mousedown.stop
-            ><GripVertical class="h-4 w-4" aria-hidden="true" /></button>
-            <div class="node-select-name mono" style="width:100%">
+            >
+              <GripVertical class="h-4 w-4" aria-hidden="true" />
+            </button>
+
+            <div class="flex-1 font-mono text-xs overflow-hidden">
               <template v-if="entry.type === 'regex' && editingRegexIndex === idx">
-                <div class="regex-edit-box no-drag">
+                <div class="flex flex-col gap-2 p-1">
                   <input
                     v-model="editingRegexName"
-                    class="regex-edit-input"
+                    class="rounded-md border border-border-subtle bg-surface-hover px-2.5 py-1.5 text-xs text-text-main focus:border-accent focus:outline-hidden"
                     placeholder="名称（可选）"
-                    style="margin-bottom:6px"
                   />
                   <input
                     v-model="editingRegexValue"
-                    class="regex-edit-input"
+                    class="rounded-md border border-border-subtle bg-surface-hover px-2.5 py-1.5 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono"
                     placeholder="输入正则，例如 香港 或 ^(?!.*(官网|套餐)).*$"
                     @keyup.enter="saveRegexEdit(idx)"
                     @keyup.escape="cancelRegexEdit"
                   />
-                  <div class="row" style="gap:6px;margin-top:6px;flex-wrap:wrap">
-                    <button class="primary" @click="saveRegexEdit(idx)" :disabled="!!editingRegexError || !editingRegexValue.trim()">
+                  <div class="flex items-center gap-2 flex-wrap pt-1">
+                    <button
+                      type="button"
+                      class="px-2.5 py-1 rounded bg-accent text-xs font-medium text-white hover:bg-accent-hover disabled:opacity-50 cursor-pointer"
+                      :disabled="!!editingRegexError || !editingRegexValue.trim()"
+                      @click="saveRegexEdit(idx)"
+                    >
                       确定
                     </button>
-                    <button @click="previewEditingRegex" :disabled="!!editingRegexError || !editingRegexValue.trim()">预览</button>
-                    <button @click="cancelRegexEdit">取消</button>
-                    <span v-if="editingRegexError" class="form-alert form-alert-error" style="margin:0;padding:4px 8px">
+                    <button
+                      type="button"
+                      class="px-2.5 py-1 rounded border border-border-subtle text-xs text-text-main hover:bg-surface-hover disabled:opacity-50 cursor-pointer"
+                      :disabled="!!editingRegexError || !editingRegexValue.trim()"
+                      @click="previewEditingRegex"
+                    >
+                      预览
+                    </button>
+                    <button
+                      type="button"
+                      class="px-2.5 py-1 rounded border border-border-subtle text-xs text-text-muted hover:text-text-main cursor-pointer"
+                      @click="cancelRegexEdit"
+                    >
+                      取消
+                    </button>
+                    <span v-if="editingRegexError" class="text-xs text-status-danger">
                       {{ editingRegexError }}
                     </span>
-                    <span v-else class="muted">动态匹配 {{ countRegexMatches(editingRegexValue) }} 个</span>
+                    <span v-else class="text-xs text-text-muted">动态匹配 {{ countRegexMatches(editingRegexValue) }} 个</span>
                   </div>
                 </div>
               </template>
               <template v-else>
-                <strong>{{ idx + 1 }}. {{ formatEntryTitle(entry, idx) }}</strong>
-                <span>
-                  {{ typeLabel(entry.type) }}
-                  <template v-if="entry.type === 'regex'">
-                    · {{ truncateText(String(entry.value || ''), 48) }}
-                    · 匹配 {{ countRegexMatches(entry.value) }} 个
-                  </template>
-                </span>
+                <div class="flex items-center gap-1.5 overflow-hidden text-ellipsis whitespace-nowrap">
+                  <strong class="text-text-main">{{ idx + 1 }}. {{ formatEntryTitle(entry, idx) }}</strong>
+                  <span class="text-text-muted text-[11px]">
+                    {{ typeLabel(entry.type) }}
+                    <template v-if="entry.type === 'regex'">
+                      · {{ truncateText(String(entry.value || ''), 48) }}
+                      · 匹配 {{ countRegexMatches(entry.value) }} 个
+                    </template>
+                  </span>
+                </div>
               </template>
             </div>
-            <div class="node-select-actions" v-if="!(entry.type === 'regex' && editingRegexIndex === idx)">
-              <button v-if="entry.type === 'regex'" class="primary" @click="startRegexEdit(idx)">编辑</button>
-              <button v-if="entry.type === 'regex'" @click="previewEntryRegex(entry.value)">预览</button>
-              <button :disabled="idx === 0" @click="moveEntry(idx, -1)">上</button>
-              <button :disabled="idx === form.include_entries.length - 1" @click="moveEntry(idx, 1)">下</button>
-              <button class="danger" @click="removeEntry(idx)">删</button>
+
+            <div v-if="!(entry.type === 'regex' && editingRegexIndex === idx)" class="flex items-center gap-1 shrink-0">
+              <button
+                v-if="entry.type === 'regex'"
+                type="button"
+                class="px-2 py-1 rounded border border-accent/40 text-xs text-accent hover:bg-accent/10 cursor-pointer"
+                @click="startRegexEdit(idx)"
+              >
+                编辑
+              </button>
+              <button
+                v-if="entry.type === 'regex'"
+                type="button"
+                class="px-2 py-1 rounded border border-border-subtle text-xs text-text-muted hover:text-text-main hover:bg-surface-hover cursor-pointer"
+                @click="previewEntryRegex(entry.value)"
+              >
+                预览
+              </button>
+              <button
+                type="button"
+                class="px-2 py-1 rounded border border-border-subtle text-xs text-text-muted hover:text-text-main disabled:opacity-40 cursor-pointer"
+                :disabled="idx === 0"
+                @click="moveEntry(idx, -1)"
+              >
+                上
+              </button>
+              <button
+                type="button"
+                class="px-2 py-1 rounded border border-border-subtle text-xs text-text-muted hover:text-text-main disabled:opacity-40 cursor-pointer"
+                :disabled="idx === form.include_entries.length - 1"
+                @click="moveEntry(idx, 1)"
+              >
+                下
+              </button>
+              <button
+                type="button"
+                class="px-2 py-1 rounded border border-status-danger/40 text-xs text-status-danger hover:bg-status-danger/10 cursor-pointer"
+                @click="removeEntry(idx)"
+              >
+                删
+              </button>
             </div>
           </div>
         </div>
-
       </div>
 
-      <div class="selector-section" v-if="showRaw">
-        <div class="row space">
-          <strong>Raw JSON</strong>
-          <button @click="syncFromRaw">应用 Raw</button>
+      <!-- Raw JSON section -->
+      <div v-if="showRaw" class="rounded-lg border border-border-subtle bg-surface-base p-3 flex flex-col gap-2">
+        <div class="flex items-center justify-between">
+          <strong class="text-xs text-text-main">Raw JSON</strong>
+          <button
+            type="button"
+            class="px-3 py-1 rounded-md border border-border-subtle text-xs text-text-main hover:bg-surface-hover cursor-pointer"
+            @click="syncFromRaw"
+          >
+            应用 Raw
+          </button>
         </div>
-        <textarea v-model="rawJson"></textarea>
-      </div>
-
-      <div class="form-footer sticky-save-bar">
-        <button class="primary" @click="save" :disabled="saving || !form.name.trim()">
-          {{ saving ? '保存中...' : '保存' }}
-        </button>
-        <button @click="showRaw = !showRaw">{{ showRaw ? '隐藏 Raw' : '显示 Raw' }}</button>
-        <button @click="close">取消</button>
-      </div>
-
-      <div v-if="showRegexPreview" class="regex-preview-layer" @click.self="closeRegexPreview">
-        <div class="regex-preview-card" role="dialog" aria-modal="true" aria-label="正则预览">
-          <div class="row space">
-            <div>
-              <strong>正则预览</strong>
-              <div class="muted">{{ previewMatches.length }} 个匹配</div>
-            </div>
-            <button @click="closeRegexPreview">关闭</button>
-          </div>
-          <div v-if="previewMatches.length" class="mono final-preview">
-            {{ previewMatches.slice(0, 120).join(' | ') }}
-            <span v-if="previewMatches.length > 120"> … +{{ previewMatches.length - 120 }}</span>
-          </div>
-          <div v-else class="empty-mini">没有匹配节点</div>
-        </div>
+        <textarea
+          v-model="rawJson"
+          rows="8"
+          class="w-full rounded-md border border-border-subtle bg-surface-hover p-2 font-mono text-xs text-text-main focus:border-accent focus:outline-hidden resize-y"
+        ></textarea>
       </div>
     </div>
-  </div>
+
+    <template #footer>
+      <div class="flex items-center justify-between">
+        <button
+          type="button"
+          class="px-3 py-1.5 rounded-md border border-border-subtle text-xs text-text-muted hover:text-text-main cursor-pointer"
+          @click="showRaw = !showRaw"
+        >
+          {{ showRaw ? '隐藏 Raw' : '显示 Raw' }}
+        </button>
+        <div class="flex gap-2">
+          <button
+            type="button"
+            class="px-3 py-1.5 rounded-md border border-border-subtle text-xs text-text-muted hover:text-text-main cursor-pointer"
+            @click="close"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            class="px-4 py-1.5 rounded-md bg-accent text-xs font-medium text-white hover:bg-accent-hover disabled:opacity-50 transition-colors cursor-pointer"
+            :disabled="saving || !form.name.trim()"
+            @click="save"
+          >
+            {{ saving ? '保存中...' : '保存' }}
+          </button>
+        </div>
+      </div>
+    </template>
+  </AppModal>
 </template>
 
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { Zap, GripVertical } from 'lucide-vue-next'
+import AppModal from './ui/AppModal.vue'
 import {
   createNodeGroup,
   getAllSubscriptionNodes,
@@ -693,9 +896,7 @@ function syncFromRaw() {
   }
 }
 
-
 function detectReferenceCycle(entries) {
-  // Client-side soft check. Backend still enforces the same graph.
   const selfId = form.value.id == null ? null : Number(form.value.id)
   const graph = new Map()
   for (const group of allGroups.value) {
@@ -716,7 +917,6 @@ function detectReferenceCycle(entries) {
     }
     graph.set(group.id, edges)
   }
-  // New group not yet in allGroups
   if (selfId == null) {
     const edges = []
     const seen = new Set()
@@ -735,7 +935,6 @@ function detectReferenceCycle(entries) {
         push(entry.value)
       }
     }
-    // use temporary id 0 for draft
     graph.set(0, edges)
   }
 
@@ -780,7 +979,6 @@ async function save() {
   }
 
   const entries = normalizeEntries(form.value.include_entries || [])
-  // Validate all regex entries before save.
   for (const [idx, entry] of entries.entries()) {
     if (entry.type !== 'regex') continue
     const err = validateRegex(String(entry.value || ''))
@@ -790,7 +988,6 @@ async function save() {
     }
   }
 
-  // Same graph check as backend: include edges + exclude edges.
   const cycleHint = detectReferenceCycle(entries)
   if (cycleHint) {
     error.value = cycleHint
@@ -810,7 +1007,6 @@ async function save() {
     name,
     group_type: form.value.group_type || 'select',
     sort_order: form.value.sort_order || 0,
-    // include_entries 为唯一数据源，后端自动推导正则与类型
     include_entries: entries,
     add_fallback: form.value.add_fallback === true,
     exclude_nodes: uniq(form.value.exclude_nodes || []),
@@ -829,7 +1025,6 @@ async function save() {
     } else {
       await createNodeGroup(payload)
     }
-    // 由父页面统一触发成功提示，避免重复弹窗通知
     emit('saved', { created: !form.value.id, name })
     emit('close')
   } catch (err) {
@@ -904,7 +1099,6 @@ function normalizeEntries(entries) {
 }
 
 function buildEntriesFallback(value) {
-  // Data already migrated to include_entries. Keep a tiny fallback for empty groups.
   const entries = []
   for (const name of value.include_nodes || []) entries.push({ type: 'node', value: name })
   for (const id of value.include_group_ids || []) entries.push({ type: 'group', value: id })
@@ -916,7 +1110,6 @@ function buildEntriesFallback(value) {
 function uniq(items) {
   return [...new Set(items)]
 }
-
 
 function uniqBy(items, getKey) {
   const seen = new Set()

@@ -1,5 +1,5 @@
 <template>
-  <section class="page subscriptions-page p-2 space-y-6">
+  <section class="page subscriptions-page p-2 space-y-6 min-w-0 max-w-full overflow-x-hidden">
     <!-- Top Header -->
     <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pb-4 border-b border-border-subtle">
       <div>
@@ -13,7 +13,7 @@
         <Button
           variant="primary"
           size="md"
-          class="flex-1 sm:flex-initial min-h-[44px]"
+          class="flex-1 sm:flex-initial min-h-[44px] justify-center"
           :icon="Plus"
           @click="openCreate"
         >
@@ -23,7 +23,7 @@
           data-testid="add-manual-node"
           variant="secondary"
           size="md"
-          class="flex-1 sm:flex-initial min-h-[44px]"
+          class="flex-1 sm:flex-initial min-h-[44px] justify-center whitespace-nowrap"
           :icon="Plus"
           @click="openManualNode"
         >
@@ -32,7 +32,7 @@
         <Button
           variant="secondary"
           size="md"
-          class="flex-1 sm:flex-initial min-h-[44px]"
+          class="flex-1 sm:flex-initial min-h-[44px] justify-center"
           :disabled="loading"
           :loading="loading"
           :icon="RefreshCw"
@@ -453,6 +453,7 @@
                 variant="danger"
                 size="md"
                 class="min-h-[44px] justify-center"
+                :class="sub.is_primary ? 'col-span-2 sm:col-span-1' : ''"
                 :icon="Trash2"
                 @click="remove(sub)"
               >

@@ -105,55 +105,16 @@
 
           <!-- 流媒体徽标 -->
           <template v-if="probeStatus(node).media || probeStatus(node).streaming_unlock">
-            <span
-              v-if="(probeStatus(node).media?.youtube || probeStatus(node).streaming_unlock?.youtube)?.status === 'ok' || (probeStatus(node).media?.youtube || probeStatus(node).streaming_unlock?.youtube)?.unlocked"
-              class="probe-tag tag-yt text-[10px] px-1.5 py-0.5 rounded font-bold bg-status-danger/15 text-status-danger border border-status-danger/30"
-              :title="`YouTube: ${(probeStatus(node).media?.youtube || probeStatus(node).streaming_unlock?.youtube)?.region || 'OK'}`"
-            >
-              YT:{{ (probeStatus(node).media?.youtube || probeStatus(node).streaming_unlock?.youtube)?.region || 'OK' }}
-            </span>
-            <span
-              v-if="(probeStatus(node).media?.netflix || probeStatus(node).streaming_unlock?.netflix)?.status === 'full' || (probeStatus(node).media?.netflix || probeStatus(node).streaming_unlock?.netflix)?.status === 'originals' || (probeStatus(node).media?.netflix || probeStatus(node).streaming_unlock?.netflix)?.unlocked"
-              class="probe-tag tag-nf text-[10px] px-1.5 py-0.5 rounded font-bold bg-status-danger/20 text-status-danger border border-status-danger/40"
-              :title="`Netflix: ${(probeStatus(node).media?.netflix || probeStatus(node).streaming_unlock?.netflix)?.label || (probeStatus(node).media?.netflix || probeStatus(node).streaming_unlock?.netflix)?.region || 'OK'}`"
-            >
-              NF:{{ (probeStatus(node).media?.netflix || probeStatus(node).streaming_unlock?.netflix)?.region || 'OK' }}
-            </span>
-            <span
-              v-if="(probeStatus(node).media?.chatgpt || probeStatus(node).streaming_unlock?.chatgpt)?.status === 'ok' || (probeStatus(node).media?.chatgpt || probeStatus(node).streaming_unlock?.chatgpt)?.unlocked"
-              class="probe-tag tag-gpt text-[10px] px-1.5 py-0.5 rounded font-bold bg-status-success/15 text-status-success border border-status-success/30"
-              title="ChatGPT 解锁正常"
-            >
-              GPT
-            </span>
-            <span
-              v-if="(probeStatus(node).media?.gemini || probeStatus(node).streaming_unlock?.gemini)?.status === 'ok' || (probeStatus(node).media?.gemini || probeStatus(node).streaming_unlock?.gemini)?.unlocked"
-              class="probe-tag tag-gemini text-[10px] px-1.5 py-0.5 rounded font-bold bg-accent/15 text-accent border border-accent/30"
-              title="Google Gemini 解锁正常"
-            >
-              Gemini
-            </span>
-            <span
-              v-if="(probeStatus(node).media?.disney || probeStatus(node).streaming_unlock?.disney)?.status === 'ok' || (probeStatus(node).media?.disney || probeStatus(node).streaming_unlock?.disney)?.unlocked"
-              class="probe-tag tag-disney text-[10px] px-1.5 py-0.5 rounded font-bold bg-status-info/15 text-status-info border border-status-info/30"
-              title="Disney+ 解锁正常"
-            >
-              Disney
-            </span>
-            <span
-              v-if="(probeStatus(node).media?.meta_ai || probeStatus(node).streaming_unlock?.meta_ai)?.status === 'ok' || (probeStatus(node).media?.meta_ai || probeStatus(node).streaming_unlock?.meta_ai)?.unlocked"
-              class="probe-tag tag-meta text-[10px] px-1.5 py-0.5 rounded font-bold bg-status-info/15 text-status-info border border-status-info/30"
-              title="Meta AI 解锁正常"
-            >
-              Meta
-            </span>
-            <span
-              v-if="(probeStatus(node).media?.bilibili || probeStatus(node).streaming_unlock?.bilibili)?.status === 'ok' || (probeStatus(node).media?.bilibili || probeStatus(node).streaming_unlock?.bilibili)?.unlocked"
-              class="probe-tag tag-bili text-[10px] px-1.5 py-0.5 rounded font-bold bg-status-warning/15 text-status-warning border border-status-warning/30"
-              title="Bilibili 港澳台解锁正常"
-            >
-              Bili
-            </span>
+            <template v-for="platform in mediaPlatformList" :key="platform.key">
+              <span
+                v-if="getPlatformPresentation(node, platform)"
+                class="probe-tag text-[10px] px-1.5 py-0.5 rounded font-bold font-mono inline-flex items-center gap-0.5"
+                :class="getPlatformPresentation(node, platform).badgeClass"
+                :title="getPlatformPresentation(node, platform).accessibleTitle"
+              >
+                {{ getPlatformPresentation(node, platform).shortBadgeText }}
+              </span>
+            </template>
           </template>
         </template>
 
@@ -190,6 +151,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { Zap, Gauge } from 'lucide-vue-next'
 import { getApiErrorMessage, getProbeResults, probeNodesFull, probeTcp } from '../api'
 import { getNodeFlag } from '../utils/format'
+import { MEDIA_PLATFORMS, getMediaSemanticPresentation } from '../views/nodeLedgerDomain'
 
 const props = defineProps({
   nodes: { type: Array, default: () => [] },
@@ -330,6 +292,21 @@ function saveRenames() {
 
 function probeKey(node) {
   return `${node.baseName || node.name || ''}|${node.server || ''}|${node.port || ''}`
+}
+
+const mediaPlatformList = MEDIA_PLATFORMS
+
+function getPlatformPresentation(node, platform) {
+  const probe = probeStatus(node)
+  if (!probe) return null
+  const mediaObj = probe.media || probe.streaming_unlock
+  if (!mediaObj || typeof mediaObj !== 'object') return null
+  const item = mediaObj[platform.key]
+  if (!item || typeof item !== 'object') return null
+  if (item.status === undefined && item.verdict === undefined && item.unlocked === undefined) {
+    return null
+  }
+  return getMediaSemanticPresentation(item, platform)
 }
 
 function probeStatus(node) {

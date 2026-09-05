@@ -77,6 +77,269 @@ export const MEDIA_PLATFORMS: MediaPlatformDef[] = [
   { key: 'bilibili', name: 'Bilibili', short: 'Bili', icon: '⚡' },
 ]
 
+export const DISQUALIFIED_VERDICTS = new Set([
+  'originals_only',
+  'unsupported_region',
+  'blocked',
+  'challenge',
+  'rate_limited',
+  'unknown',
+])
+
+export const DISQUALIFIED_STATUSES = new Set([
+  'partial',
+  'originals',
+  'originals_only',
+  'restricted',
+  'ip_blocked',
+  'challenged',
+  'rate_limited',
+  'timeout',
+  'transport_error',
+  'inconclusive',
+  'disabled',
+  'fail',
+  'failed',
+  'blocked',
+  'unknown',
+])
+
+export const DISQUALIFIED_CONFIDENCES = new Set([
+  'conflicted',
+  'unavailable',
+])
+
+/**
+ * Pure predicate determining whether a media probe outcome represents verified full unlock.
+ * Strictly disqualifies partial originals_only, restricted, ip_blocked, challenged,
+ * rate_limited, timeout, transport_error, and inconclusive.
+ * Retains legacy full/ok compatibility until superseded.
+ */
+export function isMediaFullUnlocked(item: any): boolean {
+  if (item === null || item === undefined) return false
+  if (typeof item !== 'object') return Boolean(item === true)
+
+  const status = String(item.status || '').toLowerCase().trim()
+  const verdict = String(item.verdict || '').toLowerCase().trim()
+  const confidence = String(item.confidence || '').toLowerCase().trim()
+  const unlocked = item.unlocked
+
+  // 1. Explicit disqualifications
+  if (verdict && DISQUALIFIED_VERDICTS.has(verdict)) {
+    return false
+  }
+  if (status && DISQUALIFIED_STATUSES.has(status)) {
+    return false
+  }
+  if (confidence && DISQUALIFIED_CONFIDENCES.has(confidence)) {
+    return false
+  }
+
+  // 2. Evidence-grade verified checks
+  if (status === 'verified' && (verdict === 'full' || verdict === 'available')) {
+    return true
+  }
+
+  // 3. Legacy compatibility (status == 'full' or status == 'ok')
+  if (status === 'full' || status === 'ok') {
+    return true
+  }
+
+  // 4. Fallback unlocked flag when no negative verdict/status
+  if (unlocked === true) {
+    if (verdict === 'full' || verdict === 'available' || !verdict) {
+      return true
+    }
+  }
+
+  return false
+}
+
+/**
+ * Sanitizes evidence and produces a concise summary without leaking
+ * secrets, cookies, auth tokens, passwords, proxy credentials, or raw bodies.
+ */
+export function sanitizeEvidenceSummary(evidence: any): string {
+  if (!evidence || typeof evidence !== 'object') return ''
+  const signals = Array.isArray(evidence.signals) ? evidence.signals : []
+  const safeSignals = signals.filter(
+    (s: any) =>
+      typeof s === 'string' &&
+      !/token|cookie|auth|credential|secret|password|bearer/i.test(s)
+  )
+
+  const parts: string[] = []
+  if (evidence.http_status != null) {
+    parts.push(`HTTP ${evidence.http_status}`)
+  }
+  if (evidence.redirect_class && evidence.redirect_class !== 'none') {
+    parts.push(`重定向: ${evidence.redirect_class}`)
+  }
+  if (safeSignals.length > 0) {
+    parts.push(`信号: ${safeSignals.join(', ')}`)
+  }
+  if (evidence.elapsed_ms != null && evidence.elapsed_ms > 0) {
+    parts.push(`${evidence.elapsed_ms}ms`)
+  }
+  if (evidence.error_code) {
+    parts.push(`错误码: ${evidence.error_code}`)
+  }
+  return parts.join(' | ')
+}
+
+export interface MediaSemanticPresentation {
+  isFullUnlocked: boolean
+  isPartial: boolean
+  isInconclusive: boolean
+  badgeVariant: 'success' | 'warning' | 'danger' | 'neutral' | 'info'
+  badgeClass: string
+  label: string
+  shortBadgeText: string
+  accessibleTitle: string
+  region?: string
+  verdict?: string
+  status?: string
+  confidence?: string
+  evidenceVersion?: string
+  checkedAt?: number
+  sanitizedSignalSummary?: string
+}
+
+/**
+ * Returns structured semantic presentation for UI badges and diagnostics drawers.
+ * Guaranteed:
+ * - Only verified full / available receives success badge;
+ * - partial originals_only displays '仅自制剧' with warning badge, NEVER success;
+ * - inconclusive displays '未定结论' with neutral badge;
+ * - restricted / challenged / rate_limited / timeout / transport_error never receive success badges;
+ * - historical full/originals/ok maintain backward-compatible labels.
+ */
+export function getMediaSemanticPresentation(
+  item: any,
+  platformDef?: { key: string; name: string; short: string }
+): MediaSemanticPresentation {
+  const pName = platformDef?.name || '未知平台'
+  const pShort = platformDef?.short || platformDef?.key?.toUpperCase() || 'PROBE'
+
+  if (!item || typeof item !== 'object') {
+    return {
+      isFullUnlocked: false,
+      isPartial: false,
+      isInconclusive: false,
+      badgeVariant: 'neutral',
+      badgeClass: 'bg-surface-active text-text-sub border border-border-subtle',
+      label: '未测',
+      shortBadgeText: `${pShort}:未测`,
+      accessibleTitle: `${pName}: 未检测`,
+    }
+  }
+
+  const fullUnlocked = isMediaFullUnlocked(item)
+  const status = String(item.status || '').toLowerCase().trim()
+  const verdict = String(item.verdict || '').toLowerCase().trim()
+  const region = item.region ? String(item.region).toUpperCase().trim() : undefined
+  const confidence = item.confidence ? String(item.confidence).toLowerCase().trim() : undefined
+  const evidenceVersion = item.evidence_version ? String(item.evidence_version).trim() : undefined
+  const checkedAt = typeof item.checked_at === 'number' ? item.checked_at : undefined
+  const sanitizedSummary = sanitizeEvidenceSummary(item.evidence)
+
+  const isPartial =
+    status === 'partial' ||
+    verdict === 'originals_only' ||
+    status === 'originals'
+  const isInconclusive =
+    status === 'inconclusive' || (status === 'unknown' && (verdict === 'unknown' || !verdict))
+
+  let badgeVariant: 'success' | 'warning' | 'danger' | 'neutral' | 'info' = 'neutral'
+  let label = '未知'
+  let shortBadgeText = `${pShort}:--`
+  let accessibleTitle = `${pName}: 未知状态`
+
+  if (fullUnlocked) {
+    badgeVariant = 'success'
+    label = region || (status === 'full' ? '全解' : '解锁')
+    shortBadgeText = region ? `${pShort}:${region}` : (status === 'full' ? `${pShort}:全解` : `${pShort}:OK`)
+    accessibleTitle = `${pName}: ${region ? region + ' ' : ''}全解锁 (Verified Full Unlock)`
+  } else if (isPartial) {
+    badgeVariant = 'warning'
+    label = '仅自制剧'
+    shortBadgeText = `${pShort}:自制`
+    accessibleTitle = `${pName}: 仅自制剧 (Partial Originals Only, 未全解)`
+  } else if (isInconclusive) {
+    badgeVariant = 'neutral'
+    label = '未定结论'
+    shortBadgeText = `${pShort}:未定`
+    accessibleTitle = `${pName}: 未定结论 (Inconclusive, 契约漂移或信号未知)`
+  } else if (status === 'restricted' || verdict === 'unsupported_region') {
+    badgeVariant = 'danger'
+    label = '地区受限'
+    shortBadgeText = `${pShort}:受限`
+    accessibleTitle = `${pName}: 地区受限 (Restricted / Unsupported Region)`
+  } else if (status === 'ip_blocked' || verdict === 'blocked') {
+    badgeVariant = 'danger'
+    label = 'IP阻断'
+    shortBadgeText = `${pShort}:阻断`
+    accessibleTitle = `${pName}: IP阻断 (Blocked)`
+  } else if (status === 'challenged' || verdict === 'challenge') {
+    badgeVariant = 'warning'
+    label = '质询拦截'
+    shortBadgeText = `${pShort}:质询`
+    accessibleTitle = `${pName}: 质询拦截 (Bot Challenge)`
+  } else if (status === 'rate_limited' || verdict === 'rate_limited') {
+    badgeVariant = 'warning'
+    label = '速率限制'
+    shortBadgeText = `${pShort}:限流`
+    accessibleTitle = `${pName}: 速率限制 (Rate Limited)`
+  } else if (status === 'timeout') {
+    badgeVariant = 'neutral'
+    label = '超时'
+    shortBadgeText = `${pShort}:超时`
+    accessibleTitle = `${pName}: 请求超时 (Timeout)`
+  } else if (status === 'transport_error') {
+    badgeVariant = 'danger'
+    label = '传输错误'
+    shortBadgeText = `${pShort}:错误`
+    accessibleTitle = `${pName}: 节点传输错误 (Transport Error)`
+  } else if (status === 'disabled') {
+    badgeVariant = 'neutral'
+    label = '已禁用'
+    shortBadgeText = `${pShort}:禁用`
+    accessibleTitle = `${pName}: 已禁用 (Disabled)`
+  } else if (status === 'fail' || status === 'failed') {
+    badgeVariant = 'danger'
+    label = '失败'
+    shortBadgeText = `${pShort}:失败`
+    accessibleTitle = `${pName}: 检测失败 (Failed)`
+  }
+
+  let badgeClass = 'bg-surface-active text-text-sub border border-border-subtle'
+  if (badgeVariant === 'success') {
+    badgeClass = 'bg-status-success/15 text-status-success border border-status-success/30'
+  } else if (badgeVariant === 'warning') {
+    badgeClass = 'bg-status-warning/15 text-status-warning border border-status-warning/30'
+  } else if (badgeVariant === 'danger') {
+    badgeClass = 'bg-status-danger/15 text-status-danger border border-status-danger/30'
+  }
+
+  return {
+    isFullUnlocked: fullUnlocked,
+    isPartial,
+    isInconclusive,
+    badgeVariant,
+    badgeClass,
+    label,
+    shortBadgeText,
+    accessibleTitle,
+    region,
+    verdict: item.verdict || undefined,
+    status: item.status || undefined,
+    confidence,
+    evidenceVersion,
+    checkedAt,
+    sanitizedSignalSummary: sanitizedSummary || undefined,
+  }
+}
+
 export const COUNTRY_NAME_MAP: Record<string, string> = {
   HK: '香港',
   TW: '台湾',
@@ -284,13 +547,7 @@ export function filterAndSortNodes(
       if (!probe?.media) return false
       for (const mKey of mediaList) {
         const m = probe.media[mKey]
-        if (!m) return false
-        const ok =
-          m.status === 'ok' ||
-          m.status === 'full' ||
-          m.status === 'originals' ||
-          m.unlocked === true
-        if (!ok) return false
+        if (!isMediaFullUnlocked(m)) return false
       }
     }
 

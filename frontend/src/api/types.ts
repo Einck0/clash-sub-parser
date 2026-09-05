@@ -83,6 +83,51 @@ export interface ProbeSettings {
   media_timeout_s: number
   probe_concurrency: number
   probe_timeout_ms: number
+  probe_service_timeout_ms?: number
+  probe_cron_enabled?: boolean
+  probe_cron_interval_minutes?: number
+}
+
+export interface ProviderEvidence {
+  http_status?: number | null
+  final_host?: string | null
+  redirect_class?: string | null
+  signals?: string[]
+  elapsed_ms?: number
+  error_code?: string | null
+}
+
+export interface ProviderResult {
+  status:
+    | 'verified'
+    | 'partial'
+    | 'restricted'
+    | 'ip_blocked'
+    | 'challenged'
+    | 'rate_limited'
+    | 'timeout'
+    | 'transport_error'
+    | 'inconclusive'
+    | 'disabled'
+    | string
+  verdict:
+    | 'full'
+    | 'originals_only'
+    | 'available'
+    | 'unsupported_region'
+    | 'blocked'
+    | 'challenge'
+    | 'rate_limited'
+    | 'unknown'
+    | string
+  unlocked: boolean
+  region?: string | null
+  checked_at?: number
+  evidence_version?: string
+  confidence?: 'verified' | 'conflicted' | 'unavailable' | string
+  evidence?: ProviderEvidence
+  label?: string | null
+  error?: string | null
 }
 
 export interface ProbeResult {
@@ -97,7 +142,7 @@ export interface ProbeResult {
   country?: string | null
   asn?: number | null
   organization?: string | null
-  media?: Record<string, any>
+  media?: Record<string, ProviderResult | any>
   error?: string | null
   checked_at?: number
 }

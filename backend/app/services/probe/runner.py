@@ -104,6 +104,7 @@ async def _wait_for_port_ready(port: int, max_wait_s: float = 1.5, step_s: float
 async def spawn_node_runner(
     node: dict[str, Any],
     runner_bin: str | None = None,
+    service_timeout_s: float = 2.0,
 ) -> AsyncGenerator[dict[str, Any], None]:
     """为单个节点拉起 sing-box runner 上下文
 
@@ -172,7 +173,7 @@ async def spawn_node_runner(
             )
 
             # 等待本地入站就绪
-            ready = await _wait_for_port_ready(listen_port, max_wait_s=2.0)
+            ready = await _wait_for_port_ready(listen_port, max_wait_s=service_timeout_s)
             if not ready:
                 # 检查子进程是否已退出并记录报错
                 if proc.returncode is not None:

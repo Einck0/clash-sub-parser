@@ -13,6 +13,7 @@ from app.schemas.logical_config import (
     LogicalConfigurationBundle,
     LogicalGroupConfig,
 )
+from app.utils.capability_filter import is_media_full_unlocked
 
 
 def _matches_regex(pattern: str, text: str) -> bool:
@@ -45,11 +46,9 @@ def _is_qualified_for_policy(
         media_map = observation.get("media") or {}
         for plat in required_media:
             p_res = media_map.get(plat.lower().strip())
-            if not p_res:
-                return False
-            status = p_res.get("status")
-            unlocked = p_res.get("unlocked")
-            if status not in ("ok", "full", "originals") and not unlocked:
+            if p_res is None and plat in media_map:
+                p_res = media_map.get(plat)
+            if not is_media_full_unlocked(p_res):
                 return False
 
     return True

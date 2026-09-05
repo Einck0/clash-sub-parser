@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.schemas.probe_domain import ObservationEligibilityDTO, ProbeObservationDTO
+from app.utils.capability_filter import is_media_full_unlocked
 
 
 def evaluate_observation_eligibility(
@@ -67,6 +68,8 @@ def evaluate_observation_eligibility(
         for plat in required_media:
             p_key = plat.lower().strip()
             p_res = media_map.get(p_key)
+            if p_res is None and plat in media_map:
+                p_res = media_map.get(plat)
             if not p_res:
                 return ObservationEligibilityDTO(
                     eligible=False,
@@ -74,16 +77,14 @@ def evaluate_observation_eligibility(
                     reason=f"缺少平台 {plat} 的探测项",
                     observation=obs_dto,
                 )
-            if isinstance(p_res, dict):
-                p_status = p_res.get("status")
-                unlocked = p_res.get("unlocked")
-                if p_status not in ("ok", "full", "originals") and not unlocked:
-                    return ObservationEligibilityDTO(
-                        eligible=False,
-                        status="insufficient",
-                        reason=f"平台 {plat} 未能解锁（状态: {p_status}）",
-                        observation=obs_dto,
-                    )
+            if not is_media_full_unlocked(p_res):
+                p_status = p_res.get("status") if isinstance(p_res, dict) else str(p_res)
+                return ObservationEligibilityDTO(
+                    eligible=False,
+                    status="insufficient",
+                    reason=f"平台 {plat} 未能满足完整解锁条件（状态: {p_status}）",
+                    observation=obs_dto,
+                )
 
     return ObservationEligibilityDTO(
         eligible=True,

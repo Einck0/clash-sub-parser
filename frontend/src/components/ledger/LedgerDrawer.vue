@@ -81,24 +81,78 @@
           </div>
         </div>
 
-        <!-- Media Unlocks List -->
-        <div class="rounded-lg border border-border-subtle bg-surface-base p-4 space-y-2.5">
-          <span class="text-text-main font-semibold block pb-1 border-b border-border-subtle uppercase">
-            STREAMING & AI UNLOCKS
-          </span>
-          <div class="grid grid-cols-2 gap-2 pt-1">
+        <!-- Media Unlocks Evidence Diagnostics List -->
+        <div class="rounded-lg border border-border-subtle bg-surface-base p-4 space-y-3">
+          <div class="flex items-center justify-between border-b border-border-subtle pb-2">
+            <span class="text-text-main font-semibold uppercase tracking-wider">
+              STREAMING & AI UNLOCKS · PROBE EVIDENCE (流媒体与 AI 证据诊断)
+            </span>
+            <span class="text-[10px] text-text-sub font-mono tabular-nums">
+              {{ mediaPlatformList.length }} 平台
+            </span>
+          </div>
+
+          <!-- Dense Bordered Diagnostic Rows -->
+          <div class="space-y-2 pt-1">
             <div
               v-for="platform in mediaPlatformList"
               :key="platform.key"
-              class="flex items-center justify-between p-2 rounded-md border border-border-subtle bg-canvas"
+              class="rounded-md border border-border-subtle bg-canvas p-2.5 space-y-2 text-xs font-mono"
             >
-              <span class="text-text-main font-medium">{{ platform.name }}</span>
-              <span
-                class="rounded px-1.5 py-0.5 text-[10px] font-bold font-mono"
-                :class="getMediaStatusBadgeClass(probe?.media?.[platform.key])"
+              <!-- Row 1: Platform name + Status/Verdict Badge + Region -->
+              <div class="flex items-center justify-between gap-2">
+                <div class="flex items-center gap-2 min-w-0">
+                  <span class="text-text-sub text-xs">·</span>
+                  <strong class="text-text-main font-semibold truncate">{{ platform.name }}</strong>
+                  <span
+                    v-if="getPlatformPres(platform).region"
+                    class="px-1.5 py-0.2 rounded text-[10px] font-bold bg-surface-active text-text-main border border-border-subtle tabular-nums shrink-0"
+                  >
+                    {{ getPlatformPres(platform).region }}
+                  </span>
+                </div>
+                <div class="flex items-center gap-1.5 shrink-0">
+                  <span
+                    class="rounded px-2 py-0.5 text-[10px] font-bold font-mono border inline-flex items-center gap-1"
+                    :class="getPlatformPres(platform).badgeClass"
+                  >
+                    {{ getPlatformPres(platform).label }}
+                  </span>
+                </div>
+              </div>
+
+              <!-- Row 2: Diagnostic Attributes (Verdict, Confidence, Version, Timestamp) -->
+              <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] text-text-muted border-t border-border-subtle/60 pt-2">
+                <div>
+                  <span class="text-text-sub text-[10px] uppercase block">VERDICT</span>
+                  <span class="text-text-main font-medium">{{ getPlatformPres(platform).verdict || (getPlatformPres(platform).isFullUnlocked ? 'full' : (getPlatformPres(platform).isPartial ? 'originals_only' : 'unknown')) }}</span>
+                </div>
+                <div>
+                  <span class="text-text-sub text-[10px] uppercase block">CONFIDENCE</span>
+                  <span class="text-text-main font-medium">{{ getPlatformPres(platform).confidence || (probe?.media?.[platform.key] ? 'verified' : 'unavailable') }}</span>
+                </div>
+                <div>
+                  <span class="text-text-sub text-[10px] uppercase block">VERSION</span>
+                  <span class="text-text-main font-medium truncate" :title="getPlatformPres(platform).evidenceVersion || 'catalogue-2026-09-05'">
+                    {{ getPlatformPres(platform).evidenceVersion || 'catalogue-2026-09-05' }}
+                  </span>
+                </div>
+                <div>
+                  <span class="text-text-sub text-[10px] uppercase block">TIMESTAMP</span>
+                  <span class="text-text-main font-medium tabular-nums">
+                    {{ formatTimestamp(getPlatformPres(platform).checkedAt || probe?.checked_at) }}
+                  </span>
+                </div>
+              </div>
+
+              <!-- Row 3: Sanitized Signals Summary (if present) -->
+              <div
+                v-if="getPlatformPres(platform).sanitizedSignalSummary"
+                class="text-[10px] text-text-sub bg-surface-hover/60 px-2 py-1 rounded border border-border-subtle/40 truncate font-mono"
+                :title="getPlatformPres(platform).sanitizedSignalSummary"
               >
-                {{ getMediaStatusLabel(probe?.media?.[platform.key]) }}
-              </span>
+                <span class="text-accent font-semibold">SIGNALS:</span> {{ getPlatformPres(platform).sanitizedSignalSummary }}
+              </div>
             </div>
           </div>
         </div>
@@ -304,7 +358,9 @@ import StatusBadge from '../ui/StatusBadge.vue'
 import {
   COUNTRY_NAME_MAP,
   MEDIA_PLATFORMS,
+  getMediaSemanticPresentation,
   type LedgerNodeItem,
+  type MediaSemanticPresentation,
   type ProbeRecord,
   resolveNodeCountryCode,
 } from '../../views/nodeLedgerDomain'
@@ -434,25 +490,29 @@ function sourceLabel(src?: string | null): string {
   return src || '未知'
 }
 
+function getPlatformPres(platform: { key: string; name: string; short: string }): MediaSemanticPresentation {
+  const item = props.probe?.media?.[platform.key]
+  return getMediaSemanticPresentation(item, platform)
+}
+
+function formatTimestamp(ts?: number): string {
+  if (!ts) return 'N/A'
+  try {
+    const d = new Date(ts > 1e11 ? ts : ts * 1000)
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  } catch (_) {
+    return String(ts)
+  }
+}
+
 function getMediaStatusLabel(m: any): string {
-  if (!m) return '未测'
-  if (m.status === 'ok' || m.unlocked === true) return '解锁'
-  if (m.status === 'full') return '全解'
-  if (m.status === 'originals') return '自制'
-  if (m.status === 'blocked') return '阻断'
-  if (m.status === 'fail') return '失败'
-  return '未知'
+  const pres = getMediaSemanticPresentation(m)
+  return pres.label
 }
 
 function getMediaStatusBadgeClass(m: any): string {
-  if (!m) return 'bg-surface-active text-text-sub border border-border-subtle'
-  if (m.status === 'ok' || m.status === 'full' || m.unlocked === true) {
-    return 'bg-status-success/15 text-status-success border border-status-success/30'
-  }
-  if (m.status === 'originals') {
-    return 'bg-status-warning/15 text-status-warning border border-status-warning/30'
-  }
-  return 'bg-status-danger/15 text-status-danger border border-status-danger/30'
+  const pres = getMediaSemanticPresentation(m)
+  return pres.badgeClass
 }
 
 function submitSaveChain() {

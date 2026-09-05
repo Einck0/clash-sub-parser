@@ -21,6 +21,7 @@
             type="button"
             :class="[
               'flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-xs font-medium transition-colors cursor-pointer text-left',
+              mobile ? 'min-h-[44px]' : '',
               isActive
                 ? 'bg-accent-subtle text-accent border border-accent/25'
                 : 'text-text-muted hover:bg-surface-hover hover:text-text-main border border-transparent'

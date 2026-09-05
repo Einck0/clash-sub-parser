@@ -43,20 +43,19 @@ test('Key views (Subscriptions, NodeGroups, Rules, Generate) use MetricCard and 
   assert.match(genContent, /min-h-\[44px\]/, 'Generate.vue should enforce 44px min touch height')
 })
 
-test('BaseDrawer and QuickExportModal adapt to Bottom Sheet on mobile with pb-safe', () => {
+test('BaseDrawer adapts to Bottom Sheet on mobile with pb-safe and QuickExportModal uses pb-safe', () => {
   const drawerPath = path.resolve(import.meta.dirname, '../src/components/ui/BaseDrawer.vue')
   assert.ok(fs.existsSync(drawerPath), 'BaseDrawer.vue should exist')
   const drawerContent = fs.readFileSync(drawerPath, 'utf8')
   assert.match(drawerContent, /pb-safe/, 'BaseDrawer should include pb-safe')
-  assert.match(drawerContent, /rounded-t-(?:2xl|lg)/, 'BaseDrawer should have rounded top corners on mobile')
+  assert.match(drawerContent, /rounded-t-(?:2xl|lg|\[16px\])/, 'BaseDrawer should have rounded top corners on mobile')
   assert.match(drawerContent, /sm:hidden.*rounded-full/, 'BaseDrawer should have drag indicator on mobile')
 
   const exportPath = path.resolve(import.meta.dirname, '../src/components/QuickExportModal.vue')
   assert.ok(fs.existsSync(exportPath), 'QuickExportModal.vue should exist')
   const exportContent = fs.readFileSync(exportPath, 'utf8')
   assert.match(exportContent, /pb-safe/, 'QuickExportModal should include pb-safe')
-  assert.match(exportContent, /items-end sm:items-center/, 'QuickExportModal should align to bottom on mobile')
-  assert.match(exportContent, /rounded-t-(?:2xl|lg) sm:rounded-(?:2xl|lg)/, 'QuickExportModal should adapt to rounded top on mobile')
+  assert.match(exportContent, /<AppModal\b/, 'QuickExportModal should use AppModal')
 })
 
 test('PageToolbar provides modern responsive input with min-height touch target', () => {

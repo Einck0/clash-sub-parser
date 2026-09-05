@@ -30,6 +30,117 @@
       {{ message }}
     </div>
 
+    <!-- 5-Target Export Center Card (Initial Viewport Priority) -->
+    <div class="rounded-lg border border-white/10 bg-slate-900 p-4 sm:p-5 space-y-4">
+      <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 pb-3 border-b border-white/5">
+        <div>
+          <h3 class="text-sm font-semibold text-white tracking-tight">多客户端订阅与导出</h3>
+          <p class="text-xs text-slate-400 mt-0.5">支持 5 大客户端格式与 Scheme 协议自动分发。</p>
+        </div>
+        <div class="grid grid-cols-2 gap-1 rounded-lg bg-slate-950/60 p-1 border border-white/5 text-xs">
+          <button
+            type="button"
+            :class="[
+              'px-3 py-1.5 rounded-md font-medium transition-colors cursor-pointer',
+              exportMode === 'merged' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'
+            ]"
+            @click="exportMode = 'merged'"
+          >
+            合并配置
+          </button>
+          <button
+            type="button"
+            :class="[
+              'px-3 py-1.5 rounded-md font-medium transition-colors cursor-pointer',
+              exportMode === 'subscription' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'
+            ]"
+            @click="exportMode = 'subscription'"
+          >
+            单订阅导出
+          </button>
+        </div>
+      </div>
+
+      <!-- Single Subscription Select if exportMode === 'subscription' -->
+      <div v-if="exportMode === 'subscription'" class="space-y-1.5 p-3 rounded-lg bg-slate-950/40 border border-white/5">
+        <label class="text-xs font-mono text-slate-400">选择单订阅数据源</label>
+        <select
+          v-model="selectedExportSubId"
+          class="w-full min-h-[44px] rounded-lg border border-white/10 bg-slate-950/60 px-3.5 py-2 text-xs text-white font-mono focus:border-blue-500 focus:outline-hidden cursor-pointer"
+        >
+          <option v-for="sub in subscriptions" :key="sub.id" :value="sub.id">
+            {{ sub.name }} (ID: {{ sub.id }})
+          </option>
+        </select>
+      </div>
+
+      <!-- 5 Target Selector Tabs -->
+      <div class="grid grid-cols-5 gap-1.5 rounded-lg bg-slate-950/60 p-1.5 border border-white/5">
+        <button
+          v-for="t in TARGET_DEFS"
+          :key="t.key"
+          type="button"
+          :class="[
+            'flex flex-col items-center justify-center py-2 px-1 rounded-md text-xs font-medium transition-colors cursor-pointer min-h-[44px]',
+            selectedTarget === t.key
+              ? 'bg-blue-600/20 text-blue-400 border border-blue-500/40'
+              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 border border-transparent'
+          ]"
+          @click="selectedTarget = t.key"
+        >
+          <span class="font-semibold">{{ t.name }}</span>
+          <span class="text-[10px] font-mono opacity-70">{{ t.format }}</span>
+        </button>
+      </div>
+
+      <!-- Target Description & Badge -->
+      <div class="flex items-center justify-between text-xs font-mono text-slate-400 px-1">
+        <span>{{ currentTargetDef.desc }}</span>
+        <span class="px-2 py-0.5 rounded bg-slate-800 border border-white/5 text-blue-300 text-[10px]">{{ currentTargetDef.badge }}</span>
+      </div>
+
+      <!-- Export URL Row -->
+      <div class="space-y-1.5">
+        <div class="flex items-center gap-2">
+          <input
+            :value="currentExportUrl"
+            readonly
+            class="flex-1 min-h-[44px] rounded-lg border border-white/10 bg-slate-950/80 px-3.5 py-2 text-xs font-mono text-slate-200 select-all focus:border-blue-500 focus:outline-hidden"
+          />
+          <button
+            type="button"
+            class="min-h-[44px] px-4 py-2 rounded-lg border border-blue-500/40 bg-blue-600/20 text-xs font-medium text-blue-400 hover:bg-blue-600/30 transition-colors cursor-pointer whitespace-nowrap"
+            @click="copy(currentExportUrl)"
+          >
+            复制链接
+          </button>
+        </div>
+      </div>
+
+      <!-- Actions & QR Code Grid -->
+      <div class="grid grid-cols-1 sm:grid-cols-12 gap-4 pt-1 items-center">
+        <div class="sm:col-span-8 flex flex-col gap-2.5">
+          <a
+            :href="currentSchemeUrl"
+            class="flex min-h-[44px] items-center justify-center gap-2 rounded-lg border border-blue-500/40 bg-blue-600 px-4 py-2.5 text-xs font-semibold text-white shadow-md hover:bg-blue-500 transition-colors cursor-pointer text-center"
+          >
+            <span>{{ clientWakeupLabel }}</span>
+          </a>
+          <a
+            :href="currentExportUrl"
+            target="_blank"
+            rel="noreferrer"
+            class="flex min-h-[44px] items-center justify-center gap-2 rounded-lg border border-white/10 bg-slate-800/60 px-4 py-2.5 text-xs font-medium text-slate-200 hover:bg-slate-800 hover:text-white transition-colors cursor-pointer text-center"
+          >
+            <span>下载 / 查看 {{ currentTargetDef.format }}</span>
+          </a>
+        </div>
+        <div class="sm:col-span-4 flex flex-col items-center justify-center p-2 bg-white rounded-lg shadow-md">
+          <QrCode :url="currentQrPayload" :size="100" />
+        </div>
+      </div>
+    </div>
+
     <!-- Industrial MetricCards Grid for Compile Stats (Adaptive 2 cols mobile, 4 cols md+) -->
     <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
       <MetricCard
@@ -184,117 +295,6 @@
 
       <!-- Right Column: Subscription Links & Output -->
       <main class="lg:col-span-7 space-y-6">
-        <!-- 5-Target Export Center Card -->
-        <div class="rounded-lg border border-white/10 bg-slate-900 p-4 sm:p-5 space-y-4">
-          <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 pb-3 border-b border-white/5">
-            <div>
-              <h3 class="text-sm font-semibold text-white tracking-tight">多客户端订阅与导出</h3>
-              <p class="text-xs text-slate-400 mt-0.5">支持 5 大客户端格式与 Scheme 协议自动分发。</p>
-            </div>
-            <div class="grid grid-cols-2 gap-1 rounded-lg bg-slate-950/60 p-1 border border-white/5 text-xs">
-              <button
-                type="button"
-                :class="[
-                  'px-3 py-1.5 rounded-md font-medium transition-colors cursor-pointer',
-                  exportMode === 'merged' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'
-                ]"
-                @click="exportMode = 'merged'"
-              >
-                合并配置
-              </button>
-              <button
-                type="button"
-                :class="[
-                  'px-3 py-1.5 rounded-md font-medium transition-colors cursor-pointer',
-                  exportMode === 'subscription' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'
-                ]"
-                @click="exportMode = 'subscription'"
-              >
-                单订阅导出
-              </button>
-            </div>
-          </div>
-
-          <!-- Single Subscription Select if exportMode === 'subscription' -->
-          <div v-if="exportMode === 'subscription'" class="space-y-1.5 p-3 rounded-lg bg-slate-950/40 border border-white/5">
-            <label class="text-xs font-mono text-slate-400">选择单订阅数据源</label>
-            <select
-              v-model="selectedExportSubId"
-              class="w-full min-h-[44px] rounded-lg border border-white/10 bg-slate-950/60 px-3.5 py-2 text-xs text-white font-mono focus:border-blue-500 focus:outline-hidden cursor-pointer"
-            >
-              <option v-for="sub in subscriptions" :key="sub.id" :value="sub.id">
-                {{ sub.name }} (ID: {{ sub.id }})
-              </option>
-            </select>
-          </div>
-
-          <!-- 5 Target Selector Tabs -->
-          <div class="grid grid-cols-5 gap-1.5 rounded-lg bg-slate-950/60 p-1.5 border border-white/5">
-            <button
-              v-for="t in TARGET_DEFS"
-              :key="t.key"
-              type="button"
-              :class="[
-                'flex flex-col items-center justify-center py-2 px-1 rounded-md text-xs font-medium transition-colors cursor-pointer min-h-[44px]',
-                selectedTarget === t.key
-                  ? 'bg-blue-600/20 text-blue-400 border border-blue-500/40'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 border border-transparent'
-              ]"
-              @click="selectedTarget = t.key"
-            >
-              <span class="font-semibold">{{ t.name }}</span>
-              <span class="text-[10px] font-mono opacity-70">{{ t.format }}</span>
-            </button>
-          </div>
-
-          <!-- Target Description & Badge -->
-          <div class="flex items-center justify-between text-xs font-mono text-slate-400 px-1">
-            <span>{{ currentTargetDef.desc }}</span>
-            <span class="px-2 py-0.5 rounded bg-slate-800 border border-white/5 text-blue-300 text-[10px]">{{ currentTargetDef.badge }}</span>
-          </div>
-
-          <!-- Export URL Row -->
-          <div class="space-y-1.5">
-            <div class="flex items-center gap-2">
-              <input
-                :value="currentExportUrl"
-                readonly
-                class="flex-1 min-h-[44px] rounded-lg border border-white/10 bg-slate-950/80 px-3.5 py-2 text-xs font-mono text-slate-200 select-all focus:border-blue-500 focus:outline-hidden"
-              />
-              <button
-                type="button"
-                class="min-h-[44px] px-4 py-2 rounded-lg border border-blue-500/40 bg-blue-600/20 text-xs font-medium text-blue-400 hover:bg-blue-600/30 transition-colors cursor-pointer whitespace-nowrap"
-                @click="copy(currentExportUrl)"
-              >
-                复制链接
-              </button>
-            </div>
-          </div>
-
-          <!-- Actions & QR Code Grid -->
-          <div class="grid grid-cols-1 sm:grid-cols-12 gap-4 pt-1 items-center">
-            <div class="sm:col-span-8 flex flex-col gap-2.5">
-              <a
-                :href="currentSchemeUrl"
-                class="flex min-h-[44px] items-center justify-center gap-2 rounded-lg border border-blue-500/40 bg-blue-600 px-4 py-2.5 text-xs font-semibold text-white shadow-md hover:bg-blue-500 transition-colors cursor-pointer text-center"
-              >
-                <span>{{ clientWakeupLabel }}</span>
-              </a>
-              <a
-                :href="currentExportUrl"
-                target="_blank"
-                rel="noreferrer"
-                class="flex min-h-[44px] items-center justify-center gap-2 rounded-lg border border-white/10 bg-slate-800/60 px-4 py-2.5 text-xs font-medium text-slate-200 hover:bg-slate-800 hover:text-white transition-colors cursor-pointer text-center"
-              >
-                <span>下载 / 查看 {{ currentTargetDef.format }}</span>
-              </a>
-            </div>
-            <div class="sm:col-span-4 flex flex-col items-center justify-center p-2 bg-white rounded-lg shadow-md">
-              <QrCode :url="currentQrPayload" :size="100" />
-            </div>
-          </div>
-        </div>
-
         <!-- Links Grid -->
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <!-- Short URL Card -->

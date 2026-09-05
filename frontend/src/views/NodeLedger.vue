@@ -119,13 +119,13 @@
     />
 
     <!-- Selection indicator & quick select-all toolbar -->
-    <div class="flex items-center justify-between text-xs font-mono text-text-muted px-1">
+    <div class="flex flex-wrap items-center justify-between text-xs font-mono text-text-muted px-1 gap-2">
       <div class="flex items-center gap-3">
-        <label class="inline-flex items-center gap-1.5 cursor-pointer select-none">
+        <label class="inline-flex items-center gap-2 min-h-[44px] cursor-pointer select-none py-1">
           <input
             type="checkbox"
             :checked="isAllFilteredSelected"
-            class="rounded-sm border-border-strong bg-canvas text-accent focus:ring-0"
+            class="rounded-sm border-border-strong bg-canvas text-accent focus:ring-0 cursor-pointer"
             @change="toggleSelectAllFiltered"
           />
           <span>全选当前筛选节点 (<span class="tabular-nums">{{ filteredRows.length }}</span>)</span>
@@ -135,7 +135,7 @@
         </span>
       </div>
 
-      <div v-if="viewMode === 'grid'" class="flex items-center gap-2">
+      <div v-if="viewMode === 'grid'" class="hidden sm:flex items-center gap-2">
         <button
           class="px-2 py-1 rounded-md border border-border-subtle bg-surface-hover text-text-main disabled:opacity-40 cursor-pointer focus-ring"
           :disabled="gridPage <= 1"
@@ -170,202 +170,221 @@
       </Button>
     </div>
 
-    <!-- Node Virtual Table View (High Performance Virtualized for 2000+ Nodes, 36px Density) -->
-    <div v-else-if="viewMode === 'table'" class="space-y-1">
-      <!-- Table Column Headers -->
-      <div class="flex items-center justify-between px-4 py-2 border-b border-border-subtle bg-surface-hover/60 rounded-t-lg text-[11px] font-mono text-text-muted select-none uppercase tracking-wider">
-        <div class="flex items-center gap-3 min-w-0 flex-1">
-          <span class="w-4"></span>
-          <span>节点名称 / 协议</span>
-        </div>
-        <div class="hidden md:flex items-center gap-2 flex-1 min-w-0">
-          <span>服务器与端口</span>
-        </div>
-        <div class="hidden lg:flex items-center gap-2 flex-1 min-w-0">
-          <span>跳板链路</span>
-        </div>
-        <div class="flex items-center justify-end gap-4 shrink-0 text-right">
-          <span>状态 / 延迟</span>
-          <span class="hidden sm:inline">测速</span>
-          <span class="w-8">操作</span>
-        </div>
+    <!-- Node Views (Responsive Split: Mobile Compact List for <640px, Virtual Table/Grid for >=640px) -->
+    <template v-else>
+      <!-- Mobile Compact List (< 640px) -->
+      <div class="block sm:hidden" data-testid="node-ledger-mobile-container">
+        <LedgerMobileList
+          :items="filteredRows"
+          :selected-names="selectedNodeNames"
+          :probes="probes"
+          :probing-single-key="probingSingleNodeKey"
+          @toggle-select="toggleSelectNode"
+          @inspect="inspectNode"
+          @probe-single="handleProbeSingle"
+        />
       </div>
 
-      <VirtualNodeTable
-        :items="filteredRows"
-        :estimate-size="36"
-        :selected-keys="selectedNodeNames"
-        class="border-t-0 rounded-t-none"
-      >
-        <template #default="{ item, isSelected }">
+      <!-- Desktop Views (>= 640px) -->
+      <div class="hidden sm:block">
+        <!-- Node Virtual Table View (High Performance Virtualized for 2000+ Nodes, 36px Density) -->
+        <div v-if="viewMode === 'table'" class="space-y-1">
+          <!-- Table Column Headers -->
+          <div class="flex items-center justify-between px-4 py-2 border-b border-border-subtle bg-surface-hover/60 rounded-t-lg text-[11px] font-mono text-text-muted select-none uppercase tracking-wider">
+            <div class="flex items-center gap-3 min-w-0 flex-1">
+              <span class="w-4"></span>
+              <span>节点名称 / 协议</span>
+            </div>
+            <div class="hidden md:flex items-center gap-2 flex-1 min-w-0">
+              <span>服务器与端口</span>
+            </div>
+            <div class="hidden lg:flex items-center gap-2 flex-1 min-w-0">
+              <span>跳板链路</span>
+            </div>
+            <div class="flex items-center justify-end gap-4 shrink-0 text-right">
+              <span>状态 / 延迟</span>
+              <span class="hidden sm:inline">测速</span>
+              <span class="w-8">操作</span>
+            </div>
+          </div>
+
+          <VirtualNodeTable
+            :items="filteredRows"
+            :estimate-size="36"
+            :selected-keys="selectedNodeNames"
+            class="border-t-0 rounded-t-none"
+          >
+            <template #default="{ item, isSelected }">
+              <div
+                class="flex w-full h-[36px] items-center justify-between py-1 cursor-pointer select-none text-xs font-mono table-row-dense"
+                @click="inspectNode(item)"
+              >
+                <!-- Checkbox & Country Code & Node Name & Protocol -->
+                <div class="flex items-center gap-2 sm:gap-2.5 min-w-0 flex-1">
+                  <input
+                    type="checkbox"
+                    :checked="isSelected"
+                    class="rounded-sm border-border-strong bg-canvas text-accent focus:ring-0 cursor-pointer shrink-0"
+                    @click.stop="toggleSelectNode(item.name)"
+                  />
+                  <span class="px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-surface-active text-text-muted border border-border-subtle shrink-0 tabular-nums">
+                    {{ resolveCountryCode(item) }}
+                  </span>
+                  <span
+                    class="font-medium text-text-main hover:text-accent transition-colors truncate max-w-[140px] sm:max-w-xs"
+                    :title="item.name"
+                  >
+                    {{ item.name }}
+                  </span>
+                  <StatusBadge type="info" :text="(item.type || 'RAW').toUpperCase()" class="shrink-0" />
+                </div>
+
+                <!-- Server & Port (Desktop) -->
+                <div class="hidden md:flex items-center gap-2 text-xs font-mono text-text-muted flex-1 min-w-0">
+                  <span class="truncate max-w-[180px] tabular-nums">{{ item.server }}</span>
+                  <span class="text-text-sub tabular-nums">:{{ item.port }}</span>
+                  <span v-if="item.subscription_name" class="text-[10px] text-text-sub truncate max-w-[100px]">
+                    [{{ item.subscription_name }}]
+                  </span>
+                </div>
+
+                <!-- Dialer Chain Badge (Large Desktop) -->
+                <div class="hidden lg:flex items-center gap-2 flex-1 min-w-0">
+                  <span
+                    v-if="item.dialer_proxy"
+                    class="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-mono border"
+                    :class="item.chain_source === 'node' ? 'border-accent/30 bg-accent-subtle text-accent' : 'border-purple-500/30 bg-purple-500/10 text-purple-400'"
+                  >
+                    链: {{ item.dialer_proxy }}
+                  </span>
+                </div>
+
+                <!-- Probe Metrics & Quick Actions -->
+                <div class="flex items-center justify-end gap-3 font-mono text-xs shrink-0">
+                  <span
+                    v-if="getProbe(item.name)?.status === 'ok'"
+                    class="text-status-success font-semibold tabular-nums"
+                  >
+                    {{ getProbe(item.name)?.latency_ms }}ms
+                  </span>
+                  <span
+                    v-else-if="getProbe(item.name)?.status === 'fail'"
+                    class="text-status-danger font-medium"
+                  >
+                    失败
+                  </span>
+                  <span
+                    v-else-if="getProbe(item.name)?.status === 'timeout'"
+                    class="text-status-warning font-medium"
+                  >
+                    超时
+                  </span>
+                  <span v-else class="text-text-sub">
+                    未测
+                  </span>
+
+                  <span
+                    v-if="getProbe(item.name)?.speed_mbps"
+                    class="text-status-info hidden sm:inline font-semibold tabular-nums"
+                  >
+                    {{ getProbe(item.name)?.speed_mbps }}M
+                  </span>
+
+                  <IconButton
+                    :icon="Zap"
+                    label="单节点测速"
+                    size="sm"
+                    variant="ghost"
+                    :loading="probingSingleNodeKey === item.name"
+                    @click.stop="handleProbeSingle(item)"
+                  />
+                </div>
+              </div>
+            </template>
+          </VirtualNodeTable>
+        </div>
+
+        <!-- Node Grid View (Bounded Paged Cards) -->
+        <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           <div
-            class="flex w-full h-[36px] items-center justify-between py-1 cursor-pointer select-none text-xs font-mono table-row-dense"
+            v-for="item in pagedGridRows"
+            :key="item.name"
+            class="flex flex-col justify-between p-4 rounded-lg border bg-surface-base transition-colors cursor-pointer space-y-3"
+            :class="[
+              selectedNodeNames.has(item.name)
+                ? 'border-accent bg-accent-subtle ring-1 ring-accent/30'
+                : 'border-border-subtle hover:border-border-strong hover:bg-surface-hover'
+            ]"
             @click="inspectNode(item)"
           >
-            <!-- Checkbox & Country Code & Node Name & Protocol -->
-            <div class="flex items-center gap-2 sm:gap-2.5 min-w-0 flex-1">
-              <input
-                type="checkbox"
-                :checked="isSelected"
-                class="rounded-sm border-border-strong bg-canvas text-accent focus:ring-0 cursor-pointer shrink-0"
-                @click.stop="toggleSelectNode(item.name)"
-              />
-              <span class="px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-surface-active text-text-muted border border-border-subtle shrink-0 tabular-nums">
-                {{ resolveCountryCode(item) }}
-              </span>
-              <span
-                class="font-medium text-text-main hover:text-accent transition-colors truncate max-w-[140px] sm:max-w-xs"
-                :title="item.name"
-              >
-                {{ item.name }}
-              </span>
-              <StatusBadge type="info" :text="(item.type || 'RAW').toUpperCase()" class="shrink-0" />
+            <!-- Card Top -->
+            <div class="flex items-start justify-between gap-2">
+              <div class="flex items-center gap-2 min-w-0 flex-1">
+                <input
+                  type="checkbox"
+                  :checked="selectedNodeNames.has(item.name)"
+                  class="rounded-sm border-border-strong bg-canvas text-accent focus:ring-0 cursor-pointer shrink-0"
+                  @click.stop="toggleSelectNode(item.name)"
+                />
+                <span class="px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-surface-active text-text-muted border border-border-subtle shrink-0 tabular-nums">
+                  {{ resolveCountryCode(item) }}
+                </span>
+                <span class="text-sm font-semibold text-text-main truncate" :title="item.name">{{ item.name }}</span>
+              </div>
+              <StatusBadge type="info" :text="(item.type || 'RAW').toUpperCase()" />
             </div>
 
-            <!-- Server & Port (Desktop) -->
-            <div class="hidden md:flex items-center gap-2 text-xs font-mono text-text-muted flex-1 min-w-0">
-              <span class="truncate max-w-[180px] tabular-nums">{{ item.server }}</span>
-              <span class="text-text-sub tabular-nums">:{{ item.port }}</span>
-              <span v-if="item.subscription_name" class="text-[10px] text-text-sub truncate max-w-[100px]">
-                [{{ item.subscription_name }}]
-              </span>
+            <!-- Endpoint & Subscription -->
+            <div class="text-xs font-mono text-text-muted truncate flex justify-between tabular-nums">
+              <span>{{ item.server }}:{{ item.port }}</span>
+              <span v-if="item.subscription_name" class="text-text-sub truncate max-w-[120px]">[{{ item.subscription_name }}]</span>
             </div>
 
-            <!-- Dialer Chain Badge (Large Desktop) -->
-            <div class="hidden lg:flex items-center gap-2 flex-1 min-w-0">
-              <span
-                v-if="item.dialer_proxy"
-                class="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-mono border"
-                :class="item.chain_source === 'node' ? 'border-accent/30 bg-accent-subtle text-accent' : 'border-purple-500/30 bg-purple-500/10 text-purple-400'"
-              >
-                链: {{ item.dialer_proxy }}
-              </span>
+            <!-- Dialer Chain if set -->
+            <div v-if="item.dialer_proxy" class="text-xs font-mono text-accent flex items-center gap-1">
+              <span>跳板: {{ item.dialer_proxy }}</span>
             </div>
 
-            <!-- Probe Metrics & Quick Actions -->
-            <div class="flex items-center justify-end gap-3 font-mono text-xs shrink-0">
-              <span
-                v-if="getProbe(item.name)?.status === 'ok'"
-                class="text-status-success font-semibold tabular-nums"
-              >
+            <!-- Probe Metrics Strip -->
+            <div class="flex items-center justify-between pt-2 border-t border-border-subtle text-xs font-mono">
+              <span v-if="getProbe(item.name)?.status === 'ok'" class="text-status-success font-semibold tabular-nums">
                 {{ getProbe(item.name)?.latency_ms }}ms
               </span>
-              <span
-                v-else-if="getProbe(item.name)?.status === 'fail'"
-                class="text-status-danger font-medium"
-              >
-                失败
-              </span>
-              <span
-                v-else-if="getProbe(item.name)?.status === 'timeout'"
-                class="text-status-warning font-medium"
-              >
-                超时
-              </span>
-              <span v-else class="text-text-sub">
-                未测
-              </span>
+              <span v-else-if="getProbe(item.name)?.status === 'fail'" class="text-status-danger">失败</span>
+              <span v-else-if="getProbe(item.name)?.status === 'timeout'" class="text-status-warning">超时</span>
+              <span v-else class="text-text-sub">未测</span>
 
-              <span
-                v-if="getProbe(item.name)?.speed_mbps"
-                class="text-status-info hidden sm:inline font-semibold tabular-nums"
-              >
-                {{ getProbe(item.name)?.speed_mbps }}M
+              <span v-if="getProbe(item.name)?.speed_mbps" class="text-status-info font-semibold tabular-nums">
+                {{ getProbe(item.name)?.speed_mbps }} Mbps
               </span>
+            </div>
 
-              <IconButton
-                :icon="Zap"
-                label="单节点测速"
+            <!-- Footer Actions -->
+            <div class="flex gap-2 pt-2 border-t border-border-subtle">
+              <Button
+                variant="secondary"
                 size="sm"
-                variant="ghost"
+                class="flex-1"
+                @click.stop="inspectNode(item)"
+              >
+                详情
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
+                class="flex-1"
+                :disabled="probingSingleNodeKey === item.name"
                 :loading="probingSingleNodeKey === item.name"
+                :icon="Zap"
                 @click.stop="handleProbeSingle(item)"
-              />
+              >
+                测速
+              </Button>
             </div>
           </div>
-        </template>
-      </VirtualNodeTable>
-    </div>
-
-    <!-- Node Grid View (Bounded Paged Cards) -->
-    <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-      <div
-        v-for="item in pagedGridRows"
-        :key="item.name"
-        class="flex flex-col justify-between p-4 rounded-lg border bg-surface-base transition-colors cursor-pointer space-y-3"
-        :class="[
-          selectedNodeNames.has(item.name)
-            ? 'border-accent bg-accent-subtle ring-1 ring-accent/30'
-            : 'border-border-subtle hover:border-border-strong hover:bg-surface-hover'
-        ]"
-        @click="inspectNode(item)"
-      >
-        <!-- Card Top -->
-        <div class="flex items-start justify-between gap-2">
-          <div class="flex items-center gap-2 min-w-0 flex-1">
-            <input
-              type="checkbox"
-              :checked="selectedNodeNames.has(item.name)"
-              class="rounded-sm border-border-strong bg-canvas text-accent focus:ring-0 cursor-pointer shrink-0"
-              @click.stop="toggleSelectNode(item.name)"
-            />
-            <span class="px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-surface-active text-text-muted border border-border-subtle shrink-0 tabular-nums">
-              {{ resolveCountryCode(item) }}
-            </span>
-            <span class="text-sm font-semibold text-text-main truncate" :title="item.name">{{ item.name }}</span>
-          </div>
-          <StatusBadge type="info" :text="(item.type || 'RAW').toUpperCase()" />
-        </div>
-
-        <!-- Endpoint & Subscription -->
-        <div class="text-xs font-mono text-text-muted truncate flex justify-between tabular-nums">
-          <span>{{ item.server }}:{{ item.port }}</span>
-          <span v-if="item.subscription_name" class="text-text-sub truncate max-w-[120px]">[{{ item.subscription_name }}]</span>
-        </div>
-
-        <!-- Dialer Chain if set -->
-        <div v-if="item.dialer_proxy" class="text-xs font-mono text-accent flex items-center gap-1">
-          <span>跳板: {{ item.dialer_proxy }}</span>
-        </div>
-
-        <!-- Probe Metrics Strip -->
-        <div class="flex items-center justify-between pt-2 border-t border-border-subtle text-xs font-mono">
-          <span v-if="getProbe(item.name)?.status === 'ok'" class="text-status-success font-semibold tabular-nums">
-            {{ getProbe(item.name)?.latency_ms }}ms
-          </span>
-          <span v-else-if="getProbe(item.name)?.status === 'fail'" class="text-status-danger">失败</span>
-          <span v-else-if="getProbe(item.name)?.status === 'timeout'" class="text-status-warning">超时</span>
-          <span v-else class="text-text-sub">未测</span>
-
-          <span v-if="getProbe(item.name)?.speed_mbps" class="text-status-info font-semibold tabular-nums">
-            {{ getProbe(item.name)?.speed_mbps }} Mbps
-          </span>
-        </div>
-
-        <!-- Footer Actions -->
-        <div class="flex gap-2 pt-2 border-t border-border-subtle">
-          <Button
-            variant="secondary"
-            size="sm"
-            class="flex-1"
-            @click.stop="inspectNode(item)"
-          >
-            详情
-          </Button>
-          <Button
-            variant="primary"
-            size="sm"
-            class="flex-1"
-            :disabled="probingSingleNodeKey === item.name"
-            :loading="probingSingleNodeKey === item.name"
-            :icon="Zap"
-            @click.stop="handleProbeSingle(item)"
-          >
-            测速
-          </Button>
         </div>
       </div>
-    </div>
+    </template>
 
     <!-- Node Inspector & Dialer Chain Drawer (Componentized) -->
     <LedgerDrawer
@@ -408,6 +427,7 @@ import {
 } from '../api'
 import LedgerDrawer from '../components/ledger/LedgerDrawer.vue'
 import LedgerMetricsBar from '../components/ledger/LedgerMetricsBar.vue'
+import LedgerMobileList from '../components/ledger/LedgerMobileList.vue'
 import LedgerSearchFilter from '../components/ledger/LedgerSearchFilter.vue'
 import Button from '../components/ui/Button.vue'
 import IconButton from '../components/ui/IconButton.vue'
@@ -421,6 +441,7 @@ import {
   computeFilterOptions,
   filterAndSortNodes,
   getProbeForNode,
+  isMediaFullUnlocked,
   MEDIA_PLATFORMS,
   normalizeNodeLedgerMap,
   replaceNodeDialerProxy,
@@ -487,12 +508,7 @@ const mediaStats = computed(() => {
     if (probe?.media) {
       for (const p of mediaPlatformList) {
         const item = probe.media[p.key]
-        if (
-          item?.status === 'ok' ||
-          item?.status === 'full' ||
-          item?.status === 'originals' ||
-          item?.unlocked === true
-        ) {
+        if (isMediaFullUnlocked(item)) {
           stats[p.key]++
         }
       }
@@ -644,6 +660,12 @@ async function reload() {
 
     const rawProbeData = probeRes?.data?.results || probeRes?.data
     probes.value = normalizeNodeLedgerMap(rawProbeData)
+
+    store.setNodeSummary({
+      status: 'ready',
+      total: rows.value.length,
+      probed: rows.value.filter((r) => getProbeForNode(probes.value, r)?.status === 'ok').length,
+    })
   } catch (err: any) {
     error.value = getApiErrorMessage(err, '加载节点与跳板数据失败')
   } finally {
@@ -702,7 +724,6 @@ async function startProbeBatch(targetNodes: LedgerNodeItem[]) {
         nodes: chunk,
         include_speed: includeSpeedtest.value,
         include_media: includeMediaCheck.value,
-        concurrency: 5,
         use_cache: false,
       })
 

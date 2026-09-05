@@ -24,6 +24,7 @@ from app.services.probe.service import (
 )
 from app.services.probe_settings_service import (
     get_probe_config,
+    resolve_probe_config,
     to_read,
     update_probe_config,
 )
@@ -101,20 +102,15 @@ async def probe_node_endpoint(
 ) -> dict[str, Any]:
     """对单个节点进行全协议真实代理握手、出口定位与流媒体/测速检测"""
     config = await get_probe_config(db)
-
-    speed_enabled = payload.include_speed if payload.include_speed is not None else config.speedtest_enabled
-    media_enabled = payload.include_media if payload.include_media is not None else config.media_check_enabled
+    resolved = resolve_probe_config(
+        config,
+        client_include_speed=payload.include_speed,
+        client_include_media=payload.include_media,
+    )
 
     return await probe_single_node(
         payload.node,
-        probe_enabled=config.probe_enabled,
-        speedtest_enabled=speed_enabled,
-        media_check_enabled=media_enabled,
-        media_platforms=config.media_platforms,
-        speedtest_url=config.speedtest_url,
-        speedtest_max_bytes=config.speedtest_max_bytes,
-        speedtest_timeout_s=config.speedtest_timeout_s,
-        probe_timeout_ms=config.probe_timeout_ms,
+        resolved_config=resolved,
         use_cache=payload.use_cache,
         db=db,
     )
@@ -135,22 +131,17 @@ async def probe_batch_endpoint(
         )
 
     config = await get_probe_config(db)
-    concurrency = payload.concurrency or config.probe_concurrency
-    timeout_ms = payload.timeout_ms or config.probe_timeout_ms
-    speed_enabled = payload.include_speed if payload.include_speed is not None else config.speedtest_enabled
-    media_enabled = payload.include_media if payload.include_media is not None else config.media_check_enabled
+    resolved = resolve_probe_config(
+        config,
+        client_concurrency=payload.concurrency,
+        client_timeout_ms=payload.timeout_ms,
+        client_include_speed=payload.include_speed,
+        client_include_media=payload.include_media,
+    )
 
     return await probe_batch_nodes(
         payload.nodes,
-        probe_enabled=config.probe_enabled,
-        speedtest_enabled=speed_enabled,
-        media_check_enabled=media_enabled,
-        media_platforms=config.media_platforms,
-        speedtest_url=config.speedtest_url,
-        speedtest_max_bytes=config.speedtest_max_bytes,
-        speedtest_timeout_s=config.speedtest_timeout_s,
-        probe_timeout_ms=timeout_ms,
-        concurrency=concurrency,
+        resolved_config=resolved,
         use_cache=payload.use_cache,
         db=db,
     )

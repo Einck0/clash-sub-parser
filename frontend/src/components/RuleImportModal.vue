@@ -1,84 +1,174 @@
 <template>
-  <div class="modal-backdrop" @click.self="$emit('close')">
-    <div class="modal import-modal">
-      <div class="row space">
-        <div>
-          <p class="eyebrow">Batch Import</p>
-          <h3>批量导入规则</h3>
-          <p class="section-hint">粘贴 Clash YAML rules 或协议链接，自动解析为规则列表。</p>
-        </div>
-        <button @click="$emit('close')">关闭</button>
+  <AppModal
+    :model-value="true"
+    size="md"
+    title="批量导入规则"
+    @update:model-value="(val) => !val && $emit('close')"
+    @close="$emit('close')"
+  >
+    <div class="flex flex-col gap-4">
+      <div class="text-xs text-text-muted">
+        粘贴 Clash YAML rules 或协议链接，自动解析为规则列表。
       </div>
 
-      <div class="import-tabs">
-        <button :class="{ active: mode === 'yaml' }" @click="mode = 'yaml'">YAML Rules</button>
-        <button :class="{ active: mode === 'links' }" @click="mode = 'links'">协议链接</button>
-        <button :class="{ active: mode === 'text' }" @click="mode = 'text'">文本规则</button>
+      <!-- Import Mode Tabs -->
+      <div class="grid grid-cols-3 gap-1 rounded-lg bg-surface-base p-1 border border-border-subtle">
+        <button
+          type="button"
+          :class="[
+            'py-1.5 px-3 rounded-md text-xs font-medium transition-colors cursor-pointer text-center',
+            mode === 'yaml'
+              ? 'bg-accent text-white shadow-xs'
+              : 'text-text-muted hover:text-text-main hover:bg-surface-hover'
+          ]"
+          @click="mode = 'yaml'"
+        >
+          YAML Rules
+        </button>
+        <button
+          type="button"
+          :class="[
+            'py-1.5 px-3 rounded-md text-xs font-medium transition-colors cursor-pointer text-center',
+            mode === 'links'
+              ? 'bg-accent text-white shadow-xs'
+              : 'text-text-muted hover:text-text-main hover:bg-surface-hover'
+          ]"
+          @click="mode = 'links'"
+        >
+          协议链接
+        </button>
+        <button
+          type="button"
+          :class="[
+            'py-1.5 px-3 rounded-md text-xs font-medium transition-colors cursor-pointer text-center',
+            mode === 'text'
+              ? 'bg-accent text-white shadow-xs'
+              : 'text-text-muted hover:text-text-main hover:bg-surface-hover'
+          ]"
+          @click="mode = 'text'"
+        >
+          文本规则
+        </button>
       </div>
 
-      <div class="import-body">
-        <textarea
-          v-model="input"
-          :placeholder="placeholders[mode]"
-          rows="10"
-          class="import-textarea"
-        ></textarea>
+      <!-- Textarea Input -->
+      <textarea
+        v-model="input"
+        :placeholder="placeholders[mode]"
+        rows="8"
+        class="w-full rounded-md border border-border-subtle bg-surface-hover p-3 font-mono text-xs text-text-main placeholder:text-text-muted focus:border-accent focus:outline-hidden resize-y"
+      ></textarea>
 
-        <div class="import-options">
-          <label class="field">
-            <span>目标代理</span>
-            <select v-model="proxy">
-              <option value="">选择目标</option>
-              <option v-for="p in proxyOptions" :key="p" :value="p">{{ p }}</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>目标分类</span>
-            <select v-model="category">
-              <option value="">使用默认</option>
-              <option v-for="cat in categories" :key="cat" :value="cat">{{ cat }}</option>
-            </select>
-          </label>
-          <button class="primary" @click="parseInput" :disabled="!input.trim() || !proxy">解析</button>
-        </div>
+      <!-- Options Row -->
+      <div class="flex flex-wrap items-end gap-3">
+        <label class="flex flex-col gap-1 text-xs text-text-muted flex-1 min-w-[140px]">
+          <span>目标代理</span>
+          <select
+            v-model="proxy"
+            class="rounded-md border border-border-subtle bg-surface-hover px-3 py-2 text-xs text-text-main focus:border-accent focus:outline-hidden"
+          >
+            <option value="">选择目标</option>
+            <option v-for="p in proxyOptions" :key="p" :value="p">{{ p }}</option>
+          </select>
+        </label>
+
+        <label class="flex flex-col gap-1 text-xs text-text-muted flex-1 min-w-[140px]">
+          <span>目标分类</span>
+          <select
+            v-model="category"
+            class="rounded-md border border-border-subtle bg-surface-hover px-3 py-2 text-xs text-text-main focus:border-accent focus:outline-hidden"
+          >
+            <option value="">使用默认</option>
+            <option v-for="cat in categories" :key="cat" :value="cat">{{ cat }}</option>
+          </select>
+        </label>
+
+        <button
+          type="button"
+          class="px-4 py-2 rounded-md bg-accent text-xs font-medium text-white hover:bg-accent-hover disabled:opacity-50 transition-colors cursor-pointer shrink-0"
+          :disabled="!input.trim() || !proxy"
+          @click="parseInput"
+        >
+          解析
+        </button>
       </div>
 
-      <div v-if="parsed.length" class="import-preview">
-        <div class="row space">
-          <strong>解析结果：{{ parsed.length }} 条规则</strong>
-          <div class="row" style="gap:6px">
-            <span v-if="parseSkipped" class="muted">{{ parseSkipped }} 行无法解析已跳过</span>
-            <button @click="selectAll">全选</button>
-            <button @click="deselectAll">全不选</button>
+      <!-- Preview Section -->
+      <div v-if="parsed.length" class="flex flex-col gap-2 pt-3 border-t border-border-subtle">
+        <div class="flex items-center justify-between">
+          <strong class="text-xs text-text-main">解析结果：{{ parsed.length }} 条规则</strong>
+          <div class="flex items-center gap-2 text-xs">
+            <span v-if="parseSkipped" class="text-text-muted">{{ parseSkipped }} 行无法解析已跳过</span>
+            <button
+              type="button"
+              class="text-accent hover:underline cursor-pointer"
+              @click="selectAll"
+            >
+              全选
+            </button>
+            <button
+              type="button"
+              class="text-text-muted hover:text-text-main cursor-pointer"
+              @click="deselectAll"
+            >
+              全不选
+            </button>
           </div>
         </div>
-        <div class="import-rules-list">
+
+        <div class="max-h-60 overflow-y-auto divide-y divide-border-subtle rounded-md border border-border-subtle bg-surface-base p-1">
           <label
             v-for="(rule, idx) in parsed"
             :key="idx"
-            class="import-rule-row"
-            :class="{ selected: selected.has(idx) }"
+            :class="[
+              'flex items-center gap-2 p-2 text-xs cursor-pointer rounded-sm transition-colors',
+              selected.has(idx) ? 'bg-accent/10' : 'hover:bg-surface-hover'
+            ]"
           >
-            <input type="checkbox" :checked="selected.has(idx)" @change="toggle(idx)" />
-            <span class="badge">{{ rule.type }}</span>
-            <code>{{ rule.value }}</code>
-            <span class="muted">→ {{ rule.proxy }}</span>
+            <input
+              type="checkbox"
+              :checked="selected.has(idx)"
+              class="accent-accent cursor-pointer"
+              @change="toggle(idx)"
+            />
+            <span class="rounded bg-surface-hover px-1.5 py-0.5 font-mono text-[10px] text-text-muted border border-border-subtle">{{ rule.type }}</span>
+            <code class="flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-xs text-text-main">{{ rule.value }}</code>
+            <span class="text-text-muted text-[11px]">→ {{ rule.proxy }}</span>
           </label>
         </div>
       </div>
-
-      <div class="row" style="margin-top:12px" v-if="selected.size > 0">
-        <button class="primary" @click="applySelected">
-          应用 {{ selected.size }} 条规则
-        </button>
-        <span class="muted">将添加到当前规则列表末尾</span>
-      </div>
     </div>
-  </div>
+
+    <template #footer>
+      <div class="flex items-center justify-between">
+        <span class="text-xs text-text-muted">
+          {{ selected.size > 0 ? `将添加 ${selected.size} 条规则到当前列表末尾` : '' }}
+        </span>
+        <div class="flex gap-2">
+          <button
+            type="button"
+            class="px-3 py-1.5 rounded-md border border-border-subtle text-xs text-text-muted hover:text-text-main cursor-pointer"
+            @click="$emit('close')"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            class="px-4 py-1.5 rounded-md bg-accent text-xs font-medium text-white hover:bg-accent-hover disabled:opacity-50 transition-colors cursor-pointer"
+            :disabled="selected.size === 0"
+            @click="applySelected"
+          >
+            应用 {{ selected.size }} 条规则
+          </button>
+        </div>
+      </div>
+    </template>
+  </AppModal>
 </template>
 
 <script setup>
 import { ref } from 'vue'
+import AppModal from './ui/AppModal.vue'
 
 const props = defineProps({
   proxyOptions: { type: Array, default: () => ['DIRECT', 'PROXY', 'REJECT'] },
@@ -203,71 +293,3 @@ function applySelected() {
   emit('close')
 }
 </script>
-
-<style>
-.import-modal {
-  max-width: 700px;
-  max-height: 85vh;
-  overflow-y: auto;
-}
-.import-tabs {
-  display: flex;
-  gap: 4px;
-  margin: 12px 0 8px;
-}
-.import-tabs button {
-  padding: 6px 14px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-0);
-  cursor: pointer;
-  font-size: 13px;
-}
-.import-tabs button.active {
-  background: var(--accent, #6366f1);
-  color: #fff;
-  border-color: var(--accent, #6366f1);
-}
-.import-textarea {
-  width: 100%;
-  font-family: monospace;
-  font-size: 13px;
-  resize: vertical;
-}
-.import-options {
-  display: flex;
-  gap: 10px;
-  align-items: end;
-  margin-top: 8px;
-  flex-wrap: wrap;
-}
-.import-preview {
-  margin-top: 12px;
-  border-top: 1px solid var(--border);
-  padding-top: 12px;
-}
-.import-rules-list {
-  max-height: 240px;
-  overflow-y: auto;
-  margin-top: 8px;
-}
-.import-rule-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 0;
-  cursor: pointer;
-  font-size: 13px;
-  border-bottom: 1px solid var(--border);
-}
-.import-rule-row.selected {
-  background: rgba(99, 102, 241, 0.05);
-}
-.import-rule-row code {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-</style>

@@ -49,19 +49,38 @@
       <div class="dns-section settings-card">
         <h3>Token / 密码</h3>
         <p class="section-hint">留空表示不修改当前 token。新 token 至少 8 位；公开部署建议使用生成的长随机 token。</p>
-        <label class="field settings-token-field">
+        <div class="field settings-token-field">
           <span>新 token</span>
-          <input v-model="newToken" :type="showToken ? 'text' : 'password'" autocomplete="new-password" placeholder="输入新的访问 token" />
-        </label>
-        <div class="row">
+          <div class="relative flex items-center">
+            <input
+              v-model="newToken"
+              :type="showToken ? 'text' : 'password'"
+              autocomplete="new-password"
+              placeholder="输入新的访问 token"
+              @input="onManualTokenInput"
+              style="padding-right: 36px; width: 100%;"
+            />
+            <button
+              type="button"
+              class="absolute right-2 text-text-muted hover:text-text-main cursor-pointer"
+              style="background: transparent; border: none; padding: 4px;"
+              :aria-label="showToken ? '隐藏 Token' : '显示 Token'"
+              :title="showToken ? '隐藏 Token' : '显示 Token'"
+              @click="showToken = !showToken"
+            >
+              <EyeOff v-if="showToken" :size="16" />
+              <Eye v-else :size="16" />
+            </button>
+          </div>
+        </div>
+        <div class="row" style="margin-top: 8px;">
           <button type="button" @click="generateToken">生成随机 token</button>
         </div>
-        <label class="switch-line">
-          <input type="checkbox" v-model="showToken" /> 显示 token
-        </label>
-        <div class="settings-token-status">
+        <div class="settings-token-status" style="margin-top: 8px;">
           <span class="badge">当前：{{ settings.has_token ? '已设置 token' : '未设置 token' }}</span>
           <span class="badge" v-if="newToken">新 token：{{ newToken.length }} 位</span>
+          <span class="badge ok" v-if="isGeneratedToken && tokenAcknowledged">已确认保存</span>
+          <span class="badge error" v-else-if="isGeneratedToken && !tokenAcknowledged">待确认保存</span>
         </div>
       </div>
 
@@ -92,17 +111,21 @@
         <div class="section-title-row">
           <div>
             <h3><Activity :size="16" aria-hidden="true" /> 节点检测与测速设置</h3>
-            <p class="section-hint">配置全协议代理握手、真实出口 IP/国家识别、流媒体与 AI 解锁测试及受控带宽测速。</p>
+            <p class="section-hint">配置全协议代理握手、真实出口 IP/国家识别、流媒体与 AI 解锁测试、服务级超时及定时质检调度。</p>
           </div>
           <span class="sync-pill" :class="{ ok: probeConfig.probe_enabled }">
-            {{ probeConfig.probe_enabled ? '质检已开启' : '质检已暂停' }}
+            {{ probeConfig.probe_enabled ? '质检总开关已开启' : '质检总开关已暂停' }}
           </span>
         </div>
 
         <div class="settings-toggle-list" style="margin-bottom: 16px;">
           <label class="settings-toggle">
             <input type="checkbox" v-model="probeConfig.probe_enabled" />
-            <span><strong>开启节点出站校验</strong><small>通过 sing-box 建立独立通道验证真实代理协议握手与延迟（不仅是 TCP 端口）。</small></span>
+            <span><strong>开启节点出站校验（主开关）</strong><small>通过 sing-box 建立独立通道验证真实代理协议握手与延迟。关闭时暂停全部手动与定时质检。</small></span>
+          </label>
+          <label class="settings-toggle">
+            <input type="checkbox" v-model="probeConfig.probe_cron_enabled" :disabled="!probeConfig.probe_enabled" />
+            <span><strong>开启后台定时质检</strong><small>按设定周期自动在后台对所有节点执行完整质检，受主开关控制。</small></span>
           </label>
           <label class="settings-toggle">
             <input type="checkbox" v-model="probeConfig.media_check_enabled" :disabled="!probeConfig.probe_enabled" />
@@ -136,9 +159,59 @@
 
         <div class="settings-grid-2" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin-bottom: 12px;">
           <label class="field">
-            <span class="field-title-hint">后台自动探测周期（分钟）</span>
-            <input type="number" min="0" max="1440" v-model.number="probeConfig.probe_interval_minutes" placeholder="0 为仅手动探测" />
-            <small style="color: var(--text-muted); font-size: 0.8rem;">设置为 0 表示仅手动探测，大于 0 则后台按设定周期自动对所有节点进行探测与测速</small>
+            <span class="field-title-hint">后台定时质检周期 (分钟)</span>
+            <input
+              type="number"
+              min="1"
+              max="1440"
+              v-model.number="probeConfig.probe_cron_interval_minutes"
+              :disabled="!probeConfig.probe_enabled || !probeConfig.probe_cron_enabled"
+              placeholder="60"
+            />
+            <small style="color: var(--text-muted); font-size: 0.8rem;">
+              定时自动质检的时间间隔 (1–1440 分钟，默认 60 分钟)；设置保存后于下一调度周期生效。
+            </small>
+          </label>
+          <label class="field">
+            <span>服务级独立超时 (毫秒)</span>
+            <input
+              type="number"
+              min="500"
+              max="30000"
+              step="500"
+              v-model.number="probeConfig.probe_service_timeout_ms"
+              placeholder="2000"
+            />
+            <small style="color: var(--text-muted); font-size: 0.8rem;">
+              独立作用于每个握手、出口定位、平台解锁或测速服务，非整批或整节点超时 (500–30000ms，默认 2000ms)。
+            </small>
+          </label>
+          <label class="field">
+            <span>探测最大并发数</span>
+            <input
+              type="number"
+              min="1"
+              max="20"
+              v-model.number="probeConfig.probe_concurrency"
+              placeholder="10"
+            />
+            <small style="color: var(--text-muted); font-size: 0.8rem;">
+              单批次同时执行质检的节点工作流上限 (1–20，默认 10)。
+            </small>
+          </label>
+          <label class="field">
+            <span>单节点总预算超时 (毫秒，可选)</span>
+            <input
+              type="number"
+              min="0"
+              max="60000"
+              step="500"
+              v-model.number="probeConfig.probe_timeout_ms"
+              placeholder="0 为不设总预算"
+            />
+            <small style="color: var(--text-muted); font-size: 0.8rem;">
+              单节点端到端整体执行预算，0 表示不设硬限；各服务独立受上述服务级超时约束。
+            </small>
           </label>
           <label class="field">
             <span class="field-title-hint">测速目标 URL</span>
@@ -161,14 +234,6 @@
           <label class="field">
             <span>测速达标过滤阈值 (Mbps)</span>
             <input type="number" min="0" step="0.5" v-model.number="probeConfig.speedtest_min_speed_mbps" placeholder="0 表示不设门槛" />
-          </label>
-          <label class="field">
-            <span>探测并发数</span>
-            <input type="number" min="1" max="20" v-model.number="probeConfig.probe_concurrency" />
-          </label>
-          <label class="field">
-            <span>单次探测超时 (毫秒)</span>
-            <input type="number" min="500" max="15000" step="500" v-model.number="probeConfig.probe_timeout_ms" />
           </label>
         </div>
       </div>
@@ -237,13 +302,74 @@
         <p class="section-hint">管理界面登录使用 HttpOnly cookie；如果关闭 API 鉴权但开启导出鉴权，Clash 订阅地址仍需要 URL token。</p>
       </div>
     </div>
+
+    <!-- Generated Token Recovery & Acknowledgement Modal -->
+    <AppModal
+      v-model="showGeneratedModal"
+      title="已生成新访问 Token"
+      size="md"
+      @close="onCloseGeneratedModal"
+    >
+      <div class="space-y-4">
+        <div class="p-3 rounded-md border border-status-warning/30 bg-status-warning/10 text-xs text-status-warning font-mono">
+          警告：请务必立即复制并妥善保存下方 Token。关闭此弹窗后将无法再次查看该明文。在您勾选确认已保存前，无法保存设置。
+        </div>
+
+        <div class="space-y-1.5">
+          <label class="block text-xs font-mono text-text-muted">新生成的随机 Token</label>
+          <div class="flex items-center gap-2">
+            <input
+              :value="generatedTokenValue"
+              readonly
+              class="flex-1 min-h-[44px] rounded-md border border-border bg-surface-base px-3.5 py-2 font-mono text-xs text-text-main select-all focus:outline-hidden"
+            />
+            <button
+              type="button"
+              class="min-h-[44px] px-4 py-2 rounded-md bg-accent text-xs font-medium text-white hover:bg-accent-hover transition-colors cursor-pointer whitespace-nowrap shrink-0"
+              @click="copyGeneratedToken"
+            >
+              {{ tokenCopied ? '已复制' : '复制 Token' }}
+            </button>
+          </div>
+        </div>
+
+        <label class="flex items-center gap-2.5 text-xs text-text-main cursor-pointer select-none pt-2">
+          <input
+            type="checkbox"
+            v-model="tokenAcknowledged"
+            :disabled="!tokenCopied"
+            class="rounded border-border text-accent focus-ring cursor-pointer"
+          />
+          <span>我已复制并妥善保存此 Token，确认应用到设置</span>
+        </label>
+
+        <div class="flex justify-end gap-2.5 pt-4 border-t border-border-subtle">
+          <button
+            type="button"
+            class="min-h-[36px] px-4 py-1.5 rounded-md border border-border bg-surface-hover text-xs text-text-muted hover:text-text-main cursor-pointer"
+            @click="onCloseGeneratedModal"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            class="min-h-[36px] px-4 py-1.5 rounded-md bg-accent text-xs font-semibold text-white hover:bg-accent-hover transition-colors cursor-pointer disabled:opacity-50"
+            :disabled="!tokenAcknowledged"
+            @click="applyGeneratedToken"
+          >
+            采纳并填入表单
+          </button>
+        </div>
+      </div>
+    </AppModal>
   </section>
 </template>
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
-import { Activity } from 'lucide-vue-next'
+import { Activity, Eye, EyeOff } from 'lucide-vue-next'
 import { useAppStore } from '../stores/app'
+import AppModal from '../components/ui/AppModal.vue'
 import { formatBytes, formatDate } from '../utils/format'
 import {
   exportAppConfig,
@@ -285,8 +411,11 @@ const probeConfig = reactive({
   media_check_enabled: true,
   media_platforms: ['youtube', 'netflix', 'disney', 'chatgpt', 'bilibili', 'meta_ai', 'gemini'],
   media_timeout_s: 5,
-  probe_concurrency: 5,
+  probe_concurrency: 10,
   probe_timeout_ms: 3000,
+  probe_service_timeout_ms: 2000,
+  probe_cron_enabled: true,
+  probe_cron_interval_minutes: 60,
 })
 
 const availablePlatforms = [
@@ -310,6 +439,18 @@ const importInput = ref(null)
 const customDownloadUrl = ref('')
 const downloadItems = ref([])
 
+const persistedAuthEnabled = ref(false)
+const isGeneratedToken = ref(false)
+const tokenAcknowledged = ref(false)
+const tokenCopied = ref(false)
+const showGeneratedModal = ref(false)
+const generatedTokenValue = ref('')
+
+function onManualTokenInput() {
+  isGeneratedToken.value = false
+  tokenAcknowledged.value = true
+}
+
 const isBusy = computed(() => Boolean(working.value))
 const uiUrlExample = computed(() => `${window.location.origin}/（页面输入框填写 token）`)
 const exportNeedsToken = computed(() => Boolean(settings.auth_enabled && settings.protect_exports))
@@ -328,7 +469,10 @@ async function load() {
       getSecuritySettings(),
       getProbeSettings().catch(() => ({ data: null })),
     ])
-    if (secRes?.data) Object.assign(settings, secRes.data)
+    if (secRes?.data) {
+      Object.assign(settings, secRes.data)
+      persistedAuthEnabled.value = Boolean(secRes.data.auth_enabled)
+    }
     if (probeRes?.data) Object.assign(probeConfig, probeRes.data)
   } catch (err) {
     setMessage(getApiErrorMessage(err, '加载设置失败'), 'error')
@@ -338,6 +482,27 @@ async function load() {
 }
 
 async function save() {
+  if (isGeneratedToken.value && !tokenAcknowledged.value) {
+    store.warning('已生成的 Token 尚未确认妥善保存，无法保存设置')
+    return
+  }
+
+  // Dangerous confirmation on auth_enabled: true -> false
+  if (persistedAuthEnabled.value && !settings.auth_enabled) {
+    const confirmed = await store.confirm({
+      title: '危险操作：停用 Token 鉴权',
+      message: '关闭 Token 鉴权将导致 Web 控制台、API 及导出地址完全开放，任何能够访问服务的人均可查看节点与配置。\n\n确定要停用鉴权吗？',
+      confirmText: '确认停用鉴权',
+      cancelText: '取消',
+      danger: true,
+    })
+    if (!confirmed) {
+      settings.auth_enabled = true
+      store.info('已取消停用鉴权，设置未保存')
+      return
+    }
+  }
+
   saving.value = true
   message.value = ''
   try {
@@ -349,20 +514,26 @@ async function save() {
       fetch_proxy_enabled: settings.fetch_proxy_enabled,
       fetch_proxy_url: settings.fetch_proxy_url?.trim() || '',
     }
-    if (newToken.value) secPayload.token = newToken.value
+    const tokenToSave = newToken.value
+    if (tokenToSave) secPayload.token = tokenToSave
 
     const [secRes, probeRes] = await Promise.all([
       updateSecuritySettings(secPayload),
       updateProbeSettings(probeConfig),
     ])
 
-    if (secRes?.data) Object.assign(settings, secRes.data)
+    if (secRes?.data) {
+      Object.assign(settings, secRes.data)
+      persistedAuthEnabled.value = Boolean(secRes.data.auth_enabled)
+    }
     if (probeRes?.data) Object.assign(probeConfig, probeRes.data)
 
-    if (newToken.value) {
-      await loginAuthToken(newToken.value)
+    if (tokenToSave) {
+      await loginAuthToken(tokenToSave)
     }
     newToken.value = ''
+    isGeneratedToken.value = false
+    tokenAcknowledged.value = false
     showToken.value = false
     store.success('所有设置已保存')
   } catch (err) {
@@ -544,8 +715,46 @@ function generateToken() {
   const bytes = new Uint8Array(32)
   crypto.getRandomValues(bytes)
   const binary = Array.from(bytes, (byte) => String.fromCharCode(byte)).join('')
-  newToken.value = btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
+  generatedTokenValue.value = btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
+  tokenCopied.value = false
+  tokenAcknowledged.value = false
+  showGeneratedModal.value = true
+}
+
+async function copyGeneratedToken() {
+  if (!generatedTokenValue.value) return
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(generatedTokenValue.value)
+    } else {
+      const textarea = document.createElement('textarea')
+      textarea.value = generatedTokenValue.value
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.select()
+      document.execCommand('copy')
+      document.body.removeChild(textarea)
+    }
+    tokenCopied.value = true
+    store.success('Token 已成功复制到剪贴板')
+  } catch (err) {
+    tokenCopied.value = true
+    store.warning('无法自动写入剪贴板，请手动选中文本并复制')
+  }
+}
+
+function applyGeneratedToken() {
+  if (!tokenAcknowledged.value) return
+  newToken.value = generatedTokenValue.value
+  isGeneratedToken.value = true
+  showGeneratedModal.value = false
   showToken.value = true
+  store.info('已将生成的 Token 填入设置，请点击“保存所有设置”以使其生效')
+}
+
+function onCloseGeneratedModal() {
+  showGeneratedModal.value = false
 }
 </script>
 

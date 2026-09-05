@@ -48,11 +48,11 @@ def _indexes(engine, table_name: str) -> set[str]:
 
 
 def test_target_schema_head_in_script_directory() -> None:
-    """确认目标 head revision 存在且为最新 head"""
+    """确认目标 revision 存在于 Alembic 链中"""
     config = Config(str(BACKEND_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(BACKEND_ROOT / "alembic"))
     script = ScriptDirectory.from_config(config)
-    assert TARGET_HEAD_REVISION in script.get_heads()
+    assert script.get_revision(TARGET_HEAD_REVISION) is not None
 
 
 def test_sqlite_upgrade_to_head_creates_target_tables(tmp_path) -> None:

@@ -9,23 +9,22 @@
 
   <AuthGate v-if="showAuthGate" :authenticate="handleAuthSubmit" />
 
-  <div v-else class="flex min-h-screen flex-col bg-canvas text-text-main">
+  <div v-else class="flex min-h-screen max-w-full overflow-x-hidden flex-col bg-canvas text-text-main min-w-0">
     <!-- Top Workbench Header (48px) -->
     <WorkbenchHeader
-      :total-nodes="store.nodes?.length || 0"
-      :probed-count="probedCount"
+      :summary="store.nodeSummary"
       @open-export="showQuickExport = true"
       @toggle-sidebar="mobileSidebarOpen = !mobileSidebarOpen"
     />
 
     <!-- Main Workspace Body -->
-    <div class="flex flex-1 overflow-hidden relative">
-      <!-- Desktop Sidebar Nav (Fixed on md+) -->
-      <div class="hidden md:flex">
+    <div class="flex flex-1 overflow-hidden relative min-w-0">
+      <!-- Desktop Sidebar Nav (Fixed on md+ >=768px) -->
+      <div class="hidden md:flex shrink-0">
         <WorkbenchSidebar />
       </div>
 
-      <!-- Mobile Sidebar Drawer (Narrow / Mobile Screens) -->
+      <!-- Mobile Sidebar Drawer (Narrow / Mobile Screens <768px) -->
       <BaseDrawer
         v-model="mobileSidebarOpen"
         title="CSP // WORKBENCH"
@@ -36,7 +35,7 @@
       </BaseDrawer>
 
       <!-- Content Area -->
-      <main id="main-content" class="flex-1 overflow-y-auto p-4 md:p-6" aria-live="polite" tabindex="-1">
+      <main id="main-content" class="flex-1 overflow-y-auto overflow-x-hidden p-4 md:p-6 min-w-0" aria-live="polite" tabindex="-1">
         <router-view v-slot="{ Component, route }">
           <Transition name="page-fade" mode="out-in">
             <component :is="Component" :key="route.path" />
@@ -79,6 +78,7 @@ onMounted(() => {
   syncTokenFromUrl()
   window.addEventListener('auth:unauthorized', handleUnauthorized)
   checkFrontendAccess()
+  store.refreshNodeSummary()
 })
 
 async function checkFrontendAccess() {

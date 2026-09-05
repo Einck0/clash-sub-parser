@@ -279,24 +279,43 @@
       </div>
     </div>
 
-    <div v-if="manualNodeEditIndex !== null" class="modal-backdrop manual-node-edit-backdrop">
-      <div class="modal" role="dialog" aria-modal="true" aria-label="编辑手动节点">
-        <div class="row space">
-          <div>
-            <p class="eyebrow">Manual Node</p>
-            <h3>编辑节点配置</h3>
-            <p class="section-hint">直接编辑 YAML，未修改的协议字段会原样保留。</p>
-          </div>
-          <button @click="closeManualNodeEdit">关闭</button>
-        </div>
-        <textarea data-testid="manual-node-yaml" v-model="manualNodeYaml" class="secret-textarea" style="min-height:260px"></textarea>
-        <p v-if="manualNodeEditError" class="form-alert form-alert-error">{{ manualNodeEditError }}</p>
-        <div class="form-footer">
-          <button class="primary" data-testid="manual-node-yaml-apply" @click="saveManualNodeEdit">应用修改</button>
-          <button @click="closeManualNodeEdit">取消</button>
-        </div>
+    <AppModal
+      :model-value="manualNodeEditIndex !== null"
+      size="md"
+      title="编辑节点配置"
+      @update:model-value="(val) => !val && closeManualNodeEdit()"
+      @close="closeManualNodeEdit"
+    >
+      <div class="flex flex-col gap-3">
+        <div class="text-xs text-text-muted">直接编辑 YAML，未修改的协议字段会原样保留。</div>
+        <textarea
+          data-testid="manual-node-yaml"
+          v-model="manualNodeYaml"
+          class="w-full min-h-[260px] rounded-md border border-border-subtle bg-surface-hover p-3 font-mono text-xs text-text-main focus:border-accent focus:outline-hidden"
+          placeholder="name: 节点名&#10;type: ss&#10;server: ..."
+        ></textarea>
+        <p v-if="manualNodeEditError" class="rounded-md border border-status-danger/40 bg-status-danger/10 p-2 text-xs text-status-danger">{{ manualNodeEditError }}</p>
       </div>
-    </div>
+      <template #footer>
+        <div class="flex justify-end gap-2">
+          <button
+            type="button"
+            class="px-3 py-1.5 rounded-md border border-border-subtle text-xs text-text-muted hover:text-text-main cursor-pointer"
+            @click="closeManualNodeEdit"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            class="primary px-4 py-1.5 rounded-md bg-accent text-xs font-medium text-white hover:bg-accent-hover cursor-pointer"
+            data-testid="manual-node-yaml-apply"
+            @click="saveManualNodeEdit"
+          >
+            应用修改
+          </button>
+        </div>
+      </template>
+    </AppModal>
 
     <div class="form-footer">
       <button class="primary" data-testid="subscription-save" @click="handleSave" :disabled="saveDisabled || fetching">保存</button>
@@ -308,6 +327,7 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { Zap } from 'lucide-vue-next'
+import AppModal from './ui/AppModal.vue'
 import { parseManualNodeYaml, serializeManualNode } from '../utils/manualNodeYaml'
 import { setDragGhost } from '../utils/drag'
 import { fetchSubscription, getApiErrorMessage } from '../api'

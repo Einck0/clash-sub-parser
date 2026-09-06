@@ -13,6 +13,7 @@ from app.schemas.probe import (
     ProbeNodeRequest,
     ProbeSettingsRead,
     ProbeSettingsUpdate,
+    ProbeStatusRead,
 )
 from app.services.probe.service import (
     clear_probe_cache,
@@ -61,6 +62,18 @@ async def update_probe_settings_endpoint(
     """更新节点探测与测速设置"""
     item = await update_probe_config(db, payload)
     return to_read(item)
+
+
+@router.get("/status", response_model=ProbeStatusRead)
+async def get_probe_status_endpoint(
+    db: AsyncSession = Depends(get_db),
+) -> ProbeStatusRead:
+    """获取后台节点定时质检运行状态与单实例时间投影"""
+    config = await get_probe_config(db)
+    from app.services.scheduler import get_probe_schedule_runtime
+    runtime = get_probe_schedule_runtime()
+    status_data = runtime.get_status(config)
+    return ProbeStatusRead(**status_data)
 
 
 @router.post("/tcp")

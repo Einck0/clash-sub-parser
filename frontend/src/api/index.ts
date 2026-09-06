@@ -53,9 +53,9 @@ async function request(method: string, url: string, data?: any, extraOptions?: {
 
 const api = {
   get: (url: string, options?: { signal?: AbortSignal }) => request('GET', url, undefined, options),
-  post: (url: string, data?: any) => request('POST', url, data),
-  patch: (url: string, data?: any) => request('PATCH', url, data),
-  delete: (url: string) => request('DELETE', url),
+  post: (url: string, data?: any, options?: { signal?: AbortSignal }) => request('POST', url, data, options),
+  patch: (url: string, data?: any, options?: { signal?: AbortSignal }) => request('PATCH', url, data, options),
+  delete: (url: string, options?: { signal?: AbortSignal }) => request('DELETE', url, undefined, options),
 }
 
 export function getApiErrorMessage(err: any, fallback: string = '请求失败'): string {
@@ -99,8 +99,11 @@ export const probeTcp = (payload: { nodes: any[]; timeout_ms?: number; concurren
 // 节点深度能力与测速探针
 export const getProbeSettings = () => api.get('/probe/settings')
 export const updateProbeSettings = (data: any) => api.patch('/probe/settings', data)
-export const probeNode = (data: { node: any; include_speed?: boolean; include_media?: boolean; use_cache?: boolean }) =>
-  api.post('/probe/node', data)
+export const getProbeStatus = (options?: { signal?: AbortSignal }) => api.get('/probe/status', options)
+export const probeNode = (
+  data: { node: any; include_speed?: boolean; include_media?: boolean; use_cache?: boolean },
+  options?: { signal?: AbortSignal }
+) => api.post('/probe/node', data, options)
 export const probeBatch = (data: {
   nodes: any[]
   include_speed?: boolean

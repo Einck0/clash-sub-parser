@@ -16,21 +16,25 @@ from app.services.probe.catalogue import (
     EVIDENCE_VERSION,
     STATUS_TAXONOMY,
     VERDICT_TAXONOMY,
+    eval_aistudio,
     eval_bilibili,
     eval_chatgpt,
+    eval_claude,
     eval_disney,
     eval_gemini,
-    eval_aistudio,
     eval_meta_ai,
     eval_netflix,
     eval_youtube,
     eval_youtube_cdn,
 )
 from app.services.probe.models import (
+    CONFIDENCE_TAXONOMY,
     CdnRoutingObservation,
     IdentityObservation,
+    OBSERVATION_KIND_TAXONOMY,
     ProviderEvidence,
     ProviderResult,
+    TIER_TAXONOMY,
 )
 
 
@@ -598,3 +602,131 @@ async def test_gemini_alpha3_fast_optimization():
     assert res_cn.verdict == "unsupported_region"
     assert res_cn.unlocked is False
     assert res_cn.region == "CN"
+
+
+def test_taxonomy_sets_completeness():
+    assert CONFIDENCE_TAXONOMY == {"verified", "conflicted", "unavailable"}
+    assert OBSERVATION_KIND_TAXONOMY == {"capability", "region_signal"}
+    assert TIER_TAXONOMY == {"none", "web", "app"}
+
+
+@pytest.mark.asyncio
+async def test_claude_evaluator_regional_signal():
+    """Verify Claude evaluation returns regional signal observation, never full unlock."""
+    # 1. Parseable regional signal (e.g. loc=US)
+    client_us = AsyncMock(spec=httpx.AsyncClient)
+    trace_text = "fl=123f45\nh=claude.ai\nip=1.2.3.4\nts=1788546780\nvisit_scheme=https\nuag=Mozilla\nloc=US\n"
+    client_us.get = AsyncMock(return_value=_build_mock_response(200, text=trace_text, url="https://claude.ai/cdn-cgi/trace"))
+    res_us = await eval_claude(client_us)
+    assert res_us.status == "verified"
+    assert res_us.verdict == "unknown"  # Strictly does NOT declare full unlock
+    assert res_us.unlocked is False
+    assert res_us.region == "US"
+    assert res_us.confidence == "verified"
+    assert res_us.observation_kind == "region_signal"
+    assert res_us.tier == "none"
+
+    # 2. Challenge / 403
+    client_blk = AsyncMock(spec=httpx.AsyncClient)
+    client_blk.get = AsyncMock(return_value=_build_mock_response(403, text="Just a moment...", url="https://claude.ai/cdn-cgi/trace"))
+    res_blk = await eval_claude(client_blk)
+    assert res_blk.status == "challenged"
+    assert res_blk.verdict == "unknown"
+    assert res_blk.unlocked is False
+    assert res_blk.observation_kind == "region_signal"
+
+    # 3. 429 Rate limited
+    client_429 = AsyncMock(spec=httpx.AsyncClient)
+    client_429.get = AsyncMock(return_value=_build_mock_response(429, text="Rate limit", url="https://claude.ai/cdn-cgi/trace"))
+    res_429 = await eval_claude(client_429)
+    assert res_429.status == "rate_limited"
+    assert res_429.verdict == "unknown"
+    assert res_429.unlocked is False
+
+    # 4. Contract drift (no loc=)
+    client_drift = AsyncMock(spec=httpx.AsyncClient)
+    client_drift.get = AsyncMock(return_value=_build_mock_response(200, text="something unexpected\n", url="https://claude.ai/cdn-cgi/trace"))
+    res_drift = await eval_claude(client_drift)
+    assert res_drift.status == "inconclusive"
+    assert res_drift.confidence == "unavailable"
+    assert res_drift.unlocked is False
+
+    # 5. Timeout
+    client_timeout = AsyncMock(spec=httpx.AsyncClient)
+    client_timeout.get = AsyncMock(side_effect=httpx.TimeoutException("Read timed out"))
+    res_timeout = await eval_claude(client_timeout)
+    assert res_timeout.status == "timeout"
+    assert res_timeout.verdict == "unknown"
+    assert res_timeout.unlocked is False
+    assert res_timeout.tier == "none"
+
+
+@pytest.mark.asyncio
+async def test_chatgpt_evaluator_tiered_observations():
+    """Verify ChatGPT tiered observation across Web and iOS App modalities."""
+    # 1. Both Web and App succeed -> top-level verified, tier=app, unlocked=True
+    client_both = AsyncMock(spec=httpx.AsyncClient)
+    client_both.get = AsyncMock(return_value=_build_mock_response(200, json_data={"status": "normal"}))
+    res_both = await eval_chatgpt(client_both)
+    assert res_both.status == "verified"
+    assert res_both.verdict == "available"
+    assert res_both.unlocked is True
+    assert res_both.tier == "app"
+    assert res_both.subobservations is not None
+    assert res_both.subobservations["web"]["unlocked"] is True
+    assert res_both.subobservations["app"]["unlocked"] is True
+
+    # 2. Web succeeds, but App is challenged -> partial, tier=web, unlocked=False
+    client_mixed = AsyncMock(spec=httpx.AsyncClient)
+    async def mock_mixed_get(url, headers=None, **kwargs):
+        if headers and "com.openai.chatgpt" in headers.get("X-Requested-With", ""):
+            return _build_mock_response(403, text="Cloudflare challenge")
+        return _build_mock_response(200, json_data={"status": "normal"})
+    client_mixed.get = AsyncMock(side_effect=mock_mixed_get)
+
+    res_mixed = await eval_chatgpt(client_mixed)
+    assert res_mixed.status == "partial"
+    assert res_mixed.verdict == "unknown"
+    assert res_mixed.unlocked is False
+    assert res_mixed.tier == "web"
+    assert res_mixed.subobservations is not None
+    assert res_mixed.subobservations["web"]["unlocked"] is True
+    assert res_mixed.subobservations["app"]["status"] == "challenged"
+    assert res_mixed.subobservations["app"]["unlocked"] is False
+
+    # 3. Both challenged -> top-level challenged, tier=none, unlocked=False
+    client_challenged = AsyncMock(spec=httpx.AsyncClient)
+    client_challenged.get = AsyncMock(return_value=_build_mock_response(403, text="Cloudflare challenge"))
+    res_challenged = await eval_chatgpt(client_challenged)
+    assert res_challenged.status == "challenged"
+    assert res_challenged.unlocked is False
+    assert res_challenged.tier == "none"
+    assert res_challenged.subobservations is not None
+    assert res_challenged.subobservations["web"]["status"] == "challenged"
+    assert res_challenged.subobservations["app"]["status"] == "challenged"
+
+    # 4. Rate limited (429) -> status="rate_limited", tier="none", unlocked=False
+    client_rate_limited = AsyncMock(spec=httpx.AsyncClient)
+    client_rate_limited.get = AsyncMock(return_value=_build_mock_response(429, text="Rate limit"))
+    res_rl = await eval_chatgpt(client_rate_limited)
+    assert res_rl.status == "rate_limited"
+    assert res_rl.unlocked is False
+    assert res_rl.tier == "none"
+    assert res_rl.subobservations is not None
+    assert res_rl.subobservations["web"]["status"] == "rate_limited"
+
+    # 5. Timeout -> status="timeout", tier="none", unlocked=False
+    client_timeout = AsyncMock(spec=httpx.AsyncClient)
+    client_timeout.get = AsyncMock(side_effect=httpx.TimeoutException("Timeout"))
+    res_timeout = await eval_chatgpt(client_timeout)
+    assert res_timeout.status == "timeout"
+    assert res_timeout.unlocked is False
+    assert res_timeout.tier == "none"
+
+    # 6. Malformed JSON -> status="inconclusive", tier="none", unlocked=False
+    client_malformed = AsyncMock(spec=httpx.AsyncClient)
+    client_malformed.get = AsyncMock(return_value=_build_mock_response(200, text="not-a-json"))
+    res_malformed = await eval_chatgpt(client_malformed)
+    assert res_malformed.status == "inconclusive"
+    assert res_malformed.unlocked is False
+    assert res_malformed.tier == "none"

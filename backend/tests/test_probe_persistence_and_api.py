@@ -327,6 +327,32 @@ class TestProbeSecretRedactionAndAPIRegression:
         violations = _scan_for_secrets(sanitized)
         assert not violations, f"Secret violations found: {violations}"
 
+        # Subobservations nesting sanitization check
+        raw_with_subs = {
+            "status": "verified",
+            "observation_kind": "capability",
+            "tier": "app",
+            "subobservations": {
+                "web": {
+                    "status": "verified",
+                    "cookie": "secret_cookie",
+                    "evidence": {"http_status": 200, "headers": {"Authorization": "Bearer 123"}},
+                },
+                "app": {
+                    "status": "verified",
+                    "password": "secret_password",
+                    "evidence": {"http_status": 200, "final_host": "ios.chat.openai.com"},
+                },
+            },
+        }
+        sanitized_subs = sanitize_probe_evidence(raw_with_subs)
+        assert "cookie" not in sanitized_subs["subobservations"]["web"]
+        assert "headers" not in sanitized_subs["subobservations"]["web"]["evidence"]
+        assert "password" not in sanitized_subs["subobservations"]["app"]
+        assert sanitized_subs["subobservations"]["app"]["evidence"]["final_host"] == "ios.chat.openai.com"
+        violations_subs = _scan_for_secrets(sanitized_subs)
+        assert not violations_subs, f"Subobservations secret violations: {violations_subs}"
+
     @pytest.mark.asyncio
     async def test_api_results_endpoint_backward_compatible_and_redacted(self):
         """Verify GET /api/probe/results returns valid data without any secrets and paged envelope."""

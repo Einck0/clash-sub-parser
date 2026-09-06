@@ -248,7 +248,7 @@ async def test_scheduler_dynamic_cron_tick_and_no_overlap(isolated_db):
     run_mock = AsyncMock()
 
     with patch("app.services.scheduler.AsyncSessionLocal") as mock_session_ctx, \
-         patch("app.services.scheduler.collect_all_subscription_nodes", return_value=[{"name": "n1"}]), \
+         patch("app.services.scheduler.collect_scheduler_inventory_nodes", return_value=[{"name": "n1"}]), \
          patch("app.services.probe.service.probe_batch_nodes", side_effect=run_mock):
 
         mock_session_ctx.return_value.__aenter__.return_value = isolated_db

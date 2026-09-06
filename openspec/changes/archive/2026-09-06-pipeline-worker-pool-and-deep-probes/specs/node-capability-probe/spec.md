@@ -1,27 +1,4 @@
-# node-capability-probe Specification
-
-## Purpose
-Provides comprehensive proxy node health evaluation, accurate geo-identity consensus, streaming and AI service unlocking capability detection, and controlled speed testing for parsed subscription nodes.
-
-## Requirements
-
-### Requirement: Node Outbound Isolation and Protocol Handshake
-The system SHALL spin up an isolated runtime instance for each candidate proxy node using a dedicated loopback port to verify protocol handshake and measure transport latency.
-
-#### Scenario: Successful protocol handshake
-- **WHEN** a valid proxy node (such as Shadowsocks, VMess, VLESS with Reality, or Trojan) is submitted for probing
-- **THEN** the system launches an isolated runtime, verifies connectivity to a standard 204 endpoint via the node egress without inheriting host environment proxies, records latency, and cleanly tears down the runner instance.
-
-#### Scenario: Invalid node credentials or unreachable server
-- **WHEN** a node configuration contains invalid TLS parameters or server is unreachable
-- **THEN** the system reports a structured failure reason (such as handshake failure or timeout) within the configured timeout limit and reclaims all allocated ports and temporary files.
-
-### Requirement: Egress Identity and Geo-location Consensus
-The system SHALL query multiple independent external IP verification providers through the node egress to establish a consensus on the exit IP, ISO country code, and ASN.
-
-#### Scenario: Multi-provider geo consensus
-- **WHEN** the node establishes outbound connection
-- **THEN** the probe client queries at least two independent IP identity providers through the node's local listener and records the verified country code and outbound IP only when providers reach consensus.
+## MODIFIED Requirements
 
 ### Requirement: Streaming Media and AI Unlock Probing
 
@@ -54,10 +31,3 @@ The system SHALL support bounded single-thread download speed tests with strict 
 #### Scenario: Sliding batch retains speed bound
 - **WHEN** a manual sliding batch includes speed tests and one node completes
 - **THEN** the next node MAY begin only after that node’s bounded probe workflow has released its batch slot, and active probe workflows SHALL not exceed the effective configured concurrency
-
-### Requirement: Capability Filtering and Subscription Generation Integration
-The system SHALL persist probe results with timestamps and capability tags, allowing subscription generation pipelines to filter or group nodes based on media unlock and speed criteria.
-
-#### Scenario: Generating subscription filtered by capability
-- **WHEN** a user requests subscription output filtered by capability (such as `netflix=true` and `latency < 500ms`)
-- **THEN** the system outputs only nodes meeting the capability criteria from recent valid probe runs without modifying original raw proxy parameters.

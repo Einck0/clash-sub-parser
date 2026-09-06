@@ -14,12 +14,16 @@ The system SHALL store the outcome of all node capability and speed probes in a 
 - THEN the system stores or updates the record keyed by `name|type|server:port` in `node_probe_results`.
 
 ### Requirement: Periodic Background Node Probing
-The system SHALL support periodic automated node probing on a configurable interval.
+The system SHALL support periodic automated node probing on a configurable interval. Scheduling runtime status — current state, recent outcome, server clock, and estimated next trigger — SHALL be queryable through a protected endpoint. IP Risk observations MUST NOT participate in node capability filtering, subscription generation, or health statistics.
 
 #### Scenario: Running background probing
-- GIVEN `probe_interval_minutes` is configured to a positive integer $M$
-- WHEN $M$ minutes have elapsed since the previous background probe
-- THEN the background scheduler triggers probing for all active subscription nodes and persists the results.
+- GIVEN `probe_cron_enabled` is true and `probe_cron_interval_minutes` is configured to a positive integer $M$
+- WHEN $M$ minutes have elapsed since the previous background probe in the current process
+- THEN the background scheduler triggers probing for all active subscription nodes, persists the results, updates the runtime status to reflect the latest run.
+
+#### Scenario: IP Risk observation does not affect capability filtering
+- WHEN a node has an IP Risk observation recorded alongside media capability observations
+- THEN capability-based filtering, node-group resolution, and subscription generation SHALL evaluate only media capability fields and ignore the risk observation entirely
 
 ### Requirement: Capability-Based Filtering in Subscriptions and Node Groups
 系统 SHALL 基于速度阈值与多选流媒体 AI 完整解锁能力过滤订阅和节点组。多项必需媒体能力 SHALL 同时满足；confirmed full unlock 之外的 partial、restricted、challenged、rate-limited、timeout、transport-error 和 inconclusive 均不得满足能力要求。节点台账 SHALL 以同一判定语义提供地区、协议、健康和解锁能力的多选筛选：同一维度内按 OR 匹配，不同维度以及速度、链路、订阅和关键词约束按 AND 组合。

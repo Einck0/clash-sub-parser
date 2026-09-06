@@ -17,6 +17,7 @@ from app.services.probe.catalogue import (
     eval_aistudio,
     eval_bilibili,
     eval_chatgpt,
+    eval_claude,
     eval_disney,
     eval_gemini,
     eval_geo_identity_consensus,
@@ -133,6 +134,11 @@ async def check_chatgpt(client: httpx.AsyncClient, timeout_s: float = 2.0, deadl
     return await _call_eval(eval_chatgpt, client, timeout_s=timeout_s, deadline_monotonic=deadline_monotonic)
 
 
+async def check_claude(client: httpx.AsyncClient, timeout_s: float = 2.0, deadline_monotonic: float | None = None) -> dict[str, Any]:
+    """检测 Claude 区域信号观察 (非完整解锁)"""
+    return await _call_eval(eval_claude, client, timeout_s=timeout_s, deadline_monotonic=deadline_monotonic)
+
+
 async def check_bilibili(client: httpx.AsyncClient, timeout_s: float = 2.0, deadline_monotonic: float | None = None) -> dict[str, Any]:
     """检测 Bilibili 港澳台与大陆限定区域解锁"""
     return await _call_eval(eval_bilibili, client, timeout_s=timeout_s, deadline_monotonic=deadline_monotonic)
@@ -163,6 +169,7 @@ PROBE_MEDIA_DISPATCH = {
     "netflix": check_netflix,
     "disney": check_disney,
     "chatgpt": check_chatgpt,
+    "claude": check_claude,
     "bilibili": check_bilibili,
     "meta_ai": check_meta_ai,
     "gemini": check_gemini,

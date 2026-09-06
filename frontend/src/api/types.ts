@@ -128,6 +128,26 @@ export interface ProviderResult {
   evidence?: ProviderEvidence
   label?: string | null
   error?: string | null
+  observation_kind?: 'capability' | 'region_signal' | string
+  tier?: 'none' | 'web' | 'app' | string
+  subobservations?: Record<string, any>
+}
+
+export interface ProbeScheduleStatus {
+  state: 'disabled' | 'initializing' | 'waiting' | 'running' | 'failed'
+  server_now: number
+  interval_minutes: number | null
+  next_expected_at: number | null
+  last_started_at: number | null
+  last_finished_at: number | null
+  last_summary: {
+    total: number
+    ok: number
+    fail: number
+    timeout: number
+    skipped: number
+  } | null
+  last_error_code: string | null
 }
 
 export interface ProbeResult {

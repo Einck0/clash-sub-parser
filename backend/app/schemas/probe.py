@@ -97,6 +97,20 @@ class ProviderResultRead(BaseModel):
     evidence: dict[str, Any] = Field(default_factory=dict)
     label: str | None = None
     error: str | None = None
+    observation_kind: str | None = None
+    tier: str | None = None
+    subobservations: dict[str, Any] | None = None
+
+
+class ProbeStatusRead(BaseModel):
+    state: str
+    server_now: int
+    interval_minutes: int | None = None
+    next_expected_at: int | None = None
+    last_started_at: int | None = None
+    last_finished_at: int | None = None
+    last_summary: dict[str, int] | None = None
+    last_error_code: str | None = None
 
 
 class IdentityEvidenceRead(BaseModel):

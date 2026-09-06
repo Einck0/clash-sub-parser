@@ -53,9 +53,12 @@ def is_media_full_unlocked(item: Any) -> bool:
     status = str(item.get("status") or "").lower().strip()
     verdict = str(item.get("verdict") or "").lower().strip()
     confidence = str(item.get("confidence") or "").lower().strip()
+    observation_kind = str(item.get("observation_kind") or "").lower().strip()
     unlocked = item.get("unlocked")
 
     # 1. Explicit disqualifications
+    if observation_kind == "region_signal":
+        return False
     if verdict in DISQUALIFIED_VERDICTS:
         return False
     if status in DISQUALIFIED_STATUSES:

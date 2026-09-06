@@ -178,6 +178,7 @@ export interface MediaPlatformDef {
 
 export const MEDIA_PLATFORMS: MediaPlatformDef[] = [
   { key: 'chatgpt', name: 'ChatGPT', short: 'GPT', icon: '🤖' },
+  { key: 'claude', name: 'Claude', short: 'Claude', icon: '🤖' },
   { key: 'gemini', name: 'Gemini', short: 'Gemini', icon: '🧠' },
   { key: 'youtube', name: 'YouTube', short: 'YT', icon: '📺' },
   { key: 'netflix', name: 'Netflix', short: 'NF', icon: '🍿' },
@@ -227,6 +228,16 @@ export const DISQUALIFIED_CONFIDENCES = new Set([
 export function isMediaFullUnlocked(item: any): boolean {
   if (item === null || item === undefined) return false
   if (typeof item !== 'object') return Boolean(item === true)
+
+  const observationKind = String(item.observation_kind || '').toLowerCase().trim()
+  if (observationKind === 'region_signal') {
+    return false
+  }
+
+  const tier = String(item.tier || '').toLowerCase().trim()
+  if (tier === 'web' || tier === 'none') {
+    return false
+  }
 
   const status = String(item.status || '').toLowerCase().trim()
   const verdict = String(item.verdict || '').toLowerCase().trim()
@@ -312,6 +323,9 @@ export interface MediaSemanticPresentation {
   evidenceVersion?: string
   checkedAt?: number
   sanitizedSignalSummary?: string
+  observationKind?: string
+  tier?: string
+  subobservations?: Record<string, any>
 }
 
 /**
@@ -327,6 +341,7 @@ export function getMediaSemanticPresentation(
   item: any,
   platformDef?: { key: string; name: string; short: string }
 ): MediaSemanticPresentation {
+  const pKey = platformDef?.key || ''
   const pName = platformDef?.name || '未知平台'
   const pShort = platformDef?.short || platformDef?.key?.toUpperCase() || 'PROBE'
 
@@ -351,20 +366,106 @@ export function getMediaSemanticPresentation(
   const evidenceVersion = item.evidence_version ? String(item.evidence_version).trim() : undefined
   const checkedAt = typeof item.checked_at === 'number' ? item.checked_at : undefined
   const sanitizedSummary = sanitizeEvidenceSummary(item.evidence)
+  const observationKind = item.observation_kind ? String(item.observation_kind).trim() : undefined
+  const tier = item.tier ? String(item.tier).trim() : undefined
+  const subobservations = item.subobservations && typeof item.subobservations === 'object' ? item.subobservations : undefined
 
   const isPartial =
     status === 'partial' ||
     verdict === 'originals_only' ||
-    status === 'originals'
+    status === 'originals' ||
+    tier === 'web'
   const isInconclusive =
-    status === 'inconclusive' || (status === 'unknown' && (verdict === 'unknown' || !verdict))
+    status === 'inconclusive' || (status === 'unknown' && (verdict === 'unknown' || !verdict) && observationKind !== 'region_signal')
 
   let badgeVariant: 'success' | 'warning' | 'danger' | 'neutral' | 'info' = 'neutral'
   let label = '未知'
   let shortBadgeText = `${pShort}:--`
   let accessibleTitle = `${pName}: 未知状态`
 
-  if (fullUnlocked) {
+  // 1. Claude / region_signal observation
+  if (pKey === 'claude' || observationKind === 'region_signal') {
+    if (status === 'timeout') {
+      badgeVariant = 'neutral'
+      label = '超时'
+      shortBadgeText = `${pShort}:超时`
+      accessibleTitle = `${pName}: 请求超时 (Timeout)`
+    } else if (status === 'challenged' || verdict === 'challenge') {
+      badgeVariant = 'warning'
+      label = '质询拦截'
+      shortBadgeText = `${pShort}:质询`
+      accessibleTitle = `${pName}: 质询拦截 (Challenge)`
+    } else if (status === 'rate_limited' || verdict === 'rate_limited') {
+      badgeVariant = 'warning'
+      label = '速率限制'
+      shortBadgeText = `${pShort}:限流`
+      accessibleTitle = `${pName}: 速率限制 (Rate Limited)`
+    } else if (status === 'transport_error') {
+      badgeVariant = 'danger'
+      label = '传输错误'
+      shortBadgeText = `${pShort}:错误`
+      accessibleTitle = `${pName}: 传输错误 (Transport Error)`
+    } else if (status === 'inconclusive') {
+      badgeVariant = 'neutral'
+      label = '未定结论'
+      shortBadgeText = `${pShort}:未定`
+      accessibleTitle = `${pName}: 未定结论 (Inconclusive)`
+    } else if (region || status === 'verified') {
+      badgeVariant = 'info'
+      label = region ? `${region} 信号` : '区域信号'
+      shortBadgeText = region ? `${pShort}:${region}` : `${pShort}:信号`
+      accessibleTitle = `${pName}: ${region ? region + ' ' : ''}地区信号 (Region Signal, 非解锁)`
+    } else {
+      badgeVariant = 'neutral'
+      label = '未定'
+      shortBadgeText = `${pShort}:未定`
+      accessibleTitle = `${pName}: 地区信号未定`
+    }
+  }
+  // 2. ChatGPT Tiered presentation
+  else if (pKey === 'chatgpt' && tier) {
+    if (tier === 'app') {
+      badgeVariant = 'success'
+      label = region ? `${region} · GPT⁺` : 'GPT⁺'
+      shortBadgeText = region ? `GPT⁺:${region}` : 'GPT⁺'
+      accessibleTitle = `${pName}: ${region ? region + ' ' : ''}最高级别解锁 (Verified Web & App, GPT⁺)`
+    } else if (tier === 'web') {
+      badgeVariant = 'warning'
+      label = region ? `${region} · GPT` : 'GPT'
+      shortBadgeText = region ? `GPT:${region}` : 'GPT:Web'
+      accessibleTitle = `${pName}: 仅 Web 可用 (Web Only, 未获 App 确认, GPT)`
+    } else {
+      // tier === 'none'
+      if (status === 'challenged' || verdict === 'challenge') {
+        badgeVariant = 'warning'
+        label = '质询拦截'
+        shortBadgeText = `${pShort}:质询`
+        accessibleTitle = `${pName}: 质询拦截 (Bot Challenge)`
+      } else if (status === 'rate_limited' || verdict === 'rate_limited') {
+        badgeVariant = 'warning'
+        label = '速率限制'
+        shortBadgeText = `${pShort}:限流`
+        accessibleTitle = `${pName}: 速率限制 (Rate Limited)`
+      } else if (status === 'timeout') {
+        badgeVariant = 'neutral'
+        label = '超时'
+        shortBadgeText = `${pShort}:超时`
+        accessibleTitle = `${pName}: 请求超时 (Timeout)`
+      } else if (status === 'transport_error') {
+        badgeVariant = 'danger'
+        label = '传输错误'
+        shortBadgeText = `${pShort}:错误`
+        accessibleTitle = `${pName}: 节点传输错误 (Transport Error)`
+      } else {
+        badgeVariant = 'danger'
+        label = '未解锁'
+        shortBadgeText = `${pShort}:失败`
+        accessibleTitle = `${pName}: 未解锁 (Unavailable)`
+      }
+    }
+  }
+  // 3. General platforms and legacy compatibility
+  else if (fullUnlocked) {
     badgeVariant = 'success'
     label = region || (status === 'full' ? '全解' : '解锁')
     shortBadgeText = region ? `${pShort}:${region}` : (status === 'full' ? `${pShort}:全解` : `${pShort}:OK`)
@@ -428,6 +529,8 @@ export function getMediaSemanticPresentation(
     badgeClass = 'bg-status-warning/15 text-status-warning border border-status-warning/30'
   } else if (badgeVariant === 'danger') {
     badgeClass = 'bg-status-danger/15 text-status-danger border border-status-danger/30'
+  } else if (badgeVariant === 'info') {
+    badgeClass = 'bg-status-info/15 text-status-info border border-status-info/30'
   }
 
   return {
@@ -967,4 +1070,153 @@ export async function clearNodeDialerProxy(
     .filter(b => b.target_type === 'node' && b.target_name === nodeName)
     .map(b => b.id)
   await Promise.all(toDelete.map(id => deleteBindingFn(id)))
+}
+
+/**
+ * Calculates remaining seconds until next_expected_at based on server_now
+ * and local elapsed monotonic time, strictly avoiding client clock skew.
+ */
+export function calculateRemainingSeconds(
+  nextExpectedAt: number | null | undefined,
+  serverNow: number,
+  clientFetchTimestamp: number,
+  currentClientTimestamp: number = Date.now()
+): number | null {
+  if (nextExpectedAt == null || isNaN(nextExpectedAt)) return null
+  const elapsedLocalSeconds = Math.max(0, (currentClientTimestamp - clientFetchTimestamp) / 1000)
+  const currentServerNow = serverNow + elapsedLocalSeconds
+  return Math.max(0, Math.floor(nextExpectedAt - currentServerNow))
+}
+
+/**
+ * Formats a remaining seconds countdown as MM:SS, returning '--:--' if null or negative.
+ */
+export function formatCountdown(seconds: number | null | undefined): string {
+  if (seconds == null || seconds < 0 || isNaN(seconds)) return '--:--'
+  const m = Math.floor(seconds / 60)
+  const s = Math.floor(seconds % 60)
+  const mm = String(m).padStart(2, '0')
+  const ss = String(s).padStart(2, '0')
+  return `${mm}:${ss}`
+}
+
+export interface SlidingWorkerPoolOptions<T, R> {
+  concurrency?: number
+  signal?: AbortSignal
+  workerFn: (item: T, signal?: AbortSignal) => Promise<R>
+  onItemDone?: (result: R, item: T, progress: { done: number; total: number; ok: number; fail: number }) => void
+}
+
+export interface SlidingWorkerPoolResult<R> {
+  results: R[]
+  stopped: boolean
+  ok: number
+  fail: number
+  done: number
+  total: number
+}
+
+/**
+ * Executes async operations over an array of items using a bounded sliding worker pool.
+ * Guarantees:
+ * - Active workers never exceed the configured concurrency limit (clamped 1..20);
+ * - Any completed slot immediately consumes the next item without waiting on other slow workers;
+ * - Cancellation halts further dispatch, aborts active requests, and preserves completed results;
+ * - Single item failures do not stall or crash the remaining workers.
+ */
+export async function runSlidingWorkerPool<T, R>(
+  items: T[],
+  options: SlidingWorkerPoolOptions<T, R>
+): Promise<SlidingWorkerPoolResult<R>> {
+  const total = items.length
+  if (total === 0) {
+    return { results: [], stopped: false, ok: 0, fail: 0, done: 0, total: 0 }
+  }
+
+  const rawConcurrency = typeof options.concurrency === 'number' ? options.concurrency : 10
+  const workerLimit = Math.max(1, Math.min(20, rawConcurrency))
+  const poolSize = Math.min(total, workerLimit)
+
+  let nextIndex = 0
+  let done = 0
+  let ok = 0
+  let fail = 0
+  let dispatchStopped = false
+  const results: R[] = []
+
+  const inFlightControllers = new Set<AbortController>()
+
+  const handleAbort = () => {
+    dispatchStopped = true
+    for (const ctrl of inFlightControllers) {
+      try {
+        ctrl.abort()
+      } catch (_) {}
+    }
+  }
+
+  if (options.signal) {
+    if (options.signal.aborted) {
+      return { results: [], stopped: true, ok: 0, fail: 0, done: 0, total }
+    }
+    options.signal.addEventListener('abort', handleAbort, { once: true })
+  }
+
+  async function worker() {
+    while (!dispatchStopped && !(options.signal?.aborted)) {
+      if (nextIndex >= total) break
+      const itemIndex = nextIndex++
+      const item = items[itemIndex]
+
+      const itemController = new AbortController()
+      inFlightControllers.add(itemController)
+
+      let res: R | null = null
+      let succeeded = false
+
+      try {
+        res = await options.workerFn(item, itemController.signal)
+        succeeded = true
+      } catch (err: any) {
+        if (itemController.signal.aborted || options.signal?.aborted || dispatchStopped) {
+          break
+        }
+        res = {
+          name: (item as any)?.name || `node-${itemIndex}`,
+          status: 'fail',
+          error: String(err?.message || 'probe_failed'),
+        } as unknown as R
+        succeeded = true
+      } finally {
+        inFlightControllers.delete(itemController)
+      }
+
+      if (succeeded && res !== null && !itemController.signal.aborted && !(options.signal?.aborted)) {
+        results.push(res)
+        done++
+        if ((res as any)?.status === 'ok') {
+          ok++
+        } else {
+          fail++
+        }
+        options.onItemDone?.(res, item, { done, total, ok, fail })
+      }
+    }
+  }
+
+  const workers = Array.from({ length: poolSize }, () => worker())
+  await Promise.all(workers)
+
+  if (options.signal) {
+    options.signal.removeEventListener('abort', handleAbort)
+  }
+
+  return {
+    results,
+    stopped: dispatchStopped || Boolean(options.signal?.aborted),
+    ok,
+    fail,
+    done,
+    total,
+  }
 }

@@ -284,6 +284,7 @@ STANDARD_MEDIA_PLATFORMS = (
     "netflix",
     "disney",
     "chatgpt",
+    "claude",
     "bilibili",
     "meta_ai",
     "gemini",

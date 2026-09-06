@@ -89,7 +89,7 @@ async def test_definitive_responses_never_retry():
 
     res_403 = await eval_chatgpt(client_403)
     assert res_403.status == "challenged"
-    assert calls_403 == 1, "403 must not retry"
+    assert calls_403 == 2, "403 must not retry (1 request per modality: web and app)"
 
     # 2. 429 Rate limited
     client_429 = AsyncMock(spec=httpx.AsyncClient)
@@ -103,7 +103,7 @@ async def test_definitive_responses_never_retry():
 
     res_429 = await eval_chatgpt(client_429)
     assert res_429.status == "rate_limited"
-    assert calls_429 == 1, "429 must not retry"
+    assert calls_429 == 2, "429 must not retry (1 request per modality: web and app)"
 
     # 3. Contract drift (200 with unknown body)
     client_drift = AsyncMock(spec=httpx.AsyncClient)
@@ -117,7 +117,7 @@ async def test_definitive_responses_never_retry():
 
     res_drift = await eval_chatgpt(client_drift)
     assert res_drift.status == "inconclusive"
-    assert calls_drift == 1, "Contract drift must not retry"
+    assert calls_drift == 2, "Contract drift must not retry (1 request per modality: web and app)"
 
 
 @pytest.mark.asyncio

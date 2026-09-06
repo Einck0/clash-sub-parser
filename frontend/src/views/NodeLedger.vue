@@ -49,6 +49,9 @@
       {{ error }}
     </div>
 
+    <!-- Periodic Probe Scheduler Banner -->
+    <LedgerSchedulerBanner ref="schedulerBannerRef" />
+
     <!-- Live Probe Progress Banner -->
     <div v-if="probing" class="p-4 rounded-lg border border-accent/40 bg-surface-base space-y-2 shadow-xs">
       <div class="flex justify-between items-center text-xs font-mono">
@@ -436,13 +439,15 @@ import {
   getNodeLedger,
   getProbeResultDetail,
   getProbeResults,
+  getProbeSettings,
+  getProbeStatus,
   getProxyChains,
   probeNode,
-  probeNodesFull,
 } from '../api'
 import LedgerDrawer from '../components/ledger/LedgerDrawer.vue'
 import LedgerMetricsBar from '../components/ledger/LedgerMetricsBar.vue'
 import LedgerMobileList from '../components/ledger/LedgerMobileList.vue'
+import LedgerSchedulerBanner from '../components/ledger/LedgerSchedulerBanner.vue'
 import LedgerSearchFilter from '../components/ledger/LedgerSearchFilter.vue'
 import Button from '../components/ui/Button.vue'
 import IconButton from '../components/ui/IconButton.vue'
@@ -463,6 +468,7 @@ import {
   normalizeNodeLedgerMap,
   replaceNodeDialerProxy,
   resolveNodeCountryCode,
+  runSlidingWorkerPool,
   type FacetFilterState,
   type FilterState,
   type LedgerNodeItem,
@@ -474,6 +480,7 @@ const store = useAppStore()
 // State
 const loading = ref(false)
 const error = ref('')
+const schedulerBannerRef = ref<any>(null)
 const probing = ref(false)
 const probingSingleNodeKey = ref<string | null>(null)
 const savingChain = ref(false)
@@ -786,6 +793,7 @@ async function reload() {
     if (probeRes?.data?.has_more && probeRes?.data?.next_cursor) {
       fetchRemainingProbePages(probeRes.data.next_cursor)
     }
+    schedulerBannerRef.value?.refresh()
   } catch (err: any) {
     error.value = getApiErrorMessage(err, '加载节点与跳板数据失败')
   } finally {
@@ -819,10 +827,13 @@ async function handleProbeSingle(node: LedgerNodeItem) {
 }
 
 // Batch Probe
+let cancelToastShown = false
+
 async function startProbeBatch(targetNodes: LedgerNodeItem[]) {
   if (!targetNodes || !targetNodes.length || probing.value) return
   probing.value = true
   error.value = ''
+  cancelToastShown = false
   probeProgress.done = 0
   probeProgress.total = targetNodes.length
   probeProgress.ok = 0
@@ -830,37 +841,63 @@ async function startProbeBatch(targetNodes: LedgerNodeItem[]) {
 
   probeAbortController = new AbortController()
 
-  const CHUNK_SIZE = 10
-  const chunks: LedgerNodeItem[][] = []
-  for (let i = 0; i < targetNodes.length; i += CHUNK_SIZE) {
-    chunks.push(targetNodes.slice(i, i + CHUNK_SIZE))
+  // 1. Read single snapshot of probe_concurrency from settings
+  let workerLimit = 10
+  try {
+    const settingsRes = await getProbeSettings()
+    const concurrency = Number(settingsRes?.data?.probe_concurrency)
+    if (concurrency && !isNaN(concurrency)) {
+      workerLimit = Math.max(1, Math.min(20, concurrency))
+    }
+  } catch (_) {
+    workerLimit = 10
   }
 
   try {
-    for (const chunk of chunks) {
-      if (probeAbortController.signal.aborted || !probing.value) break
+    const { stopped } = await runSlidingWorkerPool<LedgerNodeItem, any>(targetNodes, {
+      concurrency: workerLimit,
+      signal: probeAbortController.signal,
+      workerFn: async (node, signal) => {
+        const res = await probeNode(
+          {
+            node,
+            include_speed: includeSpeedtest.value,
+            include_media: includeMediaCheck.value,
+            use_cache: false,
+          },
+          { signal }
+        )
+        return res?.data || { name: node.name, status: 'ok' }
+      },
+      onItemDone: (res, node, prog) => {
+        probeProgress.done = prog.done
+        probeProgress.ok = prog.ok
+        probeProgress.fail = prog.fail
 
-      const res = await probeNodesFull({
-        nodes: chunk,
-        include_speed: includeSpeedtest.value,
-        include_media: includeMediaCheck.value,
-        use_cache: false,
-      })
-
-      const list = res?.data?.results || []
-      for (const item of list) {
-        if (item.status === 'ok') probeProgress.ok++
-        else probeProgress.fail++
-        probeProgress.done++
-
+        const item = res || { name: node.name, status: 'ok' }
         if (item.name) probes.value[item.name] = item
         if (item.node_key) probes.value[item.node_key] = item
+        probes.value = { ...probes.value }
+      },
+    })
+
+    if (stopped) {
+      if (!cancelToastShown) {
+        cancelToastShown = true
+        store.toast('已停止后续探测', 'info')
       }
-      probes.value = { ...probes.value }
+    } else {
+      store.toast(`质检完成：${probeProgress.ok} 正常，${probeProgress.fail} 异常`, 'success')
     }
-    store.toast(`质检完成：${probeProgress.ok} 正常，${probeProgress.fail} 异常`, 'success')
   } catch (err: any) {
-    error.value = getApiErrorMessage(err, '综合质检执行失败')
+    if (probeAbortController?.signal.aborted) {
+      if (!cancelToastShown) {
+        cancelToastShown = true
+        store.toast('已停止后续探测', 'info')
+      }
+    } else {
+      error.value = getApiErrorMessage(err, '综合质检执行失败')
+    }
   } finally {
     probing.value = false
     probeAbortController = null
@@ -868,11 +905,14 @@ async function startProbeBatch(targetNodes: LedgerNodeItem[]) {
 }
 
 function cancelProbeBatch() {
-  if (probeAbortController) {
+  if (probeAbortController && !probeAbortController.signal.aborted) {
     probeAbortController.abort()
   }
   probing.value = false
-  store.toast('已停止后续探测任务', 'info')
+  if (!cancelToastShown) {
+    cancelToastShown = true
+    store.toast('已停止后续探测', 'info')
+  }
 }
 
 function probeSelectedNodes() {

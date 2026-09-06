@@ -40,6 +40,17 @@ CONFIDENCE_TAXONOMY = {
     "unavailable",
 }
 
+OBSERVATION_KIND_TAXONOMY = {
+    "capability",
+    "region_signal",
+}
+
+TIER_TAXONOMY = {
+    "none",
+    "web",
+    "app",
+}
+
 ALLOWED_EVIDENCE_KEYS = {
     "http_status",
     "final_host",
@@ -81,6 +92,9 @@ class ProviderResult:
     evidence: dict[str, Any] = field(default_factory=dict)
     label: str | None = None
     error: str | None = None
+    observation_kind: str | None = None
+    tier: str | None = None
+    subobservations: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if self.status not in STATUS_TAXONOMY:
@@ -89,6 +103,10 @@ class ProviderResult:
             raise ValueError(f"Invalid verdict: {self.verdict} not in {VERDICT_TAXONOMY}")
         if self.confidence not in CONFIDENCE_TAXONOMY:
             raise ValueError(f"Invalid confidence: {self.confidence} not in {CONFIDENCE_TAXONOMY}")
+        if self.observation_kind is not None and self.observation_kind not in OBSERVATION_KIND_TAXONOMY:
+            raise ValueError(f"Invalid observation_kind: {self.observation_kind} not in {OBSERVATION_KIND_TAXONOMY}")
+        if self.tier is not None and self.tier not in TIER_TAXONOMY:
+            raise ValueError(f"Invalid tier: {self.tier} not in {TIER_TAXONOMY}")
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary while maintaining legacy-compatible fields."""
@@ -106,6 +124,20 @@ class ProviderResult:
             res["label"] = self.label
         if self.error is not None:
             res["error"] = self.error
+        if self.observation_kind is not None:
+            res["observation_kind"] = self.observation_kind
+        if self.tier is not None:
+            res["tier"] = self.tier
+        if self.subobservations is not None:
+            serialized_subs: dict[str, Any] = {}
+            for k, v in self.subobservations.items():
+                if hasattr(v, "to_dict"):
+                    serialized_subs[k] = v.to_dict()
+                elif isinstance(v, dict):
+                    serialized_subs[k] = v
+                else:
+                    serialized_subs[k] = v
+            res["subobservations"] = serialized_subs
         return res
 
 

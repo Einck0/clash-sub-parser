@@ -560,25 +560,162 @@ async def eval_disney(
         return _classify_error_outcome(exc, elapsed_ms, final_host)
 
 
-async def eval_chatgpt(
+CLAUDE_TRACE_URL = "https://claude.ai/cdn-cgi/trace"
+CHATGPT_STATUS_ENDPOINT = "https://ios.chat.openai.com/public-api/mobile/server_status/v1"
+
+
+async def eval_claude(
     client: httpx.AsyncClient,
     timeout_s: float = 2.0,
     deadline_monotonic: float | None = None,
 ) -> ProviderResult:
-    """Evaluate ChatGPT / OpenAI API accessibility."""
+    """Evaluate Claude regional signal observation (non-unlocking region signal).
+
+    Queries Claude's public edge trace endpoint. Extracts ISO country code if present,
+    but always records verdict='unknown' and unlocked=False to strictly prevent false
+    full-unlock classification.
+    """
     started = time.monotonic()
     deadline = min(deadline_monotonic, started + timeout_s) if deadline_monotonic is not None else (started + timeout_s)
-    final_host = "ios.chat.openai.com"
+    final_host = "claude.ai"
 
     try:
         resp = await execute_request_with_retry(
             client,
             "GET",
-            "https://ios.chat.openai.com/public-api/mobile/server_status/v1",
+            CLAUDE_TRACE_URL,
             deadline_monotonic=deadline,
         )
         elapsed_ms = int((time.monotonic() - started) * 1000)
-        final_host = resp.url.host if resp.url else final_host
+        if resp.url:
+            final_host = resp.url.host or final_host
+
+        if resp.status_code == 429:
+            return ProviderResult(
+                status="rate_limited",
+                verdict="unknown",
+                unlocked=False,
+                confidence="verified",
+                observation_kind="region_signal",
+                tier="none",
+                evidence=ProviderEvidence(
+                    http_status=429,
+                    final_host=final_host,
+                    signals=["rate_limited"],
+                    elapsed_ms=elapsed_ms,
+                    error_code="rate_limited",
+                ).to_dict(),
+                label="限流",
+            )
+        if resp.status_code == 403 or "cf-challenge" in resp.text:
+            return ProviderResult(
+                status="challenged",
+                verdict="unknown",
+                unlocked=False,
+                confidence="verified",
+                observation_kind="region_signal",
+                tier="none",
+                evidence=ProviderEvidence(
+                    http_status=resp.status_code,
+                    final_host=final_host,
+                    signals=["challenge_detected"],
+                    elapsed_ms=elapsed_ms,
+                    error_code="challenge",
+                ).to_dict(),
+                label="被风控或阻断",
+            )
+
+        if resp.status_code == 200:
+            lines = resp.text.splitlines()
+            loc_val: str | None = None
+            for line in lines:
+                if line.startswith("loc="):
+                    val = line.split("=", 1)[1].strip()
+                    if len(val) == 2 and val.isalpha():
+                        loc_val = val.upper()
+                        break
+            if loc_val:
+                return ProviderResult(
+                    status="verified",
+                    verdict="unknown",
+                    unlocked=False,
+                    region=loc_val,
+                    confidence="verified",
+                    observation_kind="region_signal",
+                    tier="none",
+                    evidence=ProviderEvidence(
+                        http_status=200,
+                        final_host=final_host,
+                        signals=["region_signal_observed", f"loc_{loc_val.lower()}"],
+                        elapsed_ms=elapsed_ms,
+                    ).to_dict(),
+                    label=f"区域信号 ({loc_val})",
+                )
+
+            return ProviderResult(
+                status="inconclusive",
+                verdict="unknown",
+                unlocked=False,
+                confidence="unavailable",
+                observation_kind="region_signal",
+                tier="none",
+                evidence=ProviderEvidence(
+                    http_status=200,
+                    final_host=final_host,
+                    signals=["contract_drift"],
+                    elapsed_ms=elapsed_ms,
+                    error_code="contract_drift",
+                ).to_dict(),
+                label="未知",
+            )
+
+        return ProviderResult(
+            status="inconclusive",
+            verdict="unknown",
+            unlocked=False,
+            confidence="unavailable",
+            observation_kind="region_signal",
+            tier="none",
+            evidence=ProviderEvidence(
+                http_status=resp.status_code,
+                final_host=final_host,
+                signals=["unexpected_status"],
+                elapsed_ms=elapsed_ms,
+                error_code="unexpected_status",
+            ).to_dict(),
+            label="未知",
+        )
+
+    except Exception as exc:
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        res = _classify_error_outcome(exc, elapsed_ms, final_host)
+        res.observation_kind = "region_signal"
+        res.tier = "none"
+        res.verdict = "unknown"
+        res.unlocked = False
+        return res
+
+
+async def _eval_chatgpt_single(
+    client: httpx.AsyncClient,
+    *,
+    headers: dict[str, str] | None = None,
+    deadline_monotonic: float,
+    sub_name: str,
+) -> ProviderResult:
+    started = time.monotonic()
+    final_host = "ios.chat.openai.com"
+    try:
+        resp = await execute_request_with_retry(
+            client,
+            "GET",
+            CHATGPT_STATUS_ENDPOINT,
+            headers=headers,
+            deadline_monotonic=deadline_monotonic,
+        )
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        if resp.url:
+            final_host = resp.url.host or final_host
 
         if resp.status_code == 429:
             return ProviderResult(
@@ -586,7 +723,13 @@ async def eval_chatgpt(
                 verdict="rate_limited",
                 unlocked=False,
                 confidence="verified",
-                evidence=ProviderEvidence(http_status=429, final_host=final_host, signals=["rate_limited"], elapsed_ms=elapsed_ms).to_dict(),
+                evidence=ProviderEvidence(
+                    http_status=429,
+                    final_host=final_host,
+                    signals=["rate_limited"],
+                    elapsed_ms=elapsed_ms,
+                    error_code="rate_limited",
+                ).to_dict(),
                 label="限流",
             )
         if resp.status_code in (403, 1020) or "Cloudflare" in resp.text:
@@ -595,37 +738,168 @@ async def eval_chatgpt(
                 verdict="challenge",
                 unlocked=False,
                 confidence="verified",
-                evidence=ProviderEvidence(http_status=resp.status_code, final_host=final_host, signals=["cf_blocked"], elapsed_ms=elapsed_ms).to_dict(),
+                evidence=ProviderEvidence(
+                    http_status=resp.status_code,
+                    final_host=final_host,
+                    signals=["cf_blocked"],
+                    elapsed_ms=elapsed_ms,
+                    error_code="challenge",
+                ).to_dict(),
                 label="被风控或阻断",
             )
 
         if resp.status_code == 200:
             try:
                 data = resp.json()
-                if data.get("status") in ("normal", "ok"):
+                if isinstance(data, dict) and data.get("status") in ("normal", "ok"):
                     return ProviderResult(
                         status="verified",
                         verdict="available",
                         unlocked=True,
                         confidence="verified",
-                        evidence=ProviderEvidence(http_status=200, final_host=final_host, signals=["server_status_normal"], elapsed_ms=elapsed_ms).to_dict(),
+                        evidence=ProviderEvidence(
+                            http_status=200,
+                            final_host=final_host,
+                            signals=[f"{sub_name}_server_status_normal"],
+                            elapsed_ms=elapsed_ms,
+                        ).to_dict(),
                         label="允许访问",
                     )
             except Exception:
                 pass
+
+            return ProviderResult(
+                status="inconclusive",
+                verdict="unknown",
+                unlocked=False,
+                confidence="unavailable",
+                evidence=ProviderEvidence(
+                    http_status=resp.status_code,
+                    final_host=final_host,
+                    signals=["contract_drift"],
+                    elapsed_ms=elapsed_ms,
+                    error_code="contract_drift",
+                ).to_dict(),
+                label="未知",
+            )
 
         return ProviderResult(
             status="inconclusive",
             verdict="unknown",
             unlocked=False,
             confidence="unavailable",
-            evidence=ProviderEvidence(http_status=resp.status_code, final_host=final_host, signals=["contract_drift"], elapsed_ms=elapsed_ms).to_dict(),
+            evidence=ProviderEvidence(
+                http_status=resp.status_code,
+                final_host=final_host,
+                signals=["unexpected_status"],
+                elapsed_ms=elapsed_ms,
+                error_code="unexpected_status",
+            ).to_dict(),
             label="未知",
         )
-
     except Exception as exc:
         elapsed_ms = int((time.monotonic() - started) * 1000)
         return _classify_error_outcome(exc, elapsed_ms, final_host)
+
+
+async def eval_chatgpt(
+    client: httpx.AsyncClient,
+    timeout_s: float = 2.0,
+    deadline_monotonic: float | None = None,
+) -> ProviderResult:
+    """Evaluate ChatGPT accessibility across Web and iOS App request modalities."""
+    started = time.monotonic()
+    deadline = min(deadline_monotonic, started + timeout_s) if deadline_monotonic is not None else (started + timeout_s)
+    final_host = "ios.chat.openai.com"
+
+    web_coro = _eval_chatgpt_single(
+        client,
+        headers=None,
+        deadline_monotonic=deadline,
+        sub_name="web",
+    )
+    app_coro = _eval_chatgpt_single(
+        client,
+        headers={"X-Requested-With": "com.openai.chatgpt"},
+        deadline_monotonic=deadline,
+        sub_name="app",
+    )
+
+    web_res, app_res = await asyncio.gather(web_coro, app_coro)
+    elapsed_ms = int((time.monotonic() - started) * 1000)
+
+    subobservations = {
+        "web": web_res.to_dict(),
+        "app": app_res.to_dict(),
+    }
+
+    # Synthesize top-level result
+    web_ok = (web_res.status == "verified" and web_res.unlocked is True)
+    app_ok = (app_res.status == "verified" and app_res.unlocked is True)
+
+    if web_ok and app_ok:
+        return ProviderResult(
+            status="verified",
+            verdict="available",
+            unlocked=True,
+            confidence="verified",
+            observation_kind="capability",
+            tier="app",
+            subobservations=subobservations,
+            evidence=ProviderEvidence(
+                http_status=200,
+                final_host=final_host,
+                signals=["web_normal", "app_normal"],
+                elapsed_ms=elapsed_ms,
+            ).to_dict(),
+            label="允许访问 (App)",
+        )
+    elif web_ok:
+        return ProviderResult(
+            status="partial",
+            verdict="unknown",
+            unlocked=False,
+            confidence="verified",
+            observation_kind="capability",
+            tier="web",
+            subobservations=subobservations,
+            evidence=ProviderEvidence(
+                http_status=200,
+                final_host=final_host,
+                signals=["web_normal", f"app_{app_res.status}"],
+                elapsed_ms=elapsed_ms,
+                error_code=app_res.evidence.get("error_code"),
+            ).to_dict(),
+            label="仅网页可用",
+        )
+    else:
+        dominant_res = app_res if app_res.status in ("challenged", "rate_limited") else web_res
+        if web_res.status in ("challenged", "rate_limited"):
+            dominant_res = web_res
+
+        dominant_status = dominant_res.status
+        dominant_verdict = dominant_res.verdict
+        dominant_label = dominant_res.label
+        dominant_confidence = dominant_res.confidence
+
+        return ProviderResult(
+            status=dominant_status,
+            verdict=dominant_verdict,
+            unlocked=False,
+            confidence=dominant_confidence,
+            observation_kind="capability",
+            tier="none",
+            subobservations=subobservations,
+            evidence=ProviderEvidence(
+                http_status=dominant_res.evidence.get("http_status"),
+                final_host=final_host,
+                signals=[f"web_{web_res.status}", f"app_{app_res.status}"],
+                elapsed_ms=elapsed_ms,
+                error_code=dominant_res.evidence.get("error_code"),
+            ).to_dict(),
+            label=dominant_label,
+            error=dominant_res.error,
+        )
 
 
 async def eval_bilibili(

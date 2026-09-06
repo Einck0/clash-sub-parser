@@ -49,3 +49,54 @@ def test_capability_filter_combined():
     assert is_node_capability_qualified(probe, min_speed_mbps=20.0, required_media=["chatgpt", "gemini"]) is True
     assert is_node_capability_qualified(probe, min_speed_mbps=30.0, required_media=["chatgpt", "gemini"]) is False
     assert is_node_capability_qualified(probe, min_speed_mbps=20.0, required_media=["chatgpt", "netflix"]) is False
+
+
+def test_capability_filter_claude_region_signal_and_chatgpt_tier():
+    # 1. Claude regional signal (even if status=verified and region=US) must NEVER qualify full unlock
+    probe_claude_verified = {
+        "status": "ok",
+        "media": {
+            "claude": {
+                "status": "verified",
+                "verdict": "unknown",
+                "unlocked": False,
+                "region": "US",
+                "confidence": "verified",
+                "observation_kind": "region_signal",
+                "tier": "none",
+            },
+        },
+    }
+    assert is_node_capability_qualified(probe_claude_verified, required_media=["claude"]) is False
+
+    # 2. ChatGPT with partial (web only) fails
+    probe_chatgpt_web_only = {
+        "status": "ok",
+        "media": {
+            "chatgpt": {
+                "status": "partial",
+                "verdict": "unknown",
+                "unlocked": False,
+                "confidence": "verified",
+                "observation_kind": "capability",
+                "tier": "web",
+            },
+        },
+    }
+    assert is_node_capability_qualified(probe_chatgpt_web_only, required_media=["chatgpt"]) is False
+
+    # 3. ChatGPT with app tier verified succeeds
+    probe_chatgpt_app = {
+        "status": "ok",
+        "media": {
+            "chatgpt": {
+                "status": "verified",
+                "verdict": "available",
+                "unlocked": True,
+                "confidence": "verified",
+                "observation_kind": "capability",
+                "tier": "app",
+            },
+        },
+    }
+    assert is_node_capability_qualified(probe_chatgpt_app, required_media=["chatgpt"]) is True

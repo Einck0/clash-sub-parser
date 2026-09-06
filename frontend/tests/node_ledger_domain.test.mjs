@@ -3,12 +3,17 @@ import test from 'node:test'
 import {
   applyMetricShortcut,
   buildEffectiveBatchTargets,
+  calculateRemainingSeconds,
   chunkItems,
   computeFilterOptions,
   createDefaultFacetFilterState,
   createDrawerDetailSession,
   filterAndSortNodes,
+  formatCountdown,
+  getMediaSemanticPresentation,
   getProbeForNode,
+  isMediaFullUnlocked,
+  MEDIA_PLATFORMS,
   mergeNodeLedgerProbePages,
   nodeMatchesStatus,
   normalizeFacetFilterState,
@@ -17,6 +22,7 @@ import {
   replaceNodeDialerProxy,
   resolveDrawerDetailFetch,
   runChunkedBatchProbe,
+  runSlidingWorkerPool,
   startDrawerDetailFetch,
 } from '../src/views/nodeLedgerDomain.ts'
 
@@ -517,4 +523,232 @@ test('3.1 probe summary pagination page merge and boolean media filtering', () =
   // Error on node 2 retry -> unavailable
   resolveDrawerDetailFetch(session, 'node:002', null, new Error('network down'))
   assert.equal(session.status, 'unavailable')
+})
+
+test('Task 2.2: runSlidingWorkerPool bounds concurrency and ensures slow nodes do not block freed slots', async () => {
+  const items = Array.from({ length: 8 }, (_, i) => ({ name: `Node-${i}`, id: i }))
+  let currentActive = 0
+  let maxObservedActive = 0
+  const completionOrder = []
+
+  // Node 0 is very slow (80ms), while Nodes 1..7 are fast (10ms)
+  const workerFn = async (item) => {
+    currentActive++
+    if (currentActive > maxObservedActive) maxObservedActive = currentActive
+    const delay = item.id === 0 ? 80 : 10
+    await new Promise((resolve) => setTimeout(resolve, delay))
+    currentActive--
+    completionOrder.push(item.id)
+    return { name: item.name, status: 'ok', latency_ms: delay }
+  }
+
+  const progressTicks = []
+  const { results, stopped, ok, fail, done, total } = await runSlidingWorkerPool(items, {
+    concurrency: 3,
+    workerFn,
+    onItemDone: (res, item, prog) => {
+      progressTicks.push({ id: item.id, ...prog })
+    },
+  })
+
+  // Concurrency bounds: never exceeds snapshot concurrency 3
+  assert.equal(maxObservedActive <= 3, true, `Active concurrency (${maxObservedActive}) must not exceed limit 3`)
+  assert.equal(stopped, false)
+  assert.equal(total, 8)
+  assert.equal(done, 8)
+  assert.equal(ok, 8)
+  assert.equal(fail, 0)
+  assert.equal(results.length, 8)
+
+  // Slow node 0 does not block slots: Node 1 and Node 2 finish, and subsequent nodes (3, 4) finish BEFORE Node 0
+  assert.ok(completionOrder.indexOf(1) < completionOrder.indexOf(0), 'Node 1 finishes before slow Node 0')
+  assert.ok(completionOrder.indexOf(2) < completionOrder.indexOf(0), 'Node 2 finishes before slow Node 0')
+  assert.ok(completionOrder.indexOf(3) < completionOrder.indexOf(0), 'Slot reclaimed: Node 3 finishes before slow Node 0')
+
+  // Smooth progressive updates
+  assert.equal(progressTicks.length, 8)
+  assert.equal(progressTicks[progressTicks.length - 1].done, 8)
+})
+
+test('Task 2.3: runSlidingWorkerPool cancellation semantics, in-flight abort, and completed result preservation', async () => {
+  const items = Array.from({ length: 10 }, (_, i) => ({ name: `Node-${i}`, id: i }))
+  const abortCtrl = new AbortController()
+  const started = []
+  const abortedSignals = []
+
+  const workerFn = async (item, signal) => {
+    started.push(item.id)
+    signal.addEventListener('abort', () => abortedSignals.push(item.id))
+    // Node 0 and 1 finish fast (10ms), Node 2 and 3 are slow (150ms)
+    const delay = item.id < 2 ? 10 : 150
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(resolve, delay)
+      signal.addEventListener('abort', () => {
+        clearTimeout(timer)
+        reject(new Error('AbortError'))
+      })
+    })
+    return { name: item.name, status: 'ok' }
+  }
+
+  // Abort after 40ms: nodes 0 and 1 should have finished, in-flight nodes aborted, nodes 4..9 never started
+  setTimeout(() => abortCtrl.abort(), 40)
+
+  const { results, stopped, ok, done } = await runSlidingWorkerPool(items, {
+    concurrency: 3,
+    signal: abortCtrl.signal,
+    workerFn,
+  })
+
+  assert.equal(stopped, true)
+  // Nodes 0 and 1 completed
+  assert.equal(results.length, 2)
+  assert.deepEqual(results.map((r) => r.name), ['Node-0', 'Node-1'])
+  assert.equal(ok, 2)
+  assert.equal(done, 2)
+
+  // In-flight items were aborted
+  assert.ok(abortedSignals.length > 0, 'In-flight signals were aborted')
+
+  // Nodes beyond in-flight slots were not started after cancellation
+  assert.ok(started.length <= 5, `Expected <= 5 nodes started before 40ms abort, got ${started.length}`)
+  assert.ok(!started.includes(5) && !started.includes(6) && !started.includes(9), 'Nodes 5..9 were not started after cancellation')
+
+  // Pre-aborted signal scenario: 0 requests dispatched
+  const preAbortedCtrl = new AbortController()
+  preAbortedCtrl.abort()
+  const preStarted = []
+  const preResult = await runSlidingWorkerPool(items, {
+    concurrency: 4,
+    signal: preAbortedCtrl.signal,
+    workerFn: async (item) => {
+      preStarted.push(item.id)
+      return { name: item.name, status: 'ok' }
+    },
+  })
+  assert.equal(preResult.stopped, true)
+  assert.equal(preResult.results.length, 0)
+  assert.equal(preStarted.length, 0)
+})
+
+test('Task 2.4: calculateRemainingSeconds and formatCountdown server-time calibration', () => {
+  const serverNow = 1000
+  const clientFetchTimestamp = 50000
+  const nextExpectedAt = 1600 // 600s in the future
+
+  // 1. Immediately after fetch: 600 seconds remaining
+  const rem0 = calculateRemainingSeconds(nextExpectedAt, serverNow, clientFetchTimestamp, 50000)
+  assert.equal(rem0, 600)
+  assert.equal(formatCountdown(rem0), '10:00')
+
+  // 2. 65 seconds elapsed on client (irrespective of absolute clock offset)
+  const rem65 = calculateRemainingSeconds(nextExpectedAt, serverNow, clientFetchTimestamp, 50000 + 65000)
+  assert.equal(rem65, 535)
+  assert.equal(formatCountdown(rem65), '08:55')
+
+  // 3. Past expiration: clamps to 0
+  const remPast = calculateRemainingSeconds(nextExpectedAt, serverNow, clientFetchTimestamp, 50000 + 700000)
+  assert.equal(remPast, 0)
+  assert.equal(formatCountdown(remPast), '00:00')
+
+  // 4. Null next_expected_at returns null and formatCountdown returns '--:--'
+  assert.equal(calculateRemainingSeconds(null, serverNow, clientFetchTimestamp, 50000), null)
+  assert.equal(formatCountdown(null), '--:--')
+  assert.equal(formatCountdown(-5), '--:--')
+})
+
+test('Task 2.5: AI observation tier matrix & presentation (Claude region signal & ChatGPT tiers)', () => {
+  // 1. Platform definitions include Claude
+  const claudePlat = MEDIA_PLATFORMS.find((p) => p.key === 'claude')
+  assert.ok(claudePlat, 'MEDIA_PLATFORMS must include claude')
+  assert.equal(claudePlat.name, 'Claude')
+
+  // 2. Claude regional signal is NEVER full unlocked
+  const claudeVerified = {
+    status: 'verified',
+    verdict: 'unknown',
+    unlocked: false,
+    region: 'US',
+    confidence: 'verified',
+    observation_kind: 'region_signal',
+    tier: 'none',
+    evidence: { http_status: 200, signals: ['loc_US'], elapsed_ms: 110 },
+  }
+  assert.equal(isMediaFullUnlocked(claudeVerified), false)
+
+  const claudePres = getMediaSemanticPresentation(claudeVerified, claudePlat)
+  assert.equal(claudePres.isFullUnlocked, false)
+  assert.notEqual(claudePres.badgeVariant, 'success')
+  assert.equal(claudePres.badgeVariant, 'info')
+  assert.match(claudePres.accessibleTitle, /地区信号/)
+  assert.equal(claudePres.shortBadgeText, 'Claude:US')
+
+  // Claude challenge / timeout / rate_limited / inconclusive
+  const claudeTimeout = getMediaSemanticPresentation({ status: 'timeout', observation_kind: 'region_signal' }, claudePlat)
+  assert.equal(claudeTimeout.isFullUnlocked, false)
+  assert.equal(claudeTimeout.badgeVariant, 'neutral')
+
+  const claudeChallenge = getMediaSemanticPresentation({ status: 'challenged', verdict: 'challenge', observation_kind: 'region_signal' }, claudePlat)
+  assert.equal(claudeChallenge.isFullUnlocked, false)
+  assert.equal(claudeChallenge.badgeVariant, 'warning')
+
+  // 3. ChatGPT Tiered Presentation
+  const gptPlat = MEDIA_PLATFORMS.find((p) => p.key === 'chatgpt')
+  assert.ok(gptPlat, 'MEDIA_PLATFORMS must include chatgpt')
+
+  // 3a. App Tier verified (both Web and App pass) -> Highest tier (GPT⁺), Full Unlock
+  const gptApp = {
+    status: 'verified',
+    verdict: 'available',
+    unlocked: true,
+    confidence: 'verified',
+    observation_kind: 'capability',
+    tier: 'app',
+    region: 'US',
+    subobservations: {
+      web: { status: 'verified', verdict: 'available', unlocked: true },
+      app: { status: 'verified', verdict: 'available', unlocked: true },
+    },
+  }
+  assert.equal(isMediaFullUnlocked(gptApp), true)
+  const gptAppPres = getMediaSemanticPresentation(gptApp, gptPlat)
+  assert.equal(gptAppPres.isFullUnlocked, true)
+  assert.equal(gptAppPres.badgeVariant, 'success')
+  assert.match(gptAppPres.label, /GPT⁺/)
+  assert.match(gptAppPres.shortBadgeText, /GPT⁺/)
+
+  // 3b. Web Tier only (Web passes, App inconclusive/partial) -> NOT full unlocked, warning badge, GPT label
+  const gptWeb = {
+    status: 'partial',
+    verdict: 'unknown',
+    unlocked: false,
+    confidence: 'verified',
+    observation_kind: 'capability',
+    tier: 'web',
+    region: 'US',
+    subobservations: {
+      web: { status: 'verified', verdict: 'available', unlocked: true },
+      app: { status: 'challenged', verdict: 'challenge', unlocked: false },
+    },
+  }
+  assert.equal(isMediaFullUnlocked(gptWeb), false)
+  const gptWebPres = getMediaSemanticPresentation(gptWeb, gptPlat)
+  assert.equal(gptWebPres.isFullUnlocked, false)
+  assert.notEqual(gptWebPres.badgeVariant, 'success')
+  assert.equal(gptWebPres.badgeVariant, 'warning')
+  assert.match(gptWebPres.label, /GPT/)
+  assert.doesNotMatch(gptWebPres.label, /GPT⁺/)
+  assert.match(gptWebPres.shortBadgeText, /GPT:Web|GPT:US/)
+
+  // 3c. Rate limited / 429 / challenged ChatGPT
+  const gpt429 = getMediaSemanticPresentation({ status: 'rate_limited', verdict: 'rate_limited', tier: 'none' }, gptPlat)
+  assert.equal(gpt429.isFullUnlocked, false)
+  assert.equal(gpt429.badgeVariant, 'warning')
+
+  // 3d. Legacy compatibility (legacy payload without tier still works)
+  const legacyGpt = { status: 'verified', verdict: 'available', unlocked: true }
+  assert.equal(isMediaFullUnlocked(legacyGpt), true)
+  const legacyGptPres = getMediaSemanticPresentation(legacyGpt, gptPlat)
+  assert.equal(legacyGptPres.isFullUnlocked, true)
+  assert.equal(legacyGptPres.badgeVariant, 'success')
 })

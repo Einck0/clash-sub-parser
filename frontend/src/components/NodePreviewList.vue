@@ -1,25 +1,31 @@
 <template>
-  <div class="node-preview-box">
-    <div class="node-preview-toolbar">
+  <TooltipProvider>
+    <div class="node-preview-box">
+      <div class="node-preview-toolbar">
       <label class="node-preview-search">
         <span>搜索节点</span>
-        <input v-model.trim="query" :placeholder="placeholder" />
+        <Input v-model="query" :placeholder="placeholder" @update:model-value="(value) => (query = value)" />
       </label>
       <div class="node-preview-summary">
         <span class="count-pill">{{ filteredNodes.length }} / {{ normalizedNodes.length }}</span>
-        <button @click="runFullProbe" :disabled="probing || !normalizedNodes.length" class="primary inline-flex items-center gap-1">
-          <Zap class="h-3.5 w-3.5" aria-hidden="true" />
-          <span>{{ probing ? '探测中…' : '综合探测' }}</span>
-        </button>
-        <button @click="runTcpProbe" :disabled="probing || !normalizedNodes.length">
+        <Tooltip>
+          <TooltipTrigger as-child>
+            <ShadButton @click="runFullProbe" :disabled="probing || !normalizedNodes.length" class="primary inline-flex items-center gap-1">
+              <Zap class="h-3.5 w-3.5" aria-hidden="true" />
+              <span>{{ probing ? '探测中…' : '综合探测' }}</span>
+            </ShadButton>
+          </TooltipTrigger>
+          <TooltipContent>经隔离 sing-box 验证握手、落地地区、流媒体与测速</TooltipContent>
+        </Tooltip>
+        <ShadButton @click="runTcpProbe" :disabled="probing || !normalizedNodes.length">
           TCP 探活
-        </button>
-        <button v-if="editable" @click="toggleEditMode" :class="{ primary: editMode }">
+        </ShadButton>
+        <ShadButton v-if="editable" @click="toggleEditMode" :class="{ primary: editMode }">
           {{ editMode ? '完成改名' : '改名' }}
-        </button>
-        <button v-if="filteredNodes.length > collapsedLimit" @click="expanded = !expanded">
+        </ShadButton>
+        <ShadButton v-if="filteredNodes.length > collapsedLimit" @click="expanded = !expanded">
           {{ expanded ? '收起' : `展开全部 ${filteredNodes.length}` }}
-        </button>
+        </ShadButton>
       </div>
     </div>
 
@@ -43,11 +49,11 @@
       <div v-for="(node, idx) in visibleNodes" :key="`${node.baseName}-${idx}`" class="node-preview-item">
         <div class="node-preview-main">
           <template v-if="editable && editMode">
-            <input
+            <Input
               class="node-rename-input"
-              :value="displayName(node)"
+              :model-value="displayName(node)"
               :placeholder="node.baseName"
-              @input="onRenameInput(node.baseName, $event.target.value)"
+              @update:model-value="(value) => onRenameInput(node.baseName, value)"
             />
             <span class="node-preview-meta" v-if="displayName(node) !== node.baseName">
               原名：{{ node.baseName }}
@@ -127,28 +133,31 @@
         >
           {{ probeLabel(node) }}
         </span>
-        <button
+        <ShadButton
           v-if="editable && editMode && displayName(node) !== node.baseName"
           class="danger"
           @click="onRenameInput(node.baseName, node.baseName)"
         >
           还原
-        </button>
+        </ShadButton>
       </div>
     </div>
 
     <div v-if="editable && editMode" class="node-rename-actions">
-      <button class="primary" @click="saveRenames" :disabled="saving || !dirtyCount">
+      <ShadButton class="primary" @click="saveRenames" :disabled="saving || !dirtyCount">
         {{ saving ? '保存中...' : `保存改名 (${dirtyCount})` }}
-      </button>
-      <button @click="resetDraft" :disabled="saving || !dirtyCount">重置未保存</button>
+      </ShadButton>
+      <ShadButton @click="resetDraft" :disabled="saving || !dirtyCount">重置未保存</ShadButton>
     </div>
-  </div>
+    </div>
+  </TooltipProvider>
 </template>
 
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { Zap, Gauge } from 'lucide-vue-next'
+import { Button as ShadButton, Input } from './ui'
+import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from './ui'
 import { getApiErrorMessage, getProbeResults, probeNodesFull, probeTcp } from '../api'
 import { getNodeFlag } from '../utils/format'
 import { MEDIA_PLATFORMS, getMediaSemanticPresentation } from '../views/nodeLedgerDomain'

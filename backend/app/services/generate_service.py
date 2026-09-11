@@ -16,7 +16,11 @@ from app.models.rule import Rule
 from app.models.rule_category import RuleCategory
 from app.models.subscription import Subscription
 from app.services.probe.service import get_all_db_probe_results
-from app.utils.dedup import deduplicate_nodes
+from app.utils.capability_filter import (
+    deduplicate_nodes_by_key,
+    get_probe_result_for_node,
+    is_node_capability_qualified,
+)
 from app.utils.group_utils import resolve_group_members, with_fallback
 from app.services.proxy_chain_service import apply_bindings_to_nodes
 
@@ -209,11 +213,10 @@ async def generate_subscription_payload(
     sub_nodes = list(item.raw_nodes or [])
     if item.filter_min_speed_mbps is not None or item.filter_media_unlock:
         probe_map = await get_all_db_probe_results(db)
-        from app.utils.capability_filter import is_node_capability_qualified
         sub_nodes = [
             n for n in sub_nodes
             if is_node_capability_qualified(
-                probe_map.get(str(n.get("name", "")).strip()),
+                get_probe_result_for_node(probe_map, n),
                 min_speed_mbps=item.filter_min_speed_mbps,
                 required_media=item.filter_media_unlock,
             )
@@ -251,7 +254,6 @@ async def _collect_all_nodes(db: AsyncSession) -> list[dict]:
         select(Subscription).where(Subscription.enabled.is_(True))
     )
     probe_map = await get_all_db_probe_results(db)
-    from app.utils.capability_filter import is_node_capability_qualified
     nodes: list[dict] = []
     for sub in result.scalars().all():
         sub_nodes = list(sub.raw_nodes or [])
@@ -259,13 +261,13 @@ async def _collect_all_nodes(db: AsyncSession) -> list[dict]:
             sub_nodes = [
                 n for n in sub_nodes
                 if is_node_capability_qualified(
-                    probe_map.get(str(n.get("name", "")).strip()),
+                    get_probe_result_for_node(probe_map, n),
                     min_speed_mbps=sub.filter_min_speed_mbps,
                     required_media=sub.filter_media_unlock,
                 )
             ]
         nodes.extend(sub_nodes)
-    return await apply_bindings_to_nodes(db, deduplicate_nodes(nodes))
+    return await apply_bindings_to_nodes(db, deduplicate_nodes_by_key(nodes))
 
 
 async def _collect_node_groups(db: AsyncSession, all_nodes: list[dict]) -> list[dict]:
@@ -273,13 +275,8 @@ async def _collect_node_groups(db: AsyncSession, all_nodes: list[dict]) -> list[
         select(NodeGroup).order_by(NodeGroup.sort_order.asc(), NodeGroup.id.asc())
     )
     groups = list(result.scalars().all())
-    all_node_names = [
-        str(node.get("name", "")).strip()
-        for node in all_nodes
-        if node.get("name")
-    ]
     probe_map = await get_all_db_probe_results(db)
-    resolved = resolve_group_members(groups, all_node_names, leaves_only=False, probe_map=probe_map)
+    resolved = resolve_group_members(groups, all_nodes, leaves_only=False, probe_map=probe_map)
 
     result_groups = []
     for group in groups:

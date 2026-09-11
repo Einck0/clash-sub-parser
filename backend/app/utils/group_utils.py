@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import re
 from functools import lru_cache
-from typing import Iterable
+from typing import Any, Iterable
 
 from app.models.node_group import NodeGroup
+from app.utils.capability_filter import get_probe_result_for_node, is_node_capability_qualified
 
 
 @lru_cache(maxsize=256)
@@ -69,12 +71,22 @@ def resolve_entries(group: NodeGroup) -> list[dict]:
 
 def resolve_group_members(
     groups: Iterable[NodeGroup],
-    all_node_names: list[str],
+    all_nodes: list[str] | list[dict[str, Any]],
     *,
     leaves_only: bool = False,
     probe_map: dict[str, dict] | None = None,
 ) -> dict[int, list[str]]:
     """Resolve every group's ordered member list from include_entries."""
+    node_records = [item for item in all_nodes if isinstance(item, Mapping)]
+    all_node_names = [
+        str(item.get("name") or "").strip() if isinstance(item, Mapping) else str(item).strip()
+        for item in all_nodes
+    ]
+    node_by_name: dict[str, list[dict[str, Any]]] = {}
+    for node in node_records:
+        name = str(node.get("name") or "").strip()
+        if name:
+            node_by_name.setdefault(name, []).append(node)
     group_list = list(groups)
     mapping = {g.id: g for g in group_list}
     name_to_id = {g.name: g.id for g in group_list if g.name}
@@ -148,22 +160,25 @@ def resolve_group_members(
 
         merged = [item for item in dedup_names(selected) if item not in excluded]
 
-        # 针对叶子节点应用当前策略组设置的能力与测速过滤
         if probe_map and (group.filter_min_speed_mbps or group.filter_media_unlock):
-            from app.utils.capability_filter import is_node_capability_qualified
             filtered_merged = []
             for item in merged:
-                # 如果是嵌套策略组名，直接保留；如果是节点名，执行探针能力筛选
+                # 如果是嵌套策略组名，直接保留；如果是节点名，按每个节点的 canonical key 筛选
                 if item in group_label_set:
                     filtered_merged.append(item)
-                else:
-                    node_probe = probe_map.get(item)
-                    if is_node_capability_qualified(
-                        node_probe,
+                    continue
+                candidates = node_by_name.get(item, [])
+                if not candidates:
+                    continue
+                if any(
+                    is_node_capability_qualified(
+                        get_probe_result_for_node(probe_map, node),
                         min_speed_mbps=group.filter_min_speed_mbps,
                         required_media=group.filter_media_unlock,
-                    ):
-                        filtered_merged.append(item)
+                    )
+                    for node in candidates
+                ):
+                    filtered_merged.append(item)
             merged = filtered_merged
 
         if leaves_only:

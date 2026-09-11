@@ -2,7 +2,7 @@
   <section class="page rule-detail-page">
     <div class="page-head sticky-head">
       <div class="title-cluster">
-        <button @click="goBack">← 返回</button>
+        <Button variant="ghost" size="sm" :icon="ArrowLeft" aria-label="返回" @click="goBack">返回</Button>
         <div>
           <p class="eyebrow">Rule Category</p>
           <h2>{{ categoryName }}</h2>
@@ -10,13 +10,13 @@
         </div>
       </div>
       <div class="head-actions">
-        <button @click="loadWithConfirm">刷新</button>
-        <button @click="showPresets = true">规则模板</button>
-        <button @click="showImport = true">批量导入</button>
-        <button @click="createRuleRow">新增规则</button>
-        <button class="primary" @click="saveAllRules" :disabled="saving || !rules.length">
+        <Button variant="secondary" size="md" @click="loadWithConfirm">刷新</Button>
+        <Button variant="secondary" size="md" @click="showPresets = true">规则模板</Button>
+        <Button variant="secondary" size="md" @click="showImport = true">批量导入</Button>
+        <Button variant="secondary" size="md" :icon="Plus" @click="createRuleRow">新增规则</Button>
+        <Button variant="primary" size="md" :loading="saving" :disabled="!rules.length" @click="saveAllRules">
           {{ saving ? '保存中...' : '保存全部' }}
-        </button>
+        </Button>
       </div>
     </div>
 
@@ -27,48 +27,42 @@
       <div class="toolbar-grid">
         <label class="field search-field">
           <span>搜索</span>
-          <input v-model="search" placeholder="名称 / 类型 / 规则值 / 目标 / 参数" />
+          <Input v-model="search" placeholder="名称 / 类型 / 规则值 / 目标 / 参数" />
         </label>
         <label class="field">
           <span>类型</span>
-          <select v-model="typeFilter">
-            <option value="">全部类型</option>
-            <option v-for="type in availableTypes" :key="type" :value="type">{{ type }}</option>
-          </select>
+          <Select v-model="typeFilter" :options="[{ value: '', label: '全部类型' }, ...availableTypes.map((type) => ({ value: type, label: type }))]" />
         </label>
         <label class="field">
           <span>目标</span>
-          <select v-model="proxyFilter">
-            <option value="">全部目标</option>
-            <option v-for="proxy in availableProxies" :key="proxy" :value="proxy">{{ proxy }}</option>
-          </select>
+          <Select v-model="proxyFilter" :options="[{ value: '', label: '全部目标' }, ...availableProxies.map((proxy) => ({ value: proxy, label: proxy }))]" />
         </label>
         <label class="field small-field">
           <span>状态</span>
-          <select v-model="enabledFilter">
-            <option value="">全部</option>
-            <option value="enabled">启用</option>
-            <option value="disabled">禁用</option>
-          </select>
+          <Select v-model="enabledFilter" :options="[{ value: '', label: '全部' }, { value: 'enabled', label: '启用' }, { value: 'disabled', label: '禁用' }]" />
         </label>
-        <button class="toolbar-button" @click="resetFilters">清空</button>
+        <Button variant="secondary" size="md" class="toolbar-button" @click="resetFilters">清空</Button>
       </div>
     </div>
 
     <div class="pager-card">
       <div class="action-row">
-        <button :disabled="page <= 1" @click="page--">上一页</button>
+        <Button :disabled="page <= 1" @click="page--">上一页</Button>
         <span class="pager-text">第 {{ normalizedPage }} / {{ totalPages }} 页</span>
-        <button :disabled="page >= totalPages" @click="page++">下一页</button>
+        <Button :disabled="page >= totalPages" @click="page++">下一页</Button>
       </div>
       <div class="action-row">
         <span class="muted">每页</span>
-        <select v-model.number="pageSize" class="page-size-select">
+        <Select
+          :model-value="pageSize"
+          class="page-size-select"
+          @update:model-value="pageSize = Number($event)"
+        >
           <option :value="20">20</option>
           <option :value="50">50</option>
           <option :value="100">100</option>
           <option :value="200">200</option>
-        </select>
+        </Select>
         <span class="muted">共 {{ filteredRules.length }} 条</span>
       </div>
     </div>
@@ -96,16 +90,16 @@
             @drop="onRuleDrop(item)"
           >
             <td class="col-index muted">
-              <button type="button" class="drag-handle drag-mini" title="拖拽排序" data-drag-handle draggable="true" @dragstart="onRuleDragStart($event, item)" @dragend="draggingRuleKey = null" @click.stop @mousedown.stop>
+              <Button type="button" class="drag-handle drag-mini" title="拖拽排序" data-drag-handle draggable="true" @dragstart="onRuleDragStart($event, item)" @dragend="draggingRuleKey = null" @click.stop @mousedown.stop>
                 <GripVertical :size="16" aria-hidden="true" />
-              </button>
+              </Button>
               {{ pageStart + idx + 1 }}
             </td>
-            <td class="col-enabled no-drag"><input type="checkbox" v-model="item.enabled" @dragstart.stop.prevent /></td>
-            <td class="no-drag"><input v-model="item.name" placeholder="可选" @dragstart.stop.prevent /></td>
-            <td class="no-drag"><select v-model="item.type"><option v-for="type in ruleTypes" :key="type" :value="type">{{ type }}</option></select></td>
+            <td class="col-enabled no-drag"><Checkbox v-model="item.enabled" @dragstart.stop.prevent /></td>
+            <td class="no-drag"><Input v-model="item.name" placeholder="可选" @dragstart.stop.prevent /></td>
+            <td class="no-drag"><Select v-model="item.type"><option v-for="type in ruleTypes" :key="type" :value="type">{{ type }}</option></Select></td>
             <td class="no-drag">
-              <input
+              <Input
                 v-model="item.value"
                 :disabled="normalizeRuleType(item.type) === 'MATCH'"
                 :placeholder="normalizeRuleType(item.type) === 'MATCH' ? 'MATCH 无需值' : '规则值'"
@@ -113,18 +107,22 @@
               />
             </td>
             <td class="no-drag">
-              <select v-model="item.proxy">
+              <Select v-model="item.proxy">
                 <option value="">选择目标</option>
                 <option v-for="target in proxyTargets" :key="target" :value="target">{{ target }}</option>
-              </select>
+              </Select>
             </td>
-            <td class="no-drag"><input v-model="item.optionsText" placeholder="逗号分隔" @dragstart.stop.prevent /></td>
+            <td class="no-drag"><Input v-model="item.optionsText" placeholder="逗号分隔" @dragstart.stop.prevent /></td>
             <td class="no-drag">
               <div class="action-row compact-actions no-wrap">
-                <select class="inline-move-select" :value="ruleIndex(item)" @change="moveRuleToIndex(item, Number($event.target.value))">
+                <Select
+                  class="inline-move-select"
+                  :model-value="String(ruleIndex(item))"
+                  @update:model-value="moveRuleToIndex(item, Number($event))"
+                >
                   <option v-for="(_, targetIdx) in rules" :key="targetIdx" :value="targetIdx">#{{ targetIdx + 1 }}</option>
-                </select>
-                <button class="danger" @click="deleteRuleRow(item)">移除</button>
+                </Select>
+                <Button class="danger" @click="deleteRuleRow(item)">移除</Button>
               </div>
             </td>
           </tr>
@@ -147,36 +145,36 @@
       >
         <div class="mobile-rule-head">
           <div class="sortable-title">
-            <button type="button" class="drag-handle" title="拖拽排序" data-drag-handle draggable="true" @dragstart="onRuleDragStart($event, item)" @dragend="draggingRuleKey = null" @click.stop @mousedown.stop>
+            <Button type="button" class="drag-handle" title="拖拽排序" data-drag-handle draggable="true" @dragstart="onRuleDragStart($event, item)" @dragend="draggingRuleKey = null" @click.stop @mousedown.stop>
               <GripVertical :size="16" aria-hidden="true" />
-            </button>
+            </Button>
             <div>
               <span class="category-index">#{{ pageStart + idx + 1 }}</span>
               <strong>{{ item.name || item.type || '未命名规则' }}</strong>
             </div>
           </div>
-          <label class="switch-line no-drag"><input type="checkbox" v-model="item.enabled" @dragstart.stop.prevent /> 启用</label>
+          <label class="switch-line no-drag"><Checkbox v-model="item.enabled" @dragstart.stop.prevent /> 启用</label>
         </div>
 
         <div class="mobile-rule-fields no-drag">
-          <label class="field"><span>名称</span><input v-model="item.name" placeholder="可选" @dragstart.stop.prevent /></label>
-          <label class="field"><span>类型</span><select v-model="item.type"><option v-for="type in ruleTypes" :key="type" :value="type">{{ type }}</option></select></label>
+          <label class="field"><span>名称</span><Input v-model="item.name" placeholder="可选" @dragstart.stop.prevent /></label>
+          <label class="field"><span>类型</span><Select v-model="item.type"><option v-for="type in ruleTypes" :key="type" :value="type">{{ type }}</option></Select></label>
           <label class="field wide-field">
             <span>规则值</span>
-            <input
+            <Input
               v-model="item.value"
               :disabled="normalizeRuleType(item.type) === 'MATCH'"
               :placeholder="normalizeRuleType(item.type) === 'MATCH' ? 'MATCH 无需值' : '规则值'"
               @dragstart.stop.prevent
             />
           </label>
-          <label class="field"><span>目标</span><select v-model="item.proxy"><option value="">选择目标</option><option v-for="target in proxyTargets" :key="target" :value="target">{{ target }}</option></select></label>
-          <label class="field"><span>参数</span><input v-model="item.optionsText" placeholder="逗号分隔" @dragstart.stop.prevent /></label>
-          <label class="field"><span>移动到</span><select :value="ruleIndex(item)" @change="moveRuleToIndex(item, Number($event.target.value))"><option v-for="(_, targetIdx) in rules" :key="targetIdx" :value="targetIdx">第 {{ targetIdx + 1 }} 位</option></select></label>
+          <label class="field"><span>目标</span><Select v-model="item.proxy"><option value="">选择目标</option><option v-for="target in proxyTargets" :key="target" :value="target">{{ target }}</option></Select></label>
+          <label class="field"><span>参数</span><Input v-model="item.optionsText" placeholder="逗号分隔" @dragstart.stop.prevent /></label>
+          <label class="field"><span>移动到</span><Select :model-value="String(ruleIndex(item))" @update:model-value="moveRuleToIndex(item, Number($event))"><option v-for="(_, targetIdx) in rules" :key="targetIdx" :value="targetIdx">第 {{ targetIdx + 1 }} 位</option></Select></label>
         </div>
 
         <div class="action-row compact-actions">
-          <button class="danger" @click="deleteRuleRow(item)">移除</button>
+          <Button class="danger" @click="deleteRuleRow(item)">移除</Button>
         </div>
       </article>
       <div v-if="pagedRules.length === 0" class="empty-state">没有匹配的规则</div>
@@ -205,18 +203,18 @@
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router'
+import { GripVertical, ArrowLeft, Plus } from 'lucide-vue-next'
 import { useAppStore } from '../stores/app'
+import { Button, Input, Select, Checkbox } from '../components/ui'
 import { useUrlState } from '../utils/urlState'
-
-const store = useAppStore()
 import { createRule, deleteRule, getApiErrorMessage, getNodeGroups, getRules, updateRule, batchRules } from '../api'
 import { BUILTINS, RULE_TYPES, normalizeRuleType, parseOptions, proxyTargetsFromGroups } from '../utils/ruleUtils'
 import { setDragGhost, shouldAllowDragStart } from '../utils/drag'
-import { GripVertical } from 'lucide-vue-next'
 import RulePresetsModal from '../components/RulePresetsModal.vue'
 import RuleImportModal from '../components/RuleImportModal.vue'
 import FabSave from '../components/FabSave.vue'
 
+const store = useAppStore()
 const route = useRoute()
 const router = useRouter()
 const categoryName = computed(() => String(route.params.name || 'default'))

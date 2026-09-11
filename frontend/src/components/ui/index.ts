@@ -12,4 +12,16 @@ export { default as ConfirmDialog } from './ConfirmDialog.vue'
 export { default as ToastContainer } from './ToastContainer.vue'
 export { default as VirtualNodeTable } from './VirtualNodeTable.vue'
 
+// shadcn-vue / Reka UI v2 Foundation Primitives
+export * from './button'
+export * from './badge'
+export * from './input'
+export * from './checkbox'
+export * from './tooltip'
+export * from './dropdown-menu'
+export * from './dialog'
+export * from './alert-dialog'
+export * from './sheet'
+export * from './tabs'
+
 export type * from './types'

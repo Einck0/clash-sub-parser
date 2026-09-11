@@ -134,6 +134,7 @@ class FinalNodeItem(BaseModel):
 
 
 class NodeLedgerItem(FinalNodeItem):
+    node_key: str
     dialer_proxy: str | None = None
     chain_source: str | None = None  # node | node_group | subscription
     group_names: list[str] = []

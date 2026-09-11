@@ -12,8 +12,13 @@ from app.config import get_settings
 from app.models.subscription import Subscription
 from app.schemas.subscription import ManualNodeCreate, SubscriptionCreate, SubscriptionUpdate
 from app.services.security_settings_service import get_fetch_proxy_config, get_security_settings
+from app.services.node_identity import canonical_node_key
+from app.utils.capability_filter import (
+    deduplicate_nodes_by_key,
+    get_probe_result_for_node,
+    is_node_capability_qualified,
+)
 from app.utils.clash_parser import compile_regex, parse_node_links, parse_subscription_content
-from app.utils.dedup import deduplicate_nodes
 from app.utils.http_fetch import stream_fetch
 
 settings = get_settings()
@@ -67,6 +72,9 @@ async def create_subscription(
     db.add(item)
     await db.commit()
     await db.refresh(item)
+
+    from app.services.probe.service import converge_probe_results_to_current_nodes
+    await converge_probe_results_to_current_nodes(db)
     return item
 
 
@@ -84,7 +92,7 @@ async def create_manual_node_subscription(
 
     name = payload.name.strip()
     prefix = payload.node_prefix.strip() if payload.node_prefix else None
-    selected_nodes = deduplicate_nodes(nodes)
+    selected_nodes = deduplicate_nodes_by_key(nodes)
     prefixed_nodes = _apply_prefix(
         selected_nodes,
         _resolve_prefix(name, prefix, payload.is_primary),
@@ -104,7 +112,7 @@ async def create_manual_node_subscription(
         node_renames={},
         source_nodes=[],
         manual_nodes=selected_nodes,
-        raw_nodes=deduplicate_nodes(prefixed_nodes),
+        raw_nodes=deduplicate_nodes_by_key(prefixed_nodes),
         last_fetched_at=datetime.now(timezone.utc),
         last_fetch_error=None,
         fetch_failed_count=0,
@@ -113,6 +121,9 @@ async def create_manual_node_subscription(
     db.add(item)
     await db.commit()
     await db.refresh(item)
+
+    from app.services.probe.service import converge_probe_results_to_current_nodes
+    await converge_probe_results_to_current_nodes(db)
     return item
 
 
@@ -132,7 +143,7 @@ async def update_subscription(
     if "node_renames" in data and data["node_renames"] is not None:
         data["node_renames"] = _normalize_node_renames(data["node_renames"])
     if "manual_nodes" in data and data["manual_nodes"] is not None:
-        data["manual_nodes"] = deduplicate_nodes(data["manual_nodes"] or [])
+        data["manual_nodes"] = deduplicate_nodes_by_key(data["manual_nodes"] or [])
     if manual_node_links is not None:
         data["manual_nodes"] = _merge_manual_nodes(data.get("manual_nodes", item.manual_nodes or []), manual_node_links)
 
@@ -150,6 +161,8 @@ async def update_subscription(
         & set(data.keys())
     ) or manual_node_links is not None
 
+    node_set_changed = selection_changed or ("enabled" in data and data["enabled"] != item.enabled)
+
     for key, value in data.items():
         setattr(item, key, value)
 
@@ -159,6 +172,11 @@ async def update_subscription(
     db.add(item)
     await db.commit()
     await db.refresh(item)
+
+    if node_set_changed:
+        from app.services.probe.service import converge_probe_results_to_current_nodes
+        await converge_probe_results_to_current_nodes(db)
+
     return item
 
 
@@ -174,6 +192,9 @@ async def delete_subscription(db: AsyncSession, item: Subscription) -> None:
     await db.delete(target)
     await db.commit()
 
+    from app.services.probe.service import converge_probe_results_to_current_nodes
+    await converge_probe_results_to_current_nodes(db)
+
 
 async def fetch_subscription_nodes(
     db: AsyncSession, item: Subscription
@@ -187,6 +208,9 @@ async def fetch_subscription_nodes(
         db.add(item)
         await db.commit()
         await db.refresh(item)
+
+        from app.services.probe.service import converge_probe_results_to_current_nodes
+        await converge_probe_results_to_current_nodes(db)
         return item
 
     # 提前记录标识避免并发删除导致 ORM 行失效或游离
@@ -214,7 +238,7 @@ async def fetch_subscription_nodes(
         live = await _require_subscription(db, sub_id)
 
         fetched_nodes, comments = parse_subscription_content(raw_text)
-        live.source_nodes = deduplicate_nodes(fetched_nodes)
+        live.source_nodes = deduplicate_nodes_by_key(fetched_nodes)
         live.raw_nodes = _materialize_raw_nodes(
             live.source_nodes,
             live.manual_nodes or [],
@@ -237,6 +261,9 @@ async def fetch_subscription_nodes(
         db.add(live)
         await db.commit()
         await db.refresh(live)
+
+        from app.services.probe.service import converge_probe_results_to_current_nodes
+        await converge_probe_results_to_current_nodes(db)
 
         # 同步发布规范化库存新世代
         try:
@@ -382,7 +409,7 @@ def _materialize_raw_nodes(
         _resolve_prefix(name, node_prefix, is_primary),
     )
     renamed_nodes = _apply_renames(prefixed_nodes, node_renames or {})
-    return deduplicate_nodes(renamed_nodes)
+    return deduplicate_nodes_by_key(renamed_nodes)
 
 
 def _apply_selection(
@@ -403,22 +430,23 @@ def _apply_selection(
     selected: dict[str, dict] = {}
 
     for node in nodes:
+        node_key = canonical_node_key(node)
         name = str(node.get("name", "")).strip()
         if not name:
             continue
         if not regex_patterns or any(pattern.search(name) for pattern in regex_patterns):
-            selected[name] = node
+            selected[node_key] = node
 
     if include_set:
         for node in nodes:
             name = str(node.get("name", "")).strip()
             if name in include_set:
-                selected[name] = node
+                selected[canonical_node_key(node)] = node
 
-    for name in exclude_set:
-        selected.pop(name, None)
-
-    return list(selected.values())
+    return [
+        node for node in selected.values()
+        if str(node.get("name", "")).strip() not in exclude_set
+    ]
 
 
 def _refresh_selected_nodes(item: Subscription) -> None:
@@ -441,25 +469,25 @@ def _refresh_selected_nodes(item: Subscription) -> None:
         return
 
     if item.raw_nodes:
-        item.raw_nodes = deduplicate_nodes(
+        item.raw_nodes = deduplicate_nodes_by_key(
             _apply_renames(item.raw_nodes or [], item.node_renames or {})
         )
 
 
 def _merge_manual_nodes(existing_nodes: list[dict], node_links: str | None) -> list[dict]:
     if not node_links or not node_links.strip():
-        return deduplicate_nodes(existing_nodes or [])
+        return deduplicate_nodes_by_key(existing_nodes or [])
     try:
         parsed_nodes, _ = parse_subscription_content(node_links)
     except Exception as exc:
         raise HTTPException(status_code=400, detail="未找到支持的节点链接或原始内容") from exc
     if not parsed_nodes:
         raise HTTPException(status_code=400, detail="未找到支持的节点链接或原始内容")
-    return deduplicate_nodes([*(existing_nodes or []), *parsed_nodes])
+    return deduplicate_nodes_by_key([*(existing_nodes or []), *parsed_nodes])
 
 
 def _combined_source_nodes(source_nodes: list[dict], manual_nodes: list[dict]) -> list[dict]:
-    return deduplicate_nodes([*(source_nodes or []), *(manual_nodes or [])])
+    return deduplicate_nodes_by_key([*(source_nodes or []), *(manual_nodes or [])])
 
 
 def _resolve_prefix(name: str, custom_prefix: str | None, is_primary: bool) -> str:
@@ -577,7 +605,6 @@ async def collect_all_subscription_nodes(db: AsyncSession) -> list[dict]:
         select(Subscription).where(Subscription.enabled.is_(True))
     )
     from app.services.probe.service import get_all_db_probe_results
-    from app.utils.capability_filter import is_node_capability_qualified
     probe_map = await get_all_db_probe_results(db)
     merged: list[dict] = []
     for sub in result.scalars().all():
@@ -586,13 +613,13 @@ async def collect_all_subscription_nodes(db: AsyncSession) -> list[dict]:
             sub_nodes = [
                 n for n in sub_nodes
                 if is_node_capability_qualified(
-                    probe_map.get(str(n.get("name", "")).strip()),
+                    get_probe_result_for_node(probe_map, n),
                     min_speed_mbps=sub.filter_min_speed_mbps,
                     required_media=sub.filter_media_unlock,
                 )
             ]
         merged.extend(sub_nodes)
-    return deduplicate_nodes(merged)
+    return deduplicate_nodes_by_key(merged)
 
 
 def _normalize_and_validate_regex(regex_list: list[str]) -> list[str]:

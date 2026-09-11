@@ -8,7 +8,6 @@ from app.models.node_group import NodeGroup
 from app.models.rule import Rule
 from app.models.subscription import Subscription
 from app.services.probe.service import get_all_db_probe_results
-from app.utils.dedup import deduplicate_nodes
 from app.schemas.node_group import NodeGroupCreate, NodeGroupReorder, NodeGroupUpdate
 from app.services.snapshot_service import create_snapshot
 from app.utils.group_utils import resolve_entries, resolve_group_members, with_fallback
@@ -157,12 +156,8 @@ async def preview_node_groups(db: AsyncSession) -> list[dict]:
     all_nodes: list[dict] = []
     for nodes in node_result.scalars().all():
         all_nodes.extend(nodes or [])
-    node_names = [
-        str(node.get("name", "")).strip() for node in deduplicate_nodes(all_nodes)
-    ]
-    node_names = [name for name in node_names if name]
     probe_map = await get_all_db_probe_results(db)
-    resolved_map = resolve_group_members(groups, node_names, leaves_only=False, probe_map=probe_map)
+    resolved_map = resolve_group_members(groups, all_nodes, leaves_only=False, probe_map=probe_map)
 
     preview: list[dict] = []
     for group in groups:

@@ -324,8 +324,13 @@ async def test_proxy_chain_preview_and_node_ledger(client):
 
     ledger = await client.get("/api/proxy-chains/meta/node-ledger")
     assert ledger.status_code == 200, ledger.text
-    rows = {row["name"]: row for row in ledger.json()}
+    ledger_items = ledger.json()
+    for row in ledger_items:
+        assert "node_key" in row
+        assert isinstance(row["node_key"], str) and len(row["node_key"]) > 0
+    rows = {row["name"]: row for row in ledger_items}
     assert "美国落地" in rows
+    assert rows["美国落地"]["node_key"] == "美国落地|vmess|2.2.2.2:2"
     assert rows["美国落地"]["dialer_proxy"] == "香港入口"
     assert rows["美国落地"]["chain_source"] == "node"
     assert rows["美国落地"]["subscription_name"] == "chain-sub"

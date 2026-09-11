@@ -90,20 +90,17 @@
         :count-text="`${filteredGroups.length} / ${groups.length} 组`"
       >
         <template #filters>
-          <select
+          <FormSelect
             v-model="typeFilter"
             aria-label="策略组类型筛选"
-            class="min-h-[44px] rounded-lg border border-border-subtle bg-surface-base px-3 py-2 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono cursor-pointer transition-colors"
-          >
-            <option value="">全部类型</option>
-            <option v-for="t in typeOptions" :key="t" :value="t">{{ t }}</option>
-          </select>
+            :options="[
+              { value: '', label: '全部类型' },
+              ...typeOptions.map((value) => ({ value, label: value })),
+            ]"
+            class="min-w-[120px]"
+          />
           <label class="min-h-[44px] inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-border-subtle bg-surface-base text-xs text-text-main cursor-pointer select-none">
-            <input
-              v-model="onlyEmpty"
-              type="checkbox"
-              class="rounded border-border-subtle bg-surface text-accent focus:ring-0"
-            />
+            <FormCheckbox v-model="onlyEmpty" />
             <span>仅空组</span>
           </label>
         </template>
@@ -169,7 +166,7 @@
                 <!-- Drag handle & Index -->
                 <td class="py-2 px-3 text-center whitespace-nowrap">
                   <div class="flex items-center justify-center gap-1">
-                    <button
+                    <ShadButton
                       type="button"
                       class="flex min-h-[32px] min-w-[32px] items-center justify-center rounded-md border border-border-subtle bg-surface text-text-muted hover:text-text-main transition-colors select-none"
                       :class="canReorderGroups ? 'cursor-grab active:cursor-grabbing' : 'opacity-40 cursor-not-allowed'"
@@ -183,7 +180,7 @@
                       @mousedown.stop
                     >
                       <GripVertical class="h-3.5 w-3.5" aria-hidden="true" />
-                    </button>
+                    </ShadButton>
                     <span class="text-[11px] text-text-sub tabular-nums">#{{ originalIndex(group.id) + 1 }}</span>
                   </div>
                 </td>
@@ -330,21 +327,21 @@
             <!-- Card Head -->
             <div class="flex items-start justify-between gap-2 pb-2 border-b border-border-subtle">
               <div class="flex items-start gap-2.5 min-w-0 flex-1">
-                <button
-                  type="button"
-                  class="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg border border-border-subtle bg-surface text-text-muted hover:text-text-main transition-colors select-none shrink-0"
-                  :class="canReorderGroups ? 'cursor-grab active:cursor-grabbing' : 'opacity-40 cursor-not-allowed'"
-                  :title="canReorderGroups ? '拖拽排序' : '清空筛选后再拖拽排序'"
-                  data-drag-handle
-                  :disabled="!canReorderGroups"
-                  :draggable="canReorderGroups"
-                  @dragstart="onGroupDragStart($event, group)"
-                  @dragend="draggingGroupId = null"
-                  @click.stop
-                  @mousedown.stop
-                >
-                  <GripVertical class="h-4 w-4" aria-hidden="true" />
-                </button>
+                    <ShadButton
+                      type="button"
+                      class="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg border border-border-subtle bg-surface text-text-muted hover:text-text-main transition-colors select-none shrink-0"
+                      :class="canReorderGroups ? 'cursor-grab active:cursor-grabbing' : 'opacity-40 cursor-not-allowed'"
+                      :title="canReorderGroups ? '拖拽排序' : '清空筛选后再拖拽排序'"
+                      data-drag-handle
+                      :disabled="!canReorderGroups"
+                      :draggable="canReorderGroups"
+                      @dragstart="onGroupDragStart($event, group)"
+                      @dragend="draggingGroupId = null"
+                      @click.stop
+                      @mousedown.stop
+                    >
+                      <GripVertical class="h-4 w-4" aria-hidden="true" />
+                    </ShadButton>
                 <div class="min-w-0 space-y-1">
                   <div class="flex items-center gap-1.5 flex-wrap">
                     <span class="text-xs font-mono text-text-sub tabular-nums">#{{ originalIndex(group.id) + 1 }}</span>
@@ -517,7 +514,7 @@ import NodePreviewList from '../components/NodePreviewList.vue'
 import PageToolbar from '../components/PageToolbar.vue'
 import UiState from '../components/UiState.vue'
 import NodeGroupModal from '../components/NodeGroupModal.vue'
-import { Button, StatusBadge, MetricCard, BaseDrawer } from '../components/ui'
+import { Button, StatusBadge, MetricCard, BaseDrawer, Select as FormSelect, Checkbox as FormCheckbox } from '../components/ui'
 import { setDragGhost, shouldAllowDragStart } from '../utils/drag'
 
 const store = useAppStore()

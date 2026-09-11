@@ -6,39 +6,41 @@
         <h3>{{ form.id ? '编辑订阅' : '添加订阅' }}</h3>
         <p class="section-hint">主订阅在列表卡片设置。高级能力默认收起，打开后才显示对应配置。</p>
       </div>
-      <button
+      <ShadButton
         v-if="form.id && form.url !== 'manual://nodes'"
-        class="primary"
-        @click="handleFetch"
+        variant="primary"
+        size="md"
+        :loading="fetching"
         :disabled="fetching || saveDisabled"
+        @click="handleFetch"
       >
         {{ fetching ? '拉取中...' : '拉取节点' }}
-      </button>
+      </ShadButton>
     </div>
 
     <div class="grid-2">
       <label>
         <div class="muted">订阅名</div>
-        <input v-model="form.name" placeholder="粘贴 URL 后自动填二级域名" @input="onNameInput" />
+        <Input v-model="form.name" placeholder="粘贴 URL 后自动填二级域名" @update:model-value="onNameInput" />
       </label>
       <label>
         <div class="muted">URL</div>
-        <input v-model="form.url" placeholder="https://..." @input="onUrlInput" />
+        <Input v-model="form.url" placeholder="https://..." @update:model-value="onUrlInput" />
       </label>
       <label>
         <div class="muted">更新周期（分钟）</div>
-        <input v-model.number="form.update_interval" type="number" min="1" placeholder="留空则不自动更新" />
+        <Input v-model.number="form.update_interval" type="number" min="1" placeholder="留空则不自动更新" />
       </label>
       <label>
         <div class="muted">节点前缀</div>
-        <input v-model="form.node_prefix" placeholder="主订阅空=不加，其他空=订阅名" />
+        <Input v-model="form.node_prefix" placeholder="主订阅空=不加，其他空=订阅名" />
       </label>
     </div>
 
     <div v-if="fetchError" class="form-alert form-alert-error">{{ fetchError }}</div>
 
     <div class="feature-toggle-row">
-      <button
+      <ShadButton
         type="button"
         class="feature-chip"
         :class="{ active: featureManual }"
@@ -46,32 +48,32 @@
         @click="featureManual = !featureManual"
       >
         手动节点
-      </button>
-      <button
+      </ShadButton>
+      <ShadButton
         type="button"
         class="feature-chip"
         :class="{ active: featureRegex }"
         @click="featureRegex = !featureRegex"
       >
         初筛正则
-      </button>
-      <button
+      </ShadButton>
+      <ShadButton
         type="button"
         class="feature-chip"
         :class="{ active: featureRefine }"
         @click="featureRefine = !featureRefine"
       >
         精修筛选
-      </button>
-      <button
+      </ShadButton>
+      <ShadButton
         type="button"
         class="feature-chip"
         :class="{ active: featureRename }"
         @click="featureRename = !featureRename"
       >
         节点重命名
-      </button>
-      <button
+      </ShadButton>
+      <ShadButton
         type="button"
         class="feature-chip inline-flex items-center gap-1.5"
         :class="{ active: featureProbe }"
@@ -79,7 +81,7 @@
       >
         <Zap class="h-3.5 w-3.5" aria-hidden="true" />
         <span>质检筛选</span>
-      </button>
+      </ShadButton>
     </div>
     <p class="section-hint">节点重命名作用在「加前缀之后」的名字上，策略组匹配的也是最终名。</p>
 
@@ -102,7 +104,7 @@
           @dragover.prevent
           @drop="dropManualNode(index)"
         >
-          <button
+          <ShadButton
             type="button"
             class="drag-handle"
             data-drag-handle
@@ -111,16 +113,16 @@
             aria-label="拖动排序"
             @dragstart="startManualNodeDrag($event, index)"
             @dragend="draggingManualNodeIndex = null"
-          >⠿</button>
+          >⠿</ShadButton>
           <div class="node-select-name mono">
             <strong>{{ nodeName(node) }}</strong>
             <span>{{ node.type || '-' }} {{ node.server ? `| ${node.server}:${node.port || ''}` : '' }}</span>
           </div>
           <div class="node-select-actions">
-            <button type="button" title="上移" :disabled="index === 0" @click="moveManualNode(index, -1)">↑</button>
-            <button type="button" title="下移" :disabled="index === form.manual_nodes.length - 1" @click="moveManualNode(index, 1)">↓</button>
-            <button data-testid="manual-node-edit" @click="openManualNodeEdit(index)">编辑</button>
-            <button class="danger" data-testid="manual-node-remove" @click="removeManualNode(node)">移除</button>
+            <ShadButton type="button" title="上移" :disabled="index === 0" @click="moveManualNode(index, -1)">↑</ShadButton>
+            <ShadButton type="button" title="下移" :disabled="index === form.manual_nodes.length - 1" @click="moveManualNode(index, 1)">↓</ShadButton>
+            <ShadButton data-testid="manual-node-edit" @click="openManualNodeEdit(index)">编辑</ShadButton>
+            <ShadButton class="danger" data-testid="manual-node-remove" @click="removeManualNode(node)">移除</ShadButton>
           </div>
         </div>
       </div>
@@ -158,19 +160,19 @@
       </div>
 
       <div class="selector-stats">
-        <span class="badge">候选 {{ candidateNodes.length }}</span>
-        <span class="badge">包含 {{ form.include_node_names.length }}</span>
-        <span class="badge">排除 {{ form.exclude_node_names.length }}</span>
+        <Badge variant="secondary">候选 {{ candidateNodes.length }}</Badge>
+        <Badge variant="secondary">包含 {{ form.include_node_names.length }}</Badge>
+        <Badge variant="secondary">排除 {{ form.exclude_node_names.length }}</Badge>
       </div>
 
       <div class="node-search-row">
-        <input v-model="nodeSearch" placeholder="搜索节点名" />
-        <button
+        <Input v-model="nodeSearch" placeholder="搜索节点名" @update:model-value="(value) => (nodeSearch = value)" />
+        <ShadButton
           @click="clearManualSelection"
           :disabled="!form.include_node_names.length && !form.exclude_node_names.length"
         >
           清空手动选择
-        </button>
+        </ShadButton>
       </div>
 
       <div v-if="!candidateNodes.length" class="empty-mini">
@@ -183,9 +185,9 @@
             <span>{{ node.type || '-' }}</span>
           </div>
           <div class="node-select-actions">
-            <button :class="{ primary: nodeMode(node) === 'auto' }" @click="setNodeMode(node, 'auto')">自动</button>
-            <button :class="{ primary: nodeMode(node) === 'include' }" @click="setNodeMode(node, 'include')">包含</button>
-            <button :class="{ danger: nodeMode(node) === 'exclude' }" @click="setNodeMode(node, 'exclude')">排除</button>
+            <ShadButton :class="{ primary: nodeMode(node) === 'auto' }" @click="setNodeMode(node, 'auto')">自动</ShadButton>
+            <ShadButton :class="{ primary: nodeMode(node) === 'include' }" @click="setNodeMode(node, 'include')">包含</ShadButton>
+            <ShadButton :class="{ danger: nodeMode(node) === 'exclude' }" @click="setNodeMode(node, 'exclude')">排除</ShadButton>
           </div>
         </div>
       </div>
@@ -204,8 +206,8 @@
       </div>
 
       <div class="node-search-row">
-        <input v-model="renameSearch" placeholder="搜索前缀后名称" />
-        <button @click="clearRenames" :disabled="!renameCount">清空重命名</button>
+        <Input v-model="renameSearch" placeholder="搜索前缀后名称" />
+        <ShadButton @click="clearRenames" :disabled="!renameCount">清空重命名</ShadButton>
       </div>
 
       <div v-if="!prefixedPreviewNodes.length" class="empty-mini">
@@ -215,11 +217,11 @@
         <div v-for="item in visiblePrefixedNodes" :key="item.prefixed" class="rename-row">
           <div class="rename-from mono" :title="item.prefixed">{{ item.prefixed }}</div>
           <span class="rename-arrow">→</span>
-          <input
+          <Input
             class="rename-to"
             :value="form.node_renames[item.prefixed] || item.prefixed"
             :placeholder="item.prefixed"
-            @input="setRename(item.prefixed, $event.target.value)"
+            @update:model-value="(value) => setRename(item.prefixed, value)"
           />
         </div>
       </div>
@@ -238,13 +240,14 @@
       <div class="grid-2" style="margin-top:10px;gap:10px">
         <label>
           <div class="muted">测速最低达标门槛 (Mbps)</div>
-          <input
-            type="number"
-            min="0"
-            step="0.5"
-            v-model.number="form.filter_min_speed_mbps"
-            placeholder="例如 5.0，留空或 0 为不限制"
-          />
+          <Input
+                      type="number"
+                      min="0"
+                      step="0.5"
+                      :model-value="form.filter_min_speed_mbps ?? ''"
+                      @update:model-value="(value) => (form.filter_min_speed_mbps = value === '' ? null : Number(value))"
+                      placeholder="例如：5.0，留空或 0 为不限制"
+                    />
         </label>
       </div>
       <div style="margin-top:10px">
@@ -253,14 +256,13 @@
           <label
             v-for="p in availablePlatforms"
             :key="p.id"
-            class="platform-chip min-h-[36px] px-3 py-1.5 rounded-md border border-border-subtle text-xs flex items-center gap-1.5 cursor-pointer select-none transition-colors"
+            class="platform-chip min-h-[44px] px-3 py-1.5 rounded-md border border-border-subtle text-xs flex items-center gap-1.5 cursor-pointer select-none transition-colors"
             :class="{ active: (form.filter_media_unlock || []).includes(p.id) }"
           >
-            <input
-              type="checkbox"
-              :value="p.id"
-              v-model="form.filter_media_unlock"
-              style="display: none;"
+            <Checkbox
+              :model-value="(form.filter_media_unlock || []).includes(p.id)"
+              :aria-label="`要求解锁 ${p.name}`"
+              @update:model-value="(checked) => togglePlatform(p.id, checked)"
             />
             <span>{{ p.name }}</span>
           </label>
@@ -298,28 +300,28 @@
       </div>
       <template #footer>
         <div class="flex justify-end gap-2">
-          <button
+          <ShadButton
             type="button"
             class="px-3 py-1.5 rounded-md border border-border-subtle text-xs text-text-muted hover:text-text-main cursor-pointer"
             @click="closeManualNodeEdit"
           >
             取消
-          </button>
-          <button
+          </ShadButton>
+          <ShadButton
             type="button"
             class="primary px-4 py-1.5 rounded-md bg-accent text-xs font-medium text-white hover:bg-accent-hover cursor-pointer"
             data-testid="manual-node-yaml-apply"
             @click="saveManualNodeEdit"
           >
             应用修改
-          </button>
+          </ShadButton>
         </div>
       </template>
     </AppModal>
 
     <div class="form-footer">
-      <button class="primary" data-testid="subscription-save" @click="handleSave" :disabled="saveDisabled || fetching">保存</button>
-      <button @click="$emit('cancel')">取消</button>
+      <ShadButton class="primary" data-testid="subscription-save" @click="handleSave" :disabled="saveDisabled || fetching">保存</ShadButton>
+      <ShadButton @click="$emit('cancel')">取消</ShadButton>
     </div>
   </div>
 </template>
@@ -328,6 +330,7 @@
 import { computed, ref, watch } from 'vue'
 import { Zap } from 'lucide-vue-next'
 import AppModal from './ui/AppModal.vue'
+import { Button as ShadButton, Input, Checkbox, Badge } from './ui'
 import { parseManualNodeYaml, serializeManualNode } from '../utils/manualNodeYaml'
 import { setDragGhost } from '../utils/drag'
 import { fetchSubscription, getApiErrorMessage } from '../api'
@@ -621,6 +624,13 @@ function saveManualNodeEdit() {
   } catch (error) {
     manualNodeEditError.value = error.message || '节点配置无法保存'
   }
+}
+
+function togglePlatform(platformId, checked) {
+  const selected = new Set(form.value.filter_media_unlock || [])
+  if (checked === true) selected.add(platformId)
+  else selected.delete(platformId)
+  form.value.filter_media_unlock = [...selected]
 }
 
 function clearManualSelection() {

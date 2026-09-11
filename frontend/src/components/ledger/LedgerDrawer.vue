@@ -233,7 +233,7 @@
           </div>
 
           <!-- Clear chain button (only if node-level) -->
-          <div v-if="node.dialer_proxy && node.chain_source === 'node'" class="pt-2 border-t border-border-subtle">
+          <div v-if="node.dialer_proxy && node.chain_source === 'node' && chainEditEligibility.canEdit" class="pt-2 border-t border-border-subtle">
             <Button
               variant="danger"
               size="md"
@@ -250,9 +250,11 @@
 
         <!-- Configure New / Replace Chain Card -->
         <div class="rounded-lg border border-border-subtle bg-surface-base p-4 space-y-3">
-          <span class="text-text-main font-semibold block pb-1 border-b border-border-subtle">
-            设置 / 替换跳板
-          </span>
+          <div v-if="!chainEditEligibility.canEdit" class="rounded-md border border-status-warning/30 bg-status-warning/10 p-3 text-status-warning">
+            {{ chainEditEligibility.reason }}
+          </div>
+          <template v-else>
+
 
           <div class="space-y-2">
             <label class="text-text-muted block">跳板目标类型</label>
@@ -313,6 +315,7 @@
           >
             {{ savingChain ? '保存中…' : '保存跳板配置' }}
           </Button>
+          </template>
         </div>
       </div>
 
@@ -421,6 +424,7 @@ const props = withDefaults(
     detailStatus?: 'idle' | 'loading' | 'ready' | 'unavailable'
     nodeCandidates?: LedgerNodeItem[]
     groupCandidates?: any[]
+    chainEditEligibility?: { canEdit: boolean; reason?: string }
     probingSingle?: boolean
     savingChain?: boolean
     clearingChain?: boolean
@@ -431,6 +435,7 @@ const props = withDefaults(
     detailStatus: 'idle',
     nodeCandidates: () => [],
     groupCandidates: () => [],
+    chainEditEligibility: () => ({ canEdit: true }),
     probingSingle: false,
     savingChain: false,
     clearingChain: false,

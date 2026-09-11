@@ -96,11 +96,11 @@
       </div>
 
       <div class="relative">
-        <input
+        <Input
           v-model.trim="ruleSearch"
           type="search"
           placeholder="例如 openai / DOMAIN-SUFFIX / DIRECT / 广告…"
-          class="w-full min-h-[44px] rounded-lg border border-border-subtle bg-surface px-3.5 py-2.5 pl-9 text-xs text-text-main placeholder-text-sub focus:border-accent focus:outline-hidden font-mono transition-colors"
+          class="pl-9 font-mono"
         />
         <svg class="absolute left-3 top-3.5 h-4 w-4 text-text-sub pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
@@ -119,12 +119,12 @@
             <div class="flex items-center justify-between gap-2">
               <div class="flex items-center gap-1.5 truncate">
                 <span class="text-[10px] text-text-sub">来自分类:</span>
-                <button
+                <Button
                   class="text-accent hover:underline font-semibold cursor-pointer truncate"
                   @click="openCategoryByName(rule.category)"
                 >
                   {{ rule.category || '未分类' }}
-                </button>
+                </Button>
               </div>
               <span
                 class="px-1.5 py-0.5 rounded text-[10px] border"
@@ -181,7 +181,7 @@
         <!-- Category Top Block -->
         <div class="flex items-center justify-between gap-3 pb-3 border-b border-border-subtle cursor-pointer" @click="cat.id && openCategory(cat)">
           <div class="flex items-center gap-2.5 min-w-0 flex-1">
-            <button
+            <Button
               type="button"
               class="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg border border-border-subtle bg-surface-hover text-text-muted hover:text-text-main cursor-grab active:cursor-grabbing select-none shrink-0"
               title="拖拽排序"
@@ -193,7 +193,7 @@
               @mousedown.stop
             >
               <GripVertical :size="16" aria-hidden="true" />
-            </button>
+            </Button>
             <div class="min-w-0">
               <span class="text-xs font-mono text-text-sub tabular-nums">#{{ idx + 1 }}</span>
               <h3 class="text-base font-semibold text-text-main tracking-tight truncate" :title="cat.name">
@@ -209,7 +209,7 @@
         <!-- Name Input -->
         <div class="space-y-1.5">
           <label class="text-xs font-mono text-text-muted">类别名</label>
-          <input
+          <Input
             v-model="cat.name"
             class="w-full min-h-[44px] rounded-lg border border-border-subtle bg-surface px-3.5 py-2 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono transition-colors"
             placeholder="类别名"
@@ -222,15 +222,15 @@
           <span class="tabular-nums">位置：第 {{ idx + 1 }} 位</span>
           <label class="inline-flex items-center gap-1.5">
             <span>移至</span>
-            <select
-              :value="idx"
+            <Select
+              :model-value="String(idx)"
               class="min-h-[44px] rounded-lg border border-border-subtle bg-surface px-2.5 py-1.5 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono cursor-pointer transition-colors"
-              @change="moveCategoryToIndex(cat, Number($event.target.value))"
+              @update:model-value="moveCategoryToIndex(cat, Number($event))"
             >
               <option v-for="(_, targetIdx) in sortedCategories" :key="targetIdx" :value="targetIdx">
                 第 {{ targetIdx + 1 }} 位
               </option>
-            </select>
+            </Select>
           </label>
         </div>
 
@@ -279,7 +279,7 @@ import {
 import { GripVertical, Plus, RefreshCw, Save } from 'lucide-vue-next'
 import UiState from '../components/UiState.vue'
 import FabSave from '../components/FabSave.vue'
-import { Button, MetricCard } from '../components/ui'
+import { Button, Input, Select, MetricCard } from '../components/ui'
 import { setDragGhost, shouldAllowDragStart } from '../utils/drag'
 
 const store = useAppStore()

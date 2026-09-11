@@ -6,27 +6,27 @@
         <h3>添加自定义节点</h3>
         <p class="section-hint">表单模式按协议填写，Raw 模式继续支持分享链接、Base64 和 YAML。</p>
       </div>
-      <button type="button" @click="$emit('cancel')">关闭</button>
+      <ShadButton type="button" @click="$emit('cancel')">关闭</ShadButton>
     </div>
 
     <div class="grid-2">
       <label>
         <div class="muted">节点或订阅名称</div>
-        <input data-testid="manual-subscription-name" v-model="name" placeholder="例如：我的 WARP 节点" />
+        <Input data-testid="manual-subscription-name" v-model="name" placeholder="例如：我的 WARP 节点" />
       </label>
       <label>
         <div class="muted">节点前缀（可选）</div>
-        <input v-model="nodePrefix" placeholder="留空则使用名称" />
+        <Input v-model="nodePrefix" placeholder="留空则使用名称" />
       </label>
     </div>
 
     <div class="mode-tabs" role="tablist" aria-label="节点添加模式">
-      <button type="button" class="feature-chip" :class="{ active: mode === 'form' }" @click="mode = 'form'">
+      <ShadButton type="button" class="feature-chip" :class="{ active: mode === 'form' }" @click="mode = 'form'">
         按协议填写
-      </button>
-      <button type="button" class="feature-chip" :class="{ active: mode === 'raw' }" @click="mode = 'raw'">
+      </ShadButton>
+      <ShadButton type="button" class="feature-chip" :class="{ active: mode === 'raw' }" @click="mode = 'raw'">
         Raw 模式
-      </button>
+      </ShadButton>
     </div>
 
     <template v-if="mode === 'form'">
@@ -36,59 +36,59 @@
             <strong>节点类型</strong>
             <p class="section-hint">先填一条节点，保存后可以继续在 Raw 模式导入复杂配置。</p>
           </div>
-          <select v-model="draft.type" aria-label="节点类型">
+          <FormSelect v-model="draft.type" aria-label="节点类型">
             <option v-for="item in protocolOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
-          </select>
+          </FormSelect>
         </div>
 
         <div class="grid-2">
           <label>
             <div class="muted">节点名称</div>
-            <input data-testid="manual-node-name" v-model="draft.name" placeholder="例如：香港 01" />
+            <Input data-testid="manual-node-name" v-model="draft.name" placeholder="例如：香港 01" />
           </label>
           <label>
             <div class="muted">服务器</div>
-            <input data-testid="manual-node-server" v-model="draft.server" placeholder="example.com 或 IP" />
+            <Input data-testid="manual-node-server" v-model="draft.server" placeholder="example.com 或 IP" />
           </label>
           <label>
             <div class="muted">端口</div>
-            <input data-testid="manual-node-port" v-model.number="draft.port" type="number" min="1" max="65535" placeholder="443" />
+            <Input data-testid="manual-node-port" v-model.number="draft.port" type="number" min="1" max="65535" placeholder="443" />
           </label>
           <label v-if="draft.type === 'ss'">
             <div class="muted">加密方式</div>
-            <input data-testid="manual-node-cipher" v-model="draft.cipher" placeholder="例如：chacha20-ietf-poly1305" />
+            <Input data-testid="manual-node-cipher" v-model="draft.cipher" placeholder="例如：chacha20-ietf-poly1305" />
           </label>
           <label v-if="draft.type === 'ss'">
             <div class="muted">密码</div>
-            <input data-testid="manual-node-password" v-model="draft.password" type="password" autocomplete="new-password" />
+            <Input data-testid="manual-node-password" v-model="draft.password" type="password" autocomplete="new-password" />
           </label>
           <label v-if="draft.type === 'trojan' || draft.type === 'vless'">
             <div class="muted">{{ draft.type === 'vless' ? 'UUID' : '密码' }}</div>
-            <input v-model="draft[draft.type === 'vless' ? 'uuid' : 'password']" :type="draft.type === 'vless' ? 'text' : 'password'" />
+            <Input v-model="draft[draft.type === 'vless' ? 'uuid' : 'password']" :type="draft.type === 'vless' ? 'text' : 'password'" />
           </label>
           <label v-if="draft.type === 'vmess' || draft.type === 'vless'">
             <div class="muted">UUID</div>
-            <input v-model="draft.uuid" />
+            <Input v-model="draft.uuid" />
           </label>
           <label v-if="draft.type === 'vmess'">
             <div class="muted">加密方式</div>
-            <select v-model="draft.cipher">
+            <FormSelect v-model="draft.cipher">
               <option value="auto">auto</option>
               <option value="aes-128-gcm">aes-128-gcm</option>
               <option value="chacha20-poly1305">chacha20-poly1305</option>
-            </select>
+            </FormSelect>
           </label>
           <label v-if="draft.type === 'vmess'">
             <div class="muted">alterId</div>
-            <input v-model.number="draft.alterId" type="number" min="0" />
+            <Input v-model.number="draft.alterId" type="number" min="0" />
           </label>
           <label v-if="draft.type === 'wireguard'">
             <div class="muted">私钥</div>
-            <input v-model="draft['private-key']" type="password" autocomplete="new-password" />
+            <Input v-model="draft['private-key']" type="password" autocomplete="new-password" />
           </label>
           <label v-if="draft.type === 'wireguard'">
             <div class="muted">隧道 IP</div>
-            <input v-model="draft.ip" placeholder="例如：172.16.0.2/32" />
+            <Input v-model="draft.ip" placeholder="例如：172.16.0.2/32" />
           </label>
         </div>
 
@@ -97,82 +97,82 @@
           <div class="grid-2">
             <label v-if="draft.type === 'trojan' || draft.type === 'vless' || draft.type === 'vmess'">
               <div class="muted">传输协议</div>
-              <select v-model="draft.network">
+              <FormSelect v-model="draft.network">
                 <option value="tcp">TCP</option>
                 <option value="ws">WebSocket</option>
                 <option value="grpc">gRPC</option>
                 <option v-if="draft.type === 'vmess'" value="h2">HTTP/2</option>
-              </select>
+              </FormSelect>
             </label>
             <label v-if="draft.type === 'vless'">
               <div class="muted">安全层</div>
-              <select v-model="draft.security">
+              <FormSelect v-model="draft.security">
                 <option value="none">无</option>
                 <option value="tls">TLS</option>
                 <option value="reality">Reality</option>
-              </select>
+              </FormSelect>
             </label>
             <label v-if="draft.type === 'trojan' || draft.type === 'vless' || draft.type === 'vmess'">
               <div class="muted">SNI</div>
-              <input v-if="draft.type === 'trojan'" v-model="draft.sni" placeholder="可选" />
-              <input v-else v-model="draft.servername" placeholder="可选" />
+              <Input v-if="draft.type === 'trojan'" v-model="draft.sni" placeholder="可选" />
+              <Input v-else v-model="draft.servername" placeholder="可选" />
             </label>
             <label v-if="draft.type === 'vless'">
               <div class="muted">Flow</div>
-              <input v-model="draft.flow" placeholder="例如：xtls-rprx-vision" />
+              <Input v-model="draft.flow" placeholder="例如：xtls-rprx-vision" />
             </label>
             <label v-if="draft.type === 'vless'">
               <div class="muted">客户端指纹</div>
-              <input v-model="draft['client-fingerprint']" placeholder="例如：chrome" />
+              <Input v-model="draft['client-fingerprint']" placeholder="例如：chrome" />
             </label>
             <label v-if="draft.type === 'vless' && draft.security === 'reality'">
               <div class="muted">Reality 公钥</div>
-              <input v-model="draft['reality-public-key']" />
+              <Input v-model="draft['reality-public-key']" />
             </label>
             <label v-if="draft.type === 'vless' && draft.security === 'reality'">
               <div class="muted">Reality Short ID</div>
-              <input v-model="draft['reality-short-id']" />
+              <Input v-model="draft['reality-short-id']" />
             </label>
             <label v-if="draft.type === 'trojan' || draft.type === 'vless' || draft.type === 'vmess'">
               <div class="muted">WebSocket 或 HTTP/2 路径</div>
-              <input v-model="draft.path" placeholder="可选" />
+              <Input v-model="draft.path" placeholder="可选" />
             </label>
             <label v-if="draft.type === 'trojan' || draft.type === 'vless' || draft.type === 'vmess'">
               <div class="muted">Host</div>
-              <input v-model="draft.host" placeholder="可选" />
+              <Input v-model="draft.host" placeholder="可选" />
             </label>
             <label v-if="draft.type === 'vless' || draft.type === 'vmess'">
               <div class="muted">gRPC 服务名</div>
-              <input v-model="draft.grpcServiceName" placeholder="可选" />
+              <Input v-model="draft.grpcServiceName" placeholder="可选" />
             </label>
             <label v-if="draft.type === 'wireguard'">
               <div class="muted">IPv6</div>
-              <input v-model="draft.ipv6" placeholder="可选" />
+              <Input v-model="draft.ipv6" placeholder="可选" />
             </label>
             <label v-if="draft.type === 'wireguard'">
               <div class="muted">对端公钥</div>
-              <input v-model="draft['public-key']" />
+              <Input v-model="draft['public-key']" />
             </label>
             <label v-if="draft.type === 'wireguard'">
               <div class="muted">MTU</div>
-              <input v-model.number="draft.mtu" type="number" min="576" />
+              <Input v-model.number="draft.mtu" type="number" min="576" />
             </label>
             <label v-if="draft.type === 'wireguard'">
               <div class="muted">Reserved</div>
-              <input v-model="draft.reserved" placeholder="例如：1,2,3" />
+              <Input v-model="draft.reserved" placeholder="例如：1,2,3" />
             </label>
             <label v-if="draft.type === 'trojan' || draft.type === 'vless'" class="switch-line">
-              <input v-model="draft['skip-cert-verify']" type="checkbox" /> 跳过证书校验
+              <Input v-model="draft['skip-cert-verify']" type="checkbox" /> 跳过证书校验
             </label>
             <label v-if="draft.type === 'vless' || draft.type === 'vmess'" class="switch-line">
-              <input v-model="draft.tls" type="checkbox" /> 启用 TLS
+              <Input v-model="draft.tls" type="checkbox" /> 启用 TLS
             </label>
           </div>
         </details>
 
         <div v-if="formError" class="form-alert form-alert-error">{{ formError }}</div>
         <div class="form-footer">
-          <button type="button" class="primary" data-testid="manual-add-draft" @click="addDraftNode">加入待保存列表</button>
+          <ShadButton type="button" class="primary" data-testid="manual-add-draft" @click="addDraftNode">加入待保存列表</ShadButton>
           <span class="muted">已添加 {{ draftNodes.length }} 个</span>
         </div>
       </div>
@@ -191,7 +191,7 @@
             @dragover.prevent
             @drop="dropDraftNode(index)"
           >
-            <button
+            <ShadButton
               type="button"
               class="drag-handle"
               data-drag-handle
@@ -199,12 +199,12 @@
               aria-label="拖动排序"
               @dragstart="startDraftDrag($event, index)"
               @dragend="draggingIndex = null"
-            >⠿</button>
+            >⠿</ShadButton>
             <div class="node-select-name mono">
               <strong>{{ node.name }}</strong>
               <span>{{ node.type }} · {{ node.server }}:{{ node.port }}</span>
             </div>
-            <button type="button" class="danger" @click="removeDraftNode(index)">移除</button>
+            <ShadButton type="button" class="danger" @click="removeDraftNode(index)">移除</ShadButton>
           </div>
         </div>
       </div>
@@ -222,14 +222,15 @@
 
     <p v-if="props.error" class="form-alert form-alert-error">{{ props.error }}</p>
     <div class="form-footer">
-      <button type="button" class="primary" data-testid="manual-save" :disabled="props.saving" @click="submit">{{ props.saving ? '保存中...' : '保存并解析' }}</button>
-      <button type="button" @click="$emit('cancel')">取消</button>
+      <ShadButton type="button" class="primary" data-testid="manual-save" :disabled="props.saving" @click="submit">{{ props.saving ? '保存中...' : '保存并解析' }}</ShadButton>
+      <ShadButton type="button" @click="$emit('cancel')">取消</ShadButton>
     </div>
   </div>
 </template>
 
 <script setup>
 import { ref, watch } from 'vue'
+import { Button as ShadButton, Input, Select as FormSelect } from './ui'
 import yaml from 'js-yaml'
 
 const props = defineProps({

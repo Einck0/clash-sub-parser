@@ -11,44 +11,18 @@
         粘贴 Clash YAML rules 或协议链接，自动解析为规则列表。
       </div>
 
-      <!-- Import Mode Tabs -->
       <div class="grid grid-cols-3 gap-1 rounded-lg bg-surface-base p-1 border border-border-subtle">
-        <button
+        <Button
+          v-for="item in importModes"
+          :key="item.value"
           type="button"
-          :class="[
-            'py-1.5 px-3 rounded-md text-xs font-medium transition-colors cursor-pointer text-center',
-            mode === 'yaml'
-              ? 'bg-accent text-white shadow-xs'
-              : 'text-text-muted hover:text-text-main hover:bg-surface-hover'
-          ]"
-          @click="mode = 'yaml'"
+          :variant="mode === item.value ? 'primary' : 'ghost'"
+          size="sm"
+          class="text-center"
+          @click="mode = item.value"
         >
-          YAML Rules
-        </button>
-        <button
-          type="button"
-          :class="[
-            'py-1.5 px-3 rounded-md text-xs font-medium transition-colors cursor-pointer text-center',
-            mode === 'links'
-              ? 'bg-accent text-white shadow-xs'
-              : 'text-text-muted hover:text-text-main hover:bg-surface-hover'
-          ]"
-          @click="mode = 'links'"
-        >
-          协议链接
-        </button>
-        <button
-          type="button"
-          :class="[
-            'py-1.5 px-3 rounded-md text-xs font-medium transition-colors cursor-pointer text-center',
-            mode === 'text'
-              ? 'bg-accent text-white shadow-xs'
-              : 'text-text-muted hover:text-text-main hover:bg-surface-hover'
-          ]"
-          @click="mode = 'text'"
-        >
-          文本规则
-        </button>
+          {{ item.label }}
+        </Button>
       </div>
 
       <!-- Textarea Input -->
@@ -63,34 +37,29 @@
       <div class="flex flex-wrap items-end gap-3">
         <label class="flex flex-col gap-1 text-xs text-text-muted flex-1 min-w-[140px]">
           <span>目标代理</span>
-          <select
-            v-model="proxy"
-            class="rounded-md border border-border-subtle bg-surface-hover px-3 py-2 text-xs text-text-main focus:border-accent focus:outline-hidden"
-          >
+          <Select v-model="proxy" class="bg-surface-hover">
             <option value="">选择目标</option>
             <option v-for="p in proxyOptions" :key="p" :value="p">{{ p }}</option>
-          </select>
+          </Select>
         </label>
 
         <label class="flex flex-col gap-1 text-xs text-text-muted flex-1 min-w-[140px]">
           <span>目标分类</span>
-          <select
-            v-model="category"
-            class="rounded-md border border-border-subtle bg-surface-hover px-3 py-2 text-xs text-text-main focus:border-accent focus:outline-hidden"
-          >
+          <Select v-model="category" class="bg-surface-hover">
             <option value="">使用默认</option>
             <option v-for="cat in categories" :key="cat" :value="cat">{{ cat }}</option>
-          </select>
+          </Select>
         </label>
 
-        <button
+        <Button
           type="button"
-          class="px-4 py-2 rounded-md bg-accent text-xs font-medium text-white hover:bg-accent-hover disabled:opacity-50 transition-colors cursor-pointer shrink-0"
+          variant="primary"
+          size="md"
           :disabled="!input.trim() || !proxy"
           @click="parseInput"
         >
           解析
-        </button>
+        </Button>
       </div>
 
       <!-- Preview Section -->
@@ -99,20 +68,20 @@
           <strong class="text-xs text-text-main">解析结果：{{ parsed.length }} 条规则</strong>
           <div class="flex items-center gap-2 text-xs">
             <span v-if="parseSkipped" class="text-text-muted">{{ parseSkipped }} 行无法解析已跳过</span>
-            <button
+            <Button
               type="button"
               class="text-accent hover:underline cursor-pointer"
               @click="selectAll"
             >
               全选
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
               class="text-text-muted hover:text-text-main cursor-pointer"
               @click="deselectAll"
             >
               全不选
-            </button>
+            </Button>
           </div>
         </div>
 
@@ -125,11 +94,10 @@
               selected.has(idx) ? 'bg-accent/10' : 'hover:bg-surface-hover'
             ]"
           >
-            <input
-              type="checkbox"
-              :checked="selected.has(idx)"
+            <Checkbox
+              :model-value="selected.has(idx)"
               class="accent-accent cursor-pointer"
-              @change="toggle(idx)"
+              @update:model-value="toggle(idx)"
             />
             <span class="rounded bg-surface-hover px-1.5 py-0.5 font-mono text-[10px] text-text-muted border border-border-subtle">{{ rule.type }}</span>
             <code class="flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-xs text-text-main">{{ rule.value }}</code>
@@ -145,21 +113,21 @@
           {{ selected.size > 0 ? `将添加 ${selected.size} 条规则到当前列表末尾` : '' }}
         </span>
         <div class="flex gap-2">
-          <button
+          <Button
             type="button"
             class="px-3 py-1.5 rounded-md border border-border-subtle text-xs text-text-muted hover:text-text-main cursor-pointer"
             @click="$emit('close')"
           >
             取消
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
             class="px-4 py-1.5 rounded-md bg-accent text-xs font-medium text-white hover:bg-accent-hover disabled:opacity-50 transition-colors cursor-pointer"
             :disabled="selected.size === 0"
             @click="applySelected"
           >
             应用 {{ selected.size }} 条规则
-          </button>
+          </Button>
         </div>
       </div>
     </template>
@@ -169,6 +137,7 @@
 <script setup>
 import { ref } from 'vue'
 import AppModal from './ui/AppModal.vue'
+import { Button, Select, Checkbox } from './ui'
 
 const props = defineProps({
   proxyOptions: { type: Array, default: () => ['DIRECT', 'PROXY', 'REJECT'] },
@@ -184,6 +153,12 @@ const category = ref('')
 const parsed = ref([])
 const selected = ref(new Set())
 const parseSkipped = ref(0)
+
+const importModes = [
+  { value: 'yaml', label: 'YAML Rules' },
+  { value: 'links', label: '协议链接' },
+  { value: 'text', label: '文本规则' },
+]
 
 const placeholders = {
   yaml: `粘贴 Clash YAML 格式的 rules:\n\nrules:\n  - DOMAIN-SUFFIX,google.com,PROXY\n  - DOMAIN-KEYWORD,facebook,PROXY\n  - GEOIP,CN,DIRECT\n  - MATCH,PROXY`,

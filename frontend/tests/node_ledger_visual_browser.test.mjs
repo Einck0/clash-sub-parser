@@ -318,3 +318,235 @@ test('Task 1.3: Node Ledger Visual, Elevation & Reduced-Motion Browser Gate (375
     await new Promise((resolve) => server.close(resolve))
   }
 })
+
+test('Task 1.2: Node Ledger Chromium Contract Gate (Strict 375px Geometry, Keyboard A11y, Duplicate Name Guard, Closed Status)', async (t) => {
+  assert.ok(fs.existsSync(distDir), 'frontend/dist must exist before running DOM geometry tests')
+
+  const fixturesPath = path.resolve(import.meta.dirname, './fixtures/node_ledger_fixtures.json')
+  const fixtures = JSON.parse(fs.readFileSync(fixturesPath, 'utf8'))
+
+  const server = createStaticServer()
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const port = server.address().port
+  const baseUrl = `http://127.0.0.1:${port}`
+
+  const defaultBrowserPath = process.env.HOME ? path.join(process.env.HOME, '.cache/ms-playwright') : undefined
+  process.env.PLAYWRIGHT_BROWSERS_PATH = process.env.PLAYWRIGHT_BROWSERS_PATH || defaultBrowserPath
+
+  let browser
+  try {
+    browser = await chromium.launch({ headless: true })
+  } catch (err) {
+    server.close()
+    throw new Error(`Failed to launch Chromium: ${err.message}`)
+  }
+
+  const setupMockRoutes = async (page) => {
+    await page.route('**/api/**', async (route) => {
+      const url = route.request().url()
+      if (url.includes('/api/proxy-chains/meta/node-ledger')) {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(fixtures.current_nodes),
+        })
+      } else if (url.includes('/api/probe/results')) {
+        const combinedResults = {
+          ...fixtures.paged_probe_summaries.page_1.results,
+          ...fixtures.paged_probe_summaries.page_2.results,
+        }
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            results: combinedResults,
+            next_cursor: null,
+            has_more: false,
+          }),
+        })
+      } else if (url.includes('/api/probe/status')) {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ enabled: false, running: false }),
+        })
+      } else {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify([]),
+        })
+      }
+    })
+  }
+
+  try {
+    // 1. Strict multi-viewport geometry with stress fixture data
+    const viewports = [
+      { name: 'mobile (375x812)', width: 375, height: 812 },
+      { name: 'tablet (768x900)', width: 768, height: 900 },
+      { name: 'desktop (1024x900)', width: 1024, height: 900 },
+      { name: 'wide (1440x900)', width: 1440, height: 900 },
+    ]
+
+    for (const vp of viewports) {
+      await t.test(`Strict geometry ${vp.name}: zero overflow under stress node fixtures`, async () => {
+        const page = await browser.newPage({
+          viewport: { width: vp.width, height: vp.height },
+        })
+        await setupMockRoutes(page)
+        await page.goto(`${baseUrl}/nodes`, { waitUntil: 'domcontentloaded' })
+        await page.waitForTimeout(200)
+
+        const geom = await page.evaluate(() => {
+          const docEl = document.documentElement
+          const body = document.body
+          const scrollWidth = Math.max(docEl.scrollWidth, body.scrollWidth)
+          const clientWidth = docEl.clientWidth
+          return { scrollWidth, clientWidth }
+        })
+
+        if (vp.width === 375) {
+          assert.equal(
+            geom.scrollWidth,
+            375,
+            `At 375px mobile viewport, scrollWidth must strictly equal 375px, got ${geom.scrollWidth}`
+          )
+          assert.equal(
+            geom.clientWidth,
+            375,
+            `At 375px mobile viewport, clientWidth must strictly equal 375px, got ${geom.clientWidth}`
+          )
+        } else {
+          assert.ok(
+            geom.scrollWidth <= geom.clientWidth + 1,
+            `At ${vp.name}, scrollWidth (${geom.scrollWidth}) must not exceed clientWidth (${geom.clientWidth})`
+          )
+        }
+        await page.close()
+      })
+    }
+
+    // 2. Inspection drawer keyboard lifecycle: focus trap, Escape exit, and focus restoration
+    await t.test('Drawer overlay keyboard lifecycle: focus trap, Escape exit, and focus restore', async () => {
+      const page = await browser.newPage({
+        viewport: { width: 1024, height: 900 },
+      })
+      await setupMockRoutes(page)
+      await page.goto(`${baseUrl}/nodes`, { waitUntil: 'domcontentloaded' })
+      await page.waitForTimeout(300)
+
+      const firstNode = page.locator('.table-row-dense:has-text("HK-01")').locator('visible=true').first()
+      await firstNode.click()
+      await page.waitForTimeout(150)
+
+      const drawerVisible = await page.evaluate(() => Boolean(document.querySelector('[role="dialog"]')))
+      assert.ok(drawerVisible, 'Drawer [role="dialog"] must mount upon clicking node row')
+
+      const focusInside = await page.evaluate(() => {
+        const dialog = document.querySelector('[role="dialog"]')
+        return dialog ? dialog.contains(document.activeElement) : false
+      })
+      assert.ok(focusInside, 'Focus must move into drawer upon opening')
+
+      await page.keyboard.press('Escape')
+      await page.waitForTimeout(300)
+
+      const drawerClosed = await page.evaluate(() => !document.querySelector('[role="dialog"]'))
+      assert.ok(drawerClosed, 'Drawer must unmount or close upon pressing Escape')
+
+      await page.close()
+    })
+
+    // 3. Chromium Gate: duplicate-name probe status isolation and chain edit guard (Red light test)
+    await t.test('Chromium Gate: duplicate-name probe status isolation and chain edit guard', async () => {
+      const page = await browser.newPage({
+        viewport: { width: 1024, height: 900 },
+      })
+      await setupMockRoutes(page)
+      await page.goto(`${baseUrl}/nodes`, { waitUntil: 'domcontentloaded' })
+      await page.waitForTimeout(250)
+
+      const usRows = page.locator('div:has-text("US-Relay")')
+      const count = await usRows.count()
+      assert.ok(count >= 2, `Must render at least 2 rows for duplicate "US-Relay", found ${count}`)
+
+      // Probe status isolation in DOM:
+      // Row 1 (vmess, port 443) has status ok (120ms), Row 2 (ss, port 8388) has status fail.
+      // In unmigrated code, getProbe(item.name) causes both rows to render identical status.
+      const duplicateRowStatuses = await page.evaluate(() => {
+        const rows = Array.from(document.querySelectorAll('.table-row-dense'))
+        const usRows = rows.filter((r) => r.querySelector('[title="US-Relay"]'))
+        return usRows.map((r) => {
+          const statusEl = r.querySelector(
+            '.flex.items-center.justify-end span'
+          )
+          return statusEl ? statusEl.textContent.trim() : ''
+        })
+      })
+      assert.equal(
+        duplicateRowStatuses.length,
+        2,
+        `Must find exactly 2 rows for "US-Relay", found ${duplicateRowStatuses.length}`
+      )
+      assert.notEqual(
+        duplicateRowStatuses[0],
+        duplicateRowStatuses[1],
+        `Same-name rows must NOT share probe status. Got identical statuses: ${JSON.stringify(duplicateRowStatuses)}`
+      )
+      assert.ok(
+        duplicateRowStatuses.some((s) => s.includes('120ms')) &&
+          duplicateRowStatuses.some((s) => s.includes('失败')),
+        `One US-Relay row must show 120ms and the other must show 失败. Got: ${JSON.stringify(duplicateRowStatuses)}`
+      )
+
+      // Chain edit guard:
+      const chainGuard = await page.evaluate(() => {
+        const buttons = Array.from(document.querySelectorAll('button, [title], [aria-label]'))
+        return buttons.some((el) => {
+          const title = el.getAttribute('title') || ''
+          const label = el.getAttribute('aria-label') || ''
+          const text = el.textContent || ''
+          return (
+            title.includes('名称重复，暂不能安全编辑跳板') ||
+            label.includes('名称重复，暂不能安全编辑跳板') ||
+            text.includes('名称重复，暂不能安全编辑跳板')
+          )
+        })
+      })
+      assert.ok(
+        chainGuard,
+        'Duplicate-name nodes must display disabled chain action with copy "名称重复，暂不能安全编辑跳板"'
+      )
+
+      await page.close()
+    })
+
+    // 4. Chromium Gate: closed status presentation in DOM (timeout, skipped, unknown) (Red light test)
+    await t.test('Chromium Gate: closed status model in DOM (timeout, skipped, unknown)', async () => {
+      const page = await browser.newPage({
+        viewport: { width: 1024, height: 900 },
+      })
+      await setupMockRoutes(page)
+      await page.goto(`${baseUrl}/nodes`, { waitUntil: 'domcontentloaded' })
+      await page.waitForTimeout(250)
+
+      const pageText = await page.evaluate(() => document.body.innerText)
+
+      assert.ok(pageText.includes('超时'), 'JP-Timeout must visibly render "超时"')
+      assert.ok(
+        pageText.includes('跳过') || pageText.includes('已跳过'),
+        'SG-Skipped must visibly render "跳过" or "已跳过", never fallback to "未测"'
+      )
+      assert.ok(
+        pageText.includes('状态未知'),
+        'KR-Unknown with unsupported status must visibly render "状态未知", strictly forbidden from degrading to "未测"'
+      )
+
+      await page.close()
+    })
+  } finally {
+    if (browser) await browser.close()
+    await new Promise((resolve) => server.close(resolve))
+  }
+})

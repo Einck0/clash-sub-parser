@@ -10,9 +10,8 @@ Covers Task 2.2:
 """
 from __future__ import annotations
 
-import pytest
-
 from app.services.canonical_compiler import _is_qualified_for_policy
+from app.services.node_identity import canonical_node_key
 from app.services.probe.eligibility_evaluator import evaluate_observation_eligibility
 from app.utils.capability_filter import (
     filter_nodes_by_capabilities,
@@ -240,15 +239,15 @@ class TestCapabilityFilterIntegration:
             {"name": "Node-C-Challenged", "server": "3.3.3.3", "port": 443, "type": "ss"},
         ]
         probe_map = {
-            "Node-A-Full": {
+            canonical_node_key(nodes[0]): {
                 "status": "ok",
                 "media": {"netflix": {"status": "verified", "verdict": "full", "unlocked": True, "confidence": "verified"}},
             },
-            "Node-B-Originals": {
+            canonical_node_key(nodes[1]): {
                 "status": "ok",
                 "media": {"netflix": {"status": "partial", "verdict": "originals_only", "unlocked": False, "confidence": "verified"}},
             },
-            "Node-C-Challenged": {
+            canonical_node_key(nodes[2]): {
                 "status": "ok",
                 "media": {"netflix": {"status": "challenged", "verdict": "challenge", "unlocked": False, "confidence": "verified"}},
             },

@@ -7,15 +7,15 @@
         <p class="page-desc">每次批量保存规则/分类时自动创建快照，支持手动创建和回滚。最多保留 50 个版本。</p>
       </div>
       <div class="head-actions">
-        <button @click="load" :disabled="loading">{{ loading ? '刷新中...' : '刷新' }}</button>
-        <button class="primary" @click="createManual" :disabled="creating">
+        <Button variant="secondary" size="md" :disabled="loading" @click="load">{{ loading ? '刷新中...' : '刷新' }}</Button>
+        <Button variant="primary" size="md" :loading="creating" @click="createManual">
           {{ creating ? '创建中...' : '手动创建快照' }}
-        </button>
+        </Button>
       </div>
     </div>
 
     <UiState v-if="error" type="error" title="加载失败" :description="error" compact>
-      <template #actions><button @click="load">重试</button></template>
+      <template #actions><Button variant="secondary" size="sm" @click="load">重试</Button></template>
     </UiState>
 
     <UiState v-if="loading && !snapshots.length" type="loading" title="加载中" />
@@ -25,10 +25,9 @@
         暂无快照。首次批量保存时会自动创建，也可以手动创建。
       </div>
 
-      <div
+      <div class="snapshot-card"
         v-for="snap in snapshots"
         :key="snap.id"
-        class="snapshot-card"
         :class="{ expanded: expandedId === snap.id }"
       >
         <div class="snapshot-header" @click="toggleExpand(snap.id)">
@@ -56,12 +55,12 @@
           </div>
 
           <div class="snapshot-actions">
-            <button class="danger" @click="doRestore(snap)" :disabled="restoring">
+            <Button variant="danger" size="sm" :loading="restoring === snap.id" @click.stop="doRestore(snap)">
               {{ restoring === snap.id ? '回滚中...' : '回滚到此版本' }}
-            </button>
-            <button @click="doDelete(snap)" :disabled="deleting">
+            </Button>
+            <Button variant="secondary" size="sm" :loading="deleting === snap.id" @click.stop="doDelete(snap)">
               {{ deleting === snap.id ? '删除中...' : '删除快照' }}
-            </button>
+            </Button>
           </div>
         </div>
       </div>
@@ -81,6 +80,7 @@ import {
   getApiErrorMessage,
 } from '../api'
 import UiState from '../components/UiState.vue'
+import { Button } from '../components/ui'
 
 const store = useAppStore()
 const snapshots = ref([])

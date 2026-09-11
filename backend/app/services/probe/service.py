@@ -7,13 +7,14 @@ import json
 import logging
 import re
 import time
-from typing import Any
+from typing import Any, Mapping
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.node_probe_result import NodeProbeResult
 from app.schemas.probe import ResolvedProbeConfig
+from app.services.node_identity import canonical_node_key
 from app.services.probe.models import ALLOWED_EVIDENCE_KEYS
 from app.services.probe.providers import (
     check_download_speed,
@@ -120,12 +121,8 @@ _PROBE_CACHE: dict[str, dict[str, Any]] = {}
 _CACHE_TTL_S = 900  # 15分钟缓存
 
 
-def _get_node_key(node: dict[str, Any]) -> str:
-    server = str(node.get("server") or "").strip()
-    port = str(node.get("port") or "")
-    ntype = str(node.get("type") or "").strip()
-    name = str(node.get("name") or "").strip()
-    return f"{name}|{ntype}|{server}:{port}"
+def _get_node_key(node: Mapping[str, Any]) -> str:
+    return canonical_node_key(node)
 
 
 def get_cached_result(node: dict[str, Any]) -> dict[str, Any] | None:
@@ -273,8 +270,6 @@ async def get_all_db_probe_results(db: AsyncSession) -> dict[str, dict[str, Any]
             if "confidence" in ident:
                 data["identity_confidence"] = ident["confidence"]
         results_map[item.node_key] = data
-        if item.name:
-            results_map[item.name] = data
     return results_map
 
 
@@ -292,7 +287,7 @@ STANDARD_MEDIA_PLATFORMS = (
 
 
 def serialize_probe_summary_item(item: NodeProbeResult) -> dict[str, Any]:
-    """序列化单个节点的轻量级摘要（严格仅包含状态、时延、测速、国家、IP 与流媒体布尔摘要）"""
+    """序列化单个节点的轻量级摘要（严格仅包含身份标识、状态、时延、测速、国家、IP 与流媒体布尔摘要）"""
     media_dict = item.media if isinstance(item.media, dict) else {}
     platforms = list(STANDARD_MEDIA_PLATFORMS)
     for k in media_dict.keys():
@@ -305,6 +300,8 @@ def serialize_probe_summary_item(item: NodeProbeResult) -> dict[str, Any]:
     }
 
     return {
+        "node_key": item.node_key,
+        "name": item.name or "",
         "status": item.status or "unknown",
         "latency_ms": item.latency_ms,
         "speed_mbps": round(item.speed_mbps, 2) if item.speed_mbps is not None else None,
@@ -352,52 +349,136 @@ async def get_db_probe_detail(db: AsyncSession, node_key: str) -> dict[str, Any]
     return serialize_probe_detail_item(item)
 
 
+async def get_current_enabled_node_keys(db: AsyncSession) -> set[str]:
+    """从当前启用订阅的 raw_nodes 计算当前有效最终节点 key 集合"""
+    from app.models.subscription import Subscription
+
+    stmt = select(Subscription.raw_nodes).where(Subscription.enabled.is_(True))
+    res = await db.execute(stmt)
+    current_keys: set[str] = set()
+    for raw_nodes in res.scalars().all():
+        if not raw_nodes:
+            continue
+        for node in raw_nodes:
+            if isinstance(node, dict) and str(node.get("name") or "").strip():
+                current_keys.add(canonical_node_key(node))
+    return current_keys
+
+
+async def converge_probe_results_to_current_nodes(db: AsyncSession) -> dict[str, int]:
+    """将持久化探测记录与进程内存缓存收敛到当前启用节点的有效集合。
+
+    删除不在有效集合内的孤儿记录与缓存条目，返回仅包含 retained 和 deleted 的聚合统计。
+    """
+    current_keys = await get_current_enabled_node_keys(db)
+    stmt = select(NodeProbeResult.node_key)
+    res = await db.execute(stmt)
+    existing_keys = set(res.scalars().all())
+
+    orphan_keys = existing_keys - current_keys
+    if orphan_keys:
+        orphan_list = list(orphan_keys)
+        # 分批删除，避免超出关系数据库参数限制
+        for i in range(0, len(orphan_list), 500):
+            chunk = orphan_list[i : i + 500]
+            await db.execute(delete(NodeProbeResult).where(NodeProbeResult.node_key.in_(chunk)))
+        await db.commit()
+
+    # 缓存可能包含尚未持久化的孤儿结果，也必须按同一当前集合清理
+    for key in list(_PROBE_CACHE):
+        if key not in current_keys:
+            _PROBE_CACHE.pop(key, None)
+
+    retained_count = len(existing_keys - orphan_keys)
+    deleted_count = len(orphan_keys)
+    return {"retained": retained_count, "deleted": deleted_count}
+
+
 async def get_paged_db_probe_summary(
     db: AsyncSession,
     cursor: str | None = None,
     limit: int = 100,
+    current_keys: set[str] | None = None,
 ) -> dict[str, Any]:
-    """从数据库按游标与分页限额加载节点轻量级摘要，确保 UTF-8 字节不超过 51,200 字节"""
-    stmt = select(NodeProbeResult).order_by(NodeProbeResult.node_key.asc())
-    if cursor:
-        stmt = stmt.where(NodeProbeResult.node_key > cursor)
-    stmt = stmt.limit(limit + 1)
-    res = await db.execute(stmt)
-    candidates = list(res.scalars().all())
+    """从数据库按游标与分页限额加载节点轻量级摘要，应用当前集合读取围栏，确保 UTF-8 字节不超过 51,200 字节"""
+    if current_keys is None:
+        current_keys = await get_current_enabled_node_keys(db)
+
+    if not current_keys:
+        return {
+            "results": {},
+            "next_cursor": None,
+            "has_more": False,
+        }
 
     results_map: dict[str, dict[str, Any]] = {}
     last_key: str | None = None
     has_more = False
+    current_cursor = cursor
+    batch_size = max(limit + 10, 50)
 
-    for item in candidates:
-        if len(results_map) >= limit:
-            has_more = True
+    while len(results_map) < limit:
+        stmt = select(NodeProbeResult).order_by(NodeProbeResult.node_key.asc())
+        if current_cursor:
+            stmt = stmt.where(NodeProbeResult.node_key > current_cursor)
+        stmt = stmt.limit(batch_size)
+        res = await db.execute(stmt)
+        candidates = list(res.scalars().all())
+        if not candidates:
             break
-        summary = serialize_probe_summary_item(item)
-        candidate_map = {**results_map, item.node_key: summary}
-        candidate_envelope = {
-            "results": candidate_map,
-            "next_cursor": item.node_key,
-            "has_more": True,
-        }
-        candidate_bytes = len(json.dumps(candidate_envelope, ensure_ascii=False).encode("utf-8"))
-        if candidate_bytes > MAX_SUMMARY_PAYLOAD_BYTES:
-            if not results_map:
-                from fastapi import HTTPException
-                raise HTTPException(
-                    status_code=500,
-                    detail="Single probe summary exceeds maximum payload budget",
-                )
-            has_more = True
+
+        for item in candidates:
+            current_cursor = item.node_key
+            if item.node_key not in current_keys:
+                # 读取围栏：过滤并发探测中迟到写入的孤儿记录
+                continue
+
+            summary = serialize_probe_summary_item(item)
+            candidate_map = {**results_map, item.node_key: summary}
+            candidate_envelope = {
+                "results": candidate_map,
+                "next_cursor": item.node_key,
+                "has_more": True,
+            }
+            candidate_bytes = len(json.dumps(candidate_envelope, ensure_ascii=False).encode("utf-8"))
+            if candidate_bytes > MAX_SUMMARY_PAYLOAD_BYTES:
+                if not results_map:
+                    from fastapi import HTTPException
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Single probe summary exceeds maximum payload budget",
+                    )
+                has_more = True
+                break
+
+            results_map = candidate_map
+            last_key = item.node_key
+            if len(results_map) >= limit:
+                break
+
+        if has_more or len(results_map) >= limit:
             break
-        results_map = candidate_map
-        last_key = item.node_key
 
-    if not has_more:
-        next_cursor = None
-    else:
-        next_cursor = last_key
+    # 检查是否还有后续处于 current_keys 中的有效记录
+    if len(results_map) >= limit and last_key:
+        check_cursor = last_key
+        while True:
+            stmt_next = (
+                select(NodeProbeResult.node_key)
+                .where(NodeProbeResult.node_key > check_cursor)
+                .order_by(NodeProbeResult.node_key.asc())
+                .limit(batch_size)
+            )
+            res_next = await db.execute(stmt_next)
+            next_keys = res_next.scalars().all()
+            if not next_keys:
+                break
+            if any(k in current_keys for k in next_keys):
+                has_more = True
+                break
+            check_cursor = next_keys[-1]
 
+    next_cursor = last_key if has_more else None
     return {
         "results": results_map,
         "next_cursor": next_cursor,

@@ -7,17 +7,17 @@
         <p class="page-desc">常用项可视化编辑，复杂配置保留 Raw YAML 直接改。保存时会同步成 Clash DNS YAML。</p>
       </div>
       <div class="head-actions">
-        <label class="switch-line"><input type="checkbox" v-model="enabled" /> 启用 DNS</label>
-        <button @click="load" :disabled="saving || loading">{{ loading ? '刷新中...' : '刷新' }}</button>
-        <button class="primary" @click="save" :disabled="saving">{{ saving ? '保存中...' : '保存' }}</button>
+        <label class="switch-line"><Checkbox v-model="enabled" /> 启用 DNS</label>
+        <Button variant="secondary" size="md" :disabled="loading" @click="load">{{ loading ? '刷新中...' : '刷新' }}</Button>
+        <Button variant="primary" size="md" :loading="saving" :disabled="saving" @click="save">{{ saving ? '保存中...' : '保存' }}</Button>
       </div>
     </div>
 
     <div class="alert" :class="messageType" v-if="message" :role="messageType === 'error' ? 'alert' : 'status'" aria-live="polite">{{ message }}</div>
 
     <div class="dns-tabs">
-      <button :class="{ primary: activeTab === 'visual' }" @click="switchTab('visual')">可视化</button>
-      <button :class="{ primary: activeTab === 'raw' }" @click="switchTab('raw')">Raw YAML</button>
+      <Button :class="{ primary: activeTab === 'visual' }" @click="switchTab('visual')">可视化</Button>
+      <Button :class="{ primary: activeTab === 'raw' }" @click="switchTab('raw')">Raw YAML</Button>
     </div>
 
     <template v-if="activeTab === 'visual'">
@@ -27,23 +27,23 @@
             <h3>基础行为</h3>
             <div class="dns-form-grid">
               <label class="field"><span>解析模式</span>
-                <select v-model="dns['enhanced-mode']">
+                <Select v-model="dns['enhanced-mode']">
                   <option value="fake-ip">fake-ip</option>
                   <option value="redir-host">redir-host</option>
                   <option value="normal">normal</option>
-                </select>
+                </Select>
               </label>
-              <label class="field"><span>Fake IP 段</span><input v-model="dns['fake-ip-range']" placeholder="198.18.0.1/16" /></label>
-              <label class="field"><span>缓存算法</span><input v-model="dns['cache-algorithm']" placeholder="arc / lru" /></label>
-              <label class="field"><span>默认监听</span><input v-model="dns.listen" placeholder="0.0.0.0:1053（可选）" /></label>
+              <label class="field"><span>Fake IP 段</span><Input v-model="dns['fake-ip-range']" placeholder="198.18.0.1/16" /></label>
+              <label class="field"><span>缓存算法</span><Input v-model="dns['cache-algorithm']" placeholder="arc / lru" /></label>
+              <label class="field"><span>默认监听</span><Input v-model="dns.listen" placeholder="0.0.0.0:1053（可选）" /></label>
             </div>
             <div class="toggle-grid">
-              <label><input type="checkbox" v-model="dns.enable" /> enable</label>
-              <label><input type="checkbox" v-model="dns.ipv6" /> ipv6</label>
-              <label><input type="checkbox" v-model="dns['prefer-h3']" /> prefer-h3</label>
-              <label><input type="checkbox" v-model="dns['respect-rules']" /> respect-rules</label>
-              <label><input type="checkbox" v-model="dns['use-system-hosts']" /> use-system-hosts</label>
-              <label><input type="checkbox" v-model="dns['direct-nameserver-follow-policy']" /> direct-nameserver-follow-policy</label>
+              <label><Checkbox v-model="dns.enable" /> enable</label>
+              <label><Checkbox v-model="dns.ipv6" /> ipv6</label>
+              <label><Checkbox v-model="dns['prefer-h3']" /> prefer-h3</label>
+              <label><Checkbox v-model="dns['respect-rules']" /> respect-rules</label>
+              <label><Checkbox v-model="dns['use-system-hosts']" /> use-system-hosts</label>
+              <label><Checkbox v-model="dns['direct-nameserver-follow-policy']" /> direct-nameserver-follow-policy</label>
             </div>
           </div>
 
@@ -64,11 +64,11 @@
             <p class="section-hint">左边填域名/geosite，右边填 DNS；多个 DNS 用英文逗号分隔。</p>
             <div class="policy-list">
               <div class="policy-row" v-for="(row, idx) in policyRows" :key="idx">
-                <input v-model="row.key" placeholder="+.example.com / geosite:cn" />
-                <input v-model="row.value" placeholder="223.5.5.5 或 https://..." />
-                <button class="danger" @click="policyRows.splice(idx, 1)">删除</button>
+                <Input v-model="row.key" placeholder="+.example.com / geosite:cn" />
+                <Input v-model="row.value" placeholder="223.5.5.5 或 https://..." />
+                <Button variant="danger" @click="policyRows.splice(idx, 1)">删除</Button>
               </div>
-              <button @click="policyRows.push({ key: '', value: '' })">新增 policy</button>
+              <Button @click="policyRows.push({ key: '', value: '' })">新增 policy</Button>
             </div>
           </div>
         </div>
@@ -76,8 +76,8 @@
         <aside class="dns-side">
           <div class="dns-section">
             <h3>fallback-filter</h3>
-            <label class="switch-line"><input type="checkbox" v-model="fallbackFilter.geoip" /> geoip</label>
-            <label class="field"><span>geoip-code</span><input v-model="fallbackFilter['geoip-code']" placeholder="cn" /></label>
+            <label class="switch-line"><Checkbox v-model="fallbackFilter.geoip" /> geoip</label>
+            <label class="field"><span>geoip-code</span><Input v-model="fallbackFilter['geoip-code']" placeholder="cn" /></label>
             <ListEditor title="ipcidr" hint="例如 240.0.0.0/4" v-model="fallbackFilter.ipcidr" compact />
             <ListEditor title="domain" hint="例如 +.google.com" v-model="fallbackFilter.domain" compact />
           </div>
@@ -85,9 +85,9 @@
           <div class="dns-section">
             <h3>快速模板</h3>
             <div class="template-actions">
-              <button @click="applyTemplate('current')">恢复当前推荐</button>
-              <button @click="applyTemplate('china')">国内优先</button>
-              <button @click="applyTemplate('foreign')">DoH 优先</button>
+              <Button @click="applyTemplate('current')">恢复当前推荐</Button>
+              <Button @click="applyTemplate('china')">国内优先</Button>
+              <Button @click="applyTemplate('foreign')">DoH 优先</Button>
             </div>
             <p class="section-hint">模板只覆盖常用 DNS 字段，不会动你在 Raw 里新增的其它高级字段。</p>
           </div>
@@ -102,7 +102,7 @@
             <h3 style="margin:0">Raw YAML</h3>
             <p class="section-hint">可以粘贴完整 dns: 片段；切回可视化时会尝试解析。</p>
           </div>
-          <button @click="formatRaw">格式化</button>
+          <Button @click="formatRaw">格式化</Button>
         </div>
         <textarea v-model="rawYaml" class="dns-raw-textarea" spellcheck="false"></textarea>
       </div>
@@ -115,6 +115,7 @@ import { computed, defineComponent, h, onMounted, reactive, ref, watch } from 'v
 import yaml from 'js-yaml'
 import { getApiErrorMessage, getDns, updateDns } from '../api'
 import { useAppStore } from '../stores/app'
+import { Button, Input, Select, Checkbox } from '../components/ui'
 
 const store = useAppStore()
 
@@ -133,11 +134,15 @@ const ListEditor = defineComponent({
     return () => h('div', { class: ['list-editor', props.compact ? 'compact' : ''] }, [
       h('div', { class: 'list-editor-head' }, [
         h('div', [h('strong', props.title), props.hint ? h('p', { class: 'section-hint' }, props.hint) : null]),
-        h('button', { onClick: add }, '新增'),
+        h(Button, { variant: 'secondary', size: 'sm', onClick: add }, '新增'),
       ]),
       ...(props.modelValue || []).map((item, idx) => h('div', { class: 'list-row', key: idx }, [
-        h('input', { value: item, placeholder: props.title, onInput: (e) => update(idx, e.target.value) }),
-        h('button', { class: 'danger', onClick: () => remove(idx) }, '删'),
+        h(Input, {
+          modelValue: item,
+          placeholder: props.title,
+          'onUpdate:modelValue': (value) => update(idx, value),
+        }),
+        h(Button, { variant: 'danger', size: 'sm', onClick: () => remove(idx) }, '删'),
       ])),
       (!props.modelValue || props.modelValue.length === 0) ? h('div', { class: 'empty-mini' }, '暂无条目') : null,
     ])

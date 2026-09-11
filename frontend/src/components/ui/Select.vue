@@ -61,8 +61,14 @@ withDefaults(
   }
 )
 
-defineEmits<{
+const emit = defineEmits<{
   (e: 'update:modelValue', value: string | number): void
   (e: 'change', value: string | number): void
 }>()
+
+function onChange(event: Event) {
+  const value = (event.target as HTMLSelectElement).value
+  emit('update:modelValue', value)
+  emit('change', value)
+}
 </script>

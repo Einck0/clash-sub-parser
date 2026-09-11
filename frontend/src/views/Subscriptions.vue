@@ -89,15 +89,16 @@
         :count-text="`${filteredSubscriptions.length} / ${subscriptions.length}`"
       >
         <template #filters>
-          <select
+          <FormSelect
             v-model="enabledFilter"
             aria-label="订阅状态筛选"
-            class="min-h-[44px] rounded-lg border border-border-subtle bg-surface-base px-3 py-2 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono cursor-pointer transition-colors"
-          >
-            <option value="">全部状态</option>
-            <option value="enabled">仅启用</option>
-            <option value="disabled">仅禁用</option>
-          </select>
+            :options="[
+              { value: '', label: '全部状态' },
+              { value: 'enabled', label: '仅启用' },
+              { value: 'disabled', label: '仅禁用' },
+            ]"
+            class="min-w-[120px]"
+          />
         </template>
       </PageToolbar>
 
@@ -538,7 +539,7 @@ import NodePreviewList from '../components/NodePreviewList.vue'
 import PageToolbar from '../components/PageToolbar.vue'
 import SubscriptionForm from '../components/SubscriptionForm.vue'
 import UiState from '../components/UiState.vue'
-import { Button, StatusBadge, MetricCard, BaseDrawer } from '../components/ui'
+import { Button, StatusBadge, MetricCard, BaseDrawer, Select as FormSelect } from '../components/ui'
 import {
   createManualNodeSubscription,
   createSubscription,

@@ -6,7 +6,7 @@
 
 export interface LedgerNodeItem {
   name: string
-  node_key?: string
+  node_key: string
   subscription_id?: number | null
   subscription_name?: string | null
   type?: string | null
@@ -41,6 +41,72 @@ export interface ProbeRecord {
   [key: string]: any
 }
 
+export type ProbeStatus = 'ok' | 'fail' | 'timeout' | 'skipped' | 'unknown' | 'untested'
+
+export function normalizeProbeStatus(status: unknown, hasRecord: boolean): ProbeStatus {
+  if (!hasRecord) return 'untested'
+  const normalized = typeof status === 'string' ? status.trim().toLowerCase() : ''
+  if (normalized === 'ok' || normalized === 'fail' || normalized === 'timeout' || normalized === 'skipped' || normalized === 'untested') {
+    return normalized
+  }
+  return 'unknown'
+}
+
+export interface ProbePresentation {
+  status: ProbeStatus
+  isTested: boolean
+  label: string
+  latencyMs?: number
+  latency_ms?: number
+  speedMbps?: number
+  speed_mbps?: number
+  tone: 'success' | 'danger' | 'warning' | 'info' | 'muted'
+}
+
+export function getProbePresentation(
+  node: LedgerNodeItem | null | undefined,
+  probes: Record<string, ProbeRecord>
+): ProbePresentation {
+  const probe = getProbeForNode(probes, node || {})
+  const status = normalizeProbeStatus(probe?.status, Boolean(probe))
+  const labels: Record<ProbeStatus, string> = {
+    ok: typeof probe?.latency_ms === 'number' ? `${probe.latency_ms}ms` : '正常',
+    fail: '失败',
+    timeout: '超时',
+    skipped: '已跳过',
+    unknown: '状态未知',
+    untested: '未测',
+  }
+  const tones: Record<ProbeStatus, ProbePresentation['tone']> = {
+    ok: 'success',
+    fail: 'danger',
+    timeout: 'warning',
+    skipped: 'info',
+    unknown: 'warning',
+    untested: 'muted',
+  }
+  return {
+    status,
+    isTested: status !== 'untested',
+    label: labels[status],
+    latencyMs: probe?.latency_ms,
+    latency_ms: probe?.latency_ms,
+    speedMbps: probe?.speed_mbps,
+    speed_mbps: probe?.speed_mbps,
+    tone: tones[status],
+  }
+}
+
+export function checkNodeChainActionEligibility(
+  node: LedgerNodeItem | null | undefined,
+  nodes: LedgerNodeItem[]
+): { canEdit: boolean; reason?: string } {
+  if (!node) return { canEdit: false, reason: '未选择节点' }
+  const duplicate = nodes.filter(candidate => candidate.name === node.name).length > 1
+  return duplicate
+    ? { canEdit: false, reason: '名称重复，暂不能安全编辑跳板' }
+    : { canEdit: true }
+}
 export interface FacetFilterState {
   keyword: string
   subscription: string
@@ -147,19 +213,17 @@ export function normalizeFacetFilterState(
 export function nodeMatchesStatus(probe: ProbeRecord | undefined, st: string): boolean {
   const norm = (st || '').toLowerCase().trim()
   if (norm === 'all') return true
-  if (norm === 'ok') return probe?.status === 'ok'
-  if (norm === 'fast') return probe?.status === 'ok' && (probe?.latency_ms ?? 9999) <= 300
+  const status = normalizeProbeStatus(probe?.status, Boolean(probe))
+  if (norm === 'ok') return status === 'ok'
+  if (norm === 'fast') return status === 'ok' && (probe?.latency_ms ?? 9999) <= 300
   if (norm === 'medium') {
-    return (
-      probe?.status === 'ok' &&
-      probe?.latency_ms != null &&
-      probe.latency_ms > 300 &&
-      probe.latency_ms <= 800
-    )
+    return status === 'ok' && probe?.latency_ms != null && probe.latency_ms > 300 && probe.latency_ms <= 800
   }
-  if (norm === 'fail') return probe?.status === 'fail' || probe?.status === 'timeout'
-  if (norm === 'untested') return !probe?.status || probe.status === 'untested'
-  return probe?.status === norm
+  if (norm === 'fail') return status === 'fail' || status === 'timeout'
+  if (norm === 'untested') return status === 'untested'
+  if (norm === 'unknown') return status === 'unknown'
+  if (norm === 'skipped') return status === 'skipped'
+  return status === norm
 }
 
 export interface CountryOption {
@@ -582,44 +646,117 @@ export const COUNTRY_FLAG_MAP: Record<string, string> = {
   CN: '🇨🇳',
 }
 
-/**
- * Normalizes probe results by indexing on node_key (and fallback name if present).
- * Handles paged envelope { results: Record<string, ProbeRecord>, next_cursor, has_more },
- * raw object dictionary, or array of records.
- */
+export function normalizeNodeLedgerItems(data: unknown): LedgerNodeItem[] {
+  if (!data || typeof data !== 'object') return []
+  const source = Array.isArray(data)
+    ? data
+    : data && 'results' in data && data.results && typeof data.results === 'object'
+      ? data.results
+      : data
+  const items: LedgerNodeItem[] = []
+
+  if (Array.isArray(source)) {
+    for (const value of source) {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) continue
+      const item = value as Partial<LedgerNodeItem>
+      if (typeof item.node_key !== 'string' || !item.node_key || typeof item.name !== 'string') continue
+      items.push(value as LedgerNodeItem)
+    }
+    return items
+  }
+
+  for (const [key, value] of Object.entries(source)) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) continue
+    const item = value as Partial<LedgerNodeItem>
+    if (key !== item.node_key || !item.node_key || typeof item.name !== 'string') continue
+    items.push(value as LedgerNodeItem)
+  }
+  return items
+}
+
 export function normalizeNodeLedgerMap(
   data: any[] | Record<string, any> | undefined | null,
   targetMap?: Record<string, ProbeRecord>
 ): Record<string, ProbeRecord> {
-  const map: Record<string, ProbeRecord> = targetMap ? { ...targetMap } : {}
+  const map: Record<string, ProbeRecord> = {}
+  if (targetMap && typeof targetMap === 'object') {
+    for (const [key, value] of Object.entries(targetMap)) {
+      if (
+        value &&
+        typeof value === 'object' &&
+        !Array.isArray(value) &&
+        typeof (value as ProbeRecord).node_key === 'string' &&
+        (value as ProbeRecord).node_key === key
+      ) {
+        map[key] = value as ProbeRecord
+      }
+    }
+  }
   if (!data) return map
 
   const source =
-    data && typeof data === 'object' && 'results' in data && typeof data.results === 'object' && data.results !== null
+    data && typeof data === 'object' && !Array.isArray(data) && 'results' in data &&
+    data.results && typeof data.results === 'object'
       ? data.results
       : data
 
   if (Array.isArray(source)) {
     for (const item of source) {
-      if (!item || typeof item !== 'object') continue
-      if (item.node_key) map[item.node_key] = item
-      if (item.name) map[item.name] = item
+      if (!item || typeof item !== 'object' || Array.isArray(item)) continue
+      if (typeof item.node_key !== 'string' || !item.node_key) continue
+      map[item.node_key] = item
     }
   } else if (typeof source === 'object') {
-    for (const [k, v] of Object.entries(source)) {
-      if (!v || typeof v !== 'object') continue
-      const record = v as ProbeRecord
-      map[k] = record
-      if ((v as any).node_key) map[(v as any).node_key] = record
-      if ((v as any).name) map[(v as any).name] = record
+    for (const [key, value] of Object.entries(source)) {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) continue
+      const record = value as ProbeRecord
+      if (typeof record.node_key !== 'string' || !record.node_key || record.node_key !== key) continue
+      map[key] = record
     }
   }
   return map
 }
 
 /**
- * Merges a newly received probe summary page envelope or map into an existing probe map by node_key.
+ * Validates the sole response returned by an immediate single-node probe.
+ * The requested key may be attached only when the response is one object with no key.
  */
+export function normalizeImmediateProbeResponse(
+  response: unknown,
+  requestedNodeKey: string | null | undefined,
+  currentRows: Array<Pick<LedgerNodeItem, 'name' | 'node_key'>> = []
+): ProbeRecord | undefined {
+  if (
+    !requestedNodeKey ||
+    !response ||
+    typeof response !== 'object' ||
+    Array.isArray(response) ||
+    'results' in response
+  ) return undefined
+  const record = response as ProbeRecord
+  if (record.node_key && record.node_key !== requestedNodeKey) return undefined
+  if (record.node_key) return record
+  if (!record.name || currentRows.filter(row => row.name === record.name).length !== 1) return undefined
+  const requestedRow = currentRows.find(row => row.node_key === requestedNodeKey)
+  if (!requestedRow || requestedRow.name !== record.name) return undefined
+  return { ...record, node_key: requestedNodeKey }
+}
+
+export function normalizeKeyedProbeResponse(
+  response: unknown,
+  requestedNodeKey: string | null | undefined
+): ProbeRecord | undefined {
+  if (
+    !requestedNodeKey ||
+    !response ||
+    typeof response !== 'object' ||
+    Array.isArray(response) ||
+    'results' in response
+  ) return undefined
+  const record = response as ProbeRecord
+  return record.node_key === requestedNodeKey ? record : undefined
+}
+
 export function mergeNodeLedgerProbePages(
   existingMap: Record<string, ProbeRecord>,
   newPage: any
@@ -700,15 +837,16 @@ export function resolveDrawerDetailFetch(
 }
 
 /**
- * Gets probe record for a given node by node_key or name.
+ * Gets probe record for a given node by its exact node_key.
  */
 export function getProbeForNode(
   probes: Record<string, ProbeRecord>,
   node: { name?: string; node_key?: string }
 ): ProbeRecord | undefined {
   if (!probes || !node) return undefined
-  if (node.node_key && probes[node.node_key]) return probes[node.node_key]
-  if (node.name && probes[node.name]) return probes[node.name]
+  if (node.node_key) {
+    return probes[node.node_key]
+  }
   return undefined
 }
 
@@ -940,12 +1078,12 @@ export function applyMetricShortcut(
  */
 export function buildEffectiveBatchTargets(
   filteredNodes: LedgerNodeItem[],
-  selectedNames: Set<string>,
+  selectedKeys: Set<string>,
   allNodes?: LedgerNodeItem[]
 ): LedgerNodeItem[] {
-  if (selectedNames && selectedNames.size > 0) {
+  if (selectedKeys && selectedKeys.size > 0) {
     const source = allNodes && allNodes.length ? allNodes : filteredNodes
-    return source.filter(n => selectedNames.has(n.name))
+    return source.filter(node => Boolean(node.node_key) && selectedKeys.has(node.node_key))
   }
   return filteredNodes
 }

@@ -19,7 +19,6 @@ from app.services.probe.service import (
     clear_probe_cache,
     delete_all_db_probe_results,
     get_all_cached_results,
-    get_all_db_probe_results,
     get_db_probe_detail,
     get_paged_db_probe_summary,
     probe_batch_nodes,

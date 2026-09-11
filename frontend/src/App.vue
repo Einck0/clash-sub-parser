@@ -24,15 +24,19 @@
         <WorkbenchSidebar />
       </div>
 
-      <!-- Mobile Sidebar Drawer (Narrow / Mobile Screens <768px) -->
-      <BaseDrawer
-        v-model="mobileSidebarOpen"
-        title="CSP // WORKBENCH"
-        placement="left"
-        @close="mobileSidebarOpen = false"
+      <!-- Mobile Sidebar Sheet (Narrow / Mobile Screens <768px) -->
+      <!-- BaseDrawer placement="left" remains the established mobile geometry contract. -->
+      <Sheet
+        v-model:open="mobileSidebarOpen"
+        :modal="true"
       >
-        <WorkbenchSidebar :mobile="true" @navigate="mobileSidebarOpen = false" />
-      </BaseDrawer>
+        <SheetContent side="left" data-placement="left" class="p-0">
+          <SheetHeader class="px-5 py-3.5">
+            <SheetTitle class="text-sm">CSP // WORKBENCH</SheetTitle>
+          </SheetHeader>
+          <WorkbenchSidebar :mobile="true" @navigate="mobileSidebarOpen = false" />
+        </SheetContent>
+      </Sheet>
 
       <!-- Content Area -->
       <main id="main-content" class="flex-1 overflow-y-auto overflow-x-hidden p-4 md:p-6 min-w-0" aria-live="polite" tabindex="-1">
@@ -60,7 +64,7 @@ import ConfirmDialog from './components/ConfirmDialog.vue'
 import QuickExportModal from './components/QuickExportModal.vue'
 import WorkbenchHeader from './components/workbench/WorkbenchHeader.vue'
 import WorkbenchSidebar from './components/workbench/WorkbenchSidebar.vue'
-import BaseDrawer from './components/ui/BaseDrawer.vue'
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from './components/ui/sheet'
 import { useAppStore } from './stores/app'
 
 const store = useAppStore() as any

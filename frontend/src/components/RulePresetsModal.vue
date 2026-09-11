@@ -15,7 +15,7 @@
       <div class="flex flex-wrap items-end gap-3">
         <label class="flex flex-col gap-1 text-xs text-text-muted flex-1 min-w-[200px]">
           <span>搜索模板</span>
-          <input
+          <Input
             v-model="search"
             placeholder="搜索模板（如 openai、youtube）"
             class="rounded-md border border-border-subtle bg-surface-hover px-3 py-2 text-xs text-text-main placeholder:text-text-muted focus:border-accent focus:outline-hidden"
@@ -24,24 +24,24 @@
 
         <label class="flex flex-col gap-1 text-xs text-text-muted w-[160px]">
           <span>目标代理</span>
-          <select
+          <Select
             v-model="proxyOverride"
             class="rounded-md border border-border-subtle bg-surface-hover px-3 py-2 text-xs text-text-main focus:border-accent focus:outline-hidden"
           >
             <option value="">使用模板默认值</option>
             <option v-for="p in proxyOptions" :key="p" :value="p">{{ p }}</option>
-          </select>
+          </Select>
         </label>
 
         <label class="flex flex-col gap-1 text-xs text-text-muted w-[160px]">
           <span>分类</span>
-          <select
+          <Select
             v-model="targetCategory"
             class="rounded-md border border-border-subtle bg-surface-hover px-3 py-2 text-xs text-text-main focus:border-accent focus:outline-hidden"
           >
             <option value="">不指定（使用默认）</option>
             <option v-for="cat in categories" :key="cat" :value="cat">{{ cat }}</option>
-          </select>
+          </Select>
         </label>
       </div>
 
@@ -70,12 +70,11 @@
             >
               <div class="flex items-center justify-between gap-2">
                 <label class="flex items-center gap-2 cursor-pointer text-xs font-semibold text-text-main">
-                  <input
-                    type="checkbox"
-                    :checked="selectedIds.has(preset.id)"
+                  <Checkbox
+                    :model-value="selectedIds.has(preset.id)"
                     class="accent-accent cursor-pointer"
                     @click.stop
-                    @change="togglePreset(preset.id)"
+                    @update:model-value="togglePreset(preset.id)"
                   />
                   <span>{{ preset.name }}</span>
                 </label>
@@ -112,21 +111,21 @@
           已选 {{ selectedIds.size }} 个模板，共 {{ totalSelectedRules }} 条规则
         </span>
         <div class="flex gap-2">
-          <button
+          <Button
             type="button"
             class="px-3 py-1.5 rounded-md border border-border-subtle text-xs text-text-muted hover:text-text-main cursor-pointer"
             @click="$emit('close')"
           >
             取消
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
             class="px-4 py-1.5 rounded-md bg-accent text-xs font-medium text-white hover:bg-accent-hover disabled:opacity-50 transition-colors cursor-pointer"
             :disabled="selectedIds.size === 0"
             @click="applySelected"
           >
             应用到当前规则列表
-          </button>
+          </Button>
         </div>
       </div>
     </template>
@@ -136,6 +135,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import AppModal from './ui/AppModal.vue'
+import { Button, Input, Select, Checkbox } from './ui'
 import { rulePresetCategories } from '../utils/rulePresets'
 
 const props = defineProps({

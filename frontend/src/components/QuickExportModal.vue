@@ -7,46 +7,21 @@
     @close="close"
   >
     <div class="flex flex-col gap-5 pb-safe">
-      <!-- Mode Switcher: Merged vs Single Subscription -->
       <div class="flex flex-col gap-2">
         <label class="text-xs font-medium text-text-muted">导出模式</label>
         <div class="grid grid-cols-2 gap-2 rounded-lg bg-surface-base p-1 border border-border-subtle">
-          <button
-            type="button"
-            :class="[
-              'flex items-center justify-center gap-2 rounded-md py-2 text-xs font-medium transition-colors cursor-pointer',
-              exportMode === 'merged'
-                ? 'bg-accent text-white shadow-xs'
-                : 'text-text-muted hover:text-text-main hover:bg-surface-hover'
-            ]"
-            @click="exportMode = 'merged'"
-          >
-            <Globe class="h-3.5 w-3.5" aria-hidden="true" />
-            <span>合并配置</span>
-            <span class="text-[10px] opacity-80">(全部节点)</span>
-          </button>
-          <button
-            type="button"
-            :class="[
-              'flex items-center justify-center gap-2 rounded-md py-2 text-xs font-medium transition-colors cursor-pointer',
-              exportMode === 'subscription'
-                ? 'bg-accent text-white shadow-xs'
-                : 'text-text-muted hover:text-text-main hover:bg-surface-hover'
-            ]"
-            @click="exportMode = 'subscription'"
-          >
-            <FileText class="h-3.5 w-3.5" aria-hidden="true" />
-            <span>单订阅独立导出</span>
-          </button>
+          <Button type="button" :variant="exportMode === 'merged' ? 'primary' : 'ghost'" size="sm" @click="exportMode = 'merged'">合并配置 <span class="text-[10px] opacity-80">(全部节点)</span></Button>
+          <Button type="button" :variant="exportMode === 'subscription' ? 'primary' : 'ghost'" size="sm" @click="exportMode = 'subscription'">单订阅独立导出</Button>
         </div>
       </div>
 
       <!-- Single Subscription Dropdown (when mode is 'subscription') -->
       <div v-if="exportMode === 'subscription'" class="flex flex-col gap-1.5 rounded-lg bg-surface-base p-3 border border-border-subtle">
         <label class="text-xs font-medium text-text-muted">选择订阅源</label>
-        <select
-          v-model="selectedSubscriptionId"
+        <Select
+          :model-value="selectedSubscriptionId ?? ''"
           class="w-full rounded-md border border-border-subtle bg-surface-hover px-3 py-2 text-xs text-text-main focus:border-accent focus:outline-hidden"
+          @update:model-value="(value) => { selectedSubscriptionId = value === '' ? null : Number(value) }"
         >
           <option v-if="!subscriptionsList.length" :value="null">暂无可用的有效订阅</option>
           <option
@@ -56,7 +31,7 @@
           >
             {{ sub.name }} (ID: {{ sub.id }})
           </option>
-        </select>
+        </Select>
       </div>
 
       <!-- Target Selection Tabs (5 Targets) -->
@@ -66,7 +41,7 @@
           <span class="text-[10px] font-mono text-text-muted">{{ currentTargetDef.desc }}</span>
         </div>
         <div class="grid grid-cols-5 gap-1.5 rounded-lg bg-surface-base p-1 border border-border-subtle">
-          <button
+          <Button
             v-for="t in TARGET_DEFS"
             :key="t.key"
             type="button"
@@ -80,7 +55,7 @@
           >
             <span>{{ t.name }}</span>
             <span class="text-[9px] font-mono opacity-70">{{ t.format }}</span>
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -91,13 +66,13 @@
           <span class="font-mono text-[10px] text-text-muted">{{ currentTargetDef.badge }}</span>
         </label>
         <div class="flex gap-2">
-          <input
+          <Input
             :value="currentExportUrl"
             readonly
             class="flex-1 rounded-md border border-border-subtle bg-surface-hover px-3 py-2 font-mono text-xs text-text-main select-all focus:border-accent focus:outline-hidden"
             @focus="($event.target as HTMLInputElement).select()"
           />
-          <button
+          <Button
             type="button"
             :class="[
               'inline-flex items-center justify-center gap-1.5 rounded-md px-4 py-2 text-xs font-medium transition-colors cursor-pointer shrink-0',
@@ -110,7 +85,7 @@
             <Check v-if="copied" class="h-3.5 w-3.5" aria-hidden="true" />
             <Copy v-else class="h-3.5 w-3.5" aria-hidden="true" />
             <span>{{ copied ? '已复制！' : '复制链接' }}</span>
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -149,13 +124,12 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import {
-  Globe,
-  FileText,
   Check,
   Copy,
   ExternalLink,
   Download,
 } from 'lucide-vue-next'
+import { Button, Input, Select } from './ui'
 import AppModal from './ui/AppModal.vue'
 import { getQuickExport, getSubscriptions } from '../api'
 import { getAuthToken, withAuthToken } from '../auth'

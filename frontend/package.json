@@ -14,8 +14,12 @@
     "audit:visual:strict": "node scripts/visual_audit.mjs --strict"
   },
   "dependencies": {
+    "class-variance-authority": "0.7.1",
+    "clsx": "2.1.1",
     "js-yaml": "^4.3.1",
     "pinia": "^2.1.0",
+    "reka-ui": "2.10.4",
+    "tailwind-merge": "3.6.0",
     "vue": "^3.4.0",
     "vue-router": "^4.3.0"
   },

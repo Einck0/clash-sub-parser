@@ -20,7 +20,7 @@
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <label class="flex flex-col gap-1 text-xs text-text-muted">
           <span>名称</span>
-          <input
+          <Input
             v-model="form.name"
             placeholder="例如：自动选择"
             class="rounded-md border border-border-subtle bg-surface-hover px-3 py-2 text-xs text-text-main focus:border-accent focus:outline-hidden"
@@ -28,7 +28,7 @@
         </label>
         <label class="flex flex-col gap-1 text-xs text-text-muted">
           <span>类型</span>
-          <select
+          <FormSelect
             v-model="form.group_type"
             class="rounded-md border border-border-subtle bg-surface-hover px-3 py-2 text-xs text-text-main focus:border-accent focus:outline-hidden"
           >
@@ -36,7 +36,7 @@
             <option value="url-test">url-test</option>
             <option value="fallback">fallback</option>
             <option value="load-balance">load-balance</option>
-          </select>
+          </FormSelect>
         </label>
       </div>
 
@@ -47,7 +47,7 @@
           <span class="text-[11px] text-text-muted">仅当策略组最终没有任何节点时才追加 PASS；有节点时不会加。</span>
         </div>
         <label class="flex items-center gap-2 cursor-pointer text-xs text-text-main pt-1">
-          <input type="checkbox" v-model="form.add_fallback" class="accent-accent cursor-pointer" />
+          <Checkbox v-model="form.add_fallback" />
           <span>空组时追加 PASS <span class="text-text-muted text-[11px]">(默认关闭)</span></span>
         </label>
       </div>
@@ -64,7 +64,7 @@
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <label class="flex flex-col gap-1 text-xs text-text-muted">
             <span>url</span>
-            <input
+            <Input
               v-model="urlTestUrl"
               placeholder="https://www.gstatic.com/generate_204"
               class="rounded-md border border-border-subtle bg-surface-hover px-3 py-2 text-xs text-text-main focus:border-accent focus:outline-hidden"
@@ -72,7 +72,7 @@
           </label>
           <label class="flex flex-col gap-1 text-xs text-text-muted">
             <span>interval (秒)</span>
-            <input
+            <Input
               v-model.number="urlTestInterval"
               type="number"
               min="1"
@@ -82,7 +82,7 @@
           </label>
           <label class="flex flex-col gap-1 text-xs text-text-muted">
             <span>tolerance (ms)</span>
-            <input
+            <Input
               v-model.number="urlTestTolerance"
               type="number"
               min="0"
@@ -105,78 +105,78 @@
 
         <!-- Static Node and Builtin row -->
         <div class="flex flex-wrap gap-2 items-center">
-          <select
+          <FormSelect
             v-model="selectedNodeName"
             class="flex-1 min-w-[180px] rounded-md border border-border-subtle bg-surface-hover px-3 py-2 text-xs text-text-main focus:border-accent focus:outline-hidden"
           >
             <option value="">选择节点</option>
             <option v-for="name in selectableNodeNames" :key="name" :value="name">{{ name }}</option>
-          </select>
-          <button
+          </FormSelect>
+          <ShadButton
             type="button"
             class="px-3 py-2 rounded-md border border-border-subtle text-xs text-text-main hover:bg-surface-hover disabled:opacity-50 cursor-pointer"
             :disabled="!selectedNodeName"
             @click="addNode"
           >
             加入静态节点
-          </button>
-          <button
+          </ShadButton>
+          <ShadButton
             type="button"
             class="px-2.5 py-2 rounded-md border border-border-subtle text-xs text-text-muted hover:text-text-main hover:bg-surface-hover cursor-pointer font-mono"
             @click="addBuiltin('DIRECT')"
           >
             DIRECT
-          </button>
-          <button
+          </ShadButton>
+          <ShadButton
             type="button"
             class="px-2.5 py-2 rounded-md border border-border-subtle text-xs text-text-muted hover:text-text-main hover:bg-surface-hover cursor-pointer font-mono"
             @click="addBuiltin('PASS')"
           >
             PASS
-          </button>
-          <button
+          </ShadButton>
+          <ShadButton
             type="button"
             class="px-2.5 py-2 rounded-md border border-border-subtle text-xs text-text-muted hover:text-text-main hover:bg-surface-hover cursor-pointer font-mono"
             @click="addBuiltin('REJECT')"
           >
             REJECT
-          </button>
+          </ShadButton>
         </div>
 
         <!-- Node Group reference row -->
         <div class="flex flex-wrap gap-2 items-center">
-          <select
+          <FormSelect
             v-model.number="selectedGroupId"
             class="flex-1 min-w-[180px] rounded-md border border-border-subtle bg-surface-hover px-3 py-2 text-xs text-text-main focus:border-accent focus:outline-hidden"
           >
             <option :value="null">选择节点组</option>
             <option v-for="g in selectableGroups" :key="g.id" :value="g.id">{{ g.name }}</option>
-          </select>
+          </FormSelect>
           <div class="flex gap-1.5 flex-wrap">
-            <button
+            <ShadButton
               type="button"
               class="px-3 py-2 rounded-md border border-border-subtle text-xs text-text-main hover:bg-surface-hover disabled:opacity-50 cursor-pointer"
               :disabled="!selectedGroupId"
               @click="addGroupRef"
             >
               添加组引用
-            </button>
-            <button
+            </ShadButton>
+            <ShadButton
               type="button"
               class="px-3 py-2 rounded-md border border-border-subtle text-xs text-text-main hover:bg-surface-hover disabled:opacity-50 cursor-pointer"
               :disabled="!selectedGroupId"
               @click="addGroupNodes"
             >
               添加组节点
-            </button>
-            <button
+            </ShadButton>
+            <ShadButton
               type="button"
               class="px-3 py-2 rounded-md border border-border-subtle text-xs text-text-main hover:bg-surface-hover disabled:opacity-50 cursor-pointer"
               :disabled="!selectedGroupId"
               @click="addExcludeGroupNodes"
             >
               减去组节点
-            </button>
+            </ShadButton>
           </div>
         </div>
 
@@ -184,12 +184,12 @@
         <div class="flex flex-col gap-2 pt-2 border-t border-border-subtle/50">
           <div class="text-xs text-text-muted">添加正则筛选（虚拟）</div>
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            <input
+            <Input
               v-model="regexDraftName"
               placeholder="名称（可选，空则自动 正则1/正则2）"
               class="rounded-md border border-border-subtle bg-surface-hover px-3 py-2 text-xs text-text-main focus:border-accent focus:outline-hidden"
             />
-            <input
+            <Input
               v-model="regexDraft"
               placeholder="正则，例如：香港  或  ^(?!.*(官网|套餐)).*$"
               class="rounded-md border border-border-subtle bg-surface-hover px-3 py-2 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono"
@@ -197,22 +197,22 @@
             />
           </div>
           <div class="flex items-center gap-2 flex-wrap">
-            <button
+            <ShadButton
               type="button"
               class="px-3 py-1.5 rounded-md bg-accent text-xs font-medium text-white hover:bg-accent-hover disabled:opacity-50 cursor-pointer"
               :disabled="!regexDraft.trim() || !!regexDraftError"
               @click="addRegexEntry"
             >
               加入正则
-            </button>
-            <button
+            </ShadButton>
+            <ShadButton
               type="button"
               class="px-3 py-1.5 rounded-md border border-border-subtle text-xs text-text-main hover:bg-surface-hover disabled:opacity-50 cursor-pointer"
               :disabled="!regexDraft.trim() || !!regexDraftError"
               @click="previewDraftRegex"
             >
               预览该正则匹配
-            </button>
+            </ShadButton>
             <span class="text-xs text-text-muted">匹配 {{ draftMatches.length }}</span>
           </div>
           <div v-if="regexDraftError" class="text-xs text-status-danger">
@@ -242,13 +242,13 @@
               {{ previewMatches.length }} 个匹配
             </span>
           </div>
-          <button
+          <ShadButton
             type="button"
             class="text-xs text-text-muted hover:text-text-main cursor-pointer"
             @click="closeRegexPreview"
           >
             关闭预览
-          </button>
+          </ShadButton>
         </div>
         <div
           v-if="previewMatches.length"
@@ -275,7 +275,7 @@
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <label class="flex flex-col gap-1 text-xs text-text-muted">
             <span>测速最低门槛 (Mbps)</span>
-            <input
+            <Input
               type="number"
               min="0"
               step="0.5"
@@ -289,21 +289,20 @@
         <div class="flex flex-col gap-2">
           <div class="text-xs text-text-muted">必须解锁的流媒体 / AI 平台（多选）</div>
           <div class="flex flex-wrap gap-2">
-            <label
-              v-for="p in availablePlatforms"
-              :key="p.id"
-              :class="[
-                'min-h-[36px] px-3 py-1.5 rounded-md border text-xs flex items-center gap-1.5 cursor-pointer select-none transition-colors',
+          <label
+            v-for="p in availablePlatforms"
+            :key="p.id"
+            :class="[
+              'min-h-[44px] px-3 py-1.5 rounded-md border text-xs flex items-center gap-1.5 cursor-pointer select-none transition-colors',
                 (form.filter_media_unlock || []).includes(p.id)
                   ? 'border-accent bg-accent/15 text-accent font-medium'
                   : 'border-border-subtle bg-surface-hover text-text-muted hover:text-text-main'
               ]"
             >
-              <input
-                type="checkbox"
-                :value="p.id"
-                v-model="form.filter_media_unlock"
-                class="sr-only"
+              <Checkbox
+                :model-value="(form.filter_media_unlock || []).includes(p.id)"
+                :aria-label="`要求解锁 ${p.name}`"
+                @update:model-value="(checked) => togglePlatform(p.id, checked)"
               />
               <span>{{ p.name }}</span>
             </label>
@@ -336,7 +335,7 @@
             @dragover.prevent
             @drop="onDrop(idx)"
           >
-            <button
+            <ShadButton
               v-if="!(entry.type === 'regex' && editingRegexIndex === idx)"
               type="button"
               class="drag-handle inline-flex items-center justify-center p-1 text-text-muted hover:text-text-main cursor-grab"
@@ -349,17 +348,17 @@
               @mousedown.stop
             >
               <GripVertical class="h-4 w-4" aria-hidden="true" />
-            </button>
+            </ShadButton>
 
             <div class="flex-1 font-mono text-xs overflow-hidden">
               <template v-if="entry.type === 'regex' && editingRegexIndex === idx">
                 <div class="flex flex-col gap-2 p-1">
-                  <input
+                  <Input
                     v-model="editingRegexName"
                     class="rounded-md border border-border-subtle bg-surface-hover px-2.5 py-1.5 text-xs text-text-main focus:border-accent focus:outline-hidden"
                     placeholder="名称（可选）"
                   />
-                  <input
+                  <Input
                     v-model="editingRegexValue"
                     class="rounded-md border border-border-subtle bg-surface-hover px-2.5 py-1.5 text-xs text-text-main focus:border-accent focus:outline-hidden font-mono"
                     placeholder="输入正则，例如 香港 或 ^(?!.*(官网|套餐)).*$"
@@ -367,29 +366,29 @@
                     @keyup.escape="cancelRegexEdit"
                   />
                   <div class="flex items-center gap-2 flex-wrap pt-1">
-                    <button
+                    <ShadButton
                       type="button"
                       class="px-2.5 py-1 rounded bg-accent text-xs font-medium text-white hover:bg-accent-hover disabled:opacity-50 cursor-pointer"
                       :disabled="!!editingRegexError || !editingRegexValue.trim()"
                       @click="saveRegexEdit(idx)"
                     >
                       确定
-                    </button>
-                    <button
+                    </ShadButton>
+                    <ShadButton
                       type="button"
                       class="px-2.5 py-1 rounded border border-border-subtle text-xs text-text-main hover:bg-surface-hover disabled:opacity-50 cursor-pointer"
                       :disabled="!!editingRegexError || !editingRegexValue.trim()"
                       @click="previewEditingRegex"
                     >
                       预览
-                    </button>
-                    <button
+                    </ShadButton>
+                    <ShadButton
                       type="button"
                       class="px-2.5 py-1 rounded border border-border-subtle text-xs text-text-muted hover:text-text-main cursor-pointer"
                       @click="cancelRegexEdit"
                     >
                       取消
-                    </button>
+                    </ShadButton>
                     <span v-if="editingRegexError" class="text-xs text-status-danger">
                       {{ editingRegexError }}
                     </span>
@@ -412,45 +411,45 @@
             </div>
 
             <div v-if="!(entry.type === 'regex' && editingRegexIndex === idx)" class="flex items-center gap-1 shrink-0">
-              <button
+              <ShadButton
                 v-if="entry.type === 'regex'"
                 type="button"
                 class="px-2 py-1 rounded border border-accent/40 text-xs text-accent hover:bg-accent/10 cursor-pointer"
                 @click="startRegexEdit(idx)"
               >
                 编辑
-              </button>
-              <button
+              </ShadButton>
+              <ShadButton
                 v-if="entry.type === 'regex'"
                 type="button"
                 class="px-2 py-1 rounded border border-border-subtle text-xs text-text-muted hover:text-text-main hover:bg-surface-hover cursor-pointer"
                 @click="previewEntryRegex(entry.value)"
               >
                 预览
-              </button>
-              <button
+              </ShadButton>
+              <ShadButton
                 type="button"
                 class="px-2 py-1 rounded border border-border-subtle text-xs text-text-muted hover:text-text-main disabled:opacity-40 cursor-pointer"
                 :disabled="idx === 0"
                 @click="moveEntry(idx, -1)"
               >
                 上
-              </button>
-              <button
+              </ShadButton>
+              <ShadButton
                 type="button"
                 class="px-2 py-1 rounded border border-border-subtle text-xs text-text-muted hover:text-text-main disabled:opacity-40 cursor-pointer"
                 :disabled="idx === form.include_entries.length - 1"
                 @click="moveEntry(idx, 1)"
               >
                 下
-              </button>
-              <button
+              </ShadButton>
+              <ShadButton
                 type="button"
                 class="px-2 py-1 rounded border border-status-danger/40 text-xs text-status-danger hover:bg-status-danger/10 cursor-pointer"
                 @click="removeEntry(idx)"
               >
                 删
-              </button>
+              </ShadButton>
             </div>
           </div>
         </div>
@@ -460,13 +459,13 @@
       <div v-if="showRaw" class="rounded-lg border border-border-subtle bg-surface-base p-3 flex flex-col gap-2">
         <div class="flex items-center justify-between">
           <strong class="text-xs text-text-main">Raw JSON</strong>
-          <button
+          <ShadButton
             type="button"
             class="px-3 py-1 rounded-md border border-border-subtle text-xs text-text-main hover:bg-surface-hover cursor-pointer"
             @click="syncFromRaw"
           >
             应用 Raw
-          </button>
+          </ShadButton>
         </div>
         <textarea
           v-model="rawJson"
@@ -478,29 +477,29 @@
 
     <template #footer>
       <div class="flex items-center justify-between">
-        <button
+        <ShadButton
           type="button"
           class="px-3 py-1.5 rounded-md border border-border-subtle text-xs text-text-muted hover:text-text-main cursor-pointer"
           @click="showRaw = !showRaw"
         >
           {{ showRaw ? '隐藏 Raw' : '显示 Raw' }}
-        </button>
+        </ShadButton>
         <div class="flex gap-2">
-          <button
+          <ShadButton
             type="button"
             class="px-3 py-1.5 rounded-md border border-border-subtle text-xs text-text-muted hover:text-text-main cursor-pointer"
             @click="close"
           >
             取消
-          </button>
-          <button
+          </ShadButton>
+          <ShadButton
             type="button"
             class="px-4 py-1.5 rounded-md bg-accent text-xs font-medium text-white hover:bg-accent-hover disabled:opacity-50 transition-colors cursor-pointer"
             :disabled="saving || !form.name.trim()"
             @click="save"
           >
             {{ saving ? '保存中...' : '保存' }}
-          </button>
+          </ShadButton>
         </div>
       </div>
     </template>
@@ -509,6 +508,7 @@
 
 <script setup>
 import { computed, ref, watch } from 'vue'
+import { Button as ShadButton, Input, Select as FormSelect, Checkbox } from './ui'
 import { Zap, GripVertical } from 'lucide-vue-next'
 import AppModal from './ui/AppModal.vue'
 import {
@@ -633,6 +633,13 @@ const selectableGroups = computed(() => allGroups.value.filter((item) => item.id
 const selectableNodeNames = computed(() =>
   allNodes.value.map((node) => String(node.name || '').trim()).filter(Boolean),
 )
+
+function togglePlatform(platformId, checked) {
+  const selected = new Set(form.value.filter_media_unlock || [])
+  if (checked === true) selected.add(platformId)
+  else selected.delete(platformId)
+  form.value.filter_media_unlock = [...selected]
+}
 
 function validateRegex(rule) {
   if (!rule) return ''

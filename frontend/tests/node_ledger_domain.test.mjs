@@ -63,7 +63,7 @@ const mockNodes = [
 ]
 
 const mockProbes = {
-  'HK-01': {
+  'key-hk': {
     name: 'HK-01',
     node_key: 'key-hk',
     status: 'ok',
@@ -78,7 +78,7 @@ const mockProbes = {
     },
     checked_at: 1000,
   },
-  'US-01': {
+  'key-us': {
     name: 'US-01',
     node_key: 'key-us',
     status: 'ok',
@@ -93,7 +93,7 @@ const mockProbes = {
     },
     checked_at: 2000,
   },
-  'JP-01': {
+  'key-jp': {
     name: 'JP-01',
     node_key: 'key-jp',
     status: 'fail',
@@ -108,7 +108,6 @@ test('1.1 node-to-probe matching, multi-field search, multi-media AND filtering,
     { node_key: 'key-only', latency_ms: 100 },
   ]
   const map = normalizeNodeLedgerMap(rawList)
-  assert.equal(map['HK-01']?.latency_ms, 45)
   assert.equal(map['key-hk']?.latency_ms, 45)
   assert.equal(map['key-only']?.latency_ms, 100)
 
@@ -298,7 +297,7 @@ test('1.2 batch probe target selection uses all filtered rows when no row is sel
   assert.equal(targetsAll[1].name, 'US-01')
 
   // Case 2: Explicit selection of node outside first virtual view
-  const selectedSet = new Set(['JP-01'])
+  const selectedSet = new Set(['key-jp'])
   const targetsSelected = buildEffectiveBatchTargets(filtered, selectedSet, mockNodes)
   assert.equal(targetsSelected.length, 1)
   assert.equal(targetsSelected[0].name, 'JP-01')
@@ -390,6 +389,7 @@ test('3.1 probe summary pagination page merge and boolean media filtering', () =
   const page1 = {
     results: {
       'node:001': {
+        node_key: 'node:001',
         status: 'ok',
         latency_ms: 40,
         speed_mbps: 50.0,
@@ -398,6 +398,7 @@ test('3.1 probe summary pagination page merge and boolean media filtering', () =
         media: { youtube: true, netflix: true, disney: false },
       },
       'node:002': {
+        node_key: 'node:002',
         status: 'ok',
         latency_ms: 85,
         speed_mbps: 15.0,
@@ -421,6 +422,7 @@ test('3.1 probe summary pagination page merge and boolean media filtering', () =
   const page2 = {
     results: {
       'node:003': {
+        node_key: 'node:003',
         status: 'fail',
         latency_ms: null,
         speed_mbps: null,

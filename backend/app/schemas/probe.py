@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 from pydantic import BaseModel, Field
 
@@ -146,3 +146,20 @@ class NodeProbeResultRead(BaseModel):
     media: dict[str, Any] = Field(default_factory=dict)
     error: str | None = None
     checked_at: int
+
+
+class ProbeResultSummaryItem(BaseModel):
+    node_key: str
+    name: str
+    status: str
+    latency_ms: int | None = None
+    speed_mbps: float | None = None
+    country: str | None = None
+    ip: str | None = None
+    media: dict[str, bool] = Field(default_factory=dict)
+
+
+class ProbeResultsSummaryResponse(BaseModel):
+    results: dict[str, ProbeResultSummaryItem]
+    next_cursor: str | None = None
+    has_more: bool = False

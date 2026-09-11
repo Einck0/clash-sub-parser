@@ -10,8 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.database import AsyncSessionLocal
 from app.models.subscription import Subscription
+from app.services.node_identity import canonical_node_key
 from app.services.subscription_service import fetch_due_subscriptions
-from app.utils.dedup import deduplicate_nodes
 
 logger = logging.getLogger(__name__)
 scheduler = AsyncIOScheduler()
@@ -130,14 +130,27 @@ def get_probe_schedule_runtime() -> ProbeScheduleRuntime:
 
 
 async def collect_scheduler_inventory_nodes(db: AsyncSession) -> list[dict]:
-    """Collect all raw_nodes from all enabled subscriptions without capability filtering."""
+    """Collect all raw_nodes from all enabled subscriptions without capability filtering,
+    deduplicated by canonical node key.
+    """
     result = await db.execute(
         select(Subscription).where(Subscription.enabled.is_(True))
     )
     merged: list[dict] = []
+    seen: set[str] = set()
     for sub in result.scalars().all():
-        merged.extend(sub.raw_nodes or [])
-    return deduplicate_nodes(merged)
+        for node in sub.raw_nodes or []:
+            if not isinstance(node, dict):
+                continue
+            name = str(node.get("name") or "").strip()
+            if not name:
+                continue
+            key = canonical_node_key(node)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(node)
+    return merged
 
 
 async def _poll_subscriptions() -> None:

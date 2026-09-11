@@ -7,8 +7,8 @@
         <p class="page-desc">运行时调整 Web UI、API 与导出地址的 Token 鉴权，不需要重建容器。</p>
       </div>
       <div class="head-actions">
-        <button @click="load" :disabled="loading || saving || isBusy">{{ loading ? '刷新中...' : '刷新' }}</button>
-        <button class="primary" @click="save" :disabled="loading || saving || isBusy">{{ saving ? '保存中...' : '保存设置' }}</button>
+        <Button variant="secondary" size="md" :disabled="loading || saving || isBusy" @click="load">{{ loading ? '刷新中...' : '刷新' }}</Button>
+        <Button variant="primary" size="md" :loading="saving" :disabled="loading || isBusy" @click="save">{{ saving ? '保存中...' : '保存设置' }}</Button>
       </div>
     </div>
 
@@ -28,19 +28,19 @@
 
         <div class="settings-toggle-list">
           <label class="settings-toggle">
-            <input type="checkbox" v-model="settings.auth_enabled" />
+            <Checkbox v-model="settings.auth_enabled" />
             <span><strong>开启 Token 鉴权</strong><small>保护所选范围，访问时需要 token。</small></span>
           </label>
           <label class="settings-toggle">
-            <input type="checkbox" v-model="settings.protect_frontend" :disabled="!settings.auth_enabled" />
+            <Checkbox v-model="settings.protect_frontend" :disabled="!settings.auth_enabled" />
             <span><strong>保护前端页面</strong><small>进入 Web UI 时显示 token 输入框；静态资源仍会放行。</small></span>
           </label>
           <label class="settings-toggle">
-            <input type="checkbox" v-model="settings.protect_api" :disabled="!settings.auth_enabled" />
+            <Checkbox v-model="settings.protect_api" :disabled="!settings.auth_enabled" />
             <span><strong>保护管理 API</strong><small>订阅、节点组、规则、DNS、设置等接口需要 token。</small></span>
           </label>
           <label class="settings-toggle">
-            <input type="checkbox" v-model="settings.protect_exports" :disabled="!settings.auth_enabled" />
+            <Checkbox v-model="settings.protect_exports" :disabled="!settings.auth_enabled" />
             <span><strong>保护导出/订阅地址</strong><small>/yaml 和下载地址需要 URL query token。</small></span>
           </label>
         </div>
@@ -52,7 +52,7 @@
         <div class="field settings-token-field">
           <span>新 token</span>
           <div class="relative flex items-center">
-            <input
+            <Input
               v-model="newToken"
               :type="showToken ? 'text' : 'password'"
               autocomplete="new-password"
@@ -60,7 +60,7 @@
               @input="onManualTokenInput"
               style="padding-right: 36px; width: 100%;"
             />
-            <button
+            <Button
               type="button"
               class="absolute right-2 text-text-muted hover:text-text-main cursor-pointer"
               style="background: transparent; border: none; padding: 4px;"
@@ -70,11 +70,11 @@
             >
               <EyeOff v-if="showToken" :size="16" />
               <Eye v-else :size="16" />
-            </button>
+            </Button>
           </div>
         </div>
         <div class="row" style="margin-top: 8px;">
-          <button type="button" @click="generateToken">生成随机 token</button>
+          <Button type="button" @click="generateToken">生成随机 token</Button>
         </div>
         <div class="settings-token-status" style="margin-top: 8px;">
           <span class="badge">当前：{{ settings.has_token ? '已设置 token' : '未设置 token' }}</span>
@@ -96,13 +96,13 @@
         </div>
         <div class="settings-toggle-list">
           <label class="settings-toggle">
-            <input type="checkbox" v-model="settings.fetch_proxy_enabled" />
+            <Checkbox v-model="settings.fetch_proxy_enabled" />
             <span><strong>订阅拉取走代理</strong><small>只影响订阅拉取，不影响 Web UI 和生成接口。</small></span>
           </label>
         </div>
         <label class="field settings-token-field">
           <span>代理地址</span>
-          <input v-model="settings.fetch_proxy_url" placeholder="例如：http://127.0.0.1:7890" />
+          <Input v-model="settings.fetch_proxy_url" placeholder="例如：http://127.0.0.1:7890" />
         </label>
         <p class="section-hint">常见格式：<code>http://127.0.0.1:7890</code>。保存后新的订阅拉取会立即使用这个地址。</p>
       </div>
@@ -120,19 +120,19 @@
 
         <div class="settings-toggle-list" style="margin-bottom: 16px;">
           <label class="settings-toggle">
-            <input type="checkbox" v-model="probeConfig.probe_enabled" />
+            <Checkbox v-model="probeConfig.probe_enabled" />
             <span><strong>开启节点出站校验（主开关）</strong><small>通过 sing-box 建立独立通道验证真实代理协议握手与延迟。关闭时暂停全部手动与定时质检。</small></span>
           </label>
           <label class="settings-toggle">
-            <input type="checkbox" v-model="probeConfig.probe_cron_enabled" :disabled="!probeConfig.probe_enabled" />
+            <Checkbox v-model="probeConfig.probe_cron_enabled" :disabled="!probeConfig.probe_enabled" />
             <span><strong>开启后台定时质检</strong><small>按设定周期自动在后台对所有节点执行完整质检，受主开关控制。</small></span>
           </label>
           <label class="settings-toggle">
-            <input type="checkbox" v-model="probeConfig.media_check_enabled" :disabled="!probeConfig.probe_enabled" />
+            <Checkbox v-model="probeConfig.media_check_enabled" :disabled="!probeConfig.probe_enabled" />
             <span><strong>开启流媒体与 AI 解锁检测</strong><small>通过待测节点探测 YouTube、Netflix、Disney+、ChatGPT 等平台的解锁能力。</small></span>
           </label>
           <label class="settings-toggle">
-            <input type="checkbox" v-model="probeConfig.speedtest_enabled" :disabled="!probeConfig.probe_enabled" />
+            <Checkbox v-model="probeConfig.speedtest_enabled" :disabled="!probeConfig.probe_enabled" />
             <span><strong>开启下载带宽测速</strong><small>通过小样本流量分块（受控流量）测量节点的实际下载速度 (Mbps)。</small></span>
           </label>
         </div>
@@ -146,11 +146,9 @@
               class="platform-chip"
               :class="{ active: probeConfig.media_platforms.includes(p.id) }"
             >
-              <input
-                type="checkbox"
-                :value="p.id"
-                v-model="probeConfig.media_platforms"
-                style="display: none;"
+              <Checkbox
+                :model-value="probeConfig.media_platforms.includes(p.id)"
+                @update:model-value="toggleMediaPlatform(p.id, $event)"
               />
               <span>{{ p.name }}</span>
             </label>
@@ -160,7 +158,7 @@
         <div class="settings-grid-2" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin-bottom: 12px;">
           <label class="field">
             <span class="field-title-hint">后台定时质检周期 (分钟)</span>
-            <input
+            <Input
               type="number"
               min="1"
               max="1440"
@@ -174,7 +172,7 @@
           </label>
           <label class="field">
             <span>服务级独立超时 (毫秒)</span>
-            <input
+            <Input
               type="number"
               min="500"
               max="30000"
@@ -188,7 +186,7 @@
           </label>
           <label class="field">
             <span>探测最大并发数</span>
-            <input
+            <Input
               type="number"
               min="1"
               max="20"
@@ -201,7 +199,7 @@
           </label>
           <label class="field">
             <span>单节点总预算超时 (毫秒，可选)</span>
-            <input
+            <Input
               type="number"
               min="0"
               max="60000"
@@ -215,11 +213,11 @@
           </label>
           <label class="field">
             <span class="field-title-hint">测速目标 URL</span>
-            <input v-model="probeConfig.speedtest_url" placeholder="https://speed.cloudflare.com/__down?bytes=5000000" />
+            <Input v-model="probeConfig.speedtest_url" placeholder="https://speed.cloudflare.com/__down?bytes=5000000" />
           </label>
           <label class="field">
             <span>最大测速样本流量 (MB)</span>
-            <input
+            <Input
               type="number"
               min="1"
               max="50"
@@ -229,11 +227,11 @@
           </label>
           <label class="field">
             <span>测速超时时间 (秒)</span>
-            <input type="number" min="2" max="30" v-model.number="probeConfig.speedtest_timeout_s" />
+            <Input type="number" min="2" max="30" v-model.number="probeConfig.speedtest_timeout_s" />
           </label>
           <label class="field">
             <span>测速达标过滤阈值 (Mbps)</span>
-            <input type="number" min="0" step="0.5" v-model.number="probeConfig.speedtest_min_speed_mbps" placeholder="0 表示不设门槛" />
+            <Input type="number" min="0" step="0.5" v-model.number="probeConfig.speedtest_min_speed_mbps" placeholder="0 表示不设门槛" />
           </label>
         </div>
       </div>
@@ -247,15 +245,15 @@
           <span class="sync-pill">{{ downloadItems.length }} 个文件</span>
         </div>
         <div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:12px">
-          <button class="primary" @click="refreshPresetDownloads" :disabled="isBusy">{{ working === 'refresh-downloads' ? '刷新下载中...' : '刷新最新版客户端' }}</button>
-          <button @click="loadDownloads" :disabled="isBusy">重新读取本地缓存</button>
+          <Button class="primary" @click="refreshPresetDownloads" :disabled="isBusy">{{ working === 'refresh-downloads' ? '刷新下载中...' : '刷新最新版客户端' }}</Button>
+          <Button @click="loadDownloads" :disabled="isBusy">重新读取本地缓存</Button>
         </div>
         <label class="field settings-token-field">
           <span>自定义下载 URL</span>
-          <input v-model="customDownloadUrl" placeholder="https://example.com/file.apk 或 GitHub release asset URL" />
+          <Input v-model="customDownloadUrl" placeholder="https://example.com/file.apk 或 GitHub release asset URL" />
         </label>
         <div class="row" style="margin-top:8px">
-          <button class="primary" @click="downloadCustom" :disabled="isBusy || !customDownloadUrl.trim()">{{ working === 'download-custom' ? '下载中...' : '下载自定义 URL' }}</button>
+          <Button class="primary" @click="downloadCustom" :disabled="isBusy || !customDownloadUrl.trim()">{{ working === 'download-custom' ? '下载中...' : '下载自定义 URL' }}</Button>
         </div>
         <div v-if="downloadItems.length" class="download-list">
           <div v-for="item in downloadItems" :key="item.filename" class="download-row">
@@ -273,13 +271,13 @@
         <h3>配置备份 / 重置</h3>
         <p class="section-hint">导出的 JSON 不包含访问 token/hash。重置会清空订阅、节点组、规则、DNS、生成和安全设置，恢复成新安装状态。导入会覆盖对应的数据表。</p>
         <div class="row" style="gap:8px;flex-wrap:wrap">
-          <button @click="downloadConfig(true)" :disabled="isBusy">{{ working === 'export-full' ? '导出中...' : '导出（含订阅）' }}</button>
-          <button @click="downloadConfig(false)" :disabled="isBusy">{{ working === 'export-no-subscriptions' ? '导出中...' : '导出（不含订阅）' }}</button>
+          <Button @click="downloadConfig(true)" :disabled="isBusy">{{ working === 'export-full' ? '导出中...' : '导出（含订阅）' }}</Button>
+          <Button @click="downloadConfig(false)" :disabled="isBusy">{{ working === 'export-no-subscriptions' ? '导出中...' : '导出（不含订阅）' }}</Button>
           <label class="import-label" :class="{ disabled: isBusy }">
             <input type="file" accept=".json" @change="onImportFile" :disabled="isBusy" ref="importInput" />
             <span class="button-like">{{ working === 'import' ? '导入中...' : '导入配置' }}</span>
           </label>
-          <button class="danger" @click="resetAllConfig" :disabled="isBusy">{{ working === 'reset' ? '重置中...' : '重置所有配置' }}</button>
+          <Button class="danger" @click="resetAllConfig" :disabled="isBusy">{{ working === 'reset' ? '重置中...' : '重置所有配置' }}</Button>
         </div>
       </div>
 
@@ -318,23 +316,23 @@
         <div class="space-y-1.5">
           <label class="block text-xs font-mono text-text-muted">新生成的随机 Token</label>
           <div class="flex items-center gap-2">
-            <input
+            <Input
               :value="generatedTokenValue"
               readonly
               class="flex-1 min-h-[44px] rounded-md border border-border bg-surface-base px-3.5 py-2 font-mono text-xs text-text-main select-all focus:outline-hidden"
             />
-            <button
+            <Button
               type="button"
               class="min-h-[44px] px-4 py-2 rounded-md bg-accent text-xs font-medium text-white hover:bg-accent-hover transition-colors cursor-pointer whitespace-nowrap shrink-0"
               @click="copyGeneratedToken"
             >
               {{ tokenCopied ? '已复制' : '复制 Token' }}
-            </button>
+            </Button>
           </div>
         </div>
 
         <label class="flex items-center gap-2.5 text-xs text-text-main cursor-pointer select-none pt-2">
-          <input
+          <Checkbox
             type="checkbox"
             v-model="tokenAcknowledged"
             :disabled="!tokenCopied"
@@ -344,21 +342,21 @@
         </label>
 
         <div class="flex justify-end gap-2.5 pt-4 border-t border-border-subtle">
-          <button
+          <Button
             type="button"
             class="min-h-[36px] px-4 py-1.5 rounded-md border border-border bg-surface-hover text-xs text-text-muted hover:text-text-main cursor-pointer"
             @click="onCloseGeneratedModal"
           >
             取消
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
             class="min-h-[36px] px-4 py-1.5 rounded-md bg-accent text-xs font-semibold text-white hover:bg-accent-hover transition-colors cursor-pointer disabled:opacity-50"
             :disabled="!tokenAcknowledged"
             @click="applyGeneratedToken"
           >
             采纳并填入表单
-          </button>
+          </Button>
         </div>
       </div>
     </AppModal>
@@ -368,6 +366,7 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { Activity, Eye, EyeOff } from 'lucide-vue-next'
+import { Button, Input, Checkbox } from '../components/ui'
 import { useAppStore } from '../stores/app'
 import AppModal from '../components/ui/AppModal.vue'
 import { formatBytes, formatDate } from '../utils/format'
@@ -445,6 +444,13 @@ const tokenAcknowledged = ref(false)
 const tokenCopied = ref(false)
 const showGeneratedModal = ref(false)
 const generatedTokenValue = ref('')
+
+function toggleMediaPlatform(platformId, checked) {
+  const platforms = new Set(probeConfig.media_platforms)
+  if (checked) platforms.add(platformId)
+  else platforms.delete(platformId)
+  probeConfig.media_platforms = [...platforms]
+}
 
 function onManualTokenInput() {
   isGeneratedToken.value = false

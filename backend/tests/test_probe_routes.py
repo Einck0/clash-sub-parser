@@ -1,7 +1,15 @@
-import pytest
-from httpx import ASGITransport, AsyncClient
+from __future__ import annotations
 
+import urllib.parse
+from httpx import ASGITransport, AsyncClient
+import pytest
+from sqlalchemy import delete
+
+from app.database import get_db
 from app.main import app
+from app.models.node_probe_result import NodeProbeResult
+from app.models.subscription import Subscription
+from app.services.node_identity import canonical_node_key
 
 
 @pytest.mark.asyncio
@@ -63,24 +71,33 @@ async def test_probe_cache_endpoints():
         assert del_res.json()["ok"] is True
 
 
-import urllib.parse
-from app.database import get_db
-from app.models.node_probe_result import NodeProbeResult
-from sqlalchemy import select, delete
-
-
 @pytest.mark.asyncio
 async def test_probe_results_envelope_and_summary_projection():
     """1.1 Verify GET /api/probe/results returns frozen lightweight summary envelope."""
+    node1_dict = {"name": "Node-Japan-01", "server": "192.0.2.1", "port": 443, "type": "vmess"}
+    node2_dict = {"name": "Node-US-02", "server": "192.0.2.2", "port": 8388, "type": "ss"}
+    k1 = canonical_node_key(node1_dict)
+    k2 = canonical_node_key(node2_dict)
+
     async for db in get_db():
         # Clean up existing rows
+        await db.execute(delete(Subscription))
         await db.execute(delete(NodeProbeResult))
+        await db.commit()
+
+        sub = Subscription(
+            name="sub-test-route",
+            url="https://example.com/sub",
+            enabled=True,
+            raw_nodes=[node1_dict, node2_dict],
+        )
+        db.add(sub)
         await db.commit()
 
         # Insert test records
         nodes = [
             NodeProbeResult(
-                node_key="node:001:jp",
+                node_key=k1,
                 name="Node-Japan-01",
                 server="192.0.2.1",
                 port=443,
@@ -105,7 +122,7 @@ async def test_probe_results_envelope_and_summary_projection():
                 checked_at=1788500000,
             ),
             NodeProbeResult(
-                node_key="node:002:us",
+                node_key=k2,
                 name="Node-US-02",
                 server="192.0.2.2",
                 port=8388,
@@ -140,14 +157,14 @@ async def test_probe_results_envelope_and_summary_projection():
         assert data["next_cursor"] is None
 
         # Verify keyed ONLY by node_key, no name aliases
-        assert "node:001:jp" in data["results"]
-        assert "node:002:us" in data["results"]
+        assert k1 in data["results"]
+        assert k2 in data["results"]
         assert "Node-Japan-01" not in data["results"]
         assert "Node-US-02" not in data["results"]
 
-        allowed_summary_keys = {"status", "latency_ms", "speed_mbps", "country", "ip", "media"}
+        allowed_summary_keys = {"node_key", "name", "status", "latency_ms", "speed_mbps", "country", "ip", "media"}
         forbidden_keys = {
-            "name", "server", "port", "type", "asn", "organization",
+            "server", "port", "type", "asn", "organization",
             "error", "checked_at", "identity_evidence", "identity_confidence",
             "diagnostics", "evidence", "password", "uuid"
         }
@@ -163,7 +180,7 @@ async def test_probe_results_envelope_and_summary_projection():
                 assert isinstance(m_v, bool), f"Media value for {m_k} must be bool, got {type(m_v)}"
 
         # Verify media unlock predicates
-        jp_media = data["results"]["node:001:jp"]["media"]
+        jp_media = data["results"][k1]["media"]
         assert jp_media.get("youtube") is True
         assert jp_media.get("netflix") is True
         assert jp_media.get("disney") is False
@@ -174,14 +191,30 @@ async def test_probe_results_envelope_and_summary_projection():
 @pytest.mark.asyncio
 async def test_probe_results_pagination_limits_and_budget():
     """1.1 Verify pagination parameters, limit validation (422), cursor continuation, and 50KB ceiling."""
+    raw_nodes = [
+        {"name": f"Node-{i:03d}", "server": f"192.0.2.{i}", "port": 443, "type": "ss"}
+        for i in range(10)
+    ]
+    keys = [canonical_node_key(n) for n in raw_nodes]
+
     async for db in get_db():
+        await db.execute(delete(Subscription))
         await db.execute(delete(NodeProbeResult))
+        await db.commit()
+
+        sub = Subscription(
+            name="sub-pag-test",
+            url="https://example.com/sub",
+            enabled=True,
+            raw_nodes=raw_nodes,
+        )
+        db.add(sub)
         await db.commit()
 
         # Insert 10 ordered records
         nodes = [
             NodeProbeResult(
-                node_key=f"node:{i:03d}",
+                node_key=keys[i],
                 name=f"Node-{i:03d}",
                 server=f"192.0.2.{i}",
                 port=443,
@@ -216,8 +249,8 @@ async def test_probe_results_pagination_limits_and_budget():
         p1 = res_p1.json()
         assert len(p1["results"]) == 4
         assert p1["has_more"] is True
-        assert p1["next_cursor"] == "node:003"
-        assert list(p1["results"].keys()) == [f"node:{i:03d}" for i in range(4)]
+        assert p1["next_cursor"] == keys[3]
+        assert list(p1["results"].keys()) == keys[0:4]
 
         # Page 2 with cursor
         res_p2 = await ac.get(f"/api/probe/results?limit=4&cursor={p1['next_cursor']}")
@@ -225,8 +258,8 @@ async def test_probe_results_pagination_limits_and_budget():
         p2 = res_p2.json()
         assert len(p2["results"]) == 4
         assert p2["has_more"] is True
-        assert p2["next_cursor"] == "node:007"
-        assert list(p2["results"].keys()) == [f"node:{i:03d}" for i in range(4, 8)]
+        assert p2["next_cursor"] == keys[7]
+        assert list(p2["results"].keys()) == keys[4:8]
 
         # Page 3 (final)
         res_p3 = await ac.get(f"/api/probe/results?limit=4&cursor={p2['next_cursor']}")
@@ -235,20 +268,41 @@ async def test_probe_results_pagination_limits_and_budget():
         assert len(p3["results"]) == 2
         assert p3["has_more"] is False
         assert p3["next_cursor"] is None
-        assert list(p3["results"].keys()) == ["node:008", "node:009"]
+        assert list(p3["results"].keys()) == keys[8:10]
 
 
 @pytest.mark.asyncio
 async def test_probe_results_byte_budget_enforcement():
     """1.1 Verify serialized UTF-8 payload never exceeds 51,200 bytes even with many nodes."""
+    raw_nodes = [
+        {
+            "name": f"Node-Budget-{i:04d}",
+            "server": "203.0.113.100",
+            "port": 8080,
+            "type": "vmess",
+        }
+        for i in range(300)
+    ]
+    keys = [canonical_node_key(n) for n in raw_nodes]
+
     async for db in get_db():
+        await db.execute(delete(Subscription))
         await db.execute(delete(NodeProbeResult))
+        await db.commit()
+
+        sub = Subscription(
+            name="sub-budget-test",
+            url="https://example.com/sub",
+            enabled=True,
+            raw_nodes=raw_nodes,
+        )
+        db.add(sub)
         await db.commit()
 
         # Insert 300 nodes to test byte capping
         nodes = [
             NodeProbeResult(
-                node_key=f"node:deep:budget:key:testing:prefix:length:{i:04d}",
+                node_key=keys[i],
                 name=f"Node-Budget-{i:04d}",
                 server="203.0.113.100",
                 port=8080,

@@ -1,20 +1,16 @@
 <template>
   <section class="space-y-6">
     <!-- Top Header -->
-    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pb-4 border-b border-white/10">
+    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pb-4 border-b border-border-subtle">
       <div>
-        <p class="text-xs font-mono text-blue-400 uppercase tracking-wider">Profile Compiler & Subscriptions</p>
-        <h2 class="text-xl font-bold text-white tracking-tight">生成与订阅地址</h2>
-        <p class="text-xs text-slate-400 mt-1">
-          保存模块开关后，短链接 <code class="text-blue-400">/yaml</code> 会按当前配置实时编译分发。
+        <p class="text-xs font-mono text-accent uppercase tracking-wider">Profile Compiler & Subscriptions</p>
+        <h2 class="text-xl font-bold text-text-main tracking-tight">生成与订阅地址</h2>
+        <p class="text-xs text-text-muted mt-1">
+          保存模块开关后，短链接 <code class="text-accent">/yaml</code> 会按当前配置实时编译分发。
         </p>
       </div>
-      <label class="inline-flex items-center gap-2.5 min-h-[44px] px-3.5 py-2 rounded-lg border border-white/10 bg-slate-900/60 text-xs font-medium text-white cursor-pointer select-none">
-        <input
-          v-model="switches.enabled"
-          type="checkbox"
-          class="rounded border-white/20 bg-slate-900 text-blue-500 focus:ring-0 cursor-pointer"
-        />
+      <label class="inline-flex items-center gap-2.5 min-h-[44px] px-3.5 py-2 rounded-lg border border-border-subtle bg-surface-base text-xs font-medium text-text-main cursor-pointer select-none">
+        <Checkbox v-model="switches.enabled" />
         <span>生成总开关</span>
       </label>
     </div>
@@ -38,7 +34,7 @@
           <p class="text-xs text-slate-400 mt-0.5">支持 5 大客户端格式与 Scheme 协议自动分发。</p>
         </div>
         <div class="grid grid-cols-2 gap-1 rounded-lg bg-slate-950/60 p-1 border border-white/5 text-xs">
-          <button
+          <Button
             type="button"
             :class="[
               'px-3 py-1.5 rounded-md font-medium transition-colors cursor-pointer',
@@ -47,8 +43,8 @@
             @click="exportMode = 'merged'"
           >
             合并配置
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
             :class="[
               'px-3 py-1.5 rounded-md font-medium transition-colors cursor-pointer',
@@ -57,26 +53,26 @@
             @click="exportMode = 'subscription'"
           >
             单订阅导出
-          </button>
+          </Button>
         </div>
       </div>
 
       <!-- Single Subscription Select if exportMode === 'subscription' -->
       <div v-if="exportMode === 'subscription'" class="space-y-1.5 p-3 rounded-lg bg-slate-950/40 border border-white/5">
         <label class="text-xs font-mono text-slate-400">选择单订阅数据源</label>
-        <select
+        <Select
           v-model="selectedExportSubId"
           class="w-full min-h-[44px] rounded-lg border border-white/10 bg-slate-950/60 px-3.5 py-2 text-xs text-white font-mono focus:border-blue-500 focus:outline-hidden cursor-pointer"
         >
           <option v-for="sub in subscriptions" :key="sub.id" :value="sub.id">
             {{ sub.name }} (ID: {{ sub.id }})
           </option>
-        </select>
+        </Select>
       </div>
 
       <!-- 5 Target Selector Tabs -->
       <div class="grid grid-cols-5 gap-1.5 rounded-lg bg-slate-950/60 p-1.5 border border-white/5">
-        <button
+        <Button
           v-for="t in TARGET_DEFS"
           :key="t.key"
           type="button"
@@ -90,7 +86,7 @@
         >
           <span class="font-semibold">{{ t.name }}</span>
           <span class="text-[10px] font-mono opacity-70">{{ t.format }}</span>
-        </button>
+        </Button>
       </div>
 
       <!-- Target Description & Badge -->
@@ -102,18 +98,18 @@
       <!-- Export URL Row -->
       <div class="space-y-1.5">
         <div class="flex items-center gap-2">
-          <input
+          <Input
             :value="currentExportUrl"
             readonly
             class="flex-1 min-h-[44px] rounded-lg border border-white/10 bg-slate-950/80 px-3.5 py-2 text-xs font-mono text-slate-200 select-all focus:border-blue-500 focus:outline-hidden"
           />
-          <button
+          <Button
             type="button"
             class="min-h-[44px] px-4 py-2 rounded-lg border border-blue-500/40 bg-blue-600/20 text-xs font-medium text-blue-400 hover:bg-blue-600/30 transition-colors cursor-pointer whitespace-nowrap"
             @click="copy(currentExportUrl)"
           >
             复制链接
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -197,7 +193,7 @@
           <!-- Module Switches Grid (Min-h 44px Touch Targets) -->
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
             <label class="flex min-h-[44px] items-center gap-2.5 px-3 py-2 rounded-lg border border-white/10 bg-slate-950/60 text-xs text-slate-300 cursor-pointer select-none hover:bg-slate-900 transition-colors">
-              <input
+              <Checkbox
                 v-model="switches.subscriptions"
                 type="checkbox"
                 :disabled="!switches.enabled"
@@ -206,7 +202,7 @@
               <span>订阅节点</span>
             </label>
             <label class="flex min-h-[44px] items-center gap-2.5 px-3 py-2 rounded-lg border border-white/10 bg-slate-950/60 text-xs text-slate-300 cursor-pointer select-none hover:bg-slate-900 transition-colors">
-              <input
+              <Checkbox
                 v-model="switches.node_groups"
                 type="checkbox"
                 :disabled="!switches.enabled"
@@ -215,7 +211,7 @@
               <span>节点组</span>
             </label>
             <label class="flex min-h-[44px] items-center gap-2.5 px-3 py-2 rounded-lg border border-white/10 bg-slate-950/60 text-xs text-slate-300 cursor-pointer select-none hover:bg-slate-900 transition-colors">
-              <input
+              <Checkbox
                 v-model="switches.rules"
                 type="checkbox"
                 :disabled="!switches.enabled"
@@ -224,7 +220,7 @@
               <span>分流规则</span>
             </label>
             <label class="flex min-h-[44px] items-center gap-2.5 px-3 py-2 rounded-lg border border-white/10 bg-slate-950/60 text-xs text-slate-300 cursor-pointer select-none hover:bg-slate-900 transition-colors">
-              <input
+              <Checkbox
                 v-model="switches.dns"
                 type="checkbox"
                 :disabled="!switches.enabled"
@@ -235,7 +231,7 @@
           </div>
 
           <!-- Build Button -->
-          <button
+          <Button
             class="w-full min-h-[44px] inline-flex items-center justify-center gap-2 rounded-lg border border-blue-500/40 bg-blue-600 px-4 py-2.5 text-xs font-semibold text-white shadow-md hover:bg-blue-500 transition-colors cursor-pointer disabled:opacity-50"
             data-testid="generate-yaml"
             :disabled="!!working"
@@ -243,7 +239,7 @@
           >
             <Play :size="14" aria-hidden="true" />
             {{ working === 'yaml' ? '正在编译生成 YAML…' : '立即生成 YAML' }}
-          </button>
+          </Button>
 
           <!-- Samples hint if present -->
           <div v-if="yamlStats?.dialer_samples?.length" class="text-[11px] font-mono text-slate-400 bg-slate-950/40 rounded-lg p-2.5 border border-white/5 space-y-1">
@@ -263,7 +259,7 @@
 
           <div class="space-y-1.5">
             <label class="text-xs font-mono text-slate-400">选择目标订阅</label>
-            <select
+            <Select
               v-model="selectedSubscriptionId"
               class="w-full min-h-[44px] rounded-lg border border-white/10 bg-slate-950/60 px-3.5 py-2 text-xs text-white font-mono focus:border-blue-500 focus:outline-hidden cursor-pointer"
             >
@@ -271,24 +267,24 @@
               <option v-for="sub in subscriptions" :key="sub.id" :value="sub.id">
                 {{ sub.name }}
               </option>
-            </select>
+            </Select>
           </div>
 
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-            <button
+            <Button
               class="min-h-[44px] inline-flex items-center justify-center rounded-lg border border-blue-500/40 bg-blue-600/20 px-3.5 py-2 text-xs font-medium text-blue-400 hover:bg-blue-600/30 transition-colors cursor-pointer disabled:opacity-50"
               :disabled="!selectedSubscriptionId || working === 'subscription'"
               @click="buildSubscription"
             >
               {{ working === 'subscription' ? '生成中…' : '生成单独订阅' }}
-            </button>
-            <button
+            </Button>
+            <Button
               class="min-h-[44px] inline-flex items-center justify-center rounded-lg border border-white/10 bg-slate-800/40 px-3.5 py-2 text-xs font-medium text-slate-300 hover:bg-slate-800 transition-colors cursor-pointer disabled:opacity-50"
               :disabled="!subscriptionResult"
               @click="download(subscriptionResult, 'subscription.yaml', 'text/yaml')"
             >
               下载单独订阅
-            </button>
+            </Button>
           </div>
         </div>
       </aside>
@@ -329,20 +325,20 @@
           <div class="flex items-center justify-between pb-3 border-b border-white/5">
             <strong class="text-sm font-semibold text-white">YAML 预览</strong>
             <div class="flex items-center gap-2">
-              <button
+              <Button
                 class="min-h-[44px] px-3.5 py-1.5 rounded-lg border border-white/10 bg-slate-800/40 text-xs font-medium text-slate-300 hover:bg-slate-800 transition-colors cursor-pointer"
                 :disabled="!yamlResult"
                 @click="copy(yamlResult)"
               >
                 复制
-              </button>
-              <button
+              </Button>
+              <Button
                 class="min-h-[44px] px-3.5 py-1.5 rounded-lg border border-blue-500/40 bg-blue-600/20 text-xs font-medium text-blue-400 hover:bg-blue-600/30 transition-colors cursor-pointer"
                 :disabled="!yamlResult"
                 @click="download(yamlResult, 'generated-config.yaml', 'text/yaml')"
               >
                 下载
-              </button>
+              </Button>
             </div>
           </div>
           <textarea
@@ -358,18 +354,18 @@
           <div class="flex items-center justify-between pb-3 border-b border-white/5">
             <strong class="text-sm font-semibold text-white">单独订阅内容</strong>
             <div class="flex items-center gap-2">
-              <button
+              <Button
                 class="min-h-[44px] px-3.5 py-1.5 rounded-lg border border-white/10 bg-slate-800/40 text-xs font-medium text-slate-300 hover:bg-slate-800 transition-colors cursor-pointer"
                 @click="copy(subscriptionResult)"
               >
                 复制
-              </button>
-              <button
+              </Button>
+              <Button
                 class="min-h-[44px] px-3.5 py-1.5 rounded-lg border border-blue-500/40 bg-blue-600/20 text-xs font-medium text-blue-400 hover:bg-blue-600/30 transition-colors cursor-pointer"
                 @click="download(subscriptionResult, 'subscription.yaml', 'text/yaml')"
               >
                 下载
-              </button>
+              </Button>
             </div>
           </div>
           <textarea
@@ -385,6 +381,7 @@
 <script setup>
 import { computed, defineComponent, h, onMounted, reactive, ref, watch } from 'vue'
 import { Play } from 'lucide-vue-next'
+import { Button, Checkbox, Select, Input } from '../components/ui'
 import { useAppStore } from '../stores/app'
 import { getAuthToken, withAuthToken } from '../auth'
 import QrCode from '../components/QrCode.vue'
@@ -409,16 +406,16 @@ const LinkRow = defineComponent({
     return () =>
       h('div', { class: 'flex items-center gap-2' }, [
         h('span', { class: 'text-xs font-mono font-semibold text-slate-400 w-12' }, props.label),
-        h('input', {
-          value: props.value,
+        h(Input, {
+          modelValue: props.value,
           readonly: true,
           class: 'flex-1 min-h-[44px] rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2 text-xs font-mono text-white truncate focus:outline-hidden',
         }),
         h(
-          'button',
+          Button,
           {
             onClick: () => emit('copy', props.value),
-            class: 'min-h-[44px] px-3.5 py-2 rounded-lg border border-blue-500/40 bg-blue-600/20 text-xs font-medium text-blue-400 hover:bg-blue-600/30 transition-colors cursor-pointer whitespace-nowrap',
+            class: 'whitespace-nowrap',
           },
           '复制'
         ),

@@ -10,6 +10,7 @@ from app.models.node_group import NodeGroup
 from app.models.proxy_chain import ProxyChainBinding
 from app.models.subscription import Subscription
 from app.schemas.proxy_chain import ProxyChainBindingCreate, ProxyChainBindingUpdate
+from app.services.node_identity import canonical_node_key
 from app.utils.group_utils import resolve_group_members
 
 FORBIDDEN_DIALERS = frozenset({"DIRECT", "REJECT", "PASS"})
@@ -182,12 +183,16 @@ async def list_final_nodes(db: AsyncSession) -> list[dict[str, Any]]:
             if not isinstance(node, dict):
                 continue
             name = str(node.get("name") or "").strip()
-            if not name or name in seen:
+            if not name:
                 continue
-            seen.add(name)
+            node_key = canonical_node_key(node)
+            if node_key in seen:
+                continue
+            seen.add(node_key)
             out.append(
                 {
                     "name": name,
+                    "node_key": node_key,
                     "subscription_id": sub.id,
                     "subscription_name": sub.name,
                     **_node_meta(node),
@@ -246,6 +251,7 @@ async def list_node_ledger(db: AsyncSession) -> list[dict[str, Any]]:
         out.append(
             {
                 **item,
+                "node_key": item["node_key"],
                 "dialer_proxy": dialer,
                 "chain_source": source_by_name.get(name) if dialer else None,
                 "group_names": groups_by_node.get(name, []),

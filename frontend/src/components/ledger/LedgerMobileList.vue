@@ -3,10 +3,10 @@
     <!-- Paged Cards List -->
     <div
       v-for="item in pagedItems"
-      :key="item.name"
+      :key="item.node_key"
       class="flex flex-col gap-2 p-3 rounded-lg border bg-surface-base transition-colors cursor-pointer w-full min-w-0 max-w-full overflow-hidden"
       :class="[
-        isSelected(item.name)
+        isSelected(item.node_key)
           ? 'border-accent bg-accent-subtle/30 ring-1 ring-accent/30'
           : 'border-border-subtle hover:border-border-strong hover:bg-surface-hover/60'
       ]"
@@ -23,9 +23,9 @@
         >
           <input
             type="checkbox"
-            :checked="isSelected(item.name)"
+            :checked="isSelected(item.node_key)"
             class="h-4 w-4 rounded-sm border-border-strong bg-canvas text-accent focus:ring-0 cursor-pointer"
-            @change="emit('toggleSelect', item.name)"
+            @change="emit('toggleSelect', item.node_key || '')"
           />
         </label>
 
@@ -81,36 +81,17 @@
         <!-- Status / Latency / Speed -->
         <div class="flex items-center gap-2 text-xs font-mono min-w-0 flex-1 flex-wrap">
           <span
-            v-if="getProbe(item)?.status === 'ok'"
-            class="text-status-success font-semibold tabular-nums flex items-center gap-1"
+            :class="getProbePresentation(item, probes).status === 'ok' ? 'text-status-success font-semibold tabular-nums flex items-center gap-1' : getProbePresentation(item, probes).status === 'fail' ? 'text-status-danger font-medium flex items-center gap-1' : getProbePresentation(item, probes).status === 'timeout' ? 'text-status-warning font-medium flex items-center gap-1' : 'text-text-sub flex items-center gap-1'"
           >
-            <span class="h-1.5 w-1.5 rounded-full bg-status-success inline-block"></span>
-            {{ getProbe(item)?.latency_ms }}ms
-          </span>
-          <span
-            v-else-if="getProbe(item)?.status === 'fail'"
-            class="text-status-danger font-medium flex items-center gap-1"
-          >
-            <span class="h-1.5 w-1.5 rounded-full bg-status-danger inline-block"></span>
-            失败
-          </span>
-          <span
-            v-else-if="getProbe(item)?.status === 'timeout'"
-            class="text-status-warning font-medium flex items-center gap-1"
-          >
-            <span class="h-1.5 w-1.5 rounded-full bg-status-warning inline-block"></span>
-            超时
-          </span>
-          <span v-else class="text-text-sub flex items-center gap-1">
             <span class="h-1.5 w-1.5 rounded-full bg-surface-active inline-block"></span>
-            未测
+            {{ getProbePresentation(item, probes).latency_ms ?? getProbePresentation(item, probes).label }}
           </span>
 
           <span
-            v-if="getProbe(item)?.speed_mbps"
+            v-if="getProbePresentation(item, probes).speedMbps"
             class="text-status-info font-semibold tabular-nums text-[11px]"
           >
-            {{ getProbe(item)?.speed_mbps }}M
+            {{ getProbePresentation(item, probes).speedMbps }}M
           </span>
         </div>
 
@@ -127,11 +108,11 @@
           <button
             type="button"
             class="min-h-[44px] min-w-[44px] px-3 py-2 rounded-md border border-accent/40 bg-accent-subtle text-accent hover:bg-accent/20 text-xs font-mono font-medium flex items-center justify-center gap-1 cursor-pointer transition-colors disabled:opacity-50"
-            :disabled="probingSingleKey === item.name"
+            :disabled="probingSingleKey === item.node_key"
             @click.stop="emit('probeSingle', item)"
             aria-label="测试节点"
           >
-            <Zap class="h-3.5 w-3.5" :class="{ 'animate-spin': probingSingleKey === item.name }" aria-hidden="true" />
+            <Zap class="h-3.5 w-3.5" :class="{ 'animate-spin': probingSingleKey === item.node_key }" aria-hidden="true" />
             <span>测速</span>
           </button>
         </div>
@@ -172,6 +153,7 @@ import {
   type LedgerNodeItem,
   type ProbeRecord,
   getProbeForNode,
+  getProbePresentation,
   resolveNodeCountryCode,
   MEDIA_PLATFORMS,
   getMediaSemanticPresentation,
@@ -180,13 +162,13 @@ import {
 const props = withDefaults(
   defineProps<{
     items: LedgerNodeItem[]
-    selectedNames?: Set<string>
+    selectedKeys?: Set<string>
     probes?: Record<string, ProbeRecord>
     probingSingleKey?: string | null
     pageSize?: number
   }>(),
   {
-    selectedNames: () => new Set<string>(),
+    selectedKeys: () => new Set<string>(),
     probes: () => ({}),
     probingSingleKey: null,
     pageSize: 50,
@@ -194,7 +176,7 @@ const props = withDefaults(
 )
 
 const emit = defineEmits<{
-  (e: 'toggleSelect', nodeName: string): void
+  (e: 'toggleSelect', nodeKey: string): void
   (e: 'inspect', node: LedgerNodeItem): void
   (e: 'probeSingle', node: LedgerNodeItem): void
 }>()
@@ -217,8 +199,8 @@ const pagedItems = computed(() => {
   return props.items.slice(start, start + props.pageSize)
 })
 
-function isSelected(name: string): boolean {
-  return props.selectedNames?.has(name) ?? false
+function isSelected(nodeKey?: string): boolean {
+  return nodeKey ? (props.selectedKeys?.has(nodeKey) ?? false) : false
 }
 
 function getProbe(node: LedgerNodeItem): ProbeRecord | undefined {

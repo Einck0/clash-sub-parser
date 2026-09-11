@@ -110,12 +110,12 @@
       :media-stats="mediaStats"
       :total-count="rows.length"
       :filtered-count="filteredRows.length"
-      :selected-count="selectedNodeNames.size"
+      :selected-count="selectedNodeKeys.size"
       :untested-or-failed-count="untestedOrFailedCount"
       :probing="probing"
       @change-view="viewMode = $event"
       @probe-selected="probeSelectedNodes"
-      @clear-selection="selectedNodeNames.clear()"
+      @clear-selection="selectedNodeKeys.clear()"
       @probe-untested="probeUntestedOrFailed"
       @clear-probe-data="clearProbeData"
       @reset-filters="resetFilters"
@@ -144,8 +144,8 @@
           />
           <span>全选当前筛选节点 (<span class="tabular-nums">{{ filteredRows.length }}</span>)</span>
         </label>
-        <span v-if="selectedNodeNames.size > 0" class="text-accent">
-          已跨视口选中 <span class="tabular-nums font-semibold">{{ selectedNodeNames.size }}</span> 个节点
+        <span v-if="selectedNodeKeys.size > 0" class="text-accent">
+          已跨视口选中 <span class="tabular-nums font-semibold">{{ selectedNodeKeys.size }}</span> 个节点
         </span>
       </div>
 
@@ -190,7 +190,7 @@
       <div class="block sm:hidden" data-testid="node-ledger-mobile-container">
         <LedgerMobileList
           :items="filteredRows"
-          :selected-names="selectedNodeNames"
+          :selected-keys="selectedNodeKeys"
           :probes="probes"
           :probing-single-key="probingSingleNodeKey"
           @toggle-select="toggleSelectNode"
@@ -225,7 +225,8 @@
           <VirtualNodeTable
             :items="filteredRows"
             :estimate-size="36"
-            :selected-keys="selectedNodeNames"
+            :selected-keys="selectedNodeKeys"
+            key-field="node_key"
             class="border-t-0 rounded-t-none"
           >
             <template #default="{ item, isSelected }">
@@ -239,7 +240,7 @@
                     type="checkbox"
                     :checked="isSelected"
                     class="rounded-sm border-border-strong bg-canvas text-accent focus:ring-0 cursor-pointer shrink-0"
-                    @click.stop="toggleSelectNode(item.name)"
+                    @click.stop="toggleSelectNode(item.node_key || '')"
                   />
                   <span class="px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-surface-active text-text-muted border border-border-subtle shrink-0 tabular-nums">
                     {{ resolveCountryCode(item) }}
@@ -265,43 +266,39 @@
                 <!-- Dialer Chain Badge (Large Desktop) -->
                 <div class="hidden lg:flex items-center gap-2 flex-1 min-w-0">
                   <span
-                    v-if="item.dialer_proxy"
-                    class="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-mono border"
-                    :class="item.chain_source === 'node' ? 'border-accent/30 bg-accent-subtle text-accent' : 'border-purple-500/30 bg-purple-500/10 text-purple-400'"
+                    v-if="isDuplicateName(item)"
+                    class="text-status-warning text-[10px] font-medium"
+                    :title="'名称重复，暂不能安全编辑跳板'"
+                  >
+                    名称重复，暂不能安全编辑跳板
+                  </span>
+                  <span
+                    v-else-if="item.dialer_proxy"
+                    class="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-mono border border-accent/30 bg-accent-subtle text-accent"
                   >
                     链: {{ item.dialer_proxy }}
+                  </span>
+                  <span
+                    v-else
+                    class="text-text-sub"
+                  >
+                    直连
                   </span>
                 </div>
 
                 <!-- Probe Metrics & Quick Actions -->
                 <div class="flex items-center justify-end gap-3 font-mono text-xs shrink-0">
                   <span
-                    v-if="getProbe(item.name)?.status === 'ok'"
-                    class="text-status-success font-semibold tabular-nums"
+                    :class="getProbePresentation(item, probes).status === 'ok' ? 'text-status-success font-semibold tabular-nums' : getProbePresentation(item, probes).status === 'fail' ? 'text-status-danger font-medium' : getProbePresentation(item, probes).status === 'timeout' ? 'text-status-warning font-medium' : 'text-text-sub'"
                   >
-                    {{ getProbe(item.name)?.latency_ms }}ms
-                  </span>
-                  <span
-                    v-else-if="getProbe(item.name)?.status === 'fail'"
-                    class="text-status-danger font-medium"
-                  >
-                    失败
-                  </span>
-                  <span
-                    v-else-if="getProbe(item.name)?.status === 'timeout'"
-                    class="text-status-warning font-medium"
-                  >
-                    超时
-                  </span>
-                  <span v-else class="text-text-sub">
-                    未测
+                    {{ getProbePresentation(item, probes).label }}
                   </span>
 
                   <span
-                    v-if="getProbe(item.name)?.speed_mbps"
+                    v-if="getProbePresentation(item, probes).speedMbps"
                     class="text-status-info hidden sm:inline font-semibold tabular-nums"
                   >
-                    {{ getProbe(item.name)?.speed_mbps }}M
+                    {{ getProbePresentation(item, probes).speedMbps }}M
                   </span>
 
                   <IconButton
@@ -309,7 +306,7 @@
                     label="单节点测速"
                     size="sm"
                     variant="ghost"
-                    :loading="probingSingleNodeKey === item.name"
+                    :loading="probingSingleNodeKey === item.node_key"
                     @click.stop="handleProbeSingle(item)"
                   />
                 </div>
@@ -322,10 +319,10 @@
         <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           <div
             v-for="item in pagedGridRows"
-            :key="item.name"
+            :key="item.node_key"
             class="flex flex-col justify-between p-4 rounded-lg border bg-surface-base transition-colors cursor-pointer space-y-3"
             :class="[
-              selectedNodeNames.has(item.name)
+              selectedNodeKeys.has(item.node_key || '')
                 ? 'border-accent bg-accent-subtle ring-1 ring-accent/30'
                 : 'border-border-subtle hover:border-border-strong hover:bg-surface-hover'
             ]"
@@ -336,9 +333,9 @@
               <div class="flex items-center gap-2 min-w-0 flex-1">
                 <input
                   type="checkbox"
-                  :checked="selectedNodeNames.has(item.name)"
+                  :checked="selectedNodeKeys.has(item.node_key || '')"
                   class="rounded-sm border-border-strong bg-canvas text-accent focus:ring-0 cursor-pointer shrink-0"
-                  @click.stop="toggleSelectNode(item.name)"
+                  @click.stop="toggleSelectNode(item.node_key || '')"
                 />
                 <span class="px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-surface-active text-text-muted border border-border-subtle shrink-0 tabular-nums">
                   {{ resolveCountryCode(item) }}
@@ -361,15 +358,12 @@
 
             <!-- Probe Metrics Strip -->
             <div class="flex items-center justify-between pt-2 border-t border-border-subtle text-xs font-mono">
-              <span v-if="getProbe(item.name)?.status === 'ok'" class="text-status-success font-semibold tabular-nums">
-                {{ getProbe(item.name)?.latency_ms }}ms
+              <span :class="getProbePresentation(item, probes).status === 'ok' ? 'text-status-success font-semibold tabular-nums' : getProbePresentation(item, probes).status === 'fail' ? 'text-status-danger' : getProbePresentation(item, probes).status === 'timeout' ? 'text-status-warning' : 'text-text-sub'">
+                {{ getProbePresentation(item, probes).label }}
               </span>
-              <span v-else-if="getProbe(item.name)?.status === 'fail'" class="text-status-danger">失败</span>
-              <span v-else-if="getProbe(item.name)?.status === 'timeout'" class="text-status-warning">超时</span>
-              <span v-else class="text-text-sub">未测</span>
 
-              <span v-if="getProbe(item.name)?.speed_mbps" class="text-status-info font-semibold tabular-nums">
-                {{ getProbe(item.name)?.speed_mbps }} Mbps
+              <span v-if="getProbePresentation(item, probes).speedMbps" class="text-status-info font-semibold tabular-nums">
+                {{ getProbePresentation(item, probes).speedMbps }} Mbps
               </span>
             </div>
 
@@ -387,8 +381,8 @@
                 variant="primary"
                 size="sm"
                 class="flex-1"
-                :disabled="probingSingleNodeKey === item.name"
-                :loading="probingSingleNodeKey === item.name"
+                :disabled="probingSingleNodeKey === item.node_key"
+                :loading="probingSingleNodeKey === item.node_key"
                 :icon="Zap"
                 @click.stop="handleProbeSingle(item)"
               >
@@ -409,8 +403,9 @@
       :detail-status="drawerDetailStatus"
       :node-candidates="rows"
       :group-candidates="nodeGroups"
-      :probing-single="selectedNode ? probingSingleNodeKey === selectedNode.name : false"
+      :probing-single="selectedNode ? probingSingleNodeKey === selectedNode.node_key : false"
       :saving-chain="savingChain"
+      :chain-edit-eligibility="selectedNode ? checkNodeChainActionEligibility(selectedNode, rows) : { canEdit: false }"
       :clearing-chain="clearingChain"
       @close="drawerOpen = false"
       @retry-detail="() => loadNodeDetail(selectedNode)"
@@ -462,9 +457,14 @@ import {
   createDefaultFacetFilterState,
   filterAndSortNodes,
   getProbeForNode,
+  getProbePresentation,
+  checkNodeChainActionEligibility,
   isMediaFullUnlocked,
   MEDIA_PLATFORMS,
   mergeNodeLedgerProbePages,
+  normalizeImmediateProbeResponse,
+  normalizeKeyedProbeResponse,
+  normalizeNodeLedgerItems,
   normalizeNodeLedgerMap,
   replaceNodeDialerProxy,
   resolveNodeCountryCode,
@@ -503,7 +503,7 @@ let detailAbortController: AbortController | null = null
 let pagedProbeAbortController: AbortController | null = null
 const probeLoadingMore = ref(false)
 
-const selectedNodeNames = reactive<Set<string>>(new Set())
+const selectedNodeKeys = reactive<Set<string>>(new Set())
 
 const includeSpeedtest = ref(false)
 const includeMediaCheck = ref(true)
@@ -551,7 +551,7 @@ const mediaStats = computed(() => {
 const filteredRows = computed(() => filterAndSortNodes(rows.value, probes.value, filters.value))
 
 const effectiveBatchTargets = computed(() =>
-  buildEffectiveBatchTargets(filteredRows.value, selectedNodeNames, rows.value)
+  buildEffectiveBatchTargets(filteredRows.value, selectedNodeKeys, rows.value)
 )
 
 const totalGridPages = computed(() => Math.max(1, Math.ceil(filteredRows.value.length / gridPageSize)))
@@ -562,7 +562,7 @@ const pagedGridRows = computed(() => {
 
 const isAllFilteredSelected = computed(() => {
   if (!filteredRows.value.length) return false
-  return filteredRows.value.every((r) => selectedNodeNames.has(r.name))
+  return filteredRows.value.every((r) => selectedNodeKeys.has(r.node_key || ''))
 })
 
 const healthyCount = computed(() => {
@@ -620,8 +620,8 @@ watch(
   { deep: true }
 )
 
-function getProbe(name: string): ProbeRecord | undefined {
-  return probes.value[name]
+function isDuplicateName(node: LedgerNodeItem): boolean {
+  return rows.value.filter(candidate => candidate.name === node.name).length > 1
 }
 
 function resolveCountryCode(node: LedgerNodeItem): string {
@@ -630,22 +630,23 @@ function resolveCountryCode(node: LedgerNodeItem): string {
   return code === 'OTHER' ? '--' : code
 }
 
-function toggleSelectNode(name: string) {
-  if (selectedNodeNames.has(name)) {
-    selectedNodeNames.delete(name)
+function toggleSelectNode(nodeKey: string) {
+  if (!nodeKey) return
+  if (selectedNodeKeys.has(nodeKey)) {
+    selectedNodeKeys.delete(nodeKey)
   } else {
-    selectedNodeNames.add(name)
+    selectedNodeKeys.add(nodeKey)
   }
 }
 
 function toggleSelectAllFiltered() {
   if (isAllFilteredSelected.value) {
     for (const r of filteredRows.value) {
-      selectedNodeNames.delete(r.name)
+      selectedNodeKeys.delete(r.node_key || '')
     }
   } else {
     for (const r of filteredRows.value) {
-      selectedNodeNames.add(r.name)
+      selectedNodeKeys.add(r.node_key || '')
     }
   }
 }
@@ -656,7 +657,7 @@ function handleMetricFilter(type: 'all' | 'healthy' | 'fast' | 'chained') {
 
 function resetFilters() {
   filters.value = createDefaultFacetFilterState()
-  selectedNodeNames.clear()
+  selectedNodeKeys.clear()
 }
 
 async function loadNodeDetail(node: LedgerNodeItem | null) {
@@ -684,13 +685,14 @@ async function loadNodeDetail(node: LedgerNodeItem | null) {
 
   try {
     const res = await getProbeResultDetail(requestedKey, { signal: detailAbortController.signal })
+    const detail = normalizeKeyedProbeResponse(res?.data, requestedKey)
     if (selectedNode.value?.node_key === requestedKey) {
-      if (res?.data) {
-        drawerDetailProbe.value = res.data
+      if (detail) {
+        drawerDetailProbe.value = detail
         drawerDetailStatus.value = 'ready'
         probes.value = {
           ...probes.value,
-          [requestedKey]: res.data,
+          [requestedKey]: detail,
         }
       } else {
         drawerDetailStatus.value = 'unavailable'
@@ -777,7 +779,7 @@ async function reload() {
       getNodeGroups(),
       getProbeResults({ limit: 100 }).catch(() => ({ data: {} })),
     ])
-    rows.value = Array.isArray(ledgerRes?.data) ? ledgerRes.data : []
+    rows.value = normalizeNodeLedgerItems(ledgerRes?.data)
     bindings.value = Array.isArray(chainsRes?.data) ? chainsRes.data : []
     nodeGroups.value = Array.isArray(groupsRes?.data) ? groupsRes.data : []
 
@@ -804,7 +806,7 @@ async function reload() {
 // Single node probe
 async function handleProbeSingle(node: LedgerNodeItem) {
   if (!node || probingSingleNodeKey.value) return
-  probingSingleNodeKey.value = node.name
+  probingSingleNodeKey.value = node.node_key || null
   error.value = ''
   try {
     const { data } = await probeNode({
@@ -813,12 +815,13 @@ async function handleProbeSingle(node: LedgerNodeItem) {
       include_media: includeMediaCheck.value,
       use_cache: false,
     })
-    if (data) {
-      if (node.name) probes.value[node.name] = data
-      if (data.node_key) probes.value[data.node_key] = data
-      probes.value = { ...probes.value }
+    const item = normalizeImmediateProbeResponse(data, node.node_key, rows.value)
+    if (item) {
+      probes.value = { ...probes.value, [item.node_key as string]: item }
+      store.toast(`节点「${node.name}」探测完成`, 'success')
+    } else {
+      store.toast('节点探测返回数据无效，未更新台账', 'error')
     }
-    store.toast(`节点「${node.name}」探测完成`, 'success')
   } catch (err) {
     store.toast(getApiErrorMessage(err, '节点探测失败'), 'error')
   } finally {
@@ -867,17 +870,17 @@ async function startProbeBatch(targetNodes: LedgerNodeItem[]) {
           },
           { signal }
         )
-        return res?.data || { name: node.name, status: 'ok' }
+        return res?.data || {}
       },
       onItemDone: (res, node, prog) => {
         probeProgress.done = prog.done
         probeProgress.ok = prog.ok
         probeProgress.fail = prog.fail
 
-        const item = res || { name: node.name, status: 'ok' }
-        if (item.name) probes.value[item.name] = item
-        if (item.node_key) probes.value[item.node_key] = item
-        probes.value = { ...probes.value }
+        const item = normalizeKeyedProbeResponse(res, node.node_key)
+        if (item) {
+          probes.value = { ...probes.value, [item.node_key as string]: item }
+        }
       },
     })
 
@@ -916,7 +919,7 @@ function cancelProbeBatch() {
 }
 
 function probeSelectedNodes() {
-  const targets = rows.value.filter((r) => selectedNodeNames.has(r.name))
+  const targets = rows.value.filter((r) => selectedNodeKeys.has(r.node_key || ''))
   startProbeBatch(targets)
 }
 
@@ -948,6 +951,12 @@ async function clearProbeData() {
 
 // Chain management
 async function handleSaveChain(payload: { nodeName: string; dialerType: string; dialerRef: string }) {
+  const target = rows.value.find(row => row.name === payload.nodeName)
+  const eligibility = checkNodeChainActionEligibility(target, rows.value)
+  if (!eligibility.canEdit) {
+    store.toast(eligibility.reason || '当前节点暂不可编辑跳板', 'error')
+    return
+  }
   savingChain.value = true
   error.value = ''
   try {

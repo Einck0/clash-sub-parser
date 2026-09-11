@@ -1,4 +1,6 @@
-# Capability: In-Memory High-Concurrency Probe Engine
+## Purpose
+
+Implements an ultra-high concurrency in-memory proxy node probing engine capable of 100 to 500 concurrent goroutines with direct memory dialing and physical egress isolation.
 
 ## ADDED Requirements
 
@@ -22,3 +24,10 @@
 #### Scenario: 基础网络可达但流媒体受到封锁
 - **WHEN** 节点的 TCP 握手正常且出口 IP 识别成功，但 Netflix 返回地域不可用（404/403/重定向）
 - **THEN** 节点的 `status` 标记为 `ok`，延迟有效，而流媒体结果中的 `netflix` 明确标记为未解锁或限制，保存结构化证据
+
+### Requirement: 运行时软内存防线与动态背压限速
+探测引擎 SHALL 在启动时配置运行时软内存上限（默认 200MB），并在活跃检测任务中监测内存压力；当检测到堆内存使用超过阈值时，自动对 Goroutine 工作池执行滑动限速与降并发保护。
+
+#### Scenario: 大并发批量检测遭遇内存高压
+- **WHEN** 在 500 并发压测下系统总内存占用接近 200MB 上限
+- **THEN** 探测引擎动态将新任务分发并发度平滑下调至安全区间，保障进程不发生 OOM 崩溃

@@ -1,4 +1,6 @@
-# Capability: Go Single Binary Control Plane
+## Purpose
+
+Delivers a unified Go single-binary control plane that embeds modernized Vue 3 web assets, serves high-performance HTTP APIs, and manages application lifecycle with graceful signal shutdown.
 
 ## ADDED Requirements
 

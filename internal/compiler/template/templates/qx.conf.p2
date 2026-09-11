@@ -1,0 +1,24 @@
+[general]
+dns_exclusion_list = *.apple.com, *.icloud.com
+server_check_url = https://cp.cloudflare.com/generate_204
+
+[dns]
+{% for ns in dns_servers %}server = {{ ns }}
+{% endfor %}
+[server_local]
+{% for node in nodes %}
+{% set line = node|qx_server %}
+{% if line %}{{ line }}
+{% endif %}{% endfor %}
+
+[policy]
+{% for g in groups %}
+{% set gline = g|qx_policy %}
+{% if gline %}{{ gline }}
+{% endif %}{% endfor %}
+
+[filter_local]
+{% for r in rules %}
+{% set rline = r|qx_rule %}
+{% if rline %}{{ rline }}
+{% endif %}{% endfor %}

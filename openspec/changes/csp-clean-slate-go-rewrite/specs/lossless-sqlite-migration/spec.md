@@ -1,4 +1,6 @@
-# Capability: Lossless SQLite Production Data Migration
+## Purpose
+
+Ensures 100% lossless migration and verification of all production SQLite data assets, including nodes, subscriptions, groups, rules, and historical probe records.
 
 ## ADDED Requirements
 

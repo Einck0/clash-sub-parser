@@ -2,7 +2,7 @@
 
 ## 1. 安全快照、对标基准与只读迁移演练准备
 
-- [ ] 1.1 对当前工作区创建安全 Git 保护分支与 Tag，封存当前的 11 个提交与 44 个未提交前端工作台成果；对生产 SQLite 卷执行冷备份至 `/home/service/clash-sub-parser/backups/clash_sub_parser_pre_go_rewrite.db`
+- [x] 1.1 对当前工作区创建安全 Git 保护分支与 Tag，封存当前的 11 个提交与 44 个未提交前端工作台成果；对生产 SQLite 卷执行冷备份至 `/home/service/clash-sub-parser/backups/clash_sub_parser_pre_go_rewrite.db`
 - [ ] 1.2 编写只读数据迁移验证工具契约（基于 `modernc.org/sqlite`），比对生产源库 7,236 节点、8 订阅、29 策略组、470 规则及 7,297 条历史探测结果，输出字段级一致性校验报告
 - [ ] 1.3 确立以 `sinspired/subs-check-pro` 为并发探测对标、`tindy2013/subconverter` 为协议解析对标、`flosch/pongo2` 为模板渲染对标的技术实现规范，编写子机执行任务指引
 

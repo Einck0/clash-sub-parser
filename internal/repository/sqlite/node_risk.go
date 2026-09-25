@@ -143,7 +143,7 @@ func (r *nodeRepository) ListReadModel(ctx context.Context, filter domain.NodeFi
 
 	// 3. Paginated items query
 	selectQuery := fmt.Sprintf(`%s
-		SELECT logical_id, protocol, display_name, normalized_config_secret_ref, active,
+		SELECT logical_id, protocol, display_name, normalized_config_secret_ref, credential_version, active,
 		       created_at, updated_at, risk_decision, risk_band, risk_provider,
 		       risk_schema_version, risk_status, risk_reason_code, risk_observed_at,
 		       risk_expires_at
@@ -176,6 +176,7 @@ func (r *nodeRepository) ListReadModel(ctx context.Context, filter domain.NodeFi
 			&node.Protocol,
 			&node.DisplayName,
 			&node.NormalizedConfigSecretRef,
+			&node.CredentialVersion,
 			&activeInt,
 			&createdStr,
 			&updatedStr,
@@ -616,6 +617,7 @@ func buildRiskEvaluationCTE(policy *domain.RiskPolicy, nowStr string, nodeIDs ..
 			       n.protocol,
 			       n.display_name,
 			       n.normalized_config_secret_ref,
+			       n.credential_version,
 			       n.active,
 			       n.created_at,
 			       n.updated_at,
@@ -642,6 +644,7 @@ func buildNoPolicyCTE() (string, []any) {
 			       n.protocol,
 			       n.display_name,
 			       n.normalized_config_secret_ref,
+			       n.credential_version,
 			       n.active,
 			       n.created_at,
 			       n.updated_at,

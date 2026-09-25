@@ -24,6 +24,9 @@ func (m *memoryObservations) ListByRun(context.Context, string) ([]domain.ProbeO
 func (m *memoryObservations) ListByNode(context.Context, string, int) ([]domain.ProbeObservation, error) {
 	return m.items, nil
 }
+func (m *memoryObservations) ListLatestByNodes(context.Context, []string, []domain.ProbeKind) (map[string]map[domain.ProbeKind]domain.ProbeObservation, error) {
+	return make(map[string]map[domain.ProbeKind]domain.ProbeObservation), nil
+}
 func (m *memoryObservations) Create(_ context.Context, item *domain.ProbeObservation) error {
 	m.items = append(m.items, *item)
 	return nil

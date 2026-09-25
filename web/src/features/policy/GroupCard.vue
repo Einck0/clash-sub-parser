@@ -83,10 +83,19 @@ function handleHeaderClick() {
 
       <!-- Edge Count Indicator and Action Bar wrap cleanly on narrow widths -->
       <div class="flex flex-wrap items-center justify-between gap-2 text-xs opacity-70 border-t border-base-300 pt-2.5 min-w-0">
-        <span class="flex items-center gap-1.5 font-mono min-w-0 truncate shrink-0">
-          <ShareIcon class="w-3.5 h-3.5 text-primary shrink-0" />
-          <span class="truncate">{{ edgeCount }} connected {{ edgeCount === 1 ? 'edge' : 'edges' }}</span>
-        </span>
+        <div class="flex flex-wrap items-center gap-2 min-w-0">
+          <span class="flex items-center gap-1.5 font-mono min-w-0 truncate shrink-0">
+            <ShareIcon class="w-3.5 h-3.5 text-primary shrink-0" />
+            <span class="truncate">{{ edgeCount }} connected {{ edgeCount === 1 ? 'edge' : 'edges' }}</span>
+          </span>
+          <span
+            v-if="group.node_filter && group.node_filter.conditions && group.node_filter.conditions.length > 0"
+            class="badge badge-xs badge-primary font-mono"
+            title="Custom group node filter active"
+          >
+            {{ group.node_filter.conditions.length }} filter conds
+          </span>
+        </div>
 
         <div class="flex flex-wrap items-center gap-1 shrink-0" @click.stop>
           <button
@@ -122,8 +131,36 @@ function handleHeaderClick() {
         v-if="expanded"
         class="mt-1 pt-3 border-t border-base-300/80 space-y-2 transition-all duration-200 ease-out min-w-0 overflow-hidden"
       >
+        <!-- Group Filter Conditions details if configured -->
+        <div
+          v-if="group.node_filter && group.node_filter.conditions && group.node_filter.conditions.length > 0"
+          class="p-2.5 rounded-lg bg-base-100 border border-base-300/80 text-xs font-mono space-y-1"
+        >
+          <div class="flex items-center justify-between text-[11px] font-sans opacity-70">
+            <span>Group Filter (applied after Global Filter):</span>
+            <span v-if="!group.edges || group.edges.length === 0" class="badge badge-xs badge-info font-semibold">
+              Dynamic Pool
+            </span>
+          </div>
+          <div class="flex flex-wrap gap-1">
+            <span
+              v-for="(c, cIdx) in group.node_filter.conditions"
+              :key="cIdx"
+              class="badge badge-xs badge-outline"
+            >
+              {{ c.field }} {{ c.op }} "{{ c.value }}"
+              <span v-if="c.probe_kind" class="opacity-75 ml-1">({{ c.probe_kind }})</span>
+            </span>
+          </div>
+        </div>
+
         <div v-if="!group.edges || group.edges.length === 0" class="text-xs opacity-50 italic py-1">
-          No edges configured for this group. Click "Edges" to link child groups or nodes.
+          <span v-if="group.node_filter && group.node_filter.conditions && group.node_filter.conditions.length > 0">
+            No explicit node edges: group dynamically selects matching candidates from global pool.
+          </span>
+          <span v-else>
+            No edges configured for this group. Click "Edges" to link child groups or nodes.
+          </span>
         </div>
 
         <div

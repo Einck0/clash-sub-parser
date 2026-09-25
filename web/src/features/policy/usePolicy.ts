@@ -1,9 +1,11 @@
 import { ref } from 'vue'
-import { api } from '../../api/client'
+import { api, ApiError } from '../../api/client'
 import type {
   AdmissionRule,
+  GlobalNodeFilter,
   GroupEdge,
   GroupType,
+  NodeFilterSpec,
   PolicyGroup,
   PolicyRule,
   RuleAction,
@@ -26,10 +28,13 @@ interface RulesResult {
 
 export function usePolicy() {
   const groups = ref<PolicyGroup[]>([])
+  const globalFilter = ref<GlobalNodeFilter | null>(null)
   const admissionRules = ref<AdmissionRule[]>([])
   const policyRules = ref<PolicyRule[]>([])
   const loading = ref(false)
+  const loadingGlobalFilter = ref(false)
   const saving = ref(false)
+  const savingGlobalFilter = ref(false)
   const validating = ref(false)
   const validationResult = ref<ValidationResult | null>(null)
   const error = ref('')
@@ -51,14 +56,17 @@ export function usePolicy() {
     }
   }
 
-  async function createGroup(name: string, groupType: GroupType, edges: GroupEdge[] = []): Promise<PolicyGroup> {
+  async function createGroup(name: string, groupType: GroupType, edges: GroupEdge[] = [], nodeFilter?: NodeFilterSpec | null): Promise<PolicyGroup> {
     saving.value = true
     error.value = ''
     try {
-      const payload = {
+      const payload: Record<string, unknown> = {
         name: name.trim(),
         group_type: groupType,
         edges,
+      }
+      if (nodeFilter !== undefined) {
+        payload.node_filter = nodeFilter
       }
       const created = await api.post<PolicyGroup>('/api/v1/policies/groups', payload)
       await loadGroups()
@@ -72,13 +80,14 @@ export function usePolicy() {
     }
   }
 
-  async function updateGroup(id: string, name?: string, groupType?: GroupType): Promise<PolicyGroup> {
+  async function updateGroup(id: string, name?: string, groupType?: GroupType, nodeFilter?: NodeFilterSpec | null): Promise<PolicyGroup> {
     saving.value = true
     error.value = ''
     try {
       const payload: Record<string, unknown> = {}
       if (name !== undefined) payload.name = name.trim()
       if (groupType !== undefined) payload.group_type = groupType
+      if (nodeFilter !== undefined) payload.node_filter = nodeFilter
       const updated = await api.patch<PolicyGroup>(`/api/v1/policies/groups/${id}`, payload)
       const idx = groups.value.findIndex((g) => g.id === id)
       if (idx >= 0) groups.value[idx] = updated
@@ -213,12 +222,50 @@ export function usePolicy() {
     }
   }
 
+  async function loadGlobalFilter(): Promise<GlobalNodeFilter | null> {
+    loadingGlobalFilter.value = true
+    error.value = ''
+    try {
+      const res = await api.get<GlobalNodeFilter>('/api/v1/policies/global-node-filter')
+      globalFilter.value = res
+      return res
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) {
+        globalFilter.value = null
+        return null
+      }
+      error.value = err instanceof Error ? err.message : 'Failed to load global node filter'
+      return null
+    } finally {
+      loadingGlobalFilter.value = false
+    }
+  }
+
+  async function updateGlobalFilter(spec: NodeFilterSpec): Promise<GlobalNodeFilter> {
+    savingGlobalFilter.value = true
+    error.value = ''
+    try {
+      const res = await api.put<GlobalNodeFilter>('/api/v1/policies/global-node-filter', { spec })
+      globalFilter.value = res
+      return res
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to update global node filter'
+      error.value = msg
+      throw err
+    } finally {
+      savingGlobalFilter.value = false
+    }
+  }
+
   return {
     groups,
+    globalFilter,
     admissionRules,
     policyRules,
     loading,
+    loadingGlobalFilter,
     saving,
+    savingGlobalFilter,
     validating,
     validationResult,
     error,
@@ -232,5 +279,7 @@ export function usePolicy() {
     createAdmissionRule,
     createPolicyRule,
     validateGraph,
+    loadGlobalFilter,
+    updateGlobalFilter,
   }
 }

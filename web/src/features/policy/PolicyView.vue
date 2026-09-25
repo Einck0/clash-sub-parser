@@ -8,10 +8,26 @@ import {
   ShieldCheckIcon,
   CpuChipIcon,
   Squares2X2Icon,
+  FunnelIcon,
+  GlobeAltIcon,
+  TrashIcon,
 } from '@heroicons/vue/24/outline'
 import { usePolicy } from './usePolicy'
-import type { GroupEdge, GroupType, PolicyGroup, RuleAction } from './policyTypes'
-import { ruleActionTone } from './policyTypes'
+import type {
+  FilterCondition,
+  FilterField,
+  FilterOp,
+  GroupEdge,
+  GroupType,
+  NodeFilterSpec,
+  PolicyGroup,
+  RuleAction,
+} from './policyTypes'
+import {
+  SUPPORTED_FILTER_FIELDS,
+  ruleActionTone,
+  validateConditionInput,
+} from './policyTypes'
 import GroupCard from './GroupCard.vue'
 import PolicyEditorSheet from './PolicyEditorSheet.vue'
 import ConfirmModal from '../../ui/ConfirmModal.vue'
@@ -23,10 +39,13 @@ import { t } from '../../locales'
 
 const {
   groups,
+  globalFilter,
   admissionRules,
   policyRules,
   loading,
+  loadingGlobalFilter,
   saving,
+  savingGlobalFilter,
   validating,
   validationResult,
   error,
@@ -38,9 +57,68 @@ const {
   loadRules,
   createAdmissionRule,
   validateGraph,
+  loadGlobalFilter,
+  updateGlobalFilter,
 } = usePolicy()
 
 const activeTab = ref<'groups' | 'admission'>('groups')
+
+// Global Filter Modal State
+const globalFilterModalOpen = ref(false)
+const globalConditions = ref<FilterCondition[]>([])
+const newGlobalField = ref<FilterField>('display_name')
+const newGlobalOp = ref<FilterOp>('contains')
+const newGlobalValue = ref('')
+const newGlobalProbeKind = ref<'baseline' | 'geo' | 'streaming' | 'ai' | 'speed' | 'ip_risk'>('baseline')
+const newGlobalFreshnessSeconds = ref<number | undefined>(undefined)
+const globalConditionError = ref('')
+
+function openGlobalFilterModal() {
+  globalConditions.value = (globalFilter.value?.spec?.conditions || []).map((c) => ({ ...c }))
+  globalConditionError.value = ''
+  globalFilterModalOpen.value = true
+}
+
+function addGlobalCondition() {
+  globalConditionError.value = ''
+  const cond: FilterCondition = {
+    field: newGlobalField.value,
+    op: newGlobalOp.value,
+    value: newGlobalValue.value.trim(),
+  }
+  if (newGlobalField.value === 'probe_verdict' || newGlobalField.value === 'probe_latency_ms') {
+    cond.probe_kind = newGlobalProbeKind.value
+    if (newGlobalFreshnessSeconds.value !== undefined && newGlobalFreshnessSeconds.value > 0) {
+      cond.freshness_seconds = Number(newGlobalFreshnessSeconds.value)
+    }
+  }
+
+  const err = validateConditionInput(cond)
+  if (err) {
+    globalConditionError.value = err
+    return
+  }
+  if (globalConditions.value.length >= 32) {
+    globalConditionError.value = 'Maximum 32 filter conditions allowed'
+    return
+  }
+
+  globalConditions.value.push(cond)
+  newGlobalValue.value = ''
+}
+
+function removeGlobalCondition(idx: number) {
+  globalConditions.value.splice(idx, 1)
+}
+
+async function saveGlobalFilter() {
+  try {
+    await updateGlobalFilter({ conditions: globalConditions.value })
+    globalFilterModalOpen.value = false
+  } catch {
+    // error handled in usePolicy
+  }
+}
 
 // Group / Edges Sheet State
 const sheetOpen = ref(false)
@@ -86,14 +164,14 @@ function openManageEdges(group: PolicyGroup) {
   sheetOpen.value = true
 }
 
-async function handleSaveGroup(data: { name: string; type: GroupType }) {
+async function handleSaveGroup(data: { name: string; type: GroupType; nodeFilter?: any }) {
   try {
     if (activeGroup.value) {
-      const updated = await updateGroup(activeGroup.value.id, data.name, data.type)
+      const updated = await updateGroup(activeGroup.value.id, data.name, data.type, data.nodeFilter)
       activeGroup.value = updated
       selectedGroupId.value = updated.id
     } else {
-      const created = await createGroup(data.name, data.type)
+      const created = await createGroup(data.name, data.type, [], data.nodeFilter)
       activeGroup.value = created
       selectedGroupId.value = created.id
     }
@@ -158,6 +236,7 @@ onMounted(() => {
   loadGroups()
   loadRules()
   loadNodes()
+  loadGlobalFilter()
 })
 </script>
 
@@ -174,6 +253,22 @@ onMounted(() => {
       </div>
 
       <div class="flex flex-wrap items-center gap-2 shrink-0">
+        <button
+          type="button"
+          data-testid="global-filter-btn"
+          class="btn btn-outline btn-sm gap-2"
+          @click="openGlobalFilterModal"
+        >
+          <GlobeAltIcon class="w-4 h-4 text-primary" />
+          {{ t('policy.globalFilter') }}
+          <span
+            v-if="globalFilter?.spec?.conditions && globalFilter.spec.conditions.length > 0"
+            class="badge badge-primary badge-xs"
+          >
+            {{ globalFilter.spec.conditions.length }}
+          </span>
+        </button>
+
         <button
           type="button"
           class="btn btn-outline btn-sm gap-2"
@@ -361,6 +456,173 @@ onMounted(() => {
         </article>
       </div>
     </div>
+
+    <!-- Global Filter Modal Dialog -->
+    <ModalDialog
+      v-model="globalFilterModalOpen"
+      title="Global Node Filter"
+      description="Evaluates before any policy group conditions. Nodes rejected here are excluded from all policy groups."
+    >
+      <div class="space-y-4">
+        <div class="p-3 bg-info/10 border border-info/30 rounded-xl text-xs text-info leading-relaxed">
+          <p><strong>Order of Precedence:</strong> Hard Risk/Admission Rejection → Global Filter → Group Conditions.</p>
+          <p class="mt-1">Empty conditions maintain legacy full compatibility (all nodes allowed).</p>
+          <p class="mt-1 opacity-80">Probe conditions evaluate only fresh observations matching the node's credential version; missing or stale observations fail closed.</p>
+        </div>
+
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-semibold uppercase opacity-70">Configured Conditions ({{ globalConditions.length }})</span>
+          <button
+            v-if="globalConditions.length > 0"
+            type="button"
+            class="btn btn-ghost btn-xs text-error gap-1"
+            @click="globalConditions = []"
+          >
+            <TrashIcon class="w-3.5 h-3.5" />
+            Clear All
+          </button>
+        </div>
+
+        <div class="space-y-2 max-h-48 overflow-y-auto">
+          <div
+            v-for="(cond, cIdx) in globalConditions"
+            :key="cIdx"
+            class="flex items-center justify-between p-2 rounded-lg bg-base-200 border border-base-300 text-xs font-mono"
+          >
+            <div class="flex items-center gap-1.5 truncate min-w-0">
+              <span class="badge badge-xs badge-outline">{{ cond.field }}</span>
+              <span class="text-primary font-semibold">{{ cond.op }}</span>
+              <span class="truncate">"{{ cond.value }}"</span>
+              <span v-if="cond.probe_kind" class="badge badge-xs badge-ghost">
+                {{ cond.probe_kind }}
+              </span>
+              <span v-if="cond.freshness_seconds" class="opacity-60 text-[10px]">
+                ≤{{ cond.freshness_seconds }}s
+              </span>
+            </div>
+            <button
+              type="button"
+              class="btn btn-ghost btn-xs text-error p-1"
+              @click="removeGlobalCondition(cIdx)"
+            >
+              <TrashIcon class="w-3.5 h-3.5" />
+            </button>
+          </div>
+          <p v-if="globalConditions.length === 0" class="text-xs opacity-50 italic text-center py-2">
+            No global conditions configured (all nodes allowed).
+          </p>
+        </div>
+
+        <!-- Add Condition Inline Control -->
+        <div class="p-3 rounded-xl bg-base-200/60 border border-base-300 space-y-2">
+          <span class="font-semibold text-xs block">Add Global Filter Condition</span>
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <select
+              v-model="newGlobalField"
+              class="select select-bordered select-xs"
+            >
+              <option
+                v-for="f in SUPPORTED_FILTER_FIELDS"
+                :key="f.field"
+                :value="f.field"
+              >
+                {{ f.label }}
+              </option>
+            </select>
+
+            <select
+              v-model="newGlobalOp"
+              class="select select-bordered select-xs font-mono"
+            >
+              <template v-if="newGlobalField === 'display_name' || newGlobalField === 'source_subscription_ids'">
+                <option value="contains">contains</option>
+                <option value="not_contains">not_contains</option>
+              </template>
+              <template v-else-if="newGlobalField === 'probe_latency_ms'">
+                <option value="lte">&lt;= (lte)</option>
+              </template>
+              <template v-else>
+                <option value="equals">equals</option>
+                <option value="not_equals">not_equals</option>
+              </template>
+            </select>
+
+            <select
+              v-if="newGlobalField === 'probe_verdict'"
+              v-model="newGlobalValue"
+              class="select select-bordered select-xs"
+            >
+              <option value="available">available</option>
+              <option value="restricted">restricted</option>
+              <option value="unknown">unknown</option>
+              <option value="error">error</option>
+              <option value="stale">stale</option>
+            </select>
+            <input
+              v-else
+              v-model="newGlobalValue"
+              class="input input-bordered input-xs"
+              placeholder="Target value..."
+            />
+          </div>
+
+          <!-- Extra fields for probe kinds -->
+          <div
+            v-if="newGlobalField === 'probe_verdict' || newGlobalField === 'probe_latency_ms'"
+            class="grid grid-cols-2 gap-2"
+          >
+            <select
+              v-model="newGlobalProbeKind"
+              class="select select-bordered select-xs"
+            >
+              <option value="baseline">baseline</option>
+              <option value="geo">geo</option>
+              <option value="streaming">streaming</option>
+              <option value="ai">ai</option>
+              <option value="speed">speed</option>
+              <option value="ip_risk">ip_risk</option>
+            </select>
+
+            <input
+              v-model.number="newGlobalFreshnessSeconds"
+              type="number"
+              placeholder="Freshness (s, optional)"
+              class="input input-bordered input-xs font-mono"
+            />
+          </div>
+
+          <div class="flex items-center justify-between pt-1">
+            <span v-if="globalConditionError" class="text-error text-xs">
+              {{ globalConditionError }}
+            </span>
+            <span v-else />
+            <button
+              type="button"
+              class="btn btn-outline btn-xs gap-1 ml-auto"
+              @click="addGlobalCondition"
+            >
+              <PlusIcon class="w-3.5 h-3.5" />
+              Add Condition
+            </button>
+          </div>
+        </div>
+
+        <div class="modal-action border-t border-base-300 pt-3">
+          <button type="button" class="btn btn-ghost btn-sm" @click="globalFilterModalOpen = false">
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="btn btn-primary btn-sm gap-2"
+            :class="{ loading: savingGlobalFilter }"
+            :disabled="savingGlobalFilter"
+            @click="saveGlobalFilter"
+          >
+            Save Global Filter
+          </button>
+        </div>
+      </div>
+    </ModalDialog>
 
     <!-- Policy Group / Edges Bottom Sheet -->
     <PolicyEditorSheet

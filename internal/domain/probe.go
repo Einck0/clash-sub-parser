@@ -59,13 +59,23 @@ func (r *ProbeRun) TransitionTo(target ProbeRunState) error {
 
 // ProbeObservation represents an immutable observation made during a probe execution.
 type ProbeObservation struct {
-	ID              string       `json:"id"`
-	ProbeRunID      string       `json:"probe_run_id"`
-	NodeLogicalID   string       `json:"node_logical_id"`
-	Kind            ProbeKind    `json:"kind"`
-	Verdict         ProbeVerdict `json:"verdict"`
-	EvidenceDigest  string       `json:"evidence_digest"`
-	ObservedAt      time.Time    `json:"observed_at"`
-	LatencyMS       int64        `json:"latency_ms"`
-	RedactedSummary string       `json:"redacted_summary"`
+	ID                string       `json:"id"`
+	ProbeRunID        string       `json:"probe_run_id"`
+	NodeLogicalID     string       `json:"node_logical_id"`
+	Kind              ProbeKind    `json:"kind"`
+	Verdict           ProbeVerdict `json:"verdict"`
+	EvidenceDigest    string       `json:"evidence_digest"`
+	ObservedAt        time.Time    `json:"observed_at"`
+	LatencyMS         int64        `json:"latency_ms"`
+	RedactedSummary   string       `json:"redacted_summary"`
+	CredentialVersion *int         `json:"credential_version,omitempty"`
+}
+
+// HasValidCredentialVersion verifies whether the observation's recorded credential version
+// matches the node's current credential version (fail-closed if unversioned, unknown, or mismatched).
+func (o ProbeObservation) HasValidCredentialVersion(nodeVersion int) bool {
+	if o.CredentialVersion == nil || nodeVersion <= 0 {
+		return false
+	}
+	return *o.CredentialVersion == nodeVersion
 }

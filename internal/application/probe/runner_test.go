@@ -49,6 +49,11 @@ func (m *memoryRuns) GetByIdempotencyKey(_ context.Context, actor, key string) (
 func (m *memoryRuns) Create(_ context.Context, run *domain.ProbeRun) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	for _, existing := range m.items {
+		if existing.ActorScope == run.ActorScope && existing.IdempotencyKey == run.IdempotencyKey {
+			return domain.NewConflictError("run_already_exists", "duplicate idempotency key")
+		}
+	}
 	m.items[run.ID] = *run
 	return nil
 }
@@ -134,6 +139,16 @@ func (m *memoryObservations) ListByNode(_ context.Context, nodeLogicalID string,
 				break
 			}
 		}
+	}
+	return res, nil
+}
+
+func (m *memoryObservations) ListLatestByNodes(_ context.Context, nodeLogicalIDs []string, kinds []domain.ProbeKind) (map[string]map[domain.ProbeKind]domain.ProbeObservation, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	res := make(map[string]map[domain.ProbeKind]domain.ProbeObservation)
+	for _, id := range nodeLogicalIDs {
+		res[id] = make(map[domain.ProbeKind]domain.ProbeObservation)
 	}
 	return res, nil
 }

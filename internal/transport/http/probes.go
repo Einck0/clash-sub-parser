@@ -3,6 +3,7 @@ package http
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -38,6 +39,13 @@ func registerProbeRoutes(r chi.Router, service *probe.Service, runs domain.Probe
 	r.Post("/probes/runs/{run_id}/cancel", h.cancel)
 	r.Get("/probes/runs/{run_id}/observations", h.runObservations)
 	r.Get("/nodes/{logical_id}/observations", h.nodeObservations)
+
+	// Periodic active probe schedule & batch management routes
+	r.Get("/probes/schedule", h.getSchedule)
+	r.Put("/probes/schedule", h.updateSchedule)
+	r.Get("/probes/batches", h.listBatches)
+	r.Get("/probes/batches/{batch_id}", h.getBatch)
+	r.Post("/probes/batches/{batch_id}/cancel", h.cancelBatch)
 }
 
 func (h probeHandler) create(w http.ResponseWriter, r *http.Request) {
@@ -120,6 +128,73 @@ func (h probeHandler) cancel(w http.ResponseWriter, r *http.Request) {
 	}
 	h.recordAudit(r, "probe_run.cancel", domain.AuditResultSuccess, "run_id="+id)
 	WriteSuccess(w, r, http.StatusOK, map[string]any{"run_id": id, "state": domain.ProbeRunStateCancelled})
+}
+
+func (h probeHandler) getSchedule(w http.ResponseWriter, r *http.Request) {
+	sched, err := h.service.GetSchedule(r.Context())
+	if err != nil {
+		WriteDomainError(w, r, err)
+		return
+	}
+	WriteSuccess(w, r, http.StatusOK, sched)
+}
+
+func (h probeHandler) updateSchedule(w http.ResponseWriter, r *http.Request) {
+	var req domain.UpdateProbeScheduleRequest
+	if err := decodeJSON(w, r, &req); err != nil {
+		return
+	}
+	updated, err := h.service.UpdateSchedule(r.Context(), req)
+	if err != nil {
+		h.recordAudit(r, "probe_schedule.update", domain.AuditResultFailure, "failed to update schedule: "+err.Error())
+		WriteDomainError(w, r, err)
+		return
+	}
+	h.recordAudit(r, "probe_schedule.update", domain.AuditResultSuccess,
+		fmt.Sprintf("enabled=%v interval=%d generation=%d", updated.Enabled, updated.IntervalSeconds, updated.Generation))
+	WriteSuccess(w, r, http.StatusOK, updated)
+}
+
+func (h probeHandler) listBatches(w http.ResponseWriter, r *http.Request) {
+	page, pageSize, err := ParsePagination(r)
+	if err != nil {
+		WriteDomainError(w, r, err)
+		return
+	}
+	batches, total, err := h.service.ListBatches(r.Context(), page, pageSize)
+	if err != nil {
+		WriteDomainError(w, r, err)
+		return
+	}
+	WritePaginated(w, r, batches, page, pageSize, total)
+}
+
+func (h probeHandler) getBatch(w http.ResponseWriter, r *http.Request) {
+	batchID := chi.URLParam(r, "batch_id")
+	batch, err := h.service.GetBatch(r.Context(), batchID)
+	if err != nil {
+		WriteDomainError(w, r, err)
+		return
+	}
+	WriteSuccess(w, r, http.StatusOK, batch)
+}
+
+func (h probeHandler) cancelBatch(w http.ResponseWriter, r *http.Request) {
+	batchID := chi.URLParam(r, "batch_id")
+	if err := h.service.CancelBatch(r.Context(), batchID); err != nil {
+		h.recordAudit(r, "probe_batch.cancel", domain.AuditResultFailure, "batch_id="+batchID)
+		WriteDomainError(w, r, err)
+		return
+	}
+	h.recordAudit(r, "probe_batch.cancel", domain.AuditResultSuccess, "batch_id="+batchID)
+	if batch, err := h.service.GetBatch(r.Context(), batchID); err == nil && batch != nil {
+		WriteSuccess(w, r, http.StatusOK, batch)
+		return
+	}
+	WriteSuccess(w, r, http.StatusOK, map[string]any{
+		"id":    batchID,
+		"state": domain.ProbeBatchStateCancelled,
+	})
 }
 
 func (h probeHandler) recordAudit(r *http.Request, action string, result domain.AuditResult, summary string) {

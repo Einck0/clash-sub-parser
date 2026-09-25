@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -496,5 +497,66 @@ func TestExistingPublicationImmutableToSubsequentRiskObservations(t *testing.T) 
 	}
 	if len(pubRepo.publications) != 1 {
 		t.Fatalf("expected exactly 1 publication in repo, got %d", len(pubRepo.publications))
+	}
+}
+
+func TestPreflight_BlocksEmptyRoutedGroup(t *testing.T) {
+	svc, _, _ := setupService()
+	ctx := context.Background()
+
+	snap := buildSampleSnapshot()
+	snap.Diagnostics = []resolver.Diagnostic{
+		{
+			Severity: resolver.DiagnosticSeverityError,
+			Code:     "empty_routed_group",
+			Message:  "routed group Proxy has 0 nodes after filtering",
+			Target:   "grp-proxy-1",
+		},
+	}
+
+	preRes, err := svc.Preflight(ctx, publication.PreflightCommand{
+		Target:   domain.TargetClash,
+		Snapshot: snap,
+	})
+	if err != nil {
+		t.Fatalf("unexpected preflight error: %v", err)
+	}
+	if preRes.Allowed {
+		t.Fatalf("expected preflight Allowed to be false for empty_routed_group")
+	}
+	if len(preRes.Diagnostics) != 1 || preRes.Diagnostics[0].Code != "empty_routed_group" {
+		t.Fatalf("expected empty_routed_group diagnostic, got %+v", preRes.Diagnostics)
+	}
+}
+
+func TestPublish_BlocksEmptyRoutedGroup(t *testing.T) {
+	svc, _, _ := setupService()
+	ctx := context.Background()
+
+	snap := buildSampleSnapshot()
+	snap.Diagnostics = []resolver.Diagnostic{
+		{
+			Severity: resolver.DiagnosticSeverityError,
+			Code:     "empty_routed_group",
+			Message:  "routed group Proxy has 0 nodes after filtering",
+			Target:   "grp-proxy-1",
+		},
+	}
+
+	_, err := svc.Publish(ctx, publication.PublishCommand{
+		Target:    domain.TargetClash,
+		Snapshot:  snap,
+		ActorKind: domain.ActorKindAdmin,
+		RequestID: "req-blocked-pub",
+	})
+	if err == nil {
+		t.Fatalf("expected publish to be blocked for empty_routed_group, got nil")
+	}
+	var domErr *domain.DomainError
+	if !errors.As(err, &domErr) {
+		t.Fatalf("expected DomainError, got %T: %v", err, err)
+	}
+	if domErr.Code != "publication_preflight_rejected" {
+		t.Fatalf("expected publication_preflight_rejected code, got %s", domErr.Code)
 	}
 }

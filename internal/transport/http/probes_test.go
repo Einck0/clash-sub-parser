@@ -143,6 +143,16 @@ func (m *observationMemory) ListByNode(_ context.Context, nodeID string, limit i
 	return items, nil
 }
 
+func (m *observationMemory) ListLatestByNodes(_ context.Context, nodeIDs []string, kinds []domain.ProbeKind) (map[string]map[domain.ProbeKind]domain.ProbeObservation, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	res := make(map[string]map[domain.ProbeKind]domain.ProbeObservation)
+	for _, id := range nodeIDs {
+		res[id] = make(map[domain.ProbeKind]domain.ProbeObservation)
+	}
+	return res, nil
+}
+
 func (m *observationMemory) Create(_ context.Context, item *domain.ProbeObservation) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -617,5 +627,381 @@ func TestProbeAPIConcurrentRequestsRaceSafety(t *testing.T) {
 	wg.Wait()
 	if len(runs.data) > 5 {
 		t.Fatalf("expected at most 5 distinct idempotency runs, got %d", len(runs.data))
+	}
+}
+
+type probeScheduleMemory struct {
+	mu       sync.Mutex
+	schedule domain.ProbeSchedule
+	batches  map[string]domain.ProbeBatch
+	runs     map[string][]string
+}
+
+func newProbeScheduleMemory() *probeScheduleMemory {
+	return &probeScheduleMemory{
+		schedule: domain.DefaultProbeSchedule(),
+		batches:  make(map[string]domain.ProbeBatch),
+		runs:     make(map[string][]string),
+	}
+}
+
+func (m *probeScheduleMemory) Get(_ context.Context) (*domain.ProbeSchedule, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	copy := m.schedule
+	return &copy, nil
+}
+
+func (m *probeScheduleMemory) Update(_ context.Context, s *domain.ProbeSchedule) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.schedule = *s
+	return nil
+}
+
+func (m *probeScheduleMemory) GetBatchByID(_ context.Context, id string) (*domain.ProbeBatch, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	b, ok := m.batches[id]
+	if !ok {
+		return nil, domain.NewNotFoundError("probe_batch_not_found", fmt.Sprintf("probe batch %s not found", id))
+	}
+	copy := b
+	copy.RunIDs = append([]string{}, m.runs[id]...)
+	return &copy, nil
+}
+
+func (m *probeScheduleMemory) ListBatches(_ context.Context, page, pageSize int) ([]domain.ProbeBatch, int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	res := make([]domain.ProbeBatch, 0, len(m.batches))
+	for id, b := range m.batches {
+		copy := b
+		copy.RunIDs = append([]string{}, m.runs[id]...)
+		res = append(res, copy)
+	}
+	return res, len(res), nil
+}
+
+func (m *probeScheduleMemory) GetBatchByWindow(_ context.Context, generation int64, windowAt time.Time) (*domain.ProbeBatch, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, b := range m.batches {
+		if b.Generation == generation && b.WindowAt.Equal(windowAt) {
+			copy := b
+			copy.RunIDs = append([]string{}, m.runs[id]...)
+			return &copy, nil
+		}
+	}
+	return nil, domain.NewNotFoundError("probe_batch_not_found", "not found")
+}
+
+func (m *probeScheduleMemory) CreateBatch(_ context.Context, b *domain.ProbeBatch) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.batches[b.ID] = *b
+	m.runs[b.ID] = append([]string{}, b.RunIDs...)
+	return nil
+}
+
+func (m *probeScheduleMemory) UpdateBatch(_ context.Context, b *domain.ProbeBatch) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.batches[b.ID]; !ok {
+		return domain.NewNotFoundError("probe_batch_not_found", "not found")
+	}
+	m.batches[b.ID] = *b
+	m.runs[b.ID] = append([]string{}, b.RunIDs...)
+	return nil
+}
+
+func (m *probeScheduleMemory) AcquireLease(_ context.Context, batchID string, owner string, leaseDuration time.Duration) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	b, ok := m.batches[batchID]
+	if !ok {
+		return false, domain.NewNotFoundError("probe_batch_not_found", "not found")
+	}
+	if b.State.IsTerminal() {
+		return false, nil
+	}
+	now := time.Now().UTC()
+	if b.Owner != "" && b.Owner != owner && b.LeaseUntil != nil && b.LeaseUntil.After(now) {
+		return false, nil
+	}
+	until := now.Add(leaseDuration)
+	b.Owner = owner
+	b.LeaseUntil = &until
+	m.batches[batchID] = b
+	return true, nil
+}
+
+func (m *probeScheduleMemory) HeartbeatLease(_ context.Context, batchID string, owner string, leaseDuration time.Duration) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	b, ok := m.batches[batchID]
+	if !ok {
+		return domain.NewNotFoundError("probe_batch_not_found", "not found")
+	}
+	if b.Owner != owner || b.State.IsTerminal() {
+		return domain.NewConflictError("lost_lease", "lost lease")
+	}
+	until := time.Now().UTC().Add(leaseDuration)
+	b.LeaseUntil = &until
+	m.batches[batchID] = b
+	return nil
+}
+
+func (m *probeScheduleMemory) ReleaseLease(_ context.Context, batchID string, owner string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	b, ok := m.batches[batchID]
+	if !ok || b.Owner != owner {
+		return nil
+	}
+	b.Owner = ""
+	b.LeaseUntil = nil
+	m.batches[batchID] = b
+	return nil
+}
+
+func newProbeRouterWithSchedule() (http.Handler, *probeScheduleMemory, *auditMemory) {
+	runs := &probeRunMemory{data: make(map[string]domain.ProbeRun)}
+	audit := &auditMemory{}
+	observations := &observationMemory{items: []domain.ProbeObservation{}}
+	schedRepo := newProbeScheduleMemory()
+
+	service := probe.NewService(
+		runs,
+		probe.WithAudit(audit),
+		probe.WithScheduleRepository(schedRepo),
+	)
+
+	router := transporthttp.NewRouter(transporthttp.RouterConfig{
+		AdminToken:                 probeTestAdminToken,
+		AuditRepository:            audit,
+		ProbeRunRepository:         runs,
+		ProbeObservationRepository: observations,
+		ProbeService:               service,
+	})
+
+	return router, schedRepo, audit
+}
+
+func TestProbeScheduleAndBatchEndpoints_Auth(t *testing.T) {
+	router, _, _ := newProbeRouterWithSchedule()
+
+	endpoints := []struct {
+		method string
+		url    string
+		body   string
+	}{
+		{http.MethodGet, "/api/v1/probes/schedule", ""},
+		{http.MethodPut, "/api/v1/probes/schedule", `{"enabled": true}`},
+		{http.MethodGet, "/api/v1/probes/batches", ""},
+		{http.MethodGet, "/api/v1/probes/batches/batch-1", ""},
+		{http.MethodPost, "/api/v1/probes/batches/batch-1/cancel", ""},
+	}
+
+	for _, ep := range endpoints {
+		t.Run(ep.method+" "+ep.url, func(t *testing.T) {
+			var bodyReader *strings.Reader
+			if ep.body != "" {
+				bodyReader = strings.NewReader(ep.body)
+			} else {
+				bodyReader = strings.NewReader("")
+			}
+			req := httptest.NewRequest(ep.method, ep.url, bodyReader)
+			// No Authorization header
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("expected 401 Unauthorized, got %d", rec.Code)
+			}
+		})
+	}
+}
+
+func TestProbeScheduleEndpoints_GetAndUpdate(t *testing.T) {
+	router, _, audit := newProbeRouterWithSchedule()
+
+	// 1. GET schedule initially returns default disabled schedule
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/probes/schedule", nil)
+	req.Header.Set("Authorization", "Bearer "+probeTestAdminToken)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for GET /probes/schedule, got %d", rec.Code)
+	}
+
+	var getResp struct {
+		Data domain.ProbeSchedule `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&getResp); err != nil {
+		t.Fatal(err)
+	}
+	if getResp.Data.Enabled {
+		t.Fatalf("expected initial schedule to be disabled")
+	}
+	if getResp.Data.IntervalSeconds != 3600 {
+		t.Fatalf("expected default interval 3600, got %d", getResp.Data.IntervalSeconds)
+	}
+
+	// 2. PUT schedule with invalid interval (< 60) -> 400
+	badReq := httptest.NewRequest(http.MethodPut, "/api/v1/probes/schedule", strings.NewReader(`{"interval_seconds": 10}`))
+	badReq.Header.Set("Authorization", "Bearer "+probeTestAdminToken)
+	badRec := httptest.NewRecorder()
+	router.ServeHTTP(badRec, badReq)
+	if badRec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 Unprocessable Entity for interval < 60, got %d", badRec.Code)
+	}
+
+	// 3. PUT schedule with valid configuration
+	updatePayload := `{"enabled": true, "interval_seconds": 600, "kinds": ["baseline", "streaming"]}`
+	putReq := httptest.NewRequest(http.MethodPut, "/api/v1/probes/schedule", strings.NewReader(updatePayload))
+	putReq.Header.Set("Authorization", "Bearer "+probeTestAdminToken)
+	putRec := httptest.NewRecorder()
+	router.ServeHTTP(putRec, putReq)
+
+	if putRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for PUT /probes/schedule, got %d: %s", putRec.Code, putRec.Body.String())
+	}
+
+	var putResp struct {
+		Data domain.ProbeSchedule `json:"data"`
+	}
+	if err := json.NewDecoder(putRec.Body).Decode(&putResp); err != nil {
+		t.Fatal(err)
+	}
+	if !putResp.Data.Enabled {
+		t.Fatalf("expected updated schedule to be enabled")
+	}
+	if putResp.Data.IntervalSeconds != 600 {
+		t.Fatalf("expected interval 600, got %d", putResp.Data.IntervalSeconds)
+	}
+	if len(putResp.Data.Kinds) != 2 || putResp.Data.Kinds[1] != domain.ProbeKindStreaming {
+		t.Fatalf("expected kinds [baseline, streaming], got %+v", putResp.Data.Kinds)
+	}
+	if putResp.Data.Generation != 1 {
+		t.Fatalf("expected generation 1, got %d", putResp.Data.Generation)
+	}
+	if putResp.Data.NextDueAt == nil {
+		t.Fatalf("expected next_due_at to be populated for enabled schedule")
+	}
+
+	// 4. Verify audit event
+	audit.mu.Lock()
+	var foundAudit bool
+	for _, ev := range audit.events {
+		if ev.Action == "probe_schedule.update" && ev.Result == domain.AuditResultSuccess {
+			foundAudit = true
+			break
+		}
+	}
+	audit.mu.Unlock()
+	if !foundAudit {
+		t.Fatalf("expected audit event for probe_schedule.update, got none")
+	}
+}
+
+func TestProbeBatchEndpoints_ListGetCancel(t *testing.T) {
+	router, schedRepo, audit := newProbeRouterWithSchedule()
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	batch1 := domain.ProbeBatch{
+		ID:         "batch-http-1",
+		WindowAt:   now,
+		Generation: 1,
+		State:      domain.ProbeBatchStateRunning,
+		RunIDs:     []string{"run-1"},
+		Counts: domain.ProbeBatchCounts{
+			TotalNodes:     5,
+			DispatchedRuns: 1,
+			CompletedRuns:  0,
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	_ = schedRepo.CreateBatch(ctx, &batch1)
+
+	// 1. GET /probes/batches
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/probes/batches?page=1&page_size=10", nil)
+	req.Header.Set("Authorization", "Bearer "+probeTestAdminToken)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for GET /probes/batches, got %d", rec.Code)
+	}
+	var listResp struct {
+		Data struct {
+			Items []domain.ProbeBatch `json:"items"`
+			Total int                 `json:"total"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&listResp); err != nil {
+		t.Fatal(err)
+	}
+	if listResp.Data.Total != 1 || len(listResp.Data.Items) != 1 {
+		t.Fatalf("expected 1 batch in list, got total=%d len=%d", listResp.Data.Total, len(listResp.Data.Items))
+	}
+
+	// 2. GET /probes/batches/{batch_id}
+	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/probes/batches/"+batch1.ID, nil)
+	getReq.Header.Set("Authorization", "Bearer "+probeTestAdminToken)
+	getRec := httptest.NewRecorder()
+	router.ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for GET /probes/batches/{id}, got %d", getRec.Code)
+	}
+
+	// 3. GET /probes/batches/non-existent -> 404
+	notFoundReq := httptest.NewRequest(http.MethodGet, "/api/v1/probes/batches/no-such-batch", nil)
+	notFoundReq.Header.Set("Authorization", "Bearer "+probeTestAdminToken)
+	notFoundRec := httptest.NewRecorder()
+	router.ServeHTTP(notFoundRec, notFoundReq)
+	if notFoundRec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 Not Found, got %d", notFoundRec.Code)
+	}
+
+	// 4. POST /probes/batches/{batch_id}/cancel -> 200 OK
+	cancelReq := httptest.NewRequest(http.MethodPost, "/api/v1/probes/batches/"+batch1.ID+"/cancel", nil)
+	cancelReq.Header.Set("Authorization", "Bearer "+probeTestAdminToken)
+	cancelRec := httptest.NewRecorder()
+	router.ServeHTTP(cancelRec, cancelReq)
+	if cancelRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for cancel batch, got %d", cancelRec.Code)
+	}
+
+	var cancelResp struct {
+		Data domain.ProbeBatch `json:"data"`
+	}
+	if err := json.NewDecoder(cancelRec.Body).Decode(&cancelResp); err != nil {
+		t.Fatal(err)
+	}
+	if cancelResp.Data.ID != batch1.ID || cancelResp.Data.State != domain.ProbeBatchStateCancelled {
+		t.Fatalf("unexpected cancel response: %+v", cancelResp.Data)
+	}
+
+	// 5. Verify batch is now cancelled
+	cancelled, _ := schedRepo.GetBatchByID(ctx, batch1.ID)
+	if cancelled.State != domain.ProbeBatchStateCancelled {
+		t.Fatalf("expected batch state cancelled, got %s", cancelled.State)
+	}
+
+	// 6. Verify audit event
+	audit.mu.Lock()
+	var foundAudit bool
+	for _, ev := range audit.events {
+		if ev.Action == "probe_batch.cancel" && ev.Result == domain.AuditResultSuccess {
+			foundAudit = true
+			break
+		}
+	}
+	audit.mu.Unlock()
+	if !foundAudit {
+		t.Fatalf("expected audit event for probe_batch.cancel, got none")
 	}
 }

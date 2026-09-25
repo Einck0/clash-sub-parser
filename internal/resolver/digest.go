@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"time"
 
@@ -64,6 +65,12 @@ type canonicalInputPayload struct {
 	RiskPolicyRevision string                   `json:"risk_policy_revision,omitempty"`
 	RiskDecisionDigest string                   `json:"risk_decision_digest,omitempty"`
 	RiskDecisions      []canonicalRiskDecision  `json:"risk_decisions,omitempty"`
+
+	// Node filters and evidence
+	GlobalFilter      *domain.NodeFilterSpec           `json:"global_filter,omitempty"`
+	GroupFilters      map[string]domain.NodeFilterSpec `json:"group_filters,omitempty"`
+	NodeSources       map[string][]string              `json:"node_sources,omitempty"`
+	ObservationDigest string                           `json:"observation_digest,omitempty"`
 }
 
 func computeInputDigest(input ResolveInput) (string, error) {
@@ -155,6 +162,78 @@ func computeInputDigest(input ResolveInput) (string, error) {
 			EvaluatedAt: decision.EvaluatedAt.UTC().Format(time.RFC3339Nano),
 		})
 	}
+	var globalFilter *domain.NodeFilterSpec
+	if input.GlobalFilter != nil && !input.GlobalFilter.IsEmpty() {
+		globalFilter = input.GlobalFilter
+	}
+
+	var groupFilters map[string]domain.NodeFilterSpec
+	if len(input.GroupFilters) > 0 {
+		gf := make(map[string]domain.NodeFilterSpec)
+		for gid, spec := range input.GroupFilters {
+			if !spec.IsEmpty() {
+				gf[gid] = spec
+			}
+		}
+		if len(gf) > 0 {
+			groupFilters = gf
+		}
+	}
+
+	var canonicalSources map[string][]string
+	if len(input.NodeSources) > 0 {
+		cs := make(map[string][]string)
+		for nid, srcs := range input.NodeSources {
+			if len(srcs) > 0 {
+				subIDs := make([]string, len(srcs))
+				for i, s := range srcs {
+					subIDs[i] = s.SubscriptionID
+				}
+				sort.Strings(subIDs)
+				cs[nid] = subIDs
+			}
+		}
+		if len(cs) > 0 {
+			canonicalSources = cs
+		}
+	}
+
+	var obsDigest string
+	if len(input.LatestObservations) > 0 {
+		asOf := input.AsOf
+		if asOf.IsZero() {
+			asOf = time.Now().UTC()
+		}
+		// Sort node IDs
+		sortedNIDs := make([]string, 0, len(input.LatestObservations))
+		for nid := range input.LatestObservations {
+			sortedNIDs = append(sortedNIDs, nid)
+		}
+		sort.Strings(sortedNIDs)
+
+		h := sha256.New()
+		for _, nid := range sortedNIDs {
+			kindMap := input.LatestObservations[nid]
+			sortedKinds := make([]string, 0, len(kindMap))
+			for k := range kindMap {
+				sortedKinds = append(sortedKinds, string(k))
+			}
+			sort.Strings(sortedKinds)
+			for _, kStr := range sortedKinds {
+				k := domain.ProbeKind(kStr)
+				obs := kindMap[k]
+				credVer := -1
+				if obs.CredentialVersion != nil {
+					credVer = *obs.CredentialVersion
+				}
+				// 86400s freshness boundary
+				fresh := asOf.Sub(obs.ObservedAt) <= 86400*time.Second
+				fmt.Fprintf(h, "%s:%s:%s:%d:%d:%t;", nid, obs.Kind, obs.Verdict, obs.LatencyMS, credVer, fresh)
+			}
+		}
+		obsDigest = hex.EncodeToString(h.Sum(nil))
+	}
+
 	payload := canonicalInputPayload{
 		RevisionID:         input.RevisionID,
 		InventoryWatermark: input.InventoryWatermark,
@@ -168,6 +247,10 @@ func computeInputDigest(input ResolveInput) (string, error) {
 		RiskPolicyRevision: input.RiskPolicyRevision,
 		RiskDecisionDigest: input.RiskDecisionDigest,
 		RiskDecisions:      riskDecisions,
+		GlobalFilter:       globalFilter,
+		GroupFilters:       groupFilters,
+		NodeSources:        canonicalSources,
+		ObservationDigest:  obsDigest,
 	}
 
 	data, err := json.Marshal(payload)

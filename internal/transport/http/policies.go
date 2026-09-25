@@ -1,6 +1,8 @@
 package http
 
 import (
+	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 
@@ -16,15 +18,23 @@ type policyHandler struct {
 }
 
 type createGroupRequest struct {
-	Name      string             `json:"name"`
-	GroupType domain.GroupType   `json:"group_type"`
-	Edges     []policy.EdgeInput `json:"edges,omitempty"`
+	ID         string                 `json:"id,omitempty"`
+	Name       string                 `json:"name"`
+	GroupType  domain.GroupType       `json:"group_type"`
+	Edges      []policy.EdgeInput     `json:"edges,omitempty"`
+	NodeFilter *domain.NodeFilterSpec `json:"node_filter,omitempty"`
 }
 
 type updateGroupRequest struct {
-	Name      *string             `json:"name,omitempty"`
-	GroupType *domain.GroupType   `json:"group_type,omitempty"`
-	Edges     *[]policy.EdgeInput `json:"edges,omitempty"`
+	Name       *string                `json:"name,omitempty"`
+	GroupType  *domain.GroupType      `json:"group_type,omitempty"`
+	Edges      *[]policy.EdgeInput    `json:"edges,omitempty"`
+	NodeFilter *domain.NodeFilterSpec `json:"node_filter,omitempty"`
+}
+
+type setGlobalFilterRequest struct {
+	Spec       *domain.NodeFilterSpec   `json:"spec,omitempty"`
+	Conditions []domain.FilterCondition `json:"conditions,omitempty"`
 }
 
 type setGroupEdgesRequest struct {
@@ -55,6 +65,9 @@ func registerPolicyRoutes(r chi.Router, service *policy.Service, audit domain.Au
 	h := policyHandler{service: service, audit: audit}
 
 	registerGroup := func(sub chi.Router) {
+		sub.Get("/global-node-filter", h.getGlobalFilter)
+		sub.Put("/global-node-filter", h.setGlobalFilter)
+
 		sub.Get("/groups", h.listGroups)
 		sub.Post("/groups", h.createGroup)
 		sub.Get("/groups/{id}", h.getGroup)
@@ -72,6 +85,18 @@ func registerPolicyRoutes(r chi.Router, service *policy.Service, audit domain.Au
 
 	r.Route("/policies", registerGroup)
 	r.Route("/policy", registerGroup)
+}
+
+// RegisterPolicyFilterRoutes explicitly registers global node filter endpoints on a router.
+func RegisterPolicyFilterRoutes(r chi.Router, service *policy.Service, audit domain.AuditRepository) {
+	if service == nil {
+		return
+	}
+	h := policyHandler{service: service, audit: audit}
+	r.Get("/policies/global-node-filter", h.getGlobalFilter)
+	r.Put("/policies/global-node-filter", h.setGlobalFilter)
+	r.Get("/policy/global-node-filter", h.getGlobalFilter)
+	r.Put("/policy/global-node-filter", h.setGlobalFilter)
 }
 
 func (h policyHandler) listGroups(w http.ResponseWriter, r *http.Request) {
@@ -94,6 +119,54 @@ func (h policyHandler) listGroups(w http.ResponseWriter, r *http.Request) {
 	WritePaginated(w, r, res.Items, res.Page, res.PageSize, res.Total)
 }
 
+func (h policyHandler) getGlobalFilter(w http.ResponseWriter, r *http.Request) {
+	filter, err := h.service.GetGlobalNodeFilter(r.Context())
+	if err != nil {
+		WriteDomainError(w, r, err)
+		return
+	}
+	WriteSuccess(w, r, http.StatusOK, filter)
+}
+
+func (h policyHandler) setGlobalFilter(w http.ResponseWriter, r *http.Request) {
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		WriteDomainError(w, r, domain.NewValidationError("invalid_json", "failed to read request body"))
+		return
+	}
+
+	var req setGlobalFilterRequest
+	if err := json.Unmarshal(bodyBytes, &req); err != nil {
+		WriteDomainError(w, r, domain.NewValidationError("invalid_json", err.Error()))
+		return
+	}
+
+	var spec domain.NodeFilterSpec
+	if req.Spec != nil {
+		spec = *req.Spec
+	} else if req.Conditions != nil {
+		spec = domain.NodeFilterSpec{Conditions: req.Conditions}
+	} else {
+		var directSpec domain.NodeFilterSpec
+		if err := json.Unmarshal(bodyBytes, &directSpec); err == nil && directSpec.Conditions != nil {
+			spec = directSpec
+		} else {
+			spec = domain.NodeFilterSpec{Conditions: []domain.FilterCondition{}}
+		}
+	}
+
+	filter, err := h.service.SetGlobalNodeFilter(r.Context(), policy.SetGlobalNodeFilterCommand{
+		Spec:      spec,
+		RequestID: GetRequestID(r.Context()),
+		ActorKind: requestActorKind(r),
+	})
+	if err != nil {
+		WriteDomainError(w, r, err)
+		return
+	}
+	WriteSuccess(w, r, http.StatusOK, filter)
+}
+
 func (h policyHandler) createGroup(w http.ResponseWriter, r *http.Request) {
 	var body createGroupRequest
 	if err := decodeJSON(w, r, &body); err != nil {
@@ -101,11 +174,13 @@ func (h policyHandler) createGroup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	view, err := h.service.CreateGroup(r.Context(), policy.CreateGroupCommand{
-		Name:      body.Name,
-		GroupType: body.GroupType,
-		Edges:     body.Edges,
-		RequestID: GetRequestID(r.Context()),
-		ActorKind: requestActorKind(r),
+		ID:         body.ID,
+		Name:       body.Name,
+		GroupType:  body.GroupType,
+		Edges:      body.Edges,
+		NodeFilter: body.NodeFilter,
+		RequestID:  GetRequestID(r.Context()),
+		ActorKind:  requestActorKind(r),
 	})
 	if err != nil {
 		WriteDomainError(w, r, err)
@@ -128,19 +203,44 @@ func (h policyHandler) getGroup(w http.ResponseWriter, r *http.Request) {
 
 func (h policyHandler) updateGroup(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	var body updateGroupRequest
-	if err := decodeJSON(w, r, &body); err != nil {
+
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		WriteDomainError(w, r, domain.NewValidationError("invalid_json", "failed to read body"))
 		return
 	}
 
-	view, err := h.service.UpdateGroup(r.Context(), policy.UpdateGroupCommand{
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(bodyBytes, &raw); err != nil {
+		WriteDomainError(w, r, domain.NewValidationError("invalid_json", err.Error()))
+		return
+	}
+
+	var body updateGroupRequest
+	if err := json.Unmarshal(bodyBytes, &body); err != nil {
+		WriteDomainError(w, r, domain.NewValidationError("invalid_json", err.Error()))
+		return
+	}
+
+	cmd := policy.UpdateGroupCommand{
 		ID:        id,
 		Name:      body.Name,
 		GroupType: body.GroupType,
 		Edges:     body.Edges,
 		RequestID: GetRequestID(r.Context()),
 		ActorKind: requestActorKind(r),
-	})
+	}
+
+	if rawFilter, exists := raw["node_filter"]; exists {
+		filterStr := strings.TrimSpace(string(rawFilter))
+		if filterStr == "null" || body.NodeFilter == nil || body.NodeFilter.IsEmpty() {
+			cmd.ClearNodeFilter = true
+		} else {
+			cmd.NodeFilter = body.NodeFilter
+		}
+	}
+
+	view, err := h.service.UpdateGroup(r.Context(), cmd)
 	if err != nil {
 		WriteDomainError(w, r, err)
 		return

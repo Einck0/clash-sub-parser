@@ -38,13 +38,15 @@ type runController struct {
 
 // Service orchestrates probe run lifecycle, state transitions, idempotency, and cancellation.
 type Service struct {
-	runs     domain.ProbeRunRepository
-	audit    domain.AuditRepository
-	clock    func() time.Time
-	mu       sync.RWMutex
-	createMu sync.Mutex
-	active   map[string]*runController
-	runner   Runner
+	runs        domain.ProbeRunRepository
+	audit       domain.AuditRepository
+	schedules   domain.ProbeScheduleRepository
+	coordinator *PeriodicCoordinator
+	clock       func() time.Time
+	mu          sync.RWMutex
+	createMu    sync.Mutex
+	active      map[string]*runController
+	runner      Runner
 }
 
 // Option configures Service dependencies.
@@ -54,6 +56,20 @@ type Option func(*Service)
 func WithRunner(r Runner) Option {
 	return func(s *Service) {
 		s.runner = r
+	}
+}
+
+// WithScheduleRepository sets the probe schedule repository for periodic probe coordination.
+func WithScheduleRepository(schedules domain.ProbeScheduleRepository) Option {
+	return func(s *Service) {
+		s.schedules = schedules
+	}
+}
+
+// WithCoordinator sets the periodic probe coordinator.
+func WithCoordinator(coordinator *PeriodicCoordinator) Option {
+	return func(s *Service) {
+		s.coordinator = coordinator
 	}
 }
 
@@ -402,5 +418,148 @@ func (s *Service) TriggerRun(ctx context.Context, runID string, nodeIDs []string
 	}
 
 	return runner.Run(ctx, run, nodeIDs, kinds)
+}
+
+// SetCoordinator configures or updates the periodic probe coordinator.
+func (s *Service) SetCoordinator(coordinator *PeriodicCoordinator) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.coordinator = coordinator
+}
+
+// GetSchedule returns the current probe schedule configuration.
+func (s *Service) GetSchedule(ctx context.Context) (*domain.ProbeSchedule, error) {
+	s.mu.RLock()
+	repo := s.schedules
+	s.mu.RUnlock()
+	if repo == nil {
+		return nil, domain.NewNotFoundError("probe_schedule_not_available", "probe schedule repository not configured")
+	}
+	return repo.Get(ctx)
+}
+
+// UpdateSchedule updates probe schedule parameters and re-arms the periodic coordinator.
+func (s *Service) UpdateSchedule(ctx context.Context, req domain.UpdateProbeScheduleRequest) (*domain.ProbeSchedule, error) {
+	s.mu.RLock()
+	repo := s.schedules
+	coord := s.coordinator
+	s.mu.RUnlock()
+
+	if repo == nil {
+		return nil, domain.NewNotFoundError("probe_schedule_not_available", "probe schedule repository not configured")
+	}
+
+	current, err := repo.Get(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	updated := *current
+	changed := false
+
+	if req.Enabled != nil && *req.Enabled != updated.Enabled {
+		updated.Enabled = *req.Enabled
+		changed = true
+	}
+	if req.IntervalSeconds != nil && *req.IntervalSeconds != updated.IntervalSeconds {
+		updated.IntervalSeconds = *req.IntervalSeconds
+		changed = true
+	}
+	if req.Kinds != nil {
+		updated.Kinds = *req.Kinds
+		changed = true
+	}
+
+	if err := updated.Validate(); err != nil {
+		return nil, err
+	}
+
+	now := s.clock().UTC()
+	if changed {
+		updated.Generation++
+		if updated.Enabled {
+			if updated.NextDueAt == nil || updated.NextDueAt.Before(now) {
+				nextDue := now.Add(time.Duration(updated.IntervalSeconds) * time.Second)
+				updated.NextDueAt = &nextDue
+			}
+		} else {
+			updated.NextDueAt = nil
+		}
+	}
+
+	if err := repo.Update(ctx, &updated); err != nil {
+		return nil, err
+	}
+
+	if coord != nil {
+		coord.Wake()
+	}
+
+	return &updated, nil
+}
+
+// ListBatches returns paginated probe execution batches.
+func (s *Service) ListBatches(ctx context.Context, page, pageSize int) ([]domain.ProbeBatch, int, error) {
+	s.mu.RLock()
+	repo := s.schedules
+	s.mu.RUnlock()
+	if repo == nil {
+		return nil, 0, domain.NewNotFoundError("probe_schedule_not_available", "probe schedule repository not configured")
+	}
+	return repo.ListBatches(ctx, page, pageSize)
+}
+
+// GetBatch returns a specific probe batch by ID.
+func (s *Service) GetBatch(ctx context.Context, id string) (*domain.ProbeBatch, error) {
+	s.mu.RLock()
+	repo := s.schedules
+	s.mu.RUnlock()
+	if repo == nil {
+		return nil, domain.NewNotFoundError("probe_schedule_not_available", "probe schedule repository not configured")
+	}
+	return repo.GetBatchByID(ctx, id)
+}
+
+// CancelBatch cancels an in-flight periodic probe batch and cascades cancellation to all associated runs.
+func (s *Service) CancelBatch(ctx context.Context, id string) error {
+	s.mu.RLock()
+	repo := s.schedules
+	coord := s.coordinator
+	s.mu.RUnlock()
+
+	if repo == nil {
+		return domain.NewNotFoundError("probe_schedule_not_available", "probe schedule repository not configured")
+	}
+
+	batch, err := repo.GetBatchByID(ctx, id)
+	if err != nil {
+		return err
+	}
+
+	if batch.State.IsTerminal() {
+		if batch.State == domain.ProbeBatchStateCancelled {
+			return nil
+		}
+		return domain.NewConflictError("terminal_state",
+			fmt.Sprintf("cannot cancel probe batch %s in terminal state %s", id, batch.State))
+	}
+
+	if err := batch.TransitionTo(domain.ProbeBatchStateCancelled); err != nil {
+		return err
+	}
+
+	if err := repo.UpdateBatch(ctx, batch); err != nil {
+		return err
+	}
+
+	if coord != nil {
+		coord.CancelBatch(id)
+	}
+
+	for _, runID := range batch.RunIDs {
+		_ = s.Cancel(ctx, runID)
+	}
+
+	return nil
 }
 

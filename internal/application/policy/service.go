@@ -16,11 +16,12 @@ import (
 
 // Service orchestrates policy groups, edges, admission rules, and configuration revisions.
 type Service struct {
-	policyRepo   domain.PolicyRepository
-	revisionRepo domain.RevisionRepository
-	nodeRepo     domain.NodeRepository
-	auditRepo    domain.AuditRepository
-	mu           sync.Mutex
+	policyRepo     domain.PolicyRepository
+	revisionRepo   domain.RevisionRepository
+	nodeRepo       domain.NodeRepository
+	auditRepo      domain.AuditRepository
+	nodeFilterRepo domain.NodeFilterRepository
+	mu             sync.Mutex
 }
 
 // NewService constructs a policy application service from domain repository ports.
@@ -29,13 +30,25 @@ func NewService(
 	revisionRepo domain.RevisionRepository,
 	nodeRepo domain.NodeRepository,
 	auditRepo domain.AuditRepository,
+	nodeFilterRepo ...domain.NodeFilterRepository,
 ) *Service {
-	return &Service{
+	s := &Service{
 		policyRepo:   policyRepo,
 		revisionRepo: revisionRepo,
 		nodeRepo:     nodeRepo,
 		auditRepo:    auditRepo,
 	}
+	if len(nodeFilterRepo) > 0 {
+		s.nodeFilterRepo = nodeFilterRepo[0]
+	}
+	return s
+}
+
+// SetNodeFilterRepository configures the node filter repository dynamically.
+func (s *Service) SetNodeFilterRepository(repo domain.NodeFilterRepository) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.nodeFilterRepo = repo
 }
 
 // CreateGroup creates a new policy group and optional initial edges, enforcing topological safety.
@@ -74,6 +87,14 @@ func (s *Service) CreateGroup(ctx context.Context, cmd CreateGroupCommand) (*Gro
 		GroupType: cmd.GroupType,
 		CreatedAt: now,
 		UpdatedAt: now,
+	}
+
+	if cmd.NodeFilter != nil {
+		if err := cmd.NodeFilter.Validate(); err != nil {
+			s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_group.create", domain.AuditResultFailure, fmt.Sprintf("invalid node filter: %v", err))
+			return nil, err
+		}
+		group.NodeFilter = cmd.NodeFilter
 	}
 
 	// Prepare edges if provided
@@ -141,6 +162,18 @@ func (s *Service) CreateGroup(ctx context.Context, cmd CreateGroupCommand) (*Gro
 		}
 	}
 
+	if group.NodeFilter != nil && s.nodeFilterRepo != nil {
+		err := s.nodeFilterRepo.SetGroupFilter(ctx, &domain.GroupNodeFilter{
+			GroupID:   groupID,
+			Spec:      *group.NodeFilter,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_group.create", domain.AuditResultFailure, fmt.Sprintf("failed to save group filter: %v", err))
+			return nil, err
+		}
+	}
+
 	s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_group.create", domain.AuditResultSuccess, fmt.Sprintf("id=%s, name=%s", group.ID, group.Name))
 	return toGroupView(&group, edges), nil
 }
@@ -150,6 +183,13 @@ func (s *Service) GetGroup(ctx context.Context, id string) (*GroupView, error) {
 	group, err := s.policyRepo.GetGroupByID(ctx, id)
 	if err != nil {
 		return nil, err
+	}
+
+	if s.nodeFilterRepo != nil {
+		gf, err := s.nodeFilterRepo.GetGroupFilter(ctx, id)
+		if err == nil && gf != nil {
+			group.NodeFilter = &gf.Spec
+		}
 	}
 
 	edges, err := s.policyRepo.ListEdgesByGroup(ctx, id)
@@ -202,9 +242,22 @@ func (s *Service) ListGroups(ctx context.Context, query ListGroupsQuery) (*ListG
 		end = total
 	}
 
+	var groupFilters map[string]domain.NodeFilterSpec
+	if s.nodeFilterRepo != nil {
+		gf, err := s.nodeFilterRepo.ListGroupFilters(ctx)
+		if err == nil {
+			groupFilters = gf
+		}
+	}
+
 	sliced := filtered[start:end]
 	items := make([]GroupView, len(sliced))
 	for i, g := range sliced {
+		if groupFilters != nil {
+			if spec, ok := groupFilters[g.ID]; ok {
+				g.NodeFilter = &spec
+			}
+		}
 		edges, err := s.policyRepo.ListEdgesByGroup(ctx, g.ID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to list edges for group %s: %w", g.ID, err)
@@ -311,6 +364,42 @@ func (s *Service) UpdateGroup(ctx context.Context, cmd UpdateGroupCommand) (*Gro
 		}
 	}
 
+	if cmd.ClearNodeFilter {
+		group.NodeFilter = nil
+		if s.nodeFilterRepo != nil {
+			_ = s.nodeFilterRepo.DeleteGroupFilter(ctx, cmd.ID)
+		}
+	} else if cmd.NodeFilter != nil {
+		if cmd.NodeFilter.IsEmpty() {
+			group.NodeFilter = nil
+			if s.nodeFilterRepo != nil {
+				_ = s.nodeFilterRepo.DeleteGroupFilter(ctx, cmd.ID)
+			}
+		} else {
+			if err := cmd.NodeFilter.Validate(); err != nil {
+				s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_group.update", domain.AuditResultFailure, fmt.Sprintf("invalid node filter: %v", err))
+				return nil, err
+			}
+			group.NodeFilter = cmd.NodeFilter
+			if s.nodeFilterRepo != nil {
+				err := s.nodeFilterRepo.SetGroupFilter(ctx, &domain.GroupNodeFilter{
+					GroupID:   group.ID,
+					Spec:      *cmd.NodeFilter,
+					UpdatedAt: group.UpdatedAt,
+				})
+				if err != nil {
+					s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_group.update", domain.AuditResultFailure, fmt.Sprintf("failed to update group filter: %v", err))
+					return nil, err
+				}
+			}
+		}
+	} else if s.nodeFilterRepo != nil {
+		gf, err := s.nodeFilterRepo.GetGroupFilter(ctx, group.ID)
+		if err == nil && gf != nil {
+			group.NodeFilter = &gf.Spec
+		}
+	}
+
 	s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_group.update", domain.AuditResultSuccess, fmt.Sprintf("id=%s", cmd.ID))
 	return toGroupView(group, newEdges), nil
 }
@@ -329,6 +418,10 @@ func (s *Service) DeleteGroup(ctx context.Context, cmd DeleteGroupCommand) error
 	if err := s.policyRepo.DeleteGroup(ctx, cmd.ID); err != nil {
 		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_group.delete", domain.AuditResultFailure, fmt.Sprintf("failed to delete group: %v", err))
 		return err
+	}
+
+	if s.nodeFilterRepo != nil {
+		_ = s.nodeFilterRepo.DeleteGroupFilter(ctx, cmd.ID)
 	}
 
 	s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_group.delete", domain.AuditResultSuccess, fmt.Sprintf("id=%s, name=%s", group.ID, group.Name))
@@ -792,13 +885,51 @@ func toGroupView(group *domain.NodeGroup, edges []domain.GroupEdge) *GroupView {
 		}
 	}
 	return &GroupView{
-		ID:        group.ID,
-		Name:      group.Name,
-		GroupType: group.GroupType,
-		Edges:     edgeViews,
-		CreatedAt: group.CreatedAt,
-		UpdatedAt: group.UpdatedAt,
+		ID:         group.ID,
+		Name:       group.Name,
+		GroupType:  group.GroupType,
+		Edges:      edgeViews,
+		NodeFilter: group.NodeFilter,
+		CreatedAt:  group.CreatedAt,
+		UpdatedAt:  group.UpdatedAt,
 	}
+}
+
+// GetGlobalNodeFilter retrieves the singleton global node filter.
+func (s *Service) GetGlobalNodeFilter(ctx context.Context) (*domain.GlobalNodeFilter, error) {
+	if s.nodeFilterRepo == nil {
+		return &domain.GlobalNodeFilter{
+			Spec:      domain.NodeFilterSpec{Conditions: []domain.FilterCondition{}},
+			UpdatedAt: domain.NowUTC(),
+		}, nil
+	}
+	return s.nodeFilterRepo.GetGlobalFilter(ctx)
+}
+
+// SetGlobalNodeFilter updates the singleton global node filter.
+func (s *Service) SetGlobalNodeFilter(ctx context.Context, cmd SetGlobalNodeFilterCommand) (*domain.GlobalNodeFilter, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := cmd.Spec.Validate(); err != nil {
+		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy.global_filter.update", domain.AuditResultFailure, fmt.Sprintf("validation failed: %v", err))
+		return nil, err
+	}
+
+	filter := &domain.GlobalNodeFilter{
+		Spec:      cmd.Spec,
+		UpdatedAt: domain.NowUTC(),
+	}
+
+	if s.nodeFilterRepo != nil {
+		if err := s.nodeFilterRepo.SetGlobalFilter(ctx, filter); err != nil {
+			s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy.global_filter.update", domain.AuditResultFailure, fmt.Sprintf("persistence failed: %v", err))
+			return nil, err
+		}
+	}
+
+	s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy.global_filter.update", domain.AuditResultSuccess, fmt.Sprintf("conditions_count=%d", len(cmd.Spec.Conditions)))
+	return filter, nil
 }
 
 type canonicalSnapshot struct {

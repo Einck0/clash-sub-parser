@@ -38,6 +38,8 @@ func TestPortsInterfaces(t *testing.T) {
 	var _ domain.PublicationRepository = (domain.PublicationRepository)(nil)
 	var _ domain.SettingsRepository = (domain.SettingsRepository)(nil)
 	var _ domain.AuditRepository = (domain.AuditRepository)(nil)
+	var _ domain.ProbeScheduleRepository = (domain.ProbeScheduleRepository)(nil)
+	var _ domain.NodeFilterRepository = (domain.NodeFilterRepository)(nil)
 }
 
 func TestPaginationAndFilters(t *testing.T) {

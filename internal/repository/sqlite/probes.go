@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"clash-sub-parser/internal/domain"
@@ -242,12 +243,13 @@ func NewProbeObservationRepository(db *sql.DB) domain.ProbeObservationRepository
 
 func (r *probeObservationRepository) GetByID(ctx context.Context, id string) (*domain.ProbeObservation, error) {
 	const query = `
-	SELECT id, probe_run_id, node_logical_id, kind, verdict, evidence_digest, observed_at, latency_ms, redacted_summary
+	SELECT id, probe_run_id, node_logical_id, kind, verdict, evidence_digest, observed_at, latency_ms, redacted_summary, credential_version
 	FROM probe_observations
 	WHERE id = ?;`
 
 	var obs domain.ProbeObservation
 	var kindStr, verdictStr, observedStr string
+	var credVer sql.NullInt64
 
 	err := r.db.QueryRowContext(ctx, query, id).Scan(
 		&obs.ID,
@@ -259,6 +261,7 @@ func (r *probeObservationRepository) GetByID(ctx context.Context, id string) (*d
 		&observedStr,
 		&obs.LatencyMS,
 		&obs.RedactedSummary,
+		&credVer,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -270,13 +273,17 @@ func (r *probeObservationRepository) GetByID(ctx context.Context, id string) (*d
 	obs.Kind = domain.ProbeKind(kindStr)
 	obs.Verdict = domain.ProbeVerdict(verdictStr)
 	obs.ObservedAt, _ = time.Parse(time.RFC3339, observedStr)
+	if credVer.Valid {
+		v := int(credVer.Int64)
+		obs.CredentialVersion = &v
+	}
 
 	return &obs, nil
 }
 
 func (r *probeObservationRepository) ListByRun(ctx context.Context, runID string) ([]domain.ProbeObservation, error) {
 	const query = `
-	SELECT id, probe_run_id, node_logical_id, kind, verdict, evidence_digest, observed_at, latency_ms, redacted_summary
+	SELECT id, probe_run_id, node_logical_id, kind, verdict, evidence_digest, observed_at, latency_ms, redacted_summary, credential_version
 	FROM probe_observations
 	WHERE probe_run_id = ?
 	ORDER BY observed_at ASC;`
@@ -291,6 +298,7 @@ func (r *probeObservationRepository) ListByRun(ctx context.Context, runID string
 	for rows.Next() {
 		var obs domain.ProbeObservation
 		var kindStr, verdictStr, observedStr string
+		var credVer sql.NullInt64
 
 		err := rows.Scan(
 			&obs.ID,
@@ -302,6 +310,7 @@ func (r *probeObservationRepository) ListByRun(ctx context.Context, runID string
 			&observedStr,
 			&obs.LatencyMS,
 			&obs.RedactedSummary,
+			&credVer,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan probe observation: %w", err)
@@ -310,6 +319,10 @@ func (r *probeObservationRepository) ListByRun(ctx context.Context, runID string
 		obs.Kind = domain.ProbeKind(kindStr)
 		obs.Verdict = domain.ProbeVerdict(verdictStr)
 		obs.ObservedAt, _ = time.Parse(time.RFC3339, observedStr)
+		if credVer.Valid {
+			v := int(credVer.Int64)
+			obs.CredentialVersion = &v
+		}
 
 		items = append(items, obs)
 	}
@@ -325,7 +338,7 @@ func (r *probeObservationRepository) ListByNode(ctx context.Context, nodeLogical
 	}
 
 	const query = `
-	SELECT id, probe_run_id, node_logical_id, kind, verdict, evidence_digest, observed_at, latency_ms, redacted_summary
+	SELECT id, probe_run_id, node_logical_id, kind, verdict, evidence_digest, observed_at, latency_ms, redacted_summary, credential_version
 	FROM probe_observations
 	WHERE node_logical_id = ?
 	ORDER BY observed_at DESC
@@ -341,6 +354,7 @@ func (r *probeObservationRepository) ListByNode(ctx context.Context, nodeLogical
 	for rows.Next() {
 		var obs domain.ProbeObservation
 		var kindStr, verdictStr, observedStr string
+		var credVer sql.NullInt64
 
 		err := rows.Scan(
 			&obs.ID,
@@ -352,6 +366,7 @@ func (r *probeObservationRepository) ListByNode(ctx context.Context, nodeLogical
 			&observedStr,
 			&obs.LatencyMS,
 			&obs.RedactedSummary,
+			&credVer,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan probe observation: %w", err)
@@ -360,6 +375,10 @@ func (r *probeObservationRepository) ListByNode(ctx context.Context, nodeLogical
 		obs.Kind = domain.ProbeKind(kindStr)
 		obs.Verdict = domain.ProbeVerdict(verdictStr)
 		obs.ObservedAt, _ = time.Parse(time.RFC3339, observedStr)
+		if credVer.Valid {
+			v := int(credVer.Int64)
+			obs.CredentialVersion = &v
+		}
 
 		items = append(items, obs)
 	}
@@ -369,16 +388,121 @@ func (r *probeObservationRepository) ListByNode(ctx context.Context, nodeLogical
 	return items, nil
 }
 
+func (r *probeObservationRepository) ListLatestByNodes(ctx context.Context, nodeLogicalIDs []string, kinds []domain.ProbeKind) (map[string]map[domain.ProbeKind]domain.ProbeObservation, error) {
+	result := make(map[string]map[domain.ProbeKind]domain.ProbeObservation)
+	if len(nodeLogicalIDs) == 0 {
+		return result, nil
+	}
+
+	for _, id := range nodeLogicalIDs {
+		result[id] = make(map[domain.ProbeKind]domain.ProbeObservation)
+	}
+
+	const chunkSize = 100
+	for i := 0; i < len(nodeLogicalIDs); i += chunkSize {
+		end := i + chunkSize
+		if end > len(nodeLogicalIDs) {
+			end = len(nodeLogicalIDs)
+		}
+		chunk := nodeLogicalIDs[i:end]
+
+		placeholders := make([]string, len(chunk))
+		args := make([]interface{}, len(chunk))
+		for j, id := range chunk {
+			placeholders[j] = "?"
+			args[j] = id
+		}
+
+		var query string
+		if len(kinds) > 0 {
+			kindPlaceholders := make([]string, len(kinds))
+			for j, k := range kinds {
+				kindPlaceholders[j] = "?"
+				args = append(args, string(k))
+			}
+			query = fmt.Sprintf(`
+			SELECT id, probe_run_id, node_logical_id, kind, verdict, evidence_digest, observed_at, latency_ms, redacted_summary, credential_version
+			FROM probe_observations
+			WHERE node_logical_id IN (%s) AND kind IN (%s)
+			ORDER BY observed_at DESC, id DESC;`, strings.Join(placeholders, ", "), strings.Join(kindPlaceholders, ", "))
+		} else {
+			query = fmt.Sprintf(`
+			SELECT id, probe_run_id, node_logical_id, kind, verdict, evidence_digest, observed_at, latency_ms, redacted_summary, credential_version
+			FROM probe_observations
+			WHERE node_logical_id IN (%s)
+			ORDER BY observed_at DESC, id DESC;`, strings.Join(placeholders, ", "))
+		}
+
+		rows, err := r.db.QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, fmt.Errorf("failed to query latest observations for batch: %w", err)
+		}
+
+		for rows.Next() {
+			var obs domain.ProbeObservation
+			var kindStr, verdictStr, observedStr string
+			var credVer sql.NullInt64
+
+			err := rows.Scan(
+				&obs.ID,
+				&obs.ProbeRunID,
+				&obs.NodeLogicalID,
+				&kindStr,
+				&verdictStr,
+				&obs.EvidenceDigest,
+				&observedStr,
+				&obs.LatencyMS,
+				&obs.RedactedSummary,
+				&credVer,
+			)
+			if err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("failed to scan latest probe observation: %w", err)
+			}
+
+			obs.Kind = domain.ProbeKind(kindStr)
+			obs.Verdict = domain.ProbeVerdict(verdictStr)
+			obs.ObservedAt, _ = time.Parse(time.RFC3339, observedStr)
+			if credVer.Valid {
+				v := int(credVer.Int64)
+				obs.CredentialVersion = &v
+			}
+
+			nodeObs := result[obs.NodeLogicalID]
+			if nodeObs == nil {
+				nodeObs = make(map[domain.ProbeKind]domain.ProbeObservation)
+				result[obs.NodeLogicalID] = nodeObs
+			}
+			if _, exists := nodeObs[obs.Kind]; !exists {
+				nodeObs[obs.Kind] = obs
+			}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("error iterating latest probe observations: %w", err)
+		}
+		rows.Close()
+	}
+
+	return result, nil
+}
+
 func (r *probeObservationRepository) Create(ctx context.Context, obs *domain.ProbeObservation) error {
 	const query = `
 	INSERT INTO probe_observations (
 		id, probe_run_id, node_logical_id, kind, verdict,
-		evidence_digest, observed_at, latency_ms, redacted_summary
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);`
+		evidence_digest, observed_at, latency_ms, redacted_summary,
+		credential_version
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
 
 	observedStr := obs.ObservedAt.Format(time.RFC3339)
 	if obs.ObservedAt.IsZero() {
 		observedStr = domain.NowUTC().Format(time.RFC3339)
+	}
+
+	var credVerArg interface{}
+	if obs.CredentialVersion != nil {
+		credVerArg = *obs.CredentialVersion
 	}
 
 	_, err := r.db.ExecContext(ctx, query,
@@ -391,6 +515,7 @@ func (r *probeObservationRepository) Create(ctx context.Context, obs *domain.Pro
 		observedStr,
 		obs.LatencyMS,
 		obs.RedactedSummary,
+		credVerArg,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to insert probe observation: %w", err)

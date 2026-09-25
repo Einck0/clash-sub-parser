@@ -34,7 +34,7 @@ func (r *nodeRepository) listReadModelFast(ctx context.Context, filter domain.No
 		}
 		orderBy = fmt.Sprintf("display_name %s, logical_id ASC", order)
 	}
-	query := fmt.Sprintf("SELECT logical_id, protocol, display_name, normalized_config_secret_ref, active, created_at, updated_at FROM nodes%s ORDER BY %s LIMIT ? OFFSET ?;", whereSQL, orderBy)
+	query := fmt.Sprintf("SELECT logical_id, protocol, display_name, normalized_config_secret_ref, credential_version, active, created_at, updated_at FROM nodes%s ORDER BY %s LIMIT ? OFFSET ?;", whereSQL, orderBy)
 	rows, err := r.db.QueryContext(ctx, query, append(args, pageSize, offset)...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to query nodes: %w", err)
@@ -46,7 +46,7 @@ func (r *nodeRepository) listReadModelFast(ctx context.Context, filter domain.No
 		var n domain.Node
 		var active int
 		var created, updated string
-		if err := rows.Scan(&n.LogicalID, &n.Protocol, &n.DisplayName, &n.NormalizedConfigSecretRef, &active, &created, &updated); err != nil {
+		if err := rows.Scan(&n.LogicalID, &n.Protocol, &n.DisplayName, &n.NormalizedConfigSecretRef, &n.CredentialVersion, &active, &created, &updated); err != nil {
 			return nil, 0, err
 		}
 		n.Active = active == 1

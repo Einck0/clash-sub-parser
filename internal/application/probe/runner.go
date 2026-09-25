@@ -328,10 +328,13 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 			close(done)
 		}()
 
-		select {
+	select {
 		case <-runCtx.Done():
 			return handleCancelOrDeadline(done)
 		case <-done:
+			if runCtx.Err() != nil {
+				return handleCancelOrDeadline(done)
+			}
 			if submitErr != nil {
 				_ = run.TransitionTo(domain.ProbeRunStateFailed)
 				_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateFailed)
@@ -407,6 +410,9 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 	case <-runCtx.Done():
 		return handleCancelOrDeadline(stage1Done)
 	case <-stage1Done:
+		if runCtx.Err() != nil {
+			return handleCancelOrDeadline(stage1Done)
+		}
 		if stage1SubmitErr != nil {
 			_ = run.TransitionTo(domain.ProbeRunStateFailed)
 			_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateFailed)
@@ -494,6 +500,9 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 	case <-runCtx.Done():
 		return handleCancelOrDeadline(stage2Done)
 	case <-stage2Done:
+		if runCtx.Err() != nil {
+			return handleCancelOrDeadline(stage2Done)
+		}
 		if stage2SubmitErr != nil {
 			_ = run.TransitionTo(domain.ProbeRunStateFailed)
 			_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateFailed)
@@ -549,15 +558,21 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 		result = profiles.Result{}
 		eval := prof.Evaluate(result)
 		now := r.clock().UTC()
+		var credVer *int
+		if node.CredentialVersion > 0 {
+			cv := node.CredentialVersion
+			credVer = &cv
+		}
 		obs := &domain.ProbeObservation{
-			ID:              domain.MustNewUUIDv7(),
-			ProbeRunID:      run.ID,
-			NodeLogicalID:   node.LogicalID,
-			Kind:            kind,
-			Verdict:         eval.Verdict,
-			EvidenceDigest:  evidenceDigest(run.ID, node.LogicalID, prof.Version, eval.Verdict, 0, eval.Reason),
-			ObservedAt:      now,
-			RedactedSummary: fmt.Sprintf("profile=%s version=%s verdict=%s reason=%s status=0 latency_ms=0", prof.Kind, prof.Version, eval.Verdict, eval.Reason),
+			ID:                domain.MustNewUUIDv7(),
+			ProbeRunID:        run.ID,
+			NodeLogicalID:     node.LogicalID,
+			Kind:              kind,
+			Verdict:           eval.Verdict,
+			EvidenceDigest:    evidenceDigest(run.ID, node.LogicalID, prof.Version, eval.Verdict, 0, eval.Reason),
+			ObservedAt:        now,
+			RedactedSummary:   fmt.Sprintf("profile=%s version=%s verdict=%s reason=%s status=0 latency_ms=0", prof.Kind, prof.Version, eval.Verdict, eval.Reason),
+			CredentialVersion: credVer,
 		}
 		if createErr := r.observations.Create(ctx, obs); createErr != nil {
 			return eval.Verdict, createErr
@@ -628,16 +643,22 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 	if dialErr != nil && (errors.Is(dialErr, ErrCredentialsUnavailable) || strings.Contains(dialErr.Error(), "credentials_unavailable")) {
 		summary = summary + " error=credentials_unavailable"
 	}
+	var credVer *int
+	if node.CredentialVersion > 0 {
+		cv := node.CredentialVersion
+		credVer = &cv
+	}
 	obs := &domain.ProbeObservation{
-		ID:              domain.MustNewUUIDv7(),
-		ProbeRunID:      run.ID,
-		NodeLogicalID:   node.LogicalID,
-		Kind:            kind,
-		Verdict:         eval.Verdict,
-		EvidenceDigest:  evidenceDigest(run.ID, node.LogicalID, prof.Version, eval.Verdict, result.StatusCode, eval.Reason),
-		ObservedAt:      now,
-		LatencyMS:       latency,
-		RedactedSummary: summary,
+		ID:                domain.MustNewUUIDv7(),
+		ProbeRunID:        run.ID,
+		NodeLogicalID:     node.LogicalID,
+		Kind:              kind,
+		Verdict:           eval.Verdict,
+		EvidenceDigest:    evidenceDigest(run.ID, node.LogicalID, prof.Version, eval.Verdict, result.StatusCode, eval.Reason),
+		ObservedAt:        now,
+		LatencyMS:         latency,
+		RedactedSummary:   summary,
+		CredentialVersion: credVer,
 	}
 
 	if createErr := r.observations.Create(ctx, obs); createErr != nil {

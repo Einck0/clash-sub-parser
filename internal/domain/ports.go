@@ -79,6 +79,7 @@ type NodeRepository interface {
 // NodeSourceRepository defines the persistence port for node-subscription associations.
 type NodeSourceRepository interface {
 	ListByNode(ctx context.Context, logicalID string) ([]NodeSource, error)
+	ListByNodes(ctx context.Context, logicalIDs []string) (map[string][]NodeSource, error)
 	ListBySubscription(ctx context.Context, subID string) ([]NodeSource, error)
 	Upsert(ctx context.Context, src *NodeSource) error
 	DeleteBySubscriptionAndFetch(ctx context.Context, subID string, currentFetchID string) error
@@ -99,7 +100,35 @@ type ProbeObservationRepository interface {
 	GetByID(ctx context.Context, id string) (*ProbeObservation, error)
 	ListByRun(ctx context.Context, runID string) ([]ProbeObservation, error)
 	ListByNode(ctx context.Context, nodeLogicalID string, limit int) ([]ProbeObservation, error)
+	ListLatestByNodes(ctx context.Context, nodeLogicalIDs []string, kinds []ProbeKind) (map[string]map[ProbeKind]ProbeObservation, error)
 	Create(ctx context.Context, obs *ProbeObservation) error
+}
+
+// ProbeScheduleRepository defines the persistence port for periodic probe schedules, batches, and leases.
+type ProbeScheduleRepository interface {
+	Get(ctx context.Context) (*ProbeSchedule, error)
+	Update(ctx context.Context, schedule *ProbeSchedule) error
+
+	GetBatchByID(ctx context.Context, id string) (*ProbeBatch, error)
+	ListBatches(ctx context.Context, page, pageSize int) ([]ProbeBatch, int, error)
+	GetBatchByWindow(ctx context.Context, generation int64, windowAt time.Time) (*ProbeBatch, error)
+	CreateBatch(ctx context.Context, batch *ProbeBatch) error
+	UpdateBatch(ctx context.Context, batch *ProbeBatch) error
+
+	AcquireLease(ctx context.Context, batchID string, owner string, leaseDuration time.Duration) (bool, error)
+	HeartbeatLease(ctx context.Context, batchID string, owner string, leaseDuration time.Duration) error
+	ReleaseLease(ctx context.Context, batchID string, owner string) error
+}
+
+// NodeFilterRepository defines the persistence port for global and group node filter specifications.
+type NodeFilterRepository interface {
+	GetGlobalFilter(ctx context.Context) (*GlobalNodeFilter, error)
+	SetGlobalFilter(ctx context.Context, filter *GlobalNodeFilter) error
+
+	GetGroupFilter(ctx context.Context, groupID string) (*GroupNodeFilter, error)
+	SetGroupFilter(ctx context.Context, filter *GroupNodeFilter) error
+	DeleteGroupFilter(ctx context.Context, groupID string) error
+	ListGroupFilters(ctx context.Context) (map[string]NodeFilterSpec, error)
 }
 
 // PolicyRepository defines the persistence port for policy groups, edges, and rules.

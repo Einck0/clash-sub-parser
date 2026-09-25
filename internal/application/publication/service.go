@@ -33,6 +33,10 @@ type Service struct {
 	riskBinding domain.RiskPolicyGroupBindingRepository
 	riskObs     domain.IPRiskObservationRepository
 
+	nodeFilterRepo domain.NodeFilterRepository
+	sourceRepo     domain.NodeSourceRepository
+	obsRepo        domain.ProbeObservationRepository
+
 	mu        sync.RWMutex
 	artifacts map[string]*Artifact // keyed by publication ID
 }
@@ -94,6 +98,48 @@ func WithRiskObservationRepository(repo domain.IPRiskObservationRepository) Opti
 	return func(s *Service) {
 		s.riskObs = repo
 	}
+}
+
+// WithNodeFilterRepository sets the node filter repository for snapshot resolution.
+func WithNodeFilterRepository(repo domain.NodeFilterRepository) Option {
+	return func(s *Service) {
+		s.nodeFilterRepo = repo
+	}
+}
+
+// WithNodeSourceRepository sets the node source repository for snapshot resolution.
+func WithNodeSourceRepository(repo domain.NodeSourceRepository) Option {
+	return func(s *Service) {
+		s.sourceRepo = repo
+	}
+}
+
+// WithProbeObservationRepository sets the probe observation repository for snapshot resolution.
+func WithProbeObservationRepository(repo domain.ProbeObservationRepository) Option {
+	return func(s *Service) {
+		s.obsRepo = repo
+	}
+}
+
+// SetNodeFilterRepository allows dynamic configuration of the node filter repository.
+func (s *Service) SetNodeFilterRepository(repo domain.NodeFilterRepository) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.nodeFilterRepo = repo
+}
+
+// SetNodeSourceRepository allows dynamic configuration of the node source repository.
+func (s *Service) SetNodeSourceRepository(repo domain.NodeSourceRepository) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sourceRepo = repo
+}
+
+// SetProbeObservationRepository allows dynamic configuration of the probe observation repository.
+func (s *Service) SetProbeObservationRepository(repo domain.ProbeObservationRepository) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.obsRepo = repo
 }
 
 // NewService constructs a new publication application service.
@@ -273,6 +319,7 @@ func (s *Service) Preview(ctx context.Context, query PreviewQuery) (*PreviewResu
 		ContentType:    compileRes.ContentType,
 		Filename:       compileRes.Filename,
 		Diagnostics:    snapshot.Diagnostics,
+		FilterCounts:   snapshot.FilterCounts,
 	}, nil
 }
 
@@ -492,6 +539,40 @@ func (s *Service) resolveSnapshot(ctx context.Context, revisionID string) (*reso
 		return nil, fmt.Errorf("failed to list active nodes: %w", err)
 	}
 
+	var globalFilter *domain.NodeFilterSpec
+	var groupFilters map[string]domain.NodeFilterSpec
+	if s.nodeFilterRepo != nil {
+		gf, err := s.nodeFilterRepo.GetGlobalFilter(ctx)
+		if err == nil && gf != nil && !gf.Spec.IsEmpty() {
+			globalFilter = &gf.Spec
+		}
+		gfs, err := s.nodeFilterRepo.ListGroupFilters(ctx)
+		if err == nil {
+			groupFilters = gfs
+		}
+	}
+
+	nodeIDs := make([]string, len(nodes))
+	for i, n := range nodes {
+		nodeIDs[i] = n.LogicalID
+	}
+
+	var nodeSources map[string][]domain.NodeSource
+	if s.sourceRepo != nil && len(nodeIDs) > 0 {
+		sources, err := s.sourceRepo.ListByNodes(ctx, nodeIDs)
+		if err == nil {
+			nodeSources = sources
+		}
+	}
+
+	var latestObs map[string]map[domain.ProbeKind]domain.ProbeObservation
+	if s.obsRepo != nil && len(nodeIDs) > 0 {
+		obs, err := s.obsRepo.ListLatestByNodes(ctx, nodeIDs, nil)
+		if err == nil {
+			latestObs = obs
+		}
+	}
+
 	input := resolver.ResolveInput{
 		RevisionID:         revID,
 		InventoryWatermark: "v1",
@@ -505,6 +586,11 @@ func (s *Service) resolveSnapshot(ctx context.Context, revisionID string) (*reso
 			Enabled:     true,
 			Nameservers: []string{"1.1.1.1", "8.8.8.8"},
 		},
+		GlobalFilter:       globalFilter,
+		GroupFilters:       groupFilters,
+		NodeSources:        nodeSources,
+		LatestObservations: latestObs,
+		AsOf:               domain.NowUTC(),
 	}
 
 	if s.ipriskSvc != nil {
@@ -554,7 +640,7 @@ func (s *Service) evaluatePreflight(ctx context.Context, snapshot *resolver.Reso
 
 	// 1. Inspect existing snapshot diagnostics
 	for _, diagnostic := range snapshot.Diagnostics {
-		if diagnostic.Code == "risk_blocked" || diagnostic.Code == "risk_review" || diagnostic.Code == "risk_unknown" {
+		if diagnostic.Code == "risk_blocked" || diagnostic.Code == "risk_review" || diagnostic.Code == "risk_unknown" || diagnostic.Severity == resolver.DiagnosticSeverityError || diagnostic.Code == "empty_routed_group" {
 			result.Allowed = false
 			addDiagnostic(PreflightDiagnostic{
 				Severity: diagnostic.Severity,

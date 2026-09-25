@@ -732,3 +732,641 @@ func TestDeterministicResolver_ConcurrentResolutionsAreIdentical(t *testing.T) {
 		}
 	}
 }
+
+func TestResolver_TwoLevelFiltering_GlobalAndGroup(t *testing.T) {
+	r := resolver.New()
+	ctx := context.Background()
+
+	parentID := domain.MustNewUUIDv7()
+	n1 := domain.Node{LogicalID: testNodeLogicalID("hk-ss-01"), DisplayName: "HK SS 01", Protocol: domain.ProtocolSS, Active: true}
+	n2 := domain.Node{LogicalID: testNodeLogicalID("hk-vmess-02"), DisplayName: "HK VMess 02", Protocol: domain.ProtocolVMess, Active: true}
+	n3 := domain.Node{LogicalID: testNodeLogicalID("us-ss-03"), DisplayName: "US SS 03", Protocol: domain.ProtocolSS, Active: true}
+
+	input := resolver.ResolveInput{
+		RevisionID:         "rev-filter-1",
+		InventoryWatermark: "wm-1",
+		CompilerVersion:    "1.0.0",
+		Nodes:              []domain.Node{n1, n2, n3},
+		Groups: []domain.NodeGroup{
+			{ID: parentID, Name: "PROXY", GroupType: domain.GroupTypeSelect},
+		},
+		Edges: map[string][]domain.GroupEdge{
+			parentID: {
+				{ID: "e1", ParentGroupID: parentID, NodeLogicalID: &n1.LogicalID, Position: 0},
+				{ID: "e2", ParentGroupID: parentID, NodeLogicalID: &n2.LogicalID, Position: 1},
+				{ID: "e3", ParentGroupID: parentID, NodeLogicalID: &n3.LogicalID, Position: 2},
+			},
+		},
+		PolicyRules: []domain.PolicyRule{
+			{ID: "r1", TargetGroupID: parentID, Expression: "MATCH", Position: 0},
+		},
+		GlobalFilter: &domain.NodeFilterSpec{
+			Conditions: []domain.FilterCondition{
+				{Field: domain.FilterFieldProtocol, Op: domain.FilterOpEquals, Value: "ss"},
+			},
+		},
+		GroupFilters: map[string]domain.NodeFilterSpec{
+			parentID: {
+				Conditions: []domain.FilterCondition{
+					{Field: domain.FilterFieldDisplayName, Op: domain.FilterOpContains, Value: "HK"},
+				},
+			},
+		},
+		DNS: resolver.DNSConfig{Enabled: true, Nameservers: []string{"1.1.1.1"}},
+	}
+
+	snap, err := r.Resolve(ctx, input)
+	if err != nil {
+		t.Fatalf("resolve failed: %v", err)
+	}
+
+	// Global filter allows SS only: n1 (HK SS) and n3 (US SS). n2 (VMess) excluded globally.
+	if len(snap.Nodes) != 2 {
+		t.Fatalf("expected 2 globally admitted nodes, got %d", len(snap.Nodes))
+	}
+
+	// Group filter allows "HK" only: from {n1, n3}, only n1 passes.
+	if len(snap.Groups) != 1 {
+		t.Fatalf("expected 1 group, got %d", len(snap.Groups))
+	}
+	grp := snap.Groups[0]
+	if len(grp.Members) != 1 || grp.Members[0].TargetID != n1.LogicalID {
+		t.Fatalf("expected group to contain only n1, got %+v", grp.Members)
+	}
+
+	// Verify diagnostics: n2 excluded by global filter, n3 excluded by group filter
+	foundGlobalExcl := false
+	foundGroupExcl := false
+	for _, d := range snap.Diagnostics {
+		if d.Code == "global_filter_excluded" && d.Target == n2.LogicalID {
+			foundGlobalExcl = true
+		}
+		if d.Code == "group_member_filtered" && d.Target == n3.LogicalID {
+			foundGroupExcl = true
+		}
+	}
+	if !foundGlobalExcl {
+		t.Errorf("missing global_filter_excluded diagnostic for n2")
+	}
+	if !foundGroupExcl {
+		t.Errorf("missing group_member_filtered diagnostic for n3")
+	}
+}
+
+func TestResolver_DynamicGroup_MatchesFromGlobalPool(t *testing.T) {
+	r := resolver.New()
+	ctx := context.Background()
+
+	gid := domain.MustNewUUIDv7()
+	n1 := domain.Node{LogicalID: testNodeLogicalID("n-jp-01"), DisplayName: "JP Fast 01", Protocol: domain.ProtocolTrojan, Active: true}
+	n2 := domain.Node{LogicalID: testNodeLogicalID("n-us-02"), DisplayName: "US Fast 02", Protocol: domain.ProtocolTrojan, Active: true}
+	n3 := domain.Node{LogicalID: testNodeLogicalID("n-jp-03"), DisplayName: "JP Slow 03", Protocol: domain.ProtocolTrojan, Active: true}
+
+	input := resolver.ResolveInput{
+		RevisionID:         "rev-dyn-1",
+		InventoryWatermark: "wm-1",
+		CompilerVersion:    "1.0.0",
+		Nodes:              []domain.Node{n1, n2, n3},
+		Groups: []domain.NodeGroup{
+			{ID: gid, Name: "JP-Group", GroupType: domain.GroupTypeURLTest},
+		},
+		// No edges for gid!
+		Edges: map[string][]domain.GroupEdge{},
+		PolicyRules: []domain.PolicyRule{
+			{ID: "r1", TargetGroupID: gid, Expression: "MATCH", Position: 0},
+		},
+		GroupFilters: map[string]domain.NodeFilterSpec{
+			gid: {
+				Conditions: []domain.FilterCondition{
+					{Field: domain.FilterFieldDisplayName, Op: domain.FilterOpContains, Value: "JP"},
+				},
+			},
+		},
+		DNS: resolver.DNSConfig{Enabled: true, Nameservers: []string{"1.1.1.1"}},
+	}
+
+	snap, err := r.Resolve(ctx, input)
+	if err != nil {
+		t.Fatalf("resolve failed: %v", err)
+	}
+
+	if len(snap.Groups) != 1 {
+		t.Fatalf("expected 1 group, got %d", len(snap.Groups))
+	}
+	grp := snap.Groups[0]
+	// Dynamically matched n1 and n3, sorted by DisplayName ASC
+	if len(grp.Members) != 2 {
+		t.Fatalf("expected 2 dynamic members, got %d", len(grp.Members))
+	}
+	if grp.Members[0].TargetID != n1.LogicalID || grp.Members[1].TargetID != n3.LogicalID {
+		t.Fatalf("unexpected dynamic members: %+v", grp.Members)
+	}
+}
+
+func TestResolver_NestedGroupProjection_RestrictsChildNodes(t *testing.T) {
+	r := resolver.New()
+	ctx := context.Background()
+
+	parentID := domain.MustNewUUIDv7()
+	childID := domain.MustNewUUIDv7()
+
+	n1 := domain.Node{LogicalID: testNodeLogicalID("us-fast-01"), DisplayName: "US Fast 01", Protocol: domain.ProtocolTrojan, Active: true}
+	n2 := domain.Node{LogicalID: testNodeLogicalID("us-slow-02"), DisplayName: "US Slow 02", Protocol: domain.ProtocolTrojan, Active: true}
+
+	input := resolver.ResolveInput{
+		RevisionID:         "rev-nested-1",
+		InventoryWatermark: "wm-1",
+		CompilerVersion:    "1.0.0",
+		Nodes:              []domain.Node{n1, n2},
+		Groups: []domain.NodeGroup{
+			{ID: parentID, Name: "Proxy", GroupType: domain.GroupTypeSelect},
+			{ID: childID, Name: "US-Auto", GroupType: domain.GroupTypeURLTest},
+		},
+		Edges: map[string][]domain.GroupEdge{
+			parentID: {
+				{ID: "e1", ParentGroupID: parentID, ChildGroupID: &childID, Position: 0},
+			},
+			childID: {
+				{ID: "e2", ParentGroupID: childID, NodeLogicalID: &n1.LogicalID, Position: 0},
+				{ID: "e3", ParentGroupID: childID, NodeLogicalID: &n2.LogicalID, Position: 1},
+			},
+		},
+		PolicyRules: []domain.PolicyRule{
+			{ID: "r1", TargetGroupID: parentID, Expression: "MATCH", Position: 0},
+		},
+		GroupFilters: map[string]domain.NodeFilterSpec{
+			parentID: {
+				Conditions: []domain.FilterCondition{
+					{Field: domain.FilterFieldDisplayName, Op: domain.FilterOpContains, Value: "Fast"},
+				},
+			},
+		},
+		DNS: resolver.DNSConfig{Enabled: true, Nameservers: []string{"1.1.1.1"}},
+	}
+
+	snap, err := r.Resolve(ctx, input)
+	if err != nil {
+		t.Fatalf("resolve failed: %v", err)
+	}
+
+	// Parent has filter "Fast". Child has n1 (Fast) and n2 (Slow).
+	// A derived projection for Child under Parent must be created, containing only n1!
+	// In snap.Groups, we should have original Parent, original Child, and derived Child.
+	if len(snap.Groups) < 3 {
+		t.Fatalf("expected at least 3 groups including derived projection, got %d", len(snap.Groups))
+	}
+
+	var parentGroup *resolver.ResolvedGroup
+	for i := range snap.Groups {
+		if snap.Groups[i].ID == parentID {
+			parentGroup = &snap.Groups[i]
+			break
+		}
+	}
+	if parentGroup == nil {
+		t.Fatalf("parent group not found")
+	}
+
+	// Parent's member must reference the derived group
+	if len(parentGroup.Members) != 1 {
+		t.Fatalf("expected 1 member in parent, got %d", len(parentGroup.Members))
+	}
+	derivedMember := parentGroup.Members[0]
+	if derivedMember.TargetID == childID {
+		t.Fatalf("parent member should reference derived group ID, not original child ID")
+	}
+	if !strings.Contains(derivedMember.DisplayName, "US-Auto [Proxy]") {
+		t.Fatalf("expected derived name 'US-Auto [Proxy]', got %s", derivedMember.DisplayName)
+	}
+
+	// Parent's AllNodeLogicalIDs must only contain n1 (not n2!)
+	if len(parentGroup.AllNodeLogicalIDs) != 1 || parentGroup.AllNodeLogicalIDs[0] != n1.LogicalID {
+		t.Fatalf("parent AllNodeLogicalIDs must only contain n1, got %+v", parentGroup.AllNodeLogicalIDs)
+	}
+}
+
+func TestResolver_EmptyRoutedGroup_FailClosedDiagnostic(t *testing.T) {
+	r := resolver.New()
+	ctx := context.Background()
+
+	parentID := domain.MustNewUUIDv7()
+	n1 := domain.Node{LogicalID: testNodeLogicalID("hk-01"), DisplayName: "HK 01", Protocol: domain.ProtocolTrojan, Active: true}
+
+	input := resolver.ResolveInput{
+		RevisionID:         "rev-empty-1",
+		InventoryWatermark: "wm-1",
+		CompilerVersion:    "1.0.0",
+		Nodes:              []domain.Node{n1},
+		Groups: []domain.NodeGroup{
+			{ID: parentID, Name: "Proxy", GroupType: domain.GroupTypeSelect},
+		},
+		Edges: map[string][]domain.GroupEdge{
+			parentID: {
+				{ID: "e1", ParentGroupID: parentID, NodeLogicalID: &n1.LogicalID, Position: 0},
+			},
+		},
+		PolicyRules: []domain.PolicyRule{
+			{ID: "r1", TargetGroupID: parentID, Expression: "MATCH", Position: 0},
+		},
+		// Filter excludes n1, making Proxy completely empty
+		GroupFilters: map[string]domain.NodeFilterSpec{
+			parentID: {
+				Conditions: []domain.FilterCondition{
+					{Field: domain.FilterFieldDisplayName, Op: domain.FilterOpContains, Value: "NONEXISTENT"},
+				},
+			},
+		},
+		DNS: resolver.DNSConfig{Enabled: true, Nameservers: []string{"1.1.1.1"}},
+	}
+
+	snap, err := r.Resolve(ctx, input)
+	if err != nil {
+		t.Fatalf("resolve failed: %v", err)
+	}
+
+	foundEmptyRouted := false
+	for _, d := range snap.Diagnostics {
+		if d.Code == "empty_routed_group" && d.Severity == resolver.DiagnosticSeverityError {
+			foundEmptyRouted = true
+			if d.Target != parentID {
+				t.Fatalf("expected target to be %s, got %s", parentID, d.Target)
+			}
+		}
+	}
+	if !foundEmptyRouted {
+		t.Fatalf("expected empty_routed_group error diagnostic, got %+v", snap.Diagnostics)
+	}
+}
+
+func TestResolver_OldConfigEmptyGroup_PreservesWarning(t *testing.T) {
+	r := resolver.New()
+	ctx := context.Background()
+
+	parentID := domain.MustNewUUIDv7()
+
+	input := resolver.ResolveInput{
+		RevisionID:         "rev-old-1",
+		InventoryWatermark: "wm-1",
+		CompilerVersion:    "1.0.0",
+		Nodes:              []domain.Node{},
+		Groups: []domain.NodeGroup{
+			{ID: parentID, Name: "EmptyOldGroup", GroupType: domain.GroupTypeSelect},
+		},
+		Edges: map[string][]domain.GroupEdge{},
+		PolicyRules: []domain.PolicyRule{
+			{ID: "r1", TargetGroupID: parentID, Expression: "MATCH", Position: 0},
+		},
+		// No filters defined anywhere!
+		DNS: resolver.DNSConfig{Enabled: true, Nameservers: []string{"1.1.1.1"}},
+	}
+
+	snap, err := r.Resolve(ctx, input)
+	if err != nil {
+		t.Fatalf("resolve failed: %v", err)
+	}
+
+	foundWarning := false
+	for _, d := range snap.Diagnostics {
+		if d.Code == "empty_routed_group" {
+			t.Fatalf("old config with no filters should not emit empty_routed_group error")
+		}
+		if d.Code == "empty_group" && d.Severity == resolver.DiagnosticSeverityWarning {
+			foundWarning = true
+		}
+	}
+	if !foundWarning {
+		t.Fatalf("expected empty_group warning diagnostic for old config, got %+v", snap.Diagnostics)
+	}
+}
+
+func TestResolver_ProbeFailClosed_MissingExpiredMismatchNotEquals(t *testing.T) {
+	r := resolver.New()
+	ctx := context.Background()
+
+	gid := domain.MustNewUUIDv7()
+	nID := testNodeLogicalID("node-probe-test")
+	node := domain.Node{
+		LogicalID:         nID,
+		DisplayName:       "Probe Test Node",
+		Protocol:          domain.ProtocolTrojan,
+		Active:            true,
+		CredentialVersion: 2,
+	}
+
+	freshness := 300
+	kind := domain.ProbeKindBaseline
+	ver := 2
+	now := time.Now().UTC()
+
+	baseInput := func() resolver.ResolveInput {
+		return resolver.ResolveInput{
+			RevisionID:         "rev-p1",
+			InventoryWatermark: "wm-1",
+			CompilerVersion:    "1.0.0",
+			Nodes:              []domain.Node{node},
+			Groups:             []domain.NodeGroup{{ID: gid, Name: "G1", GroupType: domain.GroupTypeSelect}},
+			Edges: map[string][]domain.GroupEdge{
+				gid: {{ID: "e1", ParentGroupID: gid, NodeLogicalID: &nID, Position: 0}},
+			},
+			PolicyRules: []domain.PolicyRule{{ID: "r1", TargetGroupID: gid, Expression: "MATCH", Position: 0}},
+			DNS:         resolver.DNSConfig{Enabled: true, Nameservers: []string{"1.1.1.1"}},
+			AsOf:        now,
+		}
+	}
+
+	// 1. Missing observation: Even NOT_EQUALS 'error' must fail-closed (return false)
+	t.Run("missing observation rejects not_equals", func(t *testing.T) {
+		inp := baseInput()
+		inp.GlobalFilter = &domain.NodeFilterSpec{
+			Conditions: []domain.FilterCondition{
+				{
+					Field:            domain.FilterFieldProbeVerdict,
+					Op:               domain.FilterOpNotEquals,
+					Value:            "error",
+					ProbeKind:        &kind,
+					FreshnessSeconds: &freshness,
+				},
+			},
+		}
+		inp.LatestObservations = nil // missing
+
+		snap, err := r.Resolve(ctx, inp)
+		if err != nil {
+			t.Fatalf("resolve failed: %v", err)
+		}
+		if len(snap.Nodes) != 0 {
+			t.Fatalf("missing observation should fail-closed and reject node even for not_equals")
+		}
+	})
+
+	// 2. Mismatched credential version (obs version 1 vs node version 2)
+	t.Run("mismatched credential version rejects", func(t *testing.T) {
+		inp := baseInput()
+		inp.GlobalFilter = &domain.NodeFilterSpec{
+			Conditions: []domain.FilterCondition{
+				{
+					Field:            domain.FilterFieldProbeVerdict,
+					Op:               domain.FilterOpEquals,
+					Value:            "available",
+					ProbeKind:        &kind,
+					FreshnessSeconds: &freshness,
+				},
+			},
+		}
+		mismatchedVer := 1
+		inp.LatestObservations = map[string]map[domain.ProbeKind]domain.ProbeObservation{
+			nID: {
+				domain.ProbeKindBaseline: {
+					ID:                "obs-1",
+					NodeLogicalID:     nID,
+					Kind:              domain.ProbeKindBaseline,
+					Verdict:           domain.VerdictAvailable,
+					ObservedAt:        now,
+					CredentialVersion: &mismatchedVer,
+				},
+			},
+		}
+
+		snap, err := r.Resolve(ctx, inp)
+		if err != nil {
+			t.Fatalf("resolve failed: %v", err)
+		}
+		if len(snap.Nodes) != 0 {
+			t.Fatalf("mismatched credential version should fail-closed and reject node")
+		}
+	})
+
+	// 3. Expired observation
+	t.Run("expired observation rejects", func(t *testing.T) {
+		inp := baseInput()
+		inp.GlobalFilter = &domain.NodeFilterSpec{
+			Conditions: []domain.FilterCondition{
+				{
+					Field:            domain.FilterFieldProbeVerdict,
+					Op:               domain.FilterOpEquals,
+					Value:            "available",
+					ProbeKind:        &kind,
+					FreshnessSeconds: &freshness, // 300s
+				},
+			},
+		}
+		expiredTime := now.Add(-400 * time.Second) // 400s ago
+		inp.LatestObservations = map[string]map[domain.ProbeKind]domain.ProbeObservation{
+			nID: {
+				domain.ProbeKindBaseline: {
+					ID:                "obs-1",
+					NodeLogicalID:     nID,
+					Kind:              domain.ProbeKindBaseline,
+					Verdict:           domain.VerdictAvailable,
+					ObservedAt:        expiredTime,
+					CredentialVersion: &ver,
+				},
+			},
+		}
+
+		snap, err := r.Resolve(ctx, inp)
+		if err != nil {
+			t.Fatalf("resolve failed: %v", err)
+		}
+		if len(snap.Nodes) != 0 {
+			t.Fatalf("expired observation should fail-closed and reject node")
+		}
+	})
+
+	// 4. Valid observation passes
+	t.Run("valid observation passes", func(t *testing.T) {
+		inp := baseInput()
+		inp.GlobalFilter = &domain.NodeFilterSpec{
+			Conditions: []domain.FilterCondition{
+				{
+					Field:            domain.FilterFieldProbeVerdict,
+					Op:               domain.FilterOpEquals,
+					Value:            "available",
+					ProbeKind:        &kind,
+					FreshnessSeconds: &freshness,
+				},
+			},
+		}
+		validTime := now.Add(-50 * time.Second)
+		inp.LatestObservations = map[string]map[domain.ProbeKind]domain.ProbeObservation{
+			nID: {
+				domain.ProbeKindBaseline: {
+					ID:                "obs-1",
+					NodeLogicalID:     nID,
+					Kind:              domain.ProbeKindBaseline,
+					Verdict:           domain.VerdictAvailable,
+					LatencyMS:         45,
+					ObservedAt:        validTime,
+					CredentialVersion: &ver,
+				},
+			},
+		}
+
+		snap, err := r.Resolve(ctx, inp)
+		if err != nil {
+			t.Fatalf("resolve failed: %v", err)
+		}
+		if len(snap.Nodes) != 1 {
+			t.Fatalf("valid observation should admit node")
+		}
+	})
+}
+
+func TestResolver_MultiParentNestedGroupProjection(t *testing.T) {
+	r := resolver.New()
+	ctx := context.Background()
+
+	parent1ID := domain.MustNewUUIDv7()
+	parent2ID := domain.MustNewUUIDv7()
+	childID := domain.MustNewUUIDv7()
+
+	nUS := domain.Node{LogicalID: testNodeLogicalID("n-us-multi"), DisplayName: "US Node", Protocol: domain.ProtocolTrojan, Active: true}
+	nHK := domain.Node{LogicalID: testNodeLogicalID("n-hk-multi"), DisplayName: "HK Node", Protocol: domain.ProtocolTrojan, Active: true}
+
+	input := resolver.ResolveInput{
+		RevisionID:         "rev-multi-1",
+		InventoryWatermark: "wm-1",
+		CompilerVersion:    "1.0.0",
+		Nodes:              []domain.Node{nUS, nHK},
+		Groups: []domain.NodeGroup{
+			{ID: parent1ID, Name: "Parent-US", GroupType: domain.GroupTypeSelect},
+			{ID: parent2ID, Name: "Parent-HK", GroupType: domain.GroupTypeSelect},
+			{ID: childID, Name: "All-Auto", GroupType: domain.GroupTypeURLTest},
+		},
+		Edges: map[string][]domain.GroupEdge{
+			parent1ID: {{ID: "e1", ParentGroupID: parent1ID, ChildGroupID: &childID, Position: 0}},
+			parent2ID: {{ID: "e2", ParentGroupID: parent2ID, ChildGroupID: &childID, Position: 0}},
+			childID: {
+				{ID: "e3", ParentGroupID: childID, NodeLogicalID: &nUS.LogicalID, Position: 0},
+				{ID: "e4", ParentGroupID: childID, NodeLogicalID: &nHK.LogicalID, Position: 1},
+			},
+		},
+		PolicyRules: []domain.PolicyRule{
+			{ID: "r1", TargetGroupID: parent1ID, Expression: "DOMAIN-SUFFIX,google.com", Position: 0},
+			{ID: "r2", TargetGroupID: parent2ID, Expression: "MATCH", Position: 1},
+		},
+		GroupFilters: map[string]domain.NodeFilterSpec{
+			parent1ID: {
+				Conditions: []domain.FilterCondition{
+					{Field: domain.FilterFieldDisplayName, Op: domain.FilterOpContains, Value: "US"},
+				},
+			},
+			parent2ID: {
+				Conditions: []domain.FilterCondition{
+					{Field: domain.FilterFieldDisplayName, Op: domain.FilterOpContains, Value: "HK"},
+				},
+			},
+		},
+		DNS: resolver.DNSConfig{Enabled: true, Nameservers: []string{"1.1.1.1"}},
+	}
+
+	snap, err := r.Resolve(ctx, input)
+	if err != nil {
+		t.Fatalf("resolve failed: %v", err)
+	}
+
+	var p1, p2 *resolver.ResolvedGroup
+	for i := range snap.Groups {
+		if snap.Groups[i].ID == parent1ID {
+			p1 = &snap.Groups[i]
+		}
+		if snap.Groups[i].ID == parent2ID {
+			p2 = &snap.Groups[i]
+		}
+	}
+	if p1 == nil || p2 == nil {
+		t.Fatalf("parents not found")
+	}
+
+	// p1's AllNodeLogicalIDs must only contain nUS
+	if len(p1.AllNodeLogicalIDs) != 1 || p1.AllNodeLogicalIDs[0] != nUS.LogicalID {
+		t.Fatalf("p1 should only contain nUS, got %+v", p1.AllNodeLogicalIDs)
+	}
+
+	// p2's AllNodeLogicalIDs must only contain nHK
+	if len(p2.AllNodeLogicalIDs) != 1 || p2.AllNodeLogicalIDs[0] != nHK.LogicalID {
+		t.Fatalf("p2 should only contain nHK, got %+v", p2.AllNodeLogicalIDs)
+	}
+
+	// Ensure p1's member derived ID != p2's member derived ID
+	if p1.Members[0].TargetID == p2.Members[0].TargetID {
+		t.Fatalf("derived child groups for different parents must have unique IDs")
+	}
+}
+
+func TestResolver_FreshnessBoundaryDigestChange(t *testing.T) {
+	r := resolver.New()
+	ctx := context.Background()
+
+	gid := domain.MustNewUUIDv7()
+	nID := testNodeLogicalID("node-freshness-digest")
+	node := domain.Node{
+		LogicalID:         nID,
+		DisplayName:       "Digest Node",
+		Protocol:          domain.ProtocolTrojan,
+		Active:            true,
+		CredentialVersion: 1,
+	}
+
+	kind := domain.ProbeKindBaseline
+	ver := 1
+	obsTime := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
+
+	createInput := func(asOf time.Time) resolver.ResolveInput {
+		return resolver.ResolveInput{
+			RevisionID:         "rev-f1",
+			InventoryWatermark: "wm-1",
+			CompilerVersion:    "1.0.0",
+			Nodes:              []domain.Node{node},
+			Groups:             []domain.NodeGroup{{ID: gid, Name: "G1", GroupType: domain.GroupTypeSelect}},
+			Edges: map[string][]domain.GroupEdge{
+				gid: {{ID: "e1", ParentGroupID: gid, NodeLogicalID: &nID, Position: 0}},
+			},
+			PolicyRules: []domain.PolicyRule{{ID: "r1", TargetGroupID: gid, Expression: "MATCH", Position: 0}},
+			DNS:         resolver.DNSConfig{Enabled: true, Nameservers: []string{"1.1.1.1"}},
+			LatestObservations: map[string]map[domain.ProbeKind]domain.ProbeObservation{
+				nID: {
+					domain.ProbeKindBaseline: {
+						ID:                "obs-1",
+						NodeLogicalID:     nID,
+						Kind:              kind,
+						Verdict:           domain.VerdictAvailable,
+						LatencyMS:         30,
+						ObservedAt:        obsTime,
+						CredentialVersion: &ver,
+					},
+				},
+			},
+			AsOf: asOf,
+		}
+	}
+
+	// Two asOf timestamps within fresh window (e.g. 1 hour and 2 hours after obsTime, where 24h freshness is default)
+	asOf1 := obsTime.Add(1 * time.Hour)
+	asOf2 := obsTime.Add(2 * time.Hour)
+	// One asOf timestamp after expiration (> 24 hours after obsTime)
+	asOfExpired := obsTime.Add(25 * time.Hour)
+
+	snap1, err := r.Resolve(ctx, createInput(asOf1))
+	if err != nil {
+		t.Fatalf("snap1 failed: %v", err)
+	}
+	snap2, err := r.Resolve(ctx, createInput(asOf2))
+	if err != nil {
+		t.Fatalf("snap2 failed: %v", err)
+	}
+	snapExp, err := r.Resolve(ctx, createInput(asOfExpired))
+	if err != nil {
+		t.Fatalf("snapExp failed: %v", err)
+	}
+
+	// Within freshness window, wall-clock advance should not alter input digest
+	if snap1.InputDigest != snap2.InputDigest {
+		t.Fatalf("input digest should be identical across wall-clock ticks before freshness boundary: %s != %s", snap1.InputDigest, snap2.InputDigest)
+	}
+
+	// Crossing the 24h freshness boundary MUST alter input digest
+	if snap1.InputDigest == snapExp.InputDigest {
+		t.Fatalf("input digest MUST change when crossing freshness expiration boundary")
+	}
+}

@@ -193,6 +193,27 @@ onUnmounted(() => {
                     :label="`AI: ${nodeCapabilityLabel(node, 'ai').label}`"
                     :tone="nodeCapabilityLabel(node, 'ai').tone"
                   />
+                  <span
+                    v-if="node.probeStale"
+                    class="badge badge-warning badge-sm gap-1 font-mono text-[11px]"
+                    title="Probe observations are stale (> freshness window)"
+                  >
+                    Stale Probe
+                  </span>
+                  <span
+                    v-if="node.probeMissing"
+                    class="badge badge-ghost badge-sm gap-1 font-mono text-[11px] opacity-75"
+                    title="No probe observations recorded yet"
+                  >
+                    No Probe
+                  </span>
+                  <span
+                    v-if="node.credentialMismatch"
+                    class="badge badge-error badge-sm gap-1 font-mono text-[11px]"
+                    title="Node credential version does not match observation version"
+                  >
+                    Version Mismatch
+                  </span>
                 </div>
               </div>
             </article>

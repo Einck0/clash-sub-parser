@@ -91,13 +91,14 @@ type PreviewQuery struct {
 
 // PreviewResult contains rendered configuration content, digests, and diagnostics for preview.
 type PreviewResult struct {
-	Target         domain.CompilerTarget `json:"target"`
-	SnapshotDigest string                `json:"snapshot_digest"`
-	ContentDigest  string                `json:"content_digest"`
-	Content        []byte                `json:"content"`
-	ContentType    string                `json:"content_type"`
-	Filename       string                `json:"filename"`
-	Diagnostics    []resolver.Diagnostic `json:"diagnostics"`
+	Target         domain.CompilerTarget       `json:"target"`
+	SnapshotDigest string                      `json:"snapshot_digest"`
+	ContentDigest  string                      `json:"content_digest"`
+	Content        []byte                      `json:"content"`
+	ContentType    string                      `json:"content_type"`
+	Filename       string                      `json:"filename"`
+	Diagnostics    []resolver.Diagnostic       `json:"diagnostics"`
+	FilterCounts   *resolver.FilterLayerCounts `json:"filter_counts,omitempty"`
 }
 
 // RevokeCommand specifies a publication to revoke along with audit context.

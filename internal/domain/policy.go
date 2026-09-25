@@ -7,11 +7,12 @@ import (
 
 // NodeGroup represents a policy group in the routing graph.
 type NodeGroup struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	GroupType GroupType `json:"group_type"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID         string          `json:"id"`
+	Name       string          `json:"name"`
+	GroupType  GroupType       `json:"group_type"`
+	NodeFilter *NodeFilterSpec `json:"node_filter,omitempty"`
+	CreatedAt  time.Time       `json:"created_at"`
+	UpdatedAt  time.Time       `json:"updated_at"`
 }
 
 // GroupEdge represents a directed edge in the policy graph.

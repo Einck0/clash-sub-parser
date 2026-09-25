@@ -279,6 +279,60 @@ func (r *nodeSourceRepository) ListByNode(ctx context.Context, logicalID string)
 	return items, nil
 }
 
+func (r *nodeSourceRepository) ListByNodes(ctx context.Context, logicalIDs []string) (map[string][]domain.NodeSource, error) {
+	result := make(map[string][]domain.NodeSource)
+	if len(logicalIDs) == 0 {
+		return result, nil
+	}
+
+	for _, id := range logicalIDs {
+		result[id] = make([]domain.NodeSource, 0)
+	}
+
+	const chunkSize = 100
+	for i := 0; i < len(logicalIDs); i += chunkSize {
+		end := i + chunkSize
+		if end > len(logicalIDs) {
+			end = len(logicalIDs)
+		}
+		chunk := logicalIDs[i:end]
+
+		placeholders := make([]string, len(chunk))
+		args := make([]interface{}, len(chunk))
+		for j, id := range chunk {
+			placeholders[j] = "?"
+			args[j] = id
+		}
+
+		query := fmt.Sprintf(`
+		SELECT node_logical_id, subscription_id, last_seen_fetch_id
+		FROM node_sources
+		WHERE node_logical_id IN (%s)
+		ORDER BY node_logical_id ASC, subscription_id ASC;`, strings.Join(placeholders, ", "))
+
+		rows, err := r.db.QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, fmt.Errorf("failed to query node sources for batch: %w", err)
+		}
+
+		for rows.Next() {
+			var s domain.NodeSource
+			if err := rows.Scan(&s.NodeLogicalID, &s.SubscriptionID, &s.LastSeenFetchID); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("failed to scan node source in batch: %w", err)
+			}
+			result[s.NodeLogicalID] = append(result[s.NodeLogicalID], s)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("error iterating node sources in batch: %w", err)
+		}
+		rows.Close()
+	}
+
+	return result, nil
+}
+
 func (r *nodeSourceRepository) ListBySubscription(ctx context.Context, subID string) ([]domain.NodeSource, error) {
 	const query = `
 	SELECT node_logical_id, subscription_id, last_seen_fetch_id

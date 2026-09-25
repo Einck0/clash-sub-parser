@@ -42,6 +42,7 @@ const {
   revoking,
   error,
   errorDetail,
+  preflightDiagnostics,
   isNoActiveRevision,
   copied,
   fetchPreview,
@@ -227,6 +228,26 @@ onMounted(() => {
       @retry="() => fetchPreview(selectedTarget)"
     />
 
+    <!-- Preflight Diagnostics Block (e.g. Empty Route Group Rejection) -->
+    <div
+      v-if="preflightDiagnostics && preflightDiagnostics.length > 0"
+      class="p-4 rounded-xl bg-error/10 border border-error/30 text-error text-xs space-y-2"
+    >
+      <div class="font-bold flex items-center gap-2 text-sm">
+        <ExclamationTriangleIcon class="w-5 h-5 flex-shrink-0" />
+        Publication Blocked: Preflight Rejection (Empty Route Group Protection)
+      </div>
+      <p class="opacity-85">
+        One or more target routing groups resolved to empty candidate sets after filter application. Configuration export is blocked to prevent invalid client configs.
+      </p>
+      <ul class="list-disc list-inside font-mono space-y-1 pl-1">
+        <li v-for="(diag, idx) in preflightDiagnostics" :key="idx">
+          <strong>{{ diag.target ? `[${diag.target}] ` : '' }}{{ diag.message }}</strong>
+          <span v-if="diag.reason" class="opacity-75 block pl-4">Reason: {{ diag.reason }}</span>
+        </li>
+      </ul>
+    </div>
+
     <!-- Target Selector Tabs (Zashboard-inspired sleek pills) -->
     <div class="flex flex-wrap items-center gap-2 pb-1 text-xs w-full min-w-0" role="tablist" aria-label="Target formats">
       <button
@@ -273,6 +294,42 @@ onMounted(() => {
           </div>
         </div>
 
+        <!-- Filter Layer Counts Bar (if available) -->
+        <div
+          v-if="preview?.filter_counts"
+          class="flex flex-col gap-2 p-2.5 rounded-lg bg-base-100 border border-base-300 text-xs font-mono"
+        >
+          <div class="flex flex-wrap items-center gap-3">
+            <span class="opacity-60 font-sans">Filter Pipeline:</span>
+            <span>Raw: <strong>{{ preview.filter_counts.raw_total ?? '--' }}</strong></span>
+            <span class="opacity-40">→</span>
+            <span>Admitted: <strong>{{ preview.filter_counts.admitted_total ?? '--' }}</strong></span>
+            <span class="opacity-40">→</span>
+            <span class="text-primary font-semibold">
+              Global Kept: <strong>{{ preview.filter_counts.global_filtered_total ?? '--' }}</strong>
+            </span>
+            <span class="opacity-40">→</span>
+            <span class="text-success font-semibold">
+              Group Kept: <strong>{{ preview.filter_counts.group_filtered_total ?? '--' }}</strong>
+            </span>
+          </div>
+
+          <div
+            v-if="preview.filter_counts.group_counts && Object.keys(preview.filter_counts.group_counts).length > 0"
+            class="flex flex-wrap items-center gap-1.5 pt-1.5 border-t border-base-300/40 text-[11px]"
+          >
+            <span class="opacity-60 font-sans">Group Breakdown:</span>
+            <span
+              v-for="(gc, gName) in preview.filter_counts.group_counts"
+              :key="gName"
+              class="badge badge-xs font-mono badge-ghost"
+              :title="`Candidates: ${gc.candidate}, Kept: ${gc.kept}, Excluded: ${gc.excluded}`"
+            >
+              {{ gName }}: {{ gc.kept }}/{{ gc.candidate }}
+            </span>
+          </div>
+        </div>
+
         <!-- Diagnostics Warnings if any -->
         <div
           v-if="preview?.diagnostics && preview.diagnostics.length > 0"
@@ -282,9 +339,15 @@ onMounted(() => {
             <ExclamationTriangleIcon class="w-4 h-4" />
             Compiler Diagnostics
           </div>
-          <ul class="list-disc list-inside font-mono">
+          <ul class="list-disc list-inside font-mono space-y-0.5">
             <li v-for="(diag, idx) in preview.diagnostics" :key="idx">
-              {{ diag.message }}
+              <span>{{ diag.message }}</span>
+              <span v-if="diag.reason" class="opacity-75 block text-[11px] pl-4">
+                Reason: {{ diag.reason }}
+              </span>
+              <span v-if="diag.excluded_count !== undefined" class="opacity-75 block text-[11px] pl-4">
+                Excluded: {{ diag.excluded_count }} nodes
+              </span>
             </li>
           </ul>
         </div>

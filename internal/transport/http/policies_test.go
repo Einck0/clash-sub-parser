@@ -24,8 +24,9 @@ func setupPolicyTestRouter(t *testing.T, db *sql.DB) (http.Handler, *policy.Serv
 	revRepo := sqlite.NewRevisionRepository(db)
 	nodeRepo := sqlite.NewNodeRepository(db)
 	auditRepo := sqlite.NewAuditRepository(db)
+	filterRepo := sqlite.NewNodeFilterRepository(db)
 
-	policySvc := policy.NewService(policyRepo, revRepo, nodeRepo, auditRepo)
+	policySvc := policy.NewService(policyRepo, revRepo, nodeRepo, auditRepo, filterRepo)
 	routerCfg.PolicyService = policySvc
 	routerCfg.AuditRepository = auditRepo
 
@@ -388,5 +389,150 @@ func TestPolicyValidateEndpoint(t *testing.T) {
 	}
 	if !okResp.Data.Valid {
 		t.Errorf("expected validation to be valid: %#v", okResp.Data)
+	}
+}
+
+func TestPolicyGlobalNodeFilterEndpoint_AuthAndCRUD(t *testing.T) {
+	db := newCleanSQLiteDB(t)
+	router, _ := setupPolicyTestRouter(t, db)
+
+	// 1. Unauthorized GET -> 401
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/policies/global-node-filter", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 Unauthorized for unauthenticated GET, got %d", rec.Code)
+	}
+
+	// 2. Authorized GET -> 200 (returns default empty filter)
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/policies/global-node-filter", nil)
+	req.Header.Set("Authorization", "Bearer "+testAdminToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for GET global-node-filter, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var getResp testDataResponse[domain.GlobalNodeFilter]
+	if err := json.Unmarshal(rec.Body.Bytes(), &getResp); err != nil {
+		t.Fatalf("failed to unmarshal global filter response: %v", err)
+	}
+	if len(getResp.Data.Spec.Conditions) != 0 {
+		t.Fatalf("expected 0 conditions initially, got %d", len(getResp.Data.Spec.Conditions))
+	}
+
+	// 3. Authorized PUT with valid spec -> 200
+	validPayload := `{"spec":{"conditions":[{"field":"protocol","op":"equals","value":"ss"}]}}`
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/policies/global-node-filter", strings.NewReader(validPayload))
+	req.Header.Set("Authorization", "Bearer "+testAdminToken)
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for PUT global-node-filter, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// 4. Verify updated filter via GET
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/policies/global-node-filter", nil)
+	req.Header.Set("Authorization", "Bearer "+testAdminToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	var updatedResp testDataResponse[domain.GlobalNodeFilter]
+	if err := json.Unmarshal(rec.Body.Bytes(), &updatedResp); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	if len(updatedResp.Data.Spec.Conditions) != 1 || updatedResp.Data.Spec.Conditions[0].Value != "ss" {
+		t.Fatalf("unexpected updated filter: %+v", updatedResp.Data)
+	}
+
+	// 5. Authorized PUT with invalid spec (negative latency) -> 422 Unprocessable Entity
+	invalidPayload := `{"spec":{"conditions":[{"field":"probe_latency_ms","op":"lte","value":"-50","probe_kind":"baseline"}]}}`
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/policies/global-node-filter", strings.NewReader(invalidPayload))
+	req.Header.Set("Authorization", "Bearer "+testAdminToken)
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 Unprocessable Entity for invalid spec, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestPolicyGroups_NodeFilter_CreateUpdatePatchClear(t *testing.T) {
+	db := newCleanSQLiteDB(t)
+	router, _ := setupPolicyTestRouter(t, db)
+
+	// 1. Create group with node_filter
+	createPayload := `{
+		"name": "US-Nodes",
+		"group_type": "select",
+		"node_filter": {
+			"conditions": [
+				{"field": "display_name", "op": "contains", "value": "US"}
+			]
+		}
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/policies/groups", strings.NewReader(createPayload))
+	req.Header.Set("Authorization", "Bearer "+testAdminToken)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var createResp testDataResponse[policy.GroupView]
+	if err := json.Unmarshal(rec.Body.Bytes(), &createResp); err != nil {
+		t.Fatalf("failed to parse create response: %v", err)
+	}
+	groupID := createResp.Data.ID
+	if createResp.Data.NodeFilter == nil || len(createResp.Data.NodeFilter.Conditions) != 1 {
+		t.Fatalf("expected created group to have filter, got %+v", createResp.Data.NodeFilter)
+	}
+
+	// 2. PATCH omitting node_filter must NOT clear filter
+	patchOmitPayload := `{"name": "US-Nodes-Renamed"}`
+	req = httptest.NewRequest(http.MethodPatch, "/api/v1/policies/groups/"+groupID, strings.NewReader(patchOmitPayload))
+	req.Header.Set("Authorization", "Bearer "+testAdminToken)
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for PATCH omit, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var patchOmitResp testDataResponse[policy.GroupView]
+	if err := json.Unmarshal(rec.Body.Bytes(), &patchOmitResp); err != nil {
+		t.Fatalf("failed to parse patch response: %v", err)
+	}
+	if patchOmitResp.Data.NodeFilter == nil || len(patchOmitResp.Data.NodeFilter.Conditions) != 1 {
+		t.Fatalf("omitting node_filter in PATCH must retain existing filter, got %+v", patchOmitResp.Data.NodeFilter)
+	}
+
+	// 3. PATCH with null node_filter must CLEAR filter
+	patchClearPayload := `{"node_filter": null}`
+	req = httptest.NewRequest(http.MethodPatch, "/api/v1/policies/groups/"+groupID, strings.NewReader(patchClearPayload))
+	req.Header.Set("Authorization", "Bearer "+testAdminToken)
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for PATCH clear, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var patchClearResp testDataResponse[policy.GroupView]
+	if err := json.Unmarshal(rec.Body.Bytes(), &patchClearResp); err != nil {
+		t.Fatalf("failed to parse: %v", err)
+	}
+	if patchClearResp.Data.NodeFilter != nil {
+		t.Fatalf("PATCH with null node_filter must clear filter, got %+v", patchClearResp.Data.NodeFilter)
+	}
+
+	// 4. Verify GET returns cleared filter
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/policies/groups/"+groupID, nil)
+	req.Header.Set("Authorization", "Bearer "+testAdminToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	var getResp testDataResponse[policy.GroupView]
+	if err := json.Unmarshal(rec.Body.Bytes(), &getResp); err != nil {
+		t.Fatalf("failed to parse: %v", err)
+	}
+	if getResp.Data.NodeFilter != nil {
+		t.Fatalf("persisted filter must be cleared, got %+v", getResp.Data.NodeFilter)
 	}
 }

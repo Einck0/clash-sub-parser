@@ -1,6 +1,6 @@
 import { computed, ref } from 'vue'
 import { api, ApiError } from '../../api/client'
-import type { CompilerTarget, PreviewResult, PublicationDetail } from './publicationTypes'
+import type { CompilerTarget, Diagnostic, PreviewResult, PublicationDetail } from './publicationTypes'
 
 export function usePublications() {
   const selectedTarget = ref<CompilerTarget>('clash')
@@ -11,6 +11,7 @@ export function usePublications() {
   const revoking = ref(false)
   const error = ref('')
   const errorDetail = ref<ApiError | Error | null>(null)
+  const preflightDiagnostics = ref<Diagnostic[]>([])
   const copied = ref(false)
 
   const isNoActiveRevision = computed(() => {
@@ -25,6 +26,7 @@ export function usePublications() {
     loadingPreview.value = true
     error.value = ''
     errorDetail.value = null
+    preflightDiagnostics.value = []
     try {
       const payload: Record<string, string> = { target }
       if (revisionId) payload.revision_id = revisionId
@@ -36,6 +38,9 @@ export function usePublications() {
       preview.value = null
       errorDetail.value = err instanceof Error ? err : new Error(String(err))
       error.value = err instanceof Error ? err.message : 'Failed to fetch preview'
+      if (err instanceof ApiError && (err.details as any)?.diagnostics) {
+        preflightDiagnostics.value = (err.details as any).diagnostics
+      }
       return null
     } finally {
       loadingPreview.value = false
@@ -46,6 +51,7 @@ export function usePublications() {
     publishing.value = true
     error.value = ''
     errorDetail.value = null
+    preflightDiagnostics.value = []
     try {
       const payload: Record<string, string> = { target }
       if (revisionId) payload.revision_id = revisionId
@@ -56,6 +62,9 @@ export function usePublications() {
       errorDetail.value = err instanceof Error ? err : new Error(String(err))
       const msg = err instanceof Error ? err.message : 'Failed to publish configuration'
       error.value = msg
+      if (err instanceof ApiError && (err.details as any)?.diagnostics) {
+        preflightDiagnostics.value = (err.details as any).diagnostics
+      }
       throw err
     } finally {
       publishing.value = false
@@ -127,6 +136,7 @@ export function usePublications() {
     revoking,
     error,
     errorDetail,
+    preflightDiagnostics,
     isNoActiveRevision,
     copied,
     fetchPreview,

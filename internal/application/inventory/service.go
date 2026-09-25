@@ -33,38 +33,43 @@ type NodeDetail struct {
 	Sources            []domain.NodeSource        `json:"sources"`
 	IPRiskSummary      *domain.IPRiskSummary      `json:"ip_risk_summary,omitempty"`
 	RecentObservations []domain.IPRiskObservation `json:"recent_observations,omitempty"`
+	CredentialMismatch bool                       `json:"credential_mismatch,omitempty"`
 }
 
 // NodeView is the API-safe view of a Node without internal secret references.
 type NodeView struct {
-	LogicalID     string                `json:"logical_id"`
-	Protocol      domain.Protocol       `json:"protocol"`
-	DisplayName   string                `json:"display_name"`
-	Active        bool                  `json:"active"`
-	CreatedAt     time.Time             `json:"created_at"`
-	UpdatedAt     time.Time             `json:"updated_at"`
-	IPRiskSummary *domain.IPRiskSummary `json:"ip_risk_summary,omitempty"`
+	LogicalID          string                `json:"logical_id"`
+	Protocol           domain.Protocol       `json:"protocol"`
+	DisplayName        string                `json:"display_name"`
+	Active             bool                  `json:"active"`
+	CredentialVersion  int                   `json:"credential_version"`
+	CredentialMismatch bool                  `json:"credential_mismatch,omitempty"`
+	CreatedAt          time.Time             `json:"created_at"`
+	UpdatedAt          time.Time             `json:"updated_at"`
+	IPRiskSummary      *domain.IPRiskSummary `json:"ip_risk_summary,omitempty"`
 }
 
 // ToNodeView converts a domain.Node to an API-safe NodeView, stripping secret references.
 func ToNodeView(n domain.Node) NodeView {
 	return NodeView{
-		LogicalID:   n.LogicalID,
-		Protocol:    n.Protocol,
-		DisplayName: n.DisplayName,
-		Active:      n.Active,
-		CreatedAt:   n.CreatedAt,
-		UpdatedAt:   n.UpdatedAt,
+		LogicalID:         n.LogicalID,
+		Protocol:          n.Protocol,
+		DisplayName:       n.DisplayName,
+		Active:            n.Active,
+		CredentialVersion: n.CredentialVersion,
+		CreatedAt:         n.CreatedAt,
+		UpdatedAt:         n.UpdatedAt,
 	}
 }
 
 // ToNodeViewFromReadModel converts a domain.NodeReadModel to an API-safe NodeView.
 func ToNodeViewFromReadModel(rm domain.NodeReadModel) NodeView {
 	return NodeView{
-		LogicalID:     rm.Node.LogicalID,
-		Protocol:      rm.Node.Protocol,
-		DisplayName:   rm.Node.DisplayName,
+		LogicalID:         rm.Node.LogicalID,
+		Protocol:          rm.Node.Protocol,
+		DisplayName:       rm.Node.DisplayName,
 		Active:        rm.Node.Active,
+		CredentialVersion: rm.Node.CredentialVersion,
 		CreatedAt:     rm.Node.CreatedAt,
 		UpdatedAt:     rm.Node.UpdatedAt,
 		IPRiskSummary: rm.IPRiskSummary,
@@ -103,6 +108,7 @@ type Service struct {
 	fetcher       fetch.Fetcher
 	vault         *domain.NodeCredentialVault
 	credRepo      domain.NodeCredentialRepository
+	probeObsRepo  domain.ProbeObservationRepository
 	mu            sync.Mutex
 }
 
@@ -117,6 +123,13 @@ func WithCredentialVault(vault *domain.NodeCredentialVault, credRepo domain.Node
 	return func(s *Service) {
 		s.vault = vault
 		s.credRepo = credRepo
+	}
+}
+
+// WithProbeObservationRepository sets the probe observation repository for credential mismatch detection.
+func WithProbeObservationRepository(repo domain.ProbeObservationRepository) Option {
+	return func(s *Service) {
+		s.probeObsRepo = repo
 	}
 }
 
@@ -544,6 +557,18 @@ func (s *Service) GetNodeDetailWithRisk(ctx context.Context, logicalID string, p
 			detail.RecentObservations = obsList
 		}
 	}
+	if s.probeObsRepo != nil {
+		if latest, err := s.probeObsRepo.ListLatestByNodes(ctx, []string{logicalID}, nil); err == nil {
+			if kindMap, ok := latest[logicalID]; ok {
+				for _, obs := range kindMap {
+					if obs.CredentialVersion != nil && *obs.CredentialVersion != rm.Node.CredentialVersion {
+						detail.CredentialMismatch = true
+						break
+					}
+				}
+			}
+		}
+	}
 	return detail, nil
 }
 
@@ -559,5 +584,23 @@ func (s *Service) ListNodesReadModel(ctx context.Context, filter domain.NodeFilt
 		return nil, 0, err
 	}
 	views := ToNodeViewsFromReadModels(models)
+	if s.probeObsRepo != nil && len(views) > 0 {
+		nodeIDs := make([]string, len(views))
+		for i, v := range views {
+			nodeIDs[i] = v.LogicalID
+		}
+		if latest, err := s.probeObsRepo.ListLatestByNodes(ctx, nodeIDs, nil); err == nil {
+			for i := range views {
+				if kindMap, ok := latest[views[i].LogicalID]; ok {
+					for _, obs := range kindMap {
+						if obs.CredentialVersion != nil && *obs.CredentialVersion != views[i].CredentialVersion {
+							views[i].CredentialMismatch = true
+							break
+						}
+					}
+				}
+			}
+		}
+	}
 	return views, total, nil
 }

@@ -28,6 +28,17 @@ describe('PolicyView Topology & Drawer Linkage', () => {
     container = document.createElement('div')
     document.body.appendChild(container)
 
+    if (!HTMLDialogElement.prototype.showModal) {
+      HTMLDialogElement.prototype.showModal = function (this: HTMLDialogElement) {
+        this.open = true
+      }
+    }
+    if (!HTMLDialogElement.prototype.close) {
+      HTMLDialogElement.prototype.close = function (this: HTMLDialogElement) {
+        this.open = false
+      }
+    }
+
     vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
       if (path === '/api/v1/policies/groups') {
         return { items: [...mockGroups], total: 2 }
@@ -208,5 +219,95 @@ describe('PolicyView Topology & Drawer Linkage', () => {
     const expr = ruleCard?.querySelector('p')
     expect(expr?.className).toContain('break-all')
     expect(expr?.className).toContain('whitespace-pre-wrap')
+  })
+
+  it('opens Global Filter modal, displays precedence info, and saves updated conditions', async () => {
+    const putSpy = vi.spyOn(api, 'put').mockResolvedValueOnce({
+      spec: {
+        conditions: [
+          { field: 'protocol', op: 'equals', value: 'ss' },
+          { field: 'display_name', op: 'contains', value: 'premium' },
+        ],
+      },
+      updated_at: '2026-09-25T12:00:00Z',
+    })
+
+    await mountPolicyView()
+
+    // Find and click Global Filter button
+    const globalFilterBtn = container.querySelector('[data-testid="global-filter-btn"]') as HTMLButtonElement | null
+    expect(globalFilterBtn).not.toBeNull()
+    globalFilterBtn?.click()
+    await nextTick()
+    await new Promise((r) => setTimeout(r, 20))
+
+    // Verify modal opened
+    const allDialogs = Array.from(document.body.querySelectorAll('dialog'))
+    const modal = allDialogs.find((d) => d.textContent?.includes('Global Node Filter'))
+    expect(modal).toBeDefined()
+    expect(modal?.textContent).toContain('Order of Precedence')
+    expect(modal?.textContent).toContain('Global Filter')
+
+    // Add a condition
+    const selects = modal?.querySelectorAll('select')
+    const inputs = modal?.querySelectorAll('input')
+    const addBtn = Array.from(modal?.querySelectorAll('button') || []).find((b) => b.textContent?.includes('Add Condition'))
+    expect(addBtn).toBeDefined()
+
+    if (inputs && inputs.length > 0) {
+      inputs[0].value = 'premium'
+      inputs[0].dispatchEvent(new Event('input'))
+    }
+    addBtn?.click()
+    await nextTick()
+
+    // Click Save Global Filter button
+    const saveBtn = Array.from(modal?.querySelectorAll('button') || []).find((b) => b.textContent?.includes('Save Global Filter'))
+    expect(saveBtn).toBeDefined()
+    saveBtn?.click()
+    await nextTick()
+
+    expect(putSpy).toHaveBeenCalledWith('/api/v1/policies/global-node-filter', expect.any(Object))
+  })
+
+  it('renders GroupCard with custom filter conditions and dynamic pool indicator when expanded', async () => {
+    vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
+      if (path === '/api/v1/policies/groups') {
+        return {
+          items: [
+            {
+              id: 'grp-dynamic',
+              name: 'Dynamic Fast Nodes',
+              group_type: 'urltest',
+              edges: [],
+              node_filter: {
+                conditions: [
+                  { field: 'probe_latency_ms', op: 'lte', probe_kind: 'baseline', value: '150' },
+                ],
+              },
+            },
+          ],
+          total: 1,
+        }
+      }
+      return { items: [], total: 0 }
+    })
+
+    await mountPolicyView()
+
+    const cards = container.querySelectorAll('[data-testid="group-card"]')
+    expect(cards.length).toBe(1)
+    expect(cards[0].textContent).toContain('1 filter conds')
+
+    // Click to expand
+    const header = cards[0].querySelector('.cursor-pointer') as HTMLElement | null
+    header?.click()
+    await nextTick()
+    await new Promise((r) => setTimeout(r, 20))
+
+    // Verify dynamic pool indicator and filter conditions details
+    expect(cards[0].textContent).toContain('Dynamic Pool')
+    expect(cards[0].textContent).toContain('probe_latency_ms lte "150"')
+    expect(cards[0].textContent).toContain('dynamically selects matching candidates')
   })
 })

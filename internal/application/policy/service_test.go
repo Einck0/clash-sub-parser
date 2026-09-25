@@ -45,8 +45,9 @@ func setupTestService(t *testing.T, db *sql.DB) (*policy.Service, domain.AuditRe
 	revRepo := sqlite.NewRevisionRepository(db)
 	nodeRepo := sqlite.NewNodeRepository(db)
 	auditRepo := sqlite.NewAuditRepository(db)
+	filterRepo := sqlite.NewNodeFilterRepository(db)
 
-	svc := policy.NewService(policyRepo, revRepo, nodeRepo, auditRepo)
+	svc := policy.NewService(policyRepo, revRepo, nodeRepo, auditRepo, filterRepo)
 	return svc, auditRepo
 }
 
@@ -626,5 +627,182 @@ func TestPolicyService_ValidateGraphAPI(t *testing.T) {
 	res2, err := svc.ValidateGraph(ctx)
 	if err != nil || !res2.Valid {
 		t.Errorf("expected valid graph, got res=%#v, err=%v", res2, err)
+	}
+}
+
+func TestPolicyService_GlobalNodeFilter_CRUDAndAudit(t *testing.T) {
+	db := setupTestDB(t)
+	svc, auditRepo := setupTestService(t, db)
+	ctx := context.Background()
+
+	// 1. Initial global filter should default to empty conditions
+	initial, err := svc.GetGlobalNodeFilter(ctx)
+	if err != nil {
+		t.Fatalf("GetGlobalNodeFilter failed: %v", err)
+	}
+	if len(initial.Spec.Conditions) != 0 {
+		t.Fatalf("expected empty conditions initially, got %d", len(initial.Spec.Conditions))
+	}
+
+	// 2. Set global filter
+	setCmd := policy.SetGlobalNodeFilterCommand{
+		Spec: domain.NodeFilterSpec{
+			Conditions: []domain.FilterCondition{
+				{Field: domain.FilterFieldProtocol, Op: domain.FilterOpEquals, Value: "ss"},
+			},
+		},
+		RequestID: "req-filter-1",
+		ActorKind: domain.ActorKindAdmin,
+	}
+	saved, err := svc.SetGlobalNodeFilter(ctx, setCmd)
+	if err != nil {
+		t.Fatalf("SetGlobalNodeFilter failed: %v", err)
+	}
+	if len(saved.Spec.Conditions) != 1 || saved.Spec.Conditions[0].Value != "ss" {
+		t.Fatalf("unexpected saved filter: %+v", saved)
+	}
+
+	// 3. Verify Get retrieves updated filter
+	retrieved, err := svc.GetGlobalNodeFilter(ctx)
+	if err != nil {
+		t.Fatalf("GetGlobalNodeFilter failed: %v", err)
+	}
+	if len(retrieved.Spec.Conditions) != 1 || retrieved.Spec.Conditions[0].Value != "ss" {
+		t.Fatalf("unexpected retrieved filter: %+v", retrieved)
+	}
+
+	// 4. Verify audit event was logged
+	events, total, err := auditRepo.List(ctx, domain.AuditFilter{})
+	if err != nil || total == 0 {
+		t.Fatalf("expected audit events, got err=%v total=%d", err, total)
+	}
+	found := false
+	for _, e := range events {
+		if e.Action == "policy.global_filter.update" && e.Result == domain.AuditResultSuccess {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected policy.global_filter.update audit event")
+	}
+}
+
+func TestPolicyService_GroupNodeFilter_CreateUpdateClear(t *testing.T) {
+	db := setupTestDB(t)
+	svc, _ := setupTestService(t, db)
+	ctx := context.Background()
+
+	// 1. Create group with filter
+	filterSpec := &domain.NodeFilterSpec{
+		Conditions: []domain.FilterCondition{
+			{Field: domain.FilterFieldDisplayName, Op: domain.FilterOpContains, Value: "US"},
+		},
+	}
+	grp, err := svc.CreateGroup(ctx, policy.CreateGroupCommand{
+		Name:       "US-Group",
+		GroupType:  domain.GroupTypeSelect,
+		NodeFilter: filterSpec,
+		RequestID:  "req-grp-1",
+		ActorKind:  domain.ActorKindAdmin,
+	})
+	if err != nil {
+		t.Fatalf("CreateGroup failed: %v", err)
+	}
+	if grp.NodeFilter == nil || len(grp.NodeFilter.Conditions) != 1 {
+		t.Fatalf("expected group to have filter, got %+v", grp.NodeFilter)
+	}
+
+	// 2. GetGroup retrieves the filter
+	fetched, err := svc.GetGroup(ctx, grp.ID)
+	if err != nil {
+		t.Fatalf("GetGroup failed: %v", err)
+	}
+	if fetched.NodeFilter == nil || len(fetched.NodeFilter.Conditions) != 1 {
+		t.Fatalf("expected fetched group to have filter, got %+v", fetched.NodeFilter)
+	}
+
+	// 3. ListGroups includes filter in views
+	listRes, err := svc.ListGroups(ctx, policy.ListGroupsQuery{})
+	if err != nil {
+		t.Fatalf("ListGroups failed: %v", err)
+	}
+	if len(listRes.Items) != 1 || listRes.Items[0].NodeFilter == nil {
+		t.Fatalf("expected ListGroups to include filter, got %+v", listRes.Items)
+	}
+
+	// 4. UpdateGroup omitting NodeFilter preserves existing filter
+	newName := "US-Group-Renamed"
+	updated, err := svc.UpdateGroup(ctx, policy.UpdateGroupCommand{
+		ID:        grp.ID,
+		Name:      &newName,
+		RequestID: "req-grp-2",
+		ActorKind: domain.ActorKindAdmin,
+	})
+	if err != nil {
+		t.Fatalf("UpdateGroup failed: %v", err)
+	}
+	if updated.NodeFilter == nil || len(updated.NodeFilter.Conditions) != 1 {
+		t.Fatalf("omitted NodeFilter in update should preserve existing filter, got %+v", updated.NodeFilter)
+	}
+
+	// 5. UpdateGroup with ClearNodeFilter clears filter
+	cleared, err := svc.UpdateGroup(ctx, policy.UpdateGroupCommand{
+		ID:              grp.ID,
+		ClearNodeFilter: true,
+		RequestID:       "req-grp-3",
+		ActorKind:       domain.ActorKindAdmin,
+	})
+	if err != nil {
+		t.Fatalf("UpdateGroup with ClearNodeFilter failed: %v", err)
+	}
+	if cleared.NodeFilter != nil {
+		t.Fatalf("expected NodeFilter to be cleared, got %+v", cleared.NodeFilter)
+	}
+
+	// Verify persistence also cleared
+	fetchedCleared, err := svc.GetGroup(ctx, grp.ID)
+	if err != nil {
+		t.Fatalf("GetGroup failed: %v", err)
+	}
+	if fetchedCleared.NodeFilter != nil {
+		t.Fatalf("persisted filter should be cleared, got %+v", fetchedCleared.NodeFilter)
+	}
+}
+
+func TestPolicyService_FilterSpecValidationErrors(t *testing.T) {
+	db := setupTestDB(t)
+	svc, _ := setupTestService(t, db)
+	ctx := context.Background()
+
+	// 1. Invalid operator for display_name
+	_, err := svc.CreateGroup(ctx, policy.CreateGroupCommand{
+		Name:      "BadFilterGroup",
+		GroupType: domain.GroupTypeSelect,
+		NodeFilter: &domain.NodeFilterSpec{
+			Conditions: []domain.FilterCondition{
+				{Field: domain.FilterFieldDisplayName, Op: domain.FilterOpEquals, Value: "test"},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatalf("expected error for invalid op on display_name, got nil")
+	}
+
+	// 2. Negative latency
+	_, err = svc.SetGlobalNodeFilter(ctx, policy.SetGlobalNodeFilterCommand{
+		Spec: domain.NodeFilterSpec{
+			Conditions: []domain.FilterCondition{
+				{
+					Field:     domain.FilterFieldProbeLatencyMS,
+					Op:        domain.FilterOpLTE,
+					Value:     "-10",
+					ProbeKind: &[]domain.ProbeKind{domain.ProbeKindBaseline}[0],
+				},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatalf("expected error for negative latency, got nil")
 	}
 }

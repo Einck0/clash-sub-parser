@@ -16,22 +16,25 @@ type EdgeInput struct {
 
 // CreateGroupCommand defines parameters for creating a node group.
 type CreateGroupCommand struct {
-	ID        string           `json:"id,omitempty"`
-	Name      string           `json:"name"`
-	GroupType domain.GroupType `json:"group_type"`
-	Edges     []EdgeInput      `json:"edges,omitempty"`
-	RequestID string           `json:"request_id,omitempty"`
-	ActorKind domain.ActorKind `json:"actor_kind,omitempty"`
+	ID         string                 `json:"id,omitempty"`
+	Name       string                 `json:"name"`
+	GroupType  domain.GroupType       `json:"group_type"`
+	Edges      []EdgeInput            `json:"edges,omitempty"`
+	NodeFilter *domain.NodeFilterSpec `json:"node_filter,omitempty"`
+	RequestID  string                 `json:"request_id,omitempty"`
+	ActorKind  domain.ActorKind       `json:"actor_kind,omitempty"`
 }
 
 // UpdateGroupCommand defines parameters for updating a node group.
 type UpdateGroupCommand struct {
-	ID        string            `json:"id"`
-	Name      *string           `json:"name,omitempty"`
-	GroupType *domain.GroupType `json:"group_type,omitempty"`
-	Edges     *[]EdgeInput      `json:"edges,omitempty"`
-	RequestID string            `json:"request_id,omitempty"`
-	ActorKind domain.ActorKind  `json:"actor_kind,omitempty"`
+	ID              string                 `json:"id"`
+	Name            *string                `json:"name,omitempty"`
+	GroupType       *domain.GroupType      `json:"group_type,omitempty"`
+	Edges           *[]EdgeInput           `json:"edges,omitempty"`
+	NodeFilter      *domain.NodeFilterSpec `json:"node_filter,omitempty"`
+	ClearNodeFilter bool                   `json:"clear_node_filter,omitempty"`
+	RequestID       string                 `json:"request_id,omitempty"`
+	ActorKind       domain.ActorKind       `json:"actor_kind,omitempty"`
 }
 
 // DeleteGroupCommand defines parameters for deleting a node group.
@@ -41,6 +44,12 @@ type DeleteGroupCommand struct {
 	ActorKind domain.ActorKind `json:"actor_kind,omitempty"`
 }
 
+// SetGlobalNodeFilterCommand defines parameters for updating the global node filter.
+type SetGlobalNodeFilterCommand struct {
+	Spec      domain.NodeFilterSpec `json:"spec"`
+	RequestID string                `json:"request_id,omitempty"`
+	ActorKind domain.ActorKind      `json:"actor_kind,omitempty"`
+}
 // SetGroupEdgesCommand defines parameters for setting all edges of a group.
 type SetGroupEdgesCommand struct {
 	ParentGroupID string           `json:"parent_group_id"`
@@ -60,12 +69,13 @@ type GroupEdgeView struct {
 
 // GroupView is the view representation of a policy group.
 type GroupView struct {
-	ID        string           `json:"id"`
-	Name      string           `json:"name"`
-	GroupType domain.GroupType `json:"group_type"`
-	Edges     []GroupEdgeView  `json:"edges"`
-	CreatedAt time.Time        `json:"created_at"`
-	UpdatedAt time.Time        `json:"updated_at"`
+	ID         string                 `json:"id"`
+	Name       string                 `json:"name"`
+	GroupType  domain.GroupType       `json:"group_type"`
+	Edges      []GroupEdgeView        `json:"edges"`
+	NodeFilter *domain.NodeFilterSpec `json:"node_filter,omitempty"`
+	CreatedAt  time.Time              `json:"created_at"`
+	UpdatedAt  time.Time              `json:"updated_at"`
 }
 
 // ListGroupsQuery defines pagination and search filters for listing groups.

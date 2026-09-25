@@ -47,8 +47,20 @@ export const COMPILER_TARGETS: TargetMetadata[] = [
 ]
 
 export interface Diagnostic {
+  code?: string
+  target?: string
   message: string
   severity: string
+  excluded_count?: number
+  reason?: string
+}
+
+export interface FilterLayerCounts {
+  raw_total?: number
+  admitted_total?: number
+  global_filtered_total?: number
+  group_filtered_total?: number
+  group_counts?: Record<string, { candidate: number; kept: number; excluded: number }>
 }
 
 export interface PreviewResult {
@@ -59,6 +71,7 @@ export interface PreviewResult {
   content_type: string
   filename: string
   diagnostics?: Diagnostic[]
+  filter_counts?: FilterLayerCounts
 }
 
 export interface PublicationDetail {

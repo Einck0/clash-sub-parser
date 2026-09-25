@@ -336,3 +336,72 @@ func TestCompileConcurrentHighLoad(t *testing.T) {
 		}
 	}
 }
+
+func TestCompiler_DerivedProjectedGroupsAcrossAllTargets(t *testing.T) {
+	ctx := context.Background()
+	r := resolver.New()
+
+	parentID := domain.MustNewUUIDv7()
+	childID := domain.MustNewUUIDv7()
+	n1 := domain.Node{LogicalID: "0123456789abcdef0123456789abcdef", DisplayName: "US-Fast", Protocol: domain.ProtocolTrojan, Active: true}
+	n2 := domain.Node{LogicalID: "abcdef0123456789abcdef0123456789", DisplayName: "US-Slow", Protocol: domain.ProtocolTrojan, Active: true}
+
+	input := resolver.ResolveInput{
+		RevisionID:         "rev-comp-1",
+		InventoryWatermark: "wm-1",
+		CompilerVersion:    "1.0.0",
+		Nodes:              []domain.Node{n1, n2},
+		Groups: []domain.NodeGroup{
+			{ID: parentID, Name: "Proxy", GroupType: domain.GroupTypeSelect},
+			{ID: childID, Name: "Auto", GroupType: domain.GroupTypeSelect},
+		},
+		Edges: map[string][]domain.GroupEdge{
+			parentID: {{ID: "e1", ParentGroupID: parentID, ChildGroupID: &childID, Position: 0}},
+			childID: {
+				{ID: "e2", ParentGroupID: childID, NodeLogicalID: &n1.LogicalID, Position: 0},
+				{ID: "e3", ParentGroupID: childID, NodeLogicalID: &n2.LogicalID, Position: 1},
+			},
+		},
+		PolicyRules: []domain.PolicyRule{
+			{ID: "r1", TargetGroupID: parentID, Expression: "MATCH", Position: 0},
+		},
+		GroupFilters: map[string]domain.NodeFilterSpec{
+			parentID: {
+				Conditions: []domain.FilterCondition{
+					{Field: domain.FilterFieldDisplayName, Op: domain.FilterOpContains, Value: "Fast"},
+				},
+			},
+		},
+		DNS: resolver.DNSConfig{Enabled: true, Nameservers: []string{"1.1.1.1"}},
+	}
+
+	snap, err := r.Resolve(ctx, input)
+	if err != nil {
+		t.Fatalf("resolve failed: %v", err)
+	}
+
+	for _, target := range compiler.Targets() {
+		t.Run(string(target), func(t *testing.T) {
+			res, err := compiler.Compile(ctx, snap, target)
+			if err != nil {
+				t.Fatalf("compile for %s failed: %v", target, err)
+			}
+			out := string(res.Content)
+
+			// Must contain derived group name "Auto [Proxy]"
+			if !strings.Contains(out, "Auto [Proxy]") {
+				t.Errorf("expected target %s output to contain derived group 'Auto [Proxy]', got:\n%s", target, out)
+			}
+
+			// Must contain allowed node US-Fast
+			if !strings.Contains(out, "US-Fast") {
+				t.Errorf("expected target %s output to contain allowed node 'US-Fast'", target)
+			}
+
+			// Must not contain secret or token
+			if strings.Contains(out, "secret") || strings.Contains(out, "token") {
+				t.Errorf("target %s output leaks secret or token", target)
+			}
+		})
+	}
+}

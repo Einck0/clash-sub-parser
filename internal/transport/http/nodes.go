@@ -153,6 +153,7 @@ func (h nodeHandler) get(w http.ResponseWriter, r *http.Request) {
 
 	nodeView := inventory.ToNodeView(detail.Node)
 	nodeView.IPRiskSummary = detail.IPRiskSummary
+	nodeView.CredentialMismatch = detail.CredentialMismatch
 	resp := NodeDetailResponse{
 		Node:    nodeView,
 		Sources: sources,

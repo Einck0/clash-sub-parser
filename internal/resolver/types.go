@@ -25,10 +25,28 @@ const (
 
 // Diagnostic records a condition or filtered entity detected during resolution.
 type Diagnostic struct {
-	Severity DiagnosticSeverity `json:"severity"`
-	Code     string             `json:"code"`
-	Message  string             `json:"message"`
-	Target   string             `json:"target,omitempty"`
+	Severity      DiagnosticSeverity `json:"severity"`
+	Code          string             `json:"code"`
+	Message       string             `json:"message"`
+	Target        string             `json:"target,omitempty"`
+	Reason        string             `json:"reason,omitempty"`
+	ExcludedCount *int               `json:"excluded_count,omitempty"`
+}
+
+// GroupFilterCount tracks candidate, kept, and excluded node counts for a single policy group.
+type GroupFilterCount struct {
+	Candidate int `json:"candidate"`
+	Kept      int `json:"kept"`
+	Excluded  int `json:"excluded"`
+}
+
+// FilterLayerCounts tracks aggregate counts at each stage of the multi-layer node filtering pipeline.
+type FilterLayerCounts struct {
+	RawTotal            int                         `json:"raw_total"`
+	AdmittedTotal       int                         `json:"admitted_total"`
+	GlobalFilteredTotal int                         `json:"global_filtered_total"`
+	GroupFilteredTotal  int                         `json:"group_filtered_total"`
+	GroupCounts         map[string]GroupFilterCount `json:"group_counts,omitempty"`
 }
 
 // DNSConfig specifies DNS settings included in the resolved snapshot.
@@ -99,6 +117,8 @@ type ResolvedPolicySnapshot struct {
 	AdmittedNodeIDs    []string   `json:"admitted_node_ids,omitempty"`
 	ExcludedNodeIDs    []string   `json:"excluded_node_ids,omitempty"`
 
+	FilterCounts *FilterLayerCounts `json:"filter_counts,omitempty"`
+
 	ResolvedAt time.Time `json:"resolved_at"`
 }
 
@@ -121,4 +141,11 @@ type ResolveInput struct {
 	RiskReviewAction   domain.RiskAction
 	RiskDecisions      []domain.RiskDecision
 	ExcludedNodeIDs    []string
+
+	// Node filter inputs (two-level filtering)
+	GlobalFilter       *domain.NodeFilterSpec
+	GroupFilters       map[string]domain.NodeFilterSpec
+	NodeSources        map[string][]domain.NodeSource
+	LatestObservations map[string]map[domain.ProbeKind]domain.ProbeObservation
+	AsOf               time.Time
 }

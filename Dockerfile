@@ -12,13 +12,14 @@ COPY web/package*.json ./
 RUN npm ci ${NPM_CONFIG_REGISTRY:+--registry=$NPM_CONFIG_REGISTRY}
 
 # Copy web source and compile production static bundle into dist
+ENV FRONTEND_BUILD_EPOCH=20260925_periodic_filters_v1
 COPY web/ ./
 RUN npm run build
 
 # Stage 2: Compile pure-static single Go executable with embedded assets
 FROM golang:alpine AS go-builder
 
-ENV COMPILER_BUILD_EPOCH=20260925_rules_v1
+ENV COMPILER_BUILD_EPOCH=20260925_periodic_filters_v1
 
 WORKDIR /src
 

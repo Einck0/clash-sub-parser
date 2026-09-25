@@ -188,7 +188,7 @@ func (h publicationAdminHandler) preview(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	WriteSuccess(w, r, http.StatusOK, map[string]any{
+	data := map[string]any{
 		"target":          res.Target,
 		"snapshot_digest": res.SnapshotDigest,
 		"content_digest":  res.ContentDigest,
@@ -196,7 +196,11 @@ func (h publicationAdminHandler) preview(w http.ResponseWriter, r *http.Request)
 		"content_type":    res.ContentType,
 		"filename":        res.Filename,
 		"diagnostics":     res.Diagnostics,
-	})
+	}
+	if res.FilterCounts != nil {
+		data["filter_counts"] = res.FilterCounts
+	}
+	WriteSuccess(w, r, http.StatusOK, data)
 }
 
 func (h publicationAdminHandler) get(w http.ResponseWriter, r *http.Request) {

@@ -369,6 +369,7 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 		credRepo = sqlite.NewNodeCredentialRepository(db)
 		invOpts = append(invOpts, inventory.WithCredentialVault(vault, credRepo))
 	}
+	invOpts = append(invOpts, inventory.WithProbeObservationRepository(probeObsRepo))
 	invService := inventory.NewService(db, subRepo, fetchRepo, nodeRepo, nodeSourceRepo, nil, invOpts...)
 	subService.SetReconciler(invService)
 
@@ -409,8 +410,29 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 	} else {
 		probeRunner = probe.NewDefaultRunner(nodeRepo, probeObsRepo, probeScheduler, probeRunRepo, runnerOpts...)
 	}
-	probeService := probe.NewService(probeRunRepo, probe.WithRunner(probeRunner))
-	policyService := policy.NewService(policyRepo, revisionRepo, nodeRepo, auditRepo)
+	probeScheduleRepo := sqlite.NewProbeScheduleRepository(db)
+	probeService := probe.NewService(
+		probeRunRepo,
+		probe.WithRunner(probeRunner),
+		probe.WithScheduleRepository(probeScheduleRepo),
+		probe.WithAudit(auditRepo),
+	)
+
+	periodicCoordinator := probe.NewPeriodicCoordinator(
+		probeScheduleRepo,
+		nodeRepo,
+		probeRunRepo,
+		probeRunner,
+		probe.WithCoordinatorOwner("csp-instance-"+domain.MustNewUUIDv7()),
+	)
+	probeService.SetCoordinator(periodicCoordinator)
+
+	if err := periodicCoordinator.Recover(startupCtx); err != nil {
+		fmt.Fprintf(stderr, "serve: probe periodic recovery warning: %v\n", err)
+	}
+	periodicCoordinator.Start(ctx)
+	nodeFilterRepo := sqlite.NewNodeFilterRepository(db)
+	policyService := policy.NewService(policyRepo, revisionRepo, nodeRepo, auditRepo, nodeFilterRepo)
 	revisionService := revision.NewService(revisionRepo, auditRepo, revision.WithPolicyRepository(policyRepo))
 	ipriskService := iprisk.NewService(
 		riskObsRepo,
@@ -426,6 +448,9 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 		publication.WithPolicyRepository(policyRepo),
 		publication.WithRevisionRepository(revisionRepo),
 		publication.WithNodeRepository(nodeRepo),
+		publication.WithNodeFilterRepository(nodeFilterRepo),
+		publication.WithNodeSourceRepository(nodeSourceRepo),
+		publication.WithProbeObservationRepository(probeObsRepo),
 		publication.WithIPRiskService(ipriskService),
 		publication.WithRiskPolicyRepository(riskPolicyRepo),
 		publication.WithRiskBindingRepository(riskBindingRepo),
@@ -552,6 +577,7 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 		fmt.Fprintf(stderr, "serve: shutdown error: %v\n", err)
 		return 1
 	}
+	periodicCoordinator.Stop()
 	if deps != nil && deps.observeDrainBegin != nil {
 		deps.observeDrainBegin()
 	}

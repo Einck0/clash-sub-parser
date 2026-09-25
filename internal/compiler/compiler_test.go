@@ -160,6 +160,40 @@ func TestCompileRejectsUnsupportedRuleWithTargetDiagnostic(t *testing.T) {
 	}
 }
 
+func TestCompileAcceptsProcessNameRuleOnSupportedTargets(t *testing.T) {
+	snapshot := fixtureSnapshot()
+	snapshot.Rules = append(snapshot.Rules, resolver.ResolvedRule{
+		ID:              "rule-process-name",
+		TargetGroupID:   snapshot.Groups[0].ID,
+		TargetGroupName: snapshot.Groups[0].Name,
+		Expression:      "PROCESS-NAME,curl",
+		Position:        2,
+	})
+
+	for _, target := range []domain.CompilerTarget{domain.TargetMihomo, domain.TargetClash, domain.TargetSingBox, domain.TargetSurge} {
+		t.Run(string(target), func(t *testing.T) {
+			if _, err := compiler.Compile(context.Background(), snapshot, target); err != nil {
+				t.Fatalf("expected %s to support PROCESS-NAME rule: %v", target, err)
+			}
+		})
+	}
+
+	// QuantumultX does not support PROCESS-NAME -> must fail cleanly with 422 CapabilityError
+	t.Run("quantumult-x-rejection", func(t *testing.T) {
+		_, err := compiler.Compile(context.Background(), snapshot, domain.TargetQuantumultX)
+		if err == nil {
+			t.Fatal("expected Quantumult-X to reject PROCESS-NAME")
+		}
+		var capErr *compiler.CapabilityError
+		if !errors.As(err, &capErr) {
+			t.Fatalf("expected CapabilityError, got %v", err)
+		}
+		if capErr.Feature != "PROCESS-NAME" {
+			t.Fatalf("expected feature PROCESS-NAME, got %s", capErr.Feature)
+		}
+	})
+}
+
 func TestCapabilityMatrixIsExplicitAndIndependent(t *testing.T) {
 	matrix := compiler.CapabilityMatrix()
 	if len(matrix) != 5 {

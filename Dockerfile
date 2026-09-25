@@ -18,6 +18,8 @@ RUN npm run build
 # Stage 2: Compile pure-static single Go executable with embedded assets
 FROM golang:alpine AS go-builder
 
+ENV COMPILER_BUILD_EPOCH=20260925_rules_v1
+
 WORKDIR /src
 
 ARG GOPROXY=https://goproxy.cn,direct
@@ -30,7 +32,7 @@ ENV GOPROXY=${GOPROXY} \
 COPY go.mod go.sum ./
 RUN go mod download
 
-# Copy Go source trees and embed directories
+# Copy Go source trees and embed directories (v1.0.1 rule-capabilities-fix)
 COPY cmd/ ./cmd/
 COPY internal/ ./internal/
 COPY migrations/ ./migrations/

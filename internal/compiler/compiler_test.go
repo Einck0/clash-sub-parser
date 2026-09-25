@@ -93,7 +93,7 @@ func TestCompileRejectsUnsupportedProtocolWithTargetDiagnostic(t *testing.T) {
 		Active:      true,
 		Position:    2,
 	})
-	_, err := compiler.Compile(context.Background(), snapshot, domain.TargetQuantumultX)
+	_, err := compiler.Compile(context.Background(), snapshot, domain.TargetClash)
 	if err == nil {
 		t.Fatal("expected unsupported protocol to hard-fail")
 	}
@@ -101,7 +101,7 @@ func TestCompileRejectsUnsupportedProtocolWithTargetDiagnostic(t *testing.T) {
 	if !errors.As(err, &capabilityErr) {
 		t.Fatalf("expected CapabilityError, got %T: %v", err, err)
 	}
-	if capabilityErr.Target != domain.TargetQuantumultX || capabilityErr.Feature != string(domain.ProtocolWireGuard) {
+	if capabilityErr.Target != domain.TargetClash || capabilityErr.Feature != string(domain.ProtocolWireGuard) {
 		t.Fatalf("missing target-specific diagnostic: %#v", capabilityErr)
 	}
 	if capabilityErr.Location != "nodes[2]" {
@@ -199,8 +199,8 @@ func TestCapabilityMatrixIsExplicitAndIndependent(t *testing.T) {
 	if len(matrix) != 5 {
 		t.Fatalf("expected five target capabilities, got %d", len(matrix))
 	}
-	matrix[domain.TargetQuantumultX].Protocols[domain.ProtocolWireGuard] = true
-	if compiler.CapabilityMatrix()[domain.TargetQuantumultX].Protocols[domain.ProtocolWireGuard] {
+	matrix[domain.TargetClash].Protocols[domain.ProtocolWireGuard] = true
+	if compiler.CapabilityMatrix()[domain.TargetClash].Protocols[domain.ProtocolWireGuard] {
 		t.Fatal("capability matrix leaked mutable state")
 	}
 }

@@ -227,9 +227,9 @@ func TestPublishIncompatibleTargetHardFails(t *testing.T) {
 	ctx := context.Background()
 	incompatibleSnap := buildIncompatibleSnapshot()
 
-	// QuantumultX does not support Hysteria2 -> must hard fail
+	// Clash does not support Hysteria2 -> must hard fail
 	cmd := publication.PublishCommand{
-		Target:    domain.TargetQuantumultX,
+		Target:    domain.TargetClash,
 		Snapshot:  incompatibleSnap,
 		ActorKind: domain.ActorKindAdmin,
 		RequestID: "req-fail-001",
@@ -257,7 +257,7 @@ func TestPreviewIncompatibleTargetReturnsValidationDomainError(t *testing.T) {
 	incompatibleSnap := buildIncompatibleSnapshot()
 
 	query := publication.PreviewQuery{
-		Target:   domain.TargetQuantumultX,
+		Target:   domain.TargetClash,
 		Snapshot: incompatibleSnap,
 	}
 

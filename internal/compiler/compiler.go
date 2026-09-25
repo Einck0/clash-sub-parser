@@ -51,9 +51,9 @@ func Targets() []domain.CompilerTarget {
 
 var capabilities = map[domain.CompilerTarget]Capability{
 	domain.TargetClash: {
-		Protocols:  protocolSet(domain.ProtocolSS, domain.ProtocolVMess, domain.ProtocolVLESS, domain.ProtocolTrojan, domain.ProtocolHysteria2, domain.ProtocolWireGuard, domain.ProtocolTUIC),
+		Protocols:  protocolSet(domain.ProtocolSS, domain.ProtocolVMess, domain.ProtocolVLESS, domain.ProtocolTrojan),
 		GroupTypes: groupSet(domain.GroupTypeSelect, domain.GroupTypeURLTest, domain.GroupTypeFallback, domain.GroupTypeLoadBalance),
-		RuleKinds:  ruleSet("DOMAIN", "DOMAIN-SUFFIX", "DOMAIN-KEYWORD", "DOMAIN-REGEX", "GEOSITE", "IP-CIDR", "IP-CIDR6", "GEOIP", "IP-ASN", "SRC-GEOIP", "SRC-IP-CIDR", "SRC-IP-CIDR6", "SRC-PORT", "DST-PORT", "PORT", "IN-PORT", "IN-TYPE", "IN-USER", "IN-NAME", "PROCESS-NAME", "PROCESS-PATH", "PROCESS-NAME-REGEX", "PROCESS-PATH-REGEX", "PACKAGE-NAME", "RULE-SET", "AND", "OR", "NOT", "SUB-RULE", "MATCH"),
+		RuleKinds:  ruleSet("DOMAIN", "DOMAIN-SUFFIX", "DOMAIN-KEYWORD", "IP-CIDR", "IP-CIDR6", "GEOIP", "SRC-IP-CIDR", "SRC-PORT", "DST-PORT", "PORT", "PROCESS-NAME", "MATCH"),
 	},
 	domain.TargetMihomo: {
 		Protocols:  protocolSet(domain.ProtocolSS, domain.ProtocolVMess, domain.ProtocolVLESS, domain.ProtocolTrojan, domain.ProtocolHysteria2, domain.ProtocolWireGuard, domain.ProtocolTUIC),

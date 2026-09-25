@@ -1,0 +1,36 @@
+{
+  "outbounds": [
+    {
+      "type": "vmess",
+      "tag": "edge-a",
+      "server": "0123456789abcdef0123456789abcdef",
+      "server_port": 443
+    },
+    {
+      "type": "ss",
+      "tag": "edge-b",
+      "server": "abcdef0123456789abcdef0123456789",
+      "server_port": 443
+    },
+    {
+      "type": "select",
+      "tag": "proxy",
+      "outbounds": [
+        "edge-a",
+        "edge-b"
+      ]
+    }
+  ],
+  "route": {
+    "rules": [
+      {
+        "expression": "DOMAIN-SUFFIX,example.com",
+        "outbound": "proxy"
+      },
+      {
+        "expression": "MATCH",
+        "outbound": "proxy"
+      }
+    ]
+  }
+}

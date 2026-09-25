@@ -1,6 +1,0 @@
-{
-  "inbounds": {{ inbounds|json:"    " }},
-  "outbounds": {{ outbounds|json:"    " }},
-  "route": {{ route|json:"    " }},
-  "dns": {{ dns_config|json:"    " }}
-}

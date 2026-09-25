@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>CSP Control Plane</title>
+    <script>
+      (function () {
+        try {
+          const themes = ['light', 'dark', 'dim', 'cyberpunk', 'cupcake', 'dracula', 'nord']
+          const savedTheme = localStorage.getItem('csp_theme')
+          const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
+          const theme = themes.includes(savedTheme) ? savedTheme : (prefersDark ? 'dark' : 'light')
+          document.documentElement.setAttribute('data-theme', theme)
+        } catch (_) {
+          document.documentElement.setAttribute('data-theme', 'dark')
+        }
+      })()
+    </script>
+    <script type="module" crossorigin src="/assets/index-CuRBRMN8.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-CY02MDnG.css">
+  </head>
+  <body class="min-h-screen bg-base-100 text-base-content antialiased">
+    <div id="app"></div>
+  </body>
+</html>

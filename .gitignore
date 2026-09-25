@@ -41,9 +41,13 @@ htmlcov/
 venv/
 
 # Node / frontend
-frontend/node_modules/
+webnode_modules/
+web/dist/
+web.vite/
+web/test-results/
+frontendnode_modules/
 frontend/dist/
-frontend/.vite/
+frontend.vite/
 frontend/test-results/
 frontend/playwright-report/
 npm-debug.log*
@@ -81,3 +85,12 @@ graphify-out/
 tmp/
 data-safe-snapshots/
 control-plane/
+bin/
+
+# Local dev & tooling state
+.hermes/
+.pi/
+critic-evidence/
+/csp
+.vite/
+node_modules/

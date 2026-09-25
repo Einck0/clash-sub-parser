@@ -1,22 +1,22 @@
 # syntax=docker/dockerfile:1
 
-# Stage 1: Build the modernized Vue 3 + Tailwind CSS + shadcn-vue frontend SPA
+# Stage 1: Build the Vue 3 + Tailwind CSS + DaisyUI web control plane
 FROM node:20-alpine AS frontend-builder
 
-WORKDIR /frontend
+WORKDIR /web
 
 ARG NPM_CONFIG_REGISTRY=https://registry.npmmirror.com
 
 # Cache package dependencies
-COPY frontend/package*.json ./
+COPY web/package*.json ./
 RUN npm ci ${NPM_CONFIG_REGISTRY:+--registry=$NPM_CONFIG_REGISTRY}
 
-# Copy frontend source code and compile static bundle into /frontend/dist
-COPY frontend/ ./
+# Copy web source and compile production static bundle into dist
+COPY web/ ./
 RUN npm run build
 
-# Stage 2: Compile pure-static single Go executable with embedded frontend assets
-FROM golang:1.27-alpine AS go-builder
+# Stage 2: Compile pure-static single Go executable with embedded assets
+FROM golang:alpine AS go-builder
 
 WORKDIR /src
 
@@ -30,37 +30,36 @@ ENV GOPROXY=${GOPROXY} \
 COPY go.mod go.sum ./
 RUN go mod download
 
-# Copy Go source trees and embed package files
+# Copy Go source trees and embed directories
 COPY cmd/ ./cmd/
 COPY internal/ ./internal/
-COPY frontend/embed.go frontend/embed_test.go ./frontend/
-COPY --from=frontend-builder /frontend/dist ./frontend/dist
+COPY migrations/ ./migrations/
+COPY --from=frontend-builder /web/dist/ ./internal/webassets/dist/
 
 # Build pure-static stripped Go binary
-RUN go build -ldflags="-s -w" -trimpath -o /src/bin/clash-sub-parser ./cmd/server
+RUN go build -ldflags="-s -w" -trimpath -o /src/bin/csp ./cmd/csp
 
-# Stage 3: Production minimal Alpine 3.20 static runtime
+# Stage 3: Minimal Alpine 3.20 non-root runtime
 FROM alpine:3.20 AS runtime
 
-# Install basic CA certificates, timezone data, and curl for container health check
-RUN apk add --no-cache ca-certificates tzdata curl && \
+# Install basic CA certificates, timezone data, curl, and sqlite for operations and container health check
+RUN apk add --no-cache ca-certificates tzdata curl sqlite && \
     rm -rf /var/cache/apk/*
 
-# Create dedicated non-root application user matching standard container UID/GID (100:101)
-RUN addgroup -g 101 -S appuser && \
-    adduser -u 100 -S -G appuser -s /sbin/nologin -h /app appuser && \
+# Create dedicated non-root application user matching standard container UID/GID (10001:10001)
+RUN addgroup -g 10001 -S appuser && \
+    adduser -u 10001 -S -G appuser -s /sbin/nologin -h /app appuser && \
     mkdir -p /app /data && \
     chown -R appuser:appuser /app /data && \
     chmod 750 /data
 
 # Copy single binary from go-builder stage
-COPY --from=go-builder --chown=appuser:appuser /src/bin/clash-sub-parser /app/clash-sub-parser
-RUN chmod 755 /app/clash-sub-parser
+COPY --from=go-builder --chown=appuser:appuser /src/bin/csp /app/csp
+RUN chmod 755 /app/csp
 
 # Environment configurations for containerized runtime
-ENV CSP_PORT=18080 \
-    CSP_BIND=0.0.0.0 \
-    CSP_DB_PATH=/data/clash_sub_parser.db \
+ENV CSP_ADDR=0.0.0.0:18080 \
+    CSP_DB_PATH=/data/csp-v1.db \
     TZ=Asia/Shanghai
 
 WORKDIR /app
@@ -71,6 +70,7 @@ VOLUME ["/data"]
 
 # Container-level health check probe
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:18080/health || exit 1
+    CMD curl -f http://127.0.0.1:18080/healthz || exit 1
 
-ENTRYPOINT ["/app/clash-sub-parser"]
+ENTRYPOINT ["/app/csp"]
+CMD ["serve"]

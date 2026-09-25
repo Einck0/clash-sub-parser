@@ -1,0 +1,8 @@
+ss://YWVzLTI1Ni1nY206c3MtcGFzc3dvcmQ@ss.example.com:8388#Singapore%20SS
+vmess://eyJ2IjoiMiIsInBzIjoiSG9uZyBLb25nIFZNZXNzIiwiYWRkIjoidm1lc3MuZXhhbXBsZS5jb20iLCJwb3J0IjoiNDQzIiwiaWQiOiIxMTExMTExMS0xMTExLTExMTEtMTExMS0xMTExMTExMTExMTEiLCJhbmV0Ijoid3MiLCJob3N0IjoiY2RuLmV4YW1wbGUuY29tIiwic25pIjoiY2RuLmV4YW1wbGUuY29tIiwicGF0aCI6Ii92bSIsInRscyI6InRscyJ9
+vless://22222222-2222-2222-2222-222222222222@vless.example.com:443?type=grpc&security=tls&sni=grpc.example.com&serviceName=vless-service#Japan%20VLESS
+trojan://trojan-password@trojan.example.com:443?sni=trojan.example.com#United%20States%20Trojan
+hysteria2://hy2-password@hy2.example.com:8443?sni=hy2.example.com#Germany%20Hysteria2
+wireguard://wireguard-private-key@wg.example.com:51820?public_key=wireguard-public-key#WireGuard%20Test
+tuic://33333333-3333-3333-3333-333333333333:tuic-password@tuic.example.com:443?sni=tuic.example.com#Taiwan%20TUIC
+unsupported://broken

@@ -1,0 +1,18 @@
+proxies:
+    - name: edge-a
+      type: vmess
+      server: 0123456789abcdef0123456789abcdef
+      port: 443
+    - name: edge-b
+      type: ss
+      server: abcdef0123456789abcdef0123456789
+      port: 443
+proxy-groups:
+    - name: proxy
+      type: select
+      proxies:
+        - edge-a
+        - edge-b
+rules:
+    - DOMAIN-SUFFIX,example.com,proxy
+    - MATCH,proxy

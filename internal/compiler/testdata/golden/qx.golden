@@ -1,0 +1,13 @@
+[general]
+network_check_url = http://cp.cloudflare.com/generate_204
+
+[server_local]
+edge-a = vmess, address=0123456789abcdef0123456789abcdef, port=443
+edge-b = ss, address=abcdef0123456789abcdef0123456789, port=443
+
+[policy]
+proxy = static, edge-a, edge-b
+
+[filter_local]
+DOMAIN-SUFFIX,example.com, proxy
+MATCH, proxy

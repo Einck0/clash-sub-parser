@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "sources": [
+    {
+      "id": 1,
+      "url": "https://scamalytics.com/ip",
+      "title": "",
+      "accessed": "2026-09-16"
+    },
+    {
+      "id": 2,
+      "url": "https://www.ipqualityscore.com/documentation/proxy-detection-api/response-parameters",
+      "title": "",
+      "accessed": "2026-09-16"
+    },
+    {
+      "id": 3,
+      "url": "https://support.maxmind.com/knowledge-base/articles/ip-anonymizer-risk-data-minfraud",
+      "title": "",
+      "accessed": "2026-09-16"
+    },
+    {
+      "id": 4,
+      "url": "https://www.envoyproxy.io/docs/envoy/latest/configuration/http/http_filters/rbac_filter",
+      "title": "",
+      "accessed": "2026-09-16"
+    },
+    {
+      "id": 5,
+      "url": "https://sing-box.sagernet.org/configuration/route/rule",
+      "title": "",
+      "accessed": "2026-09-16"
+    }
+  ]
+}

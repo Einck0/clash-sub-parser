@@ -1,112 +1,61 @@
 package domain
 
 import (
-	"regexp"
-	"strings"
 	"time"
 )
 
-// Subscription represents a proxy subscription source and its transformation rules.
+// RefreshPolicy defines the configuration for subscription fetching.
+type RefreshPolicy struct {
+	IntervalSeconds  int    `json:"interval_seconds"`
+	UserAgentPolicy  string `json:"user_agent_policy"`
+	FetchProxyRef    string `json:"fetch_proxy_ref,omitempty"`
+	TimeoutSeconds   int    `json:"timeout_seconds"`
+	MaxResponseBytes int64  `json:"max_response_bytes"`
+}
+
+// RenameRule defines a pattern-based node renaming rule.
+type RenameRule struct {
+	Pattern string `json:"pattern"`
+	Replace string `json:"replace"`
+}
+
+// FilterRule defines an inclusion or exclusion filter rule.
+type FilterRule struct {
+	Type    string `json:"type"` // "include" | "exclude"
+	Pattern string `json:"pattern"`
+}
+
+// SubscriptionConfig holds advanced subscription parameters.
+type SubscriptionConfig struct {
+	CronSchedule string       `json:"cron_schedule,omitempty"`
+	AutoTest     bool         `json:"auto_test"`
+	RenameRules  []RenameRule `json:"rename_rules,omitempty"`
+	FilterRules  []FilterRule `json:"filter_rules,omitempty"`
+	TargetGroups []string     `json:"target_groups,omitempty"`
+}
+
+// Subscription represents a mutable subscription source configuration.
 type Subscription struct {
-	ID                    int64             `json:"id" yaml:"id"`
-	Name                  string            `json:"name" yaml:"name"`
-	URL                   string            `json:"url" yaml:"url"`
-	UpdateInterval        int               `json:"update_interval,omitempty" yaml:"update_interval,omitempty"`
-	IsPrimary             bool              `json:"is_primary" yaml:"is_primary"`
-	Enabled               bool              `json:"enabled" yaml:"enabled"`
-	NodePrefix            string            `json:"node_prefix,omitempty" yaml:"node_prefix,omitempty"`
-	FilterRegex           []string          `json:"filter_regex,omitempty" yaml:"filter_regex,omitempty"`
-	FilterMinSpeedMbps    *float64          `json:"filter_min_speed_mbps,omitempty" yaml:"filter_min_speed_mbps,omitempty"`
-	FilterMediaUnlock     []string          `json:"filter_media_unlock,omitempty" yaml:"filter_media_unlock,omitempty"`
-	IncludeNodeNames      []string          `json:"include_node_names,omitempty" yaml:"include_node_names,omitempty"`
-	ExcludeNodeNames      []string          `json:"exclude_node_names,omitempty" yaml:"exclude_node_names,omitempty"`
-	NodeRenames           map[string]string `json:"node_renames,omitempty" yaml:"node_renames,omitempty"`
-	SourceNodes           []*Node           `json:"source_nodes,omitempty" yaml:"source_nodes,omitempty"`
-	ManualNodes           []*Node           `json:"manual_nodes,omitempty" yaml:"manual_nodes,omitempty"`
-	RawNodes              []*Node           `json:"raw_nodes,omitempty" yaml:"raw_nodes,omitempty"`
-	LastFetchedAt         *time.Time        `json:"last_fetched_at,omitempty" yaml:"last_fetched_at,omitempty"`
-	LastFetchError        string            `json:"last_fetch_error,omitempty" yaml:"last_fetch_error,omitempty"`
-	FetchFailedCount      int               `json:"fetch_failed_count" yaml:"fetch_failed_count"`
-	FetchComments         []string          `json:"fetch_comments,omitempty" yaml:"fetch_comments,omitempty"`
-	SubscriptionUserinfo  string            `json:"subscription_userinfo,omitempty" yaml:"subscription_userinfo,omitempty"`
-	ProfileUpdateInterval string            `json:"profile_update_interval,omitempty" yaml:"profile_update_interval,omitempty"`
-	ProfileWebPageURL     string            `json:"profile_web_page_url,omitempty" yaml:"profile_web_page_url,omitempty"`
-	ProxyChain            string            `json:"proxy_chain,omitempty" yaml:"proxy_chain,omitempty"`
-	NodeProxyChains       map[string]string `json:"node_proxy_chains,omitempty" yaml:"node_proxy_chains,omitempty"`
+	ID                 string             `json:"id"`
+	Name               string             `json:"name"`
+	SourceURLSecretRef string             `json:"source_url_secret_ref"`
+	Enabled            bool               `json:"enabled"`
+	RefreshPolicy      RefreshPolicy      `json:"refresh_policy"`
+	Config             SubscriptionConfig `json:"config"`
+	Revision           string             `json:"revision"`
+	CreatedAt          time.Time          `json:"created_at"`
+	UpdatedAt          time.Time          `json:"updated_at"`
 }
 
-// Validate ensures all subscription attributes conform to business domain rules.
-func (s *Subscription) Validate() error {
-	if strings.TrimSpace(s.Name) == "" {
-		return ErrInvalidName
-	}
-	if strings.TrimSpace(s.URL) == "" {
-		return ErrInvalidURL
-	}
-	if s.UpdateInterval < 0 {
-		return ErrInvalidUpdateInterval
-	}
-	return nil
-}
-
-// MatchesFilter checks if a node name matches any of the filter regex patterns.
-// If FilterRegex is empty, all nodes pass by default.
-func (s *Subscription) MatchesFilter(nodeName string) bool {
-	if len(s.FilterRegex) == 0 {
-		return true
-	}
-	for _, pattern := range s.FilterRegex {
-		if strings.TrimSpace(pattern) == "" {
-			continue
-		}
-		re, err := regexp.Compile(pattern)
-		if err == nil && re.MatchString(nodeName) {
-			return true
-		}
-	}
-	return false
-}
-
-// IsExcluded checks if a node name is explicitly excluded or matches exclude patterns.
-func (s *Subscription) IsExcluded(nodeName string) bool {
-	for _, excluded := range s.ExcludeNodeNames {
-		trimmed := strings.TrimSpace(excluded)
-		if trimmed == "" {
-			continue
-		}
-		if strings.Contains(nodeName, trimmed) {
-			return true
-		}
-		re, err := regexp.Compile(trimmed)
-		if err == nil && re.MatchString(nodeName) {
-			return true
-		}
-	}
-	return false
-}
-
-// ApplyRename transforms the given node name according to configured rename mappings.
-func (s *Subscription) ApplyRename(nodeName string) string {
-	if s.NodeRenames == nil {
-		return nodeName
-	}
-	if target, exists := s.NodeRenames[nodeName]; exists {
-		return target
-	}
-	for pattern, replacement := range s.NodeRenames {
-		re, err := regexp.Compile(pattern)
-		if err == nil && re.MatchString(nodeName) {
-			return re.ReplaceAllString(nodeName, replacement)
-		}
-	}
-	return nodeName
-}
-
-// FormatNodeName applies prefix and renaming logic to produce the final node name.
-func (s *Subscription) FormatNodeName(nodeName string) string {
-	renamed := s.ApplyRename(nodeName)
-	if s.NodePrefix != "" {
-		return s.NodePrefix + renamed
-	}
-	return renamed
+// SubscriptionFetch represents an immutable audit record of a fetch operation.
+type SubscriptionFetch struct {
+	ID             string       `json:"id"`
+	SubscriptionID string       `json:"subscription_id"`
+	StartedAt      time.Time    `json:"started_at"`
+	FinishedAt     *time.Time   `json:"finished_at,omitempty"`
+	Outcome        FetchOutcome `json:"outcome"`
+	ContentDigest  string       `json:"content_digest"`
+	RedactedError  string       `json:"redacted_error,omitempty"`
+	NodesParsed    int          `json:"nodes_parsed"`
+	NodesValid     int          `json:"nodes_valid"`
 }

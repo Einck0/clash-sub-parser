@@ -1,0 +1,78 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light dark;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+  min-height: 100dvh;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+}
+
+/* Safe area insets for notched mobile devices */
+.safe-area-inset-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.safe-area-inset-top {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+/* ==========================================================================
+   Adaptive Viewport & Surface Primitives
+   Provides fluid, safe-area aware viewport bounds for sheets, modals & drawers.
+   Avoids per-component dvh magic percentages or fixed offsets.
+   ========================================================================== */
+:root {
+  --app-safe-top: env(safe-area-inset-top, 0px);
+  --app-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --app-viewport-available-h: calc(100dvh - var(--app-safe-top) - var(--app-safe-bottom));
+  --surface-max-h: calc(100dvh - var(--app-safe-top) - 1rem);
+  --dialog-max-h: calc(100dvh - var(--app-safe-top) - var(--app-safe-bottom) - 2rem);
+}
+
+/* Fluid overlay surface utility ensuring header/body/actions flex layout */
+.adaptive-surface-sheet {
+  max-height: var(--surface-max-h);
+}
+
+.adaptive-surface-dialog {
+  max-height: var(--dialog-max-h);
+}
+
+/* Proportional adaptive preview block for code/configurations */
+.adaptive-preview-box {
+  min-height: 8rem;
+  max-height: clamp(14rem, 50dvh, 40rem);
+}
+
+/* ==========================================================================
+   Semantic Touch and Interaction Standards
+   Replaces rigid 44px/24px hardcoded overrides with DaisyUI semantic sizing,
+   focus accessibility, and proportional hit-targets.
+   ========================================================================== */
+
+/* Enhanced focus indicators across interactive controls for accessibility */
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[role="button"]:focus-visible {
+  outline: 2px solid hsl(var(--p, 259 94% 51%));
+  outline-offset: 2px;
+}
+
+/* Form controls retain semantic size with ergonomic tap target feel */
+label:has(input[type="checkbox"]),
+label:has(input[type="radio"]) {
+  cursor: pointer;
+  user-select: none;
+}

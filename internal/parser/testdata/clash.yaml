@@ -1,0 +1,56 @@
+proxies:
+  - name: Singapore SS
+    type: ss
+    server: ss.example.com
+    port: 8388
+    cipher: aes-256-gcm
+    password: ss-password
+  - name: Hong Kong VMess
+    type: vmess
+    server: vmess.example.com
+    port: 443
+    uuid: 11111111-1111-1111-1111-111111111111
+    alterId: 0
+    cipher: auto
+    network: ws
+    tls: true
+    servername: cdn.example.com
+    ws-opts:
+      path: /vm
+      headers:
+        Host: cdn.example.com
+  - name: Japan VLESS
+    type: vless
+    server: vless.example.com
+    port: 443
+    uuid: 22222222-2222-2222-2222-222222222222
+    network: grpc
+    tls: true
+    servername: grpc.example.com
+    grpc-opts:
+      grpc-service-name: vless-service
+  - name: United States Trojan
+    type: trojan
+    server: trojan.example.com
+    port: 443
+    password: trojan-password
+    sni: trojan.example.com
+  - name: Germany Hysteria2
+    type: hysteria2
+    server: hy2.example.com
+    port: 8443
+    password: hy2-password
+    sni: hy2.example.com
+  - name: WireGuard Test
+    type: wireguard
+    server: wg.example.com
+    port: 51820
+    private-key: wireguard-private-key
+    public-key: wireguard-public-key
+  - name: Taiwan TUIC
+    type: tuic
+    server: tuic.example.com
+    port: 443
+    uuid: 33333333-3333-3333-3333-333333333333
+    password: tuic-password
+    sni: tuic.example.com

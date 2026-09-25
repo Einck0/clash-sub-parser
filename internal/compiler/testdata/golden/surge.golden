@@ -1,0 +1,13 @@
+[General]
+loglevel = notify
+
+[Proxy]
+edge-a = vmess, 0123456789abcdef0123456789abcdef, 443
+edge-b = ss, abcdef0123456789abcdef0123456789, 443
+
+[Proxy Group]
+proxy = select, edge-a, edge-b
+
+[Rule]
+DOMAIN-SUFFIX,example.com, proxy
+MATCH, proxy

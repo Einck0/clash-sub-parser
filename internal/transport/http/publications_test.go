@@ -888,8 +888,8 @@ func TestAdminPreview_CapabilityBoundaries(t *testing.T) {
 			t.Fatalf("failed to insert group: %v", err)
 		}
 
-		// Request preview for target "clash" (which does not support hysteria2)
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "clash"}`))
+		// Request preview for target "surge" (which does not support hysteria2)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "surge"}`))
 		req.Header.Set("Authorization", "Bearer "+testAdminToken)
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
@@ -909,15 +909,17 @@ func TestAdminPreview_CapabilityBoundaries(t *testing.T) {
 			t.Fatalf("expected message to mention unsupported protocol, got %s", errResp.Message)
 		}
 
-		// Same setup for target "mihomo" (which supports hysteria2) -> 200 OK
-		reqMihomo := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "mihomo"}`))
-		reqMihomo.Header.Set("Authorization", "Bearer "+testAdminToken)
-		reqMihomo.Header.Set("Content-Type", "application/json")
-		recMihomo := httptest.NewRecorder()
-		router.ServeHTTP(recMihomo, reqMihomo)
+		// Same setup for target "clash" and "mihomo" (which support hysteria2) -> 200 OK
+		for _, target := range []string{"clash", "mihomo"} {
+			reqTarget := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "`+target+`"}`))
+			reqTarget.Header.Set("Authorization", "Bearer "+testAdminToken)
+			reqTarget.Header.Set("Content-Type", "application/json")
+			recTarget := httptest.NewRecorder()
+			router.ServeHTTP(recTarget, reqTarget)
 
-		if recMihomo.Code != http.StatusOK {
-			t.Fatalf("expected 200 OK for mihomo with hysteria2, got %d. body: %s", recMihomo.Code, recMihomo.Body.String())
+			if recTarget.Code != http.StatusOK {
+				t.Fatalf("expected 200 OK for %s with hysteria2, got %d. body: %s", target, recTarget.Code, recTarget.Body.String())
+			}
 		}
 	})
 
@@ -1037,14 +1039,14 @@ func TestAdminPreview_CapabilityBoundaries(t *testing.T) {
 			ID:            ruleID,
 			RevisionID:    revID,
 			TargetGroupID: groupID,
-			Expression:    "GEOSITE,category-ads-all", // Clash does not support GEOSITE
+			Expression:    "GEOSITE,category-ads-all", // Surge does not support GEOSITE
 			Position:      0,
 		})
 		if err != nil {
 			t.Fatalf("failed to insert rule: %v", err)
 		}
 
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "clash"}`))
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "surge"}`))
 		req.Header.Set("Authorization", "Bearer "+testAdminToken)
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
@@ -1206,8 +1208,8 @@ func TestAdminPublish_CapabilityBoundaries(t *testing.T) {
 		t.Fatalf("failed to insert group: %v", err)
 	}
 
-	// POST /api/v1/publications with target Clash (which does not support hysteria2)
-	publishReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications", strings.NewReader(`{"target": "clash"}`))
+	// POST /api/v1/publications with target Surge (which does not support hysteria2)
+	publishReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications", strings.NewReader(`{"target": "surge"}`))
 	publishReq.Header.Set("Authorization", "Bearer "+testAdminToken)
 	publishReq.Header.Set("Content-Type", "application/json")
 	publishRec := httptest.NewRecorder()

@@ -46,7 +46,8 @@ RUN go build -ldflags="-s -w" -trimpath -o /src/bin/csp ./cmd/csp
 FROM alpine:3.20 AS runtime
 
 # Install basic CA certificates, timezone data, curl, and sqlite for operations and container health check
-RUN apk add --no-cache ca-certificates tzdata curl sqlite && \
+RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.ustc.edu.cn/g' /etc/apk/repositories && \
+    apk add --no-cache ca-certificates tzdata curl sqlite && \
     rm -rf /var/cache/apk/*
 
 # Create dedicated non-root application user matching standard container UID/GID (10001:10001)

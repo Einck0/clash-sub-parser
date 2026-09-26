@@ -32,16 +32,6 @@ func (f FilterField) IsValid() bool {
 
 func ParseFilterField(s string) (FilterField, error) {
 	norm := FilterField(strings.ToLower(strings.TrimSpace(s)))
-	// Alias support: source_subscription_id -> source_subscription_ids
-	if norm == "source_subscription_id" {
-		norm = FilterFieldSourceSubscriptions
-	}
-	if norm == "probe:latency_ms" || norm == "latency_ms" {
-		norm = FilterFieldProbeLatencyMS
-	}
-	if norm == "probe:verdict" || norm == "verdict" {
-		norm = FilterFieldProbeVerdict
-	}
 	if !norm.IsValid() {
 		return "", NewValidationError("invalid_filter_field", fmt.Sprintf("unsupported filter field: %s", s))
 	}
@@ -73,9 +63,6 @@ func (o FilterOp) IsValid() bool {
 
 func ParseFilterOp(s string) (FilterOp, error) {
 	norm := FilterOp(strings.ToLower(strings.TrimSpace(s)))
-	if norm == "<=" {
-		norm = FilterOpLTE
-	}
 	if !norm.IsValid() {
 		return "", NewValidationError("invalid_filter_op", fmt.Sprintf("unsupported filter operator: %s", s))
 	}

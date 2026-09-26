@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"sync"
 
 	"clash-sub-parser/internal/application/iprisk"
 	"clash-sub-parser/internal/compiler"
@@ -37,8 +36,8 @@ type Service struct {
 	sourceRepo     domain.NodeSourceRepository
 	obsRepo        domain.ProbeObservationRepository
 
-	mu        sync.RWMutex
-	artifacts map[string]*Artifact // keyed by publication ID
+	vault    *domain.NodeCredentialVault
+	credRepo domain.NodeCredentialRepository
 }
 
 // Option configures optional Service dependencies.
@@ -121,24 +120,26 @@ func WithProbeObservationRepository(repo domain.ProbeObservationRepository) Opti
 	}
 }
 
+// WithCredentialSource sets the vault and credential repository for resolving node secrets.
+func WithCredentialSource(vault *domain.NodeCredentialVault, repo domain.NodeCredentialRepository) Option {
+	return func(s *Service) {
+		s.vault = vault
+		s.credRepo = repo
+	}
+}
+
 // SetNodeFilterRepository allows dynamic configuration of the node filter repository.
 func (s *Service) SetNodeFilterRepository(repo domain.NodeFilterRepository) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.nodeFilterRepo = repo
 }
 
 // SetNodeSourceRepository allows dynamic configuration of the node source repository.
 func (s *Service) SetNodeSourceRepository(repo domain.NodeSourceRepository) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.sourceRepo = repo
 }
 
 // SetProbeObservationRepository allows dynamic configuration of the probe observation repository.
 func (s *Service) SetProbeObservationRepository(repo domain.ProbeObservationRepository) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.obsRepo = repo
 }
 
@@ -148,7 +149,6 @@ func NewService(pubRepo domain.PublicationRepository, auditRepo domain.AuditRepo
 		pubRepo:   pubRepo,
 		auditRepo: auditRepo,
 		resolver:  resolver.New(),
-		artifacts: make(map[string]*Artifact),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -188,6 +188,19 @@ func (s *Service) Preflight(ctx context.Context, cmd PreflightCommand) (*Preflig
 	}
 
 	preflight := s.evaluatePreflight(ctx, snapshot)
+	if preflight.Allowed {
+		creds, err := s.resolveCredentials(ctx, snapshot.Nodes)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := compiler.Compile(ctx, snapshot, cmd.Target, compiler.WithCredentials(creds)); err != nil {
+			var capErr *compiler.CapabilityError
+			if errors.As(err, &capErr) {
+				return nil, domain.NewValidationError("unsupported_target_capability", capErr.Error())
+			}
+			return nil, err
+		}
+	}
 	return &preflight, nil
 }
 
@@ -214,7 +227,13 @@ func (s *Service) Publish(ctx context.Context, cmd PublishCommand) (*PublishResu
 		return nil, err
 	}
 
-	compileRes, err := compiler.Compile(ctx, snapshot, cmd.Target)
+	creds, err := s.resolveCredentials(ctx, snapshot.Nodes)
+	if err != nil {
+		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "publication.create", domain.AuditResultFailure, fmt.Sprintf("failed to resolve credentials for target %s: %v", cmd.Target, err))
+		return nil, err
+	}
+
+	compileRes, err := compiler.Compile(ctx, snapshot, cmd.Target, compiler.WithCredentials(creds))
 	if err != nil {
 		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "publication.create", domain.AuditResultFailure, fmt.Sprintf("compiler failed for target %s: %v", cmd.Target, err))
 		var capErr *compiler.CapabilityError
@@ -241,15 +260,50 @@ func (s *Service) Publish(ctx context.Context, cmd PublishCommand) (*PublishResu
 		compilerVer = "1.0.0"
 	}
 
+	// Build credential bindings from resolved credential payloads
+	bindings := make([]domain.PublicationCredentialBinding, 0, len(snapshot.Nodes))
+	for _, node := range snapshot.Nodes {
+		payload := creds[node.LogicalID]
+		binding, bErr := domain.NewPublicationCredentialBindingFromPayload(payload)
+		if bErr != nil {
+			s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "publication.create", domain.AuditResultFailure, fmt.Sprintf("failed to build credential binding: %v", bErr))
+			return nil, domain.NewValidationError("unsupported_target_capability", bErr.Error())
+		}
+		bindings = append(bindings, binding)
+	}
+
+	credBindingDigest, credBindingsJSON, err := domain.ComputeCredentialBindingDigest(bindings)
+	if err != nil {
+		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "publication.create", domain.AuditResultFailure, fmt.Sprintf("failed to compute credential binding digest: %v", err))
+		return nil, err
+	}
+
+	revID := strings.TrimSpace(cmd.RevisionID)
+	if revID == "" && snapshot.RevisionID != "" {
+		revID = strings.TrimSpace(snapshot.RevisionID)
+	}
+
 	now := domain.NowUTC()
 	pub := domain.Publication{
-		ID:              pubID,
-		Target:          cmd.Target,
-		SnapshotDigest:  snapshot.SnapshotDigest,
-		CompilerVersion: compilerVer,
-		TokenHash:       tokenHash,
-		State:           domain.PublicationStateActive,
-		CreatedAt:       now,
+		ID:                      pubID,
+		RevisionID:              revID,
+		Target:                  cmd.Target,
+		SnapshotDigest:          snapshot.SnapshotDigest,
+		ContentDigest:           compileRes.ContentDigest,
+		CredentialBindingDigest: credBindingDigest,
+		CredentialBindingsJSON:  credBindingsJSON,
+		CredentialBindings:      bindings,
+		ContentType:             compileRes.ContentType,
+		Filename:                compileRes.Filename,
+		CompilerVersion:         compilerVer,
+		TokenHash:               tokenHash,
+		State:                   domain.PublicationStateActive,
+		CreatedAt:               now,
+	}
+
+	if err := s.vault.EncryptPublicationArtifact(&pub, compileRes.Content); err != nil {
+		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "publication.create", domain.AuditResultFailure, fmt.Sprintf("artifact encryption failed: %v", err))
+		return nil, err
 	}
 
 	if err := s.pubRepo.Create(ctx, &pub); err != nil {
@@ -257,21 +311,7 @@ func (s *Service) Publish(ctx context.Context, cmd PublishCommand) (*PublishResu
 		return nil, err
 	}
 
-	artifact := &Artifact{
-		PublicationID:  pubID,
-		Target:         cmd.Target,
-		Content:        compileRes.Content,
-		ContentType:    compileRes.ContentType,
-		Filename:       compileRes.Filename,
-		ContentDigest:  compileRes.ContentDigest,
-		SnapshotDigest: compileRes.SnapshotDigest,
-	}
-
-	s.mu.Lock()
-	s.artifacts[pubID] = artifact
-	s.mu.Unlock()
-
-	summary := fmt.Sprintf("created immutable publication %s for target %s (snapshot: %s, content: %s)", pub.ID, pub.Target, pub.SnapshotDigest, compileRes.ContentDigest)
+	summary := fmt.Sprintf("created immutable publication %s for target %s (snapshot: %s, content: %s, cred_binding: %s)", pub.ID, pub.Target, pub.SnapshotDigest, compileRes.ContentDigest, credBindingDigest)
 	s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "publication.create", domain.AuditResultSuccess, summary)
 
 	return &PublishResult{
@@ -302,7 +342,12 @@ func (s *Service) Preview(ctx context.Context, query PreviewQuery) (*PreviewResu
 		}
 	}
 
-	compileRes, err := compiler.Compile(ctx, snapshot, query.Target)
+	creds, err := s.resolveCredentials(ctx, snapshot.Nodes)
+	if err != nil {
+		return nil, err
+	}
+
+	compileRes, err := compiler.Compile(ctx, snapshot, query.Target, compiler.WithCredentials(creds))
 	if err != nil {
 		var capErr *compiler.CapabilityError
 		if errors.As(err, &capErr) {
@@ -341,17 +386,13 @@ func (s *Service) Revoke(ctx context.Context, cmd RevokeCommand) (*domain.Public
 		return nil, err
 	}
 
-	s.mu.Lock()
-	delete(s.artifacts, cmd.ID)
-	s.mu.Unlock()
-
 	summary := fmt.Sprintf("revoked publication %s (target: %s, snapshot: %s)", pub.ID, pub.Target, pub.SnapshotDigest)
 	s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "publication.revoke", domain.AuditResultSuccess, summary)
 
 	return pub, nil
 }
 
-// Get retrieves detailed publication state.
+// Get retrieves detailed publication state from persisted fields.
 func (s *Service) Get(ctx context.Context, id string) (*PublicationDetail, error) {
 	pub, err := s.pubRepo.GetByID(ctx, id)
 	if err != nil {
@@ -359,19 +400,12 @@ func (s *Service) Get(ctx context.Context, id string) (*PublicationDetail, error
 	}
 
 	detail := &PublicationDetail{
-		Publication: *pub,
-		ExportURL:   "/publish/v1/" + pub.ID,
-	}
-
-	s.mu.RLock()
-	art, ok := s.artifacts[id]
-	s.mu.RUnlock()
-
-	if ok && art != nil {
-		detail.ContentDigest = art.ContentDigest
-		detail.SnapshotDigest = art.SnapshotDigest
-		detail.ContentType = art.ContentType
-		detail.Filename = art.Filename
+		Publication:    *pub,
+		ExportURL:      "/publish/v1/" + pub.ID,
+		ContentDigest:  pub.ContentDigest,
+		SnapshotDigest: pub.SnapshotDigest,
+		ContentType:    pub.ContentType,
+		Filename:       pub.Filename,
 	}
 
 	return detail, nil
@@ -389,12 +423,12 @@ func (s *Service) ResolveAndServe(ctx context.Context, publicationID, token stri
 		return nil, ErrNotFound
 	}
 
-	// 1. Check revocation: revoked publications must immediately fail with ErrRevoked, never fallback!
+	// 1. Check revocation (403)
 	if pub.State == domain.PublicationStateRevoked || !pub.IsActive() {
 		return nil, ErrRevoked
 	}
 
-	// 2. Validate Target-bound Export Token
+	// 2. Constant-time token verification (401)
 	if strings.TrimSpace(token) == "" {
 		return nil, ErrUnauthorized
 	}
@@ -404,37 +438,160 @@ func (s *Service) ResolveAndServe(ctx context.Context, publicationID, token stri
 		return nil, ErrUnauthorized
 	}
 
-	// 3. Retrieve immutable compiled artifact
-	s.mu.RLock()
-	art, ok := s.artifacts[publicationID]
-	s.mu.RUnlock()
-
-	if ok && art != nil {
-		return art, nil
+	// 3. Target check (422)
+	if !pub.Target.IsValid() || !isValidTarget(pub.Target) {
+		return nil, ErrUnsupportedTarget
 	}
 
-	// 4. If artifact is not in memory (e.g. process restart), attempt deterministic recompile
-	snapshot, err := s.resolveSnapshot(ctx, "")
-	if err == nil && snapshot != nil && snapshot.SnapshotDigest == pub.SnapshotDigest {
-		res, err := compiler.Compile(ctx, snapshot, pub.Target)
-		if err == nil {
-			recoveredArt := &Artifact{
-				PublicationID:  pub.ID,
-				Target:         pub.Target,
-				Content:        res.Content,
-				ContentType:    res.ContentType,
-				Filename:       res.Filename,
-				ContentDigest:  res.ContentDigest,
-				SnapshotDigest: res.SnapshotDigest,
+	// 4. Verify persisted credential bindings and decrypt artifact
+	if err := s.verifyCredentialBindings(ctx, pub); err != nil {
+		return nil, ErrIntegrityCheckFailed
+	}
+
+	if s.vault != nil {
+		plaintext, err := s.vault.DecryptPublicationArtifact(pub)
+		if err != nil {
+			return nil, ErrIntegrityCheckFailed
+		}
+
+		return &Artifact{
+			PublicationID:  pub.ID,
+			Target:         pub.Target,
+			Content:        plaintext,
+			ContentType:    pub.ContentType,
+			Filename:       pub.Filename,
+			ContentDigest:  pub.ContentDigest,
+			SnapshotDigest: pub.SnapshotDigest,
+		}, nil
+	}
+
+	// 5. No vault configured (pure in-memory unit test path): attempt deterministic recompile
+	//    and verify via ContentDigest comparison
+	snapshot, err := s.resolveSnapshot(ctx, pub.RevisionID)
+	if err != nil || snapshot == nil || snapshot.SnapshotDigest != pub.SnapshotDigest {
+		return nil, ErrIntegrityCheckFailed
+	}
+
+	creds, credErr := s.resolveCredentials(ctx, snapshot.Nodes)
+	if credErr != nil {
+		return nil, ErrIntegrityCheckFailed
+	}
+
+	res, compileErr := compiler.Compile(ctx, snapshot, pub.Target, compiler.WithCredentials(creds))
+	if compileErr != nil {
+		return nil, ErrIntegrityCheckFailed
+	}
+
+	if res.ContentDigest == "" || subtle.ConstantTimeCompare([]byte(res.ContentDigest), []byte(strings.TrimSpace(pub.ContentDigest))) != 1 {
+		return nil, ErrIntegrityCheckFailed
+	}
+
+	return &Artifact{
+		PublicationID:  pub.ID,
+		Target:         pub.Target,
+		Content:        res.Content,
+		ContentType:    res.ContentType,
+		Filename:       res.Filename,
+		ContentDigest:  res.ContentDigest,
+		SnapshotDigest: res.SnapshotDigest,
+	}, nil
+}
+
+// verifyCredentialBindings verifies that the persisted credential bindings still match
+// the current active nodes and vault credentials.
+func (s *Service) verifyCredentialBindings(ctx context.Context, pub *domain.Publication) error {
+	if strings.TrimSpace(pub.ContentDigest) == "" || strings.TrimSpace(pub.SnapshotDigest) == "" {
+		return ErrIntegrityCheckFailed
+	}
+	if strings.TrimSpace(pub.CredentialBindingsJSON) == "" || strings.TrimSpace(pub.CredentialBindingDigest) == "" {
+		// Legacy publication without bindings: fail closed
+		return ErrIntegrityCheckFailed
+	}
+
+	bindings, err := domain.ParseAndVerifyCredentialBindings(pub.CredentialBindingsJSON, pub.CredentialBindingDigest)
+	if err != nil {
+		return ErrIntegrityCheckFailed
+	}
+
+	if len(bindings) > 0 && (s.vault == nil || s.credRepo == nil) {
+		return ErrIntegrityCheckFailed
+	}
+
+	// Verify each binding against current active credentials
+	for _, rawBinding := range bindings {
+		binding := rawBinding.Normalize()
+		if err := binding.Validate(); err != nil {
+			return ErrIntegrityCheckFailed
+		}
+
+		// Get current node from repo
+		if s.nodeRepo != nil {
+			node, nodeErr := s.nodeRepo.GetByLogicalID(ctx, binding.LogicalID)
+			if nodeErr != nil || node == nil || !node.Active {
+				return ErrIntegrityCheckFailed
 			}
-			s.mu.Lock()
-			s.artifacts[publicationID] = recoveredArt
-			s.mu.Unlock()
-			return recoveredArt, nil
+			if node.LogicalID != binding.LogicalID || node.Protocol != binding.Protocol || node.CredentialVersion != binding.CredentialVersion {
+				return ErrIntegrityCheckFailed
+			}
+			if node.Identity != nil {
+				if err := node.Identity.ValidateNonEmpty(); err != nil ||
+					node.Identity.LogicalID != binding.LogicalID ||
+					node.Identity.Protocol != binding.Protocol ||
+					node.Identity.Version != binding.CredentialVersion ||
+					!node.Identity.MatchesEndpoint(binding.Protocol, binding.Server, binding.Port) {
+					return ErrIntegrityCheckFailed
+				}
+				if binding.TransportDigest != "" && node.Identity.TransportDigest != "" && node.Identity.TransportDigest != binding.TransportDigest {
+					return ErrIntegrityCheckFailed
+				}
+			}
+		}
+
+		// Verify credential payload from vault
+		latestRec, latestErr := s.credRepo.GetLatestByLogicalID(ctx, binding.LogicalID)
+		if latestErr != nil || latestRec == nil || latestRec.LogicalID != binding.LogicalID || latestRec.Version != binding.CredentialVersion {
+			return ErrIntegrityCheckFailed
+		}
+
+		record, credErr := s.credRepo.GetByLogicalID(ctx, binding.LogicalID, binding.CredentialVersion)
+		if credErr != nil || record == nil || record.LogicalID != binding.LogicalID || record.Version != binding.CredentialVersion {
+			return ErrIntegrityCheckFailed
+		}
+		payload, decErr := s.vault.Decrypt(record, binding.Protocol)
+		if decErr != nil || payload == nil {
+			return ErrIntegrityCheckFailed
+		}
+		// Verify endpoint identity matches
+		if payload.LogicalID != binding.LogicalID ||
+			payload.Protocol != binding.Protocol ||
+			payload.Version != binding.CredentialVersion ||
+			strings.ToLower(strings.TrimSpace(payload.Server)) != binding.Server ||
+			payload.Port != binding.Port {
+			return ErrIntegrityCheckFailed
+		}
+		// Verify VerifiedNodeIdentity binding
+		if payload.Identity == nil {
+			return ErrIntegrityCheckFailed
+		}
+		if err := payload.Identity.ValidateNonEmpty(); err != nil {
+			return ErrIntegrityCheckFailed
+		}
+		expectedIdentity := binding.ToVerifiedNodeIdentity()
+		if payload.Identity.LogicalID != expectedIdentity.LogicalID ||
+			payload.Identity.Protocol != expectedIdentity.Protocol ||
+			payload.Identity.Version != expectedIdentity.Version ||
+			!payload.Identity.MatchesEndpoint(expectedIdentity.Protocol, expectedIdentity.Server, expectedIdentity.Port) {
+			return ErrIntegrityCheckFailed
+		}
+		if expectedIdentity.TransportDigest != "" && payload.Identity.TransportDigest != expectedIdentity.TransportDigest {
+			return ErrIntegrityCheckFailed
+		}
+		if payload.Credentials.Transport != nil && payload.Identity.TransportDigest != domain.CanonicalTransportDigest(payload.Credentials.Transport) {
+			return ErrIntegrityCheckFailed
 		}
 	}
 
-	return nil, ErrNotFound
+	return nil
 }
 
 // IsPublicationToken checks if the provided bearer/query token is recognized as a publication export token.
@@ -546,6 +703,7 @@ func (s *Service) resolveSnapshot(ctx context.Context, revisionID string) (*reso
 		if err == nil && gf != nil && !gf.Spec.IsEmpty() {
 			globalFilter = &gf.Spec
 		}
+
 		gfs, err := s.nodeFilterRepo.ListGroupFilters(ctx)
 		if err == nil {
 			groupFilters = gfs
@@ -755,6 +913,92 @@ func preflightSummary(snapshot *resolver.ResolvedPolicySnapshot, result Prefligh
 	}
 	return fmt.Sprintf("publication preflight rejected by policy revision %s (snapshot: %s, diagnostics: %d, codes: [%s])",
 		result.PolicyRevision, snapDigest, len(result.Diagnostics), strings.Join(codes, ", "))
+}
+
+func (s *Service) resolveCredentials(ctx context.Context, nodes []resolver.ResolvedNode) (map[string]*domain.NodeCredentialPayload, error) {
+	if len(nodes) == 0 {
+		return make(map[string]*domain.NodeCredentialPayload), nil
+	}
+	if s.vault == nil || s.credRepo == nil {
+		return nil, domain.NewValidationError("unsupported_target_capability", "node credentials unavailable: vault or credential repository not configured")
+	}
+
+	creds := make(map[string]*domain.NodeCredentialPayload, len(nodes))
+	for _, node := range nodes {
+		var version int
+		if s.nodeRepo != nil {
+			domainNode, err := s.nodeRepo.GetByLogicalID(ctx, node.LogicalID)
+			if err != nil || domainNode == nil {
+				return nil, domain.NewValidationError("unsupported_target_capability", fmt.Sprintf("node %s not found in repository", node.DisplayName))
+			}
+			if domainNode.LogicalID != node.LogicalID {
+				return nil, domain.NewValidationError("unsupported_target_capability", fmt.Sprintf("node %s logical ID mismatch in repository", node.DisplayName))
+			}
+			if domainNode.Protocol != node.Protocol {
+				return nil, domain.NewValidationError("unsupported_target_capability", fmt.Sprintf("node %s protocol mismatch in repository", node.DisplayName))
+			}
+			if domainNode.CredentialVersion <= 0 {
+				return nil, domain.NewValidationError("unsupported_target_capability", fmt.Sprintf("node %s has invalid credential version %d", node.DisplayName, domainNode.CredentialVersion))
+			}
+			version = domainNode.CredentialVersion
+		}
+
+		var record *domain.NodeCredentialRecord
+		var err error
+		if version > 0 {
+			record, err = s.credRepo.GetByLogicalID(ctx, node.LogicalID, version)
+		} else {
+			record, err = s.credRepo.GetLatestByLogicalID(ctx, node.LogicalID)
+		}
+		if err != nil || record == nil {
+			return nil, domain.NewValidationError("unsupported_target_capability", fmt.Sprintf("missing credential record for node %s", node.DisplayName))
+		}
+		if s.nodeRepo != nil {
+			if latestRec, latestErr := s.credRepo.GetLatestByLogicalID(ctx, node.LogicalID); latestErr == nil && latestRec != nil && latestRec.Version != version {
+				return nil, domain.NewValidationError("unsupported_target_capability", fmt.Sprintf("credential record version mismatch for node %s", node.DisplayName))
+			}
+		}
+		if version <= 0 {
+			version = record.Version
+		}
+		if version <= 0 {
+			return nil, domain.NewValidationError("unsupported_target_capability", fmt.Sprintf("node %s has invalid credential version %d", node.DisplayName, version))
+		}
+
+		// Strict identity checks between record and node
+		if record.LogicalID != node.LogicalID {
+			return nil, domain.NewValidationError("unsupported_target_capability", fmt.Sprintf("credential record logical ID mismatch for node %s", node.DisplayName))
+		}
+		if record.Version != version {
+			return nil, domain.NewValidationError("unsupported_target_capability", fmt.Sprintf("credential record version mismatch for node %s", node.DisplayName))
+		}
+
+		// Decrypt payload with expected protocol
+		payload, err := s.vault.Decrypt(record, node.Protocol)
+		if err != nil || payload == nil {
+			return nil, domain.NewValidationError("unsupported_target_capability", fmt.Sprintf("failed to decrypt credentials for node %s", node.DisplayName))
+		}
+
+		// Strict identity checks between payload, record, and node
+		if payload.LogicalID != node.LogicalID {
+			return nil, domain.NewValidationError("unsupported_target_capability", fmt.Sprintf("credential payload logical ID mismatch for node %s", node.DisplayName))
+		}
+		if payload.Version != version || payload.Version != record.Version {
+			return nil, domain.NewValidationError("unsupported_target_capability", fmt.Sprintf("credential payload version mismatch for node %s", node.DisplayName))
+		}
+		if payload.Protocol != node.Protocol {
+			return nil, domain.NewValidationError("unsupported_target_capability", fmt.Sprintf("credential payload protocol mismatch for node %s", node.DisplayName))
+		}
+		if strings.TrimSpace(payload.Server) == "" {
+			return nil, domain.NewValidationError("unsupported_target_capability", fmt.Sprintf("credential payload missing server for node %s", node.DisplayName))
+		}
+		if payload.Port <= 0 || payload.Port > 65535 {
+			return nil, domain.NewValidationError("unsupported_target_capability", fmt.Sprintf("credential payload invalid port %d for node %s", payload.Port, node.DisplayName))
+		}
+
+		creds[node.LogicalID] = payload
+	}
+	return creds, nil
 }
 
 func (s *Service) recordAudit(ctx context.Context, actorKind domain.ActorKind, requestID, action string, result domain.AuditResult, summary string) {

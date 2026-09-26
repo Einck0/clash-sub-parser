@@ -10,6 +10,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -43,12 +46,20 @@ func setupPublicationTestRouter(t *testing.T, db *sql.DB) (http.Handler, *public
 		iprisk.WithAuditRepository(auditRepo),
 	)
 
+	testMasterKey := []byte("01234567890123456789012345678901")
+	testVault, err := domain.NewNodeCredentialVault("k1", map[string][]byte{"k1": testMasterKey})
+	if err != nil {
+		t.Fatalf("failed to create test vault: %v", err)
+	}
+	credRepo := sqlite.NewNodeCredentialRepository(db)
+
 	pubSvc := publication.NewService(
 		pubRepo,
 		auditRepo,
 		publication.WithPolicyRepository(policyRepo),
 		publication.WithRevisionRepository(revRepo),
 		publication.WithNodeRepository(nodeRepo),
+		publication.WithCredentialSource(testVault, credRepo),
 		publication.WithIPRiskService(ipriskSvc),
 		publication.WithRiskPolicyRepository(riskPolicyRepo),
 		publication.WithRiskBindingRepository(riskBindingRepo),
@@ -78,11 +89,14 @@ func seedSamplePolicyData(t *testing.T, db *sql.DB) (string, string) {
 	// 1. Insert Node
 	nodeRepo := sqlite.NewNodeRepository(db)
 	nodeID := domain.ComputeNodeLogicalID(domain.ProtocolTrojan, "tokyo.example.com", 443, nil)
+	tokyoIdentity := domain.NewVerifiedNodeIdentity(nodeID, domain.ProtocolTrojan, "tokyo.example.com", 443, 1, nil)
 	err := nodeRepo.UpsertBatch(ctx, []domain.Node{
 		{
 			LogicalID:                 nodeID,
 			Protocol:                  domain.ProtocolTrojan,
 			DisplayName:               "Tokyo-01",
+			CredentialVersion:         1,
+			Identity:                  &tokyoIdentity,
 			Active:                    true,
 			NormalizedConfigSecretRef: "secret://tokyo",
 			UpdatedAt:                 domain.NowUTC(),
@@ -91,6 +105,24 @@ func seedSamplePolicyData(t *testing.T, db *sql.DB) (string, string) {
 	if err != nil {
 		t.Fatalf("failed to insert node: %v", err)
 	}
+
+	// Insert matching credentials into vault repo
+	credRepo := sqlite.NewNodeCredentialRepository(db)
+	testMasterKey := []byte("01234567890123456789012345678901")
+	testVault, _ := domain.NewNodeCredentialVault("k1", map[string][]byte{"k1": testMasterKey})
+	trojanPayload := &domain.NodeCredentialPayload{
+		LogicalID: nodeID,
+		Protocol:  domain.ProtocolTrojan,
+		Server:    "tokyo.example.com",
+		Port:      443,
+		Version:   1,
+		Identity:  &tokyoIdentity,
+		Credentials: domain.InboundProtocolCredential{
+			Password: "tokyo-trojan-password",
+		},
+	}
+	trojanRec, _ := testVault.Encrypt(trojanPayload)
+	_ = credRepo.Upsert(ctx, trojanRec)
 
 	// 2. Insert Revision
 	revRepo := sqlite.NewRevisionRepository(db)
@@ -184,10 +216,10 @@ func TestPublicationClientSubscriptionEndpoint(t *testing.T) {
 	router, pubSvc := setupPublicationTestRouter(t, db)
 	seedSamplePolicyData(t, db)
 
-	// Publish for Clash
+	// Publish for SingBox
 	ctx := context.Background()
 	pubRes, err := pubSvc.Publish(ctx, publication.PublishCommand{
-		Target:    domain.TargetClash,
+		Target:    domain.TargetSingBox,
 		ActorKind: domain.ActorKindAdmin,
 		RequestID: "req-pub-clash",
 	})
@@ -207,8 +239,8 @@ func TestPublicationClientSubscriptionEndpoint(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("expected status 200, got %d. body: %s", rec.Code, rec.Body.String())
 		}
-		if !strings.Contains(rec.Header().Get("Content-Type"), "yaml") {
-			t.Fatalf("expected Content-Type yaml, got %s", rec.Header().Get("Content-Type"))
+		if !strings.Contains(rec.Header().Get("Content-Type"), "json") {
+			t.Fatalf("expected Content-Type json, got %s", rec.Header().Get("Content-Type"))
 		}
 		if rec.Header().Get("X-Content-Digest") != pubRes.ContentDigest {
 			t.Fatalf("expected X-Content-Digest %s, got %s", pubRes.ContentDigest, rec.Header().Get("X-Content-Digest"))
@@ -216,12 +248,12 @@ func TestPublicationClientSubscriptionEndpoint(t *testing.T) {
 		if rec.Header().Get("X-Snapshot-Digest") != pubRes.SnapshotDigest {
 			t.Fatalf("expected X-Snapshot-Digest %s, got %s", pubRes.SnapshotDigest, rec.Header().Get("X-Snapshot-Digest"))
 		}
-		if !strings.Contains(rec.Header().Get("Content-Disposition"), "clash.yaml") {
-			t.Fatalf("expected Content-Disposition with clash.yaml, got %s", rec.Header().Get("Content-Disposition"))
+		if !strings.Contains(rec.Header().Get("Content-Disposition"), "sing-box.json") {
+			t.Fatalf("expected Content-Disposition with sing-box.json, got %s", rec.Header().Get("Content-Disposition"))
 		}
 		body := rec.Body.String()
-		if !strings.Contains(body, "proxies:") || !strings.Contains(body, "Tokyo-01") {
-			t.Fatalf("served body missing expected clash configuration content: %s", body)
+		if !strings.Contains(body, "outbounds") || !strings.Contains(body, "Tokyo-01") {
+			t.Fatalf("served body missing expected singbox configuration content: %s", body)
 		}
 	})
 
@@ -382,7 +414,7 @@ func TestAdminPreviewAndPublishConsistency(t *testing.T) {
 	seedSamplePolicyData(t, db)
 
 	// 1. Preview via admin API
-	previewBody := `{"target": "mihomo"}`
+	previewBody := `{"target": "singbox"}`
 	previewReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(previewBody))
 	previewReq.Header.Set("Authorization", "Bearer "+testAdminToken)
 	previewReq.Header.Set("Content-Type", "application/json")
@@ -398,15 +430,15 @@ func TestAdminPreviewAndPublishConsistency(t *testing.T) {
 		t.Fatalf("failed to parse preview response: %v", err)
 	}
 
-	if previewResp.Data.Target != "mihomo" {
-		t.Fatalf("expected target mihomo, got %s", previewResp.Data.Target)
+	if previewResp.Data.Target != "singbox" {
+		t.Fatalf("expected target singbox, got %s", previewResp.Data.Target)
 	}
 	if previewResp.Data.SnapshotDigest == "" || previewResp.Data.ContentDigest == "" {
 		t.Fatal("expected non-empty snapshot and content digests in preview")
 	}
 
 	// 2. Publish via admin API
-	publishBody := `{"target": "mihomo"}`
+	publishBody := `{"target": "singbox"}`
 	publishReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications", strings.NewReader(publishBody))
 	publishReq.Header.Set("Authorization", "Bearer "+testAdminToken)
 	publishReq.Header.Set("Content-Type", "application/json")
@@ -451,7 +483,7 @@ func TestAdminPublicationEndpointsAuthGuardrails(t *testing.T) {
 	router, _ := setupPublicationTestRouter(t, db)
 
 	// 1. Unauthenticated request to preview -> 401
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "clash"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "singbox"}`))
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {
@@ -459,7 +491,7 @@ func TestAdminPublicationEndpointsAuthGuardrails(t *testing.T) {
 	}
 
 	// 2. Cookie session without CSRF to create publication -> 403
-	req = httptest.NewRequest(http.MethodPost, "/api/v1/publications", strings.NewReader(`{"target": "clash"}`))
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/publications", strings.NewReader(`{"target": "singbox"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.AddCookie(&http.Cookie{Name: transporthttp.SessionCookieName, Value: testValidSessionID})
 	rec = httptest.NewRecorder()
@@ -498,7 +530,7 @@ func TestAdminPublicationPreflightEndpoint(t *testing.T) {
 	seedSamplePolicyData(t, db)
 
 	// 1. POST /api/v1/publications/preflight -> 200 OK with allowed=true
-	body := `{"target": "clash"}`
+	body := `{"target": "singbox"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preflight", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+testAdminToken)
 	req.Header.Set("Content-Type", "application/json")
@@ -517,8 +549,8 @@ func TestAdminPublicationPreflightEndpoint(t *testing.T) {
 		t.Fatalf("expected allowed=true, got false with diagnostics: %+v", resp.Data.Diagnostics)
 	}
 
-	// 2. GET /api/v1/publications/preflight?target=clash -> 200 OK
-	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/publications/preflight?target=clash", nil)
+	// 2. GET /api/v1/publications/preflight?target=singbox -> 200 OK
+	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/publications/preflight?target=singbox", nil)
 	getReq.Header.Set("Authorization", "Bearer "+testAdminToken)
 	getRec := httptest.NewRecorder()
 	router.ServeHTTP(getRec, getReq)
@@ -613,7 +645,7 @@ func TestAdminPublicationPreflightRecomputationConflict(t *testing.T) {
 	}
 
 	// 3. Standalone preflight returns 200 with allowed=false and diagnostic
-	preflightReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preflight", strings.NewReader(`{"target": "clash"}`))
+	preflightReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preflight", strings.NewReader(`{"target": "singbox"}`))
 	preflightReq.Header.Set("Authorization", "Bearer "+testAdminToken)
 	preflightReq.Header.Set("Content-Type", "application/json")
 	preflightRec := httptest.NewRecorder()
@@ -634,7 +666,7 @@ func TestAdminPublicationPreflightRecomputationConflict(t *testing.T) {
 	}
 
 	// 4. POST /api/v1/publications MUST be intercepted with HTTP 409 Conflict
-	pubReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications", strings.NewReader(`{"target": "clash"}`))
+	pubReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications", strings.NewReader(`{"target": "singbox"}`))
 	pubReq.Header.Set("Authorization", "Bearer "+testAdminToken)
 	pubReq.Header.Set("Content-Type", "application/json")
 	pubRec := httptest.NewRecorder()
@@ -736,7 +768,7 @@ func TestExistingPublicationImmutableToSubsequentObservationsHTTP(t *testing.T) 
 	}
 
 	// 3. Create initial publication via admin API -> 201 Created
-	pubReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications", strings.NewReader(`{"target": "clash"}`))
+	pubReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications", strings.NewReader(`{"target": "singbox"}`))
 	pubReq.Header.Set("Authorization", "Bearer "+testAdminToken)
 	pubReq.Header.Set("Content-Type", "application/json")
 	pubRec := httptest.NewRecorder()
@@ -804,7 +836,7 @@ func TestExistingPublicationImmutableToSubsequentObservationsHTTP(t *testing.T) 
 	}
 
 	// 7. Attempting to create a NEW publication now MUST be rejected with HTTP 409 Conflict
-	newPubReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications", strings.NewReader(`{"target": "clash"}`))
+	newPubReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications", strings.NewReader(`{"target": "singbox"}`))
 	newPubReq.Header.Set("Authorization", "Bearer "+testAdminToken)
 	newPubReq.Header.Set("Content-Type", "application/json")
 	newPubRec := httptest.NewRecorder()
@@ -856,6 +888,7 @@ func TestAdminPreview_CapabilityBoundaries(t *testing.T) {
 				LogicalID:                 nodeID,
 				Protocol:                  domain.ProtocolHysteria2,
 				DisplayName:               "Hy2-01",
+				CredentialVersion:         1,
 				Active:                    true,
 				NormalizedConfigSecretRef: "secret://hy2",
 				UpdatedAt:                 domain.NowUTC(),
@@ -864,6 +897,14 @@ func TestAdminPreview_CapabilityBoundaries(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to insert node: %v", err)
 		}
+		seedEncryptedCredential(t, db, &domain.NodeCredentialPayload{
+			LogicalID:   nodeID,
+			Protocol:    domain.ProtocolHysteria2,
+			Server:      "hy2.example.com",
+			Port:        443,
+			Version:     1,
+			Credentials: domain.InboundProtocolCredential{Password: "hy2-pass"},
+		})
 
 		revRepo := sqlite.NewRevisionRepository(db)
 		revID, _ := domain.NewUUIDv7()
@@ -887,37 +928,58 @@ func TestAdminPreview_CapabilityBoundaries(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to insert group: %v", err)
 		}
+		_ = policyRepo.SetEdgesForGroup(ctx, groupID, []domain.GroupEdge{
+			{ID: domain.MustNewUUIDv7(), ParentGroupID: groupID, NodeLogicalID: &nodeID, Position: 0},
+		})
 
-		// Request preview for target "clash" (which does not support hysteria2)
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "clash"}`))
-		req.Header.Set("Authorization", "Bearer "+testAdminToken)
-		req.Header.Set("Content-Type", "application/json")
-		rec := httptest.NewRecorder()
-		router.ServeHTTP(rec, req)
+		// 1. Request preview for illegal legacy target "clash" -> 422 unsupported_target
+		reqClash := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "clash"}`))
+		reqClash.Header.Set("Authorization", "Bearer "+testAdminToken)
+		reqClash.Header.Set("Content-Type", "application/json")
+		recClash := httptest.NewRecorder()
+		router.ServeHTTP(recClash, reqClash)
 
-		if rec.Code != http.StatusUnprocessableEntity {
-			t.Fatalf("expected 422 Unprocessable Entity, got %d. body: %s", rec.Code, rec.Body.String())
+		if recClash.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("expected 422 Unprocessable Entity, got %d. body: %s", recClash.Code, recClash.Body.String())
 		}
-		var errResp transporthttp.ErrorResponse
-		if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
+		var errRespClash transporthttp.ErrorResponse
+		if err := json.Unmarshal(recClash.Body.Bytes(), &errRespClash); err != nil {
 			t.Fatalf("failed to parse error response: %v", err)
 		}
-		if errResp.Code != "unsupported_target_capability" {
-			t.Fatalf("expected error code unsupported_target_capability, got %s", errResp.Code)
-		}
-		if !strings.Contains(errResp.Message, "hysteria2") || !strings.Contains(errResp.Message, "protocol is not supported") {
-			t.Fatalf("expected message to mention unsupported protocol, got %s", errResp.Message)
+		if errRespClash.Code != "unsupported_target" {
+			t.Fatalf("expected error code unsupported_target, got %s", errRespClash.Code)
 		}
 
-		// Same setup for target "mihomo" (which supports hysteria2) -> 200 OK
-		reqMihomo := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "mihomo"}`))
-		reqMihomo.Header.Set("Authorization", "Bearer "+testAdminToken)
-		reqMihomo.Header.Set("Content-Type", "application/json")
-		recMihomo := httptest.NewRecorder()
-		router.ServeHTTP(recMihomo, reqMihomo)
+		// 2. Request preview for target "surge" (which does not support hysteria2) -> 422 unsupported_target_capability
+		reqSurge := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "surge"}`))
+		reqSurge.Header.Set("Authorization", "Bearer "+testAdminToken)
+		reqSurge.Header.Set("Content-Type", "application/json")
+		recSurge := httptest.NewRecorder()
+		router.ServeHTTP(recSurge, reqSurge)
 
-		if recMihomo.Code != http.StatusOK {
-			t.Fatalf("expected 200 OK for mihomo with hysteria2, got %d. body: %s", recMihomo.Code, recMihomo.Body.String())
+		if recSurge.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("expected 422 Unprocessable Entity, got %d. body: %s", recSurge.Code, recSurge.Body.String())
+		}
+		var errRespSurge transporthttp.ErrorResponse
+		if err := json.Unmarshal(recSurge.Body.Bytes(), &errRespSurge); err != nil {
+			t.Fatalf("failed to parse error response: %v", err)
+		}
+		if errRespSurge.Code != "unsupported_target_capability" {
+			t.Fatalf("expected error code unsupported_target_capability, got %s", errRespSurge.Code)
+		}
+		if !strings.Contains(errRespSurge.Message, "hysteria2") || !strings.Contains(errRespSurge.Message, "protocol is not supported") {
+			t.Fatalf("expected message to mention unsupported protocol, got %s", errRespSurge.Message)
+		}
+
+		// 3. Same setup for target "singbox" (which supports hysteria2) -> 200 OK
+		reqSingBox := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "singbox"}`))
+		reqSingBox.Header.Set("Authorization", "Bearer "+testAdminToken)
+		reqSingBox.Header.Set("Content-Type", "application/json")
+		recSingBox := httptest.NewRecorder()
+		router.ServeHTTP(recSingBox, reqSingBox)
+
+		if recSingBox.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK for singbox with hysteria2, got %d. body: %s", recSingBox.Code, recSingBox.Body.String())
 		}
 	})
 
@@ -934,6 +996,7 @@ func TestAdminPreview_CapabilityBoundaries(t *testing.T) {
 				LogicalID:                 nodeID,
 				Protocol:                  domain.ProtocolTrojan,
 				DisplayName:               "Trojan-01",
+				CredentialVersion:         1,
 				Active:                    true,
 				NormalizedConfigSecretRef: "secret://trojan",
 				UpdatedAt:                 domain.NowUTC(),
@@ -942,6 +1005,14 @@ func TestAdminPreview_CapabilityBoundaries(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to insert node: %v", err)
 		}
+		seedEncryptedCredential(t, db, &domain.NodeCredentialPayload{
+			LogicalID:   nodeID,
+			Protocol:    domain.ProtocolTrojan,
+			Server:      "trojan.example.com",
+			Port:        443,
+			Version:     1,
+			Credentials: domain.InboundProtocolCredential{Password: "trojan-pass"},
+		})
 
 		revRepo := sqlite.NewRevisionRepository(db)
 		revID, _ := domain.NewUUIDv7()
@@ -965,6 +1036,9 @@ func TestAdminPreview_CapabilityBoundaries(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to insert group: %v", err)
 		}
+		_ = policyRepo.SetEdgesForGroup(ctx, groupID, []domain.GroupEdge{
+			{ID: domain.MustNewUUIDv7(), ParentGroupID: groupID, NodeLogicalID: &nodeID, Position: 0},
+		})
 
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "qx"}`))
 		req.Header.Set("Authorization", "Bearer "+testAdminToken)
@@ -1000,6 +1074,7 @@ func TestAdminPreview_CapabilityBoundaries(t *testing.T) {
 				LogicalID:                 nodeID,
 				Protocol:                  domain.ProtocolTrojan,
 				DisplayName:               "Trojan-01",
+				CredentialVersion:         1,
 				Active:                    true,
 				NormalizedConfigSecretRef: "secret://trojan",
 				UpdatedAt:                 domain.NowUTC(),
@@ -1008,6 +1083,14 @@ func TestAdminPreview_CapabilityBoundaries(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to insert node: %v", err)
 		}
+		seedEncryptedCredential(t, db, &domain.NodeCredentialPayload{
+			LogicalID:   nodeID,
+			Protocol:    domain.ProtocolTrojan,
+			Server:      "trojan.example.com",
+			Port:        443,
+			Version:     1,
+			Credentials: domain.InboundProtocolCredential{Password: "trojan-pass"},
+		})
 
 		revRepo := sqlite.NewRevisionRepository(db)
 		revID, _ := domain.NewUUIDv7()
@@ -1031,20 +1114,23 @@ func TestAdminPreview_CapabilityBoundaries(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to insert group: %v", err)
 		}
+		_ = policyRepo.SetEdgesForGroup(ctx, groupID, []domain.GroupEdge{
+			{ID: domain.MustNewUUIDv7(), ParentGroupID: groupID, NodeLogicalID: &nodeID, Position: 0},
+		})
 
 		ruleID, _ := domain.NewUUIDv7()
 		err = policyRepo.CreatePolicyRule(ctx, &domain.PolicyRule{
 			ID:            ruleID,
 			RevisionID:    revID,
 			TargetGroupID: groupID,
-			Expression:    "GEOSITE,category-ads-all", // Clash does not support GEOSITE
+			Expression:    "GEOSITE,category-ads-all", // Surge does not support GEOSITE
 			Position:      0,
 		})
 		if err != nil {
 			t.Fatalf("failed to insert rule: %v", err)
 		}
 
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "clash"}`))
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "surge"}`))
 		req.Header.Set("Authorization", "Bearer "+testAdminToken)
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
@@ -1126,7 +1212,7 @@ func TestAdminPreview_InputAndRevisionBoundaries(t *testing.T) {
 
 	// 4. No active revision in DB -> 409 no_active_revision
 	{
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "clash"}`))
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "singbox"}`))
 		req.Header.Set("Authorization", "Bearer "+testAdminToken)
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
@@ -1144,7 +1230,7 @@ func TestAdminPreview_InputAndRevisionBoundaries(t *testing.T) {
 
 	// 5. Non-existent revision_id -> 404 revision_not_found
 	{
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "clash", "revision_id": "0195c100-0000-7000-8000-000000000000"}`))
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "singbox", "revision_id": "0195c100-0000-7000-8000-000000000000"}`))
 		req.Header.Set("Authorization", "Bearer "+testAdminToken)
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
@@ -1206,8 +1292,8 @@ func TestAdminPublish_CapabilityBoundaries(t *testing.T) {
 		t.Fatalf("failed to insert group: %v", err)
 	}
 
-	// POST /api/v1/publications with target Clash (which does not support hysteria2)
-	publishReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications", strings.NewReader(`{"target": "clash"}`))
+	// POST /api/v1/publications with target Surge (which does not support hysteria2)
+	publishReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications", strings.NewReader(`{"target": "surge"}`))
 	publishReq.Header.Set("Authorization", "Bearer "+testAdminToken)
 	publishReq.Header.Set("Content-Type", "application/json")
 	publishRec := httptest.NewRecorder()
@@ -1231,7 +1317,7 @@ func TestWriteDomainError_CapabilityErrorAndUnexpectedError(t *testing.T) {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/test", nil)
 		capErr := &compiler.CapabilityError{
-			Target:   domain.TargetClash,
+			Target:   domain.TargetSurge,
 			Location: "nodes[0]",
 			Feature:  "hysteria2",
 			Reason:   "protocol is not supported",
@@ -1276,3 +1362,681 @@ func TestWriteDomainError_CapabilityErrorAndUnexpectedError(t *testing.T) {
 	}
 }
 
+func findMihomoBinary() string {
+	if bin := os.Getenv("MIHOMO_BIN"); bin != "" {
+		if _, err := os.Stat(bin); err == nil {
+			return bin
+		}
+	}
+	if path, err := exec.LookPath("mihomo"); err == nil {
+		return path
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		candidate := filepath.Join(home, "clashctl", "bin", "mihomo")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func TestPublicationClientSubscription_HistoricClashRejected422(t *testing.T) {
+	db := newCleanSQLiteDB(t)
+	router, _ := setupPublicationTestRouter(t, db)
+	ctx := context.Background()
+
+	rawToken := "pub_valid_clash_token_12345"
+	tokenHash := sha256.Sum256([]byte(rawToken))
+	tokenHashHex := hex.EncodeToString(tokenHash[:])
+	pubID := "pub-clash-legacy-retired"
+
+	// 1. Insert historic clash row directly into DB (simulating pre-existing database row)
+	const insertQuery = `
+	INSERT INTO publications (id, target, snapshot_digest, compiler_version, token_hash, state, created_at)
+	VALUES (?, 'clash', 'sha256:legacy-snap-digest', '1.0.0', ?, 'active', ?);`
+	_, err := db.ExecContext(ctx, insertQuery, pubID, tokenHashHex, time.Now().UTC().Format(time.RFC3339))
+	if err != nil {
+		t.Fatalf("failed to insert historic clash publication: %v", err)
+	}
+
+	// 2. Missing token returns 401 Unauthorized (Auth checked before retired target)
+	{
+		req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/publish/v1/%s", pubID), nil)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("expected status 401 for missing token, got %d", rec.Code)
+		}
+	}
+
+	// 3. Invalid token returns 401 Unauthorized (Auth checked before retired target)
+	{
+		req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/publish/v1/%s?token=wrong-token", pubID), nil)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("expected status 401 for invalid token, got %d", rec.Code)
+		}
+	}
+
+	// 4. Revoked clash publication returns 403 Forbidden (Revocation checked before retired target)
+	{
+		_, revErr := db.ExecContext(ctx, "UPDATE publications SET state = 'revoked', revoked_at = ? WHERE id = ?;", time.Now().UTC().Format(time.RFC3339), pubID)
+		if revErr != nil {
+			t.Fatalf("failed to revoke publication: %v", revErr)
+		}
+		req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/publish/v1/%s?token=%s", pubID, rawToken), nil)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("expected status 403 for revoked publication, got %d", rec.Code)
+		}
+		var errResp transporthttp.ErrorResponse
+		_ = json.Unmarshal(rec.Body.Bytes(), &errResp)
+		if errResp.Code != "publication_revoked" {
+			t.Fatalf("expected error code publication_revoked, got %s", errResp.Code)
+		}
+
+		// Restore to active
+		_, _ = db.ExecContext(ctx, "UPDATE publications SET state = 'active', revoked_at = NULL WHERE id = ?;", pubID)
+	}
+
+	// 5. Active clash publication with valid token returns 422 Unprocessable Entity (unsupported_target)
+	{
+		req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/publish/v1/%s?token=%s", pubID, rawToken), nil)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("expected status 422 Unprocessable Entity for unsupported clash publication, got %d. body: %s", rec.Code, rec.Body.String())
+		}
+		var errResp transporthttp.ErrorResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
+			t.Fatalf("failed to parse error response: %v", err)
+		}
+		if errResp.Code != "unsupported_target" {
+			t.Fatalf("expected error code unsupported_target, got %s", errResp.Code)
+		}
+	}
+
+	// 6. Admin GET /api/v1/publications/{id} returns detail with target="clash" intact for forensic/audit inspection
+	{
+		req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/publications/%s", pubID), nil)
+		req.Header.Set("Authorization", "Bearer "+testAdminToken)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status 200 for admin GET publication, got %d", rec.Code)
+		}
+		var detailResp struct {
+			Data struct {
+				Publication struct {
+					ID     string `json:"id"`
+					Target string `json:"target"`
+					State  string `json:"state"`
+				} `json:"publication"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &detailResp); err != nil {
+			t.Fatalf("failed to parse publication detail: %v", err)
+		}
+		if detailResp.Data.Publication.Target != "clash" {
+			t.Fatalf("expected target 'clash' preserved in detail, got %s", detailResp.Data.Publication.Target)
+		}
+	}
+}
+
+func TestPublication_MihomoHysteria2EndToEndWithOfficialCLI(t *testing.T) {
+	db := newCleanSQLiteDB(t)
+	router, pubSvc := setupPublicationTestRouter(t, db)
+	ctx := context.Background()
+
+	// 1. Setup Hysteria2 node
+	nodeRepo := sqlite.NewNodeRepository(db)
+	hy2ID := domain.ComputeNodeLogicalID(domain.ProtocolHysteria2, "hy2.gateway.example.com", 443, nil)
+	err := nodeRepo.UpsertBatch(ctx, []domain.Node{
+		{
+			LogicalID:                 hy2ID,
+			Protocol:                  domain.ProtocolHysteria2,
+			DisplayName:               "Hy2-Direct",
+			CredentialVersion:         1,
+			Active:                    true,
+			NormalizedConfigSecretRef: "secret://hy2-direct",
+			UpdatedAt:                 domain.NowUTC(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to insert node: %v", err)
+	}
+
+	// 2. Setup vault credentials for Hysteria2
+	testMasterKey := []byte("01234567890123456789012345678901")
+	vault, err := domain.NewNodeCredentialVault("k1", map[string][]byte{"k1": testMasterKey})
+	if err != nil {
+		t.Fatalf("create vault: %v", err)
+	}
+	credRepo := sqlite.NewNodeCredentialRepository(db)
+	hy2Payload := &domain.NodeCredentialPayload{
+		LogicalID: hy2ID,
+		Protocol:  domain.ProtocolHysteria2,
+		Server:    "hy2.gateway.example.com",
+		Port:      443,
+		Version:   1,
+		Credentials: domain.InboundProtocolCredential{
+			Password: "hy2-strong-password-456",
+			Transport: map[string]string{
+				"sni":              "hy2.gateway.example.com",
+				"skip_cert_verify": "true",
+				"up":               "100 Mbps",
+				"down":             "500 Mbps",
+			},
+		},
+	}
+	hy2Rec, err := vault.Encrypt(hy2Payload)
+	if err != nil {
+		t.Fatalf("encrypt hy2: %v", err)
+	}
+	if err := credRepo.Upsert(ctx, hy2Rec); err != nil {
+		t.Fatalf("upsert hy2 record: %v", err)
+	}
+
+	// 3. Setup revision, group, edges, and rules
+	revRepo := sqlite.NewRevisionRepository(db)
+	revID, _ := domain.NewUUIDv7()
+	_ = revRepo.Create(ctx, &domain.ConfigurationRevision{
+		ID:            revID,
+		ContentDigest: "sha256:hy2-rev-digest",
+		State:         domain.RevisionStateDraft,
+		CreatedAt:     domain.NowUTC(),
+	})
+	_ = revRepo.SetActive(ctx, revID)
+
+	policyRepo := sqlite.NewPolicyRepository(db)
+	groupID, _ := domain.NewUUIDv7()
+	_ = policyRepo.CreateGroup(ctx, &domain.NodeGroup{
+		ID:        groupID,
+		Name:      "HY2-GROUP",
+		GroupType: domain.GroupTypeSelect,
+	})
+	edgeID, _ := domain.NewUUIDv7()
+	_ = policyRepo.SetEdgesForGroup(ctx, groupID, []domain.GroupEdge{
+		{ID: edgeID, ParentGroupID: groupID, NodeLogicalID: &hy2ID, Position: 0},
+	})
+	ruleID, _ := domain.NewUUIDv7()
+	_ = policyRepo.CreatePolicyRule(ctx, &domain.PolicyRule{
+		ID:            ruleID,
+		RevisionID:    revID,
+		TargetGroupID: groupID,
+		Expression:    "MATCH",
+		Position:      0,
+	})
+
+	// 4. Preview Mihomo via POST /api/v1/publications/preview -> 200 OK
+	var previewContent string
+	var previewContentDigest string
+	{
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "mihomo"}`))
+		req.Header.Set("Authorization", "Bearer "+testAdminToken)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status 200 for Mihomo preview, got %d. body: %s", rec.Code, rec.Body.String())
+		}
+		var prevResp previewResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &prevResp); err != nil {
+			t.Fatalf("failed to decode preview response: %v", err)
+		}
+		previewContent = prevResp.Data.Content
+		previewContentDigest = prevResp.Data.ContentDigest
+
+		if !strings.Contains(previewContent, "type: hysteria2") || !strings.Contains(previewContent, "server: hy2.gateway.example.com") ||
+			!strings.Contains(previewContent, "password: hy2-strong-password-456") || !strings.Contains(previewContent, "sni: hy2.gateway.example.com") {
+			t.Fatalf("preview content missing expected Hysteria2 details:\n%s", previewContent)
+		}
+	}
+
+	// 5. Publish Mihomo via POST /api/v1/publications -> 201 Created
+	var pubID string
+	var rawToken string
+	{
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/publications", strings.NewReader(`{"target": "mihomo"}`))
+		req.Header.Set("Authorization", "Bearer "+testAdminToken)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("expected status 201 for Mihomo publish, got %d. body: %s", rec.Code, rec.Body.String())
+		}
+		var pubResp publicationCreateResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &pubResp); err != nil {
+			t.Fatalf("failed to decode publish response: %v", err)
+		}
+		pubID = pubResp.Data.Publication.ID
+		rawToken = pubResp.Data.RawToken
+
+		if pubResp.Data.ContentDigest != previewContentDigest {
+			t.Fatalf("publish content digest %s does not match preview digest %s", pubResp.Data.ContentDigest, previewContentDigest)
+		}
+		if pubResp.Data.ContentType != "application/yaml" {
+			t.Fatalf("expected content type application/yaml, got %s", pubResp.Data.ContentType)
+		}
+		if pubResp.Data.Filename != "mihomo.yaml" {
+			t.Fatalf("expected filename mihomo.yaml, got %s", pubResp.Data.Filename)
+		}
+	}
+
+	// 6. Download via GET /publish/v1/{id}?token={token} -> 200 OK
+	{
+		req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/publish/v1/%s?token=%s", pubID, rawToken), nil)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status 200 for publication download, got %d. body: %s", rec.Code, rec.Body.String())
+		}
+		if rec.Header().Get("Content-Type") != "application/yaml" {
+			t.Fatalf("expected application/yaml, got %s", rec.Header().Get("Content-Type"))
+		}
+		if !strings.Contains(rec.Header().Get("Content-Disposition"), "mihomo.yaml") {
+			t.Fatalf("expected Content-Disposition with mihomo.yaml, got %s", rec.Header().Get("Content-Disposition"))
+		}
+		if rec.Header().Get("X-Content-Digest") != previewContentDigest {
+			t.Fatalf("content digest header mismatch: %s vs %s", rec.Header().Get("X-Content-Digest"), previewContentDigest)
+		}
+		if rec.Body.String() != previewContent {
+			t.Fatal("downloaded content does not match preview content")
+		}
+
+		// 7. Validate with official Mihomo CLI if present on host
+		mihomoBin := findMihomoBinary()
+		if mihomoBin != "" {
+			tmpDir, dirErr := os.MkdirTemp("", "mihomo-cli-pub-*")
+			if dirErr != nil {
+				t.Fatalf("failed to create temp dir: %v", dirErr)
+			}
+			defer os.RemoveAll(tmpDir)
+
+			cfgPath := filepath.Join(tmpDir, "config.yaml")
+			if writeErr := os.WriteFile(cfgPath, rec.Body.Bytes(), 0o600); writeErr != nil {
+				t.Fatalf("write config file: %v", writeErr)
+			}
+
+			cmd := exec.Command(mihomoBin, "-t", "-d", tmpDir, "-f", cfgPath)
+			output, execErr := cmd.CombinedOutput()
+			if execErr != nil {
+				t.Fatalf("official mihomo -t configuration validation failed: %v\nOutput: %s", execErr, string(output))
+			}
+		}
+	}
+
+	// 8. Restart recovery test: clear in-memory artifacts map and re-request
+	{
+		// Fresh router with same DB simulating process restart
+		restartedRouter, _ := setupPublicationTestRouter(t, db)
+		req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/publish/v1/%s?token=%s", pubID, rawToken), nil)
+		rec := httptest.NewRecorder()
+		restartedRouter.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status 200 on restart recovery, got %d. body: %s", rec.Code, rec.Body.String())
+		}
+		if rec.Header().Get("X-Content-Digest") != previewContentDigest {
+			t.Fatalf("recovered content digest mismatch: %s vs %s", rec.Header().Get("X-Content-Digest"), previewContentDigest)
+		}
+		if rec.Body.String() != previewContent {
+			t.Fatal("recovered content does not match preview content")
+		}
+	}
+
+	// 9. Revoke publication -> subsequent GET returns 403 Forbidden
+	{
+		req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/publications/%s/revoke", pubID), nil)
+		req.Header.Set("Authorization", "Bearer "+testAdminToken)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status 200 on revoke, got %d", rec.Code)
+		}
+
+		getReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/publish/v1/%s?token=%s", pubID, rawToken), nil)
+		getRec := httptest.NewRecorder()
+		router.ServeHTTP(getRec, getReq)
+		if getRec.Code != http.StatusForbidden {
+			t.Fatalf("expected status 403 after revocation, got %d", getRec.Code)
+		}
+	}
+
+	_ = pubSvc
+}
+
+func TestPublication_NewClashRequestRejected422(t *testing.T) {
+	db := newCleanSQLiteDB(t)
+	router, _ := setupPublicationTestRouter(t, db)
+	seedSamplePolicyData(t, db)
+
+	// 1. POST /api/v1/publications with target "clash" -> 422 unsupported_target
+	{
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/publications", strings.NewReader(`{"target": "clash"}`))
+		req.Header.Set("Authorization", "Bearer "+testAdminToken)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("expected 422 for publish with clash, got %d. body: %s", rec.Code, rec.Body.String())
+		}
+		var errResp transporthttp.ErrorResponse
+		_ = json.Unmarshal(rec.Body.Bytes(), &errResp)
+		if errResp.Code != "unsupported_target" {
+			t.Fatalf("expected unsupported_target error code, got %s", errResp.Code)
+		}
+	}
+
+	// 2. POST /api/v1/publications/preview with target "clash" -> 422 unsupported_target
+	{
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "clash"}`))
+		req.Header.Set("Authorization", "Bearer "+testAdminToken)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("expected 422 for preview with clash, got %d. body: %s", rec.Code, rec.Body.String())
+		}
+		var errResp transporthttp.ErrorResponse
+		_ = json.Unmarshal(rec.Body.Bytes(), &errResp)
+		if errResp.Code != "unsupported_target" {
+			t.Fatalf("expected unsupported_target error code, got %s", errResp.Code)
+		}
+	}
+
+	// 3. POST /api/v1/publications/preflight with target "clash" -> 422 unsupported_target
+	{
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preflight", strings.NewReader(`{"target": "clash"}`))
+		req.Header.Set("Authorization", "Bearer "+testAdminToken)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("expected 422 for preflight with clash, got %d. body: %s", rec.Code, rec.Body.String())
+		}
+		var errResp transporthttp.ErrorResponse
+		_ = json.Unmarshal(rec.Body.Bytes(), &errResp)
+		if errResp.Code != "unsupported_target" {
+			t.Fatalf("expected unsupported_target error code, got %s", errResp.Code)
+		}
+	}
+
+	// 4. GET /api/v1/publications/preflight?target=clash -> 422 unsupported_target
+	{
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/publications/preflight?target=clash", nil)
+		req.Header.Set("Authorization", "Bearer "+testAdminToken)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("expected 422 for GET preflight with clash, got %d. body: %s", rec.Code, rec.Body.String())
+		}
+		var errResp transporthttp.ErrorResponse
+		_ = json.Unmarshal(rec.Body.Bytes(), &errResp)
+		if errResp.Code != "unsupported_target" {
+			t.Fatalf("expected unsupported_target error code, got %s", errResp.Code)
+		}
+	}
+
+	// 5. Verify no publications were created in the database
+	var count int
+	if err := db.QueryRow("SELECT COUNT(*) FROM publications").Scan(&count); err != nil {
+		t.Fatalf("count publications failed: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected 0 publications after rejected requests, got %d", count)
+	}
+}
+
+func seedEncryptedCredential(t *testing.T, db *sql.DB, payload *domain.NodeCredentialPayload) {
+	t.Helper()
+	testMasterKey := []byte("01234567890123456789012345678901")
+	testVault, err := domain.NewNodeCredentialVault("k1", map[string][]byte{"k1": testMasterKey})
+	if err != nil {
+		t.Fatalf("create vault: %v", err)
+	}
+	if payload != nil && payload.Identity == nil {
+		identity := domain.NewVerifiedNodeIdentity(payload.LogicalID, payload.Protocol, payload.Server, payload.Port, payload.Version, payload.Credentials.Transport)
+		payload.Identity = &identity
+	}
+	rec, err := testVault.Encrypt(payload)
+	if err != nil {
+		t.Fatalf("encrypt credential: %v", err)
+	}
+	if err := sqlite.NewNodeCredentialRepository(db).Upsert(context.Background(), rec); err != nil {
+		t.Fatalf("upsert credential: %v", err)
+	}
+}
+
+func TestFourTargetEndToEndHTTP_WireGuardTUICAndNativeCapabilityProof(t *testing.T) {
+	ctx := context.Background()
+	db := newCleanSQLiteDB(t)
+	router, _ := setupPublicationTestRouter(t, db)
+
+	nodeRepo := sqlite.NewNodeRepository(db)
+	revRepo := sqlite.NewRevisionRepository(db)
+	policyRepo := sqlite.NewPolicyRepository(db)
+
+	wgID := domain.ComputeNodeLogicalID(domain.ProtocolWireGuard, "198.51.100.70", 51820, nil)
+	tuicID := domain.ComputeNodeLogicalID(domain.ProtocolTUIC, "198.51.100.71", 8443, nil)
+	ssID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "198.51.100.72", 8388, nil)
+
+	now := domain.NowUTC()
+	if err := nodeRepo.UpsertBatch(ctx, []domain.Node{
+		{LogicalID: wgID, Protocol: domain.ProtocolWireGuard, DisplayName: "WG-Core-01", CredentialVersion: 1, Active: true, NormalizedConfigSecretRef: "secret://wg", CreatedAt: now, UpdatedAt: now},
+		{LogicalID: tuicID, Protocol: domain.ProtocolTUIC, DisplayName: "TUIC-Core-01", CredentialVersion: 1, Active: true, NormalizedConfigSecretRef: "secret://tuic", CreatedAt: now, UpdatedAt: now},
+		{LogicalID: ssID, Protocol: domain.ProtocolSS, DisplayName: "SS-Core-01", CredentialVersion: 1, Active: true, NormalizedConfigSecretRef: "secret://ss", CreatedAt: now, UpdatedAt: now},
+	}); err != nil {
+		t.Fatalf("upsert nodes: %v", err)
+	}
+
+	wgPrivKey := "cGxlYXNlLWRvLW5vdC1sZWFrLXdnLXByaXZhdGUta2V5"
+	wgPubKey := "cGxlYXNlLWRvLW5vdC1sZWFrLXdnLXB1YmxpYy1rZXk="
+	tuicUUID := "22222222-3333-4444-5555-666666666666"
+	tuicPass := "tuic-top-secret-password-999"
+	ssPass := "ss-top-secret-password-888"
+
+	seedEncryptedCredential(t, db, &domain.NodeCredentialPayload{
+		LogicalID: wgID,
+		Protocol:  domain.ProtocolWireGuard,
+		Server:    "198.51.100.70",
+		Port:      51820,
+		Version:   1,
+		Credentials: domain.InboundProtocolCredential{
+			PrivateKey:   wgPrivKey,
+			PublicKey:    wgPubKey,
+			PreSharedKey: "cGxlYXNlLWRvLW5vdC1sZWFrLXdnLXBzaw==",
+			LocalAddress: []string{"10.0.0.2/32", "fd00::2/128"},
+			Reserved:     []uint8{1, 2, 3},
+			MTU:          1400,
+			DNS:          []string{"1.1.1.1"},
+		},
+	})
+	seedEncryptedCredential(t, db, &domain.NodeCredentialPayload{
+		LogicalID: tuicID,
+		Protocol:  domain.ProtocolTUIC,
+		Server:    "198.51.100.71",
+		Port:      8443,
+		Version:   1,
+		Credentials: domain.InboundProtocolCredential{
+			UUID:              tuicUUID,
+			Password:          tuicPass,
+			CongestionControl: "bbr",
+			UDPRelayMode:      "native",
+			ALPN:              []string{"h3"},
+			SNI:               "tuic.example.com",
+		},
+	})
+	seedEncryptedCredential(t, db, &domain.NodeCredentialPayload{
+		LogicalID: ssID,
+		Protocol:  domain.ProtocolSS,
+		Server:    "198.51.100.72",
+		Port:      8388,
+		Version:   1,
+		Credentials: domain.InboundProtocolCredential{
+			Method:   "aes-256-gcm",
+			Password: ssPass,
+		},
+	})
+
+	revID := domain.MustNewUUIDv7()
+	_ = revRepo.Create(ctx, &domain.ConfigurationRevision{
+		ID:            revID,
+		ContentDigest: "sha256:wg-tuic-rev",
+		State:         domain.RevisionStateActive,
+		CreatedAt:     now,
+	})
+	groupID := domain.MustNewUUIDv7()
+	_ = policyRepo.CreateGroup(ctx, &domain.NodeGroup{
+		ID:        groupID,
+		Name:      "ProxySelect",
+		GroupType: domain.GroupTypeSelect,
+	})
+	_ = policyRepo.SetEdgesForGroup(ctx, groupID, []domain.GroupEdge{
+		{ID: domain.MustNewUUIDv7(), ParentGroupID: groupID, NodeLogicalID: &wgID, Position: 0},
+		{ID: domain.MustNewUUIDv7(), ParentGroupID: groupID, NodeLogicalID: &tuicID, Position: 1},
+		{ID: domain.MustNewUUIDv7(), ParentGroupID: groupID, NodeLogicalID: &ssID, Position: 2},
+	})
+	_ = policyRepo.CreatePolicyRule(ctx, &domain.PolicyRule{
+		ID:            domain.MustNewUUIDv7(),
+		RevisionID:    revID,
+		TargetGroupID: groupID,
+		Expression:    "MATCH",
+		Position:      0,
+	})
+
+	// 1. Mihomo and Sing-Box MUST succeed with real WireGuard & TUIC parameters over HTTP
+	for _, target := range []string{"mihomo", "singbox"} {
+		preReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preflight", strings.NewReader(fmt.Sprintf(`{"target": %q}`, target)))
+		preReq.Header.Set("Authorization", "Bearer "+testAdminToken)
+		preReq.Header.Set("Content-Type", "application/json")
+		preRec := httptest.NewRecorder()
+		router.ServeHTTP(preRec, preReq)
+		if preRec.Code != http.StatusOK {
+			t.Fatalf("preflight %s failed with %d: %s", target, preRec.Code, preRec.Body.String())
+		}
+
+		prevReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(fmt.Sprintf(`{"target": %q}`, target)))
+		prevReq.Header.Set("Authorization", "Bearer "+testAdminToken)
+		prevReq.Header.Set("Content-Type", "application/json")
+		prevRec := httptest.NewRecorder()
+		router.ServeHTTP(prevRec, prevReq)
+		if prevRec.Code != http.StatusOK {
+			t.Fatalf("preview %s failed with %d: %s", target, prevRec.Code, prevRec.Body.String())
+		}
+		if prevRec.Header().Get("Cache-Control") != "no-store" {
+			t.Fatalf("expected Cache-Control: no-store on preview, got %q", prevRec.Header().Get("Cache-Control"))
+		}
+
+		pubReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications", strings.NewReader(fmt.Sprintf(`{"target": %q}`, target)))
+		pubReq.Header.Set("Authorization", "Bearer "+testAdminToken)
+		pubReq.Header.Set("Content-Type", "application/json")
+		pubRec := httptest.NewRecorder()
+		router.ServeHTTP(pubRec, pubReq)
+		if pubRec.Code != http.StatusCreated {
+			t.Fatalf("publish %s failed with %d: %s", target, pubRec.Code, pubRec.Body.String())
+		}
+		var pubResp publicationCreateResponse
+		_ = json.Unmarshal(pubRec.Body.Bytes(), &pubResp)
+
+		dlReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/publish/v1/%s?token=%s", pubResp.Data.Publication.ID, pubResp.Data.RawToken), nil)
+		dlRec := httptest.NewRecorder()
+		router.ServeHTTP(dlRec, dlReq)
+		if dlRec.Code != http.StatusOK {
+			t.Fatalf("download %s failed with %d: %s", target, dlRec.Code, dlRec.Body.String())
+		}
+		dlBody := dlRec.Body.String()
+		for _, want := range []string{wgPrivKey, wgPubKey, tuicUUID, tuicPass, ssPass, "198.51.100.70", "198.51.100.71"} {
+			if !strings.Contains(dlBody, want) {
+				t.Fatalf("downloaded %s output missing expected WG/TUIC/SS credential field %q:\n%s", target, want, dlBody)
+			}
+		}
+	}
+
+	// 2. Surge and Quantumult-X MUST reject WireGuard/TUIC with 422 unsupported_target_capability (never faking output)
+	for _, limitedTarget := range []string{"surge", "qx"} {
+		for _, endpoint := range []string{"/api/v1/publications/preflight", "/api/v1/publications/preview", "/api/v1/publications"} {
+			req := httptest.NewRequest(http.MethodPost, endpoint, strings.NewReader(fmt.Sprintf(`{"target": %q}`, limitedTarget)))
+			req.Header.Set("Authorization", "Bearer "+testAdminToken)
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			if rec.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("expected 422 for %s on %s with WG/TUIC, got %d: %s", limitedTarget, endpoint, rec.Code, rec.Body.String())
+			}
+			var errResp transporthttp.ErrorResponse
+			_ = json.Unmarshal(rec.Body.Bytes(), &errResp)
+			if errResp.Code != "unsupported_target_capability" {
+				t.Fatalf("expected unsupported_target_capability for %s on %s, got %s", limitedTarget, endpoint, errResp.Code)
+			}
+			if strings.Contains(rec.Body.String(), wgPrivKey) || strings.Contains(rec.Body.String(), tuicPass) {
+				t.Fatalf("error response leaked secret on %s %s: %s", limitedTarget, endpoint, rec.Body.String())
+			}
+		}
+	}
+
+	// 3. Verify Surge and Quantumult-X succeed end-to-end (including restart recovery & credential rotation guard) when only supported nodes are active
+	_, _ = db.ExecContext(ctx, "UPDATE nodes SET active = 0 WHERE logical_id IN (?, ?);", wgID, tuicID)
+	_ = policyRepo.SetEdgesForGroup(ctx, groupID, []domain.GroupEdge{
+		{ID: domain.MustNewUUIDv7(), ParentGroupID: groupID, NodeLogicalID: &ssID, Position: 0},
+	})
+
+	for _, target := range []string{"surge", "qx"} {
+		pubReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications", strings.NewReader(fmt.Sprintf(`{"target": %q}`, target)))
+		pubReq.Header.Set("Authorization", "Bearer "+testAdminToken)
+		pubReq.Header.Set("Content-Type", "application/json")
+		pubRec := httptest.NewRecorder()
+		router.ServeHTTP(pubRec, pubReq)
+		if pubRec.Code != http.StatusCreated {
+			t.Fatalf("publish %s with supported SS node failed with %d: %s", target, pubRec.Code, pubRec.Body.String())
+		}
+		var pubResp publicationCreateResponse
+		_ = json.Unmarshal(pubRec.Body.Bytes(), &pubResp)
+
+		// Restart recovery succeeds
+		restartedRouter, _ := setupPublicationTestRouter(t, db)
+		dlReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/publish/v1/%s?token=%s", pubResp.Data.Publication.ID, pubResp.Data.RawToken), nil)
+		dlRec := httptest.NewRecorder()
+		restartedRouter.ServeHTTP(dlRec, dlReq)
+		if dlRec.Code != http.StatusOK || !strings.Contains(dlRec.Body.String(), ssPass) {
+			t.Fatalf("restart recovery for %s failed: code=%d body=%s", target, dlRec.Code, dlRec.Body.String())
+		}
+	}
+
+	// 4. Integrity check failures (tampered artifact or rotated credentials) map to HTTP 422
+	{
+		pubReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications", strings.NewReader(`{"target": "surge"}`))
+		pubReq.Header.Set("Authorization", "Bearer "+testAdminToken)
+		pubReq.Header.Set("Content-Type", "application/json")
+		pubRec := httptest.NewRecorder()
+		router.ServeHTTP(pubRec, pubReq)
+		if pubRec.Code != http.StatusCreated {
+			t.Fatalf("publish surge failed with %d: %s", pubRec.Code, pubRec.Body.String())
+		}
+		var pubResp publicationCreateResponse
+		_ = json.Unmarshal(pubRec.Body.Bytes(), &pubResp)
+
+		// Corrupt credential_binding_digest in SQLite -> must return 422
+		if _, err := db.ExecContext(ctx, `UPDATE publications SET credential_binding_digest = ? WHERE id = ?`, strings.Repeat("f", 64), pubResp.Data.Publication.ID); err != nil {
+			t.Fatalf("corrupt credential_binding_digest: %v", err)
+		}
+		restartedRouter, _ := setupPublicationTestRouter(t, db)
+		dlReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/publish/v1/%s?token=%s", pubResp.Data.Publication.ID, pubResp.Data.RawToken), nil)
+		dlRec := httptest.NewRecorder()
+		restartedRouter.ServeHTTP(dlRec, dlReq)
+		if dlRec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("expected 422 Unprocessable Entity on integrity check failure, got %d: %s", dlRec.Code, dlRec.Body.String())
+		}
+	}
+}

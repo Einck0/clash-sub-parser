@@ -158,7 +158,8 @@ type RevisionRepository interface {
 	SetActive(ctx context.Context, id string) error
 }
 
-// PublicationRepository defines the persistence port for configuration publications.
+// PublicationRepository defines the atomic persistence port for immutable configuration publications,
+// including content digests, versioned credential bindings, and AEAD-encrypted compiled artifacts.
 type PublicationRepository interface {
 	GetByID(ctx context.Context, id string) (*Publication, error)
 	GetByTokenHash(ctx context.Context, tokenHash string) (*Publication, error)

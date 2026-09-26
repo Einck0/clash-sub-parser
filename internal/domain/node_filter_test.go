@@ -216,14 +216,47 @@ func TestFilterConditionValidationMatrix(t *testing.T) {
 			wantError: false,
 		},
 		{
-			name: "probe_latency_ms valid <=",
+			name: "probe_latency_ms legacy alias <= rejected",
 			condition: domain.FilterCondition{
 				Field:     domain.FilterFieldProbeLatencyMS,
 				Op:        domain.FilterOp("<="),
 				Value:     "500",
 				ProbeKind: probeKindPtr(domain.ProbeKindBaseline),
 			},
-			wantError: false,
+			wantError: true,
+			errSubstr: "unsupported filter operator",
+		},
+		{
+			name: "probe:latency_ms legacy alias rejected",
+			condition: domain.FilterCondition{
+				Field:     domain.FilterField("probe:latency_ms"),
+				Op:        domain.FilterOpLTE,
+				Value:     "500",
+				ProbeKind: probeKindPtr(domain.ProbeKindBaseline),
+			},
+			wantError: true,
+			errSubstr: "unsupported filter field",
+		},
+		{
+			name: "probe:verdict legacy alias rejected",
+			condition: domain.FilterCondition{
+				Field:     domain.FilterField("probe:verdict"),
+				Op:        domain.FilterOpEquals,
+				Value:     "available",
+				ProbeKind: probeKindPtr(domain.ProbeKindBaseline),
+			},
+			wantError: true,
+			errSubstr: "unsupported filter field",
+		},
+		{
+			name: "source_subscription_id legacy alias rejected",
+			condition: domain.FilterCondition{
+				Field: domain.FilterField("source_subscription_id"),
+				Op:    domain.FilterOpContains,
+				Value: validUUID,
+			},
+			wantError: true,
+			errSubstr: "unsupported filter field",
 		},
 		{
 			name: "probe_latency_ms negative latency",

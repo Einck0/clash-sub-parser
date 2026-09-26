@@ -670,6 +670,205 @@ func Test10000NodesServerSidePaginationAndBoundaryContracts(t *testing.T) {
 	})
 }
 
+func TestNodeDetailConnectionAndPatchHTTPContract(t *testing.T) {
+	ctx := context.Background()
+	db := newCleanSQLiteDB(t)
+
+	vault, err := domain.NewNodeCredentialVault("k1", map[string][]byte{"k1": []byte("01234567890123456789012345678901")})
+	if err != nil {
+		t.Fatalf("create vault: %v", err)
+	}
+	nodeRepo := sqlite.NewNodeRepository(db)
+	credRepo := sqlite.NewNodeCredentialRepository(db)
+	auditRepo := sqlite.NewAuditRepository(db)
+	sourceRepo := sqlite.NewNodeSourceRepository(db)
+	subRepo := sqlite.NewSubscriptionRepository(db)
+	fetchRepo := sqlite.NewSubscriptionFetchRepository(db)
+
+	now := time.Now().UTC()
+	wgID := domain.ComputeNodeLogicalID(domain.ProtocolWireGuard, "198.51.100.55", 51820, map[string]string{"network": "wireguard"})
+	unavailID := domain.ComputeNodeLogicalID(domain.ProtocolTUIC, "198.51.100.56", 8443, map[string]string{"network": "quic"})
+
+	if err := nodeRepo.UpsertBatch(ctx, []domain.Node{
+		{
+			LogicalID:                 wgID,
+			Protocol:                  domain.ProtocolWireGuard,
+			DisplayName:               "WG HTTP Edge",
+			NormalizedConfigSecretRef: "secret://wg-http-edge",
+			CredentialVersion:         1,
+			Active:                    true,
+			CreatedAt:                 now,
+			UpdatedAt:                 now,
+		},
+		{
+			LogicalID:                 unavailID,
+			Protocol:                  domain.ProtocolTUIC,
+			DisplayName:               "TUIC Missing Cred",
+			NormalizedConfigSecretRef: "secret://tuic-unavail",
+			CredentialVersion:         1,
+			Active:                    true,
+			CreatedAt:                 now,
+			UpdatedAt:                 now,
+		},
+	}); err != nil {
+		t.Fatalf("upsert nodes: %v", err)
+	}
+
+	wgIdentity := domain.NewVerifiedNodeIdentity(wgID, domain.ProtocolWireGuard, "198.51.100.55", 51820, 1, map[string]string{"network": "wireguard"})
+	wgPayload := &domain.NodeCredentialPayload{
+		LogicalID: wgID,
+		Protocol:  domain.ProtocolWireGuard,
+		Server:    "198.51.100.55",
+		Port:      51820,
+		Version:   1,
+		Identity:  &wgIdentity,
+		Credentials: domain.InboundProtocolCredential{
+			LocalAddress: []string{"10.0.0.2/32"},
+			PublicKey:    "wg-peer-pub-key-1",
+			PrivateKey:   "TOP-SECRET-WG-PRIV-KEY-V1",
+			PreSharedKey: "TOP-SECRET-WG-PSK-V1",
+			MTU:          1420,
+			DNS:          []string{"1.1.1.1"},
+			Reserved:     []uint8{0, 0, 0},
+			Transport:    map[string]string{"network": "wireguard"},
+		},
+	}
+	wgRec, err := vault.Encrypt(wgPayload)
+	if err != nil {
+		t.Fatalf("encrypt wg payload: %v", err)
+	}
+	if err := credRepo.Upsert(ctx, wgRec); err != nil {
+		t.Fatalf("upsert wg credential: %v", err)
+	}
+
+	routerCfg := newTestRouterConfig(true)
+	routerCfg.InventoryService = inventory.NewService(
+		db,
+		subRepo,
+		fetchRepo,
+		nodeRepo,
+		sourceRepo,
+		nil,
+		inventory.WithCredentialVault(vault, credRepo),
+		inventory.WithAuditRepository(auditRepo),
+	)
+	router := transporthttp.NewRouter(routerCfg)
+
+	// 1. GET /api/v1/nodes/{id} returns safe node.connection without plaintext secrets
+	{
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/nodes/"+wgID, nil)
+		req.Header.Set("Authorization", "Bearer "+testAdminToken)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK for GET /nodes/%s, got %d: %s", wgID, rec.Code, rec.Body.String())
+		}
+		rawBody := rec.Body.String()
+		if strings.Contains(rawBody, "TOP-SECRET-WG-PRIV-KEY-V1") || strings.Contains(rawBody, "TOP-SECRET-WG-PSK-V1") {
+			t.Fatalf("SECURITY LEAK: GET /nodes/{id} leaked plaintext secret: %s", rawBody)
+		}
+		var detailResp nodeDetailResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &detailResp); err != nil {
+			t.Fatalf("unmarshal detail: %v", err)
+		}
+		conn := detailResp.Data.Node.Connection
+		if conn == nil || !conn.Available || !conn.HasPrivateKey || !conn.HasPreSharedKey {
+			t.Fatalf("expected available connection with has_private_key & has_pre_shared_key: %+v", conn)
+		}
+		if conn.Server != "198.51.100.55" || conn.Port != 51820 || conn.PublicKey != "wg-peer-pub-key-1" {
+			t.Fatalf("unexpected connection projection: %+v", conn)
+		}
+	}
+
+	// 2. GET /api/v1/nodes/{id} for node without credentials returns available=false
+	{
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/nodes/"+unavailID, nil)
+		req.Header.Set("Authorization", "Bearer "+testAdminToken)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK for GET /nodes/%s, got %d", unavailID, rec.Code)
+		}
+		var detailResp nodeDetailResponse
+		_ = json.Unmarshal(rec.Body.Bytes(), &detailResp)
+		if detailResp.Data.Node.Connection == nil || detailResp.Data.Node.Connection.Available {
+			t.Fatalf("expected available=false for missing credential node, got %+v", detailResp.Data.Node.Connection)
+		}
+	}
+
+	// 3. PATCH /api/v1/nodes/{id}/connection requires auth and CSRF for session cookies
+	{
+		unauthReq := httptest.NewRequest(http.MethodPatch, "/api/v1/nodes/"+wgID+"/connection", strings.NewReader(`{"expected_credential_version":1}`))
+		unauthReq.Header.Set("Content-Type", "application/json")
+		unauthRec := httptest.NewRecorder()
+		router.ServeHTTP(unauthRec, unauthReq)
+		if unauthRec.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401 for unauthenticated PATCH, got %d", unauthRec.Code)
+		}
+
+		cookieNoCSRF := httptest.NewRequest(http.MethodPatch, "/api/v1/nodes/"+wgID+"/connection", strings.NewReader(`{"expected_credential_version":1}`))
+		cookieNoCSRF.Header.Set("Content-Type", "application/json")
+		cookieNoCSRF.AddCookie(&http.Cookie{Name: transporthttp.SessionCookieName, Value: testValidSessionID})
+		noCSRFRec := httptest.NewRecorder()
+		router.ServeHTTP(noCSRFRec, cookieNoCSRF)
+		if noCSRFRec.Code != http.StatusForbidden {
+			t.Fatalf("expected 403 for session PATCH without X-CSRF-Token, got %d: %s", noCSRFRec.Code, noCSRFRec.Body.String())
+		}
+	}
+
+	// 4. PATCH /api/v1/nodes/{id}/connection with valid session + CSRF updates fields, rotates write-only secrets, and bumps version to 2
+	{
+		patchJSON := `{
+			"expected_credential_version": 1,
+			"display_name": "WG HTTP Edge v2",
+			"local_address": ["10.0.0.88/32", "fd00::88/128"],
+			"mtu": 1380,
+			"private_key_input": "ROTATED-WG-PRIV-KEY-HTTP-V2"
+		}`
+		req := httptest.NewRequest(http.MethodPatch, "/api/v1/nodes/"+wgID+"/connection", strings.NewReader(patchJSON))
+		req.Header.Set("Content-Type", "application/json")
+		req.AddCookie(&http.Cookie{Name: transporthttp.SessionCookieName, Value: testValidSessionID})
+		req.Header.Set("X-CSRF-Token", testValidCSRFToken)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK for valid PATCH, got %d: %s", rec.Code, rec.Body.String())
+		}
+		if strings.Contains(rec.Body.String(), "ROTATED-WG-PRIV-KEY-HTTP-V2") || strings.Contains(rec.Body.String(), "TOP-SECRET") {
+			t.Fatalf("SECURITY LEAK: PATCH response leaked secret: %s", rec.Body.String())
+		}
+		var detailResp nodeDetailResponse
+		_ = json.Unmarshal(rec.Body.Bytes(), &detailResp)
+		if detailResp.Data.Node.CredentialVersion != 2 || detailResp.Data.Node.DisplayName != "WG HTTP Edge v2" {
+			t.Fatalf("expected version 2 and updated display name, got %+v", detailResp.Data.Node)
+		}
+		if detailResp.Data.Node.Connection == nil || detailResp.Data.Node.Connection.MTU != 1380 || len(detailResp.Data.Node.Connection.LocalAddress) != 2 {
+			t.Fatalf("unexpected updated connection: %+v", detailResp.Data.Node.Connection)
+		}
+	}
+
+	// 5. Stale expected_credential_version -> 409 credential_version_conflict; server mutation -> 409 identity_mutation_forbidden
+	{
+		staleReq := httptest.NewRequest(http.MethodPatch, "/api/v1/nodes/"+wgID+"/connection", strings.NewReader(`{"expected_credential_version":1,"mtu":1400}`))
+		staleReq.Header.Set("Authorization", "Bearer "+testAdminToken)
+		staleReq.Header.Set("Content-Type", "application/json")
+		staleRec := httptest.NewRecorder()
+		router.ServeHTTP(staleRec, staleReq)
+		if staleRec.Code != http.StatusConflict || !strings.Contains(staleRec.Body.String(), "credential_version_conflict") {
+			t.Fatalf("expected 409 credential_version_conflict, got %d: %s", staleRec.Code, staleRec.Body.String())
+		}
+
+		idMutReq := httptest.NewRequest(http.MethodPatch, "/api/v1/nodes/"+wgID+"/connection", strings.NewReader(`{"expected_credential_version":2,"server":"203.0.113.200"}`))
+		idMutReq.Header.Set("Authorization", "Bearer "+testAdminToken)
+		idMutReq.Header.Set("Content-Type", "application/json")
+		idMutRec := httptest.NewRecorder()
+		router.ServeHTTP(idMutRec, idMutReq)
+		if idMutRec.Code != http.StatusConflict || !strings.Contains(idMutRec.Body.String(), "identity_mutation_forbidden") {
+			t.Fatalf("expected 409 identity_mutation_forbidden, got %d: %s", idMutRec.Code, idMutRec.Body.String())
+		}
+	}
+}
+
 func BenchmarkNodesPagination(b *testing.B) {
 	db := newCleanSQLiteDBBenchmark(b)
 	seed10000NodesBenchmark(b, db)

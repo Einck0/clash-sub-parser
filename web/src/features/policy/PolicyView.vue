@@ -24,6 +24,8 @@ import type {
   RuleAction,
 } from './policyTypes'
 import {
+  ALL_GROUP_TYPES,
+  MODERN_RULE_CAPABILITY_MATRIX,
   SUPPORTED_FILTER_FIELDS,
   ruleActionTone,
   validateConditionInput,
@@ -346,6 +348,41 @@ onMounted(() => {
       </div>
     </Transition>
 
+    <!-- Group & Routing Rule Target Capability Boundary Banner -->
+    <div
+      data-testid="policy-capability-boundary"
+      class="rounded-xl border border-base-300 bg-base-200/70 p-3.5 sm:p-4 text-xs space-y-2.5 min-w-0 w-full"
+    >
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <span class="font-bold text-base-content">Compiler Target Capability Boundaries (Groups & Routing Rules)</span>
+        <span class="badge badge-xs badge-ghost font-mono">Unsupported combinations rejected at compile time</span>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px] font-mono">
+        <div class="p-2.5 rounded-lg bg-base-100/70 border border-base-300/60 space-y-1">
+          <span class="font-sans font-semibold opacity-75 block">Policy Group Types by Target</span>
+          <div
+            v-for="gt in ALL_GROUP_TYPES"
+            :key="gt.type"
+            class="flex flex-wrap items-center justify-between gap-1"
+          >
+            <span class="text-primary font-semibold">{{ gt.type }}</span>
+            <span class="opacity-80">{{ gt.supportedTargets.join(', ') }}</span>
+          </div>
+        </div>
+        <div class="p-2.5 rounded-lg bg-base-100/70 border border-base-300/60 space-y-1">
+          <span class="font-sans font-semibold opacity-75 block">Routing Rule Subsets by Target</span>
+          <div
+            v-for="band in MODERN_RULE_CAPABILITY_MATRIX"
+            :key="band.category"
+            class="leading-snug"
+          >
+            <span class="text-secondary font-semibold">{{ band.ruleKinds.join(', ') }}</span>:
+            <span class="opacity-80">{{ band.supportedTargets.join(', ') }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Navigation Tabs -->
     <div class="flex flex-wrap items-center gap-2 border-b border-base-300 pb-2 text-xs w-full min-w-0">
       <button
@@ -466,7 +503,7 @@ onMounted(() => {
       <div class="space-y-4">
         <div class="p-3 bg-info/10 border border-info/30 rounded-xl text-xs text-info leading-relaxed">
           <p><strong>Order of Precedence:</strong> Hard Risk/Admission Rejection → Global Filter → Group Conditions.</p>
-          <p class="mt-1">Empty conditions maintain legacy full compatibility (all nodes allowed).</p>
+          <p class="mt-1">Empty conditions allow all admitted nodes without additional global filtering.</p>
           <p class="mt-1 opacity-80">Probe conditions evaluate only fresh observations matching the node's credential version; missing or stale observations fail closed.</p>
         </div>
 
@@ -539,7 +576,7 @@ onMounted(() => {
                 <option value="not_contains">not_contains</option>
               </template>
               <template v-else-if="newGlobalField === 'probe_latency_ms'">
-                <option value="lte">&lt;= (lte)</option>
+                <option value="lte">lte</option>
               </template>
               <template v-else>
                 <option value="equals">equals</option>

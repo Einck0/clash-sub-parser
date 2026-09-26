@@ -743,7 +743,7 @@ func TestMultiSourceConsistentConfigSharesVersion(t *testing.T) {
 
 	// Sub1 has Node Alpha with password "common-pass"
 	fetcher.setResponse(url1, &fetch.Response{
-		StatusCode:    200,
+		StatusCode: 200,
 		Body: []byte(`
 proxies:
   - name: Alpha Sub1
@@ -758,7 +758,7 @@ proxies:
 
 	// Sub2 also has Node Alpha with the SAME server, port, cipher, password, but different display name & digest
 	fetcher.setResponse(url2, &fetch.Response{
-		StatusCode:    200,
+		StatusCode: 200,
 		Body: []byte(`
 proxies:
   - name: Alpha Sub2 Different Name
@@ -809,6 +809,173 @@ proxies:
 	}
 }
 
+func TestInventory_NodeDetailProjectionAndConnectionPatchAndReconcileOverwrite(t *testing.T) {
+	ctx := context.Background()
+	db, subRepo, fetchRepo, nodeRepo, nodeSourceRepo := setupTestEnv(t)
+	auditRepo := sqlite.NewAuditRepository(db)
+
+	masterKey := make([]byte, 32)
+	if _, err := rand.Read(masterKey); err != nil {
+		t.Fatal(err)
+	}
+	vault, err := domain.NewNodeCredentialVault("k1", map[string][]byte{"k1": masterKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	credRepo := sqlite.NewNodeCredentialRepository(db)
+
+	fetcher := &staticFetcher{
+		body: []byte(`
+proxies:
+  - name: WG Tokyo
+    type: wireguard
+    server: 198.51.100.40
+    port: 51820
+    ip: 10.0.0.2/32
+    private-key: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
+    public-key: "HyCEC7mK3/cd/2d+p4I5dfB3nBvV9uG1D2L8aF+p+A8="
+    pre-shared-key: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+    mtu: 1420
+`),
+	}
+
+	service := inventory.NewService(
+		db, subRepo, fetchRepo, nodeRepo, nodeSourceRepo, fetcher,
+		inventory.WithCredentialVault(vault, credRepo),
+		inventory.WithAuditRepository(auditRepo),
+	)
+
+	sub := &domain.Subscription{
+		ID:                 "sub-wg-edit",
+		Name:               "WG Edit Sub",
+		SourceURLSecretRef: "https://example.com/wg.yaml",
+		Enabled:            true,
+		Revision:           "rev-wg-1",
+		CreatedAt:          domain.NowUTC(),
+		UpdatedAt:          domain.NowUTC(),
+	}
+	if err := subRepo.Create(ctx, sub); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := service.ReconcileSubscription(ctx, sub.ID); err != nil {
+		t.Fatalf("initial reconcile failed: %v", err)
+	}
+
+	nodes, _, err := nodeRepo.List(ctx, domain.NodeFilter{Pagination: domain.Pagination{Page: 1, PageSize: 10}})
+	if err != nil || len(nodes) != 1 {
+		t.Fatalf("expected 1 node, got %d (err=%v)", len(nodes), err)
+	}
+	wgID := nodes[0].LogicalID
+
+	// 1. GetNodeDetailWithRisk returns safe non-secret Connection projection
+	detail, err := service.GetNodeDetailWithRisk(ctx, wgID, "")
+	if err != nil {
+		t.Fatalf("GetNodeDetailWithRisk failed: %v", err)
+	}
+	if !detail.Connection.Available {
+		t.Fatalf("expected Connection.Available=true, got false (%s)", detail.Connection.UnavailableReason)
+	}
+	if detail.Connection.Server != "198.51.100.40" || detail.Connection.Port != 51820 {
+		t.Fatalf("unexpected server/port: %+v", detail.Connection)
+	}
+	if !detail.Connection.HasPrivateKey || !detail.Connection.HasPreSharedKey {
+		t.Fatalf("expected HasPrivateKey and HasPreSharedKey true: %+v", detail.Connection)
+	}
+
+	// 2. CAS UpdateNodeConnection: edit local_address, mtu, and rotate private_key + pre_shared_key
+	newMTU := 1380
+	newName := "WG Tokyo Edited"
+	updatedDetail, err := service.UpdateNodeConnection(ctx, inventory.UpdateNodeConnectionCommand{
+		LogicalID: wgID,
+		RequestID: "req-wg-patch-1",
+		ActorKind: domain.ActorKindAdmin,
+		Patch: domain.NodeConnectionPatchRequest{
+			ExpectedCredentialVersion: 1,
+			DisplayName:               &newName,
+			LocalAddress:              []string{"10.0.0.9/32", "fd00::9/128"},
+			MTU:                       &newMTU,
+			PrivateKeyInput:           "ROTATED-WG-PRIV-KEY-V2",
+			PreSharedKeyInput:         "ROTATED-WG-PSK-V2",
+		},
+	})
+	if err != nil {
+		t.Fatalf("UpdateNodeConnection failed: %v", err)
+	}
+	if updatedDetail.Node.CredentialVersion != 2 {
+		t.Fatalf("expected CredentialVersion 2 after patch, got %d", updatedDetail.Node.CredentialVersion)
+	}
+	if updatedDetail.Connection.MTU != 1380 || len(updatedDetail.Connection.LocalAddress) != 2 {
+		t.Fatalf("unexpected updated connection fields: %+v", updatedDetail.Connection)
+	}
+
+	// Verify rotated secret is persisted in Vault v2 and audit log does NOT leak secrets
+	recV2, err := credRepo.GetByLogicalID(ctx, wgID, 2)
+	if err != nil {
+		t.Fatalf("get v2 credential failed: %v", err)
+	}
+	decV2, err := vault.Decrypt(recV2, domain.ProtocolWireGuard)
+	if err != nil {
+		t.Fatalf("decrypt v2 credential failed: %v", err)
+	}
+	if decV2.Credentials.PrivateKey != "ROTATED-WG-PRIV-KEY-V2" || decV2.Credentials.EffectivePreSharedKey() != "ROTATED-WG-PSK-V2" {
+		t.Fatalf("rotated secrets not persisted in v2 record")
+	}
+	if decV2.Identity == nil || decV2.Identity.Version != 2 {
+		t.Fatalf("expected Identity.Version=2 in v2 record, got %+v", decV2.Identity)
+	}
+
+	events, _, err := auditRepo.List(ctx, domain.AuditFilter{Pagination: domain.Pagination{Page: 1, PageSize: 20}})
+	if err != nil || len(events) == 0 {
+		t.Fatalf("expected audit events, got %d (err=%v)", len(events), err)
+	}
+	for _, ev := range events {
+		if contains(ev.RedactedSummary, "ROTATED-WG-PRIV-KEY-V2") || contains(ev.RedactedSummary, "ROTATED-WG-PSK-V2") {
+			t.Fatalf("SECURITY LEAK: audit summary leaked rotated secret: %s", ev.RedactedSummary)
+		}
+	}
+
+	// 3. Stale ExpectedCredentialVersion (1 != current 2) must fail with conflict
+	_, err = service.UpdateNodeConnection(ctx, inventory.UpdateNodeConnectionCommand{
+		LogicalID: wgID,
+		Patch: domain.NodeConnectionPatchRequest{
+			ExpectedCredentialVersion: 1,
+			MTU:                       &newMTU,
+		},
+	})
+	if err == nil || !contains(err.Error(), "expected credential version 1 does not match current version 2") {
+		t.Fatalf("expected CAS version conflict error, got %v", err)
+	}
+
+	// 4. Attempting to mutate identity-defining server/port must fail with identity_mutation_forbidden
+	badServer := "203.0.113.99"
+	_, err = service.UpdateNodeConnection(ctx, inventory.UpdateNodeConnectionCommand{
+		LogicalID: wgID,
+		Patch: domain.NodeConnectionPatchRequest{
+			ExpectedCredentialVersion: 2,
+			Server:                    &badServer,
+		},
+	})
+	if err == nil || !contains(err.Error(), "alters node logical identity") {
+		t.Fatalf("expected identity_mutation_forbidden error when changing server, got %v", err)
+	}
+
+	// 5. Subsequent upstream subscription Reconcile overwrites local edits for the same logical ID and bumps to v3
+	if _, err := service.ReconcileSubscription(ctx, sub.ID); err != nil {
+		t.Fatalf("subsequent reconcile failed: %v", err)
+	}
+	afterReconcile, err := service.GetNodeDetailWithRisk(ctx, wgID, "")
+	if err != nil {
+		t.Fatalf("GetNodeDetailWithRisk after reconcile failed: %v", err)
+	}
+	if afterReconcile.Node.CredentialVersion != 3 {
+		t.Fatalf("expected CredentialVersion 3 after upstream reconcile overwrote local v2 edits, got %d", afterReconcile.Node.CredentialVersion)
+	}
+	if afterReconcile.Connection.MTU != 1420 || len(afterReconcile.Connection.LocalAddress) != 1 || afterReconcile.Connection.LocalAddress[0] != "10.0.0.2/32" {
+		t.Fatalf("expected upstream reconcile to restore source MTU=1420 and local_address=[10.0.0.2/32], got %+v", afterReconcile.Connection)
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || (len(s) > 0 && len(substr) > 0 && searchSubstr(s, substr)))
 }
@@ -821,4 +988,3 @@ func searchSubstr(s, substr string) bool {
 	}
 	return false
 }
-

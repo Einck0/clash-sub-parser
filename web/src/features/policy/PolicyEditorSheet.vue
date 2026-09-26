@@ -332,6 +332,9 @@ function close() {
                 <div class="min-w-0">
                   <span class="font-medium text-xs block leading-tight">{{ item.label }}</span>
                   <span class="text-[11px] opacity-60 block mt-0.5 leading-snug">{{ item.desc }}</span>
+                  <span class="text-[10px] text-primary/90 font-mono block mt-1 leading-snug">
+                    Targets: {{ item.supportedTargets.join(', ') }}
+                  </span>
                 </div>
               </label>
             </div>
@@ -343,7 +346,7 @@ function close() {
               <div>
                 <span class="font-bold text-xs">Group Node Filter Conditions</span>
                 <p class="text-[11px] opacity-60 mt-0.5">
-                  Applied after Global Filter. Empty conditions match all candidate nodes (legacy pass-through). If no explicit node edges are configured, this group dynamically selects matching global candidates.
+                  Applied after Global Filter. Empty conditions allow all candidate nodes. If no explicit node edges are configured, this group dynamically selects matching global candidates.
                 </p>
                 <p class="text-[10px] opacity-50 mt-0.5">
                   Probe conditions require observations matching current node credential version; stale or unverified observations fail closed.
@@ -410,7 +413,7 @@ function close() {
                     <option value="not_contains">not_contains</option>
                   </template>
                   <template v-else-if="newField === 'probe_latency_ms'">
-                    <option value="lte">&lt;= (lte)</option>
+                    <option value="lte">lte</option>
                   </template>
                   <template v-else>
                     <option value="equals">equals</option>

@@ -8,51 +8,84 @@ import (
 	"clash-sub-parser/internal/parser"
 )
 
-func isTruthy(v string) bool {
-	v = strings.ToLower(strings.TrimSpace(v))
-	return v == "true" || v == "1" || v == "yes" || v == "on"
-}
-
-func hasInsecureOption(m map[string]string) bool {
+func applyTransportFields(cfg *NodeConfig, m map[string]string) {
 	if m == nil {
-		return false
+		return
 	}
-	for k, v := range m {
-		kLower := strings.ToLower(strings.TrimSpace(k))
-		if strings.Contains(kLower, "insecure") ||
-			strings.Contains(kLower, "skip_cert") ||
-			strings.Contains(kLower, "skip-cert") ||
-			strings.Contains(kLower, "skipcert") {
-			if isTruthy(v) {
-				return true
+	if cfg.Network == "" && m["network"] != "" {
+		cfg.Network = m["network"]
+	}
+	if !cfg.TLS && domain.IsTruthy(m["tls"]) {
+		cfg.TLS = true
+	}
+	if cfg.SNI == "" && m["sni"] != "" {
+		cfg.SNI = m["sni"]
+	}
+	if cfg.Path == "" && m["path"] != "" {
+		cfg.Path = m["path"]
+	}
+	if cfg.Headers == nil && m["host"] != "" {
+		cfg.Headers = map[string]string{"Host": m["host"]}
+	}
+	if cfg.ServiceName == "" && m["service_name"] != "" {
+		cfg.ServiceName = m["service_name"]
+	}
+	if len(cfg.ALPN) == 0 {
+		if alpnStr := strings.TrimSpace(m["alpn"]); alpnStr != "" {
+			parts := strings.Split(alpnStr, ",")
+			for _, p := range parts {
+				if trimmed := strings.TrimSpace(p); trimmed != "" {
+					cfg.ALPN = append(cfg.ALPN, trimmed)
+				}
 			}
 		}
 	}
-	return false
-}
-
-func extractHy2Ports(m map[string]string) string {
-	if m == nil {
-		return ""
-	}
-	for _, k := range []string{"ports", "server_ports", "hy2_ports"} {
-		if v := strings.TrimSpace(m[k]); v != "" {
-			return v
+	if cfg.RealityPublicKey == "" {
+		for _, k := range []string{"pbk", "reality_public_key"} {
+			if v := strings.TrimSpace(m[k]); v != "" {
+				cfg.RealityPublicKey = v
+				break
+			}
 		}
 	}
-	return ""
-}
-
-func hasTUICDisableSNI(m map[string]string) bool {
-	if m == nil {
-		return false
-	}
-	for _, k := range []string{"disable_sni", "disable-sni", "tuic_disable_sni"} {
-		if isTruthy(m[k]) {
-			return true
+	if cfg.RealityShortID == "" {
+		for _, k := range []string{"sid", "reality_short_id"} {
+			if v := strings.TrimSpace(m[k]); v != "" {
+				cfg.RealityShortID = v
+				break
+			}
 		}
 	}
-	return false
+	if cfg.ClientFingerprint == "" {
+		for _, k := range []string{"fp", "client_fingerprint"} {
+			if v := strings.TrimSpace(m[k]); v != "" {
+				cfg.ClientFingerprint = v
+				break
+			}
+		}
+	}
+	if cfg.Hy2Obfs == "" && strings.TrimSpace(m["obfs"]) != "" {
+		cfg.Hy2Obfs = strings.TrimSpace(m["obfs"])
+	}
+	if cfg.Hy2ObfsPassword == "" {
+		for _, k := range []string{"obfs-password", "obfs_password"} {
+			if v := strings.TrimSpace(m[k]); v != "" {
+				cfg.Hy2ObfsPassword = v
+				break
+			}
+		}
+	}
+	if domain.HasInsecureTransport(m) {
+		cfg.SkipCertVerify = true
+	}
+	if cfg.Hy2Ports == "" {
+		if p := domain.ExtractHy2Ports(m); p != "" {
+			cfg.Hy2Ports = p
+		}
+	}
+	if domain.HasTUICDisableSNI(m) {
+		cfg.TUICDisableSNI = true
+	}
 }
 
 // NodeConfigFromPayload builds an ephemeral NodeConfig directly from decrypted NodeCredentialPayload.
@@ -66,28 +99,7 @@ func NodeConfigFromPayload(norm parser.NormalizedNode, payload *domain.NodeCrede
 		Transport:   norm.Transport,
 	}
 
-	if norm.Transport != nil {
-		cfg.Network = norm.Transport["network"]
-		cfg.TLS = isTruthy(norm.Transport["tls"])
-		cfg.SNI = norm.Transport["sni"]
-		cfg.Path = norm.Transport["path"]
-		if host, ok := norm.Transport["host"]; ok {
-			cfg.Headers = map[string]string{"Host": host}
-		}
-		cfg.ServiceName = norm.Transport["service_name"]
-		if alpnStr, ok := norm.Transport["alpn"]; ok && alpnStr != "" {
-			cfg.ALPN = []string{alpnStr}
-		}
-		if hasInsecureOption(norm.Transport) {
-			cfg.SkipCertVerify = true
-		}
-		if p := extractHy2Ports(norm.Transport); p != "" {
-			cfg.Hy2Ports = p
-		}
-		if hasTUICDisableSNI(norm.Transport) {
-			cfg.TUICDisableSNI = true
-		}
-	}
+	applyTransportFields(&cfg, norm.Transport)
 
 	if payload != nil {
 		creds := payload.Credentials
@@ -97,37 +109,35 @@ func NodeConfigFromPayload(norm parser.NormalizedNode, payload *domain.NodeCrede
 		cfg.AlterID = creds.AlterID
 		cfg.PrivateKey = creds.PrivateKey
 		cfg.PublicKey = creds.PublicKey
-		cfg.PresharedKey = creds.PresharedKey
+		cfg.PresharedKey = creds.EffectivePreSharedKey()
 		cfg.Username = creds.Username
 
-		if creds.Transport != nil {
-			if cfg.Network == "" && creds.Transport["network"] != "" {
-				cfg.Network = creds.Transport["network"]
-			}
-			if !cfg.TLS && isTruthy(creds.Transport["tls"]) {
-				cfg.TLS = true
-			}
-			if cfg.SNI == "" && creds.Transport["sni"] != "" {
-				cfg.SNI = creds.Transport["sni"]
-			}
-			if cfg.Path == "" && creds.Transport["path"] != "" {
-				cfg.Path = creds.Transport["path"]
-			}
-			if cfg.Headers == nil && creds.Transport["host"] != "" {
-				cfg.Headers = map[string]string{"Host": creds.Transport["host"]}
-			}
-			if hasInsecureOption(creds.Transport) {
-				cfg.SkipCertVerify = true
-			}
-			if cfg.Hy2Ports == "" {
-				if p := extractHy2Ports(creds.Transport); p != "" {
-					cfg.Hy2Ports = p
-				}
-			}
-			if hasTUICDisableSNI(creds.Transport) {
-				cfg.TUICDisableSNI = true
-			}
+		if len(creds.LocalAddress) > 0 {
+			cfg.LocalAddress = append([]string(nil), creds.LocalAddress...)
 		}
+		if len(creds.Reserved) > 0 {
+			cfg.Reserved = append([]uint8(nil), creds.Reserved...)
+		}
+		if creds.MTU > 0 {
+			cfg.MTU = uint32(creds.MTU)
+		}
+		if creds.CongestionControl != "" {
+			cfg.TUICCongestionControl = creds.CongestionControl
+		}
+		if creds.UDPRelayMode != "" {
+			cfg.TUICUDPRelayMode = creds.UDPRelayMode
+		}
+		if creds.DisableSNI {
+			cfg.TUICDisableSNI = true
+		}
+		if len(creds.ALPN) > 0 && len(cfg.ALPN) == 0 {
+			cfg.ALPN = append([]string(nil), creds.ALPN...)
+		}
+		if creds.SNI != "" && cfg.SNI == "" {
+			cfg.SNI = creds.SNI
+		}
+
+		applyTransportFields(&cfg, creds.Transport)
 	}
 
 	// When the transport does not explicitly provide TLS identity or HTTP routing,

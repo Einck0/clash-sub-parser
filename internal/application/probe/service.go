@@ -562,4 +562,3 @@ func (s *Service) CancelBatch(ctx context.Context, id string) error {
 
 	return nil
 }
-

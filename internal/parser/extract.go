@@ -3,7 +3,9 @@ package parser
 import (
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"clash-sub-parser/internal/domain"
@@ -15,6 +17,7 @@ import (
 type ParsedNodeWithCredentials struct {
 	Normalized  NormalizedNode
 	Credentials domain.InboundProtocolCredential
+	Identity    domain.VerifiedNodeIdentity
 }
 
 // ExtractResult reports parsed nodes with extracted credentials, and counts of rejected entries.
@@ -57,6 +60,7 @@ func extractYAML(content []byte) (ExtractResult, bool, error) {
 		result.Items = append(result.Items, ParsedNodeWithCredentials{
 			Normalized:  node,
 			Credentials: creds,
+			Identity:    node.Identity,
 		})
 	}
 	if len(result.Items) == 0 {
@@ -76,24 +80,86 @@ func extractYAMLProxy(proxy map[string]any) (NormalizedNode, domain.InboundProto
 	}
 	transport := yamlTransport(proxy, protocol)
 	secrets := yamlSecrets(proxy, protocol)
-	norm := newNormalizedNode(protocol, value(proxy, "name"), server, port, transport, secrets)
+
+	psk := value(proxy, "pre-shared-key", "pre_shared_key", "preshared-key", "preshared_key", "psk")
+	pubKey := value(proxy, "public-key", "public_key", "peer-public-key", "peer_public_key")
+	rawReserved := proxy["reserved"]
+	if peers, ok := proxy["peers"].([]any); ok && len(peers) > 0 {
+		if firstPeer, ok := peers[0].(map[string]any); ok {
+			if pubKey == "" {
+				pubKey = value(firstPeer, "public-key", "public_key")
+			}
+			if psk == "" {
+				psk = value(firstPeer, "pre-shared-key", "pre_shared_key", "preshared-key", "preshared_key", "psk")
+			}
+			if rawReserved == nil {
+				rawReserved = firstPeer["reserved"]
+			}
+		}
+	}
+
+	var alterID int
+	if aidStr := value(proxy, "alterId", "alter_id", "aid"); aidStr != "" {
+		if v, convErr := strconv.Atoi(aidStr); convErr == nil && v >= 0 {
+			alterID = v
+		}
+	}
 
 	creds := domain.InboundProtocolCredential{
 		Password:     value(proxy, "password"),
 		UUID:         value(proxy, "uuid"),
 		Method:       value(proxy, "cipher"),
+		AlterID:      alterID,
 		PrivateKey:   value(proxy, "private-key", "private_key"),
-		PublicKey:    value(proxy, "public-key", "public_key"),
-		PresharedKey: value(proxy, "psk"),
+		PublicKey:    pubKey,
+		PresharedKey: psk,
+		PreSharedKey: psk,
 		Username:     value(proxy, "username", "user"),
 		Transport:    transport,
 	}
 
-	// Protocol specific validation
+	if protocol == domain.ProtocolWireGuard {
+		localAddrs, addrErr := parseWireGuardAddresses(
+			proxy["local-address"],
+			proxy["local_address"],
+			proxy["address"],
+			value(proxy, "ip"),
+			value(proxy, "ipv6"),
+		)
+		if addrErr != nil {
+			return NormalizedNode{}, domain.InboundProtocolCredential{}, addrErr
+		}
+		creds.LocalAddress = localAddrs
+
+		reserved, resErr := parseWireGuardReserved(rawReserved)
+		if resErr != nil {
+			return NormalizedNode{}, domain.InboundProtocolCredential{}, resErr
+		}
+		creds.Reserved = reserved
+
+		if mtuStr := value(proxy, "mtu"); mtuStr != "" {
+			mtuVal, mtuErr := strconv.Atoi(mtuStr)
+			if mtuErr != nil || mtuVal <= 0 || mtuVal > 65535 {
+				return NormalizedNode{}, domain.InboundProtocolCredential{}, fmt.Errorf("invalid WireGuard mtu %q", mtuStr)
+			}
+			creds.MTU = mtuVal
+		}
+		creds.DNS = parseStringList(proxy["dns"])
+	}
+
+	if protocol == domain.ProtocolTUIC {
+		creds.CongestionControl = value(proxy, "congestion-controller", "congestion_controller", "congestion-control", "congestion_control")
+		creds.UDPRelayMode = value(proxy, "udp-relay-mode", "udp_relay_mode")
+		creds.ALPN = parseStringList(proxy["alpn"])
+		creds.SNI = value(proxy, "sni", "servername", "serverName")
+		creds.DisableSNI = domain.IsTruthy(value(proxy, "disable-sni", "disable_sni"))
+	}
+
 	if err := validateCredentials(protocol, creds); err != nil {
 		return NormalizedNode{}, domain.InboundProtocolCredential{}, err
 	}
 
+	norm := newNormalizedNode(protocol, value(proxy, "name"), server, port, transport, secrets)
 	return norm, creds, nil
 }
 
@@ -108,6 +174,7 @@ func extractURLLines(content string) (ExtractResult, error) {
 		result.Items = append(result.Items, ParsedNodeWithCredentials{
 			Normalized:  node,
 			Credentials: creds,
+			Identity:    node.Identity,
 		})
 	}
 	if len(result.Items) == 0 {
@@ -134,7 +201,6 @@ func extractURL(raw string) (NormalizedNode, domain.InboundProtocolCredential, e
 	}
 	transport := urlTransport(u, protocol)
 	secrets := urlSecrets(u, protocol)
-	norm := newNormalizedNode(protocol, fragmentName(u), server, port, transport, secrets)
 
 	query := u.Query()
 	creds := domain.InboundProtocolCredential{
@@ -162,7 +228,12 @@ func extractURL(raw string) (NormalizedNode, domain.InboundProtocolCredential, e
 			}
 		}
 	case domain.ProtocolVLESS:
-		creds.UUID = u.User.Username()
+		if u.User != nil {
+			creds.UUID = u.User.Username()
+		}
+		if creds.UUID == "" {
+			creds.UUID = firstQuery(query, "uuid")
+		}
 	case domain.ProtocolTrojan:
 		if creds.Password == "" && u.User != nil {
 			creds.Password = u.User.Username()
@@ -171,12 +242,48 @@ func extractURL(raw string) (NormalizedNode, domain.InboundProtocolCredential, e
 		if creds.Password == "" && u.User != nil {
 			creds.Password = u.User.Username()
 		}
+		if creds.Password == "" {
+			creds.Password = firstQuery(query, "password", "auth")
+		}
 	case domain.ProtocolWireGuard:
-		if u.User != nil {
+		if u.User != nil && u.User.Username() != "" {
 			creds.PrivateKey = u.User.Username()
 		}
-		creds.PublicKey = query.Get("public_key")
-		creds.PresharedKey = query.Get("preshared_key")
+		if creds.PrivateKey == "" {
+			creds.PrivateKey = firstQuery(query, "private_key", "private-key", "privateKey")
+		}
+		creds.PublicKey = firstQuery(query, "public_key", "public-key", "publicKey", "peer_public_key", "peer-public-key")
+		psk := firstQuery(query, "pre_shared_key", "pre-shared-key", "preshared_key", "preshared-key", "psk", "preSharedKey", "presharedKey")
+		creds.PresharedKey = psk
+		creds.PreSharedKey = psk
+
+		localAddrs, addrErr := parseWireGuardAddresses(
+			query["local_address"],
+			query["local-address"],
+			query["address"],
+			query["ip"],
+			query["ipv6"],
+		)
+		if addrErr != nil {
+			return NormalizedNode{}, domain.InboundProtocolCredential{}, addrErr
+		}
+		creds.LocalAddress = localAddrs
+
+		if rawRes := firstQuery(query, "reserved"); rawRes != "" {
+			reserved, resErr := parseWireGuardReserved(rawRes)
+			if resErr != nil {
+				return NormalizedNode{}, domain.InboundProtocolCredential{}, resErr
+			}
+			creds.Reserved = reserved
+		}
+		if mtuStr := firstQuery(query, "mtu"); mtuStr != "" {
+			mtuVal, mtuErr := strconv.Atoi(mtuStr)
+			if mtuErr != nil || mtuVal <= 0 || mtuVal > 65535 {
+				return NormalizedNode{}, domain.InboundProtocolCredential{}, fmt.Errorf("invalid WireGuard mtu %q", mtuStr)
+			}
+			creds.MTU = mtuVal
+		}
+		creds.DNS = parseStringList(query["dns"])
 	case domain.ProtocolTUIC:
 		if u.User != nil {
 			creds.UUID = u.User.Username()
@@ -184,21 +291,28 @@ func extractURL(raw string) (NormalizedNode, domain.InboundProtocolCredential, e
 				creds.Password = pw
 			}
 		}
+		if creds.UUID == "" {
+			creds.UUID = firstQuery(query, "uuid")
+		}
+		if creds.Password == "" {
+			creds.Password = firstQuery(query, "password")
+		}
+		creds.CongestionControl = firstQuery(query, "congestion_control", "congestion-control", "congestion_controller", "congestion-controller")
+		creds.UDPRelayMode = firstQuery(query, "udp_relay_mode", "udp-relay-mode")
+		creds.ALPN = parseStringList(query["alpn"])
+		creds.SNI = firstQuery(query, "sni", "servername", "serverName", "peer")
+		creds.DisableSNI = domain.IsTruthy(firstQuery(query, "disable_sni", "disable-sni"))
 	}
 
 	if err := validateCredentials(protocol, creds); err != nil {
 		return NormalizedNode{}, domain.InboundProtocolCredential{}, err
 	}
 
+	norm := newNormalizedNode(protocol, fragmentName(u), server, port, transport, secrets)
 	return norm, creds, nil
 }
 
 func extractVMess(raw string) (NormalizedNode, domain.InboundProtocolCredential, error) {
-	norm, err := parseVMess(raw)
-	if err != nil {
-		return NormalizedNode{}, domain.InboundProtocolCredential{}, err
-	}
-
 	encoded := strings.TrimPrefix(raw, "vmess://")
 	decoded, ok := decodeBase64(encoded)
 	if !ok {
@@ -208,49 +322,87 @@ func extractVMess(raw string) (NormalizedNode, domain.InboundProtocolCredential,
 	if err := json.Unmarshal([]byte(decoded), &payload); err != nil {
 		return NormalizedNode{}, domain.InboundProtocolCredential{}, fmt.Errorf("invalid VMess payload")
 	}
+	server, port, err := endpoint(value(payload, "add", "server"), value(payload, "port"))
+	if err != nil {
+		return NormalizedNode{}, domain.InboundProtocolCredential{}, err
+	}
+	transport := map[string]string{"network": strings.ToLower(defaultValue(value(payload, "net", "network", "anet"), "tcp"))}
+	copyIfPresent(transport, "tls", value(payload, "tls", "security"))
+	if tlsValue := strings.ToLower(transport["tls"]); domain.IsTruthy(tlsValue) || tlsValue == "tls" || tlsValue == "reality" {
+		transport["tls"] = "true"
+	} else {
+		delete(transport, "tls")
+	}
+	copyIfPresent(transport, "sni", value(payload, "sni"))
+	copyIfPresent(transport, "host", value(payload, "host"))
+	copyIfPresent(transport, "path", value(payload, "path"))
+
+	uuid := value(payload, "id", "uuid")
+	var alterID int
+	if aidStr := value(payload, "aid", "alterId", "alter_id"); aidStr != "" {
+		if v, convErr := strconv.Atoi(aidStr); convErr == nil && v >= 0 {
+			alterID = v
+		}
+	}
 
 	creds := domain.InboundProtocolCredential{
-		UUID:      value(payload, "id", "uuid"),
+		UUID:      uuid,
 		Method:    value(payload, "scy", "security"),
-		Transport: norm.Transport,
+		AlterID:   alterID,
+		Transport: transport,
 	}
 
 	if err := validateCredentials(domain.ProtocolVMess, creds); err != nil {
 		return NormalizedNode{}, domain.InboundProtocolCredential{}, err
 	}
 
+	norm := newNormalizedNode(domain.ProtocolVMess, value(payload, "ps", "name"), server, port, transport, []string{uuid})
 	return norm, creds, nil
 }
 
 func validateCredentials(proto domain.Protocol, creds domain.InboundProtocolCredential) error {
 	switch proto {
 	case domain.ProtocolSS:
-		if creds.Password == "" {
+		if strings.TrimSpace(creds.Password) == "" {
 			return fmt.Errorf("missing Shadowsocks password")
 		}
 	case domain.ProtocolVMess:
-		if creds.UUID == "" {
+		if strings.TrimSpace(creds.UUID) == "" {
 			return fmt.Errorf("missing VMess UUID")
 		}
 	case domain.ProtocolVLESS:
-		if creds.UUID == "" {
+		if strings.TrimSpace(creds.UUID) == "" {
 			return fmt.Errorf("missing VLESS UUID")
 		}
 	case domain.ProtocolTrojan:
-		if creds.Password == "" {
+		if strings.TrimSpace(creds.Password) == "" {
 			return fmt.Errorf("missing Trojan password")
 		}
 	case domain.ProtocolHysteria2:
-		if creds.Password == "" {
+		if strings.TrimSpace(creds.Password) == "" {
 			return fmt.Errorf("missing Hysteria2 password")
 		}
 	case domain.ProtocolWireGuard:
-		if creds.PrivateKey == "" {
+		if strings.TrimSpace(creds.PrivateKey) == "" {
 			return fmt.Errorf("missing WireGuard private key")
 		}
+		if strings.TrimSpace(creds.PublicKey) == "" {
+			return fmt.Errorf("missing WireGuard public key")
+		}
+		if len(creds.LocalAddress) == 0 {
+			return fmt.Errorf("missing WireGuard local address")
+		}
+		for _, addr := range creds.LocalAddress {
+			if _, err := netip.ParsePrefix(strings.TrimSpace(addr)); err != nil {
+				return fmt.Errorf("invalid WireGuard local address CIDR %q: %w", addr, err)
+			}
+		}
 	case domain.ProtocolTUIC:
-		if creds.UUID == "" {
+		if strings.TrimSpace(creds.UUID) == "" {
 			return fmt.Errorf("missing TUIC UUID")
+		}
+		if strings.TrimSpace(creds.Password) == "" {
+			return fmt.Errorf("missing TUIC password")
 		}
 	}
 	return nil

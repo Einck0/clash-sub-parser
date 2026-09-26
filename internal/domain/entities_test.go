@@ -107,7 +107,7 @@ func TestGroupEdgeSelfLoopPrevention(t *testing.T) {
 func TestPublicationRevocation(t *testing.T) {
 	pub := domain.Publication{
 		ID:              domain.MustNewUUIDv7(),
-		Target:          domain.TargetClash,
+		Target:          domain.TargetMihomo,
 		SnapshotDigest:  "sha256:abcd",
 		CompilerVersion: "v1.0.0",
 		TokenHash:       "sha256:token",

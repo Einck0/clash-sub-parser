@@ -5,15 +5,14 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
 
 	"clash-sub-parser/internal/domain"
-	"gopkg.in/yaml.v3"
 )
 
 // NormalizedNode is the non-secret normalized representation used by inventory reconciliation.
@@ -22,6 +21,7 @@ type NormalizedNode struct {
 	Server    string
 	Port      int
 	Transport map[string]string
+	Identity  domain.VerifiedNodeIdentity
 }
 
 // Result reports parsed nodes and malformed or unsupported input entries that were skipped.
@@ -31,56 +31,20 @@ type Result struct {
 }
 
 // Parse accepts a Clash or Mihomo YAML proxy list, a Base64 subscription, or URL lines.
+// It delegates to ExtractWithCredentials and projects only non-secret normalized node fields.
 func Parse(content []byte) (Result, error) {
-	trimmed := strings.TrimSpace(string(content))
-	if trimmed == "" {
-		return Result{}, domain.NewValidationError("empty_subscription", "subscription content is empty")
-	}
-
-	if nodes, ok, err := parseYAML([]byte(trimmed)); ok {
-		return nodes, err
-	}
-	if decoded, ok := decodeBase64(trimmed); ok {
-		return parseURLLines(decoded)
-	}
-	return parseURLLines(trimmed)
-}
-
-func parseYAML(content []byte) (Result, bool, error) {
-	var document struct {
-		Proxies []map[string]any `yaml:"proxies"`
-	}
-	if err := yaml.Unmarshal(content, &document); err != nil || document.Proxies == nil {
-		return Result{}, false, nil
-	}
-
-	result := Result{Nodes: make([]NormalizedNode, 0, len(document.Proxies))}
-	for _, proxy := range document.Proxies {
-		node, err := parseYAMLProxy(proxy)
-		if err != nil {
-			result.Rejected++
-			continue
-		}
-		result.Nodes = append(result.Nodes, node)
-	}
-	if len(result.Nodes) == 0 {
-		return Result{}, true, domain.NewValidationError("no_supported_nodes", "subscription contains no supported nodes")
-	}
-	return result, true, nil
-}
-
-func parseYAMLProxy(proxy map[string]any) (NormalizedNode, error) {
-	protocol, err := protocolFor(value(proxy, "type"))
+	extracted, err := ExtractWithCredentials(content)
 	if err != nil {
-		return NormalizedNode{}, err
+		return Result{}, err
 	}
-	server, port, err := endpoint(value(proxy, "server"), value(proxy, "port"))
-	if err != nil {
-		return NormalizedNode{}, err
+	nodes := make([]NormalizedNode, 0, len(extracted.Items))
+	for _, item := range extracted.Items {
+		nodes = append(nodes, item.Normalized)
 	}
-	transport := yamlTransport(proxy, protocol)
-	secrets := yamlSecrets(proxy, protocol)
-	return newNormalizedNode(protocol, value(proxy, "name"), server, port, transport, secrets), nil
+	return Result{
+		Nodes:    nodes,
+		Rejected: extracted.Rejected,
+	}, nil
 }
 
 func yamlTransport(proxy map[string]any, protocol domain.Protocol) map[string]string {
@@ -109,11 +73,49 @@ func yamlTransport(proxy map[string]any, protocol domain.Protocol) map[string]st
 	}
 	copyIfPresent(transport, "path", value(proxy, "path"))
 	copyIfPresent(transport, "host", value(proxy, "host"))
+	if alpnList := parseStringList(proxy["alpn"]); len(alpnList) > 0 {
+		copyIfPresent(transport, "alpn", strings.Join(alpnList, ","))
+	}
+
+	if protocol == domain.ProtocolVLESS {
+		copyIfPresent(transport, "flow", value(proxy, "flow"))
+		copyIfPresent(transport, "fp", value(proxy, "client-fingerprint", "client_fingerprint", "fingerprint", "fp"))
+		if reality, ok := proxy["reality-opts"].(map[string]any); ok {
+			copyIfPresent(transport, "pbk", value(reality, "public-key", "public_key", "pbk"))
+			copyIfPresent(transport, "sid", value(reality, "short-id", "short_id", "sid"))
+		} else if reality, ok := proxy["reality_opts"].(map[string]any); ok {
+			copyIfPresent(transport, "pbk", value(reality, "public-key", "public_key", "pbk"))
+			copyIfPresent(transport, "sid", value(reality, "short-id", "short_id", "sid"))
+		}
+		copyIfPresent(transport, "pbk", value(proxy, "pbk", "reality-public-key", "reality_public_key"))
+		copyIfPresent(transport, "sid", value(proxy, "sid", "short-id", "short_id", "reality-short-id", "reality_short_id"))
+		if transport["pbk"] != "" {
+			transport["tls"] = "true"
+		}
+	}
+
+	if protocol == domain.ProtocolHysteria2 {
+		copyIfPresent(transport, "up", value(proxy, "up"))
+		copyIfPresent(transport, "down", value(proxy, "down"))
+		copyIfPresent(transport, "obfs", value(proxy, "obfs"))
+		copyIfPresent(transport, "obfs-password", value(proxy, "obfs-password", "obfs_password"))
+		copyIfPresent(transport, "server_ports", value(proxy, "ports", "server_ports", "hy2_ports", "mport"))
+	}
+
+	if protocol == domain.ProtocolTUIC {
+		if domain.IsTruthy(value(proxy, "disable-sni", "disable_sni")) {
+			transport["disable_sni"] = "true"
+		}
+	}
+
+	if domain.IsTruthy(value(proxy, "skip-cert-verify", "skip_cert_verify", "insecure")) {
+		transport["skip_cert_verify"] = "true"
+	}
 	return transport
 }
 
 func yamlSecrets(proxy map[string]any, protocol domain.Protocol) []string {
-	keys := []string{"password", "uuid", "private-key", "private_key", "psk"}
+	keys := []string{"password", "uuid", "private-key", "private_key", "public-key", "public_key", "psk", "pre-shared-key", "pre_shared_key", "preshared-key", "preshared_key", "obfs-password", "obfs_password"}
 	if protocol == domain.ProtocolSS {
 		keys = append(keys, "cipher")
 	}
@@ -123,70 +125,18 @@ func yamlSecrets(proxy map[string]any, protocol domain.Protocol) []string {
 			secrets = append(secrets, secret)
 		}
 	}
-	return secrets
-}
-
-func parseURLLines(content string) (Result, error) {
-	result := Result{}
-	for _, line := range strings.Fields(content) {
-		node, err := parseURL(line)
-		if err != nil {
-			result.Rejected++
-			continue
+	if protocol == domain.ProtocolWireGuard {
+		if peers, ok := proxy["peers"].([]any); ok && len(peers) > 0 {
+			if firstPeer, ok := peers[0].(map[string]any); ok {
+				for _, key := range []string{"public-key", "public_key", "pre-shared-key", "pre_shared_key", "preshared-key", "preshared_key", "psk"} {
+					if secret := value(firstPeer, key); secret != "" {
+						secrets = append(secrets, secret)
+					}
+				}
+			}
 		}
-		result.Nodes = append(result.Nodes, node)
 	}
-	if len(result.Nodes) == 0 {
-		return Result{}, domain.NewValidationError("no_supported_nodes", "subscription contains no supported nodes")
-	}
-	return result, nil
-}
-
-func parseURL(raw string) (NormalizedNode, error) {
-	u, err := url.Parse(raw)
-	if err != nil || u.Scheme == "" {
-		return NormalizedNode{}, fmt.Errorf("invalid subscription URL")
-	}
-	protocol, err := protocolFor(u.Scheme)
-	if err != nil {
-		return NormalizedNode{}, err
-	}
-	if protocol == domain.ProtocolVMess {
-		return parseVMess(raw)
-	}
-	server, port, err := endpoint(u.Hostname(), u.Port())
-	if err != nil {
-		return NormalizedNode{}, err
-	}
-	transport := urlTransport(u, protocol)
-	return newNormalizedNode(protocol, fragmentName(u), server, port, transport, urlSecrets(u, protocol)), nil
-}
-
-func parseVMess(raw string) (NormalizedNode, error) {
-	encoded := strings.TrimPrefix(raw, "vmess://")
-	decoded, ok := decodeBase64(encoded)
-	if !ok {
-		return NormalizedNode{}, fmt.Errorf("invalid VMess payload")
-	}
-	var payload map[string]any
-	if err := json.Unmarshal([]byte(decoded), &payload); err != nil {
-		return NormalizedNode{}, fmt.Errorf("invalid VMess payload")
-	}
-	server, port, err := endpoint(value(payload, "add", "server"), value(payload, "port"))
-	if err != nil {
-		return NormalizedNode{}, err
-	}
-	transport := map[string]string{"network": strings.ToLower(defaultValue(value(payload, "net", "network", "anet"), "tcp"))}
-	copyIfPresent(transport, "tls", value(payload, "tls", "security"))
-	if tlsValue := strings.ToLower(transport["tls"]); tlsValue == "tls" || tlsValue == "reality" || tlsValue == "true" {
-		transport["tls"] = "true"
-	} else {
-		delete(transport, "tls")
-	}
-	copyIfPresent(transport, "sni", value(payload, "sni"))
-	copyIfPresent(transport, "host", value(payload, "host"))
-	copyIfPresent(transport, "path", value(payload, "path"))
-	return newNormalizedNode(domain.ProtocolVMess, value(payload, "ps", "name"), server, port, transport, []string{value(payload, "id", "uuid")}), nil
+	return secrets
 }
 
 func urlTransport(u *url.URL, protocol domain.Protocol) map[string]string {
@@ -202,11 +152,41 @@ func urlTransport(u *url.URL, protocol domain.Protocol) map[string]string {
 	if security == "tls" || security == "reality" || protocolUsesTLS(protocol) {
 		transport["tls"] = "true"
 	}
-	copyIfPresent(transport, "sni", query.Get("sni"))
+	copyIfPresent(transport, "sni", firstQuery(query, "sni", "servername", "serverName", "peer"))
 	copyIfPresent(transport, "host", query.Get("host"))
 	copyIfPresent(transport, "path", query.Get("path"))
 	copyIfPresent(transport, "service_name", defaultValue(query.Get("serviceName"), query.Get("service_name")))
-	copyIfPresent(transport, "alpn", query.Get("alpn"))
+	if alpnList := parseStringList(query["alpn"]); len(alpnList) > 0 {
+		copyIfPresent(transport, "alpn", strings.Join(alpnList, ","))
+	}
+
+	if protocol == domain.ProtocolVLESS {
+		copyIfPresent(transport, "flow", firstQuery(query, "flow"))
+		copyIfPresent(transport, "fp", firstQuery(query, "fp", "fingerprint", "client-fingerprint", "client_fingerprint"))
+		copyIfPresent(transport, "pbk", firstQuery(query, "pbk", "public-key", "public_key", "reality-public-key", "reality_public_key"))
+		copyIfPresent(transport, "sid", firstQuery(query, "sid", "short-id", "short_id", "reality-short-id", "reality_short_id"))
+		if transport["pbk"] != "" {
+			transport["tls"] = "true"
+		}
+	}
+
+	if protocol == domain.ProtocolHysteria2 {
+		copyIfPresent(transport, "up", firstQuery(query, "up", "upmbps", "up_mbps"))
+		copyIfPresent(transport, "down", firstQuery(query, "down", "downmbps", "down_mbps"))
+		copyIfPresent(transport, "obfs", firstQuery(query, "obfs"))
+		copyIfPresent(transport, "obfs-password", firstQuery(query, "obfs-password", "obfs_password"))
+		copyIfPresent(transport, "server_ports", firstQuery(query, "ports", "server_ports", "hy2_ports", "mport"))
+	}
+
+	if protocol == domain.ProtocolTUIC {
+		if domain.IsTruthy(firstQuery(query, "disable_sni", "disable-sni")) {
+			transport["disable_sni"] = "true"
+		}
+	}
+
+	if domain.IsTruthy(firstQuery(query, "insecure", "allowInsecure", "skip-cert-verify", "skip_cert_verify")) {
+		transport["skip_cert_verify"] = "true"
+	}
 	return transport
 }
 
@@ -219,7 +199,7 @@ func urlSecrets(u *url.URL, protocol domain.Protocol) []string {
 		}
 	}
 	query := u.Query()
-	for _, key := range []string{"password", "uuid", "private_key", "private-key", "psk"} {
+	for _, key := range []string{"password", "uuid", "private_key", "private-key", "public_key", "public-key", "psk", "pre_shared_key", "pre-shared-key", "preshared_key", "preshared-key", "obfs-password", "obfs_password"} {
 		if value := query.Get(key); value != "" {
 			secrets = append(secrets, value)
 		}
@@ -234,10 +214,17 @@ func urlSecrets(u *url.URL, protocol domain.Protocol) []string {
 
 func newNormalizedNode(protocol domain.Protocol, name, server string, port int, transport map[string]string, secrets []string) NormalizedNode {
 	server = strings.ToLower(strings.TrimSpace(server))
+	normTransport := make(map[string]string, len(transport))
 	for key, value := range transport {
-		transport[key] = strings.TrimSpace(value)
+		trimmed := strings.TrimSpace(value)
+		transport[key] = trimmed
+		if key == "obfs-password" || key == "obfs_password" {
+			continue
+		}
+		normTransport[key] = trimmed
 	}
-	logicalID := domain.ComputeNodeLogicalID(protocol, server, port, transport)
+	logicalID := domain.ComputeNodeLogicalID(protocol, server, port, normTransport)
+	identity := domain.NewVerifiedNodeIdentity(logicalID, protocol, server, port, 1, normTransport)
 	secretRef := opaqueSecretRef(protocol, server, port, secrets)
 	if name == "" {
 		name = net.JoinHostPort(server, strconv.Itoa(port))
@@ -248,9 +235,13 @@ func newNormalizedNode(protocol domain.Protocol, name, server string, port int, 
 			Protocol:                  protocol,
 			DisplayName:               name,
 			NormalizedConfigSecretRef: secretRef,
+			Identity:                  &identity,
 			Active:                    true,
 		},
-		Server: server, Port: port, Transport: transport,
+		Server:    server,
+		Port:      port,
+		Transport: normTransport,
+		Identity:  identity,
 	}
 }
 
@@ -290,19 +281,30 @@ func protocolFor(raw string) (domain.Protocol, error) {
 }
 
 func decodeBase64(value string) (string, bool) {
+	raw, ok := decodeBase64Bytes(value)
+	if !ok {
+		return "", false
+	}
+	return string(raw), true
+}
+
+func decodeBase64Bytes(value string) ([]byte, bool) {
 	value = strings.Map(func(r rune) rune {
 		if r == '\r' || r == '\n' || r == ' ' || r == '\t' {
 			return -1
 		}
 		return r
 	}, value)
+	if value == "" {
+		return nil, false
+	}
 	for _, encoding := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding} {
 		decoded, err := encoding.DecodeString(value)
 		if err == nil {
-			return string(decoded), true
+			return decoded, true
 		}
 	}
-	return "", false
+	return nil, false
 }
 
 func value(values map[string]any, keys ...string) string {
@@ -327,8 +329,165 @@ func value(values map[string]any, keys ...string) string {
 	return ""
 }
 
+func firstQuery(query url.Values, keys ...string) string {
+	for _, key := range keys {
+		if v := strings.TrimSpace(query.Get(key)); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func parseStringList(raw any) []string {
+	var out []string
+	seen := make(map[string]bool)
+	addTokens := func(s string) {
+		for _, part := range strings.Split(s, ",") {
+			if trimmed := strings.TrimSpace(part); trimmed != "" && !seen[trimmed] {
+				seen[trimmed] = true
+				out = append(out, trimmed)
+			}
+		}
+	}
+	switch typed := raw.(type) {
+	case string:
+		addTokens(typed)
+	case []string:
+		for _, item := range typed {
+			addTokens(item)
+		}
+	case []any:
+		for _, item := range typed {
+			if s, ok := item.(string); ok {
+				addTokens(s)
+			} else if item != nil {
+				addTokens(fmt.Sprint(item))
+			}
+		}
+	}
+	return out
+}
+
+func parseWireGuardAddresses(rawValues ...any) ([]string, error) {
+	var rawTokens []string
+	for _, rv := range rawValues {
+		for _, token := range parseStringList(rv) {
+			rawTokens = append(rawTokens, token)
+		}
+	}
+	if len(rawTokens) == 0 {
+		return nil, nil
+	}
+	out := make([]string, 0, len(rawTokens))
+	seen := make(map[string]bool, len(rawTokens))
+	for _, token := range rawTokens {
+		token = strings.TrimSpace(token)
+		if token == "" {
+			continue
+		}
+		var canonical string
+		if strings.Contains(token, "/") {
+			prefix, err := netip.ParsePrefix(token)
+			if err != nil {
+				return nil, fmt.Errorf("invalid WireGuard local_address %q: %w", token, err)
+			}
+			canonical = prefix.String()
+		} else {
+			addr, err := netip.ParseAddr(token)
+			if err != nil {
+				return nil, fmt.Errorf("invalid WireGuard local_address %q: %w", token, err)
+			}
+			bits := 32
+			if addr.Is6() {
+				bits = 128
+			}
+			canonical = netip.PrefixFrom(addr, bits).String()
+		}
+		if !seen[canonical] {
+			seen[canonical] = true
+			out = append(out, canonical)
+		}
+	}
+	return out, nil
+}
+
+func parseWireGuardReserved(raw any) ([]uint8, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	switch typed := raw.(type) {
+	case []uint8:
+		if len(typed) == 0 {
+			return nil, nil
+		}
+		if len(typed) != 3 {
+			return nil, fmt.Errorf("WireGuard reserved must contain 3 bytes, got %d", len(typed))
+		}
+		return append([]uint8(nil), typed...), nil
+	case []int:
+		if len(typed) == 0 {
+			return nil, nil
+		}
+		if len(typed) != 3 {
+			return nil, fmt.Errorf("WireGuard reserved must contain 3 bytes, got %d", len(typed))
+		}
+		out := make([]uint8, 3)
+		for i, v := range typed {
+			if v < 0 || v > 255 {
+				return nil, fmt.Errorf("WireGuard reserved byte out of range: %d", v)
+			}
+			out[i] = uint8(v)
+		}
+		return out, nil
+	case []any:
+		if len(typed) == 0 {
+			return nil, nil
+		}
+		if len(typed) != 3 {
+			return nil, fmt.Errorf("WireGuard reserved must contain 3 bytes, got %d", len(typed))
+		}
+		out := make([]uint8, 3)
+		for i, elem := range typed {
+			val, err := strconv.Atoi(strings.TrimSpace(fmt.Sprint(elem)))
+			if err != nil || val < 0 || val > 255 {
+				return nil, fmt.Errorf("invalid WireGuard reserved element %v", elem)
+			}
+			out[i] = uint8(val)
+		}
+		return out, nil
+	case string:
+		s := strings.TrimSpace(typed)
+		if s == "" {
+			return nil, nil
+		}
+		trimmed := strings.Trim(s, "[]")
+		if strings.Contains(trimmed, ",") {
+			parts := strings.Split(trimmed, ",")
+			if len(parts) != 3 {
+				return nil, fmt.Errorf("WireGuard reserved must contain 3 bytes, got %d", len(parts))
+			}
+			out := make([]uint8, 3)
+			for i, p := range parts {
+				val, err := strconv.Atoi(strings.TrimSpace(p))
+				if err != nil || val < 0 || val > 255 {
+					return nil, fmt.Errorf("invalid WireGuard reserved byte %q", p)
+				}
+				out[i] = uint8(val)
+			}
+			return out, nil
+		}
+		if decoded, ok := decodeBase64Bytes(s); ok && len(decoded) == 3 {
+			return []uint8{decoded[0], decoded[1], decoded[2]}, nil
+		}
+		return nil, fmt.Errorf("invalid WireGuard reserved value %q", s)
+	default:
+		return nil, fmt.Errorf("unsupported WireGuard reserved type %T", raw)
+	}
+}
+
 func tlsEnabled(proxy map[string]any) bool {
-	return strings.EqualFold(value(proxy, "tls", "security"), "true") || strings.EqualFold(value(proxy, "tls", "security"), "tls") || strings.EqualFold(value(proxy, "tls", "security"), "reality")
+	v := value(proxy, "tls", "security")
+	return domain.IsTruthy(v) || strings.EqualFold(v, "tls") || strings.EqualFold(v, "reality")
 }
 
 func protocolUsesTLS(protocol domain.Protocol) bool {

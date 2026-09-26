@@ -429,4 +429,3 @@ func TestProbeServiceTriggerRunWithoutRunnerFailsRun(t *testing.T) {
 		t.Fatalf("expected run state failed, got %s", updated.State)
 	}
 }
-

@@ -64,9 +64,9 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
   }
 
   const mockPreview = {
-    target: 'clash',
+    target: 'mihomo',
     content: 'mixed-port: 7890\nallow-lan: true\nproxies:\n  - name: HK Premium 01\n    type: ss',
-    filename: 'csp-clash.yaml',
+    filename: 'csp-mihomo.yaml',
     content_type: 'text/yaml',
     digest: 'sha256-mock-digest-preview-12345',
     generated_at: '2026-09-16T10:00:00Z',

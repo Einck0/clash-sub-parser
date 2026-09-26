@@ -108,7 +108,6 @@ func TestProbeRunStateEnums(t *testing.T) {
 
 func TestCompilerTargetEnums(t *testing.T) {
 	validTargets := []domain.CompilerTarget{
-		domain.TargetClash,
 		domain.TargetMihomo,
 		domain.TargetSingBox,
 		domain.TargetSurge,
@@ -125,6 +124,24 @@ func TestCompilerTargetEnums(t *testing.T) {
 		}
 		if parsed != target {
 			t.Errorf("parsed target mismatch: expected %s, got %s", target, parsed)
+		}
+	}
+
+	// Legacy target "clash" MUST be rejected - no alias, shim, or fallback.
+	if domain.CompilerTarget("clash").IsValid() {
+		t.Error("legacy target 'clash' must not be valid")
+	}
+	if _, err := domain.ParseCompilerTarget("clash"); err == nil {
+		t.Error("ParseCompilerTarget('clash') must return error")
+	}
+
+	// Unknown targets must be rejected.
+	for _, unknown := range []string{"", "unknown", "v2ray", "shadowrocket"} {
+		if domain.CompilerTarget(unknown).IsValid() {
+			t.Errorf("unknown target %q must not be valid", unknown)
+		}
+		if _, err := domain.ParseCompilerTarget(unknown); err == nil {
+			t.Errorf("ParseCompilerTarget(%q) must return error", unknown)
 		}
 	}
 }
@@ -162,4 +179,3 @@ func TestProbeKindEnums(t *testing.T) {
 		}
 	}
 }
-

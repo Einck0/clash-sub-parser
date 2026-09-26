@@ -146,7 +146,6 @@ func ParseProbeKind(s string) (ProbeKind, error) {
 type CompilerTarget string
 
 const (
-	TargetClash       CompilerTarget = "clash"
 	TargetMihomo      CompilerTarget = "mihomo"
 	TargetSingBox     CompilerTarget = "singbox"
 	TargetSurge       CompilerTarget = "surge"
@@ -154,7 +153,6 @@ const (
 )
 
 var validCompilerTargets = map[CompilerTarget]bool{
-	TargetClash:       true,
 	TargetMihomo:      true,
 	TargetSingBox:     true,
 	TargetSurge:       true,

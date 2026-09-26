@@ -87,6 +87,11 @@ func TestControlPlaneEndToEndFixture(t *testing.T) {
 		t.Fatalf("create subscription: %v", err)
 	}
 
+	credRepo := sqlite.NewNodeCredentialRepository(db)
+	vault, err := domain.NewNodeCredentialVault("k1", map[string][]byte{"k1": []byte("01234567890123456789012345678901")})
+	if err != nil {
+		t.Fatalf("create vault: %v", err)
+	}
 	inventoryService := inventory.NewService(db, subRepo, fetchRepo, nodeRepo, sourceRepo, fixtureFetcher{
 		response: &fetch.Response{
 			StatusCode:    200,
@@ -100,7 +105,7 @@ func TestControlPlaneEndToEndFixture(t *testing.T) {
 				"    cipher: aes-128-gcm\n" +
 				"    password: fixture-secret\n"),
 		},
-	})
+	}, inventory.WithCredentialVault(vault, credRepo))
 	refresh, err := inventoryService.ReconcileSubscription(ctx, sub.ID)
 	if err != nil {
 		t.Fatalf("refresh subscription: %v", err)
@@ -216,17 +221,32 @@ func TestControlPlaneEndToEndFixture(t *testing.T) {
 	}
 
 	// -------------------------------------------------------------------------
-	// 5. Five-Target Compilation
+	// 5. Four-Target Compilation
 	// -------------------------------------------------------------------------
+	nodeRec, err := credRepo.GetByLogicalID(ctx, node.LogicalID, node.CredentialVersion)
+	if err != nil {
+		t.Fatalf("get node credential: %v", err)
+	}
+	nodePayload, err := vault.Decrypt(nodeRec, node.Protocol)
+	if err != nil {
+		t.Fatalf("decrypt node credential: %v", err)
+	}
+	for i := range snapshot.Nodes {
+		if snapshot.Nodes[i].LogicalID == node.LogicalID {
+			snapshot.Nodes[i].Identity = nodePayload.Identity
+		}
+	}
+	creds := map[string]*domain.NodeCredentialPayload{
+		node.LogicalID: nodePayload,
+	}
 	expectedTargets := []domain.CompilerTarget{
-		domain.TargetClash,
 		domain.TargetMihomo,
 		domain.TargetSingBox,
 		domain.TargetSurge,
 		domain.TargetQuantumultX,
 	}
 	for _, target := range expectedTargets {
-		compiled, err := compiler.Compile(ctx, snapshot, target)
+		compiled, err := compiler.Compile(ctx, snapshot, target, compiler.WithCredentials(creds))
 		if err != nil {
 			t.Fatalf("compile %s: %v", target, err)
 		}
@@ -240,10 +260,15 @@ func TestControlPlaneEndToEndFixture(t *testing.T) {
 	// -------------------------------------------------------------------------
 	publicationRepo := sqlite.NewPublicationRepository(db)
 	auditRepo := sqlite.NewAuditRepository(db)
-	publicationService := publication.NewService(publicationRepo, auditRepo)
+	publicationService := publication.NewService(
+		publicationRepo,
+		auditRepo,
+		publication.WithNodeRepository(nodeRepo),
+		publication.WithCredentialSource(vault, credRepo),
+	)
 
 	published, err := publicationService.Publish(ctx, publication.PublishCommand{
-		Target:    domain.TargetClash,
+		Target:    domain.TargetSingBox,
 		Snapshot:  snapshot,
 		ActorKind: domain.ActorKindAdmin,
 		RequestID: "req-integration-e2e",
@@ -274,7 +299,7 @@ func TestControlPlaneEndToEndFixture(t *testing.T) {
 	if clientRec.Code != http.StatusOK {
 		t.Fatalf("client publication GET %s returned %d: %s", clientPubURL, clientRec.Code, clientRec.Body.String())
 	}
-	if recType := clientRec.Header().Get("Content-Type"); !strings.Contains(recType, "yaml") {
+	if recType := clientRec.Header().Get("Content-Type"); !strings.Contains(recType, "json") {
 		t.Fatalf("unexpected content type: %s", recType)
 	}
 	if clientRec.Body.String() != string(artifact.Content) {
@@ -325,13 +350,13 @@ func TestControlPlaneEndToEndFixture(t *testing.T) {
 
 // TestControlPlaneEndToEndWithIPRiskFakeProvider tests the full closed-loop chain with
 // a deterministic fake IP risk provider:
-// 1. Subscription ingestion of multiple nodes (clean node vs adversarial/Tor node)
-// 2. Probing with fake IP risk provider and generating non-secret observations
-// 3. Risk policy evaluation producing deterministic risk decisions and digests
-// 4. Resolver applying risk admission rules (excluding/diagnosing high-risk nodes)
-// 5. Five-target compilation of the admitted policy snapshot
-// 6. Publication preflight interception: blocking publications that violate risk policy,
-//    and allowing publications containing verified low-risk nodes
+//  1. Subscription ingestion of multiple nodes (clean node vs adversarial/Tor node)
+//  2. Probing with fake IP risk provider and generating non-secret observations
+//  3. Risk policy evaluation producing deterministic risk decisions and digests
+//  4. Resolver applying risk admission rules (excluding/diagnosing high-risk nodes)
+//  5. Five-target compilation of the admitted policy snapshot
+//  6. Publication preflight interception: blocking publications that violate risk policy,
+//     and allowing publications containing verified low-risk nodes
 func TestControlPlaneEndToEndWithIPRiskFakeProvider(t *testing.T) {
 	ctx := context.Background()
 	db := openIntegrationDB(t)
@@ -381,6 +406,11 @@ func TestControlPlaneEndToEndWithIPRiskFakeProvider(t *testing.T) {
 		t.Fatalf("create subscription: %v", err)
 	}
 
+	credRepo := sqlite.NewNodeCredentialRepository(db)
+	vault, err := domain.NewNodeCredentialVault("k1", map[string][]byte{"k1": []byte("01234567890123456789012345678901")})
+	if err != nil {
+		t.Fatalf("create vault: %v", err)
+	}
 	inventoryService := inventory.NewService(db, subRepo, fetchRepo, nodeRepo, sourceRepo, fixtureFetcher{
 		response: &fetch.Response{
 			StatusCode:    200,
@@ -400,7 +430,7 @@ func TestControlPlaneEndToEndWithIPRiskFakeProvider(t *testing.T) {
 				"    cipher: aes-128-gcm\n" +
 				"    password: secret-tor\n"),
 		},
-	})
+	}, inventory.WithCredentialVault(vault, credRepo))
 	refresh, err := inventoryService.ReconcileSubscription(ctx, sub.ID)
 	if err != nil || refresh.NodesValid != 2 {
 		t.Fatalf("reconcile subscription: nodes_valid=%d err=%v", refresh.NodesValid, err)
@@ -564,16 +594,31 @@ func TestControlPlaneEndToEndWithIPRiskFakeProvider(t *testing.T) {
 		t.Fatalf("expected risk_blocked diagnostic for torNode %s, got: %+v", torNode.LogicalID, resolvedSnap.Diagnostics)
 	}
 
-	// 6. Five-Target Compilation for Admitted Snapshot
+	// 6. Compilation for Admitted Snapshot
+	cleanRec, err := credRepo.GetByLogicalID(ctx, cleanNode.LogicalID, cleanNode.CredentialVersion)
+	if err != nil {
+		t.Fatalf("get cleanNode credential: %v", err)
+	}
+	cleanPayload, err := vault.Decrypt(cleanRec, cleanNode.Protocol)
+	if err != nil {
+		t.Fatalf("decrypt cleanNode credential: %v", err)
+	}
+	for i := range resolvedSnap.Nodes {
+		if resolvedSnap.Nodes[i].LogicalID == cleanNode.LogicalID {
+			resolvedSnap.Nodes[i].Identity = cleanPayload.Identity
+		}
+	}
+	creds2 := map[string]*domain.NodeCredentialPayload{
+		cleanNode.LogicalID: cleanPayload,
+	}
 	targets := []domain.CompilerTarget{
-		domain.TargetClash,
 		domain.TargetMihomo,
 		domain.TargetSingBox,
 		domain.TargetSurge,
 		domain.TargetQuantumultX,
 	}
 	for _, target := range targets {
-		compiled, err := compiler.Compile(ctx, resolvedSnap, target)
+		compiled, err := compiler.Compile(ctx, resolvedSnap, target, compiler.WithCredentials(creds2))
 		if err != nil {
 			t.Fatalf("compile %s: %v", target, err)
 		}
@@ -586,6 +631,8 @@ func TestControlPlaneEndToEndWithIPRiskFakeProvider(t *testing.T) {
 	pubService := publication.NewService(
 		pubRepo,
 		auditRepo,
+		publication.WithNodeRepository(nodeRepo),
+		publication.WithCredentialSource(vault, credRepo),
 		publication.WithIPRiskService(ipriskSvc),
 		publication.WithRiskPolicyRepository(riskPolicyRepo),
 		publication.WithRiskObservationRepository(riskObsRepo),
@@ -593,7 +640,7 @@ func TestControlPlaneEndToEndWithIPRiskFakeProvider(t *testing.T) {
 
 	// 7a. Attempting to publish the snapshot containing the blocked Tor node must be rejected by preflight!
 	_, err = pubService.Publish(ctx, publication.PublishCommand{
-		Target:    domain.TargetClash,
+		Target:    domain.TargetSingBox,
 		Snapshot:  resolvedSnap,
 		ActorKind: domain.ActorKindAdmin,
 		RequestID: "req-publish-fail-test",
@@ -620,7 +667,7 @@ func TestControlPlaneEndToEndWithIPRiskFakeProvider(t *testing.T) {
 	}
 
 	publishedClean, err := pubService.Publish(ctx, publication.PublishCommand{
-		Target:    domain.TargetClash,
+		Target:    domain.TargetSingBox,
 		Snapshot:  cleanOnlySnap,
 		ActorKind: domain.ActorKindAdmin,
 		RequestID: "req-publish-clean-success",

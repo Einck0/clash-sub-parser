@@ -11,7 +11,6 @@ import (
 
 	"clash-sub-parser/internal/domain"
 	"clash-sub-parser/internal/fetch"
-	"clash-sub-parser/internal/parser"
 	"github.com/sagernet/sing-box/adapter"
 )
 
@@ -113,56 +112,4 @@ type Adapter interface {
 	Close() error
 	IsClosed() bool
 	Outbound() adapter.Outbound
-}
-
-// NodeConfigFromNormalized builds a NodeConfig from a parsed NormalizedNode and credentials.
-func NodeConfigFromNormalized(norm parser.NormalizedNode, secrets ...string) NodeConfig {
-	cfg := NodeConfig{
-		LogicalID:   norm.Node.LogicalID,
-		DisplayName: norm.Node.DisplayName,
-		Protocol:    norm.Node.Protocol,
-		Server:      norm.Server,
-		Port:        norm.Port,
-		Transport:   norm.Transport,
-	}
-
-	if norm.Transport != nil {
-		cfg.Network = norm.Transport["network"]
-		cfg.TLS = norm.Transport["tls"] == "true"
-		cfg.SNI = norm.Transport["sni"]
-		cfg.Path = norm.Transport["path"]
-		if host, ok := norm.Transport["host"]; ok {
-			cfg.Headers = map[string]string{"Host": host}
-		}
-		cfg.ServiceName = norm.Transport["service_name"]
-		if alpnStr, ok := norm.Transport["alpn"]; ok && alpnStr != "" {
-			cfg.ALPN = []string{alpnStr}
-		}
-	}
-
-	if len(secrets) > 0 {
-		switch norm.Node.Protocol {
-		case domain.ProtocolSS:
-			cfg.Password = secrets[0]
-			if len(secrets) > 1 {
-				cfg.Method = secrets[1]
-			}
-		case domain.ProtocolVMess, domain.ProtocolVLESS:
-			cfg.UUID = secrets[0]
-		case domain.ProtocolTrojan, domain.ProtocolHysteria2:
-			cfg.Password = secrets[0]
-		case domain.ProtocolTUIC:
-			cfg.UUID = secrets[0]
-			if len(secrets) > 1 {
-				cfg.Password = secrets[1]
-			}
-		case domain.ProtocolWireGuard:
-			cfg.PrivateKey = secrets[0]
-			if len(secrets) > 1 {
-				cfg.PublicKey = secrets[1]
-			}
-		}
-	}
-
-	return cfg
 }

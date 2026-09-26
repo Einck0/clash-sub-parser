@@ -52,19 +52,24 @@ func publicationClientHandler(svc *publication.Service) http.HandlerFunc {
 
 		artifact, err := svc.ResolveAndServe(r.Context(), pubID, token)
 		if err != nil {
-			switch err {
-			case publication.ErrNotFound:
+			switch {
+			case errors.Is(err, publication.ErrNotFound):
 				WriteError(w, r, http.StatusNotFound, "publication_not_found", "Publication not found")
-			case publication.ErrRevoked:
+			case errors.Is(err, publication.ErrRevoked):
 				WriteError(w, r, http.StatusForbidden, "publication_revoked", "Publication has been revoked")
-			case publication.ErrUnauthorized:
+			case errors.Is(err, publication.ErrUnauthorized):
 				WriteError(w, r, http.StatusUnauthorized, "unauthorized", "Invalid publication token")
+			case errors.Is(err, publication.ErrUnsupportedTarget):
+				WriteError(w, r, http.StatusUnprocessableEntity, "unsupported_target", "Unsupported compiler target")
+			case errors.Is(err, publication.ErrIntegrityCheckFailed):
+				WriteError(w, r, http.StatusUnprocessableEntity, "publication_integrity_failed", "Publication credential binding or artifact verification failed")
 			default:
 				WriteError(w, r, http.StatusInternalServerError, "internal_error", "Failed to resolve publication")
 			}
 			return
 		}
 
+		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Content-Type", artifact.ContentType)
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", artifact.Filename))
 		w.Header().Set("ETag", fmt.Sprintf("%q", artifact.ContentDigest))
@@ -91,26 +96,6 @@ func registerPublicationRoutes(r chi.Router, service *publication.Service, audit
 		sub.Post("/{id}/revoke", h.revoke)
 		sub.Delete("/{id}", h.revoke)
 	})
-}
-
-// registerPublicationSkeleton mounts placeholder routes when publication service is not configured.
-func registerPublicationSkeleton(r chi.Router) {
-	handler := func(w http.ResponseWriter, r *http.Request) {
-		status := http.StatusOK
-		if r.Method == http.MethodPost {
-			status = http.StatusCreated
-		}
-		WriteSuccess(w, r, status, map[string]any{
-			"service": "publications",
-			"status":  "skeleton_active",
-		})
-	}
-	r.Get("/publications", handler)
-	r.Post("/publications", handler)
-	r.Get("/publications/*", handler)
-	r.Post("/publications/*", handler)
-	r.Patch("/publications/*", handler)
-	r.Delete("/publications/*", handler)
 }
 
 func (h publicationAdminHandler) create(w http.ResponseWriter, r *http.Request) {
@@ -150,6 +135,7 @@ func (h publicationAdminHandler) create(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	w.Header().Set("Cache-Control", "no-store")
 	WriteSuccess(w, r, http.StatusCreated, res)
 }
 
@@ -177,6 +163,7 @@ func (h publicationAdminHandler) preview(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	w.Header().Set("Cache-Control", "no-store")
 	if r.URL.Query().Get("format") == "raw" {
 		w.Header().Set("Content-Type", res.ContentType)
 		w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=%q", res.Filename))

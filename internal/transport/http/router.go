@@ -79,14 +79,10 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Get("/*", webHandler.ServeHTTP)
 	}
 
-	// Hard 410 Gone legacy interceptors
-	r.HandleFunc("/yaml", Legacy410Handler)
-	r.HandleFunc("/yaml/*", Legacy410Handler)
-	r.HandleFunc("/script", Legacy410Handler)
-	r.HandleFunc("/script/*", Legacy410Handler)
-
 	// Publication endpoint: /publish/v1/{publication_id}
-	r.Get("/publish/v1/{publication_id}", publicationHandler(cfg))
+	if cfg.PublicationService != nil {
+		r.Get("/publish/v1/{publication_id}", publicationClientHandler(cfg.PublicationService))
+	}
 
 	// Public auth endpoints
 	r.Get("/api/v1/auth/status", authStatusHandler(cfg))
@@ -100,13 +96,9 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 		if cfg.SubscriptionService != nil {
 			registerSubscriptionRoutes(api, cfg.SubscriptionService)
-		} else {
-			registerSubscriptionSkeleton(api)
 		}
 		if cfg.InventoryService != nil {
 			registerNodeRoutes(api, cfg.InventoryService)
-		} else {
-			registerNodeSkeleton(api)
 		}
 		if cfg.ProbeService != nil {
 			registerProbeRoutes(api, cfg.ProbeService, cfg.ProbeRunRepository, cfg.ProbeObservationRepository, cfg.AuditRepository)
@@ -116,31 +108,16 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		}
 		if cfg.RevisionService != nil {
 			registerRevisionRoutes(api, cfg.RevisionService)
-		} else {
-			registerRevisionSkeleton(api)
 		}
 		if cfg.PublicationService != nil {
 			registerPublicationRoutes(api, cfg.PublicationService, cfg.AuditRepository)
-		} else {
-			registerPublicationSkeleton(api)
 		}
 		registerIPRiskRoutes(api, cfg)
 		registerSettingsRoutes(api, cfg)
-		registerSkeletonRoutes(api)
 
 		api.NotFound(func(w http.ResponseWriter, r *http.Request) {
 			WriteError(w, r, http.StatusNotFound, "not_found", "API endpoint not found")
 		})
-	})
-
-	// Legacy unversioned /api/* routes interceptor
-	r.HandleFunc("/api", Legacy410Handler)
-	r.HandleFunc("/api/*", func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/v1") {
-			WriteError(w, r, http.StatusNotFound, "not_found", "API endpoint not found")
-			return
-		}
-		Legacy410Handler(w, r)
 	})
 
 	// Global 404 handler with unified error envelope
@@ -149,41 +126,6 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	})
 
 	return r
-}
-
-// publicationHandler serves publication requests, requiring valid publication export tokens.
-func publicationHandler(cfg RouterConfig) http.HandlerFunc {
-	if cfg.PublicationService != nil {
-		return publicationClientHandler(cfg.PublicationService)
-	}
-	return func(w http.ResponseWriter, r *http.Request) {
-		pubID := chi.URLParam(r, "publication_id")
-		token := strings.TrimSpace(r.URL.Query().Get("token"))
-		if token == "" {
-			authHeader := strings.TrimSpace(r.Header.Get("Authorization"))
-			if strings.HasPrefix(strings.ToLower(authHeader), "bearer ") {
-				token = strings.TrimSpace(authHeader[7:])
-			}
-		}
-
-		if token == "" {
-			WriteError(w, r, http.StatusUnauthorized, "unauthorized", "Publication token required")
-			return
-		}
-
-		if cfg.PublicationTokenValidator != nil {
-			valid, err := cfg.PublicationTokenValidator(r.Context(), pubID, token)
-			if err != nil || !valid {
-				WriteError(w, r, http.StatusUnauthorized, "unauthorized", "Invalid publication token")
-				return
-			}
-		}
-
-		WriteSuccess(w, r, http.StatusOK, map[string]any{
-			"publication_id": pubID,
-			"status":         "active",
-		})
-	}
 }
 
 // authStatusHandler serves GET /api/v1/auth/status
@@ -331,86 +273,5 @@ func authLogoutHandler(cfg RouterConfig) http.HandlerFunc {
 		WriteSuccess(w, r, http.StatusOK, map[string]any{
 			"message": "Logged out successfully",
 		})
-	}
-}
-
-// registerSubscriptionSkeleton preserves the Phase 1 route contract until a service is injected.
-func registerSubscriptionSkeleton(r chi.Router) {
-	handler := func(w http.ResponseWriter, r *http.Request) {
-		status := http.StatusOK
-		if r.Method == http.MethodPost {
-			status = http.StatusCreated
-		}
-		WriteSuccess(w, r, status, map[string]any{"service": "subscriptions", "status": "skeleton_active"})
-	}
-	r.Get("/subscriptions", handler)
-	r.Post("/subscriptions", handler)
-	r.Get("/subscriptions/*", handler)
-	r.Post("/subscriptions/*", handler)
-	r.Patch("/subscriptions/*", handler)
-	r.Delete("/subscriptions/*", handler)
-}
-
-// registerNodeSkeleton preserves the Phase 1 route contract until a service is injected.
-func registerNodeSkeleton(r chi.Router) {
-	handler := func(w http.ResponseWriter, r *http.Request) {
-		status := http.StatusOK
-		if r.Method == http.MethodPost {
-			status = http.StatusCreated
-		}
-		WriteSuccess(w, r, status, map[string]any{"service": "nodes", "status": "skeleton_active"})
-	}
-	r.Get("/nodes", handler)
-	r.Post("/nodes", handler)
-	r.Get("/nodes/*", handler)
-	r.Post("/nodes/*", handler)
-	r.Patch("/nodes/*", handler)
-	r.Delete("/nodes/*", handler)
-}
-
-// registerRevisionSkeleton preserves the Phase 1 route contract until a service is injected.
-func registerRevisionSkeleton(r chi.Router) {
-	handler := func(w http.ResponseWriter, r *http.Request) {
-		status := http.StatusOK
-		if r.Method == http.MethodPost {
-			status = http.StatusCreated
-		}
-		WriteSuccess(w, r, status, map[string]any{"service": "revisions", "status": "skeleton_active"})
-	}
-	r.Get("/revisions", handler)
-	r.Post("/revisions", handler)
-	r.Get("/revisions/*", handler)
-	r.Post("/revisions/*", handler)
-	r.Patch("/revisions/*", handler)
-	r.Delete("/revisions/*", handler)
-}
-
-// registerSkeletonRoutes sets up route placeholders for CSP 1.0 control plane services.
-func registerSkeletonRoutes(r chi.Router) {
-	services := []string{
-		"probes",
-		"policy",
-		"audit",
-	}
-
-	for _, svc := range services {
-		name := svc
-		handler := func(w http.ResponseWriter, r *http.Request) {
-			status := http.StatusOK
-			if r.Method == http.MethodPost {
-				status = http.StatusCreated
-			}
-			WriteSuccess(w, r, status, map[string]any{
-				"service": name,
-				"status":  "skeleton_active",
-			})
-		}
-
-		r.Get("/"+name, handler)
-		r.Post("/"+name, handler)
-		r.Get("/"+name+"/*", handler)
-		r.Post("/"+name+"/*", handler)
-		r.Patch("/"+name+"/*", handler)
-		r.Delete("/"+name+"/*", handler)
 	}
 }

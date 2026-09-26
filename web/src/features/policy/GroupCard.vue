@@ -9,7 +9,7 @@ import {
   ShareIcon,
 } from '@heroicons/vue/24/outline'
 import type { GroupEdge, PolicyGroup } from './policyTypes'
-import { groupTypeLabel } from './policyTypes'
+import { groupTypeLabel, groupTypeSupportedTargets } from './policyTypes'
 import StatusBadge from '../../ui/StatusBadge.vue'
 
 const props = defineProps<{
@@ -87,6 +87,12 @@ function handleHeaderClick() {
           <span class="flex items-center gap-1.5 font-mono min-w-0 truncate shrink-0">
             <ShareIcon class="w-3.5 h-3.5 text-primary shrink-0" />
             <span class="truncate">{{ edgeCount }} connected {{ edgeCount === 1 ? 'edge' : 'edges' }}</span>
+          </span>
+          <span
+            class="badge badge-xs badge-ghost font-mono"
+            :title="`Supported compiler targets for ${group.group_type}`"
+          >
+            Targets: {{ groupTypeSupportedTargets(group.group_type).join('/') }}
           </span>
           <span
             v-if="group.node_filter && group.node_filter.conditions && group.node_filter.conditions.length > 0"

@@ -1,6 +1,8 @@
 package domain
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"time"
 )
@@ -78,4 +80,11 @@ func (o ProbeObservation) HasValidCredentialVersion(nodeVersion int) bool {
 		return false
 	}
 	return *o.CredentialVersion == nodeVersion
+}
+
+// ComputeProbeEvidenceDigest computes the canonical SHA-256 evidence digest for a probe observation.
+func ComputeProbeEvidenceDigest(runID, nodeLogicalID, profileVersion string, verdict ProbeVerdict, statusCode int, reason string) string {
+	h := sha256.New()
+	fmt.Fprintf(h, "%s\x00%s\x00%s\x00%s\x00%d\x00%s", runID, nodeLogicalID, profileVersion, verdict, statusCode, reason)
+	return "sha256:" + hex.EncodeToString(h.Sum(nil))
 }

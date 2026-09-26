@@ -50,17 +50,17 @@ func TestIPRiskRepositoryRejectsSensitiveObservationFixtures(t *testing.T) {
 	}
 
 	for name, summary := range map[string]string{
-		"api key":                          `provider api_key=fixture-api-key`,
-		"cookie":                           "provider Cookie: session=fixture-cookie",
-		"ipv4":                             "provider observed 198.51.100.7",
-		"ipv6":                             "provider observed 2001:db8::7",
-		"raw JSON":                         `{"ip":"198.51.100.7","risk":42}`,
-		"raw JSON safe keywords":          `{"status":"ok","score":42}`,
-		"raw JSON array":                  `[{"risk":42}]`,
-		"nested credentials JSON":          `{"credentials":{"token":"fixture-token"}}`,
-		"nested auth JSON":                 `{"auth":{"api_key":"fixture-key"}}`,
-		"overlong summary":                 strings.Repeat("a", 513),
-		"URL query":                        "https://provider.invalid/check?token=fixture-token",
+		"api key":                 `provider api_key=fixture-api-key`,
+		"cookie":                  "provider Cookie: session=fixture-cookie",
+		"ipv4":                    "provider observed 198.51.100.7",
+		"ipv6":                    "provider observed 2001:db8::7",
+		"raw JSON":                `{"ip":"198.51.100.7","risk":42}`,
+		"raw JSON safe keywords":  `{"status":"ok","score":42}`,
+		"raw JSON array":          `[{"risk":42}]`,
+		"nested credentials JSON": `{"credentials":{"token":"fixture-token"}}`,
+		"nested auth JSON":        `{"auth":{"api_key":"fixture-key"}}`,
+		"overlong summary":        strings.Repeat("a", 513),
+		"URL query":               "https://provider.invalid/check?token=fixture-token",
 	} {
 		t.Run(name, func(t *testing.T) {
 			observation := base

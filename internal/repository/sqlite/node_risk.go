@@ -294,14 +294,19 @@ func (r *nodeRepository) GetReadModel(ctx context.Context, logicalID string, pol
 			defaultTTL = 24 * time.Hour
 		}
 
-		// Query latest observation for this node and policy's provider
+		// Query latest observation for this node across policy's allowed providers
 		const obsQuery = `
 			SELECT o.provider, o.provider_schema_version, o.observed_at, o.expires_at,
 			       o.status, o.score, o.confidence, o.anonymizer_traits
 			FROM ip_risk_observations o
-			JOIN risk_policy_providers rpp
-			  ON o.provider = rpp.provider AND o.provider_schema_version = rpp.schema_version
-			WHERE rpp.revision_id = ? AND o.node_logical_id = ?
+			WHERE o.node_logical_id = ?
+			  AND EXISTS (
+			      SELECT 1
+			      FROM risk_policy_providers rpp
+			      WHERE rpp.revision_id = ?
+			        AND rpp.provider = o.provider
+			        AND rpp.schema_version = o.provider_schema_version
+			  )
 			ORDER BY o.observed_at DESC, o.id DESC
 			LIMIT 1;`
 
@@ -311,7 +316,7 @@ func (r *nodeRepository) GetReadModel(ctx context.Context, logicalID string, pol
 			traitsJSON                                                   string
 		)
 
-		err := r.db.QueryRowContext(ctx, obsQuery, policy.RevisionID, logicalID).Scan(
+		err := r.db.QueryRowContext(ctx, obsQuery, logicalID, policy.RevisionID).Scan(
 			&provider, &schemaVersion, &observedAtStr, &expiresAtStr, &status, &score, &confidence, &traitsJSON,
 		)
 
@@ -460,8 +465,8 @@ func buildRiskEvaluationCTE(policy *domain.RiskPolicy, nowStr string, nodeIDs ..
 	unknownAction := string(policy.EffectiveUnknownAction())
 	minConfidence := policy.MinimumConfidence
 
-	// Args for latest_keys and latest_obs CTEs:
-	args = append(args, policy.RevisionID, policy.RevisionID)
+	// Arg for ranked_obs CTE:
+	args = append(args, policy.RevisionID)
 
 	// Build CASE expressions for obs_eval
 	// 1. Action CASE
@@ -563,15 +568,7 @@ func buildRiskEvaluationCTE(policy *domain.RiskPolicy, nowStr string, nodeIDs ..
 	args = append(args, unknownAction, primaryProvider, primarySchemaVersion)
 
 	cteSQL := fmt.Sprintf(`
-		WITH latest_keys AS (
-			SELECT o.node_logical_id, MAX(o.observed_at) AS observed_at
-			FROM ip_risk_observations o
-			JOIN risk_policy_providers rpp
-			  ON o.provider = rpp.provider AND o.provider_schema_version = rpp.schema_version
-			WHERE rpp.revision_id = ?
-			GROUP BY o.node_logical_id
-		),
-		latest_obs AS (
+		WITH ranked_obs AS (
 			SELECT o.id AS obs_id,
 			       o.node_logical_id,
 			       o.provider,
@@ -581,24 +578,33 @@ func buildRiskEvaluationCTE(policy *domain.RiskPolicy, nowStr string, nodeIDs ..
 			       o.status,
 			       o.score,
 			       o.confidence,
-			       o.anonymizer_traits
+			       o.anonymizer_traits,
+			       ROW_NUMBER() OVER (
+			           PARTITION BY o.node_logical_id
+			           ORDER BY o.observed_at DESC, o.id DESC
+			       ) AS rn
 			FROM ip_risk_observations o
-			JOIN risk_policy_providers rpp
-			  ON o.provider = rpp.provider AND o.provider_schema_version = rpp.schema_version
-			JOIN latest_keys lk
-			  ON lk.node_logical_id = o.node_logical_id AND lk.observed_at = o.observed_at
-			WHERE rpp.revision_id = ?
-			  AND NOT EXISTS (
-			      SELECT 1
-			      FROM ip_risk_observations newer
-			      JOIN risk_policy_providers newer_rpp
-			        ON newer.provider = newer_rpp.provider
-			       AND newer.provider_schema_version = newer_rpp.schema_version
-			      WHERE newer_rpp.revision_id = rpp.revision_id
-			        AND newer.node_logical_id = o.node_logical_id
-			        AND newer.observed_at = o.observed_at
-			        AND newer.id > o.id
-			  )
+			WHERE EXISTS (
+				SELECT 1
+				FROM risk_policy_providers rpp
+				WHERE rpp.revision_id = ?
+				  AND rpp.provider = o.provider
+				  AND rpp.schema_version = o.provider_schema_version
+			)
+		),
+		latest_obs AS (
+			SELECT obs_id,
+			       node_logical_id,
+			       provider,
+			       provider_schema_version,
+			       observed_at,
+			       expires_at,
+			       status,
+			       score,
+			       confidence,
+			       anonymizer_traits
+			FROM ranked_obs
+			WHERE rn = 1
 		),
 		obs_eval AS (
 			SELECT lo.node_logical_id,
@@ -730,4 +736,212 @@ func normalizeRiskReasonCode(reason string) string {
 		res = strings.ReplaceAll(res, "__", "_")
 	}
 	return strings.Trim(res, "_")
+}
+
+type latestRiskObservation struct {
+	id, provider, schema, status, traits string
+	observedAt, expiresAt                time.Time
+	score, confidence                    sql.NullInt64
+}
+
+func (r *nodeRepository) listReadModelFast(ctx context.Context, filter domain.NodeFilter, policy *domain.RiskPolicy, pageSize, offset int) ([]domain.NodeReadModel, int, error) {
+	where, args := nodeFilterSQL(filter)
+	whereSQL := ""
+	if len(where) > 0 {
+		whereSQL = " WHERE " + strings.Join(where, " AND ")
+	}
+	var total int
+	if err := r.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM nodes"+whereSQL+";", args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("failed to count nodes: %w", err)
+	}
+	orderBy := "created_at DESC, logical_id ASC"
+	if filter.SortBy == "display_name" {
+		order := "ASC"
+		if strings.EqualFold(filter.SortOrder, "DESC") {
+			order = "DESC"
+		}
+		orderBy = fmt.Sprintf("display_name %s, logical_id ASC", order)
+	}
+	query := fmt.Sprintf("SELECT logical_id, protocol, display_name, normalized_config_secret_ref, credential_version, active, created_at, updated_at FROM nodes%s ORDER BY %s LIMIT ? OFFSET ?;", whereSQL, orderBy)
+	rows, err := r.db.QueryContext(ctx, query, append(args, pageSize, offset)...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to query nodes: %w", err)
+	}
+	defer rows.Close()
+	models := make([]domain.NodeReadModel, 0, pageSize)
+	ids := make([]string, 0, pageSize)
+	for rows.Next() {
+		var n domain.Node
+		var active int
+		var created, updated string
+		if err := rows.Scan(&n.LogicalID, &n.Protocol, &n.DisplayName, &n.NormalizedConfigSecretRef, &n.CredentialVersion, &active, &created, &updated); err != nil {
+			return nil, 0, err
+		}
+		n.Active = active == 1
+		n.CreatedAt = parseStoredTime(created)
+		n.UpdatedAt = parseStoredTime(updated)
+		models = append(models, domain.NodeReadModel{Node: n})
+		ids = append(ids, n.LogicalID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	observations, err := r.latestObservationsForNodes(ctx, ids, policy)
+	if err != nil {
+		return nil, 0, err
+	}
+	now := domain.NowUTC()
+	rev := policy.RevisionID
+	provider, schema := primaryRiskProvider(policy)
+	ttl := defaultRiskTTL(policy)
+	for i := range models {
+		obs, ok := observations[models[i].Node.LogicalID]
+		if !ok {
+			models[i].IPRiskSummary = &domain.IPRiskSummary{
+				Decision:              policy.EffectiveUnknownAction(),
+				RiskBand:              domain.RiskBandUnknown,
+				Provider:              provider,
+				ProviderSchemaVersion: schema,
+				ObservedAt:            now,
+				ExpiresAt:             now.Add(ttl),
+				Status:                domain.IPRiskStatusUnknown,
+				ReasonCode:            "missing_observation",
+				PolicyRevisionID:      &rev,
+			}
+			continue
+		}
+		expAt := obs.expiresAt
+		if !expAt.After(obs.observedAt) {
+			expAt = obs.observedAt.Add(ttl)
+		}
+		action, band, status, reason := evaluateObservationAgainstPolicy(policy, obs.status, obs.score, obs.confidence, obs.traits, expAt, now)
+		models[i].IPRiskSummary = &domain.IPRiskSummary{
+			Decision:              action,
+			RiskBand:              band,
+			Provider:              obs.provider,
+			ProviderSchemaVersion: obs.schema,
+			ObservedAt:            obs.observedAt,
+			ExpiresAt:             expAt,
+			Status:                status,
+			ReasonCode:            reason,
+			PolicyRevisionID:      &rev,
+		}
+	}
+	return models, total, nil
+}
+
+func (r *nodeRepository) latestObservationsForNodes(ctx context.Context, ids []string, policy *domain.RiskPolicy) (map[string]latestRiskObservation, error) {
+	return r.loadObservationsForNodes(ctx, ids, policy)
+}
+
+func (r *nodeRepository) loadObservationsForNodes(ctx context.Context, ids []string, policy *domain.RiskPolicy) (map[string]latestRiskObservation, error) {
+	if len(ids) == 0 || policy == nil || len(policy.ProviderSelection.Providers) == 0 {
+		return map[string]latestRiskObservation{}, nil
+	}
+	ph := make([]string, len(ids))
+	args := make([]any, 0, len(ids)+1)
+	for i, id := range ids {
+		ph[i] = "?"
+		args = append(args, id)
+	}
+	args = append(args, policy.RevisionID)
+	q := `
+		WITH ranked_obs AS (
+			SELECT o.id,
+			       o.node_logical_id,
+			       o.provider,
+			       o.provider_schema_version,
+			       o.observed_at,
+			       o.expires_at,
+			       o.status,
+			       o.score,
+			       o.confidence,
+			       o.anonymizer_traits,
+			       ROW_NUMBER() OVER (
+			           PARTITION BY o.node_logical_id
+			           ORDER BY o.observed_at DESC, o.id DESC
+			       ) AS rn
+			FROM ip_risk_observations o
+			WHERE o.node_logical_id IN (` + strings.Join(ph, ",") + `)
+			  AND EXISTS (
+			      SELECT 1
+			      FROM risk_policy_providers rpp
+			      WHERE rpp.revision_id = ?
+			        AND rpp.provider = o.provider
+			        AND rpp.schema_version = o.provider_schema_version
+			  )
+		)
+		SELECT id,
+		       node_logical_id,
+		       provider,
+		       provider_schema_version,
+		       observed_at,
+		       expires_at,
+		       status,
+		       score,
+		       confidence,
+		       anonymizer_traits
+		FROM ranked_obs
+		WHERE rn = 1;`
+	rows, err := r.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make(map[string]latestRiskObservation, len(ids))
+	for rows.Next() {
+		var o latestRiskObservation
+		var nodeID, observed, expires string
+		if err := rows.Scan(&o.id, &nodeID, &o.provider, &o.schema, &observed, &expires, &o.status, &o.score, &o.confidence, &o.traits); err != nil {
+			return nil, err
+		}
+		o.observedAt = parseStoredTime(observed)
+		o.expiresAt = parseStoredTime(expires)
+		result[nodeID] = o
+	}
+	return result, rows.Err()
+}
+
+func nodeFilterSQL(filter domain.NodeFilter) ([]string, []any) {
+	var where []string
+	var args []any
+	if filter.ActiveOnly {
+		where = append(where, "active = 1")
+	}
+	if len(filter.Protocols) > 0 {
+		p := make([]string, len(filter.Protocols))
+		for i, v := range filter.Protocols {
+			p[i] = "?"
+			args = append(args, string(v))
+		}
+		where = append(where, "protocol IN ("+strings.Join(p, ",")+")")
+	}
+	if filter.SearchText != "" {
+		where = append(where, "display_name LIKE ?")
+		args = append(args, "%"+filter.SearchText+"%")
+	}
+	return where, args
+}
+
+func parseStoredTime(v string) time.Time {
+	t, _ := time.Parse(time.RFC3339Nano, v)
+	if t.IsZero() {
+		t, _ = time.Parse(time.RFC3339, v)
+	}
+	return t
+}
+
+func defaultRiskTTL(p *domain.RiskPolicy) time.Duration {
+	if p.MaxObservationAge > 0 {
+		return p.MaxObservationAge
+	}
+	return 24 * time.Hour
+}
+
+func primaryRiskProvider(p *domain.RiskPolicy) (string, string) {
+	if len(p.ProviderSelection.Providers) > 0 {
+		x := p.ProviderSelection.Providers[0]
+		return x.Provider, x.SchemaVersion
+	}
+	return "unknown", "v1"
 }

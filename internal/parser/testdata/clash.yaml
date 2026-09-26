@@ -45,6 +45,7 @@ proxies:
     type: wireguard
     server: wg.example.com
     port: 51820
+    ip: 10.0.0.2/32
     private-key: wireguard-private-key
     public-key: wireguard-public-key
   - name: Taiwan TUIC

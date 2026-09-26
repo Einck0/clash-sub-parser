@@ -63,20 +63,20 @@ func TestBuildOptionsRejectsInvalidEndpoint(t *testing.T) {
 	}
 }
 
-func TestNodeConfigFromNormalized(t *testing.T) {
+func TestNodeConfigFromPayloadProtocols(t *testing.T) {
 	testCases := []struct {
 		protocol domain.Protocol
-		secrets  []string
+		creds    domain.InboundProtocolCredential
 		network  string
 		tls      bool
 	}{
-		{domain.ProtocolSS, []string{"ss-pass", "aes-128-gcm"}, "tcp", false},
-		{domain.ProtocolVMess, []string{"11111111-1111-1111-1111-111111111111"}, "ws", true},
-		{domain.ProtocolVLESS, []string{"22222222-2222-2222-2222-222222222222"}, "grpc", true},
-		{domain.ProtocolTrojan, []string{"trojan-pass"}, "tcp", true},
-		{domain.ProtocolHysteria2, []string{"hy2-pass"}, "quic", true},
-		{domain.ProtocolTUIC, []string{"33333333-3333-3333-3333-333333333333", "tuic-pass"}, "quic", true},
-		{domain.ProtocolWireGuard, []string{"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB="}, "wireguard", false},
+		{domain.ProtocolSS, domain.InboundProtocolCredential{Password: "ss-pass", Method: "aes-128-gcm"}, "tcp", false},
+		{domain.ProtocolVMess, domain.InboundProtocolCredential{UUID: "11111111-1111-1111-1111-111111111111"}, "ws", true},
+		{domain.ProtocolVLESS, domain.InboundProtocolCredential{UUID: "22222222-2222-2222-2222-222222222222"}, "grpc", true},
+		{domain.ProtocolTrojan, domain.InboundProtocolCredential{Password: "trojan-pass"}, "tcp", true},
+		{domain.ProtocolHysteria2, domain.InboundProtocolCredential{Password: "hy2-pass"}, "quic", true},
+		{domain.ProtocolTUIC, domain.InboundProtocolCredential{UUID: "33333333-3333-3333-3333-333333333333", Password: "tuic-pass", CongestionControl: "bbr", UDPRelayMode: "native", ALPN: []string{"h3"}, SNI: "node.example.com"}, "quic", true},
+		{domain.ProtocolWireGuard, domain.InboundProtocolCredential{PrivateKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", PublicKey: "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=", LocalAddress: []string{"10.0.0.2/32"}, MTU: 1420, Reserved: []uint8{1, 2, 3}}, "wireguard", false},
 	}
 
 	for _, tc := range testCases {
@@ -106,7 +106,16 @@ func TestNodeConfigFromNormalized(t *testing.T) {
 				norm.Transport["service_name"] = "grpc-svc"
 			}
 
-			cfg := singbox.NodeConfigFromNormalized(norm, tc.secrets...)
+			payload := &domain.NodeCredentialPayload{
+				LogicalID:   norm.Node.LogicalID,
+				Protocol:    tc.protocol,
+				Server:      norm.Server,
+				Port:        norm.Port,
+				Version:     1,
+				Credentials: tc.creds,
+			}
+
+			cfg := singbox.NodeConfigFromPayload(norm, payload)
 			if cfg.LogicalID != norm.Node.LogicalID {
 				t.Fatalf("LogicalID = %q, want %q", cfg.LogicalID, norm.Node.LogicalID)
 			}
@@ -120,7 +129,7 @@ func TestNodeConfigFromNormalized(t *testing.T) {
 			// Validate singbox options build succeeds
 			options, tag, err := singbox.BuildOptions(cfg)
 			if err != nil {
-				t.Fatalf("BuildOptions(fromNormalized) error = %v", err)
+				t.Fatalf("BuildOptions(fromPayload) error = %v", err)
 			}
 			if tag != cfg.LogicalID {
 				t.Fatalf("tag = %q, want %q", tag, cfg.LogicalID)

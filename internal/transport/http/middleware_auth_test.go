@@ -321,12 +321,12 @@ func TestAdminAuthMiddleware_RouterIntegration_OpenModeVsTokenMode(t *testing.T)
 		cfg.AdminToken = ""
 		router := transporthttp.NewRouter(cfg)
 
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/subscriptions", nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/settings/admin-token", nil)
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, req)
 
 		if rec.Code == http.StatusUnauthorized {
-			t.Fatalf("expected router to allow /api/v1/subscriptions in open mode, got 401: %s", rec.Body.String())
+			t.Fatalf("expected router to allow /api/v1/settings/admin-token in open mode, got 401: %s", rec.Body.String())
 		}
 		if rec.Code != http.StatusOK {
 			t.Fatalf("expected 200 OK in open mode, got %d: %s", rec.Code, rec.Body.String())
@@ -338,7 +338,7 @@ func TestAdminAuthMiddleware_RouterIntegration_OpenModeVsTokenMode(t *testing.T)
 		cfg.AdminToken = "secret-token"
 		router := transporthttp.NewRouter(cfg)
 
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/subscriptions", nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/settings/admin-token", nil)
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, req)
 

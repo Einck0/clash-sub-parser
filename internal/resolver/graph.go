@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	"clash-sub-parser/internal/domain"
@@ -16,139 +15,7 @@ func validateTopology(
 	edges map[string][]domain.GroupEdge,
 	rules []domain.PolicyRule,
 ) error {
-	groupSet := make(map[string]bool, len(groups))
-	for _, g := range groups {
-		if !domain.IsValidUUIDv7(g.ID) {
-			return domain.NewValidationError("invalid_group_id", fmt.Sprintf("group ID %s is not valid UUIDv7", g.ID))
-		}
-		if strings.TrimSpace(g.Name) == "" {
-			return domain.NewValidationError("invalid_group_name", "group name cannot be empty")
-		}
-		if !g.GroupType.IsValid() {
-			return domain.NewValidationError("invalid_group_type", fmt.Sprintf("unsupported group type: %s", g.GroupType))
-		}
-		groupSet[g.ID] = true
-	}
-
-	// Check self-loops and missing child group references
-	adj := make(map[string][]string, len(groups))
-	for _, g := range groups {
-		adj[g.ID] = make([]string, 0)
-	}
-
-	for parentID, edgeList := range edges {
-		if !groupSet[parentID] {
-			return domain.NewValidationError("parent_group_not_found", fmt.Sprintf("parent group %s does not exist", parentID))
-		}
-
-		for _, edge := range edgeList {
-			edge.ParentGroupID = parentID
-			if err := domain.ValidateGroupEdge(edge); err != nil {
-				return err
-			}
-
-			if edge.ChildGroupID != nil && *edge.ChildGroupID != "" {
-				childID := *edge.ChildGroupID
-				if childID == parentID {
-					return domain.NewValidationError("self_loop_forbidden", fmt.Sprintf("self-loop detected: group %s references itself", parentID))
-				}
-				if !groupSet[childID] {
-					return domain.NewValidationError("target_group_not_found", fmt.Sprintf("target group %s does not exist", childID))
-				}
-				adj[parentID] = append(adj[parentID], childID)
-			}
-		}
-	}
-
-	// 3-color DFS cycle detection with explicit stack
-	// Colors: 0 = unvisited (white), 1 = visiting (gray), 2 = visited (black)
-	color := make(map[string]int, len(groups))
-	var stack []string
-
-	// Sort group IDs for deterministic cycle detection
-	sortedGroupIDs := make([]string, 0, len(groups))
-	for _, g := range groups {
-		sortedGroupIDs = append(sortedGroupIDs, g.ID)
-	}
-	sort.Strings(sortedGroupIDs)
-
-	var dfs func(u string) error
-	dfs = func(u string) error {
-		color[u] = 1
-		stack = append(stack, u)
-
-		// Sort neighbors deterministically
-		neighbors := make([]string, len(adj[u]))
-		copy(neighbors, adj[u])
-		sort.Strings(neighbors)
-
-		for _, v := range neighbors {
-			if color[v] == 1 {
-				// Cycle detected: extract path from stack
-				idx := -1
-				for i, node := range stack {
-					if node == v {
-						idx = i
-						break
-					}
-				}
-				var cyclePath []string
-				if idx >= 0 {
-					cyclePath = append(cyclePath, stack[idx:]...)
-					cyclePath = append(cyclePath, v)
-				} else {
-					cyclePath = []string{u, v, u}
-				}
-				pathStr := strings.Join(cyclePath, " -> ")
-				domErr := domain.NewValidationError("cycle_detected", fmt.Sprintf("cycle detected in policy graph: %s", pathStr))
-				domErr.Details = map[string]string{
-					"cycle":    pathStr,
-					"group_id": v,
-				}
-				return domErr
-			}
-			if color[v] == 0 {
-				if err := dfs(v); err != nil {
-					return err
-				}
-			}
-		}
-
-		stack = stack[:len(stack)-1]
-		color[u] = 2
-		return nil
-	}
-
-	for _, id := range sortedGroupIDs {
-		if color[id] == 0 {
-			if err := dfs(id); err != nil {
-				return err
-			}
-		}
-	}
-
-	// Validate rule references and match rule ordering
-	matchCount := 0
-	for _, rule := range rules {
-		if strings.TrimSpace(rule.Expression) == "" {
-			return domain.NewValidationError("invalid_expression", "rule expression cannot be empty")
-		}
-		if rule.Position < 0 {
-			return domain.NewValidationError("invalid_position", "rule position must be non-negative")
-		}
-		if len(groupSet) > 0 && !groupSet[rule.TargetGroupID] {
-			return domain.NewValidationError("target_group_not_found", fmt.Sprintf("rule target group %s does not exist", rule.TargetGroupID))
-		}
-		if isMatchRule(rule.Expression) {
-			matchCount++
-		}
-	}
-
-	if matchCount > 1 {
-		return domain.NewValidationError("invalid_match_rule_ordering", "multiple terminal MATCH rules detected")
-	}
-
-	return nil
+	return domain.ValidatePolicyTopology(groups, edges, rules, false)
 }
 
 func deterministicDerivedUUID(parentID, childID string) string {
@@ -538,7 +405,7 @@ func resolveRules(rules []domain.PolicyRule, groups []domain.NodeGroup) []Resolv
 			TargetGroupName: groupNameMap[r.TargetGroupID],
 			Expression:      r.Expression,
 			Position:        r.Position,
-			IsTerminal:      isMatchRule(r.Expression),
+			IsTerminal:      domain.IsMatchRule(r.Expression),
 		}
 
 		if rr.IsTerminal {
@@ -563,15 +430,4 @@ func resolveRules(rules []domain.PolicyRule, groups []domain.NodeGroup) []Resolv
 	}
 
 	return finalRules
-}
-
-// isMatchRule returns whether an expression represents a terminal MATCH or FINAL routing rule.
-func isMatchRule(expr string) bool {
-	norm := strings.ToUpper(strings.TrimSpace(expr))
-	return norm == "MATCH" ||
-		strings.HasPrefix(norm, "MATCH,") ||
-		strings.HasPrefix(norm, "MATCH ") ||
-		norm == "FINAL" ||
-		strings.HasPrefix(norm, "FINAL,") ||
-		strings.HasPrefix(norm, "FINAL ")
 }

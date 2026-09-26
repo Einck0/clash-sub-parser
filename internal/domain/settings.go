@@ -8,13 +8,13 @@ import (
 // Settings encapsulates global system parameters and resource bounds.
 // Note: Settings NEVER contains plaintext secrets.
 type Settings struct {
-	ProbeConcurrencyWindow int       `json:"probe_concurrency_window"` // default 16, valid 10-20, hard limit 32
-	MaxConcurrentProbes    int       `json:"max_concurrent_probes"`
-	ProbePerNodeTTLSeconds int       `json:"probe_per_node_ttl_seconds"`
-	FetchTimeoutSeconds    int       `json:"fetch_timeout_seconds"`
-	FetchMaxResponseBytes  int64     `json:"fetch_max_response_bytes"`
-	MaxPageSize            int       `json:"max_page_size"`     // default 50, maximum allowed 100
-	DefaultPageSize        int       `json:"default_page_size"` // default 50
+	ProbeConcurrencyWindow int   `json:"probe_concurrency_window"` // default 16, valid 10-20, hard limit 32
+	MaxConcurrentProbes    int   `json:"max_concurrent_probes"`
+	ProbePerNodeTTLSeconds int   `json:"probe_per_node_ttl_seconds"`
+	FetchTimeoutSeconds    int   `json:"fetch_timeout_seconds"`
+	FetchMaxResponseBytes  int64 `json:"fetch_max_response_bytes"`
+	MaxPageSize            int   `json:"max_page_size"`     // default 50, maximum allowed 100
+	DefaultPageSize        int   `json:"default_page_size"` // default 50
 	// AdminToken stores the cryptographic verifier/hash for admin authentication, NEVER usable plaintext secret.
 	AdminToken string    `json:"-"`
 	UpdatedAt  time.Time `json:"updated_at"`

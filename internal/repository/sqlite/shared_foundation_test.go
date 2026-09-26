@@ -58,6 +58,20 @@ func TestMigrations000007And000008Schema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to query group_node_filters table: %v", err)
 	}
+
+	// 5. Verify Migration 9 (publication artifact/binding columns), Migration 10 (risk latest index), and SchemaVersion == 10
+	_, err = db.ExecContext(ctx, "SELECT revision_id, content_digest, credential_binding_digest, credential_bindings_json, artifact_key_id, artifact_nonce, artifact_ciphertext FROM publications LIMIT 1;")
+	if err != nil {
+		t.Fatalf("failed to query migration 000009 columns on publications: %v", err)
+	}
+	var idxName string
+	if err := db.QueryRowContext(ctx, "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_ip_risk_obs_node_observed_id';").Scan(&idxName); err != nil {
+		t.Fatalf("expected migration 000010 index idx_ip_risk_obs_node_observed_id: %v", err)
+	}
+	report, err := sqlite.CheckReadiness(ctx, db)
+	if err != nil || !report.Ready || report.SchemaVersion != 10 {
+		t.Fatalf("expected readiness SchemaVersion=10 Ready=true, got report=%+v err=%v", report, err)
+	}
 }
 
 func TestProbeObservationsCredentialVersionAndListLatestByNodes(t *testing.T) {
@@ -411,14 +425,26 @@ func TestTask1_2BaselineCompatibilityAndProcessNameVerification(t *testing.T) {
 		},
 	}
 
+	creds := map[string]*domain.NodeCredentialPayload{
+		"node-process-test": {
+			LogicalID: "node-process-test",
+			Protocol:  domain.ProtocolSS,
+			Server:    "198.51.100.1",
+			Port:      8388,
+			Credentials: domain.InboundProtocolCredential{
+				Method:   "aes-256-gcm",
+				Password: "dummy-password",
+			},
+		},
+	}
+
 	supportedTargets := []domain.CompilerTarget{
 		domain.TargetMihomo,
-		domain.TargetClash,
 		domain.TargetSingBox,
 		domain.TargetSurge,
 	}
 	for _, target := range supportedTargets {
-		out, err := compiler.Compile(ctx, &snapshot, target)
+		out, err := compiler.Compile(ctx, &snapshot, target, compiler.WithCredentials(creds))
 		if err != nil {
 			t.Fatalf("compiler failed for target %s with PROCESS-NAME: %v", target, err)
 		}
@@ -446,4 +472,94 @@ func TestTask1_2BaselineCompatibilityAndProcessNameVerification(t *testing.T) {
 	// PROCESS-NAME is fully functional. The reported issue remains categorized
 	// as "待证据" (pending evidence) to strictly prevent speculative fixes.
 	t.Log("Task 1.2 Baseline verification PASSED: manual probes, legacy policies, and PROCESS-NAME intact; unknown user issue marked as pending evidence.")
+}
+
+func TestHistoricPublicationTargetClashPreservedAndNotMutated(t *testing.T) {
+	ctx := context.Background()
+	db, _ := setupTestDB(t)
+	defer db.Close()
+
+	pubRepo := sqlite.NewPublicationRepository(db)
+	now := domain.NowUTC()
+	nowStr := now.Format(time.RFC3339)
+
+	// 1. Insert historic publication with target='clash' directly into DB
+	historicID := "0191e4a0-0000-7000-8000-000000000091"
+	historicTokenHash := "hash-historic-clash-12345678"
+	const insertSQL = `
+	INSERT INTO publications (id, target, snapshot_digest, compiler_version, token_hash, state, created_at)
+	VALUES (?, 'clash', 'sha256:historic-snapshot', '1.0.0', ?, 'active', ?);`
+	_, err := db.ExecContext(ctx, insertSQL, historicID, historicTokenHash, nowStr)
+	if err != nil {
+		t.Fatalf("failed to insert historic clash publication: %v", err)
+	}
+
+	// 2. Read back via GetByID: old target 'clash' must be read-only identifiable and not modified
+	pub, err := pubRepo.GetByID(ctx, historicID)
+	if err != nil {
+		t.Fatalf("GetByID failed for historic publication: %v", err)
+	}
+	if pub.Target != domain.CompilerTarget("clash") {
+		t.Fatalf("expected target 'clash', got %s", pub.Target)
+	}
+	if pub.Target.IsValid() {
+		t.Fatalf("expected historic target 'clash' IsValid() to be false")
+	}
+	if pub.TokenHash != historicTokenHash {
+		t.Fatalf("expected token hash %s, got %s", historicTokenHash, pub.TokenHash)
+	}
+
+	// 3. Read back via GetByTokenHash
+	pubByToken, err := pubRepo.GetByTokenHash(ctx, historicTokenHash)
+	if err != nil {
+		t.Fatalf("GetByTokenHash failed: %v", err)
+	}
+	if pubByToken.ID != historicID || pubByToken.Target != domain.CompilerTarget("clash") {
+		t.Fatalf("unexpected pubByToken: %+v", pubByToken)
+	}
+
+	// 4. Create new modern publication with target=domain.TargetMihomo
+	modernID := "0191e4a0-0000-7000-8000-000000000092"
+	modernTokenHash := "hash-modern-mihomo-98765432"
+	modernPub := &domain.Publication{
+		ID:              modernID,
+		Target:          domain.TargetMihomo,
+		SnapshotDigest:  "sha256:modern-snapshot",
+		CompilerVersion: "1.0.0",
+		TokenHash:       modernTokenHash,
+		State:           domain.PublicationStateActive,
+		CreatedAt:       now,
+	}
+	if err := pubRepo.Create(ctx, modernPub); err != nil {
+		t.Fatalf("failed to create modern publication: %v", err)
+	}
+
+	// 5. Query both rows directly with raw SQL to verify that:
+	// - Historic row remains target='clash', token_hash untouched, not backfilled or migrated
+	// - Modern row has target='mihomo'
+	var dbHistoricTarget, dbHistoricToken string
+	err = db.QueryRowContext(ctx, "SELECT target, token_hash FROM publications WHERE id = ?;", historicID).
+		Scan(&dbHistoricTarget, &dbHistoricToken)
+	if err != nil {
+		t.Fatalf("failed to query historic publication from DB: %v", err)
+	}
+	if dbHistoricTarget != "clash" {
+		t.Fatalf("historic target in DB was altered! Expected 'clash', got %s", dbHistoricTarget)
+	}
+	if dbHistoricToken != historicTokenHash {
+		t.Fatalf("historic token hash in DB was altered! Expected %s, got %s", historicTokenHash, dbHistoricToken)
+	}
+
+	var dbModernTarget, dbModernToken string
+	err = db.QueryRowContext(ctx, "SELECT target, token_hash FROM publications WHERE id = ?;", modernID).
+		Scan(&dbModernTarget, &dbModernToken)
+	if err != nil {
+		t.Fatalf("failed to query modern publication from DB: %v", err)
+	}
+	if dbModernTarget != "mihomo" {
+		t.Fatalf("modern target in DB expected 'mihomo', got %s", dbModernTarget)
+	}
+	if dbModernToken != modernTokenHash {
+		t.Fatalf("modern token in DB expected %s, got %s", modernTokenHash, dbModernToken)
+	}
 }

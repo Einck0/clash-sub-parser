@@ -25,29 +25,6 @@ type SafeNodeDialerOptions struct {
 	ClientFactory func(ctx context.Context, config singbox.NodeConfig, options singbox.HTTPClientOptions) (*http.Client, func() error, error)
 }
 
-func isTruthy(v string) bool {
-	v = strings.ToLower(strings.TrimSpace(v))
-	return v == "true" || v == "1" || v == "yes" || v == "on"
-}
-
-func hasInsecureTransport(transport map[string]string) bool {
-	if transport == nil {
-		return false
-	}
-	for k, v := range transport {
-		kLower := strings.ToLower(strings.TrimSpace(k))
-		if strings.Contains(kLower, "insecure") ||
-			strings.Contains(kLower, "skip_cert") ||
-			strings.Contains(kLower, "skip-cert") ||
-			strings.Contains(kLower, "skipcert") {
-			if isTruthy(v) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 // NewSafeNodeDialer returns a NodeDialer closure that resolves credentials from repo and vault,
 // enforces identity and server consistency, verifies that the destination server is a public IP,
 // disallows HTTP redirects, and establishes an ephemeral sing-box memory client.
@@ -130,22 +107,14 @@ func NewSafeNodeDialer(
 
 		// Reject insecure TLS flags and protocol options that add unverified entry points
 		// or weaken the authenticated server identity.
-		if hasInsecureTransport(payload.Credentials.Transport) {
+		if domain.HasInsecureTransport(payload.Credentials.Transport) {
 			return nil, nil, fmt.Errorf("%w: insecure certificate verification requested", ErrCredentialsUnavailable)
 		}
-		if node.Protocol == domain.ProtocolHysteria2 {
-			for _, key := range []string{"ports", "server_ports", "hy2_ports"} {
-				if strings.TrimSpace(payload.Credentials.Transport[key]) != "" {
-					return nil, nil, fmt.Errorf("%w: hysteria2 port hopping is unsupported", ErrCredentialsUnavailable)
-				}
-			}
+		if node.Protocol == domain.ProtocolHysteria2 && domain.ExtractHy2Ports(payload.Credentials.Transport) != "" {
+			return nil, nil, fmt.Errorf("%w: hysteria2 port hopping is unsupported", ErrCredentialsUnavailable)
 		}
-		if node.Protocol == domain.ProtocolTUIC {
-			for _, key := range []string{"disable_sni", "disable-sni", "tuic_disable_sni"} {
-				if isTruthy(payload.Credentials.Transport[key]) {
-					return nil, nil, fmt.Errorf("%w: TUIC SNI disable is unsupported", ErrCredentialsUnavailable)
-				}
-			}
+		if node.Protocol == domain.ProtocolTUIC && (payload.Credentials.DisableSNI || domain.HasTUICDisableSNI(payload.Credentials.Transport)) {
+			return nil, nil, fmt.Errorf("%w: TUIC SNI disable is unsupported", ErrCredentialsUnavailable)
 		}
 
 		// 5. Verify IP is public and pin domain destinations before sing-box dials.

@@ -3,7 +3,6 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"flag"
@@ -26,8 +25,6 @@ import (
 	"clash-sub-parser/internal/application/revision"
 	"clash-sub-parser/internal/application/subscription"
 	"clash-sub-parser/internal/domain"
-	"clash-sub-parser/internal/import/legacy"
-	"clash-sub-parser/internal/import/legacy/inspect"
 	"clash-sub-parser/internal/platform"
 	"clash-sub-parser/internal/probe/queue"
 	"clash-sub-parser/internal/repository/sqlite"
@@ -38,163 +35,6 @@ import (
 const (
 	appName = "csp"
 )
-
-// runLegacyInspect executes the read-only legacy SQLite inspection command.
-func runLegacyInspect(args []string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("legacy-inspect", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-
-	var sourcePath string
-	var format string
-	var outputPath string
-
-	fs.StringVar(&sourcePath, "source", "", "path to legacy SQLite database file (required)")
-	fs.StringVar(&sourcePath, "s", "", "path to legacy SQLite database file (shorthand)")
-	fs.StringVar(&format, "format", "text", "output format: text or json (default: text)")
-	fs.StringVar(&format, "f", "text", "output format: text or json (shorthand)")
-	fs.StringVar(&outputPath, "output", "", "optional output file path (default: stdout)")
-	fs.StringVar(&outputPath, "o", "", "optional output file path (shorthand)")
-
-	if err := fs.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return 0
-		}
-		return 2
-	}
-
-	// Positional argument fallback for source if --source not explicitly provided
-	if sourcePath == "" && len(fs.Args()) > 0 {
-		sourcePath = fs.Args()[0]
-	}
-
-	if sourcePath == "" {
-		fmt.Fprintln(stderr, "legacy-inspect: --source is required")
-		return 2
-	}
-
-	report, err := inspect.Inspect(sourcePath)
-	if err != nil {
-		fmt.Fprintf(stderr, "legacy-inspect: %v\n", err)
-		return 1
-	}
-
-	var outputContent string
-	switch strings.ToLower(strings.TrimSpace(format)) {
-	case "json":
-		encoded, err := inspect.Marshal(report)
-		if err != nil {
-			fmt.Fprintf(stderr, "legacy-inspect: failed to marshal json report: %v\n", err)
-			return 1
-		}
-		outputContent = string(encoded) + "\n"
-	case "text":
-		outputContent = inspect.FormatText(report)
-	default:
-		fmt.Fprintf(stderr, "legacy-inspect: unknown format %q, expected 'text' or 'json'\n", format)
-		return 2
-	}
-
-	if outputPath != "" {
-		if err := os.WriteFile(outputPath, []byte(outputContent), 0644); err != nil {
-			fmt.Fprintf(stderr, "legacy-inspect: failed to write output file: %v\n", err)
-			return 1
-		}
-	} else {
-		fmt.Fprint(stdout, outputContent)
-	}
-
-	return 0
-}
-
-// runLegacyImport executes the offline allowlist-driven migration command.
-func runLegacyImport(args []string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("legacy-import", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-
-	var sourcePath string
-	var targetPath string
-	var dryRun bool
-	var format string
-	var reportPath string
-
-	fs.StringVar(&sourcePath, "source", "", "path to legacy SQLite database file (required)")
-	fs.StringVar(&sourcePath, "s", "", "path to legacy SQLite database file (shorthand)")
-	fs.StringVar(&targetPath, "target", "", "path to target CSP 1.0 SQLite database file (required unless --dry-run)")
-	fs.StringVar(&targetPath, "t", "", "path to target CSP 1.0 SQLite database file (shorthand)")
-	fs.BoolVar(&dryRun, "dry-run", false, "simulate import without writing to target database")
-	fs.StringVar(&format, "format", "text", "output format: text or json (default: text)")
-	fs.StringVar(&format, "f", "text", "output format: text or json (shorthand)")
-	fs.StringVar(&reportPath, "report", "", "optional report output file path (default: stdout)")
-	fs.StringVar(&reportPath, "r", "", "optional report output file path (shorthand)")
-
-	if err := fs.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return 0
-		}
-		return 2
-	}
-
-	remaining := fs.Args()
-	if sourcePath == "" && len(remaining) > 0 {
-		sourcePath = remaining[0]
-	}
-	if targetPath == "" && len(remaining) > 1 {
-		targetPath = remaining[1]
-	}
-
-	if sourcePath == "" {
-		fmt.Fprintln(stderr, "legacy-import: --source is required")
-		return 2
-	}
-
-	if !dryRun && targetPath == "" {
-		fmt.Fprintln(stderr, "legacy-import: --target is required for actual import")
-		return 2
-	}
-
-	normFormat := strings.ToLower(strings.TrimSpace(format))
-	if normFormat != "text" && normFormat != "json" {
-		fmt.Fprintf(stderr, "legacy-import: unknown format %q, expected 'text' or 'json'\n", format)
-		return 2
-	}
-
-	importer := legacy.NewImporter()
-	report, err := importer.Import(context.Background(), legacy.Options{
-		SourcePath: sourcePath,
-		TargetPath: targetPath,
-		DryRun:     dryRun,
-		ReportPath: reportPath,
-		Format:     normFormat,
-	})
-	if err != nil {
-		fmt.Fprintf(stderr, "legacy-import: %v\n", err)
-		return 1
-	}
-
-	var outputContent string
-	switch normFormat {
-	case "json":
-		encoded, err := report.MarshalJSON()
-		if err != nil {
-			fmt.Fprintf(stderr, "legacy-import: failed to marshal json report: %v\n", err)
-			return 1
-		}
-		outputContent = string(encoded) + "\n"
-	case "text":
-		outputContent = report.FormatText()
-	}
-
-	if reportPath != "" {
-		if err := os.WriteFile(reportPath, []byte(outputContent), 0644); err != nil {
-			fmt.Fprintf(stderr, "legacy-import: failed to write report file: %v\n", err)
-			return 1
-		}
-	} else {
-		fmt.Fprint(stdout, outputContent)
-	}
-
-	return 0
-}
 
 // runServe executes the long-running HTTP control plane and SPA server.
 func runServe(args []string, stdout, stderr io.Writer) int {
@@ -289,7 +129,7 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 		return 1
 	}
 	if vault == nil {
-		fmt.Fprintf(stderr, "serve: warning: node credential master key not configured; credential-backed probes disabled, legacy features remain compatible\n")
+		fmt.Fprintf(stderr, "serve: warning: node credential master key not configured; credential-backed probes and publications disabled\n")
 	}
 
 	// Ensure parent directory exists if not in-memory
@@ -363,10 +203,9 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 
 	// Wire domain application services
 	subService := subscription.NewService(subRepo, auditRepo)
+	credRepo := sqlite.NewNodeCredentialRepository(db)
 	var invOpts []inventory.Option
-	var credRepo domain.NodeCredentialRepository
 	if vault != nil {
-		credRepo = sqlite.NewNodeCredentialRepository(db)
 		invOpts = append(invOpts, inventory.WithCredentialVault(vault, credRepo))
 	}
 	invOpts = append(invOpts, inventory.WithProbeObservationRepository(probeObsRepo))
@@ -442,9 +281,7 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 		iprisk.WithNodeRepository(nodeRepo),
 		iprisk.WithAuditRepository(auditRepo),
 	)
-	pubService := publication.NewService(
-		pubRepo,
-		auditRepo,
+	pubOpts := []publication.Option{
 		publication.WithPolicyRepository(policyRepo),
 		publication.WithRevisionRepository(revisionRepo),
 		publication.WithNodeRepository(nodeRepo),
@@ -455,6 +292,12 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 		publication.WithRiskPolicyRepository(riskPolicyRepo),
 		publication.WithRiskBindingRepository(riskBindingRepo),
 		publication.WithRiskObservationRepository(riskObsRepo),
+		publication.WithCredentialSource(vault, credRepo),
+	}
+	pubService := publication.NewService(
+		pubRepo,
+		auditRepo,
+		pubOpts...,
 	)
 
 	// Embedded web assets
@@ -507,26 +350,8 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 		ReadinessChecker: func(c context.Context) (*sqlite.ReadinessReport, error) {
 			return sqlite.CheckReadiness(c, db)
 		},
-		PublicationTokenValidator: func(c context.Context, publicationID, token string) (bool, error) {
-			hash := fmt.Sprintf("%x", sha256.Sum256([]byte(token)))
-			pub, err := pubRepo.GetByID(c, publicationID)
-			if err != nil || pub == nil {
-				return false, nil
-			}
-			if pub.RevokedAt != nil {
-				return false, nil
-			}
-			return pub.TokenHash == hash || pub.TokenHash == token, nil
-		},
-		IsPublicationToken: func(c context.Context, token string) bool {
-			hash := fmt.Sprintf("%x", sha256.Sum256([]byte(token)))
-			pub, err := pubRepo.GetByTokenHash(c, hash)
-			if err == nil && pub != nil {
-				return true
-			}
-			pub, err = pubRepo.GetByTokenHash(c, token)
-			return err == nil && pub != nil
-		},
+		PublicationTokenValidator:  pubService.ValidateToken,
+		IsPublicationToken:         pubService.IsPublicationToken,
 		SubscriptionService:        subService,
 		InventoryService:           invService,
 		ProbeService:               probeService,
@@ -639,10 +464,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 		case "version":
 			fmt.Fprintf(stdout, "%s %s\n", appName, platform.Version)
 			return 0
-		case "legacy-inspect":
-			return runLegacyInspect(remaining[1:], stdout, stderr)
-		case "legacy-import":
-			return runLegacyImport(remaining[1:], stdout, stderr)
 		case "serve", "server":
 			return runServe(remaining[1:], stdout, stderr)
 		default:

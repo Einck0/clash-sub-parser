@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   ArrowPathIcon,
@@ -13,11 +13,15 @@ import {
   DocumentDuplicateIcon,
   Cog6ToothIcon,
   CubeTransparentIcon,
+  ShieldCheckIcon,
 } from '@heroicons/vue/24/outline'
 import { usePublications } from './usePublications'
 import {
   COMPILER_TARGETS,
   formatDigest,
+  getTargetMetadata,
+  redactPreviewSecrets,
+  targetFileExt,
   type CompilerTarget,
 } from './publicationTypes'
 import ModalDialog from '../../ui/ModalDialog.vue'
@@ -55,6 +59,11 @@ const {
 const publishModalOpen = ref(false)
 const copiedToken = ref(false)
 
+const currentTargetMeta = computed(() => getTargetMetadata(selectedTarget.value))
+const safePreviewContent = computed(() =>
+  preview.value?.content ? redactPreviewSecrets(preview.value.content) : ''
+)
+
 async function switchTarget(target: CompilerTarget) {
   selectedTarget.value = target
   await fetchPreview(target)
@@ -67,8 +76,9 @@ async function handleCopyContent() {
 
 function handleDownload() {
   if (!preview.value) return
+  const ext = targetFileExt(preview.value.target)
   downloadFile(
-    preview.value.filename || `config-${preview.value.target}.txt`,
+    preview.value.filename || `config-${preview.value.target}.${ext}`,
     preview.value.content,
     preview.value.content_type
   )
@@ -220,7 +230,7 @@ onMounted(() => {
       </div>
     </div>
 
-    <!-- Generic Error (401, 403, 500, network, etc.) -->
+    <!-- Generic Error (401, 403, 422, 500, network, etc.) -->
     <ErrorStateCard
       v-else-if="error"
       :error="errorDetail || error"
@@ -248,7 +258,7 @@ onMounted(() => {
       </ul>
     </div>
 
-    <!-- Target Selector Tabs (Zashboard-inspired sleek pills) -->
+    <!-- Target Selector Tabs -->
     <div class="flex flex-wrap items-center gap-2 pb-1 text-xs w-full min-w-0" role="tablist" aria-label="Target formats">
       <button
         v-for="item in COMPILER_TARGETS"
@@ -268,6 +278,53 @@ onMounted(() => {
           .{{ item.ext }}
         </span>
       </button>
+    </div>
+
+    <!-- Target Capability Boundary Card -->
+    <div
+      data-testid="target-capability-boundary"
+      class="rounded-xl border border-base-300 bg-base-200/70 p-3.5 sm:p-4 text-xs space-y-2 min-w-0 w-full"
+    >
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <div class="flex items-center gap-2 font-semibold text-base-content">
+          <ShieldCheckIcon class="w-4 h-4 text-primary shrink-0" />
+          <span>{{ t('publications.capabilityBoundaryTitle') }} · {{ currentTargetMeta.label }}</span>
+        </div>
+        <span class="badge badge-xs badge-ghost font-mono">
+          Secrets Redacted in Preview DOM (***)
+        </span>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-2 font-mono text-[11px]">
+        <div class="p-2 rounded-lg bg-base-100/70 border border-base-300/60">
+          <span class="opacity-60 font-sans block mb-1">Supported Protocols ({{ currentTargetMeta.protocols.length }})</span>
+          <div class="flex flex-wrap gap-1">
+            <span
+              v-for="proto in currentTargetMeta.protocols"
+              :key="proto"
+              class="badge badge-xs badge-primary badge-outline"
+            >
+              {{ proto }}
+            </span>
+          </div>
+        </div>
+        <div class="p-2 rounded-lg bg-base-100/70 border border-base-300/60">
+          <span class="opacity-60 font-sans block mb-1">Supported Group Types ({{ currentTargetMeta.groupTypes.length }})</span>
+          <div class="flex flex-wrap gap-1">
+            <span
+              v-for="gt in currentTargetMeta.groupTypes"
+              :key="gt"
+              class="badge badge-xs badge-secondary badge-outline"
+            >
+              {{ gt }}
+            </span>
+          </div>
+        </div>
+        <div class="p-2 rounded-lg bg-base-100/70 border border-base-300/60">
+          <span class="opacity-60 font-sans block mb-1">Rules & Rejection Boundary</span>
+          <p class="leading-snug text-base-content/85">{{ currentTargetMeta.ruleSummary }}</p>
+          <p class="mt-1 text-warning leading-snug">{{ currentTargetMeta.unsupportedSummary }}</p>
+        </div>
+      </div>
     </div>
 
     <!-- Main Preview Card (200ms ease-out) -->
@@ -377,7 +434,7 @@ onMounted(() => {
             </button>
 
             <!-- Pre Code Block -->
-            <pre class="p-4 sm:p-5 text-xs font-mono overflow-auto adaptive-preview-box leading-relaxed select-text text-base-content/90 max-w-full">{{ preview?.content || 'No configuration rendered.' }}</pre>
+            <pre class="p-4 sm:p-5 text-xs font-mono overflow-auto adaptive-preview-box leading-relaxed select-text text-base-content/90 max-w-full">{{ safePreviewContent || 'No configuration rendered.' }}</pre>
           </div>
         </div>
 
@@ -436,7 +493,11 @@ onMounted(() => {
         <div class="grid grid-cols-2 gap-2 text-xs font-mono p-3 rounded-xl bg-base-200 border border-base-300">
           <div>
             <span class="opacity-60 block">Target</span>
-            <strong class="uppercase text-primary">{{ activePublication.target }}</strong>
+            <div class="flex items-center gap-1.5 mt-0.5">
+              <strong class="uppercase text-primary">
+                {{ activePublication.target }}
+              </strong>
+            </div>
           </div>
           <div>
             <span class="opacity-60 block">Status</span>

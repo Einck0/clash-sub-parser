@@ -174,4 +174,3 @@ func TestIPRiskMatchedContractProducesAvailable(t *testing.T) {
 		t.Fatalf("IPRisk matched contract verdict = %s, want available", got.Verdict)
 	}
 }
-

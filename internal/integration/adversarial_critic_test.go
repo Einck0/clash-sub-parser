@@ -2,13 +2,9 @@ package integration_test
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"fmt"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -21,7 +17,6 @@ import (
 	"clash-sub-parser/internal/compiler"
 	"clash-sub-parser/internal/domain"
 	"clash-sub-parser/internal/fetch"
-	"clash-sub-parser/internal/import/legacy"
 	"clash-sub-parser/internal/probe/profiles"
 	"clash-sub-parser/internal/probe/queue"
 	"clash-sub-parser/internal/repository/sqlite"
@@ -82,17 +77,14 @@ func TestAdversarial_Dimension1_ZeroSubscriptionAndEmptyBoundary(t *testing.T) {
 		t.Fatalf("expected 0 nodes on cold start, got total=%d len=%d err=%v", totalNodes, len(nodes), err)
 	}
 
-	// 3. Resolve policy snapshot on zero nodes
-	groupID := domain.MustNewUUIDv7()
+	// 3. Resolve policy snapshot on zero nodes (empty snapshot boundary)
 	emptyInput := resolver.ResolveInput{
 		RevisionID:      "empty-revision",
 		CompilerVersion: "1.0.0",
 		Nodes:           []domain.Node{},
-		Groups: []domain.NodeGroup{
-			{ID: groupID, Name: "PROXY", GroupType: domain.GroupTypeSelect},
-		},
-		Edges:       map[string][]domain.GroupEdge{groupID: {}},
-		PolicyRules: []domain.PolicyRule{{ID: "rule-empty", TargetGroupID: groupID, Expression: "MATCH", Position: 0}},
+		Groups:          []domain.NodeGroup{},
+		Edges:           map[string][]domain.GroupEdge{},
+		PolicyRules:     []domain.PolicyRule{},
 	}
 	snap, err := resolver.New().Resolve(ctx, emptyInput)
 	if err != nil {
@@ -105,9 +97,8 @@ func TestAdversarial_Dimension1_ZeroSubscriptionAndEmptyBoundary(t *testing.T) {
 		t.Fatalf("expected 0 active nodes in snapshot, got %d", len(snap.NodeLogicalIDs))
 	}
 
-	// 4. Compile 5 targets on empty snapshot
+	// 4. Compile targets on empty snapshot
 	targets := []domain.CompilerTarget{
-		domain.TargetClash,
 		domain.TargetMihomo,
 		domain.TargetSingBox,
 		domain.TargetSurge,
@@ -629,22 +620,57 @@ func TestAdversarial_Dimension7_PublishRevokeConcurrencyRace(t *testing.T) {
 
 	pubRepo := sqlite.NewPublicationRepository(db)
 	auditRepo := sqlite.NewAuditRepository(db)
-	pubSvc := publication.NewService(pubRepo, auditRepo)
+	nodeRepo := sqlite.NewNodeRepository(db)
+	credRepo := sqlite.NewNodeCredentialRepository(db)
+	vault, err := domain.NewNodeCredentialVault("k1", map[string][]byte{"k1": []byte("01234567890123456789012345678901")})
+	if err != nil {
+		t.Fatalf("create vault: %v", err)
+	}
+	pubSvc := publication.NewService(
+		pubRepo,
+		auditRepo,
+		publication.WithNodeRepository(nodeRepo),
+		publication.WithCredentialSource(vault, credRepo),
+	)
 
 	groupID := domain.MustNewUUIDv7()
 	nodeID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "198.51.100.1", 8388, nil)
+	raceNode := domain.Node{
+		LogicalID:         nodeID,
+		Protocol:          domain.ProtocolSS,
+		DisplayName:       "Race Node",
+		CredentialVersion: 1,
+		Active:            true,
+		CreatedAt:         domain.NowUTC(),
+		UpdatedAt:         domain.NowUTC(),
+	}
+	if err := nodeRepo.UpsertBatch(ctx, []domain.Node{raceNode}); err != nil {
+		t.Fatalf("upsert race node: %v", err)
+	}
+	raceRec, err := vault.Encrypt(&domain.NodeCredentialPayload{
+		LogicalID: nodeID,
+		Protocol:  domain.ProtocolSS,
+		Server:    "198.51.100.1",
+		Port:      8388,
+		Version:   1,
+		Credentials: domain.InboundProtocolCredential{
+			Method:   "aes-256-gcm",
+			Password: "race-node-secret",
+		},
+	})
+	if err != nil {
+		t.Fatalf("encrypt race node: %v", err)
+	}
+	if err := credRepo.Upsert(ctx, raceRec); err != nil {
+		t.Fatalf("upsert race credential: %v", err)
+	}
 	snap, err := resolver.New().Resolve(ctx, resolver.ResolveInput{
 		RevisionID:      "rev-race-test",
 		CompilerVersion: "1.0.0",
-		Nodes: []domain.Node{{
-			LogicalID:   nodeID,
-			Protocol:    domain.ProtocolSS,
-			DisplayName: "Race Node",
-			Active:      true,
-		}},
-		Groups:      []domain.NodeGroup{{ID: groupID, Name: "PROXY", GroupType: domain.GroupTypeSelect}},
-		Edges:       map[string][]domain.GroupEdge{groupID: {{ID: domain.MustNewUUIDv7(), ParentGroupID: groupID, NodeLogicalID: &nodeID}}},
-		PolicyRules: []domain.PolicyRule{{ID: "rule-race", TargetGroupID: groupID, Expression: "MATCH", Position: 0}},
+		Nodes:           []domain.Node{raceNode},
+		Groups:          []domain.NodeGroup{{ID: groupID, Name: "PROXY", GroupType: domain.GroupTypeSelect}},
+		Edges:           map[string][]domain.GroupEdge{groupID: {{ID: domain.MustNewUUIDv7(), ParentGroupID: groupID, NodeLogicalID: &nodeID}}},
+		PolicyRules:     []domain.PolicyRule{{ID: "rule-race", TargetGroupID: groupID, Expression: "MATCH", Position: 0}},
 	})
 	if err != nil {
 		t.Fatalf("resolve policy: %v", err)
@@ -652,7 +678,7 @@ func TestAdversarial_Dimension7_PublishRevokeConcurrencyRace(t *testing.T) {
 
 	// Create an active publication
 	published, err := pubSvc.Publish(ctx, publication.PublishCommand{
-		Target:     domain.TargetClash,
+		Target:     domain.TargetSingBox,
 		RevisionID: "rev-race-test",
 		Snapshot:   snap,
 		ActorKind:  domain.ActorKindAdmin,
@@ -716,105 +742,6 @@ func TestAdversarial_Dimension7_PublishRevokeConcurrencyRace(t *testing.T) {
 	if finalErr != publication.ErrRevoked {
 		t.Fatalf("expected ErrRevoked after revocation, got: %v", finalErr)
 	}
-}
-
-// ------------------------------------------------------------------------------
-// Dimension 8: 离线导入只读物理隔离与隔离区审查 (Offline Import ReadOnly Isolation & Quarantine)
-// ------------------------------------------------------------------------------
-func TestAdversarial_Dimension8_OfflineImportReadOnlyIsolationAndQuarantine(t *testing.T) {
-	ctx := context.Background()
-	tempDir := t.TempDir()
-	sourceDBPath := filepath.Join(tempDir, "legacy_source.db")
-
-	// 1. Create a legacy SQLite database with credentials and raw fields
-	legacyDB, err := sql.Open("sqlite", sourceDBPath)
-	if err != nil {
-		t.Fatalf("create legacy sqlite: %v", err)
-	}
-	initSQL := `
-	CREATE TABLE subscriptions (
-		id TEXT PRIMARY KEY,
-		name TEXT,
-		url TEXT,
-		token TEXT,
-		raw_nodes TEXT
-	);
-	CREATE TABLE nodes (
-		id INTEGER PRIMARY KEY,
-		name TEXT,
-		type TEXT,
-		server TEXT,
-		port INTEGER,
-		password TEXT,
-		uuid TEXT,
-		private_key TEXT
-	);
-	INSERT INTO subscriptions VALUES ('sub-1', 'Legacy Sub', 'https://example.com/sub?token=secret123', 'bearer-token-abc', 'raw-blob-secret');
-	INSERT INTO nodes VALUES (1, 'Legacy-SS-01', 'ss', '198.51.100.1', 8388, 'top-secret-pwd', '', '');
-	INSERT INTO nodes VALUES (2, 'Legacy-Vmess-02', 'vmess', '198.51.100.2', 443, '', 'secret-uuid-xyz', 'priv-key-123');
-	`
-	if _, err := legacyDB.Exec(initSQL); err != nil {
-		t.Fatalf("populate legacy sqlite: %v", err)
-	}
-	_ = legacyDB.Close()
-
-	// Compute initial hash of legacy source file
-	initialHash := fileSHA256(t, sourceDBPath)
-
-	// 2. Verify strict read-only mode rejection: opening mode=ro MUST reject writes
-	roDB, err := sql.Open("sqlite", fmt.Sprintf("file:%s?mode=ro", sourceDBPath))
-	if err != nil {
-		t.Fatalf("open ro db: %v", err)
-	}
-	_, writeErr := roDB.Exec("INSERT INTO subscriptions VALUES ('sub-evil', 'Evil', 'url', 'tok', 'blob');")
-	_ = roDB.Close()
-	if writeErr == nil {
-		t.Fatalf("expected write error on mode=ro database, got nil!")
-	}
-
-	// 3. Run legacy allowlist importer into target clean DB
-	targetDBPath := filepath.Join(tempDir, "target_clean.db")
-	targetDB, err := sqlite.Open(sqlite.Config{
-		Path:        targetDBPath,
-		BusyTimeout: 5 * time.Second,
-		ForeignKeys: true,
-	})
-	if err != nil {
-		t.Fatalf("open target db: %v", err)
-	}
-	if err := sqlite.NewMigrationRunner(targetDB, migrations.FS).Run(ctx); err != nil {
-		t.Fatalf("migrate target db: %v", err)
-	}
-
-	importer := legacy.NewImporter()
-	report, err := importer.Import(ctx, legacy.Options{
-		SourcePath: sourceDBPath,
-		TargetPath: targetDBPath,
-		DryRun:     false,
-	})
-	if err != nil {
-		t.Fatalf("legacy import execution failed: %v", err)
-	}
-
-	// Verify source hash remains 100% untouched
-	afterHash := fileSHA256(t, sourceDBPath)
-	if initialHash != afterHash {
-		t.Fatalf("legacy source database was mutated! initial=%s after=%s", initialHash, afterHash)
-	}
-
-	// Verify Quarantine captures:
-	// raw_nodes (blob), token, password, uuid, private_key
-	if report.Counts.QuarantineCount == 0 {
-		t.Fatalf("expected secrets/blobs to be quarantined, got count 0")
-	}
-
-	// Verify Target DB contains NO plain-text secrets
-	var leakCount int
-	err = targetDB.QueryRowContext(ctx, "SELECT COUNT(*) FROM nodes WHERE display_name LIKE '%secret%' OR normalized_config_secret_ref LIKE '%top-secret%'").Scan(&leakCount)
-	if err != nil || leakCount != 0 {
-		t.Fatalf("plain-text secrets found in target nodes table! leakCount=%d err=%v", leakCount, err)
-	}
-	_ = targetDB.Close()
 }
 
 // ------------------------------------------------------------------------------
@@ -928,14 +855,4 @@ func (f *dynamicFetcher) Fetch(ctx context.Context, opts fetch.Options) (*fetch.
 		ContentDigest: "default-digest",
 		Body:          []byte("proxies: []\n"),
 	}, nil
-}
-
-func fileSHA256(t *testing.T, path string) string {
-	t.Helper()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read file %s: %v", path, err)
-	}
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])
 }

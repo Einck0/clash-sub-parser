@@ -1,6 +1,8 @@
 package http
 
 import (
+	"encoding/json"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -22,6 +24,7 @@ func registerNodeRoutes(r chi.Router, service *inventory.Service) {
 	h := nodeHandler{service: service}
 	r.Get("/nodes", h.list)
 	r.Get("/nodes/{logical_id}", h.get)
+	r.Patch("/nodes/{logical_id}/connection", h.patchConnection)
 }
 
 // NodeDetailResponse represents the response envelope for single node details with provenance sources.
@@ -134,6 +137,7 @@ func (h nodeHandler) list(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h nodeHandler) get(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	logicalID := chi.URLParam(r, "logical_id")
 	if strings.TrimSpace(logicalID) == "" {
 		WriteDomainError(w, r, domain.NewValidationError("missing_logical_id", "logical_id is required"))
@@ -152,11 +156,62 @@ func (h nodeHandler) get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	nodeView := inventory.ToNodeView(detail.Node)
+	nodeView.Connection = detail.Connection
 	nodeView.IPRiskSummary = detail.IPRiskSummary
 	nodeView.CredentialMismatch = detail.CredentialMismatch
 	resp := NodeDetailResponse{
-		Node:    nodeView,
-		Sources: sources,
+		Node:          nodeView,
+		Sources:       sources,
+		IPRiskSummary: detail.IPRiskSummary,
+	}
+
+	WriteSuccess(w, r, http.StatusOK, resp)
+}
+
+func (h nodeHandler) patchConnection(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	logicalID := strings.TrimSpace(chi.URLParam(r, "logical_id"))
+	if logicalID == "" {
+		WriteDomainError(w, r, domain.NewValidationError("missing_logical_id", "logical_id is required"))
+		return
+	}
+
+	var body domain.NodeConnectionPatchRequest
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil {
+		WriteDomainError(w, r, domain.NewValidationError("invalid_json", "request body must be valid JSON"))
+		return
+	}
+	if decoder.Decode(&struct{}{}) != io.EOF {
+		WriteDomainError(w, r, domain.NewValidationError("invalid_json", "request body must contain one JSON object"))
+		return
+	}
+
+	detail, err := h.service.UpdateNodeConnection(r.Context(), inventory.UpdateNodeConnectionCommand{
+		LogicalID: logicalID,
+		Patch:     body,
+		RequestID: GetRequestID(r.Context()),
+		ActorKind: requestActorKind(r),
+	})
+	if err != nil {
+		WriteDomainError(w, r, err)
+		return
+	}
+
+	sources := detail.Sources
+	if sources == nil {
+		sources = make([]domain.NodeSource, 0)
+	}
+	nodeView := inventory.ToNodeView(detail.Node)
+	nodeView.Connection = detail.Connection
+	nodeView.IPRiskSummary = detail.IPRiskSummary
+	nodeView.CredentialMismatch = detail.CredentialMismatch
+	resp := NodeDetailResponse{
+		Node:          nodeView,
+		Sources:       sources,
+		IPRiskSummary: detail.IPRiskSummary,
 	}
 
 	WriteSuccess(w, r, http.StatusOK, resp)

@@ -3,8 +3,6 @@ package observation
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"strconv"
 	"strings"
@@ -76,7 +74,7 @@ func (s *Service) Record(ctx context.Context, input Input) (*domain.ProbeObserva
 		NodeLogicalID:   input.NodeLogicalID,
 		Kind:            input.Profile.Kind,
 		Verdict:         evaluation.Verdict,
-		EvidenceDigest:  digest(input, evaluation),
+		EvidenceDigest:  domain.ComputeProbeEvidenceDigest(input.RunID, input.NodeLogicalID, input.Profile.Version, evaluation.Verdict, input.Result.StatusCode, evaluation.Reason),
 		ObservedAt:      observedAt.UTC(),
 		LatencyMS:       input.LatencyMS,
 		RedactedSummary: summary(input, evaluation),
@@ -85,13 +83,6 @@ func (s *Service) Record(ctx context.Context, input Input) (*domain.ProbeObserva
 		return nil, fmt.Errorf("persist probe observation: %w", err)
 	}
 	return obs, nil
-}
-
-func digest(input Input, evaluation profiles.Evaluation) string {
-	h := sha256.New()
-	fmt.Fprintf(h, "%s\x00%s\x00%s\x00%s\x00%d\x00%s", input.RunID, input.NodeLogicalID,
-		input.Profile.Version, evaluation.Verdict, input.Result.StatusCode, evaluation.Reason)
-	return "sha256:" + hex.EncodeToString(h.Sum(nil))
 }
 
 func summary(input Input, evaluation profiles.Evaluation) string {

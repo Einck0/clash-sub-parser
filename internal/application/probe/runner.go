@@ -2,8 +2,6 @@ package probe
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -328,7 +326,7 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 			close(done)
 		}()
 
-	select {
+		select {
 		case <-runCtx.Done():
 			return handleCancelOrDeadline(done)
 		case <-done:
@@ -569,7 +567,7 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 			NodeLogicalID:     node.LogicalID,
 			Kind:              kind,
 			Verdict:           eval.Verdict,
-			EvidenceDigest:    evidenceDigest(run.ID, node.LogicalID, prof.Version, eval.Verdict, 0, eval.Reason),
+			EvidenceDigest:    domain.ComputeProbeEvidenceDigest(run.ID, node.LogicalID, prof.Version, eval.Verdict, 0, eval.Reason),
 			ObservedAt:        now,
 			RedactedSummary:   fmt.Sprintf("profile=%s version=%s verdict=%s reason=%s status=0 latency_ms=0", prof.Kind, prof.Version, eval.Verdict, eval.Reason),
 			CredentialVersion: credVer,
@@ -654,7 +652,7 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 		NodeLogicalID:     node.LogicalID,
 		Kind:              kind,
 		Verdict:           eval.Verdict,
-		EvidenceDigest:    evidenceDigest(run.ID, node.LogicalID, prof.Version, eval.Verdict, result.StatusCode, eval.Reason),
+		EvidenceDigest:    domain.ComputeProbeEvidenceDigest(run.ID, node.LogicalID, prof.Version, eval.Verdict, result.StatusCode, eval.Reason),
 		ObservedAt:        now,
 		LatencyMS:         latency,
 		RedactedSummary:   summary,
@@ -668,10 +666,4 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 		return eval.Verdict, dialErr
 	}
 	return eval.Verdict, nil
-}
-
-func evidenceDigest(runID, nodeID, version string, verdict domain.ProbeVerdict, statusCode int, reason string) string {
-	h := sha256.New()
-	fmt.Fprintf(h, "%s\x00%s\x00%s\x00%s\x00%d\x00%s", runID, nodeID, version, verdict, statusCode, reason)
-	return "sha256:" + hex.EncodeToString(h.Sum(nil))
 }

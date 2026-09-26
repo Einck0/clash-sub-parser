@@ -219,8 +219,8 @@ func (m *memoryNodeRepo) DeactivateNodesNotIn(_ context.Context, _ []string) err
 }
 
 type mockRunner struct {
-	mu           sync.Mutex
-	executedRuns []*domain.ProbeRun
+	mu              sync.Mutex
+	executedRuns    []*domain.ProbeRun
 	executedNodeIDs map[string][]string
 }
 

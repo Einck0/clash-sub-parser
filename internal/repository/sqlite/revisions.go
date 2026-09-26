@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -217,20 +218,46 @@ func NewPublicationRepository(db *sql.DB) domain.PublicationRepository {
 	return &publicationRepository{db: db}
 }
 
-func (r *publicationRepository) GetByID(ctx context.Context, id string) (*domain.Publication, error) {
-	const query = `
-	SELECT id, target, snapshot_digest, compiler_version, token_hash, state, created_at, revoked_at
-	FROM publications
-	WHERE id = ?;`
+const selectPublicationColumnsSQL = `
+	SELECT
+		id,
+		revision_id,
+		target,
+		snapshot_digest,
+		content_digest,
+		credential_binding_digest,
+		credential_bindings_json,
+		content_type,
+		filename,
+		artifact_key_id,
+		artifact_nonce,
+		artifact_ciphertext,
+		compiler_version,
+		token_hash,
+		state,
+		created_at,
+		revoked_at
+	FROM publications`
 
+func scanPublicationRow(row *sql.Row, notFoundMsg string) (*domain.Publication, error) {
 	var pub domain.Publication
 	var targetStr, stateStr, createdStr string
 	var revokedStr sql.NullString
+	var nonce, ciphertext []byte
 
-	err := r.db.QueryRowContext(ctx, query, id).Scan(
+	err := row.Scan(
 		&pub.ID,
+		&pub.RevisionID,
 		&targetStr,
 		&pub.SnapshotDigest,
+		&pub.ContentDigest,
+		&pub.CredentialBindingDigest,
+		&pub.CredentialBindingsJSON,
+		&pub.ContentType,
+		&pub.Filename,
+		&pub.ArtifactKeyID,
+		&nonce,
+		&ciphertext,
 		&pub.CompilerVersion,
 		&pub.TokenHash,
 		&stateStr,
@@ -239,9 +266,9 @@ func (r *publicationRepository) GetByID(ctx context.Context, id string) (*domain
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, domain.NewNotFoundError("publication_not_found", fmt.Sprintf("publication %s not found", id))
+			return nil, domain.NewNotFoundError("publication_not_found", notFoundMsg)
 		}
-		return nil, fmt.Errorf("failed to query publication %s: %w", id, err)
+		return nil, fmt.Errorf("failed to query publication: %w", err)
 	}
 
 	pub.Target = domain.CompilerTarget(targetStr)
@@ -253,54 +280,59 @@ func (r *publicationRepository) GetByID(ctx context.Context, id string) (*domain
 			pub.RevokedAt = &revTime
 		}
 	}
+	if len(nonce) > 0 {
+		pub.ArtifactNonce = append([]byte(nil), nonce...)
+	}
+	if len(ciphertext) > 0 {
+		pub.ArtifactCiphertext = append([]byte(nil), ciphertext...)
+	}
+	if strings.TrimSpace(pub.CredentialBindingsJSON) != "" {
+		var bindings []domain.PublicationCredentialBinding
+		if err := json.Unmarshal([]byte(pub.CredentialBindingsJSON), &bindings); err == nil {
+			pub.CredentialBindings = bindings
+		}
+	}
 
 	return &pub, nil
+}
+
+func (r *publicationRepository) GetByID(ctx context.Context, id string) (*domain.Publication, error) {
+	query := selectPublicationColumnsSQL + "\n\tWHERE id = ?;"
+	row := r.db.QueryRowContext(ctx, query, id)
+	return scanPublicationRow(row, fmt.Sprintf("publication %s not found", id))
 }
 
 func (r *publicationRepository) GetByTokenHash(ctx context.Context, tokenHash string) (*domain.Publication, error) {
-	const query = `
-	SELECT id, target, snapshot_digest, compiler_version, token_hash, state, created_at, revoked_at
-	FROM publications
-	WHERE token_hash = ?;`
-
-	var pub domain.Publication
-	var targetStr, stateStr, createdStr string
-	var revokedStr sql.NullString
-
-	err := r.db.QueryRowContext(ctx, query, tokenHash).Scan(
-		&pub.ID,
-		&targetStr,
-		&pub.SnapshotDigest,
-		&pub.CompilerVersion,
-		&pub.TokenHash,
-		&stateStr,
-		&createdStr,
-		&revokedStr,
-	)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, domain.NewNotFoundError("publication_not_found", fmt.Sprintf("publication for token hash %s not found", tokenHash))
-		}
-		return nil, fmt.Errorf("failed to query publication by token hash: %w", err)
-	}
-
-	pub.Target = domain.CompilerTarget(targetStr)
-	pub.State = domain.PublicationState(stateStr)
-	pub.CreatedAt, _ = time.Parse(time.RFC3339, createdStr)
-	if revokedStr.Valid && revokedStr.String != "" {
-		revTime, err := time.Parse(time.RFC3339, revokedStr.String)
-		if err == nil {
-			pub.RevokedAt = &revTime
-		}
-	}
-
-	return &pub, nil
+	query := selectPublicationColumnsSQL + "\n\tWHERE token_hash = ?;"
+	row := r.db.QueryRowContext(ctx, query, tokenHash)
+	return scanPublicationRow(row, fmt.Sprintf("publication for token hash %s not found", tokenHash))
 }
 
 func (r *publicationRepository) Create(ctx context.Context, pub *domain.Publication) error {
+	if pub == nil {
+		return domain.NewValidationError("nil_publication", "publication cannot be nil")
+	}
+
 	const query = `
-	INSERT INTO publications (id, target, snapshot_digest, compiler_version, token_hash, state, created_at, revoked_at)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?);`
+	INSERT INTO publications (
+		id,
+		revision_id,
+		target,
+		snapshot_digest,
+		content_digest,
+		credential_binding_digest,
+		credential_bindings_json,
+		content_type,
+		filename,
+		artifact_key_id,
+		artifact_nonce,
+		artifact_ciphertext,
+		compiler_version,
+		token_hash,
+		state,
+		created_at,
+		revoked_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
 
 	createdStr := pub.CreatedAt.Format(time.RFC3339)
 	if pub.CreatedAt.IsZero() {
@@ -312,20 +344,49 @@ func (r *publicationRepository) Create(ctx context.Context, pub *domain.Publicat
 		revokedStr = sql.NullString{String: pub.RevokedAt.Format(time.RFC3339), Valid: true}
 	}
 
-	_, err := r.db.ExecContext(ctx, query,
-		pub.ID,
-		string(pub.Target),
-		pub.SnapshotDigest,
-		pub.CompilerVersion,
-		pub.TokenHash,
-		string(pub.State),
-		createdStr,
-		revokedStr,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to insert publication: %w", err)
+	bindingsJSON := pub.CredentialBindingsJSON
+	if strings.TrimSpace(bindingsJSON) == "" && len(pub.CredentialBindings) > 0 {
+		raw, err := json.Marshal(pub.CredentialBindings)
+		if err != nil {
+			return fmt.Errorf("failed to marshal publication credential bindings: %w", err)
+		}
+		bindingsJSON = string(raw)
 	}
-	return nil
+
+	nonce := pub.ArtifactNonce
+	if nonce == nil {
+		nonce = []byte{}
+	}
+	ciphertext := pub.ArtifactCiphertext
+	if ciphertext == nil {
+		ciphertext = []byte{}
+	}
+
+	return WithTx(ctx, r.db, func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, query,
+			pub.ID,
+			pub.RevisionID,
+			string(pub.Target),
+			pub.SnapshotDigest,
+			pub.ContentDigest,
+			pub.CredentialBindingDigest,
+			bindingsJSON,
+			pub.ContentType,
+			pub.Filename,
+			pub.ArtifactKeyID,
+			nonce,
+			ciphertext,
+			pub.CompilerVersion,
+			pub.TokenHash,
+			string(pub.State),
+			createdStr,
+			revokedStr,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to insert publication: %w", err)
+		}
+		return nil
+	})
 }
 
 func (r *publicationRepository) Revoke(ctx context.Context, id string, revokedAt time.Time) error {

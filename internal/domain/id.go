@@ -86,15 +86,24 @@ func ComputeNodeLogicalID(protocol Protocol, server string, port int, transportP
 
 	// Sensitive keys that MUST NEVER affect or be included in logical ID
 	sensitiveKeys := map[string]bool{
-		"password":    true,
-		"secret":      true,
-		"token":       true,
-		"key":         true,
-		"private_key": true,
-		"uuid":        true,
-		"auth":        true,
-		"username":    true,
-		"user":        true,
+		"password":       true,
+		"secret":         true,
+		"token":          true,
+		"key":            true,
+		"private_key":    true,
+		"private-key":    true,
+		"public_key":     true,
+		"public-key":     true,
+		"preshared_key":  true,
+		"pre_shared_key": true,
+		"pre-shared-key": true,
+		"psk":            true,
+		"obfs-password":  true,
+		"obfs_password":  true,
+		"uuid":           true,
+		"auth":           true,
+		"username":       true,
+		"user":           true,
 	}
 
 	var keys []string

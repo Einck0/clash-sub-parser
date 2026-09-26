@@ -19,19 +19,19 @@ func BuildOptions(config NodeConfig) (option.Options, string, error) {
 	if config.Port < 1 || config.Port > 65535 {
 		return option.Options{}, "", ErrInvalidPort
 	}
-	if config.SkipCertVerify || hasInsecureOption(config.Transport) {
+	if config.SkipCertVerify || domain.HasInsecureTransport(config.Transport) {
 		return option.Options{}, "", domain.NewValidationError(
 			"insecure_tls",
 			"certificate verification bypass (skip-cert-verify/insecure) is prohibited",
 		)
 	}
-	if config.Protocol == domain.ProtocolHysteria2 && (strings.TrimSpace(config.Hy2Ports) != "" || extractHy2Ports(config.Transport) != "") {
+	if config.Protocol == domain.ProtocolHysteria2 && (strings.TrimSpace(config.Hy2Ports) != "" || domain.ExtractHy2Ports(config.Transport) != "") {
 		return option.Options{}, "", domain.NewValidationError(
 			"unsupported_hy2_ports",
 			"hysteria2 port hopping is prohibited",
 		)
 	}
-	if config.Protocol == domain.ProtocolTUIC && (config.TUICDisableSNI || hasTUICDisableSNI(config.Transport)) {
+	if config.Protocol == domain.ProtocolTUIC && (config.TUICDisableSNI || domain.HasTUICDisableSNI(config.Transport)) {
 		return option.Options{}, "", domain.NewValidationError(
 			"unsupported_tuic_disable_sni",
 			"tuic disable_sni is prohibited",

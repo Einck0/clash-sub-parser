@@ -1,6 +1,9 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import {
+  ALL_GROUP_TYPES,
+  MODERN_RULE_CAPABILITY_MATRIX,
   groupTypeLabel,
+  groupTypeSupportedTargets,
   groupTypeTone,
   ruleActionTone,
   validateEdgeInput,
@@ -66,6 +69,19 @@ describe('policy types and helpers', () => {
       'Protocol only supports "equals" or "not_equals"'
     )
     expect(validateConditionInput({ field: 'protocol', op: 'equals', value: 'ss' })).toBeNull()
+    expect(validateConditionInput({ field: 'protocol', op: 'equals', value: 'wireguard' })).toBeNull()
+    expect(validateConditionInput({ field: 'protocol', op: 'equals', value: 'tuic' })).toBeNull()
+    expect(validateConditionInput({ field: 'protocol', op: 'equals', value: 'ssr' })).toContain(
+      'Unsupported protocol'
+    )
+
+    // group & rule target capability boundaries
+    expect(groupTypeSupportedTargets('select')).toEqual(['mihomo', 'singbox', 'surge', 'qx'])
+    expect(groupTypeSupportedTargets('urltest')).toEqual(['mihomo', 'singbox', 'surge'])
+    expect(groupTypeSupportedTargets('fallback')).toEqual(['mihomo', 'surge'])
+    expect(groupTypeSupportedTargets('loadbalance')).toEqual(['mihomo'])
+    expect(ALL_GROUP_TYPES).toHaveLength(4)
+    expect(MODERN_RULE_CAPABILITY_MATRIX).toHaveLength(3)
 
     // source_subscription_ids
     expect(validateConditionInput({ field: 'source_subscription_ids', op: 'equals', value: 'sub-1' })).toBe(
@@ -95,7 +111,7 @@ describe('policy types and helpers', () => {
         value: '200',
         probe_kind: 'baseline',
       })
-    ).toBe('Probe latency only supports "<=" (lte)')
+    ).toBe('Probe latency only supports "lte"')
     expect(
       validateConditionInput({
         field: 'probe_latency_ms',
@@ -355,7 +371,7 @@ describe('usePolicy composable', () => {
     expect(validateConditionInput({ field: 'probe_verdict', op: 'equals', probe_kind: 'baseline', value: 'available' })).toBeNull()
 
     // Probe latency requires lte and bounds
-    expect(validateConditionInput({ field: 'probe_latency_ms', op: 'equals', probe_kind: 'baseline', value: '200' })).toContain('only supports "<="')
+    expect(validateConditionInput({ field: 'probe_latency_ms', op: 'equals', probe_kind: 'baseline', value: '200' })).toContain('only supports "lte"')
     expect(validateConditionInput({ field: 'probe_latency_ms', op: 'lte', probe_kind: 'baseline', value: '-10' })).toContain('between 0 and 60000')
     expect(validateConditionInput({ field: 'probe_latency_ms', op: 'lte', probe_kind: 'baseline', value: '200', freshness_seconds: 700000 })).toContain('Freshness must be between 1s and 604800s')
     expect(validateConditionInput({ field: 'probe_latency_ms', op: 'lte', probe_kind: 'baseline', value: '200', freshness_seconds: 3600 })).toBeNull()

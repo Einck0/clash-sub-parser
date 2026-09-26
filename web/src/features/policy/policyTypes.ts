@@ -1,6 +1,27 @@
+import type { CompilerTarget } from '../publications/publicationTypes'
+
 export type GroupType = 'select' | 'urltest' | 'fallback' | 'loadbalance'
 
 export type RuleAction = 'allow' | 'reject' | 'quarantine'
+
+export type SupportedProtocol =
+  | 'ss'
+  | 'vmess'
+  | 'vless'
+  | 'trojan'
+  | 'hysteria2'
+  | 'wireguard'
+  | 'tuic'
+
+export const SUPPORTED_PROTOCOLS: readonly SupportedProtocol[] = [
+  'ss',
+  'vmess',
+  'vless',
+  'trojan',
+  'hysteria2',
+  'wireguard',
+  'tuic',
+] as const
 
 export interface GroupEdge {
   id?: string
@@ -42,12 +63,77 @@ export interface ValidationResult {
   errors?: string[]
 }
 
-export const ALL_GROUP_TYPES: Array<{ type: GroupType; label: string; desc: string }> = [
-  { type: 'select', label: 'Select', desc: 'Manual user selection of node or child group' },
-  { type: 'urltest', label: 'URL Test', desc: 'Automatic lowest-latency benchmarking group' },
-  { type: 'fallback', label: 'Fallback', desc: 'Automatic failover to next available node in order' },
-  { type: 'loadbalance', label: 'Load Balance', desc: 'Round-robin or hash-based distribution' },
+export interface GroupTypeCapabilityInfo {
+  type: GroupType
+  label: string
+  desc: string
+  supportedTargets: readonly CompilerTarget[]
+  capabilityNote: string
+}
+
+export const ALL_GROUP_TYPES: GroupTypeCapabilityInfo[] = [
+  {
+    type: 'select',
+    label: 'Select',
+    desc: 'Manual user selection of node or child group',
+    supportedTargets: ['mihomo', 'singbox', 'surge', 'qx'],
+    capabilityNote: 'Supported by all 4 modern targets (Mihomo, sing-box, Surge, Quantumult X)',
+  },
+  {
+    type: 'urltest',
+    label: 'URL Test',
+    desc: 'Automatic lowest-latency benchmarking group',
+    supportedTargets: ['mihomo', 'singbox', 'surge'],
+    capabilityNote: 'Supported by Mihomo, sing-box, Surge (rejected by Quantumult X)',
+  },
+  {
+    type: 'fallback',
+    label: 'Fallback',
+    desc: 'Automatic failover to next available node in order',
+    supportedTargets: ['mihomo', 'surge'],
+    capabilityNote: 'Supported by Mihomo & Surge only (rejected by sing-box & Quantumult X)',
+  },
+  {
+    type: 'loadbalance',
+    label: 'Load Balance',
+    desc: 'Round-robin or hash-based distribution',
+    supportedTargets: ['mihomo'],
+    capabilityNote: 'Supported by Mihomo only (rejected by sing-box, Surge & Quantumult X)',
+  },
 ]
+
+export interface RuleCapabilityBand {
+  category: string
+  ruleKinds: readonly string[]
+  supportedTargets: readonly CompilerTarget[]
+  note: string
+}
+
+export const MODERN_RULE_CAPABILITY_MATRIX: RuleCapabilityBand[] = [
+  {
+    category: 'Universal Routing Subset (7 Rules)',
+    ruleKinds: ['DOMAIN', 'DOMAIN-SUFFIX', 'DOMAIN-KEYWORD', 'IP-CIDR', 'IP-CIDR6', 'GEOIP', 'MATCH'],
+    supportedTargets: ['mihomo', 'singbox', 'surge', 'qx'],
+    note: 'Supported across all 4 targets (Mihomo, sing-box, Surge, Quantumult X)',
+  },
+  {
+    category: 'Rule-Set & Process Subset (2 Rules)',
+    ruleKinds: ['RULE-SET', 'PROCESS-NAME'],
+    supportedTargets: ['mihomo', 'singbox', 'surge'],
+    note: 'Supported by Mihomo, sing-box, Surge; rejected by Quantumult X',
+  },
+  {
+    category: 'Modern Geosite & Port/Source-CIDR Subset (5 Rules)',
+    ruleKinds: ['GEOSITE', 'SRC-IP-CIDR', 'SRC-PORT', 'DST-PORT', 'PORT'],
+    supportedTargets: ['mihomo', 'singbox'],
+    note: 'Supported by Mihomo & sing-box; rejected by Surge & Quantumult X',
+  },
+]
+
+export function groupTypeSupportedTargets(type: GroupType): readonly CompilerTarget[] {
+  const found = ALL_GROUP_TYPES.find((g) => g.type === type)
+  return found ? found.supportedTargets : ['mihomo']
+}
 
 export function groupTypeLabel(type: GroupType): string {
   switch (type) {
@@ -171,14 +257,19 @@ export function validateConditionInput(cond: Partial<FilterCondition>): string |
       }
       break
 
-    case 'protocol':
+    case 'protocol': {
       if (cond.op !== 'equals' && cond.op !== 'not_equals') {
         return 'Protocol only supports "equals" or "not_equals"'
       }
       if (!cond.value || !cond.value.trim()) {
         return 'Protocol value cannot be empty'
       }
+      const normProto = cond.value.trim().toLowerCase()
+      if (!(SUPPORTED_PROTOCOLS as readonly string[]).includes(normProto)) {
+        return `Unsupported protocol "${cond.value.trim()}" (valid: ${SUPPORTED_PROTOCOLS.join(', ')})`
+      }
       break
+    }
 
     case 'source_subscription_ids':
       if (cond.op !== 'contains' && cond.op !== 'not_contains') {
@@ -204,9 +295,9 @@ export function validateConditionInput(cond: Partial<FilterCondition>): string |
       }
       break
 
-    case 'probe_latency_ms':
+    case 'probe_latency_ms': {
       if (cond.op !== 'lte') {
-        return 'Probe latency only supports "<=" (lte)'
+        return 'Probe latency only supports "lte"'
       }
       if (!cond.probe_kind) {
         return 'Probe kind is required for probe latency condition'
@@ -222,6 +313,7 @@ export function validateConditionInput(cond: Partial<FilterCondition>): string |
         return 'Freshness must be between 1s and 604800s (7 days)'
       }
       break
+    }
 
     default:
       return `Unsupported field: ${cond.field}`
@@ -229,4 +321,3 @@ export function validateConditionInput(cond: Partial<FilterCondition>): string |
 
   return null
 }
-

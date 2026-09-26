@@ -151,3 +151,75 @@ func TestNodeCredentialVaultFromEnv(t *testing.T) {
 		t.Fatalf("expected nil vault for empty env")
 	}
 }
+
+func TestNodeCredentialExtendedProtocolsAndHelpers(t *testing.T) {
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		t.Fatal(err)
+	}
+	vault, err := domain.NewNodeCredentialVault("k1", map[string][]byte{"k1": key})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wgPayload := &domain.NodeCredentialPayload{
+		LogicalID: "node_wg_1",
+		Protocol:  domain.ProtocolWireGuard,
+		Server:    "wg.example.com",
+		Port:      51820,
+		Version:   1,
+		Credentials: domain.InboundProtocolCredential{
+			PrivateKey:   "wg-priv",
+			PublicKey:    "wg-pub",
+			PreSharedKey: "wg-psk",
+			LocalAddress: []string{"10.0.0.2/32", "fd00::2/128"},
+			Reserved:     []uint8{1, 2, 3},
+			MTU:          1420,
+			DNS:          []string{"1.1.1.1"},
+		},
+	}
+	wgRec, err := vault.Encrypt(wgPayload)
+	if err != nil {
+		t.Fatalf("Encrypt WG: %v", err)
+	}
+	wgDec, err := vault.Decrypt(wgRec, domain.ProtocolWireGuard)
+	if err != nil {
+		t.Fatalf("Decrypt WG: %v", err)
+	}
+	if wgDec.Credentials.EffectivePreSharedKey() != "wg-psk" || wgDec.Credentials.MTU != 1420 || len(wgDec.Credentials.LocalAddress) != 2 || len(wgDec.Credentials.Reserved) != 3 {
+		t.Fatalf("WG roundtrip mismatch: %+v", wgDec.Credentials)
+	}
+
+	tuicPayload := &domain.NodeCredentialPayload{
+		LogicalID: "node_tuic_1",
+		Protocol:  domain.ProtocolTUIC,
+		Server:    "tuic.example.com",
+		Port:      443,
+		Version:   1,
+		Credentials: domain.InboundProtocolCredential{
+			UUID:              "33333333-3333-3333-3333-333333333333",
+			Password:          "tuic-secret",
+			CongestionControl: "bbr",
+			UDPRelayMode:      "native",
+			ALPN:              []string{"h3"},
+			SNI:               "tuic.example.com",
+			DisableSNI:        true,
+			Transport: map[string]string{
+				"disable_sni":      "true",
+				"skip_cert_verify": "true",
+				"server_ports":     "20000-30000",
+			},
+		},
+	}
+	tuicRec, err := vault.Encrypt(tuicPayload)
+	if err != nil {
+		t.Fatalf("Encrypt TUIC: %v", err)
+	}
+	tuicDec, err := vault.Decrypt(tuicRec, domain.ProtocolTUIC)
+	if err != nil {
+		t.Fatalf("Decrypt TUIC: %v", err)
+	}
+	if tuicDec.Credentials.CongestionControl != "bbr" || !tuicDec.Credentials.DisableSNI || !domain.HasTUICDisableSNI(tuicDec.Credentials.Transport) || !domain.HasInsecureTransport(tuicDec.Credentials.Transport) || domain.ExtractHy2Ports(tuicDec.Credentials.Transport) != "20000-30000" {
+		t.Fatalf("TUIC roundtrip/helper mismatch: %+v", tuicDec.Credentials)
+	}
+}

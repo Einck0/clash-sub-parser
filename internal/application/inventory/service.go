@@ -6,7 +6,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/netip"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 
@@ -31,6 +33,7 @@ type ReconcileResult struct {
 type NodeDetail struct {
 	Node               domain.Node                `json:"node"`
 	Sources            []domain.NodeSource        `json:"sources"`
+	Connection         *domain.SafeNodeConnection `json:"connection,omitempty"`
 	IPRiskSummary      *domain.IPRiskSummary      `json:"ip_risk_summary,omitempty"`
 	RecentObservations []domain.IPRiskObservation `json:"recent_observations,omitempty"`
 	CredentialMismatch bool                       `json:"credential_mismatch,omitempty"`
@@ -38,15 +41,16 @@ type NodeDetail struct {
 
 // NodeView is the API-safe view of a Node without internal secret references.
 type NodeView struct {
-	LogicalID          string                `json:"logical_id"`
-	Protocol           domain.Protocol       `json:"protocol"`
-	DisplayName        string                `json:"display_name"`
-	Active             bool                  `json:"active"`
-	CredentialVersion  int                   `json:"credential_version"`
-	CredentialMismatch bool                  `json:"credential_mismatch,omitempty"`
-	CreatedAt          time.Time             `json:"created_at"`
-	UpdatedAt          time.Time             `json:"updated_at"`
-	IPRiskSummary      *domain.IPRiskSummary `json:"ip_risk_summary,omitempty"`
+	LogicalID          string                     `json:"logical_id"`
+	Protocol           domain.Protocol            `json:"protocol"`
+	DisplayName        string                     `json:"display_name"`
+	Active             bool                       `json:"active"`
+	CredentialVersion  int                        `json:"credential_version"`
+	CredentialMismatch bool                       `json:"credential_mismatch,omitempty"`
+	Connection         *domain.SafeNodeConnection `json:"connection,omitempty"`
+	CreatedAt          time.Time                  `json:"created_at"`
+	UpdatedAt          time.Time                  `json:"updated_at"`
+	IPRiskSummary      *domain.IPRiskSummary      `json:"ip_risk_summary,omitempty"`
 }
 
 // ToNodeView converts a domain.Node to an API-safe NodeView, stripping secret references.
@@ -68,11 +72,11 @@ func ToNodeViewFromReadModel(rm domain.NodeReadModel) NodeView {
 		LogicalID:         rm.Node.LogicalID,
 		Protocol:          rm.Node.Protocol,
 		DisplayName:       rm.Node.DisplayName,
-		Active:        rm.Node.Active,
+		Active:            rm.Node.Active,
 		CredentialVersion: rm.Node.CredentialVersion,
-		CreatedAt:     rm.Node.CreatedAt,
-		UpdatedAt:     rm.Node.UpdatedAt,
-		IPRiskSummary: rm.IPRiskSummary,
+		CreatedAt:         rm.Node.CreatedAt,
+		UpdatedAt:         rm.Node.UpdatedAt,
+		IPRiskSummary:     rm.IPRiskSummary,
 	}
 }
 
@@ -109,6 +113,7 @@ type Service struct {
 	vault         *domain.NodeCredentialVault
 	credRepo      domain.NodeCredentialRepository
 	probeObsRepo  domain.ProbeObservationRepository
+	auditRepo     domain.AuditRepository
 	mu            sync.Mutex
 }
 
@@ -133,6 +138,13 @@ func WithProbeObservationRepository(repo domain.ProbeObservationRepository) Opti
 	}
 }
 
+// WithAuditRepository sets the audit repository for recording node connection mutations.
+func WithAuditRepository(repo domain.AuditRepository) Option {
+	return func(s *Service) {
+		s.auditRepo = repo
+	}
+}
+
 // NewService constructs an inventory application service.
 func NewService(
 	db *sql.DB,
@@ -153,6 +165,9 @@ func NewService(
 		nodes:         nodes,
 		sources:       sources,
 		fetcher:       fetcher,
+	}
+	if db != nil {
+		s.auditRepo = sqlite.NewAuditRepository(db)
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -377,13 +392,26 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 						redactedErr := domain.RedactSensitiveInfo(decErr.Error())
 						return fmt.Errorf("failed to decrypt existing credentials for node %s: %s", node.LogicalID, redactedErr)
 					}
-					// Decrypted successfully, check if endpoint or credentials changed.
+					// Decrypted successfully, check if endpoint, identity binding, or credentials changed.
 					// Whole-subscription ContentDigest change alone MUST NOT bump single node version.
+					expectedIdentity := domain.NewVerifiedNodeIdentity(
+						node.LogicalID,
+						node.Protocol,
+						item.Normalized.Server,
+						item.Normalized.Port,
+						existingRecord.Version,
+						item.Normalized.Transport,
+					)
+					identityMissingOrChanged := existingPayload.Identity == nil ||
+						existingPayload.Identity.ValidateNonEmpty() != nil ||
+						!existingPayload.Identity.MatchesEndpoint(node.Protocol, item.Normalized.Server, item.Normalized.Port) ||
+						existingPayload.Identity.TransportDigest != expectedIdentity.TransportDigest
+
 					credsChanged := !reflect.DeepEqual(existingPayload.Credentials, item.Credentials)
 					serverChanged := existingPayload.Server != item.Normalized.Server || existingPayload.Port != item.Normalized.Port
 					protocolChanged := existingPayload.Protocol != node.Protocol
 
-					if credsChanged || serverChanged || protocolChanged {
+					if credsChanged || serverChanged || protocolChanged || identityMissingOrChanged {
 						shouldIncrement = true
 						needEncrypt = true
 						targetVersion = baseVersion + 1
@@ -417,8 +445,16 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 				return fmt.Errorf("failed to upsert node %s: %w", node.LogicalID, err)
 			}
 
-			// 2) If needEncrypt, persist encrypted credential
+			// 2) If needEncrypt, persist encrypted credential with verified identity binding
 			if needEncrypt {
+				identity := domain.NewVerifiedNodeIdentity(
+					node.LogicalID,
+					node.Protocol,
+					item.Normalized.Server,
+					item.Normalized.Port,
+					targetVersion,
+					item.Normalized.Transport,
+				)
 				payload := &domain.NodeCredentialPayload{
 					LogicalID:   node.LogicalID,
 					Protocol:    node.Protocol,
@@ -426,6 +462,7 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 					Port:        item.Normalized.Port,
 					Version:     targetVersion,
 					Digest:      fetchResp.ContentDigest,
+					Identity:    &identity,
 					Credentials: item.Credentials,
 				}
 				record, encErr := s.vault.Encrypt(payload)
@@ -540,9 +577,11 @@ func (s *Service) GetNodeDetailWithRisk(ctx context.Context, logicalID string, p
 	if sources == nil {
 		sources = make([]domain.NodeSource, 0)
 	}
+	conn := s.projectNodeConnection(ctx, rm.Node)
 	detail := &NodeDetail{
 		Node:               rm.Node,
 		Sources:            sources,
+		Connection:         &conn,
 		IPRiskSummary:      rm.IPRiskSummary,
 		RecentObservations: make([]domain.IPRiskObservation, 0),
 	}
@@ -603,4 +642,325 @@ func (s *Service) ListNodesReadModel(ctx context.Context, filter domain.NodeFilt
 		}
 	}
 	return views, total, nil
+}
+
+func (s *Service) projectNodeConnection(ctx context.Context, node domain.Node) domain.SafeNodeConnection {
+	if s.vault == nil || s.credRepo == nil {
+		return domain.UnavailableNodeConnection("vault_unconfigured")
+	}
+	if node.CredentialVersion <= 0 {
+		return domain.UnavailableNodeConnection("credential_unavailable")
+	}
+	record, err := s.credRepo.GetByLogicalID(ctx, node.LogicalID, node.CredentialVersion)
+	if err != nil || record == nil {
+		return domain.UnavailableNodeConnection("credential_unavailable")
+	}
+	payload, decErr := s.vault.Decrypt(record, node.Protocol)
+	if decErr != nil || payload == nil {
+		return domain.UnavailableNodeConnection("credential_decryption_failed")
+	}
+	if err := verifyCredentialIdentity(node, payload); err != nil {
+		return domain.UnavailableNodeConnection("identity_verification_failed")
+	}
+	return domain.ProjectSafeNodeConnection(payload)
+}
+
+func verifyCredentialIdentity(node domain.Node, payload *domain.NodeCredentialPayload) error {
+	if payload == nil {
+		return domain.NewValidationError("missing_credential_payload", "credential payload is nil")
+	}
+	if payload.LogicalID != node.LogicalID || payload.Protocol != node.Protocol || payload.Version != node.CredentialVersion {
+		return domain.NewConflictError("identity_binding_invalid", "credential envelope does not match node metadata")
+	}
+	if payload.Identity == nil {
+		return domain.NewConflictError("identity_binding_missing", "credential record lacks verified identity binding")
+	}
+	if err := payload.Identity.ValidateNonEmpty(); err != nil {
+		return domain.NewConflictError("identity_binding_invalid", "credential verified identity binding is incomplete")
+	}
+	if payload.Identity.LogicalID != node.LogicalID || payload.Identity.Protocol != node.Protocol || payload.Identity.Version != node.CredentialVersion {
+		return domain.NewConflictError("identity_binding_invalid", "credential verified identity binding does not match node version")
+	}
+	if !payload.Identity.MatchesEndpoint(node.Protocol, payload.Server, payload.Port) {
+		return domain.NewConflictError("identity_binding_invalid", "credential endpoint does not match verified identity binding")
+	}
+	if strings.TrimSpace(payload.Identity.TransportDigest) == "" {
+		return domain.NewConflictError("identity_binding_invalid", "credential verified identity binding lacks transport digest")
+	}
+	if payload.Credentials.Transport != nil && payload.Identity.TransportDigest != domain.CanonicalTransportDigest(payload.Credentials.Transport) {
+		return domain.NewConflictError("identity_binding_invalid", "credential transport digest does not match verified identity binding")
+	}
+	if strings.HasPrefix(node.LogicalID, "node_") && domain.IsValidLogicalID(node.LogicalID) {
+		idWithTransport := domain.ComputeNodeLogicalID(payload.Protocol, payload.Server, payload.Port, payload.Credentials.Transport)
+		idWithoutTransport := domain.ComputeNodeLogicalID(payload.Protocol, payload.Server, payload.Port, nil)
+		if idWithTransport != node.LogicalID && idWithoutTransport != node.LogicalID {
+			return domain.NewConflictError("identity_binding_invalid", "credential endpoint does not match canonical node logical identity")
+		}
+	}
+	return nil
+}
+
+// UpdateNodeConnectionCommand encapsulates a CAS-protected node connection update and optional secret rotation.
+type UpdateNodeConnectionCommand struct {
+	LogicalID string
+	Patch     domain.NodeConnectionPatchRequest
+	RequestID string
+	ActorKind domain.ActorKind
+}
+
+// UpdateNodeConnection validates and persists non-identity connection edits and write-only secret rotations.
+func (s *Service) UpdateNodeConnection(ctx context.Context, cmd UpdateNodeConnectionCommand) (*NodeDetail, error) {
+	logicalID := strings.TrimSpace(cmd.LogicalID)
+	if logicalID == "" {
+		return nil, domain.NewValidationError("missing_logical_id", "logical_id is required")
+	}
+	if cmd.Patch.ExpectedCredentialVersion < 1 {
+		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "node.connection.update", domain.AuditResultFailure,
+			fmt.Sprintf("rejected node %s connection update: missing expected_credential_version", logicalID))
+		return nil, domain.NewValidationError("missing_expected_credential_version", "expected_credential_version must be >= 1")
+	}
+	if s.vault == nil || s.credRepo == nil || s.db == nil {
+		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "node.connection.update", domain.AuditResultFailure,
+			fmt.Sprintf("rejected node %s connection update: credential vault unavailable", logicalID))
+		return nil, domain.NewConflictError("credential_vault_unavailable", "node credential vault is not configured")
+	}
+
+	s.mu.Lock()
+	var oldVersion, newVersion int
+	var rotatedCount int
+	txErr := sqlite.WithTx(ctx, s.db, func(ctx context.Context, tx *sql.Tx) error {
+		var node domain.Node
+		var activeInt int
+		var createdStr, updatedStr string
+		err := tx.QueryRowContext(ctx, `
+			SELECT logical_id, protocol, display_name, normalized_config_secret_ref, credential_version, active, created_at, updated_at
+			FROM nodes WHERE logical_id = ?;`, logicalID).Scan(
+			&node.LogicalID, &node.Protocol, &node.DisplayName, &node.NormalizedConfigSecretRef,
+			&node.CredentialVersion, &activeInt, &createdStr, &updatedStr,
+		)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return domain.NewNotFoundError("node_not_found", fmt.Sprintf("node %s not found", logicalID))
+			}
+			return fmt.Errorf("failed to query node %s: %w", logicalID, err)
+		}
+		node.Active = activeInt == 1
+		oldVersion = node.CredentialVersion
+		if node.CredentialVersion <= 0 {
+			return domain.NewNotFoundError("node_credential_not_found", "node credentials are unavailable")
+		}
+		if cmd.Patch.ExpectedCredentialVersion != node.CredentialVersion {
+			return domain.NewConflictError("credential_version_conflict",
+				fmt.Sprintf("expected credential version %d does not match current version %d", cmd.Patch.ExpectedCredentialVersion, node.CredentialVersion))
+		}
+
+		var rec domain.NodeCredentialRecord
+		var recCreated, recUpdated string
+		err = tx.QueryRowContext(ctx, `
+			SELECT logical_id, version, key_id, nonce, ciphertext, created_at, updated_at
+			FROM node_credentials WHERE logical_id = ? AND version = ?;`, logicalID, node.CredentialVersion).Scan(
+			&rec.LogicalID, &rec.Version, &rec.KeyID, &rec.Nonce, &rec.Ciphertext, &recCreated, &recUpdated,
+		)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return domain.NewNotFoundError("node_credential_not_found", "node credentials are unavailable")
+			}
+			return fmt.Errorf("failed to query node credentials: %w", err)
+		}
+
+		currentPayload, decErr := s.vault.Decrypt(&rec, node.Protocol)
+		if decErr != nil || currentPayload == nil {
+			return domain.NewSecurityError("credential_decryption_failed", "failed to authenticate or decrypt existing node credentials")
+		}
+		if err := verifyCredentialIdentity(node, currentPayload); err != nil {
+			return err
+		}
+		if err := cmd.Patch.ValidateAgainstBaseline(*currentPayload.Identity, currentPayload); err != nil {
+			return err
+		}
+
+		updatedDisplayName := node.DisplayName
+		if cmd.Patch.DisplayName != nil {
+			trimmed := strings.TrimSpace(*cmd.Patch.DisplayName)
+			if trimmed == "" {
+				return domain.NewValidationError("invalid_display_name", "display_name cannot be empty")
+			}
+			updatedDisplayName = trimmed
+		}
+
+		updatedCreds := currentPayload.Credentials
+		if currentPayload.Credentials.Transport != nil {
+			copiedTransport := make(map[string]string, len(currentPayload.Credentials.Transport))
+			for k, v := range currentPayload.Credentials.Transport {
+				copiedTransport[k] = v
+			}
+			updatedCreds.Transport = copiedTransport
+		}
+		if cmd.Patch.LocalAddress != nil {
+			addrs := make([]string, 0, len(cmd.Patch.LocalAddress))
+			for _, a := range cmd.Patch.LocalAddress {
+				trimmed := strings.TrimSpace(a)
+				if trimmed == "" {
+					continue
+				}
+				prefix, pErr := netip.ParsePrefix(trimmed)
+				if pErr != nil {
+					return domain.NewValidationError("invalid_local_address", "WireGuard local_address must be valid CIDR")
+				}
+				addrs = append(addrs, prefix.String())
+			}
+			if node.Protocol == domain.ProtocolWireGuard && len(addrs) == 0 {
+				return domain.NewValidationError("invalid_local_address", "WireGuard local_address cannot be empty")
+			}
+			updatedCreds.LocalAddress = addrs
+		}
+		if cmd.Patch.PublicKey != nil {
+			pk := strings.TrimSpace(*cmd.Patch.PublicKey)
+			if node.Protocol == domain.ProtocolWireGuard && pk == "" {
+				return domain.NewValidationError("invalid_public_key", "WireGuard public_key cannot be empty")
+			}
+			updatedCreds.PublicKey = pk
+		}
+		if cmd.Patch.Reserved != nil {
+			updatedCreds.Reserved = append([]uint8(nil), cmd.Patch.Reserved...)
+		}
+		if cmd.Patch.MTU != nil {
+			updatedCreds.MTU = *cmd.Patch.MTU
+		}
+		if cmd.Patch.DNS != nil {
+			dnsList := make([]string, 0, len(cmd.Patch.DNS))
+			for _, d := range cmd.Patch.DNS {
+				if td := strings.TrimSpace(d); td != "" {
+					dnsList = append(dnsList, td)
+				}
+			}
+			updatedCreds.DNS = dnsList
+		}
+		if cmd.Patch.UUID != nil {
+			u := strings.TrimSpace(*cmd.Patch.UUID)
+			if (node.Protocol == domain.ProtocolTUIC || node.Protocol == domain.ProtocolVMess || node.Protocol == domain.ProtocolVLESS) && u == "" {
+				return domain.NewValidationError("invalid_uuid", "uuid cannot be empty")
+			}
+			updatedCreds.UUID = u
+		}
+		if cmd.Patch.CongestionControl != nil {
+			cc := strings.TrimSpace(*cmd.Patch.CongestionControl)
+			if node.Protocol == domain.ProtocolTUIC && cc != "" && cc != "bbr" && cc != "cubic" && cc != "new_reno" {
+				return domain.NewValidationError("invalid_congestion_control", "TUIC congestion_control must be bbr, cubic, or new_reno")
+			}
+			updatedCreds.CongestionControl = cc
+		}
+		if cmd.Patch.UDPRelayMode != nil {
+			urm := strings.TrimSpace(*cmd.Patch.UDPRelayMode)
+			if node.Protocol == domain.ProtocolTUIC && urm != "" && urm != "native" && urm != "quic" {
+				return domain.NewValidationError("invalid_udp_relay_mode", "TUIC udp_relay_mode must be native or quic")
+			}
+			updatedCreds.UDPRelayMode = urm
+		}
+		if cmd.Patch.Method != nil {
+			m := strings.TrimSpace(*cmd.Patch.Method)
+			if node.Protocol == domain.ProtocolSS && m == "" {
+				return domain.NewValidationError("invalid_method", "Shadowsocks cipher method cannot be empty")
+			}
+			updatedCreds.Method = m
+		}
+
+		if pkIn := strings.TrimSpace(cmd.Patch.PrivateKeyInput); pkIn != "" {
+			if pkIn == "***" {
+				return domain.NewValidationError("invalid_private_key", "private_key_input must not be a masked placeholder")
+			}
+			updatedCreds.PrivateKey = pkIn
+			rotatedCount++
+		}
+		if pskIn := strings.TrimSpace(cmd.Patch.PreSharedKeyInput); pskIn != "" {
+			if pskIn == "***" {
+				return domain.NewValidationError("invalid_pre_shared_key", "pre_shared_key_input must not be a masked placeholder")
+			}
+			updatedCreds.PreSharedKey = pskIn
+			updatedCreds.PresharedKey = pskIn
+			rotatedCount++
+		}
+		if pwIn := strings.TrimSpace(cmd.Patch.PasswordInput); pwIn != "" {
+			if pwIn == "***" {
+				return domain.NewValidationError("invalid_password", "password_input must not be a masked placeholder")
+			}
+			updatedCreds.Password = pwIn
+			rotatedCount++
+		}
+
+		newVersion = node.CredentialVersion + 1
+		newIdentity := *currentPayload.Identity
+		newIdentity.Version = newVersion
+		newPayload := &domain.NodeCredentialPayload{
+			LogicalID:   node.LogicalID,
+			Protocol:    node.Protocol,
+			Server:      currentPayload.Server,
+			Port:        currentPayload.Port,
+			Version:     newVersion,
+			Digest:      currentPayload.Digest,
+			Identity:    &newIdentity,
+			Credentials: updatedCreds,
+		}
+		newRec, encErr := s.vault.Encrypt(newPayload)
+		if encErr != nil {
+			return encErr
+		}
+
+		nowStr := domain.NowUTC().Format(time.RFC3339)
+		res, err := tx.ExecContext(ctx, `
+			UPDATE nodes
+			SET display_name = ?, credential_version = ?, updated_at = ?
+			WHERE logical_id = ? AND credential_version = ?;`,
+			updatedDisplayName, newVersion, nowStr, node.LogicalID, node.CredentialVersion,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to update node %s: %w", node.LogicalID, err)
+		}
+		if rows, _ := res.RowsAffected(); rows != 1 {
+			return domain.NewConflictError("credential_version_conflict", "concurrent credential version update detected")
+		}
+
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO node_credentials (logical_id, version, key_id, nonce, ciphertext, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?);`,
+			newRec.LogicalID, newRec.Version, newRec.KeyID, newRec.Nonce, newRec.Ciphertext, nowStr, nowStr,
+		); err != nil {
+			return fmt.Errorf("failed to insert rotated credential for node %s: %w", node.LogicalID, err)
+		}
+		return nil
+	})
+	s.mu.Unlock()
+
+	if txErr != nil {
+		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "node.connection.update", domain.AuditResultFailure,
+			fmt.Sprintf("failed to update node %s connection: %s", logicalID, domain.RedactSensitiveInfo(txErr.Error())))
+		return nil, txErr
+	}
+
+	s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "node.connection.update", domain.AuditResultSuccess,
+		fmt.Sprintf("updated node %s connection from v%d to v%d (rotated_secrets=%d)", logicalID, oldVersion, newVersion, rotatedCount))
+
+	return s.GetNodeDetailWithRisk(ctx, logicalID, "")
+}
+
+func (s *Service) recordAudit(ctx context.Context, actorKind domain.ActorKind, requestID, action string, result domain.AuditResult, summary string) {
+	if s.auditRepo == nil {
+		return
+	}
+	id, err := domain.NewUUIDv7()
+	if err != nil {
+		return
+	}
+	if actorKind == "" {
+		actorKind = domain.ActorKindAdmin
+	}
+	_ = s.auditRepo.Record(ctx, &domain.AuditEvent{
+		ID:              id,
+		ActorKind:       actorKind,
+		RequestID:       requestID,
+		Action:          action,
+		Result:          result,
+		RedactedSummary: domain.RedactSensitiveInfo(summary),
+		CreatedAt:       domain.NowUTC(),
+	})
 }

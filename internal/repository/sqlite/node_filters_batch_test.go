@@ -56,8 +56,8 @@ func TestNodeFilterRepository_BatchAndTransactionConsistency(t *testing.T) {
 	}
 	for _, nid := range nodeIDs[:5] {
 		err := sourceRepo.Upsert(ctx, &domain.NodeSource{
-			NodeLogicalID:    nid,
-			SubscriptionID:   subID,
+			NodeLogicalID:   nid,
+			SubscriptionID:  subID,
 			LastSeenFetchID: "fetch-1",
 		})
 		if err != nil {

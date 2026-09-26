@@ -50,6 +50,7 @@ type SetGlobalNodeFilterCommand struct {
 	RequestID string                `json:"request_id,omitempty"`
 	ActorKind domain.ActorKind      `json:"actor_kind,omitempty"`
 }
+
 // SetGroupEdgesCommand defines parameters for setting all edges of a group.
 type SetGroupEdgesCommand struct {
 	ParentGroupID string           `json:"parent_group_id"`

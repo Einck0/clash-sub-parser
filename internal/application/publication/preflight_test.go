@@ -169,15 +169,21 @@ func makeTestObservation(nodeID string, score, confidence int) domain.IPRiskObse
 }
 
 func buildSnapshotWithValidNodes(hkID, usID string) *resolver.ResolvedPolicySnapshot {
+	hkIdentity := domain.NewVerifiedNodeIdentity(hkID, domain.ProtocolTrojan, "hk.example.com", 443, 1, nil)
+	usIdentity := domain.NewVerifiedNodeIdentity(usID, domain.ProtocolSS, "us.example.com", 8388, 1, nil)
 	nodes := []resolver.ResolvedNode{
-		{LogicalID: hkID, DisplayName: "Hong Kong 01", Protocol: domain.ProtocolTrojan, Active: true, Position: 0},
-		{LogicalID: usID, DisplayName: "United States 01", Protocol: domain.ProtocolSS, Active: true, Position: 1},
+		{LogicalID: hkID, DisplayName: "Hong Kong 01", Protocol: domain.ProtocolTrojan, Active: true, Position: 0, CredentialVersion: 1, Identity: &hkIdentity},
+		{LogicalID: usID, DisplayName: "United States 01", Protocol: domain.ProtocolSS, Active: true, Position: 1, CredentialVersion: 1, Identity: &usIdentity},
 	}
 	groups := []resolver.ResolvedGroup{
 		{
-			ID:                "group-select",
-			Name:              "ProxySelect",
-			GroupType:         domain.GroupTypeSelect,
+			ID:        "group-select",
+			Name:      "ProxySelect",
+			GroupType: domain.GroupTypeSelect,
+			Members: []resolver.ResolvedGroupMember{
+				{Kind: resolver.MemberKindNode, TargetID: hkID, DisplayName: "Hong Kong 01", Position: 0},
+				{Kind: resolver.MemberKindNode, TargetID: usID, DisplayName: "United States 01", Position: 1},
+			},
 			NodeLogicalIDs:    []string{hkID, usID},
 			AllNodeLogicalIDs: []string{hkID, usID},
 			Position:          0,
@@ -203,13 +209,50 @@ func buildSnapshotWithValidNodes(hkID, usID string) *resolver.ResolvedPolicySnap
 	}
 }
 
+func setupValidNodesVault(hkID, usID string) (*domain.NodeCredentialVault, *mockCredentialRepo, *mockNodeRepo) {
+	masterKey := []byte("01234567890123456789012345678901")
+	vault, _ := domain.NewNodeCredentialVault("k1", map[string][]byte{"k1": masterKey})
+	credRepo := newMockCredentialRepo()
+	nodeRepo := newMockNodeRepo()
+	now := time.Now().UTC()
+
+	hkIdentity := domain.NewVerifiedNodeIdentity(hkID, domain.ProtocolTrojan, "hk.example.com", 443, 1, nil)
+	usIdentity := domain.NewVerifiedNodeIdentity(usID, domain.ProtocolSS, "us.example.com", 8388, 1, nil)
+
+	_ = nodeRepo.UpsertBatch(context.Background(), []domain.Node{
+		{LogicalID: hkID, Protocol: domain.ProtocolTrojan, DisplayName: "Hong Kong 01", CredentialVersion: 1, Identity: &hkIdentity, Active: true, CreatedAt: now, UpdatedAt: now},
+		{LogicalID: usID, Protocol: domain.ProtocolSS, DisplayName: "United States 01", CredentialVersion: 1, Identity: &usIdentity, Active: true, CreatedAt: now, UpdatedAt: now},
+	})
+	hkRec, _ := vault.Encrypt(&domain.NodeCredentialPayload{
+		LogicalID:   hkID,
+		Protocol:    domain.ProtocolTrojan,
+		Server:      "hk.example.com",
+		Port:        443,
+		Version:     1,
+		Identity:    &hkIdentity,
+		Credentials: domain.InboundProtocolCredential{Password: "hk-trojan-pass"},
+	})
+	usRec, _ := vault.Encrypt(&domain.NodeCredentialPayload{
+		LogicalID:   usID,
+		Protocol:    domain.ProtocolSS,
+		Server:      "us.example.com",
+		Port:        8388,
+		Version:     1,
+		Identity:    &usIdentity,
+		Credentials: domain.InboundProtocolCredential{Method: "aes-256-gcm", Password: "us-ss-pass"},
+	})
+	_ = credRepo.Upsert(context.Background(), hkRec)
+	_ = credRepo.Upsert(context.Background(), usRec)
+	return vault, credRepo, nodeRepo
+}
+
 func TestPreflightStandaloneDiagnosticAllowed(t *testing.T) {
 	svc, _, _ := setupService()
 	ctx := context.Background()
 	snap := buildSampleSnapshot()
 
 	cmd := publication.PreflightCommand{
-		Target:   domain.TargetClash,
+		Target:   domain.TargetSingBox,
 		Snapshot: snap,
 	}
 
@@ -238,7 +281,7 @@ func TestPreflightStandaloneDiagnosticRejection(t *testing.T) {
 	}}
 
 	cmd := publication.PreflightCommand{
-		Target:   domain.TargetClash,
+		Target:   domain.TargetSingBox,
 		Snapshot: snap,
 	}
 
@@ -287,7 +330,7 @@ func TestPreflightRecomputesRiskAndBlocksHighRiskNode(t *testing.T) {
 
 	// 1. Preflight diagnostic check should catch that hkID is recomputed as blocked
 	preflightRes, err := svc.Preflight(ctx, publication.PreflightCommand{
-		Target:   domain.TargetClash,
+		Target:   domain.TargetSingBox,
 		Snapshot: snap,
 	})
 	if err != nil {
@@ -309,7 +352,7 @@ func TestPreflightRecomputesRiskAndBlocksHighRiskNode(t *testing.T) {
 
 	// 2. Publish must also be intercepted with a conflict error
 	_, err = svc.Publish(ctx, publication.PublishCommand{
-		Target:    domain.TargetClash,
+		Target:    domain.TargetSingBox,
 		Snapshot:  snap,
 		ActorKind: domain.ActorKindAdmin,
 		RequestID: "req-blocked-node",
@@ -360,10 +403,13 @@ func TestPreflightRecomputationAllowsReviewWhenConfigured(t *testing.T) {
 	_ = riskObsRepo.Create(context.Background(), &obs)
 
 	ipriskSvc := iprisk.NewService(riskObsRepo, riskPolicyRepo)
+	vault, credRepo, nodeRepo := setupValidNodesVault(hkID, usID)
 
 	svc := publication.NewService(
 		pubRepo,
 		auditRepo,
+		publication.WithNodeRepository(nodeRepo),
+		publication.WithCredentialSource(vault, credRepo),
 		publication.WithIPRiskService(ipriskSvc),
 		publication.WithRiskPolicyRepository(riskPolicyRepo),
 		publication.WithRiskObservationRepository(riskObsRepo),
@@ -375,7 +421,7 @@ func TestPreflightRecomputationAllowsReviewWhenConfigured(t *testing.T) {
 
 	// Preflight should allow because reviewAction is allow
 	preflightRes, err := svc.Preflight(ctx, publication.PreflightCommand{
-		Target:   domain.TargetClash,
+		Target:   domain.TargetSingBox,
 		Snapshot: snap,
 	})
 	if err != nil {
@@ -387,7 +433,7 @@ func TestPreflightRecomputationAllowsReviewWhenConfigured(t *testing.T) {
 
 	// Publish should succeed
 	pubRes, err := svc.Publish(ctx, publication.PublishCommand{
-		Target:    domain.TargetClash,
+		Target:    domain.TargetSingBox,
 		Snapshot:  snap,
 		ActorKind: domain.ActorKindAdmin,
 		RequestID: "req-review-allowed",
@@ -422,10 +468,13 @@ func TestExistingPublicationImmutableToSubsequentRiskObservations(t *testing.T) 
 	_ = riskObsRepo.Create(context.Background(), &obsUS)
 
 	ipriskSvc := iprisk.NewService(riskObsRepo, riskPolicyRepo)
+	vault, credRepo, nodeRepo := setupValidNodesVault(hkID, usID)
 
 	svc := publication.NewService(
 		pubRepo,
 		auditRepo,
+		publication.WithNodeRepository(nodeRepo),
+		publication.WithCredentialSource(vault, credRepo),
 		publication.WithIPRiskService(ipriskSvc),
 		publication.WithRiskPolicyRepository(riskPolicyRepo),
 		publication.WithRiskObservationRepository(riskObsRepo),
@@ -437,7 +486,7 @@ func TestExistingPublicationImmutableToSubsequentRiskObservations(t *testing.T) 
 
 	// 1. First publication succeeds
 	pubRes1, err := svc.Publish(ctx, publication.PublishCommand{
-		Target:    domain.TargetClash,
+		Target:    domain.TargetSingBox,
 		Snapshot:  snap,
 		ActorKind: domain.ActorKindAdmin,
 		RequestID: "req-initial-pub",
@@ -475,7 +524,7 @@ func TestExistingPublicationImmutableToSubsequentRiskObservations(t *testing.T) 
 
 	// 5. Creating a NEW publication now MUST be intercepted by preflight!
 	_, err = svc.Publish(ctx, publication.PublishCommand{
-		Target:    domain.TargetClash,
+		Target:    domain.TargetSingBox,
 		Snapshot:  snap,
 		ActorKind: domain.ActorKindAdmin,
 		RequestID: "req-second-pub",
@@ -515,7 +564,7 @@ func TestPreflight_BlocksEmptyRoutedGroup(t *testing.T) {
 	}
 
 	preRes, err := svc.Preflight(ctx, publication.PreflightCommand{
-		Target:   domain.TargetClash,
+		Target:   domain.TargetSingBox,
 		Snapshot: snap,
 	})
 	if err != nil {
@@ -544,7 +593,7 @@ func TestPublish_BlocksEmptyRoutedGroup(t *testing.T) {
 	}
 
 	_, err := svc.Publish(ctx, publication.PublishCommand{
-		Target:    domain.TargetClash,
+		Target:    domain.TargetSingBox,
 		Snapshot:  snap,
 		ActorKind: domain.ActorKindAdmin,
 		RequestID: "req-blocked-pub",

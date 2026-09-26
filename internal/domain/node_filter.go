@@ -265,11 +265,6 @@ func MatchesCondition(c FilterCondition, node Node, sources []NodeSource, latest
 			return false, fmt.Sprintf("no %s probe observation available", *c.ProbeKind)
 		}
 
-		// Fail-closed if credential version is unversioned/unknown or mismatched
-		if !obs.HasValidCredentialVersion(node.CredentialVersion) {
-			return false, fmt.Sprintf("observation credential version mismatch (node=%d)", node.CredentialVersion)
-		}
-
 		// Freshness check: default 86400s (24h) if not specified
 		freshnessSec := 86400
 		if c.FreshnessSeconds != nil && *c.FreshnessSeconds > 0 {

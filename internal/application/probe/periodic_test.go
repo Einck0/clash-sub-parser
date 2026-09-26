@@ -252,19 +252,17 @@ func TestPeriodicCoordinator_TriggerWindow_ShardingAndCounts(t *testing.T) {
 	runRepo := &memoryRuns{items: make(map[string]domain.ProbeRun)}
 	runner := &mockRunner{}
 
-	// Setup 5 nodes:
-	// 3 nodes with CredentialVersion > 0 (eligible)
-	// 2 nodes with CredentialVersion = 0 (fail-closed skip)
+	// Setup 5 active nodes (all eligible without credential version gate)
 	nodes := []domain.Node{
-		{LogicalID: "node-1", DisplayName: "Node 1", Active: true, CredentialVersion: 1},
-		{LogicalID: "node-2", DisplayName: "Node 2", Active: true, CredentialVersion: 0}, // skipped
-		{LogicalID: "node-3", DisplayName: "Node 3", Active: true, CredentialVersion: 2},
-		{LogicalID: "node-4", DisplayName: "Node 4", Active: true, CredentialVersion: -1}, // skipped
-		{LogicalID: "node-5", DisplayName: "Node 5", Active: true, CredentialVersion: 1},
+		{LogicalID: "node-1", DisplayName: "Node 1", Active: true},
+		{LogicalID: "node-2", DisplayName: "Node 2", Active: true},
+		{LogicalID: "node-3", DisplayName: "Node 3", Active: true},
+		{LogicalID: "node-4", DisplayName: "Node 4", Active: true},
+		{LogicalID: "node-5", DisplayName: "Node 5", Active: true},
 	}
 	nodeRepo := &memoryNodeRepo{nodes: nodes}
 
-	// Set maxTasksPerRun = 2, so 3 eligible nodes will be sharded into 2 runs: [2 nodes] + [1 node]
+	// Set maxTasksPerRun = 2, so 5 active nodes will be sharded into 3 runs: [2 nodes] + [2 nodes] + [1 node]
 	coord := NewPeriodicCoordinator(
 		schedRepo,
 		nodeRepo,
@@ -292,24 +290,24 @@ func TestPeriodicCoordinator_TriggerWindow_ShardingAndCounts(t *testing.T) {
 	if b.Counts.TotalNodes != 5 {
 		t.Fatalf("expected total_nodes 5, got %d", b.Counts.TotalNodes)
 	}
-	if b.Counts.SkippedNodes != 2 {
-		t.Fatalf("expected skipped_nodes 2, got %d", b.Counts.SkippedNodes)
+	if b.Counts.SkippedNodes != 0 {
+		t.Fatalf("expected skipped_nodes 0, got %d", b.Counts.SkippedNodes)
 	}
-	if b.Counts.DispatchedRuns != 2 {
-		t.Fatalf("expected dispatched_runs 2, got %d", b.Counts.DispatchedRuns)
+	if b.Counts.DispatchedRuns != 3 {
+		t.Fatalf("expected dispatched_runs 3, got %d", b.Counts.DispatchedRuns)
 	}
-	if b.Counts.CompletedRuns != 2 {
-		t.Fatalf("expected completed_runs 2, got %d", b.Counts.CompletedRuns)
+	if b.Counts.CompletedRuns != 3 {
+		t.Fatalf("expected completed_runs 3, got %d", b.Counts.CompletedRuns)
 	}
-	if len(b.RunIDs) != 2 {
-		t.Fatalf("expected 2 run IDs in batch, got %d", len(b.RunIDs))
+	if len(b.RunIDs) != 3 {
+		t.Fatalf("expected 3 run IDs in batch, got %d", len(b.RunIDs))
 	}
 
-	// Verify runner executed 2 runs
+	// Verify runner executed 3 runs
 	runner.mu.Lock()
 	defer runner.mu.Unlock()
-	if len(runner.executedRuns) != 2 {
-		t.Fatalf("expected 2 executed runs, got %d", len(runner.executedRuns))
+	if len(runner.executedRuns) != 3 {
+		t.Fatalf("expected 3 executed runs, got %d", len(runner.executedRuns))
 	}
 }
 
@@ -367,7 +365,7 @@ func TestPeriodicCoordinator_MultiInstanceCASContention(t *testing.T) {
 
 	sharedSchedRepo := newMemoryScheduleRepo(sched)
 	sharedNodeRepo := &memoryNodeRepo{nodes: []domain.Node{
-		{LogicalID: "n1", DisplayName: "N1", Active: true, CredentialVersion: 1},
+		{LogicalID: "n1", DisplayName: "N1", Active: true},
 	}}
 	sharedRunRepo := &memoryRuns{items: make(map[string]domain.ProbeRun)}
 	runner := &mockRunner{}
@@ -491,7 +489,7 @@ func TestPeriodicCoordinator_StartupRecovery(t *testing.T) {
 	}
 }
 
-func TestObservationCredentialVersionWritten(t *testing.T) {
+func TestObservationWrittenForActiveNode(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
 
@@ -509,7 +507,7 @@ func TestObservationCredentialVersionWritten(t *testing.T) {
 
 	nodeRepo := &memoryNodeRepo{
 		nodes: []domain.Node{
-			{LogicalID: "node-v3", DisplayName: "Node V3", Active: true, CredentialVersion: 3},
+			{LogicalID: "node-v3", DisplayName: "Node V3", Active: true},
 		},
 	}
 
@@ -532,7 +530,7 @@ func TestObservationCredentialVersionWritten(t *testing.T) {
 
 	run := &domain.ProbeRun{
 		ID:             domain.MustNewUUIDv7(),
-		IdempotencyKey: "test-cred-ver",
+		IdempotencyKey: "test-obs",
 		ActorScope:     "test",
 		State:          domain.ProbeRunStateQueued,
 		DeadlineAt:     now.Add(time.Minute),
@@ -550,13 +548,8 @@ func TestObservationCredentialVersionWritten(t *testing.T) {
 	if len(recordedObs) != 1 {
 		t.Fatalf("expected 1 recorded observation, got %d", len(recordedObs))
 	}
-
-	obs := recordedObs[0]
-	if obs.CredentialVersion == nil {
-		t.Fatalf("expected CredentialVersion to be non-nil, got nil")
-	}
-	if *obs.CredentialVersion != 3 {
-		t.Fatalf("expected CredentialVersion=3, got %d", *obs.CredentialVersion)
+	if recordedObs[0].NodeLogicalID != "node-v3" {
+		t.Fatalf("expected NodeLogicalID=node-v3, got %s", recordedObs[0].NodeLogicalID)
 	}
 }
 
@@ -603,10 +596,9 @@ func TestPeriodicCoordinator_LargeInventoryPagination(t *testing.T) {
 	nodes := make([]domain.Node, 250)
 	for i := 0; i < 250; i++ {
 		nodes[i] = domain.Node{
-			LogicalID:         fmt.Sprintf("node-%03d", i),
-			DisplayName:       fmt.Sprintf("Node %d", i),
-			Active:            true,
-			CredentialVersion: 1,
+			LogicalID:   fmt.Sprintf("node-%03d", i),
+			DisplayName: fmt.Sprintf("Node %d", i),
+			Active:      true,
 		}
 	}
 	nodeRepo := &memoryNodeRepo{nodes: nodes}
@@ -669,8 +661,8 @@ func TestPeriodicCoordinator_CrashTakeoverIdempotency(t *testing.T) {
 	runner := &mockRunner{}
 
 	nodes := []domain.Node{
-		{LogicalID: "node-1", DisplayName: "Node 1", Active: true, CredentialVersion: 1},
-		{LogicalID: "node-2", DisplayName: "Node 2", Active: true, CredentialVersion: 1},
+		{LogicalID: "node-1", DisplayName: "Node 1", Active: true},
+		{LogicalID: "node-2", DisplayName: "Node 2", Active: true},
 	}
 	nodeRepo := &memoryNodeRepo{nodes: nodes}
 

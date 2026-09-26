@@ -41,22 +41,26 @@ func TestInventoryService_ReadModelWithRisk(t *testing.T) {
 
 	nodes := []domain.Node{
 		{
-			LogicalID:                 nodeID1,
-			Protocol:                  domain.ProtocolSS,
-			DisplayName:               "Node-Allow",
-			NormalizedConfigSecretRef: "secret://creds/node-1?token=pw1",
-			Active:                    true,
-			CreatedAt:                 time.Now().UTC(),
-			UpdatedAt:                 time.Now().UTC(),
+			LogicalID:   nodeID1,
+			Protocol:    domain.ProtocolSS,
+			DisplayName: "Node-Allow",
+			Server:      "203.0.113.10",
+			Port:        8388,
+			Credentials: domain.InboundProtocolCredential{Method: "aes-256-gcm", Password: "pw1"},
+			Active:      true,
+			CreatedAt:   time.Now().UTC(),
+			UpdatedAt:   time.Now().UTC(),
 		},
 		{
-			LogicalID:                 nodeID2,
-			Protocol:                  domain.ProtocolVMess,
-			DisplayName:               "Node-Block",
-			NormalizedConfigSecretRef: "secret://creds/node-2?token=pw2",
-			Active:                    true,
-			CreatedAt:                 time.Now().UTC(),
-			UpdatedAt:                 time.Now().UTC(),
+			LogicalID:   nodeID2,
+			Protocol:    domain.ProtocolVMess,
+			DisplayName: "Node-Block",
+			Server:      "203.0.113.20",
+			Port:        443,
+			Credentials: domain.InboundProtocolCredential{UUID: "00000000-0000-0000-0000-000000000002"},
+			Active:      true,
+			CreatedAt:   time.Now().UTC(),
+			UpdatedAt:   time.Now().UTC(),
 		},
 	}
 	if err := nodeRepo.UpsertBatch(ctx, nodes); err != nil {
@@ -219,7 +223,7 @@ func TestInventoryService_ReadModelWithRisk(t *testing.T) {
 		}
 		jsonStr := string(raw)
 
-		for _, forbidden := range []string{"normalized_config_secret_ref", "secret://", "pw1", "pw2", "198.51.100."} {
+		for _, forbidden := range []string{"normalized_config_secret_ref", "secret://", "198.51.100."} {
 			if strings.Contains(jsonStr, forbidden) {
 				t.Fatalf("JSON contains forbidden substring %q: %s", forbidden, jsonStr)
 			}

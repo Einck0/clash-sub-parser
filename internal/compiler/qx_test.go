@@ -20,7 +20,7 @@ func TestQuantumultXGoldenFixture(t *testing.T) {
 	assertTargetGoldenFixture(t, domain.TargetQuantumultX)
 
 	ctx := context.Background()
-	res, err := compiler.Compile(ctx, fixtureSnapshot(), domain.TargetQuantumultX, compiler.WithCredentials(fixtureCredentials()))
+	res, err := compiler.Compile(ctx, fixtureSnapshot(), domain.TargetQuantumultX)
 	if err != nil {
 		t.Fatalf("compile QuantumultX failed: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestQuantumultXGoldenFixture(t *testing.T) {
 }
 
 func TestQuantumultXOutputFormat(t *testing.T) {
-	qxRes, err := compiler.Compile(context.Background(), fixtureSnapshot(), domain.TargetQuantumultX, compiler.WithCredentials(fixtureCredentials()))
+	qxRes, err := compiler.Compile(context.Background(), fixtureSnapshot(), domain.TargetQuantumultX)
 	if err != nil {
 		t.Fatalf("compile QuantumultX failed: %v", err)
 	}
@@ -74,13 +74,135 @@ func TestQuantumultXSupportedProtocolsAndRules(t *testing.T) {
 		SnapshotDigest:  "snap-qx-full",
 		CompilerVersion: "1.0.0",
 		Nodes: []resolver.ResolvedNode{
-			{LogicalID: "node-ss-tcp", DisplayName: "SS-TCP", Protocol: domain.ProtocolSS, Active: true, Position: 0},
-			{LogicalID: "node-ss-obfs", DisplayName: "SS-Obfs", Protocol: domain.ProtocolSS, Active: true, Position: 1},
-			{LogicalID: "node-ss-wss", DisplayName: "SS-WSS", Protocol: domain.ProtocolSS, Active: true, Position: 2},
-			{LogicalID: "node-vmess-tls", DisplayName: "VMess-TLS", Protocol: domain.ProtocolVMess, Active: true, Position: 3},
-			{LogicalID: "node-vmess-wss", DisplayName: "VMess-WSS", Protocol: domain.ProtocolVMess, Active: true, Position: 4},
-			{LogicalID: "node-trojan-tcp", DisplayName: "Trojan-TCP", Protocol: domain.ProtocolTrojan, Active: true, Position: 5},
-			{LogicalID: "node-trojan-wss", DisplayName: "Trojan-WSS", Protocol: domain.ProtocolTrojan, Active: true, Position: 6},
+			{
+				LogicalID:   "node-ss-tcp",
+				DisplayName: "SS-TCP",
+				Protocol:    domain.ProtocolSS,
+				Server:      "198.51.100.10",
+				Port:        8388,
+				Credentials: domain.InboundProtocolCredential{
+					Method:   "2022-blake3-aes-128-gcm",
+					Password: "ss-tcp-password",
+				},
+				Active:   true,
+				Position: 0,
+			},
+			{
+				LogicalID:   "node-ss-obfs",
+				DisplayName: "SS-Obfs",
+				Protocol:    domain.ProtocolSS,
+				Server:      "198.51.100.11",
+				Port:        8080,
+				Credentials: domain.InboundProtocolCredential{
+					Method:   "chacha20-ietf-poly1305",
+					Password: "ss-obfs-password",
+					Transport: map[string]string{
+						"network": "tcp",
+						"obfs":    "http",
+						"host":    "cdn.example.com",
+						"path":    "/download",
+					},
+				},
+				Active:   true,
+				Position: 1,
+			},
+			{
+				LogicalID:   "node-ss-wss",
+				DisplayName: "SS-WSS",
+				Protocol:    domain.ProtocolSS,
+				Server:      "198.51.100.12",
+				Port:        8443,
+				Credentials: domain.InboundProtocolCredential{
+					Method:   "aes-256-gcm",
+					Password: "ss-wss-password",
+					Transport: map[string]string{
+						"network":          "ws",
+						"tls":              "true",
+						"host":             "ws.example.com",
+						"sni":              "sni.example.com",
+						"path":             "/ss-ws",
+						"skip_cert_verify": "true",
+					},
+				},
+				Active:   true,
+				Position: 2,
+			},
+			{
+				LogicalID:   "node-vmess-tls",
+				DisplayName: "VMess-TLS",
+				Protocol:    domain.ProtocolVMess,
+				Server:      "198.51.100.20",
+				Port:        443,
+				Credentials: domain.InboundProtocolCredential{
+					UUID:   "11111111-2222-3333-4444-555555555555",
+					Method: "aes-128-gcm",
+					Transport: map[string]string{
+						"network":          "tcp",
+						"tls":              "true",
+						"sni":              "vmess-tls.example.com",
+						"skip_cert_verify": "true",
+					},
+				},
+				Active:   true,
+				Position: 3,
+			},
+			{
+				LogicalID:   "node-vmess-wss",
+				DisplayName: "VMess-WSS",
+				Protocol:    domain.ProtocolVMess,
+				Server:      "2001:db8::21",
+				Port:        2053,
+				Credentials: domain.InboundProtocolCredential{
+					UUID:   "66666666-7777-8888-9999-000000000000",
+					Method: "chacha20-poly1305",
+					Transport: map[string]string{
+						"network": "ws",
+						"tls":     "true",
+						"host":    "vmess-ws.example.com",
+						"path":    "/ws-path",
+					},
+				},
+				Active:   true,
+				Position: 4,
+			},
+			{
+				LogicalID:   "node-trojan-tcp",
+				DisplayName: "Trojan-TCP",
+				Protocol:    domain.ProtocolTrojan,
+				Server:      "trojan.example.com",
+				Port:        443,
+				Credentials: domain.InboundProtocolCredential{
+					Password: "trojan-tcp-password",
+					Transport: map[string]string{
+						"network": "tcp",
+						"tls":     "true",
+						"sni":     "trojan.example.com",
+						"alpn":    "h2,http/1.1",
+					},
+				},
+				Active:   true,
+				Position: 5,
+			},
+			{
+				LogicalID:   "node-trojan-wss",
+				DisplayName: "Trojan-WSS",
+				Protocol:    domain.ProtocolTrojan,
+				Server:      "198.51.100.31",
+				Port:        9443,
+				Credentials: domain.InboundProtocolCredential{
+					Password: "trojan-wss-password",
+					Transport: map[string]string{
+						"network":          "ws",
+						"tls":              "true",
+						"host":             "trojan-cdn.example.com",
+						"sni":              "trojan-sni.example.com",
+						"path":             "/trojan-ws",
+						"skip_cert_verify": "true",
+					},
+				},
+				Active:   true,
+				Position: 6,
+			},
 		},
 		Groups: []resolver.ResolvedGroup{
 			{
@@ -120,125 +242,7 @@ func TestQuantumultXSupportedProtocolsAndRules(t *testing.T) {
 		},
 	}
 
-	creds := map[string]*domain.NodeCredentialPayload{
-		"node-ss-tcp": {
-			LogicalID: "node-ss-tcp",
-			Protocol:  domain.ProtocolSS,
-			Server:    "198.51.100.10",
-			Port:      8388,
-			Version:   1,
-			Credentials: domain.InboundProtocolCredential{
-				Method:   "2022-blake3-aes-128-gcm",
-				Password: "ss-tcp-password",
-			},
-		},
-		"node-ss-obfs": {
-			LogicalID: "node-ss-obfs",
-			Protocol:  domain.ProtocolSS,
-			Server:    "198.51.100.11",
-			Port:      8080,
-			Version:   1,
-			Credentials: domain.InboundProtocolCredential{
-				Method:   "chacha20-ietf-poly1305",
-				Password: "ss-obfs-password",
-				Transport: map[string]string{
-					"network": "tcp",
-					"obfs":    "http",
-					"host":    "cdn.example.com",
-					"path":    "/download",
-				},
-			},
-		},
-		"node-ss-wss": {
-			LogicalID: "node-ss-wss",
-			Protocol:  domain.ProtocolSS,
-			Server:    "198.51.100.12",
-			Port:      8443,
-			Version:   1,
-			Credentials: domain.InboundProtocolCredential{
-				Method:   "aes-256-gcm",
-				Password: "ss-wss-password",
-				Transport: map[string]string{
-					"network":          "ws",
-					"tls":              "true",
-					"host":             "ws.example.com",
-					"sni":              "sni.example.com",
-					"path":             "/ss-ws",
-					"skip_cert_verify": "true",
-				},
-			},
-		},
-		"node-vmess-tls": {
-			LogicalID: "node-vmess-tls",
-			Protocol:  domain.ProtocolVMess,
-			Server:    "198.51.100.20",
-			Port:      443,
-			Version:   1,
-			Credentials: domain.InboundProtocolCredential{
-				UUID:   "11111111-2222-3333-4444-555555555555",
-				Method: "aes-128-gcm",
-				Transport: map[string]string{
-					"network":          "tcp",
-					"tls":              "true",
-					"sni":              "vmess-tls.example.com",
-					"skip_cert_verify": "true",
-				},
-			},
-		},
-		"node-vmess-wss": {
-			LogicalID: "node-vmess-wss",
-			Protocol:  domain.ProtocolVMess,
-			Server:    "2001:db8::21",
-			Port:      2053,
-			Version:   1,
-			Credentials: domain.InboundProtocolCredential{
-				UUID:   "66666666-7777-8888-9999-000000000000",
-				Method: "chacha20-poly1305",
-				Transport: map[string]string{
-					"network": "ws",
-					"tls":     "true",
-					"host":    "vmess-ws.example.com",
-					"path":    "/ws-path",
-				},
-			},
-		},
-		"node-trojan-tcp": {
-			LogicalID: "node-trojan-tcp",
-			Protocol:  domain.ProtocolTrojan,
-			Server:    "trojan.example.com",
-			Port:      443,
-			Version:   1,
-			Credentials: domain.InboundProtocolCredential{
-				Password: "trojan-tcp-password",
-				Transport: map[string]string{
-					"network": "tcp",
-					"tls":     "true",
-					"sni":     "trojan.example.com",
-					"alpn":    "h2,http/1.1",
-				},
-			},
-		},
-		"node-trojan-wss": {
-			LogicalID: "node-trojan-wss",
-			Protocol:  domain.ProtocolTrojan,
-			Server:    "198.51.100.31",
-			Port:      9443,
-			Version:   1,
-			Credentials: domain.InboundProtocolCredential{
-				Password: "trojan-wss-password",
-				Transport: map[string]string{
-					"network":          "ws",
-					"tls":              "true",
-					"host":             "trojan-cdn.example.com",
-					"sni":              "trojan-sni.example.com",
-					"path":             "/trojan-ws",
-					"skip_cert_verify": "true",
-				},
-			},
-		},
-	}
-
-	res, err := compiler.Compile(ctx, snapshot, domain.TargetQuantumultX, compiler.WithCredentials(creds))
+	res, err := compiler.Compile(ctx, snapshot, domain.TargetQuantumultX)
 	if err != nil {
 		t.Fatalf("expected QuantumultX full supported compile to succeed, got: %v", err)
 	}
@@ -281,7 +285,7 @@ func TestQuantumultXRejectsProcessNameRule(t *testing.T) {
 		Position:        2,
 	})
 
-	_, err := compiler.Compile(context.Background(), snapshot, domain.TargetQuantumultX, compiler.WithCredentials(fixtureCredentials()))
+	_, err := compiler.Compile(context.Background(), snapshot, domain.TargetQuantumultX)
 	if err == nil {
 		t.Fatal("expected Quantumult-X to reject PROCESS-NAME")
 	}
@@ -307,7 +311,7 @@ func TestQuantumultXRejectsUnsupportedCapabilitiesAndTransports(t *testing.T) {
 		for _, proto := range unsupported {
 			snap := fixtureSnapshot()
 			snap.Nodes[0].Protocol = proto
-			_, err := compiler.Compile(ctx, snap, domain.TargetQuantumultX, compiler.WithCredentials(fixtureCredentials()))
+			_, err := compiler.Compile(ctx, snap, domain.TargetQuantumultX)
 			if err == nil {
 				t.Fatalf("expected QuantumultX to reject protocol %s", proto)
 			}
@@ -330,7 +334,7 @@ func TestQuantumultXRejectsUnsupportedCapabilitiesAndTransports(t *testing.T) {
 		for _, gt := range unsupportedGroups {
 			snap := fixtureSnapshot()
 			snap.Groups[0].GroupType = gt
-			_, err := compiler.Compile(ctx, snap, domain.TargetQuantumultX, compiler.WithCredentials(fixtureCredentials()))
+			_, err := compiler.Compile(ctx, snap, domain.TargetQuantumultX)
 			if err == nil {
 				t.Fatalf("expected QuantumultX to reject group type %s", gt)
 			}
@@ -371,7 +375,7 @@ func TestQuantumultXRejectsUnsupportedCapabilitiesAndTransports(t *testing.T) {
 				snap.Rules = []resolver.ResolvedRule{
 					{ID: "r-test", TargetGroupID: targetID, TargetGroupName: tc.targetGroup, Expression: tc.expr, Position: 0},
 				}
-				_, err := compiler.Compile(ctx, snap, domain.TargetQuantumultX, compiler.WithCredentials(fixtureCredentials()))
+				_, err := compiler.Compile(ctx, snap, domain.TargetQuantumultX)
 				if err == nil {
 					t.Fatalf("expected error for %s (%q)", tc.name, tc.expr)
 				}
@@ -391,7 +395,7 @@ func TestQuantumultXRejectsUnsupportedCapabilitiesAndTransports(t *testing.T) {
 				{ID: "r-match-first", TargetGroupID: snap.Groups[0].ID, TargetGroupName: "proxy", Expression: "MATCH", Position: 0, IsTerminal: true},
 				{ID: "r-after-match", TargetGroupID: snap.Groups[0].ID, TargetGroupName: "proxy", Expression: "DOMAIN,example.com", Position: 1},
 			}
-			_, err := compiler.Compile(ctx, snap, domain.TargetQuantumultX, compiler.WithCredentials(fixtureCredentials()))
+			_, err := compiler.Compile(ctx, snap, domain.TargetQuantumultX)
 			if err == nil {
 				t.Fatal("expected non-terminal MATCH rule to be rejected")
 			}
@@ -404,20 +408,22 @@ func TestQuantumultXRejectsUnsupportedCapabilitiesAndTransports(t *testing.T) {
 
 	t.Run("RejectsMissingCredentialsAndUnsupportedTransportsWithoutSecretLeak", func(t *testing.T) {
 		// 1. Missing credentials on non-empty snapshot must fail closed
-		_, err := compiler.Compile(ctx, fixtureSnapshot(), domain.TargetQuantumultX)
+		snapMissing := fixtureSnapshot()
+		snapMissing.Nodes[0].Credentials = domain.InboundProtocolCredential{}
+		_, err := compiler.Compile(ctx, snapMissing, domain.TargetQuantumultX)
 		if err == nil {
 			t.Fatal("expected Compile without credentials to fail closed on non-empty snapshot")
 		}
 		var capErr *compiler.CapabilityError
 		if !errors.As(err, &capErr) || capErr.Location != "nodes[0]" {
-			t.Fatalf("expected nodes[0] CapabilityError for nil credentials, got %v", err)
+			t.Fatalf("expected nodes[0] CapabilityError for empty credentials, got %v", err)
 		}
 
 		// 2. Unsupported transports / ciphers / injection characters must fail without leaking secrets
 		type transportCase struct {
 			name         string
 			nodeIndex    int
-			mutate       func(map[string]*domain.NodeCredentialPayload)
+			mutate       func(*resolver.ResolvedPolicySnapshot)
 			secretMarker string
 			wantFeature  string
 		}
@@ -426,9 +432,9 @@ func TestQuantumultXRejectsUnsupportedCapabilitiesAndTransports(t *testing.T) {
 			{
 				name:      "VMess_GRPC_Unsupported",
 				nodeIndex: 0,
-				mutate: func(c map[string]*domain.NodeCredentialPayload) {
-					c["0123456789abcdef0123456789abcdef"].Credentials.UUID = "SECRET-VMESS-UUID-101"
-					c["0123456789abcdef0123456789abcdef"].Credentials.Transport = map[string]string{
+				mutate: func(s *resolver.ResolvedPolicySnapshot) {
+					s.Nodes[0].Credentials.UUID = "SECRET-VMESS-UUID-101"
+					s.Nodes[0].Credentials.Transport = map[string]string{
 						"network": "grpc",
 					}
 				},
@@ -438,9 +444,9 @@ func TestQuantumultXRejectsUnsupportedCapabilitiesAndTransports(t *testing.T) {
 			{
 				name:      "SS_GRPC_Unsupported",
 				nodeIndex: 1,
-				mutate: func(c map[string]*domain.NodeCredentialPayload) {
-					c["abcdef0123456789abcdef0123456789"].Credentials.Password = "SECRET-SS-PASS-202"
-					c["abcdef0123456789abcdef0123456789"].Credentials.Transport = map[string]string{
+				mutate: func(s *resolver.ResolvedPolicySnapshot) {
+					s.Nodes[1].Credentials.Password = "SECRET-SS-PASS-202"
+					s.Nodes[1].Credentials.Transport = map[string]string{
 						"network": "grpc",
 					}
 				},
@@ -450,9 +456,9 @@ func TestQuantumultXRejectsUnsupportedCapabilitiesAndTransports(t *testing.T) {
 			{
 				name:      "SS_UnsupportedCipher",
 				nodeIndex: 1,
-				mutate: func(c map[string]*domain.NodeCredentialPayload) {
-					c["abcdef0123456789abcdef0123456789"].Credentials.Method = "SECRET-UNKNOWN-CIPHER-303"
-					c["abcdef0123456789abcdef0123456789"].Credentials.Password = "SECRET-SS-PASS-303"
+				mutate: func(s *resolver.ResolvedPolicySnapshot) {
+					s.Nodes[1].Credentials.Method = "SECRET-UNKNOWN-CIPHER-303"
+					s.Nodes[1].Credentials.Password = "SECRET-SS-PASS-303"
 				},
 				secretMarker: "SECRET-UNKNOWN-CIPHER-303",
 				wantFeature:  "ss",
@@ -460,8 +466,8 @@ func TestQuantumultXRejectsUnsupportedCapabilitiesAndTransports(t *testing.T) {
 			{
 				name:      "PasswordContainsCommaInjection",
 				nodeIndex: 1,
-				mutate: func(c map[string]*domain.NodeCredentialPayload) {
-					c["abcdef0123456789abcdef0123456789"].Credentials.Password = "SECRET-INJECT-404, over-tls=false"
+				mutate: func(s *resolver.ResolvedPolicySnapshot) {
+					s.Nodes[1].Credentials.Password = "SECRET-INJECT-404, over-tls=false"
 				},
 				secretMarker: "SECRET-INJECT-404",
 				wantFeature:  "ss",
@@ -469,9 +475,9 @@ func TestQuantumultXRejectsUnsupportedCapabilitiesAndTransports(t *testing.T) {
 			{
 				name:      "PlaceholderLogicalIDServerAddress",
 				nodeIndex: 0,
-				mutate: func(c map[string]*domain.NodeCredentialPayload) {
-					c["0123456789abcdef0123456789abcdef"].Server = "0123456789abcdef0123456789abcdef"
-					c["0123456789abcdef0123456789abcdef"].Credentials.UUID = "SECRET-VMESS-UUID-505"
+				mutate: func(s *resolver.ResolvedPolicySnapshot) {
+					s.Nodes[0].Server = "0123456789abcdef0123456789abcdef"
+					s.Nodes[0].Credentials.UUID = "SECRET-VMESS-UUID-505"
 				},
 				secretMarker: "SECRET-VMESS-UUID-505",
 				wantFeature:  "vmess",
@@ -480,9 +486,9 @@ func TestQuantumultXRejectsUnsupportedCapabilitiesAndTransports(t *testing.T) {
 
 		for _, tc := range tCases {
 			t.Run(tc.name, func(t *testing.T) {
-				creds := fixtureCredentials()
-				tc.mutate(creds)
-				_, err := compiler.Compile(ctx, fixtureSnapshot(), domain.TargetQuantumultX, compiler.WithCredentials(creds))
+				snap := fixtureSnapshot()
+				tc.mutate(snap)
+				_, err := compiler.Compile(ctx, snap, domain.TargetQuantumultX)
 				if err == nil {
 					t.Fatalf("expected error for %s", tc.name)
 				}

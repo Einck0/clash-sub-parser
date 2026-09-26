@@ -3,7 +3,6 @@ package sqlite
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -225,13 +224,9 @@ const selectPublicationColumnsSQL = `
 		target,
 		snapshot_digest,
 		content_digest,
-		credential_binding_digest,
-		credential_bindings_json,
 		content_type,
 		filename,
-		artifact_key_id,
-		artifact_nonce,
-		artifact_ciphertext,
+		content,
 		compiler_version,
 		token_hash,
 		state,
@@ -243,7 +238,7 @@ func scanPublicationRow(row *sql.Row, notFoundMsg string) (*domain.Publication, 
 	var pub domain.Publication
 	var targetStr, stateStr, createdStr string
 	var revokedStr sql.NullString
-	var nonce, ciphertext []byte
+	var content []byte
 
 	err := row.Scan(
 		&pub.ID,
@@ -251,13 +246,9 @@ func scanPublicationRow(row *sql.Row, notFoundMsg string) (*domain.Publication, 
 		&targetStr,
 		&pub.SnapshotDigest,
 		&pub.ContentDigest,
-		&pub.CredentialBindingDigest,
-		&pub.CredentialBindingsJSON,
 		&pub.ContentType,
 		&pub.Filename,
-		&pub.ArtifactKeyID,
-		&nonce,
-		&ciphertext,
+		&content,
 		&pub.CompilerVersion,
 		&pub.TokenHash,
 		&stateStr,
@@ -280,17 +271,8 @@ func scanPublicationRow(row *sql.Row, notFoundMsg string) (*domain.Publication, 
 			pub.RevokedAt = &revTime
 		}
 	}
-	if len(nonce) > 0 {
-		pub.ArtifactNonce = append([]byte(nil), nonce...)
-	}
-	if len(ciphertext) > 0 {
-		pub.ArtifactCiphertext = append([]byte(nil), ciphertext...)
-	}
-	if strings.TrimSpace(pub.CredentialBindingsJSON) != "" {
-		var bindings []domain.PublicationCredentialBinding
-		if err := json.Unmarshal([]byte(pub.CredentialBindingsJSON), &bindings); err == nil {
-			pub.CredentialBindings = bindings
-		}
+	if len(content) > 0 {
+		pub.Content = append([]byte(nil), content...)
 	}
 
 	return &pub, nil
@@ -320,19 +302,15 @@ func (r *publicationRepository) Create(ctx context.Context, pub *domain.Publicat
 		target,
 		snapshot_digest,
 		content_digest,
-		credential_binding_digest,
-		credential_bindings_json,
 		content_type,
 		filename,
-		artifact_key_id,
-		artifact_nonce,
-		artifact_ciphertext,
+		content,
 		compiler_version,
 		token_hash,
 		state,
 		created_at,
 		revoked_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
 
 	createdStr := pub.CreatedAt.Format(time.RFC3339)
 	if pub.CreatedAt.IsZero() {
@@ -344,22 +322,9 @@ func (r *publicationRepository) Create(ctx context.Context, pub *domain.Publicat
 		revokedStr = sql.NullString{String: pub.RevokedAt.Format(time.RFC3339), Valid: true}
 	}
 
-	bindingsJSON := pub.CredentialBindingsJSON
-	if strings.TrimSpace(bindingsJSON) == "" && len(pub.CredentialBindings) > 0 {
-		raw, err := json.Marshal(pub.CredentialBindings)
-		if err != nil {
-			return fmt.Errorf("failed to marshal publication credential bindings: %w", err)
-		}
-		bindingsJSON = string(raw)
-	}
-
-	nonce := pub.ArtifactNonce
-	if nonce == nil {
-		nonce = []byte{}
-	}
-	ciphertext := pub.ArtifactCiphertext
-	if ciphertext == nil {
-		ciphertext = []byte{}
+	content := pub.Content
+	if content == nil {
+		content = []byte{}
 	}
 
 	return WithTx(ctx, r.db, func(ctx context.Context, tx *sql.Tx) error {
@@ -369,13 +334,9 @@ func (r *publicationRepository) Create(ctx context.Context, pub *domain.Publicat
 			string(pub.Target),
 			pub.SnapshotDigest,
 			pub.ContentDigest,
-			pub.CredentialBindingDigest,
-			bindingsJSON,
 			pub.ContentType,
 			pub.Filename,
-			pub.ArtifactKeyID,
-			nonce,
-			ciphertext,
+			content,
 			pub.CompilerVersion,
 			pub.TokenHash,
 			string(pub.State),

@@ -665,8 +665,8 @@ func TestRepositoryIntegration(t *testing.T) {
 	// Insert test node to satisfy foreign key
 	nodeID := "node_0123456789abcdef"
 	_, err := db.ExecContext(ctx, `
-		INSERT INTO nodes (logical_id, protocol, display_name, normalized_config_secret_ref, created_at, updated_at)
-		VALUES (?, 'ss', 'fixture_node', 'secret://node', '2026-09-16T00:00:00Z', '2026-09-16T00:00:00Z');`, nodeID)
+		INSERT INTO nodes (logical_id, protocol, display_name, server, port, config_json, created_at, updated_at)
+		VALUES (?, 'ss', 'fixture_node', '198.51.100.1', 8388, '{}', '2026-09-16T00:00:00Z', '2026-09-16T00:00:00Z');`, nodeID)
 	if err != nil {
 		t.Fatalf("insert node: %v", err)
 	}

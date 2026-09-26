@@ -62,7 +62,7 @@ func singBoxCapability() Capability {
 	}
 }
 
-func renderSingBox(snapshot *resolver.ResolvedPolicySnapshot, credentials map[string]*domain.NodeCredentialPayload) ([]byte, error) {
+func renderSingBox(snapshot *resolver.ResolvedPolicySnapshot) ([]byte, error) {
 	var (
 		endpoints []option.Endpoint
 		outbounds []option.Outbound
@@ -75,8 +75,7 @@ func renderSingBox(snapshot *resolver.ResolvedPolicySnapshot, credentials map[st
 
 	for i, node := range snapshot.Nodes {
 		loc := fmt.Sprintf("nodes[%d]", i)
-		cred, err := validateCredentialEnvelope(domain.TargetSingBox, i, node, credentials)
-		if err != nil {
+		if err := validateCredentialEnvelope(domain.TargetSingBox, i, node); err != nil {
 			return nil, err
 		}
 		tag := strings.TrimSpace(node.DisplayName)
@@ -91,7 +90,14 @@ func renderSingBox(snapshot *resolver.ResolvedPolicySnapshot, credentials map[st
 		seenTags[tag] = true
 		nodeNameByID[node.LogicalID] = tag
 
-		out, ep, err := probesingbox.BuildExportNodeOption(tag, cred)
+		out, ep, err := probesingbox.BuildExportNodeOption(tag, domain.Node{
+			LogicalID:   node.LogicalID,
+			DisplayName: tag,
+			Protocol:    node.Protocol,
+			Server:      node.Server,
+			Port:        node.Port,
+			Credentials: node.Credentials,
+		})
 		if err != nil {
 			return nil, &CapabilityError{
 				Target:   domain.TargetSingBox,

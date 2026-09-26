@@ -62,7 +62,7 @@ func assertValidSingBoxConfig(t *testing.T, content []byte) option.Options {
 func TestSingBoxGoldenFixture(t *testing.T) {
 	assertTargetGoldenFixture(t, domain.TargetSingBox)
 
-	res, err := compiler.Compile(context.Background(), fixtureSnapshot(), domain.TargetSingBox, compiler.WithCredentials(fixtureCredentials()))
+	res, err := compiler.Compile(context.Background(), fixtureSnapshot(), domain.TargetSingBox)
 	if err != nil {
 		t.Fatalf("compile failed: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestSingBoxGoldenFixture(t *testing.T) {
 }
 
 func TestSingBoxOutputIsValidJSON(t *testing.T) {
-	result, err := compiler.Compile(context.Background(), fixtureSnapshot(), domain.TargetSingBox, compiler.WithCredentials(fixtureCredentials()))
+	result, err := compiler.Compile(context.Background(), fixtureSnapshot(), domain.TargetSingBox)
 	if err != nil {
 		t.Fatalf("compile failed: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestSingBoxSupportsGeositeAndProcessNameRules(t *testing.T) {
 		},
 	}
 
-	res, err := compiler.Compile(context.Background(), snapshot, domain.TargetSingBox, compiler.WithCredentials(fixtureCredentials()))
+	res, err := compiler.Compile(context.Background(), snapshot, domain.TargetSingBox)
 	if err != nil {
 		t.Fatalf("expected SingBox to support GEOSITE and PROCESS-NAME rules: %v", err)
 	}
@@ -136,33 +136,25 @@ func TestSingBoxAllSevenProtocolsGroupsAndFourteenRules_OfficialValidation(t *te
 	ctx := context.Background()
 
 	nodes := []resolver.ResolvedNode{
-		{LogicalID: "id-ss", DisplayName: "Node-SS", Protocol: domain.ProtocolSS, Active: true, Position: 0},
-		{LogicalID: "id-vmess", DisplayName: "Node-VMess", Protocol: domain.ProtocolVMess, Active: true, Position: 1},
-		{LogicalID: "id-vless", DisplayName: "Node-VLESS-Reality", Protocol: domain.ProtocolVLESS, Active: true, Position: 2},
-		{LogicalID: "id-trojan", DisplayName: "Node-Trojan", Protocol: domain.ProtocolTrojan, Active: true, Position: 3},
-		{LogicalID: "id-hy2", DisplayName: "Node-Hysteria2", Protocol: domain.ProtocolHysteria2, Active: true, Position: 4},
-		{LogicalID: "id-wg", DisplayName: "Node-WireGuard", Protocol: domain.ProtocolWireGuard, Active: true, Position: 5},
-		{LogicalID: "id-tuic", DisplayName: "Node-TUIC", Protocol: domain.ProtocolTUIC, Active: true, Position: 6},
-	}
-
-	creds := map[string]*domain.NodeCredentialPayload{
-		"id-ss": {
-			LogicalID: "id-ss",
-			Protocol:  domain.ProtocolSS,
-			Server:    "198.51.100.10",
-			Port:      8388,
-			Version:   1,
+		{
+			LogicalID:   "id-ss",
+			DisplayName: "Node-SS",
+			Protocol:    domain.ProtocolSS,
+			Server:      "198.51.100.10",
+			Port:        8388,
 			Credentials: domain.InboundProtocolCredential{
 				Method:   "2022-blake3-aes-128-gcm",
 				Password: "AAAAAAAAAAAAAAAAAAAAAA==",
 			},
+			Active:   true,
+			Position: 0,
 		},
-		"id-vmess": {
-			LogicalID: "id-vmess",
-			Protocol:  domain.ProtocolVMess,
-			Server:    "vmess.example.com",
-			Port:      443,
-			Version:   1,
+		{
+			LogicalID:   "id-vmess",
+			DisplayName: "Node-VMess",
+			Protocol:    domain.ProtocolVMess,
+			Server:      "vmess.example.com",
+			Port:        443,
 			Credentials: domain.InboundProtocolCredential{
 				UUID:    "b831381d-6324-4d53-ad4f-8cda48b30811",
 				Method:  "aes-128-gcm",
@@ -177,13 +169,15 @@ func TestSingBoxAllSevenProtocolsGroupsAndFourteenRules_OfficialValidation(t *te
 					"fp":      "chrome",
 				},
 			},
+			Active:   true,
+			Position: 1,
 		},
-		"id-vless": {
-			LogicalID: "id-vless",
-			Protocol:  domain.ProtocolVLESS,
-			Server:    "198.51.100.12",
-			Port:      443,
-			Version:   1,
+		{
+			LogicalID:   "id-vless",
+			DisplayName: "Node-VLESS-Reality",
+			Protocol:    domain.ProtocolVLESS,
+			Server:      "198.51.100.12",
+			Port:        443,
 			Credentials: domain.InboundProtocolCredential{
 				UUID: "b831381d-6324-4d53-ad4f-8cda48b30812",
 				Transport: map[string]string{
@@ -196,13 +190,15 @@ func TestSingBoxAllSevenProtocolsGroupsAndFourteenRules_OfficialValidation(t *te
 					"fp":      "safari",
 				},
 			},
+			Active:   true,
+			Position: 2,
 		},
-		"id-trojan": {
-			LogicalID: "id-trojan",
-			Protocol:  domain.ProtocolTrojan,
-			Server:    "trojan.example.com",
-			Port:      8443,
-			Version:   1,
+		{
+			LogicalID:   "id-trojan",
+			DisplayName: "Node-Trojan",
+			Protocol:    domain.ProtocolTrojan,
+			Server:      "trojan.example.com",
+			Port:        8443,
 			Credentials: domain.InboundProtocolCredential{
 				Password: "trojan-secret-password",
 				Transport: map[string]string{
@@ -212,13 +208,15 @@ func TestSingBoxAllSevenProtocolsGroupsAndFourteenRules_OfficialValidation(t *te
 					"service_name": "trojan-grpc-svc",
 				},
 			},
+			Active:   true,
+			Position: 3,
 		},
-		"id-hy2": {
-			LogicalID: "id-hy2",
-			Protocol:  domain.ProtocolHysteria2,
-			Server:    "hy2.example.com",
-			Port:      443,
-			Version:   1,
+		{
+			LogicalID:   "id-hy2",
+			DisplayName: "Node-Hysteria2",
+			Protocol:    domain.ProtocolHysteria2,
+			Server:      "hy2.example.com",
+			Port:        443,
 			Credentials: domain.InboundProtocolCredential{
 				Password: "hy2-secret-password",
 				Transport: map[string]string{
@@ -230,13 +228,15 @@ func TestSingBoxAllSevenProtocolsGroupsAndFourteenRules_OfficialValidation(t *te
 					"down":          "500 Mbps",
 				},
 			},
+			Active:   true,
+			Position: 4,
 		},
-		"id-wg": {
-			LogicalID: "id-wg",
-			Protocol:  domain.ProtocolWireGuard,
-			Server:    "198.51.100.15",
-			Port:      51820,
-			Version:   1,
+		{
+			LogicalID:   "id-wg",
+			DisplayName: "Node-WireGuard",
+			Protocol:    domain.ProtocolWireGuard,
+			Server:      "198.51.100.15",
+			Port:        51820,
 			Credentials: domain.InboundProtocolCredential{
 				PrivateKey:   "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
 				PublicKey:    "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=",
@@ -246,13 +246,15 @@ func TestSingBoxAllSevenProtocolsGroupsAndFourteenRules_OfficialValidation(t *te
 				MTU:          1400,
 				DNS:          []string{"1.1.1.1"},
 			},
+			Active:   true,
+			Position: 5,
 		},
-		"id-tuic": {
-			LogicalID: "id-tuic",
-			Protocol:  domain.ProtocolTUIC,
-			Server:    "tuic.example.com",
-			Port:      443,
-			Version:   1,
+		{
+			LogicalID:   "id-tuic",
+			DisplayName: "Node-TUIC",
+			Protocol:    domain.ProtocolTUIC,
+			Server:      "tuic.example.com",
+			Port:        443,
 			Credentials: domain.InboundProtocolCredential{
 				UUID:              "b831381d-6324-4d53-ad4f-8cda48b30813",
 				Password:          "tuic-secret-password",
@@ -262,6 +264,8 @@ func TestSingBoxAllSevenProtocolsGroupsAndFourteenRules_OfficialValidation(t *te
 				SNI:               "tuic.example.com",
 				DisableSNI:        true,
 			},
+			Active:   true,
+			Position: 6,
 		},
 	}
 
@@ -319,7 +323,7 @@ func TestSingBoxAllSevenProtocolsGroupsAndFourteenRules_OfficialValidation(t *te
 		},
 	}
 
-	res, err := compiler.Compile(ctx, snapshot, domain.TargetSingBox, compiler.WithCredentials(creds))
+	res, err := compiler.Compile(ctx, snapshot, domain.TargetSingBox)
 	if err != nil {
 		t.Fatalf("Compile failed: %v", err)
 	}
@@ -364,7 +368,9 @@ func TestSingBoxNegativeCases_FailsClosedWithPreciseDiagnostics(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("MissingCredentialsFailsClosed", func(t *testing.T) {
-		_, err := compiler.Compile(ctx, fixtureSnapshot(), domain.TargetSingBox)
+		snap := fixtureSnapshot()
+		snap.Nodes[0].Credentials = domain.InboundProtocolCredential{}
+		_, err := compiler.Compile(ctx, snap, domain.TargetSingBox)
 		if err == nil {
 			t.Fatal("expected compilation without credentials to fail closed")
 		}
@@ -378,7 +384,7 @@ func TestSingBoxNegativeCases_FailsClosedWithPreciseDiagnostics(t *testing.T) {
 		for _, gt := range []domain.GroupType{domain.GroupTypeFallback, domain.GroupTypeLoadBalance} {
 			snap := fixtureSnapshot()
 			snap.Groups[0].GroupType = gt
-			_, err := compiler.Compile(ctx, snap, domain.TargetSingBox, compiler.WithCredentials(fixtureCredentials()))
+			_, err := compiler.Compile(ctx, snap, domain.TargetSingBox)
 			if err == nil {
 				t.Fatalf("expected group type %s to be rejected on sing-box", gt)
 			}
@@ -394,7 +400,7 @@ func TestSingBoxNegativeCases_FailsClosedWithPreciseDiagnostics(t *testing.T) {
 		snap.Groups[0].Members = nil
 		snap.Groups[0].NodeLogicalIDs = nil
 		snap.Groups[0].ChildGroupIDs = nil
-		_, err := compiler.Compile(ctx, snap, domain.TargetSingBox, compiler.WithCredentials(fixtureCredentials()))
+		_, err := compiler.Compile(ctx, snap, domain.TargetSingBox)
 		var capErr *compiler.CapabilityError
 		if !errors.As(err, &capErr) || capErr.Location != "groups[0]" {
 			t.Fatalf("expected CapabilityError at groups[0] for empty group, got %v", err)
@@ -404,71 +410,63 @@ func TestSingBoxNegativeCases_FailsClosedWithPreciseDiagnostics(t *testing.T) {
 	t.Run("InvalidNodeProtocolOptionsRejected", func(t *testing.T) {
 		cases := []struct {
 			name     string
-			mutate   func(snap *resolver.ResolvedPolicySnapshot, creds map[string]*domain.NodeCredentialPayload)
+			mutate   func(snap *resolver.ResolvedPolicySnapshot)
 			wantFeat string
 		}{
 			{
 				name: "UnsupportedSSCipher",
-				mutate: func(_ *resolver.ResolvedPolicySnapshot, creds map[string]*domain.NodeCredentialPayload) {
-					creds["abcdef0123456789abcdef0123456789"].Credentials.Method = "unsupported-cipher"
+				mutate: func(snap *resolver.ResolvedPolicySnapshot) {
+					snap.Nodes[1].Credentials.Method = "unsupported-cipher"
 				},
 				wantFeat: "ss",
 			},
 			{
 				name: "UnsupportedVMessSecurity",
-				mutate: func(_ *resolver.ResolvedPolicySnapshot, creds map[string]*domain.NodeCredentialPayload) {
-					creds["0123456789abcdef0123456789abcdef"].Credentials.Method = "chacha20-invalid"
+				mutate: func(snap *resolver.ResolvedPolicySnapshot) {
+					snap.Nodes[0].Credentials.Method = "chacha20-invalid"
 				},
 				wantFeat: "vmess",
 			},
 			{
 				name: "UnsupportedTransportNetwork",
-				mutate: func(_ *resolver.ResolvedPolicySnapshot, creds map[string]*domain.NodeCredentialPayload) {
-					creds["0123456789abcdef0123456789abcdef"].Credentials.Transport["network"] = "kcp"
+				mutate: func(snap *resolver.ResolvedPolicySnapshot) {
+					snap.Nodes[0].Credentials.Transport["network"] = "kcp"
 				},
 				wantFeat: "vmess",
 			},
 			{
 				name: "UnsupportedVLESSFlow",
-				mutate: func(snap *resolver.ResolvedPolicySnapshot, creds map[string]*domain.NodeCredentialPayload) {
+				mutate: func(snap *resolver.ResolvedPolicySnapshot) {
 					snap.Nodes[0].Protocol = domain.ProtocolVLESS
-					c := creds["0123456789abcdef0123456789abcdef"]
-					c.Protocol = domain.ProtocolVLESS
-					c.Credentials.Transport = map[string]string{"flow": "xtls-rprx-direct"}
+					snap.Nodes[0].Credentials.Transport = map[string]string{"flow": "xtls-rprx-direct"}
 				},
 				wantFeat: "vless",
 			},
 			{
 				name: "Hysteria2ObfsMissingPassword",
-				mutate: func(snap *resolver.ResolvedPolicySnapshot, creds map[string]*domain.NodeCredentialPayload) {
+				mutate: func(snap *resolver.ResolvedPolicySnapshot) {
 					snap.Nodes[0].Protocol = domain.ProtocolHysteria2
-					c := creds["0123456789abcdef0123456789abcdef"]
-					c.Protocol = domain.ProtocolHysteria2
-					c.Credentials.Password = "hy2-pass"
-					c.Credentials.Transport = map[string]string{"obfs": "salamander"}
+					snap.Nodes[0].Credentials.Password = "hy2-pass"
+					snap.Nodes[0].Credentials.Transport = map[string]string{"obfs": "salamander"}
 				},
 				wantFeat: "hysteria2",
 			},
 			{
 				name: "Hysteria2InvalidBandwidth",
-				mutate: func(snap *resolver.ResolvedPolicySnapshot, creds map[string]*domain.NodeCredentialPayload) {
+				mutate: func(snap *resolver.ResolvedPolicySnapshot) {
 					snap.Nodes[0].Protocol = domain.ProtocolHysteria2
-					c := creds["0123456789abcdef0123456789abcdef"]
-					c.Protocol = domain.ProtocolHysteria2
-					c.Credentials.Password = "hy2-pass"
-					c.Credentials.Transport = map[string]string{"up": "invalid-bw"}
+					snap.Nodes[0].Credentials.Password = "hy2-pass"
+					snap.Nodes[0].Credentials.Transport = map[string]string{"up": "invalid-bw"}
 				},
 				wantFeat: "hysteria2",
 			},
 			{
 				name: "TUICUnsupportedCongestionControl",
-				mutate: func(snap *resolver.ResolvedPolicySnapshot, creds map[string]*domain.NodeCredentialPayload) {
+				mutate: func(snap *resolver.ResolvedPolicySnapshot) {
 					snap.Nodes[0].Protocol = domain.ProtocolTUIC
-					c := creds["0123456789abcdef0123456789abcdef"]
-					c.Protocol = domain.ProtocolTUIC
-					c.Credentials.Password = "tuic-pass"
-					c.Credentials.CongestionControl = "reno-invalid"
-					c.Credentials.Transport = nil
+					snap.Nodes[0].Credentials.Password = "tuic-pass"
+					snap.Nodes[0].Credentials.CongestionControl = "reno-invalid"
+					snap.Nodes[0].Credentials.Transport = nil
 				},
 				wantFeat: "tuic",
 			},
@@ -477,9 +475,8 @@ func TestSingBoxNegativeCases_FailsClosedWithPreciseDiagnostics(t *testing.T) {
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
 				snap := fixtureSnapshot()
-				creds := fixtureCredentials()
-				tc.mutate(snap, creds)
-				_, err := compiler.Compile(ctx, snap, domain.TargetSingBox, compiler.WithCredentials(creds))
+				tc.mutate(snap)
+				_, err := compiler.Compile(ctx, snap, domain.TargetSingBox)
 				if err == nil {
 					t.Fatalf("expected error for %s, got nil", tc.name)
 				}
@@ -522,7 +519,7 @@ func TestSingBoxNegativeCases_FailsClosedWithPreciseDiagnostics(t *testing.T) {
 					Expression:      tc.expr,
 					Position:        0,
 				}
-				_, err := compiler.Compile(ctx, snap, domain.TargetSingBox, compiler.WithCredentials(fixtureCredentials()))
+				_, err := compiler.Compile(ctx, snap, domain.TargetSingBox)
 				if err == nil {
 					t.Fatalf("expected error for %s (%s), got nil", tc.name, tc.expr)
 				}

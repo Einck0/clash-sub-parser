@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"clash-sub-parser/internal/domain"
-	"clash-sub-parser/internal/parser"
 	box "github.com/sagernet/sing-box"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/include"
@@ -65,33 +64,22 @@ var validVMessSecurities = map[string]bool{
 }
 
 // BuildExportNodeOption constructs an official sing-box option.Outbound or option.Endpoint
-// from a decrypted NodeCredentialPayload for configuration export.
-func BuildExportNodeOption(tag string, payload *domain.NodeCredentialPayload) (*option.Outbound, *option.Endpoint, error) {
-	if payload == nil {
-		return nil, nil, ErrNilNode
-	}
-	server := strings.TrimSpace(payload.Server)
+// from a plaintext domain.Node for configuration export.
+func BuildExportNodeOption(tag string, node domain.Node) (*option.Outbound, *option.Endpoint, error) {
+	server := strings.TrimSpace(node.Server)
 	if server == "" {
 		return nil, nil, ErrMissingServer
 	}
-	if payload.Port < 1 || payload.Port > 65535 {
+	if node.Port < 1 || node.Port > 65535 {
 		return nil, nil, ErrInvalidPort
 	}
 
-	norm := parser.NormalizedNode{
-		Node: domain.Node{
-			LogicalID:   payload.LogicalID,
-			DisplayName: tag,
-			Protocol:    payload.Protocol,
-		},
-		Server:    server,
-		Port:      payload.Port,
-		Transport: payload.Credentials.Transport,
-	}
-	cfg := NodeConfigFromPayload(norm, payload)
-	m := payload.Credentials.Transport
+	node.DisplayName = tag
+	node.Server = server
+	cfg := NodeConfigFromNode(node)
+	m := node.Credentials.Transport
 
-	switch payload.Protocol {
+	switch node.Protocol {
 	case domain.ProtocolSS:
 		method := strings.ToLower(strings.TrimSpace(cfg.Method))
 		if !validShadowsocksMethods[method] {
@@ -289,7 +277,7 @@ func BuildExportNodeOption(tag string, payload *domain.NodeCredentialPayload) (*
 		return nil, &ep, nil
 
 	default:
-		return nil, nil, fmt.Errorf("%w: %s", ErrUnsupportedProto, payload.Protocol)
+		return nil, nil, fmt.Errorf("%w: %s", ErrUnsupportedProto, node.Protocol)
 	}
 }
 

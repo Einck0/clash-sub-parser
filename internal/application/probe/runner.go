@@ -94,7 +94,7 @@ func NewDefaultRunner(
 		observations: observations,
 		scheduler:    scheduler,
 		runs:         runs,
-		dialer:       defaultNodeDialer,
+		dialer:       NewSafeNodeDialer(),
 		clock:        time.Now,
 		budget:       DefaultRunBudget,
 	}
@@ -556,21 +556,15 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 		result = profiles.Result{}
 		eval := prof.Evaluate(result)
 		now := r.clock().UTC()
-		var credVer *int
-		if node.CredentialVersion > 0 {
-			cv := node.CredentialVersion
-			credVer = &cv
-		}
 		obs := &domain.ProbeObservation{
-			ID:                domain.MustNewUUIDv7(),
-			ProbeRunID:        run.ID,
-			NodeLogicalID:     node.LogicalID,
-			Kind:              kind,
-			Verdict:           eval.Verdict,
-			EvidenceDigest:    domain.ComputeProbeEvidenceDigest(run.ID, node.LogicalID, prof.Version, eval.Verdict, 0, eval.Reason),
-			ObservedAt:        now,
-			RedactedSummary:   fmt.Sprintf("profile=%s version=%s verdict=%s reason=%s status=0 latency_ms=0", prof.Kind, prof.Version, eval.Verdict, eval.Reason),
-			CredentialVersion: credVer,
+			ID:              domain.MustNewUUIDv7(),
+			ProbeRunID:      run.ID,
+			NodeLogicalID:   node.LogicalID,
+			Kind:            kind,
+			Verdict:         eval.Verdict,
+			EvidenceDigest:  domain.ComputeProbeEvidenceDigest(run.ID, node.LogicalID, prof.Version, eval.Verdict, 0, eval.Reason),
+			ObservedAt:      now,
+			RedactedSummary: fmt.Sprintf("profile=%s version=%s verdict=%s reason=%s status=0 latency_ms=0", prof.Kind, prof.Version, eval.Verdict, eval.Reason),
 		}
 		if createErr := r.observations.Create(ctx, obs); createErr != nil {
 			return eval.Verdict, createErr
@@ -641,22 +635,16 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 	if dialErr != nil && (errors.Is(dialErr, ErrCredentialsUnavailable) || strings.Contains(dialErr.Error(), "credentials_unavailable")) {
 		summary = summary + " error=credentials_unavailable"
 	}
-	var credVer *int
-	if node.CredentialVersion > 0 {
-		cv := node.CredentialVersion
-		credVer = &cv
-	}
 	obs := &domain.ProbeObservation{
-		ID:                domain.MustNewUUIDv7(),
-		ProbeRunID:        run.ID,
-		NodeLogicalID:     node.LogicalID,
-		Kind:              kind,
-		Verdict:           eval.Verdict,
-		EvidenceDigest:    domain.ComputeProbeEvidenceDigest(run.ID, node.LogicalID, prof.Version, eval.Verdict, result.StatusCode, eval.Reason),
-		ObservedAt:        now,
-		LatencyMS:         latency,
-		RedactedSummary:   summary,
-		CredentialVersion: credVer,
+		ID:              domain.MustNewUUIDv7(),
+		ProbeRunID:      run.ID,
+		NodeLogicalID:   node.LogicalID,
+		Kind:            kind,
+		Verdict:         eval.Verdict,
+		EvidenceDigest:  domain.ComputeProbeEvidenceDigest(run.ID, node.LogicalID, prof.Version, eval.Verdict, result.StatusCode, eval.Reason),
+		ObservedAt:      now,
+		LatencyMS:       latency,
+		RedactedSummary: summary,
 	}
 
 	if createErr := r.observations.Create(ctx, obs); createErr != nil {

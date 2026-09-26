@@ -336,7 +336,7 @@ func TestExtractWithCredentials_AllSevenProtocolsFullFieldsAndDualFormatParity(t
 		}
 	}
 
-	// Verify Parse() projection equivalence and zero secret leakage
+	// Verify Parse() produces complete domain.Node with Server, Port, and Credentials
 	parsedYAML, err := parser.Parse(yamlInput)
 	if err != nil {
 		t.Fatalf("Parse(YAML) failed: %v", err)
@@ -361,8 +361,8 @@ func TestExtractWithCredentials_AllSevenProtocolsFullFieldsAndDualFormatParity(t
 		"33333333-3333-3333-3333-333333333333",
 		"tuic-full-password",
 	} {
-		if strings.Contains(string(encoded), secret) {
-			t.Errorf("Parse() output leaked secret %q: %s", secret, string(encoded))
+		if !strings.Contains(string(encoded), secret) {
+			t.Errorf("Parse() output missing expected plaintext credential %q: %s", secret, string(encoded))
 		}
 	}
 }

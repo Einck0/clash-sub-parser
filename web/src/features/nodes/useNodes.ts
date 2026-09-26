@@ -3,10 +3,10 @@ import { api } from '../../api/client'
 import {
   normalizeNode,
   validateNodeConnectionProfile,
+  type NodeConnectionProfile,
   type NodeRecord,
   type NodeSourceRecord,
   type NormalizedNode,
-  type SafeNodeConnectionProfile,
 } from './nodeView'
 
 interface NodePage {
@@ -125,12 +125,8 @@ export function useNodes() {
 
   async function updateNodeConnection(
     logicalId: string,
-    draft: Partial<SafeNodeConnectionProfile> & {
+    draft: Partial<NodeConnectionProfile> & {
       displayName?: string
-      expectedCredentialVersion?: number
-      privateKeyInput?: string
-      preSharedKeyInput?: string
-      passwordInput?: string
     }
   ): Promise<{ ok: boolean; error?: string; node?: NormalizedNode }> {
     const target =
@@ -140,38 +136,18 @@ export function useNodes() {
     if (!target) {
       return { ok: false, error: 'Node not found' }
     }
-    if (!target.connection.available) {
-      return {
-        ok: false,
-        error: `Node credentials are unavailable (${target.connection.unavailableReason || 'credential_unavailable'})`,
-      }
-    }
 
-    const candidateConn: SafeNodeConnectionProfile = {
+    const candidateConn: NodeConnectionProfile = {
       ...target.connection,
       ...draft,
-      privateKeyMasked: '***',
-      preSharedKeyMasked: '***',
-      passwordMasked: '***',
-      hasPrivateKey: Boolean(target.connection.hasPrivateKey || Boolean(draft.privateKeyInput?.trim())),
-      hasPreSharedKey: Boolean(target.connection.hasPreSharedKey || Boolean(draft.preSharedKeyInput?.trim())),
-      hasPassword: Boolean(target.connection.hasPassword || Boolean(draft.passwordInput?.trim())),
     }
 
-    const validationErr = validateNodeConnectionProfile(target.protocol, {
-      ...candidateConn,
-      privateKeyInput: draft.privateKeyInput,
-      preSharedKeyInput: draft.preSharedKeyInput,
-      passwordInput: draft.passwordInput,
-    })
+    const validationErr = validateNodeConnectionProfile(target.protocol, candidateConn)
     if (validationErr) {
       return { ok: false, error: validationErr }
     }
 
-    const expectedVersion = draft.expectedCredentialVersion ?? target.credentialVersion ?? 1
-    const patchBody: Record<string, unknown> = {
-      expected_credential_version: expectedVersion,
-    }
+    const patchBody: Record<string, unknown> = {}
     if (draft.displayName !== undefined) {
       patchBody.display_name = draft.displayName.trim()
     }
@@ -185,11 +161,14 @@ export function useNodes() {
     if (proto === 'wireguard') {
       if (draft.localAddress !== undefined) patchBody.local_address = draft.localAddress
       if (draft.publicKey !== undefined) patchBody.public_key = draft.publicKey.trim()
+      if (draft.privateKey !== undefined) patchBody.private_key = draft.privateKey.trim()
+      if (draft.preSharedKey !== undefined) patchBody.pre_shared_key = draft.preSharedKey.trim()
       if (draft.reserved !== undefined && draft.reserved.length > 0) patchBody.reserved = draft.reserved
       if (draft.mtu !== undefined) patchBody.mtu = draft.mtu
       if (draft.dns !== undefined) patchBody.dns = draft.dns
     } else if (proto === 'tuic') {
       if (draft.uuid !== undefined) patchBody.uuid = draft.uuid.trim()
+      if (draft.password !== undefined) patchBody.password = draft.password.trim()
       if (draft.congestionControl !== undefined) patchBody.congestion_control = draft.congestionControl.trim()
       if (draft.udpRelayMode !== undefined) patchBody.udp_relay_mode = draft.udpRelayMode.trim()
       if (draft.alpn !== undefined && draft.alpn.length > 0) patchBody.alpn = draft.alpn
@@ -198,16 +177,10 @@ export function useNodes() {
     } else {
       if (draft.uuid !== undefined && draft.uuid.trim()) patchBody.uuid = draft.uuid.trim()
       if (draft.method !== undefined && draft.method.trim()) patchBody.method = draft.method.trim()
-    }
-
-    if (draft.privateKeyInput && draft.privateKeyInput.trim()) {
-      patchBody.private_key_input = draft.privateKeyInput.trim()
-    }
-    if (draft.preSharedKeyInput && draft.preSharedKeyInput.trim()) {
-      patchBody.pre_shared_key_input = draft.preSharedKeyInput.trim()
-    }
-    if (draft.passwordInput && draft.passwordInput.trim()) {
-      patchBody.password_input = draft.passwordInput.trim()
+      if (draft.password !== undefined && draft.password.trim()) patchBody.password = draft.password.trim()
+      if (draft.sni !== undefined && draft.sni.trim()) patchBody.sni = draft.sni.trim()
+      if (draft.alpn !== undefined && draft.alpn.length > 0) patchBody.alpn = draft.alpn
+      if (draft.disableSni !== undefined) patchBody.disable_sni = draft.disableSni
     }
 
     savingConnection.value = true

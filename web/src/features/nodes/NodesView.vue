@@ -5,7 +5,6 @@ import {
   CheckCircleIcon,
   ExclamationTriangleIcon,
   EyeIcon,
-  LockClosedIcon,
   ShieldCheckIcon,
 } from '@heroicons/vue/24/outline'
 import { useWindowVirtualizer } from '@tanstack/vue-virtual'
@@ -18,7 +17,7 @@ import {
   SUPPORTED_NODE_PROTOCOLS,
   nodeCapabilityLabel,
   protocolSupportedTargets,
-  renderSafeNodePreview,
+  renderNodePreview,
   type NormalizedNode,
 } from './nodeView'
 import { useNodes } from './useNodes'
@@ -51,27 +50,27 @@ const previewTarget = ref<'mihomo' | 'singbox'>('mihomo')
 const connectionError = ref('')
 const connectionSaved = ref(false)
 
-// Editable non-secret connection draft fields inside the Node Detail Drawer
+// Editable plaintext connection draft fields inside the Node Detail Drawer
 const draftDisplayName = ref('')
 const draftServer = ref('')
 const draftPort = ref<number>(0)
-// WireGuard non-secret fields
+// WireGuard fields
 const draftWgLocalAddress = ref('')
 const draftWgPublicKey = ref('')
+const draftWgPrivateKey = ref('')
+const draftWgPreSharedKey = ref('')
 const draftWgMtu = ref<number | undefined>(undefined)
 const draftWgDns = ref('')
 const draftWgReserved = ref('')
-// TUIC non-secret fields
-const draftTuicUuid = ref('')
-const draftTuicCongestionControl = ref('')
-const draftTuicUdpRelayMode = ref('')
-const draftTuicAlpn = ref('')
-const draftTuicSni = ref('')
-const draftTuicDisableSni = ref(false)
-// Write-only secret rotation inputs (never pre-populated, empty = preserve existing)
-const draftPrivateKeyInput = ref('')
-const draftPreSharedKeyInput = ref('')
-const draftPasswordInput = ref('')
+// TUIC / Generic protocol fields
+const draftUuid = ref('')
+const draftPassword = ref('')
+const draftMethod = ref('')
+const draftCongestionControl = ref('')
+const draftUdpRelayMode = ref('')
+const draftAlpn = ref('')
+const draftSni = ref('')
+const draftDisableSni = ref(false)
 
 function syncDraftFromNode(node: NormalizedNode) {
   connectionError.value = ''
@@ -81,19 +80,19 @@ function syncDraftFromNode(node: NormalizedNode) {
   draftPort.value = node.connection.port
   draftWgLocalAddress.value = node.connection.localAddress.join(', ')
   draftWgPublicKey.value = node.connection.publicKey
+  draftWgPrivateKey.value = node.connection.privateKey
+  draftWgPreSharedKey.value = node.connection.preSharedKey
   draftWgMtu.value = node.connection.mtu
   draftWgDns.value = node.connection.dns.join(', ')
   draftWgReserved.value = node.connection.reserved.join(', ')
-  draftTuicUuid.value = node.connection.uuid
-  draftTuicCongestionControl.value = node.connection.congestionControl
-  draftTuicUdpRelayMode.value = node.connection.udpRelayMode
-  draftTuicAlpn.value = node.connection.alpn.join(', ')
-  draftTuicSni.value = node.connection.sni
-  draftTuicDisableSni.value = node.connection.disableSni
-  // Secret rotation inputs are always cleared on sync – write-only, never pre-populated
-  draftPrivateKeyInput.value = ''
-  draftPreSharedKeyInput.value = ''
-  draftPasswordInput.value = ''
+  draftUuid.value = node.connection.uuid
+  draftPassword.value = node.connection.password
+  draftMethod.value = node.connection.method || ''
+  draftCongestionControl.value = node.connection.congestionControl
+  draftUdpRelayMode.value = node.connection.udpRelayMode
+  draftAlpn.value = node.connection.alpn.join(', ')
+  draftSni.value = node.connection.sni
+  draftDisableSni.value = node.connection.disableSni
 }
 
 async function openNodeDetail(node: NormalizedNode) {
@@ -125,7 +124,7 @@ async function handleApplyConnectionUpdate() {
     .filter(Boolean)
     .map((s) => Number(s))
     .filter((n) => !Number.isNaN(n))
-  const alpn = draftTuicAlpn.value
+  const alpn = draftAlpn.value
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean)
@@ -136,38 +135,34 @@ async function handleApplyConnectionUpdate() {
     port: Number(draftPort.value),
     localAddress,
     publicKey: draftWgPublicKey.value,
+    privateKey: draftWgPrivateKey.value,
+    preSharedKey: draftWgPreSharedKey.value,
     mtu: draftWgMtu.value ? Number(draftWgMtu.value) : undefined,
     dns,
     reserved,
-    uuid: draftTuicUuid.value,
-    congestionControl: draftTuicCongestionControl.value,
-    udpRelayMode: draftTuicUdpRelayMode.value,
+    uuid: draftUuid.value,
+    password: draftPassword.value,
+    method: draftMethod.value,
+    congestionControl: draftCongestionControl.value,
+    udpRelayMode: draftUdpRelayMode.value,
     alpn,
-    sni: draftTuicSni.value,
-    disableSni: draftTuicDisableSni.value,
-    privateKeyInput: draftPrivateKeyInput.value,
-    preSharedKeyInput: draftPreSharedKeyInput.value,
-    passwordInput: draftPasswordInput.value,
+    sni: draftSni.value,
+    disableSni: draftDisableSni.value,
   })
 
   if (!res.ok) {
-    // Failure: preserve uncommitted draft fields — do NOT reset inputs
     connectionError.value = res.error || 'Invalid connection parameters'
     return
   }
   if (res.node) {
     syncDraftFromNode(res.node)
-  } else {
-    draftPrivateKeyInput.value = ''
-    draftPreSharedKeyInput.value = ''
-    draftPasswordInput.value = ''
   }
   connectionSaved.value = true
 }
 
 const previewNodeSnippet = computed(() => {
   if (!selectedNode.value) return ''
-  return renderSafeNodePreview(selectedNode.value, previewTarget.value)
+  return renderNodePreview(selectedNode.value, previewTarget.value)
 })
 
 function selectProtocolFilter(proto: string) {
@@ -388,15 +383,15 @@ onUnmounted(() => {
                   <span class="badge badge-xs badge-ghost">
                     Targets: {{ protocolSupportedTargets(node.protocol).join('/') }}
                   </span>
+                  <span v-if="node.connection.server && node.connection.port" class="badge badge-xs badge-ghost">
+                    {{ node.connection.server }}:{{ node.connection.port }}
+                  </span>
                   <template v-if="node.protocol.toLowerCase() === 'wireguard'">
-                    <span class="badge badge-xs badge-info badge-outline">
+                    <span v-if="node.connection.localAddress.length" class="badge badge-xs badge-info badge-outline">
                       IP: {{ node.connection.localAddress.join(', ') }}
                     </span>
                     <span v-if="node.connection.mtu" class="badge badge-xs badge-ghost">
                       MTU: {{ node.connection.mtu }}
-                    </span>
-                    <span class="badge badge-xs badge-ghost">
-                      PrivKey: {{ node.connection.privateKeyMasked }}
                     </span>
                   </template>
                   <template v-else-if="node.protocol.toLowerCase() === 'tuic'">
@@ -405,9 +400,6 @@ onUnmounted(() => {
                     </span>
                     <span v-if="node.connection.udpRelayMode" class="badge badge-xs badge-ghost">
                       UDP: {{ node.connection.udpRelayMode }}
-                    </span>
-                    <span class="badge badge-xs badge-ghost">
-                      Pass: {{ node.connection.passwordMasked }}
                     </span>
                   </template>
                 </div>
@@ -436,13 +428,6 @@ onUnmounted(() => {
                       title="No probe observations recorded yet"
                     >
                       No Probe
-                    </span>
-                    <span
-                      v-if="node.credentialMismatch"
-                      class="badge badge-error badge-sm gap-1 font-mono text-[11px]"
-                      title="Node credential version does not match observation version"
-                    >
-                      Version Mismatch
                     </span>
                   </div>
 
@@ -482,35 +467,27 @@ onUnmounted(() => {
       />
     </div>
 
-    <!-- Node Detail, Edit & Safe Preview Drawer -->
+    <!-- Node Detail, Edit & Preview Drawer -->
     <DrawerCard
       v-model="drawerOpen"
       :title="selectedNode ? `${selectedNode.displayName} (${selectedNode.protocol.toUpperCase()})` : t('nodes.inspectNode')"
       :description="t('nodes.connectionProfile')"
     >
       <div v-if="selectedNode" data-testid="node-detail-drawer" class="space-y-4 text-xs">
-        <!-- Security / Vault Redaction Banner -->
-        <div class="p-3 rounded-xl bg-info/10 border border-info/30 text-info flex items-start gap-2.5">
-          <LockClosedIcon class="w-4 h-4 shrink-0 mt-0.5" />
-          <div class="space-y-0.5">
-            <p class="font-semibold">{{ t('nodes.secretProtected') }}</p>
-            <p class="opacity-80 font-mono text-[11px]">
-              Logical ID: {{ selectedNode.logicalId }} · Credential Version: v{{ selectedNode.credentialVersion ?? 1 }}
-            </p>
-          </div>
-        </div>
-
-        <!-- Subscription Provenance & Reconcile Overwrite Notice -->
+        <!-- Subscription Provenance & Reconcile Notice -->
         <div
           data-testid="node-reconcile-overwrite-notice"
-          class="p-3 rounded-xl bg-warning/10 border border-warning/30 text-warning-content space-y-1"
+          class="p-3 rounded-xl bg-base-200 border border-base-300 space-y-1"
         >
-          <p class="font-semibold flex items-center gap-1.5">
-            <ArrowPathIcon class="w-4 h-4 shrink-0" />
-            <span>Subscription Reconcile &amp; Identity Semantics</span>
+          <p class="font-semibold flex items-center justify-between gap-1.5">
+            <span class="flex items-center gap-1.5">
+              <ArrowPathIcon class="w-4 h-4 shrink-0 text-primary" />
+              <span>Subscription Provenance &amp; Reconcile</span>
+            </span>
+            <span class="font-mono text-[11px] opacity-75">Logical ID: {{ selectedNode.logicalId }}</span>
           </p>
-          <p class="opacity-85 leading-relaxed">
-            Local credential/parameter edits apply to this logical ID with CAS version bumping. Subsequent upstream subscription Reconcile will overwrite local changes if the source payload for this logical ID updates. Identity-defining endpoint/transport changes (server, port, SNI, ALPN, disable_sni) are forbidden in-place; update the subscription source to reconcile as a new logical ID.
+          <p class="opacity-80 leading-relaxed">
+            Direct plaintext edits update this node in place. Subsequent upstream subscription Reconcile will refresh node configuration from the subscription source.
           </p>
           <p
             v-if="selectedNode.sources && selectedNode.sources.length > 0"
@@ -519,23 +496,6 @@ onUnmounted(() => {
           >
             Sources: {{ selectedNode.sources.map((s) => s.subscription_id).join(', ') }}
           </p>
-        </div>
-
-        <!-- Unavailable Credentials Alert -->
-        <div
-          v-if="!selectedNode.connection.available"
-          data-testid="node-connection-unavailable"
-          class="p-3 rounded-xl bg-error/10 border border-error/30 text-error flex items-start gap-2.5"
-        >
-          <ExclamationTriangleIcon class="w-4 h-4 shrink-0 mt-0.5" />
-          <div class="space-y-0.5">
-            <p class="font-semibold">
-              Connection details unavailable ({{ selectedNode.connection.unavailableReason || 'credential_unavailable' }})
-            </p>
-            <p class="opacity-80">
-              Verified node credentials are missing or failed identity authentication. No fabricated parameters are displayed and editing is disabled.
-            </p>
-          </div>
         </div>
 
         <!-- Compiler Target Compatibility for this Node Protocol -->
@@ -565,7 +525,7 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <!-- Connection Parameters Form (Edit & Inspect Non-Secret Fields) -->
+        <!-- Connection Parameters Form (Direct Plaintext Edit & Inspect) -->
         <form
           data-testid="node-connection-form"
           class="p-3.5 rounded-xl bg-base-200/70 border border-base-300 space-y-3"
@@ -604,7 +564,7 @@ onUnmounted(() => {
           <!-- WireGuard Specific Fields -->
           <div v-if="selectedNode.protocol.toLowerCase() === 'wireguard'" class="space-y-2.5 pt-2 border-t border-base-300">
             <div class="font-bold text-primary uppercase tracking-wider text-[11px]">
-              WireGuard Endpoint & Peer Configuration
+              WireGuard Endpoint &amp; Peer Configuration
             </div>
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
               <label class="form-control">
@@ -622,6 +582,24 @@ onUnmounted(() => {
                   v-model="draftWgPublicKey"
                   data-testid="wg-public-key-input"
                   placeholder="Base64 peer public key"
+                  class="input input-bordered input-xs font-mono mt-1"
+                />
+              </label>
+              <label class="form-control">
+                <span class="label-text text-xs font-semibold">Private Key</span>
+                <input
+                  v-model="draftWgPrivateKey"
+                  data-testid="wg-private-key-input"
+                  placeholder="Base64 client private key"
+                  class="input input-bordered input-xs font-mono mt-1"
+                />
+              </label>
+              <label class="form-control">
+                <span class="label-text text-xs font-semibold">Pre-Shared Key (Optional)</span>
+                <input
+                  v-model="draftWgPreSharedKey"
+                  data-testid="wg-psk-input"
+                  placeholder="Base64 pre-shared key"
                   class="input input-bordered input-xs font-mono mt-1"
                 />
               </label>
@@ -655,71 +633,36 @@ onUnmounted(() => {
                 />
               </label>
             </div>
-
-            <!-- Masked WireGuard Secrets & Write-Only Rotation Inputs (Never Exposed in DOM) -->
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 font-mono">
-              <div
-                data-testid="wg-private-key-masked"
-                class="p-2 rounded-lg bg-base-100 border border-base-300 flex items-center justify-between"
-              >
-                <span class="opacity-70">private_key:</span>
-                <span class="badge badge-xs badge-neutral">
-                  {{ selectedNode.connection.hasPrivateKey ? `${selectedNode.connection.privateKeyMasked} (Vault AEAD)` : 'unavailable' }}
-                </span>
-              </div>
-              <div
-                data-testid="wg-psk-masked"
-                class="p-2 rounded-lg bg-base-100 border border-base-300 flex items-center justify-between"
-              >
-                <span class="opacity-70">pre_shared_key:</span>
-                <span class="badge badge-xs badge-neutral">
-                  {{ selectedNode.connection.hasPreSharedKey ? `${selectedNode.connection.preSharedKeyMasked} (Vault AEAD)` : 'unavailable' }}
-                </span>
-              </div>
-              <label class="form-control">
-                <span class="label-text text-xs font-semibold">Rotate Private Key (Write-Only)</span>
-                <input
-                  v-model="draftPrivateKeyInput"
-                  data-testid="wg-private-key-input"
-                  type="password"
-                  autocomplete="new-password"
-                  placeholder="Leave empty to preserve current private_key"
-                  class="input input-bordered input-xs font-mono mt-1"
-                />
-              </label>
-              <label class="form-control">
-                <span class="label-text text-xs font-semibold">Rotate Pre-Shared Key (Write-Only)</span>
-                <input
-                  v-model="draftPreSharedKeyInput"
-                  data-testid="wg-psk-input"
-                  type="password"
-                  autocomplete="new-password"
-                  placeholder="Leave empty to preserve current pre_shared_key"
-                  class="input input-bordered input-xs font-mono mt-1"
-                />
-              </label>
-            </div>
           </div>
 
           <!-- TUIC Specific Fields -->
           <div v-else-if="selectedNode.protocol.toLowerCase() === 'tuic'" class="space-y-2.5 pt-2 border-t border-base-300">
             <div class="font-bold text-primary uppercase tracking-wider text-[11px]">
-              TUIC v5 Connection & QUIC Transport Parameters
+              TUIC v5 Connection &amp; QUIC Transport Parameters
             </div>
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-              <label class="form-control sm:col-span-2">
+              <label class="form-control">
                 <span class="label-text text-xs font-semibold">UUID</span>
                 <input
-                  v-model="draftTuicUuid"
+                  v-model="draftUuid"
                   data-testid="tuic-uuid-input"
                   placeholder="00000000-0000-4000-8000-000000000001"
                   class="input input-bordered input-xs font-mono mt-1"
                 />
               </label>
               <label class="form-control">
+                <span class="label-text text-xs font-semibold">Password</span>
+                <input
+                  v-model="draftPassword"
+                  data-testid="tuic-password-input"
+                  placeholder="TUIC authentication password"
+                  class="input input-bordered input-xs font-mono mt-1"
+                />
+              </label>
+              <label class="form-control">
                 <span class="label-text text-xs font-semibold">Congestion Control</span>
                 <select
-                  v-model="draftTuicCongestionControl"
+                  v-model="draftCongestionControl"
                   data-testid="tuic-cc-select"
                   class="select select-bordered select-xs font-mono mt-1"
                 >
@@ -732,7 +675,7 @@ onUnmounted(() => {
               <label class="form-control">
                 <span class="label-text text-xs font-semibold">UDP Relay Mode</span>
                 <select
-                  v-model="draftTuicUdpRelayMode"
+                  v-model="draftUdpRelayMode"
                   data-testid="tuic-udp-mode-select"
                   class="select select-bordered select-xs font-mono mt-1"
                 >
@@ -744,7 +687,7 @@ onUnmounted(() => {
               <label class="form-control">
                 <span class="label-text text-xs font-semibold">ALPN</span>
                 <input
-                  v-model="draftTuicAlpn"
+                  v-model="draftAlpn"
                   data-testid="tuic-alpn-input"
                   placeholder="h3"
                   class="input input-bordered input-xs font-mono mt-1"
@@ -753,7 +696,7 @@ onUnmounted(() => {
               <label class="form-control">
                 <span class="label-text text-xs font-semibold">SNI</span>
                 <input
-                  v-model="draftTuicSni"
+                  v-model="draftSni"
                   data-testid="tuic-sni-input"
                   placeholder="tuic.example.com"
                   class="input input-bordered input-xs font-mono mt-1"
@@ -761,7 +704,7 @@ onUnmounted(() => {
               </label>
               <label class="flex items-center gap-2 cursor-pointer sm:col-span-2 pt-1">
                 <input
-                  v-model="draftTuicDisableSni"
+                  v-model="draftDisableSni"
                   data-testid="tuic-disable-sni-checkbox"
                   type="checkbox"
                   class="checkbox checkbox-primary checkbox-xs"
@@ -769,51 +712,72 @@ onUnmounted(() => {
                 <span class="label-text text-xs font-mono">disable_sni</span>
               </label>
             </div>
+          </div>
 
-            <!-- Masked TUIC Secret & Write-Only Rotation Input (Never Exposed in DOM) -->
-            <div class="space-y-2 font-mono">
-              <div
-                data-testid="tuic-password-masked"
-                class="p-2 rounded-lg bg-base-100 border border-base-300 flex items-center justify-between"
+          <!-- Other Protocols (SS, VMess, VLESS, Trojan, Hysteria2) Plaintext Credential Fields -->
+          <div v-else class="pt-2 border-t border-base-300 space-y-2.5">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              <label
+                v-if="['vmess', 'vless'].includes(selectedNode.protocol.toLowerCase())"
+                class="form-control"
               >
-                <span class="opacity-70">password:</span>
-                <span class="badge badge-xs badge-neutral">
-                  {{ selectedNode.connection.hasPassword ? `${selectedNode.connection.passwordMasked} (Vault AEAD)` : 'unavailable' }}
-                </span>
-              </div>
-              <label class="form-control">
-                <span class="label-text text-xs font-semibold">Rotate Password (Write-Only)</span>
+                <span class="label-text text-xs font-semibold">UUID</span>
                 <input
-                  v-model="draftPasswordInput"
-                  data-testid="tuic-password-input"
-                  type="password"
-                  autocomplete="new-password"
-                  placeholder="Leave empty to preserve current password"
+                  v-model="draftUuid"
+                  data-testid="node-uuid-input"
+                  placeholder="UUID"
                   class="input input-bordered input-xs font-mono mt-1"
                 />
               </label>
+              <label
+                v-if="['ss', 'shadowsocks', 'vmess'].includes(selectedNode.protocol.toLowerCase())"
+                class="form-control"
+              >
+                <span class="label-text text-xs font-semibold">Method / Cipher</span>
+                <input
+                  v-model="draftMethod"
+                  data-testid="node-method-input"
+                  placeholder="aes-256-gcm, chacha20-ietf-poly1305..."
+                  class="input input-bordered input-xs font-mono mt-1"
+                />
+              </label>
+              <label class="form-control sm:col-span-2">
+                <span class="label-text text-xs font-semibold">Password</span>
+                <input
+                  v-model="draftPassword"
+                  data-testid="node-password-input"
+                  placeholder="Protocol password / secret"
+                  class="input input-bordered input-xs font-mono mt-1"
+                />
+              </label>
+              <label class="form-control">
+                <span class="label-text text-xs font-semibold">SNI</span>
+                <input
+                  v-model="draftSni"
+                  data-testid="node-sni-input"
+                  placeholder="sni.example.com"
+                  class="input input-bordered input-xs font-mono mt-1"
+                />
+              </label>
+              <label class="form-control">
+                <span class="label-text text-xs font-semibold">ALPN</span>
+                <input
+                  v-model="draftAlpn"
+                  data-testid="node-alpn-input"
+                  placeholder="h2, http/1.1"
+                  class="input input-bordered input-xs font-mono mt-1"
+                />
+              </label>
+              <label class="flex items-center gap-2 cursor-pointer sm:col-span-2 pt-1">
+                <input
+                  v-model="draftDisableSni"
+                  data-testid="node-disable-sni-checkbox"
+                  type="checkbox"
+                  class="checkbox checkbox-primary checkbox-xs"
+                />
+                <span class="label-text text-xs font-mono">disable_sni</span>
+              </label>
             </div>
-          </div>
-
-          <!-- Other Protocols Protected Credential Summary -->
-          <div v-else class="pt-2 border-t border-base-300 space-y-2 font-mono">
-            <div class="p-2 rounded-lg bg-base-100 border border-base-300 flex items-center justify-between">
-              <span class="opacity-70">credential secret:</span>
-              <span class="badge badge-xs badge-neutral">
-                {{ selectedNode.connection.hasPassword ? `${selectedNode.connection.passwordMasked} (Vault AEAD)` : 'unavailable' }}
-              </span>
-            </div>
-            <label class="form-control">
-              <span class="label-text text-xs font-semibold">Rotate Credential Secret (Write-Only)</span>
-              <input
-                v-model="draftPasswordInput"
-                data-testid="node-password-input"
-                type="password"
-                autocomplete="new-password"
-                placeholder="Leave empty to preserve current secret"
-                class="input input-bordered input-xs font-mono mt-1"
-              />
-            </label>
           </div>
 
           <div class="flex items-center justify-between pt-2">
@@ -829,24 +793,24 @@ onUnmounted(() => {
               data-testid="node-connection-saved"
               class="text-success font-medium"
             >
-              Connection parameters saved (v{{ selectedNode.credentialVersion ?? 1 }})
+              Connection parameters saved
             </span>
             <span v-else />
             <button
               type="submit"
               data-testid="node-save-connection-btn"
               class="btn btn-primary btn-xs"
-              :disabled="!selectedNode.connection.available || savingConnection"
+              :disabled="savingConnection"
             >
-              Save &amp; Rotate
+              {{ t('common.save') }}
             </button>
           </div>
         </form>
 
-        <!-- Redacted Node Config Snippet Preview (Mihomo YAML / sing-box JSON) -->
+        <!-- Node Config Snippet Preview (Mihomo YAML / sing-box JSON) -->
         <div class="space-y-2">
           <div class="flex items-center justify-between">
-            <span class="font-bold text-xs">Redacted Node Target Preview</span>
+            <span class="font-bold text-xs">Node Target Preview</span>
             <div class="flex items-center gap-1">
               <button
                 type="button"

@@ -84,8 +84,8 @@ func seed10000NodesWithRisk(t *testing.T, db *sql.DB) (domain.RiskPolicy, string
 	defer func() { _ = tx.Rollback() }()
 
 	nodeStmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO nodes (logical_id, protocol, display_name, normalized_config_secret_ref, active, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO nodes (logical_id, protocol, display_name, server, port, config_json, active, created_at, updated_at)
+		VALUES (?, ?, ?, '203.0.113.10', 8388, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		t.Fatalf("failed to prepare node stmt: %v", err)
@@ -121,14 +121,14 @@ func seed10000NodesWithRisk(t *testing.T, db *sql.DB) (domain.RiskPolicy, string
 		logicalID := fmt.Sprintf("node-risk-%05d", i)
 		proto := protocols[i%len(protocols)]
 		displayName := fmt.Sprintf("RiskNode-%05d", i)
-		secretRef := fmt.Sprintf("secret://credentials/node-%05d?token=super-secret-pw-%05d", i, i)
+		configJSON := fmt.Sprintf(`{"method":"aes-256-gcm","password":"pw-%05d"}`, i)
 		active := 1
 		if i > 8000 {
 			active = 0
 		}
 		timestamp := now.Add(time.Duration(i) * time.Millisecond).Format(time.RFC3339Nano)
 
-		if _, err := nodeStmt.ExecContext(ctx, logicalID, string(proto), displayName, secretRef, active, timestamp, timestamp); err != nil {
+		if _, err := nodeStmt.ExecContext(ctx, logicalID, string(proto), displayName, configJSON, active, timestamp, timestamp); err != nil {
 			t.Fatalf("insert node %d: %v", i, err)
 		}
 
@@ -581,9 +581,9 @@ func TestNodeRiskRepository_MultiProviderAndHistoryPagination(t *testing.T) {
 		displayName := fmt.Sprintf("MPNode-%03d", i)
 		createdAt := now.Add(time.Duration(i) * time.Second).Format(time.RFC3339Nano)
 		if _, err := db.ExecContext(ctx, `
-			INSERT INTO nodes (logical_id, protocol, display_name, normalized_config_secret_ref, active, created_at, updated_at)
-			VALUES (?, 'vless', ?, ?, 1, ?, ?);
-		`, logicalID, displayName, fmt.Sprintf("secret://mp/%03d", i), createdAt, createdAt); err != nil {
+			INSERT INTO nodes (logical_id, protocol, display_name, server, port, config_json, active, created_at, updated_at)
+			VALUES (?, 'vless', ?, '203.0.113.20', 443, '{}', 1, ?, ?);
+		`, logicalID, displayName, createdAt, createdAt); err != nil {
 			t.Fatalf("insert node %s: %v", logicalID, err)
 		}
 

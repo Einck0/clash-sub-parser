@@ -434,28 +434,11 @@ func (c *PeriodicCoordinator) executeBatch(parentCtx context.Context, batch *dom
 	})
 
 	batch.Counts.TotalNodes = len(nodes)
-
-	// Fail-closed for nodes with unconfigured/invalid credential versions
-	var eligibleNodes []domain.Node
-	for _, n := range nodes {
-		if n.CredentialVersion <= 0 {
-			batch.Counts.SkippedNodes++
-			continue
-		}
-		eligibleNodes = append(eligibleNodes, n)
-	}
-
-	if len(eligibleNodes) == 0 {
-		if batch.Counts.SkippedNodes > 0 {
-			batch.RedactedError = fmt.Sprintf("%d nodes skipped: missing or invalid credentials (fail-closed)", batch.Counts.SkippedNodes)
-		}
+	if len(nodes) == 0 {
 		_ = batch.TransitionTo(domain.ProbeBatchStateSucceeded)
 		_ = c.schedules.UpdateBatch(context.Background(), batch)
 		_ = c.schedules.ReleaseLease(context.Background(), batch.ID, c.ownerID)
 		return nil
-	}
-	if batch.Counts.SkippedNodes > 0 && batch.RedactedError == "" {
-		batch.RedactedError = fmt.Sprintf("%d nodes skipped: missing or invalid credentials (fail-closed)", batch.Counts.SkippedNodes)
 	}
 
 	// 5. Partition active nodes into run chunks within task budget
@@ -473,12 +456,12 @@ func (c *PeriodicCoordinator) executeBatch(parentCtx context.Context, batch *dom
 	}
 
 	var chunks [][]domain.Node
-	for i := 0; i < len(eligibleNodes); i += nodesPerChunk {
+	for i := 0; i < len(nodes); i += nodesPerChunk {
 		end := i + nodesPerChunk
-		if end > len(eligibleNodes) {
-			end = len(eligibleNodes)
+		if end > len(nodes) {
+			end = len(nodes)
 		}
-		chunks = append(chunks, eligibleNodes[i:end])
+		chunks = append(chunks, nodes[i:end])
 	}
 
 	batch.Counts.DispatchedRuns = len(chunks)

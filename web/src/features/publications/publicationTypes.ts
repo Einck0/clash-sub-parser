@@ -191,25 +191,3 @@ export function formatDigest(digest: string): string {
   return `${digest.slice(0, 8)}...${digest.slice(-5)}`
 }
 
-/**
- * Redacts sensitive secret values (WireGuard private_key / pre_shared_key, TUIC/SS/Trojan/Hy2 password & obfs-password)
- * before rendering configuration text into DOM preview containers, while keeping non-secret connection parameters
- * (server, port, local_address/ip/ipv6, public_key, mtu, dns, reserved, uuid, congestion_control, udp_relay_mode, alpn, sni)
- * visible for inspection.
- */
-export function redactPreviewSecrets(content: string): string {
-  if (!content) return ''
-  return content
-    .replace(
-      /(^|\n)(\s*(?:-\s*)?(?:private-key|private_key|pre-shared-key|pre_shared_key|preshared-key|preshared_key|password|obfs-password|obfs_password)\s*:\s*)([^\r\n#]+)/gi,
-      '$1$2***'
-    )
-    .replace(
-      /("(?:private_key|private-key|pre_shared_key|pre-shared-key|preshared_key|preshared-key|password|obfs_password|obfs-password)"\s*:\s*)"[^"]*"/gi,
-      '$1"***"'
-    )
-    .replace(
-      /(\b(?:password|private-key|private_key|preshared-key|preshared_key|pre-shared-key|pre_shared_key|obfs-password|obfs_password)\s*=\s*)([^,\r\n]+)/gi,
-      '$1***'
-    )
-}

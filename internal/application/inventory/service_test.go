@@ -788,16 +788,18 @@ proxies:
 	}
 }
 
-// 10. NodeView non-disclosure test: ensure secret references are stripped from NodeView.
-func TestReconcile_NodeViewSecretRedaction(t *testing.T) {
+// 10. NodeView plaintext projection test.
+func TestReconcile_NodeViewProjection(t *testing.T) {
 	node := domain.Node{
-		LogicalID:                 "node_0123456789abcdef",
-		Protocol:                  domain.ProtocolSS,
-		DisplayName:               "Public Display",
-		NormalizedConfigSecretRef: "secret_should_never_leak_in_view",
-		Active:                    true,
-		CreatedAt:                 domain.NowUTC(),
-		UpdatedAt:                 domain.NowUTC(),
+		LogicalID:   "node_0123456789abcdef",
+		Protocol:    domain.ProtocolSS,
+		DisplayName: "Public Display",
+		Server:      "203.0.113.10",
+		Port:        8388,
+		Credentials: domain.InboundProtocolCredential{Method: "aes-256-gcm", Password: "secret"},
+		Active:      true,
+		CreatedAt:   domain.NowUTC(),
+		UpdatedAt:   domain.NowUTC(),
 	}
 
 	view := inventory.ToNodeView(node)
@@ -806,6 +808,9 @@ func TestReconcile_NodeViewSecretRedaction(t *testing.T) {
 	}
 	if view.DisplayName != node.DisplayName {
 		t.Fatalf("display_name mismatch: %s != %s", view.DisplayName, node.DisplayName)
+	}
+	if view.Server != node.Server || view.Port != node.Port || view.Credentials == nil || view.Credentials.Password != "secret" {
+		t.Fatalf("expected plaintext server/port/credentials in NodeView, got %+v", view)
 	}
 
 	views := inventory.ToNodeViews([]domain.Node{node})

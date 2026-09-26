@@ -76,8 +76,8 @@ func TestFeatureConvergence_SchemaMigrationTo8(t *testing.T) {
 	if !report.Ready {
 		t.Fatalf("expected readiness report Ready=true, got report: %+v", report)
 	}
-	if report.SchemaVersion != 10 {
-		t.Fatalf("expected schema version 10, got %d", report.SchemaVersion)
+	if report.SchemaVersion != 11 {
+		t.Fatalf("expected schema version 11, got %d", report.SchemaVersion)
 	}
 	if len(report.MissingTables) > 0 {
 		t.Fatalf("unexpected missing tables: %v", report.MissingTables)
@@ -191,19 +191,12 @@ func TestFeatureConvergence_FullStack(t *testing.T) {
 		ipriskApp.WithAuditRepository(auditRepo),
 	)
 
-	credRepo := sqlite.NewNodeCredentialRepository(db)
-	vault, err := domain.NewNodeCredentialVault("k1", map[string][]byte{"k1": []byte("01234567890123456789012345678901")})
-	if err != nil {
-		t.Fatalf("create vault: %v", err)
-	}
-
 	pubService := publication.NewService(
 		pubRepo,
 		auditRepo,
 		publication.WithPolicyRepository(policyRepo),
 		publication.WithRevisionRepository(revisionRepo),
 		publication.WithNodeRepository(nodeRepo),
-		publication.WithCredentialSource(vault, credRepo),
 		publication.WithNodeFilterRepository(nodeFilterRepo),
 		publication.WithNodeSourceRepository(nodeSourceRepo),
 		publication.WithProbeObservationRepository(probeObsRepo),
@@ -289,78 +282,41 @@ func TestFeatureConvergence_FullStack(t *testing.T) {
 	// -------------------------------------------------------------------------
 	now := time.Now().UTC()
 	node1 := domain.Node{
-		LogicalID:                 domain.ComputeNodeLogicalID(domain.ProtocolTrojan, "tokyo1.example.com", 443, nil),
-		Protocol:                  domain.ProtocolTrojan,
-		DisplayName:               "Tokyo Trojan Fast",
-		NormalizedConfigSecretRef: "secret://tokyo-1",
-		CredentialVersion:         1,
-		Active:                    true,
-		CreatedAt:                 now,
-		UpdatedAt:                 now,
+		LogicalID:   domain.ComputeNodeLogicalID(domain.ProtocolTrojan, "tokyo1.example.com", 443, nil),
+		Protocol:    domain.ProtocolTrojan,
+		DisplayName: "Tokyo Trojan Fast",
+		Server:      "tokyo1.example.com",
+		Port:        443,
+		Credentials: domain.InboundProtocolCredential{Password: "tokyo1-pass"},
+		Active:      true,
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 	node2 := domain.Node{
-		LogicalID:                 domain.ComputeNodeLogicalID(domain.ProtocolVMess, "us2.example.com", 443, nil),
-		Protocol:                  domain.ProtocolVMess,
-		DisplayName:               "US Vmess Slow",
-		NormalizedConfigSecretRef: "secret://us-2",
-		CredentialVersion:         1,
-		Active:                    true,
-		CreatedAt:                 now,
-		UpdatedAt:                 now,
+		LogicalID:   domain.ComputeNodeLogicalID(domain.ProtocolVMess, "us2.example.com", 443, nil),
+		Protocol:    domain.ProtocolVMess,
+		DisplayName: "US Vmess Slow",
+		Server:      "us2.example.com",
+		Port:        443,
+		Credentials: domain.InboundProtocolCredential{UUID: "11111111-1111-1111-1111-111111111111", Method: "auto"},
+		Active:      true,
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 	node3 := domain.Node{
-		LogicalID:                 domain.ComputeNodeLogicalID(domain.ProtocolTrojan, "hk3.example.com", 443, nil),
-		Protocol:                  domain.ProtocolTrojan,
-		DisplayName:               "HK Trojan Mismatched",
-		NormalizedConfigSecretRef: "secret://hk-3",
-		CredentialVersion:         2, // Version is 2!
-		Active:                    true,
-		CreatedAt:                 now,
-		UpdatedAt:                 now,
+		LogicalID:   domain.ComputeNodeLogicalID(domain.ProtocolTrojan, "hk3.example.com", 443, nil),
+		Protocol:    domain.ProtocolTrojan,
+		DisplayName: "HK Trojan Mismatched",
+		Server:      "hk3.example.com",
+		Port:        443,
+		Credentials: domain.InboundProtocolCredential{Password: "hk3-pass-v2"},
+		Active:      true,
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 
 	if err := nodeRepo.UpsertBatch(ctx, []domain.Node{node1, node2, node3}); err != nil {
 		t.Fatalf("failed to insert nodes: %v", err)
-	}
-	id1 := domain.NewVerifiedNodeIdentity(node1.LogicalID, node1.Protocol, "tokyo1.example.com", 443, 1, nil)
-	id2 := domain.NewVerifiedNodeIdentity(node2.LogicalID, node2.Protocol, "us2.example.com", 443, 1, nil)
-	id3 := domain.NewVerifiedNodeIdentity(node3.LogicalID, node3.Protocol, "hk3.example.com", 443, 2, nil)
-	for _, cp := range []*domain.NodeCredentialPayload{
-		{
-			LogicalID:   node1.LogicalID,
-			Protocol:    node1.Protocol,
-			Server:      "tokyo1.example.com",
-			Port:        443,
-			Version:     1,
-			Identity:    &id1,
-			Credentials: domain.InboundProtocolCredential{Password: "tokyo1-pass"},
-		},
-		{
-			LogicalID:   node2.LogicalID,
-			Protocol:    node2.Protocol,
-			Server:      "us2.example.com",
-			Port:        443,
-			Version:     1,
-			Identity:    &id2,
-			Credentials: domain.InboundProtocolCredential{UUID: "11111111-1111-1111-1111-111111111111", Method: "auto"},
-		},
-		{
-			LogicalID:   node3.LogicalID,
-			Protocol:    node3.Protocol,
-			Server:      "hk3.example.com",
-			Port:        443,
-			Version:     2,
-			Identity:    &id3,
-			Credentials: domain.InboundProtocolCredential{Password: "hk3-pass-v2"},
-		},
-	} {
-		rec, err := vault.Encrypt(cp)
-		if err != nil {
-			t.Fatalf("encrypt node credential %s: %v", cp.LogicalID, err)
-		}
-		if err := credRepo.Upsert(ctx, rec); err != nil {
-			t.Fatalf("upsert node credential %s: %v", cp.LogicalID, err)
-		}
 	}
 
 	// Create ProbeRun for observations FK
@@ -378,39 +334,35 @@ func TestFeatureConvergence_FullStack(t *testing.T) {
 	}
 
 	// Observations:
-	// Node 1: baseline latency 45ms, cred_version 1 (matches node 1)
-	v1 := 1
+	// Node 1: baseline latency 45ms (<= 100ms)
 	obs1 := domain.ProbeObservation{
-		ID:                domain.MustNewUUIDv7(),
-		ProbeRunID:        run.ID,
-		NodeLogicalID:     node1.LogicalID,
-		Kind:              domain.ProbeKindBaseline,
-		Verdict:           domain.VerdictAvailable,
-		LatencyMS:         45,
-		CredentialVersion: &v1,
-		ObservedAt:        now,
+		ID:            domain.MustNewUUIDv7(),
+		ProbeRunID:    run.ID,
+		NodeLogicalID: node1.LogicalID,
+		Kind:          domain.ProbeKindBaseline,
+		Verdict:       domain.VerdictAvailable,
+		LatencyMS:     45,
+		ObservedAt:    now,
 	}
-	// Node 2: baseline latency 250ms, cred_version 1
+	// Node 2: baseline latency 250ms
 	obs2 := domain.ProbeObservation{
-		ID:                domain.MustNewUUIDv7(),
-		ProbeRunID:        run.ID,
-		NodeLogicalID:     node2.LogicalID,
-		Kind:              domain.ProbeKindBaseline,
-		Verdict:           domain.VerdictAvailable,
-		LatencyMS:         250,
-		CredentialVersion: &v1,
-		ObservedAt:        now,
+		ID:            domain.MustNewUUIDv7(),
+		ProbeRunID:    run.ID,
+		NodeLogicalID: node2.LogicalID,
+		Kind:          domain.ProbeKindBaseline,
+		Verdict:       domain.VerdictAvailable,
+		LatencyMS:     250,
+		ObservedAt:    now,
 	}
-	// Node 3: baseline latency 40ms, cred_version 1 (mismatch with node3 credential_version 2!)
+	// Node 3: baseline latency 240ms (> 100ms, excluded by group filter)
 	obs3 := domain.ProbeObservation{
-		ID:                domain.MustNewUUIDv7(),
-		ProbeRunID:        run.ID,
-		NodeLogicalID:     node3.LogicalID,
-		Kind:              domain.ProbeKindBaseline,
-		Verdict:           domain.VerdictAvailable,
-		LatencyMS:         45,
-		CredentialVersion: &v1, // Observation has version 1, but node is version 2!
-		ObservedAt:        now,
+		ID:            domain.MustNewUUIDv7(),
+		ProbeRunID:    run.ID,
+		NodeLogicalID: node3.LogicalID,
+		Kind:          domain.ProbeKindBaseline,
+		Verdict:       domain.VerdictAvailable,
+		LatencyMS:     240,
+		ObservedAt:    now,
 	}
 
 	for _, o := range []domain.ProbeObservation{obs1, obs2, obs3} {
@@ -420,7 +372,7 @@ func TestFeatureConvergence_FullStack(t *testing.T) {
 	}
 
 	// -------------------------------------------------------------------------
-	// 2. Test GET /api/v1/nodes: Check credential_version & credential_mismatch
+	// 2. Test GET /api/v1/nodes: Check plaintext server & port returned directly
 	// -------------------------------------------------------------------------
 	resp, body := doReq(http.MethodGet, "/api/v1/nodes", nil)
 	if resp.StatusCode != http.StatusOK {
@@ -430,9 +382,9 @@ func TestFeatureConvergence_FullStack(t *testing.T) {
 	var nodePage struct {
 		Data struct {
 			Items []struct {
-				LogicalID          string `json:"logical_id"`
-				CredentialVersion  int    `json:"credential_version"`
-				CredentialMismatch bool   `json:"credential_mismatch"`
+				LogicalID string `json:"logical_id"`
+				Server    string `json:"server"`
+				Port      int    `json:"port"`
 			} `json:"items"`
 		} `json:"data"`
 	}
@@ -444,20 +396,14 @@ func TestFeatureConvergence_FullStack(t *testing.T) {
 	for _, n := range nodePage.Data.Items {
 		if n.LogicalID == node1.LogicalID {
 			foundN1 = true
-			if n.CredentialVersion != 1 {
-				t.Errorf("node1 expected credential_version 1, got %d", n.CredentialVersion)
-			}
-			if n.CredentialMismatch {
-				t.Errorf("node1 expected credential_mismatch false, got true")
+			if n.Server != "tokyo1.example.com" || n.Port != 443 {
+				t.Errorf("node1 expected tokyo1.example.com:443, got %s:%d", n.Server, n.Port)
 			}
 		}
 		if n.LogicalID == node3.LogicalID {
 			foundN3 = true
-			if n.CredentialVersion != 2 {
-				t.Errorf("node3 expected credential_version 2, got %d", n.CredentialVersion)
-			}
-			if !n.CredentialMismatch {
-				t.Errorf("node3 expected credential_mismatch true, got false")
+			if n.Server != "hk3.example.com" || n.Port != 443 {
+				t.Errorf("node3 expected hk3.example.com:443, got %s:%d", n.Server, n.Port)
 			}
 		}
 	}
@@ -939,12 +885,6 @@ func TestFeatureConvergence_NativeMihomoExportCleanSlate(t *testing.T) {
 		t.Fatalf("run migrations: %v", err)
 	}
 
-	masterKey := []byte("01234567890123456789012345678901")
-	vault, err := domain.NewNodeCredentialVault("k1", map[string][]byte{"k1": masterKey})
-	if err != nil {
-		t.Fatalf("create vault: %v", err)
-	}
-	credRepo := sqlite.NewNodeCredentialRepository(db)
 	nodeRepo := sqlite.NewNodeRepository(db)
 	policyRepo := sqlite.NewPolicyRepository(db)
 	revRepo := sqlite.NewRevisionRepository(db)
@@ -954,36 +894,11 @@ func TestFeatureConvergence_NativeMihomoExportCleanSlate(t *testing.T) {
 	now := time.Now().UTC()
 	hy2ID := domain.ComputeNodeLogicalID(domain.ProtocolHysteria2, "hy2.integration.edge", 443, nil)
 	hy2Node := domain.Node{
-		LogicalID:         hy2ID,
-		Protocol:          domain.ProtocolHysteria2,
-		DisplayName:       "Hy2-Integration",
-		CredentialVersion: 1,
-		Active:            true,
-		CreatedAt:         now,
-		UpdatedAt:         now,
-	}
-
-	ssID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "ss.integration.edge", 8388, nil)
-	ssNode := domain.Node{
-		LogicalID:         ssID,
-		Protocol:          domain.ProtocolSS,
-		DisplayName:       "SS-Integration",
-		CredentialVersion: 1,
-		Active:            true,
-		CreatedAt:         now,
-		UpdatedAt:         now,
-	}
-
-	if err := nodeRepo.UpsertBatch(ctx, []domain.Node{hy2Node, ssNode}); err != nil {
-		t.Fatalf("upsert nodes: %v", err)
-	}
-
-	hy2Payload := &domain.NodeCredentialPayload{
-		LogicalID: hy2ID,
-		Protocol:  domain.ProtocolHysteria2,
-		Server:    "hy2.integration.edge",
-		Port:      443,
-		Version:   1,
+		LogicalID:   hy2ID,
+		Protocol:    domain.ProtocolHysteria2,
+		DisplayName: "Hy2-Integration",
+		Server:      "hy2.integration.edge",
+		Port:        443,
 		Credentials: domain.InboundProtocolCredential{
 			Password: "hy2-convergence-secret",
 			Transport: map[string]string{
@@ -991,32 +906,29 @@ func TestFeatureConvergence_NativeMihomoExportCleanSlate(t *testing.T) {
 				"skip_cert_verify": "true",
 			},
 		},
-	}
-	hy2Rec, err := vault.Encrypt(hy2Payload)
-	if err != nil {
-		t.Fatalf("encrypt hy2 payload: %v", err)
-	}
-	if err := credRepo.Upsert(ctx, hy2Rec); err != nil {
-		t.Fatalf("upsert hy2 record: %v", err)
+		Active:    true,
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 
-	ssPayload := &domain.NodeCredentialPayload{
-		LogicalID: ssID,
-		Protocol:  domain.ProtocolSS,
-		Server:    "ss.integration.edge",
-		Port:      8388,
-		Version:   1,
+	ssID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "ss.integration.edge", 8388, nil)
+	ssNode := domain.Node{
+		LogicalID:   ssID,
+		Protocol:    domain.ProtocolSS,
+		DisplayName: "SS-Integration",
+		Server:      "ss.integration.edge",
+		Port:        8388,
 		Credentials: domain.InboundProtocolCredential{
 			Method:   "aes-256-gcm",
 			Password: "ss-convergence-secret",
 		},
+		Active:    true,
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
-	ssRec, err := vault.Encrypt(ssPayload)
-	if err != nil {
-		t.Fatalf("encrypt ss payload: %v", err)
-	}
-	if err := credRepo.Upsert(ctx, ssRec); err != nil {
-		t.Fatalf("upsert ss record: %v", err)
+
+	if err := nodeRepo.UpsertBatch(ctx, []domain.Node{hy2Node, ssNode}); err != nil {
+		t.Fatalf("upsert nodes: %v", err)
 	}
 
 	revID := domain.MustNewUUIDv7()
@@ -1055,7 +967,6 @@ func TestFeatureConvergence_NativeMihomoExportCleanSlate(t *testing.T) {
 		publication.WithPolicyRepository(policyRepo),
 		publication.WithRevisionRepository(revRepo),
 		publication.WithNodeRepository(nodeRepo),
-		publication.WithCredentialSource(vault, credRepo),
 	)
 
 	router := transporthttp.NewRouter(transporthttp.RouterConfig{
@@ -1203,7 +1114,6 @@ func TestFeatureConvergence_NativeMihomoExportCleanSlate(t *testing.T) {
 			publication.WithPolicyRepository(policyRepo),
 			publication.WithRevisionRepository(revRepo),
 			publication.WithNodeRepository(nodeRepo),
-			publication.WithCredentialSource(vault, credRepo),
 		)
 		restartedRouter := transporthttp.NewRouter(transporthttp.RouterConfig{
 			PublicationService: restartedPubService,
@@ -1333,12 +1243,6 @@ func TestFeatureConvergence_AllFourTargetsFullLifecycleAndRotationRejection(t *t
 		t.Fatalf("run migrations: %v", err)
 	}
 
-	masterKey := []byte("fedcba9876543210fedcba9876543210")
-	vault, err := domain.NewNodeCredentialVault("k1", map[string][]byte{"k1": masterKey})
-	if err != nil {
-		t.Fatalf("create vault: %v", err)
-	}
-	credRepo := sqlite.NewNodeCredentialRepository(db)
 	nodeRepo := sqlite.NewNodeRepository(db)
 	subRepo := sqlite.NewSubscriptionRepository(db)
 	fetchRepo := sqlite.NewSubscriptionFetchRepository(db)
@@ -1452,7 +1356,6 @@ func TestFeatureConvergence_AllFourTargetsFullLifecycleAndRotationRejection(t *t
 		nodeRepo,
 		sourceRepo,
 		fetcher,
-		inventory.WithCredentialVault(vault, credRepo),
 	)
 	recRes, err := invSvc.ReconcileSubscription(ctx, subID)
 	if err != nil {
@@ -1552,7 +1455,6 @@ func TestFeatureConvergence_AllFourTargetsFullLifecycleAndRotationRejection(t *t
 			publication.WithPolicyRepository(policyRepo),
 			publication.WithRevisionRepository(revRepo),
 			publication.WithNodeRepository(nodeRepo),
-			publication.WithCredentialSource(vault, credRepo),
 			publication.WithNodeFilterRepository(nodeFilterRepo),
 		)
 		r := transporthttp.NewRouter(transporthttp.RouterConfig{
@@ -1819,7 +1721,7 @@ func TestFeatureConvergence_AllFourTargetsFullLifecycleAndRotationRejection(t *t
 		}
 		_ = json.Unmarshal(pubRec.Body.Bytes(), &pubEnv)
 
-		// Restart recovery for Surge/QX
+		// Restart recovery for Surge/QX serves persisted plaintext content directly
 		_, restartedRouter := makeRouter()
 		dlReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/publish/v1/%s?token=%s", pubEnv.Data.Publication.ID, pubEnv.Data.RawToken), nil)
 		dlRec := httptest.NewRecorder()
@@ -1828,51 +1730,13 @@ func TestFeatureConvergence_AllFourTargetsFullLifecycleAndRotationRejection(t *t
 			t.Fatalf("%s restart download failed: code=%d", target, dlRec.Code)
 		}
 
-		// Now rotate SS node credential to version 2 (different password) AND simulate process restart
-		ssNode := nodeByProto[domain.ProtocolSS]
-		origSSRec, err := credRepo.GetByLogicalID(ctx, ssNode.LogicalID, 1)
-		if err != nil {
-			t.Fatalf("get original ss credential record: %v", err)
+		// Verify plaintext content is persisted directly in publications table
+		var storedContent []byte
+		if err := db.QueryRowContext(ctx, "SELECT content FROM publications WHERE id = ?;", pubEnv.Data.Publication.ID).Scan(&storedContent); err != nil {
+			t.Fatalf("query stored publication content for %s: %v", target, err)
 		}
-		origSSPayload, err := vault.Decrypt(origSSRec, domain.ProtocolSS)
-		if err != nil {
-			t.Fatalf("decrypt original ss credential payload: %v", err)
+		if string(storedContent) != prevEnv.Data.Content {
+			t.Fatalf("expected stored plaintext content in publications table to match preview for %s", target)
 		}
-		ssNode.CredentialVersion = 2
-		_ = nodeRepo.UpsertBatch(ctx, []domain.Node{ssNode})
-		rotIdentity := *origSSPayload.Identity
-		rotIdentity.Version = 2
-		rotatedPayload := &domain.NodeCredentialPayload{
-			LogicalID: ssNode.LogicalID,
-			Protocol:  domain.ProtocolSS,
-			Server:    "198.51.100.11",
-			Port:      8388,
-			Version:   2,
-			Identity:  &rotIdentity,
-			Credentials: domain.InboundProtocolCredential{
-				Method:    "aes-256-gcm",
-				Password:  "ROTATED-SS-PASSWORD-V2-MUST-NOT-LEAK",
-				Transport: origSSPayload.Credentials.Transport,
-			},
-		}
-		rotRec, _ := vault.Encrypt(rotatedPayload)
-		_ = credRepo.Upsert(ctx, rotRec)
-
-		_, postRotateRouter := makeRouter()
-		rotDlReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/publish/v1/%s?token=%s", pubEnv.Data.Publication.ID, pubEnv.Data.RawToken), nil)
-		rotDlRec := httptest.NewRecorder()
-		postRotateRouter.ServeHTTP(rotDlRec, rotDlReq)
-		if rotDlRec.Code == http.StatusOK {
-			t.Fatalf("SECURITY FAILURE: %s download succeeded after credential rotation + restart instead of failing closed", target)
-		}
-		if strings.Contains(rotDlRec.Body.String(), "ROTATED-SS-PASSWORD-V2-MUST-NOT-LEAK") || strings.Contains(rotDlRec.Body.String(), "secret-ss-password-conv") {
-			t.Fatalf("SECURITY LEAK: %s error response leaked credential secret: %s", target, rotDlRec.Body.String())
-		}
-
-		// Restore SS node credential to version 1 for subsequent target iteration
-		ssNode.CredentialVersion = 1
-		_ = nodeRepo.UpsertBatch(ctx, []domain.Node{ssNode})
-		_ = credRepo.Upsert(ctx, origSSRec)
-		_, _ = db.ExecContext(ctx, "DELETE FROM node_credentials WHERE logical_id = ? AND version = 2;", ssNode.LogicalID)
 	}
 }

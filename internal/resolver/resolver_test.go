@@ -1046,16 +1046,14 @@ func TestResolver_ProbeFailClosed_MissingExpiredMismatchNotEquals(t *testing.T) 
 	gid := domain.MustNewUUIDv7()
 	nID := testNodeLogicalID("node-probe-test")
 	node := domain.Node{
-		LogicalID:         nID,
-		DisplayName:       "Probe Test Node",
-		Protocol:          domain.ProtocolTrojan,
-		Active:            true,
-		CredentialVersion: 2,
+		LogicalID:   nID,
+		DisplayName: "Probe Test Node",
+		Protocol:    domain.ProtocolTrojan,
+		Active:      true,
 	}
 
 	freshness := 300
 	kind := domain.ProbeKindBaseline
-	ver := 2
 	now := time.Now().UTC()
 
 	baseInput := func() resolver.ResolveInput {
@@ -1099,44 +1097,7 @@ func TestResolver_ProbeFailClosed_MissingExpiredMismatchNotEquals(t *testing.T) 
 		}
 	})
 
-	// 2. Mismatched credential version (obs version 1 vs node version 2)
-	t.Run("mismatched credential version rejects", func(t *testing.T) {
-		inp := baseInput()
-		inp.GlobalFilter = &domain.NodeFilterSpec{
-			Conditions: []domain.FilterCondition{
-				{
-					Field:            domain.FilterFieldProbeVerdict,
-					Op:               domain.FilterOpEquals,
-					Value:            "available",
-					ProbeKind:        &kind,
-					FreshnessSeconds: &freshness,
-				},
-			},
-		}
-		mismatchedVer := 1
-		inp.LatestObservations = map[string]map[domain.ProbeKind]domain.ProbeObservation{
-			nID: {
-				domain.ProbeKindBaseline: {
-					ID:                "obs-1",
-					NodeLogicalID:     nID,
-					Kind:              domain.ProbeKindBaseline,
-					Verdict:           domain.VerdictAvailable,
-					ObservedAt:        now,
-					CredentialVersion: &mismatchedVer,
-				},
-			},
-		}
-
-		snap, err := r.Resolve(ctx, inp)
-		if err != nil {
-			t.Fatalf("resolve failed: %v", err)
-		}
-		if len(snap.Nodes) != 0 {
-			t.Fatalf("mismatched credential version should fail-closed and reject node")
-		}
-	})
-
-	// 3. Expired observation
+	// 2. Expired observation
 	t.Run("expired observation rejects", func(t *testing.T) {
 		inp := baseInput()
 		inp.GlobalFilter = &domain.NodeFilterSpec{
@@ -1154,12 +1115,11 @@ func TestResolver_ProbeFailClosed_MissingExpiredMismatchNotEquals(t *testing.T) 
 		inp.LatestObservations = map[string]map[domain.ProbeKind]domain.ProbeObservation{
 			nID: {
 				domain.ProbeKindBaseline: {
-					ID:                "obs-1",
-					NodeLogicalID:     nID,
-					Kind:              domain.ProbeKindBaseline,
-					Verdict:           domain.VerdictAvailable,
-					ObservedAt:        expiredTime,
-					CredentialVersion: &ver,
+					ID:            "obs-1",
+					NodeLogicalID: nID,
+					Kind:          domain.ProbeKindBaseline,
+					Verdict:       domain.VerdictAvailable,
+					ObservedAt:    expiredTime,
 				},
 			},
 		}
@@ -1173,7 +1133,7 @@ func TestResolver_ProbeFailClosed_MissingExpiredMismatchNotEquals(t *testing.T) 
 		}
 	})
 
-	// 4. Valid observation passes
+	// 3. Valid observation passes
 	t.Run("valid observation passes", func(t *testing.T) {
 		inp := baseInput()
 		inp.GlobalFilter = &domain.NodeFilterSpec{
@@ -1191,13 +1151,12 @@ func TestResolver_ProbeFailClosed_MissingExpiredMismatchNotEquals(t *testing.T) 
 		inp.LatestObservations = map[string]map[domain.ProbeKind]domain.ProbeObservation{
 			nID: {
 				domain.ProbeKindBaseline: {
-					ID:                "obs-1",
-					NodeLogicalID:     nID,
-					Kind:              domain.ProbeKindBaseline,
-					Verdict:           domain.VerdictAvailable,
-					LatencyMS:         45,
-					ObservedAt:        validTime,
-					CredentialVersion: &ver,
+					ID:            "obs-1",
+					NodeLogicalID: nID,
+					Kind:          domain.ProbeKindBaseline,
+					Verdict:       domain.VerdictAvailable,
+					LatencyMS:     45,
+					ObservedAt:    validTime,
 				},
 			},
 		}
@@ -1301,15 +1260,13 @@ func TestResolver_FreshnessBoundaryDigestChange(t *testing.T) {
 	gid := domain.MustNewUUIDv7()
 	nID := testNodeLogicalID("node-freshness-digest")
 	node := domain.Node{
-		LogicalID:         nID,
-		DisplayName:       "Digest Node",
-		Protocol:          domain.ProtocolTrojan,
-		Active:            true,
-		CredentialVersion: 1,
+		LogicalID:   nID,
+		DisplayName: "Digest Node",
+		Protocol:    domain.ProtocolTrojan,
+		Active:      true,
 	}
 
 	kind := domain.ProbeKindBaseline
-	ver := 1
 	obsTime := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
 
 	createInput := func(asOf time.Time) resolver.ResolveInput {
@@ -1327,13 +1284,12 @@ func TestResolver_FreshnessBoundaryDigestChange(t *testing.T) {
 			LatestObservations: map[string]map[domain.ProbeKind]domain.ProbeObservation{
 				nID: {
 					domain.ProbeKindBaseline: {
-						ID:                "obs-1",
-						NodeLogicalID:     nID,
-						Kind:              kind,
-						Verdict:           domain.VerdictAvailable,
-						LatencyMS:         30,
-						ObservedAt:        obsTime,
-						CredentialVersion: &ver,
+						ID:            "obs-1",
+						NodeLogicalID: nID,
+						Kind:          kind,
+						Verdict:       domain.VerdictAvailable,
+						LatencyMS:     30,
+						ObservedAt:    obsTime,
 					},
 				},
 			},

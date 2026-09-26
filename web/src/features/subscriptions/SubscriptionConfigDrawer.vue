@@ -40,7 +40,7 @@ watch(
     if (sub) {
       draft.value = {
         name: sub.name,
-        source_url_secret_ref: sub.source_url_secret_ref || '***',
+        source_url_secret_ref: sub.source_url_secret_ref || '',
         enabled: sub.enabled,
         refresh_policy: { ...defaultPolicy(), ...sub.refresh_policy },
         config: {
@@ -147,7 +147,6 @@ function handleSubmit() {
       <label class="form-control">
         <div class="flex justify-between items-center mb-1">
           <span class="label-text text-xs font-semibold">{{ t('subscriptions.sourceUrl') }}</span>
-          <span v-if="subscription" class="text-[10px] text-primary/80 font-mono">Masked with '***'</span>
         </div>
         <input
           v-model="draft.source_url_secret_ref"

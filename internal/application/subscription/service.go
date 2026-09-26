@@ -359,7 +359,7 @@ func normalizedPolicy(policy domain.RefreshPolicy) domain.RefreshPolicy {
 
 func redact(sub domain.Subscription) SubscriptionView {
 	return SubscriptionView{
-		ID: sub.ID, Name: sub.Name, SourceURLSecretRef: "***", Enabled: sub.Enabled, RefreshPolicy: sub.RefreshPolicy,
+		ID: sub.ID, Name: sub.Name, SourceURLSecretRef: sub.SourceURLSecretRef, Enabled: sub.Enabled, RefreshPolicy: sub.RefreshPolicy,
 		Config: sub.Config, Revision: sub.Revision,
 		CreatedAt: sub.CreatedAt.Format("2006-01-02T15:04:05Z07:00"), UpdatedAt: sub.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}

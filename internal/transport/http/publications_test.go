@@ -46,20 +46,12 @@ func setupPublicationTestRouter(t *testing.T, db *sql.DB) (http.Handler, *public
 		iprisk.WithAuditRepository(auditRepo),
 	)
 
-	testMasterKey := []byte("01234567890123456789012345678901")
-	testVault, err := domain.NewNodeCredentialVault("k1", map[string][]byte{"k1": testMasterKey})
-	if err != nil {
-		t.Fatalf("failed to create test vault: %v", err)
-	}
-	credRepo := sqlite.NewNodeCredentialRepository(db)
-
 	pubSvc := publication.NewService(
 		pubRepo,
 		auditRepo,
 		publication.WithPolicyRepository(policyRepo),
 		publication.WithRevisionRepository(revRepo),
 		publication.WithNodeRepository(nodeRepo),
-		publication.WithCredentialSource(testVault, credRepo),
 		publication.WithIPRiskService(ipriskSvc),
 		publication.WithRiskPolicyRepository(riskPolicyRepo),
 		publication.WithRiskBindingRepository(riskBindingRepo),
@@ -89,40 +81,23 @@ func seedSamplePolicyData(t *testing.T, db *sql.DB) (string, string) {
 	// 1. Insert Node
 	nodeRepo := sqlite.NewNodeRepository(db)
 	nodeID := domain.ComputeNodeLogicalID(domain.ProtocolTrojan, "tokyo.example.com", 443, nil)
-	tokyoIdentity := domain.NewVerifiedNodeIdentity(nodeID, domain.ProtocolTrojan, "tokyo.example.com", 443, 1, nil)
 	err := nodeRepo.UpsertBatch(ctx, []domain.Node{
 		{
-			LogicalID:                 nodeID,
-			Protocol:                  domain.ProtocolTrojan,
-			DisplayName:               "Tokyo-01",
-			CredentialVersion:         1,
-			Identity:                  &tokyoIdentity,
-			Active:                    true,
-			NormalizedConfigSecretRef: "secret://tokyo",
-			UpdatedAt:                 domain.NowUTC(),
+			LogicalID:   nodeID,
+			Protocol:    domain.ProtocolTrojan,
+			DisplayName: "Tokyo-01",
+			Server:      "tokyo.example.com",
+			Port:        443,
+			Credentials: domain.InboundProtocolCredential{
+				Password: "tokyo-trojan-password",
+			},
+			Active:    true,
+			UpdatedAt: domain.NowUTC(),
 		},
 	})
 	if err != nil {
 		t.Fatalf("failed to insert node: %v", err)
 	}
-
-	// Insert matching credentials into vault repo
-	credRepo := sqlite.NewNodeCredentialRepository(db)
-	testMasterKey := []byte("01234567890123456789012345678901")
-	testVault, _ := domain.NewNodeCredentialVault("k1", map[string][]byte{"k1": testMasterKey})
-	trojanPayload := &domain.NodeCredentialPayload{
-		LogicalID: nodeID,
-		Protocol:  domain.ProtocolTrojan,
-		Server:    "tokyo.example.com",
-		Port:      443,
-		Version:   1,
-		Identity:  &tokyoIdentity,
-		Credentials: domain.InboundProtocolCredential{
-			Password: "tokyo-trojan-password",
-		},
-	}
-	trojanRec, _ := testVault.Encrypt(trojanPayload)
-	_ = credRepo.Upsert(ctx, trojanRec)
 
 	// 2. Insert Revision
 	revRepo := sqlite.NewRevisionRepository(db)
@@ -885,26 +860,19 @@ func TestAdminPreview_CapabilityBoundaries(t *testing.T) {
 		nodeID := domain.ComputeNodeLogicalID(domain.ProtocolHysteria2, "hy2.example.com", 443, nil)
 		err := nodeRepo.UpsertBatch(ctx, []domain.Node{
 			{
-				LogicalID:                 nodeID,
-				Protocol:                  domain.ProtocolHysteria2,
-				DisplayName:               "Hy2-01",
-				CredentialVersion:         1,
-				Active:                    true,
-				NormalizedConfigSecretRef: "secret://hy2",
-				UpdatedAt:                 domain.NowUTC(),
+				LogicalID:   nodeID,
+				Protocol:    domain.ProtocolHysteria2,
+				DisplayName: "Hy2-01",
+				Server:      "hy2.example.com",
+				Port:        443,
+				Credentials: domain.InboundProtocolCredential{Password: "hy2-pass"},
+				Active:      true,
+				UpdatedAt:   domain.NowUTC(),
 			},
 		})
 		if err != nil {
 			t.Fatalf("failed to insert node: %v", err)
 		}
-		seedEncryptedCredential(t, db, &domain.NodeCredentialPayload{
-			LogicalID:   nodeID,
-			Protocol:    domain.ProtocolHysteria2,
-			Server:      "hy2.example.com",
-			Port:        443,
-			Version:     1,
-			Credentials: domain.InboundProtocolCredential{Password: "hy2-pass"},
-		})
 
 		revRepo := sqlite.NewRevisionRepository(db)
 		revID, _ := domain.NewUUIDv7()
@@ -993,26 +961,19 @@ func TestAdminPreview_CapabilityBoundaries(t *testing.T) {
 		nodeID := domain.ComputeNodeLogicalID(domain.ProtocolTrojan, "trojan.example.com", 443, nil)
 		err := nodeRepo.UpsertBatch(ctx, []domain.Node{
 			{
-				LogicalID:                 nodeID,
-				Protocol:                  domain.ProtocolTrojan,
-				DisplayName:               "Trojan-01",
-				CredentialVersion:         1,
-				Active:                    true,
-				NormalizedConfigSecretRef: "secret://trojan",
-				UpdatedAt:                 domain.NowUTC(),
+				LogicalID:   nodeID,
+				Protocol:    domain.ProtocolTrojan,
+				DisplayName: "Trojan-01",
+				Server:      "trojan.example.com",
+				Port:        443,
+				Credentials: domain.InboundProtocolCredential{Password: "trojan-pass"},
+				Active:      true,
+				UpdatedAt:   domain.NowUTC(),
 			},
 		})
 		if err != nil {
 			t.Fatalf("failed to insert node: %v", err)
 		}
-		seedEncryptedCredential(t, db, &domain.NodeCredentialPayload{
-			LogicalID:   nodeID,
-			Protocol:    domain.ProtocolTrojan,
-			Server:      "trojan.example.com",
-			Port:        443,
-			Version:     1,
-			Credentials: domain.InboundProtocolCredential{Password: "trojan-pass"},
-		})
 
 		revRepo := sqlite.NewRevisionRepository(db)
 		revID, _ := domain.NewUUIDv7()
@@ -1071,26 +1032,19 @@ func TestAdminPreview_CapabilityBoundaries(t *testing.T) {
 		nodeID := domain.ComputeNodeLogicalID(domain.ProtocolTrojan, "trojan.example.com", 443, nil)
 		err := nodeRepo.UpsertBatch(ctx, []domain.Node{
 			{
-				LogicalID:                 nodeID,
-				Protocol:                  domain.ProtocolTrojan,
-				DisplayName:               "Trojan-01",
-				CredentialVersion:         1,
-				Active:                    true,
-				NormalizedConfigSecretRef: "secret://trojan",
-				UpdatedAt:                 domain.NowUTC(),
+				LogicalID:   nodeID,
+				Protocol:    domain.ProtocolTrojan,
+				DisplayName: "Trojan-01",
+				Server:      "trojan.example.com",
+				Port:        443,
+				Credentials: domain.InboundProtocolCredential{Password: "trojan-pass"},
+				Active:      true,
+				UpdatedAt:   domain.NowUTC(),
 			},
 		})
 		if err != nil {
 			t.Fatalf("failed to insert node: %v", err)
 		}
-		seedEncryptedCredential(t, db, &domain.NodeCredentialPayload{
-			LogicalID:   nodeID,
-			Protocol:    domain.ProtocolTrojan,
-			Server:      "trojan.example.com",
-			Port:        443,
-			Version:     1,
-			Credentials: domain.InboundProtocolCredential{Password: "trojan-pass"},
-		})
 
 		revRepo := sqlite.NewRevisionRepository(db)
 		revID, _ := domain.NewUUIDv7()
@@ -1257,12 +1211,14 @@ func TestAdminPublish_CapabilityBoundaries(t *testing.T) {
 	nodeID := domain.ComputeNodeLogicalID(domain.ProtocolHysteria2, "hy2.example.com", 443, nil)
 	err := nodeRepo.UpsertBatch(ctx, []domain.Node{
 		{
-			LogicalID:                 nodeID,
-			Protocol:                  domain.ProtocolHysteria2,
-			DisplayName:               "Hy2-01",
-			Active:                    true,
-			NormalizedConfigSecretRef: "secret://hy2",
-			UpdatedAt:                 domain.NowUTC(),
+			LogicalID:   nodeID,
+			Protocol:    domain.ProtocolHysteria2,
+			DisplayName: "Hy2-01",
+			Server:      "hy2.example.com",
+			Port:        443,
+			Credentials: domain.InboundProtocolCredential{Password: "hy2-pass"},
+			Active:      true,
+			UpdatedAt:   domain.NowUTC(),
 		},
 	})
 	if err != nil {
@@ -1492,53 +1448,31 @@ func TestPublication_MihomoHysteria2EndToEndWithOfficialCLI(t *testing.T) {
 	router, pubSvc := setupPublicationTestRouter(t, db)
 	ctx := context.Background()
 
-	// 1. Setup Hysteria2 node
+	// 1. Setup Hysteria2 node with plaintext credentials
 	nodeRepo := sqlite.NewNodeRepository(db)
 	hy2ID := domain.ComputeNodeLogicalID(domain.ProtocolHysteria2, "hy2.gateway.example.com", 443, nil)
 	err := nodeRepo.UpsertBatch(ctx, []domain.Node{
 		{
-			LogicalID:                 hy2ID,
-			Protocol:                  domain.ProtocolHysteria2,
-			DisplayName:               "Hy2-Direct",
-			CredentialVersion:         1,
-			Active:                    true,
-			NormalizedConfigSecretRef: "secret://hy2-direct",
-			UpdatedAt:                 domain.NowUTC(),
+			LogicalID:   hy2ID,
+			Protocol:    domain.ProtocolHysteria2,
+			DisplayName: "Hy2-Direct",
+			Server:      "hy2.gateway.example.com",
+			Port:        443,
+			Credentials: domain.InboundProtocolCredential{
+				Password: "hy2-strong-password-456",
+				Transport: map[string]string{
+					"sni":              "hy2.gateway.example.com",
+					"skip_cert_verify": "true",
+					"up":               "100 Mbps",
+					"down":             "500 Mbps",
+				},
+			},
+			Active:    true,
+			UpdatedAt: domain.NowUTC(),
 		},
 	})
 	if err != nil {
 		t.Fatalf("failed to insert node: %v", err)
-	}
-
-	// 2. Setup vault credentials for Hysteria2
-	testMasterKey := []byte("01234567890123456789012345678901")
-	vault, err := domain.NewNodeCredentialVault("k1", map[string][]byte{"k1": testMasterKey})
-	if err != nil {
-		t.Fatalf("create vault: %v", err)
-	}
-	credRepo := sqlite.NewNodeCredentialRepository(db)
-	hy2Payload := &domain.NodeCredentialPayload{
-		LogicalID: hy2ID,
-		Protocol:  domain.ProtocolHysteria2,
-		Server:    "hy2.gateway.example.com",
-		Port:      443,
-		Version:   1,
-		Credentials: domain.InboundProtocolCredential{
-			Password: "hy2-strong-password-456",
-			Transport: map[string]string{
-				"sni":              "hy2.gateway.example.com",
-				"skip_cert_verify": "true",
-				"up":               "100 Mbps",
-				"down":             "500 Mbps",
-			},
-		},
-	}
-	hy2Rec, err := vault.Encrypt(hy2Payload)
-	if err != nil {
-		t.Fatalf("encrypt hy2: %v", err)
-	}
-	if err := credRepo.Upsert(ctx, hy2Rec); err != nil {
-		t.Fatalf("upsert hy2 record: %v", err)
 	}
 
 	// 3. Setup revision, group, edges, and rules
@@ -1799,26 +1733,6 @@ func TestPublication_NewClashRequestRejected422(t *testing.T) {
 	}
 }
 
-func seedEncryptedCredential(t *testing.T, db *sql.DB, payload *domain.NodeCredentialPayload) {
-	t.Helper()
-	testMasterKey := []byte("01234567890123456789012345678901")
-	testVault, err := domain.NewNodeCredentialVault("k1", map[string][]byte{"k1": testMasterKey})
-	if err != nil {
-		t.Fatalf("create vault: %v", err)
-	}
-	if payload != nil && payload.Identity == nil {
-		identity := domain.NewVerifiedNodeIdentity(payload.LogicalID, payload.Protocol, payload.Server, payload.Port, payload.Version, payload.Credentials.Transport)
-		payload.Identity = &identity
-	}
-	rec, err := testVault.Encrypt(payload)
-	if err != nil {
-		t.Fatalf("encrypt credential: %v", err)
-	}
-	if err := sqlite.NewNodeCredentialRepository(db).Upsert(context.Background(), rec); err != nil {
-		t.Fatalf("upsert credential: %v", err)
-	}
-}
-
 func TestFourTargetEndToEndHTTP_WireGuardTUICAndNativeCapabilityProof(t *testing.T) {
 	ctx := context.Background()
 	db := newCleanSQLiteDB(t)
@@ -1832,63 +1746,68 @@ func TestFourTargetEndToEndHTTP_WireGuardTUICAndNativeCapabilityProof(t *testing
 	tuicID := domain.ComputeNodeLogicalID(domain.ProtocolTUIC, "198.51.100.71", 8443, nil)
 	ssID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "198.51.100.72", 8388, nil)
 
-	now := domain.NowUTC()
-	if err := nodeRepo.UpsertBatch(ctx, []domain.Node{
-		{LogicalID: wgID, Protocol: domain.ProtocolWireGuard, DisplayName: "WG-Core-01", CredentialVersion: 1, Active: true, NormalizedConfigSecretRef: "secret://wg", CreatedAt: now, UpdatedAt: now},
-		{LogicalID: tuicID, Protocol: domain.ProtocolTUIC, DisplayName: "TUIC-Core-01", CredentialVersion: 1, Active: true, NormalizedConfigSecretRef: "secret://tuic", CreatedAt: now, UpdatedAt: now},
-		{LogicalID: ssID, Protocol: domain.ProtocolSS, DisplayName: "SS-Core-01", CredentialVersion: 1, Active: true, NormalizedConfigSecretRef: "secret://ss", CreatedAt: now, UpdatedAt: now},
-	}); err != nil {
-		t.Fatalf("upsert nodes: %v", err)
-	}
-
 	wgPrivKey := "cGxlYXNlLWRvLW5vdC1sZWFrLXdnLXByaXZhdGUta2V5"
 	wgPubKey := "cGxlYXNlLWRvLW5vdC1sZWFrLXdnLXB1YmxpYy1rZXk="
 	tuicUUID := "22222222-3333-4444-5555-666666666666"
 	tuicPass := "tuic-top-secret-password-999"
 	ssPass := "ss-top-secret-password-888"
 
-	seedEncryptedCredential(t, db, &domain.NodeCredentialPayload{
-		LogicalID: wgID,
-		Protocol:  domain.ProtocolWireGuard,
-		Server:    "198.51.100.70",
-		Port:      51820,
-		Version:   1,
-		Credentials: domain.InboundProtocolCredential{
-			PrivateKey:   wgPrivKey,
-			PublicKey:    wgPubKey,
-			PreSharedKey: "cGxlYXNlLWRvLW5vdC1sZWFrLXdnLXBzaw==",
-			LocalAddress: []string{"10.0.0.2/32", "fd00::2/128"},
-			Reserved:     []uint8{1, 2, 3},
-			MTU:          1400,
-			DNS:          []string{"1.1.1.1"},
+	now := domain.NowUTC()
+	if err := nodeRepo.UpsertBatch(ctx, []domain.Node{
+		{
+			LogicalID:   wgID,
+			Protocol:    domain.ProtocolWireGuard,
+			DisplayName: "WG-Core-01",
+			Server:      "198.51.100.70",
+			Port:        51820,
+			Credentials: domain.InboundProtocolCredential{
+				PrivateKey:   wgPrivKey,
+				PublicKey:    wgPubKey,
+				PreSharedKey: "cGxlYXNlLWRvLW5vdC1sZWFrLXdnLXBzaw==",
+				LocalAddress: []string{"10.0.0.2/32", "fd00::2/128"},
+				Reserved:     []uint8{1, 2, 3},
+				MTU:          1400,
+				DNS:          []string{"1.1.1.1"},
+			},
+			Active:    true,
+			CreatedAt: now,
+			UpdatedAt: now,
 		},
-	})
-	seedEncryptedCredential(t, db, &domain.NodeCredentialPayload{
-		LogicalID: tuicID,
-		Protocol:  domain.ProtocolTUIC,
-		Server:    "198.51.100.71",
-		Port:      8443,
-		Version:   1,
-		Credentials: domain.InboundProtocolCredential{
-			UUID:              tuicUUID,
-			Password:          tuicPass,
-			CongestionControl: "bbr",
-			UDPRelayMode:      "native",
-			ALPN:              []string{"h3"},
-			SNI:               "tuic.example.com",
+		{
+			LogicalID:   tuicID,
+			Protocol:    domain.ProtocolTUIC,
+			DisplayName: "TUIC-Core-01",
+			Server:      "198.51.100.71",
+			Port:        8443,
+			Credentials: domain.InboundProtocolCredential{
+				UUID:              tuicUUID,
+				Password:          tuicPass,
+				CongestionControl: "bbr",
+				UDPRelayMode:      "native",
+				ALPN:              []string{"h3"},
+				SNI:               "tuic.example.com",
+			},
+			Active:    true,
+			CreatedAt: now,
+			UpdatedAt: now,
 		},
-	})
-	seedEncryptedCredential(t, db, &domain.NodeCredentialPayload{
-		LogicalID: ssID,
-		Protocol:  domain.ProtocolSS,
-		Server:    "198.51.100.72",
-		Port:      8388,
-		Version:   1,
-		Credentials: domain.InboundProtocolCredential{
-			Method:   "aes-256-gcm",
-			Password: ssPass,
+		{
+			LogicalID:   ssID,
+			Protocol:    domain.ProtocolSS,
+			DisplayName: "SS-Core-01",
+			Server:      "198.51.100.72",
+			Port:        8388,
+			Credentials: domain.InboundProtocolCredential{
+				Method:   "aes-256-gcm",
+				Password: ssPass,
+			},
+			Active:    true,
+			CreatedAt: now,
+			UpdatedAt: now,
 		},
-	})
+	}); err != nil {
+		t.Fatalf("upsert nodes: %v", err)
+	}
 
 	revID := domain.MustNewUUIDv7()
 	_ = revRepo.Create(ctx, &domain.ConfigurationRevision{
@@ -2011,32 +1930,6 @@ func TestFourTargetEndToEndHTTP_WireGuardTUICAndNativeCapabilityProof(t *testing
 		restartedRouter.ServeHTTP(dlRec, dlReq)
 		if dlRec.Code != http.StatusOK || !strings.Contains(dlRec.Body.String(), ssPass) {
 			t.Fatalf("restart recovery for %s failed: code=%d body=%s", target, dlRec.Code, dlRec.Body.String())
-		}
-	}
-
-	// 4. Integrity check failures (tampered artifact or rotated credentials) map to HTTP 422
-	{
-		pubReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications", strings.NewReader(`{"target": "surge"}`))
-		pubReq.Header.Set("Authorization", "Bearer "+testAdminToken)
-		pubReq.Header.Set("Content-Type", "application/json")
-		pubRec := httptest.NewRecorder()
-		router.ServeHTTP(pubRec, pubReq)
-		if pubRec.Code != http.StatusCreated {
-			t.Fatalf("publish surge failed with %d: %s", pubRec.Code, pubRec.Body.String())
-		}
-		var pubResp publicationCreateResponse
-		_ = json.Unmarshal(pubRec.Body.Bytes(), &pubResp)
-
-		// Corrupt credential_binding_digest in SQLite -> must return 422
-		if _, err := db.ExecContext(ctx, `UPDATE publications SET credential_binding_digest = ? WHERE id = ?`, strings.Repeat("f", 64), pubResp.Data.Publication.ID); err != nil {
-			t.Fatalf("corrupt credential_binding_digest: %v", err)
-		}
-		restartedRouter, _ := setupPublicationTestRouter(t, db)
-		dlReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/publish/v1/%s?token=%s", pubResp.Data.Publication.ID, pubResp.Data.RawToken), nil)
-		dlRec := httptest.NewRecorder()
-		restartedRouter.ServeHTTP(dlRec, dlReq)
-		if dlRec.Code != http.StatusUnprocessableEntity {
-			t.Fatalf("expected 422 Unprocessable Entity on integrity check failure, got %d: %s", dlRec.Code, dlRec.Body.String())
 		}
 	}
 }

@@ -103,22 +103,15 @@ func (r *defaultResolver) Resolve(ctx context.Context, input ResolveInput) (*Res
 	// Build sorted admitted nodes (sorted by DisplayName ASC, then LogicalID ASC)
 	sortedAdmittedNodes := make([]ResolvedNode, len(globalAdmittedNodes))
 	for i, n := range globalAdmittedNodes {
-		var idCopy *domain.VerifiedNodeIdentity
-		if n.Identity != nil {
-			copied := *n.Identity
-			if n.CredentialVersion > 0 {
-				copied.Version = n.CredentialVersion
-			}
-			idCopy = &copied
-		}
 		sortedAdmittedNodes[i] = ResolvedNode{
-			LogicalID:         n.LogicalID,
-			DisplayName:       n.DisplayName,
-			Protocol:          n.Protocol,
-			Active:            n.Active,
-			Position:          i,
-			CredentialVersion: n.CredentialVersion,
-			Identity:          idCopy,
+			LogicalID:   n.LogicalID,
+			DisplayName: n.DisplayName,
+			Protocol:    n.Protocol,
+			Server:      n.Server,
+			Port:        n.Port,
+			Credentials: n.Credentials,
+			Active:      n.Active,
+			Position:    i,
 		}
 	}
 	sort.SliceStable(sortedAdmittedNodes, func(i, j int) bool {

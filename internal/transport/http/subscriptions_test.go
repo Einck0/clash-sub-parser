@@ -46,9 +46,9 @@ func subscriptionTestRouter(t *testing.T) http.Handler {
 	return transporthttp.NewRouter(routerCfg)
 }
 
-func TestSubscriptionEndpointsEnforceSecurityAndRedactSecrets(t *testing.T) {
+func TestSubscriptionEndpointsEnforceSecurityAndReturnPlaintextURL(t *testing.T) {
 	router := subscriptionTestRouter(t)
-	secretRef := "secret://subscriptions/primary?token=leak-me"
+	secretRef := "https://example.com/subscriptions/primary?token=real-url"
 	body := `{"name":"Primary","source_url_secret_ref":"` + secretRef + `","enabled":true,"refresh_policy":{"interval_seconds":3600}}`
 
 	unauthorized := httptest.NewRecorder()
@@ -74,23 +74,28 @@ func TestSubscriptionEndpointsEnforceSecurityAndRedactSecrets(t *testing.T) {
 	if created.Code != http.StatusCreated {
 		t.Fatalf("create status = %d, body = %s", created.Code, created.Body.String())
 	}
-	if strings.Contains(created.Body.String(), "leak-me") {
-		t.Fatalf("create response leaked secret: %s", created.Body.String())
-	}
 	var createResponse testDataResponse[subscriptionResponse]
 	if err := json.Unmarshal(created.Body.Bytes(), &createResponse); err != nil {
 		t.Fatalf("decode create response: %v", err)
 	}
-	if createResponse.Data.SourceURLSecretRef != "***" || createResponse.Data.ID == "" || createResponse.Data.Revision == "" {
-		t.Fatalf("unexpected redacted create response: %#v", createResponse.Data)
+	if createResponse.Data.SourceURLSecretRef != secretRef || createResponse.Data.ID == "" || createResponse.Data.Revision == "" {
+		t.Fatalf("unexpected create response: %#v", createResponse.Data)
 	}
 
 	list := httptest.NewRequest(http.MethodGet, "/api/v1/subscriptions?page=1&page_size=50&enabled_only=true&search_text=Primary", nil)
 	list.Header.Set("Authorization", "Bearer "+testAdminToken)
 	listed := httptest.NewRecorder()
 	router.ServeHTTP(listed, list)
-	if listed.Code != http.StatusOK || strings.Contains(listed.Body.String(), "leak-me") {
+	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), secretRef) {
 		t.Fatalf("list status/body = %d %s", listed.Code, listed.Body.String())
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/subscriptions/"+createResponse.Data.ID, nil)
+	getReq.Header.Set("Authorization", "Bearer "+testAdminToken)
+	got := httptest.NewRecorder()
+	router.ServeHTTP(got, getReq)
+	if got.Code != http.StatusOK || !strings.Contains(got.Body.String(), secretRef) {
+		t.Fatalf("get status/body = %d %s", got.Code, got.Body.String())
 	}
 
 	patch := httptest.NewRequest(http.MethodPatch, "/api/v1/subscriptions/"+createResponse.Data.ID, strings.NewReader(`{"name":"Renamed"}`))
@@ -103,22 +108,22 @@ func TestSubscriptionEndpointsEnforceSecurityAndRedactSecrets(t *testing.T) {
 		t.Fatalf("stale patch status = %d, body = %s", conflict.Code, conflict.Body.String())
 	}
 
-	// Test update with "***" secret ref preserves original secret without leaking or clearing
-	patchWithMask := httptest.NewRequest(http.MethodPatch, "/api/v1/subscriptions/"+createResponse.Data.ID, strings.NewReader(`{"source_url_secret_ref":"***","config":{"cron_schedule":"0 0 * * *","auto_test":true}}`))
-	patchWithMask.Header.Set("Content-Type", "application/json")
-	patchWithMask.Header.Set("Authorization", "Bearer "+testAdminToken)
-	patchWithMask.Header.Set("If-Match", createResponse.Data.Revision)
+	updatedURL := "https://example.com/subscriptions/updated?token=new-url"
+	patchUpdate := httptest.NewRequest(http.MethodPatch, "/api/v1/subscriptions/"+createResponse.Data.ID, strings.NewReader(`{"source_url_secret_ref":"`+updatedURL+`","config":{"cron_schedule":"0 0 * * *","auto_test":true}}`))
+	patchUpdate.Header.Set("Content-Type", "application/json")
+	patchUpdate.Header.Set("Authorization", "Bearer "+testAdminToken)
+	patchUpdate.Header.Set("If-Match", createResponse.Data.Revision)
 	patchRecorder := httptest.NewRecorder()
-	router.ServeHTTP(patchRecorder, patchWithMask)
+	router.ServeHTTP(patchRecorder, patchUpdate)
 	if patchRecorder.Code != http.StatusOK {
-		t.Fatalf("patch with mask status = %d, body = %s", patchRecorder.Code, patchRecorder.Body.String())
+		t.Fatalf("patch update status = %d, body = %s", patchRecorder.Code, patchRecorder.Body.String())
 	}
 	var patchResponse testDataResponse[subscriptionResponse]
 	if err := json.Unmarshal(patchRecorder.Body.Bytes(), &patchResponse); err != nil {
 		t.Fatalf("decode patch response: %v", err)
 	}
-	if patchResponse.Data.SourceURLSecretRef != "***" {
-		t.Fatalf("expected redacted '***', got %s", patchResponse.Data.SourceURLSecretRef)
+	if patchResponse.Data.SourceURLSecretRef != updatedURL {
+		t.Fatalf("expected updated URL %q, got %q", updatedURL, patchResponse.Data.SourceURLSecretRef)
 	}
 	if patchResponse.Data.Config.CronSchedule != "0 0 * * *" || !patchResponse.Data.Config.AutoTest {
 		t.Fatalf("expected updated config, got %#v", patchResponse.Data.Config)

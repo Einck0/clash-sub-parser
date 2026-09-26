@@ -88,12 +88,12 @@ func surgeCapability() Capability {
 	}
 }
 
-func renderSurge(snapshot *resolver.ResolvedPolicySnapshot, credentials map[string]*domain.NodeCredentialPayload) ([]byte, error) {
+func renderSurge(snapshot *resolver.ResolvedPolicySnapshot) ([]byte, error) {
 	var b strings.Builder
 	b.WriteString("[General]\nloglevel = notify\n\n[Proxy]\n")
 
 	for i, node := range snapshot.Nodes {
-		line, err := renderSurgeProxyLine(i, node, credentials)
+		line, err := renderSurgeProxyLine(i, node)
 		if err != nil {
 			return nil, err
 		}
@@ -124,12 +124,11 @@ func renderSurge(snapshot *resolver.ResolvedPolicySnapshot, credentials map[stri
 	return []byte(b.String()), nil
 }
 
-func renderSurgeProxyLine(index int, node resolver.ResolvedNode, credentials map[string]*domain.NodeCredentialPayload) (string, error) {
+func renderSurgeProxyLine(index int, node resolver.ResolvedNode) (string, error) {
 	loc := fmt.Sprintf("nodes[%d]", index)
 	feature := string(node.Protocol)
 
-	cred, err := validateCredentialEnvelope(domain.TargetSurge, index, node, credentials)
-	if err != nil {
+	if err := validateCredentialEnvelope(domain.TargetSurge, index, node); err != nil {
 		return "", err
 	}
 
@@ -143,7 +142,7 @@ func renderSurgeProxyLine(index int, node resolver.ResolvedNode, credentials map
 		}
 	}
 
-	server := strings.TrimSpace(cred.Server)
+	server := strings.TrimSpace(node.Server)
 	if !isSurgeSafeToken(server) {
 		return "", &CapabilityError{
 			Target:   domain.TargetSurge,
@@ -153,7 +152,7 @@ func renderSurgeProxyLine(index int, node resolver.ResolvedNode, credentials map
 		}
 	}
 
-	c := cred.Credentials
+	c := node.Credentials
 	transport := c.Transport
 
 	if hasSurgeUnsupportedRealityOrFlow(transport) {
@@ -167,11 +166,11 @@ func renderSurgeProxyLine(index int, node resolver.ResolvedNode, credentials map
 
 	switch node.Protocol {
 	case domain.ProtocolSS:
-		return renderSurgeSSProxy(loc, name, server, cred.Port, c)
+		return renderSurgeSSProxy(loc, name, server, node.Port, c)
 	case domain.ProtocolVMess:
-		return renderSurgeVMessProxy(loc, name, server, cred.Port, c)
+		return renderSurgeVMessProxy(loc, name, server, node.Port, c)
 	case domain.ProtocolTrojan:
-		return renderSurgeTrojanProxy(loc, name, server, cred.Port, c)
+		return renderSurgeTrojanProxy(loc, name, server, node.Port, c)
 	default:
 		return "", &CapabilityError{
 			Target:   domain.TargetSurge,

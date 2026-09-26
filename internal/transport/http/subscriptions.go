@@ -92,11 +92,10 @@ func (h subscriptionHandler) update(w http.ResponseWriter, r *http.Request) {
 	if err := decodeSubscriptionJSON(w, r, &body); err != nil {
 		return
 	}
-	// Desensitize check: if source_url_secret_ref is empty or "***", preserve the original secret ref
 	var sourceURLRef *string
 	if body.SourceURLSecretRef != nil {
 		trimmed := strings.TrimSpace(*body.SourceURLSecretRef)
-		if trimmed != "" && trimmed != "***" {
+		if trimmed != "" {
 			sourceURLRef = &trimmed
 		}
 	}

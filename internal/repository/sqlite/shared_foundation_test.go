@@ -59,22 +59,30 @@ func TestMigrations000007And000008Schema(t *testing.T) {
 		t.Fatalf("failed to query group_node_filters table: %v", err)
 	}
 
-	// 5. Verify Migration 9 (publication artifact/binding columns), Migration 10 (risk latest index), and SchemaVersion == 10
-	_, err = db.ExecContext(ctx, "SELECT revision_id, content_digest, credential_binding_digest, credential_bindings_json, artifact_key_id, artifact_nonce, artifact_ciphertext FROM publications LIMIT 1;")
+	// 5. Verify Migration 11 (plaintext nodes and publications, dropped node_credentials) and SchemaVersion == 11
+	_, err = db.ExecContext(ctx, "SELECT logical_id, server, port, config_json FROM nodes LIMIT 1;")
 	if err != nil {
-		t.Fatalf("failed to query migration 000009 columns on publications: %v", err)
+		t.Fatalf("failed to query migration 000011 columns on nodes: %v", err)
+	}
+	_, err = db.ExecContext(ctx, "SELECT revision_id, content_digest, content FROM publications LIMIT 1;")
+	if err != nil {
+		t.Fatalf("failed to query migration 000011 columns on publications: %v", err)
+	}
+	var credTableCount int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='node_credentials';").Scan(&credTableCount); err != nil || credTableCount != 0 {
+		t.Fatalf("expected node_credentials table to be dropped by migration 000011, got count=%d err=%v", credTableCount, err)
 	}
 	var idxName string
 	if err := db.QueryRowContext(ctx, "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_ip_risk_obs_node_observed_id';").Scan(&idxName); err != nil {
 		t.Fatalf("expected migration 000010 index idx_ip_risk_obs_node_observed_id: %v", err)
 	}
 	report, err := sqlite.CheckReadiness(ctx, db)
-	if err != nil || !report.Ready || report.SchemaVersion != 10 {
-		t.Fatalf("expected readiness SchemaVersion=10 Ready=true, got report=%+v err=%v", report, err)
+	if err != nil || !report.Ready || report.SchemaVersion != 11 {
+		t.Fatalf("expected readiness SchemaVersion=11 Ready=true, got report=%+v err=%v", report, err)
 	}
 }
 
-func TestProbeObservationsCredentialVersionAndListLatestByNodes(t *testing.T) {
+func TestProbeObservationsAndListLatestByNodes(t *testing.T) {
 	ctx := context.Background()
 	db, _ := setupTestDB(t)
 	defer db.Close()
@@ -87,22 +95,26 @@ func TestProbeObservationsCredentialVersionAndListLatestByNodes(t *testing.T) {
 
 	// Seed nodes
 	node1 := domain.Node{
-		LogicalID:         "node-obs-test-01",
-		Protocol:          domain.ProtocolSS,
-		DisplayName:       "Node Obs 1",
-		CredentialVersion: 2,
-		Active:            true,
-		CreatedAt:         now,
-		UpdatedAt:         now,
+		LogicalID:   "node-obs-test-01",
+		Protocol:    domain.ProtocolSS,
+		DisplayName: "Node Obs 1",
+		Server:      "198.51.100.1",
+		Port:        8388,
+		Credentials: domain.InboundProtocolCredential{Method: "aes-256-gcm", Password: "secret"},
+		Active:      true,
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 	node2 := domain.Node{
-		LogicalID:         "node-obs-test-02",
-		Protocol:          domain.ProtocolVMess,
-		DisplayName:       "Node Obs 2",
-		CredentialVersion: 1,
-		Active:            true,
-		CreatedAt:         now,
-		UpdatedAt:         now,
+		LogicalID:   "node-obs-test-02",
+		Protocol:    domain.ProtocolVMess,
+		DisplayName: "Node Obs 2",
+		Server:      "198.51.100.2",
+		Port:        443,
+		Credentials: domain.InboundProtocolCredential{UUID: "00000000-0000-0000-0000-000000000001"},
+		Active:      true,
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 	if err := nodeRepo.UpsertBatch(ctx, []domain.Node{node1, node2}); err != nil {
 		t.Fatalf("failed to insert test nodes: %v", err)
@@ -123,19 +135,17 @@ func TestProbeObservationsCredentialVersionAndListLatestByNodes(t *testing.T) {
 		t.Fatalf("failed to create probe run: %v", err)
 	}
 
-	// 1. Create observation with credential_version
-	credVer2 := 2
+	// 1. Create observation
 	obs1 := domain.ProbeObservation{
-		ID:                "obs-test-01",
-		ProbeRunID:        runID,
-		NodeLogicalID:     node1.LogicalID,
-		Kind:              domain.ProbeKindBaseline,
-		Verdict:           domain.VerdictAvailable,
-		EvidenceDigest:    "digest-01",
-		ObservedAt:        now.Add(-10 * time.Minute),
-		LatencyMS:         150,
-		RedactedSummary:   "ok",
-		CredentialVersion: &credVer2,
+		ID:              "obs-test-01",
+		ProbeRunID:      runID,
+		NodeLogicalID:   node1.LogicalID,
+		Kind:            domain.ProbeKindBaseline,
+		Verdict:         domain.VerdictAvailable,
+		EvidenceDigest:  "digest-01",
+		ObservedAt:      now.Add(-10 * time.Minute),
+		LatencyMS:       150,
+		RedactedSummary: "ok",
 	}
 	if err := obsRepo.Create(ctx, &obs1); err != nil {
 		t.Fatalf("failed to create obs1: %v", err)
@@ -143,16 +153,15 @@ func TestProbeObservationsCredentialVersionAndListLatestByNodes(t *testing.T) {
 
 	// 2. Create newer observation for same node and kind (latency=120)
 	obs1Newer := domain.ProbeObservation{
-		ID:                "obs-test-01-newer",
-		ProbeRunID:        runID,
-		NodeLogicalID:     node1.LogicalID,
-		Kind:              domain.ProbeKindBaseline,
-		Verdict:           domain.VerdictAvailable,
-		EvidenceDigest:    "digest-01-newer",
-		ObservedAt:        now.Add(-2 * time.Minute),
-		LatencyMS:         120,
-		RedactedSummary:   "ok newer",
-		CredentialVersion: &credVer2,
+		ID:              "obs-test-01-newer",
+		ProbeRunID:      runID,
+		NodeLogicalID:   node1.LogicalID,
+		Kind:            domain.ProbeKindBaseline,
+		Verdict:         domain.VerdictAvailable,
+		EvidenceDigest:  "digest-01-newer",
+		ObservedAt:      now.Add(-2 * time.Minute),
+		LatencyMS:       120,
+		RedactedSummary: "ok newer",
 	}
 	if err := obsRepo.Create(ctx, &obs1Newer); err != nil {
 		t.Fatalf("failed to create obs1Newer: %v", err)
@@ -160,53 +169,51 @@ func TestProbeObservationsCredentialVersionAndListLatestByNodes(t *testing.T) {
 
 	// 3. Create observation for node1 with different kind (geo)
 	obs1Geo := domain.ProbeObservation{
-		ID:                "obs-test-01-geo",
-		ProbeRunID:        runID,
-		NodeLogicalID:     node1.LogicalID,
-		Kind:              domain.ProbeKindGeo,
-		Verdict:           domain.VerdictAvailable,
-		EvidenceDigest:    "digest-geo",
-		ObservedAt:        now.Add(-5 * time.Minute),
-		LatencyMS:         200,
-		RedactedSummary:   "geo ok",
-		CredentialVersion: &credVer2,
+		ID:              "obs-test-01-geo",
+		ProbeRunID:      runID,
+		NodeLogicalID:   node1.LogicalID,
+		Kind:            domain.ProbeKindGeo,
+		Verdict:         domain.VerdictAvailable,
+		EvidenceDigest:  "digest-geo",
+		ObservedAt:      now.Add(-5 * time.Minute),
+		LatencyMS:       200,
+		RedactedSummary: "geo ok",
 	}
 	if err := obsRepo.Create(ctx, &obs1Geo); err != nil {
 		t.Fatalf("failed to create obs1Geo: %v", err)
 	}
 
-	// 4. Create observation for node2 without credential_version (legacy unversioned)
+	// 4. Create observation for node2
 	obs2Legacy := domain.ProbeObservation{
-		ID:                "obs-test-02-legacy",
-		ProbeRunID:        runID,
-		NodeLogicalID:     node2.LogicalID,
-		Kind:              domain.ProbeKindBaseline,
-		Verdict:           domain.VerdictAvailable,
-		EvidenceDigest:    "digest-legacy",
-		ObservedAt:        now.Add(-20 * time.Minute),
-		LatencyMS:         300,
-		RedactedSummary:   "legacy",
-		CredentialVersion: nil,
+		ID:              "obs-test-02-legacy",
+		ProbeRunID:      runID,
+		NodeLogicalID:   node2.LogicalID,
+		Kind:            domain.ProbeKindBaseline,
+		Verdict:         domain.VerdictAvailable,
+		EvidenceDigest:  "digest-legacy",
+		ObservedAt:      now.Add(-20 * time.Minute),
+		LatencyMS:       300,
+		RedactedSummary: "legacy",
 	}
 	if err := obsRepo.Create(ctx, &obs2Legacy); err != nil {
 		t.Fatalf("failed to create obs2Legacy: %v", err)
 	}
 
-	// Verify GetByID reads CredentialVersion correctly
+	// Verify GetByID reads observation correctly
 	fetched1, err := obsRepo.GetByID(ctx, obs1.ID)
 	if err != nil {
 		t.Fatalf("failed to get obs1: %v", err)
 	}
-	if fetched1.CredentialVersion == nil || *fetched1.CredentialVersion != 2 {
-		t.Fatalf("expected CredentialVersion=2, got %+v", fetched1.CredentialVersion)
+	if fetched1.LatencyMS != 150 {
+		t.Fatalf("expected LatencyMS=150, got %d", fetched1.LatencyMS)
 	}
 
 	fetched2, err := obsRepo.GetByID(ctx, obs2Legacy.ID)
 	if err != nil {
 		t.Fatalf("failed to get obs2Legacy: %v", err)
 	}
-	if fetched2.CredentialVersion != nil {
-		t.Fatalf("expected legacy obs CredentialVersion to be nil, got %d", *fetched2.CredentialVersion)
+	if fetched2.LatencyMS != 300 {
+		t.Fatalf("expected LatencyMS=300, got %d", fetched2.LatencyMS)
 	}
 
 	// 5. Test ListLatestByNodes
@@ -233,13 +240,13 @@ func TestProbeObservationsCredentialVersionAndListLatestByNodes(t *testing.T) {
 		t.Fatalf("expected latest geo observation %s, got %s", obs1Geo.ID, geoObs.ID)
 	}
 
-	// node2 should have obs2Legacy with nil credential_version
+	// node2 should have obs2Legacy
 	node2Obs := latest[node2.LogicalID]
 	if node2Obs == nil {
 		t.Fatal("expected observations for node2")
 	}
-	if node2Obs[domain.ProbeKindBaseline].CredentialVersion != nil {
-		t.Fatalf("expected node2 baseline credential_version to be nil")
+	if node2Obs[domain.ProbeKindBaseline].ID != obs2Legacy.ID {
+		t.Fatalf("expected node2 baseline observation %s", obs2Legacy.ID)
 	}
 
 	// nonexistent node should have empty map
@@ -384,8 +391,14 @@ func TestTask1_2BaselineCompatibilityAndProcessNameVerification(t *testing.T) {
 				LogicalID:   "node-process-test",
 				DisplayName: "HK-01",
 				Protocol:    domain.ProtocolSS,
-				Active:      true,
-				Position:    0,
+				Server:      "198.51.100.1",
+				Port:        8388,
+				Credentials: domain.InboundProtocolCredential{
+					Method:   "aes-256-gcm",
+					Password: "dummy-password",
+				},
+				Active:   true,
+				Position: 0,
 			},
 		},
 		Groups: []resolver.ResolvedGroup{
@@ -425,26 +438,13 @@ func TestTask1_2BaselineCompatibilityAndProcessNameVerification(t *testing.T) {
 		},
 	}
 
-	creds := map[string]*domain.NodeCredentialPayload{
-		"node-process-test": {
-			LogicalID: "node-process-test",
-			Protocol:  domain.ProtocolSS,
-			Server:    "198.51.100.1",
-			Port:      8388,
-			Credentials: domain.InboundProtocolCredential{
-				Method:   "aes-256-gcm",
-				Password: "dummy-password",
-			},
-		},
-	}
-
 	supportedTargets := []domain.CompilerTarget{
 		domain.TargetMihomo,
 		domain.TargetSingBox,
 		domain.TargetSurge,
 	}
 	for _, target := range supportedTargets {
-		out, err := compiler.Compile(ctx, &snapshot, target, compiler.WithCredentials(creds))
+		out, err := compiler.Compile(ctx, &snapshot, target)
 		if err != nil {
 			t.Fatalf("compiler failed for target %s with PROCESS-NAME: %v", target, err)
 		}

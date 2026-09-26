@@ -165,3 +165,27 @@ func TestSettingsValidation(t *testing.T) {
 		t.Fatal("MaxPageSize > 100 must fail validation")
 	}
 }
+
+func TestInboundProtocolCredentialHelpers(t *testing.T) {
+	c1 := domain.InboundProtocolCredential{PresharedKey: "psk-1"}
+	if got := c1.EffectivePreSharedKey(); got != "psk-1" {
+		t.Fatalf("expected psk-1, got %q", got)
+	}
+	c2 := domain.InboundProtocolCredential{PresharedKey: "psk-1", PreSharedKey: "psk-2"}
+	if got := c2.EffectivePreSharedKey(); got != "psk-2" {
+		t.Fatalf("expected psk-2 to take precedence, got %q", got)
+	}
+
+	if !domain.IsTruthy("true") || !domain.IsTruthy("1") || !domain.IsTruthy("YES") || !domain.IsTruthy("on") || domain.IsTruthy("false") {
+		t.Fatal("unexpected IsTruthy results")
+	}
+	if !domain.HasInsecureTransport(map[string]string{"skip_cert_verify": "true"}) || domain.HasInsecureTransport(map[string]string{"tls": "true"}) {
+		t.Fatal("unexpected HasInsecureTransport results")
+	}
+	if got := domain.ExtractHy2Ports(map[string]string{"server_ports": "20000-30000"}); got != "20000-30000" {
+		t.Fatalf("unexpected ExtractHy2Ports: %q", got)
+	}
+	if !domain.HasTUICDisableSNI(map[string]string{"disable-sni": "1"}) || domain.HasTUICDisableSNI(nil) {
+		t.Fatal("unexpected HasTUICDisableSNI results")
+	}
+}

@@ -70,18 +70,17 @@ func isQuantumultXBuiltInPolicy(name string) bool {
 	}
 }
 
-func renderQuantumultX(snapshot *resolver.ResolvedPolicySnapshot, credentials map[string]*domain.NodeCredentialPayload) ([]byte, error) {
+func renderQuantumultX(snapshot *resolver.ResolvedPolicySnapshot) ([]byte, error) {
 	if snapshot == nil {
 		return nil, fmt.Errorf("resolved policy snapshot is required")
 	}
 
 	serverLines := make([]string, 0, len(snapshot.Nodes))
 	for i, node := range snapshot.Nodes {
-		cred, err := validateCredentialEnvelope(domain.TargetQuantumultX, i, node, credentials)
-		if err != nil {
+		if err := validateCredentialEnvelope(domain.TargetQuantumultX, i, node); err != nil {
 			return nil, err
 		}
-		line, err := renderQuantumultXServerLine(i, node, cred)
+		line, err := renderQuantumultXServerLine(i, node)
 		if err != nil {
 			return nil, err
 		}
@@ -174,12 +173,12 @@ func renderQuantumultX(snapshot *resolver.ResolvedPolicySnapshot, credentials ma
 	return []byte(b.String()), nil
 }
 
-func renderQuantumultXServerLine(index int, node resolver.ResolvedNode, cred *domain.NodeCredentialPayload) (string, error) {
+func renderQuantumultXServerLine(index int, node resolver.ResolvedNode) (string, error) {
 	loc := fmt.Sprintf("nodes[%d]", index)
 	feature := string(node.Protocol)
 
 	tag := strings.TrimSpace(node.DisplayName)
-	server := strings.TrimSpace(cred.Server)
+	server := strings.TrimSpace(node.Server)
 	if tag == "" || server == "" || hasUnsafeQXChars(tag) || hasUnsafeQXChars(server) {
 		return "", &CapabilityError{
 			Target:   domain.TargetQuantumultX,
@@ -197,8 +196,8 @@ func renderQuantumultXServerLine(index int, node resolver.ResolvedNode, cred *do
 		}
 	}
 
-	endpoint := net.JoinHostPort(server, strconv.Itoa(cred.Port))
-	tMap := cred.Credentials.Transport
+	endpoint := net.JoinHostPort(server, strconv.Itoa(node.Port))
+	tMap := node.Credentials.Transport
 
 	if tMap != nil {
 		if strings.TrimSpace(tMap["pbk"]) != "" || strings.TrimSpace(tMap["sid"]) != "" {
@@ -247,8 +246,8 @@ func renderQuantumultXServerLine(index int, node resolver.ResolvedNode, cred *do
 
 	switch node.Protocol {
 	case domain.ProtocolSS:
-		method := strings.ToLower(strings.TrimSpace(cred.Credentials.Method))
-		password := strings.TrimSpace(cred.Credentials.Password)
+		method := strings.ToLower(strings.TrimSpace(node.Credentials.Method))
+		password := strings.TrimSpace(node.Credentials.Password)
 		if hasUnsafeQXChars(method) || hasUnsafeQXChars(password) {
 			return "", &CapabilityError{
 				Target:   domain.TargetQuantumultX,
@@ -347,8 +346,8 @@ func renderQuantumultXServerLine(index int, node resolver.ResolvedNode, cred *do
 		return strings.Join(parts, ", "), nil
 
 	case domain.ProtocolVMess:
-		uuid := strings.TrimSpace(cred.Credentials.UUID)
-		method := strings.ToLower(strings.TrimSpace(cred.Credentials.Method))
+		uuid := strings.TrimSpace(node.Credentials.UUID)
+		method := strings.ToLower(strings.TrimSpace(node.Credentials.Method))
 		if method == "" {
 			method = "auto"
 		}
@@ -474,7 +473,7 @@ func renderQuantumultXServerLine(index int, node resolver.ResolvedNode, cred *do
 		return strings.Join(parts, ", "), nil
 
 	case domain.ProtocolTrojan:
-		password := strings.TrimSpace(cred.Credentials.Password)
+		password := strings.TrimSpace(node.Credentials.Password)
 		if hasUnsafeQXChars(password) {
 			return "", &CapabilityError{
 				Target:   domain.TargetQuantumultX,

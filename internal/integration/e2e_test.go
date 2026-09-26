@@ -87,11 +87,6 @@ func TestControlPlaneEndToEndFixture(t *testing.T) {
 		t.Fatalf("create subscription: %v", err)
 	}
 
-	credRepo := sqlite.NewNodeCredentialRepository(db)
-	vault, err := domain.NewNodeCredentialVault("k1", map[string][]byte{"k1": []byte("01234567890123456789012345678901")})
-	if err != nil {
-		t.Fatalf("create vault: %v", err)
-	}
 	inventoryService := inventory.NewService(db, subRepo, fetchRepo, nodeRepo, sourceRepo, fixtureFetcher{
 		response: &fetch.Response{
 			StatusCode:    200,
@@ -105,7 +100,7 @@ func TestControlPlaneEndToEndFixture(t *testing.T) {
 				"    cipher: aes-128-gcm\n" +
 				"    password: fixture-secret\n"),
 		},
-	}, inventory.WithCredentialVault(vault, credRepo))
+	})
 	refresh, err := inventoryService.ReconcileSubscription(ctx, sub.ID)
 	if err != nil {
 		t.Fatalf("refresh subscription: %v", err)
@@ -223,22 +218,6 @@ func TestControlPlaneEndToEndFixture(t *testing.T) {
 	// -------------------------------------------------------------------------
 	// 5. Four-Target Compilation
 	// -------------------------------------------------------------------------
-	nodeRec, err := credRepo.GetByLogicalID(ctx, node.LogicalID, node.CredentialVersion)
-	if err != nil {
-		t.Fatalf("get node credential: %v", err)
-	}
-	nodePayload, err := vault.Decrypt(nodeRec, node.Protocol)
-	if err != nil {
-		t.Fatalf("decrypt node credential: %v", err)
-	}
-	for i := range snapshot.Nodes {
-		if snapshot.Nodes[i].LogicalID == node.LogicalID {
-			snapshot.Nodes[i].Identity = nodePayload.Identity
-		}
-	}
-	creds := map[string]*domain.NodeCredentialPayload{
-		node.LogicalID: nodePayload,
-	}
 	expectedTargets := []domain.CompilerTarget{
 		domain.TargetMihomo,
 		domain.TargetSingBox,
@@ -246,7 +225,7 @@ func TestControlPlaneEndToEndFixture(t *testing.T) {
 		domain.TargetQuantumultX,
 	}
 	for _, target := range expectedTargets {
-		compiled, err := compiler.Compile(ctx, snapshot, target, compiler.WithCredentials(creds))
+		compiled, err := compiler.Compile(ctx, snapshot, target)
 		if err != nil {
 			t.Fatalf("compile %s: %v", target, err)
 		}
@@ -264,7 +243,6 @@ func TestControlPlaneEndToEndFixture(t *testing.T) {
 		publicationRepo,
 		auditRepo,
 		publication.WithNodeRepository(nodeRepo),
-		publication.WithCredentialSource(vault, credRepo),
 	)
 
 	published, err := publicationService.Publish(ctx, publication.PublishCommand{
@@ -406,11 +384,6 @@ func TestControlPlaneEndToEndWithIPRiskFakeProvider(t *testing.T) {
 		t.Fatalf("create subscription: %v", err)
 	}
 
-	credRepo := sqlite.NewNodeCredentialRepository(db)
-	vault, err := domain.NewNodeCredentialVault("k1", map[string][]byte{"k1": []byte("01234567890123456789012345678901")})
-	if err != nil {
-		t.Fatalf("create vault: %v", err)
-	}
 	inventoryService := inventory.NewService(db, subRepo, fetchRepo, nodeRepo, sourceRepo, fixtureFetcher{
 		response: &fetch.Response{
 			StatusCode:    200,
@@ -430,7 +403,7 @@ func TestControlPlaneEndToEndWithIPRiskFakeProvider(t *testing.T) {
 				"    cipher: aes-128-gcm\n" +
 				"    password: secret-tor\n"),
 		},
-	}, inventory.WithCredentialVault(vault, credRepo))
+	})
 	refresh, err := inventoryService.ReconcileSubscription(ctx, sub.ID)
 	if err != nil || refresh.NodesValid != 2 {
 		t.Fatalf("reconcile subscription: nodes_valid=%d err=%v", refresh.NodesValid, err)
@@ -595,22 +568,6 @@ func TestControlPlaneEndToEndWithIPRiskFakeProvider(t *testing.T) {
 	}
 
 	// 6. Compilation for Admitted Snapshot
-	cleanRec, err := credRepo.GetByLogicalID(ctx, cleanNode.LogicalID, cleanNode.CredentialVersion)
-	if err != nil {
-		t.Fatalf("get cleanNode credential: %v", err)
-	}
-	cleanPayload, err := vault.Decrypt(cleanRec, cleanNode.Protocol)
-	if err != nil {
-		t.Fatalf("decrypt cleanNode credential: %v", err)
-	}
-	for i := range resolvedSnap.Nodes {
-		if resolvedSnap.Nodes[i].LogicalID == cleanNode.LogicalID {
-			resolvedSnap.Nodes[i].Identity = cleanPayload.Identity
-		}
-	}
-	creds2 := map[string]*domain.NodeCredentialPayload{
-		cleanNode.LogicalID: cleanPayload,
-	}
 	targets := []domain.CompilerTarget{
 		domain.TargetMihomo,
 		domain.TargetSingBox,
@@ -618,7 +575,7 @@ func TestControlPlaneEndToEndWithIPRiskFakeProvider(t *testing.T) {
 		domain.TargetQuantumultX,
 	}
 	for _, target := range targets {
-		compiled, err := compiler.Compile(ctx, resolvedSnap, target, compiler.WithCredentials(creds2))
+		compiled, err := compiler.Compile(ctx, resolvedSnap, target)
 		if err != nil {
 			t.Fatalf("compile %s: %v", target, err)
 		}
@@ -632,7 +589,6 @@ func TestControlPlaneEndToEndWithIPRiskFakeProvider(t *testing.T) {
 		pubRepo,
 		auditRepo,
 		publication.WithNodeRepository(nodeRepo),
-		publication.WithCredentialSource(vault, credRepo),
 		publication.WithIPRiskService(ipriskSvc),
 		publication.WithRiskPolicyRepository(riskPolicyRepo),
 		publication.WithRiskObservationRepository(riskObsRepo),

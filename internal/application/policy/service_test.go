@@ -54,8 +54,8 @@ func setupTestService(t *testing.T, db *sql.DB) (*policy.Service, domain.AuditRe
 func insertTestNode(t *testing.T, db *sql.DB, logicalID string) {
 	t.Helper()
 	const query = `
-	INSERT INTO nodes (logical_id, protocol, display_name, normalized_config_secret_ref, active, created_at, updated_at)
-	VALUES (?, 'ss', 'Test Node', 'secret://test', 1, '2026-09-15T00:00:00Z', '2026-09-15T00:00:00Z');`
+	INSERT INTO nodes (logical_id, protocol, display_name, server, port, config_json, active, created_at, updated_at)
+	VALUES (?, 'ss', 'Test Node', '198.51.100.1', 8388, '{}', 1, '2026-09-15T00:00:00Z', '2026-09-15T00:00:00Z');`
 	if _, err := db.Exec(query, logicalID); err != nil {
 		t.Fatalf("failed to insert test node %s: %v", logicalID, err)
 	}

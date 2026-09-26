@@ -1,9 +1,7 @@
 package parser_test
 
 import (
-	"encoding/json"
 	"os"
-	"strings"
 	"testing"
 
 	"clash-sub-parser/internal/domain"
@@ -90,23 +88,23 @@ func TestParseLogicalIDIgnoresNamesSourceAndSecrets(t *testing.T) {
 	if first.Nodes[0].Node.LogicalID != second.Nodes[0].Node.LogicalID {
 		t.Fatalf("logical IDs differ for same transport: %q != %q", first.Nodes[0].Node.LogicalID, second.Nodes[0].Node.LogicalID)
 	}
-	if first.Nodes[0].Node.NormalizedConfigSecretRef == second.Nodes[0].Node.NormalizedConfigSecretRef {
-		t.Fatal("distinct credentials must have distinct opaque secret references")
+	if first.Nodes[0].Node.Credentials.UUID == second.Nodes[0].Node.Credentials.UUID {
+		t.Fatal("distinct credentials must be preserved on parsed nodes")
 	}
 }
 
-func TestParseOutputDoesNotExposeCredentials(t *testing.T) {
+func TestParsePopulatesPlaintextNodeConfiguration(t *testing.T) {
 	const credential = "top-secret-password"
 	result, err := parser.Parse([]byte("trojan://" + credential + "@secure.example:443?sni=secure.example#Private"))
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	encoded, err := json.Marshal(result)
-	if err != nil {
-		t.Fatalf("json.Marshal() error = %v", err)
+	if len(result.Nodes) != 1 {
+		t.Fatalf("expected 1 node, got %d", len(result.Nodes))
 	}
-	if strings.Contains(string(encoded), credential) {
-		t.Fatalf("parser output exposed credential: %s", encoded)
+	node := result.Nodes[0].Node
+	if node.Server != "secure.example" || node.Port != 443 || node.Credentials.Password != credential {
+		t.Fatalf("expected plaintext server/port/credentials on Node, got %+v", node)
 	}
 }
 

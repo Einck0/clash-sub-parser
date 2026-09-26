@@ -28,13 +28,15 @@ func TestNodeFilterRepository_BatchAndTransactionConsistency(t *testing.T) {
 		nid := fmt.Sprintf("0195c100-0000-7000-8000-%012d", i+1)
 		nodeIDs = append(nodeIDs, nid)
 		nodes = append(nodes, domain.Node{
-			LogicalID:         nid,
-			DisplayName:       fmt.Sprintf("Node-%02d", i+1),
-			Protocol:          domain.ProtocolSS,
-			Active:            true,
-			CredentialVersion: 1,
-			CreatedAt:         time.Now().UTC(),
-			UpdatedAt:         time.Now().UTC(),
+			LogicalID:   nid,
+			DisplayName: fmt.Sprintf("Node-%02d", i+1),
+			Protocol:    domain.ProtocolSS,
+			Server:      "203.0.113.10",
+			Port:        8388,
+			Credentials: domain.InboundProtocolCredential{Method: "aes-256-gcm", Password: "secret"},
+			Active:      true,
+			CreatedAt:   time.Now().UTC(),
+			UpdatedAt:   time.Now().UTC(),
 		})
 	}
 	if err := nodeRepo.UpsertBatch(ctx, nodes); err != nil {
@@ -97,22 +99,16 @@ func TestNodeFilterRepository_BatchAndTransactionConsistency(t *testing.T) {
 	}
 
 	for i, nid := range nodeIDs {
-		ver := 1
-		if i == 0 {
-			// One node has mismatched credential version
-			ver = 2
-		}
 		obsID := fmt.Sprintf("obs-bulk-%02d", i+1)
 		err := obsRepo.Create(ctx, &domain.ProbeObservation{
-			ID:                obsID,
-			ProbeRunID:        runID,
-			NodeLogicalID:     nid,
-			Kind:              domain.ProbeKindBaseline,
-			Verdict:           domain.VerdictAvailable,
-			EvidenceDigest:    "digest",
-			LatencyMS:         50,
-			ObservedAt:        time.Now().UTC(),
-			CredentialVersion: &ver,
+			ID:             obsID,
+			ProbeRunID:     runID,
+			NodeLogicalID:  nid,
+			Kind:           domain.ProbeKindBaseline,
+			Verdict:        domain.VerdictAvailable,
+			EvidenceDigest: "digest",
+			LatencyMS:      50,
+			ObservedAt:     time.Now().UTC(),
 		})
 		if err != nil {
 			t.Fatalf("Create probe observation failed: %v", err)
@@ -175,12 +171,14 @@ func TestNodeFilterRepository_BatchAndTransactionConsistency(t *testing.T) {
 	}
 }
 
-func TestNodeFilter_UnknownOrMissingCredentialVersion_FailClosed(t *testing.T) {
+func TestNodeFilter_ProbeVerdictWithoutCredentialVersionGate(t *testing.T) {
 	node := domain.Node{
-		LogicalID:         "0195c500-0000-7000-8000-000000000001",
-		DisplayName:       "Node-Version-Test",
-		Protocol:          domain.ProtocolSS,
-		CredentialVersion: 3,
+		LogicalID:   "0195c500-0000-7000-8000-000000000001",
+		DisplayName: "Node-Probe-Filter-Test",
+		Protocol:    domain.ProtocolSS,
+		Server:      "203.0.113.10",
+		Port:        8388,
+		Credentials: domain.InboundProtocolCredential{Method: "aes-256-gcm", Password: "secret"},
 	}
 
 	kind := domain.ProbeKindBaseline
@@ -193,65 +191,17 @@ func TestNodeFilter_UnknownOrMissingCredentialVersion_FailClosed(t *testing.T) {
 		FreshnessSeconds: &freshness,
 	}
 
-	// 1. Observation with nil credential_version (legacy/unknown)
-	obsNil := domain.ProbeObservation{
-		ID:                "obs-unknown-ver",
-		NodeLogicalID:     node.LogicalID,
-		Kind:              kind,
-		Verdict:           domain.VerdictAvailable,
-		ObservedAt:        time.Now().UTC(),
-		CredentialVersion: nil, // Unknown / unversioned
+	obs := domain.ProbeObservation{
+		ID:            "obs-fresh",
+		NodeLogicalID: node.LogicalID,
+		Kind:          kind,
+		Verdict:       domain.VerdictAvailable,
+		ObservedAt:    time.Now().UTC(),
 	}
 
-	matched, reason := domain.MatchesCondition(cond, node, nil, map[domain.ProbeKind]domain.ProbeObservation{kind: obsNil}, time.Now().UTC())
-	if matched {
-		t.Fatalf("observation with nil CredentialVersion must fail-closed, got matched=true")
-	}
-	if reason == "" {
-		t.Fatalf("expected failure reason for unversioned observation")
-	}
-
-	// 2. Observation with mismatched version (version 2 vs node version 3)
-	ver2 := 2
-	obsMismatch := domain.ProbeObservation{
-		ID:                "obs-mismatch-ver",
-		NodeLogicalID:     node.LogicalID,
-		Kind:              kind,
-		Verdict:           domain.VerdictAvailable,
-		ObservedAt:        time.Now().UTC(),
-		CredentialVersion: &ver2,
-	}
-	matched, _ = domain.MatchesCondition(cond, node, nil, map[domain.ProbeKind]domain.ProbeObservation{kind: obsMismatch}, time.Now().UTC())
-	if matched {
-		t.Fatalf("observation with mismatched CredentialVersion must fail-closed, got matched=true")
-	}
-
-	// 3. Negated condition OpNotEquals with unknown version MUST ALSO fail-closed!
-	condNeg := domain.FilterCondition{
-		Field:            domain.FilterFieldProbeVerdict,
-		Op:               domain.FilterOpNotEquals,
-		Value:            "error",
-		ProbeKind:        &kind,
-		FreshnessSeconds: &freshness,
-	}
-	matched, _ = domain.MatchesCondition(condNeg, node, nil, map[domain.ProbeKind]domain.ProbeObservation{kind: obsNil}, time.Now().UTC())
-	if matched {
-		t.Fatalf("negated probe condition with unversioned observation must fail-closed, got matched=true")
-	}
-
-	// 4. Matching version 3 passes
-	ver3 := 3
-	obsMatching := domain.ProbeObservation{
-		ID:                "obs-matching-ver",
-		NodeLogicalID:     node.LogicalID,
-		Kind:              kind,
-		Verdict:           domain.VerdictAvailable,
-		ObservedAt:        time.Now().UTC(),
-		CredentialVersion: &ver3,
-	}
-	matched, _ = domain.MatchesCondition(cond, node, nil, map[domain.ProbeKind]domain.ProbeObservation{kind: obsMatching}, time.Now().UTC())
+	matched, reason := domain.MatchesCondition(cond, node, nil, map[domain.ProbeKind]domain.ProbeObservation{kind: obs}, time.Now().UTC())
 	if !matched {
-		t.Fatalf("observation with matching CredentialVersion should pass")
+		t.Fatalf("fresh observation must match without credential version gate, got matched=false (%s)", reason)
 	}
 }
 

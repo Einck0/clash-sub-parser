@@ -563,10 +563,10 @@ func TestIPRiskUnactivatedPolicyDoesNotAffectGroupMembers(t *testing.T) {
 	// Node 1: low risk (score 20 -> allow)
 	// Node 2: high risk (score 95 -> block)
 	_, err := db.ExecContext(context.Background(), `
-		INSERT INTO nodes (logical_id, protocol, display_name, normalized_config_secret_ref, created_at, updated_at)
+		INSERT INTO nodes (logical_id, protocol, display_name, server, port, config_json, created_at, updated_at)
 		VALUES
-		('node_1111111111111111', 'ss', 'Safe Node', 'sec://safe', '2026-09-16T00:00:00Z', '2026-09-16T00:00:00Z'),
-		('node_2222222222222222', 'ss', 'Risky Node', 'sec://risky', '2026-09-16T00:00:00Z', '2026-09-16T00:00:00Z');
+		('node_1111111111111111', 'ss', 'Safe Node', '198.51.100.1', 8388, '{}', '2026-09-16T00:00:00Z', '2026-09-16T00:00:00Z'),
+		('node_2222222222222222', 'ss', 'Risky Node', '198.51.100.2', 8388, '{}', '2026-09-16T00:00:00Z', '2026-09-16T00:00:00Z');
 	`)
 	if err != nil {
 		t.Fatalf("insert nodes: %v", err)

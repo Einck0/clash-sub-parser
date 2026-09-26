@@ -143,7 +143,7 @@ func (r *nodeRepository) ListReadModel(ctx context.Context, filter domain.NodeFi
 
 	// 3. Paginated items query
 	selectQuery := fmt.Sprintf(`%s
-		SELECT logical_id, protocol, display_name, normalized_config_secret_ref, credential_version, active,
+		SELECT logical_id, protocol, display_name, server, port, config_json, active,
 		       created_at, updated_at, risk_decision, risk_band, risk_provider,
 		       risk_schema_version, risk_status, risk_reason_code, risk_observed_at,
 		       risk_expires_at
@@ -163,6 +163,7 @@ func (r *nodeRepository) ListReadModel(ctx context.Context, filter domain.NodeFi
 	for rows.Next() {
 		var (
 			node                                 domain.Node
+			configJSON                           string
 			activeInt                            int
 			createdStr, updatedStr               string
 			riskDecision, riskBand, riskProvider string
@@ -175,8 +176,9 @@ func (r *nodeRepository) ListReadModel(ctx context.Context, filter domain.NodeFi
 			&node.LogicalID,
 			&node.Protocol,
 			&node.DisplayName,
-			&node.NormalizedConfigSecretRef,
-			&node.CredentialVersion,
+			&node.Server,
+			&node.Port,
+			&configJSON,
 			&activeInt,
 			&createdStr,
 			&updatedStr,
@@ -191,6 +193,12 @@ func (r *nodeRepository) ListReadModel(ctx context.Context, filter domain.NodeFi
 		); err != nil {
 			return nil, 0, fmt.Errorf("failed to scan read model node: %w", err)
 		}
+
+		creds, err := unmarshalNodeCredentials(configJSON)
+		if err != nil {
+			return nil, 0, fmt.Errorf("failed to unmarshal credentials for node %s: %w", node.LogicalID, err)
+		}
+		node.Credentials = creds
 
 		node.Active = activeInt == 1
 		node.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdStr)
@@ -622,8 +630,9 @@ func buildRiskEvaluationCTE(policy *domain.RiskPolicy, nowStr string, nodeIDs ..
 			SELECT n.logical_id,
 			       n.protocol,
 			       n.display_name,
-			       n.normalized_config_secret_ref,
-			       n.credential_version,
+			       n.server,
+			       n.port,
+			       n.config_json,
 			       n.active,
 			       n.created_at,
 			       n.updated_at,
@@ -649,8 +658,9 @@ func buildNoPolicyCTE() (string, []any) {
 			SELECT n.logical_id,
 			       n.protocol,
 			       n.display_name,
-			       n.normalized_config_secret_ref,
-			       n.credential_version,
+			       n.server,
+			       n.port,
+			       n.config_json,
 			       n.active,
 			       n.created_at,
 			       n.updated_at,
@@ -762,7 +772,7 @@ func (r *nodeRepository) listReadModelFast(ctx context.Context, filter domain.No
 		}
 		orderBy = fmt.Sprintf("display_name %s, logical_id ASC", order)
 	}
-	query := fmt.Sprintf("SELECT logical_id, protocol, display_name, normalized_config_secret_ref, credential_version, active, created_at, updated_at FROM nodes%s ORDER BY %s LIMIT ? OFFSET ?;", whereSQL, orderBy)
+	query := fmt.Sprintf("SELECT logical_id, protocol, display_name, server, port, config_json, active, created_at, updated_at FROM nodes%s ORDER BY %s LIMIT ? OFFSET ?;", whereSQL, orderBy)
 	rows, err := r.db.QueryContext(ctx, query, append(args, pageSize, offset)...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to query nodes: %w", err)
@@ -772,11 +782,17 @@ func (r *nodeRepository) listReadModelFast(ctx context.Context, filter domain.No
 	ids := make([]string, 0, pageSize)
 	for rows.Next() {
 		var n domain.Node
+		var configJSON string
 		var active int
 		var created, updated string
-		if err := rows.Scan(&n.LogicalID, &n.Protocol, &n.DisplayName, &n.NormalizedConfigSecretRef, &n.CredentialVersion, &active, &created, &updated); err != nil {
+		if err := rows.Scan(&n.LogicalID, &n.Protocol, &n.DisplayName, &n.Server, &n.Port, &configJSON, &active, &created, &updated); err != nil {
 			return nil, 0, err
 		}
+		creds, err := unmarshalNodeCredentials(configJSON)
+		if err != nil {
+			return nil, 0, fmt.Errorf("failed to unmarshal credentials for node %s: %w", n.LogicalID, err)
+		}
+		n.Credentials = creds
 		n.Active = active == 1
 		n.CreatedAt = parseStoredTime(created)
 		n.UpdatedAt = parseStoredTime(updated)

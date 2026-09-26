@@ -39,8 +39,39 @@ func fixtureSnapshot() *resolver.ResolvedPolicySnapshot {
 		SnapshotDigest:  "snapshot-test-digest",
 		CompilerVersion: "1.0.0",
 		Nodes: []resolver.ResolvedNode{
-			{LogicalID: "0123456789abcdef0123456789abcdef", DisplayName: "edge-a", Protocol: domain.ProtocolVMess, Active: true, Position: 0},
-			{LogicalID: "abcdef0123456789abcdef0123456789", DisplayName: "edge-b", Protocol: domain.ProtocolSS, Active: true, Position: 1},
+			{
+				LogicalID:   "0123456789abcdef0123456789abcdef",
+				DisplayName: "edge-a",
+				Protocol:    domain.ProtocolVMess,
+				Server:      "198.51.100.1",
+				Port:        443,
+				Credentials: domain.InboundProtocolCredential{
+					UUID:    "b831381d-6324-4d53-ad4f-8cda48b30811",
+					Method:  "auto",
+					AlterID: 0,
+					Transport: map[string]string{
+						"network": "ws",
+						"path":    "/vmess",
+						"host":    "example.com",
+						"tls":     "true",
+					},
+				},
+				Active:   true,
+				Position: 0,
+			},
+			{
+				LogicalID:   "abcdef0123456789abcdef0123456789",
+				DisplayName: "edge-b",
+				Protocol:    domain.ProtocolSS,
+				Server:      "198.51.100.2",
+				Port:        8388,
+				Credentials: domain.InboundProtocolCredential{
+					Method:   "aes-256-gcm",
+					Password: "test-ss-password",
+				},
+				Active:   true,
+				Position: 1,
+			},
 		},
 		Groups: []resolver.ResolvedGroup{
 			{
@@ -63,53 +94,16 @@ func fixtureSnapshot() *resolver.ResolvedPolicySnapshot {
 	}
 }
 
-func fixtureCredentials() map[string]*domain.NodeCredentialPayload {
-	return map[string]*domain.NodeCredentialPayload{
-		"0123456789abcdef0123456789abcdef": {
-			LogicalID: "0123456789abcdef0123456789abcdef",
-			Protocol:  domain.ProtocolVMess,
-			Server:    "198.51.100.1",
-			Port:      443,
-			Version:   1,
-			Digest:    "digest-vmess",
-			Credentials: domain.InboundProtocolCredential{
-				UUID:    "b831381d-6324-4d53-ad4f-8cda48b30811",
-				Method:  "auto",
-				AlterID: 0,
-				Transport: map[string]string{
-					"network": "ws",
-					"path":    "/vmess",
-					"host":    "example.com",
-					"tls":     "true",
-				},
-			},
-		},
-		"abcdef0123456789abcdef0123456789": {
-			LogicalID: "abcdef0123456789abcdef0123456789",
-			Protocol:  domain.ProtocolSS,
-			Server:    "198.51.100.2",
-			Port:      8388,
-			Version:   1,
-			Digest:    "digest-ss",
-			Credentials: domain.InboundProtocolCredential{
-				Method:   "aes-256-gcm",
-				Password: "test-ss-password",
-			},
-		},
-	}
-}
-
 func assertTargetGoldenFixture(t *testing.T, target domain.CompilerTarget) {
 	t.Helper()
 	ctx := context.Background()
 	snapshot := fixtureSnapshot()
-	creds := fixtureCredentials()
 
-	first, err := compiler.Compile(ctx, snapshot, target, compiler.WithCredentials(creds))
+	first, err := compiler.Compile(ctx, snapshot, target)
 	if err != nil {
 		t.Fatalf("compile failed: %v", err)
 	}
-	second, err := compiler.Compile(ctx, snapshot, target, compiler.WithCredentials(creds))
+	second, err := compiler.Compile(ctx, snapshot, target)
 	if err != nil {
 		t.Fatalf("second compile failed: %v", err)
 	}
@@ -197,13 +191,12 @@ func TestCompileContextCancellation(t *testing.T) {
 
 func TestCompileConcurrentHighLoad(t *testing.T) {
 	snapshot := fixtureSnapshot()
-	creds := fixtureCredentials()
 	ctx := context.Background()
 	targets := compiler.Targets()
 
 	var baseline = make(map[domain.CompilerTarget]compiler.Result)
 	for _, target := range targets {
-		res, err := compiler.Compile(ctx, snapshot, target, compiler.WithCredentials(creds))
+		res, err := compiler.Compile(ctx, snapshot, target)
 		if err != nil {
 			t.Fatalf("baseline compile %s failed: %v", target, err)
 		}
@@ -219,7 +212,7 @@ func TestCompileConcurrentHighLoad(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for _, target := range targets {
-				res, err := compiler.Compile(ctx, snapshot, target, compiler.WithCredentials(creds))
+				res, err := compiler.Compile(ctx, snapshot, target)
 				if err != nil {
 					errCh <- err
 					return
@@ -253,8 +246,28 @@ func TestCompiler_DerivedProjectedGroupsAcrossAllTargets(t *testing.T) {
 
 	parentID := domain.MustNewUUIDv7()
 	childID := domain.MustNewUUIDv7()
-	n1 := domain.Node{LogicalID: "0123456789abcdef0123456789abcdef", DisplayName: "US-Fast", Protocol: domain.ProtocolTrojan, Active: true}
-	n2 := domain.Node{LogicalID: "abcdef0123456789abcdef0123456789", DisplayName: "US-Slow", Protocol: domain.ProtocolTrojan, Active: true}
+	n1 := domain.Node{
+		LogicalID:   "0123456789abcdef0123456789abcdef",
+		DisplayName: "US-Fast",
+		Protocol:    domain.ProtocolTrojan,
+		Server:      "198.51.100.20",
+		Port:        443,
+		Credentials: domain.InboundProtocolCredential{
+			Password: "trojan-pwd-1",
+		},
+		Active: true,
+	}
+	n2 := domain.Node{
+		LogicalID:   "abcdef0123456789abcdef0123456789",
+		DisplayName: "US-Slow",
+		Protocol:    domain.ProtocolTrojan,
+		Server:      "198.51.100.21",
+		Port:        443,
+		Credentials: domain.InboundProtocolCredential{
+			Password: "trojan-pwd-2",
+		},
+		Active: true,
+	}
 
 	input := resolver.ResolveInput{
 		RevisionID:         "rev-comp-1",
@@ -290,30 +303,9 @@ func TestCompiler_DerivedProjectedGroupsAcrossAllTargets(t *testing.T) {
 		t.Fatalf("resolve failed: %v", err)
 	}
 
-	creds := map[string]*domain.NodeCredentialPayload{
-		n1.LogicalID: {
-			LogicalID: n1.LogicalID,
-			Protocol:  domain.ProtocolTrojan,
-			Server:    "198.51.100.20",
-			Port:      443,
-			Credentials: domain.InboundProtocolCredential{
-				Password: "trojan-pwd-1",
-			},
-		},
-		n2.LogicalID: {
-			LogicalID: n2.LogicalID,
-			Protocol:  domain.ProtocolTrojan,
-			Server:    "198.51.100.21",
-			Port:      443,
-			Credentials: domain.InboundProtocolCredential{
-				Password: "trojan-pwd-2",
-			},
-		},
-	}
-
 	for _, target := range compiler.Targets() {
 		t.Run(string(target), func(t *testing.T) {
-			res, err := compiler.Compile(ctx, snap, target, compiler.WithCredentials(creds))
+			res, err := compiler.Compile(ctx, snap, target)
 			if err != nil {
 				t.Fatalf("compile for %s failed: %v", target, err)
 			}
@@ -330,15 +322,58 @@ func TestCompiler_DerivedProjectedGroupsAcrossAllTargets(t *testing.T) {
 	}
 }
 
-func TestValidateCredentialEnvelope_AllSevenProtocolsAndIdentity(t *testing.T) {
+func TestValidateCredentialEnvelope_AllSevenProtocols(t *testing.T) {
 	ctx := context.Background()
+
+	validCredForProto := func(proto domain.Protocol) domain.InboundProtocolCredential {
+		switch proto {
+		case domain.ProtocolSS:
+			return domain.InboundProtocolCredential{Method: "aes-256-gcm", Password: "secret-ss-password"}
+		case domain.ProtocolVMess:
+			return domain.InboundProtocolCredential{UUID: "b831381d-6324-4d53-ad4f-8cda48b30811"}
+		case domain.ProtocolVLESS:
+			return domain.InboundProtocolCredential{
+				UUID:      "b831381d-6324-4d53-ad4f-8cda48b30812",
+				Transport: map[string]string{"pbk": "secret-reality-pbk", "sid": "01ab"},
+			}
+		case domain.ProtocolTrojan:
+			return domain.InboundProtocolCredential{Password: "secret-trojan-password"}
+		case domain.ProtocolHysteria2:
+			return domain.InboundProtocolCredential{Password: "secret-hy2-password"}
+		case domain.ProtocolWireGuard:
+			return domain.InboundProtocolCredential{
+				PrivateKey:   "secret-wg-private-key",
+				PublicKey:    "secret-wg-public-key",
+				PreSharedKey: "secret-wg-psk",
+				LocalAddress: []string{"10.0.0.2/32", "fd00::2/128"},
+				Reserved:     []uint8{1, 2, 3},
+				MTU:          1420,
+			}
+		case domain.ProtocolTUIC:
+			return domain.InboundProtocolCredential{
+				UUID:     "b831381d-6324-4d53-ad4f-8cda48b30813",
+				Password: "secret-tuic-password",
+			}
+		default:
+			return domain.InboundProtocolCredential{}
+		}
+	}
 
 	makeSingleNodeSnapshot := func(id, name string, proto domain.Protocol) *resolver.ResolvedPolicySnapshot {
 		return &resolver.ResolvedPolicySnapshot{
 			SnapshotDigest:  "snap-" + id,
 			CompilerVersion: "1.0.0",
 			Nodes: []resolver.ResolvedNode{
-				{LogicalID: id, DisplayName: name, Protocol: proto, Active: true, Position: 0},
+				{
+					LogicalID:   id,
+					DisplayName: name,
+					Protocol:    proto,
+					Server:      "198.51.100.50",
+					Port:        443,
+					Credentials: validCredForProto(proto),
+					Active:      true,
+					Position:    0,
+				},
 			},
 			Groups: []resolver.ResolvedGroup{
 				{
@@ -358,47 +393,6 @@ func TestValidateCredentialEnvelope_AllSevenProtocolsAndIdentity(t *testing.T) {
 		}
 	}
 
-	validCredForProto := func(id string, proto domain.Protocol) *domain.NodeCredentialPayload {
-		payload := &domain.NodeCredentialPayload{
-			LogicalID: id,
-			Protocol:  proto,
-			Server:    "198.51.100.50",
-			Port:      443,
-			Version:   1,
-			Digest:    "digest-" + id,
-		}
-		switch proto {
-		case domain.ProtocolSS:
-			payload.Credentials = domain.InboundProtocolCredential{Method: "aes-256-gcm", Password: "secret-ss-password"}
-		case domain.ProtocolVMess:
-			payload.Credentials = domain.InboundProtocolCredential{UUID: "b831381d-6324-4d53-ad4f-8cda48b30811"}
-		case domain.ProtocolVLESS:
-			payload.Credentials = domain.InboundProtocolCredential{
-				UUID:      "b831381d-6324-4d53-ad4f-8cda48b30812",
-				Transport: map[string]string{"pbk": "secret-reality-pbk", "sid": "01ab"},
-			}
-		case domain.ProtocolTrojan:
-			payload.Credentials = domain.InboundProtocolCredential{Password: "secret-trojan-password"}
-		case domain.ProtocolHysteria2:
-			payload.Credentials = domain.InboundProtocolCredential{Password: "secret-hy2-password"}
-		case domain.ProtocolWireGuard:
-			payload.Credentials = domain.InboundProtocolCredential{
-				PrivateKey:   "secret-wg-private-key",
-				PublicKey:    "secret-wg-public-key",
-				PreSharedKey: "secret-wg-psk",
-				LocalAddress: []string{"10.0.0.2/32", "fd00::2/128"},
-				Reserved:     []uint8{1, 2, 3},
-				MTU:          1420,
-			}
-		case domain.ProtocolTUIC:
-			payload.Credentials = domain.InboundProtocolCredential{
-				UUID:     "b831381d-6324-4d53-ad4f-8cda48b30813",
-				Password: "secret-tuic-password",
-			}
-		}
-		return payload
-	}
-
 	allProtocols := []domain.Protocol{
 		domain.ProtocolSS,
 		domain.ProtocolVMess,
@@ -413,9 +407,7 @@ func TestValidateCredentialEnvelope_AllSevenProtocolsAndIdentity(t *testing.T) {
 		t.Run("Valid_"+string(proto), func(t *testing.T) {
 			id := "node-" + string(proto)
 			snap := makeSingleNodeSnapshot(id, "Edge-"+string(proto), proto)
-			cred := validCredForProto(id, proto)
-			inputs := []compiler.NodeCredentialInput{{Node: snap.Nodes[0], Credential: cred}}
-			if _, err := compiler.Compile(ctx, snap, domain.TargetSingBox, compiler.WithCredentialInputs(inputs)); err != nil {
+			if _, err := compiler.Compile(ctx, snap, domain.TargetSingBox); err != nil {
 				t.Fatalf("expected valid %s credentials to pass envelope check: %v", proto, err)
 			}
 		})
@@ -424,44 +416,17 @@ func TestValidateCredentialEnvelope_AllSevenProtocolsAndIdentity(t *testing.T) {
 	type errorCase struct {
 		name         string
 		proto        domain.Protocol
-		mutate       func(*domain.NodeCredentialPayload)
+		mutate       func(*resolver.ResolvedNode)
 		secretMarker string
 		wantReason   string
 	}
 
 	cases := []errorCase{
 		{
-			name:  "Envelope_LogicalIDMismatch",
-			proto: domain.ProtocolSS,
-			mutate: func(p *domain.NodeCredentialPayload) {
-				p.LogicalID = "other-id"
-			},
-			secretMarker: "secret-ss-password",
-			wantReason:   "logical ID mismatch",
-		},
-		{
-			name:  "Envelope_ProtocolMismatch",
-			proto: domain.ProtocolSS,
-			mutate: func(p *domain.NodeCredentialPayload) {
-				p.Protocol = domain.ProtocolTrojan
-			},
-			secretMarker: "secret-ss-password",
-			wantReason:   "protocol mismatch",
-		},
-		{
-			name:  "Envelope_NegativeVersion",
-			proto: domain.ProtocolSS,
-			mutate: func(p *domain.NodeCredentialPayload) {
-				p.Version = -1
-			},
-			secretMarker: "secret-ss-password",
-			wantReason:   "invalid version",
-		},
-		{
 			name:  "Envelope_EmptyServer",
 			proto: domain.ProtocolSS,
-			mutate: func(p *domain.NodeCredentialPayload) {
-				p.Server = "   "
+			mutate: func(n *resolver.ResolvedNode) {
+				n.Server = "   "
 			},
 			secretMarker: "secret-ss-password",
 			wantReason:   "missing server address",
@@ -469,8 +434,8 @@ func TestValidateCredentialEnvelope_AllSevenProtocolsAndIdentity(t *testing.T) {
 		{
 			name:  "Envelope_InvalidPort",
 			proto: domain.ProtocolSS,
-			mutate: func(p *domain.NodeCredentialPayload) {
-				p.Port = 70000
+			mutate: func(n *resolver.ResolvedNode) {
+				n.Port = 70000
 			},
 			secretMarker: "secret-ss-password",
 			wantReason:   "invalid port",
@@ -478,8 +443,8 @@ func TestValidateCredentialEnvelope_AllSevenProtocolsAndIdentity(t *testing.T) {
 		{
 			name:  "SS_MissingMethod",
 			proto: domain.ProtocolSS,
-			mutate: func(p *domain.NodeCredentialPayload) {
-				p.Credentials.Method = ""
+			mutate: func(n *resolver.ResolvedNode) {
+				n.Credentials.Method = ""
 			},
 			secretMarker: "secret-ss-password",
 			wantReason:   "missing required cipher or password",
@@ -487,8 +452,8 @@ func TestValidateCredentialEnvelope_AllSevenProtocolsAndIdentity(t *testing.T) {
 		{
 			name:  "SS_MissingPassword",
 			proto: domain.ProtocolSS,
-			mutate: func(p *domain.NodeCredentialPayload) {
-				p.Credentials.Password = ""
+			mutate: func(n *resolver.ResolvedNode) {
+				n.Credentials.Password = ""
 			},
 			secretMarker: "aes-256-gcm",
 			wantReason:   "missing required cipher or password",
@@ -496,16 +461,16 @@ func TestValidateCredentialEnvelope_AllSevenProtocolsAndIdentity(t *testing.T) {
 		{
 			name:  "VMess_MissingUUID",
 			proto: domain.ProtocolVMess,
-			mutate: func(p *domain.NodeCredentialPayload) {
-				p.Credentials.UUID = " "
+			mutate: func(n *resolver.ResolvedNode) {
+				n.Credentials.UUID = " "
 			},
 			wantReason: "missing required uuid in vmess",
 		},
 		{
 			name:  "VMess_NegativeAlterID",
 			proto: domain.ProtocolVMess,
-			mutate: func(p *domain.NodeCredentialPayload) {
-				p.Credentials.AlterID = -2
+			mutate: func(n *resolver.ResolvedNode) {
+				n.Credentials.AlterID = -2
 			},
 			secretMarker: "b831381d-6324-4d53-ad4f-8cda48b30811",
 			wantReason:   "invalid alterId in vmess",
@@ -513,8 +478,8 @@ func TestValidateCredentialEnvelope_AllSevenProtocolsAndIdentity(t *testing.T) {
 		{
 			name:  "VLESS_MissingUUID",
 			proto: domain.ProtocolVLESS,
-			mutate: func(p *domain.NodeCredentialPayload) {
-				p.Credentials.UUID = ""
+			mutate: func(n *resolver.ResolvedNode) {
+				n.Credentials.UUID = ""
 			},
 			secretMarker: "secret-reality-pbk",
 			wantReason:   "missing required uuid in vless",
@@ -522,8 +487,8 @@ func TestValidateCredentialEnvelope_AllSevenProtocolsAndIdentity(t *testing.T) {
 		{
 			name:  "VLESS_RealitySidWithoutPbk",
 			proto: domain.ProtocolVLESS,
-			mutate: func(p *domain.NodeCredentialPayload) {
-				p.Credentials.Transport["pbk"] = ""
+			mutate: func(n *resolver.ResolvedNode) {
+				n.Credentials.Transport["pbk"] = ""
 			},
 			secretMarker: "b831381d-6324-4d53-ad4f-8cda48b30812",
 			wantReason:   "missing required reality public key",
@@ -531,24 +496,24 @@ func TestValidateCredentialEnvelope_AllSevenProtocolsAndIdentity(t *testing.T) {
 		{
 			name:  "Trojan_MissingPassword",
 			proto: domain.ProtocolTrojan,
-			mutate: func(p *domain.NodeCredentialPayload) {
-				p.Credentials.Password = ""
+			mutate: func(n *resolver.ResolvedNode) {
+				n.Credentials.Password = ""
 			},
 			wantReason: "missing required password in trojan",
 		},
 		{
 			name:  "Hysteria2_MissingPassword",
 			proto: domain.ProtocolHysteria2,
-			mutate: func(p *domain.NodeCredentialPayload) {
-				p.Credentials.Password = ""
+			mutate: func(n *resolver.ResolvedNode) {
+				n.Credentials.Password = ""
 			},
 			wantReason: "missing required password in hysteria2",
 		},
 		{
 			name:  "WireGuard_MissingPrivateKey",
 			proto: domain.ProtocolWireGuard,
-			mutate: func(p *domain.NodeCredentialPayload) {
-				p.Credentials.PrivateKey = ""
+			mutate: func(n *resolver.ResolvedNode) {
+				n.Credentials.PrivateKey = ""
 			},
 			secretMarker: "secret-wg-public-key",
 			wantReason:   "missing required private_key in wireguard",
@@ -556,8 +521,8 @@ func TestValidateCredentialEnvelope_AllSevenProtocolsAndIdentity(t *testing.T) {
 		{
 			name:  "WireGuard_MissingPublicKey",
 			proto: domain.ProtocolWireGuard,
-			mutate: func(p *domain.NodeCredentialPayload) {
-				p.Credentials.PublicKey = ""
+			mutate: func(n *resolver.ResolvedNode) {
+				n.Credentials.PublicKey = ""
 			},
 			secretMarker: "secret-wg-private-key",
 			wantReason:   "missing required public_key in wireguard",
@@ -565,8 +530,8 @@ func TestValidateCredentialEnvelope_AllSevenProtocolsAndIdentity(t *testing.T) {
 		{
 			name:  "WireGuard_MissingLocalAddress",
 			proto: domain.ProtocolWireGuard,
-			mutate: func(p *domain.NodeCredentialPayload) {
-				p.Credentials.LocalAddress = nil
+			mutate: func(n *resolver.ResolvedNode) {
+				n.Credentials.LocalAddress = nil
 			},
 			secretMarker: "secret-wg-private-key",
 			wantReason:   "missing required local_address in wireguard",
@@ -574,8 +539,8 @@ func TestValidateCredentialEnvelope_AllSevenProtocolsAndIdentity(t *testing.T) {
 		{
 			name:  "WireGuard_InvalidLocalAddressCIDR",
 			proto: domain.ProtocolWireGuard,
-			mutate: func(p *domain.NodeCredentialPayload) {
-				p.Credentials.LocalAddress = []string{"secret-invalid-cidr-token"}
+			mutate: func(n *resolver.ResolvedNode) {
+				n.Credentials.LocalAddress = []string{"secret-invalid-cidr-token"}
 			},
 			secretMarker: "secret-invalid-cidr-token",
 			wantReason:   "invalid local_address CIDR in wireguard",
@@ -583,8 +548,8 @@ func TestValidateCredentialEnvelope_AllSevenProtocolsAndIdentity(t *testing.T) {
 		{
 			name:  "WireGuard_InvalidReservedLength",
 			proto: domain.ProtocolWireGuard,
-			mutate: func(p *domain.NodeCredentialPayload) {
-				p.Credentials.Reserved = []uint8{1, 2}
+			mutate: func(n *resolver.ResolvedNode) {
+				n.Credentials.Reserved = []uint8{1, 2}
 			},
 			secretMarker: "secret-wg-private-key",
 			wantReason:   "invalid reserved bytes in wireguard",
@@ -592,8 +557,8 @@ func TestValidateCredentialEnvelope_AllSevenProtocolsAndIdentity(t *testing.T) {
 		{
 			name:  "WireGuard_InvalidMTU",
 			proto: domain.ProtocolWireGuard,
-			mutate: func(p *domain.NodeCredentialPayload) {
-				p.Credentials.MTU = 70000
+			mutate: func(n *resolver.ResolvedNode) {
+				n.Credentials.MTU = 70000
 			},
 			secretMarker: "secret-wg-private-key",
 			wantReason:   "invalid mtu in wireguard",
@@ -601,8 +566,8 @@ func TestValidateCredentialEnvelope_AllSevenProtocolsAndIdentity(t *testing.T) {
 		{
 			name:  "TUIC_MissingUUID",
 			proto: domain.ProtocolTUIC,
-			mutate: func(p *domain.NodeCredentialPayload) {
-				p.Credentials.UUID = ""
+			mutate: func(n *resolver.ResolvedNode) {
+				n.Credentials.UUID = ""
 			},
 			secretMarker: "secret-tuic-password",
 			wantReason:   "missing required uuid in tuic",
@@ -610,8 +575,8 @@ func TestValidateCredentialEnvelope_AllSevenProtocolsAndIdentity(t *testing.T) {
 		{
 			name:  "TUIC_MissingPassword",
 			proto: domain.ProtocolTUIC,
-			mutate: func(p *domain.NodeCredentialPayload) {
-				p.Credentials.Password = ""
+			mutate: func(n *resolver.ResolvedNode) {
+				n.Credentials.Password = ""
 			},
 			secretMarker: "b831381d-6324-4d53-ad4f-8cda48b30813",
 			wantReason:   "missing required password in tuic",
@@ -622,12 +587,9 @@ func TestValidateCredentialEnvelope_AllSevenProtocolsAndIdentity(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			id := "node-" + string(tc.proto)
 			snap := makeSingleNodeSnapshot(id, "Edge-"+string(tc.proto), tc.proto)
-			cred := validCredForProto(id, tc.proto)
-			tc.mutate(cred)
+			tc.mutate(&snap.Nodes[0])
 
-			_, err := compiler.Compile(ctx, snap, domain.TargetSingBox, compiler.WithCredentials(map[string]*domain.NodeCredentialPayload{
-				id: cred,
-			}))
+			_, err := compiler.Compile(ctx, snap, domain.TargetSingBox)
 			if err == nil {
 				t.Fatalf("expected error for case %s, got nil", tc.name)
 			}
@@ -647,7 +609,7 @@ func TestValidateCredentialEnvelope_AllSevenProtocolsAndIdentity(t *testing.T) {
 		})
 	}
 
-	t.Run("VerifiedNodeIdentity_DualFormatAndAntiSpoofing", func(t *testing.T) {
+	t.Run("ExtractWithCredentials_DualFormatCompilesDirectly", func(t *testing.T) {
 		yamlSub := `
 proxies:
   - name: WG-Dual
@@ -667,53 +629,14 @@ proxies:
 			}
 			item := ext.Items[0]
 			snap := makeSingleNodeSnapshot(item.Normalized.Node.LogicalID, item.Normalized.Node.DisplayName, item.Normalized.Node.Protocol)
-			snap.Nodes[0].CredentialVersion = 1
-			snap.Nodes[0].Identity = &item.Identity
-
-			validPayload := &domain.NodeCredentialPayload{
-				LogicalID:   item.Normalized.Node.LogicalID,
-				Protocol:    item.Normalized.Node.Protocol,
-				Server:      item.Normalized.Server,
-				Port:        item.Normalized.Port,
-				Version:     1,
-				Identity:    &item.Identity,
-				Credentials: item.Credentials,
-			}
+			snap.Nodes[0].Server = item.Normalized.Server
+			snap.Nodes[0].Port = item.Normalized.Port
+			snap.Nodes[0].Credentials = item.Credentials
 
 			for _, target := range []domain.CompilerTarget{domain.TargetMihomo, domain.TargetSingBox} {
-				if _, err := compiler.Compile(ctx, snap, target, compiler.WithCredentials(map[string]*domain.NodeCredentialPayload{
-					item.Normalized.Node.LogicalID: validPayload,
-				})); err != nil {
+				if _, err := compiler.Compile(ctx, snap, target); err != nil {
 					t.Fatalf("expected valid parsed node %s to compile for %s: %v", item.Normalized.Node.DisplayName, target, err)
 				}
-			}
-
-			// Malicious payload keeping identical logicalID, protocol, version, but spoofing server/port
-			spoofedIdentity := item.Identity
-			spoofedIdentity.Server = "203.0.113.250"
-			spoofedPayload := *validPayload
-			spoofedPayload.Server = "203.0.113.250"
-			spoofedPayload.Identity = &spoofedIdentity
-
-			for _, target := range []domain.CompilerTarget{domain.TargetMihomo, domain.TargetSingBox} {
-				_, err := compiler.Compile(ctx, snap, target, compiler.WithCredentials(map[string]*domain.NodeCredentialPayload{
-					item.Normalized.Node.LogicalID: &spoofedPayload,
-				}))
-				if err == nil {
-					t.Fatalf("SECURITY FAILURE: expected spoofed endpoint for %s on %s to be rejected", item.Normalized.Node.DisplayName, target)
-				}
-				if strings.Contains(err.Error(), "secret-tuic-uri-pass") || strings.Contains(err.Error(), "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=") {
-					t.Fatalf("SECURITY LEAK: compiler error leaked secret: %v", err)
-				}
-			}
-
-			// Legacy / unverified credential row missing Identity binding must fail closed
-			unverifiedPayload := *validPayload
-			unverifiedPayload.Identity = nil
-			if _, err := compiler.Compile(ctx, snap, domain.TargetMihomo, compiler.WithCredentials(map[string]*domain.NodeCredentialPayload{
-				item.Normalized.Node.LogicalID: &unverifiedPayload,
-			})); err == nil {
-				t.Fatalf("SECURITY FAILURE: expected missing verified identity binding to be rejected fail-closed")
 			}
 		}
 	})
@@ -728,7 +651,7 @@ func TestValidateSnapshot_GroupsRulesAndEmptyBoundary(t *testing.T) {
 			CompilerVersion: "1.0.0",
 		}
 		for _, target := range compiler.SortedCapabilities() {
-			res, err := compiler.Compile(ctx, emptySnap, target, compiler.WithCredentials(map[string]*domain.NodeCredentialPayload{}))
+			res, err := compiler.Compile(ctx, emptySnap, target)
 			if err != nil {
 				t.Fatalf("expected empty snapshot to succeed for target %s: %v", target, err)
 			}
@@ -741,7 +664,7 @@ func TestValidateSnapshot_GroupsRulesAndEmptyBoundary(t *testing.T) {
 	t.Run("InvalidNodeFieldsRejected", func(t *testing.T) {
 		snap := fixtureSnapshot()
 		snap.Nodes[0].DisplayName = "   "
-		_, err := compiler.Compile(ctx, snap, domain.TargetMihomo, compiler.WithCredentials(fixtureCredentials()))
+		_, err := compiler.Compile(ctx, snap, domain.TargetMihomo)
 		var capErr *compiler.CapabilityError
 		if !errors.As(err, &capErr) || capErr.Location != "nodes[0]" {
 			t.Fatalf("expected nodes[0] CapabilityError for blank display name, got %v", err)
@@ -751,7 +674,7 @@ func TestValidateSnapshot_GroupsRulesAndEmptyBoundary(t *testing.T) {
 	t.Run("InvalidGroupAndMemberReferencesRejected", func(t *testing.T) {
 		snap := fixtureSnapshot()
 		snap.Groups[0].Name = "  "
-		_, err := compiler.Compile(ctx, snap, domain.TargetMihomo, compiler.WithCredentials(fixtureCredentials()))
+		_, err := compiler.Compile(ctx, snap, domain.TargetMihomo)
 		var capErr *compiler.CapabilityError
 		if !errors.As(err, &capErr) || capErr.Location != "groups[0]" {
 			t.Fatalf("expected groups[0] CapabilityError for blank group name, got %v", err)
@@ -764,7 +687,7 @@ func TestValidateSnapshot_GroupsRulesAndEmptyBoundary(t *testing.T) {
 			DisplayName: "ghost-node",
 			Position:    2,
 		})
-		_, err = compiler.Compile(ctx, snap2, domain.TargetMihomo, compiler.WithCredentials(fixtureCredentials()))
+		_, err = compiler.Compile(ctx, snap2, domain.TargetMihomo)
 		if !errors.As(err, &capErr) || capErr.Location != "groups[0]" || !strings.Contains(capErr.Reason, "unknown node") {
 			t.Fatalf("expected unknown node member error at groups[0], got %v", err)
 		}
@@ -776,7 +699,7 @@ func TestValidateSnapshot_GroupsRulesAndEmptyBoundary(t *testing.T) {
 			DisplayName: "ghost-group",
 			Position:    2,
 		})
-		_, err = compiler.Compile(ctx, snap3, domain.TargetMihomo, compiler.WithCredentials(fixtureCredentials()))
+		_, err = compiler.Compile(ctx, snap3, domain.TargetMihomo)
 		if !errors.As(err, &capErr) || capErr.Location != "groups[0]" || !strings.Contains(capErr.Reason, "unknown policy group") {
 			t.Fatalf("expected unknown policy group member error at groups[0], got %v", err)
 		}
@@ -785,7 +708,7 @@ func TestValidateSnapshot_GroupsRulesAndEmptyBoundary(t *testing.T) {
 	t.Run("InvalidRuleExpressionsAndTargetReferencesRejected", func(t *testing.T) {
 		snap := fixtureSnapshot()
 		snap.Rules[0].Expression = "DOMAIN-SUFFIX,"
-		_, err := compiler.Compile(ctx, snap, domain.TargetMihomo, compiler.WithCredentials(fixtureCredentials()))
+		_, err := compiler.Compile(ctx, snap, domain.TargetMihomo)
 		var capErr *compiler.CapabilityError
 		if !errors.As(err, &capErr) || capErr.Location != "rules[0]" || !strings.Contains(capErr.Reason, "rule value is required") {
 			t.Fatalf("expected rules[0] value error, got %v", err)
@@ -793,7 +716,7 @@ func TestValidateSnapshot_GroupsRulesAndEmptyBoundary(t *testing.T) {
 
 		snap2 := fixtureSnapshot()
 		snap2.Rules[0].TargetGroupName = "NonExistentGroup"
-		_, err = compiler.Compile(ctx, snap2, domain.TargetMihomo, compiler.WithCredentials(fixtureCredentials()))
+		_, err = compiler.Compile(ctx, snap2, domain.TargetMihomo)
 		if !errors.As(err, &capErr) || capErr.Location != "rules[0]" || !strings.Contains(capErr.Reason, "unknown target group") {
 			t.Fatalf("expected rules[0] unknown target group error, got %v", err)
 		}
@@ -801,7 +724,7 @@ func TestValidateSnapshot_GroupsRulesAndEmptyBoundary(t *testing.T) {
 		snapBuiltIn := fixtureSnapshot()
 		snapBuiltIn.Rules[0].TargetGroupName = "DIRECT"
 		snapBuiltIn.Rules[0].TargetGroupID = ""
-		if _, err := compiler.Compile(ctx, snapBuiltIn, domain.TargetMihomo, compiler.WithCredentials(fixtureCredentials())); err != nil {
+		if _, err := compiler.Compile(ctx, snapBuiltIn, domain.TargetMihomo); err != nil {
 			t.Fatalf("expected built-in DIRECT target in rule to succeed: %v", err)
 		}
 	})

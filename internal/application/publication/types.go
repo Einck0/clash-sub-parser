@@ -21,10 +21,6 @@ var (
 
 	// ErrUnsupportedTarget indicates the requested compiler target is unknown or invalid.
 	ErrUnsupportedTarget = errors.New("unsupported compiler target")
-
-	// ErrIntegrityCheckFailed indicates that the publication's persisted credential bindings,
-	// active vault credentials, or encrypted artifact failed fail-closed verification.
-	ErrIntegrityCheckFailed = errors.New("publication credential binding or artifact verification failed")
 )
 
 // PreflightDiagnostic describes a safe, actionable publication admission finding.

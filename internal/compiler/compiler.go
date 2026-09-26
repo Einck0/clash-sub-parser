@@ -81,45 +81,15 @@ func CapabilityMatrix() map[domain.CompilerTarget]Capability {
 	return copyMatrix
 }
 
-// NodeCredentialInput binds a resolved node to its authenticated decrypted credential payload.
-type NodeCredentialInput struct {
-	Node       resolver.ResolvedNode
-	Credential *domain.NodeCredentialPayload
-}
-
-// CompileOptions specifies optional compilation arguments, such as authenticated credentials.
-type CompileOptions struct {
-	Credentials map[string]*domain.NodeCredentialPayload
-}
+// CompileOptions specifies optional compilation arguments.
+type CompileOptions struct{}
 
 // CompileOption applies an option to CompileOptions.
 type CompileOption func(*CompileOptions)
 
-// WithCredentials configures authenticated node credentials for compilation.
-func WithCredentials(credentials map[string]*domain.NodeCredentialPayload) CompileOption {
-	return func(opts *CompileOptions) {
-		opts.Credentials = credentials
-	}
-}
-
-// WithCredentialInputs configures authenticated node credentials from a list of inputs.
-func WithCredentialInputs(inputs []NodeCredentialInput) CompileOption {
-	return func(opts *CompileOptions) {
-		if opts.Credentials == nil {
-			opts.Credentials = make(map[string]*domain.NodeCredentialPayload, len(inputs))
-		}
-		for _, input := range inputs {
-			if input.Credential != nil {
-				opts.Credentials[input.Node.LogicalID] = input.Credential
-			}
-		}
-	}
-}
-
-// CompileMihomo renders a deterministic Mihomo YAML subscription from a resolved snapshot
-// and authenticated node credentials. Missing or invalid credentials fail closed.
-func CompileMihomo(ctx context.Context, snapshot *resolver.ResolvedPolicySnapshot, credentials map[string]*domain.NodeCredentialPayload) (Result, error) {
-	return Compile(ctx, snapshot, domain.TargetMihomo, WithCredentials(credentials))
+// CompileMihomo renders a deterministic Mihomo YAML subscription from a resolved snapshot.
+func CompileMihomo(ctx context.Context, snapshot *resolver.ResolvedPolicySnapshot) (Result, error) {
+	return Compile(ctx, snapshot, domain.TargetMihomo)
 }
 
 // Compile validates target capabilities before rendering a deterministic result.
@@ -144,15 +114,13 @@ func Compile(ctx context.Context, snapshot *resolver.ResolvedPolicySnapshot, tar
 			opt(&options)
 		}
 	}
-	if options.Credentials != nil {
-		for i, node := range snapshot.Nodes {
-			if _, err := validateCredentialEnvelope(target, i, node, options.Credentials); err != nil {
-				return Result{}, err
-			}
+	for i, node := range snapshot.Nodes {
+		if err := validateCredentialEnvelope(target, i, node); err != nil {
+			return Result{}, err
 		}
 	}
 
-	content, contentType, filename, err := render(snapshot, target, options.Credentials)
+	content, contentType, filename, err := render(snapshot, target)
 	if err != nil {
 		return Result{}, err
 	}
@@ -275,209 +243,49 @@ func ruleKind(expression string) string {
 	return kind
 }
 
-// validateCredentialEnvelope verifies that a node has a matching, non-empty credential payload envelope
-// and protocol-complete credential fields without leaking sensitive values in error reasons.
-func validateCredentialEnvelope(target domain.CompilerTarget, index int, node resolver.ResolvedNode, credentials map[string]*domain.NodeCredentialPayload) (*domain.NodeCredentialPayload, error) {
+// validateCredentialEnvelope verifies that a node has a valid endpoint and protocol-complete
+// credential fields without leaking sensitive values in error reasons.
+func validateCredentialEnvelope(target domain.CompilerTarget, index int, node resolver.ResolvedNode) error {
 	loc := fmt.Sprintf("nodes[%d]", index)
 	feature := string(node.Protocol)
-	if credentials == nil {
-		return nil, &CapabilityError{
+	if strings.TrimSpace(node.LogicalID) == "" {
+		return &CapabilityError{
 			Target:   target,
 			Location: loc,
 			Feature:  feature,
-			Reason:   fmt.Sprintf("node credentials are required for %s compilation (fail closed)", target),
+			Reason:   "node logical ID is required",
 		}
 	}
-	cred, ok := credentials[node.LogicalID]
-	if !ok || cred == nil {
-		return nil, &CapabilityError{
+	if !node.Protocol.IsValid() {
+		return &CapabilityError{
 			Target:   target,
 			Location: loc,
 			Feature:  feature,
-			Reason:   fmt.Sprintf("missing credential payload for node %s", node.DisplayName),
+			Reason:   "protocol is not supported",
 		}
 	}
-	if strings.TrimSpace(node.LogicalID) == "" || cred.LogicalID != node.LogicalID {
-		return nil, &CapabilityError{
-			Target:   target,
-			Location: loc,
-			Feature:  feature,
-			Reason:   "credential payload logical ID mismatch",
-		}
-	}
-	if !node.Protocol.IsValid() || cred.Protocol != node.Protocol {
-		return nil, &CapabilityError{
-			Target:   target,
-			Location: loc,
-			Feature:  feature,
-			Reason:   "credential payload protocol mismatch",
-		}
-	}
-	if cred.Version < 0 {
-		return nil, &CapabilityError{
-			Target:   target,
-			Location: loc,
-			Feature:  feature,
-			Reason:   "invalid version in credential payload",
-		}
-	}
-	if strings.TrimSpace(cred.Server) == "" {
-		return nil, &CapabilityError{
+	if strings.TrimSpace(node.Server) == "" {
+		return &CapabilityError{
 			Target:   target,
 			Location: loc,
 			Feature:  feature,
 			Reason:   "missing server address in credential payload",
 		}
 	}
-	if cred.Port <= 0 || cred.Port > 65535 {
-		return nil, &CapabilityError{
+	if node.Port <= 0 || node.Port > 65535 {
+		return &CapabilityError{
 			Target:   target,
 			Location: loc,
 			Feature:  feature,
 			Reason:   "invalid port in credential payload",
 		}
 	}
-	if node.CredentialVersion > 0 && cred.Version != node.CredentialVersion {
-		return nil, &CapabilityError{
-			Target:   target,
-			Location: loc,
-			Feature:  feature,
-			Reason:   "credential payload version mismatch",
-		}
-	}
 
-	requiresVerifiedIdentity := node.Identity != nil || cred.Identity != nil ||
-		(strings.HasPrefix(node.LogicalID, "node_") && domain.IsValidLogicalID(node.LogicalID))
-	if requiresVerifiedIdentity {
-		if cred.Identity == nil {
-			return nil, &CapabilityError{
-				Target:   target,
-				Location: loc,
-				Feature:  feature,
-				Reason:   "missing verified identity binding in credential payload",
-			}
-		}
-		if err := cred.Identity.ValidateNonEmpty(); err != nil {
-			return nil, &CapabilityError{
-				Target:   target,
-				Location: loc,
-				Feature:  feature,
-				Reason:   "invalid verified identity binding in credential payload",
-			}
-		}
-		if cred.Identity.LogicalID != node.LogicalID {
-			return nil, &CapabilityError{
-				Target:   target,
-				Location: loc,
-				Feature:  feature,
-				Reason:   "credential identity binding logical ID mismatch",
-			}
-		}
-		if cred.Identity.Protocol != node.Protocol {
-			return nil, &CapabilityError{
-				Target:   target,
-				Location: loc,
-				Feature:  feature,
-				Reason:   "credential identity binding protocol mismatch",
-			}
-		}
-		if cred.Identity.Version != cred.Version {
-			return nil, &CapabilityError{
-				Target:   target,
-				Location: loc,
-				Feature:  feature,
-				Reason:   "credential identity binding version mismatch",
-			}
-		}
-		if !cred.Identity.MatchesEndpoint(cred.Protocol, cred.Server, cred.Port) {
-			return nil, &CapabilityError{
-				Target:   target,
-				Location: loc,
-				Feature:  feature,
-				Reason:   "credential identity binding endpoint mismatch",
-			}
-		}
-		if strings.TrimSpace(cred.Identity.TransportDigest) == "" {
-			return nil, &CapabilityError{
-				Target:   target,
-				Location: loc,
-				Feature:  feature,
-				Reason:   "missing transport digest in credential identity binding",
-			}
-		}
-		if cred.Credentials.Transport != nil && cred.Identity.TransportDigest != domain.CanonicalTransportDigest(cred.Credentials.Transport) {
-			return nil, &CapabilityError{
-				Target:   target,
-				Location: loc,
-				Feature:  feature,
-				Reason:   "credential identity binding transport digest mismatch",
-			}
-		}
-
-		if node.Identity != nil {
-			if err := node.Identity.ValidateNonEmpty(); err != nil {
-				return nil, &CapabilityError{
-					Target:   target,
-					Location: loc,
-					Feature:  feature,
-					Reason:   "invalid verified identity on resolved node",
-				}
-			}
-			if node.Identity.LogicalID != node.LogicalID || node.Identity.Protocol != node.Protocol {
-				return nil, &CapabilityError{
-					Target:   target,
-					Location: loc,
-					Feature:  feature,
-					Reason:   "resolved node identity mismatch",
-				}
-			}
-			if node.Identity.Version != cred.Version {
-				return nil, &CapabilityError{
-					Target:   target,
-					Location: loc,
-					Feature:  feature,
-					Reason:   "credential payload version mismatch with node identity",
-				}
-			}
-			if !node.Identity.MatchesEndpoint(cred.Protocol, cred.Server, cred.Port) ||
-				!node.Identity.MatchesEndpoint(cred.Identity.Protocol, cred.Identity.Server, cred.Identity.Port) {
-				return nil, &CapabilityError{
-					Target:   target,
-					Location: loc,
-					Feature:  feature,
-					Reason:   "credential endpoint does not match verified node identity",
-				}
-			}
-			if strings.TrimSpace(node.Identity.TransportDigest) == "" ||
-				node.Identity.TransportDigest != cred.Identity.TransportDigest {
-				return nil, &CapabilityError{
-					Target:   target,
-					Location: loc,
-					Feature:  feature,
-					Reason:   "credential transport digest does not match verified node identity",
-				}
-			}
-		}
-
-		if strings.HasPrefix(node.LogicalID, "node_") && domain.IsValidLogicalID(node.LogicalID) {
-			idWithTransport := domain.ComputeNodeLogicalID(cred.Protocol, cred.Server, cred.Port, cred.Credentials.Transport)
-			idWithoutTransport := domain.ComputeNodeLogicalID(cred.Protocol, cred.Server, cred.Port, nil)
-			if idWithTransport != node.LogicalID && (node.Identity != nil || idWithoutTransport != node.LogicalID) {
-				return nil, &CapabilityError{
-					Target:   target,
-					Location: loc,
-					Feature:  feature,
-					Reason:   "credential endpoint does not match node logical identity",
-				}
-			}
-		}
-	}
-
-	c := cred.Credentials
+	c := node.Credentials
 	switch node.Protocol {
 	case domain.ProtocolSS:
 		if strings.TrimSpace(c.Method) == "" || strings.TrimSpace(c.Password) == "" {
-			return nil, &CapabilityError{
+			return &CapabilityError{
 				Target:   target,
 				Location: loc,
 				Feature:  feature,
@@ -486,7 +294,7 @@ func validateCredentialEnvelope(target domain.CompilerTarget, index int, node re
 		}
 	case domain.ProtocolVMess:
 		if strings.TrimSpace(c.UUID) == "" {
-			return nil, &CapabilityError{
+			return &CapabilityError{
 				Target:   target,
 				Location: loc,
 				Feature:  feature,
@@ -494,7 +302,7 @@ func validateCredentialEnvelope(target domain.CompilerTarget, index int, node re
 			}
 		}
 		if c.AlterID < 0 {
-			return nil, &CapabilityError{
+			return &CapabilityError{
 				Target:   target,
 				Location: loc,
 				Feature:  feature,
@@ -503,7 +311,7 @@ func validateCredentialEnvelope(target domain.CompilerTarget, index int, node re
 		}
 	case domain.ProtocolVLESS:
 		if strings.TrimSpace(c.UUID) == "" {
-			return nil, &CapabilityError{
+			return &CapabilityError{
 				Target:   target,
 				Location: loc,
 				Feature:  feature,
@@ -511,7 +319,7 @@ func validateCredentialEnvelope(target domain.CompilerTarget, index int, node re
 			}
 		}
 		if c.Transport != nil && strings.TrimSpace(c.Transport["sid"]) != "" && strings.TrimSpace(c.Transport["pbk"]) == "" {
-			return nil, &CapabilityError{
+			return &CapabilityError{
 				Target:   target,
 				Location: loc,
 				Feature:  feature,
@@ -520,7 +328,7 @@ func validateCredentialEnvelope(target domain.CompilerTarget, index int, node re
 		}
 	case domain.ProtocolTrojan:
 		if strings.TrimSpace(c.Password) == "" {
-			return nil, &CapabilityError{
+			return &CapabilityError{
 				Target:   target,
 				Location: loc,
 				Feature:  feature,
@@ -529,7 +337,7 @@ func validateCredentialEnvelope(target domain.CompilerTarget, index int, node re
 		}
 	case domain.ProtocolHysteria2:
 		if strings.TrimSpace(c.Password) == "" {
-			return nil, &CapabilityError{
+			return &CapabilityError{
 				Target:   target,
 				Location: loc,
 				Feature:  feature,
@@ -538,7 +346,7 @@ func validateCredentialEnvelope(target domain.CompilerTarget, index int, node re
 		}
 	case domain.ProtocolWireGuard:
 		if strings.TrimSpace(c.PrivateKey) == "" {
-			return nil, &CapabilityError{
+			return &CapabilityError{
 				Target:   target,
 				Location: loc,
 				Feature:  feature,
@@ -546,7 +354,7 @@ func validateCredentialEnvelope(target domain.CompilerTarget, index int, node re
 			}
 		}
 		if strings.TrimSpace(c.PublicKey) == "" {
-			return nil, &CapabilityError{
+			return &CapabilityError{
 				Target:   target,
 				Location: loc,
 				Feature:  feature,
@@ -554,7 +362,7 @@ func validateCredentialEnvelope(target domain.CompilerTarget, index int, node re
 			}
 		}
 		if len(c.LocalAddress) == 0 {
-			return nil, &CapabilityError{
+			return &CapabilityError{
 				Target:   target,
 				Location: loc,
 				Feature:  feature,
@@ -564,7 +372,7 @@ func validateCredentialEnvelope(target domain.CompilerTarget, index int, node re
 		for _, rawAddr := range c.LocalAddress {
 			addr := strings.TrimSpace(rawAddr)
 			if addr == "" {
-				return nil, &CapabilityError{
+				return &CapabilityError{
 					Target:   target,
 					Location: loc,
 					Feature:  feature,
@@ -572,7 +380,7 @@ func validateCredentialEnvelope(target domain.CompilerTarget, index int, node re
 				}
 			}
 			if _, err := netip.ParsePrefix(addr); err != nil {
-				return nil, &CapabilityError{
+				return &CapabilityError{
 					Target:   target,
 					Location: loc,
 					Feature:  feature,
@@ -581,7 +389,7 @@ func validateCredentialEnvelope(target domain.CompilerTarget, index int, node re
 			}
 		}
 		if len(c.Reserved) > 0 && len(c.Reserved) != 3 {
-			return nil, &CapabilityError{
+			return &CapabilityError{
 				Target:   target,
 				Location: loc,
 				Feature:  feature,
@@ -589,7 +397,7 @@ func validateCredentialEnvelope(target domain.CompilerTarget, index int, node re
 			}
 		}
 		if c.MTU < 0 || c.MTU > 65535 {
-			return nil, &CapabilityError{
+			return &CapabilityError{
 				Target:   target,
 				Location: loc,
 				Feature:  feature,
@@ -598,7 +406,7 @@ func validateCredentialEnvelope(target domain.CompilerTarget, index int, node re
 		}
 	case domain.ProtocolTUIC:
 		if strings.TrimSpace(c.UUID) == "" {
-			return nil, &CapabilityError{
+			return &CapabilityError{
 				Target:   target,
 				Location: loc,
 				Feature:  feature,
@@ -606,7 +414,7 @@ func validateCredentialEnvelope(target domain.CompilerTarget, index int, node re
 			}
 		}
 		if strings.TrimSpace(c.Password) == "" {
-			return nil, &CapabilityError{
+			return &CapabilityError{
 				Target:   target,
 				Location: loc,
 				Feature:  feature,
@@ -614,7 +422,7 @@ func validateCredentialEnvelope(target domain.CompilerTarget, index int, node re
 			}
 		}
 	default:
-		return nil, &CapabilityError{
+		return &CapabilityError{
 			Target:   target,
 			Location: loc,
 			Feature:  feature,
@@ -622,22 +430,22 @@ func validateCredentialEnvelope(target domain.CompilerTarget, index int, node re
 		}
 	}
 
-	return cred, nil
+	return nil
 }
 
-func render(snapshot *resolver.ResolvedPolicySnapshot, target domain.CompilerTarget, credentials map[string]*domain.NodeCredentialPayload) ([]byte, string, string, error) {
+func render(snapshot *resolver.ResolvedPolicySnapshot, target domain.CompilerTarget) ([]byte, string, string, error) {
 	switch target {
 	case domain.TargetMihomo:
-		content, err := renderMihomo(snapshot, credentials)
+		content, err := renderMihomo(snapshot)
 		return content, "application/yaml", "mihomo.yaml", err
 	case domain.TargetSingBox:
-		content, err := renderSingBox(snapshot, credentials)
+		content, err := renderSingBox(snapshot)
 		return content, "application/json", "sing-box.json", err
 	case domain.TargetSurge:
-		content, err := renderSurge(snapshot, credentials)
+		content, err := renderSurge(snapshot)
 		return content, "text/plain; charset=utf-8", "surge.conf", err
 	case domain.TargetQuantumultX:
-		content, err := renderQuantumultX(snapshot, credentials)
+		content, err := renderQuantumultX(snapshot)
 		return content, "text/plain; charset=utf-8", "quantumult-x.conf", err
 	default:
 		return nil, "", "", fmt.Errorf("unknown compiler target %s", target)

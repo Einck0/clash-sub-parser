@@ -240,8 +240,7 @@ func TestSurgeGoldenFixture(t *testing.T) {
 	assertTargetGoldenFixture(t, domain.TargetSurge)
 
 	snap := fixtureSnapshot()
-	creds := fixtureCredentials()
-	res, err := compiler.Compile(context.Background(), snap, domain.TargetSurge, compiler.WithCredentials(creds))
+	res, err := compiler.Compile(context.Background(), snap, domain.TargetSurge)
 	if err != nil {
 		t.Fatalf("compile Surge failed: %v", err)
 	}
@@ -286,7 +285,7 @@ func TestSurgeGoldenFixture(t *testing.T) {
 }
 
 func TestSurgeOutputFormat(t *testing.T) {
-	surgeRes, err := compiler.Compile(context.Background(), fixtureSnapshot(), domain.TargetSurge, compiler.WithCredentials(fixtureCredentials()))
+	surgeRes, err := compiler.Compile(context.Background(), fixtureSnapshot(), domain.TargetSurge)
 	if err != nil {
 		t.Fatalf("compile Surge failed: %v", err)
 	}
@@ -317,7 +316,7 @@ func TestSurgeSupportsProcessNameRule(t *testing.T) {
 			IsTerminal:      true,
 		},
 	}
-	res, err := compiler.Compile(context.Background(), snapshot, domain.TargetSurge, compiler.WithCredentials(fixtureCredentials()))
+	res, err := compiler.Compile(context.Background(), snapshot, domain.TargetSurge)
 	if err != nil {
 		t.Fatalf("expected Surge to support PROCESS-NAME rule: %v", err)
 	}
@@ -332,9 +331,63 @@ func TestSurgeAllSupportedProtocolsGroupsAndRules(t *testing.T) {
 		SnapshotDigest:  "surge-full-digest",
 		CompilerVersion: "1.0.0",
 		Nodes: []resolver.ResolvedNode{
-			{LogicalID: "id-ss-obfs", DisplayName: "HK-SS-Obfs", Protocol: domain.ProtocolSS, Active: true, Position: 0},
-			{LogicalID: "id-vmess-legacy", DisplayName: "US-VMess-Legacy", Protocol: domain.ProtocolVMess, Active: true, Position: 1},
-			{LogicalID: "id-trojan-ws", DisplayName: "JP-Trojan-WS", Protocol: domain.ProtocolTrojan, Active: true, Position: 2},
+			{
+				LogicalID:   "id-ss-obfs",
+				DisplayName: "HK-SS-Obfs",
+				Protocol:    domain.ProtocolSS,
+				Server:      "hk.ss.example.com",
+				Port:        8388,
+				Credentials: domain.InboundProtocolCredential{
+					Method:   "2022-blake3-aes-128-gcm",
+					Password: "ss-2022-secret-password",
+					Transport: map[string]string{
+						"obfs": "tls",
+						"host": "obfs.example.com",
+						"path": "/obfs",
+					},
+				},
+				Active:   true,
+				Position: 0,
+			},
+			{
+				LogicalID:   "id-vmess-legacy",
+				DisplayName: "US-VMess-Legacy",
+				Protocol:    domain.ProtocolVMess,
+				Server:      "us.vmess.example.com",
+				Port:        8443,
+				Credentials: domain.InboundProtocolCredential{
+					UUID:    "11111111-2222-3333-4444-555555555555",
+					AlterID: 2,
+					Method:  "chacha20-poly1305",
+					Transport: map[string]string{
+						"network":          "tcp",
+						"tls":              "true",
+						"sni":              "sni.vmess.example.com",
+						"skip_cert_verify": "true",
+					},
+				},
+				Active:   true,
+				Position: 1,
+			},
+			{
+				LogicalID:   "id-trojan-ws",
+				DisplayName: "JP-Trojan-WS",
+				Protocol:    domain.ProtocolTrojan,
+				Server:      "jp.trojan.example.com",
+				Port:        443,
+				Credentials: domain.InboundProtocolCredential{
+					Password: "trojan-secret-password",
+					SNI:      "sni.trojan.example.com",
+					Transport: map[string]string{
+						"network":          "ws",
+						"path":             "/trojan-ws",
+						"host":             "cdn.trojan.example.com",
+						"skip-cert-verify": "true",
+					},
+				},
+				Active:   true,
+				Position: 2,
+			},
 		},
 		Groups: []resolver.ResolvedGroup{
 			{
@@ -388,61 +441,7 @@ func TestSurgeAllSupportedProtocolsGroupsAndRules(t *testing.T) {
 		},
 	}
 
-	creds := map[string]*domain.NodeCredentialPayload{
-		"id-ss-obfs": {
-			LogicalID: "id-ss-obfs",
-			Protocol:  domain.ProtocolSS,
-			Server:    "hk.ss.example.com",
-			Port:      8388,
-			Version:   1,
-			Credentials: domain.InboundProtocolCredential{
-				Method:   "2022-blake3-aes-128-gcm",
-				Password: "ss-2022-secret-password",
-				Transport: map[string]string{
-					"obfs": "tls",
-					"host": "obfs.example.com",
-					"path": "/obfs",
-				},
-			},
-		},
-		"id-vmess-legacy": {
-			LogicalID: "id-vmess-legacy",
-			Protocol:  domain.ProtocolVMess,
-			Server:    "us.vmess.example.com",
-			Port:      8443,
-			Version:   1,
-			Credentials: domain.InboundProtocolCredential{
-				UUID:    "11111111-2222-3333-4444-555555555555",
-				AlterID: 2,
-				Method:  "chacha20-poly1305",
-				Transport: map[string]string{
-					"network":          "tcp",
-					"tls":              "true",
-					"sni":              "sni.vmess.example.com",
-					"skip_cert_verify": "true",
-				},
-			},
-		},
-		"id-trojan-ws": {
-			LogicalID: "id-trojan-ws",
-			Protocol:  domain.ProtocolTrojan,
-			Server:    "jp.trojan.example.com",
-			Port:      443,
-			Version:   1,
-			Credentials: domain.InboundProtocolCredential{
-				Password: "trojan-secret-password",
-				SNI:      "sni.trojan.example.com",
-				Transport: map[string]string{
-					"network":          "ws",
-					"path":             "/trojan-ws",
-					"host":             "cdn.trojan.example.com",
-					"skip-cert-verify": "true",
-				},
-			},
-		},
-	}
-
-	res, err := compiler.Compile(ctx, snapshot, domain.TargetSurge, compiler.WithCredentials(creds))
+	res, err := compiler.Compile(ctx, snapshot, domain.TargetSurge)
 	if err != nil {
 		t.Fatalf("compile full Surge profile failed: %v", err)
 	}
@@ -510,7 +509,7 @@ func TestSurgeCapabilityAndFailClosedRejections(t *testing.T) {
 				Active:      true,
 				Position:    2,
 			})
-			_, err := compiler.Compile(ctx, snap, domain.TargetSurge, compiler.WithCredentials(fixtureCredentials()))
+			_, err := compiler.Compile(ctx, snap, domain.TargetSurge)
 			if err == nil {
 				t.Fatalf("expected Surge to reject unsupported protocol %s", proto)
 			}
@@ -534,7 +533,7 @@ func TestSurgeCapabilityAndFailClosedRejections(t *testing.T) {
 			Members:   snap.Groups[0].Members,
 			Position:  1,
 		})
-		_, err := compiler.Compile(ctx, snap, domain.TargetSurge, compiler.WithCredentials(fixtureCredentials()))
+		_, err := compiler.Compile(ctx, snap, domain.TargetSurge)
 		var capErr *compiler.CapabilityError
 		if !errors.As(err, &capErr) || capErr.Location != "groups[1]" || capErr.Feature != string(domain.GroupTypeLoadBalance) {
 			t.Fatalf("expected CapabilityError at groups[1] for loadbalance, got %v", err)
@@ -570,7 +569,7 @@ func TestSurgeCapabilityAndFailClosedRejections(t *testing.T) {
 				},
 				snap.Rules[1],
 			}
-			_, err := compiler.Compile(ctx, snap, domain.TargetSurge, compiler.WithCredentials(fixtureCredentials()))
+			_, err := compiler.Compile(ctx, snap, domain.TargetSurge)
 			var capErr *compiler.CapabilityError
 			if !errors.As(err, &capErr) || capErr.Location != "rules[0]" || capErr.Feature != tc.wantFeat {
 				t.Fatalf("expected CapabilityError at rules[0] feature=%s, got %v", tc.wantFeat, err)
@@ -578,26 +577,26 @@ func TestSurgeCapabilityAndFailClosedRejections(t *testing.T) {
 		})
 	}
 
-	// 4. Missing credentials (nil map when nodes exist) must fail closed without fake LogicalID:443
+	// 4. Missing credentials on node must fail closed without fake LogicalID:443
 	t.Run("NilCredentialsFailClosed", func(t *testing.T) {
 		snap := fixtureSnapshot()
+		snap.Nodes[0].Credentials = domain.InboundProtocolCredential{}
 		_, err := compiler.Compile(ctx, snap, domain.TargetSurge)
 		var capErr *compiler.CapabilityError
 		if !errors.As(err, &capErr) || capErr.Location != "nodes[0]" {
-			t.Fatalf("expected CapabilityError at nodes[0] when credentials nil, got %v", err)
+			t.Fatalf("expected CapabilityError at nodes[0] when credentials empty, got %v", err)
 		}
 	})
 
 	// 5. Unsupported transport / cipher / secret non-leakage on error
 	t.Run("UnsupportedTransportAndNoSecretLeak", func(t *testing.T) {
 		snap := fixtureSnapshot()
-		creds := fixtureCredentials()
 		secretUUID := "secret-vmess-uuid-999999"
-		creds["0123456789abcdef0123456789abcdef"].Credentials.UUID = secretUUID
-		creds["0123456789abcdef0123456789abcdef"].Credentials.Transport["network"] = "grpc"
-		creds["0123456789abcdef0123456789abcdef"].Credentials.Transport["service_name"] = "grpc-svc"
+		snap.Nodes[0].Credentials.UUID = secretUUID
+		snap.Nodes[0].Credentials.Transport["network"] = "grpc"
+		snap.Nodes[0].Credentials.Transport["service_name"] = "grpc-svc"
 
-		_, err := compiler.Compile(ctx, snap, domain.TargetSurge, compiler.WithCredentials(creds))
+		_, err := compiler.Compile(ctx, snap, domain.TargetSurge)
 		var capErr *compiler.CapabilityError
 		if !errors.As(err, &capErr) || capErr.Location != "nodes[0]" || capErr.Feature != "vmess" {
 			t.Fatalf("expected CapabilityError at nodes[0] for vmess grpc, got %v", err)
@@ -607,12 +606,12 @@ func TestSurgeCapabilityAndFailClosedRejections(t *testing.T) {
 		}
 
 		// SS unsupported cipher does not leak password
-		creds2 := fixtureCredentials()
+		snap2 := fixtureSnapshot()
 		secretPass := "super-secret-ss-password-value"
-		creds2["abcdef0123456789abcdef0123456789"].Credentials.Password = secretPass
-		creds2["abcdef0123456789abcdef0123456789"].Credentials.Method = "unsupported-cipher-xyz"
+		snap2.Nodes[1].Credentials.Password = secretPass
+		snap2.Nodes[1].Credentials.Method = "unsupported-cipher-xyz"
 
-		_, err = compiler.Compile(ctx, snap, domain.TargetSurge, compiler.WithCredentials(creds2))
+		_, err = compiler.Compile(ctx, snap2, domain.TargetSurge)
 		if !errors.As(err, &capErr) || capErr.Location != "nodes[1]" || capErr.Feature != "ss" {
 			t.Fatalf("expected CapabilityError at nodes[1] for ss cipher, got %v", err)
 		}

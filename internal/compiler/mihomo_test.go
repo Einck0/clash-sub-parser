@@ -117,13 +117,140 @@ func TestCompileMihomo_AllSevenProtocolsFourGroupsFourteenRules_AndOfficialValid
 		SnapshotDigest:  "snap-mihomo-full-7p-4g-14r",
 		CompilerVersion: "1.0.0",
 		Nodes: []resolver.ResolvedNode{
-			{LogicalID: "node-ss", DisplayName: "ss-edge", Protocol: domain.ProtocolSS, Active: true, Position: 0},
-			{LogicalID: "node-vmess", DisplayName: "vmess-edge", Protocol: domain.ProtocolVMess, Active: true, Position: 1},
-			{LogicalID: "node-vless", DisplayName: "vless-reality-edge", Protocol: domain.ProtocolVLESS, Active: true, Position: 2},
-			{LogicalID: "node-trojan", DisplayName: "trojan-grpc-edge", Protocol: domain.ProtocolTrojan, Active: true, Position: 3},
-			{LogicalID: "node-hy2", DisplayName: "hy2-edge", Protocol: domain.ProtocolHysteria2, Active: true, Position: 4},
-			{LogicalID: "node-wg", DisplayName: "wg-edge", Protocol: domain.ProtocolWireGuard, Active: true, Position: 5},
-			{LogicalID: "node-tuic", DisplayName: "tuic-edge", Protocol: domain.ProtocolTUIC, Active: true, Position: 6},
+			{
+				LogicalID:   "node-ss",
+				DisplayName: "ss-edge",
+				Protocol:    domain.ProtocolSS,
+				Server:      "198.51.100.10",
+				Port:        8388,
+				Credentials: domain.InboundProtocolCredential{
+					Method:   "aes-256-gcm",
+					Password: "ss-secret-password",
+				},
+				Active:   true,
+				Position: 0,
+			},
+			{
+				LogicalID:   "node-vmess",
+				DisplayName: "vmess-edge",
+				Protocol:    domain.ProtocolVMess,
+				Server:      "198.51.100.11",
+				Port:        443,
+				Credentials: domain.InboundProtocolCredential{
+					UUID:    "11111111-1111-1111-1111-111111111111",
+					AlterID: 0,
+					Method:  "auto",
+					Transport: map[string]string{
+						"network": "ws",
+						"tls":     "true",
+						"sni":     "vmess.example.com",
+						"path":    "/vmess-ws",
+						"host":    "vmess.example.com",
+					},
+				},
+				Active:   true,
+				Position: 1,
+			},
+			{
+				LogicalID:   "node-vless",
+				DisplayName: "vless-reality-edge",
+				Protocol:    domain.ProtocolVLESS,
+				Server:      "198.51.100.12",
+				Port:        443,
+				Credentials: domain.InboundProtocolCredential{
+					UUID: "22222222-2222-2222-2222-222222222222",
+					Transport: map[string]string{
+						"network": "tcp",
+						"tls":     "true",
+						"sni":     "reality.example.com",
+						"flow":    "xtls-rprx-vision",
+						"fp":      "chrome",
+						"pbk":     "jNXHt1yRo0vD5_1N6p2W3x4Y5z6A7b8C9d0E1f2G3h4",
+						"sid":     "01ab",
+					},
+				},
+				Active:   true,
+				Position: 2,
+			},
+			{
+				LogicalID:   "node-trojan",
+				DisplayName: "trojan-grpc-edge",
+				Protocol:    domain.ProtocolTrojan,
+				Server:      "198.51.100.13",
+				Port:        443,
+				Credentials: domain.InboundProtocolCredential{
+					Password: "trojan-secret-password",
+					Transport: map[string]string{
+						"network":          "grpc",
+						"sni":              "trojan.example.com",
+						"skip_cert_verify": "true",
+						"alpn":             "h2,http/1.1",
+						"service_name":     "trojan-grpc-svc",
+					},
+				},
+				Active:   true,
+				Position: 3,
+			},
+			{
+				LogicalID:   "node-hy2",
+				DisplayName: "hy2-edge",
+				Protocol:    domain.ProtocolHysteria2,
+				Server:      "198.51.100.14",
+				Port:        8443,
+				Credentials: domain.InboundProtocolCredential{
+					Password: "hysteria2-secret-password",
+					Transport: map[string]string{
+						"sni":              "hy2.example.com",
+						"skip_cert_verify": "true",
+						"up":               "100 Mbps",
+						"down":             "500 Mbps",
+						"obfs":             "salamander",
+						"obfs-password":    "hy2-obfs-secret",
+						"ports":            "20000-30000",
+					},
+				},
+				Active:   true,
+				Position: 4,
+			},
+			{
+				LogicalID:   "node-wg",
+				DisplayName: "wg-edge",
+				Protocol:    domain.ProtocolWireGuard,
+				Server:      "198.51.100.15",
+				Port:        51820,
+				Credentials: domain.InboundProtocolCredential{
+					PrivateKey:   "aGVsbG8td29ybGQtdGVzdC1wcml2YXRlLWtleS0xMjM=",
+					PublicKey:    "aGVsbG8td29ybGQtdGVzdC1wdWJsaWMta2V5LTEyMzQ=",
+					PreSharedKey: "aGVsbG8td29ybGQtdGVzdC1wc2sta2V5LTEyMzQ1Njc=",
+					LocalAddress: []string{"10.0.0.2/32", "fd00::2/128"},
+					Reserved:     []uint8{12, 34, 56},
+					MTU:          1420,
+					DNS:          []string{"1.1.1.1", "8.8.8.8"},
+				},
+				Active:   true,
+				Position: 5,
+			},
+			{
+				LogicalID:   "node-tuic",
+				DisplayName: "tuic-edge",
+				Protocol:    domain.ProtocolTUIC,
+				Server:      "198.51.100.16",
+				Port:        443,
+				Credentials: domain.InboundProtocolCredential{
+					UUID:              "33333333-3333-3333-3333-333333333333",
+					Password:          "tuic-secret-password",
+					CongestionControl: "bbr",
+					UDPRelayMode:      "native",
+					ALPN:              []string{"h3"},
+					SNI:               "tuic.example.com",
+					DisableSNI:        true,
+					Transport: map[string]string{
+						"skip_cert_verify": "true",
+					},
+				},
+				Active:   true,
+				Position: 6,
+			},
 		},
 		Groups: []resolver.ResolvedGroup{
 			{
@@ -187,134 +314,11 @@ func TestCompileMihomo_AllSevenProtocolsFourGroupsFourteenRules_AndOfficialValid
 		},
 	}
 
-	creds := map[string]*domain.NodeCredentialPayload{
-		"node-ss": {
-			LogicalID: "node-ss",
-			Protocol:  domain.ProtocolSS,
-			Server:    "198.51.100.10",
-			Port:      8388,
-			Version:   1,
-			Credentials: domain.InboundProtocolCredential{
-				Method:   "aes-256-gcm",
-				Password: "ss-secret-password",
-			},
-		},
-		"node-vmess": {
-			LogicalID: "node-vmess",
-			Protocol:  domain.ProtocolVMess,
-			Server:    "198.51.100.11",
-			Port:      443,
-			Version:   1,
-			Credentials: domain.InboundProtocolCredential{
-				UUID:    "11111111-1111-1111-1111-111111111111",
-				AlterID: 0,
-				Method:  "auto",
-				Transport: map[string]string{
-					"network": "ws",
-					"tls":     "true",
-					"sni":     "vmess.example.com",
-					"path":    "/vmess-ws",
-					"host":    "vmess.example.com",
-				},
-			},
-		},
-		"node-vless": {
-			LogicalID: "node-vless",
-			Protocol:  domain.ProtocolVLESS,
-			Server:    "198.51.100.12",
-			Port:      443,
-			Version:   1,
-			Credentials: domain.InboundProtocolCredential{
-				UUID: "22222222-2222-2222-2222-222222222222",
-				Transport: map[string]string{
-					"network": "tcp",
-					"tls":     "true",
-					"sni":     "reality.example.com",
-					"flow":    "xtls-rprx-vision",
-					"fp":      "chrome",
-					"pbk":     "jNXHt1yRo0vD5_1N6p2W3x4Y5z6A7b8C9d0E1f2G3h4",
-					"sid":     "01ab",
-				},
-			},
-		},
-		"node-trojan": {
-			LogicalID: "node-trojan",
-			Protocol:  domain.ProtocolTrojan,
-			Server:    "198.51.100.13",
-			Port:      443,
-			Version:   1,
-			Credentials: domain.InboundProtocolCredential{
-				Password: "trojan-secret-password",
-				Transport: map[string]string{
-					"network":          "grpc",
-					"sni":              "trojan.example.com",
-					"skip_cert_verify": "true",
-					"alpn":             "h2,http/1.1",
-					"service_name":     "trojan-grpc-svc",
-				},
-			},
-		},
-		"node-hy2": {
-			LogicalID: "node-hy2",
-			Protocol:  domain.ProtocolHysteria2,
-			Server:    "198.51.100.14",
-			Port:      8443,
-			Version:   1,
-			Credentials: domain.InboundProtocolCredential{
-				Password: "hysteria2-secret-password",
-				Transport: map[string]string{
-					"sni":              "hy2.example.com",
-					"skip_cert_verify": "true",
-					"up":               "100 Mbps",
-					"down":             "500 Mbps",
-					"obfs":             "salamander",
-					"obfs-password":    "hy2-obfs-secret",
-					"ports":            "20000-30000",
-				},
-			},
-		},
-		"node-wg": {
-			LogicalID: "node-wg",
-			Protocol:  domain.ProtocolWireGuard,
-			Server:    "198.51.100.15",
-			Port:      51820,
-			Version:   1,
-			Credentials: domain.InboundProtocolCredential{
-				PrivateKey:   "aGVsbG8td29ybGQtdGVzdC1wcml2YXRlLWtleS0xMjM=",
-				PublicKey:    "aGVsbG8td29ybGQtdGVzdC1wdWJsaWMta2V5LTEyMzQ=",
-				PreSharedKey: "aGVsbG8td29ybGQtdGVzdC1wc2sta2V5LTEyMzQ1Njc=",
-				LocalAddress: []string{"10.0.0.2/32", "fd00::2/128"},
-				Reserved:     []uint8{12, 34, 56},
-				MTU:          1420,
-				DNS:          []string{"1.1.1.1", "8.8.8.8"},
-			},
-		},
-		"node-tuic": {
-			LogicalID: "node-tuic",
-			Protocol:  domain.ProtocolTUIC,
-			Server:    "198.51.100.16",
-			Port:      443,
-			Version:   1,
-			Credentials: domain.InboundProtocolCredential{
-				UUID:              "33333333-3333-3333-3333-333333333333",
-				Password:          "tuic-secret-password",
-				CongestionControl: "bbr",
-				UDPRelayMode:      "native",
-				ALPN:              []string{"h3"},
-				SNI:               "tuic.example.com",
-				DisableSNI:        true,
-				Transport: map[string]string{
-					"skip_cert_verify": "true",
-				},
-			},
-		},
-	}
-
-	res1, err := compiler.CompileMihomo(ctx, snapshot, creds)
+	res1, err := compiler.CompileMihomo(ctx, snapshot)
 	if err != nil {
 		t.Fatalf("CompileMihomo failed: %v", err)
 	}
-	res2, err := compiler.Compile(ctx, snapshot, domain.TargetMihomo, compiler.WithCredentials(creds))
+	res2, err := compiler.Compile(ctx, snapshot, domain.TargetMihomo)
 	if err != nil {
 		t.Fatalf("Compile(TargetMihomo) failed: %v", err)
 	}
@@ -402,9 +406,10 @@ func TestCompileMihomo_AllSevenProtocolsFourGroupsFourteenRules_AndOfficialValid
 
 func TestCompileMihomo_FailsClosedWithoutCredentials(t *testing.T) {
 	ctx := context.Background()
-	snapshot := fixtureSnapshot()
 
-	t.Run("CompileTargetMihomo_WithoutOption_FailsClosed", func(t *testing.T) {
+	t.Run("CompileTargetMihomo_WithoutCredentials_FailsClosed", func(t *testing.T) {
+		snapshot := fixtureSnapshot()
+		snapshot.Nodes[0].Credentials = domain.InboundProtocolCredential{}
 		_, err := compiler.Compile(ctx, snapshot, domain.TargetMihomo)
 		if err == nil {
 			t.Fatal("expected TargetMihomo without credentials to fail closed")
@@ -416,23 +421,12 @@ func TestCompileMihomo_FailsClosedWithoutCredentials(t *testing.T) {
 		if capErr.Target != domain.TargetMihomo || capErr.Location != "nodes[0]" {
 			t.Fatalf("unexpected capability error: %#v", capErr)
 		}
-		if !strings.Contains(capErr.Reason, "fail closed") {
-			t.Fatalf("expected fail closed reason, got: %s", capErr.Reason)
-		}
-	})
-
-	t.Run("CompileMihomo_NilCredentials_FailsClosed", func(t *testing.T) {
-		_, err := compiler.CompileMihomo(ctx, snapshot, nil)
-		if err == nil {
-			t.Fatal("expected nil credentials to fail closed")
-		}
 	})
 
 	t.Run("CompileMihomo_PartialCredentials_FailsClosedAtLocation", func(t *testing.T) {
-		creds := map[string]*domain.NodeCredentialPayload{
-			snapshot.Nodes[0].LogicalID: fixtureCredentials()[snapshot.Nodes[0].LogicalID],
-		}
-		_, err := compiler.CompileMihomo(ctx, snapshot, creds)
+		snapshot := fixtureSnapshot()
+		snapshot.Nodes[1].Credentials = domain.InboundProtocolCredential{}
+		_, err := compiler.CompileMihomo(ctx, snapshot)
 		if err == nil {
 			t.Fatal("expected missing node credentials to fail closed")
 		}
@@ -446,9 +440,9 @@ func TestCompileMihomo_FailsClosedWithoutCredentials(t *testing.T) {
 	})
 
 	t.Run("CompileMihomo_MissingPassword_FailsClosed", func(t *testing.T) {
-		creds := fixtureCredentials()
-		creds["abcdef0123456789abcdef0123456789"].Credentials.Password = ""
-		_, err := compiler.CompileMihomo(ctx, snapshot, creds)
+		snapshot := fixtureSnapshot()
+		snapshot.Nodes[1].Credentials.Password = ""
+		_, err := compiler.CompileMihomo(ctx, snapshot)
 		if err == nil {
 			t.Fatal("expected empty password to fail closed")
 		}
@@ -462,9 +456,9 @@ func TestCompileMihomo_FailsClosedWithoutCredentials(t *testing.T) {
 	})
 
 	t.Run("CompileMihomo_MissingServer_FailsClosed", func(t *testing.T) {
-		creds := fixtureCredentials()
-		creds["0123456789abcdef0123456789abcdef"].Server = "  "
-		_, err := compiler.CompileMihomo(ctx, snapshot, creds)
+		snapshot := fixtureSnapshot()
+		snapshot.Nodes[0].Server = "  "
+		_, err := compiler.CompileMihomo(ctx, snapshot)
 		if err == nil {
 			t.Fatal("expected blank server to fail closed")
 		}
@@ -474,15 +468,6 @@ func TestCompileMihomo_FailsClosedWithoutCredentials(t *testing.T) {
 		}
 		if capErr.Location != "nodes[0]" {
 			t.Fatalf("expected nodes[0], got %s", capErr.Location)
-		}
-	})
-
-	t.Run("CompileMihomo_LogicalIDMismatch_FailsClosed", func(t *testing.T) {
-		creds := fixtureCredentials()
-		creds["0123456789abcdef0123456789abcdef"].LogicalID = "wrong-id"
-		_, err := compiler.CompileMihomo(ctx, snapshot, creds)
-		if err == nil {
-			t.Fatal("expected logical ID mismatch to fail closed")
 		}
 	})
 }
@@ -677,17 +662,10 @@ func TestCompileMihomo_SevenProtocolsNegativeValidationAndZeroSecretLeakage(t *t
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			snap := makeSingleNodeSnap(tc.proto)
-			creds := map[string]*domain.NodeCredentialPayload{
-				"node-0": {
-					LogicalID:   "node-0",
-					Protocol:    tc.proto,
-					Server:      "198.51.100.99",
-					Port:        443,
-					Version:     1,
-					Credentials: tc.cred,
-				},
-			}
-			_, err := compiler.CompileMihomo(ctx, snap, creds)
+			snap.Nodes[0].Server = "198.51.100.99"
+			snap.Nodes[0].Port = 443
+			snap.Nodes[0].Credentials = tc.cred
+			_, err := compiler.CompileMihomo(ctx, snap)
 			if err == nil {
 				t.Fatalf("expected error for %s, got nil", tc.name)
 			}
@@ -710,7 +688,6 @@ func TestCompileMihomo_SevenProtocolsNegativeValidationAndZeroSecretLeakage(t *t
 
 func TestCompileMihomo_ModernRulesAndFailClosedValidation(t *testing.T) {
 	ctx := context.Background()
-	creds := fixtureCredentials()
 
 	t.Run("SupportsGEOSITE_RULESET_PROCESSNAME_PORT", func(t *testing.T) {
 		snapshot := fixtureSnapshot()
@@ -721,7 +698,7 @@ func TestCompileMihomo_ModernRulesAndFailClosedValidation(t *testing.T) {
 			{ID: "r4", TargetGroupID: snapshot.Groups[0].ID, TargetGroupName: "proxy", Expression: "PORT,8000-8080", Position: 3},
 			{ID: "r5", TargetGroupID: snapshot.Groups[0].ID, TargetGroupName: "proxy", Expression: "MATCH", Position: 4, IsTerminal: true},
 		}
-		res, err := compiler.CompileMihomo(ctx, snapshot, creds)
+		res, err := compiler.CompileMihomo(ctx, snapshot)
 		if err != nil {
 			t.Fatalf("expected modern rules to compile cleanly on Mihomo: %v", err)
 		}
@@ -745,7 +722,7 @@ func TestCompileMihomo_ModernRulesAndFailClosedValidation(t *testing.T) {
 			{ID: "r3", TargetGroupID: snapshot.Groups[0].ID, TargetGroupName: "proxy", Expression: "RULE-SET,https://rules.example.com/ads/reject.yaml,no-resolve", Position: 2},
 			{ID: "r4", TargetGroupID: snapshot.Groups[0].ID, TargetGroupName: "proxy", Expression: "MATCH", Position: 3, IsTerminal: true},
 		}
-		res, err := compiler.CompileMihomo(ctx, snapshot, creds)
+		res, err := compiler.CompileMihomo(ctx, snapshot)
 		if err != nil {
 			t.Fatalf("expected valid https RULE-SET rules to compile: %v", err)
 		}
@@ -787,7 +764,7 @@ func TestCompileMihomo_ModernRulesAndFailClosedValidation(t *testing.T) {
 			{ID: "r2", TargetGroupID: snapshot.Groups[0].ID, TargetGroupName: "proxy", Expression: "RULE-SET,unconfigured-provider", Position: 1},
 			{ID: "r3", TargetGroupID: snapshot.Groups[0].ID, TargetGroupName: "proxy", Expression: "MATCH", Position: 2, IsTerminal: true},
 		}
-		_, err := compiler.CompileMihomo(ctx, snapshot, creds)
+		_, err := compiler.CompileMihomo(ctx, snapshot)
 		if err == nil {
 			t.Fatal("expected bare RULE-SET provider without URL at rules[1] to fail closed")
 		}
@@ -806,7 +783,7 @@ func TestCompileMihomo_ModernRulesAndFailClosedValidation(t *testing.T) {
 			{ID: "r1", TargetGroupID: snapshot.Groups[0].ID, TargetGroupName: "proxy", Expression: "RULE-SET,ads,https://rules.example.com/v1/ads.yaml", Position: 0},
 			{ID: "r2", TargetGroupID: snapshot.Groups[0].ID, TargetGroupName: "proxy", Expression: "RULE-SET,ads,https://rules.example.com/v2/ads.yaml", Position: 1},
 		}
-		_, err := compiler.CompileMihomo(ctx, snapshot, creds)
+		_, err := compiler.CompileMihomo(ctx, snapshot)
 		if err == nil {
 			t.Fatal("expected conflicting RULE-SET provider URLs to fail closed")
 		}
@@ -966,7 +943,7 @@ func TestCompileMihomo_ModernRulesAndFailClosedValidation(t *testing.T) {
 					Position:        0,
 				},
 			}
-			_, err := compiler.CompileMihomo(ctx, snapshot, creds)
+			_, err := compiler.CompileMihomo(ctx, snapshot)
 			if err == nil {
 				t.Fatalf("expected rule %q to fail closed, got nil", tc.expression)
 			}
@@ -988,8 +965,7 @@ func TestCompileMihomo_ModernRulesAndFailClosedValidation(t *testing.T) {
 }
 
 func TestMihomoOutputIsValidYAML(t *testing.T) {
-	creds := fixtureCredentials()
-	res, err := compiler.CompileMihomo(context.Background(), fixtureSnapshot(), creds)
+	res, err := compiler.CompileMihomo(context.Background(), fixtureSnapshot())
 	if err != nil {
 		t.Fatalf("compile Mihomo failed: %v", err)
 	}

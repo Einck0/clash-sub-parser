@@ -34,8 +34,8 @@ func TestIPRiskRepositoryRejectsSensitiveObservationFixtures(t *testing.T) {
 	}
 	ctx := context.Background()
 	_, err := db.ExecContext(ctx, `
-		INSERT INTO nodes (logical_id, protocol, display_name, normalized_config_secret_ref, created_at, updated_at)
-		VALUES ('node_0123456789abcdef', 'ss', 'fixture', 'secret://node', '2026-09-16T00:00:00Z', '2026-09-16T00:00:00Z');`)
+		INSERT INTO nodes (logical_id, protocol, display_name, server, port, config_json, created_at, updated_at)
+		VALUES ('node_0123456789abcdef', 'ss', 'fixture', '203.0.113.1', 8388, '{}', '2026-09-16T00:00:00Z', '2026-09-16T00:00:00Z');`)
 	if err != nil {
 		t.Fatalf("insert node: %v", err)
 	}

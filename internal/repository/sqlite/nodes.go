@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -20,13 +21,37 @@ func NewNodeRepository(db *sql.DB) domain.NodeRepository {
 	return &nodeRepository{db: db}
 }
 
+func marshalNodeCredentials(creds domain.InboundProtocolCredential) (string, error) {
+	raw, err := json.Marshal(creds)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal node credentials: %w", err)
+	}
+	if len(raw) == 0 {
+		return "{}", nil
+	}
+	return string(raw), nil
+}
+
+func unmarshalNodeCredentials(configJSON string) (domain.InboundProtocolCredential, error) {
+	var creds domain.InboundProtocolCredential
+	trimmed := strings.TrimSpace(configJSON)
+	if trimmed == "" || trimmed == "{}" || trimmed == "null" {
+		return creds, nil
+	}
+	if err := json.Unmarshal([]byte(trimmed), &creds); err != nil {
+		return domain.InboundProtocolCredential{}, fmt.Errorf("failed to unmarshal node credentials: %w", err)
+	}
+	return creds, nil
+}
+
 func (r *nodeRepository) GetByLogicalID(ctx context.Context, logicalID string) (*domain.Node, error) {
 	const query = `
-	SELECT logical_id, protocol, display_name, normalized_config_secret_ref, credential_version, active, created_at, updated_at
+	SELECT logical_id, protocol, display_name, server, port, config_json, active, created_at, updated_at
 	FROM nodes
 	WHERE logical_id = ?;`
 
 	var node domain.Node
+	var configJSON string
 	var activeInt int
 	var createdStr, updatedStr string
 
@@ -34,8 +59,9 @@ func (r *nodeRepository) GetByLogicalID(ctx context.Context, logicalID string) (
 		&node.LogicalID,
 		&node.Protocol,
 		&node.DisplayName,
-		&node.NormalizedConfigSecretRef,
-		&node.CredentialVersion,
+		&node.Server,
+		&node.Port,
+		&configJSON,
 		&activeInt,
 		&createdStr,
 		&updatedStr,
@@ -47,6 +73,11 @@ func (r *nodeRepository) GetByLogicalID(ctx context.Context, logicalID string) (
 		return nil, fmt.Errorf("failed to query node %s: %w", logicalID, err)
 	}
 
+	creds, err := unmarshalNodeCredentials(configJSON)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal credentials for node %s: %w", logicalID, err)
+	}
+	node.Credentials = creds
 	node.Active = activeInt == 1
 	node.CreatedAt, _ = time.Parse(time.RFC3339, createdStr)
 	node.UpdatedAt, _ = time.Parse(time.RFC3339, updatedStr)
@@ -109,7 +140,7 @@ func (r *nodeRepository) List(ctx context.Context, filter domain.NodeFilter) ([]
 	}
 
 	selectQuery := fmt.Sprintf(`
-	SELECT logical_id, protocol, display_name, normalized_config_secret_ref, credential_version, active, created_at, updated_at
+	SELECT logical_id, protocol, display_name, server, port, config_json, active, created_at, updated_at
 	FROM nodes
 	%s
 	ORDER BY %s
@@ -125,6 +156,7 @@ func (r *nodeRepository) List(ctx context.Context, filter domain.NodeFilter) ([]
 	items := make([]domain.Node, 0)
 	for rows.Next() {
 		var node domain.Node
+		var configJSON string
 		var activeInt int
 		var createdStr, updatedStr string
 
@@ -132,8 +164,9 @@ func (r *nodeRepository) List(ctx context.Context, filter domain.NodeFilter) ([]
 			&node.LogicalID,
 			&node.Protocol,
 			&node.DisplayName,
-			&node.NormalizedConfigSecretRef,
-			&node.CredentialVersion,
+			&node.Server,
+			&node.Port,
+			&configJSON,
 			&activeInt,
 			&createdStr,
 			&updatedStr,
@@ -142,6 +175,11 @@ func (r *nodeRepository) List(ctx context.Context, filter domain.NodeFilter) ([]
 			return nil, 0, fmt.Errorf("failed to scan node: %w", err)
 		}
 
+		creds, err := unmarshalNodeCredentials(configJSON)
+		if err != nil {
+			return nil, 0, fmt.Errorf("failed to unmarshal credentials for node %s: %w", node.LogicalID, err)
+		}
+		node.Credentials = creds
 		node.Active = activeInt == 1
 		node.CreatedAt, _ = time.Parse(time.RFC3339, createdStr)
 		node.UpdatedAt, _ = time.Parse(time.RFC3339, updatedStr)
@@ -162,13 +200,14 @@ func (r *nodeRepository) UpsertBatch(ctx context.Context, nodes []domain.Node) e
 	}
 
 	const query = `
-	INSERT INTO nodes (logical_id, protocol, display_name, normalized_config_secret_ref, credential_version, active, created_at, updated_at)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	INSERT INTO nodes (logical_id, protocol, display_name, server, port, config_json, active, created_at, updated_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(logical_id) DO UPDATE SET
 		protocol = excluded.protocol,
 		display_name = excluded.display_name,
-		normalized_config_secret_ref = excluded.normalized_config_secret_ref,
-		credential_version = excluded.credential_version,
+		server = excluded.server,
+		port = excluded.port,
+		config_json = excluded.config_json,
 		active = excluded.active,
 		updated_at = excluded.updated_at;`
 
@@ -186,6 +225,11 @@ func (r *nodeRepository) UpsertBatch(ctx context.Context, nodes []domain.Node) e
 				activeInt = 1
 			}
 
+			configJSON, err := marshalNodeCredentials(node.Credentials)
+			if err != nil {
+				return fmt.Errorf("failed to marshal credentials for node %s: %w", node.LogicalID, err)
+			}
+
 			createdStr := node.CreatedAt.Format(time.RFC3339)
 			if node.CreatedAt.IsZero() {
 				createdStr = nowStr
@@ -195,12 +239,13 @@ func (r *nodeRepository) UpsertBatch(ctx context.Context, nodes []domain.Node) e
 				updatedStr = nowStr
 			}
 
-			_, err := stmt.ExecContext(ctx,
+			_, err = stmt.ExecContext(ctx,
 				node.LogicalID,
 				string(node.Protocol),
 				node.DisplayName,
-				node.NormalizedConfigSecretRef,
-				node.CredentialVersion,
+				node.Server,
+				node.Port,
+				configJSON,
 				activeInt,
 				createdStr,
 				updatedStr,
@@ -211,6 +256,53 @@ func (r *nodeRepository) UpsertBatch(ctx context.Context, nodes []domain.Node) e
 		}
 		return nil
 	})
+}
+
+// Update persists plaintext display_name, server, port, and config_json updates for an existing node.
+func (r *nodeRepository) Update(ctx context.Context, node *domain.Node) error {
+	return UpdateNode(ctx, r.db, node)
+}
+
+// UpdateNode updates an existing node's plaintext connection and credentials in SQLite.
+func UpdateNode(ctx context.Context, db *sql.DB, node *domain.Node) error {
+	if node == nil {
+		return domain.NewValidationError("nil_node", "node cannot be nil")
+	}
+	configJSON, err := marshalNodeCredentials(node.Credentials)
+	if err != nil {
+		return err
+	}
+	updatedAt := node.UpdatedAt
+	if updatedAt.IsZero() {
+		updatedAt = domain.NowUTC()
+	}
+	updatedStr := updatedAt.UTC().Format(time.RFC3339)
+
+	const query = `
+	UPDATE nodes
+	SET display_name = ?, server = ?, port = ?, config_json = ?, updated_at = ?
+	WHERE logical_id = ?;`
+
+	res, err := db.ExecContext(ctx, query,
+		node.DisplayName,
+		node.Server,
+		node.Port,
+		configJSON,
+		updatedStr,
+		node.LogicalID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update node %s: %w", node.LogicalID, err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return domain.NewNotFoundError("node_not_found", fmt.Sprintf("node %s not found", node.LogicalID))
+	}
+	node.UpdatedAt = updatedAt.UTC()
+	return nil
 }
 
 func (r *nodeRepository) DeactivateNodesNotIn(ctx context.Context, activeLogicalIDs []string) error {

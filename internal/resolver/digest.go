@@ -222,13 +222,9 @@ func computeInputDigest(input ResolveInput) (string, error) {
 			for _, kStr := range sortedKinds {
 				k := domain.ProbeKind(kStr)
 				obs := kindMap[k]
-				credVer := -1
-				if obs.CredentialVersion != nil {
-					credVer = *obs.CredentialVersion
-				}
 				// 86400s freshness boundary
 				fresh := asOf.Sub(obs.ObservedAt) <= 86400*time.Second
-				fmt.Fprintf(h, "%s:%s:%s:%d:%d:%t;", nid, obs.Kind, obs.Verdict, obs.LatencyMS, credVer, fresh)
+				fmt.Fprintf(h, "%s:%s:%s:%d:%t;", nid, obs.Kind, obs.Verdict, obs.LatencyMS, fresh)
 			}
 		}
 		obsDigest = hex.EncodeToString(h.Sum(nil))

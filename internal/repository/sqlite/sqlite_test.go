@@ -249,8 +249,8 @@ func TestForeignKeyConstraintEnforcement(t *testing.T) {
 	// 4. Insert valid node, then node_sources -> MUST succeed
 	nodeLogicalID := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	_, err = db.ExecContext(ctx, `
-		INSERT INTO nodes (logical_id, protocol, display_name, normalized_config_secret_ref, created_at, updated_at)
-		VALUES (?, 'ss', 'Node 1', 'sec://node1', '2026-09-15T00:00:00Z', '2026-09-15T00:00:00Z');
+		INSERT INTO nodes (logical_id, protocol, display_name, server, port, config_json, created_at, updated_at)
+		VALUES (?, 'ss', 'Node 1', '203.0.113.1', 8388, '{}', '2026-09-15T00:00:00Z', '2026-09-15T00:00:00Z');
 	`, nodeLogicalID)
 	if err != nil {
 		t.Fatalf("failed to insert valid node: %v", err)
@@ -319,8 +319,8 @@ func TestTableConstraintsAndIntegrity(t *testing.T) {
 	// 2. Group edge exclusivity: specifying both child_group_id AND node_logical_id MUST fail CHECK constraint
 	nodeLogicalID := "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
 	_, err = db.ExecContext(ctx, `
-		INSERT INTO nodes (logical_id, protocol, display_name, normalized_config_secret_ref, created_at, updated_at)
-		VALUES (?, 'vless', 'Node 2', 'sec://node2', '2026-09-15T00:00:00Z', '2026-09-15T00:00:00Z');
+		INSERT INTO nodes (logical_id, protocol, display_name, server, port, config_json, created_at, updated_at)
+		VALUES (?, 'vless', 'Node 2', '203.0.113.2', 443, '{}', '2026-09-15T00:00:00Z', '2026-09-15T00:00:00Z');
 	`, nodeLogicalID)
 	if err != nil {
 		t.Fatalf("failed to insert node 2: %v", err)
@@ -596,13 +596,15 @@ func TestRepositoriesCRUD(t *testing.T) {
 	nodeSourceRepo := sqlite.NewNodeSourceRepository(db)
 	nodeLogicalID := "1111222233334444555566667777888899990000aaaabbbbccccddddeeeeffff"
 	node := domain.Node{
-		LogicalID:                 nodeLogicalID,
-		Protocol:                  domain.ProtocolVMess,
-		DisplayName:               "Node Alpha",
-		NormalizedConfigSecretRef: "sec://node-alpha",
-		Active:                    true,
-		CreatedAt:                 domain.NowUTC(),
-		UpdatedAt:                 domain.NowUTC(),
+		LogicalID:   nodeLogicalID,
+		Protocol:    domain.ProtocolVMess,
+		DisplayName: "Node Alpha",
+		Server:      "203.0.113.10",
+		Port:        443,
+		Credentials: domain.InboundProtocolCredential{UUID: "00000000-0000-0000-0000-000000000001"},
+		Active:      true,
+		CreatedAt:   domain.NowUTC(),
+		UpdatedAt:   domain.NowUTC(),
 	}
 	if err := nodeRepo.UpsertBatch(ctx, []domain.Node{node}); err != nil {
 		t.Fatalf("failed to upsert node: %v", err)

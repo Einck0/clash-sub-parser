@@ -25,17 +25,13 @@ type SafeNodeDialerOptions struct {
 	ClientFactory func(ctx context.Context, config singbox.NodeConfig, options singbox.HTTPClientOptions) (*http.Client, func() error, error)
 }
 
-// NewSafeNodeDialer returns a NodeDialer closure that resolves credentials from repo and vault,
-// enforces identity and server consistency, verifies that the destination server is a public IP,
-// disallows HTTP redirects, and establishes an ephemeral sing-box memory client.
+// NewSafeNodeDialer returns a NodeDialer closure that reads plaintext credentials directly from domain.Node,
+// verifies that the destination server is a public IP, disallows HTTP redirects, and establishes an ephemeral
+// sing-box memory client.
 //
 // Domain destinations are resolved and validated here, then the sing-box server field is pinned
 // to a validated IP so protocol outbounds cannot perform a second DNS lookup.
-func NewSafeNodeDialer(
-	repo domain.NodeCredentialRepository,
-	vault *domain.NodeCredentialVault,
-	opts ...SafeNodeDialerOptions,
-) NodeDialer {
+func NewSafeNodeDialer(opts ...SafeNodeDialerOptions) NodeDialer {
 	var opt SafeNodeDialerOptions
 	if len(opts) > 0 {
 		opt = opts[0]
@@ -46,78 +42,31 @@ func NewSafeNodeDialer(
 	}
 
 	return func(ctx context.Context, node domain.Node) (*http.Client, func() error, error) {
-		// 1. Dependency checks: fail-closed if repo or vault is nil
-		if repo == nil || vault == nil {
-			return nil, nil, fmt.Errorf("%w: missing credential repository or vault", ErrCredentialsUnavailable)
-		}
-
 		if node.LogicalID == "" {
 			return nil, nil, fmt.Errorf("%w: node logical ID is empty", ErrCredentialsUnavailable)
 		}
-		if node.CredentialVersion <= 0 {
-			return nil, nil, fmt.Errorf("%w: invalid credential version %d", ErrCredentialsUnavailable, node.CredentialVersion)
-		}
 
-		// 2. Fetch credentials for exact logical ID and version
-		record, err := repo.GetByLogicalID(ctx, node.LogicalID, node.CredentialVersion)
-		if err != nil {
-			// Do not leak internal DB errors or secrets
-			return nil, nil, fmt.Errorf("%w: failed to retrieve credentials: %v", ErrCredentialsUnavailable, err)
-		}
-		if record == nil {
-			return nil, nil, fmt.Errorf("%w: no credential record found for logical ID %s version %d", ErrCredentialsUnavailable, node.LogicalID, node.CredentialVersion)
-		}
-
-		// Verify record logical ID and version binding
-		if record.LogicalID != node.LogicalID {
-			return nil, nil, fmt.Errorf("%w: record logical ID mismatch", ErrCredentialsUnavailable)
-		}
-		if record.Version != node.CredentialVersion {
-			return nil, nil, fmt.Errorf("%w: record version mismatch", ErrCredentialsUnavailable)
-		}
-
-		// 3. Decrypt credentials using authenticated protocol
-		payload, err := vault.Decrypt(record, node.Protocol)
-		if err != nil {
-			// Do not leak secret ciphertext, keys, or plaintext in error message
-			return nil, nil, fmt.Errorf("%w: failed to decrypt credentials", ErrCredentialsUnavailable)
-		}
-		if payload == nil {
-			return nil, nil, fmt.Errorf("%w: decrypted payload is nil", ErrCredentialsUnavailable)
-		}
-
-		// 4. Strict binding checks: logical ID, version, and protocol must match
-		if payload.LogicalID != node.LogicalID {
-			return nil, nil, fmt.Errorf("%w: payload logical ID mismatch", ErrCredentialsUnavailable)
-		}
-		if payload.Version != node.CredentialVersion || payload.Version != record.Version {
-			return nil, nil, fmt.Errorf("%w: payload version does not match expected version", ErrCredentialsUnavailable)
-		}
-		if payload.Protocol != node.Protocol {
-			return nil, nil, fmt.Errorf("%w: payload protocol mismatch", ErrCredentialsUnavailable)
-		}
-
-		serverHost := strings.TrimSpace(payload.Server)
+		serverHost := strings.TrimSpace(node.Server)
 		if serverHost == "" {
-			return nil, nil, fmt.Errorf("%w: empty server in payload", ErrCredentialsUnavailable)
+			return nil, nil, fmt.Errorf("%w: empty server in node", ErrCredentialsUnavailable)
 		}
-		if payload.Port < 1 || payload.Port > 65535 {
-			return nil, nil, fmt.Errorf("%w: invalid port %d in payload", ErrCredentialsUnavailable, payload.Port)
+		if node.Port < 1 || node.Port > 65535 {
+			return nil, nil, fmt.Errorf("%w: invalid port %d in node", ErrCredentialsUnavailable, node.Port)
 		}
 
 		// Reject insecure TLS flags and protocol options that add unverified entry points
 		// or weaken the authenticated server identity.
-		if domain.HasInsecureTransport(payload.Credentials.Transport) {
+		if domain.HasInsecureTransport(node.Credentials.Transport) {
 			return nil, nil, fmt.Errorf("%w: insecure certificate verification requested", ErrCredentialsUnavailable)
 		}
-		if node.Protocol == domain.ProtocolHysteria2 && domain.ExtractHy2Ports(payload.Credentials.Transport) != "" {
+		if node.Protocol == domain.ProtocolHysteria2 && domain.ExtractHy2Ports(node.Credentials.Transport) != "" {
 			return nil, nil, fmt.Errorf("%w: hysteria2 port hopping is unsupported", ErrCredentialsUnavailable)
 		}
-		if node.Protocol == domain.ProtocolTUIC && (payload.Credentials.DisableSNI || domain.HasTUICDisableSNI(payload.Credentials.Transport)) {
+		if node.Protocol == domain.ProtocolTUIC && (node.Credentials.DisableSNI || domain.HasTUICDisableSNI(node.Credentials.Transport)) {
 			return nil, nil, fmt.Errorf("%w: TUIC SNI disable is unsupported", ErrCredentialsUnavailable)
 		}
 
-		// 5. Verify IP is public and pin domain destinations before sing-box dials.
+		// Verify IP is public and pin domain destinations before sing-box dials.
 		// Strip brackets for IPv6 literal: "[::1]" -> "::1"
 		cleanHost := strings.Trim(serverHost, "[]")
 		parsedIP := net.ParseIP(cleanHost)
@@ -153,22 +102,26 @@ func NewSafeNodeDialer(
 			targetServer = chosenIP.String()
 		}
 
-		// 6. Build ephemeral sing-box config
+		// Build ephemeral sing-box config directly from domain.Node plaintext configuration
 		norm := parser.NormalizedNode{
-			Node:   node,
-			Server: serverHost,
-			Port:   payload.Port,
+			Node:        node,
+			Server:      serverHost,
+			Port:        node.Port,
+			Transport:   node.Credentials.Transport,
+			Credentials: node.Credentials,
 		}
-		if payload.Credentials.Transport != nil {
-			norm.Transport = payload.Credentials.Transport
+		payload := &domain.NodeCredentialPayload{
+			LogicalID:   node.LogicalID,
+			Protocol:    node.Protocol,
+			Server:      serverHost,
+			Port:        node.Port,
+			Credentials: node.Credentials,
 		}
 
 		cfg := singbox.NodeConfigFromPayload(norm, payload)
-		// Guarantee logical ID and server match
 		cfg.LogicalID = node.LogicalID
-		// Pin socket dial destination to chosen public IP (or verified literal IP)
 		cfg.Server = targetServer
-		cfg.Port = payload.Port
+		cfg.Port = node.Port
 
 		// Preserve TLS identity: if cfg.SNI is empty, retain original domain as SNI
 		usesTLS := cfg.TLS || node.Protocol == domain.ProtocolTrojan || node.Protocol == domain.ProtocolHysteria2 || node.Protocol == domain.ProtocolTUIC
@@ -181,7 +134,7 @@ func NewSafeNodeDialer(
 			return nil, nil, fmt.Errorf("%w: strict certificate verification required for safe node dialer", ErrCredentialsUnavailable)
 		}
 
-		// 7. Instantiate in-memory singbox client & enforce no-redirect policy
+		// Instantiate in-memory singbox client & enforce no-redirect policy
 		clientFactory := opt.ClientFactory
 		if clientFactory == nil {
 			clientFactory = singbox.NewHTTPClient

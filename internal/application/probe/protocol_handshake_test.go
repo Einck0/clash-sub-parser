@@ -389,28 +389,8 @@ func TestSafeNodeDialerTrojanRealTLSHandshakeTo204(t *testing.T) {
 	}
 	defer srvBox.Close()
 
-	// 4. Setup repo and vault with Trojan credentials
-	repo := newMemoryCredRepo()
-	vault := createTestVault(t)
+	// 4. Setup plaintext Trojan node
 	ctx := context.Background()
-
-	payload := &domain.NodeCredentialPayload{
-		LogicalID: nodeLogicalID,
-		Version:   1,
-		Protocol:  domain.ProtocolTrojan,
-		Server:    nodeDomain,
-		Port:      pinnedNodePort,
-		Credentials: domain.InboundProtocolCredential{
-			Password: trojanPassword,
-		},
-	}
-	rec, err := vault.Encrypt(payload)
-	if err != nil {
-		t.Fatalf("vault.Encrypt: %v", err)
-	}
-	if err := repo.Upsert(ctx, rec); err != nil {
-		t.Fatalf("repo.Upsert: %v", err)
-	}
 
 	// 5. Build SafeNodeDialer with IP pinning, test CA trust, and client loopback mapper
 	clientNodeMapper := newAppLoopbackMapperState()
@@ -461,15 +441,19 @@ func TestSafeNodeDialerTrojanRealTLSHandshakeTo204(t *testing.T) {
 		return rt.HTTPClient(opts), rt.Close, nil
 	}
 
-	dialer := probe.NewSafeNodeDialer(repo, vault, probe.SafeNodeDialerOptions{
+	dialer := probe.NewSafeNodeDialer(probe.SafeNodeDialerOptions{
 		Resolver:      dialerResolver,
 		ClientFactory: clientFactory,
 	})
 
 	node := domain.Node{
-		LogicalID:         nodeLogicalID,
-		Protocol:          domain.ProtocolTrojan,
-		CredentialVersion: 1,
+		LogicalID: nodeLogicalID,
+		Protocol:  domain.ProtocolTrojan,
+		Server:    nodeDomain,
+		Port:      pinnedNodePort,
+		Credentials: domain.InboundProtocolCredential{
+			Password: trojanPassword,
+		},
 	}
 
 	httpClient, cleanup, err := dialer(ctx, node)
@@ -898,13 +882,6 @@ func TestSafeNodeDialerAndDefaultRunnerSecurityMatrixAndUDPHandshake(t *testing.
 			wantNodeDialed: false,
 		},
 		{
-			name:           "negative_revoked_credential_version",
-			protocol:       domain.ProtocolTrojan,
-			credPassword:   serverPassword,
-			nodeVersion:    2,
-			wantNodeDialed: false,
-		},
-		{
 			name:             "negative_context_cancelled",
 			protocol:         domain.ProtocolTrojan,
 			credPassword:     serverPassword,
@@ -1109,33 +1086,10 @@ func TestSafeNodeDialerAndDefaultRunnerSecurityMatrixAndUDPHandshake(t *testing.
 				clientNodeMapper.MapTCP(expectedNodeAddr, inboundLocalAddr)
 			}
 
-			repo := newMemoryCredRepo()
-			vault := createTestVault(t)
 			logicalID := "node-" + sc.name
 			serverHost := nodeDomain
 			if sc.credServer != "" {
 				serverHost = sc.credServer
-			}
-
-			payload := &domain.NodeCredentialPayload{
-				LogicalID: logicalID,
-				Version:   1,
-				Protocol:  sc.protocol,
-				Server:    serverHost,
-				Port:      nodePort,
-				Credentials: domain.InboundProtocolCredential{
-					Password:  sc.credPassword,
-					UUID:      sc.credUUID,
-					Method:    sc.credMethod,
-					Transport: sc.credTransport,
-				},
-			}
-			rec, err := vault.Encrypt(payload)
-			if err != nil {
-				t.Fatalf("vault.Encrypt: %v", err)
-			}
-			if err := repo.Upsert(context.Background(), rec); err != nil {
-				t.Fatalf("repo.Upsert: %v", err)
 			}
 
 			var nodeLookupCalls atomic.Int32
@@ -1196,21 +1150,24 @@ func TestSafeNodeDialerAndDefaultRunnerSecurityMatrixAndUDPHandshake(t *testing.
 				return rt.HTTPClient(opts), rt.Close, nil
 			}
 
-			dialer := probe.NewSafeNodeDialer(repo, vault, probe.SafeNodeDialerOptions{
+			dialer := probe.NewSafeNodeDialer(probe.SafeNodeDialerOptions{
 				Resolver:      resolver,
 				ClientFactory: clientFactory,
 			})
 
-			credVer := 1
-			if sc.nodeVersion != 0 {
-				credVer = sc.nodeVersion
-			}
 			node := domain.Node{
-				LogicalID:         logicalID,
-				DisplayName:       sc.name,
-				Protocol:          sc.protocol,
-				CredentialVersion: credVer,
-				Active:            true,
+				LogicalID:   logicalID,
+				DisplayName: sc.name,
+				Protocol:    sc.protocol,
+				Server:      serverHost,
+				Port:        nodePort,
+				Credentials: domain.InboundProtocolCredential{
+					Password:  sc.credPassword,
+					UUID:      sc.credUUID,
+					Method:    sc.credMethod,
+					Transport: sc.credTransport,
+				},
+				Active: true,
 			}
 
 			if sc.rebindSecondLookup {

@@ -4,10 +4,9 @@ package inventory
 import (
 	"context"
 	"database/sql"
-	"errors"
+	"encoding/json"
 	"fmt"
 	"net/netip"
-	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -33,51 +32,45 @@ type ReconcileResult struct {
 type NodeDetail struct {
 	Node               domain.Node                `json:"node"`
 	Sources            []domain.NodeSource        `json:"sources"`
-	Connection         *domain.SafeNodeConnection `json:"connection,omitempty"`
 	IPRiskSummary      *domain.IPRiskSummary      `json:"ip_risk_summary,omitempty"`
 	RecentObservations []domain.IPRiskObservation `json:"recent_observations,omitempty"`
-	CredentialMismatch bool                       `json:"credential_mismatch,omitempty"`
 }
 
-// NodeView is the API-safe view of a Node without internal secret references.
+// NodeView is the management API view of a Node including plaintext server, port, and protocol credentials.
 type NodeView struct {
-	LogicalID          string                     `json:"logical_id"`
-	Protocol           domain.Protocol            `json:"protocol"`
-	DisplayName        string                     `json:"display_name"`
-	Active             bool                       `json:"active"`
-	CredentialVersion  int                        `json:"credential_version"`
-	CredentialMismatch bool                       `json:"credential_mismatch,omitempty"`
-	Connection         *domain.SafeNodeConnection `json:"connection,omitempty"`
-	CreatedAt          time.Time                  `json:"created_at"`
-	UpdatedAt          time.Time                  `json:"updated_at"`
-	IPRiskSummary      *domain.IPRiskSummary      `json:"ip_risk_summary,omitempty"`
+	LogicalID     string                            `json:"logical_id"`
+	Protocol      domain.Protocol                   `json:"protocol"`
+	DisplayName   string                            `json:"display_name"`
+	Server        string                            `json:"server,omitempty"`
+	Port          int                               `json:"port,omitempty"`
+	Credentials   *domain.InboundProtocolCredential `json:"credentials,omitempty"`
+	Active        bool                              `json:"active"`
+	CreatedAt     time.Time                         `json:"created_at"`
+	UpdatedAt     time.Time                         `json:"updated_at"`
+	IPRiskSummary *domain.IPRiskSummary             `json:"ip_risk_summary,omitempty"`
 }
 
-// ToNodeView converts a domain.Node to an API-safe NodeView, stripping secret references.
+// ToNodeView converts a domain.Node to a NodeView.
 func ToNodeView(n domain.Node) NodeView {
+	creds := n.Credentials
 	return NodeView{
-		LogicalID:         n.LogicalID,
-		Protocol:          n.Protocol,
-		DisplayName:       n.DisplayName,
-		Active:            n.Active,
-		CredentialVersion: n.CredentialVersion,
-		CreatedAt:         n.CreatedAt,
-		UpdatedAt:         n.UpdatedAt,
+		LogicalID:   n.LogicalID,
+		Protocol:    n.Protocol,
+		DisplayName: n.DisplayName,
+		Server:      n.Server,
+		Port:        n.Port,
+		Credentials: &creds,
+		Active:      n.Active,
+		CreatedAt:   n.CreatedAt,
+		UpdatedAt:   n.UpdatedAt,
 	}
 }
 
-// ToNodeViewFromReadModel converts a domain.NodeReadModel to an API-safe NodeView.
+// ToNodeViewFromReadModel converts a domain.NodeReadModel to a NodeView.
 func ToNodeViewFromReadModel(rm domain.NodeReadModel) NodeView {
-	return NodeView{
-		LogicalID:         rm.Node.LogicalID,
-		Protocol:          rm.Node.Protocol,
-		DisplayName:       rm.Node.DisplayName,
-		Active:            rm.Node.Active,
-		CredentialVersion: rm.Node.CredentialVersion,
-		CreatedAt:         rm.Node.CreatedAt,
-		UpdatedAt:         rm.Node.UpdatedAt,
-		IPRiskSummary:     rm.IPRiskSummary,
-	}
+	v := ToNodeView(rm.Node)
+	v.IPRiskSummary = rm.IPRiskSummary
+	return v
 }
 
 // ToNodeViewsFromReadModels converts a slice of domain.NodeReadModel to a slice of NodeView.
@@ -99,10 +92,6 @@ func ToNodeViews(nodes []domain.Node) []NodeView {
 }
 
 // Service coordinates inventory ingestion, provenance reconciliation, and ledger queries.
-type credentialTransactionRepository interface {
-	GetLatestByLogicalIDTx(ctx context.Context, tx *sql.Tx, logicalID string) (*domain.NodeCredentialRecord, error)
-}
-
 type Service struct {
 	db            *sql.DB
 	subscriptions domain.SubscriptionRepository
@@ -110,8 +99,6 @@ type Service struct {
 	nodes         domain.NodeRepository
 	sources       domain.NodeSourceRepository
 	fetcher       fetch.Fetcher
-	vault         *domain.NodeCredentialVault
-	credRepo      domain.NodeCredentialRepository
 	probeObsRepo  domain.ProbeObservationRepository
 	auditRepo     domain.AuditRepository
 	mu            sync.Mutex
@@ -123,15 +110,7 @@ type Reconciler = Service
 // Option configures Service dependencies.
 type Option func(*Service)
 
-// WithCredentialVault sets the vault and repository for encrypted node credential storage.
-func WithCredentialVault(vault *domain.NodeCredentialVault, credRepo domain.NodeCredentialRepository) Option {
-	return func(s *Service) {
-		s.vault = vault
-		s.credRepo = credRepo
-	}
-}
-
-// WithProbeObservationRepository sets the probe observation repository for credential mismatch detection.
+// WithProbeObservationRepository sets the probe observation repository.
 func WithProbeObservationRepository(repo domain.ProbeObservationRepository) Option {
 	return func(s *Service) {
 		s.probeObsRepo = repo
@@ -176,21 +155,7 @@ func NewService(
 }
 
 // ReconcileSubscription executes the safe fetch, in-memory parse, and atomic transaction convergence.
-// Lifecycle steps:
-// 1. Retrieve subscription snapshot and verify enabled state.
-// 2. Outside transaction: safely fetch subscription content under SSRF and resource limits.
-// 3. Outside transaction: parse and normalize nodes in memory, deriving stable logical_ids.
-// 4. In a single SQLite short transaction (sqlite.WithTx):
-//   - Record subscription_fetches audit entry.
-//   - Upsert nodes table (active = 1).
-//   - Update node_sources table with last_seen_fetch_id.
-//   - Prune obsolete node_sources for this subscription (last_seen_fetch_id != currentFetchID).
-//   - Deactivate nodes that have lost all valid sources (active = 0).
-//
-// 5. Commit transaction.
-// Failure protection: On network or parser errors, no ledger changes are committed, only an audit record is saved.
 func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*ReconcileResult, error) {
-	// Step 1: Preflight subscription snapshot and revision check
 	sub, err := s.subscriptions.GetByID(ctx, subID)
 	if err != nil {
 		return nil, err
@@ -199,7 +164,6 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 		return nil, domain.NewValidationError("subscription_disabled", "disabled subscriptions cannot be refreshed")
 	}
 
-	// Step 2: Outside transaction - safe fetch under SSRF policy
 	startedAt := domain.NowUTC()
 	opts := fetch.OptionsFromPolicy(sub.SourceURLSecretRef, sub.RefreshPolicy, sub.RefreshPolicy.FetchProxyRef)
 	fetchResp, fetchErr := s.fetcher.Fetch(ctx, opts)
@@ -229,7 +193,6 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 		}, fmt.Errorf("failed to fetch subscription %s: %w", sub.ID, fetchErr)
 	}
 
-	// Step 3: Outside transaction - in-memory extract and normalize
 	extractResult, extractErr := parser.ExtractWithCredentials(fetchResp.Body)
 	if extractErr != nil {
 		finishedAt := domain.NowUTC()
@@ -265,7 +228,6 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 		outcome = domain.FetchOutcomePartial
 	}
 
-	// Step 4: In a single SQLite short transaction - atomic convergence
 	fetchID := domain.MustNewUUIDv7()
 	finishedAt := domain.NowUTC()
 	nowStr := domain.NowUTC().Format(time.RFC3339)
@@ -274,7 +236,6 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 	defer s.mu.Unlock()
 
 	err = sqlite.WithTx(ctx, s.db, func(ctx context.Context, tx *sql.Tx) error {
-		// 1. Record subscription_fetches audit entry
 		const insertFetchSQL = `
 		INSERT INTO subscription_fetches (
 			id, subscription_id, started_at, finished_at, outcome,
@@ -296,15 +257,15 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 			return fmt.Errorf("failed to insert subscription fetch: %w", err)
 		}
 
-		// 2. Batch upsert nodes table
 		const upsertNodeSQL = `
-		INSERT INTO nodes (logical_id, protocol, display_name, normalized_config_secret_ref, credential_version, active, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+		INSERT INTO nodes (logical_id, protocol, display_name, server, port, config_json, active, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
 		ON CONFLICT(logical_id) DO UPDATE SET
 			protocol = excluded.protocol,
 			display_name = excluded.display_name,
-			normalized_config_secret_ref = excluded.normalized_config_secret_ref,
-			credential_version = excluded.credential_version,
+			server = excluded.server,
+			port = excluded.port,
+			config_json = excluded.config_json,
 			active = 1,
 			updated_at = excluded.updated_at;`
 
@@ -314,7 +275,6 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 		}
 		defer nodeStmt.Close()
 
-		// 3. Update node_sources table
 		const upsertSourceSQL = `
 		INSERT INTO node_sources (node_logical_id, subscription_id, last_seen_fetch_id)
 		VALUES (?, ?, ?)
@@ -327,169 +287,29 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 		}
 		defer sourceStmt.Close()
 
-		const queryNodeVersionSQL = `
-		SELECT credential_version
-		FROM nodes
-		WHERE logical_id = ?;`
-
-		queryNodeVersionStmt, err := tx.PrepareContext(ctx, queryNodeVersionSQL)
-		if err != nil {
-			return fmt.Errorf("failed to prepare query node version statement: %w", err)
-		}
-		defer queryNodeVersionStmt.Close()
-
 		seenLogicalIDs := make(map[string]bool)
 		for _, item := range extractResult.Items {
 			node := item.Normalized.Node
-
-			// Determine node's credential_version and encrypted credential payload
-			targetVersion := 0
-			needEncrypt := false
-
-			// If vault & credRepo configured, persist AEAD encrypted credentials in the same transaction
-			if s.vault != nil {
-				// Query current node row credential_version in this transaction
-				currentNodeVersion := 0
-				var vRow int
-				if qvErr := queryNodeVersionStmt.QueryRowContext(ctx, node.LogicalID).Scan(&vRow); qvErr == nil {
-					currentNodeVersion = vRow
-				} else if !errors.Is(qvErr, sql.ErrNoRows) {
-					return fmt.Errorf("failed to query current version for node %s: %w", node.LogicalID, qvErr)
-				}
-
-				// Query latest credential version within this transaction to avoid cross-connection race and lock conflicts
-				var existingRecord *domain.NodeCredentialRecord
-				if s.credRepo != nil {
-					txRepo, ok := s.credRepo.(credentialTransactionRepository)
-					if !ok {
-						return fmt.Errorf("credential repository does not support transaction-scoped reads")
-					}
-					rec, qErr := txRepo.GetLatestByLogicalIDTx(ctx, tx, node.LogicalID)
-					if qErr != nil {
-						var de *domain.DomainError
-						if !errors.Is(qErr, sql.ErrNoRows) && (!errors.As(qErr, &de) || de.Category != domain.CategoryNotFound) {
-							return fmt.Errorf("failed to query existing credentials for node %s: %w", node.LogicalID, qErr)
-						}
-					} else {
-						existingRecord = rec
-					}
-				}
-
-				// High watermark version across existing credential record and node row
-				baseVersion := currentNodeVersion
-				if existingRecord != nil && existingRecord.Version > baseVersion {
-					baseVersion = existingRecord.Version
-				}
-
-				shouldIncrement := false
-
-				if existingRecord != nil {
-					existingPayload, decErr := s.vault.Decrypt(existingRecord, node.Protocol)
-					if decErr != nil {
-						// Existing payload cannot be decrypted with current keys/AAD or is corrupted.
-						// Fail closed: do NOT silently mask decryption errors or bump version.
-						// Abort transaction and return a redacted error.
-						redactedErr := domain.RedactSensitiveInfo(decErr.Error())
-						return fmt.Errorf("failed to decrypt existing credentials for node %s: %s", node.LogicalID, redactedErr)
-					}
-					// Decrypted successfully, check if endpoint, identity binding, or credentials changed.
-					// Whole-subscription ContentDigest change alone MUST NOT bump single node version.
-					expectedIdentity := domain.NewVerifiedNodeIdentity(
-						node.LogicalID,
-						node.Protocol,
-						item.Normalized.Server,
-						item.Normalized.Port,
-						existingRecord.Version,
-						item.Normalized.Transport,
-					)
-					identityMissingOrChanged := existingPayload.Identity == nil ||
-						existingPayload.Identity.ValidateNonEmpty() != nil ||
-						!existingPayload.Identity.MatchesEndpoint(node.Protocol, item.Normalized.Server, item.Normalized.Port) ||
-						existingPayload.Identity.TransportDigest != expectedIdentity.TransportDigest
-
-					credsChanged := !reflect.DeepEqual(existingPayload.Credentials, item.Credentials)
-					serverChanged := existingPayload.Server != item.Normalized.Server || existingPayload.Port != item.Normalized.Port
-					protocolChanged := existingPayload.Protocol != node.Protocol
-
-					if credsChanged || serverChanged || protocolChanged || identityMissingOrChanged {
-						shouldIncrement = true
-						needEncrypt = true
-						targetVersion = baseVersion + 1
-					} else {
-						// Reusing existing credentials with identical connection configuration
-						targetVersion = existingRecord.Version
-					}
-				} else {
-					// First time ingestion with vault configured
-					shouldIncrement = true
-					needEncrypt = true
-					if baseVersion > 0 {
-						targetVersion = baseVersion + 1
-					} else {
-						targetVersion = 1
-					}
-				}
-				_ = shouldIncrement
+			rawCreds, mErr := json.Marshal(node.Credentials)
+			if mErr != nil {
+				return fmt.Errorf("failed to marshal credentials for node %s: %w", node.LogicalID, mErr)
+			}
+			configJSON := string(rawCreds)
+			if configJSON == "" {
+				configJSON = "{}"
 			}
 
-			// 1) Upsert node first so that node_credentials foreign key constraint is satisfied
 			if _, err := nodeStmt.ExecContext(ctx,
 				node.LogicalID,
 				string(node.Protocol),
 				node.DisplayName,
-				node.NormalizedConfigSecretRef,
-				targetVersion,
+				node.Server,
+				node.Port,
+				configJSON,
 				nowStr,
 				nowStr,
 			); err != nil {
 				return fmt.Errorf("failed to upsert node %s: %w", node.LogicalID, err)
-			}
-
-			// 2) If needEncrypt, persist encrypted credential with verified identity binding
-			if needEncrypt {
-				identity := domain.NewVerifiedNodeIdentity(
-					node.LogicalID,
-					node.Protocol,
-					item.Normalized.Server,
-					item.Normalized.Port,
-					targetVersion,
-					item.Normalized.Transport,
-				)
-				payload := &domain.NodeCredentialPayload{
-					LogicalID:   node.LogicalID,
-					Protocol:    node.Protocol,
-					Server:      item.Normalized.Server,
-					Port:        item.Normalized.Port,
-					Version:     targetVersion,
-					Digest:      fetchResp.ContentDigest,
-					Identity:    &identity,
-					Credentials: item.Credentials,
-				}
-				record, encErr := s.vault.Encrypt(payload)
-				if encErr != nil {
-					return fmt.Errorf("failed to encrypt node credential for %s: %w", node.LogicalID, encErr)
-				}
-
-				const upsertCredSQL = `
-				INSERT INTO node_credentials (logical_id, version, key_id, nonce, ciphertext, created_at, updated_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?)
-				ON CONFLICT(logical_id, version) DO UPDATE SET
-					key_id = excluded.key_id,
-					nonce = excluded.nonce,
-					ciphertext = excluded.ciphertext,
-					updated_at = excluded.updated_at;`
-
-				if _, err := tx.ExecContext(ctx, upsertCredSQL,
-					record.LogicalID,
-					record.Version,
-					record.KeyID,
-					record.Nonce,
-					record.Ciphertext,
-					nowStr,
-					nowStr,
-				); err != nil {
-					return fmt.Errorf("failed to persist encrypted credential for node %s: %w", node.LogicalID, err)
-				}
 			}
 
 			if !seenLogicalIDs[node.LogicalID] {
@@ -504,17 +324,14 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 			}
 		}
 
-		// 4. Clean up association records under current subscription where last_seen_fetch_id != fetchID
 		const pruneSourcesSQL = `
 		DELETE FROM node_sources
 		WHERE subscription_id = ? AND last_seen_fetch_id != ?;`
 
 		if _, err := tx.ExecContext(ctx, pruneSourcesSQL, sub.ID, fetchID); err != nil {
-			return fmt.Errorf("failed to prune obsolete node sources for sub %s: %w", sub.ID, err)
+			return fmt.Errorf("failed to prune obsolete node sources: %w", err)
 		}
 
-		// 5. Deactivate nodes that have lost all valid sources (no records in node_sources)
-		// and clean up credentials of deactivated nodes
 		const deactivateOrphansSQL = `
 		UPDATE nodes
 		SET active = 0, updated_at = ?
@@ -525,16 +342,6 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 
 		if _, err := tx.ExecContext(ctx, deactivateOrphansSQL, nowStr); err != nil {
 			return fmt.Errorf("failed to deactivate orphan nodes: %w", err)
-		}
-
-		const cleanOrphanCredsSQL = `
-		DELETE FROM node_credentials
-		WHERE logical_id IN (
-			SELECT logical_id FROM nodes WHERE active = 0
-		);`
-
-		if _, err := tx.ExecContext(ctx, cleanOrphanCredsSQL); err != nil {
-			return fmt.Errorf("failed to clean orphan credentials: %w", err)
 		}
 
 		return nil
@@ -577,11 +384,9 @@ func (s *Service) GetNodeDetailWithRisk(ctx context.Context, logicalID string, p
 	if sources == nil {
 		sources = make([]domain.NodeSource, 0)
 	}
-	conn := s.projectNodeConnection(ctx, rm.Node)
 	detail := &NodeDetail{
 		Node:               rm.Node,
 		Sources:            sources,
-		Connection:         &conn,
 		IPRiskSummary:      rm.IPRiskSummary,
 		RecentObservations: make([]domain.IPRiskObservation, 0),
 	}
@@ -596,18 +401,6 @@ func (s *Service) GetNodeDetailWithRisk(ctx context.Context, logicalID string, p
 			detail.RecentObservations = obsList
 		}
 	}
-	if s.probeObsRepo != nil {
-		if latest, err := s.probeObsRepo.ListLatestByNodes(ctx, []string{logicalID}, nil); err == nil {
-			if kindMap, ok := latest[logicalID]; ok {
-				for _, obs := range kindMap {
-					if obs.CredentialVersion != nil && *obs.CredentialVersion != rm.Node.CredentialVersion {
-						detail.CredentialMismatch = true
-						break
-					}
-				}
-			}
-		}
-	}
 	return detail, nil
 }
 
@@ -616,329 +409,255 @@ func (s *Service) ListNodes(ctx context.Context, filter domain.NodeFilter) ([]do
 	return s.nodes.List(ctx, filter)
 }
 
-// ListNodesReadModel queries the node projection with server-side risk filtering and returns API-safe NodeViews.
+// ListNodesReadModel queries the node projection with server-side risk filtering and returns NodeViews.
 func (s *Service) ListNodesReadModel(ctx context.Context, filter domain.NodeFilter) ([]NodeView, int, error) {
 	models, total, err := s.nodes.ListReadModel(ctx, filter)
 	if err != nil {
 		return nil, 0, err
 	}
-	views := ToNodeViewsFromReadModels(models)
-	if s.probeObsRepo != nil && len(views) > 0 {
-		nodeIDs := make([]string, len(views))
-		for i, v := range views {
-			nodeIDs[i] = v.LogicalID
-		}
-		if latest, err := s.probeObsRepo.ListLatestByNodes(ctx, nodeIDs, nil); err == nil {
-			for i := range views {
-				if kindMap, ok := latest[views[i].LogicalID]; ok {
-					for _, obs := range kindMap {
-						if obs.CredentialVersion != nil && *obs.CredentialVersion != views[i].CredentialVersion {
-							views[i].CredentialMismatch = true
-							break
-						}
-					}
-				}
-			}
-		}
-	}
-	return views, total, nil
+	return ToNodeViewsFromReadModels(models), total, nil
 }
 
-func (s *Service) projectNodeConnection(ctx context.Context, node domain.Node) domain.SafeNodeConnection {
-	if s.vault == nil || s.credRepo == nil {
-		return domain.UnavailableNodeConnection("vault_unconfigured")
-	}
-	if node.CredentialVersion <= 0 {
-		return domain.UnavailableNodeConnection("credential_unavailable")
-	}
-	record, err := s.credRepo.GetByLogicalID(ctx, node.LogicalID, node.CredentialVersion)
-	if err != nil || record == nil {
-		return domain.UnavailableNodeConnection("credential_unavailable")
-	}
-	payload, decErr := s.vault.Decrypt(record, node.Protocol)
-	if decErr != nil || payload == nil {
-		return domain.UnavailableNodeConnection("credential_decryption_failed")
-	}
-	if err := verifyCredentialIdentity(node, payload); err != nil {
-		return domain.UnavailableNodeConnection("identity_verification_failed")
-	}
-	return domain.ProjectSafeNodeConnection(payload)
+// NodePatchRequest represents a direct plaintext patch payload for a node.
+type NodePatchRequest struct {
+	DisplayName       *string                           `json:"display_name,omitempty"`
+	Server            *string                           `json:"server,omitempty"`
+	Port              *int                              `json:"port,omitempty"`
+	Credentials       *domain.InboundProtocolCredential `json:"credentials,omitempty"`
+	LocalAddress      []string                          `json:"local_address,omitempty"`
+	PublicKey         *string                           `json:"public_key,omitempty"`
+	PrivateKey        *string                           `json:"private_key,omitempty"`
+	PreSharedKey      *string                           `json:"pre_shared_key,omitempty"`
+	PresharedKey      *string                           `json:"preshared_key,omitempty"`
+	Reserved          []uint8                           `json:"reserved,omitempty"`
+	MTU               *int                              `json:"mtu,omitempty"`
+	DNS               []string                          `json:"dns,omitempty"`
+	UUID              *string                           `json:"uuid,omitempty"`
+	Password          *string                           `json:"password,omitempty"`
+	Method            *string                           `json:"method,omitempty"`
+	AlterID           *int                              `json:"alter_id,omitempty"`
+	CongestionControl *string                           `json:"congestion_control,omitempty"`
+	UDPRelayMode      *string                           `json:"udp_relay_mode,omitempty"`
+	ALPN              []string                          `json:"alpn,omitempty"`
+	SNI               *string                           `json:"sni,omitempty"`
+	DisableSNI        *bool                             `json:"disable_sni,omitempty"`
+	Username          *string                           `json:"username,omitempty"`
+	Transport         map[string]string                 `json:"transport,omitempty"`
 }
 
-func verifyCredentialIdentity(node domain.Node, payload *domain.NodeCredentialPayload) error {
-	if payload == nil {
-		return domain.NewValidationError("missing_credential_payload", "credential payload is nil")
-	}
-	if payload.LogicalID != node.LogicalID || payload.Protocol != node.Protocol || payload.Version != node.CredentialVersion {
-		return domain.NewConflictError("identity_binding_invalid", "credential envelope does not match node metadata")
-	}
-	if payload.Identity == nil {
-		return domain.NewConflictError("identity_binding_missing", "credential record lacks verified identity binding")
-	}
-	if err := payload.Identity.ValidateNonEmpty(); err != nil {
-		return domain.NewConflictError("identity_binding_invalid", "credential verified identity binding is incomplete")
-	}
-	if payload.Identity.LogicalID != node.LogicalID || payload.Identity.Protocol != node.Protocol || payload.Identity.Version != node.CredentialVersion {
-		return domain.NewConflictError("identity_binding_invalid", "credential verified identity binding does not match node version")
-	}
-	if !payload.Identity.MatchesEndpoint(node.Protocol, payload.Server, payload.Port) {
-		return domain.NewConflictError("identity_binding_invalid", "credential endpoint does not match verified identity binding")
-	}
-	if strings.TrimSpace(payload.Identity.TransportDigest) == "" {
-		return domain.NewConflictError("identity_binding_invalid", "credential verified identity binding lacks transport digest")
-	}
-	if payload.Credentials.Transport != nil && payload.Identity.TransportDigest != domain.CanonicalTransportDigest(payload.Credentials.Transport) {
-		return domain.NewConflictError("identity_binding_invalid", "credential transport digest does not match verified identity binding")
-	}
-	if strings.HasPrefix(node.LogicalID, "node_") && domain.IsValidLogicalID(node.LogicalID) {
-		idWithTransport := domain.ComputeNodeLogicalID(payload.Protocol, payload.Server, payload.Port, payload.Credentials.Transport)
-		idWithoutTransport := domain.ComputeNodeLogicalID(payload.Protocol, payload.Server, payload.Port, nil)
-		if idWithTransport != node.LogicalID && idWithoutTransport != node.LogicalID {
-			return domain.NewConflictError("identity_binding_invalid", "credential endpoint does not match canonical node logical identity")
-		}
-	}
-	return nil
-}
-
-// UpdateNodeConnectionCommand encapsulates a CAS-protected node connection update and optional secret rotation.
+// UpdateNodeConnectionCommand encapsulates a plaintext node update request.
 type UpdateNodeConnectionCommand struct {
 	LogicalID string
-	Patch     domain.NodeConnectionPatchRequest
+	Patch     NodePatchRequest
 	RequestID string
 	ActorKind domain.ActorKind
 }
 
-// UpdateNodeConnection validates and persists non-identity connection edits and write-only secret rotations.
+// UpdateNodeConnection directly updates plaintext node fields in the nodes table.
 func (s *Service) UpdateNodeConnection(ctx context.Context, cmd UpdateNodeConnectionCommand) (*NodeDetail, error) {
 	logicalID := strings.TrimSpace(cmd.LogicalID)
 	if logicalID == "" {
 		return nil, domain.NewValidationError("missing_logical_id", "logical_id is required")
 	}
-	if cmd.Patch.ExpectedCredentialVersion < 1 {
-		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "node.connection.update", domain.AuditResultFailure,
-			fmt.Sprintf("rejected node %s connection update: missing expected_credential_version", logicalID))
-		return nil, domain.NewValidationError("missing_expected_credential_version", "expected_credential_version must be >= 1")
-	}
-	if s.vault == nil || s.credRepo == nil || s.db == nil {
-		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "node.connection.update", domain.AuditResultFailure,
-			fmt.Sprintf("rejected node %s connection update: credential vault unavailable", logicalID))
-		return nil, domain.NewConflictError("credential_vault_unavailable", "node credential vault is not configured")
-	}
 
 	s.mu.Lock()
-	var oldVersion, newVersion int
-	var rotatedCount int
-	txErr := sqlite.WithTx(ctx, s.db, func(ctx context.Context, tx *sql.Tx) error {
-		var node domain.Node
-		var activeInt int
-		var createdStr, updatedStr string
-		err := tx.QueryRowContext(ctx, `
-			SELECT logical_id, protocol, display_name, normalized_config_secret_ref, credential_version, active, created_at, updated_at
-			FROM nodes WHERE logical_id = ?;`, logicalID).Scan(
-			&node.LogicalID, &node.Protocol, &node.DisplayName, &node.NormalizedConfigSecretRef,
-			&node.CredentialVersion, &activeInt, &createdStr, &updatedStr,
-		)
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return domain.NewNotFoundError("node_not_found", fmt.Sprintf("node %s not found", logicalID))
-			}
-			return fmt.Errorf("failed to query node %s: %w", logicalID, err)
-		}
-		node.Active = activeInt == 1
-		oldVersion = node.CredentialVersion
-		if node.CredentialVersion <= 0 {
-			return domain.NewNotFoundError("node_credential_not_found", "node credentials are unavailable")
-		}
-		if cmd.Patch.ExpectedCredentialVersion != node.CredentialVersion {
-			return domain.NewConflictError("credential_version_conflict",
-				fmt.Sprintf("expected credential version %d does not match current version %d", cmd.Patch.ExpectedCredentialVersion, node.CredentialVersion))
-		}
+	node, err := s.nodes.GetByLogicalID(ctx, logicalID)
+	if err != nil {
+		s.mu.Unlock()
+		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "node.connection.update", domain.AuditResultFailure,
+			fmt.Sprintf("failed to load node %s: %s", logicalID, domain.RedactSensitiveInfo(err.Error())))
+		return nil, err
+	}
 
-		var rec domain.NodeCredentialRecord
-		var recCreated, recUpdated string
-		err = tx.QueryRowContext(ctx, `
-			SELECT logical_id, version, key_id, nonce, ciphertext, created_at, updated_at
-			FROM node_credentials WHERE logical_id = ? AND version = ?;`, logicalID, node.CredentialVersion).Scan(
-			&rec.LogicalID, &rec.Version, &rec.KeyID, &rec.Nonce, &rec.Ciphertext, &recCreated, &recUpdated,
-		)
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return domain.NewNotFoundError("node_credential_not_found", "node credentials are unavailable")
-			}
-			return fmt.Errorf("failed to query node credentials: %w", err)
+	updated := *node
+	if cmd.Patch.DisplayName != nil {
+		trimmed := strings.TrimSpace(*cmd.Patch.DisplayName)
+		if trimmed == "" {
+			s.mu.Unlock()
+			return nil, domain.NewValidationError("invalid_display_name", "display_name cannot be empty")
 		}
+		updated.DisplayName = trimmed
+	}
+	if cmd.Patch.Server != nil {
+		trimmed := strings.TrimSpace(*cmd.Patch.Server)
+		if trimmed == "" {
+			s.mu.Unlock()
+			return nil, domain.NewValidationError("invalid_server", "server cannot be empty")
+		}
+		updated.Server = trimmed
+	}
+	if cmd.Patch.Port != nil {
+		if *cmd.Patch.Port <= 0 || *cmd.Patch.Port > 65535 {
+			s.mu.Unlock()
+			return nil, domain.NewValidationError("invalid_port", "port must be between 1 and 65535")
+		}
+		updated.Port = *cmd.Patch.Port
+	}
 
-		currentPayload, decErr := s.vault.Decrypt(&rec, node.Protocol)
-		if decErr != nil || currentPayload == nil {
-			return domain.NewSecurityError("credential_decryption_failed", "failed to authenticate or decrypt existing node credentials")
+	updatedCreds := updated.Credentials
+	if cmd.Patch.Credentials != nil {
+		updatedCreds = *cmd.Patch.Credentials
+	}
+	if updatedCreds.Transport != nil {
+		copiedTransport := make(map[string]string, len(updatedCreds.Transport))
+		for k, v := range updatedCreds.Transport {
+			copiedTransport[k] = v
 		}
-		if err := verifyCredentialIdentity(node, currentPayload); err != nil {
-			return err
+		updatedCreds.Transport = copiedTransport
+	}
+	if cmd.Patch.Transport != nil {
+		copiedTransport := make(map[string]string, len(cmd.Patch.Transport))
+		for k, v := range cmd.Patch.Transport {
+			copiedTransport[k] = v
 		}
-		if err := cmd.Patch.ValidateAgainstBaseline(*currentPayload.Identity, currentPayload); err != nil {
-			return err
-		}
+		updatedCreds.Transport = copiedTransport
+	}
 
-		updatedDisplayName := node.DisplayName
-		if cmd.Patch.DisplayName != nil {
-			trimmed := strings.TrimSpace(*cmd.Patch.DisplayName)
+	if cmd.Patch.LocalAddress != nil {
+		addrs := make([]string, 0, len(cmd.Patch.LocalAddress))
+		for _, a := range cmd.Patch.LocalAddress {
+			trimmed := strings.TrimSpace(a)
 			if trimmed == "" {
-				return domain.NewValidationError("invalid_display_name", "display_name cannot be empty")
+				continue
 			}
-			updatedDisplayName = trimmed
+			prefix, pErr := netip.ParsePrefix(trimmed)
+			if pErr != nil {
+				s.mu.Unlock()
+				return nil, domain.NewValidationError("invalid_local_address", "WireGuard local_address must be valid CIDR")
+			}
+			addrs = append(addrs, prefix.String())
 		}
+		if node.Protocol == domain.ProtocolWireGuard && len(addrs) == 0 {
+			s.mu.Unlock()
+			return nil, domain.NewValidationError("invalid_local_address", "WireGuard local_address cannot be empty")
+		}
+		updatedCreds.LocalAddress = addrs
+	}
+	if cmd.Patch.PublicKey != nil {
+		pk := strings.TrimSpace(*cmd.Patch.PublicKey)
+		if node.Protocol == domain.ProtocolWireGuard && pk == "" {
+			s.mu.Unlock()
+			return nil, domain.NewValidationError("invalid_public_key", "WireGuard public_key cannot be empty")
+		}
+		updatedCreds.PublicKey = pk
+	}
+	if cmd.Patch.PrivateKey != nil {
+		pk := strings.TrimSpace(*cmd.Patch.PrivateKey)
+		if node.Protocol == domain.ProtocolWireGuard && pk == "" {
+			s.mu.Unlock()
+			return nil, domain.NewValidationError("invalid_private_key", "WireGuard private_key cannot be empty")
+		}
+		updatedCreds.PrivateKey = pk
+	}
+	if cmd.Patch.PreSharedKey != nil {
+		psk := strings.TrimSpace(*cmd.Patch.PreSharedKey)
+		updatedCreds.PreSharedKey = psk
+		updatedCreds.PresharedKey = psk
+	}
+	if cmd.Patch.PresharedKey != nil {
+		psk := strings.TrimSpace(*cmd.Patch.PresharedKey)
+		updatedCreds.PreSharedKey = psk
+		updatedCreds.PresharedKey = psk
+	}
+	if cmd.Patch.Reserved != nil {
+		if len(cmd.Patch.Reserved) > 0 && len(cmd.Patch.Reserved) != 3 {
+			s.mu.Unlock()
+			return nil, domain.NewValidationError("invalid_reserved", "WireGuard reserved must contain 3 bytes")
+		}
+		updatedCreds.Reserved = append([]uint8(nil), cmd.Patch.Reserved...)
+	}
+	if cmd.Patch.MTU != nil {
+		if *cmd.Patch.MTU != 0 && (*cmd.Patch.MTU < 576 || *cmd.Patch.MTU > 9000) {
+			s.mu.Unlock()
+			return nil, domain.NewValidationError("invalid_mtu", "WireGuard mtu must be between 576 and 9000")
+		}
+		updatedCreds.MTU = *cmd.Patch.MTU
+	}
+	if cmd.Patch.DNS != nil {
+		dnsList := make([]string, 0, len(cmd.Patch.DNS))
+		for _, d := range cmd.Patch.DNS {
+			if td := strings.TrimSpace(d); td != "" {
+				dnsList = append(dnsList, td)
+			}
+		}
+		updatedCreds.DNS = dnsList
+	}
+	if cmd.Patch.UUID != nil {
+		u := strings.TrimSpace(*cmd.Patch.UUID)
+		if (node.Protocol == domain.ProtocolTUIC || node.Protocol == domain.ProtocolVMess || node.Protocol == domain.ProtocolVLESS) && u == "" {
+			s.mu.Unlock()
+			return nil, domain.NewValidationError("invalid_uuid", "uuid cannot be empty")
+		}
+		updatedCreds.UUID = u
+	}
+	if cmd.Patch.Password != nil {
+		pw := strings.TrimSpace(*cmd.Patch.Password)
+		if (node.Protocol == domain.ProtocolTUIC || node.Protocol == domain.ProtocolSS || node.Protocol == domain.ProtocolTrojan || node.Protocol == domain.ProtocolHysteria2) && pw == "" {
+			s.mu.Unlock()
+			return nil, domain.NewValidationError("invalid_password", "password cannot be empty")
+		}
+		updatedCreds.Password = pw
+	}
+	if cmd.Patch.Method != nil {
+		m := strings.TrimSpace(*cmd.Patch.Method)
+		if node.Protocol == domain.ProtocolSS && m == "" {
+			s.mu.Unlock()
+			return nil, domain.NewValidationError("invalid_method", "Shadowsocks cipher method cannot be empty")
+		}
+		updatedCreds.Method = m
+	}
+	if cmd.Patch.AlterID != nil {
+		updatedCreds.AlterID = *cmd.Patch.AlterID
+	}
+	if cmd.Patch.CongestionControl != nil {
+		cc := strings.TrimSpace(*cmd.Patch.CongestionControl)
+		if node.Protocol == domain.ProtocolTUIC && cc != "" && cc != "bbr" && cc != "cubic" && cc != "new_reno" {
+			s.mu.Unlock()
+			return nil, domain.NewValidationError("invalid_congestion_control", "TUIC congestion_control must be bbr, cubic, or new_reno")
+		}
+		updatedCreds.CongestionControl = cc
+	}
+	if cmd.Patch.UDPRelayMode != nil {
+		urm := strings.TrimSpace(*cmd.Patch.UDPRelayMode)
+		if node.Protocol == domain.ProtocolTUIC && urm != "" && urm != "native" && urm != "quic" {
+			s.mu.Unlock()
+			return nil, domain.NewValidationError("invalid_udp_relay_mode", "TUIC udp_relay_mode must be native or quic")
+		}
+		updatedCreds.UDPRelayMode = urm
+	}
+	if cmd.Patch.ALPN != nil {
+		alpnList := make([]string, 0, len(cmd.Patch.ALPN))
+		for _, a := range cmd.Patch.ALPN {
+			if ta := strings.TrimSpace(a); ta != "" {
+				alpnList = append(alpnList, ta)
+			}
+		}
+		updatedCreds.ALPN = alpnList
+	}
+	if cmd.Patch.SNI != nil {
+		updatedCreds.SNI = strings.TrimSpace(*cmd.Patch.SNI)
+	}
+	if cmd.Patch.DisableSNI != nil {
+		updatedCreds.DisableSNI = *cmd.Patch.DisableSNI
+	}
+	if cmd.Patch.Username != nil {
+		updatedCreds.Username = strings.TrimSpace(*cmd.Patch.Username)
+	}
 
-		updatedCreds := currentPayload.Credentials
-		if currentPayload.Credentials.Transport != nil {
-			copiedTransport := make(map[string]string, len(currentPayload.Credentials.Transport))
-			for k, v := range currentPayload.Credentials.Transport {
-				copiedTransport[k] = v
-			}
-			updatedCreds.Transport = copiedTransport
-		}
-		if cmd.Patch.LocalAddress != nil {
-			addrs := make([]string, 0, len(cmd.Patch.LocalAddress))
-			for _, a := range cmd.Patch.LocalAddress {
-				trimmed := strings.TrimSpace(a)
-				if trimmed == "" {
-					continue
-				}
-				prefix, pErr := netip.ParsePrefix(trimmed)
-				if pErr != nil {
-					return domain.NewValidationError("invalid_local_address", "WireGuard local_address must be valid CIDR")
-				}
-				addrs = append(addrs, prefix.String())
-			}
-			if node.Protocol == domain.ProtocolWireGuard && len(addrs) == 0 {
-				return domain.NewValidationError("invalid_local_address", "WireGuard local_address cannot be empty")
-			}
-			updatedCreds.LocalAddress = addrs
-		}
-		if cmd.Patch.PublicKey != nil {
-			pk := strings.TrimSpace(*cmd.Patch.PublicKey)
-			if node.Protocol == domain.ProtocolWireGuard && pk == "" {
-				return domain.NewValidationError("invalid_public_key", "WireGuard public_key cannot be empty")
-			}
-			updatedCreds.PublicKey = pk
-		}
-		if cmd.Patch.Reserved != nil {
-			updatedCreds.Reserved = append([]uint8(nil), cmd.Patch.Reserved...)
-		}
-		if cmd.Patch.MTU != nil {
-			updatedCreds.MTU = *cmd.Patch.MTU
-		}
-		if cmd.Patch.DNS != nil {
-			dnsList := make([]string, 0, len(cmd.Patch.DNS))
-			for _, d := range cmd.Patch.DNS {
-				if td := strings.TrimSpace(d); td != "" {
-					dnsList = append(dnsList, td)
-				}
-			}
-			updatedCreds.DNS = dnsList
-		}
-		if cmd.Patch.UUID != nil {
-			u := strings.TrimSpace(*cmd.Patch.UUID)
-			if (node.Protocol == domain.ProtocolTUIC || node.Protocol == domain.ProtocolVMess || node.Protocol == domain.ProtocolVLESS) && u == "" {
-				return domain.NewValidationError("invalid_uuid", "uuid cannot be empty")
-			}
-			updatedCreds.UUID = u
-		}
-		if cmd.Patch.CongestionControl != nil {
-			cc := strings.TrimSpace(*cmd.Patch.CongestionControl)
-			if node.Protocol == domain.ProtocolTUIC && cc != "" && cc != "bbr" && cc != "cubic" && cc != "new_reno" {
-				return domain.NewValidationError("invalid_congestion_control", "TUIC congestion_control must be bbr, cubic, or new_reno")
-			}
-			updatedCreds.CongestionControl = cc
-		}
-		if cmd.Patch.UDPRelayMode != nil {
-			urm := strings.TrimSpace(*cmd.Patch.UDPRelayMode)
-			if node.Protocol == domain.ProtocolTUIC && urm != "" && urm != "native" && urm != "quic" {
-				return domain.NewValidationError("invalid_udp_relay_mode", "TUIC udp_relay_mode must be native or quic")
-			}
-			updatedCreds.UDPRelayMode = urm
-		}
-		if cmd.Patch.Method != nil {
-			m := strings.TrimSpace(*cmd.Patch.Method)
-			if node.Protocol == domain.ProtocolSS && m == "" {
-				return domain.NewValidationError("invalid_method", "Shadowsocks cipher method cannot be empty")
-			}
-			updatedCreds.Method = m
-		}
+	updated.Credentials = updatedCreds
+	updated.UpdatedAt = domain.NowUTC()
 
-		if pkIn := strings.TrimSpace(cmd.Patch.PrivateKeyInput); pkIn != "" {
-			if pkIn == "***" {
-				return domain.NewValidationError("invalid_private_key", "private_key_input must not be a masked placeholder")
-			}
-			updatedCreds.PrivateKey = pkIn
-			rotatedCount++
-		}
-		if pskIn := strings.TrimSpace(cmd.Patch.PreSharedKeyInput); pskIn != "" {
-			if pskIn == "***" {
-				return domain.NewValidationError("invalid_pre_shared_key", "pre_shared_key_input must not be a masked placeholder")
-			}
-			updatedCreds.PreSharedKey = pskIn
-			updatedCreds.PresharedKey = pskIn
-			rotatedCount++
-		}
-		if pwIn := strings.TrimSpace(cmd.Patch.PasswordInput); pwIn != "" {
-			if pwIn == "***" {
-				return domain.NewValidationError("invalid_password", "password_input must not be a masked placeholder")
-			}
-			updatedCreds.Password = pwIn
-			rotatedCount++
-		}
-
-		newVersion = node.CredentialVersion + 1
-		newIdentity := *currentPayload.Identity
-		newIdentity.Version = newVersion
-		newPayload := &domain.NodeCredentialPayload{
-			LogicalID:   node.LogicalID,
-			Protocol:    node.Protocol,
-			Server:      currentPayload.Server,
-			Port:        currentPayload.Port,
-			Version:     newVersion,
-			Digest:      currentPayload.Digest,
-			Identity:    &newIdentity,
-			Credentials: updatedCreds,
-		}
-		newRec, encErr := s.vault.Encrypt(newPayload)
-		if encErr != nil {
-			return encErr
-		}
-
-		nowStr := domain.NowUTC().Format(time.RFC3339)
-		res, err := tx.ExecContext(ctx, `
-			UPDATE nodes
-			SET display_name = ?, credential_version = ?, updated_at = ?
-			WHERE logical_id = ? AND credential_version = ?;`,
-			updatedDisplayName, newVersion, nowStr, node.LogicalID, node.CredentialVersion,
-		)
-		if err != nil {
-			return fmt.Errorf("failed to update node %s: %w", node.LogicalID, err)
-		}
-		if rows, _ := res.RowsAffected(); rows != 1 {
-			return domain.NewConflictError("credential_version_conflict", "concurrent credential version update detected")
-		}
-
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO node_credentials (logical_id, version, key_id, nonce, ciphertext, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?);`,
-			newRec.LogicalID, newRec.Version, newRec.KeyID, newRec.Nonce, newRec.Ciphertext, nowStr, nowStr,
-		); err != nil {
-			return fmt.Errorf("failed to insert rotated credential for node %s: %w", node.LogicalID, err)
-		}
-		return nil
-	})
+	upsertErr := s.nodes.UpsertBatch(ctx, []domain.Node{updated})
 	s.mu.Unlock()
 
-	if txErr != nil {
+	if upsertErr != nil {
 		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "node.connection.update", domain.AuditResultFailure,
-			fmt.Sprintf("failed to update node %s connection: %s", logicalID, domain.RedactSensitiveInfo(txErr.Error())))
-		return nil, txErr
+			fmt.Sprintf("failed to update node %s connection: %s", logicalID, domain.RedactSensitiveInfo(upsertErr.Error())))
+		return nil, upsertErr
 	}
 
 	s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "node.connection.update", domain.AuditResultSuccess,
-		fmt.Sprintf("updated node %s connection from v%d to v%d (rotated_secrets=%d)", logicalID, oldVersion, newVersion, rotatedCount))
+		fmt.Sprintf("updated node %s plaintext connection", logicalID))
 
 	return s.GetNodeDetailWithRisk(ctx, logicalID, "")
 }

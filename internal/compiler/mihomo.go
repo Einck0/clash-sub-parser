@@ -207,18 +207,17 @@ var allowedMihomoTransportKeys = map[domain.Protocol]map[string]bool{
 	},
 }
 
-func validateMihomoCredentials(snapshot *resolver.ResolvedPolicySnapshot, credentials map[string]*domain.NodeCredentialPayload) error {
+func validateMihomoCredentials(snapshot *resolver.ResolvedPolicySnapshot) error {
 	if len(snapshot.Nodes) == 0 {
 		return nil
 	}
 	for i, node := range snapshot.Nodes {
 		loc := fmt.Sprintf("nodes[%d]", i)
-		cred, err := validateCredentialEnvelope(domain.TargetMihomo, i, node, credentials)
-		if err != nil {
+		if err := validateCredentialEnvelope(domain.TargetMihomo, i, node); err != nil {
 			return err
 		}
 
-		c := cred.Credentials
+		c := node.Credentials
 		if err := validateMihomoTransportKeys(loc, node.Protocol, c.Transport); err != nil {
 			return err
 		}
@@ -542,16 +541,15 @@ type mihomoTUICProxy struct {
 	SkipCertVerify       bool     `yaml:"skip-cert-verify,omitempty"`
 }
 
-func renderMihomo(snapshot *resolver.ResolvedPolicySnapshot, credentials map[string]*domain.NodeCredentialPayload) ([]byte, error) {
-	if err := validateMihomoCredentials(snapshot, credentials); err != nil {
+func renderMihomo(snapshot *resolver.ResolvedPolicySnapshot) ([]byte, error) {
+	if err := validateMihomoCredentials(snapshot); err != nil {
 		return nil, err
 	}
 
 	proxies := make([]any, 0, len(snapshot.Nodes))
 	for i, node := range snapshot.Nodes {
 		loc := fmt.Sprintf("nodes[%d]", i)
-		cred := credentials[node.LogicalID]
-		c := cred.Credentials
+		c := node.Credentials
 		switch node.Protocol {
 		case domain.ProtocolHysteria2:
 			ports := domain.ExtractHy2Ports(c.Transport)
@@ -561,8 +559,8 @@ func renderMihomo(snapshot *resolver.ResolvedPolicySnapshot, credentials map[str
 			p := mihomoHysteria2Proxy{
 				Name:           node.DisplayName,
 				Type:           "hysteria2",
-				Server:         cred.Server,
-				Port:           cred.Port,
+				Server:         node.Server,
+				Port:           node.Port,
 				Ports:          ports,
 				Password:       c.Password,
 				SNI:            transportValue(c, "sni", "servername", "serverName", "peer"),
@@ -578,8 +576,8 @@ func renderMihomo(snapshot *resolver.ResolvedPolicySnapshot, credentials map[str
 			p := mihomoSSProxy{
 				Name:     node.DisplayName,
 				Type:     "ss",
-				Server:   cred.Server,
-				Port:     cred.Port,
+				Server:   node.Server,
+				Port:     node.Port,
 				Cipher:   c.Method,
 				Password: c.Password,
 				Plugin:   transportValue(c, "plugin"),
@@ -593,8 +591,8 @@ func renderMihomo(snapshot *resolver.ResolvedPolicySnapshot, credentials map[str
 			p := mihomoVMessProxy{
 				Name:              node.DisplayName,
 				Type:              "vmess",
-				Server:            cred.Server,
-				Port:              cred.Port,
+				Server:            node.Server,
+				Port:              node.Port,
 				UUID:              strings.TrimSpace(c.UUID),
 				AlterID:           c.AlterID,
 				Cipher:            cipher,
@@ -633,8 +631,8 @@ func renderMihomo(snapshot *resolver.ResolvedPolicySnapshot, credentials map[str
 			p := mihomoVLESSProxy{
 				Name:              node.DisplayName,
 				Type:              "vless",
-				Server:            cred.Server,
-				Port:              cred.Port,
+				Server:            node.Server,
+				Port:              node.Port,
 				UUID:              strings.TrimSpace(c.UUID),
 				Network:           strings.ToLower(transportValue(c, "network")),
 				TLS:               domain.IsTruthy(transportValue(c, "tls")) || realityOpts != nil,
@@ -664,8 +662,8 @@ func renderMihomo(snapshot *resolver.ResolvedPolicySnapshot, credentials map[str
 			p := mihomoTrojanProxy{
 				Name:              node.DisplayName,
 				Type:              "trojan",
-				Server:            cred.Server,
-				Port:              cred.Port,
+				Server:            node.Server,
+				Port:              node.Port,
 				Password:          c.Password,
 				Network:           strings.ToLower(transportValue(c, "network")),
 				SNI:               transportValue(c, "sni", "servername", "serverName", "peer"),
@@ -709,8 +707,8 @@ func renderMihomo(snapshot *resolver.ResolvedPolicySnapshot, credentials map[str
 			p := mihomoWireGuardProxy{
 				Name:             node.DisplayName,
 				Type:             "wireguard",
-				Server:           cred.Server,
-				Port:             cred.Port,
+				Server:           node.Server,
+				Port:             node.Port,
 				IP:               ipv4,
 				IPv6:             ipv6,
 				PrivateKey:       strings.TrimSpace(c.PrivateKey),
@@ -727,8 +725,8 @@ func renderMihomo(snapshot *resolver.ResolvedPolicySnapshot, credentials map[str
 			p := mihomoTUICProxy{
 				Name:                 node.DisplayName,
 				Type:                 "tuic",
-				Server:               cred.Server,
-				Port:                 cred.Port,
+				Server:               node.Server,
+				Port:                 node.Port,
 				UUID:                 strings.TrimSpace(c.UUID),
 				Password:             c.Password,
 				CongestionController: strings.ToLower(transportValue(c, "congestion_control", "congestion-control", "congestion_controller", "congestion-controller")),

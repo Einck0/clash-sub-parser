@@ -24,6 +24,7 @@ func registerNodeRoutes(r chi.Router, service *inventory.Service) {
 	h := nodeHandler{service: service}
 	r.Get("/nodes", h.list)
 	r.Get("/nodes/{logical_id}", h.get)
+	r.Patch("/nodes/{logical_id}", h.patchConnection)
 	r.Patch("/nodes/{logical_id}/connection", h.patchConnection)
 }
 
@@ -156,9 +157,7 @@ func (h nodeHandler) get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	nodeView := inventory.ToNodeView(detail.Node)
-	nodeView.Connection = detail.Connection
 	nodeView.IPRiskSummary = detail.IPRiskSummary
-	nodeView.CredentialMismatch = detail.CredentialMismatch
 	resp := NodeDetailResponse{
 		Node:          nodeView,
 		Sources:       sources,
@@ -176,7 +175,7 @@ func (h nodeHandler) patchConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var body domain.NodeConnectionPatchRequest
+	var body inventory.NodePatchRequest
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
@@ -205,9 +204,7 @@ func (h nodeHandler) patchConnection(w http.ResponseWriter, r *http.Request) {
 		sources = make([]domain.NodeSource, 0)
 	}
 	nodeView := inventory.ToNodeView(detail.Node)
-	nodeView.Connection = detail.Connection
 	nodeView.IPRiskSummary = detail.IPRiskSummary
-	nodeView.CredentialMismatch = detail.CredentialMismatch
 	resp := NodeDetailResponse{
 		Node:          nodeView,
 		Sources:       sources,

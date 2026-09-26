@@ -1,5 +1,5 @@
 import type { ToastTone } from '../../ui/toast'
-import { redactPreviewSecrets, type CompilerTarget } from '../publications/publicationTypes'
+import type { CompilerTarget } from '../publications/publicationTypes'
 
 export type CapabilityStatus = 'available' | 'restricted' | 'unknown' | 'error' | 'stale' | 'missing'
 
@@ -22,23 +22,26 @@ export const SUPPORTED_NODE_PROTOCOLS: readonly NodeProtocol[] = [
   'tuic',
 ] as const
 
-export interface ApiSafeNodeConnection {
-  available?: boolean
-  unavailable_reason?: string
+export interface NodeConnectionInput {
   server?: string
   port?: number
   local_address?: string[]
   public_key?: string
+  private_key?: string
+  pre_shared_key?: string
+  preshared_key?: string
   reserved?: number[]
   mtu?: number
   dns?: string[]
   uuid?: string
+  password?: string
+  method?: string
+  alter_id?: number
   congestion_control?: string
   udp_relay_mode?: string
   alpn?: string[]
   sni?: string
   disable_sni?: boolean
-  method?: string
   flow?: string
   reality_public_key?: string
   reality_short_id?: string
@@ -46,37 +49,31 @@ export interface ApiSafeNodeConnection {
   up?: string
   down?: string
   obfs?: string
-  has_private_key?: boolean
-  has_pre_shared_key?: boolean
-  has_password?: boolean
-}
-
-export interface NodeCredentialsInput extends ApiSafeNodeConnection {
-  password?: string
-  alter_id?: number
-  private_key?: string
-  preshared_key?: string
-  pre_shared_key?: string
+  username?: string
   transport?: Record<string, string>
 }
 
-export interface SafeNodeConnectionProfile {
-  available: boolean
-  unavailableReason?: string
+export type ApiSafeNodeConnection = NodeConnectionInput
+export type NodeCredentialsInput = NodeConnectionInput
+
+export interface NodeConnectionProfile {
   server: string
   port: number
   localAddress: string[]
   publicKey: string
+  privateKey: string
+  preSharedKey: string
   reserved: number[]
   mtu?: number
   dns: string[]
   uuid: string
+  password: string
+  method: string
   congestionControl: string
   udpRelayMode: string
   alpn: string[]
   sni: string
   disableSni: boolean
-  method?: string
   flow?: string
   realityPublicKey?: string
   realityShortId?: string
@@ -84,13 +81,9 @@ export interface SafeNodeConnectionProfile {
   up?: string
   down?: string
   obfs?: string
-  privateKeyMasked: '***'
-  preSharedKeyMasked: '***'
-  passwordMasked: '***'
-  hasPrivateKey: boolean
-  hasPreSharedKey: boolean
-  hasPassword: boolean
 }
+
+export type SafeNodeConnectionProfile = NodeConnectionProfile
 
 export interface NodeSourceRecord {
   node_logical_id: string
@@ -103,16 +96,14 @@ export interface NodeRecord {
   protocol: string
   display_name: string
   active: boolean
-  credential_version?: number
   created_at?: string
   updated_at?: string
   capabilities?: Record<string, CapabilityStatus>
   probe_stale?: boolean
   probe_missing?: boolean
-  credential_mismatch?: boolean
   server?: string
   port?: number
-  connection?: ApiSafeNodeConnection
+  connection?: NodeConnectionInput
   credentials?: NodeCredentialsInput
   sources?: NodeSourceRecord[]
 }
@@ -122,19 +113,13 @@ export interface NormalizedNode {
   protocol: string
   displayName: string
   active: boolean
-  credentialVersion?: number
   createdAt?: string
   updatedAt?: string
   capabilities: Record<string, CapabilityStatus>
   probeStale?: boolean
   probeMissing?: boolean
-  credentialMismatch?: boolean
-  connection: SafeNodeConnectionProfile
+  connection: NodeConnectionProfile
   sources?: NodeSourceRecord[]
-}
-
-export function maskSecretReference(_value: string): string {
-  return '***'
 }
 
 export function protocolSupportedTargets(protocol: string): readonly CompilerTarget[] {
@@ -154,144 +139,99 @@ export function protocolSupportedTargets(protocol: string): readonly CompilerTar
   }
 }
 
-export function sanitizeNodeConnection(node: NodeRecord): SafeNodeConnectionProfile {
+export function sanitizeNodeConnection(node: NodeRecord): NodeConnectionProfile {
   const conn = node.connection
   const raw = node.credentials
-  const transport = raw?.transport ?? {}
+  const transport = raw?.transport ?? conn?.transport ?? {}
 
-  const server = (conn?.server ?? node.server ?? raw?.server ?? '').trim()
-  const port = conn?.port ?? node.port ?? raw?.port ?? 0
+  const server = (node.server ?? conn?.server ?? raw?.server ?? '').trim()
+  const port = node.port ?? conn?.port ?? raw?.port ?? 0
 
-  const explicitAvailable =
-    conn && typeof conn.available === 'boolean'
-      ? conn.available
-      : Boolean(server && port >= 1 && port <= 65535)
-
-  if (!explicitAvailable || !server || port < 1 || port > 65535) {
-    return {
-      available: false,
-      unavailableReason: conn?.unavailable_reason || 'credential_unavailable',
-      server: '',
-      port: 0,
-      localAddress: [],
-      publicKey: '',
-      reserved: [],
-      mtu: undefined,
-      dns: [],
-      uuid: '',
-      congestionControl: '',
-      udpRelayMode: '',
-      alpn: [],
-      sni: '',
-      disableSni: false,
-      privateKeyMasked: '***',
-      preSharedKeyMasked: '***',
-      passwordMasked: '***',
-      hasPrivateKey: false,
-      hasPreSharedKey: false,
-      hasPassword: false,
-    }
-  }
-
-  const rawLocal = conn?.local_address ?? raw?.local_address
+  const rawLocal = raw?.local_address ?? conn?.local_address
   const localAddress = Array.isArray(rawLocal)
     ? rawLocal.map((s) => String(s).trim()).filter(Boolean)
     : []
 
-  const publicKey = (conn?.public_key ?? raw?.public_key ?? transport.public_key ?? '').trim()
+  const publicKey = (raw?.public_key ?? conn?.public_key ?? transport.public_key ?? '').trim()
+  const privateKey = (raw?.private_key ?? conn?.private_key ?? '').trim()
+  const preSharedKey = (
+    raw?.pre_shared_key ??
+    raw?.preshared_key ??
+    conn?.pre_shared_key ??
+    conn?.preshared_key ??
+    ''
+  ).trim()
 
-  const rawReserved = conn?.reserved ?? raw?.reserved
+  const rawReserved = raw?.reserved ?? conn?.reserved
   const reserved = Array.isArray(rawReserved)
     ? rawReserved.map((n) => Number(n)).filter((n) => !Number.isNaN(n))
     : []
 
-  const mtu = conn?.mtu ?? raw?.mtu
-  const rawDns = conn?.dns ?? raw?.dns
+  const mtu = raw?.mtu ?? conn?.mtu
+  const rawDns = raw?.dns ?? conn?.dns
   const dns = Array.isArray(rawDns)
     ? rawDns.map((s) => String(s).trim()).filter(Boolean)
     : []
 
-  const uuid = (conn?.uuid ?? raw?.uuid ?? '').trim()
+  const uuid = (raw?.uuid ?? conn?.uuid ?? '').trim()
+  const password = (raw?.password ?? conn?.password ?? '').trim()
+  const method = (raw?.method ?? conn?.method ?? transport.cipher ?? '').trim()
   const congestionControl = (
-    conn?.congestion_control ??
     raw?.congestion_control ??
+    conn?.congestion_control ??
     transport.congestion_control ??
     ''
   ).trim()
   const udpRelayMode = (
-    conn?.udp_relay_mode ??
     raw?.udp_relay_mode ??
+    conn?.udp_relay_mode ??
     transport.udp_relay_mode ??
     ''
   ).trim()
 
-  const rawAlpn = conn?.alpn ?? raw?.alpn
+  const rawAlpn = raw?.alpn ?? conn?.alpn
   const alpn = Array.isArray(rawAlpn)
     ? rawAlpn.map((s) => String(s).trim()).filter(Boolean)
     : transport.alpn
     ? transport.alpn.split(',').map((s) => s.trim()).filter(Boolean)
     : []
 
-  const sni = (conn?.sni ?? raw?.sni ?? transport.sni ?? transport.servername ?? '').trim()
+  const sni = (raw?.sni ?? conn?.sni ?? transport.sni ?? transport.servername ?? '').trim()
   const disableSni =
-    Boolean(conn?.disable_sni ?? raw?.disable_sni) ||
+    Boolean(raw?.disable_sni ?? conn?.disable_sni) ||
     ['true', '1', 'yes', 'on'].includes((transport.disable_sni || transport['disable-sni'] || '').toLowerCase())
 
-  const hasPrivateKey =
-    typeof conn?.has_private_key === 'boolean'
-      ? conn.has_private_key
-      : Boolean(raw?.private_key && raw.private_key.trim())
-  const hasPreSharedKey =
-    typeof conn?.has_pre_shared_key === 'boolean'
-      ? conn.has_pre_shared_key
-      : Boolean(
-          (raw?.pre_shared_key && raw.pre_shared_key.trim()) ||
-            (raw?.preshared_key && raw.preshared_key.trim())
-        )
-  const hasPassword =
-    typeof conn?.has_password === 'boolean'
-      ? conn.has_password
-      : Boolean(raw?.password && raw.password.trim())
-
   return {
-    available: true,
     server,
     port,
     localAddress,
     publicKey,
+    privateKey,
+    preSharedKey,
     reserved,
     mtu,
     dns,
     uuid,
+    password,
+    method,
     congestionControl,
     udpRelayMode,
     alpn,
     sni,
     disableSni,
-    method: conn?.method || raw?.method || transport.cipher || undefined,
-    flow: conn?.flow || transport.flow || undefined,
-    realityPublicKey: conn?.reality_public_key || transport.pbk || undefined,
-    realityShortId: conn?.reality_short_id || transport.sid || undefined,
-    clientFingerprint: conn?.client_fingerprint || transport.fp || undefined,
-    up: conn?.up || transport.up || undefined,
-    down: conn?.down || transport.down || undefined,
-    obfs: conn?.obfs || transport.obfs || undefined,
-    privateKeyMasked: '***',
-    preSharedKeyMasked: '***',
-    passwordMasked: '***',
-    hasPrivateKey,
-    hasPreSharedKey,
-    hasPassword,
+    flow: conn?.flow || raw?.flow || transport.flow || undefined,
+    realityPublicKey: conn?.reality_public_key || raw?.reality_public_key || transport.pbk || undefined,
+    realityShortId: conn?.reality_short_id || raw?.reality_short_id || transport.sid || undefined,
+    clientFingerprint: conn?.client_fingerprint || raw?.client_fingerprint || transport.fp || undefined,
+    up: conn?.up || raw?.up || transport.up || undefined,
+    down: conn?.down || raw?.down || transport.down || undefined,
+    obfs: conn?.obfs || raw?.obfs || transport.obfs || undefined,
   }
 }
 
 export function validateNodeConnectionProfile(
   protocol: string,
-  draft: Partial<SafeNodeConnectionProfile> & {
-    privateKeyInput?: string
-    preSharedKeyInput?: string
-    passwordInput?: string
-  }
+  draft: Partial<NodeConnectionProfile>
 ): string | null {
   const proto = protocol.trim().toLowerCase()
   if (!draft.server || !draft.server.trim()) {
@@ -309,8 +249,7 @@ export function validateNodeConnectionProfile(
     if (!draft.publicKey || !draft.publicKey.trim()) {
       return 'WireGuard requires peer public_key'
     }
-    const hasPriv = Boolean(draft.hasPrivateKey || (draft.privateKeyInput && draft.privateKeyInput.trim()))
-    if (!hasPriv) {
+    if (!draft.privateKey || !draft.privateKey.trim()) {
       return 'WireGuard requires private_key'
     }
     if (draft.mtu !== undefined && draft.mtu !== 0 && (draft.mtu < 576 || draft.mtu > 9000)) {
@@ -322,8 +261,7 @@ export function validateNodeConnectionProfile(
     if (!draft.uuid || !draft.uuid.trim()) {
       return 'TUIC requires uuid'
     }
-    const hasPass = Boolean(draft.hasPassword || (draft.passwordInput && draft.passwordInput.trim()))
-    if (!hasPass) {
+    if (!draft.password || !draft.password.trim()) {
       return 'TUIC requires password'
     }
   }
@@ -331,15 +269,12 @@ export function validateNodeConnectionProfile(
   return null
 }
 
-export function renderSafeNodePreview(
+export function renderNodePreview(
   node: NormalizedNode,
   target: 'mihomo' | 'singbox' = 'mihomo'
 ): string {
   const proto = node.protocol.trim().toLowerCase()
   const conn = node.connection
-  if (!conn.available || !conn.server || conn.port < 1) {
-    return `# Connection details unavailable (${conn.unavailableReason || 'credential_unavailable'})`
-  }
 
   if (target === 'singbox') {
     if (proto === 'wireguard') {
@@ -347,19 +282,19 @@ export function renderSafeNodePreview(
         type: 'wireguard',
         tag: node.displayName,
         address: conn.localAddress,
-        private_key: '***',
+        private_key: conn.privateKey,
         peers: [
           {
             address: conn.server,
             port: conn.port,
             public_key: conn.publicKey,
-            ...(conn.hasPreSharedKey ? { pre_shared_key: '***' } : {}),
+            ...(conn.preSharedKey ? { pre_shared_key: conn.preSharedKey } : {}),
             ...(conn.reserved.length === 3 ? { reserved: conn.reserved } : {}),
           },
         ],
         ...(conn.mtu ? { mtu: conn.mtu } : {}),
       }
-      return redactPreviewSecrets(JSON.stringify({ endpoints: [wgEndpoint] }, null, 2))
+      return JSON.stringify({ endpoints: [wgEndpoint] }, null, 2)
     }
 
     if (proto === 'tuic') {
@@ -369,7 +304,7 @@ export function renderSafeNodePreview(
         server: conn.server,
         server_port: conn.port,
         uuid: conn.uuid,
-        password: '***',
+        password: conn.password,
         ...(conn.congestionControl ? { congestion_control: conn.congestionControl } : {}),
         ...(conn.udpRelayMode ? { udp_relay_mode: conn.udpRelayMode } : {}),
         tls: {
@@ -379,7 +314,7 @@ export function renderSafeNodePreview(
           ...(conn.disableSni ? { disable_sni: true } : {}),
         },
       }
-      return redactPreviewSecrets(JSON.stringify({ outbounds: [tuicOutbound] }, null, 2))
+      return JSON.stringify({ outbounds: [tuicOutbound] }, null, 2)
     }
 
     const genericOutbound: Record<string, unknown> = {
@@ -388,9 +323,20 @@ export function renderSafeNodePreview(
       server: conn.server,
       server_port: conn.port,
       ...(conn.uuid ? { uuid: conn.uuid } : {}),
-      ...(conn.hasPassword ? { password: '***' } : {}),
+      ...(conn.method ? { method: conn.method } : {}),
+      ...(conn.password ? { password: conn.password } : {}),
+      ...(conn.sni || conn.alpn.length > 0 || conn.disableSni
+        ? {
+            tls: {
+              enabled: true,
+              ...(conn.sni ? { server_name: conn.sni } : {}),
+              ...(conn.alpn.length > 0 ? { alpn: conn.alpn } : {}),
+              ...(conn.disableSni ? { disable_sni: true } : {}),
+            },
+          }
+        : {}),
     }
-    return redactPreviewSecrets(JSON.stringify({ outbounds: [genericOutbound] }, null, 2))
+    return JSON.stringify({ outbounds: [genericOutbound] }, null, 2)
   }
 
   if (proto === 'wireguard') {
@@ -406,9 +352,9 @@ export function renderSafeNodePreview(
     if (ipv4) lines.push(`    ip: ${ipv4}`)
     if (ipv6) lines.push(`    ipv6: ${ipv6}`)
     lines.push(`    public-key: ${conn.publicKey}`)
-    lines.push('    private-key: ***')
-    if (conn.hasPreSharedKey) {
-      lines.push('    pre-shared-key: ***')
+    lines.push(`    private-key: ${conn.privateKey}`)
+    if (conn.preSharedKey) {
+      lines.push(`    pre-shared-key: ${conn.preSharedKey}`)
     }
     if (conn.mtu) {
       lines.push(`    mtu: ${conn.mtu}`)
@@ -420,7 +366,7 @@ export function renderSafeNodePreview(
       lines.push(`    reserved: [${conn.reserved.join(', ')}]`)
     }
     lines.push('    udp: true')
-    return redactPreviewSecrets(lines.join('\n'))
+    return lines.join('\n')
   }
 
   if (proto === 'tuic') {
@@ -431,7 +377,7 @@ export function renderSafeNodePreview(
       `    server: ${conn.server}`,
       `    port: ${conn.port}`,
       `    uuid: ${conn.uuid}`,
-      '    password: ***',
+      `    password: ${conn.password}`,
     ]
     if (conn.congestionControl) {
       lines.push(`    congestion-controller: ${conn.congestionControl}`)
@@ -449,7 +395,7 @@ export function renderSafeNodePreview(
       lines.push('    disable-sni: true')
     }
     lines.push('    udp: true')
-    return redactPreviewSecrets(lines.join('\n'))
+    return lines.join('\n')
   }
 
   const lines = [
@@ -461,14 +407,19 @@ export function renderSafeNodePreview(
   ]
   if (conn.uuid) lines.push(`    uuid: ${conn.uuid}`)
   if (conn.method) lines.push(`    cipher: ${conn.method}`)
-  if (conn.hasPassword) lines.push('    password: ***')
+  if (conn.password) lines.push(`    password: ${conn.password}`)
+  if (conn.sni) lines.push(`    sni: ${conn.sni}`)
+  if (conn.alpn.length > 0) lines.push(`    alpn: [${conn.alpn.join(', ')}]`)
+  if (conn.disableSni) lines.push('    disable-sni: true')
   if (conn.realityPublicKey) {
     lines.push('    reality-opts:')
     lines.push(`      public-key: ${conn.realityPublicKey}`)
     if (conn.realityShortId) lines.push(`      short-id: ${conn.realityShortId}`)
   }
-  return redactPreviewSecrets(lines.join('\n'))
+  return lines.join('\n')
 }
+
+export const renderSafeNodePreview = renderNodePreview
 
 export function normalizeNode(node: NodeRecord): NormalizedNode {
   const logicalId = node.logical_id || (node as any).logicalId || ''
@@ -485,13 +436,11 @@ export function normalizeNode(node: NodeRecord): NormalizedNode {
     protocol: node.protocol,
     displayName: rawDisplayName.trim() || logicalId,
     active: node.active,
-    credentialVersion: node.credential_version,
     createdAt: node.created_at,
     updatedAt: node.updated_at,
     capabilities: node.capabilities ?? {},
     probeStale,
     probeMissing,
-    credentialMismatch: Boolean(node.credential_mismatch),
     connection: sanitizeNodeConnection(normalizedInput),
     sources: node.sources,
   }

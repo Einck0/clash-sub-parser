@@ -57,8 +57,8 @@ func seed10000Nodes(t *testing.T, db *sql.DB) {
 	defer func() { _ = tx.Rollback() }()
 
 	nodeStmt, err := tx.Prepare(`
-		INSERT INTO nodes (logical_id, protocol, display_name, normalized_config_secret_ref, active, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO nodes (logical_id, protocol, display_name, server, port, config_json, active, created_at, updated_at)
+		VALUES (?, ?, ?, '203.0.113.10', 8388, '{}', ?, ?, ?)
 	`)
 	if err != nil {
 		t.Fatalf("failed to prepare node stmt: %v", err)
@@ -109,7 +109,6 @@ func seed10000Nodes(t *testing.T, db *sql.DB) {
 		}
 
 		displayName := fmt.Sprintf("Node-%s-%05d", region, i)
-		secretRef := fmt.Sprintf("secret://credentials/node-%05d?token=super-secret-pw-%05d", i, i)
 
 		// 7,000 active, 3,000 inactive
 		active := 1
@@ -119,7 +118,7 @@ func seed10000Nodes(t *testing.T, db *sql.DB) {
 
 		timestamp := now.Add(time.Duration(i) * time.Second).Format(time.RFC3339)
 
-		if _, err := nodeStmt.Exec(logicalID, string(proto), displayName, secretRef, active, timestamp, timestamp); err != nil {
+		if _, err := nodeStmt.Exec(logicalID, string(proto), displayName, active, timestamp, timestamp); err != nil {
 			t.Fatalf("failed to insert node %d: %v", i, err)
 		}
 
@@ -165,9 +164,9 @@ func TestNodeDetailIncludesAPISafeRiskSummary(t *testing.T) {
 	nodeID := "node_0123456789abcdef"
 
 	_, err := db.ExecContext(ctx, `
-		INSERT INTO nodes (logical_id, protocol, display_name, normalized_config_secret_ref, active, created_at, updated_at)
-		VALUES (?, ?, ?, ?, 1, ?, ?);`,
-		nodeID, string(domain.ProtocolSS), "Risk detail node", "secret://node/private", now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
+		INSERT INTO nodes (logical_id, protocol, display_name, server, port, config_json, active, created_at, updated_at)
+		VALUES (?, ?, ?, '203.0.113.10', 8388, '{}', 1, ?, ?);`,
+		nodeID, string(domain.ProtocolSS), "Risk detail node", now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
 	if err != nil {
 		t.Fatalf("insert node: %v", err)
 	}
@@ -674,12 +673,7 @@ func TestNodeDetailConnectionAndPatchHTTPContract(t *testing.T) {
 	ctx := context.Background()
 	db := newCleanSQLiteDB(t)
 
-	vault, err := domain.NewNodeCredentialVault("k1", map[string][]byte{"k1": []byte("01234567890123456789012345678901")})
-	if err != nil {
-		t.Fatalf("create vault: %v", err)
-	}
 	nodeRepo := sqlite.NewNodeRepository(db)
-	credRepo := sqlite.NewNodeCredentialRepository(db)
 	auditRepo := sqlite.NewAuditRepository(db)
 	sourceRepo := sqlite.NewNodeSourceRepository(db)
 	subRepo := sqlite.NewSubscriptionRepository(db)
@@ -687,58 +681,30 @@ func TestNodeDetailConnectionAndPatchHTTPContract(t *testing.T) {
 
 	now := time.Now().UTC()
 	wgID := domain.ComputeNodeLogicalID(domain.ProtocolWireGuard, "198.51.100.55", 51820, map[string]string{"network": "wireguard"})
-	unavailID := domain.ComputeNodeLogicalID(domain.ProtocolTUIC, "198.51.100.56", 8443, map[string]string{"network": "quic"})
 
 	if err := nodeRepo.UpsertBatch(ctx, []domain.Node{
 		{
-			LogicalID:                 wgID,
-			Protocol:                  domain.ProtocolWireGuard,
-			DisplayName:               "WG HTTP Edge",
-			NormalizedConfigSecretRef: "secret://wg-http-edge",
-			CredentialVersion:         1,
-			Active:                    true,
-			CreatedAt:                 now,
-			UpdatedAt:                 now,
-		},
-		{
-			LogicalID:                 unavailID,
-			Protocol:                  domain.ProtocolTUIC,
-			DisplayName:               "TUIC Missing Cred",
-			NormalizedConfigSecretRef: "secret://tuic-unavail",
-			CredentialVersion:         1,
-			Active:                    true,
-			CreatedAt:                 now,
-			UpdatedAt:                 now,
+			LogicalID:   wgID,
+			Protocol:    domain.ProtocolWireGuard,
+			DisplayName: "WG HTTP Edge",
+			Server:      "198.51.100.55",
+			Port:        51820,
+			Credentials: domain.InboundProtocolCredential{
+				LocalAddress: []string{"10.0.0.2/32"},
+				PublicKey:    "wg-peer-pub-key-1",
+				PrivateKey:   "PLAIN-WG-PRIV-KEY-V1",
+				PreSharedKey: "PLAIN-WG-PSK-V1",
+				MTU:          1420,
+				DNS:          []string{"1.1.1.1"},
+				Reserved:     []uint8{0, 0, 0},
+				Transport:    map[string]string{"network": "wireguard"},
+			},
+			Active:    true,
+			CreatedAt: now,
+			UpdatedAt: now,
 		},
 	}); err != nil {
 		t.Fatalf("upsert nodes: %v", err)
-	}
-
-	wgIdentity := domain.NewVerifiedNodeIdentity(wgID, domain.ProtocolWireGuard, "198.51.100.55", 51820, 1, map[string]string{"network": "wireguard"})
-	wgPayload := &domain.NodeCredentialPayload{
-		LogicalID: wgID,
-		Protocol:  domain.ProtocolWireGuard,
-		Server:    "198.51.100.55",
-		Port:      51820,
-		Version:   1,
-		Identity:  &wgIdentity,
-		Credentials: domain.InboundProtocolCredential{
-			LocalAddress: []string{"10.0.0.2/32"},
-			PublicKey:    "wg-peer-pub-key-1",
-			PrivateKey:   "TOP-SECRET-WG-PRIV-KEY-V1",
-			PreSharedKey: "TOP-SECRET-WG-PSK-V1",
-			MTU:          1420,
-			DNS:          []string{"1.1.1.1"},
-			Reserved:     []uint8{0, 0, 0},
-			Transport:    map[string]string{"network": "wireguard"},
-		},
-	}
-	wgRec, err := vault.Encrypt(wgPayload)
-	if err != nil {
-		t.Fatalf("encrypt wg payload: %v", err)
-	}
-	if err := credRepo.Upsert(ctx, wgRec); err != nil {
-		t.Fatalf("upsert wg credential: %v", err)
 	}
 
 	routerCfg := newTestRouterConfig(true)
@@ -749,12 +715,11 @@ func TestNodeDetailConnectionAndPatchHTTPContract(t *testing.T) {
 		nodeRepo,
 		sourceRepo,
 		nil,
-		inventory.WithCredentialVault(vault, credRepo),
 		inventory.WithAuditRepository(auditRepo),
 	)
 	router := transporthttp.NewRouter(routerCfg)
 
-	// 1. GET /api/v1/nodes/{id} returns safe node.connection without plaintext secrets
+	// 1. GET /api/v1/nodes/{id} returns full plaintext node info
 	{
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/nodes/"+wgID, nil)
 		req.Header.Set("Authorization", "Bearer "+testAdminToken)
@@ -763,42 +728,19 @@ func TestNodeDetailConnectionAndPatchHTTPContract(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("expected 200 OK for GET /nodes/%s, got %d: %s", wgID, rec.Code, rec.Body.String())
 		}
-		rawBody := rec.Body.String()
-		if strings.Contains(rawBody, "TOP-SECRET-WG-PRIV-KEY-V1") || strings.Contains(rawBody, "TOP-SECRET-WG-PSK-V1") {
-			t.Fatalf("SECURITY LEAK: GET /nodes/{id} leaked plaintext secret: %s", rawBody)
-		}
 		var detailResp nodeDetailResponse
 		if err := json.Unmarshal(rec.Body.Bytes(), &detailResp); err != nil {
 			t.Fatalf("unmarshal detail: %v", err)
 		}
-		conn := detailResp.Data.Node.Connection
-		if conn == nil || !conn.Available || !conn.HasPrivateKey || !conn.HasPreSharedKey {
-			t.Fatalf("expected available connection with has_private_key & has_pre_shared_key: %+v", conn)
-		}
-		if conn.Server != "198.51.100.55" || conn.Port != 51820 || conn.PublicKey != "wg-peer-pub-key-1" {
-			t.Fatalf("unexpected connection projection: %+v", conn)
+		node := detailResp.Data.Node
+		if node.Server != "198.51.100.55" || node.Port != 51820 || node.Credentials == nil || node.Credentials.PrivateKey != "PLAIN-WG-PRIV-KEY-V1" || node.Credentials.PublicKey != "wg-peer-pub-key-1" {
+			t.Fatalf("unexpected plaintext node detail: %+v", node)
 		}
 	}
 
-	// 2. GET /api/v1/nodes/{id} for node without credentials returns available=false
+	// 2. PATCH /api/v1/nodes/{id}/connection requires auth and CSRF for session cookies
 	{
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/nodes/"+unavailID, nil)
-		req.Header.Set("Authorization", "Bearer "+testAdminToken)
-		rec := httptest.NewRecorder()
-		router.ServeHTTP(rec, req)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected 200 OK for GET /nodes/%s, got %d", unavailID, rec.Code)
-		}
-		var detailResp nodeDetailResponse
-		_ = json.Unmarshal(rec.Body.Bytes(), &detailResp)
-		if detailResp.Data.Node.Connection == nil || detailResp.Data.Node.Connection.Available {
-			t.Fatalf("expected available=false for missing credential node, got %+v", detailResp.Data.Node.Connection)
-		}
-	}
-
-	// 3. PATCH /api/v1/nodes/{id}/connection requires auth and CSRF for session cookies
-	{
-		unauthReq := httptest.NewRequest(http.MethodPatch, "/api/v1/nodes/"+wgID+"/connection", strings.NewReader(`{"expected_credential_version":1}`))
+		unauthReq := httptest.NewRequest(http.MethodPatch, "/api/v1/nodes/"+wgID+"/connection", strings.NewReader(`{"mtu":1380}`))
 		unauthReq.Header.Set("Content-Type", "application/json")
 		unauthRec := httptest.NewRecorder()
 		router.ServeHTTP(unauthRec, unauthReq)
@@ -806,7 +748,7 @@ func TestNodeDetailConnectionAndPatchHTTPContract(t *testing.T) {
 			t.Fatalf("expected 401 for unauthenticated PATCH, got %d", unauthRec.Code)
 		}
 
-		cookieNoCSRF := httptest.NewRequest(http.MethodPatch, "/api/v1/nodes/"+wgID+"/connection", strings.NewReader(`{"expected_credential_version":1}`))
+		cookieNoCSRF := httptest.NewRequest(http.MethodPatch, "/api/v1/nodes/"+wgID+"/connection", strings.NewReader(`{"mtu":1380}`))
 		cookieNoCSRF.Header.Set("Content-Type", "application/json")
 		cookieNoCSRF.AddCookie(&http.Cookie{Name: transporthttp.SessionCookieName, Value: testValidSessionID})
 		noCSRFRec := httptest.NewRecorder()
@@ -816,14 +758,15 @@ func TestNodeDetailConnectionAndPatchHTTPContract(t *testing.T) {
 		}
 	}
 
-	// 4. PATCH /api/v1/nodes/{id}/connection with valid session + CSRF updates fields, rotates write-only secrets, and bumps version to 2
+	// 3. PATCH /api/v1/nodes/{id}/connection and PATCH /api/v1/nodes/{id} directly update plaintext fields (including server & port)
 	{
 		patchJSON := `{
-			"expected_credential_version": 1,
 			"display_name": "WG HTTP Edge v2",
+			"server": "203.0.113.200",
+			"port": 51821,
 			"local_address": ["10.0.0.88/32", "fd00::88/128"],
 			"mtu": 1380,
-			"private_key_input": "ROTATED-WG-PRIV-KEY-HTTP-V2"
+			"private_key": "UPDATED-WG-PRIV-KEY-HTTP-V2"
 		}`
 		req := httptest.NewRequest(http.MethodPatch, "/api/v1/nodes/"+wgID+"/connection", strings.NewReader(patchJSON))
 		req.Header.Set("Content-Type", "application/json")
@@ -834,37 +777,23 @@ func TestNodeDetailConnectionAndPatchHTTPContract(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("expected 200 OK for valid PATCH, got %d: %s", rec.Code, rec.Body.String())
 		}
-		if strings.Contains(rec.Body.String(), "ROTATED-WG-PRIV-KEY-HTTP-V2") || strings.Contains(rec.Body.String(), "TOP-SECRET") {
-			t.Fatalf("SECURITY LEAK: PATCH response leaked secret: %s", rec.Body.String())
-		}
 		var detailResp nodeDetailResponse
 		_ = json.Unmarshal(rec.Body.Bytes(), &detailResp)
-		if detailResp.Data.Node.CredentialVersion != 2 || detailResp.Data.Node.DisplayName != "WG HTTP Edge v2" {
-			t.Fatalf("expected version 2 and updated display name, got %+v", detailResp.Data.Node)
+		if detailResp.Data.Node.DisplayName != "WG HTTP Edge v2" || detailResp.Data.Node.Server != "203.0.113.200" || detailResp.Data.Node.Port != 51821 {
+			t.Fatalf("expected updated display_name/server/port, got %+v", detailResp.Data.Node)
 		}
-		if detailResp.Data.Node.Connection == nil || detailResp.Data.Node.Connection.MTU != 1380 || len(detailResp.Data.Node.Connection.LocalAddress) != 2 {
-			t.Fatalf("unexpected updated connection: %+v", detailResp.Data.Node.Connection)
-		}
-	}
-
-	// 5. Stale expected_credential_version -> 409 credential_version_conflict; server mutation -> 409 identity_mutation_forbidden
-	{
-		staleReq := httptest.NewRequest(http.MethodPatch, "/api/v1/nodes/"+wgID+"/connection", strings.NewReader(`{"expected_credential_version":1,"mtu":1400}`))
-		staleReq.Header.Set("Authorization", "Bearer "+testAdminToken)
-		staleReq.Header.Set("Content-Type", "application/json")
-		staleRec := httptest.NewRecorder()
-		router.ServeHTTP(staleRec, staleReq)
-		if staleRec.Code != http.StatusConflict || !strings.Contains(staleRec.Body.String(), "credential_version_conflict") {
-			t.Fatalf("expected 409 credential_version_conflict, got %d: %s", staleRec.Code, staleRec.Body.String())
+		if detailResp.Data.Node.Credentials == nil || detailResp.Data.Node.Credentials.MTU != 1380 || detailResp.Data.Node.Credentials.PrivateKey != "UPDATED-WG-PRIV-KEY-HTTP-V2" || len(detailResp.Data.Node.Credentials.LocalAddress) != 2 {
+			t.Fatalf("unexpected updated credentials: %+v", detailResp.Data.Node.Credentials)
 		}
 
-		idMutReq := httptest.NewRequest(http.MethodPatch, "/api/v1/nodes/"+wgID+"/connection", strings.NewReader(`{"expected_credential_version":2,"server":"203.0.113.200"}`))
-		idMutReq.Header.Set("Authorization", "Bearer "+testAdminToken)
-		idMutReq.Header.Set("Content-Type", "application/json")
-		idMutRec := httptest.NewRecorder()
-		router.ServeHTTP(idMutRec, idMutReq)
-		if idMutRec.Code != http.StatusConflict || !strings.Contains(idMutRec.Body.String(), "identity_mutation_forbidden") {
-			t.Fatalf("expected 409 identity_mutation_forbidden, got %d: %s", idMutRec.Code, idMutRec.Body.String())
+		// Also verify PATCH /api/v1/nodes/{id} route alias
+		aliasReq := httptest.NewRequest(http.MethodPatch, "/api/v1/nodes/"+wgID, strings.NewReader(`{"mtu":1400}`))
+		aliasReq.Header.Set("Authorization", "Bearer "+testAdminToken)
+		aliasReq.Header.Set("Content-Type", "application/json")
+		aliasRec := httptest.NewRecorder()
+		router.ServeHTTP(aliasRec, aliasReq)
+		if aliasRec.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK on PATCH /api/v1/nodes/{id}, got %d: %s", aliasRec.Code, aliasRec.Body.String())
 		}
 	}
 }
@@ -924,8 +853,8 @@ func seed10000NodesBenchmark(b *testing.B, db *sql.DB) {
 	defer func() { _ = tx.Rollback() }()
 
 	nodeStmt, err := tx.Prepare(`
-		INSERT INTO nodes (logical_id, protocol, display_name, normalized_config_secret_ref, active, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO nodes (logical_id, protocol, display_name, server, port, config_json, active, created_at, updated_at)
+		VALUES (?, ?, ?, '203.0.113.10', 443, '{}', ?, ?, ?)
 	`)
 	if err != nil {
 		b.Fatalf("failed to prepare stmt: %v", err)
@@ -936,9 +865,8 @@ func seed10000NodesBenchmark(b *testing.B, db *sql.DB) {
 	for i := 1; i <= 10000; i++ {
 		logicalID := fmt.Sprintf("bench-node-%05d", i)
 		displayName := fmt.Sprintf("Bench-Node-%05d", i)
-		secretRef := fmt.Sprintf("secret://bench/%05d", i)
 		ts := now.Format(time.RFC3339)
-		if _, err := nodeStmt.Exec(logicalID, "vmess", displayName, secretRef, 1, ts, ts); err != nil {
+		if _, err := nodeStmt.Exec(logicalID, "vmess", displayName, 1, ts, ts); err != nil {
 			b.Fatalf("failed to insert bench node %d: %v", i, err)
 		}
 	}

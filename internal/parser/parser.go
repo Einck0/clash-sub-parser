@@ -1,10 +1,8 @@
-// Package parser normalizes supported subscription formats without retaining credentials.
+// Package parser normalizes supported subscription formats and extracts node configurations.
 package parser
 
 import (
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"fmt"
 	"net"
 	"net/netip"
@@ -15,13 +13,13 @@ import (
 	"clash-sub-parser/internal/domain"
 )
 
-// NormalizedNode is the non-secret normalized representation used by inventory reconciliation.
+// NormalizedNode is the normalized node representation used by inventory reconciliation.
 type NormalizedNode struct {
-	Node      domain.Node
-	Server    string
-	Port      int
-	Transport map[string]string
-	Identity  domain.VerifiedNodeIdentity
+	Node        domain.Node
+	Server      string
+	Port        int
+	Transport   map[string]string
+	Credentials domain.InboundProtocolCredential
 }
 
 // Result reports parsed nodes and malformed or unsupported input entries that were skipped.
@@ -31,7 +29,7 @@ type Result struct {
 }
 
 // Parse accepts a Clash or Mihomo YAML proxy list, a Base64 subscription, or URL lines.
-// It delegates to ExtractWithCredentials and projects only non-secret normalized node fields.
+// It delegates to ExtractWithCredentials and returns normalized nodes with full credentials.
 func Parse(content []byte) (Result, error) {
 	extracted, err := ExtractWithCredentials(content)
 	if err != nil {
@@ -114,31 +112,6 @@ func yamlTransport(proxy map[string]any, protocol domain.Protocol) map[string]st
 	return transport
 }
 
-func yamlSecrets(proxy map[string]any, protocol domain.Protocol) []string {
-	keys := []string{"password", "uuid", "private-key", "private_key", "public-key", "public_key", "psk", "pre-shared-key", "pre_shared_key", "preshared-key", "preshared_key", "obfs-password", "obfs_password"}
-	if protocol == domain.ProtocolSS {
-		keys = append(keys, "cipher")
-	}
-	secrets := make([]string, 0, len(keys))
-	for _, key := range keys {
-		if secret := value(proxy, key); secret != "" {
-			secrets = append(secrets, secret)
-		}
-	}
-	if protocol == domain.ProtocolWireGuard {
-		if peers, ok := proxy["peers"].([]any); ok && len(peers) > 0 {
-			if firstPeer, ok := peers[0].(map[string]any); ok {
-				for _, key := range []string{"public-key", "public_key", "pre-shared-key", "pre_shared_key", "preshared-key", "preshared_key", "psk"} {
-					if secret := value(firstPeer, key); secret != "" {
-						secrets = append(secrets, secret)
-					}
-				}
-			}
-		}
-	}
-	return secrets
-}
-
 func urlTransport(u *url.URL, protocol domain.Protocol) map[string]string {
 	query := u.Query()
 	transport := map[string]string{"network": strings.ToLower(defaultValue(query.Get("type"), "tcp"))}
@@ -190,29 +163,7 @@ func urlTransport(u *url.URL, protocol domain.Protocol) map[string]string {
 	return transport
 }
 
-func urlSecrets(u *url.URL, protocol domain.Protocol) []string {
-	secrets := []string{}
-	if u.User != nil {
-		secrets = append(secrets, u.User.Username())
-		if password, ok := u.User.Password(); ok {
-			secrets = append(secrets, password)
-		}
-	}
-	query := u.Query()
-	for _, key := range []string{"password", "uuid", "private_key", "private-key", "public_key", "public-key", "psk", "pre_shared_key", "pre-shared-key", "preshared_key", "preshared-key", "obfs-password", "obfs_password"} {
-		if value := query.Get(key); value != "" {
-			secrets = append(secrets, value)
-		}
-	}
-	if protocol == domain.ProtocolSS && u.User != nil {
-		if decoded, ok := decodeBase64(u.User.Username()); ok {
-			secrets = append(secrets, decoded)
-		}
-	}
-	return secrets
-}
-
-func newNormalizedNode(protocol domain.Protocol, name, server string, port int, transport map[string]string, secrets []string) NormalizedNode {
+func newNormalizedNode(protocol domain.Protocol, name, server string, port int, transport map[string]string, creds domain.InboundProtocolCredential) NormalizedNode {
 	server = strings.ToLower(strings.TrimSpace(server))
 	normTransport := make(map[string]string, len(transport))
 	for key, value := range transport {
@@ -224,30 +175,25 @@ func newNormalizedNode(protocol domain.Protocol, name, server string, port int, 
 		normTransport[key] = trimmed
 	}
 	logicalID := domain.ComputeNodeLogicalID(protocol, server, port, normTransport)
-	identity := domain.NewVerifiedNodeIdentity(logicalID, protocol, server, port, 1, normTransport)
-	secretRef := opaqueSecretRef(protocol, server, port, secrets)
 	if name == "" {
 		name = net.JoinHostPort(server, strconv.Itoa(port))
 	}
+	creds.Transport = transport
 	return NormalizedNode{
 		Node: domain.Node{
-			LogicalID:                 logicalID,
-			Protocol:                  protocol,
-			DisplayName:               name,
-			NormalizedConfigSecretRef: secretRef,
-			Identity:                  &identity,
-			Active:                    true,
+			LogicalID:   logicalID,
+			Protocol:    protocol,
+			DisplayName: name,
+			Server:      server,
+			Port:        port,
+			Credentials: creds,
+			Active:      true,
 		},
-		Server:    server,
-		Port:      port,
-		Transport: normTransport,
-		Identity:  identity,
+		Server:      server,
+		Port:        port,
+		Transport:   normTransport,
+		Credentials: creds,
 	}
-}
-
-func opaqueSecretRef(protocol domain.Protocol, server string, port int, secrets []string) string {
-	hash := sha256.Sum256([]byte(strings.Join(append([]string{string(protocol), server, strconv.Itoa(port)}, secrets...), "\x00")))
-	return "secret_" + hex.EncodeToString(hash[:16])
 }
 
 func endpoint(server, rawPort string) (string, int, error) {

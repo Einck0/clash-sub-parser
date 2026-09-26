@@ -2,8 +2,6 @@ package probe_test
 
 import (
 	"context"
-	"crypto/rand"
-	"database/sql"
 	"errors"
 	"fmt"
 	"net"
@@ -24,169 +22,69 @@ import (
 	"github.com/sagernet/sing-box/option"
 )
 
-type memoryCredRepo struct {
-	mu      sync.Mutex
-	records map[string]*domain.NodeCredentialRecord // key: logicalID:version
-}
-
-func newMemoryCredRepo() *memoryCredRepo {
-	return &memoryCredRepo{
-		records: make(map[string]*domain.NodeCredentialRecord),
-	}
-}
-
-func (m *memoryCredRepo) Upsert(ctx context.Context, record *domain.NodeCredentialRecord) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	key := m.key(record.LogicalID, record.Version)
-	m.records[key] = record
-	return nil
-}
-
-func (m *memoryCredRepo) GetByLogicalID(ctx context.Context, logicalID string, version int) (*domain.NodeCredentialRecord, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	key := m.key(logicalID, version)
-	rec, ok := m.records[key]
-	if !ok {
-		return nil, nil
-	}
-	return rec, nil
-}
-
-func (m *memoryCredRepo) GetLatestByLogicalID(ctx context.Context, logicalID string) (*domain.NodeCredentialRecord, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	var latest *domain.NodeCredentialRecord
-	for _, rec := range m.records {
-		if rec.LogicalID == logicalID {
-			if latest == nil || rec.Version > latest.Version {
-				latest = rec
-			}
-		}
-	}
-	return latest, nil
-}
-
-func (m *memoryCredRepo) GetLatestByLogicalIDTx(ctx context.Context, tx *sql.Tx, logicalID string) (*domain.NodeCredentialRecord, error) {
-	return m.GetLatestByLogicalID(ctx, logicalID)
-}
-
-func (m *memoryCredRepo) DeleteByLogicalID(ctx context.Context, logicalID string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	prefix := logicalID + ":"
-	for k := range m.records {
-		if strings.HasPrefix(k, prefix) {
-			delete(m.records, k)
-		}
-	}
-	return nil
-}
-
-func (m *memoryCredRepo) key(logicalID string, version int) string {
-	return fmt.Sprintf("%s:%d", logicalID, version)
-}
-
-func createTestVault(t *testing.T) *domain.NodeCredentialVault {
-	t.Helper()
-	key := make([]byte, 32)
-	if _, err := rand.Read(key); err != nil {
-		t.Fatalf("failed to generate random key: %v", err)
-	}
-	vault, err := domain.NewNodeCredentialVault("k1", map[string][]byte{"k1": key})
-	if err != nil {
-		t.Fatalf("failed to create vault: %v", err)
-	}
-	return vault
-}
-
-// 1. TestSafeNodeDialerOldZeroAndVersionMismatch tests version <= 0 and version mismatch between node and record
-func TestSafeNodeDialerOldZeroAndVersionMismatch(t *testing.T) {
-	vault := createTestVault(t)
-	repo := newMemoryCredRepo()
-	dialer := probe.NewSafeNodeDialer(repo, vault)
+// 1. TestSafeNodeDialerMissingServerOrPort tests missing LogicalID, empty server, and invalid port
+func TestSafeNodeDialerMissingServerOrPort(t *testing.T) {
+	dialer := probe.NewSafeNodeDialer()
 	ctx := context.Background()
 
-	// 1.1 Old node with CredentialVersion == 0
-	nodeZero := domain.Node{
-		LogicalID:         "node-zero",
-		Protocol:          domain.ProtocolSS,
-		CredentialVersion: 0,
-	}
-	client, cleanup, err := dialer(ctx, nodeZero)
-	if err == nil {
-		if cleanup != nil {
-			_ = cleanup()
-		}
-		t.Fatal("expected error for CredentialVersion=0, got nil")
-	}
-	if !errors.Is(err, probe.ErrCredentialsUnavailable) {
-		t.Fatalf("expected ErrCredentialsUnavailable, got %v", err)
-	}
-	if client != nil {
-		t.Fatal("expected nil client on failure")
-	}
-
-	// 1.2 Node with negative version
-	nodeNegative := domain.Node{
-		LogicalID:         "node-neg",
-		Protocol:          domain.ProtocolSS,
-		CredentialVersion: -1,
-	}
-	client, cleanup, err = dialer(ctx, nodeNegative)
-	if err == nil {
-		if cleanup != nil {
-			_ = cleanup()
-		}
-		t.Fatal("expected error for CredentialVersion=-1, got nil")
-	}
-	if !errors.Is(err, probe.ErrCredentialsUnavailable) {
-		t.Fatalf("expected ErrCredentialsUnavailable, got %v", err)
-	}
-
-	// 1.3 Record version mismatch: repo has version 1, node requests version 2
-	payload1 := &domain.NodeCredentialPayload{
-		LogicalID: "node-v1",
-		Version:   1,
+	// 1.1 Empty LogicalID
+	nodeEmptyID := domain.Node{
+		LogicalID: "",
 		Protocol:  domain.ProtocolSS,
 		Server:    "198.51.100.1",
 		Port:      8388,
-		Credentials: domain.InboundProtocolCredential{
-			Method:   "aes-128-gcm",
-			Password: "secret-password-1",
-		},
 	}
-	rec1, err := vault.Encrypt(payload1)
-	if err != nil {
-		t.Fatalf("failed to encrypt payload: %v", err)
-	}
-	if err := repo.Upsert(ctx, rec1); err != nil {
-		t.Fatalf("failed to save record: %v", err)
-	}
-
-	nodeReq2 := domain.Node{
-		LogicalID:         "node-v1",
-		Protocol:          domain.ProtocolSS,
-		CredentialVersion: 2, // version 2 doesn't exist in repo
-	}
-	client, cleanup, err = dialer(ctx, nodeReq2)
+	client, cleanup, err := dialer(ctx, nodeEmptyID)
 	if err == nil {
 		if cleanup != nil {
 			_ = cleanup()
 		}
-		t.Fatal("expected error for version mismatch/not found, got nil")
+		t.Fatal("expected error for empty LogicalID, got nil")
 	}
-	if !errors.Is(err, probe.ErrCredentialsUnavailable) {
-		t.Fatalf("expected ErrCredentialsUnavailable, got %v", err)
+	if !errors.Is(err, probe.ErrCredentialsUnavailable) || client != nil {
+		t.Fatalf("expected ErrCredentialsUnavailable and nil client, got err=%v client=%v", err, client)
+	}
+
+	// 1.2 Empty Server
+	nodeEmptyServer := domain.Node{
+		LogicalID: "node-empty-server",
+		Protocol:  domain.ProtocolSS,
+		Server:    "",
+		Port:      8388,
+	}
+	client, cleanup, err = dialer(ctx, nodeEmptyServer)
+	if err == nil {
+		if cleanup != nil {
+			_ = cleanup()
+		}
+		t.Fatal("expected error for empty Server, got nil")
+	}
+	if !errors.Is(err, probe.ErrCredentialsUnavailable) || client != nil {
+		t.Fatalf("expected ErrCredentialsUnavailable and nil client, got err=%v client=%v", err, client)
+	}
+
+	// 1.3 Invalid Port
+	nodeInvalidPort := domain.Node{
+		LogicalID: "node-bad-port",
+		Protocol:  domain.ProtocolSS,
+		Server:    "198.51.100.1",
+		Port:      0,
+	}
+	client, cleanup, err = dialer(ctx, nodeInvalidPort)
+	if err == nil {
+		if cleanup != nil {
+			_ = cleanup()
+		}
+		t.Fatal("expected error for Port=0, got nil")
+	}
+	if !errors.Is(err, probe.ErrCredentialsUnavailable) || client != nil {
+		t.Fatalf("expected ErrCredentialsUnavailable and nil client, got err=%v client=%v", err, client)
 	}
 }
 
 // 2. TestSafeNodeDialerRejectsPrivateAndCarrierGradeIPs tests rejection of 100.64.0.0/10, 10.0.0.0/8, 127.0.0.1, etc.
 func TestSafeNodeDialerRejectsPrivateAndCarrierGradeIPs(t *testing.T) {
-	vault := createTestVault(t)
-	repo := newMemoryCredRepo()
-	dialer := probe.NewSafeNodeDialer(repo, vault)
+	dialer := probe.NewSafeNodeDialer()
 	ctx := context.Background()
 
 	testIPs := []struct {
@@ -205,10 +103,8 @@ func TestSafeNodeDialerRejectsPrivateAndCarrierGradeIPs(t *testing.T) {
 	}
 
 	for i, tc := range testIPs {
-		logicalID := fmt.Sprintf("node-ip-%d", i)
-		payload := &domain.NodeCredentialPayload{
-			LogicalID: logicalID,
-			Version:   1,
+		node := domain.Node{
+			LogicalID: fmt.Sprintf("node-ip-%d", i),
 			Protocol:  domain.ProtocolSS,
 			Server:    tc.ip,
 			Port:      8388,
@@ -216,17 +112,6 @@ func TestSafeNodeDialerRejectsPrivateAndCarrierGradeIPs(t *testing.T) {
 				Method:   "aes-128-gcm",
 				Password: "password",
 			},
-		}
-		rec, err := vault.Encrypt(payload)
-		if err != nil {
-			t.Fatalf("[%s] vault.Encrypt failed: %v", tc.name, err)
-		}
-		_ = repo.Upsert(ctx, rec)
-
-		node := domain.Node{
-			LogicalID:         logicalID,
-			Protocol:          domain.ProtocolSS,
-			CredentialVersion: 1,
 		}
 
 		client, cleanup, err := dialer(ctx, node)
@@ -245,38 +130,21 @@ func TestSafeNodeDialerRejectsPrivateAndCarrierGradeIPs(t *testing.T) {
 	}
 }
 
-// 3. TestSafeNodeDialerCiphertextTamperingAndSanitization tests error message sanitization on corrupted ciphertext or wrong key
-func TestSafeNodeDialerCiphertextTamperingAndSanitization(t *testing.T) {
-	vault := createTestVault(t)
-	repo := newMemoryCredRepo()
-	dialer := probe.NewSafeNodeDialer(repo, vault)
+// 3. TestSafeNodeDialerErrorSanitization tests that secret passwords do not leak in error messages
+func TestSafeNodeDialerErrorSanitization(t *testing.T) {
+	dialer := probe.NewSafeNodeDialer()
 	ctx := context.Background()
 
 	secretPassword := "super-sensitive-secret-token-do-not-leak"
-	payload := &domain.NodeCredentialPayload{
-		LogicalID: "node-tamper",
-		Version:   1,
+	node := domain.Node{
+		LogicalID: "node-private-ip",
 		Protocol:  domain.ProtocolSS,
-		Server:    "198.51.100.1",
+		Server:    "10.0.0.1",
 		Port:      8388,
 		Credentials: domain.InboundProtocolCredential{
 			Method:   "aes-128-gcm",
 			Password: secretPassword,
 		},
-	}
-	rec, err := vault.Encrypt(payload)
-	if err != nil {
-		t.Fatalf("vault.Encrypt failed: %v", err)
-	}
-
-	// Corrupt ciphertext
-	rec.Ciphertext[0] ^= 0xff
-	_ = repo.Upsert(ctx, rec)
-
-	node := domain.Node{
-		LogicalID:         "node-tamper",
-		Protocol:          domain.ProtocolSS,
-		CredentialVersion: 1,
 	}
 
 	client, cleanup, err := dialer(ctx, node)
@@ -284,29 +152,19 @@ func TestSafeNodeDialerCiphertextTamperingAndSanitization(t *testing.T) {
 		if cleanup != nil {
 			_ = cleanup()
 		}
-		t.Fatal("expected error on tampered ciphertext, got nil")
+		t.Fatal("expected error on private IP, got nil")
 	}
-	if !errors.Is(err, probe.ErrCredentialsUnavailable) {
-		t.Fatalf("expected ErrCredentialsUnavailable, got %v", err)
+	if !errors.Is(err, probe.ErrCredentialsUnavailable) || client != nil {
+		t.Fatalf("expected ErrCredentialsUnavailable and nil client, got %v", err)
 	}
-	if client != nil {
-		t.Fatal("client must be nil")
-	}
-
-	errMsg := err.Error()
-	if strings.Contains(errMsg, secretPassword) {
-		t.Fatalf("error message leaks secret password: %s", errMsg)
-	}
-	if strings.Contains(errMsg, "aes-128-gcm") {
-		t.Fatalf("error message leaks cipher details: %s", errMsg)
+	if strings.Contains(err.Error(), secretPassword) {
+		t.Fatalf("error message leaks secret password: %s", err.Error())
 	}
 }
 
-// TestSafeNodeDialerRejectsDomainNames verifies unsafe or unresolvable domain entries remain fail-closed.
+// 4. TestSafeNodeDialerRejectsDomainNames verifies unsafe or unresolvable domain entries remain fail-closed.
 func TestSafeNodeDialerRejectsDomainNames(t *testing.T) {
-	vault := createTestVault(t)
-	repo := newMemoryCredRepo()
-	dialer := probe.NewSafeNodeDialer(repo, vault)
+	dialer := probe.NewSafeNodeDialer()
 	ctx := context.Background()
 
 	domains := []string{
@@ -316,10 +174,8 @@ func TestSafeNodeDialerRejectsDomainNames(t *testing.T) {
 	}
 
 	for i, domainName := range domains {
-		logicalID := fmt.Sprintf("node-dom-%d", i)
-		payload := &domain.NodeCredentialPayload{
-			LogicalID: logicalID,
-			Version:   1,
+		node := domain.Node{
+			LogicalID: fmt.Sprintf("node-dom-%d", i),
 			Protocol:  domain.ProtocolSS,
 			Server:    domainName,
 			Port:      8388,
@@ -328,17 +184,6 @@ func TestSafeNodeDialerRejectsDomainNames(t *testing.T) {
 				Password: "password",
 			},
 		}
-		rec, err := vault.Encrypt(payload)
-		if err != nil {
-			t.Fatalf("[%s] vault.Encrypt failed: %v", domainName, err)
-		}
-		_ = repo.Upsert(ctx, rec)
-
-		node := domain.Node{
-			LogicalID:         logicalID,
-			Protocol:          domain.ProtocolSS,
-			CredentialVersion: 1,
-		}
 
 		client, cleanup, err := dialer(ctx, node)
 		if err == nil {
@@ -346,12 +191,9 @@ func TestSafeNodeDialerRejectsDomainNames(t *testing.T) {
 				_ = cleanup()
 			}
 			if client != nil {
-				if cleanup != nil {
-					_ = cleanup()
-				}
 				client.CloseIdleConnections()
 			}
-			continue // validated domain/IP pin prepared without dialing
+			continue
 		}
 		if !errors.Is(err, probe.ErrCredentialsUnavailable) {
 			t.Fatalf("[%s] expected ErrCredentialsUnavailable, got %v", domainName, err)
@@ -365,36 +207,18 @@ func TestSafeNodeDialerRejectsDomainNames(t *testing.T) {
 // 5. TestSafeNodeDialerPublicIPPreparationDoesNotConnect verifies that preparing a dialer for a public IP succeeds
 // in constructing an in-memory client and setting CheckRedirect, but does NOT initiate any network dial or open connections.
 func TestSafeNodeDialerPublicIPPreparationDoesNotConnect(t *testing.T) {
-	vault := createTestVault(t)
-	repo := newMemoryCredRepo()
-	dialer := probe.NewSafeNodeDialer(repo, vault)
+	dialer := probe.NewSafeNodeDialer()
 	ctx := context.Background()
 
-	// Use public IP outside blocked CIDRs (e.g. Cloudflare DNS IP 1.1.1.1 or 93.184.216.34)
-	publicIP := "1.1.1.1"
-	logicalID := "node-public-prep"
-
-	payload := &domain.NodeCredentialPayload{
-		LogicalID: logicalID,
-		Version:   1,
+	node := domain.Node{
+		LogicalID: "node-public-prep",
 		Protocol:  domain.ProtocolSS,
-		Server:    publicIP,
+		Server:    "1.1.1.1",
 		Port:      8388,
 		Credentials: domain.InboundProtocolCredential{
 			Method:   "aes-128-gcm",
 			Password: "safe-password-test",
 		},
-	}
-	rec, err := vault.Encrypt(payload)
-	if err != nil {
-		t.Fatalf("vault.Encrypt failed: %v", err)
-	}
-	_ = repo.Upsert(ctx, rec)
-
-	node := domain.Node{
-		LogicalID:         logicalID,
-		Protocol:          domain.ProtocolSS,
-		CredentialVersion: 1,
 	}
 
 	client, cleanup, err := dialer(ctx, node)
@@ -413,7 +237,6 @@ func TestSafeNodeDialerPublicIPPreparationDoesNotConnect(t *testing.T) {
 		}
 	}()
 
-	// Verify redirect policy is set to ErrUseLastResponse (no redirects allowed)
 	if client.CheckRedirect == nil {
 		t.Fatal("expected CheckRedirect to be configured")
 	}
@@ -428,11 +251,7 @@ func TestSafeNodeDialerPublicIPPreparationDoesNotConnect(t *testing.T) {
 
 // 6. TestRunnerSafeNodeDialerWiring verifies wiring between SafeNodeDialer and Runner
 func TestRunnerSafeNodeDialerWiring(t *testing.T) {
-	vault := createTestVault(t)
-	repo := newMemoryCredRepo()
-
-	// 6.1 Runner with SafeNodeDialer injected: when node credentials missing, fails closed
-	safeDialer := probe.NewSafeNodeDialer(repo, vault)
+	safeDialer := probe.NewSafeNodeDialer()
 
 	sched, err := queue.NewScheduler(queue.Config{Concurrency: 10})
 	if err != nil {
@@ -440,34 +259,19 @@ func TestRunnerSafeNodeDialerWiring(t *testing.T) {
 	}
 	defer sched.Close()
 
-	// Minimal memory node & run repositories
 	node := domain.Node{
-		LogicalID:         "node-wire-test",
-		DisplayName:       "Wire Test Node",
-		Protocol:          domain.ProtocolSS,
-		CredentialVersion: 1,
-		Active:            true,
-	}
-
-	// Payload with private IP - should fail closed via safe dialer
-	payload := &domain.NodeCredentialPayload{
-		LogicalID: node.LogicalID,
-		Version:   1,
-		Protocol:  domain.ProtocolSS,
-		Server:    "127.0.0.1", // loopback rejected by safe dialer!
-		Port:      8388,
+		LogicalID:   "node-wire-test",
+		DisplayName: "Wire Test Node",
+		Protocol:    domain.ProtocolSS,
+		Server:      "127.0.0.1", // loopback rejected by safe dialer!
+		Port:        8388,
 		Credentials: domain.InboundProtocolCredential{
 			Method:   "aes-128-gcm",
 			Password: "pass",
 		},
+		Active: true,
 	}
-	rec, err := vault.Encrypt(payload)
-	if err != nil {
-		t.Fatalf("vault.Encrypt: %v", err)
-	}
-	_ = repo.Upsert(context.Background(), rec)
 
-	// Test calling safeDialer directly first
 	_, _, err = safeDialer(context.Background(), node)
 	if err == nil {
 		t.Fatal("expected safe dialer to reject 127.0.0.1, got nil")
@@ -476,8 +280,6 @@ func TestRunnerSafeNodeDialerWiring(t *testing.T) {
 		t.Fatalf("expected ErrCredentialsUnavailable, got %v", err)
 	}
 
-	// 6.2 Now verify SafeNodeDialer wired into probe.NewDefaultRunner:
-	// When SafeNodeDialer rejects the node, the Runner fails closed and writes an Error observation
 	nodesRepo := newMemoryNodes()
 	nodesRepo.items[node.LogicalID] = node
 	obsRepo := newMemoryObservations()
@@ -520,10 +322,6 @@ func TestRunnerSafeNodeDialerWiring(t *testing.T) {
 		t.Fatalf("expected summary to contain credentials_unavailable, got %s", observations[0].RedactedSummary)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Mock Resolver Fixture for Trojan DNS Resolution & IP Pinning Tests
-// ---------------------------------------------------------------------------
 
 type fixtureResolver struct {
 	mu        sync.Mutex
@@ -572,10 +370,6 @@ func (r *fixtureResolver) LookupIPAddr(ctx context.Context, host string) ([]net.
 	return nil, fmt.Errorf("no fixture record for %s", host)
 }
 
-// ---------------------------------------------------------------------------
-// 7. Trojan Domain Resolution, IP Pinning, SNI Preservation & In-Memory Client
-// ---------------------------------------------------------------------------
-
 func TestSafeNodeDialerRejectsProtocolEndpointBypasses(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -588,27 +382,24 @@ func TestSafeNodeDialerRejectsProtocolEndpointBypasses(t *testing.T) {
 		{name: "TUIC disabled SNI", protocol: domain.ProtocolTUIC, server: "1.1.1.1", port: 443, transport: map[string]string{"disable_sni": "true"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			vault := createTestVault(t)
-			repo := newMemoryCredRepo()
-			payload := &domain.NodeCredentialPayload{
-				LogicalID: "endpoint-bypass-" + string(tc.protocol), Version: 1,
-				Protocol: tc.protocol, Server: tc.server, Port: tc.port,
-				Credentials: domain.InboundProtocolCredential{UUID: "11111111-1111-1111-1111-111111111111", Password: "fixture", Transport: tc.transport},
-			}
-			record, err := vault.Encrypt(payload)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := repo.Upsert(context.Background(), record); err != nil {
-				t.Fatal(err)
-			}
-			dialer := probe.NewSafeNodeDialer(repo, vault, probe.SafeNodeDialerOptions{
+			dialer := probe.NewSafeNodeDialer(probe.SafeNodeDialerOptions{
 				ClientFactory: func(context.Context, singbox.NodeConfig, singbox.HTTPClientOptions) (*http.Client, func() error, error) {
 					t.Fatal("client factory must not be called for an unsafe endpoint configuration")
 					return nil, nil, nil
 				},
 			})
-			_, _, err = dialer(context.Background(), domain.Node{LogicalID: payload.LogicalID, CredentialVersion: 1, Protocol: tc.protocol})
+			node := domain.Node{
+				LogicalID: "endpoint-bypass-" + string(tc.protocol),
+				Protocol:  tc.protocol,
+				Server:    tc.server,
+				Port:      tc.port,
+				Credentials: domain.InboundProtocolCredential{
+					UUID:      "11111111-1111-1111-1111-111111111111",
+					Password:  "fixture",
+					Transport: tc.transport,
+				},
+			}
+			_, _, err := dialer(context.Background(), node)
 			if !errors.Is(err, probe.ErrCredentialsUnavailable) {
 				t.Fatalf("expected fail-closed credential error, got %v", err)
 			}
@@ -617,16 +408,9 @@ func TestSafeNodeDialerRejectsProtocolEndpointBypasses(t *testing.T) {
 }
 
 func TestSafeNodeDialerTrojanDomainResolutionAndIPPinning(t *testing.T) {
-	vault := createTestVault(t)
-	repo := newMemoryCredRepo()
 	resolver := newFixtureResolver()
 	ctx := context.Background()
 
-	// Fixtures:
-	// - trojan.public.com resolves to multiple public IPs [1.1.1.1, 1.0.0.1]
-	// - trojan.single.com resolves to single public IP 93.184.216.34
-	// - trojan.ipv6.com resolves to public IPv6 2606:4700:4700::1111
-	// - trojan.explicit-sni.com resolves to 1.1.1.1, with explicit SNI custom.sni.org
 	resolver.SetIPs("trojan.public.com", "1.1.1.1", "1.0.0.1")
 	resolver.SetIPs("trojan.single.com", "93.184.216.34")
 	resolver.SetIPs("trojan.ipv6.com", "2606:4700:4700::1111")
@@ -677,9 +461,8 @@ func TestSafeNodeDialerTrojanDomainResolutionAndIPPinning(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			logicalID := "node-" + strings.ReplaceAll(tc.domainName, ".", "-")
-			payload := &domain.NodeCredentialPayload{
+			node := domain.Node{
 				LogicalID: logicalID,
-				Version:   1,
 				Protocol:  domain.ProtocolTrojan,
 				Server:    tc.domainName,
 				Port:      443,
@@ -688,19 +471,7 @@ func TestSafeNodeDialerTrojanDomainResolutionAndIPPinning(t *testing.T) {
 					Transport: tc.transport,
 				},
 			}
-			rec, err := vault.Encrypt(payload)
-			if err != nil {
-				t.Fatalf("vault.Encrypt failed: %v", err)
-			}
-			_ = repo.Upsert(ctx, rec)
 
-			node := domain.Node{
-				LogicalID:         logicalID,
-				Protocol:          domain.ProtocolTrojan,
-				CredentialVersion: 1,
-			}
-
-			// Capture the singbox.NodeConfig via ClientFactory without real network connection
 			var capturedCfg singbox.NodeConfig
 			factoryCalled := false
 			capturingFactory := func(fCtx context.Context, config singbox.NodeConfig, opts singbox.HTTPClientOptions) (*http.Client, func() error, error) {
@@ -709,7 +480,7 @@ func TestSafeNodeDialerTrojanDomainResolutionAndIPPinning(t *testing.T) {
 				return &http.Client{}, func() error { return nil }, nil
 			}
 
-			dialer := probe.NewSafeNodeDialer(repo, vault, probe.SafeNodeDialerOptions{
+			dialer := probe.NewSafeNodeDialer(probe.SafeNodeDialerOptions{
 				Resolver:      resolver,
 				ClientFactory: capturingFactory,
 			})
@@ -725,15 +496,12 @@ func TestSafeNodeDialerTrojanDomainResolutionAndIPPinning(t *testing.T) {
 				t.Fatal("expected capturing client factory to be called")
 			}
 
-			// 1. Verify cfg.Server is pinned to first public IP, NOT domain name
 			if capturedCfg.Server != tc.expectedIP {
 				t.Fatalf("expected pinned cfg.Server=%s, got %s", tc.expectedIP, capturedCfg.Server)
 			}
-			// 2. Verify cfg.SNI retains domain name or explicit SNI identity
 			if capturedCfg.SNI != tc.expectedSNI {
 				t.Fatalf("expected cfg.SNI=%s, got %s", tc.expectedSNI, capturedCfg.SNI)
 			}
-			// 3. Verify credential matching: logical ID, port, password
 			if capturedCfg.LogicalID != node.LogicalID {
 				t.Fatalf("logical ID mismatch: %s != %s", capturedCfg.LogicalID, node.LogicalID)
 			}
@@ -747,7 +515,6 @@ func TestSafeNodeDialerTrojanDomainResolutionAndIPPinning(t *testing.T) {
 				t.Fatal("expected SkipCertVerify to be false")
 			}
 
-			// 4. Verify sing-box BuildOptions produces outbound pointing strictly to pinned IP with SNI
 			if tc.testOutbound {
 				opts, tag, buildErr := singbox.BuildOptions(capturedCfg)
 				if buildErr != nil {
@@ -767,14 +534,12 @@ func TestSafeNodeDialerTrojanDomainResolutionAndIPPinning(t *testing.T) {
 				if !ok || trojanOpts == nil {
 					t.Fatalf("failed to cast outbound options to TrojanOutboundOptions")
 				}
-				// Verify singbox outbound Server is pinned IP literal
 				if trojanOpts.Server != tc.expectedIP {
 					t.Fatalf("singbox trojanOpts.Server=%s, expected pinned IP %s", trojanOpts.Server, tc.expectedIP)
 				}
 				if trojanOpts.ServerPort != 443 {
 					t.Fatalf("singbox trojanOpts.ServerPort=%d, expected 443", trojanOpts.ServerPort)
 				}
-				// Verify singbox outbound TLS ServerName is original domain or explicit SNI
 				if trojanOpts.TLS == nil || trojanOpts.TLS.ServerName != tc.expectedSNI {
 					t.Fatalf("singbox trojanOpts.TLS.ServerName=%v, expected %s", trojanOpts.TLS, tc.expectedSNI)
 				}
@@ -785,16 +550,18 @@ func TestSafeNodeDialerTrojanDomainResolutionAndIPPinning(t *testing.T) {
 		})
 	}
 
-	// 5. Verify real default singbox client factory (nil ClientFactory) initializes in-memory client
-	// without any network calls and enforces CheckRedirect and Proxy == nil
 	t.Run("DefaultSingboxHTTPClientInstantiatedWithoutNetworkCalls", func(t *testing.T) {
-		defaultDialer := probe.NewSafeNodeDialer(repo, vault, probe.SafeNodeDialerOptions{
+		defaultDialer := probe.NewSafeNodeDialer(probe.SafeNodeDialerOptions{
 			Resolver: resolver,
 		})
 		node := domain.Node{
-			LogicalID:         "node-trojan-public-com",
-			Protocol:          domain.ProtocolTrojan,
-			CredentialVersion: 1,
+			LogicalID: "node-trojan-public-com",
+			Protocol:  domain.ProtocolTrojan,
+			Server:    "trojan.public.com",
+			Port:      443,
+			Credentials: domain.InboundProtocolCredential{
+				Password: "trojan-test-password",
+			},
 		}
 
 		client, cleanup, err := defaultDialer(ctx, node)
@@ -810,13 +577,11 @@ func TestSafeNodeDialerTrojanDomainResolutionAndIPPinning(t *testing.T) {
 			}
 		}()
 
-		// Redirect prohibition
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://cp.cloudflare.com/generate_204", nil)
 		if err := client.CheckRedirect(req, []*http.Request{req}); err != http.ErrUseLastResponse {
 			t.Fatalf("expected http.ErrUseLastResponse, got %v", err)
 		}
 
-		// Transport Proxy must be nil to prevent host environment proxy leakage
 		tr, ok := client.Transport.(*http.Transport)
 		if !ok {
 			t.Fatalf("client transport is not *http.Transport: %T", client.Transport)
@@ -830,39 +595,27 @@ func TestSafeNodeDialerTrojanDomainResolutionAndIPPinning(t *testing.T) {
 	})
 }
 
-// ---------------------------------------------------------------------------
-// 8. Rejection of RFC6598, IPv6 Private, Loopback, & DNS Rebinding Fixtures
-// ---------------------------------------------------------------------------
-
 func TestSafeNodeDialerTrojanPrivateAndRebindingRejections(t *testing.T) {
-	vault := createTestVault(t)
-	repo := newMemoryCredRepo()
 	resolver := newFixtureResolver()
 	ctx := context.Background()
 
-	// Fixtures:
-	// - RFC 6598 Carrier Grade NAT (100.64.0.0/10)
 	resolver.SetIPs("trojan.rfc6598-1.com", "100.64.0.1")
 	resolver.SetIPs("trojan.rfc6598-2.com", "100.127.255.254")
-	// - IPv6 Private / Loopback / Link-Local / ULA
 	resolver.SetIPs("trojan.ipv6-loopback.com", "::1")
 	resolver.SetIPs("trojan.ipv6-ula-1.com", "fc00::1")
 	resolver.SetIPs("trojan.ipv6-ula-2.com", "fd12:3456:789a::1")
 	resolver.SetIPs("trojan.ipv6-linklocal.com", "fe80::1")
-	// - IPv4 RFC 1918 & Loopback
 	resolver.SetIPs("trojan.ipv4-private10.com", "10.0.0.1")
 	resolver.SetIPs("trojan.ipv4-private172.com", "172.16.0.1")
 	resolver.SetIPs("trojan.ipv4-private192.com", "192.168.1.1")
 	resolver.SetIPs("trojan.ipv4-loopback.com", "127.0.0.1")
-	// - DNS Rebinding attack fixtures: multiple IPs returned, one public and one private/RFC6598
 	resolver.SetIPs("trojan.rebind-loopback.com", "1.1.1.1", "127.0.0.1")
 	resolver.SetIPs("trojan.rebind-rfc6598.com", "1.1.1.1", "100.64.1.1")
 	resolver.SetIPs("trojan.rebind-ipv6-ula.com", "1.1.1.1", "fc00::1")
 	resolver.SetIPs("trojan.rebind-ipv6-linklocal.com", "1.1.1.1", "fe80::1")
 	resolver.SetIPs("trojan.rebind-ipv4-private.com", "1.1.1.1", "10.10.10.10")
-	// - Resolver error & empty IPs
 	resolver.SetError("trojan.nxdomain.com", errors.New("no such host"))
-	resolver.SetIPs("trojan.empty-ips.com") // zero IPs
+	resolver.SetIPs("trojan.empty-ips.com")
 
 	testCases := []struct {
 		name       string
@@ -887,33 +640,21 @@ func TestSafeNodeDialerTrojanPrivateAndRebindingRejections(t *testing.T) {
 		{"DNS resolver empty IP set", "trojan.empty-ips.com"},
 	}
 
-	dialer := probe.NewSafeNodeDialer(repo, vault, probe.SafeNodeDialerOptions{
+	dialer := probe.NewSafeNodeDialer(probe.SafeNodeDialerOptions{
 		Resolver: resolver,
 	})
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			logicalID := "node-reject-" + strings.ReplaceAll(tc.domainName, ".", "-")
-			payload := &domain.NodeCredentialPayload{
+			node := domain.Node{
 				LogicalID: logicalID,
-				Version:   1,
 				Protocol:  domain.ProtocolTrojan,
 				Server:    tc.domainName,
 				Port:      443,
 				Credentials: domain.InboundProtocolCredential{
 					Password: "password",
 				},
-			}
-			rec, err := vault.Encrypt(payload)
-			if err != nil {
-				t.Fatalf("[%s] vault.Encrypt failed: %v", tc.name, err)
-			}
-			_ = repo.Upsert(ctx, rec)
-
-			node := domain.Node{
-				LogicalID:         logicalID,
-				Protocol:          domain.ProtocolTrojan,
-				CredentialVersion: 1,
 			}
 
 			client, cleanup, err := dialer(ctx, node)
@@ -933,18 +674,12 @@ func TestSafeNodeDialerTrojanPrivateAndRebindingRejections(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// 9. Rejection of Unsafe Transport, Insecure Cert Flags, & Port/Identity Mismatch
-// ---------------------------------------------------------------------------
-
 func TestSafeNodeDialerUnsafeTransportAndCertVerificationRejected(t *testing.T) {
-	vault := createTestVault(t)
-	repo := newMemoryCredRepo()
 	resolver := newFixtureResolver()
 	resolver.SetIPs("trojan.valid.com", "1.1.1.1")
 	ctx := context.Background()
 
-	dialer := probe.NewSafeNodeDialer(repo, vault, probe.SafeNodeDialerOptions{
+	dialer := probe.NewSafeNodeDialer(probe.SafeNodeDialerOptions{
 		Resolver: resolver,
 	})
 
@@ -955,9 +690,6 @@ func TestSafeNodeDialerUnsafeTransportAndCertVerificationRejected(t *testing.T) 
 		port      int
 		transport map[string]string
 	}{
-		// Domains are accepted only after resolution/pinning; protocol fixture support is tested separately.
-
-		// Trojan domain with insecure certificate options
 		{"Trojan domain with skip_cert_verify=true rejected", domain.ProtocolTrojan, "trojan.valid.com", 443, map[string]string{"network": "tcp", "skip_cert_verify": "true"}},
 		{"Trojan domain with skip_cert_verify=1 rejected", domain.ProtocolTrojan, "trojan.valid.com", 443, map[string]string{"network": "tcp", "skip_cert_verify": "1"}},
 		{"Trojan domain with skip-cert-verify=true rejected", domain.ProtocolTrojan, "trojan.valid.com", 443, map[string]string{"network": "tcp", "skip-cert-verify": "true"}},
@@ -968,12 +700,10 @@ func TestSafeNodeDialerUnsafeTransportAndCertVerificationRejected(t *testing.T) 
 		{"Trojan domain with allow_insecure=true rejected", domain.ProtocolTrojan, "trojan.valid.com", 443, map[string]string{"network": "tcp", "allow_insecure": "true"}},
 		{"Trojan domain with allow-insecure=1 rejected", domain.ProtocolTrojan, "trojan.valid.com", 443, map[string]string{"network": "tcp", "allow-insecure": "1"}},
 
-		// Direct IP literal with insecure cert options (strict verification required for safe dialer)
 		{"Trojan IP literal with skip_cert_verify=true rejected", domain.ProtocolTrojan, "1.1.1.1", 443, map[string]string{"skip_cert_verify": "true"}},
 		{"Trojan IP literal with insecure=1 rejected", domain.ProtocolTrojan, "1.1.1.1", 443, map[string]string{"insecure": "1"}},
 		{"Trojan IP literal with skip-cert-verify=true rejected", domain.ProtocolTrojan, "1.1.1.1", 443, map[string]string{"skip-cert-verify": "true"}},
 
-		// Invalid port numbers
 		{"Trojan with port 0 rejected", domain.ProtocolTrojan, "1.1.1.1", 0, nil},
 		{"Trojan with port -1 rejected", domain.ProtocolTrojan, "1.1.1.1", -1, nil},
 		{"Trojan with port 65536 rejected", domain.ProtocolTrojan, "1.1.1.1", 65536, nil},
@@ -981,10 +711,8 @@ func TestSafeNodeDialerUnsafeTransportAndCertVerificationRejected(t *testing.T) 
 
 	for idx, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			logicalID := fmt.Sprintf("node-unsafe-%d", idx)
-			payload := &domain.NodeCredentialPayload{
-				LogicalID: logicalID,
-				Version:   1,
+			node := domain.Node{
+				LogicalID: fmt.Sprintf("node-unsafe-%d", idx),
 				Protocol:  tc.protocol,
 				Server:    tc.server,
 				Port:      tc.port,
@@ -992,17 +720,6 @@ func TestSafeNodeDialerUnsafeTransportAndCertVerificationRejected(t *testing.T) 
 					Password:  "pass",
 					Transport: tc.transport,
 				},
-			}
-			rec, err := vault.Encrypt(payload)
-			if err != nil {
-				t.Fatalf("[%s] vault.Encrypt failed: %v", tc.name, err)
-			}
-			_ = repo.Upsert(ctx, rec)
-
-			node := domain.Node{
-				LogicalID:         logicalID,
-				Protocol:          tc.protocol,
-				CredentialVersion: 1,
 			}
 
 			client, cleanup, err := dialer(ctx, node)
@@ -1013,10 +730,7 @@ func TestSafeNodeDialerUnsafeTransportAndCertVerificationRejected(t *testing.T) 
 				if client != nil {
 					client.CloseIdleConnections()
 				}
-				if strings.Contains(tc.name, "insecure") || strings.Contains(tc.name, "skip") || strings.Contains(tc.name, "allow") || strings.Contains(tc.name, "port") {
-					t.Fatalf("[%s] expected rejection, got nil error", tc.name)
-				}
-				return
+				t.Fatalf("[%s] expected rejection, got nil error", tc.name)
 			}
 			if !errors.Is(err, probe.ErrCredentialsUnavailable) {
 				t.Fatalf("[%s] expected ErrCredentialsUnavailable, got %v", tc.name, err)
@@ -1027,10 +741,6 @@ func TestSafeNodeDialerUnsafeTransportAndCertVerificationRejected(t *testing.T) 
 		})
 	}
 }
-
-// ---------------------------------------------------------------------------
-// 10. Unit Test for payload_config.go Insecure / Skip Cert Normalization
-// ---------------------------------------------------------------------------
 
 func TestNodeConfigFromPayloadInsecureOptions(t *testing.T) {
 	baseNode := domain.Node{
@@ -1137,10 +847,6 @@ func TestNodeConfigFromPayloadInsecureOptions(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// 11. Target URL Does Not Connect Via Host Directly
-// ---------------------------------------------------------------------------
-
 type staticAppResolverFunc func(context.Context, string) ([]net.IPAddr, error)
 
 func (f staticAppResolverFunc) LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error) {
@@ -1165,20 +871,6 @@ func TestSafeNodeDialerRejectsUnsafeCredentialsAndDNS(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
-			vault := createTestVault(t)
-			repo := newMemoryCredRepo()
-			payload := &domain.NodeCredentialPayload{
-				LogicalID: "negative-node", Version: 1, Protocol: tc.protocol,
-				Server: tc.server, Port: 443,
-				Credentials: domain.InboundProtocolCredential{Password: "secret", UUID: "00000000-0000-0000-0000-000000000001", Transport: tc.transport},
-			}
-			rec, err := vault.Encrypt(payload)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := repo.Upsert(ctx, rec); err != nil {
-				t.Fatal(err)
-			}
 			var calls atomic.Int32
 			resolver := staticAppResolverFunc(func(_ context.Context, host string) ([]net.IPAddr, error) {
 				if host != tc.server {
@@ -1187,14 +879,25 @@ func TestSafeNodeDialerRejectsUnsafeCredentialsAndDNS(t *testing.T) {
 				calls.Add(1)
 				return tc.ips, nil
 			})
-			dialer := probe.NewSafeNodeDialer(repo, vault, probe.SafeNodeDialerOptions{
+			dialer := probe.NewSafeNodeDialer(probe.SafeNodeDialerOptions{
 				Resolver: resolver,
 				ClientFactory: func(context.Context, singbox.NodeConfig, singbox.HTTPClientOptions) (*http.Client, func() error, error) {
 					t.Fatal("unsafe input reached client factory")
 					return nil, nil, nil
 				},
 			})
-			client, cleanup, err := dialer(ctx, domain.Node{LogicalID: "negative-node", Protocol: tc.protocol, CredentialVersion: 1})
+			node := domain.Node{
+				LogicalID: "negative-node",
+				Protocol:  tc.protocol,
+				Server:    tc.server,
+				Port:      443,
+				Credentials: domain.InboundProtocolCredential{
+					Password:  "secret",
+					UUID:      "00000000-0000-0000-0000-000000000001",
+					Transport: tc.transport,
+				},
+			}
+			client, cleanup, err := dialer(ctx, node)
 			if cleanup != nil {
 				defer cleanup()
 			}
@@ -1215,8 +918,6 @@ func TestSafeNodeDialerRejectsUnsafeCredentialsAndDNS(t *testing.T) {
 }
 
 func TestTargetURLDoesNotConnectViaHost(t *testing.T) {
-	vault := createTestVault(t)
-	repo := newMemoryCredRepo()
 	resolver := newFixtureResolver()
 	resolver.SetIPs("trojan.wire-check.com", "93.184.216.34")
 	ctx := context.Background()
@@ -1224,35 +925,22 @@ func TestTargetURLDoesNotConnectViaHost(t *testing.T) {
 	var capturedCfg singbox.NodeConfig
 	capturingFactory := func(fCtx context.Context, config singbox.NodeConfig, opts singbox.HTTPClientOptions) (*http.Client, func() error, error) {
 		capturedCfg = config
-		// Use real singbox HTTPClient to verify runtime wiring
 		return singbox.NewHTTPClient(fCtx, config, opts)
 	}
 
-	dialer := probe.NewSafeNodeDialer(repo, vault, probe.SafeNodeDialerOptions{
+	dialer := probe.NewSafeNodeDialer(probe.SafeNodeDialerOptions{
 		Resolver:      resolver,
 		ClientFactory: capturingFactory,
 	})
 
-	payload := &domain.NodeCredentialPayload{
+	node := domain.Node{
 		LogicalID: "node-wire-check",
-		Version:   1,
 		Protocol:  domain.ProtocolTrojan,
 		Server:    "trojan.wire-check.com",
 		Port:      443,
 		Credentials: domain.InboundProtocolCredential{
 			Password: "safe-password",
 		},
-	}
-	rec, err := vault.Encrypt(payload)
-	if err != nil {
-		t.Fatalf("vault.Encrypt failed: %v", err)
-	}
-	_ = repo.Upsert(ctx, rec)
-
-	node := domain.Node{
-		LogicalID:         "node-wire-check",
-		Protocol:          domain.ProtocolTrojan,
-		CredentialVersion: 1,
 	}
 
 	client, cleanup, err := dialer(ctx, node)
@@ -1265,7 +953,6 @@ func TestTargetURLDoesNotConnectViaHost(t *testing.T) {
 		}
 	}()
 
-	// 1. Verify singbox NodeConfig is pinned to IP literal
 	if capturedCfg.Server != "93.184.216.34" {
 		t.Fatalf("capturedCfg.Server must be pinned IP 93.184.216.34, got %s", capturedCfg.Server)
 	}
@@ -1273,7 +960,6 @@ func TestTargetURLDoesNotConnectViaHost(t *testing.T) {
 		t.Fatalf("capturedCfg.SNI must be original domain trojan.wire-check.com, got %s", capturedCfg.SNI)
 	}
 
-	// 2. Verify singbox Outbound configuration
 	boxOpts, _, err := singbox.BuildOptions(capturedCfg)
 	if err != nil {
 		t.Fatalf("BuildOptions failed: %v", err)
@@ -1289,7 +975,6 @@ func TestTargetURLDoesNotConnectViaHost(t *testing.T) {
 		t.Fatal("singbox outbound TLS must have strict cert validation")
 	}
 
-	// 3. Verify client Transport has nil Proxy (host HTTP_PROXY / ALL_PROXY ignored)
 	tr, ok := client.Transport.(*http.Transport)
 	if !ok {
 		t.Fatalf("expected *http.Transport, got %T", client.Transport)
@@ -1297,13 +982,10 @@ func TestTargetURLDoesNotConnectViaHost(t *testing.T) {
 	if tr.Proxy != nil {
 		t.Fatal("expected tr.Proxy to be nil so host proxy settings are never consulted")
 	}
-
-	// 4. Verify DialContext is present and bound to singbox runtime outbound
 	if tr.DialContext == nil {
 		t.Fatal("expected tr.DialContext to be configured to sing-box runtime outbound")
 	}
 
-	// 5. Verify redirect prohibition is active
 	dummyReq, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://target.destination.internal/", nil)
 	if err := client.CheckRedirect(dummyReq, []*http.Request{dummyReq}); err != http.ErrUseLastResponse {
 		t.Fatalf("expected http.ErrUseLastResponse, got %v", err)

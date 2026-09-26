@@ -13,11 +13,9 @@ import (
 )
 
 // ParsedNodeWithCredentials holds a normalized node alongside its extracted protocol-specific credentials.
-// This structure is held strictly in-memory during fetch ingestion and is NEVER persisted directly or logged.
 type ParsedNodeWithCredentials struct {
 	Normalized  NormalizedNode
 	Credentials domain.InboundProtocolCredential
-	Identity    domain.VerifiedNodeIdentity
 }
 
 // ExtractResult reports parsed nodes with extracted credentials, and counts of rejected entries.
@@ -60,7 +58,6 @@ func extractYAML(content []byte) (ExtractResult, bool, error) {
 		result.Items = append(result.Items, ParsedNodeWithCredentials{
 			Normalized:  node,
 			Credentials: creds,
-			Identity:    node.Identity,
 		})
 	}
 	if len(result.Items) == 0 {
@@ -79,7 +76,6 @@ func extractYAMLProxy(proxy map[string]any) (NormalizedNode, domain.InboundProto
 		return NormalizedNode{}, domain.InboundProtocolCredential{}, err
 	}
 	transport := yamlTransport(proxy, protocol)
-	secrets := yamlSecrets(proxy, protocol)
 
 	psk := value(proxy, "pre-shared-key", "pre_shared_key", "preshared-key", "preshared_key", "psk")
 	pubKey := value(proxy, "public-key", "public_key", "peer-public-key", "peer_public_key")
@@ -159,8 +155,8 @@ func extractYAMLProxy(proxy map[string]any) (NormalizedNode, domain.InboundProto
 		return NormalizedNode{}, domain.InboundProtocolCredential{}, err
 	}
 
-	norm := newNormalizedNode(protocol, value(proxy, "name"), server, port, transport, secrets)
-	return norm, creds, nil
+	norm := newNormalizedNode(protocol, value(proxy, "name"), server, port, transport, creds)
+	return norm, norm.Credentials, nil
 }
 
 func extractURLLines(content string) (ExtractResult, error) {
@@ -174,7 +170,6 @@ func extractURLLines(content string) (ExtractResult, error) {
 		result.Items = append(result.Items, ParsedNodeWithCredentials{
 			Normalized:  node,
 			Credentials: creds,
-			Identity:    node.Identity,
 		})
 	}
 	if len(result.Items) == 0 {
@@ -200,7 +195,6 @@ func extractURL(raw string) (NormalizedNode, domain.InboundProtocolCredential, e
 		return NormalizedNode{}, domain.InboundProtocolCredential{}, err
 	}
 	transport := urlTransport(u, protocol)
-	secrets := urlSecrets(u, protocol)
 
 	query := u.Query()
 	creds := domain.InboundProtocolCredential{
@@ -308,8 +302,8 @@ func extractURL(raw string) (NormalizedNode, domain.InboundProtocolCredential, e
 		return NormalizedNode{}, domain.InboundProtocolCredential{}, err
 	}
 
-	norm := newNormalizedNode(protocol, fragmentName(u), server, port, transport, secrets)
-	return norm, creds, nil
+	norm := newNormalizedNode(protocol, fragmentName(u), server, port, transport, creds)
+	return norm, norm.Credentials, nil
 }
 
 func extractVMess(raw string) (NormalizedNode, domain.InboundProtocolCredential, error) {
@@ -356,8 +350,8 @@ func extractVMess(raw string) (NormalizedNode, domain.InboundProtocolCredential,
 		return NormalizedNode{}, domain.InboundProtocolCredential{}, err
 	}
 
-	norm := newNormalizedNode(domain.ProtocolVMess, value(payload, "ps", "name"), server, port, transport, []string{uuid})
-	return norm, creds, nil
+	norm := newNormalizedNode(domain.ProtocolVMess, value(payload, "ps", "name"), server, port, transport, creds)
+	return norm, norm.Credentials, nil
 }
 
 func validateCredentials(proto domain.Protocol, creds domain.InboundProtocolCredential) error {

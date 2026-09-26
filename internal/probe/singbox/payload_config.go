@@ -88,57 +88,94 @@ func applyTransportFields(cfg *NodeConfig, m map[string]string) {
 	}
 }
 
-// NodeConfigFromPayload builds an ephemeral NodeConfig directly from decrypted NodeCredentialPayload.
+// NodeConfigFromNode builds an ephemeral NodeConfig directly from a plaintext domain.Node.
+func NodeConfigFromNode(node domain.Node) NodeConfig {
+	return NodeConfigFromPayload(parser.NormalizedNode{
+		Node:        node,
+		Server:      node.Server,
+		Port:        node.Port,
+		Transport:   node.Credentials.Transport,
+		Credentials: node.Credentials,
+	}, &domain.NodeCredentialPayload{
+		LogicalID:   node.LogicalID,
+		Protocol:    node.Protocol,
+		Server:      node.Server,
+		Port:        node.Port,
+		Credentials: node.Credentials,
+	})
+}
+
+// NodeConfigFromPayload builds an ephemeral NodeConfig from NormalizedNode and optional NodeCredentialPayload.
 func NodeConfigFromPayload(norm parser.NormalizedNode, payload *domain.NodeCredentialPayload) NodeConfig {
+	server := norm.Server
+	if server == "" {
+		server = norm.Node.Server
+	}
+	port := norm.Port
+	if port == 0 {
+		port = norm.Node.Port
+	}
+	transport := norm.Transport
+	if transport == nil {
+		transport = norm.Credentials.Transport
+	}
+	if transport == nil {
+		transport = norm.Node.Credentials.Transport
+	}
+
 	cfg := NodeConfig{
 		LogicalID:   norm.Node.LogicalID,
 		DisplayName: norm.Node.DisplayName,
 		Protocol:    norm.Node.Protocol,
-		Server:      norm.Server,
-		Port:        norm.Port,
-		Transport:   norm.Transport,
+		Server:      server,
+		Port:        port,
+		Transport:   transport,
 	}
 
-	applyTransportFields(&cfg, norm.Transport)
+	applyTransportFields(&cfg, transport)
 
+	creds := norm.Credentials
 	if payload != nil {
-		creds := payload.Credentials
-		cfg.Password = creds.Password
-		cfg.UUID = creds.UUID
-		cfg.Method = creds.Method
-		cfg.AlterID = creds.AlterID
-		cfg.PrivateKey = creds.PrivateKey
-		cfg.PublicKey = creds.PublicKey
-		cfg.PresharedKey = creds.EffectivePreSharedKey()
-		cfg.Username = creds.Username
-
-		if len(creds.LocalAddress) > 0 {
-			cfg.LocalAddress = append([]string(nil), creds.LocalAddress...)
-		}
-		if len(creds.Reserved) > 0 {
-			cfg.Reserved = append([]uint8(nil), creds.Reserved...)
-		}
-		if creds.MTU > 0 {
-			cfg.MTU = uint32(creds.MTU)
-		}
-		if creds.CongestionControl != "" {
-			cfg.TUICCongestionControl = creds.CongestionControl
-		}
-		if creds.UDPRelayMode != "" {
-			cfg.TUICUDPRelayMode = creds.UDPRelayMode
-		}
-		if creds.DisableSNI {
-			cfg.TUICDisableSNI = true
-		}
-		if len(creds.ALPN) > 0 && len(cfg.ALPN) == 0 {
-			cfg.ALPN = append([]string(nil), creds.ALPN...)
-		}
-		if creds.SNI != "" && cfg.SNI == "" {
-			cfg.SNI = creds.SNI
-		}
-
-		applyTransportFields(&cfg, creds.Transport)
+		creds = payload.Credentials
+	} else if creds.Password == "" && creds.UUID == "" && creds.PrivateKey == "" {
+		creds = norm.Node.Credentials
 	}
+
+	cfg.Password = creds.Password
+	cfg.UUID = creds.UUID
+	cfg.Method = creds.Method
+	cfg.AlterID = creds.AlterID
+	cfg.PrivateKey = creds.PrivateKey
+	cfg.PublicKey = creds.PublicKey
+	cfg.PresharedKey = creds.EffectivePreSharedKey()
+	cfg.Username = creds.Username
+
+	if len(creds.LocalAddress) > 0 {
+		cfg.LocalAddress = append([]string(nil), creds.LocalAddress...)
+	}
+	if len(creds.Reserved) > 0 {
+		cfg.Reserved = append([]uint8(nil), creds.Reserved...)
+	}
+	if creds.MTU > 0 {
+		cfg.MTU = uint32(creds.MTU)
+	}
+	if creds.CongestionControl != "" {
+		cfg.TUICCongestionControl = creds.CongestionControl
+	}
+	if creds.UDPRelayMode != "" {
+		cfg.TUICUDPRelayMode = creds.UDPRelayMode
+	}
+	if creds.DisableSNI {
+		cfg.TUICDisableSNI = true
+	}
+	if len(creds.ALPN) > 0 && len(cfg.ALPN) == 0 {
+		cfg.ALPN = append([]string(nil), creds.ALPN...)
+	}
+	if creds.SNI != "" && cfg.SNI == "" {
+		cfg.SNI = creds.SNI
+	}
+
+	applyTransportFields(&cfg, creds.Transport)
 
 	// When the transport does not explicitly provide TLS identity or HTTP routing,
 	// preserve the original server hostname (not a later pinned socket IP).

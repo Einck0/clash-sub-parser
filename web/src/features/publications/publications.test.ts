@@ -5,7 +5,6 @@ import {
   DEFAULT_COMPILER_TARGET,
   getTargetMetadata,
   isValidCompilerTarget,
-  redactPreviewSecrets,
   targetLabel,
   targetFileExt,
   formatDigest,
@@ -19,7 +18,7 @@ import {
 } from './usePublications'
 import { api, ApiError } from '../../api/client'
 
-describe('publication types, capability boundaries, and secret redaction', () => {
+describe('publication types and capability boundaries', () => {
   it('defines only the four modern compiler targets defaulting to mihomo', () => {
     const targets = COMPILER_TARGETS.map((t) => t.target)
     expect(targets).toEqual(['mihomo', 'singbox', 'surge', 'qx'])
@@ -80,65 +79,6 @@ describe('publication types, capability boundaries, and secret redaction', () =>
     expect(isValidCompilerTarget('')).toBe(false)
     expect(isValidCompilerTarget(null)).toBe(false)
     expect(isValidCompilerTarget('unknown')).toBe(false)
-  })
-
-  it('redacts WireGuard private_key/psk and TUIC password in YAML, JSON, and INI while keeping non-secret fields visible', () => {
-    const yamlContent = [
-      'proxies:',
-      '  - name: WG-Tokyo',
-      '    type: wireguard',
-      '    server: 198.51.100.20',
-      '    port: 51820',
-      '    ip: 10.0.0.2/32',
-      '    public-key: peer-public-key-visible-123',
-      '    private-key: TOP-SECRET-WG-PRIVKEY-999',
-      '    pre-shared-key: TOP-SECRET-WG-PSK-888',
-      '    mtu: 1420',
-      '  - name: TUIC-Seoul',
-      '    type: tuic',
-      '    server: 198.51.100.21',
-      '    port: 8443',
-      '    uuid: 11111111-2222-4333-8444-555555555555',
-      '    password: TOP-SECRET-TUIC-PASSWORD-777',
-      '    congestion-controller: bbr',
-      '    udp-relay-mode: native',
-    ].join('\n')
-
-    const redactedYaml = redactPreviewSecrets(yamlContent)
-    expect(redactedYaml).toContain('public-key: peer-public-key-visible-123')
-    expect(redactedYaml).toContain('ip: 10.0.0.2/32')
-    expect(redactedYaml).toContain('uuid: 11111111-2222-4333-8444-555555555555')
-    expect(redactedYaml).toContain('congestion-controller: bbr')
-    expect(redactedYaml).toContain('udp-relay-mode: native')
-    expect(redactedYaml).not.toContain('TOP-SECRET-WG-PRIVKEY-999')
-    expect(redactedYaml).not.toContain('TOP-SECRET-WG-PSK-888')
-    expect(redactedYaml).not.toContain('TOP-SECRET-TUIC-PASSWORD-777')
-    expect(redactedYaml).toContain('private-key: ***')
-    expect(redactedYaml).toContain('pre-shared-key: ***')
-    expect(redactedYaml).toContain('password: ***')
-
-    const jsonContent = JSON.stringify({
-      endpoints: [
-        {
-          type: 'wireguard',
-          private_key: 'JSON-SECRET-PRIVKEY',
-          peers: [{ public_key: 'JSON-VISIBLE-PUBKEY', pre_shared_key: 'JSON-SECRET-PSK' }],
-        },
-      ],
-      outbounds: [
-        {
-          type: 'tuic',
-          uuid: 'json-visible-uuid',
-          password: 'JSON-SECRET-PASSWORD',
-        },
-      ],
-    })
-    const redactedJson = redactPreviewSecrets(jsonContent)
-    expect(redactedJson).toContain('JSON-VISIBLE-PUBKEY')
-    expect(redactedJson).toContain('json-visible-uuid')
-    expect(redactedJson).not.toContain('JSON-SECRET-PRIVKEY')
-    expect(redactedJson).not.toContain('JSON-SECRET-PSK')
-    expect(redactedJson).not.toContain('JSON-SECRET-PASSWORD')
   })
 })
 
@@ -296,32 +236,34 @@ describe('PublicationsView component rendering', () => {
     }
   })
 
-  it('renders PublicationsView with redacted WG/TUIC secrets in DOM preview and capability boundary banner', async () => {
+  it('renders PublicationsView with real plaintext WG/TUIC configuration in DOM preview matching copied content', async () => {
     const { default: PublicationsView } = await import('./PublicationsView.vue')
     const { createApp, h, nextTick } = await import('vue')
+
+    const rawConfig = [
+      'proxies:',
+      '  - name: WG-Edge',
+      '    type: wireguard',
+      '    server: 198.51.100.10',
+      '    port: 51820',
+      '    ip: 10.0.0.2/32',
+      '    public-key: wg-public-key-visible',
+      '    private-key: wg-super-secret-privkey',
+      '    pre-shared-key: wg-super-secret-psk',
+      '  - name: TUIC-Edge',
+      '    type: tuic',
+      '    server: 198.51.100.11',
+      '    port: 8443',
+      '    uuid: 00000000-0000-4000-8000-000000000099',
+      '    password: tuic-super-secret-password',
+      '    congestion-controller: bbr',
+    ].join('\n')
 
     vi.spyOn(api, 'post').mockResolvedValue({
       target: 'mihomo',
       snapshot_digest: 'sha256:test',
       content_digest: 'sha256:test',
-      content: [
-        'proxies:',
-        '  - name: WG-Edge',
-        '    type: wireguard',
-        '    server: 198.51.100.10',
-        '    port: 51820',
-        '    ip: 10.0.0.2/32',
-        '    public-key: wg-public-key-visible',
-        '    private-key: wg-super-secret-privkey',
-        '    pre-shared-key: wg-super-secret-psk',
-        '  - name: TUIC-Edge',
-        '    type: tuic',
-        '    server: 198.51.100.11',
-        '    port: 8443',
-        '    uuid: 00000000-0000-4000-8000-000000000099',
-        '    password: tuic-super-secret-password',
-        '    congestion-controller: bbr',
-      ].join('\n'),
+      content: rawConfig,
       content_type: 'application/x-yaml',
       filename: 'mihomo.yaml',
       diagnostics: [],
@@ -341,13 +283,11 @@ describe('PublicationsView component rendering', () => {
     const preEl = mountEl.querySelector('pre')
     expect(preEl).not.toBeNull()
     expect(preEl?.className).toContain('adaptive-preview-box')
-    expect(preEl?.textContent).toContain('WG-Edge')
-    expect(preEl?.textContent).toContain('wg-public-key-visible')
-    expect(preEl?.textContent).toContain('00000000-0000-4000-8000-000000000099')
-    // Must NEVER leak private_key, psk, or password in DOM!
-    expect(mountEl.textContent).not.toContain('wg-super-secret-privkey')
-    expect(mountEl.textContent).not.toContain('wg-super-secret-psk')
-    expect(mountEl.textContent).not.toContain('tuic-super-secret-password')
+    expect(preEl?.textContent).toBe(rawConfig)
+    expect(preEl?.textContent).toContain('wg-super-secret-privkey')
+    expect(preEl?.textContent).toContain('wg-super-secret-psk')
+    expect(preEl?.textContent).toContain('tuic-super-secret-password')
+    expect(preEl?.textContent).not.toContain('***')
 
     // Capability boundary banner is present and no retired card exists
     const capCard = mountEl.querySelector('[data-testid="target-capability-boundary"]')
@@ -356,7 +296,7 @@ describe('PublicationsView component rendering', () => {
     expect(capCard?.textContent).toContain('tuic')
     expect(mountEl.querySelector('[data-testid="retired-target-card"]')).toBeNull()
 
-    // Verify Copy Full Config exports the real admin configuration (not masked '***'), while DOM stays redacted
+    // Verify Copy Full Config exports the exact same real admin configuration
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.assign(navigator, { clipboard: { writeText } })
     const copyBtns = Array.from(mountEl.querySelectorAll('button')).filter(
@@ -367,10 +307,7 @@ describe('PublicationsView component rendering', () => {
     await nextTick()
     expect(writeText).toHaveBeenCalled()
     const copiedText = writeText.mock.calls[0][0] as string
-    expect(copiedText).toContain('wg-super-secret-privkey')
-    expect(copiedText).not.toContain('private-key: ***')
-    // DOM still must not contain plaintext secrets
-    expect(mountEl.textContent).not.toContain('wg-super-secret-privkey')
+    expect(copiedText).toBe(rawConfig)
 
     testApp.unmount()
     mountEl.remove()

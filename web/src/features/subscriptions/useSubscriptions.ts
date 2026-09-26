@@ -75,8 +75,8 @@ export function subscriptionPatchPayload(draft: SubscriptionDraft): Partial<Subs
     refresh_policy: draft.refresh_policy,
     config: draft.config,
   }
-  if (draft.source_url_secret_ref.trim() && draft.source_url_secret_ref !== '***') {
-    payload.source_url_secret_ref = draft.source_url_secret_ref
+  if (draft.source_url_secret_ref.trim()) {
+    payload.source_url_secret_ref = draft.source_url_secret_ref.trim()
   }
   return payload
 }

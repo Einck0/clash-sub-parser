@@ -122,16 +122,6 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 		return 2
 	}
 
-	// Initialize node credential vault from environment (fail-fast on invalid key)
-	vault, err := domain.NewNodeCredentialVaultFromEnv()
-	if err != nil {
-		fmt.Fprintf(stderr, "serve: node credential vault initialization failed: %v\n", err)
-		return 1
-	}
-	if vault == nil {
-		fmt.Fprintf(stderr, "serve: warning: node credential master key not configured; credential-backed probes and publications disabled\n")
-	}
-
 	// Ensure parent directory exists if not in-memory
 	if dir := filepath.Dir(dbPath); dir != "" && dir != "." && !strings.HasPrefix(dbPath, ":memory:") && !strings.HasPrefix(dbPath, "file::memory:") {
 		if err := os.MkdirAll(dir, 0755); err != nil {
@@ -203,12 +193,9 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 
 	// Wire domain application services
 	subService := subscription.NewService(subRepo, auditRepo)
-	credRepo := sqlite.NewNodeCredentialRepository(db)
-	var invOpts []inventory.Option
-	if vault != nil {
-		invOpts = append(invOpts, inventory.WithCredentialVault(vault, credRepo))
+	invOpts := []inventory.Option{
+		inventory.WithProbeObservationRepository(probeObsRepo),
 	}
-	invOpts = append(invOpts, inventory.WithProbeObservationRepository(probeObsRepo))
 	invService := inventory.NewService(db, subRepo, fetchRepo, nodeRepo, nodeSourceRepo, nil, invOpts...)
 	subService.SetReconciler(invService)
 
@@ -237,10 +224,8 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 		}
 	}()
 
-	var runnerOpts []probe.DefaultRunnerOption
-	if vault != nil && credRepo != nil {
-		safeDialer := probe.NewSafeNodeDialer(credRepo, vault)
-		runnerOpts = append(runnerOpts, probe.WithNodeDialer(safeDialer))
+	runnerOpts := []probe.DefaultRunnerOption{
+		probe.WithNodeDialer(probe.NewSafeNodeDialer()),
 	}
 
 	var probeRunner probe.Runner
@@ -292,7 +277,6 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 		publication.WithRiskPolicyRepository(riskPolicyRepo),
 		publication.WithRiskBindingRepository(riskBindingRepo),
 		publication.WithRiskObservationRepository(riskObsRepo),
-		publication.WithCredentialSource(vault, credRepo),
 	}
 	pubService := publication.NewService(
 		pubRepo,

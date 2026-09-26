@@ -107,8 +107,8 @@ func TestServiceCreatesRedactedSubscriptionAndAudits(t *testing.T) {
 	if !domain.IsValidUUIDv7(created.ID) || !domain.IsValidUUIDv7(created.Revision) {
 		t.Fatalf("Create() must produce UUIDv7 id/revision: %#v", created)
 	}
-	if created.SourceURLSecretRef != "***" {
-		t.Fatalf("Create() leaked secret reference: %#v", created)
+	if created.SourceURLSecretRef != "secret://subscriptions/primary?token=do-not-leak" {
+		t.Fatalf("Create() unexpected SourceURLSecretRef: %#v", created)
 	}
 	if len(audit.events) != 1 || audit.events[0].Action != "subscription.create" || audit.events[0].Result != domain.AuditResultSuccess {
 		t.Fatalf("Create() audit events = %#v", audit.events)

@@ -363,13 +363,11 @@ func TestFilterConditionMatchingSemantics(t *testing.T) {
 	subID1 := "0191e4a0-0000-7000-8000-000000000010"
 	subID2 := "0191e4a0-0000-7000-8000-000000000020"
 
-	credVer := 2
 	node := domain.Node{
-		LogicalID:         "node-test-01",
-		Protocol:          domain.ProtocolSS,
-		DisplayName:       "Hong Kong [01] Premium",
-		CredentialVersion: credVer,
-		Active:            true,
+		LogicalID:   "node-test-01",
+		Protocol:    domain.ProtocolSS,
+		DisplayName: "Hong Kong [01] Premium",
+		Active:      true,
 	}
 
 	sources := []domain.NodeSource{
@@ -377,13 +375,12 @@ func TestFilterConditionMatchingSemantics(t *testing.T) {
 	}
 
 	freshObs := domain.ProbeObservation{
-		ID:                "obs-01",
-		NodeLogicalID:     node.LogicalID,
-		Kind:              domain.ProbeKindBaseline,
-		Verdict:           domain.VerdictAvailable,
-		LatencyMS:         180,
-		CredentialVersion: &credVer,
-		ObservedAt:        now.Add(-10 * time.Minute),
+		ID:            "obs-01",
+		NodeLogicalID: node.LogicalID,
+		Kind:          domain.ProbeKindBaseline,
+		Verdict:       domain.VerdictAvailable,
+		LatencyMS:     180,
+		ObservedAt:    now.Add(-10 * time.Minute),
 	}
 
 	latestObs := map[domain.ProbeKind]domain.ProbeObservation{
@@ -489,23 +486,6 @@ func TestFilterConditionMatchingSemantics(t *testing.T) {
 		matchedStale, _ := domain.MatchesCondition(condAvail, node, sources, staleMap, asOf)
 		if matchedStale {
 			t.Fatal("expected expired observation to fail closed")
-		}
-
-		// Credential version mismatch (node credVersion changed to 3) -> fails closed
-		mismatchedNode := node
-		mismatchedNode.CredentialVersion = 3
-		matchedMismatch, _ := domain.MatchesCondition(condAvail, mismatchedNode, sources, latestObs, asOf)
-		if matchedMismatch {
-			t.Fatal("expected mismatched credential version observation to fail closed")
-		}
-
-		// Unversioned legacy observation (CredentialVersion == nil) -> fails closed
-		legacyObs := freshObs
-		legacyObs.CredentialVersion = nil
-		legacyMap := map[domain.ProbeKind]domain.ProbeObservation{domain.ProbeKindBaseline: legacyObs}
-		matchedLegacy, _ := domain.MatchesCondition(condAvail, node, sources, legacyMap, asOf)
-		if matchedLegacy {
-			t.Fatal("expected unversioned legacy observation to fail closed")
 		}
 
 		// Negated condition with missing/expired observation -> MUST ALSO BE FALSE (fail-closed, not bypassable)

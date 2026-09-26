@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -37,8 +36,9 @@ func (m *mockPublicationRepo) GetByID(ctx context.Context, id string) (*domain.P
 	if !ok {
 		return nil, domain.NewNotFoundError("publication_not_found", "publication not found")
 	}
-	copy := *pub
-	return &copy, nil
+	cp := *pub
+	cp.Content = append([]byte(nil), pub.Content...)
+	return &cp, nil
 }
 
 func (m *mockPublicationRepo) GetByTokenHash(ctx context.Context, tokenHash string) (*domain.Publication, error) {
@@ -48,8 +48,9 @@ func (m *mockPublicationRepo) GetByTokenHash(ctx context.Context, tokenHash stri
 	if !ok {
 		return nil, domain.NewNotFoundError("publication_not_found", "publication for token hash not found")
 	}
-	copy := *pub
-	return &copy, nil
+	cp := *pub
+	cp.Content = append([]byte(nil), pub.Content...)
+	return &cp, nil
 }
 
 func (m *mockPublicationRepo) Create(ctx context.Context, pub *domain.Publication) error {
@@ -58,9 +59,10 @@ func (m *mockPublicationRepo) Create(ctx context.Context, pub *domain.Publicatio
 	if _, exists := m.tokenMap[pub.TokenHash]; exists {
 		return domain.NewConflictError("duplicate_token_hash", "token hash already exists")
 	}
-	copy := *pub
-	m.publications[pub.ID] = &copy
-	m.tokenMap[pub.TokenHash] = &copy
+	cp := *pub
+	cp.Content = append([]byte(nil), pub.Content...)
+	m.publications[pub.ID] = &cp
+	m.tokenMap[pub.TokenHash] = &cp
 	return nil
 }
 
@@ -97,11 +99,27 @@ func (m *mockAuditRepo) List(ctx context.Context, filter domain.AuditFilter) ([]
 
 // buildSampleSnapshot returns a standard valid snapshot supported across all four compilers.
 func buildSampleSnapshot() *resolver.ResolvedPolicySnapshot {
-	hkIdentity := domain.NewVerifiedNodeIdentity("node-hk-01", domain.ProtocolTrojan, "hk.example.com", 443, 1, nil)
-	usIdentity := domain.NewVerifiedNodeIdentity("node-us-01", domain.ProtocolSS, "us.example.com", 8388, 1, nil)
 	nodes := []resolver.ResolvedNode{
-		{LogicalID: "node-hk-01", DisplayName: "Hong Kong 01", Protocol: domain.ProtocolTrojan, Active: true, Position: 0, CredentialVersion: 1, Identity: &hkIdentity},
-		{LogicalID: "node-us-01", DisplayName: "United States 01", Protocol: domain.ProtocolSS, Active: true, Position: 1, CredentialVersion: 1, Identity: &usIdentity},
+		{
+			LogicalID:   "node-hk-01",
+			DisplayName: "Hong Kong 01",
+			Protocol:    domain.ProtocolTrojan,
+			Server:      "hk.example.com",
+			Port:        443,
+			Credentials: domain.InboundProtocolCredential{Password: "hk-trojan-secret-password"},
+			Active:      true,
+			Position:    0,
+		},
+		{
+			LogicalID:   "node-us-01",
+			DisplayName: "United States 01",
+			Protocol:    domain.ProtocolSS,
+			Server:      "us.example.com",
+			Port:        8388,
+			Credentials: domain.InboundProtocolCredential{Method: "aes-256-gcm", Password: "us-ss-secret-password"},
+			Active:      true,
+			Position:    1,
+		},
 	}
 	groups := []resolver.ResolvedGroup{
 		{
@@ -142,105 +160,72 @@ func buildSampleSnapshot() *resolver.ResolvedPolicySnapshot {
 // buildIncompatibleSnapshot returns a snapshot containing protocols (Hysteria2) unsupported by Surge/QX.
 func buildIncompatibleSnapshot() *resolver.ResolvedPolicySnapshot {
 	snap := buildSampleSnapshot()
-	hy2Identity := domain.NewVerifiedNodeIdentity("node-hy2-01", domain.ProtocolHysteria2, "hy2.example.com", 443, 1, nil)
 	snap.Nodes = append(snap.Nodes, resolver.ResolvedNode{
-		LogicalID:         "node-hy2-01",
-		DisplayName:       "Hysteria 01",
-		Protocol:          domain.ProtocolHysteria2,
-		Active:            true,
-		Position:          2,
-		CredentialVersion: 1,
-		Identity:          &hy2Identity,
+		LogicalID:   "node-hy2-01",
+		DisplayName: "Hysteria 01",
+		Protocol:    domain.ProtocolHysteria2,
+		Server:      "hy2.example.com",
+		Port:        443,
+		Credentials: domain.InboundProtocolCredential{Password: "hy2-secret-password"},
+		Active:      true,
+		Position:    2,
 	})
 	snap.NodeLogicalIDs = append(snap.NodeLogicalIDs, "node-hy2-01")
 	return snap
 }
 
-func setupSampleVaultSource() (*domain.NodeCredentialVault, *mockCredentialRepo, *mockNodeRepo) {
-	masterKey := []byte("01234567890123456789012345678901")
-	vault, err := domain.NewNodeCredentialVault("k1", map[string][]byte{"k1": masterKey})
-	if err != nil {
-		panic(fmt.Sprintf("failed to create sample vault: %v", err))
-	}
-	credRepo := newMockCredentialRepo()
+func setupSampleNodeSource() *mockNodeRepo {
 	nodeRepo := newMockNodeRepo()
 	now := time.Now().UTC()
 
-	sampleNodes := []struct {
-		id     string
-		name   string
-		proto  domain.Protocol
-		server string
-		port   int
-		cred   domain.InboundProtocolCredential
-	}{
+	nodes := []domain.Node{
 		{
-			id:     "node-hk-01",
-			name:   "Hong Kong 01",
-			proto:  domain.ProtocolTrojan,
-			server: "hk.example.com",
-			port:   443,
-			cred:   domain.InboundProtocolCredential{Password: "hk-trojan-secret-password"},
+			LogicalID:   "node-hk-01",
+			Protocol:    domain.ProtocolTrojan,
+			DisplayName: "Hong Kong 01",
+			Server:      "hk.example.com",
+			Port:        443,
+			Credentials: domain.InboundProtocolCredential{Password: "hk-trojan-secret-password"},
+			Active:      true,
+			CreatedAt:   now,
+			UpdatedAt:   now,
 		},
 		{
-			id:     "node-us-01",
-			name:   "United States 01",
-			proto:  domain.ProtocolSS,
-			server: "us.example.com",
-			port:   8388,
-			cred:   domain.InboundProtocolCredential{Method: "aes-256-gcm", Password: "us-ss-secret-password"},
+			LogicalID:   "node-us-01",
+			Protocol:    domain.ProtocolSS,
+			DisplayName: "United States 01",
+			Server:      "us.example.com",
+			Port:        8388,
+			Credentials: domain.InboundProtocolCredential{Method: "aes-256-gcm", Password: "us-ss-secret-password"},
+			Active:      true,
+			CreatedAt:   now,
+			UpdatedAt:   now,
 		},
 		{
-			id:     "node-hy2-01",
-			name:   "Hysteria 01",
-			proto:  domain.ProtocolHysteria2,
-			server: "hy2.example.com",
-			port:   443,
-			cred:   domain.InboundProtocolCredential{Password: "hy2-secret-password"},
+			LogicalID:   "node-hy2-01",
+			Protocol:    domain.ProtocolHysteria2,
+			DisplayName: "Hysteria 01",
+			Server:      "hy2.example.com",
+			Port:        443,
+			Credentials: domain.InboundProtocolCredential{Password: "hy2-secret-password"},
+			Active:      true,
+			CreatedAt:   now,
+			UpdatedAt:   now,
 		},
-	}
-
-	var nodes []domain.Node
-	for _, sn := range sampleNodes {
-		identity := domain.NewVerifiedNodeIdentity(sn.id, sn.proto, sn.server, sn.port, 1, sn.cred.Transport)
-		nodes = append(nodes, domain.Node{
-			LogicalID:         sn.id,
-			Protocol:          sn.proto,
-			DisplayName:       sn.name,
-			CredentialVersion: 1,
-			Identity:          &identity,
-			Active:            true,
-			CreatedAt:         now,
-			UpdatedAt:         now,
-		})
-		rec, err := vault.Encrypt(&domain.NodeCredentialPayload{
-			LogicalID:   sn.id,
-			Protocol:    sn.proto,
-			Server:      sn.server,
-			Port:        sn.port,
-			Version:     1,
-			Identity:    &identity,
-			Credentials: sn.cred,
-		})
-		if err != nil {
-			panic(fmt.Sprintf("encrypt sample node %s: %v", sn.id, err))
-		}
-		_ = credRepo.Upsert(context.Background(), rec)
 	}
 	_ = nodeRepo.UpsertBatch(context.Background(), nodes)
-	return vault, credRepo, nodeRepo
+	return nodeRepo
 }
 
 func setupService() (*publication.Service, *mockPublicationRepo, *mockAuditRepo) {
 	pubRepo := newMockPublicationRepo()
 	auditRepo := &mockAuditRepo{}
-	vault, credRepo, nodeRepo := setupSampleVaultSource()
+	nodeRepo := setupSampleNodeSource()
 	svc := publication.NewService(
 		pubRepo,
 		auditRepo,
 		publication.WithResolver(resolver.New()),
 		publication.WithNodeRepository(nodeRepo),
-		publication.WithCredentialSource(vault, credRepo),
 	)
 	return svc, pubRepo, auditRepo
 }
@@ -289,6 +274,9 @@ func TestPublishSuccess(t *testing.T) {
 	if result.ContentDigest == "" {
 		t.Fatal("expected non-empty content digest")
 	}
+	if len(result.Publication.Content) == 0 {
+		t.Fatal("expected plaintext Content persisted in Publication")
+	}
 
 	// Verify audit log recorded
 	auditRepo.mu.Lock()
@@ -304,7 +292,6 @@ func TestPublishSuccess(t *testing.T) {
 	if ev.Result != domain.AuditResultSuccess {
 		t.Fatalf("expected audit result success, got %s", ev.Result)
 	}
-	// Verify raw token is NOT leaked in audit summary
 	if strings.Contains(ev.RedactedSummary, result.RawToken) {
 		t.Fatalf("raw token leaked in audit summary: %s", ev.RedactedSummary)
 	}
@@ -315,7 +302,6 @@ func TestPublishIncompatibleTargetHardFails(t *testing.T) {
 	ctx := context.Background()
 	incompatibleSnap := buildIncompatibleSnapshot()
 
-	// Surge does not support Hysteria2 -> must hard fail
 	cmd := publication.PublishCommand{
 		Target:    domain.TargetSurge,
 		Snapshot:  incompatibleSnap,
@@ -433,7 +419,6 @@ func TestServiceRejectsLegacyTargetClashAndUnknownTargets(t *testing.T) {
 	ctx := context.Background()
 	snap := buildSampleSnapshot()
 
-	// 1. Legacy target "clash" must be rejected on Publish and Preview without alias/fallback
 	for _, illegalTarget := range []domain.CompilerTarget{"clash", "unknown", "v2ray"} {
 		t.Run("publish_"+string(illegalTarget), func(t *testing.T) {
 			_, err := svc.Publish(ctx, publication.PublishCommand{
@@ -467,68 +452,6 @@ func TestServiceRejectsLegacyTargetClashAndUnknownTargets(t *testing.T) {
 	}
 }
 
-// mockCredentialRepo implements domain.NodeCredentialRepository in memory.
-type mockCredentialRepo struct {
-	mu      sync.RWMutex
-	records map[string]*domain.NodeCredentialRecord
-}
-
-func newMockCredentialRepo() *mockCredentialRepo {
-	return &mockCredentialRepo{records: make(map[string]*domain.NodeCredentialRecord)}
-}
-
-func (m *mockCredentialRepo) key(logicalID string, version int) string {
-	return fmt.Sprintf("%s:%d", logicalID, version)
-}
-
-func (m *mockCredentialRepo) GetByLogicalID(ctx context.Context, logicalID string, version int) (*domain.NodeCredentialRecord, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	rec, ok := m.records[m.key(logicalID, version)]
-	if !ok {
-		return nil, domain.NewNotFoundError("credential_not_found", "credential not found")
-	}
-	copy := *rec
-	return &copy, nil
-}
-
-func (m *mockCredentialRepo) GetLatestByLogicalID(ctx context.Context, logicalID string) (*domain.NodeCredentialRecord, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	var latest *domain.NodeCredentialRecord
-	for _, rec := range m.records {
-		if rec.LogicalID == logicalID {
-			if latest == nil || rec.Version > latest.Version {
-				copy := *rec
-				latest = &copy
-			}
-		}
-	}
-	if latest == nil {
-		return nil, domain.NewNotFoundError("credential_not_found", "credential not found")
-	}
-	return latest, nil
-}
-
-func (m *mockCredentialRepo) Upsert(ctx context.Context, record *domain.NodeCredentialRecord) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	copy := *record
-	m.records[m.key(record.LogicalID, record.Version)] = &copy
-	return nil
-}
-
-func (m *mockCredentialRepo) DeleteByLogicalID(ctx context.Context, logicalID string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for k, rec := range m.records {
-		if rec.LogicalID == logicalID {
-			delete(m.records, k)
-		}
-	}
-	return nil
-}
-
 // mockNodeRepo implements domain.NodeRepository in memory.
 type mockNodeRepo struct {
 	mu    sync.RWMutex
@@ -546,8 +469,8 @@ func (m *mockNodeRepo) GetByLogicalID(ctx context.Context, logicalID string) (*d
 	if !ok {
 		return nil, domain.NewNotFoundError("node_not_found", "node not found")
 	}
-	copy := *n
-	return &copy, nil
+	cp := *n
+	return &cp, nil
 }
 
 func (m *mockNodeRepo) List(ctx context.Context, filter domain.NodeFilter) ([]domain.Node, int, error) {
@@ -575,8 +498,8 @@ func (m *mockNodeRepo) UpsertBatch(ctx context.Context, nodes []domain.Node) err
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, n := range nodes {
-		copy := n
-		m.nodes[n.LogicalID] = &copy
+		cp := n
+		m.nodes[n.LogicalID] = &cp
 	}
 	return nil
 }
@@ -603,8 +526,8 @@ func (m *mockRevisionRepo) GetByID(ctx context.Context, id string) (*domain.Conf
 	if !ok {
 		return nil, domain.NewNotFoundError("revision_not_found", "revision not found")
 	}
-	copy := *r
-	return &copy, nil
+	cp := *r
+	return &cp, nil
 }
 
 func (m *mockRevisionRepo) GetActive(ctx context.Context) (*domain.ConfigurationRevision, error) {
@@ -617,8 +540,8 @@ func (m *mockRevisionRepo) GetActive(ctx context.Context) (*domain.Configuration
 	if !ok {
 		return nil, domain.NewNotFoundError("active_revision_not_found", "no active revision")
 	}
-	copy := *r
-	return &copy, nil
+	cp := *r
+	return &cp, nil
 }
 
 func (m *mockRevisionRepo) List(ctx context.Context, filter domain.RevisionFilter) ([]domain.ConfigurationRevision, int, error) {
@@ -634,8 +557,8 @@ func (m *mockRevisionRepo) List(ctx context.Context, filter domain.RevisionFilte
 func (m *mockRevisionRepo) Create(ctx context.Context, rev *domain.ConfigurationRevision) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	copy := *rev
-	m.revisions[rev.ID] = &copy
+	cp := *rev
+	m.revisions[rev.ID] = &cp
 	if rev.State == domain.RevisionStateActive {
 		m.activeID = rev.ID
 	}
@@ -684,8 +607,8 @@ func (m *mockPolicyRepo) GetGroupByID(ctx context.Context, id string) (*domain.N
 	if !ok {
 		return nil, domain.NewNotFoundError("group_not_found", "group not found")
 	}
-	copy := *g
-	return &copy, nil
+	cp := *g
+	return &cp, nil
 }
 
 func (m *mockPolicyRepo) ListGroups(ctx context.Context) ([]domain.NodeGroup, error) {
@@ -701,16 +624,16 @@ func (m *mockPolicyRepo) ListGroups(ctx context.Context) ([]domain.NodeGroup, er
 func (m *mockPolicyRepo) CreateGroup(ctx context.Context, group *domain.NodeGroup) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	copy := *group
-	m.groups[group.ID] = &copy
+	cp := *group
+	m.groups[group.ID] = &cp
 	return nil
 }
 
 func (m *mockPolicyRepo) UpdateGroup(ctx context.Context, group *domain.NodeGroup) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	copy := *group
-	m.groups[group.ID] = &copy
+	cp := *group
+	m.groups[group.ID] = &cp
 	return nil
 }
 
@@ -728,14 +651,12 @@ func (m *mockPolicyRepo) ListEdgesByGroup(ctx context.Context, parentGroupID str
 	return append([]domain.GroupEdge(nil), edges...), nil
 }
 
-func (m *mockPolicyRepo) SetEdgesForGroup(ctx context.Context, parentGroupID string, edges []GroupEdgeSafe) error {
+func (m *mockPolicyRepo) SetEdgesForGroup(ctx context.Context, parentGroupID string, edges []domain.GroupEdge) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.edges[parentGroupID] = edges
 	return nil
 }
-
-type GroupEdgeSafe = domain.GroupEdge
 
 func (m *mockPolicyRepo) ListAdmissionRules(ctx context.Context, revisionID string) ([]domain.AdmissionRule, error) {
 	m.mu.RLock()
@@ -763,18 +684,15 @@ func (m *mockPolicyRepo) CreatePolicyRule(ctx context.Context, rule *domain.Poli
 	return nil
 }
 
-func setupVaultAndNodes(t *testing.T) (*domain.NodeCredentialVault, *mockCredentialRepo, *mockNodeRepo, *resolver.ResolvedPolicySnapshot) {
-	masterKey := []byte("01234567890123456789012345678901") // 32 bytes
-	vault, err := domain.NewNodeCredentialVault("k1", map[string][]byte{"k1": masterKey})
-	if err != nil {
-		t.Fatalf("failed to create vault: %v", err)
-	}
-
-	credRepo := newMockCredentialRepo()
+func TestMihomoPublishAndPreview_PlaintextPersistenceAndRestartRecovery(t *testing.T) {
+	ctx := context.Background()
 	nodeRepo := newMockNodeRepo()
+	pubRepo := newMockPublicationRepo()
+	auditRepo := &mockAuditRepo{}
+	revRepo := newMockRevisionRepo()
+	policyRepo := newMockPolicyRepo()
 
 	now := time.Now().UTC()
-
 	hy2Transport := map[string]string{
 		"sni":              "hy2.sample.com",
 		"skip_cert_verify": "true",
@@ -782,106 +700,36 @@ func setupVaultAndNodes(t *testing.T) (*domain.NodeCredentialVault, *mockCredent
 	hy2ID := domain.ComputeNodeLogicalID(domain.ProtocolHysteria2, "198.51.100.25", 443, hy2Transport)
 	ssID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "198.51.100.26", 8388, nil)
 
-	hy2Identity := domain.NewVerifiedNodeIdentity(hy2ID, domain.ProtocolHysteria2, "198.51.100.25", 443, 1, hy2Transport)
-	ssIdentity := domain.NewVerifiedNodeIdentity(ssID, domain.ProtocolSS, "198.51.100.26", 8388, 1, nil)
-
-	// 1. Hysteria2 node
-	hy2Node := domain.Node{
-		LogicalID:         hy2ID,
-		Protocol:          domain.ProtocolHysteria2,
-		DisplayName:       "Hy2-Edge",
-		CredentialVersion: 1,
-		Identity:          &hy2Identity,
-		Active:            true,
-		CreatedAt:         now,
-		UpdatedAt:         now,
-	}
-	hy2Payload := &domain.NodeCredentialPayload{
-		LogicalID: hy2ID,
-		Protocol:  domain.ProtocolHysteria2,
-		Server:    "198.51.100.25",
-		Port:      443,
-		Version:   1,
-		Identity:  &hy2Identity,
-		Credentials: domain.InboundProtocolCredential{
-			Password:  "hy2-super-secret-password",
-			Transport: hy2Transport,
-		},
-	}
-	hy2Rec, err := vault.Encrypt(hy2Payload)
-	if err != nil {
-		t.Fatalf("encrypt hy2: %v", err)
-	}
-	if err := credRepo.Upsert(context.Background(), hy2Rec); err != nil {
-		t.Fatalf("upsert hy2 record: %v", err)
-	}
-
-	// 2. Shadowsocks node
-	ssNode := domain.Node{
-		LogicalID:         ssID,
-		Protocol:          domain.ProtocolSS,
-		DisplayName:       "SS-Edge",
-		CredentialVersion: 1,
-		Identity:          &ssIdentity,
-		Active:            true,
-		CreatedAt:         now,
-		UpdatedAt:         now,
-	}
-	ssPayload := &domain.NodeCredentialPayload{
-		LogicalID: ssID,
-		Protocol:  domain.ProtocolSS,
-		Server:    "198.51.100.26",
-		Port:      8388,
-		Version:   1,
-		Identity:  &ssIdentity,
-		Credentials: domain.InboundProtocolCredential{
-			Method:   "aes-256-gcm",
-			Password: "ss-super-secret-password",
-		},
-	}
-	ssRec, err := vault.Encrypt(ssPayload)
-	if err != nil {
-		t.Fatalf("encrypt ss: %v", err)
-	}
-	if err := credRepo.Upsert(context.Background(), ssRec); err != nil {
-		t.Fatalf("upsert ss record: %v", err)
-	}
-
-	_ = nodeRepo.UpsertBatch(context.Background(), []domain.Node{hy2Node, ssNode})
-
-	groupID := domain.MustNewUUIDv7()
-	snapshot := &resolver.ResolvedPolicySnapshot{
-		SnapshotDigest:  "snap-hy2-ss-valid",
-		CompilerVersion: "1.0.0",
-		Nodes: []resolver.ResolvedNode{
-			{LogicalID: hy2ID, DisplayName: "Hy2-Edge", Protocol: domain.ProtocolHysteria2, Active: true, Position: 0, CredentialVersion: 1, Identity: &hy2Identity},
-			{LogicalID: ssID, DisplayName: "SS-Edge", Protocol: domain.ProtocolSS, Active: true, Position: 1, CredentialVersion: 1, Identity: &ssIdentity},
-		},
-		Groups: []resolver.ResolvedGroup{
-			{
-				ID:             groupID,
-				Name:           "PROXY",
-				GroupType:      domain.GroupTypeSelect,
-				Members:        []resolver.ResolvedGroupMember{{Kind: resolver.MemberKindNode, TargetID: hy2ID, DisplayName: "Hy2-Edge", Position: 0}, {Kind: resolver.MemberKindNode, TargetID: ssID, DisplayName: "SS-Edge", Position: 1}},
-				NodeLogicalIDs: []string{hy2ID, ssID},
-				Position:       0,
+	_ = nodeRepo.UpsertBatch(ctx, []domain.Node{
+		{
+			LogicalID:   hy2ID,
+			Protocol:    domain.ProtocolHysteria2,
+			DisplayName: "Hy2-Edge",
+			Server:      "198.51.100.25",
+			Port:        443,
+			Credentials: domain.InboundProtocolCredential{
+				Password:  "hy2-super-secret-password",
+				Transport: hy2Transport,
 			},
+			Active:    true,
+			CreatedAt: now,
+			UpdatedAt: now,
 		},
-		Rules: []resolver.ResolvedRule{
-			{ID: domain.MustNewUUIDv7(), TargetGroupID: groupID, TargetGroupName: "PROXY", Expression: "MATCH", Position: 0, IsTerminal: true},
+		{
+			LogicalID:   ssID,
+			Protocol:    domain.ProtocolSS,
+			DisplayName: "SS-Edge",
+			Server:      "198.51.100.26",
+			Port:        8388,
+			Credentials: domain.InboundProtocolCredential{
+				Method:   "aes-256-gcm",
+				Password: "ss-super-secret-password",
+			},
+			Active:    true,
+			CreatedAt: now,
+			UpdatedAt: now,
 		},
-	}
-
-	return vault, credRepo, nodeRepo, snapshot
-}
-
-func TestMihomoPublishAndPreview_EncryptedVaultSuccessAndRestartRecovery(t *testing.T) {
-	ctx := context.Background()
-	vault, credRepo, nodeRepo, _ := setupVaultAndNodes(t)
-	pubRepo := newMockPublicationRepo()
-	auditRepo := &mockAuditRepo{}
-	revRepo := newMockRevisionRepo()
-	policyRepo := newMockPolicyRepo()
+	})
 
 	revID := domain.MustNewUUIDv7()
 	groupID := domain.MustNewUUIDv7()
@@ -899,11 +747,6 @@ func TestMihomoPublishAndPreview_EncryptedVaultSuccessAndRestartRecovery(t *test
 		Name:      "PROXY",
 		GroupType: domain.GroupTypeSelect,
 	})
-	hy2ID := domain.ComputeNodeLogicalID(domain.ProtocolHysteria2, "198.51.100.25", 443, map[string]string{
-		"sni":              "hy2.sample.com",
-		"skip_cert_verify": "true",
-	})
-	ssID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "198.51.100.26", 8388, nil)
 	_ = policyRepo.SetEdgesForGroup(ctx, groupID, []domain.GroupEdge{
 		{ID: edge1ID, ParentGroupID: groupID, NodeLogicalID: &hy2ID, Position: 0},
 		{ID: edge2ID, ParentGroupID: groupID, NodeLogicalID: &ssID, Position: 1},
@@ -920,12 +763,11 @@ func TestMihomoPublishAndPreview_EncryptedVaultSuccessAndRestartRecovery(t *test
 		pubRepo,
 		auditRepo,
 		publication.WithNodeRepository(nodeRepo),
-		publication.WithCredentialSource(vault, credRepo),
 		publication.WithRevisionRepository(revRepo),
 		publication.WithPolicyRepository(policyRepo),
 	)
 
-	// 1. Preview Mihomo with credentials -> 200 OK
+	// 1. Preview Mihomo -> 200 OK
 	previewRes, err := svc.Preview(ctx, publication.PreviewQuery{
 		Target:     domain.TargetMihomo,
 		RevisionID: revID,
@@ -942,7 +784,7 @@ func TestMihomoPublishAndPreview_EncryptedVaultSuccessAndRestartRecovery(t *test
 		t.Fatalf("Preview Mihomo missing expected Shadowsocks credentials:\n%s", previewContent)
 	}
 
-	// 2. Publish Mihomo with credentials -> creates publication
+	// 2. Publish Mihomo -> creates publication with persisted plaintext Content
 	pubRes, err := svc.Publish(ctx, publication.PublishCommand{
 		Target:     domain.TargetMihomo,
 		RevisionID: revID,
@@ -978,190 +820,15 @@ func TestMihomoPublishAndPreview_EncryptedVaultSuccessAndRestartRecovery(t *test
 		t.Fatal("served artifact content does not match preview content")
 	}
 
-	// 4. Audit security: verify secrets and raw tokens are not leaked
-	auditRepo.mu.Lock()
-	for _, ev := range auditRepo.events {
-		if strings.Contains(ev.RedactedSummary, pubRes.RawToken) {
-			t.Fatalf("audit event leaked raw token: %s", ev.RedactedSummary)
-		}
-		if strings.Contains(ev.RedactedSummary, "hy2-super-secret-password") || strings.Contains(ev.RedactedSummary, "ss-super-secret-password") {
-			t.Fatalf("audit event leaked password: %s", ev.RedactedSummary)
-		}
-	}
-	auditRepo.mu.Unlock()
-
-	// 5. Simulated process restart: clear in-memory artifacts map and re-resolve
-	// We instantiate a fresh service pointing to the same repositories
-	restartedSvc := publication.NewService(
-		pubRepo,
-		auditRepo,
-		publication.WithNodeRepository(nodeRepo),
-		publication.WithCredentialSource(vault, credRepo),
-		publication.WithRevisionRepository(revRepo),
-		publication.WithPolicyRepository(policyRepo),
-	)
-
+	// 4. Simulated process restart: fresh service instance serves directly from persisted Content
+	restartedSvc := publication.NewService(pubRepo, auditRepo)
 	recoveredArt, err := restartedSvc.ResolveAndServe(ctx, pubRes.Publication.ID, pubRes.RawToken)
 	if err != nil {
 		t.Fatalf("restart recovery ResolveAndServe failed: %v", err)
 	}
-	if recoveredArt.ContentDigest != pubRes.ContentDigest {
-		t.Fatalf("recovered ContentDigest %s does not match original %s", recoveredArt.ContentDigest, pubRes.ContentDigest)
+	if recoveredArt.ContentDigest != pubRes.ContentDigest || string(recoveredArt.Content) != previewContent {
+		t.Fatalf("recovered content does not match original preview content")
 	}
-	if string(recoveredArt.Content) != previewContent {
-		t.Fatal("recovered content does not match original preview content")
-	}
-}
-
-func TestMihomoPublishAndPreview_FailClosedScenarios(t *testing.T) {
-	ctx := context.Background()
-
-	// 1. Missing credentials for node in repo fails closed
-	t.Run("MissingCredentialsFailClosed", func(t *testing.T) {
-		vault, credRepo, nodeRepo, snapshot := setupVaultAndNodes(t)
-		hy2ID := snapshot.Nodes[0].LogicalID
-		_ = credRepo.DeleteByLogicalID(ctx, hy2ID) // remove credentials for hy2
-
-		svc := publication.NewService(
-			newMockPublicationRepo(),
-			&mockAuditRepo{},
-			publication.WithNodeRepository(nodeRepo),
-			publication.WithCredentialSource(vault, credRepo),
-		)
-
-		_, err := svc.Publish(ctx, publication.PublishCommand{
-			Target:    domain.TargetMihomo,
-			Snapshot:  snapshot,
-			ActorKind: domain.ActorKindAdmin,
-			RequestID: "req-missing-cred",
-		})
-		if err == nil {
-			t.Fatal("expected missing credentials to fail closed")
-		}
-		de, ok := domain.AsDomainError(err)
-		if !ok || de.Code != "unsupported_target_capability" {
-			t.Fatalf("expected unsupported_target_capability, got %v", err)
-		}
-	})
-
-	// 2. Unconfigured vault/credRepo fails closed
-	t.Run("UnconfiguredVaultFailsClosed", func(t *testing.T) {
-		_, _, nodeRepo, snapshot := setupVaultAndNodes(t)
-		svc := publication.NewService(
-			newMockPublicationRepo(),
-			&mockAuditRepo{},
-			publication.WithNodeRepository(nodeRepo),
-			// no WithCredentialSource
-		)
-
-		_, err := svc.Publish(ctx, publication.PublishCommand{
-			Target:    domain.TargetMihomo,
-			Snapshot:  snapshot,
-			ActorKind: domain.ActorKindAdmin,
-			RequestID: "req-no-vault",
-		})
-		if err == nil {
-			t.Fatal("expected unconfigured vault to fail closed")
-		}
-		de, ok := domain.AsDomainError(err)
-		if !ok || de.Code != "unsupported_target_capability" {
-			t.Fatalf("expected unsupported_target_capability, got %v", err)
-		}
-	})
-
-	// 3. Credential version mismatch fails closed
-	t.Run("VersionMismatchFailsClosed", func(t *testing.T) {
-		vault, credRepo, nodeRepo, snapshot := setupVaultAndNodes(t)
-		hy2ID := snapshot.Nodes[0].LogicalID
-		// Bump version in nodeRepo without updating credRepo
-		node, _ := nodeRepo.GetByLogicalID(ctx, hy2ID)
-		node.CredentialVersion = 2
-		_ = nodeRepo.UpsertBatch(ctx, []domain.Node{*node})
-
-		svc := publication.NewService(
-			newMockPublicationRepo(),
-			&mockAuditRepo{},
-			publication.WithNodeRepository(nodeRepo),
-			publication.WithCredentialSource(vault, credRepo),
-		)
-
-		_, err := svc.Publish(ctx, publication.PublishCommand{
-			Target:    domain.TargetMihomo,
-			Snapshot:  snapshot,
-			ActorKind: domain.ActorKindAdmin,
-			RequestID: "req-version-mismatch",
-		})
-		if err == nil {
-			t.Fatal("expected version mismatch to fail closed")
-		}
-		de, ok := domain.AsDomainError(err)
-		if !ok || de.Code != "unsupported_target_capability" {
-			t.Fatalf("expected unsupported_target_capability, got %v", err)
-		}
-	})
-
-	// 4. Tampered ciphertext fails closed without secret leak
-	t.Run("TamperedCiphertextFailsClosed", func(t *testing.T) {
-		vault, credRepo, nodeRepo, snapshot := setupVaultAndNodes(t)
-		hy2ID := snapshot.Nodes[0].LogicalID
-		rec, _ := credRepo.GetByLogicalID(ctx, hy2ID, 1)
-		rec.Ciphertext[0] ^= 0xff // corrupt ciphertext byte
-		_ = credRepo.Upsert(ctx, rec)
-
-		svc := publication.NewService(
-			newMockPublicationRepo(),
-			&mockAuditRepo{},
-			publication.WithNodeRepository(nodeRepo),
-			publication.WithCredentialSource(vault, credRepo),
-		)
-
-		_, err := svc.Publish(ctx, publication.PublishCommand{
-			Target:    domain.TargetMihomo,
-			Snapshot:  snapshot,
-			ActorKind: domain.ActorKindAdmin,
-			RequestID: "req-tampered",
-		})
-		if err == nil {
-			t.Fatal("expected tampered ciphertext to fail closed")
-		}
-		de, ok := domain.AsDomainError(err)
-		if !ok || de.Code != "unsupported_target_capability" {
-			t.Fatalf("expected unsupported_target_capability, got %v", err)
-		}
-		if strings.Contains(err.Error(), "01234567890123456789012345678901") {
-			t.Fatal("error message leaked encryption key")
-		}
-	})
-
-	// 5. Logical ID mismatch fails closed
-	t.Run("LogicalIDMismatchFailsClosed", func(t *testing.T) {
-		vault, credRepo, nodeRepo, snapshot := setupVaultAndNodes(t)
-		hy2ID := snapshot.Nodes[0].LogicalID
-		rec, _ := credRepo.GetByLogicalID(ctx, hy2ID, 1)
-		_ = credRepo.DeleteByLogicalID(ctx, hy2ID)
-		// Put record back under key hy2ID:1 but with mismatched LogicalID field
-		rec.LogicalID = "wrong-logical-id"
-		credRepo.mu.Lock()
-		credRepo.records[hy2ID+":1"] = rec
-		credRepo.mu.Unlock()
-
-		svc := publication.NewService(
-			newMockPublicationRepo(),
-			&mockAuditRepo{},
-			publication.WithNodeRepository(nodeRepo),
-			publication.WithCredentialSource(vault, credRepo),
-		)
-
-		_, err := svc.Publish(ctx, publication.PublishCommand{
-			Target:    domain.TargetMihomo,
-			Snapshot:  snapshot,
-			ActorKind: domain.ActorKindAdmin,
-			RequestID: "req-logical-id-mismatch",
-		})
-		if err == nil {
-			t.Fatal("expected logical ID mismatch to fail closed")
-		}
-	})
 }
 
 func TestResolveAndServe_LegacyClashRetiredContract(t *testing.T) {
@@ -1177,7 +844,7 @@ func TestResolveAndServe_LegacyClashRetiredContract(t *testing.T) {
 
 	legacyPub := domain.Publication{
 		ID:              pubID,
-		Target:          domain.CompilerTarget("clash"), // legacy retired target
+		Target:          domain.CompilerTarget("clash"),
 		SnapshotDigest:  "snap-legacy-digest",
 		CompilerVersion: "1.0.0",
 		TokenHash:       hex.EncodeToString(tokenHash[:]),
@@ -1186,19 +853,16 @@ func TestResolveAndServe_LegacyClashRetiredContract(t *testing.T) {
 	}
 	_ = pubRepo.Create(ctx, &legacyPub)
 
-	// 1. Missing token -> 401 Unauthorized (Auth check before retired target check)
 	_, err := svc.ResolveAndServe(ctx, pubID, "")
 	if !errors.Is(err, publication.ErrUnauthorized) {
 		t.Fatalf("expected ErrUnauthorized for missing token, got %v", err)
 	}
 
-	// 2. Invalid token -> 401 Unauthorized (Auth check before retired target check)
 	_, err = svc.ResolveAndServe(ctx, pubID, "pub_invalid_token")
 	if !errors.Is(err, publication.ErrUnauthorized) {
 		t.Fatalf("expected ErrUnauthorized for invalid token, got %v", err)
 	}
 
-	// 3. Revoked publication -> 403 Revoked (Revocation check before retired target check)
 	now := time.Now().UTC()
 	_ = pubRepo.Revoke(ctx, pubID, now)
 	_, err = svc.ResolveAndServe(ctx, pubID, rawToken)
@@ -1206,10 +870,8 @@ func TestResolveAndServe_LegacyClashRetiredContract(t *testing.T) {
 		t.Fatalf("expected ErrRevoked for revoked clash publication, got %v", err)
 	}
 
-	// 4. Un-revoke to active: with valid token -> returns ErrUnsupportedTarget
 	revivedPub := legacyPub
 	revivedPub.State = domain.PublicationStateActive
-	_ = pubRepo.Create(ctx, &revivedPub)
 	pubRepo.mu.Lock()
 	pubRepo.publications[pubID] = &revivedPub
 	pubRepo.tokenMap[revivedPub.TokenHash] = &revivedPub
@@ -1220,7 +882,6 @@ func TestResolveAndServe_LegacyClashRetiredContract(t *testing.T) {
 		t.Fatalf("expected ErrUnsupportedTarget for valid token on legacy clash, got %v", err)
 	}
 
-	// 5. Admin can still inspect detail with Target="clash"
 	detail, err := svc.Get(ctx, pubID)
 	if err != nil {
 		t.Fatalf("Get publication detail failed: %v", err)
@@ -1233,7 +894,7 @@ func TestResolveAndServe_LegacyClashRetiredContract(t *testing.T) {
 	}
 }
 
-func TestAllFourTargets_UnifiedCredentialVaultAndRestartCredentialRotationGuard(t *testing.T) {
+func TestAllFourTargets_PlaintextLifecycle(t *testing.T) {
 	ctx := context.Background()
 	targets := []domain.CompilerTarget{
 		domain.TargetMihomo,
@@ -1244,8 +905,6 @@ func TestAllFourTargets_UnifiedCredentialVaultAndRestartCredentialRotationGuard(
 
 	for _, target := range targets {
 		t.Run("FullLifecycle_"+string(target), func(t *testing.T) {
-			vault, _, _ := setupSampleVaultSource()
-			credRepo := newMockCredentialRepo()
 			nodeRepo := newMockNodeRepo()
 			pubRepo := newMockPublicationRepo()
 			auditRepo := &mockAuditRepo{}
@@ -1256,33 +915,31 @@ func TestAllFourTargets_UnifiedCredentialVaultAndRestartCredentialRotationGuard(
 			groupID := domain.MustNewUUIDv7()
 			hkID := domain.ComputeNodeLogicalID(domain.ProtocolTrojan, "hk.example.com", 443, nil)
 			usID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "us.example.com", 8388, nil)
-			hkIdentity := domain.NewVerifiedNodeIdentity(hkID, domain.ProtocolTrojan, "hk.example.com", 443, 1, nil)
-			usIdentity := domain.NewVerifiedNodeIdentity(usID, domain.ProtocolSS, "us.example.com", 8388, 1, nil)
 			now := time.Now().UTC()
 			_ = nodeRepo.UpsertBatch(ctx, []domain.Node{
-				{LogicalID: hkID, Protocol: domain.ProtocolTrojan, DisplayName: "Hong Kong 01", CredentialVersion: 1, Identity: &hkIdentity, Active: true, CreatedAt: now, UpdatedAt: now},
-				{LogicalID: usID, Protocol: domain.ProtocolSS, DisplayName: "United States 01", CredentialVersion: 1, Identity: &usIdentity, Active: true, CreatedAt: now, UpdatedAt: now},
+				{
+					LogicalID:   hkID,
+					Protocol:    domain.ProtocolTrojan,
+					DisplayName: "Hong Kong 01",
+					Server:      "hk.example.com",
+					Port:        443,
+					Credentials: domain.InboundProtocolCredential{Password: "hk-trojan-secret-password"},
+					Active:      true,
+					CreatedAt:   now,
+					UpdatedAt:   now,
+				},
+				{
+					LogicalID:   usID,
+					Protocol:    domain.ProtocolSS,
+					DisplayName: "United States 01",
+					Server:      "us.example.com",
+					Port:        8388,
+					Credentials: domain.InboundProtocolCredential{Method: "aes-256-gcm", Password: "us-ss-secret-password"},
+					Active:      true,
+					CreatedAt:   now,
+					UpdatedAt:   now,
+				},
 			})
-			hkRec, _ := vault.Encrypt(&domain.NodeCredentialPayload{
-				LogicalID:   hkID,
-				Protocol:    domain.ProtocolTrojan,
-				Server:      "hk.example.com",
-				Port:        443,
-				Version:     1,
-				Identity:    &hkIdentity,
-				Credentials: domain.InboundProtocolCredential{Password: "hk-trojan-secret-password"},
-			})
-			usRec, _ := vault.Encrypt(&domain.NodeCredentialPayload{
-				LogicalID:   usID,
-				Protocol:    domain.ProtocolSS,
-				Server:      "us.example.com",
-				Port:        8388,
-				Version:     1,
-				Identity:    &usIdentity,
-				Credentials: domain.InboundProtocolCredential{Method: "aes-256-gcm", Password: "us-ss-secret-password"},
-			})
-			_ = credRepo.Upsert(ctx, hkRec)
-			_ = credRepo.Upsert(ctx, usRec)
 
 			_ = revRepo.Create(ctx, &domain.ConfigurationRevision{
 				ID:            revID,
@@ -1310,12 +967,10 @@ func TestAllFourTargets_UnifiedCredentialVaultAndRestartCredentialRotationGuard(
 				pubRepo,
 				auditRepo,
 				publication.WithNodeRepository(nodeRepo),
-				publication.WithCredentialSource(vault, credRepo),
 				publication.WithRevisionRepository(revRepo),
 				publication.WithPolicyRepository(policyRepo),
 			)
 
-			// 1. Preflight
 			preRes, err := svc.Preflight(ctx, publication.PreflightCommand{
 				Target:     target,
 				RevisionID: revID,
@@ -1324,7 +979,6 @@ func TestAllFourTargets_UnifiedCredentialVaultAndRestartCredentialRotationGuard(
 				t.Fatalf("preflight failed for %s: allowed=%v err=%v", target, preRes != nil && preRes.Allowed, err)
 			}
 
-			// 2. Preview
 			prevRes, err := svc.Preview(ctx, publication.PreviewQuery{
 				Target:     target,
 				RevisionID: revID,
@@ -1333,10 +987,9 @@ func TestAllFourTargets_UnifiedCredentialVaultAndRestartCredentialRotationGuard(
 				t.Fatalf("preview failed for %s: %v", target, err)
 			}
 			if !strings.Contains(string(prevRes.Content), "hk-trojan-secret-password") || !strings.Contains(string(prevRes.Content), "us-ss-secret-password") {
-				t.Fatalf("preview for %s missing decrypted vault credentials:\n%s", target, string(prevRes.Content))
+				t.Fatalf("preview for %s missing plaintext credentials:\n%s", target, string(prevRes.Content))
 			}
 
-			// 3. Publish
 			pubRes, err := svc.Publish(ctx, publication.PublishCommand{
 				Target:     target,
 				RevisionID: revID,
@@ -1350,75 +1003,12 @@ func TestAllFourTargets_UnifiedCredentialVaultAndRestartCredentialRotationGuard(
 				t.Fatalf("content digest mismatch on %s: publish=%s preview=%s", target, pubRes.ContentDigest, prevRes.ContentDigest)
 			}
 
-			// 4. Restart recovery with unchanged credentials succeeds
-			restartedSvc := publication.NewService(
-				pubRepo,
-				auditRepo,
-				publication.WithNodeRepository(nodeRepo),
-				publication.WithCredentialSource(vault, credRepo),
-				publication.WithRevisionRepository(revRepo),
-				publication.WithPolicyRepository(policyRepo),
-			)
-			art, err := restartedSvc.ResolveAndServe(ctx, pubRes.Publication.ID, pubRes.RawToken)
+			art, err := svc.ResolveAndServe(ctx, pubRes.Publication.ID, pubRes.RawToken)
 			if err != nil {
-				t.Fatalf("restart recovery failed for %s: %v", target, err)
+				t.Fatalf("ResolveAndServe failed for %s: %v", target, err)
 			}
 			if art.ContentDigest != pubRes.ContentDigest || string(art.Content) != string(prevRes.Content) {
-				t.Fatalf("restart recovered content mismatch for %s", target)
-			}
-
-			// 5. Credential version rotation after publish: restart recovery MUST reject and NOT silently serve v2 credentials
-			hkV2Identity := domain.NewVerifiedNodeIdentity(hkID, domain.ProtocolTrojan, "hk.example.com", 443, 2, nil)
-			hkNode, _ := nodeRepo.GetByLogicalID(ctx, hkID)
-			hkNode.CredentialVersion = 2
-			hkNode.Identity = &hkV2Identity
-			_ = nodeRepo.UpsertBatch(ctx, []domain.Node{*hkNode})
-			v2Rec, err := vault.Encrypt(&domain.NodeCredentialPayload{
-				LogicalID: hkID,
-				Protocol:  domain.ProtocolTrojan,
-				Server:    "hk.example.com",
-				Port:      443,
-				Version:   2,
-				Identity:  &hkV2Identity,
-				Credentials: domain.InboundProtocolCredential{
-					Password: "hk-trojan-rotated-v2-password",
-				},
-			})
-			if err != nil {
-				t.Fatalf("encrypt v2: %v", err)
-			}
-			_ = credRepo.Upsert(ctx, v2Rec)
-
-			restartedAfterRotationSvc := publication.NewService(
-				pubRepo,
-				auditRepo,
-				publication.WithNodeRepository(nodeRepo),
-				publication.WithCredentialSource(vault, credRepo),
-				publication.WithRevisionRepository(revRepo),
-				publication.WithPolicyRepository(policyRepo),
-			)
-			_, err = restartedAfterRotationSvc.ResolveAndServe(ctx, pubRes.Publication.ID, pubRes.RawToken)
-			if !errors.Is(err, publication.ErrIntegrityCheckFailed) {
-				t.Fatalf("expected ErrIntegrityCheckFailed when credential version changed across restart for %s, got %v", target, err)
-			}
-		})
-
-		t.Run("FailClosedWithoutVault_"+string(target), func(t *testing.T) {
-			_, _, nodeRepo := setupSampleVaultSource()
-			svcNoVault := publication.NewService(
-				newMockPublicationRepo(),
-				&mockAuditRepo{},
-				publication.WithNodeRepository(nodeRepo),
-			)
-			snap := buildSampleSnapshot()
-			if _, err := svcNoVault.Preflight(ctx, publication.PreflightCommand{Target: target, Snapshot: snap}); err == nil {
-				t.Fatalf("expected Preflight without vault to fail closed for %s", target)
-			}
-			if _, err := svcNoVault.Preview(ctx, publication.PreviewQuery{Target: target, Snapshot: snap}); err == nil {
-				t.Fatalf("expected Preview without vault to fail closed for %s", target)
-			}
-			if _, err := svcNoVault.Publish(ctx, publication.PublishCommand{Target: target, Snapshot: snap}); err == nil {
-				t.Fatalf("expected Publish without vault to fail closed for %s", target)
+				t.Fatalf("served content mismatch for %s", target)
 			}
 		})
 	}
@@ -1459,98 +1049,4 @@ func TestZeroNodeEmptySnapshot_ValidAcrossAllFourTargets(t *testing.T) {
 			t.Fatalf("expected 0-node empty snapshot publish to succeed for %s, got err=%v", target, err)
 		}
 	}
-}
-
-func TestResolveAndServe_FailClosedOnMissingBindingsTamperingAndDeletion(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("MissingBindingsLegacyRowReturnsErrIntegrityCheckFailed", func(t *testing.T) {
-		vault, credRepo, nodeRepo := setupSampleVaultSource()
-		pubRepo := newMockPublicationRepo()
-		auditRepo := &mockAuditRepo{}
-		svc := publication.NewService(
-			pubRepo,
-			auditRepo,
-			publication.WithNodeRepository(nodeRepo),
-			publication.WithCredentialSource(vault, credRepo),
-		)
-
-		rawToken := "pub_legacy_unmigrated_token_001"
-		sum := sha256.Sum256([]byte(rawToken))
-		legacyPub := domain.Publication{
-			ID:              "0191e4a0-0000-7000-8000-000000000801",
-			Target:          domain.TargetMihomo,
-			SnapshotDigest:  "sha256:legacy-snap",
-			CompilerVersion: "1.0.0",
-			TokenHash:       hex.EncodeToString(sum[:]),
-			State:           domain.PublicationStateActive,
-			CreatedAt:       time.Now().UTC(),
-		}
-		_ = pubRepo.Create(ctx, &legacyPub)
-
-		_, err := svc.ResolveAndServe(ctx, legacyPub.ID, rawToken)
-		if !errors.Is(err, publication.ErrIntegrityCheckFailed) {
-			t.Fatalf("expected ErrIntegrityCheckFailed for legacy row missing bindings, got %v", err)
-		}
-	})
-
-	t.Run("DeletedCredentialOrTamperedArtifactReturnsErrIntegrityCheckFailed", func(t *testing.T) {
-		vault, credRepo, nodeRepo := setupSampleVaultSource()
-		pubRepo := newMockPublicationRepo()
-		auditRepo := &mockAuditRepo{}
-		svc := publication.NewService(
-			pubRepo,
-			auditRepo,
-			publication.WithNodeRepository(nodeRepo),
-			publication.WithCredentialSource(vault, credRepo),
-		)
-
-		snap := buildSampleSnapshot()
-		pubRes, err := svc.Publish(ctx, publication.PublishCommand{
-			Target:    domain.TargetMihomo,
-			Snapshot:  snap,
-			ActorKind: domain.ActorKindAdmin,
-			RequestID: "req-integrity-check",
-		})
-		if err != nil {
-			t.Fatalf("Publish failed: %v", err)
-		}
-
-		// Verify Get from restarted service returns persisted metadata
-		restartedSvc := publication.NewService(
-			pubRepo,
-			auditRepo,
-			publication.WithNodeRepository(nodeRepo),
-			publication.WithCredentialSource(vault, credRepo),
-		)
-		detail, err := restartedSvc.Get(ctx, pubRes.Publication.ID)
-		if err != nil {
-			t.Fatalf("Get after restart failed: %v", err)
-		}
-		if detail.ContentDigest != pubRes.ContentDigest || detail.Filename != "mihomo.yaml" || detail.ContentType != "application/yaml" {
-			t.Fatalf("unexpected Get metadata after restart: %+v", detail)
-		}
-
-		// Tamper with ArtifactCiphertext in repo -> ErrIntegrityCheckFailed
-		pubRepo.mu.Lock()
-		origCipher := append([]byte(nil), pubRepo.publications[pubRes.Publication.ID].ArtifactCiphertext...)
-		pubRepo.publications[pubRes.Publication.ID].ArtifactCiphertext[0] ^= 0xff
-		pubRepo.mu.Unlock()
-
-		_, err = restartedSvc.ResolveAndServe(ctx, pubRes.Publication.ID, pubRes.RawToken)
-		if !errors.Is(err, publication.ErrIntegrityCheckFailed) {
-			t.Fatalf("expected ErrIntegrityCheckFailed on tampered ciphertext, got %v", err)
-		}
-
-		// Restore ciphertext, then delete credential from vault repo -> ErrIntegrityCheckFailed
-		pubRepo.mu.Lock()
-		pubRepo.publications[pubRes.Publication.ID].ArtifactCiphertext = origCipher
-		pubRepo.mu.Unlock()
-
-		_ = credRepo.DeleteByLogicalID(ctx, "node-hk-01")
-		_, err = restartedSvc.ResolveAndServe(ctx, pubRes.Publication.ID, pubRes.RawToken)
-		if !errors.Is(err, publication.ErrIntegrityCheckFailed) {
-			t.Fatalf("expected ErrIntegrityCheckFailed on deleted node credential, got %v", err)
-		}
-	})
 }

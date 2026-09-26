@@ -621,48 +621,30 @@ func TestAdversarial_Dimension7_PublishRevokeConcurrencyRace(t *testing.T) {
 	pubRepo := sqlite.NewPublicationRepository(db)
 	auditRepo := sqlite.NewAuditRepository(db)
 	nodeRepo := sqlite.NewNodeRepository(db)
-	credRepo := sqlite.NewNodeCredentialRepository(db)
-	vault, err := domain.NewNodeCredentialVault("k1", map[string][]byte{"k1": []byte("01234567890123456789012345678901")})
-	if err != nil {
-		t.Fatalf("create vault: %v", err)
-	}
 	pubSvc := publication.NewService(
 		pubRepo,
 		auditRepo,
 		publication.WithNodeRepository(nodeRepo),
-		publication.WithCredentialSource(vault, credRepo),
 	)
 
 	groupID := domain.MustNewUUIDv7()
 	nodeID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "198.51.100.1", 8388, nil)
 	raceNode := domain.Node{
-		LogicalID:         nodeID,
-		Protocol:          domain.ProtocolSS,
-		DisplayName:       "Race Node",
-		CredentialVersion: 1,
-		Active:            true,
-		CreatedAt:         domain.NowUTC(),
-		UpdatedAt:         domain.NowUTC(),
-	}
-	if err := nodeRepo.UpsertBatch(ctx, []domain.Node{raceNode}); err != nil {
-		t.Fatalf("upsert race node: %v", err)
-	}
-	raceRec, err := vault.Encrypt(&domain.NodeCredentialPayload{
-		LogicalID: nodeID,
-		Protocol:  domain.ProtocolSS,
-		Server:    "198.51.100.1",
-		Port:      8388,
-		Version:   1,
+		LogicalID:   nodeID,
+		Protocol:    domain.ProtocolSS,
+		DisplayName: "Race Node",
+		Server:      "198.51.100.1",
+		Port:        8388,
 		Credentials: domain.InboundProtocolCredential{
 			Method:   "aes-256-gcm",
 			Password: "race-node-secret",
 		},
-	})
-	if err != nil {
-		t.Fatalf("encrypt race node: %v", err)
+		Active:    true,
+		CreatedAt: domain.NowUTC(),
+		UpdatedAt: domain.NowUTC(),
 	}
-	if err := credRepo.Upsert(ctx, raceRec); err != nil {
-		t.Fatalf("upsert race credential: %v", err)
+	if err := nodeRepo.UpsertBatch(ctx, []domain.Node{raceNode}); err != nil {
+		t.Fatalf("upsert race node: %v", err)
 	}
 	snap, err := resolver.New().Resolve(ctx, resolver.ResolveInput{
 		RevisionID:      "rev-race-test",

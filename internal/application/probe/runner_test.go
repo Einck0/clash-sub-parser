@@ -482,11 +482,10 @@ func TestProbeRunnerDefaultDialerFailsClosedWithoutPlaceholderLoopback(t *testin
 	nodesRepo := newMemoryNodes()
 
 	nodesRepo.items["node_opaque"] = domain.Node{
-		LogicalID:                 "node_opaque",
-		DisplayName:               "Opaque Node",
-		Protocol:                  domain.ProtocolSS,
-		NormalizedConfigSecretRef: "secret_sha256_mock_hash",
-		Active:                    true,
+		LogicalID:   "node_opaque",
+		DisplayName: "Opaque Node",
+		Protocol:    domain.ProtocolSS,
+		Active:      true,
 	}
 
 	sched, err := queue.NewScheduler(queue.Config{Concurrency: 10})

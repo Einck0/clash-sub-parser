@@ -20,7 +20,6 @@ import {
   COMPILER_TARGETS,
   formatDigest,
   getTargetMetadata,
-  redactPreviewSecrets,
   targetFileExt,
   type CompilerTarget,
 } from './publicationTypes'
@@ -60,9 +59,6 @@ const publishModalOpen = ref(false)
 const copiedToken = ref(false)
 
 const currentTargetMeta = computed(() => getTargetMetadata(selectedTarget.value))
-const safePreviewContent = computed(() =>
-  preview.value?.content ? redactPreviewSecrets(preview.value.content) : ''
-)
 
 async function switchTarget(target: CompilerTarget) {
   selectedTarget.value = target
@@ -290,9 +286,6 @@ onMounted(() => {
           <ShieldCheckIcon class="w-4 h-4 text-primary shrink-0" />
           <span>{{ t('publications.capabilityBoundaryTitle') }} · {{ currentTargetMeta.label }}</span>
         </div>
-        <span class="badge badge-xs badge-ghost font-mono">
-          Secrets Redacted in Preview DOM (***)
-        </span>
       </div>
       <div class="grid grid-cols-1 md:grid-cols-3 gap-2 font-mono text-[11px]">
         <div class="p-2 rounded-lg bg-base-100/70 border border-base-300/60">
@@ -434,7 +427,7 @@ onMounted(() => {
             </button>
 
             <!-- Pre Code Block -->
-            <pre class="p-4 sm:p-5 text-xs font-mono overflow-auto adaptive-preview-box leading-relaxed select-text text-base-content/90 max-w-full">{{ safePreviewContent || 'No configuration rendered.' }}</pre>
+            <pre class="p-4 sm:p-5 text-xs font-mono overflow-auto adaptive-preview-box leading-relaxed select-text text-base-content/90 max-w-full">{{ preview?.content || 'No configuration rendered.' }}</pre>
           </div>
         </div>
 

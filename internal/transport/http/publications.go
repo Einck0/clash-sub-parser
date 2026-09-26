@@ -61,8 +61,6 @@ func publicationClientHandler(svc *publication.Service) http.HandlerFunc {
 				WriteError(w, r, http.StatusUnauthorized, "unauthorized", "Invalid publication token")
 			case errors.Is(err, publication.ErrUnsupportedTarget):
 				WriteError(w, r, http.StatusUnprocessableEntity, "unsupported_target", "Unsupported compiler target")
-			case errors.Is(err, publication.ErrIntegrityCheckFailed):
-				WriteError(w, r, http.StatusUnprocessableEntity, "publication_integrity_failed", "Publication credential binding or artifact verification failed")
 			default:
 				WriteError(w, r, http.StatusInternalServerError, "internal_error", "Failed to resolve publication")
 			}

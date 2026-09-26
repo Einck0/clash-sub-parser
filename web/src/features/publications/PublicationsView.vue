@@ -18,8 +18,12 @@ import {
 import { usePublications } from './usePublications'
 import {
   COMPILER_TARGETS,
+  auditEventLabel,
   formatDigest,
   getTargetMetadata,
+  groupTypeLabel,
+  preflightCheckLabel,
+  publicationStateLabel,
   targetFileExt,
   type CompilerTarget,
 } from './publicationTypes'
@@ -126,7 +130,7 @@ onMounted(() => {
     <!-- Header -->
     <div class="flex flex-col sm:flex-row sm:items-end justify-between gap-3 w-full min-w-0">
       <div class="min-w-0">
-        <p class="text-xs font-semibold uppercase tracking-[0.18em] text-primary">{{ t('publications.tag') }}</p>
+        <p class="text-xs font-semibold uppercase tracking-[0.18em] text-primary">多目标编译与发布</p>
         <h2 id="publications-title" class="mt-1 text-2xl font-bold truncate">{{ t('publications.title') }}</h2>
         <p class="mt-1 text-sm opacity-70">
           {{ t('publications.subtitle') }}
@@ -241,21 +245,24 @@ onMounted(() => {
     >
       <div class="font-bold flex items-center gap-2 text-sm">
         <ExclamationTriangleIcon class="w-5 h-5 flex-shrink-0" />
-        Publication Blocked: Preflight Rejection (Empty Route Group Protection)
+        发布已阻断：预检未通过（空路由组与安全策略保护）
       </div>
       <p class="opacity-85">
-        One or more target routing groups resolved to empty candidate sets after filter application. Configuration export is blocked to prevent invalid client configs.
+        一个或多个目标路由策略组在应用过滤条件后无可用候选节点，或触发了风险安全预检拦截。为防止向客户端下发无效配置，当前配置导出已被阻断。
       </p>
       <ul class="list-disc list-inside font-mono space-y-1 pl-1">
         <li v-for="(diag, idx) in preflightDiagnostics" :key="idx">
+          <span v-if="diag.code" class="badge badge-xs badge-error badge-outline mr-1.5 font-sans">
+            {{ preflightCheckLabel(diag.code) }}
+          </span>
           <strong>{{ diag.target ? `[${diag.target}] ` : '' }}{{ diag.message }}</strong>
-          <span v-if="diag.reason" class="opacity-75 block pl-4">Reason: {{ diag.reason }}</span>
+          <span v-if="diag.reason" class="opacity-75 block pl-4">原因：{{ diag.reason }}</span>
         </li>
       </ul>
     </div>
 
     <!-- Target Selector Tabs -->
-    <div class="flex flex-wrap items-center gap-2 pb-1 text-xs w-full min-w-0" role="tablist" aria-label="Target formats">
+    <div class="flex flex-wrap items-center gap-2 pb-1 text-xs w-full min-w-0" role="tablist" aria-label="目标导出格式">
       <button
         v-for="item in COMPILER_TARGETS"
         :key="item.target"
@@ -286,10 +293,11 @@ onMounted(() => {
           <ShieldCheckIcon class="w-4 h-4 text-primary shrink-0" />
           <span>{{ t('publications.capabilityBoundaryTitle') }} · {{ currentTargetMeta.label }}</span>
         </div>
+        <span class="text-xs opacity-80">{{ currentTargetMeta.desc }}</span>
       </div>
       <div class="grid grid-cols-1 md:grid-cols-3 gap-2 font-mono text-[11px]">
         <div class="p-2 rounded-lg bg-base-100/70 border border-base-300/60">
-          <span class="opacity-60 font-sans block mb-1">Supported Protocols ({{ currentTargetMeta.protocols.length }})</span>
+          <span class="opacity-60 font-sans block mb-1">支持节点协议 ({{ currentTargetMeta.protocols.length }})</span>
           <div class="flex flex-wrap gap-1">
             <span
               v-for="proto in currentTargetMeta.protocols"
@@ -301,19 +309,22 @@ onMounted(() => {
           </div>
         </div>
         <div class="p-2 rounded-lg bg-base-100/70 border border-base-300/60">
-          <span class="opacity-60 font-sans block mb-1">Supported Group Types ({{ currentTargetMeta.groupTypes.length }})</span>
-          <div class="flex flex-wrap gap-1">
+          <span class="opacity-60 font-sans block mb-1">策略组支持 ({{ currentTargetMeta.groupTypes.length }})</span>
+          <div v-if="currentTargetMeta.groupTypes.length > 0" class="flex flex-wrap gap-1">
             <span
               v-for="gt in currentTargetMeta.groupTypes"
               :key="gt"
               class="badge badge-xs badge-secondary badge-outline"
             >
-              {{ gt }}
+              {{ groupTypeLabel(gt) }}
             </span>
+          </div>
+          <div v-else class="text-base-content/75 font-sans">
+            仅导出节点格式（忽略策略组与规则）
           </div>
         </div>
         <div class="p-2 rounded-lg bg-base-100/70 border border-base-300/60">
-          <span class="opacity-60 font-sans block mb-1">Rules & Rejection Boundary</span>
+          <span class="opacity-60 font-sans block mb-1">导出范围与能力边界</span>
           <p class="leading-snug text-base-content/85">{{ currentTargetMeta.ruleSummary }}</p>
           <p class="mt-1 text-warning leading-snug">{{ currentTargetMeta.unsupportedSummary }}</p>
         </div>
@@ -335,11 +346,11 @@ onMounted(() => {
           </div>
 
           <div class="flex items-center gap-2 font-mono text-[11px] opacity-70 shrink-0">
-            <span v-if="preview?.content_digest" title="Content Digest SHA-256">
-              Content: <strong>{{ formatDigest(preview.content_digest) }}</strong>
+            <span v-if="preview?.content_digest" title="配置内容 SHA-256 摘要">
+              内容摘要: <strong>{{ formatDigest(preview.content_digest) }}</strong>
             </span>
-            <span v-if="preview?.snapshot_digest" class="hidden sm:inline" title="Snapshot Digest">
-              · Snapshot: <strong>{{ formatDigest(preview.snapshot_digest) }}</strong>
+            <span v-if="preview?.snapshot_digest" class="hidden sm:inline" title="策略快照摘要">
+              · 快照摘要: <strong>{{ formatDigest(preview.snapshot_digest) }}</strong>
             </span>
           </div>
         </div>
@@ -350,17 +361,17 @@ onMounted(() => {
           class="flex flex-col gap-2 p-2.5 rounded-lg bg-base-100 border border-base-300 text-xs font-mono"
         >
           <div class="flex flex-wrap items-center gap-3">
-            <span class="opacity-60 font-sans">Filter Pipeline:</span>
-            <span>Raw: <strong>{{ preview.filter_counts.raw_total ?? '--' }}</strong></span>
+            <span class="opacity-60 font-sans">过滤流水线：</span>
+            <span>原始节点: <strong>{{ preview.filter_counts.raw_total ?? '--' }}</strong></span>
             <span class="opacity-40">→</span>
-            <span>Admitted: <strong>{{ preview.filter_counts.admitted_total ?? '--' }}</strong></span>
+            <span>准入通过: <strong>{{ preview.filter_counts.admitted_total ?? '--' }}</strong></span>
             <span class="opacity-40">→</span>
             <span class="text-primary font-semibold">
-              Global Kept: <strong>{{ preview.filter_counts.global_filtered_total ?? '--' }}</strong>
+              全局保留: <strong>{{ preview.filter_counts.global_filtered_total ?? '--' }}</strong>
             </span>
             <span class="opacity-40">→</span>
             <span class="text-success font-semibold">
-              Group Kept: <strong>{{ preview.filter_counts.group_filtered_total ?? '--' }}</strong>
+              策略组保留: <strong>{{ preview.filter_counts.group_filtered_total ?? '--' }}</strong>
             </span>
           </div>
 
@@ -368,12 +379,12 @@ onMounted(() => {
             v-if="preview.filter_counts.group_counts && Object.keys(preview.filter_counts.group_counts).length > 0"
             class="flex flex-wrap items-center gap-1.5 pt-1.5 border-t border-base-300/40 text-[11px]"
           >
-            <span class="opacity-60 font-sans">Group Breakdown:</span>
+            <span class="opacity-60 font-sans">各策略组统计：</span>
             <span
               v-for="(gc, gName) in preview.filter_counts.group_counts"
               :key="gName"
               class="badge badge-xs font-mono badge-ghost"
-              :title="`Candidates: ${gc.candidate}, Kept: ${gc.kept}, Excluded: ${gc.excluded}`"
+              :title="`候选: ${gc.candidate}, 保留: ${gc.kept}, 排除: ${gc.excluded}`"
             >
               {{ gName }}: {{ gc.kept }}/{{ gc.candidate }}
             </span>
@@ -387,16 +398,19 @@ onMounted(() => {
         >
           <div class="font-bold flex items-center gap-1.5">
             <ExclamationTriangleIcon class="w-4 h-4" />
-            Compiler Diagnostics
+            编译器诊断提示
           </div>
           <ul class="list-disc list-inside font-mono space-y-0.5">
             <li v-for="(diag, idx) in preview.diagnostics" :key="idx">
+              <span v-if="diag.code" class="badge badge-xs badge-warning badge-outline mr-1.5 font-sans">
+                {{ preflightCheckLabel(diag.code) }}
+              </span>
               <span>{{ diag.message }}</span>
               <span v-if="diag.reason" class="opacity-75 block text-[11px] pl-4">
-                Reason: {{ diag.reason }}
+                原因：{{ diag.reason }}
               </span>
               <span v-if="diag.excluded_count !== undefined" class="opacity-75 block text-[11px] pl-4">
-                Excluded: {{ diag.excluded_count }} nodes
+                已排除：{{ diag.excluded_count }} 个节点
               </span>
             </li>
           </ul>
@@ -423,11 +437,11 @@ onMounted(() => {
             >
               <ClipboardDocumentCheckIcon v-if="copied" class="w-4 h-4 text-success-content" />
               <ClipboardDocumentIcon v-else class="w-4 h-4" />
-              <span>{{ copied ? 'Copied!' : 'Copy Code' }}</span>
+              <span>{{ copied ? '已复制！' : '复制配置' }}</span>
             </button>
 
             <!-- Pre Code Block -->
-            <pre class="p-4 sm:p-5 text-xs font-mono overflow-auto adaptive-preview-box leading-relaxed select-text text-base-content/90 max-w-full">{{ preview?.content || 'No configuration rendered.' }}</pre>
+            <pre class="p-4 sm:p-5 text-xs font-mono overflow-auto adaptive-preview-box leading-relaxed select-text text-base-content/90 max-w-full">{{ preview?.content || '暂无渲染配置内容。' }}</pre>
           </div>
         </div>
 
@@ -452,17 +466,17 @@ onMounted(() => {
     <!-- Publish Success / Token Modal (Bottom sheet on mobile) -->
     <ModalDialog
       v-model="publishModalOpen"
-      title="Publication Endpoint Generated"
-      description="Immutable subscriber URL bound to compiler target with SHA-256 token authorization"
+      title="订阅发布链接已生成"
+      description="绑定目标编译格式的不可变订阅地址（含 SHA-256 令牌鉴权）"
     >
       <div v-if="activePublication" class="space-y-4">
         <div class="p-3.5 rounded-xl bg-success/10 border border-success/30 text-success text-xs flex items-center gap-2">
           <CheckBadgeIcon class="w-5 h-5 flex-shrink-0" />
-          <span>Immutable publication registered successfully. Stale configuration fallbacks strictly refused.</span>
+          <span>不可变订阅发布已成功注册（审计事件：{{ auditEventLabel('publication.create') }}），严格拒绝过期配置回退。</span>
         </div>
 
         <div class="space-y-1.5">
-          <label class="text-xs font-semibold">Client Subscription URL</label>
+          <label class="text-xs font-semibold">客户端订阅地址</label>
           <div class="flex gap-2">
             <input
               readonly
@@ -475,17 +489,17 @@ onMounted(() => {
               @click="copyPublicationURL"
             >
               <ClipboardDocumentIcon class="w-4 h-4" />
-              {{ copiedToken ? 'Copied!' : 'Copy' }}
+              {{ copiedToken ? '已复制！' : '复制链接' }}
             </button>
           </div>
           <p class="text-[11px] opacity-60">
-            Clients can fetch this subscription via Bearer header or the query token parameter.
+            客户端可通过 Bearer 请求头或 URL 查询参数 token 拉取此订阅配置。
           </p>
         </div>
 
         <div class="grid grid-cols-2 gap-2 text-xs font-mono p-3 rounded-xl bg-base-200 border border-base-300">
           <div>
-            <span class="opacity-60 block">Target</span>
+            <span class="opacity-60 block">导出目标</span>
             <div class="flex items-center gap-1.5 mt-0.5">
               <strong class="uppercase text-primary">
                 {{ activePublication.target }}
@@ -493,9 +507,9 @@ onMounted(() => {
             </div>
           </div>
           <div>
-            <span class="opacity-60 block">Status</span>
+            <span class="opacity-60 block">发布状态</span>
             <strong :class="activePublication.revoked_at ? 'text-error' : 'text-success'">
-              {{ activePublication.revoked_at ? 'Revoked' : 'Active' }}
+              {{ publicationStateLabel(activePublication.state, activePublication.revoked_at) }}
             </strong>
           </div>
         </div>
@@ -510,7 +524,7 @@ onMounted(() => {
             @click="handleRevoke"
           >
             <XCircleIcon class="w-4 h-4" />
-            Revoke Access
+            撤销发布
           </button>
           <div v-else />
 
@@ -519,7 +533,7 @@ onMounted(() => {
             class="btn btn-ghost btn-sm"
             @click="publishModalOpen = false"
           >
-            Done
+            完成
           </button>
         </div>
       </div>
@@ -528,10 +542,10 @@ onMounted(() => {
     <!-- Confirm Revoke Publication Modal -->
     <ConfirmModal
       v-model="confirmRevokeOpen"
-      title="Revoke Publication"
-      message="Revoke this publication immediately? Clients will no longer be able to download this config."
-      confirm-text="Revoke Immediately"
-      cancel-text="Keep Active"
+      title="确认撤销发布"
+      message="确定立即撤销该发布记录吗？撤销后状态将变为“已撤销”，客户端将无法继续下载此订阅配置。"
+      confirm-text="立即撤销"
+      cancel-text="保持生效"
       tone="danger"
       :loading="revoking"
       @confirm="confirmRevokePublication"

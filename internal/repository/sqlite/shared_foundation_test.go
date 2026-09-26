@@ -2,7 +2,7 @@ package sqlite_test
 
 import (
 	"context"
-	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -438,12 +438,13 @@ func TestTask1_2BaselineCompatibilityAndProcessNameVerification(t *testing.T) {
 		},
 	}
 
-	supportedTargets := []domain.CompilerTarget{
+	allTargets := []domain.CompilerTarget{
 		domain.TargetMihomo,
 		domain.TargetSingBox,
 		domain.TargetSurge,
+		domain.TargetQuantumultX,
 	}
-	for _, target := range supportedTargets {
+	for _, target := range allTargets {
 		out, err := compiler.Compile(ctx, &snapshot, target)
 		if err != nil {
 			t.Fatalf("compiler failed for target %s with PROCESS-NAME: %v", target, err)
@@ -451,19 +452,15 @@ func TestTask1_2BaselineCompatibilityAndProcessNameVerification(t *testing.T) {
 		if len(out.Content) == 0 {
 			t.Fatalf("compiled output empty for target %s", target)
 		}
-	}
-
-	// QuantumultX must reject PROCESS-NAME cleanly
-	_, err = compiler.Compile(ctx, &snapshot, domain.TargetQuantumultX)
-	if err == nil {
-		t.Fatal("expected Quantumult-X to reject PROCESS-NAME rule")
-	}
-	var capErr *compiler.CapabilityError
-	if !errors.As(err, &capErr) {
-		t.Fatalf("expected CapabilityError, got %v", err)
-	}
-	if capErr.Feature != "PROCESS-NAME" {
-		t.Fatalf("expected feature PROCESS-NAME, got %s", capErr.Feature)
+		if target == domain.TargetMihomo {
+			if !strings.Contains(string(out.Content), "PROCESS-NAME,curl") {
+				t.Fatalf("expected mihomo output to include PROCESS-NAME,curl, got:\n%s", string(out.Content))
+			}
+		} else {
+			if strings.Contains(string(out.Content), "PROCESS-NAME") {
+				t.Fatalf("expected node-only target %s to ignore rules, got:\n%s", target, string(out.Content))
+			}
+		}
 	}
 
 	// 4. Record Task 1.2 evidence status:

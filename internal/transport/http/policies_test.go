@@ -368,28 +368,136 @@ func TestPolicyRulesEndpointsAndMATCHOrdering(t *testing.T) {
 	}
 }
 
+type writeHeaderCounterRecorder struct {
+	*httptest.ResponseRecorder
+	writeHeaderCount int
+}
+
+func (w *writeHeaderCounterRecorder) WriteHeader(code int) {
+	w.writeHeaderCount++
+	w.ResponseRecorder.WriteHeader(code)
+}
+
+func assertSingleJSONBodyAndNoSuperfluousWriteHeader(t *testing.T, rec *writeHeaderCounterRecorder) {
+	t.Helper()
+	if rec.writeHeaderCount > 1 {
+		t.Fatalf("expected WriteHeader to be called at most once, got %d", rec.writeHeaderCount)
+	}
+	dec := json.NewDecoder(bytes.NewReader(rec.Body.Bytes()))
+	var first any
+	if err := dec.Decode(&first); err != nil {
+		t.Fatalf("response body is not valid JSON (%v): %s", err, rec.Body.String())
+	}
+	if dec.More() {
+		t.Fatalf("response body contains multiple concatenated JSON values: %s", rec.Body.String())
+	}
+}
+
 func TestPolicyValidateEndpoint(t *testing.T) {
 	db := newCleanSQLiteDB(t)
-	router, _ := setupPolicyTestRouter(t, db)
+	router, policySvc := setupPolicyTestRouter(t, db)
+	ctx := context.Background()
 
-	// Valid graph (empty or valid)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/policies/validate", bytes.NewReader([]byte("{}")))
-	req.Header.Set("Authorization", "Bearer "+testAdminToken)
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
+	// 1. No-body request validates current persisted DB graph state
+	t.Run("no_body_validates_persisted_db_graph", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/policies/validate", nil)
+		req.Header.Set("Authorization", "Bearer "+testAdminToken)
+		rec := &writeHeaderCounterRecorder{ResponseRecorder: httptest.NewRecorder()}
+		router.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200 OK for valid policy validation, got %d: %s", rec.Code, rec.Body.String())
-	}
+		assertSingleJSONBodyAndNoSuperfluousWriteHeader(t, rec)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK for valid policy validation, got %d: %s", rec.Code, rec.Body.String())
+		}
 
-	var okResp testDataResponse[policy.ValidationResult]
-	if err := json.Unmarshal(rec.Body.Bytes(), &okResp); err != nil {
-		t.Fatalf("failed to parse validation response: %v", err)
-	}
-	if !okResp.Data.Valid {
-		t.Errorf("expected validation to be valid: %#v", okResp.Data)
-	}
+		var okResp testDataResponse[policy.ValidationResult]
+		if err := json.Unmarshal(rec.Body.Bytes(), &okResp); err != nil {
+			t.Fatalf("failed to parse validation response: %v", err)
+		}
+		if !okResp.Data.Valid {
+			t.Errorf("expected validation to be valid: %#v", okResp.Data)
+		}
+	})
+
+	// 2. Persisted groups, edges, and rules in DB validate cleanly without client payload
+	t.Run("persisted_groups_edges_and_rules_validate", func(t *testing.T) {
+		g2, err := policySvc.CreateGroup(ctx, policy.CreateGroupCommand{
+			Name:      "Auto",
+			GroupType: domain.GroupTypeURLTest,
+			RequestID: "req-g2",
+			ActorKind: domain.ActorKindAdmin,
+		})
+		if err != nil {
+			t.Fatalf("failed to create Auto group: %v", err)
+		}
+		g1, err := policySvc.CreateGroup(ctx, policy.CreateGroupCommand{
+			Name:      "Proxy",
+			GroupType: domain.GroupTypeSelect,
+			Edges: []policy.EdgeInput{
+				{ChildGroupID: &g2.ID, Position: 0},
+			},
+			RequestID: "req-g1",
+			ActorKind: domain.ActorKindAdmin,
+		})
+		if err != nil {
+			t.Fatalf("failed to create Proxy group: %v", err)
+		}
+		rev, err := policySvc.CreateRevision(ctx, policy.CreateRevisionCommand{
+			State:     domain.RevisionStateActive,
+			RequestID: "req-rev",
+			ActorKind: domain.ActorKindAdmin,
+		})
+		if err != nil {
+			t.Fatalf("failed to create active revision: %v", err)
+		}
+		if _, err := policySvc.CreatePolicyRule(ctx, policy.CreatePolicyRuleCommand{
+			RevisionID:    rev.ID,
+			TargetGroupID: g1.ID,
+			Expression:    "MATCH",
+			Position:      0,
+			RequestID:     "req-rule",
+			ActorKind:     domain.ActorKindAdmin,
+		}); err != nil {
+			t.Fatalf("failed to create MATCH rule: %v", err)
+		}
+
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/policies/validate", nil)
+		req.Header.Set("Authorization", "Bearer "+testAdminToken)
+		rec := &writeHeaderCounterRecorder{ResponseRecorder: httptest.NewRecorder()}
+		router.ServeHTTP(rec, req)
+
+		assertSingleJSONBodyAndNoSuperfluousWriteHeader(t, rec)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK for persisted graph validation, got %d: %s", rec.Code, rec.Body.String())
+		}
+		var okResp testDataResponse[policy.ValidationResult]
+		if err := json.Unmarshal(rec.Body.Bytes(), &okResp); err != nil || !okResp.Data.Valid {
+			t.Fatalf("expected valid=true response, got err=%v resp=%+v", err, okResp)
+		}
+
+		// Inject a cycle directly in DB to verify backend graph validation catches persisted cycles
+		cycleEdgeID := domain.MustNewUUIDv7()
+		if _, err := db.Exec(`INSERT INTO group_edges (id, parent_group_id, child_group_id, position) VALUES (?, ?, ?, 0)`, cycleEdgeID, g2.ID, g1.ID); err != nil {
+			t.Fatalf("failed to insert cycle edge: %v", err)
+		}
+		defer func() {
+			_, _ = db.Exec(`DELETE FROM group_edges WHERE id = ?`, cycleEdgeID)
+		}()
+
+		cycleReq := httptest.NewRequest(http.MethodPost, "/api/v1/policies/validate", nil)
+		cycleReq.Header.Set("Authorization", "Bearer "+testAdminToken)
+		cycleRec := &writeHeaderCounterRecorder{ResponseRecorder: httptest.NewRecorder()}
+		router.ServeHTTP(cycleRec, cycleReq)
+
+		assertSingleJSONBodyAndNoSuperfluousWriteHeader(t, cycleRec)
+		if cycleRec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("expected 422 for cycle in persisted DB edges, got %d: %s", cycleRec.Code, cycleRec.Body.String())
+		}
+		var cycleErr testErrorResponse
+		if err := json.Unmarshal(cycleRec.Body.Bytes(), &cycleErr); err != nil || cycleErr.Code != "cycle_detected" {
+			t.Fatalf("expected cycle_detected error, got err=%v resp=%+v", err, cycleErr)
+		}
+	})
 }
 
 func TestPolicyGlobalNodeFilterEndpoint_AuthAndCRUD(t *testing.T) {

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createApp, h, nextTick, reactive } from 'vue'
+import { createApp, h, nextTick } from 'vue'
 import PolicyView from './PolicyView.vue'
 import { api } from '../../api/client'
 import type { PolicyGroup } from './policyTypes'
@@ -89,7 +89,7 @@ describe('PolicyView Topology & Drawer Linkage', () => {
     // Drawer should open and document should contain Policy Editor dialog
     const dialog = document.body.querySelector('[role="dialog"]')
     expect(dialog).not.toBeNull()
-    expect(dialog?.textContent).toContain('Edit Policy Group')
+    expect(dialog?.textContent).toContain('编辑策略组')
     expect(dialog?.querySelector('input')?.value).toBe('Proxy Group 1')
 
     // First card should reflect selected styling ring
@@ -106,7 +106,7 @@ describe('PolicyView Topology & Drawer Linkage', () => {
     await new Promise((r) => setTimeout(r, 20))
 
     const dialog = document.body.querySelector('[role="dialog"]')
-    const cancelBtn = Array.from(dialog?.querySelectorAll('button') || []).find((b) => b.textContent?.includes('Cancel'))
+    const cancelBtn = Array.from(dialog?.querySelectorAll('button') || []).find((b) => b.textContent?.includes('取消'))
     expect(cancelBtn).toBeDefined()
     cancelBtn?.click()
     await nextTick()
@@ -173,12 +173,12 @@ describe('PolicyView Topology & Drawer Linkage', () => {
   })
 
   it('renders ErrorStateCard degraded card on fetch failure and provides retry', async () => {
-    vi.spyOn(api, 'get').mockRejectedValueOnce(new Error('Failed to load policy groups'))
+    vi.spyOn(api, 'get').mockRejectedValueOnce(new Error('加载策略组失败'))
     await mountPolicyView()
 
     const errorCard = container.querySelector('[data-testid="error-state-card"]')
     expect(errorCard).not.toBeNull()
-    expect(errorCard?.textContent).toContain('Failed to load policy groups')
+    expect(errorCard?.textContent).toContain('加载策略组失败')
   })
 
   it('renders admission rules tab with min-w-0 responsive layout and break-all expressions', async () => {
@@ -205,7 +205,7 @@ describe('PolicyView Topology & Drawer Linkage', () => {
 
     // Click the admission tab
     const tabs = Array.from(container.querySelectorAll('button'))
-    const admissionTab = tabs.find((b) => b.textContent?.includes('Admission') || b.textContent?.includes('准入') || b.textContent?.includes('Rules'))
+    const admissionTab = tabs.find((b) => b.textContent?.includes('准入规则'))
     expect(admissionTab).toBeTruthy()
     admissionTab?.click()
     await nextTick()
@@ -215,6 +215,7 @@ describe('PolicyView Topology & Drawer Linkage', () => {
     expect(ruleCard).not.toBeNull()
     expect(ruleCard?.className).toContain('min-w-0')
     expect(ruleCard?.className).toContain('overflow-hidden')
+    expect(ruleCard?.textContent).toContain('允许')
 
     const expr = ruleCard?.querySelector('p')
     expect(expr?.className).toContain('break-all')
@@ -243,15 +244,14 @@ describe('PolicyView Topology & Drawer Linkage', () => {
 
     // Verify modal opened
     const allDialogs = Array.from(document.body.querySelectorAll('dialog'))
-    const modal = allDialogs.find((d) => d.textContent?.includes('Global Node Filter'))
+    const modal = allDialogs.find((d) => d.textContent?.includes('全局节点筛选'))
     expect(modal).toBeDefined()
-    expect(modal?.textContent).toContain('Order of Precedence')
-    expect(modal?.textContent).toContain('Global Filter')
+    expect(modal?.textContent).toContain('执行优先级')
+    expect(modal?.textContent).toContain('全局节点筛选')
 
     // Add a condition
-    const selects = modal?.querySelectorAll('select')
     const inputs = modal?.querySelectorAll('input')
-    const addBtn = Array.from(modal?.querySelectorAll('button') || []).find((b) => b.textContent?.includes('Add Condition'))
+    const addBtn = Array.from(modal?.querySelectorAll('button') || []).find((b) => b.textContent?.includes('添加条件'))
     expect(addBtn).toBeDefined()
 
     if (inputs && inputs.length > 0) {
@@ -262,7 +262,7 @@ describe('PolicyView Topology & Drawer Linkage', () => {
     await nextTick()
 
     // Click Save Global Filter button
-    const saveBtn = Array.from(modal?.querySelectorAll('button') || []).find((b) => b.textContent?.includes('Save Global Filter'))
+    const saveBtn = Array.from(modal?.querySelectorAll('button') || []).find((b) => b.textContent?.includes('保存全局筛选'))
     expect(saveBtn).toBeDefined()
     saveBtn?.click()
     await nextTick()
@@ -297,7 +297,7 @@ describe('PolicyView Topology & Drawer Linkage', () => {
 
     const cards = container.querySelectorAll('[data-testid="group-card"]')
     expect(cards.length).toBe(1)
-    expect(cards[0].textContent).toContain('1 filter conds')
+    expect(cards[0].textContent).toContain('1 条筛选条件')
 
     // Click to expand
     const header = cards[0].querySelector('.cursor-pointer') as HTMLElement | null
@@ -306,8 +306,8 @@ describe('PolicyView Topology & Drawer Linkage', () => {
     await new Promise((r) => setTimeout(r, 20))
 
     // Verify dynamic pool indicator and filter conditions details
-    expect(cards[0].textContent).toContain('Dynamic Pool')
+    expect(cards[0].textContent).toContain('动态节点池')
     expect(cards[0].textContent).toContain('probe_latency_ms lte "150"')
-    expect(cards[0].textContent).toContain('dynamically selects matching candidates')
+    expect(cards[0].textContent).toContain('从全局节点池中动态筛选匹配的候选节点')
   })
 })

@@ -28,7 +28,7 @@ export const COMPILER_TARGETS: TargetMetadata[] = [
     label: 'Mihomo',
     ext: 'yaml',
     mimeType: 'application/x-yaml',
-    desc: 'Mihomo native YAML subscription profile (full 7 protocols, 4 group types, 14 modern rules)',
+    desc: '导出完整 Mihomo 配置（含节点、策略组与分流规则）',
     protocols: ['ss', 'vmess', 'vless', 'trojan', 'hysteria2', 'wireguard', 'tuic'],
     groupTypes: ['select', 'urltest', 'fallback', 'loadbalance'],
     ruleKinds: [
@@ -47,83 +47,44 @@ export const COMPILER_TARGETS: TargetMetadata[] = [
       'PROCESS-NAME',
       'MATCH',
     ],
-    ruleSummary: '14 modern rules (DOMAIN*, IP-CIDR*, GEOIP, GEOSITE, RULE-SET, SRC-IP-CIDR, SRC/DST-PORT, PORT, PROCESS-NAME, MATCH)',
-    unsupportedSummary: 'Rejects incomplete WG/TUIC credentials or unresolvable rule-providers',
+    ruleSummary: '导出完整配置（含 14 类分流规则：DOMAIN*、IP-CIDR*、GEOIP、GEOSITE、RULE-SET、SRC-IP-CIDR、SRC/DST-PORT、PORT、PROCESS-NAME、MATCH）',
+    unsupportedSummary: '拒绝凭据不完整的 WireGuard/TUIC 节点、空路由策略组或无法解析的规则提供者',
   },
   {
     target: 'singbox',
     label: 'sing-box',
     ext: 'json',
     mimeType: 'application/json',
-    desc: 'sing-box official JSON options profile (7 protocols with native WG endpoint, select/urltest groups, 14 rules)',
+    desc: '仅导出 sing-box 节点格式（全 7 协议 outbounds/endpoints，忽略策略组与规则）',
     protocols: ['ss', 'vmess', 'vless', 'trojan', 'hysteria2', 'wireguard', 'tuic'],
-    groupTypes: ['select', 'urltest'],
-    ruleKinds: [
-      'DOMAIN',
-      'DOMAIN-SUFFIX',
-      'DOMAIN-KEYWORD',
-      'IP-CIDR',
-      'IP-CIDR6',
-      'GEOIP',
-      'GEOSITE',
-      'RULE-SET',
-      'SRC-IP-CIDR',
-      'SRC-PORT',
-      'DST-PORT',
-      'PORT',
-      'PROCESS-NAME',
-      'MATCH',
-    ],
-    ruleSummary: '14 modern rules mapped to official sing-box route & rule_set options',
-    unsupportedSummary: 'Rejects fallback and loadbalance policy group types',
+    groupTypes: [],
+    ruleKinds: [],
+    ruleSummary: '仅导出 sing-box 节点格式（全 7 协议 outbounds/endpoints，忽略策略组与规则）',
+    unsupportedSummary: '仅校验节点协议与连接凭据完整性，忽略策略组与分流规则',
   },
   {
     target: 'surge',
     label: 'Surge',
     ext: 'conf',
     mimeType: 'text/plain',
-    desc: 'Surge 5 INI configuration subset ([Proxy], [Proxy Group], [Rule])',
-    protocols: ['ss', 'vmess', 'trojan'],
-    groupTypes: ['select', 'urltest', 'fallback'],
-    ruleKinds: [
-      'DOMAIN',
-      'DOMAIN-SUFFIX',
-      'DOMAIN-KEYWORD',
-      'IP-CIDR',
-      'IP-CIDR6',
-      'GEOIP',
-      'PROCESS-NAME',
-      'SRC-IP',
-      'DEST-PORT',
-      'IN-PORT',
-      'RULE-SET',
-      'USER-AGENT',
-      'URL-REGEX',
-      'MATCH',
-      'FINAL',
-    ],
-    ruleSummary: 'Surge 5 [Rule] subset (DOMAIN*, IP-CIDR*, GEOIP, PROCESS-NAME, RULE-SET, SRC-IP, DEST/IN-PORT, MATCH/FINAL)',
-    unsupportedSummary: 'Rejects VLESS/WireGuard/TUIC/Hysteria2 protocols, loadbalance groups, and GEOSITE rules',
+    desc: '仅导出 Surge 节点格式（支持 SS/VMess/Trojan/Hysteria2/TUIC/WireGuard，忽略策略组与规则）',
+    protocols: ['ss', 'vmess', 'trojan', 'hysteria2', 'tuic', 'wireguard'],
+    groupTypes: [],
+    ruleKinds: [],
+    ruleSummary: '仅导出 Surge 节点格式（支持 SS/VMess/Trojan/Hysteria2/TUIC/WireGuard，忽略策略组与规则）',
+    unsupportedSummary: '拒绝 VLESS 协议节点；忽略策略组与分流规则',
   },
   {
     target: 'qx',
     label: 'Quantumult X',
     ext: 'conf',
     mimeType: 'text/plain',
-    desc: 'Quantumult X INI subset ([server_local], [policy], [filter_local])',
+    desc: '仅导出 Quantumult X 节点格式（支持 SS/VMess/Trojan，忽略策略组与规则）',
     protocols: ['ss', 'vmess', 'trojan'],
-    groupTypes: ['select'],
-    ruleKinds: [
-      'DOMAIN',
-      'DOMAIN-SUFFIX',
-      'DOMAIN-KEYWORD',
-      'IP-CIDR',
-      'IP-CIDR6',
-      'GEOIP',
-      'MATCH',
-    ],
-    ruleSummary: 'Quantumult X [filter_local] subset (DOMAIN, DOMAIN-SUFFIX, DOMAIN-KEYWORD, IP-CIDR, IP-CIDR6, GEOIP, MATCH)',
-    unsupportedSummary: 'Rejects VLESS/WireGuard/TUIC/Hysteria2, urltest/fallback/loadbalance groups, and GEOSITE/RULE-SET/PROCESS-NAME rules',
+    groupTypes: [],
+    ruleKinds: [],
+    ruleSummary: '仅导出 Quantumult X 节点格式（支持 SS/VMess/Trojan，忽略策略组与规则）',
+    unsupportedSummary: '拒绝 VLESS/WireGuard/TUIC/Hysteria2 协议节点；忽略策略组与分流规则',
   },
 ]
 
@@ -190,4 +151,48 @@ export function formatDigest(digest: string): string {
   if (!digest || digest.length <= 16) return digest || '--'
   return `${digest.slice(0, 8)}...${digest.slice(-5)}`
 }
+
+const GROUP_TYPE_LABELS: Record<string, string> = {
+  select: '手动选择 (select)',
+  urltest: '自动测速 (urltest)',
+  fallback: '故障转移 (fallback)',
+  loadbalance: '负载均衡 (loadbalance)',
+}
+
+export function groupTypeLabel(groupType: string): string {
+  return GROUP_TYPE_LABELS[groupType.toLowerCase()] ?? groupType
+}
+
+export function publicationStateLabel(state?: string, revokedAt?: string): string {
+  if (revokedAt || state === 'revoked') {
+    return '已撤销'
+  }
+  return '已生效'
+}
+
+const PREFLIGHT_CHECK_LABELS: Record<string, string> = {
+  empty_routed_group: '空路由策略组检查',
+  risk_blocked: '高风险节点拦截检查',
+  risk_review: '中风险节点复核检查',
+  risk_unknown: '未探测风险节点检查',
+  unsupported_target_capability: '目标能力兼容性检查',
+}
+
+export function preflightCheckLabel(code?: string): string {
+  if (!code) return '预检检查项'
+  return PREFLIGHT_CHECK_LABELS[code] ?? code
+}
+
+const AUDIT_EVENT_LABELS: Record<string, string> = {
+  'publication.create': '创建订阅发布',
+  'publication.revoke': '撤销订阅发布',
+  'publication.preflight': '发布前置预检',
+  'publication.export': '客户端拉取订阅',
+}
+
+export function auditEventLabel(event?: string): string {
+  if (!event) return '审计事件'
+  return AUDIT_EVENT_LABELS[event] ?? event
+}
+
 

@@ -81,7 +81,7 @@ export function usePublications(initialTarget?: CompilerTarget) {
     } catch (err) {
       preview.value = null
       errorDetail.value = err instanceof Error ? err : new Error(String(err))
-      error.value = err instanceof Error ? err.message : 'Failed to fetch preview'
+      error.value = err instanceof Error ? err.message : '获取配置预览失败'
       if (err instanceof ApiError && (err.details as any)?.diagnostics) {
         preflightDiagnostics.value = (err.details as any).diagnostics
       }
@@ -125,7 +125,7 @@ export function usePublications(initialTarget?: CompilerTarget) {
       return res
     } catch (err) {
       errorDetail.value = err instanceof Error ? err : new Error(String(err))
-      const msg = err instanceof Error ? err.message : 'Failed to publish configuration'
+      const msg = err instanceof Error ? err.message : '创建订阅发布失败'
       error.value = msg
       if (err instanceof ApiError && (err.details as any)?.diagnostics) {
         preflightDiagnostics.value = (err.details as any).diagnostics
@@ -156,7 +156,7 @@ export function usePublications(initialTarget?: CompilerTarget) {
       return res
     } catch (err) {
       errorDetail.value = err instanceof Error ? err : new Error(String(err))
-      error.value = err instanceof Error ? err.message : 'Failed to fetch publication'
+      error.value = err instanceof Error ? err.message : '获取发布详情失败'
       return null
     }
   }
@@ -171,7 +171,7 @@ export function usePublications(initialTarget?: CompilerTarget) {
         activePublication.value.state = 'revoked'
       }
     } catch (err) {
-      error.value = err instanceof Error ? err.message : 'Failed to revoke publication'
+      error.value = err instanceof Error ? err.message : '撤销订阅发布失败'
       throw err
     } finally {
       revoking.value = false

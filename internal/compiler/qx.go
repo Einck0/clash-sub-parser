@@ -52,8 +52,8 @@ var validQXVMessMethods = map[string]bool{
 func quantumultXCapability() Capability {
 	return Capability{
 		Protocols:  protocolSet(domain.ProtocolSS, domain.ProtocolVMess, domain.ProtocolTrojan),
-		GroupTypes: groupSet(domain.GroupTypeSelect),
-		RuleKinds:  ruleSet("DOMAIN", "DOMAIN-SUFFIX", "DOMAIN-KEYWORD", "IP-CIDR", "IP-CIDR6", "GEOIP", "MATCH"),
+		GroupTypes: groupSet(),
+		RuleKinds:  ruleSet(),
 	}
 }
 
@@ -75,7 +75,7 @@ func renderQuantumultX(snapshot *resolver.ResolvedPolicySnapshot) ([]byte, error
 		return nil, fmt.Errorf("resolved policy snapshot is required")
 	}
 
-	serverLines := make([]string, 0, len(snapshot.Nodes))
+	var b strings.Builder
 	for i, node := range snapshot.Nodes {
 		if err := validateCredentialEnvelope(domain.TargetQuantumultX, i, node); err != nil {
 			return nil, err
@@ -84,90 +84,10 @@ func renderQuantumultX(snapshot *resolver.ResolvedPolicySnapshot) ([]byte, error
 		if err != nil {
 			return nil, err
 		}
-		serverLines = append(serverLines, line)
-	}
-
-	policyLines := make([]string, 0, len(snapshot.Groups))
-	for i, group := range snapshot.Groups {
-		loc := fmt.Sprintf("groups[%d]", i)
-		if group.GroupType != domain.GroupTypeSelect {
-			return nil, &CapabilityError{
-				Target:   domain.TargetQuantumultX,
-				Location: loc,
-				Feature:  string(group.GroupType),
-				Reason:   "policy group type is not supported",
-			}
-		}
-		groupName := strings.TrimSpace(group.Name)
-		if groupName == "" || hasUnsafeQXChars(groupName) {
-			return nil, &CapabilityError{
-				Target:   domain.TargetQuantumultX,
-				Location: loc,
-				Feature:  string(group.GroupType),
-				Reason:   "invalid policy group name",
-			}
-		}
-		members := make([]string, 0, len(group.Members))
-		for _, member := range group.Members {
-			memberName := strings.TrimSpace(member.DisplayName)
-			if memberName == "" || hasUnsafeQXChars(memberName) {
-				return nil, &CapabilityError{
-					Target:   domain.TargetQuantumultX,
-					Location: loc,
-					Feature:  groupName,
-					Reason:   "invalid group member display name",
-				}
-			}
-			if isBuiltInPolicyTarget(memberName) {
-				if !isQuantumultXBuiltInPolicy(memberName) {
-					return nil, &CapabilityError{
-						Target:   domain.TargetQuantumultX,
-						Location: loc,
-						Feature:  memberName,
-						Reason:   "built-in policy target is not supported by Quantumult X",
-					}
-				}
-				memberName = strings.ToUpper(memberName)
-			}
-			members = append(members, memberName)
-		}
-		if len(members) == 0 {
-			members = []string{"DIRECT"}
-		}
-		policyLines = append(policyLines, fmt.Sprintf("static = %s, %s", groupName, strings.Join(members, ", ")))
-	}
-
-	ruleLines := make([]string, 0, len(snapshot.Rules))
-	for i, rule := range snapshot.Rules {
-		if ruleKind(rule.Expression) == "MATCH" && i != len(snapshot.Rules)-1 {
-			return nil, &CapabilityError{
-				Target:   domain.TargetQuantumultX,
-				Location: fmt.Sprintf("rules[%d]", i),
-				Feature:  "MATCH",
-				Reason:   "terminal MATCH rule must be positioned last in Quantumult X [filter_local]",
-			}
-		}
-		line, err := renderQuantumultXRuleLine(i, rule)
-		if err != nil {
-			return nil, err
-		}
-		ruleLines = append(ruleLines, line)
-	}
-
-	var b strings.Builder
-	b.WriteString("[general]\nnetwork_check_url = http://cp.cloudflare.com/generate_204\n\n[server_local]\n")
-	for _, line := range serverLines {
 		b.WriteString(line)
 		b.WriteByte('\n')
 	}
-	b.WriteString("\n[policy]\n")
-	for _, line := range policyLines {
-		b.WriteString(line)
-		b.WriteByte('\n')
-	}
-	b.WriteString("\n[filter_local]\n")
-	for _, line := range ruleLines {
-		b.WriteString(line)
+	if b.Len() == 0 {
 		b.WriteByte('\n')
 	}
 	return []byte(b.String()), nil

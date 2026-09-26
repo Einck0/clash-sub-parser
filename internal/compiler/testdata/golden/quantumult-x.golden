@@ -1,13 +1,2 @@
-[general]
-network_check_url = http://cp.cloudflare.com/generate_204
-
-[server_local]
 vmess = 198.51.100.1:443, method=auto, password=b831381d-6324-4d53-ad4f-8cda48b30811, obfs=wss, obfs-host=example.com, obfs-uri=/vmess, tls-host=example.com, tag=edge-a
 shadowsocks = 198.51.100.2:8388, method=aes-256-gcm, password=test-ss-password, tag=edge-b
-
-[policy]
-static = proxy, edge-a, edge-b
-
-[filter_local]
-host-suffix, example.com, proxy
-final, proxy

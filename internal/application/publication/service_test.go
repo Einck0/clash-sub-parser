@@ -157,20 +157,23 @@ func buildSampleSnapshot() *resolver.ResolvedPolicySnapshot {
 	}
 }
 
-// buildIncompatibleSnapshot returns a snapshot containing protocols (Hysteria2) unsupported by Surge/QX.
+// buildIncompatibleSnapshot returns a snapshot containing protocols (VLESS) unsupported by Surge/QX.
 func buildIncompatibleSnapshot() *resolver.ResolvedPolicySnapshot {
 	snap := buildSampleSnapshot()
 	snap.Nodes = append(snap.Nodes, resolver.ResolvedNode{
-		LogicalID:   "node-hy2-01",
-		DisplayName: "Hysteria 01",
-		Protocol:    domain.ProtocolHysteria2,
-		Server:      "hy2.example.com",
+		LogicalID:   "node-vless-01",
+		DisplayName: "VLESS 01",
+		Protocol:    domain.ProtocolVLESS,
+		Server:      "vless.example.com",
 		Port:        443,
-		Credentials: domain.InboundProtocolCredential{Password: "hy2-secret-password"},
-		Active:      true,
-		Position:    2,
+		Credentials: domain.InboundProtocolCredential{
+			UUID:      "b831381d-6324-4d53-ad4f-8cda48b30812",
+			Transport: map[string]string{"pbk": "secret-reality-pbk", "sid": "01ab"},
+		},
+		Active:   true,
+		Position: 2,
 	})
-	snap.NodeLogicalIDs = append(snap.NodeLogicalIDs, "node-hy2-01")
+	snap.NodeLogicalIDs = append(snap.NodeLogicalIDs, "node-vless-01")
 	return snap
 }
 

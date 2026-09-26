@@ -91,6 +91,14 @@ export interface NodeSourceRecord {
   last_seen_fetch_id: string
 }
 
+export interface IPRiskSummaryRecord {
+  decision?: 'allow' | 'review' | 'block' | 'unknown'
+  risk_band?: 'low' | 'medium' | 'high' | 'critical' | 'unknown'
+  status?: 'fresh' | 'stale' | 'missing' | 'error'
+  provider?: string
+  reason_code?: string
+}
+
 export interface NodeRecord {
   logical_id: string
   protocol: string
@@ -101,6 +109,8 @@ export interface NodeRecord {
   capabilities?: Record<string, CapabilityStatus>
   probe_stale?: boolean
   probe_missing?: boolean
+  health_status?: 'healthy' | 'degraded' | 'unhealthy' | 'missing'
+  ip_risk_summary?: IPRiskSummaryRecord
   server?: string
   port?: number
   connection?: NodeConnectionInput
@@ -118,6 +128,8 @@ export interface NormalizedNode {
   capabilities: Record<string, CapabilityStatus>
   probeStale?: boolean
   probeMissing?: boolean
+  healthStatus?: 'healthy' | 'degraded' | 'unhealthy' | 'missing'
+  ipRiskSummary?: IPRiskSummaryRecord
   connection: NodeConnectionProfile
   sources?: NodeSourceRecord[]
 }
@@ -130,10 +142,11 @@ export function protocolSupportedTargets(protocol: string): readonly CompilerTar
     case 'vmess':
     case 'trojan':
       return ['mihomo', 'singbox', 'surge', 'qx']
-    case 'vless':
     case 'hysteria2':
     case 'wireguard':
     case 'tuic':
+      return ['mihomo', 'singbox', 'surge']
+    case 'vless':
     default:
       return ['mihomo', 'singbox']
   }
@@ -235,34 +248,34 @@ export function validateNodeConnectionProfile(
 ): string | null {
   const proto = protocol.trim().toLowerCase()
   if (!draft.server || !draft.server.trim()) {
-    return 'Server address is required'
+    return '服务器地址不能为空'
   }
   if (!draft.port || draft.port < 1 || draft.port > 65535) {
-    return 'Port must be between 1 and 65535'
+    return '端口必须在 1 到 65535 之间'
   }
 
   if (proto === 'wireguard') {
     const addrs = (draft.localAddress ?? []).map((a) => a.trim()).filter(Boolean)
     if (addrs.length === 0) {
-      return 'WireGuard requires at least one local_address (IPv4/IPv6 CIDR)'
+      return 'WireGuard 至少需要配置一个内网地址 (local_address，IPv4/IPv6 CIDR)'
     }
     if (!draft.publicKey || !draft.publicKey.trim()) {
-      return 'WireGuard requires peer public_key'
+      return 'WireGuard 需要配置对端公钥 (public_key)'
     }
     if (!draft.privateKey || !draft.privateKey.trim()) {
-      return 'WireGuard requires private_key'
+      return 'WireGuard 需要配置客户端私钥 (private_key)'
     }
     if (draft.mtu !== undefined && draft.mtu !== 0 && (draft.mtu < 576 || draft.mtu > 9000)) {
-      return 'WireGuard MTU must be between 576 and 9000'
+      return 'WireGuard MTU 必须在 576 到 9000 之间'
     }
   }
 
   if (proto === 'tuic') {
     if (!draft.uuid || !draft.uuid.trim()) {
-      return 'TUIC requires uuid'
+      return 'TUIC 需要配置 UUID (uuid)'
     }
     if (!draft.password || !draft.password.trim()) {
-      return 'TUIC requires password'
+      return 'TUIC 需要配置认证密码 (password)'
     }
   }
 
@@ -441,20 +454,65 @@ export function normalizeNode(node: NodeRecord): NormalizedNode {
     capabilities: node.capabilities ?? {},
     probeStale,
     probeMissing,
+    healthStatus: node.health_status,
+    ipRiskSummary: node.ip_risk_summary ?? (node as any).ipRiskSummary,
     connection: sanitizeNodeConnection(normalizedInput),
     sources: node.sources,
   }
 }
 
 const capabilityLabels: Record<CapabilityStatus, { label: string; tone: ToastTone }> = {
-  available: { label: 'Available', tone: 'success' },
-  restricted: { label: 'Restricted', tone: 'warning' },
-  unknown: { label: 'Unknown', tone: 'info' },
-  error: { label: 'Error', tone: 'error' },
-  stale: { label: 'Stale', tone: 'warning' },
-  missing: { label: 'Missing', tone: 'info' },
+  available: { label: '可用', tone: 'success' },
+  restricted: { label: '受限', tone: 'warning' },
+  unknown: { label: '未知', tone: 'info' },
+  error: { label: '异常', tone: 'error' },
+  stale: { label: '已过期', tone: 'warning' },
+  missing: { label: '未探测', tone: 'info' },
 }
 
 export function nodeCapabilityLabel(node: NodeRecord | NormalizedNode, capability: string) {
   return capabilityLabels[node.capabilities?.[capability] ?? 'unknown']
 }
+
+export function nodeHealthBadge(node: NodeRecord | NormalizedNode): { label: string; tone: ToastTone } {
+  const health = (node as NormalizedNode).healthStatus ?? (node as NodeRecord).health_status
+  if (health === 'healthy') return { label: '正常', tone: 'success' }
+  if (health === 'degraded') return { label: '降级', tone: 'warning' }
+  if (health === 'unhealthy') return { label: '异常', tone: 'error' }
+  if (health === 'missing') return { label: '未探测', tone: 'info' }
+
+  const caps = node.capabilities ?? {}
+  const values = Object.values(caps)
+  const probeMissing = (node as NormalizedNode).probeMissing ?? (node as NodeRecord).probe_missing ?? values.length === 0
+  const probeStale = (node as NormalizedNode).probeStale ?? (node as NodeRecord).probe_stale ?? values.includes('stale')
+
+  if (probeMissing || values.length === 0) {
+    return { label: '未探测', tone: 'info' }
+  }
+  if (values.includes('error')) {
+    return { label: '异常', tone: 'error' }
+  }
+  if (probeStale || values.includes('restricted') || values.includes('stale')) {
+    return { label: '降级', tone: 'warning' }
+  }
+  if (values.includes('available')) {
+    return { label: '正常', tone: 'success' }
+  }
+  return { label: '未探测', tone: 'info' }
+}
+
+export function nodeRiskBadge(node: NodeRecord | NormalizedNode): { label: string; tone: ToastTone } {
+  const summary = (node as NormalizedNode).ipRiskSummary ?? (node as NodeRecord).ip_risk_summary
+  const band = summary?.risk_band
+  if (band === 'low') return { label: '低风险', tone: 'success' }
+  if (band === 'medium') return { label: '中风险', tone: 'warning' }
+  if (band === 'high' || band === 'critical') return { label: '高风险', tone: 'error' }
+
+  const capRisk = node.capabilities?.ip_risk
+  if (capRisk === 'available') return { label: '低风险', tone: 'success' }
+  if (capRisk === 'restricted' || capRisk === 'stale') return { label: '中风险', tone: 'warning' }
+  if (capRisk === 'error') return { label: '高风险', tone: 'error' }
+
+  return { label: '未探测', tone: 'info' }
+}
+

@@ -39,26 +39,8 @@ func singBoxCapability() Capability {
 			domain.ProtocolWireGuard,
 			domain.ProtocolTUIC,
 		),
-		GroupTypes: groupSet(
-			domain.GroupTypeSelect,
-			domain.GroupTypeURLTest,
-		),
-		RuleKinds: ruleSet(
-			"DOMAIN",
-			"DOMAIN-SUFFIX",
-			"DOMAIN-KEYWORD",
-			"IP-CIDR",
-			"IP-CIDR6",
-			"GEOIP",
-			"GEOSITE",
-			"SRC-IP-CIDR",
-			"SRC-PORT",
-			"DST-PORT",
-			"PORT",
-			"PROCESS-NAME",
-			"RULE-SET",
-			"MATCH",
-		),
+		GroupTypes: groupSet(),
+		RuleKinds:  ruleSet(),
 	}
 }
 
@@ -68,10 +50,7 @@ func renderSingBox(snapshot *resolver.ResolvedPolicySnapshot) ([]byte, error) {
 		outbounds []option.Outbound
 	)
 
-	seenTags := make(map[string]bool, len(snapshot.Nodes)+len(snapshot.Groups))
-	nodeNameByID := make(map[string]string, len(snapshot.Nodes))
-	groupNameByID := make(map[string]string, len(snapshot.Groups))
-	definedGroups := make(map[string]bool, len(snapshot.Groups))
+	seenTags := make(map[string]bool, len(snapshot.Nodes))
 
 	for i, node := range snapshot.Nodes {
 		loc := fmt.Sprintf("nodes[%d]", i)
@@ -88,7 +67,6 @@ func renderSingBox(snapshot *resolver.ResolvedPolicySnapshot) ([]byte, error) {
 			}
 		}
 		seenTags[tag] = true
-		nodeNameByID[node.LogicalID] = tag
 
 		out, ep, err := probesingbox.BuildExportNodeOption(tag, domain.Node{
 			LogicalID:   node.LogicalID,
@@ -114,189 +92,12 @@ func renderSingBox(snapshot *resolver.ResolvedPolicySnapshot) ([]byte, error) {
 		}
 	}
 
-	for _, group := range snapshot.Groups {
-		if group.ID != "" {
-			groupNameByID[group.ID] = strings.TrimSpace(group.Name)
-		}
-		definedGroups[strings.TrimSpace(group.Name)] = true
-	}
-
-	var requiredBuiltInOutbounds []string
-	requireBuiltInOutbound := func(tag string) {
-		if seenTags[tag] {
-			return
-		}
-		for _, existing := range requiredBuiltInOutbounds {
-			if existing == tag {
-				return
-			}
-		}
-		requiredBuiltInOutbounds = append(requiredBuiltInOutbounds, tag)
-	}
-
-	for i, group := range snapshot.Groups {
-		loc := fmt.Sprintf("groups[%d]", i)
-		groupTag := strings.TrimSpace(group.Name)
-		if seenTags[groupTag] {
-			return nil, &CapabilityError{
-				Target:   domain.TargetSingBox,
-				Location: loc,
-				Feature:  groupTag,
-				Reason:   "duplicate group outbound tag in sing-box configuration",
-			}
-		}
-		seenTags[groupTag] = true
-
-		members := resolveSingBoxGroupMembers(group, nodeNameByID, groupNameByID)
-		if len(members) == 0 {
-			return nil, &CapabilityError{
-				Target:   domain.TargetSingBox,
-				Location: loc,
-				Feature:  groupTag,
-				Reason:   "policy group must contain at least one member in sing-box",
-			}
-		}
-
-		for _, member := range members {
-			if !definedGroups[member] && !seenTags[member] && isBuiltInPolicyTarget(member) {
-				if err := validateSingBoxBuiltInTarget(loc, member); err != nil {
-					return nil, err
-				}
-				requireBuiltInOutbound(member)
-			}
-		}
-
-		switch group.GroupType {
-		case domain.GroupTypeSelect:
-			outbounds = append(outbounds, option.Outbound{
-				Type: C.TypeSelector,
-				Tag:  groupTag,
-				Options: &option.SelectorOutboundOptions{
-					Outbounds: members,
-				},
-			})
-		case domain.GroupTypeURLTest:
-			outbounds = append(outbounds, option.Outbound{
-				Type: C.TypeURLTest,
-				Tag:  groupTag,
-				Options: &option.URLTestOutboundOptions{
-					Outbounds: members,
-					URL:       defaultSingBoxURLTestURL,
-					Interval:  badoption.Duration(defaultSingBoxURLTestInterval),
-					Tolerance: defaultSingBoxURLTestTolerance,
-				},
-			})
-		default:
-			return nil, &CapabilityError{
-				Target:   domain.TargetSingBox,
-				Location: loc,
-				Feature:  string(group.GroupType),
-				Reason:   "policy group type is not supported",
-			}
-		}
-	}
-
-	var (
-		routeRules []option.Rule
-		ruleSets   []option.RuleSet
-		finalTag   string
-	)
-	ruleSetURLByTag := make(map[string]string)
-	registerRuleSet := func(loc, feature, tag, rawURL, format string) error {
-		if existingURL, exists := ruleSetURLByTag[tag]; exists {
-			if existingURL != rawURL {
-				return &CapabilityError{
-					Target:   domain.TargetSingBox,
-					Location: loc,
-					Feature:  feature,
-					Reason:   fmt.Sprintf("conflicting rule-set URL for tag %q", tag),
-				}
-			}
-			return nil
-		}
-		ruleSetURLByTag[tag] = rawURL
-		ruleSets = append(ruleSets, option.RuleSet{
-			Type:   C.RuleSetTypeRemote,
-			Tag:    badoption.Listable[string]{tag},
-			Format: format,
-			RemoteOptions: option.RemoteRuleSet{
-				URL: rawURL,
-			},
-		})
-		return nil
-	}
-
-	for i, rule := range snapshot.Rules {
-		loc := fmt.Sprintf("rules[%d]", i)
-		expr := strings.TrimSpace(rule.Expression)
-		kind := ruleKind(expr)
-		targetName := strings.TrimSpace(rule.TargetGroupName)
-
-		if !definedGroups[targetName] && isBuiltInPolicyTarget(targetName) {
-			if err := validateSingBoxBuiltInTarget(loc, targetName); err != nil {
-				return nil, err
-			}
-		}
-
-		if domain.IsMatchRule(expr) {
-			if !definedGroups[targetName] && isBuiltInPolicyTarget(targetName) {
-				requireBuiltInOutbound(targetName)
-			}
-			finalTag = targetName
-			continue
-		}
-
-		defaultRule, err := buildSingBoxDefaultRule(loc, kind, expr, registerRuleSet)
-		if err != nil {
-			return nil, err
-		}
-
-		action, needOutbound := buildSingBoxRuleAction(targetName, definedGroups)
-		if needOutbound {
-			requireBuiltInOutbound(targetName)
-		}
-		defaultRule.RuleAction = action
-
-		routeRules = append(routeRules, option.Rule{
-			Type:           C.RuleTypeDefault,
-			DefaultOptions: defaultRule,
-		})
-	}
-
-	for _, builtInTag := range requiredBuiltInOutbounds {
-		if seenTags[builtInTag] {
-			continue
-		}
-		seenTags[builtInTag] = true
-		switch strings.ToUpper(builtInTag) {
-		case "DIRECT":
-			outbounds = append(outbounds, option.Outbound{
-				Type:    C.TypeDirect,
-				Tag:     builtInTag,
-				Options: &option.DirectOutboundOptions{},
-			})
-		case "REJECT", "REJECT-DROP":
-			outbounds = append(outbounds, option.Outbound{
-				Type:    C.TypeBlock,
-				Tag:     builtInTag,
-				Options: &option.StubOptions{},
-			})
-		}
-	}
-
 	var options option.Options
 	if len(endpoints) > 0 {
 		options.Endpoints = endpoints
 	}
 	if len(outbounds) > 0 {
 		options.Outbounds = outbounds
-	}
-	if len(routeRules) > 0 || len(ruleSets) > 0 || finalTag != "" {
-		options.Route = &option.RouteOptions{
-			Rules:   routeRules,
-			RuleSet: ruleSets,
-			Final:   finalTag,
-		}
 	}
 
 	var buf bytes.Buffer

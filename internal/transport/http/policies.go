@@ -51,13 +51,6 @@ type createRuleRequest struct {
 	Position      int               `json:"position"`
 }
 
-type validateGraphRequest struct {
-	Groups         []domain.NodeGroup            `json:"groups,omitempty"`
-	Edges          map[string][]domain.GroupEdge `json:"edges,omitempty"`
-	PolicyRules    []domain.PolicyRule           `json:"policy_rules,omitempty"`
-	AdmissionRules []domain.AdmissionRule        `json:"admission_rules,omitempty"`
-}
-
 func registerPolicyRoutes(r chi.Router, service *policy.Service, audit domain.AuditRepository) {
 	if service == nil {
 		return
@@ -350,22 +343,6 @@ func (h policyHandler) createRule(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h policyHandler) validate(w http.ResponseWriter, r *http.Request) {
-	var body validateGraphRequest
-	// Try to decode optional request body, ignore if empty or invalid
-	_ = decodeJSON(w, r, &body)
-
-	if len(body.Groups) > 0 {
-		if err := policy.ValidatePolicyGraph(body.Groups, body.Edges, body.PolicyRules, body.AdmissionRules); err != nil {
-			WriteDomainError(w, r, err)
-			return
-		}
-		WriteSuccess(w, r, http.StatusOK, policy.ValidationResult{
-			Valid:  true,
-			Errors: nil,
-		})
-		return
-	}
-
 	res, err := h.service.ValidateGraph(r.Context())
 	if err != nil {
 		WriteDomainError(w, r, err)

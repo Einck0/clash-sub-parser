@@ -44,7 +44,7 @@ export function useProbes() {
       schedule.value = res
       return res
     } catch (err) {
-      error.value = err instanceof Error ? err.message : 'Failed to load probe schedule'
+      error.value = err instanceof Error ? err.message : '加载探针周期计划失败'
       return null
     } finally {
       loadingSchedule.value = false
@@ -63,7 +63,7 @@ export function useProbes() {
       schedule.value = updated
       return updated
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to update probe schedule'
+      const msg = err instanceof Error ? err.message : '更新探针周期计划失败'
       error.value = msg
       throw err
     } finally {
@@ -82,7 +82,7 @@ export function useProbes() {
       totalBatches.value = res.total || 0
       return res
     } catch (err) {
-      error.value = err instanceof Error ? err.message : 'Failed to load probe batches'
+      error.value = err instanceof Error ? err.message : '加载探针执行批次失败'
       return null
     } finally {
       loadingBatches.value = false
@@ -93,7 +93,7 @@ export function useProbes() {
     try {
       return await api.get<ProbeBatch>(`/api/v1/probes/batches/${batchId}`)
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to get probe batch'
+      const msg = err instanceof Error ? err.message : '获取探针批次详情失败'
       error.value = msg
       throw err
     }
@@ -110,7 +110,7 @@ export function useProbes() {
       }
       return res
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to cancel probe batch'
+      const msg = err instanceof Error ? err.message : '取消探针批次失败'
       error.value = msg
       throw err
     } finally {
@@ -130,7 +130,7 @@ export function useProbes() {
       runs.value = res.items || []
       totalRuns.value = res.total || 0
     } catch (err) {
-      error.value = err instanceof Error ? err.message : 'Failed to load probe runs'
+      error.value = err instanceof Error ? err.message : '加载探针执行记录失败'
     } finally {
       loadingRuns.value = false
     }
@@ -159,7 +159,7 @@ export function useProbes() {
       await loadRuns()
       return res
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to trigger probe run'
+      const msg = err instanceof Error ? err.message : '发起探针任务失败'
       error.value = msg
       throw err
     } finally {
@@ -180,7 +180,7 @@ export function useProbes() {
         activeRun.value.state = 'cancelled'
       }
     } catch (err) {
-      error.value = err instanceof Error ? err.message : 'Failed to cancel probe run'
+      error.value = err instanceof Error ? err.message : '取消探针任务失败'
       throw err
     } finally {
       cancelling.value = false
@@ -196,7 +196,7 @@ export function useProbes() {
       })
       observations.value = res.items || []
     } catch (err) {
-      error.value = err instanceof Error ? err.message : 'Failed to load observations'
+      error.value = err instanceof Error ? err.message : '加载探测观测证据失败'
     } finally {
       loadingObservations.value = false
     }

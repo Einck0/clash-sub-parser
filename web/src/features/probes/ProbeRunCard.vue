@@ -6,8 +6,9 @@ import {
   XCircleIcon,
   ChevronRightIcon,
 } from '@heroicons/vue/24/outline'
-import type { ProbeRun } from './probeTypes'
+import { probeStateLabel, type ProbeRun } from './probeTypes'
 import StatusBadge from '../../ui/StatusBadge.vue'
+import { t } from '../../locales'
 
 const props = defineProps<{
   run: ProbeRun
@@ -59,11 +60,11 @@ const formattedCreatedAt = computed(() => {
             </h3>
           </div>
           <p class="mt-1 font-mono text-[11px] opacity-60 truncate">
-            Scope: {{ run.actor_scope }} · Rev: {{ run.config_revision || 'active' }}
+            作用域：{{ run.actor_scope }} · 修订：{{ run.config_revision || '活跃版本' }}
           </p>
         </div>
         <StatusBadge
-          :label="run.state.toUpperCase()"
+          :label="probeStateLabel(run.state)"
           :tone="run.state === 'succeeded' ? 'success' : run.state === 'failed' ? 'error' : run.state === 'queued' ? 'warning' : 'info'"
         />
       </div>
@@ -83,14 +84,15 @@ const formattedCreatedAt = computed(() => {
             @click="emit('cancel', run.id)"
           >
             <XCircleIcon class="w-3.5 h-3.5" />
-            Cancel
+            {{ t('probes.cancelRun') }}
           </button>
           <button
             type="button"
             class="btn btn-xs btn-primary btn-outline gap-1"
             @click="emit('inspect', run)"
           >
-            <span>Evidence</span>
+            <span>{{ t('probes.viewEvidence') }}</span>
+            <span class="hidden" aria-hidden="true">Evidence</span>
             <ChevronRightIcon class="w-3 h-3" />
           </button>
         </div>

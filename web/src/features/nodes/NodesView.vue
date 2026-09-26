@@ -16,6 +16,8 @@ import StatusBadge from '../../ui/StatusBadge.vue'
 import {
   SUPPORTED_NODE_PROTOCOLS,
   nodeCapabilityLabel,
+  nodeHealthBadge,
+  nodeRiskBadge,
   protocolSupportedTargets,
   renderNodePreview,
   type NormalizedNode,
@@ -151,7 +153,7 @@ async function handleApplyConnectionUpdate() {
   })
 
   if (!res.ok) {
-    connectionError.value = res.error || 'Invalid connection parameters'
+    connectionError.value = res.error || '连接参数无效'
     return
   }
   if (res.node) {
@@ -257,7 +259,7 @@ onUnmounted(() => {
     <!-- Header -->
     <div class="flex flex-wrap items-end justify-between gap-3">
       <div>
-        <p class="text-xs font-semibold uppercase tracking-[0.18em] text-primary">{{ t('nodes.tag') }}</p>
+        <p class="text-xs font-semibold uppercase tracking-[0.18em] text-primary">节点资产台账</p>
         <h2 id="nodes-title" class="mt-1 text-2xl font-bold">{{ t('nodes.title') }}</h2>
         <p class="mt-1 text-sm opacity-70">{{ t('nodes.subtitle') }}</p>
       </div>
@@ -275,7 +277,7 @@ onUnmounted(() => {
         data-testid="node-protocol-filter"
         class="flex flex-wrap items-center gap-1.5 text-xs"
         role="group"
-        aria-label="Protocol filter"
+        aria-label="协议筛选"
       >
         <button
           type="button"
@@ -381,14 +383,14 @@ onUnmounted(() => {
                 <!-- Protocol Connection Summary & Target Boundary Badges -->
                 <div class="flex flex-wrap items-center gap-1.5 text-[11px] font-mono opacity-80">
                   <span class="badge badge-xs badge-ghost">
-                    Targets: {{ protocolSupportedTargets(node.protocol).join('/') }}
+                    兼容目标: {{ protocolSupportedTargets(node.protocol).join('/') }}
                   </span>
                   <span v-if="node.connection.server && node.connection.port" class="badge badge-xs badge-ghost">
                     {{ node.connection.server }}:{{ node.connection.port }}
                   </span>
                   <template v-if="node.protocol.toLowerCase() === 'wireguard'">
                     <span v-if="node.connection.localAddress.length" class="badge badge-xs badge-info badge-outline">
-                      IP: {{ node.connection.localAddress.join(', ') }}
+                      内网 IP: {{ node.connection.localAddress.join(', ') }}
                     </span>
                     <span v-if="node.connection.mtu" class="badge badge-xs badge-ghost">
                       MTU: {{ node.connection.mtu }}
@@ -396,38 +398,46 @@ onUnmounted(() => {
                   </template>
                   <template v-else-if="node.protocol.toLowerCase() === 'tuic'">
                     <span v-if="node.connection.congestionControl" class="badge badge-xs badge-info badge-outline">
-                      CC: {{ node.connection.congestionControl }}
+                      拥塞控制: {{ node.connection.congestionControl }}
                     </span>
                     <span v-if="node.connection.udpRelayMode" class="badge badge-xs badge-ghost">
-                      UDP: {{ node.connection.udpRelayMode }}
+                      UDP 模式: {{ node.connection.udpRelayMode }}
                     </span>
                   </template>
                 </div>
 
                 <div class="flex flex-wrap items-center justify-between gap-2 border-t border-base-300 pt-3 text-xs min-w-0">
                   <div class="flex flex-wrap items-center gap-1.5 sm:gap-2 min-w-0">
-                    <span class="mr-1 text-xs opacity-60 shrink-0">Capabilities</span>
+                    <span class="mr-1 text-xs opacity-60 shrink-0">{{ t('nodes.capabilities') }}</span>
                     <StatusBadge
-                      :label="`Streaming: ${nodeCapabilityLabel(node, 'streaming').label}`"
+                      :label="`健康: ${nodeHealthBadge(node).label}`"
+                      :tone="nodeHealthBadge(node).tone"
+                    />
+                    <StatusBadge
+                      :label="`风险: ${nodeRiskBadge(node).label}`"
+                      :tone="nodeRiskBadge(node).tone"
+                    />
+                    <StatusBadge
+                      :label="`${t('nodes.streaming')}: ${nodeCapabilityLabel(node, 'streaming').label}`"
                       :tone="nodeCapabilityLabel(node, 'streaming').tone"
                     />
                     <StatusBadge
-                      :label="`AI: ${nodeCapabilityLabel(node, 'ai').label}`"
+                      :label="`${t('nodes.ai')}: ${nodeCapabilityLabel(node, 'ai').label}`"
                       :tone="nodeCapabilityLabel(node, 'ai').tone"
                     />
                     <span
                       v-if="node.probeStale"
                       class="badge badge-warning badge-sm gap-1 font-mono text-[11px]"
-                      title="Probe observations are stale (> freshness window)"
+                      title="探测观测数据已过期（超出保鲜窗口）"
                     >
-                      Stale Probe
+                      探测已过期
                     </span>
                     <span
                       v-if="node.probeMissing"
                       class="badge badge-ghost badge-sm gap-1 font-mono text-[11px] opacity-75"
-                      title="No probe observations recorded yet"
+                      title="尚无探针观测记录"
                     >
-                      No Probe
+                      未探测
                     </span>
                   </div>
 
@@ -455,7 +465,7 @@ onUnmounted(() => {
         <div v-if="loadingMore" class="flex justify-center py-2">
           <span class="loading loading-spinner loading-sm text-primary" />
         </div>
-        <p v-if="!hasMore" class="text-xs opacity-60">All nodes loaded</p>
+        <p v-if="!hasMore" class="text-xs opacity-60">{{ t('nodes.allLoaded') }}</p>
       </div>
 
       <!-- Empty State -->
@@ -482,19 +492,19 @@ onUnmounted(() => {
           <p class="font-semibold flex items-center justify-between gap-1.5">
             <span class="flex items-center gap-1.5">
               <ArrowPathIcon class="w-4 h-4 shrink-0 text-primary" />
-              <span>Subscription Provenance &amp; Reconcile</span>
+              <span>订阅溯源与自动同步 (Reconcile)</span>
             </span>
-            <span class="font-mono text-[11px] opacity-75">Logical ID: {{ selectedNode.logicalId }}</span>
+            <span class="font-mono text-[11px] opacity-75">逻辑 ID: {{ selectedNode.logicalId }}</span>
           </p>
           <p class="opacity-80 leading-relaxed">
-            Direct plaintext edits update this node in place. Subsequent upstream subscription Reconcile will refresh node configuration from the subscription source.
+            直接编辑明文连接参数将原地更新当前节点；后续上游订阅源触发自动同步 (Reconcile) 时将从订阅源刷新节点配置。
           </p>
           <p
             v-if="selectedNode.sources && selectedNode.sources.length > 0"
             data-testid="node-provenance-sources"
             class="font-mono text-[11px] opacity-80"
           >
-            Sources: {{ selectedNode.sources.map((s) => s.subscription_id).join(', ') }}
+            来源订阅: {{ selectedNode.sources.map((s) => s.subscription_id).join(', ') }}
           </p>
         </div>
 
@@ -513,15 +523,20 @@ onUnmounted(() => {
               :key="target"
               class="badge badge-xs badge-success badge-outline uppercase"
             >
-              {{ target }}: Supported
+              {{ target }}: 已支持
             </span>
-            <template
-              v-if="['wireguard', 'tuic', 'vless', 'hysteria2'].includes(selectedNode.protocol.toLowerCase())"
+            <span
+              v-if="selectedNode.protocol.toLowerCase() === 'vless'"
+              class="badge badge-xs badge-warning badge-outline"
             >
-              <span class="badge badge-xs badge-warning badge-outline">
-                surge / qx: Rejected (Unsupported Protocol)
-              </span>
-            </template>
+              surge / qx: 不支持该协议
+            </span>
+            <span
+              v-else-if="['wireguard', 'tuic', 'hysteria2'].includes(selectedNode.protocol.toLowerCase())"
+              class="badge badge-xs badge-warning badge-outline"
+            >
+              qx: 不支持该协议
+            </span>
           </div>
         </div>
 
@@ -533,7 +548,7 @@ onUnmounted(() => {
         >
           <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
             <label class="form-control sm:col-span-1">
-              <span class="label-text text-xs font-semibold">Display Name</span>
+              <span class="label-text text-xs font-semibold">节点显示名称</span>
               <input
                 v-model="draftDisplayName"
                 data-testid="node-display-name-input"
@@ -541,7 +556,7 @@ onUnmounted(() => {
               />
             </label>
             <label class="form-control sm:col-span-1">
-              <span class="label-text text-xs font-semibold">Server Host / IP</span>
+              <span class="label-text text-xs font-semibold">服务器地址 / IP</span>
               <input
                 v-model="draftServer"
                 data-testid="node-server-input"
@@ -549,7 +564,7 @@ onUnmounted(() => {
               />
             </label>
             <label class="form-control sm:col-span-1">
-              <span class="label-text text-xs font-semibold">Port</span>
+              <span class="label-text text-xs font-semibold">端口</span>
               <input
                 v-model.number="draftPort"
                 data-testid="node-port-input"
@@ -564,11 +579,11 @@ onUnmounted(() => {
           <!-- WireGuard Specific Fields -->
           <div v-if="selectedNode.protocol.toLowerCase() === 'wireguard'" class="space-y-2.5 pt-2 border-t border-base-300">
             <div class="font-bold text-primary uppercase tracking-wider text-[11px]">
-              WireGuard Endpoint &amp; Peer Configuration
+              WireGuard 端点与对端配置
             </div>
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
               <label class="form-control">
-                <span class="label-text text-xs font-semibold">Local Address (CIDR)</span>
+                <span class="label-text text-xs font-semibold">内网地址 (CIDR)</span>
                 <input
                   v-model="draftWgLocalAddress"
                   data-testid="wg-local-address-input"
@@ -577,34 +592,34 @@ onUnmounted(() => {
                 />
               </label>
               <label class="form-control">
-                <span class="label-text text-xs font-semibold">Peer Public Key</span>
+                <span class="label-text text-xs font-semibold">对端公钥 (Peer Public Key)</span>
                 <input
                   v-model="draftWgPublicKey"
                   data-testid="wg-public-key-input"
-                  placeholder="Base64 peer public key"
+                  placeholder="Base64 对端公钥"
                   class="input input-bordered input-xs font-mono mt-1"
                 />
               </label>
               <label class="form-control">
-                <span class="label-text text-xs font-semibold">Private Key</span>
+                <span class="label-text text-xs font-semibold">客户端私钥 (Private Key)</span>
                 <input
                   v-model="draftWgPrivateKey"
                   data-testid="wg-private-key-input"
-                  placeholder="Base64 client private key"
+                  placeholder="Base64 客户端私钥"
                   class="input input-bordered input-xs font-mono mt-1"
                 />
               </label>
               <label class="form-control">
-                <span class="label-text text-xs font-semibold">Pre-Shared Key (Optional)</span>
+                <span class="label-text text-xs font-semibold">预共享密钥 (可选)</span>
                 <input
                   v-model="draftWgPreSharedKey"
                   data-testid="wg-psk-input"
-                  placeholder="Base64 pre-shared key"
+                  placeholder="Base64 预共享密钥"
                   class="input input-bordered input-xs font-mono mt-1"
                 />
               </label>
               <label class="form-control">
-                <span class="label-text text-xs font-semibold">MTU</span>
+                <span class="label-text text-xs font-semibold">最大传输单元 (MTU)</span>
                 <input
                   v-model.number="draftWgMtu"
                   data-testid="wg-mtu-input"
@@ -615,7 +630,7 @@ onUnmounted(() => {
                 />
               </label>
               <label class="form-control">
-                <span class="label-text text-xs font-semibold">DNS Servers</span>
+                <span class="label-text text-xs font-semibold">DNS 服务器</span>
                 <input
                   v-model="draftWgDns"
                   data-testid="wg-dns-input"
@@ -624,7 +639,7 @@ onUnmounted(() => {
                 />
               </label>
               <label class="form-control sm:col-span-2">
-                <span class="label-text text-xs font-semibold">Reserved Bytes (Optional, 3 uint8)</span>
+                <span class="label-text text-xs font-semibold">保留字节 (可选，3 个 uint8)</span>
                 <input
                   v-model="draftWgReserved"
                   data-testid="wg-reserved-input"
@@ -638,7 +653,7 @@ onUnmounted(() => {
           <!-- TUIC Specific Fields -->
           <div v-else-if="selectedNode.protocol.toLowerCase() === 'tuic'" class="space-y-2.5 pt-2 border-t border-base-300">
             <div class="font-bold text-primary uppercase tracking-wider text-[11px]">
-              TUIC v5 Connection &amp; QUIC Transport Parameters
+              TUIC v5 连接与 QUIC 传输参数
             </div>
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
               <label class="form-control">
@@ -651,41 +666,41 @@ onUnmounted(() => {
                 />
               </label>
               <label class="form-control">
-                <span class="label-text text-xs font-semibold">Password</span>
+                <span class="label-text text-xs font-semibold">认证密码</span>
                 <input
                   v-model="draftPassword"
                   data-testid="tuic-password-input"
-                  placeholder="TUIC authentication password"
+                  placeholder="TUIC 认证密码"
                   class="input input-bordered input-xs font-mono mt-1"
                 />
               </label>
               <label class="form-control">
-                <span class="label-text text-xs font-semibold">Congestion Control</span>
+                <span class="label-text text-xs font-semibold">拥塞控制算法</span>
                 <select
                   v-model="draftCongestionControl"
                   data-testid="tuic-cc-select"
                   class="select select-bordered select-xs font-mono mt-1"
                 >
-                  <option value="">(default / unset)</option>
+                  <option value="">（默认 / 未设置）</option>
                   <option value="bbr">bbr</option>
                   <option value="cubic">cubic</option>
                   <option value="new_reno">new_reno</option>
                 </select>
               </label>
               <label class="form-control">
-                <span class="label-text text-xs font-semibold">UDP Relay Mode</span>
+                <span class="label-text text-xs font-semibold">UDP 转发模式</span>
                 <select
                   v-model="draftUdpRelayMode"
                   data-testid="tuic-udp-mode-select"
                   class="select select-bordered select-xs font-mono mt-1"
                 >
-                  <option value="">(default / unset)</option>
+                  <option value="">（默认 / 未设置）</option>
                   <option value="native">native</option>
                   <option value="quic">quic</option>
                 </select>
               </label>
               <label class="form-control">
-                <span class="label-text text-xs font-semibold">ALPN</span>
+                <span class="label-text text-xs font-semibold">ALPN 协议协商</span>
                 <input
                   v-model="draftAlpn"
                   data-testid="tuic-alpn-input"
@@ -694,7 +709,7 @@ onUnmounted(() => {
                 />
               </label>
               <label class="form-control">
-                <span class="label-text text-xs font-semibold">SNI</span>
+                <span class="label-text text-xs font-semibold">SNI 域名</span>
                 <input
                   v-model="draftSni"
                   data-testid="tuic-sni-input"
@@ -709,7 +724,7 @@ onUnmounted(() => {
                   type="checkbox"
                   class="checkbox checkbox-primary checkbox-xs"
                 />
-                <span class="label-text text-xs font-mono">disable_sni</span>
+                <span class="label-text text-xs font-mono">禁用 SNI (disable_sni)</span>
               </label>
             </div>
           </div>
@@ -733,7 +748,7 @@ onUnmounted(() => {
                 v-if="['ss', 'shadowsocks', 'vmess'].includes(selectedNode.protocol.toLowerCase())"
                 class="form-control"
               >
-                <span class="label-text text-xs font-semibold">Method / Cipher</span>
+                <span class="label-text text-xs font-semibold">加密方式 (Cipher)</span>
                 <input
                   v-model="draftMethod"
                   data-testid="node-method-input"
@@ -742,16 +757,16 @@ onUnmounted(() => {
                 />
               </label>
               <label class="form-control sm:col-span-2">
-                <span class="label-text text-xs font-semibold">Password</span>
+                <span class="label-text text-xs font-semibold">连接密码 / 密钥</span>
                 <input
                   v-model="draftPassword"
                   data-testid="node-password-input"
-                  placeholder="Protocol password / secret"
+                  placeholder="输入协议连接密码或密钥"
                   class="input input-bordered input-xs font-mono mt-1"
                 />
               </label>
               <label class="form-control">
-                <span class="label-text text-xs font-semibold">SNI</span>
+                <span class="label-text text-xs font-semibold">SNI 域名</span>
                 <input
                   v-model="draftSni"
                   data-testid="node-sni-input"
@@ -760,7 +775,7 @@ onUnmounted(() => {
                 />
               </label>
               <label class="form-control">
-                <span class="label-text text-xs font-semibold">ALPN</span>
+                <span class="label-text text-xs font-semibold">ALPN 协议协商</span>
                 <input
                   v-model="draftAlpn"
                   data-testid="node-alpn-input"
@@ -775,7 +790,7 @@ onUnmounted(() => {
                   type="checkbox"
                   class="checkbox checkbox-primary checkbox-xs"
                 />
-                <span class="label-text text-xs font-mono">disable_sni</span>
+                <span class="label-text text-xs font-mono">禁用 SNI (disable_sni)</span>
               </label>
             </div>
           </div>
@@ -793,7 +808,7 @@ onUnmounted(() => {
               data-testid="node-connection-saved"
               class="text-success font-medium"
             >
-              Connection parameters saved
+              连接参数已保存
             </span>
             <span v-else />
             <button
@@ -810,7 +825,7 @@ onUnmounted(() => {
         <!-- Node Config Snippet Preview (Mihomo YAML / sing-box JSON) -->
         <div class="space-y-2">
           <div class="flex items-center justify-between">
-            <span class="font-bold text-xs">Node Target Preview</span>
+            <span class="font-bold text-xs">节点导出格式预览</span>
             <div class="flex items-center gap-1">
               <button
                 type="button"

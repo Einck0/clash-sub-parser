@@ -5,6 +5,7 @@ import {
   ExclamationCircleIcon,
   InformationCircleIcon,
 } from '@heroicons/vue/24/outline'
+import { t } from '../locales'
 
 interface Props {
   modelValue?: boolean
@@ -20,11 +21,11 @@ interface Props {
 
 const props = withDefaults(defineProps<Props>(), {
   modelValue: false,
-  title: 'Confirm Operation',
+  title: '',
   message: '',
   description: '',
-  confirmText: 'Confirm',
-  cancelText: 'Cancel',
+  confirmText: '',
+  cancelText: '',
   tone: 'danger',
   loading: false,
   closable: true,
@@ -36,7 +37,10 @@ const emit = defineEmits<{
   cancel: []
 }>()
 
+const displayTitle = computed(() => props.title || t('common.confirm'))
 const displayMessage = computed(() => props.message || props.description || '')
+const displayConfirmText = computed(() => props.confirmText || t('common.confirm'))
+const displayCancelText = computed(() => props.cancelText || t('common.cancel'))
 
 function handleConfirm() {
   if (props.loading) return
@@ -106,7 +110,7 @@ function handleBackdrop(event: MouseEvent) {
             class="text-base sm:text-lg font-bold tracking-tight text-base-content break-words"
             data-testid="confirm-modal-title"
           >
-            {{ title }}
+            {{ displayTitle }}
           </h2>
           <p
             v-if="displayMessage"
@@ -134,7 +138,7 @@ function handleBackdrop(event: MouseEvent) {
           :disabled="loading"
           @click="handleCancel"
         >
-          {{ cancelText }}
+          {{ displayCancelText }}
         </button>
         <button
           type="button"
@@ -149,7 +153,7 @@ function handleBackdrop(event: MouseEvent) {
           :disabled="loading"
           @click="handleConfirm"
         >
-          {{ confirmText }}
+          {{ displayConfirmText }}
         </button>
       </div>
     </div>

@@ -2,16 +2,13 @@
 import { computed, ref } from 'vue'
 import {
   XMarkIcon,
-  CheckCircleIcon,
-  ExclamationCircleIcon,
   ClockIcon,
   InformationCircleIcon,
-  FingerPrintIcon,
-  BoltIcon,
 } from '@heroicons/vue/24/outline'
 import type { ProbeObservation, ProbeRun } from './probeTypes'
-import { formatLatency, probeVerdictTone } from './probeTypes'
+import { formatLatency, probeKindLabel, probeStateLabel, probeVerdictLabel, probeVerdictTone } from './probeTypes'
 import StatusBadge from '../../ui/StatusBadge.vue'
+import { t } from '../../locales'
 
 const props = defineProps<{
   open: boolean
@@ -84,24 +81,24 @@ function close() {
       <header class="flex items-start justify-between p-4 sm:p-5 border-b border-base-300 flex-shrink-0">
         <div class="min-w-0 pr-2">
           <div class="flex items-center gap-2">
-            <span class="text-xs font-semibold uppercase tracking-wider text-primary">Evidence Inspector</span>
+            <span class="text-xs font-semibold uppercase tracking-wider text-primary">证据检视器</span>
             <StatusBadge
               v-if="run"
-              :label="run.state.toUpperCase()"
+              :label="probeStateLabel(run.state)"
               :tone="run.state === 'succeeded' ? 'success' : run.state === 'failed' ? 'error' : run.state === 'queued' ? 'warning' : 'info'"
             />
           </div>
           <h2 id="sheet-title" class="mt-1 text-lg sm:text-xl font-bold truncate">
-            Probe Run Evidence
+            {{ t('probes.evidenceTitle') }}
           </h2>
           <p v-if="run" class="mt-0.5 font-mono text-xs opacity-60 truncate">
-            Run ID: {{ run.id }}
+            任务 ID：{{ run.id }}
           </p>
         </div>
         <button
           type="button"
           class="btn btn-ghost btn-sm btn-circle"
-          aria-label="Close sheet"
+          aria-label="关闭面板"
           @click="close"
         >
           <XMarkIcon class="w-5 h-5" />
@@ -110,24 +107,24 @@ function close() {
 
       <!-- Kind Filter Bar -->
       <div v-if="kinds.length > 1" class="px-4 py-2 bg-base-200/50 border-b border-base-300 flex items-center gap-1.5 overflow-x-auto text-xs flex-shrink-0">
-        <span class="opacity-60 mr-1">Filter:</span>
+        <span class="opacity-60 mr-1">筛选：</span>
         <button
           type="button"
           class="btn btn-xs rounded-lg"
           :class="selectedKind === 'all' ? 'btn-primary' : 'btn-ghost'"
           @click="selectedKind = 'all'"
         >
-          All ({{ observations.length }})
+          全部 ({{ observations.length }})
         </button>
         <button
           v-for="kind in kinds"
           :key="kind"
           type="button"
-          class="btn btn-xs rounded-lg uppercase"
+          class="btn btn-xs rounded-lg"
           :class="selectedKind === kind ? 'btn-primary' : 'btn-ghost'"
           @click="selectedKind = kind"
         >
-          {{ kind }}
+          {{ probeKindLabel(kind) }}
         </button>
       </div>
 
@@ -142,8 +139,8 @@ function close() {
           class="rounded-xl border border-dashed border-base-300 p-8 text-center"
         >
           <InformationCircleIcon class="w-8 h-8 mx-auto opacity-40 text-info" />
-          <p class="mt-2 font-medium text-sm">No observations recorded</p>
-          <p class="mt-1 text-xs opacity-60">Run may still be queued or no nodes were matched.</p>
+          <p class="mt-2 font-medium text-sm">暂无观测记录</p>
+          <p class="mt-1 text-xs opacity-60">探针任务可能仍在队列等待中，或没有匹配到可探测节点。</p>
         </div>
 
         <article
@@ -154,19 +151,19 @@ function close() {
           <div class="flex items-start justify-between gap-2">
             <div class="min-w-0">
               <div class="flex items-center gap-2">
-                <span class="badge badge-sm font-semibold uppercase tracking-wider badge-ghost">
-                  {{ obs.kind }}
+                <span class="badge badge-sm font-semibold tracking-wider badge-ghost">
+                  {{ probeKindLabel(obs.kind) }}
                 </span>
                 <span class="font-mono text-xs font-medium truncate">
                   {{ obs.node_logical_id }}
                 </span>
               </div>
               <p class="mt-1.5 text-xs text-base-content/80 leading-relaxed font-sans">
-                {{ obs.redacted_summary || 'Evidence recorded.' }}
+                {{ obs.redacted_summary || '已记录观测证据。' }}
               </p>
             </div>
             <StatusBadge
-              :label="obs.verdict.toUpperCase()"
+              :label="probeVerdictLabel(obs.verdict)"
               :tone="probeVerdictTone(obs.verdict) === 'error' ? 'error' : probeVerdictTone(obs.verdict) === 'success' ? 'success' : probeVerdictTone(obs.verdict) === 'warning' ? 'warning' : 'info'"
             />
           </div>
@@ -174,9 +171,9 @@ function close() {
           <div class="mt-3 pt-2.5 border-t border-base-300/50 flex flex-wrap items-center justify-between gap-2 text-[11px] opacity-70">
             <span class="flex items-center gap-1">
               <ClockIcon class="w-3.5 h-3.5" />
-              Latency: <strong class="font-mono font-semibold">{{ formatLatency(obs.latency_ms) }}</strong>
+              延迟：<strong class="font-mono font-semibold">{{ formatLatency(obs.latency_ms) }}</strong>
             </span>
-            <span v-if="obs.evidence_digest" class="font-mono truncate max-w-[200px]" title="Evidence Digest">
+            <span v-if="obs.evidence_digest" class="font-mono truncate max-w-[200px]" title="证据指纹">
               {{ obs.evidence_digest }}
             </span>
           </div>
@@ -190,7 +187,7 @@ function close() {
           class="btn btn-sm btn-ghost"
           @click="close"
         >
-          Close
+          {{ t('common.close') }}
         </button>
       </footer>
     </section>

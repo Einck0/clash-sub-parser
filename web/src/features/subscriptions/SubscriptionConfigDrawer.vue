@@ -140,7 +140,7 @@ function handleSubmit() {
           v-model="draft.name"
           required
           class="input input-bordered input-sm focus:input-primary font-medium"
-          placeholder="e.g. Hong Kong VIP Feed"
+          placeholder="例如：香港专线订阅源"
         />
       </label>
 
@@ -185,7 +185,7 @@ function handleSubmit() {
           <input v-model="draft.enabled" type="checkbox" class="toggle toggle-primary toggle-sm" />
           <div class="flex flex-col">
             <span class="label-text text-xs font-semibold">{{ t('subscriptions.enabled') }}</span>
-            <span class="text-[11px] text-base-content/60">Include this feed in node aggregation</span>
+            <span class="text-[11px] text-base-content/60">将该订阅源纳入节点汇聚与自动同步</span>
           </div>
         </label>
       </div>
@@ -222,7 +222,7 @@ function handleSubmit() {
         </div>
 
         <div v-if="!draft.config.rename_rules?.length" class="text-xs text-base-content/50 py-2 italic text-center border border-dashed border-base-300 rounded-lg">
-          No renaming regex rules applied
+          暂未配置节点正则重命名规则
         </div>
         <div v-else class="space-y-2">
           <div
@@ -264,7 +264,7 @@ function handleSubmit() {
         </div>
 
         <div v-if="!draft.config.filter_rules?.length" class="text-xs text-base-content/50 py-2 italic text-center border border-dashed border-base-300 rounded-lg">
-          No filtering regex rules applied
+          暂未配置节点黑白名单过滤规则
         </div>
         <div v-else class="space-y-2">
           <div
@@ -299,7 +299,7 @@ function handleSubmit() {
           <input
             v-model="targetGroupsInput"
             class="input input-bordered input-sm font-mono text-xs focus:input-primary"
-            placeholder="Proxy, Streaming, Auto (comma-separated)"
+            :placeholder="t('subscriptions.targetGroupsPlaceholder')"
           />
           <span class="text-[11px] text-base-content/60 mt-1">{{ t('subscriptions.targetGroupsDesc') }}</span>
         </label>

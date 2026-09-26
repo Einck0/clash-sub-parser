@@ -137,11 +137,11 @@ onMounted(() => {
         <span
           data-testid="telemetry-badge-engine"
           class="badge badge-neutral font-mono h-auto min-h-[1.75rem] py-1 px-2.5 text-xs leading-normal whitespace-normal inline-flex items-center"
-        >Go 1.22+ Control Plane</span>
+        >{{ t('dashboard.badgeEngine') }}</span>
         <span
           data-testid="telemetry-badge-storage"
           class="badge badge-primary badge-outline font-mono h-auto min-h-[1.75rem] py-1 px-2.5 text-xs leading-normal whitespace-normal inline-flex items-center"
-        >Chi v5 & SQLite WAL</span>
+        >{{ t('dashboard.badgeStorage') }}</span>
       </div>
     </div>
 

@@ -19,7 +19,7 @@ describe('SettingsView Component', () => {
     document.body.appendChild(container)
     localStorage.clear()
     toastStore.clear()
-    setLocale('en-US')
+    setLocale('zh-CN')
     vi.restoreAllMocks()
   })
 
@@ -31,6 +31,7 @@ describe('SettingsView Component', () => {
     container.remove()
     localStorage.clear()
     toastStore.clear()
+    setLocale('zh-CN')
     vi.restoreAllMocks()
   })
 
@@ -69,7 +70,7 @@ describe('SettingsView Component', () => {
 
     const badge = getAuthModeBadge()
     expect(badge).toBeTruthy()
-    expect(badge?.textContent).toContain('Open Mode')
+    expect(badge?.textContent).toContain('开放模式')
   })
 
   it('probes auth mode on mount and renders Protected with green/success style', async () => {
@@ -86,7 +87,7 @@ describe('SettingsView Component', () => {
 
     const badge = getAuthModeBadge()
     expect(badge).toBeTruthy()
-    expect(badge?.textContent).toContain('Protected')
+    expect(badge?.textContent).toContain('受保护')
   })
 
   it('displays stored token masked by default and toggles visibility on click', async () => {
@@ -173,7 +174,7 @@ describe('SettingsView Component', () => {
 
     expect(getSpy).toHaveBeenCalledWith('/api/v1/auth/status')
     expect(toastStore.items.value.some((t) => t.tone === 'success')).toBe(true)
-    expect(getConnectionResult()?.textContent?.toLowerCase()).toMatch(/connected|reachable|正常|success/)
+    expect(getConnectionResult()?.textContent?.toLowerCase()).toMatch(/connected|reachable|已连接|可达|正常|success/)
   })
 
   it('tests connectivity to backend and shows error state when request fails', async () => {
@@ -232,7 +233,7 @@ describe('SettingsView Component', () => {
     expect(runtimeInfo?.textContent).toContain('internal/webassets')
   })
 
-  it('displays single accurate token status badge without duplication in en and zh', async () => {
+  it('displays single accurate token status badge without duplication in zh and en', async () => {
     localStorage.setItem('csp_token', 'token-active-123')
     vi.spyOn(api, 'get').mockResolvedValue({ mode: 'protected', authenticated: true, subject: 'admin' })
 
@@ -242,12 +243,12 @@ describe('SettingsView Component', () => {
 
     const statusBadge = container.querySelector('[data-testid="token-status-badge"]')
     expect(statusBadge).toBeTruthy()
-    expect(statusBadge?.textContent?.trim()).toBe('Active')
-    expect(statusBadge?.textContent).not.toContain('Active Active')
-
-    setLocale('zh-CN')
-    await nextTick()
     expect(statusBadge?.textContent?.trim()).toBe('活跃')
+    expect(statusBadge?.textContent).not.toContain('活跃 活跃')
+
+    setLocale('en-US')
+    await nextTick()
+    expect(statusBadge?.textContent?.trim()).toBe('Active')
     expect(statusBadge?.textContent).not.toContain('Active Active')
   })
 })
@@ -261,6 +262,7 @@ describe('App.vue Integration: Settings View & Topbar Auth Badge', () => {
     document.body.appendChild(container)
     localStorage.clear()
     toastStore.clear()
+    setLocale('zh-CN')
     vi.restoreAllMocks()
   })
 
@@ -272,7 +274,7 @@ describe('App.vue Integration: Settings View & Topbar Auth Badge', () => {
     container.remove()
     localStorage.clear()
     toastStore.clear()
-    setLocale('en-US')
+    setLocale('zh-CN')
     vi.restoreAllMocks()
   })
 
@@ -308,7 +310,7 @@ describe('App.vue Integration: Settings View & Topbar Auth Badge', () => {
 
     const badge = getHeaderAuthBadge()
     expect(badge).toBeTruthy()
-    expect(badge.textContent).toContain('Open Mode')
+    expect(badge.textContent).toContain('开放模式')
   })
 
   it('renders Protected badge in topbar header when auth status is protected', async () => {
@@ -318,7 +320,7 @@ describe('App.vue Integration: Settings View & Topbar Auth Badge', () => {
 
     const badge = getHeaderAuthBadge()
     expect(badge).toBeTruthy()
-    expect(badge.textContent).toContain('Protected')
+    expect(badge.textContent).toContain('受保护')
   })
 
   it('clicking topbar auth badge navigates to Settings view', async () => {
@@ -332,7 +334,7 @@ describe('App.vue Integration: Settings View & Topbar Auth Badge', () => {
     await new Promise((r) => setTimeout(r, 20))
 
     const main = getMainContent()
-    expect(main?.textContent).toContain('Security & Credentials')
+    expect(main?.textContent).toContain('安全与全局设置')
     expect(['#settings', '#/settings']).toContain(window.location.hash)
   })
 
@@ -342,7 +344,7 @@ describe('App.vue Integration: Settings View & Topbar Auth Badge', () => {
     await new Promise((r) => setTimeout(r, 20))
 
     const buttons = getSidebarButtons()
-    const settingsBtn = buttons.find((b): b is HTMLButtonElement => b instanceof HTMLButtonElement && b.textContent?.includes('Settings') === true)
+    const settingsBtn = buttons.find((b): b is HTMLButtonElement => b instanceof HTMLButtonElement && (b.textContent?.includes('全局配置') === true || b.textContent?.includes('Settings') === true))
     expect(settingsBtn).toBeTruthy()
 
     settingsBtn?.click()
@@ -350,7 +352,7 @@ describe('App.vue Integration: Settings View & Topbar Auth Badge', () => {
     await new Promise((r) => setTimeout(r, 25))
 
     const main = getMainContent()
-    expect(main?.textContent).toContain('Security & Credentials')
+    expect(main?.textContent).toContain('安全与全局设置')
     expect(main?.textContent).not.toContain('Phase 6.1')
     expect(['#settings', '#/settings']).toContain(window.location.hash)
   })

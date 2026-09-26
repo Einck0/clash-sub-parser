@@ -69,7 +69,7 @@ async function copyReference(subscription: SubscriptionRecord) {
       await navigator.clipboard.writeText(refText)
       toastStore.push({ message: t('common.copySuccess'), tone: 'success' })
     } else {
-      throw new Error('Clipboard API unavailable')
+      throw new Error('剪贴板不可用')
     }
   } catch {
     toastStore.push({ message: t('common.copyFailed'), tone: 'error' })
@@ -83,7 +83,7 @@ onMounted(load)
   <section class="space-y-5" aria-labelledby="subscriptions-title">
     <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 w-full min-w-0">
       <div class="min-w-0">
-        <p class="text-xs font-semibold uppercase tracking-[0.18em] text-primary">{{ t('subscriptions.tag') }}</p>
+        <p class="text-xs font-semibold uppercase tracking-[0.18em] text-primary">订阅源管理</p>
         <h2 id="subscriptions-title" class="mt-1 text-2xl font-bold truncate">{{ t('subscriptions.title') }}</h2>
         <p class="mt-1 text-sm opacity-70">{{ t('subscriptions.subtitle') }}</p>
       </div>
@@ -139,7 +139,7 @@ onMounted(load)
                     class="btn btn-ghost btn-xs btn-circle text-base-content/70 hover:text-base-content touch-manipulation"
                     :class="{ 'btn-active': open }"
                     :title="t('common.actions')"
-                    aria-label="Subscription actions"
+                    aria-label="订阅源操作菜单"
                     data-testid="subscription-actions-trigger"
                   >
                     <EllipsisVerticalIcon class="h-4 w-4" />
@@ -205,27 +205,27 @@ onMounted(load)
               {{ subscription.config.cron_schedule }}
             </span>
             <span v-if="subscription.config?.auto_test" class="badge badge-primary badge-outline badge-xs text-[10px]">
-              Auto Test
+              自动探测
             </span>
             <span v-if="subscription.config?.rename_rules?.length" class="badge badge-info badge-outline badge-xs text-[10px]">
-              {{ subscription.config.rename_rules.length }} Renames
+              {{ subscription.config.rename_rules.length }} 条重命名
             </span>
             <span v-if="subscription.config?.filter_rules?.length" class="badge badge-accent badge-outline badge-xs text-[10px]">
-              {{ subscription.config.filter_rules.length }} Filters
+              {{ subscription.config.filter_rules.length }} 条过滤
             </span>
             <span v-if="subscription.config?.target_groups?.length" class="badge badge-secondary badge-outline badge-xs text-[10px]">
-              {{ subscription.config.target_groups.length }} Groups
+              {{ subscription.config.target_groups.length }} 个目标组
             </span>
           </div>
 
           <dl class="grid grid-cols-2 gap-3 text-xs">
             <div>
               <dt class="opacity-60">{{ t('subscriptions.refreshInterval') }}</dt>
-              <dd class="mt-1 font-medium">{{ subscription.refresh_policy.interval_seconds }}s</dd>
+              <dd class="mt-1 font-medium">{{ subscription.refresh_policy.interval_seconds }} 秒</dd>
             </div>
             <div>
               <dt class="opacity-60">{{ t('subscriptions.timeout') }}</dt>
-              <dd class="mt-1 font-medium">{{ subscription.refresh_policy.timeout_seconds }}s</dd>
+              <dd class="mt-1 font-medium">{{ subscription.refresh_policy.timeout_seconds }} 秒</dd>
             </div>
           </dl>
         </div>

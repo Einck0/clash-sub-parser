@@ -701,17 +701,27 @@ func TestFeatureConvergence_FullStack(t *testing.T) {
 		t.Errorf("expected empty_routed_group diagnostic in preview, got: %s", string(body))
 	}
 
-	// Publication creation MUST fail with 409 preflight conflict error
+	// Publication creation for Mihomo MUST fail with 409 preflight conflict error
 	pubReq := map[string]any{
-		"target":      "singbox",
+		"target":      "mihomo",
 		"revision_id": emptyRev.ID,
 	}
 	resp, body = doReq(http.MethodPost, "/api/v1/publications", pubReq)
 	if resp.StatusCode != http.StatusConflict {
-		t.Fatalf("expected 409 for empty routed group publication, got %d: %s", resp.StatusCode, string(body))
+		t.Fatalf("expected 409 for empty routed group publication on mihomo, got %d: %s", resp.StatusCode, string(body))
 	}
 	if !strings.Contains(string(body), "empty_routed_group") {
 		t.Errorf("expected 409 body to reference empty_routed_group, got: %s", string(body))
+	}
+
+	// Publication creation for node-only target (singbox) ignores empty_routed_group and succeeds
+	sbPubReq := map[string]any{
+		"target":      "singbox",
+		"revision_id": emptyRev.ID,
+	}
+	resp, body = doReq(http.MethodPost, "/api/v1/publications", sbPubReq)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201 for node-only singbox publication despite empty_routed_group, got %d: %s", resp.StatusCode, string(body))
 	}
 
 	// -------------------------------------------------------------------------

@@ -65,9 +65,36 @@ const navItems = [
 ]
 
 const currentTitle = computed(() => {
-  const rName = injectedRoute?.name || activeTab.value || 'dashboard'
-  return String(rName).replace('-', ' ')
+  const rName = String(injectedRoute?.name || activeTab.value || 'dashboard')
+  if (currentLocale.value === 'zh-CN') {
+    const matched = navItems.find((item) => item.id === rName)
+    if (matched) {
+      return t(matched.labelKey)
+    }
+  }
+  return rName.replace('-', ' ')
 })
+
+function themeLabel(theme: ThemeName): string {
+  switch (theme) {
+    case 'light':
+      return t('themes.light')
+    case 'dark':
+      return t('themes.dark')
+    case 'dim':
+      return t('themes.dim')
+    case 'cyberpunk':
+      return t('themes.cyberpunk')
+    case 'cupcake':
+      return t('themes.cupcake')
+    case 'dracula':
+      return t('themes.dracula')
+    case 'nord':
+      return t('themes.nord')
+    default:
+      return theme
+  }
+}
 
 const isItemActive = (item: typeof navItems[0]) => {
   if (injectedRoute) {
@@ -196,8 +223,8 @@ onUnmounted(() => {
             C
           </div>
           <div v-if="!isCollapsed" class="min-w-0 transition-opacity duration-150">
-            <h1 class="font-bold text-sm tracking-wide truncate">CSP Control Plane</h1>
-            <p class="text-xs text-base-content/60 truncate">v1.0 Clean-Slate</p>
+            <h1 class="font-bold text-sm tracking-wide truncate">{{ t('topbar.sidebarTitle') }}</h1>
+            <p class="text-xs text-base-content/60 truncate">{{ t('topbar.sidebarVersion') }}</p>
           </div>
         </div>
 
@@ -243,7 +270,7 @@ onUnmounted(() => {
 
       <div class="p-3 border-t border-base-300">
         <div v-if="!isCollapsed" class="flex items-center justify-between text-xs text-base-content/60">
-          <span>Theme: {{ currentTheme }}</span>
+          <span>{{ t('themes.label') }}：{{ themeLabel(currentTheme) }}</span>
           <div class="flex gap-1">
             <button
               v-for="tName in themes.slice(0, 3)"
@@ -260,7 +287,7 @@ onUnmounted(() => {
           <button
             @click="switchTheme(currentTheme === 'dark' ? 'light' : 'dark')"
             class="btn btn-ghost btn-xs btn-circle"
-            :title="`Theme: ${currentTheme}`"
+            :title="`${t('themes.label')}：${themeLabel(currentTheme)}`"
           >
             <SunIcon v-if="currentTheme === 'light'" class="w-4 h-4" />
             <MoonIcon v-else class="w-4 h-4" />
@@ -299,7 +326,7 @@ onUnmounted(() => {
                 'bg-base-200/50 text-base-content/60': authState === 'probing',
                 'bg-error/10 text-error border-error/30': authState === 'error',
               }"
-              :title="authState === 'open' ? '当前为零配置私有开放模式' : authState === 'authenticated' ? 'Protected by Admin Token (已认证，点击管理)' : authState === 'unauthenticated' ? 'Protected by Admin Token (未认证)' : '认证探测中...'"
+              :title="authState === 'open' ? t('topbar.openModeTooltip') : authState === 'authenticated' ? t('topbar.protectedAuthTooltip') : authState === 'unauthenticated' ? t('topbar.protectedUnauthTooltip') : t('topbar.probingTooltip')"
               @click="(e) => { activeTab = 'settings'; setRouteTab('settings'); if (navigate) navigate(e); else router.push('/settings'); }"
             >
               <span
@@ -311,7 +338,7 @@ onUnmounted(() => {
                   'bg-base-content/40 animate-pulse': authState === 'probing',
                 }"
               />
-              <span class="hidden sm:inline whitespace-nowrap">{{ authState === 'open' ? 'Open Mode' : (authState === 'authenticated' || authState === 'unauthenticated') ? 'Protected' : authState === 'probing' ? 'Probing...' : 'Error' }}</span>
+              <span class="hidden sm:inline whitespace-nowrap">{{ authState === 'open' ? t('topbar.openMode') : (authState === 'authenticated' || authState === 'unauthenticated') ? t('topbar.protected') : authState === 'probing' ? t('topbar.probing') : t('topbar.authError') }}</span>
             </button>
           </RouterLink>
 
@@ -325,8 +352,8 @@ onUnmounted(() => {
                 'bg-error': healthStatus === 'unhealthy'
               }"
             />
-            <span class="hidden sm:inline capitalize whitespace-nowrap">{{ healthStatus }}</span>
-            <button @click="checkHealth" class="btn btn-ghost btn-xs btn-circle ml-0.5 touch-manipulation" title="Refresh health" aria-label="Refresh health">
+            <span class="hidden sm:inline capitalize whitespace-nowrap">{{ healthStatus === 'healthy' ? t('topbar.systemReady') : healthStatus === 'unhealthy' ? t('topbar.connectionError') : t('topbar.checking') }}</span>
+            <button @click="checkHealth" class="btn btn-ghost btn-xs btn-circle ml-0.5 touch-manipulation" :title="t('topbar.refreshHealth')" :aria-label="t('topbar.refreshHealth')">
               <ArrowPathIcon class="w-3 h-3" :class="{ 'animate-spin': healthStatus === 'checking' }" />
             </button>
           </div>
@@ -376,7 +403,7 @@ onUnmounted(() => {
                   class="capitalize touch-manipulation w-full text-left"
                   :class="{ 'active': currentTheme === tName }"
                 >
-                  {{ tName }}
+                  {{ themeLabel(tName) }}
                 </button>
               </li>
             </ul>
@@ -399,11 +426,11 @@ onUnmounted(() => {
         <!-- 2. Probing Error -->
         <div v-else-if="authState === 'error'" class="alert alert-error shadow-lg" data-testid="auth-error-alert">
           <div>
-            <h3 class="font-bold">认证状态探测失败</h3>
-            <div class="text-xs">{{ authErrorMessage || '无法连接控制面认证服务' }}</div>
+            <h3 class="font-bold">{{ t('topbar.authProbeError') }}</h3>
+            <div class="text-xs">{{ authErrorMessage || t('topbar.authProbeErrorDesc') }}</div>
           </div>
           <div class="flex-none">
-            <button class="btn btn-sm btn-outline" @click="probeAuth">重试探测</button>
+            <button class="btn btn-sm btn-outline" @click="probeAuth">{{ t('topbar.retryProbe') }}</button>
           </div>
         </div>
 

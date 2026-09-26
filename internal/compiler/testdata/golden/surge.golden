@@ -1,13 +1,2 @@
-[General]
-loglevel = notify
-
-[Proxy]
 edge-a = vmess, 198.51.100.1, 443, username=b831381d-6324-4d53-ad4f-8cda48b30811, vmess-aead=true, ws=true, ws-path=/vmess, ws-headers=Host:example.com, tls=true
 edge-b = ss, 198.51.100.2, 8388, encrypt-method=aes-256-gcm, password=test-ss-password
-
-[Proxy Group]
-proxy = select, edge-a, edge-b
-
-[Rule]
-DOMAIN-SUFFIX,example.com, proxy
-FINAL, proxy

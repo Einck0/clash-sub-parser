@@ -63,7 +63,7 @@ export function useNodes() {
       total.value = result.total
     } catch (cause) {
       if (generation === requestGeneration.value) {
-        error.value = cause instanceof Error ? cause.message : 'Unable to load nodes'
+        error.value = cause instanceof Error ? cause.message : '加载节点列表失败'
       }
     } finally {
       if (generation === requestGeneration.value) {
@@ -134,7 +134,7 @@ export function useNodes() {
       items.value.find((n) => n.logicalId === logicalId) ??
       null
     if (!target) {
-      return { ok: false, error: 'Node not found' }
+      return { ok: false, error: '未找到目标节点' }
     }
 
     const candidateConn: NodeConnectionProfile = {
@@ -191,7 +191,7 @@ export function useNodes() {
       )
       const rawNode = extractNodeRecord(res)
       if (!rawNode) {
-        return { ok: false, error: 'Server did not return updated node detail' }
+        return { ok: false, error: '服务器未返回更新后的节点详情' }
       }
       const updatedNode = normalizeNode(rawNode)
       const idx = items.value.findIndex((n) => n.logicalId === logicalId)
@@ -203,7 +203,7 @@ export function useNodes() {
       }
       return { ok: true, node: updatedNode }
     } catch (cause) {
-      const msg = cause instanceof Error ? cause.message : 'Failed to persist node connection changes'
+      const msg = cause instanceof Error ? cause.message : '保存节点连接参数失败'
       return { ok: false, error: msg }
     } finally {
       savingConnection.value = false

@@ -3,8 +3,12 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import {
   COMPILER_TARGETS,
   DEFAULT_COMPILER_TARGET,
+  auditEventLabel,
   getTargetMetadata,
+  groupTypeLabel,
   isValidCompilerTarget,
+  preflightCheckLabel,
+  publicationStateLabel,
   targetLabel,
   targetFileExt,
   formatDigest,
@@ -31,26 +35,35 @@ describe('publication types and capability boundaries', () => {
     expect(mihomo.groupTypes).toEqual(['select', 'urltest', 'fallback', 'loadbalance'])
     expect(mihomo.ruleKinds).toContain('GEOSITE')
     expect(mihomo.ruleKinds).toContain('RULE-SET')
+    expect(mihomo.desc).toContain('导出完整 Mihomo 配置')
 
     const singbox = getTargetMetadata('singbox')
     expect(singbox.protocols).toEqual(['ss', 'vmess', 'vless', 'trojan', 'hysteria2', 'wireguard', 'tuic'])
-    expect(singbox.groupTypes).toEqual(['select', 'urltest'])
-    expect(singbox.groupTypes).not.toContain('fallback')
-    expect(singbox.groupTypes).not.toContain('loadbalance')
+    expect(singbox.groupTypes).toEqual([])
+    expect(singbox.ruleKinds).toEqual([])
+    expect(singbox.desc).toContain('仅导出 sing-box 节点格式')
+    expect(singbox.desc).toContain('忽略策略组与规则')
 
     const surge = getTargetMetadata('surge')
-    expect(surge.protocols).toEqual(['ss', 'vmess', 'trojan'])
+    expect(surge.protocols).toEqual(['ss', 'vmess', 'trojan', 'hysteria2', 'tuic', 'wireguard'])
     expect(surge.protocols).not.toContain('vless')
-    expect(surge.groupTypes).toEqual(['select', 'urltest', 'fallback'])
-    expect(surge.groupTypes).not.toContain('loadbalance')
-    expect(surge.ruleKinds).not.toContain('GEOSITE')
+    expect(surge.groupTypes).toEqual([])
+    expect(surge.ruleKinds).toEqual([])
+    expect(surge.desc).toContain('仅导出 Surge 节点格式')
+    expect(surge.desc).toContain('忽略策略组与规则')
 
     const qx = getTargetMetadata('qx')
     expect(qx.protocols).toEqual(['ss', 'vmess', 'trojan'])
-    expect(qx.groupTypes).toEqual(['select'])
-    expect(qx.groupTypes).not.toContain('urltest')
-    expect(qx.ruleKinds).not.toContain('GEOSITE')
-    expect(qx.ruleKinds).not.toContain('RULE-SET')
+    expect(qx.groupTypes).toEqual([])
+    expect(qx.ruleKinds).toEqual([])
+    expect(qx.desc).toContain('仅导出 Quantumult X 节点格式')
+    expect(qx.desc).toContain('忽略策略组与规则')
+
+    expect(groupTypeLabel('select')).toContain('手动选择')
+    expect(publicationStateLabel('active')).toBe('已生效')
+    expect(publicationStateLabel('revoked')).toBe('已撤销')
+    expect(preflightCheckLabel('empty_routed_group')).toBe('空路由策略组检查')
+    expect(auditEventLabel('publication.create')).toBe('创建订阅发布')
   })
 
   it('formats target labels, extensions, and digests accurately', () => {
@@ -300,7 +313,7 @@ describe('PublicationsView component rendering', () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.assign(navigator, { clipboard: { writeText } })
     const copyBtns = Array.from(mountEl.querySelectorAll('button')).filter(
-      (b) => b.textContent?.includes('Copy Code') || b.textContent?.includes('复制完整配置') || b.textContent?.includes('Copy Full')
+      (b) => b.textContent?.includes('复制配置') || b.textContent?.includes('复制完整配置') || b.textContent?.includes('Copy')
     )
     expect(copyBtns.length).toBeGreaterThan(0)
     copyBtns[0].click()
@@ -362,7 +375,9 @@ describe('PublicationsView component rendering', () => {
     expect(postSpy).toHaveBeenCalledWith('/api/v1/publications/preview', { target: 'surge' })
     const capCard = mountEl.querySelector('[data-testid="target-capability-boundary"]')
     expect(capCard?.textContent).toContain('Surge')
-    expect(capCard?.textContent).toContain('Rejects VLESS/WireGuard/TUIC/Hysteria2')
+    expect(capCard?.textContent).toContain('仅导出 Surge 节点格式')
+    expect(capCard?.textContent).toContain('忽略策略组与规则')
+    expect(capCard?.textContent).toContain('拒绝 VLESS')
 
     testApp.unmount()
     mountEl.remove()

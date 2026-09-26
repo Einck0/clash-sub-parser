@@ -1,14 +1,12 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import {
-  ArrowPathIcon,
   PlusIcon,
   CheckBadgeIcon,
   ExclamationTriangleIcon,
   ShieldCheckIcon,
   CpuChipIcon,
   Squares2X2Icon,
-  FunnelIcon,
   GlobeAltIcon,
   TrashIcon,
 } from '@heroicons/vue/24/outline'
@@ -19,7 +17,6 @@ import type {
   FilterOp,
   GroupEdge,
   GroupType,
-  NodeFilterSpec,
   PolicyGroup,
   RuleAction,
 } from './policyTypes'
@@ -27,6 +24,7 @@ import {
   ALL_GROUP_TYPES,
   MODERN_RULE_CAPABILITY_MATRIX,
   SUPPORTED_FILTER_FIELDS,
+  ruleActionLabel,
   ruleActionTone,
   validateConditionInput,
 } from './policyTypes'
@@ -43,9 +41,7 @@ const {
   groups,
   globalFilter,
   admissionRules,
-  policyRules,
   loading,
-  loadingGlobalFilter,
   saving,
   savingGlobalFilter,
   validating,
@@ -75,6 +71,17 @@ const newGlobalProbeKind = ref<'baseline' | 'geo' | 'streaming' | 'ai' | 'speed'
 const newGlobalFreshnessSeconds = ref<number | undefined>(undefined)
 const globalConditionError = ref('')
 
+watch(newGlobalField, (f) => {
+  globalConditionError.value = ''
+  if (f === 'display_name' || f === 'source_subscription_ids') {
+    newGlobalOp.value = 'contains'
+  } else if (f === 'probe_latency_ms') {
+    newGlobalOp.value = 'lte'
+  } else {
+    newGlobalOp.value = 'equals'
+  }
+})
+
 function openGlobalFilterModal() {
   globalConditions.value = (globalFilter.value?.spec?.conditions || []).map((c) => ({ ...c }))
   globalConditionError.value = ''
@@ -101,7 +108,7 @@ function addGlobalCondition() {
     return
   }
   if (globalConditions.value.length >= 32) {
-    globalConditionError.value = 'Maximum 32 filter conditions allowed'
+    globalConditionError.value = '最多允许添加 32 条筛选条件'
     return
   }
 
@@ -328,10 +335,10 @@ onMounted(() => {
           <ExclamationTriangleIcon v-else class="w-5 h-5 flex-shrink-0 mt-0.5" />
           <div>
             <h4 class="font-bold">
-              {{ validationResult.valid ? 'Topology Validated Successfully' : 'Graph Topology Violation' }}
+              {{ validationResult.valid ? '拓扑图校验通过' : '拓扑图校验存在冲突' }}
             </h4>
             <p v-if="validationResult.valid" class="text-xs opacity-90 mt-0.5">
-              Policy groups and routing rules form an acyclic, well-formed directed acyclic graph.
+              {{ t('policy.validationSuccess') }}
             </p>
             <ul v-else class="mt-1 text-xs list-disc list-inside space-y-0.5 font-mono">
               <li v-for="(err, idx) in validationResult.errors" :key="idx">{{ err }}</li>
@@ -354,29 +361,30 @@ onMounted(() => {
       class="rounded-xl border border-base-300 bg-base-200/70 p-3.5 sm:p-4 text-xs space-y-2.5 min-w-0 w-full"
     >
       <div class="flex flex-wrap items-center justify-between gap-2">
-        <span class="font-bold text-base-content">Compiler Target Capability Boundaries (Groups & Routing Rules)</span>
-        <span class="badge badge-xs badge-ghost font-mono">Unsupported combinations rejected at compile time</span>
+        <span class="font-bold text-base-content">编译目标能力边界说明（策略组与分流规则）</span>
+        <span class="badge badge-xs badge-ghost font-mono">仅 Mihomo 导出完整策略组与分流规则；其他目标仅导出节点格式（忽略策略组与规则）</span>
       </div>
       <div class="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px] font-mono">
         <div class="p-2.5 rounded-lg bg-base-100/70 border border-base-300/60 space-y-1">
-          <span class="font-sans font-semibold opacity-75 block">Policy Group Types by Target</span>
+          <span class="font-sans font-semibold opacity-75 block">策略组类型支持目标</span>
           <div
             v-for="gt in ALL_GROUP_TYPES"
             :key="gt.type"
             class="flex flex-wrap items-center justify-between gap-1"
           >
-            <span class="text-primary font-semibold">{{ gt.type }}</span>
+            <span class="text-primary font-semibold">{{ gt.label }}</span>
             <span class="opacity-80">{{ gt.supportedTargets.join(', ') }}</span>
           </div>
         </div>
         <div class="p-2.5 rounded-lg bg-base-100/70 border border-base-300/60 space-y-1">
-          <span class="font-sans font-semibold opacity-75 block">Routing Rule Subsets by Target</span>
+          <span class="font-sans font-semibold opacity-75 block">分流规则子集支持目标</span>
           <div
             v-for="band in MODERN_RULE_CAPABILITY_MATRIX"
             :key="band.category"
             class="leading-snug"
           >
-            <span class="text-secondary font-semibold">{{ band.ruleKinds.join(', ') }}</span>:
+            <span class="font-sans opacity-75 mr-1">{{ band.category }}：</span>
+            <span class="text-secondary font-semibold">{{ band.ruleKinds.join(', ') }}</span> →
             <span class="opacity-80">{{ band.supportedTargets.join(', ') }}</span>
           </div>
         </div>
@@ -426,7 +434,7 @@ onMounted(() => {
           @click="openCreateGroup"
         >
           <PlusIcon class="w-4 h-4" />
-          Create First Group
+          {{ t('policy.createGroup') }}
         </button>
       </div>
 
@@ -452,9 +460,9 @@ onMounted(() => {
         class="rounded-box border border-dashed border-base-300 p-12 text-center"
       >
         <ShieldCheckIcon class="w-10 h-10 mx-auto opacity-40 text-primary" />
-        <p class="mt-3 font-semibold text-base">No admission rules configured</p>
+        <p class="mt-3 font-semibold text-base">暂无准入规则</p>
         <p class="mt-1 text-sm opacity-60">
-          Define admission criteria to filter and classify imported nodes (allow, reject, quarantine).
+          定义节点准入条件以过滤并分类导入的节点（允许、拒绝、隔离）。
         </p>
         <button
           type="button"
@@ -482,12 +490,12 @@ onMounted(() => {
             </div>
             <StatusBadge
               class="shrink-0"
-              :label="rule.action.toUpperCase()"
+              :label="ruleActionLabel(rule.action)"
               :tone="ruleActionTone(rule.action)"
             />
           </div>
           <div class="mt-2.5 pt-2 border-t border-base-300/60 text-[11px] opacity-60 flex justify-between font-mono min-w-0">
-            <span class="shrink-0">Position: {{ rule.position }}</span>
+            <span class="shrink-0">优先级序号：{{ rule.position }}</span>
             <span class="truncate ml-2 text-right">ID: {{ rule.id }}</span>
           </div>
         </article>
@@ -497,18 +505,18 @@ onMounted(() => {
     <!-- Global Filter Modal Dialog -->
     <ModalDialog
       v-model="globalFilterModalOpen"
-      title="Global Node Filter"
-      description="Evaluates before any policy group conditions. Nodes rejected here are excluded from all policy groups."
+      title="全局节点筛选"
+      description="在所有策略组条件之前评估，在此处被排除的节点将不会进入任何策略组。"
     >
       <div class="space-y-4">
         <div class="p-3 bg-info/10 border border-info/30 rounded-xl text-xs text-info leading-relaxed">
-          <p><strong>Order of Precedence:</strong> Hard Risk/Admission Rejection → Global Filter → Group Conditions.</p>
-          <p class="mt-1">Empty conditions allow all admitted nodes without additional global filtering.</p>
-          <p class="mt-1 opacity-80">Probe conditions evaluate only fresh observations matching the node's credential version; missing or stale observations fail closed.</p>
+          <p><strong>执行优先级：</strong>硬性风险/准入拒绝 → 全局节点筛选 → 策略组专属筛选条件。</p>
+          <p class="mt-1">留空筛选条件时将允许所有通过准入的节点，不做额外全局过滤。</p>
+          <p class="mt-1 opacity-80">探针条件仅评估与节点当前凭据版本匹配的有效期观测记录；缺失或过期的观测将按安全闭合（Fail-Closed）原则排除。</p>
         </div>
 
         <div class="flex items-center justify-between">
-          <span class="text-xs font-semibold uppercase opacity-70">Configured Conditions ({{ globalConditions.length }})</span>
+          <span class="text-xs font-semibold uppercase opacity-70">已配置条件 ({{ globalConditions.length }})</span>
           <button
             v-if="globalConditions.length > 0"
             type="button"
@@ -516,7 +524,7 @@ onMounted(() => {
             @click="globalConditions = []"
           >
             <TrashIcon class="w-3.5 h-3.5" />
-            Clear All
+            清空全部
           </button>
         </div>
 
@@ -546,13 +554,13 @@ onMounted(() => {
             </button>
           </div>
           <p v-if="globalConditions.length === 0" class="text-xs opacity-50 italic text-center py-2">
-            No global conditions configured (all nodes allowed).
+            暂未配置全局筛选条件（默认允许所有节点）。
           </p>
         </div>
 
         <!-- Add Condition Inline Control -->
         <div class="p-3 rounded-xl bg-base-200/60 border border-base-300 space-y-2">
-          <span class="font-semibold text-xs block">Add Global Filter Condition</span>
+          <span class="font-semibold text-xs block">添加全局筛选条件</span>
           <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
             <select
               v-model="newGlobalField"
@@ -572,15 +580,15 @@ onMounted(() => {
               class="select select-bordered select-xs font-mono"
             >
               <template v-if="newGlobalField === 'display_name' || newGlobalField === 'source_subscription_ids'">
-                <option value="contains">contains</option>
-                <option value="not_contains">not_contains</option>
+                <option value="contains">包含 (contains)</option>
+                <option value="not_contains">不包含 (not_contains)</option>
               </template>
               <template v-else-if="newGlobalField === 'probe_latency_ms'">
-                <option value="lte">lte</option>
+                <option value="lte">小于等于 (lte)</option>
               </template>
               <template v-else>
-                <option value="equals">equals</option>
-                <option value="not_equals">not_equals</option>
+                <option value="equals">等于 (equals)</option>
+                <option value="not_equals">不等于 (not_equals)</option>
               </template>
             </select>
 
@@ -589,17 +597,17 @@ onMounted(() => {
               v-model="newGlobalValue"
               class="select select-bordered select-xs"
             >
-              <option value="available">available</option>
-              <option value="restricted">restricted</option>
-              <option value="unknown">unknown</option>
-              <option value="error">error</option>
-              <option value="stale">stale</option>
+              <option value="available">可用 (available)</option>
+              <option value="restricted">受限 (restricted)</option>
+              <option value="unknown">未知 (unknown)</option>
+              <option value="error">错误 (error)</option>
+              <option value="stale">已过期 (stale)</option>
             </select>
             <input
               v-else
               v-model="newGlobalValue"
               class="input input-bordered input-xs"
-              placeholder="Target value..."
+              placeholder="匹配目标值..."
             />
           </div>
 
@@ -612,18 +620,18 @@ onMounted(() => {
               v-model="newGlobalProbeKind"
               class="select select-bordered select-xs"
             >
-              <option value="baseline">baseline</option>
-              <option value="geo">geo</option>
-              <option value="streaming">streaming</option>
-              <option value="ai">ai</option>
-              <option value="speed">speed</option>
-              <option value="ip_risk">ip_risk</option>
+              <option value="baseline">基础连通性 (baseline)</option>
+              <option value="geo">地域与出口 IP (geo)</option>
+              <option value="streaming">流媒体解锁 (streaming)</option>
+              <option value="ai">AI 服务可用性 (ai)</option>
+              <option value="speed">带宽测速 (speed)</option>
+              <option value="ip_risk">IP 风险度 (ip_risk)</option>
             </select>
 
             <input
               v-model.number="newGlobalFreshnessSeconds"
               type="number"
-              placeholder="Freshness (s, optional)"
+              placeholder="最大有效期（秒，可选）"
               class="input input-bordered input-xs font-mono"
             />
           </div>
@@ -639,14 +647,14 @@ onMounted(() => {
               @click="addGlobalCondition"
             >
               <PlusIcon class="w-3.5 h-3.5" />
-              Add Condition
+              添加条件
             </button>
           </div>
         </div>
 
         <div class="modal-action border-t border-base-300 pt-3">
           <button type="button" class="btn btn-ghost btn-sm" @click="globalFilterModalOpen = false">
-            Cancel
+            取消
           </button>
           <button
             type="button"
@@ -655,7 +663,7 @@ onMounted(() => {
             :disabled="savingGlobalFilter"
             @click="saveGlobalFilter"
           >
-            Save Global Filter
+            保存全局筛选
           </button>
         </div>
       </div>
@@ -677,37 +685,37 @@ onMounted(() => {
     <!-- Add Admission Rule Modal -->
     <ModalDialog
       v-model="ruleModalOpen"
-      title="Create Admission Rule"
-      description="Rules evaluate incoming node attributes before placing them into inventory"
+      title="新建准入规则"
+      description="准入规则在节点入库前评估节点属性并决定放行、拒绝或隔离"
     >
       <form class="space-y-4" @submit.prevent="submitAdmissionRule">
         <label class="form-control">
-          <span class="label-text text-xs font-semibold">Rule Name</span>
+          <span class="label-text text-xs font-semibold">规则名称</span>
           <input
             v-model="ruleName"
             required
-            placeholder="e.g. Reject Low Speed or Allow HK"
+            placeholder="例如：拒绝低速节点 或 允许香港节点"
             class="input input-bordered input-sm mt-1"
           />
         </label>
 
         <label class="form-control">
-          <span class="label-text text-xs font-semibold">Expression</span>
+          <span class="label-text text-xs font-semibold">规则表达式</span>
           <input
             v-model="ruleExpression"
             required
-            placeholder="e.g. country in ['HK', 'TW'] && protocol == 'ss'"
+            placeholder="例如：country in ['HK', 'TW'] && protocol == 'ss'"
             class="input input-bordered input-sm font-mono text-xs mt-1"
           />
         </label>
 
         <div>
-          <span class="label-text text-xs font-semibold block mb-1.5">Action</span>
+          <span class="label-text text-xs font-semibold block mb-1.5">准入动作</span>
           <div class="flex gap-2">
             <label
               v-for="act in (['allow', 'reject', 'quarantine'] as RuleAction[])"
               :key="act"
-              class="flex items-center gap-2 p-2 px-3 rounded-lg border border-base-300 bg-base-200/50 cursor-pointer text-xs uppercase font-medium"
+              class="flex items-center gap-2 p-2 px-3 rounded-lg border border-base-300 bg-base-200/50 cursor-pointer text-xs font-medium"
               :class="{ 'border-primary bg-primary/10 text-primary': ruleAction === act }"
             >
               <input
@@ -716,21 +724,21 @@ onMounted(() => {
                 :value="act"
                 class="radio radio-primary radio-xs"
               />
-              <span>{{ act }}</span>
+              <span>{{ ruleActionLabel(act) }}</span>
             </label>
           </div>
         </div>
 
         <div class="modal-action border-t border-base-300 pt-3">
           <button type="button" class="btn btn-ghost btn-sm" @click="ruleModalOpen = false">
-            Cancel
+            取消
           </button>
           <button
             type="submit"
             class="btn btn-primary btn-sm"
             :disabled="!ruleName.trim() || !ruleExpression.trim()"
           >
-            Create Rule
+            创建规则
           </button>
         </div>
       </form>
@@ -739,10 +747,10 @@ onMounted(() => {
     <!-- Confirm Delete Policy Group Modal -->
     <ConfirmModal
       v-model="confirmDeleteGroupOpen"
-      title="Delete Policy Group"
-      message="Are you sure you want to delete this policy group? Associated directed edges and routing references will be removed."
-      confirm-text="Delete Group"
-      cancel-text="Cancel"
+      title="确认删除策略组"
+      message="确定要删除此策略组吗？关联的有向拓扑边和路由引用将一并移除。"
+      confirm-text="删除策略组"
+      cancel-text="取消"
       tone="danger"
       :loading="deletingGroup"
       @confirm="handleConfirmDeleteGroup"

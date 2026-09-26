@@ -176,7 +176,7 @@ func (s *Service) Preflight(ctx context.Context, cmd PreflightCommand) (*Preflig
 		}
 	}
 
-	preflight := s.evaluatePreflight(ctx, snapshot)
+	preflight := s.evaluatePreflight(ctx, snapshot, cmd.Target)
 	if preflight.Allowed {
 		if _, err := compiler.Compile(ctx, snapshot, cmd.Target); err != nil {
 			var capErr *compiler.CapabilityError
@@ -205,7 +205,7 @@ func (s *Service) Publish(ctx context.Context, cmd PublishCommand) (*PublishResu
 		}
 	}
 
-	preflight := s.evaluatePreflight(ctx, snapshot)
+	preflight := s.evaluatePreflight(ctx, snapshot, cmd.Target)
 	if !preflight.Allowed {
 		err := newPreflightError(preflight)
 		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "publication.create", domain.AuditResultFailure, preflightSummary(snapshot, preflight))
@@ -619,7 +619,7 @@ func (s *Service) resolveSnapshot(ctx context.Context, revisionID string) (*reso
 	return s.resolver.Resolve(ctx, input)
 }
 
-func (s *Service) evaluatePreflight(ctx context.Context, snapshot *resolver.ResolvedPolicySnapshot) PreflightResult {
+func (s *Service) evaluatePreflight(ctx context.Context, snapshot *resolver.ResolvedPolicySnapshot, target domain.CompilerTarget) PreflightResult {
 	result := PreflightResult{Allowed: true, Diagnostics: make([]PreflightDiagnostic, 0)}
 	if snapshot == nil {
 		return result
@@ -639,6 +639,11 @@ func (s *Service) evaluatePreflight(ctx context.Context, snapshot *resolver.Reso
 
 	// 1. Inspect existing snapshot diagnostics
 	for _, diagnostic := range snapshot.Diagnostics {
+		if target != domain.TargetMihomo {
+			if diagnostic.Code != "risk_blocked" && diagnostic.Code != "risk_review" && diagnostic.Code != "risk_unknown" {
+				continue
+			}
+		}
 		if diagnostic.Code == "risk_blocked" || diagnostic.Code == "risk_review" || diagnostic.Code == "risk_unknown" || diagnostic.Severity == resolver.DiagnosticSeverityError || diagnostic.Code == "empty_routed_group" {
 			result.Allowed = false
 			addDiagnostic(PreflightDiagnostic{
@@ -669,12 +674,14 @@ func (s *Service) evaluatePreflight(ctx context.Context, snapshot *resolver.Reso
 			for _, n := range snapshot.Nodes {
 				nodeIDSet[n.LogicalID] = struct{}{}
 			}
-			for _, g := range snapshot.Groups {
-				for _, nid := range g.NodeLogicalIDs {
-					nodeIDSet[nid] = struct{}{}
-				}
-				for _, nid := range g.AllNodeLogicalIDs {
-					nodeIDSet[nid] = struct{}{}
+			if target == domain.TargetMihomo {
+				for _, g := range snapshot.Groups {
+					for _, nid := range g.NodeLogicalIDs {
+						nodeIDSet[nid] = struct{}{}
+					}
+					for _, nid := range g.AllNodeLogicalIDs {
+						nodeIDSet[nid] = struct{}{}
+					}
 				}
 			}
 

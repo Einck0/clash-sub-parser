@@ -74,31 +74,31 @@ export interface GroupTypeCapabilityInfo {
 export const ALL_GROUP_TYPES: GroupTypeCapabilityInfo[] = [
   {
     type: 'select',
-    label: 'Select',
-    desc: 'Manual user selection of node or child group',
-    supportedTargets: ['mihomo', 'singbox', 'surge', 'qx'],
-    capabilityNote: 'Supported by all 4 modern targets (Mihomo, sing-box, Surge, Quantumult X)',
+    label: '手动选择 (select)',
+    desc: '用户手动选择使用的节点或子策略组',
+    supportedTargets: ['mihomo'],
+    capabilityNote: '仅 Mihomo 支持策略组（其他目标仅导出节点格式，忽略策略组与规则）',
   },
   {
     type: 'urltest',
-    label: 'URL Test',
-    desc: 'Automatic lowest-latency benchmarking group',
-    supportedTargets: ['mihomo', 'singbox', 'surge'],
-    capabilityNote: 'Supported by Mihomo, sing-box, Surge (rejected by Quantumult X)',
+    label: '自动测速 (url-test)',
+    desc: '自动选择延迟最低的节点',
+    supportedTargets: ['mihomo'],
+    capabilityNote: '仅 Mihomo 支持策略组（其他目标仅导出节点格式，忽略策略组与规则）',
   },
   {
     type: 'fallback',
-    label: 'Fallback',
-    desc: 'Automatic failover to next available node in order',
-    supportedTargets: ['mihomo', 'surge'],
-    capabilityNote: 'Supported by Mihomo & Surge only (rejected by sing-box & Quantumult X)',
+    label: '故障转移 (fallback)',
+    desc: '按优先顺序自动切换到下一个可用节点',
+    supportedTargets: ['mihomo'],
+    capabilityNote: '仅 Mihomo 支持策略组（其他目标仅导出节点格式，忽略策略组与规则）',
   },
   {
     type: 'loadbalance',
-    label: 'Load Balance',
-    desc: 'Round-robin or hash-based distribution',
+    label: '负载均衡 (load-balance)',
+    desc: '在多个节点间轮询或哈希分配流量',
     supportedTargets: ['mihomo'],
-    capabilityNote: 'Supported by Mihomo only (rejected by sing-box, Surge & Quantumult X)',
+    capabilityNote: '仅 Mihomo 支持策略组（其他目标仅导出节点格式，忽略策略组与规则）',
   },
 ]
 
@@ -111,22 +111,22 @@ export interface RuleCapabilityBand {
 
 export const MODERN_RULE_CAPABILITY_MATRIX: RuleCapabilityBand[] = [
   {
-    category: 'Universal Routing Subset (7 Rules)',
+    category: '通用路由子集（7 类规则）',
     ruleKinds: ['DOMAIN', 'DOMAIN-SUFFIX', 'DOMAIN-KEYWORD', 'IP-CIDR', 'IP-CIDR6', 'GEOIP', 'MATCH'],
-    supportedTargets: ['mihomo', 'singbox', 'surge', 'qx'],
-    note: 'Supported across all 4 targets (Mihomo, sing-box, Surge, Quantumult X)',
+    supportedTargets: ['mihomo'],
+    note: '仅 Mihomo 支持分流规则（sing-box / Surge / Quantumult X 仅导出节点格式，忽略规则）',
   },
   {
-    category: 'Rule-Set & Process Subset (2 Rules)',
+    category: '规则集与进程子集（2 类规则）',
     ruleKinds: ['RULE-SET', 'PROCESS-NAME'],
-    supportedTargets: ['mihomo', 'singbox', 'surge'],
-    note: 'Supported by Mihomo, sing-box, Surge; rejected by Quantumult X',
+    supportedTargets: ['mihomo'],
+    note: '仅 Mihomo 支持分流规则',
   },
   {
-    category: 'Modern Geosite & Port/Source-CIDR Subset (5 Rules)',
+    category: '现代 Geosite 与端口/源 IP 子集（5 类规则）',
     ruleKinds: ['GEOSITE', 'SRC-IP-CIDR', 'SRC-PORT', 'DST-PORT', 'PORT'],
-    supportedTargets: ['mihomo', 'singbox'],
-    note: 'Supported by Mihomo & sing-box; rejected by Surge & Quantumult X',
+    supportedTargets: ['mihomo'],
+    note: '仅 Mihomo 支持分流规则',
   },
 ]
 
@@ -138,13 +138,13 @@ export function groupTypeSupportedTargets(type: GroupType): readonly CompilerTar
 export function groupTypeLabel(type: GroupType): string {
   switch (type) {
     case 'select':
-      return 'Select'
+      return '手动选择 (select)'
     case 'urltest':
-      return 'URL Test'
+      return '自动测速 (url-test)'
     case 'fallback':
-      return 'Fallback'
+      return '故障转移 (fallback)'
     case 'loadbalance':
-      return 'Load Balance'
+      return '负载均衡 (load-balance)'
     default:
       return type
   }
@@ -162,6 +162,19 @@ export function groupTypeTone(type: GroupType): 'primary' | 'secondary' | 'accen
       return 'info'
     default:
       return 'primary'
+  }
+}
+
+export function ruleActionLabel(action: RuleAction): string {
+  switch (action) {
+    case 'allow':
+      return '允许'
+    case 'reject':
+      return '拒绝'
+    case 'quarantine':
+      return '隔离'
+    default:
+      return action
   }
 }
 
@@ -183,19 +196,19 @@ export function validateEdgeInput(edge: Partial<GroupEdge>, parentId: string): s
   const hasNode = Boolean(edge.node_logical_id && edge.node_logical_id.trim())
 
   if (!hasChild && !hasNode) {
-    return 'Must specify either child group or node logical ID'
+    return '必须指定子策略组或节点逻辑 ID'
   }
 
   if (hasChild && hasNode) {
-    return 'Cannot specify both child group and node logical ID'
+    return '不能同时指定子策略组和节点逻辑 ID'
   }
 
   if (hasChild && edge.child_group_id === parentId) {
-    return 'Self-loop forbidden: parent group cannot reference itself'
+    return '禁止自环：父策略组不能引用自身'
   }
 
   if (edge.position !== undefined && edge.position < 0) {
-    return 'Edge position must be non-negative'
+    return '边位置序号必须为非负数'
   }
 
   return null
@@ -233,90 +246,90 @@ export interface GlobalNodeFilter {
 }
 
 export const SUPPORTED_FILTER_FIELDS: Array<{ field: FilterField; label: string }> = [
-  { field: 'display_name', label: 'Display Name' },
-  { field: 'protocol', label: 'Protocol' },
-  { field: 'source_subscription_ids', label: 'Source Subscription' },
-  { field: 'probe_verdict', label: 'Probe Verdict' },
-  { field: 'probe_latency_ms', label: 'Probe Latency (ms)' },
+  { field: 'display_name', label: '显示名称' },
+  { field: 'protocol', label: '协议类型' },
+  { field: 'source_subscription_ids', label: '来源订阅' },
+  { field: 'probe_verdict', label: '探针判定' },
+  { field: 'probe_latency_ms', label: '探针延迟 (ms)' },
 ]
 
 export function validateConditionInput(cond: Partial<FilterCondition>): string | null {
-  if (!cond.field) return 'Field is required'
-  if (!cond.op) return 'Operator is required'
+  if (!cond.field) return '必须选择字段'
+  if (!cond.op) return '必须选择运算符'
 
   switch (cond.field) {
     case 'display_name':
       if (cond.op !== 'contains' && cond.op !== 'not_contains') {
-        return 'Display name only supports "contains" or "not_contains"'
+        return '显示名称仅支持"包含"或"不包含"运算符'
       }
       if (!cond.value || !cond.value.trim()) {
-        return 'Display name value cannot be empty'
+        return '显示名称值不能为空'
       }
       if (cond.value.trim().length > 255) {
-        return 'Display name value cannot exceed 255 characters'
+        return '显示名称值长度不能超过 255 个字符'
       }
       break
 
     case 'protocol': {
       if (cond.op !== 'equals' && cond.op !== 'not_equals') {
-        return 'Protocol only supports "equals" or "not_equals"'
+        return '协议类型仅支持"等于"或"不等于"运算符'
       }
       if (!cond.value || !cond.value.trim()) {
-        return 'Protocol value cannot be empty'
+        return '协议值不能为空'
       }
       const normProto = cond.value.trim().toLowerCase()
       if (!(SUPPORTED_PROTOCOLS as readonly string[]).includes(normProto)) {
-        return `Unsupported protocol "${cond.value.trim()}" (valid: ${SUPPORTED_PROTOCOLS.join(', ')})`
+        return `不支持的协议"${cond.value.trim()}"（有效协议：${SUPPORTED_PROTOCOLS.join(', ')}）`
       }
       break
     }
 
     case 'source_subscription_ids':
       if (cond.op !== 'contains' && cond.op !== 'not_contains') {
-        return 'Source subscription only supports "contains" or "not_contains"'
+        return '来源订阅仅支持"包含"或"不包含"运算符'
       }
       if (!cond.value || !cond.value.trim()) {
-        return 'Subscription ID cannot be empty'
+        return '订阅 ID 不能为空'
       }
       break
 
     case 'probe_verdict':
       if (cond.op !== 'equals' && cond.op !== 'not_equals') {
-        return 'Probe verdict only supports "equals" or "not_equals"'
+        return '探针判定仅支持"等于"或"不等于"运算符'
       }
       if (!cond.probe_kind) {
-        return 'Probe kind is required for probe verdict condition'
+        return '探针判定条件必须指定探针类型'
       }
       if (!cond.value || !cond.value.trim()) {
-        return 'Verdict value is required'
+        return '判定结果值不能为空'
       }
       if (cond.freshness_seconds !== undefined && (cond.freshness_seconds < 1 || cond.freshness_seconds > 604800)) {
-        return 'Freshness must be between 1s and 604800s (7 days)'
+        return '有效期必须在 1 秒到 604800 秒（7 天）之间'
       }
       break
 
     case 'probe_latency_ms': {
       if (cond.op !== 'lte') {
-        return 'Probe latency only supports "lte"'
+        return '探针延迟仅支持"小于等于"运算符'
       }
       if (!cond.probe_kind) {
-        return 'Probe kind is required for probe latency condition'
+        return '探针延迟条件必须指定探针类型'
       }
       if (!cond.value || !cond.value.trim()) {
-        return 'Latency threshold (ms) is required'
+        return '延迟阈值 (ms) 不能为空'
       }
       const lat = Number(cond.value)
       if (isNaN(lat) || lat < 0 || lat > 60000) {
-        return 'Latency threshold must be a number between 0 and 60000 ms'
+        return '延迟阈值必须在 0 到 60000 ms 之间'
       }
       if (cond.freshness_seconds !== undefined && (cond.freshness_seconds < 1 || cond.freshness_seconds > 604800)) {
-        return 'Freshness must be between 1s and 604800s (7 days)'
+        return '有效期必须在 1 秒到 604800 秒（7 天）之间'
       }
       break
     }
 
     default:
-      return `Unsupported field: ${cond.field}`
+      return `不支持的字段：${cond.field}`
   }
 
   return null

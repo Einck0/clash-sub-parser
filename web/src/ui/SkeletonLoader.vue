@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { t } from '../locales'
+
 withDefaults(defineProps<{
   lines?: number
   rounded?: boolean
@@ -6,7 +8,7 @@ withDefaults(defineProps<{
 </script>
 
 <template>
-  <div class="space-y-3" aria-busy="true" aria-label="Loading">
+  <div class="space-y-3" aria-busy="true" :aria-label="t('common.loading')">
     <div
       v-for="line in lines"
       :key="line"

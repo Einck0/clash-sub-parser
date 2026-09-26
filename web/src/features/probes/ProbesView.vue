@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import {
   ArrowPathIcon,
   BoltIcon,
@@ -7,14 +7,14 @@ import {
   FunnelIcon,
   ClockIcon,
   Cog6ToothIcon,
-  ExclamationCircleIcon,
   StopIcon,
 } from '@heroicons/vue/24/outline'
 import { useProbes } from './useProbes'
 import {
   ALL_PROBE_KINDS,
   probeBatchStateTone,
-  type ProbeBatch,
+  probeKindLabel,
+  probeStateLabel,
   type ProbeKind,
   type ProbeRun,
   type ProbeRunState,
@@ -249,7 +249,7 @@ onUnmounted(() => {
           class="badge badge-xs"
           :class="schedule.enabled ? 'badge-success' : 'badge-ghost'"
         >
-          {{ schedule.enabled ? 'Active' : 'Disabled' }}
+          {{ schedule.enabled ? '已启用' : '已停用' }}
         </span>
       </button>
     </div>
@@ -265,17 +265,17 @@ onUnmounted(() => {
           :class="selectedStateFilter === '' ? 'btn-primary' : 'btn-ghost'"
           @click="handleFilterChange('')"
         >
-          All ({{ totalRuns }})
+          全部 ({{ totalRuns }})
         </button>
         <button
           v-for="st in (['running', 'queued', 'succeeded', 'failed', 'cancelled'] as ProbeRunState[])"
           :key="st"
           type="button"
-          class="btn btn-xs rounded-lg uppercase font-medium touch-manipulation"
+          class="btn btn-xs rounded-lg font-medium touch-manipulation"
           :class="selectedStateFilter === st ? 'btn-primary' : 'btn-ghost'"
           @click="handleFilterChange(st)"
         >
-          {{ st }}
+          {{ probeStateLabel(st) }}
         </button>
       </div>
 
@@ -288,7 +288,7 @@ onUnmounted(() => {
         v-else-if="runs.length === 0"
         :icon="BoltIcon"
         :title="t('probes.noRuns')"
-        description="Trigger your first probe run to evaluate streaming, AI, geo and connectivity capabilities."
+        :description="t('probes.emptyDesc')"
         :action-label="t('probes.triggerRun')"
         @action="openCreateModal"
       >
@@ -316,15 +316,15 @@ onUnmounted(() => {
         <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
             <div class="flex items-center gap-2">
-              <h3 class="font-bold text-base sm:text-lg">Periodic Capability Schedule</h3>
+              <h3 class="font-bold text-base sm:text-lg">周期能力探测计划</h3>
               <StatusBadge
                 v-if="schedule"
-                :label="schedule.enabled ? 'ENABLED' : 'DISABLED'"
+                :label="schedule.enabled ? '已启用' : '已停用'"
                 :tone="schedule.enabled ? 'success' : 'info'"
               />
             </div>
             <p class="text-xs opacity-70 mt-1">
-              Automatically dispatches coordinated probe runs across all active nodes at fixed intervals.
+              按固定周期在所有活跃节点上自动调度协同探针任务。
             </p>
           </div>
           <button
@@ -334,31 +334,31 @@ onUnmounted(() => {
             @click="openScheduleModal"
           >
             <Cog6ToothIcon class="w-4 h-4" />
-            Configure Schedule
+            {{ t('probes.configureSchedule') }}
           </button>
         </div>
 
         <div v-if="schedule" class="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4 pt-3 border-t border-base-300 text-xs">
           <div>
-            <span class="opacity-60 block">Interval</span>
-            <span class="font-mono font-semibold">{{ schedule.interval_seconds }}s ({{ Math.round(schedule.interval_seconds / 60) }}m)</span>
+            <span class="opacity-60 block">执行间隔</span>
+            <span class="font-mono font-semibold">{{ schedule.interval_seconds }}s ({{ Math.round(schedule.interval_seconds / 60) }} 分钟)</span>
           </div>
           <div>
-            <span class="opacity-60 block">Kinds</span>
+            <span class="opacity-60 block">探测类型</span>
             <div class="flex flex-wrap gap-1 mt-0.5">
-              <span v-for="k in schedule.kinds" :key="k" class="badge badge-xs font-mono uppercase badge-ghost">
-                {{ k }}
+              <span v-for="k in schedule.kinds" :key="k" class="badge badge-xs badge-ghost">
+                {{ probeKindLabel(k) }}
               </span>
             </div>
           </div>
           <div>
-            <span class="opacity-60 block">Next Due</span>
+            <span class="opacity-60 block">下次执行</span>
             <span class="font-mono font-semibold text-primary">
-              {{ schedule.next_due_at ? new Date(schedule.next_due_at).toLocaleTimeString() : 'N/A' }}
+              {{ schedule.next_due_at ? new Date(schedule.next_due_at).toLocaleTimeString() : '暂无' }}
             </span>
           </div>
           <div>
-            <span class="opacity-60 block">Generation</span>
+            <span class="opacity-60 block">计划代数</span>
             <span class="font-mono font-semibold">#{{ schedule.generation }}</span>
           </div>
         </div>
@@ -368,7 +368,7 @@ onUnmounted(() => {
       <div class="space-y-3">
         <div class="flex items-center justify-between">
           <h4 class="font-bold text-sm tracking-wide uppercase opacity-80">
-            Execution Batches ({{ totalBatches }})
+            周期执行批次 ({{ totalBatches }})
           </h4>
           <button
             type="button"
@@ -377,7 +377,7 @@ onUnmounted(() => {
             @click="() => loadBatches()"
           >
             <ArrowPathIcon class="w-3.5 h-3.5" :class="{ 'animate-spin': loadingBatches }" />
-            Refresh
+            {{ t('common.refresh') }}
           </button>
         </div>
 
@@ -388,8 +388,8 @@ onUnmounted(() => {
         <EmptyState
           v-else-if="batches.length === 0"
           :icon="ClockIcon"
-          title="No execution batches yet"
-          description="Batches will appear here automatically when the periodic schedule executes."
+          title="暂无周期执行批次"
+          description="当周期探测计划触发执行时，执行批次将自动显示在此处。"
         />
 
         <div v-else class="space-y-3">
@@ -402,14 +402,14 @@ onUnmounted(() => {
             <div class="flex flex-wrap items-start justify-between gap-2">
               <div class="min-w-0">
                 <div class="flex items-center gap-2">
-                  <span class="font-mono font-bold text-xs truncate">Batch {{ batch.id }}</span>
+                  <span class="font-mono font-bold text-xs truncate">批次 {{ batch.id }}</span>
                   <StatusBadge
-                    :label="batch.state.toUpperCase()"
+                    :label="probeStateLabel(batch.state)"
                     :tone="probeBatchStateTone(batch.state)"
                   />
                 </div>
                 <p class="text-[11px] opacity-60 font-mono mt-0.5">
-                  Window: {{ new Date(batch.window_at).toLocaleString() }} · Gen #{{ batch.generation }} · Owner: {{ batch.owner || 'csp-core' }}
+                  时间窗口：{{ new Date(batch.window_at).toLocaleString() }} · 代数 #{{ batch.generation }} · 执行器：{{ batch.owner || 'csp-core' }}
                 </p>
               </div>
 
@@ -422,28 +422,28 @@ onUnmounted(() => {
                   @click="cancelBatch(batch.id)"
                 >
                   <StopIcon class="w-3.5 h-3.5" />
-                  Cancel Batch
+                  取消批次
                 </button>
               </div>
             </div>
 
             <div class="flex flex-wrap items-center gap-4 text-xs pt-2 border-t border-base-300 opacity-80">
-              <span>Total Nodes: <strong class="font-mono">{{ batch.counts.total_nodes }}</strong></span>
-              <span>Dispatched: <strong class="font-mono text-primary">{{ batch.counts.dispatched_runs }}</strong></span>
-              <span>Completed: <strong class="font-mono text-success">{{ batch.counts.completed_runs }}</strong></span>
+              <span>总节点数：<strong class="font-mono">{{ batch.counts.total_nodes }}</strong></span>
+              <span>已派发：<strong class="font-mono text-primary">{{ batch.counts.dispatched_runs }}</strong></span>
+              <span>已完成：<strong class="font-mono text-success">{{ batch.counts.completed_runs }}</strong></span>
               <span v-if="batch.counts.skipped_nodes > 0" class="text-warning">
-                Skipped: <strong class="font-mono">{{ batch.counts.skipped_nodes }}</strong>
+                已跳过：<strong class="font-mono">{{ batch.counts.skipped_nodes }}</strong>
               </span>
             </div>
 
             <div v-if="batch.run_ids && batch.run_ids.length > 0" class="flex flex-wrap items-center gap-1.5 pt-1 text-[11px]">
-              <span class="opacity-60">Associated Runs:</span>
+              <span class="opacity-60">关联探针任务：</span>
               <button
                 v-for="rId in batch.run_ids"
                 :key="rId"
                 type="button"
                 class="badge badge-xs font-mono badge-neutral hover:badge-primary cursor-pointer transition-colors"
-                title="Jump to associated run"
+                title="跳转到关联探针任务"
                 @click="handleJumpToRun(rId)"
               >
                 {{ rId }}
@@ -451,13 +451,13 @@ onUnmounted(() => {
             </div>
 
             <div v-if="batch.counts.total_nodes === 0" class="p-2 bg-info/10 border border-info/20 rounded-lg text-info text-xs">
-              No active inventory nodes available for probing at scheduled window.
+              当前计划窗口内无可用于探测的活跃节点。
             </div>
             <div v-else-if="batch.counts.skipped_nodes > 0" class="p-2 bg-warning/10 border border-warning/20 rounded-lg text-warning text-xs">
-              {{ batch.counts.skipped_nodes }} node(s) skipped due to missing or invalid credentials (fail-closed protection).
+              已跳过 {{ batch.counts.skipped_nodes }} 个凭据缺失或无效的节点（安全闭合保护）。
             </div>
             <div v-if="batch.state === 'expired'" class="p-2 bg-neutral/20 border border-base-300 rounded-lg text-xs opacity-75">
-              Batch window lapsed or lease lost before completion.
+              批次时间窗口已过期或租约在完成前失效。
             </div>
 
             <div v-if="batch.redacted_error" class="p-2 bg-error/10 border border-error/20 rounded-lg text-error text-xs font-mono">
@@ -471,19 +471,19 @@ onUnmounted(() => {
     <!-- Trigger Modal Dialog -->
     <ModalDialog
       v-model="createModalOpen"
-      title="Trigger New Probe Run"
-      description="Select capability kinds and execution parameters with 24h idempotency protection"
+      :title="t('probes.runBatch')"
+      description="选择需要执行的探测维度与运行参数（具备 24 小时幂等保护）"
     >
       <form class="space-y-4" @submit.prevent="submitCreate">
         <div>
           <div class="flex items-center justify-between mb-2">
-            <span class="label-text font-semibold text-sm">Probe Kinds</span>
+            <span class="label-text font-semibold text-sm">{{ t('probes.kindsTitle') }}</span>
             <button
               type="button"
               class="btn btn-link btn-xs p-0 text-primary"
               @click="selectAllKinds"
             >
-              Select All
+              全选
             </button>
           </div>
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -508,7 +508,7 @@ onUnmounted(() => {
 
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
           <label class="form-control">
-            <span class="label-text text-xs font-semibold">Deadline (minutes)</span>
+            <span class="label-text text-xs font-semibold">{{ t('probes.deadlineTitle') }}</span>
             <input
               v-model.number="deadlineMinutes"
               type="number"
@@ -520,10 +520,10 @@ onUnmounted(() => {
           </label>
 
           <label class="form-control">
-            <span class="label-text text-xs font-semibold">Config Revision (optional)</span>
+            <span class="label-text text-xs font-semibold">{{ t('probes.configRevision') }}</span>
             <input
               v-model="configRevision"
-              placeholder="Leave empty for active"
+              placeholder="留空则使用当前活跃版本"
               class="input input-bordered input-sm mt-1 font-mono text-xs"
             />
           </label>
@@ -535,7 +535,7 @@ onUnmounted(() => {
             class="btn btn-ghost btn-sm"
             @click="createModalOpen = false"
           >
-            Cancel
+            {{ t('common.cancel') }}
           </button>
           <button
             type="submit"
@@ -544,7 +544,7 @@ onUnmounted(() => {
             :disabled="submitting || selectedKinds.length === 0"
           >
             <PlayIcon class="w-4 h-4" />
-            Dispatch Run
+            {{ t('probes.submitProbe') }}
           </button>
         </div>
       </form>
@@ -553,8 +553,8 @@ onUnmounted(() => {
     <!-- Configure Schedule Modal Dialog -->
     <ModalDialog
       v-model="scheduleModalOpen"
-      title="Configure Periodic Probe Schedule"
-      description="Enable automated background capability checks and configure dispatch intervals"
+      title="配置周期探测计划"
+      description="启用后台自动能力检测并配置调度周期"
     >
       <form class="space-y-4" @submit.prevent="submitSaveSchedule">
         <div class="form-control">
@@ -564,13 +564,13 @@ onUnmounted(() => {
               type="checkbox"
               class="toggle toggle-primary"
             />
-            <span class="label-text font-semibold">Enable Periodic Background Probes</span>
+            <span class="label-text font-semibold">启用后台周期自动探测</span>
           </label>
         </div>
 
         <div class="form-control">
           <label class="label">
-            <span class="label-text font-semibold text-xs">Interval (seconds)</span>
+            <span class="label-text font-semibold text-xs">调度间隔（秒）</span>
           </label>
           <input
             v-model.number="scheduleInterval"
@@ -579,13 +579,13 @@ onUnmounted(() => {
             max="604800"
             required
             class="input input-bordered input-sm font-mono"
-            placeholder="e.g. 3600 (1 hour)"
+            placeholder="例如：3600（1 小时）"
           />
-          <span class="text-[11px] opacity-60 mt-1">Allowed range: 60s to 604,800s (7 days).</span>
+          <span class="text-[11px] opacity-60 mt-1">允许范围：60 秒至 604,800 秒（7 天）。</span>
         </div>
 
         <div>
-          <span class="label-text font-semibold text-xs block mb-2">Probe Kinds to Dispatch</span>
+          <span class="label-text font-semibold text-xs block mb-2">周期派发的探针类型</span>
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <label
               v-for="item in ALL_PROBE_KINDS"
@@ -609,7 +609,7 @@ onUnmounted(() => {
             class="btn btn-ghost btn-sm"
             @click="scheduleModalOpen = false"
           >
-            Cancel
+            {{ t('common.cancel') }}
           </button>
           <button
             type="submit"
@@ -617,7 +617,7 @@ onUnmounted(() => {
             :class="{ loading: savingSchedule }"
             :disabled="savingSchedule || scheduleKinds.length === 0"
           >
-            Save Schedule
+            保存周期计划
           </button>
         </div>
       </form>
@@ -635,10 +635,10 @@ onUnmounted(() => {
     <!-- Cancel Confirmation Modal -->
     <ConfirmModal
       v-model="confirmCancelOpen"
-      title="Cancel Probe Run"
-      message="Are you sure you want to cancel this probe run? In-flight capability checks will be terminated immediately."
-      confirm-text="Cancel Run"
-      cancel-text="Keep Running"
+      title="确认取消探针任务"
+      message="确定要取消该探针任务吗？正在执行中的能力检测将立即终止。"
+      confirm-text="取消任务"
+      cancel-text="继续运行"
       tone="danger"
       :loading="cancelling"
       @confirm="handleConfirmCancel"

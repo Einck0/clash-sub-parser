@@ -2,7 +2,10 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { createApp, h, nextTick } from 'vue'
 import {
+  probeKindLabel,
+  probeStateLabel,
   probeStateTone,
+  probeVerdictLabel,
   probeVerdictTone,
   probeBatchStateTone,
   formatLatency,
@@ -16,21 +19,42 @@ import ProbesView from './ProbesView.vue'
 import { api, ApiError } from '../../api/client'
 
 describe('probes types and helpers', () => {
-  it('maps probe run states to accurate badge tones', () => {
+  it('maps probe run states to accurate badge tones and Chinese labels', () => {
     expect(probeStateTone('queued')).toBe('warning')
     expect(probeStateTone('running')).toBe('primary')
     expect(probeStateTone('succeeded')).toBe('success')
     expect(probeStateTone('failed')).toBe('error')
     expect(probeStateTone('cancelled')).toBe('neutral')
     expect(probeStateTone('expired')).toBe('neutral')
+
+    expect(probeStateLabel('pending')).toBe('等待中')
+    expect(probeStateLabel('queued')).toBe('排队中')
+    expect(probeStateLabel('running')).toBe('运行中')
+    expect(probeStateLabel('succeeded')).toBe('已完成')
+    expect(probeStateLabel('failed')).toBe('已失败')
+    expect(probeStateLabel('cancelled')).toBe('已取消')
+    expect(probeStateLabel('expired')).toBe('已过期')
   })
 
-  it('maps probe verdicts to accurate badge tones', () => {
+  it('maps probe verdicts and kinds to accurate badge tones and Chinese labels', () => {
     expect(probeVerdictTone('available')).toBe('success')
     expect(probeVerdictTone('restricted')).toBe('warning')
     expect(probeVerdictTone('unknown')).toBe('info')
     expect(probeVerdictTone('error')).toBe('error')
     expect(probeVerdictTone('stale')).toBe('neutral')
+
+    expect(probeVerdictLabel('available')).toBe('可用')
+    expect(probeVerdictLabel('restricted')).toBe('降级/受限')
+    expect(probeVerdictLabel('unknown')).toBe('未知')
+    expect(probeVerdictLabel('error')).toBe('不可达')
+    expect(probeVerdictLabel('stale')).toBe('已过期')
+
+    expect(probeKindLabel('baseline')).toBe('基础连通性')
+    expect(probeKindLabel('geo')).toBe('地域与出口 IP')
+    expect(probeKindLabel('streaming')).toBe('流媒体解锁')
+    expect(probeKindLabel('ai')).toBe('AI 服务')
+    expect(probeKindLabel('speed')).toBe('带宽测速')
+    expect(probeKindLabel('ip_risk')).toBe('IP 风险')
   })
 
   it('formats latency cleanly', () => {
@@ -180,7 +204,7 @@ describe('useProbes composable', () => {
     expect(observations.value[0].latency_ms).toBe(56)
   })
 
-  it('renders ProbeEvidenceSheet with fluid responsive max-height', async () => {
+  it('renders ProbeEvidenceSheet with fluid responsive max-height and Chinese labels', async () => {
     const { default: ProbeEvidenceSheet } = await import('./ProbeEvidenceSheet.vue')
     const { createApp, h, nextTick } = await import('vue')
 
@@ -212,6 +236,9 @@ describe('useProbes composable', () => {
     expect(sheetDialog).not.toBeNull()
     expect(sheetDialog?.className).toContain('adaptive-surface-sheet')
     expect(sheetDialog?.className).toContain('md:max-h-[82vh]')
+    expect(sheetDialog?.textContent).toContain('探针观测证据链')
+    expect(sheetDialog?.textContent).toContain('已完成')
+    expect(sheetDialog?.textContent).toContain('暂无观测记录')
 
     testApp.unmount()
     mountEl.remove()
@@ -465,8 +492,8 @@ describe('ProbesView Component Interaction & Feedback', () => {
     await new Promise((r) => setTimeout(r, 20))
 
     // Schedule overview card verification
-    expect(container.textContent).toContain('Periodic Capability Schedule')
-    expect(container.textContent).toContain('ENABLED')
+    expect(container.textContent).toContain('周期能力探测计划')
+    expect(container.textContent).toContain('已启用')
     expect(container.textContent).toContain('7200s')
     expect(container.textContent).toContain('#3')
 
@@ -476,13 +503,13 @@ describe('ProbesView Component Interaction & Feedback', () => {
 
     // Batch 1: Associated runs and skipped nodes feedback
     expect(batchCards[0].textContent).toContain('run-assoc-101')
-    expect(batchCards[0].textContent).toContain('20 node(s) skipped due to missing or invalid credentials')
+    expect(batchCards[0].textContent).toContain('已跳过 20 个凭据缺失或无效的节点')
 
     // Batch 2: Empty inventory feedback
-    expect(batchCards[1].textContent).toContain('No active inventory nodes available for probing at scheduled window.')
+    expect(batchCards[1].textContent).toContain('当前计划窗口内无可用于探测的活跃节点。')
 
     // Batch 3: Expired feedback and sanitized error
-    expect(batchCards[2].textContent).toContain('Batch window lapsed or lease lost before completion.')
+    expect(batchCards[2].textContent).toContain('批次时间窗口已过期或租约在完成前失效。')
     expect(batchCards[2].textContent).toContain('Lease expired after node crash; rescued safely')
   })
 
@@ -510,9 +537,9 @@ describe('ProbesView Component Interaction & Feedback', () => {
 
     // Dialog should be present
     const allDialogs = Array.from(document.body.querySelectorAll('dialog'))
-    const dialog = allDialogs.find((d) => d.textContent?.includes('Configure Periodic Probe Schedule'))
+    const dialog = allDialogs.find((d) => d.textContent?.includes('配置周期探测计划'))
     expect(dialog).toBeDefined()
-    expect(dialog?.textContent).toContain('Configure Periodic Probe Schedule')
+    expect(dialog?.textContent).toContain('配置周期探测计划')
 
     // Toggle enabled checkbox
     const toggle = dialog?.querySelector('input[type="checkbox"]') as HTMLInputElement | null
@@ -521,7 +548,7 @@ describe('ProbesView Component Interaction & Feedback', () => {
     await nextTick()
 
     // Save schedule
-    const saveBtn = Array.from(dialog?.querySelectorAll('button') || []).find((b) => b.textContent?.includes('Save Schedule'))
+    const saveBtn = Array.from(dialog?.querySelectorAll('button') || []).find((b) => b.textContent?.includes('保存周期计划'))
     expect(saveBtn).toBeDefined()
     saveBtn?.click()
     await nextTick()
@@ -546,7 +573,7 @@ describe('ProbesView Component Interaction & Feedback', () => {
     await new Promise((r) => setTimeout(r, 20))
 
     const batchCards = container.querySelectorAll('[data-testid="probe-batch-card"]')
-    const cancelBtn = Array.from(batchCards[0].querySelectorAll('button')).find((b) => b.textContent?.includes('Cancel Batch'))
+    const cancelBtn = Array.from(batchCards[0].querySelectorAll('button')).find((b) => b.textContent?.includes('取消批次'))
     expect(cancelBtn).toBeDefined()
     cancelBtn?.click()
     await nextTick()

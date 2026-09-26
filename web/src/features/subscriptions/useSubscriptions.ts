@@ -103,7 +103,7 @@ export function useSubscriptions() {
       items.value = result.items
       total.value = result.total
     } catch (cause) {
-      error.value = cause instanceof Error ? cause.message : 'Unable to load subscriptions'
+      error.value = cause instanceof Error ? cause.message : '加载订阅源列表失败'
     } finally {
       loading.value = false
     }
@@ -116,14 +116,14 @@ export function useSubscriptions() {
         await api.patch(`/api/v1/subscriptions/${encodeURIComponent(current.id)}`, subscriptionPatchPayload(draft), {
           headers: { 'If-Match': current.revision },
         })
-        toastStore.push({ message: 'Subscription updated', tone: 'success' })
+        toastStore.push({ message: '订阅源已更新', tone: 'success' })
       } else {
         await api.post('/api/v1/subscriptions', draft)
-        toastStore.push({ message: 'Subscription added', tone: 'success' })
+        toastStore.push({ message: '订阅源已添加', tone: 'success' })
       }
       await load()
     } catch (cause) {
-      toastStore.push({ message: cause instanceof Error ? cause.message : 'Unable to save subscription', tone: 'error' })
+      toastStore.push({ message: cause instanceof Error ? cause.message : '保存订阅源失败', tone: 'error' })
       throw cause
     } finally {
       saving.value = false
@@ -133,10 +133,10 @@ export function useSubscriptions() {
   async function remove(subscription: SubscriptionRecord) {
     try {
       await api.delete(`/api/v1/subscriptions/${encodeURIComponent(subscription.id)}`)
-      toastStore.push({ message: 'Subscription deleted', tone: 'success' })
+      toastStore.push({ message: '订阅源已删除', tone: 'success' })
       await load()
     } catch (cause) {
-      toastStore.push({ message: cause instanceof Error ? cause.message : 'Unable to delete subscription', tone: 'error' })
+      toastStore.push({ message: cause instanceof Error ? cause.message : '删除订阅源失败', tone: 'error' })
     }
   }
 
@@ -147,9 +147,9 @@ export function useSubscriptions() {
       await api.post(`/api/v1/subscriptions/${encodeURIComponent(subscription.id)}/refresh`, undefined, {
         headers: { 'Idempotency-Key': crypto.randomUUID() },
       })
-      toastStore.push({ message: 'Refresh queued', tone: 'success' })
+      toastStore.push({ message: '订阅刷新任务已加入队列', tone: 'success' })
     } catch (cause) {
-      toastStore.push({ message: cause instanceof Error ? cause.message : 'Unable to refresh subscription', tone: 'error' })
+      toastStore.push({ message: cause instanceof Error ? cause.message : '刷新订阅源失败', tone: 'error' })
     } finally {
       const pending = new Set(refreshingIDs.value)
       pending.delete(subscription.id)

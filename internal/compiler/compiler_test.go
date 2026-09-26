@@ -311,8 +311,14 @@ func TestCompiler_DerivedProjectedGroupsAcrossAllTargets(t *testing.T) {
 			}
 			out := string(res.Content)
 
-			if !strings.Contains(out, "Auto [Proxy]") {
-				t.Errorf("expected target %s output to contain derived group 'Auto [Proxy]', got:\n%s", target, out)
+			if target == domain.TargetMihomo {
+				if !strings.Contains(out, "Auto [Proxy]") {
+					t.Errorf("expected target %s output to contain derived group 'Auto [Proxy]', got:\n%s", target, out)
+				}
+			} else {
+				if strings.Contains(out, "Auto [Proxy]") {
+					t.Errorf("expected node-only target %s output not to contain derived group 'Auto [Proxy]', got:\n%s", target, out)
+				}
 			}
 
 			if !strings.Contains(out, "US-Fast") {

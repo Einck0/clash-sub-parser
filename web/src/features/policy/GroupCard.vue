@@ -8,7 +8,7 @@ import {
   PlusIcon,
   ShareIcon,
 } from '@heroicons/vue/24/outline'
-import type { GroupEdge, PolicyGroup } from './policyTypes'
+import type { PolicyGroup } from './policyTypes'
 import { groupTypeLabel, groupTypeSupportedTargets } from './policyTypes'
 import StatusBadge from '../../ui/StatusBadge.vue'
 
@@ -86,20 +86,20 @@ function handleHeaderClick() {
         <div class="flex flex-wrap items-center gap-2 min-w-0">
           <span class="flex items-center gap-1.5 font-mono min-w-0 truncate shrink-0">
             <ShareIcon class="w-3.5 h-3.5 text-primary shrink-0" />
-            <span class="truncate">{{ edgeCount }} connected {{ edgeCount === 1 ? 'edge' : 'edges' }}</span>
+            <span class="truncate">{{ edgeCount }} 条关联边</span>
           </span>
           <span
             class="badge badge-xs badge-ghost font-mono"
-            :title="`Supported compiler targets for ${group.group_type}`"
+            :title="`支持策略组的编译目标：${groupTypeSupportedTargets(group.group_type).join('/')}`"
           >
-            Targets: {{ groupTypeSupportedTargets(group.group_type).join('/') }}
+            目标：{{ groupTypeSupportedTargets(group.group_type).join('/') }}
           </span>
           <span
             v-if="group.node_filter && group.node_filter.conditions && group.node_filter.conditions.length > 0"
             class="badge badge-xs badge-primary font-mono"
-            title="Custom group node filter active"
+            title="已启用策略组专属节点筛选"
           >
-            {{ group.node_filter.conditions.length }} filter conds
+            {{ group.node_filter.conditions.length }} 条筛选条件
           </span>
         </div>
 
@@ -107,16 +107,16 @@ function handleHeaderClick() {
           <button
             type="button"
             class="btn btn-ghost btn-xs gap-1 touch-manipulation"
-            title="Manage edges"
+            title="管理关联边"
             @click="emit('manage-edges', group)"
           >
             <PlusIcon class="w-3.5 h-3.5 shrink-0" />
-            Edges
+            管理边
           </button>
           <button
             type="button"
             class="btn btn-ghost btn-xs gap-1 touch-manipulation"
-            title="Edit group"
+            title="编辑策略组"
             @click="emit('edit', group)"
           >
             <PencilSquareIcon class="w-3.5 h-3.5 shrink-0" />
@@ -124,7 +124,7 @@ function handleHeaderClick() {
           <button
             type="button"
             class="btn btn-ghost btn-xs text-error gap-1 touch-manipulation"
-            title="Delete group"
+            title="删除策略组"
             @click="emit('delete', group.id)"
           >
             <TrashIcon class="w-3.5 h-3.5 shrink-0" />
@@ -143,9 +143,9 @@ function handleHeaderClick() {
           class="p-2.5 rounded-lg bg-base-100 border border-base-300/80 text-xs font-mono space-y-1"
         >
           <div class="flex items-center justify-between text-[11px] font-sans opacity-70">
-            <span>Group Filter (applied after Global Filter):</span>
+            <span>策略组筛选条件（在全局筛选之后生效）：</span>
             <span v-if="!group.edges || group.edges.length === 0" class="badge badge-xs badge-info font-semibold">
-              Dynamic Pool
+              动态节点池
             </span>
           </div>
           <div class="flex flex-wrap gap-1">
@@ -162,10 +162,10 @@ function handleHeaderClick() {
 
         <div v-if="!group.edges || group.edges.length === 0" class="text-xs opacity-50 italic py-1">
           <span v-if="group.node_filter && group.node_filter.conditions && group.node_filter.conditions.length > 0">
-            No explicit node edges: group dynamically selects matching candidates from global pool.
+            未配置显式节点边：策略组将从全局节点池中动态筛选匹配的候选节点。
           </span>
           <span v-else>
-            No edges configured for this group. Click "Edges" to link child groups or nodes.
+            当前策略组尚未配置关联边，点击「管理边」挂载子策略组或节点。
           </span>
         </div>
 
@@ -177,10 +177,10 @@ function handleHeaderClick() {
           <div class="flex items-center gap-2 min-w-0 flex-1">
             <span class="badge badge-xs badge-ghost font-semibold shrink-0">{{ edge.position }}</span>
             <span v-if="edge.child_group_id" class="text-secondary truncate min-w-0 flex-1">
-              Group: {{ edge.child_group_id }}
+              子策略组：{{ edge.child_group_id }}
             </span>
             <span v-else-if="edge.node_logical_id" class="text-primary truncate min-w-0 flex-1">
-              Node: {{ edge.node_logical_id }}
+              节点：{{ edge.node_logical_id }}
             </span>
           </div>
         </div>

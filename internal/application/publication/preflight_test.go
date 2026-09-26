@@ -572,17 +572,34 @@ func TestPreflight_BlocksEmptyRoutedGroup(t *testing.T) {
 	}
 
 	preRes, err := svc.Preflight(ctx, publication.PreflightCommand{
-		Target:   domain.TargetSingBox,
+		Target:   domain.TargetMihomo,
 		Snapshot: snap,
 	})
 	if err != nil {
 		t.Fatalf("unexpected preflight error: %v", err)
 	}
 	if preRes.Allowed {
-		t.Fatalf("expected preflight Allowed to be false for empty_routed_group")
+		t.Fatalf("expected preflight Allowed to be false for empty_routed_group on mihomo")
 	}
 	if len(preRes.Diagnostics) != 1 || preRes.Diagnostics[0].Code != "empty_routed_group" {
-		t.Fatalf("expected empty_routed_group diagnostic, got %+v", preRes.Diagnostics)
+		t.Fatalf("expected empty_routed_group diagnostic on mihomo, got %+v", preRes.Diagnostics)
+	}
+
+	for _, nodeOnlyTarget := range []domain.CompilerTarget{
+		domain.TargetSingBox,
+		domain.TargetSurge,
+		domain.TargetQuantumultX,
+	} {
+		nodeOnlyRes, err := svc.Preflight(ctx, publication.PreflightCommand{
+			Target:   nodeOnlyTarget,
+			Snapshot: snap,
+		})
+		if err != nil {
+			t.Fatalf("unexpected preflight error for %s: %v", nodeOnlyTarget, err)
+		}
+		if !nodeOnlyRes.Allowed {
+			t.Fatalf("expected preflight Allowed to be true for node-only target %s despite empty_routed_group, got diagnostics: %+v", nodeOnlyTarget, nodeOnlyRes.Diagnostics)
+		}
 	}
 }
 
@@ -601,13 +618,13 @@ func TestPublish_BlocksEmptyRoutedGroup(t *testing.T) {
 	}
 
 	_, err := svc.Publish(ctx, publication.PublishCommand{
-		Target:    domain.TargetSingBox,
+		Target:    domain.TargetMihomo,
 		Snapshot:  snap,
 		ActorKind: domain.ActorKindAdmin,
 		RequestID: "req-blocked-pub",
 	})
 	if err == nil {
-		t.Fatalf("expected publish to be blocked for empty_routed_group, got nil")
+		t.Fatalf("expected publish to be blocked for empty_routed_group on mihomo, got nil")
 	}
 	var domErr *domain.DomainError
 	if !errors.As(err, &domErr) {
@@ -615,5 +632,18 @@ func TestPublish_BlocksEmptyRoutedGroup(t *testing.T) {
 	}
 	if domErr.Code != "publication_preflight_rejected" {
 		t.Fatalf("expected publication_preflight_rejected code, got %s", domErr.Code)
+	}
+
+	pubRes, err := svc.Publish(ctx, publication.PublishCommand{
+		Target:    domain.TargetSingBox,
+		Snapshot:  snap,
+		ActorKind: domain.ActorKindAdmin,
+		RequestID: "req-allowed-singbox-pub",
+	})
+	if err != nil {
+		t.Fatalf("expected singbox publish to ignore empty_routed_group and succeed, got %v", err)
+	}
+	if pubRes.Publication.Target != domain.TargetSingBox {
+		t.Fatalf("expected target singbox, got %s", pubRes.Publication.Target)
 	}
 }

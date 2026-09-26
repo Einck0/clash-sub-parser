@@ -42,8 +42,7 @@ type parsedSurgeConfig struct {
 	Rules   []parsedSurgeRule
 }
 
-// parseSurge5Config is an independent structural and semantic validator for Surge 5 INI profiles
-// based on the Surge 5 Official Manual (https://kb.nssurge.com/surge-knowledge-base/manual/configuration).
+// parseSurge5Config validates pure Surge 5 node lines (without [General]/[Proxy]/[Proxy Group]/[Rule] sections).
 func parseSurge5Config(raw string, disallowedLogicalIDs map[string]bool) (*parsedSurgeConfig, error) {
 	cfg := &parsedSurgeConfig{
 		General: make(map[string]string),
@@ -51,7 +50,6 @@ func parseSurge5Config(raw string, disallowedLogicalIDs map[string]bool) (*parse
 		Groups:  make(map[string]parsedSurgeGroup),
 	}
 
-	var section string
 	lines := strings.Split(raw, "\n")
 	for lineNo, rawLine := range lines {
 		line := strings.TrimSpace(rawLine)
@@ -59,168 +57,68 @@ func parseSurge5Config(raw string, disallowedLogicalIDs map[string]bool) (*parse
 			continue
 		}
 		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
-			section = line
-			continue
+			return nil, fmt.Errorf("line %d: unexpected INI section %q in node-only Surge output", lineNo+1, line)
 		}
 
-		switch section {
-		case "[General]":
-			k, v, ok := strings.Cut(line, "=")
-			if !ok {
-				return nil, fmt.Errorf("line %d: invalid [General] assignment %q", lineNo+1, line)
+		name, rest, ok := strings.Cut(line, "=")
+		if !ok {
+			return nil, fmt.Errorf("line %d: invalid proxy definition %q", lineNo+1, line)
+		}
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return nil, fmt.Errorf("line %d: empty proxy name", lineNo+1)
+		}
+		tokens := splitTrimmedCSV(rest)
+		if len(tokens) < 4 {
+			return nil, fmt.Errorf("line %d: proxy %q requires at least type, server, port, and credential params", lineNo+1, name)
+		}
+		proto := tokens[0]
+		server := tokens[1]
+		if disallowedLogicalIDs[server] {
+			return nil, fmt.Errorf("line %d: proxy %q uses LogicalID %q as server address", lineNo+1, name, server)
+		}
+		port, err := strconv.Atoi(tokens[2])
+		if err != nil || port < 1 || port > 65535 {
+			return nil, fmt.Errorf("line %d: proxy %q has invalid port %q", lineNo+1, name, tokens[2])
+		}
+		params := make(map[string]string, len(tokens)-3)
+		for _, kv := range tokens[3:] {
+			pk, pv, hasEq := strings.Cut(kv, "=")
+			if !hasEq || strings.TrimSpace(pk) == "" || strings.TrimSpace(pv) == "" {
+				return nil, fmt.Errorf("line %d: proxy %q has malformed parameter %q", lineNo+1, name, kv)
 			}
-			cfg.General[strings.TrimSpace(k)] = strings.TrimSpace(v)
-
-		case "[Proxy]":
-			name, rest, ok := strings.Cut(line, "=")
-			if !ok {
-				return nil, fmt.Errorf("line %d: invalid [Proxy] definition %q", lineNo+1, line)
+			params[strings.TrimSpace(pk)] = strings.TrimSpace(pv)
+		}
+		switch proto {
+		case "ss":
+			if params["encrypt-method"] == "" || params["password"] == "" {
+				return nil, fmt.Errorf("line %d: ss proxy %q missing encrypt-method or password", lineNo+1, name)
 			}
-			name = strings.TrimSpace(name)
-			if name == "" {
-				return nil, fmt.Errorf("line %d: empty proxy name", lineNo+1)
+		case "vmess":
+			if params["username"] == "" || (params["vmess-aead"] != "true" && params["vmess-aead"] != "false") {
+				return nil, fmt.Errorf("line %d: vmess proxy %q missing username or vmess-aead", lineNo+1, name)
 			}
-			tokens := splitTrimmedCSV(rest)
-			if len(tokens) < 4 {
-				return nil, fmt.Errorf("line %d: proxy %q requires at least type, server, port, and credential params", lineNo+1, name)
+		case "trojan", "hysteria2":
+			if params["password"] == "" {
+				return nil, fmt.Errorf("line %d: %s proxy %q missing password", lineNo+1, proto, name)
 			}
-			proto := tokens[0]
-			server := tokens[1]
-			if disallowedLogicalIDs[server] {
-				return nil, fmt.Errorf("line %d: proxy %q uses LogicalID %q as server address", lineNo+1, name, server)
+		case "tuic":
+			if params["uuid"] == "" || params["password"] == "" {
+				return nil, fmt.Errorf("line %d: tuic proxy %q missing uuid or password", lineNo+1, name)
 			}
-			port, err := strconv.Atoi(tokens[2])
-			if err != nil || port < 1 || port > 65535 {
-				return nil, fmt.Errorf("line %d: proxy %q has invalid port %q", lineNo+1, name, tokens[2])
+		case "wireguard":
+			if params["private-key"] == "" || params["peer-public-key"] == "" {
+				return nil, fmt.Errorf("line %d: wireguard proxy %q missing private-key or peer-public-key", lineNo+1, name)
 			}
-			params := make(map[string]string, len(tokens)-3)
-			for _, kv := range tokens[3:] {
-				pk, pv, hasEq := strings.Cut(kv, "=")
-				if !hasEq || strings.TrimSpace(pk) == "" || strings.TrimSpace(pv) == "" {
-					return nil, fmt.Errorf("line %d: proxy %q has malformed parameter %q", lineNo+1, name, kv)
-				}
-				params[strings.TrimSpace(pk)] = strings.TrimSpace(pv)
-			}
-			switch proto {
-			case "ss":
-				if params["encrypt-method"] == "" || params["password"] == "" {
-					return nil, fmt.Errorf("line %d: ss proxy %q missing encrypt-method or password", lineNo+1, name)
-				}
-			case "vmess":
-				if params["username"] == "" || (params["vmess-aead"] != "true" && params["vmess-aead"] != "false") {
-					return nil, fmt.Errorf("line %d: vmess proxy %q missing username or vmess-aead", lineNo+1, name)
-				}
-			case "trojan":
-				if params["password"] == "" {
-					return nil, fmt.Errorf("line %d: trojan proxy %q missing password", lineNo+1, name)
-				}
-			default:
-				return nil, fmt.Errorf("line %d: unsupported Surge 5 proxy type %q", lineNo+1, proto)
-			}
-			cfg.Proxies[name] = parsedSurgeProxy{
-				Name:   name,
-				Proto:  proto,
-				Server: server,
-				Port:   port,
-				Params: params,
-			}
-
-		case "[Proxy Group]":
-			name, rest, ok := strings.Cut(line, "=")
-			if !ok {
-				return nil, fmt.Errorf("line %d: invalid [Proxy Group] definition %q", lineNo+1, line)
-			}
-			name = strings.TrimSpace(name)
-			tokens := splitTrimmedCSV(rest)
-			if len(tokens) < 2 {
-				return nil, fmt.Errorf("line %d: group %q requires type and at least one policy member", lineNo+1, name)
-			}
-			gType := tokens[0]
-			var members []string
-			params := make(map[string]string)
-			for _, tok := range tokens[1:] {
-				if k, v, hasEq := strings.Cut(tok, "="); hasEq {
-					params[strings.TrimSpace(k)] = strings.TrimSpace(v)
-				} else {
-					members = append(members, tok)
-				}
-			}
-			if len(members) == 0 {
-				return nil, fmt.Errorf("line %d: group %q has 0 policy members", lineNo+1, name)
-			}
-			switch gType {
-			case "select":
-			case "url-test":
-				if params["url"] == "" || params["interval"] == "" || params["timeout"] == "" || params["tolerance"] == "" {
-					return nil, fmt.Errorf("line %d: url-test group %q missing url/interval/timeout/tolerance: %v", lineNo+1, name, params)
-				}
-			case "fallback":
-				if params["url"] == "" || params["interval"] == "" || params["timeout"] == "" {
-					return nil, fmt.Errorf("line %d: fallback group %q missing url/interval/timeout: %v", lineNo+1, name, params)
-				}
-			default:
-				return nil, fmt.Errorf("line %d: unsupported Surge 5 group type %q", lineNo+1, gType)
-			}
-			cfg.Groups[name] = parsedSurgeGroup{
-				Name:    name,
-				Type:    gType,
-				Members: members,
-				Params:  params,
-			}
-
-		case "[Rule]":
-			tokens := splitTrimmedCSV(line)
-			if len(tokens) < 2 {
-				return nil, fmt.Errorf("line %d: invalid [Rule] line %q", lineNo+1, line)
-			}
-			kind := tokens[0]
-			if kind == "FINAL" {
-				cfg.Rules = append(cfg.Rules, parsedSurgeRule{
-					Kind:    "FINAL",
-					Policy:  tokens[1],
-					Options: tokens[2:],
-				})
-			} else {
-				if len(tokens) < 3 {
-					return nil, fmt.Errorf("line %d: rule %q requires kind, value, and policy", lineNo+1, line)
-				}
-				cfg.Rules = append(cfg.Rules, parsedSurgeRule{
-					Kind:    kind,
-					Value:   tokens[1],
-					Policy:  tokens[2],
-					Options: tokens[3:],
-				})
-			}
-
 		default:
-			return nil, fmt.Errorf("line %d: content outside known Surge section (%q): %q", lineNo+1, section, line)
+			return nil, fmt.Errorf("line %d: unsupported Surge 5 proxy type %q", lineNo+1, proto)
 		}
-	}
-
-	builtInPolicies := map[string]bool{
-		"DIRECT":      true,
-		"REJECT":      true,
-		"REJECT-DROP": true,
-	}
-
-	for _, grp := range cfg.Groups {
-		for _, m := range grp.Members {
-			if _, isProxy := cfg.Proxies[m]; !isProxy {
-				if _, isGroup := cfg.Groups[m]; !isGroup && !builtInPolicies[m] {
-					return nil, fmt.Errorf("group %q references undefined policy or proxy %q", grp.Name, m)
-				}
-			}
-		}
-	}
-
-	for idx, r := range cfg.Rules {
-		if r.Kind == "FINAL" && idx != len(cfg.Rules)-1 {
-			return nil, fmt.Errorf("FINAL rule at index %d is not the last rule", idx)
-		}
-		if _, isGroup := cfg.Groups[r.Policy]; !isGroup {
-			if _, isProxy := cfg.Proxies[r.Policy]; !isProxy && !builtInPolicies[r.Policy] {
-				return nil, fmt.Errorf("rule %d (%s) references undefined policy %q", idx, r.Kind, r.Policy)
-			}
+		cfg.Proxies[name] = parsedSurgeProxy{
+			Name:   name,
+			Proto:  proto,
+			Server: server,
+			Port:   port,
+			Params: params,
 		}
 	}
 
@@ -279,8 +177,8 @@ func TestSurgeGoldenFixture(t *testing.T) {
 		t.Fatalf("unexpected parsed edge-b proxy: %+v", edgeB)
 	}
 
-	if len(parsed.Rules) != 2 || parsed.Rules[1].Kind != "FINAL" || parsed.Rules[1].Policy != "proxy" {
-		t.Fatalf("expected terminal FINAL, proxy rule, got %+v", parsed.Rules)
+	if len(parsed.Groups) != 0 || len(parsed.Rules) != 0 {
+		t.Fatalf("expected node-only Surge export to have 0 groups and 0 rules, got groups=%d rules=%d", len(parsed.Groups), len(parsed.Rules))
 	}
 }
 
@@ -290,9 +188,13 @@ func TestSurgeOutputFormat(t *testing.T) {
 		t.Fatalf("compile Surge failed: %v", err)
 	}
 	surgeStr := string(surgeRes.Content)
-	if !strings.Contains(surgeStr, "[General]") || !strings.Contains(surgeStr, "[Proxy]") ||
-		!strings.Contains(surgeStr, "[Proxy Group]") || !strings.Contains(surgeStr, "[Rule]") {
-		t.Fatalf("Surge output missing expected sections: %s", surgeStr)
+	for _, unexpectedSection := range []string{"[General]", "[Proxy]", "[Proxy Group]", "[Rule]"} {
+		if strings.Contains(surgeStr, unexpectedSection) {
+			t.Fatalf("node-only Surge output must not contain section %s:\n%s", unexpectedSection, surgeStr)
+		}
+	}
+	if !strings.Contains(surgeStr, "edge-a = vmess,") || !strings.Contains(surgeStr, "edge-b = ss,") {
+		t.Fatalf("Surge output missing expected node lines:\n%s", surgeStr)
 	}
 }
 
@@ -318,10 +220,10 @@ func TestSurgeSupportsProcessNameRule(t *testing.T) {
 	}
 	res, err := compiler.Compile(context.Background(), snapshot, domain.TargetSurge)
 	if err != nil {
-		t.Fatalf("expected Surge to support PROCESS-NAME rule: %v", err)
+		t.Fatalf("expected Surge node-only export to ignore PROCESS-NAME rule cleanly: %v", err)
 	}
-	if !strings.Contains(string(res.Content), "PROCESS-NAME,curl, proxy") {
-		t.Fatalf("expected PROCESS-NAME,curl, proxy in output:\n%s", string(res.Content))
+	if strings.Contains(string(res.Content), "PROCESS-NAME") {
+		t.Fatalf("expected PROCESS-NAME rule to be omitted in node-only Surge output:\n%s", string(res.Content))
 	}
 }
 
@@ -387,6 +289,55 @@ func TestSurgeAllSupportedProtocolsGroupsAndRules(t *testing.T) {
 				},
 				Active:   true,
 				Position: 2,
+			},
+			{
+				LogicalID:   "id-hy2",
+				DisplayName: "SG-Hysteria2",
+				Protocol:    domain.ProtocolHysteria2,
+				Server:      "sg.hy2.example.com",
+				Port:        443,
+				Credentials: domain.InboundProtocolCredential{
+					Password: "hy2-secret-password",
+					SNI:      "sni.hy2.example.com",
+					Transport: map[string]string{
+						"down":             "500 Mbps",
+						"skip-cert-verify": "true",
+					},
+				},
+				Active:   true,
+				Position: 3,
+			},
+			{
+				LogicalID:   "id-tuic",
+				DisplayName: "DE-TUIC",
+				Protocol:    domain.ProtocolTUIC,
+				Server:      "de.tuic.example.com",
+				Port:        8443,
+				Credentials: domain.InboundProtocolCredential{
+					UUID:     "22222222-3333-4444-5555-666666666666",
+					Password: "tuic-secret-password",
+					SNI:      "sni.tuic.example.com",
+					ALPN:     []string{"h3"},
+				},
+				Active:   true,
+				Position: 4,
+			},
+			{
+				LogicalID:   "id-wg",
+				DisplayName: "UK-WireGuard",
+				Protocol:    domain.ProtocolWireGuard,
+				Server:      "198.51.100.77",
+				Port:        51820,
+				Credentials: domain.InboundProtocolCredential{
+					PrivateKey:   "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+					PublicKey:    "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=",
+					PreSharedKey: "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC=",
+					LocalAddress: []string{"10.0.0.2/32", "fd00::2/128"},
+					Reserved:     []uint8{1, 2, 3},
+					MTU:          1400,
+				},
+				Active:   true,
+				Position: 5,
 			},
 		},
 		Groups: []resolver.ResolvedGroup{
@@ -476,28 +427,32 @@ func TestSurgeAllSupportedProtocolsGroupsAndRules(t *testing.T) {
 		t.Fatalf("unexpected Trojan WS parameters: %+v", tr.Params)
 	}
 
-	// Verify url-test and fallback groups
-	autoGrp := parsed.Groups["Auto"]
-	if autoGrp.Type != "url-test" || autoGrp.Params["url"] != "http://www.gstatic.com/generate_204" ||
-		autoGrp.Params["interval"] != "300" || autoGrp.Params["timeout"] != "5" || autoGrp.Params["tolerance"] != "50" {
-		t.Fatalf("unexpected Auto url-test group: %+v", autoGrp)
+	// Verify Hysteria2, TUIC, and WireGuard
+	hy2 := parsed.Proxies["SG-Hysteria2"]
+	if hy2.Proto != "hysteria2" || hy2.Params["password"] != "hy2-secret-password" || hy2.Params["download-bandwidth"] != "500" || hy2.Params["sni"] != "sni.hy2.example.com" {
+		t.Fatalf("unexpected Hysteria2 parameters: %+v", hy2)
 	}
-	fbGrp := parsed.Groups["FallbackGroup"]
-	if fbGrp.Type != "fallback" || fbGrp.Params["url"] != "http://www.gstatic.com/generate_204" ||
-		fbGrp.Params["interval"] != "300" || fbGrp.Params["timeout"] != "5" {
-		t.Fatalf("unexpected FallbackGroup fallback group: %+v", fbGrp)
+	tuic := parsed.Proxies["DE-TUIC"]
+	if tuic.Proto != "tuic" || tuic.Params["uuid"] != "22222222-3333-4444-5555-666666666666" || tuic.Params["password"] != "tuic-secret-password" || tuic.Params["alpn"] != "h3" {
+		t.Fatalf("unexpected TUIC parameters: %+v", tuic)
+	}
+	wg := parsed.Proxies["UK-WireGuard"]
+	if wg.Proto != "wireguard" || wg.Params["self-ip"] != "10.0.0.2" || wg.Params["self-ip-v6"] != "fd00::2" || wg.Params["mtu"] != "1400" || wg.Params["client-id"] != "1/2/3" {
+		t.Fatalf("unexpected WireGuard parameters: %+v", wg)
+	}
+
+	// Verify groups and rules are ignored in node-only Surge output
+	if len(parsed.Groups) != 0 || len(parsed.Rules) != 0 {
+		t.Fatalf("expected 0 groups and 0 rules in node-only Surge output, got groups=%+v rules=%+v", parsed.Groups, parsed.Rules)
 	}
 }
 
 func TestSurgeCapabilityAndFailClosedRejections(t *testing.T) {
 	ctx := context.Background()
 
-	// 1. Unsupported protocols (VLESS, Hysteria2, WireGuard, TUIC) must fail at exact node index
+	// 1. Unsupported protocol (VLESS) must fail at exact node index
 	unsupportedProtocols := []domain.Protocol{
 		domain.ProtocolVLESS,
-		domain.ProtocolHysteria2,
-		domain.ProtocolWireGuard,
-		domain.ProtocolTUIC,
 	}
 	for _, proto := range unsupportedProtocols {
 		t.Run("UnsupportedProtocol_"+string(proto), func(t *testing.T) {
@@ -523,8 +478,8 @@ func TestSurgeCapabilityAndFailClosedRejections(t *testing.T) {
 		})
 	}
 
-	// 2. Unsupported group type (loadbalance) must fail at exact group index
-	t.Run("UnsupportedGroupType_LoadBalance", func(t *testing.T) {
+	// 2. Group types (including loadbalance) are ignored in node-only Surge export
+	t.Run("GroupType_LoadBalance_Ignored", func(t *testing.T) {
 		snap := fixtureSnapshot()
 		snap.Groups = append(snap.Groups, resolver.ResolvedGroup{
 			ID:        "g-lb",
@@ -533,35 +488,31 @@ func TestSurgeCapabilityAndFailClosedRejections(t *testing.T) {
 			Members:   snap.Groups[0].Members,
 			Position:  1,
 		})
-		_, err := compiler.Compile(ctx, snap, domain.TargetSurge)
-		var capErr *compiler.CapabilityError
-		if !errors.As(err, &capErr) || capErr.Location != "groups[1]" || capErr.Feature != string(domain.GroupTypeLoadBalance) {
-			t.Fatalf("expected CapabilityError at groups[1] for loadbalance, got %v", err)
+		res, err := compiler.Compile(ctx, snap, domain.TargetSurge)
+		if err != nil {
+			t.Fatalf("expected loadbalance group to be ignored in node-only Surge export, got %v", err)
+		}
+		if strings.Contains(string(res.Content), "LB") {
+			t.Fatalf("expected group LB to be omitted from Surge output, got:\n%s", string(res.Content))
 		}
 	})
 
-	// 3. Unsupported rules and malformed rule values must fail at exact rule index
-	badRuleCases := []struct {
+	// 3. Routing rules are ignored in node-only Surge export
+	ignoredRuleCases := []struct {
 		name       string
 		expression string
-		wantFeat   string
 	}{
-		{name: "UnsupportedGEOSITE", expression: "GEOSITE,category-ads-all", wantFeat: "GEOSITE"},
-		{name: "UnsupportedSRCIPCIDR", expression: "SRC-IP-CIDR,192.168.1.0/24", wantFeat: "SRC-IP-CIDR"},
-		{name: "UnsupportedDSTPORT", expression: "DST-PORT,443", wantFeat: "DST-PORT"},
-		{name: "BareRuleSetProviderName", expression: "RULE-SET,my-clash-provider", wantFeat: "RULE-SET"},
-		{name: "InvalidIPCIDR", expression: "IP-CIDR,2001:db8::/32", wantFeat: "IP-CIDR"},
-		{name: "InvalidIPCIDR6", expression: "IP-CIDR6,10.0.0.0/8", wantFeat: "IP-CIDR6"},
-		{name: "InvalidDestPortRange", expression: "DEST-PORT,443-80", wantFeat: "DEST-PORT"},
-		{name: "InvalidSrcIP", expression: "SRC-IP,not-an-ip", wantFeat: "SRC-IP"},
-		{name: "UnsupportedRuleOption", expression: "IP-CIDR,10.0.0.0/8,unknown-opt", wantFeat: "IP-CIDR"},
+		{name: "GEOSITE", expression: "GEOSITE,category-ads-all"},
+		{name: "SRCIPCIDR", expression: "SRC-IP-CIDR,192.168.1.0/24"},
+		{name: "DSTPORT", expression: "DST-PORT,443"},
+		{name: "BareRuleSetProviderName", expression: "RULE-SET,my-clash-provider"},
 	}
-	for _, tc := range badRuleCases {
-		t.Run("RuleRejection_"+tc.name, func(t *testing.T) {
+	for _, tc := range ignoredRuleCases {
+		t.Run("RuleIgnored_"+tc.name, func(t *testing.T) {
 			snap := fixtureSnapshot()
 			snap.Rules = []resolver.ResolvedRule{
 				{
-					ID:              "bad-rule",
+					ID:              "ignored-rule",
 					TargetGroupID:   snap.Groups[0].ID,
 					TargetGroupName: snap.Groups[0].Name,
 					Expression:      tc.expression,
@@ -569,10 +520,12 @@ func TestSurgeCapabilityAndFailClosedRejections(t *testing.T) {
 				},
 				snap.Rules[1],
 			}
-			_, err := compiler.Compile(ctx, snap, domain.TargetSurge)
-			var capErr *compiler.CapabilityError
-			if !errors.As(err, &capErr) || capErr.Location != "rules[0]" || capErr.Feature != tc.wantFeat {
-				t.Fatalf("expected CapabilityError at rules[0] feature=%s, got %v", tc.wantFeat, err)
+			res, err := compiler.Compile(ctx, snap, domain.TargetSurge)
+			if err != nil {
+				t.Fatalf("expected rule %s to be ignored in node-only Surge export, got %v", tc.name, err)
+			}
+			if strings.Contains(string(res.Content), tc.expression) {
+				t.Fatalf("expected rule %s to be omitted from Surge output, got:\n%s", tc.name, string(res.Content))
 			}
 		})
 	}

@@ -6,7 +6,7 @@ import {
   TrashIcon,
 } from '@heroicons/vue/24/outline'
 import type { FilterCondition, FilterField, FilterOp, GroupEdge, GroupType, NodeFilterSpec, PolicyGroup } from './policyTypes'
-import { ALL_GROUP_TYPES, SUPPORTED_FILTER_FIELDS, validateConditionInput, validateEdgeInput } from './policyTypes'
+import { ALL_GROUP_TYPES, SUPPORTED_FILTER_FIELDS, groupTypeLabel, validateConditionInput, validateEdgeInput } from './policyTypes'
 import { api } from '../../api/client'
 
 interface Props {
@@ -99,7 +99,7 @@ const activeNodes = computed(() => {
 function getGroupName(id?: string): string {
   if (!id) return ''
   const g = props.allGroups.find((x) => x.id === id)
-  return g ? `${g.name} (${g.group_type})` : id
+  return g ? `${g.name} (${groupTypeLabel(g.group_type)})` : id
 }
 
 function getNodeDisplayName(logicalId?: string): string {
@@ -166,7 +166,7 @@ function addFilterCondition() {
   }
 
   if (filterConditions.value.length >= 32) {
-    conditionError.value = 'Maximum 32 filter conditions allowed'
+    conditionError.value = '最多允许添加 32 条筛选条件'
     return
   }
 
@@ -201,7 +201,7 @@ function addEdge() {
   edgeError.value = ''
   const target = newEdgeTarget.value.trim()
   if (!target) {
-    edgeError.value = 'Target identifier cannot be empty'
+    edgeError.value = '目标标识不能为空'
     return
   }
 
@@ -285,15 +285,15 @@ function close() {
       <!-- Header -->
       <header class="flex items-start justify-between p-4 sm:p-5 border-b border-base-300 flex-shrink-0">
         <div>
-          <span class="text-xs font-semibold uppercase tracking-wider text-primary">Policy Editor</span>
+          <span class="text-xs font-semibold uppercase tracking-wider text-primary">策略编辑器</span>
           <h2 id="editor-title" class="mt-0.5 text-lg sm:text-xl font-bold">
-            {{ mode === 'group' ? (group ? 'Edit Policy Group' : 'Create Policy Group') : 'Manage Group Edges' }}
+            {{ mode === 'group' ? (group ? '编辑策略组' : '新建策略组') : '管理策略组连接边' }}
           </h2>
         </div>
         <button
           type="button"
           class="btn btn-ghost btn-sm btn-circle"
-          aria-label="Close"
+          aria-label="关闭"
           @click="close"
         >
           <XMarkIcon class="w-5 h-5" />
@@ -305,17 +305,17 @@ function close() {
         <!-- Group Mode Form -->
         <form v-if="mode === 'group'" class="space-y-4" @submit.prevent="handleSaveGroup">
           <label class="form-control">
-            <span class="label-text font-semibold text-xs">Group Name</span>
+            <span class="label-text font-semibold text-xs">策略组名称</span>
             <input
               v-model="name"
               required
-              placeholder="e.g. Proxy, Auto-Select, Streaming"
+              placeholder="例如：代理节点、自动优选、流媒体解锁"
               class="input input-bordered input-sm mt-1"
             />
           </label>
 
           <div>
-            <span class="label-text font-semibold text-xs block mb-1.5">Group Type</span>
+            <span class="label-text font-semibold text-xs block mb-1.5">策略组类型</span>
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <label
                 v-for="item in ALL_GROUP_TYPES"
@@ -333,7 +333,7 @@ function close() {
                   <span class="font-medium text-xs block leading-tight">{{ item.label }}</span>
                   <span class="text-[11px] opacity-60 block mt-0.5 leading-snug">{{ item.desc }}</span>
                   <span class="text-[10px] text-primary/90 font-mono block mt-1 leading-snug">
-                    Targets: {{ item.supportedTargets.join(', ') }}
+                    支持目标：{{ item.supportedTargets.join(', ') }}
                   </span>
                 </div>
               </label>
@@ -344,12 +344,12 @@ function close() {
           <div class="p-3 rounded-xl bg-base-200/70 border border-base-300 space-y-3">
             <div class="flex items-center justify-between">
               <div>
-                <span class="font-bold text-xs">Group Node Filter Conditions</span>
+                <span class="font-bold text-xs">策略组节点筛选条件</span>
                 <p class="text-[11px] opacity-60 mt-0.5">
-                  Applied after Global Filter. Empty conditions allow all candidate nodes. If no explicit node edges are configured, this group dynamically selects matching global candidates.
+                  在全局筛选之后生效。留空则允许所有候选节点。若未配置显式节点连接边，该策略组将动态从全局候选节点中筛选匹配项。
                 </p>
                 <p class="text-[10px] opacity-50 mt-0.5">
-                  Probe conditions require observations matching current node credential version; stale or unverified observations fail closed.
+                  探针条件要求观测记录与当前节点凭据版本一致；过期或未验证的观测将按安全闭合（Fail-Closed）原则排除。
                 </p>
               </div>
               <span class="badge badge-sm badge-ghost font-mono">
@@ -385,7 +385,7 @@ function close() {
               </div>
             </div>
             <p v-else class="text-xs opacity-50 italic">
-              No conditions set. All nodes passing global filters will be admitted.
+              未设置筛选条件，所有通过全局筛选的节点均允许进入。
             </p>
 
             <!-- Add Condition Inline Control -->
@@ -409,15 +409,15 @@ function close() {
                   class="select select-bordered select-xs font-mono"
                 >
                   <template v-if="newField === 'display_name' || newField === 'source_subscription_ids'">
-                    <option value="contains">contains</option>
-                    <option value="not_contains">not_contains</option>
+                    <option value="contains">包含 (contains)</option>
+                    <option value="not_contains">不包含 (not_contains)</option>
                   </template>
                   <template v-else-if="newField === 'probe_latency_ms'">
-                    <option value="lte">lte</option>
+                    <option value="lte">小于等于 (lte)</option>
                   </template>
                   <template v-else>
-                    <option value="equals">equals</option>
-                    <option value="not_equals">not_equals</option>
+                    <option value="equals">等于 (equals)</option>
+                    <option value="not_equals">不等于 (not_equals)</option>
                   </template>
                 </select>
 
@@ -426,17 +426,17 @@ function close() {
                   v-model="newValue"
                   class="select select-bordered select-xs"
                 >
-                  <option value="available">available</option>
-                  <option value="restricted">restricted</option>
-                  <option value="unknown">unknown</option>
-                  <option value="error">error</option>
-                  <option value="stale">stale</option>
+                  <option value="available">可用 (available)</option>
+                  <option value="restricted">受限 (restricted)</option>
+                  <option value="unknown">未知 (unknown)</option>
+                  <option value="error">错误 (error)</option>
+                  <option value="stale">已过期 (stale)</option>
                 </select>
                 <input
                   v-else
                   v-model="newValue"
                   class="input input-bordered input-xs"
-                  placeholder="Target value..."
+                  placeholder="匹配目标值..."
                 />
               </div>
 
@@ -449,18 +449,18 @@ function close() {
                   v-model="newProbeKind"
                   class="select select-bordered select-xs"
                 >
-                  <option value="baseline">baseline</option>
-                  <option value="geo">geo</option>
-                  <option value="streaming">streaming</option>
-                  <option value="ai">ai</option>
-                  <option value="speed">speed</option>
-                  <option value="ip_risk">ip_risk</option>
+                  <option value="baseline">基础连通性 (baseline)</option>
+                  <option value="geo">地域与出口 IP (geo)</option>
+                  <option value="streaming">流媒体解锁 (streaming)</option>
+                  <option value="ai">AI 服务可用性 (ai)</option>
+                  <option value="speed">带宽测速 (speed)</option>
+                  <option value="ip_risk">IP 风险度 (ip_risk)</option>
                 </select>
 
                 <input
                   v-model.number="newFreshnessSeconds"
                   type="number"
-                  placeholder="Freshness (s, optional)"
+                  placeholder="最大有效期（秒，可选）"
                   class="input input-bordered input-xs font-mono"
                 />
               </div>
@@ -476,21 +476,21 @@ function close() {
                   @click="addFilterCondition"
                 >
                   <PlusIcon class="w-3.5 h-3.5" />
-                  Add Condition
+                  添加条件
                 </button>
               </div>
             </div>
           </div>
 
           <div class="modal-action pt-2">
-            <button type="button" class="btn btn-ghost btn-sm" :disabled="saving" @click="close">Cancel</button>
+            <button type="button" class="btn btn-ghost btn-sm" :disabled="saving" @click="close">取消</button>
             <button
               type="submit"
               class="btn btn-primary btn-sm"
               :class="{ loading: saving }"
               :disabled="!name.trim() || saving"
             >
-              {{ group ? 'Update Group' : 'Create Group' }}
+              {{ group ? '保存策略组' : '创建策略组' }}
             </button>
           </div>
         </form>
@@ -498,7 +498,7 @@ function close() {
         <!-- Edges Mode Form -->
         <div v-else class="space-y-4">
           <p class="text-xs opacity-70">
-            Configure directed connections from <strong>{{ group?.name }}</strong> to child groups or specific nodes.
+            配置从 <strong>{{ group?.name }}</strong> 指向子策略组或特定节点的有向连接边。
           </p>
 
           <!-- Existing Edges List -->
@@ -511,23 +511,23 @@ function close() {
               <div class="flex items-center gap-2 min-w-0">
                 <span class="badge badge-sm badge-ghost">{{ edge.position }}</span>
                 <span v-if="edge.child_group_id" class="text-secondary truncate">
-                  Child Group: {{ getGroupName(edge.child_group_id) }}
+                  子策略组：{{ getGroupName(edge.child_group_id) }}
                 </span>
                 <span v-else class="text-primary truncate">
-                  Node: {{ getNodeDisplayName(edge.node_logical_id) }}
+                  节点：{{ getNodeDisplayName(edge.node_logical_id) }}
                 </span>
               </div>
               <button
                 type="button"
                 class="btn btn-ghost btn-xs text-error"
-                title="Remove edge"
+                title="移除连接边"
                 @click="removeEdge(idx)"
               >
                 <TrashIcon class="w-3.5 h-3.5" />
               </button>
             </div>
             <p v-if="edges.length === 0" class="text-xs opacity-50 italic text-center py-2">
-              No edges attached yet. Add one below.
+              尚未挂载任何连接边，请在下方添加。
             </p>
           </div>
 
@@ -541,7 +541,7 @@ function close() {
                   value="group"
                   class="radio radio-primary radio-xs"
                 />
-                <span>Child Group</span>
+                <span>子策略组</span>
               </label>
               <label class="flex items-center gap-1.5 cursor-pointer">
                 <input
@@ -550,7 +550,7 @@ function close() {
                   value="node"
                   class="radio radio-primary radio-xs"
                 />
-                <span>Active Node</span>
+                <span>活跃节点</span>
               </label>
             </div>
 
@@ -561,13 +561,13 @@ function close() {
                 class="select select-bordered select-sm flex-1 text-xs"
                 data-testid="edge-group-select"
               >
-                <option disabled value="">Select a child group...</option>
+                <option disabled value="">请选择子策略组...</option>
                 <option
                   v-for="cg in availableChildGroups"
                   :key="cg.id"
                   :value="cg.id"
                 >
-                  {{ cg.name }} ({{ cg.group_type }})
+                  {{ cg.name }} ({{ groupTypeLabel(cg.group_type) }})
                 </option>
               </select>
 
@@ -578,7 +578,7 @@ function close() {
                 data-testid="edge-node-select"
               >
                 <option disabled value="">
-                  {{ loadingNodes ? 'Loading nodes...' : (activeNodes.length ? 'Select an active node...' : 'No active nodes found') }}
+                  {{ loadingNodes ? '加载节点中...' : (activeNodes.length ? '请选择活跃节点...' : '暂无活跃节点') }}
                 </option>
                 <option
                   v-for="node in activeNodes"
@@ -596,7 +596,7 @@ function close() {
                 @click="addEdge"
               >
                 <PlusIcon class="w-4 h-4" />
-                Add
+                添加
               </button>
             </div>
 
@@ -606,7 +606,7 @@ function close() {
           </div>
 
           <div class="modal-action pt-2">
-            <button type="button" class="btn btn-ghost btn-sm" :disabled="saving" @click="close">Cancel</button>
+            <button type="button" class="btn btn-ghost btn-sm" :disabled="saving" @click="close">取消</button>
             <button
               type="button"
               class="btn btn-primary btn-sm"
@@ -614,7 +614,7 @@ function close() {
               :disabled="saving"
               @click="handleSaveEdges"
             >
-              Save Edges
+              保存连接边
             </button>
           </div>
         </div>

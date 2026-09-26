@@ -11,7 +11,7 @@ function getInitialLocale(): Locale {
       return stored
     }
   }
-  return 'en-US'
+  return 'zh-CN'
 }
 
 const activeLocaleRef = ref<Locale>(getInitialLocale())
@@ -19,7 +19,7 @@ const activeLocaleRef = ref<Locale>(getInitialLocale())
 export const i18n = createI18n({
   legacy: false,
   locale: activeLocaleRef.value,
-  fallbackLocale: 'en-US',
+  fallbackLocale: 'zh-CN',
   messages: {
     'zh-CN': zhCN,
     'en-US': enUS,

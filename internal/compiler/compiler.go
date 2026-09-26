@@ -158,6 +158,10 @@ func validate(snapshot *resolver.ResolvedPolicySnapshot, target domain.CompilerT
 		nodeNames[node.DisplayName] = true
 	}
 
+	if target != domain.TargetMihomo {
+		return nil
+	}
+
 	groupIDs := make(map[string]bool, len(snapshot.Groups))
 	groupNames := make(map[string]bool, len(snapshot.Groups))
 	for i, group := range snapshot.Groups {

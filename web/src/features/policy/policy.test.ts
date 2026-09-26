@@ -5,6 +5,7 @@ import {
   groupTypeLabel,
   groupTypeSupportedTargets,
   groupTypeTone,
+  ruleActionLabel,
   ruleActionTone,
   validateEdgeInput,
   validateConditionInput,
@@ -16,14 +17,14 @@ import { usePolicy } from './usePolicy'
 import { api, ApiError } from '../../api/client'
 
 describe('policy types and helpers', () => {
-  it('formats group types into readable labels', () => {
-    expect(groupTypeLabel('select')).toBe('Select')
-    expect(groupTypeLabel('urltest')).toBe('URL Test')
-    expect(groupTypeLabel('fallback')).toBe('Fallback')
-    expect(groupTypeLabel('loadbalance')).toBe('Load Balance')
+  it('formats group types into readable Chinese labels', () => {
+    expect(groupTypeLabel('select')).toBe('手动选择 (select)')
+    expect(groupTypeLabel('urltest')).toBe('自动测速 (url-test)')
+    expect(groupTypeLabel('fallback')).toBe('故障转移 (fallback)')
+    expect(groupTypeLabel('loadbalance')).toBe('负载均衡 (load-balance)')
   })
 
-  it('maps group types and rule actions to accurate tones', () => {
+  it('maps group types and rule actions to accurate tones and Chinese labels', () => {
     expect(groupTypeTone('select')).toBe('primary')
     expect(groupTypeTone('urltest')).toBe('secondary')
     expect(groupTypeTone('fallback')).toBe('accent')
@@ -32,15 +33,19 @@ describe('policy types and helpers', () => {
     expect(ruleActionTone('allow')).toBe('success')
     expect(ruleActionTone('reject')).toBe('error')
     expect(ruleActionTone('quarantine')).toBe('warning')
+
+    expect(ruleActionLabel('allow')).toBe('允许')
+    expect(ruleActionLabel('reject')).toBe('拒绝')
+    expect(ruleActionLabel('quarantine')).toBe('隔离')
   })
 
   it('validates edge inputs to strictly prevent self-loops and empty targets', () => {
     // Empty target
-    expect(validateEdgeInput({}, 'grp-parent')).toBe('Must specify either child group or node logical ID')
+    expect(validateEdgeInput({}, 'grp-parent')).toBe('必须指定子策略组或节点逻辑 ID')
 
     // Self loop
     expect(validateEdgeInput({ child_group_id: 'grp-parent' }, 'grp-parent')).toBe(
-      'Self-loop forbidden: parent group cannot reference itself'
+      '禁止自环：父策略组不能引用自身'
     )
 
     // Valid child group
@@ -52,46 +57,49 @@ describe('policy types and helpers', () => {
 
   it('validates filter condition inputs across fields, operators and bounds', () => {
     // Missing field or op
-    expect(validateConditionInput({})).toBe('Field is required')
-    expect(validateConditionInput({ field: 'display_name' })).toBe('Operator is required')
+    expect(validateConditionInput({})).toBe('必须选择字段')
+    expect(validateConditionInput({ field: 'display_name' })).toBe('必须选择运算符')
 
     // display_name
     expect(validateConditionInput({ field: 'display_name', op: 'equals', value: 'foo' })).toBe(
-      'Display name only supports "contains" or "not_contains"'
+      '显示名称仅支持"包含"或"不包含"运算符'
     )
     expect(validateConditionInput({ field: 'display_name', op: 'contains', value: '' })).toBe(
-      'Display name value cannot be empty'
+      '显示名称值不能为空'
     )
     expect(validateConditionInput({ field: 'display_name', op: 'contains', value: 'US' })).toBeNull()
 
     // protocol
     expect(validateConditionInput({ field: 'protocol', op: 'contains', value: 'ss' })).toBe(
-      'Protocol only supports "equals" or "not_equals"'
+      '协议类型仅支持"等于"或"不等于"运算符'
     )
     expect(validateConditionInput({ field: 'protocol', op: 'equals', value: 'ss' })).toBeNull()
     expect(validateConditionInput({ field: 'protocol', op: 'equals', value: 'wireguard' })).toBeNull()
     expect(validateConditionInput({ field: 'protocol', op: 'equals', value: 'tuic' })).toBeNull()
     expect(validateConditionInput({ field: 'protocol', op: 'equals', value: 'ssr' })).toContain(
-      'Unsupported protocol'
+      '不支持的协议'
     )
 
-    // group & rule target capability boundaries
-    expect(groupTypeSupportedTargets('select')).toEqual(['mihomo', 'singbox', 'surge', 'qx'])
-    expect(groupTypeSupportedTargets('urltest')).toEqual(['mihomo', 'singbox', 'surge'])
-    expect(groupTypeSupportedTargets('fallback')).toEqual(['mihomo', 'surge'])
+    // group & rule target capability boundaries (only mihomo supports groups & rules)
+    expect(groupTypeSupportedTargets('select')).toEqual(['mihomo'])
+    expect(groupTypeSupportedTargets('urltest')).toEqual(['mihomo'])
+    expect(groupTypeSupportedTargets('fallback')).toEqual(['mihomo'])
     expect(groupTypeSupportedTargets('loadbalance')).toEqual(['mihomo'])
     expect(ALL_GROUP_TYPES).toHaveLength(4)
     expect(MODERN_RULE_CAPABILITY_MATRIX).toHaveLength(3)
+    for (const band of MODERN_RULE_CAPABILITY_MATRIX) {
+      expect(band.supportedTargets).toEqual(['mihomo'])
+    }
 
     // source_subscription_ids
     expect(validateConditionInput({ field: 'source_subscription_ids', op: 'equals', value: 'sub-1' })).toBe(
-      'Source subscription only supports "contains" or "not_contains"'
+      '来源订阅仅支持"包含"或"不包含"运算符'
     )
     expect(validateConditionInput({ field: 'source_subscription_ids', op: 'contains', value: 'sub-1' })).toBeNull()
 
     // probe_verdict
     expect(validateConditionInput({ field: 'probe_verdict', op: 'equals', value: 'available' })).toBe(
-      'Probe kind is required for probe verdict condition'
+      '探针判定条件必须指定探针类型'
     )
     expect(
       validateConditionInput({
@@ -111,7 +119,7 @@ describe('policy types and helpers', () => {
         value: '200',
         probe_kind: 'baseline',
       })
-    ).toBe('Probe latency only supports "lte"')
+    ).toBe('探针延迟仅支持"小于等于"运算符')
     expect(
       validateConditionInput({
         field: 'probe_latency_ms',
@@ -119,7 +127,7 @@ describe('policy types and helpers', () => {
         value: 'invalid',
         probe_kind: 'baseline',
       })
-    ).toBe('Latency threshold must be a number between 0 and 60000 ms')
+    ).toBe('延迟阈值必须在 0 到 60000 ms 之间')
     expect(
       validateConditionInput({
         field: 'probe_latency_ms',
@@ -242,7 +250,7 @@ describe('usePolicy composable', () => {
     expect(policyRules.value[0].target_group_id).toBe('grp-1')
   })
 
-  it('validates graph topology via POST /api/v1/policies/validate', async () => {
+  it('validates persisted backend graph topology via POST /api/v1/policies/validate without client payload', async () => {
     const postSpy = vi.spyOn(api, 'post').mockResolvedValueOnce({
       valid: true,
       errors: [],
@@ -251,7 +259,7 @@ describe('usePolicy composable', () => {
     const { validateGraph, validationResult } = usePolicy()
     const result = await validateGraph()
 
-    expect(postSpy).toHaveBeenCalledWith('/api/v1/policies/validate', expect.any(Object))
+    expect(postSpy).toHaveBeenCalledWith('/api/v1/policies/validate')
     expect(result.valid).toBe(true)
     expect(validationResult.value?.valid).toBe(true)
   })
@@ -356,24 +364,24 @@ describe('usePolicy composable', () => {
   it('validates filter condition inputs against matrix bounds', () => {
     // Valid display_name
     expect(validateConditionInput({ field: 'display_name', op: 'contains', value: 'hk' })).toBeNull()
-    expect(validateConditionInput({ field: 'display_name', op: 'equals', value: 'hk' })).toContain('only supports "contains"')
-    expect(validateConditionInput({ field: 'display_name', op: 'contains', value: '' })).toContain('cannot be empty')
+    expect(validateConditionInput({ field: 'display_name', op: 'equals', value: 'hk' })).toContain('仅支持"包含"')
+    expect(validateConditionInput({ field: 'display_name', op: 'contains', value: '' })).toContain('不能为空')
 
     // Valid protocol
     expect(validateConditionInput({ field: 'protocol', op: 'equals', value: 'ss' })).toBeNull()
-    expect(validateConditionInput({ field: 'protocol', op: 'contains', value: 'ss' })).toContain('only supports "equals"')
+    expect(validateConditionInput({ field: 'protocol', op: 'contains', value: 'ss' })).toContain('仅支持"等于"')
 
     // Valid source_subscription_ids
     expect(validateConditionInput({ field: 'source_subscription_ids', op: 'contains', value: 'sub-1' })).toBeNull()
 
     // Probe verdict requires probe_kind
-    expect(validateConditionInput({ field: 'probe_verdict', op: 'equals', value: 'available' })).toContain('Probe kind is required')
+    expect(validateConditionInput({ field: 'probe_verdict', op: 'equals', value: 'available' })).toContain('必须指定探针类型')
     expect(validateConditionInput({ field: 'probe_verdict', op: 'equals', probe_kind: 'baseline', value: 'available' })).toBeNull()
 
     // Probe latency requires lte and bounds
-    expect(validateConditionInput({ field: 'probe_latency_ms', op: 'equals', probe_kind: 'baseline', value: '200' })).toContain('only supports "lte"')
-    expect(validateConditionInput({ field: 'probe_latency_ms', op: 'lte', probe_kind: 'baseline', value: '-10' })).toContain('between 0 and 60000')
-    expect(validateConditionInput({ field: 'probe_latency_ms', op: 'lte', probe_kind: 'baseline', value: '200', freshness_seconds: 700000 })).toContain('Freshness must be between 1s and 604800s')
+    expect(validateConditionInput({ field: 'probe_latency_ms', op: 'equals', probe_kind: 'baseline', value: '200' })).toContain('仅支持"小于等于"')
+    expect(validateConditionInput({ field: 'probe_latency_ms', op: 'lte', probe_kind: 'baseline', value: '-10' })).toContain('0 到 60000')
+    expect(validateConditionInput({ field: 'probe_latency_ms', op: 'lte', probe_kind: 'baseline', value: '200', freshness_seconds: 700000 })).toContain('1 秒到 604800 秒')
     expect(validateConditionInput({ field: 'probe_latency_ms', op: 'lte', probe_kind: 'baseline', value: '200', freshness_seconds: 3600 })).toBeNull()
   })
 })

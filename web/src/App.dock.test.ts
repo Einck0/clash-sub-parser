@@ -140,7 +140,10 @@ describe('App.vue Navigation Dock & Layout Adaptability', () => {
     const themeOptions = Array.from(dropdown.querySelectorAll('.dropdown-content button')) as HTMLButtonElement[]
     expect(themeOptions.length).toBeGreaterThan(0)
 
-    const cyberpunkOption = themeOptions.find((btn) => btn.textContent?.trim().toLowerCase() === 'cyberpunk')
+    const cyberpunkOption = themeOptions.find((btn) => {
+      const label = btn.textContent?.trim().toLowerCase() ?? ''
+      return label === 'cyberpunk' || label === '赛博朋克'
+    })
     expect(cyberpunkOption).toBeTruthy()
 
     cyberpunkOption!.click()

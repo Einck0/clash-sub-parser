@@ -52,13 +52,70 @@ export interface CreateProbeRunResponse {
 }
 
 export const ALL_PROBE_KINDS: Array<{ kind: ProbeKind; label: string; desc: string }> = [
-  { kind: 'baseline', label: 'Baseline', desc: 'TCP, TLS handshakes and connectivity' },
-  { kind: 'geo', label: 'Geo & Outbound IP', desc: 'Exit IP, ISO country code & ASN' },
-  { kind: 'streaming', label: 'Streaming', desc: 'Netflix, YouTube & Bilibili unblocking' },
-  { kind: 'ai', label: 'AI Services', desc: 'OpenAI, Gemini & Claude accessibility' },
-  { kind: 'speed', label: 'Speed & Bandwidth', desc: 'Latency and throughput benchmarks' },
-  { kind: 'ip_risk', label: 'IP Risk & Fraud', desc: 'Scamalytics, IPQS & IP-API risk score' },
+  { kind: 'baseline', label: '基础连通性 (Baseline)', desc: 'TCP、TLS 握手与基础连通性检测' },
+  { kind: 'geo', label: '地域与出口 IP (Geo)', desc: '出口 IP、ISO 国家/地区代码与 ASN 识别' },
+  { kind: 'streaming', label: '流媒体解锁 (Streaming)', desc: 'Netflix、YouTube 与哔哩哔哩解锁检测' },
+  { kind: 'ai', label: 'AI 服务可用性 (AI)', desc: 'OpenAI、Gemini 与 Claude 可访问性检测' },
+  { kind: 'speed', label: '速度与带宽 (Speed)', desc: '延迟与吞吐带宽基准测试' },
+  { kind: 'ip_risk', label: 'IP 风险与欺诈分 (IP Risk)', desc: 'Scamalytics、IPQS 与 IP-API 风险评分' },
 ]
+
+export function probeKindLabel(kind: ProbeKind | string): string {
+  switch (kind) {
+    case 'baseline':
+      return '基础连通性'
+    case 'geo':
+      return '地域与出口 IP'
+    case 'streaming':
+      return '流媒体解锁'
+    case 'ai':
+      return 'AI 服务'
+    case 'speed':
+      return '带宽测速'
+    case 'ip_risk':
+      return 'IP 风险'
+    default:
+      return kind
+  }
+}
+
+export function probeStateLabel(state: ProbeRunState | ProbeBatchState | string): string {
+  switch (state) {
+    case 'pending':
+      return '等待中'
+    case 'queued':
+      return '排队中'
+    case 'running':
+      return '运行中'
+    case 'succeeded':
+      return '已完成'
+    case 'failed':
+      return '已失败'
+    case 'cancelled':
+      return '已取消'
+    case 'expired':
+      return '已过期'
+    default:
+      return state
+  }
+}
+
+export function probeVerdictLabel(verdict: ProbeVerdict | string): string {
+  switch (verdict) {
+    case 'available':
+      return '可用'
+    case 'restricted':
+      return '降级/受限'
+    case 'unknown':
+      return '未知'
+    case 'error':
+      return '不可达'
+    case 'stale':
+      return '已过期'
+    default:
+      return verdict
+  }
+}
 
 export function probeStateTone(state: ProbeRunState): 'primary' | 'success' | 'warning' | 'error' | 'neutral' {
   switch (state) {

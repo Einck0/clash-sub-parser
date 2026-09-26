@@ -50,7 +50,7 @@ export function usePolicy() {
       groups.value = res.items || []
       totalGroups.value = res.total || 0
     } catch (err) {
-      error.value = err instanceof Error ? err.message : 'Failed to load policy groups'
+      error.value = err instanceof Error ? err.message : '加载策略组失败'
     } finally {
       loading.value = false
     }
@@ -72,7 +72,7 @@ export function usePolicy() {
       await loadGroups()
       return created
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to create group'
+      const msg = err instanceof Error ? err.message : '创建策略组失败'
       error.value = msg
       throw err
     } finally {
@@ -93,7 +93,7 @@ export function usePolicy() {
       if (idx >= 0) groups.value[idx] = updated
       return updated
     } catch (err) {
-      error.value = err instanceof Error ? err.message : 'Failed to update group'
+      error.value = err instanceof Error ? err.message : '更新策略组失败'
       throw err
     } finally {
       saving.value = false
@@ -107,7 +107,7 @@ export function usePolicy() {
       await api.delete(`/api/v1/policies/groups/${id}`)
       groups.value = groups.value.filter((g) => g.id !== id)
     } catch (err) {
-      error.value = err instanceof Error ? err.message : 'Failed to delete group'
+      error.value = err instanceof Error ? err.message : '删除策略组失败'
       throw err
     } finally {
       saving.value = false
@@ -121,7 +121,7 @@ export function usePolicy() {
       await api.put(`/api/v1/policies/groups/${groupId}/edges`, { edges })
       await loadGroups()
     } catch (err) {
-      error.value = err instanceof Error ? err.message : 'Failed to set group edges'
+      error.value = err instanceof Error ? err.message : '保存策略组连接边失败'
       throw err
     } finally {
       saving.value = false
@@ -138,7 +138,7 @@ export function usePolicy() {
       admissionRules.value = res.admission_rules || []
       policyRules.value = res.policy_rules || []
     } catch (err) {
-      error.value = err instanceof Error ? err.message : 'Failed to load rules'
+      error.value = err instanceof Error ? err.message : '加载规则失败'
     } finally {
       loading.value = false
     }
@@ -166,7 +166,7 @@ export function usePolicy() {
       admissionRules.value.push(created)
       return created
     } catch (err) {
-      error.value = err instanceof Error ? err.message : 'Failed to create admission rule'
+      error.value = err instanceof Error ? err.message : '创建准入规则失败'
       throw err
     } finally {
       saving.value = false
@@ -193,7 +193,7 @@ export function usePolicy() {
       policyRules.value.push(created)
       return created
     } catch (err) {
-      error.value = err instanceof Error ? err.message : 'Failed to create policy rule'
+      error.value = err instanceof Error ? err.message : '创建分流规则失败'
       throw err
     } finally {
       saving.value = false
@@ -204,16 +204,11 @@ export function usePolicy() {
     validating.value = true
     error.value = ''
     try {
-      const payload = {
-        groups: groups.value,
-        admission_rules: admissionRules.value,
-        policy_rules: policyRules.value,
-      }
-      const res = await api.post<ValidationResult>('/api/v1/policies/validate', payload)
+      const res = await api.post<ValidationResult>('/api/v1/policies/validate')
       validationResult.value = res
       return res
     } catch (err) {
-      error.value = err instanceof Error ? err.message : 'Failed to validate graph'
+      error.value = err instanceof Error ? err.message : '校验拓扑图失败'
       const fallback: ValidationResult = { valid: false, errors: [error.value] }
       validationResult.value = fallback
       return fallback
@@ -234,7 +229,7 @@ export function usePolicy() {
         globalFilter.value = null
         return null
       }
-      error.value = err instanceof Error ? err.message : 'Failed to load global node filter'
+      error.value = err instanceof Error ? err.message : '加载全局节点筛选失败'
       return null
     } finally {
       loadingGlobalFilter.value = false
@@ -249,7 +244,7 @@ export function usePolicy() {
       globalFilter.value = res
       return res
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to update global node filter'
+      const msg = err instanceof Error ? err.message : '更新全局节点筛选失败'
       error.value = msg
       throw err
     } finally {

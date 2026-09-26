@@ -918,41 +918,43 @@ func TestAdminPreview_CapabilityBoundaries(t *testing.T) {
 			t.Fatalf("expected error code unsupported_target, got %s", errRespClash.Code)
 		}
 
-		// 2. Request preview for target "surge" (which does not support hysteria2) -> 422 unsupported_target_capability
-		reqSurge := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "surge"}`))
-		reqSurge.Header.Set("Authorization", "Bearer "+testAdminToken)
-		reqSurge.Header.Set("Content-Type", "application/json")
-		recSurge := httptest.NewRecorder()
-		router.ServeHTTP(recSurge, reqSurge)
+		// 2. Request preview for target "qx" (which does not support hysteria2) -> 422 unsupported_target_capability
+		reqQX := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "qx"}`))
+		reqQX.Header.Set("Authorization", "Bearer "+testAdminToken)
+		reqQX.Header.Set("Content-Type", "application/json")
+		recQX := httptest.NewRecorder()
+		router.ServeHTTP(recQX, reqQX)
 
-		if recSurge.Code != http.StatusUnprocessableEntity {
-			t.Fatalf("expected 422 Unprocessable Entity, got %d. body: %s", recSurge.Code, recSurge.Body.String())
+		if recQX.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("expected 422 Unprocessable Entity, got %d. body: %s", recQX.Code, recQX.Body.String())
 		}
-		var errRespSurge transporthttp.ErrorResponse
-		if err := json.Unmarshal(recSurge.Body.Bytes(), &errRespSurge); err != nil {
+		var errRespQX transporthttp.ErrorResponse
+		if err := json.Unmarshal(recQX.Body.Bytes(), &errRespQX); err != nil {
 			t.Fatalf("failed to parse error response: %v", err)
 		}
-		if errRespSurge.Code != "unsupported_target_capability" {
-			t.Fatalf("expected error code unsupported_target_capability, got %s", errRespSurge.Code)
+		if errRespQX.Code != "unsupported_target_capability" {
+			t.Fatalf("expected error code unsupported_target_capability, got %s", errRespQX.Code)
 		}
-		if !strings.Contains(errRespSurge.Message, "hysteria2") || !strings.Contains(errRespSurge.Message, "protocol is not supported") {
-			t.Fatalf("expected message to mention unsupported protocol, got %s", errRespSurge.Message)
+		if !strings.Contains(errRespQX.Message, "hysteria2") || !strings.Contains(errRespQX.Message, "protocol is not supported") {
+			t.Fatalf("expected message to mention unsupported protocol, got %s", errRespQX.Message)
 		}
 
-		// 3. Same setup for target "singbox" (which supports hysteria2) -> 200 OK
-		reqSingBox := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "singbox"}`))
-		reqSingBox.Header.Set("Authorization", "Bearer "+testAdminToken)
-		reqSingBox.Header.Set("Content-Type", "application/json")
-		recSingBox := httptest.NewRecorder()
-		router.ServeHTTP(recSingBox, reqSingBox)
+		// 3. Same setup for targets "singbox" and "surge" (which both support hysteria2) -> 200 OK
+		for _, okTarget := range []string{"singbox", "surge"} {
+			reqOK := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(fmt.Sprintf(`{"target": %q}`, okTarget)))
+			reqOK.Header.Set("Authorization", "Bearer "+testAdminToken)
+			reqOK.Header.Set("Content-Type", "application/json")
+			recOK := httptest.NewRecorder()
+			router.ServeHTTP(recOK, reqOK)
 
-		if recSingBox.Code != http.StatusOK {
-			t.Fatalf("expected 200 OK for singbox with hysteria2, got %d. body: %s", recSingBox.Code, recSingBox.Body.String())
+			if recOK.Code != http.StatusOK {
+				t.Fatalf("expected 200 OK for %s with hysteria2, got %d. body: %s", okTarget, recOK.Code, recOK.Body.String())
+			}
 		}
 	})
 
-	// Subcase 2: Target Quantumult-X cannot render url-test group type -> 422 unsupported_target_capability
-	t.Run("URLTestGroupNotSupportedByQuantumultX", func(t *testing.T) {
+	// Subcase 2: Node-only target Quantumult-X ignores url-test group type and exports pure node lines -> 200 OK
+	t.Run("URLTestGroupIgnoredByNodeOnlyQuantumultX", func(t *testing.T) {
 		db := newCleanSQLiteDB(t)
 		router, _ := setupPublicationTestRouter(t, db)
 		ctx := context.Background()
@@ -992,7 +994,7 @@ func TestAdminPreview_CapabilityBoundaries(t *testing.T) {
 		err = policyRepo.CreateGroup(ctx, &domain.NodeGroup{
 			ID:        groupID,
 			Name:      "AUTO",
-			GroupType: domain.GroupTypeURLTest, // Quantumult-X only supports Select
+			GroupType: domain.GroupTypeURLTest,
 		})
 		if err != nil {
 			t.Fatalf("failed to insert group: %v", err)
@@ -1007,23 +1009,16 @@ func TestAdminPreview_CapabilityBoundaries(t *testing.T) {
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, req)
 
-		if rec.Code != http.StatusUnprocessableEntity {
-			t.Fatalf("expected 422 Unprocessable Entity, got %d. body: %s", rec.Code, rec.Body.String())
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK for node-only qx export ignoring groups, got %d. body: %s", rec.Code, rec.Body.String())
 		}
-		var errResp transporthttp.ErrorResponse
-		if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
-			t.Fatalf("failed to parse error response: %v", err)
-		}
-		if errResp.Code != "unsupported_target_capability" {
-			t.Fatalf("expected error code unsupported_target_capability, got %s", errResp.Code)
-		}
-		if !strings.Contains(errResp.Message, "urltest") || !strings.Contains(errResp.Message, "policy group type is not supported") {
-			t.Fatalf("expected message to mention unsupported group type, got %s", errResp.Message)
+		if strings.Contains(rec.Body.String(), "[policy]") {
+			t.Fatalf("expected pure node-only qx output without [policy], got %s", rec.Body.String())
 		}
 	})
 
-	// Subcase 3: Target Clash cannot render GEOSITE routing rule -> 422 unsupported_target_capability
-	t.Run("GEOSITERuleNotSupportedByClash", func(t *testing.T) {
+	// Subcase 3: Node-only target Surge ignores GEOSITE routing rule and exports pure node lines -> 200 OK
+	t.Run("GEOSITERuleIgnoredByNodeOnlySurge", func(t *testing.T) {
 		db := newCleanSQLiteDB(t)
 		router, _ := setupPublicationTestRouter(t, db)
 		ctx := context.Background()
@@ -1077,7 +1072,7 @@ func TestAdminPreview_CapabilityBoundaries(t *testing.T) {
 			ID:            ruleID,
 			RevisionID:    revID,
 			TargetGroupID: groupID,
-			Expression:    "GEOSITE,category-ads-all", // Surge does not support GEOSITE
+			Expression:    "GEOSITE,category-ads-all",
 			Position:      0,
 		})
 		if err != nil {
@@ -1090,18 +1085,11 @@ func TestAdminPreview_CapabilityBoundaries(t *testing.T) {
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, req)
 
-		if rec.Code != http.StatusUnprocessableEntity {
-			t.Fatalf("expected 422 Unprocessable Entity, got %d. body: %s", rec.Code, rec.Body.String())
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK for node-only surge export ignoring rules, got %d. body: %s", rec.Code, rec.Body.String())
 		}
-		var errResp transporthttp.ErrorResponse
-		if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
-			t.Fatalf("failed to parse error response: %v", err)
-		}
-		if errResp.Code != "unsupported_target_capability" {
-			t.Fatalf("expected error code unsupported_target_capability, got %s", errResp.Code)
-		}
-		if !strings.Contains(errResp.Message, "GEOSITE") || !strings.Contains(errResp.Message, "routing rule kind is not supported") {
-			t.Fatalf("expected message to mention unsupported rule kind, got %s", errResp.Message)
+		if strings.Contains(rec.Body.String(), "[Rule]") {
+			t.Fatalf("expected pure node-only surge output without [Rule], got %s", rec.Body.String())
 		}
 	})
 }
@@ -1248,8 +1236,8 @@ func TestAdminPublish_CapabilityBoundaries(t *testing.T) {
 		t.Fatalf("failed to insert group: %v", err)
 	}
 
-	// POST /api/v1/publications with target Surge (which does not support hysteria2)
-	publishReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications", strings.NewReader(`{"target": "surge"}`))
+	// POST /api/v1/publications with target Quantumult-X (which does not support hysteria2)
+	publishReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications", strings.NewReader(`{"target": "qx"}`))
 	publishReq.Header.Set("Authorization", "Bearer "+testAdminToken)
 	publishReq.Header.Set("Content-Type", "application/json")
 	publishRec := httptest.NewRecorder()
@@ -1835,8 +1823,8 @@ func TestFourTargetEndToEndHTTP_WireGuardTUICAndNativeCapabilityProof(t *testing
 		Position:      0,
 	})
 
-	// 1. Mihomo and Sing-Box MUST succeed with real WireGuard & TUIC parameters over HTTP
-	for _, target := range []string{"mihomo", "singbox"} {
+	// 1. Mihomo, Sing-Box, and Surge MUST succeed with real WireGuard & TUIC parameters over HTTP
+	for _, target := range []string{"mihomo", "singbox", "surge"} {
 		preReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preflight", strings.NewReader(fmt.Sprintf(`{"target": %q}`, target)))
 		preReq.Header.Set("Authorization", "Bearer "+testAdminToken)
 		preReq.Header.Set("Content-Type", "application/json")
@@ -1883,8 +1871,8 @@ func TestFourTargetEndToEndHTTP_WireGuardTUICAndNativeCapabilityProof(t *testing
 		}
 	}
 
-	// 2. Surge and Quantumult-X MUST reject WireGuard/TUIC with 422 unsupported_target_capability (never faking output)
-	for _, limitedTarget := range []string{"surge", "qx"} {
+	// 2. Quantumult-X MUST reject WireGuard/TUIC with 422 unsupported_target_capability (never faking output)
+	for _, limitedTarget := range []string{"qx"} {
 		for _, endpoint := range []string{"/api/v1/publications/preflight", "/api/v1/publications/preview", "/api/v1/publications"} {
 			req := httptest.NewRequest(http.MethodPost, endpoint, strings.NewReader(fmt.Sprintf(`{"target": %q}`, limitedTarget)))
 			req.Header.Set("Authorization", "Bearer "+testAdminToken)

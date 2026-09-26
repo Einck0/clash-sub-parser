@@ -8,6 +8,7 @@ import {
   ArrowPathIcon,
   KeyIcon,
 } from '@heroicons/vue/24/outline'
+import { t } from '../locales'
 
 export interface ErrorStateCardProps {
   error: unknown
@@ -46,6 +47,43 @@ interface ParsedErrorInfo {
   isServerError: boolean
 }
 
+function translateErrorCode(code?: string): string {
+  switch (code) {
+    case 'unauthorized':
+      return t('errors.unauthorized')
+    case 'forbidden':
+      return t('errors.forbidden')
+    case 'conflict':
+      return t('errors.conflict')
+    case 'validation_failed':
+      return t('errors.validation_failed')
+    case 'unsupported_target':
+      return t('errors.unsupported_target')
+    case 'unsupported_target_capability':
+      return t('errors.unsupported_target_capability')
+    case 'no_active_revision':
+      return t('errors.no_active_revision')
+    case 'invalid_json':
+      return t('errors.invalid_json')
+    case 'cycle_detected':
+      return t('errors.cycle_detected')
+    case 'self_loop_forbidden':
+      return t('errors.self_loop_forbidden')
+    case 'publication_preflight_rejected':
+      return t('errors.publication_preflight_rejected')
+    case 'publication_not_found':
+      return t('errors.publication_not_found')
+    case 'publication_revoked':
+      return t('errors.publication_revoked')
+    case 'not_found':
+      return t('errors.not_found')
+    case 'internal_error':
+      return t('errors.internal_error')
+    default:
+      return ''
+  }
+}
+
 const parsedError = computed<ParsedErrorInfo>(() => {
   const err = props.error
   let status: number | undefined
@@ -71,44 +109,47 @@ const parsedError = computed<ParsedErrorInfo>(() => {
   }
 
   const lowerMsg = message.toLowerCase()
-  const isAuth = status === 401 || lowerMsg.includes('unauthorized') || lowerMsg.includes('未授权') || lowerMsg.includes('token') || lowerMsg.includes('令牌')
-  const isForbidden = status === 403 || lowerMsg.includes('forbidden') || lowerMsg.includes('拒绝访问') || lowerMsg.includes('无权限')
-  const isConflict = status === 409 || lowerMsg.includes('conflict') || lowerMsg.includes('冲突')
+  const isAuth = status === 401 || code === 'unauthorized' || lowerMsg.includes('unauthorized') || lowerMsg.includes('未授权') || lowerMsg.includes('token') || lowerMsg.includes('令牌')
+  const isForbidden = status === 403 || code === 'forbidden' || lowerMsg.includes('forbidden') || lowerMsg.includes('拒绝访问') || lowerMsg.includes('无权限')
+  const isConflict = status === 409 || code === 'conflict' || lowerMsg.includes('conflict') || lowerMsg.includes('冲突')
   const isNetwork = lowerMsg.includes('network') || lowerMsg.includes('failed to fetch') || lowerMsg.includes('networkerror') || lowerMsg.includes('无法连接')
   const isServerError = (status !== undefined && status >= 500) || lowerMsg.includes('internal server error') || lowerMsg.includes('500')
 
+  const codeTitle = translateErrorCode(code)
   let friendlyTitle = props.title
   let friendlyDesc = props.description
 
   if (!friendlyTitle) {
     if (isAuth) {
-      friendlyTitle = 'Authentication Required / 鉴权已失效或需要登录'
+      friendlyTitle = t('errors.unauthorized')
     } else if (isForbidden) {
-      friendlyTitle = 'Access Denied / 访问受限'
+      friendlyTitle = t('errors.forbidden')
     } else if (isConflict) {
-      friendlyTitle = 'Resource Conflict / 状态冲突'
+      friendlyTitle = codeTitle && code !== 'conflict' ? `${t('errors.conflict')}：${codeTitle}` : t('errors.conflict')
     } else if (isNetwork) {
-      friendlyTitle = 'Network Connection Failed / 网络连接异常'
+      friendlyTitle = t('errors.networkError')
     } else if (isServerError) {
-      friendlyTitle = 'Service Temporarily Unavailable / 服务暂时不可用'
+      friendlyTitle = t('errors.serverError')
+    } else if (codeTitle) {
+      friendlyTitle = codeTitle
     } else {
-      friendlyTitle = 'Operation Failed / 操作失败'
+      friendlyTitle = t('errors.operationFailed')
     }
   }
 
   if (!friendlyDesc) {
     if (isAuth) {
-      friendlyDesc = 'Token is missing, invalid or expired. Please verify your credentials in Settings or re-authenticate.'
+      friendlyDesc = t('errors.unauthorizedDesc')
     } else if (isForbidden) {
-      friendlyDesc = 'You do not have permission to perform this action. Check administrative access permissions.'
+      friendlyDesc = t('errors.forbiddenDesc')
     } else if (isConflict) {
-      friendlyDesc = 'The resource has been modified or conflicts with another concurrent operation. Please refresh and retry.'
+      friendlyDesc = t('errors.conflictDesc')
     } else if (isNetwork) {
-      friendlyDesc = 'Cannot establish a connection to the CSP backend. Please check network connectivity and backend service status.'
+      friendlyDesc = t('errors.networkErrorDesc')
     } else if (isServerError) {
-      friendlyDesc = 'The server encountered an error processing your request. Please try again or check backend logs.'
+      friendlyDesc = t('errors.serverErrorDesc')
     } else {
-      friendlyDesc = message || 'An unexpected error occurred while processing the request.'
+      friendlyDesc = message || codeTitle || t('errors.operationFailedDesc')
     }
   }
 
@@ -189,7 +230,7 @@ function handleAuthRecovery() {
             @click="handleRetry"
           >
             <ArrowPathIcon class="w-4 h-4" :class="{ 'animate-spin': retrying }" />
-            <span>Retry</span>
+            <span>{{ t('errors.retryBtn') }}</span>
           </button>
 
           <button
@@ -199,7 +240,7 @@ function handleAuthRecovery() {
             @click="handleAuthRecovery"
           >
             <KeyIcon class="w-4 h-4" />
-            <span>Go to Settings / Auth</span>
+            <span>{{ t('errors.goToAuth') }}</span>
           </button>
 
           <slot name="actions" />

@@ -53,44 +53,24 @@ var surgeSupportedVMessCiphers = map[string]bool{
 	"zero":                   true,
 }
 
-// surgeCapability declares the exact subset of protocols, policy group types, and routing rules
-// natively expressible in Surge 5 configuration syntax ([Proxy], [Proxy Group], [Rule]).
-// Reference: Surge 5 Official Manual (https://kb.nssurge.com/surge-knowledge-base/manual/configuration).
+// surgeCapability declares the protocols supported by Surge 5 node-only export.
 func surgeCapability() Capability {
 	return Capability{
 		Protocols: protocolSet(
 			domain.ProtocolSS,
 			domain.ProtocolVMess,
 			domain.ProtocolTrojan,
+			domain.ProtocolHysteria2,
+			domain.ProtocolTUIC,
+			domain.ProtocolWireGuard,
 		),
-		GroupTypes: groupSet(
-			domain.GroupTypeSelect,
-			domain.GroupTypeURLTest,
-			domain.GroupTypeFallback,
-		),
-		RuleKinds: ruleSet(
-			"DOMAIN",
-			"DOMAIN-SUFFIX",
-			"DOMAIN-KEYWORD",
-			"IP-CIDR",
-			"IP-CIDR6",
-			"GEOIP",
-			"PROCESS-NAME",
-			"SRC-IP",
-			"DEST-PORT",
-			"IN-PORT",
-			"RULE-SET",
-			"USER-AGENT",
-			"URL-REGEX",
-			"MATCH",
-			"FINAL",
-		),
+		GroupTypes: groupSet(),
+		RuleKinds:  ruleSet(),
 	}
 }
 
 func renderSurge(snapshot *resolver.ResolvedPolicySnapshot) ([]byte, error) {
 	var b strings.Builder
-	b.WriteString("[General]\nloglevel = notify\n\n[Proxy]\n")
 
 	for i, node := range snapshot.Nodes {
 		line, err := renderSurgeProxyLine(i, node)
@@ -101,23 +81,7 @@ func renderSurge(snapshot *resolver.ResolvedPolicySnapshot) ([]byte, error) {
 		b.WriteByte('\n')
 	}
 
-	b.WriteString("\n[Proxy Group]\n")
-	for i, group := range snapshot.Groups {
-		line, err := renderSurgeGroupLine(i, group)
-		if err != nil {
-			return nil, err
-		}
-		b.WriteString(line)
-		b.WriteByte('\n')
-	}
-
-	b.WriteString("\n[Rule]\n")
-	for i, rule := range snapshot.Rules {
-		line, err := renderSurgeRuleLine(i, len(snapshot.Rules), rule)
-		if err != nil {
-			return nil, err
-		}
-		b.WriteString(line)
+	if b.Len() == 0 {
 		b.WriteByte('\n')
 	}
 
@@ -171,6 +135,12 @@ func renderSurgeProxyLine(index int, node resolver.ResolvedNode) (string, error)
 		return renderSurgeVMessProxy(loc, name, server, node.Port, c)
 	case domain.ProtocolTrojan:
 		return renderSurgeTrojanProxy(loc, name, server, node.Port, c)
+	case domain.ProtocolHysteria2:
+		return renderSurgeHysteria2Proxy(loc, name, server, node.Port, c)
+	case domain.ProtocolTUIC:
+		return renderSurgeTUICProxy(loc, name, server, node.Port, c)
+	case domain.ProtocolWireGuard:
+		return renderSurgeWireGuardProxy(loc, name, server, node.Port, c)
 	default:
 		return "", &CapabilityError{
 			Target:   domain.TargetSurge,
@@ -179,6 +149,224 @@ func renderSurgeProxyLine(index int, node resolver.ResolvedNode) (string, error)
 			Reason:   "protocol is not supported",
 		}
 	}
+}
+
+func renderSurgeHysteria2Proxy(loc, name, server string, port int, c domain.InboundProtocolCredential) (string, error) {
+	password := strings.TrimSpace(c.Password)
+	if !isSurgeSafeValue(password) {
+		return "", &CapabilityError{
+			Target:   domain.TargetSurge,
+			Location: loc,
+			Feature:  string(domain.ProtocolHysteria2),
+			Reason:   "hysteria2 password contains characters invalid in Surge [Proxy] line",
+		}
+	}
+
+	transport := c.Transport
+	netMode := strings.ToLower(strings.TrimSpace(transport["network"]))
+	if netMode != "" && netMode != "quic" && netMode != "udp" && netMode != "tcp" {
+		return "", &CapabilityError{
+			Target:   domain.TargetSurge,
+			Location: loc,
+			Feature:  string(domain.ProtocolHysteria2),
+			Reason:   fmt.Sprintf("unsupported network %q in hysteria2 transport", netMode),
+		}
+	}
+
+	params := []string{
+		fmt.Sprintf("%s = hysteria2", name),
+		server,
+		strconv.Itoa(port),
+		"password=" + password,
+	}
+
+	if downRaw := strings.TrimSpace(transport["down"]); downRaw != "" {
+		downMbps, err := parseSurgeBandwidthMbps(downRaw)
+		if err != nil {
+			return "", &CapabilityError{
+				Target:   domain.TargetSurge,
+				Location: loc,
+				Feature:  string(domain.ProtocolHysteria2),
+				Reason:   err.Error(),
+			}
+		}
+		params = append(params, fmt.Sprintf("download-bandwidth=%d", downMbps))
+	}
+
+	sni := surgeFirstNonEmpty(c.SNI, transport["sni"], transport["servername"], transport["serverName"], transport["peer"])
+	if sni != "" {
+		if !isSurgeSafeValue(sni) {
+			return "", &CapabilityError{
+				Target:   domain.TargetSurge,
+				Location: loc,
+				Feature:  string(domain.ProtocolHysteria2),
+				Reason:   "invalid sni in hysteria2 transport",
+			}
+		}
+		params = append(params, "sni="+sni)
+	}
+
+	if domain.HasInsecureTransport(transport) {
+		params = append(params, "skip-cert-verify=true")
+	}
+
+	return strings.Join(params, ", "), nil
+}
+
+func renderSurgeTUICProxy(loc, name, server string, port int, c domain.InboundProtocolCredential) (string, error) {
+	uuid := strings.TrimSpace(c.UUID)
+	password := strings.TrimSpace(c.Password)
+	if !isSurgeSafeValue(uuid) || !isSurgeSafeValue(password) {
+		return "", &CapabilityError{
+			Target:   domain.TargetSurge,
+			Location: loc,
+			Feature:  string(domain.ProtocolTUIC),
+			Reason:   "tuic credentials contain characters invalid in Surge [Proxy] line",
+		}
+	}
+
+	transport := c.Transport
+	netMode := strings.ToLower(strings.TrimSpace(transport["network"]))
+	if netMode != "" && netMode != "quic" && netMode != "udp" && netMode != "tcp" {
+		return "", &CapabilityError{
+			Target:   domain.TargetSurge,
+			Location: loc,
+			Feature:  string(domain.ProtocolTUIC),
+			Reason:   fmt.Sprintf("unsupported network %q in tuic transport", netMode),
+		}
+	}
+
+	params := []string{
+		fmt.Sprintf("%s = tuic", name),
+		server,
+		strconv.Itoa(port),
+		"uuid=" + uuid,
+		"password=" + password,
+	}
+
+	sni := surgeFirstNonEmpty(c.SNI, transport["sni"], transport["servername"])
+	if sni != "" {
+		if !isSurgeSafeValue(sni) {
+			return "", &CapabilityError{
+				Target:   domain.TargetSurge,
+				Location: loc,
+				Feature:  string(domain.ProtocolTUIC),
+				Reason:   "invalid sni in tuic transport",
+			}
+		}
+		params = append(params, "sni="+sni)
+	}
+
+	var alpnList []string
+	for _, a := range c.ALPN {
+		if trimmed := strings.TrimSpace(a); trimmed != "" {
+			alpnList = append(alpnList, trimmed)
+		}
+	}
+	if len(alpnList) == 0 && transport != nil {
+		for _, a := range strings.Split(transport["alpn"], ",") {
+			if trimmed := strings.TrimSpace(a); trimmed != "" {
+				alpnList = append(alpnList, trimmed)
+			}
+		}
+	}
+	if len(alpnList) > 0 {
+		alpnJoined := strings.Join(alpnList, ":")
+		if !isSurgeSafeValue(alpnJoined) {
+			return "", &CapabilityError{
+				Target:   domain.TargetSurge,
+				Location: loc,
+				Feature:  string(domain.ProtocolTUIC),
+				Reason:   "invalid alpn in tuic transport",
+			}
+		}
+		params = append(params, "alpn="+alpnJoined)
+	}
+
+	if domain.HasInsecureTransport(transport) {
+		params = append(params, "skip-cert-verify=true")
+	}
+
+	return strings.Join(params, ", "), nil
+}
+
+func renderSurgeWireGuardProxy(loc, name, server string, port int, c domain.InboundProtocolCredential) (string, error) {
+	privateKey := strings.TrimSpace(c.PrivateKey)
+	publicKey := strings.TrimSpace(c.PublicKey)
+	if !isSurgeSafeValue(privateKey) || !isSurgeSafeValue(publicKey) {
+		return "", &CapabilityError{
+			Target:   domain.TargetSurge,
+			Location: loc,
+			Feature:  string(domain.ProtocolWireGuard),
+			Reason:   "wireguard keys contain characters invalid in Surge [Proxy] line",
+		}
+	}
+
+	var selfIP, selfIPv6 string
+	for _, rawAddr := range c.LocalAddress {
+		pfx, err := netip.ParsePrefix(strings.TrimSpace(rawAddr))
+		if err != nil {
+			return "", &CapabilityError{
+				Target:   domain.TargetSurge,
+				Location: loc,
+				Feature:  string(domain.ProtocolWireGuard),
+				Reason:   "invalid local_address CIDR in wireguard credentials",
+			}
+		}
+		if pfx.Addr().Is4() && selfIP == "" {
+			selfIP = pfx.Addr().String()
+		} else if pfx.Addr().Is6() && selfIPv6 == "" {
+			selfIPv6 = pfx.Addr().String()
+		}
+	}
+
+	params := []string{
+		fmt.Sprintf("%s = wireguard", name),
+		server,
+		strconv.Itoa(port),
+	}
+	if selfIP != "" {
+		params = append(params, "self-ip="+selfIP)
+	}
+	if selfIPv6 != "" {
+		params = append(params, "self-ip-v6="+selfIPv6)
+	}
+	params = append(params, "private-key="+privateKey, "peer-public-key="+publicKey)
+
+	if psk := strings.TrimSpace(c.PreSharedKey); psk != "" {
+		if !isSurgeSafeValue(psk) {
+			return "", &CapabilityError{
+				Target:   domain.TargetSurge,
+				Location: loc,
+				Feature:  string(domain.ProtocolWireGuard),
+				Reason:   "wireguard pre-shared-key contains characters invalid in Surge [Proxy] line",
+			}
+		}
+		params = append(params, "preshared-key="+psk)
+	}
+	if len(c.Reserved) == 3 {
+		params = append(params, fmt.Sprintf("client-id=%d/%d/%d", c.Reserved[0], c.Reserved[1], c.Reserved[2]))
+	}
+	if c.MTU > 0 {
+		params = append(params, fmt.Sprintf("mtu=%d", c.MTU))
+	}
+
+	return strings.Join(params, ", "), nil
+}
+
+func parseSurgeBandwidthMbps(raw string) (int, error) {
+	normalized := strings.ToLower(strings.TrimSpace(raw))
+	for _, suffix := range []string{"mbps", "m"} {
+		if strings.HasSuffix(normalized, suffix) {
+			normalized = strings.TrimSpace(strings.TrimSuffix(normalized, suffix))
+			break
+		}
+	}
+	val, err := strconv.Atoi(normalized)
+	if err != nil || val <= 0 {
+		return 0, fmt.Errorf("invalid hysteria2 bandwidth %q", raw)
+	}
+	return val, nil
 }
 
 func renderSurgeSSProxy(loc, name, server string, port int, c domain.InboundProtocolCredential) (string, error) {

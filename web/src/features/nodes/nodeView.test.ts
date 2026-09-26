@@ -4,6 +4,8 @@ import {
   SUPPORTED_NODE_PROTOCOLS,
   normalizeNode,
   nodeCapabilityLabel,
+  nodeHealthBadge,
+  nodeRiskBadge,
   protocolSupportedTargets,
   renderNodePreview,
   renderSafeNodePreview,
@@ -24,10 +26,10 @@ describe('node view helpers & plaintext WireGuard / TUIC connection handling', (
       'wireguard',
       'tuic',
     ])
-    expect(protocolSupportedTargets('wireguard')).toEqual(['mihomo', 'singbox'])
-    expect(protocolSupportedTargets('tuic')).toEqual(['mihomo', 'singbox'])
+    expect(protocolSupportedTargets('wireguard')).toEqual(['mihomo', 'singbox', 'surge'])
+    expect(protocolSupportedTargets('tuic')).toEqual(['mihomo', 'singbox', 'surge'])
     expect(protocolSupportedTargets('vless')).toEqual(['mihomo', 'singbox'])
-    expect(protocolSupportedTargets('hysteria2')).toEqual(['mihomo', 'singbox'])
+    expect(protocolSupportedTargets('hysteria2')).toEqual(['mihomo', 'singbox', 'surge'])
     expect(protocolSupportedTargets('ss')).toEqual(['mihomo', 'singbox', 'surge', 'qx'])
     expect(protocolSupportedTargets('vmess')).toEqual(['mihomo', 'singbox', 'surge', 'qx'])
     expect(protocolSupportedTargets('trojan')).toEqual(['mihomo', 'singbox', 'surge', 'qx'])
@@ -177,17 +179,42 @@ describe('node view helpers & plaintext WireGuard / TUIC connection handling', (
     ).toContain('password')
   })
 
-  it('renders probe status as a stable capability label', () => {
+  it('renders probe status, health badge, and risk badge as localized Chinese labels', () => {
     const node: NodeRecord = {
       logical_id: 'node-2',
       protocol: 'ss',
       display_name: 'Seoul',
       active: false,
       capabilities: { streaming: 'available', ai: 'restricted' },
+      ip_risk_summary: { risk_band: 'low', decision: 'allow', status: 'fresh' },
     }
-    expect(nodeCapabilityLabel(node, 'streaming')).toEqual({ label: 'Available', tone: 'success' })
-    expect(nodeCapabilityLabel(node, 'ai')).toEqual({ label: 'Restricted', tone: 'warning' })
-    expect(nodeCapabilityLabel(node, 'geo')).toEqual({ label: 'Unknown', tone: 'info' })
+    expect(nodeCapabilityLabel(node, 'streaming')).toEqual({ label: '可用', tone: 'success' })
+    expect(nodeCapabilityLabel(node, 'ai')).toEqual({ label: '受限', tone: 'warning' })
+    expect(nodeCapabilityLabel(node, 'geo')).toEqual({ label: '未知', tone: 'info' })
+
+    expect(nodeHealthBadge({ logical_id: 'n1', protocol: 'ss', display_name: 'N1', active: true, capabilities: { streaming: 'available' } })).toEqual({
+      label: '正常',
+      tone: 'success',
+    })
+    expect(nodeHealthBadge(node)).toEqual({ label: '降级', tone: 'warning' })
+    expect(nodeHealthBadge({ logical_id: 'n2', protocol: 'ss', display_name: 'N2', active: true, capabilities: { streaming: 'error' } })).toEqual({
+      label: '异常',
+      tone: 'error',
+    })
+    expect(nodeHealthBadge({ logical_id: 'n3', protocol: 'ss', display_name: 'N3', active: true })).toEqual({
+      label: '未探测',
+      tone: 'info',
+    })
+
+    expect(nodeRiskBadge(node)).toEqual({ label: '低风险', tone: 'success' })
+    expect(nodeRiskBadge({ logical_id: 'n4', protocol: 'ss', display_name: 'N4', active: true, ip_risk_summary: { risk_band: 'medium' } })).toEqual({
+      label: '中风险',
+      tone: 'warning',
+    })
+    expect(nodeRiskBadge({ logical_id: 'n5', protocol: 'ss', display_name: 'N5', active: true, ip_risk_summary: { risk_band: 'high' } })).toEqual({
+      label: '高风险',
+      tone: 'error',
+    })
   })
 
   it('includes plaintext source_url_secret_ref in subscriptionPatchPayload and omits blank URL', () => {
@@ -386,7 +413,7 @@ describe('NodesView real API detail, plaintext PATCH edit, and failure draft pre
 
     const drawer = document.body.querySelector('[data-testid="node-detail-drawer"]')
     expect(drawer).not.toBeNull()
-    expect(drawer?.textContent).toContain('WireGuard Endpoint & Peer Configuration')
+    expect(drawer?.textContent).toContain('WireGuard 端点与对端配置')
     expect(drawer?.querySelector('[data-testid="node-reconcile-overwrite-notice"]')?.textContent).toContain(
       'Reconcile'
     )
@@ -432,7 +459,7 @@ describe('NodesView real API detail, plaintext PATCH edit, and failure draft pre
     expect(wgPrivInput?.value).toBe('UPDATED-WG-PRIVATE-KEY')
     expect(wgPskInput?.value).toBe('UPDATED-WG-PSK')
     expect(drawer?.querySelector('[data-testid="node-connection-saved"]')?.textContent).toContain(
-      'Connection parameters saved'
+      '连接参数已保存'
     )
 
     const previewEl = drawer?.querySelector('[data-testid="node-config-preview"]')
@@ -453,7 +480,7 @@ describe('NodesView real API detail, plaintext PATCH edit, and failure draft pre
     await nextTick()
     await new Promise((r) => setTimeout(r, 30))
 
-    expect(drawer?.textContent).toContain('TUIC v5 Connection & QUIC Transport Parameters')
+    expect(drawer?.textContent).toContain('TUIC v5 连接与 QUIC 传输参数')
     const tuicPassInput = drawer?.querySelector('[data-testid="tuic-password-input"]') as HTMLInputElement | null
     const tuicSniInput = drawer?.querySelector('[data-testid="tuic-sni-input"]') as HTMLInputElement | null
     expect(tuicPassInput?.value).toBe('tuic-password-initial')

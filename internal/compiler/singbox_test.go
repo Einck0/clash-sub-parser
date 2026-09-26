@@ -342,7 +342,7 @@ func TestSingBoxAllSevenProtocolsGroupsAndFourteenRules_OfficialValidation(t *te
 		t.Fatalf("unexpected wireguard endpoint fields: %#v", wgOpts)
 	}
 
-	// Verify VLESS Reality, Hysteria2, and TUIC fields in outbounds
+	// Verify VLESS Reality, Hysteria2, and TUIC fields in outbounds, and ensure groups/routes are omitted
 	raw := string(res.Content)
 	for _, expected := range []string{
 		`"flow": "xtls-rprx-vision"`,
@@ -354,12 +354,19 @@ func TestSingBoxAllSevenProtocolsGroupsAndFourteenRules_OfficialValidation(t *te
 		`"congestion_control": "bbr"`,
 		`"udp_relay_mode": "native"`,
 		`"disable_sni": true`,
-		`"type": "urltest"`,
-		`"type": "selector"`,
-		`"final": "Proxy"`,
 	} {
 		if !strings.Contains(raw, expected) {
 			t.Errorf("expected rendered sing-box JSON to contain %s, got:\n%s", expected, raw)
+		}
+	}
+	for _, unexpected := range []string{
+		`"type": "urltest"`,
+		`"type": "selector"`,
+		`"route"`,
+		`"final": "Proxy"`,
+	} {
+		if strings.Contains(raw, unexpected) {
+			t.Errorf("expected node-only sing-box JSON not to contain %s, got:\n%s", unexpected, raw)
 		}
 	}
 }
@@ -380,31 +387,26 @@ func TestSingBoxNegativeCases_FailsClosedWithPreciseDiagnostics(t *testing.T) {
 		}
 	})
 
-	t.Run("UnsupportedGroupTypesFallbackAndLoadBalanceRejected", func(t *testing.T) {
+	t.Run("GroupsAndEmptyGroupMembersIgnoredInNodeOnlyExport", func(t *testing.T) {
 		for _, gt := range []domain.GroupType{domain.GroupTypeFallback, domain.GroupTypeLoadBalance} {
 			snap := fixtureSnapshot()
 			snap.Groups[0].GroupType = gt
-			_, err := compiler.Compile(ctx, snap, domain.TargetSingBox)
-			if err == nil {
-				t.Fatalf("expected group type %s to be rejected on sing-box", gt)
+			res, err := compiler.Compile(ctx, snap, domain.TargetSingBox)
+			if err != nil {
+				t.Fatalf("expected group type %s to be ignored in node-only sing-box export, got %v", gt, err)
 			}
-			var capErr *compiler.CapabilityError
-			if !errors.As(err, &capErr) || capErr.Location != "groups[0]" || capErr.Feature != string(gt) {
-				t.Fatalf("expected CapabilityError at groups[0] for %s, got %#v", gt, err)
-			}
+			assertValidSingBoxConfig(t, res.Content)
 		}
-	})
 
-	t.Run("EmptyGroupMembersRejected", func(t *testing.T) {
-		snap := fixtureSnapshot()
-		snap.Groups[0].Members = nil
-		snap.Groups[0].NodeLogicalIDs = nil
-		snap.Groups[0].ChildGroupIDs = nil
-		_, err := compiler.Compile(ctx, snap, domain.TargetSingBox)
-		var capErr *compiler.CapabilityError
-		if !errors.As(err, &capErr) || capErr.Location != "groups[0]" {
-			t.Fatalf("expected CapabilityError at groups[0] for empty group, got %v", err)
+		snapEmpty := fixtureSnapshot()
+		snapEmpty.Groups[0].Members = nil
+		snapEmpty.Groups[0].NodeLogicalIDs = nil
+		snapEmpty.Groups[0].ChildGroupIDs = nil
+		resEmpty, err := compiler.Compile(ctx, snapEmpty, domain.TargetSingBox)
+		if err != nil {
+			t.Fatalf("expected empty group to be ignored in node-only sing-box export, got %v", err)
 		}
+		assertValidSingBoxConfig(t, resEmpty.Content)
 	})
 
 	t.Run("InvalidNodeProtocolOptionsRejected", func(t *testing.T) {
@@ -488,24 +490,23 @@ func TestSingBoxNegativeCases_FailsClosedWithPreciseDiagnostics(t *testing.T) {
 		}
 	})
 
-	t.Run("InvalidAndUnsupportedRulesRejected", func(t *testing.T) {
-		badRules := []struct {
-			name     string
-			expr     string
-			target   string
-			wantFeat string
+	t.Run("ArbitraryRulesIgnoredInNodeOnlyExport", func(t *testing.T) {
+		rules := []struct {
+			name   string
+			expr   string
+			target string
 		}{
-			{name: "UnsupportedUserAgent", expr: "USER-AGENT,Instagram*", target: "proxy", wantFeat: "USER-AGENT"},
-			{name: "InvalidIPCIDR", expr: "IP-CIDR,2001:db8::/32", target: "proxy", wantFeat: "IP-CIDR"},
-			{name: "InvalidIPCIDR6", expr: "IP-CIDR6,198.51.100.0/24", target: "proxy", wantFeat: "IP-CIDR6"},
-			{name: "InvalidSrcIPCIDR", expr: "SRC-IP-CIDR,not-a-cidr", target: "proxy", wantFeat: "SRC-IP-CIDR"},
-			{name: "InvalidPortNumber", expr: "DST-PORT,70000", target: "proxy", wantFeat: "DST-PORT"},
-			{name: "InvalidPortRange", expr: "PORT,9000-8000", target: "proxy", wantFeat: "PORT"},
-			{name: "InvalidRuleSetURL", expr: "RULE-SET,http://", target: "proxy", wantFeat: "RULE-SET"},
-			{name: "UnsupportedBuiltInPass", expr: "DOMAIN,example.com", target: "PASS", wantFeat: "PASS"},
+			{name: "UnsupportedUserAgent", expr: "USER-AGENT,Instagram*", target: "proxy"},
+			{name: "InvalidIPCIDR", expr: "IP-CIDR,2001:db8::/32", target: "proxy"},
+			{name: "InvalidIPCIDR6", expr: "IP-CIDR6,198.51.100.0/24", target: "proxy"},
+			{name: "InvalidSrcIPCIDR", expr: "SRC-IP-CIDR,not-a-cidr", target: "proxy"},
+			{name: "InvalidPortNumber", expr: "DST-PORT,70000", target: "proxy"},
+			{name: "InvalidPortRange", expr: "PORT,9000-8000", target: "proxy"},
+			{name: "InvalidRuleSetURL", expr: "RULE-SET,http://", target: "proxy"},
+			{name: "UnsupportedBuiltInPass", expr: "DOMAIN,example.com", target: "PASS"},
 		}
 
-		for _, tc := range badRules {
+		for _, tc := range rules {
 			t.Run(tc.name, func(t *testing.T) {
 				snap := fixtureSnapshot()
 				targetID := snap.Groups[0].ID
@@ -513,20 +514,17 @@ func TestSingBoxNegativeCases_FailsClosedWithPreciseDiagnostics(t *testing.T) {
 					targetID = ""
 				}
 				snap.Rules[0] = resolver.ResolvedRule{
-					ID:              "bad-rule",
+					ID:              "ignored-rule",
 					TargetGroupID:   targetID,
 					TargetGroupName: tc.target,
 					Expression:      tc.expr,
 					Position:        0,
 				}
-				_, err := compiler.Compile(ctx, snap, domain.TargetSingBox)
-				if err == nil {
-					t.Fatalf("expected error for %s (%s), got nil", tc.name, tc.expr)
+				res, err := compiler.Compile(ctx, snap, domain.TargetSingBox)
+				if err != nil {
+					t.Fatalf("expected rule %s (%s) to be ignored in node-only sing-box export, got %v", tc.name, tc.expr, err)
 				}
-				var capErr *compiler.CapabilityError
-				if !errors.As(err, &capErr) || capErr.Location != "rules[0]" || capErr.Feature != tc.wantFeat {
-					t.Fatalf("expected CapabilityError at rules[0] feature %q, got %#v", tc.wantFeat, err)
-				}
+				assertValidSingBoxConfig(t, res.Content)
 			})
 		}
 	})

@@ -48,13 +48,13 @@ async function probeAuthMode() {
     }
   } catch (err: any) {
     authMode.value = 'error'
-    authModeError.value = err?.message || 'Failed to probe auth status'
+    authModeError.value = err?.message || t('topbar.authProbeErrorDesc')
   }
 }
 
 const displayToken = computed(() => {
   if (!storedToken.value) {
-    return 'None (未配置)'
+    return t('settings.tokenNotConfigured')
   }
   if (showStoredToken.value) {
     return storedToken.value
@@ -64,6 +64,27 @@ const displayToken = computed(() => {
   }
   return `${storedToken.value.slice(0, 3)}••••••••${storedToken.value.slice(-3)}`
 })
+
+function themeLabel(theme: ThemeName): string {
+  switch (theme) {
+    case 'light':
+      return t('themes.light')
+    case 'dark':
+      return t('themes.dark')
+    case 'dim':
+      return t('themes.dim')
+    case 'cyberpunk':
+      return t('themes.cyberpunk')
+    case 'cupcake':
+      return t('themes.cupcake')
+    case 'dracula':
+      return t('themes.dracula')
+    case 'nord':
+      return t('themes.nord')
+    default:
+      return theme
+  }
+}
 
 function toggleTokenVisibility() {
   showStoredToken.value = !showStoredToken.value
@@ -112,20 +133,26 @@ async function handleSaveToken() {
 async function handleTestConnection() {
   isTesting.value = true
   connectionStatus.value = 'idle'
-  connectionMessage.value = 'Testing connection...'
+  connectionMessage.value = t('settings.testingConnection')
 
   try {
     const res = await api.get<AuthStatus>('/api/v1/auth/status')
     connectionStatus.value = 'success'
-    connectionMessage.value = `Connected: backend reachable (Mode: ${res?.mode || 'active'})`
-    toastStore.push({ message: 'Backend connected successfully', tone: 'success' })
+    const modeText =
+      res?.mode === 'open'
+        ? t('settings.authModeOpen')
+        : res?.mode === 'protected'
+        ? t('settings.authModeProtected')
+        : res?.mode || t('common.active')
+    connectionMessage.value = t('settings.connectedMsg', { mode: modeText })
+    toastStore.push({ message: t('settings.connectedToast'), tone: 'success' })
     if (res?.mode === 'open' || res?.mode === 'protected') {
       authMode.value = res.mode === 'open' ? 'open' : 'token'
     }
   } catch (err: any) {
     connectionStatus.value = 'error'
-    connectionMessage.value = `Connection failed: ${err?.message || 'Reachable error'}`
-    toastStore.push({ message: 'Backend connection failed', tone: 'error' })
+    connectionMessage.value = t('settings.connectionFailedMsg', { error: err?.message || t('common.error') })
+    toastStore.push({ message: t('settings.connectionFailedToast'), tone: 'error' })
   } finally {
     isTesting.value = false
   }
@@ -193,7 +220,7 @@ onMounted(() => {
 
       <!-- Auth Mode Status Pill -->
       <div class="flex items-center gap-2">
-        <span class="text-xs text-base-content/60 font-medium">Auth Mode:</span>
+        <span class="text-xs text-base-content/60 font-medium">{{ t('settings.authModeLabel') }}</span>
         <div
           data-testid="auth-mode-badge"
           class="badge gap-1.5 py-3 px-3 text-xs font-semibold uppercase tracking-wider"
@@ -216,12 +243,12 @@ onMounted(() => {
           <span>
             {{
               authMode === 'open'
-                ? 'Open Mode'
+                ? t('settings.authModeOpen')
                 : authMode === 'token'
-                ? 'Protected'
+                ? t('settings.authModeProtected')
                 : authMode === 'loading'
-                ? 'Probing...'
-                : 'Error'
+                ? t('settings.authModeProbing')
+                : t('settings.authModeError')
             }}
           </span>
         </div>
@@ -267,7 +294,7 @@ onMounted(() => {
                 type="button"
                 data-testid="toggle-token-visibility-btn"
                 class="btn btn-ghost btn-xs btn-square text-base-content/60 hover:text-base-content"
-                :title="showStoredToken ? 'Mask token' : 'Reveal token'"
+                :title="showStoredToken ? t('settings.maskToken') : t('settings.revealToken')"
                 @click="toggleTokenVisibility"
               >
                 <EyeSlashIcon v-if="showStoredToken" class="w-4 h-4" />
@@ -364,7 +391,7 @@ onMounted(() => {
               :class="currentLocale === 'zh-CN' ? 'btn-primary' : 'btn-outline'"
               @click="handleLocaleChange('zh-CN')"
             >
-              简体中文 (zh-CN)
+              {{ t('settings.langZhCN') }}
             </button>
             <button
               type="button"
@@ -372,7 +399,7 @@ onMounted(() => {
               :class="currentLocale === 'en-US' ? 'btn-primary' : 'btn-outline'"
               @click="handleLocaleChange('en-US')"
             >
-              English (en-US)
+              {{ t('settings.langEnUS') }}
             </button>
           </div>
         </div>
@@ -393,11 +420,11 @@ onMounted(() => {
               v-for="theme in THEME_NAMES"
               :key="theme"
               type="button"
-              class="btn btn-xs uppercase font-mono"
+              class="btn btn-xs font-mono"
               :class="currentTheme === theme ? 'btn-secondary' : 'btn-outline'"
               @click="handleThemeChange(theme)"
             >
-              {{ theme }}
+              {{ themeLabel(theme) }}
             </button>
           </div>
         </div>
@@ -414,21 +441,21 @@ onMounted(() => {
 
         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 text-xs">
           <div class="p-4 rounded-xl bg-base-100/70 border border-white/5 space-y-1">
-            <span class="text-base-content/60 font-medium">Control Plane</span>
-            <p class="font-mono text-sm font-semibold text-primary">Single-Binary Go 1.22+</p>
-            <p class="text-[11px] text-base-content/50">自包含编译与无依赖单二进制部署</p>
+            <span class="text-base-content/60 font-medium">{{ t('settings.runtimeControlPlane') }}</span>
+            <p class="font-mono text-sm font-semibold text-primary">{{ t('settings.runtimeBinary') }}</p>
+            <p class="text-[11px] text-base-content/50">{{ t('settings.runtimeControlPlaneDesc') }}</p>
           </div>
 
           <div class="p-4 rounded-xl bg-base-100/70 border border-white/5 space-y-1">
-            <span class="text-base-content/60 font-medium">API Client</span>
-            <p class="font-mono text-sm font-semibold text-success">Unified {data} & X-Request-ID</p>
-            <p class="text-[11px] text-base-content/50">全链路追踪 ID 与主动握手状态机</p>
+            <span class="text-base-content/60 font-medium">{{ t('settings.runtimeApiClient') }}</span>
+            <p class="font-mono text-sm font-semibold text-success">{{ t('settings.runtimeClient') }}</p>
+            <p class="text-[11px] text-base-content/50">{{ t('settings.runtimeApiClientDesc') }}</p>
           </div>
 
           <div class="p-4 rounded-xl bg-base-100/70 border border-white/5 space-y-1">
-            <span class="text-base-content/60 font-medium">Asset Packaging</span>
-            <p class="font-mono text-sm font-semibold text-secondary">internal/webassets (embed.FS)</p>
-            <p class="text-[11px] text-base-content/50">前端构建产物零运行时外部文件依赖</p>
+            <span class="text-base-content/60 font-medium">{{ t('settings.runtimeAssetPackaging') }}</span>
+            <p class="font-mono text-sm font-semibold text-secondary">{{ t('settings.runtimeAssets') }}</p>
+            <p class="text-[11px] text-base-content/50">{{ t('settings.runtimeAssetPackagingDesc') }}</p>
           </div>
         </div>
       </div>

@@ -25,23 +25,6 @@
       "server_port": 8388,
       "method": "aes-256-gcm",
       "password": "test-ss-password"
-    },
-    {
-      "type": "selector",
-      "tag": "proxy",
-      "outbounds": [
-        "edge-a",
-        "edge-b"
-      ]
     }
-  ],
-  "route": {
-    "rules": [
-      {
-        "domain_suffix": "example.com",
-        "outbound": "proxy"
-      }
-    ],
-    "final": "proxy"
-  }
+  ]
 }

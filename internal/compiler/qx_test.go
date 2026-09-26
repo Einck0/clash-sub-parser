@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -58,9 +57,10 @@ func TestQuantumultXOutputFormat(t *testing.T) {
 		t.Fatalf("compile QuantumultX failed: %v", err)
 	}
 	qxStr := string(qxRes.Content)
-	if !strings.Contains(qxStr, "[general]") || !strings.Contains(qxStr, "[server_local]") ||
-		!strings.Contains(qxStr, "[policy]") || !strings.Contains(qxStr, "[filter_local]") {
-		t.Fatalf("QuantumultX output missing expected sections: %s", qxStr)
+	for _, unexpectedSection := range []string{"[general]", "[server_local]", "[policy]", "[filter_local]"} {
+		if strings.Contains(qxStr, unexpectedSection) {
+			t.Fatalf("node-only QuantumultX output must not contain section %s:\n%s", unexpectedSection, qxStr)
+		}
 	}
 	assertValidQuantumultXConfig(t, qxStr)
 }
@@ -258,19 +258,15 @@ func TestQuantumultXSupportedProtocolsAndRules(t *testing.T) {
 		"vmess = [2001:db8::21]:2053, method=chacha20-poly1305, password=66666666-7777-8888-9999-000000000000, obfs=wss, obfs-host=vmess-ws.example.com, obfs-uri=/ws-path, tls-host=vmess-ws.example.com, tag=VMess-WSS",
 		"trojan = trojan.example.com:443, password=trojan-tcp-password, over-tls=true, tls-host=trojan.example.com, tls-verification=true, tag=Trojan-TCP",
 		"trojan = 198.51.100.31:9443, password=trojan-wss-password, obfs=wss, obfs-host=trojan-cdn.example.com, obfs-uri=/trojan-ws, tls-host=trojan-sni.example.com, tls-verification=false, tag=Trojan-WSS",
-		"static = HK-Nodes, SS-TCP, SS-Obfs, SS-WSS",
-		"static = Proxy, HK-Nodes, VMess-TLS, VMess-WSS, Trojan-TCP, Trojan-WSS, DIRECT",
-		"host, api.example.com, Proxy",
-		"host-suffix, example.com, Proxy",
-		"host-keyword, google, Proxy",
-		"ip-cidr, 198.51.100.0/24, DIRECT",
-		"ip6-cidr, 2001:db8::/32, REJECT",
-		"geoip, CN, DIRECT",
-		"final, Proxy",
 	}
 	for _, want := range expectedLines {
 		if !strings.Contains(out, want) {
 			t.Errorf("QuantumultX output missing expected line %q.\nFull output:\n%s", want, out)
+		}
+	}
+	for _, unexpected := range []string{"static =", "host,", "host-suffix,", "final,"} {
+		if strings.Contains(out, unexpected) {
+			t.Errorf("node-only QuantumultX output must not contain policy/rule line %q.\nFull output:\n%s", unexpected, out)
 		}
 	}
 }
@@ -285,16 +281,12 @@ func TestQuantumultXRejectsProcessNameRule(t *testing.T) {
 		Position:        2,
 	})
 
-	_, err := compiler.Compile(context.Background(), snapshot, domain.TargetQuantumultX)
-	if err == nil {
-		t.Fatal("expected Quantumult-X to reject PROCESS-NAME")
+	res, err := compiler.Compile(context.Background(), snapshot, domain.TargetQuantumultX)
+	if err != nil {
+		t.Fatalf("expected Quantumult-X node-only export to ignore PROCESS-NAME rule cleanly: %v", err)
 	}
-	var capErr *compiler.CapabilityError
-	if !errors.As(err, &capErr) {
-		t.Fatalf("expected CapabilityError, got %v", err)
-	}
-	if capErr.Feature != "PROCESS-NAME" || capErr.Location != "rules[2]" {
-		t.Fatalf("expected feature PROCESS-NAME at rules[2], got %#v", capErr)
+	if strings.Contains(string(res.Content), "PROCESS-NAME") {
+		t.Fatalf("expected PROCESS-NAME rule to be omitted in Quantumult-X output:\n%s", string(res.Content))
 	}
 }
 
@@ -325,45 +317,38 @@ func TestQuantumultXRejectsUnsupportedCapabilitiesAndTransports(t *testing.T) {
 		}
 	})
 
-	t.Run("RejectsUnsupportedGroupTypesWithoutSilentStaticDowngrade", func(t *testing.T) {
-		unsupportedGroups := []domain.GroupType{
+	t.Run("IgnoresAllGroupTypesInNodeOnlyExport", func(t *testing.T) {
+		groupTypes := []domain.GroupType{
 			domain.GroupTypeURLTest,
 			domain.GroupTypeFallback,
 			domain.GroupTypeLoadBalance,
 		}
-		for _, gt := range unsupportedGroups {
+		for _, gt := range groupTypes {
 			snap := fixtureSnapshot()
 			snap.Groups[0].GroupType = gt
-			_, err := compiler.Compile(ctx, snap, domain.TargetQuantumultX)
-			if err == nil {
-				t.Fatalf("expected QuantumultX to reject group type %s", gt)
+			res, err := compiler.Compile(ctx, snap, domain.TargetQuantumultX)
+			if err != nil {
+				t.Fatalf("expected QuantumultX node-only export to ignore group type %s, got %v", gt, err)
 			}
-			var capErr *compiler.CapabilityError
-			if !errors.As(err, &capErr) {
-				t.Fatalf("expected CapabilityError for %s, got %T: %v", gt, err, err)
-			}
-			if capErr.Target != domain.TargetQuantumultX || capErr.Location != "groups[0]" || capErr.Feature != string(gt) {
-				t.Fatalf("unexpected CapabilityError for %s: %#v", gt, capErr)
-			}
+			assertValidQuantumultXConfig(t, string(res.Content))
 		}
 	})
 
-	t.Run("RejectsUnsupportedRulesAndInvalidCIDRs", func(t *testing.T) {
+	t.Run("IgnoresRulesInNodeOnlyExport", func(t *testing.T) {
 		cases := []struct {
 			name        string
 			expr        string
 			targetGroup string
-			wantFeature string
 		}{
-			{name: "GEOSITE", expr: "GEOSITE,category-ads-all", targetGroup: "proxy", wantFeature: "GEOSITE"},
-			{name: "RULE-SET", expr: "RULE-SET,apple", targetGroup: "proxy", wantFeature: "RULE-SET"},
-			{name: "SRC-IP-CIDR", expr: "SRC-IP-CIDR,10.0.0.0/8", targetGroup: "proxy", wantFeature: "SRC-IP-CIDR"},
-			{name: "DST-PORT", expr: "DST-PORT,443", targetGroup: "proxy", wantFeature: "DST-PORT"},
-			{name: "PORT", expr: "PORT,80", targetGroup: "proxy", wantFeature: "PORT"},
-			{name: "InvalidIPv4CIDR", expr: "IP-CIDR,2001:db8::/32", targetGroup: "proxy", wantFeature: "IP-CIDR"},
-			{name: "InvalidIPv6CIDR", expr: "IP-CIDR6,198.51.100.0/24", targetGroup: "proxy", wantFeature: "IP-CIDR6"},
-			{name: "ExtraRuleModifier", expr: "DOMAIN-SUFFIX,example.com,no-resolve", targetGroup: "proxy", wantFeature: "DOMAIN-SUFFIX"},
-			{name: "UnsupportedBuiltInTargetPass", expr: "DOMAIN,example.com", targetGroup: "PASS", wantFeature: "PASS"},
+			{name: "GEOSITE", expr: "GEOSITE,category-ads-all", targetGroup: "proxy"},
+			{name: "RULE-SET", expr: "RULE-SET,apple", targetGroup: "proxy"},
+			{name: "SRC-IP-CIDR", expr: "SRC-IP-CIDR,10.0.0.0/8", targetGroup: "proxy"},
+			{name: "DST-PORT", expr: "DST-PORT,443", targetGroup: "proxy"},
+			{name: "PORT", expr: "PORT,80", targetGroup: "proxy"},
+			{name: "InvalidIPv4CIDR", expr: "IP-CIDR,2001:db8::/32", targetGroup: "proxy"},
+			{name: "InvalidIPv6CIDR", expr: "IP-CIDR6,198.51.100.0/24", targetGroup: "proxy"},
+			{name: "ExtraRuleModifier", expr: "DOMAIN-SUFFIX,example.com,no-resolve", targetGroup: "proxy"},
+			{name: "UnsupportedBuiltInTargetPass", expr: "DOMAIN,example.com", targetGroup: "PASS"},
 		}
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
@@ -375,34 +360,25 @@ func TestQuantumultXRejectsUnsupportedCapabilitiesAndTransports(t *testing.T) {
 				snap.Rules = []resolver.ResolvedRule{
 					{ID: "r-test", TargetGroupID: targetID, TargetGroupName: tc.targetGroup, Expression: tc.expr, Position: 0},
 				}
-				_, err := compiler.Compile(ctx, snap, domain.TargetQuantumultX)
-				if err == nil {
-					t.Fatalf("expected error for %s (%q)", tc.name, tc.expr)
+				res, err := compiler.Compile(ctx, snap, domain.TargetQuantumultX)
+				if err != nil {
+					t.Fatalf("expected rule %s (%q) to be ignored in node-only QuantumultX export, got %v", tc.name, tc.expr, err)
 				}
-				var capErr *compiler.CapabilityError
-				if !errors.As(err, &capErr) {
-					t.Fatalf("expected CapabilityError for %s, got %T: %v", tc.name, err, err)
-				}
-				if capErr.Location != "rules[0]" || capErr.Feature != tc.wantFeature {
-					t.Fatalf("unexpected CapabilityError for %s: %#v", tc.name, capErr)
-				}
+				assertValidQuantumultXConfig(t, string(res.Content))
 			})
 		}
 
-		t.Run("NonTerminalMatchRuleRejected", func(t *testing.T) {
+		t.Run("NonTerminalMatchRuleIgnored", func(t *testing.T) {
 			snap := fixtureSnapshot()
 			snap.Rules = []resolver.ResolvedRule{
 				{ID: "r-match-first", TargetGroupID: snap.Groups[0].ID, TargetGroupName: "proxy", Expression: "MATCH", Position: 0, IsTerminal: true},
 				{ID: "r-after-match", TargetGroupID: snap.Groups[0].ID, TargetGroupName: "proxy", Expression: "DOMAIN,example.com", Position: 1},
 			}
-			_, err := compiler.Compile(ctx, snap, domain.TargetQuantumultX)
-			if err == nil {
-				t.Fatal("expected non-terminal MATCH rule to be rejected")
+			res, err := compiler.Compile(ctx, snap, domain.TargetQuantumultX)
+			if err != nil {
+				t.Fatalf("expected non-terminal MATCH rule to be ignored in node-only QuantumultX export, got %v", err)
 			}
-			var capErr *compiler.CapabilityError
-			if !errors.As(err, &capErr) || capErr.Location != "rules[0]" || capErr.Feature != "MATCH" {
-				t.Fatalf("expected CapabilityError at rules[0]/MATCH, got %#v (%v)", capErr, err)
-			}
+			assertValidQuantumultXConfig(t, string(res.Content))
 		})
 	})
 
@@ -508,23 +484,12 @@ func TestQuantumultXRejectsUnsupportedCapabilitiesAndTransports(t *testing.T) {
 	})
 }
 
-// assertValidQuantumultXConfig validates rendered Quantumult X configuration against
-// Cross Utility's official Quantumult X sample.conf grammar for [general], [server_local],
-// [policy], and [filter_local].
+// assertValidQuantumultXConfig validates rendered Quantumult X node-only lines against
+// Cross Utility's official Quantumult X server_local grammar.
 func assertValidQuantumultXConfig(t *testing.T, content string) {
 	t.Helper()
 
-	var currentSection string
-	seenSections := make(map[string]bool)
 	definedTags := make(map[string]bool)
-	definedPolicies := make(map[string]bool)
-	seenFinalRule := false
-
-	type policyEntry struct {
-		name       string
-		candidates []string
-	}
-	var policies []policyEntry
 
 	lines := strings.Split(content, "\n")
 	for lineNo, rawLine := range lines {
@@ -533,152 +498,61 @@ func assertValidQuantumultXConfig(t *testing.T, content string) {
 			continue
 		}
 		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
-			currentSection = line
-			seenSections[currentSection] = true
-			continue
+			t.Fatalf("line %d: unexpected INI section %q in node-only Quantumult X output", lineNo+1, line)
 		}
 
-		switch currentSection {
-		case "[general]":
-			parts := strings.SplitN(line, "=", 2)
-			if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
-				t.Fatalf("line %d: invalid [general] entry: %q", lineNo+1, line)
-			}
-
-		case "[server_local]":
-			eqIdx := strings.IndexByte(line, '=')
-			if eqIdx <= 0 {
-				t.Fatalf("line %d: [server_local] entry missing '=': %q", lineNo+1, line)
-			}
-			proto := strings.TrimSpace(line[:eqIdx])
-			if proto != "shadowsocks" && proto != "vmess" && proto != "trojan" {
-				t.Fatalf("line %d: unsupported [server_local] protocol %q in %q", lineNo+1, proto, line)
-			}
-
-			fields := strings.Split(line[eqIdx+1:], ",")
-			if len(fields) < 3 {
-				t.Fatalf("line %d: [server_local] entry has too few fields: %q", lineNo+1, line)
-			}
-			endpoint := strings.TrimSpace(fields[0])
-			host, portStr, err := net.SplitHostPort(endpoint)
-			if err != nil || host == "" {
-				t.Fatalf("line %d: invalid [server_local] host:port %q: %v", lineNo+1, endpoint, err)
-			}
-			port, err := strconv.Atoi(portStr)
-			if err != nil || port < 1 || port > 65535 {
-				t.Fatalf("line %d: invalid [server_local] port %q", lineNo+1, portStr)
-			}
-
-			kv := make(map[string]string, len(fields)-1)
-			for _, rawField := range fields[1:] {
-				kvParts := strings.SplitN(strings.TrimSpace(rawField), "=", 2)
-				if len(kvParts) != 2 || strings.TrimSpace(kvParts[0]) == "" || strings.TrimSpace(kvParts[1]) == "" {
-					t.Fatalf("line %d: invalid [server_local] parameter %q in %q", lineNo+1, rawField, line)
-				}
-				kv[strings.TrimSpace(kvParts[0])] = strings.TrimSpace(kvParts[1])
-			}
-
-			tag := kv["tag"]
-			if tag == "" {
-				t.Fatalf("line %d: [server_local] entry missing tag: %q", lineNo+1, line)
-			}
-			if definedTags[tag] {
-				t.Fatalf("line %d: duplicate [server_local] tag %q", lineNo+1, tag)
-			}
-			definedTags[tag] = true
-
-			switch proto {
-			case "shadowsocks", "vmess":
-				if kv["method"] == "" || kv["password"] == "" {
-					t.Fatalf("line %d: %s entry missing method or password: %q", lineNo+1, proto, line)
-				}
-			case "trojan":
-				if kv["password"] == "" {
-					t.Fatalf("line %d: trojan entry missing password: %q", lineNo+1, line)
-				}
-				if kv["over-tls"] != "true" && kv["obfs"] != "wss" {
-					t.Fatalf("line %d: trojan entry must specify over-tls=true or obfs=wss: %q", lineNo+1, line)
-				}
-			}
-
-		case "[policy]":
-			eqIdx := strings.IndexByte(line, '=')
-			if eqIdx <= 0 {
-				t.Fatalf("line %d: [policy] entry missing '=': %q", lineNo+1, line)
-			}
-			policyType := strings.TrimSpace(line[:eqIdx])
-			if policyType != "static" {
-				t.Fatalf("line %d: unexpected [policy] type %q in %q", lineNo+1, policyType, line)
-			}
-			fields := strings.Split(line[eqIdx+1:], ",")
-			if len(fields) < 2 {
-				t.Fatalf("line %d: [policy] entry must contain group name and at least one candidate: %q", lineNo+1, line)
-			}
-			groupName := strings.TrimSpace(fields[0])
-			if groupName == "" {
-				t.Fatalf("line %d: empty [policy] group name in %q", lineNo+1, line)
-			}
-			definedPolicies[groupName] = true
-			candidates := make([]string, 0, len(fields)-1)
-			for _, c := range fields[1:] {
-				candidates = append(candidates, strings.TrimSpace(c))
-			}
-			policies = append(policies, policyEntry{name: groupName, candidates: candidates})
-
-		case "[filter_local]":
-			if seenFinalRule {
-				t.Fatalf("line %d: rule %q appears after terminal final rule", lineNo+1, line)
-			}
-			fields := strings.Split(line, ",")
-			kind := strings.TrimSpace(fields[0])
-			switch kind {
-			case "final":
-				if len(fields) != 2 {
-					t.Fatalf("line %d: final rule must have 2 fields: %q", lineNo+1, line)
-				}
-				target := strings.TrimSpace(fields[1])
-				if !definedPolicies[target] && target != "DIRECT" && target != "REJECT" {
-					t.Fatalf("line %d: final rule references unknown policy %q", lineNo+1, target)
-				}
-				seenFinalRule = true
-			case "host", "host-suffix", "host-keyword", "geoip", "ip-cidr", "ip6-cidr":
-				if len(fields) != 3 {
-					t.Fatalf("line %d: %s rule must have 3 fields: %q", lineNo+1, kind, line)
-				}
-				val := strings.TrimSpace(fields[1])
-				target := strings.TrimSpace(fields[2])
-				if val == "" {
-					t.Fatalf("line %d: empty value in %s rule: %q", lineNo+1, kind, line)
-				}
-				if kind == "ip-cidr" {
-					if p, err := netip.ParsePrefix(val); err != nil || !p.Addr().Is4() {
-						t.Fatalf("line %d: invalid IPv4 CIDR %q", lineNo+1, val)
-					}
-				}
-				if kind == "ip6-cidr" {
-					if p, err := netip.ParsePrefix(val); err != nil || !p.Addr().Is6() {
-						t.Fatalf("line %d: invalid IPv6 CIDR %q", lineNo+1, val)
-					}
-				}
-				if !definedPolicies[target] && target != "DIRECT" && target != "REJECT" {
-					t.Fatalf("line %d: %s rule references unknown policy %q", lineNo+1, kind, target)
-				}
-			default:
-				t.Fatalf("line %d: unsupported [filter_local] rule kind %q in %q", lineNo+1, kind, line)
-			}
+		eqIdx := strings.IndexByte(line, '=')
+		if eqIdx <= 0 {
+			t.Fatalf("line %d: node entry missing '=': %q", lineNo+1, line)
 		}
-	}
-
-	for _, reqSection := range []string{"[general]", "[server_local]", "[policy]", "[filter_local]"} {
-		if !seenSections[reqSection] {
-			t.Fatalf("missing required Quantumult X section %s", reqSection)
+		proto := strings.TrimSpace(line[:eqIdx])
+		if proto != "shadowsocks" && proto != "vmess" && proto != "trojan" {
+			t.Fatalf("line %d: unsupported Quantumult X protocol %q in %q", lineNo+1, proto, line)
 		}
-	}
 
-	for _, p := range policies {
-		for _, cand := range p.candidates {
-			if !definedTags[cand] && !definedPolicies[cand] && cand != "DIRECT" && cand != "REJECT" {
-				t.Fatalf("policy %q references undefined candidate %q", p.name, cand)
+		fields := strings.Split(line[eqIdx+1:], ",")
+		if len(fields) < 3 {
+			t.Fatalf("line %d: node entry has too few fields: %q", lineNo+1, line)
+		}
+		endpoint := strings.TrimSpace(fields[0])
+		host, portStr, err := net.SplitHostPort(endpoint)
+		if err != nil || host == "" {
+			t.Fatalf("line %d: invalid host:port %q: %v", lineNo+1, endpoint, err)
+		}
+		port, err := strconv.Atoi(portStr)
+		if err != nil || port < 1 || port > 65535 {
+			t.Fatalf("line %d: invalid port %q", lineNo+1, portStr)
+		}
+
+		kv := make(map[string]string, len(fields)-1)
+		for _, rawField := range fields[1:] {
+			kvParts := strings.SplitN(strings.TrimSpace(rawField), "=", 2)
+			if len(kvParts) != 2 || strings.TrimSpace(kvParts[0]) == "" || strings.TrimSpace(kvParts[1]) == "" {
+				t.Fatalf("line %d: invalid parameter %q in %q", lineNo+1, rawField, line)
+			}
+			kv[strings.TrimSpace(kvParts[0])] = strings.TrimSpace(kvParts[1])
+		}
+
+		tag := kv["tag"]
+		if tag == "" {
+			t.Fatalf("line %d: node entry missing tag: %q", lineNo+1, line)
+		}
+		if definedTags[tag] {
+			t.Fatalf("line %d: duplicate tag %q", lineNo+1, tag)
+		}
+		definedTags[tag] = true
+
+		switch proto {
+		case "shadowsocks", "vmess":
+			if kv["method"] == "" || kv["password"] == "" {
+				t.Fatalf("line %d: %s entry missing method or password: %q", lineNo+1, proto, line)
+			}
+		case "trojan":
+			if kv["password"] == "" {
+				t.Fatalf("line %d: trojan entry missing password: %q", lineNo+1, line)
+			}
+			if kv["over-tls"] != "true" && kv["obfs"] != "wss" {
+				t.Fatalf("line %d: trojan entry must specify over-tls=true or obfs=wss: %q", lineNo+1, line)
 			}
 		}
 	}

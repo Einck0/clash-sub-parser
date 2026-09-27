@@ -49,7 +49,7 @@ type RunBudget struct {
 }
 
 // MaxResponseBytes is enforced independently for each probe task, not across a run.
-var DefaultRunBudget = RunBudget{MaxTasks: 512, MaxResponseBytes: 16 << 20, TaskTimeout: 30 * time.Second}
+var DefaultRunBudget = RunBudget{MaxTasks: 10000, MaxResponseBytes: 16 << 20, TaskTimeout: 30 * time.Second}
 
 var errResponseTooLarge = errors.New("probe response exceeds per-task byte limit")
 
@@ -188,13 +188,30 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 			targetNodes = append(targetNodes, *node)
 		}
 	} else {
-		nodes, _, err := r.nodes.List(ctx, domain.NodeFilter{ActiveOnly: true})
-		if err != nil {
-			_ = run.TransitionTo(domain.ProbeRunStateFailed)
-			_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateFailed)
-			return err
+		const fetchPageSize = 100
+		seen := make(map[string]struct{})
+		for fetchPage := 1; ; fetchPage++ {
+			chunk, total, err := r.nodes.List(ctx, domain.NodeFilter{
+				ActiveOnly: true,
+				Pagination: domain.Pagination{Page: fetchPage, PageSize: fetchPageSize},
+			})
+			if err != nil {
+				_ = run.TransitionTo(domain.ProbeRunStateFailed)
+				_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateFailed)
+				return err
+			}
+			added := 0
+			for _, n := range chunk {
+				if _, exists := seen[n.LogicalID]; !exists {
+					seen[n.LogicalID] = struct{}{}
+					targetNodes = append(targetNodes, n)
+					added++
+				}
+			}
+			if len(targetNodes) >= total || len(chunk) == 0 || added == 0 {
+				break
+			}
 		}
-		targetNodes = nodes
 	}
 
 	if len(targetNodes) == 0 {
@@ -543,7 +560,11 @@ func (r *DefaultRunner) executeTask(ctx context.Context, run *domain.ProbeRun, n
 func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.ProbeRun, node domain.Node, kind domain.ProbeKind) (domain.ProbeVerdict, error) {
 	prof := profileForKind(kind)
 	start := r.clock()
-	taskCtx, taskCancel := context.WithTimeout(ctx, r.budget.TaskTimeout)
+	timeout := r.budget.TaskTimeout
+	if kind == domain.ProbeKindSpeed && prof.SpeedBudget.Deadline > 0 && prof.SpeedBudget.Deadline < timeout {
+		timeout = prof.SpeedBudget.Deadline
+	}
+	taskCtx, taskCancel := context.WithTimeout(ctx, timeout)
 	defer taskCancel()
 	ctx = taskCtx
 
@@ -551,25 +572,8 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 		result  profiles.Result
 		latency int64
 	)
-
 	if kind == domain.ProbeKindSpeed {
-		result = profiles.Result{}
-		eval := prof.Evaluate(result)
-		now := r.clock().UTC()
-		obs := &domain.ProbeObservation{
-			ID:              domain.MustNewUUIDv7(),
-			ProbeRunID:      run.ID,
-			NodeLogicalID:   node.LogicalID,
-			Kind:            kind,
-			Verdict:         eval.Verdict,
-			EvidenceDigest:  domain.ComputeProbeEvidenceDigest(run.ID, node.LogicalID, prof.Version, eval.Verdict, 0, eval.Reason),
-			ObservedAt:      now,
-			RedactedSummary: fmt.Sprintf("profile=%s version=%s verdict=%s reason=%s status=0 latency_ms=0", prof.Kind, prof.Version, eval.Verdict, eval.Reason),
-		}
-		if createErr := r.observations.Create(ctx, obs); createErr != nil {
-			return eval.Verdict, createErr
-		}
-		return eval.Verdict, ErrSpeedProbeOptInRequired
+		result.OptIn = true
 	}
 
 	client, cleanup, dialErr := r.dialer(ctx, node)
@@ -578,16 +582,16 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 	}
 
 	if dialErr != nil {
-		result = profiles.Result{NetworkError: true}
+		result.NetworkError = true
 		latency = r.clock().Sub(start).Milliseconds()
 	} else if client == nil {
-		result = profiles.Result{NetworkError: true}
+		result.NetworkError = true
 		latency = r.clock().Sub(start).Milliseconds()
 	} else {
 		reqURL := probeURLForKind(kind)
 		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 		if reqErr != nil {
-			result = profiles.Result{NetworkError: true}
+			result.NetworkError = true
 			latency = r.clock().Sub(start).Milliseconds()
 		} else {
 			req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; CSP-Probe/1.0)")
@@ -611,12 +615,28 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 						result.NetworkError = true
 					}
 				}
+			} else if resp == nil || resp.Body == nil {
+				result.NetworkError = true
 			} else {
 				defer resp.Body.Close()
-				body, readErr := readBoundedResponse(resp.Body, r.budget.MaxResponseBytes)
+				readLimit := r.budget.MaxResponseBytes
+				speedCapEnforced := false
+				if kind == domain.ProbeKindSpeed && prof.SpeedBudget.MaxBytesPerRequest > 0 && prof.SpeedBudget.MaxBytesPerRequest < readLimit {
+					readLimit = prof.SpeedBudget.MaxBytesPerRequest
+					speedCapEnforced = true
+				}
+				body, readErr := readBoundedResponse(resp.Body, readLimit)
 				if readErr != nil {
-					result.NetworkError = true
-					result.BytesRead = int64(len(body))
+					if speedCapEnforced && errors.Is(readErr, errResponseTooLarge) {
+						result.StatusCode = resp.StatusCode
+						result.Body = body
+						result.BytesRead = prof.SpeedBudget.MaxBytesPerRequest + 1
+						result.ContractMatched = resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNoContent
+						result.ContractVersion = prof.Contract
+					} else {
+						result.NetworkError = true
+						result.BytesRead = int64(len(body))
+					}
 				} else {
 					result.StatusCode = resp.StatusCode
 					result.Body = body
@@ -632,6 +652,13 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 	now := r.clock().UTC()
 	summary := fmt.Sprintf("profile=%s version=%s verdict=%s reason=%s status=%d latency_ms=%d",
 		prof.Kind, prof.Version, eval.Verdict, eval.Reason, result.StatusCode, latency)
+	if kind == domain.ProbeKindSpeed && result.BytesRead > 0 {
+		throughputKbps := int64(0)
+		if latency > 0 {
+			throughputKbps = (result.BytesRead * 8) / latency
+		}
+		summary = fmt.Sprintf("%s bytes_read=%d throughput_kbps=%d", summary, result.BytesRead, throughputKbps)
+	}
 	if dialErr != nil && (errors.Is(dialErr, ErrCredentialsUnavailable) || strings.Contains(dialErr.Error(), "credentials_unavailable")) {
 		summary = summary + " error=credentials_unavailable"
 	}

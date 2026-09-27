@@ -28,15 +28,65 @@ type ReconcileResult struct {
 	NodesValid     int                 `json:"nodes_valid"`
 }
 
-// NodeDetail pairs a normalized node with its provenance sources and API-safe risk summary.
-type NodeDetail struct {
-	Node               domain.Node                `json:"node"`
-	Sources            []domain.NodeSource        `json:"sources"`
-	IPRiskSummary      *domain.IPRiskSummary      `json:"ip_risk_summary,omitempty"`
-	RecentObservations []domain.IPRiskObservation `json:"recent_observations,omitempty"`
+const defaultProbeFreshnessTTL = time.Hour
+
+// CapabilityStatus represents the latest probe observation summary for a single probe dimension on a node.
+type CapabilityStatus struct {
+	Verdict    domain.ProbeVerdict `json:"verdict"`
+	LatencyMS  int64               `json:"latency_ms"`
+	ObservedAt time.Time           `json:"observed_at"`
+	Summary    string              `json:"summary,omitempty"`
+	Stale      bool                `json:"stale"`
 }
 
-// NodeView is the management API view of a Node including plaintext server, port, and protocol credentials.
+// NodeCapabilityView is an alias for CapabilityStatus.
+type NodeCapabilityView = CapabilityStatus
+
+// NodeDetail pairs a normalized node with its provenance sources, probe status, and API-safe risk summary.
+type NodeDetail struct {
+	Node               domain.Node                   `json:"node"`
+	View               NodeView                      `json:"view"`
+	Sources            []domain.NodeSource           `json:"sources"`
+	IPRiskSummary      *domain.IPRiskSummary         `json:"ip_risk_summary,omitempty"`
+	RecentObservations []domain.IPRiskObservation    `json:"recent_observations,omitempty"`
+	LatencyMS          *int64                        `json:"latency_ms,omitempty"`
+	LastProbedAt       *time.Time                    `json:"last_probed_at,omitempty"`
+	HealthStatus       string                        `json:"health_status"`
+	ProbeMissing       bool                          `json:"probe_missing"`
+	ProbeStale         bool                          `json:"probe_stale"`
+	Capabilities       map[string]NodeCapabilityView `json:"capabilities,omitempty"`
+}
+
+// ToNodeView returns the enriched NodeView for this NodeDetail, with a fallback if View was not pre-populated.
+func (d *NodeDetail) ToNodeView() NodeView {
+	if d == nil {
+		return NodeView{HealthStatus: "unknown", ProbeMissing: true}
+	}
+	v := d.View
+	if v.LogicalID == "" {
+		v = ToNodeView(d.Node)
+		v.IPRiskSummary = d.IPRiskSummary
+		v.Sources = d.Sources
+		v.LatencyMS = d.LatencyMS
+		v.LastProbedAt = d.LastProbedAt
+		if d.HealthStatus != "" {
+			v.HealthStatus = d.HealthStatus
+		}
+		v.ProbeMissing = d.ProbeMissing
+		v.ProbeStale = d.ProbeStale
+		v.Capabilities = d.Capabilities
+	} else {
+		if v.IPRiskSummary == nil && d.IPRiskSummary != nil {
+			v.IPRiskSummary = d.IPRiskSummary
+		}
+		if len(v.Sources) == 0 && len(d.Sources) > 0 {
+			v.Sources = d.Sources
+		}
+	}
+	return v
+}
+
+// NodeView is the management API view of a Node including plaintext server, port, protocol credentials, probe status, and sources.
 type NodeView struct {
 	LogicalID     string                            `json:"logical_id"`
 	Protocol      domain.Protocol                   `json:"protocol"`
@@ -48,21 +98,31 @@ type NodeView struct {
 	CreatedAt     time.Time                         `json:"created_at"`
 	UpdatedAt     time.Time                         `json:"updated_at"`
 	IPRiskSummary *domain.IPRiskSummary             `json:"ip_risk_summary,omitempty"`
+	LatencyMS     *int64                            `json:"latency_ms,omitempty"`
+	LastProbedAt  *time.Time                        `json:"last_probed_at,omitempty"`
+	HealthStatus  string                            `json:"health_status"`
+	ProbeMissing  bool                              `json:"probe_missing"`
+	ProbeStale    bool                              `json:"probe_stale"`
+	Capabilities  map[string]NodeCapabilityView     `json:"capabilities,omitempty"`
+	Sources       []domain.NodeSource               `json:"sources,omitempty"`
 }
 
 // ToNodeView converts a domain.Node to a NodeView.
 func ToNodeView(n domain.Node) NodeView {
 	creds := n.Credentials
 	return NodeView{
-		LogicalID:   n.LogicalID,
-		Protocol:    n.Protocol,
-		DisplayName: n.DisplayName,
-		Server:      n.Server,
-		Port:        n.Port,
-		Credentials: &creds,
-		Active:      n.Active,
-		CreatedAt:   n.CreatedAt,
-		UpdatedAt:   n.UpdatedAt,
+		LogicalID:    n.LogicalID,
+		Protocol:     n.Protocol,
+		DisplayName:  n.DisplayName,
+		Server:       n.Server,
+		Port:         n.Port,
+		Credentials:  &creds,
+		Active:       n.Active,
+		CreatedAt:    n.CreatedAt,
+		UpdatedAt:    n.UpdatedAt,
+		HealthStatus: "unknown",
+		ProbeMissing: true,
+		ProbeStale:   false,
 	}
 }
 
@@ -147,6 +207,7 @@ func NewService(
 	}
 	if db != nil {
 		s.auditRepo = sqlite.NewAuditRepository(db)
+		s.probeObsRepo = sqlite.NewProbeObservationRepository(db)
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -371,24 +432,39 @@ func (s *Service) GetNodeDetail(ctx context.Context, logicalID string) (*NodeDet
 	return s.GetNodeDetailWithRisk(ctx, logicalID, "")
 }
 
-// GetNodeDetailWithRisk returns a node detail including API-safe IPRiskSummary and recent observations.
+// GetNodeDetailWithRisk returns a node detail including API-safe IPRiskSummary, probe status, sources, and recent observations.
 func (s *Service) GetNodeDetailWithRisk(ctx context.Context, logicalID string, policyRevisionID string) (*NodeDetail, error) {
 	rm, err := s.nodes.GetReadModel(ctx, logicalID, policyRevisionID)
 	if err != nil {
 		return nil, err
 	}
-	sources, err := s.sources.ListByNode(ctx, logicalID)
-	if err != nil {
-		return nil, err
+	views := []NodeView{ToNodeViewFromReadModel(*rm)}
+	s.enrichNodeViews(ctx, views)
+	view := views[0]
+
+	sources := view.Sources
+	if len(sources) == 0 && s.sources != nil {
+		if byNode, listErr := s.sources.ListByNode(ctx, logicalID); listErr == nil && byNode != nil {
+			sources = byNode
+			view.Sources = sources
+		}
 	}
 	if sources == nil {
 		sources = make([]domain.NodeSource, 0)
 	}
+
 	detail := &NodeDetail{
 		Node:               rm.Node,
+		View:               view,
 		Sources:            sources,
 		IPRiskSummary:      rm.IPRiskSummary,
 		RecentObservations: make([]domain.IPRiskObservation, 0),
+		LatencyMS:          view.LatencyMS,
+		LastProbedAt:       view.LastProbedAt,
+		HealthStatus:       view.HealthStatus,
+		ProbeMissing:       view.ProbeMissing,
+		ProbeStale:         view.ProbeStale,
+		Capabilities:       view.Capabilities,
 	}
 	if s.db != nil {
 		obsRepo := sqlite.NewIPRiskObservationRepository(s.db)
@@ -415,7 +491,170 @@ func (s *Service) ListNodesReadModel(ctx context.Context, filter domain.NodeFilt
 	if err != nil {
 		return nil, 0, err
 	}
-	return ToNodeViewsFromReadModels(models), total, nil
+	views := ToNodeViewsFromReadModels(models)
+	s.enrichNodeViews(ctx, views)
+	return views, total, nil
+}
+
+func (s *Service) enrichNodeViews(ctx context.Context, views []NodeView) {
+	if len(views) == 0 {
+		return
+	}
+	nodeIDs := make([]string, 0, len(views))
+	for i := range views {
+		if views[i].HealthStatus == "" {
+			views[i].HealthStatus = "unknown"
+			views[i].ProbeMissing = true
+		}
+		if views[i].LogicalID != "" {
+			nodeIDs = append(nodeIDs, views[i].LogicalID)
+		}
+	}
+	if len(nodeIDs) == 0 {
+		return
+	}
+
+	if s.sources != nil {
+		if sourcesByNode, err := s.sources.ListByNodes(ctx, nodeIDs); err == nil {
+			for i := range views {
+				if srcs, ok := sourcesByNode[views[i].LogicalID]; ok && srcs != nil {
+					views[i].Sources = srcs
+				} else {
+					views[i].Sources = make([]domain.NodeSource, 0)
+				}
+			}
+		}
+	}
+
+	if s.probeObsRepo != nil {
+		if latestByNode, err := s.probeObsRepo.ListLatestByNodes(ctx, nodeIDs, nil); err == nil {
+			now := domain.NowUTC()
+			for i := range views {
+				applyProbeObservationsToView(&views[i], latestByNode[views[i].LogicalID], now)
+			}
+		}
+	}
+}
+
+func verdictToHealthStatus(verdict domain.ProbeVerdict) string {
+	switch strings.ToLower(strings.TrimSpace(string(verdict))) {
+	case string(domain.VerdictAvailable), "healthy":
+		return "healthy"
+	case string(domain.VerdictRestricted), string(domain.VerdictStale), "degraded":
+		return "degraded"
+	case string(domain.VerdictError), "unreachable", "unhealthy":
+		return "unhealthy"
+	default:
+		return "unknown"
+	}
+}
+
+func applyProbeObservationsToView(v *NodeView, obsByKind map[domain.ProbeKind]domain.ProbeObservation, now time.Time) {
+	if v == nil {
+		return
+	}
+	if len(obsByKind) == 0 {
+		v.LatencyMS = nil
+		v.LastProbedAt = nil
+		v.HealthStatus = "unknown"
+		v.ProbeMissing = true
+		v.ProbeStale = false
+		v.Capabilities = nil
+		return
+	}
+
+	v.ProbeMissing = false
+	caps := make(map[string]NodeCapabilityView, len(obsByKind))
+
+	var (
+		latestAt       time.Time
+		bestLatencyObs *domain.ProbeObservation
+		hasAvailable   bool
+		hasDegraded    bool
+		hasUnhealthy   bool
+	)
+
+	for kind, obs := range obsByKind {
+		stale := obs.Verdict == domain.VerdictStale || (!obs.ObservedAt.IsZero() && now.Sub(obs.ObservedAt) > defaultProbeFreshnessTTL)
+		caps[string(kind)] = NodeCapabilityView{
+			Verdict:    obs.Verdict,
+			LatencyMS:  obs.LatencyMS,
+			ObservedAt: obs.ObservedAt,
+			Summary:    obs.RedactedSummary,
+			Stale:      stale,
+		}
+		if obs.ObservedAt.After(latestAt) {
+			latestAt = obs.ObservedAt
+		}
+		switch verdictToHealthStatus(obs.Verdict) {
+		case "healthy":
+			hasAvailable = true
+		case "degraded":
+			hasDegraded = true
+		case "unhealthy":
+			hasUnhealthy = true
+		}
+		if obs.LatencyMS > 0 || verdictToHealthStatus(obs.Verdict) == "healthy" || verdictToHealthStatus(obs.Verdict) == "degraded" {
+			obsCopy := obs
+			if bestLatencyObs == nil || obs.ObservedAt.After(bestLatencyObs.ObservedAt) ||
+				(obs.ObservedAt.Equal(bestLatencyObs.ObservedAt) && string(kind) < string(bestLatencyObs.Kind)) {
+				bestLatencyObs = &obsCopy
+			}
+		}
+	}
+
+	v.Capabilities = caps
+	if !latestAt.IsZero() {
+		ts := latestAt.UTC()
+		v.LastProbedAt = &ts
+		v.ProbeStale = now.Sub(ts) > defaultProbeFreshnessTTL
+	} else {
+		v.LastProbedAt = nil
+		v.ProbeStale = false
+	}
+
+	if baselineObs, hasBaseline := obsByKind[domain.ProbeKindBaseline]; hasBaseline {
+		if baselineObs.LatencyMS > 0 || verdictToHealthStatus(baselineObs.Verdict) == "healthy" || verdictToHealthStatus(baselineObs.Verdict) == "degraded" {
+			lat := baselineObs.LatencyMS
+			v.LatencyMS = &lat
+		} else if bestLatencyObs != nil && bestLatencyObs.LatencyMS > 0 {
+			lat := bestLatencyObs.LatencyMS
+			v.LatencyMS = &lat
+		} else {
+			v.LatencyMS = nil
+		}
+
+		status := verdictToHealthStatus(baselineObs.Verdict)
+		if status != "unknown" {
+			v.HealthStatus = status
+		} else if hasUnhealthy && !hasAvailable {
+			v.HealthStatus = "unhealthy"
+		} else if hasDegraded {
+			v.HealthStatus = "degraded"
+		} else if hasAvailable {
+			v.HealthStatus = "healthy"
+		} else {
+			v.HealthStatus = "unknown"
+		}
+		return
+	}
+
+	if bestLatencyObs != nil {
+		lat := bestLatencyObs.LatencyMS
+		v.LatencyMS = &lat
+	} else {
+		v.LatencyMS = nil
+	}
+
+	if hasUnhealthy && !hasAvailable {
+		v.HealthStatus = "unhealthy"
+	} else if hasDegraded {
+		v.HealthStatus = "degraded"
+	} else if hasAvailable {
+		v.HealthStatus = "healthy"
+	} else {
+		v.HealthStatus = "unknown"
+	}
 }
 
 // NodePatchRequest represents a direct plaintext patch payload for a node.

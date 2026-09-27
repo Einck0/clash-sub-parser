@@ -798,6 +798,158 @@ func TestNodeDetailConnectionAndPatchHTTPContract(t *testing.T) {
 	}
 }
 
+func TestNodesHTTPIncludesLatestProbeStatusCapabilitiesAndSources(t *testing.T) {
+	ctx := context.Background()
+	db := newCleanSQLiteDB(t)
+
+	nodeRepo := sqlite.NewNodeRepository(db)
+	sourceRepo := sqlite.NewNodeSourceRepository(db)
+	subRepo := sqlite.NewSubscriptionRepository(db)
+	fetchRepo := sqlite.NewSubscriptionFetchRepository(db)
+	probeRunRepo := sqlite.NewProbeRunRepository(db)
+	probeObsRepo := sqlite.NewProbeObservationRepository(db)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	subID := "sub-http-probe-01"
+	if err := subRepo.Create(ctx, &domain.Subscription{
+		ID:                 subID,
+		Name:               "HTTP Probe Sub",
+		SourceURLSecretRef: "secret://sub/http-probe",
+		Enabled:            true,
+		RefreshPolicy:      domain.RefreshPolicy{IntervalSeconds: 3600, TimeoutSeconds: 30, MaxResponseBytes: 1024 * 1024},
+		Revision:           "rev-1",
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	}); err != nil {
+		t.Fatalf("create sub: %v", err)
+	}
+	if err := fetchRepo.Create(ctx, &domain.SubscriptionFetch{
+		ID:             "fetch-http-probe-01",
+		SubscriptionID: subID,
+		StartedAt:      now,
+		FinishedAt:     &now,
+		Outcome:        domain.FetchOutcomeSuccess,
+		ContentDigest:  "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+		NodesParsed:    1,
+		NodesValid:     1,
+	}); err != nil {
+		t.Fatalf("create fetch: %v", err)
+	}
+
+	nodeID := "node_http_probe_01"
+	if err := nodeRepo.UpsertBatch(ctx, []domain.Node{
+		{
+			LogicalID:   nodeID,
+			Protocol:    domain.ProtocolSS,
+			DisplayName: "Tokyo Edge 01",
+			Server:      "203.0.113.88",
+			Port:        8388,
+			Credentials: domain.InboundProtocolCredential{Method: "aes-256-gcm", Password: "pw"},
+			Active:      true,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		},
+	}); err != nil {
+		t.Fatalf("upsert node: %v", err)
+	}
+	if err := sourceRepo.Upsert(ctx, &domain.NodeSource{
+		NodeLogicalID:   nodeID,
+		SubscriptionID:  subID,
+		LastSeenFetchID: "fetch-http-probe-01",
+	}); err != nil {
+		t.Fatalf("upsert source: %v", err)
+	}
+
+	runID := domain.MustNewUUIDv7()
+	if err := probeRunRepo.Create(ctx, &domain.ProbeRun{
+		ID:             runID,
+		IdempotencyKey: "http-probe-run-1",
+		ActorScope:     "admin",
+		State:          domain.ProbeRunStateSucceeded,
+		DeadlineAt:     now.Add(10 * time.Minute),
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	if err := probeObsRepo.Create(ctx, &domain.ProbeObservation{
+		ID:              domain.MustNewUUIDv7(),
+		ProbeRunID:      runID,
+		NodeLogicalID:   nodeID,
+		Kind:            domain.ProbeKindBaseline,
+		Verdict:         domain.VerdictAvailable,
+		EvidenceDigest:  domain.ComputeProbeEvidenceDigest(runID, nodeID, "baseline-v1", domain.VerdictAvailable, 204, "contract_matched"),
+		ObservedAt:      now,
+		LatencyMS:       37,
+		RedactedSummary: "profile=baseline version=baseline-v1 verdict=available reason=contract_matched status=204 latency_ms=37",
+	}); err != nil {
+		t.Fatalf("create baseline obs: %v", err)
+	}
+	if err := probeObsRepo.Create(ctx, &domain.ProbeObservation{
+		ID:              domain.MustNewUUIDv7(),
+		ProbeRunID:      runID,
+		NodeLogicalID:   nodeID,
+		Kind:            domain.ProbeKindStreaming,
+		Verdict:         domain.VerdictAvailable,
+		EvidenceDigest:  domain.ComputeProbeEvidenceDigest(runID, nodeID, "streaming-v1", domain.VerdictAvailable, 200, "contract_matched"),
+		ObservedAt:      now,
+		LatencyMS:       91,
+		RedactedSummary: "profile=streaming version=streaming-v1 verdict=available reason=contract_matched status=200 latency_ms=91",
+	}); err != nil {
+		t.Fatalf("create streaming obs: %v", err)
+	}
+
+	router := setupNodesTestRouter(t, db)
+
+	// 1. Verify GET /api/v1/nodes
+	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/nodes?page=1&page_size=20", nil)
+	listReq.Header.Set("Authorization", "Bearer "+testAdminToken)
+	listRec := httptest.NewRecorder()
+	router.ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on GET /api/v1/nodes, got %d: %s", listRec.Code, listRec.Body.String())
+	}
+	var listResp nodePaginatedResponse
+	if err := json.Unmarshal(listRec.Body.Bytes(), &listResp); err != nil {
+		t.Fatalf("unmarshal list: %v", err)
+	}
+	if len(listResp.Data.Items) != 1 {
+		t.Fatalf("expected 1 node in list, got %d", len(listResp.Data.Items))
+	}
+	item := listResp.Data.Items[0]
+	if item.LatencyMS == nil || *item.LatencyMS != 37 {
+		t.Fatalf("expected latency_ms=37 in GET /api/v1/nodes, got %v", item.LatencyMS)
+	}
+	if item.HealthStatus != "healthy" || item.ProbeMissing || item.ProbeStale {
+		t.Fatalf("unexpected probe health fields in GET /api/v1/nodes: %+v", item)
+	}
+	if item.Capabilities["baseline"].Verdict != domain.VerdictAvailable || item.Capabilities["streaming"].Verdict != domain.VerdictAvailable {
+		t.Fatalf("unexpected capabilities in GET /api/v1/nodes: %+v", item.Capabilities)
+	}
+	if len(item.Sources) != 1 || item.Sources[0].SubscriptionID != subID {
+		t.Fatalf("expected sources=[%s] in GET /api/v1/nodes, got %+v", subID, item.Sources)
+	}
+
+	// 2. Verify GET /api/v1/nodes/{logical_id}
+	detailReq := httptest.NewRequest(http.MethodGet, "/api/v1/nodes/"+nodeID, nil)
+	detailReq.Header.Set("Authorization", "Bearer "+testAdminToken)
+	detailRec := httptest.NewRecorder()
+	router.ServeHTTP(detailRec, detailReq)
+	if detailRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on GET /api/v1/nodes/%s, got %d: %s", nodeID, detailRec.Code, detailRec.Body.String())
+	}
+	var detailResp nodeDetailResponse
+	if err := json.Unmarshal(detailRec.Body.Bytes(), &detailResp); err != nil {
+		t.Fatalf("unmarshal detail: %v", err)
+	}
+	if detailResp.Data.Node.LatencyMS == nil || *detailResp.Data.Node.LatencyMS != 37 || detailResp.Data.Node.HealthStatus != "healthy" {
+		t.Fatalf("unexpected detail node probe status: %+v", detailResp.Data.Node)
+	}
+	if detailResp.Data.Node.Capabilities["streaming"].LatencyMS != 91 {
+		t.Fatalf("unexpected detail node streaming capability: %+v", detailResp.Data.Node.Capabilities["streaming"])
+	}
+}
+
 func BenchmarkNodesPagination(b *testing.B) {
 	db := newCleanSQLiteDBBenchmark(b)
 	seed10000NodesBenchmark(b, db)

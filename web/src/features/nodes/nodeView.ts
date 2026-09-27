@@ -3,6 +3,18 @@ import type { CompilerTarget } from '../publications/publicationTypes'
 
 export type CapabilityStatus = 'available' | 'restricted' | 'unknown' | 'error' | 'stale' | 'missing'
 
+export interface StructuredCapabilityStatus {
+  verdict: CapabilityStatus
+  latency_ms?: number
+  observed_at?: string
+  summary?: string
+  stale?: boolean
+}
+
+export type CapabilityInput = CapabilityStatus | StructuredCapabilityStatus
+
+export type NodeHealthStatus = 'healthy' | 'degraded' | 'unhealthy' | 'unknown' | 'missing'
+
 export type NodeProtocol =
   | 'ss'
   | 'vmess'
@@ -106,10 +118,12 @@ export interface NodeRecord {
   active: boolean
   created_at?: string
   updated_at?: string
-  capabilities?: Record<string, CapabilityStatus>
+  latency_ms?: number | null
+  last_probed_at?: string | null
+  capabilities?: Record<string, CapabilityInput>
   probe_stale?: boolean
   probe_missing?: boolean
-  health_status?: 'healthy' | 'degraded' | 'unhealthy' | 'missing'
+  health_status?: NodeHealthStatus
   ip_risk_summary?: IPRiskSummaryRecord
   server?: string
   port?: number
@@ -125,13 +139,58 @@ export interface NormalizedNode {
   active: boolean
   createdAt?: string
   updatedAt?: string
+  latencyMs?: number | null
+  lastProbedAt?: string | null
   capabilities: Record<string, CapabilityStatus>
+  capabilityDetails: Record<string, StructuredCapabilityStatus>
   probeStale?: boolean
   probeMissing?: boolean
-  healthStatus?: 'healthy' | 'degraded' | 'unhealthy' | 'missing'
+  healthStatus?: NodeHealthStatus
   ipRiskSummary?: IPRiskSummaryRecord
   connection: NodeConnectionProfile
   sources?: NodeSourceRecord[]
+}
+
+export function extractCapabilityVerdict(val: CapabilityInput | undefined): CapabilityStatus {
+  if (!val) return 'unknown'
+  if (typeof val === 'string') return val
+  if (typeof val === 'object' && typeof val.verdict === 'string') {
+    return val.verdict
+  }
+  return 'unknown'
+}
+
+export function isCapabilityStale(val: CapabilityInput | undefined): boolean {
+  if (!val) return false
+  if (typeof val === 'string') return val === 'stale'
+  if (typeof val === 'object') {
+    return Boolean(val.stale) || val.verdict === 'stale'
+  }
+  return false
+}
+
+export function extractCapabilityDetail(
+  node: NodeRecord | NormalizedNode,
+  capability: string
+): StructuredCapabilityStatus | null {
+  if ('capabilityDetails' in node && node.capabilityDetails?.[capability]) {
+    return node.capabilityDetails[capability]
+  }
+  const raw = node.capabilities?.[capability]
+  if (!raw) return null
+  if (typeof raw === 'string') {
+    return { verdict: raw, stale: raw === 'stale' }
+  }
+  if (typeof raw === 'object' && raw !== null) {
+    return {
+      verdict: raw.verdict ?? 'unknown',
+      latency_ms: raw.latency_ms,
+      observed_at: raw.observed_at,
+      summary: raw.summary,
+      stale: Boolean(raw.stale) || raw.verdict === 'stale',
+    }
+  }
+  return null
 }
 
 export function protocolSupportedTargets(protocol: string): readonly CompilerTarget[] {
@@ -442,8 +501,44 @@ export function normalizeNode(node: NodeRecord): NormalizedNode {
     logical_id: logicalId,
     display_name: rawDisplayName,
   }
-  const probeMissing = node.probe_missing ?? (!node.capabilities || Object.keys(node.capabilities).length === 0)
-  const probeStale = node.probe_stale ?? Object.values(node.capabilities ?? {}).some((s) => s === 'stale')
+
+  const rawCaps = node.capabilities ?? {}
+  const capabilities: Record<string, CapabilityStatus> = {}
+  const capabilityDetails: Record<string, StructuredCapabilityStatus> = {}
+
+  for (const [k, v] of Object.entries(rawCaps)) {
+    const verdict = extractCapabilityVerdict(v)
+    capabilities[k] = verdict
+    if (typeof v === 'object' && v !== null) {
+      capabilityDetails[k] = {
+        verdict,
+        latency_ms: v.latency_ms,
+        observed_at: v.observed_at,
+        summary: v.summary,
+        stale: Boolean(v.stale) || verdict === 'stale',
+      }
+    } else {
+      capabilityDetails[k] = {
+        verdict,
+        stale: verdict === 'stale',
+      }
+    }
+  }
+
+  const capEntries = Object.values(rawCaps)
+  const probeMissing = node.probe_missing ?? capEntries.length === 0
+  const probeStale = node.probe_stale ?? capEntries.some(isCapabilityStale)
+
+  let latencyMs: number | null | undefined = node.latency_ms ?? (node as any).latencyMs
+  if (latencyMs === undefined && capabilityDetails.baseline?.latency_ms !== undefined) {
+    latencyMs = capabilityDetails.baseline.latency_ms
+  }
+
+  const lastProbedAt: string | null | undefined =
+    node.last_probed_at ??
+    (node as any).lastProbedAt ??
+    capabilityDetails.baseline?.observed_at
+
   return {
     logicalId,
     protocol: node.protocol,
@@ -451,7 +546,10 @@ export function normalizeNode(node: NodeRecord): NormalizedNode {
     active: node.active,
     createdAt: node.created_at,
     updatedAt: node.updated_at,
-    capabilities: node.capabilities ?? {},
+    latencyMs,
+    lastProbedAt,
+    capabilities,
+    capabilityDetails,
     probeStale,
     probeMissing,
     healthStatus: node.health_status,
@@ -471,7 +569,8 @@ const capabilityLabels: Record<CapabilityStatus, { label: string; tone: ToastTon
 }
 
 export function nodeCapabilityLabel(node: NodeRecord | NormalizedNode, capability: string) {
-  return capabilityLabels[node.capabilities?.[capability] ?? 'unknown']
+  const verdict = extractCapabilityVerdict(node.capabilities?.[capability])
+  return capabilityLabels[verdict ?? 'unknown'] ?? capabilityLabels.unknown
 }
 
 export function nodeHealthBadge(node: NodeRecord | NormalizedNode): { label: string; tone: ToastTone } {
@@ -479,12 +578,21 @@ export function nodeHealthBadge(node: NodeRecord | NormalizedNode): { label: str
   if (health === 'healthy') return { label: '正常', tone: 'success' }
   if (health === 'degraded') return { label: '降级', tone: 'warning' }
   if (health === 'unhealthy') return { label: '异常', tone: 'error' }
-  if (health === 'missing') return { label: '未探测', tone: 'info' }
+  if (health === 'missing' || health === 'unknown') {
+    const rawCaps = node.capabilities ?? {}
+    if (Object.keys(rawCaps).length === 0) {
+      return { label: '未探测', tone: 'info' }
+    }
+  }
 
   const caps = node.capabilities ?? {}
-  const values = Object.values(caps)
+  const rawValues = Object.values(caps)
+  const values = rawValues.map(extractCapabilityVerdict)
   const probeMissing = (node as NormalizedNode).probeMissing ?? (node as NodeRecord).probe_missing ?? values.length === 0
-  const probeStale = (node as NormalizedNode).probeStale ?? (node as NodeRecord).probe_stale ?? values.includes('stale')
+  const probeStale =
+    (node as NormalizedNode).probeStale ??
+    (node as NodeRecord).probe_stale ??
+    rawValues.some(isCapabilityStale)
 
   if (probeMissing || values.length === 0) {
     return { label: '未探测', tone: 'info' }
@@ -508,7 +616,7 @@ export function nodeRiskBadge(node: NodeRecord | NormalizedNode): { label: strin
   if (band === 'medium') return { label: '中风险', tone: 'warning' }
   if (band === 'high' || band === 'critical') return { label: '高风险', tone: 'error' }
 
-  const capRisk = node.capabilities?.ip_risk
+  const capRisk = extractCapabilityVerdict(node.capabilities?.ip_risk)
   if (capRisk === 'available') return { label: '低风险', tone: 'success' }
   if (capRisk === 'restricted' || capRisk === 'stale') return { label: '中风险', tone: 'warning' }
   if (capRisk === 'error') return { label: '高风险', tone: 'error' }
@@ -516,3 +624,34 @@ export function nodeRiskBadge(node: NodeRecord | NormalizedNode): { label: strin
   return { label: '未探测', tone: 'info' }
 }
 
+export function resolveNodeLatencyMs(node: NodeRecord | NormalizedNode): number | null {
+  const top = (node as NormalizedNode).latencyMs ?? (node as NodeRecord).latency_ms
+  if (typeof top === 'number' && top >= 0) return top
+  const baseDetail = extractCapabilityDetail(node, 'baseline')
+  if (baseDetail && typeof baseDetail.latency_ms === 'number' && baseDetail.latency_ms >= 0) {
+    return baseDetail.latency_ms
+  }
+  return null
+}
+
+export function formatNodeLatency(node: NodeRecord | NormalizedNode): string {
+  const ms = resolveNodeLatencyMs(node)
+  if (ms === null || ms < 0) {
+    const health = nodeHealthBadge(node)
+    if (health.tone === 'error') return '不可达'
+    return '未测速'
+  }
+  return `${ms} ms`
+}
+
+export function nodeLatencyTone(node: NodeRecord | NormalizedNode): ToastTone {
+  const ms = resolveNodeLatencyMs(node)
+  if (ms === null || ms < 0) {
+    const health = nodeHealthBadge(node)
+    if (health.tone === 'error') return 'error'
+    return 'info'
+  }
+  if (ms < 100) return 'success'
+  if (ms <= 250) return 'warning'
+  return 'error'
+}

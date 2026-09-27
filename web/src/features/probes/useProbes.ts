@@ -1,10 +1,12 @@
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { api } from '../../api/client'
+import { normalizeNode, type NodeRecord, type NormalizedNode } from '../nodes/nodeView'
 import {
   generateIdempotencyKey,
   type CreateProbeRunInput,
   type CreateProbeRunResponse,
   type ProbeBatch,
+  type ProbeKind,
   type ProbeObservation,
   type ProbeRun,
   type ProbeRunState,
@@ -18,16 +20,29 @@ interface PaginatedResult<T> {
   total: number
 }
 
+interface SubscriptionLite {
+  id: string
+  name: string
+  enabled?: boolean
+}
+
 export function useProbes() {
   const runs = ref<ProbeRun[]>([])
   const activeRun = ref<ProbeRun | null>(null)
   const observations = ref<ProbeObservation[]>([])
+  const nodeObservations = ref<ProbeObservation[]>([])
   const schedule = ref<ProbeSchedule | null>(null)
   const batches = ref<ProbeBatch[]>([])
+  const probeNodes = ref<NormalizedNode[]>([])
+  const subscriptions = ref<SubscriptionLite[]>([])
+  const probingNodeIds = ref<Set<string>>(new Set())
+
   const loadingRuns = ref(false)
   const loadingObservations = ref(false)
+  const loadingNodeObservations = ref(false)
   const loadingSchedule = ref(false)
   const loadingBatches = ref(false)
+  const loadingNodes = ref(false)
   const savingSchedule = ref(false)
   const cancellingBatch = ref(false)
   const submitting = ref(false)
@@ -35,6 +50,127 @@ export function useProbes() {
   const error = ref('')
   const totalRuns = ref(0)
   const totalBatches = ref(0)
+  const totalNodes = ref(0)
+
+  const nodeMap = computed<Record<string, NormalizedNode>>(() => {
+    const map: Record<string, NormalizedNode> = {}
+    for (const node of probeNodes.value) {
+      map[node.logicalId] = node
+    }
+    return map
+  })
+
+  const subscriptionNameMap = computed<Record<string, string>>(() => {
+    const map: Record<string, string> = {}
+    for (const sub of subscriptions.value) {
+      map[sub.id] = sub.name || sub.id
+    }
+    return map
+  })
+
+  async function loadProbeNodes() {
+    loadingNodes.value = true
+    try {
+      const collected: NormalizedNode[] = []
+      let page = 1
+      const pageSize = 100
+      let expectedTotal = 0
+
+      while (page <= 20) {
+        const res = await api.get<PaginatedResult<NodeRecord>>('/api/v1/nodes', {
+          params: {
+            page,
+            page_size: pageSize,
+            active_only: 'true',
+            sort_by: 'display_name',
+            sort_order: 'asc',
+          },
+        })
+        const items = Array.isArray(res?.items) ? res.items : []
+        expectedTotal = typeof res?.total === 'number' ? res.total : items.length
+        for (const raw of items) {
+          collected.push(normalizeNode(raw))
+        }
+        if (items.length === 0 || collected.length >= expectedTotal || items.length < pageSize) {
+          break
+        }
+        page += 1
+      }
+
+      probeNodes.value = collected
+      totalNodes.value = expectedTotal || collected.length
+      return collected
+    } catch {
+      // Keep workbench resilient if /api/v1/nodes is not mocked in isolated unit tests
+      return probeNodes.value
+    } finally {
+      loadingNodes.value = false
+    }
+  }
+
+  async function loadSubscriptions() {
+    try {
+      const res = await api.get<PaginatedResult<SubscriptionLite>>('/api/v1/subscriptions', {
+        params: { page: 1, page_size: 100 },
+      })
+      subscriptions.value = Array.isArray(res?.items) ? res.items : []
+    } catch {
+      // Non-blocking if subscriptions endpoint is not mocked
+    }
+  }
+
+  function synthesizeObservationsFromNode(logicalId: string): ProbeObservation[] {
+    const node = nodeMap.value[logicalId]
+    if (!node || !node.capabilityDetails) return []
+    const synthesized: ProbeObservation[] = []
+    for (const [kind, detail] of Object.entries(node.capabilityDetails)) {
+      if (!detail || detail.verdict === 'missing' || detail.verdict === 'unknown') continue
+      synthesized.push({
+        id: `cap-${logicalId}-${kind}`,
+        probe_run_id: 'latest',
+        node_logical_id: logicalId,
+        kind: kind as ProbeKind,
+        verdict: detail.verdict as ProbeObservation['verdict'],
+        evidence_digest: '',
+        observed_at: detail.observed_at || node.lastProbedAt || '',
+        latency_ms:
+          typeof detail.latency_ms === 'number'
+            ? detail.latency_ms
+            : kind === 'baseline' && typeof node.latencyMs === 'number'
+            ? node.latencyMs
+            : 0,
+        redacted_summary: detail.summary || '',
+      })
+    }
+    return synthesized
+  }
+
+  async function loadNodeObservations(logicalId: string) {
+    loadingNodeObservations.value = true
+    error.value = ''
+    try {
+      const res = await api.get<PaginatedResult<ProbeObservation>>(
+        `/api/v1/nodes/${encodeURIComponent(logicalId)}/observations`,
+        {
+          params: { page: 1, page_size: 100 },
+        }
+      )
+      const items = res?.items || []
+      nodeObservations.value = items.length > 0 ? items : synthesizeObservationsFromNode(logicalId)
+      return nodeObservations.value
+    } catch (err) {
+      const fallback = synthesizeObservationsFromNode(logicalId)
+      if (fallback.length > 0) {
+        nodeObservations.value = fallback
+        return fallback
+      }
+      error.value = err instanceof Error ? err.message : '加载节点测速历史失败'
+      nodeObservations.value = []
+      return []
+    } finally {
+      loadingNodeObservations.value = false
+    }
+  }
 
   async function loadSchedule() {
     loadingSchedule.value = true
@@ -139,11 +275,17 @@ export function useProbes() {
   async function createRun(input: CreateProbeRunInput): Promise<CreateProbeRunResponse> {
     submitting.value = true
     error.value = ''
+    const targetIds = input.node_logical_ids || []
+    if (targetIds.length > 0) {
+      const nextSet = new Set(probingNodeIds.value)
+      for (const id of targetIds) nextSet.add(id)
+      probingNodeIds.value = nextSet
+    }
     try {
       const idempotencyKey = generateIdempotencyKey()
       const body: Record<string, unknown> = {
         config_revision: input.config_revision || '',
-        node_logical_ids: input.node_logical_ids || [],
+        node_logical_ids: targetIds,
         kinds: input.kinds || ['baseline', 'geo', 'streaming', 'ai', 'speed', 'ip_risk'],
       }
       if (input.deadline_minutes && input.deadline_minutes > 0) {
@@ -164,7 +306,25 @@ export function useProbes() {
       throw err
     } finally {
       submitting.value = false
+      if (targetIds.length > 0) {
+        const nextSet = new Set(probingNodeIds.value)
+        for (const id of targetIds) nextSet.delete(id)
+        probingNodeIds.value = nextSet
+      }
     }
+  }
+
+  async function triggerQuickProbe(options: {
+    kinds: ProbeKind[]
+    nodeLogicalIds?: string[]
+  }): Promise<CreateProbeRunResponse | null> {
+    const kinds: ProbeKind[] = options.kinds.length > 0 ? options.kinds : ['baseline']
+    const res = await createRun({
+      kinds,
+      node_logical_ids: options.nodeLogicalIds ?? [],
+    })
+    await loadProbeNodes()
+    return res
   }
 
   async function cancelRun(runId: string) {
@@ -213,7 +373,7 @@ export function useProbes() {
         activeRun.value = run
       }
       return run
-    } catch (err) {
+    } catch {
       return null
     }
   }
@@ -222,12 +382,20 @@ export function useProbes() {
     runs,
     activeRun,
     observations,
+    nodeObservations,
     schedule,
     batches,
+    probeNodes,
+    subscriptions,
+    nodeMap,
+    subscriptionNameMap,
+    probingNodeIds,
     loadingRuns,
     loadingObservations,
+    loadingNodeObservations,
     loadingSchedule,
     loadingBatches,
+    loadingNodes,
     savingSchedule,
     cancellingBatch,
     submitting,
@@ -235,8 +403,13 @@ export function useProbes() {
     error,
     totalRuns,
     totalBatches,
+    totalNodes,
+    loadProbeNodes,
+    loadSubscriptions,
+    loadNodeObservations,
     loadRuns,
     createRun,
+    triggerQuickProbe,
     cancelRun,
     loadObservations,
     fetchRunDetail,

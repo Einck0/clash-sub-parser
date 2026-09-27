@@ -19,39 +19,91 @@ func stageRun(id string) *domain.ProbeRun {
 	return &domain.ProbeRun{ID: id, State: domain.ProbeRunStateQueued, DeadlineAt: time.Now().Add(time.Minute)}
 }
 
-func TestStageGateSpeedRejectedBeforeDialOrHTTP(t *testing.T) {
-	runs, observations, nodes := newMemoryRuns(), newMemoryObservations(), newMemoryNodes()
-	nodes.items["node"] = domain.Node{LogicalID: "node", Protocol: domain.ProtocolSS, Active: true}
-	sched, err := queue.NewScheduler(queue.Config{Concurrency: 10})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer sched.Close()
+func TestStageGateSpeedExplicitOptInExecutesAndEnforcesBudget(t *testing.T) {
+	t.Run("explicit_speed_kind_opts_in_and_succeeds", func(t *testing.T) {
+		runs, observations, nodes := newMemoryRuns(), newMemoryObservations(), newMemoryNodes()
+		nodes.items["node"] = domain.Node{LogicalID: "node", Protocol: domain.ProtocolSS, Active: true}
+		sched, err := queue.NewScheduler(queue.Config{Concurrency: 10})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer sched.Close()
 
-	var dials, requests atomic.Int32
-	runner := probe.NewDefaultRunner(nodes, observations, sched, runs,
-		probe.WithNodeDialer(func(context.Context, domain.Node) (*http.Client, func() error, error) {
-			dials.Add(1)
-			return &http.Client{Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
-				requests.Add(1)
-				return nil, nil
-			})}, nil, nil
-		}),
-	)
-	run := stageRun("speed_opt_in")
-	if err := runs.Create(context.Background(), run); err != nil {
-		t.Fatal(err)
-	}
-	if err := runner.Run(context.Background(), run, []string{"node"}, []domain.ProbeKind{domain.ProbeKindSpeed}); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if dials.Load() != 0 || requests.Load() != 0 {
-		t.Fatalf("speed unexpectedly performed work: dials=%d requests=%d", dials.Load(), requests.Load())
-	}
-	got, err := observations.ListByRun(context.Background(), run.ID)
-	if err != nil || len(got) != 1 || got[0].Kind != domain.ProbeKindSpeed {
-		t.Fatalf("speed observation missing: %#v, err=%v", got, err)
-	}
+		var dials, requests atomic.Int32
+		runner := probe.NewDefaultRunner(nodes, observations, sched, runs,
+			probe.WithNodeDialer(func(context.Context, domain.Node) (*http.Client, func() error, error) {
+				dials.Add(1)
+				return &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+					requests.Add(1)
+					payload := strings.Repeat("x", 4096)
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     make(http.Header),
+						Body:       io.NopCloser(strings.NewReader(payload)),
+						Request:    req,
+					}, nil
+				})}, nil, nil
+			}),
+		)
+		run := stageRun("speed_opt_in")
+		if err := runs.Create(context.Background(), run); err != nil {
+			t.Fatal(err)
+		}
+		if err := runner.Run(context.Background(), run, []string{"node"}, []domain.ProbeKind{domain.ProbeKindSpeed}); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if dials.Load() != 1 || requests.Load() != 1 {
+			t.Fatalf("expected speed probe to dial and request once: dials=%d requests=%d", dials.Load(), requests.Load())
+		}
+		got, err := observations.ListByRun(context.Background(), run.ID)
+		if err != nil || len(got) != 1 || got[0].Kind != domain.ProbeKindSpeed {
+			t.Fatalf("speed observation missing: %#v, err=%v", got, err)
+		}
+		if got[0].Verdict != domain.VerdictAvailable {
+			t.Fatalf("expected speed verdict available, got %s (summary=%s)", got[0].Verdict, got[0].RedactedSummary)
+		}
+		if !strings.Contains(got[0].RedactedSummary, "bytes_read=4096") {
+			t.Fatalf("expected summary to include bytes_read=4096, got %s", got[0].RedactedSummary)
+		}
+	})
+
+	t.Run("speed_exceeding_max_bytes_per_request_returns_budget_exceeded", func(t *testing.T) {
+		runs, observations, nodes := newMemoryRuns(), newMemoryObservations(), newMemoryNodes()
+		nodes.items["node"] = domain.Node{LogicalID: "node", Protocol: domain.ProtocolSS, Active: true}
+		sched, err := queue.NewScheduler(queue.Config{Concurrency: 10})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer sched.Close()
+
+		runner := probe.NewDefaultRunner(nodes, observations, sched, runs,
+			probe.WithNodeDialer(func(context.Context, domain.Node) (*http.Client, func() error, error) {
+				return &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+					payload := strings.Repeat("x", (1<<20)+64)
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     make(http.Header),
+						Body:       io.NopCloser(strings.NewReader(payload)),
+						Request:    req,
+					}, nil
+				})}, nil, nil
+			}),
+		)
+		run := stageRun("speed_over_budget")
+		if err := runs.Create(context.Background(), run); err != nil {
+			t.Fatal(err)
+		}
+		if err := runner.Run(context.Background(), run, []string{"node"}, []domain.ProbeKind{domain.ProbeKindSpeed}); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		got, err := observations.ListByRun(context.Background(), run.ID)
+		if err != nil || len(got) != 1 {
+			t.Fatalf("speed observation missing: %#v, err=%v", got, err)
+		}
+		if got[0].Verdict != domain.VerdictError || !strings.Contains(got[0].RedactedSummary, "reason=speed_budget_exceeded") {
+			t.Fatalf("expected speed_budget_exceeded error observation, got %#v", got[0])
+		}
+	})
 }
 
 func TestStageGateBaselineAvailabilityControlsStreaming(t *testing.T) {

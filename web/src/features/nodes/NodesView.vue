@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch, type VNodeRef } from 'vue'
 import {
   ArrowPathIcon,
+  BoltIcon,
   CheckCircleIcon,
   ExclamationTriangleIcon,
   EyeIcon,
@@ -15,13 +16,17 @@ import ErrorStateCard from '../../ui/ErrorStateCard.vue'
 import StatusBadge from '../../ui/StatusBadge.vue'
 import {
   SUPPORTED_NODE_PROTOCOLS,
+  formatNodeLatency,
   nodeCapabilityLabel,
   nodeHealthBadge,
+  nodeLatencyTone,
   nodeRiskBadge,
   protocolSupportedTargets,
   renderNodePreview,
+  resolveNodeLatencyMs,
   type NormalizedNode,
 } from './nodeView'
+import { formatRelativeTime } from '../probes/probeTypes'
 import { useNodes } from './useNodes'
 import { deriveColumns } from '../../composables/useResponsiveColumns'
 import { t } from '../../locales'
@@ -35,6 +40,7 @@ const {
   loading,
   loadingMore,
   savingConnection,
+  probingNodeId,
   error,
   total,
   hasMore,
@@ -44,6 +50,7 @@ const {
   load,
   loadMore,
   fetchNodeDetail,
+  probeSingleNode,
   updateNodeConnection,
 } = useNodes()
 
@@ -51,6 +58,17 @@ const drawerOpen = ref(false)
 const previewTarget = ref<'mihomo' | 'singbox'>('mihomo')
 const connectionError = ref('')
 const connectionSaved = ref(false)
+const probeFeedback = ref('')
+
+async function handleProbeSelectedNode(node: NormalizedNode) {
+  probeFeedback.value = ''
+  const res = await probeSingleNode(node.logicalId)
+  if (res.ok) {
+    probeFeedback.value = '测速已完成并刷新最新状态'
+  } else {
+    probeFeedback.value = res.error || '测速请求失败'
+  }
+}
 
 // Editable plaintext connection draft fields inside the Node Detail Drawer
 const draftDisplayName = ref('')
@@ -99,6 +117,7 @@ function syncDraftFromNode(node: NormalizedNode) {
 
 async function openNodeDetail(node: NormalizedNode) {
   selectedNode.value = node
+  probeFeedback.value = ''
   syncDraftFromNode(node)
   drawerOpen.value = true
   const detailed = await fetchNodeDetail(node.logicalId)
@@ -414,6 +433,12 @@ onUnmounted(() => {
                       :tone="nodeHealthBadge(node).tone"
                     />
                     <StatusBadge
+                      v-if="resolveNodeLatencyMs(node) !== null"
+                      data-testid="node-latency-badge"
+                      :label="`延迟: ${formatNodeLatency(node)}`"
+                      :tone="nodeLatencyTone(node)"
+                    />
+                    <StatusBadge
                       :label="`风险: ${nodeRiskBadge(node).label}`"
                       :tone="nodeRiskBadge(node).tone"
                     />
@@ -441,14 +466,26 @@ onUnmounted(() => {
                     </span>
                   </div>
 
-                  <button
-                    type="button"
-                    data-testid="node-inspect-btn"
-                    class="btn btn-ghost btn-xs font-mono shrink-0"
-                    @click.stop="openNodeDetail(node)"
-                  >
-                    {{ t('nodes.inspectNode') }}
-                  </button>
+                  <div class="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      data-testid="node-card-probe-btn"
+                      class="btn btn-outline btn-primary btn-xs gap-1"
+                      :disabled="probingNodeId === node.logicalId"
+                      @click.stop="handleProbeSelectedNode(node)"
+                    >
+                      <BoltIcon class="w-3.5 h-3.5" :class="{ 'animate-pulse': probingNodeId === node.logicalId }" />
+                      <span>{{ probingNodeId === node.logicalId ? '测速中...' : '测速' }}</span>
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="node-inspect-btn"
+                      class="btn btn-ghost btn-xs font-mono shrink-0"
+                      @click.stop="openNodeDetail(node)"
+                    >
+                      {{ t('nodes.inspectNode') }}
+                    </button>
+                  </div>
                 </div>
               </div>
             </article>
@@ -484,6 +521,58 @@ onUnmounted(() => {
       :description="t('nodes.connectionProfile')"
     >
       <div v-if="selectedNode" data-testid="node-detail-drawer" class="space-y-4 text-xs">
+        <!-- Real-Time Probe Telemetry & Single-Node Quick Probe Bar -->
+        <div
+          data-testid="node-drawer-probe-panel"
+          class="p-3 rounded-xl bg-base-200 border border-base-300 space-y-2.5"
+        >
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <div class="flex items-center gap-1.5 font-semibold">
+              <BoltIcon class="w-4 h-4 text-primary shrink-0" />
+              <span>实时测速与解锁状态</span>
+              <span v-if="selectedNode.lastProbedAt" class="text-[11px] font-normal opacity-65">
+                · 最后测速: {{ formatRelativeTime(selectedNode.lastProbedAt) }}
+              </span>
+            </div>
+            <button
+              type="button"
+              data-testid="node-probe-btn"
+              class="btn btn-primary btn-xs gap-1"
+              :disabled="probingNodeId === selectedNode.logicalId"
+              @click="handleProbeSelectedNode(selectedNode)"
+            >
+              <BoltIcon class="w-3.5 h-3.5" :class="{ 'animate-spin': probingNodeId === selectedNode.logicalId }" />
+              <span>{{ probingNodeId === selectedNode.logicalId ? '正在测速...' : '测速此节点' }}</span>
+            </button>
+          </div>
+          <div class="flex flex-wrap items-center gap-1.5">
+            <StatusBadge
+              :label="`健康: ${nodeHealthBadge(selectedNode).label}`"
+              :tone="nodeHealthBadge(selectedNode).tone"
+            />
+            <StatusBadge
+              data-testid="node-drawer-latency-badge"
+              :label="`响应延迟: ${formatNodeLatency(selectedNode)}`"
+              :tone="nodeLatencyTone(selectedNode)"
+            />
+            <StatusBadge
+              :label="`流媒体: ${nodeCapabilityLabel(selectedNode, 'streaming').label}`"
+              :tone="nodeCapabilityLabel(selectedNode, 'streaming').tone"
+            />
+            <StatusBadge
+              :label="`AI 解锁: ${nodeCapabilityLabel(selectedNode, 'ai').label}`"
+              :tone="nodeCapabilityLabel(selectedNode, 'ai').tone"
+            />
+            <StatusBadge
+              :label="`IP 风险: ${nodeRiskBadge(selectedNode).label}`"
+              :tone="nodeRiskBadge(selectedNode).tone"
+            />
+          </div>
+          <p v-if="probeFeedback" data-testid="node-probe-feedback" class="text-[11px] text-primary font-medium">
+            {{ probeFeedback }}
+          </p>
+        </div>
+
         <!-- Subscription Provenance & Reconcile Notice -->
         <div
           data-testid="node-reconcile-overwrite-notice"

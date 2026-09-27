@@ -3,8 +3,10 @@ package probe_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -189,7 +191,30 @@ func (m *memoryNodes) List(_ context.Context, filter domain.NodeFilter) ([]domai
 		}
 		res = append(res, node)
 	}
-	return res, len(res), nil
+	sort.Slice(res, func(i, j int) bool {
+		return res[i].LogicalID < res[j].LogicalID
+	})
+	total := len(res)
+	pageSize := filter.Pagination.PageSize
+	if pageSize <= 0 {
+		pageSize = 50
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
+	page := filter.Pagination.Page
+	if page <= 0 {
+		page = 1
+	}
+	offset := (page - 1) * pageSize
+	if offset >= total {
+		return []domain.Node{}, total, nil
+	}
+	end := offset + pageSize
+	if end > total {
+		end = total
+	}
+	return res[offset:end], total, nil
 }
 
 func (m *memoryNodes) ListReadModel(_ context.Context, filter domain.NodeFilter) ([]domain.NodeReadModel, int, error) {
@@ -710,5 +735,86 @@ func TestProbeRunnerPartialSubmitFailureFailsRun(t *testing.T) {
 	updated, _ := runsRepo.GetByID(context.Background(), run.ID)
 	if updated.State != domain.ProbeRunStateFailed {
 		t.Fatalf("expected run state failed, got %s", updated.State)
+	}
+}
+
+func TestProbeRunnerFullInventoryPaginationAndLargeTaskBudget(t *testing.T) {
+	runsRepo := newMemoryRuns()
+	obsRepo := newMemoryObservations()
+	nodesRepo := newMemoryNodes()
+
+	// Seed 120 active nodes + 15 inactive nodes (> 50 default page size and > 100 max page size)
+	for i := 1; i <= 120; i++ {
+		id := fmt.Sprintf("node_active_%03d", i)
+		nodesRepo.items[id] = domain.Node{
+			LogicalID:   id,
+			DisplayName: fmt.Sprintf("Active Node %03d", i),
+			Protocol:    domain.ProtocolSS,
+			Active:      true,
+		}
+	}
+	for i := 1; i <= 15; i++ {
+		id := fmt.Sprintf("node_inactive_%03d", i)
+		nodesRepo.items[id] = domain.Node{
+			LogicalID:   id,
+			DisplayName: fmt.Sprintf("Inactive Node %03d", i),
+			Protocol:    domain.ProtocolVMess,
+			Active:      false,
+		}
+	}
+
+	sched, err := queue.NewScheduler(queue.Config{Concurrency: 16})
+	if err != nil {
+		t.Fatalf("failed to create scheduler: %v", err)
+	}
+	defer sched.Close()
+
+	runner := probe.NewDefaultRunner(
+		nodesRepo,
+		obsRepo,
+		sched,
+		runsRepo,
+		probe.WithNodeDialer(func(ctx context.Context, node domain.Node) (*http.Client, func() error, error) {
+			return mockHTTPClient(http.StatusOK, "OK", nil), nil, nil
+		}),
+	)
+
+	run := &domain.ProbeRun{
+		ID:             "run_full_inventory_120",
+		IdempotencyKey: "key_full_inventory_120",
+		ActorScope:     "admin",
+		State:          domain.ProbeRunStateQueued,
+		DeadlineAt:     time.Now().Add(time.Hour),
+	}
+	if err := runsRepo.Create(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+
+	// 120 active nodes * 5 kinds = 600 tasks (> old 512 budget limit)
+	kinds := []domain.ProbeKind{
+		domain.ProbeKindBaseline,
+		domain.ProbeKindGeo,
+		domain.ProbeKindStreaming,
+		domain.ProbeKindAI,
+		domain.ProbeKindSpeed,
+	}
+	if err := runner.Run(context.Background(), run, nil, kinds); err != nil {
+		t.Fatalf("runner.Run failed on 120 nodes x 5 kinds: %v", err)
+	}
+
+	updated, err := runsRepo.GetByID(context.Background(), run.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if updated.State != domain.ProbeRunStateSucceeded {
+		t.Fatalf("expected run state succeeded, got %s", updated.State)
+	}
+
+	observations, err := obsRepo.ListByRun(context.Background(), run.ID)
+	if err != nil {
+		t.Fatalf("ListByRun: %v", err)
+	}
+	if len(observations) != 600 {
+		t.Fatalf("expected 600 observations (120 active nodes * 5 kinds), got %d", len(observations))
 	}
 }

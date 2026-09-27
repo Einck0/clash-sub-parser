@@ -6,6 +6,8 @@ import {
   nodeCapabilityLabel,
   nodeHealthBadge,
   nodeRiskBadge,
+  formatNodeLatency,
+  nodeLatencyTone,
   protocolSupportedTargets,
   renderNodePreview,
   renderSafeNodePreview,
@@ -215,6 +217,27 @@ describe('node view helpers & plaintext WireGuard / TUIC connection handling', (
       label: '高风险',
       tone: 'error',
     })
+
+    const enrichedNode = normalizeNode({
+      logical_id: 'n-enriched',
+      protocol: 'vless',
+      display_name: 'Tokyo Enriched',
+      active: true,
+      latency_ms: 42,
+      last_probed_at: '2026-09-26T10:00:00Z',
+      health_status: 'healthy',
+      probe_missing: false,
+      probe_stale: false,
+      capabilities: {
+        baseline: { verdict: 'available', latency_ms: 42, observed_at: '2026-09-26T10:00:00Z', stale: false },
+        streaming: { verdict: 'available', latency_ms: 85, observed_at: '2026-09-26T10:00:00Z', stale: false },
+      },
+    })
+    expect(enrichedNode.latencyMs).toBe(42)
+    expect(formatNodeLatency(enrichedNode)).toBe('42 ms')
+    expect(nodeLatencyTone(enrichedNode)).toBe('success')
+    expect(nodeHealthBadge(enrichedNode)).toEqual({ label: '正常', tone: 'success' })
+    expect(nodeCapabilityLabel(enrichedNode, 'streaming')).toEqual({ label: '可用', tone: 'success' })
   })
 
   it('includes plaintext source_url_secret_ref in subscriptionPatchPayload and omits blank URL', () => {

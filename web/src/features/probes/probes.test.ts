@@ -10,6 +10,9 @@ import {
   probeBatchStateTone,
   formatLatency,
   generateIdempotencyKey,
+  parseRedactedSummary,
+  intervalLabel,
+  latencyTone,
   type ProbeRun,
   type ProbeObservation,
   type ProbeBatch,
@@ -57,10 +60,27 @@ describe('probes types and helpers', () => {
     expect(probeKindLabel('ip_risk')).toBe('IP 风险')
   })
 
-  it('formats latency cleanly', () => {
+  it('formats latency cleanly and parses machine redacted_summary into human-readable Chinese labels', () => {
     expect(formatLatency(42)).toBe('42 ms')
     expect(formatLatency(0)).toBe('0 ms')
     expect(formatLatency(-1)).toBe('--')
+
+    expect(latencyTone(42)).toBe('success')
+    expect(latencyTone(180)).toBe('warning')
+    expect(latencyTone(320)).toBe('error')
+    expect(latencyTone(null)).toBe('neutral')
+
+    expect(intervalLabel(900)).toBe('每 15 分钟')
+    expect(intervalLabel(3600)).toBe('每 1 小时')
+    expect(intervalLabel(86400)).toBe('每 1 天')
+
+    const parsed = parseRedactedSummary(
+      'profile=baseline version=baseline-v1 verdict=available reason=contract_matched status=204 latency_ms=42'
+    )
+    expect(parsed.profile).toBe('baseline')
+    expect(parsed.statusCode).toBe(204)
+    expect(parsed.latencyMs).toBe(42)
+    expect(parsed.reasonLabel).toBe('协议握手与响应校验通过')
   })
 
   it('generates non-empty unique idempotency keys', () => {
@@ -236,7 +256,7 @@ describe('useProbes composable', () => {
     expect(sheetDialog).not.toBeNull()
     expect(sheetDialog?.className).toContain('adaptive-surface-sheet')
     expect(sheetDialog?.className).toContain('md:max-h-[82vh]')
-    expect(sheetDialog?.textContent).toContain('探针观测证据链')
+    expect(sheetDialog?.textContent).toContain('节点测速与可用性报告')
     expect(sheetDialog?.textContent).toContain('已完成')
     expect(sheetDialog?.textContent).toContain('暂无观测记录')
 
@@ -491,26 +511,155 @@ describe('ProbesView Component Interaction & Feedback', () => {
     await nextTick()
     await new Promise((r) => setTimeout(r, 20))
 
-    // Schedule overview card verification
+    // Schedule overview card verification (human-readable interval instead of raw seconds/generation jargon)
     expect(container.textContent).toContain('周期能力探测计划')
     expect(container.textContent).toContain('已启用')
-    expect(container.textContent).toContain('7200s')
-    expect(container.textContent).toContain('#3')
+    expect(container.textContent).toContain('每 2 小时 (120 分钟)')
 
     // Batch cards verification
     const batchCards = container.querySelectorAll('[data-testid="probe-batch-card"]')
     expect(batchCards.length).toBe(3)
 
-    // Batch 1: Associated runs and skipped nodes feedback
-    expect(batchCards[0].textContent).toContain('run-assoc-101')
+    // Batch 1: Human-readable batch title, sub-task links and skipped nodes feedback
+    expect(batchCards[0].textContent).toContain('自动定时批次')
+    expect(batchCards[0].textContent).toContain('子任务 #1')
     expect(batchCards[0].textContent).toContain('已跳过 20 个凭据缺失或无效的节点')
 
     // Batch 2: Empty inventory feedback
     expect(batchCards[1].textContent).toContain('当前计划窗口内无可用于探测的活跃节点。')
 
     // Batch 3: Expired feedback and sanitized error
-    expect(batchCards[2].textContent).toContain('批次时间窗口已过期或租约在完成前失效。')
+    expect(batchCards[2].textContent).toContain('批次时间窗口已超时结束。')
     expect(batchCards[2].textContent).toContain('Lease expired after node crash; rescued safely')
+  })
+
+  it('renders 3-tier Node Speed & Availability Workbench, supports one-click probe, filtering, sorting, and human-readable node evidence sheet', async () => {
+    const mockNodes = [
+      {
+        logical_id: 'node-tokyo-01',
+        protocol: 'vless',
+        display_name: 'Tokyo HighSpeed 01',
+        active: true,
+        server: '203.0.113.10',
+        port: 443,
+        latency_ms: 38,
+        last_probed_at: new Date().toISOString(),
+        health_status: 'healthy' as const,
+        probe_missing: false,
+        probe_stale: false,
+        capabilities: {
+          baseline: { verdict: 'available' as const, latency_ms: 38, summary: 'profile=baseline version=baseline-v1 verdict=available reason=contract_matched status=204 latency_ms=38' },
+          streaming: { verdict: 'available' as const, latency_ms: 65, summary: 'profile=streaming version=streaming-v1 verdict=available reason=contract_matched status=200 latency_ms=65' },
+          ai: { verdict: 'available' as const, latency_ms: 72 },
+        },
+        ip_risk_summary: { risk_band: 'low' as const, decision: 'allow' as const, status: 'fresh' as const },
+        sources: [{ node_logical_id: 'node-tokyo-01', subscription_id: 'sub-main', last_seen_fetch_id: 'f1' }],
+      },
+      {
+        logical_id: 'node-us-slow',
+        protocol: 'trojan',
+        display_name: 'US West Relay 02',
+        active: true,
+        server: '198.51.100.55',
+        port: 8443,
+        latency_ms: 210,
+        last_probed_at: new Date().toISOString(),
+        health_status: 'degraded' as const,
+        probe_missing: false,
+        probe_stale: false,
+        capabilities: {
+          baseline: { verdict: 'available' as const, latency_ms: 210 },
+          streaming: { verdict: 'restricted' as const, latency_ms: 240 },
+          ai: { verdict: 'error' as const, latency_ms: 0 },
+        },
+        sources: [{ node_logical_id: 'node-us-slow', subscription_id: 'sub-backup', last_seen_fetch_id: 'f2' }],
+      },
+    ]
+
+    vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
+      if (path === '/api/v1/nodes') {
+        return { items: mockNodes, page: 1, page_size: 100, total: 2 }
+      }
+      if (path === '/api/v1/subscriptions') {
+        return { items: [{ id: 'sub-main', name: '主力专线订阅' }, { id: 'sub-backup', name: '备用美西订阅' }], total: 2 }
+      }
+      if (path === '/api/v1/nodes/node-tokyo-01/observations') {
+        return {
+          items: [
+            {
+              id: 'obs-tokyo-1',
+              probe_run_id: 'run-1',
+              node_logical_id: 'node-tokyo-01',
+              kind: 'baseline',
+              verdict: 'available',
+              evidence_digest: 'sha256:hidden',
+              observed_at: '2026-09-26T10:00:00Z',
+              latency_ms: 38,
+              redacted_summary: 'profile=baseline version=baseline-v1 verdict=available reason=contract_matched status=204 latency_ms=38',
+            },
+          ],
+          page: 1,
+          page_size: 100,
+          total: 1,
+        }
+      }
+      if (path === '/api/v1/probes/runs') return { items: [], total: 0 }
+      if (path === '/api/v1/probes/schedule') return { ...mockSchedule }
+      if (path === '/api/v1/probes/batches') return { items: [], total: 0 }
+      return { items: [], total: 0 }
+    })
+
+    const postSpy = vi.spyOn(api, 'post').mockResolvedValue({
+      run_id: 'run-quick-1',
+      state: 'running',
+      deadline_at: '2026-09-26T10:10:00Z',
+    })
+
+    await mountProbesView()
+
+    // Tier 1: KPI Summary Bar
+    const kpiBar = container.querySelector('[data-testid="probe-kpi-bar"]')
+    expect(kpiBar).not.toBeNull()
+    expect(kpiBar?.textContent).toContain('在线可用率')
+    expect(kpiBar?.textContent).toContain('100%')
+    expect(kpiBar?.textContent).toContain('124 ms') // avg of 38 and 210
+
+    // Tier 3: Node Probe Workbench Table
+    const rows = container.querySelectorAll('[data-testid="probe-node-row"]')
+    expect(rows.length).toBe(2)
+    expect(rows[0].textContent).toContain('Tokyo HighSpeed 01')
+    expect(rows[0].textContent).toContain('38 ms')
+    expect(rows[0].textContent).toContain('主力专线订阅')
+
+    // One-click full probe without config_revision modal
+    const fullProbeBtn = container.querySelector('[data-testid="quick-full-probe-btn"]') as HTMLButtonElement | null
+    expect(fullProbeBtn).not.toBeNull()
+    fullProbeBtn?.click()
+    await nextTick()
+    await new Promise((r) => setTimeout(r, 20))
+
+    expect(postSpy).toHaveBeenCalledWith(
+      '/api/v1/probes/runs',
+      expect.objectContaining({
+        config_revision: '',
+        node_logical_ids: [],
+        kinds: expect.arrayContaining(['baseline', 'streaming', 'ai']),
+      }),
+      expect.any(Object)
+    )
+
+    // Open node detail sheet & verify structured Chinese explanation without raw key=value noise
+    const inspectBtn = rows[0].querySelector('[data-testid="row-inspect-btn"]') as HTMLButtonElement | null
+    inspectBtn?.click()
+    await nextTick()
+    await new Promise((r) => setTimeout(r, 20))
+
+    const sheet = document.body.querySelector('[data-testid="probe-evidence-sheet"]')
+    expect(sheet).not.toBeNull()
+    expect(sheet?.textContent).toContain('Tokyo HighSpeed 01')
+    expect(sheet?.textContent).toContain('HTTP 204 连通正常')
+    expect(sheet?.textContent).toContain('协议握手与响应校验通过')
+    expect(sheet?.textContent).not.toContain('profile=baseline version=baseline-v1')
   })
 
   it('opens schedule configuration modal, updates values and submits PUT /api/v1/probes/schedule', async () => {

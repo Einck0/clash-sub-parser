@@ -156,8 +156,7 @@ func (h nodeHandler) get(w http.ResponseWriter, r *http.Request) {
 		sources = make([]domain.NodeSource, 0)
 	}
 
-	nodeView := inventory.ToNodeView(detail.Node)
-	nodeView.IPRiskSummary = detail.IPRiskSummary
+	nodeView := detail.ToNodeView()
 	resp := NodeDetailResponse{
 		Node:          nodeView,
 		Sources:       sources,
@@ -203,8 +202,7 @@ func (h nodeHandler) patchConnection(w http.ResponseWriter, r *http.Request) {
 	if sources == nil {
 		sources = make([]domain.NodeSource, 0)
 	}
-	nodeView := inventory.ToNodeView(detail.Node)
-	nodeView.IPRiskSummary = detail.IPRiskSummary
+	nodeView := detail.ToNodeView()
 	resp := NodeDetailResponse{
 		Node:          nodeView,
 		Sources:       sources,

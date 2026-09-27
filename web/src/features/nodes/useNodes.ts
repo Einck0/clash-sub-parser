@@ -1,8 +1,10 @@
 import { computed, ref } from 'vue'
 import { api } from '../../api/client'
+import { generateIdempotencyKey, type CreateProbeRunResponse, type ProbeKind, type ProbeRun } from '../probes/probeTypes'
 import {
   normalizeNode,
   validateNodeConnectionProfile,
+  type IPRiskSummaryRecord,
   type NodeConnectionProfile,
   type NodeRecord,
   type NodeSourceRecord,
@@ -19,6 +21,7 @@ interface NodePage {
 interface NodeDetailResponse {
   node?: NodeRecord
   sources?: NodeSourceRecord[]
+  ip_risk_summary?: IPRiskSummaryRecord
 }
 
 export function useNodes() {
@@ -27,6 +30,7 @@ export function useNodes() {
   const loadingMore = ref(false)
   const loadingDetail = ref(false)
   const savingConnection = ref(false)
+  const probingNodeId = ref<string | null>(null)
   const error = ref('')
   const page = ref(0)
   const pageSize = 100
@@ -89,6 +93,7 @@ export function useNodes() {
       return {
         ...res.node,
         sources: Array.isArray(res.sources) ? res.sources : res.node.sources,
+        ip_risk_summary: res.ip_risk_summary ?? res.node.ip_risk_summary,
       }
     }
     if ('logical_id' in res || 'logicalId' in (res as any)) {
@@ -120,6 +125,49 @@ export function useNodes() {
       return existing
     } finally {
       loadingDetail.value = false
+    }
+  }
+
+  async function probeSingleNode(
+    logicalId: string,
+    kinds: ProbeKind[] = ['baseline', 'streaming', 'ai', 'ip_risk', 'geo']
+  ): Promise<{ ok: boolean; runId?: string; error?: string }> {
+    probingNodeId.value = logicalId
+    try {
+      const res = await api.post<CreateProbeRunResponse>(
+        '/api/v1/probes/runs',
+        {
+          config_revision: '',
+          node_logical_ids: [logicalId],
+          kinds,
+        },
+        {
+          headers: {
+            'Idempotency-Key': generateIdempotencyKey(),
+          },
+        }
+      )
+      // Poll briefly for completion so single-node probe feels instant
+      if (res?.run_id) {
+        for (let attempt = 0; attempt < 6; attempt++) {
+          await new Promise((r) => setTimeout(r, 350))
+          try {
+            const run = await api.get<ProbeRun>(`/api/v1/probes/runs/${encodeURIComponent(res.run_id)}`)
+            if (run && ['succeeded', 'failed', 'cancelled', 'expired'].includes(run.state)) {
+              break
+            }
+          } catch {
+            break
+          }
+        }
+      }
+      await fetchNodeDetail(logicalId)
+      return { ok: true, runId: res?.run_id }
+    } catch (cause) {
+      const msg = cause instanceof Error ? cause.message : '发起节点测速失败'
+      return { ok: false, error: msg }
+    } finally {
+      probingNodeId.value = null
     }
   }
 
@@ -216,6 +264,7 @@ export function useNodes() {
     loadingMore,
     loadingDetail,
     savingConnection,
+    probingNodeId,
     error,
     total,
     hasMore,
@@ -225,6 +274,7 @@ export function useNodes() {
     load,
     loadMore,
     fetchNodeDetail,
+    probeSingleNode,
     updateNodeConnection,
   }
 }

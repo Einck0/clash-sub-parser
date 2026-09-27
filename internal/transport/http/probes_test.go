@@ -13,6 +13,7 @@ import (
 
 	"clash-sub-parser/internal/application/probe"
 	"clash-sub-parser/internal/domain"
+	"clash-sub-parser/internal/probe/queue"
 	transporthttp "clash-sub-parser/internal/transport/http"
 )
 
@@ -147,8 +148,19 @@ func (m *observationMemory) ListLatestByNodes(_ context.Context, nodeIDs []strin
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	res := make(map[string]map[domain.ProbeKind]domain.ProbeObservation)
+	nodeSet := make(map[string]bool, len(nodeIDs))
 	for _, id := range nodeIDs {
+		nodeSet[id] = true
 		res[id] = make(map[domain.ProbeKind]domain.ProbeObservation)
+	}
+	for _, item := range m.items {
+		if !nodeSet[item.NodeLogicalID] {
+			continue
+		}
+		existing, ok := res[item.NodeLogicalID][item.Kind]
+		if !ok || item.ObservedAt.After(existing.ObservedAt) {
+			res[item.NodeLogicalID][item.Kind] = item
+		}
 	}
 	return res, nil
 }
@@ -1004,4 +1016,158 @@ func TestProbeBatchEndpoints_ListGetCancel(t *testing.T) {
 	if !foundAudit {
 		t.Fatalf("expected audit event for probe_batch.cancel, got none")
 	}
+}
+
+type poolNodeMemory struct {
+	nodes []domain.Node
+}
+
+func (m *poolNodeMemory) Upsert(context.Context, *domain.Node) error       { return nil }
+func (m *poolNodeMemory) UpsertBatch(context.Context, []domain.Node) error { return nil }
+func (m *poolNodeMemory) GetByLogicalID(_ context.Context, id string) (*domain.Node, error) {
+	for _, n := range m.nodes {
+		if n.LogicalID == id {
+			copy := n
+			return &copy, nil
+		}
+	}
+	return nil, domain.NewNotFoundError("node_not_found", "not found")
+}
+func (m *poolNodeMemory) List(_ context.Context, f domain.NodeFilter) ([]domain.Node, int, error) {
+	var out []domain.Node
+	for _, n := range m.nodes {
+		if f.ActiveOnly && !n.Active {
+			continue
+		}
+		out = append(out, n)
+	}
+	return out, len(out), nil
+}
+func (m *poolNodeMemory) GetReadModel(context.Context, string, string) (*domain.NodeReadModel, error) {
+	return nil, nil
+}
+func (m *poolNodeMemory) ListReadModel(context.Context, domain.NodeFilter) ([]domain.NodeReadModel, int, error) {
+	return nil, 0, nil
+}
+func (m *poolNodeMemory) DeactivateOrphans(context.Context) (int64, error)     { return 0, nil }
+func (m *poolNodeMemory) DeactivateNodesNotIn(context.Context, []string) error { return nil }
+
+func TestProbePoolAndScheduleTriggerEndpoints(t *testing.T) {
+	now := time.Now().UTC()
+	runs := &probeRunMemory{data: make(map[string]domain.ProbeRun)}
+	audit := &auditMemory{}
+	schedRepo := newProbeScheduleMemory()
+	nodesRepo := &poolNodeMemory{
+		nodes: []domain.Node{
+			{LogicalID: "node-1", DisplayName: "N1", Protocol: domain.ProtocolVMess, Active: true},
+			{LogicalID: "node-2", DisplayName: "N2", Protocol: domain.ProtocolVMess, Active: true},
+			{LogicalID: "node-3", DisplayName: "N3", Protocol: domain.ProtocolVMess, Active: true},
+			{LogicalID: "node-4", DisplayName: "N4", Protocol: domain.ProtocolVMess, Active: true},
+		},
+	}
+	observations := &observationMemory{
+		items: []domain.ProbeObservation{
+			{
+				ID:            "obs-n1",
+				ProbeRunID:    "run-seed",
+				NodeLogicalID: "node-1",
+				Kind:          domain.ProbeKindBaseline,
+				Verdict:       domain.VerdictAvailable,
+				LatencyMS:     40,
+				ObservedAt:    now,
+			},
+			{
+				ID:            "obs-n2",
+				ProbeRunID:    "run-seed",
+				NodeLogicalID: "node-2",
+				Kind:          domain.ProbeKindBaseline,
+				Verdict:       domain.VerdictError,
+				LatencyMS:     0,
+				ObservedAt:    now,
+			},
+		},
+	}
+
+	sched, err := queue.NewScheduler(queue.Config{Concurrency: 10, QueueSize: 32})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sched.Close()
+
+	holdProbe := make(chan struct{})
+	probeStarted := make(chan struct{})
+	var startOnce sync.Once
+
+	runner := probe.NewDefaultRunner(
+		nodesRepo,
+		observations,
+		sched,
+		runs,
+		probe.WithNodeDialer(func(ctx context.Context, node domain.Node) (*http.Client, func() error, error) {
+			startOnce.Do(func() { close(probeStarted) })
+			<-holdProbe
+			return nil, nil, fmt.Errorf("dial blocked")
+		}),
+	)
+
+	service := probe.NewService(
+		runs,
+		probe.WithRunner(runner),
+		probe.WithNodeRepository(nodesRepo),
+		probe.WithObservationRepository(observations),
+		probe.WithScheduler(sched),
+		probe.WithScheduleRepository(schedRepo),
+		probe.WithAudit(audit),
+	)
+
+	router := transporthttp.NewRouter(transporthttp.RouterConfig{
+		AdminToken:                 probeTestAdminToken,
+		ProbeService:               service,
+		ProbeRunRepository:         runs,
+		ProbeObservationRepository: observations,
+		AuditRepository:            audit,
+	})
+
+	// 1. GET /api/v1/probes/pool before any active tasks
+	poolReq := httptest.NewRequest(http.MethodGet, "/api/v1/probes/pool", nil)
+	poolReq.Header.Set("Authorization", "Bearer "+probeTestAdminToken)
+	poolRec := httptest.NewRecorder()
+	router.ServeHTTP(poolRec, poolReq)
+	if poolRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for GET /probes/pool, got %d: %s", poolRec.Code, poolRec.Body.String())
+	}
+
+	var poolResp struct {
+		Data domain.ProbePoolStatus `json:"data"`
+	}
+	if err := json.NewDecoder(poolRec.Body).Decode(&poolResp); err != nil {
+		t.Fatal(err)
+	}
+	if poolResp.Data.TotalCount != 4 || poolResp.Data.AvailableCount != 1 || poolResp.Data.UnavailableCount != 1 || poolResp.Data.UntestedCount != 2 || poolResp.Data.QueueNodesCount != 0 {
+		t.Fatalf("unexpected initial pool status: %+v", poolResp.Data)
+	}
+
+	// 2. POST /api/v1/probes/schedule/trigger to enqueue all 4 active nodes
+	trigReq := httptest.NewRequest(http.MethodPost, "/api/v1/probes/schedule/trigger", nil)
+	trigReq.Header.Set("Authorization", "Bearer "+probeTestAdminToken)
+	trigRec := httptest.NewRecorder()
+	router.ServeHTTP(trigRec, trigReq)
+	if trigRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for POST /probes/schedule/trigger, got %d: %s", trigRec.Code, trigRec.Body.String())
+	}
+
+	<-probeStarted
+
+	var trigResp struct {
+		Data domain.ProbePoolStatus `json:"data"`
+	}
+	if err := json.NewDecoder(trigRec.Body).Decode(&trigResp); err != nil {
+		t.Fatal(err)
+	}
+	if trigResp.Data.QueueNodesCount != 4 {
+		t.Fatalf("expected queue_nodes_count=4 after schedule trigger, got %+v", trigResp.Data)
+	}
+
+	close(holdProbe)
+	sched.Wait()
 }

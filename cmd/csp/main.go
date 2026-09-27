@@ -207,6 +207,7 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 		fmt.Fprintf(stderr, "serve: probe scheduler initialization failed: %v\n", err)
 		return 1
 	}
+	invService.SetNodePoolStateProvider(probeScheduler)
 	shutdownTimeout := 5 * time.Second
 	if deps != nil && deps.shutdownTimeout > 0 {
 		shutdownTimeout = deps.shutdownTimeout
@@ -238,6 +239,9 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 	probeService := probe.NewService(
 		probeRunRepo,
 		probe.WithRunner(probeRunner),
+		probe.WithNodeRepository(nodeRepo),
+		probe.WithObservationRepository(probeObsRepo),
+		probe.WithScheduler(probeScheduler),
 		probe.WithScheduleRepository(probeScheduleRepo),
 		probe.WithAudit(auditRepo),
 	)

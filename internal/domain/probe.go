@@ -78,3 +78,19 @@ func ComputeProbeEvidenceDigest(runID, nodeLogicalID, profileVersion string, ver
 	fmt.Fprintf(h, "%s\x00%s\x00%s\x00%s\x00%d\x00%s", runID, nodeLogicalID, profileVersion, verdict, statusCode, reason)
 	return "sha256:" + hex.EncodeToString(h.Sum(nil))
 }
+
+// ProbePoolStatus represents the real-time status of the node probe pool and active node health counts.
+type ProbePoolStatus struct {
+	QueueNodesCount    int       `json:"queue_nodes_count"`
+	ProbingCount       int       `json:"probing_count"`
+	QueuedWaitingCount int       `json:"queued_waiting_count"`
+	UntestedCount      int       `json:"untested_count"`
+	TotalCount         int       `json:"total_count"`
+	UnavailableCount   int       `json:"unavailable_count"`
+	AvailableCount     int       `json:"available_count"`
+	HealthyCount       int       `json:"healthy_count"`
+	DegradedCount      int       `json:"degraded_count"`
+	ProbingNodeIDs     []string  `json:"probing_node_ids"`
+	QueuedNodeIDs      []string  `json:"queued_node_ids"`
+	UpdatedAt          time.Time `json:"updated_at"`
+}

@@ -21,6 +21,7 @@ import {
   formatNodeLatency,
   nodeHealthBadge,
   nodeLatencyTone,
+  resolveNodeLatencyMs,
   type NormalizedNode,
 } from '../nodes/nodeView'
 import StatusBadge from '../../ui/StatusBadge.vue'
@@ -197,11 +198,12 @@ function close() {
             </span>
             <StatusBadge
               v-if="node"
-              :label="nodeHealthBadge(node).label"
-              :tone="nodeHealthBadge(node).tone"
+              data-testid="evidence-node-health-badge"
+              :label="nodeHealthBadge(node, reprobing ? [node.logicalId] : undefined).label"
+              :tone="nodeHealthBadge(node, reprobing ? [node.logicalId] : undefined).tone"
             />
             <StatusBadge
-              v-if="node"
+              v-if="node && resolveNodeLatencyMs(node) !== null"
               :label="formatNodeLatency(node)"
               :tone="nodeLatencyTone(node)"
             />
@@ -333,7 +335,7 @@ function close() {
           <div class="mt-3 pt-2.5 border-t border-base-300/50 flex flex-wrap items-center justify-between gap-2 text-[11px] opacity-75">
             <span class="flex items-center gap-1">
               <ClockIcon class="w-3.5 h-3.5" />
-              响应延迟：<strong class="font-mono font-semibold">{{ formatLatency(obs.latency_ms) }}</strong>
+              响应延迟：<strong class="font-mono font-semibold">{{ obs.verdict === 'error' || obs.latency_ms <= 0 ? '--' : formatLatency(obs.latency_ms) }}</strong>
             </span>
             <span class="font-mono">
               检测时间：{{ formatObsTime(obs.observed_at) }}

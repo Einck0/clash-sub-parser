@@ -224,6 +224,21 @@ export function probeBatchStateTone(state: ProbeBatchState): 'info' | 'success' 
   }
 }
 
+export interface ProbePoolStatus {
+  queue_nodes_count: number
+  probing_count: number
+  queued_waiting_count: number
+  untested_count: number
+  total_count: number
+  unavailable_count: number
+  available_count: number
+  healthy_count: number
+  degraded_count: number
+  probing_node_ids: string[]
+  queued_node_ids: string[]
+  updated_at: string
+}
+
 export function generateIdempotencyKey(): string {
   const entropy = Math.random().toString(36).slice(2, 10)
   return `probe-run-${Date.now().toString(36)}-${entropy}`

@@ -52,6 +52,7 @@ type NodeDetail struct {
 	LatencyMS          *int64                        `json:"latency_ms,omitempty"`
 	LastProbedAt       *time.Time                    `json:"last_probed_at,omitempty"`
 	HealthStatus       string                        `json:"health_status"`
+	ProbeState         string                        `json:"probe_state"`
 	ProbeMissing       bool                          `json:"probe_missing"`
 	ProbeStale         bool                          `json:"probe_stale"`
 	Capabilities       map[string]NodeCapabilityView `json:"capabilities,omitempty"`
@@ -60,7 +61,7 @@ type NodeDetail struct {
 // ToNodeView returns the enriched NodeView for this NodeDetail, with a fallback if View was not pre-populated.
 func (d *NodeDetail) ToNodeView() NodeView {
 	if d == nil {
-		return NodeView{HealthStatus: "unknown", ProbeMissing: true}
+		return NodeView{HealthStatus: "unknown", ProbeState: "idle", ProbeMissing: true}
 	}
 	v := d.View
 	if v.LogicalID == "" {
@@ -72,6 +73,9 @@ func (d *NodeDetail) ToNodeView() NodeView {
 		if d.HealthStatus != "" {
 			v.HealthStatus = d.HealthStatus
 		}
+		if d.ProbeState != "" {
+			v.ProbeState = d.ProbeState
+		}
 		v.ProbeMissing = d.ProbeMissing
 		v.ProbeStale = d.ProbeStale
 		v.Capabilities = d.Capabilities
@@ -81,6 +85,13 @@ func (d *NodeDetail) ToNodeView() NodeView {
 		}
 		if len(v.Sources) == 0 && len(d.Sources) > 0 {
 			v.Sources = d.Sources
+		}
+		if v.ProbeState == "" {
+			if d.ProbeState != "" {
+				v.ProbeState = d.ProbeState
+			} else {
+				v.ProbeState = "idle"
+			}
 		}
 	}
 	return v
@@ -101,6 +112,7 @@ type NodeView struct {
 	LatencyMS     *int64                            `json:"latency_ms,omitempty"`
 	LastProbedAt  *time.Time                        `json:"last_probed_at,omitempty"`
 	HealthStatus  string                            `json:"health_status"`
+	ProbeState    string                            `json:"probe_state"`
 	ProbeMissing  bool                              `json:"probe_missing"`
 	ProbeStale    bool                              `json:"probe_stale"`
 	Capabilities  map[string]NodeCapabilityView     `json:"capabilities,omitempty"`
@@ -121,6 +133,7 @@ func ToNodeView(n domain.Node) NodeView {
 		CreatedAt:    n.CreatedAt,
 		UpdatedAt:    n.UpdatedAt,
 		HealthStatus: "unknown",
+		ProbeState:   "idle",
 		ProbeMissing: true,
 		ProbeStale:   false,
 	}
@@ -151,6 +164,12 @@ func ToNodeViews(nodes []domain.Node) []NodeView {
 	return views
 }
 
+// NodePoolStateProvider is implemented by anything that can report the real-time
+// probe-pool state for a given node ("probing", "queued", or "idle").
+type NodePoolStateProvider interface {
+	GetNodePoolState(logicalID string) string
+}
+
 // Service coordinates inventory ingestion, provenance reconciliation, and ledger queries.
 type Service struct {
 	db            *sql.DB
@@ -161,6 +180,7 @@ type Service struct {
 	fetcher       fetch.Fetcher
 	probeObsRepo  domain.ProbeObservationRepository
 	auditRepo     domain.AuditRepository
+	poolProvider  NodePoolStateProvider
 	mu            sync.Mutex
 }
 
@@ -182,6 +202,21 @@ func WithAuditRepository(repo domain.AuditRepository) Option {
 	return func(s *Service) {
 		s.auditRepo = repo
 	}
+}
+
+// WithNodePoolStateProvider injects a real-time node-pool state provider so that
+// NodeView can reflect "probing" / "queued" / "idle" live probe-pool states.
+func WithNodePoolStateProvider(provider NodePoolStateProvider) Option {
+	return func(s *Service) {
+		s.poolProvider = provider
+	}
+}
+
+// SetNodePoolStateProvider sets or replaces the real-time node-pool state provider.
+func (s *Service) SetNodePoolStateProvider(provider NodePoolStateProvider) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.poolProvider = provider
 }
 
 // NewService constructs an inventory application service.
@@ -462,6 +497,7 @@ func (s *Service) GetNodeDetailWithRisk(ctx context.Context, logicalID string, p
 		LatencyMS:          view.LatencyMS,
 		LastProbedAt:       view.LastProbedAt,
 		HealthStatus:       view.HealthStatus,
+		ProbeState:         view.ProbeState,
 		ProbeMissing:       view.ProbeMissing,
 		ProbeStale:         view.ProbeStale,
 		Capabilities:       view.Capabilities,
@@ -534,6 +570,24 @@ func (s *Service) enrichNodeViews(ctx context.Context, views []NodeView) {
 			}
 		}
 	}
+
+	for i := range views {
+		if views[i].ProbeState == "" {
+			views[i].ProbeState = "idle"
+		}
+		if s.poolProvider != nil && views[i].LogicalID != "" {
+			state := s.poolProvider.GetNodePoolState(views[i].LogicalID)
+			switch state {
+			case "probing":
+				views[i].ProbeState = "probing"
+				views[i].HealthStatus = "probing"
+			case "queued":
+				views[i].ProbeState = "queued"
+			default:
+				views[i].ProbeState = "idle"
+			}
+		}
+	}
 }
 
 func verdictToHealthStatus(verdict domain.ProbeVerdict) string {
@@ -576,9 +630,14 @@ func applyProbeObservationsToView(v *NodeView, obsByKind map[domain.ProbeKind]do
 
 	for kind, obs := range obsByKind {
 		stale := obs.Verdict == domain.VerdictStale || (!obs.ObservedAt.IsZero() && now.Sub(obs.ObservedAt) > defaultProbeFreshnessTTL)
+		status := verdictToHealthStatus(obs.Verdict)
+		capLatency := obs.LatencyMS
+		if (status != "healthy" && status != "degraded") || capLatency <= 0 {
+			capLatency = 0
+		}
 		caps[string(kind)] = NodeCapabilityView{
 			Verdict:    obs.Verdict,
-			LatencyMS:  obs.LatencyMS,
+			LatencyMS:  capLatency,
 			ObservedAt: obs.ObservedAt,
 			Summary:    obs.RedactedSummary,
 			Stale:      stale,
@@ -586,7 +645,7 @@ func applyProbeObservationsToView(v *NodeView, obsByKind map[domain.ProbeKind]do
 		if obs.ObservedAt.After(latestAt) {
 			latestAt = obs.ObservedAt
 		}
-		switch verdictToHealthStatus(obs.Verdict) {
+		switch status {
 		case "healthy":
 			hasAvailable = true
 		case "degraded":
@@ -594,7 +653,7 @@ func applyProbeObservationsToView(v *NodeView, obsByKind map[domain.ProbeKind]do
 		case "unhealthy":
 			hasUnhealthy = true
 		}
-		if obs.LatencyMS > 0 || verdictToHealthStatus(obs.Verdict) == "healthy" || verdictToHealthStatus(obs.Verdict) == "degraded" {
+		if (status == "healthy" || status == "degraded") && obs.LatencyMS > 0 {
 			obsCopy := obs
 			if bestLatencyObs == nil || obs.ObservedAt.After(bestLatencyObs.ObservedAt) ||
 				(obs.ObservedAt.Equal(bestLatencyObs.ObservedAt) && string(kind) < string(bestLatencyObs.Kind)) {
@@ -614,19 +673,19 @@ func applyProbeObservationsToView(v *NodeView, obsByKind map[domain.ProbeKind]do
 	}
 
 	if baselineObs, hasBaseline := obsByKind[domain.ProbeKindBaseline]; hasBaseline {
-		if baselineObs.LatencyMS > 0 || verdictToHealthStatus(baselineObs.Verdict) == "healthy" || verdictToHealthStatus(baselineObs.Verdict) == "degraded" {
+		baseStatus := verdictToHealthStatus(baselineObs.Verdict)
+		if (baseStatus == "healthy" || baseStatus == "degraded") && baselineObs.LatencyMS > 0 {
 			lat := baselineObs.LatencyMS
 			v.LatencyMS = &lat
-		} else if bestLatencyObs != nil && bestLatencyObs.LatencyMS > 0 {
+		} else if baseStatus != "unhealthy" && bestLatencyObs != nil && bestLatencyObs.LatencyMS > 0 {
 			lat := bestLatencyObs.LatencyMS
 			v.LatencyMS = &lat
 		} else {
 			v.LatencyMS = nil
 		}
 
-		status := verdictToHealthStatus(baselineObs.Verdict)
-		if status != "unknown" {
-			v.HealthStatus = status
+		if baseStatus != "unknown" {
+			v.HealthStatus = baseStatus
 		} else if hasUnhealthy && !hasAvailable {
 			v.HealthStatus = "unhealthy"
 		} else if hasDegraded {
@@ -636,10 +695,13 @@ func applyProbeObservationsToView(v *NodeView, obsByKind map[domain.ProbeKind]do
 		} else {
 			v.HealthStatus = "unknown"
 		}
+		if v.HealthStatus == "unhealthy" {
+			v.LatencyMS = nil
+		}
 		return
 	}
 
-	if bestLatencyObs != nil {
+	if bestLatencyObs != nil && bestLatencyObs.LatencyMS > 0 {
 		lat := bestLatencyObs.LatencyMS
 		v.LatencyMS = &lat
 	} else {
@@ -654,6 +716,9 @@ func applyProbeObservationsToView(v *NodeView, obsByKind map[domain.ProbeKind]do
 		v.HealthStatus = "healthy"
 	} else {
 		v.HealthStatus = "unknown"
+	}
+	if v.HealthStatus == "unhealthy" {
+		v.LatencyMS = nil
 	}
 }
 

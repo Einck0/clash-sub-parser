@@ -149,8 +149,19 @@ func (m *memoryObservations) ListLatestByNodes(_ context.Context, nodeLogicalIDs
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	res := make(map[string]map[domain.ProbeKind]domain.ProbeObservation)
+	nodeSet := make(map[string]bool, len(nodeLogicalIDs))
 	for _, id := range nodeLogicalIDs {
+		nodeSet[id] = true
 		res[id] = make(map[domain.ProbeKind]domain.ProbeObservation)
+	}
+	for _, item := range m.items {
+		if !nodeSet[item.NodeLogicalID] {
+			continue
+		}
+		existing, ok := res[item.NodeLogicalID][item.Kind]
+		if !ok || item.ObservedAt.After(existing.ObservedAt) {
+			res[item.NodeLogicalID][item.Kind] = item
+		}
 	}
 	return res, nil
 }
@@ -817,4 +828,132 @@ func TestProbeRunnerFullInventoryPaginationAndLargeTaskBudget(t *testing.T) {
 	if len(observations) != 600 {
 		t.Fatalf("expected 600 observations (120 active nodes * 5 kinds), got %d", len(observations))
 	}
+}
+
+func TestServiceGetPoolStatusFiveMetrics(t *testing.T) {
+	ctx := context.Background()
+	runsRepo := newMemoryRuns()
+	obsRepo := newMemoryObservations()
+	nodesRepo := newMemoryNodes()
+
+	// Seed 10 active nodes: 4 healthy, 1 degraded (available=5), 2 unhealthy (unavailable=2), 3 untested
+	for i := 1; i <= 10; i++ {
+		id := fmt.Sprintf("node_%02d", i)
+		nodesRepo.items[id] = domain.Node{
+			LogicalID:   id,
+			DisplayName: fmt.Sprintf("Node %02d", i),
+			Protocol:    domain.ProtocolVMess,
+			Active:      true,
+		}
+	}
+
+	now := time.Now().UTC()
+	for i := 1; i <= 4; i++ {
+		_ = obsRepo.Create(ctx, &domain.ProbeObservation{
+			ID:            fmt.Sprintf("obs_h_%d", i),
+			ProbeRunID:    "run_seed",
+			NodeLogicalID: fmt.Sprintf("node_%02d", i),
+			Kind:          domain.ProbeKindBaseline,
+			Verdict:       domain.VerdictAvailable,
+			LatencyMS:     int64(30 + i),
+			ObservedAt:    now,
+		})
+	}
+	_ = obsRepo.Create(ctx, &domain.ProbeObservation{
+		ID:            "obs_deg_5",
+		ProbeRunID:    "run_seed",
+		NodeLogicalID: "node_05",
+		Kind:          domain.ProbeKindBaseline,
+		Verdict:       domain.VerdictRestricted,
+		LatencyMS:     180,
+		ObservedAt:    now,
+	})
+	for i := 6; i <= 7; i++ {
+		_ = obsRepo.Create(ctx, &domain.ProbeObservation{
+			ID:            fmt.Sprintf("obs_err_%d", i),
+			ProbeRunID:    "run_seed",
+			NodeLogicalID: fmt.Sprintf("node_%02d", i),
+			Kind:          domain.ProbeKindBaseline,
+			Verdict:       domain.VerdictError,
+			LatencyMS:     0,
+			ObservedAt:    now,
+		})
+	}
+
+	// Create scheduler with 10 workers; occupy 8 with dummy blockers and 2 with node_01, node_02
+	// so node_01 and node_02 are probing, and node_03, node_04, node_05 wait in queue.
+	sched, err := queue.NewScheduler(queue.Config{Concurrency: 10, RunConcurrency: 10, QueueSize: 32})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sched.Close()
+
+	holdWorkers := make(chan struct{})
+	workersStarted := make(chan struct{})
+	var started atomic.Int32
+
+	for i := 0; i < 8; i++ {
+		_ = sched.Submit(queue.Task{
+			RunID:     "run-dummy",
+			LogicalID: "", // empty logicalID does not count toward node pool IDs
+			Kind:      domain.ProbeKindBaseline,
+			Mode:      queue.EnqueuePeriodicDedupe,
+			Execute: func(context.Context) error {
+				if started.Add(1) == 10 {
+					close(workersStarted)
+				}
+				<-holdWorkers
+				return nil
+			},
+		})
+	}
+	for _, nid := range []string{"node_01", "node_02"} {
+		nodeID := nid
+		_ = sched.Submit(queue.Task{
+			RunID:     "run-probing",
+			LogicalID: nodeID,
+			Kind:      domain.ProbeKindBaseline,
+			Mode:      queue.EnqueuePeriodicDedupe,
+			Execute: func(context.Context) error {
+				if started.Add(1) == 10 {
+					close(workersStarted)
+				}
+				<-holdWorkers
+				return nil
+			},
+		})
+	}
+	<-workersStarted
+
+	for _, nid := range []string{"node_03", "node_04", "node_05"} {
+		_ = sched.Submit(queue.Task{
+			RunID:     "run-queued",
+			LogicalID: nid,
+			Kind:      domain.ProbeKindBaseline,
+			Mode:      queue.EnqueuePeriodicDedupe,
+			Execute:   func(context.Context) error { return nil },
+		})
+	}
+
+	svc := probe.NewService(
+		runsRepo,
+		probe.WithNodeRepository(nodesRepo),
+		probe.WithObservationRepository(obsRepo),
+		probe.WithScheduler(sched),
+	)
+
+	status, err := svc.GetPoolStatus(ctx)
+	if err != nil {
+		t.Fatalf("GetPoolStatus failed: %v", err)
+	}
+
+	if status.QueueNodesCount != 5 || status.ProbingCount != 2 || status.QueuedWaitingCount != 3 {
+		t.Fatalf("expected queue_nodes_count=5 (probing=2, queued=3), got %+v", status)
+	}
+	if status.TotalCount != 10 || status.AvailableCount != 5 || status.HealthyCount != 4 || status.DegradedCount != 1 || status.UnavailableCount != 2 || status.UntestedCount != 3 {
+		t.Fatalf("unexpected 5 core metrics: %+v", status)
+	}
+
+	close(holdWorkers)
+	sched.Wait()
 }

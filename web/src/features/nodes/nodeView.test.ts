@@ -8,6 +8,7 @@ import {
   nodeRiskBadge,
   formatNodeLatency,
   nodeLatencyTone,
+  resolveNodeLatencyMs,
   protocolSupportedTargets,
   renderNodePreview,
   renderSafeNodePreview,
@@ -238,6 +239,55 @@ describe('node view helpers & plaintext WireGuard / TUIC connection handling', (
     expect(nodeLatencyTone(enrichedNode)).toBe('success')
     expect(nodeHealthBadge(enrichedNode)).toEqual({ label: '正常', tone: 'success' })
     expect(nodeCapabilityLabel(enrichedNode, 'streaming')).toEqual({ label: '可用', tone: 'success' })
+
+    const probingNode = normalizeNode({
+      logical_id: 'n-probing',
+      protocol: 'vless',
+      display_name: 'HK Probing 01',
+      active: true,
+      probe_state: 'probing',
+      health_status: 'probing',
+      latency_ms: 35,
+    })
+    expect(probingNode.probeState).toBe('probing')
+    expect(nodeHealthBadge(probingNode)).toEqual({ label: '检测中', tone: 'info' })
+
+    const queuedNode = normalizeNode({
+      logical_id: 'n-queued',
+      protocol: 'trojan',
+      display_name: 'SG Queued 02',
+      active: true,
+      probe_state: 'queued',
+    })
+    expect(queuedNode.probeState).toBe('queued')
+    expect(nodeHealthBadge(queuedNode)).toEqual({ label: '队列中', tone: 'warning' })
+
+    // Live pool ID sets override static idle node state
+    expect(nodeHealthBadge(enrichedNode, new Set(['n-enriched']))).toEqual({
+      label: '检测中',
+      tone: 'info',
+    })
+    expect(nodeHealthBadge(enrichedNode, new Set(), new Set(['n-enriched']))).toEqual({
+      label: '队列中',
+      tone: 'warning',
+    })
+
+    // Unhealthy / failed node with latency_ms=0 never resolves to 0 ms or green 'success' badge
+    const failedZeroLatencyNode = normalizeNode({
+      logical_id: 'n-failed-0',
+      protocol: 'ss',
+      display_name: 'RU Failed 0ms',
+      active: true,
+      health_status: 'unhealthy',
+      latency_ms: 0,
+      capabilities: {
+        baseline: { verdict: 'error', latency_ms: 0, observed_at: '2026-09-26T10:00:00Z' },
+      },
+    })
+    expect(failedZeroLatencyNode.latencyMs).toBeNull()
+    expect(resolveNodeLatencyMs(failedZeroLatencyNode)).toBeNull()
+    expect(formatNodeLatency(failedZeroLatencyNode)).toBe('--')
+    expect(nodeLatencyTone(failedZeroLatencyNode)).toBe('error')
   })
 
   it('includes plaintext source_url_secret_ref in subscriptionPatchPayload and omits blank URL', () => {
@@ -428,6 +478,9 @@ describe('NodesView real API detail, plaintext PATCH edit, and failure draft pre
 
     const cards = mountEl.querySelectorAll('[data-testid="node-card"]')
     expect(cards.length).toBe(2)
+    const healthFilterSelect = mountEl.querySelector('[data-testid="node-health-filter"]') as HTMLSelectElement | null
+    expect(healthFilterSelect).not.toBeNull()
+    expect(healthFilterSelect?.textContent).toContain('检测中')
 
     // 1. Inspect & edit WireGuard node via real API detail + direct plaintext PATCH
     ;(cards[0] as HTMLElement).click()

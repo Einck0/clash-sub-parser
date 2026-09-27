@@ -38,15 +38,18 @@ type runController struct {
 
 // Service orchestrates probe run lifecycle, state transitions, idempotency, and cancellation.
 type Service struct {
-	runs        domain.ProbeRunRepository
-	audit       domain.AuditRepository
-	schedules   domain.ProbeScheduleRepository
-	coordinator *PeriodicCoordinator
-	clock       func() time.Time
-	mu          sync.RWMutex
-	createMu    sync.Mutex
-	active      map[string]*runController
-	runner      Runner
+	runs         domain.ProbeRunRepository
+	nodes        domain.NodeRepository
+	observations domain.ProbeObservationRepository
+	scheduler    *queue.Scheduler
+	audit        domain.AuditRepository
+	schedules    domain.ProbeScheduleRepository
+	coordinator  *PeriodicCoordinator
+	clock        func() time.Time
+	mu           sync.RWMutex
+	createMu     sync.Mutex
+	active       map[string]*runController
+	runner       Runner
 }
 
 // Option configures Service dependencies.
@@ -56,6 +59,27 @@ type Option func(*Service)
 func WithRunner(r Runner) Option {
 	return func(s *Service) {
 		s.runner = r
+	}
+}
+
+// WithNodeRepository sets the node repository for computing node pool and inventory status metrics.
+func WithNodeRepository(nodes domain.NodeRepository) Option {
+	return func(s *Service) {
+		s.nodes = nodes
+	}
+}
+
+// WithObservationRepository sets the probe observation repository for computing node health metrics.
+func WithObservationRepository(observations domain.ProbeObservationRepository) Option {
+	return func(s *Service) {
+		s.observations = observations
+	}
+}
+
+// WithScheduler sets the queue scheduler for real-time node probe pool introspection.
+func WithScheduler(scheduler *queue.Scheduler) Option {
+	return func(s *Service) {
+		s.scheduler = scheduler
 	}
 }
 
@@ -211,6 +235,10 @@ func (s *Service) Cancel(ctx context.Context, id string) error {
 		}
 	}
 	s.mu.Unlock()
+
+	if sched := s.resolveScheduler(); sched != nil {
+		sched.CancelRun(id)
+	}
 
 	return nil
 }
@@ -561,4 +589,266 @@ func (s *Service) CancelBatch(ctx context.Context, id string) error {
 	}
 
 	return nil
+}
+
+// SetNodeRepository sets or replaces the node repository used for pool status metrics.
+func (s *Service) SetNodeRepository(nodes domain.NodeRepository) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.nodes = nodes
+}
+
+// SetObservationRepository sets or replaces the probe observation repository used for pool status metrics.
+func (s *Service) SetObservationRepository(observations domain.ProbeObservationRepository) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.observations = observations
+}
+
+// SetScheduler sets or replaces the queue scheduler used for pool status introspection.
+func (s *Service) SetScheduler(scheduler *queue.Scheduler) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.scheduler = scheduler
+}
+
+func (s *Service) resolveScheduler() *queue.Scheduler {
+	s.mu.RLock()
+	sched := s.scheduler
+	runner := s.runner
+	s.mu.RUnlock()
+	if sched != nil {
+		return sched
+	}
+	if dr, ok := runner.(*DefaultRunner); ok && dr != nil {
+		return dr.scheduler
+	}
+	if sp, ok := runner.(interface{ Scheduler() *queue.Scheduler }); ok && sp != nil {
+		return sp.Scheduler()
+	}
+	return nil
+}
+
+func (s *Service) resolveNodesRepo() domain.NodeRepository {
+	s.mu.RLock()
+	nodes := s.nodes
+	runner := s.runner
+	coord := s.coordinator
+	s.mu.RUnlock()
+	if nodes != nil {
+		return nodes
+	}
+	if dr, ok := runner.(*DefaultRunner); ok && dr != nil && dr.nodes != nil {
+		return dr.nodes
+	}
+	if coord != nil && coord.nodes != nil {
+		return coord.nodes
+	}
+	return nil
+}
+
+func (s *Service) resolveObservationsRepo() domain.ProbeObservationRepository {
+	s.mu.RLock()
+	obs := s.observations
+	runner := s.runner
+	s.mu.RUnlock()
+	if obs != nil {
+		return obs
+	}
+	if dr, ok := runner.(*DefaultRunner); ok && dr != nil && dr.observations != nil {
+		return dr.observations
+	}
+	return nil
+}
+
+// GetNodePoolState returns the real-time probe pool state ("probing", "queued", or "idle") for a node.
+func (s *Service) GetNodePoolState(logicalID string) string {
+	sched := s.resolveScheduler()
+	if sched == nil {
+		return "idle"
+	}
+	return sched.GetNodePoolState(logicalID)
+}
+
+func classifyNodeHealthFromObservations(obsByKind map[domain.ProbeKind]domain.ProbeObservation) string {
+	if len(obsByKind) == 0 {
+		return "unknown"
+	}
+	var (
+		hasAvailable bool
+		hasDegraded  bool
+		hasUnhealthy bool
+	)
+	mapVerdict := func(verdict domain.ProbeVerdict) string {
+		switch strings.ToLower(strings.TrimSpace(string(verdict))) {
+		case string(domain.VerdictAvailable), "healthy":
+			return "healthy"
+		case string(domain.VerdictRestricted), string(domain.VerdictStale), "degraded":
+			return "degraded"
+		case string(domain.VerdictError), "unreachable", "unhealthy":
+			return "unhealthy"
+		default:
+			return "unknown"
+		}
+	}
+	for _, obs := range obsByKind {
+		switch mapVerdict(obs.Verdict) {
+		case "healthy":
+			hasAvailable = true
+		case "degraded":
+			hasDegraded = true
+		case "unhealthy":
+			hasUnhealthy = true
+		}
+	}
+	if baselineObs, hasBaseline := obsByKind[domain.ProbeKindBaseline]; hasBaseline {
+		status := mapVerdict(baselineObs.Verdict)
+		if status != "unknown" {
+			return status
+		}
+	}
+	if hasUnhealthy && !hasAvailable {
+		return "unhealthy"
+	}
+	if hasDegraded {
+		return "degraded"
+	}
+	if hasAvailable {
+		return "healthy"
+	}
+	return "unknown"
+}
+
+// GetPoolStatus aggregates real-time node probe pool counts and active node health statistics.
+func (s *Service) GetPoolStatus(ctx context.Context) (*domain.ProbePoolStatus, error) {
+	status := &domain.ProbePoolStatus{
+		ProbingNodeIDs: []string{},
+		QueuedNodeIDs:  []string{},
+		UpdatedAt:      s.clock().UTC(),
+	}
+
+	if sched := s.resolveScheduler(); sched != nil {
+		snap := sched.SnapshotNodePool()
+		if snap.ProbingNodeIDs != nil {
+			status.ProbingNodeIDs = snap.ProbingNodeIDs
+		}
+		if snap.QueuedNodeIDs != nil {
+			status.QueuedNodeIDs = snap.QueuedNodeIDs
+		}
+		status.ProbingCount = snap.ProbingCount
+		status.QueuedWaitingCount = snap.QueuedWaitingCount
+		status.QueueNodesCount = snap.QueueNodesCount
+	}
+
+	nodesRepo := s.resolveNodesRepo()
+	if nodesRepo == nil {
+		return status, nil
+	}
+
+	const fetchPageSize = 100
+	seen := make(map[string]struct{})
+	activeIDs := make([]string, 0)
+	for fetchPage := 1; ; fetchPage++ {
+		chunk, total, err := nodesRepo.List(ctx, domain.NodeFilter{
+			ActiveOnly: true,
+			Pagination: domain.Pagination{Page: fetchPage, PageSize: fetchPageSize},
+		})
+		if err != nil {
+			return nil, err
+		}
+		added := 0
+		for _, n := range chunk {
+			if n.LogicalID == "" {
+				continue
+			}
+			if _, exists := seen[n.LogicalID]; !exists {
+				seen[n.LogicalID] = struct{}{}
+				activeIDs = append(activeIDs, n.LogicalID)
+				added++
+			}
+		}
+		if len(activeIDs) >= total || len(chunk) == 0 || added == 0 {
+			break
+		}
+	}
+
+	status.TotalCount = len(activeIDs)
+	if status.TotalCount == 0 {
+		return status, nil
+	}
+
+	obsRepo := s.resolveObservationsRepo()
+	if obsRepo == nil {
+		status.UntestedCount = status.TotalCount
+		return status, nil
+	}
+
+	latestByNode, err := obsRepo.ListLatestByNodes(ctx, activeIDs, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, id := range activeIDs {
+		switch classifyNodeHealthFromObservations(latestByNode[id]) {
+		case "healthy":
+			status.HealthyCount++
+			status.AvailableCount++
+		case "degraded":
+			status.DegradedCount++
+			status.AvailableCount++
+		case "unhealthy":
+			status.UnavailableCount++
+		default:
+			status.UntestedCount++
+		}
+	}
+
+	return status, nil
+}
+
+// TriggerScheduleNow triggers an immediate periodic deduplicated node pool enqueue
+// across active nodes and returns the updated ProbePoolStatus.
+func (s *Service) TriggerScheduleNow(ctx context.Context) (*domain.ProbePoolStatus, error) {
+	s.mu.RLock()
+	coord := s.coordinator
+	schedRepo := s.schedules
+	s.mu.RUnlock()
+
+	enqueuedCh := make(chan struct{})
+	doneCh := make(chan error, 1)
+	bgCtx := WithTasksEnqueuedHook(context.Background(), func() {
+		close(enqueuedCh)
+	})
+
+	if coord != nil {
+		go func() {
+			doneCh <- coord.TriggerImmediate(bgCtx)
+		}()
+	} else {
+		kinds := []domain.ProbeKind{domain.ProbeKindBaseline}
+		if schedRepo != nil {
+			if sched, err := schedRepo.Get(ctx); err == nil && sched != nil && len(sched.Kinds) > 0 {
+				kinds = sched.Kinds
+			}
+		}
+		run, err := s.Create(ctx, CreateRunCommand{
+			ActorScope:     "system:periodic-probe",
+			IdempotencyKey: "periodic-trigger-" + domain.MustNewUUIDv7(),
+			Kinds:          kinds,
+		})
+		if err != nil {
+			return nil, err
+		}
+		go func() {
+			doneCh <- s.TriggerRun(bgCtx, run.ID, nil, kinds, nil)
+		}()
+	}
+
+	select {
+	case <-enqueuedCh:
+	case <-doneCh:
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	return s.GetPoolStatus(ctx)
 }

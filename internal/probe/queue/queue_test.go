@@ -418,3 +418,240 @@ func TestSchedulerZeroGoroutineLeak(t *testing.T) {
 		t.Fatalf("goroutine leak detected: before=%d, after=%d", beforeGoroutines, afterGoroutines)
 	}
 }
+
+func TestSchedulerPeriodicDedupeSkipsProbingAndQueuedNodes(t *testing.T) {
+	s, err := NewScheduler(Config{Concurrency: 10, RunConcurrency: 10, QueueSize: 32, NodeTTL: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	blockWorkers := make(chan struct{})
+	allWorkersBusy := make(chan struct{})
+	var startedCount atomic.Int32
+
+	// Occupy all 10 worker slots with nodes blocker-0..blocker-9
+	for i := 0; i < 10; i++ {
+		id := fmt.Sprintf("blocker-%d", i)
+		if i == 0 {
+			id = "node-hk-01" // node-hk-01 is actively probing
+		}
+		if err := s.Submit(Task{
+			RunID:     "run-initial",
+			LogicalID: id,
+			Kind:      domain.ProbeKindBaseline,
+			Mode:      EnqueuePeriodicDedupe,
+			Execute: func(context.Context) error {
+				if startedCount.Add(1) == 10 {
+					close(allWorkersBusy)
+				}
+				<-blockWorkers
+				return nil
+			},
+		}); err != nil {
+			t.Fatalf("initial submit failed: %v", err)
+		}
+	}
+
+	<-allWorkersBusy
+
+	// Enqueue node-queued-01 into the waiting queue
+	var queuedExecCount atomic.Int32
+	if err := s.Submit(Task{
+		RunID:     "run-periodic-1",
+		LogicalID: "node-queued-01",
+		Kind:      domain.ProbeKindBaseline,
+		Mode:      EnqueuePeriodicDedupe,
+		Execute: func(context.Context) error {
+			queuedExecCount.Add(1)
+			return nil
+		},
+	}); err != nil {
+		t.Fatalf("enqueue node-queued-01 failed: %v", err)
+	}
+
+	if got := s.GetNodePoolState("node-hk-01"); got != "probing" {
+		t.Fatalf("expected node-hk-01 state probing, got %s", got)
+	}
+	if got := s.GetNodePoolState("node-queued-01"); got != "queued" {
+		t.Fatalf("expected node-queued-01 state queued, got %s", got)
+	}
+	if got := s.GetNodePoolState("node-sg-02"); got != "idle" {
+		t.Fatalf("expected node-sg-02 state idle, got %s", got)
+	}
+
+	// Now a second periodic batch tries to enqueue ["node-hk-01", "node-queued-01", "node-sg-02"]
+	var skippedCallbacks atomic.Int32
+	var sg02Executed atomic.Int32
+	for _, nid := range []string{"node-hk-01", "node-queued-01", "node-sg-02"} {
+		nodeID := nid
+		err := s.Submit(Task{
+			RunID:     "run-periodic-2",
+			LogicalID: nodeID,
+			Kind:      domain.ProbeKindBaseline,
+			Mode:      EnqueuePeriodicDedupe,
+			Execute: func(context.Context) error {
+				if nodeID == "node-sg-02" {
+					sg02Executed.Add(1)
+				} else {
+					t.Errorf("duplicate periodic execution for %s", nodeID)
+				}
+				return nil
+			},
+			OnComplete: func(err error) {
+				if err != nil {
+					t.Errorf("unexpected error in OnComplete: %v", err)
+				}
+				if nodeID != "node-sg-02" {
+					skippedCallbacks.Add(1)
+				}
+			},
+		})
+		if err != nil {
+			t.Fatalf("expected EnqueuePeriodicDedupe not to fail for %s, got %v", nodeID, err)
+		}
+	}
+
+	// Both already-in-pool nodes must have been silently skipped immediately
+	if got := skippedCallbacks.Load(); got != 2 {
+		t.Fatalf("expected 2 immediate skipped callbacks, got %d", got)
+	}
+
+	snap := s.SnapshotNodePool()
+	if snap.ProbingCount != 10 || snap.QueuedWaitingCount != 2 || snap.QueueNodesCount != 12 {
+		t.Fatalf("unexpected pool snapshot: %+v", snap)
+	}
+
+	close(blockWorkers)
+	s.Wait()
+
+	if queuedExecCount.Load() != 1 {
+		t.Fatalf("expected node-queued-01 to execute once, got %d", queuedExecCount.Load())
+	}
+	if sg02Executed.Load() != 1 {
+		t.Fatalf("expected node-sg-02 to execute once, got %d", sg02Executed.Load())
+	}
+}
+
+func TestSchedulerManualPreemptFrontAndPromotion(t *testing.T) {
+	// Use Concurrency=10 and occupy 9 workers permanently until test end so the 10th worker
+	// processes the queue strictly one-by-one in deterministic priority order.
+	s, err := NewScheduler(Config{Concurrency: 10, RunConcurrency: 10, QueueSize: 64, NodeTTL: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	holdNine := make(chan struct{})
+	holdFirst := make(chan struct{})
+	workersReady := make(chan struct{})
+	var busyWorkers atomic.Int32
+
+	for i := 0; i < 9; i++ {
+		id := fmt.Sprintf("pin-worker-%d", i)
+		_ = s.Submit(Task{
+			RunID:     "run-pin",
+			LogicalID: id,
+			Kind:      domain.ProbeKindBaseline,
+			Mode:      EnqueuePeriodicDedupe,
+			Execute: func(context.Context) error {
+				if busyWorkers.Add(1) == 10 {
+					close(workersReady)
+				}
+				<-holdNine
+				return nil
+			},
+		})
+	}
+
+	_ = s.Submit(Task{
+		RunID:     "run-pin-last",
+		LogicalID: "pin-worker-9",
+		Kind:      domain.ProbeKindBaseline,
+		Mode:      EnqueuePeriodicDedupe,
+		Execute: func(context.Context) error {
+			if busyWorkers.Add(1) == 10 {
+				close(workersReady)
+			}
+			<-holdFirst
+			return nil
+		},
+	})
+
+	<-workersReady
+
+	var execMu sync.Mutex
+	var execOrder []string
+
+	// Enqueue 20 periodic tasks: node-01 .. node-20
+	for i := 1; i <= 20; i++ {
+		nid := fmt.Sprintf("node-%02d", i)
+		if err := s.Submit(Task{
+			RunID:     "run-periodic",
+			LogicalID: nid,
+			Kind:      domain.ProbeKindBaseline,
+			Mode:      EnqueuePeriodicDedupe,
+			Execute: func(context.Context) error {
+				execMu.Lock()
+				execOrder = append(execOrder, nid)
+				execMu.Unlock()
+				return nil
+			},
+		}); err != nil {
+			t.Fatalf("periodic submit %s failed: %v", nid, err)
+		}
+	}
+
+	// Trigger manual preempt front for "node-18" (already in periodic queue) and "node-99" (new node)
+	for _, manualID := range []string{"node-18", "node-99"} {
+		nid := manualID
+		if err := s.Submit(Task{
+			RunID:     "run-manual",
+			LogicalID: nid,
+			Kind:      domain.ProbeKindBaseline,
+			Mode:      EnqueueManualPreemptFront,
+			Execute: func(context.Context) error {
+				execMu.Lock()
+				execOrder = append(execOrder, nid)
+				execMu.Unlock()
+				return nil
+			},
+		}); err != nil {
+			t.Fatalf("manual preempt submit %s failed: %v", nid, err)
+		}
+	}
+
+	snap := s.SnapshotNodePool()
+	// 20 periodic + 1 new manual ("node-99") = 21 unique queued nodes ("node-18" was promoted, not duplicated)
+	if snap.QueuedWaitingCount != 21 {
+		t.Fatalf("expected 21 unique queued waiting nodes, got %d (%v)", snap.QueuedWaitingCount, snap.QueuedNodeIDs)
+	}
+	if len(snap.QueuedNodeIDs) < 2 || snap.QueuedNodeIDs[0] != "node-18" || snap.QueuedNodeIDs[1] != "node-99" {
+		t.Fatalf("expected node-18 and node-99 at the front of QueuedNodeIDs, got %v", snap.QueuedNodeIDs)
+	}
+
+	// Release the 10th worker to drain the queue sequentially
+	close(holdFirst)
+	// Wait until all 21 queued tasks complete
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		execMu.Lock()
+		doneCount := len(execOrder)
+		execMu.Unlock()
+		if doneCount >= 21 {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	close(holdNine)
+	s.Wait()
+
+	execMu.Lock()
+	defer execMu.Unlock()
+	if len(execOrder) != 21 {
+		t.Fatalf("expected 21 executed tasks, got %d (%v)", len(execOrder), execOrder)
+	}
+	if execOrder[0] != "node-18" || execOrder[1] != "node-99" {
+		t.Fatalf("expected manual preempted nodes [node-18, node-99] to execute first, got %v", execOrder[:5])
+	}
+}

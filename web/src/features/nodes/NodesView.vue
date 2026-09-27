@@ -21,9 +21,11 @@ import {
   nodeHealthBadge,
   nodeLatencyTone,
   nodeRiskBadge,
+  nodeUnderlyingHealthCategory,
   protocolSupportedTargets,
   renderNodePreview,
   resolveNodeLatencyMs,
+  resolveNodeProbeState,
   type NormalizedNode,
 } from './nodeView'
 import { formatRelativeTime } from '../probes/probeTypes'
@@ -41,14 +43,18 @@ const {
   loadingMore,
   savingConnection,
   probingNodeId,
+  probingNodeIds,
+  queuedNodeIds,
   error,
   total,
   hasMore,
   protocolFilter,
+  healthFilter,
   searchQuery,
   selectedNode,
   load,
   loadMore,
+  syncPoolStatus,
   fetchNodeDetail,
   probeSingleNode,
   updateNodeConnection,
@@ -60,11 +66,71 @@ const connectionError = ref('')
 const connectionSaved = ref(false)
 const probeFeedback = ref('')
 
+const effectiveProbingIds = computed(() => {
+  const set = new Set<string>(probingNodeIds.value)
+  if (probingNodeId.value) set.add(probingNodeId.value)
+  return set
+})
+
+function getNodeProbeState(node: NormalizedNode): 'probing' | 'queued' | 'idle' {
+  return resolveNodeProbeState(node, effectiveProbingIds.value, queuedNodeIds.value)
+}
+
+function getNodeHealthBadge(node: NormalizedNode) {
+  return nodeHealthBadge(node, effectiveProbingIds.value, queuedNodeIds.value)
+}
+
+const healthCounts = computed(() => {
+  let probing = 0
+  let healthy = 0
+  let degraded = 0
+  let unhealthy = 0
+  let unknown = 0
+
+  for (const node of items.value) {
+    const live = getNodeProbeState(node)
+    if (live === 'probing' || live === 'queued') {
+      probing += 1
+    }
+    const cat = nodeUnderlyingHealthCategory(node)
+    if (cat === 'healthy') healthy += 1
+    else if (cat === 'degraded') degraded += 1
+    else if (cat === 'unhealthy') unhealthy += 1
+    else unknown += 1
+  }
+
+  return {
+    all: items.value.length,
+    probing,
+    healthy,
+    degraded,
+    unhealthy,
+    unknown,
+  }
+})
+
+const filteredItems = computed(() => {
+  const filter = healthFilter.value
+  if (filter === 'all') return items.value
+  return items.value.filter((node) => {
+    if (filter === 'probing') {
+      const live = getNodeProbeState(node)
+      return live === 'probing' || live === 'queued'
+    }
+    const cat = nodeUnderlyingHealthCategory(node)
+    if (filter === 'healthy') return cat === 'healthy'
+    if (filter === 'degraded') return cat === 'degraded'
+    if (filter === 'unhealthy') return cat === 'unhealthy'
+    if (filter === 'unknown') return cat === 'unprobed'
+    return true
+  })
+})
+
 async function handleProbeSelectedNode(node: NormalizedNode) {
-  probeFeedback.value = ''
+  probeFeedback.value = `已将节点「${node.displayName}」插队至节点池最前面优先检测...`
   const res = await probeSingleNode(node.logicalId)
   if (res.ok) {
-    probeFeedback.value = '测速已完成并刷新最新状态'
+    probeFeedback.value = '已插队至节点池最前面优先检测 · 测速已完成并刷新最新状态'
   } else {
     probeFeedback.value = res.error || '测速请求失败'
   }
@@ -195,11 +261,11 @@ const containerRef = ref<HTMLElement | null>(null)
 const { width } = useElementSize(containerRef)
 
 const columns = computed(() => deriveColumns(width.value, MIN_CARD_WIDTH, GAP))
-const rowCount = computed(() => Math.ceil(items.value.length / columns.value))
+const rowCount = computed(() => Math.ceil(filteredItems.value.length / columns.value))
 
 function getRowItems(rowIndex: number) {
   const start = rowIndex * columns.value
-  return items.value.slice(start, start + columns.value)
+  return filteredItems.value.slice(start, start + columns.value)
 }
 
 const scrollMargin = ref(0)
@@ -249,6 +315,12 @@ watch(width, () => {
   })
 })
 
+watch(healthFilter, () => {
+  nextTick(() => {
+    rowVirtualizer.value.measure()
+  })
+})
+
 function onScroll() {
   if (typeof window === 'undefined') return
   const scrollPosition = window.innerHeight + window.scrollY
@@ -258,15 +330,27 @@ function onScroll() {
   }
 }
 
+let poolPollTimer: ReturnType<typeof setInterval> | null = null
+
 onMounted(() => {
   load()
   if (typeof window !== 'undefined') {
     window.addEventListener('scroll', onScroll, { passive: true })
     nextTick(updateScrollMargin)
   }
+  poolPollTimer = setInterval(() => {
+    if (
+      probingNodeIds.value.size > 0 ||
+      queuedNodeIds.value.size > 0 ||
+      healthFilter.value === 'probing'
+    ) {
+      syncPoolStatus()
+    }
+  }, 2000)
 })
 
 onUnmounted(() => {
+  if (poolPollTimer) clearInterval(poolPollTimer)
   if (typeof window !== 'undefined') {
     window.removeEventListener('scroll', onScroll)
   }
@@ -290,43 +374,127 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- Protocol Filter Pills & Search Bar -->
-    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-      <div
-        data-testid="node-protocol-filter"
-        class="flex flex-wrap items-center gap-1.5 text-xs"
-        role="group"
-        aria-label="协议筛选"
-      >
-        <button
-          type="button"
-          class="btn btn-xs rounded-lg font-mono"
-          :class="protocolFilter === 'all' ? 'btn-primary' : 'btn-ghost bg-base-200/70'"
-          @click="selectProtocolFilter('all')"
+    <!-- Protocol Filter Pills, Health Status Filter & Search Bar -->
+    <div class="flex flex-col gap-3">
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div
+          data-testid="node-protocol-filter"
+          class="flex flex-wrap items-center gap-1.5 text-xs"
+          role="group"
+          aria-label="协议筛选"
         >
-          {{ t('nodes.protocolAll') }}
-        </button>
-        <button
-          v-for="proto in SUPPORTED_NODE_PROTOCOLS"
-          :key="proto"
-          type="button"
-          class="btn btn-xs rounded-lg font-mono uppercase"
-          :class="protocolFilter === proto ? 'btn-primary' : 'btn-ghost bg-base-200/70'"
-          @click="selectProtocolFilter(proto)"
-        >
-          {{ proto }}
-        </button>
+          <button
+            type="button"
+            class="btn btn-xs rounded-lg font-mono"
+            :class="protocolFilter === 'all' ? 'btn-primary' : 'btn-ghost bg-base-200/70'"
+            @click="selectProtocolFilter('all')"
+          >
+            {{ t('nodes.protocolAll') }}
+          </button>
+          <button
+            v-for="proto in SUPPORTED_NODE_PROTOCOLS"
+            :key="proto"
+            type="button"
+            class="btn btn-xs rounded-lg font-mono uppercase"
+            :class="protocolFilter === proto ? 'btn-primary' : 'btn-ghost bg-base-200/70'"
+            @click="selectProtocolFilter(proto)"
+          >
+            {{ proto }}
+          </button>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-2">
+          <select
+            v-model="healthFilter"
+            data-testid="node-health-filter"
+            aria-label="按节点状态筛选"
+            class="select select-bordered select-xs sm:select-sm text-xs"
+          >
+            <option value="all">全部 ({{ healthCounts.all }})</option>
+            <option value="probing">检测中 ({{ healthCounts.probing }})</option>
+            <option value="healthy">正常 ({{ healthCounts.healthy }})</option>
+            <option value="degraded">降级 ({{ healthCounts.degraded }})</option>
+            <option value="unhealthy">异常 ({{ healthCounts.unhealthy }})</option>
+            <option value="unknown">未探测 ({{ healthCounts.unknown }})</option>
+          </select>
+
+          <input
+            v-model="searchQuery"
+            data-testid="node-search-input"
+            type="search"
+            :placeholder="t('nodes.searchPlaceholder')"
+            class="input input-bordered input-xs sm:input-sm w-full sm:w-60 font-mono text-xs"
+            @keydown.enter="load"
+          />
+        </div>
       </div>
 
-      <div class="flex items-center gap-2">
-        <input
-          v-model="searchQuery"
-          data-testid="node-search-input"
-          type="search"
-          :placeholder="t('nodes.searchPlaceholder')"
-          class="input input-bordered input-xs sm:input-sm w-full sm:w-60 font-mono text-xs"
-          @keydown.enter="load"
-        />
+      <!-- Health Status Quick Filter Capsules -->
+      <div
+        data-testid="node-health-pills"
+        class="flex flex-wrap items-center gap-1.5 text-xs"
+        role="group"
+        aria-label="节点状态筛选"
+      >
+        <span class="opacity-60 mr-1 font-medium">节点状态：</span>
+        <button
+          type="button"
+          data-testid="node-health-pill-all"
+          class="btn btn-xs rounded-full"
+          :class="healthFilter === 'all' ? 'btn-primary' : 'btn-ghost bg-base-200/70'"
+          @click="healthFilter = 'all'"
+        >
+          全部 ({{ healthCounts.all }})
+        </button>
+        <button
+          type="button"
+          data-testid="node-health-pill-probing"
+          class="btn btn-xs rounded-full gap-1"
+          :class="healthFilter === 'probing' ? 'btn-info' : 'btn-ghost bg-base-200/70'"
+          @click="healthFilter = 'probing'"
+        >
+          <span
+            class="w-1.5 h-1.5 rounded-full bg-current"
+            :class="{ 'animate-ping': healthCounts.probing > 0 }"
+          />
+          <span>检测中 ({{ healthCounts.probing }})</span>
+        </button>
+        <button
+          type="button"
+          data-testid="node-health-pill-healthy"
+          class="btn btn-xs rounded-full"
+          :class="healthFilter === 'healthy' ? 'btn-success' : 'btn-ghost bg-base-200/70'"
+          @click="healthFilter = 'healthy'"
+        >
+          正常 ({{ healthCounts.healthy }})
+        </button>
+        <button
+          type="button"
+          data-testid="node-health-pill-degraded"
+          class="btn btn-xs rounded-full"
+          :class="healthFilter === 'degraded' ? 'btn-warning' : 'btn-ghost bg-base-200/70'"
+          @click="healthFilter = 'degraded'"
+        >
+          降级 ({{ healthCounts.degraded }})
+        </button>
+        <button
+          type="button"
+          data-testid="node-health-pill-unhealthy"
+          class="btn btn-xs rounded-full"
+          :class="healthFilter === 'unhealthy' ? 'btn-error' : 'btn-ghost bg-base-200/70'"
+          @click="healthFilter = 'unhealthy'"
+        >
+          异常 ({{ healthCounts.unhealthy }})
+        </button>
+        <button
+          type="button"
+          data-testid="node-health-pill-unknown"
+          class="btn btn-xs rounded-full"
+          :class="healthFilter === 'unknown' ? 'btn-neutral' : 'btn-ghost bg-base-200/70'"
+          @click="healthFilter = 'unknown'"
+        >
+          未探测 ({{ healthCounts.unknown }})
+        </button>
       </div>
     </div>
 
@@ -349,7 +517,7 @@ onUnmounted(() => {
     <!-- Virtualized Responsive Node Grid Normal page flow with width-derived columns -->
     <div v-else ref="containerRef" class="w-full min-w-0">
       <div
-        v-if="items.length > 0"
+        v-if="filteredItems.length > 0"
         class="relative w-full"
         :style="{ height: `${rowVirtualizer.getTotalSize()}px` }"
       >
@@ -429,8 +597,16 @@ onUnmounted(() => {
                   <div class="flex flex-wrap items-center gap-1.5 sm:gap-2 min-w-0">
                     <span class="mr-1 text-xs opacity-60 shrink-0">{{ t('nodes.capabilities') }}</span>
                     <StatusBadge
-                      :label="`健康: ${nodeHealthBadge(node).label}`"
-                      :tone="nodeHealthBadge(node).tone"
+                      data-testid="node-health-badge"
+                      :label="
+                        getNodeProbeState(node) === 'probing'
+                          ? '⚡ 检测中'
+                          : getNodeProbeState(node) === 'queued'
+                          ? '⏳ 队列等待'
+                          : `健康: ${getNodeHealthBadge(node).label}`
+                      "
+                      :tone="getNodeHealthBadge(node).tone"
+                      :pulse="getNodeProbeState(node) !== 'idle'"
                     />
                     <StatusBadge
                       v-if="resolveNodeLatencyMs(node) !== null"
@@ -471,11 +647,14 @@ onUnmounted(() => {
                       type="button"
                       data-testid="node-card-probe-btn"
                       class="btn btn-outline btn-primary btn-xs gap-1"
-                      :disabled="probingNodeId === node.logicalId"
+                      :disabled="getNodeProbeState(node) === 'probing'"
                       @click.stop="handleProbeSelectedNode(node)"
                     >
-                      <BoltIcon class="w-3.5 h-3.5" :class="{ 'animate-pulse': probingNodeId === node.logicalId }" />
-                      <span>{{ probingNodeId === node.logicalId ? '测速中...' : '测速' }}</span>
+                      <BoltIcon
+                        class="w-3.5 h-3.5"
+                        :class="{ 'animate-spin': getNodeProbeState(node) === 'probing' }"
+                      />
+                      <span>{{ getNodeProbeState(node) === 'probing' ? '检测中...' : '立即重测' }}</span>
                     </button>
                     <button
                       type="button"
@@ -495,7 +674,7 @@ onUnmounted(() => {
 
       <!-- Terminal content reserves inherited dynamic dock inset for clean separation -->
       <div
-        v-if="items.length > 0"
+        v-if="filteredItems.length > 0"
         class="py-4 text-center"
         :style="{ paddingBottom: 'var(--content-dock-inset, 32px)' }"
       >
@@ -507,10 +686,10 @@ onUnmounted(() => {
 
       <!-- Empty State -->
       <EmptyState
-        v-if="!items.length && !loading"
+        v-if="!filteredItems.length && !loading"
         :icon="EyeIcon"
-        :title="t('nodes.emptyTitle')"
-        :description="t('nodes.emptyDesc')"
+        :title="items.length === 0 ? t('nodes.emptyTitle') : '没有匹配筛选状态的节点'"
+        :description="items.length === 0 ? t('nodes.emptyDesc') : '请尝试切换节点状态筛选或协议筛选条件。'"
       />
     </div>
 
@@ -538,17 +717,28 @@ onUnmounted(() => {
               type="button"
               data-testid="node-probe-btn"
               class="btn btn-primary btn-xs gap-1"
-              :disabled="probingNodeId === selectedNode.logicalId"
+              :disabled="getNodeProbeState(selectedNode) === 'probing'"
               @click="handleProbeSelectedNode(selectedNode)"
             >
-              <BoltIcon class="w-3.5 h-3.5" :class="{ 'animate-spin': probingNodeId === selectedNode.logicalId }" />
-              <span>{{ probingNodeId === selectedNode.logicalId ? '正在测速...' : '测速此节点' }}</span>
+              <BoltIcon
+                class="w-3.5 h-3.5"
+                :class="{ 'animate-spin': getNodeProbeState(selectedNode) === 'probing' }"
+              />
+              <span>{{ getNodeProbeState(selectedNode) === 'probing' ? '检测中...' : '立即重测 (插队)' }}</span>
             </button>
           </div>
           <div class="flex flex-wrap items-center gap-1.5">
             <StatusBadge
-              :label="`健康: ${nodeHealthBadge(selectedNode).label}`"
-              :tone="nodeHealthBadge(selectedNode).tone"
+              data-testid="node-drawer-health-badge"
+              :label="
+                getNodeProbeState(selectedNode) === 'probing'
+                  ? '⚡ 检测中'
+                  : getNodeProbeState(selectedNode) === 'queued'
+                  ? '⏳ 队列等待'
+                  : `健康: ${getNodeHealthBadge(selectedNode).label}`
+              "
+              :tone="getNodeHealthBadge(selectedNode).tone"
+              :pulse="getNodeProbeState(selectedNode) !== 'idle'"
             />
             <StatusBadge
               data-testid="node-drawer-latency-badge"

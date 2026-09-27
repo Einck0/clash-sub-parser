@@ -385,6 +385,60 @@ describe('useProbes composable', () => {
     await expect(cancelBatch('batch-detail-1')).rejects.toThrow('Batch is already finalized')
     expect(error.value).toBe('Batch is already finalized')
   })
+
+  it('loads ProbePoolStatus from GET /api/v1/probes/pool, falls back to local nodes when offline, and triggers POST /api/v1/probes/schedule/trigger', async () => {
+    const serverPool = {
+      queue_nodes_count: 5,
+      probing_count: 2,
+      queued_waiting_count: 3,
+      untested_count: 3,
+      total_count: 10,
+      unavailable_count: 2,
+      available_count: 5,
+      healthy_count: 4,
+      degraded_count: 1,
+      probing_node_ids: ['node-hk-01', 'node-jp-02'],
+      queued_node_ids: ['node-sg-03', 'node-us-04', 'node-kr-05'],
+      updated_at: '2026-09-27T03:00:00Z',
+    }
+
+    vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
+      if (path === '/api/v1/probes/pool') {
+        return serverPool
+      }
+      if (path === '/api/v1/probes/batches') {
+        return { items: [], total: 0 }
+      }
+      if (path === '/api/v1/nodes') {
+        return { items: [], total: 0 }
+      }
+      return {}
+    })
+
+    const postSpy = vi.spyOn(api, 'post').mockResolvedValueOnce({
+      ...serverPool,
+      queue_nodes_count: 7,
+      queued_waiting_count: 5,
+    })
+
+    const { poolStatus, probingNodeIds, queuedNodeIds, loadPoolStatus, triggerPeriodicPoolEnqueue } = useProbes()
+    const loaded = await loadPoolStatus()
+
+    expect(loaded.queue_nodes_count).toBe(5)
+    expect(loaded.probing_count).toBe(2)
+    expect(loaded.queued_waiting_count).toBe(3)
+    expect(loaded.untested_count).toBe(3)
+    expect(loaded.total_count).toBe(10)
+    expect(loaded.unavailable_count).toBe(2)
+    expect(loaded.available_count).toBe(5)
+    expect(probingNodeIds.value.has('node-hk-01')).toBe(true)
+    expect(queuedNodeIds.value.has('node-sg-03')).toBe(true)
+
+    const triggered = await triggerPeriodicPoolEnqueue()
+    expect(postSpy).toHaveBeenCalledWith('/api/v1/probes/schedule/trigger')
+    expect(triggered?.queue_nodes_count).toBe(7)
+    expect(poolStatus.value.queue_nodes_count).toBe(7)
+  })
 })
 
 describe('ProbesView Component Interaction & Feedback', () => {
@@ -771,5 +825,175 @@ describe('ProbesView Component Interaction & Feedback', () => {
     expect(fullText).not.toMatch(/password/i)
     expect(fullText).not.toMatch(/private_key/i)
     expect(fullText).not.toMatch(/BEGIN RSA PRIVATE KEY/)
+  })
+
+  it('renders Node Pool 5 core metrics dashboard, probing/queued badges, status filter linkage, manual preemption feedback, and periodic deduplication trigger', async () => {
+    const poolSnapshot = {
+      queue_nodes_count: 2,
+      probing_count: 1,
+      queued_waiting_count: 1,
+      untested_count: 1,
+      total_count: 4,
+      unavailable_count: 1,
+      available_count: 2,
+      healthy_count: 1,
+      degraded_count: 1,
+      probing_node_ids: ['node-hk-probing'],
+      queued_node_ids: ['node-sg-queued'],
+      updated_at: '2026-09-27T03:05:00Z',
+    }
+
+    const mockPoolNodes = [
+      {
+        logical_id: 'node-hk-probing',
+        protocol: 'vless',
+        display_name: 'HK Pool Probing 01',
+        active: true,
+        server: '203.0.113.1',
+        port: 443,
+        latency_ms: 32,
+        probe_state: 'probing' as const,
+        health_status: 'probing' as const,
+        capabilities: { baseline: { verdict: 'available' as const, latency_ms: 32 } },
+      },
+      {
+        logical_id: 'node-sg-queued',
+        protocol: 'trojan',
+        display_name: 'SG Pool Queued 02',
+        active: true,
+        server: '203.0.113.2',
+        port: 443,
+        latency_ms: 140,
+        probe_state: 'queued' as const,
+        health_status: 'degraded' as const,
+        capabilities: { baseline: { verdict: 'restricted' as const, latency_ms: 140 } },
+      },
+      {
+        logical_id: 'node-us-down',
+        protocol: 'ss',
+        display_name: 'US Down 03',
+        active: true,
+        server: '203.0.113.3',
+        port: 8388,
+        latency_ms: 0,
+        probe_state: 'idle' as const,
+        health_status: 'unhealthy' as const,
+        capabilities: { baseline: { verdict: 'error' as const, latency_ms: 0 } },
+      },
+      {
+        logical_id: 'node-kr-untested',
+        protocol: 'hysteria2',
+        display_name: 'KR Untested 04',
+        active: true,
+        server: '203.0.113.4',
+        port: 8443,
+        probe_state: 'idle' as const,
+        probe_missing: true,
+        capabilities: {},
+      },
+    ]
+
+    vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
+      if (path === '/api/v1/probes/pool') return { ...poolSnapshot }
+      if (path === '/api/v1/nodes') return { items: mockPoolNodes, page: 1, page_size: 100, total: 4 }
+      if (path === '/api/v1/probes/runs') return { items: [], total: 0 }
+      if (path === '/api/v1/probes/schedule') return { ...mockSchedule }
+      if (path === '/api/v1/probes/batches') return { items: [], total: 0 }
+      return { items: [], total: 0 }
+    })
+
+    const postSpy = vi.spyOn(api, 'post').mockImplementation(async (path: string) => {
+      if (path === '/api/v1/probes/schedule/trigger') {
+        return {
+          ...poolSnapshot,
+          queue_nodes_count: 3,
+          queued_waiting_count: 2,
+          queued_node_ids: ['node-sg-queued', 'node-kr-untested'],
+        }
+      }
+      return {
+        run_id: 'run-preempt-1',
+        state: 'running',
+        deadline_at: '2026-09-27T03:15:00Z',
+      }
+    })
+
+    await mountProbesView()
+
+    // Verify 3x2 spacious grid class on probe-pool-dashboard (no xl:grid-cols-6 cramping)
+    const poolDashboard = container.querySelector('[data-testid="probe-pool-dashboard"]') as HTMLElement | null
+    expect(poolDashboard?.className).toContain('lg:grid-cols-3')
+    expect(poolDashboard?.className).not.toContain('xl:grid-cols-6')
+
+    // Verify 5 core metrics cards in Node Pool dashboard
+    const metricQueue = container.querySelector('[data-testid="pool-metric-queue"]') as HTMLElement | null
+    const metricTotal = container.querySelector('[data-testid="pool-metric-total"]') as HTMLElement | null
+    const metricAvailable = container.querySelector('[data-testid="pool-metric-available"]') as HTMLElement | null
+    const metricUnavailable = container.querySelector('[data-testid="pool-metric-unavailable"]') as HTMLElement | null
+    const metricUntested = container.querySelector('[data-testid="pool-metric-untested"]') as HTMLElement | null
+
+    expect(metricQueue?.textContent).toContain('当前队列中的节点数')
+    expect(metricQueue?.textContent).toContain('2')
+    expect(metricQueue?.textContent).toContain('检测中 1')
+    expect(metricQueue?.textContent).toContain('排队等待 1')
+    expect(metricTotal?.textContent).toContain('总数')
+    expect(metricTotal?.textContent).toContain('4')
+    expect(metricTotal?.textContent).toContain('86 ms') // avg of 32 and 140, excluding 0ms failed node
+    expect(metricAvailable?.textContent).toContain('可用数')
+    expect(metricAvailable?.textContent).toContain('2')
+    expect(metricUnavailable?.textContent).toContain('不可用数')
+    expect(metricUnavailable?.textContent).toContain('1')
+    expect(metricUntested?.textContent).toContain('未测数')
+    expect(metricUntested?.textContent).toContain('1')
+
+    // Verify table rows show "检测中" and "队列中" badges, and failed node shows "--" (not "0 ms")
+    const allRows = container.querySelectorAll('[data-testid="probe-node-row"]')
+    expect(allRows.length).toBe(4)
+    expect(allRows[0].textContent).toContain('HK Pool Probing 01')
+    expect(allRows[0].textContent).toContain('检测中')
+    expect(allRows[1].textContent).toContain('SG Pool Queued 02')
+    expect(allRows[1].textContent).toContain('队列中')
+    const failedRow = Array.from(allRows).find((r) => r.textContent?.includes('US Down 03'))
+    expect(failedRow?.textContent).not.toContain('0 ms')
+    expect(failedRow?.querySelector('[data-testid="probe-node-latency-badge"]')?.textContent?.trim()).toBe('--')
+
+    // Click "当前队列中的节点数" metric card to filter by probing/queued nodes
+    metricQueue?.click()
+    await nextTick()
+    const probingRows = container.querySelectorAll('[data-testid="probe-node-row"]')
+    expect(probingRows.length).toBe(2)
+
+    // Click "未测数" metric card to filter by untested nodes
+    metricUntested?.click()
+    await nextTick()
+    const untestedRows = container.querySelectorAll('[data-testid="probe-node-row"]')
+    expect(untestedRows.length).toBe(1)
+    expect(untestedRows[0].textContent).toContain('KR Untested 04')
+
+    // Click "立即重测" on the untested node and verify front-of-queue preemption feedback
+    const reprobeBtn = untestedRows[0].querySelector('[data-testid="row-reprobe-btn"]') as HTMLButtonElement | null
+    reprobeBtn?.click()
+    await nextTick()
+    await new Promise((r) => setTimeout(r, 20))
+
+    expect(postSpy).toHaveBeenCalledWith(
+      '/api/v1/probes/runs',
+      expect.objectContaining({
+        node_logical_ids: ['node-kr-untested'],
+      }),
+      expect.any(Object)
+    )
+    const feedbackEl = container.querySelector('[data-testid="pool-action-feedback"]')
+    expect(feedbackEl?.textContent).toContain('插队至节点池最前面优先检测')
+
+    // Trigger periodic deduplicated pool enqueue
+    const periodicTriggerBtn = container.querySelector('[data-testid="trigger-periodic-pool-btn"]') as HTMLButtonElement | null
+    expect(periodicTriggerBtn).not.toBeNull()
+    periodicTriggerBtn?.click()
+    await nextTick()
+    await new Promise((r) => setTimeout(r, 20))
+
+    expect(postSpy).toHaveBeenCalledWith('/api/v1/probes/schedule/trigger')
+    expect(feedbackEl?.textContent).toContain('自动去重跳过')
   })
 })

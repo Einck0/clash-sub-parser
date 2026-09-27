@@ -442,3 +442,133 @@ func TestInventoryService_ReadModelWithProbeObservationsAndSources(t *testing.T)
 		t.Fatalf("unexpected detail NodeView: %+v", dv)
 	}
 }
+
+type mockPoolStateProvider struct {
+	states map[string]string
+}
+
+func (m mockPoolStateProvider) GetNodePoolState(logicalID string) string {
+	if st, ok := m.states[logicalID]; ok {
+		return st
+	}
+	return "idle"
+}
+
+func TestInventoryService_NodeViewProbeStateProbingAndQueued(t *testing.T) {
+	db, subRepo, fetchRepo, nodeRepo, sourceRepo := setupTestEnv(t)
+	ctx := context.Background()
+
+	now := domain.NowUTC()
+	n1 := "node_probing_01"
+	n2 := "node_queued_02"
+	n3 := "node_idle_03"
+	for _, id := range []string{n1, n2, n3} {
+		if err := nodeRepo.UpsertBatch(ctx, []domain.Node{{
+			LogicalID:   id,
+			Protocol:    domain.ProtocolVMess,
+			DisplayName: id,
+			Server:      "198.51.100.1",
+			Port:        443,
+			Active:      true,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		}}); err != nil {
+			t.Fatalf("upsert %s: %v", id, err)
+		}
+	}
+
+	probeRunRepo := sqlite.NewProbeRunRepository(db)
+	probeObsRepo := sqlite.NewProbeObservationRepository(db)
+	runID := domain.MustNewUUIDv7()
+	_ = probeRunRepo.Create(ctx, &domain.ProbeRun{
+		ID:             runID,
+		IdempotencyKey: "pool-state-run",
+		ActorScope:     "admin",
+		State:          domain.ProbeRunStateSucceeded,
+		DeadlineAt:     now.Add(10 * time.Minute),
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	})
+	_ = probeObsRepo.Create(ctx, &domain.ProbeObservation{
+		ID:            domain.MustNewUUIDv7(),
+		ProbeRunID:    runID,
+		NodeLogicalID: n1,
+		Kind:          domain.ProbeKindBaseline,
+		Verdict:       domain.VerdictAvailable,
+		EvidenceDigest: domain.ComputeProbeEvidenceDigest(
+			runID, n1, "v1", domain.VerdictAvailable, 204, "ok",
+		),
+		ObservedAt:      now,
+		LatencyMS:       55,
+		RedactedSummary: "ok",
+	})
+
+	provider := mockPoolStateProvider{
+		states: map[string]string{
+			n1: "probing",
+			n2: "queued",
+			n3: "idle",
+		},
+	}
+
+	svc := inventory.NewService(
+		db, subRepo, fetchRepo, nodeRepo, sourceRepo, nil,
+		inventory.WithProbeObservationRepository(probeObsRepo),
+		inventory.WithNodePoolStateProvider(provider),
+	)
+
+	views, total, err := svc.ListNodesReadModel(ctx, domain.NodeFilter{
+		Pagination: domain.Pagination{Page: 1, PageSize: 20},
+	})
+	if err != nil || total != 3 {
+		t.Fatalf("ListNodesReadModel: total=%d err=%v", total, err)
+	}
+
+	byID := make(map[string]inventory.NodeView, len(views))
+	for _, v := range views {
+		byID[v.LogicalID] = v
+	}
+
+	if byID[n1].ProbeState != "probing" || byID[n1].HealthStatus != "probing" {
+		t.Fatalf("expected %s probe_state=probing and health_status=probing, got %+v", n1, byID[n1])
+	}
+	if byID[n1].LatencyMS == nil || *byID[n1].LatencyMS != 55 {
+		t.Fatalf("expected %s historical latency_ms=55 preserved while probing, got %v", n1, byID[n1].LatencyMS)
+	}
+	if byID[n2].ProbeState != "queued" {
+		t.Fatalf("expected %s probe_state=queued, got %+v", n2, byID[n2])
+	}
+	if byID[n3].ProbeState != "idle" {
+		t.Fatalf("expected %s probe_state=idle, got %+v", n3, byID[n3])
+	}
+
+	detail, err := svc.GetNodeDetailWithRisk(ctx, n1, "")
+	if err != nil {
+		t.Fatalf("GetNodeDetailWithRisk: %v", err)
+	}
+	if detail.ProbeState != "probing" || detail.HealthStatus != "probing" || detail.ToNodeView().ProbeState != "probing" {
+		t.Fatalf("expected detail probe_state=probing and health_status=probing, got %+v", detail)
+	}
+
+	// Verify failed/unhealthy observation (verdict=error, latency_ms=0 or >0) never populates valid LatencyMS
+	_ = probeObsRepo.Create(ctx, &domain.ProbeObservation{
+		ID:            domain.MustNewUUIDv7(),
+		ProbeRunID:    runID,
+		NodeLogicalID: n3,
+		Kind:          domain.ProbeKindBaseline,
+		Verdict:       domain.VerdictError,
+		EvidenceDigest: domain.ComputeProbeEvidenceDigest(
+			runID, n3, "v1", domain.VerdictError, 0, "dial_timeout",
+		),
+		ObservedAt:      now,
+		LatencyMS:       0,
+		RedactedSummary: "profile=baseline version=v1 verdict=error reason=dial_timeout status=0 latency_ms=0",
+	})
+	detailFailed, err := svc.GetNodeDetailWithRisk(ctx, n3, "")
+	if err != nil {
+		t.Fatalf("GetNodeDetailWithRisk(%s): %v", n3, err)
+	}
+	if detailFailed.HealthStatus != "unhealthy" || detailFailed.LatencyMS != nil {
+		t.Fatalf("expected unhealthy node %s to have nil LatencyMS, got health=%s latency=%v", n3, detailFailed.HealthStatus, detailFailed.LatencyMS)
+	}
+}

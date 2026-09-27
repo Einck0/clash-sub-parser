@@ -748,3 +748,94 @@ func TestPeriodicCoordinator_CrashTakeoverIdempotency(t *testing.T) {
 		t.Fatalf("expected completed_runs 2, got %d", finalBatch.Counts.CompletedRuns)
 	}
 }
+
+func TestPeriodicCoordinator_DeduplicatesNodesAlreadyInPool(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	pastDue := now.Add(-time.Minute)
+
+	schedRepo := newMemoryScheduleRepo(domain.ProbeSchedule{
+		Enabled:         true,
+		IntervalSeconds: 300,
+		Kinds:           []domain.ProbeKind{domain.ProbeKindBaseline},
+		NextDueAt:       &pastDue,
+		Generation:      1,
+		UpdatedAt:       now,
+	})
+	nodeRepo := &memoryNodeRepo{
+		nodes: []domain.Node{
+			{LogicalID: "node-hk-01", DisplayName: "HK 01", Protocol: domain.ProtocolVMess, Active: true},
+			{LogicalID: "node-sg-02", DisplayName: "SG 02", Protocol: domain.ProtocolVMess, Active: true},
+		},
+	}
+	runRepo := &memoryRuns{items: make(map[string]domain.ProbeRun)}
+	obsRepo := &testObsRepo{}
+
+	sched, err := queue.NewScheduler(queue.Config{Concurrency: 10, QueueSize: 32})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sched.Close()
+
+	// Pre-occupy node-hk-01 in the node pool (currently probing)
+	hkStarted := make(chan struct{})
+	releaseHK := make(chan struct{})
+	if err := sched.Submit(queue.Task{
+		RunID:     "manual-run-hk",
+		LogicalID: "node-hk-01",
+		Kind:      domain.ProbeKindBaseline,
+		Mode:      queue.EnqueueManualPreemptFront,
+		Execute: func(context.Context) error {
+			close(hkStarted)
+			<-releaseHK
+			return nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	<-hkStarted
+
+	var probedNodesMu sync.Mutex
+	probedByPeriodic := make([]string, 0)
+	runner := NewDefaultRunner(
+		nodeRepo,
+		obsRepo,
+		sched,
+		runRepo,
+		WithNodeDialer(func(ctx context.Context, node domain.Node) (*http.Client, func() error, error) {
+			probedNodesMu.Lock()
+			probedByPeriodic = append(probedByPeriodic, node.LogicalID)
+			probedNodesMu.Unlock()
+			return nil, nil, nil
+		}),
+	)
+
+	coord := NewPeriodicCoordinator(
+		schedRepo,
+		nodeRepo,
+		runRepo,
+		runner,
+		WithCoordinatorClock(func() time.Time { return now }),
+	)
+
+	if err := coord.TriggerWindow(); err != nil {
+		t.Fatalf("TriggerWindow failed: %v", err)
+	}
+
+	close(releaseHK)
+	sched.Wait()
+
+	probedNodesMu.Lock()
+	if len(probedByPeriodic) != 1 || probedByPeriodic[0] != "node-sg-02" {
+		t.Fatalf("expected only node-sg-02 to be probed by periodic batch, got %v", probedByPeriodic)
+	}
+	probedNodesMu.Unlock()
+
+	batches, total, err := schedRepo.ListBatches(ctx, 1, 10)
+	if err != nil || total != 1 {
+		t.Fatalf("expected 1 batch, got total=%d err=%v", total, err)
+	}
+	if batches[0].Counts.TotalNodes != 2 || batches[0].Counts.SkippedNodes != 1 {
+		t.Fatalf("expected TotalNodes=2 and SkippedNodes=1, got %+v", batches[0].Counts)
+	}
+}

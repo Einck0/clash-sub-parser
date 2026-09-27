@@ -273,6 +273,60 @@ func (c *PeriodicCoordinator) TriggerWindow() error {
 	return c.triggerWindow()
 }
 
+// TriggerImmediate forces an immediate periodic probe batch execution, deduplicating
+// nodes that are already in the probe pool.
+func (c *PeriodicCoordinator) TriggerImmediate(ctx context.Context) error {
+	if ctx == nil {
+		if c.ctx != nil {
+			ctx = c.ctx
+		} else {
+			ctx = context.Background()
+		}
+	}
+
+	var sched *domain.ProbeSchedule
+	if c.schedules != nil {
+		if s, err := c.schedules.Get(ctx); err == nil && s != nil {
+			copySched := *s
+			sched = &copySched
+		}
+	}
+	if sched == nil {
+		def := domain.DefaultProbeSchedule()
+		sched = &def
+	}
+	if len(sched.Kinds) == 0 {
+		sched.Kinds = []domain.ProbeKind{domain.ProbeKindBaseline}
+	}
+
+	now := c.clock().UTC()
+	windowAt := now.Truncate(time.Millisecond)
+	newBatch := &domain.ProbeBatch{
+		ID:         domain.MustNewUUIDv7(),
+		WindowAt:   windowAt,
+		Generation: sched.Generation,
+		Owner:      c.ownerID,
+		State:      domain.ProbeBatchStatePending,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	if c.schedules != nil {
+		if err := c.schedules.CreateBatch(ctx, newBatch); err != nil {
+			if existing, getErr := c.schedules.GetBatchByWindow(ctx, sched.Generation, windowAt); getErr == nil && existing != nil {
+				newBatch = existing
+			} else {
+				return err
+			}
+		}
+	}
+
+	if newBatch.State.IsTerminal() {
+		return nil
+	}
+
+	return c.executeBatch(ctx, newBatch, sched)
+}
+
 func (c *PeriodicCoordinator) triggerWindow() error {
 	if c.ctx == nil {
 		c.ctx = context.Background()
@@ -434,7 +488,22 @@ func (c *PeriodicCoordinator) executeBatch(parentCtx context.Context, batch *dom
 	})
 
 	batch.Counts.TotalNodes = len(nodes)
+	if poolFilter, ok := c.runner.(interface{ IsNodeInPool(logicalID string) bool }); ok && poolFilter != nil {
+		filtered := make([]domain.Node, 0, len(nodes))
+		skipped := 0
+		for _, n := range nodes {
+			if poolFilter.IsNodeInPool(n.LogicalID) {
+				skipped++
+				continue
+			}
+			filtered = append(filtered, n)
+		}
+		batch.Counts.SkippedNodes = skipped
+		nodes = filtered
+	}
+
 	if len(nodes) == 0 {
+		notifyTasksEnqueued(parentCtx)
 		_ = batch.TransitionTo(domain.ProbeBatchStateSucceeded)
 		_ = c.schedules.UpdateBatch(context.Background(), batch)
 		_ = c.schedules.ReleaseLease(context.Background(), batch.ID, c.ownerID)

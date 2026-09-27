@@ -37,7 +37,9 @@ import {
   nodeHealthBadge,
   nodeLatencyTone,
   nodeRiskBadge,
+  nodeUnderlyingHealthCategory,
   resolveNodeLatencyMs,
+  resolveNodeProbeState,
   type NormalizedNode,
 } from '../nodes/nodeView'
 import ProbeRunCard from './ProbeRunCard.vue'
@@ -61,6 +63,10 @@ const {
   nodeMap,
   subscriptionNameMap,
   probingNodeIds,
+  queuedNodeIds,
+  poolStatus,
+  loadingPoolStatus,
+  triggeringSchedule,
   loadingRuns,
   loadingObservations,
   loadingNodeObservations,
@@ -86,6 +92,8 @@ const {
   updateSchedule,
   loadBatches,
   cancelBatch,
+  loadPoolStatus,
+  triggerPeriodicPoolEnqueue,
 } = useProbes()
 
 const activeTab = ref<'workbench' | 'runs' | 'schedule'>('workbench')
@@ -94,6 +102,7 @@ const evidenceSheetOpen = ref(false)
 const selectedInspectNode = ref<NormalizedNode | null>(null)
 const selectedStateFilter = ref<ProbeRunState | ''>('')
 const historyCollapsed = ref(false)
+const poolActionFeedback = ref('')
 
 // Probe Dimension Pills state (baseline always included by default)
 const selectedKinds = ref<ProbeKind[]>(['baseline', 'streaming', 'ai', 'ip_risk', 'geo'])
@@ -102,7 +111,9 @@ const selectedKinds = ref<ProbeKind[]>(['baseline', 'streaming', 'ai', 'ip_risk'
 const searchQuery = ref('')
 const protocolFilter = ref('all')
 const subscriptionFilter = ref('all')
-const healthFilter = ref<'all' | 'healthy' | 'degraded' | 'unhealthy' | 'unprobed'>('all')
+const healthFilter = ref<
+  'all' | 'probing' | 'available' | 'healthy' | 'degraded' | 'unhealthy' | 'unprobed'
+>('all')
 const sortBy = ref<'latency_asc' | 'latency_desc' | 'name_asc'>('latency_asc')
 
 // Multi-select nodes for targeted probing
@@ -128,16 +139,20 @@ function selectAllKinds() {
   selectedKinds.value = ALL_PROBE_KINDS.map((k) => k.kind)
 }
 
+function getNodeProbeState(node: NormalizedNode): 'probing' | 'queued' | 'idle' {
+  return resolveNodeProbeState(node, probingNodeIds.value, queuedNodeIds.value)
+}
+
+function getNodeHealthBadge(node: NormalizedNode) {
+  return nodeHealthBadge(node, probingNodeIds.value, queuedNodeIds.value)
+}
+
 // ============================================================================
-// Tier 1: KPI Summary Bar Computed Metrics
+// Tier 1: Node Pool & Fleet Status Computed Metrics (5 Core Metrics)
 // ============================================================================
 const kpiStats = computed(() => {
   const nodes = probeNodes.value
-  const total = nodes.length
-  let healthy = 0
-  let degraded = 0
-  let unhealthy = 0
-  let unprobed = 0
+  const pool = poolStatus.value
 
   let latencySum = 0
   let latencyCount = 0
@@ -150,14 +165,8 @@ const kpiStats = computed(() => {
   let lowRiskCount = 0
 
   for (const node of nodes) {
-    const badge = nodeHealthBadge(node)
-    if (badge.label === '正常') healthy += 1
-    else if (badge.label === '降级') degraded += 1
-    else if (badge.label === '异常') unhealthy += 1
-    else unprobed += 1
-
     const ms = resolveNodeLatencyMs(node)
-    if (ms !== null && ms >= 0) {
+    if (ms !== null && ms > 0) {
       latencySum += ms
       latencyCount += 1
       if (ms < 100) fastCount += 1
@@ -176,11 +185,34 @@ const kpiStats = computed(() => {
     }
   }
 
-  const availableCount = healthy + degraded
+  const total = pool.total_count > 0 || nodes.length === 0 ? pool.total_count : nodes.length
+  const availableCount = pool.available_count
+  const healthy = pool.healthy_count
+  const degraded = pool.degraded_count
+  const unhealthy = pool.unavailable_count
+  const unprobed = pool.untested_count
+  const queueNodesCount = pool.queue_nodes_count
+  const probingCount = pool.probing_count
+  const queuedWaitingCount = pool.queued_waiting_count
+
   const onlineRate = total > 0 ? Math.round((availableCount / total) * 100) : 0
   const avgLatency = latencyCount > 0 ? Math.round(latencySum / latencyCount) : null
 
+  // Segmented bar percentages
+  const denom = Math.max(1, total)
+  const healthyPct = Math.round((healthy / denom) * 100)
+  const degradedPct = Math.round((degraded / denom) * 100)
+  const unhealthyPct = Math.round((unhealthy / denom) * 100)
+  const unprobedPct = Math.max(0, 100 - healthyPct - degradedPct - unhealthyPct)
+  const queueProgressPct =
+    total > 0 && queueNodesCount > 0
+      ? Math.max(8, Math.min(100, Math.round(((total - queueNodesCount) / total) * 100)))
+      : 0
+
   return {
+    queueNodesCount,
+    probingCount,
+    queuedWaitingCount,
     total,
     availableCount,
     onlineRate,
@@ -196,8 +228,24 @@ const kpiStats = computed(() => {
     streamingUnlocked,
     aiUnlocked,
     lowRiskCount,
+    healthyPct,
+    degradedPct,
+    unhealthyPct,
+    unprobedPct,
+    queueProgressPct,
   }
 })
+
+function selectPoolMetricFilter(
+  target: 'all' | 'probing' | 'available' | 'healthy' | 'degraded' | 'unhealthy' | 'unprobed'
+) {
+  activeTab.value = 'workbench'
+  if (target === 'all') {
+    healthFilter.value = 'all'
+    return
+  }
+  healthFilter.value = healthFilter.value === target ? 'all' : target
+}
 
 // Available subscription filter options derived from subscriptions + node sources
 const subscriptionOptions = computed(() => {
@@ -231,11 +279,14 @@ const filteredNodes = computed(() => {
       if (!hasSub) return false
     }
     if (health !== 'all') {
-      const badge = nodeHealthBadge(node)
-      if (health === 'healthy' && badge.label !== '正常') return false
-      if (health === 'degraded' && badge.label !== '降级') return false
-      if (health === 'unhealthy' && badge.label !== '异常') return false
-      if (health === 'unprobed' && badge.label !== '未探测') return false
+      const liveState = getNodeProbeState(node)
+      const category = nodeUnderlyingHealthCategory(node)
+      if (health === 'probing' && liveState !== 'probing' && liveState !== 'queued') return false
+      if (health === 'available' && category !== 'healthy' && category !== 'degraded') return false
+      if (health === 'healthy' && category !== 'healthy') return false
+      if (health === 'degraded' && category !== 'degraded') return false
+      if (health === 'unhealthy' && category !== 'unhealthy') return false
+      if (health === 'unprobed' && category !== 'unprobed') return false
     }
     if (q) {
       const matchName = node.displayName.toLowerCase().includes(q)
@@ -296,9 +347,14 @@ const currentRunningRun = computed(() => {
 })
 
 // ============================================================================
-// One-Click Probing Actions (No config_revision modal!)
+// One-Click Probing Actions (Front-of-Queue Preemption & Periodic Dedupe)
 // ============================================================================
 async function handleQuickFullProbe() {
+  const count = probeNodes.value.length || kpiStats.value.total
+  poolActionFeedback.value =
+    count > 0
+      ? `已将 ${count} 个活跃节点插队至节点池最前面优先检测`
+      : '已发起全量节点插队至节点池最前面优先检测'
   try {
     await triggerQuickProbe({
       kinds: selectedKinds.value,
@@ -311,10 +367,12 @@ async function handleQuickFullProbe() {
 
 async function handleProbeSelectedNodes() {
   if (selectedNodeIds.value.size === 0) return
+  const ids = Array.from(selectedNodeIds.value)
+  poolActionFeedback.value = `已将 ${ids.length} 个已选节点插队至节点池最前面优先检测`
   try {
     await triggerQuickProbe({
       kinds: selectedKinds.value,
-      nodeLogicalIds: Array.from(selectedNodeIds.value),
+      nodeLogicalIds: ids,
     })
   } catch {
     // error recorded in useProbes
@@ -322,6 +380,7 @@ async function handleProbeSelectedNodes() {
 }
 
 async function handleProbeSingleNode(node: NormalizedNode) {
+  poolActionFeedback.value = `已将节点「${node.displayName}」插队至节点池最前面优先检测`
   try {
     await triggerQuickProbe({
       kinds: selectedKinds.value,
@@ -335,6 +394,51 @@ async function handleProbeSingleNode(node: NormalizedNode) {
   } catch {
     // error recorded in useProbes
   }
+}
+
+async function handleProbeUntestedNodes() {
+  const targetIds = probeNodes.value
+    .filter((n) => nodeUnderlyingHealthCategory(n) === 'unprobed')
+    .map((n) => n.logicalId)
+  if (targetIds.length === 0) {
+    selectPoolMetricFilter('unprobed')
+    return
+  }
+  healthFilter.value = 'probing'
+  poolActionFeedback.value = `已将 ${targetIds.length} 个未测节点插队至节点池最前面优先检测`
+  try {
+    await triggerQuickProbe({
+      kinds: selectedKinds.value,
+      nodeLogicalIds: targetIds,
+    })
+  } catch {
+    // error recorded in useProbes
+  }
+}
+
+async function handleProbeUnavailableNodes() {
+  const targetIds = probeNodes.value
+    .filter((n) => nodeUnderlyingHealthCategory(n) === 'unhealthy')
+    .map((n) => n.logicalId)
+  if (targetIds.length === 0) {
+    selectPoolMetricFilter('unhealthy')
+    return
+  }
+  healthFilter.value = 'probing'
+  poolActionFeedback.value = `已将 ${targetIds.length} 个不可用节点插队至节点池最前面优先检测`
+  try {
+    await triggerQuickProbe({
+      kinds: selectedKinds.value,
+      nodeLogicalIds: targetIds,
+    })
+  } catch {
+    // error recorded in useProbes
+  }
+}
+
+async function handleTriggerPeriodicPool() {
+  poolActionFeedback.value = '已触发定时入池巡检（已在节点池中的节点自动去重跳过，不重复添加）'
+  await triggerPeriodicPoolEnqueue()
 }
 
 // ============================================================================
@@ -468,6 +572,7 @@ function handleFilterChange(state: ProbeRunState | '') {
 }
 
 function refreshAll() {
+  loadPoolStatus()
   loadProbeNodes()
   loadSubscriptions()
   loadRuns(selectedStateFilter.value || undefined)
@@ -480,15 +585,20 @@ let pollTimer: ReturnType<typeof setInterval> | null = null
 onMounted(() => {
   refreshAll()
   pollTimer = setInterval(() => {
-    const hasActive = runs.value.some((r) => r.state === 'running' || r.state === 'queued')
-    if (hasActive) {
+    const hasActiveRun = runs.value.some((r) => r.state === 'running' || r.state === 'queued')
+    const hasActivePool =
+      poolStatus.value.queue_nodes_count > 0 ||
+      probingNodeIds.value.size > 0 ||
+      queuedNodeIds.value.size > 0
+    if (hasActiveRun || hasActivePool) {
+      loadPoolStatus()
       loadRuns(selectedStateFilter.value || undefined)
       loadProbeNodes()
       if (activeRun.value && (activeRun.value.state === 'running' || activeRun.value.state === 'queued')) {
         loadObservations(activeRun.value.id)
       }
     }
-  }, 4000)
+  }, 2000)
 })
 
 onUnmounted(() => {
@@ -523,7 +633,7 @@ onUnmounted(() => {
         >
           <ArrowPathIcon
             class="w-4 h-4"
-            :class="{ 'animate-spin': loadingNodes || loadingRuns || loadingSchedule || loadingBatches }"
+            :class="{ 'animate-spin': loadingNodes || loadingRuns || loadingSchedule || loadingBatches || loadingPoolStatus }"
           />
         </button>
         <button
@@ -548,129 +658,291 @@ onUnmounted(() => {
     />
 
     <!-- =====================================================================
-         Tier 1: KPI Summary Bar (全景节点健康与延迟统计看板)
+         Tier 1: Node Pool & Fleet Status Dashboard (节点池与全网检测状态看板 — 5 大核心指标 + 定时去重入池)
          ===================================================================== -->
     <div
       data-testid="probe-kpi-bar"
-      class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3.5"
+      class="space-y-3"
     >
-      <!-- KPI Card 1: Online Availability Rate -->
-      <article
-        data-testid="kpi-online-rate"
-        class="card bg-base-200 border border-base-300 shadow-sm p-4 flex flex-col justify-between gap-2.5"
+      <div
+        data-testid="probe-pool-dashboard"
+        class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3"
       >
-        <div class="flex items-center justify-between">
-          <span class="text-xs font-semibold opacity-70">在线可用率</span>
-          <CheckCircleIcon class="w-4 h-4 text-success" />
-        </div>
-        <div class="flex items-baseline justify-between gap-2">
-          <div class="text-2xl font-extrabold font-mono">
-            {{ kpiStats.availableCount }}
-            <span class="text-sm font-normal opacity-60">/ {{ kpiStats.total }} 节点</span>
+        <!-- Metric 1: 当前队列中的节点数 -->
+        <article
+          data-testid="pool-metric-queue"
+          role="button"
+          tabindex="0"
+          class="card bg-base-200 border shadow-sm p-4 flex flex-col justify-between gap-2.5 cursor-pointer transition-all hover:border-info/60 hover:shadow-md"
+          :class="
+            healthFilter === 'probing'
+              ? 'border-info ring-2 ring-info/25 bg-info/5'
+              : kpiStats.queueNodesCount > 0
+              ? 'border-info/40'
+              : 'border-base-300'
+          "
+          @click="selectPoolMetricFilter('probing')"
+          @keydown.enter.prevent="selectPoolMetricFilter('probing')"
+        >
+          <div class="flex items-center justify-between gap-2">
+            <span class="text-xs font-semibold opacity-75 whitespace-nowrap">当前队列中的节点数</span>
+            <span
+              class="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap shrink-0"
+              :class="
+                kpiStats.queueNodesCount > 0
+                  ? 'bg-info/15 text-info animate-pulse'
+                  : 'bg-base-300/70 text-base-content/60'
+              "
+            >
+              <BoltIcon class="w-3.5 h-3.5 shrink-0" :class="{ 'animate-spin': kpiStats.probingCount > 0 }" />
+              <span>{{ kpiStats.queueNodesCount > 0 ? '实时检测中' : '队列空闲' }}</span>
+            </span>
           </div>
-          <span class="text-sm font-bold text-success font-mono">{{ kpiStats.onlineRate }}%</span>
-        </div>
-        <progress
-          class="progress progress-success w-full h-1.5"
-          :value="kpiStats.onlineRate"
-          max="100"
-        />
-        <div class="flex flex-wrap items-center gap-1.5 text-[11px] opacity-80">
-          <span class="badge badge-xs badge-success badge-outline">正常 {{ kpiStats.healthy }}</span>
-          <span class="badge badge-xs badge-warning badge-outline">降级 {{ kpiStats.degraded }}</span>
-          <span class="badge badge-xs badge-error badge-outline">异常 {{ kpiStats.unhealthy }}</span>
-          <span class="badge badge-xs badge-ghost">未测 {{ kpiStats.unprobed }}</span>
-        </div>
-      </article>
 
-      <!-- KPI Card 2: Average Response Latency -->
-      <article
-        data-testid="kpi-avg-latency"
-        class="card bg-base-200 border border-base-300 shadow-sm p-4 flex flex-col justify-between gap-2.5"
-      >
-        <div class="flex items-center justify-between">
-          <span class="text-xs font-semibold opacity-70">平均响应延迟</span>
-          <BoltIcon class="w-4 h-4 text-primary" />
-        </div>
-        <div class="flex items-baseline gap-2">
-          <span class="text-2xl font-extrabold font-mono">
-            {{ kpiStats.avgLatency !== null ? `${kpiStats.avgLatency} ms` : '未测速' }}
-          </span>
-          <span v-if="kpiStats.latencyCount > 0" class="text-xs opacity-60">
-            ({{ kpiStats.latencyCount }} 个已测节点)
-          </span>
-        </div>
-        <div class="flex flex-wrap items-center gap-1.5 text-[11px] opacity-85 pt-1">
-          <span class="badge badge-xs badge-success badge-outline">
-            极速 &lt;100ms: {{ kpiStats.fastCount }}
-          </span>
-          <span class="badge badge-xs badge-warning badge-outline">
-            良好 100-250ms: {{ kpiStats.mediumCount }}
-          </span>
-          <span class="badge badge-xs badge-error badge-outline">
-            较慢 &gt;250ms: {{ kpiStats.slowCount }}
-          </span>
-        </div>
-      </article>
+          <div class="flex items-baseline justify-between gap-2">
+            <span class="text-3xl font-extrabold font-mono text-info">
+              {{ kpiStats.queueNodesCount }}
+            </span>
+            <span class="text-[11px] opacity-65 font-mono whitespace-nowrap">
+              / {{ kpiStats.total }} 节点
+            </span>
+          </div>
 
-      <!-- KPI Card 3: Streaming & AI Unlock Matrix -->
-      <article
-        data-testid="kpi-unlock-stats"
-        class="card bg-base-200 border border-base-300 shadow-sm p-4 flex flex-col justify-between gap-2.5"
-      >
-        <div class="flex items-center justify-between">
-          <span class="text-xs font-semibold opacity-70">流媒体与 AI 解锁</span>
-          <SparklesIcon class="w-4 h-4 text-secondary" />
-        </div>
-        <div class="grid grid-cols-3 gap-2 pt-0.5">
-          <div class="rounded-lg bg-base-300/50 p-2 text-center">
-            <span class="text-[11px] opacity-65 block">🎬 流媒体</span>
-            <strong class="text-base font-mono font-bold text-success">{{ kpiStats.streamingUnlocked }}</strong>
+          <div class="flex flex-wrap items-center gap-1.5 text-[11px]">
+            <span class="badge badge-xs badge-info gap-1 font-mono h-auto py-0.5 whitespace-nowrap">
+              ⚡ 检测中 {{ kpiStats.probingCount }}
+            </span>
+            <span class="badge badge-xs badge-warning badge-outline gap-1 font-mono h-auto py-0.5 whitespace-nowrap">
+              ⏳ 排队等待 {{ kpiStats.queuedWaitingCount }}
+            </span>
           </div>
-          <div class="rounded-lg bg-base-300/50 p-2 text-center">
-            <span class="text-[11px] opacity-65 block">🤖 AI 可用</span>
-            <strong class="text-base font-mono font-bold text-primary">{{ kpiStats.aiUnlocked }}</strong>
-          </div>
-          <div class="rounded-lg bg-base-300/50 p-2 text-center">
-            <span class="text-[11px] opacity-65 block">🛡️ 纯净 IP</span>
-            <strong class="text-base font-mono font-bold text-info">{{ kpiStats.lowRiskCount }}</strong>
-          </div>
-        </div>
-        <p class="text-[11px] opacity-65 truncate">
-          覆盖 Netflix / YouTube / OpenAI / Claude 等核心服务
-        </p>
-      </article>
 
-      <!-- KPI Card 4: Periodic Auto-Probe Status -->
-      <article
-        data-testid="kpi-schedule-status"
-        class="card bg-base-200 border border-base-300 shadow-sm p-4 flex flex-col justify-between gap-2.5"
-      >
-        <div class="flex items-center justify-between gap-2">
-          <span class="text-xs font-semibold opacity-70">定时自动测速状态</span>
-          <StatusBadge
-            :label="schedule?.enabled ? '自动巡检开启' : '未启用'"
-            :tone="schedule?.enabled ? 'success' : 'info'"
+          <progress
+            v-if="kpiStats.queueNodesCount > 0"
+            class="progress progress-info w-full h-1.5"
+            :value="kpiStats.queueProgressPct"
+            max="100"
           />
-        </div>
-        <div class="flex items-center justify-between gap-2">
+          <p class="text-[11px] opacity-70 leading-tight">
+            手动插队最前 · 定时去重入池
+          </p>
+        </article>
+
+        <!-- Metric 2: 总数 -->
+        <article
+          data-testid="pool-metric-total"
+          role="button"
+          tabindex="0"
+          class="card bg-base-200 border shadow-sm p-4 flex flex-col justify-between gap-2.5 cursor-pointer transition-all hover:border-primary/50 hover:shadow-md"
+          :class="healthFilter === 'all' ? 'border-primary/60 ring-1 ring-primary/20' : 'border-base-300'"
+          @click="selectPoolMetricFilter('all')"
+          @keydown.enter.prevent="selectPoolMetricFilter('all')"
+        >
+          <div class="flex items-center justify-between gap-2">
+            <span class="text-xs font-semibold opacity-75 whitespace-nowrap">总数</span>
+            <span class="badge badge-xs badge-ghost font-mono h-auto py-0.5 whitespace-nowrap">全网活跃</span>
+          </div>
+
+          <div class="flex items-baseline justify-between gap-2">
+            <span class="text-3xl font-extrabold font-mono">
+              {{ kpiStats.total }}
+            </span>
+            <span class="text-xs opacity-65 whitespace-nowrap">活跃节点</span>
+          </div>
+
+          <div class="flex flex-wrap items-center gap-1.5 text-[11px] opacity-85">
+            <span class="badge badge-xs badge-primary badge-outline font-mono h-auto py-0.5 whitespace-nowrap">
+              平均响应延迟 {{ kpiStats.avgLatency !== null ? `${kpiStats.avgLatency} ms` : '未测速' }}
+            </span>
+            <span v-if="subscriptionOptions.length > 0" class="badge badge-xs badge-ghost h-auto py-0.5 whitespace-nowrap">
+              {{ subscriptionOptions.length }} 个订阅源
+            </span>
+          </div>
+
+          <p class="text-[11px] opacity-65 leading-tight">
+            点击查看全部节点与实时测速状态
+          </p>
+        </article>
+
+        <!-- Metric 3: 可用数 -->
+        <article
+          data-testid="pool-metric-available"
+          role="button"
+          tabindex="0"
+          class="card bg-base-200 border shadow-sm p-4 flex flex-col justify-between gap-2.5 cursor-pointer transition-all hover:border-success/60 hover:shadow-md"
+          :class="
+            healthFilter === 'available' || healthFilter === 'healthy'
+              ? 'border-success ring-2 ring-success/25 bg-success/5'
+              : 'border-base-300'
+          "
+          @click="selectPoolMetricFilter('available')"
+          @keydown.enter.prevent="selectPoolMetricFilter('available')"
+        >
+          <div class="flex items-center justify-between gap-2">
+            <span class="text-xs font-semibold opacity-75 flex items-center gap-1 whitespace-nowrap">
+              <CheckCircleIcon class="w-4 h-4 text-success shrink-0" />
+              <span>可用数</span>
+            </span>
+            <span class="text-xs font-bold text-success font-mono whitespace-nowrap">
+              在线可用率 {{ kpiStats.onlineRate }}%
+            </span>
+          </div>
+
+          <div class="flex items-baseline justify-between gap-2">
+            <span class="text-3xl font-extrabold font-mono text-success">
+              {{ kpiStats.availableCount }}
+            </span>
+            <span class="text-xs font-mono opacity-70 whitespace-nowrap">
+              {{ kpiStats.avgLatency !== null ? `${kpiStats.avgLatency} ms` : '未测速' }}
+            </span>
+          </div>
+
+          <progress
+            class="progress progress-success w-full h-1.5"
+            :value="kpiStats.onlineRate"
+            max="100"
+          />
+
+          <div class="flex flex-wrap items-center gap-1.5 text-[11px] opacity-85">
+            <span class="badge badge-xs badge-success badge-outline font-mono h-auto py-0.5 whitespace-nowrap">
+              正常 {{ kpiStats.healthy }}
+            </span>
+            <span class="badge badge-xs badge-warning badge-outline font-mono h-auto py-0.5 whitespace-nowrap">
+              降级 {{ kpiStats.degraded }}
+            </span>
+          </div>
+        </article>
+
+        <!-- Metric 4: 不可用数 -->
+        <article
+          data-testid="pool-metric-unavailable"
+          role="button"
+          tabindex="0"
+          class="card bg-base-200 border shadow-sm p-4 flex flex-col justify-between gap-2.5 cursor-pointer transition-all hover:border-error/60 hover:shadow-md"
+          :class="
+            healthFilter === 'unhealthy'
+              ? 'border-error ring-2 ring-error/25 bg-error/5'
+              : 'border-base-300'
+          "
+          @click="selectPoolMetricFilter('unhealthy')"
+          @keydown.enter.prevent="selectPoolMetricFilter('unhealthy')"
+        >
+          <div class="flex items-center justify-between gap-2">
+            <span class="text-xs font-semibold opacity-75 whitespace-nowrap">不可用数</span>
+            <span class="badge badge-xs badge-error badge-outline font-mono h-auto py-0.5 whitespace-nowrap">
+              异常 / 不可达
+            </span>
+          </div>
+
+          <div class="flex items-baseline justify-between gap-2">
+            <span class="text-3xl font-extrabold font-mono text-error">
+              {{ kpiStats.unhealthy }}
+            </span>
+            <span class="text-xs opacity-65 font-mono whitespace-nowrap">
+              {{ kpiStats.unhealthyPct }}%
+            </span>
+          </div>
+
+          <div class="flex items-center justify-between gap-2 pt-0.5" @click.stop>
+            <span class="text-[11px] opacity-65 truncate">握手失败或连接超时</span>
+            <button
+              type="button"
+              data-testid="pool-probe-unavailable-btn"
+              class="btn btn-xs btn-error btn-outline shrink-0 whitespace-nowrap"
+              :disabled="submitting || kpiStats.unhealthy === 0"
+              @click="handleProbeUnavailableNodes"
+            >
+              插队重测
+            </button>
+          </div>
+        </article>
+
+        <!-- Metric 5: 未测数 -->
+        <article
+          data-testid="pool-metric-untested"
+          role="button"
+          tabindex="0"
+          class="card bg-base-200 border shadow-sm p-4 flex flex-col justify-between gap-2.5 cursor-pointer transition-all hover:border-warning/60 hover:shadow-md"
+          :class="
+            healthFilter === 'unprobed'
+              ? 'border-warning ring-2 ring-warning/25 bg-warning/5'
+              : 'border-base-300'
+          "
+          @click="selectPoolMetricFilter('unprobed')"
+          @keydown.enter.prevent="selectPoolMetricFilter('unprobed')"
+        >
+          <div class="flex items-center justify-between gap-2">
+            <span class="text-xs font-semibold opacity-75 whitespace-nowrap">未测数</span>
+            <span class="badge badge-xs badge-ghost font-mono h-auto py-0.5 whitespace-nowrap">待入池检测</span>
+          </div>
+
+          <div class="flex items-baseline justify-between gap-2">
+            <span class="text-3xl font-extrabold font-mono text-warning">
+              {{ kpiStats.unprobed }}
+            </span>
+            <span class="text-xs opacity-65 font-mono whitespace-nowrap">
+              {{ kpiStats.unprobedPct }}%
+            </span>
+          </div>
+
+          <div class="flex items-center justify-between gap-2 pt-0.5" @click.stop>
+            <span class="text-[11px] opacity-65 truncate">尚无探测观测记录</span>
+            <button
+              type="button"
+              data-testid="pool-probe-untested-btn"
+              class="btn btn-xs btn-warning btn-outline shrink-0 whitespace-nowrap"
+              :disabled="submitting || kpiStats.unprobed === 0"
+              @click="handleProbeUntestedNodes"
+            >
+              插队检测
+            </button>
+          </div>
+        </article>
+
+        <!-- Card 6: 定时自动入池控制卡 (Periodic Pool Deduplication Control) -->
+        <article
+          data-testid="pool-schedule-card"
+          class="card bg-base-200 border border-base-300 shadow-sm p-4 flex flex-col justify-between gap-2.5"
+        >
+          <div class="flex items-center justify-between gap-2">
+            <span class="text-xs font-semibold opacity-75 whitespace-nowrap">定时自动入池状态</span>
+            <StatusBadge
+              :label="schedule?.enabled ? '自动巡检开启' : '未启用'"
+              :tone="schedule?.enabled ? 'success' : 'info'"
+            />
+          </div>
+
           <div>
-            <div class="text-base font-bold">
-              {{ schedule ? intervalLabel(schedule.interval_seconds) : '每 1 小时' }}
+            <div class="text-sm font-bold flex items-center justify-between gap-2">
+              <span class="whitespace-nowrap">{{ schedule ? intervalLabel(schedule.interval_seconds) : '每 1 小时' }}</span>
+              <span class="text-[11px] font-normal opacity-65 whitespace-nowrap">
+                下次：{{
+                  schedule?.enabled && schedule?.next_due_at
+                    ? new Date(schedule.next_due_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                    : '等待启用'
+                }}
+              </span>
             </div>
-            <p class="text-[11px] opacity-65">
-              下次测速：{{
-                schedule?.enabled && schedule?.next_due_at
-                  ? new Date(schedule.next_due_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                  : '等待启用'
-              }}
+            <p class="text-[11px] opacity-65 mt-0.5 leading-tight">
+              已在节点池中不重复添加 · 手动插队最前
             </p>
           </div>
-          <div class="flex items-center gap-1.5">
+
+          <div class="flex flex-wrap items-center gap-1.5 pt-0.5">
+            <button
+              type="button"
+              data-testid="trigger-periodic-pool-btn"
+              class="btn btn-xs btn-primary gap-1 whitespace-nowrap"
+              :disabled="triggeringSchedule"
+              @click="handleTriggerPeriodicPool"
+            >
+              <ArrowPathIcon class="w-3 h-3 shrink-0" :class="{ 'animate-spin': triggeringSchedule }" />
+              <span>立即定时入池（去重）</span>
+            </button>
             <button
               type="button"
               data-testid="quick-toggle-schedule-btn"
-              class="btn btn-xs"
+              class="btn btn-xs whitespace-nowrap"
               :class="schedule?.enabled ? 'btn-ghost text-warning' : 'btn-success btn-outline'"
               :disabled="savingSchedule"
               @click="handleQuickToggleSchedule"
@@ -680,14 +952,85 @@ onUnmounted(() => {
             <button
               type="button"
               data-testid="open-schedule-modal-btn"
-              class="btn btn-xs btn-primary btn-outline"
+              class="btn btn-xs btn-ghost whitespace-nowrap"
               @click="openScheduleModal"
             >
               调整策略
             </button>
           </div>
+        </article>
+      </div>
+
+      <!-- Fleet Health Segmented Bar & Unlock Telemetry Strip -->
+      <div
+        data-testid="pool-health-segmented-bar"
+        class="card bg-base-200/80 border border-base-300 px-4 py-3 flex flex-col gap-2.5"
+      >
+        <div class="flex flex-wrap items-center justify-between gap-2 text-xs">
+          <div class="flex flex-wrap items-center gap-3">
+            <span class="font-semibold opacity-80 whitespace-nowrap">节点池与全网健康分布</span>
+            <span class="inline-flex items-center gap-1 text-[11px] whitespace-nowrap">
+              <span class="w-2 h-2 rounded-full bg-info animate-pulse shrink-0" />
+              <span>队列中 {{ kpiStats.queueNodesCount }} (检测中 {{ kpiStats.probingCount }} / 排队 {{ kpiStats.queuedWaitingCount }})</span>
+            </span>
+            <span class="inline-flex items-center gap-1 text-[11px] whitespace-nowrap">
+              <span class="w-2 h-2 rounded-full bg-success shrink-0" />
+              <span>可用 {{ kpiStats.availableCount }} (正常 {{ kpiStats.healthy }} / 降级 {{ kpiStats.degraded }})</span>
+            </span>
+            <span class="inline-flex items-center gap-1 text-[11px] whitespace-nowrap">
+              <span class="w-2 h-2 rounded-full bg-error shrink-0" />
+              <span>不可用 {{ kpiStats.unhealthy }}</span>
+            </span>
+            <span class="inline-flex items-center gap-1 text-[11px] whitespace-nowrap">
+              <span class="w-2 h-2 rounded-full bg-base-content/30 shrink-0" />
+              <span>未测 {{ kpiStats.unprobed }}</span>
+            </span>
+          </div>
+
+          <div class="flex flex-wrap items-center gap-2 text-[11px]">
+            <SparklesIcon class="w-3.5 h-3.5 text-secondary shrink-0" />
+            <span class="badge badge-xs badge-success badge-outline h-auto py-0.5 whitespace-nowrap">
+              🎬 流媒体解锁 {{ kpiStats.streamingUnlocked }}
+            </span>
+            <span class="badge badge-xs badge-primary badge-outline h-auto py-0.5 whitespace-nowrap">
+              🤖 AI 可用 {{ kpiStats.aiUnlocked }}
+            </span>
+            <span class="badge badge-xs badge-info badge-outline h-auto py-0.5 whitespace-nowrap">
+              🛡️ 纯净 IP {{ kpiStats.lowRiskCount }}
+            </span>
+            <span class="badge badge-xs badge-ghost font-mono h-auto py-0.5 whitespace-nowrap">
+              极速 &lt;100ms: {{ kpiStats.fastCount }}
+            </span>
+          </div>
         </div>
-      </article>
+
+        <div class="w-full h-2 rounded-full bg-base-300 overflow-hidden flex">
+          <div
+            v-if="kpiStats.healthyPct > 0"
+            class="h-full bg-success transition-all duration-300"
+            :style="{ width: `${kpiStats.healthyPct}%` }"
+            :title="`正常: ${kpiStats.healthy}`"
+          />
+          <div
+            v-if="kpiStats.degradedPct > 0"
+            class="h-full bg-warning transition-all duration-300"
+            :style="{ width: `${kpiStats.degradedPct}%` }"
+            :title="`降级: ${kpiStats.degraded}`"
+          />
+          <div
+            v-if="kpiStats.unhealthyPct > 0"
+            class="h-full bg-error transition-all duration-300"
+            :style="{ width: `${kpiStats.unhealthyPct}%` }"
+            :title="`不可用: ${kpiStats.unhealthy}`"
+          />
+          <div
+            v-if="kpiStats.unprobedPct > 0"
+            class="h-full bg-base-content/20 transition-all duration-300"
+            :style="{ width: `${kpiStats.unprobedPct}%` }"
+            :title="`未测: ${kpiStats.unprobed}`"
+          />
+        </div>
+      </div>
     </div>
 
     <!-- Navigation Tabs: Node Workbench vs Manual Runs vs Periodic Schedule & Batches -->
@@ -800,26 +1143,39 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <!-- Real-Time Active Probe Progress Banner -->
+        <!-- Real-Time Active Probe & Pool Preemption Feedback Banner -->
         <div
-          v-if="currentRunningRun || submitting"
+          v-if="poolActionFeedback || currentRunningRun || submitting || kpiStats.queueNodesCount > 0"
           data-testid="active-probe-progress-banner"
           class="rounded-xl bg-primary/10 border border-primary/30 px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs"
         >
           <div class="flex items-center gap-2.5 min-w-0 flex-1">
-            <span class="loading loading-spinner loading-xs text-primary shrink-0" />
+            <span
+              v-if="currentRunningRun || submitting || kpiStats.queueNodesCount > 0"
+              class="loading loading-spinner loading-xs text-primary shrink-0"
+            />
+            <BoltIcon v-else class="w-4 h-4 text-primary shrink-0" />
             <div class="min-w-0 flex-1">
-              <div class="font-semibold text-primary flex items-center gap-2">
-                <span>正在执行节点实时测速...</span>
+              <div class="font-semibold text-primary flex flex-wrap items-center gap-2">
+                <span data-testid="pool-action-feedback">
+                  {{
+                    poolActionFeedback ||
+                      `节点池实时检测中：当前队列 ${kpiStats.queueNodesCount} 个节点（检测中 ${kpiStats.probingCount} · 排队等待 ${kpiStats.queuedWaitingCount}）`
+                  }}
+                </span>
                 <span v-if="currentRunningRun" class="badge badge-xs badge-primary">
                   {{ probeStateLabel(currentRunningRun.state) }}
                 </span>
               </div>
-              <progress class="progress progress-primary w-full max-w-md h-1.5 mt-1" />
+              <progress
+                v-if="currentRunningRun || submitting || kpiStats.queueNodesCount > 0"
+                class="progress progress-primary w-full max-w-md h-1.5 mt-1"
+              />
             </div>
           </div>
-          <div v-if="currentRunningRun" class="flex items-center gap-2 shrink-0">
+          <div class="flex items-center gap-2 shrink-0">
             <button
+              v-if="currentRunningRun"
               type="button"
               class="btn btn-xs btn-ghost"
               @click="handleInspectRun(currentRunningRun)"
@@ -827,6 +1183,7 @@ onUnmounted(() => {
               查看实时观测
             </button>
             <button
+              v-if="currentRunningRun"
               type="button"
               data-testid="banner-cancel-run-btn"
               class="btn btn-xs btn-error btn-outline"
@@ -835,7 +1192,69 @@ onUnmounted(() => {
             >
               取消测速
             </button>
+            <button
+              v-if="poolActionFeedback && !currentRunningRun"
+              type="button"
+              class="btn btn-xs btn-ghost"
+              @click="poolActionFeedback = ''"
+            >
+              知道了
+            </button>
           </div>
+        </div>
+
+        <!-- Quick Status Filter Capsules -->
+        <div
+          data-testid="probe-status-quick-pills"
+          class="flex flex-wrap items-center gap-1.5 text-xs pt-1"
+        >
+          <span class="opacity-60 mr-1 font-medium">节点状态筛选：</span>
+          <button
+            type="button"
+            data-testid="status-pill-all"
+            class="btn btn-xs rounded-full"
+            :class="healthFilter === 'all' ? 'btn-primary' : 'btn-ghost bg-base-300/60'"
+            @click="healthFilter = 'all'"
+          >
+            全部 ({{ kpiStats.total }})
+          </button>
+          <button
+            type="button"
+            data-testid="status-pill-probing"
+            class="btn btn-xs rounded-full gap-1"
+            :class="healthFilter === 'probing' ? 'btn-info' : 'btn-ghost bg-base-300/60'"
+            @click="healthFilter = 'probing'"
+          >
+            <span class="w-1.5 h-1.5 rounded-full bg-current" :class="{ 'animate-ping': kpiStats.queueNodesCount > 0 }" />
+            <span>检测中 ({{ kpiStats.queueNodesCount }})</span>
+          </button>
+          <button
+            type="button"
+            data-testid="status-pill-available"
+            class="btn btn-xs rounded-full"
+            :class="healthFilter === 'available' ? 'btn-success' : 'btn-ghost bg-base-300/60'"
+            @click="healthFilter = 'available'"
+          >
+            可用 ({{ kpiStats.availableCount }})
+          </button>
+          <button
+            type="button"
+            data-testid="status-pill-unhealthy"
+            class="btn btn-xs rounded-full"
+            :class="healthFilter === 'unhealthy' ? 'btn-error' : 'btn-ghost bg-base-300/60'"
+            @click="healthFilter = 'unhealthy'"
+          >
+            不可用 ({{ kpiStats.unhealthy }})
+          </button>
+          <button
+            type="button"
+            data-testid="status-pill-unprobed"
+            class="btn btn-xs rounded-full"
+            :class="healthFilter === 'unprobed' ? 'btn-warning' : 'btn-ghost bg-base-300/60'"
+            @click="healthFilter = 'unprobed'"
+          >
+            未测 ({{ kpiStats.unprobed }})
+          </button>
         </div>
 
         <!-- Bottom Row: Multi-dimensional Node Filter & Sort Bar -->
@@ -888,10 +1307,12 @@ onUnmounted(() => {
             aria-label="按健康状态筛选"
             class="select select-bordered select-xs sm:select-sm text-xs"
           >
-            <option value="all">全部状态 ({{ probeNodes.length }})</option>
+            <option value="all">全部状态 ({{ kpiStats.total }})</option>
+            <option value="probing">检测中 ({{ kpiStats.queueNodesCount }})</option>
+            <option value="available">可用 ({{ kpiStats.availableCount }})</option>
             <option value="healthy">正常 ({{ kpiStats.healthy }})</option>
             <option value="degraded">降级 ({{ kpiStats.degraded }})</option>
-            <option value="unhealthy">异常 ({{ kpiStats.unhealthy }})</option>
+            <option value="unhealthy">异常 / 不可用 ({{ kpiStats.unhealthy }})</option>
             <option value="unprobed">未测速 ({{ kpiStats.unprobed }})</option>
           </select>
 
@@ -1002,14 +1423,30 @@ onUnmounted(() => {
                 <td class="whitespace-nowrap">
                   <div class="flex items-center gap-1.5">
                     <StatusBadge
-                      :label="nodeHealthBadge(node).label"
-                      :tone="nodeHealthBadge(node).tone"
+                      data-testid="probe-node-status-badge"
+                      :label="getNodeHealthBadge(node).label"
+                      :tone="getNodeHealthBadge(node).tone"
+                      :pulse="getNodeProbeState(node) !== 'idle'"
                     />
+                    <span
+                      v-if="getNodeProbeState(node) === 'queued'"
+                      class="badge badge-xs badge-warning badge-outline h-auto py-0.5 whitespace-nowrap"
+                    >
+                      队列等待
+                    </span>
                     <StatusBadge
+                      v-if="resolveNodeLatencyMs(node) !== null"
                       data-testid="probe-node-latency-badge"
                       :label="formatNodeLatency(node)"
                       :tone="nodeLatencyTone(node)"
                     />
+                    <span
+                      v-else
+                      data-testid="probe-node-latency-badge"
+                      class="font-mono text-xs opacity-60 px-1.5"
+                    >
+                      --
+                    </span>
                   </div>
                 </td>
 
@@ -1054,14 +1491,23 @@ onUnmounted(() => {
                       type="button"
                       data-testid="row-reprobe-btn"
                       class="btn btn-xs btn-primary btn-outline gap-1"
-                      :disabled="probingNodeIds.has(node.logicalId) || submitting"
+                      :disabled="getNodeProbeState(node) === 'probing' || submitting"
+                      title="手动检测将插在节点池队列最前面优先执行"
                       @click="handleProbeSingleNode(node)"
                     >
                       <BoltIcon
                         class="w-3.5 h-3.5"
-                        :class="{ 'animate-spin': probingNodeIds.has(node.logicalId) }"
+                        :class="{ 'animate-spin': getNodeProbeState(node) === 'probing' }"
                       />
-                      <span>{{ probingNodeIds.has(node.logicalId) ? '测速中' : '立即重测' }}</span>
+                      <span>
+                        {{
+                          getNodeProbeState(node) === 'probing'
+                            ? '检测中'
+                            : getNodeProbeState(node) === 'queued'
+                            ? '队列等待'
+                            : '立即重测'
+                        }}
+                      </span>
                     </button>
                     <button
                       type="button"
@@ -1430,7 +1876,7 @@ onUnmounted(() => {
       :node-map="nodeMap"
       :observations="sheetObservations"
       :loading="sheetLoading"
-      :reprobing="selectedInspectNode ? probingNodeIds.has(selectedInspectNode.logicalId) : false"
+      :reprobing="selectedInspectNode ? getNodeProbeState(selectedInspectNode) === 'probing' : false"
       @close="evidenceSheetOpen = false"
       @reprobe="handleProbeSingleNode"
     />

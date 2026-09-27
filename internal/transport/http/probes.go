@@ -40,9 +40,11 @@ func registerProbeRoutes(r chi.Router, service *probe.Service, runs domain.Probe
 	r.Get("/probes/runs/{run_id}/observations", h.runObservations)
 	r.Get("/nodes/{logical_id}/observations", h.nodeObservations)
 
-	// Periodic active probe schedule & batch management routes
+	// Node probe pool status & periodic schedule management routes
+	r.Get("/probes/pool", h.getPoolStatus)
 	r.Get("/probes/schedule", h.getSchedule)
 	r.Put("/probes/schedule", h.updateSchedule)
+	r.Post("/probes/schedule/trigger", h.triggerSchedule)
 	r.Get("/probes/batches", h.listBatches)
 	r.Get("/probes/batches/{batch_id}", h.getBatch)
 	r.Post("/probes/batches/{batch_id}/cancel", h.cancelBatch)
@@ -78,13 +80,49 @@ func (h probeHandler) create(w http.ResponseWriter, r *http.Request) {
 	}
 	if !alreadyExists {
 		h.recordAudit(r, "probe_run.create", domain.AuditResultSuccess, "run_id="+run.ID)
+		enqueuedCh := make(chan struct{})
+		doneCh := make(chan struct{})
+		bgCtx := probe.WithTasksEnqueuedHook(context.Background(), func() {
+			close(enqueuedCh)
+		})
 		go func() {
-			_ = h.service.TriggerRun(context.Background(), run.ID, body.NodeLogicalIDs, body.Kinds, nil)
+			defer close(doneCh)
+			_ = h.service.TriggerRun(bgCtx, run.ID, body.NodeLogicalIDs, body.Kinds, nil)
 		}()
+		select {
+		case <-enqueuedCh:
+		case <-doneCh:
+		case <-time.After(30 * time.Millisecond):
+		}
 	}
-	WriteSuccess(w, r, http.StatusCreated, map[string]any{
+	respPayload := map[string]any{
 		"run_id": run.ID, "state": run.State, "deadline_at": run.DeadlineAt,
-	})
+	}
+	if poolStatus, poolErr := h.service.GetPoolStatus(r.Context()); poolErr == nil && poolStatus != nil {
+		respPayload["pool_status"] = poolStatus
+	}
+	WriteSuccess(w, r, http.StatusCreated, respPayload)
+}
+
+func (h probeHandler) getPoolStatus(w http.ResponseWriter, r *http.Request) {
+	status, err := h.service.GetPoolStatus(r.Context())
+	if err != nil {
+		WriteDomainError(w, r, err)
+		return
+	}
+	WriteSuccess(w, r, http.StatusOK, status)
+}
+
+func (h probeHandler) triggerSchedule(w http.ResponseWriter, r *http.Request) {
+	status, err := h.service.TriggerScheduleNow(r.Context())
+	if err != nil {
+		h.recordAudit(r, "probe_schedule.trigger", domain.AuditResultFailure, "failed to trigger schedule: "+err.Error())
+		WriteDomainError(w, r, err)
+		return
+	}
+	h.recordAudit(r, "probe_schedule.trigger", domain.AuditResultSuccess,
+		fmt.Sprintf("queue_nodes=%d probing=%d queued=%d", status.QueueNodesCount, status.ProbingCount, status.QueuedWaitingCount))
+	WriteSuccess(w, r, http.StatusOK, status)
 }
 
 func (h probeHandler) list(w http.ResponseWriter, r *http.Request) {

@@ -1,6 +1,12 @@
 import { computed, ref } from 'vue'
 import { api } from '../../api/client'
-import { generateIdempotencyKey, type CreateProbeRunResponse, type ProbeKind, type ProbeRun } from '../probes/probeTypes'
+import {
+  generateIdempotencyKey,
+  type CreateProbeRunResponse,
+  type ProbeKind,
+  type ProbePoolStatus,
+  type ProbeRun,
+} from '../probes/probeTypes'
 import {
   normalizeNode,
   validateNodeConnectionProfile,
@@ -31,15 +37,64 @@ export function useNodes() {
   const loadingDetail = ref(false)
   const savingConnection = ref(false)
   const probingNodeId = ref<string | null>(null)
+  const probingNodeIds = ref<Set<string>>(new Set())
+  const queuedNodeIds = ref<Set<string>>(new Set())
   const error = ref('')
   const page = ref(0)
   const pageSize = 100
   const total = ref(0)
   const protocolFilter = ref<string>('all')
+  const healthFilter = ref<'all' | 'probing' | 'healthy' | 'degraded' | 'unhealthy' | 'unknown'>('all')
   const searchQuery = ref<string>('')
   const selectedNode = ref<NormalizedNode | null>(null)
   const requestGeneration = ref(0)
   const hasMore = computed(() => items.value.length < total.value)
+
+  function applyPoolStateToNode(node: NormalizedNode): NormalizedNode {
+    if (probingNodeIds.value.has(node.logicalId) || probingNodeId.value === node.logicalId) {
+      return { ...node, probeState: 'probing' }
+    }
+    if (queuedNodeIds.value.has(node.logicalId)) {
+      return { ...node, probeState: 'queued' }
+    }
+    if (node.healthStatus === 'probing') {
+      return { ...node, probeState: 'probing' }
+    }
+    if (node.healthStatus === 'queued') {
+      return { ...node, probeState: 'queued' }
+    }
+    return { ...node, probeState: node.probeState ?? 'idle' }
+  }
+
+  async function syncPoolStatus(): Promise<void> {
+    try {
+      const res = await api.get<ProbePoolStatus>('/api/v1/probes/pool')
+      if (
+        res &&
+        typeof res === 'object' &&
+        (Array.isArray(res.probing_node_ids) || Array.isArray(res.queued_node_ids))
+      ) {
+        const nextProbing = new Set<string>(
+          Array.isArray(res.probing_node_ids) ? res.probing_node_ids : []
+        )
+        const nextQueued = new Set<string>(
+          (Array.isArray(res.queued_node_ids) ? res.queued_node_ids : []).filter(
+            (id) => !nextProbing.has(id)
+          )
+        )
+        probingNodeIds.value = nextProbing
+        queuedNodeIds.value = nextQueued
+        if (items.value.length > 0) {
+          items.value = items.value.map(applyPoolStateToNode)
+        }
+        if (selectedNode.value) {
+          selectedNode.value = applyPoolStateToNode(selectedNode.value)
+        }
+      }
+    } catch {
+      // Non-blocking if /api/v1/probes/pool is unavailable in isolated unit tests
+    }
+  }
 
   async function loadPage(nextPage: number, append = false, generation = requestGeneration.value) {
     if (append && (loadingMore.value || loading.value)) return
@@ -59,9 +114,12 @@ export function useNodes() {
       if (searchQuery.value.trim()) {
         params.search = searchQuery.value.trim()
       }
-      const result = await api.get<NodePage>('/api/v1/nodes', { params })
+      const [result] = await Promise.all([
+        api.get<NodePage>('/api/v1/nodes', { params }),
+        syncPoolStatus(),
+      ])
       if (generation !== requestGeneration.value) return
-      const normalized = (result.items || []).map(normalizeNode)
+      const normalized = (result.items || []).map((raw) => applyPoolStateToNode(normalizeNode(raw)))
       items.value = append ? [...items.value, ...normalized] : normalized
       page.value = result.page
       total.value = result.total
@@ -133,6 +191,13 @@ export function useNodes() {
     kinds: ProbeKind[] = ['baseline', 'streaming', 'ai', 'ip_risk', 'geo']
   ): Promise<{ ok: boolean; runId?: string; error?: string }> {
     probingNodeId.value = logicalId
+    const idx = items.value.findIndex((n) => n.logicalId === logicalId)
+    if (idx >= 0) {
+      items.value[idx] = { ...items.value[idx], probeState: 'probing' }
+    }
+    if (selectedNode.value?.logicalId === logicalId) {
+      selectedNode.value = { ...selectedNode.value, probeState: 'probing' }
+    }
     try {
       const res = await api.post<CreateProbeRunResponse>(
         '/api/v1/probes/runs',
@@ -168,6 +233,21 @@ export function useNodes() {
       return { ok: false, error: msg }
     } finally {
       probingNodeId.value = null
+      const currentIdx = items.value.findIndex((n) => n.logicalId === logicalId)
+      if (
+        currentIdx >= 0 &&
+        items.value[currentIdx].probeState === 'probing' &&
+        items.value[currentIdx].healthStatus !== 'probing'
+      ) {
+        items.value[currentIdx] = { ...items.value[currentIdx], probeState: 'idle' }
+      }
+      if (
+        selectedNode.value?.logicalId === logicalId &&
+        selectedNode.value.probeState === 'probing' &&
+        selectedNode.value.healthStatus !== 'probing'
+      ) {
+        selectedNode.value = { ...selectedNode.value, probeState: 'idle' }
+      }
     }
   }
 
@@ -265,14 +345,18 @@ export function useNodes() {
     loadingDetail,
     savingConnection,
     probingNodeId,
+    probingNodeIds,
+    queuedNodeIds,
     error,
     total,
     hasMore,
     protocolFilter,
+    healthFilter,
     searchQuery,
     selectedNode,
     load,
     loadMore,
+    syncPoolStatus,
     fetchNodeDetail,
     probeSingleNode,
     updateNodeConnection,

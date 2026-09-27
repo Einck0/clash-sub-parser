@@ -104,6 +104,48 @@ func NewDefaultRunner(
 	return r
 }
 
+type tasksEnqueuedCtxKey struct{}
+
+// WithTasksEnqueuedHook attaches a one-shot callback to ctx that is invoked as
+// soon as DefaultRunner.Run has finished submitting initial tasks to the queue scheduler.
+func WithTasksEnqueuedHook(ctx context.Context, fn func()) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if fn == nil {
+		return ctx
+	}
+	var once sync.Once
+	return context.WithValue(ctx, tasksEnqueuedCtxKey{}, func() {
+		once.Do(fn)
+	})
+}
+
+func notifyTasksEnqueued(ctx context.Context) {
+	if ctx == nil {
+		return
+	}
+	if fn, ok := ctx.Value(tasksEnqueuedCtxKey{}).(func()); ok && fn != nil {
+		fn()
+	}
+}
+
+// Scheduler returns the underlying queue scheduler used by this runner.
+func (r *DefaultRunner) Scheduler() *queue.Scheduler {
+	if r == nil {
+		return nil
+	}
+	return r.scheduler
+}
+
+// IsNodeInPool returns true if the node is currently probing or queued in the node pool.
+func (r *DefaultRunner) IsNodeInPool(logicalID string) bool {
+	if r == nil || r.scheduler == nil {
+		return false
+	}
+	return r.scheduler.IsNodeInPool(logicalID)
+}
+
 // Sentinel errors for fatal probe dial configuration issues.
 var (
 	ErrCredentialsUnavailable    = errors.New("credentials_unavailable")
@@ -293,6 +335,11 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 		return runCtx.Err()
 	}
 
+	enqueueMode := queue.EnqueueManualPreemptFront
+	if run.ActorScope == "system:periodic-probe" {
+		enqueueMode = queue.EnqueuePeriodicDedupe
+	}
+
 	isMixedTwoPhase := hasBaseline && len(expensiveKinds) > 0
 
 	if !isMixedTwoPhase {
@@ -313,6 +360,7 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 					RunID:     run.ID,
 					LogicalID: n.LogicalID,
 					Kind:      k,
+					Mode:      enqueueMode,
 					Context:   runCtx,
 					Execute: func(tCtx context.Context) error {
 						err := r.executeTask(tCtx, run, n, k)
@@ -336,6 +384,7 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 				break
 			}
 		}
+		notifyTasksEnqueued(ctx)
 
 		done := make(chan struct{})
 		go func() {
@@ -390,6 +439,7 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 			RunID:     run.ID,
 			LogicalID: n.LogicalID,
 			Kind:      k,
+			Mode:      enqueueMode,
 			Context:   runCtx,
 			Execute: func(tCtx context.Context) error {
 				verdict, err := r.executeTaskWithVerdict(tCtx, run, n, k)
@@ -414,6 +464,7 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 			break
 		}
 	}
+	notifyTasksEnqueued(ctx)
 
 	stage1Done := make(chan struct{})
 	go func() {
@@ -481,6 +532,7 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 				RunID:     run.ID,
 				LogicalID: n.LogicalID,
 				Kind:      k,
+				Mode:      enqueueMode,
 				Context:   runCtx,
 				Execute: func(tCtx context.Context) error {
 					err := r.executeTask(tCtx, run, n, k)
@@ -494,7 +546,7 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 				},
 			}
 
-			if err := r.scheduler.Submit(task); err != nil {
+			if err := r.scheduler.SubmitWithContext(runCtx, task); err != nil {
 				stage2WG.Done()
 				stage2SubmitErr = err
 				break

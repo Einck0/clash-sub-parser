@@ -13,7 +13,16 @@ export interface StructuredCapabilityStatus {
 
 export type CapabilityInput = CapabilityStatus | StructuredCapabilityStatus
 
-export type NodeHealthStatus = 'healthy' | 'degraded' | 'unhealthy' | 'unknown' | 'missing'
+export type NodeProbeState = 'probing' | 'queued' | 'idle'
+
+export type NodeHealthStatus =
+  | 'probing'
+  | 'queued'
+  | 'healthy'
+  | 'degraded'
+  | 'unhealthy'
+  | 'unknown'
+  | 'missing'
 
 export type NodeProtocol =
   | 'ss'
@@ -123,6 +132,7 @@ export interface NodeRecord {
   capabilities?: Record<string, CapabilityInput>
   probe_stale?: boolean
   probe_missing?: boolean
+  probe_state?: NodeProbeState
   health_status?: NodeHealthStatus
   ip_risk_summary?: IPRiskSummaryRecord
   server?: string
@@ -145,6 +155,7 @@ export interface NormalizedNode {
   capabilityDetails: Record<string, StructuredCapabilityStatus>
   probeStale?: boolean
   probeMissing?: boolean
+  probeState: NodeProbeState
   healthStatus?: NodeHealthStatus
   ipRiskSummary?: IPRiskSummaryRecord
   connection: NodeConnectionProfile
@@ -530,14 +541,34 @@ export function normalizeNode(node: NodeRecord): NormalizedNode {
   const probeStale = node.probe_stale ?? capEntries.some(isCapabilityStale)
 
   let latencyMs: number | null | undefined = node.latency_ms ?? (node as any).latencyMs
-  if (latencyMs === undefined && capabilityDetails.baseline?.latency_ms !== undefined) {
+  if (
+    latencyMs === undefined &&
+    capabilityDetails.baseline?.latency_ms !== undefined &&
+    capabilityDetails.baseline.verdict !== 'error' &&
+    capabilityDetails.baseline.latency_ms > 0
+  ) {
     latencyMs = capabilityDetails.baseline.latency_ms
+  }
+  if (
+    typeof latencyMs === 'number' &&
+    (!Number.isFinite(latencyMs) || latencyMs <= 0 || node.health_status === 'unhealthy')
+  ) {
+    latencyMs = null
   }
 
   const lastProbedAt: string | null | undefined =
     node.last_probed_at ??
     (node as any).lastProbedAt ??
     capabilityDetails.baseline?.observed_at
+
+  const rawProbeState: NodeProbeState | undefined =
+    node.probe_state ??
+    (node as any).probeState ??
+    (node.health_status === 'probing'
+      ? 'probing'
+      : node.health_status === 'queued'
+      ? 'queued'
+      : undefined)
 
   return {
     logicalId,
@@ -552,6 +583,7 @@ export function normalizeNode(node: NodeRecord): NormalizedNode {
     capabilityDetails,
     probeStale,
     probeMissing,
+    probeState: rawProbeState ?? 'idle',
     healthStatus: node.health_status,
     ipRiskSummary: node.ip_risk_summary ?? (node as any).ipRiskSummary,
     connection: sanitizeNodeConnection(normalizedInput),
@@ -573,39 +605,90 @@ export function nodeCapabilityLabel(node: NodeRecord | NormalizedNode, capabilit
   return capabilityLabels[verdict ?? 'unknown'] ?? capabilityLabels.unknown
 }
 
-export function nodeHealthBadge(node: NodeRecord | NormalizedNode): { label: string; tone: ToastTone } {
+function hasNodeId(collection: Set<string> | Iterable<string> | undefined, id: string): boolean {
+  if (!collection || !id) return false
+  if (collection instanceof Set) return collection.has(id)
+  for (const item of collection) {
+    if (item === id) return true
+  }
+  return false
+}
+
+export function resolveNodeProbeState(
+  node: NodeRecord | NormalizedNode,
+  probingIds?: Set<string> | Iterable<string>,
+  queuedIds?: Set<string> | Iterable<string>
+): NodeProbeState {
+  const logicalId = (node as NormalizedNode).logicalId ?? (node as NodeRecord).logical_id ?? ''
+  const probeState = (node as NormalizedNode).probeState ?? (node as NodeRecord).probe_state
   const health = (node as NormalizedNode).healthStatus ?? (node as NodeRecord).health_status
-  if (health === 'healthy') return { label: '正常', tone: 'success' }
-  if (health === 'degraded') return { label: '降级', tone: 'warning' }
-  if (health === 'unhealthy') return { label: '异常', tone: 'error' }
+  if (probeState === 'probing' || health === 'probing' || hasNodeId(probingIds, logicalId)) {
+    return 'probing'
+  }
+  if (probeState === 'queued' || health === 'queued' || hasNodeId(queuedIds, logicalId)) {
+    return 'queued'
+  }
+  return 'idle'
+}
+
+export function nodeUnderlyingHealthCategory(
+  node: NodeRecord | NormalizedNode
+): 'healthy' | 'degraded' | 'unhealthy' | 'unprobed' {
+  const health = (node as NormalizedNode).healthStatus ?? (node as NodeRecord).health_status
+  if (health === 'healthy') return 'healthy'
+  if (health === 'degraded') return 'degraded'
+  if (health === 'unhealthy') return 'unhealthy'
   if (health === 'missing' || health === 'unknown') {
     const rawCaps = node.capabilities ?? {}
     if (Object.keys(rawCaps).length === 0) {
-      return { label: '未探测', tone: 'info' }
+      return 'unprobed'
     }
   }
 
   const caps = node.capabilities ?? {}
   const rawValues = Object.values(caps)
   const values = rawValues.map(extractCapabilityVerdict)
-  const probeMissing = (node as NormalizedNode).probeMissing ?? (node as NodeRecord).probe_missing ?? values.length === 0
+  const probeMissing =
+    (node as NormalizedNode).probeMissing ??
+    (node as NodeRecord).probe_missing ??
+    values.length === 0
   const probeStale =
     (node as NormalizedNode).probeStale ??
     (node as NodeRecord).probe_stale ??
     rawValues.some(isCapabilityStale)
 
   if (probeMissing || values.length === 0) {
-    return { label: '未探测', tone: 'info' }
+    return 'unprobed'
   }
   if (values.includes('error')) {
-    return { label: '异常', tone: 'error' }
+    return 'unhealthy'
   }
   if (probeStale || values.includes('restricted') || values.includes('stale')) {
-    return { label: '降级', tone: 'warning' }
+    return 'degraded'
   }
   if (values.includes('available')) {
-    return { label: '正常', tone: 'success' }
+    return 'healthy'
   }
+  return 'unprobed'
+}
+
+export function nodeHealthBadge(
+  node: NodeRecord | NormalizedNode,
+  probingIds?: Set<string> | Iterable<string>,
+  queuedIds?: Set<string> | Iterable<string>
+): { label: string; tone: ToastTone } {
+  const liveProbeState = resolveNodeProbeState(node, probingIds, queuedIds)
+  if (liveProbeState === 'probing') {
+    return { label: '检测中', tone: 'info' }
+  }
+  if (liveProbeState === 'queued') {
+    return { label: '队列中', tone: 'warning' }
+  }
+
+  const category = nodeUnderlyingHealthCategory(node)
+  if (category === 'healthy') return { label: '正常', tone: 'success' }
+  if (category === 'degraded') return { label: '降级', tone: 'warning' }
+  if (category === 'unhealthy') return { label: '异常', tone: 'error' }
   return { label: '未探测', tone: 'info' }
 }
 
@@ -625,10 +708,20 @@ export function nodeRiskBadge(node: NodeRecord | NormalizedNode): { label: strin
 }
 
 export function resolveNodeLatencyMs(node: NodeRecord | NormalizedNode): number | null {
+  const health = (node as NormalizedNode).healthStatus ?? (node as NodeRecord).health_status
+  if (health === 'unhealthy' || nodeUnderlyingHealthCategory(node) === 'unhealthy') {
+    return null
+  }
   const top = (node as NormalizedNode).latencyMs ?? (node as NodeRecord).latency_ms
-  if (typeof top === 'number' && top >= 0) return top
+  if (typeof top === 'number' && Number.isFinite(top) && top > 0) return top
   const baseDetail = extractCapabilityDetail(node, 'baseline')
-  if (baseDetail && typeof baseDetail.latency_ms === 'number' && baseDetail.latency_ms >= 0) {
+  if (
+    baseDetail &&
+    baseDetail.verdict !== 'error' &&
+    typeof baseDetail.latency_ms === 'number' &&
+    Number.isFinite(baseDetail.latency_ms) &&
+    baseDetail.latency_ms > 0
+  ) {
     return baseDetail.latency_ms
   }
   return null
@@ -636,17 +729,15 @@ export function resolveNodeLatencyMs(node: NodeRecord | NormalizedNode): number 
 
 export function formatNodeLatency(node: NodeRecord | NormalizedNode): string {
   const ms = resolveNodeLatencyMs(node)
-  if (ms === null || ms < 0) {
-    const health = nodeHealthBadge(node)
-    if (health.tone === 'error') return '不可达'
-    return '未测速'
+  if (ms === null || ms <= 0) {
+    return '--'
   }
   return `${ms} ms`
 }
 
 export function nodeLatencyTone(node: NodeRecord | NormalizedNode): ToastTone {
   const ms = resolveNodeLatencyMs(node)
-  if (ms === null || ms < 0) {
+  if (ms === null || ms <= 0) {
     const health = nodeHealthBadge(node)
     if (health.tone === 'error') return 'error'
     return 'info'

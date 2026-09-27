@@ -1,6 +1,6 @@
 import { computed, ref } from 'vue'
 import { api } from '../../api/client'
-import { normalizeNode, type NodeRecord, type NormalizedNode } from '../nodes/nodeView'
+import { normalizeNode, nodeUnderlyingHealthCategory, type NodeRecord, type NormalizedNode } from '../nodes/nodeView'
 import {
   generateIdempotencyKey,
   type CreateProbeRunInput,
@@ -8,6 +8,7 @@ import {
   type ProbeBatch,
   type ProbeKind,
   type ProbeObservation,
+  type ProbePoolStatus,
   type ProbeRun,
   type ProbeRunState,
   type ProbeSchedule,
@@ -36,6 +37,10 @@ export function useProbes() {
   const probeNodes = ref<NormalizedNode[]>([])
   const subscriptions = ref<SubscriptionLite[]>([])
   const probingNodeIds = ref<Set<string>>(new Set())
+  const queuedNodeIds = ref<Set<string>>(new Set())
+  const serverPoolStatus = ref<ProbePoolStatus | null>(null)
+  const loadingPoolStatus = ref(false)
+  const triggeringSchedule = ref(false)
 
   const loadingRuns = ref(false)
   const loadingObservations = ref(false)
@@ -89,7 +94,15 @@ export function useProbes() {
         const items = Array.isArray(res?.items) ? res.items : []
         expectedTotal = typeof res?.total === 'number' ? res.total : items.length
         for (const raw of items) {
-          collected.push(normalizeNode(raw))
+          const normalized = normalizeNode(raw)
+          if (normalized.probeState === 'idle') {
+            if (probingNodeIds.value.has(normalized.logicalId)) {
+              normalized.probeState = 'probing'
+            } else if (queuedNodeIds.value.has(normalized.logicalId)) {
+              normalized.probeState = 'queued'
+            }
+          }
+          collected.push(normalized)
         }
         if (items.length === 0 || collected.length >= expectedTotal || items.length < pageSize) {
           break
@@ -107,6 +120,162 @@ export function useProbes() {
       loadingNodes.value = false
     }
   }
+
+  function isValidPoolStatus(res: unknown): res is ProbePoolStatus {
+    if (!res || typeof res !== 'object') return false
+    const candidate = res as Record<string, unknown>
+    return (
+      typeof candidate.total_count === 'number' &&
+      typeof candidate.queue_nodes_count === 'number' &&
+      typeof candidate.available_count === 'number' &&
+      typeof candidate.unavailable_count === 'number' &&
+      typeof candidate.untested_count === 'number'
+    )
+  }
+
+  function derivePoolStatusFromLocal(): ProbePoolStatus {
+    const nodes = probeNodes.value
+    const total = nodes.length
+    const probingSet = new Set<string>(probingNodeIds.value)
+    const queuedSet = new Set<string>(queuedNodeIds.value)
+    let healthy = 0
+    let degraded = 0
+    let unhealthy = 0
+    let untested = 0
+
+    for (const node of nodes) {
+      if (node.probeState === 'probing' || node.healthStatus === 'probing') {
+        probingSet.add(node.logicalId)
+      } else if (node.probeState === 'queued' || node.healthStatus === 'queued') {
+        queuedSet.add(node.logicalId)
+      }
+      const cat = nodeUnderlyingHealthCategory(node)
+      if (cat === 'healthy') healthy += 1
+      else if (cat === 'degraded') degraded += 1
+      else if (cat === 'unhealthy') unhealthy += 1
+      else untested += 1
+    }
+
+    for (const id of probingSet) {
+      queuedSet.delete(id)
+    }
+
+    const probingIds = Array.from(probingSet)
+    const queuedIds = Array.from(queuedSet)
+    const probingCount = probingIds.length
+    const queuedWaitingCount = queuedIds.length
+
+    return {
+      queue_nodes_count: probingCount + queuedWaitingCount,
+      probing_count: probingCount,
+      queued_waiting_count: queuedWaitingCount,
+      untested_count: untested,
+      total_count: total,
+      unavailable_count: unhealthy,
+      available_count: healthy + degraded,
+      healthy_count: healthy,
+      degraded_count: degraded,
+      probing_node_ids: probingIds,
+      queued_node_ids: queuedIds,
+      updated_at: new Date().toISOString(),
+    }
+  }
+
+  const poolStatus = computed<ProbePoolStatus>({
+    get: () => serverPoolStatus.value ?? derivePoolStatusFromLocal(),
+    set: (val) => {
+      serverPoolStatus.value = val
+    },
+  })
+
+  function applyServerPoolStatus(res: ProbePoolStatus): ProbePoolStatus {
+    const probingIds = Array.isArray(res.probing_node_ids) ? res.probing_node_ids : []
+    const queuedIds = Array.isArray(res.queued_node_ids) ? res.queued_node_ids : []
+    const nextProbing = new Set<string>(probingIds)
+    const nextQueued = new Set<string>(queuedIds.filter((id) => !nextProbing.has(id)))
+    probingNodeIds.value = nextProbing
+    queuedNodeIds.value = nextQueued
+
+    const normalized: ProbePoolStatus = {
+      queue_nodes_count:
+        typeof res.queue_nodes_count === 'number'
+          ? res.queue_nodes_count
+          : nextProbing.size + nextQueued.size,
+      probing_count:
+        typeof res.probing_count === 'number' ? res.probing_count : nextProbing.size,
+      queued_waiting_count:
+        typeof res.queued_waiting_count === 'number'
+          ? res.queued_waiting_count
+          : nextQueued.size,
+      untested_count: res.untested_count ?? 0,
+      total_count: res.total_count ?? 0,
+      unavailable_count: res.unavailable_count ?? 0,
+      available_count: res.available_count ?? 0,
+      healthy_count: res.healthy_count ?? 0,
+      degraded_count: res.degraded_count ?? 0,
+      probing_node_ids: Array.from(nextProbing),
+      queued_node_ids: Array.from(nextQueued),
+      updated_at: res.updated_at || new Date().toISOString(),
+    }
+
+    serverPoolStatus.value = normalized
+
+    if (probeNodes.value.length > 0) {
+      probeNodes.value = probeNodes.value.map((n) => {
+        if (nextProbing.has(n.logicalId)) {
+          return { ...n, probeState: 'probing' as const }
+        }
+        if (nextQueued.has(n.logicalId)) {
+          return { ...n, probeState: 'queued' as const }
+        }
+        if (n.probeState !== 'idle' && n.healthStatus !== 'probing' && n.healthStatus !== 'queued') {
+          return { ...n, probeState: 'idle' as const }
+        }
+        return n
+      })
+    }
+
+    return normalized
+  }
+
+  async function loadPoolStatus(): Promise<ProbePoolStatus> {
+    loadingPoolStatus.value = true
+    try {
+      const res = await api.get<ProbePoolStatus>('/api/v1/probes/pool')
+      if (isValidPoolStatus(res)) {
+        return applyServerPoolStatus(res)
+      }
+      serverPoolStatus.value = null
+      return derivePoolStatusFromLocal()
+    } catch {
+      serverPoolStatus.value = null
+      return derivePoolStatusFromLocal()
+    } finally {
+      loadingPoolStatus.value = false
+    }
+  }
+
+  async function triggerPeriodicPoolEnqueue(): Promise<ProbePoolStatus | null> {
+    triggeringSchedule.value = true
+    error.value = ''
+    try {
+      const res = await api.post<ProbePoolStatus>('/api/v1/probes/schedule/trigger')
+      if (isValidPoolStatus(res)) {
+        const applied = applyServerPoolStatus(res)
+        await Promise.all([loadProbeNodes(), loadBatches()])
+        return applied
+      }
+      await Promise.all([loadPoolStatus(), loadProbeNodes(), loadBatches()])
+      return poolStatus.value
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : '触发定时入池检测失败'
+      return null
+    } finally {
+      triggeringSchedule.value = false
+    }
+  }
+
+  const triggerScheduleNow = triggerPeriodicPoolEnqueue
 
   async function loadSubscriptions() {
     try {
@@ -134,11 +303,13 @@ export function useProbes() {
         evidence_digest: '',
         observed_at: detail.observed_at || node.lastProbedAt || '',
         latency_ms:
-          typeof detail.latency_ms === 'number'
+          detail.verdict === 'error'
+            ? -1
+            : typeof detail.latency_ms === 'number' && detail.latency_ms > 0
             ? detail.latency_ms
-            : kind === 'baseline' && typeof node.latencyMs === 'number'
+            : kind === 'baseline' && typeof node.latencyMs === 'number' && node.latencyMs > 0
             ? node.latencyMs
-            : 0,
+            : -1,
         redacted_summary: detail.summary || '',
       })
     }
@@ -276,11 +447,34 @@ export function useProbes() {
     submitting.value = true
     error.value = ''
     const targetIds = input.node_logical_ids || []
-    if (targetIds.length > 0) {
-      const nextSet = new Set(probingNodeIds.value)
-      for (const id of targetIds) nextSet.add(id)
-      probingNodeIds.value = nextSet
+    const idsToMark = targetIds.length > 0 ? targetIds : probeNodes.value.map((n) => n.logicalId)
+
+    if (idsToMark.length > 0) {
+      const nextProbing = new Set(probingNodeIds.value)
+      const nextQueued = new Set(queuedNodeIds.value)
+      for (const id of idsToMark) {
+        nextProbing.add(id)
+        nextQueued.delete(id)
+      }
+      probingNodeIds.value = nextProbing
+      queuedNodeIds.value = nextQueued
+      probeNodes.value = probeNodes.value.map((n) =>
+        idsToMark.includes(n.logicalId) ? { ...n, probeState: 'probing' as const } : n
+      )
+      if (serverPoolStatus.value) {
+        const mergedProbing = Array.from(new Set([...serverPoolStatus.value.probing_node_ids, ...idsToMark]))
+        const mergedQueued = serverPoolStatus.value.queued_node_ids.filter((id) => !mergedProbing.includes(id))
+        serverPoolStatus.value = {
+          ...serverPoolStatus.value,
+          probing_node_ids: mergedProbing,
+          queued_node_ids: mergedQueued,
+          probing_count: mergedProbing.length,
+          queued_waiting_count: mergedQueued.length,
+          queue_nodes_count: mergedProbing.length + mergedQueued.length,
+        }
+      }
     }
+
     try {
       const idempotencyKey = generateIdempotencyKey()
       const body: Record<string, unknown> = {
@@ -298,19 +492,31 @@ export function useProbes() {
           'Idempotency-Key': idempotencyKey,
         },
       })
+      if (res && isValidPoolStatus((res as any).pool_status)) {
+        applyServerPoolStatus((res as any).pool_status)
+      } else if (res && ['succeeded', 'failed', 'cancelled', 'expired'].includes(res.state)) {
+        const nextProbing = new Set(probingNodeIds.value)
+        for (const id of idsToMark) nextProbing.delete(id)
+        probingNodeIds.value = nextProbing
+      }
       await loadRuns()
       return res
     } catch (err) {
+      if (idsToMark.length > 0) {
+        const nextProbing = new Set(probingNodeIds.value)
+        for (const id of idsToMark) nextProbing.delete(id)
+        probingNodeIds.value = nextProbing
+        probeNodes.value = probeNodes.value.map((n) =>
+          idsToMark.includes(n.logicalId) && n.healthStatus !== 'probing'
+            ? { ...n, probeState: 'idle' as const }
+            : n
+        )
+      }
       const msg = err instanceof Error ? err.message : '发起探针任务失败'
       error.value = msg
       throw err
     } finally {
       submitting.value = false
-      if (targetIds.length > 0) {
-        const nextSet = new Set(probingNodeIds.value)
-        for (const id of targetIds) nextSet.delete(id)
-        probingNodeIds.value = nextSet
-      }
     }
   }
 
@@ -323,7 +529,7 @@ export function useProbes() {
       kinds,
       node_logical_ids: options.nodeLogicalIds ?? [],
     })
-    await loadProbeNodes()
+    await Promise.all([loadProbeNodes(), loadPoolStatus()])
     return res
   }
 
@@ -390,6 +596,10 @@ export function useProbes() {
     nodeMap,
     subscriptionNameMap,
     probingNodeIds,
+    queuedNodeIds,
+    poolStatus,
+    loadingPoolStatus,
+    triggeringSchedule,
     loadingRuns,
     loadingObservations,
     loadingNodeObservations,
@@ -418,5 +628,8 @@ export function useProbes() {
     loadBatches,
     getBatch,
     cancelBatch,
+    loadPoolStatus,
+    triggerPeriodicPoolEnqueue,
+    triggerScheduleNow,
   }
 }

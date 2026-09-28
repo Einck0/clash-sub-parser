@@ -232,12 +232,19 @@ func (r *probeRunRepository) ListActive(ctx context.Context) ([]domain.ProbeRun,
 
 // ProbeObservationRepository implementation
 
+const ensureLatestProbeObservationIndexSQL = `
+CREATE INDEX IF NOT EXISTS idx_probe_obs_node_kind_observed_id
+	ON probe_observations(node_logical_id, kind, observed_at DESC, id DESC);`
+
 type probeObservationRepository struct {
 	db *sql.DB
 }
 
 // NewProbeObservationRepository constructs a SQLite implementation of domain.ProbeObservationRepository.
 func NewProbeObservationRepository(db *sql.DB) domain.ProbeObservationRepository {
+	if db != nil {
+		_, _ = db.Exec(ensureLatestProbeObservationIndexSQL)
+	}
 	return &probeObservationRepository{db: db}
 }
 
@@ -370,6 +377,28 @@ func (r *probeObservationRepository) ListByNode(ctx context.Context, nodeLogical
 	return items, nil
 }
 
+func buildLatestByNodesQuery(nodePlaceholders, kindPlaceholders []string) string {
+	whereClause := fmt.Sprintf("node_logical_id IN (%s)", strings.Join(nodePlaceholders, ", "))
+	if len(kindPlaceholders) > 0 {
+		whereClause = fmt.Sprintf("%s AND kind IN (%s)", whereClause, strings.Join(kindPlaceholders, ", "))
+	}
+	return fmt.Sprintf(`
+	WITH ranked_observations AS (
+		SELECT id, probe_run_id, node_logical_id, kind, verdict,
+		       evidence_digest, observed_at, latency_ms, redacted_summary,
+		       ROW_NUMBER() OVER (
+		           PARTITION BY node_logical_id, kind
+		           ORDER BY observed_at DESC, id DESC
+		       ) AS rn
+		FROM probe_observations
+		WHERE %s
+	)
+	SELECT id, probe_run_id, node_logical_id, kind, verdict,
+	       evidence_digest, observed_at, latency_ms, redacted_summary
+	FROM ranked_observations
+	WHERE rn = 1;`, whereClause)
+}
+
 func (r *probeObservationRepository) ListLatestByNodes(ctx context.Context, nodeLogicalIDs []string, kinds []domain.ProbeKind) (map[string]map[domain.ProbeKind]domain.ProbeObservation, error) {
 	result := make(map[string]map[domain.ProbeKind]domain.ProbeObservation)
 	if len(nodeLogicalIDs) == 0 {
@@ -389,31 +418,22 @@ func (r *probeObservationRepository) ListLatestByNodes(ctx context.Context, node
 		chunk := nodeLogicalIDs[i:end]
 
 		placeholders := make([]string, len(chunk))
-		args := make([]interface{}, len(chunk))
+		args := make([]interface{}, 0, len(chunk)+len(kinds))
 		for j, id := range chunk {
 			placeholders[j] = "?"
-			args[j] = id
+			args = append(args, id)
 		}
 
-		var query string
+		var kindPlaceholders []string
 		if len(kinds) > 0 {
-			kindPlaceholders := make([]string, len(kinds))
+			kindPlaceholders = make([]string, len(kinds))
 			for j, k := range kinds {
 				kindPlaceholders[j] = "?"
 				args = append(args, string(k))
 			}
-			query = fmt.Sprintf(`
-			SELECT id, probe_run_id, node_logical_id, kind, verdict, evidence_digest, observed_at, latency_ms, redacted_summary
-			FROM probe_observations
-			WHERE node_logical_id IN (%s) AND kind IN (%s)
-			ORDER BY observed_at DESC, id DESC;`, strings.Join(placeholders, ", "), strings.Join(kindPlaceholders, ", "))
-		} else {
-			query = fmt.Sprintf(`
-			SELECT id, probe_run_id, node_logical_id, kind, verdict, evidence_digest, observed_at, latency_ms, redacted_summary
-			FROM probe_observations
-			WHERE node_logical_id IN (%s)
-			ORDER BY observed_at DESC, id DESC;`, strings.Join(placeholders, ", "))
 		}
+
+		query := buildLatestByNodesQuery(placeholders, kindPlaceholders)
 
 		rows, err := r.db.QueryContext(ctx, query, args...)
 		if err != nil {

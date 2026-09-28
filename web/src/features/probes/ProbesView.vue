@@ -1356,8 +1356,8 @@ onUnmounted(() => {
         data-testid="node-probe-workbench-table"
         class="card bg-base-200 border border-base-300 shadow-sm overflow-hidden"
       >
-        <div class="overflow-x-auto">
-          <table class="table table-sm sm:table-md w-full align-middle">
+        <div class="overflow-x-auto probe-node-table-wrap">
+          <table class="table table-sm sm:table-md w-full align-middle probe-node-table">
             <thead>
               <tr class="bg-base-300/50 text-xs uppercase tracking-wider">
                 <th class="w-10">
@@ -1370,11 +1370,11 @@ onUnmounted(() => {
                     @change="toggleSelectAll"
                   />
                 </th>
-                <th>节点名称 / 协议与入口</th>
+                <th class="probe-node-identity">节点名称 / 协议与入口</th>
                 <th>连通状态与延迟</th>
                 <th>流媒体 / AI / 地区 / 风险</th>
                 <th>最后测速</th>
-                <th class="text-right">快捷操作</th>
+                <th class="text-right probe-node-actions">快捷操作</th>
               </tr>
             </thead>
             <tbody>
@@ -1382,9 +1382,9 @@ onUnmounted(() => {
                 v-for="node in filteredNodes"
                 :key="node.logicalId"
                 data-testid="probe-node-row"
-                class="hover:bg-base-300/30 transition-colors"
+                class="probe-node-row hover:bg-base-300/30 transition-colors"
               >
-                <td>
+                <td class="probe-node-select">
                   <input
                     type="checkbox"
                     data-testid="select-node-checkbox"
@@ -1396,23 +1396,24 @@ onUnmounted(() => {
                 </td>
 
                 <!-- Node Name, Protocol, Server:Port & Subscription Source -->
-                <td class="min-w-[200px]">
-                  <div class="flex items-center gap-2">
-                    <span class="font-semibold text-xs sm:text-sm truncate max-w-[240px]">
+                <td class="min-w-0 probe-node-identity" data-label="节点 / 协议与入口">
+                  <div class="flex min-w-0 flex-wrap items-center gap-2">
+                    <span class="min-w-0 max-w-full break-all font-semibold text-xs sm:text-sm">
                       {{ node.displayName }}
                     </span>
-                    <span class="badge badge-xs badge-outline font-mono uppercase">
+                    <span class="badge badge-xs badge-outline font-mono uppercase shrink-0">
                       {{ node.protocol }}
                     </span>
                   </div>
-                  <div class="flex flex-wrap items-center gap-1.5 mt-1 text-[11px] font-mono opacity-70">
+                  <div class="flex min-w-0 flex-wrap items-center gap-1.5 mt-1 text-[11px] font-mono opacity-70 break-all">
                     <span v-if="node.connection.server && node.connection.port">
                       {{ node.connection.server }}:{{ node.connection.port }}
                     </span>
                     <span
                       v-for="srcName in formatNodeSources(node)"
                       :key="srcName"
-                      class="badge badge-xs badge-ghost font-sans"
+                      data-testid="probe-node-source-badge"
+                      class="badge badge-xs badge-ghost font-sans h-auto py-0.5 leading-tight max-w-full whitespace-normal break-all"
                     >
                       {{ srcName }}
                     </span>
@@ -1420,8 +1421,8 @@ onUnmounted(() => {
                 </td>
 
                 <!-- Connectivity Health & Semantic Colored Latency Badge -->
-                <td class="whitespace-nowrap">
-                  <div class="flex items-center gap-1.5">
+                <td class="whitespace-nowrap" data-label="连通状态与延迟">
+                  <div class="flex flex-wrap items-center gap-1.5">
                     <StatusBadge
                       data-testid="probe-node-status-badge"
                       :label="getNodeHealthBadge(node).label"
@@ -1451,7 +1452,7 @@ onUnmounted(() => {
                 </td>
 
                 <!-- Capability Matrix Badges -->
-                <td>
+                <td data-label="探测结果">
                   <div class="flex flex-wrap items-center gap-1.5 text-xs">
                     <StatusBadge
                       :label="`🎬 流媒体: ${nodeCapabilityLabel(node, 'streaming').label}`"
@@ -1473,7 +1474,7 @@ onUnmounted(() => {
                 </td>
 
                 <!-- Relative Last Probed Time -->
-                <td class="whitespace-nowrap text-xs font-mono opacity-75">
+                <td class="whitespace-nowrap text-xs font-mono opacity-75" data-label="最后测速">
                   <span>{{ formatRelativeTime(node.lastProbedAt) }}</span>
                   <span
                     v-if="node.probeStale"
@@ -1485,12 +1486,12 @@ onUnmounted(() => {
                 </td>
 
                 <!-- Row-Level Quick Actions -->
-                <td class="text-right whitespace-nowrap">
-                  <div class="inline-flex items-center gap-1.5">
+                <td class="text-right whitespace-normal probe-node-actions" data-label="快捷操作">
+                  <div class="flex min-w-0 flex-wrap items-center gap-1.5">
                     <button
                       type="button"
                       data-testid="row-reprobe-btn"
-                      class="btn btn-xs btn-primary btn-outline gap-1"
+                      class="btn btn-xs btn-primary btn-outline gap-1 probe-node-action-button"
                       :disabled="getNodeProbeState(node) === 'probing' || submitting"
                       title="手动检测将插在节点池队列最前面优先执行"
                       @click="handleProbeSingleNode(node)"
@@ -1512,7 +1513,7 @@ onUnmounted(() => {
                     <button
                       type="button"
                       data-testid="row-inspect-btn"
-                      class="btn btn-xs btn-ghost"
+                      class="btn btn-xs btn-ghost probe-node-action-button"
                       @click="handleInspectNode(node)"
                     >
                       {{ t('probes.viewEvidence') }}
@@ -1894,3 +1895,48 @@ onUnmounted(() => {
     />
   </section>
 </template>
+
+<style scoped>
+.probe-node-identity .badge {
+  height: auto;
+  min-height: 1rem;
+  padding-top: 0.125rem;
+  padding-bottom: 0.125rem;
+  line-height: 1.25;
+}
+/* Keep dense desktop tables usable without letting unbroken user data dictate column width. */
+@media (min-width: 768px) {
+  .probe-node-table { table-layout: fixed; }
+  .probe-node-table th:nth-child(1), .probe-node-select { width: 5%; }
+  .probe-node-table th:nth-child(2), .probe-node-identity { width: 23%; }
+  .probe-node-table th:nth-child(3) { width: 14%; }
+  .probe-node-table th:nth-child(4) { width: 26%; }
+  .probe-node-table th:nth-child(5) { width: 12%; }
+  .probe-node-table th:nth-child(6), .probe-node-actions { width: 20%; }
+  .probe-node-actions > div { justify-content: flex-end; }
+  .probe-node-action-button { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+  .probe-node-identity > div { min-width: 0; max-width: 100%; }
+  .probe-node-identity span { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+}
+@media (max-width: 767px) {
+  .probe-node-table-wrap { overflow-x: clip; }
+  .probe-node-table { display: block; width: 100%; min-width: 0; table-layout: fixed; }
+  .probe-node-table thead { display: none; }
+  .probe-node-table tbody { display: grid; gap: 0.75rem; }
+  .probe-node-row {
+    position: relative; display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.5rem;
+    padding: 0.75rem; border: 1px solid hsl(var(--bc) / 0.18); border-radius: 0.75rem;
+    background: hsl(var(--b1));
+  }
+  .probe-node-row td { display: block; width: 100%; min-width: 0; max-width: 100%; padding: 0; white-space: normal; text-align: left; overflow-wrap: anywhere; }
+  .probe-node-row td:not(.probe-node-select)::before {
+    content: attr(data-label); display: block; margin-bottom: 0.2rem; font-size: 0.65rem;
+    font-weight: 700; opacity: 0.65;
+  }
+  .probe-node-select { position: absolute; top: 0.75rem; right: 0.75rem; z-index: 1; }
+  .probe-node-actions, .probe-node-actions > div { width: 100%; min-width: 0; max-width: 100%; }
+  .probe-node-actions button { flex: 1 1 auto; min-width: 0; min-height: 2rem; white-space: normal; overflow-wrap: anywhere; }
+  .probe-node-row td > div { min-width: 0; max-width: 100%; }
+  .probe-node-row [data-testid="probe-node-status-badge"], .probe-node-row .badge { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+}
+</style>

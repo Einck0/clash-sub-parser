@@ -684,6 +684,25 @@ describe('ProbesView Component Interaction & Feedback', () => {
     expect(rows[0].textContent).toContain('Tokyo HighSpeed 01')
     expect(rows[0].textContent).toContain('38 ms')
     expect(rows[0].textContent).toContain('主力专线订阅')
+    // The same node's detail and reprobe actions remain in the node row for both
+    // the desktop table and its narrow-screen card presentation.
+    expect(rows[0].querySelector('[data-testid="row-inspect-btn"]')).not.toBeNull()
+    expect(rows[0].querySelector('[data-testid="row-reprobe-btn"]')).not.toBeNull()
+    expect(rows[0].querySelector('[data-label="探测结果"]')).not.toBeNull()
+    expect(rows[0].querySelector('[data-label="快捷操作"]')).not.toBeNull()
+    const nodeCell = rows[0].querySelector('[data-label="节点 / 协议与入口"]') as HTMLElement
+    expect(nodeCell.className).toContain('min-w-0')
+    expect(nodeCell.querySelector('.font-semibold')?.className).toContain('break-all')
+    const sourceBadge = nodeCell.querySelector('[data-testid="probe-node-source-badge"]') as HTMLElement
+    expect(sourceBadge).not.toBeNull()
+    expect(sourceBadge.className).toContain('break-all')
+    expect(sourceBadge.className).toContain('h-auto')
+    const actionsCell = rows[0].querySelector('[data-label="快捷操作"]') as HTMLElement
+    expect(actionsCell.className).toContain('whitespace-normal')
+    expect(nodeCell.className).toContain('probe-node-identity')
+    expect(actionsCell.querySelectorAll('.probe-node-action-button')).toHaveLength(2)
+    expect(actionsCell.querySelector('[data-testid="row-inspect-btn"]')?.className).toContain('probe-node-action-button')
+    expect(actionsCell.querySelector('[data-testid="row-reprobe-btn"]')?.className).toContain('probe-node-action-button')
 
     // One-click full probe without config_revision modal
     const fullProbeBtn = container.querySelector('[data-testid="quick-full-probe-btn"]') as HTMLButtonElement | null
@@ -714,6 +733,87 @@ describe('ProbesView Component Interaction & Feedback', () => {
     expect(sheet?.textContent).toContain('HTTP 204 连通正常')
     expect(sheet?.textContent).toContain('协议握手与响应校验通过')
     expect(sheet?.textContent).not.toContain('profile=baseline version=baseline-v1')
+  })
+
+  it('constrains unbroken long node names and source badges while keeping row inspect and reprobe actions operable', async () => {
+    const longNodeName = 'LONG_UNBROKEN_NODE_' + 'N'.repeat(240)
+    const longSourceName = 'LONG_UNBROKEN_SOURCE_' + 'S'.repeat(240)
+
+    vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
+      if (path.startsWith('/api/v1/nodes')) {
+        return {
+          items: [
+            {
+              logical_id: 'node-long-unbroken',
+              display_name: longNodeName,
+              protocol: 'vless',
+              server: 'edge-long.example.com',
+              port: 443,
+              health_status: 'healthy',
+              probe_state: 'idle',
+              latency_ms: 42,
+              last_probed_at: '2026-09-26T10:00:00Z',
+              probe_stale: false,
+              probe_missing: false,
+              sources: [{ subscription_id: 'sub-long', raw_name: longNodeName }],
+              capabilities: {
+                baseline: { verdict: 'available', latency_ms: 42, observed_at: '2026-09-26T10:00:00Z', stale: false },
+              },
+            },
+          ],
+          page: 1,
+          page_size: 200,
+          total: 1,
+        }
+      }
+      if (path.startsWith('/api/v1/subscriptions')) {
+        return {
+          items: [{ id: 'sub-long', name: longSourceName }],
+          total: 1,
+        }
+      }
+      if (path === '/api/v1/probes/runs') return { items: [], total: 0 }
+      if (path === '/api/v1/probes/schedule') return { ...mockSchedule }
+      if (path === '/api/v1/probes/batches') return { items: [], total: 0 }
+      return { items: [], total: 0 }
+    })
+
+    const postSpy = vi.spyOn(api, 'post').mockResolvedValue({
+      run_id: 'run-single-long',
+      state: 'queued',
+      deadline_at: '2026-09-26T10:10:00Z',
+    })
+
+    await mountProbesView()
+
+    const row = container.querySelector('[data-testid="probe-node-row"]') as HTMLElement
+    expect(row).not.toBeNull()
+    const identityCell = row.querySelector('[data-label="节点 / 协议与入口"]') as HTMLElement
+    expect(identityCell.className).toContain('probe-node-identity')
+    expect(identityCell.className).toContain('min-w-0')
+
+    const sourceBadge = identityCell.querySelector('[data-testid="probe-node-source-badge"]') as HTMLElement
+    expect(sourceBadge).not.toBeNull()
+    expect(sourceBadge.textContent).toContain(longSourceName)
+    expect(sourceBadge.className).toContain('h-auto')
+    expect(sourceBadge.className).toContain('whitespace-normal')
+    expect(sourceBadge.className).toContain('break-all')
+
+    const reprobeBtn = row.querySelector('[data-testid="row-reprobe-btn"]') as HTMLButtonElement
+    const inspectBtn = row.querySelector('[data-testid="row-inspect-btn"]') as HTMLButtonElement
+    expect(reprobeBtn.className).toContain('probe-node-action-button')
+    expect(inspectBtn.className).toContain('probe-node-action-button')
+
+    reprobeBtn.click()
+    await nextTick()
+    await new Promise((r) => setTimeout(r, 20))
+    expect(postSpy).toHaveBeenCalledWith(
+      '/api/v1/probes/runs',
+      expect.objectContaining({
+        node_logical_ids: ['node-long-unbroken'],
+      }),
+      expect.any(Object)
+    )
   })
 
   it('opens schedule configuration modal, updates values and submits PUT /api/v1/probes/schedule', async () => {

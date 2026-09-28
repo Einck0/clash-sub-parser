@@ -3,13 +3,17 @@ package profiles
 
 import (
 	"bytes"
+	"net/http"
 	"strings"
 	"time"
 
 	"clash-sub-parser/internal/domain"
+	"clash-sub-parser/internal/probe/identity"
 )
 
 const (
+	MinValidSpeedBytes int64 = 1024
+
 	BaselineVersion  = "baseline-v1"
 	GeoVersion       = "geo-v1"
 	StreamingVersion = "streaming-v1"
@@ -80,7 +84,8 @@ func (p Profile) Evaluate(result Result) Evaluation {
 	if p.Kind == domain.ProbeKindIPRisk && result.ExitIdentityMissing {
 		return Evaluation{Verdict: domain.VerdictUnknown, Reason: "missing_exit_identity"}
 	}
-	if hasRestrictionMarker(result.Body) || result.StatusCode == 401 || result.StatusCode == 403 {
+	if hasRestrictionMarker(result.Body) || result.StatusCode == http.StatusUnauthorized || result.StatusCode == http.StatusForbidden ||
+		((p.Kind == domain.ProbeKindStreaming || p.Kind == domain.ProbeKindAI) && result.StatusCode == http.StatusUnavailableForLegalReasons) {
 		if p.Kind == domain.ProbeKindIPRisk {
 			return Evaluation{Verdict: domain.VerdictUnknown, Reason: "access_restricted"}
 		}
@@ -103,6 +108,32 @@ func (p Profile) Evaluate(result Result) Evaluation {
 	}
 	if result.StatusCode < 200 || result.StatusCode >= 400 {
 		return Evaluation{Verdict: domain.VerdictUnknown, Reason: "unexpected_status"}
+	}
+	if p.Kind == domain.ProbeKindBaseline && (result.StatusCode != http.StatusNoContent || len(result.Body) != 0 || result.BytesRead != 0) {
+		return Evaluation{Verdict: domain.VerdictUnknown, Reason: "contract_drift"}
+	}
+	if p.Kind == domain.ProbeKindGeo {
+		if result.StatusCode != http.StatusOK {
+			return Evaluation{Verdict: domain.VerdictUnknown, Reason: "contract_drift"}
+		}
+		if _, err := identity.ExtractCandidate(result.Body); err != nil {
+			return Evaluation{Verdict: domain.VerdictUnknown, Reason: "contract_drift"}
+		}
+	}
+	if p.Kind == domain.ProbeKindStreaming || p.Kind == domain.ProbeKindAI {
+		return Evaluation{Verdict: domain.VerdictUnknown, Reason: "contract_drift"}
+	}
+	if p.Kind == domain.ProbeKindIPRisk {
+		return Evaluation{Verdict: domain.VerdictUnknown, Reason: "contract_drift"}
+	}
+	if p.Kind == domain.ProbeKindSpeed {
+		bytesRead := result.BytesRead
+		if bytesRead == 0 {
+			bytesRead = int64(len(result.Body))
+		}
+		if result.StatusCode != http.StatusOK || bytesRead < MinValidSpeedBytes {
+			return Evaluation{Verdict: domain.VerdictUnknown, Reason: "contract_drift"}
+		}
 	}
 	if !result.ContractMatched || result.ContractVersion != p.Contract {
 		return Evaluation{Verdict: domain.VerdictUnknown, Reason: "contract_drift"}

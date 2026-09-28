@@ -67,6 +67,126 @@ func TestStageGateSpeedExplicitOptInExecutesAndEnforcesBudget(t *testing.T) {
 		}
 	})
 
+	t.Run("speed_rejects_204_empty_and_tiny_payloads_below_1024_bytes", func(t *testing.T) {
+		for _, tc := range []struct {
+			name       string
+			statusCode int
+			payload    string
+		}{
+			{name: "status_204_empty", statusCode: http.StatusNoContent, payload: ""},
+			{name: "status_200_empty", statusCode: http.StatusOK, payload: ""},
+			{name: "status_200_tiny_ok", statusCode: http.StatusOK, payload: "OK"},
+			{name: "status_200_1023_bytes", statusCode: http.StatusOK, payload: strings.Repeat("x", 1023)},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				runs, observations, nodes := newMemoryRuns(), newMemoryObservations(), newMemoryNodes()
+				nodes.items["node"] = domain.Node{LogicalID: "node", Protocol: domain.ProtocolSS, Active: true}
+				sched, err := queue.NewScheduler(queue.Config{Concurrency: 10})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer sched.Close()
+
+				runner := probe.NewDefaultRunner(nodes, observations, sched, runs,
+					probe.WithNodeDialer(func(context.Context, domain.Node) (*http.Client, func() error, error) {
+						return &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+							return &http.Response{
+								StatusCode: tc.statusCode,
+								Header:     make(http.Header),
+								Body:       io.NopCloser(strings.NewReader(tc.payload)),
+								Request:    req,
+							}, nil
+						})}, nil, nil
+					}),
+				)
+				run := stageRun("speed_tiny_" + tc.name)
+				if err := runs.Create(context.Background(), run); err != nil {
+					t.Fatal(err)
+				}
+				if err := runner.Run(context.Background(), run, []string{"node"}, []domain.ProbeKind{domain.ProbeKindSpeed}); err != nil {
+					t.Fatalf("Run: %v", err)
+				}
+				got, err := observations.ListByRun(context.Background(), run.ID)
+				if err != nil || len(got) != 1 {
+					t.Fatalf("speed observation missing: %#v, err=%v", got, err)
+				}
+				if got[0].Verdict != domain.VerdictUnknown || !strings.Contains(got[0].RedactedSummary, "reason=contract_drift") {
+					t.Fatalf("expected speed tiny payload verdict=unknown reason=contract_drift, got %#v", got[0])
+				}
+			})
+		}
+	})
+
+	t.Run("speed_measures_full_body_transfer_elapsed_time_and_throughput", func(t *testing.T) {
+		runs, observations, nodes := newMemoryRuns(), newMemoryObservations(), newMemoryNodes()
+		nodes.items["node"] = domain.Node{LogicalID: "node", Protocol: domain.ProtocolSS, Active: true}
+		sched, err := queue.NewScheduler(queue.Config{Concurrency: 10})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer sched.Close()
+
+		var clockMu sync.Mutex
+		now := time.Now().UTC()
+		clockFn := func() time.Time {
+			clockMu.Lock()
+			defer clockMu.Unlock()
+			return now
+		}
+		advanceClock := func(d time.Duration) {
+			clockMu.Lock()
+			now = now.Add(d)
+			clockMu.Unlock()
+		}
+
+		// 4 chunks of 1024 bytes = 4096 bytes total; each chunk read advances clock by 20ms (total 80ms in body read).
+		// Header response itself takes 0ms, so any non-zero latency_ms proves timing stopped AFTER readBoundedResponse.
+		runner := probe.NewDefaultRunner(nodes, observations, sched, runs,
+			probe.WithRunnerClock(clockFn),
+			probe.WithNodeDialer(func(context.Context, domain.Node) (*http.Client, func() error, error) {
+				return &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     make(http.Header),
+						Body: &slowChunkReader{
+							remaining: 4096,
+							maxRead:   1024,
+							onRead: func() {
+								advanceClock(20 * time.Millisecond)
+							},
+						},
+						Request: req,
+					}, nil
+				})}, nil, nil
+			}),
+		)
+		run := &domain.ProbeRun{
+			ID:         "speed_slow_reader",
+			State:      domain.ProbeRunStateQueued,
+			DeadlineAt: now.Add(time.Minute),
+		}
+		if err := runs.Create(context.Background(), run); err != nil {
+			t.Fatal(err)
+		}
+		if err := runner.Run(context.Background(), run, []string{"node"}, []domain.ProbeKind{domain.ProbeKindSpeed}); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		got, err := observations.ListByRun(context.Background(), run.ID)
+		if err != nil || len(got) != 1 {
+			t.Fatalf("speed observation missing: %#v, err=%v", got, err)
+		}
+		if got[0].Verdict != domain.VerdictAvailable {
+			t.Fatalf("expected speed verdict available, got %s (%s)", got[0].Verdict, got[0].RedactedSummary)
+		}
+		if got[0].LatencyMS != 80 {
+			t.Fatalf("expected latency_ms=80 from full body read, got %d (summary=%s)", got[0].LatencyMS, got[0].RedactedSummary)
+		}
+		// throughput_kbps = (4096 * 8) / 80 = 409
+		if !strings.Contains(got[0].RedactedSummary, "bytes_read=4096 throughput_kbps=409") {
+			t.Fatalf("expected bytes_read=4096 throughput_kbps=409 in summary, got %s", got[0].RedactedSummary)
+		}
+	})
+
 	t.Run("speed_exceeding_max_bytes_per_request_returns_budget_exceeded", func(t *testing.T) {
 		runs, observations, nodes := newMemoryRuns(), newMemoryObservations(), newMemoryNodes()
 		nodes.items["node"] = domain.Node{LogicalID: "node", Protocol: domain.ProtocolSS, Active: true}
@@ -106,14 +226,48 @@ func TestStageGateSpeedExplicitOptInExecutesAndEnforcesBudget(t *testing.T) {
 	})
 }
 
+type slowChunkReader struct {
+	remaining int
+	maxRead   int
+	advances  int
+	onRead    func()
+}
+
+func (r *slowChunkReader) Read(p []byte) (int, error) {
+	if r.remaining <= 0 {
+		return 0, io.EOF
+	}
+	if r.onRead != nil && r.advances < 4 {
+		r.advances++
+		r.onRead()
+	}
+	n := r.remaining
+	if r.maxRead > 0 && n > r.maxRead {
+		n = r.maxRead
+	}
+	if n > len(p) {
+		n = len(p)
+	}
+	for i := 0; i < n; i++ {
+		p[i] = 's'
+	}
+	r.remaining -= n
+	return n, nil
+}
+
+func (r *slowChunkReader) Close() error { return nil }
+
 func TestStageGateBaselineAvailabilityControlsStreaming(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
 		status       int
+		body         string
 		wantRequests int
 	}{
-		{name: "unavailable", status: http.StatusServiceUnavailable, wantRequests: 1},
-		{name: "available", status: http.StatusOK, wantRequests: 2},
+		{name: "unavailable_503", status: http.StatusServiceUnavailable, body: "unavailable", wantRequests: 1},
+		{name: "http_200_ok_rejected_as_drift", status: http.StatusOK, body: "ok", wantRequests: 1},
+		{name: "http_204_non_empty_rejected_as_drift", status: http.StatusNoContent, body: "unexpected", wantRequests: 1},
+		{name: "available_204_empty", status: http.StatusNoContent, body: "", wantRequests: 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			runs, observations, nodes := newMemoryRuns(), newMemoryObservations(), newMemoryNodes()
@@ -123,7 +277,7 @@ func TestStageGateBaselineAvailabilityControlsStreaming(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer sched.Close()
-			var requests atomic.Int32
+			var requests, dials, cleanups atomic.Int32
 			var urlsMu sync.Mutex
 			var urls []string
 			client := &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
@@ -131,11 +285,16 @@ func TestStageGateBaselineAvailabilityControlsStreaming(t *testing.T) {
 				urlsMu.Lock()
 				urls = append(urls, req.URL.String())
 				urlsMu.Unlock()
-				body := "ok"
-				return &http.Response{StatusCode: tc.status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: req}, nil
+				return &http.Response{StatusCode: tc.status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(tc.body)), Request: req}, nil
 			})}
 			runner := probe.NewDefaultRunner(nodes, observations, sched, runs,
-				probe.WithNodeDialer(func(context.Context, domain.Node) (*http.Client, func() error, error) { return client, nil, nil }),
+				probe.WithNodeDialer(func(context.Context, domain.Node) (*http.Client, func() error, error) {
+					dials.Add(1)
+					return client, func() error {
+						cleanups.Add(1)
+						return nil
+					}, nil
+				}),
 			)
 			run := stageRun("stage_" + tc.name)
 			if err := runs.Create(context.Background(), run); err != nil {
@@ -146,6 +305,12 @@ func TestStageGateBaselineAvailabilityControlsStreaming(t *testing.T) {
 			}
 			if got := requests.Load(); got != int32(tc.wantRequests) {
 				t.Fatalf("HTTP requests=%d, want %d", got, tc.wantRequests)
+			}
+			if gotDials := dials.Load(); gotDials != 1 {
+				t.Fatalf("node dial count=%d, want 1", gotDials)
+			}
+			if gotCleanups := cleanups.Load(); gotCleanups != 1 {
+				t.Fatalf("node cleanup count=%d, want 1", gotCleanups)
 			}
 			got, err := observations.ListByRun(context.Background(), run.ID)
 			if err != nil {
@@ -159,7 +324,7 @@ func TestStageGateBaselineAvailabilityControlsStreaming(t *testing.T) {
 				t.Fatalf("observations=%d, want %d: %#v", len(got), wantObs, got)
 			}
 			if tc.wantRequests == 1 && (got[0].Kind != domain.ProbeKindBaseline || got[0].Verdict == domain.VerdictAvailable) {
-				t.Fatalf("503 baseline observation not retained: %#v", got[0])
+				t.Fatalf("non-available baseline observation not retained: %#v", got[0])
 			}
 			if tc.wantRequests == 2 {
 				urlsMu.Lock()

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"clash-sub-parser/internal/domain"
+	"clash-sub-parser/internal/probe/identity"
 	"clash-sub-parser/internal/probe/profiles"
 	"clash-sub-parser/internal/probe/queue"
 )
@@ -285,6 +286,9 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 		defer cancel()
 	}
 
+	pool := newNodeSessionPool(runCtx)
+	defer pool.closeAll()
+
 	// Classify probe kinds: check if mixed (baseline + expensive)
 	var hasBaseline bool
 	var expensiveKinds []domain.ProbeKind
@@ -350,9 +354,12 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 		)
 
 		for _, node := range targetNodes {
-			for _, kind := range validKinds {
+			session := pool.sessionFor(node)
+			session.retain(len(validKinds))
+			for idx, kind := range validKinds {
 				n := node
 				k := kind
+				s := session
 				wg.Add(1)
 
 				task := queue.Task{
@@ -363,18 +370,20 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 					Mode:      enqueueMode,
 					Context:   runCtx,
 					Execute: func(tCtx context.Context) error {
-						err := r.executeTask(tCtx, run, n, k)
+						err := r.executeTask(tCtx, run, n, k, s)
 						if err != nil {
 							recordTaskErr(err)
 						}
 						return err
 					},
 					OnComplete: func(_ error) {
+						s.release(1)
 						wg.Done()
 					},
 				}
 
 				if err := r.scheduler.SubmitWithContext(runCtx, task); err != nil {
+					s.release(len(validKinds) - idx)
 					wg.Done()
 					submitErr = err
 					break
@@ -432,6 +441,7 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 	for _, node := range targetNodes {
 		n := node
 		k := domain.ProbeKindBaseline
+		s := pool.sessionFor(n)
 		stage1WG.Add(1)
 
 		task := queue.Task{
@@ -442,7 +452,7 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 			Mode:      enqueueMode,
 			Context:   runCtx,
 			Execute: func(tCtx context.Context) error {
-				verdict, err := r.executeTaskWithVerdict(tCtx, run, n, k)
+				verdict, err := r.executeTaskWithVerdict(tCtx, run, n, k, s)
 				if err != nil {
 					recordTaskErr(err)
 				}
@@ -502,6 +512,8 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 	for _, n := range targetNodes {
 		if _, ok := availableMap[n.LogicalID]; ok {
 			stage2Nodes = append(stage2Nodes, n)
+		} else {
+			_ = pool.sessionFor(n).close()
 		}
 	}
 	availMu.Unlock()
@@ -522,9 +534,12 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 	)
 
 	for _, node := range stage2Nodes {
-		for _, kind := range expensiveKinds {
+		session := pool.sessionFor(node)
+		session.retain(len(expensiveKinds))
+		for idx, kind := range expensiveKinds {
 			n := node
 			k := kind
+			s := session
 			stage2WG.Add(1)
 
 			task := queue.Task{
@@ -535,18 +550,20 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 				Mode:      enqueueMode,
 				Context:   runCtx,
 				Execute: func(tCtx context.Context) error {
-					err := r.executeTask(tCtx, run, n, k)
+					err := r.executeTask(tCtx, run, n, k, s)
 					if err != nil {
 						recordTaskErr(err)
 					}
 					return err
 				},
 				OnComplete: func(_ error) {
+					s.release(1)
 					stage2WG.Done()
 				},
 			}
 
 			if err := r.scheduler.SubmitWithContext(runCtx, task); err != nil {
+				s.release(len(expensiveKinds) - idx)
 				stage2WG.Done()
 				stage2SubmitErr = err
 				break
@@ -592,6 +609,139 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 	}
 }
 
+type nodeSession struct {
+	node          domain.Node
+	sessionCtx    context.Context
+	sessionCancel context.CancelFunc
+
+	dialOnce sync.Once
+	client   *http.Client
+	cleanup  func() error
+	dialErr  error
+	dialed   bool
+
+	mu           sync.Mutex
+	pendingTasks int
+
+	closeOnce sync.Once
+	closeErr  error
+}
+
+func (s *nodeSession) retain(n int) {
+	if s == nil || n <= 0 {
+		return
+	}
+	s.mu.Lock()
+	s.pendingTasks += n
+	s.mu.Unlock()
+}
+
+func (s *nodeSession) release(n int) {
+	if s == nil || n <= 0 {
+		return
+	}
+	s.mu.Lock()
+	s.pendingTasks -= n
+	shouldClose := s.pendingTasks <= 0
+	if s.pendingTasks < 0 {
+		s.pendingTasks = 0
+	}
+	s.mu.Unlock()
+	if shouldClose {
+		_ = s.close()
+	}
+}
+
+func (s *nodeSession) getOrCreateClient(dialer NodeDialer) (*http.Client, error) {
+	if s == nil {
+		return nil, errors.New("nil node session")
+	}
+	s.dialOnce.Do(func() {
+		if dialer == nil {
+			dialer = defaultNodeDialer
+		}
+		client, cleanup, err := dialer(s.sessionCtx, s.node)
+		if err == nil && client != nil && client.CheckRedirect == nil {
+			client = cloneClient(client)
+			client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			}
+		}
+		s.client = client
+		s.cleanup = cleanup
+		s.dialErr = err
+		s.dialed = true
+	})
+	if !s.dialed {
+		return nil, context.Canceled
+	}
+	return s.client, s.dialErr
+}
+
+func (s *nodeSession) close() error {
+	if s == nil {
+		return nil
+	}
+	s.closeOnce.Do(func() {
+		if s.sessionCancel != nil {
+			s.sessionCancel()
+		}
+		s.dialOnce.Do(func() {})
+		if s.cleanup != nil {
+			s.closeErr = s.cleanup()
+		}
+	})
+	return s.closeErr
+}
+
+type nodeSessionPool struct {
+	runCtx   context.Context
+	mu       sync.Mutex
+	sessions map[string]*nodeSession
+}
+
+func newNodeSessionPool(runCtx context.Context) *nodeSessionPool {
+	if runCtx == nil {
+		runCtx = context.Background()
+	}
+	return &nodeSessionPool{
+		runCtx:   runCtx,
+		sessions: make(map[string]*nodeSession),
+	}
+}
+
+func (p *nodeSessionPool) sessionFor(node domain.Node) *nodeSession {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if s, ok := p.sessions[node.LogicalID]; ok {
+		return s
+	}
+	sessionCtx, sessionCancel := context.WithCancel(p.runCtx)
+	s := &nodeSession{
+		node:          node,
+		sessionCtx:    sessionCtx,
+		sessionCancel: sessionCancel,
+	}
+	p.sessions[node.LogicalID] = s
+	return s
+}
+
+func (p *nodeSessionPool) closeAll() {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	sessions := make([]*nodeSession, 0, len(p.sessions))
+	for _, s := range p.sessions {
+		sessions = append(sessions, s)
+	}
+	p.mu.Unlock()
+
+	for _, s := range sessions {
+		_ = s.close()
+	}
+}
+
 func cloneClient(client *http.Client) *http.Client {
 	copy := *client
 	return &copy
@@ -604,12 +754,12 @@ func isFatalDialError(err error) bool {
 	return errors.Is(err, ErrCredentialsUnavailable) || errors.Is(err, ErrProbeDialingNotConfigured)
 }
 
-func (r *DefaultRunner) executeTask(ctx context.Context, run *domain.ProbeRun, node domain.Node, kind domain.ProbeKind) error {
-	_, err := r.executeTaskWithVerdict(ctx, run, node, kind)
+func (r *DefaultRunner) executeTask(ctx context.Context, run *domain.ProbeRun, node domain.Node, kind domain.ProbeKind, session *nodeSession) error {
+	_, err := r.executeTaskWithVerdict(ctx, run, node, kind, session)
 	return err
 }
 
-func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.ProbeRun, node domain.Node, kind domain.ProbeKind) (domain.ProbeVerdict, error) {
+func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.ProbeRun, node domain.Node, kind domain.ProbeKind, session *nodeSession) (domain.ProbeVerdict, error) {
 	prof := profileForKind(kind)
 	start := r.clock()
 	timeout := r.budget.TaskTimeout
@@ -621,16 +771,30 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 	ctx = taskCtx
 
 	var (
-		result  profiles.Result
-		latency int64
+		result     profiles.Result
+		latency    int64
+		geoCountry string
 	)
 	if kind == domain.ProbeKindSpeed {
 		result.OptIn = true
 	}
 
-	client, cleanup, dialErr := r.dialer(ctx, node)
-	if cleanup != nil {
-		defer cleanup()
+	var (
+		client  *http.Client
+		dialErr error
+	)
+	if session != nil {
+		client, dialErr = session.getOrCreateClient(r.dialer)
+	} else {
+		var cleanup func() error
+		client, cleanup, dialErr = r.dialer(ctx, node)
+		if cleanup != nil {
+			defer cleanup()
+		}
+		if dialErr == nil && client != nil && client.CheckRedirect == nil {
+			client = cloneClient(client)
+			client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }
+		}
 	}
 
 	if dialErr != nil {
@@ -648,15 +812,11 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 		} else {
 			req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; CSP-Probe/1.0)")
 			reqStart := r.clock()
-			if client.CheckRedirect == nil {
-				client = cloneClient(client)
-				client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }
-			}
 			req = req.WithContext(ctx)
 			resp, doErr := client.Do(req)
-			latency = r.clock().Sub(reqStart).Milliseconds()
 
 			if doErr != nil {
+				latency = r.clock().Sub(reqStart).Milliseconds()
 				if errors.Is(doErr, context.DeadlineExceeded) || (ctx.Err() == context.DeadlineExceeded) {
 					result.DeadlineExceeded = true
 				} else {
@@ -668,9 +828,9 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 					}
 				}
 			} else if resp == nil || resp.Body == nil {
+				latency = r.clock().Sub(reqStart).Milliseconds()
 				result.NetworkError = true
 			} else {
-				defer resp.Body.Close()
 				readLimit := r.budget.MaxResponseBytes
 				speedCapEnforced := false
 				if kind == domain.ProbeKindSpeed && prof.SpeedBudget.MaxBytesPerRequest > 0 && prof.SpeedBudget.MaxBytesPerRequest < readLimit {
@@ -678,13 +838,18 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 					speedCapEnforced = true
 				}
 				body, readErr := readBoundedResponse(resp.Body, readLimit)
+				_ = resp.Body.Close()
+				latency = r.clock().Sub(reqStart).Milliseconds()
+
 				if readErr != nil {
 					if speedCapEnforced && errors.Is(readErr, errResponseTooLarge) {
 						result.StatusCode = resp.StatusCode
 						result.Body = body
 						result.BytesRead = prof.SpeedBudget.MaxBytesPerRequest + 1
-						result.ContractMatched = resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNoContent
 						result.ContractVersion = prof.Contract
+					} else if errors.Is(readErr, context.DeadlineExceeded) || (ctx.Err() == context.DeadlineExceeded) {
+						result.DeadlineExceeded = true
+						result.BytesRead = int64(len(body))
 					} else {
 						result.NetworkError = true
 						result.BytesRead = int64(len(body))
@@ -693,8 +858,38 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 					result.StatusCode = resp.StatusCode
 					result.Body = body
 					result.BytesRead = int64(len(body))
-					result.ContractMatched = resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNoContent
 					result.ContractVersion = prof.Contract
+
+					switch kind {
+					case domain.ProbeKindBaseline:
+						result.ContractMatched = resp.StatusCode == http.StatusNoContent && len(body) == 0 && result.BytesRead == 0
+					case domain.ProbeKindGeo:
+						if resp.StatusCode == http.StatusOK {
+							if cand, err := identity.ExtractCandidate(body); err == nil {
+								result.ContractMatched = true
+								geoCountry = cand.NormalizedCountryCode()
+							}
+						}
+					case domain.ProbeKindStreaming, domain.ProbeKindAI:
+						result.ContractMatched = false
+					case domain.ProbeKindIPRisk:
+						result.ContractMatched = false
+						if resp.StatusCode >= 200 && resp.StatusCode < 400 {
+							if resp.StatusCode != http.StatusOK {
+								if prof.Evaluate(result).Reason != "access_restricted" {
+									result.ExitIdentityMissing = true
+								}
+							} else if _, err := identity.ExtractCandidate(body); err != nil {
+								if prof.Evaluate(result).Reason != "access_restricted" {
+									result.ExitIdentityMissing = true
+								}
+							}
+						}
+					case domain.ProbeKindSpeed:
+						result.ContractMatched = resp.StatusCode == http.StatusOK && result.BytesRead >= profiles.MinValidSpeedBytes
+					default:
+						result.ContractMatched = false
+					}
 				}
 			}
 		}
@@ -704,6 +899,9 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 	now := r.clock().UTC()
 	summary := fmt.Sprintf("profile=%s version=%s verdict=%s reason=%s status=%d latency_ms=%d",
 		prof.Kind, prof.Version, eval.Verdict, eval.Reason, result.StatusCode, latency)
+	if kind == domain.ProbeKindGeo && geoCountry != "" {
+		summary = fmt.Sprintf("%s country=%s", summary, geoCountry)
+	}
 	if kind == domain.ProbeKindSpeed && result.BytesRead > 0 {
 		throughputKbps := int64(0)
 		if latency > 0 {

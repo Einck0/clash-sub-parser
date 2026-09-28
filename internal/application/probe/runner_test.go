@@ -271,6 +271,37 @@ func mockHTTPClient(statusCode int, body string, err error) *http.Client {
 	}
 }
 
+func contractAwareMockHTTPClient() *http.Client {
+	return &http.Client{
+		Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			var (
+				status = http.StatusOK
+				body   = "<html><body>home</body></html>"
+			)
+			switch {
+			case strings.Contains(req.URL.Path, "generate_204"):
+				status = http.StatusNoContent
+				body = ""
+			case strings.Contains(req.URL.Host, "api.ip.sb") || strings.Contains(req.URL.Path, "geoip"):
+				status = http.StatusOK
+				body = `{"ip":"203.0.113.10","country_code":"SG","asn":13335}`
+			case strings.Contains(req.URL.Path, "__down"):
+				status = http.StatusOK
+				body = strings.Repeat("x", 4096)
+			case strings.Contains(req.URL.Path, "cdn-cgi/trace"):
+				status = http.StatusOK
+				body = "ip=203.0.113.10\nloc=SG\n"
+			}
+			return &http.Response{
+				StatusCode: status,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(body)),
+				Request:    req,
+			}, nil
+		}),
+	}
+}
+
 func TestProbeRunnerLifecycleSucceeded(t *testing.T) {
 	runsRepo := newMemoryRuns()
 	obsRepo := newMemoryObservations()
@@ -285,7 +316,7 @@ func TestProbeRunnerLifecycleSucceeded(t *testing.T) {
 	}
 	defer sched.Close()
 
-	var dialCount atomic.Int32
+	var dialCount, cleanupCount atomic.Int32
 	runner := probe.NewDefaultRunner(
 		nodesRepo,
 		obsRepo,
@@ -293,8 +324,11 @@ func TestProbeRunnerLifecycleSucceeded(t *testing.T) {
 		runsRepo,
 		probe.WithNodeDialer(func(ctx context.Context, node domain.Node) (*http.Client, func() error, error) {
 			dialCount.Add(1)
-			client := mockHTTPClient(200, "OK", nil)
-			return client, func() error { return nil }, nil
+			client := mockHTTPClient(http.StatusNoContent, "", nil)
+			return client, func() error {
+				cleanupCount.Add(1)
+				return nil
+			}, nil
 		}),
 	)
 
@@ -336,6 +370,9 @@ func TestProbeRunnerLifecycleSucceeded(t *testing.T) {
 			t.Errorf("expected observation verdict available, got %s", obs.Verdict)
 		}
 	}
+	if dialCount.Load() != 2 || cleanupCount.Load() != 2 {
+		t.Fatalf("expected 2 dials and 2 cleanups for 2 nodes, got dials=%d cleanups=%d", dialCount.Load(), cleanupCount.Load())
+	}
 }
 
 func TestProbeRunnerSpecificNodesAndKinds(t *testing.T) {
@@ -353,13 +390,18 @@ func TestProbeRunnerSpecificNodesAndKinds(t *testing.T) {
 	}
 	defer sched.Close()
 
+	var dialCount, cleanupCount atomic.Int32
 	runner := probe.NewDefaultRunner(
 		nodesRepo,
 		obsRepo,
 		sched,
 		runsRepo,
 		probe.WithNodeDialer(func(ctx context.Context, node domain.Node) (*http.Client, func() error, error) {
-			return mockHTTPClient(200, "OK", nil), nil, nil
+			dialCount.Add(1)
+			return contractAwareMockHTTPClient(), func() error {
+				cleanupCount.Add(1)
+				return nil
+			}, nil
 		}),
 	)
 
@@ -381,6 +423,9 @@ func TestProbeRunnerSpecificNodesAndKinds(t *testing.T) {
 	observations, _ := obsRepo.ListByRun(context.Background(), run.ID)
 	if len(observations) != 4 {
 		t.Fatalf("expected 4 observations (2 nodes * 2 kinds), got %d", len(observations))
+	}
+	if dialCount.Load() != 2 || cleanupCount.Load() != 2 {
+		t.Fatalf("expected 1 dial and 1 cleanup per node across 2 phases (total 2), got dials=%d cleanups=%d", dialCount.Load(), cleanupCount.Load())
 	}
 }
 
@@ -454,7 +499,7 @@ func TestProbeServiceTriggerRunIntegration(t *testing.T) {
 		sched,
 		runsRepo,
 		probe.WithNodeDialer(func(ctx context.Context, node domain.Node) (*http.Client, func() error, error) {
-			return mockHTTPClient(200, "OK", nil), nil, nil
+			return mockHTTPClient(http.StatusNoContent, "", nil), nil, nil
 		}),
 	)
 
@@ -780,13 +825,18 @@ func TestProbeRunnerFullInventoryPaginationAndLargeTaskBudget(t *testing.T) {
 	}
 	defer sched.Close()
 
+	var dialCount, cleanupCount atomic.Int32
 	runner := probe.NewDefaultRunner(
 		nodesRepo,
 		obsRepo,
 		sched,
 		runsRepo,
 		probe.WithNodeDialer(func(ctx context.Context, node domain.Node) (*http.Client, func() error, error) {
-			return mockHTTPClient(http.StatusOK, "OK", nil), nil, nil
+			dialCount.Add(1)
+			return contractAwareMockHTTPClient(), func() error {
+				cleanupCount.Add(1)
+				return nil
+			}, nil
 		}),
 	)
 
@@ -827,6 +877,9 @@ func TestProbeRunnerFullInventoryPaginationAndLargeTaskBudget(t *testing.T) {
 	}
 	if len(observations) != 600 {
 		t.Fatalf("expected 600 observations (120 active nodes * 5 kinds), got %d", len(observations))
+	}
+	if dialCount.Load() != 120 || cleanupCount.Load() != 120 {
+		t.Fatalf("expected 120 dials and 120 cleanups (1 per active node across 5 kinds), got dials=%d cleanups=%d", dialCount.Load(), cleanupCount.Load())
 	}
 }
 
@@ -956,4 +1009,530 @@ func TestServiceGetPoolStatusFiveMetrics(t *testing.T) {
 
 	close(holdWorkers)
 	sched.Wait()
+}
+
+func TestProbeRunnerTruthfulContractsPerKind(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		kind            domain.ProbeKind
+		statusCode      int
+		body            string
+		doErr           error
+		wantVerdict     domain.ProbeVerdict
+		wantReason      string
+		wantContains    string
+		wantNotContains string
+	}{
+		// Baseline
+		{
+			name:        "baseline_204_empty_is_available",
+			kind:        domain.ProbeKindBaseline,
+			statusCode:  http.StatusNoContent,
+			body:        "",
+			wantVerdict: domain.VerdictAvailable,
+			wantReason:  "contract_matched",
+		},
+		{
+			name:        "baseline_200_ok_text_rejected_as_unknown",
+			kind:        domain.ProbeKindBaseline,
+			statusCode:  http.StatusOK,
+			body:        "OK",
+			wantVerdict: domain.VerdictUnknown,
+			wantReason:  "contract_drift",
+		},
+		{
+			name:        "baseline_200_empty_rejected_as_unknown",
+			kind:        domain.ProbeKindBaseline,
+			statusCode:  http.StatusOK,
+			body:        "",
+			wantVerdict: domain.VerdictUnknown,
+			wantReason:  "contract_drift",
+		},
+		{
+			name:        "baseline_200_captive_portal_html_rejected_as_unknown",
+			kind:        domain.ProbeKindBaseline,
+			statusCode:  http.StatusOK,
+			body:        "<html><body>Welcome to Airport Wi-Fi</body></html>",
+			wantVerdict: domain.VerdictUnknown,
+			wantReason:  "contract_drift",
+		},
+		{
+			name:        "baseline_204_non_empty_rejected_as_unknown",
+			kind:        domain.ProbeKindBaseline,
+			statusCode:  http.StatusNoContent,
+			body:        "unexpected",
+			wantVerdict: domain.VerdictUnknown,
+			wantReason:  "contract_drift",
+		},
+		// Geo
+		{
+			name:            "geo_200_valid_ip_and_country_is_available_and_redacts_ip",
+			kind:            domain.ProbeKindGeo,
+			statusCode:      http.StatusOK,
+			body:            `{"ip":"203.0.113.10","country_code":"SG","asn":13335}`,
+			wantVerdict:     domain.VerdictAvailable,
+			wantReason:      "contract_matched",
+			wantContains:    "country=SG",
+			wantNotContains: "203.0.113.10",
+		},
+		{
+			name:        "geo_200_ok_text_rejected_as_unknown",
+			kind:        domain.ProbeKindGeo,
+			statusCode:  http.StatusOK,
+			body:        "OK",
+			wantVerdict: domain.VerdictUnknown,
+			wantReason:  "contract_drift",
+		},
+		{
+			name:        "geo_204_empty_rejected_as_unknown",
+			kind:        domain.ProbeKindGeo,
+			statusCode:  http.StatusNoContent,
+			body:        "",
+			wantVerdict: domain.VerdictUnknown,
+			wantReason:  "contract_drift",
+		},
+		{
+			name:        "geo_200_missing_country_rejected_as_unknown",
+			kind:        domain.ProbeKindGeo,
+			statusCode:  http.StatusOK,
+			body:        `{"ip":"203.0.113.10"}`,
+			wantVerdict: domain.VerdictUnknown,
+			wantReason:  "contract_drift",
+		},
+		// Streaming & AI
+		{
+			name:        "streaming_200_homepage_never_available",
+			kind:        domain.ProbeKindStreaming,
+			statusCode:  http.StatusOK,
+			body:        "<html><head><title>Netflix</title></head><body>Watch anywhere</body></html>",
+			wantVerdict: domain.VerdictUnknown,
+			wantReason:  "contract_drift",
+		},
+		{
+			name:        "streaming_204_empty_never_available",
+			kind:        domain.ProbeKindStreaming,
+			statusCode:  http.StatusNoContent,
+			body:        "",
+			wantVerdict: domain.VerdictUnknown,
+			wantReason:  "contract_drift",
+		},
+		{
+			name:        "streaming_403_is_restricted",
+			kind:        domain.ProbeKindStreaming,
+			statusCode:  http.StatusForbidden,
+			body:        "Forbidden",
+			wantVerdict: domain.VerdictRestricted,
+			wantReason:  "access_restricted",
+		},
+		{
+			name:        "ai_200_ok_never_available",
+			kind:        domain.ProbeKindAI,
+			statusCode:  http.StatusOK,
+			body:        "OK",
+			wantVerdict: domain.VerdictUnknown,
+			wantReason:  "contract_drift",
+		},
+		{
+			name:        "ai_451_is_restricted",
+			kind:        domain.ProbeKindAI,
+			statusCode:  http.StatusUnavailableForLegalReasons,
+			body:        "Unavailable for legal reasons",
+			wantVerdict: domain.VerdictRestricted,
+			wantReason:  "access_restricted",
+		},
+		{
+			name:        "ai_transport_error_is_error",
+			kind:        domain.ProbeKindAI,
+			doErr:       errors.New("connection reset by peer"),
+			wantVerdict: domain.VerdictError,
+			wantReason:  "transport_error",
+		},
+		// IP Risk
+		{
+			name:        "ip_risk_200_ok_without_exit_identity_is_missing_exit_identity",
+			kind:        domain.ProbeKindIPRisk,
+			statusCode:  http.StatusOK,
+			body:        "OK",
+			wantVerdict: domain.VerdictUnknown,
+			wantReason:  "missing_exit_identity",
+		},
+		{
+			name:        "ip_risk_204_empty_is_missing_exit_identity",
+			kind:        domain.ProbeKindIPRisk,
+			statusCode:  http.StatusNoContent,
+			body:        "",
+			wantVerdict: domain.VerdictUnknown,
+			wantReason:  "missing_exit_identity",
+		},
+		{
+			name:        "ip_risk_200_trace_identity_without_risk_provider_is_contract_drift",
+			kind:        domain.ProbeKindIPRisk,
+			statusCode:  http.StatusOK,
+			body:        "ip=203.0.113.10\nloc=SG\n",
+			wantVerdict: domain.VerdictUnknown,
+			wantReason:  "contract_drift",
+		},
+		{
+			name:        "ip_risk_403_is_access_restricted",
+			kind:        domain.ProbeKindIPRisk,
+			statusCode:  http.StatusForbidden,
+			body:        "Forbidden",
+			wantVerdict: domain.VerdictUnknown,
+			wantReason:  "access_restricted",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runsRepo := newMemoryRuns()
+			obsRepo := newMemoryObservations()
+			nodesRepo := newMemoryNodes()
+			nodesRepo.items["node_1"] = domain.Node{LogicalID: "node_1", DisplayName: "Node 1", Protocol: domain.ProtocolSS, Active: true}
+
+			sched, err := queue.NewScheduler(queue.Config{Concurrency: 10})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer sched.Close()
+
+			runner := probe.NewDefaultRunner(
+				nodesRepo,
+				obsRepo,
+				sched,
+				runsRepo,
+				probe.WithNodeDialer(func(ctx context.Context, node domain.Node) (*http.Client, func() error, error) {
+					return mockHTTPClient(tc.statusCode, tc.body, tc.doErr), nil, nil
+				}),
+			)
+
+			run := &domain.ProbeRun{
+				ID:             "run_" + tc.name,
+				IdempotencyKey: "key_" + tc.name,
+				ActorScope:     "admin",
+				State:          domain.ProbeRunStateQueued,
+				DeadlineAt:     time.Now().Add(time.Hour),
+			}
+			if err := runsRepo.Create(context.Background(), run); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := runner.Run(context.Background(), run, []string{"node_1"}, []domain.ProbeKind{tc.kind}); err != nil {
+				t.Fatalf("Run failed: %v", err)
+			}
+
+			obs, err := obsRepo.ListByRun(context.Background(), run.ID)
+			if err != nil || len(obs) != 1 {
+				t.Fatalf("expected 1 observation, got %#v (err=%v)", obs, err)
+			}
+			if obs[0].Verdict != tc.wantVerdict {
+				t.Fatalf("verdict = %s, want %s (summary=%s)", obs[0].Verdict, tc.wantVerdict, obs[0].RedactedSummary)
+			}
+			if !strings.Contains(obs[0].RedactedSummary, "reason="+tc.wantReason) {
+				t.Fatalf("summary = %q, want reason=%s", obs[0].RedactedSummary, tc.wantReason)
+			}
+			if tc.wantContains != "" && !strings.Contains(obs[0].RedactedSummary, tc.wantContains) {
+				t.Fatalf("summary = %q, want to contain %q", obs[0].RedactedSummary, tc.wantContains)
+			}
+			if tc.wantNotContains != "" && strings.Contains(obs[0].RedactedSummary, tc.wantNotContains) {
+				t.Fatalf("summary = %q, must NOT contain %q", obs[0].RedactedSummary, tc.wantNotContains)
+			}
+		})
+	}
+}
+
+func TestProbeRunnerNodeSessionReuseAndCleanupLifecycle(t *testing.T) {
+	t.Run("two_phase_and_session_ctx_survives_across_tasks", func(t *testing.T) {
+		runsRepo := newMemoryRuns()
+		obsRepo := newMemoryObservations()
+		nodesRepo := newMemoryNodes()
+		nodesRepo.items["node_pass"] = domain.Node{LogicalID: "node_pass", DisplayName: "Pass Node", Protocol: domain.ProtocolSS, Active: true}
+		nodesRepo.items["node_drift"] = domain.Node{LogicalID: "node_drift", DisplayName: "Drift Node", Protocol: domain.ProtocolSS, Active: true}
+
+		sched, err := queue.NewScheduler(queue.Config{Concurrency: 10})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer sched.Close()
+
+		var (
+			mu          sync.Mutex
+			dialCounts  = make(map[string]int)
+			cleanCounts = make(map[string]int)
+			reqCounts   = make(map[string]int)
+			closedByCtx = make(map[string]*atomic.Bool)
+		)
+
+		runner := probe.NewDefaultRunner(
+			nodesRepo,
+			obsRepo,
+			sched,
+			runsRepo,
+			probe.WithNodeDialer(func(dialCtx context.Context, node domain.Node) (*http.Client, func() error, error) {
+				closedFlag := &atomic.Bool{}
+				stopAfter := context.AfterFunc(dialCtx, func() {
+					closedFlag.Store(true)
+				})
+				mu.Lock()
+				dialCounts[node.LogicalID]++
+				closedByCtx[node.LogicalID] = closedFlag
+				mu.Unlock()
+
+				client := &http.Client{
+					Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+						if closedFlag.Load() {
+							return nil, errors.New("runtime prematurely closed by task context cancellation")
+						}
+						mu.Lock()
+						reqCounts[node.LogicalID]++
+						mu.Unlock()
+
+						if node.LogicalID == "node_drift" && strings.Contains(req.URL.Path, "generate_204") {
+							// Returns HTTP 200 "OK" on baseline -> must be rejected as unknown/contract_drift
+							return &http.Response{
+								StatusCode: http.StatusOK,
+								Header:     make(http.Header),
+								Body:       io.NopCloser(strings.NewReader("OK")),
+								Request:    req,
+							}, nil
+						}
+						return contractAwareMockHTTPClient().Transport.RoundTrip(req)
+					}),
+				}
+				cleanup := func() error {
+					stopAfter()
+					closedFlag.Store(true)
+					mu.Lock()
+					cleanCounts[node.LogicalID]++
+					mu.Unlock()
+					return nil
+				}
+				return client, cleanup, nil
+			}),
+		)
+
+		run := &domain.ProbeRun{
+			ID:             "run_two_phase_reuse",
+			IdempotencyKey: "key_two_phase_reuse",
+			ActorScope:     "admin",
+			State:          domain.ProbeRunStateQueued,
+			DeadlineAt:     time.Now().Add(time.Hour),
+		}
+		if err := runsRepo.Create(context.Background(), run); err != nil {
+			t.Fatal(err)
+		}
+
+		kinds := []domain.ProbeKind{
+			domain.ProbeKindBaseline,
+			domain.ProbeKindGeo,
+			domain.ProbeKindStreaming,
+			domain.ProbeKindAI,
+			domain.ProbeKindSpeed,
+		}
+		if err := runner.Run(context.Background(), run, []string{"node_pass", "node_drift"}, kinds); err != nil {
+			t.Fatalf("Run failed: %v", err)
+		}
+
+		mu.Lock()
+		defer mu.Unlock()
+		if dialCounts["node_pass"] != 1 || cleanCounts["node_pass"] != 1 {
+			t.Fatalf("node_pass dials=%d cleanups=%d, want 1 and 1", dialCounts["node_pass"], cleanCounts["node_pass"])
+		}
+		if reqCounts["node_pass"] != 5 {
+			t.Fatalf("node_pass requests=%d, want 5", reqCounts["node_pass"])
+		}
+		if dialCounts["node_drift"] != 1 || cleanCounts["node_drift"] != 1 {
+			t.Fatalf("node_drift dials=%d cleanups=%d, want 1 and 1", dialCounts["node_drift"], cleanCounts["node_drift"])
+		}
+		if reqCounts["node_drift"] != 1 {
+			t.Fatalf("node_drift requests=%d, want 1 (baseline 200 OK must not enter stage 2)", reqCounts["node_drift"])
+		}
+	})
+
+	t.Run("single_stage_multi_kind_reuses_client_and_cleans_up_once", func(t *testing.T) {
+		runsRepo := newMemoryRuns()
+		obsRepo := newMemoryObservations()
+		nodesRepo := newMemoryNodes()
+		nodesRepo.items["node_single"] = domain.Node{LogicalID: "node_single", DisplayName: "Single Stage", Protocol: domain.ProtocolSS, Active: true}
+
+		sched, err := queue.NewScheduler(queue.Config{Concurrency: 10})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer sched.Close()
+
+		var dials, cleanups, requests atomic.Int32
+		var clientClosed atomic.Bool
+		runner := probe.NewDefaultRunner(
+			nodesRepo,
+			obsRepo,
+			sched,
+			runsRepo,
+			probe.WithNodeDialer(func(dialCtx context.Context, node domain.Node) (*http.Client, func() error, error) {
+				dials.Add(1)
+				stopAfter := context.AfterFunc(dialCtx, func() {
+					clientClosed.Store(true)
+				})
+				client := &http.Client{
+					Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+						if clientClosed.Load() {
+							return nil, errors.New("client already closed before all node tasks completed")
+						}
+						requests.Add(1)
+						return contractAwareMockHTTPClient().Transport.RoundTrip(req)
+					}),
+				}
+				return client, func() error {
+					stopAfter()
+					clientClosed.Store(true)
+					cleanups.Add(1)
+					return nil
+				}, nil
+			}),
+		)
+
+		run := &domain.ProbeRun{
+			ID:             "run_single_stage_reuse",
+			IdempotencyKey: "key_single_stage_reuse",
+			ActorScope:     "admin",
+			State:          domain.ProbeRunStateQueued,
+			DeadlineAt:     time.Now().Add(time.Hour),
+		}
+		if err := runsRepo.Create(context.Background(), run); err != nil {
+			t.Fatal(err)
+		}
+
+		// Non-baseline multiple kinds trigger single-stage path
+		kinds := []domain.ProbeKind{
+			domain.ProbeKindGeo,
+			domain.ProbeKindStreaming,
+			domain.ProbeKindAI,
+			domain.ProbeKindSpeed,
+		}
+		if err := runner.Run(context.Background(), run, []string{"node_single"}, kinds); err != nil {
+			t.Fatalf("Run failed: %v", err)
+		}
+		if dials.Load() != 1 || cleanups.Load() != 1 || requests.Load() != 4 {
+			t.Fatalf("expected dials=1 cleanups=1 requests=4, got dials=%d cleanups=%d requests=%d", dials.Load(), cleanups.Load(), requests.Load())
+		}
+	})
+
+	t.Run("cancellation_and_partial_submit_failure_cleanup_exactly_once", func(t *testing.T) {
+		runsRepo := newMemoryRuns()
+		obsRepo := newMemoryObservations()
+		nodesRepo := newMemoryNodes()
+		nodesRepo.items["node_cancel"] = domain.Node{LogicalID: "node_cancel", DisplayName: "Cancel Node", Protocol: domain.ProtocolSS, Active: true}
+
+		sched, err := queue.NewScheduler(queue.Config{Concurrency: 10})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer sched.Close()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		var dials, cleanups atomic.Int32
+		runner := probe.NewDefaultRunner(
+			nodesRepo,
+			obsRepo,
+			sched,
+			runsRepo,
+			probe.WithNodeDialer(func(dialCtx context.Context, node domain.Node) (*http.Client, func() error, error) {
+				dials.Add(1)
+				cancel()
+				return contractAwareMockHTTPClient(), func() error {
+					cleanups.Add(1)
+					return nil
+				}, nil
+			}),
+		)
+
+		run := &domain.ProbeRun{
+			ID:             "run_cancel_cleanup",
+			IdempotencyKey: "key_cancel_cleanup",
+			ActorScope:     "admin",
+			State:          domain.ProbeRunStateQueued,
+			DeadlineAt:     time.Now().Add(time.Hour),
+		}
+		if err := runsRepo.Create(context.Background(), run); err != nil {
+			t.Fatal(err)
+		}
+
+		_ = runner.Run(ctx, run, []string{"node_cancel"}, []domain.ProbeKind{domain.ProbeKindGeo, domain.ProbeKindStreaming, domain.ProbeKindAI})
+		if dials.Load() != 1 || cleanups.Load() != 1 {
+			t.Fatalf("expected dials=1 cleanups=1 on cancellation, got dials=%d cleanups=%d", dials.Load(), cleanups.Load())
+		}
+
+		// Partial submit failure + fatal dial error cleanup check
+		firstStarted := make(chan struct{})
+		releaseFirst := make(chan struct{})
+		var submitFailDials, submitFailCleanups atomic.Int32
+		runnerSubmitFail := probe.NewDefaultRunner(
+			nodesRepo,
+			obsRepo,
+			sched,
+			runsRepo,
+			probe.WithNodeDialer(func(dialCtx context.Context, node domain.Node) (*http.Client, func() error, error) {
+				submitFailDials.Add(1)
+				select {
+				case <-firstStarted:
+				default:
+					close(firstStarted)
+				}
+				<-releaseFirst
+				return contractAwareMockHTTPClient(), func() error {
+					submitFailCleanups.Add(1)
+					return nil
+				}, nil
+			}),
+		)
+		runSubmitFail := &domain.ProbeRun{
+			ID:             "run_submit_fail_cleanup",
+			IdempotencyKey: "key_submit_fail_cleanup",
+			ActorScope:     "admin",
+			State:          domain.ProbeRunStateQueued,
+			DeadlineAt:     time.Now().Add(time.Hour),
+		}
+		if err := runsRepo.Create(context.Background(), runSubmitFail); err != nil {
+			t.Fatal(err)
+		}
+		go func() {
+			<-firstStarted
+			close(releaseFirst)
+		}()
+		if err := runnerSubmitFail.Run(context.Background(), runSubmitFail, []string{"node_cancel", "node_cancel"}, []domain.ProbeKind{domain.ProbeKindBaseline}); err == nil {
+			t.Fatal("expected duplicate node submission to fail")
+		}
+		if submitFailDials.Load() != 1 || submitFailCleanups.Load() != 1 {
+			t.Fatalf("expected dials=1 cleanups=1 on partial submit failure, got dials=%d cleanups=%d", submitFailDials.Load(), submitFailCleanups.Load())
+		}
+
+		// Fatal dial error with non-nil cleanup across multiple kinds
+		var fatalDials, fatalCleanups atomic.Int32
+		runnerFatal := probe.NewDefaultRunner(
+			nodesRepo,
+			obsRepo,
+			sched,
+			runsRepo,
+			probe.WithNodeDialer(func(dialCtx context.Context, node domain.Node) (*http.Client, func() error, error) {
+				fatalDials.Add(1)
+				return nil, func() error {
+					fatalCleanups.Add(1)
+					return nil
+				}, fmt.Errorf("%w: fatal dial failure", probe.ErrCredentialsUnavailable)
+			}),
+		)
+		runFatal := &domain.ProbeRun{
+			ID:             "run_fatal_dial_cleanup",
+			IdempotencyKey: "key_fatal_dial_cleanup",
+			ActorScope:     "admin",
+			State:          domain.ProbeRunStateQueued,
+			DeadlineAt:     time.Now().Add(time.Hour),
+		}
+		if err := runsRepo.Create(context.Background(), runFatal); err != nil {
+			t.Fatal(err)
+		}
+		if err := runnerFatal.Run(context.Background(), runFatal, []string{"node_cancel"}, []domain.ProbeKind{domain.ProbeKindGeo, domain.ProbeKindStreaming}); err == nil {
+			t.Fatal("expected fatal dial error to fail run")
+		}
+		if fatalDials.Load() != 1 || fatalCleanups.Load() != 1 {
+			t.Fatalf("expected dials=1 cleanups=1 on fatal dial error, got dials=%d cleanups=%d", fatalDials.Load(), fatalCleanups.Load())
+		}
+	})
 }

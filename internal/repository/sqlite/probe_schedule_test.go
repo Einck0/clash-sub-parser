@@ -295,3 +295,83 @@ func TestConcurrentLeaseContention(t *testing.T) {
 		t.Fatalf("expected exactly 1 winner in concurrent lease acquisition, got %d: %+v", len(winners), winners)
 	}
 }
+
+func TestUpdateBatch_PreservesLeaseAndHeartbeat(t *testing.T) {
+	ctx := context.Background()
+	db, _ := setupTestDB(t)
+	defer db.Close()
+
+	repo := sqlite.NewProbeScheduleRepository(db)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	batch := &domain.ProbeBatch{
+		ID:         domain.MustNewUUIDv7(),
+		WindowAt:   now,
+		Generation: 1,
+		State:      domain.ProbeBatchStatePending,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	if err := repo.CreateBatch(ctx, batch); err != nil {
+		t.Fatalf("failed to create batch: %v", err)
+	}
+
+	// 1. Acquire lease as owner-A
+	acquired, err := repo.AcquireLease(ctx, batch.ID, "owner-A", 10*time.Second)
+	if err != nil || !acquired {
+		t.Fatalf("expected owner-A to acquire lease, got %v (err: %v)", acquired, err)
+	}
+
+	// 2. Call UpdateBatch multiple times with empty/stale batch.Owner or nil batch.LeaseUntil
+	batch.Owner = ""
+	batch.LeaseUntil = nil
+	batch.State = domain.ProbeBatchStateRunning
+	batch.Counts.TotalNodes = 10
+	batch.Counts.DispatchedRuns = 2
+	if err := repo.UpdateBatch(ctx, batch); err != nil {
+		t.Fatalf("failed to update batch: %v", err)
+	}
+
+	// Verify DB still holds owner-A and active lease_until
+	b, err := repo.GetBatchByID(ctx, batch.ID)
+	if err != nil {
+		t.Fatalf("failed to get batch: %v", err)
+	}
+	if b.Owner != "owner-A" {
+		t.Fatalf("expected owner-A to be preserved after UpdateBatch, got %q", b.Owner)
+	}
+	if b.LeaseUntil == nil || !b.LeaseUntil.After(now) {
+		t.Fatalf("expected valid LeaseUntil after UpdateBatch, got %v", b.LeaseUntil)
+	}
+
+	// 3. Heartbeat succeeds for owner-A
+	if err := repo.HeartbeatLease(ctx, batch.ID, "owner-A", 20*time.Second); err != nil {
+		t.Fatalf("expected heartbeat to succeed: %v", err)
+	}
+
+	// 4. UpdateBatch called again (e.g. run completion)
+	batch.Counts.CompletedRuns = 1
+	if err := repo.UpdateBatch(ctx, batch); err != nil {
+		t.Fatalf("failed second update batch: %v", err)
+	}
+
+	// Verify owner-B CANNOT acquire lease
+	acquiredB, err := repo.AcquireLease(ctx, batch.ID, "owner-B", 5*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if acquiredB {
+		t.Fatalf("expected owner-B to fail acquiring active lease")
+	}
+
+	// 5. Release lease
+	if err := repo.ReleaseLease(ctx, batch.ID, "owner-A"); err != nil {
+		t.Fatalf("failed to release lease: %v", err)
+	}
+
+	// Now owner-B can acquire
+	acquiredB2, err := repo.AcquireLease(ctx, batch.ID, "owner-B", 5*time.Second)
+	if err != nil || !acquiredB2 {
+		t.Fatalf("expected owner-B to acquire released lease, got %v (err: %v)", acquiredB2, err)
+	}
+}

@@ -437,6 +437,7 @@ async function handleProbeUnavailableNodes() {
 }
 
 async function handleTriggerPeriodicPool() {
+  trackingActiveTicks.value = 8
   poolActionFeedback.value = '已触发定时入池巡检（已在节点池中的节点自动去重跳过，不重复添加）'
   await triggerPeriodicPoolEnqueue()
 }
@@ -580,6 +581,8 @@ function refreshAll() {
   loadBatches()
 }
 
+const trackingActiveTicks = ref(0)
+let idleTickCount = 0
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
 onMounted(() => {
@@ -590,12 +593,29 @@ onMounted(() => {
       poolStatus.value.queue_nodes_count > 0 ||
       probingNodeIds.value.size > 0 ||
       queuedNodeIds.value.size > 0
-    if (hasActiveRun || hasActivePool) {
+    const isTracking = trackingActiveTicks.value > 0
+
+    if (hasActiveRun || hasActivePool || isTracking) {
+      if (trackingActiveTicks.value > 0) {
+        trackingActiveTicks.value--
+      }
+      idleTickCount = 0
       loadPoolStatus()
       loadRuns(selectedStateFilter.value || undefined)
       loadProbeNodes()
+      loadBatches()
       if (activeRun.value && (activeRun.value.state === 'running' || activeRun.value.state === 'queued')) {
         loadObservations(activeRun.value.id)
+      }
+    } else {
+      // Idle low-frequency baseline refresh every ~16 seconds (8 ticks * 2s)
+      idleTickCount++
+      if (idleTickCount >= 8) {
+        idleTickCount = 0
+        loadPoolStatus()
+        loadRuns(selectedStateFilter.value || undefined)
+        loadBatches()
+        loadSchedule()
       }
     }
   }, 2000)
@@ -916,15 +936,15 @@ onUnmounted(() => {
             <div class="text-sm font-bold flex items-center justify-between gap-2">
               <span class="whitespace-nowrap">{{ schedule ? intervalLabel(schedule.interval_seconds) : '每 1 小时' }}</span>
               <span class="text-[11px] font-normal opacity-65 whitespace-nowrap">
-                下次：{{
+                下次扫描：{{
                   schedule?.enabled && schedule?.next_due_at
-                    ? new Date(schedule.next_due_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                    ? new Date(schedule.next_due_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
                     : '等待启用'
                 }}
               </span>
             </div>
             <p class="text-[11px] opacity-65 mt-0.5 leading-tight">
-              已在节点池中不重复添加 · 手动插队最前
+              每 10 分钟巡检过期节点 · 每节点/类别有效期={{ schedule ? intervalLabel(schedule.interval_seconds) : '配置周期' }} · 在池去重
             </p>
           </div>
 
@@ -1666,7 +1686,7 @@ onUnmounted(() => {
             </div>
           </div>
           <div>
-            <span class="opacity-60 block">下次自动测速</span>
+            <span class="opacity-60 block">下次巡检扫描</span>
             <span class="font-mono font-semibold text-primary">
               {{ schedule.next_due_at ? new Date(schedule.next_due_at).toLocaleTimeString() : '暂无' }}
             </span>
@@ -1784,9 +1804,16 @@ onUnmounted(() => {
     <ModalDialog
       v-model="scheduleModalOpen"
       title="配置周期探测计划"
-      description="启用后台自动测速巡检并选择直观的巡检频率与检测项目"
+      description="系统每 10 分钟自动巡检过期节点，每节点/类别有效期按配置周期判定"
     >
       <form class="space-y-4" @submit.prevent="submitSaveSchedule">
+        <div class="rounded-lg bg-base-200 p-2.5 text-xs opacity-80 flex items-start gap-2">
+          <ClockIcon class="w-4 h-4 shrink-0 text-primary mt-0.5" />
+          <span>
+            <strong>增量过期机制：</strong>系统每 10 分钟常态化巡检数据库中的最新观测。若节点观测记录距今已超过设定的有效期（或尚未观测），仅将到期项目入池增量测速，避免全量并发冲击。
+          </span>
+        </div>
+
         <div class="form-control">
           <label class="label cursor-pointer justify-start gap-3">
             <input

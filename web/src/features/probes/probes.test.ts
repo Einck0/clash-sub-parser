@@ -1096,4 +1096,43 @@ describe('ProbesView Component Interaction & Feedback', () => {
     expect(postSpy).toHaveBeenCalledWith('/api/v1/probes/schedule/trigger')
     expect(feedbackEl?.textContent).toContain('自动去重跳过')
   })
+
+  it('renders pool schedule card with 10-minute sweep interval and per-node validity, and supports idle baseline refresh and tracking', async () => {
+    let getCalls: string[] = []
+    vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
+      getCalls.push(path)
+      if (path === '/api/v1/probes/schedule') return { ...mockSchedule }
+      if (path === '/api/v1/probes/pool') return { queue_nodes_count: 0, probing_count: 0, queued_waiting_count: 0, untested_count: 0, total_count: 2, unavailable_count: 0, available_count: 2, healthy_count: 2, degraded_count: 0, probing_node_ids: [], queued_node_ids: [], updated_at: new Date().toISOString() }
+      if (path === '/api/v1/probes/batches') return { items: mockBatches, total: mockBatches.length, page: 1, page_size: 20 }
+      if (path === '/api/v1/probes/runs') return { items: [], total: 0, page: 1, page_size: 50 }
+      if (path === '/api/v1/nodes') return { items: [], total: 0, page: 1, page_size: 100 }
+      return {}
+    })
+
+    vi.spyOn(api, 'post').mockImplementation(async (path: string) => {
+      if (path === '/api/v1/probes/schedule/trigger') {
+        return { queue_nodes_count: 2, probing_count: 0, queued_waiting_count: 2, untested_count: 0, total_count: 2, unavailable_count: 0, available_count: 2, healthy_count: 2, degraded_count: 0, probing_node_ids: [], queued_node_ids: ['node-1'], updated_at: new Date().toISOString() }
+      }
+      return {}
+    })
+
+    await mountProbesView()
+
+    // 1. Verify pool schedule card text
+    const poolCard = container.querySelector('[data-testid="pool-schedule-card"]')
+    expect(poolCard).not.toBeNull()
+    expect(poolCard?.textContent).toContain('每 10 分钟巡检过期节点')
+    expect(poolCard?.textContent).toContain('每节点/类别有效期=每 2 小时')
+    expect(poolCard?.textContent).toContain('下次扫描：')
+
+    // 2. Trigger periodic pool enqueue and verify tracking and batch/runs refresh
+    const triggerBtn = container.querySelector('[data-testid="trigger-periodic-pool-btn"]') as HTMLButtonElement | null
+    expect(triggerBtn).not.toBeNull()
+    getCalls = []
+    triggerBtn?.click()
+    await nextTick()
+    await new Promise((r) => setTimeout(r, 50))
+
+    expect(getCalls).toContain('/api/v1/probes/batches')
+  })
 })

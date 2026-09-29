@@ -719,10 +719,16 @@ func (m *probeScheduleMemory) CreateBatch(_ context.Context, b *domain.ProbeBatc
 func (m *probeScheduleMemory) UpdateBatch(_ context.Context, b *domain.ProbeBatch) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.batches[b.ID]; !ok {
+	existing, ok := m.batches[b.ID]
+	if !ok {
 		return domain.NewNotFoundError("probe_batch_not_found", "not found")
 	}
-	m.batches[b.ID] = *b
+	existing.State = b.State
+	existing.Counts = b.Counts
+	existing.RedactedError = b.RedactedError
+	existing.UpdatedAt = b.UpdatedAt
+	existing.RunIDs = append([]string{}, b.RunIDs...)
+	m.batches[b.ID] = existing
 	m.runs[b.ID] = append([]string{}, b.RunIDs...)
 	return nil
 }

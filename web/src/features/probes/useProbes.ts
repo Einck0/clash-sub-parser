@@ -262,10 +262,21 @@ export function useProbes() {
       const res = await api.post<ProbePoolStatus>('/api/v1/probes/schedule/trigger')
       if (isValidPoolStatus(res)) {
         const applied = applyServerPoolStatus(res)
-        await Promise.all([loadProbeNodes(), loadBatches()])
+        await Promise.allSettled([
+          loadProbeNodes(),
+          loadBatches(),
+          loadRuns(),
+          loadSchedule(),
+        ])
         return applied
       }
-      await Promise.all([loadPoolStatus(), loadProbeNodes(), loadBatches()])
+      await Promise.allSettled([
+        loadPoolStatus(),
+        loadProbeNodes(),
+        loadBatches(),
+        loadRuns(),
+        loadSchedule(),
+      ])
       return poolStatus.value
     } catch (err) {
       error.value = err instanceof Error ? err.message : '触发定时入池检测失败'

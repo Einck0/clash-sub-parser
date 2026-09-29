@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sort"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -94,10 +96,16 @@ func (m *memoryScheduleRepo) CreateBatch(_ context.Context, b *domain.ProbeBatch
 func (m *memoryScheduleRepo) UpdateBatch(_ context.Context, b *domain.ProbeBatch) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.batches[b.ID]; !ok {
+	existing, ok := m.batches[b.ID]
+	if !ok {
 		return domain.NewNotFoundError("probe_batch_not_found", "not found")
 	}
-	m.batches[b.ID] = *b
+	existing.State = b.State
+	existing.Counts = b.Counts
+	existing.RedactedError = b.RedactedError
+	existing.UpdatedAt = b.UpdatedAt
+	existing.RunIDs = append([]string{}, b.RunIDs...)
+	m.batches[b.ID] = existing
 	m.runs[b.ID] = append([]string{}, b.RunIDs...)
 	return nil
 }
@@ -222,16 +230,21 @@ type mockRunner struct {
 	mu              sync.Mutex
 	executedRuns    []*domain.ProbeRun
 	executedNodeIDs map[string][]string
+	runFn           func(ctx context.Context, run *domain.ProbeRun, nodeIDs []string, kinds []domain.ProbeKind) error
 }
 
-func (m *mockRunner) Run(_ context.Context, run *domain.ProbeRun, nodeIDs []string, _ []domain.ProbeKind) error {
+func (m *mockRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs []string, kinds []domain.ProbeKind) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.executedRuns = append(m.executedRuns, run)
 	if m.executedNodeIDs == nil {
 		m.executedNodeIDs = make(map[string][]string)
 	}
 	m.executedNodeIDs[run.ID] = nodeIDs
+	fn := m.runFn
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, run, nodeIDs, kinds)
+	}
 	return nil
 }
 
@@ -479,13 +492,290 @@ func TestPeriodicCoordinator_StartupRecovery(t *testing.T) {
 		t.Fatalf("expected abandoned run state expired, got %s", r.State)
 	}
 
-	// 3. Verify schedule next_due_at advanced to future (not overdue)
+	// 3. Verify schedule next_due_at corrected to now for immediate sweep (not delayed to future)
 	sched, err := schedRepo.Get(ctx)
 	if err != nil {
 		t.Fatalf("failed to get recovered schedule: %v", err)
 	}
-	if sched.NextDueAt == nil || !sched.NextDueAt.After(now) {
-		t.Fatalf("expected next_due_at advanced to future, got %v (now: %v)", sched.NextDueAt, now)
+	if sched.NextDueAt == nil || !sched.NextDueAt.Equal(now) {
+		t.Fatalf("expected next_due_at corrected to now for immediate sweep, got %v (expected %v)", sched.NextDueAt, now)
+	}
+
+	// 4. Verify schedule with nil NextDueAt is also corrected to now
+	sched.NextDueAt = nil
+	_ = schedRepo.Update(ctx, sched)
+	if err := coord.Recover(ctx); err != nil {
+		t.Fatalf("Recover failed for nil NextDueAt: %v", err)
+	}
+	sched, _ = schedRepo.Get(ctx)
+	if sched.NextDueAt == nil || !sched.NextDueAt.Equal(now) {
+		t.Fatalf("expected nil next_due_at corrected to now, got %v", sched.NextDueAt)
+	}
+
+	// 5. Verify schedule with legacy far-future NextDueAt is corrected to now
+	farFuture := now.Add(2 * time.Hour)
+	sched.NextDueAt = &farFuture
+	_ = schedRepo.Update(ctx, sched)
+	if err := coord.Recover(ctx); err != nil {
+		t.Fatalf("Recover failed for far-future NextDueAt: %v", err)
+	}
+	sched, _ = schedRepo.Get(ctx)
+	if sched.NextDueAt == nil || !sched.NextDueAt.Equal(now) {
+		t.Fatalf("expected far-future next_due_at corrected to now, got %v", sched.NextDueAt)
+	}
+
+	// 6. Verify valid near-future NextDueAt (e.g. now + 3m within 10m sweep interval) is preserved
+	nearFuture := now.Add(3 * time.Minute)
+	sched.NextDueAt = &nearFuture
+	_ = schedRepo.Update(ctx, sched)
+	if err := coord.Recover(ctx); err != nil {
+		t.Fatalf("Recover failed for near-future NextDueAt: %v", err)
+	}
+	sched, _ = schedRepo.Get(ctx)
+	if sched.NextDueAt == nil || !sched.NextDueAt.Equal(nearFuture) {
+		t.Fatalf("expected near-future next_due_at preserved, got %v (expected %v)", sched.NextDueAt, nearFuture)
+	}
+}
+
+func TestPeriodicCoordinator_StartupRecovery_ImmediateSweepWithFakeClock(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	overdue := now.Add(-1 * time.Hour)
+	sched := domain.ProbeSchedule{
+		Enabled:         true,
+		IntervalSeconds: 300,
+		Kinds:           []domain.ProbeKind{domain.ProbeKindBaseline},
+		NextDueAt:       &overdue,
+		Generation:      1,
+		UpdatedAt:       overdue,
+	}
+
+	schedRepo := newMemoryScheduleRepo(sched)
+	nodeRepo := &memoryNodeRepo{nodes: []domain.Node{
+		{LogicalID: "node-sweep-1", DisplayName: "Sweep Node 1", Active: true},
+	}}
+	runRepo := &memoryRuns{items: make(map[string]domain.ProbeRun)}
+	runner := &mockRunner{}
+
+	coord := NewPeriodicCoordinator(
+		schedRepo,
+		nodeRepo,
+		runRepo,
+		runner,
+		WithCoordinatorOwner("recovery-worker"),
+		WithCoordinatorClock(func() time.Time { return now }),
+	)
+
+	if err := coord.Recover(ctx); err != nil {
+		t.Fatalf("Recover failed: %v", err)
+	}
+
+	// Verify next_due_at was corrected to now
+	recoveredSched, _ := schedRepo.Get(ctx)
+	if recoveredSched.NextDueAt == nil || !recoveredSched.NextDueAt.Equal(now) {
+		t.Fatalf("expected next_due_at set to now, got %v", recoveredSched.NextDueAt)
+	}
+
+	// Start coordinator loop and verify immediate sweep triggers without sleeping
+	sweepDone := make(chan struct{})
+	runner.runFn = func(ctx context.Context, run *domain.ProbeRun, nodeIDs []string, kinds []domain.ProbeKind) error {
+		select {
+		case <-sweepDone:
+		default:
+			close(sweepDone)
+		}
+		return nil
+	}
+
+	coord.Start(ctx)
+	defer coord.Stop()
+
+	select {
+	case <-sweepDone:
+		// Succeeded immediately on startup
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected startup sweep to trigger immediately, timed out")
+	}
+}
+
+func TestPeriodicCoordinator_MultiInstanceLeaseWithMultipleUpdateBatches(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	sched := domain.ProbeSchedule{
+		Enabled:         true,
+		IntervalSeconds: 300,
+		Kinds:           []domain.ProbeKind{domain.ProbeKindBaseline},
+		NextDueAt:       &now,
+		Generation:      1,
+		UpdatedAt:       now,
+	}
+
+	// 5 nodes, maxTasksPerRun = 1 -> will produce 5 separate runs and multiple UpdateBatch calls during execution
+	nodes := make([]domain.Node, 5)
+	for i := 0; i < 5; i++ {
+		nodes[i] = domain.Node{
+			LogicalID:   fmt.Sprintf("node-lease-%d", i),
+			DisplayName: fmt.Sprintf("Node %d", i),
+			Active:      true,
+		}
+	}
+
+	schedRepo := newMemoryScheduleRepo(sched)
+	nodeRepo := &memoryNodeRepo{nodes: nodes}
+	runRepo := &memoryRuns{items: make(map[string]domain.ProbeRun)}
+
+	var initialOwner string
+	var initialOwnerMu sync.Mutex
+	var leaseChecksFailed int32
+	runner := &mockRunner{}
+	runner.runFn = func(ctx context.Context, run *domain.ProbeRun, nodeIDs []string, kinds []domain.ProbeKind) error {
+		t.Logf("RUN %s nodeIDs=%v", run.ID, nodeIDs)
+		time.Sleep(10 * time.Millisecond)
+		// Verify batch lease is still held by the winning instance in repo
+		batches, _, _ := schedRepo.ListBatches(ctx, 1, 10)
+		for _, b := range batches {
+			initialOwnerMu.Lock()
+			if initialOwner == "" {
+				initialOwner = b.Owner
+			}
+			expectedOwner := initialOwner
+			initialOwnerMu.Unlock()
+
+			if b.Owner != expectedOwner || b.LeaseUntil == nil || !b.LeaseUntil.After(now) {
+				t.Logf("CHECK FAILED: batch ID=%s, owner=%q (expected %q), state=%s, lease_until=%v, now=%v", b.ID, b.Owner, expectedOwner, b.State, b.LeaseUntil, now)
+				atomic.AddInt32(&leaseChecksFailed, 1)
+			}
+		}
+		return nil
+	}
+
+	coord1 := NewPeriodicCoordinator(
+		schedRepo, nodeRepo, runRepo, runner,
+		WithCoordinatorOwner("instance-1"),
+		WithCoordinatorClock(func() time.Time { return now }),
+		WithCoordinatorMaxTasks(1),
+		WithCoordinatorLeaseDuration(1*time.Second),
+	)
+
+	coord2 := NewPeriodicCoordinator(
+		schedRepo, nodeRepo, runRepo, runner,
+		WithCoordinatorOwner("instance-2"),
+		WithCoordinatorClock(func() time.Time { return now }),
+		WithCoordinatorMaxTasks(1),
+		WithCoordinatorLeaseDuration(1*time.Second),
+	)
+
+	coord1Done := make(chan error, 1)
+	go func() {
+		coord1Done <- coord1.TriggerWindow()
+	}()
+
+	// Concurrently, instance-2 attempts TriggerWindow repeatedly while coord1 executes multiple runs
+	var wg sync.WaitGroup
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 10; j++ {
+				_ = coord2.TriggerWindow()
+				time.Sleep(5 * time.Millisecond)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if err := <-coord1Done; err != nil {
+		t.Fatalf("coord1 TriggerWindow failed: %v", err)
+	}
+
+	if atomic.LoadInt32(&leaseChecksFailed) > 0 {
+		t.Fatalf("detected lease corruption during batch execution: %d checks failed", leaseChecksFailed)
+	}
+
+	// Verify only 1 batch was created and executed to terminal state
+	batches, _, err := schedRepo.ListBatches(ctx, 1, 10)
+	if err != nil || len(batches) != 1 {
+		t.Fatalf("expected 1 batch, got %d (err: %v)", len(batches), err)
+	}
+	if batches[0].State != domain.ProbeBatchStateSucceeded {
+		t.Fatalf("expected batch state succeeded, got %s", batches[0].State)
+	}
+	if batches[0].Counts.CompletedRuns != 5 {
+		t.Fatalf("expected 5 completed runs, got %d", batches[0].Counts.CompletedRuns)
+	}
+
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	if len(runner.executedRuns) != 5 {
+		t.Fatalf("expected exactly 5 runs executed (all by coord1), got %d", len(runner.executedRuns))
+	}
+}
+
+func TestPeriodicCoordinator_LeaseLostAbortsExecution(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	sched := domain.ProbeSchedule{
+		Enabled:         true,
+		IntervalSeconds: 300,
+		Kinds:           []domain.ProbeKind{domain.ProbeKindBaseline},
+		NextDueAt:       &now,
+		Generation:      1,
+		UpdatedAt:       now,
+	}
+
+	nodes := []domain.Node{
+		{LogicalID: "node-lost-1", DisplayName: "N1", Active: true},
+		{LogicalID: "node-lost-2", DisplayName: "N2", Active: true},
+	}
+
+	schedRepo := newMemoryScheduleRepo(sched)
+	nodeRepo := &memoryNodeRepo{nodes: nodes}
+	runRepo := &memoryRuns{items: make(map[string]domain.ProbeRun)}
+
+	// Runner steals lease on first run execution to simulate another instance taking over expired lease
+	runner := &mockRunner{}
+	runner.runFn = func(ctx context.Context, run *domain.ProbeRun, nodeIDs []string, kinds []domain.ProbeKind) error {
+		// Steal lease by force-setting owner to instance-thief
+		schedRepo.mu.Lock()
+		for id, b := range schedRepo.batches {
+			b.Owner = "instance-thief"
+			until := now.Add(10 * time.Minute)
+			b.LeaseUntil = &until
+			schedRepo.batches[id] = b
+		}
+		schedRepo.mu.Unlock()
+		// Sleep so the heartbeat ticker (5ms) fires, notices owner changed, and triggers leaseLost
+		time.Sleep(30 * time.Millisecond)
+		return nil
+	}
+
+	coord := NewPeriodicCoordinator(
+		schedRepo, nodeRepo, runRepo, runner,
+		WithCoordinatorOwner("instance-victim"),
+		WithCoordinatorClock(func() time.Time { return now }),
+		WithCoordinatorMaxTasks(1),
+		WithCoordinatorLeaseDuration(15*time.Millisecond), // Fast heartbeat: ticker every 5ms
+	)
+
+	err := coord.TriggerWindow()
+	if err == nil {
+		t.Fatalf("expected error due to lost lease, got nil")
+	}
+	de, ok := domain.AsDomainError(err)
+	if !ok || de.Category != domain.CategoryConflict {
+		t.Fatalf("expected conflict error (lease_lost), got %v", err)
+	}
+
+	// Verify that instance-victim did NOT overwrite owner back or set batch to terminal Failed/Cancelled
+	schedRepo.mu.Lock()
+	defer schedRepo.mu.Unlock()
+	for _, b := range schedRepo.batches {
+		if b.Owner != "instance-thief" {
+			t.Fatalf("expected batch owner to remain instance-thief, got %s", b.Owner)
+		}
 	}
 }
 
@@ -837,5 +1127,432 @@ func TestPeriodicCoordinator_DeduplicatesNodesAlreadyInPool(t *testing.T) {
 	}
 	if batches[0].Counts.TotalNodes != 2 || batches[0].Counts.SkippedNodes != 1 {
 		t.Fatalf("expected TotalNodes=2 and SkippedNodes=1, got %+v", batches[0].Counts)
+	}
+}
+
+type memoryObsRepo struct {
+	mu           sync.Mutex
+	observations map[string]map[domain.ProbeKind]domain.ProbeObservation
+}
+
+func newMemoryObsRepo() *memoryObsRepo {
+	return &memoryObsRepo{
+		observations: make(map[string]map[domain.ProbeKind]domain.ProbeObservation),
+	}
+}
+
+func (m *memoryObsRepo) SetObservation(nodeID string, kind domain.ProbeKind, obs domain.ProbeObservation) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.observations[nodeID]; !ok {
+		m.observations[nodeID] = make(map[domain.ProbeKind]domain.ProbeObservation)
+	}
+	m.observations[nodeID][kind] = obs
+}
+
+func (m *memoryObsRepo) GetByID(_ context.Context, _ string) (*domain.ProbeObservation, error) {
+	return nil, nil
+}
+func (m *memoryObsRepo) ListByRun(_ context.Context, _ string) ([]domain.ProbeObservation, error) {
+	return nil, nil
+}
+func (m *memoryObsRepo) ListByNode(_ context.Context, _ string, _ int) ([]domain.ProbeObservation, error) {
+	return nil, nil
+}
+func (m *memoryObsRepo) ListLatestByNodes(_ context.Context, nodeLogicalIDs []string, kinds []domain.ProbeKind) (map[string]map[domain.ProbeKind]domain.ProbeObservation, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	res := make(map[string]map[domain.ProbeKind]domain.ProbeObservation)
+	for _, id := range nodeLogicalIDs {
+		res[id] = make(map[domain.ProbeKind]domain.ProbeObservation)
+		if nodeMap, ok := m.observations[id]; ok {
+			for _, k := range kinds {
+				if obs, exists := nodeMap[k]; exists {
+					res[id][k] = obs
+				}
+			}
+		}
+	}
+	return res, nil
+}
+func (m *memoryObsRepo) Create(_ context.Context, obs *domain.ProbeObservation) error {
+	m.SetObservation(obs.NodeLogicalID, obs.Kind, *obs)
+	return nil
+}
+
+func TestPeriodicCoordinator_IncrementalSweep_EnableImmediateAndNextDueAt(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	initialSched := domain.DefaultProbeSchedule()
+	initialSched.Enabled = false
+	initialSched.IntervalSeconds = 7200 // 2 hours
+
+	schedRepo := newMemoryScheduleRepo(initialSched)
+	runRepo := &memoryRuns{items: make(map[string]domain.ProbeRun)}
+	nodeRepo := &memoryNodeRepo{
+		nodes: []domain.Node{
+			{LogicalID: "node-1", DisplayName: "Node 1", Active: true},
+		},
+	}
+	runner := &mockRunner{}
+	obsRepo := newMemoryObsRepo()
+
+	coord := NewPeriodicCoordinator(
+		schedRepo,
+		nodeRepo,
+		runRepo,
+		runner,
+		WithCoordinatorClock(func() time.Time { return now }),
+		WithCoordinatorObservations(obsRepo),
+		WithCoordinatorSweepInterval(10*time.Minute),
+	)
+
+	service := NewService(
+		runRepo,
+		WithScheduleRepository(schedRepo),
+		WithCoordinator(coord),
+		WithClock(func() time.Time { return now }),
+	)
+
+	// 1. Enable schedule: NextDueAt should be set immediately to now, not now + 2h
+	enabled := true
+	updated, err := service.UpdateSchedule(ctx, domain.UpdateProbeScheduleRequest{
+		Enabled: &enabled,
+	})
+	if err != nil {
+		t.Fatalf("UpdateSchedule failed: %v", err)
+	}
+	if updated.NextDueAt == nil || !updated.NextDueAt.Equal(now) {
+		t.Fatalf("expected NextDueAt to be immediately now (%v), got %v", now, updated.NextDueAt)
+	}
+
+	// 2. TriggerWindow executes: next_due_at advances by 10 minutes (sweepInterval), NOT 2 hours
+	if err := coord.TriggerWindow(); err != nil {
+		t.Fatalf("TriggerWindow failed: %v", err)
+	}
+
+	afterSched, err := schedRepo.Get(ctx)
+	if err != nil {
+		t.Fatalf("failed to get schedule: %v", err)
+	}
+	expectedNextDue := now.Add(10 * time.Minute)
+	if afterSched.NextDueAt == nil || !afterSched.NextDueAt.Equal(expectedNextDue) {
+		t.Fatalf("expected next_due_at to be %v (10min sweep interval), got %v", expectedNextDue, afterSched.NextDueAt)
+	}
+}
+
+func TestPeriodicCoordinator_IncrementalSweep_ShortenedInterval(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	futureDue := now.Add(10 * time.Minute)
+	sched := domain.ProbeSchedule{
+		Enabled:         true,
+		IntervalSeconds: 7200, // 2 hours
+		Kinds:           []domain.ProbeKind{domain.ProbeKindBaseline},
+		NextDueAt:       &futureDue,
+		Generation:      1,
+		UpdatedAt:       now,
+	}
+
+	schedRepo := newMemoryScheduleRepo(sched)
+	runRepo := &memoryRuns{items: make(map[string]domain.ProbeRun)}
+	coord := NewPeriodicCoordinator(
+		schedRepo,
+		&memoryNodeRepo{},
+		runRepo,
+		&mockRunner{},
+		WithCoordinatorClock(func() time.Time { return now }),
+	)
+
+	service := NewService(
+		runRepo,
+		WithScheduleRepository(schedRepo),
+		WithCoordinator(coord),
+		WithClock(func() time.Time { return now }),
+	)
+
+	// Shorten interval to 600s: NextDueAt should be reset to now for immediate re-evaluation
+	newInterval := 600
+	updated, err := service.UpdateSchedule(ctx, domain.UpdateProbeScheduleRequest{
+		IntervalSeconds: &newInterval,
+	})
+	if err != nil {
+		t.Fatalf("UpdateSchedule failed: %v", err)
+	}
+	if updated.NextDueAt == nil || !updated.NextDueAt.Equal(now) {
+		t.Fatalf("expected NextDueAt to be reset to now (%v), got %v", now, updated.NextDueAt)
+	}
+}
+
+func TestPeriodicCoordinator_IncrementalSweep_ValidExpiredAndUnobservedNodes(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+
+	sched := domain.ProbeSchedule{
+		Enabled:         true,
+		IntervalSeconds: 7200, // 2 hours
+		Kinds:           []domain.ProbeKind{domain.ProbeKindBaseline, domain.ProbeKindStreaming},
+		NextDueAt:       &now,
+		Generation:      1,
+		UpdatedAt:       now,
+	}
+
+	schedRepo := newMemoryScheduleRepo(sched)
+	runRepo := &memoryRuns{items: make(map[string]domain.ProbeRun)}
+	obsRepo := newMemoryObsRepo()
+
+	// 5 active nodes:
+	// node-unobs: no observations -> expired!
+	// node-fresh: observed 1 hour ago (valid, interval is 2h) -> skip!
+	// node-stale: observed 3 hours ago -> expired!
+	// node-cooldown: failed 2 minutes ago, failure cooldown 5m -> suppressed!
+	// node-failed-expired: failed 10 minutes ago, interval 5m, but here interval is 2h -> wait, if interval is 2h and failed 10m ago, not expired
+	// node-fail-due: observed 3 hours ago with error, cooldown 5m -> expired!
+	nodeRepo := &memoryNodeRepo{
+		nodes: []domain.Node{
+			{LogicalID: "node-unobs", DisplayName: "Unobserved", Active: true},
+			{LogicalID: "node-fresh", DisplayName: "Fresh", Active: true},
+			{LogicalID: "node-stale", DisplayName: "Stale", Active: true},
+			{LogicalID: "node-cooldown", DisplayName: "Cooldown", Active: true},
+			{LogicalID: "node-fail-due", DisplayName: "Fail Due", Active: true},
+		},
+	}
+
+	// Setup observations:
+	// Fresh: both kinds observed 1h ago
+	obsRepo.SetObservation("node-fresh", domain.ProbeKindBaseline, domain.ProbeObservation{
+		NodeLogicalID: "node-fresh",
+		Kind:          domain.ProbeKindBaseline,
+		Verdict:       domain.VerdictAvailable,
+		ObservedAt:    now.Add(-1 * time.Hour),
+	})
+	obsRepo.SetObservation("node-fresh", domain.ProbeKindStreaming, domain.ProbeObservation{
+		NodeLogicalID: "node-fresh",
+		Kind:          domain.ProbeKindStreaming,
+		Verdict:       domain.VerdictAvailable,
+		ObservedAt:    now.Add(-1 * time.Hour),
+	})
+
+	// Stale: baseline observed 3h ago, streaming unobserved -> both expired!
+	obsRepo.SetObservation("node-stale", domain.ProbeKindBaseline, domain.ProbeObservation{
+		NodeLogicalID: "node-stale",
+		Kind:          domain.ProbeKindBaseline,
+		Verdict:       domain.VerdictAvailable,
+		ObservedAt:    now.Add(-3 * time.Hour),
+	})
+
+	// Cooldown: failed 2m ago -> suppressed by failure cooldown (5m)
+	obsRepo.SetObservation("node-cooldown", domain.ProbeKindBaseline, domain.ProbeObservation{
+		NodeLogicalID: "node-cooldown",
+		Kind:          domain.ProbeKindBaseline,
+		Verdict:       domain.VerdictError,
+		ObservedAt:    now.Add(-2 * time.Minute),
+	})
+	obsRepo.SetObservation("node-cooldown", domain.ProbeKindStreaming, domain.ProbeObservation{
+		NodeLogicalID: "node-cooldown",
+		Kind:          domain.ProbeKindStreaming,
+		Verdict:       domain.VerdictError,
+		ObservedAt:    now.Add(-2 * time.Minute),
+	})
+
+	// Fail Due: failed 3h ago -> exceeds cooldown (5m) and exceeds interval (2h) -> expired!
+	obsRepo.SetObservation("node-fail-due", domain.ProbeKindBaseline, domain.ProbeObservation{
+		NodeLogicalID: "node-fail-due",
+		Kind:          domain.ProbeKindBaseline,
+		Verdict:       domain.VerdictError,
+		ObservedAt:    now.Add(-3 * time.Hour),
+	})
+	obsRepo.SetObservation("node-fail-due", domain.ProbeKindStreaming, domain.ProbeObservation{
+		NodeLogicalID: "node-fail-due",
+		Kind:          domain.ProbeKindStreaming,
+		Verdict:       domain.VerdictError,
+		ObservedAt:    now.Add(-3 * time.Hour),
+	})
+
+	runner := &mockRunner{}
+	coord := NewPeriodicCoordinator(
+		schedRepo,
+		nodeRepo,
+		runRepo,
+		runner,
+		WithCoordinatorClock(func() time.Time { return now }),
+		WithCoordinatorObservations(obsRepo),
+		WithCoordinatorFailureCooldown(5*time.Minute),
+		WithCoordinatorSweepInterval(10*time.Minute),
+	)
+
+	if err := coord.TriggerWindow(); err != nil {
+		t.Fatalf("TriggerWindow failed: %v", err)
+	}
+
+	// Verify executed nodes
+	executedNodeSet := make(map[string]bool)
+	for _, nodeIDs := range runner.executedNodeIDs {
+		for _, id := range nodeIDs {
+			executedNodeSet[id] = true
+		}
+	}
+
+	// Expected to be probed: node-unobs, node-stale, node-fail-due
+	if !executedNodeSet["node-unobs"] {
+		t.Errorf("expected node-unobs to be probed")
+	}
+	if !executedNodeSet["node-stale"] {
+		t.Errorf("expected node-stale to be probed")
+	}
+	if !executedNodeSet["node-fail-due"] {
+		t.Errorf("expected node-fail-due to be probed")
+	}
+
+	// Expected NOT to be probed: node-fresh (still valid), node-cooldown (in failure cooldown)
+	if executedNodeSet["node-fresh"] {
+		t.Errorf("expected node-fresh NOT to be probed (still valid)")
+	}
+	if executedNodeSet["node-cooldown"] {
+		t.Errorf("expected node-cooldown NOT to be probed (within failure cooldown)")
+	}
+}
+
+func TestPeriodicCoordinator_IncrementalSweep_QuotaAndStarvationPrevention(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+
+	sched := domain.ProbeSchedule{
+		Enabled:         true,
+		IntervalSeconds: 3600, // 1 hour
+		Kinds:           []domain.ProbeKind{domain.ProbeKindBaseline},
+		NextDueAt:       &now,
+		Generation:      1,
+		UpdatedAt:       now,
+	}
+
+	schedRepo := newMemoryScheduleRepo(sched)
+	runRepo := &memoryRuns{items: make(map[string]domain.ProbeRun)}
+	obsRepo := newMemoryObsRepo()
+
+	// 20 nodes total:
+	// node-00 .. node-09: unobserved (priority 1)
+	// node-10 .. node-19: observed 3 hours ago (priority 2, oldest observed)
+	nodes := make([]domain.Node, 20)
+	for i := 0; i < 20; i++ {
+		id := fmt.Sprintf("node-%02d", i)
+		nodes[i] = domain.Node{LogicalID: id, DisplayName: id, Active: true}
+		if i >= 10 {
+			// Observed in the past (node-10 oldest, node-19 newest of the old ones)
+			obsRepo.SetObservation(id, domain.ProbeKindBaseline, domain.ProbeObservation{
+				NodeLogicalID: id,
+				Kind:          domain.ProbeKindBaseline,
+				Verdict:       domain.VerdictAvailable,
+				ObservedAt:    now.Add(time.Duration(-(180 - i)) * time.Minute),
+			})
+		}
+	}
+	nodeRepo := &memoryNodeRepo{nodes: nodes}
+
+	// Sweep quota = 8 tasks per sweep
+	runner := &mockRunner{}
+	currentClock := now
+	coord := NewPeriodicCoordinator(
+		schedRepo,
+		nodeRepo,
+		runRepo,
+		runner,
+		WithCoordinatorClock(func() time.Time { return currentClock }),
+		WithCoordinatorObservations(obsRepo),
+		WithCoordinatorSweepQuota(8),
+		WithCoordinatorSweepInterval(10*time.Minute),
+	)
+
+	// Round 1: quota is 8 tasks -> should pick first 8 unobserved nodes (node-00 .. node-07)
+	if err := coord.TriggerWindow(); err != nil {
+		t.Fatalf("Round 1 TriggerWindow failed: %v", err)
+	}
+
+	var round1Nodes []string
+	for _, nids := range runner.executedNodeIDs {
+		round1Nodes = append(round1Nodes, nids...)
+	}
+	sort.Strings(round1Nodes)
+	if len(round1Nodes) != 8 {
+		t.Fatalf("expected 8 nodes in round 1, got %d: %v", len(round1Nodes), round1Nodes)
+	}
+	for i := 0; i < 8; i++ {
+		expectedID := fmt.Sprintf("node-%02d", i)
+		if round1Nodes[i] != expectedID {
+			t.Fatalf("expected round 1 node %d to be %s, got %s", i, expectedID, round1Nodes[i])
+		}
+		// Record fresh observation for probed nodes
+		obsRepo.SetObservation(expectedID, domain.ProbeKindBaseline, domain.ProbeObservation{
+			NodeLogicalID: expectedID,
+			Kind:          domain.ProbeKindBaseline,
+			Verdict:       domain.VerdictAvailable,
+			ObservedAt:    currentClock,
+		})
+	}
+
+	// Advance clock by 10 minutes for Round 2
+	currentClock = currentClock.Add(10 * time.Minute)
+	runner.executedNodeIDs = make(map[string][]string)
+
+	// Round 2: should pick remaining 2 unobserved nodes (node-08, node-09) + 6 oldest observed nodes (node-10 .. node-15)
+	if err := coord.TriggerWindow(); err != nil {
+		t.Fatalf("Round 2 TriggerWindow failed: %v", err)
+	}
+
+	var round2Nodes []string
+	for _, nids := range runner.executedNodeIDs {
+		round2Nodes = append(round2Nodes, nids...)
+	}
+	sort.Strings(round2Nodes)
+	if len(round2Nodes) != 8 {
+		t.Fatalf("expected 8 nodes in round 2, got %d: %v", len(round2Nodes), round2Nodes)
+	}
+
+	expectedRound2 := []string{"node-08", "node-09", "node-10", "node-11", "node-12", "node-13", "node-14", "node-15"}
+	for i, exp := range expectedRound2 {
+		if round2Nodes[i] != exp {
+			t.Fatalf("expected round 2 node %d to be %s, got %s", i, exp, round2Nodes[i])
+		}
+	}
+}
+
+func TestPeriodicCoordinator_IncrementalSweep_RecoveryLegacyFarDueCorrection(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	// Legacy schedule in DB had NextDueAt set to 2 hours in the future
+	legacyDue := now.Add(2 * time.Hour)
+	legacySched := domain.ProbeSchedule{
+		Enabled:         true,
+		IntervalSeconds: 7200,
+		Kinds:           []domain.ProbeKind{domain.ProbeKindBaseline},
+		NextDueAt:       &legacyDue,
+		Generation:      1,
+		UpdatedAt:       now,
+	}
+
+	schedRepo := newMemoryScheduleRepo(legacySched)
+	runRepo := &memoryRuns{items: make(map[string]domain.ProbeRun)}
+	coord := NewPeriodicCoordinator(
+		schedRepo,
+		&memoryNodeRepo{},
+		runRepo,
+		&mockRunner{},
+		WithCoordinatorClock(func() time.Time { return now }),
+		WithCoordinatorSweepInterval(10*time.Minute),
+	)
+
+	// Run recovery on startup
+	if err := coord.Recover(ctx); err != nil {
+		t.Fatalf("Recover failed: %v", err)
+	}
+
+	// Verify NextDueAt was corrected to now (or <= now) for immediate sweep, eliminating the 2-hour delay
+	recoveredSched, err := schedRepo.Get(ctx)
+	if err != nil {
+		t.Fatalf("failed to get recovered schedule: %v", err)
+	}
+	if recoveredSched.NextDueAt == nil || recoveredSched.NextDueAt.After(now) {
+		t.Fatalf("expected NextDueAt to be corrected to <= now (%v), got %v", now, recoveredSched.NextDueAt)
 	}
 }

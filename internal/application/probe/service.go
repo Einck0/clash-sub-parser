@@ -506,13 +506,13 @@ func (s *Service) UpdateSchedule(ctx context.Context, req domain.UpdateProbeSche
 	if changed {
 		updated.Generation++
 		if updated.Enabled {
-			if updated.NextDueAt == nil || updated.NextDueAt.Before(now) {
-				nextDue := now.Add(time.Duration(updated.IntervalSeconds) * time.Second)
-				updated.NextDueAt = &nextDue
-			}
+			// Trigger immediate lightweight sweep upon enabling or configuration change
+			updated.NextDueAt = &now
 		} else {
 			updated.NextDueAt = nil
 		}
+	} else if updated.Enabled && (updated.NextDueAt == nil || updated.NextDueAt.Before(now)) {
+		updated.NextDueAt = &now
 	}
 
 	if err := repo.Update(ctx, &updated); err != nil {

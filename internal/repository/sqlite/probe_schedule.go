@@ -407,27 +407,22 @@ func (r *probeScheduleRepository) UpdateBatch(ctx context.Context, batch *domain
 	batch.UpdatedAt = now
 	updatedAtStr := now.Format(time.RFC3339)
 
-	var leaseUntilArg any
-	if batch.LeaseUntil != nil && !batch.LeaseUntil.IsZero() {
-		leaseUntilArg = batch.LeaseUntil.UTC().Format(time.RFC3339)
-	}
-
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to begin tx for batch update: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// Update batch execution progress and metadata without overwriting lease columns (owner, lease_until),
+	// which are exclusively managed by AcquireLease, HeartbeatLease, and ReleaseLease.
 	const updateBatch = `
 	UPDATE probe_batches
-	SET owner = ?, lease_until = ?, state = ?, run_ids = ?,
+	SET state = ?, run_ids = ?,
 	    total_nodes = ?, dispatched_runs = ?, completed_runs = ?, skipped_nodes = ?,
 	    redacted_error = ?, updated_at = ?
 	WHERE id = ?;`
 
 	res, err := tx.ExecContext(ctx, updateBatch,
-		batch.Owner,
-		leaseUntilArg,
 		string(batch.State),
 		string(runIDsJSON),
 		batch.Counts.TotalNodes,

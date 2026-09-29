@@ -252,6 +252,7 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 		probeRunRepo,
 		probeRunner,
 		probe.WithCoordinatorOwner("csp-instance-"+domain.MustNewUUIDv7()),
+		probe.WithCoordinatorObservations(probeObsRepo),
 	)
 	probeService.SetCoordinator(periodicCoordinator)
 

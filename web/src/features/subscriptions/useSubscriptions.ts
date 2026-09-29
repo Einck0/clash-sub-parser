@@ -36,6 +36,8 @@ export interface SubscriptionRecord {
   revision: string
   created_at: string
   updated_at: string
+  last_refreshed_at?: string | null
+  last_refresh_outcome?: 'success' | 'partial' | 'failed' | string | null
 }
 
 interface Page<T> {
@@ -68,7 +70,45 @@ export const defaultConfig = (): SubscriptionConfig => ({
   target_groups: [],
 })
 
+export function formatRefreshTime(iso: string | null | undefined, locale: string = 'zh-CN'): string {
+  if (!iso) return ''
+  try {
+    const d = new Date(iso)
+    if (isNaN(d.getTime())) return iso
+    const now = Date.now()
+    const diffMs = now - d.getTime()
+    if (diffMs < 0 || diffMs < 60_000) return locale === 'zh-CN' ? '刚刚' : 'just now'
+    const mins = Math.floor(diffMs / 60_000)
+    if (mins < 60) {
+      return locale === 'zh-CN' ? `${mins} 分钟前` : `${mins} min${mins > 1 ? 's' : ''} ago`
+    }
+    const hrs = Math.floor(mins / 60)
+    if (hrs < 24) {
+      return locale === 'zh-CN' ? `${hrs} 小时前` : `${hrs} hr${hrs > 1 ? 's' : ''} ago`
+    }
+    const days = Math.floor(hrs / 24)
+    if (days < 30) {
+      return locale === 'zh-CN' ? `${days} 天前` : `${days} day${days > 1 ? 's' : ''} ago`
+    }
+    return d.toLocaleDateString(locale === 'zh-CN' ? 'zh-CN' : 'en-US')
+  } catch {
+    return iso
+  }
+}
+
+export function formatFullDateTime(iso: string | null | undefined, locale: string = 'zh-CN'): string {
+  if (!iso) return ''
+  try {
+    const d = new Date(iso)
+    if (isNaN(d.getTime())) return iso
+    return d.toLocaleString(locale === 'zh-CN' ? 'zh-CN' : 'en-US', { hour12: false })
+  } catch {
+    return iso
+  }
+}
+
 export function subscriptionPatchPayload(draft: SubscriptionDraft): Partial<SubscriptionDraft> {
+
   const payload: Partial<SubscriptionDraft> = {
     name: draft.name,
     enabled: draft.enabled,
@@ -148,8 +188,10 @@ export function useSubscriptions() {
         headers: { 'Idempotency-Key': crypto.randomUUID() },
       })
       toastStore.push({ message: '订阅刷新任务已加入队列', tone: 'success' })
+      await load()
     } catch (cause) {
       toastStore.push({ message: cause instanceof Error ? cause.message : '刷新订阅源失败', tone: 'error' })
+      await load().catch(() => {})
     } finally {
       const pending = new Set(refreshingIDs.value)
       pending.delete(subscription.id)

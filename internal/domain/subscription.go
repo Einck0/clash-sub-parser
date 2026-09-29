@@ -45,6 +45,8 @@ type Subscription struct {
 	Revision           string             `json:"revision"`
 	CreatedAt          time.Time          `json:"created_at"`
 	UpdatedAt          time.Time          `json:"updated_at"`
+	LastRefreshedAt    *time.Time         `json:"last_refreshed_at,omitempty"`
+	LastRefreshOutcome *FetchOutcome      `json:"last_refresh_outcome,omitempty"`
 }
 
 // SubscriptionFetch represents an immutable audit record of a fetch operation.

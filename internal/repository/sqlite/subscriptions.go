@@ -64,6 +64,10 @@ func (r *subscriptionRepository) GetByID(ctx context.Context, id string) (*domai
 	sub.CreatedAt, _ = time.Parse(time.RFC3339, createdAtStr)
 	sub.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAtStr)
 
+	if err := r.attachLatestFetches(ctx, []*domain.Subscription{&sub}); err != nil {
+		return nil, err
+	}
+
 	return &sub, nil
 }
 
@@ -161,7 +165,85 @@ func (r *subscriptionRepository) List(ctx context.Context, filter domain.Subscri
 		return nil, 0, fmt.Errorf("error iterating subscriptions: %w", err)
 	}
 
+	if len(items) > 0 {
+		subPtrs := make([]*domain.Subscription, len(items))
+		for i := range items {
+			subPtrs[i] = &items[i]
+		}
+		if err := r.attachLatestFetches(ctx, subPtrs); err != nil {
+			return nil, 0, err
+		}
+	}
+
 	return items, total, nil
+}
+
+func (r *subscriptionRepository) attachLatestFetches(ctx context.Context, subs []*domain.Subscription) error {
+	if len(subs) == 0 {
+		return nil
+	}
+
+	subMap := make(map[string]*domain.Subscription, len(subs))
+	placeholders := make([]string, len(subs))
+	args := make([]interface{}, len(subs))
+	for i, s := range subs {
+		subMap[s.ID] = s
+		placeholders[i] = "?"
+		args[i] = s.ID
+	}
+
+	query := fmt.Sprintf(`
+	WITH ranked_fetches AS (
+		SELECT subscription_id, finished_at, outcome,
+		       ROW_NUMBER() OVER (
+		           PARTITION BY subscription_id
+		           ORDER BY started_at DESC, id DESC
+		       ) AS rn
+		FROM subscription_fetches
+		WHERE subscription_id IN (%s)
+		  AND finished_at IS NOT NULL
+		  AND trim(finished_at) != ''
+	)
+	SELECT subscription_id, finished_at, outcome
+	FROM ranked_fetches
+	WHERE rn = 1;`, strings.Join(placeholders, ", "))
+
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("failed to query latest subscription fetches: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var subID, finishedAtStr, outcomeStr string
+		if err := rows.Scan(&subID, &finishedAtStr, &outcomeStr); err != nil {
+			return fmt.Errorf("failed to scan latest subscription fetch: %w", err)
+		}
+		sub, ok := subMap[subID]
+		if !ok {
+			continue
+		}
+		trimmedTime := strings.TrimSpace(finishedAtStr)
+		if trimmedTime != "" {
+			t, err := time.Parse(time.RFC3339, trimmedTime)
+			if err != nil {
+				t, err = time.Parse(time.RFC3339Nano, trimmedTime)
+			}
+			if err == nil {
+				sub.LastRefreshedAt = &t
+			}
+		}
+		outcomeVal := domain.FetchOutcome(strings.TrimSpace(outcomeStr))
+		if outcomeVal != "" {
+			sub.LastRefreshOutcome = &outcomeVal
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("error iterating latest subscription fetches: %w", err)
+	}
+
+	return nil
 }
 
 func (r *subscriptionRepository) Create(ctx context.Context, sub *domain.Subscription) error {

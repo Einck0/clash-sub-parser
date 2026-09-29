@@ -81,6 +81,8 @@ type SubscriptionView struct {
 	Revision           string                    `json:"revision"`
 	CreatedAt          string                    `json:"created_at"`
 	UpdatedAt          string                    `json:"updated_at"`
+	LastRefreshedAt    *string                   `json:"last_refreshed_at"`
+	LastRefreshOutcome *string                   `json:"last_refresh_outcome,omitempty"`
 }
 
 // ListResult is a page of API-safe subscriptions.
@@ -358,11 +360,20 @@ func normalizedPolicy(policy domain.RefreshPolicy) domain.RefreshPolicy {
 }
 
 func redact(sub domain.Subscription) SubscriptionView {
-	return SubscriptionView{
+	view := SubscriptionView{
 		ID: sub.ID, Name: sub.Name, SourceURLSecretRef: sub.SourceURLSecretRef, Enabled: sub.Enabled, RefreshPolicy: sub.RefreshPolicy,
 		Config: sub.Config, Revision: sub.Revision,
 		CreatedAt: sub.CreatedAt.Format("2006-01-02T15:04:05Z07:00"), UpdatedAt: sub.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
+	if sub.LastRefreshedAt != nil && !sub.LastRefreshedAt.IsZero() {
+		refreshedStr := sub.LastRefreshedAt.Format("2006-01-02T15:04:05Z07:00")
+		view.LastRefreshedAt = &refreshedStr
+	}
+	if sub.LastRefreshOutcome != nil && string(*sub.LastRefreshOutcome) != "" {
+		outcomeStr := string(*sub.LastRefreshOutcome)
+		view.LastRefreshOutcome = &outcomeStr
+	}
+	return view
 }
 
 func (s *Service) record(ctx context.Context, actor domain.ActorKind, requestID, action string, result domain.AuditResult) error {

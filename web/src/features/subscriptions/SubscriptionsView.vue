@@ -16,9 +16,11 @@ import StatusBadge from '../../ui/StatusBadge.vue'
 import Popover from '../../ui/Popover.vue'
 import { toastStore } from '../../ui/toast'
 import SubscriptionConfigDrawer from './SubscriptionConfigDrawer.vue'
-import { t } from '../../locales'
+import { t, currentLocale } from '../../locales'
 import {
   useSubscriptions,
+  formatRefreshTime,
+  formatFullDateTime,
   type SubscriptionDraft,
   type SubscriptionRecord,
 } from './useSubscriptions'
@@ -226,6 +228,50 @@ onMounted(load)
             <div>
               <dt class="opacity-60">{{ t('subscriptions.timeout') }}</dt>
               <dd class="mt-1 font-medium">{{ subscription.refresh_policy.timeout_seconds }} 秒</dd>
+            </div>
+            <div class="col-span-2 min-w-0" data-testid="subscription-last-refresh">
+              <dt class="opacity-60">{{ t('subscriptions.lastRefreshed') }}</dt>
+              <dd class="mt-1 font-medium min-w-0">
+                <span v-if="!subscription.last_refreshed_at" class="opacity-60" data-testid="sub-never-refreshed">
+                  {{ t('subscriptions.neverRefreshed') }}
+                </span>
+                <div v-else-if="subscription.last_refresh_outcome === 'failed'" class="flex items-center gap-2 flex-wrap min-w-0" data-testid="sub-refresh-failed">
+                  <span class="badge badge-error badge-sm h-auto min-h-[1.25rem] py-0.5 px-2 font-medium shrink-0 whitespace-nowrap text-error-content">
+                    {{ t('subscriptions.refreshFailed') }}
+                  </span>
+                  <span
+                    :title="formatFullDateTime(subscription.last_refreshed_at, currentLocale)"
+                    class="truncate text-error/90 font-mono text-[11px] cursor-help"
+                    data-testid="sub-refresh-time"
+                  >
+                    {{ formatRefreshTime(subscription.last_refreshed_at, currentLocale) }}
+                  </span>
+                </div>
+                <div v-else-if="subscription.last_refresh_outcome === 'partial'" class="flex items-center gap-2 flex-wrap min-w-0" data-testid="sub-refresh-partial">
+                  <span class="badge badge-warning badge-sm h-auto min-h-[1.25rem] py-0.5 px-2 font-medium shrink-0 whitespace-nowrap text-warning-content">
+                    {{ t('subscriptions.refreshPartial') }}
+                  </span>
+                  <span
+                    :title="formatFullDateTime(subscription.last_refreshed_at, currentLocale)"
+                    class="truncate opacity-80 font-mono text-[11px] cursor-help"
+                    data-testid="sub-refresh-time"
+                  >
+                    {{ formatRefreshTime(subscription.last_refreshed_at, currentLocale) }}
+                  </span>
+                </div>
+                <div v-else class="flex items-center gap-2 flex-wrap min-w-0" data-testid="sub-refresh-success">
+                  <span class="badge badge-success badge-outline badge-sm h-auto min-h-[1.25rem] py-0.5 px-2 font-medium shrink-0 whitespace-nowrap">
+                    {{ t('subscriptions.refreshSuccess') }}
+                  </span>
+                  <span
+                    :title="formatFullDateTime(subscription.last_refreshed_at, currentLocale)"
+                    class="truncate opacity-80 font-mono text-[11px] cursor-help"
+                    data-testid="sub-refresh-time"
+                  >
+                    {{ formatRefreshTime(subscription.last_refreshed_at, currentLocale) }}
+                  </span>
+                </div>
+              </dd>
             </div>
           </dl>
         </div>

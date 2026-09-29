@@ -2,10 +2,13 @@ package subscription_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"clash-sub-parser/internal/application/inventory"
 	"clash-sub-parser/internal/application/subscription"
@@ -388,5 +391,71 @@ func TestSubscriptionRefreshWithSetReconciler(t *testing.T) {
 	}
 	if summary.NodesParsed != 15 || summary.NodesValid != 12 {
 		t.Fatalf("summary nodes = (%d, %d), want (15, 12)", summary.NodesParsed, summary.NodesValid)
+	}
+}
+
+func TestSubscriptionView_LastRefreshedAtJSONSerialization(t *testing.T) {
+	subID := "0191e4a0-0000-7000-8000-000000000099"
+	repo := &memorySubscriptions{items: map[string]domain.Subscription{
+		subID: {
+			ID:                 subID,
+			Name:               "Never Refreshed",
+			SourceURLSecretRef: "secret://unrefreshed",
+			Revision:           "rev-1",
+			Enabled:            true,
+			CreatedAt:          time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC),
+			UpdatedAt:          time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC),
+			LastRefreshedAt:    nil,
+			LastRefreshOutcome: nil,
+		},
+	}}
+	service := subscription.NewService(repo, nil)
+	view, err := service.Get(context.Background(), subscription.GetSubscriptionQuery{ID: subID})
+	if err != nil {
+		t.Fatalf("Get() failed: %v", err)
+	}
+	if view.LastRefreshedAt != nil {
+		t.Fatalf("expected nil LastRefreshedAt, got %v", *view.LastRefreshedAt)
+	}
+	data, err := json.Marshal(view)
+	if err != nil {
+		t.Fatalf("json.Marshal failed: %v", err)
+	}
+	if !strings.Contains(string(data), `"last_refreshed_at":null`) {
+		t.Fatalf("expected JSON to contain '\"last_refreshed_at\":null', got: %s", string(data))
+	}
+
+	refTime := time.Date(2026, 9, 29, 1, 23, 45, 0, time.UTC)
+	failedOutcome := domain.FetchOutcomeFailed
+	repo.items[subID] = domain.Subscription{
+		ID:                 subID,
+		Name:               "Failed Refresh",
+		SourceURLSecretRef: "secret://failed",
+		Revision:           "rev-2",
+		Enabled:            true,
+		CreatedAt:          time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC),
+		UpdatedAt:          time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC),
+		LastRefreshedAt:    &refTime,
+		LastRefreshOutcome: &failedOutcome,
+	}
+	view2, err := service.Get(context.Background(), subscription.GetSubscriptionQuery{ID: subID})
+	if err != nil {
+		t.Fatalf("Get() failed: %v", err)
+	}
+	if view2.LastRefreshedAt == nil || *view2.LastRefreshedAt != "2026-09-29T01:23:45Z" {
+		t.Fatalf("expected LastRefreshedAt 2026-09-29T01:23:45Z, got %v", view2.LastRefreshedAt)
+	}
+	if view2.LastRefreshOutcome == nil || *view2.LastRefreshOutcome != "failed" {
+		t.Fatalf("expected LastRefreshOutcome failed, got %v", view2.LastRefreshOutcome)
+	}
+	data2, err := json.Marshal(view2)
+	if err != nil {
+		t.Fatalf("json.Marshal failed: %v", err)
+	}
+	if !strings.Contains(string(data2), `"last_refreshed_at":"2026-09-29T01:23:45Z"`) {
+		t.Fatalf("expected JSON to contain formatted timestamp, got: %s", string(data2))
+	}
+	if !strings.Contains(string(data2), `"last_refresh_outcome":"failed"`) {
+		t.Fatalf("expected JSON to contain outcome failed, got: %s", string(data2))
 	}
 }

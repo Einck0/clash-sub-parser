@@ -553,11 +553,14 @@ func (s *Service) CreateAdmissionRule(ctx context.Context, cmd CreateAdmissionRu
 		}
 	}
 
-	revID := cmd.RevisionID
+	revID := strings.TrimSpace(cmd.RevisionID)
 	if revID == "" {
-		active, err := s.revisionRepo.GetActive(ctx)
+		active, err := s.ensureActiveRevisionLocked(ctx)
 		if err != nil {
-			return nil, domain.NewValidationError("missing_revision_id", "revision_id is required when no active revision exists")
+			return nil, err
+		}
+		if active == nil {
+			return nil, domain.NewValidationError("missing_revision_id", "no active revision exists; specify a revision_id or activate a revision")
 		}
 		revID = active.ID
 	}
@@ -617,11 +620,14 @@ func (s *Service) CreatePolicyRule(ctx context.Context, cmd CreatePolicyRuleComm
 		}
 	}
 
-	revID := cmd.RevisionID
+	revID := strings.TrimSpace(cmd.RevisionID)
 	if revID == "" {
-		active, err := s.revisionRepo.GetActive(ctx)
+		active, err := s.ensureActiveRevisionLocked(ctx)
 		if err != nil {
-			return nil, domain.NewValidationError("missing_revision_id", "revision_id is required when no active revision exists")
+			return nil, err
+		}
+		if active == nil {
+			return nil, domain.NewValidationError("missing_revision_id", "no active revision exists; specify a revision_id or activate a revision")
 		}
 		revID = active.ID
 	}
@@ -659,6 +665,68 @@ func (s *Service) CreatePolicyRule(ctx context.Context, cmd CreatePolicyRuleComm
 		Expression:    newRule.Expression,
 		Position:      newRule.Position,
 	}, nil
+}
+
+// DeleteRule deletes an admission or routing policy rule by ID.
+func (s *Service) DeleteRule(ctx context.Context, cmd DeleteRuleCommand) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	id := strings.TrimSpace(cmd.ID)
+	if id == "" {
+		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_rule.delete", domain.AuditResultFailure, "empty rule id")
+		return domain.NewValidationError("missing_rule_id", "rule id is required")
+	}
+
+	kind := strings.ToLower(strings.TrimSpace(cmd.Kind))
+	switch kind {
+	case "admission":
+		if err := s.policyRepo.DeleteAdmissionRule(ctx, id); err != nil {
+			s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "admission_rule.delete", domain.AuditResultFailure, fmt.Sprintf("rule %s: %v", id, err))
+			return err
+		}
+		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "admission_rule.delete", domain.AuditResultSuccess, fmt.Sprintf("id=%s", id))
+		return nil
+	case "policy":
+		if err := s.policyRepo.DeletePolicyRule(ctx, id); err != nil {
+			s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_rule.delete", domain.AuditResultFailure, fmt.Sprintf("rule %s: %v", id, err))
+			return err
+		}
+		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_rule.delete", domain.AuditResultSuccess, fmt.Sprintf("id=%s", id))
+		return nil
+	case "":
+		err := s.policyRepo.DeletePolicyRule(ctx, id)
+		if err == nil {
+			s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_rule.delete", domain.AuditResultSuccess, fmt.Sprintf("id=%s", id))
+			return nil
+		}
+		if domErr, ok := domain.AsDomainError(err); ok && domErr.Category == domain.CategoryNotFound {
+			admErr := s.policyRepo.DeleteAdmissionRule(ctx, id)
+			if admErr == nil {
+				s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "admission_rule.delete", domain.AuditResultSuccess, fmt.Sprintf("id=%s", id))
+				return nil
+			}
+			s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_rule.delete", domain.AuditResultFailure, fmt.Sprintf("rule %s not found", id))
+			return admErr
+		}
+		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_rule.delete", domain.AuditResultFailure, fmt.Sprintf("rule %s: %v", id, err))
+		return err
+	default:
+		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_rule.delete", domain.AuditResultFailure, fmt.Sprintf("invalid rule kind: %s", kind))
+		return domain.NewValidationError("invalid_rule_kind", fmt.Sprintf("unsupported rule kind: %s", cmd.Kind))
+	}
+}
+
+// DeletePolicyRule deletes a routing policy rule by ID.
+func (s *Service) DeletePolicyRule(ctx context.Context, cmd DeleteRuleCommand) error {
+	cmd.Kind = "policy"
+	return s.DeleteRule(ctx, cmd)
+}
+
+// DeleteAdmissionRule deletes an admission rule by ID.
+func (s *Service) DeleteAdmissionRule(ctx context.Context, cmd DeleteRuleCommand) error {
+	cmd.Kind = "admission"
+	return s.DeleteRule(ctx, cmd)
 }
 
 // ListRules retrieves admission and policy rules for a revision.
@@ -765,6 +833,90 @@ func (s *Service) ValidateGraph(ctx context.Context) (*ValidationResult, error) 
 	}, nil
 }
 
+// EnsureActiveRevision idempotently bootstraps an initial active configuration revision
+// when the database has no active revision and zero total revisions.
+func (s *Service) EnsureActiveRevision(ctx context.Context) (*domain.ConfigurationRevision, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.ensureActiveRevisionLocked(ctx)
+}
+
+// ensureActiveRevisionLocked shares the startup and rule-creation gate under s.mu.
+func (s *Service) ensureActiveRevisionLocked(ctx context.Context) (*domain.ConfigurationRevision, error) {
+	if s.revisionRepo == nil {
+		return nil, domain.NewValidationError("missing_revision_id", "revision repository is not configured")
+	}
+
+	active, err := s.revisionRepo.GetActive(ctx)
+	if err == nil && active != nil {
+		return active, nil
+	}
+	if err != nil {
+		if domErr, ok := domain.AsDomainError(err); !ok || domErr.Category != domain.CategoryNotFound {
+			return nil, err
+		}
+	}
+
+	_, total, err := s.revisionRepo.List(ctx, domain.RevisionFilter{
+		Pagination: domain.Pagination{Page: 1, PageSize: 1},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if total > 0 {
+		return nil, nil
+	}
+
+	return s.bootstrapActiveRevisionLocked(ctx)
+}
+
+func (s *Service) bootstrapActiveRevisionLocked(ctx context.Context) (*domain.ConfigurationRevision, error) {
+	var groups []domain.NodeGroup
+	edgeMap := make(map[string][]domain.GroupEdge)
+	if s.policyRepo != nil {
+		var err error
+		groups, err = s.policyRepo.ListGroups(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to query groups: %w", err)
+		}
+		for _, g := range groups {
+			edges, eErr := s.policyRepo.ListEdgesByGroup(ctx, g.ID)
+			if eErr != nil {
+				return nil, fmt.Errorf("failed to query edges: %w", eErr)
+			}
+			edgeMap[g.ID] = edges
+		}
+		if err := ValidatePolicyGraph(groups, edgeMap, nil, nil); err != nil {
+			return nil, err
+		}
+	}
+
+	digest, err := ComputeConfigurationDigest(groups, edgeMap)
+	if err != nil {
+		return nil, fmt.Errorf("failed to compute content digest: %w", err)
+	}
+
+	revID, err := domain.NewUUIDv7()
+	if err != nil {
+		return nil, err
+	}
+
+	rev := domain.ConfigurationRevision{
+		ID:            revID,
+		ContentDigest: digest,
+		State:         domain.RevisionStateDraft,
+		CreatedAt:     domain.NowUTC(),
+	}
+
+	if err := s.revisionRepo.CreateActive(ctx, &rev); err != nil {
+		return nil, fmt.Errorf("failed to create and activate initial revision: %w", err)
+	}
+	rev.State = domain.RevisionStateActive
+	s.recordAudit(ctx, domain.ActorKindSystem, "", "revision.create", domain.AuditResultSuccess, fmt.Sprintf("id=%s, digest=%s, bootstrap=true", rev.ID, rev.ContentDigest))
+	return &rev, nil
+}
+
 // CreateRevision computes a deterministic ContentDigest from the valid graph state and persists a new ConfigurationRevision.
 func (s *Service) CreateRevision(ctx context.Context, cmd CreateRevisionCommand) (*domain.ConfigurationRevision, error) {
 	s.mu.Lock()
@@ -814,14 +966,19 @@ func (s *Service) CreateRevision(ctx context.Context, cmd CreateRevisionCommand)
 		CreatedAt:     domain.NowUTC(),
 	}
 
-	if err := s.revisionRepo.Create(ctx, &rev); err != nil {
-		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "revision.create", domain.AuditResultFailure, fmt.Sprintf("failed to save revision: %v", err))
-		return nil, err
-	}
-
+	var saveErr error
 	if state == domain.RevisionStateActive {
-		_ = s.revisionRepo.SetActive(ctx, revID)
+		// Never persist state=active before activation; both writes must commit together.
+		rev.State = domain.RevisionStateDraft
+		saveErr = s.revisionRepo.CreateActive(ctx, &rev)
+	} else {
+		saveErr = s.revisionRepo.Create(ctx, &rev)
 	}
+	if saveErr != nil {
+		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "revision.create", domain.AuditResultFailure, fmt.Sprintf("failed to save and activate revision: %v", saveErr))
+		return nil, saveErr
+	}
+	rev.State = state
 
 	s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "revision.create", domain.AuditResultSuccess, fmt.Sprintf("id=%s, digest=%s", rev.ID, rev.ContentDigest))
 	return &rev, nil
@@ -935,6 +1092,11 @@ func (s *Service) SetGlobalNodeFilter(ctx context.Context, cmd SetGlobalNodeFilt
 type canonicalSnapshot struct {
 	Groups []domain.NodeGroup            `json:"groups"`
 	Edges  map[string][]domain.GroupEdge `json:"edges"`
+}
+
+// ComputeConfigurationDigest computes a canonical SHA-256 content digest for the given policy groups and edges.
+func ComputeConfigurationDigest(groups []domain.NodeGroup, edges map[string][]domain.GroupEdge) (string, error) {
+	return computeConfigurationDigest(groups, edges)
 }
 
 func computeConfigurationDigest(groups []domain.NodeGroup, edges map[string][]domain.GroupEdge) (string, error) {

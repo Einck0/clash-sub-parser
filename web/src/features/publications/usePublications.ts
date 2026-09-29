@@ -1,4 +1,4 @@
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { api, ApiError } from '../../api/client'
 import {
   DEFAULT_COMPILER_TARGET,
@@ -10,6 +10,15 @@ import {
 } from './publicationTypes'
 
 export const TARGET_STORAGE_KEY = 'csp_publication_target'
+export const PUBLICATION_STORAGE_PREFIX = 'csp_publication_active_'
+export const PUBLICATION_LATEST_KEY = 'csp_publication_latest'
+
+const publicationSession = ref(0)
+
+export function clearPublicationCapabilities(): void {
+  clearStoredPublication()
+  publicationSession.value++
+}
 
 export function getStoredTarget(
   storage: Storage | undefined = typeof window !== 'undefined' ? window.localStorage : undefined
@@ -38,6 +47,75 @@ export function setStoredTarget(
   }
 }
 
+export function getStoredPublication(
+  target?: CompilerTarget,
+  storage: Storage | undefined = typeof window !== 'undefined' ? window.sessionStorage : undefined
+): PublicationDetail | null {
+  if (!storage) return null
+  try {
+    const key = target ? `${PUBLICATION_STORAGE_PREFIX}${target}` : PUBLICATION_LATEST_KEY
+    let raw = storage.getItem(key)
+    if (!raw && target) {
+      const latestRaw = storage.getItem(PUBLICATION_LATEST_KEY)
+      if (latestRaw) {
+        const parsed = JSON.parse(latestRaw)
+        if (parsed?.target === target) {
+          raw = latestRaw
+        }
+      }
+    } else if (!raw && !target) {
+      raw = storage.getItem(PUBLICATION_LATEST_KEY)
+    }
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    if (parsed && typeof parsed === 'object' && parsed.id && parsed.export_url && (!target || parsed.target === target)) {
+      return parsed as PublicationDetail
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+export function setStoredPublication(
+  pub: PublicationDetail,
+  storage: Storage | undefined = typeof window !== 'undefined' ? window.sessionStorage : undefined
+): boolean {
+  if (!storage || !pub || !pub.id) return false
+  try {
+    const serialized = JSON.stringify(pub)
+    storage.setItem(PUBLICATION_LATEST_KEY, serialized)
+    if (pub.target) {
+      storage.setItem(`${PUBLICATION_STORAGE_PREFIX}${pub.target}`, serialized)
+    }
+    return true
+  } catch {
+    return false
+  }
+}
+
+export function clearStoredPublication(
+  target?: CompilerTarget,
+  storage: Storage | undefined = typeof window !== 'undefined' ? window.sessionStorage : undefined
+): void {
+  if (!storage) return
+  try {
+    if (target) {
+      storage.removeItem(`${PUBLICATION_STORAGE_PREFIX}${target}`)
+      const latest = storage.getItem(PUBLICATION_LATEST_KEY)
+      if (latest && JSON.parse(latest)?.target === target) {
+        storage.removeItem(PUBLICATION_LATEST_KEY)
+      }
+    } else {
+      storage.removeItem(PUBLICATION_LATEST_KEY)
+      for (let i = storage.length - 1; i >= 0; i--) {
+        const key = storage.key(i)
+        if (key?.startsWith(PUBLICATION_STORAGE_PREFIX)) storage.removeItem(key)
+      }
+    }
+  } catch {}
+}
+
 export function usePublications(initialTarget?: CompilerTarget) {
   const resolvedInitial: CompilerTarget =
     initialTarget && isValidCompilerTarget(initialTarget)
@@ -46,7 +124,10 @@ export function usePublications(initialTarget?: CompilerTarget) {
 
   const selectedTarget = ref<CompilerTarget>(resolvedInitial)
   const preview = ref<PreviewResult | null>(null)
-  const activePublication = ref<PublicationDetail | null>(null)
+  const activePublication = ref<PublicationDetail | null>(getStoredPublication(resolvedInitial))
+  watch(publicationSession, () => {
+    activePublication.value = null
+  }, { flush: 'sync' })
   const loadingPreview = ref(false)
   const publishing = ref(false)
   const revoking = ref(false)
@@ -54,6 +135,20 @@ export function usePublications(initialTarget?: CompilerTarget) {
   const errorDetail = ref<ApiError | Error | null>(null)
   const preflightDiagnostics = ref<Diagnostic[]>([])
   const copied = ref(false)
+  let previewRequest = 0
+  const publishRequests = new Map<CompilerTarget, number>()
+
+  // Selection belongs to the user, never to an asynchronous server response.
+  watch(selectedTarget, target => {
+    ++previewRequest
+    loadingPreview.value = false
+    setStoredTarget(target)
+    activePublication.value = getStoredPublication(target)
+    preview.value = null
+    error.value = ''
+    errorDetail.value = null
+    preflightDiagnostics.value = []
+  }, { flush: 'sync' })
 
   const isNoActiveRevision = computed(() => {
     const err = errorDetail.value
@@ -64,6 +159,8 @@ export function usePublications(initialTarget?: CompilerTarget) {
   })
 
   async function fetchPreview(target: CompilerTarget, revisionId?: string): Promise<PreviewResult | null> {
+    const request = ++previewRequest
+    const session = publicationSession.value
     loadingPreview.value = true
     error.value = ''
     errorDetail.value = null
@@ -72,26 +169,27 @@ export function usePublications(initialTarget?: CompilerTarget) {
       const payload: Record<string, string> = { target }
       if (revisionId) payload.revision_id = revisionId
       const res = await api.post<PreviewResult>('/api/v1/publications/preview', payload)
-      preview.value = res
-      if (isValidCompilerTarget(target)) {
-        selectedTarget.value = target
-        setStoredTarget(target)
-      }
+      if (request === previewRequest && selectedTarget.value === target && session === publicationSession.value) preview.value = res
       return res
     } catch (err) {
-      preview.value = null
-      errorDetail.value = err instanceof Error ? err : new Error(String(err))
-      error.value = err instanceof Error ? err.message : '获取配置预览失败'
-      if (err instanceof ApiError && (err.details as any)?.diagnostics) {
-        preflightDiagnostics.value = (err.details as any).diagnostics
+      if (request === previewRequest && selectedTarget.value === target && session === publicationSession.value) {
+        preview.value = null
+        errorDetail.value = err instanceof Error ? err : new Error(String(err))
+        error.value = err instanceof Error ? err.message : '获取配置预览失败'
+        if (err instanceof ApiError && (err.details as any)?.diagnostics) {
+          preflightDiagnostics.value = (err.details as any).diagnostics
+        }
       }
       return null
     } finally {
-      loadingPreview.value = false
+      if (request === previewRequest) loadingPreview.value = false
     }
   }
 
   async function publish(target: CompilerTarget, revisionId?: string): Promise<PublicationDetail> {
+    const session = publicationSession.value
+    const request = (publishRequests.get(target) ?? 0) + 1
+    publishRequests.set(target, request)
     publishing.value = true
     error.value = ''
     errorDetail.value = null
@@ -100,6 +198,7 @@ export function usePublications(initialTarget?: CompilerTarget) {
       const payload: Record<string, string> = { target }
       if (revisionId) payload.revision_id = revisionId
       const rawRes = await api.post<any>('/api/v1/publications', payload)
+      if (session !== publicationSession.value) throw new Error('publication session changed')
       const resolvedTarget: CompilerTarget = isValidCompilerTarget(rawRes?.publication?.target)
         ? rawRes.publication.target
         : isValidCompilerTarget(rawRes?.target)
@@ -117,18 +216,19 @@ export function usePublications(initialTarget?: CompilerTarget) {
         revoked_at: rawRes?.publication?.revoked_at || rawRes?.revoked_at,
         created_at: rawRes?.publication?.created_at || rawRes?.created_at || new Date().toISOString(),
       }
-      activePublication.value = res
-      if (isValidCompilerTarget(target)) {
-        selectedTarget.value = target
-        setStoredTarget(target)
+      if (request === publishRequests.get(target)) {
+        setStoredPublication(res)
+        if (selectedTarget.value === target) activePublication.value = res
       }
       return res
     } catch (err) {
-      errorDetail.value = err instanceof Error ? err : new Error(String(err))
-      const msg = err instanceof Error ? err.message : '创建订阅发布失败'
-      error.value = msg
-      if (err instanceof ApiError && (err.details as any)?.diagnostics) {
-        preflightDiagnostics.value = (err.details as any).diagnostics
+      if (session === publicationSession.value && request === publishRequests.get(target) && selectedTarget.value === target) {
+        errorDetail.value = err instanceof Error ? err : new Error(String(err))
+        const msg = err instanceof Error ? err.message : '创建订阅发布失败'
+        error.value = msg
+        if (err instanceof ApiError && (err.details as any)?.diagnostics) {
+          preflightDiagnostics.value = (err.details as any).diagnostics
+        }
       }
       throw err
     } finally {
@@ -137,8 +237,10 @@ export function usePublications(initialTarget?: CompilerTarget) {
   }
 
   async function fetchPublication(id: string): Promise<PublicationDetail | null> {
+    const session = publicationSession.value
     try {
       const rawRes = await api.get<any>(`/api/v1/publications/${id}`)
+      if (session !== publicationSession.value) return null
       const rawTarget = rawRes?.publication?.target || rawRes?.target
       const res: PublicationDetail = {
         id: rawRes?.publication?.id || rawRes?.id || id,
@@ -152,23 +254,28 @@ export function usePublications(initialTarget?: CompilerTarget) {
         revoked_at: rawRes?.publication?.revoked_at || rawRes?.revoked_at,
         created_at: rawRes?.publication?.created_at || rawRes?.created_at || new Date().toISOString(),
       }
-      activePublication.value = res
+      if (selectedTarget.value === res.target && activePublication.value?.id === id) activePublication.value = res
       return res
     } catch (err) {
-      errorDetail.value = err instanceof Error ? err : new Error(String(err))
-      error.value = err instanceof Error ? err.message : '获取发布详情失败'
+      if (session === publicationSession.value) {
+        errorDetail.value = err instanceof Error ? err : new Error(String(err))
+        error.value = err instanceof Error ? err.message : '获取发布详情失败'
+      }
       return null
     }
   }
 
   async function revoke(id: string) {
+    const session = publicationSession.value
     revoking.value = true
     error.value = ''
     try {
       await api.post(`/api/v1/publications/${id}/revoke`)
+      if (session !== publicationSession.value) return
       if (activePublication.value?.id === id) {
         activePublication.value.revoked_at = new Date().toISOString()
         activePublication.value.state = 'revoked'
+        clearStoredPublication(activePublication.value.target)
       }
     } catch (err) {
       error.value = err instanceof Error ? err.message : '撤销订阅发布失败'
@@ -218,6 +325,22 @@ export function usePublications(initialTarget?: CompilerTarget) {
     }
   }
 
+  function restoreActivePublication(target?: CompilerTarget): PublicationDetail | null {
+    const found = getStoredPublication(target ?? selectedTarget.value)
+    activePublication.value = found
+    return found
+  }
+
+  function getFullExportUrl(pub?: PublicationDetail | null): string {
+    const targetPub = pub ?? activePublication.value
+    if (!targetPub?.export_url || targetPub.target !== selectedTarget.value) return ''
+    if (targetPub.export_url.startsWith('http://') || targetPub.export_url.startsWith('https://')) {
+      return targetPub.export_url
+    }
+    const origin = typeof window !== 'undefined' && window.location?.origin ? window.location.origin : ''
+    return `${origin}${targetPub.export_url.startsWith('/') ? '' : '/'}${targetPub.export_url}`
+  }
+
   return {
     selectedTarget,
     preview,
@@ -236,5 +359,7 @@ export function usePublications(initialTarget?: CompilerTarget) {
     revoke,
     copyToClipboard,
     downloadFile,
+    restoreActivePublication,
+    getFullExportUrl,
   }
 }

@@ -150,4 +150,62 @@ describe('ApiClient', () => {
     expect(typeof setOnUnauthorized).toBe('function')
     expect(typeof setAuthToken).toBe('function')
   })
+
+  it('attaches X-CSRF-Token on unsafe HTTP methods (POST, PUT, PATCH, DELETE) but not GET', async () => {
+    let capturedHeaders: Headers | undefined
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      capturedHeaders = new Headers(init?.headers)
+      return new Response(JSON.stringify({ data: 'ok' }), { status: 200 })
+    })
+
+    const client = new ApiClient({
+      fetcher,
+      getAuthToken: () => 'auth-secret-123',
+    })
+    client.setCsrfToken('csrf-token-abc')
+
+    // GET request (safe method) - should NOT include X-CSRF-Token, only Authorization
+    await client.get('/test')
+    expect(capturedHeaders?.get('Authorization')).toBe('Bearer auth-secret-123')
+    expect(capturedHeaders?.has('X-CSRF-Token')).toBe(false)
+
+    // POST request (unsafe method) - MUST include X-CSRF-Token and Authorization without cross-leaking
+    await client.post('/test', { hello: 'world' })
+    expect(capturedHeaders?.get('Authorization')).toBe('Bearer auth-secret-123')
+    expect(capturedHeaders?.get('X-CSRF-Token')).toBe('csrf-token-abc')
+
+    // PUT request
+    await client.put('/test', { hello: 'world' })
+    expect(capturedHeaders?.get('X-CSRF-Token')).toBe('csrf-token-abc')
+
+    // PATCH request
+    await client.patch('/test', { hello: 'world' })
+    expect(capturedHeaders?.get('X-CSRF-Token')).toBe('csrf-token-abc')
+
+    // DELETE request
+    await client.delete('/test')
+    expect(capturedHeaders?.get('X-CSRF-Token')).toBe('csrf-token-abc')
+
+    // After clearing CSRF token
+    client.setCsrfToken(null)
+    await client.post('/test', { hello: 'world' })
+    expect(capturedHeaders?.has('X-CSRF-Token')).toBe(false)
+  })
+
+  it('preserves an explicit X-CSRF-Token in request options', async () => {
+    let capturedHeaders: Headers | undefined
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      capturedHeaders = new Headers(init?.headers)
+      return new Response(JSON.stringify({ data: 'ok' }), { status: 200 })
+    })
+
+    const client = new ApiClient({ fetcher })
+    client.setCsrfToken('default-csrf')
+
+    await client.post('/test', {}, {
+      headers: { 'X-CSRF-Token': 'custom-csrf-override' },
+    })
+
+    expect(capturedHeaders?.get('X-CSRF-Token')).toBe('custom-csrf-override')
+  })
 })

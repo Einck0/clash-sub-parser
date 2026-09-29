@@ -92,17 +92,10 @@ func (h subscriptionHandler) update(w http.ResponseWriter, r *http.Request) {
 	if err := decodeSubscriptionJSON(w, r, &body); err != nil {
 		return
 	}
-	var sourceURLRef *string
-	if body.SourceURLSecretRef != nil {
-		trimmed := strings.TrimSpace(*body.SourceURLSecretRef)
-		if trimmed != "" {
-			sourceURLRef = &trimmed
-		}
-	}
 
 	view, err := h.service.Update(r.Context(), subscription.UpdateSubscriptionCommand{
 		ID: chi.URLParam(r, "id"), Revision: strings.TrimSpace(r.Header.Get("If-Match")), Name: body.Name,
-		SourceURLSecretRef: sourceURLRef, Enabled: body.Enabled, RefreshPolicy: body.RefreshPolicy,
+		SourceURLSecretRef: body.SourceURLSecretRef, Enabled: body.Enabled, RefreshPolicy: body.RefreshPolicy,
 		Config:    body.Config,
 		RequestID: GetRequestID(r.Context()), ActorKind: requestActorKind(r),
 	})

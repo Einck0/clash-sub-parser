@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"clash-sub-parser/internal/application/policy"
 	"clash-sub-parser/internal/application/revision"
 	"clash-sub-parser/internal/domain"
 	"clash-sub-parser/internal/repository/sqlite"
@@ -430,4 +431,73 @@ func TestRevisionsConcurrentRequestsRaceSafety(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
+}
+
+func TestRevisionsCreateEndpointAndBootstrap(t *testing.T) {
+	db := newCleanSQLiteDB(t)
+	routerCfg := newTestRouterConfig(true)
+	revRepo := sqlite.NewRevisionRepository(db)
+	auditRepo := sqlite.NewAuditRepository(db)
+	policyRepo := sqlite.NewPolicyRepository(db)
+	nodeRepo := sqlite.NewNodeRepository(db)
+	filterRepo := sqlite.NewNodeFilterRepository(db)
+
+	policySvc := policy.NewService(policyRepo, revRepo, nodeRepo, auditRepo, filterRepo)
+	revSvc := revision.NewService(revRepo, auditRepo, revision.WithPolicyRepository(policyRepo))
+	routerCfg.PolicyService = policySvc
+	routerCfg.RevisionService = revSvc
+	routerCfg.AuditRepository = auditRepo
+	router := transporthttp.NewRouter(routerCfg)
+
+	// 1. Fresh DB: POST /api/v1/admission/rules without revision_id auto-bootstraps active revision and returns 201
+	admBody := `{"name": "InitialAdmission", "expression": "protocol != ''", "action": "allow", "position": 0}`
+	reqAdm := httptest.NewRequest(http.MethodPost, "/api/v1/admission/rules", strings.NewReader(admBody))
+	reqAdm.Header.Set("Authorization", "Bearer "+testAdminToken)
+	reqAdm.Header.Set("Content-Type", "application/json")
+	recAdm := httptest.NewRecorder()
+	router.ServeHTTP(recAdm, reqAdm)
+	if recAdm.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created on fresh DB rule creation without revision_id, got %d: %s", recAdm.Code, recAdm.Body.String())
+	}
+	var admResp testDataResponse[policy.AdmissionRuleView]
+	if err := json.Unmarshal(recAdm.Body.Bytes(), &admResp); err != nil {
+		t.Fatalf("failed to decode admission rule response: %v", err)
+	}
+	if admResp.Data.RevisionID == "" {
+		t.Fatalf("expected non-empty bootstrapped revision_id, got %+v", admResp.Data)
+	}
+
+	// 2. POST /api/v1/revisions creates a new draft revision (201 Created)
+	reqCreateDraft := httptest.NewRequest(http.MethodPost, "/api/v1/revisions", strings.NewReader(`{}`))
+	reqCreateDraft.Header.Set("Authorization", "Bearer "+testAdminToken)
+	reqCreateDraft.Header.Set("Content-Type", "application/json")
+	recCreateDraft := httptest.NewRecorder()
+	router.ServeHTTP(recCreateDraft, reqCreateDraft)
+	if recCreateDraft.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created on POST /api/v1/revisions, got %d: %s", recCreateDraft.Code, recCreateDraft.Body.String())
+	}
+	var createdDraft testDataResponse[domain.ConfigurationRevision]
+	if err := json.Unmarshal(recCreateDraft.Body.Bytes(), &createdDraft); err != nil {
+		t.Fatalf("failed to decode created draft revision: %v", err)
+	}
+	if createdDraft.Data.ID == "" || createdDraft.Data.State != domain.RevisionStateDraft {
+		t.Fatalf("expected draft revision, got %+v", createdDraft.Data)
+	}
+
+	// 3. POST /api/v1/revisions with state=active creates and activates a new revision
+	reqCreateActive := httptest.NewRequest(http.MethodPost, "/api/v1/revisions", strings.NewReader(fmt.Sprintf(`{"state":"active","parent_id":"%s"}`, admResp.Data.RevisionID)))
+	reqCreateActive.Header.Set("Authorization", "Bearer "+testAdminToken)
+	reqCreateActive.Header.Set("Content-Type", "application/json")
+	recCreateActive := httptest.NewRecorder()
+	router.ServeHTTP(recCreateActive, reqCreateActive)
+	if recCreateActive.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created on POST /api/v1/revisions with state=active, got %d: %s", recCreateActive.Code, recCreateActive.Body.String())
+	}
+	var createdActive testDataResponse[domain.ConfigurationRevision]
+	if err := json.Unmarshal(recCreateActive.Body.Bytes(), &createdActive); err != nil {
+		t.Fatalf("failed to decode created active revision: %v", err)
+	}
+	if createdActive.Data.State != domain.RevisionStateActive {
+		t.Fatalf("expected active state, got %s", createdActive.Data.State)
+	}
 }

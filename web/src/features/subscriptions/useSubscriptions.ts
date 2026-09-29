@@ -1,6 +1,9 @@
 import { computed, ref } from 'vue'
 import { api } from '../../api/client'
 import { toastStore } from '../../ui/toast'
+import { generateUUID } from '../../utils/uuid'
+
+export { generateUUID }
 
 export interface RenameRule {
   pattern: string
@@ -185,7 +188,7 @@ export function useSubscriptions() {
     refreshingIDs.value = new Set(refreshingIDs.value).add(subscription.id)
     try {
       await api.post(`/api/v1/subscriptions/${encodeURIComponent(subscription.id)}/refresh`, undefined, {
-        headers: { 'Idempotency-Key': crypto.randomUUID() },
+        headers: { 'Idempotency-Key': generateUUID() },
       })
       toastStore.push({ message: '订阅刷新任务已加入队列', tone: 'success' })
       await load()

@@ -355,20 +355,39 @@ func (r *subscriptionRepository) Update(ctx context.Context, sub *domain.Subscri
 }
 
 func (r *subscriptionRepository) Delete(ctx context.Context, id string) error {
-	res, err := r.db.ExecContext(ctx, "DELETE FROM subscriptions WHERE id = ?;", id)
-	if err != nil {
-		return fmt.Errorf("failed to delete subscription: %w", err)
-	}
+	return WithTx(ctx, r.db, func(ctx context.Context, tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, "DELETE FROM subscriptions WHERE id = ?;", id)
+		if err != nil {
+			return fmt.Errorf("failed to delete subscription: %w", err)
+		}
 
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if affected == 0 {
-		return domain.NewNotFoundError("subscription_not_found", fmt.Sprintf("subscription %s not found", id))
-	}
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if affected == 0 {
+			return domain.NewNotFoundError("subscription_not_found", fmt.Sprintf("subscription %s not found", id))
+		}
 
-	return nil
+		if _, err := tx.ExecContext(ctx, "DELETE FROM node_sources WHERE subscription_id = ?;", id); err != nil {
+			return fmt.Errorf("failed to delete subscription node sources: %w", err)
+		}
+
+		const deactivateOrphansSQL = `
+		UPDATE nodes
+		SET active = 0, updated_at = ?
+		WHERE active = 1
+		  AND NOT EXISTS (
+			  SELECT 1 FROM node_sources WHERE node_sources.node_logical_id = nodes.logical_id
+		  );`
+
+		nowStr := domain.NowUTC().Format(time.RFC3339)
+		if _, err := tx.ExecContext(ctx, deactivateOrphansSQL, nowStr); err != nil {
+			return fmt.Errorf("failed to deactivate orphan nodes after subscription delete: %w", err)
+		}
+
+		return nil
+	})
 }
 
 // SubscriptionFetchRepository implementation

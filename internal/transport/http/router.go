@@ -70,6 +70,12 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	r.Get("/healthz", HealthzHandler())
 	r.Get("/readyz", ReadyzHandler(cfg.ReadinessChecker))
 
+	// Hard 410 Gone legacy interceptors
+	r.HandleFunc("/yaml", Legacy410Handler)
+	r.HandleFunc("/yaml/*", Legacy410Handler)
+	r.HandleFunc("/script", Legacy410Handler)
+	r.HandleFunc("/script/*", Legacy410Handler)
+
 	webHandler := cfg.WebHandler
 	if webHandler == nil {
 		webHandler, _ = webassets.Handler()
@@ -126,6 +132,19 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	})
 
 	return r
+}
+
+const (
+	// LegacyEndpointRemovedCode is the error code returned for deprecated Python-era routes.
+	LegacyEndpointRemovedCode = "legacy_endpoint_removed"
+	// LegacyEndpointRemovedMessage provides migration guidance for removed legacy routes.
+	LegacyEndpointRemovedMessage = "This endpoint has been permanently removed in CSP 1.0. Please use the versioned API at /api/v1/."
+)
+
+// Legacy410Handler returns a hard HTTP 410 Gone for legacy endpoints with unified error payload.
+func Legacy410Handler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Del("Location")
+	WriteError(w, r, http.StatusGone, LegacyEndpointRemovedCode, LegacyEndpointRemovedMessage)
 }
 
 // authStatusHandler serves GET /api/v1/auth/status

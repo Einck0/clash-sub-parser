@@ -14,6 +14,7 @@ import (
 	"clash-sub-parser/internal/application/probe"
 	"clash-sub-parser/internal/domain"
 	"clash-sub-parser/internal/probe/queue"
+	"clash-sub-parser/internal/repository/sqlite"
 	transporthttp "clash-sub-parser/internal/transport/http"
 )
 
@@ -142,6 +143,33 @@ func (m *observationMemory) ListByNode(_ context.Context, nodeID string, limit i
 		}
 	}
 	return items, nil
+}
+
+func (m *observationMemory) ListByNodePaginated(_ context.Context, nodeID string, page, pageSize int) ([]domain.ProbeObservation, int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	items := make([]domain.ProbeObservation, 0)
+	for _, item := range m.items {
+		if item.NodeLogicalID == nodeID {
+			items = append(items, item)
+		}
+	}
+	total := len(items)
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 20
+	}
+	start := (page - 1) * pageSize
+	if start >= total {
+		return []domain.ProbeObservation{}, total, nil
+	}
+	end := start + pageSize
+	if end > total {
+		end = total
+	}
+	return items[start:end], total, nil
 }
 
 func (m *observationMemory) ListLatestByNodes(_ context.Context, nodeIDs []string, kinds []domain.ProbeKind) (map[string]map[domain.ProbeKind]domain.ProbeObservation, error) {
@@ -1176,4 +1204,117 @@ func TestProbePoolAndScheduleTriggerEndpoints(t *testing.T) {
 
 	close(holdProbe)
 	sched.Wait()
+}
+
+func TestNodeObservationsPagination(t *testing.T) {
+	db := newCleanSQLiteDB(t)
+
+	// Seed parent probe run & node for foreign keys
+	runID := domain.MustNewUUIDv7()
+	nodeID := "node-pagination-45"
+	now := time.Now().UTC()
+
+	_, err := db.Exec(`
+		INSERT INTO probe_runs (id, idempotency_key, actor_scope, config_revision, state, deadline_at, created_at, updated_at)
+		VALUES (?, 'idemp-pg-test', 'default', 'rev-pg', 'succeeded', ?, ?, ?);
+	`, runID, now.Format(time.RFC3339), now.Format(time.RFC3339), now.Format(time.RFC3339))
+	if err != nil {
+		t.Fatalf("failed to insert test probe run: %v", err)
+	}
+
+	_, err = db.Exec(`
+		INSERT INTO nodes (logical_id, protocol, display_name, server, port, config_json, active, created_at, updated_at)
+		VALUES (?, 'ss', 'Pagination Node', '1.1.1.1', 8388, '{}', 1, ?, ?);
+	`, nodeID, now.Format(time.RFC3339), now.Format(time.RFC3339))
+	if err != nil {
+		t.Fatalf("failed to insert test node: %v", err)
+	}
+
+	// Insert exactly 45 observations for nodeID
+	obsRepo := sqlite.NewProbeObservationRepository(db)
+	for i := 1; i <= 45; i++ {
+		obs := &domain.ProbeObservation{
+			ID:              domain.MustNewUUIDv7(),
+			ProbeRunID:      runID,
+			NodeLogicalID:   nodeID,
+			Kind:            domain.ProbeKindBaseline,
+			Verdict:         domain.VerdictAvailable,
+			EvidenceDigest:  fmt.Sprintf("sha256:obs-%03d", i),
+			ObservedAt:      now.Add(time.Duration(i) * time.Second),
+			LatencyMS:       int64(i * 10),
+			RedactedSummary: fmt.Sprintf("observation %d summary", i),
+		}
+		if err := obsRepo.Create(context.Background(), obs); err != nil {
+			t.Fatalf("failed to create observation %d: %v", i, err)
+		}
+	}
+
+	runsRepo := sqlite.NewProbeRunRepository(db)
+	auditRepo := sqlite.NewAuditRepository(db)
+	schedRepo := sqlite.NewProbeScheduleRepository(db)
+	service := probe.NewService(
+		runsRepo,
+		probe.WithObservationRepository(obsRepo),
+		probe.WithScheduleRepository(schedRepo),
+		probe.WithAudit(auditRepo),
+	)
+
+	router := transporthttp.NewRouter(transporthttp.RouterConfig{
+		AdminToken:                 probeTestAdminToken,
+		ProbeService:               service,
+		ProbeRunRepository:         runsRepo,
+		ProbeObservationRepository: obsRepo,
+		AuditRepository:            auditRepo,
+	})
+
+	testCases := []struct {
+		page         int
+		pageSize     int
+		expectedLen  int
+		expectedTot  int
+		expectedPage int
+		expectedSize int
+	}{
+		{page: 1, pageSize: 20, expectedLen: 20, expectedTot: 45, expectedPage: 1, expectedSize: 20},
+		{page: 2, pageSize: 20, expectedLen: 20, expectedTot: 45, expectedPage: 2, expectedSize: 20},
+		{page: 3, pageSize: 20, expectedLen: 5, expectedTot: 45, expectedPage: 3, expectedSize: 20},
+		{page: 4, pageSize: 20, expectedLen: 0, expectedTot: 45, expectedPage: 4, expectedSize: 20},
+	}
+
+	for _, tc := range testCases {
+		url := fmt.Sprintf("/api/v1/nodes/%s/observations?page=%d&page_size=%d", nodeID, tc.page, tc.pageSize)
+		req := httptest.NewRequest(http.MethodGet, url, nil)
+		req.Header.Set("Authorization", "Bearer "+probeTestAdminToken)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("page %d: expected 200 OK, got %d: %s", tc.page, rec.Code, rec.Body.String())
+		}
+
+		var resp struct {
+			Data struct {
+				Items    []domain.ProbeObservation `json:"items"`
+				Page     int                       `json:"page"`
+				PageSize int                       `json:"page_size"`
+				Total    int                       `json:"total"`
+			} `json:"data"`
+		}
+		if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+			t.Fatalf("page %d: failed to decode response: %v", tc.page, err)
+		}
+
+		if resp.Data.Total != tc.expectedTot {
+			t.Fatalf("page %d: expected total %d, got %d", tc.page, tc.expectedTot, resp.Data.Total)
+		}
+		if len(resp.Data.Items) != tc.expectedLen {
+			t.Fatalf("page %d: expected %d items, got %d", tc.page, tc.expectedLen, len(resp.Data.Items))
+		}
+		if resp.Data.Page != tc.expectedPage {
+			t.Fatalf("page %d: expected page %d, got %d", tc.page, tc.expectedPage, resp.Data.Page)
+		}
+		if resp.Data.PageSize != tc.expectedSize {
+			t.Fatalf("page %d: expected page_size %d, got %d", tc.page, tc.expectedSize, resp.Data.PageSize)
+		}
+	}
 }

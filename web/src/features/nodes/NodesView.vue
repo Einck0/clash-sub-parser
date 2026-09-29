@@ -303,6 +303,35 @@ const measureRow: VNodeRef = (element) => {
   }
 }
 
+const MAX_AUTO_PAGE_STEPS = 3
+const consecutiveAutoPages = ref(0)
+const isAutoPaginating = ref(false)
+
+async function checkViewportStarvation() {
+  if (typeof window === 'undefined') return
+  if (healthFilter.value === 'all') return
+  if (loading.value || loadingMore.value || isAutoPaginating.value) return
+  if (!hasMore.value) return
+
+  if (filteredItems.value.length < 10 && consecutiveAutoPages.value < MAX_AUTO_PAGE_STEPS) {
+    consecutiveAutoPages.value++
+    isAutoPaginating.value = true
+    try {
+      await loadMore()
+    } finally {
+      isAutoPaginating.value = false
+      nextTick(() => {
+        checkViewportStarvation()
+      })
+    }
+  }
+}
+
+function manualLoadMore() {
+  consecutiveAutoPages.value = 0
+  loadMore()
+}
+
 watch(columns, () => {
   nextTick(() => {
     rowVirtualizer.value.measure()
@@ -316,9 +345,19 @@ watch(width, () => {
 })
 
 watch(healthFilter, () => {
+  consecutiveAutoPages.value = 0
   nextTick(() => {
     rowVirtualizer.value.measure()
+    checkViewportStarvation()
   })
+})
+
+watch(filteredItems, (newItems) => {
+  if (newItems.length >= 10) {
+    consecutiveAutoPages.value = 0
+  } else {
+    checkViewportStarvation()
+  }
 })
 
 function onScroll() {
@@ -326,14 +365,16 @@ function onScroll() {
   const scrollPosition = window.innerHeight + window.scrollY
   const threshold = document.documentElement.scrollHeight - 420
   if (scrollPosition >= threshold) {
+    consecutiveAutoPages.value = 0
     loadMore()
   }
 }
 
 let poolPollTimer: ReturnType<typeof setInterval> | null = null
 
-onMounted(() => {
-  load()
+onMounted(async () => {
+  await load()
+  checkViewportStarvation()
   if (typeof window !== 'undefined') {
     window.addEventListener('scroll', onScroll, { passive: true })
     nextTick(updateScrollMargin)
@@ -678,19 +719,43 @@ onUnmounted(() => {
         class="py-4 text-center"
         :style="{ paddingBottom: 'var(--content-dock-inset, 32px)' }"
       >
-        <div v-if="loadingMore" class="flex justify-center py-2">
+        <div v-if="loadingMore || isAutoPaginating" class="flex justify-center py-2">
           <span class="loading loading-spinner loading-sm text-primary" />
+        </div>
+        <div v-else-if="hasMore && consecutiveAutoPages >= MAX_AUTO_PAGE_STEPS" class="py-2">
+          <button
+            type="button"
+            class="btn btn-xs btn-outline btn-primary"
+            data-testid="manual-load-more-btn"
+            @click="manualLoadMore"
+          >
+            继续加载更多节点
+          </button>
         </div>
         <p v-if="!hasMore" class="text-xs opacity-60">{{ t('nodes.allLoaded') }}</p>
       </div>
 
-      <!-- Empty State -->
-      <EmptyState
-        v-if="!filteredItems.length && !loading"
-        :icon="EyeIcon"
-        :title="items.length === 0 ? t('nodes.emptyTitle') : '没有匹配筛选状态的节点'"
-        :description="items.length === 0 ? t('nodes.emptyDesc') : '请尝试切换节点状态筛选或协议筛选条件。'"
-      />
+      <!-- Empty State & Starvation Guard if filtered count is 0 -->
+      <div v-if="!filteredItems.length && !loading">
+        <EmptyState
+          :icon="EyeIcon"
+          :title="items.length === 0 ? t('nodes.emptyTitle') : '没有匹配筛选状态的节点'"
+          :description="items.length === 0 ? t('nodes.emptyDesc') : '请尝试切换节点状态筛选或协议筛选条件。'"
+        />
+        <div
+          v-if="hasMore && !loadingMore && !isAutoPaginating && consecutiveAutoPages >= MAX_AUTO_PAGE_STEPS"
+          class="text-center py-3"
+          data-testid="starvation-auto-page-guard"
+        >
+          <button
+            type="button"
+            class="btn btn-sm btn-outline btn-primary"
+            @click="manualLoadMore"
+          >
+            已自动检索 3 页无匹配 · 继续加载更多节点
+          </button>
+        </div>
+      </div>
     </div>
 
     <!-- Node Detail, Edit & Preview Drawer -->

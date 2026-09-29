@@ -386,3 +386,74 @@ describe('formatRefreshTime and formatFullDateTime helpers', () => {
     expect(fullEn.length).toBeGreaterThan(5)
   })
 })
+
+describe('SubscriptionConfigDrawer validation guards', () => {
+  it('blocks save and forces basic tab when saving with blank name or source URL', async () => {
+    const { default: SubscriptionConfigDrawer } = await import('./SubscriptionConfigDrawer.vue')
+    const { createApp, h, nextTick } = await import('vue')
+
+    const saveSpy = vi.fn()
+    const mountEl = document.createElement('div')
+    document.body.appendChild(mountEl)
+
+    const app = createApp({
+      render() {
+        return h(SubscriptionConfigDrawer, {
+          modelValue: true,
+          onSave: saveSpy,
+        })
+      },
+    })
+    app.mount(mountEl)
+    await nextTick()
+
+    // Switch to advanced tab (Drawer teleports to document.body)
+    const tabs = document.body.querySelectorAll('.tab')
+    expect(tabs.length).toBe(2)
+    ;(tabs[1] as HTMLElement).click()
+    await nextTick()
+
+    // Click footer save button
+    const saveBtn = document.body.querySelector('[data-testid="subscription-drawer-save-btn"]') as HTMLButtonElement | null
+    expect(saveBtn).not.toBeNull()
+    saveBtn?.click()
+    await nextTick()
+
+    // Verification 1: save must NOT be emitted
+    expect(saveSpy).not.toHaveBeenCalled()
+
+    // Verification 2: active tab must be switched back to basic
+    expect(tabs[0].className).toContain('tab-active')
+
+    // Verification 3: validation error messages must be shown
+    const nameError = document.body.querySelector('[data-testid="subscription-name-error"]')
+    const urlError = document.body.querySelector('[data-testid="subscription-url-error"]')
+    expect(nameError?.textContent).toContain('订阅源名称不能为空')
+    expect(urlError?.textContent).toContain('订阅地址不能为空')
+
+    // Now fill the required fields and verify save succeeds
+    const nameInput = document.body.querySelector('[data-testid="subscription-name-input"]') as HTMLInputElement | null
+    const urlInput = document.body.querySelector('[data-testid="subscription-url-input"]') as HTMLInputElement | null
+    if (nameInput && urlInput) {
+      nameInput.value = 'Valid HK Sub'
+      nameInput.dispatchEvent(new Event('input'))
+      urlInput.value = 'https://example.com/sub.yaml'
+      urlInput.dispatchEvent(new Event('input'))
+    }
+    await nextTick()
+
+    saveBtn?.click()
+    await nextTick()
+
+    expect(saveSpy).toHaveBeenCalledTimes(1)
+    expect(saveSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'Valid HK Sub',
+        source_url_secret_ref: 'https://example.com/sub.yaml',
+      })
+    )
+
+    app.unmount()
+    mountEl.remove()
+  })
+})

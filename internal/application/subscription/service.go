@@ -186,20 +186,20 @@ func (s *Service) Update(ctx context.Context, command UpdateSubscriptionCommand)
 		s.recordFailure(ctx, command.ActorKind, command.RequestID, "subscription.update")
 		return SubscriptionView{}, err
 	}
+	if command.Name != nil && strings.TrimSpace(*command.Name) == "" {
+		err = domain.NewValidationError("invalid_subscription_name", "subscription name is required")
+		s.recordFailure(ctx, command.ActorKind, command.RequestID, "subscription.update")
+		return SubscriptionView{}, err
+	}
+	if command.SourceURLSecretRef != nil && strings.TrimSpace(*command.SourceURLSecretRef) == "" {
+		err = domain.NewValidationError("invalid_source_url_secret_ref", "source URL secret reference is required")
+		s.recordFailure(ctx, command.ActorKind, command.RequestID, "subscription.update")
+		return SubscriptionView{}, err
+	}
 	if command.Name != nil {
-		if strings.TrimSpace(*command.Name) == "" {
-			err = domain.NewValidationError("invalid_subscription_name", "subscription name is required")
-			s.recordFailure(ctx, command.ActorKind, command.RequestID, "subscription.update")
-			return SubscriptionView{}, err
-		}
 		sub.Name = strings.TrimSpace(*command.Name)
 	}
 	if command.SourceURLSecretRef != nil {
-		if strings.TrimSpace(*command.SourceURLSecretRef) == "" {
-			err = domain.NewValidationError("invalid_source_url_secret_ref", "source URL secret reference is required")
-			s.recordFailure(ctx, command.ActorKind, command.RequestID, "subscription.update")
-			return SubscriptionView{}, err
-		}
 		sub.SourceURLSecretRef = strings.TrimSpace(*command.SourceURLSecretRef)
 	}
 	if command.Enabled != nil {
@@ -223,7 +223,7 @@ func (s *Service) Update(ctx context.Context, command UpdateSubscriptionCommand)
 	return redact(*sub), nil
 }
 
-// Delete removes a subscription and relies on repository foreign-key cascades for its associations.
+// Delete removes a subscription, cascades its node source associations, and deactivates orphan nodes.
 func (s *Service) Delete(ctx context.Context, command DeleteSubscriptionCommand) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

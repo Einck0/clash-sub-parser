@@ -1,6 +1,8 @@
 // @ts-nocheck
+// Real Go server E2E: isolated temporary DBs + OS-assigned loopback ports only.
+// This suite intentionally rejects external server URLs and never contacts 17000/18080.
 import { test, expect } from '@playwright/test'
-import { spawn, execSync } from 'node:child_process'
+import { spawn, execFileSync } from 'node:child_process'
 import http from 'node:http'
 import net from 'node:net'
 import fs from 'node:fs'
@@ -34,9 +36,9 @@ function getFreePort(): Promise<number> {
 /**
  * Ensure the single-binary Go executable 'csp' is compiled and ready.
  */
-function ensureCspBinary(): string {
-  const binaryPath = path.join(os.tmpdir(), 'csp-e2e-test-bin')
-  execSync(`go build -o "${binaryPath}" ./cmd/csp`, { cwd: repoRoot, stdio: 'pipe' })
+function ensureCspBinary(tmpDir: string): string {
+  const binaryPath = path.join(tmpDir, 'csp')
+  execFileSync('go', ['build', '-o', binaryPath, './cmd/csp'], { cwd: repoRoot, stdio: 'pipe' })
   return binaryPath
 }
 
@@ -78,9 +80,19 @@ interface RunningServer {
  * No mocks: all HTTP requests (static assets & /api/v1/*) are served directly by Go.
  */
 async function startServer(options: { adminToken?: string } = {}): Promise<RunningServer> {
-  const binaryPath = ensureCspBinary()
-  const port = await getFreePort()
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'csp-e2e-'))
+  let binaryPath: string
+  let port: number
+  try {
+    binaryPath = ensureCspBinary(tmpDir)
+    port = await getFreePort()
+    if (port === 17000 || port === 18080) {
+      throw new Error(`Safety violation: dynamic port resolved to production port ${port}`)
+    }
+  } catch (err) {
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+    throw err
+  }
   const dbPath = path.join(tmpDir, 'test.db')
   const args = ['serve', '-addr', `127.0.0.1:${port}`, '-db', dbPath]
   if (options.adminToken) {
@@ -139,19 +151,12 @@ let tokenServer: RunningServer | null = null
 let tokenServerUrl = ''
 
 test.beforeAll(async () => {
-  if (process.env.CSP_OPEN_SERVER_URL) {
-    openServerUrl = process.env.CSP_OPEN_SERVER_URL
-  } else {
-    openServer = await startServer({})
-    openServerUrl = openServer.url
-  }
-
-  if (process.env.CSP_TOKEN_SERVER_URL) {
-    tokenServerUrl = process.env.CSP_TOKEN_SERVER_URL
-  } else {
-    tokenServer = await startServer({ adminToken: TEST_ADMIN_TOKEN })
-    tokenServerUrl = tokenServer.url
-  }
+  // Never accept external URLs: all tests must use locally spawned ephemeral servers
+  // and temporary SQLite DBs; 17000/18080 are production aliases on this host.
+  openServer = await startServer({})
+  openServerUrl = openServer.url
+  tokenServer = await startServer({ adminToken: TEST_ADMIN_TOKEN })
+  tokenServerUrl = tokenServer.url
 })
 
 test.afterAll(async () => {
@@ -199,7 +204,7 @@ test.describe('Real Go Server E2E: Adversarial Case 1 - Dirty Cache Self-Healing
     // 1. Wait for SPA to finish probing and transition to Open Mode
     const authBadge = page.locator('[data-testid="header-auth-badge"]')
     await expect(authBadge).toBeVisible()
-    await expect(authBadge).toContainText('Open Mode')
+    await expect(authBadge).toContainText(/(Open Mode|开放模式)/)
 
     // 2. Assert zero 401 HTTP responses occurred during initialization
     expect(http401Urls).toHaveLength(0)
@@ -214,15 +219,15 @@ test.describe('Real Go Server E2E: Adversarial Case 1 - Dirty Cache Self-Healing
     // 5. Navigate to business tabs (Subscriptions, Nodes, Settings) with zero 401s
     await page.goto(`${openServerUrl}/#subscriptions`)
     await expect(page.locator('#subscriptions-title')).toBeVisible()
-    await expect(page.getByRole('heading', { name: 'Subscriptions', exact: true })).toBeVisible()
+    await expect(page.getByRole('heading', { name: /(Subscriptions|订阅源编排)/i })).toBeVisible()
 
     await page.goto(`${openServerUrl}/#nodes`)
     await expect(page.locator('#nodes-title')).toBeVisible()
-    await expect(page.getByRole('heading', { name: 'Node ledger' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: /(Node ledger|节点账本)/i })).toBeVisible()
 
     await page.goto(`${openServerUrl}/#settings`)
     await expect(page.locator('[data-testid="settings-view"]')).toBeVisible()
-    await expect(page.locator('[data-testid="auth-mode-badge"]')).toContainText('Open Mode')
+    await expect(page.locator('[data-testid="auth-mode-badge"]')).toContainText(/(Open Mode|开放模式)/)
 
     // 6. Assert DOM has no auth errors and console is clean
     const pageText = await page.textContent('body')
@@ -265,24 +270,24 @@ test.describe('Real Go Server E2E: Adversarial Case 2 - Open Mode Clean Baseline
     await expect(page.locator('header')).toBeVisible()
     const authBadge = page.locator('[data-testid="header-auth-badge"]')
     await expect(authBadge).toBeVisible()
-    await expect(authBadge).toContainText('Open Mode')
+    await expect(authBadge).toContainText(/(Open Mode|开放模式)/)
 
     // 2. Navigate to Subscriptions view
     await page.goto(`${openServerUrl}/#subscriptions`)
     await expect(page.locator('#subscriptions-title')).toBeVisible()
-    await expect(page.getByRole('heading', { name: 'Subscriptions', exact: true })).toBeVisible()
-    await expect(page.locator('text=No subscriptions yet')).toBeVisible()
+    await expect(page.getByRole('heading', { name: /(Subscriptions|订阅源编排)/i })).toBeVisible()
+    await expect(page.getByText(/(No subscriptions yet|暂无订阅源)/)).toBeVisible()
 
     // 3. Navigate to Node Ledger view
     await page.goto(`${openServerUrl}/#nodes`)
     await expect(page.locator('#nodes-title')).toBeVisible()
-    await expect(page.getByRole('heading', { name: 'Node ledger' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: /(Node ledger|节点账本)/i })).toBeVisible()
 
     // 4. Navigate to Settings view
     await page.goto(`${openServerUrl}/#settings`)
     await expect(page.locator('[data-testid="settings-view"]')).toBeVisible()
-    await expect(page.getByRole('heading', { name: 'Security & Credentials' })).toBeVisible()
-    await expect(page.locator('[data-testid="auth-mode-badge"]')).toContainText('Open Mode')
+    await expect(page.getByRole('heading', { name: /(Security & Credentials|安全与全局设置)/i })).toBeVisible()
+    await expect(page.locator('[data-testid="auth-mode-badge"]')).toContainText(/(Open Mode|开放模式)/)
 
     // 5. Assert ZERO 401 responses occurred across all /api/v1/ endpoints
     expect(http401Urls).toHaveLength(0)
@@ -320,7 +325,7 @@ test.describe('Real Go Server E2E: Adversarial Case 2 - Open Mode Clean Baseline
     const authBadge = page.locator('[data-testid="header-auth-badge"]')
     await expect(authBadge).toBeVisible()
 
-    const healthRefreshBtn = page.locator('header button[aria-label="Refresh health"]')
+    const healthRefreshBtn = page.locator('header .header-health-indicator button, header button[aria-label="Refresh health"], header button[aria-label="刷新健康检测"]')
     await expect(healthRefreshBtn).toBeVisible()
 
     const themeBtn = page.locator('header [aria-label="Toggle Theme"]')
@@ -389,7 +394,7 @@ test.describe('Real Go Server E2E: Adversarial Case 3 - Protected Mode (Controll
     // 1. Assert header displays Protected badge
     const authBadge = page.locator('[data-testid="header-auth-badge"]')
     await expect(authBadge).toBeVisible()
-    await expect(authBadge).toContainText('Protected')
+    await expect(authBadge).toContainText(/(Protected|受保护)/)
 
     // 2. AuthGate must be visible and blocking business views
     const gate = page.locator('[data-testid="auth-gate"]')
@@ -438,12 +443,12 @@ test.describe('Real Go Server E2E: Adversarial Case 3 - Protected Mode (Controll
     // 9. Navigate to Subscriptions view: loads with 200 OK
     await page.goto(`${tokenServerUrl}/#subscriptions`)
     await expect(page.locator('#subscriptions-title')).toBeVisible()
-    await expect(page.locator('text=No subscriptions yet')).toBeVisible()
+    await expect(page.getByText(/(No subscriptions yet|暂无订阅源)/)).toBeVisible()
 
     // 10. Subsequent navigation to Node Ledger succeeds without re-prompting
     await page.goto(`${tokenServerUrl}/#nodes`)
     await expect(page.locator('#nodes-title')).toBeVisible()
-    await expect(page.getByRole('heading', { name: /node ledger/i })).toBeVisible()
+    await expect(page.getByRole('heading', { name: /(Node ledger|节点账本)/i })).toBeVisible()
     await expect(gate).not.toBeVisible()
   })
 })
@@ -484,5 +489,108 @@ test.describe('Real Go Server E2E: Adversarial Case 4 - Escape Hatch (Emergency 
     await tokenInput.fill(TEST_ADMIN_TOKEN)
     await page.locator('[data-testid="auth-gate-submit"]').click()
     await expect(gate).not.toBeVisible()
+  })
+})
+
+// ============================================================================
+// 对抗用例 5（集成回归闭环）：410 遗留路由拦截、无修订冷启动自愈引导与规则生命周期闭环
+// ============================================================================
+test.describe('Real Go Server E2E: Adversarial Case 5 - Remediated User Flows Integration Regression', () => {
+  test('legacy endpoints /yaml and /script return explicit 410 Gone and never downgrade to SPA 200', async () => {
+    // Probe legacy endpoints directly on the isolated real Go server instance
+    const yamlRes = await fetch(`${openServerUrl}/yaml`)
+    expect(yamlRes.status).toBe(410)
+    const yamlBody = await yamlRes.text()
+    expect(yamlBody).toContain('legacy_endpoint_removed')
+    expect(yamlBody).not.toContain('<!DOCTYPE html>')
+
+    const scriptRes = await fetch(`${openServerUrl}/script`)
+    expect(scriptRes.status).toBe(410)
+    const scriptBody = await scriptRes.text()
+    expect(scriptBody).toContain('legacy_endpoint_removed')
+    expect(scriptBody).not.toContain('<!DOCTYPE html>')
+  })
+
+  test('fresh database auto-bootstraps active revision on policy rule creation (no 422) and supports rule deletion (204/404)', async () => {
+    // 1. Create a policy group on the real open-mode server (cold database)
+    const grpRes = await fetch(`${openServerUrl}/api/v1/policies/groups`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'IntegrationProxyGroup', group_type: 'select' }),
+    })
+    expect(grpRes.status).toBe(201)
+    const grpJson = await grpRes.json()
+    const groupId = grpJson.data?.id
+    expect(groupId).toBeTruthy()
+
+    // 2. Create a policy rule WITHOUT revision_id - must auto-bootstrap active revision and return 201 (not 422)
+    const ruleRes = await fetch(`${openServerUrl}/api/v1/policies/rules`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        kind: 'policy',
+        target_group_id: groupId,
+        expression: 'DOMAIN-SUFFIX,regression-test.org',
+        position: 0,
+      }),
+    })
+    expect(ruleRes.status).toBe(201)
+    const ruleJson = await ruleRes.json()
+    const ruleId = ruleJson.data?.id
+    expect(ruleId).toBeTruthy()
+    expect(ruleJson.data?.revision_id).toBeTruthy()
+
+    // 3. Delete the rule via DELETE /api/v1/policies/rules/{id} -> must return 204 No Content
+    const delRes = await fetch(`${openServerUrl}/api/v1/policies/rules/${ruleId}`, {
+      method: 'DELETE',
+    })
+    expect(delRes.status).toBe(204)
+
+    // 4. Repeated deletion or access must return 404
+    const delRes2 = await fetch(`${openServerUrl}/api/v1/policies/rules/${ruleId}`, {
+      method: 'DELETE',
+    })
+    expect(delRes2.status).toBe(404)
+  })
+
+  test('blank subscription secret reference PATCH returns 422 without mutating the subscription', async () => {
+    const createRes = await fetch(`${openServerUrl}/api/v1/subscriptions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Isolated subscription',
+        source_url_secret_ref: 'https://example.com/subscription',
+        enabled: true,
+        refresh_policy: { interval_seconds: 3600 },
+      }),
+    })
+    expect(createRes.status).toBe(201)
+    const created = (await createRes.json()).data
+    expect(created.id).toBeTruthy()
+    expect(created.revision).toBeTruthy()
+
+    const patchRes = await fetch(`${openServerUrl}/api/v1/subscriptions/${created.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', 'If-Match': created.revision },
+      body: JSON.stringify({ source_url_secret_ref: '   ' }),
+    })
+    expect(patchRes.status).toBe(422)
+    expect((await patchRes.json()).code).toBe('invalid_source_url_secret_ref')
+
+    const getRes = await fetch(`${openServerUrl}/api/v1/subscriptions/${created.id}`)
+    expect(getRes.status).toBe(200)
+    const actual = (await getRes.json()).data
+    expect(actual.source_url_secret_ref).toBe(created.source_url_secret_ref)
+    expect(actual.revision).toBe(created.revision)
+  })
+
+  test('ports used strictly adhere to isolated dynamic ephemeral ports and never collide with production 17000/18080', async () => {
+    expect(openServer?.port).toBeGreaterThan(0)
+    expect(openServer?.port).not.toBe(17000)
+    expect(openServer?.port).not.toBe(18080)
+
+    expect(tokenServer?.port).toBeGreaterThan(0)
+    expect(tokenServer?.port).not.toBe(17000)
+    expect(tokenServer?.port).not.toBe(18080)
   })
 })

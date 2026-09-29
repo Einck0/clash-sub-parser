@@ -177,41 +177,102 @@ type upstreamProvider interface {
 	Upstream() any
 }
 
+type deadlineSetter interface {
+	SetDeadline(t time.Time) error
+}
+
+type readDeadlineSetter interface {
+	SetReadDeadline(t time.Time) error
+}
+
 type safeRuntimeConn struct {
 	net.Conn
-	upstream    io.Closer
+	upstreams   []any
+	closed      atomic.Bool
+	closeOnce   sync.Once
+	closeErr    error
 	readCloseMu sync.Mutex
+}
+
+// WrapSafeRuntimeConn wraps a net.Conn so concurrent Read and Close calls are serialized
+// safely while unblocking any in-flight Read via immediate deadlines and upstream closure.
+func WrapSafeRuntimeConn(conn net.Conn) net.Conn {
+	return wrapSafeRuntimeConn(conn)
 }
 
 func wrapSafeRuntimeConn(conn net.Conn) net.Conn {
 	if conn == nil {
 		return nil
 	}
-	var upstream io.Closer
-	if u, ok := conn.(upstreamProvider); ok {
-		if c, ok := u.Upstream().(io.Closer); ok {
-			upstream = c
+	if safe, ok := conn.(*safeRuntimeConn); ok {
+		return safe
+	}
+	const maxUpstreamDepth = 16
+	var upstreams []any
+	var curr any = conn
+	for i := 0; i < maxUpstreamDepth && curr != nil; i++ {
+		u, ok := curr.(upstreamProvider)
+		if !ok {
+			break
 		}
+		next := u.Upstream()
+		if next == nil {
+			break
+		}
+		upstreams = append(upstreams, next)
+		curr = next
 	}
 	return &safeRuntimeConn{
-		Conn:     conn,
-		upstream: upstream,
+		Conn:      conn,
+		upstreams: upstreams,
+	}
+}
+
+func setImmediateDeadline(target any, now time.Time) {
+	if target == nil {
+		return
+	}
+	if rds, ok := target.(readDeadlineSetter); ok {
+		_ = rds.SetReadDeadline(now)
+	}
+	if ds, ok := target.(deadlineSetter); ok {
+		_ = ds.SetDeadline(now)
 	}
 }
 
 func (c *safeRuntimeConn) Read(p []byte) (int, error) {
+	if c == nil || c.Conn == nil || c.closed.Load() {
+		return 0, net.ErrClosed
+	}
 	c.readCloseMu.Lock()
 	defer c.readCloseMu.Unlock()
+	if c.closed.Load() {
+		return 0, net.ErrClosed
+	}
 	return c.Conn.Read(p)
 }
 
 func (c *safeRuntimeConn) Close() error {
-	if c.upstream != nil {
-		_ = c.upstream.Close()
+	if c == nil || c.Conn == nil {
+		return nil
 	}
-	c.readCloseMu.Lock()
-	defer c.readCloseMu.Unlock()
-	return c.Conn.Close()
+	c.closed.Store(true)
+	now := time.Now()
+	setImmediateDeadline(c.Conn, now)
+	for i := len(c.upstreams) - 1; i >= 0; i-- {
+		setImmediateDeadline(c.upstreams[i], now)
+	}
+	c.closeOnce.Do(func() {
+		for i := len(c.upstreams) - 1; i >= 0; i-- {
+			if closer, ok := c.upstreams[i].(io.Closer); ok {
+				_ = closer.Close()
+			}
+		}
+		c.readCloseMu.Lock()
+		defer c.readCloseMu.Unlock()
+		c.closeErr = c.Conn.Close()
+	})
+	return c.closeErr
 }
 
 // DialContext dials the target address strictly through this runtime's sing-box outbound.

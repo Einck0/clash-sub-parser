@@ -384,4 +384,58 @@ describe('usePolicy composable', () => {
     expect(validateConditionInput({ field: 'probe_latency_ms', op: 'lte', probe_kind: 'baseline', value: '200', freshness_seconds: 700000 })).toContain('1 秒到 604800 秒')
     expect(validateConditionInput({ field: 'probe_latency_ms', op: 'lte', probe_kind: 'baseline', value: '200', freshness_seconds: 3600 })).toBeNull()
   })
+
+  it('safely encodes special characters in policy group and edges REST URLs', async () => {
+    const patchSpy = vi.spyOn(api, 'patch').mockResolvedValue({
+      id: 'group/special & test',
+      name: 'Special Group',
+      group_type: 'select',
+      edges: [],
+    })
+    const deleteSpy = vi.spyOn(api, 'delete').mockResolvedValue(undefined)
+    const putSpy = vi.spyOn(api, 'put').mockResolvedValue(undefined)
+
+    const { updateGroup, deleteGroup, setGroupEdges } = usePolicy()
+
+    // updateGroup
+    await updateGroup('group/special & test', 'Renamed')
+    expect(patchSpy).toHaveBeenCalledWith('/api/v1/policies/groups/group%2Fspecial%20%26%20test', {
+      name: 'Renamed',
+    })
+
+    // deleteGroup
+    await deleteGroup('group/special & test')
+    expect(deleteSpy).toHaveBeenCalledWith('/api/v1/policies/groups/group%2Fspecial%20%26%20test')
+
+    // setGroupEdges
+    await setGroupEdges('group/special & test', [])
+    expect(putSpy).toHaveBeenCalledWith('/api/v1/policies/groups/group%2Fspecial%20%26%20test/edges', {
+      edges: [],
+    })
+  })
+
+  it('deletes admission and policy rules via deleteRule with proper URL encoding and local reactive state updates', async () => {
+    const deleteSpy = vi.spyOn(api, 'delete').mockResolvedValue(undefined)
+
+    const { admissionRules, policyRules, deleteRule } = usePolicy()
+
+    admissionRules.value = [
+      { id: 'adm/rule 1', revision_id: 'rev-1', name: 'Rule 1', expression: 'DOMAIN,google.com', action: 'allow', position: 0 },
+      { id: 'adm-2', revision_id: 'rev-1', name: 'Rule 2', expression: 'DOMAIN,facebook.com', action: 'reject', position: 1 },
+    ]
+    policyRules.value = [
+      { id: 'pol/rule 1', revision_id: 'rev-1', target_group_id: 'grp-1', expression: 'MATCH', position: 0 },
+    ]
+
+    // Delete admission rule with special char
+    await deleteRule('adm/rule 1')
+    expect(deleteSpy).toHaveBeenCalledWith('/api/v1/policies/rules/adm%2Frule%201')
+    expect(admissionRules.value).toHaveLength(1)
+    expect(admissionRules.value[0].id).toBe('adm-2')
+
+    // Delete policy rule
+    await deleteRule('pol/rule 1')
+    expect(deleteSpy).toHaveBeenCalledWith('/api/v1/policies/rules/pol%2Frule%201')
+    expect(policyRules.value).toHaveLength(0)
+  })
 })

@@ -88,7 +88,7 @@ export function usePolicy() {
       if (name !== undefined) payload.name = name.trim()
       if (groupType !== undefined) payload.group_type = groupType
       if (nodeFilter !== undefined) payload.node_filter = nodeFilter
-      const updated = await api.patch<PolicyGroup>(`/api/v1/policies/groups/${id}`, payload)
+      const updated = await api.patch<PolicyGroup>(`/api/v1/policies/groups/${encodeURIComponent(id)}`, payload)
       const idx = groups.value.findIndex((g) => g.id === id)
       if (idx >= 0) groups.value[idx] = updated
       return updated
@@ -104,7 +104,7 @@ export function usePolicy() {
     saving.value = true
     error.value = ''
     try {
-      await api.delete(`/api/v1/policies/groups/${id}`)
+      await api.delete(`/api/v1/policies/groups/${encodeURIComponent(id)}`)
       groups.value = groups.value.filter((g) => g.id !== id)
     } catch (err) {
       error.value = err instanceof Error ? err.message : '删除策略组失败'
@@ -118,7 +118,7 @@ export function usePolicy() {
     saving.value = true
     error.value = ''
     try {
-      await api.put(`/api/v1/policies/groups/${groupId}/edges`, { edges })
+      await api.put(`/api/v1/policies/groups/${encodeURIComponent(groupId)}/edges`, { edges })
       await loadGroups()
     } catch (err) {
       error.value = err instanceof Error ? err.message : '保存策略组连接边失败'
@@ -200,6 +200,21 @@ export function usePolicy() {
     }
   }
 
+  async function deleteRule(id: string): Promise<void> {
+    saving.value = true
+    error.value = ''
+    try {
+      await api.delete(`/api/v1/policies/rules/${encodeURIComponent(id)}`)
+      admissionRules.value = admissionRules.value.filter((r) => r.id !== id)
+      policyRules.value = policyRules.value.filter((r) => r.id !== id)
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : '删除规则失败'
+      throw err
+    } finally {
+      saving.value = false
+    }
+  }
+
   async function validateGraph(): Promise<ValidationResult> {
     validating.value = true
     error.value = ''
@@ -273,6 +288,7 @@ export function usePolicy() {
     loadRules,
     createAdmissionRule,
     createPolicyRule,
+    deleteRule,
     validateGraph,
     loadGlobalFilter,
     updateGlobalFilter,

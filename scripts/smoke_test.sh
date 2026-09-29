@@ -6,6 +6,11 @@ set -euo pipefail
 # Validates Compose configs, volume isolation, Docker non-root image,
 # empty-volume startup, healthz/readyz, 410 interceptors, backup & restore.
 # Zero hardcoded absolute paths: uses dynamic script directory and mktemp.
+#
+# Production Port Isolation Invariant:
+# Port 17000 and 18080 are production mapped aliases on the host. Smoke tests
+# and automated suites must strictly bind dynamic ephemeral ports and isolated
+# temporary SQLite DBs, NEVER probing or mutating 17000 or 18080.
 # ==============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -76,8 +81,17 @@ BIN_PATH="${TMP_DIR}/csp"
 go build -o "${BIN_PATH}" ./cmd/csp
 echo "  ✓ Single Go executable compiled: ${BIN_PATH}"
 
-# Pick random available port
-PORT=$((20000 + RANDOM % 10000))
+# Ask the OS for an ephemeral port (bind :0), never guess a production alias.
+# The port is released before Go starts; the bounded readiness wait catches a
+# rare intervening bind. No test request is ever made to 17000 or 18080.
+allocate_test_port() {
+  python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'
+}
+PORT="$(allocate_test_port)"
+if [ "${PORT}" -eq 17000 ] || [ "${PORT}" -eq 18080 ]; then
+  echo "  ✗ ERROR: OS selected production port ${PORT}; refusing to start test server."
+  exit 1
+fi
 ADDR="127.0.0.1:${PORT}"
 DB_PATH="${TMP_DIR}/data/csp-v1.db"
 
@@ -128,6 +142,16 @@ if [ "${SCRIPT_CODE}" != "410" ]; then
 fi
 echo "  ✓ Legacy routes (/yaml, /script) return HTTP 410 Gone"
 
+# Verify affected user flow: cold-database revision auto-bootstrapping and rule lifecycle
+RULE_POST_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "http://${ADDR}/api/v1/policies/rules" \
+  -H "Content-Type: application/json" \
+  -d '{"kind":"admission","name":"SmokeAdmission","expression":"country != \"CN\"","action":"allow","position":0}')
+if [ "${RULE_POST_CODE}" != "201" ]; then
+  echo "  ✗ ERROR: Expected 201 on cold-database rule creation, got ${RULE_POST_CODE}"
+  exit 1
+fi
+echo "  ✓ Cold-database rule creation auto-bootstrapped revision (HTTP 201, zero 422 errors)"
+
 # 5. Database hot backup and integrity verification
 echo "=== [5/6] Testing Database Hot Backup & Integrity Check ==="
 BACKUP_PATH="${TMP_DIR}/csp-v1-backup.db"
@@ -160,7 +184,11 @@ echo "  ✓ Hot backup created, integrity_check=ok, foreign_key_check=clean, sch
 
 # 6. Disaster restore verification
 echo "=== [6/6] Testing Disaster Recovery Restore ==="
-RESTORE_PORT=$((30000 + RANDOM % 10000))
+RESTORE_PORT="$(allocate_test_port)"
+if [ "${RESTORE_PORT}" -eq 17000 ] || [ "${RESTORE_PORT}" -eq 18080 ] || [ "${RESTORE_PORT}" -eq "${PORT}" ]; then
+  echo "  ✗ ERROR: OS selected a production or already-used test port; refusing to start restore server."
+  exit 1
+fi
 RESTORE_ADDR="127.0.0.1:${RESTORE_PORT}"
 RESTORE_DB_PATH="${TMP_DIR}/restored_data/csp-v1.db"
 mkdir -p "${TMP_DIR}/restored_data"

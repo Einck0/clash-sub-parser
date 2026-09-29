@@ -459,3 +459,58 @@ func TestSubscriptionView_LastRefreshedAtJSONSerialization(t *testing.T) {
 		t.Fatalf("expected JSON to contain outcome failed, got: %s", string(data2))
 	}
 }
+
+func TestServiceUpdate_RejectsBlankSecretRefWithoutMutatingState(t *testing.T) {
+	subID := "0191e4a0-0000-7000-8000-000000000055"
+	initialRev := "0191e4a0-0000-7000-8000-000000000056"
+	repo := &memorySubscriptions{items: map[string]domain.Subscription{
+		subID: {
+			ID:                 subID,
+			Name:               "Original Name",
+			SourceURLSecretRef: "https://example.com/original",
+			Revision:           initialRev,
+			Enabled:            true,
+		},
+	}}
+	audit := &memoryAudit{}
+	service := subscription.NewService(repo, audit)
+
+	blank := "   \t\n  "
+	newName := "Should Not Persist"
+	_, err := service.Update(context.Background(), subscription.UpdateSubscriptionCommand{
+		ID:                 subID,
+		Revision:           initialRev,
+		Name:               &newName,
+		SourceURLSecretRef: &blank,
+		RequestID:          "req-blank-ref",
+		ActorKind:          domain.ActorKindAdmin,
+	})
+	var domErr *domain.DomainError
+	if !errors.As(err, &domErr) || domErr.Category != domain.CategoryValidation || domErr.Code != "invalid_source_url_secret_ref" {
+		t.Fatalf("Update() with blank SourceURLSecretRef error = %v, want validation error invalid_source_url_secret_ref", err)
+	}
+
+	got, err := service.Get(context.Background(), subscription.GetSubscriptionQuery{ID: subID})
+	if err != nil {
+		t.Fatalf("Get() failed: %v", err)
+	}
+	if got.Name != "Original Name" || got.SourceURLSecretRef != "https://example.com/original" || got.Revision != initialRev {
+		t.Fatalf("subscription mutated on failed update: %+v", got)
+	}
+
+	// Omitting SourceURLSecretRef (nil) while updating Name must keep existing SourceURLSecretRef intact
+	validName := "Updated Name Only"
+	updated, err := service.Update(context.Background(), subscription.UpdateSubscriptionCommand{
+		ID:        subID,
+		Revision:  initialRev,
+		Name:      &validName,
+		RequestID: "req-name-only",
+		ActorKind: domain.ActorKindAdmin,
+	})
+	if err != nil {
+		t.Fatalf("Update() name-only error = %v", err)
+	}
+	if updated.Name != "Updated Name Only" || updated.SourceURLSecretRef != "https://example.com/original" {
+		t.Fatalf("unexpected updated view: %+v", updated)
+	}
+}

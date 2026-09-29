@@ -583,3 +583,154 @@ func testNode(protocol domain.Protocol) singbox.NodeConfig {
 		Transport:  map[string]string{"network": "tcp"},
 	}
 }
+
+type blockingReadNotifyConn struct {
+	net.Conn
+	enteredOnce sync.Once
+	enteredCh   chan struct{}
+}
+
+func (c *blockingReadNotifyConn) Read(p []byte) (int, error) {
+	c.enteredOnce.Do(func() {
+		close(c.enteredCh)
+	})
+	return c.Conn.Read(p)
+}
+
+type layeredProtocolConn struct {
+	net.Conn
+	upstream    net.Conn
+	enteredOnce sync.Once
+	enteredCh   chan struct{}
+	cipherState []byte
+}
+
+func (c *layeredProtocolConn) Upstream() any {
+	return c.upstream
+}
+
+func (c *layeredProtocolConn) SetDeadline(time.Time) error     { return nil }
+func (c *layeredProtocolConn) SetReadDeadline(time.Time) error { return nil }
+
+func (c *layeredProtocolConn) Read(p []byte) (int, error) {
+	c.enteredOnce.Do(func() {
+		close(c.enteredCh)
+	})
+	if len(c.cipherState) > 0 {
+		c.cipherState[0] ^= 0x5a
+	}
+	n, err := c.upstream.Read(p)
+	if len(c.cipherState) > 0 {
+		c.cipherState[0] ^= 0x5a
+	}
+	return n, err
+}
+
+func (c *layeredProtocolConn) Close() error {
+	c.cipherState = nil
+	return c.upstream.Close()
+}
+
+func TestSafeRuntimeConn_ConcurrentReadClose(t *testing.T) {
+	if singbox.WrapSafeRuntimeConn(nil) != nil {
+		t.Fatal("expected nil when wrapping nil net.Conn")
+	}
+
+	const iterations = 100
+
+	for i := 0; i < iterations; i++ {
+		// 1. Direct net.Pipe connection (no Upstream provider) blocked inside Read holding mutex
+		c1, c2 := net.Pipe()
+		entered := make(chan struct{})
+		notifyConn := &blockingReadNotifyConn{
+			Conn:      c1,
+			enteredCh: entered,
+		}
+		safeConn := singbox.WrapSafeRuntimeConn(notifyConn)
+
+		readDone := make(chan error, 1)
+		go func() {
+			buf := make([]byte, 32)
+			_, err := safeConn.Read(buf)
+			readDone <- err
+		}()
+
+		<-entered
+
+		closeDone := make(chan error, 1)
+		go func() {
+			closeDone <- safeConn.Close()
+		}()
+
+		select {
+		case err := <-closeDone:
+			if err != nil {
+				t.Fatalf("iteration %d: direct Close returned unexpected error: %v", i, err)
+			}
+		case <-time.After(500 * time.Millisecond):
+			_ = c2.Close()
+			t.Fatalf("iteration %d: deadlock detected: safeRuntimeConn.Close() blocked on Read()", i)
+		}
+
+		select {
+		case readErr := <-readDone:
+			if readErr == nil {
+				t.Fatalf("iteration %d: expected Read to return error after Close, got nil", i)
+			}
+		case <-time.After(500 * time.Millisecond):
+			_ = c2.Close()
+			t.Fatalf("iteration %d: Read did not unblock after Close()", i)
+		}
+		_ = c2.Close()
+
+		// 2. Layered protocol connection with Upstream() + shared cipherState buffer
+		p1, p2 := net.Pipe()
+		layerEntered := make(chan struct{})
+		layered := &layeredProtocolConn{
+			Conn:        p1,
+			upstream:    p1,
+			enteredCh:   layerEntered,
+			cipherState: make([]byte, 16),
+		}
+		safeLayered := singbox.WrapSafeRuntimeConn(layered)
+
+		layerReadDone := make(chan error, 1)
+		go func() {
+			buf := make([]byte, 32)
+			_, err := safeLayered.Read(buf)
+			layerReadDone <- err
+		}()
+
+		<-layerEntered
+
+		layerCloseDone := make(chan error, 1)
+		go func() {
+			layerCloseDone <- safeLayered.Close()
+		}()
+
+		select {
+		case err := <-layerCloseDone:
+			if err != nil {
+				t.Fatalf("iteration %d: layered Close returned unexpected error: %v", i, err)
+			}
+		case <-time.After(500 * time.Millisecond):
+			_ = p2.Close()
+			t.Fatalf("iteration %d: deadlock detected on layered safeRuntimeConn.Close()", i)
+		}
+
+		select {
+		case readErr := <-layerReadDone:
+			if readErr == nil {
+				t.Fatalf("iteration %d: expected layered Read to return error after Close, got nil", i)
+			}
+		case <-time.After(500 * time.Millisecond):
+			_ = p2.Close()
+			t.Fatalf("iteration %d: layered Read did not unblock after Close()", i)
+		}
+		// Idempotent second Close must not panic or block
+		if err := safeLayered.Close(); err != nil {
+			t.Fatalf("iteration %d: idempotent Close returned error: %v", i, err)
+		}
+		_ = p2.Close()
+	}
+}

@@ -301,12 +301,13 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 	}
 
 	var (
-		taskErrMu       sync.Mutex
-		taskFatalErr    error
-		hasFatalDialErr bool
+		taskErrMu          sync.Mutex
+		taskFatalErr       error
+		hasSystemicDialErr bool
+		fatalDialNodes     = make(map[string]struct{})
 	)
 
-	recordTaskErr := func(err error) {
+	recordTaskErr := func(nodeLogicalID string, err error) {
 		if err == nil {
 			return
 		}
@@ -314,10 +315,22 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 		if taskFatalErr == nil {
 			taskFatalErr = err
 		}
+		if errors.Is(err, ErrProbeDialingNotConfigured) {
+			hasSystemicDialErr = true
+		}
 		if isFatalDialError(err) {
-			hasFatalDialErr = true
+			fatalDialNodes[nodeLogicalID] = struct{}{}
 		}
 		taskErrMu.Unlock()
+	}
+
+	checkFatalDial := func() (bool, error) {
+		taskErrMu.Lock()
+		defer taskErrMu.Unlock()
+		if hasSystemicDialErr || (len(targetNodes) > 0 && len(fatalDialNodes) == len(targetNodes)) {
+			return true, taskFatalErr
+		}
+		return false, nil
 	}
 
 	handleCancelOrDeadline := func(done chan struct{}) error {
@@ -372,7 +385,7 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 					Execute: func(tCtx context.Context) error {
 						err := r.executeTask(tCtx, run, n, k, s)
 						if err != nil {
-							recordTaskErr(err)
+							recordTaskErr(n.LogicalID, err)
 						}
 						return err
 					},
@@ -413,12 +426,7 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 				_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateFailed)
 				return submitErr
 			}
-			taskErrMu.Lock()
-			fatalErr := taskFatalErr
-			fatalDial := hasFatalDialErr
-			taskErrMu.Unlock()
-
-			if fatalDial {
+			if fatalDial, fatalErr := checkFatalDial(); fatalDial {
 				_ = run.TransitionTo(domain.ProbeRunStateFailed)
 				_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateFailed)
 				return fatalErr
@@ -454,7 +462,7 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 			Execute: func(tCtx context.Context) error {
 				verdict, err := r.executeTaskWithVerdict(tCtx, run, n, k, s)
 				if err != nil {
-					recordTaskErr(err)
+					recordTaskErr(n.LogicalID, err)
 				}
 				if verdict == domain.VerdictAvailable {
 					availMu.Lock()
@@ -494,12 +502,7 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 			_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateFailed)
 			return stage1SubmitErr
 		}
-		taskErrMu.Lock()
-		fatalDial := hasFatalDialErr
-		fatalErr := taskFatalErr
-		taskErrMu.Unlock()
-
-		if fatalDial {
+		if fatalDial, fatalErr := checkFatalDial(); fatalDial {
 			_ = run.TransitionTo(domain.ProbeRunStateFailed)
 			_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateFailed)
 			return fatalErr
@@ -552,7 +555,7 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 				Execute: func(tCtx context.Context) error {
 					err := r.executeTask(tCtx, run, n, k, s)
 					if err != nil {
-						recordTaskErr(err)
+						recordTaskErr(n.LogicalID, err)
 					}
 					return err
 				},
@@ -592,12 +595,7 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 			_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateFailed)
 			return stage2SubmitErr
 		}
-		taskErrMu.Lock()
-		fatalErr := taskFatalErr
-		fatalDial := hasFatalDialErr
-		taskErrMu.Unlock()
-
-		if fatalDial {
+		if fatalDial, fatalErr := checkFatalDial(); fatalDial {
 			_ = run.TransitionTo(domain.ProbeRunStateFailed)
 			_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateFailed)
 			return fatalErr
@@ -749,6 +747,9 @@ func cloneClient(client *http.Client) *http.Client {
 
 func isFatalDialError(err error) bool {
 	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrTargetUnresolvable) || errors.Is(err, ErrPrivateTargetRejected) {
 		return false
 	}
 	return errors.Is(err, ErrCredentialsUnavailable) || errors.Is(err, ErrProbeDialingNotConfigured)
@@ -909,8 +910,15 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 		}
 		summary = fmt.Sprintf("%s bytes_read=%d throughput_kbps=%d", summary, result.BytesRead, throughputKbps)
 	}
-	if dialErr != nil && (errors.Is(dialErr, ErrCredentialsUnavailable) || strings.Contains(dialErr.Error(), "credentials_unavailable")) {
-		summary = summary + " error=credentials_unavailable"
+	if dialErr != nil {
+		switch {
+		case errors.Is(dialErr, ErrCredentialsUnavailable) || strings.Contains(dialErr.Error(), "credentials_unavailable"):
+			summary = summary + " error=credentials_unavailable"
+		case errors.Is(dialErr, ErrPrivateTargetRejected):
+			summary = summary + " error=private_target_rejected"
+		case errors.Is(dialErr, ErrTargetUnresolvable):
+			summary = summary + " error=target_unresolvable"
+		}
 	}
 	obs := &domain.ProbeObservation{
 		ID:              domain.MustNewUUIDv7(),

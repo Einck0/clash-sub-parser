@@ -280,6 +280,10 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 	nodeFilterRepo := sqlite.NewNodeFilterRepository(db)
 	policyService := policy.NewService(policyRepo, revisionRepo, nodeRepo, auditRepo, nodeFilterRepo)
 	revisionService := revision.NewService(revisionRepo, auditRepo, revision.WithPolicyRepository(policyRepo))
+	if _, err := policyService.EnsureActiveRevision(startupCtx); err != nil {
+		fmt.Fprintf(stderr, "serve: failed to ensure initial active configuration revision: %v\n", err)
+		return 1
+	}
 	ipriskService := iprisk.NewService(
 		riskObsRepo,
 		riskPolicyRepo,

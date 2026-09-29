@@ -33,10 +33,20 @@ const draft = ref<SubscriptionDraft>({
 })
 
 const targetGroupsInput = ref('')
+const nameError = ref('')
+const urlError = ref('')
+const generalError = ref('')
+
+function clearErrors() {
+  nameError.value = ''
+  urlError.value = ''
+  generalError.value = ''
+}
 
 watch(
   () => props.subscription,
   (sub) => {
+    clearErrors()
     if (sub) {
       draft.value = {
         name: sub.name,
@@ -89,10 +99,55 @@ function removeFilterRule(index: number) {
 }
 
 function handleClose() {
+  clearErrors()
   emit('update:modelValue', false)
 }
 
+function validate(): boolean {
+  clearErrors()
+  let valid = true
+
+  const trimmedName = draft.value.name.trim()
+  if (!trimmedName) {
+    nameError.value = '订阅源名称不能为空'
+    valid = false
+  }
+
+  const trimmedUrl = draft.value.source_url_secret_ref.trim()
+  if (!trimmedUrl) {
+    urlError.value = '订阅地址不能为空'
+    valid = false
+  }
+
+  const interval = draft.value.refresh_policy.interval_seconds
+  if (!interval || interval < 60) {
+    generalError.value = '刷新间隔不能小于 60 秒'
+    valid = false
+  }
+
+  const timeout = draft.value.refresh_policy.timeout_seconds
+  if (!timeout || timeout < 5 || timeout > 120) {
+    generalError.value = '超时时间必须在 5 到 120 秒之间'
+    valid = false
+  }
+
+  if (!valid) {
+    activeTab.value = 'basic'
+    if (!trimmedName) {
+      generalError.value = generalError.value || '请填写订阅源名称'
+    } else if (!trimmedUrl) {
+      generalError.value = generalError.value || '请填写订阅地址'
+    }
+  }
+
+  return valid
+}
+
 function handleSubmit() {
+  if (!validate()) {
+    return
+  }
+
   // Parse target groups comma-separated string
   const groups = targetGroupsInput.value
     .split(',')
@@ -113,6 +168,15 @@ function handleSubmit() {
     @update:model-value="emit('update:modelValue', $event)"
   >
     <!-- Tab Selector -->
+    <div
+      v-if="generalError"
+      role="alert"
+      class="p-3 rounded-xl bg-error/10 border border-error/30 text-error text-xs font-medium"
+      data-testid="subscription-drawer-error"
+    >
+      {{ generalError }}
+    </div>
+
     <div class="tabs tabs-boxed bg-base-300/60 p-1 rounded-xl">
       <button
         type="button"
@@ -140,8 +204,14 @@ function handleSubmit() {
           v-model="draft.name"
           required
           class="input input-bordered input-sm focus:input-primary font-medium"
+          :class="{ 'input-error': nameError }"
           placeholder="例如：香港专线订阅源"
+          data-testid="subscription-name-input"
+          @input="nameError = ''; generalError = ''"
         />
+        <span v-if="nameError" class="text-error text-[11px] mt-1" data-testid="subscription-name-error">
+          {{ nameError }}
+        </span>
       </label>
 
       <label class="form-control">
@@ -152,8 +222,14 @@ function handleSubmit() {
           v-model="draft.source_url_secret_ref"
           required
           class="input input-bordered input-sm font-mono text-xs focus:input-primary"
+          :class="{ 'input-error': urlError }"
           :placeholder="t('subscriptions.sourceUrlPlaceholder')"
+          data-testid="subscription-url-input"
+          @input="urlError = ''; generalError = ''"
         />
+        <span v-if="urlError" class="text-error text-[11px] mt-1" data-testid="subscription-url-error">
+          {{ urlError }}
+        </span>
       </label>
 
       <div class="grid grid-cols-2 gap-4">
@@ -317,6 +393,7 @@ function handleSubmit() {
           class="btn btn-primary btn-sm touch-manipulation shadow-sm"
           :class="{ loading: saving }"
           :disabled="saving"
+          data-testid="subscription-drawer-save-btn"
           @click="handleSubmit"
         >
           {{ t('common.save') }}

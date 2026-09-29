@@ -583,6 +583,7 @@ function refreshAll() {
 
 const trackingActiveTicks = ref(0)
 let idleTickCount = 0
+let hadActiveProbe = false
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
 onMounted(() => {
@@ -594,20 +595,26 @@ onMounted(() => {
       probingNodeIds.value.size > 0 ||
       queuedNodeIds.value.size > 0
     const isTracking = trackingActiveTicks.value > 0
+    const isCurrentlyActive = hasActiveRun || hasActivePool || isTracking
 
-    if (hasActiveRun || hasActivePool || isTracking) {
+    if (isCurrentlyActive) {
       if (trackingActiveTicks.value > 0) {
         trackingActiveTicks.value--
       }
+      hadActiveProbe = true
       idleTickCount = 0
       loadPoolStatus()
       loadRuns(selectedStateFilter.value || undefined)
-      loadProbeNodes()
       loadBatches()
       if (activeRun.value && (activeRun.value.state === 'running' || activeRun.value.state === 'queued')) {
         loadObservations(activeRun.value.id)
       }
     } else {
+      // When transitioning from active probing to idle, refresh node inventory once
+      if (hadActiveProbe) {
+        hadActiveProbe = false
+        loadProbeNodes()
+      }
       // Idle low-frequency baseline refresh every ~16 seconds (8 ticks * 2s)
       idleTickCount++
       if (idleTickCount >= 8) {

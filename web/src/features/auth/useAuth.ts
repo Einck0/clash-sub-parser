@@ -1,5 +1,6 @@
 import { ref } from 'vue'
 import { api, ApiError } from '../../api/client'
+import { clearPublicationCapabilities } from '../publications/usePublications'
 
 export type AuthState = 'probing' | 'open' | 'unauthenticated' | 'authenticated' | 'error'
 
@@ -15,6 +16,8 @@ const errorMessage = ref<string>('')
 
 // 注册全局失效通知
 api.setOnUnauthorized(() => {
+  clearPublicationCapabilities()
+  api.setCsrfToken(null)
   if (state.value === 'authenticated') {
     state.value = 'unauthenticated'
   }
@@ -26,16 +29,21 @@ export function useAuth() {
     errorMessage.value = ''
     try {
       const res = await api.get<AuthStatus>('/api/v1/auth/status')
+      const wasProtected = status.value?.mode === 'protected'
+      const hadStoredAuth = Boolean(typeof window !== 'undefined' && window.localStorage?.getItem('csp_token'))
       status.value = res
       if (res.mode === 'open') {
-        // Open Mode 自动净化历史脏 Token，彻底避免污染
+        // Keep public-mode publication links on reload; clear only a replaced protected/dirty session.
+        if (wasProtected || hadStoredAuth) clearPublicationCapabilities()
         api.setAuthToken(null)
+        api.setCsrfToken(null)
         state.value = 'open'
       } else {
         // Protected Mode
         if (res.authenticated) {
           state.value = 'authenticated'
         } else {
+          clearPublicationCapabilities()
           state.value = 'unauthenticated'
         }
       }
@@ -54,11 +62,15 @@ export function useAuth() {
     }
 
     try {
-      const res = await api.post<{ mode: string; authenticated: boolean; token?: string }>('/api/v1/auth/login', {
+      const res = await api.post<{ mode: string; authenticated: boolean; token?: string; csrf_token?: string }>('/api/v1/auth/login', {
         token: trimmed,
       })
       if (res && res.authenticated) {
+        clearPublicationCapabilities()
         api.setAuthToken(trimmed)
+        if (res.csrf_token) {
+          api.setCsrfToken(res.csrf_token)
+        }
         state.value = 'authenticated'
         status.value = {
           mode: res.mode as 'open' | 'protected',
@@ -80,10 +92,12 @@ export function useAuth() {
   }
 
   const logout = async () => {
+    clearPublicationCapabilities()
     try {
       await api.post('/api/v1/auth/logout')
     } catch {}
     api.setAuthToken(null)
+    api.setCsrfToken(null)
     state.value = 'unauthenticated'
     if (status.value) {
       status.value.authenticated = false
@@ -91,7 +105,9 @@ export function useAuth() {
   }
 
   const clearStoredToken = () => {
+    clearPublicationCapabilities()
     api.setAuthToken(null)
+    api.setCsrfToken(null)
     probe()
   }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -121,8 +122,8 @@ func TestSafeNodeDialerRejectsPrivateAndCarrierGradeIPs(t *testing.T) {
 			}
 			t.Fatalf("[%s] expected IP %s to be rejected, but dialer succeeded", tc.name, tc.ip)
 		}
-		if !errors.Is(err, probe.ErrCredentialsUnavailable) {
-			t.Fatalf("[%s] expected ErrCredentialsUnavailable, got %v", tc.name, err)
+		if !errors.Is(err, probe.ErrPrivateTargetRejected) {
+			t.Fatalf("[%s] expected ErrPrivateTargetRejected, got %v", tc.name, err)
 		}
 		if client != nil {
 			t.Fatalf("[%s] client must be nil", tc.name)
@@ -154,8 +155,8 @@ func TestSafeNodeDialerErrorSanitization(t *testing.T) {
 		}
 		t.Fatal("expected error on private IP, got nil")
 	}
-	if !errors.Is(err, probe.ErrCredentialsUnavailable) || client != nil {
-		t.Fatalf("expected ErrCredentialsUnavailable and nil client, got %v", err)
+	if !errors.Is(err, probe.ErrPrivateTargetRejected) || client != nil {
+		t.Fatalf("expected ErrPrivateTargetRejected and nil client, got %v", err)
 	}
 	if strings.Contains(err.Error(), secretPassword) {
 		t.Fatalf("error message leaks secret password: %s", err.Error())
@@ -195,8 +196,8 @@ func TestSafeNodeDialerRejectsDomainNames(t *testing.T) {
 			}
 			continue
 		}
-		if !errors.Is(err, probe.ErrCredentialsUnavailable) {
-			t.Fatalf("[%s] expected ErrCredentialsUnavailable, got %v", domainName, err)
+		if !errors.Is(err, probe.ErrTargetUnresolvable) && !errors.Is(err, probe.ErrPrivateTargetRejected) {
+			t.Fatalf("[%s] expected ErrTargetUnresolvable or ErrPrivateTargetRejected, got %v", domainName, err)
 		}
 		if client != nil {
 			t.Fatalf("[%s] client must be nil", domainName)
@@ -276,8 +277,8 @@ func TestRunnerSafeNodeDialerWiring(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected safe dialer to reject 127.0.0.1, got nil")
 	}
-	if !errors.Is(err, probe.ErrCredentialsUnavailable) {
-		t.Fatalf("expected ErrCredentialsUnavailable, got %v", err)
+	if !errors.Is(err, probe.ErrPrivateTargetRejected) {
+		t.Fatalf("expected ErrPrivateTargetRejected, got %v", err)
 	}
 
 	nodesRepo := newMemoryNodes()
@@ -302,24 +303,24 @@ func TestRunnerSafeNodeDialerWiring(t *testing.T) {
 	_ = runsRepo.Create(context.Background(), run)
 
 	runErr := runner.Run(context.Background(), run, []string{node.LogicalID}, []domain.ProbeKind{domain.ProbeKindBaseline})
-	if runErr == nil {
-		t.Fatal("expected runner.Run to fail when safe dialer rejects private IP, got nil")
+	if runErr != nil {
+		t.Fatalf("expected runner.Run to record unavailable observation without fatal error, got: %v", runErr)
 	}
 
 	updatedRun, _ := runsRepo.GetByID(context.Background(), run.ID)
-	if updatedRun.State != domain.ProbeRunStateFailed {
-		t.Fatalf("expected run state failed, got %s", updatedRun.State)
+	if updatedRun.State != domain.ProbeRunStateSucceeded {
+		t.Fatalf("expected run state succeeded, got %s", updatedRun.State)
 	}
 
 	observations, _ := obsRepo.ListByRun(context.Background(), run.ID)
 	if len(observations) != 1 {
 		t.Fatalf("expected 1 observation, got %d", len(observations))
 	}
-	if observations[0].Verdict != domain.VerdictError {
-		t.Fatalf("expected verdict error, got %s", observations[0].Verdict)
+	if observations[0].Verdict != domain.VerdictUnavailable {
+		t.Fatalf("expected verdict unavailable/error, got %s", observations[0].Verdict)
 	}
-	if !strings.Contains(observations[0].RedactedSummary, "credentials_unavailable") {
-		t.Fatalf("expected summary to contain credentials_unavailable, got %s", observations[0].RedactedSummary)
+	if !strings.Contains(observations[0].RedactedSummary, "private_target_rejected") {
+		t.Fatalf("expected summary to contain private_target_rejected, got %s", observations[0].RedactedSummary)
 	}
 }
 
@@ -664,8 +665,8 @@ func TestSafeNodeDialerTrojanPrivateAndRebindingRejections(t *testing.T) {
 				}
 				t.Fatalf("[%s] expected fail-closed rejection for %s, got nil error", tc.name, tc.domainName)
 			}
-			if !errors.Is(err, probe.ErrCredentialsUnavailable) {
-				t.Fatalf("[%s] expected ErrCredentialsUnavailable, got %v", tc.name, err)
+			if !errors.Is(err, probe.ErrPrivateTargetRejected) && !errors.Is(err, probe.ErrTargetUnresolvable) {
+				t.Fatalf("[%s] expected ErrPrivateTargetRejected or ErrTargetUnresolvable, got %v", tc.name, err)
 			}
 			if client != nil {
 				t.Fatalf("[%s] client must be nil on rejection", tc.name)
@@ -990,4 +991,215 @@ func TestTargetURLDoesNotConnectViaHost(t *testing.T) {
 	if err := client.CheckRedirect(dummyReq, []*http.Request{dummyReq}); err != http.ErrUseLastResponse {
 		t.Fatalf("expected http.ErrUseLastResponse, got %v", err)
 	}
+}
+
+func TestRunner_TargetResolutionFailureDoesNotFailRun(t *testing.T) {
+	resolver := newFixtureResolver()
+	resolver.SetError("unresolvable.invalid", errors.New("no such host"))
+	for i := 1; i <= 5; i++ {
+		resolver.SetIPs(fmt.Sprintf("healthy-%d.example.com", i), fmt.Sprintf("93.184.216.%d", 30+i))
+	}
+
+	mockFactory := func(ctx context.Context, config singbox.NodeConfig, opts singbox.HTTPClientOptions) (*http.Client, func() error, error) {
+		client := &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if strings.Contains(req.URL.String(), "generate_204") {
+					return &http.Response{
+						StatusCode: http.StatusNoContent,
+						Body:       http.NoBody,
+						Header:     make(http.Header),
+					}, nil
+				}
+				// Geo probe returns valid JSON candidate
+				geoJSON := `{"ip":"93.184.216.34","country":"US"}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(geoJSON)),
+					Header:     make(http.Header),
+				}, nil
+			}),
+		}
+		return client, func() error { return nil }, nil
+	}
+
+	dialer := probe.NewSafeNodeDialer(probe.SafeNodeDialerOptions{
+		Resolver:      resolver,
+		ClientFactory: mockFactory,
+	})
+
+	sched, err := queue.NewScheduler(queue.Config{Concurrency: 10})
+	if err != nil {
+		t.Fatalf("queue.NewScheduler: %v", err)
+	}
+	defer sched.Close()
+
+	nodesRepo := newMemoryNodes()
+	obsRepo := newMemoryObservations()
+	runsRepo := newMemoryRuns()
+
+	// 1. Faulty node with DNS resolution failure
+	dnsFailNode := domain.Node{
+		LogicalID:   "node_dns_fail",
+		DisplayName: "DNS Fail Node",
+		Protocol:    domain.ProtocolTrojan,
+		Server:      "unresolvable.invalid",
+		Port:        443,
+		Credentials: domain.InboundProtocolCredential{Password: "pwd"},
+		Active:      true,
+	}
+	nodesRepo.items[dnsFailNode.LogicalID] = dnsFailNode
+
+	// 2. Faulty node with SSRF private loopback
+	ssrfLoopbackNode := domain.Node{
+		LogicalID:   "node_ssrf_loopback",
+		DisplayName: "SSRF Loopback",
+		Protocol:    domain.ProtocolSS,
+		Server:      "127.0.0.1",
+		Port:        8388,
+		Credentials: domain.InboundProtocolCredential{Method: "aes-128-gcm", Password: "pwd"},
+		Active:      true,
+	}
+	nodesRepo.items[ssrfLoopbackNode.LogicalID] = ssrfLoopbackNode
+
+	// 3. Faulty node with SSRF CGNAT IP
+	ssrfCGNATNode := domain.Node{
+		LogicalID:   "node_ssrf_cgnat",
+		DisplayName: "SSRF CGNAT",
+		Protocol:    domain.ProtocolSS,
+		Server:      "100.64.0.1",
+		Port:        8388,
+		Credentials: domain.InboundProtocolCredential{Method: "aes-128-gcm", Password: "pwd"},
+		Active:      true,
+	}
+	nodesRepo.items[ssrfCGNATNode.LogicalID] = ssrfCGNATNode
+
+	// 4. Faulty node with individual bad credentials (insecure cert verification)
+	badCredNode := domain.Node{
+		LogicalID:   "node_bad_cred",
+		DisplayName: "Bad Cred Node",
+		Protocol:    domain.ProtocolTrojan,
+		Server:      "healthy-1.example.com",
+		Port:        443,
+		Credentials: domain.InboundProtocolCredential{Password: "pwd", Transport: map[string]string{"skip_cert_verify": "true"}},
+		Active:      true,
+	}
+	nodesRepo.items[badCredNode.LogicalID] = badCredNode
+
+	// 5..9. Five healthy proxy nodes
+	nodeIDs := []string{
+		dnsFailNode.LogicalID,
+		ssrfLoopbackNode.LogicalID,
+		ssrfCGNATNode.LogicalID,
+		badCredNode.LogicalID,
+	}
+	for i := 1; i <= 5; i++ {
+		hNode := domain.Node{
+			LogicalID:   fmt.Sprintf("node_healthy_%d", i),
+			DisplayName: fmt.Sprintf("Healthy Node %d", i),
+			Protocol:    domain.ProtocolTrojan,
+			Server:      fmt.Sprintf("healthy-%d.example.com", i),
+			Port:        443,
+			Credentials: domain.InboundProtocolCredential{Password: "trojan-pwd"},
+			Active:      true,
+		}
+		nodesRepo.items[hNode.LogicalID] = hNode
+		nodeIDs = append(nodeIDs, hNode.LogicalID)
+	}
+
+	runner := probe.NewDefaultRunner(
+		nodesRepo,
+		obsRepo,
+		sched,
+		runsRepo,
+		probe.WithNodeDialer(dialer),
+	)
+
+	run := &domain.ProbeRun{
+		ID:             "run_multi_fault_tolerance",
+		IdempotencyKey: "key_multi_fault_tolerance",
+		ActorScope:     "admin",
+		State:          domain.ProbeRunStateQueued,
+		DeadlineAt:     time.Now().Add(time.Hour),
+	}
+	if err := runsRepo.Create(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+
+	kinds := []domain.ProbeKind{domain.ProbeKindBaseline, domain.ProbeKindGeo}
+	runErr := runner.Run(context.Background(), run, nodeIDs, kinds)
+	if runErr != nil {
+		t.Fatalf("expected multi-node run to succeed despite individual faulty nodes, got: %v", runErr)
+	}
+
+	updatedRun, err := runsRepo.GetByID(context.Background(), run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updatedRun.State != domain.ProbeRunStateSucceeded {
+		t.Fatalf("expected run state succeeded, got %s", updatedRun.State)
+	}
+
+	observations, err := obsRepo.ListByRun(context.Background(), run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 4 faulty nodes had 1 baseline observation each = 4
+	// 5 healthy nodes had 2 observations each (baseline + geo) = 10
+	// Total expected = 14
+	if len(observations) != 14 {
+		t.Fatalf("expected 14 observations, got %d", len(observations))
+	}
+
+	obsByNode := make(map[string][]domain.ProbeObservation)
+	for _, obs := range observations {
+		obsByNode[obs.NodeLogicalID] = append(obsByNode[obs.NodeLogicalID], obs)
+	}
+
+	// Check DNS failure node
+	dnsObs := obsByNode[dnsFailNode.LogicalID]
+	if len(dnsObs) != 1 || dnsObs[0].Verdict != domain.VerdictUnavailable {
+		t.Fatalf("expected 1 unavailable observation for DNS fail node, got %+v", dnsObs)
+	}
+	if !strings.Contains(dnsObs[0].RedactedSummary, "target_unresolvable") {
+		t.Fatalf("expected target_unresolvable in DNS fail summary, got %s", dnsObs[0].RedactedSummary)
+	}
+
+	// Check SSRF loopback node
+	ssrfObs := obsByNode[ssrfLoopbackNode.LogicalID]
+	if len(ssrfObs) != 1 || ssrfObs[0].Verdict != domain.VerdictUnavailable {
+		t.Fatalf("expected 1 unavailable observation for SSRF loopback, got %+v", ssrfObs)
+	}
+	if !strings.Contains(ssrfObs[0].RedactedSummary, "private_target_rejected") {
+		t.Fatalf("expected private_target_rejected in SSRF summary, got %s", ssrfObs[0].RedactedSummary)
+	}
+
+	// Check bad credentials node
+	badCredObs := obsByNode[badCredNode.LogicalID]
+	if len(badCredObs) != 1 || badCredObs[0].Verdict != domain.VerdictUnavailable {
+		t.Fatalf("expected 1 unavailable observation for bad cred node, got %+v", badCredObs)
+	}
+	if !strings.Contains(badCredObs[0].RedactedSummary, "credentials_unavailable") {
+		t.Fatalf("expected credentials_unavailable in bad cred summary, got %s", badCredObs[0].RedactedSummary)
+	}
+
+	// Check all 5 healthy nodes
+	for i := 1; i <= 5; i++ {
+		hID := fmt.Sprintf("node_healthy_%d", i)
+		hObs := obsByNode[hID]
+		if len(hObs) != 2 {
+			t.Fatalf("expected 2 observations for %s, got %d", hID, len(hObs))
+		}
+		for _, o := range hObs {
+			if o.Verdict != domain.VerdictAvailable {
+				t.Fatalf("expected available verdict for healthy node observation, got %s", o.Verdict)
+			}
+		}
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }

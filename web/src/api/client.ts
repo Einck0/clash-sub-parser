@@ -19,6 +19,7 @@ export interface ApiClientOptions {
   fetcher?: typeof fetch
   requestId?: () => string
   getAuthToken?: () => string | null | undefined
+  getCsrfToken?: () => string | null | undefined
 }
 
 export interface RequestOptions extends RequestInit {
@@ -31,7 +32,9 @@ export class ApiClient {
   private fetcher: typeof fetch
   private requestIdGenerator: () => string
   private getAuthTokenFn?: () => string | null | undefined
+  private getCsrfTokenFn?: () => string | null | undefined
   private authToken: string | null | undefined = undefined
+  private csrfToken: string | null | undefined = undefined
   private onUnauthorizedCallback?: () => void
 
   constructor(options: ApiClientOptions = {}) {
@@ -42,6 +45,7 @@ export class ApiClient {
       return `csp-${entropy}-${Date.now().toString(36)}`
     })
     this.getAuthTokenFn = options.getAuthToken
+    this.getCsrfTokenFn = options.getCsrfToken
   }
 
   /**
@@ -49,6 +53,52 @@ export class ApiClient {
    */
   setOnUnauthorized(cb: () => void): void {
     this.onUnauthorizedCallback = cb
+  }
+
+  /**
+   * Updates in-memory CSRF token and synchronizes with sessionStorage if available.
+   */
+  setCsrfToken(token: string | null): void {
+    this.csrfToken = token
+    if (typeof window !== 'undefined' && typeof window.sessionStorage !== 'undefined') {
+      try {
+        if (token) {
+          window.sessionStorage.setItem('csp_csrf_token', token)
+        } else {
+          window.sessionStorage.removeItem('csp_csrf_token')
+        }
+      } catch {
+        // ignore sessionStorage access errors
+      }
+    }
+  }
+
+  /**
+   * Resolves the current active CSRF token.
+   */
+  getCsrfToken(): string | null {
+    if (this.csrfToken !== undefined) {
+      return this.csrfToken
+    }
+    if (this.getCsrfTokenFn) {
+      const fromFn = this.getCsrfTokenFn()
+      if (fromFn) return fromFn
+    }
+    if (typeof window !== 'undefined' && typeof window.sessionStorage !== 'undefined') {
+      try {
+        const stored = window.sessionStorage.getItem('csp_csrf_token')
+        if (stored) return stored
+      } catch {
+        // ignore
+      }
+    }
+    if (typeof document !== 'undefined') {
+      const match = document.cookie.match(/(?:^|;\s*)(?:csrf_token|csp_csrf|XSRF-TOKEN)=([^;]+)/)
+      if (match) {
+        return decodeURIComponent(match[1])
+      }
+    }
+    return null
   }
 
   /**
@@ -108,6 +158,15 @@ export class ApiClient {
       const token = this.getAuthToken()
       if (token) {
         headers.set('Authorization', `Bearer ${token}`)
+      }
+    }
+
+    const method = (init.method || 'GET').toUpperCase()
+    const isUnsafe = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)
+    if (isUnsafe && !headers.has('X-CSRF-Token')) {
+      const csrf = this.getCsrfToken()
+      if (csrf) {
+        headers.set('X-CSRF-Token', csrf)
       }
     }
 
@@ -215,7 +274,15 @@ export const api = new ApiClient({
     }
     return null
   },
+  getCsrfToken: () => {
+    if (typeof window !== 'undefined' && typeof window.sessionStorage !== 'undefined') {
+      return sessionStorage.getItem('csp_csrf_token')
+    }
+    return null
+  },
 })
 
 export const setAuthToken = (token: string | null): void => api.setAuthToken(token)
+export const setCsrfToken = (token: string | null): void => api.setCsrfToken(token)
+export const getCsrfToken = (): string | null => api.getCsrfToken()
 export const setOnUnauthorized = (cb: () => void): void => api.setOnUnauthorized(cb)

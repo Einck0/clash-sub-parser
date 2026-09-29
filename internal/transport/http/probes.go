@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -274,8 +275,17 @@ func (h probeHandler) nodeObservations(w http.ResponseWriter, r *http.Request) {
 		WriteDomainError(w, r, err)
 		return
 	}
-	limit := page * pageSize
-	items, err := h.observations.ListByNode(r.Context(), chi.URLParam(r, "logical_id"), limit)
+	logicalID := chi.URLParam(r, "logical_id")
+	if pager, ok := h.observations.(domain.ProbeObservationNodePager); ok {
+		items, total, err := pager.ListByNodePaginated(r.Context(), logicalID, page, pageSize)
+		if err != nil {
+			WriteDomainError(w, r, err)
+			return
+		}
+		WritePaginated(w, r, items, page, pageSize, total)
+		return
+	}
+	items, err := h.observations.ListByNode(r.Context(), logicalID, math.MaxInt32)
 	if err != nil {
 		WriteDomainError(w, r, err)
 		return

@@ -1,6 +1,9 @@
 package http
 
 import (
+	"bytes"
+	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 
@@ -14,16 +17,64 @@ type revisionHandler struct {
 	service *revision.Service
 }
 
+type createRevisionRequest struct {
+	ParentID *string `json:"parent_id,omitempty"`
+	State    string  `json:"state,omitempty"`
+}
+
 func registerRevisionRoutes(r chi.Router, svc *revision.Service) {
 	if svc == nil {
 		return
 	}
 	h := revisionHandler{service: svc}
 	r.Get("/revisions", h.list)
+	r.Post("/revisions", h.create)
 	r.Get("/revisions/active", h.getActive)
 	r.Get("/revisions/{id}", h.get)
 	r.Post("/revisions/{id}/review", h.review)
 	r.Post("/revisions/{id}/activate", h.activate)
+}
+
+func (h revisionHandler) create(w http.ResponseWriter, r *http.Request) {
+	var body createRevisionRequest
+	if r.Body != nil {
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			WriteDomainError(w, r, domain.NewValidationError("invalid_json", "request body must be valid JSON"))
+			return
+		}
+		if len(bytes.TrimSpace(raw)) > 0 {
+			dec := json.NewDecoder(bytes.NewReader(raw))
+			dec.DisallowUnknownFields()
+			if err := dec.Decode(&body); err != nil {
+				WriteDomainError(w, r, domain.NewValidationError("invalid_json", "request body must be valid JSON"))
+				return
+			}
+		}
+	}
+
+	var state domain.ConfigurationRevisionState
+	if s := strings.TrimSpace(body.State); s != "" {
+		parsed, err := domain.ParseRevisionState(s)
+		if err != nil {
+			WriteDomainError(w, r, err)
+			return
+		}
+		state = parsed
+	}
+
+	rev, err := h.service.Create(r.Context(), revision.CreateCommand{
+		ParentID:  body.ParentID,
+		State:     state,
+		RequestID: GetRequestID(r.Context()),
+		ActorKind: requestActorKind(r),
+	})
+	if err != nil {
+		WriteDomainError(w, r, err)
+		return
+	}
+	WriteSuccess(w, r, http.StatusCreated, rev)
 }
 
 func (h revisionHandler) list(w http.ResponseWriter, r *http.Request) {

@@ -377,6 +377,70 @@ func (r *probeObservationRepository) ListByNode(ctx context.Context, nodeLogical
 	return items, nil
 }
 
+func (r *probeObservationRepository) ListByNodePaginated(ctx context.Context, nodeLogicalID string, page, pageSize int) ([]domain.ProbeObservation, int, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 20
+	}
+
+	var total int
+	const countQuery = `SELECT COUNT(*) FROM probe_observations WHERE node_logical_id = ?;`
+	if err := r.db.QueryRowContext(ctx, countQuery, nodeLogicalID).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("failed to count observations for node %s: %w", nodeLogicalID, err)
+	}
+
+	if total == 0 {
+		return []domain.ProbeObservation{}, 0, nil
+	}
+
+	const query = `
+	SELECT id, probe_run_id, node_logical_id, kind, verdict, evidence_digest, observed_at, latency_ms, redacted_summary
+	FROM probe_observations
+	WHERE node_logical_id = ?
+	ORDER BY observed_at DESC, id DESC
+	LIMIT ? OFFSET ?;`
+
+	offset := (page - 1) * pageSize
+	rows, err := r.db.QueryContext(ctx, query, nodeLogicalID, pageSize, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to query observations for node %s: %w", nodeLogicalID, err)
+	}
+	defer rows.Close()
+
+	items := make([]domain.ProbeObservation, 0)
+	for rows.Next() {
+		var obs domain.ProbeObservation
+		var kindStr, verdictStr, observedStr string
+
+		err := rows.Scan(
+			&obs.ID,
+			&obs.ProbeRunID,
+			&obs.NodeLogicalID,
+			&kindStr,
+			&verdictStr,
+			&obs.EvidenceDigest,
+			&observedStr,
+			&obs.LatencyMS,
+			&obs.RedactedSummary,
+		)
+		if err != nil {
+			return nil, 0, fmt.Errorf("failed to scan probe observation: %w", err)
+		}
+
+		obs.Kind = domain.ProbeKind(kindStr)
+		obs.Verdict = domain.ProbeVerdict(verdictStr)
+		obs.ObservedAt, _ = time.Parse(time.RFC3339, observedStr)
+
+		items = append(items, obs)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("error iterating node observations: %w", err)
+	}
+	return items, total, nil
+}
+
 func buildLatestByNodesQuery(nodePlaceholders, kindPlaceholders []string) string {
 	whereClause := fmt.Sprintf("node_logical_id IN (%s)", strings.Join(nodePlaceholders, ", "))
 	if len(kindPlaceholders) > 0 {

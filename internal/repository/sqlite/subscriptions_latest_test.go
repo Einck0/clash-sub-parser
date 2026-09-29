@@ -3,6 +3,7 @@ package sqlite_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -318,5 +319,178 @@ func TestSubscriptionsLatestFetch_Pagination(t *testing.T) {
 	}
 	if !sub5Found {
 		t.Fatalf("sub 5 not found on page 1")
+	}
+}
+
+func TestSubscriptionDeleteDeactivatesOrphanNodes(t *testing.T) {
+	ctx := context.Background()
+	db, subRepo := newSubscriptionsTestDB(t)
+	nodeRepo := sqlite.NewNodeRepository(db)
+	sourceRepo := sqlite.NewNodeSourceRepository(db)
+
+	now := domain.NowUTC().Add(-10 * time.Minute)
+
+	subA := &domain.Subscription{
+		ID:                 "01910000-0000-7000-8000-000000000101",
+		Name:               "Sub A",
+		SourceURLSecretRef: "https://example.com/sub-a",
+		Enabled:            true,
+		Revision:           domain.MustNewUUIDv7(),
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	}
+	subB := &domain.Subscription{
+		ID:                 "01910000-0000-7000-8000-000000000102",
+		Name:               "Sub B",
+		SourceURLSecretRef: "https://example.com/sub-b",
+		Enabled:            true,
+		Revision:           domain.MustNewUUIDv7(),
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	}
+	if err := subRepo.Create(ctx, subA); err != nil {
+		t.Fatalf("Create subA failed: %v", err)
+	}
+	if err := subRepo.Create(ctx, subB); err != nil {
+		t.Fatalf("Create subB failed: %v", err)
+	}
+
+	nodes := []domain.Node{
+		{
+			LogicalID:   "node-exclusive-a1",
+			Protocol:    domain.ProtocolVMess,
+			DisplayName: "Exclusive A1",
+			Server:      "198.51.100.1",
+			Port:        443,
+			Active:      true,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		},
+		{
+			LogicalID:   "node-exclusive-a2",
+			Protocol:    domain.ProtocolTrojan,
+			DisplayName: "Exclusive A2",
+			Server:      "198.51.100.2",
+			Port:        443,
+			Active:      true,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		},
+		{
+			LogicalID:   "node-shared-ab",
+			Protocol:    domain.ProtocolVLESS,
+			DisplayName: "Shared AB",
+			Server:      "198.51.100.3",
+			Port:        443,
+			Active:      true,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		},
+		{
+			LogicalID:   "node-exclusive-b1",
+			Protocol:    domain.ProtocolTrojan,
+			DisplayName: "Exclusive B1",
+			Server:      "198.51.100.4",
+			Port:        8388,
+			Active:      true,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		},
+	}
+	if err := nodeRepo.UpsertBatch(ctx, nodes); err != nil {
+		t.Fatalf("UpsertBatch nodes failed: %v", err)
+	}
+
+	sources := []domain.NodeSource{
+		{NodeLogicalID: "node-exclusive-a1", SubscriptionID: subA.ID, LastSeenFetchID: "fetch-a"},
+		{NodeLogicalID: "node-exclusive-a2", SubscriptionID: subA.ID, LastSeenFetchID: "fetch-a"},
+		{NodeLogicalID: "node-shared-ab", SubscriptionID: subA.ID, LastSeenFetchID: "fetch-a"},
+		{NodeLogicalID: "node-shared-ab", SubscriptionID: subB.ID, LastSeenFetchID: "fetch-b"},
+		{NodeLogicalID: "node-exclusive-b1", SubscriptionID: subB.ID, LastSeenFetchID: "fetch-b"},
+	}
+	for i := range sources {
+		if err := sourceRepo.Upsert(ctx, &sources[i]); err != nil {
+			t.Fatalf("Upsert source %+v failed: %v", sources[i], err)
+		}
+	}
+
+	// Deleting nonexistent subscription must return not_found and not deactivate anything
+	err := subRepo.Delete(ctx, "01910000-0000-7000-8000-nonexistent")
+	var domErr *domain.DomainError
+	if !errors.As(err, &domErr) || domErr.Category != domain.CategoryNotFound {
+		t.Fatalf("Delete nonexistent sub error = %v, want not_found", err)
+	}
+
+	// Delete Sub A
+	if err := subRepo.Delete(ctx, subA.ID); err != nil {
+		t.Fatalf("Delete subA failed: %v", err)
+	}
+
+	// Sub A must be gone
+	if _, err := subRepo.GetByID(ctx, subA.ID); !errors.As(err, &domErr) || domErr.Category != domain.CategoryNotFound {
+		t.Fatalf("GetByID(subA) after delete error = %v, want not_found", err)
+	}
+
+	// Exclusive nodes of Sub A must be deactivated (active = false)
+	for _, id := range []string{"node-exclusive-a1", "node-exclusive-a2"} {
+		n, err := nodeRepo.GetByLogicalID(ctx, id)
+		if err != nil {
+			t.Fatalf("GetByLogicalID(%s) failed: %v", id, err)
+		}
+		if n.Active {
+			t.Fatalf("expected orphan node %s to have Active=false after deleting Sub A, got true", id)
+		}
+		remSources, err := sourceRepo.ListByNode(ctx, id)
+		if err != nil {
+			t.Fatalf("ListByNode(%s) failed: %v", id, err)
+		}
+		if len(remSources) != 0 {
+			t.Fatalf("expected 0 remaining sources for %s, got %+v", id, remSources)
+		}
+	}
+
+	// Shared node and Sub B exclusive node must remain active (active = true)
+	for _, id := range []string{"node-shared-ab", "node-exclusive-b1"} {
+		n, err := nodeRepo.GetByLogicalID(ctx, id)
+		if err != nil {
+			t.Fatalf("GetByLogicalID(%s) failed: %v", id, err)
+		}
+		if !n.Active {
+			t.Fatalf("expected node %s still backed by Sub B to remain Active=true, got false", id)
+		}
+		remSources, err := sourceRepo.ListByNode(ctx, id)
+		if err != nil {
+			t.Fatalf("ListByNode(%s) failed: %v", id, err)
+		}
+		if len(remSources) != 1 || remSources[0].SubscriptionID != subB.ID {
+			t.Fatalf("expected 1 remaining source (Sub B) for %s, got %+v", id, remSources)
+		}
+	}
+
+	activeNodes, totalActive, err := nodeRepo.List(ctx, domain.NodeFilter{
+		ActiveOnly: true,
+		Pagination: domain.Pagination{Page: 1, PageSize: 10},
+	})
+	if err != nil {
+		t.Fatalf("List active nodes failed: %v", err)
+	}
+	if totalActive != 2 || len(activeNodes) != 2 {
+		t.Fatalf("expected 2 active nodes after deleting Sub A, got total=%d len=%d", totalActive, len(activeNodes))
+	}
+
+	// Now delete Sub B -> all remaining nodes become orphans and must be deactivated
+	if err := subRepo.Delete(ctx, subB.ID); err != nil {
+		t.Fatalf("Delete subB failed: %v", err)
+	}
+
+	activeNodesAfterB, totalActiveAfterB, err := nodeRepo.List(ctx, domain.NodeFilter{
+		ActiveOnly: true,
+		Pagination: domain.Pagination{Page: 1, PageSize: 10},
+	})
+	if err != nil {
+		t.Fatalf("List active nodes after Sub B delete failed: %v", err)
+	}
+	if totalActiveAfterB != 0 || len(activeNodesAfterB) != 0 {
+		t.Fatalf("expected 0 active nodes after deleting Sub B, got total=%d len=%d", totalActiveAfterB, len(activeNodesAfterB))
 	}
 }

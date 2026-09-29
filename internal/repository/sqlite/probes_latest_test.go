@@ -571,3 +571,109 @@ func legacyListLatestByNodesScanAll(ctx context.Context, db *sql.DB, nodeLogical
 	}
 	return result, nil
 }
+
+func TestProbeObservationRepository_ListByNodePaginated(t *testing.T) {
+	ctx := context.Background()
+	db, _ := setupTestDB(t)
+	defer db.Close()
+
+	runRepo := sqlite.NewProbeRunRepository(db)
+	obsRepo := sqlite.NewProbeObservationRepository(db)
+	nodeRepo := sqlite.NewNodeRepository(db)
+
+	now := time.Now().UTC()
+	run := &domain.ProbeRun{
+		ID:             "run-pg-repo-test",
+		IdempotencyKey: "key-pg-repo-test",
+		ActorScope:     "admin",
+		State:          domain.ProbeRunStateSucceeded,
+		DeadlineAt:     now.Add(time.Hour),
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	if err := runRepo.Create(ctx, run); err != nil {
+		t.Fatalf("failed to create probe run: %v", err)
+	}
+
+	node := domain.Node{
+		LogicalID:   "node-repo-pg-test",
+		DisplayName: "Repo Paginated Node",
+		Protocol:    domain.ProtocolSS,
+		Server:      "1.1.1.1",
+		Port:        8388,
+		Active:      true,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	if err := nodeRepo.UpsertBatch(ctx, []domain.Node{node}); err != nil {
+		t.Fatalf("failed to upsert node: %v", err)
+	}
+
+	pager, ok := obsRepo.(domain.ProbeObservationNodePager)
+	if !ok {
+		t.Fatalf("expected obsRepo to implement domain.ProbeObservationNodePager")
+	}
+
+	// 0 records initially
+	emptyItems, emptyTotal, err := pager.ListByNodePaginated(ctx, node.LogicalID, 1, 20)
+	if err != nil {
+		t.Fatalf("ListByNodePaginated empty error: %v", err)
+	}
+	if emptyTotal != 0 || len(emptyItems) != 0 {
+		t.Fatalf("expected 0 items and 0 total, got total=%d items=%d", emptyTotal, len(emptyItems))
+	}
+
+	// Insert 45 records
+	for i := 1; i <= 45; i++ {
+		obs := &domain.ProbeObservation{
+			ID:              domain.MustNewUUIDv7(),
+			ProbeRunID:      run.ID,
+			NodeLogicalID:   node.LogicalID,
+			Kind:            domain.ProbeKindBaseline,
+			Verdict:         domain.VerdictAvailable,
+			EvidenceDigest:  fmt.Sprintf("sha256:obs-repo-%03d", i),
+			ObservedAt:      now.Add(time.Duration(i) * time.Second),
+			LatencyMS:       int64(i * 10),
+			RedactedSummary: fmt.Sprintf("summary %d", i),
+		}
+		if err := obsRepo.Create(ctx, obs); err != nil {
+			t.Fatalf("failed to insert observation %d: %v", i, err)
+		}
+	}
+
+	// Page 1: 20 items, total 45
+	p1Items, p1Total, err := pager.ListByNodePaginated(ctx, node.LogicalID, 1, 20)
+	if err != nil {
+		t.Fatalf("page 1 error: %v", err)
+	}
+	if p1Total != 45 || len(p1Items) != 20 {
+		t.Fatalf("page 1: expected total=45 len=20, got total=%d len=%d", p1Total, len(p1Items))
+	}
+
+	// Page 2: 20 items, total 45
+	p2Items, p2Total, err := pager.ListByNodePaginated(ctx, node.LogicalID, 2, 20)
+	if err != nil {
+		t.Fatalf("page 2 error: %v", err)
+	}
+	if p2Total != 45 || len(p2Items) != 20 {
+		t.Fatalf("page 2: expected total=45 len=20, got total=%d len=%d", p2Total, len(p2Items))
+	}
+
+	// Page 3: 5 items, total 45
+	p3Items, p3Total, err := pager.ListByNodePaginated(ctx, node.LogicalID, 3, 20)
+	if err != nil {
+		t.Fatalf("page 3 error: %v", err)
+	}
+	if p3Total != 45 || len(p3Items) != 5 {
+		t.Fatalf("page 3: expected total=45 len=5, got total=%d len=%d", p3Total, len(p3Items))
+	}
+
+	// Page 4: 0 items, total 45
+	p4Items, p4Total, err := pager.ListByNodePaginated(ctx, node.LogicalID, 4, 20)
+	if err != nil {
+		t.Fatalf("page 4 error: %v", err)
+	}
+	if p4Total != 45 || len(p4Items) != 0 {
+		t.Fatalf("page 4: expected total=45 len=0, got total=%d len=%d", p4Total, len(p4Items))
+	}
+}

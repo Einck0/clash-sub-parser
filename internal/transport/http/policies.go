@@ -72,12 +72,18 @@ func registerPolicyRoutes(r chi.Router, service *policy.Service, audit domain.Au
 
 		sub.Get("/rules", h.listRules)
 		sub.Post("/rules", h.createRule)
+		sub.Delete("/rules/{id}", h.deleteRule)
 
 		sub.Post("/validate", h.validate)
 	}
 
 	r.Route("/policies", registerGroup)
 	r.Route("/policy", registerGroup)
+	r.Route("/admission", func(sub chi.Router) {
+		sub.Get("/rules", h.listRules)
+		sub.Post("/rules", h.createAdmissionRule)
+		sub.Delete("/rules/{id}", h.deleteRule)
+	})
 }
 
 // RegisterPolicyFilterRoutes explicitly registers global node filter endpoints on a router.
@@ -340,6 +346,44 @@ func (h policyHandler) createRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	WriteSuccess(w, r, http.StatusCreated, polView)
+}
+
+func (h policyHandler) createAdmissionRule(w http.ResponseWriter, r *http.Request) {
+	var body createRuleRequest
+	if err := decodeJSON(w, r, &body); err != nil {
+		return
+	}
+
+	admView, err := h.service.CreateAdmissionRule(r.Context(), policy.CreateAdmissionRuleCommand{
+		RevisionID: body.RevisionID,
+		Name:       body.Name,
+		Expression: body.Expression,
+		Action:     body.Action,
+		Position:   body.Position,
+		RequestID:  GetRequestID(r.Context()),
+		ActorKind:  requestActorKind(r),
+	})
+	if err != nil {
+		WriteDomainError(w, r, err)
+		return
+	}
+	WriteSuccess(w, r, http.StatusCreated, admView)
+}
+
+func (h policyHandler) deleteRule(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	kind := strings.TrimSpace(r.URL.Query().Get("kind"))
+	err := h.service.DeleteRule(r.Context(), policy.DeleteRuleCommand{
+		ID:        id,
+		Kind:      kind,
+		RequestID: GetRequestID(r.Context()),
+		ActorKind: requestActorKind(r),
+	})
+	if err != nil {
+		WriteDomainError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h policyHandler) validate(w http.ResponseWriter, r *http.Request) {

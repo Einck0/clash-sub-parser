@@ -181,29 +181,52 @@ func (r *revisionRepository) Create(ctx context.Context, rev *domain.Configurati
 	return nil
 }
 
+// CreateActive rolls back the new revision and previous active state if activation fails.
+func (r *revisionRepository) CreateActive(ctx context.Context, rev *domain.ConfigurationRevision) error {
+	return WithTx(ctx, r.db, func(ctx context.Context, tx *sql.Tx) error {
+		var parent sql.NullString
+		if rev.ParentID != nil && *rev.ParentID != "" {
+			parent = sql.NullString{String: *rev.ParentID, Valid: true}
+		}
+		created := rev.CreatedAt
+		if created.IsZero() {
+			created = domain.NowUTC()
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO configuration_revisions (id, parent_id, content_digest, state, created_at) VALUES (?, ?, ?, 'draft', ?);`,
+			rev.ID, parent, rev.ContentDigest, created.Format(time.RFC3339)); err != nil {
+			return fmt.Errorf("failed to insert configuration revision: %w", err)
+		}
+		return setActiveRevision(ctx, tx, rev.ID)
+	})
+}
+
 func (r *revisionRepository) SetActive(ctx context.Context, id string) error {
 	return WithTx(ctx, r.db, func(ctx context.Context, tx *sql.Tx) error {
-		// Archive previously active revisions
-		_, err := tx.ExecContext(ctx, "UPDATE configuration_revisions SET state = 'archived' WHERE state = 'active';")
-		if err != nil {
-			return fmt.Errorf("failed to archive previously active revisions: %w", err)
-		}
-
-		res, err := tx.ExecContext(ctx, "UPDATE configuration_revisions SET state = 'active' WHERE id = ?;", id)
-		if err != nil {
-			return fmt.Errorf("failed to activate revision %s: %w", id, err)
-		}
-
-		affected, err := res.RowsAffected()
-		if err != nil {
-			return err
-		}
-		if affected == 0 {
-			return domain.NewNotFoundError("revision_not_found", fmt.Sprintf("configuration revision %s not found", id))
-		}
-
-		return nil
+		return setActiveRevision(ctx, tx, id)
 	})
+}
+
+func setActiveRevision(ctx context.Context, tx *sql.Tx, id string) error {
+	// Archive previously active revisions
+	_, err := tx.ExecContext(ctx, "UPDATE configuration_revisions SET state = 'archived' WHERE state = 'active';")
+	if err != nil {
+		return fmt.Errorf("failed to archive previously active revisions: %w", err)
+	}
+
+	res, err := tx.ExecContext(ctx, "UPDATE configuration_revisions SET state = 'active' WHERE id = ?;", id)
+	if err != nil {
+		return fmt.Errorf("failed to activate revision %s: %w", id, err)
+	}
+
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return domain.NewNotFoundError("revision_not_found", fmt.Sprintf("configuration revision %s not found", id))
+	}
+
+	return nil
 }
 
 // PublicationRepository implementation

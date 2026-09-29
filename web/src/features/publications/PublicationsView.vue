@@ -57,6 +57,8 @@ const {
   revoke,
   copyToClipboard,
   downloadFile,
+  restoreActivePublication,
+  getFullExportUrl,
 } = usePublications()
 
 const publishModalOpen = ref(false)
@@ -66,6 +68,7 @@ const currentTargetMeta = computed(() => getTargetMetadata(selectedTarget.value)
 
 async function switchTarget(target: CompilerTarget) {
   selectedTarget.value = target
+  restoreActivePublication(target)
   await fetchPreview(target)
 }
 
@@ -85,17 +88,18 @@ function handleDownload() {
 }
 
 async function handlePublish() {
+  const target = selectedTarget.value
   try {
-    await publish(selectedTarget.value)
-    publishModalOpen.value = true
+    await publish(target)
+    if (selectedTarget.value === target) publishModalOpen.value = true
   } catch {
     // handled in composable
   }
 }
 
 async function copyPublicationURL() {
-  if (!activePublication.value?.export_url) return
-  const fullUrl = `${window.location.origin}${activePublication.value.export_url}`
+  const fullUrl = getFullExportUrl(activePublication.value)
+  if (!fullUrl) return
   await copyToClipboard(fullUrl)
   copiedToken.value = true
   setTimeout(() => {
@@ -121,6 +125,7 @@ async function confirmRevokePublication() {
 }
 
 onMounted(() => {
+  restoreActivePublication(selectedTarget.value)
   fetchPreview(selectedTarget.value)
 })
 </script>
@@ -146,6 +151,17 @@ onMounted(() => {
           @click="fetchPreview(selectedTarget)"
         >
           <ArrowPathIcon class="w-4 h-4" :class="{ 'animate-spin': loadingPreview }" />
+        </button>
+
+        <button
+          v-if="activePublication && !activePublication.revoked_at && activePublication.export_url"
+          type="button"
+          class="btn btn-secondary btn-sm gap-1.5 touch-manipulation"
+          data-testid="copy-subscription-url-btn"
+          @click="copyPublicationURL"
+        >
+          <ClipboardDocumentIcon class="w-4 h-4" />
+          {{ copiedToken ? '已复制！' : '复制订阅链接' }}
         </button>
 
         <button
@@ -486,10 +502,11 @@ onMounted(() => {
             <button
               type="button"
               class="btn btn-primary btn-sm gap-1"
+              data-testid="modal-copy-subscription-url-btn"
               @click="copyPublicationURL"
             >
               <ClipboardDocumentIcon class="w-4 h-4" />
-              {{ copiedToken ? '已复制！' : '复制链接' }}
+              {{ copiedToken ? '已复制！' : '复制订阅链接' }}
             </button>
           </div>
           <p class="text-[11px] opacity-60">

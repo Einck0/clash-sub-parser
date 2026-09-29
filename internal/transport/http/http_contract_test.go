@@ -118,3 +118,27 @@ func TestEmbeddedWebRoutes(t *testing.T) {
 		})
 	}
 }
+
+func TestLegacyGoneEndpoints(t *testing.T) {
+	router := setupTestRouter(t, true)
+	for _, route := range []string{"/yaml", "/yaml/default", "/script", "/script/default"} {
+		t.Run(route, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, route, nil)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			if rec.Code != http.StatusGone {
+				t.Fatalf("expected status 410 Gone for %s, got %d: %s", route, rec.Code, rec.Body.String())
+			}
+			if strings.Contains(rec.Header().Get("Content-Type"), "text/html") {
+				t.Fatalf("legacy route %s must not fall back to SPA HTML, got Content-Type %q", route, rec.Header().Get("Content-Type"))
+			}
+			var errResp testErrorResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
+				t.Fatalf("failed to decode 410 error response: %v", err)
+			}
+			if errResp.Code != transporthttp.LegacyEndpointRemovedCode {
+				t.Fatalf("expected code %q, got %q", transporthttp.LegacyEndpointRemovedCode, errResp.Code)
+			}
+		})
+	}
+}

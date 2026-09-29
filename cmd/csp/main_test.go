@@ -174,6 +174,28 @@ func TestServeCLI(t *testing.T) {
 			t.Fatalf("/readyz check failed or timed out. Stdout: %s, Stderr: %s", stdout.String(), stderr.String())
 		}
 
+		// Verify initial active revision was bootstrapped on fresh DB startup
+		revResp, err := client.Get(baseURL + "/api/v1/revisions/active")
+		if err != nil {
+			t.Fatalf("GET /api/v1/revisions/active failed: %v", err)
+		}
+		defer revResp.Body.Close()
+		if revResp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200 OK on /api/v1/revisions/active after fresh startup, got %d", revResp.StatusCode)
+		}
+
+		// Verify legacy endpoints return 410 Gone
+		for _, legacyPath := range []string{"/yaml", "/script"} {
+			lResp, lErr := client.Get(baseURL + legacyPath)
+			if lErr != nil {
+				t.Fatalf("GET %s failed: %v", legacyPath, lErr)
+			}
+			_ = lResp.Body.Close()
+			if lResp.StatusCode != http.StatusGone {
+				t.Fatalf("expected 410 Gone for %s, got %d", legacyPath, lResp.StatusCode)
+			}
+		}
+
 		// Trigger graceful shutdown
 		cancel()
 

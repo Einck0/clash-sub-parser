@@ -1,11 +1,21 @@
 package domain
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"time"
 )
+
+// VerdictUnavailable aliases VerdictError for nodes that failed baseline connectivity or dial checks.
+const VerdictUnavailable = VerdictError
+
+// ProbeObservationNodePager is an optional extension of ProbeObservationRepository
+// that performs SQL-level LIMIT/OFFSET pagination and exact COUNT(*) total for node observations.
+type ProbeObservationNodePager interface {
+	ListByNodePaginated(ctx context.Context, nodeLogicalID string, page, pageSize int) ([]ProbeObservation, int, error)
+}
 
 // ProbeRun represents a bounded capability probing job across a set of nodes.
 type ProbeRun struct {

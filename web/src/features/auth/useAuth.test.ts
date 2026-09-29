@@ -2,10 +2,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, ApiError } from '../../api/client'
 import { useAuth, type AuthStatus } from './useAuth'
+import { usePublications } from '../publications/usePublications'
 
 describe('useAuth state machine', () => {
   beforeEach(() => {
     localStorage.clear()
+    sessionStorage.clear()
     api.setAuthToken(null)
     vi.restoreAllMocks()
   })
@@ -34,6 +36,13 @@ describe('useAuth state machine', () => {
     expect(localStorage.getItem('csp_token')).toBeNull()
     expect(api.getAuthToken()).toBeNull()
     expect(auth.errorMessage.value).toBe('')
+  })
+
+  it('preserves a publication capability on a fresh open-mode page reload', async () => {
+    sessionStorage.setItem('csp_publication_active_mihomo', '{"id":"public","target":"mihomo","export_url":"/publish/v1/public?token=public"}')
+    vi.spyOn(api, 'get').mockResolvedValue({ mode: 'open', authenticated: true, subject: 'admin' } as AuthStatus)
+    await useAuth().probe()
+    expect(sessionStorage.getItem('csp_publication_active_mihomo')).toContain('public')
   })
 
   it('probes in protected mode when authenticated', async () => {
@@ -154,5 +163,71 @@ describe('useAuth state machine', () => {
     // Simulate 401 triggering api.onUnauthorizedCallback
     ;(api as any).onUnauthorizedCallback?.()
     expect(auth.state.value).toBe('unauthenticated')
+    expect(api.getCsrfToken()).toBeNull()
+  })
+
+  it('clears publication capabilities across all auth invalidation paths', async () => {
+    sessionStorage.setItem('csp_publication_latest', '{"id":"pub-1","target":"mihomo","export_url":"/url"}')
+    sessionStorage.setItem('csp_publication_active_mihomo', '{"id":"pub-1","target":"mihomo","export_url":"/url"}')
+    sessionStorage.setItem('unrelated_session', 'preserve')
+
+    const auth = useAuth()
+
+    // 1. clearStoredToken
+    auth.clearStoredToken()
+    expect(sessionStorage.getItem('csp_publication_latest')).toBeNull()
+    expect(sessionStorage.getItem('csp_publication_active_mihomo')).toBeNull()
+
+    // 2. logout
+    sessionStorage.setItem('csp_publication_latest', '{"id":"pub-2","target":"mihomo","export_url":"/url"}')
+    sessionStorage.setItem('csp_publication_active_mihomo', '{"id":"pub-2","target":"mihomo","export_url":"/url"}')
+    vi.spyOn(api, 'post').mockResolvedValueOnce({ message: 'Logged out' })
+    await auth.logout()
+    expect(sessionStorage.getItem('csp_publication_latest')).toBeNull()
+    expect(sessionStorage.getItem('csp_publication_active_mihomo')).toBeNull()
+
+    // 3. 401 callback also clears a mounted publication view's in-memory capability
+    sessionStorage.setItem('csp_publication_latest', '{"id":"pub-3","target":"mihomo","export_url":"/url"}')
+    sessionStorage.setItem('csp_publication_active_mihomo', '{"id":"pub-3","target":"mihomo","export_url":"/url"}')
+    const publication = usePublications('mihomo')
+    expect(publication.activePublication.value?.id).toBe('pub-3')
+    ;(api as any).onUnauthorizedCallback?.()
+    expect(publication.activePublication.value).toBeNull()
+    expect(sessionStorage.getItem('csp_publication_latest')).toBeNull()
+    expect(sessionStorage.getItem('csp_publication_active_mihomo')).toBeNull()
+
+    // 4. login replacement
+    sessionStorage.setItem('csp_publication_latest', '{"id":"pub-4","target":"mihomo","export_url":"/url"}')
+    sessionStorage.setItem('csp_publication_active_mihomo', '{"id":"pub-4","target":"mihomo","export_url":"/url"}')
+    vi.spyOn(api, 'post').mockResolvedValueOnce({ mode: 'protected', authenticated: true, token: 'new-token' })
+    await auth.login('new-token')
+    expect(sessionStorage.getItem('csp_publication_latest')).toBeNull()
+    expect(sessionStorage.getItem('csp_publication_active_mihomo')).toBeNull()
+    expect(sessionStorage.getItem('unrelated_session')).toBe('preserve')
+  })
+
+  it('stores and clears CSRF token alongside login and logout lifecycle', async () => {
+    sessionStorage.clear()
+    api.setCsrfToken(null)
+
+    const postSpy = vi.spyOn(api, 'post').mockResolvedValue({
+      mode: 'protected',
+      authenticated: true,
+      token: 'valid-secret-token',
+      csrf_token: 'csrf-server-token-123',
+    })
+
+    const auth = useAuth()
+    const success = await auth.login('valid-secret-token')
+
+    expect(success).toBe(true)
+    expect(api.getCsrfToken()).toBe('csrf-server-token-123')
+    expect(sessionStorage.getItem('csp_csrf_token')).toBe('csrf-server-token-123')
+
+    // Logout should clear CSRF token
+    postSpy.mockResolvedValueOnce({ message: 'Logged out' })
+    await auth.logout()
+    expect(api.getCsrfToken()).toBeNull()
+    expect(sessionStorage.getItem('csp_csrf_token')).toBeNull()
   })
 })

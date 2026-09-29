@@ -333,3 +333,184 @@ func TestSubscriptionEndpointsReturnLastRefreshInfo(t *testing.T) {
 		t.Fatalf("subID not found in list response")
 	}
 }
+
+func TestSubscriptionPatch_BlankSecretRefRejected(t *testing.T) {
+	cfg := sqlite.Config{
+		Path:            fmt.Sprintf("file:sub_patch_blank_%d?mode=memory&cache=shared", time.Now().UnixNano()),
+		BusyTimeout:     time.Second,
+		ForeignKeys:     true,
+		WALMode:         false,
+		MaxOpenConns:    1,
+		MaxIdleConns:    1,
+		ConnMaxLifetime: 0,
+	}
+	db, err := sqlite.OpenAndMigrate(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("OpenAndMigrate() error = %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	routerCfg := newTestRouterConfig(true)
+	routerCfg.SubscriptionService = subscription.NewService(sqlite.NewSubscriptionRepository(db), sqlite.NewAuditRepository(db))
+	router := transporthttp.NewRouter(routerCfg)
+
+	initialURL := "https://example.com/subscriptions/original?token=abc"
+	createBody := `{"name":"OriginalSub","source_url_secret_ref":"` + initialURL + `","enabled":true,"refresh_policy":{"interval_seconds":3600}}`
+	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/subscriptions", strings.NewReader(createBody))
+	createReq.Header.Set("Content-Type", "application/json")
+	createReq.Header.Set("Authorization", "Bearer "+testAdminToken)
+	createRec := httptest.NewRecorder()
+	router.ServeHTTP(createRec, createReq)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, body = %s", createRec.Code, createRec.Body.String())
+	}
+	var createdResp testDataResponse[subscriptionResponse]
+	if err := json.Unmarshal(createRec.Body.Bytes(), &createdResp); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+
+	subID := createdResp.Data.ID
+	initialRev := createdResp.Data.Revision
+
+	// 1. Whitespace-only source_url_secret_ref must be rejected with 422 invalid_source_url_secret_ref
+	for _, payload := range []string{
+		`{"source_url_secret_ref":"   "}`,
+		`{"source_url_secret_ref":""}`,
+		`{"name":"ShouldNotApply","source_url_secret_ref":"  \t\n "}`,
+	} {
+		patchReq := httptest.NewRequest(http.MethodPatch, "/api/v1/subscriptions/"+subID, strings.NewReader(payload))
+		patchReq.Header.Set("Content-Type", "application/json")
+		patchReq.Header.Set("Authorization", "Bearer "+testAdminToken)
+		patchReq.Header.Set("If-Match", initialRev)
+		patchRec := httptest.NewRecorder()
+		router.ServeHTTP(patchRec, patchReq)
+		if patchRec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("patch payload %s status = %d, want 422; body = %s", payload, patchRec.Code, patchRec.Body.String())
+		}
+		if !strings.Contains(patchRec.Body.String(), `"invalid_source_url_secret_ref"`) {
+			t.Fatalf("expected error code invalid_source_url_secret_ref, got body = %s", patchRec.Body.String())
+		}
+	}
+
+	// Verify state and revision were not modified after failed PATCH attempts
+	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/subscriptions/"+subID, nil)
+	getReq.Header.Set("Authorization", "Bearer "+testAdminToken)
+	getRec := httptest.NewRecorder()
+	router.ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("get status = %d, body = %s", getRec.Code, getRec.Body.String())
+	}
+	var getResp testDataResponse[subscriptionResponse]
+	if err := json.Unmarshal(getRec.Body.Bytes(), &getResp); err != nil {
+		t.Fatalf("decode get response: %v", err)
+	}
+	if getResp.Data.Name != "OriginalSub" || getResp.Data.SourceURLSecretRef != initialURL || getResp.Data.Revision != initialRev {
+		t.Fatalf("subscription unexpectedly mutated after rejected PATCH: %+v", getResp.Data)
+	}
+
+	// 2. Omitting source_url_secret_ref while updating name must succeed and keep existing source_url_secret_ref
+	validPatch := httptest.NewRequest(http.MethodPatch, "/api/v1/subscriptions/"+subID, strings.NewReader(`{"name":"RenamedWithoutURL"}`))
+	validPatch.Header.Set("Content-Type", "application/json")
+	validPatch.Header.Set("Authorization", "Bearer "+testAdminToken)
+	validPatch.Header.Set("If-Match", initialRev)
+	validRec := httptest.NewRecorder()
+	router.ServeHTTP(validRec, validPatch)
+	if validRec.Code != http.StatusOK {
+		t.Fatalf("valid patch status = %d, body = %s", validRec.Code, validRec.Body.String())
+	}
+	var validResp testDataResponse[subscriptionResponse]
+	if err := json.Unmarshal(validRec.Body.Bytes(), &validResp); err != nil {
+		t.Fatalf("decode valid patch response: %v", err)
+	}
+	if validResp.Data.Name != "RenamedWithoutURL" || validResp.Data.SourceURLSecretRef != initialURL {
+		t.Fatalf("unexpected valid patch response: %+v", validResp.Data)
+	}
+}
+
+func TestSubscriptionDelete_DeactivatesOrphanNodesAndPreservesSharedNodes(t *testing.T) {
+	ctx := context.Background()
+	cfg := sqlite.Config{
+		Path:            fmt.Sprintf("file:sub_del_orphans_%d?mode=memory&cache=shared", time.Now().UnixNano()),
+		BusyTimeout:     time.Second,
+		ForeignKeys:     true,
+		WALMode:         false,
+		MaxOpenConns:    1,
+		MaxIdleConns:    1,
+		ConnMaxLifetime: 0,
+	}
+	db, err := sqlite.OpenAndMigrate(ctx, cfg)
+	if err != nil {
+		t.Fatalf("OpenAndMigrate() error = %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	subRepo := sqlite.NewSubscriptionRepository(db)
+	nodeRepo := sqlite.NewNodeRepository(db)
+	sourceRepo := sqlite.NewNodeSourceRepository(db)
+
+	routerCfg := newTestRouterConfig(true)
+	routerCfg.SubscriptionService = subscription.NewService(subRepo, sqlite.NewAuditRepository(db))
+	router := transporthttp.NewRouter(routerCfg)
+
+	createSub := func(name, url string) string {
+		body := fmt.Sprintf(`{"name":%q,"source_url_secret_ref":%q,"enabled":true,"refresh_policy":{"interval_seconds":3600}}`, name, url)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/subscriptions", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+testAdminToken)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("create sub %s status = %d, body = %s", name, rec.Code, rec.Body.String())
+		}
+		var resp testDataResponse[subscriptionResponse]
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode create response: %v", err)
+		}
+		return resp.Data.ID
+	}
+
+	subAID := createSub("Sub A", "https://example.com/a")
+	subBID := createSub("Sub B", "https://example.com/b")
+
+	now := domain.NowUTC()
+	if err := nodeRepo.UpsertBatch(ctx, []domain.Node{
+		{LogicalID: "orphan-candidate", Protocol: domain.ProtocolVMess, DisplayName: "Orphan Candidate", Server: "198.51.100.10", Port: 443, Active: true, CreatedAt: now, UpdatedAt: now},
+		{LogicalID: "shared-node", Protocol: domain.ProtocolTrojan, DisplayName: "Shared Node", Server: "198.51.100.11", Port: 443, Active: true, CreatedAt: now, UpdatedAt: now},
+	}); err != nil {
+		t.Fatalf("UpsertBatch failed: %v", err)
+	}
+	for _, src := range []domain.NodeSource{
+		{NodeLogicalID: "orphan-candidate", SubscriptionID: subAID, LastSeenFetchID: "f1"},
+		{NodeLogicalID: "shared-node", SubscriptionID: subAID, LastSeenFetchID: "f1"},
+		{NodeLogicalID: "shared-node", SubscriptionID: subBID, LastSeenFetchID: "f2"},
+	} {
+		s := src
+		if err := sourceRepo.Upsert(ctx, &s); err != nil {
+			t.Fatalf("Upsert source failed: %v", err)
+		}
+	}
+
+	delReq := httptest.NewRequest(http.MethodDelete, "/api/v1/subscriptions/"+subAID, nil)
+	delReq.Header.Set("Authorization", "Bearer "+testAdminToken)
+	delRec := httptest.NewRecorder()
+	router.ServeHTTP(delRec, delReq)
+	if delRec.Code != http.StatusNoContent {
+		t.Fatalf("delete subA status = %d, body = %s", delRec.Code, delRec.Body.String())
+	}
+
+	orphanNode, err := nodeRepo.GetByLogicalID(ctx, "orphan-candidate")
+	if err != nil {
+		t.Fatalf("GetByLogicalID orphan-candidate failed: %v", err)
+	}
+	if orphanNode.Active {
+		t.Fatalf("expected orphan-candidate Active=false after deleting Sub A, got true")
+	}
+
+	sharedNode, err := nodeRepo.GetByLogicalID(ctx, "shared-node")
+	if err != nil {
+		t.Fatalf("GetByLogicalID shared-node failed: %v", err)
+	}
+	if !sharedNode.Active {
+		t.Fatalf("expected shared-node Active=true because Sub B still owns it, got false")
+	}
+}

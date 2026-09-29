@@ -206,3 +206,94 @@ func TestServiceConcurrentActivationsRaceSafety(t *testing.T) {
 		t.Fatalf("expected an active revision after concurrent activations: err=%v", err)
 	}
 }
+
+type failingInitialActivationRepo struct {
+	domain.RevisionRepository
+}
+
+func (r failingInitialActivationRepo) SetActive(context.Context, string) error {
+	return fmt.Errorf("activation unavailable")
+}
+
+func TestEnsureActiveRevisionActivationFailure(t *testing.T) {
+	db := setupRevisionDB(t)
+	realRepo := sqlite.NewRevisionRepository(db)
+	svc := revision.NewService(failingInitialActivationRepo{realRepo}, sqlite.NewAuditRepository(db), revision.WithPolicyRepository(sqlite.NewPolicyRepository(db)))
+	active, err := svc.EnsureActiveRevision(context.Background())
+	if active != nil || err == nil {
+		t.Fatalf("failed activation must not report active revision: active=%+v err=%v", active, err)
+	}
+	_, total, err := realRepo.List(context.Background(), domain.RevisionFilter{})
+	if err != nil || total != 1 {
+		t.Fatalf("expected one draft after failed activation, total=%d err=%v", total, err)
+	}
+	stillActive, err := realRepo.GetActive(context.Background())
+	if stillActive != nil || err == nil {
+		t.Fatalf("failed activation must not leave an active revision: active=%+v err=%v", stillActive, err)
+	}
+}
+
+func TestServiceEnsureActiveRevisionAndCreate(t *testing.T) {
+	db := setupRevisionDB(t)
+	repo := sqlite.NewRevisionRepository(db)
+	audit := sqlite.NewAuditRepository(db)
+	policyRepo := sqlite.NewPolicyRepository(db)
+	svc := revision.NewService(repo, audit, revision.WithPolicyRepository(policyRepo))
+	ctx := context.Background()
+
+	// 1. Fresh DB: EnsureActiveRevision creates an active revision
+	bootstrapped, err := svc.EnsureActiveRevision(ctx)
+	if err != nil || bootstrapped == nil {
+		t.Fatalf("expected initial active revision to be bootstrapped, got rev=%+v err=%v", bootstrapped, err)
+	}
+	if bootstrapped.State != domain.RevisionStateActive {
+		t.Fatalf("expected state active, got %s", bootstrapped.State)
+	}
+
+	// 2. Calling EnsureActiveRevision again is idempotent
+	again, err := svc.EnsureActiveRevision(ctx)
+	if err != nil || again == nil || again.ID != bootstrapped.ID {
+		t.Fatalf("expected idempotent active revision %s, got %+v err=%v", bootstrapped.ID, again, err)
+	}
+
+	// 3. Create draft revision explicitly
+	draftRev, err := svc.Create(ctx, revision.CreateCommand{
+		ParentID:  &bootstrapped.ID,
+		RequestID: "req-create-draft",
+		ActorKind: domain.ActorKindAdmin,
+	})
+	if err != nil || draftRev == nil {
+		t.Fatalf("Create draft failed: %v", err)
+	}
+	if draftRev.State != domain.RevisionStateDraft {
+		t.Fatalf("expected created revision state draft, got %s", draftRev.State)
+	}
+	if draftRev.ParentID == nil || *draftRev.ParentID != bootstrapped.ID {
+		t.Fatalf("expected parent_id %s, got %+v", bootstrapped.ID, draftRev.ParentID)
+	}
+
+	// Active revision must still be bootstrapped
+	active, err := svc.GetActive(ctx)
+	if err != nil || active.ID != bootstrapped.ID {
+		t.Fatalf("expected active revision to remain %s, got %+v err=%v", bootstrapped.ID, active, err)
+	}
+
+	// 4. Create active revision explicitly -> promotes new revision and archives previous
+	activeRev, err := svc.Create(ctx, revision.CreateCommand{
+		ParentID:  &bootstrapped.ID,
+		State:     domain.RevisionStateActive,
+		RequestID: "req-create-active",
+		ActorKind: domain.ActorKindAdmin,
+	})
+	if err != nil || activeRev == nil || activeRev.State != domain.RevisionStateActive {
+		t.Fatalf("Create active revision failed: rev=%+v err=%v", activeRev, err)
+	}
+	currentActive, err := svc.GetActive(ctx)
+	if err != nil || currentActive.ID != activeRev.ID {
+		t.Fatalf("expected current active to be %s, got %+v err=%v", activeRev.ID, currentActive, err)
+	}
+	oldRev, err := repo.GetByID(ctx, bootstrapped.ID)
+	if err != nil || oldRev.State != domain.RevisionStateArchived {
+		t.Fatalf("expected previous active revision to be archived, got %+v err=%v", oldRev, err)
+	}
+}

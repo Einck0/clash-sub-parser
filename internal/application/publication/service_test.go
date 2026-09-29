@@ -568,6 +568,21 @@ func (m *mockRevisionRepo) Create(ctx context.Context, rev *domain.Configuration
 	return nil
 }
 
+func (m *mockRevisionRepo) CreateActive(ctx context.Context, rev *domain.ConfigurationRevision) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, other := range m.revisions {
+		if other.State == domain.RevisionStateActive {
+			other.State = domain.RevisionStateArchived
+		}
+	}
+	cp := *rev
+	cp.State = domain.RevisionStateActive
+	m.revisions[rev.ID] = &cp
+	m.activeID = rev.ID
+	return nil
+}
+
 func (m *mockRevisionRepo) SetActive(ctx context.Context, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -674,6 +689,20 @@ func (m *mockPolicyRepo) CreateAdmissionRule(ctx context.Context, rule *domain.A
 	return nil
 }
 
+func (m *mockPolicyRepo) DeleteAdmissionRule(ctx context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for revID, rules := range m.admissionRules {
+		for i, r := range rules {
+			if r.ID == id {
+				m.admissionRules[revID] = append(rules[:i], rules[i+1:]...)
+				return nil
+			}
+		}
+	}
+	return domain.NewNotFoundError("rule_not_found", "admission rule not found")
+}
+
 func (m *mockPolicyRepo) ListPolicyRules(ctx context.Context, revisionID string) ([]domain.PolicyRule, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -685,6 +714,20 @@ func (m *mockPolicyRepo) CreatePolicyRule(ctx context.Context, rule *domain.Poli
 	defer m.mu.Unlock()
 	m.policyRules[rule.RevisionID] = append(m.policyRules[rule.RevisionID], *rule)
 	return nil
+}
+
+func (m *mockPolicyRepo) DeletePolicyRule(ctx context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for revID, rules := range m.policyRules {
+		for i, r := range rules {
+			if r.ID == id {
+				m.policyRules[revID] = append(rules[:i], rules[i+1:]...)
+				return nil
+			}
+		}
+	}
+	return domain.NewNotFoundError("rule_not_found", "policy rule not found")
 }
 
 func TestMihomoPublishAndPreview_PlaintextPersistenceAndRestartRecovery(t *testing.T) {

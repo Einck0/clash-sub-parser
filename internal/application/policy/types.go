@@ -136,6 +136,14 @@ type PolicyRuleView struct {
 	Position      int    `json:"position"`
 }
 
+// DeleteRuleCommand defines parameters for deleting an admission or routing policy rule.
+type DeleteRuleCommand struct {
+	ID        string           `json:"id"`
+	Kind      string           `json:"kind,omitempty"` // "admission", "policy", or "" to auto-detect
+	RequestID string           `json:"request_id,omitempty"`
+	ActorKind domain.ActorKind `json:"actor_kind,omitempty"`
+}
+
 // ListRulesQuery defines parameters for listing rules.
 type ListRulesQuery struct {
 	RevisionID string `json:"revision_id,omitempty"`

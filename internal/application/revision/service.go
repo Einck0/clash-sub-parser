@@ -17,6 +17,14 @@ type Action struct {
 	ActorKind domain.ActorKind
 }
 
+// CreateCommand defines parameters for creating a configuration revision.
+type CreateCommand struct {
+	ParentID  *string                           `json:"parent_id,omitempty"`
+	State     domain.ConfigurationRevisionState `json:"state,omitempty"`
+	RequestID string                            `json:"request_id,omitempty"`
+	ActorKind domain.ActorKind                  `json:"actor_kind,omitempty"`
+}
+
 // RevisionDetail encapsulates a configuration revision along with its associated policy and admission rules.
 type RevisionDetail struct {
 	domain.ConfigurationRevision
@@ -65,6 +73,153 @@ func (s *Service) List(ctx context.Context, filter domain.RevisionFilter) ([]dom
 // GetActive retrieves the currently active configuration revision.
 func (s *Service) GetActive(ctx context.Context) (*domain.ConfigurationRevision, error) {
 	return s.revisions.GetActive(ctx)
+}
+
+// EnsureActiveRevision idempotently bootstraps an initial active configuration revision
+// when the database has no active revision and zero total revisions.
+func (s *Service) EnsureActiveRevision(ctx context.Context) (*domain.ConfigurationRevision, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.revisions == nil {
+		return nil, domain.NewValidationError("missing_revision_id", "revision repository is not configured")
+	}
+
+	active, err := s.revisions.GetActive(ctx)
+	if err == nil && active != nil {
+		return active, nil
+	}
+	if err != nil {
+		if domErr, ok := domain.AsDomainError(err); !ok || domErr.Category != domain.CategoryNotFound {
+			return nil, err
+		}
+	}
+
+	_, total, err := s.revisions.List(ctx, domain.RevisionFilter{
+		Pagination: domain.Pagination{Page: 1, PageSize: 1},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if total > 0 {
+		return nil, nil
+	}
+
+	digest, err := s.computeCurrentDigestLocked(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	revID, err := domain.NewUUIDv7()
+	if err != nil {
+		return nil, err
+	}
+
+	rev := domain.ConfigurationRevision{
+		ID:            revID,
+		ContentDigest: digest,
+		State:         domain.RevisionStateDraft,
+		CreatedAt:     domain.NowUTC(),
+	}
+
+	if err := s.revisions.Create(ctx, &rev); err != nil {
+		return nil, err
+	}
+	if err := s.revisions.SetActive(ctx, revID); err != nil {
+		return nil, fmt.Errorf("failed to activate initial revision: %w", err)
+	}
+	rev.State = domain.RevisionStateActive
+	s.recordAudit(ctx, Action{ActorKind: domain.ActorKindSystem}, "revision.create", domain.AuditResultSuccess, fmt.Sprintf("revision_id=%s digest=%s state=active bootstrap=true", rev.ID, rev.ContentDigest))
+	return &rev, nil
+}
+
+// Create generates a new configuration revision from the current policy graph.
+func (s *Service) Create(ctx context.Context, cmd CreateCommand) (*domain.ConfigurationRevision, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	action := Action{
+		RequestID: cmd.RequestID,
+		ActorKind: cmd.ActorKind,
+	}
+
+	state := cmd.State
+	if state == "" {
+		state = domain.RevisionStateDraft
+	} else if state != domain.RevisionStateDraft && state != domain.RevisionStateActive {
+		s.recordAudit(ctx, action, "revision.create", domain.AuditResultFailure, fmt.Sprintf("invalid creation state: %s", state))
+		return nil, domain.NewValidationError("invalid_revision_state", fmt.Sprintf("unsupported creation revision state: %s", state))
+	}
+
+	var parentID *string
+	if cmd.ParentID != nil {
+		trimmed := strings.TrimSpace(*cmd.ParentID)
+		if trimmed != "" {
+			if _, err := s.revisions.GetByID(ctx, trimmed); err != nil {
+				s.recordAudit(ctx, action, "revision.create", domain.AuditResultFailure, fmt.Sprintf("parent revision %s: %v", trimmed, err))
+				return nil, err
+			}
+			parentID = &trimmed
+		}
+	}
+
+	digest, err := s.computeCurrentDigestLocked(ctx)
+	if err != nil {
+		s.recordAudit(ctx, action, "revision.create", domain.AuditResultFailure, fmt.Sprintf("invalid policy graph: %v", err))
+		return nil, err
+	}
+
+	revID, err := domain.NewUUIDv7()
+	if err != nil {
+		return nil, err
+	}
+
+	rev := domain.ConfigurationRevision{
+		ID:            revID,
+		ParentID:      parentID,
+		ContentDigest: digest,
+		State:         domain.RevisionStateDraft,
+		CreatedAt:     domain.NowUTC(),
+	}
+
+	if err := s.revisions.Create(ctx, &rev); err != nil {
+		s.recordAudit(ctx, action, "revision.create", domain.AuditResultFailure, fmt.Sprintf("failed to save revision: %v", err))
+		return nil, err
+	}
+
+	if state == domain.RevisionStateActive {
+		if err := s.revisions.SetActive(ctx, revID); err != nil {
+			s.recordAudit(ctx, action, "revision.create", domain.AuditResultFailure, fmt.Sprintf("failed to activate revision %s: %v", revID, err))
+			return nil, err
+		}
+		rev.State = domain.RevisionStateActive
+	}
+
+	s.recordAudit(ctx, action, "revision.create", domain.AuditResultSuccess, fmt.Sprintf("revision_id=%s digest=%s state=%s", rev.ID, rev.ContentDigest, rev.State))
+	return &rev, nil
+}
+
+func (s *Service) computeCurrentDigestLocked(ctx context.Context) (string, error) {
+	var groups []domain.NodeGroup
+	edgeMap := make(map[string][]domain.GroupEdge)
+	if s.policyRepo != nil {
+		var err error
+		groups, err = s.policyRepo.ListGroups(ctx)
+		if err != nil {
+			return "", fmt.Errorf("failed to list groups: %w", err)
+		}
+		for _, g := range groups {
+			edges, eErr := s.policyRepo.ListEdgesByGroup(ctx, g.ID)
+			if eErr != nil {
+				return "", fmt.Errorf("failed to list edges for group %s: %w", g.ID, eErr)
+			}
+			edgeMap[g.ID] = edges
+		}
+		if err := policy.ValidatePolicyGraph(groups, edgeMap, nil, nil); err != nil {
+			return "", err
+		}
+	}
+	return policy.ComputeConfigurationDigest(groups, edgeMap)
 }
 
 // Get inspects a configuration revision and its associated rules without state changes.

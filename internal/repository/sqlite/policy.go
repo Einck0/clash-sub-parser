@@ -315,6 +315,22 @@ func (r *policyRepository) CreateAdmissionRule(ctx context.Context, rule *domain
 	return nil
 }
 
+func (r *policyRepository) DeleteAdmissionRule(ctx context.Context, id string) error {
+	res, err := r.db.ExecContext(ctx, "DELETE FROM admission_rules WHERE id = ?;", id)
+	if err != nil {
+		return fmt.Errorf("failed to delete admission rule: %w", err)
+	}
+
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return domain.NewNotFoundError("rule_not_found", fmt.Sprintf("admission rule %s not found", id))
+	}
+	return nil
+}
+
 func (r *policyRepository) ListPolicyRules(ctx context.Context, revisionID string) ([]domain.PolicyRule, error) {
 	const query = `
 	SELECT id, revision_id, target_group_id, expression, position
@@ -366,6 +382,22 @@ func (r *policyRepository) CreatePolicyRule(ctx context.Context, rule *domain.Po
 	)
 	if err != nil {
 		return fmt.Errorf("failed to insert policy rule: %w", err)
+	}
+	return nil
+}
+
+func (r *policyRepository) DeletePolicyRule(ctx context.Context, id string) error {
+	res, err := r.db.ExecContext(ctx, "DELETE FROM policy_rules WHERE id = ?;", id)
+	if err != nil {
+		return fmt.Errorf("failed to delete policy rule: %w", err)
+	}
+
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return domain.NewNotFoundError("rule_not_found", fmt.Sprintf("policy rule %s not found", id))
 	}
 	return nil
 }

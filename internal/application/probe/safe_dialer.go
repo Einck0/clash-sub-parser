@@ -2,6 +2,7 @@ package probe
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -11,6 +12,12 @@ import (
 	"clash-sub-parser/internal/fetch"
 	"clash-sub-parser/internal/parser"
 	"clash-sub-parser/internal/probe/singbox"
+)
+
+// Sentinel errors for node-level target resolution and SSRF policy rejection.
+var (
+	ErrTargetUnresolvable    = errors.New("target_unresolvable")
+	ErrPrivateTargetRejected = errors.New("private_target_rejected")
 )
 
 // SafeNodeDialerOptions provides optional overrides for SafeNodeDialer.
@@ -76,7 +83,7 @@ func NewSafeNodeDialer(opts ...SafeNodeDialerOptions) NodeDialer {
 		if parsedIP != nil {
 			// Direct IP literal: must be public
 			if err := policy.ValidateIP(parsedIP); err != nil {
-				return nil, nil, fmt.Errorf("%w: server IP %s is not a public IP: %v", ErrCredentialsUnavailable, parsedIP.String(), err)
+				return nil, nil, fmt.Errorf("%w: server IP %s is not a public IP: %v", ErrPrivateTargetRejected, parsedIP.String(), err)
 			}
 			targetServer = cleanHost
 		} else {
@@ -84,12 +91,12 @@ func NewSafeNodeDialer(opts ...SafeNodeDialerOptions) NodeDialer {
 			policy.Resolver = resolver
 			ips, lookupErr := resolver.LookupIPAddr(ctx, cleanHost)
 			if lookupErr != nil || len(ips) == 0 {
-				return nil, nil, fmt.Errorf("%w: failed to resolve server domain %s", ErrCredentialsUnavailable, cleanHost)
+				return nil, nil, fmt.Errorf("%w: failed to resolve server domain %s", ErrTargetUnresolvable, cleanHost)
 			}
 			var chosenIP net.IP
 			for _, ipAddr := range ips {
 				if err := policy.ValidateIP(ipAddr.IP); err != nil {
-					return nil, nil, fmt.Errorf("%w: domain %s resolved to non-public IP %s: %v", ErrCredentialsUnavailable, cleanHost, ipAddr.IP.String(), err)
+					return nil, nil, fmt.Errorf("%w: domain %s resolved to non-public IP %s: %v", ErrPrivateTargetRejected, cleanHost, ipAddr.IP.String(), err)
 				}
 				if chosenIP == nil {
 					chosenIP = ipAddr.IP
@@ -97,7 +104,7 @@ func NewSafeNodeDialer(opts ...SafeNodeDialerOptions) NodeDialer {
 			}
 
 			if chosenIP == nil {
-				return nil, nil, fmt.Errorf("%w: no valid public IP found for domain %s", ErrCredentialsUnavailable, cleanHost)
+				return nil, nil, fmt.Errorf("%w: no valid public IP found for domain %s", ErrTargetUnresolvable, cleanHost)
 			}
 			targetServer = chosenIP.String()
 		}

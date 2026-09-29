@@ -644,3 +644,132 @@ func TestPolicyGroups_NodeFilter_CreateUpdatePatchClear(t *testing.T) {
 		t.Fatalf("persisted filter must be cleared, got %+v", getResp.Data.NodeFilter)
 	}
 }
+
+func TestPolicyRulesDelete(t *testing.T) {
+	db := newCleanSQLiteDB(t)
+	router, _ := setupPolicyTestRouter(t, db)
+
+	// 1. Create a policy group on a fresh DB (no revision created yet)
+	grpPayload := `{"name": "ProxyGroup", "group_type": "select"}`
+	reqGrp := httptest.NewRequest(http.MethodPost, "/api/v1/policies/groups", strings.NewReader(grpPayload))
+	reqGrp.Header.Set("Authorization", "Bearer "+testAdminToken)
+	reqGrp.Header.Set("Content-Type", "application/json")
+	recGrp := httptest.NewRecorder()
+	router.ServeHTTP(recGrp, reqGrp)
+	if recGrp.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created for group, got %d: %s", recGrp.Code, recGrp.Body.String())
+	}
+	var grpResp testDataResponse[policy.GroupView]
+	if err := json.Unmarshal(recGrp.Body.Bytes(), &grpResp); err != nil {
+		t.Fatalf("failed to parse group response: %v", err)
+	}
+
+	// 2. Create a policy rule WITHOUT revision_id on fresh DB -> must succeed with 201 Created (not 422)
+	polRulePayload := fmt.Sprintf(`{
+		"kind": "policy",
+		"target_group_id": "%s",
+		"expression": "DOMAIN-SUFFIX,google.com",
+		"position": 0
+	}`, grpResp.Data.ID)
+	reqPol := httptest.NewRequest(http.MethodPost, "/api/v1/policies/rules", strings.NewReader(polRulePayload))
+	reqPol.Header.Set("Authorization", "Bearer "+testAdminToken)
+	reqPol.Header.Set("Content-Type", "application/json")
+	recPol := httptest.NewRecorder()
+	router.ServeHTTP(recPol, reqPol)
+	if recPol.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created for policy rule without revision_id, got %d: %s", recPol.Code, recPol.Body.String())
+	}
+	var polRuleResp testDataResponse[policy.PolicyRuleView]
+	if err := json.Unmarshal(recPol.Body.Bytes(), &polRuleResp); err != nil {
+		t.Fatalf("failed to parse policy rule response: %v", err)
+	}
+	if polRuleResp.Data.ID == "" || polRuleResp.Data.RevisionID == "" {
+		t.Fatalf("expected valid rule ID and bootstrapped revision_id, got %+v", polRuleResp.Data)
+	}
+
+	// 3. Create an admission rule WITHOUT revision_id -> must succeed with 201 Created
+	admRulePayload := `{
+		"kind": "admission",
+		"name": "BlockHighRisk",
+		"expression": "country != 'CN'",
+		"action": "allow",
+		"position": 0
+	}`
+	reqAdm := httptest.NewRequest(http.MethodPost, "/api/v1/policies/rules", strings.NewReader(admRulePayload))
+	reqAdm.Header.Set("Authorization", "Bearer "+testAdminToken)
+	reqAdm.Header.Set("Content-Type", "application/json")
+	recAdm := httptest.NewRecorder()
+	router.ServeHTTP(recAdm, reqAdm)
+	if recAdm.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created for admission rule without revision_id, got %d: %s", recAdm.Code, recAdm.Body.String())
+	}
+	var admRuleResp testDataResponse[policy.AdmissionRuleView]
+	if err := json.Unmarshal(recAdm.Body.Bytes(), &admRuleResp); err != nil {
+		t.Fatalf("failed to parse admission rule response: %v", err)
+	}
+
+	// 4. Delete the policy rule -> 204 No Content
+	reqDelPol := httptest.NewRequest(http.MethodDelete, "/api/v1/policies/rules/"+polRuleResp.Data.ID, nil)
+	reqDelPol.Header.Set("Authorization", "Bearer "+testAdminToken)
+	recDelPol := httptest.NewRecorder()
+	router.ServeHTTP(recDelPol, reqDelPol)
+	if recDelPol.Code != http.StatusNoContent {
+		t.Fatalf("expected 204 No Content deleting policy rule, got %d: %s", recDelPol.Code, recDelPol.Body.String())
+	}
+
+	// 5. Verify GET /api/v1/policies/rules no longer includes the deleted policy rule
+	reqList := httptest.NewRequest(http.MethodGet, "/api/v1/policies/rules", nil)
+	reqList.Header.Set("Authorization", "Bearer "+testAdminToken)
+	recList := httptest.NewRecorder()
+	router.ServeHTTP(recList, reqList)
+	if recList.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK listing rules, got %d", recList.Code)
+	}
+	var listResp testDataResponse[policy.ListRulesResult]
+	if err := json.Unmarshal(recList.Body.Bytes(), &listResp); err != nil {
+		t.Fatalf("failed to parse list rules response: %v", err)
+	}
+	if len(listResp.Data.PolicyRules) != 0 {
+		t.Fatalf("expected 0 policy rules after delete, got %d", len(listResp.Data.PolicyRules))
+	}
+	if len(listResp.Data.AdmissionRules) != 1 {
+		t.Fatalf("expected 1 admission rule remaining, got %d", len(listResp.Data.AdmissionRules))
+	}
+
+	// 6. Delete the admission rule -> 204 No Content
+	reqDelAdm := httptest.NewRequest(http.MethodDelete, "/api/v1/policies/rules/"+admRuleResp.Data.ID, nil)
+	reqDelAdm.Header.Set("Authorization", "Bearer "+testAdminToken)
+	recDelAdm := httptest.NewRecorder()
+	router.ServeHTTP(recDelAdm, reqDelAdm)
+	if recDelAdm.Code != http.StatusNoContent {
+		t.Fatalf("expected 204 No Content deleting admission rule, got %d: %s", recDelAdm.Code, recDelAdm.Body.String())
+	}
+
+	// Verify admission rule is also gone
+	reqList2 := httptest.NewRequest(http.MethodGet, "/api/v1/policies/rules", nil)
+	reqList2.Header.Set("Authorization", "Bearer "+testAdminToken)
+	recList2 := httptest.NewRecorder()
+	router.ServeHTTP(recList2, reqList2)
+	if err := json.Unmarshal(recList2.Body.Bytes(), &listResp); err != nil {
+		t.Fatalf("failed to parse list rules response: %v", err)
+	}
+	if len(listResp.Data.AdmissionRules) != 0 {
+		t.Fatalf("expected 0 admission rules after delete, got %d", len(listResp.Data.AdmissionRules))
+	}
+
+	// 7. Deleting a non-existent rule -> 404 Not Found with code rule_not_found
+	reqDelMissing := httptest.NewRequest(http.MethodDelete, "/api/v1/policies/rules/"+polRuleResp.Data.ID, nil)
+	reqDelMissing.Header.Set("Authorization", "Bearer "+testAdminToken)
+	recDelMissing := httptest.NewRecorder()
+	router.ServeHTTP(recDelMissing, reqDelMissing)
+	if recDelMissing.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 Not Found for non-existent rule delete, got %d: %s", recDelMissing.Code, recDelMissing.Body.String())
+	}
+	var errResp testErrorResponse
+	if err := json.Unmarshal(recDelMissing.Body.Bytes(), &errResp); err != nil {
+		t.Fatalf("failed to decode error response: %v", err)
+	}
+	if errResp.Code != "rule_not_found" {
+		t.Fatalf("expected error code 'rule_not_found', got %q", errResp.Code)
+	}
+}

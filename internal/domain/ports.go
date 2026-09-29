@@ -144,9 +144,11 @@ type PolicyRepository interface {
 
 	ListAdmissionRules(ctx context.Context, revisionID string) ([]AdmissionRule, error)
 	CreateAdmissionRule(ctx context.Context, rule *AdmissionRule) error
+	DeleteAdmissionRule(ctx context.Context, id string) error
 
 	ListPolicyRules(ctx context.Context, revisionID string) ([]PolicyRule, error)
 	CreatePolicyRule(ctx context.Context, rule *PolicyRule) error
+	DeletePolicyRule(ctx context.Context, id string) error
 }
 
 // RevisionRepository defines the persistence port for configuration revisions.
@@ -155,6 +157,8 @@ type RevisionRepository interface {
 	GetActive(ctx context.Context) (*ConfigurationRevision, error)
 	List(ctx context.Context, filter RevisionFilter) ([]ConfigurationRevision, int, error)
 	Create(ctx context.Context, rev *ConfigurationRevision) error
+	// CreateActive inserts and activates a revision in one transaction; failures leave no new revision.
+	CreateActive(ctx context.Context, rev *ConfigurationRevision) error
 	SetActive(ctx context.Context, id string) error
 }
 

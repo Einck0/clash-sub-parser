@@ -582,4 +582,107 @@ describe('NodesView real API detail, plaintext PATCH edit, and failure draft pre
     app.unmount()
     mountEl.remove()
   })
+
+  it('automatically loads subsequent pages when health filter starves viewport and hasMore is true', async () => {
+    const { default: NodesView } = await import('./NodesView.vue')
+    const { createApp, h, nextTick } = await import('vue')
+
+    // Page 1: 10 healthy nodes (total = 40)
+    const page1Nodes: NodeRecord[] = Array.from({ length: 10 }, (_, i) => ({
+      logical_id: `node-healthy-${i}`,
+      protocol: 'vmess',
+      display_name: `Healthy Node ${i}`,
+      active: true,
+      health_status: 'healthy' as const,
+      latency_ms: 50,
+      last_probed_at: new Date().toISOString(),
+    }))
+
+    // Page 2: 1 unhealthy node + 9 healthy nodes (total = 40)
+    const page2Nodes: NodeRecord[] = [
+      {
+        logical_id: 'node-unhealthy-99',
+        protocol: 'vmess',
+        display_name: 'Unhealthy Node 99',
+        active: true,
+        health_status: 'unhealthy' as const,
+        latency_ms: 0,
+        last_probed_at: new Date().toISOString(),
+      },
+      ...Array.from({ length: 9 }, (_, i) => ({
+        logical_id: `node-healthy-p2-${i}`,
+        protocol: 'vmess',
+        display_name: `Healthy Node P2 ${i}`,
+        active: true,
+        health_status: 'healthy' as const,
+        latency_ms: 60,
+        last_probed_at: new Date().toISOString(),
+      })),
+    ]
+
+    const pageCalls: number[] = []
+    vi.spyOn(api, 'get').mockImplementation(async (path: string, options?: any) => {
+      if (path === '/api/v1/nodes') {
+        const page = Number(options?.params?.page || 1)
+        pageCalls.push(page)
+        if (page === 1) {
+          return { items: page1Nodes, total: 40, page: 1, page_size: 10 }
+        }
+        if (page === 2) {
+          return { items: page2Nodes, total: 40, page: 2, page_size: 10 }
+        }
+        return { items: [], total: 40, page, page_size: 10 }
+      }
+      if (path === '/api/v1/probes/pool') {
+        return {
+          queue_nodes_count: 0,
+          probing_count: 0,
+          queued_waiting_count: 0,
+          untested_count: 0,
+          total_count: 40,
+          unavailable_count: 1,
+          available_count: 39,
+          healthy_count: 39,
+          degraded_count: 0,
+          probing_node_ids: [],
+          queued_node_ids: [],
+          updated_at: new Date().toISOString(),
+        }
+      }
+      return {}
+    })
+
+    const mountEl = document.createElement('div')
+    document.body.appendChild(mountEl)
+    const app = createApp({
+      render() {
+        return h(NodesView)
+      },
+    })
+    app.mount(mountEl)
+    await nextTick()
+    await new Promise((r) => setTimeout(r, 40))
+
+    // Initially page 1 is loaded
+    expect(pageCalls).toContain(1)
+
+    // Switch health filter to "unhealthy"
+    const unhealthyPill = Array.from(mountEl.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('异常')
+    )
+    expect(unhealthyPill).toBeDefined()
+    unhealthyPill?.click()
+
+    await nextTick()
+    await new Promise((r) => setTimeout(r, 60))
+
+    // Because page 1 had 0 unhealthy nodes and hasMore was true, auto-pagination must trigger page 2
+    expect(pageCalls).toContain(2)
+
+    // The unhealthy node from page 2 should now be visible in DOM
+    expect(mountEl.textContent).toContain('Unhealthy Node 99')
+
+    app.unmount()
+    mountEl.remove()
+  })
 })

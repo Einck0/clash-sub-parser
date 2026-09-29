@@ -1135,4 +1135,60 @@ describe('ProbesView Component Interaction & Feedback', () => {
 
     expect(getCalls).toContain('/api/v1/probes/batches')
   })
+
+  it('does not poll /api/v1/nodes on each 2-second heartbeat during active probe runs', async () => {
+    const getCalls: string[] = []
+
+    vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
+      getCalls.push(path)
+      if (path === '/api/v1/probes/schedule') return { ...mockSchedule }
+      if (path === '/api/v1/probes/pool') {
+        return {
+          queue_nodes_count: 5,
+          probing_count: 2,
+          queued_waiting_count: 3,
+          untested_count: 0,
+          total_count: 10,
+          unavailable_count: 0,
+          available_count: 10,
+          healthy_count: 10,
+          degraded_count: 0,
+          probing_node_ids: ['node-1'],
+          queued_node_ids: ['node-2'],
+          updated_at: new Date().toISOString(),
+        }
+      }
+      if (path === '/api/v1/probes/batches') return { items: [], total: 0, page: 1, page_size: 20 }
+      if (path === '/api/v1/probes/runs') {
+        return {
+          items: [{ id: 'run-active-1', state: 'running', kinds: ['baseline'], total_nodes: 5, completed_nodes: 1, deadline_at: new Date(Date.now() + 60000).toISOString() }],
+          total: 1,
+          page: 1,
+          page_size: 50,
+        }
+      }
+      if (path.includes('/observations')) return { items: [], total: 0 }
+      if (path === '/api/v1/nodes') return { items: [], total: 0, page: 1, page_size: 100 }
+      return { items: [], total: 0 }
+    })
+
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    await mountProbesView()
+    // Initial mount calls loadProbeNodes once
+    const initialNodesCalls = getCalls.filter((p) => p === '/api/v1/nodes').length
+    expect(initialNodesCalls).toBeGreaterThanOrEqual(1)
+
+    getCalls.length = 0
+    await vi.advanceTimersByTimeAsync(6000)
+
+    // During active probing, heartbeat MUST NOT query /api/v1/nodes repeatedly
+    const heartbeatNodeCalls = getCalls.filter((p) => p === '/api/v1/nodes').length
+    expect(heartbeatNodeCalls).toBe(0)
+
+    // But active runs and pool status MUST be polled
+    expect(getCalls.filter((p) => p === '/api/v1/probes/pool').length).toBeGreaterThanOrEqual(2)
+    expect(getCalls.filter((p) => p === '/api/v1/probes/runs').length).toBeGreaterThanOrEqual(2)
+
+    vi.useRealTimers()
+  })
 })

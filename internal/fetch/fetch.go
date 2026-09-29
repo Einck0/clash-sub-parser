@@ -8,6 +8,8 @@ import (
 	"compress/zlib"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -26,7 +28,7 @@ const (
 	DefaultTimeoutSeconds   = 30
 	DefaultMaxResponseBytes = 10 * 1024 * 1024 // 10 MB
 	DefaultMaxRedirects     = 5
-	DefaultUserAgent        = "clash-sub-parser/1.0"
+	DefaultUserAgent        = "clash-verge/v2.5.6"
 )
 
 // Options holds parameters for a secure fetch operation.
@@ -39,6 +41,7 @@ type Options struct {
 	MaxDecompressedBytes int64
 	MaxRedirects         int
 	Policy               *Policy
+	RootCAs              *x509.CertPool
 }
 
 // Response contains the result of a successful fetch operation.
@@ -118,37 +121,6 @@ func (c *Client) Fetch(ctx context.Context, opts Options) (*Response, error) {
 		policy = DefaultPolicy()
 	}
 
-	// 1. Validate Target URL
-	targetURL, err := url.Parse(opts.URL)
-	if err != nil {
-		return nil, domain.NewValidationError("invalid_url", fmt.Sprintf("malformed URL: %v", err))
-	}
-
-	if err := policy.ValidateTarget(ctx, targetURL); err != nil {
-		return nil, err
-	}
-
-	// 2. Validate Explicit Proxy if specified
-	var proxyFunc func(*http.Request) (*url.URL, error)
-	if opts.FetchProxyURL != "" {
-		proxyURL, err := url.Parse(opts.FetchProxyURL)
-		if err != nil {
-			return nil, domain.NewValidationError("invalid_proxy_url", fmt.Sprintf("malformed proxy URL: %v", err))
-		}
-
-		proxyScheme := strings.ToLower(proxyURL.Scheme)
-		if proxyScheme != "http" && proxyScheme != "https" && proxyScheme != "socks5" {
-			return nil, domain.NewValidationError("invalid_proxy_url", fmt.Sprintf("unsupported proxy scheme %q", proxyURL.Scheme))
-		}
-
-		if err := policy.ValidateTarget(ctx, proxyURL); err != nil {
-			return nil, domain.NewSecurityError("proxy_ssrf_blocked", fmt.Sprintf("proxy host %s blocked by SSRF policy: %v", proxyURL.Hostname(), err))
-		}
-
-		proxyFunc = http.ProxyURL(proxyURL)
-	}
-
-	// 3. Configure Timeouts and Deadlines
 	timeout := opts.Timeout
 	if timeout <= 0 {
 		timeout = DefaultTimeoutSeconds * time.Second
@@ -156,70 +128,23 @@ func (c *Client) Fetch(ctx context.Context, opts Options) (*Response, error) {
 	reqCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// 4. Configure Dialer with DNS Hop Validation and Address Pinning
-	dialer := &net.Dialer{
-		Timeout:   timeout,
-		KeepAlive: 30 * time.Second,
+	var activeProxyURL *url.URL
+	if opts.FetchProxyURL != "" {
+		proxyURL, err := url.Parse(opts.FetchProxyURL)
+		if err != nil {
+			return nil, domain.NewValidationError("invalid_proxy_url", fmt.Sprintf("malformed proxy URL: %v", err))
+		}
+
+		if err := policy.ValidateProxy(reqCtx, proxyURL); err != nil {
+			return nil, err
+		}
+
+		activeProxyURL = proxyURL
 	}
 
-	dialContext := func(dialCtx context.Context, network, addr string) (net.Conn, error) {
-		host, port, err := net.SplitHostPort(addr)
-		if err != nil {
-			return nil, domain.NewValidationError("invalid_address", fmt.Sprintf("invalid address %s: %v", addr, err))
-		}
-
-		if policy.IsHostAllowed(host) || policy.IsHostAllowed(addr) {
-			return dialer.DialContext(dialCtx, network, addr)
-		}
-
-		if ip := net.ParseIP(host); ip != nil {
-			if err := policy.ValidateIP(ip); err != nil {
-				return nil, err
-			}
-			return dialer.DialContext(dialCtx, network, addr)
-		}
-
-		resolver := policy.Resolver
-		if resolver == nil {
-			resolver = net.DefaultResolver
-		}
-
-		ips, err := resolver.LookupIPAddr(dialCtx, host)
-		if err != nil {
-			return nil, domain.NewSecurityError("dns_resolution_failed", fmt.Sprintf("failed to resolve %s: %v", host, err))
-		}
-		if len(ips) == 0 {
-			return nil, domain.NewSecurityError("dns_resolution_failed", fmt.Sprintf("no IP addresses resolved for %s", host))
-		}
-
-		for _, ipAddr := range ips {
-			if err := policy.ValidateIP(ipAddr.IP); err != nil {
-				return nil, err
-			}
-		}
-
-		// Connect to verified IPs directly to eliminate DNS rebinding
-		var lastDialErr error
-		for _, ipAddr := range ips {
-			pinnedAddr := net.JoinHostPort(ipAddr.IP.String(), port)
-			conn, err := dialer.DialContext(dialCtx, network, pinnedAddr)
-			if err == nil {
-				return conn, nil
-			}
-			lastDialErr = err
-		}
-		return nil, domain.NewDomainError("connection_failed", fmt.Sprintf("failed to connect to %s: %v", host, lastDialErr), domain.CategoryInternal)
-	}
-
-	// 5. Configure Transport (NEVER inherit environment proxy)
-	transport := &http.Transport{
-		Proxy:               proxyFunc,
-		DialContext:         dialContext,
-		DisableCompression:  true, // Manual decompression to control memory limits against decompression bombs
-		ForceAttemptHTTP2:   true,
-		MaxIdleConns:        100,
-		IdleConnTimeout:     90 * time.Second,
-		TLSHandshakeTimeout: 10 * time.Second,
+	ua := opts.UserAgent
+	if ua == "" {
+		ua = DefaultUserAgent
 	}
 
 	maxRedirects := opts.MaxRedirects
@@ -230,42 +155,241 @@ func (c *Client) Fetch(ctx context.Context, opts Options) (*Response, error) {
 		maxRedirects = DefaultMaxRedirects
 	}
 
-	httpClient := &http.Client{
-		Transport: transport,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= maxRedirects {
-				return domain.NewSecurityError("too_many_redirects", fmt.Sprintf("exceeded maximum redirect limit of %d", maxRedirects))
-			}
-			if err := policy.ValidateTarget(req.Context(), req.URL); err != nil {
-				return err
-			}
-			return nil
-		},
-	}
+	currentURLStr := opts.URL
+	hop := 0
+	var httpResp *http.Response
 
-	// 6. Build HTTP Request
-	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodGet, opts.URL, nil)
-	if err != nil {
-		return nil, domain.NewValidationError("invalid_request", fmt.Sprintf("failed to create request: %v", err))
-	}
-
-	ua := opts.UserAgent
-	if ua == "" {
-		ua = DefaultUserAgent
-	}
-	httpReq.Header.Set("User-Agent", ua)
-	httpReq.Header.Set("Accept-Encoding", "gzip, deflate")
-
-	// 7. Execute Request
-	httpResp, err := httpClient.Do(httpReq)
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(reqCtx.Err(), context.DeadlineExceeded) {
-			return nil, domain.NewDomainError("fetch_timeout", fmt.Sprintf("fetch timed out after %v", timeout), domain.CategoryInternal)
+	for {
+		if hop > maxRedirects {
+			return nil, domain.NewSecurityError("too_many_redirects", fmt.Sprintf("exceeded maximum redirect limit of %d", maxRedirects))
 		}
-		if de, ok := domain.AsDomainError(err); ok {
-			return nil, de
+
+		currURL, err := url.Parse(currentURLStr)
+		if err != nil {
+			return nil, domain.NewValidationError("invalid_url", fmt.Sprintf("malformed URL: %v", err))
 		}
-		return nil, domain.NewDomainError("fetch_failed", err.Error(), domain.CategoryInternal)
+
+		scheme := strings.ToLower(currURL.Scheme)
+		if scheme != "http" && scheme != "https" {
+			return nil, domain.NewSecurityError("unsupported_scheme", fmt.Sprintf("unsupported scheme %q, only http and https are allowed", currURL.Scheme))
+		}
+
+		targetHost := strings.TrimSpace(currURL.Hostname())
+		if targetHost == "" {
+			return nil, domain.NewValidationError("invalid_url", "URL is missing a host")
+		}
+
+		if strings.HasSuffix(targetHost, ".") {
+			return nil, domain.NewValidationError("invalid_url", fmt.Sprintf("target host %q has a trailing dot", targetHost))
+		}
+
+		if isObfuscatedIP(targetHost) {
+			return nil, domain.NewSecurityError("ssrf_blocked", fmt.Sprintf("target host %s is an obfuscated IP format", targetHost))
+		}
+
+		if strings.Contains(strings.ToLower(targetHost), "::ffff:") || strings.Contains(strings.ToLower(targetHost), ":ffff:") {
+			return nil, domain.NewSecurityError("ssrf_blocked", fmt.Sprintf("target host %s is an IPv4-mapped IPv6 address", targetHost))
+		}
+
+		targetPort := currURL.Port()
+		if targetPort == "" {
+			if scheme == "https" {
+				targetPort = "443"
+			} else {
+				targetPort = "80"
+			}
+		}
+
+		isExempted := policy.AllowPrivate || policy.IsHostAllowed(targetHost) || policy.IsHostAllowed(currURL.Host)
+
+		var pinnedIP net.IP
+		if isExempted {
+			if ip := net.ParseIP(targetHost); ip != nil {
+				pinnedIP = ip
+			} else {
+				resolver := policy.Resolver
+				if resolver == nil {
+					resolver = net.DefaultResolver
+				}
+				ips, err := resolver.LookupIPAddr(reqCtx, targetHost)
+				if err != nil {
+					return nil, domain.NewSecurityError("dns_resolution_failed", fmt.Sprintf("failed to resolve %s: %v", targetHost, err))
+				}
+				if len(ips) == 0 {
+					return nil, domain.NewSecurityError("dns_resolution_failed", fmt.Sprintf("no IP addresses resolved for %s", targetHost))
+				}
+				pinnedIP = ips[0].IP
+			}
+		} else {
+			if ip := net.ParseIP(targetHost); ip != nil {
+				if ip.To4() != nil && strings.Contains(targetHost, ":") {
+					return nil, domain.NewSecurityError("ssrf_blocked", fmt.Sprintf("target IP %s is blocked by SSRF policy", targetHost))
+				}
+				if err := policy.ValidateIP(ip); err != nil {
+					return nil, err
+				}
+				pinnedIP = ip
+			} else {
+				resolver := policy.Resolver
+				if resolver == nil {
+					resolver = net.DefaultResolver
+				}
+				ips, err := resolver.LookupIPAddr(reqCtx, targetHost)
+				if err != nil {
+					return nil, domain.NewSecurityError("dns_resolution_failed", fmt.Sprintf("failed to resolve %s: %v", targetHost, err))
+				}
+				if len(ips) == 0 {
+					return nil, domain.NewSecurityError("dns_resolution_failed", fmt.Sprintf("no IP addresses resolved for %s", targetHost))
+				}
+				for _, ipAddr := range ips {
+					if err := policy.ValidateIP(ipAddr.IP); err != nil {
+						return nil, err
+					}
+				}
+				pinnedIP = ips[0].IP
+				for _, ipAddr := range ips {
+					if ipAddr.IP.To4() != nil {
+						pinnedIP = ipAddr.IP
+						break
+					}
+				}
+			}
+		}
+
+		pinnedAddr := net.JoinHostPort(pinnedIP.String(), targetPort)
+		origHostHeader := currURL.Host
+
+		dialer := &net.Dialer{
+			Timeout:   timeout,
+			KeepAlive: 30 * time.Second,
+		}
+
+		var transport *http.Transport
+		var hopReq *http.Request
+
+		if activeProxyURL != nil {
+			proxyDialContext := func(dCtx context.Context, network, addr string) (net.Conn, error) {
+				return dialer.DialContext(dCtx, network, addr)
+			}
+
+			if scheme == "http" {
+				hopReq, err = http.NewRequestWithContext(reqCtx, http.MethodGet, currURL.String(), nil)
+				if err != nil {
+					return nil, domain.NewValidationError("invalid_request", fmt.Sprintf("failed to create request: %v", err))
+				}
+				hopReq.URL.Host = pinnedAddr
+				escapedPath := currURL.EscapedPath()
+				if escapedPath == "" {
+					escapedPath = "/"
+				}
+				hopReq.URL.Opaque = "//" + pinnedAddr + escapedPath
+				hopReq.Host = origHostHeader
+
+				transport = &http.Transport{
+					Proxy:                 http.ProxyURL(activeProxyURL),
+					DialContext:           proxyDialContext,
+					DisableCompression:    true,
+					MaxIdleConns:          10,
+					IdleConnTimeout:       30 * time.Second,
+					ResponseHeaderTimeout: timeout,
+				}
+			} else {
+				hopReq, err = http.NewRequestWithContext(reqCtx, http.MethodGet, currURL.String(), nil)
+				if err != nil {
+					return nil, domain.NewValidationError("invalid_request", fmt.Sprintf("failed to create request: %v", err))
+				}
+				hopReq.URL.Host = pinnedAddr
+				hopReq.URL.Opaque = ""
+				hopReq.Host = origHostHeader
+
+				transport = &http.Transport{
+					Proxy:       http.ProxyURL(activeProxyURL),
+					DialContext: proxyDialContext,
+					TLSClientConfig: &tls.Config{
+						ServerName:         targetHost,
+						RootCAs:            opts.RootCAs,
+						MinVersion:         tls.VersionTLS12,
+						InsecureSkipVerify: false,
+					},
+					DisableCompression:    true,
+					MaxIdleConns:          10,
+					IdleConnTimeout:       30 * time.Second,
+					TLSHandshakeTimeout:   10 * time.Second,
+					ResponseHeaderTimeout: timeout,
+				}
+			}
+		} else {
+			directDialContext := func(dCtx context.Context, network, addr string) (net.Conn, error) {
+				return dialer.DialContext(dCtx, network, pinnedAddr)
+			}
+
+			hopReq, err = http.NewRequestWithContext(reqCtx, http.MethodGet, currURL.String(), nil)
+			if err != nil {
+				return nil, domain.NewValidationError("invalid_request", fmt.Sprintf("failed to create request: %v", err))
+			}
+			hopReq.URL.Host = pinnedAddr
+			hopReq.URL.Opaque = ""
+			hopReq.Host = origHostHeader
+
+			transport = &http.Transport{
+				DialContext: directDialContext,
+				TLSClientConfig: &tls.Config{
+					ServerName:         targetHost,
+					RootCAs:            opts.RootCAs,
+					MinVersion:         tls.VersionTLS12,
+					InsecureSkipVerify: false,
+				},
+				DisableCompression:    true,
+				MaxIdleConns:          10,
+				IdleConnTimeout:       30 * time.Second,
+				TLSHandshakeTimeout:   10 * time.Second,
+				ResponseHeaderTimeout: timeout,
+			}
+		}
+
+		defer transport.CloseIdleConnections()
+
+		hopReq.Header.Set("User-Agent", ua)
+		hopReq.Header.Set("Accept", "*/*")
+		hopReq.Header.Set("Accept-Encoding", "gzip, deflate")
+
+		hopClient := &http.Client{
+			Transport: transport,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
+
+		resp, err := hopClient.Do(hopReq)
+		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) || errors.Is(reqCtx.Err(), context.DeadlineExceeded) {
+				return nil, domain.NewDomainError("fetch_timeout", fmt.Sprintf("fetch timed out after %v", timeout), domain.CategoryInternal)
+			}
+			if de, ok := domain.AsDomainError(err); ok {
+				return nil, de
+			}
+			return nil, domain.NewDomainError("fetch_failed", RedactError(err), domain.CategoryInternal)
+		}
+
+		if resp.StatusCode == http.StatusMovedPermanently || resp.StatusCode == http.StatusFound ||
+			resp.StatusCode == http.StatusSeeOther || resp.StatusCode == http.StatusTemporaryRedirect ||
+			resp.StatusCode == http.StatusPermanentRedirect {
+			loc := resp.Header.Get("Location")
+			resp.Body.Close()
+			if loc == "" {
+				return nil, domain.NewDomainError("http_error", fmt.Sprintf("redirect %d missing Location header", resp.StatusCode), domain.CategoryInternal)
+			}
+			nextURL, err := currURL.Parse(loc)
+			if err != nil {
+				return nil, domain.NewValidationError("invalid_redirect", fmt.Sprintf("malformed redirect Location %q: %v", loc, err))
+			}
+			currentURLStr = nextURL.String()
+			hop++
+			continue
+		}
+
+		httpResp = resp
+		break
 	}
 	defer httpResp.Body.Close()
 

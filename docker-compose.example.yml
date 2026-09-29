@@ -12,7 +12,10 @@ services:
       CSP_ADDR: ${CSP_ADDR:-0.0.0.0:18080}
       CSP_DB_PATH: ${CSP_DB_PATH:-/data/csp-v1.db}
       CSP_ADMIN_TOKEN: ${CSP_ADMIN_TOKEN:-}
+      CSP_FETCH_PROXY: ${CSP_FETCH_PROXY:-http://host.docker.internal:7890}
       TZ: ${TZ:-Asia/Shanghai}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "${CSP_PORT:-127.0.0.1:18080}:18080"
     volumes:

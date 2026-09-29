@@ -25,6 +25,7 @@ import (
 	"clash-sub-parser/internal/application/revision"
 	"clash-sub-parser/internal/application/subscription"
 	"clash-sub-parser/internal/domain"
+	"clash-sub-parser/internal/fetch"
 	"clash-sub-parser/internal/platform"
 	"clash-sub-parser/internal/probe/queue"
 	"clash-sub-parser/internal/repository/sqlite"
@@ -105,15 +106,22 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 		defaultAdminToken = os.Getenv("ADMIN_TOKEN")
 	}
 
+	defaultFetchProxy := os.Getenv("CSP_FETCH_PROXY")
+	if defaultFetchProxy == "" {
+		defaultFetchProxy = os.Getenv("FETCH_PROXY")
+	}
+
 	var addr string
 	var dbPath string
 	var adminToken string
+	var fetchProxy string
 
 	fs.StringVar(&addr, "addr", defaultAddr, "HTTP listen address [host:port] (default from CSP_ADDR/CSP_BIND/CSP_PORT or 0.0.0.0:18080)")
 	fs.StringVar(&addr, "a", defaultAddr, "HTTP listen address [host:port] (shorthand)")
 	fs.StringVar(&dbPath, "db", defaultDBPath, "path to target SQLite database file (default from CSP_DB_PATH or /data/csp-v1.db)")
 	fs.StringVar(&dbPath, "d", defaultDBPath, "path to target SQLite database file (shorthand)")
 	fs.StringVar(&adminToken, "admin-token", defaultAdminToken, "admin bearer/cookie token (default from CSP_ADMIN_TOKEN)")
+	fs.StringVar(&fetchProxy, "fetch-proxy", defaultFetchProxy, "outbound HTTP/HTTPS proxy for subscription fetching (default from CSP_FETCH_PROXY)")
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -192,11 +200,20 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 	riskObsRepo := sqlite.NewIPRiskObservationRepository(db)
 
 	// Wire domain application services
+	fetchPolicy := fetch.DefaultPolicy()
+	if fetchProxy != "" {
+		if err := fetchPolicy.AddAllowedProxy(fetchProxy); err != nil {
+			fmt.Fprintf(stderr, "warning: invalid CSP_FETCH_PROXY %q: %v\n", fetchProxy, err)
+		}
+	}
+	fetchClient := fetch.NewClientWithPolicy(fetchPolicy)
+
 	subService := subscription.NewService(subRepo, auditRepo)
 	invOpts := []inventory.Option{
 		inventory.WithProbeObservationRepository(probeObsRepo),
+		inventory.WithDefaultFetchProxy(fetchProxy),
 	}
-	invService := inventory.NewService(db, subRepo, fetchRepo, nodeRepo, nodeSourceRepo, nil, invOpts...)
+	invService := inventory.NewService(db, subRepo, fetchRepo, nodeRepo, nodeSourceRepo, fetchClient, invOpts...)
 	subService.SetReconciler(invService)
 
 	probeScheduler, err := queue.NewScheduler(queue.Config{

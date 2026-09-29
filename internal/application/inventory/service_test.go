@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -49,15 +50,17 @@ func setupTestEnv(t *testing.T) (*sql.DB, domain.SubscriptionRepository, domain.
 
 // mockFetcher provides controlled HTTP responses for testing.
 type mockFetcher struct {
-	mu        sync.Mutex
-	responses map[string]*fetch.Response
-	errors    map[string]error
+	mu          sync.Mutex
+	responses   map[string]*fetch.Response
+	errors      map[string]error
+	lastOptions map[string]fetch.Options
 }
 
 func newMockFetcher() *mockFetcher {
 	return &mockFetcher{
-		responses: make(map[string]*fetch.Response),
-		errors:    make(map[string]error),
+		responses:   make(map[string]*fetch.Response),
+		errors:      make(map[string]error),
+		lastOptions: make(map[string]fetch.Options),
 	}
 }
 
@@ -75,9 +78,16 @@ func (m *mockFetcher) setError(url string, err error) {
 	delete(m.responses, url)
 }
 
+func (m *mockFetcher) getLastOptions(url string) fetch.Options {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.lastOptions[url]
+}
+
 func (m *mockFetcher) Fetch(_ context.Context, opts fetch.Options) (*fetch.Response, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.lastOptions[opts.URL] = opts
 	if err, ok := m.errors[opts.URL]; ok {
 		return nil, err
 	}
@@ -877,5 +887,130 @@ func TestReconcile_ConcurrentAccess(t *testing.T) {
 
 	for err := range errCh {
 		t.Errorf("concurrent reconcile error: %v", err)
+	}
+}
+
+// 12. Test proxy resolution hierarchy (subscription-level > global default > direct) and failure audit redaction.
+func TestReconcile_ProxyResolutionAndFailureAudit(t *testing.T) {
+	ctx := context.Background()
+	db, subRepo, fetchRepo, nodeRepo, sourceRepo := setupTestEnv(t)
+	fetcher := newMockFetcher()
+
+	globalProxy := "http://host.docker.internal:7890"
+	svc := inventory.NewService(
+		db, subRepo, fetchRepo, nodeRepo, sourceRepo, fetcher,
+		inventory.WithDefaultFetchProxy(globalProxy),
+	)
+
+	// Case 1: Subscription with empty FetchProxyRef inherits global proxy
+	sub1ID := domain.MustNewUUIDv7()
+	url1 := "https://provider1.example.com/sub"
+	createTestSub(t, subRepo, sub1ID, "Sub Global Proxy", url1, true)
+	fetcher.setResponse(url1, &fetch.Response{
+		StatusCode:    200,
+		Body:          []byte(clashYAMLSub1WithTwoNodes),
+		ContentDigest: "digest-sub1",
+	})
+
+	res1, err := svc.ReconcileSubscription(ctx, sub1ID)
+	if err != nil {
+		t.Fatalf("reconcile sub1 failed: %v", err)
+	}
+	if res1.Outcome != domain.FetchOutcomeSuccess {
+		t.Errorf("expected success outcome, got %s", res1.Outcome)
+	}
+	usedOpts1 := fetcher.getLastOptions(url1)
+	if usedOpts1.FetchProxyURL != globalProxy {
+		t.Errorf("expected global proxy %s, got: %s", globalProxy, usedOpts1.FetchProxyURL)
+	}
+
+	// Case 2: Subscription with explicit FetchProxyRef overrides global proxy
+	sub2ID := domain.MustNewUUIDv7()
+	url2 := "https://provider2.example.com/sub"
+	customProxy := "http://custom-proxy.example.com:8888"
+	createTestSub(t, subRepo, sub2ID, "Sub Custom Proxy", url2, true)
+	// Update sub2 to set FetchProxyRef
+	sub2, err := subRepo.GetByID(ctx, sub2ID)
+	if err != nil {
+		t.Fatalf("failed to get sub2: %v", err)
+	}
+	sub2.RefreshPolicy.FetchProxyRef = customProxy
+	if err := subRepo.Update(ctx, sub2); err != nil {
+		t.Fatalf("failed to update sub2: %v", err)
+	}
+
+	fetcher.setResponse(url2, &fetch.Response{
+		StatusCode:    200,
+		Body:          []byte(clashYAMLSub1WithTwoNodes),
+		ContentDigest: "digest-sub2",
+	})
+
+	res2, err := svc.ReconcileSubscription(ctx, sub2ID)
+	if err != nil {
+		t.Fatalf("reconcile sub2 failed: %v", err)
+	}
+	if res2.Outcome != domain.FetchOutcomeSuccess {
+		t.Errorf("expected success outcome, got %s", res2.Outcome)
+	}
+	usedOpts2 := fetcher.getLastOptions(url2)
+	if usedOpts2.FetchProxyURL != customProxy {
+		t.Errorf("expected custom proxy %s, got: %s", customProxy, usedOpts2.FetchProxyURL)
+	}
+
+	// Case 3: Service without default proxy and sub with empty proxy -> direct connection
+	svcDirect := inventory.NewService(db, subRepo, fetchRepo, nodeRepo, sourceRepo, fetcher)
+	sub3ID := domain.MustNewUUIDv7()
+	url3 := "https://provider3.example.com/sub"
+	createTestSub(t, subRepo, sub3ID, "Sub Direct", url3, true)
+	fetcher.setResponse(url3, &fetch.Response{
+		StatusCode:    200,
+		Body:          []byte(clashYAMLSub1WithTwoNodes),
+		ContentDigest: "digest-sub3",
+	})
+
+	res3, err := svcDirect.ReconcileSubscription(ctx, sub3ID)
+	if err != nil {
+		t.Fatalf("reconcile sub3 failed: %v", err)
+	}
+	if res3.Outcome != domain.FetchOutcomeSuccess {
+		t.Errorf("expected success outcome, got %s", res3.Outcome)
+	}
+	usedOpts3 := fetcher.getLastOptions(url3)
+	if usedOpts3.FetchProxyURL != "" {
+		t.Errorf("expected direct connection (empty proxy), got: %s", usedOpts3.FetchProxyURL)
+	}
+
+	// Case 4: Proxy failure classification and sensitive error redaction in audit record
+	sub4ID := domain.MustNewUUIDv7()
+	url4 := "https://provider4.example.com/sub?token=supersecret123"
+	createTestSub(t, subRepo, sub4ID, "Sub Proxy Fail", url4, true)
+	fetcher.setError(url4, domain.NewDomainError(
+		"fetch_failed",
+		"proxy http://host.docker.internal:7890 connection refused for https://provider4.example.com/sub?token=supersecret123",
+		domain.CategoryInternal,
+	))
+
+	res4, err := svc.ReconcileSubscription(ctx, sub4ID)
+	if err == nil {
+		t.Fatal("expected error on failed proxy fetch, got nil")
+	}
+	if res4 == nil || res4.Outcome != domain.FetchOutcomeFailed {
+		t.Fatalf("expected failed outcome, got: %v", res4)
+	}
+
+	// Check audit record in fetchRepo
+	fetches, err := fetchRepo.ListBySubscription(ctx, sub4ID, 10)
+	if err != nil {
+		t.Fatalf("failed to list fetches for sub4: %v", err)
+	}
+	if len(fetches) == 0 {
+		t.Fatal("expected audit record in fetchRepo, got none")
+	}
+	auditRecord := fetches[0]
+	if auditRecord.Outcome != domain.FetchOutcomeFailed {
+		t.Errorf("expected audit outcome failed, got: %s", auditRecord.Outcome)
+	}
+	if strings.Contains(auditRecord.RedactedError, "supersecret123") {
+		t.Errorf("audit record contains unredacted secret: %s", auditRecord.RedactedError)
 	}
 }

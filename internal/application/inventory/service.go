@@ -172,16 +172,17 @@ type NodePoolStateProvider interface {
 
 // Service coordinates inventory ingestion, provenance reconciliation, and ledger queries.
 type Service struct {
-	db            *sql.DB
-	subscriptions domain.SubscriptionRepository
-	fetches       domain.SubscriptionFetchRepository
-	nodes         domain.NodeRepository
-	sources       domain.NodeSourceRepository
-	fetcher       fetch.Fetcher
-	probeObsRepo  domain.ProbeObservationRepository
-	auditRepo     domain.AuditRepository
-	poolProvider  NodePoolStateProvider
-	mu            sync.Mutex
+	db                *sql.DB
+	subscriptions     domain.SubscriptionRepository
+	fetches           domain.SubscriptionFetchRepository
+	nodes             domain.NodeRepository
+	sources           domain.NodeSourceRepository
+	fetcher           fetch.Fetcher
+	probeObsRepo      domain.ProbeObservationRepository
+	auditRepo         domain.AuditRepository
+	poolProvider      NodePoolStateProvider
+	defaultFetchProxy string
+	mu                sync.Mutex
 }
 
 // Reconciler is an alias for Service to satisfy reconciler role expectations.
@@ -209,6 +210,13 @@ func WithAuditRepository(repo domain.AuditRepository) Option {
 func WithNodePoolStateProvider(provider NodePoolStateProvider) Option {
 	return func(s *Service) {
 		s.poolProvider = provider
+	}
+}
+
+// WithDefaultFetchProxy configures the fallback outbound proxy for subscriptions without an explicit proxy ref.
+func WithDefaultFetchProxy(proxyURL string) Option {
+	return func(s *Service) {
+		s.defaultFetchProxy = strings.TrimSpace(proxyURL)
 	}
 }
 
@@ -261,7 +269,11 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 	}
 
 	startedAt := domain.NowUTC()
-	opts := fetch.OptionsFromPolicy(sub.SourceURLSecretRef, sub.RefreshPolicy, sub.RefreshPolicy.FetchProxyRef)
+	proxyURL := sub.RefreshPolicy.FetchProxyRef
+	if proxyURL == "" {
+		proxyURL = s.defaultFetchProxy
+	}
+	opts := fetch.OptionsFromPolicy(sub.SourceURLSecretRef, sub.RefreshPolicy, proxyURL)
 	fetchResp, fetchErr := s.fetcher.Fetch(ctx, opts)
 	if fetchErr != nil {
 		finishedAt := domain.NowUTC()

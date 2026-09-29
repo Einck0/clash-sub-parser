@@ -196,4 +196,61 @@ func TestServeCLI(t *testing.T) {
 			t.Errorf("did not expect credential master key warning, got stderr: %s", stderr.String())
 		}
 	})
+
+	t.Run("serve accepts fetch-proxy flag and starts up cleanly", func(t *testing.T) {
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("failed to find free port: %v", err)
+		}
+		addr := l.Addr().String()
+		_ = l.Close()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		var stdout, stderr bytes.Buffer
+		serveDone := make(chan int, 1)
+
+		dbP := filepath.Join(tempDir, "serve_proxy_test.db")
+		go func() {
+			exitCode := runServeWithContext(ctx, []string{
+				"-addr", addr,
+				"-db", dbP,
+				"-fetch-proxy", "http://host.docker.internal:7890",
+			}, &stdout, &stderr)
+			serveDone <- exitCode
+		}()
+
+		baseURL := fmt.Sprintf("http://%s", addr)
+		client := &http.Client{Timeout: 2 * time.Second}
+
+		var healthzOK bool
+		deadline := time.Now().Add(10 * time.Second)
+		for time.Now().Before(deadline) {
+			time.Sleep(50 * time.Millisecond)
+			resp, err := client.Get(baseURL + "/healthz")
+			if err != nil {
+				continue
+			}
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				healthzOK = true
+				break
+			}
+		}
+
+		if !healthzOK {
+			t.Fatalf("/healthz check failed with fetch-proxy configured. Stdout: %s, Stderr: %s", stdout.String(), stderr.String())
+		}
+
+		cancel()
+		select {
+		case code := <-serveDone:
+			if code != 0 {
+				t.Fatalf("expected graceful exit code 0, got %d. Stderr: %s", code, stderr.String())
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("server shutdown timed out")
+		}
+	})
 }

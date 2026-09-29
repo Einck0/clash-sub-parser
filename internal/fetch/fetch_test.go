@@ -1,12 +1,21 @@
 package fetch_test
 
 import (
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/hex"
 	"fmt"
+	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -639,5 +648,1208 @@ func TestFetch_PureNoSideEffects(t *testing.T) {
 	}
 	if err1 == nil || err2 == nil {
 		t.Errorf("expected errors on loopback requests")
+	}
+}
+
+func TestVergeHeadersDefaultAndOverride(t *testing.T) {
+	ctx := context.Background()
+
+	var receivedUA, receivedAccept, receivedEncoding string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedUA = r.Header.Get("User-Agent")
+		receivedAccept = r.Header.Get("Accept")
+		receivedEncoding = r.Header.Get("Accept-Encoding")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok payload"))
+	}))
+	defer server.Close()
+
+	u, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("failed to parse test server URL: %v", err)
+	}
+
+	policy := fetch.DefaultPolicy()
+	policy.AllowedHosts = []string{u.Host}
+	client := fetch.NewClientWithPolicy(policy)
+
+	// Case 1: Default Verge UA and standard headers
+	resp, err := client.Fetch(ctx, fetch.Options{
+		URL:    server.URL,
+		Policy: policy,
+	})
+	if err != nil {
+		t.Fatalf("fetch failed: %v", err)
+	}
+	if string(resp.Body) != "ok payload" {
+		t.Errorf("unexpected body: %s", string(resp.Body))
+	}
+	if receivedUA != "clash-verge/v2.5.6" {
+		t.Errorf("expected default UA clash-verge/v2.5.6, got: %s", receivedUA)
+	}
+	if receivedAccept != "*/*" {
+		t.Errorf("expected Accept */*, got: %s", receivedAccept)
+	}
+	if !strings.Contains(receivedEncoding, "gzip") {
+		t.Errorf("expected Accept-Encoding to contain gzip, got: %s", receivedEncoding)
+	}
+
+	// Case 2: Custom UA overrides default
+	resp, err = client.Fetch(ctx, fetch.Options{
+		URL:       server.URL,
+		UserAgent: "custom-clash-meta/v1.0",
+		Policy:    policy,
+	})
+	if err != nil {
+		t.Fatalf("fetch with custom UA failed: %v", err)
+	}
+	if receivedUA != "custom-clash-meta/v1.0" {
+		t.Errorf("expected custom UA custom-clash-meta/v1.0, got: %s", receivedUA)
+	}
+	if receivedAccept != "*/*" {
+		t.Errorf("expected Accept */*, got: %s", receivedAccept)
+	}
+}
+
+func TestHTTPProxy_MockProxyAndSSRFBoundaries(t *testing.T) {
+	ctx := context.Background()
+
+	// Target backend server
+	var targetHitCount int
+	var targetReceivedUA string
+	targetServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetHitCount++
+		targetReceivedUA = r.Header.Get("User-Agent")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("proxied payload content"))
+	}))
+	defer targetServer.Close()
+
+	targetURL, _ := url.Parse(targetServer.URL)
+
+	// Mock forward HTTP proxy server
+	var proxyHitCount int
+	proxyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxyHitCount++
+		// Forward request to target
+		outReq, err := http.NewRequestWithContext(r.Context(), r.Method, r.RequestURI, r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		for k, v := range r.Header {
+			outReq.Header[k] = v
+		}
+		resp, err := http.DefaultTransport.RoundTrip(outReq)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+		for k, v := range resp.Header {
+			w.Header()[k] = v
+		}
+		w.WriteHeader(resp.StatusCode)
+		io.Copy(w, resp.Body)
+	}))
+	defer proxyServer.Close()
+
+	// 1. Success via AllowedProxyHosts
+	policy := fetch.DefaultPolicy()
+	policy.AllowedHosts = []string{targetURL.Host}
+	_ = policy.AddAllowedProxy(proxyServer.URL)
+
+	client := fetch.NewClientWithPolicy(policy)
+
+	resp, err := client.Fetch(ctx, fetch.Options{
+		URL:           targetServer.URL,
+		FetchProxyURL: proxyServer.URL,
+		Policy:        policy,
+	})
+	if err != nil {
+		t.Fatalf("fetch via mock proxy failed: %v", err)
+	}
+	if string(resp.Body) != "proxied payload content" {
+		t.Errorf("unexpected body: %s", string(resp.Body))
+	}
+	if proxyHitCount != 1 {
+		t.Errorf("expected 1 hit on proxy, got %d", proxyHitCount)
+	}
+	if targetHitCount != 1 {
+		t.Errorf("expected 1 hit on target, got %d", targetHitCount)
+	}
+	if targetReceivedUA != "clash-verge/v2.5.6" {
+		t.Errorf("expected Verge UA on target, got: %s", targetReceivedUA)
+	}
+
+	// 2. Untrusted proxy to private/loopback/cloud metadata is rejected
+	t.Run("untrusted private proxy blocked", func(t *testing.T) {
+		strictPolicy := fetch.DefaultPolicy()
+		strictPolicy.AllowedHosts = []string{targetURL.Host}
+		// proxyURL.Host is NOT in AllowedProxyHosts
+		_, err := client.Fetch(ctx, fetch.Options{
+			URL:           targetServer.URL,
+			FetchProxyURL: proxyServer.URL, // loopback proxy not in AllowedProxyHosts
+			Policy:        strictPolicy,
+		})
+		if err == nil {
+			t.Fatal("expected proxy_ssrf_blocked on unlisted loopback proxy, got nil")
+		}
+		de, ok := domain.AsDomainError(err)
+		if !ok || de.Code != "proxy_ssrf_blocked" {
+			t.Fatalf("expected code proxy_ssrf_blocked, got %v", err)
+		}
+	})
+
+	t.Run("untrusted cloud metadata proxy blocked", func(t *testing.T) {
+		_, err := client.Fetch(ctx, fetch.Options{
+			URL:           targetServer.URL,
+			FetchProxyURL: "http://169.254.169.254:80",
+			Policy:        policy,
+		})
+		if err == nil {
+			t.Fatal("expected proxy_ssrf_blocked for cloud metadata, got nil")
+		}
+		de, ok := domain.AsDomainError(err)
+		if !ok || de.Code != "proxy_ssrf_blocked" {
+			t.Fatalf("expected code proxy_ssrf_blocked, got %v", err)
+		}
+	})
+
+	// 3. Target SSRF protection remains strict even when proxy is configured
+	t.Run("target SSRF blocked even with proxy", func(t *testing.T) {
+		_, err := client.Fetch(ctx, fetch.Options{
+			URL:           "http://127.0.0.1:8080/feed",
+			FetchProxyURL: proxyServer.URL,
+			Policy:        policy, // policy has AllowedProxyHosts, but NOT target 127.0.0.1
+		})
+		if err == nil {
+			t.Fatal("expected target SSRF error, got nil")
+		}
+		de, ok := domain.AsDomainError(err)
+		if !ok || de.Code != "ssrf_blocked" {
+			t.Fatalf("expected ssrf_blocked, got %v", err)
+		}
+	})
+
+	// 4. Redirect SSRF protection remains strict with proxy configured
+	t.Run("redirect to private IP blocked with proxy", func(t *testing.T) {
+		redirectServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "http://10.0.0.1:8080/internal", http.StatusFound)
+		}))
+		defer redirectServer.Close()
+
+		uRedir, _ := url.Parse(redirectServer.URL)
+		redirPolicy := fetch.DefaultPolicy()
+		redirPolicy.AllowedHosts = []string{uRedir.Host}
+		_ = redirPolicy.AddAllowedProxy(proxyServer.URL)
+
+		_, err := client.Fetch(ctx, fetch.Options{
+			URL:           redirectServer.URL,
+			FetchProxyURL: proxyServer.URL,
+			Policy:        redirPolicy,
+		})
+		if err == nil {
+			t.Fatal("expected redirect SSRF blocked error, got nil")
+		}
+		de, ok := domain.AsDomainError(err)
+		if !ok || de.Code != "ssrf_blocked" {
+			t.Fatalf("expected ssrf_blocked on redirect, got %v", err)
+		}
+	})
+}
+
+func TestHTTPProxy_UnreachableFailureClassification(t *testing.T) {
+	ctx := context.Background()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	u, _ := url.Parse(server.URL)
+	policy := fetch.DefaultPolicy()
+	policy.AllowedHosts = []string{u.Host}
+	// Pick an unreachable local port in AllowedProxyHosts
+	unreachableProxy := "http://127.0.0.1:54321"
+	_ = policy.AddAllowedProxy(unreachableProxy)
+
+	client := fetch.NewClientWithPolicy(policy)
+
+	_, err := client.Fetch(ctx, fetch.Options{
+		URL:           server.URL,
+		FetchProxyURL: unreachableProxy,
+		Timeout:       2 * time.Second,
+		Policy:        policy,
+	})
+	if err == nil {
+		t.Fatal("expected fetch error with unreachable proxy, got nil")
+	}
+	de, ok := domain.AsDomainError(err)
+	if !ok {
+		t.Fatalf("expected domain error, got %T: %v", err, err)
+	}
+	if de.Code != "fetch_failed" && de.Code != "fetch_timeout" && de.Code != "connection_failed" {
+		t.Errorf("unexpected error code: %s", de.Code)
+	}
+}
+
+type testMockResolver struct {
+	mapping map[string][]net.IPAddr
+}
+
+func (m *testMockResolver) LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error) {
+	if ips, ok := m.mapping[host]; ok {
+		return ips, nil
+	}
+	return nil, fmt.Errorf("mock DNS: host not found: %s", host)
+}
+
+func TestProxy_ExactEndpointAndPortEnforcement(t *testing.T) {
+	ctx := context.Background()
+
+	// Mock resolver resolving host.docker.internal to gateway private IP (172.17.0.1)
+	resolver := &testMockResolver{
+		mapping: map[string][]net.IPAddr{
+			"host.docker.internal": {{IP: net.ParseIP("172.17.0.1")}},
+			"public-target.com":    {{IP: net.ParseIP("93.184.216.34")}},
+		},
+	}
+
+	policy := fetch.DefaultPolicy()
+	policy.Resolver = resolver
+	// Exactly whitelist host.docker.internal:7890 ONLY
+	err := policy.AddAllowedProxy("http://host.docker.internal:7890")
+	if err != nil {
+		t.Fatalf("failed to add allowed proxy: %v", err)
+	}
+
+	// 1. Exact host:port match succeeds
+	t.Run("allowed exact proxy endpoint 7890 succeeds", func(t *testing.T) {
+		u, _ := url.Parse("http://host.docker.internal:7890")
+		if err := policy.ValidateProxy(ctx, u); err != nil {
+			t.Errorf("expected http://host.docker.internal:7890 to be allowed, got: %v", err)
+		}
+	})
+
+	// 2. Dangerous ports on same host are blocked
+	dangerousPorts := []string{"2375", "6379", "22"}
+	for _, port := range dangerousPorts {
+		t.Run(fmt.Sprintf("dangerous port %s rejected", port), func(t *testing.T) {
+			u, _ := url.Parse(fmt.Sprintf("http://host.docker.internal:%s", port))
+			err := policy.ValidateProxy(ctx, u)
+			if err == nil {
+				t.Fatalf("expected proxy port %s on host.docker.internal to be blocked, got nil", port)
+			}
+			de, ok := domain.AsDomainError(err)
+			if !ok || de.Code != "proxy_ssrf_blocked" {
+				t.Fatalf("expected proxy_ssrf_blocked for port %s, got: %v", port, err)
+			}
+		})
+	}
+
+	// 3. DNS-resolved gateway private IP equivalent bypass is blocked
+	t.Run("resolved gateway IP equivalent bypass rejected", func(t *testing.T) {
+		u, _ := url.Parse("http://172.17.0.1:7890")
+		err := policy.ValidateProxy(ctx, u)
+		if err == nil {
+			t.Fatal("expected equivalent private IP http://172.17.0.1:7890 to be blocked, got nil")
+		}
+		de, ok := domain.AsDomainError(err)
+		if !ok || de.Code != "proxy_ssrf_blocked" {
+			t.Fatalf("expected proxy_ssrf_blocked for gateway IP, got: %v", err)
+		}
+	})
+
+	// 4. Custom loopback proxy rejected
+	t.Run("custom loopback proxy rejected", func(t *testing.T) {
+		u, _ := url.Parse("http://127.0.0.1:7890")
+		err := policy.ValidateProxy(ctx, u)
+		if err == nil {
+			t.Fatal("expected http://127.0.0.1:7890 to be blocked, got nil")
+		}
+		de, ok := domain.AsDomainError(err)
+		if !ok || de.Code != "proxy_ssrf_blocked" {
+			t.Fatalf("expected proxy_ssrf_blocked for loopback, got: %v", err)
+		}
+	})
+
+	// 5. Cloud metadata proxy rejected
+	t.Run("cloud metadata proxy rejected", func(t *testing.T) {
+		u, _ := url.Parse("http://169.254.169.254:80")
+		err := policy.ValidateProxy(ctx, u)
+		if err == nil {
+			t.Fatal("expected http://169.254.169.254:80 to be blocked, got nil")
+		}
+		de, ok := domain.AsDomainError(err)
+		if !ok || de.Code != "proxy_ssrf_blocked" {
+			t.Fatalf("expected proxy_ssrf_blocked for metadata, got: %v", err)
+		}
+	})
+
+	// 6. Port omission rejected
+	t.Run("port omission in proxy URL rejected", func(t *testing.T) {
+		u, _ := url.Parse("http://host.docker.internal")
+		err := policy.ValidateProxy(ctx, u)
+		if err == nil {
+			t.Fatal("expected error on port omission, got nil")
+		}
+		de, ok := domain.AsDomainError(err)
+		if !ok || de.Code != "invalid_proxy_url" {
+			t.Fatalf("expected invalid_proxy_url for port omission, got: %v", err)
+		}
+	})
+
+	// 7. Malicious userinfo rejected
+	t.Run("malicious userinfo in proxy URL rejected", func(t *testing.T) {
+		u, _ := url.Parse("http://admin:secret@host.docker.internal:7890")
+		err := policy.ValidateProxy(ctx, u)
+		if err == nil {
+			t.Fatal("expected error on userinfo, got nil")
+		}
+		de, ok := domain.AsDomainError(err)
+		if !ok || de.Code != "invalid_proxy_url" {
+			t.Fatalf("expected invalid_proxy_url for userinfo, got: %v", err)
+		}
+	})
+
+	// 8. Obfuscated IPs rejected
+	obfuscatedCases := []string{
+		"http://0177.0.0.1:7890",
+		"http://0x7f.0.0.1:7890",
+		"http://2130706433:7890",
+		"http://127.1:7890",
+		"http://127.000.000.001:7890",
+	}
+	for _, raw := range obfuscatedCases {
+		t.Run(fmt.Sprintf("obfuscated IP %s rejected", raw), func(t *testing.T) {
+			u, _ := url.Parse(raw)
+			err := policy.ValidateProxy(ctx, u)
+			if err == nil {
+				t.Fatalf("expected obfuscated proxy %s to be blocked, got nil", raw)
+			}
+			de, ok := domain.AsDomainError(err)
+			if !ok || de.Code != "proxy_ssrf_blocked" {
+				t.Fatalf("expected proxy_ssrf_blocked for %s, got: %v", raw, err)
+			}
+		})
+	}
+}
+
+func TestProxy_DialContext_BareHostAndPortSeparation(t *testing.T) {
+	ctx := context.Background()
+
+	resolver := &testMockResolver{
+		mapping: map[string][]net.IPAddr{
+			"host.docker.internal": {{IP: net.ParseIP("172.17.0.1")}},
+			"public-site.example":  {{IP: net.ParseIP("93.184.216.34")}},
+		},
+	}
+
+	policy := fetch.DefaultPolicy()
+	policy.Resolver = resolver
+	_ = policy.AddAllowedProxy("http://host.docker.internal:7890")
+
+	client := fetch.NewClientWithPolicy(policy)
+
+	// Fetch using unauthorized port on host.docker.internal must fail at proxy validation
+	_, err := client.Fetch(ctx, fetch.Options{
+		URL:           "http://public-site.example/feed",
+		FetchProxyURL: "http://host.docker.internal:2375",
+		Policy:        policy,
+	})
+	if err == nil {
+		t.Fatal("expected fetch to fail for unauthorized proxy port 2375, got nil")
+	}
+	de, ok := domain.AsDomainError(err)
+	if !ok || de.Code != "proxy_ssrf_blocked" {
+		t.Fatalf("expected proxy_ssrf_blocked, got: %v", err)
+	}
+}
+
+func TestPolicy_AddAllowedProxy_Validation(t *testing.T) {
+	policy := fetch.DefaultPolicy()
+
+	// Valid proxy endpoints
+	if err := policy.AddAllowedProxy("http://host.docker.internal:7890"); err != nil {
+		t.Errorf("expected success, got: %v", err)
+	}
+	// socks5 is unsupported scheme and must be rejected
+	if err := policy.AddAllowedProxy("socks5://10.0.0.2:1080"); err == nil {
+		t.Errorf("expected error for socks5 scheme, got nil")
+	}
+
+	// Invalid: port omitted
+	if err := policy.AddAllowedProxy("http://host.docker.internal"); err == nil {
+		t.Error("expected error for port omission, got nil")
+	}
+
+	// Invalid: userinfo
+	if err := policy.AddAllowedProxy("http://user:pass@host.docker.internal:7890"); err == nil {
+		t.Error("expected error for userinfo, got nil")
+	}
+
+	// Invalid: unsupported scheme
+	if err := policy.AddAllowedProxy("ftp://host.docker.internal:7890"); err == nil {
+		t.Error("expected error for unsupported scheme, got nil")
+	}
+
+	// Invalid: obfuscated IP
+	if err := policy.AddAllowedProxy("http://0177.0.0.1:7890"); err == nil {
+		t.Error("expected error for obfuscated IP, got nil")
+	}
+
+	// Invalid: empty
+	if err := policy.AddAllowedProxy(""); err == nil {
+		t.Error("expected error for empty proxy endpoint, got nil")
+	}
+}
+
+func TestProxy_ObfuscatedIP_TargetBlocking(t *testing.T) {
+	ctx := context.Background()
+	policy := fetch.DefaultPolicy()
+
+	obfuscatedTargets := []string{
+		"http://0177.0.0.1/feed",
+		"http://0x7f.0.0.1/feed",
+		"http://2130706433/feed",
+		"http://127.1/feed",
+	}
+
+	for _, raw := range obfuscatedTargets {
+		u, _ := url.Parse(raw)
+		err := policy.ValidateTarget(ctx, u)
+		if err == nil {
+			t.Errorf("expected target %s to be blocked as ssrf_blocked, got nil", raw)
+		}
+		de, ok := domain.AsDomainError(err)
+		if !ok || de.Code != "ssrf_blocked" {
+			t.Errorf("expected ssrf_blocked for %s, got: %v", raw, err)
+		}
+	}
+}
+
+func generateTestCertificate(t *testing.T, dnsName string) (tls.Certificate, *x509.CertPool) {
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("failed to generate private key: %v", err)
+	}
+
+	serialNumber, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		t.Fatalf("failed to generate serial number: %v", err)
+	}
+
+	template := x509.Certificate{
+		SerialNumber: serialNumber,
+		Subject: pkix.Name{
+			Organization: []string{"CSP Test"},
+		},
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		DNSNames:              []string{dnsName},
+	}
+
+	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
+	if err != nil {
+		t.Fatalf("failed to create certificate: %v", err)
+	}
+
+	cert, err := x509.ParseCertificate(derBytes)
+	if err != nil {
+		t.Fatalf("failed to parse certificate: %v", err)
+	}
+
+	tlsCert := tls.Certificate{
+		Certificate: [][]byte{derBytes},
+		PrivateKey:  priv,
+	}
+
+	certPool := x509.NewCertPool()
+	certPool.AddCert(cert)
+
+	return tlsCert, certPool
+}
+
+func TestProxy_TargetIPPinning_WireFormat_HTTP(t *testing.T) {
+	ctx := context.Background()
+
+	// 1. Mock proxy listener recording wire format
+	var capturedRequestLine string
+	var capturedHeaders = make(http.Header)
+	var captureMu sync.Mutex
+
+	proxyListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen on proxy port: %v", err)
+	}
+	defer proxyListener.Close()
+
+	go func() {
+		conn, err := proxyListener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		br := bufio.NewReader(conn)
+		line, err := br.ReadString('\n')
+		if err != nil {
+			return
+		}
+		captureMu.Lock()
+		capturedRequestLine = strings.TrimSpace(line)
+		for {
+			hdrLine, err := br.ReadString('\n')
+			if err != nil || strings.TrimSpace(hdrLine) == "" {
+				break
+			}
+			parts := strings.SplitN(strings.TrimSpace(hdrLine), ":", 2)
+			if len(parts) == 2 {
+				capturedHeaders.Add(strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]))
+			}
+		}
+		captureMu.Unlock()
+
+		body := "wire-format-verified-payload"
+		resp := fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Length: %d\r\nContent-Type: text/plain\r\n\r\n%s", len(body), body)
+		conn.Write([]byte(resp))
+	}()
+
+	mockResolver := &testMockResolver{
+		mapping: map[string][]net.IPAddr{
+			"sub.example.com": {{IP: net.ParseIP("93.184.216.34")}},
+		},
+	}
+
+	policy := fetch.DefaultPolicy()
+	policy.Resolver = mockResolver
+	proxyURLStr := "http://" + proxyListener.Addr().String()
+	if err := policy.AddAllowedProxy(proxyURLStr); err != nil {
+		t.Fatalf("failed to add allowed proxy: %v", err)
+	}
+
+	client := fetch.NewClientWithPolicy(policy)
+	resp, err := client.Fetch(ctx, fetch.Options{
+		URL:           "http://sub.example.com/sub/feed?token=xyz",
+		FetchProxyURL: proxyURLStr,
+		Policy:        policy,
+	})
+	if err != nil {
+		t.Fatalf("fetch via proxy failed: %v", err)
+	}
+
+	if string(resp.Body) != "wire-format-verified-payload" {
+		t.Fatalf("unexpected body: %s", string(resp.Body))
+	}
+
+	captureMu.Lock()
+	defer captureMu.Unlock()
+
+	expectedReqLine := "GET http://93.184.216.34:80/sub/feed?token=xyz HTTP/1.1"
+	if capturedRequestLine != expectedReqLine {
+		t.Errorf("expected request line %q, got %q", expectedReqLine, capturedRequestLine)
+	}
+	if strings.Contains(capturedRequestLine, "sub.example.com") {
+		t.Errorf("request line leaked unpinned domain name: %s", capturedRequestLine)
+	}
+
+	if h := capturedHeaders.Get("Host"); h != "sub.example.com" {
+		t.Errorf("expected Host header 'sub.example.com', got %q", h)
+	}
+	if ua := capturedHeaders.Get("User-Agent"); ua != "clash-verge/v2.5.6" {
+		t.Errorf("expected User-Agent 'clash-verge/v2.5.6', got %q", ua)
+	}
+	if acc := capturedHeaders.Get("Accept"); acc != "*/*" {
+		t.Errorf("expected Accept '*/*', got %q", acc)
+	}
+	if enc := capturedHeaders.Get("Accept-Encoding"); enc != "gzip, deflate" {
+		t.Errorf("expected Accept-Encoding 'gzip, deflate', got %q", enc)
+	}
+}
+
+func TestProxy_TargetIPPinning_WireFormat_HTTPS(t *testing.T) {
+	ctx := context.Background()
+
+	tlsCert, rootCAs := generateTestCertificate(t, "sub.example.com")
+
+	var targetReceivedSNI string
+	var targetReceivedHost string
+	originListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+	defer originListener.Close()
+
+	tlsServer := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.TLS != nil {
+			targetReceivedSNI = r.TLS.ServerName
+		}
+		targetReceivedHost = r.Host
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("https-pinned-success"))
+	}))
+	tlsServer.Listener = originListener
+	tlsServer.TLS = &tls.Config{
+		Certificates: []tls.Certificate{tlsCert},
+	}
+	tlsServer.StartTLS()
+	defer tlsServer.Close()
+
+	var capturedConnectLine string
+	var capturedConnectHost string
+	var connectMu sync.Mutex
+
+	proxyListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen on proxy port: %v", err)
+	}
+	defer proxyListener.Close()
+
+	go func() {
+		clientConn, err := proxyListener.Accept()
+		if err != nil {
+			return
+		}
+		defer clientConn.Close()
+
+		br := bufio.NewReader(clientConn)
+		line, err := br.ReadString('\n')
+		if err != nil {
+			return
+		}
+		connectMu.Lock()
+		capturedConnectLine = strings.TrimSpace(line)
+		for {
+			hdrLine, err := br.ReadString('\n')
+			if err != nil || strings.TrimSpace(hdrLine) == "" {
+				break
+			}
+			parts := strings.SplitN(strings.TrimSpace(hdrLine), ":", 2)
+			if len(parts) == 2 && strings.EqualFold(strings.TrimSpace(parts[0]), "Host") {
+				capturedConnectHost = strings.TrimSpace(parts[1])
+			}
+		}
+		connectMu.Unlock()
+
+		originConn, err := net.Dial("tcp", originListener.Addr().String())
+		if err != nil {
+			clientConn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
+			return
+		}
+		defer originConn.Close()
+
+		clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			io.Copy(originConn, clientConn)
+		}()
+		go func() {
+			defer wg.Done()
+			io.Copy(clientConn, originConn)
+		}()
+		wg.Wait()
+	}()
+
+	mockResolver := &testMockResolver{
+		mapping: map[string][]net.IPAddr{
+			"sub.example.com": {{IP: net.ParseIP("93.184.216.34")}},
+		},
+	}
+
+	policy := fetch.DefaultPolicy()
+	policy.Resolver = mockResolver
+	proxyURLStr := "http://" + proxyListener.Addr().String()
+	if err := policy.AddAllowedProxy(proxyURLStr); err != nil {
+		t.Fatalf("failed to add allowed proxy: %v", err)
+	}
+
+	client := fetch.NewClientWithPolicy(policy)
+
+	resp, err := client.Fetch(ctx, fetch.Options{
+		URL:           "https://sub.example.com/feed?token=xyz",
+		FetchProxyURL: proxyURLStr,
+		Policy:        policy,
+		RootCAs:       rootCAs,
+	})
+	if err != nil {
+		t.Fatalf("https fetch via proxy failed: %v", err)
+	}
+
+	if string(resp.Body) != "https-pinned-success" {
+		t.Fatalf("unexpected body: %s", string(resp.Body))
+	}
+
+	connectMu.Lock()
+	defer connectMu.Unlock()
+
+	expectedConnect := "CONNECT 93.184.216.34:443 HTTP/1.1"
+	if capturedConnectLine != expectedConnect {
+		t.Errorf("expected CONNECT line %q, got %q", expectedConnect, capturedConnectLine)
+	}
+	if strings.Contains(capturedConnectLine, "sub.example.com") {
+		t.Errorf("CONNECT line leaked unpinned domain name: %s", capturedConnectLine)
+	}
+	if capturedConnectHost != "93.184.216.34:443" {
+		t.Errorf("expected CONNECT Host header '93.184.216.34:443', got %q", capturedConnectHost)
+	}
+
+	if targetReceivedSNI != "sub.example.com" {
+		t.Errorf("expected origin TLS SNI 'sub.example.com', got %q", targetReceivedSNI)
+	}
+	if targetReceivedHost != "sub.example.com" {
+		t.Errorf("expected origin Host header 'sub.example.com', got %q", targetReceivedHost)
+	}
+
+	t.Run("strict TLS verification fails on domain mismatch", func(t *testing.T) {
+		wrongCert, wrongPool := generateTestCertificate(t, "evil.attacker.com")
+		wrongListener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer wrongListener.Close()
+
+		wrongTLSServer := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+		wrongTLSServer.Listener = wrongListener
+		wrongTLSServer.TLS = &tls.Config{Certificates: []tls.Certificate{wrongCert}}
+		wrongTLSServer.StartTLS()
+		defer wrongTLSServer.Close()
+
+		wrongProxyListener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer wrongProxyListener.Close()
+
+		go func() {
+			c, err := wrongProxyListener.Accept()
+			if err != nil {
+				return
+			}
+			defer c.Close()
+			br := bufio.NewReader(c)
+			for {
+				l, _ := br.ReadString('\n')
+				if strings.TrimSpace(l) == "" {
+					break
+				}
+			}
+			orig, err := net.Dial("tcp", wrongListener.Addr().String())
+			if err != nil {
+				return
+			}
+			defer orig.Close()
+			c.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
+			go io.Copy(orig, c)
+			io.Copy(c, orig)
+		}()
+
+		wrongPolicy := fetch.DefaultPolicy()
+		wrongPolicy.Resolver = mockResolver
+		_ = wrongPolicy.AddAllowedProxy("http://" + wrongProxyListener.Addr().String())
+
+		_, err = client.Fetch(ctx, fetch.Options{
+			URL:           "https://sub.example.com/feed",
+			FetchProxyURL: "http://" + wrongProxyListener.Addr().String(),
+			Policy:        wrongPolicy,
+			RootCAs:       wrongPool,
+		})
+		if err == nil {
+			t.Fatal("expected TLS certificate verification failure on mismatch, got nil")
+		}
+	})
+}
+
+func TestProxy_ProxySideDNSPoisoningDefense(t *testing.T) {
+	ctx := context.Background()
+
+	var receivedAuthority string
+	proxyListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+	defer proxyListener.Close()
+
+	go func() {
+		c, err := proxyListener.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		br := bufio.NewReader(c)
+		line, _ := br.ReadString('\n')
+		receivedAuthority = strings.TrimSpace(line)
+		for {
+			h, _ := br.ReadString('\n')
+			if strings.TrimSpace(h) == "" {
+				break
+			}
+		}
+		c.Write([]byte("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"))
+	}()
+
+	mockResolver := &testMockResolver{
+		mapping: map[string][]net.IPAddr{
+			"poisoned.example.com": {{IP: net.ParseIP("93.184.216.34")}},
+		},
+	}
+
+	policy := fetch.DefaultPolicy()
+	policy.Resolver = mockResolver
+	proxyURLStr := "http://" + proxyListener.Addr().String()
+	_ = policy.AddAllowedProxy(proxyURLStr)
+
+	client := fetch.NewClientWithPolicy(policy)
+	_, err = client.Fetch(ctx, fetch.Options{
+		URL:           "http://poisoned.example.com/feed",
+		FetchProxyURL: proxyURLStr,
+		Policy:        policy,
+	})
+	if err != nil {
+		t.Fatalf("fetch failed: %v", err)
+	}
+
+	if !strings.Contains(receivedAuthority, "93.184.216.34") {
+		t.Errorf("proxy request line did not contain pinned public IP: %s", receivedAuthority)
+	}
+	if strings.Contains(receivedAuthority, "poisoned.example.com") {
+		t.Errorf("proxy request line leaked poisoned domain name: %s", receivedAuthority)
+	}
+
+	t.Run("local DNS resolving to loopback blocked before proxy", func(t *testing.T) {
+		loopbackResolver := &testMockResolver{
+			mapping: map[string][]net.IPAddr{
+				"bad-dns.example.com": {{IP: net.ParseIP("127.0.0.1")}},
+			},
+		}
+		p := fetch.DefaultPolicy()
+		p.Resolver = loopbackResolver
+		_ = p.AddAllowedProxy(proxyURLStr)
+
+		_, err := client.Fetch(ctx, fetch.Options{
+			URL:           "http://bad-dns.example.com/feed",
+			FetchProxyURL: proxyURLStr,
+			Policy:        p,
+		})
+		if err == nil {
+			t.Fatal("expected ssrf_blocked, got nil")
+		}
+		de, ok := domain.AsDomainError(err)
+		if !ok || de.Code != "ssrf_blocked" {
+			t.Fatalf("expected code ssrf_blocked, got: %v", err)
+		}
+	})
+
+	t.Run("302 redirect to loopback via proxy rejected", func(t *testing.T) {
+		redirectProxyListener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer redirectProxyListener.Close()
+
+		go func() {
+			c, err := redirectProxyListener.Accept()
+			if err != nil {
+				return
+			}
+			defer c.Close()
+			br := bufio.NewReader(c)
+			for {
+				h, _ := br.ReadString('\n')
+				if strings.TrimSpace(h) == "" {
+					break
+				}
+			}
+			c.Write([]byte("HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:18080/internal\r\nContent-Length: 0\r\n\r\n"))
+		}()
+
+		redirPolicy := fetch.DefaultPolicy()
+		redirPolicy.Resolver = mockResolver
+		_ = redirPolicy.AddAllowedProxy("http://" + redirectProxyListener.Addr().String())
+
+		_, err = client.Fetch(ctx, fetch.Options{
+			URL:           "http://poisoned.example.com/feed",
+			FetchProxyURL: "http://" + redirectProxyListener.Addr().String(),
+			Policy:        redirPolicy,
+		})
+		if err == nil {
+			t.Fatal("expected ssrf_blocked on redirect to loopback, got nil")
+		}
+		de, ok := domain.AsDomainError(err)
+		if !ok || de.Code != "ssrf_blocked" {
+			t.Fatalf("expected code ssrf_blocked, got: %v", err)
+		}
+	})
+}
+
+func TestProxy_MultiHopRedirectIPRebinding(t *testing.T) {
+	ctx := context.Background()
+
+	var hopRequests []string
+	var hopHosts []string
+	var mu sync.Mutex
+
+	proxyListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+	defer proxyListener.Close()
+
+	go func() {
+		for i := 0; i < 3; i++ {
+			c, err := proxyListener.Accept()
+			if err != nil {
+				return
+			}
+			br := bufio.NewReader(c)
+			line, _ := br.ReadString('\n')
+			var hostHeader string
+			for {
+				hdr, _ := br.ReadString('\n')
+				if strings.TrimSpace(hdr) == "" {
+					break
+				}
+				if strings.HasPrefix(strings.ToLower(hdr), "host:") {
+					hostHeader = strings.TrimSpace(strings.TrimPrefix(hdr, "Host:"))
+				}
+			}
+			mu.Lock()
+			hopRequests = append(hopRequests, strings.TrimSpace(line))
+			hopHosts = append(hopHosts, hostHeader)
+			step := len(hopRequests)
+			mu.Unlock()
+
+			if step == 1 {
+				c.Write([]byte("HTTP/1.1 302 Found\r\nLocation: http://hop2.example.com/step2\r\nContent-Length: 0\r\n\r\n"))
+			} else if step == 2 {
+				c.Write([]byte("HTTP/1.1 302 Found\r\nLocation: http://hop3.example.com/final\r\nContent-Length: 0\r\n\r\n"))
+			} else {
+				c.Write([]byte("HTTP/1.1 200 OK\r\nContent-Length: 16\r\n\r\nmulti-hop-done!!"))
+			}
+			c.Close()
+		}
+	}()
+
+	mockResolver := &testMockResolver{
+		mapping: map[string][]net.IPAddr{
+			"hop1.example.com": {{IP: net.ParseIP("93.184.216.10")}},
+			"hop2.example.com": {{IP: net.ParseIP("93.184.216.20")}},
+			"hop3.example.com": {{IP: net.ParseIP("93.184.216.30")}},
+		},
+	}
+
+	policy := fetch.DefaultPolicy()
+	policy.Resolver = mockResolver
+	proxyURLStr := "http://" + proxyListener.Addr().String()
+	_ = policy.AddAllowedProxy(proxyURLStr)
+
+	client := fetch.NewClientWithPolicy(policy)
+	resp, err := client.Fetch(ctx, fetch.Options{
+		URL:           "http://hop1.example.com/start",
+		FetchProxyURL: proxyURLStr,
+		Policy:        policy,
+	})
+	if err != nil {
+		t.Fatalf("multi-hop fetch failed: %v", err)
+	}
+
+	if string(resp.Body) != "multi-hop-done!!" {
+		t.Fatalf("unexpected body: %s", string(resp.Body))
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(hopRequests) != 3 {
+		t.Fatalf("expected 3 hops recorded, got %d", len(hopRequests))
+	}
+
+	if !strings.Contains(hopRequests[0], "93.184.216.10:80") || hopHosts[0] != "hop1.example.com" {
+		t.Errorf("hop 1 mismatch: req=%q, host=%q", hopRequests[0], hopHosts[0])
+	}
+	if !strings.Contains(hopRequests[1], "93.184.216.20:80") || hopHosts[1] != "hop2.example.com" {
+		t.Errorf("hop 2 mismatch: req=%q, host=%q", hopRequests[1], hopHosts[1])
+	}
+	if !strings.Contains(hopRequests[2], "93.184.216.30:80") || hopHosts[2] != "hop3.example.com" {
+		t.Errorf("hop 3 mismatch: req=%q, host=%q", hopRequests[2], hopHosts[2])
+	}
+}
+
+func TestProxy_ProtocolAndPortConfusion_EdgeCases(t *testing.T) {
+	ctx := context.Background()
+	policy := fetch.DefaultPolicy()
+
+	if err := policy.AddAllowedProxy("http://host.docker.internal:7890"); err != nil {
+		t.Fatalf("failed to add allowed proxy: %v", err)
+	}
+
+	unsupportedSchemes := []string{
+		"socks5://host.docker.internal:7890",
+		"https://host.docker.internal:7890",
+		"ftp://host.docker.internal:7890",
+		"host.docker.internal:7890",
+	}
+	for _, raw := range unsupportedSchemes {
+		t.Run("unsupported scheme "+raw, func(t *testing.T) {
+			if policy.IsProxyHostAllowed(raw) {
+				t.Fatalf("expected %s to NOT be allowed as proxy", raw)
+			}
+			u, _ := url.Parse(raw)
+			err := policy.ValidateProxy(ctx, u)
+			if err == nil {
+				t.Fatalf("expected ValidateProxy to fail for %s, got nil", raw)
+			}
+			de, ok := domain.AsDomainError(err)
+			if !ok || de.Code != "invalid_proxy_url" {
+				t.Fatalf("expected invalid_proxy_url for %s, got: %v", raw, err)
+			}
+		})
+	}
+
+	leadingZeroPorts := []string{
+		"http://host.docker.internal:07890",
+		"http://host.docker.internal:0080",
+	}
+	for _, raw := range leadingZeroPorts {
+		t.Run("leading zero port "+raw, func(t *testing.T) {
+			if policy.IsProxyHostAllowed(raw) {
+				t.Fatalf("expected %s to NOT be allowed as proxy", raw)
+			}
+			u, _ := url.Parse(raw)
+			err := policy.ValidateProxy(ctx, u)
+			if err == nil {
+				t.Fatalf("expected ValidateProxy to fail for leading zero port %s, got nil", raw)
+			}
+			de, ok := domain.AsDomainError(err)
+			if !ok || de.Code != "invalid_proxy_url" {
+				t.Fatalf("expected invalid_proxy_url for %s, got: %v", raw, err)
+			}
+		})
+	}
+
+	trailingDots := []string{
+		"http://host.docker.internal.:7890",
+		"http://127.0.0.1.:7890",
+	}
+	for _, raw := range trailingDots {
+		t.Run("trailing dot "+raw, func(t *testing.T) {
+			if policy.IsProxyHostAllowed(raw) {
+				t.Fatalf("expected %s to NOT be allowed as proxy", raw)
+			}
+			u, _ := url.Parse(raw)
+			err := policy.ValidateProxy(ctx, u)
+			if err == nil {
+				t.Fatalf("expected ValidateProxy to fail for trailing dot %s, got nil", raw)
+			}
+			de, ok := domain.AsDomainError(err)
+			if !ok || de.Code != "invalid_proxy_url" {
+				t.Fatalf("expected invalid_proxy_url for %s, got: %v", raw, err)
+			}
+		})
+	}
+
+	specialIPv6 := []struct {
+		url          string
+		expectedCode string
+	}{
+		{"http://[fe80::1%25eth0]:7890", "invalid_proxy_url"},
+		{"http://[::ffff:127.0.0.1]:7890", "proxy_ssrf_blocked"},
+	}
+	for _, tc := range specialIPv6 {
+		t.Run("special IPv6 "+tc.url, func(t *testing.T) {
+			if policy.IsProxyHostAllowed(tc.url) {
+				t.Fatalf("expected %s to NOT be allowed as proxy", tc.url)
+			}
+			u, _ := url.Parse(tc.url)
+			err := policy.ValidateProxy(ctx, u)
+			if err == nil {
+				t.Fatalf("expected ValidateProxy to fail for %s, got nil", tc.url)
+			}
+			de, ok := domain.AsDomainError(err)
+			if !ok || de.Code != tc.expectedCode {
+				t.Fatalf("expected %s for %s, got: %v", tc.expectedCode, tc.url, err)
+			}
+		})
+	}
+
+	invalidExtraParts := []string{
+		"http://host.docker.internal:7890/some/path",
+		"http://host.docker.internal:7890?query=1",
+		"http://host.docker.internal:7890#fragment",
+	}
+	for _, raw := range invalidExtraParts {
+		t.Run("extra parts "+raw, func(t *testing.T) {
+			u, _ := url.Parse(raw)
+			err := policy.ValidateProxy(ctx, u)
+			if err == nil {
+				t.Fatalf("expected ValidateProxy to fail for %s, got nil", raw)
+			}
+			de, ok := domain.AsDomainError(err)
+			if !ok || de.Code != "invalid_proxy_url" {
+				t.Fatalf("expected invalid_proxy_url for %s, got: %v", raw, err)
+			}
+		})
+	}
+
+	t.Run("canonical IPv6 normalization", func(t *testing.T) {
+		p := fetch.DefaultPolicy()
+		err := p.AddAllowedProxy("http://[2001:0db8:0000:0000:0000:0000:0000:0001]:7890")
+		if err != nil {
+			t.Fatalf("failed to add IPv6 proxy: %v", err)
+		}
+		if len(p.AllowedProxyHosts) != 1 || p.AllowedProxyHosts[0] != "http://[2001:db8::1]:7890" {
+			t.Errorf("expected normalized http://[2001:db8::1]:7890, got: %v", p.AllowedProxyHosts)
+		}
+		if !p.IsProxyHostAllowed("http://[2001:db8::1]:7890") {
+			t.Error("expected IsProxyHostAllowed to match canonical IPv6")
+		}
+	})
+
+	t.Run("custom proxy to RFC1918 private IP blocked", func(t *testing.T) {
+		u, _ := url.Parse("http://192.168.1.50:8080")
+		err := policy.ValidateProxy(ctx, u)
+		if err == nil {
+			t.Fatal("expected ValidateProxy to block private IP, got nil")
+		}
+		de, ok := domain.AsDomainError(err)
+		if !ok || de.Code != "proxy_ssrf_blocked" {
+			t.Fatalf("expected proxy_ssrf_blocked for private IP, got: %v", err)
+		}
+	})
+}
+
+func TestProxy_DirectTargetCannotAbuseAllowedProxyHost(t *testing.T) {
+	ctx := context.Background()
+
+	mockResolver := &testMockResolver{
+		mapping: map[string][]net.IPAddr{
+			"host.docker.internal": {{IP: net.ParseIP("172.17.0.1")}},
+		},
+	}
+
+	policy := fetch.DefaultPolicy()
+	policy.Resolver = mockResolver
+	_ = policy.AddAllowedProxy("http://host.docker.internal:7890")
+
+	client := fetch.NewClientWithPolicy(policy)
+
+	_, err := client.Fetch(ctx, fetch.Options{
+		URL:    "http://host.docker.internal:7890/metrics",
+		Policy: policy,
+	})
+	if err == nil {
+		t.Fatal("expected direct fetch to host.docker.internal:7890 to be blocked by SSRF, got nil")
+	}
+	de, ok := domain.AsDomainError(err)
+	if !ok || de.Code != "ssrf_blocked" {
+		t.Fatalf("expected code ssrf_blocked, got: %v", err)
 	}
 }

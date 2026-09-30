@@ -190,7 +190,7 @@ function close() {
       </div>
 
       <!-- Sheet Header -->
-      <header class="flex items-start justify-between p-4 sm:p-5 border-b border-base-300 flex-shrink-0 gap-3">
+      <header class="flex items-start justify-between p-4 sm:p-5 border-b border-base-300 min-h-0 overflow-y-auto gap-3">
         <div class="min-w-0 flex-1">
           <div class="flex flex-wrap items-center gap-2">
             <span class="text-xs font-semibold uppercase tracking-wider text-primary">
@@ -243,7 +243,7 @@ function close() {
           </button>
           <button
             type="button"
-            class="btn btn-ghost btn-sm btn-circle"
+            class="btn btn-ghost btn-sm btn-circle sticky top-0"
             aria-label="关闭面板"
             @click="close"
           >
@@ -276,7 +276,7 @@ function close() {
       </div>
 
       <!-- Observations Content -->
-      <div class="flex-1 p-4 sm:p-5 overflow-y-auto space-y-3">
+      <div class="flex-1 min-h-0 p-4 sm:p-5 overflow-y-auto overscroll-contain space-y-3">
         <div v-if="loading" class="space-y-3">
           <div v-for="i in 3" :key="i" class="skeleton h-24 rounded-xl" />
         </div>

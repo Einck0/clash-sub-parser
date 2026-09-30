@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { nextTick, onUnmounted, ref, watch } from 'vue'
 import { onClickOutside } from '@vueuse/core'
 
 const props = withDefaults(
@@ -7,94 +7,130 @@ const props = withDefaults(
     placement?: 'bottom-end' | 'bottom-start' | 'top-end' | 'top-start'
     panelClass?: string
   }>(),
-  {
-    placement: 'bottom-end',
-    panelClass: 'w-48',
-  }
+  { placement: 'bottom-end', panelClass: 'w-48' }
 )
 
 const isOpen = ref(false)
 const triggerRef = ref<HTMLElement | null>(null)
 const panelRef = ref<HTMLElement | null>(null)
+const panelStyle = ref<Record<string, string>>({ visibility: 'hidden' })
+let observer: ResizeObserver | undefined
 
-function toggle() {
-  isOpen.value = !isOpen.value
+function viewport() {
+  const visual = window.visualViewport
+  return {
+    left: visual?.offsetLeft ?? 0,
+    top: visual?.offsetTop ?? 0,
+    width: visual?.width ?? window.innerWidth,
+    height: visual?.height ?? window.innerHeight,
+  }
 }
 
-function open() {
-  isOpen.value = true
-}
-
-function close() {
-  isOpen.value = false
-}
-
-onClickOutside(panelRef, (event) => {
-  if (triggerRef.value && triggerRef.value.contains(event.target as Node)) {
+function position() {
+  const trigger = triggerRef.value?.getBoundingClientRect()
+  const panel = panelRef.value
+  if (!trigger || !panel || !isOpen.value) return
+  const view = viewport()
+  const padding = 8
+  const gap = 6
+  const leftEdge = view.left + padding
+  const rightEdge = view.left + view.width - padding
+  const topEdge = view.top + padding
+  const bottomEdge = view.top + view.height - padding
+  if (trigger.bottom < topEdge || trigger.top > bottomEdge || trigger.right < leftEdge || trigger.left > rightEdge) {
+    close(false)
     return
   }
-  close()
-})
-
-function handleKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape' && isOpen.value) {
-    close()
+  const width = Math.min(panel.offsetWidth, rightEdge - leftEdge)
+  const height = panel.scrollHeight
+  const below = Math.max(0, bottomEdge - trigger.bottom - gap)
+  const above = Math.max(0, trigger.top - topEdge - gap)
+  const preferTop = props.placement.startsWith('top')
+  const top = preferTop ? above >= height || above > below : !(below >= height || below >= above)
+  const space = top ? above : below
+  const x = props.placement.endsWith('end') ? trigger.right - width : trigger.left
+  panelStyle.value = {
+    position: 'fixed',
+    left: `${Math.max(leftEdge, Math.min(x, rightEdge - width))}px`,
+    top: `${Math.max(topEdge, top ? trigger.top - gap - Math.min(height, space) : trigger.bottom + gap)}px`,
+    maxWidth: `${Math.max(0, rightEdge - leftEdge)}px`,
+    maxHeight: `${Math.max(0, space)}px`,
+    visibility: 'visible',
   }
 }
 
-onMounted(() => {
-  if (typeof window !== 'undefined') {
-    window.addEventListener('keydown', handleKeydown)
+function stopPositioning() {
+  observer?.disconnect()
+  observer = undefined
+  window.removeEventListener('scroll', position, true)
+  window.removeEventListener('resize', position)
+  window.visualViewport?.removeEventListener('resize', position)
+  window.visualViewport?.removeEventListener('scroll', position)
+}
+
+function close(restoreFocus = true) {
+  isOpen.value = false
+  if (restoreFocus) triggerRef.value?.querySelector<HTMLElement>('button, [tabindex], a')?.focus()
+}
+function open() { isOpen.value = true }
+function toggle() { isOpen.value ? close() : open() }
+
+watch(isOpen, async (openNow) => {
+  if (!openNow) {
+    stopPositioning()
+    panelStyle.value = { visibility: 'hidden' }
+    return
   }
+  await nextTick()
+  if (!isOpen.value || !panelRef.value) return
+  position()
+  window.addEventListener('scroll', position, true)
+  window.addEventListener('resize', position)
+  window.visualViewport?.addEventListener('resize', position)
+  window.visualViewport?.addEventListener('scroll', position)
+  if (typeof ResizeObserver !== 'undefined') {
+    observer = new ResizeObserver(position)
+    observer.observe(panelRef.value)
+    if (triggerRef.value) observer.observe(triggerRef.value)
+  }
+  panelRef.value.querySelector<HTMLElement>('button:not(:disabled), a[href], [tabindex="0"]')?.focus()
 })
 
-onUnmounted(() => {
-  if (typeof window !== 'undefined') {
-    window.removeEventListener('keydown', handleKeydown)
+onClickOutside(panelRef, (event) => {
+  if (triggerRef.value?.contains(event.target as Node)) return
+  close(false)
+})
+function handleKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape' && isOpen.value) {
+    event.preventDefault()
+    event.stopPropagation()
+    close(true)
   }
-})
+}
+onUnmounted(stopPositioning)
 
-defineExpose({
-  isOpen,
-  open,
-  close,
-  toggle,
-})
+defineExpose({ isOpen, open, close, toggle })
 </script>
 
 <template>
-  <div class="relative inline-block text-left">
-    <!-- Trigger slot -->
+  <div class="relative inline-block text-left" @keydown="handleKeydown">
     <div ref="triggerRef" class="inline-flex" @click="toggle">
       <slot name="trigger" :open="isOpen" />
     </div>
-
-    <!-- Dropdown Panel with dark glass aesthetics -->
-    <Transition
-      enter-active-class="transition duration-150 ease-out"
-      enter-from-class="transform scale-95 opacity-0"
-      enter-to-class="transform scale-100 opacity-100"
-      leave-active-class="transition duration-100 ease-in"
-      leave-from-class="transform scale-100 opacity-100"
-      leave-to-class="transform scale-95 opacity-0"
-    >
+    <Teleport to="body">
       <div
         v-if="isOpen"
         ref="panelRef"
-        class="absolute z-40 mt-1.5 rounded-2xl bg-base-200/95 backdrop-blur-2xl border border-white/10 shadow-2xl p-1.5 outline-none"
-        :class="[
-          placement === 'bottom-end' ? 'right-0 origin-top-right' :
-          placement === 'bottom-start' ? 'left-0 origin-top-left' :
-          placement === 'top-end' ? 'right-0 bottom-full mb-1.5 origin-bottom-right' :
-          'left-0 bottom-full mb-1.5 origin-bottom-left',
-          panelClass,
-        ]"
+        class="z-40 rounded-2xl bg-base-200/95 backdrop-blur-2xl border border-white/10 shadow-2xl p-1.5 outline-none overflow-y-auto overscroll-contain"
+        :class="panelClass"
+        :style="panelStyle"
         role="menu"
         aria-orientation="vertical"
         tabindex="-1"
+        @keydown="handleKeydown"
       >
         <slot :close="close" />
       </div>
-    </Transition>
+    </Teleport>
   </div>
 </template>

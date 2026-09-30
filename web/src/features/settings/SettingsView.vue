@@ -16,6 +16,7 @@ import { toastStore } from '../../ui/toast'
 import type { AuthStatus } from '../auth/useAuth'
 import { t, getLocale, setLocale, type Locale } from '../../locales'
 import { applyTheme, getStoredTheme, THEME_NAMES, type ThemeName } from '../../theme'
+import GlobalNodeFilterSettings from './GlobalNodeFilterSettings.vue'
 
 const authMode = ref<'open' | 'token' | 'loading' | 'error'>('loading')
 const authModeError = ref('')
@@ -371,6 +372,8 @@ onMounted(() => {
         </div>
       </div>
     </section>
+
+    <GlobalNodeFilterSettings />
 
     <!-- Language & Visual System Settings -->
     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">

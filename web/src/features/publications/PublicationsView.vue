@@ -261,10 +261,10 @@ onMounted(() => {
     >
       <div class="font-bold flex items-center gap-2 text-sm">
         <ExclamationTriangleIcon class="w-5 h-5 flex-shrink-0" />
-        发布已阻断：预检未通过（空路由组与安全策略保护）
+        预览或发布已阻断：筛选、路由组或安全预检未通过
       </div>
       <p class="opacity-85">
-        一个或多个目标路由策略组在应用过滤条件后无可用候选节点，或触发了风险安全预检拦截。为防止向客户端下发无效配置，当前配置导出已被阻断。
+        筛选后可能没有可导出的节点，也可能是路由组为空或安全预检拦截。请查看下方诊断并检查筛选条件与探针观测；当前不能预览或新发布配置。
       </p>
       <ul class="list-disc list-inside font-mono space-y-1 pl-1">
         <li v-for="(diag, idx) in preflightDiagnostics" :key="idx">
@@ -493,11 +493,11 @@ onMounted(() => {
 
         <div class="space-y-1.5">
           <label class="text-xs font-semibold">客户端订阅地址</label>
-          <div class="flex gap-2">
+          <div class="flex flex-wrap gap-2 min-w-0">
             <input
               readonly
               :value="activePublication.export_url ? `${activePublication.export_url}` : ''"
-              class="input input-bordered input-sm font-mono text-xs flex-1 bg-base-200"
+              class="input input-bordered input-sm font-mono text-xs flex-1 min-w-0 bg-base-200"
             />
             <button
               type="button"
@@ -514,7 +514,7 @@ onMounted(() => {
           </p>
         </div>
 
-        <div class="grid grid-cols-2 gap-2 text-xs font-mono p-3 rounded-xl bg-base-200 border border-base-300">
+        <div class="grid grid-cols-2 gap-2 text-xs font-mono p-3 rounded-xl bg-base-200 border border-base-300 min-w-0 break-all">
           <div>
             <span class="opacity-60 block">导出目标</span>
             <div class="flex items-center gap-1.5 mt-0.5">
@@ -531,7 +531,9 @@ onMounted(() => {
           </div>
         </div>
 
-        <div class="modal-action border-t border-base-300 pt-3 flex items-center justify-between">
+      </div>
+      <template #footer>
+        <div v-if="activePublication" class="flex flex-wrap items-center justify-between gap-2 w-full">
           <button
             v-if="!activePublication.revoked_at"
             type="button"
@@ -553,7 +555,7 @@ onMounted(() => {
             完成
           </button>
         </div>
-      </div>
+      </template>
     </ModalDialog>
 
     <!-- Confirm Revoke Publication Modal -->

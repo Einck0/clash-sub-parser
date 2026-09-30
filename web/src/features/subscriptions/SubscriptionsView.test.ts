@@ -327,7 +327,7 @@ describe('SubscriptionsView - Last Refreshed Display & Refresh Flow', () => {
     await nextTick()
 
     // Click refresh button
-    const refreshBtn = container.querySelector('[data-testid="sub-action-refresh"]') as HTMLButtonElement
+    const refreshBtn = document.body.querySelector('[data-testid="sub-action-refresh"]') as HTMLButtonElement
     expect(refreshBtn).not.toBeNull()
     refreshBtn.click()
     await nextTick()

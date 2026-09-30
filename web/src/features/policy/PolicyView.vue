@@ -512,7 +512,8 @@ onMounted(() => {
         <div class="p-3 bg-info/10 border border-info/30 rounded-xl text-xs text-info leading-relaxed">
           <p><strong>执行优先级：</strong>硬性风险/准入拒绝 → 全局节点筛选 → 策略组专属筛选条件。</p>
           <p class="mt-1">留空筛选条件时将允许所有通过准入的节点，不做额外全局过滤。</p>
-          <p class="mt-1 opacity-80">探针条件仅评估与节点当前凭据版本匹配的有效期观测记录；缺失或过期的观测将按安全闭合（Fail-Closed）原则排除。</p>
+          <p class="mt-1 opacity-80">{{ t('settings.filterExplanation') }}</p>
+          <p class="mt-1 opacity-80">{{ t('settings.filterScope') }}</p>
         </div>
 
         <div class="flex items-center justify-between">

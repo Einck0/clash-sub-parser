@@ -118,15 +118,7 @@ func (h publicationAdminHandler) create(w http.ResponseWriter, r *http.Request) 
 
 	res, err := h.service.Publish(r.Context(), cmd)
 	if err != nil {
-		var preflightErr *publication.PreflightError
-		if errors.As(err, &preflightErr) {
-			WriteJSON(w, http.StatusConflict, map[string]any{
-				"code":            "publication_preflight_rejected",
-				"message":         "Publication preflight rejected",
-				"request_id":      GetRequestID(r.Context()),
-				"policy_revision": preflightErr.Result.PolicyRevision,
-				"diagnostics":     preflightErr.Result.Diagnostics,
-			})
+		if writePublicationPreflightError(w, r, err) {
 			return
 		}
 		WriteDomainError(w, r, err)
@@ -157,6 +149,9 @@ func (h publicationAdminHandler) preview(w http.ResponseWriter, r *http.Request)
 
 	res, err := h.service.Preview(r.Context(), query)
 	if err != nil {
+		if writePublicationPreflightError(w, r, err) {
+			return
+		}
 		WriteDomainError(w, r, err)
 		return
 	}
@@ -186,6 +181,35 @@ func (h publicationAdminHandler) preview(w http.ResponseWriter, r *http.Request)
 		data["filter_counts"] = res.FilterCounts
 	}
 	WriteSuccess(w, r, http.StatusOK, data)
+}
+
+// writePublicationPreflightError keeps preview (including raw format) and publish
+// rejections in the same JSON envelope. Only the known filter diagnostic needs
+// a fixed public message; never serialize an underlying repository error.
+func writePublicationPreflightError(w http.ResponseWriter, r *http.Request, err error) bool {
+	var preflightErr *publication.PreflightError
+	if !errors.As(err, &preflightErr) {
+		return false
+	}
+	diagnostics := make([]publication.PreflightDiagnostic, len(preflightErr.Result.Diagnostics))
+	for i, d := range preflightErr.Result.Diagnostics {
+		if d.Code == "filtered_nodes_empty" {
+			d.Message = "Configured node filters left no exportable nodes; check filter conditions and probe observations"
+			d.Target = ""
+		} else {
+			d.Message = sanitizeErrorMessage(d.Message)
+		}
+		diagnostics[i] = d
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	WriteJSON(w, http.StatusConflict, map[string]any{
+		"code":            "publication_preflight_rejected",
+		"message":         "Publication preflight rejected",
+		"request_id":      GetRequestID(r.Context()),
+		"policy_revision": preflightErr.Result.PolicyRevision,
+		"diagnostics":     diagnostics,
+	})
+	return true
 }
 
 func (h publicationAdminHandler) get(w http.ResponseWriter, r *http.Request) {

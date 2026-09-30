@@ -283,8 +283,8 @@ function close() {
       </div>
 
       <!-- Header -->
-      <header class="flex items-start justify-between p-4 sm:p-5 border-b border-base-300 flex-shrink-0">
-        <div>
+      <header class="flex items-start justify-between gap-3 p-4 sm:p-5 border-b border-base-300 min-h-0 overflow-y-auto">
+        <div class="min-w-0 flex-1">
           <span class="text-xs font-semibold uppercase tracking-wider text-primary">策略编辑器</span>
           <h2 id="editor-title" class="mt-0.5 text-lg sm:text-xl font-bold">
             {{ mode === 'group' ? (group ? '编辑策略组' : '新建策略组') : '管理策略组连接边' }}
@@ -292,7 +292,7 @@ function close() {
         </div>
         <button
           type="button"
-          class="btn btn-ghost btn-sm btn-circle"
+          class="btn btn-ghost btn-sm btn-circle shrink-0 sticky top-0"
           aria-label="关闭"
           @click="close"
         >
@@ -301,9 +301,9 @@ function close() {
       </header>
 
       <!-- Content -->
-      <div class="flex-1 p-4 sm:p-5 overflow-y-auto space-y-4">
+      <div class="flex-1 min-h-0 p-4 sm:p-5 overflow-y-auto overscroll-contain space-y-4">
         <!-- Group Mode Form -->
-        <form v-if="mode === 'group'" class="space-y-4" @submit.prevent="handleSaveGroup">
+        <form v-if="mode === 'group'" id="policy-editor-group-form" class="space-y-4" @submit.prevent="handleSaveGroup">
           <label class="form-control">
             <span class="label-text font-semibold text-xs">策略组名称</span>
             <input
@@ -482,17 +482,7 @@ function close() {
             </div>
           </div>
 
-          <div class="modal-action pt-2">
-            <button type="button" class="btn btn-ghost btn-sm" :disabled="saving" @click="close">取消</button>
-            <button
-              type="submit"
-              class="btn btn-primary btn-sm"
-              :class="{ loading: saving }"
-              :disabled="!name.trim() || saving"
-            >
-              {{ group ? '保存策略组' : '创建策略组' }}
-            </button>
-          </div>
+
         </form>
 
         <!-- Edges Mode Form -->
@@ -605,19 +595,20 @@ function close() {
             </p>
           </div>
 
-          <div class="modal-action pt-2">
-            <button type="button" class="btn btn-ghost btn-sm" :disabled="saving" @click="close">取消</button>
-            <button
-              type="button"
-              class="btn btn-primary btn-sm"
-              :class="{ loading: saving }"
-              :disabled="saving"
-              @click="handleSaveEdges"
-            >
-              保存连接边
-            </button>
-          </div>
+
         </div>
+      </div>
+      <div class="flex flex-wrap justify-end gap-2 p-4 sm:p-5 border-t border-base-300 shrink-0 bg-base-100">
+        <button type="button" class="btn btn-ghost btn-sm" :disabled="saving" @click="close">取消</button>
+        <button
+          v-if="mode === 'group'"
+          type="submit"
+          form="policy-editor-group-form"
+          class="btn btn-primary btn-sm"
+          :class="{ loading: saving }"
+          :disabled="saving || !name.trim()"
+        >{{ group ? '保存策略组' : '创建策略组' }}</button>
+        <button v-else type="button" class="btn btn-primary btn-sm" :class="{ loading: saving }" :disabled="saving" @click="handleSaveEdges">保存连接边</button>
       </div>
     </section>
   </Transition>

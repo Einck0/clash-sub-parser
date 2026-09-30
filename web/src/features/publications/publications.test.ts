@@ -596,6 +596,30 @@ describe('PublicationsView component rendering', () => {
     mountEl.remove()
   })
 
+  it('shows filtered_nodes_empty diagnostics on a rejected preview and disables new export actions', async () => {
+    const { default: PublicationsView } = await import('./PublicationsView.vue')
+    const { createApp, h, nextTick } = await import('vue')
+    const response = {
+      code: 'publication_preflight_rejected',
+      diagnostics: [{ code: 'filtered_nodes_empty', severity: 'error', message: 'Configured node filters left no exportable nodes' }],
+    }
+    vi.spyOn(api, 'post').mockRejectedValue(new ApiError(409, response.code, 'Publication preflight rejected', undefined, response))
+    const mountEl = document.createElement('div')
+    document.body.appendChild(mountEl)
+    const app = createApp({ render: () => h(PublicationsView) })
+    app.mount(mountEl)
+    await nextTick()
+    await new Promise(resolve => setTimeout(resolve, 20))
+
+    const alert = Array.from(mountEl.querySelectorAll('div')).find(el => el.textContent?.includes('筛选后无可导出节点') && el.classList.contains('bg-error/10'))
+    expect(alert?.textContent).toContain('Configured node filters left no exportable nodes')
+    const buttons = Array.from(mountEl.querySelectorAll('button'))
+    expect(buttons.find(button => button.textContent?.includes('下载'))?.disabled).toBe(true)
+    expect(buttons.find(button => button.textContent?.includes('发布'))?.disabled).toBe(true)
+    app.unmount()
+    mountEl.remove()
+  })
+
   it('switches between different stored target links without exposing the previous target', async () => {
     const { default: PublicationsView } = await import('./PublicationsView.vue')
     const { createApp, h, nextTick } = await import('vue')

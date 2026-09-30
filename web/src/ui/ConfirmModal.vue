@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import {
   ExclamationTriangleIcon,
   ExclamationCircleIcon,
@@ -41,6 +41,24 @@ const displayTitle = computed(() => props.title || t('common.confirm'))
 const displayMessage = computed(() => props.message || props.description || '')
 const displayConfirmText = computed(() => props.confirmText || t('common.confirm'))
 const displayCancelText = computed(() => props.cancelText || t('common.cancel'))
+const dialog = ref<HTMLDialogElement>()
+
+async function syncDialog(open: boolean) {
+  await nextTick()
+  if (!dialog.value) return
+  if (open && !dialog.value.open) dialog.value.showModal()
+  if (!open && dialog.value.open) dialog.value.close()
+}
+watch(() => props.modelValue, syncDialog)
+onMounted(() => syncDialog(props.modelValue))
+
+function handleNativeClose() {
+  if (props.modelValue) handleCancel()
+}
+function handleNativeCancel(event: Event) {
+  event.preventDefault()
+  handleCancel()
+}
 
 function handleConfirm() {
   if (props.loading) return
@@ -61,35 +79,32 @@ function handleBackdrop(event: MouseEvent) {
 </script>
 
 <template>
-  <div
-    class="modal modal-middle z-50 bg-base-900/60 backdrop-blur-sm transition-opacity duration-200"
-    :class="{ 'modal-open': modelValue }"
-    role="dialog"
+  <dialog
+    ref="dialog"
+    class="modal modal-middle bg-base-900/60 backdrop-blur-sm"
     aria-modal="true"
     aria-labelledby="confirm-modal-title"
     aria-describedby="confirm-modal-description"
-    tabindex="-1"
     @click="handleBackdrop"
-    @keydown.esc="handleCancel"
+    @cancel="handleNativeCancel"
+    @close="handleNativeClose"
   >
     <div
       class="modal-box relative max-w-md w-[calc(100%-2rem)] adaptive-surface-dialog flex flex-col bg-base-100 text-base-content shadow-2xl border border-base-300 p-5 md:p-6 overflow-hidden"
     >
-      <!-- Close button -->
       <button
         v-if="closable"
         type="button"
-        class="btn btn-ghost btn-sm btn-circle absolute right-4 top-4 text-base-content/60 hover:text-base-content"
+        class="btn btn-ghost btn-sm btn-circle absolute right-4 top-4 z-10 text-base-content/60 hover:text-base-content"
         data-testid="confirm-modal-close"
         aria-label="Close dialog"
         :disabled="loading"
         @click="handleCancel"
-      >
-        ✕
-      </button>
+      >✕</button>
+      <!-- Title, message and optional content share the scrollable area. Actions remain visible. -->
+      <div class="flex-1 min-h-0 overflow-y-auto overscroll-contain">
+        <div class="flex items-start gap-3">
 
-      <!-- Tone icon + Title & description -->
-      <div class="flex items-start gap-3 shrink-0">
         <div
           class="p-2.5 rounded-xl border shrink-0"
           :class="{
@@ -104,7 +119,7 @@ function handleBackdrop(event: MouseEvent) {
           <InformationCircleIcon v-else class="w-6 h-6" />
         </div>
 
-        <div class="pr-6 min-w-0 flex-1">
+        <div class="min-w-0 flex-1 pr-8">
           <h2
             id="confirm-modal-title"
             class="text-base sm:text-lg font-bold tracking-tight text-base-content break-words"
@@ -121,15 +136,12 @@ function handleBackdrop(event: MouseEvent) {
             {{ displayMessage }}
           </p>
         </div>
-      </div>
-
-      <!-- Optional slot content -->
-      <div v-if="$slots.default" class="py-3 flex-1 min-h-0 overflow-y-auto overscroll-contain">
-        <slot />
+        </div>
+        <div v-if="$slots.default" class="py-3"><slot /></div>
       </div>
 
       <!-- Action buttons -->
-      <div class="modal-action mt-6 flex justify-end items-center gap-2 shrink-0">
+      <div class="modal-action mt-3 pt-3 border-t border-base-300 flex flex-wrap justify-end items-center gap-2 shrink-0">
         <button
           v-if="closable"
           type="button"
@@ -157,5 +169,5 @@ function handleBackdrop(event: MouseEvent) {
         </button>
       </div>
     </div>
-  </div>
+  </dialog>
 </template>

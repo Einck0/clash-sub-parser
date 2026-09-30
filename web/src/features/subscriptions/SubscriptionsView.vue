@@ -148,13 +148,14 @@ onMounted(load)
                   </button>
                 </template>
                 <template #default="{ close }">
-                  <div class="flex flex-col gap-0.5 text-xs font-medium" role="menu">
+                  <div class="flex flex-col gap-0.5 text-xs font-medium">
                     <!-- Refresh -->
                     <button
                       type="button"
                       class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-left hover:bg-base-300/80 transition-colors"
                       :disabled="refreshingIDs.has(subscription.id)"
                       @click="close(); refresh(subscription)"
+                      role="menuitem"
                       data-testid="sub-action-refresh"
                     >
                       <ArrowPathIcon class="h-3.5 w-3.5 shrink-0" :class="{ 'animate-spin': refreshingIDs.has(subscription.id) }" />
@@ -166,6 +167,7 @@ onMounted(load)
                       type="button"
                       class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-left hover:bg-base-300/80 text-primary transition-colors"
                       @click="close(); openEdit(subscription)"
+                      role="menuitem"
                       data-testid="sub-action-configure"
                     >
                       <AdjustmentsHorizontalIcon class="h-3.5 w-3.5 shrink-0" />
@@ -177,6 +179,7 @@ onMounted(load)
                       type="button"
                       class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-left hover:bg-base-300/80 transition-colors"
                       @click="close(); copyReference(subscription)"
+                      role="menuitem"
                       data-testid="sub-action-copy-ref"
                     >
                       <ClipboardDocumentIcon class="h-3.5 w-3.5 shrink-0" />
@@ -190,6 +193,7 @@ onMounted(load)
                       type="button"
                       class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-left hover:bg-error/20 text-error transition-colors"
                       @click="close(); confirmRemove(subscription)"
+                      role="menuitem"
                       data-testid="sub-action-delete"
                     >
                       <TrashIcon class="h-3.5 w-3.5 shrink-0" />

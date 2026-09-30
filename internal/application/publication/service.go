@@ -296,6 +296,14 @@ func (s *Service) Preview(ctx context.Context, query PreviewQuery) (*PreviewResu
 		}
 	}
 
+	// Preview historically exposes non-filter preflight diagnostics with the raw
+	// output. A filtered empty set is different: never return an empty export.
+	for _, diagnostic := range snapshot.Diagnostics {
+		if diagnostic.Code == "filtered_nodes_empty" {
+			return nil, newPreflightError(s.evaluatePreflight(ctx, snapshot, query.Target))
+		}
+	}
+
 	compileRes, err := compiler.Compile(ctx, snapshot, query.Target)
 	if err != nil {
 		var capErr *compiler.CapabilityError
@@ -541,13 +549,16 @@ func (s *Service) resolveSnapshot(ctx context.Context, revisionID string) (*reso
 	var groupFilters map[string]domain.NodeFilterSpec
 	if s.nodeFilterRepo != nil {
 		gf, err := s.nodeFilterRepo.GetGlobalFilter(ctx)
-		if err == nil && gf != nil && !gf.Spec.IsEmpty() {
+		if err != nil {
+			return nil, domain.NewInternalError("global_filter_unavailable", "failed to read global node filter")
+		}
+		if gf != nil && !gf.Spec.IsEmpty() {
 			globalFilter = &gf.Spec
 		}
 
-		gfs, err := s.nodeFilterRepo.ListGroupFilters(ctx)
-		if err == nil {
-			groupFilters = gfs
+		groupFilters, err = s.nodeFilterRepo.ListGroupFilters(ctx)
+		if err != nil {
+			return nil, domain.NewInternalError("group_filters_unavailable", "failed to read group node filters")
 		}
 	}
 
@@ -556,19 +567,26 @@ func (s *Service) resolveSnapshot(ctx context.Context, revisionID string) (*reso
 		nodeIDs[i] = n.LogicalID
 	}
 
+	needsSources, needsObservations := filterDependencies(globalFilter, groupFilters, groups)
 	var nodeSources map[string][]domain.NodeSource
+	if needsSources && s.sourceRepo == nil {
+		return nil, domain.NewInternalError("node_sources_unavailable", "node sources required by configured filter are unavailable")
+	}
 	if s.sourceRepo != nil && len(nodeIDs) > 0 {
-		sources, err := s.sourceRepo.ListByNodes(ctx, nodeIDs)
-		if err == nil {
-			nodeSources = sources
+		nodeSources, err = s.sourceRepo.ListByNodes(ctx, nodeIDs)
+		if err != nil && needsSources {
+			return nil, domain.NewInternalError("node_sources_unavailable", "failed to read node sources for configured filter")
 		}
 	}
 
 	var latestObs map[string]map[domain.ProbeKind]domain.ProbeObservation
+	if needsObservations && s.obsRepo == nil {
+		return nil, domain.NewInternalError("probe_observations_unavailable", "probe observations required by configured filter are unavailable")
+	}
 	if s.obsRepo != nil && len(nodeIDs) > 0 {
-		obs, err := s.obsRepo.ListLatestByNodes(ctx, nodeIDs, nil)
-		if err == nil {
-			latestObs = obs
+		latestObs, err = s.obsRepo.ListLatestByNodes(ctx, nodeIDs, nil)
+		if err != nil && needsObservations {
+			return nil, domain.NewInternalError("probe_observations_unavailable", "failed to read probe observations for configured filter")
 		}
 	}
 
@@ -616,7 +634,63 @@ func (s *Service) resolveSnapshot(ctx context.Context, revisionID string) (*reso
 		}
 	}
 
-	return s.resolver.Resolve(ctx, input)
+	snapshot, err := s.resolver.Resolve(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	// Only configured filters can trigger the empty-filter gate. Existing empty
+	// inventory and unrelated missing group edges retain their previous behavior.
+	counts := snapshot.FilterCounts
+	if counts != nil && counts.AdmittedTotal > 0 {
+		globallyEmpty := globalFilter != nil && !globalFilter.IsEmpty() && counts.GlobalFilteredTotal == 0
+		groupEmpty := false
+		if !globallyEmpty && counts.GroupFilteredTotal == 0 {
+			for _, group := range groups {
+				gf := groupFilters[group.ID]
+				if gf.IsEmpty() && group.NodeFilter != nil {
+					gf = *group.NodeFilter
+				}
+				if count := counts.GroupCounts[group.ID]; !gf.IsEmpty() && count.Candidate > 0 && count.Excluded > 0 {
+					groupEmpty = true
+					break
+				}
+			}
+		}
+		if globallyEmpty || groupEmpty {
+			snapshot.Diagnostics = append(snapshot.Diagnostics, resolver.Diagnostic{
+				Severity: resolver.DiagnosticSeverityError,
+				Code:     "filtered_nodes_empty",
+				Message:  "configured node filters left no exportable nodes; check probe observations, freshness and filter conditions",
+			})
+		}
+	}
+	return snapshot, nil
+}
+
+// filterDependencies includes persisted group filters and inline group filters; the
+// resolver applies both and evaluates every condition with AND semantics.
+func filterDependencies(global *domain.NodeFilterSpec, groupFilters map[string]domain.NodeFilterSpec, groups []domain.NodeGroup) (sources, observations bool) {
+	inspect := func(spec *domain.NodeFilterSpec) {
+		if spec == nil {
+			return
+		}
+		for _, condition := range spec.Conditions {
+			switch condition.Field {
+			case domain.FilterFieldSourceSubscriptions:
+				sources = true
+			case domain.FilterFieldProbeVerdict, domain.FilterFieldProbeLatencyMS:
+				observations = true
+			}
+		}
+	}
+	inspect(global)
+	for _, spec := range groupFilters {
+		inspect(&spec)
+	}
+	for _, group := range groups {
+		inspect(group.NodeFilter)
+	}
+	return sources, observations
 }
 
 func (s *Service) evaluatePreflight(ctx context.Context, snapshot *resolver.ResolvedPolicySnapshot, target domain.CompilerTarget) PreflightResult {
@@ -639,7 +713,7 @@ func (s *Service) evaluatePreflight(ctx context.Context, snapshot *resolver.Reso
 
 	// 1. Inspect existing snapshot diagnostics
 	for _, diagnostic := range snapshot.Diagnostics {
-		if target != domain.TargetMihomo {
+		if target != domain.TargetMihomo && diagnostic.Code != "filtered_nodes_empty" {
 			if diagnostic.Code != "risk_blocked" && diagnostic.Code != "risk_review" && diagnostic.Code != "risk_unknown" {
 				continue
 			}

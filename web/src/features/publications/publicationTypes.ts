@@ -172,6 +172,7 @@ export function publicationStateLabel(state?: string, revokedAt?: string): strin
 
 const PREFLIGHT_CHECK_LABELS: Record<string, string> = {
   empty_routed_group: '空路由策略组检查',
+  filtered_nodes_empty: '筛选后无可导出节点',
   risk_blocked: '高风险节点拦截检查',
   risk_review: '中风险节点复核检查',
   risk_unknown: '未探测风险节点检查',

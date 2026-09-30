@@ -25,7 +25,7 @@ import (
 	transporthttp "clash-sub-parser/internal/transport/http"
 )
 
-func setupPublicationTestRouter(t *testing.T, db *sql.DB) (http.Handler, *publication.Service) {
+func setupPublicationTestRouter(t *testing.T, db *sql.DB, extraOptions ...publication.Option) (http.Handler, *publication.Service) {
 	t.Helper()
 	routerCfg := newTestRouterConfig(true)
 	pubRepo := sqlite.NewPublicationRepository(db)
@@ -46,9 +46,7 @@ func setupPublicationTestRouter(t *testing.T, db *sql.DB) (http.Handler, *public
 		iprisk.WithAuditRepository(auditRepo),
 	)
 
-	pubSvc := publication.NewService(
-		pubRepo,
-		auditRepo,
+	pubOptions := []publication.Option{
 		publication.WithPolicyRepository(policyRepo),
 		publication.WithRevisionRepository(revRepo),
 		publication.WithNodeRepository(nodeRepo),
@@ -56,6 +54,12 @@ func setupPublicationTestRouter(t *testing.T, db *sql.DB) (http.Handler, *public
 		publication.WithRiskPolicyRepository(riskPolicyRepo),
 		publication.WithRiskBindingRepository(riskBindingRepo),
 		publication.WithRiskObservationRepository(riskObsRepo),
+	}
+	pubOptions = append(pubOptions, extraOptions...)
+	pubSvc := publication.NewService(
+		pubRepo,
+		auditRepo,
+		pubOptions...,
 	)
 
 	routerCfg.PublicationService = pubSvc

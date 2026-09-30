@@ -2,12 +2,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp, h, nextTick, reactive } from 'vue'
 import ConfirmModal from './ConfirmModal.vue'
+import ModalDialog from './ModalDialog.vue'
 
 describe('ConfirmModal Component', () => {
   let container: HTMLDivElement
   let app: ReturnType<typeof createApp> | null = null
 
   beforeEach(() => {
+    HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
+    HTMLDialogElement.prototype.close = function () { this.removeAttribute('open'); this.dispatchEvent(new Event('close')) }
     container = document.createElement('div')
     document.body.appendChild(container)
   })
@@ -62,7 +65,7 @@ describe('ConfirmModal Component', () => {
     return {
       propsState,
       emitted,
-      getModal: () => container.querySelector('.modal') as HTMLDivElement,
+      getModal: () => container.querySelector('.modal') as HTMLDialogElement,
       getTitle: () => container.querySelector('[data-testid="confirm-modal-title"]'),
       getMessage: () => container.querySelector('[data-testid="confirm-modal-message"]'),
       getConfirmBtn: () => container.querySelector('button[data-testid="confirm-modal-confirm"]') as HTMLButtonElement,
@@ -75,11 +78,13 @@ describe('ConfirmModal Component', () => {
   it('renders modal open when modelValue is true and closes when false', async () => {
     const { propsState, getModal } = mountModal({ modelValue: true })
     expect(getModal()).toBeTruthy()
-    expect(getModal().classList.contains('modal-open')).toBe(true)
+    await nextTick()
+    expect(getModal().open).toBe(true)
 
     propsState.modelValue = false
     await nextTick()
-    expect(getModal().classList.contains('modal-open')).toBe(false)
+    await nextTick()
+    expect(getModal().open).toBe(false)
   })
 
   it('displays correct title, message, and button labels', () => {
@@ -141,9 +146,46 @@ describe('ConfirmModal Component', () => {
     await nextTick()
     expect(emitted.cancel).toHaveLength(1)
 
-    getModal().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    getModal().dispatchEvent(new Event('cancel', { cancelable: true }))
     await nextTick()
     expect(emitted.cancel).toHaveLength(2)
+  })
+
+  it('opens the confirmation as a native modal after an already open parent dialog', async () => {
+    const showModal = vi.spyOn(HTMLDialogElement.prototype, 'showModal')
+    const state = reactive({ parent: true, confirm: false })
+    app = createApp({
+      render: () => [
+        h(ModalDialog, { modelValue: state.parent, 'onUpdate:modelValue': (value: boolean) => { state.parent = value } }, { default: () => h('button', { id: 'revoke', onClick: () => { state.confirm = true } }, 'Revoke') }),
+        h(ConfirmModal, { modelValue: state.confirm, 'onUpdate:modelValue': (value: boolean) => { state.confirm = value } }),
+      ],
+    })
+    app.mount(container)
+    await nextTick()
+    await nextTick()
+    expect(showModal).toHaveBeenCalledTimes(1)
+    ;(container.querySelector('#revoke') as HTMLButtonElement).click()
+    await nextTick()
+    await nextTick()
+    expect(showModal).toHaveBeenCalledTimes(2)
+    const dialogs = container.querySelectorAll('dialog')
+    expect(dialogs[0].open).toBe(true)
+    expect(dialogs[1].open).toBe(true)
+    ;(dialogs[1].querySelector('[data-testid="confirm-modal-cancel"]') as HTMLButtonElement).click()
+    await nextTick()
+    await nextTick()
+    expect(dialogs[0].open).toBe(true)
+    expect(dialogs[1].open).toBe(false)
+  })
+
+  it('keeps message and slot in one scroll region with actions outside', async () => {
+    const { getModal } = mountModal({ message: 'Long message '.repeat(100) })
+    await nextTick()
+    const box = getModal().querySelector('.modal-box') as HTMLElement
+    const scroll = box.querySelector('.overflow-y-auto') as HTMLElement
+    expect(scroll.textContent).toContain('Long message')
+    expect(scroll.contains(getModal().querySelector('[data-testid="confirm-modal-confirm"]'))).toBe(false)
+    expect(box.className).toContain('adaptive-surface-dialog')
   })
 
   it('disables actions and applies loading spinner when loading is true', async () => {

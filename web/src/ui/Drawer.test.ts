@@ -69,7 +69,7 @@ describe('Drawer and DrawerCard Components', () => {
     expect(title).toBeTruthy()
     expect(title.classList.contains('break-words')).toBe(true)
 
-    const scrollBody = document.querySelector('.overflow-y-auto') as HTMLElement
+    const scrollBody = aside.querySelector('.flex-1.overflow-y-auto') as HTMLElement
     expect(scrollBody).toBeTruthy()
     expect(scrollBody.classList.contains('min-h-0')).toBe(true)
     expect(scrollBody.querySelector('.long-content-probe')).toBeTruthy()

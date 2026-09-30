@@ -28,7 +28,7 @@ function close() {
 
 function handleKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape' && props.modelValue) {
-    close()
+    if (!document.querySelector('dialog[open]')) close()
   }
 }
 
@@ -46,15 +46,13 @@ onUnmounted(() => {
 
 watch(
   () => props.modelValue,
-  (val) => {
-    if (typeof document !== 'undefined' && document.body) {
-      if (val) {
-        document.body.style.overflow = 'hidden'
-      } else {
-        document.body.style.overflow = ''
-      }
-    }
-  }
+  (val, _, onCleanup) => {
+    if (!val || typeof document === 'undefined') return
+    const previous = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    onCleanup(() => { document.body.style.overflow = previous })
+  },
+  { immediate: true }
 )
 </script>
 
@@ -82,7 +80,7 @@ watch(
         </div>
 
         <!-- Drawer Header -->
-        <div class="flex items-start justify-between gap-4 px-5 pt-3 md:pt-6 pb-4 border-b border-base-300/40 shrink-0">
+        <div class="flex items-start justify-between gap-4 px-5 pt-3 md:pt-6 pb-4 border-b border-base-300/40 shrink min-h-0 overflow-y-auto">
           <div class="min-w-0 flex-1">
             <h3 id="drawer-title" class="text-lg md:text-xl font-bold tracking-tight break-words text-base-content">
               {{ title }}
@@ -93,7 +91,7 @@ watch(
           </div>
           <button
             type="button"
-            class="btn btn-ghost btn-circle btn-sm shrink-0 touch-manipulation hover:bg-base-300/50"
+            class="btn btn-ghost btn-circle btn-sm shrink-0 sticky top-0 touch-manipulation hover:bg-base-300/50"
             aria-label="Close drawer"
             @click="close"
           >
@@ -107,7 +105,7 @@ watch(
         </div>
 
         <!-- Drawer Optional Footer -->
-        <div v-if="$slots.footer" class="p-4 md:p-5 pb-[max(1rem,env(safe-area-inset-bottom,0px))] md:pb-5 border-t border-base-300/40 bg-base-200/50 shrink-0">
+        <div v-if="$slots.footer" class="p-4 md:p-5 pb-[max(1rem,env(safe-area-inset-bottom,0px))] md:pb-5 border-t border-base-300/40 bg-base-200/50 shrink-0 flex flex-wrap gap-2">
           <slot name="footer" />
         </div>
       </aside>

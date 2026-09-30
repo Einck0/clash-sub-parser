@@ -78,7 +78,7 @@ describe('ModalDialog Component', () => {
 
     const bodyProbe = container.querySelector('.modal-body-probe')
     expect(bodyProbe).toBeTruthy()
-    const scrollContainer = bodyProbe?.parentElement as HTMLElement
+    const scrollContainer = bodyProbe?.parentElement?.parentElement as HTMLElement
     expect(scrollContainer.classList.contains('overflow-y-auto')).toBe(true)
     expect(scrollContainer.classList.contains('min-h-0')).toBe(true)
 

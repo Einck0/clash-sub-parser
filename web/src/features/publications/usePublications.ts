@@ -216,6 +216,9 @@ export function usePublications(initialTarget?: CompilerTarget) {
         revoked_at: rawRes?.publication?.revoked_at || rawRes?.revoked_at,
         created_at: rawRes?.publication?.created_at || rawRes?.created_at || new Date().toISOString(),
       }
+      if (!res.id || !res.export_url || new URL(res.export_url, 'http://localhost').pathname !== `/publish/v1/${encodeURIComponent(res.id)}`) {
+        throw new Error('Publication response does not contain a valid ID and export URL')
+      }
       if (request === publishRequests.get(target)) {
         setStoredPublication(res)
         if (selectedTarget.value === target) activePublication.value = res
@@ -243,7 +246,7 @@ export function usePublications(initialTarget?: CompilerTarget) {
       if (session !== publicationSession.value) return null
       const rawTarget = rawRes?.publication?.target || rawRes?.target
       const res: PublicationDetail = {
-        id: rawRes?.publication?.id || rawRes?.id || id,
+        id: rawRes?.publication?.id || rawRes?.id || '',
         target: isValidCompilerTarget(rawTarget) ? rawTarget : DEFAULT_COMPILER_TARGET,
         state: rawRes?.publication?.state || rawRes?.state || 'active',
         snapshot_digest: rawRes?.publication?.snapshot_digest || rawRes?.snapshot_digest || '',
@@ -254,7 +257,14 @@ export function usePublications(initialTarget?: CompilerTarget) {
         revoked_at: rawRes?.publication?.revoked_at || rawRes?.revoked_at,
         created_at: rawRes?.publication?.created_at || rawRes?.created_at || new Date().toISOString(),
       }
-      if (selectedTarget.value === res.target && activePublication.value?.id === id) activePublication.value = res
+      if (res.id !== id || !res.export_url || new URL(res.export_url, 'http://localhost').pathname !== `/publish/v1/${encodeURIComponent(id)}`) {
+        throw new Error('Publication detail does not match the requested ID')
+      }
+      if (selectedTarget.value === res.target && activePublication.value?.id === id) {
+        // The GET response cannot recover the one-time publication token.
+        res.export_url = activePublication.value.export_url
+        activePublication.value = res
+      }
       return res
     } catch (err) {
       if (session === publicationSession.value) {
@@ -331,14 +341,20 @@ export function usePublications(initialTarget?: CompilerTarget) {
     return found
   }
 
-  function getFullExportUrl(pub?: PublicationDetail | null): string {
+  function getFullExportUrl(pub?: PublicationDetail | null, protectedExport = true, suppliedToken = ''): string {
     const targetPub = pub ?? activePublication.value
-    if (!targetPub?.export_url || targetPub.target !== selectedTarget.value) return ''
-    if (targetPub.export_url.startsWith('http://') || targetPub.export_url.startsWith('https://')) {
-      return targetPub.export_url
+    if (!targetPub?.id || !targetPub.export_url || targetPub.target !== selectedTarget.value || targetPub.revoked_at || targetPub.state === 'revoked') return ''
+    const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost'
+    const url = new URL(targetPub.export_url, origin)
+    if (url.origin !== origin || url.pathname !== `/publish/v1/${encodeURIComponent(targetPub.id)}`) return ''
+    const token = suppliedToken.trim() || url.searchParams.get('token') || ''
+    url.search = ''
+    url.hash = ''
+    if (protectedExport) {
+      if (!token) return ''
+      url.searchParams.set('token', token)
     }
-    const origin = typeof window !== 'undefined' && window.location?.origin ? window.location.origin : ''
-    return `${origin}${targetPub.export_url.startsWith('/') ? '' : '/'}${targetPub.export_url}`
+    return url.toString()
   }
 
   return {

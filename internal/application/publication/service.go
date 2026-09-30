@@ -368,9 +368,20 @@ func (s *Service) Get(ctx context.Context, id string) (*PublicationDetail, error
 	return detail, nil
 }
 
-// ResolveAndServe resolves and serves the immutable compiled artifact for client subscription endpoints.
-// If the publication is revoked or the token is invalid, it returns a domain error without fallback.
+// ResolveAndServe resolves and serves an artifact using its publication-specific token.
 func (s *Service) ResolveAndServe(ctx context.Context, publicationID, token string) (*Artifact, error) {
+	return s.ResolveAndServeAuthorized(ctx, publicationID, func(pubTokenHash string) bool {
+		if strings.TrimSpace(token) == "" {
+			return false
+		}
+		digest := hashToken(token)
+		return subtle.ConstantTimeCompare([]byte(pubTokenHash), []byte(digest)) == 1
+	})
+}
+
+// ResolveAndServeAuthorized checks publication existence/revocation before applying
+// the caller's auth policy; the same immutable artifact path serves every mode.
+func (s *Service) ResolveAndServeAuthorized(ctx context.Context, publicationID string, authorized func(pubTokenHash string) bool) (*Artifact, error) {
 	if strings.TrimSpace(publicationID) == "" {
 		return nil, ErrNotFound
 	}
@@ -385,13 +396,8 @@ func (s *Service) ResolveAndServe(ctx context.Context, publicationID, token stri
 		return nil, ErrRevoked
 	}
 
-	// 2. Constant-time token verification (401)
-	if strings.TrimSpace(token) == "" {
-		return nil, ErrUnauthorized
-	}
-
-	tokenHash := hashToken(token)
-	if subtle.ConstantTimeCompare([]byte(pub.TokenHash), []byte(tokenHash)) != 1 {
+	// 2. Authorize only active publications, without exposing content to invalid credentials.
+	if authorized == nil || !authorized(pub.TokenHash) {
 		return nil, ErrUnauthorized
 	}
 
@@ -443,14 +449,11 @@ func (s *Service) ResolveAndServe(ctx context.Context, publicationID, token stri
 	}, nil
 }
 
-// IsPublicationToken checks if the provided bearer/query token is recognized as a publication export token.
-// This is called by AdminAuthMiddleware to strictly forbid publication export tokens from administrative API access.
+// IsPublicationToken checks whether a token belongs to an active publication.
+// This is called by AdminAuthMiddleware to forbid valid export tokens from protected admin APIs.
 func (s *Service) IsPublicationToken(ctx context.Context, token string) bool {
 	if strings.TrimSpace(token) == "" {
 		return false
-	}
-	if strings.HasPrefix(token, "pub_") {
-		return true
 	}
 	tokenHash := hashToken(token)
 	pub, err := s.pubRepo.GetByTokenHash(ctx, tokenHash)

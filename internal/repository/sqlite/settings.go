@@ -24,12 +24,13 @@ func (r *settingsRepository) Get(ctx context.Context) (*domain.Settings, error) 
 	const query = `
 	SELECT probe_concurrency_window, max_concurrent_probes, probe_per_node_ttl_seconds,
 	       fetch_timeout_seconds, fetch_max_response_bytes, max_page_size, default_page_size,
-	       admin_token, updated_at
+	       admin_token, admin_auth_enabled, export_auth_enabled, updated_at
 	FROM settings
 	WHERE id = 1;`
 
 	var s domain.Settings
 	var updatedStr string
+	var adminAuthInt, exportAuthInt int
 
 	err := r.db.QueryRowContext(ctx, query).Scan(
 		&s.ProbeConcurrencyWindow,
@@ -40,6 +41,8 @@ func (r *settingsRepository) Get(ctx context.Context) (*domain.Settings, error) 
 		&s.MaxPageSize,
 		&s.DefaultPageSize,
 		&s.AdminToken,
+		&adminAuthInt,
+		&exportAuthInt,
 		&updatedStr,
 	)
 	if err != nil {
@@ -51,6 +54,8 @@ func (r *settingsRepository) Get(ctx context.Context) (*domain.Settings, error) 
 		return nil, fmt.Errorf("failed to query settings: %w", err)
 	}
 
+	s.AdminAuthEnabled = adminAuthInt != 0
+	s.ExportAuthEnabled = exportAuthInt != 0
 	s.UpdatedAt, _ = time.Parse(time.RFC3339, updatedStr)
 	return &s, nil
 }
@@ -64,8 +69,8 @@ func (r *settingsRepository) Update(ctx context.Context, settings *domain.Settin
 	INSERT INTO settings (
 		id, probe_concurrency_window, max_concurrent_probes, probe_per_node_ttl_seconds,
 		fetch_timeout_seconds, fetch_max_response_bytes, max_page_size, default_page_size,
-		admin_token, updated_at
-	) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		admin_token, admin_auth_enabled, export_auth_enabled, updated_at
+	) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(id) DO UPDATE SET
 		probe_concurrency_window = excluded.probe_concurrency_window,
 		max_concurrent_probes = excluded.max_concurrent_probes,
@@ -75,10 +80,21 @@ func (r *settingsRepository) Update(ctx context.Context, settings *domain.Settin
 		max_page_size = excluded.max_page_size,
 		default_page_size = excluded.default_page_size,
 		admin_token = excluded.admin_token,
+		admin_auth_enabled = excluded.admin_auth_enabled,
+		export_auth_enabled = excluded.export_auth_enabled,
 		updated_at = excluded.updated_at;`
 
 	updatedStr := domain.NowUTC().Format(time.RFC3339)
 	settings.UpdatedAt = domain.NowUTC()
+
+	adminAuthInt := 0
+	if settings.AdminAuthEnabled {
+		adminAuthInt = 1
+	}
+	exportAuthInt := 0
+	if settings.ExportAuthEnabled {
+		exportAuthInt = 1
+	}
 
 	_, err := r.db.ExecContext(ctx, query,
 		settings.ProbeConcurrencyWindow,
@@ -89,6 +105,8 @@ func (r *settingsRepository) Update(ctx context.Context, settings *domain.Settin
 		settings.MaxPageSize,
 		settings.DefaultPageSize,
 		settings.AdminToken,
+		adminAuthInt,
+		exportAuthInt,
 		updatedStr,
 	)
 	if err != nil {
@@ -103,8 +121,8 @@ func (r *settingsRepository) UpdateAdminToken(ctx context.Context, tokenVerifier
 	INSERT INTO settings (
 		id, probe_concurrency_window, max_concurrent_probes, probe_per_node_ttl_seconds,
 		fetch_timeout_seconds, fetch_max_response_bytes, max_page_size, default_page_size,
-		admin_token, updated_at
-	) VALUES (1, 16, 16, 300, 30, 10485760, 100, 50, ?, ?)
+		admin_token, admin_auth_enabled, export_auth_enabled, updated_at
+	) VALUES (1, 16, 16, 300, 30, 10485760, 100, 50, ?, 1, 1, ?)
 	ON CONFLICT(id) DO UPDATE SET
 		admin_token = excluded.admin_token,
 		updated_at = excluded.updated_at;`
@@ -113,6 +131,53 @@ func (r *settingsRepository) UpdateAdminToken(ctx context.Context, tokenVerifier
 	_, err := r.db.ExecContext(ctx, query, tokenVerifier, updatedStr)
 	if err != nil {
 		return fmt.Errorf("failed to update admin token verifier: %w", err)
+	}
+	return nil
+}
+
+func (r *settingsRepository) UpdateAuthSettings(ctx context.Context, adminAuthEnabled, exportAuthEnabled bool, tokenVerifier *string) error {
+	adminAuthInt := 0
+	if adminAuthEnabled {
+		adminAuthInt = 1
+	}
+	exportAuthInt := 0
+	if exportAuthEnabled {
+		exportAuthInt = 1
+	}
+	updatedStr := domain.NowUTC().Format(time.RFC3339)
+
+	var query string
+	var args []any
+	if tokenVerifier != nil {
+		query = `
+		INSERT INTO settings (
+			id, probe_concurrency_window, max_concurrent_probes, probe_per_node_ttl_seconds,
+			fetch_timeout_seconds, fetch_max_response_bytes, max_page_size, default_page_size,
+			admin_token, admin_auth_enabled, export_auth_enabled, updated_at
+		) VALUES (1, 16, 16, 300, 30, 10485760, 100, 50, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			admin_token = excluded.admin_token,
+			admin_auth_enabled = excluded.admin_auth_enabled,
+			export_auth_enabled = excluded.export_auth_enabled,
+			updated_at = excluded.updated_at;`
+		args = []any{*tokenVerifier, adminAuthInt, exportAuthInt, updatedStr}
+	} else {
+		query = `
+		INSERT INTO settings (
+			id, probe_concurrency_window, max_concurrent_probes, probe_per_node_ttl_seconds,
+			fetch_timeout_seconds, fetch_max_response_bytes, max_page_size, default_page_size,
+			admin_token, admin_auth_enabled, export_auth_enabled, updated_at
+		) VALUES (1, 16, 16, 300, 30, 10485760, 100, 50, '', ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			admin_auth_enabled = excluded.admin_auth_enabled,
+			export_auth_enabled = excluded.export_auth_enabled,
+			updated_at = excluded.updated_at;`
+		args = []any{adminAuthInt, exportAuthInt, updatedStr}
+	}
+
+	_, err := r.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("failed to update auth settings: %w", err)
 	}
 	return nil
 }

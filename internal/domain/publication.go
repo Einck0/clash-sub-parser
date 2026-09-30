@@ -17,7 +17,7 @@ type Publication struct {
 	Filename        string           `json:"filename,omitempty"`
 	Content         []byte           `json:"-"`
 	CompilerVersion string           `json:"compiler_version"`
-	TokenHash       string           `json:"token_hash"`
+	TokenHash       string           `json:"-"`
 	State           PublicationState `json:"state"`
 	CreatedAt       time.Time        `json:"created_at"`
 	RevokedAt       *time.Time       `json:"revoked_at,omitempty"`

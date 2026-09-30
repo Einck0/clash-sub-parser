@@ -15,7 +15,9 @@ import {
   CubeTransparentIcon,
   ShieldCheckIcon,
 } from '@heroicons/vue/24/outline'
-import { usePublications } from './usePublications'
+import { usePublications, clearStoredPublication } from './usePublications'
+import { fetchAuthSettings } from '../auth/authSettings'
+import { toastStore } from '../../ui/toast'
 import {
   COMPILER_TARGETS,
   auditEventLabel,
@@ -53,6 +55,7 @@ const {
   isNoActiveRevision,
   copied,
   fetchPreview,
+  fetchPublication,
   publish,
   revoke,
   copyToClipboard,
@@ -63,12 +66,48 @@ const {
 
 const publishModalOpen = ref(false)
 const copiedToken = ref(false)
+const exportProtected = ref<boolean | null>(null)
+const authSettingsError = ref(false)
+const verifyingPublication = ref(false)
+const publicationLookupFailed = ref(false)
+const suppliedToken = ref('')
+const copyUrl = computed(() => exportProtected.value === null ? '' : getFullExportUrl(activePublication.value, exportProtected.value, suppliedToken.value))
+
+async function refreshExportMode() {
+  exportProtected.value = null
+  authSettingsError.value = false
+  try {
+    const settings = await fetchAuthSettings()
+    if (typeof settings?.export_auth_enabled !== 'boolean') throw new Error('Invalid export auth settings')
+    exportProtected.value = settings.export_auth_enabled
+  } catch {
+    authSettingsError.value = true
+  }
+}
+
+async function verifySavedPublication() {
+  const saved = activePublication.value
+  if (!saved) return
+  verifyingPublication.value = true
+  publicationLookupFailed.value = false
+  const detail = await fetchPublication(saved.id)
+  if (selectedTarget.value === saved.target && activePublication.value?.id === saved.id) {
+    if (!detail) publicationLookupFailed.value = true
+    else if (detail.state === 'revoked' || detail.revoked_at) {
+      clearStoredPublication(saved.target)
+      activePublication.value = null
+    }
+  }
+  verifyingPublication.value = false
+}
 
 const currentTargetMeta = computed(() => getTargetMetadata(selectedTarget.value))
 
 async function switchTarget(target: CompilerTarget) {
   selectedTarget.value = target
   restoreActivePublication(target)
+  suppliedToken.value = ''
+  void verifySavedPublication()
   await fetchPreview(target)
 }
 
@@ -91,16 +130,23 @@ async function handlePublish() {
   const target = selectedTarget.value
   try {
     await publish(target)
-    if (selectedTarget.value === target) publishModalOpen.value = true
+    if (selectedTarget.value === target) {
+      publicationLookupFailed.value = false
+      publishModalOpen.value = true
+    }
   } catch {
     // handled in composable
   }
 }
 
 async function copyPublicationURL() {
-  const fullUrl = getFullExportUrl(activePublication.value)
-  if (!fullUrl) return
-  await copyToClipboard(fullUrl)
+  const fullUrl = copyUrl.value
+  if (!fullUrl || verifyingPublication.value || publicationLookupFailed.value) return
+  if (!await copyToClipboard(fullUrl)) {
+    toastStore.push({ message: t('publications.copyFailed'), tone: 'error' })
+    return
+  }
+  toastStore.push({ message: t(exportProtected.value ? 'publications.copyProtectedSuccess' : 'publications.copyPublicSuccess'), tone: 'success' })
   copiedToken.value = true
   setTimeout(() => {
     copiedToken.value = false
@@ -126,6 +172,8 @@ async function confirmRevokePublication() {
 
 onMounted(() => {
   restoreActivePublication(selectedTarget.value)
+  void verifySavedPublication()
+  void refreshExportMode()
   fetchPreview(selectedTarget.value)
 })
 </script>
@@ -158,6 +206,7 @@ onMounted(() => {
           type="button"
           class="btn btn-secondary btn-sm gap-1.5 touch-manipulation"
           data-testid="copy-subscription-url-btn"
+          :disabled="!copyUrl || verifyingPublication || publicationLookupFailed"
           @click="copyPublicationURL"
         >
           <ClipboardDocumentIcon class="w-4 h-4" />
@@ -275,6 +324,22 @@ onMounted(() => {
           <span v-if="diag.reason" class="opacity-75 block pl-4">原因：{{ diag.reason }}</span>
         </li>
       </ul>
+    </div>
+
+    <div v-if="!activePublication && !loadingPreview && !error" data-testid="no-publication-guide" class="rounded-xl border border-warning/30 bg-warning/10 p-4 space-y-2" role="status">
+      <h3 class="font-bold">{{ t('publications.noPublicationTitle') }}</h3>
+      <p class="text-sm">{{ t('publications.noPublicationDesc') }}</p>
+      <button type="button" class="btn btn-primary btn-sm" :disabled="!preview || publishing" @click="handlePublish">{{ t('publications.createPub') }}</button>
+    </div>
+    <p v-if="publicationLookupFailed" role="alert" class="text-error">{{ t('publications.publicationLookupFailed') }}</p>
+    <p v-if="authSettingsError" role="alert" class="text-error">{{ t('settings.invalidSettings') }}</p>
+    <div v-if="activePublication && exportProtected !== null" data-testid="publication-link-state" class="rounded-xl bg-base-200 p-4 space-y-2">
+      <p>{{ t(exportProtected ? 'publications.protectedLink' : 'publications.publicLink') }}</p>
+      <p v-if="exportProtected && !copyUrl" class="text-warning text-sm">{{ t('publications.missingCredential') }}</p>
+      <label v-if="exportProtected" class="block text-sm space-y-1">
+        <span>{{ t('publications.sharedTokenHint') }}</span>
+        <input v-model="suppliedToken" type="password" autocomplete="off" data-testid="export-token-input" class="input input-bordered w-full" :placeholder="t('publications.enterExportToken')" />
+      </label>
     </div>
 
     <!-- Target Selector Tabs -->
@@ -483,7 +548,7 @@ onMounted(() => {
     <ModalDialog
       v-model="publishModalOpen"
       title="订阅发布链接已生成"
-      description="绑定目标编译格式的不可变订阅地址（含 SHA-256 令牌鉴权）"
+      :description="t(exportProtected ? 'publications.protectedLink' : 'publications.publicLink')"
     >
       <div v-if="activePublication" class="space-y-4">
         <div class="p-3.5 rounded-xl bg-success/10 border border-success/30 text-success text-xs flex items-center gap-2">
@@ -496,13 +561,14 @@ onMounted(() => {
           <div class="flex flex-wrap gap-2 min-w-0">
             <input
               readonly
-              :value="activePublication.export_url ? `${activePublication.export_url}` : ''"
+              :value="copyUrl"
               class="input input-bordered input-sm font-mono text-xs flex-1 min-w-0 bg-base-200"
             />
             <button
               type="button"
               class="btn btn-primary btn-sm gap-1"
               data-testid="modal-copy-subscription-url-btn"
+              :disabled="!copyUrl || verifyingPublication || publicationLookupFailed"
               @click="copyPublicationURL"
             >
               <ClipboardDocumentIcon class="w-4 h-4" />
@@ -510,7 +576,7 @@ onMounted(() => {
             </button>
           </div>
           <p class="text-[11px] opacity-60">
-            客户端可通过 Bearer 请求头或 URL 查询参数 token 拉取此订阅配置。
+            {{ t(exportProtected ? 'publications.sharedTokenHint' : 'publications.publicLink') }}
           </p>
         </div>
 

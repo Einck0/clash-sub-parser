@@ -14,6 +14,7 @@ import {
 import { api } from '../../api/client'
 import { toastStore } from '../../ui/toast'
 import type { AuthStatus } from '../auth/useAuth'
+import { fetchAuthSettings, type AuthSettings } from '../auth/authSettings'
 import { t, getLocale, setLocale, type Locale } from '../../locales'
 import { applyTheme, getStoredTheme, THEME_NAMES, type ThemeName } from '../../theme'
 import GlobalNodeFilterSettings from './GlobalNodeFilterSettings.vue'
@@ -21,6 +22,10 @@ import GlobalNodeFilterSettings from './GlobalNodeFilterSettings.vue'
 const authMode = ref<'open' | 'token' | 'loading' | 'error'>('loading')
 const authModeError = ref('')
 const storedToken = ref<string>('')
+const authSettings = ref<AuthSettings | null>(null)
+const adminEnabled = ref(true)
+const exportEnabled = ref(true)
+const settingsError = ref('')
 const showStoredToken = ref(false)
 const inputToken = ref('')
 const isTesting = ref(false)
@@ -41,21 +46,74 @@ async function probeAuthMode() {
   authMode.value = 'loading'
   authModeError.value = ''
   try {
-    const res = await api.get<AuthStatus>('/api/v1/auth/status')
-    if (res && (res.mode === 'open' || res.mode === 'protected')) {
-      authMode.value = res.mode === 'open' ? 'open' : 'token'
-    } else {
-      authMode.value = 'open'
+    settingsError.value = ''
+    const res = await fetchAuthSettings()
+    if (typeof res?.admin_auth_enabled !== 'boolean' || typeof res?.export_auth_enabled !== 'boolean' ||
+        typeof res?.token_configured !== 'boolean' || !['open', 'protected'].includes(res.admin_mode) ||
+        !['open', 'protected'].includes(res.export_mode)) throw new Error(t('settings.invalidSettings'))
+    authSettings.value = res
+    adminEnabled.value = res.admin_auth_enabled
+    exportEnabled.value = res.export_auth_enabled
+    authMode.value = res.admin_mode === 'open' ? 'open' : 'token'
+    if (!res.token_configured) {
+      storedToken.value = ''
+      showStoredToken.value = false
+    } else if (res.admin_mode === 'open') {
+      // An open admin session must not imply the local bearer is the server's secret.
+      storedToken.value = ''
     }
   } catch (err: any) {
+    authSettings.value = null
     authMode.value = 'error'
-    authModeError.value = err?.message || t('topbar.authProbeErrorDesc')
+    settingsError.value = err?.message || t('topbar.authProbeErrorDesc')
+    authModeError.value = settingsError.value
   }
+}
+
+async function updateSettings(change: { token?: string; clear_token?: boolean } = {}) {
+  if (!authSettings.value || isSaving.value) return
+  isSaving.value = true
+  try {
+    const res = await api.put<AuthSettings>('/api/v1/settings/auth', {
+      admin_auth_enabled: adminEnabled.value,
+      export_auth_enabled: exportEnabled.value,
+      ...change,
+    })
+    if (!res || typeof res.token_configured !== 'boolean' || typeof res.admin_auth_enabled !== 'boolean' ||
+        typeof res.export_auth_enabled !== 'boolean' || !['open', 'protected'].includes(res.admin_mode) ||
+        !['open', 'protected'].includes(res.export_mode)) throw new Error(t('settings.invalidSettings'))
+    // Token rotation invalidates cookies; the server never returns a plaintext secret.
+    if (change.token || change.clear_token) {
+      const nextToken = change.token && res.admin_mode === 'protected' ? change.token : null
+      nextToken ? localStorage.setItem('csp_token', nextToken) : localStorage.removeItem('csp_token')
+      api.setAuthToken(nextToken)
+      api.setCsrfToken(null)
+      storedToken.value = nextToken || ''
+      showStoredToken.value = false
+      inputToken.value = ''
+    }
+    authSettings.value = res
+    adminEnabled.value = res.admin_auth_enabled
+    exportEnabled.value = res.export_auth_enabled
+    authMode.value = res.admin_mode === 'open' ? 'open' : 'token'
+    toastStore.push({ message: t('settings.authSaved'), tone: 'success' })
+    window.dispatchEvent(new CustomEvent('csp:auth-success'))
+  } catch (err: any) {
+    toastStore.push({ message: err?.message || t('settings.tokenSaveFailed'), tone: 'error' })
+  } finally {
+    isSaving.value = false
+  }
+}
+
+function saveSwitches() {
+  if (!exportEnabled.value && authSettings.value?.export_auth_enabled &&
+      !window.confirm(t('settings.publicWarning'))) return
+  void updateSettings()
 }
 
 const displayToken = computed(() => {
   if (!storedToken.value) {
-    return t('settings.tokenNotConfigured')
+    return authSettings.value?.token_configured ? t('settings.tokenOnServerOnly') : t('settings.tokenNotConfigured')
   }
   if (showStoredToken.value) {
     return storedToken.value
@@ -92,9 +150,7 @@ function toggleTokenVisibility() {
 }
 
 /**
- * Saves real server Admin Token via POST /api/v1/settings/admin-token.
- * Never a localStorage-only setting. If the backend fails or has not applied the endpoint,
- * it catches and gracefully displays the API error without faking success.
+ * Saves the shared token together with both independent switches.
  */
 async function handleSaveToken() {
   const trimmed = inputToken.value.trim()
@@ -103,32 +159,7 @@ async function handleSaveToken() {
     return
   }
 
-  isSaving.value = true
-  try {
-    await api.post('/api/v1/settings/admin-token', { token: trimmed })
-
-    // Successfully applied to backend: update local bearer state
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('csp_token', trimmed)
-    }
-    if (api && typeof (api as any).setAuthToken === 'function') {
-      (api as any).setAuthToken(trimmed)
-    }
-
-    storedToken.value = trimmed
-    inputToken.value = ''
-    toastStore.push({ message: t('settings.tokenSaved'), tone: 'success' })
-
-    if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('csp:auth-success', { detail: { token: trimmed } }))
-    }
-    await probeAuthMode()
-  } catch (err: any) {
-    const msg = err?.message || t('settings.tokenSaveFailed')
-    toastStore.push({ message: msg, tone: 'error' })
-  } finally {
-    isSaving.value = false
-  }
+  await updateSettings({ token: trimmed })
 }
 
 async function handleTestConnection() {
@@ -160,34 +191,17 @@ async function handleTestConnection() {
 }
 
 /**
- * Clears real server Admin Token via POST /api/v1/settings/admin-token with empty string.
+ * Clears the shared token without changing either independent switch.
  */
 async function handleClearToken() {
+  if (!window.confirm(t('settings.clearTokenConfirm'))) return
   isClearing.value = true
   try {
-    await api.post('/api/v1/settings/admin-token', { token: '' })
-
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem('csp_token')
-    }
-    if (api && typeof (api as any).setAuthToken === 'function') {
-      (api as any).setAuthToken(null)
-    }
-
-    storedToken.value = ''
-    inputToken.value = ''
-    connectionStatus.value = 'idle'
-    connectionMessage.value = ''
-    toastStore.push({ message: t('settings.tokenCleared'), tone: 'info' })
-    await probeAuthMode()
-  } catch (err: any) {
-    const msg = err?.message || t('settings.tokenClearFailed')
-    toastStore.push({ message: msg, tone: 'error' })
+    await updateSettings({ clear_token: true })
   } finally {
     isClearing.value = false
   }
 }
-
 function handleLocaleChange(loc: Locale) {
   currentLocale.value = loc
   setLocale(loc)
@@ -201,9 +215,7 @@ function handleThemeChange(theme: ThemeName) {
 onMounted(() => {
   syncStoredToken()
   probeAuthMode()
-  if (typeof window !== 'undefined') {
-    window.addEventListener('csp:auth-success', syncStoredToken)
-  }
+
 })
 </script>
 
@@ -256,7 +268,26 @@ onMounted(() => {
       </div>
     </div>
 
-    <!-- Credentials Management Card (Real Server POST /api/v1/settings/admin-token) -->
+    <section class="card bg-base-200/80 border border-white/10" data-testid="auth-switches">
+      <div class="card-body p-5 sm:p-6 space-y-4">
+        <h3 class="font-bold">{{ t('settings.protectionTitle') }}</h3>
+        <p v-if="settingsError" role="alert" class="text-error">{{ settingsError }}</p>
+        <label class="flex items-center justify-between gap-4">
+          <span>{{ t('settings.adminProtection') }}</span>
+          <input v-model="adminEnabled" data-testid="admin-auth-switch" type="checkbox" class="toggle toggle-primary" :disabled="!authSettings || isSaving" />
+        </label>
+        <label class="flex items-center justify-between gap-4">
+          <span>{{ t('settings.exportProtection') }}</span>
+          <input v-model="exportEnabled" data-testid="export-auth-switch" type="checkbox" class="toggle toggle-primary" :disabled="!authSettings || isSaving" />
+        </label>
+        <p data-testid="export-mode-badge" class="text-sm">{{ t('settings.exportMode') }}: {{ authSettings ? t(authSettings.export_mode === 'open' ? 'settings.exportOpen' : 'settings.exportProtected') : '—' }}</p>
+        <p v-if="authSettings?.admin_auth_enabled && !authSettings.token_configured" class="text-warning text-sm">{{ t('settings.zeroConfigWarning') }}</p>
+        <p v-if="!exportEnabled" class="text-warning text-sm">{{ t('settings.publicWarning') }}</p>
+        <button type="button" class="btn btn-primary btn-sm self-start" data-testid="save-auth-switches-btn" :disabled="!authSettings || isSaving" @click="saveSwitches">{{ t('settings.saveAndApply') }}</button>
+      </div>
+    </section>
+
+    <!-- Shared credential; the status comes from the server, never from localStorage. -->
     <section class="card bg-base-200/80 backdrop-blur-xl shadow-sm border border-white/10">
       <div class="card-body p-5 sm:p-6 space-y-5">
         <div class="flex items-start justify-between gap-3">
@@ -277,10 +308,11 @@ onMounted(() => {
         <div class="p-4 rounded-xl bg-base-300/50 border border-white/5 space-y-2">
           <div class="flex items-center justify-between text-xs font-semibold text-base-content/70">
             <span>{{ t('settings.serverTokenLabel') }}</span>
-            <span v-if="storedToken" data-testid="token-status-badge" class="badge badge-xs badge-success gap-1">{{ t('common.active') }}</span>
+            <span v-if="authSettings?.token_configured" data-testid="token-status-badge" class="badge badge-xs badge-success gap-1">{{ t('common.active') }}</span>
             <span v-else data-testid="token-status-badge" class="badge badge-xs badge-ghost">{{ t('common.inactive') }}</span>
           </div>
 
+          <p class="text-xs opacity-70">{{ t('settings.sharedTokenHint') }}</p>
           <div class="flex items-center justify-between gap-2">
             <span
               data-testid="stored-token-display"
@@ -303,11 +335,11 @@ onMounted(() => {
               </button>
 
               <button
-                v-if="storedToken"
+                v-if="authSettings?.token_configured"
                 type="button"
                 data-testid="clear-token-btn"
                 class="btn btn-ghost btn-xs text-error hover:bg-error/10 gap-1"
-                :disabled="isClearing"
+                :disabled="isClearing || isSaving"
                 @click="handleClearToken"
               >
                 <TrashIcon class="w-3.5 h-3.5" />
@@ -338,7 +370,7 @@ onMounted(() => {
               type="button"
               data-testid="save-token-btn"
               class="btn btn-primary btn-sm sm:btn-md text-xs font-semibold shadow-sm"
-              :disabled="isSaving"
+              :disabled="isSaving || !authSettings"
               @click="handleSaveToken"
             >
               <span v-if="isSaving" class="loading loading-spinner loading-xs" />

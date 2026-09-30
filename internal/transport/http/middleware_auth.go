@@ -9,8 +9,7 @@ import (
 
 // AdminAuthMiddleware validates admin credentials (Bearer token or session cookie)
 // and strictly rejects unauthorized callers and publication export tokens.
-// In SecurityModeOpen, requests are unconditionally allowed with admin context
-// (unless bearing a publication export token, which is always rejected).
+// In SecurityModeOpen, requests are unconditionally allowed with admin context.
 func AdminAuthMiddleware(cfg RouterConfig) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -21,12 +20,6 @@ func AdminAuthMiddleware(cfg RouterConfig) func(http.Handler) http.Handler {
 				if len(parts) == 2 && strings.EqualFold(parts[0], "bearer") {
 					token = strings.TrimSpace(parts[1])
 				}
-			}
-
-			// 1. 导出令牌安全隔离硬门禁：无论何种模式，发布令牌严禁访问管理端
-			if token != "" && isPublicationToken(r.Context(), cfg, token) {
-				WriteError(w, r, http.StatusForbidden, "invalid_token_scope", "Publication export token cannot access administration API")
-				return
 			}
 
 			// 2. Open Mode 核心放行铁律：
@@ -41,6 +34,12 @@ func AdminAuthMiddleware(cfg RouterConfig) func(http.Handler) http.Handler {
 				}
 				ctx := WithAuthContext(r.Context(), auth)
 				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+
+			// Export-only credentials must never cross into protected admin APIs.
+			if token != "" && isPublicationToken(r.Context(), cfg, token) {
+				WriteError(w, r, http.StatusForbidden, "invalid_token_scope", "Publication export token cannot access administration API")
 				return
 			}
 

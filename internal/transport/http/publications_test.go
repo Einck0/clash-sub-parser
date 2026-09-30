@@ -190,6 +190,78 @@ type previewResponse struct {
 	} `json:"data"`
 }
 
+func TestPublicationClientExportAuthModes(t *testing.T) {
+	db := newCleanSQLiteDB(t)
+	seedSamplePolicyData(t, db)
+	pubRepo := sqlite.NewPublicationRepository(db)
+	svc := publication.NewService(pubRepo, sqlite.NewAuditRepository(db),
+		publication.WithPolicyRepository(sqlite.NewPolicyRepository(db)),
+		publication.WithRevisionRepository(sqlite.NewRevisionRepository(db)),
+		publication.WithNodeRepository(sqlite.NewNodeRepository(db)))
+	res, err := svc.Publish(context.Background(), publication.PublishCommand{Target: domain.TargetSingBox, ActorKind: domain.ActorKindAdmin, RequestID: "auth-modes"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if svc.IsPublicationToken(context.Background(), "pub_not_issued") {
+		t.Fatal("unknown publication-looking token must not be recognized as valid export credential")
+	}
+	holder := transporthttp.NewDynamicTokenHolder(transporthttp.TokenHolderConfig{InitialToken: "shared-master", HashCost: transporthttp.MinHashCost})
+	router := transporthttp.NewRouter(transporthttp.RouterConfig{TokenHolder: holder, PublicationService: svc, IsPublicationToken: svc.IsPublicationToken})
+	request := func(path, bearer string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		if bearer != "" {
+			req.Header.Set("Authorization", "Bearer "+bearer)
+		}
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		return rec
+	}
+	url := "/publish/v1/" + res.Publication.ID
+	cases := []struct {
+		name, path, bearer string
+		want               int
+	}{
+		{"publication token query", url + "?token=" + res.RawToken, "", http.StatusOK},
+		{"master bearer", url, "shared-master", http.StatusOK},
+		{"master query short path", "/p/" + res.Publication.ID + "?token=shared-master", "", http.StatusOK},
+		{"invalid", url + "?token=incorrect", "", http.StatusUnauthorized},
+		{"unknown publication-shaped token", url, "pub_not_issued", http.StatusUnauthorized},
+		{"missing", url, "", http.StatusUnauthorized},
+		{"unknown short path", "/p/nonexistent?token=shared-master", "", http.StatusNotFound},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := request(tc.path, tc.bearer)
+			if rec.Code != tc.want {
+				t.Fatalf("expected %d, got %d: %s", tc.want, rec.Code, rec.Body.String())
+			}
+			if tc.want == http.StatusOK && (rec.Header().Get("Cache-Control") != "no-store" || rec.Header().Get("ETag") == "" || len(rec.Body.Bytes()) == 0) {
+				t.Fatalf("missing artifact or headers: %d %+v", rec.Code, rec.Header())
+			}
+		})
+	}
+	// Export protection must still accept publication tokens when there is no master token.
+	if err := holder.UpdateToken(context.Background(), ""); err != nil {
+		t.Fatal(err)
+	}
+	if rec := request(url+"?token="+res.RawToken, ""); rec.Code != http.StatusOK {
+		t.Fatalf("publication token must work without a configured master: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := request(url, "shared-master"); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("removed master token must fail: %d", rec.Code)
+	}
+	holder.SetAuthSwitches(true, false)
+	for _, path := range []string{url, url + "?token=incorrect", "/p/" + res.Publication.ID} {
+		if rec := request(path, ""); rec.Code != http.StatusOK {
+			t.Fatalf("open export %s: %d %s", path, rec.Code, rec.Body.String())
+		}
+	}
+	if rec := request("/p/nonexistent", ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown publication in open mode: %d", rec.Code)
+	}
+}
+
 func TestPublicationClientSubscriptionEndpoint(t *testing.T) {
 	db := newCleanSQLiteDB(t)
 	router, pubSvc := setupPublicationTestRouter(t, db)
@@ -233,6 +305,16 @@ func TestPublicationClientSubscriptionEndpoint(t *testing.T) {
 		body := rec.Body.String()
 		if !strings.Contains(body, "outbounds") || !strings.Contains(body, "Tokyo-01") {
 			t.Fatalf("served body missing expected singbox configuration content: %s", body)
+		}
+	})
+
+	// Both the standard and historical short routes serve the same artifact.
+	t.Run("short_path_success", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/p/%s?token=%s", pubID, rawToken), nil)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK || rec.Header().Get("X-Content-Digest") != pubRes.ContentDigest {
+			t.Fatalf("short path: %d %s", rec.Code, rec.Body.String())
 		}
 	})
 
@@ -452,8 +534,8 @@ func TestAdminPreviewAndPublishConsistency(t *testing.T) {
 	}
 
 	// Verify raw token is NOT exposed in GET publication detail
-	if strings.Contains(getRec.Body.String(), pubResp.Data.RawToken) {
-		t.Fatalf("raw export token must NOT be exposed in GET publication detail: %s", getRec.Body.String())
+	if strings.Contains(getRec.Body.String(), pubResp.Data.RawToken) || strings.Contains(getRec.Body.String(), `"token_hash"`) {
+		t.Fatalf("publication token or verifier must NOT be exposed in GET publication detail: %s", getRec.Body.String())
 	}
 }
 

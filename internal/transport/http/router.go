@@ -87,7 +87,9 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 	// Publication endpoint: /publish/v1/{publication_id}
 	if cfg.PublicationService != nil {
-		r.Get("/publish/v1/{publication_id}", publicationClientHandler(cfg.PublicationService))
+		client := publicationClientHandler(cfg.PublicationService, cfg.TokenHolder)
+		r.Get("/publish/v1/{publication_id}", client)
+		r.Get("/p/{publication_id}", client)
 	}
 
 	// Public auth endpoints
@@ -151,9 +153,15 @@ func Legacy410Handler(w http.ResponseWriter, r *http.Request) {
 func authStatusHandler(cfg RouterConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		mode := cfg.SecurityMode()
+		exportMode := SecurityModeProtected
+		if h, ok := cfg.TokenHolder.(interface{ IsExportAuthRequired() bool }); ok && !h.IsExportAuthRequired() {
+			exportMode = SecurityModeOpen
+		}
 		if mode == SecurityModeOpen {
 			WriteSuccess(w, r, http.StatusOK, AuthStatusData{
 				Mode:          SecurityModeOpen,
+				AdminMode:     mode,
+				ExportMode:    exportMode,
 				Authenticated: true,
 				Subject:       "admin",
 			})
@@ -180,6 +188,8 @@ func authStatusHandler(cfg RouterConfig) http.HandlerFunc {
 			if valid {
 				WriteSuccess(w, r, http.StatusOK, AuthStatusData{
 					Mode:          SecurityModeProtected,
+					AdminMode:     mode,
+					ExportMode:    exportMode,
 					Authenticated: true,
 					Subject:       "admin",
 				})
@@ -199,6 +209,8 @@ func authStatusHandler(cfg RouterConfig) http.HandlerFunc {
 			if ok && session != nil {
 				WriteSuccess(w, r, http.StatusOK, AuthStatusData{
 					Mode:          SecurityModeProtected,
+					AdminMode:     mode,
+					ExportMode:    exportMode,
 					Authenticated: true,
 					Subject:       session.Subject,
 				})
@@ -208,6 +220,8 @@ func authStatusHandler(cfg RouterConfig) http.HandlerFunc {
 
 		WriteSuccess(w, r, http.StatusOK, AuthStatusData{
 			Mode:          SecurityModeProtected,
+			AdminMode:     mode,
+			ExportMode:    exportMode,
 			Authenticated: false,
 			Subject:       "",
 		})
@@ -266,7 +280,6 @@ func authLoginHandler(cfg RouterConfig) http.HandlerFunc {
 			Mode:          SecurityModeProtected,
 			Authenticated: true,
 			Subject:       "admin",
-			Token:         trimmedToken,
 			CSRFToken:     csrfToken,
 			Message:       "Authentication successful",
 		})

@@ -29,7 +29,7 @@ type previewPublicationRequest struct {
 }
 
 // publicationClientHandler serves client subscription export requests at /publish/v1/{publication_id}.
-func publicationClientHandler(svc *publication.Service) http.HandlerFunc {
+func publicationClientHandler(svc *publication.Service, holder AdminTokenHolder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		pubID := strings.TrimSpace(chi.URLParam(r, "publication_id"))
 		if pubID == "" {
@@ -45,12 +45,12 @@ func publicationClientHandler(svc *publication.Service) http.HandlerFunc {
 			}
 		}
 
-		if token == "" {
-			WriteError(w, r, http.StatusUnauthorized, "unauthorized", "Publication token required")
-			return
-		}
-
-		artifact, err := svc.ResolveAndServe(r.Context(), pubID, token)
+		artifact, err := svc.ResolveAndServeAuthorized(r.Context(), pubID, func(pubTokenHash string) bool {
+			if h, ok := holder.(interface{ VerifyExportToken(string, string) bool }); ok {
+				return h.VerifyExportToken(token, pubTokenHash)
+			}
+			return false
+		})
 		if err != nil {
 			switch {
 			case errors.Is(err, publication.ErrNotFound):

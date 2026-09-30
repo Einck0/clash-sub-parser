@@ -27,6 +27,8 @@ func (cfg RouterConfig) SecurityMode() SecurityMode {
 // AuthStatusData defines the payload returned by GET /api/v1/auth/status.
 type AuthStatusData struct {
 	Mode          SecurityMode `json:"mode"`
+	AdminMode     SecurityMode `json:"admin_mode"`
+	ExportMode    SecurityMode `json:"export_mode"`
 	Authenticated bool         `json:"authenticated"`
 	Subject       string       `json:"subject"`
 }
@@ -41,7 +43,6 @@ type LoginResponseData struct {
 	Mode          SecurityMode `json:"mode"`
 	Authenticated bool         `json:"authenticated"`
 	Subject       string       `json:"subject"`
-	Token         string       `json:"token,omitempty"`
 	CSRFToken     string       `json:"csrf_token,omitempty"`
 	Message       string       `json:"message"`
 }

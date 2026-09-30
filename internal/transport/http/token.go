@@ -3,6 +3,8 @@ package http
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"sync"
@@ -35,16 +37,21 @@ type TokenHolderConfig struct {
 	SettingsRepo    domain.SettingsRepository
 	SessionStore    SessionStore
 	HashCost        int // bcrypt cost (default: DefaultHashCost)
+	// Defaults preserve the existing protected behavior for callers that do not load settings.
+	AdminAuthEnabled  *bool
+	ExportAuthEnabled *bool
 }
 
 // DynamicTokenHolder is a concurrency-safe atomic/mutex snapshot holder for the admin token verifier.
 // It ensures that auth mode transitions, verification, and token rotations are completely thread-safe.
 type DynamicTokenHolder struct {
-	mu           sync.RWMutex
-	verifier     string
-	settingsRepo domain.SettingsRepository
-	sessionStore SessionStore
-	hashCost     int
+	mu                sync.RWMutex
+	verifier          string
+	adminAuthEnabled  bool
+	exportAuthEnabled bool
+	settingsRepo      domain.SettingsRepository
+	sessionStore      SessionStore
+	hashCost          int
 }
 
 // NewDynamicTokenHolder creates and initializes a DynamicTokenHolder.
@@ -55,9 +62,17 @@ func NewDynamicTokenHolder(cfg TokenHolderConfig) *DynamicTokenHolder {
 	}
 
 	holder := &DynamicTokenHolder{
-		settingsRepo: cfg.SettingsRepo,
-		sessionStore: cfg.SessionStore,
-		hashCost:     cost,
+		settingsRepo:      cfg.SettingsRepo,
+		sessionStore:      cfg.SessionStore,
+		hashCost:          cost,
+		adminAuthEnabled:  true,
+		exportAuthEnabled: true,
+	}
+	if cfg.AdminAuthEnabled != nil {
+		holder.adminAuthEnabled = *cfg.AdminAuthEnabled
+	}
+	if cfg.ExportAuthEnabled != nil {
+		holder.exportAuthEnabled = *cfg.ExportAuthEnabled
 	}
 
 	if trimmedVerifier := strings.TrimSpace(cfg.InitialVerifier); trimmedVerifier != "" {
@@ -79,21 +94,108 @@ func NewDynamicTokenHolder(cfg TokenHolderConfig) *DynamicTokenHolder {
 	return holder
 }
 
-// Mode returns the current SecurityMode (Open or Protected).
-func (h *DynamicTokenHolder) Mode() SecurityMode {
+// Mode returns the effective admin security mode, retaining the legacy name.
+func (h *DynamicTokenHolder) Mode() SecurityMode { return h.AdminMode() }
+
+// AdminMode returns protected only when the admin switch is on and a verifier exists.
+func (h *DynamicTokenHolder) AdminMode() SecurityMode {
 	if h == nil {
 		return SecurityModeOpen
 	}
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	if h.verifier == "" {
+	if !h.adminAuthEnabled || h.verifier == "" {
 		return SecurityModeOpen
 	}
 	return SecurityModeProtected
 }
 
-// Verify checks a candidate plaintext token in constant time against the stored verifier.
-// Returns false if server is in Open Mode or if the candidate does not match.
+// ExportMode reports the independent export protection state.
+func (h *DynamicTokenHolder) ExportMode() SecurityMode {
+	if h.IsExportAuthRequired() {
+		return SecurityModeProtected
+	}
+	return SecurityModeOpen
+}
+
+func (h *DynamicTokenHolder) IsExportAuthRequired() bool {
+	if h == nil {
+		return true
+	}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.exportAuthEnabled
+}
+
+// SetAuthSwitches changes both in-memory switches as a single snapshot.
+func (h *DynamicTokenHolder) SetAuthSwitches(admin, export bool) {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	h.adminAuthEnabled, h.exportAuthEnabled = admin, export
+	h.mu.Unlock()
+}
+
+// VerifyExportToken accepts a publication-specific token or the system master token.
+func (h *DynamicTokenHolder) VerifyExportToken(candidate, pubTokenHash string) bool {
+	if h == nil {
+		return false
+	}
+	h.mu.RLock()
+	required, verifier := h.exportAuthEnabled, h.verifier
+	h.mu.RUnlock()
+	if !required {
+		return true
+	}
+	if candidate == "" {
+		return false
+	}
+	digest := sha256.Sum256([]byte(candidate))
+	if len(pubTokenHash) == hex.EncodedLen(len(digest)) &&
+		subtle.ConstantTimeCompare([]byte(hex.EncodeToString(digest[:])), []byte(pubTokenHash)) == 1 {
+		return true
+	}
+	return verifier != "" && VerifyToken(verifier, candidate)
+}
+
+// UpdateAuthSettings persists switches and an optional token change, then publishes
+// the new verifier and switches together and invalidates sessions on token changes.
+func (h *DynamicTokenHolder) UpdateAuthSettings(ctx context.Context, admin, export bool, token *string) error {
+	if h == nil {
+		return fmt.Errorf("dynamic token holder is nil")
+	}
+	var verifier *string
+	if token != nil {
+		v := ""
+		if trimmed := strings.TrimSpace(*token); trimmed != "" {
+			var err error
+			v, err = HashTokenWithCost(trimmed, h.hashCost)
+			if err != nil {
+				return fmt.Errorf("failed to hash admin token: %w", err)
+			}
+		}
+		verifier = &v
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.settingsRepo != nil {
+		if err := h.settingsRepo.UpdateAuthSettings(ctx, admin, export, verifier); err != nil {
+			return fmt.Errorf("failed to persist auth settings: %w", err)
+		}
+	}
+	h.adminAuthEnabled, h.exportAuthEnabled = admin, export
+	if verifier != nil {
+		h.verifier = *verifier
+		if h.sessionStore != nil {
+			h.sessionStore.RevokeAll()
+		}
+	}
+	return nil
+}
+
+// Verify checks a candidate plaintext token against the stored verifier.
+// Returns false when no verifier is configured or when the candidate does not match.
 func (h *DynamicTokenHolder) Verify(candidate string) bool {
 	if h == nil {
 		return false
@@ -121,7 +223,7 @@ func (h *DynamicTokenHolder) SetVerifier(verifier string) {
 	h.mu.Unlock()
 }
 
-// CurrentVerifier returns the active verifier snapshot (empty string if open mode).
+// CurrentVerifier returns the active verifier snapshot (empty if no token is configured).
 func (h *DynamicTokenHolder) CurrentVerifier() string {
 	if h == nil {
 		return ""
@@ -131,9 +233,9 @@ func (h *DynamicTokenHolder) CurrentVerifier() string {
 	return h.verifier
 }
 
-// UpdateToken updates or clears the admin token.
-// If token is empty: clears verifier, switches to OpenMode, persists to SQLite, revokes all sessions.
-// If token is non-empty: generates cryptographic verifier, persists to SQLite, switches to ProtectedMode, revokes all sessions.
+// UpdateToken updates or clears the system token while preserving both auth switches.
+// It persists the verifier and invalidates sessions; the effective admin mode
+// depends on the admin switch as well as whether a verifier is configured.
 func (h *DynamicTokenHolder) UpdateToken(ctx context.Context, token string) error {
 	if h == nil {
 		return fmt.Errorf("dynamic token holder is nil")
@@ -153,19 +255,14 @@ func (h *DynamicTokenHolder) UpdateToken(ctx context.Context, token string) erro
 		}
 	}
 
-	// 1. Persist to SQLite database if repository is configured
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	if h.settingsRepo != nil {
 		if err := h.settingsRepo.UpdateAdminToken(ctx, newVerifier); err != nil {
 			return fmt.Errorf("failed to persist admin token: %w", err)
 		}
 	}
-
-	// 2. Concurrency-safe snapshot update
-	h.mu.Lock()
 	h.verifier = newVerifier
-	h.mu.Unlock()
-
-	// 3. Invalidate all existing cookie sessions
 	if h.sessionStore != nil {
 		h.sessionStore.RevokeAll()
 	}

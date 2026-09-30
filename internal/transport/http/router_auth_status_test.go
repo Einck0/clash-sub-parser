@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -247,8 +248,8 @@ func TestAuthLoginEndpoint(t *testing.T) {
 		if !resp.Data.Authenticated || resp.Data.Subject != "admin" {
 			t.Errorf("expected authenticated=true subject=admin, got %+v", resp.Data)
 		}
-		if resp.Data.Token != secretToken {
-			t.Errorf("expected returned token %q, got %q", secretToken, resp.Data.Token)
+		if strings.Contains(rec.Body.String(), secretToken) || strings.Contains(rec.Body.String(), `"token"`) {
+			t.Fatalf("login response must not echo token: %s", rec.Body.String())
 		}
 		if resp.Data.CSRFToken == "" {
 			t.Error("expected non-empty CSRFToken in login response")

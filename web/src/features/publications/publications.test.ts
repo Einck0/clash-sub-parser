@@ -626,12 +626,13 @@ describe('PublicationsView component rendering', () => {
     sessionStorage.clear()
     localStorage.setItem(TARGET_STORAGE_KEY, 'mihomo')
     sessionStorage.setItem('csp_publication_active_mihomo', JSON.stringify({
-      id: 'pub-mihomo', target: 'mihomo', state: 'active', export_url: '/publish/v1/one?token=one',
+      id: 'pub-mihomo', target: 'mihomo', state: 'active', export_url: '/publish/v1/pub-mihomo?token=one',
     }))
     sessionStorage.setItem('csp_publication_active_singbox', JSON.stringify({
-      id: 'pub-singbox', target: 'singbox', state: 'active', export_url: '/publish/v1/two?token=two',
+      id: 'pub-singbox', target: 'singbox', state: 'active', export_url: '/publish/v1/pub-singbox?token=two',
     }))
     vi.spyOn(api, 'post').mockResolvedValue({ target: 'singbox', content: 'ok', diagnostics: [] })
+    vi.spyOn(api, 'get').mockImplementation(async path => path === '/api/v1/settings/auth' ? { export_auth_enabled: true } : { publication: { id: path.split('/').pop(), target: path.endsWith('pub-mihomo') ? 'mihomo' : 'singbox', state: 'active' }, export_url: `/publish/v1/${path.split('/').pop()}` })
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.assign(navigator, { clipboard: { writeText } })
     const mountEl = document.createElement('div')
@@ -646,10 +647,11 @@ describe('PublicationsView component rendering', () => {
     await nextTick()
     const copyButton = mountEl.querySelector('[data-testid="copy-subscription-url-btn"]') as HTMLButtonElement | null
     if (!copyButton) throw new Error('sing-box copy button not rendered')
+    await new Promise(r => setTimeout(r, 10))
     copyButton.click()
     await nextTick()
-    expect(writeText).toHaveBeenCalledWith(expect.stringContaining('/publish/v1/two?token=two'))
-    expect(writeText).not.toHaveBeenCalledWith(expect.stringContaining('/publish/v1/one?token=one'))
+    expect(writeText).toHaveBeenCalledWith(expect.stringContaining('/publish/v1/pub-singbox?token=two'))
+    expect(writeText).not.toHaveBeenCalledWith(expect.stringContaining('/publish/v1/pub-mihomo?token=one'))
     app.unmount()
     mountEl.remove()
   })
@@ -721,6 +723,7 @@ describe('PublicationsView component rendering', () => {
       diagnostics: [],
     })
 
+    vi.spyOn(api, 'get').mockImplementation(async path => path === '/api/v1/settings/auth' ? { export_auth_enabled: true } : { publication: { id: 'pub-persist-99', target: 'mihomo', state: 'active' }, export_url: '/publish/v1/pub-persist-99' })
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.assign(navigator, { clipboard: { writeText } })
 
@@ -754,6 +757,61 @@ describe('PublicationsView component rendering', () => {
     expect(copiedUrl).toContain('/publish/v1/pub-persist-99?token=persisted_token_999')
 
     testApp.unmount()
+    mountEl.remove()
+  })
+
+  it('shows empty publication guidance and switches copied links between public and protected modes', async () => {
+    const { default: PublicationsView } = await import('./PublicationsView.vue')
+    const { createApp, h, nextTick } = await import('vue')
+    sessionStorage.clear()
+    vi.spyOn(api, 'get').mockImplementation(async path => path === '/api/v1/settings/auth' ? { export_auth_enabled: false } : { publication: { id: 'pub-open-1', target: 'mihomo', state: 'active' }, export_url: '/publish/v1/pub-open-1' })
+    vi.spyOn(api, 'post').mockImplementation(async path => path === '/api/v1/publications'
+      ? { publication: { id: 'pub-open-1', target: 'mihomo', state: 'active' }, export_url: '/publish/v1/pub-open-1?token=pub_secret' }
+      : { target: 'mihomo', content: 'proxies: []\n', diagnostics: [] })
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, { clipboard: { writeText } })
+    const mountEl = document.createElement('div')
+    document.body.appendChild(mountEl)
+    const app = createApp({ render: () => h(PublicationsView) })
+    app.mount(mountEl)
+    await nextTick()
+    await new Promise(r => setTimeout(r, 15))
+    expect(mountEl.querySelector('[data-testid="no-publication-guide"]')?.textContent).toContain('/p/')
+    mountEl.querySelector<HTMLButtonElement>('[data-testid="no-publication-guide"] button')!.click()
+    await nextTick()
+    await new Promise(r => setTimeout(r, 15))
+    mountEl.querySelector<HTMLButtonElement>('[data-testid="copy-subscription-url-btn"]')!.click()
+    await nextTick()
+    expect(writeText).toHaveBeenCalledWith('http://localhost:3000/publish/v1/pub-open-1')
+    app.unmount()
+    mountEl.remove()
+  })
+
+  it('does not pretend an unstored publication token exists when export auth is enabled, and accepts the shared token', async () => {
+    const { default: PublicationsView } = await import('./PublicationsView.vue')
+    const { createApp, h, nextTick } = await import('vue')
+    sessionStorage.setItem('csp_publication_active_mihomo', JSON.stringify({ id: 'pub-no-tok', target: 'mihomo', state: 'active', export_url: '/publish/v1/pub-no-tok' }))
+    vi.spyOn(api, 'get').mockImplementation(async path => path === '/api/v1/settings/auth' ? { export_auth_enabled: true } : { publication: { id: 'pub-no-tok', target: 'mihomo', state: 'active' }, export_url: '/publish/v1/pub-no-tok' })
+    vi.spyOn(api, 'post').mockResolvedValue({ target: 'mihomo', content: 'proxies: []\n', diagnostics: [] })
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, { clipboard: { writeText } })
+    const mountEl = document.createElement('div')
+    document.body.appendChild(mountEl)
+    const app = createApp({ render: () => h(PublicationsView) })
+    app.mount(mountEl)
+    await nextTick()
+    await new Promise(r => setTimeout(r, 15))
+    const copyBtn = mountEl.querySelector<HTMLButtonElement>('[data-testid="copy-subscription-url-btn"]')!
+    expect(copyBtn.disabled).toBe(true)
+    const tokenInput = mountEl.querySelector<HTMLInputElement>('[data-testid="export-token-input"]')!
+    tokenInput.value = 'shared_master_token'
+    tokenInput.dispatchEvent(new Event('input'))
+    await nextTick()
+    expect(copyBtn.disabled).toBe(false)
+    copyBtn.click()
+    await nextTick()
+    expect(writeText).toHaveBeenCalledWith('http://localhost:3000/publish/v1/pub-no-tok?token=shared_master_token')
+    app.unmount()
     mountEl.remove()
   })
 })

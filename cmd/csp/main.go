@@ -343,10 +343,12 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 	}
 
 	tokenHolder := transporthttp.NewDynamicTokenHolder(transporthttp.TokenHolderConfig{
-		InitialVerifier: activeVerifier,
-		SettingsRepo:    settingsRepo,
-		SessionStore:    sessionStore,
-		HashCost:        transporthttp.DefaultHashCost,
+		InitialVerifier:   activeVerifier,
+		SettingsRepo:      settingsRepo,
+		SessionStore:      sessionStore,
+		HashCost:          transporthttp.DefaultHashCost,
+		AdminAuthEnabled:  &dbSettings.AdminAuthEnabled,
+		ExportAuthEnabled: &dbSettings.ExportAuthEnabled,
 	})
 
 	routerCfg := transporthttp.RouterConfig{

@@ -47,6 +47,16 @@ func (m *mockSettingsRepo) UpdateAdminToken(ctx context.Context, verifier string
 	return nil
 }
 
+func (m *mockSettingsRepo) UpdateAuthSettings(ctx context.Context, adminAuthEnabled, exportAuthEnabled bool, verifier *string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.settings.AdminAuthEnabled, m.settings.ExportAuthEnabled = adminAuthEnabled, exportAuthEnabled
+	if verifier != nil {
+		m.settings.AdminToken = *verifier
+	}
+	return nil
+}
+
 func TestDynamicAdminTokenLifecycle(t *testing.T) {
 	ctx := context.Background()
 	repo := newMockSettingsRepo("")

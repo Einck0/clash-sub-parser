@@ -16,8 +16,10 @@ type Settings struct {
 	MaxPageSize            int   `json:"max_page_size"`     // default 50, maximum allowed 100
 	DefaultPageSize        int   `json:"default_page_size"` // default 50
 	// AdminToken stores the cryptographic verifier/hash for admin authentication, NEVER usable plaintext secret.
-	AdminToken string    `json:"-"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	AdminToken        string    `json:"-"`
+	AdminAuthEnabled  bool      `json:"admin_auth_enabled"`
+	ExportAuthEnabled bool      `json:"export_auth_enabled"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 // DefaultSettings returns the standard production baseline settings.
@@ -31,6 +33,8 @@ func DefaultSettings() Settings {
 		MaxPageSize:            100,
 		DefaultPageSize:        50,
 		AdminToken:             "",
+		AdminAuthEnabled:       true,
+		ExportAuthEnabled:      true,
 		UpdatedAt:              NowUTC(),
 	}
 }

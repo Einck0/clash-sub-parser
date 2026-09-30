@@ -175,6 +175,9 @@ type SettingsRepository interface {
 	Get(ctx context.Context) (*Settings, error)
 	Update(ctx context.Context, settings *Settings) error
 	UpdateAdminToken(ctx context.Context, tokenVerifier string) error
+	// UpdateAuthSettings atomically sets both switches and optionally replaces the token verifier.
+	// A nil verifier preserves the currently configured system token.
+	UpdateAuthSettings(ctx context.Context, adminAuthEnabled, exportAuthEnabled bool, tokenVerifier *string) error
 }
 
 // IPRiskObservationRepository defines append-only normalized risk evidence persistence.

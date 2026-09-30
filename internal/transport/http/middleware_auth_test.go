@@ -242,6 +242,12 @@ func TestAdminAuthMiddleware_PublicationToken_Forbidden(t *testing.T) {
 			rec := httptest.NewRecorder()
 			handler.ServeHTTP(rec, req)
 
+			if mode.name == "open_mode" {
+				if rec.Code != http.StatusOK {
+					t.Fatalf("expected 200 open-mode admin for any bearer token, got %d. Body: %s", rec.Code, rec.Body.String())
+				}
+				return
+			}
 			if rec.Code != http.StatusForbidden {
 				t.Fatalf("expected 403 Forbidden for publication token in %s, got %d. Body: %s", mode.name, rec.Code, rec.Body.String())
 			}

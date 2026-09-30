@@ -872,29 +872,32 @@ func TestNodesHTTPIncludesLatestProbeStatusCapabilitiesAndSources(t *testing.T) 
 	}); err != nil {
 		t.Fatalf("create run: %v", err)
 	}
+	rev1 := int64(1)
 	if err := probeObsRepo.Create(ctx, &domain.ProbeObservation{
-		ID:              domain.MustNewUUIDv7(),
-		ProbeRunID:      runID,
-		NodeLogicalID:   nodeID,
-		Kind:            domain.ProbeKindBaseline,
-		Verdict:         domain.VerdictAvailable,
-		EvidenceDigest:  domain.ComputeProbeEvidenceDigest(runID, nodeID, "baseline-v1", domain.VerdictAvailable, 204, "contract_matched"),
-		ObservedAt:      now,
-		LatencyMS:       37,
-		RedactedSummary: "profile=baseline version=baseline-v1 verdict=available reason=contract_matched status=204 latency_ms=37",
+		ID:                 domain.MustNewUUIDv7(),
+		ProbeRunID:         runID,
+		NodeLogicalID:      nodeID,
+		Kind:               domain.ProbeKindBaseline,
+		Verdict:            domain.VerdictAvailable,
+		EvidenceDigest:     domain.ComputeProbeEvidenceDigest(runID, nodeID, "baseline-v1", domain.VerdictAvailable, 204, "contract_matched"),
+		ObservedAt:         now,
+		LatencyMS:          37,
+		RedactedSummary:    "profile=baseline version=baseline-v1 verdict=available reason=contract_matched status=204 latency_ms=37",
+		ConnectionRevision: &rev1,
 	}); err != nil {
 		t.Fatalf("create baseline obs: %v", err)
 	}
 	if err := probeObsRepo.Create(ctx, &domain.ProbeObservation{
-		ID:              domain.MustNewUUIDv7(),
-		ProbeRunID:      runID,
-		NodeLogicalID:   nodeID,
-		Kind:            domain.ProbeKindStreaming,
-		Verdict:         domain.VerdictAvailable,
-		EvidenceDigest:  domain.ComputeProbeEvidenceDigest(runID, nodeID, "streaming-v1", domain.VerdictAvailable, 200, "contract_matched"),
-		ObservedAt:      now,
-		LatencyMS:       91,
-		RedactedSummary: "profile=streaming version=streaming-v1 verdict=available reason=contract_matched status=200 latency_ms=91",
+		ID:                 domain.MustNewUUIDv7(),
+		ProbeRunID:         runID,
+		NodeLogicalID:      nodeID,
+		Kind:               domain.ProbeKindStreaming,
+		Verdict:            domain.VerdictAvailable,
+		EvidenceDigest:     domain.ComputeProbeEvidenceDigest(runID, nodeID, "streaming-v1", domain.VerdictAvailable, 200, "contract_matched"),
+		ObservedAt:         now,
+		LatencyMS:          91,
+		RedactedSummary:    "profile=streaming version=streaming-v1 verdict=available reason=contract_matched status=200 latency_ms=91",
+		ConnectionRevision: &rev1,
 	}); err != nil {
 		t.Fatalf("create streaming obs: %v", err)
 	}

@@ -7,7 +7,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -155,7 +154,7 @@ var (
 )
 
 func defaultNodeDialer(ctx context.Context, node domain.Node) (*http.Client, func() error, error) {
-	return nil, nil, fmt.Errorf("%w: probe dialing not configured for node %s (%s): %w", ErrProbeDialingNotConfigured, node.DisplayName, node.LogicalID, ErrCredentialsUnavailable)
+	return nil, nil, ErrProbeDialingNotConfigured
 }
 
 func profileForKind(kind domain.ProbeKind) profiles.Profile {
@@ -745,6 +744,29 @@ func cloneClient(client *http.Client) *http.Client {
 	return &copy
 }
 
+// classifyDialFailure intentionally never formats the underlying error: runtime errors may
+// contain server names, socket addresses or authentication material.
+func classifyDialFailure(err error) string {
+	switch {
+	case errors.Is(err, ErrUnsafeTLSRejected):
+		return "unsafe_tls_rejected"
+	case errors.Is(err, ErrUnsafeOptionRejected):
+		return "unsafe_option_rejected"
+	case errors.Is(err, ErrPrivateTargetRejected):
+		return "private_target_rejected"
+	case errors.Is(err, ErrTargetUnresolvable):
+		return "target_unresolvable"
+	case errors.Is(err, ErrCredentialsUnavailable):
+		return "credentials_unavailable"
+	case errors.Is(err, ErrProbeDialingNotConfigured):
+		return "probe_dialing_not_configured"
+	case errors.Is(err, ErrClientBuildFailed):
+		return "client_build_failed"
+	default:
+		return "client_build_failed"
+	}
+}
+
 func isFatalDialError(err error) bool {
 	if err == nil {
 		return false
@@ -752,7 +774,7 @@ func isFatalDialError(err error) bool {
 	if errors.Is(err, ErrTargetUnresolvable) || errors.Is(err, ErrPrivateTargetRejected) {
 		return false
 	}
-	return errors.Is(err, ErrCredentialsUnavailable) || errors.Is(err, ErrProbeDialingNotConfigured)
+	return errors.Is(err, ErrCredentialsUnavailable) || errors.Is(err, ErrProbeDialingNotConfigured) || errors.Is(err, ErrClientBuildFailed)
 }
 
 func (r *DefaultRunner) executeTask(ctx context.Context, run *domain.ProbeRun, node domain.Node, kind domain.ProbeKind, session *nodeSession) error {
@@ -772,9 +794,10 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 	ctx = taskCtx
 
 	var (
-		result     profiles.Result
-		latency    int64
-		geoCountry string
+		result        profiles.Result
+		latency       int64
+		geoCountry    string
+		failureReason string
 	)
 	if kind == domain.ProbeKindSpeed {
 		result.OptIn = true
@@ -799,15 +822,18 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 	}
 
 	if dialErr != nil {
+		failureReason = classifyDialFailure(dialErr)
 		result.NetworkError = true
 		latency = r.clock().Sub(start).Milliseconds()
 	} else if client == nil {
+		failureReason = "client_build_failed"
 		result.NetworkError = true
 		latency = r.clock().Sub(start).Milliseconds()
 	} else {
 		reqURL := probeURLForKind(kind)
 		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 		if reqErr != nil {
+			failureReason = "request_build_failed"
 			result.NetworkError = true
 			latency = r.clock().Sub(start).Milliseconds()
 		} else {
@@ -819,17 +845,21 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 			if doErr != nil {
 				latency = r.clock().Sub(reqStart).Milliseconds()
 				if errors.Is(doErr, context.DeadlineExceeded) || (ctx.Err() == context.DeadlineExceeded) {
+					failureReason = "timeout"
 					result.DeadlineExceeded = true
 				} else {
 					var dnsErr *net.DNSError
 					if errors.As(doErr, &dnsErr) {
+						failureReason = "dns_error"
 						result.DNSError = true
 					} else {
+						failureReason = "transport_error"
 						result.NetworkError = true
 					}
 				}
 			} else if resp == nil || resp.Body == nil {
 				latency = r.clock().Sub(reqStart).Milliseconds()
+				failureReason = "transport_error"
 				result.NetworkError = true
 			} else {
 				readLimit := r.budget.MaxResponseBytes
@@ -849,9 +879,11 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 						result.BytesRead = prof.SpeedBudget.MaxBytesPerRequest + 1
 						result.ContractVersion = prof.Contract
 					} else if errors.Is(readErr, context.DeadlineExceeded) || (ctx.Err() == context.DeadlineExceeded) {
+						failureReason = "timeout"
 						result.DeadlineExceeded = true
 						result.BytesRead = int64(len(body))
 					} else {
+						failureReason = "transport_error"
 						result.NetworkError = true
 						result.BytesRead = int64(len(body))
 					}
@@ -897,6 +929,9 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 	}
 
 	eval := prof.Evaluate(result)
+	if failureReason != "" {
+		eval.Reason = failureReason
+	}
 	now := r.clock().UTC()
 	summary := fmt.Sprintf("profile=%s version=%s verdict=%s reason=%s status=%d latency_ms=%d",
 		prof.Kind, prof.Version, eval.Verdict, eval.Reason, result.StatusCode, latency)
@@ -911,14 +946,7 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 		summary = fmt.Sprintf("%s bytes_read=%d throughput_kbps=%d", summary, result.BytesRead, throughputKbps)
 	}
 	if dialErr != nil {
-		switch {
-		case errors.Is(dialErr, ErrCredentialsUnavailable) || strings.Contains(dialErr.Error(), "credentials_unavailable"):
-			summary = summary + " error=credentials_unavailable"
-		case errors.Is(dialErr, ErrPrivateTargetRejected):
-			summary = summary + " error=private_target_rejected"
-		case errors.Is(dialErr, ErrTargetUnresolvable):
-			summary = summary + " error=target_unresolvable"
-		}
+		summary += " error=" + failureReason
 	}
 	obs := &domain.ProbeObservation{
 		ID:              domain.MustNewUUIDv7(),
@@ -932,6 +960,10 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 		RedactedSummary: summary,
 	}
 
+	if node.ConnectionRevision > 0 {
+		revision := node.ConnectionRevision
+		obs.ConnectionRevision = &revision
+	}
 	if createErr := r.observations.Create(ctx, obs); createErr != nil {
 		return eval.Verdict, createErr
 	}

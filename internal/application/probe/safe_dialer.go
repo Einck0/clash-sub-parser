@@ -3,7 +3,6 @@ package probe
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net"
 	"net/http"
 	"strings"
@@ -18,6 +17,9 @@ import (
 var (
 	ErrTargetUnresolvable    = errors.New("target_unresolvable")
 	ErrPrivateTargetRejected = errors.New("private_target_rejected")
+	ErrUnsafeTLSRejected     = errors.New("unsafe_tls_rejected")
+	ErrUnsafeOptionRejected  = errors.New("unsafe_option_rejected")
+	ErrClientBuildFailed     = errors.New("client_build_failed")
 )
 
 // SafeNodeDialerOptions provides optional overrides for SafeNodeDialer.
@@ -50,27 +52,27 @@ func NewSafeNodeDialer(opts ...SafeNodeDialerOptions) NodeDialer {
 
 	return func(ctx context.Context, node domain.Node) (*http.Client, func() error, error) {
 		if node.LogicalID == "" {
-			return nil, nil, fmt.Errorf("%w: node logical ID is empty", ErrCredentialsUnavailable)
+			return nil, nil, ErrCredentialsUnavailable
 		}
 
 		serverHost := strings.TrimSpace(node.Server)
 		if serverHost == "" {
-			return nil, nil, fmt.Errorf("%w: empty server in node", ErrCredentialsUnavailable)
+			return nil, nil, ErrCredentialsUnavailable
 		}
 		if node.Port < 1 || node.Port > 65535 {
-			return nil, nil, fmt.Errorf("%w: invalid port %d in node", ErrCredentialsUnavailable, node.Port)
+			return nil, nil, ErrCredentialsUnavailable
 		}
 
 		// Reject insecure TLS flags and protocol options that add unverified entry points
 		// or weaken the authenticated server identity.
 		if domain.HasInsecureTransport(node.Credentials.Transport) {
-			return nil, nil, fmt.Errorf("%w: insecure certificate verification requested", ErrCredentialsUnavailable)
+			return nil, nil, ErrUnsafeTLSRejected
 		}
 		if node.Protocol == domain.ProtocolHysteria2 && domain.ExtractHy2Ports(node.Credentials.Transport) != "" {
-			return nil, nil, fmt.Errorf("%w: hysteria2 port hopping is unsupported", ErrCredentialsUnavailable)
+			return nil, nil, ErrUnsafeOptionRejected
 		}
 		if node.Protocol == domain.ProtocolTUIC && (node.Credentials.DisableSNI || domain.HasTUICDisableSNI(node.Credentials.Transport)) {
-			return nil, nil, fmt.Errorf("%w: TUIC SNI disable is unsupported", ErrCredentialsUnavailable)
+			return nil, nil, ErrUnsafeOptionRejected
 		}
 
 		// Verify IP is public and pin domain destinations before sing-box dials.
@@ -83,7 +85,7 @@ func NewSafeNodeDialer(opts ...SafeNodeDialerOptions) NodeDialer {
 		if parsedIP != nil {
 			// Direct IP literal: must be public
 			if err := policy.ValidateIP(parsedIP); err != nil {
-				return nil, nil, fmt.Errorf("%w: server IP %s is not a public IP: %v", ErrPrivateTargetRejected, parsedIP.String(), err)
+				return nil, nil, ErrPrivateTargetRejected
 			}
 			targetServer = cleanHost
 		} else {
@@ -91,12 +93,12 @@ func NewSafeNodeDialer(opts ...SafeNodeDialerOptions) NodeDialer {
 			policy.Resolver = resolver
 			ips, lookupErr := resolver.LookupIPAddr(ctx, cleanHost)
 			if lookupErr != nil || len(ips) == 0 {
-				return nil, nil, fmt.Errorf("%w: failed to resolve server domain %s", ErrTargetUnresolvable, cleanHost)
+				return nil, nil, ErrTargetUnresolvable
 			}
 			var chosenIP net.IP
 			for _, ipAddr := range ips {
 				if err := policy.ValidateIP(ipAddr.IP); err != nil {
-					return nil, nil, fmt.Errorf("%w: domain %s resolved to non-public IP %s: %v", ErrPrivateTargetRejected, cleanHost, ipAddr.IP.String(), err)
+					return nil, nil, ErrPrivateTargetRejected
 				}
 				if chosenIP == nil {
 					chosenIP = ipAddr.IP
@@ -104,7 +106,7 @@ func NewSafeNodeDialer(opts ...SafeNodeDialerOptions) NodeDialer {
 			}
 
 			if chosenIP == nil {
-				return nil, nil, fmt.Errorf("%w: no valid public IP found for domain %s", ErrTargetUnresolvable, cleanHost)
+				return nil, nil, ErrTargetUnresolvable
 			}
 			targetServer = chosenIP.String()
 		}
@@ -129,6 +131,29 @@ func NewSafeNodeDialer(opts ...SafeNodeDialerOptions) NodeDialer {
 		cfg.LogicalID = node.LogicalID
 		cfg.Server = targetServer
 		cfg.Port = node.Port
+		// Distinguish absent credentials from a malformed or unsupported sing-box config.
+		switch node.Protocol {
+		case domain.ProtocolSS:
+			if cfg.Password == "" {
+				return nil, nil, ErrCredentialsUnavailable
+			}
+		case domain.ProtocolVMess, domain.ProtocolVLESS:
+			if cfg.UUID == "" {
+				return nil, nil, ErrCredentialsUnavailable
+			}
+		case domain.ProtocolTrojan, domain.ProtocolHysteria2:
+			if cfg.Password == "" {
+				return nil, nil, ErrCredentialsUnavailable
+			}
+		case domain.ProtocolTUIC:
+			if cfg.UUID == "" || cfg.Password == "" {
+				return nil, nil, ErrCredentialsUnavailable
+			}
+		case domain.ProtocolWireGuard:
+			if cfg.PrivateKey == "" {
+				return nil, nil, ErrCredentialsUnavailable
+			}
+		}
 
 		// Preserve TLS identity: if cfg.SNI is empty, retain original domain as SNI
 		usesTLS := cfg.TLS || node.Protocol == domain.ProtocolTrojan || node.Protocol == domain.ProtocolHysteria2 || node.Protocol == domain.ProtocolTUIC
@@ -138,7 +163,7 @@ func NewSafeNodeDialer(opts ...SafeNodeDialerOptions) NodeDialer {
 
 		// Fail closed if skip cert verification is requested
 		if cfg.SkipCertVerify {
-			return nil, nil, fmt.Errorf("%w: strict certificate verification required for safe node dialer", ErrCredentialsUnavailable)
+			return nil, nil, ErrUnsafeTLSRejected
 		}
 
 		// Instantiate in-memory singbox client & enforce no-redirect policy
@@ -152,7 +177,7 @@ func NewSafeNodeDialer(opts ...SafeNodeDialerOptions) NodeDialer {
 		}
 		client, cleanup, err := clientFactory(ctx, cfg, httpOpts)
 		if err != nil {
-			return nil, nil, fmt.Errorf("%w: failed to create singbox client: %v", ErrCredentialsUnavailable, err)
+			return nil, nil, ErrClientBuildFailed
 		}
 
 		// Enforce HTTP redirect prohibition

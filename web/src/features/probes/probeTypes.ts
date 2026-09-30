@@ -36,6 +36,7 @@ export interface ProbeObservation {
   observed_at: string
   latency_ms: number
   redacted_summary: string
+  connection_revision?: number | null
 }
 
 export interface CreateProbeRunInput {
@@ -237,7 +238,17 @@ export interface ProbePoolStatus {
   probing_node_ids: string[]
   queued_node_ids: string[]
   updated_at: string
+  batch_id?: string
+  batch_state?: ProbeBatchState
+  dispatched_runs?: number
+  scheduled_nodes?: number
+  scheduled_tasks?: number
+  skipped_nodes?: number
+  no_due_tasks?: boolean
+  run_ids?: string[]
 }
+
+export type ScheduleTriggerResult = ProbePoolStatus
 
 export function generateIdempotencyKey(): string {
   const entropy = Math.random().toString(36).slice(2, 10)
@@ -270,13 +281,47 @@ export interface ParsedSummary {
 
 const REASON_LABELS: Record<string, string> = {
   contract_matched: '协议握手与响应校验通过',
-  transport_error: '网络连接或握手失败',
+  unsafe_tls_rejected: '安全策略拒绝：禁用跳过证书校验 (skip_cert_verify)',
+  unsafe_option_rejected: '安全策略拒绝：包含不安全传输或协议选项',
+  private_target_rejected: '安全策略拒绝：私有或保留目标地址',
+  target_unresolvable: '节点入口域名无法解析为公网 IP',
+  credentials_unavailable: '探针凭据或必要连接参数缺失（未执行出站检测）',
+  probe_dialing_not_configured: '探针拨号服务未配置',
+  client_build_failed: '探针客户端构建失败（协议参数暂不兼容，未执行出站检测）',
+  request_build_failed: '探测请求构建失败',
+  node_connect_failed: '节点连接或代理握手失败（已证实不可达）',
+  transport_error: '网络连接或握手异常（阶段未确权，待核验）',
+  timeout: '探测连接或响应超时',
+  dial_timeout: '连接超时',
+  dns_error: 'DNS 解析失败',
+  dns_resolution_failed: 'DNS 解析失败',
+  tls_handshake_failed: 'TLS 握手失败',
   access_restricted: '目标服务访问受限 / 触发验证',
   missing_exit_identity: '未能识别出口 IP 身份',
-  dial_timeout: '连接超时',
   speed_opt_in_required: '带宽测速需要显式勾选',
-  tls_handshake_failed: 'TLS 握手失败',
-  dns_resolution_failed: 'DNS 解析失败',
+  speed_budget_exceeded: '超出单次测速流量上限',
+  unexpected_status: '探测响应状态码不符合预期',
+  contract_drift: '探测响应内容不符合契约',
+}
+
+const POLICY_OR_CONFIG_BLOCKED_REASONS = new Set<string>([
+  'unsafe_tls_rejected',
+  'unsafe_option_rejected',
+  'private_target_rejected',
+  'credentials_unavailable',
+  'probe_dialing_not_configured',
+  'client_build_failed',
+  'request_build_failed',
+])
+
+export function isPolicyOrConfigBlockedReason(reason?: string): boolean {
+  if (!reason) return false
+  return POLICY_OR_CONFIG_BLOCKED_REASONS.has(reason.trim())
+}
+
+export function formatObservationReasonLabel(reason?: string): string {
+  if (!reason) return ''
+  return REASON_LABELS[reason] || reason
 }
 
 export function parseRedactedSummary(summary: string): ParsedSummary {

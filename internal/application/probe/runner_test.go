@@ -889,47 +889,53 @@ func TestServiceGetPoolStatusFiveMetrics(t *testing.T) {
 	obsRepo := newMemoryObservations()
 	nodesRepo := newMemoryNodes()
 
-	// Seed 10 active nodes: 4 healthy, 1 degraded (available=5), 2 unhealthy (unavailable=2), 3 untested
+	rev1 := int64(1)
+	// Seed 10 active nodes: 4 healthy, 2 unhealthy (unavailable=2), 4 untested/unknown (node_05 restricted, node_08..10 untested)
 	for i := 1; i <= 10; i++ {
 		id := fmt.Sprintf("node_%02d", i)
 		nodesRepo.items[id] = domain.Node{
-			LogicalID:   id,
-			DisplayName: fmt.Sprintf("Node %02d", i),
-			Protocol:    domain.ProtocolVMess,
-			Active:      true,
+			LogicalID:          id,
+			DisplayName:        fmt.Sprintf("Node %02d", i),
+			Protocol:           domain.ProtocolVMess,
+			Active:             true,
+			ConnectionRevision: rev1,
 		}
 	}
 
 	now := time.Now().UTC()
 	for i := 1; i <= 4; i++ {
 		_ = obsRepo.Create(ctx, &domain.ProbeObservation{
-			ID:            fmt.Sprintf("obs_h_%d", i),
-			ProbeRunID:    "run_seed",
-			NodeLogicalID: fmt.Sprintf("node_%02d", i),
-			Kind:          domain.ProbeKindBaseline,
-			Verdict:       domain.VerdictAvailable,
-			LatencyMS:     int64(30 + i),
-			ObservedAt:    now,
+			ID:                 fmt.Sprintf("obs_h_%d", i),
+			ProbeRunID:         "run_seed",
+			NodeLogicalID:      fmt.Sprintf("node_%02d", i),
+			Kind:               domain.ProbeKindBaseline,
+			Verdict:            domain.VerdictAvailable,
+			LatencyMS:          int64(30 + i),
+			ObservedAt:         now,
+			ConnectionRevision: &rev1,
 		})
 	}
 	_ = obsRepo.Create(ctx, &domain.ProbeObservation{
-		ID:            "obs_deg_5",
-		ProbeRunID:    "run_seed",
-		NodeLogicalID: "node_05",
-		Kind:          domain.ProbeKindBaseline,
-		Verdict:       domain.VerdictRestricted,
-		LatencyMS:     180,
-		ObservedAt:    now,
+		ID:                 "obs_deg_5",
+		ProbeRunID:         "run_seed",
+		NodeLogicalID:      "node_05",
+		Kind:               domain.ProbeKindBaseline,
+		Verdict:            domain.VerdictRestricted,
+		LatencyMS:          180,
+		ObservedAt:         now,
+		ConnectionRevision: &rev1,
 	})
 	for i := 6; i <= 7; i++ {
 		_ = obsRepo.Create(ctx, &domain.ProbeObservation{
-			ID:            fmt.Sprintf("obs_err_%d", i),
-			ProbeRunID:    "run_seed",
-			NodeLogicalID: fmt.Sprintf("node_%02d", i),
-			Kind:          domain.ProbeKindBaseline,
-			Verdict:       domain.VerdictError,
-			LatencyMS:     0,
-			ObservedAt:    now,
+			ID:                 fmt.Sprintf("obs_err_%d", i),
+			ProbeRunID:         "run_seed",
+			NodeLogicalID:      fmt.Sprintf("node_%02d", i),
+			Kind:               domain.ProbeKindBaseline,
+			Verdict:            domain.VerdictError,
+			RedactedSummary:    "reason=node_connect_failed",
+			LatencyMS:          0,
+			ObservedAt:         now,
+			ConnectionRevision: &rev1,
 		})
 	}
 
@@ -1003,7 +1009,7 @@ func TestServiceGetPoolStatusFiveMetrics(t *testing.T) {
 	if status.QueueNodesCount != 5 || status.ProbingCount != 2 || status.QueuedWaitingCount != 3 {
 		t.Fatalf("expected queue_nodes_count=5 (probing=2, queued=3), got %+v", status)
 	}
-	if status.TotalCount != 10 || status.AvailableCount != 5 || status.HealthyCount != 4 || status.DegradedCount != 1 || status.UnavailableCount != 2 || status.UntestedCount != 3 {
+	if status.TotalCount != 10 || status.AvailableCount != 4 || status.HealthyCount != 4 || status.DegradedCount != 0 || status.UnavailableCount != 2 || status.UntestedCount != 4 {
 		t.Fatalf("unexpected 5 core metrics: %+v", status)
 	}
 

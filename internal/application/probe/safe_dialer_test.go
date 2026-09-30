@@ -401,8 +401,8 @@ func TestSafeNodeDialerRejectsProtocolEndpointBypasses(t *testing.T) {
 				},
 			}
 			_, _, err := dialer(context.Background(), node)
-			if !errors.Is(err, probe.ErrCredentialsUnavailable) {
-				t.Fatalf("expected fail-closed credential error, got %v", err)
+			if !errors.Is(err, probe.ErrUnsafeOptionRejected) {
+				t.Fatalf("expected unsafe option rejection, got %v", err)
 			}
 		})
 	}
@@ -733,8 +733,12 @@ func TestSafeNodeDialerUnsafeTransportAndCertVerificationRejected(t *testing.T) 
 				}
 				t.Fatalf("[%s] expected rejection, got nil error", tc.name)
 			}
-			if !errors.Is(err, probe.ErrCredentialsUnavailable) {
-				t.Fatalf("[%s] expected ErrCredentialsUnavailable, got %v", tc.name, err)
+			want := probe.ErrUnsafeTLSRejected
+			if tc.port < 1 || tc.port > 65535 {
+				want = probe.ErrCredentialsUnavailable
+			}
+			if !errors.Is(err, want) {
+				t.Fatalf("[%s] expected %v, got %v", tc.name, want, err)
 			}
 			if client != nil {
 				t.Fatalf("[%s] client must be nil", tc.name)
@@ -1179,8 +1183,8 @@ func TestRunner_TargetResolutionFailureDoesNotFailRun(t *testing.T) {
 	if len(badCredObs) != 1 || badCredObs[0].Verdict != domain.VerdictUnavailable {
 		t.Fatalf("expected 1 unavailable observation for bad cred node, got %+v", badCredObs)
 	}
-	if !strings.Contains(badCredObs[0].RedactedSummary, "credentials_unavailable") {
-		t.Fatalf("expected credentials_unavailable in bad cred summary, got %s", badCredObs[0].RedactedSummary)
+	if !strings.Contains(badCredObs[0].RedactedSummary, "unsafe_tls_rejected") || strings.Contains(badCredObs[0].RedactedSummary, "credentials_unavailable") {
+		t.Fatalf("expected unsafe TLS rejection rather than missing credentials, got %s", badCredObs[0].RedactedSummary)
 	}
 
 	// Check all 5 healthy nodes

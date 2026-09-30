@@ -241,7 +241,10 @@ export const zhCN = {
     statusProbing: '检测中',
     statusQueued: '队列中',
     poolPreemptHint: '手动插队最前 · 定时去重入池',
-    triggerPeriodicPool: '立即定时入池（去重）',
+    triggerPeriodicPool: '刷新状态 / 按需检测',
+    refreshStatus: '刷新状态',
+    refreshStatusHint: '重读最新节点与池状态，并按需触发增量状态巡检（不重置后台扫描时钟）',
+    minuteSweepHint: '每 1 分钟巡检状态变更与过期节点 · 每节点/类别有效期 = 配置周期 · 在池去重',
   },
   policy: {
     tag: '策略拓扑与规则',
@@ -649,7 +652,10 @@ export const enUS: typeof zhCN = {
     statusProbing: 'Probing',
     statusQueued: 'Queued',
     poolPreemptHint: 'Manual Preempts Front · Periodic Deduplicates',
-    triggerPeriodicPool: 'Trigger Periodic Pool Enqueue',
+    triggerPeriodicPool: 'Refresh Status / On-Demand Probe',
+    refreshStatus: 'Refresh Status',
+    refreshStatusHint: 'Reload latest node and pool status, then trigger incremental due-node sweep without resetting schedule timer',
+    minuteSweepHint: 'Every 1m sweeps state changes & expired nodes · Per-node/kind TTL = configured interval · In-pool dedupe',
   },
   policy: {
     tag: 'TOPOLOGY & RULES',

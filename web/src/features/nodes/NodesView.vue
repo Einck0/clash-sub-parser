@@ -19,6 +19,7 @@ import {
   formatNodeLatency,
   nodeCapabilityLabel,
   nodeHealthBadge,
+  nodeHealthDiagnostic,
   nodeLatencyTone,
   nodeRiskBadge,
   nodeUnderlyingHealthCategory,
@@ -456,7 +457,7 @@ onUnmounted(() => {
             <option value="healthy">正常 ({{ healthCounts.healthy }})</option>
             <option value="degraded">降级 ({{ healthCounts.degraded }})</option>
             <option value="unhealthy">异常 ({{ healthCounts.unhealthy }})</option>
-            <option value="unknown">未探测 ({{ healthCounts.unknown }})</option>
+            <option value="unknown">未探测 / 待核验 ({{ healthCounts.unknown }})</option>
           </select>
 
           <input
@@ -534,7 +535,7 @@ onUnmounted(() => {
           :class="healthFilter === 'unknown' ? 'btn-neutral' : 'btn-ghost bg-base-200/70'"
           @click="healthFilter = 'unknown'"
         >
-          未探测 ({{ healthCounts.unknown }})
+          未探测 / 待核验 ({{ healthCounts.unknown }})
         </button>
       </div>
     </div>
@@ -681,6 +682,15 @@ onUnmounted(() => {
                     >
                       未探测
                     </span>
+                    <span
+                      v-if="getNodeProbeState(node) === 'idle' && nodeHealthDiagnostic(node) && nodeHealthDiagnostic(node)?.code !== 'probe_missing'"
+                      data-testid="node-card-diagnostic-badge"
+                      class="badge badge-sm gap-1 text-[11px] h-auto py-0.5 whitespace-normal"
+                      :class="nodeHealthDiagnostic(node)?.isBlockedByPolicyOrConfig ? 'badge-warning badge-outline' : 'badge-ghost opacity-80'"
+                      :title="nodeHealthDiagnostic(node)?.detail"
+                    >
+                      {{ nodeHealthDiagnostic(node)?.shortLabel }}
+                    </span>
                   </div>
 
                   <div class="flex items-center gap-1.5 shrink-0">
@@ -822,6 +832,19 @@ onUnmounted(() => {
               :label="`IP 风险: ${nodeRiskBadge(selectedNode).label}`"
               :tone="nodeRiskBadge(selectedNode).tone"
             />
+          </div>
+          <div
+            v-if="getNodeProbeState(selectedNode) === 'idle' && nodeHealthDiagnostic(selectedNode)"
+            data-testid="node-drawer-diagnostic-notice"
+            class="rounded-lg px-2.5 py-2 text-[11px] leading-relaxed border"
+            :class="
+              nodeHealthDiagnostic(selectedNode)?.isBlockedByPolicyOrConfig
+                ? 'bg-warning/10 border-warning/30 text-warning'
+                : 'bg-base-300/50 border-base-300 text-base-content/80'
+            "
+          >
+            <span class="font-semibold">{{ nodeHealthDiagnostic(selectedNode)?.shortLabel }}：</span>
+            <span>{{ nodeHealthDiagnostic(selectedNode)?.detail }}</span>
           </div>
           <p v-if="probeFeedback" data-testid="node-probe-feedback" class="text-[11px] text-primary font-medium">
             {{ probeFeedback }}

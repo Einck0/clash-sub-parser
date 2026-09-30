@@ -59,7 +59,7 @@ func TestMigrations000007And000008Schema(t *testing.T) {
 		t.Fatalf("failed to query group_node_filters table: %v", err)
 	}
 
-	// 5. Verify Migration 11 (plaintext nodes and publications, dropped node_credentials) and SchemaVersion == 11
+	// 5. Verify Migration 11 (plaintext nodes and publications) and Migration 12 (connection revisions).
 	_, err = db.ExecContext(ctx, "SELECT logical_id, server, port, config_json FROM nodes LIMIT 1;")
 	if err != nil {
 		t.Fatalf("failed to query migration 000011 columns on nodes: %v", err)
@@ -77,8 +77,8 @@ func TestMigrations000007And000008Schema(t *testing.T) {
 		t.Fatalf("expected migration 000010 index idx_ip_risk_obs_node_observed_id: %v", err)
 	}
 	report, err := sqlite.CheckReadiness(ctx, db)
-	if err != nil || !report.Ready || report.SchemaVersion != 11 {
-		t.Fatalf("expected readiness SchemaVersion=11 Ready=true, got report=%+v err=%v", report, err)
+	if err != nil || !report.Ready || report.SchemaVersion != 12 {
+		t.Fatalf("expected readiness SchemaVersion=12 Ready=true, got report=%+v err=%v", report, err)
 	}
 }
 

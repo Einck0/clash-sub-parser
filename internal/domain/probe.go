@@ -80,6 +80,8 @@ type ProbeObservation struct {
 	ObservedAt      time.Time    `json:"observed_at"`
 	LatencyMS       int64        `json:"latency_ms"`
 	RedactedSummary string       `json:"redacted_summary"`
+	// Nil identifies pre-migration history, which cannot certify a current connection.
+	ConnectionRevision *int64 `json:"connection_revision,omitempty"`
 }
 
 // ComputeProbeEvidenceDigest computes the canonical SHA-256 evidence digest for a probe observation.

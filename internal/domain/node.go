@@ -14,8 +14,10 @@ type Node struct {
 	Port        int                       `json:"port"`
 	Credentials InboundProtocolCredential `json:"credentials"`
 	Active      bool                      `json:"active"`
-	CreatedAt   time.Time                 `json:"created_at"`
-	UpdatedAt   time.Time                 `json:"updated_at"`
+	// ConnectionRevision advances only when connection settings change or a node is reactivated.
+	ConnectionRevision int64     `json:"connection_revision,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 // NodeSource tracks the provenance association between a node and a subscription.

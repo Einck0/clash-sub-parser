@@ -342,41 +342,45 @@ func TestInventoryService_ReadModelWithProbeObservationsAndSources(t *testing.T)
 		t.Fatalf("create probe run: %v", err)
 	}
 
+	rev1 := int64(1)
 	// Healthy node: baseline 42ms available + streaming 85ms available (fresh)
 	for _, obs := range []*domain.ProbeObservation{
 		{
-			ID:              domain.MustNewUUIDv7(),
-			ProbeRunID:      run.ID,
-			NodeLogicalID:   nodeHealthy,
-			Kind:            domain.ProbeKindBaseline,
-			Verdict:         domain.VerdictAvailable,
-			EvidenceDigest:  domain.ComputeProbeEvidenceDigest(run.ID, nodeHealthy, "baseline-v1", domain.VerdictAvailable, 204, "contract_matched"),
-			ObservedAt:      now.Add(-5 * time.Minute),
-			LatencyMS:       42,
-			RedactedSummary: "profile=baseline version=baseline-v1 verdict=available reason=contract_matched status=204 latency_ms=42",
+			ID:                 domain.MustNewUUIDv7(),
+			ProbeRunID:         run.ID,
+			NodeLogicalID:      nodeHealthy,
+			Kind:               domain.ProbeKindBaseline,
+			Verdict:            domain.VerdictAvailable,
+			EvidenceDigest:     domain.ComputeProbeEvidenceDigest(run.ID, nodeHealthy, "baseline-v1", domain.VerdictAvailable, 204, "contract_matched"),
+			ObservedAt:         now.Add(-5 * time.Minute),
+			LatencyMS:          42,
+			RedactedSummary:    "profile=baseline version=baseline-v1 verdict=available reason=contract_matched status=204 latency_ms=42",
+			ConnectionRevision: &rev1,
 		},
 		{
-			ID:              domain.MustNewUUIDv7(),
-			ProbeRunID:      run.ID,
-			NodeLogicalID:   nodeHealthy,
-			Kind:            domain.ProbeKindStreaming,
-			Verdict:         domain.VerdictAvailable,
-			EvidenceDigest:  domain.ComputeProbeEvidenceDigest(run.ID, nodeHealthy, "streaming-v1", domain.VerdictAvailable, 200, "contract_matched"),
-			ObservedAt:      now.Add(-4 * time.Minute),
-			LatencyMS:       85,
-			RedactedSummary: "profile=streaming version=streaming-v1 verdict=available reason=contract_matched status=200 latency_ms=85",
+			ID:                 domain.MustNewUUIDv7(),
+			ProbeRunID:         run.ID,
+			NodeLogicalID:      nodeHealthy,
+			Kind:               domain.ProbeKindStreaming,
+			Verdict:            domain.VerdictAvailable,
+			EvidenceDigest:     domain.ComputeProbeEvidenceDigest(run.ID, nodeHealthy, "streaming-v1", domain.VerdictAvailable, 200, "contract_matched"),
+			ObservedAt:         now.Add(-4 * time.Minute),
+			LatencyMS:          85,
+			RedactedSummary:    "profile=streaming version=streaming-v1 verdict=available reason=contract_matched status=200 latency_ms=85",
+			ConnectionRevision: &rev1,
 		},
 		// Stale node: restricted observation 2 hours ago without baseline
 		{
-			ID:              domain.MustNewUUIDv7(),
-			ProbeRunID:      run.ID,
-			NodeLogicalID:   nodeStale,
-			Kind:            domain.ProbeKindAI,
-			Verdict:         domain.VerdictRestricted,
-			EvidenceDigest:  domain.ComputeProbeEvidenceDigest(run.ID, nodeStale, "ai-v1", domain.VerdictRestricted, 403, "access_restricted"),
-			ObservedAt:      now.Add(-2 * time.Hour),
-			LatencyMS:       210,
-			RedactedSummary: "profile=ai version=ai-v1 verdict=restricted reason=access_restricted status=403 latency_ms=210",
+			ID:                 domain.MustNewUUIDv7(),
+			ProbeRunID:         run.ID,
+			NodeLogicalID:      nodeStale,
+			Kind:               domain.ProbeKindAI,
+			Verdict:            domain.VerdictRestricted,
+			EvidenceDigest:     domain.ComputeProbeEvidenceDigest(run.ID, nodeStale, "ai-v1", domain.VerdictRestricted, 403, "access_restricted"),
+			ObservedAt:         now.Add(-2 * time.Hour),
+			LatencyMS:          210,
+			RedactedSummary:    "profile=ai version=ai-v1 verdict=restricted reason=access_restricted status=403 latency_ms=210",
+			ConnectionRevision: &rev1,
 		},
 	} {
 		if err := probeObsRepo.Create(ctx, obs); err != nil {
@@ -414,13 +418,13 @@ func TestInventoryService_ReadModelWithProbeObservationsAndSources(t *testing.T)
 		t.Fatalf("unexpected nodeHealthy capabilities: %+v", vh.Capabilities)
 	}
 
-	// Verify nodeStale (no baseline, AI restricted 2h ago)
+	// Verify nodeStale (no baseline, AI restricted 2h ago) -> baseline is missing, overall health must be unknown and latency nil
 	vs := byID[nodeStale]
-	if vs.LatencyMS == nil || *vs.LatencyMS != 210 {
-		t.Fatalf("expected nodeStale fallback latency_ms=210, got %v", vs.LatencyMS)
+	if vs.LatencyMS != nil {
+		t.Fatalf("expected nodeStale latency_ms=nil (non-baseline does not populate latency), got %v", vs.LatencyMS)
 	}
-	if vs.HealthStatus != "degraded" || vs.ProbeMissing || !vs.ProbeStale {
-		t.Fatalf("expected nodeStale health=degraded missing=false stale=true, got health=%s missing=%v stale=%v", vs.HealthStatus, vs.ProbeMissing, vs.ProbeStale)
+	if vs.HealthStatus != "unknown" || vs.ProbeMissing || !vs.ProbeStale {
+		t.Fatalf("expected nodeStale health=unknown missing=false stale=true, got health=%s missing=%v stale=%v", vs.HealthStatus, vs.ProbeMissing, vs.ProbeStale)
 	}
 	if !vs.Capabilities["ai"].Stale {
 		t.Fatalf("expected nodeStale ai capability stale=true, got %+v", vs.Capabilities["ai"])
@@ -489,6 +493,7 @@ func TestInventoryService_NodeViewProbeStateProbingAndQueued(t *testing.T) {
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	})
+	rev1 := int64(1)
 	_ = probeObsRepo.Create(ctx, &domain.ProbeObservation{
 		ID:            domain.MustNewUUIDv7(),
 		ProbeRunID:    runID,
@@ -498,9 +503,10 @@ func TestInventoryService_NodeViewProbeStateProbingAndQueued(t *testing.T) {
 		EvidenceDigest: domain.ComputeProbeEvidenceDigest(
 			runID, n1, "v1", domain.VerdictAvailable, 204, "ok",
 		),
-		ObservedAt:      now,
-		LatencyMS:       55,
-		RedactedSummary: "ok",
+		ObservedAt:         now,
+		LatencyMS:          55,
+		RedactedSummary:    "ok",
+		ConnectionRevision: &rev1,
 	})
 
 	provider := mockPoolStateProvider{
@@ -558,11 +564,12 @@ func TestInventoryService_NodeViewProbeStateProbingAndQueued(t *testing.T) {
 		Kind:          domain.ProbeKindBaseline,
 		Verdict:       domain.VerdictError,
 		EvidenceDigest: domain.ComputeProbeEvidenceDigest(
-			runID, n3, "v1", domain.VerdictError, 0, "dial_timeout",
+			runID, n3, "v1", domain.VerdictError, 0, "node_connect_failed",
 		),
-		ObservedAt:      now,
-		LatencyMS:       0,
-		RedactedSummary: "profile=baseline version=v1 verdict=error reason=dial_timeout status=0 latency_ms=0",
+		ObservedAt:         now,
+		LatencyMS:          0,
+		RedactedSummary:    "profile=baseline version=v1 verdict=error reason=node_connect_failed status=0 latency_ms=0",
+		ConnectionRevision: &rev1,
 	})
 	detailFailed, err := svc.GetNodeDetailWithRisk(ctx, n3, "")
 	if err != nil {
@@ -570,5 +577,156 @@ func TestInventoryService_NodeViewProbeStateProbingAndQueued(t *testing.T) {
 	}
 	if detailFailed.HealthStatus != "unhealthy" || detailFailed.LatencyMS != nil {
 		t.Fatalf("expected unhealthy node %s to have nil LatencyMS, got health=%s latency=%v", n3, detailFailed.HealthStatus, detailFailed.LatencyMS)
+	}
+}
+
+func TestInventoryService_BaselineEvidenceClassificationAndNonBaselineIsolation(t *testing.T) {
+	db, subRepo, fetchRepo, nodeRepo, sourceRepo := setupTestEnv(t)
+	ctx := context.Background()
+	now := domain.NowUTC()
+	rev1 := int64(1)
+
+	// Create test nodes
+	nodes := []domain.Node{
+		{LogicalID: "node_non_baseline_err", Protocol: domain.ProtocolVMess, DisplayName: "N Non-baseline", Server: "198.51.100.10", Port: 443, Active: true, CreatedAt: now, UpdatedAt: now},
+		{LogicalID: "node_unsafe_tls", Protocol: domain.ProtocolVMess, DisplayName: "N Unsafe TLS", Server: "198.51.100.11", Port: 443, Active: true, CreatedAt: now, UpdatedAt: now},
+		{LogicalID: "node_private_target", Protocol: domain.ProtocolVMess, DisplayName: "N Private Target", Server: "198.51.100.12", Port: 443, Active: true, CreatedAt: now, UpdatedAt: now},
+		{LogicalID: "node_creds_unavail", Protocol: domain.ProtocolVMess, DisplayName: "N Creds Unavail", Server: "198.51.100.13", Port: 443, Active: true, CreatedAt: now, UpdatedAt: now},
+		{LogicalID: "node_client_build_fail", Protocol: domain.ProtocolVMess, DisplayName: "N Client Build Fail", Server: "198.51.100.14", Port: 443, Active: true, CreatedAt: now, UpdatedAt: now},
+		{LogicalID: "node_connect_fail", Protocol: domain.ProtocolVMess, DisplayName: "N Connect Fail", Server: "198.51.100.15", Port: 443, Active: true, CreatedAt: now, UpdatedAt: now},
+		{LogicalID: "node_healthy_base", Protocol: domain.ProtocolVMess, DisplayName: "N Healthy Base", Server: "198.51.100.16", Port: 443, Active: true, CreatedAt: now, UpdatedAt: now},
+	}
+	if err := nodeRepo.UpsertBatch(ctx, nodes); err != nil {
+		t.Fatalf("upsert nodes: %v", err)
+	}
+
+	probeRunRepo := sqlite.NewProbeRunRepository(db)
+	probeObsRepo := sqlite.NewProbeObservationRepository(db)
+	runID := domain.MustNewUUIDv7()
+	_ = probeRunRepo.Create(ctx, &domain.ProbeRun{
+		ID:             runID,
+		IdempotencyKey: "classification-test-run",
+		ActorScope:     "admin",
+		State:          domain.ProbeRunStateSucceeded,
+		DeadlineAt:     now.Add(10 * time.Minute),
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	})
+
+	// 1. Non-baseline errors only: streaming error + AI error (no baseline)
+	_ = probeObsRepo.Create(ctx, &domain.ProbeObservation{
+		ID:                 domain.MustNewUUIDv7(),
+		ProbeRunID:         runID,
+		NodeLogicalID:      "node_non_baseline_err",
+		Kind:               domain.ProbeKindStreaming,
+		Verdict:            domain.VerdictError,
+		ObservedAt:         now,
+		LatencyMS:          120,
+		RedactedSummary:    "profile=streaming reason=transport_error",
+		ConnectionRevision: &rev1,
+	})
+	_ = probeObsRepo.Create(ctx, &domain.ProbeObservation{
+		ID:                 domain.MustNewUUIDv7(),
+		ProbeRunID:         runID,
+		NodeLogicalID:      "node_non_baseline_err",
+		Kind:               domain.ProbeKindAI,
+		Verdict:            domain.VerdictError,
+		ObservedAt:         now,
+		LatencyMS:          200,
+		RedactedSummary:    "profile=ai reason=node_connect_failed",
+		ConnectionRevision: &rev1,
+	})
+
+	// 2. Baseline security / build rejections -> unknown
+	securityCases := []struct {
+		nodeID string
+		reason string
+	}{
+		{"node_unsafe_tls", "unsafe_tls_rejected"},
+		{"node_private_target", "private_target_rejected"},
+		{"node_creds_unavail", "credentials_unavailable"},
+		{"node_client_build_fail", "client_build_failed"},
+	}
+	for _, sc := range securityCases {
+		_ = probeObsRepo.Create(ctx, &domain.ProbeObservation{
+			ID:                 domain.MustNewUUIDv7(),
+			ProbeRunID:         runID,
+			NodeLogicalID:      sc.nodeID,
+			Kind:               domain.ProbeKindBaseline,
+			Verdict:            domain.VerdictError,
+			ObservedAt:         now,
+			LatencyMS:          0,
+			RedactedSummary:    "profile=baseline version=v1 verdict=error reason=" + sc.reason + " status=0 latency_ms=0",
+			ConnectionRevision: &rev1,
+		})
+	}
+
+	// 3. Baseline confirmed node connect failure -> unhealthy
+	_ = probeObsRepo.Create(ctx, &domain.ProbeObservation{
+		ID:                 domain.MustNewUUIDv7(),
+		ProbeRunID:         runID,
+		NodeLogicalID:      "node_connect_fail",
+		Kind:               domain.ProbeKindBaseline,
+		Verdict:            domain.VerdictError,
+		ObservedAt:         now,
+		LatencyMS:          0,
+		RedactedSummary:    "profile=baseline version=v1 verdict=error reason=node_connect_failed status=0 latency_ms=0",
+		ConnectionRevision: &rev1,
+	})
+
+	// 4. Baseline success -> healthy
+	_ = probeObsRepo.Create(ctx, &domain.ProbeObservation{
+		ID:                 domain.MustNewUUIDv7(),
+		ProbeRunID:         runID,
+		NodeLogicalID:      "node_healthy_base",
+		Kind:               domain.ProbeKindBaseline,
+		Verdict:            domain.VerdictAvailable,
+		ObservedAt:         now,
+		LatencyMS:          42,
+		RedactedSummary:    "profile=baseline version=v1 verdict=available reason=contract_matched status=204 latency_ms=42",
+		ConnectionRevision: &rev1,
+	})
+
+	svc := inventory.NewService(
+		db, subRepo, fetchRepo, nodeRepo, sourceRepo, nil,
+		inventory.WithProbeObservationRepository(probeObsRepo),
+	)
+
+	views, _, err := svc.ListNodesReadModel(ctx, domain.NodeFilter{
+		Pagination: domain.Pagination{Page: 1, PageSize: 50},
+	})
+	if err != nil {
+		t.Fatalf("ListNodesReadModel: %v", err)
+	}
+
+	byID := make(map[string]inventory.NodeView, len(views))
+	for _, v := range views {
+		byID[v.LogicalID] = v
+	}
+
+	// Verify non-baseline error does not pollute overall health (must be unknown, latency nil)
+	vNonBase := byID["node_non_baseline_err"]
+	if vNonBase.HealthStatus != "unknown" || vNonBase.LatencyMS != nil {
+		t.Fatalf("node_non_baseline_err: expected health=unknown latency=nil, got health=%s latency=%v", vNonBase.HealthStatus, vNonBase.LatencyMS)
+	}
+
+	// Verify security rejections and build failures all evaluate to unknown
+	for _, sc := range securityCases {
+		vSec := byID[sc.nodeID]
+		if vSec.HealthStatus != "unknown" || vSec.LatencyMS != nil {
+			t.Fatalf("%s (%s): expected health=unknown latency=nil, got health=%s latency=%v", sc.nodeID, sc.reason, vSec.HealthStatus, vSec.LatencyMS)
+		}
+	}
+
+	// Verify confirmed connect fail is unhealthy
+	vConnFail := byID["node_connect_fail"]
+	if vConnFail.HealthStatus != "unhealthy" || vConnFail.LatencyMS != nil {
+		t.Fatalf("node_connect_fail: expected health=unhealthy latency=nil, got health=%s latency=%v", vConnFail.HealthStatus, vConnFail.LatencyMS)
+	}
+
+	// Verify baseline healthy
+	vHealthy := byID["node_healthy_base"]
+	if vHealthy.HealthStatus != "healthy" || vHealthy.LatencyMS == nil || *vHealthy.LatencyMS != 42 {
+		t.Fatalf("node_healthy_base: expected health=healthy latency=42, got health=%s latency=%v", vHealthy.HealthStatus, vHealthy.LatencyMS)
 	}
 }

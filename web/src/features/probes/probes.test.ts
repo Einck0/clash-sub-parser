@@ -1097,7 +1097,7 @@ describe('ProbesView Component Interaction & Feedback', () => {
     expect(feedbackEl?.textContent).toContain('自动去重跳过')
   })
 
-  it('renders pool schedule card with 10-minute sweep interval and per-node validity, and supports idle baseline refresh and tracking', async () => {
+  it('renders pool schedule card with 1-minute sweep interval and per-node validity, and supports idle baseline refresh and tracking', async () => {
     let getCalls: string[] = []
     vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
       getCalls.push(path)
@@ -1111,7 +1111,23 @@ describe('ProbesView Component Interaction & Feedback', () => {
 
     vi.spyOn(api, 'post').mockImplementation(async (path: string) => {
       if (path === '/api/v1/probes/schedule/trigger') {
-        return { queue_nodes_count: 2, probing_count: 0, queued_waiting_count: 2, untested_count: 0, total_count: 2, unavailable_count: 0, available_count: 2, healthy_count: 2, degraded_count: 0, probing_node_ids: [], queued_node_ids: ['node-1'], updated_at: new Date().toISOString() }
+        return {
+          queue_nodes_count: 2,
+          probing_count: 0,
+          queued_waiting_count: 2,
+          untested_count: 0,
+          total_count: 2,
+          unavailable_count: 0,
+          available_count: 2,
+          healthy_count: 2,
+          degraded_count: 0,
+          probing_node_ids: [],
+          queued_node_ids: ['node-1'],
+          scheduled_nodes: 2,
+          scheduled_tasks: 4,
+          no_due_tasks: false,
+          updated_at: new Date().toISOString(),
+        }
       }
       return {}
     })
@@ -1121,11 +1137,12 @@ describe('ProbesView Component Interaction & Feedback', () => {
     // 1. Verify pool schedule card text
     const poolCard = container.querySelector('[data-testid="pool-schedule-card"]')
     expect(poolCard).not.toBeNull()
-    expect(poolCard?.textContent).toContain('每 10 分钟巡检过期节点')
-    expect(poolCard?.textContent).toContain('每节点/类别有效期=每 2 小时')
+    expect(poolCard?.textContent).toContain('每 1 分钟巡检状态变更与过期节点 · 每节点/类别有效期 = 配置周期')
+    expect(poolCard?.textContent).toContain('每 2 小时')
+    expect(poolCard?.textContent).toContain('在池去重')
     expect(poolCard?.textContent).toContain('下次扫描：')
 
-    // 2. Trigger periodic pool enqueue and verify tracking and batch/runs refresh
+    // 2. Trigger periodic pool enqueue and verify pre-read GETs + tracking and batch/runs refresh
     const triggerBtn = container.querySelector('[data-testid="trigger-periodic-pool-btn"]') as HTMLButtonElement | null
     expect(triggerBtn).not.toBeNull()
     getCalls = []
@@ -1133,7 +1150,237 @@ describe('ProbesView Component Interaction & Feedback', () => {
     await nextTick()
     await new Promise((r) => setTimeout(r, 50))
 
+    expect(getCalls).toContain('/api/v1/probes/pool')
+    expect(getCalls).toContain('/api/v1/nodes')
+    expect(getCalls).toContain('/api/v1/probes/schedule')
     expect(getCalls).toContain('/api/v1/probes/batches')
+    const feedbackEl = container.querySelector('[data-testid="pool-action-feedback"]')
+    expect(feedbackEl?.textContent).toContain('已按需入池检测 2 个节点（4 项待测任务')
+  })
+
+  it('distinguishes manual status refresh from full probe: handles due tasks, no-due-tasks, failure, preserves next_due_at, and never POSTs on background GET timers', async () => {
+    const callOrder: string[] = []
+    let triggerScenario: 'due' | 'no_due' | 'fail' = 'no_due'
+
+    vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
+      callOrder.push(`GET ${path}`)
+      if (path === '/api/v1/probes/schedule') return { ...mockSchedule }
+      if (path === '/api/v1/probes/pool') {
+        return {
+          queue_nodes_count: 0,
+          probing_count: 0,
+          queued_waiting_count: 0,
+          untested_count: 0,
+          total_count: 3,
+          unavailable_count: 0,
+          available_count: 3,
+          healthy_count: 3,
+          degraded_count: 0,
+          probing_node_ids: [],
+          queued_node_ids: [],
+          updated_at: new Date().toISOString(),
+        }
+      }
+      if (path === '/api/v1/nodes') return { items: [], total: 0, page: 1, page_size: 100 }
+      return { items: [], total: 0 }
+    })
+
+    const postSpy = vi.spyOn(api, 'post').mockImplementation(async (path: string) => {
+      callOrder.push(`POST ${path}`)
+      if (path === '/api/v1/probes/schedule/trigger') {
+        if (triggerScenario === 'fail') {
+          throw new ApiError(500, 'sweep_failed', 'Incremental sweep coordinator error')
+        }
+        if (triggerScenario === 'no_due') {
+          return {
+            queue_nodes_count: 0,
+            probing_count: 0,
+            queued_waiting_count: 0,
+            untested_count: 0,
+            total_count: 3,
+            unavailable_count: 0,
+            available_count: 3,
+            healthy_count: 3,
+            degraded_count: 0,
+            probing_node_ids: [],
+            queued_node_ids: [],
+            scheduled_nodes: 0,
+            scheduled_tasks: 0,
+            no_due_tasks: true,
+            updated_at: new Date().toISOString(),
+          }
+        }
+        return {
+          queue_nodes_count: 1,
+          probing_count: 1,
+          queued_waiting_count: 0,
+          untested_count: 0,
+          total_count: 3,
+          unavailable_count: 0,
+          available_count: 2,
+          healthy_count: 2,
+          degraded_count: 0,
+          probing_node_ids: ['node-changed-1'],
+          queued_node_ids: [],
+          scheduled_nodes: 1,
+          scheduled_tasks: 2,
+          no_due_tasks: false,
+          updated_at: new Date().toISOString(),
+        }
+      }
+      return {}
+    })
+    const putSpy = vi.spyOn(api, 'put')
+
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    await mountProbesView()
+
+    // Background idle timer ticks MUST only perform GETs, never POST
+    callOrder.length = 0
+    await vi.advanceTimersByTimeAsync(16000)
+    expect(callOrder.some((c) => c.startsWith('POST '))).toBe(false)
+    vi.useRealTimers()
+
+    // Click header "刷新状态" when no tasks are due
+    callOrder.length = 0
+    const headerRefreshBtn = container.querySelector('[data-testid="header-refresh-status-btn"]') as HTMLButtonElement | null
+    expect(headerRefreshBtn).not.toBeNull()
+    expect(headerRefreshBtn?.textContent).toContain('刷新状态')
+    headerRefreshBtn?.click()
+    await nextTick()
+    await new Promise((r) => setTimeout(r, 30))
+
+    // Verify GETs occurred before POST /api/v1/probes/schedule/trigger, and full probe (/api/v1/probes/runs) was NOT called
+    const postIdx = callOrder.indexOf('POST /api/v1/probes/schedule/trigger')
+    expect(postIdx).toBeGreaterThan(0)
+    expect(callOrder.slice(0, postIdx)).toContain('GET /api/v1/probes/pool')
+    expect(callOrder.slice(0, postIdx)).toContain('GET /api/v1/nodes')
+    expect(callOrder.slice(0, postIdx)).toContain('GET /api/v1/probes/schedule')
+    expect(postSpy).not.toHaveBeenCalledWith('/api/v1/probes/runs', expect.anything(), expect.anything())
+    expect(putSpy).not.toHaveBeenCalled()
+
+    const feedbackEl = container.querySelector('[data-testid="pool-action-feedback"]')
+    expect(feedbackEl?.textContent).toContain('无需检测')
+
+    // Consecutive click when sweep fails: must surface error and clear fake success feedback
+    triggerScenario = 'fail'
+    headerRefreshBtn?.click()
+    await nextTick()
+    await new Promise((r) => setTimeout(r, 30))
+
+    expect(container.textContent).toContain('Incremental sweep coordinator error')
+    expect(container.querySelector('[data-testid="pool-action-feedback"]')).toBeNull()
+  })
+
+  it('honestly presents unknown health status and sanitized Chinese diagnostic reasons for safety/config blocks without misreporting fleet outage', async () => {
+    const diagnosticNodes = [
+      {
+        logical_id: 'node-hy2-unsafe-tls',
+        protocol: 'hysteria2',
+        display_name: 'Hy2 SkipCert Node',
+        active: true,
+        server: '203.0.113.50',
+        port: 443,
+        health_status: 'unknown' as const,
+        probe_missing: false,
+        probe_stale: false,
+        capabilities: {
+          baseline: {
+            verdict: 'error' as const,
+            latency_ms: 0,
+            observed_at: '2026-09-30T06:00:00Z',
+            summary: 'profile=baseline version=baseline-v1 verdict=error reason=unsafe_tls_rejected status=0 latency_ms=0 error=unsafe_tls_rejected',
+          },
+        },
+      },
+      {
+        logical_id: 'node-vless-build-err',
+        protocol: 'vless',
+        display_name: 'VLESS Build Blocked',
+        active: true,
+        server: '203.0.113.51',
+        port: 443,
+        health_status: 'unknown' as const,
+        probe_missing: false,
+        probe_stale: false,
+        capabilities: {
+          baseline: {
+            verdict: 'error' as const,
+            latency_ms: 0,
+            observed_at: '2026-09-30T06:00:00Z',
+            summary: 'profile=baseline version=baseline-v1 verdict=error reason=client_build_failed status=0 latency_ms=0 error=client_build_failed',
+          },
+        },
+      },
+    ]
+
+    vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
+      if (path === '/api/v1/probes/pool') {
+        return {
+          queue_nodes_count: 0,
+          probing_count: 0,
+          queued_waiting_count: 0,
+          untested_count: 2,
+          total_count: 2,
+          unavailable_count: 0,
+          available_count: 0,
+          healthy_count: 0,
+          degraded_count: 0,
+          probing_node_ids: [],
+          queued_node_ids: [],
+          updated_at: new Date().toISOString(),
+        }
+      }
+      if (path === '/api/v1/nodes') {
+        return { items: diagnosticNodes, total: 2, page: 1, page_size: 100 }
+      }
+      if (path.includes('/observations')) {
+        return {
+          items: [
+            {
+              id: 'obs-unsafe-1',
+              probe_run_id: 'run-1',
+              node_logical_id: 'node-hy2-unsafe-tls',
+              kind: 'baseline',
+              verdict: 'error',
+              evidence_digest: 'sha256:111',
+              observed_at: '2026-09-30T06:00:00Z',
+              latency_ms: 0,
+              redacted_summary:
+                'profile=baseline version=baseline-v1 verdict=error reason=unsafe_tls_rejected status=0 latency_ms=0 error=unsafe_tls_rejected',
+            },
+          ],
+          total: 1,
+          page: 1,
+          page_size: 100,
+        }
+      }
+      if (path === '/api/v1/probes/schedule') return { ...mockSchedule }
+      return { items: [], total: 0 }
+    })
+
+    await mountProbesView()
+
+    const rows = container.querySelectorAll('[data-testid="probe-node-row"]')
+    expect(rows.length).toBe(2)
+    expect(rows[0].textContent).toContain('未知 · 安全拒绝')
+    expect(rows[0].textContent).toContain('安全拒绝：跳过证书校验')
+    expect(rows[1].textContent).toContain('未知 · 配置待核')
+    expect(rows[1].textContent).toContain('探针构建失败')
+
+    // Open Evidence Sheet on first node and verify diagnostic banner & observation badge
+    const inspectBtn = rows[0].querySelector('[data-testid="row-inspect-btn"]') as HTMLButtonElement | null
+    inspectBtn?.click()
+    await nextTick()
+    await new Promise((r) => setTimeout(r, 30))
+
+    const sheet = document.body.querySelector('[data-testid="probe-evidence-sheet"]')
+    expect(sheet).not.toBeNull()
+    expect(sheet?.querySelector('[data-testid="evidence-node-diagnostic-banner"]')?.textContent).toContain(
+      '不代表线路网络瘫痪'
+    )
+    expect(sheet?.textContent).toContain('安全策略拒绝：禁用跳过证书校验 (skip_cert_verify)')
+    expect(sheet?.textContent).toContain('未判定 · 安全/配置阻断')
   })
 
   it('does not poll /api/v1/nodes on each 2-second heartbeat during active probe runs', async () => {

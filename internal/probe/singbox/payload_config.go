@@ -176,6 +176,9 @@ func NodeConfigFromPayload(norm parser.NormalizedNode, payload *domain.NodeCrede
 	}
 
 	applyTransportFields(&cfg, creds.Transport)
+	if cfg.Protocol == domain.ProtocolVLESS && (strings.TrimSpace(cfg.Transport["flow"]) != "" || cfg.RealityPublicKey != "") {
+		cfg.TLS = true
+	}
 
 	// When the transport does not explicitly provide TLS identity or HTTP routing,
 	// preserve the original server hostname (not a later pinned socket IP).

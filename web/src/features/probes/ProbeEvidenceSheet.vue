@@ -9,7 +9,9 @@ import {
 import type { ProbeObservation, ProbeRun } from './probeTypes'
 import {
   formatLatency,
+  formatObservationReasonLabel,
   formatRelativeTime,
+  isPolicyOrConfigBlockedReason,
   parseRedactedSummary,
   probeKindEmoji,
   probeKindLabel,
@@ -20,6 +22,7 @@ import {
 import {
   formatNodeLatency,
   nodeHealthBadge,
+  nodeHealthDiagnostic,
   nodeLatencyTone,
   resolveNodeLatencyMs,
   type NormalizedNode,
@@ -122,17 +125,46 @@ function formatHumanSummary(obs: ProbeObservation): {
   if (parsed.reasonLabel) {
     parts.push(parsed.reasonLabel)
   }
-  if (parsed.error) {
-    parts.push(`异常详情: ${parsed.error}`)
+  if (parsed.error && parsed.error !== parsed.reason) {
+    parts.push(`诊断详情: ${formatObservationReasonLabel(parsed.error)}`)
   }
   if (parts.length === 0) {
-    parts.push(obs.verdict === 'available' ? '连接与响应正常' : '探测返回受限或不可达状态')
+    parts.push(obs.verdict === 'available' ? '连接与响应正常' : '探测返回受限或待核验状态')
   }
   return {
     statusBadge,
     explanation: parts.join(' · '),
   }
 }
+
+function observationVerdictBadge(obs: ProbeObservation): {
+  label: string
+  tone: 'success' | 'warning' | 'error' | 'info'
+} {
+  const parsed = parseRedactedSummary(obs.redacted_summary || '')
+  if (obs.verdict === 'error' && isPolicyOrConfigBlockedReason(parsed.reason)) {
+    return {
+      label: '未判定 · 安全/配置阻断',
+      tone: 'warning',
+    }
+  }
+  if (obs.verdict === 'error' && parsed.reason === 'transport_error') {
+    return {
+      label: '未知 · 待复核',
+      tone: 'info',
+    }
+  }
+  const tone = probeVerdictTone(obs.verdict)
+  return {
+    label: probeVerdictLabel(obs.verdict),
+    tone: tone === 'error' ? 'error' : tone === 'success' ? 'success' : tone === 'warning' ? 'warning' : 'info',
+  }
+}
+
+const currentNodeDiagnostic = computed(() => {
+  if (!props.node) return null
+  return nodeHealthDiagnostic(props.node)
+})
 
 function formatObsTime(iso: string): string {
   if (!iso) return '--'
@@ -277,6 +309,20 @@ function close() {
 
       <!-- Observations Content -->
       <div class="flex-1 min-h-0 p-4 sm:p-5 overflow-y-auto overscroll-contain space-y-3">
+        <div
+          v-if="node && currentNodeDiagnostic"
+          data-testid="evidence-node-diagnostic-banner"
+          class="rounded-xl border px-3.5 py-2.5 text-xs leading-relaxed"
+          :class="
+            currentNodeDiagnostic.isBlockedByPolicyOrConfig
+              ? 'bg-warning/10 border-warning/30 text-warning'
+              : 'bg-base-200/80 border-base-300 text-base-content/85'
+          "
+        >
+          <span class="font-semibold">{{ currentNodeDiagnostic.shortLabel }}：</span>
+          <span>{{ currentNodeDiagnostic.detail }}</span>
+        </div>
+
         <div v-if="loading" class="space-y-3">
           <div v-for="i in 3" :key="i" class="skeleton h-24 rounded-xl" />
         </div>
@@ -327,8 +373,8 @@ function close() {
               </div>
             </div>
             <StatusBadge
-              :label="probeVerdictLabel(obs.verdict)"
-              :tone="probeVerdictTone(obs.verdict) === 'error' ? 'error' : probeVerdictTone(obs.verdict) === 'success' ? 'success' : probeVerdictTone(obs.verdict) === 'warning' ? 'warning' : 'info'"
+              :label="observationVerdictBadge(obs).label"
+              :tone="observationVerdictBadge(obs).tone"
             />
           </div>
 

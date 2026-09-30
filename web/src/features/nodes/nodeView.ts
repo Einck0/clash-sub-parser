@@ -125,6 +125,7 @@ export interface NodeRecord {
   protocol: string
   display_name: string
   active: boolean
+  connection_revision?: number
   created_at?: string
   updated_at?: string
   latency_ms?: number | null
@@ -147,6 +148,7 @@ export interface NormalizedNode {
   protocol: string
   displayName: string
   active: boolean
+  connectionRevision?: number
   createdAt?: string
   updatedAt?: string
   latencyMs?: number | null
@@ -160,6 +162,13 @@ export interface NormalizedNode {
   ipRiskSummary?: IPRiskSummaryRecord
   connection: NodeConnectionProfile
   sources?: NodeSourceRecord[]
+}
+
+export interface NodeHealthDiagnostic {
+  code: string
+  shortLabel: string
+  detail: string
+  isBlockedByPolicyOrConfig: boolean
 }
 
 export function extractCapabilityVerdict(val: CapabilityInput | undefined): CapabilityStatus {
@@ -545,13 +554,18 @@ export function normalizeNode(node: NodeRecord): NormalizedNode {
     latencyMs === undefined &&
     capabilityDetails.baseline?.latency_ms !== undefined &&
     capabilityDetails.baseline.verdict !== 'error' &&
+    !capabilityDetails.baseline.stale &&
     capabilityDetails.baseline.latency_ms > 0
   ) {
     latencyMs = capabilityDetails.baseline.latency_ms
   }
   if (
     typeof latencyMs === 'number' &&
-    (!Number.isFinite(latencyMs) || latencyMs <= 0 || node.health_status === 'unhealthy')
+    (!Number.isFinite(latencyMs) ||
+      latencyMs <= 0 ||
+      node.health_status === 'unhealthy' ||
+      node.health_status === 'unknown' ||
+      node.health_status === 'missing')
   ) {
     latencyMs = null
   }
@@ -575,6 +589,7 @@ export function normalizeNode(node: NodeRecord): NormalizedNode {
     protocol: node.protocol,
     displayName: rawDisplayName.trim() || logicalId,
     active: node.active,
+    connectionRevision: node.connection_revision ?? (node as any).connectionRevision,
     createdAt: node.created_at,
     updatedAt: node.updated_at,
     latencyMs,
@@ -614,6 +629,12 @@ function hasNodeId(collection: Set<string> | Iterable<string> | undefined, id: s
   return false
 }
 
+function extractSummaryReason(summary?: string): string {
+  if (!summary) return ''
+  const match = summary.match(/(?:^|\s)reason=(\S+)/)
+  return match ? match[1] : ''
+}
+
 export function resolveNodeProbeState(
   node: NodeRecord | NormalizedNode,
   probingIds?: Set<string> | Iterable<string>,
@@ -639,10 +660,28 @@ export function nodeUnderlyingHealthCategory(
   if (health === 'degraded') return 'degraded'
   if (health === 'unhealthy') return 'unhealthy'
   if (health === 'missing' || health === 'unknown') {
-    const rawCaps = node.capabilities ?? {}
-    if (Object.keys(rawCaps).length === 0) {
+    return 'unprobed'
+  }
+
+  const baseDetail = extractCapabilityDetail(node, 'baseline')
+  if (baseDetail) {
+    if (baseDetail.stale || baseDetail.verdict === 'stale') {
       return 'unprobed'
     }
+    if (baseDetail.verdict === 'available') {
+      return 'healthy'
+    }
+    if (baseDetail.verdict === 'restricted') {
+      return 'degraded'
+    }
+    if (baseDetail.verdict === 'error') {
+      const reason = extractSummaryReason(baseDetail.summary)
+      if (reason && reason !== 'node_connect_failed') {
+        return 'unprobed'
+      }
+      return 'unhealthy'
+    }
+    return 'unprobed'
   }
 
   const caps = node.capabilities ?? {}
@@ -672,6 +711,131 @@ export function nodeUnderlyingHealthCategory(
   return 'unprobed'
 }
 
+export function nodeHealthDiagnostic(node: NodeRecord | NormalizedNode): NodeHealthDiagnostic | null {
+  const category = nodeUnderlyingHealthCategory(node)
+  if (category === 'healthy' || category === 'degraded') {
+    return null
+  }
+
+  const baseDetail = extractCapabilityDetail(node, 'baseline')
+  const reason = extractSummaryReason(baseDetail?.summary)
+
+  if (reason === 'unsafe_tls_rejected') {
+    return {
+      code: 'unsafe_tls_rejected',
+      shortLabel: '安全拒绝：跳过证书校验',
+      detail: '探针安全策略拒绝：节点启用了跳过 TLS 证书校验 (skip_cert_verify)，零出站拦截，不代表线路网络瘫痪',
+      isBlockedByPolicyOrConfig: true,
+    }
+  }
+  if (reason === 'unsafe_option_rejected') {
+    return {
+      code: 'unsafe_option_rejected',
+      shortLabel: '安全拒绝：不安全协议选项',
+      detail: '探针安全策略拒绝：节点包含未验证端口跳跃或禁用 SNI 等不安全参数，零出站拦截，不代表线路故障',
+      isBlockedByPolicyOrConfig: true,
+    }
+  }
+  if (reason === 'private_target_rejected') {
+    return {
+      code: 'private_target_rejected',
+      shortLabel: '安全拒绝：私有目标地址',
+      detail: '探针安全策略拒绝：目标地址属于内网或保留网段 (private_target_rejected)，零出站拦截，不代表线路故障',
+      isBlockedByPolicyOrConfig: true,
+    }
+  }
+  if (reason === 'credentials_unavailable') {
+    return {
+      code: 'credentials_unavailable',
+      shortLabel: '凭据缺失 / 待核验',
+      detail: '探针未能读取完整连接凭据或必要协议参数 (credentials_unavailable)，未完成出站检测，不代表线路网络瘫痪',
+      isBlockedByPolicyOrConfig: true,
+    }
+  }
+  if (
+    reason === 'client_build_failed' ||
+    reason === 'probe_dialing_not_configured' ||
+    reason === 'request_build_failed'
+  ) {
+    return {
+      code: reason,
+      shortLabel: '探针构建失败',
+      detail: '探针客户端构建失败 (client_build_failed)：协议或传输参数暂不兼容，未完成出站检测，不代表线路网络瘫痪',
+      isBlockedByPolicyOrConfig: true,
+    }
+  }
+  if (reason === 'target_unresolvable') {
+    return {
+      code: 'target_unresolvable',
+      shortLabel: '入口域名无法解析',
+      detail: '节点入口域名 DNS 解析失败 (target_unresolvable)，暂无法建立探测连接，状态待复核',
+      isBlockedByPolicyOrConfig: false,
+    }
+  }
+  if (reason === 'transport_error' && category === 'unprobed') {
+    return {
+      code: 'transport_error',
+      shortLabel: '传输异常 · 待复核',
+      detail: '探测传输异常 (transport_error)，缺乏连接握手阶段失败确权证据，暂列为未知/待核验，不直接断定线路瘫痪',
+      isBlockedByPolicyOrConfig: false,
+    }
+  }
+  if ((reason === 'timeout' || reason === 'dial_timeout') && category === 'unprobed') {
+    return {
+      code: reason,
+      shortLabel: '探测超时 · 待复核',
+      detail: '探测请求超时，暂列为未知/待核验状态，等待下轮巡检复核',
+      isBlockedByPolicyOrConfig: false,
+    }
+  }
+  if ((reason === 'dns_error' || reason === 'dns_resolution_failed') && category === 'unprobed') {
+    return {
+      code: reason,
+      shortLabel: 'DNS 解析异常 · 待复核',
+      detail: '探测过程中 DNS 解析异常，暂列为未知/待核验状态',
+      isBlockedByPolicyOrConfig: false,
+    }
+  }
+  if (category === 'unhealthy') {
+    return {
+      code: reason || 'node_connect_failed',
+      shortLabel: '连接或握手失败',
+      detail: '节点代理连接或握手阶段失败，已证实当前不可达',
+      isBlockedByPolicyOrConfig: false,
+    }
+  }
+
+  const probeStale =
+    Boolean(baseDetail?.stale) ||
+    Boolean((node as NormalizedNode).probeStale ?? (node as NodeRecord).probe_stale)
+  if (probeStale) {
+    return {
+      code: 'probe_stale',
+      shortLabel: '观测已过期 / 配置已更新',
+      detail: '基础连通性观测已超保鲜期或节点连接参数已更新，等待 1 分钟增量巡检或手动刷新按需重测',
+      isBlockedByPolicyOrConfig: false,
+    }
+  }
+
+  const caps = node.capabilities ?? {}
+  const capKeys = Object.keys(caps)
+  if (!baseDetail && capKeys.length > 0) {
+    return {
+      code: 'baseline_missing',
+      shortLabel: '缺少基础连通观测',
+      detail: '仅有流媒体/AI 等辅助能力记录，缺少有效基础连通性 (baseline) 观测，整体状态待核验',
+      isBlockedByPolicyOrConfig: false,
+    }
+  }
+
+  return {
+    code: 'probe_missing',
+    shortLabel: '尚未探测',
+    detail: '尚无探测观测记录，等待 1 分钟增量巡检或手动刷新入池检测',
+    isBlockedByPolicyOrConfig: false,
+  }
+}
+
 export function nodeHealthBadge(
   node: NodeRecord | NormalizedNode,
   probingIds?: Set<string> | Iterable<string>,
@@ -689,6 +853,31 @@ export function nodeHealthBadge(
   if (category === 'healthy') return { label: '正常', tone: 'success' }
   if (category === 'degraded') return { label: '降级', tone: 'warning' }
   if (category === 'unhealthy') return { label: '异常', tone: 'error' }
+
+  const diag = nodeHealthDiagnostic(node)
+  if (diag) {
+    if (
+      diag.code === 'unsafe_tls_rejected' ||
+      diag.code === 'unsafe_option_rejected' ||
+      diag.code === 'private_target_rejected'
+    ) {
+      return { label: '未知 · 安全拒绝', tone: 'warning' }
+    }
+    if (
+      diag.code === 'credentials_unavailable' ||
+      diag.code === 'client_build_failed' ||
+      diag.code === 'probe_dialing_not_configured' ||
+      diag.code === 'request_build_failed'
+    ) {
+      return { label: '未知 · 配置待核', tone: 'warning' }
+    }
+    if (diag.code === 'probe_stale') {
+      return { label: '未知 · 待重测', tone: 'info' }
+    }
+    if (diag.code !== 'probe_missing') {
+      return { label: '未知 / 待核验', tone: 'info' }
+    }
+  }
   return { label: '未探测', tone: 'info' }
 }
 
@@ -709,7 +898,14 @@ export function nodeRiskBadge(node: NodeRecord | NormalizedNode): { label: strin
 
 export function resolveNodeLatencyMs(node: NodeRecord | NormalizedNode): number | null {
   const health = (node as NormalizedNode).healthStatus ?? (node as NodeRecord).health_status
-  if (health === 'unhealthy' || nodeUnderlyingHealthCategory(node) === 'unhealthy') {
+  const category = nodeUnderlyingHealthCategory(node)
+  if (
+    health === 'unhealthy' ||
+    health === 'unknown' ||
+    health === 'missing' ||
+    category === 'unhealthy' ||
+    category === 'unprobed'
+  ) {
     return null
   }
   const top = (node as NormalizedNode).latencyMs ?? (node as NodeRecord).latency_ms
@@ -718,6 +914,7 @@ export function resolveNodeLatencyMs(node: NodeRecord | NormalizedNode): number 
   if (
     baseDetail &&
     baseDetail.verdict !== 'error' &&
+    !baseDetail.stale &&
     typeof baseDetail.latency_ms === 'number' &&
     Number.isFinite(baseDetail.latency_ms) &&
     baseDetail.latency_ms > 0

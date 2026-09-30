@@ -216,6 +216,14 @@ export function useProbes() {
       probing_node_ids: Array.from(nextProbing),
       queued_node_ids: Array.from(nextQueued),
       updated_at: res.updated_at || new Date().toISOString(),
+      ...(res.batch_id !== undefined ? { batch_id: res.batch_id } : {}),
+      ...(res.batch_state !== undefined ? { batch_state: res.batch_state } : {}),
+      ...(res.dispatched_runs !== undefined ? { dispatched_runs: res.dispatched_runs } : {}),
+      ...(res.scheduled_nodes !== undefined ? { scheduled_nodes: res.scheduled_nodes } : {}),
+      ...(res.scheduled_tasks !== undefined ? { scheduled_tasks: res.scheduled_tasks } : {}),
+      ...(res.skipped_nodes !== undefined ? { skipped_nodes: res.skipped_nodes } : {}),
+      ...(res.no_due_tasks !== undefined ? { no_due_tasks: res.no_due_tasks } : {}),
+      ...(res.run_ids !== undefined ? { run_ids: res.run_ids } : {}),
     }
 
     serverPoolStatus.value = normalized
@@ -259,6 +267,11 @@ export function useProbes() {
     triggeringSchedule.value = true
     error.value = ''
     try {
+      await Promise.allSettled([
+        loadPoolStatus(),
+        loadProbeNodes(),
+        loadSchedule(),
+      ])
       const res = await api.post<ProbePoolStatus>('/api/v1/probes/schedule/trigger')
       if (isValidPoolStatus(res)) {
         const applied = applyServerPoolStatus(res)
@@ -279,7 +292,7 @@ export function useProbes() {
       ])
       return poolStatus.value
     } catch (err) {
-      error.value = err instanceof Error ? err.message : '触发定时入池检测失败'
+      error.value = err instanceof Error ? err.message : '刷新状态并触发按需检测失败'
       return null
     } finally {
       triggeringSchedule.value = false
@@ -304,7 +317,8 @@ export function useProbes() {
     if (!node || !node.capabilityDetails) return []
     const synthesized: ProbeObservation[] = []
     for (const [kind, detail] of Object.entries(node.capabilityDetails)) {
-      if (!detail || detail.verdict === 'missing' || detail.verdict === 'unknown') continue
+      if (!detail || detail.verdict === 'missing') continue
+      if (detail.verdict === 'unknown' && !detail.summary && !detail.observed_at) continue
       synthesized.push({
         id: `cap-${logicalId}-${kind}`,
         probe_run_id: 'latest',

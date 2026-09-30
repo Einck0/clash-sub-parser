@@ -188,13 +188,18 @@ func buildVMessOutbound(config NodeConfig, tag string) (option.Outbound, error) 
 }
 
 func buildVLESSOutbound(config NodeConfig, tag string) (option.Outbound, error) {
+	flow := strings.TrimSpace(config.Transport["flow"])
+	if flow != "" && flow != "xtls-rprx-vision" {
+		return option.Outbound{}, domain.NewValidationError("unsupported_vless_flow", "unsupported vless flow")
+	}
 	out := &option.VLESSOutboundOptions{
 		ServerOptions: serverOptions(config),
 		UUID:          config.UUID,
+		Flow:          flow,
 		Network:       option.NetworkList(networkName(config)),
 	}
 
-	if config.TLS || config.RealityPublicKey != "" || (config.Transport != nil && config.Transport["tls"] == "true") {
+	if flow != "" || config.TLS || config.RealityPublicKey != "" || (config.Transport != nil && config.Transport["tls"] == "true") {
 		tlsOpt := &option.OutboundTLSOptions{
 			Enabled:    true,
 			ServerName: config.SNI,

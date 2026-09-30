@@ -18,7 +18,23 @@ const (
 	DefaultRunTimeout = 10 * time.Minute
 	// IdempotencyTTL is the duration within which identical submissions return the existing run.
 	IdempotencyTTL = 24 * time.Hour
+	// DefaultProbeFreshnessTTL defines the baseline freshness window used for health determination.
+	DefaultProbeFreshnessTTL = time.Hour
 )
+
+// ScheduleTriggerResult embeds domain.ProbePoolStatus to preserve 100% backward compatibility
+// while providing explicit incremental sweep feedback for manual status refresh.
+type ScheduleTriggerResult struct {
+	domain.ProbePoolStatus
+	BatchID        string                 `json:"batch_id,omitempty"`
+	BatchState     domain.ProbeBatchState `json:"batch_state,omitempty"`
+	DispatchedRuns int                    `json:"dispatched_runs"`
+	ScheduledNodes int                    `json:"scheduled_nodes"`
+	ScheduledTasks int                    `json:"scheduled_tasks"`
+	SkippedNodes   int                    `json:"skipped_nodes"`
+	NoDueTasks     bool                   `json:"no_due_tasks"`
+	RunIDs         []string               `json:"run_ids,omitempty"`
+}
 
 // CreateRunCommand specifies parameters for scheduling a probe run.
 type CreateRunCommand struct {
@@ -747,6 +763,7 @@ func (s *Service) GetPoolStatus(ctx context.Context) (*domain.ProbePoolStatus, e
 
 	const fetchPageSize = 100
 	seen := make(map[string]struct{})
+	activeNodes := make([]domain.Node, 0)
 	activeIDs := make([]string, 0)
 	for fetchPage := 1; ; fetchPage++ {
 		chunk, total, err := nodesRepo.List(ctx, domain.NodeFilter{
@@ -763,6 +780,7 @@ func (s *Service) GetPoolStatus(ctx context.Context) (*domain.ProbePoolStatus, e
 			}
 			if _, exists := seen[n.LogicalID]; !exists {
 				seen[n.LogicalID] = struct{}{}
+				activeNodes = append(activeNodes, n)
 				activeIDs = append(activeIDs, n.LogicalID)
 				added++
 			}
@@ -788,15 +806,24 @@ func (s *Service) GetPoolStatus(ctx context.Context) (*domain.ProbePoolStatus, e
 		return nil, err
 	}
 
-	for _, id := range activeIDs {
-		switch classifyNodeHealthFromObservations(latestByNode[id]) {
-		case "healthy":
+	now := s.clock().UTC()
+	for _, n := range activeNodes {
+		var baselinePtr *domain.ProbeObservation
+		if nodeObs, ok := latestByNode[n.LogicalID]; ok {
+			if baselineObs, hasBaseline := nodeObs[domain.ProbeKindBaseline]; hasBaseline {
+				obsCopy := baselineObs
+				baselinePtr = &obsCopy
+			}
+		}
+		health, _ := domain.EvaluateBaselineHealth(baselinePtr, n.ConnectionRevision, now, DefaultProbeFreshnessTTL)
+		switch health {
+		case domain.BaselineHealthy:
 			status.HealthyCount++
 			status.AvailableCount++
-		case "degraded":
+		case domain.BaselineDegraded:
 			status.DegradedCount++
 			status.AvailableCount++
-		case "unhealthy":
+		case domain.BaselineUnhealthy:
 			status.UnavailableCount++
 		default:
 			status.UntestedCount++
@@ -808,47 +835,78 @@ func (s *Service) GetPoolStatus(ctx context.Context) (*domain.ProbePoolStatus, e
 
 // TriggerScheduleNow triggers an immediate periodic deduplicated node pool enqueue
 // across active nodes and returns the updated ProbePoolStatus.
-func (s *Service) TriggerScheduleNow(ctx context.Context) (*domain.ProbePoolStatus, error) {
+func (s *Service) TriggerScheduleNow(ctx context.Context) (*ScheduleTriggerResult, error) {
 	s.mu.RLock()
 	coord := s.coordinator
 	schedRepo := s.schedules
+	runner := s.runner
+	runs := s.runs
+	clock := s.clock
 	s.mu.RUnlock()
+
+	if coord == nil {
+		coord = NewPeriodicCoordinator(
+			schedRepo,
+			s.resolveNodesRepo(),
+			runs,
+			runner,
+			WithCoordinatorObservations(s.resolveObservationsRepo()),
+			WithCoordinatorClock(clock),
+		)
+	}
 
 	enqueuedCh := make(chan struct{})
 	doneCh := make(chan error, 1)
+	var summaryMu sync.Mutex
+	var sweepSummary SweepSummary
+
 	bgCtx := WithTasksEnqueuedHook(context.Background(), func() {
 		close(enqueuedCh)
 	})
+	bgCtx = withSweepSummaryHook(bgCtx, func(summary SweepSummary) {
+		summaryMu.Lock()
+		sweepSummary = summary
+		summaryMu.Unlock()
+	})
 
-	if coord != nil {
-		go func() {
-			doneCh <- coord.TriggerImmediate(bgCtx)
-		}()
-	} else {
-		kinds := []domain.ProbeKind{domain.ProbeKindBaseline}
-		if schedRepo != nil {
-			if sched, err := schedRepo.Get(ctx); err == nil && sched != nil && len(sched.Kinds) > 0 {
-				kinds = sched.Kinds
-			}
-		}
-		run, err := s.Create(ctx, CreateRunCommand{
-			ActorScope:     "system:periodic-probe",
-			IdempotencyKey: "periodic-trigger-" + domain.MustNewUUIDv7(),
-			Kinds:          kinds,
-		})
-		if err != nil {
-			return nil, err
-		}
-		go func() {
-			doneCh <- s.TriggerRun(bgCtx, run.ID, nil, kinds, nil)
-		}()
-	}
+	go func() {
+		doneCh <- coord.TriggerImmediate(bgCtx)
+	}()
 
 	select {
 	case <-enqueuedCh:
-	case <-doneCh:
-	case <-time.After(50 * time.Millisecond):
+		select {
+		case err := <-doneCh:
+			if err != nil {
+				return nil, err
+			}
+		default:
+		}
+	case err := <-doneCh:
+		if err != nil {
+			return nil, err
+		}
+	case <-time.After(2 * time.Second):
 	}
 
-	return s.GetPoolStatus(ctx)
+	poolStatus, err := s.GetPoolStatus(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	summaryMu.Lock()
+	summary := sweepSummary
+	summaryMu.Unlock()
+
+	return &ScheduleTriggerResult{
+		ProbePoolStatus: *poolStatus,
+		BatchID:         summary.BatchID,
+		BatchState:      summary.BatchState,
+		DispatchedRuns:  summary.DispatchedRuns,
+		ScheduledNodes:  summary.ScheduledNodes,
+		ScheduledTasks:  summary.ScheduledTasks,
+		SkippedNodes:    summary.SkippedNodes,
+		NoDueTasks:      summary.NoDueTasks,
+		RunIDs:          summary.RunIDs,
+	}, nil
 }

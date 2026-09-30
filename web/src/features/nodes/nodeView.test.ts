@@ -5,6 +5,8 @@ import {
   normalizeNode,
   nodeCapabilityLabel,
   nodeHealthBadge,
+  nodeHealthDiagnostic,
+  nodeUnderlyingHealthCategory,
   nodeRiskBadge,
   formatNodeLatency,
   nodeLatencyTone,
@@ -288,6 +290,64 @@ describe('node view helpers & plaintext WireGuard / TUIC connection handling', (
     expect(resolveNodeLatencyMs(failedZeroLatencyNode)).toBeNull()
     expect(formatNodeLatency(failedZeroLatencyNode)).toBe('--')
     expect(nodeLatencyTone(failedZeroLatencyNode)).toBe('error')
+
+    // Safety policy and probe config/build rejections remain unknown ('unprobed'), never misreported as 'unhealthy'
+    const unsafeTlsNode = normalizeNode({
+      logical_id: 'n-unsafe-tls',
+      protocol: 'hysteria2',
+      display_name: 'Hy2 SkipCert',
+      active: true,
+      health_status: 'unknown',
+      probe_missing: false,
+      capabilities: {
+        baseline: {
+          verdict: 'error',
+          latency_ms: 0,
+          summary: 'profile=baseline version=baseline-v1 verdict=error reason=unsafe_tls_rejected status=0 latency_ms=0',
+        },
+      },
+    })
+    expect(nodeUnderlyingHealthCategory(unsafeTlsNode)).toBe('unprobed')
+    expect(resolveNodeLatencyMs(unsafeTlsNode)).toBeNull()
+    expect(nodeHealthBadge(unsafeTlsNode)).toEqual({ label: '未知 · 安全拒绝', tone: 'warning' })
+    expect(nodeHealthDiagnostic(unsafeTlsNode)?.shortLabel).toContain('安全拒绝：跳过证书校验')
+
+    const credsMissingNode = normalizeNode({
+      logical_id: 'n-creds-missing',
+      protocol: 'vless',
+      display_name: 'VLESS Missing Creds',
+      active: true,
+      health_status: 'unknown',
+      probe_missing: false,
+      capabilities: {
+        baseline: {
+          verdict: 'error',
+          latency_ms: 0,
+          summary: 'profile=baseline version=baseline-v1 verdict=error reason=credentials_unavailable status=0 latency_ms=0',
+        },
+      },
+    })
+    expect(nodeUnderlyingHealthCategory(credsMissingNode)).toBe('unprobed')
+    expect(nodeHealthBadge(credsMissingNode)).toEqual({ label: '未知 · 配置待核', tone: 'warning' })
+    expect(nodeHealthDiagnostic(credsMissingNode)?.detail).toContain('不代表线路网络瘫痪')
+
+    const staleBaselineNode = normalizeNode({
+      logical_id: 'n-stale-baseline',
+      protocol: 'vless',
+      display_name: 'Stale Baseline Node',
+      active: true,
+      health_status: 'unknown',
+      probe_stale: true,
+      probe_missing: false,
+      capabilities: {
+        baseline: { verdict: 'available', latency_ms: 48, stale: true },
+        streaming: { verdict: 'available', latency_ms: 92, stale: false },
+      },
+    })
+    expect(nodeUnderlyingHealthCategory(staleBaselineNode)).toBe('unprobed')
+    expect(resolveNodeLatencyMs(staleBaselineNode)).toBeNull()
+    expect(nodeHealthBadge(staleBaselineNode)).toEqual({ label: '未知 · 待重测', tone: 'info' })
+    expect(nodeHealthDiagnostic(staleBaselineNode)?.code).toBe('probe_stale')
   })
 
   it('includes plaintext source_url_secret_ref in subscriptionPatchPayload and omits blank URL', () => {

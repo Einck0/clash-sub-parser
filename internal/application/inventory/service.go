@@ -99,43 +99,45 @@ func (d *NodeDetail) ToNodeView() NodeView {
 
 // NodeView is the management API view of a Node including plaintext server, port, protocol credentials, probe status, and sources.
 type NodeView struct {
-	LogicalID     string                            `json:"logical_id"`
-	Protocol      domain.Protocol                   `json:"protocol"`
-	DisplayName   string                            `json:"display_name"`
-	Server        string                            `json:"server,omitempty"`
-	Port          int                               `json:"port,omitempty"`
-	Credentials   *domain.InboundProtocolCredential `json:"credentials,omitempty"`
-	Active        bool                              `json:"active"`
-	CreatedAt     time.Time                         `json:"created_at"`
-	UpdatedAt     time.Time                         `json:"updated_at"`
-	IPRiskSummary *domain.IPRiskSummary             `json:"ip_risk_summary,omitempty"`
-	LatencyMS     *int64                            `json:"latency_ms,omitempty"`
-	LastProbedAt  *time.Time                        `json:"last_probed_at,omitempty"`
-	HealthStatus  string                            `json:"health_status"`
-	ProbeState    string                            `json:"probe_state"`
-	ProbeMissing  bool                              `json:"probe_missing"`
-	ProbeStale    bool                              `json:"probe_stale"`
-	Capabilities  map[string]NodeCapabilityView     `json:"capabilities,omitempty"`
-	Sources       []domain.NodeSource               `json:"sources,omitempty"`
+	LogicalID          string                            `json:"logical_id"`
+	Protocol           domain.Protocol                   `json:"protocol"`
+	DisplayName        string                            `json:"display_name"`
+	Server             string                            `json:"server,omitempty"`
+	Port               int                               `json:"port,omitempty"`
+	Credentials        *domain.InboundProtocolCredential `json:"credentials,omitempty"`
+	Active             bool                              `json:"active"`
+	ConnectionRevision int64                             `json:"connection_revision,omitempty"`
+	CreatedAt          time.Time                         `json:"created_at"`
+	UpdatedAt          time.Time                         `json:"updated_at"`
+	IPRiskSummary      *domain.IPRiskSummary             `json:"ip_risk_summary,omitempty"`
+	LatencyMS          *int64                            `json:"latency_ms,omitempty"`
+	LastProbedAt       *time.Time                        `json:"last_probed_at,omitempty"`
+	HealthStatus       string                            `json:"health_status"`
+	ProbeState         string                            `json:"probe_state"`
+	ProbeMissing       bool                              `json:"probe_missing"`
+	ProbeStale         bool                              `json:"probe_stale"`
+	Capabilities       map[string]NodeCapabilityView     `json:"capabilities,omitempty"`
+	Sources            []domain.NodeSource               `json:"sources,omitempty"`
 }
 
 // ToNodeView converts a domain.Node to a NodeView.
 func ToNodeView(n domain.Node) NodeView {
 	creds := n.Credentials
 	return NodeView{
-		LogicalID:    n.LogicalID,
-		Protocol:     n.Protocol,
-		DisplayName:  n.DisplayName,
-		Server:       n.Server,
-		Port:         n.Port,
-		Credentials:  &creds,
-		Active:       n.Active,
-		CreatedAt:    n.CreatedAt,
-		UpdatedAt:    n.UpdatedAt,
-		HealthStatus: "unknown",
-		ProbeState:   "idle",
-		ProbeMissing: true,
-		ProbeStale:   false,
+		LogicalID:          n.LogicalID,
+		Protocol:           n.Protocol,
+		DisplayName:        n.DisplayName,
+		Server:             n.Server,
+		Port:               n.Port,
+		Credentials:        &creds,
+		Active:             n.Active,
+		ConnectionRevision: n.ConnectionRevision,
+		CreatedAt:          n.CreatedAt,
+		UpdatedAt:          n.UpdatedAt,
+		HealthStatus:       "unknown",
+		ProbeState:         "idle",
+		ProbeMissing:       true,
+		ProbeStale:         false,
 	}
 }
 
@@ -182,6 +184,7 @@ type Service struct {
 	auditRepo         domain.AuditRepository
 	poolProvider      NodePoolStateProvider
 	defaultFetchProxy string
+	clock             func() time.Time
 	mu                sync.Mutex
 }
 
@@ -218,6 +221,22 @@ func WithDefaultFetchProxy(proxyURL string) Option {
 	return func(s *Service) {
 		s.defaultFetchProxy = strings.TrimSpace(proxyURL)
 	}
+}
+
+// WithClock configures a deterministic clock for read-model freshness evaluation in tests.
+func WithClock(clock func() time.Time) Option {
+	return func(s *Service) {
+		if clock != nil {
+			s.clock = clock
+		}
+	}
+}
+
+func (s *Service) now() time.Time {
+	if s != nil && s.clock != nil {
+		return s.clock().UTC()
+	}
+	return domain.NowUTC()
 }
 
 // SetNodePoolStateProvider sets or replaces the real-time node-pool state provider.
@@ -375,7 +394,12 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 			port = excluded.port,
 			config_json = excluded.config_json,
 			active = 1,
-			updated_at = excluded.updated_at;`
+			updated_at = excluded.updated_at,
+			connection_revision = nodes.connection_revision + CASE WHEN
+				nodes.protocol IS NOT excluded.protocol OR nodes.server IS NOT excluded.server OR
+				nodes.port IS NOT excluded.port OR nodes.config_json IS NOT excluded.config_json OR
+				(nodes.active = 0 AND excluded.active = 1)
+				THEN 1 ELSE 0 END;`
 
 		nodeStmt, err := tx.PrepareContext(ctx, upsertNodeSQL)
 		if err != nil {
@@ -576,7 +600,7 @@ func (s *Service) enrichNodeViews(ctx context.Context, views []NodeView) {
 
 	if s.probeObsRepo != nil {
 		if latestByNode, err := s.probeObsRepo.ListLatestByNodes(ctx, nodeIDs, nil); err == nil {
-			now := domain.NowUTC()
+			now := s.now()
 			for i := range views {
 				applyProbeObservationsToView(&views[i], latestByNode[views[i].LogicalID], now)
 			}
@@ -622,7 +646,7 @@ func applyProbeObservationsToView(v *NodeView, obsByKind map[domain.ProbeKind]do
 	if len(obsByKind) == 0 {
 		v.LatencyMS = nil
 		v.LastProbedAt = nil
-		v.HealthStatus = "unknown"
+		v.HealthStatus = string(domain.BaselineUnknown)
 		v.ProbeMissing = true
 		v.ProbeStale = false
 		v.Capabilities = nil
@@ -632,21 +656,31 @@ func applyProbeObservationsToView(v *NodeView, obsByKind map[domain.ProbeKind]do
 	v.ProbeMissing = false
 	caps := make(map[string]NodeCapabilityView, len(obsByKind))
 
-	var (
-		latestAt       time.Time
-		bestLatencyObs *domain.ProbeObservation
-		hasAvailable   bool
-		hasDegraded    bool
-		hasUnhealthy   bool
-	)
+	var baselinePtr *domain.ProbeObservation
+	if baselineObs, hasBaseline := obsByKind[domain.ProbeKindBaseline]; hasBaseline {
+		obsCopy := baselineObs
+		baselinePtr = &obsCopy
+	}
+	baseHealth, baseLatencyValid := domain.EvaluateBaselineHealth(baselinePtr, v.ConnectionRevision, now, defaultProbeFreshnessTTL)
 
+	var latestAt time.Time
 	for kind, obs := range obsByKind {
-		stale := obs.Verdict == domain.VerdictStale || (!obs.ObservedAt.IsZero() && now.Sub(obs.ObservedAt) > defaultProbeFreshnessTTL)
-		status := verdictToHealthStatus(obs.Verdict)
-		capLatency := obs.LatencyMS
-		if (status != "healthy" && status != "degraded") || capLatency <= 0 {
-			capLatency = 0
+		revisionMismatch := obs.ConnectionRevision == nil || v.ConnectionRevision < 1 || *obs.ConnectionRevision != v.ConnectionRevision
+		ageExpired := obs.ObservedAt.IsZero() || obs.ObservedAt.After(now) || now.Sub(obs.ObservedAt) >= defaultProbeFreshnessTTL
+		stale := obs.Verdict == domain.VerdictStale || ageExpired || revisionMismatch
+
+		var capLatency int64
+		if kind == domain.ProbeKindBaseline {
+			if baseLatencyValid && obs.LatencyMS > 0 {
+				capLatency = obs.LatencyMS
+			}
+		} else {
+			status := verdictToHealthStatus(obs.Verdict)
+			if !stale && (status == "healthy" || status == "degraded") && obs.LatencyMS > 0 {
+				capLatency = obs.LatencyMS
+			}
 		}
+
 		caps[string(kind)] = NodeCapabilityView{
 			Verdict:    obs.Verdict,
 			LatencyMS:  capLatency,
@@ -657,79 +691,29 @@ func applyProbeObservationsToView(v *NodeView, obsByKind map[domain.ProbeKind]do
 		if obs.ObservedAt.After(latestAt) {
 			latestAt = obs.ObservedAt
 		}
-		switch status {
-		case "healthy":
-			hasAvailable = true
-		case "degraded":
-			hasDegraded = true
-		case "unhealthy":
-			hasUnhealthy = true
-		}
-		if (status == "healthy" || status == "degraded") && obs.LatencyMS > 0 {
-			obsCopy := obs
-			if bestLatencyObs == nil || obs.ObservedAt.After(bestLatencyObs.ObservedAt) ||
-				(obs.ObservedAt.Equal(bestLatencyObs.ObservedAt) && string(kind) < string(bestLatencyObs.Kind)) {
-				bestLatencyObs = &obsCopy
-			}
-		}
 	}
 
 	v.Capabilities = caps
 	if !latestAt.IsZero() {
 		ts := latestAt.UTC()
 		v.LastProbedAt = &ts
-		v.ProbeStale = now.Sub(ts) > defaultProbeFreshnessTTL
 	} else {
 		v.LastProbedAt = nil
+	}
+
+	if baselineCap, hasBaseline := caps[string(domain.ProbeKindBaseline)]; hasBaseline {
+		v.ProbeStale = baselineCap.Stale
+	} else if !latestAt.IsZero() {
+		v.ProbeStale = latestAt.After(now) || now.Sub(latestAt) >= defaultProbeFreshnessTTL
+	} else {
 		v.ProbeStale = false
 	}
 
-	if baselineObs, hasBaseline := obsByKind[domain.ProbeKindBaseline]; hasBaseline {
-		baseStatus := verdictToHealthStatus(baselineObs.Verdict)
-		if (baseStatus == "healthy" || baseStatus == "degraded") && baselineObs.LatencyMS > 0 {
-			lat := baselineObs.LatencyMS
-			v.LatencyMS = &lat
-		} else if baseStatus != "unhealthy" && bestLatencyObs != nil && bestLatencyObs.LatencyMS > 0 {
-			lat := bestLatencyObs.LatencyMS
-			v.LatencyMS = &lat
-		} else {
-			v.LatencyMS = nil
-		}
-
-		if baseStatus != "unknown" {
-			v.HealthStatus = baseStatus
-		} else if hasUnhealthy && !hasAvailable {
-			v.HealthStatus = "unhealthy"
-		} else if hasDegraded {
-			v.HealthStatus = "degraded"
-		} else if hasAvailable {
-			v.HealthStatus = "healthy"
-		} else {
-			v.HealthStatus = "unknown"
-		}
-		if v.HealthStatus == "unhealthy" {
-			v.LatencyMS = nil
-		}
-		return
-	}
-
-	if bestLatencyObs != nil && bestLatencyObs.LatencyMS > 0 {
-		lat := bestLatencyObs.LatencyMS
+	v.HealthStatus = string(baseHealth)
+	if baseLatencyValid && baselinePtr != nil && baselinePtr.LatencyMS > 0 {
+		lat := baselinePtr.LatencyMS
 		v.LatencyMS = &lat
 	} else {
-		v.LatencyMS = nil
-	}
-
-	if hasUnhealthy && !hasAvailable {
-		v.HealthStatus = "unhealthy"
-	} else if hasDegraded {
-		v.HealthStatus = "degraded"
-	} else if hasAvailable {
-		v.HealthStatus = "healthy"
-	} else {
-		v.HealthStatus = "unknown"
-	}
-	if v.HealthStatus == "unhealthy" {
 		v.LatencyMS = nil
 	}
 }

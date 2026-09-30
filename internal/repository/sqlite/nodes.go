@@ -46,7 +46,7 @@ func unmarshalNodeCredentials(configJSON string) (domain.InboundProtocolCredenti
 
 func (r *nodeRepository) GetByLogicalID(ctx context.Context, logicalID string) (*domain.Node, error) {
 	const query = `
-	SELECT logical_id, protocol, display_name, server, port, config_json, active, created_at, updated_at
+	SELECT logical_id, protocol, display_name, server, port, config_json, active, created_at, updated_at, connection_revision
 	FROM nodes
 	WHERE logical_id = ?;`
 
@@ -65,6 +65,7 @@ func (r *nodeRepository) GetByLogicalID(ctx context.Context, logicalID string) (
 		&activeInt,
 		&createdStr,
 		&updatedStr,
+		&node.ConnectionRevision,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -140,7 +141,7 @@ func (r *nodeRepository) List(ctx context.Context, filter domain.NodeFilter) ([]
 	}
 
 	selectQuery := fmt.Sprintf(`
-	SELECT logical_id, protocol, display_name, server, port, config_json, active, created_at, updated_at
+	SELECT logical_id, protocol, display_name, server, port, config_json, active, created_at, updated_at, connection_revision
 	FROM nodes
 	%s
 	ORDER BY %s
@@ -170,6 +171,7 @@ func (r *nodeRepository) List(ctx context.Context, filter domain.NodeFilter) ([]
 			&activeInt,
 			&createdStr,
 			&updatedStr,
+			&node.ConnectionRevision,
 		)
 		if err != nil {
 			return nil, 0, fmt.Errorf("failed to scan node: %w", err)
@@ -209,7 +211,12 @@ func (r *nodeRepository) UpsertBatch(ctx context.Context, nodes []domain.Node) e
 		port = excluded.port,
 		config_json = excluded.config_json,
 		active = excluded.active,
-		updated_at = excluded.updated_at;`
+		updated_at = excluded.updated_at,
+		connection_revision = nodes.connection_revision + CASE WHEN
+			nodes.protocol IS NOT excluded.protocol OR nodes.server IS NOT excluded.server OR
+			nodes.port IS NOT excluded.port OR nodes.config_json IS NOT excluded.config_json OR
+			(nodes.active = 0 AND excluded.active = 1)
+			THEN 1 ELSE 0 END;`
 
 	return WithTx(ctx, r.db, func(ctx context.Context, tx *sql.Tx) error {
 		stmt, err := tx.PrepareContext(ctx, query)
@@ -280,26 +287,25 @@ func UpdateNode(ctx context.Context, db *sql.DB, node *domain.Node) error {
 
 	const query = `
 	UPDATE nodes
-	SET display_name = ?, server = ?, port = ?, config_json = ?, updated_at = ?
-	WHERE logical_id = ?;`
+	SET display_name = ?, server = ?, port = ?, config_json = ?, updated_at = ?,
+		connection_revision = connection_revision + CASE WHEN
+			server IS NOT ? OR port IS NOT ? OR config_json IS NOT ? THEN 1 ELSE 0 END
+	WHERE logical_id = ? RETURNING connection_revision;`
 
-	res, err := db.ExecContext(ctx, query,
+	err = db.QueryRowContext(ctx, query,
 		node.DisplayName,
 		node.Server,
 		node.Port,
 		configJSON,
 		updatedStr,
+		node.Server, node.Port, configJSON,
 		node.LogicalID,
-	)
+	).Scan(&node.ConnectionRevision)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.NewNotFoundError("node_not_found", fmt.Sprintf("node %s not found", node.LogicalID))
+	}
 	if err != nil {
 		return fmt.Errorf("failed to update node %s: %w", node.LogicalID, err)
-	}
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if affected == 0 {
-		return domain.NewNotFoundError("node_not_found", fmt.Sprintf("node %s not found", node.LogicalID))
 	}
 	node.UpdatedAt = updatedAt.UTC()
 	return nil

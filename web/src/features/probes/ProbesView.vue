@@ -35,6 +35,7 @@ import {
   formatNodeLatency,
   nodeCapabilityLabel,
   nodeHealthBadge,
+  nodeHealthDiagnostic,
   nodeLatencyTone,
   nodeRiskBadge,
   nodeUnderlyingHealthCategory,
@@ -437,9 +438,30 @@ async function handleProbeUnavailableNodes() {
 }
 
 async function handleTriggerPeriodicPool() {
+  poolActionFeedback.value = ''
+  const res = await triggerPeriodicPoolEnqueue()
+  if (!res) {
+    return
+  }
+  const scheduledNodes = res.scheduled_nodes ?? 0
+  const scheduledTasks = res.scheduled_tasks ?? 0
+  if (res.no_due_tasks === true || (res.scheduled_nodes === 0 && scheduledTasks === 0 && res.queue_nodes_count === 0)) {
+    poolActionFeedback.value =
+      '状态已刷新：当前所有节点状态最新（未到期且连接配置无变更），无需检测（自动去重跳过）'
+    return
+  }
   trackingActiveTicks.value = 8
-  poolActionFeedback.value = '已触发定时入池巡检（已在节点池中的节点自动去重跳过，不重复添加）'
-  await triggerPeriodicPoolEnqueue()
+  if (scheduledNodes > 0 || scheduledTasks > 0) {
+    const nodesCount = scheduledNodes || res.queue_nodes_count
+    const tasksCount = scheduledTasks || nodesCount
+    poolActionFeedback.value = `状态已刷新：已按需入池检测 ${nodesCount} 个节点（${tasksCount} 项待测任务，在池与未到期节点自动去重跳过）`
+    return
+  }
+  if (res.queue_nodes_count > 0) {
+    poolActionFeedback.value = `状态已刷新：已按需入池检测（当前队列 ${res.queue_nodes_count} 个节点，已在节点池中的节点自动去重跳过）`
+    return
+  }
+  poolActionFeedback.value = '状态已刷新：当前所有节点状态最新，无需检测（自动去重跳过）'
 }
 
 // ============================================================================
@@ -654,14 +676,17 @@ onUnmounted(() => {
         </button>
         <button
           type="button"
-          class="btn btn-ghost btn-sm btn-square touch-manipulation"
-          :title="t('common.refresh')"
-          @click="refreshAll"
+          data-testid="header-refresh-status-btn"
+          class="btn btn-outline btn-sm gap-1.5 touch-manipulation"
+          :title="t('probes.refreshStatusHint')"
+          :disabled="triggeringSchedule"
+          @click="handleTriggerPeriodicPool"
         >
           <ArrowPathIcon
             class="w-4 h-4"
-            :class="{ 'animate-spin': loadingNodes || loadingRuns || loadingSchedule || loadingBatches || loadingPoolStatus }"
+            :class="{ 'animate-spin': triggeringSchedule || loadingNodes || loadingRuns || loadingSchedule || loadingBatches || loadingPoolStatus }"
           />
+          <span>{{ t('probes.refreshStatus') }}</span>
         </button>
         <button
           type="button"
@@ -900,7 +925,7 @@ onUnmounted(() => {
         >
           <div class="flex items-center justify-between gap-2">
             <span class="text-xs font-semibold opacity-75 whitespace-nowrap">未测数</span>
-            <span class="badge badge-xs badge-ghost font-mono h-auto py-0.5 whitespace-nowrap">待入池检测</span>
+            <span class="badge badge-xs badge-ghost font-mono h-auto py-0.5 whitespace-nowrap">未知 / 待核验</span>
           </div>
 
           <div class="flex items-baseline justify-between gap-2">
@@ -913,7 +938,7 @@ onUnmounted(() => {
           </div>
 
           <div class="flex items-center justify-between gap-2 pt-0.5" @click.stop>
-            <span class="text-[11px] opacity-65 truncate">尚无探测观测记录</span>
+            <span class="text-[11px] opacity-65 truncate">未测、过期或安全/配置阻断待核验</span>
             <button
               type="button"
               data-testid="pool-probe-untested-btn"
@@ -951,7 +976,7 @@ onUnmounted(() => {
               </span>
             </div>
             <p class="text-[11px] opacity-65 mt-0.5 leading-tight">
-              每 10 分钟巡检过期节点 · 每节点/类别有效期={{ schedule ? intervalLabel(schedule.interval_seconds) : '配置周期' }} · 在池去重
+              每 1 分钟巡检状态变更与过期节点 · 每节点/类别有效期 = 配置周期（{{ schedule ? intervalLabel(schedule.interval_seconds) : '每 1 小时' }}） · 在池去重
             </p>
           </div>
 
@@ -964,7 +989,7 @@ onUnmounted(() => {
               @click="handleTriggerPeriodicPool"
             >
               <ArrowPathIcon class="w-3 h-3 shrink-0" :class="{ 'animate-spin': triggeringSchedule }" />
-              <span>立即定时入池（去重）</span>
+              <span>{{ t('probes.triggerPeriodicPool') }}</span>
             </button>
             <button
               type="button"
@@ -1448,7 +1473,7 @@ onUnmounted(() => {
                 </td>
 
                 <!-- Connectivity Health & Semantic Colored Latency Badge -->
-                <td class="whitespace-nowrap" data-label="连通状态与延迟">
+                <td class="min-w-0" data-label="连通状态与延迟">
                   <div class="flex flex-wrap items-center gap-1.5">
                     <StatusBadge
                       data-testid="probe-node-status-badge"
@@ -1476,6 +1501,15 @@ onUnmounted(() => {
                       --
                     </span>
                   </div>
+                  <p
+                    v-if="getNodeProbeState(node) === 'idle' && nodeHealthDiagnostic(node) && nodeHealthDiagnostic(node)?.code !== 'probe_missing'"
+                    data-testid="probe-node-diagnostic-hint"
+                    class="mt-1 text-[11px] leading-tight whitespace-normal break-words"
+                    :class="nodeHealthDiagnostic(node)?.isBlockedByPolicyOrConfig ? 'text-warning' : 'opacity-70'"
+                    :title="nodeHealthDiagnostic(node)?.detail"
+                  >
+                    {{ nodeHealthDiagnostic(node)?.shortLabel }}
+                  </p>
                 </td>
 
                 <!-- Capability Matrix Badges -->
@@ -1811,13 +1845,13 @@ onUnmounted(() => {
     <ModalDialog
       v-model="scheduleModalOpen"
       title="配置周期探测计划"
-      description="系统每 10 分钟自动巡检过期节点，每节点/类别有效期按配置周期判定"
+      description="每 1 分钟巡检状态变更与过期节点 · 每节点/类别有效期 = 配置周期 · 在池去重"
     >
       <form class="space-y-4" @submit.prevent="submitSaveSchedule">
         <div class="rounded-lg bg-base-200 p-2.5 text-xs opacity-80 flex items-start gap-2">
           <ClockIcon class="w-4 h-4 shrink-0 text-primary mt-0.5" />
           <span>
-            <strong>增量过期机制：</strong>系统每 10 分钟常态化巡检数据库中的最新观测。若节点观测记录距今已超过设定的有效期（或尚未观测），仅将到期项目入池增量测速，避免全量并发冲击。
+            <strong>1 分钟增量状态巡检：</strong>系统每 1 分钟巡检状态变更与过期节点（每节点/类别有效期 = 配置周期 · 在池去重）。仅当节点观测缺失、已超过设定有效期或连接参数发生更新时才按需入池检测，未到期且无变更的节点自动去重跳过。
           </span>
         </div>
 

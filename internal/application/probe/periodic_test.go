@@ -524,8 +524,8 @@ func TestPeriodicCoordinator_StartupRecovery(t *testing.T) {
 		t.Fatalf("expected far-future next_due_at corrected to now, got %v", sched.NextDueAt)
 	}
 
-	// 6. Verify valid near-future NextDueAt (e.g. now + 3m within 10m sweep interval) is preserved
-	nearFuture := now.Add(3 * time.Minute)
+	// 6. Verify valid near-future NextDueAt (e.g. now + 30s within 1m sweep interval) is preserved
+	nearFuture := now.Add(30 * time.Second)
 	sched.NextDueAt = &nearFuture
 	_ = schedRepo.Update(ctx, sched)
 	if err := coord.Recover(ctx); err != nil {
@@ -1166,9 +1166,15 @@ func (m *memoryObsRepo) ListLatestByNodes(_ context.Context, nodeLogicalIDs []st
 	for _, id := range nodeLogicalIDs {
 		res[id] = make(map[domain.ProbeKind]domain.ProbeObservation)
 		if nodeMap, ok := m.observations[id]; ok {
-			for _, k := range kinds {
-				if obs, exists := nodeMap[k]; exists {
+			if len(kinds) == 0 {
+				for k, obs := range nodeMap {
 					res[id][k] = obs
+				}
+			} else {
+				for _, k := range kinds {
+					if obs, exists := nodeMap[k]; exists {
+						res[id][k] = obs
+					}
 				}
 			}
 		}
@@ -1554,5 +1560,270 @@ func TestPeriodicCoordinator_IncrementalSweep_RecoveryLegacyFarDueCorrection(t *
 	}
 	if recoveredSched.NextDueAt == nil || recoveredSched.NextDueAt.After(now) {
 		t.Fatalf("expected NextDueAt to be corrected to <= now (%v), got %v", now, recoveredSched.NextDueAt)
+	}
+}
+
+func TestPeriodicCoordinator_MinuteSweep_NoSpinAndConnectionRevisionChange(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	rev1 := int64(1)
+	rev2 := int64(2)
+
+	sched := domain.ProbeSchedule{
+		Enabled:         true,
+		IntervalSeconds: 3600, // 1 hour validity
+		Kinds:           []domain.ProbeKind{domain.ProbeKindBaseline},
+		NextDueAt:       &now,
+		Generation:      1,
+		UpdatedAt:       now,
+	}
+
+	schedRepo := newMemoryScheduleRepo(sched)
+	runRepo := &memoryRuns{items: make(map[string]domain.ProbeRun)}
+	obsRepo := newMemoryObsRepo()
+
+	nodeRepo := &memoryNodeRepo{
+		nodes: []domain.Node{
+			{LogicalID: "node-1", DisplayName: "Node 1", Active: true, ConnectionRevision: 1},
+			{LogicalID: "node-2", DisplayName: "Node 2", Active: true, ConnectionRevision: 1},
+			{LogicalID: "node-cooldown", DisplayName: "Node Cooldown", Active: true, ConnectionRevision: 1},
+		},
+	}
+
+	// Both node-1 and node-2 have fresh observations matching ConnectionRevision=1
+	obsRepo.SetObservation("node-1", domain.ProbeKindBaseline, domain.ProbeObservation{
+		NodeLogicalID:      "node-1",
+		Kind:               domain.ProbeKindBaseline,
+		Verdict:            domain.VerdictAvailable,
+		ObservedAt:         now.Add(-30 * time.Second),
+		ConnectionRevision: &rev1,
+	})
+	obsRepo.SetObservation("node-2", domain.ProbeKindBaseline, domain.ProbeObservation{
+		NodeLogicalID:      "node-2",
+		Kind:               domain.ProbeKindBaseline,
+		Verdict:            domain.VerdictAvailable,
+		ObservedAt:         now.Add(-30 * time.Second),
+		ConnectionRevision: &rev1,
+	})
+	// node-cooldown failed 2 minutes ago (< 5m default failure cooldown)
+	obsRepo.SetObservation("node-cooldown", domain.ProbeKindBaseline, domain.ProbeObservation{
+		NodeLogicalID:      "node-cooldown",
+		Kind:               domain.ProbeKindBaseline,
+		Verdict:            domain.VerdictError,
+		ObservedAt:         now.Add(-2 * time.Minute),
+		ConnectionRevision: &rev1,
+	})
+
+	runner := &mockRunner{}
+	currentClock := now
+	coord := NewPeriodicCoordinator(
+		schedRepo,
+		nodeRepo,
+		runRepo,
+		runner,
+		WithCoordinatorClock(func() time.Time { return currentClock }),
+		WithCoordinatorObservations(obsRepo),
+	)
+
+	// 1. Minute 0: No changes, all valid or in cooldown -> must NOT spin / dispatch any runs
+	if err := coord.TriggerWindow(); err != nil {
+		t.Fatalf("Minute 0 TriggerWindow failed: %v", err)
+	}
+	if len(runner.executedRuns) != 0 {
+		t.Fatalf("expected 0 dispatched runs when nothing changed, got %d", len(runner.executedRuns))
+	}
+
+	// Verify default sweep interval is 1 minute
+	afterM0, err := schedRepo.Get(ctx)
+	if err != nil {
+		t.Fatalf("Get schedule failed: %v", err)
+	}
+	expectedM1 := now.Add(1 * time.Minute)
+	if afterM0.NextDueAt == nil || !afterM0.NextDueAt.Equal(expectedM1) {
+		t.Fatalf("expected NextDueAt=%v (1-minute default sweep), got %v", expectedM1, afterM0.NextDueAt)
+	}
+
+	// 2. Minute 1: node-2 connection configuration changes (ConnectionRevision increments 1 -> 2)
+	currentClock = expectedM1
+	nodeRepo.nodes[1].ConnectionRevision = rev2
+
+	if err := coord.TriggerWindow(); err != nil {
+		t.Fatalf("Minute 1 TriggerWindow failed: %v", err)
+	}
+	if len(runner.executedRuns) != 1 {
+		t.Fatalf("expected 1 dispatched run after ConnectionRevision increment, got %d", len(runner.executedRuns))
+	}
+	var probedM1 []string
+	for _, ids := range runner.executedNodeIDs {
+		probedM1 = append(probedM1, ids...)
+	}
+	if len(probedM1) != 1 || probedM1[0] != "node-2" {
+		t.Fatalf("expected only node-2 (revision changed) to be probed at Minute 1, got %v", probedM1)
+	}
+
+	// Record fresh observation for node-2 with rev2
+	obsRepo.SetObservation("node-2", domain.ProbeKindBaseline, domain.ProbeObservation{
+		NodeLogicalID:      "node-2",
+		Kind:               domain.ProbeKindBaseline,
+		Verdict:            domain.VerdictAvailable,
+		ObservedAt:         currentClock,
+		ConnectionRevision: &rev2,
+	})
+
+	// 3. Manual TriggerImmediate must NOT postpone NextDueAt
+	schedBeforeManual, _ := schedRepo.Get(ctx)
+	if schedBeforeManual.NextDueAt == nil {
+		t.Fatalf("expected NextDueAt to be set")
+	}
+	expectedAutoDue := *schedBeforeManual.NextDueAt
+
+	runner.executedRuns = nil
+	runner.executedNodeIDs = make(map[string][]string)
+	if err := coord.TriggerImmediate(ctx); err != nil {
+		t.Fatalf("TriggerImmediate failed: %v", err)
+	}
+	if len(runner.executedRuns) != 0 {
+		t.Fatalf("expected 0 runs on manual trigger when all nodes fresh/cooldown, got %d", len(runner.executedRuns))
+	}
+	schedAfterManual, _ := schedRepo.Get(ctx)
+	if schedAfterManual.NextDueAt == nil || !schedAfterManual.NextDueAt.Equal(expectedAutoDue) {
+		t.Fatalf("manual TriggerImmediate must not alter NextDueAt: want %v, got %v", expectedAutoDue, schedAfterManual.NextDueAt)
+	}
+}
+
+func TestPeriodicCoordinator_Default512TaskBudget(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+
+	sched := domain.ProbeSchedule{
+		Enabled:         true,
+		IntervalSeconds: 3600,
+		Kinds:           []domain.ProbeKind{domain.ProbeKindBaseline},
+		NextDueAt:       &now,
+		Generation:      1,
+		UpdatedAt:       now,
+	}
+
+	schedRepo := newMemoryScheduleRepo(sched)
+	runRepo := &memoryRuns{items: make(map[string]domain.ProbeRun)}
+	obsRepo := newMemoryObsRepo()
+
+	// Create 600 unobserved active nodes
+	nodes := make([]domain.Node, 600)
+	for i := 0; i < 600; i++ {
+		id := fmt.Sprintf("node-%03d", i)
+		nodes[i] = domain.Node{LogicalID: id, DisplayName: id, Active: true, ConnectionRevision: 1}
+	}
+	nodeRepo := &memoryNodeRepo{nodes: nodes}
+
+	runner := &mockRunner{}
+	coord := NewPeriodicCoordinator(
+		schedRepo,
+		nodeRepo,
+		runRepo,
+		runner,
+		WithCoordinatorClock(func() time.Time { return now }),
+		WithCoordinatorObservations(obsRepo),
+	)
+
+	if err := coord.TriggerWindow(); err != nil {
+		t.Fatalf("TriggerWindow failed: %v", err)
+	}
+
+	var totalProbed int
+	for _, nids := range runner.executedNodeIDs {
+		totalProbed += len(nids)
+	}
+	if totalProbed != 512 {
+		t.Fatalf("expected default 512 task budget to cap scheduled nodes at 512, got %d", totalProbed)
+	}
+}
+
+func TestPoolStatus_BaselineIsolationAndSecurityRejectionsUnknown(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	rev1 := int64(1)
+
+	nodeRepo := &memoryNodeRepo{
+		nodes: []domain.Node{
+			{LogicalID: "n-healthy", Active: true, ConnectionRevision: 1},
+			{LogicalID: "n-unhealthy", Active: true, ConnectionRevision: 1},
+			{LogicalID: "n-nonbase-err", Active: true, ConnectionRevision: 1},
+			{LogicalID: "n-unsafe-tls", Active: true, ConnectionRevision: 1},
+			{LogicalID: "n-private-ip", Active: true, ConnectionRevision: 1},
+			{LogicalID: "n-creds-missing", Active: true, ConnectionRevision: 1},
+			{LogicalID: "n-build-failed", Active: true, ConnectionRevision: 1},
+		},
+	}
+
+	obsRepo := newMemoryObsRepo()
+	// 1. Healthy baseline
+	obsRepo.SetObservation("n-healthy", domain.ProbeKindBaseline, domain.ProbeObservation{
+		NodeLogicalID:      "n-healthy",
+		Kind:               domain.ProbeKindBaseline,
+		Verdict:            domain.VerdictAvailable,
+		LatencyMS:          35,
+		ObservedAt:         now,
+		ConnectionRevision: &rev1,
+	})
+	// 2. Unhealthy baseline (confirmed node_connect_failed)
+	obsRepo.SetObservation("n-unhealthy", domain.ProbeKindBaseline, domain.ProbeObservation{
+		NodeLogicalID:      "n-unhealthy",
+		Kind:               domain.ProbeKindBaseline,
+		Verdict:            domain.VerdictError,
+		RedactedSummary:    "reason=node_connect_failed",
+		ObservedAt:         now,
+		ConnectionRevision: &rev1,
+	})
+	// 3. Non-baseline error without baseline -> must be counted as Untested/Unknown, NOT Unavailable
+	obsRepo.SetObservation("n-nonbase-err", domain.ProbeKindStreaming, domain.ProbeObservation{
+		NodeLogicalID:      "n-nonbase-err",
+		Kind:               domain.ProbeKindStreaming,
+		Verdict:            domain.VerdictError,
+		RedactedSummary:    "reason=node_connect_failed",
+		ObservedAt:         now,
+		ConnectionRevision: &rev1,
+	})
+	// 4. Security / build rejections -> must be counted as Untested/Unknown, NOT Unavailable
+	for _, tc := range []struct {
+		id     string
+		reason string
+	}{
+		{"n-unsafe-tls", "unsafe_tls_rejected"},
+		{"n-private-ip", "private_target_rejected"},
+		{"n-creds-missing", "credentials_unavailable"},
+		{"n-build-failed", "client_build_failed"},
+	} {
+		obsRepo.SetObservation(tc.id, domain.ProbeKindBaseline, domain.ProbeObservation{
+			NodeLogicalID:      tc.id,
+			Kind:               domain.ProbeKindBaseline,
+			Verdict:            domain.VerdictError,
+			RedactedSummary:    "reason=" + tc.reason,
+			ObservedAt:         now,
+			ConnectionRevision: &rev1,
+		})
+	}
+
+	svc := NewService(
+		&memoryRuns{items: make(map[string]domain.ProbeRun)},
+		WithNodeRepository(nodeRepo),
+		WithObservationRepository(obsRepo),
+		WithClock(func() time.Time { return now }),
+	)
+
+	pool, err := svc.GetPoolStatus(ctx)
+	if err != nil {
+		t.Fatalf("GetPoolStatus failed: %v", err)
+	}
+	if pool.TotalCount != 7 {
+		t.Fatalf("expected total_count=7, got %d", pool.TotalCount)
+	}
+	if pool.HealthyCount != 1 || pool.AvailableCount != 1 {
+		t.Fatalf("expected healthy=1 available=1, got healthy=%d available=%d", pool.HealthyCount, pool.AvailableCount)
+	}
+	if pool.UnavailableCount != 1 {
+		t.Fatalf("expected unavailable_count=1 (only n-unhealthy), got %d", pool.UnavailableCount)
+	}
+	if pool.UntestedCount != 5 {
+		t.Fatalf("expected untested_count=5 (non-baseline + 4 security/build rejections), got %d", pool.UntestedCount)
 	}
 }

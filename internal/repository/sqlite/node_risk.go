@@ -144,7 +144,7 @@ func (r *nodeRepository) ListReadModel(ctx context.Context, filter domain.NodeFi
 	// 3. Paginated items query
 	selectQuery := fmt.Sprintf(`%s
 		SELECT logical_id, protocol, display_name, server, port, config_json, active,
-		       created_at, updated_at, risk_decision, risk_band, risk_provider,
+		       created_at, updated_at, connection_revision, risk_decision, risk_band, risk_provider,
 		       risk_schema_version, risk_status, risk_reason_code, risk_observed_at,
 		       risk_expires_at
 		FROM node_eval
@@ -182,6 +182,7 @@ func (r *nodeRepository) ListReadModel(ctx context.Context, filter domain.NodeFi
 			&activeInt,
 			&createdStr,
 			&updatedStr,
+			&node.ConnectionRevision,
 			&riskDecision,
 			&riskBand,
 			&riskProvider,
@@ -636,6 +637,7 @@ func buildRiskEvaluationCTE(policy *domain.RiskPolicy, nowStr string, nodeIDs ..
 			       n.active,
 			       n.created_at,
 			       n.updated_at,
+			       n.connection_revision,
 			       COALESCE(oe.action, ?) AS risk_decision,
 			       COALESCE(oe.band, 'unknown') AS risk_band,
 			       COALESCE(oe.provider, ?) AS risk_provider,
@@ -664,6 +666,7 @@ func buildNoPolicyCTE() (string, []any) {
 			       n.active,
 			       n.created_at,
 			       n.updated_at,
+			       n.connection_revision,
 			       'unknown' AS risk_decision,
 			       'unknown' AS risk_band,
 			       '' AS risk_provider,
@@ -772,7 +775,7 @@ func (r *nodeRepository) listReadModelFast(ctx context.Context, filter domain.No
 		}
 		orderBy = fmt.Sprintf("display_name %s, logical_id ASC", order)
 	}
-	query := fmt.Sprintf("SELECT logical_id, protocol, display_name, server, port, config_json, active, created_at, updated_at FROM nodes%s ORDER BY %s LIMIT ? OFFSET ?;", whereSQL, orderBy)
+	query := fmt.Sprintf("SELECT logical_id, protocol, display_name, server, port, config_json, active, created_at, updated_at, connection_revision FROM nodes%s ORDER BY %s LIMIT ? OFFSET ?;", whereSQL, orderBy)
 	rows, err := r.db.QueryContext(ctx, query, append(args, pageSize, offset)...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to query nodes: %w", err)
@@ -785,7 +788,7 @@ func (r *nodeRepository) listReadModelFast(ctx context.Context, filter domain.No
 		var configJSON string
 		var active int
 		var created, updated string
-		if err := rows.Scan(&n.LogicalID, &n.Protocol, &n.DisplayName, &n.Server, &n.Port, &configJSON, &active, &created, &updated); err != nil {
+		if err := rows.Scan(&n.LogicalID, &n.Protocol, &n.DisplayName, &n.Server, &n.Port, &configJSON, &active, &created, &updated, &n.ConnectionRevision); err != nil {
 			return nil, 0, err
 		}
 		creds, err := unmarshalNodeCredentials(configJSON)

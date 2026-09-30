@@ -122,7 +122,8 @@ func (h probeHandler) triggerSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.recordAudit(r, "probe_schedule.trigger", domain.AuditResultSuccess,
-		fmt.Sprintf("queue_nodes=%d probing=%d queued=%d", status.QueueNodesCount, status.ProbingCount, status.QueuedWaitingCount))
+		fmt.Sprintf("queue_nodes=%d probing=%d queued=%d scheduled_nodes=%d no_due_tasks=%v",
+			status.QueueNodesCount, status.ProbingCount, status.QueuedWaitingCount, status.ScheduledNodes, status.NoDueTasks))
 	WriteSuccess(w, r, http.StatusOK, status)
 }
 

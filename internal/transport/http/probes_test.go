@@ -1088,36 +1088,44 @@ func (m *poolNodeMemory) DeactivateNodesNotIn(context.Context, []string) error {
 
 func TestProbePoolAndScheduleTriggerEndpoints(t *testing.T) {
 	now := time.Now().UTC()
+	rev1 := int64(1)
 	runs := &probeRunMemory{data: make(map[string]domain.ProbeRun)}
 	audit := &auditMemory{}
 	schedRepo := newProbeScheduleMemory()
+	nextDue := now.Add(time.Minute)
+	schedRepo.schedule.Enabled = true
+	schedRepo.schedule.NextDueAt = &nextDue
+
 	nodesRepo := &poolNodeMemory{
 		nodes: []domain.Node{
-			{LogicalID: "node-1", DisplayName: "N1", Protocol: domain.ProtocolVMess, Active: true},
-			{LogicalID: "node-2", DisplayName: "N2", Protocol: domain.ProtocolVMess, Active: true},
-			{LogicalID: "node-3", DisplayName: "N3", Protocol: domain.ProtocolVMess, Active: true},
-			{LogicalID: "node-4", DisplayName: "N4", Protocol: domain.ProtocolVMess, Active: true},
+			{LogicalID: "node-1", DisplayName: "N1", Protocol: domain.ProtocolVMess, Active: true, ConnectionRevision: 1},
+			{LogicalID: "node-2", DisplayName: "N2", Protocol: domain.ProtocolVMess, Active: true, ConnectionRevision: 1},
+			{LogicalID: "node-3", DisplayName: "N3", Protocol: domain.ProtocolVMess, Active: true, ConnectionRevision: 1},
+			{LogicalID: "node-4", DisplayName: "N4", Protocol: domain.ProtocolVMess, Active: true, ConnectionRevision: 1},
 		},
 	}
 	observations := &observationMemory{
 		items: []domain.ProbeObservation{
 			{
-				ID:            "obs-n1",
-				ProbeRunID:    "run-seed",
-				NodeLogicalID: "node-1",
-				Kind:          domain.ProbeKindBaseline,
-				Verdict:       domain.VerdictAvailable,
-				LatencyMS:     40,
-				ObservedAt:    now,
+				ID:                 "obs-n1",
+				ProbeRunID:         "run-seed",
+				NodeLogicalID:      "node-1",
+				Kind:               domain.ProbeKindBaseline,
+				Verdict:            domain.VerdictAvailable,
+				LatencyMS:          40,
+				ObservedAt:         now,
+				ConnectionRevision: &rev1,
 			},
 			{
-				ID:            "obs-n2",
-				ProbeRunID:    "run-seed",
-				NodeLogicalID: "node-2",
-				Kind:          domain.ProbeKindBaseline,
-				Verdict:       domain.VerdictError,
-				LatencyMS:     0,
-				ObservedAt:    now,
+				ID:                 "obs-n2",
+				ProbeRunID:         "run-seed",
+				NodeLogicalID:      "node-2",
+				Kind:               domain.ProbeKindBaseline,
+				Verdict:            domain.VerdictError,
+				LatencyMS:          0,
+				ObservedAt:         now,
+				ConnectionRevision: &rev1,
+				RedactedSummary:    "reason=node_connect_failed",
 			},
 		},
 	}
@@ -1181,7 +1189,7 @@ func TestProbePoolAndScheduleTriggerEndpoints(t *testing.T) {
 		t.Fatalf("unexpected initial pool status: %+v", poolResp.Data)
 	}
 
-	// 2. POST /api/v1/probes/schedule/trigger to enqueue all 4 active nodes
+	// 2. POST /api/v1/probes/schedule/trigger to run incremental sweep
 	trigReq := httptest.NewRequest(http.MethodPost, "/api/v1/probes/schedule/trigger", nil)
 	trigReq.Header.Set("Authorization", "Bearer "+probeTestAdminToken)
 	trigRec := httptest.NewRecorder()
@@ -1193,17 +1201,53 @@ func TestProbePoolAndScheduleTriggerEndpoints(t *testing.T) {
 	<-probeStarted
 
 	var trigResp struct {
-		Data domain.ProbePoolStatus `json:"data"`
+		Data probe.ScheduleTriggerResult `json:"data"`
 	}
 	if err := json.NewDecoder(trigRec.Body).Decode(&trigResp); err != nil {
 		t.Fatal(err)
 	}
-	if trigResp.Data.QueueNodesCount != 4 {
-		t.Fatalf("expected queue_nodes_count=4 after schedule trigger, got %+v", trigResp.Data)
+	// Under incremental sweep: node-1 (fresh) and node-2 (failure cooldown) are skipped.
+	// Only unobserved node-3 and node-4 are enqueued.
+	if trigResp.Data.QueueNodesCount != 2 {
+		t.Fatalf("expected queue_nodes_count=2 after schedule trigger, got %+v", trigResp.Data)
+	}
+	if trigResp.Data.ScheduledNodes != 2 || trigResp.Data.ScheduledTasks != 2 || trigResp.Data.SkippedNodes != 2 || trigResp.Data.NoDueTasks {
+		t.Fatalf("expected scheduled_nodes=2 scheduled_tasks=2 skipped_nodes=2 no_due_tasks=false, got %+v", trigResp.Data)
+	}
+	if trigResp.Data.BatchID == "" || len(trigResp.Data.RunIDs) != 1 {
+		t.Fatalf("expected non-empty batch_id and 1 run_id in trigger response, got %+v", trigResp.Data)
+	}
+
+	// Verify manual trigger does NOT postpone automatic NextDueAt
+	schedAfter, _ := schedRepo.Get(context.Background())
+	if schedAfter.NextDueAt == nil || !schedAfter.NextDueAt.Equal(nextDue) {
+		t.Fatalf("expected next_due_at to remain unchanged at %v, got %v", nextDue, schedAfter.NextDueAt)
 	}
 
 	close(holdProbe)
 	sched.Wait()
+
+	// 3. Second manual trigger when observations are fresh/cooldown -> no tasks due
+	trigReq2 := httptest.NewRequest(http.MethodPost, "/api/v1/probes/schedule/trigger", nil)
+	trigReq2.Header.Set("Authorization", "Bearer "+probeTestAdminToken)
+	trigRec2 := httptest.NewRecorder()
+	router.ServeHTTP(trigRec2, trigReq2)
+	if trigRec2.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for second trigger, got %d: %s", trigRec2.Code, trigRec2.Body.String())
+	}
+	var trigResp2 struct {
+		Data probe.ScheduleTriggerResult `json:"data"`
+	}
+	if err := json.NewDecoder(trigRec2.Body).Decode(&trigResp2); err != nil {
+		t.Fatal(err)
+	}
+	if !trigResp2.Data.NoDueTasks || trigResp2.Data.ScheduledNodes != 0 || trigResp2.Data.ScheduledTasks != 0 {
+		t.Fatalf("expected no_due_tasks=true scheduled_nodes=0 on second trigger, got %+v", trigResp2.Data)
+	}
+	schedAfter2, _ := schedRepo.Get(context.Background())
+	if schedAfter2.NextDueAt == nil || !schedAfter2.NextDueAt.Equal(nextDue) {
+		t.Fatalf("expected next_due_at to remain unchanged after no-due trigger, got %v", schedAfter2.NextDueAt)
+	}
 }
 
 func TestNodeObservationsPagination(t *testing.T) {

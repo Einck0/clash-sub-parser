@@ -15,10 +15,44 @@ const (
 	defaultLeaseDuration   = 60 * time.Second
 	defaultRunTimeout      = 10 * time.Minute
 	defaultMaxTasks        = 512
-	defaultSweepInterval   = 10 * time.Minute
+	defaultSweepInterval   = 1 * time.Minute
 	defaultFailureCooldown = 5 * time.Minute
 	defaultSweepQuota      = 512
 )
+
+// SweepSummary captures execution and node coverage metrics for an incremental sweep batch.
+type SweepSummary struct {
+	BatchID        string                 `json:"batch_id,omitempty"`
+	BatchState     domain.ProbeBatchState `json:"batch_state,omitempty"`
+	TotalNodes     int                    `json:"total_nodes"`
+	DispatchedRuns int                    `json:"dispatched_runs"`
+	ScheduledNodes int                    `json:"scheduled_nodes"`
+	ScheduledTasks int                    `json:"scheduled_tasks"`
+	SkippedNodes   int                    `json:"skipped_nodes"`
+	NoDueTasks     bool                   `json:"no_due_tasks"`
+	RunIDs         []string               `json:"run_ids,omitempty"`
+}
+
+type sweepSummaryCtxKey struct{}
+
+func withSweepSummaryHook(ctx context.Context, fn func(SweepSummary)) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if fn == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, sweepSummaryCtxKey{}, fn)
+}
+
+func notifySweepSummary(ctx context.Context, s SweepSummary) {
+	if ctx == nil {
+		return
+	}
+	if fn, ok := ctx.Value(sweepSummaryCtxKey{}).(func(SweepSummary)); ok && fn != nil {
+		fn(s)
+	}
+}
 
 // PeriodicCoordinatorOption configures PeriodicCoordinator options.
 type PeriodicCoordinatorOption func(*PeriodicCoordinator)
@@ -350,36 +384,57 @@ func (c *PeriodicCoordinator) TriggerImmediate(ctx context.Context) error {
 	}
 
 	now := c.clock().UTC()
-	windowAt := now.Truncate(time.Millisecond)
+	windowAt := now.Truncate(time.Second)
+
+	// Ensure manual trigger window does not collide with scheduled NextDueAt
+	if sched.NextDueAt != nil && !sched.NextDueAt.IsZero() {
+		if windowAt.Equal(sched.NextDueAt.UTC().Truncate(time.Second)) {
+			windowAt = windowAt.Add(-time.Second)
+		}
+	}
+
 	newBatch := &domain.ProbeBatch{
 		ID:         domain.MustNewUUIDv7(),
 		WindowAt:   windowAt,
 		Generation: sched.Generation,
-		Owner:      c.ownerID,
+		Owner:      "",
 		State:      domain.ProbeBatchStatePending,
 		CreatedAt:  now,
 		UpdatedAt:  now,
 	}
 	if c.schedules != nil {
-		if err := c.schedules.CreateBatch(ctx, newBatch); err != nil {
-			if existing, getErr := c.schedules.GetBatchByWindow(ctx, sched.Generation, windowAt); getErr == nil && existing != nil {
-				newBatch = existing
-			} else {
+		for attempt := 0; attempt < 60; attempt++ {
+			newBatch.WindowAt = windowAt
+			if err := c.schedules.CreateBatch(ctx, newBatch); err != nil {
+				if existing, getErr := c.schedules.GetBatchByWindow(ctx, sched.Generation, windowAt); getErr == nil && existing != nil {
+					if existing.State.IsTerminal() {
+						windowAt = windowAt.Add(-time.Second)
+						newBatch.ID = domain.MustNewUUIDv7()
+						continue
+					}
+					newBatch = existing
+					break
+				}
 				return err
 			}
+			break
 		}
-		if sched.Enabled {
-			sweepInterval := c.sweepInterval
-			if sweepInterval <= 0 {
-				sweepInterval = defaultSweepInterval
-			}
-			nextDue := now.Add(sweepInterval)
-			sched.NextDueAt = &nextDue
-			_ = c.schedules.Update(ctx, sched)
-		}
+		// Note: Manual refresh must NEVER modify sched.NextDueAt!
 	}
 
 	if newBatch.State.IsTerminal() {
+		notifySweepSummary(ctx, SweepSummary{
+			BatchID:        newBatch.ID,
+			BatchState:     newBatch.State,
+			TotalNodes:     newBatch.Counts.TotalNodes,
+			DispatchedRuns: 0,
+			ScheduledNodes: 0,
+			ScheduledTasks: 0,
+			SkippedNodes:   newBatch.Counts.SkippedNodes,
+			NoDueTasks:     true,
+			RunIDs:         []string{},
+		})
+		notifyTasksEnqueued(ctx)
 		return nil
 	}
 
@@ -470,16 +525,31 @@ func (c *PeriodicCoordinator) triggerWindow() error {
 }
 
 func (c *PeriodicCoordinator) executeBatch(parentCtx context.Context, batch *domain.ProbeBatch, sched *domain.ProbeSchedule) error {
+	if c.nodes == nil {
+		return domain.NewValidationError("missing_nodes_repository", "node repository is not configured")
+	}
+	if c.runner == nil {
+		return domain.NewValidationError("missing_runner", "no probe runner configured")
+	}
+
 	// 1. CAS Lease Acquisition
-	acquired, err := c.schedules.AcquireLease(parentCtx, batch.ID, c.ownerID, c.leaseDuration)
-	if err != nil {
-		return fmt.Errorf("failed to acquire lease for batch %s: %w", batch.ID, err)
+	if c.schedules != nil {
+		acquired, err := c.schedules.AcquireLease(parentCtx, batch.ID, c.ownerID, c.leaseDuration)
+		if err != nil {
+			return fmt.Errorf("failed to acquire lease for batch %s: %w", batch.ID, err)
+		}
+		if !acquired {
+			// Another instance holds active lease; yield execution
+			notifySweepSummary(parentCtx, SweepSummary{
+				BatchID:    batch.ID,
+				BatchState: batch.State,
+				NoDueTasks: true,
+			})
+			notifyTasksEnqueued(parentCtx)
+			return nil
+		}
+		batch.Owner = c.ownerID
 	}
-	if !acquired {
-		// Another instance holds active lease; yield execution
-		return nil
-	}
-	batch.Owner = c.ownerID
 
 	batchCtx, batchCancel := context.WithCancel(parentCtx)
 	defer batchCancel()
@@ -487,6 +557,12 @@ func (c *PeriodicCoordinator) executeBatch(parentCtx context.Context, batch *dom
 	c.mu.Lock()
 	if _, active := c.activeBatches[batch.ID]; active {
 		c.mu.Unlock()
+		notifySweepSummary(parentCtx, SweepSummary{
+			BatchID:    batch.ID,
+			BatchState: batch.State,
+			NoDueTasks: true,
+		})
+		notifyTasksEnqueued(parentCtx)
 		return nil
 	}
 	c.activeBatches[batch.ID] = batchCancel
@@ -505,36 +581,40 @@ func (c *PeriodicCoordinator) executeBatch(parentCtx context.Context, batch *dom
 		close(heartbeatDone)
 	}()
 
-	go func() {
-		ticker := time.NewTicker(c.leaseDuration / 3)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-heartbeatDone:
-				return
-			case <-batchCtx.Done():
-				return
-			case <-ticker.C:
-				hbErr := c.schedules.HeartbeatLease(batchCtx, batch.ID, c.ownerID, c.leaseDuration)
-				if hbErr != nil {
-					select {
-					case <-leaseLost:
-					default:
-						close(leaseLost)
-					}
-					batchCancel()
+	if c.schedules != nil {
+		go func() {
+			ticker := time.NewTicker(c.leaseDuration / 3)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-heartbeatDone:
 					return
+				case <-batchCtx.Done():
+					return
+				case <-ticker.C:
+					hbErr := c.schedules.HeartbeatLease(batchCtx, batch.ID, c.ownerID, c.leaseDuration)
+					if hbErr != nil {
+						select {
+						case <-leaseLost:
+						default:
+							close(leaseLost)
+						}
+						batchCancel()
+						return
+					}
 				}
 			}
-		}
-	}()
+		}()
+	}
 
 	// 3. Mark batch running
 	if batch.CanTransitionTo(domain.ProbeBatchStateRunning) {
 		_ = batch.TransitionTo(domain.ProbeBatchStateRunning)
-		if err := c.schedules.UpdateBatch(batchCtx, batch); err != nil {
-			_ = c.schedules.ReleaseLease(context.Background(), batch.ID, c.ownerID)
-			return err
+		if c.schedules != nil {
+			if err := c.schedules.UpdateBatch(batchCtx, batch); err != nil {
+				_ = c.schedules.ReleaseLease(context.Background(), batch.ID, c.ownerID)
+				return err
+			}
 		}
 	}
 
@@ -555,8 +635,10 @@ func (c *PeriodicCoordinator) executeBatch(parentCtx context.Context, batch *dom
 			}
 			batch.RedactedError = "failed to list active nodes"
 			_ = batch.TransitionTo(domain.ProbeBatchStateFailed)
-			_ = c.schedules.UpdateBatch(context.Background(), batch)
-			_ = c.schedules.ReleaseLease(context.Background(), batch.ID, c.ownerID)
+			if c.schedules != nil {
+				_ = c.schedules.UpdateBatch(context.Background(), batch)
+				_ = c.schedules.ReleaseLease(context.Background(), batch.ID, c.ownerID)
+			}
 			return err
 		}
 		allActiveNodes = append(allActiveNodes, chunk...)
@@ -590,10 +672,23 @@ func (c *PeriodicCoordinator) executeBatch(parentCtx context.Context, batch *dom
 		default:
 		}
 		batch.Counts.SkippedNodes = len(allActiveNodes)
+		notifySweepSummary(parentCtx, SweepSummary{
+			BatchID:        batch.ID,
+			BatchState:     domain.ProbeBatchStateSucceeded,
+			TotalNodes:     len(allActiveNodes),
+			DispatchedRuns: 0,
+			ScheduledNodes: 0,
+			ScheduledTasks: 0,
+			SkippedNodes:   len(allActiveNodes),
+			NoDueTasks:     true,
+			RunIDs:         []string{},
+		})
 		notifyTasksEnqueued(parentCtx)
 		_ = batch.TransitionTo(domain.ProbeBatchStateSucceeded)
-		_ = c.schedules.UpdateBatch(context.Background(), batch)
-		_ = c.schedules.ReleaseLease(context.Background(), batch.ID, c.ownerID)
+		if c.schedules != nil {
+			_ = c.schedules.UpdateBatch(context.Background(), batch)
+			_ = c.schedules.ReleaseLease(context.Background(), batch.ID, c.ownerID)
+		}
 		return nil
 	}
 
@@ -624,8 +719,10 @@ func (c *PeriodicCoordinator) executeBatch(parentCtx context.Context, batch *dom
 			}
 			batch.RedactedError = "failed to query latest observations: " + domain.RedactSensitiveInfo(err.Error())
 			_ = batch.TransitionTo(domain.ProbeBatchStateFailed)
-			_ = c.schedules.UpdateBatch(context.Background(), batch)
-			_ = c.schedules.ReleaseLease(context.Background(), batch.ID, c.ownerID)
+			if c.schedules != nil {
+				_ = c.schedules.UpdateBatch(context.Background(), batch)
+				_ = c.schedules.ReleaseLease(context.Background(), batch.ID, c.ownerID)
+			}
 			return err
 		}
 		latestObsMap = obsMap
@@ -633,16 +730,18 @@ func (c *PeriodicCoordinator) executeBatch(parentCtx context.Context, batch *dom
 
 	now := c.clock().UTC()
 	type nodeExpiredCandidate struct {
-		node             domain.Node
-		expiredKinds     []domain.ProbeKind
-		hasUnobserved    bool
-		oldestObservedAt time.Time
+		node                domain.Node
+		expiredKinds        []domain.ProbeKind
+		hasUnobserved       bool
+		hasRevisionMismatch bool
+		oldestObservedAt    time.Time
 	}
 
 	var candidates []nodeExpiredCandidate
 	for _, n := range candidateNodes {
 		var expiredKinds []domain.ProbeKind
 		hasUnobserved := false
+		hasRevisionMismatch := false
 		var oldestObs time.Time
 		hasAnyObs := false
 
@@ -678,8 +777,12 @@ func (c *PeriodicCoordinator) executeBatch(parentCtx context.Context, batch *dom
 				continue
 			}
 
-			if obsAge >= interval {
+			revisionMismatch := n.ConnectionRevision > 0 && (obs.ConnectionRevision == nil || *obs.ConnectionRevision != n.ConnectionRevision)
+			if revisionMismatch || obsAge >= interval {
 				expiredKinds = append(expiredKinds, k)
+				if revisionMismatch {
+					hasRevisionMismatch = true
+				}
 				if !hasAnyObs || obs.ObservedAt.Before(oldestObs) {
 					oldestObs = obs.ObservedAt
 					hasAnyObs = true
@@ -689,10 +792,11 @@ func (c *PeriodicCoordinator) executeBatch(parentCtx context.Context, batch *dom
 
 		if len(expiredKinds) > 0 {
 			candidates = append(candidates, nodeExpiredCandidate{
-				node:             n,
-				expiredKinds:     expiredKinds,
-				hasUnobserved:    hasUnobserved,
-				oldestObservedAt: oldestObs,
+				node:                n,
+				expiredKinds:        expiredKinds,
+				hasUnobserved:       hasUnobserved,
+				hasRevisionMismatch: hasRevisionMismatch,
+				oldestObservedAt:    oldestObs,
 			})
 		}
 	}
@@ -700,13 +804,17 @@ func (c *PeriodicCoordinator) executeBatch(parentCtx context.Context, batch *dom
 	// 6. Fair sorting & Quota budgeting to prevent bursts (e.g. 960 nodes * 5 kinds)
 	// Sort candidates:
 	// 1. Unobserved nodes first
-	// 2. Oldest observed_at ascending (starvation prevention)
-	// 3. LogicalID ascending (deterministic tie-breaker)
+	// 2. Revision-mismatched nodes second (immediate re-probe after config change)
+	// 3. Oldest observed_at ascending (starvation prevention)
+	// 4. LogicalID ascending (deterministic tie-breaker)
 	sort.Slice(candidates, func(i, j int) bool {
 		if candidates[i].hasUnobserved != candidates[j].hasUnobserved {
 			return candidates[i].hasUnobserved
 		}
-		if !candidates[i].hasUnobserved {
+		if candidates[i].hasRevisionMismatch != candidates[j].hasRevisionMismatch {
+			return candidates[i].hasRevisionMismatch
+		}
+		if !candidates[i].hasUnobserved && !candidates[i].hasRevisionMismatch {
 			if !candidates[i].oldestObservedAt.Equal(candidates[j].oldestObservedAt) {
 				return candidates[i].oldestObservedAt.Before(candidates[j].oldestObservedAt)
 			}
@@ -722,12 +830,27 @@ func (c *PeriodicCoordinator) executeBatch(parentCtx context.Context, batch *dom
 	var selectedCandidates []nodeExpiredCandidate
 	accumulatedTasks := 0
 	for _, cand := range candidates {
-		candTasks := len(cand.expiredKinds)
-		if accumulatedTasks+candTasks > sweepQuota && len(selectedCandidates) > 0 {
+		if accumulatedTasks >= sweepQuota {
 			break
 		}
+		remaining := sweepQuota - accumulatedTasks
+		candKinds := cand.expiredKinds
+		if len(candKinds) > remaining {
+			// Prioritize baseline if present when partial kinds are picked
+			sort.SliceStable(candKinds, func(a, b int) bool {
+				if candKinds[a] == domain.ProbeKindBaseline {
+					return true
+				}
+				if candKinds[b] == domain.ProbeKindBaseline {
+					return false
+				}
+				return string(candKinds[a]) < string(candKinds[b])
+			})
+			candKinds = candKinds[:remaining]
+		}
+		cand.expiredKinds = candKinds
 		selectedCandidates = append(selectedCandidates, cand)
-		accumulatedTasks += candTasks
+		accumulatedTasks += len(candKinds)
 	}
 
 	batch.Counts.SkippedNodes = len(allActiveNodes) - len(selectedCandidates)
@@ -738,10 +861,23 @@ func (c *PeriodicCoordinator) executeBatch(parentCtx context.Context, batch *dom
 			return domain.NewConflictError("lease_lost", "batch lease lost to another instance")
 		default:
 		}
+		notifySweepSummary(parentCtx, SweepSummary{
+			BatchID:        batch.ID,
+			BatchState:     domain.ProbeBatchStateSucceeded,
+			TotalNodes:     len(allActiveNodes),
+			DispatchedRuns: 0,
+			ScheduledNodes: 0,
+			ScheduledTasks: 0,
+			SkippedNodes:   len(allActiveNodes),
+			NoDueTasks:     true,
+			RunIDs:         []string{},
+		})
 		notifyTasksEnqueued(parentCtx)
 		_ = batch.TransitionTo(domain.ProbeBatchStateSucceeded)
-		_ = c.schedules.UpdateBatch(context.Background(), batch)
-		_ = c.schedules.ReleaseLease(context.Background(), batch.ID, c.ownerID)
+		if c.schedules != nil {
+			_ = c.schedules.UpdateBatch(context.Background(), batch)
+			_ = c.schedules.ReleaseLease(context.Background(), batch.ID, c.ownerID)
+		}
 		return nil
 	}
 
@@ -850,8 +986,10 @@ func (c *PeriodicCoordinator) executeBatch(parentCtx context.Context, batch *dom
 				} else {
 					batch.RedactedError = "failed to create probe run chunk"
 					_ = batch.TransitionTo(domain.ProbeBatchStateFailed)
-					_ = c.schedules.UpdateBatch(context.Background(), batch)
-					_ = c.schedules.ReleaseLease(context.Background(), batch.ID, c.ownerID)
+					if c.schedules != nil {
+						_ = c.schedules.UpdateBatch(context.Background(), batch)
+						_ = c.schedules.ReleaseLease(context.Background(), batch.ID, c.ownerID)
+					}
 					return fmt.Errorf("failed to create run for chunk %d: %w", chunkIdx, err)
 				}
 			}
@@ -866,15 +1004,29 @@ func (c *PeriodicCoordinator) executeBatch(parentCtx context.Context, batch *dom
 		return domain.NewConflictError("lease_lost", "batch lease lost to another instance")
 	default:
 	}
-	if err := c.schedules.UpdateBatch(batchCtx, batch); err != nil {
-		select {
-		case <-leaseLost:
-			return domain.NewConflictError("lease_lost", "batch lease lost to another instance")
-		default:
+	if c.schedules != nil {
+		if err := c.schedules.UpdateBatch(batchCtx, batch); err != nil {
+			select {
+			case <-leaseLost:
+				return domain.NewConflictError("lease_lost", "batch lease lost to another instance")
+			default:
+			}
+			_ = c.schedules.ReleaseLease(context.Background(), batch.ID, c.ownerID)
+			return err
 		}
-		_ = c.schedules.ReleaseLease(context.Background(), batch.ID, c.ownerID)
-		return err
 	}
+
+	notifySweepSummary(parentCtx, SweepSummary{
+		BatchID:        batch.ID,
+		BatchState:     batch.State,
+		TotalNodes:     len(allActiveNodes),
+		DispatchedRuns: len(chunks),
+		ScheduledNodes: len(selectedCandidates),
+		ScheduledTasks: accumulatedTasks,
+		SkippedNodes:   batch.Counts.SkippedNodes,
+		NoDueTasks:     false,
+		RunIDs:         append([]string(nil), runIDs...),
+	})
 
 	// 8. Execute each run chunk
 	var hasRunError bool
@@ -900,8 +1052,10 @@ func (c *PeriodicCoordinator) executeBatch(parentCtx context.Context, batch *dom
 			if batch.CanTransitionTo(domain.ProbeBatchStateCancelled) {
 				_ = batch.TransitionTo(domain.ProbeBatchStateCancelled)
 			}
-			_ = c.schedules.UpdateBatch(context.Background(), batch)
-			_ = c.schedules.ReleaseLease(context.Background(), batch.ID, c.ownerID)
+			if c.schedules != nil {
+				_ = c.schedules.UpdateBatch(context.Background(), batch)
+				_ = c.schedules.ReleaseLease(context.Background(), batch.ID, c.ownerID)
+			}
 			return batchCtx.Err()
 		default:
 		}
@@ -920,16 +1074,19 @@ func (c *PeriodicCoordinator) executeBatch(parentCtx context.Context, batch *dom
 		if runErr != nil {
 			hasRunError = true
 			batch.RedactedError = domain.RedactSensitiveInfo(runErr.Error())
+		} else {
+			completedRuns++
+			batch.Counts.CompletedRuns = completedRuns
 		}
-		completedRuns++
-		batch.Counts.CompletedRuns = completedRuns
 
 		select {
 		case <-leaseLost:
 			return domain.NewConflictError("lease_lost", "batch lease lost to another instance")
 		default:
 		}
-		_ = c.schedules.UpdateBatch(batchCtx, batch)
+		if c.schedules != nil {
+			_ = c.schedules.UpdateBatch(batchCtx, batch)
+		}
 	}
 
 	select {
@@ -941,13 +1098,17 @@ func (c *PeriodicCoordinator) executeBatch(parentCtx context.Context, batch *dom
 	targetState := domain.ProbeBatchStateSucceeded
 	if hasRunError && batch.Counts.CompletedRuns == 0 {
 		targetState = domain.ProbeBatchStateFailed
+	} else if hasRunError {
+		targetState = domain.ProbeBatchStateFailed
 	}
 
 	if batch.CanTransitionTo(targetState) {
 		_ = batch.TransitionTo(targetState)
 	}
-	_ = c.schedules.UpdateBatch(context.Background(), batch)
-	_ = c.schedules.ReleaseLease(context.Background(), batch.ID, c.ownerID)
+	if c.schedules != nil {
+		_ = c.schedules.UpdateBatch(context.Background(), batch)
+		_ = c.schedules.ReleaseLease(context.Background(), batch.ID, c.ownerID)
+	}
 
 	return nil
 }

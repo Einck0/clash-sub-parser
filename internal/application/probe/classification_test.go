@@ -49,7 +49,7 @@ func TestRunnerReasonCategoriesHaveNoSecretLeakageAndAssociateRevision(t *testin
 		{name: "transport_error", node: domain.Node{LogicalID: "7", Protocol: domain.ProtocolSS, Server: host, Port: 443, Active: true, ConnectionRevision: 8, Credentials: domain.InboundProtocolCredential{Password: secret}}, dial: func(context.Context, domain.Node) (*http.Client, func() error, error) {
 			return &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) { return nil, errors.New(secret + host) })}, nil, nil
 		}, reason: "transport_error"},
-		{name: "local_loopback_fixture", node: domain.Node{LogicalID: "8", Protocol: domain.ProtocolVLESS, Server: "93.184.216.34", Port: 443, Active: true, ConnectionRevision: 9, Credentials: domain.InboundProtocolCredential{UUID: secret, Transport: map[string]string{"flow": "xtls-rprx-vision", "pbk": "key", "sni": "example.org"}}}, dial: probe.NewSafeNodeDialer(probe.SafeNodeDialerOptions{ClientFactory: func(_ context.Context, cfg singbox.NodeConfig, _ singbox.HTTPClientOptions) (*http.Client, func() error, error) {
+		{name: "local_loopback_fixture", node: domain.Node{LogicalID: "8", Protocol: domain.ProtocolVLESS, Server: "93.184.216.34", Port: 443, Active: true, ConnectionRevision: 9, Credentials: domain.InboundProtocolCredential{UUID: secret, Transport: map[string]string{"flow": "xtls-rprx-vision", "pbk": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", "sni": "example.org"}}}, dial: probe.NewSafeNodeDialer(probe.SafeNodeDialerOptions{ClientFactory: func(_ context.Context, cfg singbox.NodeConfig, _ singbox.HTTPClientOptions) (*http.Client, func() error, error) {
 			if _, _, err := singbox.BuildOptions(cfg); err != nil {
 				return nil, nil, err
 			}

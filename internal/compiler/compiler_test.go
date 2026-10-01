@@ -340,7 +340,7 @@ func TestValidateCredentialEnvelope_AllSevenProtocols(t *testing.T) {
 		case domain.ProtocolVLESS:
 			return domain.InboundProtocolCredential{
 				UUID:      "b831381d-6324-4d53-ad4f-8cda48b30812",
-				Transport: map[string]string{"pbk": "secret-reality-pbk", "sid": "01ab"},
+				Transport: map[string]string{"pbk": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", "sid": "01ab"},
 			}
 		case domain.ProtocolTrojan:
 			return domain.InboundProtocolCredential{Password: "secret-trojan-password"}
@@ -487,7 +487,7 @@ func TestValidateCredentialEnvelope_AllSevenProtocols(t *testing.T) {
 			mutate: func(n *resolver.ResolvedNode) {
 				n.Credentials.UUID = ""
 			},
-			secretMarker: "secret-reality-pbk",
+			secretMarker: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
 			wantReason:   "missing required uuid in vless",
 		},
 		{

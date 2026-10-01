@@ -1,6 +1,7 @@
 package singbox
 
 import (
+	"encoding/base64"
 	"fmt"
 	"net/netip"
 	"strings"
@@ -53,41 +54,6 @@ func BuildOptions(config NodeConfig) (option.Options, string, error) {
 	}
 
 	switch config.Protocol {
-	case domain.ProtocolSS:
-		out, err := buildShadowsocksOutbound(config, tag)
-		if err != nil {
-			return option.Options{}, "", err
-		}
-		options.Outbounds = []option.Outbound{out}
-
-	case domain.ProtocolVMess:
-		out, err := buildVMessOutbound(config, tag)
-		if err != nil {
-			return option.Options{}, "", err
-		}
-		options.Outbounds = []option.Outbound{out}
-
-	case domain.ProtocolVLESS:
-		out, err := buildVLESSOutbound(config, tag)
-		if err != nil {
-			return option.Options{}, "", err
-		}
-		options.Outbounds = []option.Outbound{out}
-
-	case domain.ProtocolTrojan:
-		out, err := buildTrojanOutbound(config, tag)
-		if err != nil {
-			return option.Options{}, "", err
-		}
-		options.Outbounds = []option.Outbound{out}
-
-	case domain.ProtocolHysteria2:
-		out, err := buildHysteria2Outbound(config, tag)
-		if err != nil {
-			return option.Options{}, "", err
-		}
-		options.Outbounds = []option.Outbound{out}
-
 	case domain.ProtocolWireGuard:
 		ep, err := buildWireGuardEndpoint(config, tag)
 		if err != nil {
@@ -95,26 +61,45 @@ func BuildOptions(config NodeConfig) (option.Options, string, error) {
 		}
 		options.Endpoints = []option.Endpoint{ep}
 
-	case domain.ProtocolTUIC:
-		out, err := buildTUICOutbound(config, tag)
+	default:
+		out, err := BuildOutbound(config, tag)
 		if err != nil {
 			return option.Options{}, "", err
 		}
 		options.Outbounds = []option.Outbound{out}
-
-	case domain.Protocol("socks"), domain.Protocol("socks5"):
-		out := buildSOCKSOutbound(config, tag)
-		options.Outbounds = []option.Outbound{out}
-
-	case domain.Protocol("http"):
-		out := buildHTTPOutbound(config, tag)
-		options.Outbounds = []option.Outbound{out}
-
-	default:
-		return option.Options{}, "", fmt.Errorf("%w: %s", ErrUnsupportedProto, config.Protocol)
 	}
 
 	return options, tag, nil
+}
+
+// BuildOutbound constructs a single sing-box Outbound option from a NodeConfig.
+func BuildOutbound(config NodeConfig, tag string) (option.Outbound, error) {
+	if tag == "" {
+		tag = config.LogicalID
+		if tag == "" {
+			tag = "node-probe"
+		}
+	}
+	switch config.Protocol {
+	case domain.ProtocolSS:
+		return buildShadowsocksOutbound(config, tag)
+	case domain.ProtocolVMess:
+		return buildVMessOutbound(config, tag)
+	case domain.ProtocolVLESS:
+		return buildVLESSOutbound(config, tag)
+	case domain.ProtocolTrojan:
+		return buildTrojanOutbound(config, tag)
+	case domain.ProtocolHysteria2:
+		return buildHysteria2Outbound(config, tag)
+	case domain.ProtocolTUIC:
+		return buildTUICOutbound(config, tag)
+	case domain.Protocol("socks"), domain.Protocol("socks5"):
+		return buildSOCKSOutbound(config, tag), nil
+	case domain.Protocol("http"):
+		return buildHTTPOutbound(config, tag), nil
+	default:
+		return option.Outbound{}, fmt.Errorf("%w: %s", ErrUnsupportedProto, config.Protocol)
+	}
 }
 
 func serverOptions(config NodeConfig) option.ServerOptions {
@@ -125,13 +110,66 @@ func serverOptions(config NodeConfig) option.ServerOptions {
 }
 
 func networkName(config NodeConfig) string {
+	if t := determineTransportType(config); t != "" {
+		return t
+	}
 	if config.Network != "" {
-		return strings.ToLower(config.Network)
+		return strings.ToLower(strings.TrimSpace(config.Network))
 	}
 	if config.Transport != nil && config.Transport["network"] != "" {
-		return strings.ToLower(config.Transport["network"])
+		return strings.ToLower(strings.TrimSpace(config.Transport["network"]))
 	}
 	return "tcp"
+}
+
+func determineTransportType(config NodeConfig) string {
+	raw := ""
+	if config.Transport != nil {
+		if t := config.Transport["type"]; t != "" {
+			raw = t
+		} else if n := config.Transport["network"]; n != "" {
+			raw = n
+		}
+	}
+	if raw == "" && config.Network != "" {
+		lower := strings.ToLower(strings.TrimSpace(config.Network))
+		switch lower {
+		case "ws", "websocket", "grpc", "http", "httpupgrade", "quic", "xhttp":
+			raw = lower
+		}
+	}
+	raw = strings.ToLower(strings.TrimSpace(raw))
+	if raw == "websocket" {
+		return "ws"
+	}
+	return raw
+}
+
+func determineL4Network(config NodeConfig) option.NetworkList {
+	if config.Protocol == domain.ProtocolHysteria2 || config.Protocol == domain.ProtocolTUIC {
+		return option.NetworkList("udp")
+	}
+
+	netStr := strings.ToLower(strings.TrimSpace(config.Network))
+	if netStr == "udp" {
+		return option.NetworkList("udp")
+	}
+	if netStr == "tcp" {
+		return option.NetworkList("tcp")
+	}
+	if netStr == "tcp,udp" || netStr == "tcp/udp" || netStr == "all" || netStr == "both" {
+		return option.NetworkList("tcp\nudp")
+	}
+
+	if config.Transport != nil && domain.IsTruthy(config.Transport["udp"]) {
+		return option.NetworkList("tcp\nudp")
+	}
+
+	if config.Protocol == domain.ProtocolSS {
+		return option.NetworkList("tcp\nudp")
+	}
+
+	return option.NetworkList("tcp")
 }
 
 func buildShadowsocksOutbound(config NodeConfig, tag string) (option.Outbound, error) {
@@ -146,7 +184,7 @@ func buildShadowsocksOutbound(config NodeConfig, tag string) (option.Outbound, e
 			ServerOptions: serverOptions(config),
 			Method:        method,
 			Password:      config.Password,
-			Network:       option.NetworkList(networkName(config)),
+			Network:       determineL4Network(config),
 		},
 	}, nil
 }
@@ -161,7 +199,7 @@ func buildVMessOutbound(config NodeConfig, tag string) (option.Outbound, error) 
 		UUID:          config.UUID,
 		Security:      security,
 		AlterId:       config.AlterID,
-		Network:       option.NetworkList(networkName(config)),
+		Network:       determineL4Network(config),
 	}
 
 	if config.TLS || (config.Transport != nil && config.Transport["tls"] == "true") {
@@ -196,7 +234,7 @@ func buildVLESSOutbound(config NodeConfig, tag string) (option.Outbound, error) 
 		ServerOptions: serverOptions(config),
 		UUID:          config.UUID,
 		Flow:          flow,
-		Network:       option.NetworkList(networkName(config)),
+		Network:       determineL4Network(config),
 	}
 
 	if flow != "" || config.TLS || config.RealityPublicKey != "" || (config.Transport != nil && config.Transport["tls"] == "true") {
@@ -215,10 +253,53 @@ func buildVLESSOutbound(config NodeConfig, tag string) (option.Outbound, error) 
 			}
 		}
 		if config.RealityPublicKey != "" {
+			pbkRaw := strings.TrimSpace(config.RealityPublicKey)
+			decoded, err := base64.RawURLEncoding.DecodeString(pbkRaw)
+			if err != nil {
+				decoded, err = base64.URLEncoding.DecodeString(pbkRaw)
+			}
+			if err != nil {
+				decoded, err = base64.RawStdEncoding.DecodeString(pbkRaw)
+			}
+			if err != nil {
+				decoded, err = base64.StdEncoding.DecodeString(pbkRaw)
+			}
+			if err != nil || len(decoded) != 32 {
+				return option.Outbound{}, domain.NewValidationError(
+					"invalid_reality_public_key",
+					"Reality public key must decode to exactly 32 bytes",
+				)
+			}
+			normalizedPBK := base64.RawURLEncoding.EncodeToString(decoded)
+
+			sidRaw := strings.TrimSpace(config.RealityShortID)
+			if sidRaw != "" {
+				if len(sidRaw)%2 != 0 {
+					return option.Outbound{}, domain.NewValidationError(
+						"invalid_reality_short_id",
+						"Reality short ID must be an even-length hex string",
+					)
+				}
+				if len(sidRaw) > 16 {
+					return option.Outbound{}, domain.NewValidationError(
+						"invalid_reality_short_id",
+						"Reality short ID must not exceed 8 bytes (16 hex characters)",
+					)
+				}
+				for _, r := range sidRaw {
+					if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')) {
+						return option.Outbound{}, domain.NewValidationError(
+							"invalid_reality_short_id",
+							"Reality short ID must contain only valid hex characters",
+						)
+					}
+				}
+			}
+
 			tlsOpt.Reality = &option.OutboundRealityOptions{
 				Enabled:   true,
-				PublicKey: config.RealityPublicKey,
-				ShortID:   config.RealityShortID,
+				PublicKey: normalizedPBK,
+				ShortID:   sidRaw,
 			}
 			if tlsOpt.UTLS == nil {
 				tlsOpt.UTLS = &option.OutboundUTLSOptions{
@@ -259,7 +340,7 @@ func buildTrojanOutbound(config NodeConfig, tag string) (option.Outbound, error)
 	out := &option.TrojanOutboundOptions{
 		ServerOptions: serverOptions(config),
 		Password:      config.Password,
-		Network:       option.NetworkList(networkName(config)),
+		Network:       determineL4Network(config),
 		OutboundTLSOptionsContainer: option.OutboundTLSOptionsContainer{
 			TLS: tlsOpt,
 		},
@@ -286,7 +367,7 @@ func buildHysteria2Outbound(config NodeConfig, tag string) (option.Outbound, err
 	out := &option.Hysteria2OutboundOptions{
 		ServerOptions: serverOptions(config),
 		Password:      config.Password,
-		Network:       option.NetworkList(networkName(config)),
+		Network:       determineL4Network(config),
 		OutboundTLSOptionsContainer: option.OutboundTLSOptionsContainer{
 			TLS: tlsOpt,
 		},
@@ -326,7 +407,7 @@ func buildTUICOutbound(config NodeConfig, tag string) (option.Outbound, error) {
 		Password:          config.Password,
 		CongestionControl: config.TUICCongestionControl,
 		UDPRelayMode:      config.TUICUDPRelayMode,
-		Network:           option.NetworkList(networkName(config)),
+		Network:           determineL4Network(config),
 		OutboundTLSOptionsContainer: option.OutboundTLSOptionsContainer{
 			TLS: tlsOpt,
 		},
@@ -400,7 +481,7 @@ func buildSOCKSOutbound(config NodeConfig, tag string) option.Outbound {
 			Version:       "5",
 			Username:      config.Username,
 			Password:      config.Password,
-			Network:       option.NetworkList(networkName(config)),
+			Network:       determineL4Network(config),
 		},
 	}
 }
@@ -418,7 +499,7 @@ func buildHTTPOutbound(config NodeConfig, tag string) option.Outbound {
 }
 
 func buildV2RayTransport(config NodeConfig, tlsEnabled bool) (*option.V2RayTransportOptions, error) {
-	net := networkName(config)
+	transportType := determineTransportType(config)
 	var headers badoption.HTTPHeader
 	if len(config.Headers) > 0 {
 		headers = make(badoption.HTTPHeader, len(config.Headers))
@@ -438,7 +519,12 @@ func buildV2RayTransport(config NodeConfig, tlsEnabled bool) (*option.V2RayTrans
 		host = config.Transport["host"]
 	}
 
-	switch net {
+	switch transportType {
+	case "xhttp":
+		return nil, domain.NewValidationError(
+			"unsupported_transport",
+			"xhttp transport is not supported by underlying sing-box library",
+		)
 	case "http":
 		var hostList badoption.Listable[string]
 		if host != "" {

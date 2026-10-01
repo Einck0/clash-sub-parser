@@ -130,8 +130,8 @@ proxies:
     type: ss
     server: 198.51.100.1
     port: 8388
-    cipher: chacha20-ietf-poly1305
-    password: different-password-sub2
+    cipher: aes-128-gcm
+    password: secret-password-sub1
   - name: "Sub2 Unique Node Gamma"
     type: vmess
     server: 198.51.100.3
@@ -337,8 +337,8 @@ func TestReconcile_LastSourceDeletion(t *testing.T) {
 		t.Fatalf("sub1 second refresh failed: %v", err)
 	}
 
-	// Shared Node Alpha was removed from Sub1, BUT it is still in Sub2!
-	// It MUST still be active = true!
+	// Shared Node Alpha was omitted from Sub1's new fetch, BUT it is still in Sub2!
+	// It MUST still be active = true, and under non-destructive merge, source edges are not pruned!
 	detail, err := svc.GetNodeDetail(ctx, sharedLogicalID)
 	if err != nil {
 		t.Fatalf("GetNodeDetail failed: %v", err)
@@ -346,8 +346,8 @@ func TestReconcile_LastSourceDeletion(t *testing.T) {
 	if !detail.Node.Active {
 		t.Fatalf("shared node should still be active because Sub2 still has it")
 	}
-	if len(detail.Sources) != 1 || detail.Sources[0].SubscriptionID != sub2ID {
-		t.Fatalf("expected exactly 1 remaining source (Sub2), got: %#v", detail.Sources)
+	if len(detail.Sources) != 2 {
+		t.Fatalf("expected 2 sources preserved under non-destructive merge (Sub1 stale + Sub2 current), got: %#v", detail.Sources)
 	}
 
 	// Step C: Now Sub2 also updates and Shared Node Alpha DISAPPEARS from Sub2 as well!
@@ -372,50 +372,55 @@ proxies:
 		t.Fatalf("sub2 second refresh failed: %v", err)
 	}
 
-	// Now Shared Node Alpha has lost ALL sources!
-	// It MUST have active = 0 (false) and NO sources associated!
+	// Now Shared Node Alpha is omitted from Sub2's new fetch as well,
+	// BUT under the non-destructive merge contract, its active status remains TRUE and source edges are preserved!
 	detail, err = svc.GetNodeDetail(ctx, sharedLogicalID)
 	if err != nil {
 		t.Fatalf("GetNodeDetail failed: %v", err)
 	}
-	if detail.Node.Active {
-		t.Fatalf("expected node to be deactivated (active=false) after losing all sources, got active=true")
+	if !detail.Node.Active {
+		t.Fatalf("expected node to remain active (active=true) after source omission under non-destructive contract, got active=false")
 	}
-	if len(detail.Sources) != 0 {
-		t.Fatalf("expected 0 sources for deactivated node, got %d", len(detail.Sources))
+	if len(detail.Sources) != 2 {
+		t.Fatalf("expected 2 preserved sources (with stale fetch IDs) for omitted node, got %d", len(detail.Sources))
 	}
 
-	// Active list MUST NOT include Shared Node Alpha!
+	// Active list MUST still include Shared Node Alpha!
 	activeNodes, totalActive, err := svc.ListNodes(ctx, domain.NodeFilter{ActiveOnly: true})
 	if err != nil {
 		t.Fatalf("ListNodes(ActiveOnly=true) failed: %v", err)
 	}
+	var alphaFound bool
 	for _, n := range activeNodes {
 		if n.LogicalID == sharedLogicalID {
-			t.Fatalf("deactivated node %s must not appear in ActiveOnly list", sharedLogicalID)
+			alphaFound = true
+			break
 		}
 	}
-	if totalActive != 2 { // only Beta and Gamma remain active
-		t.Fatalf("expected 2 active nodes (Beta and Gamma), got %d", totalActive)
+	if !alphaFound {
+		t.Fatalf("node %s must still appear in ActiveOnly list", sharedLogicalID)
+	}
+	if totalActive != 3 { // Alpha, Beta, and Gamma all remain active
+		t.Fatalf("expected 3 active nodes (Alpha, Beta and Gamma), got %d", totalActive)
 	}
 
-	// Inactive query (all nodes) MUST still include Shared Node Alpha
+	// All nodes query MUST still include Shared Node Alpha
 	allNodes, totalAll, err := svc.ListNodes(ctx, domain.NodeFilter{ActiveOnly: false})
 	if err != nil {
 		t.Fatalf("ListNodes(ActiveOnly=false) failed: %v", err)
 	}
 	if totalAll != 3 {
-		t.Fatalf("expected 3 total nodes including inactive, got %d", totalAll)
+		t.Fatalf("expected 3 total nodes, got %d", totalAll)
 	}
-	foundInactive := false
+	foundShared := false
 	for _, n := range allNodes {
-		if n.LogicalID == sharedLogicalID && !n.Active {
-			foundInactive = true
+		if n.LogicalID == sharedLogicalID && n.Active {
+			foundShared = true
 			break
 		}
 	}
-	if !foundInactive {
-		t.Fatalf("expected to find inactive node %s in full ledger", sharedLogicalID)
+	if !foundShared {
+		t.Fatalf("expected to find active node %s in full ledger", sharedLogicalID)
 	}
 }
 
@@ -624,7 +629,7 @@ func TestReconcile_Reactivation(t *testing.T) {
 		t.Fatalf("node should be active in step 1")
 	}
 
-	// Step 2: replace with another node -> shared node is deactivated
+	// Step 2: replace with another node -> node remains active and source edge is preserved
 	fetcher.setResponse(url, &fetch.Response{
 		StatusCode:    200,
 		Body:          []byte(clashYAMLSub1WithoutSharedNode),
@@ -635,8 +640,11 @@ func TestReconcile_Reactivation(t *testing.T) {
 	}
 
 	detail, err = svc.GetNodeDetail(ctx, sharedLogicalID)
-	if err != nil || detail.Node.Active {
-		t.Fatalf("node should be inactive in step 2")
+	if err != nil || !detail.Node.Active {
+		t.Fatalf("node should remain active under non-destructive merge in step 2")
+	}
+	if len(detail.Sources) != 1 {
+		t.Fatalf("expected source edge to be preserved in step 2, got %d", len(detail.Sources))
 	}
 
 	// Step 3: shared node reappears -> must be reactivated

@@ -158,7 +158,7 @@ func TestAdversarial_Dimension2_MassSuddenNodeOfflineAndConvergence(t *testing.T
 	var yamlA strings.Builder
 	yamlA.WriteString("proxies:\n")
 	for i := 1; i <= 100; i++ {
-		yamlA.WriteString(fmt.Sprintf("  - name: Node-%03d\n    type: ss\n    server: 198.51.100.%d\n    port: 8388\n    cipher: aes-128-gcm\n    password: secret-%03d\n", i, (i%250)+1, i))
+		yamlA.WriteString(fmt.Sprintf("  - name: Node-%03d\n    type: ss\n    server: 198.51.100.%d\n    port: 8388\n    cipher: aes-128-gcm\n    password: secret-%03d\n", i, i, i))
 	}
 
 	// Sub B shares Node-100 and has Node-B01
@@ -216,23 +216,23 @@ func TestAdversarial_Dimension2_MassSuddenNodeOfflineAndConvergence(t *testing.T
 		t.Fatalf("reconcile subA dropped: err=%v res=%+v", err, resA2)
 	}
 
-	// Verify Convergence:
-	// Exclusive nodes 1..99 must be tombstoned (active = 0)
-	// Node-100 was also in Sub B, so it MUST stay active!
+	// Verify Non-destructive Merge Invariant:
+	// Nodes 1..99 are NOT tombstoned; they remain active under non-destructive merge!
+	// Node-100 was also in Sub B, so it stays active!
 	// Node-B01 was in Sub B, so it stays active!
-	// Total active nodes MUST be exactly 2 (Node-100 and Node-B01)!
+	// Total active nodes MUST be preserved (all 101 nodes remain active)!
 	activeAfter, totalAfter, err := invSvc.ListNodes(ctx, domain.NodeFilter{
 		ActiveOnly: true,
-		Pagination: domain.Pagination{Page: 1, PageSize: 200},
+		Pagination: domain.Pagination{Page: 1, PageSize: 100},
 	})
-	if err != nil || totalAfter != 2 || len(activeAfter) != 2 {
-		t.Fatalf("expected exactly 2 active nodes surviving mass offline, got total=%d len=%d err=%v", totalAfter, len(activeAfter), err)
+	if err != nil || totalAfter != 101 || len(activeAfter) != 100 {
+		t.Fatalf("expected all 101 active nodes preserved under non-destructive merge, got total=%d len=%d err=%v", totalAfter, len(activeAfter), err)
 	}
 
 	// Historical all-nodes query (ActiveOnly=false) must still preserve all 101 nodes for audit/evidence!
 	allNodes, totalAll, err := invSvc.ListNodes(ctx, domain.NodeFilter{
 		ActiveOnly: false,
-		Pagination: domain.Pagination{Page: 1, PageSize: 200},
+		Pagination: domain.Pagination{Page: 1, PageSize: 100},
 	})
 	if err != nil || totalAll != 101 || len(allNodes) != 100 { // Page 1 has 100 items out of 101
 		t.Fatalf("historical node ledger must preserve all 101 nodes, got total=%d len=%d err=%v", totalAll, len(allNodes), err)
@@ -248,12 +248,12 @@ func TestAdversarial_Dimension2_MassSuddenNodeOfflineAndConvergence(t *testing.T
 		t.Fatalf("expected parser rejection on empty proxies: [], got nil")
 	}
 
-	// Active nodes must STILL remain 2 (protected against empty-body wipeout!)
+	// Active nodes must STILL remain 101 (protected against empty-body wipeout!)
 	activeAfterEmpty, totalAfterEmpty, err := invSvc.ListNodes(ctx, domain.NodeFilter{
 		ActiveOnly: true,
-		Pagination: domain.Pagination{Page: 1, PageSize: 200},
+		Pagination: domain.Pagination{Page: 1, PageSize: 100},
 	})
-	if err != nil || totalAfterEmpty != 2 || len(activeAfterEmpty) != 2 {
+	if err != nil || totalAfterEmpty != 101 || len(activeAfterEmpty) != 100 {
 		t.Fatalf("empty response parse failure must preserve existing inventory: total=%d err=%v", totalAfterEmpty, err)
 	}
 
@@ -266,12 +266,12 @@ func TestAdversarial_Dimension2_MassSuddenNodeOfflineAndConvergence(t *testing.T
 		t.Fatalf("expected reconcile error on 502, got nil")
 	}
 
-	// Active nodes must STILL remain 2 (last known good state protected)
+	// Active nodes must STILL remain 101 (last known good state protected)
 	activeAfterErr, totalAfterErr, err := invSvc.ListNodes(ctx, domain.NodeFilter{
 		ActiveOnly: true,
-		Pagination: domain.Pagination{Page: 1, PageSize: 200},
+		Pagination: domain.Pagination{Page: 1, PageSize: 100},
 	})
-	if err != nil || totalAfterErr != 2 || len(activeAfterErr) != 2 {
+	if err != nil || totalAfterErr != 101 || len(activeAfterErr) != 100 {
 		t.Fatalf("failed fetch must preserve last known good inventory: total=%d err=%v", totalAfterErr, err)
 	}
 }

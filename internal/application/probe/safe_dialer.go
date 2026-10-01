@@ -22,6 +22,67 @@ var (
 	ErrClientBuildFailed     = errors.New("client_build_failed")
 )
 
+// ClientBuildDiagnosticError carries redacted, categorized failure details when sing-box client construction fails.
+type ClientBuildDiagnosticError struct {
+	Category string `json:"category"`
+	Reason   string `json:"reason"`
+	Err      error  `json:"-"`
+}
+
+func (e *ClientBuildDiagnosticError) Error() string {
+	return "client_build_failed: [" + e.Category + "] " + e.Reason
+}
+
+func (e *ClientBuildDiagnosticError) Unwrap() error {
+	return ErrClientBuildFailed
+}
+
+func (e *ClientBuildDiagnosticError) Is(target error) bool {
+	return target == ErrClientBuildFailed
+}
+
+// ClassifyAndRedactBuildError sanitizes raw errors, strips sensitive credentials, and assigns a diagnostic category.
+func ClassifyAndRedactBuildError(err error, creds domain.InboundProtocolCredential) error {
+	if err == nil {
+		return nil
+	}
+	rawMsg := err.Error()
+
+	// Strip specific credential strings if present in the error message
+	secrets := []string{creds.Password, creds.UUID, creds.PrivateKey, creds.PublicKey, creds.Username}
+	for _, s := range secrets {
+		if s != "" {
+			rawMsg = strings.ReplaceAll(rawMsg, s, "[REDACTED]")
+		}
+	}
+
+	// Scrub any sensitive query strings or embedded tokens
+	redacted := domain.RedactSensitiveInfo(rawMsg)
+
+	lower := strings.ToLower(rawMsg)
+	category := "client_initialization"
+	switch {
+	case strings.Contains(lower, "reality") || strings.Contains(lower, "short_id") || strings.Contains(lower, "public_key"):
+		category = "reality_configuration"
+	case strings.Contains(lower, "xhttp") || strings.Contains(lower, "transport") || strings.Contains(lower, "websocket") || strings.Contains(lower, "grpc"):
+		category = "transport_configuration"
+	case strings.Contains(lower, "flow") || strings.Contains(lower, "vision"):
+		category = "flow_configuration"
+	case strings.Contains(lower, "tls") || strings.Contains(lower, "cert") || strings.Contains(lower, "sni") || strings.Contains(lower, "alpn"):
+		category = "tls_configuration"
+	case strings.Contains(lower, "network") || strings.Contains(lower, "udp") || strings.Contains(lower, "tcp"):
+		category = "network_configuration"
+	case strings.Contains(lower, "unsupported"):
+		category = "unsupported_protocol_feature"
+	}
+
+	return &ClientBuildDiagnosticError{
+		Category: category,
+		Reason:   redacted,
+		Err:      err,
+	}
+}
+
 // SafeNodeDialerOptions provides optional overrides for SafeNodeDialer.
 type SafeNodeDialerOptions struct {
 	// Resolver allows overriding the DNS resolver used for server verification.
@@ -177,7 +238,7 @@ func NewSafeNodeDialer(opts ...SafeNodeDialerOptions) NodeDialer {
 		}
 		client, cleanup, err := clientFactory(ctx, cfg, httpOpts)
 		if err != nil {
-			return nil, nil, ErrClientBuildFailed
+			return nil, nil, ClassifyAndRedactBuildError(err, node.Credentials)
 		}
 
 		// Enforce HTTP redirect prohibition

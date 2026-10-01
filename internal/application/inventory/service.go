@@ -311,6 +311,16 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 			NodesValid:     0,
 		}
 		_ = s.fetches.Create(ctx, &failedFetch)
+		if s.auditRepo != nil {
+			_ = s.auditRepo.Record(ctx, &domain.AuditEvent{
+				ID:              domain.MustNewUUIDv7(),
+				ActorKind:       domain.ActorKindSystem,
+				Action:          "subscription.fetch.failed",
+				RedactedSummary: redactedErr,
+				Result:          domain.AuditResultFailure,
+				CreatedAt:       finishedAt,
+			})
+		}
 
 		return &ReconcileResult{
 			FetchID:        fetchID,
@@ -338,6 +348,16 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 			NodesValid:     0,
 		}
 		_ = s.fetches.Create(ctx, &failedFetch)
+		if s.auditRepo != nil {
+			_ = s.auditRepo.Record(ctx, &domain.AuditEvent{
+				ID:              domain.MustNewUUIDv7(),
+				ActorKind:       domain.ActorKindSystem,
+				Action:          "subscription.parse.failed",
+				RedactedSummary: redactedErr,
+				Result:          domain.AuditResultFailure,
+				CreatedAt:       finishedAt,
+			})
+		}
 
 		return &ReconcileResult{
 			FetchID:        fetchID,
@@ -346,6 +366,45 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 			ContentDigest:  fetchResp.ContentDigest,
 			RedactedError:  redactedErr,
 		}, fmt.Errorf("failed to parse subscription %s content: %w", sub.ID, extractErr)
+	}
+
+	if len(extractResult.Items) == 0 {
+		finishedAt := domain.NowUTC()
+		fetchID := domain.MustNewUUIDv7()
+		redactedErr := "extracted 0 valid nodes from subscription content"
+
+		failedFetch := domain.SubscriptionFetch{
+			ID:             fetchID,
+			SubscriptionID: sub.ID,
+			StartedAt:      startedAt,
+			FinishedAt:     &finishedAt,
+			Outcome:        domain.FetchOutcomeFailed,
+			ContentDigest:  fetchResp.ContentDigest,
+			RedactedError:  redactedErr,
+			NodesParsed:    extractResult.Rejected,
+			NodesValid:     0,
+		}
+		_ = s.fetches.Create(ctx, &failedFetch)
+		if s.auditRepo != nil {
+			_ = s.auditRepo.Record(ctx, &domain.AuditEvent{
+				ID:              domain.MustNewUUIDv7(),
+				ActorKind:       domain.ActorKindSystem,
+				Action:          "subscription.extract.empty",
+				RedactedSummary: redactedErr,
+				Result:          domain.AuditResultFailure,
+				CreatedAt:       finishedAt,
+			})
+		}
+
+		return &ReconcileResult{
+			FetchID:        fetchID,
+			SubscriptionID: sub.ID,
+			Outcome:        domain.FetchOutcomeFailed,
+			ContentDigest:  fetchResp.ContentDigest,
+			RedactedError:  redactedErr,
+			NodesParsed:    extractResult.Rejected,
+			NodesValid:     0,
+		}, fmt.Errorf("failed to reconcile subscription %s: %s", sub.ID, redactedErr)
 	}
 
 	nodesParsed := len(extractResult.Items) + extractResult.Rejected
@@ -384,22 +443,66 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 			return fmt.Errorf("failed to insert subscription fetch: %w", err)
 		}
 
+		type existingNodeRow struct {
+			logicalID          string
+			protocol           domain.Protocol
+			displayName        string
+			server             string
+			port               int
+			configJSON         string
+			creds              domain.InboundProtocolCredential
+			active             bool
+			connectionRevision int64
+		}
+		existingNodes := make(map[string]existingNodeRow)
+		existingByNameProto := make(map[string][]existingNodeRow)
+
+		const selectExistingSQL = `
+		SELECT n.logical_id, n.protocol, n.display_name, n.server, n.port, n.config_json, n.active, n.connection_revision
+		FROM nodes n
+		INNER JOIN node_sources ns ON n.logical_id = ns.node_logical_id
+		WHERE ns.subscription_id = ?;`
+
+		rows, qErr := tx.QueryContext(ctx, selectExistingSQL, sub.ID)
+		if qErr != nil {
+			return fmt.Errorf("failed to query existing nodes for subscription: %w", qErr)
+		}
+		for rows.Next() {
+			var r existingNodeRow
+			var protoStr string
+			var activeInt int
+			if scanErr := rows.Scan(&r.logicalID, &protoStr, &r.displayName, &r.server, &r.port, &r.configJSON, &activeInt, &r.connectionRevision); scanErr != nil {
+				rows.Close()
+				return fmt.Errorf("failed to scan existing node: %w", scanErr)
+			}
+			r.protocol = domain.Protocol(protoStr)
+			r.active = activeInt == 1
+			_ = json.Unmarshal([]byte(r.configJSON), &r.creds)
+			existingNodes[r.logicalID] = r
+			npKey := r.displayName + "|" + string(r.protocol)
+			existingByNameProto[npKey] = append(existingByNameProto[npKey], r)
+		}
+		rows.Close()
+
+		incomingByNameProto := make(map[string]int)
+		for _, item := range extractResult.Items {
+			node := item.Normalized.Node
+			npKey := node.DisplayName + "|" + string(node.Protocol)
+			incomingByNameProto[npKey]++
+		}
+
 		const upsertNodeSQL = `
-		INSERT INTO nodes (logical_id, protocol, display_name, server, port, config_json, active, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+		INSERT INTO nodes (logical_id, protocol, display_name, server, port, config_json, active, created_at, updated_at, connection_revision)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(logical_id) DO UPDATE SET
 			protocol = excluded.protocol,
 			display_name = excluded.display_name,
 			server = excluded.server,
 			port = excluded.port,
 			config_json = excluded.config_json,
-			active = 1,
+			active = excluded.active,
 			updated_at = excluded.updated_at,
-			connection_revision = nodes.connection_revision + CASE WHEN
-				nodes.protocol IS NOT excluded.protocol OR nodes.server IS NOT excluded.server OR
-				nodes.port IS NOT excluded.port OR nodes.config_json IS NOT excluded.config_json OR
-				(nodes.active = 0 AND excluded.active = 1)
-				THEN 1 ELSE 0 END;`
+			connection_revision = excluded.connection_revision;`
 
 		nodeStmt, err := tx.PrepareContext(ctx, upsertNodeSQL)
 		if err != nil {
@@ -422,9 +525,180 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 		seenLogicalIDs := make(map[string]bool)
 		for _, item := range extractResult.Items {
 			node := item.Normalized.Node
+			npKey := node.DisplayName + "|" + string(node.Protocol)
+
+			candidateID := node.LogicalID
+			if candidateID == "" {
+				candidateID = domain.ComputeNodeLogicalID(node.Protocol, node.Server, node.Port, item.Normalized.Transport)
+			}
+			scopedCandidateID := computeScopedLogicalID(sub.ID, candidateID)
+
+			var targetLogicalID string
+			var currentRevision int64 = 1
+			targetActive := 1
+
+			// 1. Try to match an existing node already associated with this subscription
+			var matchedNode *existingNodeRow
+			if node.LogicalID != "" {
+				if ex, ok := existingNodes[node.LogicalID]; ok {
+					matchedNode = &ex
+				}
+			}
+
+			existingList := existingByNameProto[npKey]
+			isUniqueInExisting := len(existingList) == 1
+			isUniqueInIncoming := incomingByNameProto[npKey] == 1
+
+			if matchedNode == nil && isUniqueInExisting && isUniqueInIncoming {
+				// Matched by unique (DisplayName, Protocol) within this subscription
+				m := existingList[0]
+				matchedNode = &m
+			}
+
+			if matchedNode == nil {
+				// Matched by scoped candidate ID or base candidate ID in existingNodes
+				if ex, ok := existingNodes[scopedCandidateID]; ok {
+					matchedNode = &ex
+				} else if ex, ok := existingNodes[candidateID]; ok {
+					matchedNode = &ex
+				}
+			}
+
+			if matchedNode != nil {
+				if !matchedNode.active {
+					targetActive = 0 // Preserve user disabled state
+				}
+
+				connEqual := areConnectionParametersEqual(
+					matchedNode.protocol, node.Protocol,
+					matchedNode.server, node.Server,
+					matchedNode.port, node.Port,
+					matchedNode.creds, node.Credentials,
+				)
+
+				if connEqual {
+					targetLogicalID = matchedNode.logicalID
+					currentRevision = matchedNode.connectionRevision
+				} else {
+					// Connection parameters changed!
+					// Check if matchedNode is a legacy shared node (referenced by other subscriptions).
+					var otherOwnersCount int
+					if err := tx.QueryRowContext(ctx, `
+						SELECT COUNT(*) FROM node_sources
+						WHERE node_logical_id = ? AND subscription_id != ?;
+					`, matchedNode.logicalID, sub.ID).Scan(&otherOwnersCount); err != nil {
+						return fmt.Errorf("failed to check node sources count: %w", err)
+					}
+
+					if otherOwnersCount > 0 {
+						// Copy-on-write isolation:
+						// Branch to a scoped ID for this subscription so other subscriptions and
+						// existing group_edges pointing to matchedNode.logicalID are conservatively preserved.
+						targetLogicalID = scopedCandidateID
+						currentRevision = matchedNode.connectionRevision + 1
+						// Remove this subscription's association from the old shared node
+						if _, err := tx.ExecContext(ctx, `
+							DELETE FROM node_sources
+							WHERE node_logical_id = ? AND subscription_id = ?;
+						`, matchedNode.logicalID, sub.ID); err != nil {
+							return fmt.Errorf("failed to unlink old shared node source: %w", err)
+						}
+					} else {
+						// Single owner within this subscription: update in-place
+						targetLogicalID = matchedNode.logicalID
+						currentRevision = matchedNode.connectionRevision + 1
+					}
+				}
+			} else {
+				// Not matched to any existing node in this subscription.
+				// Check if candidateID already exists in global nodes table (owned by another sub or manual).
+				var existingActive int
+				var existingRev int64
+				var existingConfig string
+				var existingProto string
+				var existingServer string
+				var existingPort int
+
+				checkErr := tx.QueryRowContext(ctx, `
+					SELECT n.active, n.connection_revision, n.config_json, n.protocol, n.server, n.port
+					FROM nodes n WHERE n.logical_id = ?;
+				`, candidateID).Scan(&existingActive, &existingRev, &existingConfig, &existingProto, &existingServer, &existingPort)
+
+				if checkErr == sql.ErrNoRows {
+					// ID does not exist anywhere. Safe to use candidateID.
+					targetLogicalID = candidateID
+					currentRevision = 1
+					targetActive = 1
+				} else if checkErr == nil {
+					// candidateID exists in nodes table. Check its provenance in node_sources.
+					var sameSubCount int
+					var otherSubCount int
+					_ = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM node_sources WHERE node_logical_id = ? AND subscription_id = ?;`, candidateID, sub.ID).Scan(&sameSubCount)
+					_ = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM node_sources WHERE node_logical_id = ? AND subscription_id != ?;`, candidateID, sub.ID).Scan(&otherSubCount)
+
+					if sameSubCount > 0 {
+						// Already associated with this subscription in this or earlier batch (e.g. duplicate in same sub)
+						targetLogicalID = candidateID
+						currentRevision = existingRev
+						if existingActive == 0 {
+							targetActive = 0
+						}
+					} else if otherSubCount == 0 {
+						// MANUAL NODE (no subscription sources): Must NEVER be overwritten by incoming subscription!
+						targetLogicalID = scopedCandidateID
+					} else {
+						// Belongs to other subscription(s). Check if credentials are identical.
+						var exCreds domain.InboundProtocolCredential
+						_ = json.Unmarshal([]byte(existingConfig), &exCreds)
+						if areConnectionParametersEqual(domain.Protocol(existingProto), node.Protocol, existingServer, node.Server, existingPort, node.Port, exCreds, node.Credentials) {
+							// Identical connection credentials: safe to share legacy reference
+							targetLogicalID = candidateID
+							currentRevision = existingRev
+							if existingActive == 0 {
+								targetActive = 0
+							}
+						} else {
+							// Credential conflict across sources: isolate using scoped logical ID!
+							targetLogicalID = scopedCandidateID
+						}
+					}
+
+					// If targetLogicalID was redirected to scopedCandidateID, check if scopedCandidateID already exists
+					if targetLogicalID == scopedCandidateID {
+						var scActive int
+						var scRev int64
+						var scConfig string
+						var scProto string
+						var scServer string
+						var scPort int
+						scErr := tx.QueryRowContext(ctx, `
+							SELECT n.active, n.connection_revision, n.config_json, n.protocol, n.server, n.port
+							FROM nodes n WHERE n.logical_id = ?;
+						`, scopedCandidateID).Scan(&scActive, &scRev, &scConfig, &scProto, &scServer, &scPort)
+						if scErr == nil {
+							if scActive == 0 {
+								targetActive = 0
+							}
+							var scCreds domain.InboundProtocolCredential
+							_ = json.Unmarshal([]byte(scConfig), &scCreds)
+							if areConnectionParametersEqual(domain.Protocol(scProto), node.Protocol, scServer, node.Server, scPort, node.Port, scCreds, node.Credentials) {
+								currentRevision = scRev
+							} else {
+								currentRevision = scRev + 1
+							}
+						} else {
+							currentRevision = 1
+							targetActive = 1
+						}
+					}
+				} else {
+					return fmt.Errorf("failed to query node %s: %w", candidateID, checkErr)
+				}
+			}
+
 			rawCreds, mErr := json.Marshal(node.Credentials)
 			if mErr != nil {
-				return fmt.Errorf("failed to marshal credentials for node %s: %w", node.LogicalID, mErr)
+				return fmt.Errorf("failed to marshal credentials for node %s: %w", targetLogicalID, mErr)
 			}
 			configJSON := string(rawCreds)
 			if configJSON == "" {
@@ -432,50 +706,35 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 			}
 
 			if _, err := nodeStmt.ExecContext(ctx,
-				node.LogicalID,
+				targetLogicalID,
 				string(node.Protocol),
 				node.DisplayName,
 				node.Server,
 				node.Port,
 				configJSON,
+				targetActive,
 				nowStr,
 				nowStr,
+				currentRevision,
 			); err != nil {
-				return fmt.Errorf("failed to upsert node %s: %w", node.LogicalID, err)
+				return fmt.Errorf("failed to upsert node %s: %w", targetLogicalID, err)
 			}
 
-			if !seenLogicalIDs[node.LogicalID] {
-				seenLogicalIDs[node.LogicalID] = true
+			if !seenLogicalIDs[targetLogicalID] {
+				seenLogicalIDs[targetLogicalID] = true
 				if _, err := sourceStmt.ExecContext(ctx,
-					node.LogicalID,
+					targetLogicalID,
 					sub.ID,
 					fetchID,
 				); err != nil {
-					return fmt.Errorf("failed to upsert node source for node %s: %w", node.LogicalID, err)
+					return fmt.Errorf("failed to upsert node source for node %s: %w", targetLogicalID, err)
 				}
 			}
 		}
 
-		const pruneSourcesSQL = `
-		DELETE FROM node_sources
-		WHERE subscription_id = ? AND last_seen_fetch_id != ?;`
-
-		if _, err := tx.ExecContext(ctx, pruneSourcesSQL, sub.ID, fetchID); err != nil {
-			return fmt.Errorf("failed to prune obsolete node sources: %w", err)
-		}
-
-		const deactivateOrphansSQL = `
-		UPDATE nodes
-		SET active = 0, updated_at = ?
-		WHERE active = 1
-		  AND NOT EXISTS (
-			  SELECT 1 FROM node_sources WHERE node_sources.node_logical_id = nodes.logical_id
-		  );`
-
-		if _, err := tx.ExecContext(ctx, deactivateOrphansSQL, nowStr); err != nil {
-			return fmt.Errorf("failed to deactivate orphan nodes: %w", err)
-		}
-
+		// NON-DESTRUCTIVE INVARIANT: No node_sources rows are pruned or deleted on refresh.
+		// Existing source associations are preserved across intervals (even if omitted in current fetch,
+		// last_seen_fetch_id remains as historical record, but provenance edge is never removed).
 		return nil
 	})
 

@@ -12,7 +12,7 @@ func TestVLESSVisionRealityRuntimeMatchesExport(t *testing.T) {
 	node := domain.Node{
 		LogicalID: "vision", Protocol: domain.ProtocolVLESS, Server: "198.51.100.9", Port: 443,
 		Credentials: domain.InboundProtocolCredential{UUID: "11111111-1111-1111-1111-111111111111", Transport: map[string]string{
-			"flow": "xtls-rprx-vision", "pbk": "public-key", "sid": "deadbeef", "sni": "example.org", "fp": "chrome",
+			"flow": "xtls-rprx-vision", "pbk": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", "sid": "deadbeef", "sni": "example.org", "fp": "chrome",
 		}},
 	}
 	cfg := singbox.NodeConfigFromNode(node)

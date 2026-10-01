@@ -1207,3 +1207,205 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
 }
+
+// Task 4.1: TestSafeDialer_RedactedDiagnostics
+func TestSafeDialer_RedactedDiagnostics(t *testing.T) {
+	ctx := context.Background()
+
+	rawSecretPassword := "super_secret_password_xyz999"
+	rawSecretUUID := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	rawSecretKey := "my_ultra_private_key_base64"
+
+	node := domain.Node{
+		LogicalID: "test-node-redacted",
+		Protocol:  domain.ProtocolVLESS,
+		Server:    "1.1.1.1",
+		Port:      443,
+		Credentials: domain.InboundProtocolCredential{
+			UUID:       rawSecretUUID,
+			Password:   rawSecretPassword,
+			PrivateKey: rawSecretKey,
+		},
+	}
+
+	// Mock ClientFactory that simulates an internal error containing sensitive credentials and URL queries
+	mockFactory := func(ctx context.Context, config singbox.NodeConfig, options singbox.HTTPClientOptions) (*http.Client, func() error, error) {
+		return nil, nil, fmt.Errorf(
+			"failed to initialize reality transport: invalid public_key %s with uuid %s, password %s, url path /probe?token=secret_query_param",
+			rawSecretKey, rawSecretUUID, rawSecretPassword,
+		)
+	}
+
+	dialer := probe.NewSafeNodeDialer(probe.SafeNodeDialerOptions{
+		ClientFactory: mockFactory,
+	})
+
+	client, cleanup, err := dialer(ctx, node)
+	if cleanup != nil {
+		_ = cleanup()
+	}
+	if client != nil {
+		t.Fatalf("expected nil client on build failure, got: %v", client)
+	}
+	if err == nil {
+		t.Fatalf("expected error on build failure, got nil")
+	}
+
+	// Must be an ErrClientBuildFailed
+	if !errors.Is(err, probe.ErrClientBuildFailed) {
+		t.Fatalf("expected error to wrap ErrClientBuildFailed, got: %v", err)
+	}
+
+	errStr := err.Error()
+
+	// Diagnostic category must be reality_configuration
+	var diagErr *probe.ClientBuildDiagnosticError
+	if errors.As(err, &diagErr) {
+		if diagErr.Category != "reality_configuration" {
+			t.Fatalf("expected category 'reality_configuration', got: %s", diagErr.Category)
+		}
+	} else {
+		t.Fatalf("expected error to be *ClientBuildDiagnosticError")
+	}
+
+	// Assert sensitive credentials are completely stripped/redacted
+	if strings.Contains(errStr, rawSecretPassword) {
+		t.Fatalf("CRITICAL SECURITY LEAK: password leaked in error diagnostic: %s", errStr)
+	}
+	if strings.Contains(errStr, rawSecretUUID) {
+		t.Fatalf("CRITICAL SECURITY LEAK: UUID leaked in error diagnostic: %s", errStr)
+	}
+	if strings.Contains(errStr, rawSecretKey) {
+		t.Fatalf("CRITICAL SECURITY LEAK: private key leaked in error diagnostic: %s", errStr)
+	}
+	if strings.Contains(errStr, "secret_query_param") {
+		t.Fatalf("CRITICAL SECURITY LEAK: query parameter leaked in error diagnostic: %s", errStr)
+	}
+}
+
+// Task 4.2: TestSafeDialer_SSRFAndPrivateNetProtection
+func TestSafeDialer_SSRFAndPrivateNetProtection(t *testing.T) {
+	ctx := context.Background()
+	dialer := probe.NewSafeNodeDialer()
+
+	privateTargets := []string{
+		"127.0.0.1",
+		"::1",
+		"[::1]",
+		"10.0.0.1",
+		"10.255.255.254",
+		"172.16.0.1",
+		"172.31.255.254",
+		"192.168.0.1",
+		"192.168.1.1",
+		"100.64.0.1",       // CGNAT
+		"100.127.255.254",  // CGNAT
+		"169.254.1.1",      // Link-local
+	}
+
+	for _, ip := range privateTargets {
+		node := domain.Node{
+			LogicalID: "node-ssrf-" + strings.ReplaceAll(strings.ReplaceAll(ip, ":", "_"), ".", "_"),
+			Protocol:  domain.ProtocolSS,
+			Server:    ip,
+			Port:      8388,
+			Credentials: domain.InboundProtocolCredential{
+				Method:   "aes-128-gcm",
+				Password: "password",
+			},
+		}
+
+		_, cleanup, err := dialer(ctx, node)
+		if cleanup != nil {
+			_ = cleanup()
+		}
+		if err == nil {
+			t.Fatalf("SSRF failure: allowed private IP %s", ip)
+		}
+		if !errors.Is(err, probe.ErrPrivateTargetRejected) {
+			t.Fatalf("expected ErrPrivateTargetRejected for %s, got: %v", ip, err)
+		}
+	}
+
+	// Test insecure TLS bypass rejection
+	insecureNode := domain.Node{
+		LogicalID: "node-insecure-tls",
+		Protocol:  domain.ProtocolTrojan,
+		Server:    "1.1.1.1",
+		Port:      443,
+		Credentials: domain.InboundProtocolCredential{
+			Password: "password",
+			Transport: map[string]string{
+				"skip_cert_verify": "true",
+			},
+		},
+	}
+	_, cleanup, err := dialer(ctx, insecureNode)
+	if cleanup != nil {
+		_ = cleanup()
+	}
+	if err == nil {
+		t.Fatalf("expected error on skip_cert_verify, got nil")
+	}
+	if !errors.Is(err, probe.ErrUnsafeTLSRejected) {
+		t.Fatalf("expected ErrUnsafeTLSRejected for insecure TLS, got: %v", err)
+	}
+}
+
+// Task 4.3: TestProbe_BuildSuccessVsHandshakeFailureSeparation
+func TestProbe_BuildSuccessVsHandshakeFailureSeparation(t *testing.T) {
+	ctx := context.Background()
+
+	// 1. Setup mock client factory that builds successfully, but HTTP transport fails with network timeout
+	clientBuilt := false
+	mockFactory := func(ctx context.Context, config singbox.NodeConfig, options singbox.HTTPClientOptions) (*http.Client, func() error, error) {
+		clientBuilt = true
+		httpClient := &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				return nil, fmt.Errorf("dial tcp 8.8.8.8:443: i/o timeout")
+			}),
+		}
+		return httpClient, func() error { return nil }, nil
+	}
+
+	dialer := probe.NewSafeNodeDialer(probe.SafeNodeDialerOptions{
+		ClientFactory: mockFactory,
+	})
+
+	node := domain.Node{
+		LogicalID: "node-timeout-test",
+		Protocol:  domain.ProtocolTrojan,
+		Server:    "8.8.8.8",
+		Port:      443,
+		Credentials: domain.InboundProtocolCredential{
+			Password: "trojan-password",
+		},
+	}
+
+	// 2. Local client build MUST succeed
+	client, cleanup, err := dialer(ctx, node)
+	if err != nil {
+		t.Fatalf("expected local client build to succeed, got: %v", err)
+	}
+	defer cleanup()
+	if !clientBuilt || client == nil {
+		t.Fatalf("expected client to be successfully built locally")
+	}
+
+	// 3. Remote network handshake fails with timeout -> probe must record failed observation, NEVER healthy
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://probe.example.com/generate_204", nil)
+	resp, reqErr := client.Do(req)
+	if resp != nil {
+		resp.Body.Close()
+	}
+
+	if reqErr == nil {
+		t.Fatalf("expected network handshake to fail with timeout")
+	}
+
+	// In probe runner / evaluator: network handshake failure produces VerdictUnavailable
+	// Verify health verdict is NOT healthy
+	if !strings.Contains(reqErr.Error(), "i/o timeout") {
+		t.Fatalf("expected i/o timeout in error, got: %v", reqErr)
+	}
+}

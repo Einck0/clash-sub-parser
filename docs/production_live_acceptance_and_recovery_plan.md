@@ -63,9 +63,10 @@ curl -s http://127.0.0.1:18080/healthz
 ```bash
 docker compose -f /home/service/clash-sub-parser/docker-compose.yml stop app
 docker tag clash-sub-parser-app:rollback-target clash-sub-parser-app:latest
-docker compose -f /home/service/clash-sub-parser/docker-compose.yml up -d app
+docker compose -f /home/service/clash-sub-parser/docker-compose.yml up -d --no-deps --no-build --force-recreate app
 curl -s http://127.0.0.1:18080/healthz
 ```
+正常镜像回滚不覆盖仍完好的数据库；仅在数据库发生有损写入时，才在停机后执行独立数据库回滚。
 
 ---
 
@@ -81,7 +82,8 @@ curl -s http://127.0.0.1:18080/healthz
   -output /tmp/csp-live-acceptance-report.json
 ```
 - 预期输出：`/healthz` (PASS, status=ok), `/readyz` (PASS, tables=14, schema=13), `/api/v1/auth/status` (PASS, mode=protected)。
-- 若未提供凭据：报告 `PAUSED_CREDENTIALS_REQUIRED`，退出码 0，保护管理端不被非法调用。
+- 若未提供凭据：报告 `PAUSED_CREDENTIALS_REQUIRED` / `BLOCKED`，退出码 2（非零），保护管理端不被非法调用，绝不冒充业务通过。
+- 运行环境安全：runner 采用受管私有 scratch（umask 077、trap 可靠清理），报告以 0600 权限写入，绝不在公共目录遗留明文凭据或未清理的构建产物。
 
 ### 2. 带身份管理端只读审计 (Authenticated Read-Only Management Audit)
 提供合法凭据后（通过环境变量或凭据文件）：
@@ -98,7 +100,8 @@ CSP_ADMIN_TOKEN="<managed-token>" /home/service/clash-sub-parser/scripts/run_aut
   -token-file /path/to/managed-token.secret \
   -output /tmp/csp-live-acceptance-report.json
 ```
-- 预期输出：验证 `/api/v1/settings/auth`、`/api/v1/subscriptions`、`/api/v1/nodes`、`/api/v1/policies`、`/api/v1/publications` 完整响应体语义。
+- 预期输出：验证 `/api/v1/settings/auth`、`/api/v1/subscriptions`、`/api/v1/nodes`、`/api/v1/policies/rules`、`/api/v1/policies/groups`、`/api/v1/publications/preflight` 完整响应体语义。
+- 安全保证：所有日志与报告严格脱敏，不输出明文令牌、订阅私有地址或未经遮蔽的网络错误。全分页准确统计，节点 active 遵循布尔语义。
 
 ### 3. 有界实网验收与代表性探测 (Bounded Live Acceptance Under Budget)
 在审查机 PASS 且获授权后执行：

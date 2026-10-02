@@ -39,34 +39,60 @@ test -s "${BACKUP_FILE}" && ls -lh "${BACKUP_FILE}"
 
 ### 1. 固化当前存量镜像作为回滚目标
 ```bash
-# 获取当前线上正在运行的镜像 ID 并打上回滚标签
+# 获取当前线上正在运行的镜像 ID 并打上受管回滚标签（以实际 app 镜像名称 clash-sub-parser-app 为准）
 CURRENT_IMAGE_ID=$(docker inspect --format='{{.Image}}' clash-sub-parser)
-docker tag "${CURRENT_IMAGE_ID}" clash-sub-parser:rollback-target
+docker tag "${CURRENT_IMAGE_ID}" clash-sub-parser-app:rollback-target
 echo "Rollback target pinned to image: ${CURRENT_IMAGE_ID}"
+# 导出当前镜像归档到私有受管备份目录留存
+docker save "${CURRENT_IMAGE_ID}" | gzip > /data/backups/csp-image-rollback.tar.gz
 ```
 
-### 2. 构建新版本生产镜像
+### 2. 构建新版本生产镜像与受控发布
 ```bash
-# 基于当前代码树构建新镜像
-docker compose build app
+# 基于当前已审查冻结源码树构建新镜像
+docker compose -f /home/service/clash-sub-parser/docker-compose.yml build app
+
+# 严格执行目标服务受控替换：不 down、不删卷、不重新拉取其他服务
+# 保持 csp-v1-data 命名卷、双 loopback 端口 (17000/18080)、代理及现有 DB verifier 不变
+docker compose -f /home/service/clash-sub-parser/docker-compose.yml up -d --no-deps --no-build --force-recreate app
 ```
 
 ### 3. 双向回滚应急操作流程
-若上线后健康检查失败（`/healthz` 非 200）、服务异常重启或 Critic 黑盒验收判定 FAILED：
+若上线后健康检查失败（`/healthz` 非 200）、服务异常重启或实网验收出现严重故障：
+
+#### 方案 A：常规镜像回滚（默认无损路径）
+适用于仅应用逻辑、前端资产或二进制异常，且数据库未发生有损变更：
 ```bash
 # 1. 停止异常服务
-docker compose stop app
+docker compose -f /home/service/clash-sub-parser/docker-compose.yml stop app
 
-# 2. 还原数据库备份（若部署阶段存在写入）
-cp "${BACKUP_FILE}" /data/csp-v1.db
+# 2. 切换回滚镜像并拉起（严格使用 clash-sub-parser-app 镜像名，不使用旧 clash-sub-parser:latest）
+docker tag clash-sub-parser-app:rollback-target clash-sub-parser-app:latest
+docker compose -f /home/service/clash-sub-parser/docker-compose.yml up -d --no-deps --no-build --force-recreate app
 
-# 3. 切换回滚镜像并拉起
-docker tag clash-sub-parser:rollback-target clash-sub-parser:latest
-docker compose up -d app
-
-# 4. 验证回滚后健康状态
+# 3. 验证回滚后健康状态
 curl -fsS http://127.0.0.1:18080/healthz || exit 1
 curl -fsS http://127.0.0.1:18080/readyz || exit 1
+```
+*注意：正常镜像回滚绝不覆盖仍完好的数据库，防止丢失正常的业务写入！*
+
+#### 方案 B：数据库有损写入恢复（仅在确有数据损坏时执行）
+仅当更新后数据库遭遇非法 schema 破坏或严重损坏写入时才触发：
+```bash
+# 1. 停止异常服务并确认无其他活跃写者
+docker compose -f /home/service/clash-sub-parser/docker-compose.yml stop app
+
+# 2. 封存损坏数据库及 WAL/SHM 现场以供审计证据留存，严禁旧 WAL 重新挂载到快照
+mv /data/csp-v1.db /data/csp-v1-corrupted-$(date +%Y%m%d_%H%M%S).db
+rm -f /data/csp-v1.db-wal /data/csp-v1.db-shm
+
+# 3. 原子恢复已验证的备份副本并核验权限
+cp "${BACKUP_FILE}" /data/csp-v1.db
+chmod 0600 /data/csp-v1.db
+
+# 4. 以捕获的回滚镜像重新启动
+docker tag clash-sub-parser-app:rollback-target clash-sub-parser-app:latest
+docker compose -f /home/service/clash-sub-parser/docker-compose.yml up -d --no-deps --no-build --force-recreate app
 ```
 
 ---
@@ -140,8 +166,8 @@ Critic 必须通过无头浏览器采集如下视口尺寸实机渲染截图并�
 ## 六、 生产计划准备与资源/回滚预检 (Production Planning & Preflight Verification)
 
 ### 1. 生产环境服务定位与当前运行态
-- **生产容器**：`clash-sub-parser` (Container ID `b6392154ebf7`，状态 `healthy`)；
-- **生产镜像**：`clash-sub-parser-app` (Image SHA256: `0ea88a8d0ee838eaff081d030591aade73765cdaa3f97324427bbb36a52a7020`)；
+- **生产容器**：`clash-sub-parser` (Container ID `d8780938a0d6`，状态 `healthy`)；
+- **生产镜像**：`clash-sub-parser-app:latest` (Image ID `807549162ceb`，当前稳定运行镜像，杜绝使用旧 `0ea88a8d0ee8`)；
 - **生产数据卷**：Docker Volume `csp-v1-data`（宿主机物理路径 `/var/lib/docker/volumes/csp-v1-data/_data/`）；
 - **生产数据库文件**：`/var/lib/docker/volumes/csp-v1-data/_data/csp-v1.db` (5.5 MB)；
 - **生产外部端口**：`127.0.0.1:18080`（及 17000），严禁抢占或写入。
@@ -163,7 +189,7 @@ Critic 必须通过无头浏览器采集如下视口尺寸实机渲染截图并�
 ### 4. 生产门禁与待决前提
 - **本阶段零写入声明**：当前施工与预览准备阶段绝对不触碰生产环境，不执行生产备份改写，不上线生产；
 - **后续闭环前提**：
-  1. Critic 黑盒视觉多视口验收判定 **CRITIC_VISUAL_VERDICT: PASSED**；
-  2. 主脑（`master-orchestrator`）完成全部证据终态核验；
+  1. 独立代码审查（`reviewer`）出具明确 **REVIEW: PASS** 且全量自测门禁通过；
+  2. 主脑（`master-orchestrator`）完成全部证据终态核验（本包无新增 UI，依据合同 Critic 不适用）；
   3. 获取用户明确部署授权后，按生产运行手册规范闭环实施上线。
 

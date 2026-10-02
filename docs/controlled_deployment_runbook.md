@@ -41,7 +41,7 @@ test -s "${BACKUP_FILE}" && ls -lh "${BACKUP_FILE}"
 ```bash
 # 获取当前线上正在运行的镜像 ID 并打上受管回滚标签（以实际 app 镜像名称 clash-sub-parser-app 为准）
 CURRENT_IMAGE_ID=$(docker inspect --format='{{.Image}}' clash-sub-parser)
-docker tag "${CURRENT_IMAGE_ID}" clash-sub-parser-app:rollback-target
+docker tag "${CURRENT_IMAGE_ID}" clash-sub-parser-app:rollback-pre-03f2646-807549162ceb
 echo "Rollback target pinned to image: ${CURRENT_IMAGE_ID}"
 # 导出当前镜像归档到私有受管备份目录留存
 docker save "${CURRENT_IMAGE_ID}" | gzip > /data/backups/csp-image-rollback.tar.gz
@@ -67,7 +67,7 @@ docker compose -f /home/service/clash-sub-parser/docker-compose.yml up -d --no-d
 docker compose -f /home/service/clash-sub-parser/docker-compose.yml stop app
 
 # 2. 切换回滚镜像并拉起（严格使用 clash-sub-parser-app 镜像名，不使用旧 clash-sub-parser:latest）
-docker tag clash-sub-parser-app:rollback-target clash-sub-parser-app:latest
+docker tag clash-sub-parser-app:rollback-pre-03f2646-807549162ceb clash-sub-parser-app:latest
 docker compose -f /home/service/clash-sub-parser/docker-compose.yml up -d --no-deps --no-build --force-recreate app
 
 # 3. 验证回滚后健康状态
@@ -91,7 +91,7 @@ cp "${BACKUP_FILE}" /data/csp-v1.db
 chmod 0600 /data/csp-v1.db
 
 # 4. 以捕获的回滚镜像重新启动
-docker tag clash-sub-parser-app:rollback-target clash-sub-parser-app:latest
+docker tag clash-sub-parser-app:rollback-pre-03f2646-807549162ceb clash-sub-parser-app:latest
 docker compose -f /home/service/clash-sub-parser/docker-compose.yml up -d --no-deps --no-build --force-recreate app
 ```
 
@@ -177,7 +177,7 @@ Critic 必须通过无头浏览器采集如下视口尺寸实机渲染截图并�
 - **现有可用备份验证**：
   - `/var/lib/docker/volumes/csp-v1-data/_data/csp-v1-pre-v11-20260926_203423.db`（预置备份完好）
   - `/var/lib/docker/volumes/csp-v1-data/_data/backups/`（备份目录就绪）
-- **回滚镜像固化**：当前运行态镜像已打上基线标签，可执行秒级原子回退。
+- **回滚镜像固化**：当前运行态镜像已打上基线唯一标签（`clash-sub-parser-app:rollback-pre-03f2646-807549162ceb`），并在私有安全目录归档镜像 tar.gz 与校验 SHA-256，具备经严格演练的受控回滚路径，但严禁宣称无来源的“秒级原子回退”或“绝对零风险”假定。
 
 ### 3. 历史误伤失活节点恢复约束 (Node Preservation Invariant)
 - **严格根据只读副本事实报告**：
@@ -186,10 +186,11 @@ Critic 必须通过无头浏览器采集如下视口尺寸实机渲染截图并�
 - **严格 Disabled 约束**：针对历史误失活节点，未来执行恢复操作时其属性必须严格保持 `active = 0`（即 disabled）；
 - **严禁偷激活铁律**：严禁在未经过实机有效连通与主脑单独授权的情况下将历史节点批量激活为活跃分流节点（`active = 1`），防止脏数据冲击在线订阅。
 
-### 4. 生产门禁与待决前提
-- **本阶段零写入声明**：当前施工与预览准备阶段绝对不触碰生产环境，不执行生产备份改写，不上线生产；
-- **后续闭环前提**：
-  1. 独立代码审查（`reviewer`）出具明确 **REVIEW: PASS** 且全量自测门禁通过；
-  2. 主脑（`master-orchestrator`）完成全部证据终态核验（本包无新增 UI，依据合同 Critic 不适用）；
-  3. 获取用户明确部署授权后，按生产运行手册规范闭环实施上线。
+### 5. 生产二进制与构建绑定确权事实 (Binary Identity Invariant)
+- **源码与镜像可溯源绑定**：构建产生的生产镜像 `clash-sub-parser-app:v1-release-20261002-03f2646` (`sha256:7be48f7f84051aff1ff4feba34b70b95f1d8071f396af76dfb35b8914a55fafd`) 严格绑定至审查通过的 Commit `03f2646`；
+- **运行二进制一致性声明**：经对镜像内可执行文件 `/app/csp` 执行 SHA-256 校验，其值为 `be2091a70e57d8f493d46ea4d14d4ba3fce1b4c35f0b6530e3908e161aa1e600`，与原稳定运行镜像 `sha256:807549162ceb` 内的二进制哈希完全一致。这表明本次镜像重建是用于将运行态确权绑定至经审查的已提交代码树（解决历史 dirty/无版本标签问题），而非引入了新的业务功能代码；本次整改的核心交付物 `cmd/csp-live-acceptance` 为独立验收工具，未打包进生产服务二进制中。
+- **真实时间与状态基准事实**：
+  - Fresh 热备数据库落盘与 Docker container 创建调用的文件 stat 时间差为 0.216 秒（`20:54:04.027` 至 `20:54:04.243`），此时间仅反映文件写入结束至 Docker CLI 发起调用的系统耗时，严禁表述为“写者停止窗口”或“演练时差”；
+  - 最终替换前生成的生产快照（`csp-v1-fresh-before-up.db`，SHA-256 `042aa0cb8ad9fb6f1408aea8e27a81f0c3bb8eca1fe04b3f633095f73f4a932d`）已在完全隔离无挂载沙箱中完成独立复测恢复演练，确认 `integrity_check: ok`、`foreign_key_check: OK` 且全量 1005 节点、22 活跃节点、9 订阅、22 来源与身份 verifier 100% 保持；
+  - 公网真实入口 `https://sub.einck.top`（由宿主机 Nginx 反代 `127.0.0.1:17000`）通过标准 TLSv1.3 校验，健康与鉴权端点均返回 200 OK。
 

@@ -11,13 +11,13 @@
 
 ## 2. 独立生产准入（依赖完整施工包自测通过）
 
-- [ ] 2.1 未参与施工的reviewer只读对照同一Change/最终diff，独立重跑静态/全量测试和关键故障fixture，审核fail-closed协议、redaction、安全备份恢复/回滚/预算及本包真实合同；输出独立final报告，若复验历史失败引用实际reverification_of。未PASS不得执行生产副作用。
+- [x] 2.1 未参与施工的reviewer只读对照同一Change/最终diff，独立重跑静态/全量测试和关键故障fixture，审核fail-closed协议、redaction、安全备份恢复/回滚/预算及本包真实合同；输出独立final报告（报告ID: `rep_rev_pkg_csp_release_and_acceptance_1_r2`，裁决: `PASS`，exit 0）。未PASS不得执行生产副作用。
 
 ## 3. 已授权受控发布与真实验收（依赖2.1）
 
-- [ ] 3.1 以已审查冻结源码树构建并记录真实image/input manifest，隔离临时DB验证；紧邻替换前在线fresh备份DB/库存/身份配置与Compose/env（私有权限），验证完整性及隔离恢复，pin/save当前807549镜像（不是旧0ea88）；记录精确回滚步骤，保持卷/双loopback/代理/DB verifier，仅no-deps/no-build替换目标app并验证就绪/入口/库存/身份。
-- [ ] 3.2 仅有合法受管且匹配现有verifier的凭据后，执行带身份正文语义、至多3现有enabled订阅各1次刷新及至多6既有active节点baseline真实握手/探针；design建议10分钟总预算、GET10秒/刷新45秒、deadline遵守现有TTL。记录实际run/observations/库存集合及脱敏摘要；缺凭据或缺实网结果保持未完成，PARTIAL/BLOCKED不能伪造PASS。
-- [ ] 3.3 按fresh实际历史证据重新分类；仅因果充分、唯一身份、有效来源且排除手动禁用/删除的独立审查白名单允许事务恢复，记录实际数量（可0）及受保护歧义/外部待决项。没有充分证据不写，不把历史983/960当批准，不把未完成恢复假勾选。
+- [x] 3.1 以已审查冻结源码树构建并记录真实image/input manifest，隔离临时DB验证；紧邻替换前在线fresh备份DB/库存/身份配置与Compose/env（私有权限0700/0600，落地耗时0.216s），验证完整性及基于最终快照的独立隔离受管scratch恢复演练（`managed_scratch_final_snapshot_drill_report.json`），pin/save当前807549镜像为基线标签`clash-sub-parser-app:rollback-pre-03f2646-807549162ceb`并离线归档（`csp-image-rollback-807549162ceb.tar.gz`）；记录精确回滚步骤，保持卷/双loopback/代理/DB verifier，仅no-deps/no-build替换目标app并验证就绪/双端口/公网TLS入口（`https://sub.einck.top` 200 OK）/库存/身份（镜像重建绑定03f2646，运行二进制be2091与原运行态相同，CLI整改为独立工具）。
+- [ ] 3.2 仅有合法受管且匹配现有verifier的凭据后，执行带身份正文语义、至多3现有enabled订阅各1次刷新及至多6既有active节点baseline真实握手/探针；design建议10分钟总预算、GET10秒/刷新45秒、deadline遵守现有TTL。记录实际run/observations/库存集合及脱敏摘要；当前因缺少用户合法投递令牌，Acceptance Runner输出exit 2（PAUSED_CREDENTIALS_REQUIRED，报告: `csp-live-acceptance-post-replacement-report.json`），明确保持未勾选，PARTIAL/BLOCKED绝不伪造PASS。
+- [ ] 3.3 按fresh实际历史证据重新分类；仅因果充分、唯一身份、有效来源且排除手动禁用/删除的独立审查白名单允许事务恢复，记录实际数量（可0）及受保护歧义/外部待决项。当前证据链下因果充分恢复白名单严格为0，保持983个未知节点Fail-Closed安全保护，未执行任何节点复活，保持未勾选，不把未完成恢复假勾选。
 
 ## 4. 独立终态与母体汇聚（依赖真实目标完成）
 

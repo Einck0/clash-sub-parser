@@ -49,12 +49,24 @@ sha256sum "${BACKUP_DIR}/csp-v1-hot.db" > "${BACKUP_DIR}/backup.sha256"
 echo "Hot backup created at ${BACKUP_DIR}/csp-v1-hot.db"
 ```
 
-### 2. 数据库回滚指令 (Database Rollback)
-若生产恢复或刷新出现意外：
+### 2. 数据库回滚指令 (Database Rollback - 仅当确有数据损坏时按手册执行)
+**严格原则**：正常镜像回滚绝不触碰完好的数据库！仅当更新后数据库遭遇不可逆 schema 破坏或严重损坏写入时，才在停机后执行受控恢复，严禁在服务运行中直接 `cp` 覆盖数据库文件：
 ```bash
+# 1. 停止异常服务并确认无其他活跃写者
 docker compose -f /home/service/clash-sub-parser/docker-compose.yml stop app
-cp "${BACKUP_DIR}/csp-v1-hot.db" /var/lib/docker/volumes/csp-v1-data/_data/csp-v1.db
-docker compose -f /home/service/clash-sub-parser/docker-compose.yml up -d app
+
+# 2. 封存损坏数据库及 WAL/SHM 现场以供审计证据留存，严禁旧 WAL 重新挂载到快照
+mv /var/lib/docker/volumes/csp-v1-data/_data/csp-v1.db /var/lib/docker/volumes/csp-v1-data/_data/csp-v1-corrupted-$(date +%Y%m%d_%H%M%S).db
+rm -f /var/lib/docker/volumes/csp-v1-data/_data/csp-v1.db-wal /var/lib/docker/volumes/csp-v1-data/_data/csp-v1.db-shm
+
+# 3. 原子恢复已验证的备份副本并核验权限与一致性
+cp "${BACKUP_DIR}/csp-v1-fresh-before-up.db" /var/lib/docker/volumes/csp-v1-data/_data/csp-v1.db
+chmod 0600 /var/lib/docker/volumes/csp-v1-data/_data/csp-v1.db
+sqlite3 /var/lib/docker/volumes/csp-v1-data/_data/csp-v1.db "PRAGMA integrity_check;"
+
+# 4. 以捕获的回滚镜像重新启动仅目标 app
+docker tag clash-sub-parser-app:rollback-pre-03f2646-807549162ceb clash-sub-parser-app:latest
+docker compose -f /home/service/clash-sub-parser/docker-compose.yml up -d --no-deps --no-build app
 curl -s http://127.0.0.1:18080/healthz
 ```
 
@@ -62,11 +74,28 @@ curl -s http://127.0.0.1:18080/healthz
 若服务二进制或镜像发生异常：
 ```bash
 docker compose -f /home/service/clash-sub-parser/docker-compose.yml stop app
-docker tag clash-sub-parser-app:rollback-target clash-sub-parser-app:latest
+docker tag clash-sub-parser-app:rollback-pre-03f2646-807549162ceb clash-sub-parser-app:latest
 docker compose -f /home/service/clash-sub-parser/docker-compose.yml up -d --no-deps --no-build --force-recreate app
 curl -s http://127.0.0.1:18080/healthz
 ```
 正常镜像回滚不覆盖仍完好的数据库；仅在数据库发生有损写入时，才在停机后执行独立数据库回滚。
+
+### 4. 生产运行态与真实公网入口确权 (Live Runtime & Public Domain Invariant)
+- **生产容器与镜像**：
+  - 容器名: `clash-sub-parser` (`e5e13e23a84e`，由 `d8780938a0d6` 受控重建升级)
+  - 镜像: `clash-sub-parser-app:latest` / `v1-release-20261002-03f2646` (`sha256:7be48f7f84051aff1ff4feba34b70b95f1d8071f396af76dfb35b8914a55fafd`)
+  - 镜像内二进制 `/app/csp` SHA-256: `be2091a70e57d8f493d46ea4d14d4ba3fce1b4c35f0b6530e3908e161aa1e600`（与原运行态二进制完全一致，确保本次重建为代码审计与发布绑定，而非新增未审计业务逻辑）。
+- **真实公网入口检验 (Non-Spoofed TLS Verification)**：
+  - 依据真实 Nginx 配置（`/home/service/nginx/einck.top.conf` 行 370-388），域名 `sub.einck.top` 代理至 `localhost:17000`；
+  - 经以标准公网证书体系无 `-k`、无手动 `Host` 伪造、无 `--resolve` 探测：
+    - `https://sub.einck.top/healthz` -> `HTTP 200 OK` (`status: ok`)，TLSv1.3，Let's Encrypt 证书验证通过；
+    - `https://sub.einck.top/readyz` -> `HTTP 200 OK` (`ready: true`, 14 tables, schema 13)；
+    - `https://sub.einck.top/api/v1/auth/status` -> `HTTP 200 OK` (`mode: protected`, `auth: false`)；
+  - 详细公网 TLS 审计证据存盘于 `/home/service/backups/csp-release-20261002_204817/public_domain_tls_acceptance_report.json`。
+- **最终生产快照独立演练确权**：
+  - 最终上线前快照 `/home/service/backups/csp-release-20261002_204817/csp-v1-fresh-before-up.db`（SHA-256 `042aa0cb8ad9fb6f1408aea8e27a81f0c3bb8eca1fe04b3f633095f73f4a932d`）在私有隔离临时环境完成全量恢复演练，证据存盘于 `/home/service/backups/csp-release-20261002_204817/final_fresh_snapshot_recovery_drill_report.json`（权限 0600）。
+- **时间与基准指标客观记录**：
+  - 热备文件落地至容器创建调用的系统耗时为 0.216 秒（真实文件元数据时间差），不得曲解为“无损窗口”，但客观证明了操作流程紧凑无缝。
 
 ---
 

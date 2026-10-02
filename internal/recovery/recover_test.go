@@ -343,3 +343,172 @@ func TestRecovery_RollbackProtectsSubsequentUserModifications(t *testing.T) {
 		t.Fatalf("untouched node was not rolled back! expected active=0, got %d", activeUntouched)
 	}
 }
+
+func TestRecovery_StalePrecondition_AbortsEntireBatchWithoutChanges(t *testing.T) {
+	ctx := context.Background()
+	db, dbPath := setupRecoveryTestDB(t)
+
+	// Seed 2 candidate nodes
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO nodes (logical_id, protocol, display_name, server, port, config_json, active, created_at, updated_at)
+		VALUES
+		('node_batch_1', 'ss', 'Batch 1', '1.1.1.1', 8388, '{"password":"p1"}', 0, '2026-09-28T00:00:00Z', '2026-09-29T00:52:15Z'),
+		('node_batch_2', 'ss', 'Batch 2', '1.1.1.2', 8388, '{"password":"p2"}', 0, '2026-09-28T00:00:00Z', '2026-09-29T00:52:15Z');
+	`)
+	if err != nil {
+		t.Fatalf("failed to insert batch nodes: %v", err)
+	}
+
+	plan, err := recovery.Inspect(ctx, db, dbPath, "")
+	if err != nil {
+		t.Fatalf("Inspect failed: %v", err)
+	}
+	_ = recovery.ApproveForRehearsal(plan, "orchestrator-simulation", "stale-precondition-drill")
+
+	if len(plan.AttributedCandidates) != 2 {
+		t.Fatalf("expected 2 candidates in plan, got %d", len(plan.AttributedCandidates))
+	}
+
+	// Concurrently tamper/modify node_batch_2 state (stale precondition)
+	_, err = db.ExecContext(ctx, `UPDATE nodes SET updated_at = '2026-10-02T00:00:00Z' WHERE logical_id = 'node_batch_2'`)
+	if err != nil {
+		t.Fatalf("concurrent update failed: %v", err)
+	}
+
+	// Apply must detect the stale precondition on node_batch_2 and abort the ENTIRE batch.
+	// Neither node_batch_1 nor node_batch_2 should be activated!
+	report, err := recovery.Apply(ctx, db, plan)
+	if err != nil {
+		t.Fatalf("Apply returned unexpected error: %v", err)
+	}
+	if !report.AbortedDueToStale {
+		t.Fatalf("expected report.AbortedDueToStale to be true")
+	}
+	if report.StalePreconditionNode != "node_batch_2" {
+		t.Fatalf("expected stale node to be node_batch_2, got %q", report.StalePreconditionNode)
+	}
+	if report.RowsAffected != 0 {
+		t.Fatalf("expected 0 rows affected (entire batch aborted), got %d", report.RowsAffected)
+	}
+
+	// Verify both nodes remain active = 0 in database
+	var active1, active2 int
+	_ = db.QueryRowContext(ctx, "SELECT active FROM nodes WHERE logical_id = 'node_batch_1'").Scan(&active1)
+	_ = db.QueryRowContext(ctx, "SELECT active FROM nodes WHERE logical_id = 'node_batch_2'").Scan(&active2)
+	if active1 != 0 || active2 != 0 {
+		t.Fatalf("CRITICAL: node was activated despite stale precondition! active1=%d, active2=%d", active1, active2)
+	}
+}
+
+func TestRecovery_AllowlistFilteringAndPlanHash(t *testing.T) {
+	ctx := context.Background()
+	db, dbPath := setupRecoveryTestDB(t)
+
+	// Seed 3 candidate nodes
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO nodes (logical_id, protocol, display_name, server, port, config_json, active, created_at, updated_at)
+		VALUES
+		('node_allow_1', 'ss', 'Allow 1', '1.1.1.1', 8388, '{"password":"p1"}', 0, '2026-09-28T00:00:00Z', '2026-09-29T00:52:15Z'),
+		('node_allow_2', 'ss', 'Allow 2', '1.1.1.2', 8388, '{"password":"p2"}', 0, '2026-09-28T00:00:00Z', '2026-09-29T00:52:15Z'),
+		('node_allow_3', 'ss', 'Allow 3', '1.1.1.3', 8388, '{"password":"p3"}', 0, '2026-09-28T00:00:00Z', '2026-09-29T00:52:15Z');
+	`)
+	if err != nil {
+		t.Fatalf("failed to insert allowlist test nodes: %v", err)
+	}
+
+	plan, err := recovery.Inspect(ctx, db, dbPath, "")
+	if err != nil {
+		t.Fatalf("Inspect failed: %v", err)
+	}
+	_ = recovery.ApproveForRehearsal(plan, "orchestrator-simulation", "allowlist-test")
+
+	if len(plan.AttributedCandidates) != 3 {
+		t.Fatalf("expected 3 candidates before filter, got %d", len(plan.AttributedCandidates))
+	}
+
+	// Filter strictly to allowlist containing only node_allow_1 and node_allow_3
+	plan.FilterByAllowlist([]string{"node_allow_1", "node_allow_3"})
+
+	if len(plan.AttributedCandidates) != 2 {
+		t.Fatalf("expected 2 candidates after allowlist filter, got %d", len(plan.AttributedCandidates))
+	}
+	if plan.AttributedCandidates[0].LogicalID != "node_allow_1" || plan.AttributedCandidates[1].LogicalID != "node_allow_3" {
+		t.Fatalf("unexpected candidates after filter: %#v", plan.AttributedCandidates)
+	}
+
+	// Apply should only restore the 2 allowlisted nodes
+	report, err := recovery.Apply(ctx, db, plan)
+	if err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
+	if report.RowsAffected != 2 {
+		t.Fatalf("expected 2 rows affected, got %d", report.RowsAffected)
+	}
+
+	var active1, active2, active3 int
+	_ = db.QueryRowContext(ctx, "SELECT active FROM nodes WHERE logical_id = 'node_allow_1'").Scan(&active1)
+	_ = db.QueryRowContext(ctx, "SELECT active FROM nodes WHERE logical_id = 'node_allow_2'").Scan(&active2)
+	_ = db.QueryRowContext(ctx, "SELECT active FROM nodes WHERE logical_id = 'node_allow_3'").Scan(&active3)
+
+	if active1 != 1 || active3 != 1 {
+		t.Fatalf("expected allowlisted nodes to be active, got active1=%d, active3=%d", active1, active3)
+	}
+	if active2 != 0 {
+		t.Fatalf("excluded node_allow_2 was revived! expected active=0, got %d", active2)
+	}
+}
+
+func TestRecovery_AmbiguousCandidatesFixture(t *testing.T) {
+	ctx := context.Background()
+	db, dbPath := setupRecoveryTestDB(t)
+
+	// Seed 4 nodes with distinct causal ambiguity conditions:
+	// 1. Invalid JSON config
+	// 2. Missing server / port <= 0
+	// 3. Mismatched timestamp window
+	// 4. Inactive node that still has active node_sources binding
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO subscriptions (id, name, source_url_secret_ref, revision, created_at, updated_at)
+		VALUES ('sub-fixture-1', 'Fixture Sub', 'secret-ref', 'rev-1', '2026-09-28T00:00:00Z', '2026-09-28T00:00:00Z');
+
+		INSERT INTO nodes (logical_id, protocol, display_name, server, port, config_json, active, created_at, updated_at)
+		VALUES
+		('node_bad_json', 'ss', 'Bad JSON', '1.1.1.1', 8388, '{invalid-json', 0, '2026-09-28T00:00:00Z', '2026-09-29T00:52:15Z'),
+		('node_no_server', 'ss', 'No Server', '', 0, '{"password":"p"}', 0, '2026-09-28T00:00:00Z', '2026-09-29T00:52:15Z'),
+		('node_wrong_time', 'ss', 'Wrong Time', '1.1.1.3', 8388, '{"password":"p"}', 0, '2026-09-28T00:00:00Z', '2026-09-30T12:00:00Z'),
+		('node_with_sources', 'ss', 'With Source', '1.1.1.4', 8388, '{"password":"p"}', 0, '2026-09-28T00:00:00Z', '2026-09-29T00:52:15Z');
+
+		INSERT INTO node_sources (node_logical_id, subscription_id, last_seen_fetch_id)
+		VALUES ('node_with_sources', 'sub-fixture-1', 'fetch-1');
+	`)
+	if err != nil {
+		t.Fatalf("failed to insert ambiguity fixture nodes: %v", err)
+	}
+
+	plan, err := recovery.Inspect(ctx, db, dbPath, "")
+	if err != nil {
+		t.Fatalf("Inspect failed: %v", err)
+	}
+
+	// ALL 4 anomalous nodes MUST be categorized as AmbiguousNodes
+	if len(plan.HeuristicCandidates) != 0 {
+		t.Fatalf("expected 0 heuristic candidates from anomalous nodes, got %d", len(plan.HeuristicCandidates))
+	}
+	if len(plan.AttributedCandidates) != 0 {
+		t.Fatalf("expected 0 attributed candidates, got %d", len(plan.AttributedCandidates))
+	}
+	if len(plan.AmbiguousNodes) != 4 {
+		t.Fatalf("expected exactly 4 ambiguous nodes, got %d", len(plan.AmbiguousNodes))
+	}
+
+	ambiguousMap := make(map[string]bool)
+	for _, n := range plan.AmbiguousNodes {
+		ambiguousMap[n.LogicalID] = true
+	}
+	for _, expectedID := range []string{"node_bad_json", "node_no_server", "node_wrong_time", "node_with_sources"} {
+		if !ambiguousMap[expectedID] {
+			t.Fatalf("expected node %s to be in AmbiguousNodes", expectedID)
+		}
+	}
+}
+

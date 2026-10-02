@@ -91,8 +91,38 @@ type RecoveryPlan struct {
 	AmbiguousNodes       []CandidateNode `json:"ambiguous_nodes"`        // Ambiguous / unproven nodes
 	ManuallyDisabledIDs  []string        `json:"manually_disabled_ids"`
 	Approval             *PlanApproval   `json:"approval,omitempty"`
+	Allowlist            []string        `json:"allowlist,omitempty"`
 	PlanHash             string          `json:"plan_hash"`
 	AppliedTimestamp     string          `json:"applied_timestamp,omitempty"`
+}
+
+// FilterByAllowlist restricts AttributedCandidates strictly to node IDs specified in allowlist.
+// If allowlist is non-empty, any candidate whose LogicalID is not in allowlist is excluded.
+// The PlanHash is recomputed automatically.
+func (p *RecoveryPlan) FilterByAllowlist(allowedIDs []string) {
+	if len(allowedIDs) == 0 {
+		return
+	}
+	allowedMap := make(map[string]bool, len(allowedIDs))
+	for _, id := range allowedIDs {
+		trimmed := strings.TrimSpace(id)
+		if trimmed != "" {
+			allowedMap[trimmed] = true
+		}
+	}
+	p.Allowlist = make([]string, 0, len(allowedMap))
+	for id := range allowedMap {
+		p.Allowlist = append(p.Allowlist, id)
+	}
+
+	filtered := make([]CandidateNode, 0, len(p.AttributedCandidates))
+	for _, c := range p.AttributedCandidates {
+		if allowedMap[c.LogicalID] {
+			filtered = append(filtered, c)
+		}
+	}
+	p.AttributedCandidates = filtered
+	p.PlanHash = ComputePlanHash(p.AttributedCandidates, p.Approval)
 }
 
 // ComputePlanHash calculates a SHA-256 digest covering candidate fields and approval evidence.
@@ -109,16 +139,18 @@ func ComputePlanHash(candidates []CandidateNode, approval *PlanApproval) string 
 
 // ExecutionReport captures the results of a dry-run, apply, or rollback operation.
 type ExecutionReport struct {
-	Mode             string    `json:"mode"`
-	ExecutedAt       time.Time `json:"executed_at"`
-	AppliedTimestamp string    `json:"applied_timestamp,omitempty"`
-	PlanHash         string    `json:"plan_hash,omitempty"`
-	TargetDBPath     string    `json:"target_db_path"`
-	HeuristicCount   int       `json:"heuristic_count"`
-	CandidateCount   int       `json:"candidate_count"`
-	AmbiguousCount   int       `json:"ambiguous_count"`
-	RowsAffected     int64     `json:"rows_affected"`
-	RollbackScript   string    `json:"rollback_script,omitempty"`
+	Mode                  string    `json:"mode"`
+	ExecutedAt            time.Time `json:"executed_at"`
+	AppliedTimestamp      string    `json:"applied_timestamp,omitempty"`
+	PlanHash              string    `json:"plan_hash,omitempty"`
+	TargetDBPath          string    `json:"target_db_path"`
+	HeuristicCount        int       `json:"heuristic_count"`
+	CandidateCount        int       `json:"candidate_count"`
+	AmbiguousCount        int       `json:"ambiguous_count"`
+	RowsAffected          int64     `json:"rows_affected"`
+	RollbackScript        string    `json:"rollback_script,omitempty"`
+	StalePreconditionNode string    `json:"stale_precondition_node,omitempty"`
+	AbortedDueToStale     bool      `json:"aborted_due_to_stale,omitempty"`
 }
 
 // Inspect queries the database, separates heuristic candidates from confirmed proof, and constructs a RecoveryPlan.
@@ -284,7 +316,6 @@ func Apply(ctx context.Context, db *sql.DB, plan *RecoveryPlan) (*ExecutionRepor
 	report := &ExecutionReport{
 		Mode:             mode,
 		ExecutedAt:       time.Now().UTC(),
-		AppliedTimestamp: nowStr,
 		PlanHash:         expectedHash,
 		TargetDBPath:     plan.TargetDBPath,
 		HeuristicCount:   len(plan.HeuristicCandidates),
@@ -309,6 +340,8 @@ func Apply(ctx context.Context, db *sql.DB, plan *RecoveryPlan) (*ExecutionRepor
 	}
 	defer stmt.Close()
 
+	var hasConflict bool
+	var staleCandidateID string
 	var totalAffected int64
 	var restoredIDs []string
 	for _, c := range plan.AttributedCandidates {
@@ -317,15 +350,32 @@ func Apply(ctx context.Context, db *sql.DB, plan *RecoveryPlan) (*ExecutionRepor
 			return nil, fmt.Errorf("failed to update node %s: %w", c.LogicalID, execErr)
 		}
 		aff, _ := res.RowsAffected()
-		if aff > 0 {
-			totalAffected += aff
-			restoredIDs = append(restoredIDs, c.LogicalID)
+		if aff == 0 {
+			hasConflict = true
+			staleCandidateID = c.LogicalID
+			break
 		}
+		totalAffected += aff
+		restoredIDs = append(restoredIDs, c.LogicalID)
+	}
+
+	if hasConflict {
+		// Scenario: Stale recovery plan - WHEN production identity or state differs from the reviewed allowlist
+		// THEN restoration aborts without changing nodes.
+		_ = tx.Rollback()
+		report.RowsAffected = 0
+		report.RollbackScript = ""
+		report.StalePreconditionNode = staleCandidateID
+		report.AbortedDueToStale = true
+		return report, nil
 	}
 
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("failed to commit transaction: %w", err)
 	}
+
+	plan.AppliedTimestamp = nowStr
+	report.AppliedTimestamp = nowStr
 
 	report.RowsAffected = totalAffected
 	if len(restoredIDs) > 0 {

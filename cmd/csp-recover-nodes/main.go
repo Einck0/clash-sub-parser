@@ -23,6 +23,7 @@ func main() {
 	outputPlanPath := flag.String("output-plan", "", "Path to save recovery plan JSON")
 	outputReportPath := flag.String("output-report", "", "Path to save execution report JSON")
 	rehearsalApproval := flag.String("rehearsal-approval", "", "Explicit rehearsal approval token in format 'actor:evidence' for test copy drill")
+	allowlistFlag := flag.String("allowlist", "", "Comma-separated list of approved node logical IDs or path to JSON allowlist file")
 	flag.Parse()
 
 	if *dbPath == "" {
@@ -79,12 +80,33 @@ func main() {
 		}
 	}
 
+	if *allowlistFlag != "" {
+		var ids []string
+		if strings.HasSuffix(*allowlistFlag, ".json") {
+			data, aErr := os.ReadFile(*allowlistFlag)
+			if aErr == nil {
+				_ = json.Unmarshal(data, &ids)
+			}
+		}
+		if len(ids) == 0 {
+			for _, part := range strings.Split(*allowlistFlag, ",") {
+				if trimmed := strings.TrimSpace(part); trimmed != "" {
+					ids = append(ids, trimmed)
+				}
+			}
+		}
+		plan.FilterByAllowlist(ids)
+	}
+
 	fmt.Printf("=== Recovery Inspection Summary ===\n")
 	fmt.Printf("Database:           %s\n", plan.TargetDBPath)
 	fmt.Printf("Batch Prefix:       %s\n", plan.BatchTimestampPrefix)
 	fmt.Printf("Total Inactive:     %d\n", plan.TotalInactiveNodes)
 	fmt.Printf("Heuristic (Hold):   %d\n", len(plan.HeuristicCandidates))
 	fmt.Printf("Attributed (Ready): %d\n", len(plan.AttributedCandidates))
+	if len(plan.Allowlist) > 0 {
+		fmt.Printf("Allowlist Filtered: %d candidates specified\n", len(plan.Allowlist))
+	}
 	fmt.Printf("Ambiguous (Hold):   %d\n", len(plan.AmbiguousNodes))
 	fmt.Printf("User Disabled:      %d\n", len(plan.ManuallyDisabledIDs))
 	if plan.Approval != nil {
@@ -118,7 +140,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error during apply: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("Apply complete! Mode: %s, Rows restored: %d\n", report.Mode, report.RowsAffected)
+		if report.AbortedDueToStale {
+			fmt.Printf("WARNING: Restoration aborted without changes due to stale precondition on candidate %s\n", report.StalePreconditionNode)
+		} else {
+			fmt.Printf("Apply complete! Mode: %s, Rows restored: %d\n", report.Mode, report.RowsAffected)
+		}
 		if *outputPlanPath != "" {
 			if raw, mErr := json.MarshalIndent(plan, "", "  "); mErr == nil {
 				_ = os.WriteFile(*outputPlanPath, raw, 0644)

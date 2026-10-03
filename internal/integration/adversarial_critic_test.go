@@ -280,14 +280,14 @@ func TestAdversarial_Dimension2_MassSuddenNodeOfflineAndConvergence(t *testing.T
 // Dimension 3: 探测队列过载拥塞与并发滑动窗口 (Probe Queue Overload & Concurrency Bounding)
 // ------------------------------------------------------------------------------
 func TestAdversarial_Dimension3_ProbeQueueOverloadAndBackpressure(t *testing.T) {
-	// 1. Concurrency boundary check (Must be between 10 and 32)
-	_, errLow := queue.NewScheduler(queue.Config{Concurrency: 4})
+	// 1. Concurrency boundary check (Must be between 1 and 256)
+	_, errLow := queue.NewScheduler(queue.Config{Concurrency: -1})
 	if errLow != queue.ErrInvalidConcurrency {
-		t.Fatalf("concurrency < 10 must return ErrInvalidConcurrency, got %v", errLow)
+		t.Fatalf("concurrency < 1 must return ErrInvalidConcurrency, got %v", errLow)
 	}
-	_, errHigh := queue.NewScheduler(queue.Config{Concurrency: 40})
+	_, errHigh := queue.NewScheduler(queue.Config{Concurrency: 500})
 	if errHigh != queue.ErrInvalidConcurrency {
-		t.Fatalf("concurrency > 32 must return ErrInvalidConcurrency, got %v", errHigh)
+		t.Fatalf("concurrency > 256 must return ErrInvalidConcurrency, got %v", errHigh)
 	}
 
 	// 2. Queue capacity and backpressure

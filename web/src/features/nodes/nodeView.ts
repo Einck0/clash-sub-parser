@@ -1,5 +1,13 @@
 import type { ToastTone } from '../../ui/toast'
 import type { CompilerTarget } from '../publications/publicationTypes'
+import {
+  type PlatformCapability,
+  type PlatformSubTier,
+  type PlatformBadge,
+  formatPlatformBadge,
+  formatSpeed,
+  normalizePlatforms,
+} from '../probes/probeTypes'
 
 export type CapabilityStatus = 'available' | 'restricted' | 'unknown' | 'error' | 'stale' | 'missing'
 
@@ -9,9 +17,22 @@ export interface StructuredCapabilityStatus {
   observed_at?: string
   summary?: string
   stale?: boolean
+  region?: string
+  sub_tier?: PlatformSubTier
+  throughput?: number
+  risk_score?: string
+  reason?: string
+  platforms?: Record<string, PlatformCapability>
 }
 
-export type CapabilityInput = CapabilityStatus | StructuredCapabilityStatus
+export type CapabilityInput =
+  | CapabilityStatus
+  | (StructuredCapabilityStatus & {
+      latencyMs?: number
+      observedAt?: string
+      subTier?: PlatformSubTier
+      riskScore?: string
+    })
 
 export type NodeProbeState = 'probing' | 'queued' | 'idle'
 
@@ -202,12 +223,26 @@ export function extractCapabilityDetail(
     return { verdict: raw, stale: raw === 'stale' }
   }
   if (typeof raw === 'object' && raw !== null) {
+    const verdict = extractCapabilityVerdict(raw)
+    const rawRegion = typeof raw.region === 'string' ? raw.region.trim() : undefined
+    const region = rawRegion && rawRegion.toLowerCase() !== 'unknown' ? rawRegion : undefined
     return {
-      verdict: raw.verdict ?? 'unknown',
-      latency_ms: raw.latency_ms,
-      observed_at: raw.observed_at,
+      verdict,
+      latency_ms: raw.latency_ms ?? (raw as any).latencyMs,
+      observed_at: raw.observed_at ?? (raw as any).observedAt,
       summary: raw.summary,
-      stale: Boolean(raw.stale) || raw.verdict === 'stale',
+      stale: Boolean(raw.stale) || verdict === 'stale',
+      region,
+      sub_tier: raw.sub_tier ?? (raw as any).subTier,
+      throughput: raw.throughput,
+      risk_score:
+        raw.risk_score != null
+          ? String(raw.risk_score)
+          : (raw as any).riskScore != null
+          ? String((raw as any).riskScore)
+          : undefined,
+      reason: raw.reason,
+      platforms: normalizePlatforms(raw.platforms),
     }
   }
   return null
@@ -530,12 +565,25 @@ export function normalizeNode(node: NodeRecord): NormalizedNode {
     const verdict = extractCapabilityVerdict(v)
     capabilities[k] = verdict
     if (typeof v === 'object' && v !== null) {
+      const rawRegion = typeof v.region === 'string' ? v.region.trim() : undefined
+      const region = rawRegion && rawRegion.toLowerCase() !== 'unknown' ? rawRegion : undefined
       capabilityDetails[k] = {
         verdict,
-        latency_ms: v.latency_ms,
-        observed_at: v.observed_at,
+        latency_ms: v.latency_ms ?? (v as any).latencyMs,
+        observed_at: v.observed_at ?? (v as any).observedAt,
         summary: v.summary,
         stale: Boolean(v.stale) || verdict === 'stale',
+        region,
+        sub_tier: v.sub_tier ?? (v as any).subTier,
+        throughput: v.throughput,
+        risk_score:
+          v.risk_score != null
+            ? String(v.risk_score)
+            : (v as any).riskScore != null
+            ? String((v as any).riskScore)
+            : undefined,
+        reason: v.reason,
+        platforms: normalizePlatforms(v.platforms),
       }
     } else {
       capabilityDetails[k] = {
@@ -882,6 +930,18 @@ export function nodeHealthBadge(
 }
 
 export function nodeRiskBadge(node: NodeRecord | NormalizedNode): { label: string; tone: ToastTone } {
+  const capDetail = extractCapabilityDetail(node, 'ip_risk')
+  if (capDetail && capDetail.risk_score !== undefined && capDetail.risk_score !== '') {
+    const score = capDetail.risk_score
+    const num = Number(score)
+    if (!Number.isNaN(num)) {
+      if (num < 25) return { label: `低风险 (${score})`, tone: 'success' }
+      if (num < 65) return { label: `中风险 (${score})`, tone: 'warning' }
+      return { label: `高风险 (${score})`, tone: 'error' }
+    }
+    return { label: `风险: ${score}`, tone: 'info' }
+  }
+
   const summary = (node as NormalizedNode).ipRiskSummary ?? (node as NodeRecord).ip_risk_summary
   const band = summary?.risk_band
   if (band === 'low') return { label: '低风险', tone: 'success' }
@@ -894,6 +954,42 @@ export function nodeRiskBadge(node: NodeRecord | NormalizedNode): { label: strin
   if (capRisk === 'error') return { label: '高风险', tone: 'error' }
 
   return { label: '未探测', tone: 'info' }
+}
+
+export function getNodePlatformBadges(
+  node: NodeRecord | NormalizedNode,
+  kind: 'streaming' | 'ai'
+): PlatformBadge[] {
+  const detail = extractCapabilityDetail(node, kind)
+  if (!detail || !detail.platforms) {
+    return []
+  }
+  const canonicalOrder =
+    kind === 'streaming'
+      ? ['netflix', 'youtube', 'disney']
+      : ['openai', 'claude', 'gemini']
+
+  const allKeys = Object.keys(detail.platforms)
+  const sortedKeys = [
+    ...canonicalOrder.filter((k) => allKeys.includes(k)),
+    ...allKeys.filter((k) => !canonicalOrder.includes(k)),
+  ]
+
+  return sortedKeys.map((key) => formatPlatformBadge(key, detail.platforms![key]))
+}
+
+export function getNodeSpeedBadge(
+  node: NodeRecord | NormalizedNode
+): { label: string; tone: ToastTone } | null {
+  const speedDetail = extractCapabilityDetail(node, 'speed')
+  if (!speedDetail) return null
+  if (typeof speedDetail.throughput === 'number' && speedDetail.throughput > 0) {
+    return {
+      label: `🚀 ${formatSpeed(speedDetail.throughput)}`,
+      tone: 'info',
+    }
+  }
+  return null
 }
 
 export function resolveNodeLatencyMs(node: NodeRecord | NormalizedNode): number | null {

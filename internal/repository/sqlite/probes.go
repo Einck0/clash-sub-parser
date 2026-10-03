@@ -244,13 +244,14 @@ type probeObservationRepository struct {
 func NewProbeObservationRepository(db *sql.DB) domain.ProbeObservationRepository {
 	if db != nil {
 		_, _ = db.Exec(ensureLatestProbeObservationIndexSQL)
+		_, _ = db.Exec("ALTER TABLE probe_observations ADD COLUMN evidence_data TEXT NOT NULL DEFAULT '';")
 	}
 	return &probeObservationRepository{db: db}
 }
 
 func (r *probeObservationRepository) GetByID(ctx context.Context, id string) (*domain.ProbeObservation, error) {
 	const query = `
-	SELECT id, probe_run_id, node_logical_id, kind, verdict, evidence_digest, observed_at, latency_ms, redacted_summary, connection_revision
+	SELECT id, probe_run_id, node_logical_id, kind, verdict, evidence_digest, observed_at, latency_ms, redacted_summary, connection_revision, evidence_data
 	FROM probe_observations
 	WHERE id = ?;`
 
@@ -268,6 +269,7 @@ func (r *probeObservationRepository) GetByID(ctx context.Context, id string) (*d
 		&obs.LatencyMS,
 		&obs.RedactedSummary,
 		&obs.ConnectionRevision,
+		&obs.EvidenceData,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -279,13 +281,14 @@ func (r *probeObservationRepository) GetByID(ctx context.Context, id string) (*d
 	obs.Kind = domain.ProbeKind(kindStr)
 	obs.Verdict = domain.ProbeVerdict(verdictStr)
 	obs.ObservedAt, _ = time.Parse(time.RFC3339, observedStr)
+	obs.SyncEvidenceData()
 
 	return &obs, nil
 }
 
 func (r *probeObservationRepository) ListByRun(ctx context.Context, runID string) ([]domain.ProbeObservation, error) {
 	const query = `
-	SELECT id, probe_run_id, node_logical_id, kind, verdict, evidence_digest, observed_at, latency_ms, redacted_summary, connection_revision
+	SELECT id, probe_run_id, node_logical_id, kind, verdict, evidence_digest, observed_at, latency_ms, redacted_summary, connection_revision, evidence_data
 	FROM probe_observations
 	WHERE probe_run_id = ?
 	ORDER BY observed_at ASC;`
@@ -312,6 +315,7 @@ func (r *probeObservationRepository) ListByRun(ctx context.Context, runID string
 			&obs.LatencyMS,
 			&obs.RedactedSummary,
 			&obs.ConnectionRevision,
+			&obs.EvidenceData,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan probe observation: %w", err)
@@ -320,6 +324,7 @@ func (r *probeObservationRepository) ListByRun(ctx context.Context, runID string
 		obs.Kind = domain.ProbeKind(kindStr)
 		obs.Verdict = domain.ProbeVerdict(verdictStr)
 		obs.ObservedAt, _ = time.Parse(time.RFC3339, observedStr)
+		obs.SyncEvidenceData()
 
 		items = append(items, obs)
 	}
@@ -335,7 +340,7 @@ func (r *probeObservationRepository) ListByNode(ctx context.Context, nodeLogical
 	}
 
 	const query = `
-	SELECT id, probe_run_id, node_logical_id, kind, verdict, evidence_digest, observed_at, latency_ms, redacted_summary, connection_revision
+	SELECT id, probe_run_id, node_logical_id, kind, verdict, evidence_digest, observed_at, latency_ms, redacted_summary, connection_revision, evidence_data
 	FROM probe_observations
 	WHERE node_logical_id = ?
 	ORDER BY observed_at DESC
@@ -363,6 +368,7 @@ func (r *probeObservationRepository) ListByNode(ctx context.Context, nodeLogical
 			&obs.LatencyMS,
 			&obs.RedactedSummary,
 			&obs.ConnectionRevision,
+			&obs.EvidenceData,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan probe observation: %w", err)
@@ -371,6 +377,7 @@ func (r *probeObservationRepository) ListByNode(ctx context.Context, nodeLogical
 		obs.Kind = domain.ProbeKind(kindStr)
 		obs.Verdict = domain.ProbeVerdict(verdictStr)
 		obs.ObservedAt, _ = time.Parse(time.RFC3339, observedStr)
+		obs.SyncEvidenceData()
 
 		items = append(items, obs)
 	}
@@ -399,7 +406,7 @@ func (r *probeObservationRepository) ListByNodePaginated(ctx context.Context, no
 	}
 
 	const query = `
-	SELECT id, probe_run_id, node_logical_id, kind, verdict, evidence_digest, observed_at, latency_ms, redacted_summary, connection_revision
+	SELECT id, probe_run_id, node_logical_id, kind, verdict, evidence_digest, observed_at, latency_ms, redacted_summary, connection_revision, evidence_data
 	FROM probe_observations
 	WHERE node_logical_id = ?
 	ORDER BY observed_at DESC, id DESC
@@ -428,6 +435,7 @@ func (r *probeObservationRepository) ListByNodePaginated(ctx context.Context, no
 			&obs.LatencyMS,
 			&obs.RedactedSummary,
 			&obs.ConnectionRevision,
+			&obs.EvidenceData,
 		)
 		if err != nil {
 			return nil, 0, fmt.Errorf("failed to scan probe observation: %w", err)
@@ -436,6 +444,7 @@ func (r *probeObservationRepository) ListByNodePaginated(ctx context.Context, no
 		obs.Kind = domain.ProbeKind(kindStr)
 		obs.Verdict = domain.ProbeVerdict(verdictStr)
 		obs.ObservedAt, _ = time.Parse(time.RFC3339, observedStr)
+		obs.SyncEvidenceData()
 
 		items = append(items, obs)
 	}
@@ -453,7 +462,7 @@ func buildLatestByNodesQuery(nodePlaceholders, kindPlaceholders []string) string
 	return fmt.Sprintf(`
 	WITH ranked_observations AS (
 		SELECT id, probe_run_id, node_logical_id, kind, verdict,
-		       evidence_digest, observed_at, latency_ms, redacted_summary, connection_revision,
+		       evidence_digest, observed_at, latency_ms, redacted_summary, connection_revision, evidence_data,
 		       ROW_NUMBER() OVER (
 		           PARTITION BY node_logical_id, kind
 		           ORDER BY observed_at DESC, id DESC
@@ -462,7 +471,7 @@ func buildLatestByNodesQuery(nodePlaceholders, kindPlaceholders []string) string
 		WHERE %s
 	)
 	SELECT id, probe_run_id, node_logical_id, kind, verdict,
-	       evidence_digest, observed_at, latency_ms, redacted_summary, connection_revision
+	       evidence_digest, observed_at, latency_ms, redacted_summary, connection_revision, evidence_data
 	FROM ranked_observations
 	WHERE rn = 1;`, whereClause)
 }
@@ -523,6 +532,7 @@ func (r *probeObservationRepository) ListLatestByNodes(ctx context.Context, node
 				&obs.LatencyMS,
 				&obs.RedactedSummary,
 				&obs.ConnectionRevision,
+				&obs.EvidenceData,
 			)
 			if err != nil {
 				rows.Close()
@@ -532,6 +542,7 @@ func (r *probeObservationRepository) ListLatestByNodes(ctx context.Context, node
 			obs.Kind = domain.ProbeKind(kindStr)
 			obs.Verdict = domain.ProbeVerdict(verdictStr)
 			obs.ObservedAt, _ = time.Parse(time.RFC3339, observedStr)
+			obs.SyncEvidenceData()
 
 			nodeObs := result[obs.NodeLogicalID]
 			if nodeObs == nil {
@@ -553,11 +564,12 @@ func (r *probeObservationRepository) ListLatestByNodes(ctx context.Context, node
 }
 
 func (r *probeObservationRepository) Create(ctx context.Context, obs *domain.ProbeObservation) error {
+	obs.SyncEvidenceData()
 	const query = `
 	INSERT INTO probe_observations (
 		id, probe_run_id, node_logical_id, kind, verdict,
-		evidence_digest, observed_at, latency_ms, redacted_summary, connection_revision
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
+		evidence_digest, observed_at, latency_ms, redacted_summary, connection_revision, evidence_data
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
 
 	observedStr := obs.ObservedAt.Format(time.RFC3339)
 	if obs.ObservedAt.IsZero() {
@@ -575,6 +587,7 @@ func (r *probeObservationRepository) Create(ctx context.Context, obs *domain.Pro
 		obs.LatencyMS,
 		obs.RedactedSummary,
 		obs.ConnectionRevision,
+		obs.EvidenceData,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to insert probe observation: %w", err)

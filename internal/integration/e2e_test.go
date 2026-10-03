@@ -18,6 +18,7 @@ import (
 	"clash-sub-parser/internal/domain"
 	"clash-sub-parser/internal/fetch"
 	ipriskProbe "clash-sub-parser/internal/probe/iprisk"
+	"clash-sub-parser/internal/probe/mihomo"
 	"clash-sub-parser/internal/probe/singbox"
 	"clash-sub-parser/internal/repository/sqlite"
 	"clash-sub-parser/internal/resolver"
@@ -159,14 +160,14 @@ func TestControlPlaneEndToEndFixture(t *testing.T) {
 		t.Fatalf("expected 1 singbox outbound, got %d", len(options.Outbounds))
 	}
 
-	rt, err := singbox.New(ctx, nodeCfg)
+	proxy, err := mihomo.ParseProxy(node)
 	if err != nil {
-		t.Fatalf("start in-memory sing-box runtime: %v", err)
+		t.Fatalf("mihomo ParseProxy failed: %v", err)
 	}
-	if rt.Tag() != node.LogicalID {
-		t.Fatalf("unexpected runtime tag: %s", rt.Tag())
+	if proxy == nil {
+		t.Fatal("expected non-nil mihomo proxy")
 	}
-	_ = rt.Close()
+	_ = proxy.Close()
 
 	// Execute probe run and store observation
 	if err := probeService.Execute(ctx, run.ID, func(context.Context) error {

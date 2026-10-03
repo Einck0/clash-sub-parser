@@ -177,6 +177,7 @@ export const zhCN = {
     connectionProfile: '协议连接与安全凭据',
     secretProtected: '敏感凭据已受 Vault AEAD 加密保护（界面与日志严格脱敏）',
     targetCompatibility: '目标编译器能力边界',
+    platformMatrix: '多平台解锁与能力矩阵',
   },
   topbar: {
     switchLang: '切换语言',
@@ -611,6 +612,7 @@ export const enUS: typeof zhCN = {
     connectionProfile: 'Protocol Connection & Protected Credentials',
     secretProtected: 'Sensitive secrets are Vault AEAD protected (redacted in DOM & logs)',
     targetCompatibility: 'Compiler Target Compatibility',
+    platformMatrix: 'Platform Capability Matrix',
   },
   topbar: {
     switchLang: 'Switch Language',

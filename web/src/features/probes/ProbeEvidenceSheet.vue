@@ -11,6 +11,9 @@ import {
   formatLatency,
   formatObservationReasonLabel,
   formatRelativeTime,
+  formatPlatformBadge,
+  formatSpeed,
+  normalizePlatforms,
   isPolicyOrConfigBlockedReason,
   parseRedactedSummary,
   probeKindEmoji,
@@ -18,6 +21,7 @@ import {
   probeStateLabel,
   probeVerdictLabel,
   probeVerdictTone,
+  type PlatformBadge,
 } from './probeTypes'
 import {
   formatNodeLatency,
@@ -179,6 +183,31 @@ function formatObsTime(iso: string): string {
 
 function close() {
   emit('close')
+}
+
+function resolveObservationPlatforms(obs: ProbeObservation): PlatformBadge[] {
+  let platforms = obs.platforms
+  if (!platforms && obs.redacted_summary && obs.redacted_summary.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(obs.redacted_summary)
+      if (parsed.platforms) {
+        platforms = normalizePlatforms(parsed.platforms)
+      }
+    } catch {
+      // ignore
+    }
+  }
+  if (!platforms) return []
+  const canonicalOrder =
+    obs.kind === 'streaming'
+      ? ['netflix', 'youtube', 'disney']
+      : ['openai', 'claude', 'gemini']
+  const allKeys = Object.keys(platforms)
+  const sortedKeys = [
+    ...canonicalOrder.filter((k) => allKeys.includes(k)),
+    ...allKeys.filter((k) => !canonicalOrder.includes(k)),
+  ]
+  return sortedKeys.map((key) => formatPlatformBadge(key, platforms![key]))
 }
 </script>
 
@@ -369,6 +398,51 @@ function close() {
                 </span>
                 <span class="text-base-content/85 leading-relaxed">
                   {{ formatHumanSummary(obs).explanation }}
+                </span>
+              </div>
+
+              <!-- Multi-platform capabilities breakdown -->
+              <div
+                v-if="resolveObservationPlatforms(obs).length > 0"
+                data-testid="observation-platforms-grid"
+                class="mt-2.5 grid grid-cols-1 sm:grid-cols-2 gap-2"
+              >
+                <div
+                  v-for="badge in resolveObservationPlatforms(obs)"
+                  :key="`obs-platform-${badge.platform}`"
+                  class="flex items-center justify-between p-2 rounded-lg bg-base-100 border border-base-300/80 text-xs"
+                >
+                  <div class="min-w-0 pr-2">
+                    <span class="font-medium truncate block">{{ badge.platform.toUpperCase() }}</span>
+                    <span v-if="badge.subTier" class="text-[10px] opacity-60 truncate block">{{ badge.subTier }}</span>
+                  </div>
+                  <StatusBadge
+                    :label="badge.label"
+                    :tone="badge.tone"
+                    :title="badge.tooltip"
+                  />
+                </div>
+              </div>
+
+              <!-- Speed throughput badge -->
+              <div
+                v-if="obs.throughput !== undefined && obs.throughput > 0"
+                data-testid="observation-speed-row"
+                class="mt-2 flex items-center gap-2 text-xs"
+              >
+                <span class="badge badge-sm badge-info badge-outline font-mono">
+                  🚀 带宽速率：{{ formatSpeed(obs.throughput) }}
+                </span>
+              </div>
+
+              <!-- IP Risk score badge -->
+              <div
+                v-if="obs.risk_score !== undefined && obs.risk_score !== ''"
+                data-testid="observation-risk-row"
+                class="mt-2 flex items-center gap-2 text-xs"
+              >
+                <span class="badge badge-sm badge-outline font-mono">
+                  🛡️ 风险评分：{{ obs.risk_score }}
                 </span>
               </div>
             </div>

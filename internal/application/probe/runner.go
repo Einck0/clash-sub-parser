@@ -7,11 +7,14 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"clash-sub-parser/internal/domain"
 	"clash-sub-parser/internal/probe/identity"
+	"clash-sub-parser/internal/probe/mihomo"
+	"clash-sub-parser/internal/probe/platform"
 	"clash-sub-parser/internal/probe/profiles"
 	"clash-sub-parser/internal/probe/queue"
 )
@@ -25,6 +28,28 @@ type Runner interface {
 type NodeDialer func(ctx context.Context, node domain.Node) (*http.Client, func() error, error)
 
 // DefaultRunnerOption configures DefaultRunner parameters.
+// StageConcurrency defines per-stage concurrency bounds for the probe pipeline,
+// aligned with upstream subs-check defaults (alive: 50, media: 20, speed: 8).
+type StageConcurrency struct {
+	Alive int
+	Media int
+	Speed int
+}
+
+// DefaultStageConcurrency matches upstream subs-check configuration defaults.
+var DefaultStageConcurrency = StageConcurrency{
+	Alive: 50,
+	Media: 20,
+	Speed: 8,
+}
+
+// WithStageConcurrency configures independent stage concurrency limits.
+func WithStageConcurrency(sc StageConcurrency) DefaultRunnerOption {
+	return func(r *DefaultRunner) {
+		r.stageConcurrency = sc
+	}
+}
+
 type DefaultRunnerOption func(*DefaultRunner)
 
 // WithNodeDialer overrides the default sing-box dialer.
@@ -72,13 +97,14 @@ func WithRunBudget(budget RunBudget) DefaultRunnerOption {
 }
 
 type DefaultRunner struct {
-	budget       RunBudget
-	nodes        domain.NodeRepository
-	observations domain.ProbeObservationRepository
-	scheduler    *queue.Scheduler
-	runs         domain.ProbeRunRepository
-	dialer       NodeDialer
-	clock        func() time.Time
+	budget           RunBudget
+	stageConcurrency StageConcurrency
+	nodes            domain.NodeRepository
+	observations     domain.ProbeObservationRepository
+	scheduler        *queue.Scheduler
+	runs             domain.ProbeRunRepository
+	dialer           NodeDialer
+	clock            func() time.Time
 }
 
 // NewDefaultRunner constructs a DefaultRunner.
@@ -90,13 +116,14 @@ func NewDefaultRunner(
 	opts ...DefaultRunnerOption,
 ) *DefaultRunner {
 	r := &DefaultRunner{
-		nodes:        nodes,
-		observations: observations,
-		scheduler:    scheduler,
-		runs:         runs,
-		dialer:       NewSafeNodeDialer(),
-		clock:        time.Now,
-		budget:       DefaultRunBudget,
+		nodes:            nodes,
+		observations:     observations,
+		scheduler:        scheduler,
+		runs:             runs,
+		dialer:           mihomo.NewNodeDialer(15 * time.Second),
+		clock:            time.Now,
+		budget:           DefaultRunBudget,
+		stageConcurrency: DefaultStageConcurrency,
 	}
 	for _, opt := range opts {
 		opt(r)
@@ -146,11 +173,16 @@ func (r *DefaultRunner) IsNodeInPool(logicalID string) bool {
 	return r.scheduler.IsNodeInPool(logicalID)
 }
 
-// Sentinel errors for fatal probe dial configuration issues.
+// Sentinel errors for fatal probe dial configuration issues and legacy failure classification.
 var (
-	ErrCredentialsUnavailable    = errors.New("credentials_unavailable")
+	ErrCredentialsUnavailable    = domain.ErrCredentialsUnavailable
 	ErrProbeDialingNotConfigured = errors.New("probe dialing not configured")
 	ErrSpeedProbeOptInRequired   = errors.New("speed probe opt-in required")
+	ErrTargetUnresolvable        = errors.New("target_unresolvable")
+	ErrPrivateTargetRejected     = errors.New("private_target_rejected")
+	ErrUnsafeTLSRejected         = errors.New("unsafe_tls_rejected")
+	ErrUnsafeOptionRejected      = errors.New("unsafe_option_rejected")
+	ErrClientBuildFailed         = domain.ErrClientBuildFailed
 )
 
 func defaultNodeDialer(ctx context.Context, node domain.Node) (*http.Client, func() error, error) {
@@ -187,7 +219,7 @@ func probeURLForKind(kind domain.ProbeKind) string {
 	case domain.ProbeKindAI:
 		return "https://api.openai.com"
 	case domain.ProbeKindSpeed:
-		return "http://speed.cloudflare.com/__down?bytes=1048576"
+		return platform.DefaultSpeedTestURL
 	case domain.ProbeKindIPRisk:
 		return "https://cloudflare.com/cdn-cgi/trace"
 	default:
@@ -288,14 +320,23 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 	pool := newNodeSessionPool(runCtx)
 	defer pool.closeAll()
 
-	// Classify probe kinds: check if mixed (baseline + expensive)
-	var hasBaseline bool
-	var expensiveKinds []domain.ProbeKind
+	// Classify probe kinds into 3 pipeline stages:
+	// Stage 1 (Alive): Baseline
+	// Stage 2 (Media): Geo, Streaming, AI, IPRisk
+	// Stage 3 (Speed): Speed
+	var (
+		stage1Kinds []domain.ProbeKind
+		stage2Kinds []domain.ProbeKind
+		stage3Kinds []domain.ProbeKind
+	)
 	for _, k := range validKinds {
-		if k == domain.ProbeKindBaseline {
-			hasBaseline = true
-		} else {
-			expensiveKinds = append(expensiveKinds, k)
+		switch k {
+		case domain.ProbeKindBaseline:
+			stage1Kinds = append(stage1Kinds, k)
+		case domain.ProbeKindSpeed:
+			stage3Kinds = append(stage3Kinds, k)
+		default:
+			stage2Kinds = append(stage2Kinds, k)
 		}
 	}
 
@@ -356,193 +397,37 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 		enqueueMode = queue.EnqueuePeriodicDedupe
 	}
 
-	isMixedTwoPhase := hasBaseline && len(expensiveKinds) > 0
+	var enqueuedOnce sync.Once
+	triggerNotify := func() {
+		enqueuedOnce.Do(func() {
+			notifyTasksEnqueued(ctx)
+		})
+	}
 
-	if !isMixedTwoPhase {
-		// Single-stage dispatch: original behavior for baseline-only or non-baseline requests
+	// ---------------------------------------------------------
+	// Stage 1: Alive (Baseline)
+	// ---------------------------------------------------------
+	var (
+		availMu      sync.Mutex
+		availableMap = make(map[string]domain.Node)
+	)
+
+	if len(stage1Kinds) > 0 {
 		var (
-			wg        sync.WaitGroup
-			submitErr error
+			stage1WG        sync.WaitGroup
+			stage1SubmitErr error
 		)
+		stage1Limit := r.stageConcurrency.Alive
+		if stage1Limit <= 0 {
+			stage1Limit = DefaultStageConcurrency.Alive
+		}
+		stage1Sem := make(chan struct{}, stage1Limit)
 
 		for _, node := range targetNodes {
-			session := pool.sessionFor(node)
-			session.retain(len(validKinds))
-			for idx, kind := range validKinds {
-				n := node
-				k := kind
-				s := session
-				wg.Add(1)
-
-				task := queue.Task{
-					ID:        domain.MustNewUUIDv7(),
-					RunID:     run.ID,
-					LogicalID: n.LogicalID,
-					Kind:      k,
-					Mode:      enqueueMode,
-					Context:   runCtx,
-					Execute: func(tCtx context.Context) error {
-						err := r.executeTask(tCtx, run, n, k, s)
-						if err != nil {
-							recordTaskErr(n.LogicalID, err)
-						}
-						return err
-					},
-					OnComplete: func(_ error) {
-						s.release(1)
-						wg.Done()
-					},
-				}
-
-				if err := r.scheduler.SubmitWithContext(runCtx, task); err != nil {
-					s.release(len(validKinds) - idx)
-					wg.Done()
-					submitErr = err
-					break
-				}
-			}
-			if submitErr != nil {
-				break
-			}
-		}
-		notifyTasksEnqueued(ctx)
-
-		done := make(chan struct{})
-		go func() {
-			wg.Wait()
-			close(done)
-		}()
-
-		select {
-		case <-runCtx.Done():
-			return handleCancelOrDeadline(done)
-		case <-done:
-			if runCtx.Err() != nil {
-				return handleCancelOrDeadline(done)
-			}
-			if submitErr != nil {
-				_ = run.TransitionTo(domain.ProbeRunStateFailed)
-				_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateFailed)
-				return submitErr
-			}
-			if fatalDial, fatalErr := checkFatalDial(); fatalDial {
-				_ = run.TransitionTo(domain.ProbeRunStateFailed)
-				_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateFailed)
-				return fatalErr
-			}
-
-			_ = run.TransitionTo(domain.ProbeRunStateSucceeded)
-			_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateSucceeded)
-			return nil
-		}
-	}
-
-	// Two-phase execution: Phase 1 (Baseline) -> Collect Available -> Phase 2 (Expensive)
-	var (
-		stage1WG        sync.WaitGroup
-		stage1SubmitErr error
-		availMu         sync.Mutex
-		availableMap    = make(map[string]domain.Node)
-	)
-
-	for _, node := range targetNodes {
-		n := node
-		k := domain.ProbeKindBaseline
-		s := pool.sessionFor(n)
-		stage1WG.Add(1)
-
-		task := queue.Task{
-			ID:        domain.MustNewUUIDv7(),
-			RunID:     run.ID,
-			LogicalID: n.LogicalID,
-			Kind:      k,
-			Mode:      enqueueMode,
-			Context:   runCtx,
-			Execute: func(tCtx context.Context) error {
-				verdict, err := r.executeTaskWithVerdict(tCtx, run, n, k, s)
-				if err != nil {
-					recordTaskErr(n.LogicalID, err)
-				}
-				if verdict == domain.VerdictAvailable {
-					availMu.Lock()
-					availableMap[n.LogicalID] = n
-					availMu.Unlock()
-				}
-				return err
-			},
-			OnComplete: func(_ error) {
-				stage1WG.Done()
-			},
-		}
-
-		if err := r.scheduler.SubmitWithContext(runCtx, task); err != nil {
-			stage1WG.Done()
-			stage1SubmitErr = err
-			break
-		}
-	}
-	notifyTasksEnqueued(ctx)
-
-	stage1Done := make(chan struct{})
-	go func() {
-		stage1WG.Wait()
-		close(stage1Done)
-	}()
-
-	select {
-	case <-runCtx.Done():
-		return handleCancelOrDeadline(stage1Done)
-	case <-stage1Done:
-		if runCtx.Err() != nil {
-			return handleCancelOrDeadline(stage1Done)
-		}
-		if stage1SubmitErr != nil {
-			_ = run.TransitionTo(domain.ProbeRunStateFailed)
-			_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateFailed)
-			return stage1SubmitErr
-		}
-		if fatalDial, fatalErr := checkFatalDial(); fatalDial {
-			_ = run.TransitionTo(domain.ProbeRunStateFailed)
-			_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateFailed)
-			return fatalErr
-		}
-	}
-
-	// Filter nodes for Phase 2: only those that passed baseline with VerdictAvailable
-	availMu.Lock()
-	var stage2Nodes []domain.Node
-	for _, n := range targetNodes {
-		if _, ok := availableMap[n.LogicalID]; ok {
-			stage2Nodes = append(stage2Nodes, n)
-		} else {
-			_ = pool.sessionFor(n).close()
-		}
-	}
-	availMu.Unlock()
-
-	if len(stage2Nodes) == 0 {
-		// An unavailable or restricted baseline is a successful observation, not
-		// an execution failure. The run is complete once every baseline result
-		// has been persisted and there is no submission, fatal dial, or context error.
-		_ = run.TransitionTo(domain.ProbeRunStateSucceeded)
-		_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateSucceeded)
-		return nil
-	}
-
-	// Phase 2: submit expensive kinds only for available nodes
-	var (
-		stage2WG        sync.WaitGroup
-		stage2SubmitErr error
-	)
-
-	for _, node := range stage2Nodes {
-		session := pool.sessionFor(node)
-		session.retain(len(expensiveKinds))
-		for idx, kind := range expensiveKinds {
 			n := node
-			k := kind
-			s := session
-			stage2WG.Add(1)
+			k := domain.ProbeKindBaseline
+			s := pool.sessionFor(n)
+			stage1WG.Add(1)
 
 			task := queue.Task{
 				ID:        domain.MustNewUUIDv7(),
@@ -552,58 +437,269 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 				Mode:      enqueueMode,
 				Context:   runCtx,
 				Execute: func(tCtx context.Context) error {
-					err := r.executeTask(tCtx, run, n, k, s)
+					select {
+					case stage1Sem <- struct{}{}:
+						defer func() { <-stage1Sem }()
+					case <-tCtx.Done():
+						return tCtx.Err()
+					}
+					verdict, err := r.executeTaskWithVerdict(tCtx, run, n, k, s)
 					if err != nil {
 						recordTaskErr(n.LogicalID, err)
+					}
+					if verdict == domain.VerdictAvailable {
+						availMu.Lock()
+						availableMap[n.LogicalID] = n
+						availMu.Unlock()
 					}
 					return err
 				},
 				OnComplete: func(_ error) {
-					s.release(1)
-					stage2WG.Done()
+					stage1WG.Done()
 				},
 			}
 
 			if err := r.scheduler.SubmitWithContext(runCtx, task); err != nil {
-				s.release(len(expensiveKinds) - idx)
-				stage2WG.Done()
-				stage2SubmitErr = err
+				stage1WG.Done()
+				stage1SubmitErr = err
 				break
 			}
 		}
-		if stage2SubmitErr != nil {
-			break
+		triggerNotify()
+
+		stage1Done := make(chan struct{})
+		go func() {
+			stage1WG.Wait()
+			close(stage1Done)
+		}()
+
+		select {
+		case <-runCtx.Done():
+			return handleCancelOrDeadline(stage1Done)
+		case <-stage1Done:
+			if runCtx.Err() != nil {
+				return handleCancelOrDeadline(stage1Done)
+			}
+			if stage1SubmitErr != nil {
+				_ = run.TransitionTo(domain.ProbeRunStateFailed)
+				_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateFailed)
+				return stage1SubmitErr
+			}
+			if fatalDial, fatalErr := checkFatalDial(); fatalDial {
+				_ = run.TransitionTo(domain.ProbeRunStateFailed)
+				_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateFailed)
+				return fatalErr
+			}
 		}
 	}
 
-	stage2Done := make(chan struct{})
-	go func() {
-		stage2WG.Wait()
-		close(stage2Done)
-	}()
+	// Filter nodes eligible for Stage 2 & Stage 3:
+	// If Baseline was executed, only nodes with VerdictAvailable advance.
+	// Nodes that failed baseline are closed immediately.
+	var eligibleNodes []domain.Node
+	if len(stage1Kinds) > 0 {
+		availMu.Lock()
+		for _, n := range targetNodes {
+			if _, ok := availableMap[n.LogicalID]; ok {
+				eligibleNodes = append(eligibleNodes, n)
+			} else {
+				_ = pool.sessionFor(n).close()
+			}
+		}
+		availMu.Unlock()
+	} else {
+		eligibleNodes = targetNodes
+	}
 
-	select {
-	case <-runCtx.Done():
-		return handleCancelOrDeadline(stage2Done)
-	case <-stage2Done:
-		if runCtx.Err() != nil {
-			return handleCancelOrDeadline(stage2Done)
-		}
-		if stage2SubmitErr != nil {
-			_ = run.TransitionTo(domain.ProbeRunStateFailed)
-			_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateFailed)
-			return stage2SubmitErr
-		}
-		if fatalDial, fatalErr := checkFatalDial(); fatalDial {
-			_ = run.TransitionTo(domain.ProbeRunStateFailed)
-			_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateFailed)
-			return fatalErr
-		}
-
+	if len(eligibleNodes) == 0 || (len(stage2Kinds) == 0 && len(stage3Kinds) == 0) {
 		_ = run.TransitionTo(domain.ProbeRunStateSucceeded)
 		_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateSucceeded)
 		return nil
 	}
+
+	// Retain sessions for all tasks across subsequent stages (Stage 2 + Stage 3)
+	tasksPerNode := len(stage2Kinds) + len(stage3Kinds)
+	for _, n := range eligibleNodes {
+		pool.sessionFor(n).retain(tasksPerNode)
+	}
+
+	// ---------------------------------------------------------
+	// Stage 2: Media / AI (Geo, Streaming, AI, IPRisk)
+	// ---------------------------------------------------------
+	if len(stage2Kinds) > 0 {
+		var (
+			stage2WG        sync.WaitGroup
+			stage2SubmitErr error
+		)
+		stage2Limit := r.stageConcurrency.Media
+		if stage2Limit <= 0 {
+			stage2Limit = DefaultStageConcurrency.Media
+		}
+		stage2Sem := make(chan struct{}, stage2Limit)
+
+		for _, node := range eligibleNodes {
+			session := pool.sessionFor(node)
+			for idx, kind := range stage2Kinds {
+				n := node
+				k := kind
+				s := session
+				stage2WG.Add(1)
+
+				task := queue.Task{
+					ID:        domain.MustNewUUIDv7(),
+					RunID:     run.ID,
+					LogicalID: n.LogicalID,
+					Kind:      k,
+					Mode:      enqueueMode,
+					Context:   runCtx,
+					Execute: func(tCtx context.Context) error {
+						select {
+						case stage2Sem <- struct{}{}:
+							defer func() { <-stage2Sem }()
+						case <-tCtx.Done():
+							return tCtx.Err()
+						}
+						err := r.executeTask(tCtx, run, n, k, s)
+						if err != nil {
+							recordTaskErr(n.LogicalID, err)
+						}
+						return err
+					},
+					OnComplete: func(_ error) {
+						s.release(1)
+						stage2WG.Done()
+					},
+				}
+
+				if err := r.scheduler.SubmitWithContext(runCtx, task); err != nil {
+					s.release(tasksPerNode - idx)
+					stage2WG.Done()
+					stage2SubmitErr = err
+					break
+				}
+			}
+			if stage2SubmitErr != nil {
+				break
+			}
+		}
+		triggerNotify()
+
+		stage2Done := make(chan struct{})
+		go func() {
+			stage2WG.Wait()
+			close(stage2Done)
+		}()
+
+		select {
+		case <-runCtx.Done():
+			return handleCancelOrDeadline(stage2Done)
+		case <-stage2Done:
+			if runCtx.Err() != nil {
+				return handleCancelOrDeadline(stage2Done)
+			}
+			if stage2SubmitErr != nil {
+				_ = run.TransitionTo(domain.ProbeRunStateFailed)
+				_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateFailed)
+				return stage2SubmitErr
+			}
+			if fatalDial, fatalErr := checkFatalDial(); fatalDial {
+				_ = run.TransitionTo(domain.ProbeRunStateFailed)
+				_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateFailed)
+				return fatalErr
+			}
+		}
+	}
+
+	// ---------------------------------------------------------
+	// Stage 3: Speed (Opt-in throughput test, after Stage 2 finishes)
+	// ---------------------------------------------------------
+	if len(stage3Kinds) > 0 {
+		var (
+			stage3WG        sync.WaitGroup
+			stage3SubmitErr error
+		)
+		stage3Limit := r.stageConcurrency.Speed
+		if stage3Limit <= 0 {
+			stage3Limit = DefaultStageConcurrency.Speed
+		}
+		stage3Sem := make(chan struct{}, stage3Limit)
+
+		for _, node := range eligibleNodes {
+			session := pool.sessionFor(node)
+			for idx, kind := range stage3Kinds {
+				n := node
+				k := kind
+				s := session
+				stage3WG.Add(1)
+
+				task := queue.Task{
+					ID:        domain.MustNewUUIDv7(),
+					RunID:     run.ID,
+					LogicalID: n.LogicalID,
+					Kind:      k,
+					Mode:      enqueueMode,
+					Context:   runCtx,
+					Execute: func(tCtx context.Context) error {
+						select {
+						case stage3Sem <- struct{}{}:
+							defer func() { <-stage3Sem }()
+						case <-tCtx.Done():
+							return tCtx.Err()
+						}
+						err := r.executeTask(tCtx, run, n, k, s)
+						if err != nil {
+							recordTaskErr(n.LogicalID, err)
+						}
+						return err
+					},
+					OnComplete: func(_ error) {
+						s.release(1)
+						stage3WG.Done()
+					},
+				}
+
+				if err := r.scheduler.SubmitWithContext(runCtx, task); err != nil {
+					s.release(len(stage3Kinds) - idx)
+					stage3WG.Done()
+					stage3SubmitErr = err
+					break
+				}
+			}
+			if stage3SubmitErr != nil {
+				break
+			}
+		}
+		triggerNotify()
+
+		stage3Done := make(chan struct{})
+		go func() {
+			stage3WG.Wait()
+			close(stage3Done)
+		}()
+
+		select {
+		case <-runCtx.Done():
+			return handleCancelOrDeadline(stage3Done)
+		case <-stage3Done:
+			if runCtx.Err() != nil {
+				return handleCancelOrDeadline(stage3Done)
+			}
+			if stage3SubmitErr != nil {
+				_ = run.TransitionTo(domain.ProbeRunStateFailed)
+				_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateFailed)
+				return stage3SubmitErr
+			}
+			if fatalDial, fatalErr := checkFatalDial(); fatalDial {
+				_ = run.TransitionTo(domain.ProbeRunStateFailed)
+				_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateFailed)
+				return fatalErr
+			}
+		}
+	}
+
+	_ = run.TransitionTo(domain.ProbeRunStateSucceeded)
+	_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateSucceeded)
+	return nil
 }
 
 type nodeSession struct {
@@ -777,6 +873,36 @@ func isFatalDialError(err error) bool {
 	return errors.Is(err, ErrCredentialsUnavailable) || errors.Is(err, ErrProbeDialingNotConfigured) || errors.Is(err, ErrClientBuildFailed)
 }
 
+func aggregateGroupVerdict(platforms map[string]domain.PlatformCapability) (domain.ProbeVerdict, string) {
+	if len(platforms) == 0 {
+		return domain.VerdictUnknown, "contract_drift"
+	}
+	hasAvailable := false
+	allRestricted := true
+	allError := true
+	for _, p := range platforms {
+		if p.Verdict == domain.VerdictAvailable {
+			hasAvailable = true
+		}
+		if p.Verdict != domain.VerdictRestricted {
+			allRestricted = false
+		}
+		if p.Verdict != domain.VerdictError {
+			allError = false
+		}
+	}
+	if hasAvailable {
+		return domain.VerdictAvailable, "contract_matched"
+	}
+	if allRestricted {
+		return domain.VerdictRestricted, "access_restricted"
+	}
+	if allError {
+		return domain.VerdictError, "transport_error"
+	}
+	return domain.VerdictUnknown, "contract_drift"
+}
+
 func (r *DefaultRunner) executeTask(ctx context.Context, run *domain.ProbeRun, node domain.Node, kind domain.ProbeKind, session *nodeSession) error {
 	_, err := r.executeTaskWithVerdict(ctx, run, node, kind, session)
 	return err
@@ -794,10 +920,14 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 	ctx = taskCtx
 
 	var (
-		result        profiles.Result
-		latency       int64
-		geoCountry    string
-		failureReason string
+		result          profiles.Result
+		latency         int64
+		geoCountry      string
+		failureReason   string
+		platformsMap    map[string]domain.PlatformCapability
+		speedCap        domain.PlatformCapability
+		speedThroughput *float64
+		ipRiskScore     string
 	)
 	if kind == domain.ProbeKindSpeed {
 		result.OptIn = true
@@ -829,6 +959,76 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 		failureReason = "client_build_failed"
 		result.NetworkError = true
 		latency = r.clock().Sub(start).Milliseconds()
+	} else if kind == domain.ProbeKindStreaming {
+		reqStart := r.clock()
+		nf := platform.CheckNetflix(ctx, client)
+		yt := platform.CheckYoutube(ctx, client)
+		dis := platform.CheckDisney(ctx, client)
+		latency = r.clock().Sub(reqStart).Milliseconds()
+		platformsMap = map[string]domain.PlatformCapability{
+			"netflix": nf,
+			"youtube": yt,
+			"disney":  dis,
+		}
+		result.ContractMatched = true
+		result.ContractVersion = prof.Contract
+	} else if kind == domain.ProbeKindAI {
+		reqStart := r.clock()
+		oai := platform.CheckOpenAI(ctx, client)
+		claude := platform.CheckClaude(ctx, client)
+		gem := platform.CheckGemini(ctx, client)
+		latency = r.clock().Sub(reqStart).Milliseconds()
+		platformsMap = map[string]domain.PlatformCapability{
+			"openai": oai,
+			"claude": claude,
+			"gemini": gem,
+		}
+		result.ContractMatched = true
+		result.ContractVersion = prof.Contract
+	} else if kind == domain.ProbeKindSpeed {
+		reqStart := r.clock()
+		limitBytes := uint64(platform.DefaultDownloadMB * 1024 * 1024)
+		if prof.SpeedBudget.MaxBytesPerRequest > 0 {
+			limitBytes = uint64(prof.SpeedBudget.MaxBytesPerRequest)
+		}
+		deadline := platform.DefaultSpeedTimeout
+		if prof.SpeedBudget.Deadline > 0 {
+			deadline = prof.SpeedBudget.Deadline
+		}
+		var speedErr error
+		speedCap, speedErr = platform.CheckSpeed(ctx, client, nil, "", limitBytes, deadline)
+		latency = r.clock().Sub(reqStart).Milliseconds()
+		if latency <= 0 && speedCap.LatencyMS != nil {
+			latency = *speedCap.LatencyMS
+		}
+		var actualBytes int64
+		if idx := strings.Index(speedCap.Summary, "bytes_read="); idx != -1 {
+			_, _ = fmt.Sscanf(speedCap.Summary[idx:], "bytes_read=%d", &actualBytes)
+		}
+		speedThroughput = speedCap.Throughput
+		if actualBytes > 0 {
+			result.BytesRead = actualBytes
+			if latency > 0 {
+				kbps := (float64(actualBytes) / 1024.0) * 1000.0 / float64(latency)
+				speedThroughput = &kbps
+				throughputKbps := (actualBytes * 8) / latency
+				speedCap.Summary = fmt.Sprintf("%.1f KB/s (read %d bytes in %d ms) bytes_read=%d throughput_kbps=%d",
+					kbps, actualBytes, latency, actualBytes, throughputKbps)
+			}
+		}
+		if speedErr != nil {
+			failureReason = speedCap.Reason
+			if errors.Is(speedErr, context.DeadlineExceeded) || (ctx.Err() == context.DeadlineExceeded) {
+				result.DeadlineExceeded = true
+			} else {
+				result.NetworkError = true
+			}
+		}
+		result.ContractMatched = (speedCap.Verdict == domain.VerdictAvailable)
+		result.ContractVersion = prof.Contract
+		if speedCap.Verdict == domain.VerdictAvailable {
+			result.StatusCode = http.StatusOK
+		}
 	} else {
 		reqURL := probeURLForKind(kind)
 		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
@@ -863,22 +1063,12 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 				result.NetworkError = true
 			} else {
 				readLimit := r.budget.MaxResponseBytes
-				speedCapEnforced := false
-				if kind == domain.ProbeKindSpeed && prof.SpeedBudget.MaxBytesPerRequest > 0 && prof.SpeedBudget.MaxBytesPerRequest < readLimit {
-					readLimit = prof.SpeedBudget.MaxBytesPerRequest
-					speedCapEnforced = true
-				}
 				body, readErr := readBoundedResponse(resp.Body, readLimit)
 				_ = resp.Body.Close()
 				latency = r.clock().Sub(reqStart).Milliseconds()
 
 				if readErr != nil {
-					if speedCapEnforced && errors.Is(readErr, errResponseTooLarge) {
-						result.StatusCode = resp.StatusCode
-						result.Body = body
-						result.BytesRead = prof.SpeedBudget.MaxBytesPerRequest + 1
-						result.ContractVersion = prof.Contract
-					} else if errors.Is(readErr, context.DeadlineExceeded) || (ctx.Err() == context.DeadlineExceeded) {
+					if errors.Is(readErr, context.DeadlineExceeded) || (ctx.Err() == context.DeadlineExceeded) {
 						failureReason = "timeout"
 						result.DeadlineExceeded = true
 						result.BytesRead = int64(len(body))
@@ -903,23 +1093,17 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 								geoCountry = cand.NormalizedCountryCode()
 							}
 						}
-					case domain.ProbeKindStreaming, domain.ProbeKindAI:
-						result.ContractMatched = false
 					case domain.ProbeKindIPRisk:
-						result.ContractMatched = false
-						if resp.StatusCode >= 200 && resp.StatusCode < 400 {
-							if resp.StatusCode != http.StatusOK {
-								if prof.Evaluate(result).Reason != "access_restricted" {
-									result.ExitIdentityMissing = true
-								}
-							} else if _, err := identity.ExtractCandidate(body); err != nil {
-								if prof.Evaluate(result).Reason != "access_restricted" {
-									result.ExitIdentityMissing = true
-								}
+						if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+							cand, err := identity.ExtractCandidate(body)
+							if err != nil || cand.CountryCode == "" {
+								result.ExitIdentityMissing = true
+								result.ContractMatched = false
+							} else {
+								result.ContractMatched = true
+								ipRiskScore = cand.CountryCode
 							}
 						}
-					case domain.ProbeKindSpeed:
-						result.ContractMatched = resp.StatusCode == http.StatusOK && result.BytesRead >= profiles.MinValidSpeedBytes
 					default:
 						result.ContractMatched = false
 					}
@@ -928,7 +1112,16 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 		}
 	}
 
-	eval := prof.Evaluate(result)
+	var eval profiles.Evaluation
+	if kind == domain.ProbeKindSpeed {
+		eval.Verdict = speedCap.Verdict
+		eval.Reason = speedCap.Reason
+	} else {
+		eval = prof.Evaluate(result)
+		if len(platformsMap) > 0 {
+			eval.Verdict, eval.Reason = aggregateGroupVerdict(platformsMap)
+		}
+	}
 	if failureReason != "" {
 		eval.Reason = failureReason
 	}
@@ -938,16 +1131,35 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 	if kind == domain.ProbeKindGeo && geoCountry != "" {
 		summary = fmt.Sprintf("%s country=%s", summary, geoCountry)
 	}
-	if kind == domain.ProbeKindSpeed && result.BytesRead > 0 {
-		throughputKbps := int64(0)
-		if latency > 0 {
-			throughputKbps = (result.BytesRead * 8) / latency
+	if kind == domain.ProbeKindSpeed {
+		if speedCap.Summary != "" {
+			summary = fmt.Sprintf("%s %s", summary, speedCap.Summary)
 		}
-		summary = fmt.Sprintf("%s bytes_read=%d throughput_kbps=%d", summary, result.BytesRead, throughputKbps)
+		if speedThroughput != nil {
+			summary = fmt.Sprintf("%s throughput_kbps=%.1f", summary, *speedThroughput)
+		}
 	}
 	if dialErr != nil {
 		summary += " error=" + failureReason
 	}
+	obsSubTier := ""
+	obsRegion := geoCountry
+	if kind == domain.ProbeKindStreaming {
+		if nf, ok := platformsMap["netflix"]; ok && nf.SubTier != "" {
+			obsSubTier = nf.SubTier
+			if nf.Region != "" {
+				obsRegion = nf.Region
+			}
+		}
+	} else if kind == domain.ProbeKindAI {
+		if oai, ok := platformsMap["openai"]; ok && oai.SubTier != "" {
+			obsSubTier = oai.SubTier
+			if oai.Region != "" {
+				obsRegion = oai.Region
+			}
+		}
+	}
+
 	obs := &domain.ProbeObservation{
 		ID:              domain.MustNewUUIDv7(),
 		ProbeRunID:      run.ID,
@@ -958,6 +1170,11 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 		ObservedAt:      now,
 		LatencyMS:       latency,
 		RedactedSummary: summary,
+		Region:          obsRegion,
+		SubTier:         obsSubTier,
+		Throughput:      speedThroughput,
+		RiskScore:       ipRiskScore,
+		Platforms:       platformsMap,
 	}
 
 	if node.ConnectionRevision > 0 {

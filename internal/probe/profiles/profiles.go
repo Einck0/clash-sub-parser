@@ -179,8 +179,8 @@ func Speed() Profile {
 	p := profile(domain.ProbeKindSpeed, SpeedVersion)
 	p.SpeedBudget = SpeedBudget{
 		OptInRequired:      true,
-		MaxBytesPerRequest: 1 << 20,
-		MaxBytesPerRun:     8 << 20,
+		MaxBytesPerRequest: 5 * 1024 * 1024,
+		MaxBytesPerRun:     40 * 1024 * 1024,
 		Deadline:           10 * time.Second,
 	}
 	return p

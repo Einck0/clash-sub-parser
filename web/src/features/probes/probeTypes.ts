@@ -15,6 +15,39 @@ export type ProbeVerdict =
   | 'error'
   | 'stale'
 
+export type PlatformSubTier =
+  | 'full'
+  | 'web'
+  | 'app'
+  | 'originals'
+  | 'banned'
+  | 'unlocked'
+  | 'soon'
+
+export interface PlatformCapability {
+  verdict: ProbeVerdict
+  latency_ms?: number
+  observed_at?: string
+  summary?: string
+  region?: string
+  sub_tier?: PlatformSubTier
+  throughput?: number
+  risk_score?: string
+  reason?: string
+}
+
+export interface PlatformBadge {
+  platform: string
+  verdict: ProbeVerdict
+  label: string
+  tone: 'success' | 'warning' | 'error' | 'info'
+  region?: string
+  subTier?: PlatformSubTier
+  tooltip?: string
+  throughput?: number
+  riskScore?: string
+}
+
 export interface ProbeRun {
   id: string
   idempotency_key: string
@@ -37,6 +70,11 @@ export interface ProbeObservation {
   latency_ms: number
   redacted_summary: string
   connection_revision?: number | null
+  region?: string
+  sub_tier?: PlatformSubTier
+  throughput?: number
+  risk_score?: string
+  platforms?: Record<string, PlatformCapability>
 }
 
 export interface CreateProbeRunInput {
@@ -159,6 +197,273 @@ export function probeVerdictTone(verdict: ProbeVerdict): 'success' | 'warning' |
 export function formatLatency(ms: number): string {
   if (ms < 0) return '--'
   return `${ms} ms`
+}
+
+/** Format speed throughput into reasonable KB/s or MB/s */
+export function formatSpeed(kbPerSec?: number | null): string {
+  if (kbPerSec == null || kbPerSec < 0 || Number.isNaN(kbPerSec)) return '--'
+  if (kbPerSec < 1024) {
+    return `${Math.round(kbPerSec)} KB/s`
+  }
+  const mb = kbPerSec / 1024
+  return `${mb.toFixed(1)} MB/s`
+}
+
+/** Compute overall group verdict from platform dictionary */
+export function computeGroupVerdict(
+  platforms?: Record<string, PlatformCapability>
+): ProbeVerdict {
+  if (!platforms) return 'unknown'
+  const values = Object.values(platforms)
+  if (values.length === 0) return 'unknown'
+
+  if (values.some((p) => p.verdict === 'available')) {
+    return 'available'
+  }
+  if (values.every((p) => p.verdict === 'restricted')) {
+    return 'restricted'
+  }
+  if (values.every((p) => p.verdict === 'error')) {
+    return 'error'
+  }
+  return 'unknown'
+}
+
+/** Normalize raw platform dictionary from snake_case or camelCase */
+export function normalizePlatforms(
+  raw?: Record<string, any>
+): Record<string, PlatformCapability> | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const result: Record<string, PlatformCapability> = {}
+  for (const [k, v] of Object.entries(raw)) {
+    if (!v || typeof v !== 'object') continue
+    const verdict = (v.verdict as ProbeVerdict) || 'unknown'
+    const latency =
+      typeof v.latency_ms === 'number'
+        ? v.latency_ms
+        : typeof v.latencyMs === 'number'
+        ? v.latencyMs
+        : undefined
+    const observedAt = v.observed_at || v.observedAt
+    const subTier = v.sub_tier || v.subTier
+    const throughput = typeof v.throughput === 'number' ? v.throughput : undefined
+    const riskScore =
+      v.risk_score != null ? String(v.risk_score) : v.riskScore != null ? String(v.riskScore) : undefined
+    const rawRegion = typeof v.region === 'string' ? v.region.trim() : undefined
+    const region = rawRegion && rawRegion.toLowerCase() !== 'unknown' ? rawRegion : undefined
+
+    result[k.toLowerCase()] = {
+      verdict,
+      latency_ms: latency,
+      observed_at: observedAt,
+      summary: v.summary,
+      region,
+      sub_tier: subTier,
+      throughput,
+      risk_score: riskScore,
+      reason: v.reason,
+    }
+  }
+  return Object.keys(result).length > 0 ? result : undefined
+}
+
+/** Format platform status badge adhering to beck-8 and subcheck semantics */
+export function formatPlatformBadge(platform: string, cap: PlatformCapability): PlatformBadge {
+  const normPlat = platform.trim().toLowerCase()
+  const rawRegion = typeof cap.region === 'string' ? cap.region.trim() : undefined
+  const region = rawRegion && rawRegion.toLowerCase() !== 'unknown' ? rawRegion : undefined
+  const subTier = cap.sub_tier
+  const verdict = cap.verdict || 'unknown'
+  const isStale = verdict === 'stale'
+
+  let label = ''
+  let tone: 'success' | 'warning' | 'error' | 'info' = 'info'
+  let tooltip: string | undefined = cap.summary || cap.reason
+
+  switch (normPlat) {
+    case 'openai':
+      if (subTier === 'full') {
+        label = region ? `GPT⁺ (${region})` : 'GPT⁺'
+        tone = 'success'
+        tooltip = tooltip || 'OpenAI 网页 + App 双通'
+      } else if (subTier === 'web') {
+        label = region ? `GPT (${region})` : 'GPT'
+        tone = 'warning'
+        tooltip = tooltip || 'OpenAI 仅网页端可用'
+      } else if (subTier === 'app') {
+        label = region ? `GPT App (${region})` : 'GPT App'
+        tone = 'warning'
+        tooltip = tooltip || 'OpenAI 仅客户端可用'
+      } else if (subTier === 'banned') {
+        label = region ? `GPT 封禁 (${region})` : 'GPT 封禁'
+        tone = 'error'
+        tooltip = tooltip || 'OpenAI 封禁'
+      } else if (verdict === 'available') {
+        label = region ? `GPT⁺ (${region})` : 'GPT⁺'
+        tone = 'success'
+      } else if (verdict === 'restricted') {
+        label = region ? `GPT 受限 (${region})` : 'GPT 受限'
+        tone = 'warning'
+      } else if (verdict === 'error') {
+        label = 'GPT 异常'
+        tone = 'error'
+      } else {
+        label = region ? `GPT (${region})` : 'GPT'
+        tone = 'info'
+      }
+      break
+
+    case 'netflix':
+      if (subTier === 'full') {
+        label = region ? `NF (${region})` : 'NF'
+        tone = 'success'
+        tooltip = tooltip || 'Netflix 全量剧集解锁'
+      } else if (subTier === 'originals') {
+        label = region ? `NF 仅自制 (${region})` : 'NF 仅自制'
+        tone = 'warning'
+        tooltip = tooltip || 'Netflix 仅自制剧'
+      } else if (subTier === 'banned') {
+        label = region ? `NF 封禁 (${region})` : 'NF 封禁'
+        tone = 'error'
+        tooltip = tooltip || 'Netflix 已封禁'
+      } else if (verdict === 'available') {
+        label = region ? `NF (${region})` : 'NF'
+        tone = 'success'
+      } else if (verdict === 'restricted') {
+        label = region ? `NF 受限 (${region})` : 'NF 受限'
+        tone = 'warning'
+      } else if (verdict === 'error') {
+        label = 'NF 异常'
+        tone = 'error'
+      } else {
+        label = region ? `NF (${region})` : 'NF'
+        tone = 'info'
+      }
+      break
+
+    case 'disney':
+      if (subTier === 'unlocked') {
+        label = region ? `D+ (${region})` : 'D+'
+        tone = 'success'
+        tooltip = tooltip || 'Disney+ 已解锁'
+      } else if (subTier === 'soon') {
+        label = region ? `D+ 尚未开放 (${region})` : 'D+ 尚未开放'
+        tone = 'warning' // Must NOT be green!
+        tooltip = tooltip || 'Disney+ 尚未开放'
+      } else if (subTier === 'banned') {
+        label = region ? `D+ 封禁 (${region})` : 'D+ 封禁'
+        tone = 'error'
+        tooltip = tooltip || 'Disney+ 已封禁'
+      } else if (verdict === 'available') {
+        label = region ? `D+ (${region})` : 'D+'
+        tone = 'success'
+      } else if (verdict === 'restricted') {
+        label = region ? `D+ 受限 (${region})` : 'D+ 受限'
+        tone = 'warning'
+      } else if (verdict === 'error') {
+        label = 'D+ 异常'
+        tone = 'error'
+      } else {
+        label = region ? `D+ (${region})` : 'D+'
+        tone = 'info'
+      }
+      break
+
+    case 'youtube':
+      if (subTier === 'banned') {
+        label = region ? `YT 封禁 (${region})` : 'YT 封禁'
+        tone = 'error'
+      } else if (verdict === 'available') {
+        label = region ? `YT (${region})` : 'YT'
+        tone = 'success'
+      } else if (verdict === 'restricted') {
+        label = region ? `YT 受限 (${region})` : 'YT 受限'
+        tone = 'warning'
+      } else if (verdict === 'error') {
+        label = 'YT 异常'
+        tone = 'error'
+      } else {
+        label = region ? `YT (${region})` : 'YT'
+        tone = 'info'
+      }
+      break
+
+    case 'claude':
+      if (subTier === 'banned') {
+        label = region ? `Claude 封禁 (${region})` : 'Claude 封禁'
+        tone = 'error'
+      } else if (verdict === 'available') {
+        label = region ? `Claude (${region})` : 'Claude'
+        tone = 'success'
+      } else if (verdict === 'restricted') {
+        label = region ? `Claude 受限 (${region})` : 'Claude 受限'
+        tone = 'warning'
+      } else if (verdict === 'error') {
+        label = 'Claude 异常'
+        tone = 'error'
+      } else {
+        label = region ? `Claude (${region})` : 'Claude'
+        tone = 'info'
+      }
+      break
+
+    case 'gemini':
+      if (verdict === 'available') {
+        label = region ? `Gemini (${region})` : 'Gemini'
+        tone = 'success'
+      } else if (verdict === 'restricted') {
+        label = region ? `Gemini 受限 (${region})` : 'Gemini 受限'
+        tone = 'warning'
+      } else if (verdict === 'error') {
+        label = 'Gemini 异常'
+        tone = 'error'
+      } else {
+        label = region ? `Gemini (${region})` : 'Gemini'
+        tone = 'info'
+      }
+      break
+
+    default: {
+      const platName = platform.toUpperCase()
+      if (verdict === 'available') {
+        label = region ? `${platName} (${region})` : platName
+        tone = 'success'
+      } else if (verdict === 'restricted') {
+        label = region ? `${platName} 受限 (${region})` : `${platName} 受限`
+        tone = 'warning'
+      } else if (verdict === 'error') {
+        label = `${platName} 异常`
+        tone = 'error'
+      } else {
+        label = region ? `${platName} (${region})` : platName
+        tone = 'info'
+      }
+      break
+    }
+  }
+
+  // Stale handling: append status and set tone to warning
+  if (isStale) {
+    label = `${label} · 已过期`
+    tone = 'warning'
+  }
+
+  // Double check: unknown and error must never be success/green
+  if ((verdict === 'unknown' || verdict === 'error') && tone === 'success') {
+    tone = 'error'
+  }
+
+  return {
+    platform: normPlat,
+    verdict,
+    label,
+    tone,
+    region,
+    subTier,
+    tooltip,
+    throughput: cap.throughput,
+    riskScore: cap.risk_score,
+  }
 }
 
 /** Returns semantic latency class for styling */

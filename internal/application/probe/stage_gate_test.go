@@ -12,6 +12,7 @@ import (
 
 	"clash-sub-parser/internal/application/probe"
 	"clash-sub-parser/internal/domain"
+	"clash-sub-parser/internal/probe/platform"
 	"clash-sub-parser/internal/probe/queue"
 )
 
@@ -187,7 +188,7 @@ func TestStageGateSpeedExplicitOptInExecutesAndEnforcesBudget(t *testing.T) {
 		}
 	})
 
-	t.Run("speed_exceeding_max_bytes_per_request_returns_budget_exceeded", func(t *testing.T) {
+	t.Run("speed_caps_at_application_byte_budget_without_error", func(t *testing.T) {
 		runs, observations, nodes := newMemoryRuns(), newMemoryObservations(), newMemoryNodes()
 		nodes.items["node"] = domain.Node{LogicalID: "node", Protocol: domain.ProtocolSS, Active: true}
 		sched, err := queue.NewScheduler(queue.Config{Concurrency: 10})
@@ -196,15 +197,23 @@ func TestStageGateSpeedExplicitOptInExecutesAndEnforcesBudget(t *testing.T) {
 		}
 		defer sched.Close()
 
+		// Server offers 8 MB of payload, exceeding 5 MB application read budget
+		totalOffered := 8 * 1024 * 1024
+		var serverBytesRead atomic.Int64
 		runner := probe.NewDefaultRunner(nodes, observations, sched, runs,
 			probe.WithNodeDialer(func(context.Context, domain.Node) (*http.Client, func() error, error) {
 				return &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
-					payload := strings.Repeat("x", (1<<20)+64)
 					return &http.Response{
 						StatusCode: http.StatusOK,
 						Header:     make(http.Header),
-						Body:       io.NopCloser(strings.NewReader(payload)),
-						Request:    req,
+						Body: io.NopCloser(&slowChunkReader{
+							remaining: totalOffered,
+							maxRead:   32 * 1024,
+							onRead: func() {
+								serverBytesRead.Add(32 * 1024)
+							},
+						}),
+						Request: req,
 					}, nil
 				})}, nil, nil
 			}),
@@ -220,8 +229,15 @@ func TestStageGateSpeedExplicitOptInExecutesAndEnforcesBudget(t *testing.T) {
 		if err != nil || len(got) != 1 {
 			t.Fatalf("speed observation missing: %#v, err=%v", got, err)
 		}
-		if got[0].Verdict != domain.VerdictError || !strings.Contains(got[0].RedactedSummary, "reason=speed_budget_exceeded") {
-			t.Fatalf("expected speed_budget_exceeded error observation, got %#v", got[0])
+		if got[0].Verdict != domain.VerdictAvailable {
+			t.Fatalf("expected speed verdict available, got %#v", got[0])
+		}
+		expectedBudget := int64(platform.DefaultDownloadMB * 1024 * 1024)
+		if serverBytesRead.Load() > expectedBudget+64*1024 {
+			t.Fatalf("expected application read to be bounded by budget %d, got %d", expectedBudget, serverBytesRead.Load())
+		}
+		if got[0].Throughput == nil || *got[0].Throughput <= 0 {
+			t.Fatalf("expected valid throughput calculation, got %#v", got[0].Throughput)
 		}
 	})
 }
@@ -267,7 +283,7 @@ func TestStageGateBaselineAvailabilityControlsStreaming(t *testing.T) {
 		{name: "unavailable_503", status: http.StatusServiceUnavailable, body: "unavailable", wantRequests: 1},
 		{name: "http_200_ok_rejected_as_drift", status: http.StatusOK, body: "ok", wantRequests: 1},
 		{name: "http_204_non_empty_rejected_as_drift", status: http.StatusNoContent, body: "unexpected", wantRequests: 1},
-		{name: "available_204_empty", status: http.StatusNoContent, body: "", wantRequests: 2},
+		{name: "available_204_empty", status: http.StatusNoContent, body: "", wantRequests: 6},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			runs, observations, nodes := newMemoryRuns(), newMemoryObservations(), newMemoryNodes()
@@ -317,7 +333,7 @@ func TestStageGateBaselineAvailabilityControlsStreaming(t *testing.T) {
 				t.Fatal(err)
 			}
 			wantObs := 1
-			if tc.wantRequests == 2 {
+			if tc.wantRequests > 1 {
 				wantObs = 2
 			}
 			if len(got) != wantObs {
@@ -326,10 +342,10 @@ func TestStageGateBaselineAvailabilityControlsStreaming(t *testing.T) {
 			if tc.wantRequests == 1 && (got[0].Kind != domain.ProbeKindBaseline || got[0].Verdict == domain.VerdictAvailable) {
 				t.Fatalf("non-available baseline observation not retained: %#v", got[0])
 			}
-			if tc.wantRequests == 2 {
+			if tc.wantRequests > 1 {
 				urlsMu.Lock()
 				defer urlsMu.Unlock()
-				if !strings.Contains(urls[1], "netflix.com") {
+				if !strings.Contains(urls[1], "fast.com") && !strings.Contains(urls[1], "netflix") {
 					t.Fatalf("second-stage request not streaming: %q", urls[1])
 				}
 			}

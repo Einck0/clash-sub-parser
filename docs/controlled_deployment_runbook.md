@@ -161,6 +161,18 @@ Critic 必须通过无头浏览器采集如下视口尺寸实机渲染截图并�
 - **桌面端视口**：`1280x800` 与 `1440x900`
   - 门禁要求：双列流式栅格弹性展开，弹窗居中无偏移，文字标签无省略号误截断。
 
+### 4. 本轮重做节点探针 Critic 验收证据记录 (Probe Redo Visual & Functional Acceptance)
+- **验收环境**：本地独立沙箱预览服务 (`http://127.0.0.1:18081`)，基于独立 SQLite 数据库 (`/tmp/csp-preview/csp-sandbox.db`)，生产数据 0 写入；
+- **验收证据工件**：`/tmp/pi-critic-workspace/screenshots/01..14`（共 15 张图片，覆盖 `01_desktop_dirty_token_gate.png` 至 `14_mobile_probes_evidence_drawer.png`，含 `11b`）；
+- **视口量测**：桌面端 `1440x900` 与移动端 `392x872`；
+- **核心判定事实**：
+  - 浏览器全流程 0 控制台报错 (console error: 0)、0 网络故障 (neterror: 0)；
+  - 细粒度平台分级真实呈现：OpenAI `Full (GPT⁺) [US]` / `Web (GPT) [SG]` / `App Only [HK]`，Netflix `Full [US]` / `Originals Only [HK]` / `Banned (Fast 403)`，YouTube 送中识别 `CN` 与正常解锁 `US/HK`，Disney+ `Soon` 与 `Banned`，测速吞吐 `51.2 MB/s`、`15.0 MB/s`、`4.0 MB/s`；
+  - 探针手动触发与取消流程实测正常；
+  - **测试数据边界声明**：所有展示节点均为明确标记为 `[Test-Fixture]` 的受控测试数据，绝不声称或冒充真实商业节点网络解锁；
+  - **总裁决**：`CRITIC: PASSED`。
+
+
 ---
 
 ## 六、 生产计划准备与资源/回滚预检 (Production Planning & Preflight Verification)

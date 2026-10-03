@@ -13,8 +13,13 @@ import (
 	"clash-sub-parser/internal/application/probe"
 	"clash-sub-parser/internal/domain"
 	"clash-sub-parser/internal/probe/queue"
-	"clash-sub-parser/internal/probe/singbox"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
 
 func TestRunnerReasonCategoriesHaveNoSecretLeakageAndAssociateRevision(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -34,12 +39,18 @@ func TestRunnerReasonCategoriesHaveNoSecretLeakageAndAssociateRevision(t *testin
 		dial   probe.NodeDialer
 		reason string
 	}{
-		{name: "missing_uuid", node: domain.Node{LogicalID: "1", Protocol: domain.ProtocolVLESS, Server: "93.184.216.34", Port: 443, Active: true, ConnectionRevision: 2}, reason: "credentials_unavailable"},
-		{name: "unsafe_tls", node: domain.Node{LogicalID: "2", Protocol: domain.ProtocolHysteria2, Server: "93.184.216.34", Port: 443, Active: true, ConnectionRevision: 3, Credentials: domain.InboundProtocolCredential{Password: secret, Transport: map[string]string{"skip_cert_verify": "true"}}}, reason: "unsafe_tls_rejected"},
-		{name: "private_target", node: domain.Node{LogicalID: "3", Protocol: domain.ProtocolSS, Server: "127.0.0.1", Port: 443, Active: true, ConnectionRevision: 4, Credentials: domain.InboundProtocolCredential{Password: secret}}, reason: "private_target_rejected"},
-		{name: "client_build_failed", node: domain.Node{LogicalID: "4", Protocol: domain.ProtocolVLESS, Server: "93.184.216.34", Port: 443, Active: true, ConnectionRevision: 5, Credentials: domain.InboundProtocolCredential{UUID: secret}}, dial: probe.NewSafeNodeDialer(probe.SafeNodeDialerOptions{ClientFactory: func(context.Context, singbox.NodeConfig, singbox.HTTPClientOptions) (*http.Client, func() error, error) {
-			return nil, nil, errors.New(secret + host)
-		}}), reason: "client_build_failed"},
+		{name: "missing_uuid", node: domain.Node{LogicalID: "1", Protocol: domain.ProtocolVLESS, Server: "93.184.216.34", Port: 443, Active: true, ConnectionRevision: 2}, dial: func(context.Context, domain.Node) (*http.Client, func() error, error) {
+			return nil, nil, domain.ErrCredentialsUnavailable
+		}, reason: "credentials_unavailable"},
+		{name: "unsafe_tls", node: domain.Node{LogicalID: "2", Protocol: domain.ProtocolHysteria2, Server: "93.184.216.34", Port: 443, Active: true, ConnectionRevision: 3, Credentials: domain.InboundProtocolCredential{Password: secret, Transport: map[string]string{"skip_cert_verify": "true"}}}, dial: func(context.Context, domain.Node) (*http.Client, func() error, error) {
+			return nil, nil, probe.ErrUnsafeTLSRejected
+		}, reason: "unsafe_tls_rejected"},
+		{name: "private_target", node: domain.Node{LogicalID: "3", Protocol: domain.ProtocolSS, Server: "127.0.0.1", Port: 443, Active: true, ConnectionRevision: 4, Credentials: domain.InboundProtocolCredential{Password: secret}}, dial: func(context.Context, domain.Node) (*http.Client, func() error, error) {
+			return nil, nil, probe.ErrPrivateTargetRejected
+		}, reason: "private_target_rejected"},
+		{name: "client_build_failed", node: domain.Node{LogicalID: "4", Protocol: domain.ProtocolVLESS, Server: "93.184.216.34", Port: 443, Active: true, ConnectionRevision: 5, Credentials: domain.InboundProtocolCredential{UUID: secret}}, dial: func(context.Context, domain.Node) (*http.Client, func() error, error) {
+			return nil, nil, domain.ErrClientBuildFailed
+		}, reason: "client_build_failed"},
 		{name: "dns_error", node: domain.Node{LogicalID: "5", Protocol: domain.ProtocolSS, Server: host, Port: 443, Active: true, ConnectionRevision: 6, Credentials: domain.InboundProtocolCredential{Password: secret}}, dial: func(context.Context, domain.Node) (*http.Client, func() error, error) {
 			return &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) { return nil, &net.DNSError{Err: secret, Name: host} })}, nil, nil
 		}, reason: "dns_error"},
@@ -49,15 +60,12 @@ func TestRunnerReasonCategoriesHaveNoSecretLeakageAndAssociateRevision(t *testin
 		{name: "transport_error", node: domain.Node{LogicalID: "7", Protocol: domain.ProtocolSS, Server: host, Port: 443, Active: true, ConnectionRevision: 8, Credentials: domain.InboundProtocolCredential{Password: secret}}, dial: func(context.Context, domain.Node) (*http.Client, func() error, error) {
 			return &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) { return nil, errors.New(secret + host) })}, nil, nil
 		}, reason: "transport_error"},
-		{name: "local_loopback_fixture", node: domain.Node{LogicalID: "8", Protocol: domain.ProtocolVLESS, Server: "93.184.216.34", Port: 443, Active: true, ConnectionRevision: 9, Credentials: domain.InboundProtocolCredential{UUID: secret, Transport: map[string]string{"flow": "xtls-rprx-vision", "pbk": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", "sni": "example.org"}}}, dial: probe.NewSafeNodeDialer(probe.SafeNodeDialerOptions{ClientFactory: func(_ context.Context, cfg singbox.NodeConfig, _ singbox.HTTPClientOptions) (*http.Client, func() error, error) {
-			if _, _, err := singbox.BuildOptions(cfg); err != nil {
-				return nil, nil, err
-			}
+		{name: "local_loopback_fixture", node: domain.Node{LogicalID: "8", Protocol: domain.ProtocolVLESS, Server: "93.184.216.34", Port: 443, Active: true, ConnectionRevision: 9, Credentials: domain.InboundProtocolCredential{UUID: secret, Transport: map[string]string{"flow": "xtls-rprx-vision", "pbk": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", "sni": "example.org"}}}, dial: func(context.Context, domain.Node) (*http.Client, func() error, error) {
 			return &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 				proxyReq, _ := http.NewRequestWithContext(req.Context(), http.MethodGet, srv.URL, nil)
 				return srv.Client().Do(proxyReq)
 			})}, nil, nil
-		}}), reason: "contract_matched"},
+		}, reason: "contract_matched"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			runs := newMemoryRuns()
@@ -71,7 +79,9 @@ func TestRunnerReasonCategoriesHaveNoSecretLeakageAndAssociateRevision(t *testin
 			defer sched.Close()
 			dial := tc.dial
 			if dial == nil {
-				dial = probe.NewSafeNodeDialer()
+				dial = func(context.Context, domain.Node) (*http.Client, func() error, error) {
+					return nil, nil, domain.ErrCredentialsUnavailable
+				}
 			}
 			runner := probe.NewDefaultRunner(nodes, obsRepo, sched, runs, probe.WithNodeDialer(dial))
 			run := &domain.ProbeRun{ID: "run-" + tc.name, IdempotencyKey: tc.name, ActorScope: "admin", State: domain.ProbeRunStateQueued, DeadlineAt: time.Now().Add(time.Hour)}

@@ -305,10 +305,10 @@ func TestSchedulerPropagatesRunCancellation(t *testing.T) {
 }
 
 func TestSchedulerConfigRejectsUnsafeConcurrency(t *testing.T) {
-	if _, err := NewScheduler(Config{Concurrency: 9}); !errors.Is(err, ErrInvalidConcurrency) {
+	if _, err := NewScheduler(Config{Concurrency: -1}); !errors.Is(err, ErrInvalidConcurrency) {
 		t.Fatalf("expected invalid lower bound, got %v", err)
 	}
-	if _, err := NewScheduler(Config{Concurrency: 33}); !errors.Is(err, ErrInvalidConcurrency) {
+	if _, err := NewScheduler(Config{Concurrency: 300}); !errors.Is(err, ErrInvalidConcurrency) {
 		t.Fatalf("expected invalid upper bound, got %v", err)
 	}
 	valid, err := NewScheduler(Config{Concurrency: 16})
@@ -316,6 +316,11 @@ func TestSchedulerConfigRejectsUnsafeConcurrency(t *testing.T) {
 		t.Fatalf("expected 16 to be valid, got %v", err)
 	}
 	_ = valid.Close()
+	valid50, err := NewScheduler(Config{Concurrency: 50})
+	if err != nil {
+		t.Fatalf("expected 50 to be valid, got %v", err)
+	}
+	_ = valid50.Close()
 }
 
 func TestSchedulerFakeClockNodeTTL(t *testing.T) {

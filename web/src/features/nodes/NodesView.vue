@@ -27,6 +27,8 @@ import {
   renderNodePreview,
   resolveNodeLatencyMs,
   resolveNodeProbeState,
+  getNodePlatformBadges,
+  getNodeSpeedBadge,
   type NormalizedNode,
 } from './nodeView'
 import { formatRelativeTime } from '../probes/probeTypes'
@@ -661,10 +663,37 @@ onUnmounted(() => {
                       :tone="nodeRiskBadge(node).tone"
                     />
                     <StatusBadge
+                      v-if="getNodeSpeedBadge(node)"
+                      :label="getNodeSpeedBadge(node)!.label"
+                      :tone="getNodeSpeedBadge(node)!.tone"
+                    />
+                    <!-- Streaming: individual platform badges if available, fallback to single badge -->
+                    <template v-if="getNodePlatformBadges(node, 'streaming').length > 0">
+                      <StatusBadge
+                        v-for="badge in getNodePlatformBadges(node, 'streaming')"
+                        :key="`streaming-${badge.platform}`"
+                        :label="badge.label"
+                        :tone="badge.tone"
+                        :title="badge.tooltip"
+                      />
+                    </template>
+                    <StatusBadge
+                      v-else
                       :label="`${t('nodes.streaming')}: ${nodeCapabilityLabel(node, 'streaming').label}`"
                       :tone="nodeCapabilityLabel(node, 'streaming').tone"
                     />
+                    <!-- AI: individual platform badges if available, fallback to single badge -->
+                    <template v-if="getNodePlatformBadges(node, 'ai').length > 0">
+                      <StatusBadge
+                        v-for="badge in getNodePlatformBadges(node, 'ai')"
+                        :key="`ai-${badge.platform}`"
+                        :label="badge.label"
+                        :tone="badge.tone"
+                        :title="badge.tooltip"
+                      />
+                    </template>
                     <StatusBadge
+                      v-else
                       :label="`${t('nodes.ai')}: ${nodeCapabilityLabel(node, 'ai').label}`"
                       :tone="nodeCapabilityLabel(node, 'ai').tone"
                     />
@@ -821,10 +850,35 @@ onUnmounted(() => {
               :tone="nodeLatencyTone(selectedNode)"
             />
             <StatusBadge
+              v-if="getNodeSpeedBadge(selectedNode)"
+              :label="getNodeSpeedBadge(selectedNode)!.label"
+              :tone="getNodeSpeedBadge(selectedNode)!.tone"
+            />
+            <template v-if="getNodePlatformBadges(selectedNode, 'streaming').length > 0">
+              <StatusBadge
+                v-for="badge in getNodePlatformBadges(selectedNode, 'streaming')"
+                :key="`drawer-streaming-${badge.platform}`"
+                :label="badge.label"
+                :tone="badge.tone"
+                :title="badge.tooltip"
+              />
+            </template>
+            <StatusBadge
+              v-else
               :label="`流媒体: ${nodeCapabilityLabel(selectedNode, 'streaming').label}`"
               :tone="nodeCapabilityLabel(selectedNode, 'streaming').tone"
             />
+            <template v-if="getNodePlatformBadges(selectedNode, 'ai').length > 0">
+              <StatusBadge
+                v-for="badge in getNodePlatformBadges(selectedNode, 'ai')"
+                :key="`drawer-ai-${badge.platform}`"
+                :label="badge.label"
+                :tone="badge.tone"
+                :title="badge.tooltip"
+              />
+            </template>
             <StatusBadge
+              v-else
               :label="`AI 解锁: ${nodeCapabilityLabel(selectedNode, 'ai').label}`"
               :tone="nodeCapabilityLabel(selectedNode, 'ai').tone"
             />
@@ -849,6 +903,43 @@ onUnmounted(() => {
           <p v-if="probeFeedback" data-testid="node-probe-feedback" class="text-[11px] text-primary font-medium">
             {{ probeFeedback }}
           </p>
+        </div>
+
+        <!-- Platform Capabilities Breakdown (subcheck matrix) -->
+        <div
+          v-if="
+            getNodePlatformBadges(selectedNode, 'streaming').length > 0 ||
+            getNodePlatformBadges(selectedNode, 'ai').length > 0 ||
+            getNodeSpeedBadge(selectedNode)
+          "
+          class="p-3 rounded-xl bg-base-200 border border-base-300 space-y-2"
+        >
+          <div class="flex items-center justify-between">
+            <span class="font-semibold text-xs text-primary">{{ t('nodes.platformMatrix') }}</span>
+            <span v-if="getNodeSpeedBadge(selectedNode)" class="font-mono text-[11px] opacity-75">
+              {{ getNodeSpeedBadge(selectedNode)!.label }}
+            </span>
+          </div>
+          <div class="grid grid-cols-2 gap-2 text-[11px]">
+            <div
+              v-for="badge in [
+                ...getNodePlatformBadges(selectedNode, 'streaming'),
+                ...getNodePlatformBadges(selectedNode, 'ai'),
+              ]"
+              :key="`matrix-${badge.platform}`"
+              class="flex items-center justify-between p-2 rounded-lg bg-base-100 border border-base-300"
+            >
+              <div class="min-w-0 pr-1">
+                <span class="font-medium block truncate">{{ badge.platform.toUpperCase() }}</span>
+                <span v-if="badge.subTier" class="text-[10px] opacity-60 block truncate">{{ badge.subTier }}</span>
+              </div>
+              <StatusBadge
+                :label="badge.label"
+                :tone="badge.tone"
+                :title="badge.tooltip"
+              />
+            </div>
+          </div>
         </div>
 
         <!-- Subscription Provenance & Reconcile Notice -->

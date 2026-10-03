@@ -242,9 +242,7 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 		}
 	}()
 
-	runnerOpts := []probe.DefaultRunnerOption{
-		probe.WithNodeDialer(probe.NewSafeNodeDialer()),
-	}
+	var runnerOpts []probe.DefaultRunnerOption
 
 	var probeRunner probe.Runner
 	if deps != nil && deps.newProbeRunner != nil {

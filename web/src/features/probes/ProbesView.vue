@@ -41,6 +41,8 @@ import {
   nodeUnderlyingHealthCategory,
   resolveNodeLatencyMs,
   resolveNodeProbeState,
+  getNodePlatformBadges,
+  getNodeSpeedBadge,
   type NormalizedNode,
 } from '../nodes/nodeView'
 import ProbeRunCard from './ProbeRunCard.vue'
@@ -938,7 +940,7 @@ onUnmounted(() => {
           </div>
 
           <div class="flex items-center justify-between gap-2 pt-0.5" @click.stop>
-            <span class="text-[11px] opacity-65 truncate">未测、过期或安全/配置阻断待核验</span>
+            <span class="text-[11px] opacity-65 truncate">未测、过期或异常待核验</span>
             <button
               type="button"
               data-testid="pool-probe-untested-btn"
@@ -1515,14 +1517,42 @@ onUnmounted(() => {
                 <!-- Capability Matrix Badges -->
                 <td data-label="探测结果">
                   <div class="flex flex-wrap items-center gap-1.5 text-xs">
+                    <template v-if="getNodePlatformBadges(node, 'streaming').length > 0">
+                      <StatusBadge
+                        v-for="badge in getNodePlatformBadges(node, 'streaming')"
+                        :key="`streaming-${badge.platform}`"
+                        :label="badge.label"
+                        :tone="badge.tone"
+                        :title="badge.tooltip"
+                      />
+                    </template>
                     <StatusBadge
+                      v-else
                       :label="`🎬 流媒体: ${nodeCapabilityLabel(node, 'streaming').label}`"
                       :tone="nodeCapabilityLabel(node, 'streaming').tone"
                     />
+
+                    <template v-if="getNodePlatformBadges(node, 'ai').length > 0">
+                      <StatusBadge
+                        v-for="badge in getNodePlatformBadges(node, 'ai')"
+                        :key="`ai-${badge.platform}`"
+                        :label="badge.label"
+                        :tone="badge.tone"
+                        :title="badge.tooltip"
+                      />
+                    </template>
                     <StatusBadge
+                      v-else
                       :label="`🤖 AI: ${nodeCapabilityLabel(node, 'ai').label}`"
                       :tone="nodeCapabilityLabel(node, 'ai').tone"
                     />
+
+                    <StatusBadge
+                      v-if="getNodeSpeedBadge(node)"
+                      :label="getNodeSpeedBadge(node)!.label"
+                      :tone="getNodeSpeedBadge(node)!.tone"
+                    />
+
                     <StatusBadge
                       :label="`🌍 地区: ${nodeCapabilityLabel(node, 'geo').label}`"
                       :tone="nodeCapabilityLabel(node, 'geo').tone"
@@ -1827,7 +1857,7 @@ onUnmounted(() => {
               当前计划窗口内无可用于探测的活跃节点。
             </div>
             <div v-else-if="batch.counts.skipped_nodes > 0" class="p-2 bg-warning/10 border border-warning/20 rounded-lg text-warning text-xs">
-              已跳过 {{ batch.counts.skipped_nodes }} 个凭据缺失或无效的节点（安全闭合保护）。
+              已跳过 {{ batch.counts.skipped_nodes }} 个凭据缺失或无效的节点。
             </div>
             <div v-if="batch.state === 'expired'" class="p-2 bg-neutral/20 border border-base-300 rounded-lg text-xs opacity-75">
               批次时间窗口已超时结束。

@@ -12,17 +12,17 @@ import (
 )
 
 var (
-	ErrInvalidConcurrency = errors.New("concurrency must be between 10 and 32")
+	ErrInvalidConcurrency = errors.New("concurrency must be between 1 and 256")
 	ErrCapacityExceeded   = errors.New("queue capacity exceeded")
 	ErrNodeConflict       = errors.New("node has active or recent probe for this kind")
 	ErrSchedulerClosed    = errors.New("scheduler is closed")
 )
 
 const (
-	DefaultConcurrency = 16
-	MinConcurrency     = 10
-	MaxConcurrency     = 20
-	HardMaxConcurrency = 32
+	DefaultConcurrency = 50
+	MinConcurrency     = 1
+	MaxConcurrency     = 64
+	HardMaxConcurrency = 256
 	DefaultQueueSize   = 1024
 	DefaultNodeTTL     = 30 * time.Second
 )

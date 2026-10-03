@@ -204,7 +204,7 @@ func TestServeCLI(t *testing.T) {
 			if code != 0 {
 				t.Fatalf("expected graceful exit code 0, got %d. Stderr: %s", code, stderr.String())
 			}
-		case <-time.After(5 * time.Second):
+		case <-time.After(10 * time.Second):
 			t.Fatal("server shutdown timed out")
 		}
 

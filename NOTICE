@@ -1,0 +1,25 @@
+clash-sub-parser
+Copyright (c) 2026 clash-sub-parser contributors
+
+This project incorporates, adapts, or references code from the following open-source projects:
+
+1. subs-check
+   Repository: https://github.com/beck-8/subs-check
+   Commit: 3c320fd58aff5235e16218c050ec5b8ce587e233
+   License: GNU General Public License v3.0 (GPL-3.0)
+   Copyright (c) beck-8
+   Used for: Multi-platform streaming and AI capability detection algorithms (OpenAI, Netflix, YouTube, Disney+, Claude, Gemini, IPRisk, Speed).
+
+2. subs-check-pro
+   Repository: https://github.com/sinspired/subs-check-pro
+   Commit: e768ab277457ad3edc87c1cea6738a312192686e
+   License: GNU General Public License v3.0 (GPL-3.0)
+   Copyright (c) sinspired
+   Used for: ProxyClient connection lifecycle, merged context cancellation, and watchdog scheduling references.
+
+3. mihomo
+   Repository: https://github.com/metacubex/mihomo
+   Version: v1.19.31
+   License: GNU General Public License v3.0 (GPL-3.0)
+   Copyright (c) MetaCubeX
+   Used for: In-process outbound proxy adapter (adapter.ParseProxy) and protocol tunneling.

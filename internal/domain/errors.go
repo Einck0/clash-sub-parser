@@ -8,7 +8,11 @@ import (
 	"strings"
 )
 
-// ErrorCategory classifies domain errors for machine handling and HTTP status mapping.
+// Sentinel errors for probe dial configuration and build issues.
+var (
+	ErrCredentialsUnavailable = errors.New("credentials_unavailable")
+	ErrClientBuildFailed      = errors.New("client_build_failed")
+)
 type ErrorCategory string
 
 const (

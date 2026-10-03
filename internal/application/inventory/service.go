@@ -32,11 +32,16 @@ const defaultProbeFreshnessTTL = time.Hour
 
 // CapabilityStatus represents the latest probe observation summary for a single probe dimension on a node.
 type CapabilityStatus struct {
-	Verdict    domain.ProbeVerdict `json:"verdict"`
-	LatencyMS  int64               `json:"latency_ms"`
-	ObservedAt time.Time           `json:"observed_at"`
-	Summary    string              `json:"summary,omitempty"`
-	Stale      bool                `json:"stale"`
+	Verdict    domain.ProbeVerdict                  `json:"verdict"`
+	LatencyMS  int64                                `json:"latency_ms"`
+	ObservedAt time.Time                            `json:"observed_at"`
+	Summary    string                               `json:"summary,omitempty"`
+	Stale      bool                                 `json:"stale"`
+	Region     string                               `json:"region,omitempty"`
+	SubTier    string                               `json:"sub_tier,omitempty"`
+	Throughput *float64                             `json:"throughput,omitempty"`
+	RiskScore  string                               `json:"risk_score,omitempty"`
+	Platforms  map[string]domain.PlatformCapability `json:"platforms,omitempty"`
 }
 
 // NodeCapabilityView is an alias for CapabilityStatus.
@@ -946,6 +951,11 @@ func applyProbeObservationsToView(v *NodeView, obsByKind map[domain.ProbeKind]do
 			ObservedAt: obs.ObservedAt,
 			Summary:    obs.RedactedSummary,
 			Stale:      stale,
+			Region:     obs.Region,
+			SubTier:    obs.SubTier,
+			Throughput: obs.Throughput,
+			RiskScore:  obs.RiskScore,
+			Platforms:  obs.Platforms,
 		}
 		if obs.ObservedAt.After(latestAt) {
 			latestAt = obs.ObservedAt

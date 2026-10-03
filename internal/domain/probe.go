@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -69,19 +70,76 @@ func (r *ProbeRun) TransitionTo(target ProbeRunState) error {
 	return nil
 }
 
+// PlatformCapability represents a fine-grained, evidence-based platform capability observation.
+type PlatformCapability struct {
+	Verdict    ProbeVerdict `json:"verdict"`
+	LatencyMS  *int64       `json:"latency_ms,omitempty"`
+	ObservedAt *time.Time   `json:"observed_at,omitempty"`
+	Summary    string       `json:"summary,omitempty"`
+	Region     string       `json:"region,omitempty"`
+	SubTier    string       `json:"sub_tier,omitempty"`
+	Throughput *float64     `json:"throughput,omitempty"`
+	RiskScore  string       `json:"risk_score,omitempty"`
+	Reason     string       `json:"reason,omitempty"`
+}
+
+// ObservationEvidenceData contains structured metadata persisted alongside an observation.
+type ObservationEvidenceData struct {
+	Region     string                        `json:"region,omitempty"`
+	SubTier    string                        `json:"sub_tier,omitempty"`
+	Throughput *float64                      `json:"throughput,omitempty"`
+	RiskScore  string                        `json:"risk_score,omitempty"`
+	Platforms  map[string]PlatformCapability `json:"platforms,omitempty"`
+	Reason     string                        `json:"reason,omitempty"`
+}
+
 // ProbeObservation represents an immutable observation made during a probe execution.
 type ProbeObservation struct {
-	ID              string       `json:"id"`
-	ProbeRunID      string       `json:"probe_run_id"`
-	NodeLogicalID   string       `json:"node_logical_id"`
-	Kind            ProbeKind    `json:"kind"`
-	Verdict         ProbeVerdict `json:"verdict"`
-	EvidenceDigest  string       `json:"evidence_digest"`
-	ObservedAt      time.Time    `json:"observed_at"`
-	LatencyMS       int64        `json:"latency_ms"`
-	RedactedSummary string       `json:"redacted_summary"`
+	ID                 string                        `json:"id"`
+	ProbeRunID         string                        `json:"probe_run_id"`
+	NodeLogicalID      string                        `json:"node_logical_id"`
+	Kind               ProbeKind                     `json:"kind"`
+	Verdict            ProbeVerdict                  `json:"verdict"`
+	EvidenceDigest     string                        `json:"evidence_digest"`
+	ObservedAt         time.Time                     `json:"observed_at"`
+	LatencyMS          int64                         `json:"latency_ms"`
+	RedactedSummary    string                        `json:"redacted_summary"`
 	// Nil identifies pre-migration history, which cannot certify a current connection.
-	ConnectionRevision *int64 `json:"connection_revision,omitempty"`
+	ConnectionRevision *int64                        `json:"connection_revision,omitempty"`
+	EvidenceData       string                        `json:"evidence_data,omitempty"`
+	Region             string                        `json:"region,omitempty"`
+	SubTier            string                        `json:"sub_tier,omitempty"`
+	Throughput         *float64                      `json:"throughput,omitempty"`
+	RiskScore          string                        `json:"risk_score,omitempty"`
+	Platforms          map[string]PlatformCapability `json:"platforms,omitempty"`
+}
+
+// SyncEvidenceData synchronizes structured fields with EvidenceData JSON.
+func (o *ProbeObservation) SyncEvidenceData() {
+	if o == nil {
+		return
+	}
+	if o.EvidenceData == "" && (o.Region != "" || o.SubTier != "" || o.Throughput != nil || o.RiskScore != "" || len(o.Platforms) > 0) {
+		ed := ObservationEvidenceData{
+			Region:     o.Region,
+			SubTier:    o.SubTier,
+			Throughput: o.Throughput,
+			RiskScore:  o.RiskScore,
+			Platforms:  o.Platforms,
+		}
+		if b, err := json.Marshal(ed); err == nil {
+			o.EvidenceData = string(b)
+		}
+	} else if o.EvidenceData != "" && o.Region == "" && o.SubTier == "" && o.Throughput == nil && o.RiskScore == "" && len(o.Platforms) == 0 {
+		var ed ObservationEvidenceData
+		if err := json.Unmarshal([]byte(o.EvidenceData), &ed); err == nil {
+			o.Region = ed.Region
+			o.SubTier = ed.SubTier
+			o.Throughput = ed.Throughput
+			o.RiskScore = ed.RiskScore
+			o.Platforms = ed.Platforms
+		}
+	}
 }
 
 // ComputeProbeEvidenceDigest computes the canonical SHA-256 evidence digest for a probe observation.

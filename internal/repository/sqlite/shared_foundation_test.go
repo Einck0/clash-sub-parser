@@ -77,8 +77,8 @@ func TestMigrations000007And000008Schema(t *testing.T) {
 		t.Fatalf("expected migration 000010 index idx_ip_risk_obs_node_observed_id: %v", err)
 	}
 	report, err := sqlite.CheckReadiness(ctx, db)
-	if err != nil || !report.Ready || report.SchemaVersion != 13 {
-		t.Fatalf("expected readiness SchemaVersion=13 Ready=true, got report=%+v err=%v", report, err)
+	if err != nil || !report.Ready || report.SchemaVersion != 14 {
+		t.Fatalf("expected readiness SchemaVersion=14 Ready=true, got report=%+v err=%v", report, err)
 	}
 }
 

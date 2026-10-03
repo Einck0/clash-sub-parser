@@ -1,9 +1,11 @@
 package platform
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"regexp"
 	"strings"
@@ -56,17 +58,15 @@ func CheckNetflix(ctx context.Context, httpClient *http.Client) domain.PlatformC
 		cap.Reason = "title_403"
 
 	case nonOriginalStatus == 200 || nonOriginalStatus == 301:
+		cap.Verdict = domain.VerdictAvailable
+		cap.SubTier = "full"
+		cap.Reason = "title_non_original_unlocked"
 		reg := getNetflixRegion(ctx, httpClient)
 		if reg != "" {
-			cap.Verdict = domain.VerdictAvailable
-			cap.SubTier = "full"
 			cap.Region = reg
 			cap.Summary = fmt.Sprintf("Full (%s)", reg)
-			cap.Reason = "title_non_original_unlocked"
 		} else {
-			cap.Verdict = domain.VerdictUnknown
-			cap.Summary = "Inconclusive"
-			cap.Reason = "contract_drift"
+			cap.Summary = "Full"
 		}
 
 	case nonOriginalStatus == 404 && (originalStatus == 200 || originalStatus == 301):
@@ -138,6 +138,19 @@ func checkNetflixTitle(ctx context.Context, httpClient *http.Client, titleID str
 		return 0, err
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		buf := getPooledBuf()
+		defer putPooledBuf(buf)
+		if _, err := buf.ReadFrom(io.LimitReader(resp.Body, 4096)); err == nil {
+			bodyLower := bytes.ToLower(buf.Bytes())
+			if bytes.Contains(bodyLower, []byte("<title>netflix</title>")) ||
+				bytes.Contains(bodyLower, []byte("watch anywhere")) ||
+				bytes.Contains(bodyLower, []byte("netflix - watch tv shows online")) {
+				return http.StatusNotFound, nil
+			}
+		}
+	}
 
 	return resp.StatusCode, nil
 }

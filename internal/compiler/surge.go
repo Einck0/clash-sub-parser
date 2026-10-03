@@ -658,7 +658,7 @@ func buildSurgeWSParams(loc, feature, netMode string, transport map[string]strin
 	return params, nil
 }
 
-func renderSurgeGroupLine(index int, group resolver.ResolvedGroup) (string, error) {
+func RenderSurgeGroupLine(index int, group resolver.ResolvedGroup) (string, error) {
 	loc := fmt.Sprintf("groups[%d]", index)
 	name := strings.TrimSpace(group.Name)
 	if !isSurgeSafeIdentifier(name) {
@@ -684,7 +684,12 @@ func renderSurgeGroupLine(index int, group resolver.ResolvedGroup) (string, erro
 		members = append(members, memberName)
 	}
 	if len(members) == 0 {
-		members = []string{"DIRECT"}
+		return "", &CapabilityError{
+			Target:   domain.TargetSurge,
+			Location: loc,
+			Feature:  name,
+			Reason:   "empty_group_not_allowed: policy group has no available members",
+		}
 	}
 	memberJoined := strings.Join(members, ", ")
 

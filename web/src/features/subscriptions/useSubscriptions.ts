@@ -23,6 +23,35 @@ export interface SubscriptionConfig {
   target_groups?: string[]
 }
 
+export type EntryKind = 'proxy' | 'notice' | 'unknown'
+
+export interface SubscriptionEntryDTO {
+  entry_id: string
+  subscription_id: string
+  payload_id: string
+  ordinal: number
+  name: string
+  entry_kind: EntryKind
+  user_kind_override?: EntryKind | null
+  effective_kind: EntryKind
+  node_logical_id?: string
+  classification_reason?: string
+  rule_version?: string
+  override_reason?: string
+  override_at?: string // RFC3339
+  conflict?: string
+}
+
+export interface SubscriptionEntriesResponse {
+  items: SubscriptionEntryDTO[]
+  total: number
+}
+
+export interface EntryOverridePayload {
+  user_kind_override: EntryKind | null
+  reason?: string
+}
+
 export interface SubscriptionRecord {
   id: string
   name: string
@@ -203,4 +232,75 @@ export function useSubscriptions() {
   }
 
   return { items, loading, saving, error, total, hasItems, refreshingIDs, load, save, remove, refresh }
+}
+
+export function useSubscriptionEntries() {
+  const entries = ref<SubscriptionEntryDTO[]>([])
+  const loading = ref(false)
+  const error = ref('')
+  const total = ref(0)
+  const overridingId = ref<string | null>(null)
+
+  async function loadEntries(subscriptionId: string) {
+    loading.value = true
+    error.value = ''
+    try {
+      const res = await api.get<SubscriptionEntriesResponse>(
+        `/api/v1/subscriptions/${encodeURIComponent(subscriptionId)}/entries`
+      )
+      entries.value = res?.items ?? []
+      total.value = res?.total ?? entries.value.length
+    } catch (cause) {
+      error.value = cause instanceof Error ? cause.message : '加载来源条目失败'
+      entries.value = []
+      total.value = 0
+    } finally {
+      loading.value = false
+    }
+  }
+
+  async function setOverride(
+    subscriptionId: string,
+    entryId: string,
+    userKindOverride: EntryKind | null,
+    reason?: string
+  ): Promise<SubscriptionEntryDTO | null> {
+    overridingId.value = entryId
+    try {
+      const payload: EntryOverridePayload = {
+        user_kind_override: userKindOverride,
+      }
+      if (reason) payload.reason = reason
+      const updated = await api.post<SubscriptionEntryDTO>(
+        `/api/v1/subscriptions/${encodeURIComponent(subscriptionId)}/entries/${encodeURIComponent(entryId)}/override`,
+        payload
+      )
+      if (updated) {
+        const idx = entries.value.findIndex((e) => e.entry_id === entryId)
+        if (idx !== -1) {
+          entries.value[idx] = updated
+        }
+      }
+      toastStore.push({ message: '分类覆盖已生效', tone: 'success' })
+      return updated
+    } catch (cause) {
+      toastStore.push({
+        message: cause instanceof Error ? cause.message : '更新分类覆盖失败',
+        tone: 'error',
+      })
+      throw cause
+    } finally {
+      overridingId.value = null
+    }
+  }
+
+  return {
+    entries,
+    loading,
+    error,
+    total,
+    overridingId,
+    loadEntries,
+    setOverride,
+  }
 }

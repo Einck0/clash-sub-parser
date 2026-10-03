@@ -78,6 +78,19 @@ func (m *mockPublicationRepo) Revoke(ctx context.Context, id string, revokedAt t
 	return nil
 }
 
+func (m *mockPublicationRepo) Activate(ctx context.Context, id, tokenHash string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	pub, ok := m.publications[id]
+	if !ok {
+		return domain.NewNotFoundError("publication_not_found", "publication not found")
+	}
+	pub.State = domain.PublicationStateActive
+	pub.TokenHash = tokenHash
+	m.tokenMap[tokenHash] = pub
+	return nil
+}
+
 // mockAuditRepo implements domain.AuditRepository in-memory for testing.
 type mockAuditRepo struct {
 	mu     sync.Mutex

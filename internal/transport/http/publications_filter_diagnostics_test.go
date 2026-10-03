@@ -27,7 +27,28 @@ func (r failingPublicationFilterRepository) GetGlobalFilter(context.Context) (*d
 
 func publicationFilterRequest(t *testing.T, router http.Handler, endpoint, target string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, endpoint, strings.NewReader(fmt.Sprintf(`{"target":%q}`, target)))
+	var bodyJSON string
+	if endpoint == "/api/v1/publications" {
+		prevReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(fmt.Sprintf(`{"target":%q}`, target)))
+		prevReq.Header.Set("Authorization", "Bearer "+testAdminToken)
+		prevReq.Header.Set("Content-Type", "application/json")
+		prevRec := httptest.NewRecorder()
+		router.ServeHTTP(prevRec, prevReq)
+		var prevResp struct {
+			Data struct {
+				SnapshotID string `json:"snapshot_id"`
+			} `json:"data"`
+		}
+		_ = json.Unmarshal(prevRec.Body.Bytes(), &prevResp)
+		if prevResp.Data.SnapshotID != "" {
+			bodyJSON = fmt.Sprintf(`{"target":%q,"snapshot_id":%q}`, target, prevResp.Data.SnapshotID)
+		} else {
+			bodyJSON = fmt.Sprintf(`{"target":%q}`, target)
+		}
+	} else {
+		bodyJSON = fmt.Sprintf(`{"target":%q}`, target)
+	}
+	req := httptest.NewRequest(http.MethodPost, endpoint, strings.NewReader(bodyJSON))
 	req.Header.Set("Authorization", "Bearer "+testAdminToken)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()

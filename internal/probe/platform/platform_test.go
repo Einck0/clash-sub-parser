@@ -3,6 +3,7 @@ package platform_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -178,6 +179,81 @@ func TestCheckNetflix(t *testing.T) {
 	cap = platform.CheckNetflix(ctx, clientOriginals)
 	if cap.Verdict != domain.VerdictAvailable || cap.SubTier != "originals" {
 		t.Fatalf("expected Originals, got: %+v", cap)
+	}
+
+	// Scenario 4: Fast CDN inconclusive, title non-original 200 with region redirect -> Full(JP)
+	clientTitleWithRegion := mockClient(func(req *http.Request) (*http.Response, error) {
+		if strings.Contains(req.URL.Host, "fast.com") {
+			return jsonResponse(500, "error")
+		}
+		if strings.Contains(req.URL.Path, "81280792") {
+			return jsonResponse(200, "OK NonOriginal")
+		}
+		if strings.Contains(req.URL.Path, "80018499") {
+			resp, _ := jsonResponse(302, "")
+			resp.Header.Set("Location", "https://www.netflix.com/jp/title/80018499")
+			return resp, nil
+		}
+		return jsonResponse(404, "")
+	})
+	cap = platform.CheckNetflix(ctx, clientTitleWithRegion)
+	if cap.Verdict != domain.VerdictAvailable || cap.SubTier != "full" || cap.Region != "JP" {
+		t.Fatalf("expected Full(JP), got: %+v", cap)
+	}
+
+	// Scenario 5: Fast CDN inconclusive, title non-original 200 without region redirect -> Full (region unknown, not contract_drift!)
+	clientTitleWithoutRegion := mockClient(func(req *http.Request) (*http.Response, error) {
+		if strings.Contains(req.URL.Host, "fast.com") {
+			return jsonResponse(500, "error")
+		}
+		if strings.Contains(req.URL.Path, "81280792") {
+			return jsonResponse(200, "OK NonOriginal")
+		}
+		return jsonResponse(404, "")
+	})
+	cap = platform.CheckNetflix(ctx, clientTitleWithoutRegion)
+	if cap.Verdict != domain.VerdictAvailable || cap.SubTier != "full" || cap.Region != "" || cap.Summary != "Full" {
+		t.Fatalf("expected Full with empty/omitted region, got: %+v", cap)
+	}
+	capJSON, err := json.Marshal(cap)
+	if err != nil {
+		t.Fatalf("failed to marshal capability: %v", err)
+	}
+	if strings.Contains(string(capJSON), `"region"`) {
+		t.Fatalf("expected region to be omitted from JSON when empty, got: %s", string(capJSON))
+	}
+
+	// Scenario 6: Title 403 -> Banned
+	clientTitleBanned := mockClient(func(req *http.Request) (*http.Response, error) {
+		if strings.Contains(req.URL.Host, "fast.com") {
+			return jsonResponse(500, "error")
+		}
+		if strings.Contains(req.URL.Path, "81280792") {
+			return jsonResponse(403, "Forbidden")
+		}
+		return jsonResponse(404, "")
+	})
+	cap = platform.CheckNetflix(ctx, clientTitleBanned)
+	if cap.Verdict != domain.VerdictRestricted || cap.SubTier != "banned" || cap.Reason != "title_403" {
+		t.Fatalf("expected Banned from Title 403, got: %+v", cap)
+	}
+
+	// Scenario 7: All endpoints network error -> VerdictError / network_error
+	clientNetErr := mockClient(func(req *http.Request) (*http.Response, error) {
+		return nil, fmt.Errorf("connection refused")
+	})
+	cap = platform.CheckNetflix(ctx, clientNetErr)
+	if cap.Verdict != domain.VerdictError || cap.Reason != "network_error" {
+		t.Fatalf("expected network_error on all connection refused, got: %+v", cap)
+	}
+
+	// Scenario 8: Status mismatch -> VerdictUnknown / status_mismatch
+	clientMismatch := mockClient(func(req *http.Request) (*http.Response, error) {
+		return jsonResponse(404, "")
+	})
+	cap = platform.CheckNetflix(ctx, clientMismatch)
+	if cap.Verdict != domain.VerdictUnknown || cap.Reason != "status_mismatch" {
+		t.Fatalf("expected status_mismatch on 404s, got: %+v", cap)
 	}
 }
 

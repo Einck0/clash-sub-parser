@@ -349,8 +349,10 @@ func TestPipelineStageConcurrencyLimits(t *testing.T) {
 	if maxAlive.Load() > 2 {
 		t.Fatalf("expected Alive peak concurrency <= 2, got %d", maxAlive.Load())
 	}
-	if maxMedia.Load() > 1 {
-		t.Fatalf("expected Media peak concurrency <= 1, got %d", maxMedia.Load())
+	// Media stage concurrency limit is 1 node. With parallel sub-requests (Netflix, YouTube, Disney),
+	// peak in-flight HTTP requests for that 1 node reaches up to 3.
+	if maxMedia.Load() > 3 {
+		t.Fatalf("expected Media peak concurrency <= 3 (1 node x 3 sub-requests), got %d", maxMedia.Load())
 	}
 	if maxSpeed.Load() > 1 {
 		t.Fatalf("expected Speed peak concurrency <= 1, got %d", maxSpeed.Load())

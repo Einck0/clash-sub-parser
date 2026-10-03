@@ -181,6 +181,7 @@ type publicationCreateResponse struct {
 
 type previewResponse struct {
 	Data struct {
+		SnapshotID     string `json:"snapshot_id"`
 		Target         string `json:"target"`
 		SnapshotDigest string `json:"snapshot_digest"`
 		ContentDigest  string `json:"content_digest"`
@@ -499,7 +500,7 @@ func TestAdminPreviewAndPublishConsistency(t *testing.T) {
 	}
 
 	// 2. Publish via admin API
-	publishBody := `{"target": "singbox"}`
+	publishBody := fmt.Sprintf(`{"target": "singbox", "snapshot_id": %q}`, previewResp.Data.SnapshotID)
 	publishReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications", strings.NewReader(publishBody))
 	publishReq.Header.Set("Authorization", "Bearer "+testAdminToken)
 	publishReq.Header.Set("Content-Type", "application/json")
@@ -829,7 +830,19 @@ func TestExistingPublicationImmutableToSubsequentObservationsHTTP(t *testing.T) 
 	}
 
 	// 3. Create initial publication via admin API -> 201 Created
-	pubReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications", strings.NewReader(`{"target": "singbox"}`))
+	prevReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "singbox"}`))
+	prevReq.Header.Set("Authorization", "Bearer "+testAdminToken)
+	prevReq.Header.Set("Content-Type", "application/json")
+	prevRec := httptest.NewRecorder()
+	router.ServeHTTP(prevRec, prevReq)
+	var prevResp struct {
+		Data struct {
+			SnapshotID string `json:"snapshot_id"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal(prevRec.Body.Bytes(), &prevResp)
+
+	pubReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications", strings.NewReader(fmt.Sprintf(`{"target": "singbox", "snapshot_id": %q}`, prevResp.Data.SnapshotID)))
 	pubReq.Header.Set("Authorization", "Bearer "+testAdminToken)
 	pubReq.Header.Set("Content-Type", "application/json")
 	pubRec := httptest.NewRecorder()
@@ -1610,7 +1623,19 @@ func TestPublication_MihomoHysteria2EndToEndWithOfficialCLI(t *testing.T) {
 	var pubID string
 	var rawToken string
 	{
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/publications", strings.NewReader(`{"target": "mihomo"}`))
+		prevReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "mihomo"}`))
+		prevReq.Header.Set("Authorization", "Bearer "+testAdminToken)
+		prevReq.Header.Set("Content-Type", "application/json")
+		prevRec := httptest.NewRecorder()
+		router.ServeHTTP(prevRec, prevReq)
+		var prevResp struct {
+			Data struct {
+				SnapshotID string `json:"snapshot_id"`
+			} `json:"data"`
+		}
+		_ = json.Unmarshal(prevRec.Body.Bytes(), &prevResp)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/publications", strings.NewReader(fmt.Sprintf(`{"target": "mihomo", "snapshot_id": %q}`, prevResp.Data.SnapshotID)))
 		req.Header.Set("Authorization", "Bearer "+testAdminToken)
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
@@ -1932,7 +1957,10 @@ func TestFourTargetEndToEndHTTP_WireGuardTUICAndNativeCapabilityProof(t *testing
 			t.Fatalf("expected Cache-Control: no-store on preview, got %q", prevRec.Header().Get("Cache-Control"))
 		}
 
-		pubReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications", strings.NewReader(fmt.Sprintf(`{"target": %q}`, target)))
+		var prevResp previewResponse
+		_ = json.Unmarshal(prevRec.Body.Bytes(), &prevResp)
+
+		pubReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications", strings.NewReader(fmt.Sprintf(`{"target": %q, "snapshot_id": %q}`, target, prevResp.Data.SnapshotID)))
 		pubReq.Header.Set("Authorization", "Bearer "+testAdminToken)
 		pubReq.Header.Set("Content-Type", "application/json")
 		pubRec := httptest.NewRecorder()
@@ -1986,7 +2014,19 @@ func TestFourTargetEndToEndHTTP_WireGuardTUICAndNativeCapabilityProof(t *testing
 	})
 
 	for _, target := range []string{"surge", "qx"} {
-		pubReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications", strings.NewReader(fmt.Sprintf(`{"target": %q}`, target)))
+		prevReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(fmt.Sprintf(`{"target": %q}`, target)))
+		prevReq.Header.Set("Authorization", "Bearer "+testAdminToken)
+		prevReq.Header.Set("Content-Type", "application/json")
+		prevRec := httptest.NewRecorder()
+		router.ServeHTTP(prevRec, prevReq)
+		var prevResp struct {
+			Data struct {
+				SnapshotID string `json:"snapshot_id"`
+			} `json:"data"`
+		}
+		_ = json.Unmarshal(prevRec.Body.Bytes(), &prevResp)
+
+		pubReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications", strings.NewReader(fmt.Sprintf(`{"target": %q, "snapshot_id": %q}`, target, prevResp.Data.SnapshotID)))
 		pubReq.Header.Set("Authorization", "Bearer "+testAdminToken)
 		pubReq.Header.Set("Content-Type", "application/json")
 		pubRec := httptest.NewRecorder()

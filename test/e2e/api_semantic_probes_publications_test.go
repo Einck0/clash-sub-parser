@@ -224,8 +224,9 @@ func TestAPISemantic_ProbesAndPublications(t *testing.T) {
 	}
 	var previewData struct {
 		Data struct {
-			Target  string `json:"target"`
-			Content string `json:"content"`
+			Target     string `json:"target"`
+			Content    string `json:"content"`
+			SnapshotID string `json:"snapshot_id"`
 		} `json:"data"`
 	}
 	if err := resp.JSON(&previewData); err != nil || previewData.Data.Content == "" {
@@ -235,6 +236,7 @@ func TestAPISemantic_ProbesAndPublications(t *testing.T) {
 	// 2.3 Create Publication: POST /api/v1/publications -> 201 Created
 	createPubBody := map[string]any{
 		"target":      "mihomo",
+		"snapshot_id": previewData.Data.SnapshotID,
 		"revision_id": activeRev.ID,
 	}
 	resp, err = harness.AuthRequest(http.MethodPost, "/api/v1/publications", createPubBody, nil)
@@ -330,8 +332,23 @@ func TestAPISemantic_ProbesAndPublications(t *testing.T) {
 	}
 
 	// 2.9 Direct DELETE /api/v1/publications/{id} (Alias to revoke via HTTP DELETE)
+	prevResp2, err := harness.AuthRequest(http.MethodPost, "/api/v1/publications/preview", map[string]any{
+		"target":      "singbox",
+		"revision_id": activeRev.ID,
+	}, nil)
+	if err != nil || prevResp2.StatusCode != http.StatusOK {
+		t.Fatalf("preview for second publication failed: %v", err)
+	}
+	var prev2Data struct {
+		Data struct {
+			SnapshotID string `json:"snapshot_id"`
+		} `json:"data"`
+	}
+	_ = prevResp2.JSON(&prev2Data)
+
 	createPubBody2 := map[string]any{
 		"target":      "singbox",
+		"snapshot_id": prev2Data.Data.SnapshotID,
 		"revision_id": activeRev.ID,
 	}
 	resp, err = harness.AuthRequest(http.MethodPost, "/api/v1/publications", createPubBody2, nil)

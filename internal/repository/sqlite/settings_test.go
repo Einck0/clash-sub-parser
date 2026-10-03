@@ -142,8 +142,8 @@ func assertAuthSchemaDefaults(t *testing.T, db *sql.DB) {
 		t.Fatalf("migration 13 must seed both protection switches on: %d, %d", admin, export)
 	}
 	var version int
-	if err := db.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil || version != 14 {
-		t.Fatalf("expected schema version 14, got %d: %v", version, err)
+	if err := db.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil || version < 15 {
+		t.Fatalf("expected schema version >= 15, got %d: %v", version, err)
 	}
 }
 

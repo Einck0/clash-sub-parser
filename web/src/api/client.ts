@@ -203,10 +203,14 @@ export class ApiClient {
         if (text) {
           const payload = JSON.parse(text)
           if (payload && typeof payload === 'object') {
-            if (typeof payload.code === 'string') code = payload.code
-            if (typeof payload.message === 'string') message = payload.message
+            const errObj = (payload.error && typeof payload.error === 'object') ? payload.error : payload
+            if (typeof errObj.code === 'string') code = errObj.code
+            else if (typeof payload.code === 'string') code = payload.code
+            if (typeof errObj.message === 'string') message = errObj.message
+            else if (typeof payload.message === 'string') message = payload.message
             if (typeof payload.request_id === 'string') errRequestId = payload.request_id
-            details = payload.details ?? payload
+            else if (typeof errObj.request_id === 'string') errRequestId = errObj.request_id
+            details = errObj.details ?? payload.details ?? payload
           }
         }
       } catch {

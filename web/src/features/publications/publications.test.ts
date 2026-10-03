@@ -179,7 +179,7 @@ describe('usePublications composable', () => {
     const { preview, loadingPreview, fetchPreview, selectedTarget } = usePublications()
     await fetchPreview('mihomo')
 
-    expect(postSpy).toHaveBeenCalledWith('/api/v1/publications/preview', { target: 'mihomo' })
+    expect(postSpy).toHaveBeenCalledWith('/api/v1/publications/preview', { target: 'mihomo', compat_mode: 'strict' })
     expect(loadingPreview.value).toBe(false)
     expect(selectedTarget.value).toBe('mihomo')
     expect(preview.value).toEqual(mockPreview)
@@ -463,7 +463,7 @@ describe('PublicationsView component rendering', () => {
     expect(targets.some((t) => t?.includes('Surge'))).toBe(true)
     expect(targets.some((t) => t?.includes('Quantumult X'))).toBe(true)
 
-    expect(postSpy).toHaveBeenCalledWith('/api/v1/publications/preview', { target: 'mihomo' })
+    expect(postSpy).toHaveBeenCalledWith('/api/v1/publications/preview', { target: 'mihomo', compat_mode: 'strict' })
 
     // Click Surge (the 3rd target) and verify capability boundary reflects Surge subset
     const surgeBtn = targetButtons[2]
@@ -471,7 +471,7 @@ describe('PublicationsView component rendering', () => {
     await nextTick()
     await new Promise((r) => setTimeout(r, 20))
 
-    expect(postSpy).toHaveBeenCalledWith('/api/v1/publications/preview', { target: 'surge' })
+    expect(postSpy).toHaveBeenCalledWith('/api/v1/publications/preview', { target: 'surge', compat_mode: 'strict' })
     const capCard = mountEl.querySelector('[data-testid="target-capability-boundary"]')
     expect(capCard?.textContent).toContain('Surge')
     expect(capCard?.textContent).toContain('仅导出 Surge 节点格式')
@@ -560,7 +560,7 @@ describe('PublicationsView component rendering', () => {
     await nextTick()
     await new Promise((r) => setTimeout(r, 20))
 
-    expect(postSpy).toHaveBeenCalledWith('/api/v1/publications/preview', { target: 'mihomo' })
+    expect(postSpy).toHaveBeenCalledWith('/api/v1/publications/preview', { target: 'mihomo', compat_mode: 'strict' })
     expect(mountEl.querySelector('[data-testid="no-active-revision-card"]')).toBeNull()
     expect(downloadBtn?.disabled).toBe(false)
     expect(createPubBtn?.disabled).toBe(false)

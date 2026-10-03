@@ -767,8 +767,9 @@ func (s *Service) GetPoolStatus(ctx context.Context) (*domain.ProbePoolStatus, e
 	activeIDs := make([]string, 0)
 	for fetchPage := 1; ; fetchPage++ {
 		chunk, total, err := nodesRepo.List(ctx, domain.NodeFilter{
-			ActiveOnly: true,
-			Pagination: domain.Pagination{Page: fetchPage, PageSize: fetchPageSize},
+			ActiveOnly:     true,
+			ExcludeNotices: true,
+			Pagination:     domain.Pagination{Page: fetchPage, PageSize: fetchPageSize},
 		})
 		if err != nil {
 			return nil, err

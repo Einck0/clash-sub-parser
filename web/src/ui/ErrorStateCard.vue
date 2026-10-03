@@ -61,6 +61,14 @@ function translateErrorCode(code?: string): string {
       return t('errors.unsupported_target')
     case 'unsupported_target_capability':
       return t('errors.unsupported_target_capability')
+    case 'empty_group_not_allowed':
+      return t('errors.empty_group_not_allowed')
+    case 'snapshot_required':
+      return t('errors.snapshot_required')
+    case 'snapshot_target_mismatch':
+      return t('errors.snapshot_target_mismatch')
+    case 'snapshot_not_publishable':
+      return t('errors.snapshot_not_publishable')
     case 'no_active_revision':
       return t('errors.no_active_revision')
     case 'invalid_json':
@@ -109,10 +117,11 @@ const parsedError = computed<ParsedErrorInfo>(() => {
   }
 
   const lowerMsg = message.toLowerCase()
+  const isCapability = status === 422 || code === 'unsupported_target_capability' || code === 'unsupported_target' || code === 'validation_failed' || code === 'empty_group_not_allowed' || code === 'snapshot_target_mismatch' || code === 'snapshot_not_publishable'
   const isAuth = status === 401 || code === 'unauthorized' || lowerMsg.includes('unauthorized') || lowerMsg.includes('未授权') || lowerMsg.includes('token') || lowerMsg.includes('令牌')
   const isForbidden = status === 403 || code === 'forbidden' || lowerMsg.includes('forbidden') || lowerMsg.includes('拒绝访问') || lowerMsg.includes('无权限')
   const isConflict = status === 409 || code === 'conflict' || lowerMsg.includes('conflict') || lowerMsg.includes('冲突')
-  const isNetwork = lowerMsg.includes('network') || lowerMsg.includes('failed to fetch') || lowerMsg.includes('networkerror') || lowerMsg.includes('无法连接')
+  const isNetwork = !isCapability && (lowerMsg.includes('network') || lowerMsg.includes('failed to fetch') || lowerMsg.includes('networkerror') || lowerMsg.includes('无法连接'))
   const isServerError = (status !== undefined && status >= 500) || lowerMsg.includes('internal server error') || lowerMsg.includes('500')
 
   const codeTitle = translateErrorCode(code)

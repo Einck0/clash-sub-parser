@@ -152,3 +152,39 @@ func TestNodeToMapping_TUICDisableSNI(t *testing.T) {
 		t.Fatal("expected non-nil proxy instance")
 	}
 }
+
+func TestNodeToMapping_SupportsVLESSXHTTP(t *testing.T) {
+	node := domain.Node{
+		DisplayName: "VLESS-xhttp",
+		Protocol:    domain.ProtocolVLESS,
+		Server:      "edge.example.com",
+		Port:        443,
+		Credentials: domain.InboundProtocolCredential{
+			UUID: "a67dd449-34ba-449e-b924-4f9342738a14",
+			Transport: map[string]string{
+				"network": "xhttp",
+				"path":    "/xhttp-path",
+				"host":    "edge.example.com",
+				"mode":    "auto",
+				"headers": `{"X-Test":"custom"}`,
+			},
+		},
+	}
+
+	mapping, err := mihomo.NodeToMapping(node)
+	if err != nil {
+		t.Fatalf("NodeToMapping failed: %v", err)
+	}
+
+	if mapping["network"] != "xhttp" {
+		t.Fatalf("expected network=xhttp, got: %v", mapping["network"])
+	}
+
+	xhttpOpts, ok := mapping["xhttp-opts"].(map[string]any)
+	if !ok || xhttpOpts == nil {
+		t.Fatalf("expected xhttp-opts map in mapping, got: %v", mapping["xhttp-opts"])
+	}
+	if xhttpOpts["path"] != "/xhttp-path" || xhttpOpts["host"] != "edge.example.com" || xhttpOpts["mode"] != "auto" {
+		t.Fatalf("xhttp-opts values mismatch: %v", xhttpOpts)
+	}
+}

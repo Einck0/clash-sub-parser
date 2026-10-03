@@ -44,6 +44,7 @@ const router = (() => {
 
 const {
   selectedTarget,
+  compatMode,
   preview,
   activePublication,
   loadingPreview,
@@ -108,7 +109,13 @@ async function switchTarget(target: CompilerTarget) {
   restoreActivePublication(target)
   suppliedToken.value = ''
   void verifySavedPublication()
-  await fetchPreview(target)
+  await fetchPreview(target, undefined, compatMode.value)
+}
+
+async function switchCompatMode(mode: 'strict' | 'compatible') {
+  if (compatMode.value === mode) return
+  compatMode.value = mode
+  await fetchPreview(selectedTarget.value, undefined, mode)
 }
 
 async function handleCopyContent() {
@@ -128,8 +135,9 @@ function handleDownload() {
 
 async function handlePublish() {
   const target = selectedTarget.value
+  const snapshotId = preview.value?.snapshot_id
   try {
-    await publish(target)
+    await publish(target, snapshotId)
     if (selectedTarget.value === target) {
       publicationLookupFailed.value = false
       publishModalOpen.value = true
@@ -320,6 +328,9 @@ onMounted(() => {
           <span v-if="diag.code" class="badge badge-xs badge-error badge-outline mr-1.5 font-sans">
             {{ preflightCheckLabel(diag.code) }}
           </span>
+          <span v-if="diag.node_id" class="badge badge-xs badge-neutral mr-1 font-mono">
+            {{ diag.node_id }}
+          </span>
           <strong>{{ diag.target ? `[${diag.target}] ` : '' }}{{ diag.message }}</strong>
           <span v-if="diag.reason" class="opacity-75 block pl-4">原因：{{ diag.reason }}</span>
         </li>
@@ -362,6 +373,36 @@ onMounted(() => {
           .{{ item.ext }}
         </span>
       </button>
+    </div>
+
+    <!-- Compatibility Mode Selector -->
+    <div class="flex flex-wrap items-center justify-between gap-2 p-3 rounded-xl bg-base-200/50 border border-base-300 text-xs w-full min-w-0">
+      <div class="flex items-center gap-2">
+        <span class="font-semibold text-base-content">{{ t('publications.compatModeLabel') }}:</span>
+        <div class="join" role="group" aria-label="编译模式切换">
+          <button
+            type="button"
+            class="btn btn-xs join-item transition-all"
+            :class="compatMode === 'strict' ? 'btn-primary font-bold shadow-sm' : 'btn-ghost bg-base-100 hover:bg-base-300'"
+            data-testid="mode-strict-btn"
+            @click="switchCompatMode('strict')"
+          >
+            {{ t('publications.compatStrict') }}
+          </button>
+          <button
+            type="button"
+            class="btn btn-xs join-item transition-all"
+            :class="compatMode === 'compatible' ? 'btn-primary font-bold shadow-sm' : 'btn-ghost bg-base-100 hover:bg-base-300'"
+            data-testid="mode-compatible-btn"
+            @click="switchCompatMode('compatible')"
+          >
+            {{ t('publications.compatCompatible') }}
+          </button>
+        </div>
+      </div>
+      <p class="text-[11px] opacity-75">
+        {{ compatMode === 'strict' ? t('publications.compatStrictDesc') : t('publications.compatCompatibleDesc') }}
+      </p>
     </div>
 
     <!-- Target Capability Boundary Card -->
@@ -427,12 +468,53 @@ onMounted(() => {
           </div>
 
           <div class="flex items-center gap-2 font-mono text-[11px] opacity-70 shrink-0">
+            <span v-if="preview?.snapshot_id" class="badge badge-sm badge-ghost font-mono text-[10px]" data-testid="preview-snapshot-id" title="不可变快照 ID">
+              快照: {{ formatDigest(preview.snapshot_id) }}
+            </span>
             <span v-if="preview?.content_digest" title="配置内容 SHA-256 摘要">
               内容摘要: <strong>{{ formatDigest(preview.content_digest) }}</strong>
             </span>
             <span v-if="preview?.snapshot_digest" class="hidden sm:inline" title="策略快照摘要">
               · 快照摘要: <strong>{{ formatDigest(preview.snapshot_digest) }}</strong>
             </span>
+          </div>
+        </div>
+
+        <!-- Manifest Excluded Nodes (Compatible mode or format exclusions) -->
+        <div
+          v-if="preview?.manifest?.excluded && preview.manifest.excluded.length > 0"
+          data-testid="excluded-nodes-card"
+          class="p-3 rounded-lg bg-warning/10 border border-warning/30 text-warning text-xs space-y-1.5"
+        >
+          <div class="font-bold flex items-center justify-between gap-1.5 text-xs">
+            <div class="flex items-center gap-1.5">
+              <ExclamationTriangleIcon class="w-4 h-4 shrink-0" />
+              <span>{{ t('publications.excludedNodesTitle') }} ({{ preview.manifest.excluded.length }} 个节点)</span>
+            </div>
+            <span class="badge badge-xs badge-warning badge-outline font-normal">
+              {{ t('publications.compatCompatible') }}
+            </span>
+          </div>
+          <p class="opacity-80 text-[11px]">
+            {{ t('publications.compatCompatibleDesc') }}
+          </p>
+          <div class="divide-y divide-warning/20 font-mono text-[11px] pt-1">
+            <div
+              v-for="(item, idx) in preview.manifest.excluded"
+              :key="idx"
+              data-testid="excluded-node-item"
+              class="py-1 flex flex-wrap items-center justify-between gap-2"
+            >
+              <strong class="text-base-content/90">{{ item.node_id }}</strong>
+              <div class="flex items-center gap-1.5">
+                <span v-if="item.code" class="badge badge-xs badge-outline badge-warning">
+                  {{ item.code }}
+                </span>
+                <span v-if="item.reason" class="text-base-content/75 font-sans">
+                  {{ item.reason }}
+                </span>
+              </div>
+            </div>
           </div>
         </div>
 

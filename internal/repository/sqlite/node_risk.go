@@ -631,13 +631,13 @@ func buildRiskEvaluationCTE(policy *domain.RiskPolicy, nowStr string, nodeIDs ..
 			SELECT n.logical_id,
 			       n.protocol,
 			       n.display_name,
-			       n.server,
-			       n.port,
-			       n.config_json,
+			       COALESCE(json_extract(v.effective_config_json, '$.server'), n.server) AS server,
+			       COALESCE(json_extract(v.effective_config_json, '$.port'), n.port) AS port,
+			       COALESCE(json_extract(v.effective_config_json, '$.credentials'), v.effective_config_json, n.config_json) AS config_json,
 			       n.active,
 			       n.created_at,
 			       n.updated_at,
-			       n.connection_revision,
+			       COALESCE(h.connection_revision, n.connection_revision) AS connection_revision,
 			       COALESCE(oe.action, ?) AS risk_decision,
 			       COALESCE(oe.band, 'unknown') AS risk_band,
 			       COALESCE(oe.provider, ?) AS risk_provider,
@@ -647,6 +647,8 @@ func buildRiskEvaluationCTE(policy *domain.RiskPolicy, nowStr string, nodeIDs ..
 			       oe.observed_at AS risk_observed_at,
 			       oe.expires_at AS risk_expires_at
 			FROM nodes n
+			LEFT JOIN node_connection_heads h ON n.logical_id = h.logical_id
+			LEFT JOIN node_connection_versions v ON h.logical_id = v.node_logical_id AND h.connection_revision = v.connection_revision
 			LEFT JOIN obs_eval oe ON n.logical_id = oe.node_logical_id
 		)
 	`, actionExpr, bandExpr, statusExpr, reasonExpr)
@@ -660,13 +662,13 @@ func buildNoPolicyCTE() (string, []any) {
 			SELECT n.logical_id,
 			       n.protocol,
 			       n.display_name,
-			       n.server,
-			       n.port,
-			       n.config_json,
+			       COALESCE(json_extract(v.effective_config_json, '$.server'), n.server) AS server,
+			       COALESCE(json_extract(v.effective_config_json, '$.port'), n.port) AS port,
+			       COALESCE(json_extract(v.effective_config_json, '$.credentials'), v.effective_config_json, n.config_json) AS config_json,
 			       n.active,
 			       n.created_at,
 			       n.updated_at,
-			       n.connection_revision,
+			       COALESCE(h.connection_revision, n.connection_revision) AS connection_revision,
 			       'unknown' AS risk_decision,
 			       'unknown' AS risk_band,
 			       '' AS risk_provider,
@@ -676,6 +678,8 @@ func buildNoPolicyCTE() (string, []any) {
 			       NULL AS risk_observed_at,
 			       NULL AS risk_expires_at
 			FROM nodes n
+			LEFT JOIN node_connection_heads h ON n.logical_id = h.logical_id
+			LEFT JOIN node_connection_versions v ON h.logical_id = v.node_logical_id AND h.connection_revision = v.connection_revision
 		)
 	`
 	return cteSQL, nil
@@ -926,6 +930,26 @@ func nodeFilterSQL(filter domain.NodeFilter) ([]string, []any) {
 	var args []any
 	if filter.ActiveOnly {
 		where = append(where, "active = 1")
+	}
+	if len(filter.LogicalIDs) > 0 {
+		p := make([]string, len(filter.LogicalIDs))
+		for i, v := range filter.LogicalIDs {
+			p[i] = "?"
+			args = append(args, v)
+		}
+		where = append(where, "logical_id IN ("+strings.Join(p, ",")+")")
+	}
+	if filter.ExcludeNotices {
+		where = append(where, `logical_id NOT IN (
+			SELECT se1.node_logical_id FROM subscription_entries se1
+			WHERE se1.node_logical_id IS NOT NULL
+			  AND COALESCE(se1.user_kind_override, se1.entry_kind) = 'notice'
+			  AND NOT EXISTS (
+			      SELECT 1 FROM subscription_entries se2
+			      WHERE se2.node_logical_id = se1.node_logical_id
+			        AND se2.user_kind_override = 'proxy'
+			  )
+		)`)
 	}
 	if len(filter.Protocols) > 0 {
 		p := make([]string, len(filter.Protocols))

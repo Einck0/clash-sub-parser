@@ -3,6 +3,7 @@ package parser
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/netip"
@@ -69,6 +70,40 @@ func yamlTransport(proxy map[string]any, protocol domain.Protocol) map[string]st
 	if grpc, ok := proxy["grpc-opts"].(map[string]any); ok {
 		copyIfPresent(transport, "service_name", value(grpc, "grpc-service-name", "service-name"))
 	}
+	if xhttp, ok := proxy["xhttp-opts"].(map[string]any); ok {
+		copyIfPresent(transport, "path", value(xhttp, "path"))
+		copyIfPresent(transport, "host", value(xhttp, "host"))
+		copyIfPresent(transport, "mode", value(xhttp, "mode"))
+		if headers, ok := xhttp["headers"].(map[string]any); ok {
+			if hBytes, err := json.Marshal(headers); err == nil {
+				transport["headers"] = string(hBytes)
+			}
+		}
+		for k, v := range xhttp {
+			if k != "path" && k != "host" && k != "mode" && k != "headers" {
+				if sVal := fmt.Sprintf("%v", v); sVal != "" {
+					transport["extra_"+k] = sVal
+				}
+			}
+		}
+	} else if xhttp, ok := proxy["xhttp_opts"].(map[string]any); ok {
+		copyIfPresent(transport, "path", value(xhttp, "path"))
+		copyIfPresent(transport, "host", value(xhttp, "host"))
+		copyIfPresent(transport, "mode", value(xhttp, "mode"))
+		if headers, ok := xhttp["headers"].(map[string]any); ok {
+			if hBytes, err := json.Marshal(headers); err == nil {
+				transport["headers"] = string(hBytes)
+			}
+		}
+		for k, v := range xhttp {
+			if k != "path" && k != "host" && k != "mode" && k != "headers" {
+				if sVal := fmt.Sprintf("%v", v); sVal != "" {
+					transport["extra_"+k] = sVal
+				}
+			}
+		}
+	}
+	copyIfPresent(transport, "mode", value(proxy, "mode"))
 	copyIfPresent(transport, "path", value(proxy, "path"))
 	copyIfPresent(transport, "host", value(proxy, "host"))
 	if alpnList := parseStringList(proxy["alpn"]); len(alpnList) > 0 {
@@ -129,6 +164,12 @@ func urlTransport(u *url.URL, protocol domain.Protocol) map[string]string {
 	copyIfPresent(transport, "host", query.Get("host"))
 	copyIfPresent(transport, "path", query.Get("path"))
 	copyIfPresent(transport, "service_name", defaultValue(query.Get("serviceName"), query.Get("service_name")))
+	copyIfPresent(transport, "mode", query.Get("mode"))
+	for k, v := range query {
+		if strings.HasPrefix(k, "extra") {
+			transport[k] = strings.Join(v, ",")
+		}
+	}
 	if alpnList := parseStringList(query["alpn"]); len(alpnList) > 0 {
 		copyIfPresent(transport, "alpn", strings.Join(alpnList, ","))
 	}

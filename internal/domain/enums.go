@@ -204,11 +204,13 @@ type PublicationState string
 const (
 	PublicationStateActive  PublicationState = "active"
 	PublicationStateRevoked PublicationState = "revoked"
+	PublicationStateDraft   PublicationState = "draft"
 )
 
 var validPublicationStates = map[PublicationState]bool{
 	PublicationStateActive:  true,
 	PublicationStateRevoked: true,
+	PublicationStateDraft:   true,
 }
 
 func (s PublicationState) IsValid() bool {

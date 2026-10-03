@@ -88,13 +88,39 @@ export const COMPILER_TARGETS: TargetMetadata[] = [
   },
 ]
 
+export type CompatMode = 'strict' | 'compatible'
+
 export interface Diagnostic {
   code?: string
   target?: string
   message: string
-  severity: string
+  severity?: string
   excluded_count?: number
   reason?: string
+  node_id?: string
+}
+
+export interface ExcludedNode {
+  node_id: string
+  code?: string
+  reason?: string
+}
+
+export interface IncludedNode {
+  node_id: string
+  connection_revision?: string
+}
+
+export interface PublicationManifest {
+  node_count: number
+  excluded_count: number
+  payload_ids?: string[]
+  configuration_revision?: string
+  rules_digest?: string
+  included?: IncludedNode[]
+  excluded?: ExcludedNode[]
+  target_engine_version?: string
+  mapping_version?: string
 }
 
 export interface FilterLayerCounts {
@@ -106,12 +132,14 @@ export interface FilterLayerCounts {
 }
 
 export interface PreviewResult {
+  snapshot_id?: string
   target: CompilerTarget
   snapshot_digest: string
   content_digest: string
   content: string
   content_type: string
   filename: string
+  manifest?: PublicationManifest
   diagnostics?: Diagnostic[]
   filter_counts?: FilterLayerCounts
 }
@@ -172,11 +200,15 @@ export function publicationStateLabel(state?: string, revokedAt?: string): strin
 
 const PREFLIGHT_CHECK_LABELS: Record<string, string> = {
   empty_routed_group: '空路由策略组检查',
+  empty_group_not_allowed: '策略组不能为空',
   filtered_nodes_empty: '筛选后无可导出节点',
   risk_blocked: '高风险节点拦截检查',
   risk_review: '中风险节点复核检查',
   risk_unknown: '未探测风险节点检查',
   unsupported_target_capability: '目标能力兼容性检查',
+  snapshot_required: '需要有效配置快照',
+  snapshot_target_mismatch: '快照目标平台不匹配',
+  snapshot_not_publishable: '快照不可发布或已过期',
 }
 
 export function preflightCheckLabel(code?: string): string {

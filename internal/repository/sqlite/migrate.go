@@ -203,7 +203,5 @@ func (r *MigrationRunner) Run(ctx context.Context) error {
 		}
 	}
 
-	_, _ = r.db.ExecContext(ctx, ensureLatestProbeObservationIndexSQL)
-
 	return nil
 }

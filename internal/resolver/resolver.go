@@ -104,14 +104,15 @@ func (r *defaultResolver) Resolve(ctx context.Context, input ResolveInput) (*Res
 	sortedAdmittedNodes := make([]ResolvedNode, len(globalAdmittedNodes))
 	for i, n := range globalAdmittedNodes {
 		sortedAdmittedNodes[i] = ResolvedNode{
-			LogicalID:   n.LogicalID,
-			DisplayName: n.DisplayName,
-			Protocol:    n.Protocol,
-			Server:      n.Server,
-			Port:        n.Port,
-			Credentials: n.Credentials,
-			Active:      n.Active,
-			Position:    i,
+			LogicalID:          n.LogicalID,
+			DisplayName:        n.DisplayName,
+			Protocol:           n.Protocol,
+			Server:             n.Server,
+			Port:               n.Port,
+			Credentials:        n.Credentials,
+			Active:             n.Active,
+			ConnectionRevision: n.ConnectionRevision,
+			Position:           i,
 		}
 	}
 	sort.SliceStable(sortedAdmittedNodes, func(i, j int) bool {

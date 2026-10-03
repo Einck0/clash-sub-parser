@@ -58,14 +58,15 @@ type DNSConfig struct {
 
 // ResolvedNode represents an active, admitted node in the resolved policy snapshot.
 type ResolvedNode struct {
-	LogicalID   string                           `json:"logical_id"`
-	DisplayName string                           `json:"display_name"`
-	Protocol    domain.Protocol                  `json:"protocol"`
-	Server      string                           `json:"server,omitempty"`
-	Port        int                              `json:"port,omitempty"`
-	Credentials domain.InboundProtocolCredential `json:"credentials,omitempty"`
-	Active      bool                             `json:"active"`
-	Position    int                              `json:"position"`
+	LogicalID          string                           `json:"logical_id"`
+	DisplayName        string                           `json:"display_name"`
+	Protocol           domain.Protocol                  `json:"protocol"`
+	Server             string                           `json:"server,omitempty"`
+	Port               int                              `json:"port,omitempty"`
+	Credentials        domain.InboundProtocolCredential `json:"credentials,omitempty"`
+	Active             bool                             `json:"active"`
+	ConnectionRevision int64                            `json:"connection_revision,omitempty"`
+	Position           int                              `json:"position"`
 }
 
 // ResolvedGroupMember represents an ordered reference inside a policy group.

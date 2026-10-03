@@ -76,8 +76,8 @@ func TestFeatureConvergence_SchemaMigrationTo8(t *testing.T) {
 	if !report.Ready {
 		t.Fatalf("expected readiness report Ready=true, got report: %+v", report)
 	}
-	if report.SchemaVersion != 14 {
-		t.Fatalf("expected schema version 14, got %d", report.SchemaVersion)
+	if report.SchemaVersion != 15 {
+		t.Fatalf("expected schema version 15, got %d", report.SchemaVersion)
 	}
 	if len(report.MissingTables) > 0 {
 		t.Fatalf("unexpected missing tables: %v", report.MissingTables)
@@ -715,8 +715,23 @@ func TestFeatureConvergence_FullStack(t *testing.T) {
 	}
 
 	// Publication creation for node-only target (singbox) ignores empty_routed_group and succeeds
+	sbPrevResp, sbPrevBody := doReq(http.MethodPost, "/api/v1/publications/preview", map[string]any{
+		"target":      "singbox",
+		"revision_id": emptyRev.ID,
+	})
+	if sbPrevResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for singbox preview, got %d: %s", sbPrevResp.StatusCode, string(sbPrevBody))
+	}
+	var sbPrev struct {
+		Data struct {
+			SnapshotID string `json:"snapshot_id"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal(sbPrevBody, &sbPrev)
+
 	sbPubReq := map[string]any{
 		"target":      "singbox",
+		"snapshot_id": sbPrev.Data.SnapshotID,
 		"revision_id": emptyRev.ID,
 	}
 	resp, body = doReq(http.MethodPost, "/api/v1/publications", sbPubReq)
@@ -1028,6 +1043,7 @@ func TestFeatureConvergence_NativeMihomoExportCleanSlate(t *testing.T) {
 	}
 	var prevData struct {
 		Data struct {
+			SnapshotID    string `json:"snapshot_id"`
 			Content       string `json:"content"`
 			ContentDigest string `json:"content_digest"`
 		} `json:"data"`
@@ -1052,7 +1068,7 @@ func TestFeatureConvergence_NativeMihomoExportCleanSlate(t *testing.T) {
 	}
 
 	// 3. Publish with target 'mihomo' -> 201 Created
-	pubReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications", strings.NewReader(`{"target": "mihomo"}`))
+	pubReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications", strings.NewReader(fmt.Sprintf(`{"target": "mihomo", "snapshot_id": %q}`, prevData.Data.SnapshotID)))
 	pubReq.Header.Set("Authorization", "Bearer dev-insecure-admin-token")
 	pubReq.Header.Set("Content-Type", "application/json")
 	pubRec := httptest.NewRecorder()
@@ -1530,6 +1546,7 @@ func TestFeatureConvergence_AllFourTargetsFullLifecycleAndRotationRejection(t *t
 		}
 		var prevEnv struct {
 			Data struct {
+				SnapshotID    string `json:"snapshot_id"`
 				Content       string `json:"content"`
 				ContentDigest string `json:"content_digest"`
 			} `json:"data"`
@@ -1559,7 +1576,7 @@ func TestFeatureConvergence_AllFourTargetsFullLifecycleAndRotationRejection(t *t
 			}
 		}
 
-		pubReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications", strings.NewReader(fmt.Sprintf(`{"target":%q}`, target)))
+		pubReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications", strings.NewReader(fmt.Sprintf(`{"target":%q, "snapshot_id":%q}`, target, prevEnv.Data.SnapshotID)))
 		pubReq.Header.Set("Authorization", "Bearer dev-insecure-admin-token")
 		pubReq.Header.Set("Content-Type", "application/json")
 		pubRec := httptest.NewRecorder()
@@ -1702,6 +1719,7 @@ func TestFeatureConvergence_AllFourTargetsFullLifecycleAndRotationRejection(t *t
 		}
 		var prevEnv struct {
 			Data struct {
+				SnapshotID    string `json:"snapshot_id"`
 				Content       string `json:"content"`
 				ContentDigest string `json:"content_digest"`
 			} `json:"data"`
@@ -1713,7 +1731,7 @@ func TestFeatureConvergence_AllFourTargetsFullLifecycleAndRotationRejection(t *t
 			}
 		}
 
-		pubReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications", strings.NewReader(fmt.Sprintf(`{"target":%q}`, target)))
+		pubReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications", strings.NewReader(fmt.Sprintf(`{"target":%q, "snapshot_id":%q}`, target, prevEnv.Data.SnapshotID)))
 		pubReq.Header.Set("Authorization", "Bearer dev-insecure-admin-token")
 		pubReq.Header.Set("Content-Type", "application/json")
 		pubRec := httptest.NewRecorder()

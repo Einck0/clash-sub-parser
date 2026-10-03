@@ -187,6 +187,11 @@ type Service struct {
 	fetcher           fetch.Fetcher
 	probeObsRepo      domain.ProbeObservationRepository
 	auditRepo         domain.AuditRepository
+	payloadRepo       domain.SubscriptionPayloadRepository
+	entryRepo         domain.SubscriptionEntryRepository
+	versionRepo       domain.NodeConnectionVersionRepository
+	overrideRepo      domain.NodeOverrideRepository
+	pubPayloadRefRepo domain.PublicationPayloadRefRepository
 	poolProvider      NodePoolStateProvider
 	defaultFetchProxy string
 	clock             func() time.Time
@@ -198,6 +203,41 @@ type Reconciler = Service
 
 // Option configures Service dependencies.
 type Option func(*Service)
+
+// WithSubscriptionPayloadRepository sets the subscription payload repository.
+func WithSubscriptionPayloadRepository(repo domain.SubscriptionPayloadRepository) Option {
+	return func(s *Service) {
+		s.payloadRepo = repo
+	}
+}
+
+// WithSubscriptionEntryRepository sets the subscription entry repository.
+func WithSubscriptionEntryRepository(repo domain.SubscriptionEntryRepository) Option {
+	return func(s *Service) {
+		s.entryRepo = repo
+	}
+}
+
+// WithNodeConnectionVersionRepository sets the node connection version repository.
+func WithNodeConnectionVersionRepository(repo domain.NodeConnectionVersionRepository) Option {
+	return func(s *Service) {
+		s.versionRepo = repo
+	}
+}
+
+// WithNodeOverrideRepository sets the node override repository.
+func WithNodeOverrideRepository(repo domain.NodeOverrideRepository) Option {
+	return func(s *Service) {
+		s.overrideRepo = repo
+	}
+}
+
+// WithPublicationPayloadRefRepository sets the publication payload ref repository.
+func WithPublicationPayloadRefRepository(repo domain.PublicationPayloadRefRepository) Option {
+	return func(s *Service) {
+		s.pubPayloadRefRepo = repo
+	}
+}
 
 // WithProbeObservationRepository sets the probe observation repository.
 func WithProbeObservationRepository(repo domain.ProbeObservationRepository) Option {
@@ -275,11 +315,36 @@ func NewService(
 	if db != nil {
 		s.auditRepo = sqlite.NewAuditRepository(db)
 		s.probeObsRepo = sqlite.NewProbeObservationRepository(db)
+		s.payloadRepo = sqlite.NewSubscriptionPayloadRepository(db)
+		s.entryRepo = sqlite.NewSubscriptionEntryRepository(db)
+		s.versionRepo = sqlite.NewNodeConnectionVersionRepository(db)
+		s.overrideRepo = sqlite.NewNodeOverrideRepository(db)
+		s.pubPayloadRefRepo = sqlite.NewPublicationPayloadRefRepository(db)
 	}
 	for _, opt := range opts {
 		opt(s)
 	}
 	return s
+}
+
+// EntryRepository returns the entry repository handle.
+func (s *Service) EntryRepository() domain.SubscriptionEntryRepository {
+	return s.entryRepo
+}
+
+// PayloadRepository returns the payload repository handle.
+func (s *Service) PayloadRepository() domain.SubscriptionPayloadRepository {
+	return s.payloadRepo
+}
+
+// VersionRepository returns the version repository handle.
+func (s *Service) VersionRepository() domain.NodeConnectionVersionRepository {
+	return s.versionRepo
+}
+
+// OverrideRepository returns the override repository handle.
+func (s *Service) OverrideRepository() domain.NodeOverrideRepository {
+	return s.overrideRepo
 }
 
 // ReconcileSubscription executes the safe fetch, in-memory parse, and atomic transaction convergence.
@@ -448,6 +513,37 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 			return fmt.Errorf("failed to insert subscription fetch: %w", err)
 		}
 
+		payloadID := "payload_" + domain.MustNewUUIDv7()
+		headersMap := map[string]string{
+			"content_type":  fetchResp.ContentType,
+			"etag":          fetchResp.ETag,
+			"last_modified": fetchResp.LastModified,
+		}
+		headersJSON, _ := json.Marshal(headersMap)
+		httpStatus := fetchResp.StatusCode
+		if httpStatus <= 0 {
+			httpStatus = 200
+		}
+		const insertPayloadSQL = `
+		INSERT INTO subscription_payloads (
+			id, subscription_id, fetch_id, content_digest, body_blob,
+			http_status, headers_json, pinned, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?);`
+		if _, pErr := tx.ExecContext(ctx, insertPayloadSQL,
+			payloadID,
+			sub.ID,
+			fetchID,
+			fetchResp.ContentDigest,
+			fetchResp.Body,
+			httpStatus,
+			string(headersJSON),
+			nowStr,
+		); pErr != nil {
+			if !strings.Contains(pErr.Error(), "no such table") {
+				return fmt.Errorf("failed to insert subscription payload: %w", pErr)
+			}
+		}
+
 		type existingNodeRow struct {
 			logicalID          string
 			protocol           domain.Protocol
@@ -489,6 +585,81 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 		}
 		rows.Close()
 
+		// Load previous user overrides for this subscription
+		type prevOverride struct {
+			kind   domain.EntryKind
+			anchor string
+			reason string
+			at     *time.Time
+			actor  string
+		}
+		prevOverridesByAnchor := make(map[string]prevOverride)
+		prevOverridesByName := make(map[string]prevOverride)
+		ambiguousAnchors := make(map[string]bool)
+
+		overrideRows, oErr := tx.QueryContext(ctx, `
+			SELECT source_key, raw_name, user_kind_override, override_anchor, override_reason, override_at, actor_ref
+			FROM subscription_entries
+			WHERE subscription_id = ? AND user_kind_override IS NOT NULL;
+		`, sub.ID)
+		if oErr == nil {
+			for overrideRows.Next() {
+				var sk, rn, uko, oa, or, ar string
+				var oAt sql.NullString
+				if scanErr := overrideRows.Scan(&sk, &rn, &uko, &oa, &or, &oAt, &ar); scanErr == nil {
+					k := domain.EntryKind(uko)
+					var t *time.Time
+					if oAt.Valid {
+						parsed, _ := time.Parse(time.RFC3339, oAt.String)
+						t = &parsed
+					}
+					po := prevOverride{
+						kind:   k,
+						anchor: oa,
+						reason: or,
+						at:     t,
+						actor:  ar,
+					}
+					if existing, ok := prevOverridesByAnchor[oa]; ok && existing.kind != k {
+						ambiguousAnchors[oa] = true
+					} else {
+						prevOverridesByAnchor[oa] = po
+					}
+					if sk != "" {
+						if existing, ok := prevOverridesByAnchor[sk]; ok && existing.kind != k {
+							ambiguousAnchors[sk] = true
+						} else {
+							prevOverridesByAnchor[sk] = po
+						}
+					}
+					if rn != "" {
+						if existing, ok := prevOverridesByName[rn]; ok && existing.kind != k {
+							ambiguousAnchors[rn] = true
+						} else {
+							prevOverridesByName[rn] = po
+						}
+					}
+				}
+			}
+			overrideRows.Close()
+		}
+
+		// Load field overrides from node_overrides table
+		nodeFieldOverrides := make(map[string]map[string]string)
+		noRows, noErr := tx.QueryContext(ctx, "SELECT node_logical_id, field_path, override_value_json FROM node_overrides;")
+		if noErr == nil {
+			for noRows.Next() {
+				var nid, fp, val string
+				if scanErr := noRows.Scan(&nid, &fp, &val); scanErr == nil {
+					if nodeFieldOverrides[nid] == nil {
+						nodeFieldOverrides[nid] = make(map[string]string)
+					}
+					nodeFieldOverrides[nid][fp] = val
+				}
+			}
+			noRows.Close()
+		}
+
 		incomingByNameProto := make(map[string]int)
 		for _, item := range extractResult.Items {
 			node := item.Normalized.Node
@@ -527,213 +698,421 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 		}
 		defer sourceStmt.Close()
 
+		const upsertVersionSQL = `
+		INSERT INTO node_connection_versions (
+			node_logical_id, connection_revision, effective_config_json,
+			config_fingerprint, source_entry_id, schema_version, created_at
+		) VALUES (?, ?, ?, ?, ?, 1, ?)
+		ON CONFLICT(node_logical_id, connection_revision) DO UPDATE SET
+			effective_config_json = excluded.effective_config_json,
+			config_fingerprint = excluded.config_fingerprint,
+			source_entry_id = COALESCE(node_connection_versions.source_entry_id, excluded.source_entry_id);`
+
+		var versionStmt *sql.Stmt
+		vStmt, vErr := tx.PrepareContext(ctx, upsertVersionSQL)
+		if vErr == nil {
+			versionStmt = vStmt
+			defer versionStmt.Close()
+		}
+
+		const upsertHeadSQL = `
+		INSERT INTO node_connection_heads (logical_id, connection_revision, updated_at)
+		VALUES (?, ?, ?)
+		ON CONFLICT(logical_id) DO UPDATE SET
+			connection_revision = excluded.connection_revision,
+			updated_at = excluded.updated_at;`
+
+		var headStmt *sql.Stmt
+		hStmt, hErr := tx.PrepareContext(ctx, upsertHeadSQL)
+		if hErr == nil {
+			headStmt = hStmt
+			defer headStmt.Close()
+		}
+
+		const insertEntrySQL = `
+		INSERT INTO subscription_entries (
+			id, payload_id, subscription_id, ordinal, source_key, raw_name,
+			protocol, server, port, entry_kind, classification_reason,
+			classification_version, source_provenance_json, user_kind_override,
+			override_anchor, override_reason, override_at, actor_ref,
+			parsed_config_json, parser_version, warnings_json, node_logical_id, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(payload_id, ordinal) DO UPDATE SET
+			source_key = excluded.source_key,
+			raw_name = excluded.raw_name,
+			protocol = excluded.protocol,
+			server = excluded.server,
+			port = excluded.port,
+			entry_kind = excluded.entry_kind,
+			classification_reason = excluded.classification_reason,
+			classification_version = excluded.classification_version,
+			source_provenance_json = excluded.source_provenance_json,
+			user_kind_override = excluded.user_kind_override,
+			override_anchor = excluded.override_anchor,
+			override_reason = excluded.override_reason,
+			override_at = excluded.override_at,
+			actor_ref = excluded.actor_ref,
+			parsed_config_json = excluded.parsed_config_json,
+			warnings_json = excluded.warnings_json,
+			node_logical_id = excluded.node_logical_id;`
+
+		var entryStmt *sql.Stmt
+		eStmt, eErr := tx.PrepareContext(ctx, insertEntrySQL)
+		if eErr == nil {
+			entryStmt = eStmt
+			defer entryStmt.Close()
+		}
+
+		isVerifiedSource := sub.ID == "01a0b9af-c116-7967-bc7f-197aa43a2e49" ||
+			strings.Contains(strings.ToLower(sub.Name), "dogegg") ||
+			strings.Contains(strings.ToLower(sub.SourceURLSecretRef), "dogegg")
+
 		seenLogicalIDs := make(map[string]bool)
-		for _, item := range extractResult.Items {
+		for i, item := range extractResult.Items {
 			node := item.Normalized.Node
 			npKey := node.DisplayName + "|" + string(node.Protocol)
+			ordinal := i
+			entryID := "entry_" + domain.MustNewUUIDv7()
 
-			candidateID := node.LogicalID
-			if candidateID == "" {
-				candidateID = domain.ComputeNodeLogicalID(node.Protocol, node.Server, node.Port, item.Normalized.Transport)
-			}
-			scopedCandidateID := computeScopedLogicalID(sub.ID, candidateID)
+			sourceKey := fmt.Sprintf("%s|%s|%d|%s", node.Protocol, node.Server, node.Port, node.DisplayName)
+			kind, classReason, classVer := domain.ClassifySubscriptionEntry(isVerifiedSource, node.Server, node.Port, node.Credentials, node.DisplayName)
 
-			var targetLogicalID string
-			var currentRevision int64 = 1
-			targetActive := 1
+			var userKindOverride *domain.EntryKind
+			var overrideAnchor, overrideReason, actorRef string
+			var overrideAt *time.Time
+			var conflict string
 
-			// 1. Try to match an existing node already associated with this subscription
-			var matchedNode *existingNodeRow
-			if node.LogicalID != "" {
-				if ex, ok := existingNodes[node.LogicalID]; ok {
-					matchedNode = &ex
-				}
-			}
-
-			existingList := existingByNameProto[npKey]
-			isUniqueInExisting := len(existingList) == 1
-			isUniqueInIncoming := incomingByNameProto[npKey] == 1
-
-			if matchedNode == nil && isUniqueInExisting && isUniqueInIncoming {
-				// Matched by unique (DisplayName, Protocol) within this subscription
-				m := existingList[0]
-				matchedNode = &m
-			}
-
-			if matchedNode == nil {
-				// Matched by scoped candidate ID or base candidate ID in existingNodes
-				if ex, ok := existingNodes[scopedCandidateID]; ok {
-					matchedNode = &ex
-				} else if ex, ok := existingNodes[candidateID]; ok {
-					matchedNode = &ex
-				}
-			}
-
-			if matchedNode != nil {
-				if !matchedNode.active {
-					targetActive = 0 // Preserve user disabled state
-				}
-
-				connEqual := areConnectionParametersEqual(
-					matchedNode.protocol, node.Protocol,
-					matchedNode.server, node.Server,
-					matchedNode.port, node.Port,
-					matchedNode.creds, node.Credentials,
-				)
-
-				if connEqual {
-					targetLogicalID = matchedNode.logicalID
-					currentRevision = matchedNode.connectionRevision
+			if po, ok := prevOverridesByAnchor[sourceKey]; ok {
+				if ambiguousAnchors[sourceKey] {
+					conflict = "ambiguous_anchor_override"
 				} else {
-					// Connection parameters changed!
-					// Check if matchedNode is a legacy shared node (referenced by other subscriptions).
-					var otherOwnersCount int
-					if err := tx.QueryRowContext(ctx, `
-						SELECT COUNT(*) FROM node_sources
-						WHERE node_logical_id = ? AND subscription_id != ?;
-					`, matchedNode.logicalID, sub.ID).Scan(&otherOwnersCount); err != nil {
-						return fmt.Errorf("failed to check node sources count: %w", err)
-					}
+					userKindOverride = &po.kind
+					overrideAnchor = po.anchor
+					overrideReason = po.reason
+					overrideAt = po.at
+					actorRef = po.actor
+				}
+			} else if po, ok := prevOverridesByName[node.DisplayName]; ok {
+				if ambiguousAnchors[node.DisplayName] {
+					conflict = "ambiguous_name_override"
+				} else {
+					userKindOverride = &po.kind
+					overrideAnchor = po.anchor
+					overrideReason = po.reason
+					overrideAt = po.at
+					actorRef = po.actor
+				}
+			}
 
-					if otherOwnersCount > 0 {
-						// Copy-on-write isolation:
-						// Branch to a scoped ID for this subscription so other subscriptions and
-						// existing group_edges pointing to matchedNode.logicalID are conservatively preserved.
-						targetLogicalID = scopedCandidateID
-						currentRevision = matchedNode.connectionRevision + 1
-						// Remove this subscription's association from the old shared node
-						if _, err := tx.ExecContext(ctx, `
-							DELETE FROM node_sources
-							WHERE node_logical_id = ? AND subscription_id = ?;
-						`, matchedNode.logicalID, sub.ID); err != nil {
-							return fmt.Errorf("failed to unlink old shared node source: %w", err)
-						}
-					} else {
-						// Single owner within this subscription: update in-place
-						targetLogicalID = matchedNode.logicalID
-						currentRevision = matchedNode.connectionRevision + 1
+			effectiveKind := kind
+			if userKindOverride != nil && userKindOverride.IsValid() {
+				effectiveKind = *userKindOverride
+			}
+
+			parsedConfigMap := map[string]any{
+				"protocol":    node.Protocol,
+				"server":      node.Server,
+				"port":        node.Port,
+				"credentials": node.Credentials,
+			}
+			parsedConfigBytes, _ := json.Marshal(parsedConfigMap)
+			parsedConfigJSON := string(parsedConfigBytes)
+
+			var targetLogicalIDPtr *string
+
+			if effectiveKind == domain.EntryKindNotice {
+				// Notices do NOT enter active proxy inventory!
+				var matchedNoticeNode *existingNodeRow
+				if node.LogicalID != "" {
+					if ex, ok := existingNodes[node.LogicalID]; ok {
+						matchedNoticeNode = &ex
 					}
+				}
+				if matchedNoticeNode == nil && len(existingByNameProto[npKey]) == 1 {
+					m := existingByNameProto[npKey][0]
+					matchedNoticeNode = &m
+				}
+				if matchedNoticeNode != nil {
+					// Notice pseudo-node linked for provenance; do NOT mutate nodes.active (lifecycle separated from classification)
+					targetLogicalIDPtr = &matchedNoticeNode.logicalID
 				}
 			} else {
-				// Not matched to any existing node in this subscription.
-				// Check if candidateID already exists in global nodes table (owned by another sub or manual).
-				var existingActive int
-				var existingRev int64
-				var existingConfig string
-				var existingProto string
-				var existingServer string
-				var existingPort int
+				// Proxy or Unknown: normal inventory ingestion
+				candidateID := node.LogicalID
+				if candidateID == "" {
+					candidateID = domain.ComputeNodeLogicalID(node.Protocol, node.Server, node.Port, item.Normalized.Transport)
+				}
+				scopedCandidateID := computeScopedLogicalID(sub.ID, candidateID)
 
-				checkErr := tx.QueryRowContext(ctx, `
-					SELECT n.active, n.connection_revision, n.config_json, n.protocol, n.server, n.port
-					FROM nodes n WHERE n.logical_id = ?;
-				`, candidateID).Scan(&existingActive, &existingRev, &existingConfig, &existingProto, &existingServer, &existingPort)
+				var targetLogicalID string
+				var currentRevision int64 = 1
+				targetActive := 1
 
-				if checkErr == sql.ErrNoRows {
-					// ID does not exist anywhere. Safe to use candidateID.
-					targetLogicalID = candidateID
-					currentRevision = 1
-					targetActive = 1
-				} else if checkErr == nil {
-					// candidateID exists in nodes table. Check its provenance in node_sources.
-					var sameSubCount int
-					var otherSubCount int
-					_ = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM node_sources WHERE node_logical_id = ? AND subscription_id = ?;`, candidateID, sub.ID).Scan(&sameSubCount)
-					_ = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM node_sources WHERE node_logical_id = ? AND subscription_id != ?;`, candidateID, sub.ID).Scan(&otherSubCount)
+				// 1. Try to match an existing node already associated with this subscription
+				var matchedNode *existingNodeRow
+				if node.LogicalID != "" {
+					if ex, ok := existingNodes[node.LogicalID]; ok {
+						matchedNode = &ex
+					}
+				}
 
-					if sameSubCount > 0 {
-						// Already associated with this subscription in this or earlier batch (e.g. duplicate in same sub)
-						targetLogicalID = candidateID
-						currentRevision = existingRev
-						if existingActive == 0 {
-							targetActive = 0
+				existingList := existingByNameProto[npKey]
+				isUniqueInExisting := len(existingList) == 1
+				isUniqueInIncoming := incomingByNameProto[npKey] == 1
+
+				if matchedNode == nil && isUniqueInExisting && isUniqueInIncoming {
+					m := existingList[0]
+					matchedNode = &m
+				}
+
+				if matchedNode == nil {
+					if ex, ok := existingNodes[scopedCandidateID]; ok {
+						matchedNode = &ex
+					} else if ex, ok := existingNodes[candidateID]; ok {
+						matchedNode = &ex
+					}
+				}
+
+				if matchedNode != nil {
+					targetLogicalID = matchedNode.logicalID
+					if !matchedNode.active {
+						targetActive = 0 // Preserve user disabled state
+					}
+
+					// Apply field overrides from node_overrides if present
+					if fieldOverrides, ok := nodeFieldOverrides[targetLogicalID]; ok {
+						for fp, val := range fieldOverrides {
+							applyFieldOverride(&node, fp, val)
 						}
-					} else if otherSubCount == 0 {
-						// MANUAL NODE (no subscription sources): Must NEVER be overwritten by incoming subscription!
-						targetLogicalID = scopedCandidateID
+					}
+
+					connEqual := areConnectionParametersEqual(
+						matchedNode.protocol, node.Protocol,
+						matchedNode.server, node.Server,
+						matchedNode.port, node.Port,
+						matchedNode.creds, node.Credentials,
+					)
+
+					if connEqual {
+						currentRevision = matchedNode.connectionRevision
+						if versionStmt != nil {
+							effJSONBytes, _ := json.Marshal(map[string]any{
+								"server":      node.Server,
+								"port":        node.Port,
+								"credentials": node.Credentials,
+							})
+							fp := domain.ComputeConnectionFingerprint(node.Server, node.Port, node.Credentials)
+							_, _ = versionStmt.ExecContext(ctx, targetLogicalID, currentRevision, string(effJSONBytes), fp, entryID, nowStr)
+						}
 					} else {
-						// Belongs to other subscription(s). Check if credentials are identical.
-						var exCreds domain.InboundProtocolCredential
-						_ = json.Unmarshal([]byte(existingConfig), &exCreds)
-						if areConnectionParametersEqual(domain.Protocol(existingProto), node.Protocol, existingServer, node.Server, existingPort, node.Port, exCreds, node.Credentials) {
-							// Identical connection credentials: safe to share legacy reference
+						// Connection parameters changed!
+						var otherOwnersCount int
+						if err := tx.QueryRowContext(ctx, `
+							SELECT COUNT(*) FROM node_sources
+							WHERE node_logical_id = ? AND subscription_id != ?;
+						`, matchedNode.logicalID, sub.ID).Scan(&otherOwnersCount); err != nil {
+							return fmt.Errorf("failed to check node sources count: %w", err)
+						}
+
+						if otherOwnersCount > 0 {
+							// Copy-on-write isolation
+							targetLogicalID = scopedCandidateID
+							currentRevision = matchedNode.connectionRevision + 1
+							if _, err := tx.ExecContext(ctx, `
+								DELETE FROM node_sources
+								WHERE node_logical_id = ? AND subscription_id = ?;
+							`, matchedNode.logicalID, sub.ID); err != nil {
+								return fmt.Errorf("failed to unlink old shared node source: %w", err)
+							}
+						} else {
+							targetLogicalID = matchedNode.logicalID
+							currentRevision = matchedNode.connectionRevision + 1
+						}
+
+						// Insert new version & update head
+						if versionStmt != nil && headStmt != nil {
+							effJSONBytes, _ := json.Marshal(map[string]any{
+								"server":      node.Server,
+								"port":        node.Port,
+								"credentials": node.Credentials,
+							})
+							fp := domain.ComputeConnectionFingerprint(node.Server, node.Port, node.Credentials)
+							_, _ = versionStmt.ExecContext(ctx, targetLogicalID, currentRevision, string(effJSONBytes), fp, entryID, nowStr)
+							_, _ = headStmt.ExecContext(ctx, targetLogicalID, currentRevision, nowStr)
+						}
+					}
+				} else {
+					// Not matched to any existing node in this subscription.
+					var existingActive int
+					var existingRev int64
+					var existingConfig string
+					var existingProto string
+					var existingServer string
+					var existingPort int
+
+					checkErr := tx.QueryRowContext(ctx, `
+						SELECT n.active, n.connection_revision, n.config_json, n.protocol, n.server, n.port
+						FROM nodes n WHERE n.logical_id = ?;
+					`, candidateID).Scan(&existingActive, &existingRev, &existingConfig, &existingProto, &existingServer, &existingPort)
+
+					if checkErr == sql.ErrNoRows {
+						targetLogicalID = candidateID
+						currentRevision = 1
+						targetActive = 1
+					} else if checkErr == nil {
+						var sameSubCount int
+						var otherSubCount int
+						_ = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM node_sources WHERE node_logical_id = ? AND subscription_id = ?;`, candidateID, sub.ID).Scan(&sameSubCount)
+						_ = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM node_sources WHERE node_logical_id = ? AND subscription_id != ?;`, candidateID, sub.ID).Scan(&otherSubCount)
+
+						if sameSubCount > 0 {
 							targetLogicalID = candidateID
 							currentRevision = existingRev
 							if existingActive == 0 {
 								targetActive = 0
 							}
-						} else {
-							// Credential conflict across sources: isolate using scoped logical ID!
+						} else if otherSubCount == 0 {
 							targetLogicalID = scopedCandidateID
-						}
-					}
-
-					// If targetLogicalID was redirected to scopedCandidateID, check if scopedCandidateID already exists
-					if targetLogicalID == scopedCandidateID {
-						var scActive int
-						var scRev int64
-						var scConfig string
-						var scProto string
-						var scServer string
-						var scPort int
-						scErr := tx.QueryRowContext(ctx, `
-							SELECT n.active, n.connection_revision, n.config_json, n.protocol, n.server, n.port
-							FROM nodes n WHERE n.logical_id = ?;
-						`, scopedCandidateID).Scan(&scActive, &scRev, &scConfig, &scProto, &scServer, &scPort)
-						if scErr == nil {
-							if scActive == 0 {
-								targetActive = 0
-							}
-							var scCreds domain.InboundProtocolCredential
-							_ = json.Unmarshal([]byte(scConfig), &scCreds)
-							if areConnectionParametersEqual(domain.Protocol(scProto), node.Protocol, scServer, node.Server, scPort, node.Port, scCreds, node.Credentials) {
-								currentRevision = scRev
-							} else {
-								currentRevision = scRev + 1
-							}
 						} else {
-							currentRevision = 1
-							targetActive = 1
+							var exCreds domain.InboundProtocolCredential
+							_ = json.Unmarshal([]byte(existingConfig), &exCreds)
+							if areConnectionParametersEqual(domain.Protocol(existingProto), node.Protocol, existingServer, node.Server, existingPort, node.Port, exCreds, node.Credentials) {
+								targetLogicalID = candidateID
+								currentRevision = existingRev
+								if existingActive == 0 {
+									targetActive = 0
+								}
+							} else {
+								targetLogicalID = scopedCandidateID
+							}
 						}
+
+						if targetLogicalID == scopedCandidateID {
+							var scActive int
+							var scRev int64
+							var scConfig string
+							var scProto string
+							var scServer string
+							var scPort int
+							scErr := tx.QueryRowContext(ctx, `
+								SELECT n.active, n.connection_revision, n.config_json, n.protocol, n.server, n.port
+								FROM nodes n WHERE n.logical_id = ?;
+							`, scopedCandidateID).Scan(&scActive, &scRev, &scConfig, &scProto, &scServer, &scPort)
+							if scErr == nil {
+								if scActive == 0 {
+									targetActive = 0
+								}
+								var scCreds domain.InboundProtocolCredential
+								_ = json.Unmarshal([]byte(scConfig), &scCreds)
+								if areConnectionParametersEqual(domain.Protocol(scProto), node.Protocol, scServer, node.Server, scPort, node.Port, scCreds, node.Credentials) {
+									currentRevision = scRev
+								} else {
+									currentRevision = scRev + 1
+								}
+							} else {
+								currentRevision = 1
+								targetActive = 1
+							}
+						}
+					} else {
+						return fmt.Errorf("failed to query node %s: %w", candidateID, checkErr)
 					}
-				} else {
-					return fmt.Errorf("failed to query node %s: %w", candidateID, checkErr)
+
+					// New node initial version & head
+					if versionStmt != nil && headStmt != nil {
+						effJSONBytes, _ := json.Marshal(map[string]any{
+							"server":      node.Server,
+							"port":        node.Port,
+							"credentials": node.Credentials,
+						})
+						fp := domain.ComputeConnectionFingerprint(node.Server, node.Port, node.Credentials)
+						_, _ = versionStmt.ExecContext(ctx, targetLogicalID, currentRevision, string(effJSONBytes), fp, entryID, nowStr)
+						_, _ = headStmt.ExecContext(ctx, targetLogicalID, currentRevision, nowStr)
+					}
 				}
-			}
 
-			rawCreds, mErr := json.Marshal(node.Credentials)
-			if mErr != nil {
-				return fmt.Errorf("failed to marshal credentials for node %s: %w", targetLogicalID, mErr)
-			}
-			configJSON := string(rawCreds)
-			if configJSON == "" {
-				configJSON = "{}"
-			}
+				rawCreds, mErr := json.Marshal(node.Credentials)
+				if mErr != nil {
+					return fmt.Errorf("failed to marshal credentials for node %s: %w", targetLogicalID, mErr)
+				}
+				configJSON := string(rawCreds)
+				if configJSON == "" {
+					configJSON = "{}"
+				}
 
-			if _, err := nodeStmt.ExecContext(ctx,
-				targetLogicalID,
-				string(node.Protocol),
-				node.DisplayName,
-				node.Server,
-				node.Port,
-				configJSON,
-				targetActive,
-				nowStr,
-				nowStr,
-				currentRevision,
-			); err != nil {
-				return fmt.Errorf("failed to upsert node %s: %w", targetLogicalID, err)
-			}
-
-			if !seenLogicalIDs[targetLogicalID] {
-				seenLogicalIDs[targetLogicalID] = true
-				if _, err := sourceStmt.ExecContext(ctx,
+				if _, err := nodeStmt.ExecContext(ctx,
 					targetLogicalID,
-					sub.ID,
-					fetchID,
+					string(node.Protocol),
+					node.DisplayName,
+					node.Server,
+					node.Port,
+					configJSON,
+					targetActive,
+					nowStr,
+					nowStr,
+					currentRevision,
 				); err != nil {
-					return fmt.Errorf("failed to upsert node source for node %s: %w", targetLogicalID, err)
+					return fmt.Errorf("failed to upsert node %s: %w", targetLogicalID, err)
 				}
+
+				if !seenLogicalIDs[targetLogicalID] {
+					seenLogicalIDs[targetLogicalID] = true
+					if _, err := sourceStmt.ExecContext(ctx,
+						targetLogicalID,
+						sub.ID,
+						fetchID,
+					); err != nil {
+						return fmt.Errorf("failed to upsert node source for node %s: %w", targetLogicalID, err)
+					}
+				}
+
+				targetLogicalIDPtr = &targetLogicalID
+			}
+
+			if entryStmt != nil {
+				var userOverrideVal sql.NullString
+				if userKindOverride != nil {
+					userOverrideVal = sql.NullString{String: string(*userKindOverride), Valid: true}
+				}
+				var overrideAtVal sql.NullString
+				if overrideAt != nil {
+					overrideAtVal = sql.NullString{String: overrideAt.Format(time.RFC3339), Valid: true}
+				}
+				var targetLogicalIDVal sql.NullString
+				if targetLogicalIDPtr != nil && *targetLogicalIDPtr != "" {
+					targetLogicalIDVal = sql.NullString{String: *targetLogicalIDPtr, Valid: true}
+				}
+
+				warningsJSON := "[]"
+				if conflict != "" {
+					warningsJSON = fmt.Sprintf("[%q]", conflict)
+				}
+
+				_, _ = entryStmt.ExecContext(ctx,
+					entryID,
+					payloadID,
+					sub.ID,
+					ordinal,
+					sourceKey,
+					node.DisplayName,
+					string(node.Protocol),
+					node.Server,
+					node.Port,
+					string(kind),
+					classReason,
+					classVer,
+					"{}",
+					userOverrideVal,
+					overrideAnchor,
+					overrideReason,
+					overrideAtVal,
+					actorRef,
+					parsedConfigJSON,
+					"1.0.0",
+					warningsJSON,
+					targetLogicalIDVal,
+					nowStr,
+				)
 			}
 		}
 
@@ -1216,6 +1595,100 @@ func (s *Service) UpdateNodeConnection(ctx context.Context, cmd UpdateNodeConnec
 	updated.Credentials = updatedCreds
 	updated.UpdatedAt = domain.NowUTC()
 
+	connEqual := areConnectionParametersEqual(
+		node.Protocol, updated.Protocol,
+		node.Server, updated.Server,
+		node.Port, updated.Port,
+		node.Credentials, updated.Credentials,
+	)
+
+	nowStr := domain.NowUTC().Format(time.RFC3339)
+
+	if !connEqual {
+		var currentRev int64 = 1
+		if s.db != nil {
+			_ = s.db.QueryRowContext(ctx, "SELECT connection_revision FROM node_connection_heads WHERE logical_id = ?;", logicalID).Scan(&currentRev)
+			if currentRev <= 0 {
+				currentRev = node.ConnectionRevision
+				if currentRev <= 0 {
+					currentRev = 1
+				}
+			}
+			newRev := currentRev + 1
+			updated.ConnectionRevision = newRev
+
+			rawCreds, _ := json.Marshal(updatedCreds)
+			configJSON := string(rawCreds)
+			effectiveJSONBytes, _ := json.Marshal(map[string]any{
+				"server":      updated.Server,
+				"port":        updated.Port,
+				"credentials": updatedCreds,
+			})
+			effectiveJSON := string(effectiveJSONBytes)
+			fp := domain.ComputeConnectionFingerprint(updated.Server, updated.Port, updatedCreds)
+
+			_ = sqlite.WithTx(ctx, s.db, func(ctx context.Context, tx *sql.Tx) error {
+				if cmd.Patch.Server != nil {
+					sBytes, _ := json.Marshal(*cmd.Patch.Server)
+					_, _ = tx.ExecContext(ctx, `
+						INSERT INTO node_overrides (node_logical_id, field_path, override_value_json, created_at, updated_at)
+						VALUES (?, 'server', ?, ?, ?)
+						ON CONFLICT(node_logical_id, field_path) DO UPDATE SET override_value_json = excluded.override_value_json, updated_at = excluded.updated_at;
+					`, logicalID, string(sBytes), nowStr, nowStr)
+				}
+				if cmd.Patch.Port != nil {
+					pBytes, _ := json.Marshal(*cmd.Patch.Port)
+					_, _ = tx.ExecContext(ctx, `
+						INSERT INTO node_overrides (node_logical_id, field_path, override_value_json, created_at, updated_at)
+						VALUES (?, 'port', ?, ?, ?)
+						ON CONFLICT(node_logical_id, field_path) DO UPDATE SET override_value_json = excluded.override_value_json, updated_at = excluded.updated_at;
+					`, logicalID, string(pBytes), nowStr, nowStr)
+				}
+				if cmd.Patch.SNI != nil {
+					sniBytes, _ := json.Marshal(*cmd.Patch.SNI)
+					_, _ = tx.ExecContext(ctx, `
+						INSERT INTO node_overrides (node_logical_id, field_path, override_value_json, created_at, updated_at)
+						VALUES (?, 'sni', ?, ?, ?)
+						ON CONFLICT(node_logical_id, field_path) DO UPDATE SET override_value_json = excluded.override_value_json, updated_at = excluded.updated_at;
+					`, logicalID, string(sniBytes), nowStr, nowStr)
+				}
+
+				_, _ = tx.ExecContext(ctx, `
+					INSERT INTO node_connection_versions (node_logical_id, connection_revision, effective_config_json, config_fingerprint, schema_version, created_at)
+					VALUES (?, ?, ?, ?, 1, ?)
+					ON CONFLICT(node_logical_id, connection_revision) DO UPDATE SET
+						effective_config_json = excluded.effective_config_json,
+						config_fingerprint = excluded.config_fingerprint;
+				`, logicalID, newRev, effectiveJSON, fp, nowStr)
+
+				_, _ = tx.ExecContext(ctx, `
+					INSERT INTO node_connection_heads (logical_id, connection_revision, updated_at)
+					VALUES (?, ?, ?)
+					ON CONFLICT(logical_id) DO UPDATE SET
+						connection_revision = excluded.connection_revision,
+						updated_at = excluded.updated_at;
+				`, logicalID, newRev, nowStr)
+
+				_, _ = tx.ExecContext(ctx, `
+					UPDATE nodes SET
+						display_name = ?,
+						server = ?,
+						port = ?,
+						config_json = ?,
+						updated_at = ?,
+						connection_revision = ?
+					WHERE logical_id = ?;
+				`, updated.DisplayName, updated.Server, updated.Port, configJSON, nowStr, newRev, logicalID)
+
+				return nil
+			})
+		} else {
+			updated.ConnectionRevision = node.ConnectionRevision + 1
+		}
+	} else {
+		updated.ConnectionRevision = node.ConnectionRevision
+	}
+
 	upsertErr := s.nodes.UpsertBatch(ctx, []domain.Node{updated})
 	s.mu.Unlock()
 
@@ -1229,6 +1702,82 @@ func (s *Service) UpdateNodeConnection(ctx context.Context, cmd UpdateNodeConnec
 		fmt.Sprintf("updated node %s plaintext connection", logicalID))
 
 	return s.GetNodeDetailWithRisk(ctx, logicalID, "")
+}
+
+func applyFieldOverride(node *domain.Node, fieldPath, valJSON string) {
+	switch strings.ToLower(fieldPath) {
+	case "server":
+		var s string
+		if json.Unmarshal([]byte(valJSON), &s) == nil && s != "" {
+			node.Server = s
+		}
+	case "port":
+		var p int
+		if json.Unmarshal([]byte(valJSON), &p) == nil && p > 0 {
+			node.Port = p
+		}
+	case "sni":
+		var s string
+		if json.Unmarshal([]byte(valJSON), &s) == nil {
+			node.Credentials.SNI = s
+		}
+	case "password":
+		var s string
+		if json.Unmarshal([]byte(valJSON), &s) == nil {
+			node.Credentials.Password = s
+		}
+	case "uuid":
+		var s string
+		if json.Unmarshal([]byte(valJSON), &s) == nil {
+			node.Credentials.UUID = s
+		}
+	}
+}
+
+// ListLatestEntries returns entries from the latest successful payload for a subscription.
+func (s *Service) ListLatestEntries(ctx context.Context, subscriptionID string) ([]domain.SubscriptionEntry, error) {
+	if s.entryRepo != nil {
+		return s.entryRepo.ListLatestBySubscription(ctx, subscriptionID)
+	}
+	if s.db != nil {
+		repo := sqlite.NewSubscriptionEntryRepository(s.db)
+		return repo.ListLatestBySubscription(ctx, subscriptionID)
+	}
+	return nil, nil
+}
+
+// OverrideEntryKind sets or clears a user kind override on an entry.
+func (s *Service) OverrideEntryKind(ctx context.Context, entryID string, userKindOverride *domain.EntryKind, reason, actorRef string) (*domain.SubscriptionEntry, error) {
+	var repo domain.SubscriptionEntryRepository
+	if s.entryRepo != nil {
+		repo = s.entryRepo
+	} else if s.db != nil {
+		repo = sqlite.NewSubscriptionEntryRepository(s.db)
+	}
+	if repo == nil {
+		return nil, domain.NewInternalError("entries_unavailable", "entry repository is not configured")
+	}
+
+	entry, err := repo.GetByID(ctx, entryID)
+	if err != nil {
+		return nil, err
+	}
+
+	anchor := entry.SourceKey
+	if anchor == "" {
+		anchor = fmt.Sprintf("%s|%s|%d|%s", entry.Protocol, entry.Server, entry.Port, entry.RawName)
+	}
+	now := domain.NowUTC()
+	if err := repo.SetUserOverride(ctx, entryID, userKindOverride, anchor, reason, actorRef, now); err != nil {
+		return nil, err
+	}
+
+	updatedEntry, err := repo.GetByID(ctx, entryID)
+	if err != nil {
+		return nil, err
+	}
+
+	return updatedEntry, nil
 }
 
 func (s *Service) recordAudit(ctx context.Context, actorKind domain.ActorKind, requestID, action string, result domain.AuditResult, summary string) {

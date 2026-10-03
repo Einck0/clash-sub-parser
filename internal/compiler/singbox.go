@@ -54,6 +54,14 @@ func renderSingBox(snapshot *resolver.ResolvedPolicySnapshot) ([]byte, error) {
 
 	for i, node := range snapshot.Nodes {
 		loc := fmt.Sprintf("nodes[%d]", i)
+		if node.Credentials.Transport != nil && strings.ToLower(node.Credentials.Transport["network"]) == "xhttp" {
+			return nil, &CapabilityError{
+				Target:   domain.TargetSingBox,
+				Location: fmt.Sprintf("nodes[%d].transport.network", i),
+				Feature:  "xhttp",
+				Reason:   "sing-box does not support xhttp transport protocol",
+			}
+		}
 		if err := validateCredentialEnvelope(domain.TargetSingBox, i, node); err != nil {
 			return nil, err
 		}

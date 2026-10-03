@@ -46,9 +46,16 @@ func unmarshalNodeCredentials(configJSON string) (domain.InboundProtocolCredenti
 
 func (r *nodeRepository) GetByLogicalID(ctx context.Context, logicalID string) (*domain.Node, error) {
 	const query = `
-	SELECT logical_id, protocol, display_name, server, port, config_json, active, created_at, updated_at, connection_revision
-	FROM nodes
-	WHERE logical_id = ?;`
+	SELECT n.logical_id, n.protocol, n.display_name,
+	       COALESCE(json_extract(v.effective_config_json, '$.server'), n.server),
+	       COALESCE(json_extract(v.effective_config_json, '$.port'), n.port),
+	       COALESCE(json_extract(v.effective_config_json, '$.credentials'), v.effective_config_json, n.config_json),
+	       n.active, n.created_at, n.updated_at,
+	       COALESCE(h.connection_revision, n.connection_revision)
+	FROM nodes n
+	LEFT JOIN node_connection_heads h ON n.logical_id = h.logical_id
+	LEFT JOIN node_connection_versions v ON h.logical_id = v.node_logical_id AND h.connection_revision = v.connection_revision
+	WHERE n.logical_id = ?;`
 
 	var node domain.Node
 	var configJSON string
@@ -91,7 +98,15 @@ func (r *nodeRepository) List(ctx context.Context, filter domain.NodeFilter) ([]
 	args := make([]interface{}, 0)
 
 	if filter.ActiveOnly {
-		whereClauses = append(whereClauses, "active = 1")
+		whereClauses = append(whereClauses, "n.active = 1")
+	}
+	if len(filter.LogicalIDs) > 0 {
+		placeholders := make([]string, len(filter.LogicalIDs))
+		for i, id := range filter.LogicalIDs {
+			placeholders[i] = "?"
+			args = append(args, id)
+		}
+		whereClauses = append(whereClauses, fmt.Sprintf("n.logical_id IN (%s)", strings.Join(placeholders, ",")))
 	}
 	if len(filter.Protocols) > 0 {
 		placeholders := make([]string, len(filter.Protocols))
@@ -99,11 +114,27 @@ func (r *nodeRepository) List(ctx context.Context, filter domain.NodeFilter) ([]
 			placeholders[i] = "?"
 			args = append(args, string(p))
 		}
-		whereClauses = append(whereClauses, fmt.Sprintf("protocol IN (%s)", strings.Join(placeholders, ",")))
+		whereClauses = append(whereClauses, fmt.Sprintf("n.protocol IN (%s)", strings.Join(placeholders, ",")))
 	}
 	if filter.SearchText != "" {
-		whereClauses = append(whereClauses, "display_name LIKE ?")
+		whereClauses = append(whereClauses, "n.display_name LIKE ?")
 		args = append(args, "%"+filter.SearchText+"%")
+	}
+	if filter.ExcludeNotices {
+		var tableExists int
+		_ = r.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='subscription_entries';").Scan(&tableExists)
+		if tableExists > 0 {
+			whereClauses = append(whereClauses, `n.logical_id NOT IN (
+				SELECT se1.node_logical_id FROM subscription_entries se1
+				WHERE se1.node_logical_id IS NOT NULL
+				  AND COALESCE(se1.user_kind_override, se1.entry_kind) = 'notice'
+				  AND NOT EXISTS (
+				      SELECT 1 FROM subscription_entries se2
+				      WHERE se2.node_logical_id = se1.node_logical_id
+				        AND se2.user_kind_override = 'proxy'
+				  )
+			)`)
+		}
 	}
 
 	whereSQL := ""
@@ -111,7 +142,8 @@ func (r *nodeRepository) List(ctx context.Context, filter domain.NodeFilter) ([]
 		whereSQL = "WHERE " + strings.Join(whereClauses, " AND ")
 	}
 
-	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM nodes %s;", whereSQL)
+	countWhereSQL := strings.ReplaceAll(whereSQL, "n.", "")
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM nodes %s;", countWhereSQL)
 	var total int
 	if err := r.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("failed to count nodes: %w", err)
@@ -131,18 +163,25 @@ func (r *nodeRepository) List(ctx context.Context, filter domain.NodeFilter) ([]
 	}
 	offset := (page - 1) * pageSize
 
-	orderBy := "created_at DESC"
+	orderBy := "n.created_at DESC"
 	if filter.SortBy == "display_name" {
 		order := "ASC"
 		if strings.ToUpper(filter.SortOrder) == "DESC" {
 			order = "DESC"
 		}
-		orderBy = fmt.Sprintf("display_name %s", order)
+		orderBy = fmt.Sprintf("n.display_name %s", order)
 	}
 
 	selectQuery := fmt.Sprintf(`
-	SELECT logical_id, protocol, display_name, server, port, config_json, active, created_at, updated_at, connection_revision
-	FROM nodes
+	SELECT n.logical_id, n.protocol, n.display_name,
+	       COALESCE(json_extract(v.effective_config_json, '$.server'), n.server),
+	       COALESCE(json_extract(v.effective_config_json, '$.port'), n.port),
+	       COALESCE(json_extract(v.effective_config_json, '$.credentials'), v.effective_config_json, n.config_json),
+	       n.active, n.created_at, n.updated_at,
+	       COALESCE(h.connection_revision, n.connection_revision)
+	FROM nodes n
+	LEFT JOIN node_connection_heads h ON n.logical_id = h.logical_id
+	LEFT JOIN node_connection_versions v ON h.logical_id = v.node_logical_id AND h.connection_revision = v.connection_revision
 	%s
 	ORDER BY %s
 	LIMIT ? OFFSET ?;`, whereSQL, orderBy)
@@ -260,6 +299,27 @@ func (r *nodeRepository) UpsertBatch(ctx context.Context, nodes []domain.Node) e
 			if err != nil {
 				return fmt.Errorf("failed to upsert node %s: %w", node.LogicalID, err)
 			}
+
+			// Maintain node_connection_versions and node_connection_heads
+			var curRev int64
+			var curServer string
+			var curPort int
+			var curConfig string
+			if qErr := tx.QueryRowContext(ctx, "SELECT connection_revision, server, port, config_json FROM nodes WHERE logical_id = ?;", node.LogicalID).Scan(&curRev, &curServer, &curPort, &curConfig); qErr == nil {
+				effJSON := fmt.Sprintf(`{"server":%q,"port":%d,"credentials":%s}`, curServer, curPort, curConfig)
+				fp := domain.ComputeConnectionFingerprint(curServer, curPort, node.Credentials)
+				_, _ = tx.ExecContext(ctx, `
+					INSERT OR IGNORE INTO node_connection_versions (node_logical_id, connection_revision, effective_config_json, config_fingerprint, schema_version, created_at)
+					VALUES (?, ?, ?, ?, 1, ?);
+				`, node.LogicalID, curRev, effJSON, fp, updatedStr)
+				_, _ = tx.ExecContext(ctx, `
+					INSERT INTO node_connection_heads (logical_id, connection_revision, updated_at)
+					VALUES (?, ?, ?)
+					ON CONFLICT(logical_id) DO UPDATE SET
+						connection_revision = excluded.connection_revision,
+						updated_at = excluded.updated_at;
+				`, node.LogicalID, curRev, updatedStr)
+			}
 		}
 		return nil
 	})
@@ -308,6 +368,22 @@ func UpdateNode(ctx context.Context, db *sql.DB, node *domain.Node) error {
 		return fmt.Errorf("failed to update node %s: %w", node.LogicalID, err)
 	}
 	node.UpdatedAt = updatedAt.UTC()
+
+	// Maintain node_connection_versions and node_connection_heads
+	effJSON := fmt.Sprintf(`{"server":%q,"port":%d,"credentials":%s}`, node.Server, node.Port, configJSON)
+	fp := domain.ComputeConnectionFingerprint(node.Server, node.Port, node.Credentials)
+	_, _ = db.ExecContext(ctx, `
+		INSERT OR IGNORE INTO node_connection_versions (node_logical_id, connection_revision, effective_config_json, config_fingerprint, schema_version, created_at)
+		VALUES (?, ?, ?, ?, 1, ?);
+	`, node.LogicalID, node.ConnectionRevision, effJSON, fp, updatedStr)
+	_, _ = db.ExecContext(ctx, `
+		INSERT INTO node_connection_heads (logical_id, connection_revision, updated_at)
+		VALUES (?, ?, ?)
+		ON CONFLICT(logical_id) DO UPDATE SET
+			connection_revision = excluded.connection_revision,
+			updated_at = excluded.updated_at;
+	`, node.LogicalID, node.ConnectionRevision, updatedStr)
+
 	return nil
 }
 

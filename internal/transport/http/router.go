@@ -103,7 +103,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		api.Use(CSRFMiddleware(cfg))
 
 		if cfg.SubscriptionService != nil {
-			registerSubscriptionRoutes(api, cfg.SubscriptionService)
+			registerSubscriptionRoutes(api, cfg.SubscriptionService, cfg.InventoryService)
 		}
 		if cfg.InventoryService != nil {
 			registerNodeRoutes(api, cfg.InventoryService)

@@ -243,6 +243,7 @@ type IPRiskObservation struct {
 	AnonymizerTraits      []AnonymizerTrait `json:"anonymizer_traits,omitempty"`
 	EvidenceDigest        string            `json:"evidence_digest"`
 	RedactedSummary       string            `json:"redacted_summary,omitempty"`
+	ProbeObservationID    *string           `json:"probe_observation_id,omitempty"`
 }
 
 // Validate enforces the safe persistence contract for an observation.
@@ -304,6 +305,7 @@ type RiskPolicy struct {
 	UnknownAction     RiskAction            `json:"unknown_action,omitempty"`
 	ConflictAction    RiskAction            `json:"conflict_action,omitempty"`
 	ReviewAction      RiskAction            `json:"review_action,omitempty"`
+	RulesDigest       string                `json:"rules_digest,omitempty"`
 }
 
 // EffectiveUnknownAction preserves the safe default when older policy data omits it.

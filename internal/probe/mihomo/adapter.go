@@ -1,16 +1,44 @@
 package mihomo
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/netip"
+	"runtime/debug"
 	"strconv"
 	"strings"
+	"sync"
 
 	"clash-sub-parser/internal/domain"
 	"github.com/metacubex/mihomo/adapter"
 	_ "github.com/metacubex/mihomo/config" // init() sets dns.ParseNameServer, required by ParseProxy
 	"github.com/metacubex/mihomo/constant"
 )
+
+var (
+	coreVersionOnce sync.Once
+	coreVersionStr  string
+)
+
+// CoreVersion returns the runtime dependency version of Mihomo, e.g. "mihomo/v1.19.32",
+// or "" if unknown.
+func CoreVersion() string {
+	coreVersionOnce.Do(func() {
+		bi, ok := debug.ReadBuildInfo()
+		if !ok {
+			return
+		}
+		for _, dep := range bi.Deps {
+			if dep.Path == "github.com/metacubex/mihomo" {
+				if dep.Version != "" && dep.Version != "(devel)" {
+					coreVersionStr = "mihomo/" + dep.Version
+				}
+				return
+			}
+		}
+	})
+	return coreVersionStr
+}
 
 // NodeToMapping converts a domain.Node into a configuration map suitable for Mihomo adapter.ParseProxy.
 func NodeToMapping(node domain.Node) (map[string]any, error) {
@@ -143,6 +171,24 @@ func NodeToMapping(node domain.Node) (map[string]any, error) {
 			if svc := transportValue(c, "service_name", "serviceName", "grpc-service-name"); svc != "" {
 				m["grpc-opts"] = map[string]any{"grpc-service-name": svc}
 			}
+		} else if net == "xhttp" {
+			xhttpOpts := map[string]any{}
+			if path := transportValue(c, "path"); path != "" {
+				xhttpOpts["path"] = path
+			}
+			if host := transportValue(c, "host"); host != "" {
+				xhttpOpts["host"] = host
+			}
+			if mode := transportValue(c, "mode"); mode != "" {
+				xhttpOpts["mode"] = mode
+			}
+			if hJSON := transportValue(c, "headers"); hJSON != "" {
+				var headers map[string]string
+				if err := json.Unmarshal([]byte(hJSON), &headers); err == nil && len(headers) > 0 {
+					xhttpOpts["headers"] = headers
+				}
+			}
+			m["xhttp-opts"] = xhttpOpts
 		}
 
 	case domain.ProtocolTrojan:

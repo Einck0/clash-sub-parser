@@ -20,12 +20,14 @@ type publicationAdminHandler struct {
 
 type createPublicationRequest struct {
 	Target     string `json:"target"`
+	SnapshotID string `json:"snapshot_id"`
 	RevisionID string `json:"revision_id,omitempty"`
 }
 
 type previewPublicationRequest struct {
 	Target     string `json:"target"`
 	RevisionID string `json:"revision_id,omitempty"`
+	CompatMode string `json:"compat_mode,omitempty"`
 }
 
 // publicationClientHandler serves client subscription export requests at /publish/v1/{publication_id}.
@@ -108,9 +110,41 @@ func (h publicationAdminHandler) create(w http.ResponseWriter, r *http.Request) 
 		WriteError(w, r, http.StatusUnprocessableEntity, "invalid_target", "Target compiler is required")
 		return
 	}
+	if !target.IsValid() {
+		WriteError(w, r, http.StatusUnprocessableEntity, "unsupported_target", fmt.Sprintf("target %q is not supported", target))
+		return
+	}
+
+	snapshotID := strings.TrimSpace(body.SnapshotID)
+	if snapshotID == "" {
+		preflightRes, err := h.service.Preflight(r.Context(), publication.PreflightCommand{
+			Target:     target,
+			RevisionID: strings.TrimSpace(body.RevisionID),
+		})
+		if err != nil {
+			if writePublicationPreflightError(w, r, err) {
+				return
+			}
+			var capErr *domain.DomainError
+			if errors.As(err, &capErr) && capErr.Code == "unsupported_target_capability" {
+				WriteError(w, r, http.StatusUnprocessableEntity, "unsupported_target_capability", err.Error())
+				return
+			}
+			WriteDomainError(w, r, err)
+			return
+		}
+		if preflightRes != nil && !preflightRes.Allowed {
+			writePublicationPreflightError(w, r, publication.NewPreflightError(*preflightRes))
+			return
+		}
+
+		WriteError(w, r, http.StatusBadRequest, "snapshot_required", "snapshot_id is required")
+		return
+	}
 
 	cmd := publication.PublishCommand{
 		Target:     target,
+		SnapshotID: snapshotID,
 		RevisionID: strings.TrimSpace(body.RevisionID),
 		ActorKind:  requestActorKind(r),
 		RequestID:  GetRequestID(r.Context()),
@@ -126,7 +160,11 @@ func (h publicationAdminHandler) create(w http.ResponseWriter, r *http.Request) 
 	}
 
 	w.Header().Set("Cache-Control", "no-store")
-	WriteSuccess(w, r, http.StatusCreated, res)
+	statusCode := http.StatusCreated
+	if res.Publication.State == domain.PublicationStateActive && res.RawToken == "active" {
+		statusCode = http.StatusOK
+	}
+	WriteSuccess(w, r, statusCode, res)
 }
 
 func (h publicationAdminHandler) preview(w http.ResponseWriter, r *http.Request) {
@@ -145,10 +183,28 @@ func (h publicationAdminHandler) preview(w http.ResponseWriter, r *http.Request)
 	query := publication.PreviewQuery{
 		Target:     target,
 		RevisionID: strings.TrimSpace(body.RevisionID),
+		CompatMode: strings.TrimSpace(body.CompatMode),
 	}
 
 	res, err := h.service.Preview(r.Context(), query)
 	if err != nil {
+		var strictErr *publication.StrictCapabilityError
+		if errors.As(err, &strictErr) {
+			w.Header().Set("Cache-Control", "no-store")
+			resp := map[string]any{
+				"code":       strictErr.Code,
+				"message":    strictErr.Message,
+				"request_id": GetRequestID(r.Context()),
+				"details": map[string]any{
+					"diagnostics": strictErr.Diagnostics,
+				},
+			}
+			if strictErr.SnapshotID != "" {
+				resp["details"].(map[string]any)["snapshot_id"] = strictErr.SnapshotID
+			}
+			WriteJSON(w, http.StatusUnprocessableEntity, resp)
+			return
+		}
 		if writePublicationPreflightError(w, r, err) {
 			return
 		}
@@ -169,12 +225,14 @@ func (h publicationAdminHandler) preview(w http.ResponseWriter, r *http.Request)
 	}
 
 	data := map[string]any{
+		"snapshot_id":     res.SnapshotID,
 		"target":          res.Target,
 		"snapshot_digest": res.SnapshotDigest,
 		"content_digest":  res.ContentDigest,
 		"content":         string(res.Content),
 		"content_type":    res.ContentType,
 		"filename":        res.Filename,
+		"manifest":        res.Manifest,
 		"diagnostics":     res.Diagnostics,
 	}
 	if res.FilterCounts != nil {

@@ -22,15 +22,28 @@ func CheckIPRisk(ctx context.Context, httpClient *http.Client, ip string) domain
 
 	if ip == "" {
 		// Resolve exit IP via Cloudflare trace if not pre-populated
-		ip = resolveExitIP(ctx, httpClient)
-		if ip == "" {
-			lat := time.Since(start).Milliseconds()
-			cap.LatencyMS = &lat
+		exitIP, statusCode, exitErr := resolveExitIP(ctx, httpClient)
+		lat := time.Since(start).Milliseconds()
+		cap.LatencyMS = &lat
+		if exitErr != nil {
+			cap.Verdict = domain.VerdictError
+			cap.Summary = "Error"
+			cap.Reason = "network_error"
+			return cap
+		}
+		if statusCode == http.StatusForbidden || statusCode == http.StatusUnauthorized {
 			cap.Verdict = domain.VerdictUnknown
-			cap.Reason = "missing_exit_ip"
+			cap.Reason = "access_restricted"
+			cap.Summary = "Access Restricted"
+			return cap
+		}
+		if exitIP == "" {
+			cap.Verdict = domain.VerdictUnknown
+			cap.Reason = "missing_exit_identity"
 			cap.Summary = "Unknown IP"
 			return cap
 		}
+		ip = exitIP
 	}
 
 	targetURL := fmt.Sprintf("https://scamalytics.com/ip/%s", ip)
@@ -56,6 +69,12 @@ func CheckIPRisk(ctx context.Context, httpClient *http.Client, ip string) domain
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
+		cap.Verdict = domain.VerdictUnknown
+		cap.Summary = fmt.Sprintf("HTTP %d", resp.StatusCode)
+		cap.Reason = "access_restricted"
+		return cap
+	}
 	if resp.StatusCode != http.StatusOK {
 		cap.Verdict = domain.VerdictRestricted
 		cap.Summary = fmt.Sprintf("HTTP %d", resp.StatusCode)
@@ -76,7 +95,7 @@ func CheckIPRisk(ctx context.Context, httpClient *http.Client, ip string) domain
 	apiIndex := bytes.Index(body, marker)
 	if apiIndex == -1 {
 		cap.Verdict = domain.VerdictUnknown
-		cap.Reason = "scamalytics_api_marker_missing"
+		cap.Reason = "contract_drift"
 		cap.Summary = "Score Unavailable"
 		return cap
 	}
@@ -85,7 +104,7 @@ func CheckIPRisk(ctx context.Context, httpClient *http.Client, ip string) domain
 	lines := bytes.Split(contentAfterAPI, []byte("\n"))
 	if len(lines) < 7 {
 		cap.Verdict = domain.VerdictUnknown
-		cap.Reason = "scamalytics_format_invalid"
+		cap.Reason = "contract_drift"
 		cap.Summary = "Score Unavailable"
 		return cap
 	}
@@ -115,31 +134,35 @@ func CheckIPRisk(ctx context.Context, httpClient *http.Client, ip string) domain
 	}
 
 	cap.Verdict = domain.VerdictUnknown
-	cap.Reason = "scamalytics_parse_failed"
+	cap.Reason = "contract_drift"
 	return cap
 }
 
-func resolveExitIP(ctx context.Context, httpClient *http.Client) string {
+func resolveExitIP(ctx context.Context, httpClient *http.Client) (string, int, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://cloudflare.com/cdn-cgi/trace", nil)
 	if err != nil {
-		return ""
+		return "", 0, err
 	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return ""
+		return "", 0, err
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
+		return "", resp.StatusCode, nil
+	}
 
 	buf := getPooledBuf()
 	defer putPooledBuf(buf)
 	if _, err := buf.ReadFrom(resp.Body); err != nil {
-		return ""
+		return "", resp.StatusCode, err
 	}
 
 	for _, line := range strings.Split(buf.String(), "\n") {
 		if strings.HasPrefix(line, "ip=") {
-			return strings.TrimSpace(strings.TrimPrefix(line, "ip="))
+			return strings.TrimSpace(strings.TrimPrefix(line, "ip=")), resp.StatusCode, nil
 		}
 	}
-	return ""
+	return "", resp.StatusCode, nil
 }

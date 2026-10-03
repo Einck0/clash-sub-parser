@@ -4,6 +4,7 @@ import {
   DEFAULT_COMPILER_TARGET,
   isValidCompilerTarget,
   type CompilerTarget,
+  type CompatMode,
   type Diagnostic,
   type PreviewResult,
   type PublicationDetail,
@@ -123,6 +124,7 @@ export function usePublications(initialTarget?: CompilerTarget) {
       : getStoredTarget()
 
   const selectedTarget = ref<CompilerTarget>(resolvedInitial)
+  const compatMode = ref<CompatMode>('strict')
   const preview = ref<PreviewResult | null>(null)
   const activePublication = ref<PublicationDetail | null>(getStoredPublication(resolvedInitial))
   watch(publicationSession, () => {
@@ -150,6 +152,13 @@ export function usePublications(initialTarget?: CompilerTarget) {
     preflightDiagnostics.value = []
   }, { flush: 'sync' })
 
+  watch(compatMode, () => {
+    preview.value = null
+    error.value = ''
+    errorDetail.value = null
+    preflightDiagnostics.value = []
+  })
+
   const isNoActiveRevision = computed(() => {
     const err = errorDetail.value
     if (err && err instanceof ApiError) {
@@ -158,26 +167,46 @@ export function usePublications(initialTarget?: CompilerTarget) {
     return false
   })
 
-  async function fetchPreview(target: CompilerTarget, revisionId?: string): Promise<PreviewResult | null> {
+  async function fetchPreview(
+    target: CompilerTarget,
+    revisionId?: string,
+    mode?: CompatMode
+  ): Promise<PreviewResult | null> {
     const request = ++previewRequest
     const session = publicationSession.value
+    const effectiveMode = mode ?? compatMode.value ?? 'strict'
+    if (mode && compatMode.value !== mode) {
+      compatMode.value = mode
+    }
     loadingPreview.value = true
     error.value = ''
     errorDetail.value = null
     preflightDiagnostics.value = []
     try {
-      const payload: Record<string, string> = { target }
+      const payload: Record<string, string> = {
+        target,
+        compat_mode: effectiveMode,
+      }
       if (revisionId) payload.revision_id = revisionId
       const res = await api.post<PreviewResult>('/api/v1/publications/preview', payload)
-      if (request === previewRequest && selectedTarget.value === target && session === publicationSession.value) preview.value = res
+      if (request === previewRequest && selectedTarget.value === target && session === publicationSession.value) {
+        preview.value = res
+        if (res?.diagnostics && res.diagnostics.length > 0) {
+          preflightDiagnostics.value = res.diagnostics
+        }
+      }
       return res
     } catch (err) {
       if (request === previewRequest && selectedTarget.value === target && session === publicationSession.value) {
         preview.value = null
         errorDetail.value = err instanceof Error ? err : new Error(String(err))
         error.value = err instanceof Error ? err.message : '获取配置预览失败'
-        if (err instanceof ApiError && (err.details as any)?.diagnostics) {
-          preflightDiagnostics.value = (err.details as any).diagnostics
+        if (err instanceof ApiError) {
+          const details = err.details as any
+          const diags = details?.diagnostics || details?.error?.details?.diagnostics || (Array.isArray(details) ? details : undefined)
+          if (Array.isArray(diags)) {
+            preflightDiagnostics.value = diags
+          }
         }
       }
       return null
@@ -186,7 +215,7 @@ export function usePublications(initialTarget?: CompilerTarget) {
     }
   }
 
-  async function publish(target: CompilerTarget, revisionId?: string): Promise<PublicationDetail> {
+  async function publish(target: CompilerTarget, snapshotIdOrRevisionId?: string): Promise<PublicationDetail> {
     const session = publicationSession.value
     const request = (publishRequests.get(target) ?? 0) + 1
     publishRequests.set(target, request)
@@ -194,9 +223,31 @@ export function usePublications(initialTarget?: CompilerTarget) {
     error.value = ''
     errorDetail.value = null
     preflightDiagnostics.value = []
+
+    let effectiveSnapshotId: string | undefined
+    if (snapshotIdOrRevisionId) {
+      effectiveSnapshotId = snapshotIdOrRevisionId
+    } else if (preview.value?.snapshot_id) {
+      effectiveSnapshotId = preview.value.snapshot_id
+    }
+
+    if (preview.value?.snapshot_id && preview.value.target && preview.value.target !== target) {
+      const mismatchErr = new ApiError(
+        422,
+        'snapshot_target_mismatch',
+        `当前快照目标 (${preview.value.target}) 与请求发布目标 (${target}) 不匹配，请重新生成预览`
+      )
+      errorDetail.value = mismatchErr
+      error.value = mismatchErr.message
+      publishing.value = false
+      throw mismatchErr
+    }
+
     try {
       const payload: Record<string, string> = { target }
-      if (revisionId) payload.revision_id = revisionId
+      if (effectiveSnapshotId) {
+        payload.snapshot_id = effectiveSnapshotId
+      }
       const rawRes = await api.post<any>('/api/v1/publications', payload)
       if (session !== publicationSession.value) throw new Error('publication session changed')
       const resolvedTarget: CompilerTarget = isValidCompilerTarget(rawRes?.publication?.target)
@@ -229,8 +280,12 @@ export function usePublications(initialTarget?: CompilerTarget) {
         errorDetail.value = err instanceof Error ? err : new Error(String(err))
         const msg = err instanceof Error ? err.message : '创建订阅发布失败'
         error.value = msg
-        if (err instanceof ApiError && (err.details as any)?.diagnostics) {
-          preflightDiagnostics.value = (err.details as any).diagnostics
+        if (err instanceof ApiError) {
+          const details = err.details as any
+          const diags = details?.diagnostics || details?.error?.details?.diagnostics
+          if (Array.isArray(diags)) {
+            preflightDiagnostics.value = diags
+          }
         }
       }
       throw err
@@ -359,6 +414,7 @@ export function usePublications(initialTarget?: CompilerTarget) {
 
   return {
     selectedTarget,
+    compatMode,
     preview,
     activePublication,
     loadingPreview,

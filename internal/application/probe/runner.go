@@ -96,11 +96,17 @@ func WithRunBudget(budget RunBudget) DefaultRunnerOption {
 	return func(r *DefaultRunner) { r.budget = budget }
 }
 
+// WithIPRiskObservationRepository configures an optional IP risk repository for recording 1:N risk observations.
+func WithIPRiskObservationRepository(repo domain.IPRiskObservationRepository) DefaultRunnerOption {
+	return func(r *DefaultRunner) { r.riskObs = repo }
+}
+
 type DefaultRunner struct {
 	budget           RunBudget
 	stageConcurrency StageConcurrency
 	nodes            domain.NodeRepository
 	observations     domain.ProbeObservationRepository
+	riskObs          domain.IPRiskObservationRepository
 	scheduler        *queue.Scheduler
 	runs             domain.ProbeRunRepository
 	dialer           NodeDialer
@@ -254,20 +260,33 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 
 	var targetNodes []domain.Node
 	if len(nodeIDs) > 0 {
+		chunk, _, err := r.nodes.List(ctx, domain.NodeFilter{
+			LogicalIDs:     nodeIDs,
+			ExcludeNotices: true,
+			Pagination:     domain.Pagination{Page: 1, PageSize: len(nodeIDs)},
+		})
+		if err != nil {
+			_ = run.TransitionTo(domain.ProbeRunStateFailed)
+			_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateFailed)
+			return err
+		}
+		chunkMap := make(map[string]domain.Node, len(chunk))
+		for _, n := range chunk {
+			chunkMap[n.LogicalID] = n
+		}
 		for _, id := range nodeIDs {
-			node, err := r.nodes.GetByLogicalID(ctx, id)
-			if err != nil || node == nil {
-				continue
+			if n, ok := chunkMap[id]; ok {
+				targetNodes = append(targetNodes, n)
 			}
-			targetNodes = append(targetNodes, *node)
 		}
 	} else {
 		const fetchPageSize = 100
 		seen := make(map[string]struct{})
 		for fetchPage := 1; ; fetchPage++ {
 			chunk, total, err := r.nodes.List(ctx, domain.NodeFilter{
-				ActiveOnly: true,
-				Pagination: domain.Pagination{Page: fetchPage, PageSize: fetchPageSize},
+				ActiveOnly:     true,
+				ExcludeNotices: true,
+				Pagination:     domain.Pagination{Page: fetchPage, PageSize: fetchPageSize},
 			})
 			if err != nil {
 				_ = run.TransitionTo(domain.ProbeRunStateFailed)
@@ -928,6 +947,7 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 		speedCap        domain.PlatformCapability
 		speedThroughput *float64
 		ipRiskScore     string
+		ipRiskCap       domain.PlatformCapability
 	)
 	if kind == domain.ProbeKindSpeed {
 		result.OptIn = true
@@ -961,9 +981,26 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 		latency = r.clock().Sub(start).Milliseconds()
 	} else if kind == domain.ProbeKindStreaming {
 		reqStart := r.clock()
-		nf := platform.CheckNetflix(ctx, client)
-		yt := platform.CheckYoutube(ctx, client)
-		dis := platform.CheckDisney(ctx, client)
+		var (
+			wg  sync.WaitGroup
+			nf  domain.PlatformCapability
+			yt  domain.PlatformCapability
+			dis domain.PlatformCapability
+		)
+		wg.Add(3)
+		go func() {
+			defer wg.Done()
+			nf = platform.CheckNetflix(ctx, client)
+		}()
+		go func() {
+			defer wg.Done()
+			yt = platform.CheckYoutube(ctx, client)
+		}()
+		go func() {
+			defer wg.Done()
+			dis = platform.CheckDisney(ctx, client)
+		}()
+		wg.Wait()
 		latency = r.clock().Sub(reqStart).Milliseconds()
 		platformsMap = map[string]domain.PlatformCapability{
 			"netflix": nf,
@@ -974,9 +1011,26 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 		result.ContractVersion = prof.Contract
 	} else if kind == domain.ProbeKindAI {
 		reqStart := r.clock()
-		oai := platform.CheckOpenAI(ctx, client)
-		claude := platform.CheckClaude(ctx, client)
-		gem := platform.CheckGemini(ctx, client)
+		var (
+			wg     sync.WaitGroup
+			oai    domain.PlatformCapability
+			claude domain.PlatformCapability
+			gem    domain.PlatformCapability
+		)
+		wg.Add(3)
+		go func() {
+			defer wg.Done()
+			oai = platform.CheckOpenAI(ctx, client)
+		}()
+		go func() {
+			defer wg.Done()
+			claude = platform.CheckClaude(ctx, client)
+		}()
+		go func() {
+			defer wg.Done()
+			gem = platform.CheckGemini(ctx, client)
+		}()
+		wg.Wait()
 		latency = r.clock().Sub(reqStart).Milliseconds()
 		platformsMap = map[string]domain.PlatformCapability{
 			"openai": oai,
@@ -1028,6 +1082,24 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 		result.ContractVersion = prof.Contract
 		if speedCap.Verdict == domain.VerdictAvailable {
 			result.StatusCode = http.StatusOK
+		}
+	} else if kind == domain.ProbeKindIPRisk {
+		reqStart := r.clock()
+		ipRiskCap = platform.CheckIPRisk(ctx, client, "")
+		latency = r.clock().Sub(reqStart).Milliseconds()
+		if latency <= 0 && ipRiskCap.LatencyMS != nil {
+			latency = *ipRiskCap.LatencyMS
+		}
+		ipRiskScore = ipRiskCap.RiskScore
+		if ipRiskCap.Verdict == domain.VerdictAvailable {
+			result.ContractMatched = true
+			result.StatusCode = http.StatusOK
+		} else {
+			result.ContractMatched = false
+			failureReason = ipRiskCap.Reason
+			if ipRiskCap.Verdict == domain.VerdictError {
+				result.NetworkError = true
+			}
 		}
 	} else {
 		reqURL := probeURLForKind(kind)
@@ -1116,6 +1188,9 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 	if kind == domain.ProbeKindSpeed {
 		eval.Verdict = speedCap.Verdict
 		eval.Reason = speedCap.Reason
+	} else if kind == domain.ProbeKindIPRisk {
+		eval.Verdict = ipRiskCap.Verdict
+		eval.Reason = ipRiskCap.Reason
 	} else {
 		eval = prof.Evaluate(result)
 		if len(platformsMap) > 0 {
@@ -1139,6 +1214,9 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 			summary = fmt.Sprintf("%s throughput_kbps=%.1f", summary, *speedThroughput)
 		}
 	}
+	if kind == domain.ProbeKindIPRisk && ipRiskCap.Summary != "" {
+		summary = fmt.Sprintf("%s summary=%s", summary, ipRiskCap.Summary)
+	}
 	if dialErr != nil {
 		summary += " error=" + failureReason
 	}
@@ -1160,6 +1238,33 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 		}
 	}
 
+	var safeDetail *domain.SafeDetail
+	if eval.Verdict != domain.VerdictAvailable || dialErr != nil || failureReason != "" {
+		code := eval.Reason
+		if code == "" {
+			code = failureReason
+		}
+		stage := string(kind)
+		if dialErr != nil {
+			stage = "dial"
+			if code == "" {
+				code = "dial_failed"
+			}
+		}
+		rawMap := map[string]any{
+			"stage":     stage,
+			"code":      code,
+			"transport": string(node.Protocol),
+			"status":    result.StatusCode,
+			"timeout":   int(latency),
+		}
+		if coreVer := mihomo.CoreVersion(); coreVer != "" {
+			rawMap["core"] = coreVer
+		}
+		sd := domain.SanitizeSafeDetail(rawMap)
+		safeDetail = &sd
+	}
+
 	obs := &domain.ProbeObservation{
 		ID:              domain.MustNewUUIDv7(),
 		ProbeRunID:      run.ID,
@@ -1175,6 +1280,7 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 		Throughput:      speedThroughput,
 		RiskScore:       ipRiskScore,
 		Platforms:       platformsMap,
+		SafeDetail:      safeDetail,
 	}
 
 	if node.ConnectionRevision > 0 {
@@ -1183,6 +1289,37 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 	}
 	if createErr := r.observations.Create(ctx, obs); createErr != nil {
 		return eval.Verdict, createErr
+	}
+	if r.riskObs != nil && kind == domain.ProbeKindIPRisk {
+		ipRiskStatus := domain.IPRiskStatusAvailable
+		if eval.Verdict != domain.VerdictAvailable {
+			ipRiskStatus = domain.IPRiskStatusError
+		}
+		var parsedScore *int
+		if ipRiskScore != "" {
+			var sc int
+			if n, _ := fmt.Sscanf(ipRiskScore, "%d%%", &sc); n > 0 && sc >= 0 && sc <= 100 {
+				parsedScore = &sc
+			}
+		}
+		conf := 80
+		ipRiskObs := &domain.IPRiskObservation{
+			ID:                    domain.MustNewUUIDv7(),
+			NodeLogicalID:         node.LogicalID,
+			ExitIdentityDigest:    obs.EvidenceDigest,
+			Provider:              "scamalytics",
+			ProviderSchemaVersion: "v1",
+			ObservedAt:            now,
+			ExpiresAt:             now.Add(24 * time.Hour),
+			Status:                ipRiskStatus,
+			Score:                 parsedScore,
+			Confidence:            &conf,
+			NetworkClass:          domain.NetworkClassDatacenter,
+			EvidenceDigest:        obs.EvidenceDigest,
+			RedactedSummary:       obs.RedactedSummary,
+			ProbeObservationID:    &obs.ID,
+		}
+		_ = r.riskObs.Create(ctx, ipRiskObs)
 	}
 	if dialErr != nil && isFatalDialError(dialErr) {
 		return eval.Verdict, dialErr

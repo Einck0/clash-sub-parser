@@ -286,6 +286,14 @@ func validateCredentialEnvelope(target domain.CompilerTarget, index int, node re
 	}
 
 	c := node.Credentials
+	if target == domain.TargetSingBox && c.Transport != nil && strings.ToLower(c.Transport["network"]) == "xhttp" {
+		return &CapabilityError{
+			Target:   domain.TargetSingBox,
+			Location: fmt.Sprintf("nodes[%d].transport.network", index),
+			Feature:  "xhttp",
+			Reason:   "sing-box does not support xhttp transport protocol",
+		}
+	}
 	switch node.Protocol {
 	case domain.ProtocolSS:
 		if strings.TrimSpace(c.Method) == "" || strings.TrimSpace(c.Password) == "" {
@@ -503,6 +511,115 @@ func copyStringSet(values map[string]bool) map[string]bool {
 	}
 	return result
 }
+
+// CapabilityDiagnostic describes a compiler capability diagnostic for an export target.
+type CapabilityDiagnostic struct {
+	NodeID  string `json:"node_id,omitempty"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
+	Target  string `json:"target,omitempty"`
+}
+
+// ValidateTargetCapabilities evaluates all nodes and groups against a target and returns ALL diagnostics.
+func ValidateTargetCapabilities(snapshot *resolver.ResolvedPolicySnapshot, target domain.CompilerTarget) []CapabilityDiagnostic {
+	if snapshot == nil {
+		return nil
+	}
+	capability, ok := capabilityForTarget(target)
+	if !ok {
+		return []CapabilityDiagnostic{{
+			Code:    "unsupported_target",
+			Message: fmt.Sprintf("unknown compiler target: %s", target),
+			Target:  string(target),
+		}}
+	}
+
+	var diags []CapabilityDiagnostic
+
+	// Check each node
+	for i, node := range snapshot.Nodes {
+		if !capability.Protocols[node.Protocol] {
+			diags = append(diags, CapabilityDiagnostic{
+				NodeID:  node.LogicalID,
+				Code:    "unsupported_target_capability",
+				Message: fmt.Sprintf("target %s does not support protocol %s (protocol is not supported)", target, node.Protocol),
+				Target:  string(target),
+			})
+			continue
+		}
+		if err := validateCredentialEnvelope(target, i, node); err != nil {
+			diags = append(diags, CapabilityDiagnostic{
+				NodeID:  node.LogicalID,
+				Code:    "unsupported_target_capability",
+				Message: err.Error(),
+				Target:  string(target),
+			})
+		}
+	}
+
+	return diags
+}
+
+// FilterCompatibleSnapshot creates a new ResolvedPolicySnapshot with incompatible nodes excluded.
+func FilterCompatibleSnapshot(snapshot *resolver.ResolvedPolicySnapshot, target domain.CompilerTarget) (*resolver.ResolvedPolicySnapshot, []domain.ManifestExcludedNode) {
+	if snapshot == nil {
+		return nil, nil
+	}
+	capability, ok := capabilityForTarget(target)
+	if !ok {
+		return snapshot, nil
+	}
+
+	var admittedNodes []resolver.ResolvedNode
+	var excludedNodes []domain.ManifestExcludedNode
+	admittedSet := make(map[string]bool)
+
+	for i, node := range snapshot.Nodes {
+		var reason string
+		if !capability.Protocols[node.Protocol] {
+			reason = fmt.Sprintf("target %s does not support protocol %s", target, node.Protocol)
+		} else if err := validateCredentialEnvelope(target, i, node); err != nil {
+			reason = err.Error()
+		}
+
+		if reason != "" {
+			excludedNodes = append(excludedNodes, domain.ManifestExcludedNode{
+				NodeID: node.LogicalID,
+				Code:   "unsupported_target_capability",
+				Reason: reason,
+			})
+		} else {
+			admittedNodes = append(admittedNodes, node)
+			admittedSet[node.LogicalID] = true
+			admittedSet[node.DisplayName] = true
+		}
+	}
+
+	// Build filtered groups
+	filteredGroups := make([]resolver.ResolvedGroup, len(snapshot.Groups))
+	for gi, group := range snapshot.Groups {
+		var filteredMembers []resolver.ResolvedGroupMember
+		for _, member := range group.Members {
+			if member.Kind == resolver.MemberKindNode {
+				if admittedSet[member.TargetID] || admittedSet[member.DisplayName] {
+					filteredMembers = append(filteredMembers, member)
+				}
+			} else {
+				// Keep group or built-in target references
+				filteredMembers = append(filteredMembers, member)
+			}
+		}
+		filteredGroups[gi] = group
+		filteredGroups[gi].Members = filteredMembers
+	}
+
+	copySnap := *snapshot
+	copySnap.Nodes = admittedNodes
+	copySnap.Groups = filteredGroups
+
+	return &copySnap, excludedNodes
+}
+
 
 // SortedCapabilities exposes target names without leaking the backing map.
 func SortedCapabilities() []domain.CompilerTarget {

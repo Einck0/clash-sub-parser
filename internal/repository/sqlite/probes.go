@@ -232,20 +232,12 @@ func (r *probeRunRepository) ListActive(ctx context.Context) ([]domain.ProbeRun,
 
 // ProbeObservationRepository implementation
 
-const ensureLatestProbeObservationIndexSQL = `
-CREATE INDEX IF NOT EXISTS idx_probe_obs_node_kind_observed_id
-	ON probe_observations(node_logical_id, kind, observed_at DESC, id DESC);`
-
 type probeObservationRepository struct {
 	db *sql.DB
 }
 
 // NewProbeObservationRepository constructs a SQLite implementation of domain.ProbeObservationRepository.
 func NewProbeObservationRepository(db *sql.DB) domain.ProbeObservationRepository {
-	if db != nil {
-		_, _ = db.Exec(ensureLatestProbeObservationIndexSQL)
-		_, _ = db.Exec("ALTER TABLE probe_observations ADD COLUMN evidence_data TEXT NOT NULL DEFAULT '';")
-	}
 	return &probeObservationRepository{db: db}
 }
 

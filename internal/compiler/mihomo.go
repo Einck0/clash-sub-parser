@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/netip"
 	"net/url"
@@ -128,6 +129,11 @@ var allowedMihomoTransportKeys = map[domain.Protocol]map[string]bool{
 		"service_name":       true,
 		"serviceName":        true,
 		"grpc-service-name":  true,
+		"mode":               true,
+		"headers":            true,
+		"xhttp-opts":         true,
+		"xhttp_opts":         true,
+		"extra":              true,
 	},
 	domain.ProtocolTrojan: {
 		"network":            true,
@@ -235,7 +241,7 @@ func validateMihomoCredentials(snapshot *resolver.ResolvedPolicySnapshot) error 
 			}
 		case domain.ProtocolVLESS:
 			net := strings.ToLower(transportValue(c, "network"))
-			if net != "" && net != "tcp" && net != "ws" && net != "grpc" {
+			if net != "" && net != "tcp" && net != "ws" && net != "grpc" && net != "xhttp" {
 				return mihomoError(loc, "vless", fmt.Sprintf("unsupported network %q in vless transport", net))
 			}
 			pbk := transportValue(c, "pbk", "public-key", "public_key", "reality-public-key", "reality_public_key")
@@ -304,6 +310,9 @@ func validateMihomoTransportKeys(loc string, proto domain.Protocol, transport ma
 			continue
 		}
 		key := strings.TrimSpace(rawKey)
+		if strings.HasPrefix(key, "extra") || strings.HasPrefix(key, "unknown") {
+			continue
+		}
 		if !allowed[key] {
 			return mihomoError(loc, string(proto), fmt.Sprintf("unsupported transport parameter %q for %s", key, proto))
 		}
@@ -476,6 +485,13 @@ type mihomoVMessProxy struct {
 	GRPCOpts          *mihomoGRPCOpts `yaml:"grpc-opts,omitempty"`
 }
 
+type mihomoXHTTPOpts struct {
+	Path    string            `yaml:"path,omitempty"`
+	Host    string            `yaml:"host,omitempty"`
+	Mode    string            `yaml:"mode,omitempty"`
+	Headers map[string]string `yaml:"headers,omitempty"`
+}
+
 type mihomoVLESSProxy struct {
 	Name              string             `yaml:"name"`
 	Type              string             `yaml:"type"`
@@ -492,6 +508,7 @@ type mihomoVLESSProxy struct {
 	RealityOpts       *mihomoRealityOpts `yaml:"reality-opts,omitempty"`
 	WSOpts            *mihomoWSOpts      `yaml:"ws-opts,omitempty"`
 	GRPCOpts          *mihomoGRPCOpts    `yaml:"grpc-opts,omitempty"`
+	XHTTPOpts         *mihomoXHTTPOpts   `yaml:"xhttp-opts,omitempty"`
 }
 
 type mihomoTrojanProxy struct {
@@ -656,6 +673,24 @@ func renderMihomo(snapshot *resolver.ResolvedPolicySnapshot) ([]byte, error) {
 				if svc := transportValue(c, "service_name", "serviceName", "grpc-service-name"); svc != "" {
 					p.GRPCOpts = &mihomoGRPCOpts{GRPCServiceName: svc}
 				}
+			} else if p.Network == "xhttp" {
+				xhttp := &mihomoXHTTPOpts{}
+				if path := transportValue(c, "path"); path != "" {
+					xhttp.Path = path
+				}
+				if host := transportValue(c, "host"); host != "" {
+					xhttp.Host = host
+				}
+				if mode := transportValue(c, "mode"); mode != "" {
+					xhttp.Mode = mode
+				}
+				if hJSON := transportValue(c, "headers"); hJSON != "" {
+					var headers map[string]string
+					if err := json.Unmarshal([]byte(hJSON), &headers); err == nil && len(headers) > 0 {
+						xhttp.Headers = headers
+					}
+				}
+				p.XHTTPOpts = xhttp
 			}
 			proxies = append(proxies, p)
 		case domain.ProtocolTrojan:

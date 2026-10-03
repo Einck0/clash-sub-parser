@@ -345,7 +345,10 @@ func TestStageGateBaselineAvailabilityControlsStreaming(t *testing.T) {
 			if tc.wantRequests > 1 {
 				urlsMu.Lock()
 				defer urlsMu.Unlock()
-				if !strings.Contains(urls[1], "fast.com") && !strings.Contains(urls[1], "netflix") {
+				// With concurrent streaming sub-requests (Netflix, YouTube, Disney), urls[1] can be any of the streaming endpoints.
+				isStreaming := strings.Contains(urls[1], "fast.com") || strings.Contains(urls[1], "netflix") ||
+					strings.Contains(urls[1], "youtube") || strings.Contains(urls[1], "disney")
+				if !isStreaming {
 					t.Fatalf("second-stage request not streaming: %q", urls[1])
 				}
 			}

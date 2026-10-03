@@ -35,10 +35,18 @@ type Service struct {
 	nodeFilterRepo domain.NodeFilterRepository
 	sourceRepo     domain.NodeSourceRepository
 	obsRepo        domain.ProbeObservationRepository
+	payloadRefRepo domain.PublicationPayloadRefRepository
 }
 
 // Option configures optional Service dependencies.
 type Option func(*Service)
+
+// WithPayloadRefRepository sets the publication payload ref repository.
+func WithPayloadRefRepository(repo domain.PublicationPayloadRefRepository) Option {
+	return func(s *Service) {
+		s.payloadRefRepo = repo
+	}
+}
 
 // WithPolicyRepository sets the policy repository for resolving snapshots.
 func WithPolicyRepository(repo domain.PolicyRepository) Option {
@@ -189,37 +197,73 @@ func (s *Service) Preflight(ctx context.Context, cmd PreflightCommand) (*Preflig
 	return &preflight, nil
 }
 
-// Publish creates an immutable publication for a target compiler from a resolved policy snapshot.
+// Publish activates an immutable snapshot draft as an active publication.
 func (s *Service) Publish(ctx context.Context, cmd PublishCommand) (*PublishResult, error) {
 	if !isValidTarget(cmd.Target) {
 		return nil, domain.NewValidationError("unsupported_target", fmt.Sprintf("unsupported compiler target: %s", cmd.Target))
 	}
 
-	snapshot := cmd.Snapshot
-	if snapshot == nil {
-		var err error
-		snapshot, err = s.resolveSnapshot(ctx, cmd.RevisionID)
-		if err != nil {
-			s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "publication.create", domain.AuditResultFailure, fmt.Sprintf("failed to resolve snapshot: %v", err))
+	snapshotID := strings.TrimSpace(cmd.SnapshotID)
+	if snapshotID == "" {
+		snapshot := cmd.Snapshot
+		if snapshot == nil {
+			var err error
+			snapshot, err = s.resolveSnapshot(ctx, cmd.RevisionID)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		preflight := s.evaluatePreflight(ctx, snapshot, cmd.Target)
+		if !preflight.Allowed {
+			err := newPreflightError(preflight)
+			s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "publication.create", domain.AuditResultFailure, preflightSummary(snapshot, preflight))
 			return nil, err
 		}
-	}
 
-	preflight := s.evaluatePreflight(ctx, snapshot, cmd.Target)
-	if !preflight.Allowed {
-		err := newPreflightError(preflight)
-		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "publication.create", domain.AuditResultFailure, preflightSummary(snapshot, preflight))
-		return nil, err
-	}
-
-	compileRes, err := compiler.Compile(ctx, snapshot, cmd.Target)
-	if err != nil {
-		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "publication.create", domain.AuditResultFailure, fmt.Sprintf("compiler failed for target %s: %v", cmd.Target, err))
-		var capErr *compiler.CapabilityError
-		if errors.As(err, &capErr) {
-			return nil, domain.NewValidationError("unsupported_target_capability", capErr.Error())
+		prevRes, err := s.Preview(ctx, PreviewQuery{
+			Target:     cmd.Target,
+			RevisionID: cmd.RevisionID,
+			Snapshot:   snapshot,
+		})
+		if err != nil {
+			return nil, err
 		}
+		snapshotID = prevRes.SnapshotID
+	}
+
+	pub, err := s.pubRepo.GetByID(ctx, snapshotID)
+	if err != nil {
+		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "publication.create", domain.AuditResultFailure, fmt.Sprintf("failed to load snapshot: %v", err))
 		return nil, err
+	}
+
+	if pub.Target != cmd.Target {
+		return nil, domain.NewValidationError("snapshot_target_mismatch", fmt.Sprintf("snapshot target %s does not match requested target %s", pub.Target, cmd.Target))
+	}
+
+	if pub.State != domain.PublicationStateDraft && pub.State != domain.PublicationStateActive {
+		return nil, domain.NewValidationError("snapshot_not_publishable", fmt.Sprintf("snapshot state %s is not publishable", pub.State))
+	}
+
+	if len(pub.Content) == 0 {
+		return nil, domain.NewValidationError("snapshot_not_publishable", "snapshot contains errors and is not publishable")
+	}
+
+	// Idempotent re-activation
+	if pub.State == domain.PublicationStateActive {
+		rawToken := "active"
+		return &PublishResult{
+			Publication:    *pub,
+			RawToken:       rawToken,
+			ExportURL:      "/publish/v1/" + pub.ID + "?token=" + rawToken,
+			ContentDigest:  pub.ContentDigest,
+			SnapshotDigest: pub.SnapshotDigest,
+			ContentType:    pub.ContentType,
+			Filename:       pub.Filename,
+			Size:           len(pub.Content),
+			SnapshotID:     pub.ID,
+		}, nil
 	}
 
 	rawToken, tokenHash, err := generateExportToken()
@@ -228,63 +272,40 @@ func (s *Service) Publish(ctx context.Context, cmd PublishCommand) (*PublishResu
 		return nil, err
 	}
 
-	pubID, err := domain.NewUUIDv7()
-	if err != nil {
-		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "publication.create", domain.AuditResultFailure, "UUIDv7 generation failed")
+	if err := s.pubRepo.Activate(ctx, pub.ID, tokenHash); err != nil {
+		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "publication.create", domain.AuditResultFailure, fmt.Sprintf("activation failed: %v", err))
 		return nil, err
 	}
 
-	compilerVer := snapshot.CompilerVersion
-	if compilerVer == "" {
-		compilerVer = "1.0.0"
-	}
+	pub.State = domain.PublicationStateActive
+	pub.TokenHash = tokenHash
 
-	revID := strings.TrimSpace(cmd.RevisionID)
-	if revID == "" && snapshot.RevisionID != "" {
-		revID = strings.TrimSpace(snapshot.RevisionID)
-	}
-
-	now := domain.NowUTC()
-	pub := domain.Publication{
-		ID:              pubID,
-		RevisionID:      revID,
-		Target:          cmd.Target,
-		SnapshotDigest:  snapshot.SnapshotDigest,
-		ContentDigest:   compileRes.ContentDigest,
-		ContentType:     compileRes.ContentType,
-		Filename:        compileRes.Filename,
-		Content:         append([]byte(nil), compileRes.Content...),
-		CompilerVersion: compilerVer,
-		TokenHash:       tokenHash,
-		State:           domain.PublicationStateActive,
-		CreatedAt:       now,
-	}
-
-	if err := s.pubRepo.Create(ctx, &pub); err != nil {
-		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "publication.create", domain.AuditResultFailure, fmt.Sprintf("persistence failed: %v", err))
-		return nil, err
-	}
-
-	summary := fmt.Sprintf("created immutable publication %s for target %s (snapshot: %s, content: %s)", pub.ID, pub.Target, pub.SnapshotDigest, compileRes.ContentDigest)
+	summary := fmt.Sprintf("published immutable publication %s for target %s (snapshot: %s, content: %s)", pub.ID, pub.Target, pub.SnapshotDigest, pub.ContentDigest)
 	s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "publication.create", domain.AuditResultSuccess, summary)
 
 	return &PublishResult{
-		Publication:    pub,
+		Publication:    *pub,
 		RawToken:       rawToken,
-		ExportURL:      "/publish/v1/" + pubID + "?token=" + rawToken,
-		ContentDigest:  compileRes.ContentDigest,
-		SnapshotDigest: compileRes.SnapshotDigest,
-		ContentType:    compileRes.ContentType,
-		Filename:       compileRes.Filename,
-		Size:           len(compileRes.Content),
+		ExportURL:      "/publish/v1/" + pub.ID + "?token=" + rawToken,
+		ContentDigest:  pub.ContentDigest,
+		SnapshotDigest: pub.SnapshotDigest,
+		ContentType:    pub.ContentType,
+		Filename:       pub.Filename,
+		Size:           len(pub.Content),
+		SnapshotID:     pub.ID,
 	}, nil
 }
 
-// Preview renders compiled client configuration without persisting a publication,
-// using the identical ResolvedPolicySnapshot semantics.
+// Preview renders compiled client configuration without persisting an active publication,
+// generating an immutable draft snapshot with full manifest.
 func (s *Service) Preview(ctx context.Context, query PreviewQuery) (*PreviewResult, error) {
 	if !isValidTarget(query.Target) {
 		return nil, domain.NewValidationError("unsupported_target", fmt.Sprintf("unsupported compiler target: %s", query.Target))
+	}
+
+	compatMode := strings.ToLower(strings.TrimSpace(query.CompatMode))
+	if compatMode == "" {
+		compatMode = "strict"
 	}
 
 	snapshot := query.Snapshot
@@ -296,32 +317,240 @@ func (s *Service) Preview(ctx context.Context, query PreviewQuery) (*PreviewResu
 		}
 	}
 
-	// Preview historically exposes non-filter preflight diagnostics with the raw
-	// output. A filtered empty set is different: never return an empty export.
 	for _, diagnostic := range snapshot.Diagnostics {
 		if diagnostic.Code == "filtered_nodes_empty" {
 			return nil, newPreflightError(s.evaluatePreflight(ctx, snapshot, query.Target))
 		}
 	}
 
-	compileRes, err := compiler.Compile(ctx, snapshot, query.Target)
-	if err != nil {
-		var capErr *compiler.CapabilityError
-		if errors.As(err, &capErr) {
-			return nil, domain.NewValidationError("unsupported_target_capability", capErr.Error())
+	included := make([]domain.ManifestIncludedNode, len(snapshot.Nodes))
+	for i, n := range snapshot.Nodes {
+		included[i] = domain.ManifestIncludedNode{
+			NodeID:             n.LogicalID,
+			ConnectionRevision: n.ConnectionRevision,
 		}
+	}
+
+	var payloadIDs []string
+	if s.payloadRefRepo != nil && len(included) > 0 {
+		resolved, err := s.payloadRefRepo.ResolvePayloadIDsForNodes(ctx, included)
+		if err == nil && len(resolved) > 0 {
+			payloadIDs = resolved
+		}
+	}
+	manifestPayloadIDs := payloadIDs
+	if manifestPayloadIDs == nil {
+		manifestPayloadIDs = []string{}
+	}
+
+	revID := strings.TrimSpace(query.RevisionID)
+	if revID == "" && snapshot.RevisionID != "" {
+		revID = strings.TrimSpace(snapshot.RevisionID)
+	}
+
+	if compatMode == "strict" {
+		diags := compiler.ValidateTargetCapabilities(snapshot, query.Target)
+		if len(diags) > 0 {
+			draftID := "snapshot_" + domain.MustNewUUIDv7()
+			now := domain.NowUTC()
+			compilerVer := snapshot.CompilerVersion
+			if compilerVer == "" {
+				compilerVer = "1.0.0"
+			}
+			draftPub := domain.Publication{
+				ID:              draftID,
+				RevisionID:      revID,
+				Target:          query.Target,
+				SnapshotDigest:  snapshot.SnapshotDigest,
+				ContentDigest:   "",
+				ContentType:     "",
+				Filename:        "",
+				Content:         []byte{},
+				CompilerVersion: compilerVer,
+				TokenHash:       "draft_failed:" + draftID,
+				State:           domain.PublicationStateDraft,
+				CreatedAt:       now,
+			}
+			_ = s.pubRepo.Create(ctx, &draftPub)
+
+			code := "unsupported_target_capability"
+			msg := "target capability validation failed in strict mode"
+			if len(diags) > 0 {
+				msg = fmt.Sprintf("target capability validation failed in strict mode: %s", diags[0].Message)
+			}
+			return nil, &StrictCapabilityError{
+				Code:        code,
+				Message:     msg,
+				Diagnostics: diags,
+				SnapshotID:  draftID,
+			}
+		}
+
+		compileRes, err := compiler.Compile(ctx, snapshot, query.Target)
+		if err != nil {
+			var capErr *compiler.CapabilityError
+			if errors.As(err, &capErr) {
+				return nil, domain.NewValidationError("unsupported_target_capability", capErr.Error())
+			}
+			return nil, err
+		}
+
+		snapshotID := "snapshot_" + domain.MustNewUUIDv7()
+		now := domain.NowUTC()
+		compilerVer := snapshot.CompilerVersion
+		if compilerVer == "" {
+			compilerVer = "1.0.0"
+		}
+		draftPub := domain.Publication{
+			ID:              snapshotID,
+			RevisionID:      revID,
+			Target:          query.Target,
+			SnapshotDigest:  snapshot.SnapshotDigest,
+			ContentDigest:   compileRes.ContentDigest,
+			ContentType:     compileRes.ContentType,
+			Filename:        compileRes.Filename,
+			Content:         append([]byte(nil), compileRes.Content...),
+			CompilerVersion: compilerVer,
+			TokenHash:       "draft:" + snapshotID,
+			State:           domain.PublicationStateDraft,
+			CreatedAt:       now,
+		}
+		if err := s.pubRepo.Create(ctx, &draftPub); err != nil {
+			return nil, fmt.Errorf("failed to persist preview draft: %w", err)
+		}
+
+		if s.payloadRefRepo != nil && len(payloadIDs) > 0 {
+			_ = s.payloadRefRepo.AddRefs(ctx, snapshotID, payloadIDs)
+		}
+
+		manifest := domain.PublicationManifest{
+			NodeCount:             len(snapshot.Nodes),
+			ExcludedCount:         len(snapshot.ExcludedNodeIDs),
+			PayloadIDs:            manifestPayloadIDs,
+			ConfigurationRevision: revID,
+			RulesDigest:           snapshot.RiskDecisionDigest,
+			Included:              included,
+			Excluded:              make([]domain.ManifestExcludedNode, 0),
+			TargetEngineVersion:   "1.0.0",
+			MappingVersion:        "1.0.0",
+		}
+
+		previewDiags := append([]resolver.Diagnostic(nil), snapshot.Diagnostics...)
+		if len(included) > 0 && len(payloadIDs) == 0 {
+			previewDiags = append(previewDiags, resolver.Diagnostic{
+				Code:     "legacy_payload_unreferenced",
+				Message:  "included nodes have no raw subscription payload reference (legacy or synthetic nodes)",
+				Severity: resolver.DiagnosticSeverityWarning,
+			})
+		}
+
+		return &PreviewResult{
+			SnapshotID:     snapshotID,
+			Target:         query.Target,
+			SnapshotDigest: compileRes.SnapshotDigest,
+			ContentDigest:  compileRes.ContentDigest,
+			Content:        compileRes.Content,
+			ContentType:    compileRes.ContentType,
+			Filename:       compileRes.Filename,
+			Manifest:       manifest,
+			Diagnostics:    previewDiags,
+			FilterCounts:   snapshot.FilterCounts,
+		}, nil
+	}
+
+	// Compatible mode
+	compatSnap, excludedNodes := compiler.FilterCompatibleSnapshot(snapshot, query.Target)
+	for _, g := range compatSnap.Groups {
+		if len(g.Members) == 0 {
+			return nil, domain.NewValidationError("empty_group_not_allowed", fmt.Sprintf("policy group %q has 0 members in compatible mode", g.Name))
+		}
+	}
+
+	compileRes, err := compiler.Compile(ctx, compatSnap, query.Target)
+	if err != nil {
 		return nil, err
 	}
 
+	snapshotID := "snapshot_" + domain.MustNewUUIDv7()
+	now := domain.NowUTC()
+	compilerVer := compatSnap.CompilerVersion
+	if compilerVer == "" {
+		compilerVer = "1.0.0"
+	}
+	draftPub := domain.Publication{
+		ID:              snapshotID,
+		RevisionID:      revID,
+		Target:          query.Target,
+		SnapshotDigest:  compatSnap.SnapshotDigest,
+		ContentDigest:   compileRes.ContentDigest,
+		ContentType:     compileRes.ContentType,
+		Filename:        compileRes.Filename,
+		Content:         append([]byte(nil), compileRes.Content...),
+		CompilerVersion: compilerVer,
+		TokenHash:       "draft:" + snapshotID,
+		State:           domain.PublicationStateDraft,
+		CreatedAt:       now,
+	}
+	if err := s.pubRepo.Create(ctx, &draftPub); err != nil {
+		return nil, fmt.Errorf("failed to persist preview draft: %w", err)
+	}
+
+	compatIncluded := make([]domain.ManifestIncludedNode, len(compatSnap.Nodes))
+	for i, n := range compatSnap.Nodes {
+		compatIncluded[i] = domain.ManifestIncludedNode{
+			NodeID:             n.LogicalID,
+			ConnectionRevision: n.ConnectionRevision,
+		}
+	}
+
+	var compatPayloadIDs []string
+	if s.payloadRefRepo != nil && len(compatIncluded) > 0 {
+		resolved, err := s.payloadRefRepo.ResolvePayloadIDsForNodes(ctx, compatIncluded)
+		if err == nil && len(resolved) > 0 {
+			compatPayloadIDs = resolved
+		}
+	}
+	manifestCompatPayloadIDs := compatPayloadIDs
+	if manifestCompatPayloadIDs == nil {
+		manifestCompatPayloadIDs = []string{}
+	}
+
+	if s.payloadRefRepo != nil && len(compatPayloadIDs) > 0 {
+		_ = s.payloadRefRepo.AddRefs(ctx, snapshotID, compatPayloadIDs)
+	}
+
+	manifest := domain.PublicationManifest{
+		NodeCount:             len(compatSnap.Nodes),
+		ExcludedCount:         len(excludedNodes),
+		PayloadIDs:            manifestCompatPayloadIDs,
+		ConfigurationRevision: revID,
+		RulesDigest:           compatSnap.RiskDecisionDigest,
+		Included:              compatIncluded,
+		Excluded:              excludedNodes,
+		TargetEngineVersion:   "1.0.0",
+		MappingVersion:        "1.0.0",
+	}
+
+	compatDiags := append([]resolver.Diagnostic(nil), compatSnap.Diagnostics...)
+	if len(compatIncluded) > 0 && len(compatPayloadIDs) == 0 {
+		compatDiags = append(compatDiags, resolver.Diagnostic{
+			Code:     "legacy_payload_unreferenced",
+			Message:  "included nodes have no raw subscription payload reference (legacy or synthetic nodes)",
+			Severity: resolver.DiagnosticSeverityWarning,
+		})
+	}
+
 	return &PreviewResult{
+		SnapshotID:     snapshotID,
 		Target:         query.Target,
 		SnapshotDigest: compileRes.SnapshotDigest,
 		ContentDigest:  compileRes.ContentDigest,
 		Content:        compileRes.Content,
 		ContentType:    compileRes.ContentType,
 		Filename:       compileRes.Filename,
-		Diagnostics:    snapshot.Diagnostics,
-		FilterCounts:   snapshot.FilterCounts,
+		Manifest:       manifest,
+		Diagnostics:    compatDiags,
+		FilterCounts:   compatSnap.FilterCounts,
 	}, nil
 }
 
@@ -543,7 +772,7 @@ func (s *Service) resolveSnapshot(ctx context.Context, revisionID string) (*reso
 		return nil, fmt.Errorf("failed to list admission rules for revision %s: %w", revID, err)
 	}
 
-	nodes, _, err := s.nodeRepo.List(ctx, domain.NodeFilter{ActiveOnly: true})
+	nodes, _, err := s.nodeRepo.List(ctx, domain.NodeFilter{ActiveOnly: true, ExcludeNotices: true})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list active nodes: %w", err)
 	}
@@ -821,8 +1050,12 @@ func (s *Service) evaluatePreflight(ctx context.Context, snapshot *resolver.Reso
 	return result
 }
 
-func newPreflightError(result PreflightResult) error {
+func NewPreflightError(result PreflightResult) error {
 	return &PreflightError{Result: result}
+}
+
+func newPreflightError(result PreflightResult) error {
+	return NewPreflightError(result)
 }
 
 func preflightSummary(snapshot *resolver.ResolvedPolicySnapshot, result PreflightResult) string {

@@ -100,6 +100,15 @@ describe('ErrorStateCard UI Component', () => {
     expect(container.textContent).toContain('unsupported_target_capability')
   })
 
+  it('does not misclassify 422 errors containing "network" keyword as network errors', async () => {
+    const error = new ApiError(422, 'unsupported_target_capability', 'sing-box does not support network xhttp')
+    const { container } = mountComponent({ error })
+
+    expect(container.textContent).toContain('目标格式不支持该协议或特性')
+    expect(container.textContent).not.toContain('网络连接异常')
+    expect(container.textContent).toContain('HTTP 422')
+  })
+
   it('parses error string with status code', async () => {
     const { container } = mountComponent({ error: 'Request failed with 401: unauthorized access' })
 

@@ -6,6 +6,7 @@ import {
   ClipboardDocumentIcon,
   DocumentDuplicateIcon,
   EllipsisVerticalIcon,
+  ListBulletIcon,
   PlusIcon,
   TrashIcon,
 } from '@heroicons/vue/24/outline'
@@ -16,6 +17,7 @@ import StatusBadge from '../../ui/StatusBadge.vue'
 import Popover from '../../ui/Popover.vue'
 import { toastStore } from '../../ui/toast'
 import SubscriptionConfigDrawer from './SubscriptionConfigDrawer.vue'
+import SubscriptionEntriesDrawer from './SubscriptionEntriesDrawer.vue'
 import { t, currentLocale } from '../../locales'
 import {
   useSubscriptions,
@@ -31,6 +33,13 @@ const editing = ref<SubscriptionRecord>()
 const confirmDeleteOpen = ref(false)
 const pendingDeleteSubscription = ref<SubscriptionRecord | null>(null)
 const deleting = ref(false)
+const entriesDrawerOpen = ref(false)
+const viewingEntriesSub = ref<SubscriptionRecord>()
+
+function openEntries(subscription: SubscriptionRecord) {
+  viewingEntriesSub.value = subscription
+  entriesDrawerOpen.value = true
+}
 
 function openCreate() {
   editing.value = undefined
@@ -129,6 +138,16 @@ onMounted(load)
               <p class="mt-1 truncate font-mono text-xs opacity-60 break-all">{{ subscription.source_url_secret_ref }}</p>
             </div>
             <div class="flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                class="btn btn-ghost btn-xs border border-base-300/80 px-2 gap-1 touch-manipulation hover:bg-base-300"
+                data-testid="sub-view-entries"
+                :title="t('subscriptions.viewEntries')"
+                @click="openEntries(subscription)"
+              >
+                <ListBulletIcon class="h-3.5 w-3.5" />
+                <span>{{ t('subscriptions.viewEntries') }}</span>
+              </button>
               <StatusBadge
                 class="shrink-0"
                 :label="subscription.enabled ? t('common.enabled') : t('common.disabled')"
@@ -160,6 +179,18 @@ onMounted(load)
                     >
                       <ArrowPathIcon class="h-3.5 w-3.5 shrink-0" :class="{ 'animate-spin': refreshingIDs.has(subscription.id) }" />
                       <span>{{ t('common.refresh') }}</span>
+                    </button>
+
+                    <!-- View Source Entries -->
+                    <button
+                      type="button"
+                      class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-left hover:bg-base-300/80 text-info transition-colors"
+                      @click="close(); openEntries(subscription)"
+                      role="menuitem"
+                      data-testid="sub-action-view-entries"
+                    >
+                      <ListBulletIcon class="h-3.5 w-3.5 shrink-0" />
+                      <span>{{ t('subscriptions.viewEntries') }}</span>
                     </button>
 
                     <!-- Configure / Open Drawer -->
@@ -291,6 +322,12 @@ onMounted(load)
       :subscription="editing"
       :saving="saving"
       @save="handleDrawerSave"
+    />
+
+    <!-- Source Entries Drawer -->
+    <SubscriptionEntriesDrawer
+      v-model="entriesDrawerOpen"
+      :subscription="viewingEntriesSub"
     />
 
     <ConfirmModal

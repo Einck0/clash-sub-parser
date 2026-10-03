@@ -393,3 +393,23 @@ func (r *publicationRepository) Revoke(ctx context.Context, id string, revokedAt
 	}
 	return nil
 }
+
+func (r *publicationRepository) Activate(ctx context.Context, id, tokenHash string) error {
+	const query = `
+	UPDATE publications SET state = 'active', token_hash = ?
+	WHERE id = ?;`
+
+	res, err := r.db.ExecContext(ctx, query, tokenHash, id)
+	if err != nil {
+		return fmt.Errorf("failed to activate publication %s: %w", id, err)
+	}
+
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return domain.NewNotFoundError("publication_not_found", fmt.Sprintf("publication %s not found", id))
+	}
+	return nil
+}

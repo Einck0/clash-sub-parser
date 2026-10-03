@@ -169,7 +169,14 @@ func (m *memoryNodeRepo) List(_ context.Context, filter domain.NodeFilter) ([]do
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var filtered []domain.Node
+	idSet := make(map[string]bool, len(filter.LogicalIDs))
+	for _, id := range filter.LogicalIDs {
+		idSet[id] = true
+	}
 	for _, n := range m.nodes {
+		if len(filter.LogicalIDs) > 0 && !idSet[n.LogicalID] {
+			continue
+		}
 		if filter.ActiveOnly && !n.Active {
 			continue
 		}

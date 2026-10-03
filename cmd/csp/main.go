@@ -243,6 +243,7 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 	}()
 
 	var runnerOpts []probe.DefaultRunnerOption
+	runnerOpts = append(runnerOpts, probe.WithIPRiskObservationRepository(riskObsRepo))
 
 	var probeRunner probe.Runner
 	if deps != nil && deps.newProbeRunner != nil {
@@ -290,6 +291,7 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 		iprisk.WithNodeRepository(nodeRepo),
 		iprisk.WithAuditRepository(auditRepo),
 	)
+	pubPayloadRefRepo := sqlite.NewPublicationPayloadRefRepository(db)
 	pubOpts := []publication.Option{
 		publication.WithPolicyRepository(policyRepo),
 		publication.WithRevisionRepository(revisionRepo),
@@ -301,6 +303,7 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 		publication.WithRiskPolicyRepository(riskPolicyRepo),
 		publication.WithRiskBindingRepository(riskBindingRepo),
 		publication.WithRiskObservationRepository(riskObsRepo),
+		publication.WithPayloadRefRepository(pubPayloadRefRepo),
 	}
 	pubService := publication.NewService(
 		pubRepo,

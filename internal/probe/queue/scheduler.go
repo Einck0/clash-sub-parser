@@ -80,8 +80,9 @@ type activeRecord struct {
 }
 
 type Scheduler struct {
-	cfg            Config
-	mu             sync.Mutex
+	cfg                    Config
+	explicitRunConcurrency bool
+	mu                     sync.Mutex
 	closed         bool
 	queues         map[string][]Task
 	runOrder       []string
@@ -117,6 +118,7 @@ func NewScheduler(cfg Config) (*Scheduler, error) {
 	if cfg.RunConcurrency < 0 || cfg.RunConcurrency > cfg.Concurrency {
 		return nil, errors.New("run concurrency must be between zero and global concurrency")
 	}
+	explicitRunConcurrency := cfg.RunConcurrency > 0
 	if cfg.RunConcurrency == 0 {
 		cfg.RunConcurrency = (cfg.Concurrency + 1) / 2
 	}
@@ -135,8 +137,9 @@ func NewScheduler(cfg Config) (*Scheduler, error) {
 	}
 	ctx, cancel := context.WithCancel(parent)
 	s := &Scheduler{
-		cfg:            cfg,
-		queues:         make(map[string][]Task),
+		cfg:                    cfg,
+		explicitRunConcurrency: explicitRunConcurrency,
+		queues:                 make(map[string][]Task),
 		activeByRun:    make(map[string]int),
 		activeNodes:    make(map[string]activeRecord),
 		probingNodes:   make(map[string]int),
@@ -221,6 +224,19 @@ func (s *Scheduler) dispatch() {
 	}
 }
 
+// activeCompetingRunsLocked returns the number of distinct runs that either have queued tasks
+// or currently active in-flight tasks.
+// Caller must hold s.mu.
+func (s *Scheduler) activeCompetingRunsLocked() int {
+	runs := len(s.queues)
+	for runID := range s.activeByRun {
+		if _, ok := s.queues[runID]; !ok {
+			runs++
+		}
+	}
+	return runs
+}
+
 func (s *Scheduler) nextEligibleLocked() (Task, bool) {
 	if len(s.runOrder) == 0 {
 		return Task{}, false
@@ -245,11 +261,16 @@ func (s *Scheduler) nextEligibleLocked() (Task, bool) {
 			return t, true
 		}
 	}
+	competing := s.activeCompetingRunsLocked()
 	for n := 0; n < len(s.runOrder); n++ {
 		i := (s.runCursor + n) % len(s.runOrder)
 		run := s.runOrder[i]
 		q := s.queues[run]
-		if len(q) > 0 && s.activeByRun[run] < s.cfg.RunConcurrency {
+		limit := s.cfg.RunConcurrency
+		if !s.explicitRunConcurrency && competing <= 1 {
+			limit = s.cfg.Concurrency
+		}
+		if len(q) > 0 && s.activeByRun[run] < limit {
 			t := q[0]
 			s.queues[run] = q[1:]
 			s.queued--
@@ -317,17 +338,7 @@ func (s *Scheduler) submitStrictConflict(ctx context.Context, task Task, wait bo
 			delete(s.activeNodes, key)
 		}
 		if s.queued < s.cfg.QueueSize {
-			s.activeNodes[key] = activeRecord{active: true, count: 1, lastRunID: task.RunID}
-			s.taskCount++
-			s.callbacks++
-			if len(s.queues[task.RunID]) == 0 {
-				s.runOrder = append(s.runOrder, task.RunID)
-			}
-			s.queues[task.RunID] = append(s.queues[task.RunID], task)
-			s.queued++
-			for prev := s.peakQueued.Load(); int32(s.queued) > prev && !s.peakQueued.CompareAndSwap(prev, int32(s.queued)); prev = s.peakQueued.Load() {
-			}
-			s.signalLocked()
+			s.enqueueTaskLocked(key, task)
 			s.mu.Unlock()
 			return nil
 		}
@@ -345,6 +356,20 @@ func (s *Scheduler) submitStrictConflict(ctx context.Context, task Task, wait bo
 		case <-wake:
 		}
 	}
+}
+
+func (s *Scheduler) enqueueTaskLocked(key string, task Task) {
+	s.activeNodes[key] = activeRecord{active: true, count: 1, lastRunID: task.RunID}
+	s.taskCount++
+	s.callbacks++
+	if len(s.queues[task.RunID]) == 0 {
+		s.runOrder = append(s.runOrder, task.RunID)
+	}
+	s.queues[task.RunID] = append(s.queues[task.RunID], task)
+	s.queued++
+	for prev := s.peakQueued.Load(); int32(s.queued) > prev && !s.peakQueued.CompareAndSwap(prev, int32(s.queued)); prev = s.peakQueued.Load() {
+	}
+	s.signalLocked()
 }
 
 // isNodeInPoolForPeriodicLocked checks whether this node is already in the pool

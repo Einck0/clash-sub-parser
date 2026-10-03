@@ -91,6 +91,7 @@ type ObservationEvidenceData struct {
 	RiskScore  string                        `json:"risk_score,omitempty"`
 	Platforms  map[string]PlatformCapability `json:"platforms,omitempty"`
 	Reason     string                        `json:"reason,omitempty"`
+	SafeDetail *SafeDetail                   `json:"safe_detail,omitempty"`
 }
 
 // ProbeObservation represents an immutable observation made during a probe execution.
@@ -112,6 +113,7 @@ type ProbeObservation struct {
 	Throughput         *float64                      `json:"throughput,omitempty"`
 	RiskScore          string                        `json:"risk_score,omitempty"`
 	Platforms          map[string]PlatformCapability `json:"platforms,omitempty"`
+	SafeDetail         *SafeDetail                   `json:"safe_detail,omitempty"`
 }
 
 // SyncEvidenceData synchronizes structured fields with EvidenceData JSON.
@@ -119,18 +121,19 @@ func (o *ProbeObservation) SyncEvidenceData() {
 	if o == nil {
 		return
 	}
-	if o.EvidenceData == "" && (o.Region != "" || o.SubTier != "" || o.Throughput != nil || o.RiskScore != "" || len(o.Platforms) > 0) {
+	if o.EvidenceData == "" && (o.Region != "" || o.SubTier != "" || o.Throughput != nil || o.RiskScore != "" || len(o.Platforms) > 0 || o.SafeDetail != nil) {
 		ed := ObservationEvidenceData{
 			Region:     o.Region,
 			SubTier:    o.SubTier,
 			Throughput: o.Throughput,
 			RiskScore:  o.RiskScore,
 			Platforms:  o.Platforms,
+			SafeDetail: o.SafeDetail,
 		}
 		if b, err := json.Marshal(ed); err == nil {
 			o.EvidenceData = string(b)
 		}
-	} else if o.EvidenceData != "" && o.Region == "" && o.SubTier == "" && o.Throughput == nil && o.RiskScore == "" && len(o.Platforms) == 0 {
+	} else if o.EvidenceData != "" && o.Region == "" && o.SubTier == "" && o.Throughput == nil && o.RiskScore == "" && len(o.Platforms) == 0 && o.SafeDetail == nil {
 		var ed ObservationEvidenceData
 		if err := json.Unmarshal([]byte(o.EvidenceData), &ed); err == nil {
 			o.Region = ed.Region
@@ -138,6 +141,7 @@ func (o *ProbeObservation) SyncEvidenceData() {
 			o.Throughput = ed.Throughput
 			o.RiskScore = ed.RiskScore
 			o.Platforms = ed.Platforms
+			o.SafeDetail = ed.SafeDetail
 		}
 	}
 }

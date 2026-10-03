@@ -2,7 +2,9 @@ package sqlite
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -148,7 +150,7 @@ func parseIPRiskTime(value, field string) (time.Time, error) {
 }
 
 const ipRiskObservationColumns = `id, node_logical_id, exit_identity_digest, provider, provider_schema_version,
-	observed_at, expires_at, status, score, confidence, network_class, anonymizer_traits, evidence_digest, redacted_summary`
+	observed_at, expires_at, status, score, confidence, network_class, anonymizer_traits, evidence_digest, redacted_summary, probe_observation_id`
 
 func scanIPRiskObservation(scanner interface{ Scan(...any) error }) (*domain.IPRiskObservation, error) {
 	var observation domain.IPRiskObservation
@@ -156,10 +158,16 @@ func scanIPRiskObservation(scanner interface{ Scan(...any) error }) (*domain.IPR
 	var status, networkClass string
 	var score, confidence sql.NullInt64
 	var traitsJSON string
+	var probeObsID sql.NullString
 	if err := scanner.Scan(&observation.ID, &observation.NodeLogicalID, &observation.ExitIdentityDigest,
 		&observation.Provider, &observation.ProviderSchemaVersion, &observedAt, &expiresAt, &status,
-		&score, &confidence, &networkClass, &traitsJSON, &observation.EvidenceDigest, &observation.RedactedSummary); err != nil {
+		&score, &confidence, &networkClass, &traitsJSON, &observation.EvidenceDigest, &observation.RedactedSummary,
+		&probeObsID); err != nil {
 		return nil, err
+	}
+	if probeObsID.Valid && strings.TrimSpace(probeObsID.String) != "" {
+		s := strings.TrimSpace(probeObsID.String)
+		observation.ProbeObservationID = &s
 	}
 	var err error
 	if observation.ObservedAt, err = parseIPRiskTime(observedAt, "observed_at"); err != nil {
@@ -251,6 +259,19 @@ func (r *ipRiskObservationRepository) Create(ctx context.Context, observation *d
 	if err := observation.Validate(); err != nil {
 		return err
 	}
+	if observation.ProbeObservationID != nil && strings.TrimSpace(*observation.ProbeObservationID) != "" {
+		var kindStr string
+		err := r.db.QueryRowContext(ctx, "SELECT kind FROM probe_observations WHERE id = ?;", strings.TrimSpace(*observation.ProbeObservationID)).Scan(&kindStr)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return domain.NewValidationError("probe_observation_not_found", fmt.Sprintf("referenced probe observation %s not found", *observation.ProbeObservationID))
+			}
+			return fmt.Errorf("failed to query referenced probe observation: %w", err)
+		}
+		if domain.ProbeKind(kindStr) != domain.ProbeKindIPRisk {
+			return domain.NewValidationError("invalid_probe_kind_for_ip_risk", fmt.Sprintf("ip_risk_observations may only reference probe observations of kind 'ip_risk', got %s", kindStr))
+		}
+	}
 	traits, err := json.Marshal(observation.AnonymizerTraits)
 	if err != nil {
 		return fmt.Errorf("failed to encode IP risk traits: %w", err)
@@ -259,13 +280,17 @@ func (r *ipRiskObservationRepository) Create(ctx context.Context, observation *d
 	INSERT INTO ip_risk_observations (
 		id, node_logical_id, exit_identity_digest, provider, provider_schema_version,
 		observed_at, expires_at, status, score, confidence, network_class,
-		anonymizer_traits, evidence_digest, redacted_summary
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
+		anonymizer_traits, evidence_digest, redacted_summary, probe_observation_id
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
+	var probeObsArg sql.NullString
+	if observation.ProbeObservationID != nil && strings.TrimSpace(*observation.ProbeObservationID) != "" {
+		probeObsArg = sql.NullString{String: strings.TrimSpace(*observation.ProbeObservationID), Valid: true}
+	}
 	_, err = r.db.ExecContext(ctx, query, observation.ID, observation.NodeLogicalID, observation.ExitIdentityDigest,
 		observation.Provider, observation.ProviderSchemaVersion, observation.ObservedAt.Format(time.RFC3339Nano),
 		observation.ExpiresAt.Format(time.RFC3339Nano), string(observation.Status), nullableInt(observation.Score),
 		nullableInt(observation.Confidence), string(observation.NetworkClass), string(traits), observation.EvidenceDigest,
-		observation.RedactedSummary)
+		observation.RedactedSummary, probeObsArg)
 	if err != nil {
 		return fmt.Errorf("failed to insert IP risk observation: %w", err)
 	}
@@ -289,7 +314,7 @@ func (r *riskPolicyRevisionRepository) GetActive(ctx context.Context) (*domain.R
 
 func (r *riskPolicyRevisionRepository) get(ctx context.Context, suffix string, args ...any) (*domain.RiskPolicyRevision, error) {
 	const query = `SELECT id, fusion_mode, max_observation_age_seconds, minimum_confidence,
-		unknown_action, conflict_action, review_action, active, created_at, activated_at, deactivated_at
+		unknown_action, conflict_action, review_action, active, created_at, activated_at, deactivated_at, rules_digest
 		FROM risk_policy_revisions `
 	var revision domain.RiskPolicyRevision
 	var mode, unknownAction, conflictAction, reviewAction string
@@ -297,15 +322,17 @@ func (r *riskPolicyRevisionRepository) get(ctx context.Context, suffix string, a
 	var maxAge, confidence int
 	var createdAt string
 	var activatedAt, deactivatedAt sql.NullString
+	var rulesDigest string
 	var parseErr error
 	row := r.db.QueryRowContext(ctx, query+suffix+";", args...)
 	if err := row.Scan(&revision.RevisionID, &mode, &maxAge, &confidence, &unknownAction, &conflictAction,
-		&reviewAction, &active, &createdAt, &activatedAt, &deactivatedAt); err != nil {
+		&reviewAction, &active, &createdAt, &activatedAt, &deactivatedAt, &rulesDigest); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, domain.NewNotFoundError("risk_policy_revision_not_found", "risk policy revision not found")
 		}
 		return nil, fmt.Errorf("failed to query risk policy revision: %w", err)
 	}
+	revision.RulesDigest = rulesDigest
 	revision.ProviderSelection.Mode = domain.RiskFusionMode(mode)
 	revision.MaxObservationAge = time.Duration(maxAge) * time.Second
 	revision.MinimumConfidence = confidence
@@ -389,14 +416,30 @@ func (r *riskPolicyRevisionRepository) Create(ctx context.Context, revision *dom
 	if err := revision.RiskPolicy.Validate(); err != nil {
 		return err
 	}
+	rulesDigest := strings.TrimSpace(revision.RulesDigest)
+	if rulesDigest == "" {
+		h := sha256.New()
+		for _, rule := range revision.TraitRules {
+			fmt.Fprintf(h, "trait:%s:%s;", rule.Trait, rule.Action)
+		}
+		for _, band := range revision.ScoreBands {
+			fmt.Fprintf(h, "band:%d:%d:%s:%s;", band.Min, band.Max, band.Band, band.Action)
+		}
+		for _, provider := range revision.ProviderSelection.Providers {
+			fmt.Fprintf(h, "prov:%s:%s;", provider.Provider, provider.SchemaVersion)
+		}
+		rulesDigest = "sha256:" + hex.EncodeToString(h.Sum(nil))
+		revision.RulesDigest = rulesDigest
+	}
 	return WithTx(ctx, r.db, func(ctx context.Context, tx *sql.Tx) error {
 		const query = `INSERT INTO risk_policy_revisions (
 			id, fusion_mode, max_observation_age_seconds, minimum_confidence,
-			unknown_action, conflict_action, review_action, active, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);`
+			unknown_action, conflict_action, review_action, active, created_at, rules_digest
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
 		if _, err := tx.ExecContext(ctx, query, revision.RevisionID, string(revision.ProviderSelection.Mode),
 			int(revision.MaxObservationAge/time.Second), revision.MinimumConfidence, revision.EffectiveUnknownAction(),
-			revision.EffectiveConflictAction(), revision.EffectiveReviewAction(), boolInt(revision.Active), revision.CreatedAt.Format(time.RFC3339)); err != nil {
+			revision.EffectiveConflictAction(), revision.EffectiveReviewAction(), boolInt(revision.Active), revision.CreatedAt.Format(time.RFC3339),
+			rulesDigest); err != nil {
 			return fmt.Errorf("failed to insert risk policy revision: %w", err)
 		}
 		for position, provider := range revision.ProviderSelection.Providers {

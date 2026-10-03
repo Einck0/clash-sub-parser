@@ -15,9 +15,11 @@ type Pagination struct {
 // NodeFilter defines server-side query filters for nodes.
 type NodeFilter struct {
 	Pagination          Pagination     `json:"pagination"`
+	LogicalIDs          []string       `json:"logical_ids,omitempty"`
 	Protocols           []Protocol     `json:"protocols,omitempty"`
 	Countries           []string       `json:"countries,omitempty"`
 	ActiveOnly          bool           `json:"active_only"`
+	ExcludeNotices      bool           `json:"exclude_notices,omitempty"`
 	SearchText          string         `json:"search_text,omitempty"`
 	SortBy              string         `json:"sort_by,omitempty"`
 	SortOrder           string         `json:"sort_order,omitempty"`
@@ -168,6 +170,7 @@ type PublicationRepository interface {
 	GetByTokenHash(ctx context.Context, tokenHash string) (*Publication, error)
 	Create(ctx context.Context, pub *Publication) error
 	Revoke(ctx context.Context, id string, revokedAt time.Time) error
+	Activate(ctx context.Context, id, tokenHash string) error
 }
 
 // SettingsRepository defines the persistence port for global settings.
@@ -215,4 +218,49 @@ type RiskPolicyGroupBindingRepository interface {
 type AuditRepository interface {
 	Record(ctx context.Context, event *AuditEvent) error
 	List(ctx context.Context, filter AuditFilter) ([]AuditEvent, int, error)
+}
+
+// SubscriptionPayloadRepository manages raw subscription payloads.
+type SubscriptionPayloadRepository interface {
+	Save(ctx context.Context, payload *SubscriptionPayload) error
+	GetByID(ctx context.Context, id string) (*SubscriptionPayload, error)
+	GetLatestBySubscription(ctx context.Context, subscriptionID string) (*SubscriptionPayload, error)
+	GetByDigest(ctx context.Context, contentDigest string) (*SubscriptionPayload, error)
+	Pin(ctx context.Context, id string, pinned bool) error
+	PruneUnreferenced(ctx context.Context, olderThan time.Time) (int64, error)
+}
+
+// SubscriptionEntryRepository manages parsed subscription entries.
+type SubscriptionEntryRepository interface {
+	SaveBatch(ctx context.Context, entries []SubscriptionEntry) error
+	ListByPayload(ctx context.Context, payloadID string) ([]SubscriptionEntry, error)
+	ListBySubscription(ctx context.Context, subscriptionID string, limit, offset int) ([]SubscriptionEntry, int, error)
+	ListLatestBySubscription(ctx context.Context, subscriptionID string) ([]SubscriptionEntry, error)
+	GetByID(ctx context.Context, id string) (*SubscriptionEntry, error)
+	SetUserOverride(ctx context.Context, entryID string, userKindOverride *EntryKind, overrideAnchor, reason, actorRef string, overrideAt time.Time) error
+}
+
+// NodeConnectionVersionRepository manages versioned immutable connection configurations.
+type NodeConnectionVersionRepository interface {
+	Save(ctx context.Context, version *NodeConnectionVersion) error
+	GetByRevision(ctx context.Context, nodeLogicalID string, revision int64) (*NodeConnectionVersion, error)
+	GetHead(ctx context.Context, nodeLogicalID string) (*NodeConnectionVersion, error)
+	ListByNode(ctx context.Context, nodeLogicalID string) ([]NodeConnectionVersion, error)
+	SetHead(ctx context.Context, nodeLogicalID string, revision int64, updatedAt time.Time) error
+}
+
+// NodeOverrideRepository manages explicit user field-level overrides.
+type NodeOverrideRepository interface {
+	Save(ctx context.Context, override *NodeOverride) error
+	GetByNode(ctx context.Context, nodeLogicalID string) ([]NodeOverride, error)
+	GetAll(ctx context.Context) (map[string][]NodeOverride, error)
+	Delete(ctx context.Context, nodeLogicalID, fieldPath string) error
+}
+
+// PublicationPayloadRefRepository manages references between publications and payloads.
+type PublicationPayloadRefRepository interface {
+	AddRefs(ctx context.Context, publicationID string, payloadIDs []string) error
+	ListPayloadIDsByPublication(ctx context.Context, publicationID string) ([]string, error)
+	DeleteRefsByPublication(ctx context.Context, publicationID string) error
+	ResolvePayloadIDsForNodes(ctx context.Context, nodes []ManifestIncludedNode) ([]string, error)
 }

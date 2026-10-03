@@ -5,6 +5,7 @@ package publication
 import (
 	"errors"
 
+	"clash-sub-parser/internal/compiler"
 	"clash-sub-parser/internal/domain"
 	"clash-sub-parser/internal/resolver"
 )
@@ -61,13 +62,35 @@ func (e *PreflightError) Unwrap() error {
 	return domain.NewConflictError("publication_preflight_rejected", "publication preflight rejected")
 }
 
+// StrictCapabilityError represents failure in strict mode with full diagnostics and a draft snapshot ID.
+type StrictCapabilityError struct {
+	Code        string                          `json:"code"`
+	Message     string                          `json:"message"`
+	Diagnostics []compiler.CapabilityDiagnostic `json:"diagnostics"`
+	SnapshotID  string                          `json:"snapshot_id,omitempty"`
+}
+
+func (e *StrictCapabilityError) Error() string {
+	return e.Message
+}
+
+func (e *StrictCapabilityError) As(target any) bool {
+	if de, ok := target.(**domain.DomainError); ok {
+		*de = domain.NewValidationError(e.Code, e.Message)
+		return true
+	}
+	return false
+}
+
+
 // PublishCommand contains the input parameters required to publish a new configuration bundle.
 type PublishCommand struct {
-	Target     domain.CompilerTarget
-	RevisionID string
-	Snapshot   *resolver.ResolvedPolicySnapshot
-	ActorKind  domain.ActorKind
-	RequestID  string
+	Target     domain.CompilerTarget            `json:"target"`
+	SnapshotID string                           `json:"snapshot_id"`
+	RevisionID string                           `json:"revision_id,omitempty"`
+	Snapshot   *resolver.ResolvedPolicySnapshot `json:"-"`
+	ActorKind  domain.ActorKind                 `json:"-"`
+	RequestID  string                           `json:"-"`
 }
 
 // PublishResult encapsulates the published immutable publication entity and its export token.
@@ -80,23 +103,27 @@ type PublishResult struct {
 	ContentType    string             `json:"content_type"`
 	Filename       string             `json:"filename"`
 	Size           int                `json:"size"`
+	SnapshotID     string             `json:"snapshot_id"`
 }
 
 // PreviewQuery defines parameters for previewing compiled output from a resolved snapshot.
 type PreviewQuery struct {
 	Target     domain.CompilerTarget            `json:"target"`
 	RevisionID string                           `json:"revision_id,omitempty"`
+	CompatMode string                           `json:"compat_mode,omitempty"`
 	Snapshot   *resolver.ResolvedPolicySnapshot `json:"-"`
 }
 
 // PreviewResult contains rendered configuration content, digests, and diagnostics for preview.
 type PreviewResult struct {
+	SnapshotID     string                      `json:"snapshot_id"`
 	Target         domain.CompilerTarget       `json:"target"`
 	SnapshotDigest string                      `json:"snapshot_digest"`
 	ContentDigest  string                      `json:"content_digest"`
 	Content        []byte                      `json:"content"`
 	ContentType    string                      `json:"content_type"`
 	Filename       string                      `json:"filename"`
+	Manifest       domain.PublicationManifest  `json:"manifest"`
 	Diagnostics    []resolver.Diagnostic       `json:"diagnostics"`
 	FilterCounts   *resolver.FilterLayerCounts `json:"filter_counts,omitempty"`
 }

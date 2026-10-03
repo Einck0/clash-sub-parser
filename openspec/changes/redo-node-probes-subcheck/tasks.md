@@ -38,8 +38,8 @@
 
 - [x] 6.1 汇聚门禁独立代码审查（Reviewer Gate）：完成对全量 Diff、三阶段调度架构、Mihomo 出站与数据模型的独立代码审查，出具真实裁决 `REVIEW: PASS`
 - [x] 6.2 成品隔离黑盒验收（Critic Gate）：基于本地隔离预览实例 (`127.0.0.1:18081`)，完成桌面端 (1440x900) 与移动端 (392x872) 15 视口截图采集与无控制台/网络报错验证，真实验证各平台细粒度分级 (GPT⁺/Web/App, NF Full/Originals/Banned, YT 送中 CN, Disney+ Soon) 与取消/流转流程，出具真实裁决 `CRITIC: PASSED`（全部基于 Test-Fixture，不声称真实商业解锁）
-- [ ] 6.3 生产发布在线一致性热备（Production Preflight Backup）：部署前使用官方 SQLite `.backup` 协议对生产数据库 `/var/lib/docker/volumes/csp-v1-data/_data/csp-v1.db` 执行在线热备并校验完整性与节点库存
-- [ ] 6.4 生产发布与上线健康门禁（Controlled Deployment & Healthz）：构建并受控替换生产容器镜像，维持现有数据卷/双端口/代理/鉴权配置不变，验证生产 `/healthz` 与 `/readyz` 200 OK
+- [x] 6.3 生产发布在线一致性热备（Production Preflight Backup）：部署前使用官方 SQLite `.backup` 协议对生产数据库 `/var/lib/docker/volumes/csp-v1-data/_data/csp-v1.db` 执行在线热备并校验完整性与节点库存
+- [x] 6.4 生产发布与上线健康门禁（Controlled Deployment & Healthz）：构建并受控替换生产容器镜像，维持现有数据卷/双端口/代理/鉴权配置不变，验证生产 `/healthz` 与 `/readyz` 200 OK
 - [ ] 6.5 合法生产管理身份真实节点实网验收（Production Acceptance with Legal Credential）：在用户提供或配置合法生产管理凭据后，针对生产活跃节点执行受控小范围真实节点探针抽测
-- [ ] 6.6 冻结写集合与代码版本提交（Git Commit）：经独立审查与验收通过后，由主脑调用 `git_commit` 正式提交代码变更
+- [x] 6.6 冻结写集合与代码版本提交（Git Commit）：经独立审查与验收通过后，由主脑调用 `git_commit` 正式提交代码变更 (HEAD 9b43415)
 

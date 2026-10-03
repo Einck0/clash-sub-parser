@@ -85,14 +85,16 @@
 ## Verification, Run Lineage & Evidence Clarification
 
 ### 1. 运行态谱系与旧 Run 关联澄清 (Run Lineage & Historical Integrity)
-- **历史旧 Run (`pi_run_20261002_194438_3727280`)**：
-  - 历史状态为 `EXITED` / `BLOCKED`，根因系缺乏可用的生产明文管理 Token 导致实网真实节点验收无法推进；
-  - 该历史失败事实严格保留，严禁覆盖、改写或篡改历史失败记录。
+- **历史旧 Run (`pi_run_20261002_194438_3727280`) 与过渡 Run (`pi_run_20261003_004041_3864824`) 事实确权**：
+  - 历史旧 Run `pi_run_20261002_194438_3727280` 终态为 `EXITED / BLOCKED`，根因系缺乏可用的生产明文管理 Token 导致实网真实节点验收受阻；
+  - 紧随的过渡旧 Run `pi_run_20261003_004041_3864824`（对应会话 `sess_20261003_004041_3864824`）因超时终态为 `EXITED / FAILED / TIMEOUT`，此前文档部分字样机械称其为“另一个 BLOCKED”系误记，特此严谨纠正为真实事实；上述历史失败与超时事实严格保留，严禁覆盖、改写或篡改历史记录。
 - **当前新 Run (`pi_run_20261003_083633_4084296`)**：
   - 承接用户关于全面重做节点探针、对齐 subs-check、移除不合理门禁的明确授权；
   - 全流程完成 Mihomo 进程内出站、三阶段调度漏斗、真实商业平台判定移植、前端 WebAssets 重新编译同步；
   - 汇聚门禁独立代码审查已通过（`REVIEW: PASS`）；
-  - 施工上一报告曾引用既有会话句柄 `sess_20261003_004041_3864824`，特在此确权澄清其属于新 Run `pi_run_20261003_083633_4084296` 之成功施工成果，旧 Run 历史 BLOCKED 绝不篡改。
+  - Critic 隔离多视口截图黑盒验收已通过（`CRITIC: PASSED`）；
+  - 主脑完成主线代码提交：`commit 9b43415 feat(probes): rebuild node probing from subs-check with mihomo pipeline`；
+  - 生产发布受控上线与双端口健康检查验证完成（`RELEASE: PASS`），旧 Run 历史记录不篡改。
 
 ### 2. Critic 隔离多视口黑盒验收事实 (Critic Visual Acceptance Facts)
 - **验收环境**：本地独立沙箱预览服务 (`http://127.0.0.1:18081`)，基于独立 SQLite 数据库 (`/tmp/csp-preview/csp-sandbox.db`)，生产数据 0 写入；

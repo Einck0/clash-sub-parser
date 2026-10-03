@@ -206,3 +206,40 @@ Critic 必须通过无头浏览器采集如下视口尺寸实机渲染截图并�
   - 最终替换前生成的生产快照（`csp-v1-fresh-before-up.db`，SHA-256 `042aa0cb8ad9fb6f1408aea8e27a81f0c3bb8eca1fe04b3f633095f73f4a932d`）已在完全隔离无挂载沙箱中完成独立复测恢复演练，确认 `integrity_check: ok`、`foreign_key_check: OK` 且全量 1005 节点、22 活跃节点、9 订阅、22 来源与身份 verifier 100% 保持；
   - 公网真实入口 `https://sub.einck.top`（由宿主机 Nginx 反代 `127.0.0.1:17000`）通过标准 TLSv1.3 校验，健康与鉴权端点均返回 200 OK。
 
+---
+
+## 七、 节点探针重构生产发布执行记录 (Release Record 9b43415)
+
+- **发布时间**：`2026-10-03 09:46:12` 至 `09:47:05 CST`
+- **目标提交 (Git HEAD)**：`9b4341557b412c9cb44b893bb615b837270162a1` (`feat(probes): rebuild node probing from subs-check with mihomo pipeline`)
+- **发布在线一致性热备**：
+  - 备份文件：`/var/lib/docker/volumes/csp-v1-data/_data/backups/csp-v1-backup-20261003_094612.db`（大小 8.0M，权限 `0640`）
+  - SHA-256：`64de14903f15fe28883aa983d6dd8da3c70feb09216e87500742e8a074ae005d`
+  - 校验结果：`PRAGMA integrity_check: ok`，`PRAGMA foreign_key_check: OK`
+  - 存量统计：全量 1014 节点（31 活跃，983 失活保持禁用），9 订阅，31 来源
+- **旧镜像回滚标签固化**：
+  - 回滚目标：`clash-sub-parser-app:rollback-pre-subcheck-7be48f7f8405` (`sha256:7be48f7f84051aff1ff4feba34b70b95f1d8071f396af76dfb35b8914a55fafd`)
+- **新生产镜像与容器构建替换**：
+  - 构建命令：`docker compose -f /home/service/clash-sub-parser/docker-compose.yml build app`
+  - 新镜像 ID：`sha256:bc2c43c15553ec6671d2215e310948805463c43849045f67aaf3024fb8fb8a40`
+  - 新镜像标签：`clash-sub-parser-app:latest`, `clash-sub-parser-app:v1-release-20261003-9b43415`
+  - 容器替换命令：`docker compose -f /home/service/clash-sub-parser/docker-compose.yml up -d --no-deps --no-build --force-recreate app`
+  - 新容器 ID：`d70d4245545d`（状态 `Up (healthy)`）
+  - 二进制校验：容器内 `/app/csp` SHA-256 为 `c932bc3a73eeeca21fac9af9d5a96f2b0281b991cde014bbafa2062b73688a5f`，确认包含最新内嵌资产 `index-D63KhTaR.js`
+- **全链路健康与边界校验**：
+  - `GET http://127.0.0.1:18080/healthz` -> HTTP 200 `{"data":{"status":"ok"}}`
+  - `GET http://127.0.0.1:18080/readyz` -> HTTP 200 `{"data":{"ready":true,"required_tables":14,"schema_version":14}}`
+  - `GET http://127.0.0.1:17000/healthz` -> HTTP 200 `{"data":{"status":"ok"}}`
+  - `GET http://127.0.0.1:17000/readyz` -> HTTP 200 `{"data":{"ready":true,"required_tables":14,"schema_version":14}}`
+  - `GET http://127.0.0.1:18080/api/v1/auth/status` -> HTTP 200 `{"data":{"mode":"protected","admin_mode":"protected","export_mode":"protected"}}`
+  - 未鉴权请求 `GET /api/v1/nodes` 与 `/api/v1/subscriptions` 严格返回 401 Unauthorized
+  - 生产数据库迁移自动完成（Migration 14 applied，`probe_observations.evidence_data` 列已就绪）
+  - 数据库完整性再次核验：`integrity_check: ok`, `foreign_key_check: OK`
+  - 节点库存保持一致：1014 总节点（31 活跃，983 严格保持失活禁用，无误激活），9 订阅，31 来源
+  - 管理 Token 配置保持：存储为 60 位单向 bcrypt Hash，鉴权未被关闭，无哈希或明文泄露
+- **实网探针能力验收边界声明**：
+  - 因生产环境未配置明文管理凭据，本轮生产真实节点探测执行数为 **0**；
+  - 保持 `tasks.md` 6.5 未勾选，绝不以 200 假健康冒充真实节点解锁验收；
+  - 本地隔离预览服务 (PID 4149369) 已受控停止，端口 18081 已释放。
+
+

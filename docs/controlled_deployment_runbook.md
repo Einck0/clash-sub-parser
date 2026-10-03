@@ -242,4 +242,44 @@ Critic 必须通过无头浏览器采集如下视口尺寸实机渲染截图并�
   - 保持 `tasks.md` 6.5 未勾选，绝不以 200 假健康冒充真实节点解锁验收；
   - 本地隔离预览服务 (PID 4149369) 已受控停止，端口 18081 已释放。
 
+---
+
+## 八、 数据流重构与节点事实版本化生产发布执行记录 (Release Record db1c87d)
+
+- **发布时间**：`2026-10-04 04:49:41 CST` (UTC 2026-10-03 20:49:41)
+- **目标提交 (Git HEAD)**：`db1c87d70324323c04a908efa42caba0c32fdfef` (`feat(dataflow): version node facts and snapshots with efficient probing`)
+- **发布在线一致性热备**：
+  - 备份文件：`/var/lib/docker/volumes/csp-v1-data/_data/backups/csp-v1-backup-final-pre-db1c87d_20261003_204941.db`（大小 11M，权限 `0600`）
+  - SHA-256：`a5b25dfe776de61548bca92dd4964cd2a46cd5b9f14b81bb9a4c63f83e5129b6`
+  - 校验结果：`PRAGMA integrity_check: ok`，`PRAGMA foreign_key_check: 0`
+  - 存量统计：全量 1014 节点（31 活跃，983 失活保持禁用，1 rev2），9 订阅，29 组，64 边，163 规则；冷备时点实际记录 8320 条拨测观测（此前 worker 统计 8297 条为更早 preflight 时点，停机前由于 periodic worker 增长至 8320 条；启动后随着 periodic 调度继续增长至 8343 条）
+- **旧镜像回滚标签固化**：
+  - 回滚目标：`clash-sub-parser-app:rollback-pre-db1c87d` (`sha256:bc2c43c15553ec6671d2215e310948805463c43849045f67aaf3024fb8fb8a40`)
+- **新生产镜像与容器受控替换**：
+  - 替换性质：**受控单容器停机冷替换**（非 rolling/grey 灰度，非 zero-loss 绝对无损）
+  - 镜像预构建：`docker compose build app`（在容器停止前完成，消除镜像构建耗时）
+  - 新镜像 ID：`sha256:62ee52ebbfaf14d980951eae470894eec05499f8ee6724e37428b187648e0cd1`
+  - 新镜像标签：`clash-sub-parser-app:latest`, `clash-sub-parser-app:v1-release-20261004-db1c87d`
+  - 停机切换命令：`docker compose stop app` -> `offline backup` -> `docker compose up -d --no-deps --no-build --force-recreate app`
+  - 新容器实例：**`5aaefb45714c`**（`5aaefb45714c85bbf52f5173cbb7b92945f025b021520a7738f32e2df835db8e`，Created: `2026-10-03T20:49:42.310365615Z`，Started: `2026-10-03T20:49:42.434500473Z`，替换旧容器 `d70d4245545d`）
+  - 停机维护实测窗口：**1.941 秒**（仅代表本脚本执行实测：0.515s 停止命令 + 0.034s 离线备份 + 1.315s 拉起至首个 HTTP `/readyz` 返回 200 OK；非普适 SLA 承诺，停机至首包间隙在途 HTTP 请求存在拒绝风险）
+  - 二进制校验：容器内 `/app/csp` SHA-256 为 `293ba2583d7902ca6027766bb3b10ed0bfcab365329cf28c140f14aa31f99c5c`，内嵌最新资产 `assets/index-DEOrP0Zl.js` (SHA-256 `8b062781...`) 与 `assets/index-DvGgiMfM.css` (SHA-256 `2af364cd...`)
+- **全链路健康与数据库迁移核验**：
+  - `GET http://127.0.0.1:18080/healthz` -> HTTP 200 `{"data":{"status":"ok"}}`
+  - `GET http://127.0.0.1:18080/readyz` -> HTTP 200 `{"data":{"ready":true,"required_tables":14,"schema_version":15}}`
+  - `GET http://127.0.0.1:17000/healthz` -> HTTP 200 `{"data":{"status":"ok"}}`
+  - `GET http://127.0.0.1:17000/readyz` -> HTTP 200 `{"data":{"ready":true,"required_tables":14,"schema_version":15}}`
+  - 数据库自动迁移至 Migration 15，数据表由 27 张增至 33 张；
+  - `node_connection_versions` 初始化 1014 行，`node_connection_heads` 初始化 1014 行；
+  - 原 `connection_revision=2` 节点 `node_6eda792403e42734865ede71fe21cc82` 在 versions 与 heads 中严格保留 revision=2，未被重置为 1；
+  - 节点库存核验基于与冷备文件执行布尔全等比对：相同 logical_id, connection_revision, active, server, port, credentials 与 settings bcrypt hash 逐项一致；存量节点 active 状态保持原值（31 活跃，983 失活保持禁用），不使用绝对零丢失等绝对性词汇；
+  - 数据库完整性再次核验：`integrity_check: ok`, `foreign_key_check: 0`；
+  - 管理 Token 配置保持：存储为 60 位单向 bcrypt Hash，鉴权未被关闭，无哈希或明文泄露。
+- **Post-Live 真实业务与数据流边界澄清**：
+  - `subscription_payloads` 与 `subscription_entries` 当前各为 0 条；因存量历史抓取未落盘 raw BLOB，历史公告仍暂留在 `nodes` 中；未查验历史具体 notice 节点的 active 状态，不宣称公告已全部失活或自动消失；
+  - 核心修复与能力已即刻生效：公告分类器逻辑、xhttp 编译支持、422 诊断矩阵、空组保护、快照发布两阶段均已就绪；
+  - 用户已授权实施上线，Pi 无法调用前台已登录 vault 安全渠道；生产带身份管理刷新/探针/预览发布未验（不索要聊天明文 Token）；工程审查 PASS 与成品验收 Critic PASSED 均基于隔离测试夹具 (Test-Fixture) 验证，不冒充生产管理验收；
+  - 下次由用户在已登录的 Web 控制台手动刷新 Dogegg 订阅（或调度器自动抓取）后，将正式摄入 raw payloads 并自动将公告分类至条目层解耦，不再污染节点账本；建议用户以此作为下一最小交互；
+  - 隔离预览服务 (PID 566574) 已在核实身份后完全停止，端口 18081 已释放，全部工件与截图安全存盘；
+  - 性能与基准测试声明：不宣称 CSP 相对 subs-check 存在全局性胜出；保留原试验失效与纠偏事实：corrected 5s 8 nodes 各 7 of 8（pre 5.009/5.003s, post 5.015/5.004s, subs-check 5.152/5.151s）；媒体探测 pre 3.030/3.150s -> post 1.912/2.043s，AI 探测 pre 1.784/1.846s -> post 0.909/0.840s（仅 CSP 同样本两轮自比结果；平台算法与上游不同，不宣称等价或整体优胜，未采样 p50/p95；Netflix 修正为更早正确性修复，本次无新增基准测量）。
 

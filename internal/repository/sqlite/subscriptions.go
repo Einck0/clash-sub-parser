@@ -456,6 +456,80 @@ func (r *subscriptionRepository) Update(ctx context.Context, sub *domain.Subscri
 
 func (r *subscriptionRepository) Delete(ctx context.Context, id string) error {
 	return WithTx(ctx, r.db, func(ctx context.Context, tx *sql.Tx) error {
+		// 1. Check if subscription exists and get its name
+		var subName string
+		err := tx.QueryRowContext(ctx, "SELECT name FROM subscriptions WHERE id = ?;", id).Scan(&subName)
+		if err == sql.ErrNoRows {
+			return domain.NewNotFoundError("subscription_not_found", fmt.Sprintf("subscription %s not found", id))
+		}
+		if err != nil {
+			return fmt.Errorf("failed to query subscription for deletion: %w", err)
+		}
+
+		now := domain.NowUTC()
+		nowStr := now.Format(time.RFC3339)
+
+		// 2. Snapshot current node associations to node_source_history before deletion
+		var histTableExists int
+		_ = tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='node_source_history';").Scan(&histTableExists)
+		if histTableExists > 0 {
+			type snapRow struct {
+				nodeID    string
+				fetchID   string
+				rev       int64
+				startedAt sql.NullString
+			}
+			rows, qErr := tx.QueryContext(ctx, `
+				SELECT ns.node_logical_id, ns.last_seen_fetch_id, COALESCE(n.connection_revision, 1), sf.started_at
+				FROM node_sources ns
+				JOIN nodes n ON ns.node_logical_id = n.logical_id
+				LEFT JOIN subscription_fetches sf ON ns.last_seen_fetch_id = sf.id
+				WHERE ns.subscription_id = ?;
+			`, id)
+			if qErr == nil {
+				var toSnap []snapRow
+				for rows.Next() {
+					var s snapRow
+					if scanErr := rows.Scan(&s.nodeID, &s.fetchID, &s.rev, &s.startedAt); scanErr == nil {
+						toSnap = append(toSnap, s)
+					}
+				}
+				rows.Close()
+
+				if len(toSnap) > 0 {
+					histStmt, prepErr := tx.PrepareContext(ctx, `
+						INSERT INTO node_source_history (
+							id, node_logical_id, subscription_id, source_identity, source_label,
+							connection_revision, relation_state, cause, first_observed_at,
+							last_observed_at, evidence_kind, evidence_key, evidence_json, created_at
+						) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+						ON CONFLICT(node_logical_id, evidence_key) DO UPDATE SET
+							last_observed_at = excluded.last_observed_at;
+					`)
+					if prepErr == nil {
+						defer histStmt.Close()
+						for _, s := range toSnap {
+							histID := domain.MustNewUUIDv7()
+							evidenceKey := fmt.Sprintf("subscription_deleted:%s:%s", id, s.nodeID)
+							evidenceJSON := fmt.Sprintf(`{"subscription_id":%q,"subscription_name":%q,"action":"subscription_deleted"}`, id, subName)
+							var firstObs any = nil
+							if s.startedAt.Valid && strings.TrimSpace(s.startedAt.String) != "" {
+								firstObs = s.startedAt.String
+							}
+							if _, execErr := histStmt.ExecContext(ctx,
+								histID, s.nodeID, id, "sub:"+id, subName,
+								s.rev, string(domain.RelationStateVerified), string(domain.CauseSubscriptionDeleted),
+								firstObs, nowStr, "subscription_delete_snapshot", evidenceKey,
+								evidenceJSON, nowStr,
+							); execErr != nil {
+								return fmt.Errorf("failed to insert history snapshot on subscription delete (node=%s): %w", s.nodeID, execErr)
+							}
+						}
+					}
+				}
+			}
+		}
+
 		res, err := tx.ExecContext(ctx, "DELETE FROM subscriptions WHERE id = ?;", id)
 		if err != nil {
 			return fmt.Errorf("failed to delete subscription: %w", err)
@@ -481,7 +555,6 @@ func (r *subscriptionRepository) Delete(ctx context.Context, id string) error {
 			  SELECT 1 FROM node_sources WHERE node_sources.node_logical_id = nodes.logical_id
 		  );`
 
-		nowStr := domain.NowUTC().Format(time.RFC3339)
 		if _, err := tx.ExecContext(ctx, deactivateOrphansSQL, nowStr); err != nil {
 			return fmt.Errorf("failed to deactivate orphan nodes after subscription delete: %w", err)
 		}

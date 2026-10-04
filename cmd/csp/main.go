@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -450,6 +451,91 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 	return 0
 }
 
+// runRecoverSourceHistory executes the recover-source-history CLI maintenance command.
+func runRecoverSourceHistory(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("recover-source-history", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+
+	defaultDBPath := os.Getenv("CSP_DB_PATH")
+	if defaultDBPath == "" {
+		defaultDBPath = os.Getenv("DB_PATH")
+	}
+	if defaultDBPath == "" {
+		defaultDBPath = "/data/csp-v1.db"
+	}
+
+	var (
+		manifestPath   string
+		dbPath         string
+		dryRun         bool
+		expectedSHA256 string
+		archiveDir     string
+	)
+
+	fs.StringVar(&manifestPath, "manifest", "", "path to verified recovery manifest JSON file (required)")
+	fs.StringVar(&manifestPath, "m", "", "path to verified recovery manifest JSON file (shorthand)")
+	fs.StringVar(&dbPath, "db", defaultDBPath, "path to target SQLite database file")
+	fs.StringVar(&dbPath, "d", defaultDBPath, "path to target SQLite database file (shorthand)")
+	fs.BoolVar(&dryRun, "dry-run", false, "dry run without modifying database (inspects invariants and counts)")
+	fs.StringVar(&expectedSHA256, "expected-sha256", "", "expected sha256 checksum of manifest file (required)")
+	fs.StringVar(&archiveDir, "archive-dir", "/home/service/backups", "path to evidence archives directory")
+
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		return 2
+	}
+
+	if strings.TrimSpace(manifestPath) == "" {
+		fmt.Fprintf(stderr, "recover-source-history: --manifest is required\n")
+		return 1
+	}
+	if strings.TrimSpace(expectedSHA256) == "" {
+		fmt.Fprintf(stderr, "recover-source-history: --expected-sha256 is required\n")
+		return 1
+	}
+
+	ctx := context.Background()
+
+	var db *sql.DB
+	if dryRun {
+		var err error
+		db, err = sqlite.OpenReadOnly(dbPath)
+		if err != nil {
+			fmt.Fprintf(stderr, "recover-source-history: database connection failed: %v\n", err)
+			return 1
+		}
+	} else {
+		dbCfg := sqlite.DefaultConfig(dbPath)
+		var err error
+		db, err = sqlite.Open(dbCfg)
+		if err != nil {
+			fmt.Fprintf(stderr, "recover-source-history: database connection failed: %v\n", err)
+			return 1
+		}
+	}
+	defer db.Close()
+
+	recCfg := inventory.RecoveryConfig{
+		ManifestPath:           manifestPath,
+		ExpectedManifestSHA256: expectedSHA256,
+		DryRun:                 dryRun,
+		TargetDBPath:           dbPath,
+		ArchiveDir:             archiveDir,
+	}
+
+	res, err := inventory.RecoverSourceHistory(ctx, db, recCfg)
+	if err != nil {
+		fmt.Fprintf(stderr, "recover-source-history: recovery failed: %v\n", err)
+		return 1
+	}
+
+	outJSON, _ := json.MarshalIndent(res, "", "  ")
+	fmt.Fprintln(stdout, string(outJSON))
+	return 0
+}
+
 // run executes the root application logic with injectable standard I/O for testing.
 func run(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet(appName, flag.ContinueOnError)
@@ -479,6 +565,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return 0
 		case "serve", "server":
 			return runServe(remaining[1:], stdout, stderr)
+		case "recover-source-history":
+			return runRecoverSourceHistory(remaining[1:], stdout, stderr)
 		default:
 			fmt.Fprintf(stderr, "unknown command: %s\n", remaining[0])
 			return 1

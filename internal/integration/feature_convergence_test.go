@@ -76,8 +76,8 @@ func TestFeatureConvergence_SchemaMigrationTo8(t *testing.T) {
 	if !report.Ready {
 		t.Fatalf("expected readiness report Ready=true, got report: %+v", report)
 	}
-	if report.SchemaVersion != 15 {
-		t.Fatalf("expected schema version 15, got %d", report.SchemaVersion)
+	if report.SchemaVersion != 16 {
+		t.Fatalf("expected schema version 16, got %d", report.SchemaVersion)
 	}
 	if len(report.MissingTables) > 0 {
 		t.Fatalf("unexpected missing tables: %v", report.MissingTables)

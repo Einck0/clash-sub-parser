@@ -66,6 +66,11 @@ func extractYAML(content []byte) (ExtractResult, bool, error) {
 	return result, true, nil
 }
 
+// ExtractProxyMap parses a single proxy map into a NormalizedNode and domain.InboundProtocolCredential.
+func ExtractProxyMap(proxy map[string]any) (NormalizedNode, domain.InboundProtocolCredential, error) {
+	return extractYAMLProxy(proxy)
+}
+
 func extractYAMLProxy(proxy map[string]any) (NormalizedNode, domain.InboundProtocolCredential, error) {
 	protocol, err := protocolFor(value(proxy, "type"))
 	if err != nil {

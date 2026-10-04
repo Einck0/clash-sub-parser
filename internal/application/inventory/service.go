@@ -192,6 +192,7 @@ type Service struct {
 	versionRepo       domain.NodeConnectionVersionRepository
 	overrideRepo      domain.NodeOverrideRepository
 	pubPayloadRefRepo domain.PublicationPayloadRefRepository
+	sourceHistoryRepo domain.NodeSourceHistoryRepository
 	poolProvider      NodePoolStateProvider
 	defaultFetchProxy string
 	clock             func() time.Time
@@ -229,6 +230,13 @@ func WithNodeConnectionVersionRepository(repo domain.NodeConnectionVersionReposi
 func WithNodeOverrideRepository(repo domain.NodeOverrideRepository) Option {
 	return func(s *Service) {
 		s.overrideRepo = repo
+	}
+}
+
+// WithNodeSourceHistoryRepository sets the node source history repository.
+func WithNodeSourceHistoryRepository(repo domain.NodeSourceHistoryRepository) Option {
+	return func(s *Service) {
+		s.sourceHistoryRepo = repo
 	}
 }
 
@@ -320,11 +328,17 @@ func NewService(
 		s.versionRepo = sqlite.NewNodeConnectionVersionRepository(db)
 		s.overrideRepo = sqlite.NewNodeOverrideRepository(db)
 		s.pubPayloadRefRepo = sqlite.NewPublicationPayloadRefRepository(db)
+		s.sourceHistoryRepo = sqlite.NewNodeSourceHistoryRepository(db)
 	}
 	for _, opt := range opts {
 		opt(s)
 	}
 	return s
+}
+
+// SourceHistoryRepository returns the node source history repository handle.
+func (s *Service) SourceHistoryRepository() domain.NodeSourceHistoryRepository {
+	return s.sourceHistoryRepo
 }
 
 // EntryRepository returns the entry repository handle.
@@ -558,13 +572,29 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 		existingNodes := make(map[string]existingNodeRow)
 		existingByNameProto := make(map[string][]existingNodeRow)
 
-		const selectExistingSQL = `
+		selectExistingSQL := `
 		SELECT n.logical_id, n.protocol, n.display_name, n.server, n.port, n.config_json, n.active, n.connection_revision
 		FROM nodes n
 		INNER JOIN node_sources ns ON n.logical_id = ns.node_logical_id
 		WHERE ns.subscription_id = ?;`
 
-		rows, qErr := tx.QueryContext(ctx, selectExistingSQL, sub.ID)
+		var histTableExistsPre int
+		_ = tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='node_source_history';").Scan(&histTableExistsPre)
+		var rows *sql.Rows
+		var qErr error
+		if histTableExistsPre > 0 {
+			selectExistingSQL = `
+			SELECT n.logical_id, n.protocol, n.display_name, n.server, n.port, n.config_json, n.active, n.connection_revision
+			FROM nodes n
+			WHERE n.logical_id IN (
+				SELECT node_logical_id FROM node_sources WHERE subscription_id = ?
+				UNION
+				SELECT node_logical_id FROM node_source_history WHERE subscription_id = ?
+			);`
+			rows, qErr = tx.QueryContext(ctx, selectExistingSQL, sub.ID, sub.ID)
+		} else {
+			rows, qErr = tx.QueryContext(ctx, selectExistingSQL, sub.ID)
+		}
 		if qErr != nil {
 			return fmt.Errorf("failed to query existing nodes for subscription: %w", qErr)
 		}
@@ -918,6 +948,27 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 							// Copy-on-write isolation
 							targetLogicalID = scopedCandidateID
 							currentRevision = matchedNode.connectionRevision + 1
+
+							// Snapshot old shared association before unlinking
+							var histTableExists int
+							_ = tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='node_source_history';").Scan(&histTableExists)
+							if histTableExists > 0 {
+								histID := domain.MustNewUUIDv7()
+								evidenceKey := fmt.Sprintf("cow_unlinked:%s:%s", matchedNode.logicalID, sub.ID)
+								evidenceJSON := fmt.Sprintf(`{"action":"cow_unlinked","subscription_id":%q,"subscription_name":%q}`, sub.ID, sub.Name)
+								if _, execErr := tx.ExecContext(ctx, `
+									INSERT INTO node_source_history (
+										id, node_logical_id, subscription_id, source_identity, source_label,
+										connection_revision, relation_state, cause, first_observed_at,
+										last_observed_at, evidence_kind, evidence_key, evidence_json, created_at
+									) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+									ON CONFLICT(node_logical_id, evidence_key) DO UPDATE SET
+										last_observed_at = excluded.last_observed_at;
+								`, histID, matchedNode.logicalID, sub.ID, "sub:"+sub.ID, sub.Name, matchedNode.connectionRevision, string(domain.RelationStateVerified), string(domain.CauseRefreshRemoved), nowStr, nowStr, "cow_unlinked", evidenceKey, evidenceJSON, nowStr); execErr != nil {
+									return fmt.Errorf("failed to insert cow history snapshot (node=%s): %w", matchedNode.logicalID, execErr)
+								}
+							}
+
 							if _, err := tx.ExecContext(ctx, `
 								DELETE FROM node_sources
 								WHERE node_logical_id = ? AND subscription_id = ?;
@@ -972,7 +1023,17 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 								targetActive = 0
 							}
 						} else if otherSubCount == 0 {
-							targetLogicalID = scopedCandidateID
+							var exCreds domain.InboundProtocolCredential
+							_ = json.Unmarshal([]byte(existingConfig), &exCreds)
+							if areConnectionParametersEqual(domain.Protocol(existingProto), node.Protocol, existingServer, node.Server, existingPort, node.Port, exCreds, node.Credentials) {
+								targetLogicalID = candidateID
+								currentRevision = existingRev
+								if existingActive == 0 {
+									targetActive = 1
+								}
+							} else {
+								targetLogicalID = scopedCandidateID
+							}
 						} else {
 							var exCreds domain.InboundProtocolCredential
 							_ = json.Unmarshal([]byte(existingConfig), &exCreds)
@@ -1116,9 +1177,78 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 			}
 		}
 
-		// NON-DESTRUCTIVE INVARIANT: No node_sources rows are pruned or deleted on refresh.
-		// Existing source associations are preserved across intervals (even if omitted in current fetch,
-		// last_seen_fetch_id remains as historical record, but provenance edge is never removed).
+		// 4. Archive obsolete node sources under current subscription before pruning
+		var histTableExists int
+		_ = tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='node_source_history';").Scan(&histTableExists)
+		if histTableExists > 0 {
+			type pruneRow struct {
+				nodeID    string
+				fetchID   string
+				rev       int64
+				startedAt sql.NullString
+			}
+			rows, qErr := tx.QueryContext(ctx, `
+				SELECT ns.node_logical_id, ns.last_seen_fetch_id, COALESCE(n.connection_revision, 1), sf.started_at
+				FROM node_sources ns
+				JOIN nodes n ON ns.node_logical_id = n.logical_id
+				LEFT JOIN subscription_fetches sf ON ns.last_seen_fetch_id = sf.id
+				WHERE ns.subscription_id = ? AND ns.last_seen_fetch_id != ?;
+			`, sub.ID, fetchID)
+			if qErr == nil {
+				var toPrune []pruneRow
+				for rows.Next() {
+					var p pruneRow
+					if scanErr := rows.Scan(&p.nodeID, &p.fetchID, &p.rev, &p.startedAt); scanErr == nil {
+						toPrune = append(toPrune, p)
+					}
+				}
+				rows.Close()
+
+				if len(toPrune) > 0 {
+					histStmt, prepErr := tx.PrepareContext(ctx, `
+						INSERT INTO node_source_history (
+							id, node_logical_id, subscription_id, source_identity, source_label,
+							connection_revision, relation_state, cause, first_observed_at,
+							last_observed_at, evidence_kind, evidence_key, evidence_json, created_at
+						) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+						ON CONFLICT(node_logical_id, evidence_key) DO UPDATE SET
+							last_observed_at = excluded.last_observed_at;
+					`)
+					if prepErr == nil {
+						defer histStmt.Close()
+						for _, p := range toPrune {
+							histID := domain.MustNewUUIDv7()
+							evidenceKey := fmt.Sprintf("refresh_removed:%s:%s", sub.ID, p.fetchID)
+							evidenceJSON := fmt.Sprintf(`{"subscription_id":%q,"subscription_name":%q,"pruned_by_fetch_id":%q,"last_seen_fetch_id":%q}`, sub.ID, sub.Name, fetchID, p.fetchID)
+							var firstObs any = nil
+							if p.startedAt.Valid && strings.TrimSpace(p.startedAt.String) != "" {
+								firstObs = p.startedAt.String
+							}
+							if _, execErr := histStmt.ExecContext(ctx,
+								histID, p.nodeID, sub.ID, "sub:"+sub.ID, sub.Name,
+								p.rev, string(domain.RelationStateVerified), string(domain.CauseRefreshRemoved),
+								firstObs, nowStr, "subscription_refresh_prune", evidenceKey,
+								evidenceJSON, nowStr,
+							); execErr != nil {
+								return fmt.Errorf("failed to insert history snapshot on refresh prune (node=%s): %w", p.nodeID, execErr)
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// Prune obsolete node_sources associations from current subscription
+		const pruneSourcesSQL = `
+		DELETE FROM node_sources
+		WHERE subscription_id = ? AND last_seen_fetch_id != ?;`
+
+		if _, err := tx.ExecContext(ctx, pruneSourcesSQL, sub.ID, fetchID); err != nil {
+			return fmt.Errorf("failed to prune obsolete node sources for sub %s: %w", sub.ID, err)
+		}
+
+		// NON-DESTRUCTIVE INVARIANT: Nodes themselves are NEVER deactivated or deleted on refresh pruning.
+		// node.active remains intact even when omitted from the latest fetch.
 		return nil
 	})
 
@@ -1801,3 +1931,161 @@ func (s *Service) recordAudit(ctx context.Context, actorKind domain.ActorKind, r
 		CreatedAt:       domain.NowUTC(),
 	})
 }
+
+// CurrentSourceView represents a currently attached live subscription source.
+type CurrentSourceView struct {
+	SubscriptionID string `json:"subscription_id"`
+	Name           string `json:"name"`
+	Enabled        bool   `json:"enabled"`
+}
+
+// NodeSourceHistoryItemView represents a safe, redacted historical observation item for a node.
+type NodeSourceHistoryItemView struct {
+	SourceLabel        string                  `json:"source_label"`
+	SubscriptionID     *string                 `json:"subscription_id,omitempty"`
+	RelationState      domain.RelationState    `json:"relation_state"`
+	Cause              domain.AttributionCause `json:"cause"`
+	EvidenceKind       string                  `json:"evidence_kind"`
+	FirstObservedAt    *string                 `json:"first_observed_at,omitempty"`
+	LastObservedAt     *string                 `json:"last_observed_at,omitempty"`
+	ConnectionRevision *int64                  `json:"connection_revision,omitempty"`
+	SourceDeleted      bool                    `json:"source_deleted"`
+	SourceUnmapped     bool                    `json:"source_unmapped"`
+}
+
+// NodeSourceHistoryResponseData represents the payload for GET /api/v1/nodes/{id}/source-history.
+type NodeSourceHistoryResponseData struct {
+	CurrentSources    []CurrentSourceView         `json:"current_sources"`
+	History           []NodeSourceHistoryItemView `json:"history"`
+	AttributionStatus domain.AttributionStatus    `json:"attribution_status"`
+}
+
+// GetNodeSourceHistory retrieves current subscription sources and all historical provenance ledger entries for a node.
+func (s *Service) GetNodeSourceHistory(ctx context.Context, logicalID string) (*NodeSourceHistoryResponseData, error) {
+	logicalID = strings.TrimSpace(logicalID)
+	if logicalID == "" {
+		return nil, domain.NewValidationError("missing_logical_id", "node logical_id is required")
+	}
+
+	// 1. Verify node exists in database
+	_, err := s.nodes.GetByLogicalID(ctx, logicalID)
+	if err != nil {
+		return nil, err
+	}
+
+	// 2. Query current live sources
+	currentSources := make([]CurrentSourceView, 0)
+	if s.db != nil {
+		rows, qErr := s.db.QueryContext(ctx, `
+			SELECT ns.subscription_id, COALESCE(s.name, ''), COALESCE(s.enabled, 0)
+			FROM node_sources ns
+			LEFT JOIN subscriptions s ON ns.subscription_id = s.id
+			WHERE ns.node_logical_id = ?
+			ORDER BY ns.subscription_id ASC;
+		`, logicalID)
+		if qErr == nil {
+			for rows.Next() {
+				var (
+					subID   string
+					subName string
+					enabled int
+				)
+				if scanErr := rows.Scan(&subID, &subName, &enabled); scanErr == nil {
+					currentSources = append(currentSources, CurrentSourceView{
+						SubscriptionID: subID,
+						Name:           subName,
+						Enabled:        enabled == 1,
+					})
+				}
+			}
+			rows.Close()
+		}
+	}
+
+	// 3. Query history ledger
+	var historyRecords []domain.NodeSourceHistory
+	if s.sourceHistoryRepo != nil {
+		historyRecords, err = s.sourceHistoryRepo.ListByNodeLogicalID(ctx, logicalID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch node source history: %w", err)
+		}
+	} else if s.db != nil {
+		repo := sqlite.NewNodeSourceHistoryRepository(s.db)
+		historyRecords, err = repo.ListByNodeLogicalID(ctx, logicalID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch node source history: %w", err)
+		}
+	}
+
+	// 4. Map history items and evaluate source_deleted
+	existingSubs := make(map[string]bool)
+	if s.subscriptions != nil {
+		allSubs, _, subErr := s.subscriptions.List(ctx, domain.SubscriptionFilter{
+			Pagination: domain.Pagination{Page: 1, PageSize: 1000},
+		})
+		if subErr == nil {
+			for _, sub := range allSubs {
+				existingSubs[sub.ID] = true
+			}
+		}
+	}
+
+	historyViews := make([]NodeSourceHistoryItemView, 0, len(historyRecords))
+	for _, rec := range historyRecords {
+		var sourceDeleted bool
+		var sourceUnmapped bool
+
+		if rec.SubscriptionID == nil || *rec.SubscriptionID == "" {
+			if rec.Cause == domain.CauseSubscriptionDeleted {
+				sourceDeleted = true
+				sourceUnmapped = false
+			} else {
+				sourceDeleted = false
+				sourceUnmapped = true
+			}
+		} else {
+			if rec.Cause == domain.CauseSubscriptionDeleted || !existingSubs[*rec.SubscriptionID] {
+				sourceDeleted = true
+				sourceUnmapped = false
+			} else {
+				sourceDeleted = false
+				sourceUnmapped = false
+			}
+		}
+
+		var firstObs *string
+		if rec.FirstObservedAt != nil && !rec.FirstObservedAt.IsZero() {
+			str := rec.FirstObservedAt.UTC().Format(time.RFC3339)
+			firstObs = &str
+		}
+		var lastObs *string
+		if rec.LastObservedAt != nil && !rec.LastObservedAt.IsZero() {
+			str := rec.LastObservedAt.UTC().Format(time.RFC3339)
+			lastObs = &str
+		}
+
+		historyViews = append(historyViews, NodeSourceHistoryItemView{
+			SourceLabel:        rec.SourceLabel,
+			SubscriptionID:     rec.SubscriptionID,
+			RelationState:      rec.RelationState,
+			Cause:              rec.Cause,
+			EvidenceKind:       rec.EvidenceKind,
+			FirstObservedAt:    firstObs,
+			LastObservedAt:     lastObs,
+			ConnectionRevision: rec.ConnectionRevision,
+			SourceDeleted:      sourceDeleted,
+			SourceUnmapped:     sourceUnmapped,
+		})
+	}
+
+	// 5. Aggregate status
+	hasCurrent := len(currentSources) > 0
+	aggStatus := domain.AggregateAttributionStatus(hasCurrent, historyRecords)
+
+	return &NodeSourceHistoryResponseData{
+		CurrentSources:    currentSources,
+		History:           historyViews,
+		AttributionStatus: aggStatus,
+	}, nil
+}
+

@@ -115,6 +115,13 @@ type NodeSourceRepository interface {
 	DeleteBySubscriptionAndFetch(ctx context.Context, subID string, currentFetchID string) error
 }
 
+// NodeSourceHistoryRepository defines the persistence port for the immutable node provenance history ledger.
+type NodeSourceHistoryRepository interface {
+	InsertBatch(ctx context.Context, records []NodeSourceHistory) error
+	ListByNodeLogicalID(ctx context.Context, nodeLogicalID string) ([]NodeSourceHistory, error)
+	ListBySubscriptionID(ctx context.Context, subscriptionID string) ([]NodeSourceHistory, error)
+}
+
 // ProbeRunRepository defines the persistence port for probe run jobs.
 type ProbeRunRepository interface {
 	GetByID(ctx context.Context, id string) (*ProbeRun, error)

@@ -338,7 +338,7 @@ func TestReconcile_LastSourceDeletion(t *testing.T) {
 	}
 
 	// Shared Node Alpha was omitted from Sub1's new fetch, BUT it is still in Sub2!
-	// It MUST still be active = true, and under non-destructive merge, source edges are not pruned!
+	// It MUST still be active = true, and its historical provenance is captured in node_source_history!
 	detail, err := svc.GetNodeDetail(ctx, sharedLogicalID)
 	if err != nil {
 		t.Fatalf("GetNodeDetail failed: %v", err)
@@ -346,8 +346,18 @@ func TestReconcile_LastSourceDeletion(t *testing.T) {
 	if !detail.Node.Active {
 		t.Fatalf("shared node should still be active because Sub2 still has it")
 	}
-	if len(detail.Sources) != 2 {
-		t.Fatalf("expected 2 sources preserved under non-destructive merge (Sub1 stale + Sub2 current), got: %#v", detail.Sources)
+	if len(detail.Sources) != 1 {
+		t.Fatalf("expected 1 live source (Sub2 current), got: %#v", detail.Sources)
+	}
+	histResp, err := svc.GetNodeSourceHistory(ctx, sharedLogicalID)
+	if err != nil {
+		t.Fatalf("GetNodeSourceHistory failed: %v", err)
+	}
+	if histResp.AttributionStatus != domain.AttributionStatusCurrent {
+		t.Fatalf("expected attribution_status current, got %s", histResp.AttributionStatus)
+	}
+	if len(histResp.History) != 1 || histResp.History[0].Cause != domain.CauseRefreshRemoved {
+		t.Fatalf("expected 1 history record with refresh_removed, got: %#v", histResp.History)
 	}
 
 	// Step C: Now Sub2 also updates and Shared Node Alpha DISAPPEARS from Sub2 as well!
@@ -373,7 +383,7 @@ proxies:
 	}
 
 	// Now Shared Node Alpha is omitted from Sub2's new fetch as well,
-	// BUT under the non-destructive merge contract, its active status remains TRUE and source edges are preserved!
+	// BUT under the non-destructive node contract, its active status remains TRUE and provenance is captured in history!
 	detail, err = svc.GetNodeDetail(ctx, sharedLogicalID)
 	if err != nil {
 		t.Fatalf("GetNodeDetail failed: %v", err)
@@ -381,8 +391,18 @@ proxies:
 	if !detail.Node.Active {
 		t.Fatalf("expected node to remain active (active=true) after source omission under non-destructive contract, got active=false")
 	}
-	if len(detail.Sources) != 2 {
-		t.Fatalf("expected 2 preserved sources (with stale fetch IDs) for omitted node, got %d", len(detail.Sources))
+	if len(detail.Sources) != 0 {
+		t.Fatalf("expected 0 live sources for omitted node, got %d", len(detail.Sources))
+	}
+	histResp2, err := svc.GetNodeSourceHistory(ctx, sharedLogicalID)
+	if err != nil {
+		t.Fatalf("GetNodeSourceHistory step C failed: %v", err)
+	}
+	if histResp2.AttributionStatus != domain.AttributionStatusHistoricalVerified {
+		t.Fatalf("expected historical_verified status after all sources omitted, got %s", histResp2.AttributionStatus)
+	}
+	if len(histResp2.History) != 2 {
+		t.Fatalf("expected 2 history records for omitted node, got %d", len(histResp2.History))
 	}
 
 	// Active list MUST still include Shared Node Alpha!
@@ -643,8 +663,12 @@ func TestReconcile_Reactivation(t *testing.T) {
 	if err != nil || !detail.Node.Active {
 		t.Fatalf("node should remain active under non-destructive merge in step 2")
 	}
-	if len(detail.Sources) != 1 {
-		t.Fatalf("expected source edge to be preserved in step 2, got %d", len(detail.Sources))
+	if len(detail.Sources) != 0 {
+		t.Fatalf("expected live source edge to be pruned in step 2, got %d", len(detail.Sources))
+	}
+	hResp, err := svc.GetNodeSourceHistory(ctx, sharedLogicalID)
+	if err != nil || hResp.AttributionStatus != domain.AttributionStatusHistoricalVerified {
+		t.Fatalf("expected historical_verified status in step 2, got: %v", hResp)
 	}
 
 	// Step 3: shared node reappears -> must be reactivated

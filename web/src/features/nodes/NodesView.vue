@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch, type VNodeRef } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import {
   ArrowPathIcon,
   BoltIcon,
   CheckCircleIcon,
+  ClockIcon,
   ExclamationTriangleIcon,
   EyeIcon,
   ShieldCheckIcon,
@@ -14,6 +16,9 @@ import DrawerCard from '../../ui/DrawerCard.vue'
 import EmptyState from '../../ui/EmptyState.vue'
 import ErrorStateCard from '../../ui/ErrorStateCard.vue'
 import StatusBadge from '../../ui/StatusBadge.vue'
+import NodeSourceHistoryPanel from './NodeSourceHistoryPanel.vue'
+import type { NodeSourceHistoryData } from './sourceHistoryTypes'
+import { ApiError } from '../../api/client'
 import {
   SUPPORTED_NODE_PROTOCOLS,
   formatNodeLatency,
@@ -59,15 +64,38 @@ const {
   loadMore,
   syncPoolStatus,
   fetchNodeDetail,
+  fetchNodeSourceHistory,
   probeSingleNode,
   updateNodeConnection,
 } = useNodes()
+
+const route = (() => {
+  try {
+    return useRoute()
+  } catch {
+    return undefined
+  }
+})()
+
+const router = (() => {
+  try {
+    return useRouter()
+  } catch {
+    return undefined
+  }
+})()
 
 const drawerOpen = ref(false)
 const previewTarget = ref<'mihomo' | 'singbox'>('mihomo')
 const connectionError = ref('')
 const connectionSaved = ref(false)
 const probeFeedback = ref('')
+const sourceHistory = ref<NodeSourceHistoryData | null>(null)
+const loadingSourceHistory = ref(false)
+const sourceHistoryError = ref('')
+const currentHistoryTargetId = ref('')
+const deepLinkError = ref('')
+const loadingDeepLink = ref(false)
 
 const effectiveProbingIds = computed(() => {
   const set = new Set<string>(probingNodeIds.value)
@@ -184,14 +212,77 @@ function syncDraftFromNode(node: NormalizedNode) {
   draftDisableSni.value = node.connection.disableSni
 }
 
+async function fetchSourceHistory(logicalId: string) {
+  currentHistoryTargetId.value = logicalId
+  sourceHistory.value = null
+  sourceHistoryError.value = ''
+  loadingSourceHistory.value = true
+  try {
+    const data = await fetchNodeSourceHistory(logicalId)
+    if (currentHistoryTargetId.value === logicalId) {
+      sourceHistory.value = data
+    }
+  } catch (err: any) {
+    if (currentHistoryTargetId.value === logicalId) {
+      if (err?.status === 404 || (err instanceof ApiError && err.status === 404)) {
+        sourceHistoryError.value = '未找到该节点的来源历史记录 (404)'
+      } else if (err?.status === 401 || (err instanceof ApiError && err.status === 401)) {
+        sourceHistoryError.value = '鉴权失败，无法获取来源历史'
+      } else {
+        sourceHistoryError.value = err instanceof Error ? err.message : '获取来源历史失败'
+      }
+    }
+  } finally {
+    if (currentHistoryTargetId.value === logicalId) {
+      loadingSourceHistory.value = false
+    }
+  }
+}
+
 async function openNodeDetail(node: NormalizedNode) {
   selectedNode.value = node
   probeFeedback.value = ''
   syncDraftFromNode(node)
   drawerOpen.value = true
-  const detailed = await fetchNodeDetail(node.logicalId)
-  if (detailed) {
-    syncDraftFromNode(detailed)
+
+  if (router && route && route.query?.node !== node.logicalId) {
+    router.replace({ query: { ...route.query, node: node.logicalId } }).catch(() => {})
+  }
+
+  await Promise.all([
+    (async () => {
+      const detailed = await fetchNodeDetail(node.logicalId)
+      if (detailed && selectedNode.value?.logicalId === node.logicalId) {
+        syncDraftFromNode(detailed)
+      }
+    })(),
+    fetchSourceHistory(node.logicalId),
+  ])
+}
+
+async function openNodeByLogicalId(logicalId: string) {
+  if (!logicalId) return
+  deepLinkError.value = ''
+
+  const localMatch = items.value.find((n) => n.logicalId === logicalId)
+  if (localMatch) {
+    await openNodeDetail(localMatch)
+    return
+  }
+
+  loadingDeepLink.value = true
+  try {
+    const detailed = await fetchNodeDetail(logicalId)
+    if (detailed) {
+      await openNodeDetail(detailed)
+    } else {
+      deepLinkError.value = `未找到节点「${logicalId}」(404)`
+    }
+  } catch (err: any) {
+    const status = err?.status || (err instanceof ApiError ? err.status : 404)
+    deepLinkError.value = `未找到节点「${logicalId}」(${status})`
+  } finally {
+    loadingDeepLink.value = false
   }
 }
 
@@ -373,6 +464,38 @@ function onScroll() {
   }
 }
 
+watch(drawerOpen, (isOpen) => {
+  if (!isOpen) {
+    if (router && route && route.query?.node) {
+      const query = { ...route.query }
+      delete query.node
+      router.replace({ query }).catch(() => {})
+    }
+    sourceHistory.value = null
+    sourceHistoryError.value = ''
+    loadingSourceHistory.value = false
+  }
+})
+
+if (route) {
+  watch(
+    () => route.query?.node as string | undefined,
+    async (newNodeId) => {
+      const targetId = newNodeId?.trim()
+      if (!targetId) {
+        if (drawerOpen.value) {
+          drawerOpen.value = false
+        }
+        return
+      }
+      if (selectedNode.value?.logicalId === targetId && drawerOpen.value) {
+        return
+      }
+      await openNodeByLogicalId(targetId)
+    }
+  )
+}
+
 let poolPollTimer: ReturnType<typeof setInterval> | null = null
 
 onMounted(async () => {
@@ -391,6 +514,11 @@ onMounted(async () => {
       syncPoolStatus()
     }
   }, 2000)
+
+  const initialNodeId = (route?.query?.node as string | undefined)?.trim()
+  if (initialNodeId) {
+    await openNodeByLogicalId(initialNodeId)
+  }
 })
 
 onUnmounted(() => {
@@ -545,6 +673,25 @@ onUnmounted(() => {
           未探测 / 待核验 ({{ healthCounts.unknown }})
         </button>
       </div>
+    </div>
+
+    <!-- Deep Link Error Alert -->
+    <div
+      v-if="deepLinkError"
+      data-testid="node-deep-link-error"
+      class="alert alert-warning shadow-sm flex items-center justify-between"
+    >
+      <div class="flex items-center gap-2">
+        <ExclamationTriangleIcon class="w-5 h-5 shrink-0" />
+        <span>{{ deepLinkError }}</span>
+      </div>
+      <button
+        type="button"
+        class="btn btn-ghost btn-xs"
+        @click="deepLinkError = ''"
+      >
+        关闭
+      </button>
     </div>
 
     <!-- Error Alert / Degraded State Card -->
@@ -971,6 +1118,15 @@ onUnmounted(() => {
           </p>
         </div>
 
+        <!-- Dedicated Source Attribution & Provenance Panel -->
+        <NodeSourceHistoryPanel
+          :logical-id="selectedNode.logicalId"
+          :source-history="sourceHistory"
+          :loading="loadingSourceHistory"
+          :error="sourceHistoryError"
+          @retry="fetchSourceHistory(selectedNode.logicalId)"
+        />
+
         <!-- Compiler Target Compatibility for this Node Protocol -->
         <div
           data-testid="node-target-compatibility"
@@ -1319,7 +1475,12 @@ onUnmounted(() => {
 
       <template #footer>
         <div class="flex justify-end w-full">
-          <button type="button" class="btn btn-ghost btn-sm" @click="drawerOpen = false">
+          <button
+            type="button"
+            data-testid="node-drawer-close-btn"
+            class="btn btn-ghost btn-sm"
+            @click="drawerOpen = false"
+          >
             {{ t('common.close') }}
           </button>
         </div>

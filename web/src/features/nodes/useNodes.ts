@@ -1,5 +1,6 @@
 import { computed, ref } from 'vue'
 import { api } from '../../api/client'
+import type { NodeSourceHistoryData } from './sourceHistoryTypes'
 import {
   generateIdempotencyKey,
   type CreateProbeRunResponse,
@@ -188,6 +189,29 @@ export function useNodes() {
     }
   }
 
+  async function fetchNodeSourceHistory(logicalId: string): Promise<NodeSourceHistoryData | null> {
+    try {
+      const res = await api.get<NodeSourceHistoryData | { data: NodeSourceHistoryData }>(
+        `/api/v1/nodes/${encodeURIComponent(logicalId)}/source-history`
+      )
+      if (res && typeof res === 'object' && 'data' in res && (res as any).data) {
+        return (res as any).data as NodeSourceHistoryData
+      }
+      if (
+        res &&
+        typeof res === 'object' &&
+        (Array.isArray((res as any).current_sources) ||
+          Array.isArray((res as any).history) ||
+          typeof (res as any).attribution_status === 'string')
+      ) {
+        return res as NodeSourceHistoryData
+      }
+      return null
+    } catch (err) {
+      throw err
+    }
+  }
+
   async function probeSingleNode(
     logicalId: string,
     kinds: ProbeKind[] = ['baseline', 'streaming', 'ai', 'ip_risk', 'geo']
@@ -360,6 +384,7 @@ export function useNodes() {
     loadMore,
     syncPoolStatus,
     fetchNodeDetail,
+    fetchNodeSourceHistory,
     probeSingleNode,
     updateNodeConnection,
   }

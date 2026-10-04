@@ -162,6 +162,11 @@ func (r *MigrationRunner) LoadMigrations() ([]Migration, error) {
 
 // Run scans, orders, and applies all unapplied migrations inside isolated transactions.
 func (r *MigrationRunner) Run(ctx context.Context) error {
+	return r.RunUpTo(ctx, 999999)
+}
+
+// RunUpTo scans, orders, and applies all unapplied migrations up to targetVersion inside isolated transactions.
+func (r *MigrationRunner) RunUpTo(ctx context.Context, targetVersion int) error {
 	if err := EnsureMigrationTable(ctx, r.db); err != nil {
 		return err
 	}
@@ -177,6 +182,9 @@ func (r *MigrationRunner) Run(ctx context.Context) error {
 	}
 
 	for _, m := range allMigrations {
+		if m.Version > targetVersion {
+			break
+		}
 		if _, ok := applied[m.Version]; ok {
 			continue // already applied
 		}

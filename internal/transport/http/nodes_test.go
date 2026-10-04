@@ -1038,3 +1038,239 @@ func seed10000NodesBenchmark(b *testing.B, db *sql.DB) {
 		b.Fatalf("failed to commit bench seed: %v", err)
 	}
 }
+
+func TestNodeSourceHistoryEndpoint(t *testing.T) {
+	db := newCleanSQLiteDB(t)
+	router := setupNodesTestRouter(t, db)
+	ctx := context.Background()
+
+	nodeRepo := sqlite.NewNodeRepository(db)
+	subRepo := sqlite.NewSubscriptionRepository(db)
+	sourceRepo := sqlite.NewNodeSourceRepository(db)
+	histRepo := sqlite.NewNodeSourceHistoryRepository(db)
+
+	// 1. Create a subscription
+	subID := "01a0b9af-c116-7204-b4a3-98a91733145d"
+	sub := domain.Subscription{
+		ID:                 subID,
+		Name:               "7li Provider",
+		SourceURLSecretRef: "secret-ref",
+		Enabled:            true,
+		CreatedAt:          time.Now().UTC(),
+		UpdatedAt:          time.Now().UTC(),
+	}
+	if err := subRepo.Create(ctx, &sub); err != nil {
+		t.Fatalf("create sub: %v", err)
+	}
+
+	// 2. Active node (in node_sources)
+	activeNode := domain.Node{
+		LogicalID:   "node-active-test",
+		Protocol:    domain.ProtocolVLESS,
+		DisplayName: "Active Node",
+		Server:      "active.example.com",
+		Port:        443,
+		Active:      true,
+		CreatedAt:   time.Now().UTC(),
+		UpdatedAt:   time.Now().UTC(),
+	}
+	// 3. Orphan node with verified history
+	orphanNode := domain.Node{
+		LogicalID:   "node-orphan-test",
+		Protocol:    domain.ProtocolSS,
+		DisplayName: "Orphan Node",
+		Server:      "orphan.example.com",
+		Port:        8388,
+		Active:      false,
+		CreatedAt:   time.Now().UTC(),
+		UpdatedAt:   time.Now().UTC(),
+	}
+	// 4. Unknown node (no sources, no history)
+	unknownNode := domain.Node{
+		LogicalID:   "node-unknown-test",
+		Protocol:    domain.ProtocolTrojan,
+		DisplayName: "Unknown Node",
+		Server:      "unknown.example.com",
+		Port:        443,
+		Active:      false,
+		CreatedAt:   time.Now().UTC(),
+		UpdatedAt:   time.Now().UTC(),
+	}
+
+	if err := nodeRepo.UpsertBatch(ctx, []domain.Node{activeNode, orphanNode, unknownNode}); err != nil {
+		t.Fatalf("upsert nodes: %v", err)
+	}
+
+	// Link activeNode to sub
+	if err := sourceRepo.Upsert(ctx, &domain.NodeSource{
+		NodeLogicalID:   activeNode.LogicalID,
+		SubscriptionID:  subID,
+		LastSeenFetchID: "fetch-1",
+	}); err != nil {
+		t.Fatalf("upsert source: %v", err)
+	}
+
+	// Insert history record for orphanNode
+	tObs := time.Date(2026, 9, 11, 8, 26, 6, 0, time.UTC)
+	rev := int64(1)
+	if err := histRepo.InsertBatch(ctx, []domain.NodeSourceHistory{
+		{
+			ID:                 "hist-rec-1",
+			NodeLogicalID:      orphanNode.LogicalID,
+			SubscriptionID:     &subID,
+			SourceIdentity:     "legacy:src:1",
+			SourceLabel:        "7li Provider",
+			ConnectionRevision: &rev,
+			RelationState:      domain.RelationStateVerified,
+			Cause:              domain.CauseLegacyImport,
+			FirstObservedAt:    &tObs,
+			LastObservedAt:     &tObs,
+			EvidenceKind:       "legacy_cold_archive",
+			EvidenceKey:        "legacy:pk:7240:link:4",
+			EvidenceJSON:       `{"archive_sha256":"bf768408578663c355baa17af9259955540fda54a73330bd921d8807b9b53630"}`,
+			CreatedAt:          tObs,
+		},
+	}); err != nil {
+		t.Fatalf("insert history: %v", err)
+	}
+
+	// Subtest 1: Unauthenticated request must return 401
+	{
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/nodes/"+orphanNode.LogicalID+"/source-history", nil)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401 Unauthorized without token, got %d", rec.Code)
+		}
+	}
+
+	// Subtest 2: Non-existent node must return 404
+	{
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/nodes/non-existent-node/source-history", nil)
+		req.Header.Set("Authorization", "Bearer "+testAdminToken)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("expected 404 Not Found, got %d", rec.Code)
+		}
+	}
+
+	// Subtest 3: Orphan node with history returns historical_verified and redacted structure
+	{
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/nodes/"+orphanNode.LogicalID+"/source-history", nil)
+		req.Header.Set("Authorization", "Bearer "+testAdminToken)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK, got %d: %s", rec.Code, rec.Body.String())
+		}
+
+		var resp struct {
+			Data struct {
+				CurrentSources []struct {
+					SubscriptionID string `json:"subscription_id"`
+					Name           string `json:"name"`
+					Enabled        bool   `json:"enabled"`
+				} `json:"current_sources"`
+				History []struct {
+					SourceLabel        string  `json:"source_label"`
+					SubscriptionID     *string `json:"subscription_id"`
+					RelationState      string  `json:"relation_state"`
+					Cause              string  `json:"cause"`
+					EvidenceKind       string  `json:"evidence_kind"`
+					FirstObservedAt    *string `json:"first_observed_at"`
+					LastObservedAt     *string `json:"last_observed_at"`
+					ConnectionRevision *int64  `json:"connection_revision"`
+					SourceDeleted      bool    `json:"source_deleted"`
+				} `json:"history"`
+				AttributionStatus string `json:"attribution_status"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+
+		if len(resp.Data.CurrentSources) != 0 {
+			t.Errorf("expected 0 current sources, got %d", len(resp.Data.CurrentSources))
+		}
+		if len(resp.Data.History) != 1 {
+			t.Fatalf("expected 1 history item, got %d", len(resp.Data.History))
+		}
+		hItem := resp.Data.History[0]
+		if hItem.SourceLabel != "7li Provider" {
+			t.Errorf("expected source_label '7li Provider', got %s", hItem.SourceLabel)
+		}
+		if hItem.RelationState != "verified" {
+			t.Errorf("expected relation_state verified, got %s", hItem.RelationState)
+		}
+		if hItem.Cause != "legacy_import" {
+			t.Errorf("expected cause legacy_import, got %s", hItem.Cause)
+		}
+		if hItem.SourceDeleted {
+			t.Errorf("expected source_deleted false (subscription still exists)")
+		}
+		if resp.Data.AttributionStatus != "historical_verified" {
+			t.Errorf("expected attribution_status historical_verified, got %s", resp.Data.AttributionStatus)
+		}
+
+		// Verify zero secrets leaked in response
+		bodyStr := rec.Body.String()
+		if strings.Contains(bodyStr, "password") || strings.Contains(bodyStr, "secret-ref") || strings.Contains(bodyStr, "token") {
+			t.Fatalf("response leaked sensitive secrets: %s", bodyStr)
+		}
+	}
+
+	// Subtest 4: Active node returns current attribution_status
+	{
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/nodes/"+activeNode.LogicalID+"/source-history", nil)
+		req.Header.Set("Authorization", "Bearer "+testAdminToken)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK for active node, got %d", rec.Code)
+		}
+
+		var resp struct {
+			Data struct {
+				CurrentSources []struct {
+					SubscriptionID string `json:"subscription_id"`
+					Name           string `json:"name"`
+					Enabled        bool   `json:"enabled"`
+				} `json:"current_sources"`
+				AttributionStatus string `json:"attribution_status"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("unmarshal active resp: %v", err)
+		}
+		if len(resp.Data.CurrentSources) != 1 {
+			t.Errorf("expected 1 current source, got %d", len(resp.Data.CurrentSources))
+		}
+		if resp.Data.AttributionStatus != "current" {
+			t.Errorf("expected attribution_status current, got %s", resp.Data.AttributionStatus)
+		}
+	}
+
+	// Subtest 5: Unknown node returns unknown attribution_status
+	{
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/nodes/"+unknownNode.LogicalID+"/source-history", nil)
+		req.Header.Set("Authorization", "Bearer "+testAdminToken)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK for unknown node, got %d", rec.Code)
+		}
+
+		var resp struct {
+			Data struct {
+				AttributionStatus string `json:"attribution_status"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("unmarshal unknown resp: %v", err)
+		}
+		if resp.Data.AttributionStatus != "unknown" {
+			t.Errorf("expected attribution_status unknown, got %s", resp.Data.AttributionStatus)
+		}
+	}
+}

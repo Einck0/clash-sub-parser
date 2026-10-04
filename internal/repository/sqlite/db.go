@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/url"
 
 	_ "modernc.org/sqlite"
 
@@ -63,6 +64,30 @@ func Open(cfg Config) (*sql.DB, error) {
 		}
 	}
 
+	return db, nil
+}
+
+// OpenReadOnly opens an existing SQLite database strictly in read-only mode with query_only enabled.
+// It performs zero DDL or DML writes and requires the target database file to exist.
+func OpenReadOnly(path string) (*sql.DB, error) {
+	if path == "" {
+		return nil, fmt.Errorf("read-only path cannot be empty")
+	}
+	dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=query_only(1)&_pragma=foreign_keys(0)", url.PathEscape(path))
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open read-only sqlite database: %w", err)
+	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	if err := db.Ping(); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("failed to ping read-only sqlite database: %w", err)
+	}
+	if _, err := db.Exec("PRAGMA query_only = ON;"); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("failed to set query_only pragma: %w", err)
+	}
 	return db, nil
 }
 

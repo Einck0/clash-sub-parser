@@ -24,6 +24,7 @@ func registerNodeRoutes(r chi.Router, service *inventory.Service) {
 	h := nodeHandler{service: service}
 	r.Get("/nodes", h.list)
 	r.Get("/nodes/{logical_id}", h.get)
+	r.Get("/nodes/{logical_id}/source-history", h.getSourceHistory)
 	r.Patch("/nodes/{logical_id}", h.patchConnection)
 	r.Patch("/nodes/{logical_id}/connection", h.patchConnection)
 }
@@ -184,6 +185,27 @@ func (h nodeHandler) get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	WriteSuccess(w, r, http.StatusOK, resp)
+}
+
+func (h nodeHandler) getSourceHistory(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	logicalID := chi.URLParam(r, "logical_id")
+	if logicalID == "" {
+		logicalID = chi.URLParam(r, "id")
+	}
+	logicalID = strings.TrimSpace(logicalID)
+	if logicalID == "" {
+		WriteDomainError(w, r, domain.NewValidationError("missing_logical_id", "node logical_id is required"))
+		return
+	}
+
+	data, err := h.service.GetNodeSourceHistory(r.Context(), logicalID)
+	if err != nil {
+		WriteDomainError(w, r, err)
+		return
+	}
+
+	WriteSuccess(w, r, http.StatusOK, data)
 }
 
 func (h nodeHandler) patchConnection(w http.ResponseWriter, r *http.Request) {

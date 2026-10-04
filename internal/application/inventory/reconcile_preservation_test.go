@@ -925,8 +925,12 @@ proxies:
 	if !alphaDetailP2.Node.Active {
 		t.Fatalf("Node Alpha must remain active in Phase 2")
 	}
-	if len(alphaDetailP2.Sources) != 1 || alphaDetailP2.Sources[0].LastSeenFetchID != res1.FetchID {
-		t.Fatalf("Node Alpha source edge must be preserved with stale fetch ID, got %#v", alphaDetailP2.Sources)
+	if len(alphaDetailP2.Sources) != 0 {
+		t.Fatalf("Node Alpha live source edge must be pruned in Phase 2, got %#v", alphaDetailP2.Sources)
+	}
+	alphaHistP2, err := svc.GetNodeSourceHistory(ctx, alphaID)
+	if err != nil || alphaHistP2.AttributionStatus != domain.AttributionStatusHistoricalVerified {
+		t.Fatalf("Node Alpha provenance must be preserved as historical_verified in Phase 2, got %#v", alphaHistP2)
 	}
 
 	// --- Phase 3: 2 nodes present again, but Node Alpha has changed connection port to 8389! ---

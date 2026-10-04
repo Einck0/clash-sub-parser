@@ -1,9 +1,9 @@
 # Tasks: redesign-csp-database-dataflow
 
 - **设计审查状态**: `Independent Reviewer PASS` (架构与整改方案已通过独立审查闭环)
-- **交付终态**: `STATUS: PASS (Production Released)` / `Commit db1c87d deployed to production container 5aaefb45714c (18080/17000) with measured 1.941s downtime (script stop to readyz)`
+- **交付终态**: `STATUS: PASS (Production Released)` / `Commit 2ffd20d deployed to production container 73cd5633a319 (18080/17000) with measured 2.296s downtime (script stop to healthz)`
 - **内存约束验证**: `/tmp/verify_database_dataflow_design.py` 完成 23 项 DDL、外键、前置门禁、IP Risk 统一关联及防泄密约束验证
-- **实施大包状态**: 任务 3.1 至 7.2 实施、自测与生产受控替换全部完成；任务 7.3 保持未勾选 (`[ ]`)，用户已授权实施上线，Pi 无法调用前台已登录 vault 安全渠道，生产带身份管理刷新/探针/预览发布未验
+- **实施大包状态**: 任务 3.1 至 7.2 及 8.1 至 8.6 实施、自测与生产受控替换全部完成；任务 7.3 保持未勾选 (`[ ]`)，用户已授权实施上线，Pi 无法调用前台已登录 vault 安全渠道，生产带身份管理刷新/探针/预览发布未验；工程 Reviewer PASS 与 Critic PASSED 基于隔离 fixture 验证，不冒充生产管理验收
 
 ## 独立审查复审阻断与根因整改闭环说明 (Remediation Loop - Rev 4: 队列稳定性与多Run公平)
 
@@ -84,5 +84,5 @@
 - [x] 8.3 探测调度、发布编译与消费者候选门禁：在 probe runner（selected IDs 与 run all）、periodic coordinator 与 publication resolve 中收敛至范围 E 活跃非公告候选，保持历史发布快照字节绝对不可变
 - [x] 8.4 隔离环境全场景单元与集成自测：编写覆盖启用/停用、共享节点、失活节点、手工无源节点、公告排除、抓取失败保留旧成果、刷新删除成员、10+页分页与 risk/q/sub 过滤一致性的全套测试，确保 `go test -count=1 ./...` 与静态编译退出码为 0
 - [x] 8.5 前端节点台账、首页概览与订阅卡片生效库存展示：更新 `web/src/features/nodes/useNodes.ts`、`NodesView.vue`、`DashboardView.vue` 与 `SubscriptionsView.vue`（由前端独立施工机完成，本包不修改 webassets 共享产物）
-
+- [x] 8.6 生产受控单容器停机冷替换与生效库存发布自验：执行时点一致性 SQLite 备份快照 (sha256:65dd54ce...) 校验完整性与外键 (FK 0)，新镜像 (sha256:4925c70d...) 替换旧容器至 73cd5633a319，实测停机至首个 healthz 耗时 2.296s (/readyz 随后单独校验)，生产只读 SQL 对账生效库存 31、全量资产 1014、候选 31，静态业务数据对停写备份保持全等，隔离预览 PID 827371 释放
 

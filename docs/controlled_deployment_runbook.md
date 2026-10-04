@@ -256,7 +256,7 @@ Critic 必须通过无头浏览器采集如下视口尺寸实机渲染截图并�
 - **旧镜像回滚标签固化**：
   - 回滚目标：`clash-sub-parser-app:rollback-pre-db1c87d` (`sha256:bc2c43c15553ec6671d2215e310948805463c43849045f67aaf3024fb8fb8a40`)
 - **新生产镜像与容器受控替换**：
-  - 替换性质：**受控单容器停机冷替换**（非 rolling/grey 灰度，非 zero-loss 绝对无损）
+  - 替换性质：**受控单容器停机冷替换**（单实例停止重拉，不包含灰度机制，不作绝对无损承诺）
   - 镜像预构建：`docker compose build app`（在容器停止前完成，消除镜像构建耗时）
   - 新镜像 ID：`sha256:62ee52ebbfaf14d980951eae470894eec05499f8ee6724e37428b187648e0cd1`
   - 新镜像标签：`clash-sub-parser-app:latest`, `clash-sub-parser-app:v1-release-20261004-db1c87d`
@@ -283,3 +283,62 @@ Critic 必须通过无头浏览器采集如下视口尺寸实机渲染截图并�
   - 隔离预览服务 (PID 566574) 已在核实身份后完全停止，端口 18081 已释放，全部工件与截图安全存盘；
   - 性能与基准测试声明：不宣称 CSP 相对 subs-check 存在全局性胜出；保留原试验失效与纠偏事实：corrected 5s 8 nodes 各 7 of 8（pre 5.009/5.003s, post 5.015/5.004s, subs-check 5.152/5.151s）；媒体探测 pre 3.030/3.150s -> post 1.912/2.043s，AI 探测 pre 1.784/1.846s -> post 0.909/0.840s（仅 CSP 同样本两轮自比结果；平台算法与上游不同，不宣称等价或整体优胜，未采样 p50/p95；Netflix 修正为更早正确性修复，本次无新增基准测量）。
 
+---
+
+## 九、 生效订阅库存与实时数据流对齐生产发布执行记录 (Release Record 2ffd20d)
+
+- **发布时间**：`2026-10-04 12:48:46 CST` (UTC 2026-10-04 04:48:46)
+- **目标提交 (Git HEAD)**：`2ffd20dffffa4d673c6d5e36d47b979a183d4e2a` (`fix(inventory): unify current nodes by enabled subscription membership`)
+- **发布在线一致性热备与最终停机一致性备份 (时点一致性快照)**：
+  - 热备文件：`/tmp/csp-pre-deploy-2ffd20d.db` (权限 `0600`)
+  - 最终停机一致性备份：`/var/lib/docker/volumes/csp-v1-data/_data/backups/csp-v1-backup-final-pre-2ffd20d_20261004_124846.db`（大小 13M，权限 `0600`，本地副本 `/tmp/csp-final-pitr-2ffd20d.db`）
+  - SHA-256：`65dd54cef0c0aee9de77ba06588b13096b5bcbf0634b0ed59e1ed6d84c332579`
+  - 校验结果：`PRAGMA integrity_check: ok`，`PRAGMA foreign_key_check: 0`
+  - 存量统计：全量 1014 节点（31 活跃，983 失活保持禁用），9 订阅（4 enabled，5 disabled），31 节点来源映射，29 组，163 规则，0 发布；拨测观测 8846 条
+- **旧镜像回滚标签固化**：
+  - 回滚目标：`clash-sub-parser-app:rollback-pre-2ffd20d` (`sha256:62ee52ebbfaf14d980951eae470894eec05499f8ee6724e37428b187648e0cd1`)
+- **新生产镜像与容器受控替换**：
+  - 替换性质：**受控单容器停机冷替换**（单实例停止重拉，不包含灰度机制，不作绝对无损承诺）
+  - 镜像预构建：`docker compose build app`（在容器停止前完成构建验证，无迁移无 schema 变更）
+  - 新镜像 ID：`sha256:4925c70d01a532f4b4739c71cacd9836aa5a44542b654b7e7b8bd815848c0922`
+  - 新镜像标签：`clash-sub-parser-app:latest`, `clash-sub-parser-app:v1-release-20261004-2ffd20d`
+  - 停机切换命令：`docker compose stop app` -> `offline backup` -> `docker compose up -d --force-recreate app`
+  - 新容器实例：**`73cd5633a319`**（替换旧容器 `5aaefb45714c`）
+  - 停机维护实测窗口：**2.296 秒**（仅代表本次 measurement：停止目标容器 -> SQLite 时点快照备份校验 -> `docker compose up -d --force-recreate` -> 轮询至首个 HTTP 18080 `/healthz` 返回 200 OK；`/readyz` 随后单独校验通过，不混淆为 stop-to-ready；非普适 SLA 承诺）
+  - 二进制校验：容器内 `/app/csp` SHA-256 为 `bba38bfc29625ac023677980043e1750833523c44ab2f70b5db428b07131a7b5`，内嵌最新资产 `assets/index-BnSCJERZ.js` 与 `assets/index-54xnFaH9.css`
+- **全链路健康与接口验证**：
+  - `GET http://127.0.0.1:18080/healthz` -> HTTP 200 `{"data":{"status":"ok"}}`
+  - `GET http://127.0.0.1:18080/readyz` -> HTTP 200 `{"data":{"ready":true,"required_tables":14,"schema_version":15}}`
+  - `GET http://127.0.0.1:17000/healthz` -> HTTP 200 `{"data":{"status":"ok"}}`
+  - `GET http://127.0.0.1:17000/readyz` -> HTTP 200 `{"data":{"ready":true,"required_tables":14,"schema_version":15}}`
+  - `GET http://127.0.0.1:18080/api/v1/auth/status` -> HTTP 200 `{"data":{"mode":"protected","admin_mode":"protected","export_mode":"protected","authenticated":false,"subject":""}}`
+  - 未鉴权请求 `GET /api/v1/nodes` 严格返回 401 Unauthorized (`Authentication credentials required`)
+  - 静态资源 `GET /assets/index-BnSCJERZ.js` 与 `index-54xnFaH9.css` 严格返回 HTTP 200
+  - 生产数据库完整性核验：`integrity_check: ok`, `foreign_key_check: 0`
+  - 静态字段与冷备比对：
+    - `diff nodes`: 0
+    - `diff node_sources`: 0
+    - `diff node_groups`: 0
+    - `diff policy_rules`: 0
+    - `diff subscriptions`: 0
+    - `diff settings (non-secret)`: 0
+    - `probe_observations`: 8846 -> 8850（随容器启动后 periodic probe 后台 worker 调度而自然增长，非静态字段）
+- **生产数据集合与真实快照对账**：
+  - 生产只读 SQL 对账（与备份副本 API 实测结果完全吻合）：
+    - 订阅总数 9（4 enabled，5 disabled）
+    - 生效订阅去重节点库存 (Scope E): 31
+    - 全量节点资产 (all_assets): 1014
+    - 候选可探测节点 (candidate_total): 31
+    - 订阅卡片明细贡献: Dogegg 16 + einck-qzz 15 + 7li 0 + 魔戒 0 = 31；5 个禁用订阅明确为 0
+  - 公告排除边界澄清：Dogegg 16 包含 1 条尚未条目层认证的历史公告成员；历史节点的启用状态当前未单独认定，因存量 `subscription_entries` 当前为 0 需待首次真实 refresh，依设计标准仅在已认证为 notice 时才自动排除，不宣称公告已全部排除，亦不强行抹除或伪造名称为 15。当前启用范围数量不是硬编码或永久 31，仅为当前快照事实（16 + 15）。
+- **生产安全凭据与前台验证边界**：
+  - 用户已授权但 Pi 无调用外部 vault 渠道，真实未做生产环境登录 GET/toggle/refresh/publish，clone 副本亲验 31 -> 15 -> 31 -> 0 -> 31 不冒充生产测试；
+  - 生产环境未执行人工写操作（未人工 toggle/refresh/probe，后台 periodic 调度仍正常追加 observation 表数据），核心节点状态与连接字段对停写备份保持严格相等；
+  - 线上版本与内嵌前端已更新生效，相同代码副本已在隔离测试数据库自验通过；
+  - 生产前台身份管理 GET 验证未由 Pi 执行，建议用户后续在已登录的浏览器前台验证以下具体最小交互清单:
+    1. 访问 `/nodes` 页面，确认生效订阅徽标及分页总数显示 31（而非 1014）；
+    2. 访问 `/probes` 页面，确认探测池节点总数显示 31，可探测显示 31；
+    3. 访问 `/subscriptions` 页面，确认 Dogegg 显示 16，einck-qzz 显示 15，其他订阅显示 0；
+    4. 访问 `/dashboard` 页面，确认节点总数卡片显示 31。
+- **预览实例清理**：
+  - 隔离预览进程 PID 827371 已确认身份并杀除，端口 18081 已释放。

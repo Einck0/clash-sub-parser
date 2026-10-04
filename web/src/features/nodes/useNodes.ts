@@ -22,6 +22,7 @@ interface NodePage {
   page: number
   page_size: number
   total: number
+  scope?: string
 }
 
 interface NodeDetailResponse {
@@ -105,6 +106,7 @@ export function useNodes() {
       const params: Record<string, string | number> = {
         page: nextPage,
         page_size: pageSize,
+        scope: 'enabled_subscriptions',
         sort_by: 'display_name',
         sort_order: 'asc',
       }

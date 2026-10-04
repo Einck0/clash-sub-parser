@@ -84,6 +84,15 @@ func seed10000Nodes(t *testing.T, db *sql.DB) {
 		t.Fatalf("failed to insert test subscriptions: %v", err)
 	}
 
+	_, err = tx.Exec(`
+		INSERT INTO subscription_fetches (id, subscription_id, started_at, finished_at, outcome)
+		VALUES ('fetch-001', 'sub-001', '2026-09-15T00:00:00Z', '2026-09-15T00:01:00Z', 'success'),
+		       ('fetch-002', 'sub-002', '2026-09-15T00:00:00Z', '2026-09-15T00:01:00Z', 'success')
+	`)
+	if err != nil {
+		t.Fatalf("failed to insert test subscription fetches: %v", err)
+	}
+
 	protocols := []domain.Protocol{
 		domain.ProtocolSS,
 		domain.ProtocolVMess,
@@ -122,11 +131,11 @@ func seed10000Nodes(t *testing.T, db *sql.DB) {
 			t.Fatalf("failed to insert node %d: %v", i, err)
 		}
 
-		// Attach provenance sources to node 1
+		// Attach provenance sources to nodes
+		if _, err := sourceStmt.Exec(logicalID, "sub-001", "fetch-001"); err != nil {
+			t.Fatalf("failed to insert source 1 for node %d: %v", i, err)
+		}
 		if i == 1 {
-			if _, err := sourceStmt.Exec(logicalID, "sub-001", "fetch-001"); err != nil {
-				t.Fatalf("failed to insert source 1 for node %d: %v", i, err)
-			}
 			if _, err := sourceStmt.Exec(logicalID, "sub-002", "fetch-002"); err != nil {
 				t.Fatalf("failed to insert source 2 for node %d: %v", i, err)
 			}

@@ -101,6 +101,11 @@ func WithIPRiskObservationRepository(repo domain.IPRiskObservationRepository) De
 	return func(r *DefaultRunner) { r.riskObs = repo }
 }
 
+// WithNodeScope configures the node scope for selecting target nodes (default: enabled_subscriptions).
+func WithNodeScope(scope domain.NodeScope) DefaultRunnerOption {
+	return func(r *DefaultRunner) { r.scope = scope }
+}
+
 type DefaultRunner struct {
 	budget           RunBudget
 	stageConcurrency StageConcurrency
@@ -111,6 +116,7 @@ type DefaultRunner struct {
 	runs             domain.ProbeRunRepository
 	dialer           NodeDialer
 	clock            func() time.Time
+	scope            domain.NodeScope
 }
 
 // NewDefaultRunner constructs a DefaultRunner.
@@ -130,6 +136,7 @@ func NewDefaultRunner(
 		clock:            time.Now,
 		budget:           DefaultRunBudget,
 		stageConcurrency: DefaultStageConcurrency,
+		scope:            domain.NodeScopeEnabledSubscriptions,
 	}
 	for _, opt := range opts {
 		opt(r)
@@ -258,9 +265,16 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 		}
 	}
 
+	targetScope := r.scope
+	if targetScope == "" {
+		targetScope = domain.NodeScopeEnabledSubscriptions
+	}
+
 	var targetNodes []domain.Node
 	if len(nodeIDs) > 0 {
 		chunk, _, err := r.nodes.List(ctx, domain.NodeFilter{
+			Scope:          targetScope,
+			ActiveOnly:     true,
 			LogicalIDs:     nodeIDs,
 			ExcludeNotices: true,
 			Pagination:     domain.Pagination{Page: 1, PageSize: len(nodeIDs)},
@@ -284,6 +298,7 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 		seen := make(map[string]struct{})
 		for fetchPage := 1; ; fetchPage++ {
 			chunk, total, err := r.nodes.List(ctx, domain.NodeFilter{
+				Scope:          targetScope,
 				ActiveOnly:     true,
 				ExcludeNotices: true,
 				Pagination:     domain.Pagination{Page: fetchPage, PageSize: fetchPageSize},

@@ -61,7 +61,7 @@ async function fetchNodesIfEmpty() {
   try {
     loadingNodes.value = true
     const result = await api.get<{ items: Array<{ logical_id: string; display_name: string; active: boolean; protocol: string }> }>('/api/v1/nodes', {
-      params: { page: 1, page_size: 200 },
+      params: { page: 1, page_size: 200, scope: 'enabled_subscriptions' },
     })
     if (result && Array.isArray(result.items)) {
       internalNodes.value = result.items.map((n) => ({

@@ -2,6 +2,8 @@ package domain
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 )
 
@@ -10,6 +12,30 @@ type Pagination struct {
 	Page     int `json:"page"`
 	PageSize int `json:"page_size"`
 	Total    int `json:"total"`
+}
+
+// NodeScope represents the query scope for node listings.
+type NodeScope string
+
+const (
+	NodeScopeDefault              NodeScope = ""
+	NodeScopeEnabledSubscriptions NodeScope = "enabled_subscriptions"
+	NodeScopeAllAssets            NodeScope = "all_assets"
+)
+
+func (s NodeScope) IsValid() bool {
+	return s == NodeScopeDefault || s == NodeScopeEnabledSubscriptions || s == NodeScopeAllAssets
+}
+
+func ParseNodeScope(raw string) (NodeScope, error) {
+	norm := NodeScope(strings.ToLower(strings.TrimSpace(raw)))
+	if norm == "" {
+		return NodeScopeDefault, nil
+	}
+	if norm == NodeScopeEnabledSubscriptions || norm == NodeScopeAllAssets {
+		return norm, nil
+	}
+	return "", NewValidationError("invalid_node_scope", fmt.Sprintf("unsupported node scope: %s (supported: %s, %s)", raw, NodeScopeEnabledSubscriptions, NodeScopeAllAssets))
 }
 
 // NodeFilter defines server-side query filters for nodes.
@@ -23,6 +49,8 @@ type NodeFilter struct {
 	SearchText          string         `json:"search_text,omitempty"`
 	SortBy              string         `json:"sort_by,omitempty"`
 	SortOrder           string         `json:"sort_order,omitempty"`
+	Scope               NodeScope      `json:"scope,omitempty"`
+	SubscriptionID      string         `json:"subscription_id,omitempty"`
 	RiskDecisions       []RiskAction   `json:"risk_decisions,omitempty"`
 	RiskBands           []RiskBand     `json:"risk_bands,omitempty"`
 	RiskProviders       []string       `json:"risk_providers,omitempty"`

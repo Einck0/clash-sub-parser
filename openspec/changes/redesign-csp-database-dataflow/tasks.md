@@ -76,3 +76,13 @@
 - [x] 7.1 本地全量单元测试与编译门禁：运行 `go build ./...`、全量 Go 单元测试与前端类型检查，确保退出码为 0 (实施已授权)
 - [x] 7.2 生产受控单容器停机冷替换与可验证备份：执行 SQLite 在线一致性备份 (sha256:a5b25dfe...) 校验完整性与外键 (FK 0)，新镜像 (sha256:62ee52ebbfaf) 替换旧容器至 5aaefb45714c，实测停机命令至就绪耗时 1.941s，双端口验证 `/healthz` 与 `/readyz` (schema 15) 200 OK，存量资产与冷备布尔全等比对相等 (已闭环完成)
 - [ ] 7.3 合法生产管理凭据真实节点实网验收：用户已授权实施上线，Pi无法调用前台已登录vault安全渠道；生产带身份管理刷新/探针/预览发布未验 (工程 Reviewer PASS 与 Critic PASSED 基于隔离 fixture 验证，不冒充生产管理验收)
+
+## 8. 实施大包六：启用订阅可用库存收敛与多视图对齐 (Enabled Inventory Scoping - 施工完成)
+
+- [x] 8.1 后端领域与仓储层支持启用订阅与统一底层谓词：在 `domain.NodeFilter` 中增加 `Scope: NodeScope`（`enabled_subscriptions`、`all_assets`）与 `SubscriptionID: string`，在 `domain.Subscription` 与 `domain.ProbePoolStatus` 扩展对账字段，实现 `buildNodeFilterPredicates` 统一谓词并更新 `List`、`ListReadModel` 与 `Count` 查询
+- [x] 8.2 后端 HTTP 路由参数扩展与接口契约落地：在 `GET /api/v1/nodes` 增加 `scope`（默认 `enabled_subscriptions`，显式 `all_assets`，未知 400 `invalid_node_scope`），在 `GET /api/v1/subscriptions` 增加 `node_count`、`source_node_count` 与 `counts_scope`，在 `GET /api/v1/probes/pool` 增加 `inventory_total`、`candidate_total` 与 `scope` 并保持 `total_count` 含义，单节点详情与覆写接口保持全库权限
+- [x] 8.3 探测调度、发布编译与消费者候选门禁：在 probe runner（selected IDs 与 run all）、periodic coordinator 与 publication resolve 中收敛至范围 E 活跃非公告候选，保持历史发布快照字节绝对不可变
+- [x] 8.4 隔离环境全场景单元与集成自测：编写覆盖启用/停用、共享节点、失活节点、手工无源节点、公告排除、抓取失败保留旧成果、刷新删除成员、10+页分页与 risk/q/sub 过滤一致性的全套测试，确保 `go test -count=1 ./...` 与静态编译退出码为 0
+- [x] 8.5 前端节点台账、首页概览与订阅卡片生效库存展示：更新 `web/src/features/nodes/useNodes.ts`、`NodesView.vue`、`DashboardView.vue` 与 `SubscriptionsView.vue`（由前端独立施工机完成，本包不修改 webassets 共享产物）
+
+

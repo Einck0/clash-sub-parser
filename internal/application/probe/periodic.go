@@ -624,6 +624,7 @@ func (c *PeriodicCoordinator) executeBatch(parentCtx context.Context, batch *dom
 	const fetchPageSize = 100
 	for {
 		chunk, total, err := c.nodes.List(batchCtx, domain.NodeFilter{
+			Scope:          domain.NodeScopeEnabledSubscriptions,
 			ActiveOnly:     true,
 			ExcludeNotices: true,
 			Pagination:     domain.Pagination{Page: fetchPage, PageSize: fetchPageSize},

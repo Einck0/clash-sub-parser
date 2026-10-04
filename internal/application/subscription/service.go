@@ -83,6 +83,9 @@ type SubscriptionView struct {
 	UpdatedAt          string                    `json:"updated_at"`
 	LastRefreshedAt    *string                   `json:"last_refreshed_at"`
 	LastRefreshOutcome *string                   `json:"last_refresh_outcome,omitempty"`
+	NodeCount          int                       `json:"node_count"`
+	SourceNodeCount    int                       `json:"source_node_count"`
+	CountsScope        string                    `json:"counts_scope"`
 }
 
 // ListResult is a page of API-safe subscriptions.
@@ -360,10 +363,17 @@ func normalizedPolicy(policy domain.RefreshPolicy) domain.RefreshPolicy {
 }
 
 func redact(sub domain.Subscription) SubscriptionView {
+	scope := sub.CountsScope
+	if scope == "" {
+		scope = "enabled_subscriptions"
+	}
 	view := SubscriptionView{
 		ID: sub.ID, Name: sub.Name, SourceURLSecretRef: sub.SourceURLSecretRef, Enabled: sub.Enabled, RefreshPolicy: sub.RefreshPolicy,
 		Config: sub.Config, Revision: sub.Revision,
 		CreatedAt: sub.CreatedAt.Format("2006-01-02T15:04:05Z07:00"), UpdatedAt: sub.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		NodeCount:       sub.NodeCount,
+		SourceNodeCount: sub.SourceNodeCount,
+		CountsScope:     scope,
 	}
 	if sub.LastRefreshedAt != nil && !sub.LastRefreshedAt.IsZero() {
 		refreshedStr := sub.LastRefreshedAt.Format("2006-01-02T15:04:05Z07:00")

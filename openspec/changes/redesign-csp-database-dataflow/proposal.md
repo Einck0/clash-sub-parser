@@ -54,3 +54,14 @@
   - `internal/application/probe/`: 统一 IP Risk Nullable 1:N 测量标识与 safe_detail 白名单；
   - `web/src/ui/`: 修复错误分类逻辑。
 - **数据迁移与回滚**：全量保留既有 1014 节点、29 组、163 规则、1 调度与历史探针数据，支持在线热备、实测维护窗口与原资产对账回滚。
+
+## 增量演进：启用订阅库存范围收敛与端到端指标对齐 (Enabled Inventory Scoping)
+
+- **业务背景与痛点**：当前控制台首页概览与节点列表请求 `/api/v1/nodes` 时未附带订阅范围过滤，直接返回全库 1014 个节点资产（包含 983 个历史失活节点）；而探测池与发布导出内部均已过滤活跃非公告节点（31 个），造成端到端数值不一致与“仍显示 1000 多个节点”的混淆。
+- **核心对齐规则与冻结 API 契约**：
+  1. **全库资产 vs 可用库存分离**：底表保留全量 1014 个资产作为保护数据，全局主视图与首页概览默认应用 `scope=enabled_subscriptions`（范围 E），聚焦于“至少属于一个当前已启用订阅源且为其最后成功抓取条目且非确证公告”的可用节点（31 个）；`nodes.active` 保持独立，非 E 前置条件；显式 `scope=all_assets` 支持全库台账查询；未知 scope 返回 HTTP 400 `invalid_node_scope`；
+  2. **多订阅去重与各卡计数**：`GET /api/v1/subscriptions` 增加 `node_count`（启用有效贡献数）、`source_node_count`（源最后成功成员数）与 `counts_scope: 'enabled_subscriptions'`；主视图按 `logical_id` 全局去重；多源共享节点时呈现 `Sum(Per-Sub) >= Global Dedup` 拓扑事实；
+  3. **探测池与发布快照契约**：`GET /api/v1/probes/pool` 增加 `inventory_total`（范围 E 总数）、`candidate_total`（范围 E 活跃数）、`scope: 'enabled_subscriptions'`，保持 `total_count`（旧候选计数）含义不变；探测派发与发布解析基于范围 E 门禁；历史已发布快照字节绝对不可变；
+  4. **非破坏性与编辑接口保全**：用户手动无订阅节点保持安全持久化；`unknown` 节点不盲目封杀；节点详情与修改接口 (`GET/PATCH /api/v1/nodes/{logical_id}`) 保持全库资产访问权限，杜绝删历史。
+
+

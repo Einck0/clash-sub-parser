@@ -46,6 +46,32 @@ func TestAPISemantic_ProbesAndPublications(t *testing.T) {
 		t.Fatalf("failed to seed test node: %v", err)
 	}
 
+	// Attach test node to an enabled subscription with a successful fetch
+	subID := "sub-e2e-probe-pub-01"
+	fetchID := "fetch-e2e-probe-pub-01"
+	nowStr := now.Format(time.RFC3339)
+	_, err = harness.DB.ExecContext(ctx, `
+		INSERT INTO subscriptions (id, name, source_url_secret_ref, enabled, revision, created_at, updated_at)
+		VALUES (?, 'E2E Probe Sub', 'secret://url', 1, 'rev1', ?, ?);
+	`, subID, nowStr, nowStr)
+	if err != nil {
+		t.Fatalf("failed to seed subscription: %v", err)
+	}
+	_, err = harness.DB.ExecContext(ctx, `
+		INSERT INTO subscription_fetches (id, subscription_id, started_at, finished_at, outcome)
+		VALUES (?, ?, ?, ?, 'success');
+	`, fetchID, subID, nowStr, nowStr)
+	if err != nil {
+		t.Fatalf("failed to seed subscription fetch: %v", err)
+	}
+	_, err = harness.DB.ExecContext(ctx, `
+		INSERT INTO node_sources (node_logical_id, subscription_id, last_seen_fetch_id)
+		VALUES (?, ?, ?);
+	`, testNodeID, subID, fetchID)
+	if err != nil {
+		t.Fatalf("failed to seed node source: %v", err)
+	}
+
 	// Ensure an active policy revision exists with default group/rule covering this node
 	activeRev, err := harness.RevisionService.GetActive(ctx)
 	if err != nil || activeRev == nil {

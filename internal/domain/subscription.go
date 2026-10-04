@@ -47,6 +47,9 @@ type Subscription struct {
 	UpdatedAt          time.Time          `json:"updated_at"`
 	LastRefreshedAt    *time.Time         `json:"last_refreshed_at,omitempty"`
 	LastRefreshOutcome *FetchOutcome      `json:"last_refresh_outcome,omitempty"`
+	NodeCount          int                `json:"node_count"`
+	SourceNodeCount    int                `json:"source_node_count"`
+	CountsScope        string             `json:"counts_scope,omitempty"`
 }
 
 // SubscriptionFetch represents an immutable audit record of a fetch operation.

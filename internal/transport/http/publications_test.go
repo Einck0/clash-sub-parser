@@ -77,6 +77,29 @@ func setupPublicationTestRouter(t *testing.T, db *sql.DB, extraOptions ...public
 	return transporthttp.NewRouter(routerCfg), pubSvc
 }
 
+// attachTestNodeToEnabledSub attaches seeded nodes to an enabled subscription with a successful fetch.
+func attachTestNodeToEnabledSub(t *testing.T, db *sql.DB, nodeIDs ...string) {
+	t.Helper()
+	ctx := context.Background()
+	subID := "sub-test-" + domain.MustNewUUIDv7()
+	fetchID := "fetch-test-" + domain.MustNewUUIDv7()
+	nowStr := domain.NowUTC().Format(time.RFC3339)
+	_, err := db.ExecContext(ctx, `INSERT INTO subscriptions (id, name, source_url_secret_ref, enabled, revision, created_at, updated_at) VALUES (?, 'Sub Test', 'secret://test', 1, 'rev1', ?, ?);`, subID, nowStr, nowStr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.ExecContext(ctx, `INSERT INTO subscription_fetches (id, subscription_id, started_at, finished_at, outcome) VALUES (?, ?, ?, ?, 'success');`, fetchID, subID, nowStr, nowStr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, nid := range nodeIDs {
+		_, err = db.ExecContext(ctx, `INSERT INTO node_sources (node_logical_id, subscription_id, last_seen_fetch_id) VALUES (?, ?, ?);`, nid, subID, fetchID)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 // seedSamplePolicyData sets up an active revision, a node, a policy group, and rules.
 func seedSamplePolicyData(t *testing.T, db *sql.DB) (string, string) {
 	t.Helper()
@@ -102,6 +125,7 @@ func seedSamplePolicyData(t *testing.T, db *sql.DB) (string, string) {
 	if err != nil {
 		t.Fatalf("failed to insert node: %v", err)
 	}
+	attachTestNodeToEnabledSub(t, db, nodeID)
 
 	// 2. Insert Revision
 	revRepo := sqlite.NewRevisionRepository(db)
@@ -972,6 +996,7 @@ func TestAdminPreview_CapabilityBoundaries(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to insert node: %v", err)
 		}
+		attachTestNodeToEnabledSub(t, db, nodeID)
 
 		revRepo := sqlite.NewRevisionRepository(db)
 		revID, _ := domain.NewUUIDv7()
@@ -1075,6 +1100,7 @@ func TestAdminPreview_CapabilityBoundaries(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to insert node: %v", err)
 		}
+		attachTestNodeToEnabledSub(t, db, nodeID)
 
 		revRepo := sqlite.NewRevisionRepository(db)
 		revID, _ := domain.NewUUIDv7()
@@ -1139,6 +1165,7 @@ func TestAdminPreview_CapabilityBoundaries(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to insert node: %v", err)
 		}
+		attachTestNodeToEnabledSub(t, db, nodeID)
 
 		revRepo := sqlite.NewRevisionRepository(db)
 		revID, _ := domain.NewUUIDv7()
@@ -1311,6 +1338,7 @@ func TestAdminPublish_CapabilityBoundaries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to insert node: %v", err)
 	}
+	attachTestNodeToEnabledSub(t, db, nodeID)
 
 	revRepo := sqlite.NewRevisionRepository(db)
 	revID, _ := domain.NewUUIDv7()
@@ -1561,6 +1589,7 @@ func TestPublication_MihomoHysteria2EndToEndWithOfficialCLI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to insert node: %v", err)
 	}
+	attachTestNodeToEnabledSub(t, db, hy2ID)
 
 	// 3. Setup revision, group, edges, and rules
 	revRepo := sqlite.NewRevisionRepository(db)
@@ -1907,6 +1936,7 @@ func TestFourTargetEndToEndHTTP_WireGuardTUICAndNativeCapabilityProof(t *testing
 	}); err != nil {
 		t.Fatalf("upsert nodes: %v", err)
 	}
+	attachTestNodeToEnabledSub(t, db, wgID, tuicID, ssID)
 
 	revID := domain.MustNewUUIDv7()
 	_ = revRepo.Create(ctx, &domain.ConfigurationRevision{

@@ -62,6 +62,19 @@ func (h nodeHandler) list(w http.ResponseWriter, r *http.Request) {
 		pageSize = ps
 	}
 
+	scopeStr := strings.TrimSpace(q.Get("scope"))
+	var scope domain.NodeScope
+	if scopeStr == "" {
+		scope = domain.NodeScopeEnabledSubscriptions
+	} else {
+		parsed, err := domain.ParseNodeScope(scopeStr)
+		if err != nil {
+			WriteError(w, r, http.StatusBadRequest, "invalid_node_scope", err.Error())
+			return
+		}
+		scope = parsed
+	}
+
 	filter := domain.NodeFilter{
 		Pagination: domain.Pagination{
 			Page:     page,
@@ -69,7 +82,14 @@ func (h nodeHandler) list(w http.ResponseWriter, r *http.Request) {
 		},
 		SortBy:    strings.TrimSpace(q.Get("sort_by")),
 		SortOrder: strings.TrimSpace(q.Get("sort_order")),
+		Scope:     scope,
 	}
+
+	subID := strings.TrimSpace(q.Get("subscription_id"))
+	if subID == "" {
+		subID = strings.TrimSpace(q.Get("sub"))
+	}
+	filter.SubscriptionID = subID
 
 	if activeOnlyStr := q.Get("active_only"); activeOnlyStr == "true" || activeOnlyStr == "1" {
 		filter.ActiveOnly = true

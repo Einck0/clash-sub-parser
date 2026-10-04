@@ -551,6 +551,9 @@ export interface ProbePoolStatus {
   skipped_nodes?: number
   no_due_tasks?: boolean
   run_ids?: string[]
+  inventory_total?: number
+  candidate_total?: number
+  scope?: string
 }
 
 export type ScheduleTriggerResult = ProbePoolStatus

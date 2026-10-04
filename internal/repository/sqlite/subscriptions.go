@@ -64,7 +64,7 @@ func (r *subscriptionRepository) GetByID(ctx context.Context, id string) (*domai
 	sub.CreatedAt, _ = time.Parse(time.RFC3339, createdAtStr)
 	sub.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAtStr)
 
-	if err := r.attachLatestFetches(ctx, []*domain.Subscription{&sub}); err != nil {
+	if err := r.attachMetadata(ctx, []*domain.Subscription{&sub}); err != nil {
 		return nil, err
 	}
 
@@ -170,12 +170,112 @@ func (r *subscriptionRepository) List(ctx context.Context, filter domain.Subscri
 		for i := range items {
 			subPtrs[i] = &items[i]
 		}
-		if err := r.attachLatestFetches(ctx, subPtrs); err != nil {
+		if err := r.attachMetadata(ctx, subPtrs); err != nil {
 			return nil, 0, err
 		}
 	}
 
 	return items, total, nil
+}
+
+func (r *subscriptionRepository) attachMetadata(ctx context.Context, subs []*domain.Subscription) error {
+	if len(subs) == 0 {
+		return nil
+	}
+
+	if err := r.attachLatestFetches(ctx, subs); err != nil {
+		return err
+	}
+	return r.attachNodeCounts(ctx, subs)
+}
+
+func (r *subscriptionRepository) attachNodeCounts(ctx context.Context, subs []*domain.Subscription) error {
+	if len(subs) == 0 {
+		return nil
+	}
+
+	subMap := make(map[string]*domain.Subscription, len(subs))
+	placeholders := make([]string, len(subs))
+	args := make([]interface{}, len(subs))
+	for i, s := range subs {
+		s.CountsScope = "enabled_subscriptions"
+		s.NodeCount = 0
+		s.SourceNodeCount = 0
+		subMap[s.ID] = s
+		placeholders[i] = "?"
+		args[i] = s.ID
+	}
+
+	var entriesTableExists int
+	_ = r.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='subscription_entries';").Scan(&entriesTableExists)
+
+	noticeExclusion := ""
+	if entriesTableExists > 0 {
+		noticeExclusion = `AND ns.node_logical_id NOT IN (
+			SELECT se1.node_logical_id FROM subscription_entries se1
+			WHERE se1.node_logical_id IS NOT NULL
+			  AND COALESCE(se1.user_kind_override, se1.entry_kind) = 'notice'
+			  AND NOT EXISTS (
+			      SELECT 1 FROM subscription_entries se2
+			      WHERE se2.node_logical_id = se1.node_logical_id
+			        AND se2.user_kind_override = 'proxy'
+			  )
+		)`
+	}
+
+	query := fmt.Sprintf(`
+	WITH latest_good_fetches AS (
+		SELECT sf.subscription_id, sf.id AS fetch_id
+		FROM subscription_fetches sf
+		WHERE sf.outcome IN ('success', 'partial')
+		  AND sf.id = (
+		      SELECT sf2.id FROM subscription_fetches sf2
+		      WHERE sf2.subscription_id = sf.subscription_id
+		        AND sf2.outcome IN ('success', 'partial')
+		      ORDER BY sf2.started_at DESC, sf2.id DESC
+		      LIMIT 1
+		  )
+	)
+	SELECT s.id,
+	       COUNT(DISTINCT CASE 
+	           WHEN ns.node_logical_id IS NOT NULL %s
+	           THEN ns.node_logical_id 
+	       END) AS source_node_count
+	FROM subscriptions s
+	LEFT JOIN latest_good_fetches lgf ON s.id = lgf.subscription_id
+	LEFT JOIN node_sources ns ON s.id = ns.subscription_id AND ns.last_seen_fetch_id = lgf.fetch_id
+	WHERE s.id IN (%s)
+	GROUP BY s.id;`, noticeExclusion, strings.Join(placeholders, ", "))
+
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("failed to query subscription node counts: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var subID string
+		var sourceNodeCount int
+		if err := rows.Scan(&subID, &sourceNodeCount); err != nil {
+			return fmt.Errorf("failed to scan subscription node counts: %w", err)
+		}
+		sub, ok := subMap[subID]
+		if !ok {
+			continue
+		}
+		sub.SourceNodeCount = sourceNodeCount
+		if sub.Enabled {
+			sub.NodeCount = sourceNodeCount
+		} else {
+			sub.NodeCount = 0
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("error iterating subscription node counts: %w", err)
+	}
+
+	return nil
 }
 
 func (r *subscriptionRepository) attachLatestFetches(ctx context.Context, subs []*domain.Subscription) error {

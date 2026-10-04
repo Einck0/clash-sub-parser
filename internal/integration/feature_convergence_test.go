@@ -319,6 +319,15 @@ func TestFeatureConvergence_FullStack(t *testing.T) {
 		t.Fatalf("failed to insert nodes: %v", err)
 	}
 
+	subID := "sub-conv-01"
+	fetchID := "fetch-conv-01"
+	nowStr := now.Format(time.RFC3339)
+	_, _ = db.ExecContext(ctx, `INSERT INTO subscriptions (id, name, source_url_secret_ref, enabled, revision, created_at, updated_at) VALUES (?, 'Sub', 'secret', 1, 'rev1', ?, ?);`, subID, nowStr, nowStr)
+	_, _ = db.ExecContext(ctx, `INSERT INTO subscription_fetches (id, subscription_id, started_at, finished_at, outcome) VALUES (?, ?, ?, ?, 'success');`, fetchID, subID, nowStr, nowStr)
+	for _, n := range []domain.Node{node1, node2, node3} {
+		_, _ = db.ExecContext(ctx, `INSERT INTO node_sources (node_logical_id, subscription_id, last_seen_fetch_id) VALUES (?, ?, ?);`, n.LogicalID, subID, fetchID)
+	}
+
 	// Create ProbeRun for observations FK
 	run := domain.ProbeRun{
 		ID:             domain.MustNewUUIDv7(),
@@ -372,9 +381,9 @@ func TestFeatureConvergence_FullStack(t *testing.T) {
 	}
 
 	// -------------------------------------------------------------------------
-	// 2. Test GET /api/v1/nodes: Check plaintext server & port returned directly
+	// 2. Test GET /api/v1/nodes?scope=all_assets: Check plaintext server & port returned directly
 	// -------------------------------------------------------------------------
-	resp, body := doReq(http.MethodGet, "/api/v1/nodes", nil)
+	resp, body := doReq(http.MethodGet, "/api/v1/nodes?scope=all_assets", nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET /api/v1/nodes returned %d: %s", resp.StatusCode, string(body))
 	}
@@ -954,6 +963,15 @@ func TestFeatureConvergence_NativeMihomoExportCleanSlate(t *testing.T) {
 
 	if err := nodeRepo.UpsertBatch(ctx, []domain.Node{hy2Node, ssNode}); err != nil {
 		t.Fatalf("upsert nodes: %v", err)
+	}
+
+	subMihomoID := "sub-conv-mihomo"
+	fetchMihomoID := "fetch-conv-mihomo"
+	nowStr2 := now.Format(time.RFC3339)
+	_, _ = db.ExecContext(ctx, `INSERT INTO subscriptions (id, name, source_url_secret_ref, enabled, revision, created_at, updated_at) VALUES (?, 'Sub Mihomo', 'secret', 1, 'rev1', ?, ?);`, subMihomoID, nowStr2, nowStr2)
+	_, _ = db.ExecContext(ctx, `INSERT INTO subscription_fetches (id, subscription_id, started_at, finished_at, outcome) VALUES (?, ?, ?, ?, 'success');`, fetchMihomoID, subMihomoID, nowStr2, nowStr2)
+	for _, nid := range []string{hy2ID, ssID} {
+		_, _ = db.ExecContext(ctx, `INSERT INTO node_sources (node_logical_id, subscription_id, last_seen_fetch_id) VALUES (?, ?, ?);`, nid, subMihomoID, fetchMihomoID)
 	}
 
 	revID := domain.MustNewUUIDv7()

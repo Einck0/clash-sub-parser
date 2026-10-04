@@ -104,3 +104,41 @@
 - **迁移演练**: 在隔离环境中演练 Migration 000015，实测停写耗时并获用户确认；执行 SQLite 在线一致性热备后运行迁移，事务性初始化 1014 个节点的版本与 head 指针，保全历史失活资产。
 - **受控回滚**: 准备热备文件与旧镜像，若异常发生可在短窗内原子恢复；切换后产生新数据则导出增量由操作员确认补偿。
 - **测试工程方案**: 扩充至 14 个独立验证场景（详见 `docs/design/csp-database-dataflow.md` 第七章），全流程基于项目现有测试工具验证，杜绝私造框架。
+
+---
+
+## 5. 启用订阅库存范围收敛与视图语义设计 (Enabled Inventory Scoping Architecture)
+
+### 5.1 数据集合边界与视图语义定义
+1. **全库节点资产 (Total Asset Ledger)**: `nodes` 表全量记录（1014 个节点），包含 983 个失活历史节点与 31 个当前活跃节点。全量资产用于审计、不可变版本链追溯与合法单节点管理编辑。
+2. **当前生效订阅库存范围 E (Enabled Subscription Inventory Scope E)**: 满足以下全部条件的节点子集（当前生产对账为 31 个）：
+   - 存在关联记录 `node_sources ns JOIN subscriptions s ON ns.subscription_id = s.id`，且 `s.enabled = 1`；
+   - `ns.last_seen_fetch_id` 等于该订阅最新一次成功/部分成功（`outcome IN ('success', 'partial')`）的抓取记录 ID（失败抓取保持上次成功状态）；
+   - 条目类型非确认公告（`subscription_entries` 中无未覆盖为 proxy 的 notice 记录）；
+   - **`nodes.active` 独立性**：`active` 绝不作为范围 E 的前置条件；`active_only`、搜索、协议、风险等过滤条件为在范围 E 之上叠加的附加过滤器。
+3. **多源去重与各订阅计数**:
+   - 全局主视图与首页概览统计均基于 `logical_id` 全局去重；
+   - 单订阅详情/卡片展示该订阅私有的匹配条目数（Per-Sub）：`node_count`（启用时的去重非公告有效成员贡献，停用时为 0）与 `source_node_count`（最后成功成员数，停用时保留说明历史成员）；
+   - 多源共享节点时，各订阅累加计数可大于全局去重总数，系统真实呈现该拓扑事实，不进行暴力强扣。
+4. **单节点详情与覆盖权限保全**:
+   - `GET /api/v1/nodes/{logical_id}` 与 `PATCH /api/v1/nodes/{logical_id}/connection` 对所有合法的 `logical_id` 资产开放，允许管理员查看与覆写历史节点参数，不受列表主视图范围收敛影响。
+
+### 5.2 最小 API 冻结规范与查询语义
+- **`GET /api/v1/nodes` 扩展参数**:
+  - `scope` (可选 string): `enabled_subscriptions` (默认，仅返回当前启用订阅的生效可用节点，当前共 31 条) 或 `all_assets` (返回包含历史失活节点的全库台账，当前共 1014 条)；未知 scope 返回 HTTP 400 `invalid_node_scope`；
+  - 兼容参数: `active_only=true`、`search`、`protocol`、`risk_*`、`subscription_id` 保持一致并在范围 E 之上叠加。
+- **`GET /api/v1/subscriptions` 扩展属性**:
+  - `node_count` (int): 本源当前启用且有效成员去重非公告贡献（禁用为 0）；
+  - `source_node_count` (int): 本源最后成功成员去重非公告数（禁用时保留用于说明历史规模）；
+  - `counts_scope` (string): 固定返回 `'enabled_subscriptions'`。
+- **`GET /api/v1/probes/pool` 扩展属性与候选门禁**:
+  - `inventory_total` (int): 范围 E 节点总数；
+  - `candidate_total` (int): 范围 E 中满足 `active = 1` 的探测候选总数；
+  - `total_count` (int): 保持旧字段含义作为候选计数（与 `candidate_total` 一致）；
+  - `scope` (string): 固定返回 `'enabled_subscriptions'`；
+  - 任务派发（selected IDs、run all、periodic）严格施加 `E + active=1 + exclude_notices` 门禁。
+- **仓储层与服务层统一谓词实现方案**:
+  - `NodeFilter` 中增加 `Scope: NodeScope` 与 `SubscriptionID: string`；
+  - `nodeRepository.List` 与 `nodeRepository.ListReadModel` 以及对应的 `Count` 查询共享统一底层谓词构建器 `buildNodeFilterPredicates`，彻底消除条件不一致与 substring SQL 隐患。
+
+

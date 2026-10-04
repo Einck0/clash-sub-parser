@@ -52,23 +52,9 @@ func (r *nodeRepository) ListReadModel(ctx context.Context, filter domain.NodeFi
 	}
 
 	// Apply filter clauses against the unified node_eval projection
-	if filter.ActiveOnly {
-		whereClauses = append(whereClauses, "active = 1")
-	}
-
-	if len(filter.Protocols) > 0 {
-		placeholders := make([]string, len(filter.Protocols))
-		for i, p := range filter.Protocols {
-			placeholders[i] = "?"
-			args = append(args, string(p))
-		}
-		whereClauses = append(whereClauses, fmt.Sprintf("protocol IN (%s)", strings.Join(placeholders, ",")))
-	}
-
-	if filter.SearchText != "" {
-		whereClauses = append(whereClauses, "display_name LIKE ?")
-		args = append(args, "%"+filter.SearchText+"%")
-	}
+	baseClauses, baseArgs := buildNodeFilterPredicates(filter, "")
+	whereClauses = append(whereClauses, baseClauses...)
+	args = append(args, baseArgs...)
 
 	if len(filter.RiskDecisions) > 0 {
 		placeholders := make([]string, len(filter.RiskDecisions))
@@ -926,44 +912,7 @@ func (r *nodeRepository) loadObservationsForNodes(ctx context.Context, ids []str
 }
 
 func nodeFilterSQL(filter domain.NodeFilter) ([]string, []any) {
-	var where []string
-	var args []any
-	if filter.ActiveOnly {
-		where = append(where, "active = 1")
-	}
-	if len(filter.LogicalIDs) > 0 {
-		p := make([]string, len(filter.LogicalIDs))
-		for i, v := range filter.LogicalIDs {
-			p[i] = "?"
-			args = append(args, v)
-		}
-		where = append(where, "logical_id IN ("+strings.Join(p, ",")+")")
-	}
-	if filter.ExcludeNotices {
-		where = append(where, `logical_id NOT IN (
-			SELECT se1.node_logical_id FROM subscription_entries se1
-			WHERE se1.node_logical_id IS NOT NULL
-			  AND COALESCE(se1.user_kind_override, se1.entry_kind) = 'notice'
-			  AND NOT EXISTS (
-			      SELECT 1 FROM subscription_entries se2
-			      WHERE se2.node_logical_id = se1.node_logical_id
-			        AND se2.user_kind_override = 'proxy'
-			  )
-		)`)
-	}
-	if len(filter.Protocols) > 0 {
-		p := make([]string, len(filter.Protocols))
-		for i, v := range filter.Protocols {
-			p[i] = "?"
-			args = append(args, string(v))
-		}
-		where = append(where, "protocol IN ("+strings.Join(p, ",")+")")
-	}
-	if filter.SearchText != "" {
-		where = append(where, "display_name LIKE ?")
-		args = append(args, "%"+filter.SearchText+"%")
-	}
-	return where, args
+	return buildNodeFilterPredicates(filter, "")
 }
 
 func parseStoredTime(v string) time.Time {

@@ -22,6 +22,7 @@ const router = useRouter()
 const stats = ref({
   subscriptions: 0,
   nodes: 0,
+  activeNodes: 0,
   probes: 0,
   policies: 0,
 })
@@ -49,15 +50,17 @@ async function checkHealth() {
 async function loadStats() {
   loadingStats.value = true
   try {
-    const [subsRes, nodesRes, probesRes, policyRes] = await Promise.allSettled([
+    const [subsRes, nodesRes, activeNodesRes, probesRes, policyRes] = await Promise.allSettled([
       api.get<{ total: number }>('/api/v1/subscriptions', { params: { page: 1, page_size: 1 } }),
-      api.get<{ total: number }>('/api/v1/nodes', { params: { page: 1, page_size: 1 } }),
+      api.get<{ total: number }>('/api/v1/nodes', { params: { page: 1, page_size: 1, scope: 'enabled_subscriptions' } }),
+      api.get<{ total: number }>('/api/v1/nodes', { params: { page: 1, page_size: 1, scope: 'enabled_subscriptions', active_only: 'true' } }),
       api.get<{ total: number }>('/api/v1/probes/runs', { params: { page: 1, page_size: 1 } }),
       api.get<{ total: number }>('/api/v1/policies/groups', { params: { page: 1, page_size: 1 } }),
     ])
 
     if (subsRes.status === 'fulfilled') stats.value.subscriptions = subsRes.value?.total || 0
     if (nodesRes.status === 'fulfilled') stats.value.nodes = nodesRes.value?.total || 0
+    if (activeNodesRes.status === 'fulfilled') stats.value.activeNodes = activeNodesRes.value?.total || 0
     if (probesRes.status === 'fulfilled') stats.value.probes = probesRes.value?.total || 0
     if (policyRes.status === 'fulfilled') stats.value.policies = policyRes.value?.total || 0
   } catch {
@@ -171,8 +174,22 @@ onMounted(() => {
             <span class="text-xs font-medium text-base-content/70">{{ t('dashboard.nodesCount') }}</span>
             <ServerStackIcon class="w-5 h-5 text-secondary group-hover:scale-110 transition-transform" />
           </div>
-          <div class="text-2xl sm:text-3xl font-bold font-mono tracking-tight text-base-content">
-            {{ loadingStats ? '--' : stats.nodes }}
+          <div class="flex items-baseline justify-between gap-2">
+            <div class="text-2xl sm:text-3xl font-bold font-mono tracking-tight text-base-content">
+              {{ loadingStats ? '--' : stats.nodes }}
+            </div>
+            <div
+              v-if="!loadingStats"
+              class="text-xs font-mono text-base-content/65 whitespace-nowrap"
+              :title="t('dashboard.nodesActiveSubsetHint')"
+            >
+              {{ t('dashboard.nodesActiveSubset', { count: stats.activeNodes }) }}
+            </div>
+          </div>
+          <div class="flex items-center gap-1.5 pt-0.5">
+            <span class="badge badge-xs badge-primary badge-outline font-mono">
+              {{ t('dashboard.nodesScopeEnabled') }}
+            </span>
           </div>
         </div>
       </div>

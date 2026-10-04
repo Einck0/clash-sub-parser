@@ -524,7 +524,7 @@ onMounted(() => {
           class="flex flex-col gap-2 p-2.5 rounded-lg bg-base-100 border border-base-300 text-xs font-mono"
         >
           <div class="flex flex-wrap items-center gap-3">
-            <span class="opacity-60 font-sans">过滤流水线：</span>
+            <span class="opacity-60 font-sans">当前启用订阅流水线：</span>
             <span>原始节点: <strong>{{ preview.filter_counts.raw_total ?? '--' }}</strong></span>
             <span class="opacity-40">→</span>
             <span>准入通过: <strong>{{ preview.filter_counts.admitted_total ?? '--' }}</strong></span>
@@ -662,7 +662,7 @@ onMounted(() => {
           </p>
         </div>
 
-        <div class="grid grid-cols-2 gap-2 text-xs font-mono p-3 rounded-xl bg-base-200 border border-base-300 min-w-0 break-all">
+        <div class="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs font-mono p-3 rounded-xl bg-base-200 border border-base-300 min-w-0 break-all">
           <div>
             <span class="opacity-60 block">导出目标</span>
             <div class="flex items-center gap-1.5 mt-0.5">
@@ -676,6 +676,12 @@ onMounted(() => {
             <strong :class="activePublication.revoked_at ? 'text-error' : 'text-success'">
               {{ publicationStateLabel(activePublication.state, activePublication.revoked_at) }}
             </strong>
+          </div>
+          <div class="col-span-2 sm:col-span-1">
+            <span class="opacity-60 block">历史快照语义</span>
+            <span class="badge badge-xs badge-neutral font-sans mt-0.5" title="历史发布快照具有不可变性，其节点计数为发布时的定格快照，与当前实时订阅库存解耦">
+              不可变定格快照
+            </span>
           </div>
         </div>
 

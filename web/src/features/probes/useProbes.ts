@@ -87,6 +87,7 @@ export function useProbes() {
             page,
             page_size: pageSize,
             active_only: 'true',
+            scope: 'enabled_subscriptions',
             sort_by: 'display_name',
             sort_order: 'asc',
           },
@@ -136,6 +137,8 @@ export function useProbes() {
   function derivePoolStatusFromLocal(): ProbePoolStatus {
     const nodes = probeNodes.value
     const total = nodes.length
+    const candidateNodes = nodes.filter((n) => n.active !== false)
+    const candidateTotal = candidateNodes.length
     const probingSet = new Set<string>(probingNodeIds.value)
     const queuedSet = new Set<string>(queuedNodeIds.value)
     let healthy = 0
@@ -170,7 +173,10 @@ export function useProbes() {
       probing_count: probingCount,
       queued_waiting_count: queuedWaitingCount,
       untested_count: untested,
-      total_count: total,
+      total_count: candidateTotal,
+      inventory_total: total,
+      candidate_total: candidateTotal,
+      scope: 'enabled_subscriptions',
       unavailable_count: unhealthy,
       available_count: healthy + degraded,
       healthy_count: healthy,
@@ -216,6 +222,9 @@ export function useProbes() {
       probing_node_ids: Array.from(nextProbing),
       queued_node_ids: Array.from(nextQueued),
       updated_at: res.updated_at || new Date().toISOString(),
+      inventory_total: typeof res.inventory_total === 'number' ? res.inventory_total : (res.total_count ?? 0),
+      candidate_total: typeof res.candidate_total === 'number' ? res.candidate_total : (res.total_count ?? 0),
+      scope: res.scope || 'enabled_subscriptions',
       ...(res.batch_id !== undefined ? { batch_id: res.batch_id } : {}),
       ...(res.batch_state !== undefined ? { batch_state: res.batch_state } : {}),
       ...(res.dispatched_runs !== undefined ? { dispatched_runs: res.dispatched_runs } : {}),

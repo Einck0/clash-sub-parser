@@ -761,12 +761,24 @@ func (s *Service) GetPoolStatus(ctx context.Context) (*domain.ProbePoolStatus, e
 		return status, nil
 	}
 
+	status.Scope = "enabled_subscriptions"
+	_, inventoryTotal, err := nodesRepo.List(ctx, domain.NodeFilter{
+		Scope:          domain.NodeScopeEnabledSubscriptions,
+		ExcludeNotices: true,
+		Pagination:     domain.Pagination{Page: 1, PageSize: 1},
+	})
+	if err != nil {
+		return nil, err
+	}
+	status.InventoryTotal = inventoryTotal
+
 	const fetchPageSize = 100
 	seen := make(map[string]struct{})
 	activeNodes := make([]domain.Node, 0)
 	activeIDs := make([]string, 0)
 	for fetchPage := 1; ; fetchPage++ {
 		chunk, total, err := nodesRepo.List(ctx, domain.NodeFilter{
+			Scope:          domain.NodeScopeEnabledSubscriptions,
 			ActiveOnly:     true,
 			ExcludeNotices: true,
 			Pagination:     domain.Pagination{Page: fetchPage, PageSize: fetchPageSize},
@@ -792,6 +804,7 @@ func (s *Service) GetPoolStatus(ctx context.Context) (*domain.ProbePoolStatus, e
 	}
 
 	status.TotalCount = len(activeIDs)
+	status.CandidateTotal = len(activeIDs)
 	if status.TotalCount == 0 {
 		return status, nil
 	}

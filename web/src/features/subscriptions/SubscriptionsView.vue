@@ -27,7 +27,7 @@ import {
   type SubscriptionRecord,
 } from './useSubscriptions'
 
-const { items, loading, saving, error, total, load, save, remove, refresh, refreshingIDs } = useSubscriptions()
+const { items, loading, saving, error, total, load, save, remove, refresh, refreshingIDs, toggle, togglingIDs } = useSubscriptions()
 const drawerOpen = ref(false)
 const editing = ref<SubscriptionRecord>()
 const confirmDeleteOpen = ref(false)
@@ -35,6 +35,14 @@ const pendingDeleteSubscription = ref<SubscriptionRecord | null>(null)
 const deleting = ref(false)
 const entriesDrawerOpen = ref(false)
 const viewingEntriesSub = ref<SubscriptionRecord>()
+
+async function handleToggle(subscription: SubscriptionRecord) {
+  try {
+    await toggle(subscription)
+  } catch {
+    // handled with toast
+  }
+}
 
 function openEntries(subscription: SubscriptionRecord) {
   viewingEntriesSub.value = subscription
@@ -148,11 +156,21 @@ onMounted(load)
                 <ListBulletIcon class="h-3.5 w-3.5" />
                 <span>{{ t('subscriptions.viewEntries') }}</span>
               </button>
-              <StatusBadge
-                class="shrink-0"
-                :label="subscription.enabled ? t('common.enabled') : t('common.disabled')"
-                :tone="subscription.enabled ? 'success' : 'warning'"
-              />
+              <button
+                type="button"
+                data-testid="subscription-toggle-btn"
+                class="btn btn-xs gap-1 touch-manipulation transition-all"
+                :class="subscription.enabled ? 'btn-success btn-outline' : 'btn-ghost text-base-content/60 border border-base-300'"
+                :disabled="togglingIDs.has(subscription.id)"
+                :title="subscription.enabled ? '点击停用订阅源' : '点击启用订阅源'"
+                @click="handleToggle(subscription)"
+              >
+                <span
+                  class="w-2 h-2 rounded-full"
+                  :class="subscription.enabled ? 'bg-success animate-pulse' : 'bg-base-content/40'"
+                />
+                <span>{{ subscription.enabled ? t('common.enabled') : t('common.disabled') }}</span>
+              </button>
               <Popover placement="bottom-end" panel-class="w-44 max-w-[calc(100vw-2rem)]">
                 <template #trigger="{ open }">
                   <button
@@ -179,6 +197,22 @@ onMounted(load)
                     >
                       <ArrowPathIcon class="h-3.5 w-3.5 shrink-0" :class="{ 'animate-spin': refreshingIDs.has(subscription.id) }" />
                       <span>{{ t('common.refresh') }}</span>
+                    </button>
+
+                    <!-- Toggle Enabled -->
+                    <button
+                      type="button"
+                      class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-left hover:bg-base-300/80 transition-colors"
+                      :disabled="togglingIDs.has(subscription.id)"
+                      @click="close(); handleToggle(subscription)"
+                      role="menuitem"
+                      data-testid="sub-action-toggle"
+                    >
+                      <ArrowPathIcon v-if="togglingIDs.has(subscription.id)" class="h-3.5 w-3.5 shrink-0 animate-spin" />
+                      <span v-else class="w-3.5 h-3.5 inline-flex items-center justify-center font-bold text-xs">
+                        {{ subscription.enabled ? '⏸' : '▶' }}
+                      </span>
+                      <span>{{ subscription.enabled ? t('common.disable') : t('common.enable') }}</span>
                     </button>
 
                     <!-- View Source Entries -->
@@ -233,6 +267,26 @@ onMounted(load)
                   </div>
                 </template>
               </Popover>
+            </div>
+          </div>
+
+          <!-- Node Count Badge / Retained Source Member Info -->
+          <div class="flex items-center justify-between gap-2 p-2 rounded-lg bg-base-300/40 text-xs" data-testid="subscription-node-count-bar">
+            <div class="flex items-center gap-1.5 min-w-0">
+              <span class="opacity-70 whitespace-nowrap">当前节点:</span>
+              <strong
+                data-testid="sub-current-node-count"
+                class="font-mono text-sm"
+                :class="subscription.enabled ? 'text-primary' : 'text-base-content/50'"
+              >
+                {{ subscription.enabled ? (subscription.node_count ?? 0) : 0 }}
+              </strong>
+            </div>
+            <div v-if="!subscription.enabled && (subscription.source_node_count ?? 0) > 0" class="text-[11px] opacity-65 font-mono truncate" data-testid="sub-retained-members" :title="t('subscriptions.retainedSourceMemberHint')">
+              {{ t('subscriptions.retainedSourceMembers', { count: subscription.source_node_count }) }}
+            </div>
+            <div v-else-if="subscription.enabled && subscription.source_node_count !== undefined && subscription.source_node_count !== subscription.node_count" class="text-[11px] opacity-60 font-mono truncate">
+              {{ t('subscriptions.sourceTotal', { count: subscription.source_node_count }) }}
             </div>
           </div>
 
@@ -312,9 +366,12 @@ onMounted(load)
         </div>
       </article>
     </div>
-    <p v-if="items.length" class="text-right text-xs opacity-60">
-      {{ t('subscriptions.totalOf', { count: items.length, total }) }}
-    </p>
+    <div v-if="items.length" class="flex flex-wrap items-center justify-between gap-2 text-xs opacity-60 pt-1">
+      <span class="italic">{{ t('subscriptions.perSubCountNotice') }}</span>
+      <p data-testid="subscription-total-count">
+        {{ t('subscriptions.totalOf', { count: items.length, total }) }}
+      </p>
+    </div>
 
     <!-- Advanced Configuration Drawer -->
     <SubscriptionConfigDrawer

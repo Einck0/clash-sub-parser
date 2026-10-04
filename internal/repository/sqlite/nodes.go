@@ -94,58 +94,22 @@ func (r *nodeRepository) GetByLogicalID(ctx context.Context, logicalID string) (
 }
 
 func (r *nodeRepository) List(ctx context.Context, filter domain.NodeFilter) ([]domain.Node, int, error) {
-	whereClauses := make([]string, 0)
-	args := make([]interface{}, 0)
-
-	if filter.ActiveOnly {
-		whereClauses = append(whereClauses, "n.active = 1")
-	}
-	if len(filter.LogicalIDs) > 0 {
-		placeholders := make([]string, len(filter.LogicalIDs))
-		for i, id := range filter.LogicalIDs {
-			placeholders[i] = "?"
-			args = append(args, id)
-		}
-		whereClauses = append(whereClauses, fmt.Sprintf("n.logical_id IN (%s)", strings.Join(placeholders, ",")))
-	}
-	if len(filter.Protocols) > 0 {
-		placeholders := make([]string, len(filter.Protocols))
-		for i, p := range filter.Protocols {
-			placeholders[i] = "?"
-			args = append(args, string(p))
-		}
-		whereClauses = append(whereClauses, fmt.Sprintf("n.protocol IN (%s)", strings.Join(placeholders, ",")))
-	}
-	if filter.SearchText != "" {
-		whereClauses = append(whereClauses, "n.display_name LIKE ?")
-		args = append(args, "%"+filter.SearchText+"%")
-	}
-	if filter.ExcludeNotices {
-		var tableExists int
-		_ = r.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='subscription_entries';").Scan(&tableExists)
-		if tableExists > 0 {
-			whereClauses = append(whereClauses, `n.logical_id NOT IN (
-				SELECT se1.node_logical_id FROM subscription_entries se1
-				WHERE se1.node_logical_id IS NOT NULL
-				  AND COALESCE(se1.user_kind_override, se1.entry_kind) = 'notice'
-				  AND NOT EXISTS (
-				      SELECT 1 FROM subscription_entries se2
-				      WHERE se2.node_logical_id = se1.node_logical_id
-				        AND se2.user_kind_override = 'proxy'
-				  )
-			)`)
-		}
-	}
+	whereClauses, args := buildNodeFilterPredicates(filter, "n.")
+	countWhereClauses, countArgs := buildNodeFilterPredicates(filter, "")
 
 	whereSQL := ""
 	if len(whereClauses) > 0 {
 		whereSQL = "WHERE " + strings.Join(whereClauses, " AND ")
 	}
 
-	countWhereSQL := strings.ReplaceAll(whereSQL, "n.", "")
+	countWhereSQL := ""
+	if len(countWhereClauses) > 0 {
+		countWhereSQL = "WHERE " + strings.Join(countWhereClauses, " AND ")
+	}
+
 	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM nodes %s;", countWhereSQL)
 	var total int
-	if err := r.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+	if err := r.db.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("failed to count nodes: %w", err)
 	}
 

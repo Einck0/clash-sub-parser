@@ -70,6 +70,9 @@ export interface SubscriptionRecord {
   updated_at: string
   last_refreshed_at?: string | null
   last_refresh_outcome?: 'success' | 'partial' | 'failed' | string | null
+  node_count?: number
+  source_node_count?: number
+  counts_scope?: 'enabled_subscriptions' | string
 }
 
 interface Page<T> {
@@ -164,6 +167,7 @@ export function useSubscriptions() {
 
   const hasItems = computed(() => items.value.length > 0)
   const refreshingIDs = ref(new Set<string>())
+  const togglingIDs = ref(new Set<string>())
 
   async function load() {
     loading.value = true
@@ -231,7 +235,38 @@ export function useSubscriptions() {
     }
   }
 
-  return { items, loading, saving, error, total, hasItems, refreshingIDs, load, save, remove, refresh }
+  async function toggle(subscription: SubscriptionRecord): Promise<boolean> {
+    if (togglingIDs.value.has(subscription.id)) return false
+    togglingIDs.value = new Set(togglingIDs.value).add(subscription.id)
+    try {
+      await api.patch(
+        `/api/v1/subscriptions/${encodeURIComponent(subscription.id)}`,
+        { enabled: !subscription.enabled },
+        {
+          headers: { 'If-Match': subscription.revision },
+        }
+      )
+      toastStore.push({
+        message: !subscription.enabled ? '订阅源已启用' : '订阅源已停用',
+        tone: 'success',
+      })
+      await load()
+      return true
+    } catch (cause) {
+      toastStore.push({
+        message: cause instanceof Error ? cause.message : '切换订阅状态失败',
+        tone: 'error',
+      })
+      await load().catch(() => {})
+      throw cause
+    } finally {
+      const pending = new Set(togglingIDs.value)
+      pending.delete(subscription.id)
+      togglingIDs.value = pending
+    }
+  }
+
+  return { items, loading, saving, error, total, hasItems, refreshingIDs, togglingIDs, load, save, remove, refresh, toggle }
 }
 
 export function useSubscriptionEntries() {

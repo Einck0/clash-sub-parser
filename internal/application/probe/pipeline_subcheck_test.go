@@ -659,6 +659,19 @@ func TestPipelineSQLiteEndToEndWithNodeView(t *testing.T) {
 		t.Fatalf("failed to insert test node: %v", err)
 	}
 
+	subID := "sub_sql_01"
+	fetchID := "fetch_sql_01"
+	nowStr := time.Now().UTC().Format(time.RFC3339)
+	if _, err := db.ExecContext(ctx, `INSERT INTO subscriptions (id, name, source_url_secret_ref, enabled, revision, created_at, updated_at) VALUES (?, 'Test Sub', 'secret', 1, 'rev1', ?, ?);`, subID, nowStr, nowStr); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO subscription_fetches (id, subscription_id, started_at, finished_at, outcome) VALUES (?, ?, ?, ?, 'success');`, fetchID, subID, nowStr, nowStr); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO node_sources (node_logical_id, subscription_id, last_seen_fetch_id) VALUES (?, ?, ?);`, "node_sql_01", subID, fetchID); err != nil {
+		t.Fatal(err)
+	}
+
 	sched, err := queue.NewScheduler(queue.Config{Concurrency: 10})
 	if err != nil {
 		t.Fatal(err)

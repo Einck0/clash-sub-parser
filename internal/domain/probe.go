@@ -160,6 +160,9 @@ type ProbePoolStatus struct {
 	QueuedWaitingCount int       `json:"queued_waiting_count"`
 	UntestedCount      int       `json:"untested_count"`
 	TotalCount         int       `json:"total_count"`
+	InventoryTotal     int       `json:"inventory_total"`
+	CandidateTotal     int       `json:"candidate_total"`
+	Scope              string    `json:"scope,omitempty"`
 	UnavailableCount   int       `json:"unavailable_count"`
 	AvailableCount     int       `json:"available_count"`
 	HealthyCount       int       `json:"healthy_count"`

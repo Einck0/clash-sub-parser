@@ -406,12 +406,17 @@ onUnmounted(() => {
     <!-- Header -->
     <div class="flex flex-wrap items-end justify-between gap-3">
       <div>
-        <p class="text-xs font-semibold uppercase tracking-[0.18em] text-primary">节点资产台账</p>
+        <p class="text-xs font-semibold uppercase tracking-[0.18em] text-primary">{{ t('nodes.tag') }}</p>
         <h2 id="nodes-title" class="mt-1 text-2xl font-bold">{{ t('nodes.title') }}</h2>
         <p class="mt-1 text-sm opacity-70">{{ t('nodes.subtitle') }}</p>
       </div>
       <div class="flex items-center gap-2">
-        <span class="badge badge-ghost text-xs">{{ total.toLocaleString() }} {{ t('nodes.totalNodes') }}</span>
+        <span class="badge badge-primary badge-outline text-xs" data-testid="nodes-scope-badge">
+          {{ t('nodes.scopeEnabledBadge') }}
+        </span>
+        <span class="badge badge-ghost text-xs" data-testid="nodes-total-badge">
+          {{ healthFilter === 'all' ? `${total.toLocaleString()} ${t('nodes.totalNodes')}` : `${filteredItems.length} / ${total.toLocaleString()} ${t('nodes.totalNodes')}` }}
+        </span>
         <button class="btn btn-ghost btn-sm btn-square touch-manipulation" type="button" :title="t('common.refresh')" @click="load">
           <ArrowPathIcon class="h-4 w-4" :class="{ 'animate-spin': loading }" />
         </button>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   ArrowPathIcon,
   BoltIcon,
@@ -122,6 +122,17 @@ const sortBy = ref<'latency_asc' | 'latency_desc' | 'name_asc'>('latency_asc')
 // Multi-select nodes for targeted probing
 const selectedNodeIds = ref<Set<string>>(new Set())
 
+watch(probeNodes, (nodes) => {
+  const validIds = new Set(nodes.map((n) => n.logicalId))
+  const next = new Set<string>()
+  for (const id of selectedNodeIds.value) {
+    if (validIds.has(id)) {
+      next.add(id)
+    }
+  }
+  selectedNodeIds.value = next
+})
+
 // Periodic Schedule form state (human-friendly presets + minutes)
 const scheduleEnabled = ref(false)
 const scheduleInterval = ref(3600)
@@ -188,7 +199,19 @@ const kpiStats = computed(() => {
     }
   }
 
-  const total = pool.total_count > 0 || nodes.length === 0 ? pool.total_count : nodes.length
+  const inventoryTotal =
+    pool.inventory_total !== undefined
+      ? pool.inventory_total
+      : pool.total_count > 0 || nodes.length === 0
+      ? pool.total_count
+      : nodes.length
+  const candidateTotal =
+    pool.candidate_total !== undefined
+      ? pool.candidate_total
+      : pool.total_count > 0 || nodes.length === 0
+      ? pool.total_count
+      : nodes.length
+  const total = candidateTotal
   const availableCount = pool.available_count
   const healthy = pool.healthy_count
   const degraded = pool.degraded_count
@@ -217,6 +240,8 @@ const kpiStats = computed(() => {
     probingCount,
     queuedWaitingCount,
     total,
+    inventoryTotal,
+    candidateTotal,
     availableCount,
     onlineRate,
     healthy,
@@ -369,8 +394,9 @@ async function handleQuickFullProbe() {
 }
 
 async function handleProbeSelectedNodes() {
-  if (selectedNodeIds.value.size === 0) return
-  const ids = Array.from(selectedNodeIds.value)
+  const validIds = new Set(probeNodes.value.map((n) => n.logicalId))
+  const ids = Array.from(selectedNodeIds.value).filter((id) => validIds.has(id))
+  if (ids.length === 0) return
   poolActionFeedback.value = `已将 ${ids.length} 个已选节点插队至节点池最前面优先检测`
   try {
     await triggerQuickProbe({
@@ -782,7 +808,7 @@ onUnmounted(() => {
           </p>
         </article>
 
-        <!-- Metric 2: 总数 -->
+        <!-- Metric 2: 当前订阅节点总数 vs 可探测(节点启用) -->
         <article
           data-testid="pool-metric-total"
           role="button"
@@ -793,15 +819,15 @@ onUnmounted(() => {
           @keydown.enter.prevent="selectPoolMetricFilter('all')"
         >
           <div class="flex items-center justify-between gap-2">
-            <span class="text-xs font-semibold opacity-75 whitespace-nowrap">总数</span>
-            <span class="badge badge-xs badge-ghost font-mono h-auto py-0.5 whitespace-nowrap">全网活跃</span>
+            <span class="text-xs font-semibold opacity-75 whitespace-nowrap">当前订阅节点总数</span>
+            <span class="badge badge-xs badge-ghost font-mono h-auto py-0.5 whitespace-nowrap">当前启用范围</span>
           </div>
 
           <div class="flex items-baseline justify-between gap-2">
-            <span class="text-3xl font-extrabold font-mono">
-              {{ kpiStats.total }}
+            <span class="text-3xl font-extrabold font-mono" data-testid="pool-inventory-total">
+              {{ kpiStats.inventoryTotal }}
             </span>
-            <span class="text-xs opacity-65 whitespace-nowrap">活跃节点</span>
+            <span class="text-xs opacity-65 whitespace-nowrap" data-testid="pool-candidate-total">可探测 {{ kpiStats.candidateTotal }}</span>
           </div>
 
           <div class="flex flex-wrap items-center gap-1.5 text-[11px] opacity-85">
@@ -809,12 +835,12 @@ onUnmounted(() => {
               平均响应延迟 {{ kpiStats.avgLatency !== null ? `${kpiStats.avgLatency} ms` : '未测速' }}
             </span>
             <span v-if="subscriptionOptions.length > 0" class="badge badge-xs badge-ghost h-auto py-0.5 whitespace-nowrap">
-              {{ subscriptionOptions.length }} 个订阅源
+              {{ subscriptionOptions.length }} 个启用源
             </span>
           </div>
 
           <p class="text-[11px] opacity-65 leading-tight">
-            点击查看全部节点与实时测速状态
+            当前订阅节点 vs 可探测节点 · 不混淆历史任务数
           </p>
         </article>
 

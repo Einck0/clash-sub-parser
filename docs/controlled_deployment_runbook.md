@@ -342,3 +342,75 @@ Critic 必须通过无头浏览器采集如下视口尺寸实机渲染截图并�
     4. 访问 `/dashboard` 页面，确认节点总数卡片显示 31。
 - **预览实例清理**：
   - 隔离预览进程 PID 827371 已确认身份并杀除，端口 18081 已释放。
+
+---
+
+## 十、 历史来源血统追溯与不可变账本生产发布执行记录 (Release Record 8302c51)
+
+- **发布时间**：`2026-10-04 19:46:08 CST` (UTC 2026-10-04 11:46:08)
+- **目标提交 (Git HEAD)**：`8302c517dd3d0d584b6089f04f540e6d7ce4cfdc` (`fix(inventory): preserve and recover evidence-backed historical sources`)
+- **发布在线一致性热备与停机一致性快照**：
+  - 在线热备文件：`/home/service/backups/csp-v1_online_pre_8302c51_clean.db`（大小 14M，权限 `0600`，`integrity_check: ok`, `foreign_key_check: 0`）
+  - 最终停机一致性备份：`/home/service/backups/csp-v1_pre_8302c51_stop_write_20261004_194504.db`（大小 14M，权限 `0600`，SHA-256: `85eaf04caa22f4fc362e171b713064fbc761234e95281dfcfc912d78ffe1589d`，`integrity_check: ok`, `foreign_key_check: 0`）
+  - 存量静态基线核准：全量 1014 节点（31 活跃，983 失活保持禁用），9 订阅（4 enabled，5 disabled），31 实时 `node_sources`，当前生效去重库存 (Scope E) 严格维持 31。
+- **旧镜像回滚标签固化与隔离副本回滚演练 (Rollback Rehearsal Verified)**：
+  - 回滚目标：`clash-sub-parser-app:rollback-pre-8302c51` (`sha256:4925c70d01a532f4b4739c71cacd9836aa5a44542b654b7e7b8bd815848c0922`)
+  - 隔离演练环境与步骤：
+    1. 复制停写备份至隔离沙箱 `/tmp/csp_rollback_rehearsal_18082`（目录权限 `0700`，副本权限 `0600`），比对 SHA-256 确保与原备份 `85eaf04...` 严格一致；
+    2. 在副本中关闭周期探测调度配置（`probe_schedules.enabled = 0`），隔离容器杜绝无授权真实出站探测或抓取；
+    3. 启动独立临时容器挂载隔离沙箱，映射未占用端口 `127.0.0.1:18082:18080`，不挂载生产卷；
+    4. 实测 1348ms 达到 `/readyz`（HTTP 200，`required_tables: 14`, `schema_version: 15`），`/healthz` 返回 200，`/api/v1/auth/status` 处于保护模式；
+    5. 数据库验证：保持 Schema 15（33 表），`node_source_history` 表不存在，节点总数 1014（活跃 31，失活 983），`node_sources` 31，发布引用数 0，各项历史指标与停写备份完全相符；
+    6. 演练完毕即刻销毁临时容器并清理隔离目录，端口 18082 释放，原始备份文件完整无损；
+  - 正式回滚策略与局限性声明：系统无逆向降级（schema 16 降回 15）脚本，正式回滚方案为“旧镜像 + Schema 15 停写备份”；若上线后发生写操作后再执行回滚，Schema 16 运行期间的新增写入将丢失（需额外手动导出合并），不作绝对无损承诺。
+- **新生产镜像与容器受控替换**：
+  - 替换性质：**受控单容器停机冷替换**（单实例停止重拉，无灰度、无金丝雀、不承诺绝对零停机）
+  - 镜像预构建：`docker compose build app`（在容器停止前完成构建验证，内嵌最新 Web 资产）
+  - 新镜像 ID：`sha256:84ed3ba0baa551b05ab6d437a0804d9fedaa1c79e9ef5603f30b0368b60ee25b`
+  - 新镜像标签：`clash-sub-parser-app:latest`, `clash-sub-parser-app:8302c51`, `clash-sub-parser-app:v1-release-20261004-8302c51`
+  - 新容器实例：**`054a174f7376`**（替换旧容器 `73cd5633a319`）
+  - 停机维护实测窗口：**70 秒**（基于实际日志时间戳：`2026-10-04T19:44:58+08:00` 停止容器 -> 时点备份 -> 启动维护模式执行 Migration 16 -> 运行 `csp recover-source-history` CLI 执行 dry-run 与两轮正式回填 -> 恢复周期调度配置 -> `docker compose up -d --no-deps --no-build --force-recreate app` -> `2026-10-04T19:46:08+08:00` 容器启动并首次 `/readyz` 200 OK；非普适 SLA 承诺）
+  - 二进制校验与环境差异说明：
+    - Docker 镜像及运行容器内 `/app/csp` 二进制 SHA-256：`04906d584b8c19113271af3b2d4616b50a9cbd7c7b9c7464d5ac2c175fa4c508`（容器内与镜像解包完全一致）；
+    - 宿主机本地构建产物 `bin/csp` SHA-256：`d98c14e2b11ba3e5e4c827b81dabc56c4aba7b22f4d3929d5abba80e57bb6e5d`（因 Dockerfile 采用 Alpine 多阶段静态编译剥离符号与宿主 Debian 工具链环境参数天然差异，源码完全一致但二进制哈希不同，特此区分记录）；
+    - 内嵌 Web 前端资产：`assets/index-CoQ4QXXz.js` 与 `assets/index-BffPjuiI.css`。
+- **正式 Migration 16 应用**：
+  - 迁移脚本：`migrations/000016_node_source_history.sql`，建立独立不可变历史账本表 `node_source_history`
+  - 迁移结果：`schema_migrations` 记录数由 15 升级至 16，全库表数由 33 扩展至 34
+  - 级联约束：外键 `ON DELETE CASCADE` 关联节点，`ON DELETE SET NULL` 关联订阅；定义 `(node_logical_id, evidence_key)` 联合唯一索引
+- **历史归属恢复 CLI (`csp recover-source-history`) 执行凭据**：
+  - 脱敏凭证清单：`/tmp/csp_legacy_attribution_evidence/merged_cross_verified_manifest_v2.json`
+  - 预期 SHA-256：`356a40d293d3e6513816513e3be811bae172a5ae1ad4aca26c9e3c99b57fe08e`（强制比对校验通过）
+  - 预检（`--dry-run`）：预期插入 998 条，前置与后置资产不变量完全一致（`business_assets_untouched: true`）
+  - 首轮正式执行：`inserted_records: 998`, `newly_inserted: 998`, `existing_records: 0`, `total_records: 998`
+  - 次轮幂等执行：`inserted_records: 0`, `newly_inserted: 0`, `existing_records: 998`, `total_records: 998`（零假增）
+  - 32 个预存业务表静态比对：除 `schema_migrations` 正常版本递增外，其余 32 个原有业务数据表每行每列 SHA-256 全表摘要前后 100% 保持一致（`diff: 0`）
+  - 执行报告存盘：`/home/service/backups/recovery_execution_8302c51.json`（权限 `0600`，脱敏无秘密）
+- **实际数据归属统计与分布对账**：
+  - 历史账本记录数：998 条
+  - 覆盖去重历史节点数：983 个
+  - 当前关联边数（linked edges）：900 条（完整 URL 经规范化后与当前订阅历史血统吻合；注意其中部分所属订阅当前处于停用状态，900 绝不代表当前 900 个启用成员，实时去重库存 Scope E 严格维持 31，历史数据仅用于追溯）；
+  - 未关联当前订阅边数（unmapped edges）：98 条（7li 54 条、魔戒 31 条、Eeox 13 条；因历史凭据 query/token 轮换，严格遵循完整 URL 匹配原则，未关联一律标记为 `source_unmapped = true`，前端展示黄色「未关联当前订阅」标签，绝不伪造关联，亦严格区分于真实删除事件 `source_deleted`）；
+  - 节点归属拓扑分布：885 个 only_linked（仅有关联边）、88 个 only_unmapped（仅有未关联边）、10 个 mixed（兼有两类边）
+  - 连接版本分布：975 条 legacy rev NULL（cause: `legacy_import`）、23 条 v1 rev 1（cause: `refresh_removed`）
+  - 冲突凭据隔离：1 条异凭据记录作为丢弃证据在证据字段留存，不附着当前节点
+  - 人工确认与删除记录：本批次回填 `manual_confirmed: 0`（仅代表本批回填凭证中未包含人工手动确认来源，不作全系统绝无手工改动的断言），`subscription_deleted: 0`
+  - 运行时动态表与维护态指纹区分声明：32 个原有业务数据表的 100% 静态指纹一致性比对 (`diff: 0`) 仅在维护停写窗口内严格有效；生产容器启动后，后台周期探测调度器自然执行，`probe_observations`（增至 9300+ 条）、`probe_runs` 等探测日志表处于动态增长状态，此属正常运行态事实，不与维护态静态一致性混淆。
+- **全链路健康与接口验证**：
+  - `GET http://127.0.0.1:18080/healthz` -> HTTP 200 `{"data":{"status":"ok"}}`
+  - `GET http://127.0.0.1:18080/readyz` -> HTTP 200 `{"data":{"ready":true,"required_tables":14,"schema_version":16}}`
+  - `GET http://127.0.0.1:17000/healthz` -> HTTP 200 `{"data":{"status":"ok"}}`
+  - `GET http://127.0.0.1:17000/readyz` -> HTTP 200 `{"data":{"ready":true,"required_tables":14,"schema_version":16}}`
+  - `GET http://127.0.0.1:18080/api/v1/auth/status` -> HTTP 200 `{"data":{"mode":"protected","admin_mode":"protected","export_mode":"protected","authenticated":false,"subject":""}}`
+  - 未鉴权请求 `GET /api/v1/nodes` 严格返回 401 Unauthorized (`Authentication credentials required`)
+  - 静态资源 `GET /assets/index-CoQ4QXXz.js` 与 `index-BffPjuiI.css` 严格返回 HTTP 200
+  - 生产数据库完整性核验：`integrity_check: ok`, `foreign_key_check: 0`
+- **业务语义与边界声明**：
+  - 历史归属数据仅用于血统追溯，不代表当前订阅成员或启用状态；
+  - 983 个历史失活节点保持 `active = 0` 禁用状态不变，实时库存 Scope E 严格维持 31，绝不因历史回填回潮；
+  - 历史失活时间因果属于基于冷备归档记录的强逻辑推论，非 SQLite WAL 日志物理证明；
+  - 98 条未关联边保持源标识，待后续订阅凭据更新或重新抓取后自然衔接；
+  - 生产前台登录管理及 Vault 凭据渠道在本次维护中未获访问渠道，未在生产前台冒充管理员测试，历史回填 CLI 直接基于受控本地 DB 执行且不需 Admin Token；上一数据流 7.3 未做验证，不随本 Change 归档或宣布完成。
+- **预览环境清理**：
+  - 隔离预览进程 PID `1080391` 已确认停止，端口 `18081` 完全释放；
+  - 证据快照 `/tmp/csp_preview_18081/deeplink_test_examples.json` 及相关密文权限保留供溯源。

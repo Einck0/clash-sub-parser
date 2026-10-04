@@ -31,6 +31,6 @@
 - [x] 6.1 来源严格完整 URL 规范化与名称回退废除：改造 `CanonicalSourceURL` 仅规范化 scheme/hostname 与默认端口，严格保留 query (token/signature)、userinfo 与 path 大小写；废除现代订阅映射对名称的任何 fallback，URL 未匹配一律保留为 unmapped 历史记录。
 - [x] 6.2 订阅删除与未关联 DTO 语义解耦：修复 `inventory/service.go` 中 `subscription_id == nil` 误标 `source_deleted`，新增 `source_unmapped: boolean`；前端节点抽屉对历史未关联订阅展示“未关联当前订阅”黄色标签，仅对真实删除事件或外键级联清空展示“已删除”；全量前端单测与类型检查通过。
 - [x] 6.3 幂等性预查与不可变证据防伪计数：改造 `recover_history.go` 历史插入逻辑，采用同事务前置存在性预查与 `INSERT ... ON CONFLICT DO NOTHING`，准确上报 `newly_inserted`、`existing_records`、`total_records`，杜绝假增；历史已存在证据若内容篡改触发 Fail-Closed 回滚；实机副本验证首轮回填 998，次轮回填 0 增量、998 已存。
-- [ ] 6.4 独立审查机复验（Reviewer Reverification）：由独立 Reviewer 会话对照同一 Change 与整改 diff 审查代码安全性与架构规范。
-- [ ] 6.5 成品黑盒验收（Critic Verification）与上线投产闭环：在隔离环境完成视觉与交互验收，待审查与验收全部通过后授权上线。
+- [x] 6.4 独立审查机复验（Reviewer Reverification）：由独立 Reviewer 会话对照同一 Change 与整改 diff 审查代码安全性与架构规范。（已于独立 Reviewer 会话出具最终代码与安全审计 PASS）
+- [x] 6.5 成品黑盒验收（Critic Verification）、上线投产与回滚副本演练闭环：在 18081 隔离环境完成多视口视觉与深链交互黑盒验收（Critic PASSED）；获得用户授权后严格执行受控停机冷替换（实测停机 70s）、正式迁移 Migration 16、生产历史账本幂等回填（998 条）及生产双端口就绪自验闭环；在独立沙箱完成原 rollback-pre-8302c51 镜像与停写 Schema 15 备份回滚演练（1348ms readyz，Schema 15 保持，表数 33，发布引用数 0，零改动原始备份，已安全清理容器释放 18082 端口）。
 

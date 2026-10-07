@@ -260,6 +260,10 @@ export function protocolSupportedTargets(protocol: string): readonly CompilerTar
     case 'wireguard':
     case 'tuic':
       return ['mihomo', 'singbox', 'surge']
+    case 'http':
+    case 'socks5':
+    case 'anytls':
+      return ['mihomo']
     case 'vless':
     default:
       return ['mihomo', 'singbox']

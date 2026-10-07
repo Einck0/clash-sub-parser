@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"sort"
@@ -125,6 +126,141 @@ func ComputeNodeLogicalID(protocol Protocol, server string, port int, transportP
 	canonical := fmt.Sprintf("%s|%s|%d|%s", normProtocol, normServer, port, sortedParamsStr)
 	sum := sha256.Sum256([]byte(canonical))
 
+	return "node_" + hex.EncodeToString(sum[:16])
+}
+
+type canonicalConnectionIdentity struct {
+	Version   string            `json:"version"`
+	Protocol  string            `json:"protocol"`
+	Server    string            `json:"server"`
+	Port      int               `json:"port"`
+	Transport map[string]string `json:"transport,omitempty"`
+	Auth      canonicalAuth     `json:"auth"`
+}
+
+type canonicalAuth struct {
+	Username          string   `json:"username,omitempty"`
+	Password          string   `json:"password,omitempty"`
+	UUID              string   `json:"uuid,omitempty"`
+	Method            string   `json:"method,omitempty"`
+	AlterID           int      `json:"alter_id,omitempty"`
+	PrivateKey        string   `json:"private_key,omitempty"`
+	PublicKey         string   `json:"public_key,omitempty"`
+	PreSharedKey      string   `json:"pre_shared_key,omitempty"`
+	LocalAddress      []string `json:"local_address,omitempty"`
+	Reserved          []uint8  `json:"reserved,omitempty"`
+	MTU               int      `json:"mtu,omitempty"`
+	DNS               []string `json:"dns,omitempty"`
+	CongestionControl string   `json:"congestion_control,omitempty"`
+	UDPRelayMode      string   `json:"udp_relay_mode,omitempty"`
+	ALPN              []string `json:"alpn,omitempty"`
+	SNI               string   `json:"sni,omitempty"`
+	DisableSNI        bool     `json:"disable_sni,omitempty"`
+	ObfsPassword      string   `json:"obfs_password,omitempty"`
+}
+
+// ComputeConnectionLogicalID computes a stable logical identity hash based on the full canonical connection configuration,
+// including protocol, endpoint, transport options, and credentials.
+// Sensitive fields are included in the deterministic SHA-256 digest solely in-memory to prevent collision of distinct
+// credentials on the same endpoint, without persisting or exposing plain secrets in the logical ID or transport parameters.
+func ComputeConnectionLogicalID(protocol Protocol, server string, port int, transportParams map[string]string, creds InboundProtocolCredential) string {
+	normProtocol := strings.ToLower(strings.TrimSpace(string(protocol)))
+	normServer := strings.ToLower(strings.TrimSpace(server))
+
+	// Normalize transport map (lowercase keys, trimmed values)
+	var normTransport map[string]string
+	srcTransport := transportParams
+	if len(srcTransport) == 0 && len(creds.Transport) > 0 {
+		srcTransport = creds.Transport
+	}
+	if len(srcTransport) > 0 {
+		normTransport = make(map[string]string, len(srcTransport))
+		for k, v := range srcTransport {
+			trimmedK := strings.ToLower(strings.TrimSpace(k))
+			trimmedV := strings.TrimSpace(v)
+			if trimmedK == "" || trimmedV == "" {
+				continue
+			}
+			// Skip obfs password from transport dictionary because it is normalized into Auth
+			if trimmedK == "obfs-password" || trimmedK == "obfs_password" {
+				continue
+			}
+			normTransport[trimmedK] = trimmedV
+		}
+	}
+
+	// Normalize auth fields
+	var localAddrs []string
+	if len(creds.LocalAddress) > 0 {
+		localAddrs = make([]string, len(creds.LocalAddress))
+		copy(localAddrs, creds.LocalAddress)
+		sort.Strings(localAddrs)
+	}
+
+	var dnsList []string
+	if len(creds.DNS) > 0 {
+		dnsList = make([]string, len(creds.DNS))
+		copy(dnsList, creds.DNS)
+		sort.Strings(dnsList)
+	}
+
+	var reservedCopy []uint8
+	if len(creds.Reserved) > 0 {
+		reservedCopy = make([]uint8, len(creds.Reserved))
+		copy(reservedCopy, creds.Reserved)
+	}
+
+	var alpnCopy []string
+	if len(creds.ALPN) > 0 {
+		alpnCopy = make([]string, len(creds.ALPN))
+		copy(alpnCopy, creds.ALPN)
+	}
+
+	obfsPassword := ""
+	if creds.Transport != nil {
+		if op, ok := creds.Transport["obfs-password"]; ok {
+			obfsPassword = op
+		} else if op, ok := creds.Transport["obfs_password"]; ok {
+			obfsPassword = op
+		}
+	}
+
+	auth := canonicalAuth{
+		Username:          strings.TrimSpace(creds.Username),
+		Password:          creds.Password, // Exact credentials preserved without modifying case
+		UUID:              strings.ToLower(strings.TrimSpace(creds.UUID)),
+		Method:            strings.ToLower(strings.TrimSpace(creds.Method)),
+		AlterID:           creds.AlterID,
+		PrivateKey:        strings.TrimSpace(creds.PrivateKey),
+		PublicKey:         strings.TrimSpace(creds.PublicKey),
+		PreSharedKey:      strings.TrimSpace(creds.EffectivePreSharedKey()),
+		LocalAddress:      localAddrs,
+		Reserved:          reservedCopy,
+		MTU:               creds.MTU,
+		DNS:               dnsList,
+		CongestionControl: strings.ToLower(strings.TrimSpace(creds.CongestionControl)),
+		UDPRelayMode:      strings.ToLower(strings.TrimSpace(creds.UDPRelayMode)),
+		ALPN:              alpnCopy,
+		SNI:               strings.ToLower(strings.TrimSpace(creds.SNI)),
+		DisableSNI:        creds.DisableSNI,
+		ObfsPassword:      obfsPassword,
+	}
+
+	identity := canonicalConnectionIdentity{
+		Version:   "conn_v1",
+		Protocol:  normProtocol,
+		Server:    normServer,
+		Port:      port,
+		Transport: normTransport,
+		Auth:      auth,
+	}
+
+	data, err := json.Marshal(identity)
+	if err != nil {
+		data = []byte(fmt.Sprintf("%s|%s|%d|%v|%v", normProtocol, normServer, port, normTransport, auth))
+	}
+
+	sum := sha256.Sum256(data)
 	return "node_" + hex.EncodeToString(sum[:16])
 }
 

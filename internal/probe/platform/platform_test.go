@@ -445,6 +445,66 @@ func TestCheckSpeed_CalculatesThroughput(t *testing.T) {
 	}
 }
 
+func TestCheckSpeed_HTTP429And403_TargetRestricted(t *testing.T) {
+	ctx := context.Background()
+
+	srv429 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv429.Close()
+
+	cap429, err := platform.CheckSpeed(ctx, srv429.Client(), nil, srv429.URL, 1024*1024, 2*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if cap429.Verdict != domain.VerdictUnknown || cap429.Reason != "target_rate_limited" {
+		t.Fatalf("expected VerdictUnknown/target_rate_limited, got %s/%s", cap429.Verdict, cap429.Reason)
+	}
+
+	srv403 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv403.Close()
+
+	cap403, err := platform.CheckSpeed(ctx, srv403.Client(), nil, srv403.URL, 1024*1024, 2*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if cap403.Verdict != domain.VerdictUnknown || cap403.Reason != "target_forbidden" {
+		t.Fatalf("expected VerdictUnknown/target_forbidden, got %s/%s", cap403.Verdict, cap403.Reason)
+	}
+}
+
+func TestCheckSpeed_PartialBytesTimeout_MeasuresBudgetLimited(t *testing.T) {
+	ctx := context.Background()
+
+	// Slow server sending 8KB then hanging until context deadline
+	srvSlow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(bytes.Repeat([]byte("x"), 8192))
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		// Hang until client context cancels
+		<-r.Context().Done()
+	}))
+	defer srvSlow.Close()
+
+	capSlow, err := platform.CheckSpeed(ctx, srvSlow.Client(), nil, srvSlow.URL, 1024*1024, 150*time.Millisecond)
+	if err != nil {
+		t.Fatalf("unexpected err on timeout: %v", err)
+	}
+	if capSlow.Verdict != domain.VerdictAvailable {
+		t.Fatalf("expected VerdictAvailable for partial bytes >= 1024, got %s", capSlow.Verdict)
+	}
+	if capSlow.Reason != "speed_budget_limited" {
+		t.Fatalf("expected reason speed_budget_limited, got %s", capSlow.Reason)
+	}
+	if !strings.Contains(capSlow.Summary, "[speed_budget_limited]") {
+		t.Fatalf("expected summary tag [speed_budget_limited], got %s", capSlow.Summary)
+	}
+}
+
 func TestCheckIPRisk(t *testing.T) {
 	ctx := context.Background()
 

@@ -360,11 +360,17 @@ func resolveGroups(
 
 	for _, rg := range resolvedGroups {
 		if len(rg.Members) == 0 || len(rg.AllNodeLogicalIDs) == 0 {
-			if rule, isRouted := routedGroups[rg.ID]; isRouted && anyFilterDefined {
+			if rule, isRouted := routedGroups[rg.ID]; isRouted {
+				msg := fmt.Sprintf("routed group %q (%s) referenced by rule %q has 0 available nodes", rg.Name, rg.ID, rule.Expression)
+				if len(globalAdmittedNodes) == 0 {
+					msg = fmt.Sprintf("current effective inventory is empty; routed group %q (%s) referenced by rule %q has 0 available nodes", rg.Name, rg.ID, rule.Expression)
+				} else if anyFilterDefined {
+					msg = fmt.Sprintf("routed group %q (%s) referenced by rule %q has 0 available nodes after filtering", rg.Name, rg.ID, rule.Expression)
+				}
 				diagnostics = append(diagnostics, Diagnostic{
 					Severity: DiagnosticSeverityError,
 					Code:     "empty_routed_group",
-					Message:  fmt.Sprintf("routed group %q (%s) referenced by rule %q has 0 available nodes after filtering", rg.Name, rg.ID, rule.Expression),
+					Message:  msg,
 					Target:   rg.ID,
 				})
 			} else {

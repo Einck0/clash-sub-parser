@@ -119,6 +119,14 @@ func extractYAMLProxy(proxy map[string]any) (NormalizedNode, domain.InboundProto
 		Transport:    transport,
 	}
 
+	if protocol == domain.ProtocolHTTP {
+		if headers, ok := proxy["headers"].(map[string]any); ok {
+			if hBytes, err := json.Marshal(headers); err == nil {
+				transport["headers"] = string(hBytes)
+			}
+		}
+	}
+
 	if protocol == domain.ProtocolWireGuard {
 		localAddrs, addrErr := parseWireGuardAddresses(
 			proxy["local-address"],
@@ -215,6 +223,7 @@ func extractURL(raw string) (NormalizedNode, domain.InboundProtocolCredential, e
 
 	switch protocol {
 	case domain.ProtocolSS:
+		creds.Username = ""
 		if u.User != nil {
 			if decoded, ok := decodeBase64(u.User.Username()); ok {
 				parts := strings.SplitN(decoded, ":", 2)
@@ -223,10 +232,11 @@ func extractURL(raw string) (NormalizedNode, domain.InboundProtocolCredential, e
 					creds.Password = parts[1]
 				}
 			} else if creds.Password != "" {
-				creds.Method = creds.Username
+				creds.Method = u.User.Username()
 			}
 		}
 	case domain.ProtocolVLESS:
+		creds.Username = ""
 		if u.User != nil {
 			creds.UUID = u.User.Username()
 		}
@@ -234,17 +244,20 @@ func extractURL(raw string) (NormalizedNode, domain.InboundProtocolCredential, e
 			creds.UUID = firstQuery(query, "uuid")
 		}
 	case domain.ProtocolTrojan:
-		if creds.Password == "" && u.User != nil {
+		creds.Username = ""
+		if u.User != nil {
 			creds.Password = u.User.Username()
 		}
 	case domain.ProtocolHysteria2:
-		if creds.Password == "" && u.User != nil {
+		creds.Username = ""
+		if u.User != nil {
 			creds.Password = u.User.Username()
 		}
 		if creds.Password == "" {
 			creds.Password = firstQuery(query, "password", "auth")
 		}
 	case domain.ProtocolWireGuard:
+		creds.Username = ""
 		if u.User != nil && u.User.Username() != "" {
 			creds.PrivateKey = u.User.Username()
 		}
@@ -284,6 +297,7 @@ func extractURL(raw string) (NormalizedNode, domain.InboundProtocolCredential, e
 		}
 		creds.DNS = parseStringList(query["dns"])
 	case domain.ProtocolTUIC:
+		creds.Username = ""
 		if u.User != nil {
 			creds.UUID = u.User.Username()
 			if pw, ok := u.User.Password(); ok {
@@ -301,6 +315,24 @@ func extractURL(raw string) (NormalizedNode, domain.InboundProtocolCredential, e
 		creds.ALPN = parseStringList(query["alpn"])
 		creds.SNI = firstQuery(query, "sni", "servername", "serverName", "peer")
 		creds.DisableSNI = domain.IsTruthy(firstQuery(query, "disable_sni", "disable-sni"))
+	case domain.ProtocolHTTP, domain.ProtocolSocks5:
+		if creds.Username == "" {
+			creds.Username = firstQuery(query, "user", "username")
+		}
+		if creds.Password == "" {
+			creds.Password = firstQuery(query, "password", "pass")
+		}
+	case domain.ProtocolAnyTLS:
+		creds.Username = ""
+		if u.User != nil {
+			creds.Password = u.User.Username()
+			if pw, ok := u.User.Password(); ok {
+				creds.Password = pw
+			}
+		}
+		if creds.Password == "" {
+			creds.Password = firstQuery(query, "password", "auth")
+		}
 	}
 
 	if err := validateCredentials(protocol, creds); err != nil {
@@ -344,9 +376,14 @@ func extractVMess(raw string) (NormalizedNode, domain.InboundProtocolCredential,
 		}
 	}
 
+	method := value(payload, "scy", "security")
+	if method == "" {
+		method = "auto"
+	}
+
 	creds := domain.InboundProtocolCredential{
 		UUID:      uuid,
-		Method:    value(payload, "scy", "security"),
+		Method:    method,
 		AlterID:   alterID,
 		Transport: transport,
 	}
@@ -403,6 +440,12 @@ func validateCredentials(proto domain.Protocol, creds domain.InboundProtocolCred
 		if strings.TrimSpace(creds.Password) == "" {
 			return fmt.Errorf("missing TUIC password")
 		}
+	case domain.ProtocolAnyTLS:
+		if strings.TrimSpace(creds.Password) == "" {
+			return fmt.Errorf("missing AnyTLS password")
+		}
+	case domain.ProtocolHTTP, domain.ProtocolSocks5:
+		// HTTP and SOCKS5 do not require credentials (can be anonymous/open proxies)
 	}
 	return nil
 }

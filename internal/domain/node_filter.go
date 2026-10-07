@@ -2,6 +2,7 @@ package domain
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -44,6 +45,8 @@ type FilterOp string
 const (
 	FilterOpContains    FilterOp = "contains"
 	FilterOpNotContains FilterOp = "not_contains"
+	FilterOpRegex       FilterOp = "regex"
+	FilterOpNotRegex    FilterOp = "not_regex"
 	FilterOpEquals      FilterOp = "equals"
 	FilterOpNotEquals   FilterOp = "not_equals"
 	FilterOpLTE         FilterOp = "lte"
@@ -52,6 +55,8 @@ const (
 var validFilterOps = map[FilterOp]bool{
 	FilterOpContains:    true,
 	FilterOpNotContains: true,
+	FilterOpRegex:       true,
+	FilterOpNotRegex:    true,
 	FilterOpEquals:      true,
 	FilterOpNotEquals:   true,
 	FilterOpLTE:         true,
@@ -96,14 +101,29 @@ func (c FilterCondition) Validate() error {
 
 	switch c.Field {
 	case FilterFieldDisplayName:
-		if c.Op != FilterOpContains && c.Op != FilterOpNotContains {
-			return NewValidationError("invalid_filter_op", fmt.Sprintf("display_name only supports contains/not_contains, got %s", c.Op))
+		if c.Op != FilterOpContains && c.Op != FilterOpNotContains && c.Op != FilterOpRegex && c.Op != FilterOpNotRegex {
+			return NewValidationError("invalid_filter_op", fmt.Sprintf("display_name only supports contains/not_contains/regex/not_regex, got %s", c.Op))
 		}
 		if val == "" {
 			return NewValidationError("invalid_filter_value", "display_name filter value cannot be empty")
 		}
-		if len(val) > 255 {
-			return NewValidationError("invalid_filter_value", "display_name filter value cannot exceed 255 characters")
+		maxLen := 255
+		if c.Op == FilterOpRegex || c.Op == FilterOpNotRegex {
+			maxLen = 1024
+		}
+		if len(val) > maxLen {
+			return NewValidationError("invalid_filter_value", fmt.Sprintf("display_name filter value cannot exceed %d characters", maxLen))
+		}
+		if c.Op == FilterOpRegex || c.Op == FilterOpNotRegex {
+			pat := val
+			if !strings.HasPrefix(pat, "(?i)") {
+				pat = "(?i)" + pat
+			}
+			if _, err := regexp.Compile(pat); err != nil {
+				if _, err2 := regexp.Compile(val); err2 != nil {
+					return NewValidationError("invalid_filter_value", fmt.Sprintf("invalid regex pattern: %v", err2))
+				}
+			}
 		}
 		if c.ProbeKind != nil {
 			return NewValidationError("invalid_filter_field", "display_name filter condition must not specify probe_kind")
@@ -221,6 +241,27 @@ func MatchesCondition(c FilterCondition, node Node, sources []NodeSource, latest
 
 	switch field {
 	case FilterFieldDisplayName:
+		if op == FilterOpRegex || op == FilterOpNotRegex {
+			pat := c.Value
+			if !strings.HasPrefix(pat, "(?i)") {
+				pat = "(?i)" + pat
+			}
+			re, err := regexp.Compile(pat)
+			if err != nil {
+				re, err = regexp.Compile(c.Value)
+			}
+			if err != nil {
+				return false, fmt.Sprintf("invalid regex %q: %v", c.Value, err)
+			}
+			matched := re.MatchString(node.DisplayName)
+			if op == FilterOpRegex && !matched {
+				return false, fmt.Sprintf("display_name does not match regex %q", c.Value)
+			}
+			if op == FilterOpNotRegex && matched {
+				return false, fmt.Sprintf("display_name matches excluded regex %q", c.Value)
+			}
+			return true, ""
+		}
 		match := strings.Contains(strings.ToLower(node.DisplayName), strings.ToLower(c.Value))
 		if op == FilterOpContains && !match {
 			return false, fmt.Sprintf("display_name does not contain %q", c.Value)

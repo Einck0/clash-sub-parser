@@ -70,37 +70,42 @@ func yamlTransport(proxy map[string]any, protocol domain.Protocol) map[string]st
 	if grpc, ok := proxy["grpc-opts"].(map[string]any); ok {
 		copyIfPresent(transport, "service_name", value(grpc, "grpc-service-name", "service-name"))
 	}
+	var rawXHTTP map[string]any
 	if xhttp, ok := proxy["xhttp-opts"].(map[string]any); ok {
-		copyIfPresent(transport, "path", value(xhttp, "path"))
-		copyIfPresent(transport, "host", value(xhttp, "host"))
-		copyIfPresent(transport, "mode", value(xhttp, "mode"))
-		if headers, ok := xhttp["headers"].(map[string]any); ok {
-			if hBytes, err := json.Marshal(headers); err == nil {
-				transport["headers"] = string(hBytes)
-			}
-		}
-		for k, v := range xhttp {
-			if k != "path" && k != "host" && k != "mode" && k != "headers" {
-				if sVal := fmt.Sprintf("%v", v); sVal != "" {
-					transport["extra_"+k] = sVal
-				}
-			}
-		}
+		rawXHTTP = xhttp
 	} else if xhttp, ok := proxy["xhttp_opts"].(map[string]any); ok {
-		copyIfPresent(transport, "path", value(xhttp, "path"))
-		copyIfPresent(transport, "host", value(xhttp, "host"))
-		copyIfPresent(transport, "mode", value(xhttp, "mode"))
-		if headers, ok := xhttp["headers"].(map[string]any); ok {
+		rawXHTTP = xhttp
+	}
+	if rawXHTTP != nil {
+		copyIfPresent(transport, "path", value(rawXHTTP, "path"))
+		copyIfPresent(transport, "host", value(rawXHTTP, "host"))
+		copyIfPresent(transport, "mode", value(rawXHTTP, "mode"))
+		if headers, ok := rawXHTTP["headers"].(map[string]any); ok {
 			if hBytes, err := json.Marshal(headers); err == nil {
 				transport["headers"] = string(hBytes)
 			}
 		}
-		for k, v := range xhttp {
+		for k, v := range rawXHTTP {
 			if k != "path" && k != "host" && k != "mode" && k != "headers" {
 				if sVal := fmt.Sprintf("%v", v); sVal != "" {
 					transport["extra_"+k] = sVal
 				}
 			}
+		}
+		if xBytes, err := json.Marshal(rawXHTTP); err == nil {
+			transport["xhttp-opts"] = string(xBytes)
+		}
+	}
+
+	var rawECH map[string]any
+	if ech, ok := proxy["ech-opts"].(map[string]any); ok {
+		rawECH = ech
+	} else if ech, ok := proxy["ech_opts"].(map[string]any); ok {
+		rawECH = ech
+	}
+	if rawECH != nil {
+		if echBytes, err := json.Marshal(rawECH); err == nil {
+			transport["ech-opts"] = string(echBytes)
 		}
 	}
 	copyIfPresent(transport, "mode", value(proxy, "mode"))
@@ -133,6 +138,26 @@ func yamlTransport(proxy map[string]any, protocol domain.Protocol) map[string]st
 		copyIfPresent(transport, "obfs", value(proxy, "obfs"))
 		copyIfPresent(transport, "obfs-password", value(proxy, "obfs-password", "obfs_password"))
 		copyIfPresent(transport, "server_ports", value(proxy, "ports", "server_ports", "hy2_ports", "mport"))
+	}
+
+	if protocol == domain.ProtocolSocks5 {
+		if domain.IsTruthy(value(proxy, "udp")) {
+			transport["udp"] = "true"
+		}
+	}
+
+	if protocol == domain.ProtocolAnyTLS {
+		transport["tls"] = "true"
+		if domain.IsTruthy(value(proxy, "udp")) {
+			transport["udp"] = "true"
+		}
+		copyIfPresent(transport, "fp", value(proxy, "client-fingerprint", "client_fingerprint", "fingerprint", "fp"))
+		copyIfPresent(transport, "idle-session-check-interval", value(proxy, "idle-session-check-interval", "idle_session_check_interval"))
+		copyIfPresent(transport, "idle-session-timeout", value(proxy, "idle-session-timeout", "idle_session_timeout"))
+		copyIfPresent(transport, "min-idle-session", value(proxy, "min-idle-session", "min_idle_session"))
+		if domain.IsTruthy(value(proxy, "disable-reuse", "disable_reuse")) {
+			transport["disable-reuse"] = "true"
+		}
 	}
 
 	if protocol == domain.ProtocolTUIC {
@@ -192,6 +217,32 @@ func urlTransport(u *url.URL, protocol domain.Protocol) map[string]string {
 		copyIfPresent(transport, "server_ports", firstQuery(query, "ports", "server_ports", "hy2_ports", "mport"))
 	}
 
+	if protocol == domain.ProtocolHTTP {
+		if strings.EqualFold(u.Scheme, "https") || security == "tls" {
+			transport["tls"] = "true"
+		}
+	}
+
+	if protocol == domain.ProtocolSocks5 {
+		if domain.IsTruthy(firstQuery(query, "udp")) {
+			transport["udp"] = "true"
+		}
+	}
+
+	if protocol == domain.ProtocolAnyTLS {
+		transport["tls"] = "true"
+		if domain.IsTruthy(firstQuery(query, "udp")) {
+			transport["udp"] = "true"
+		}
+		copyIfPresent(transport, "fp", firstQuery(query, "fp", "fingerprint", "client-fingerprint", "client_fingerprint"))
+		copyIfPresent(transport, "idle-session-check-interval", firstQuery(query, "idle-session-check-interval", "idle_session_check_interval"))
+		copyIfPresent(transport, "idle-session-timeout", firstQuery(query, "idle-session-timeout", "idle_session_timeout"))
+		copyIfPresent(transport, "min-idle-session", firstQuery(query, "min-idle-session", "min_idle_session"))
+		if domain.IsTruthy(firstQuery(query, "disable-reuse", "disable_reuse")) {
+			transport["disable-reuse"] = "true"
+		}
+	}
+
 	if protocol == domain.ProtocolTUIC {
 		if domain.IsTruthy(firstQuery(query, "disable_sni", "disable-sni")) {
 			transport["disable_sni"] = "true"
@@ -215,7 +266,7 @@ func newNormalizedNode(protocol domain.Protocol, name, server string, port int, 
 		}
 		normTransport[key] = trimmed
 	}
-	logicalID := domain.ComputeNodeLogicalID(protocol, server, port, normTransport)
+	logicalID := domain.ComputeConnectionLogicalID(protocol, server, port, normTransport, creds)
 	if name == "" {
 		name = net.JoinHostPort(server, strconv.Itoa(port))
 	}
@@ -262,6 +313,12 @@ func protocolFor(raw string) (domain.Protocol, error) {
 		return domain.ProtocolWireGuard, nil
 	case "tuic":
 		return domain.ProtocolTUIC, nil
+	case "http", "https":
+		return domain.ProtocolHTTP, nil
+	case "socks5", "socks", "socks5h":
+		return domain.ProtocolSocks5, nil
+	case "anytls":
+		return domain.ProtocolAnyTLS, nil
 	default:
 		return "", fmt.Errorf("unsupported node protocol")
 	}
@@ -478,7 +535,7 @@ func tlsEnabled(proxy map[string]any) bool {
 }
 
 func protocolUsesTLS(protocol domain.Protocol) bool {
-	return protocol == domain.ProtocolTrojan || protocol == domain.ProtocolHysteria2 || protocol == domain.ProtocolTUIC
+	return protocol == domain.ProtocolTrojan || protocol == domain.ProtocolHysteria2 || protocol == domain.ProtocolTUIC || protocol == domain.ProtocolAnyTLS
 }
 
 func copyIfPresent(target map[string]string, key, value string) {

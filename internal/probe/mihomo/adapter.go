@@ -158,6 +158,11 @@ func NodeToMapping(node domain.Node) (map[string]any, error) {
 		if fp := transportValue(c, "fp", "fingerprint", "client-fingerprint", "client_fingerprint"); fp != "" {
 			m["client-fingerprint"] = fp
 		}
+		if echJSON := transportValue(c, "ech-opts", "ech_opts"); echJSON != "" {
+			if echOpts, err := unmarshalJSONMap(echJSON); err == nil && len(echOpts) > 0 {
+				m["ech-opts"] = echOpts
+			}
+		}
 		if net == "ws" {
 			wsOpts := map[string]any{}
 			if path := transportValue(c, "path"); path != "" {
@@ -173,16 +178,21 @@ func NodeToMapping(node domain.Node) (map[string]any, error) {
 			}
 		} else if net == "xhttp" {
 			xhttpOpts := map[string]any{}
-			if path := transportValue(c, "path"); path != "" {
+			if xhttpJSON := transportValue(c, "xhttp-opts", "xhttp_opts"); xhttpJSON != "" {
+				if parsed, err := unmarshalJSONMap(xhttpJSON); err == nil && len(parsed) > 0 {
+					xhttpOpts = parsed
+				}
+			}
+			if path := transportValue(c, "path"); path != "" && xhttpOpts["path"] == nil {
 				xhttpOpts["path"] = path
 			}
-			if host := transportValue(c, "host"); host != "" {
+			if host := transportValue(c, "host"); host != "" && xhttpOpts["host"] == nil {
 				xhttpOpts["host"] = host
 			}
-			if mode := transportValue(c, "mode"); mode != "" {
+			if mode := transportValue(c, "mode"); mode != "" && xhttpOpts["mode"] == nil {
 				xhttpOpts["mode"] = mode
 			}
-			if hJSON := transportValue(c, "headers"); hJSON != "" {
+			if hJSON := transportValue(c, "headers"); hJSON != "" && xhttpOpts["headers"] == nil {
 				var headers map[string]string
 				if err := json.Unmarshal([]byte(hJSON), &headers); err == nil && len(headers) > 0 {
 					xhttpOpts["headers"] = headers
@@ -319,6 +329,93 @@ func NodeToMapping(node domain.Node) (map[string]any, error) {
 		}
 		m["udp"] = true
 
+	case domain.ProtocolHTTP:
+		m["type"] = "http"
+		if c.Username != "" {
+			m["username"] = c.Username
+		}
+		if c.Password != "" {
+			m["password"] = c.Password
+		}
+		if domain.IsTruthy(transportValue(c, "tls")) {
+			m["tls"] = true
+		}
+		if sni := transportValue(c, "sni", "servername", "serverName", "peer"); sni != "" {
+			m["sni"] = sni
+		}
+		if domain.HasInsecureTransport(c.Transport) {
+			m["skip-cert-verify"] = true
+		}
+		if hJSON := transportValue(c, "headers"); hJSON != "" {
+			var headers map[string]string
+			if err := json.Unmarshal([]byte(hJSON), &headers); err == nil && len(headers) > 0 {
+				m["headers"] = headers
+			}
+		}
+
+	case domain.ProtocolSocks5:
+		m["type"] = "socks5"
+		if c.Username != "" {
+			m["username"] = c.Username
+		}
+		if c.Password != "" {
+			m["password"] = c.Password
+		}
+		if domain.IsTruthy(transportValue(c, "tls")) {
+			m["tls"] = true
+		}
+		if sni := transportValue(c, "sni", "servername", "serverName", "peer"); sni != "" {
+			m["sni"] = sni
+		}
+		if domain.HasInsecureTransport(c.Transport) {
+			m["skip-cert-verify"] = true
+		}
+		if udpVal := transportValue(c, "udp"); udpVal != "" {
+			m["udp"] = domain.IsTruthy(udpVal)
+		}
+
+	case domain.ProtocolAnyTLS:
+		m["type"] = "anytls"
+		m["password"] = c.Password
+		if sni := transportValue(c, "sni", "servername", "serverName", "peer"); sni != "" {
+			m["sni"] = sni
+		}
+		if alpn := extractALPN(c); len(alpn) > 0 {
+			m["alpn"] = alpn
+		}
+		if fp := transportValue(c, "fp", "fingerprint", "client-fingerprint", "client_fingerprint"); fp != "" {
+			m["client-fingerprint"] = fp
+		}
+		if domain.HasInsecureTransport(c.Transport) {
+			m["skip-cert-verify"] = true
+		}
+		if udpVal := transportValue(c, "udp"); udpVal != "" {
+			m["udp"] = domain.IsTruthy(udpVal)
+		}
+		if echJSON := transportValue(c, "ech-opts", "ech_opts"); echJSON != "" {
+			if echOpts, err := unmarshalJSONMap(echJSON); err == nil && len(echOpts) > 0 {
+				m["ech-opts"] = echOpts
+			}
+		}
+		if idleCheck := transportValue(c, "idle-session-check-interval", "idle_session_check_interval"); idleCheck != "" {
+			if v, err := strconv.Atoi(idleCheck); err == nil {
+				m["idle-session-check-interval"] = v
+			}
+		}
+		if idleTimeout := transportValue(c, "idle-session-timeout", "idle_session_timeout"); idleTimeout != "" {
+			if v, err := strconv.Atoi(idleTimeout); err == nil {
+				m["idle-session-timeout"] = v
+			}
+		}
+		if minIdle := transportValue(c, "min-idle-session", "min_idle_session"); minIdle != "" {
+			if v, err := strconv.Atoi(minIdle); err == nil {
+				m["min-idle-session"] = v
+			}
+		}
+		if disableReuse := transportValue(c, "disable-reuse", "disable_reuse"); disableReuse != "" {
+			m["disable-reuse"] = domain.IsTruthy(disableReuse)
+		}
+
 	default:
 		return nil, fmt.Errorf("unsupported protocol: %s", node.Protocol)
 	}
@@ -337,6 +434,16 @@ func ParseProxy(node domain.Node) (constant.Proxy, error) {
 		return nil, fmt.Errorf("%w: mihomo ParseProxy failed for %s (%s): %v", domain.ErrClientBuildFailed, node.LogicalID, node.Protocol, err)
 	}
 	return proxy, nil
+}
+
+func unmarshalJSONMap(s string) (map[string]any, error) {
+	d := json.NewDecoder(strings.NewReader(s))
+	d.UseNumber()
+	var out map[string]any
+	if err := d.Decode(&out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func transportValue(c domain.InboundProtocolCredential, keys ...string) string {

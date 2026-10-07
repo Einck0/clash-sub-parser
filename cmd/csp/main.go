@@ -19,14 +19,8 @@ import (
 	"time"
 
 	"clash-sub-parser/internal/application/inventory"
-	"clash-sub-parser/internal/application/iprisk"
-	"clash-sub-parser/internal/application/policy"
 	"clash-sub-parser/internal/application/probe"
-	"clash-sub-parser/internal/application/publication"
-	"clash-sub-parser/internal/application/revision"
-	"clash-sub-parser/internal/application/subscription"
 	"clash-sub-parser/internal/domain"
-	"clash-sub-parser/internal/fetch"
 	"clash-sub-parser/internal/platform"
 	"clash-sub-parser/internal/probe/queue"
 	"clash-sub-parser/internal/repository/sqlite"
@@ -184,48 +178,25 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 		_ = closeDatabase()
 	}()
 
-	// Wire repositories
-	settingsRepo := sqlite.NewSettingsRepository(db)
-	subRepo := sqlite.NewSubscriptionRepository(db)
-	nodeRepo := sqlite.NewNodeRepository(db)
-	nodeSourceRepo := sqlite.NewNodeSourceRepository(db)
-	fetchRepo := sqlite.NewSubscriptionFetchRepository(db)
-	auditRepo := sqlite.NewAuditRepository(db)
-	probeRunRepo := sqlite.NewProbeRunRepository(db)
-	probeObsRepo := sqlite.NewProbeObservationRepository(db)
-	policyRepo := sqlite.NewPolicyRepository(db)
-	revisionRepo := sqlite.NewRevisionRepository(db)
-	pubRepo := sqlite.NewPublicationRepository(db)
-	riskPolicyRepo := sqlite.NewRiskPolicyRevisionRepository(db)
-	riskBindingRepo := sqlite.NewRiskPolicyGroupBindingRepository(db)
-	riskObsRepo := sqlite.NewIPRiskObservationRepository(db)
-
-	// Wire domain application services
-	fetchPolicy := fetch.DefaultPolicy()
-	if fetchProxy != "" {
-		if err := fetchPolicy.AddAllowedProxy(fetchProxy); err != nil {
-			fmt.Fprintf(stderr, "warning: invalid CSP_FETCH_PROXY %q: %v\n", fetchProxy, err)
-		}
+	var runnerOpts []probe.DefaultRunnerOption
+	var newRunnerFn func(db *sql.DB, nodeRepo domain.NodeRepository, obsRepo domain.ProbeObservationRepository, scheduler *queue.Scheduler, runRepo domain.ProbeRunRepository, opts ...probe.DefaultRunnerOption) probe.Runner
+	if deps != nil {
+		newRunnerFn = deps.newProbeRunner
 	}
-	fetchClient := fetch.NewClientWithPolicy(fetchPolicy)
 
-	subService := subscription.NewService(subRepo, auditRepo)
-	invOpts := []inventory.Option{
-		inventory.WithProbeObservationRepository(probeObsRepo),
-		inventory.WithDefaultFetchProxy(fetchProxy),
+	appOpts := appServiceOptions{
+		fetchProxy:       fetchProxy,
+		newProbeRunner:   newRunnerFn,
+		probeRunnerOpts:  runnerOpts,
+		startCoordinator: true,
 	}
-	invService := inventory.NewService(db, subRepo, fetchRepo, nodeRepo, nodeSourceRepo, fetchClient, invOpts...)
-	subService.SetReconciler(invService)
 
-	probeScheduler, err := queue.NewScheduler(queue.Config{
-		Concurrency: queue.DefaultConcurrency,
-		Context:     startupCtx,
-	})
+	appServices, err := makeApplicationServices(startupCtx, db, appOpts)
 	if err != nil {
-		fmt.Fprintf(stderr, "serve: probe scheduler initialization failed: %v\n", err)
+		fmt.Fprintf(stderr, "serve: application services initialization failed: %v\n", err)
 		return 1
 	}
-	invService.SetNodePoolStateProvider(probeScheduler)
+
 	shutdownTimeout := 5 * time.Second
 	if deps != nil && deps.shutdownTimeout > 0 {
 		shutdownTimeout = deps.shutdownTimeout
@@ -237,80 +208,11 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
-		if err := probeScheduler.Drain(ctx); err != nil {
+		if err := appServices.probeScheduler.Drain(ctx); err != nil {
 			closeDBOnReturn = false
 			fmt.Fprintf(stderr, "serve: probe scheduler drain incomplete during cleanup; terminating without closing database: %v\n", err)
 		}
 	}()
-
-	var runnerOpts []probe.DefaultRunnerOption
-	runnerOpts = append(runnerOpts, probe.WithIPRiskObservationRepository(riskObsRepo))
-
-	var probeRunner probe.Runner
-	if deps != nil && deps.newProbeRunner != nil {
-		probeRunner = deps.newProbeRunner(db, nodeRepo, probeObsRepo, probeScheduler, probeRunRepo, runnerOpts...)
-	} else {
-		probeRunner = probe.NewDefaultRunner(nodeRepo, probeObsRepo, probeScheduler, probeRunRepo, runnerOpts...)
-	}
-	probeScheduleRepo := sqlite.NewProbeScheduleRepository(db)
-	probeService := probe.NewService(
-		probeRunRepo,
-		probe.WithRunner(probeRunner),
-		probe.WithNodeRepository(nodeRepo),
-		probe.WithObservationRepository(probeObsRepo),
-		probe.WithScheduler(probeScheduler),
-		probe.WithScheduleRepository(probeScheduleRepo),
-		probe.WithAudit(auditRepo),
-	)
-
-	periodicCoordinator := probe.NewPeriodicCoordinator(
-		probeScheduleRepo,
-		nodeRepo,
-		probeRunRepo,
-		probeRunner,
-		probe.WithCoordinatorOwner("csp-instance-"+domain.MustNewUUIDv7()),
-		probe.WithCoordinatorObservations(probeObsRepo),
-	)
-	probeService.SetCoordinator(periodicCoordinator)
-
-	if err := periodicCoordinator.Recover(startupCtx); err != nil {
-		fmt.Fprintf(stderr, "serve: probe periodic recovery warning: %v\n", err)
-	}
-	periodicCoordinator.Start(ctx)
-	nodeFilterRepo := sqlite.NewNodeFilterRepository(db)
-	policyService := policy.NewService(policyRepo, revisionRepo, nodeRepo, auditRepo, nodeFilterRepo)
-	revisionService := revision.NewService(revisionRepo, auditRepo, revision.WithPolicyRepository(policyRepo))
-	if _, err := policyService.EnsureActiveRevision(startupCtx); err != nil {
-		fmt.Fprintf(stderr, "serve: failed to ensure initial active configuration revision: %v\n", err)
-		return 1
-	}
-	ipriskService := iprisk.NewService(
-		riskObsRepo,
-		riskPolicyRepo,
-		iprisk.WithBindingRepository(riskBindingRepo),
-		iprisk.WithGroupRepository(policyRepo),
-		iprisk.WithNodeRepository(nodeRepo),
-		iprisk.WithAuditRepository(auditRepo),
-	)
-	pubPayloadRefRepo := sqlite.NewPublicationPayloadRefRepository(db)
-	pubOpts := []publication.Option{
-		publication.WithPolicyRepository(policyRepo),
-		publication.WithRevisionRepository(revisionRepo),
-		publication.WithNodeRepository(nodeRepo),
-		publication.WithNodeFilterRepository(nodeFilterRepo),
-		publication.WithNodeSourceRepository(nodeSourceRepo),
-		publication.WithProbeObservationRepository(probeObsRepo),
-		publication.WithIPRiskService(ipriskService),
-		publication.WithRiskPolicyRepository(riskPolicyRepo),
-		publication.WithRiskBindingRepository(riskBindingRepo),
-		publication.WithRiskObservationRepository(riskObsRepo),
-		publication.WithPayloadRefRepository(pubPayloadRefRepo),
-	}
-	pubService := publication.NewService(
-		pubRepo,
-		auditRepo,
-		pubOpts...,
-	)
 
 	// Embedded web assets
 	webHandler, _ := webassets.Handler()
@@ -321,7 +223,7 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 	// Database is source of truth. Check if DB already has an admin token verifier.
 	// If unconfigured and env/flag adminToken is provided, persist it as initial bootstrap verifier.
 	// Never override existing DB token on restart.
-	dbSettings, err := settingsRepo.Get(startupCtx)
+	dbSettings, err := appServices.settingsRepo.Get(startupCtx)
 	if err != nil {
 		fmt.Fprintf(stderr, "serve: failed to read settings: %v\n", err)
 		return 1
@@ -337,7 +239,7 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 			fmt.Fprintf(stderr, "serve: failed to hash bootstrap admin token: %v\n", hashErr)
 			return 1
 		}
-		if err := settingsRepo.UpdateAdminToken(startupCtx, hashed); err != nil {
+		if err := appServices.settingsRepo.UpdateAdminToken(startupCtx, hashed); err != nil {
 			fmt.Fprintf(stderr, "serve: failed to persist bootstrap admin token: %v\n", err)
 			return 1
 		}
@@ -346,7 +248,7 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 
 	tokenHolder := transporthttp.NewDynamicTokenHolder(transporthttp.TokenHolderConfig{
 		InitialVerifier:   activeVerifier,
-		SettingsRepo:      settingsRepo,
+		SettingsRepo:      appServices.settingsRepo,
 		SessionStore:      sessionStore,
 		HashCost:          transporthttp.DefaultHashCost,
 		AdminAuthEnabled:  &dbSettings.AdminAuthEnabled,
@@ -356,7 +258,7 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 	routerCfg := transporthttp.RouterConfig{
 		AdminToken:         adminToken,
 		TokenHolder:        tokenHolder,
-		SettingsRepository: settingsRepo,
+		SettingsRepository: appServices.settingsRepo,
 		SessionStore:       sessionStore,
 		SessionValidator: func(sessionID string) (*transporthttp.SessionInfo, bool) {
 			return sessionStore.Get(sessionID)
@@ -364,20 +266,20 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 		ReadinessChecker: func(c context.Context) (*sqlite.ReadinessReport, error) {
 			return sqlite.CheckReadiness(c, db)
 		},
-		PublicationTokenValidator:  pubService.ValidateToken,
-		IsPublicationToken:         pubService.IsPublicationToken,
-		SubscriptionService:        subService,
-		InventoryService:           invService,
-		ProbeService:               probeService,
-		PolicyService:              policyService,
-		RevisionService:            revisionService,
-		PublicationService:         pubService,
-		IPRiskService:              ipriskService,
-		RiskPolicyRepository:       riskPolicyRepo,
-		RiskBindingRepository:      riskBindingRepo,
-		ProbeRunRepository:         probeRunRepo,
-		ProbeObservationRepository: probeObsRepo,
-		AuditRepository:            auditRepo,
+		PublicationTokenValidator:  appServices.pubService.ValidateToken,
+		IsPublicationToken:         appServices.pubService.IsPublicationToken,
+		SubscriptionService:        appServices.subService,
+		InventoryService:           appServices.invService,
+		ProbeService:               appServices.probeService,
+		PolicyService:              appServices.policyService,
+		RevisionService:            appServices.revisionService,
+		PublicationService:         appServices.pubService,
+		IPRiskService:              appServices.ipriskService,
+		RiskPolicyRepository:       appServices.riskPolicyRepo,
+		RiskBindingRepository:      appServices.riskBindingRepo,
+		ProbeRunRepository:         appServices.probeRunRepo,
+		ProbeObservationRepository: appServices.probeObsRepo,
+		AuditRepository:            appServices.auditRepo,
 		WebHandler:                 webHandler,
 	}
 
@@ -416,12 +318,12 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 		fmt.Fprintf(stderr, "serve: shutdown error: %v\n", err)
 		return 1
 	}
-	periodicCoordinator.Stop()
+	appServices.periodicCoordinator.Stop()
 	if deps != nil && deps.observeDrainBegin != nil {
 		deps.observeDrainBegin()
 	}
 	drainDecided = true
-	drainErr := probeScheduler.Drain(shutdownCtx)
+	drainErr := appServices.probeScheduler.Drain(shutdownCtx)
 	if deps != nil && deps.observeDrainDecision != nil {
 		deps.observeDrainDecision(drainErr)
 	}
@@ -536,7 +438,122 @@ func runRecoverSourceHistory(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// runResetNodeInventory executes the reset-node-inventory CLI maintenance command.
+func runResetNodeInventory(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("reset-node-inventory", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+
+	defaultDBPath := os.Getenv("CSP_DB_PATH")
+	if defaultDBPath == "" {
+		defaultDBPath = os.Getenv("DB_PATH")
+	}
+	if defaultDBPath == "" {
+		defaultDBPath = "/data/csp-v1.db"
+	}
+
+	var (
+		dbPath              string
+		dryRun              bool
+		apply               bool
+		confirmBackup       bool
+		backupFile          string
+		restoreSourceTokens bool
+		archiveDBPath       string
+	)
+
+	fs.StringVar(&dbPath, "db", defaultDBPath, "path to target SQLite database file")
+	fs.StringVar(&dbPath, "d", defaultDBPath, "path to target SQLite database file (shorthand)")
+	fs.BoolVar(&dryRun, "dry-run", false, "dry run without modifying database (inspects invariants and counts)")
+	fs.BoolVar(&apply, "apply", false, "apply clean-slate node inventory reset transaction")
+	fs.BoolVar(&confirmBackup, "confirm-backup", false, "confirm verified database backup exists before executing apply")
+	fs.StringVar(&backupFile, "backup-file", "", "optional path to verified backup file to inspect before apply")
+	fs.BoolVar(&restoreSourceTokens, "restore-source-tokens", false, "restore full authenticated URLs for 7li and 魔戒 from cold archive")
+	fs.StringVar(&archiveDBPath, "archive-db", "/home/service/backups/csp-legacy-cold-archive-20260919.db", "path to legacy cold archive SQLite database")
+
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		return 2
+	}
+
+	if !dryRun && !apply {
+		fmt.Fprintf(stderr, "reset-node-inventory: either --dry-run or --apply must be explicitly specified (fail-safe)\n")
+		return 1
+	}
+	if dryRun && apply {
+		fmt.Fprintf(stderr, "reset-node-inventory: cannot specify both --dry-run and --apply\n")
+		return 1
+	}
+
+	if apply && !confirmBackup && backupFile == "" {
+		fmt.Fprintf(stderr, "reset-node-inventory: apply requires backup confirmation; pass --confirm-backup or --backup-file <path>\n")
+		return 1
+	}
+	if backupFile != "" {
+		bf, err := os.Open(backupFile)
+		if err != nil {
+			fmt.Fprintf(stderr, "reset-node-inventory: backup file %q cannot be opened: %v\n", backupFile, err)
+			return 1
+		}
+		hdr := make([]byte, 16)
+		n, _ := bf.Read(hdr)
+		bf.Close()
+		if n < 15 || string(hdr[:15]) != "SQLite format 3" {
+			fmt.Fprintf(stderr, "reset-node-inventory: backup file %q is not a valid SQLite database\n", backupFile)
+			return 1
+		}
+	}
+
+	if fi, err := os.Stat(dbPath); err != nil {
+		fmt.Fprintf(stderr, "reset-node-inventory: target database %q not found: %v\n", dbPath, err)
+		return 1
+	} else if fi.IsDir() {
+		fmt.Fprintf(stderr, "reset-node-inventory: target database %q is a directory\n", dbPath)
+		return 1
+	}
+
+	ctx := context.Background()
+
+	var db *sql.DB
+	if dryRun {
+		var err error
+		db, err = sqlite.OpenReadOnly(dbPath)
+		if err != nil {
+			fmt.Fprintf(stderr, "reset-node-inventory: database connection failed: %v\n", err)
+			return 1
+		}
+	} else {
+		dbCfg := sqlite.DefaultConfig(dbPath)
+		var err error
+		db, err = sqlite.Open(dbCfg)
+		if err != nil {
+			fmt.Fprintf(stderr, "reset-node-inventory: database connection failed: %v\n", err)
+			return 1
+		}
+	}
+	defer db.Close()
+
+	opts := inventory.ResetOptions{
+		TargetDBPath:        dbPath,
+		DryRun:              dryRun,
+		RestoreSourceTokens: restoreSourceTokens,
+		ArchiveDBPath:       archiveDBPath,
+	}
+
+	report, err := inventory.RunResetNodeInventory(ctx, db, opts)
+	if err != nil {
+		fmt.Fprintf(stderr, "reset-node-inventory: reset failed: %v\n", err)
+		return 1
+	}
+
+	outJSON, _ := json.MarshalIndent(report, "", "  ")
+	fmt.Fprintln(stdout, string(outJSON))
+	return 0
+}
+
 // run executes the root application logic with injectable standard I/O for testing.
+
 func run(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet(appName, flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -567,6 +584,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return runServe(remaining[1:], stdout, stderr)
 		case "recover-source-history":
 			return runRecoverSourceHistory(remaining[1:], stdout, stderr)
+		case "reset-node-inventory":
+			return runResetNodeInventory(remaining[1:], stdout, stderr)
+		case "restore-group-filters":
+			return runRestoreGroupFilters(remaining[1:], stdout, stderr)
+		case "maintain-inventory":
+			return runMaintainInventory(remaining[1:], stdout, stderr)
 		default:
 			fmt.Fprintf(stderr, "unknown command: %s\n", remaining[0])
 			return 1

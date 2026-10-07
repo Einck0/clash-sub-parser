@@ -15,6 +15,7 @@ import (
 	"clash-sub-parser/internal/compiler"
 	"clash-sub-parser/internal/domain"
 	"clash-sub-parser/internal/resolver"
+	"gopkg.in/yaml.v3"
 )
 
 // Service coordinates publication creation, export token generation, active revocation,
@@ -184,6 +185,15 @@ func (s *Service) Preflight(ctx context.Context, cmd PreflightCommand) (*Preflig
 		}
 	}
 
+	optInPrune := cmd.PruneUnavailableOptionalGroups || cmd.OmitUnavailableOptionalGroups
+	if optInPrune {
+		prunedSnap, _, err := compiler.PruneUnavailableOptionalGroups(snapshot)
+		if err != nil {
+			return nil, err
+		}
+		snapshot = prunedSnap
+	}
+
 	preflight := s.evaluatePreflight(ctx, snapshot, cmd.Target)
 	if preflight.Allowed {
 		if _, err := compiler.Compile(ctx, snapshot, cmd.Target); err != nil {
@@ -222,9 +232,11 @@ func (s *Service) Publish(ctx context.Context, cmd PublishCommand) (*PublishResu
 		}
 
 		prevRes, err := s.Preview(ctx, PreviewQuery{
-			Target:     cmd.Target,
-			RevisionID: cmd.RevisionID,
-			Snapshot:   snapshot,
+			Target:                         cmd.Target,
+			RevisionID:                     cmd.RevisionID,
+			Snapshot:                       snapshot,
+			PruneUnavailableOptionalGroups: cmd.PruneUnavailableOptionalGroups,
+			OmitUnavailableOptionalGroups:  cmd.OmitUnavailableOptionalGroups,
 		})
 		if err != nil {
 			return nil, err
@@ -248,6 +260,12 @@ func (s *Service) Publish(ctx context.Context, cmd PublishCommand) (*PublishResu
 
 	if len(pub.Content) == 0 {
 		return nil, domain.NewValidationError("snapshot_not_publishable", "snapshot contains errors and is not publishable")
+	}
+
+	// Validate frozen content before activation
+	if err := ValidatePublicationContent(pub.Content, pub.Target); err != nil {
+		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "publication.create", domain.AuditResultFailure, fmt.Sprintf("content validation failed: %v", err))
+		return nil, err
 	}
 
 	// Idempotent re-activation
@@ -317,6 +335,15 @@ func (s *Service) Preview(ctx context.Context, query PreviewQuery) (*PreviewResu
 		}
 	}
 
+	optInPrune := query.PruneUnavailableOptionalGroups || query.OmitUnavailableOptionalGroups
+	if optInPrune {
+		prunedSnap, _, err := compiler.PruneUnavailableOptionalGroups(snapshot)
+		if err != nil {
+			return nil, err
+		}
+		snapshot = prunedSnap
+	}
+
 	for _, diagnostic := range snapshot.Diagnostics {
 		if diagnostic.Code == "filtered_nodes_empty" {
 			return nil, newPreflightError(s.evaluatePreflight(ctx, snapshot, query.Target))
@@ -384,6 +411,11 @@ func (s *Service) Preview(ctx context.Context, query PreviewQuery) (*PreviewResu
 				Diagnostics: diags,
 				SnapshotID:  draftID,
 			}
+		}
+
+		preflight := s.evaluatePreflight(ctx, snapshot, query.Target)
+		if !preflight.Allowed {
+			return nil, newPreflightError(preflight)
 		}
 
 		compileRes, err := compiler.Compile(ctx, snapshot, query.Target)
@@ -954,13 +986,26 @@ func (s *Service) evaluatePreflight(ctx context.Context, snapshot *resolver.Reso
 				continue
 			}
 		}
-		if diagnostic.Code == "risk_blocked" || diagnostic.Code == "risk_review" || diagnostic.Code == "risk_unknown" || diagnostic.Severity == resolver.DiagnosticSeverityError || diagnostic.Code == "empty_routed_group" {
+		if diagnostic.Code == "risk_blocked" || diagnostic.Code == "risk_review" || diagnostic.Code == "risk_unknown" || diagnostic.Severity == resolver.DiagnosticSeverityError || diagnostic.Code == "empty_routed_group" || diagnostic.Code == "required_nonempty" {
 			result.Allowed = false
 			addDiagnostic(PreflightDiagnostic{
 				Severity: diagnostic.Severity,
 				Code:     diagnostic.Code,
 				Message:  diagnostic.Message,
 				Target:   diagnostic.Target,
+			})
+		}
+	}
+
+	if target == domain.TargetMihomo {
+		capDiags := compiler.ValidateTargetCapabilities(snapshot, target)
+		for _, cd := range capDiags {
+			result.Allowed = false
+			addDiagnostic(PreflightDiagnostic{
+				Severity: resolver.DiagnosticSeverityError,
+				Code:     cd.Code,
+				Message:  cd.Message,
+				Target:   cd.Target,
 			})
 		}
 	}
@@ -1122,3 +1167,72 @@ func hashToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
 }
+
+// ValidatePublicationContent performs frozen-bytes verification of compiled output
+// before publication commit/activation to guarantee official kernel schema conformance.
+func ValidatePublicationContent(content []byte, target domain.CompilerTarget) error {
+	if len(content) == 0 {
+		return domain.NewValidationError("snapshot_not_publishable", "content is empty")
+	}
+
+	if target == domain.TargetMihomo {
+		var rawCfg struct {
+			Proxies     []map[string]any `yaml:"proxies"`
+			ProxyGroups []struct {
+				Name    string   `yaml:"name"`
+				Type    string   `yaml:"type"`
+				Proxies []string `yaml:"proxies"`
+				Use     []string `yaml:"use"`
+			} `yaml:"proxy-groups"`
+			Rules []string `yaml:"rules"`
+		}
+
+		if err := yaml.Unmarshal(content, &rawCfg); err != nil {
+			return domain.NewValidationError("invalid_publication_content", fmt.Sprintf("failed to parse mihomo YAML: %v", err))
+		}
+
+		groupNames := make(map[string]bool, len(rawCfg.ProxyGroups))
+		for _, pg := range rawCfg.ProxyGroups {
+			if pg.Name != "" {
+				groupNames[pg.Name] = true
+			}
+		}
+
+		for _, pg := range rawCfg.ProxyGroups {
+			if len(pg.Proxies) == 0 && len(pg.Use) == 0 {
+				return domain.NewValidationError("required_nonempty", fmt.Sprintf("proxy group %q has no proxies (required_nonempty)", pg.Name))
+			}
+		}
+
+		for _, r := range rawCfg.Rules {
+			targetGroup := extractMihomoRuleTarget(r)
+			if targetGroup != "" && targetGroup != "DIRECT" && targetGroup != "REJECT" && targetGroup != "REJECT-DROP" && targetGroup != "PASS" {
+				if !groupNames[targetGroup] {
+					return domain.NewValidationError("dangling_rule_target", fmt.Sprintf("rule %q targets non-existent group %q", r, targetGroup))
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+func extractMihomoRuleTarget(ruleLine string) string {
+	parts := strings.Split(ruleLine, ",")
+	if len(parts) < 2 {
+		return ""
+	}
+	kind := strings.ToUpper(strings.TrimSpace(parts[0]))
+	if kind == "MATCH" {
+		return strings.TrimSpace(parts[1])
+	}
+	last := strings.TrimSpace(parts[len(parts)-1])
+	if strings.EqualFold(last, "no-resolve") {
+		if len(parts) >= 3 {
+			return strings.TrimSpace(parts[len(parts)-2])
+		}
+		return ""
+	}
+	return last
+}
+

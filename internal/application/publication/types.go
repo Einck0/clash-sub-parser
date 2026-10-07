@@ -42,11 +42,13 @@ type PreflightResult struct {
 
 // PreflightCommand contains parameters for evaluating preflight diagnostics without publishing.
 type PreflightCommand struct {
-	Target     domain.CompilerTarget            `json:"target"`
-	RevisionID string                           `json:"revision_id,omitempty"`
-	Snapshot   *resolver.ResolvedPolicySnapshot `json:"-"`
-	ActorKind  domain.ActorKind                 `json:"-"`
-	RequestID  string                           `json:"-"`
+	Target                         domain.CompilerTarget            `json:"target"`
+	RevisionID                     string                           `json:"revision_id,omitempty"`
+	PruneUnavailableOptionalGroups bool                             `json:"prune_unavailable_optional_groups,omitempty"`
+	OmitUnavailableOptionalGroups  bool                             `json:"omit_unavailable_optional_groups,omitempty"`
+	Snapshot                       *resolver.ResolvedPolicySnapshot `json:"-"`
+	ActorKind                      domain.ActorKind                 `json:"-"`
+	RequestID                      string                           `json:"-"`
 }
 
 // PreflightError indicates that a resolved snapshot cannot be published safely.
@@ -85,12 +87,14 @@ func (e *StrictCapabilityError) As(target any) bool {
 
 // PublishCommand contains the input parameters required to publish a new configuration bundle.
 type PublishCommand struct {
-	Target     domain.CompilerTarget            `json:"target"`
-	SnapshotID string                           `json:"snapshot_id"`
-	RevisionID string                           `json:"revision_id,omitempty"`
-	Snapshot   *resolver.ResolvedPolicySnapshot `json:"-"`
-	ActorKind  domain.ActorKind                 `json:"-"`
-	RequestID  string                           `json:"-"`
+	Target                         domain.CompilerTarget            `json:"target"`
+	SnapshotID                     string                           `json:"snapshot_id"`
+	RevisionID                     string                           `json:"revision_id,omitempty"`
+	PruneUnavailableOptionalGroups bool                             `json:"prune_unavailable_optional_groups,omitempty"`
+	OmitUnavailableOptionalGroups  bool                             `json:"omit_unavailable_optional_groups,omitempty"`
+	Snapshot                       *resolver.ResolvedPolicySnapshot `json:"-"`
+	ActorKind                      domain.ActorKind                 `json:"-"`
+	RequestID                      string                           `json:"-"`
 }
 
 // PublishResult encapsulates the published immutable publication entity and its export token.
@@ -108,10 +112,12 @@ type PublishResult struct {
 
 // PreviewQuery defines parameters for previewing compiled output from a resolved snapshot.
 type PreviewQuery struct {
-	Target     domain.CompilerTarget            `json:"target"`
-	RevisionID string                           `json:"revision_id,omitempty"`
-	CompatMode string                           `json:"compat_mode,omitempty"`
-	Snapshot   *resolver.ResolvedPolicySnapshot `json:"-"`
+	Target                         domain.CompilerTarget            `json:"target"`
+	RevisionID                     string                           `json:"revision_id,omitempty"`
+	CompatMode                     string                           `json:"compat_mode,omitempty"`
+	PruneUnavailableOptionalGroups bool                             `json:"prune_unavailable_optional_groups,omitempty"`
+	OmitUnavailableOptionalGroups  bool                             `json:"omit_unavailable_optional_groups,omitempty"`
+	Snapshot                       *resolver.ResolvedPolicySnapshot `json:"-"`
 }
 
 // PreviewResult contains rendered configuration content, digests, and diagnostics for preview.

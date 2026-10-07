@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   PlusIcon,
   CheckBadgeIcon,
@@ -9,6 +9,7 @@ import {
   Squares2X2Icon,
   GlobeAltIcon,
   TrashIcon,
+  ArrowPathIcon,
 } from '@heroicons/vue/24/outline'
 import { usePolicy } from './usePolicy'
 import type {
@@ -18,6 +19,7 @@ import type {
   GroupEdge,
   GroupType,
   PolicyGroup,
+  PolicyRule,
   RuleAction,
 } from './policyTypes'
 import {
@@ -41,11 +43,16 @@ const {
   groups,
   globalFilter,
   admissionRules,
+  policyRules,
   loading,
   saving,
   savingGlobalFilter,
   validating,
   validationResult,
+  validationState,
+  validationStale,
+  validationError,
+  abortValidation,
   error,
   loadGroups,
   createGroup,
@@ -54,12 +61,70 @@ const {
   setGroupEdges,
   loadRules,
   createAdmissionRule,
+  createPolicyRule,
+  deleteRule,
   validateGraph,
   loadGlobalFilter,
   updateGlobalFilter,
 } = usePolicy()
 
-const activeTab = ref<'groups' | 'admission'>('groups')
+const activeTab = ref<'groups' | 'rules' | 'admission'>('groups')
+
+const sortedPolicyRules = computed(() => {
+  return [...policyRules.value].sort((a, b) => a.position - b.position)
+})
+
+function getTargetGroupName(groupId: string): string {
+  const g = groups.value.find((grp) => grp.id === groupId)
+  return g ? g.name : groupId
+}
+
+function getRuleIssue(ruleId: string, position: number) {
+  if (!validationResult.value?.issues) return null
+  return validationResult.value.issues.find(
+    (iss) => (iss.rule_id && iss.rule_id === ruleId) || iss.position === position
+  )
+}
+
+function parseRuleExpression(expr: string) {
+  const trimmed = expr.trim()
+  if (
+    trimmed.toUpperCase() === 'MATCH' ||
+    trimmed.toUpperCase().startsWith('MATCH,') ||
+    trimmed.toUpperCase().startsWith('MATCH ') ||
+    trimmed.toUpperCase() === 'FINAL' ||
+    trimmed.toUpperCase().startsWith('FINAL,') ||
+    trimmed.toUpperCase().startsWith('FINAL ')
+  ) {
+    return { type: 'MATCH', value: '' }
+  }
+  const parts = trimmed.split(',')
+  if (parts.length >= 2) {
+    return { type: parts[0].trim(), value: parts.slice(1).join(',').trim() }
+  }
+  return { type: trimmed, value: '' }
+}
+
+const confirmDeleteRuleOpen = ref(false)
+const pendingDeleteRuleId = ref<string | null>(null)
+const deletingRule = ref(false)
+
+function handleDeleteRule(id: string) {
+  pendingDeleteRuleId.value = id
+  confirmDeleteRuleOpen.value = true
+}
+
+async function handleConfirmDeleteRule() {
+  if (!pendingDeleteRuleId.value) return
+  deletingRule.value = true
+  try {
+    await deleteRule(pendingDeleteRuleId.value)
+    confirmDeleteRuleOpen.value = false
+    pendingDeleteRuleId.value = null
+  } finally {
+    deletingRule.value = false
+  }
+}
 
 // Global Filter Modal State
 const globalFilterModalOpen = ref(false)
@@ -246,6 +311,11 @@ onMounted(() => {
   loadRules()
   loadNodes()
   loadGlobalFilter()
+  void validateGraph()
+})
+
+onUnmounted(() => {
+  abortValidation()
 })
 </script>
 
@@ -280,13 +350,14 @@ onMounted(() => {
 
         <button
           type="button"
+          data-testid="manual-validate-btn"
           class="btn btn-outline btn-sm gap-2"
           :class="{ loading: validating }"
-          :disabled="validating"
+          :disabled="validating || saving"
           @click="validateGraph"
         >
           <CheckBadgeIcon class="w-4 h-4 text-success" />
-          {{ t('policy.validateTopology') }}
+          {{ t('policy.manualValidate') }}
         </button>
 
         <button
@@ -319,6 +390,41 @@ onMounted(() => {
       @retry="() => { loadGroups(); loadRules(); }"
     />
 
+    <!-- Stale Notification Banner -->
+    <div
+      v-if="validationStale"
+      class="p-2.5 rounded-lg border border-warning/30 bg-warning/10 text-warning text-xs flex items-center justify-between"
+    >
+      <div class="flex items-center gap-2">
+        <ArrowPathIcon class="w-4 h-4 animate-spin flex-shrink-0" />
+        <span>{{ t('policy.validationStaleNotice') }}</span>
+      </div>
+    </div>
+
+    <!-- Validation Incomplete / Retry Alert -->
+    <div
+      v-if="validationState === 'incomplete'"
+      role="alert"
+      aria-live="polite"
+      class="p-3.5 rounded-xl border border-error/30 bg-error/10 text-error text-xs flex items-center justify-between gap-3"
+    >
+      <div class="flex items-center gap-2">
+        <ExclamationTriangleIcon class="w-5 h-5 flex-shrink-0" />
+        <div>
+          <span class="font-bold">{{ t('policy.validationIncomplete') }}</span>
+          <p class="opacity-80 mt-0.5">{{ validationError || '服务校验响应异常，请点击右侧重试' }}</p>
+        </div>
+      </div>
+      <button
+        type="button"
+        class="btn btn-error btn-xs"
+        :disabled="validating"
+        @click="validateGraph"
+      >
+        {{ t('policy.retryValidate') }}
+      </button>
+    </div>
+
     <!-- Graph Validation Result Banner -->
     <Transition
       enter-active-class="transition-all duration-200 ease-out"
@@ -328,18 +434,42 @@ onMounted(() => {
       <div
         v-if="validationResult"
         class="p-4 rounded-xl border text-sm flex items-start justify-between gap-3"
-        :class="validationResult.valid ? 'bg-success/10 border-success/30 text-success' : 'bg-error/10 border-error/30 text-error'"
+        :class="validationResult.valid ? ((validationResult.issues && validationResult.issues.length > 0) ? 'bg-warning/10 border-warning/30 text-warning' : 'bg-success/10 border-success/30 text-success') : 'bg-error/10 border-error/30 text-error'"
       >
-        <div class="flex items-start gap-2.5">
-          <CheckBadgeIcon v-if="validationResult.valid" class="w-5 h-5 flex-shrink-0 mt-0.5" />
+        <div class="flex items-start gap-2.5 min-w-0">
+          <CheckBadgeIcon v-if="validationResult.valid && (!validationResult.issues || validationResult.issues.length === 0)" class="w-5 h-5 flex-shrink-0 mt-0.5" />
           <ExclamationTriangleIcon v-else class="w-5 h-5 flex-shrink-0 mt-0.5" />
-          <div>
+          <div class="min-w-0 space-y-1">
             <h4 class="font-bold">
-              {{ validationResult.valid ? '拓扑图校验通过' : '拓扑图校验存在冲突' }}
+              {{ validationResult.valid ? ((validationResult.issues && validationResult.issues.length > 0) ? '拓扑校验通过（存在配置警告）' : '拓扑与分流校验通过') : '拓扑与分流校验存在阻断问题' }}
             </h4>
-            <p v-if="validationResult.valid" class="text-xs opacity-90 mt-0.5">
+            <p v-if="validationResult.valid && (!validationResult.issues || validationResult.issues.length === 0)" class="text-xs opacity-90 mt-0.5">
               {{ t('policy.validationSuccess') }}
             </p>
+            <div v-else-if="validationResult.issues && validationResult.issues.length > 0" class="space-y-1.5 mt-1.5">
+              <div
+                v-for="(iss, idx) in validationResult.issues"
+                :key="idx"
+                class="text-xs flex flex-wrap items-center gap-1.5 p-1.5 rounded bg-base-100/60 border border-base-300/40"
+              >
+                <span
+                  class="badge badge-xs font-bold"
+                  :class="iss.severity === 'error' ? 'badge-error' : 'badge-warning'"
+                >
+                  {{ iss.severity === 'error' ? '错误' : '警告' }}
+                </span>
+                <span v-if="iss.position !== undefined" class="badge badge-ghost badge-xs font-mono">
+                  #{{ iss.position + 1 }}
+                </span>
+                <span v-if="iss.type" class="badge badge-outline badge-xs font-mono">
+                  {{ iss.type }}
+                </span>
+                <span v-if="iss.target_group_name" class="badge badge-neutral badge-xs">
+                  {{ iss.target_group_name }}
+                </span>
+                <span class="opacity-90">{{ iss.message }}</span>
+              </div>
+            </div>
             <ul v-else class="mt-1 text-xs list-disc list-inside space-y-0.5 font-mono">
               <li v-for="(err, idx) in validationResult.errors" :key="idx">{{ err }}</li>
             </ul>
@@ -404,6 +534,16 @@ onMounted(() => {
       </button>
       <button
         type="button"
+        data-testid="rules-tab-btn"
+        class="btn btn-sm gap-2"
+        :class="activeTab === 'rules' ? 'btn-primary' : 'btn-ghost'"
+        @click="activeTab = 'rules'"
+      >
+        <ArrowPathIcon class="w-4 h-4" />
+        {{ t('policy.routingRulesTab') }} ({{ policyRules.length }})
+      </button>
+      <button
+        type="button"
         class="btn btn-sm gap-2"
         :class="activeTab === 'admission' ? 'btn-primary' : 'btn-ghost'"
         @click="activeTab = 'admission'"
@@ -453,8 +593,81 @@ onMounted(() => {
       </div>
     </div>
 
-    <!-- Tab 2: Admission Rules View -->
-    <div v-else class="space-y-4">
+    <!-- Tab 2: Policy Routing Rules View -->
+    <div v-else-if="activeTab === 'rules'" class="space-y-4">
+      <div
+        v-if="policyRules.length === 0"
+        class="rounded-box border border-dashed border-base-300 p-12 text-center"
+      >
+        <ArrowPathIcon class="w-10 h-10 mx-auto opacity-40 text-primary" />
+        <p class="mt-3 font-semibold text-base">{{ t('policy.emptyPolicyRulesTitle') }}</p>
+        <p class="mt-1 text-sm opacity-60">
+          {{ t('policy.emptyPolicyRulesDesc') }}
+        </p>
+      </div>
+
+      <div v-else class="space-y-2.5">
+        <article
+          v-for="rule in sortedPolicyRules"
+          :key="rule.id"
+          :data-testid="`policy-rule-card-${rule.position}`"
+          class="rounded-xl border border-base-300 bg-base-100 p-3 sm:p-4 transition hover:border-primary/40 space-y-2"
+        >
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <div class="flex items-center gap-2">
+              <span class="badge badge-neutral badge-sm font-mono font-bold">
+                #{{ rule.position + 1 }}
+              </span>
+              <span class="badge badge-primary badge-outline badge-sm font-mono font-semibold">
+                {{ parseRuleExpression(rule.expression).type }}
+              </span>
+              <span class="text-xs font-mono opacity-80 truncate max-w-xs sm:max-w-md">
+                {{ parseRuleExpression(rule.expression).value || rule.expression }}
+              </span>
+            </div>
+
+            <div class="flex items-center gap-2">
+              <div class="text-xs flex items-center gap-1.5 bg-base-200 px-2.5 py-1 rounded-lg">
+                <span class="opacity-60 text-[11px]">指向策略组:</span>
+                <span class="font-semibold text-primary truncate max-w-[140px]">
+                  {{ getTargetGroupName(rule.target_group_id) }}
+                </span>
+              </div>
+
+              <button
+                type="button"
+                :data-testid="`delete-rule-btn-${rule.id}`"
+                class="btn btn-ghost btn-xs btn-square text-error"
+                title="删除分流规则"
+                @click="handleDeleteRule(rule.id)"
+              >
+                <TrashIcon class="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+
+          <!-- Associated Validation Finding on Rule -->
+          <div
+            v-if="getRuleIssue(rule.id, rule.position)"
+            role="alert"
+            aria-live="polite"
+            class="mt-1 px-3 py-1.5 rounded-lg text-xs flex items-start gap-2"
+            :class="getRuleIssue(rule.id, rule.position)?.severity === 'error' ? 'bg-error/10 text-error border border-error/20' : 'bg-warning/10 text-warning border border-warning/20'"
+          >
+            <ExclamationTriangleIcon class="w-4 h-4 flex-shrink-0 mt-0.5" />
+            <div class="min-w-0">
+              <span class="font-bold mr-1">
+                [{{ getRuleIssue(rule.id, rule.position)?.code }}]
+              </span>
+              <span>{{ getRuleIssue(rule.id, rule.position)?.message }}</span>
+            </div>
+          </div>
+        </article>
+      </div>
+    </div>
+
+    <!-- Tab 3: Admission Rules View -->
+    <div v-else-if="activeTab === 'admission'" class="space-y-4">
       <div
         v-if="admissionRules.length === 0"
         class="rounded-box border border-dashed border-base-300 p-12 text-center"
@@ -755,6 +968,14 @@ onMounted(() => {
       tone="danger"
       :loading="deletingGroup"
       @confirm="handleConfirmDeleteGroup"
+    />
+    <ConfirmModal
+      :open="confirmDeleteRuleOpen"
+      title="删除分流规则"
+      :message="t('policy.deletePolicyRuleConfirm')"
+      :confirming="deletingRule"
+      @confirm="handleConfirmDeleteRule"
+      @cancel="confirmDeleteRuleOpen = false"
     />
   </section>
 </template>

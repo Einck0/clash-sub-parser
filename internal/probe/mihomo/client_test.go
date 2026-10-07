@@ -2,13 +2,17 @@ package mihomo_test
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
+	"clash-sub-parser/internal/domain"
 	"clash-sub-parser/internal/probe/mihomo"
 	"github.com/metacubex/mihomo/adapter/outbound"
 	"github.com/metacubex/mihomo/constant"
@@ -171,5 +175,217 @@ func TestProxyClient_RealHTTPSServerRouting(t *testing.T) {
 	data, _ := io.ReadAll(resp.Body)
 	if string(data) != "ok-routed" {
 		t.Fatalf("expected 'ok-routed', got %q", string(data))
+	}
+}
+
+func TestProxyClient_LocalHTTPProxyFixture(t *testing.T) {
+	// Backend target server
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("backend-http-response"))
+	}))
+	defer backend.Close()
+
+	// Local HTTP CONNECT proxy
+	proxyLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen proxy failed: %v", err)
+	}
+	defer proxyLn.Close()
+
+	go func() {
+		for {
+			conn, err := proxyLn.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				buf := make([]byte, 4096)
+				n, err := c.Read(buf)
+				if err != nil || n == 0 {
+					return
+				}
+				reqStr := string(buf[:n])
+				if len(reqStr) >= 7 && reqStr[:7] == "CONNECT" {
+					// Extract host:port
+					parts := strings.Split(reqStr, " ")
+					if len(parts) < 2 {
+						return
+					}
+					targetAddr := parts[1]
+					targetConn, err := net.DialTimeout("tcp", targetAddr, 2*time.Second)
+					if err != nil {
+						_, _ = c.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
+						return
+					}
+					defer targetConn.Close()
+					_, _ = c.Write([]byte("HTTP/1.1 200 OK\r\n\r\n"))
+
+					errCh := make(chan struct{}, 2)
+					go func() { _, _ = io.Copy(targetConn, c); errCh <- struct{}{} }()
+					go func() { _, _ = io.Copy(c, targetConn); errCh <- struct{}{} }()
+					<-errCh
+				}
+			}(conn)
+		}
+	}()
+
+	proxyHost, proxyPortStr, _ := net.SplitHostPort(proxyLn.Addr().String())
+	proxyPort, _ := strconv.Atoi(proxyPortStr)
+
+	node := domain.Node{
+		LogicalID:   "node-fixture-http",
+		DisplayName: "Local HTTP Fixture",
+		Protocol:    domain.ProtocolHTTP,
+		Server:      proxyHost,
+		Port:        proxyPort,
+	}
+
+	proxy, err := mihomo.ParseProxy(node)
+	if err != nil {
+		t.Fatalf("mihomo.ParseProxy failed: %v", err)
+	}
+
+	pc, err := mihomo.NewProxyClientFromOutbound(proxy, 5*time.Second, "local-http-test")
+	if err != nil {
+		t.Fatalf("NewProxyClientFromOutbound failed: %v", err)
+	}
+	defer pc.Close()
+
+	// Verify transport proxy is explicitly nil (host env isolation)
+	tr := pc.Client.Transport.(*http.Transport)
+	if tr.Proxy != nil {
+		t.Fatal("expected tr.Proxy to be nil")
+	}
+
+	resp, err := pc.Client.Get(backend.URL)
+	if err != nil {
+		t.Fatalf("pc.Client.Get failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != "backend-http-response" {
+		t.Fatalf("expected 'backend-http-response', got %q", string(body))
+	}
+
+	if err := pc.Close(); err != nil {
+		t.Fatalf("pc.Close() failed: %v", err)
+	}
+}
+
+func TestProxyClient_LocalSocks5ProxyFixture(t *testing.T) {
+	// Backend target server
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("backend-socks5-response"))
+	}))
+	defer backend.Close()
+
+	// Local minimal SOCKS5 proxy
+	proxyLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen socks5 proxy failed: %v", err)
+	}
+	defer proxyLn.Close()
+
+	go func() {
+		for {
+			conn, err := proxyLn.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				// SOCKS5 greeting
+				buf := make([]byte, 256)
+				n, err := c.Read(buf)
+				if err != nil || n < 2 || buf[0] != 0x05 {
+					return
+				}
+				// Reply: version 5, no authentication required
+				_, _ = c.Write([]byte{0x05, 0x00})
+
+				// SOCKS5 request: 0x05, 0x01 (CONNECT), 0x00, ATYP
+				n, err = c.Read(buf)
+				if err != nil || n < 7 || buf[0] != 0x05 || buf[1] != 0x01 {
+					return
+				}
+
+				var destAddr string
+				switch buf[3] {
+				case 0x01: // IPv4
+					ip := net.IP(buf[4:8])
+					port := (int(buf[8]) << 8) | int(buf[9])
+					destAddr = fmt.Sprintf("%s:%d", ip.String(), port)
+				case 0x03: // Domain name
+					domainLen := int(buf[4])
+					domain := string(buf[5 : 5+domainLen])
+					port := (int(buf[5+domainLen]) << 8) | int(buf[6+domainLen])
+					destAddr = fmt.Sprintf("%s:%d", domain, port)
+				default:
+					return
+				}
+
+				targetConn, err := net.DialTimeout("tcp", destAddr, 2*time.Second)
+				if err != nil {
+					_, _ = c.Write([]byte{0x05, 0x01, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+					return
+				}
+				defer targetConn.Close()
+
+				// Success reply
+				_, _ = c.Write([]byte{0x05, 0x00, 0x00, 0x01, 127, 0, 0, 1, 0x04, 0x38})
+
+				errCh := make(chan struct{}, 2)
+				go func() { _, _ = io.Copy(targetConn, c); errCh <- struct{}{} }()
+				go func() { _, _ = io.Copy(c, targetConn); errCh <- struct{}{} }()
+				<-errCh
+			}(conn)
+		}
+	}()
+
+	proxyHost, proxyPortStr, _ := net.SplitHostPort(proxyLn.Addr().String())
+	proxyPort, _ := strconv.Atoi(proxyPortStr)
+
+	node := domain.Node{
+		LogicalID:   "node-fixture-socks5",
+		DisplayName: "Local SOCKS5 Fixture",
+		Protocol:    domain.ProtocolSocks5,
+		Server:      proxyHost,
+		Port:        proxyPort,
+	}
+
+	proxy, err := mihomo.ParseProxy(node)
+	if err != nil {
+		t.Fatalf("mihomo.ParseProxy failed: %v", err)
+	}
+
+	pc, err := mihomo.NewProxyClientFromOutbound(proxy, 5*time.Second, "local-socks5-test")
+	if err != nil {
+		t.Fatalf("NewProxyClientFromOutbound failed: %v", err)
+	}
+	defer pc.Close()
+
+	// Verify transport proxy is explicitly nil (host env isolation)
+	tr := pc.Client.Transport.(*http.Transport)
+	if tr.Proxy != nil {
+		t.Fatal("expected tr.Proxy to be nil")
+	}
+
+	resp, err := pc.Client.Get(backend.URL)
+	if err != nil {
+		t.Fatalf("pc.Client.Get via SOCKS5 failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != "backend-socks5-response" {
+		t.Fatalf("expected 'backend-socks5-response', got %q", string(body))
+	}
+
+	if err := pc.Close(); err != nil {
+		t.Fatalf("pc.Close() failed: %v", err)
 	}
 }

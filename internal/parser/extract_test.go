@@ -599,3 +599,118 @@ func TestExtractWithCredentials_MissingRequiredFieldsAndInvalidValuesRejected(t 
 		})
 	}
 }
+
+func TestExtractWithCredentials_HTTP_Socks5_AnyTLS_YAML_and_URI(t *testing.T) {
+	// Synthetic fixtures
+	yamlContent := `proxies:
+  - name: "Synthetic-HTTP"
+    type: http
+    server: "http.synthetic.test"
+    port: 8080
+    username: "synthetic-user"
+    password: "synthetic-pass"
+    tls: true
+    sni: "http.synthetic.test"
+    skip-cert-verify: true
+    headers:
+      X-Synthetic: "header-val"
+  - name: "Synthetic-Socks5"
+    type: socks5
+    server: "socks5.synthetic.test"
+    port: 1080
+    username: "synthetic-socks-user"
+    password: "synthetic-socks-pass"
+    tls: true
+    udp: true
+    sni: "socks5.synthetic.test"
+    skip-cert-verify: true
+  - name: "Synthetic-AnyTLS"
+    type: anytls
+    server: "anytls.synthetic.test"
+    port: 443
+    password: "synthetic-anytls-pass"
+    sni: "anytls.synthetic.test"
+    alpn:
+      - h2
+      - http/1.1
+    client-fingerprint: "chrome"
+    udp: true
+    skip-cert-verify: true
+    idle-session-check-interval: 30
+    idle-session-timeout: 60
+    min-idle-session: 2
+    disable-reuse: true
+    ech-opts:
+      enable: true
+      query-server-name: "cloudflarechallenge.com"
+`
+
+	res, err := parser.ExtractWithCredentials([]byte(yamlContent))
+	if err != nil {
+		t.Fatalf("ExtractWithCredentials YAML error: %v", err)
+	}
+	if len(res.Items) != 3 {
+		t.Fatalf("expected 3 items, got %d", len(res.Items))
+	}
+
+	httpItem := res.Items[0]
+	if httpItem.Normalized.Node.Protocol != domain.ProtocolHTTP {
+		t.Errorf("expected HTTP protocol, got %s", httpItem.Normalized.Node.Protocol)
+	}
+	if httpItem.Credentials.Username != "synthetic-user" || httpItem.Credentials.Password != "synthetic-pass" {
+		t.Errorf("HTTP credentials mismatch: user=%s pass=%s", httpItem.Credentials.Username, httpItem.Credentials.Password)
+	}
+	if httpItem.Normalized.Transport["tls"] != "true" || httpItem.Normalized.Transport["skip_cert_verify"] != "true" {
+		t.Errorf("HTTP transport mismatch: %+v", httpItem.Normalized.Transport)
+	}
+
+	socksItem := res.Items[1]
+	if socksItem.Normalized.Node.Protocol != domain.ProtocolSocks5 {
+		t.Errorf("expected Socks5 protocol, got %s", socksItem.Normalized.Node.Protocol)
+	}
+	if socksItem.Normalized.Transport["udp"] != "true" {
+		t.Errorf("expected socks5 udp=true, got: %+v", socksItem.Normalized.Transport)
+	}
+
+	anytlsItem := res.Items[2]
+	if anytlsItem.Normalized.Node.Protocol != domain.ProtocolAnyTLS {
+		t.Errorf("expected AnyTLS protocol, got %s", anytlsItem.Normalized.Node.Protocol)
+	}
+	if anytlsItem.Credentials.Password != "synthetic-anytls-pass" {
+		t.Errorf("AnyTLS password mismatch: %s", anytlsItem.Credentials.Password)
+	}
+	if anytlsItem.Normalized.Transport["fp"] != "chrome" {
+		t.Errorf("AnyTLS fp mismatch: %s", anytlsItem.Normalized.Transport["fp"])
+	}
+	if anytlsItem.Normalized.Transport["ech-opts"] == "" {
+		t.Errorf("expected AnyTLS ech-opts in transport")
+	}
+
+	// URI lines
+	uriContent := strings.Join([]string{
+		"http://synthetic-user:synthetic-pass@http.synthetic.test:8080#Synthetic-HTTP-URI",
+		"https://synthetic-user:synthetic-pass@https.synthetic.test:8443?sni=https.synthetic.test#Synthetic-HTTPS-URI",
+		"socks5://synthetic-socks-user:synthetic-socks-pass@socks5.synthetic.test:1080?udp=true#Synthetic-Socks5-URI",
+		"anytls://synthetic-anytls-pass@anytls.synthetic.test:443?sni=anytls.synthetic.test&alpn=h2,http/1.1&udp=true#Synthetic-AnyTLS-URI",
+	}, "\n")
+
+	uriRes, err := parser.ExtractWithCredentials([]byte(uriContent))
+	if err != nil {
+		t.Fatalf("ExtractWithCredentials URI error: %v", err)
+	}
+	if len(uriRes.Items) != 4 {
+		t.Fatalf("expected 4 items from URI, got %d", len(uriRes.Items))
+	}
+	if uriRes.Items[0].Normalized.Node.Protocol != domain.ProtocolHTTP {
+		t.Errorf("expected HTTP, got %s", uriRes.Items[0].Normalized.Node.Protocol)
+	}
+	if uriRes.Items[1].Normalized.Node.Protocol != domain.ProtocolHTTP || uriRes.Items[1].Normalized.Transport["tls"] != "true" {
+		t.Errorf("expected HTTPS with tls=true, got %+v", uriRes.Items[1].Normalized)
+	}
+	if uriRes.Items[2].Normalized.Node.Protocol != domain.ProtocolSocks5 || uriRes.Items[2].Normalized.Transport["udp"] != "true" {
+		t.Errorf("expected SOCKS5 with udp=true, got %+v", uriRes.Items[2].Normalized)
+	}
+	if uriRes.Items[3].Normalized.Node.Protocol != domain.ProtocolAnyTLS || uriRes.Items[3].Credentials.Password != "synthetic-anytls-pass" {
+		t.Errorf("expected AnyTLS with pass, got %+v", uriRes.Items[3].Normalized)
+	}
+}

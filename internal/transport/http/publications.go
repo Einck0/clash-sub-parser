@@ -19,15 +19,19 @@ type publicationAdminHandler struct {
 }
 
 type createPublicationRequest struct {
-	Target     string `json:"target"`
-	SnapshotID string `json:"snapshot_id"`
-	RevisionID string `json:"revision_id,omitempty"`
+	Target                         string `json:"target"`
+	SnapshotID                     string `json:"snapshot_id"`
+	RevisionID                     string `json:"revision_id,omitempty"`
+	PruneUnavailableOptionalGroups bool   `json:"prune_unavailable_optional_groups,omitempty"`
+	OmitUnavailableOptionalGroups  bool   `json:"omit_unavailable_optional_groups,omitempty"`
 }
 
 type previewPublicationRequest struct {
-	Target     string `json:"target"`
-	RevisionID string `json:"revision_id,omitempty"`
-	CompatMode string `json:"compat_mode,omitempty"`
+	Target                         string `json:"target"`
+	RevisionID                     string `json:"revision_id,omitempty"`
+	CompatMode                     string `json:"compat_mode,omitempty"`
+	PruneUnavailableOptionalGroups bool   `json:"prune_unavailable_optional_groups,omitempty"`
+	OmitUnavailableOptionalGroups  bool   `json:"omit_unavailable_optional_groups,omitempty"`
 }
 
 // publicationClientHandler serves client subscription export requests at /publish/v1/{publication_id}.
@@ -118,8 +122,10 @@ func (h publicationAdminHandler) create(w http.ResponseWriter, r *http.Request) 
 	snapshotID := strings.TrimSpace(body.SnapshotID)
 	if snapshotID == "" {
 		preflightRes, err := h.service.Preflight(r.Context(), publication.PreflightCommand{
-			Target:     target,
-			RevisionID: strings.TrimSpace(body.RevisionID),
+			Target:                         target,
+			RevisionID:                     strings.TrimSpace(body.RevisionID),
+			PruneUnavailableOptionalGroups: body.PruneUnavailableOptionalGroups,
+			OmitUnavailableOptionalGroups:  body.OmitUnavailableOptionalGroups,
 		})
 		if err != nil {
 			if writePublicationPreflightError(w, r, err) {
@@ -143,11 +149,13 @@ func (h publicationAdminHandler) create(w http.ResponseWriter, r *http.Request) 
 	}
 
 	cmd := publication.PublishCommand{
-		Target:     target,
-		SnapshotID: snapshotID,
-		RevisionID: strings.TrimSpace(body.RevisionID),
-		ActorKind:  requestActorKind(r),
-		RequestID:  GetRequestID(r.Context()),
+		Target:                         target,
+		SnapshotID:                     snapshotID,
+		RevisionID:                     strings.TrimSpace(body.RevisionID),
+		PruneUnavailableOptionalGroups: body.PruneUnavailableOptionalGroups,
+		OmitUnavailableOptionalGroups:  body.OmitUnavailableOptionalGroups,
+		ActorKind:                      requestActorKind(r),
+		RequestID:                      GetRequestID(r.Context()),
 	}
 
 	res, err := h.service.Publish(r.Context(), cmd)
@@ -181,9 +189,11 @@ func (h publicationAdminHandler) preview(w http.ResponseWriter, r *http.Request)
 	}
 
 	query := publication.PreviewQuery{
-		Target:     target,
-		RevisionID: strings.TrimSpace(body.RevisionID),
-		CompatMode: strings.TrimSpace(body.CompatMode),
+		Target:                         target,
+		RevisionID:                     strings.TrimSpace(body.RevisionID),
+		CompatMode:                     strings.TrimSpace(body.CompatMode),
+		PruneUnavailableOptionalGroups: body.PruneUnavailableOptionalGroups,
+		OmitUnavailableOptionalGroups:  body.OmitUnavailableOptionalGroups,
 	}
 
 	res, err := h.service.Preview(r.Context(), query)

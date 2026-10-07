@@ -259,7 +259,7 @@ describe('usePolicy composable', () => {
     const { validateGraph, validationResult } = usePolicy()
     const result = await validateGraph()
 
-    expect(postSpy).toHaveBeenCalledWith('/api/v1/policies/validate')
+    expect(postSpy).toHaveBeenCalledWith('/api/v1/policies/validate', undefined, expect.objectContaining({ signal: expect.any(Object) }))
     expect(result.valid).toBe(true)
     expect(validationResult.value?.valid).toBe(true)
   })
@@ -437,5 +437,143 @@ describe('usePolicy composable', () => {
     await deleteRule('pol/rule 1')
     expect(deleteSpy).toHaveBeenCalledWith('/api/v1/policies/rules/pol%2Frule%201')
     expect(policyRules.value).toHaveLength(0)
+  })
+
+  it('successful save and delete actions trigger autovalidation of latest revision', async () => {
+    const postSpy = vi.spyOn(api, 'post').mockImplementation(async (path: string, body?: any) => {
+      if (path === '/api/v1/policies/rules') {
+        return {
+          id: 'new-rule-1',
+          revision_id: 'rev-latest-99',
+          target_group_id: 'grp-1',
+          expression: 'DOMAIN,example.com',
+          position: 0,
+        }
+      }
+      if (path === '/api/v1/policies/validate') {
+        return {
+          valid: true,
+          revision_id: 'rev-latest-99',
+          errors: [],
+          issues: [],
+        }
+      }
+      return {}
+    })
+
+    const { createPolicyRule, latestRevisionId, validationResult, validationState } = usePolicy()
+
+    const created = await createPolicyRule({
+      target_group_id: 'grp-1',
+      expression: 'DOMAIN,example.com',
+    })
+
+    expect(created.id).toBe('new-rule-1')
+    expect(latestRevisionId.value).toBe('rev-latest-99')
+    expect(postSpy).toHaveBeenCalledWith('/api/v1/policies/validate', undefined, expect.objectContaining({ signal: expect.any(Object) }))
+    expect(validationResult.value?.valid).toBe(true)
+    expect(validationState.value).toBe('success')
+  })
+
+  it('save failure does not fake valid or trigger invalid state transition', async () => {
+    vi.spyOn(api, 'post').mockRejectedValueOnce(new Error('Network error on save'))
+
+    const { createPolicyRule, validationResult, validationState, error } = usePolicy()
+
+    await expect(
+      createPolicyRule({
+        target_group_id: 'grp-1',
+        expression: 'DOMAIN,bad.com',
+      })
+    ).rejects.toThrow('Network error on save')
+
+    // validationResult must NOT be fake-set to valid
+    expect(validationResult.value).toBeNull()
+    expect(validationState.value).toBe('idle')
+    expect(error.value).toBe('Network error on save')
+  })
+
+  it('discards late responses via sequence guard and revision mismatch guard', async () => {
+    let resolveFirst: (v: any) => void
+    const firstPromise = new Promise((r) => {
+      resolveFirst = r
+    })
+
+    const postSpy = vi.spyOn(api, 'post')
+      .mockImplementationOnce(() => firstPromise as any)
+      .mockResolvedValueOnce({
+        valid: true,
+        revision_id: 'rev-2',
+        issues: [],
+      })
+
+    const { validateGraph, validationResult, latestRevisionId, validationStale } = usePolicy()
+    latestRevisionId.value = 'rev-2'
+
+    // First validation starts (slow)
+    const call1 = validateGraph()
+
+    // Second validation starts (fast, rev-2)
+    const call2 = validateGraph()
+    await call2
+
+    expect(validationResult.value?.revision_id).toBe('rev-2')
+    expect(validationResult.value?.valid).toBe(true)
+
+    // Now resolve first validation with old rev-1 and errors
+    resolveFirst!({
+      valid: false,
+      revision_id: 'rev-1',
+      errors: ['Old error from rev-1'],
+    })
+    await call1
+
+    // validationResult must NOT be overwritten by the delayed stale response
+    expect(validationResult.value?.revision_id).toBe('rev-2')
+    expect(validationResult.value?.valid).toBe(true)
+  })
+
+  it('transitions to incomplete on server error and recovers on retry', async () => {
+    vi.spyOn(api, 'post')
+      .mockRejectedValueOnce(new ApiError(500, 'internal_error', 'Database deadlock'))
+      .mockResolvedValueOnce({
+        valid: true,
+        revision_id: 'rev-recovered',
+        issues: [],
+      })
+
+    const { validateGraph, validationResult, validationState, validationError } = usePolicy()
+
+    // First call fails with 500
+    const res1 = await validateGraph()
+    expect(res1.valid).toBe(false)
+    expect(validationState.value).toBe('incomplete')
+    expect(validationError.value).toContain('Database deadlock')
+
+    // Retry succeeds
+    const res2 = await validateGraph()
+    expect(res2.valid).toBe(true)
+    expect(validationState.value).toBe('success')
+    expect(validationResult.value?.valid).toBe(true)
+  })
+
+  it('abortValidation safely cancels active in-flight request', async () => {
+    const { validateGraph, abortValidation, validating } = usePolicy()
+
+    let signalAborted = false
+    vi.spyOn(api, 'post').mockImplementationOnce(async (_path: string, _body: any, opts: any) => {
+      opts?.signal?.addEventListener('abort', () => {
+        signalAborted = true
+      })
+      await new Promise((r) => setTimeout(r, 50))
+      return { valid: true }
+    })
+
+    const pending = validateGraph()
+    expect(validating.value).toBe(true)
+
+    abortValidation()
+    expect(signalAborted).toBe(true)
+    await pending
   })
 })

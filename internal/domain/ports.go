@@ -299,3 +299,9 @@ type PublicationPayloadRefRepository interface {
 	DeleteRefsByPublication(ctx context.Context, publicationID string) error
 	ResolvePayloadIDsForNodes(ctx context.Context, nodes []ManifestIncludedNode) ([]string, error)
 }
+
+// NodeResetRepository defines operations for clean-slate node inventory reset and foreign key checks.
+type NodeResetRepository interface {
+	ExecuteReset(ctx context.Context, dryRun bool) (*NodeInventoryResetReport, error)
+	CheckForeignKeyIntegrity(ctx context.Context) ([]string, error)
+}

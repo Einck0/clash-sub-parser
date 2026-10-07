@@ -66,6 +66,34 @@ func TestFilterConditionValidationMatrix(t *testing.T) {
 			errSubstr: "cannot be empty",
 		},
 		{
+			name: "display_name valid regex op",
+			condition: domain.FilterCondition{
+				Field: domain.FilterFieldDisplayName,
+				Op:    domain.FilterOpRegex,
+				Value: "加拿大|CA|Canada",
+			},
+			wantError: false,
+		},
+		{
+			name: "display_name invalid regex op syntax",
+			condition: domain.FilterCondition{
+				Field: domain.FilterFieldDisplayName,
+				Op:    domain.FilterOpRegex,
+				Value: "[unclosed",
+			},
+			wantError: true,
+			errSubstr: "invalid regex pattern",
+		},
+		{
+			name: "display_name valid not_regex op",
+			condition: domain.FilterCondition{
+				Field: domain.FilterFieldDisplayName,
+				Op:    domain.FilterOpNotRegex,
+				Value: "自动|故障|官网",
+			},
+			wantError: false,
+		},
+		{
 			name: "display_name value too long",
 			condition: domain.FilterCondition{
 				Field: domain.FilterFieldDisplayName,

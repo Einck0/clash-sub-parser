@@ -75,6 +75,7 @@ func registerPolicyRoutes(r chi.Router, service *policy.Service, audit domain.Au
 		sub.Delete("/rules/{id}", h.deleteRule)
 
 		sub.Post("/validate", h.validate)
+		sub.Get("/validate", h.validate)
 	}
 
 	r.Route("/policies", registerGroup)

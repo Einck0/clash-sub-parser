@@ -22,6 +22,7 @@ import (
 	"clash-sub-parser/internal/compiler"
 	"clash-sub-parser/internal/domain"
 	"clash-sub-parser/internal/repository/sqlite"
+	"clash-sub-parser/internal/resolver"
 	transporthttp "clash-sub-parser/internal/transport/http"
 )
 
@@ -2077,3 +2078,493 @@ func TestFourTargetEndToEndHTTP_WireGuardTUICAndNativeCapabilityProof(t *testing
 		}
 	}
 }
+
+func TestPublication_MihomoPreviewTargetedIntegration_HTTP_Socks5_AnyTLS_Mihomo200_Others422(t *testing.T) {
+	db := newCleanSQLiteDB(t)
+	router, pubSvc := setupPublicationTestRouter(t, db)
+	ctx := context.Background()
+
+	nodeRepo := sqlite.NewNodeRepository(db)
+
+	httpID := domain.ComputeNodeLogicalID(domain.ProtocolHTTP, "http.proxy.example.com", 8080, nil)
+	socksID := domain.ComputeNodeLogicalID(domain.ProtocolSocks5, "socks.proxy.example.com", 1080, nil)
+	anytlsID := domain.ComputeNodeLogicalID(domain.ProtocolAnyTLS, "anytls.proxy.example.com", 443, nil)
+	vmessID := domain.ComputeNodeLogicalID(domain.ProtocolVMess, "vmess.proxy.example.com", 443, nil)
+
+	nodes := []domain.Node{
+		{
+			LogicalID:   httpID,
+			Protocol:    domain.ProtocolHTTP,
+			DisplayName: "HTTP-Node",
+			Server:      "http.proxy.example.com",
+			Port:        8080,
+			Credentials: domain.InboundProtocolCredential{
+				Username: "user-http",
+				Password: "pass-http-secret",
+				Transport: map[string]string{
+					"tls":              "true",
+					"sni":              "http.proxy.example.com",
+					"skip_cert_verify": "true",
+					"headers":          `{"X-Custom-Header":"custom-val"}`,
+				},
+			},
+			Active:    true,
+			UpdatedAt: domain.NowUTC(),
+		},
+		{
+			LogicalID:   socksID,
+			Protocol:    domain.ProtocolSocks5,
+			DisplayName: "SOCKS5-Node",
+			Server:      "socks.proxy.example.com",
+			Port:        1080,
+			Credentials: domain.InboundProtocolCredential{
+				Username: "user-socks",
+				Password: "pass-socks-secret",
+				Transport: map[string]string{
+					"udp":              "true",
+					"tls":              "true",
+					"sni":              "socks.proxy.example.com",
+					"skip_cert_verify": "true",
+				},
+			},
+			Active:    true,
+			UpdatedAt: domain.NowUTC(),
+		},
+		{
+			LogicalID:   anytlsID,
+			Protocol:    domain.ProtocolAnyTLS,
+			DisplayName: "AnyTLS-Node",
+			Server:      "anytls.proxy.example.com",
+			Port:        443,
+			Credentials: domain.InboundProtocolCredential{
+				Password: "pass-anytls-secret",
+				Transport: map[string]string{
+					"sni":                         "anytls.proxy.example.com",
+					"alpn":                        "h2,http/1.1",
+					"fp":                          "chrome",
+					"skip_cert_verify":            "true",
+					"udp":                         "true",
+					"idle-session-check-interval": "30",
+					"idle-session-timeout":        "60",
+					"min-idle-session":            "1",
+				},
+			},
+			Active:    true,
+			UpdatedAt: domain.NowUTC(),
+		},
+		{
+			LogicalID:   vmessID,
+			Protocol:    domain.ProtocolVMess,
+			DisplayName: "VMess-Node",
+			Server:      "vmess.proxy.example.com",
+			Port:        443,
+			Credentials: domain.InboundProtocolCredential{
+				UUID:    "11111111-1111-1111-1111-111111111111",
+				Method:  "auto",
+				AlterID: 0,
+				Transport: map[string]string{
+					"network": "ws",
+					"tls":     "true",
+					"sni":     "vmess.proxy.example.com",
+					"path":    "/vmess-ws",
+					"host":    "vmess.proxy.example.com",
+				},
+			},
+			Active:    true,
+			UpdatedAt: domain.NowUTC(),
+		},
+	}
+
+	if err := nodeRepo.UpsertBatch(ctx, nodes); err != nil {
+		t.Fatalf("failed to insert test nodes: %v", err)
+	}
+	attachTestNodeToEnabledSub(t, db, httpID, socksID, anytlsID, vmessID)
+
+	revRepo := sqlite.NewRevisionRepository(db)
+	revID, _ := domain.NewUUIDv7()
+	_ = revRepo.Create(ctx, &domain.ConfigurationRevision{
+		ID:            revID,
+		ContentDigest: "sha256:mixed-protocols-rev-digest",
+		State:         domain.RevisionStateDraft,
+		CreatedAt:     domain.NowUTC(),
+	})
+	_ = revRepo.SetActive(ctx, revID)
+
+	policyRepo := sqlite.NewPolicyRepository(db)
+	groupID, _ := domain.NewUUIDv7()
+	_ = policyRepo.CreateGroup(ctx, &domain.NodeGroup{
+		ID:        groupID,
+		Name:      "ALL-NODES",
+		GroupType: domain.GroupTypeSelect,
+	})
+	_ = policyRepo.SetEdgesForGroup(ctx, groupID, []domain.GroupEdge{
+		{ID: "e1", ParentGroupID: groupID, NodeLogicalID: &httpID, Position: 0},
+		{ID: "e2", ParentGroupID: groupID, NodeLogicalID: &socksID, Position: 1},
+		{ID: "e3", ParentGroupID: groupID, NodeLogicalID: &anytlsID, Position: 2},
+		{ID: "e4", ParentGroupID: groupID, NodeLogicalID: &vmessID, Position: 3},
+	})
+	ruleID, _ := domain.NewUUIDv7()
+	_ = policyRepo.CreatePolicyRule(ctx, &domain.PolicyRule{
+		ID:            ruleID,
+		RevisionID:    revID,
+		TargetGroupID: groupID,
+		Expression:    "MATCH",
+		Position:      0,
+	})
+
+	// 1. POST /api/v1/publications/preview target=mihomo -> 200 OK
+	{
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "mihomo"}`))
+		req.Header.Set("Authorization", "Bearer "+testAdminToken)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK for mihomo preview with HTTP/SOCKS5/AnyTLS, got %d: %s", rec.Code, rec.Body.String())
+		}
+		var prevResp struct {
+			Data struct {
+				SnapshotID string                     `json:"snapshot_id"`
+				Target     string                     `json:"target"`
+				Content    string                     `json:"content"`
+				Manifest   domain.PublicationManifest `json:"manifest"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &prevResp); err != nil {
+			t.Fatalf("failed to decode preview response: %v", err)
+		}
+		if prevResp.Data.Target != "mihomo" {
+			t.Errorf("expected target=mihomo, got %s", prevResp.Data.Target)
+		}
+		if prevResp.Data.SnapshotID == "" {
+			t.Errorf("expected non-empty snapshot_id")
+		}
+		if prevResp.Data.Manifest.NodeCount != 4 {
+			t.Errorf("expected 4 nodes in manifest, got %d", prevResp.Data.Manifest.NodeCount)
+		}
+
+		content := prevResp.Data.Content
+		for _, substr := range []string{
+			"type: http",
+			"username: user-http",
+			"password: pass-http-secret",
+			"X-Custom-Header: custom-val",
+			"type: socks5",
+			"username: user-socks",
+			"password: pass-socks-secret",
+			"type: anytls",
+			"password: pass-anytls-secret",
+			"idle-session-check-interval: 30",
+			"idle-session-timeout: 60",
+			"min-idle-session: 1",
+			"type: vmess",
+		} {
+			if !strings.Contains(content, substr) {
+				t.Errorf("expected compiled YAML to contain %q, but missing:\n%s", substr, content)
+			}
+		}
+
+		// Validate with official mihomo CLI if present
+		if mihomoBin := findMihomoBinary(); mihomoBin != "" {
+			tmpDir := t.TempDir()
+			cfgPath := filepath.Join(tmpDir, "config.yaml")
+			if writeErr := os.WriteFile(cfgPath, []byte(content), 0o600); writeErr != nil {
+				t.Fatalf("write temp config: %v", writeErr)
+			}
+			cmd := exec.Command(mihomoBin, "-t", "-d", tmpDir, "-f", cfgPath)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("official mihomo -t failed on compiled YAML: %v\nOutput: %s", err, string(out))
+			}
+		}
+	}
+
+	// 2. POST /api/v1/publications/preview target=singbox -> 422 with structured diagnostics
+	{
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "singbox"}`))
+		req.Header.Set("Authorization", "Bearer "+testAdminToken)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("expected 422 for singbox preview, got %d: %s", rec.Code, rec.Body.String())
+		}
+		var errResp struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+			Details struct {
+				Diagnostics []compiler.CapabilityDiagnostic `json:"diagnostics"`
+				SnapshotID  string                          `json:"snapshot_id"`
+			} `json:"details"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
+			t.Fatalf("failed to parse 422 error response: %v", err)
+		}
+		if errResp.Code != "unsupported_target_capability" {
+			t.Errorf("expected code=unsupported_target_capability, got %s", errResp.Code)
+		}
+		if len(errResp.Details.Diagnostics) == 0 {
+			t.Errorf("expected non-empty diagnostics in details")
+		}
+		if errResp.Details.SnapshotID == "" {
+			t.Errorf("expected draft snapshot_id preserved on failure")
+		}
+	}
+
+	// 3. POST /api/v1/publications/preview target=surge -> 422 with structured diagnostics
+	{
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "surge"}`))
+		req.Header.Set("Authorization", "Bearer "+testAdminToken)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("expected 422 for surge preview, got %d: %s", rec.Code, rec.Body.String())
+		}
+		var errResp struct {
+			Code string `json:"code"`
+		}
+		_ = json.Unmarshal(rec.Body.Bytes(), &errResp)
+		if errResp.Code != "unsupported_target_capability" {
+			t.Errorf("expected code=unsupported_target_capability, got %s", errResp.Code)
+		}
+	}
+
+	// 4. POST /api/v1/publications/preview target=qx -> 422 with structured diagnostics
+	{
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "qx"}`))
+		req.Header.Set("Authorization", "Bearer "+testAdminToken)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("expected 422 for qx preview, got %d: %s", rec.Code, rec.Body.String())
+		}
+		var errResp struct {
+			Code string `json:"code"`
+		}
+		_ = json.Unmarshal(rec.Body.Bytes(), &errResp)
+		if errResp.Code != "unsupported_target_capability" {
+			t.Errorf("expected code=unsupported_target_capability, got %s", errResp.Code)
+		}
+	}
+
+	_ = pubSvc
+}
+
+func TestPublication_MihomoPreviewAndPublish_OptInPruneEmptyOptionalGroup(t *testing.T) {
+	db := newCleanSQLiteDB(t)
+	router, pubSvc := setupPublicationTestRouter(t, db)
+	ctx := context.Background()
+
+	nodeRepo := sqlite.NewNodeRepository(db)
+	nodeID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "ss.example.com", 8388, nil)
+	err := nodeRepo.UpsertBatch(ctx, []domain.Node{
+		{
+			LogicalID:   nodeID,
+			Protocol:    domain.ProtocolSS,
+			DisplayName: "SS-Node-1",
+			Server:      "ss.example.com",
+			Port:        8388,
+			Credentials: domain.InboundProtocolCredential{
+				Method:   "aes-256-gcm",
+				Password: "ss-password-123",
+			},
+			Active:    true,
+			UpdatedAt: domain.NowUTC(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to insert test node: %v", err)
+	}
+	attachTestNodeToEnabledSub(t, db, nodeID)
+
+	revRepo := sqlite.NewRevisionRepository(db)
+	revID, _ := domain.NewUUIDv7()
+	_ = revRepo.Create(ctx, &domain.ConfigurationRevision{
+		ID:            revID,
+		ContentDigest: "sha256:warp-prune-test",
+		State:         domain.RevisionStateDraft,
+		CreatedAt:     domain.NowUTC(),
+	})
+	_ = revRepo.SetActive(ctx, revID)
+
+	policyRepo := sqlite.NewPolicyRepository(db)
+	warpGroupID, _ := domain.NewUUIDv7()
+	_ = policyRepo.CreateGroup(ctx, &domain.NodeGroup{
+		ID:        warpGroupID,
+		Name:      "WARP",
+		GroupType: domain.GroupTypeURLTest,
+	})
+	// WARP has NO edges (0 members)!
+
+	parentGroupID, _ := domain.NewUUIDv7()
+	_ = policyRepo.CreateGroup(ctx, &domain.NodeGroup{
+		ID:        parentGroupID,
+		Name:      "选择节点",
+		GroupType: domain.GroupTypeSelect,
+	})
+	// Parent group has 2 edges: SS-Node-1 and WARP
+	_ = policyRepo.SetEdgesForGroup(ctx, parentGroupID, []domain.GroupEdge{
+		{ID: "e1", ParentGroupID: parentGroupID, NodeLogicalID: &nodeID, Position: 0},
+		{ID: "e2", ParentGroupID: parentGroupID, ChildGroupID: &warpGroupID, Position: 1},
+	})
+
+	ruleID, _ := domain.NewUUIDv7()
+	_ = policyRepo.CreatePolicyRule(ctx, &domain.PolicyRule{
+		ID:            ruleID,
+		RevisionID:    revID,
+		TargetGroupID: parentGroupID,
+		Expression:    "MATCH",
+		Position:      0,
+	})
+
+	// Capture initial DB state to verify DB is never modified
+	var initialGroupCount, initialEdgeCount, initialRuleCount int
+	_ = db.QueryRow("SELECT count(*) FROM node_groups").Scan(&initialGroupCount)
+	_ = db.QueryRow("SELECT count(*) FROM group_edges").Scan(&initialEdgeCount)
+	_ = db.QueryRow("SELECT count(*) FROM policy_rules").Scan(&initialRuleCount)
+
+	// 1. Compatible preview WITHOUT opt-in flag returns 422 empty_group_not_allowed
+	{
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "mihomo", "compat_mode": "compatible"}`))
+		req.Header.Set("Authorization", "Bearer "+testAdminToken)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("expected 422 for compatible preview with empty WARP group, got %d: %s", rec.Code, rec.Body.String())
+		}
+		var errResp struct {
+			Code string `json:"code"`
+		}
+		_ = json.Unmarshal(rec.Body.Bytes(), &errResp)
+		if errResp.Code != "empty_group_not_allowed" {
+			t.Errorf("expected empty_group_not_allowed code, got %s", errResp.Code)
+		}
+	}
+
+	// 2. Preview WITH prune_unavailable_optional_groups: true returns 200 OK
+	var snapshotID string
+	var previewContent string
+	var previewContentDigest string
+	{
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "mihomo", "prune_unavailable_optional_groups": true}`))
+		req.Header.Set("Authorization", "Bearer "+testAdminToken)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 for preview with prune_unavailable_optional_groups: true, got %d: %s", rec.Code, rec.Body.String())
+		}
+		var prevResp struct {
+			Data struct {
+				SnapshotID    string                `json:"snapshot_id"`
+				Content       string                `json:"content"`
+				ContentDigest string                `json:"content_digest"`
+				Diagnostics   []resolver.Diagnostic `json:"diagnostics"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &prevResp); err != nil {
+			t.Fatalf("failed to decode preview response: %v", err)
+		}
+		snapshotID = prevResp.Data.SnapshotID
+		previewContent = prevResp.Data.Content
+		previewContentDigest = prevResp.Data.ContentDigest
+
+		if snapshotID == "" {
+			t.Errorf("expected non-empty snapshot_id")
+		}
+
+		// Must contain diagnostic with WARP info
+		foundPruneDiag := false
+		for _, d := range prevResp.Data.Diagnostics {
+			if d.Code == "optional_group_pruned" && d.Target == "WARP" {
+				foundPruneDiag = true
+				if !strings.Contains(d.Message, "WARP暂不可用，本次备选移除，用户设置保留") {
+					t.Errorf("diagnostic message missing user guidance: %s", d.Message)
+				}
+			}
+		}
+		if !foundPruneDiag {
+			t.Errorf("expected optional_group_pruned diagnostic for WARP, got %+v", prevResp.Data.Diagnostics)
+		}
+
+		// Content must not contain empty WARP group
+		if strings.Contains(previewContent, "name: WARP") {
+			t.Errorf("rendered YAML must not contain pruned WARP group:\n%s", previewContent)
+		}
+		if strings.Contains(previewContent, "- WARP") {
+			t.Errorf("rendered YAML must not reference pruned WARP group in parent:\n%s", previewContent)
+		}
+
+		// Official mihomo -t validation if binary present
+		if mihomoBin := findMihomoBinary(); mihomoBin != "" {
+			tmpDir := t.TempDir()
+			cfgPath := filepath.Join(tmpDir, "config.yaml")
+			if writeErr := os.WriteFile(cfgPath, []byte(previewContent), 0o600); writeErr != nil {
+				t.Fatalf("write temp config: %v", writeErr)
+			}
+			cmd := exec.Command(mihomoBin, "-t", "-d", tmpDir, "-f", cfgPath)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("official mihomo -t failed on pruned config: %v\nOutput: %s", err, string(out))
+			}
+		}
+	}
+
+	// 3. Publish using the snapshot_id from the pruned preview -> 201 Created
+	var pubID, rawToken string
+	{
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/publications", strings.NewReader(fmt.Sprintf(`{"target": "mihomo", "snapshot_id": %q}`, snapshotID)))
+		req.Header.Set("Authorization", "Bearer "+testAdminToken)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("expected 201 Created for publication, got %d: %s", rec.Code, rec.Body.String())
+		}
+		var pubResp publicationCreateResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &pubResp); err != nil {
+			t.Fatalf("failed to decode publish response: %v", err)
+		}
+		pubID = pubResp.Data.Publication.ID
+		rawToken = pubResp.Data.RawToken
+		if pubResp.Data.ContentDigest != previewContentDigest {
+			t.Errorf("content digest mismatch between preview and publication: %s vs %s", previewContentDigest, pubResp.Data.ContentDigest)
+		}
+	}
+
+	// 4. Download publication from client endpoint /publish/v1/{id}?token={token} -> 200 OK with identical bytes
+	{
+		req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/publish/v1/%s?token=%s", pubID, rawToken), nil)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK for download, got %d: %s", rec.Code, rec.Body.String())
+		}
+		if rec.Body.String() != previewContent {
+			t.Fatalf("downloaded content does not match preview content")
+		}
+	}
+
+	// 5. Verify database counts remain strictly unchanged (0 DB mutations)
+	var finalGroupCount, finalEdgeCount, finalRuleCount int
+	_ = db.QueryRow("SELECT count(*) FROM node_groups").Scan(&finalGroupCount)
+	_ = db.QueryRow("SELECT count(*) FROM group_edges").Scan(&finalEdgeCount)
+	_ = db.QueryRow("SELECT count(*) FROM policy_rules").Scan(&finalRuleCount)
+
+	if finalGroupCount != initialGroupCount || finalEdgeCount != initialEdgeCount || finalRuleCount != initialRuleCount {
+		t.Fatalf("DB was modified! groups: %d->%d, edges: %d->%d, rules: %d->%d",
+			initialGroupCount, finalGroupCount, initialEdgeCount, finalEdgeCount, initialRuleCount, finalRuleCount)
+	}
+
+	_ = pubSvc
+}
+

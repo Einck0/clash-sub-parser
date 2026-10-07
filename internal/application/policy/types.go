@@ -170,8 +170,23 @@ type CreateRevisionCommand struct {
 	ActorKind domain.ActorKind                  `json:"actor_kind,omitempty"`
 }
 
+// ValidationIssue describes a single structural or dynamic routing diagnostic finding.
+type ValidationIssue struct {
+	Code            string `json:"code"`
+	Severity        string `json:"severity"` // "error" or "warning"
+	RuleID          string `json:"rule_id,omitempty"`
+	Position        int    `json:"position,omitempty"`
+	Type            string `json:"type,omitempty"`
+	Value           string `json:"value,omitempty"`
+	TargetGroupID   string `json:"target_group_id,omitempty"`
+	TargetGroupName string `json:"target_group_name,omitempty"`
+	Message         string `json:"message"`
+}
+
 // ValidationResult represents the output of graph and rule validation.
 type ValidationResult struct {
-	Valid  bool     `json:"valid"`
-	Errors []string `json:"errors,omitempty"`
+	Valid      bool              `json:"valid"`
+	Errors     []string          `json:"errors,omitempty"`
+	RevisionID string            `json:"revision_id,omitempty"`
+	Issues     []ValidationIssue `json:"issues,omitempty"`
 }

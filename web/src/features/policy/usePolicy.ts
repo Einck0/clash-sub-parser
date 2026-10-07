@@ -37,8 +37,15 @@ export function usePolicy() {
   const savingGlobalFilter = ref(false)
   const validating = ref(false)
   const validationResult = ref<ValidationResult | null>(null)
+  const validationState = ref<'idle' | 'validating' | 'success' | 'warning' | 'error' | 'incomplete'>('idle')
+  const validationStale = ref(false)
+  const validationError = ref('')
+  const latestRevisionId = ref('')
   const error = ref('')
   const totalGroups = ref(0)
+
+  let validateSeq = 0
+  let validateAbortController: AbortController | null = null
 
   async function loadGroups(search?: string) {
     loading.value = true
@@ -58,6 +65,7 @@ export function usePolicy() {
 
   async function createGroup(name: string, groupType: GroupType, edges: GroupEdge[] = [], nodeFilter?: NodeFilterSpec | null): Promise<PolicyGroup> {
     saving.value = true
+    validationStale.value = true
     error.value = ''
     try {
       const payload: Record<string, unknown> = {
@@ -70,6 +78,7 @@ export function usePolicy() {
       }
       const created = await api.post<PolicyGroup>('/api/v1/policies/groups', payload)
       await loadGroups()
+      void validateGraph()
       return created
     } catch (err) {
       const msg = err instanceof Error ? err.message : '创建策略组失败'
@@ -82,6 +91,7 @@ export function usePolicy() {
 
   async function updateGroup(id: string, name?: string, groupType?: GroupType, nodeFilter?: NodeFilterSpec | null): Promise<PolicyGroup> {
     saving.value = true
+    validationStale.value = true
     error.value = ''
     try {
       const payload: Record<string, unknown> = {}
@@ -91,6 +101,7 @@ export function usePolicy() {
       const updated = await api.patch<PolicyGroup>(`/api/v1/policies/groups/${encodeURIComponent(id)}`, payload)
       const idx = groups.value.findIndex((g) => g.id === id)
       if (idx >= 0) groups.value[idx] = updated
+      void validateGraph()
       return updated
     } catch (err) {
       error.value = err instanceof Error ? err.message : '更新策略组失败'
@@ -102,10 +113,12 @@ export function usePolicy() {
 
   async function deleteGroup(id: string) {
     saving.value = true
+    validationStale.value = true
     error.value = ''
     try {
       await api.delete(`/api/v1/policies/groups/${encodeURIComponent(id)}`)
       groups.value = groups.value.filter((g) => g.id !== id)
+      void validateGraph()
     } catch (err) {
       error.value = err instanceof Error ? err.message : '删除策略组失败'
       throw err
@@ -116,10 +129,12 @@ export function usePolicy() {
 
   async function setGroupEdges(groupId: string, edges: GroupEdge[]) {
     saving.value = true
+    validationStale.value = true
     error.value = ''
     try {
       await api.put(`/api/v1/policies/groups/${encodeURIComponent(groupId)}/edges`, { edges })
       await loadGroups()
+      void validateGraph()
     } catch (err) {
       error.value = err instanceof Error ? err.message : '保存策略组连接边失败'
       throw err
@@ -137,6 +152,9 @@ export function usePolicy() {
       const res = await api.get<RulesResult>('/api/v1/policies/rules', { params })
       admissionRules.value = res.admission_rules || []
       policyRules.value = res.policy_rules || []
+      if (res.revision_id) {
+        latestRevisionId.value = res.revision_id
+      }
     } catch (err) {
       error.value = err instanceof Error ? err.message : '加载规则失败'
     } finally {
@@ -152,6 +170,7 @@ export function usePolicy() {
     revision_id?: string
   }) {
     saving.value = true
+    validationStale.value = true
     error.value = ''
     try {
       const payload = {
@@ -164,6 +183,10 @@ export function usePolicy() {
       }
       const created = await api.post<AdmissionRule>('/api/v1/policies/rules', payload)
       admissionRules.value.push(created)
+      if (created.revision_id) {
+        latestRevisionId.value = created.revision_id
+      }
+      void validateGraph()
       return created
     } catch (err) {
       error.value = err instanceof Error ? err.message : '创建准入规则失败'
@@ -180,6 +203,7 @@ export function usePolicy() {
     revision_id?: string
   }) {
     saving.value = true
+    validationStale.value = true
     error.value = ''
     try {
       const payload = {
@@ -191,6 +215,10 @@ export function usePolicy() {
       }
       const created = await api.post<PolicyRule>('/api/v1/policies/rules', payload)
       policyRules.value.push(created)
+      if (created.revision_id) {
+        latestRevisionId.value = created.revision_id
+      }
+      void validateGraph()
       return created
     } catch (err) {
       error.value = err instanceof Error ? err.message : '创建分流规则失败'
@@ -202,11 +230,13 @@ export function usePolicy() {
 
   async function deleteRule(id: string): Promise<void> {
     saving.value = true
+    validationStale.value = true
     error.value = ''
     try {
       await api.delete(`/api/v1/policies/rules/${encodeURIComponent(id)}`)
       admissionRules.value = admissionRules.value.filter((r) => r.id !== id)
       policyRules.value = policyRules.value.filter((r) => r.id !== id)
+      void validateGraph()
     } catch (err) {
       error.value = err instanceof Error ? err.message : '删除规则失败'
       throw err
@@ -215,20 +245,76 @@ export function usePolicy() {
     }
   }
 
+  function abortValidation() {
+    if (validateAbortController) {
+      validateAbortController.abort()
+      validateAbortController = null
+    }
+  }
+
   async function validateGraph(): Promise<ValidationResult> {
+    if (validateAbortController) {
+      validateAbortController.abort()
+      validateAbortController = null
+    }
+
+    const currentSeq = ++validateSeq
+    const controller = new AbortController()
+    validateAbortController = controller
+
     validating.value = true
-    error.value = ''
+    validationState.value = 'validating'
+    validationError.value = ''
+
     try {
-      const res = await api.post<ValidationResult>('/api/v1/policies/validate')
+      const res = await api.post<ValidationResult>('/api/v1/policies/validate', undefined, {
+        signal: controller.signal,
+      })
+
+      if (currentSeq !== validateSeq) {
+        return res
+      }
+
+      // Revision match guard: if response has a revision_id and we have a tracked latestRevisionId,
+      // ensure they match; otherwise response is from a pre-mutation revision
+      if (res.revision_id && latestRevisionId.value && res.revision_id !== latestRevisionId.value) {
+        validationStale.value = true
+        return res
+      }
+
+      if (res.revision_id) {
+        latestRevisionId.value = res.revision_id
+      }
+
       validationResult.value = res
+      validationStale.value = false
+      if (!res.valid) {
+        validationState.value = 'error'
+      } else if (res.issues && res.issues.length > 0) {
+        validationState.value = 'warning'
+      } else {
+        validationState.value = 'success'
+      }
       return res
-    } catch (err) {
-      error.value = err instanceof Error ? err.message : '校验拓扑图失败'
-      const fallback: ValidationResult = { valid: false, errors: [error.value] }
+    } catch (err: any) {
+      if (err?.name === 'AbortError') {
+        const fallback: ValidationResult = validationResult.value || { valid: false, errors: [] }
+        return fallback
+      }
+      if (currentSeq !== validateSeq) {
+        return validationResult.value || { valid: false, errors: [] }
+      }
+
+      const msg = err instanceof Error ? err.message : '校验未完成'
+      validationError.value = msg
+      validationState.value = 'incomplete'
+      const fallback: ValidationResult = { valid: false, errors: [msg] }
       validationResult.value = fallback
       return fallback
     } finally {
-      validating.value = false
+      if (currentSeq === validateSeq) {
+        validating.value = false
+      }
     }
   }
 
@@ -278,6 +364,11 @@ export function usePolicy() {
     savingGlobalFilter,
     validating,
     validationResult,
+    validationState,
+    validationStale,
+    validationError,
+    latestRevisionId,
+    abortValidation,
     error,
     totalGroups,
     loadGroups,

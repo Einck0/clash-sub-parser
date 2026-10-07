@@ -6,12 +6,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"sync"
 
 	"clash-sub-parser/internal/domain"
+	"clash-sub-parser/internal/resolver"
 )
 
 // Service orchestrates policy groups, edges, admission rules, and configuration revisions.
@@ -793,6 +795,7 @@ func (s *Service) ListRules(ctx context.Context, query ListRulesQuery) (*ListRul
 }
 
 // ValidateGraph checks the complete graph and rules currently persisted in the database.
+// It performs static topology validation, admission rule checks, and dynamic group resolution against active nodes.
 func (s *Service) ValidateGraph(ctx context.Context) (*ValidationResult, error) {
 	groups, err := s.policyRepo.ListGroups(ctx)
 	if err != nil {
@@ -800,7 +803,9 @@ func (s *Service) ValidateGraph(ctx context.Context) (*ValidationResult, error) 
 	}
 
 	edgeMap := make(map[string][]domain.GroupEdge, len(groups))
+	groupMap := make(map[string]domain.NodeGroup, len(groups))
 	for _, g := range groups {
+		groupMap[g.ID] = g
 		edges, err := s.policyRepo.ListEdgesByGroup(ctx, g.ID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to list edges for group %s: %w", g.ID, err)
@@ -809,28 +814,236 @@ func (s *Service) ValidateGraph(ctx context.Context) (*ValidationResult, error) 
 	}
 
 	var activeRevID string
-	if active, err := s.revisionRepo.GetActive(ctx); err == nil && active != nil {
-		activeRevID = active.ID
+	if s.revisionRepo != nil {
+		if active, err := s.revisionRepo.GetActive(ctx); err == nil && active != nil {
+			activeRevID = active.ID
+		}
 	}
 
 	var polRules []domain.PolicyRule
 	var admRules []domain.AdmissionRule
-	if activeRevID != "" {
+	if activeRevID != "" && s.policyRepo != nil {
 		polRules, _ = s.policyRepo.ListPolicyRules(ctx, activeRevID)
 		admRules, _ = s.policyRepo.ListAdmissionRules(ctx, activeRevID)
 	}
 
-	if err := ValidatePolicyGraph(groups, edgeMap, polRules, admRules); err != nil {
+	var issues []ValidationIssue
+	var errorsList []string
+
+	// 1. Static topology validation
+	topErr := domain.ValidatePolicyTopology(groups, edgeMap, polRules, true)
+	if topErr != nil {
+		errorsList = append(errorsList, topErr.Error())
+		var domErr *domain.DomainError
+		code := "topology_invalid"
+		if errors.As(topErr, &domErr) {
+			code = domErr.Code
+		}
+		issues = append(issues, ValidationIssue{
+			Code:     code,
+			Severity: "error",
+			Message:  topErr.Error(),
+		})
 		return &ValidationResult{
-			Valid:  false,
-			Errors: []string{err.Error()},
-		}, err
+			Valid:      false,
+			Errors:     errorsList,
+			RevisionID: activeRevID,
+			Issues:     issues,
+		}, topErr
+	}
+
+	admErr := ValidateAdmissionRules(admRules)
+	if admErr != nil {
+		errorsList = append(errorsList, admErr.Error())
+		issues = append(issues, ValidationIssue{
+			Code:     "invalid_admission_rule",
+			Severity: "error",
+			Message:  admErr.Error(),
+		})
+	}
+
+	// 2. Fetch active nodes in CurrentEnabledSubscription scope
+	var nodes []domain.Node
+	if s.nodeRepo != nil {
+		nodes, _, _ = s.nodeRepo.List(ctx, domain.NodeFilter{
+			Scope:          domain.NodeScopeEnabledSubscriptions,
+			ActiveOnly:     true,
+			ExcludeNotices: true,
+		})
+	}
+
+	// 3. Fetch global & group filters
+	var globalFilter *domain.NodeFilterSpec
+	var groupFilters map[string]domain.NodeFilterSpec
+	if s.nodeFilterRepo != nil {
+		if gf, err := s.nodeFilterRepo.GetGlobalFilter(ctx); err == nil && gf != nil && !gf.Spec.IsEmpty() {
+			globalFilter = &gf.Spec
+		}
+		if gfs, err := s.nodeFilterRepo.ListGroupFilters(ctx); err == nil {
+			groupFilters = gfs
+		}
+	}
+
+	// 4. Deterministic Resolver execution (in-memory, no mutation, no external network)
+	resInput := resolver.ResolveInput{
+		RevisionID:         activeRevID,
+		InventoryWatermark: "v1",
+		CompilerVersion:    "1.0.0",
+		Nodes:              nodes,
+		Groups:             groups,
+		Edges:              edgeMap,
+		PolicyRules:        polRules,
+		AdmissionRules:     admRules,
+		GlobalFilter:       globalFilter,
+		GroupFilters:       groupFilters,
+		DNS: resolver.DNSConfig{
+			Enabled:     true,
+			Nameservers: []string{"1.1.1.1", "8.8.8.8"},
+		},
+		AsOf: domain.NowUTC(),
+	}
+
+	r := resolver.New()
+	snap, snapErr := r.Resolve(ctx, resInput)
+	if snapErr != nil {
+		if topErr == nil {
+			errorsList = append(errorsList, snapErr.Error())
+			issues = append(issues, ValidationIssue{
+				Code:     "resolver_error",
+				Severity: "error",
+				Message:  snapErr.Error(),
+			})
+		}
+	} else {
+		resolvedGroupMap := make(map[string]resolver.ResolvedGroup, len(snap.Groups))
+		for _, rg := range snap.Groups {
+			resolvedGroupMap[rg.ID] = rg
+		}
+
+		// Check each policy rule against its target group
+		for _, rule := range polRules {
+			rType, rVal := parseRuleExpr(rule.Expression)
+			tGroup, exists := groupMap[rule.TargetGroupID]
+			if !exists {
+				errMsg := fmt.Sprintf("分流规则 %q (位置 %d) 指向的策略组 %s 不存在", rule.Expression, rule.Position, rule.TargetGroupID)
+				errorsList = append(errorsList, errMsg)
+				issues = append(issues, ValidationIssue{
+					Code:            "target_group_not_found",
+					Severity:        "error",
+					RuleID:          rule.ID,
+					Position:        rule.Position,
+					Type:            rType,
+					Value:           rVal,
+					TargetGroupID:   rule.TargetGroupID,
+					TargetGroupName: "",
+					Message:         errMsg,
+				})
+				continue
+			}
+
+			rg, ok := resolvedGroupMap[rule.TargetGroupID]
+			if !ok || len(rg.Members) == 0 || len(rg.AllNodeLogicalIDs) == 0 {
+				var errMsg string
+				if len(nodes) == 0 {
+					errMsg = fmt.Sprintf("当前有效库存为空，分流规则 %q (位置 %d) 指向的策略组 %q (%s) 无可用节点", rule.Expression, rule.Position, tGroup.Name, tGroup.ID)
+				} else {
+					errMsg = fmt.Sprintf("分流规则 %q (位置 %d) 指向的策略组 %q (%s) 经解析无可用节点 (0 个可用节点)", rule.Expression, rule.Position, tGroup.Name, tGroup.ID)
+				}
+				errorsList = append(errorsList, errMsg)
+				issues = append(issues, ValidationIssue{
+					Code:            "empty_routed_group",
+					Severity:        "error",
+					RuleID:          rule.ID,
+					Position:        rule.Position,
+					Type:            rType,
+					Value:           rVal,
+					TargetGroupID:   tGroup.ID,
+					TargetGroupName: tGroup.Name,
+					Message:         errMsg,
+				})
+			}
+		}
+
+		// Check unrouted empty groups (warnings only)
+		routedTargetIDs := make(map[string]bool, len(polRules))
+		for _, rule := range polRules {
+			routedTargetIDs[rule.TargetGroupID] = true
+		}
+
+		for _, rg := range snap.Groups {
+			if !routedTargetIDs[rg.ID] && (len(rg.Members) == 0 || len(rg.AllNodeLogicalIDs) == 0) {
+				issues = append(issues, ValidationIssue{
+					Code:            "empty_group",
+					Severity:        "warning",
+					TargetGroupID:   rg.ID,
+					TargetGroupName: rg.Name,
+					Message:         fmt.Sprintf("策略组 %q (%s) 当前解析结果为空 (0 个成员)", rg.Name, rg.ID),
+				})
+			}
+		}
+
+		// Collect other diagnostics from resolver (e.g. node_inactive_or_missing)
+		for _, d := range snap.Diagnostics {
+			if d.Code == "node_inactive_or_missing" {
+				issues = append(issues, ValidationIssue{
+					Code:     d.Code,
+					Severity: string(d.Severity),
+					Message:  d.Message,
+				})
+			}
+		}
+	}
+
+	// Sort issues: errors first, then warnings; within each, position ASC, then code ASC
+	sort.SliceStable(issues, func(i, j int) bool {
+		if issues[i].Severity != issues[j].Severity {
+			return issues[i].Severity == "error"
+		}
+		if issues[i].Position != issues[j].Position {
+			return issues[i].Position < issues[j].Position
+		}
+		return issues[i].Code < issues[j].Code
+	})
+
+	// Deduplicate errorsList
+	uniqueErrors := make([]string, 0, len(errorsList))
+	seenErr := make(map[string]bool)
+	for _, e := range errorsList {
+		if !seenErr[e] {
+			seenErr[e] = true
+			uniqueErrors = append(uniqueErrors, e)
+		}
+	}
+
+	hasErrors := false
+	for _, iss := range issues {
+		if iss.Severity == "error" {
+			hasErrors = true
+			break
+		}
 	}
 
 	return &ValidationResult{
-		Valid:  true,
-		Errors: nil,
+		Valid:      !hasErrors,
+		Errors:     uniqueErrors,
+		RevisionID: activeRevID,
+		Issues:     issues,
 	}, nil
+}
+
+func parseRuleExpr(expr string) (string, string) {
+	expr = strings.TrimSpace(expr)
+	if domain.IsMatchRule(expr) {
+		return "MATCH", ""
+	}
+	parts := strings.Split(expr, ",")
+	if len(parts) >= 2 {
+		return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+	}
+	if len(parts) == 1 {
+		return strings.TrimSpace(parts[0]), ""
+	}
+	return "", ""
 }
 
 // EnsureActiveRevision idempotently bootstraps an initial active configuration revision

@@ -76,17 +76,28 @@ func TestParseYAMLAndBase64ShareLogicalIDs(t *testing.T) {
 	}
 }
 
-func TestParseLogicalIDIgnoresNamesSourceAndSecrets(t *testing.T) {
+func TestParseLogicalIDDistinguishesCredentialsAndIgnoresNames(t *testing.T) {
 	first, err := parser.Parse([]byte("vless://first-secret@edge.example:443?type=ws&security=tls&host=cdn.example&path=%2Frelay#Hong%20Kong"))
 	if err != nil {
 		t.Fatalf("Parse(first) error = %v", err)
+	}
+	renamed, err := parser.Parse([]byte("vless://first-secret@EDGE.EXAMPLE:443?path=%2Frelay&host=cdn.example&security=tls&type=ws#Renamed"))
+	if err != nil {
+		t.Fatalf("Parse(renamed) error = %v", err)
 	}
 	second, err := parser.Parse([]byte("vless://second-secret@EDGE.EXAMPLE:443?path=%2Frelay&host=cdn.example&security=tls&type=ws#Renamed"))
 	if err != nil {
 		t.Fatalf("Parse(second) error = %v", err)
 	}
-	if first.Nodes[0].Node.LogicalID != second.Nodes[0].Node.LogicalID {
-		t.Fatalf("logical IDs differ for same transport: %q != %q", first.Nodes[0].Node.LogicalID, second.Nodes[0].Node.LogicalID)
+
+	// Same connection and credential with different names / casing / param order MUST produce identical LogicalID
+	if first.Nodes[0].Node.LogicalID != renamed.Nodes[0].Node.LogicalID {
+		t.Fatalf("logical IDs differ for same connection: %q != %q", first.Nodes[0].Node.LogicalID, renamed.Nodes[0].Node.LogicalID)
+	}
+
+	// Distinct credentials on same endpoint MUST produce distinct LogicalIDs
+	if first.Nodes[0].Node.LogicalID == second.Nodes[0].Node.LogicalID {
+		t.Fatalf("logical IDs must differ for different credentials: %q == %q", first.Nodes[0].Node.LogicalID, second.Nodes[0].Node.LogicalID)
 	}
 	if first.Nodes[0].Node.Credentials.UUID == second.Nodes[0].Node.Credentials.UUID {
 		t.Fatal("distinct credentials must be preserved on parsed nodes")

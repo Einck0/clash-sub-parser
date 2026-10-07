@@ -1174,3 +1174,209 @@ func (f *failingRevisionRepo) CreateActive(ctx context.Context, rev *domain.Conf
 func (f *failingRevisionRepo) SetActive(ctx context.Context, id string) error {
 	return f.err
 }
+
+func TestPolicyService_ValidateGraph_DirectlyRoutedEmptyGroupAndUnroutedWarning(t *testing.T) {
+	db := setupTestDB(t)
+	svc, _ := setupTestService(t, db)
+	ctx := context.Background()
+
+	// 1. Create two groups: one routed, one unrouted
+	routedGrp, err := svc.CreateGroup(ctx, policy.CreateGroupCommand{
+		Name:      "RoutedEmpty",
+		GroupType: domain.GroupTypeSelect,
+		RequestID: "req-routed",
+		ActorKind: domain.ActorKindAdmin,
+	})
+	if err != nil {
+		t.Fatalf("failed to create routed group: %v", err)
+	}
+
+	unroutedGrp, err := svc.CreateGroup(ctx, policy.CreateGroupCommand{
+		Name:      "UnroutedEmpty",
+		GroupType: domain.GroupTypeSelect,
+		RequestID: "req-unrouted",
+		ActorKind: domain.ActorKindAdmin,
+	})
+	if err != nil {
+		t.Fatalf("failed to create unrouted group: %v", err)
+	}
+
+	// 2. Add rule targeting RoutedEmpty
+	rule, err := svc.CreatePolicyRule(ctx, policy.CreatePolicyRuleCommand{
+		TargetGroupID: routedGrp.ID,
+		Expression:    "DOMAIN-SUFFIX,example.com",
+		Position:      0,
+		RequestID:     "req-rule-validate",
+		ActorKind:     domain.ActorKindAdmin,
+	})
+	if err != nil {
+		t.Fatalf("failed to create policy rule: %v", err)
+	}
+
+	// 3. ValidateGraph
+	res, err := svc.ValidateGraph(ctx)
+	if err != nil {
+		t.Fatalf("ValidateGraph returned unexpected error: %v", err)
+	}
+	if res.Valid {
+		t.Fatalf("expected Valid to be false due to empty_routed_group, got true")
+	}
+	if len(res.Errors) == 0 {
+		t.Fatalf("expected non-empty Errors list")
+	}
+
+	var foundRoutedErr bool
+	var foundUnroutedWarn bool
+	for _, iss := range res.Issues {
+		if iss.Code == "empty_routed_group" && iss.Severity == "error" && iss.RuleID == rule.ID {
+			foundRoutedErr = true
+			if iss.TargetGroupID != routedGrp.ID {
+				t.Errorf("expected target_group_id %s, got %s", routedGrp.ID, iss.TargetGroupID)
+			}
+			if iss.TargetGroupName != "RoutedEmpty" {
+				t.Errorf("expected target_group_name RoutedEmpty, got %s", iss.TargetGroupName)
+			}
+			if iss.Type != "DOMAIN-SUFFIX" || iss.Value != "example.com" {
+				t.Errorf("expected type DOMAIN-SUFFIX and value example.com, got %s, %s", iss.Type, iss.Value)
+			}
+		}
+		if iss.Code == "empty_group" && iss.Severity == "warning" && iss.TargetGroupID == unroutedGrp.ID {
+			foundUnroutedWarn = true
+		}
+	}
+
+	if !foundRoutedErr {
+		t.Fatalf("expected empty_routed_group error issue for rule %s, got %+v", rule.ID, res.Issues)
+	}
+	if !foundUnroutedWarn {
+		t.Fatalf("expected empty_group warning issue for unrouted group %s, got %+v", unroutedGrp.ID, res.Issues)
+	}
+}
+
+func TestPolicyService_ValidateGraph_ExactRuleDeletion_VerificationCycle(t *testing.T) {
+	db := setupTestDB(t)
+	svc, _ := setupTestService(t, db)
+	ctx := context.Background()
+
+	// 1. Setup exact entities:
+	// Parent group "选择节点" (01a0b9af-c116-7806-9740-66b8b070ba2f)
+	// Target group "其他" (01a0b9af-c116-71ba-a125-31cefefe0d4b)
+	otherGroupID := "01a0b9af-c116-71ba-a125-31cefefe0d4b"
+	parentGroupID := "01a0b9af-c116-7806-9740-66b8b070ba2f"
+	targetRuleID := "01a0b9af-c118-72f9-9949-d94b49fa6ec2"
+
+	otherGrp, err := svc.CreateGroup(ctx, policy.CreateGroupCommand{
+		ID:        otherGroupID,
+		Name:      "其他",
+		GroupType: domain.GroupTypeSelect,
+		RequestID: "req-create-other",
+		ActorKind: domain.ActorKindAdmin,
+	})
+	if err != nil {
+		t.Fatalf("failed to create group 其他: %v", err)
+	}
+
+	parentGrp, err := svc.CreateGroup(ctx, policy.CreateGroupCommand{
+		ID:        parentGroupID,
+		Name:      "选择节点",
+		GroupType: domain.GroupTypeSelect,
+		Edges: []policy.EdgeInput{
+			{ChildGroupID: &otherGroupID, Position: 0},
+		},
+		RequestID: "req-create-parent",
+		ActorKind: domain.ActorKindAdmin,
+	})
+	if err != nil {
+		t.Fatalf("failed to create group 选择节点: %v", err)
+	}
+	if parentGrp == nil || otherGrp == nil {
+		t.Fatal("expected non-nil groups")
+	}
+
+	// Create rule PROCESS-NAME,tr.com.kliq.app -> 其他
+	rule, err := svc.CreatePolicyRule(ctx, policy.CreatePolicyRuleCommand{
+		ID:            targetRuleID,
+		TargetGroupID: otherGroupID,
+		Expression:    "PROCESS-NAME,tr.com.kliq.app",
+		Position:      20,
+		RequestID:     "req-create-rule",
+		ActorKind:     domain.ActorKindAdmin,
+	})
+	if err != nil {
+		t.Fatalf("failed to create rule: %v", err)
+	}
+
+	// 2. ValidateGraph before deletion: must fail due to empty_routed_group
+	preRes, err := svc.ValidateGraph(ctx)
+	if err != nil {
+		t.Fatalf("pre-delete ValidateGraph error: %v", err)
+	}
+	if preRes.Valid {
+		t.Fatalf("expected pre-delete validation to be invalid due to empty_routed_group")
+	}
+
+	var foundTargetRuleIssue bool
+	for _, iss := range preRes.Issues {
+		if iss.RuleID == targetRuleID && iss.Code == "empty_routed_group" {
+			foundTargetRuleIssue = true
+			if iss.Type != "PROCESS-NAME" || iss.Value != "tr.com.kliq.app" {
+				t.Errorf("expected type PROCESS-NAME and value tr.com.kliq.app, got %s, %s", iss.Type, iss.Value)
+			}
+			if iss.TargetGroupName != "其他" {
+				t.Errorf("expected target_group_name 其他, got %s", iss.TargetGroupName)
+			}
+		}
+	}
+	if !foundTargetRuleIssue {
+		t.Fatalf("expected issue for target rule %s in preRes, got %+v", targetRuleID, preRes.Issues)
+	}
+
+	// 3. Exact Deletion of target rule
+	err = svc.DeleteRule(ctx, policy.DeleteRuleCommand{
+		ID:        targetRuleID,
+		Kind:      "policy",
+		RequestID: "req-delete-target-rule",
+		ActorKind: domain.ActorKindAdmin,
+	})
+	if err != nil {
+		t.Fatalf("DeleteRule failed: %v", err)
+	}
+
+	// 4. Verify post-deletion state:
+	// Rule count for targetRuleID is 0
+	listRules, err := svc.ListRules(ctx, policy.ListRulesQuery{
+		RevisionID: rule.RevisionID,
+		Kind:       "policy",
+	})
+	if err != nil {
+		t.Fatalf("ListRules failed: %v", err)
+	}
+	for _, r := range listRules.PolicyRules {
+		if r.ID == targetRuleID {
+			t.Fatalf("expected rule %s to be deleted, but still found", targetRuleID)
+		}
+	}
+
+	// Group "其他" still exists intact!
+	grpCheck, err := svc.GetGroup(ctx, otherGroupID)
+	if err != nil || grpCheck == nil {
+		t.Fatalf("group 其他 must still exist intact after rule deletion: %v", err)
+	}
+	if grpCheck.Name != "其他" {
+		t.Errorf("group name mismatch: expected 其他, got %s", grpCheck.Name)
+	}
+
+	// 5. Re-run ValidateGraph: empty_routed_group error is gone!
+	postRes, err := svc.ValidateGraph(ctx)
+	if err != nil {
+		t.Fatalf("post-delete ValidateGraph error: %v", err)
+	}
+	if !postRes.Valid {
+		t.Fatalf("expected post-delete validation to be valid, got errors: %+v", postRes.Errors)
+	}
+	for _, iss := range postRes.Issues {
+		if iss.Code == "empty_routed_group" {
+			t.Fatalf("unexpected empty_routed_group remaining after deletion: %+v", iss)
+		}
+	}
+}

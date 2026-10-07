@@ -250,7 +250,7 @@ func TestReconcile_DualSourceMerge(t *testing.T) {
 	}
 
 	// Shared node has server 198.51.100.1 and port 8388
-	sharedLogicalID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "198.51.100.1", 8388, map[string]string{"network": "tcp"})
+	sharedLogicalID := domain.ComputeConnectionLogicalID(domain.ProtocolSS, "198.51.100.1", 8388, map[string]string{"network": "tcp"}, domain.InboundProtocolCredential{Method: "aes-128-gcm", Password: "secret-password-sub1"})
 
 	// Verify total nodes in ledger: exactly 3 unique nodes (Alpha, Beta, Gamma)
 	nodes, total, err = svc.ListNodes(ctx, domain.NodeFilter{ActiveOnly: true})
@@ -324,7 +324,7 @@ func TestReconcile_LastSourceDeletion(t *testing.T) {
 		t.Fatalf("sub2 initial refresh failed: %v", err)
 	}
 
-	sharedLogicalID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "198.51.100.1", 8388, map[string]string{"network": "tcp"})
+	sharedLogicalID := domain.ComputeConnectionLogicalID(domain.ProtocolSS, "198.51.100.1", 8388, map[string]string{"network": "tcp"}, domain.InboundProtocolCredential{Method: "aes-128-gcm", Password: "secret-password-sub1"})
 
 	// Step B: Sub1 updates and Shared Node Alpha DISAPPEARS from Sub1 (only Beta remains).
 	fetcher.setResponse(url1, &fetch.Response{
@@ -643,7 +643,7 @@ func TestReconcile_Reactivation(t *testing.T) {
 		t.Fatalf("step 1 failed: %v", err)
 	}
 
-	sharedLogicalID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "198.51.100.1", 8388, map[string]string{"network": "tcp"})
+	sharedLogicalID := domain.ComputeConnectionLogicalID(domain.ProtocolSS, "198.51.100.1", 8388, map[string]string{"network": "tcp"}, domain.InboundProtocolCredential{Method: "aes-128-gcm", Password: "secret-password-sub1"})
 	detail, err := svc.GetNodeDetail(ctx, sharedLogicalID)
 	if err != nil || !detail.Node.Active {
 		t.Fatalf("node should be active in step 1")
@@ -804,7 +804,7 @@ proxies:
     server: 198.51.100.99
     port: 8388
     cipher: aes-128-gcm
-    password: pass2
+    password: pass1
 `
 	fetcher.setResponse(url, &fetch.Response{
 		StatusCode:    200,

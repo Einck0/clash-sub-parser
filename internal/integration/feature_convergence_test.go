@@ -698,29 +698,29 @@ func TestFeatureConvergence_FullStack(t *testing.T) {
 		t.Fatalf("POST empty group rule returned %d: %s", resp.StatusCode, string(body))
 	}
 
-	// Preview should report empty_routed_group diagnostic
+	// Preview must block empty group on mihomo with 422
 	resp, body = doReq(http.MethodPost, "/api/v1/publications/preview", map[string]any{
 		"target":      "mihomo",
 		"revision_id": emptyRev.ID,
 	})
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("preview empty group returned %d: %s", resp.StatusCode, string(body))
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 for preview of empty group on mihomo, got %d: %s", resp.StatusCode, string(body))
 	}
-	if !strings.Contains(string(body), "empty_routed_group") {
-		t.Errorf("expected empty_routed_group diagnostic in preview, got: %s", string(body))
+	if !strings.Contains(string(body), "required_nonempty") && !strings.Contains(string(body), "empty_routed_group") {
+		t.Errorf("expected required_nonempty or empty_routed_group diagnostic in 422 preview body, got: %s", string(body))
 	}
 
-	// Publication creation for Mihomo MUST fail with 409 preflight conflict error
+	// Publication creation for Mihomo MUST fail with preflight / validation error
 	pubReq := map[string]any{
 		"target":      "mihomo",
 		"revision_id": emptyRev.ID,
 	}
 	resp, body = doReq(http.MethodPost, "/api/v1/publications", pubReq)
-	if resp.StatusCode != http.StatusConflict {
-		t.Fatalf("expected 409 for empty routed group publication on mihomo, got %d: %s", resp.StatusCode, string(body))
+	if resp.StatusCode != http.StatusConflict && resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 409 or 422 for empty routed group publication on mihomo, got %d: %s", resp.StatusCode, string(body))
 	}
-	if !strings.Contains(string(body), "empty_routed_group") {
-		t.Errorf("expected 409 body to reference empty_routed_group, got: %s", string(body))
+	if !strings.Contains(string(body), "empty_routed_group") && !strings.Contains(string(body), "required_nonempty") {
+		t.Errorf("expected empty_routed_group or required_nonempty in rejection body, got: %s", string(body))
 	}
 
 	// Publication creation for node-only target (singbox) ignores empty_routed_group and succeeds

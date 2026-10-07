@@ -179,9 +179,10 @@ func TestServeCLI(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GET /api/v1/revisions/active failed: %v", err)
 		}
-		defer revResp.Body.Close()
-		if revResp.StatusCode != http.StatusOK {
-			t.Fatalf("expected 200 OK on /api/v1/revisions/active after fresh startup, got %d", revResp.StatusCode)
+		status := revResp.StatusCode
+		_ = revResp.Body.Close()
+		if status != http.StatusOK {
+			t.Fatalf("expected 200 OK on /api/v1/revisions/active after fresh startup, got %d", status)
 		}
 
 		// Verify legacy endpoints return 410 Gone

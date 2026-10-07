@@ -129,3 +129,105 @@ func TestNodeLogicalIDComputation(t *testing.T) {
 		t.Fatalf("logical ID must never contain secret plaintext: %s", id1)
 	}
 }
+
+func TestComputeConnectionLogicalID(t *testing.T) {
+	baseTransport := map[string]string{
+		"network": "ws",
+		"sni":     "example.com",
+		"path":    "/ws",
+		"tls":     "true",
+	}
+	baseCreds := domain.InboundProtocolCredential{
+		Username: "synthetic-user-1",
+		Password: "synthetic-password-A",
+		UUID:     "11111111-1111-1111-1111-111111111111",
+	}
+
+	baseID := domain.ComputeConnectionLogicalID(domain.ProtocolHTTP, "proxy.example.com", 8080, baseTransport, baseCreds)
+	if !domain.IsValidLogicalID(baseID) {
+		t.Fatalf("invalid baseID: %s", baseID)
+	}
+
+	// 1. Map ordering parity: different map key insertion order must yield the EXACT SAME ID
+	shuffledTransport := map[string]string{
+		"tls":     "true",
+		"path":    "/ws",
+		"sni":     "example.com",
+		"network": "ws",
+	}
+	shuffledID := domain.ComputeConnectionLogicalID(domain.ProtocolHTTP, "PROXY.EXAMPLE.COM", 8080, shuffledTransport, baseCreds)
+	if baseID != shuffledID {
+		t.Fatalf("map order or host casing must produce identical logical ID: %s != %s", baseID, shuffledID)
+	}
+
+	// 2. Different username -> distinct ID
+	userDiffCreds := baseCreds
+	userDiffCreds.Username = "synthetic-user-2"
+	idUserDiff := domain.ComputeConnectionLogicalID(domain.ProtocolHTTP, "proxy.example.com", 8080, baseTransport, userDiffCreds)
+	if baseID == idUserDiff {
+		t.Fatalf("different username must yield distinct logical ID: %s", baseID)
+	}
+
+	// 3. Different password -> distinct ID
+	passDiffCreds := baseCreds
+	passDiffCreds.Password = "synthetic-password-B"
+	idPassDiff := domain.ComputeConnectionLogicalID(domain.ProtocolHTTP, "proxy.example.com", 8080, baseTransport, passDiffCreds)
+	if baseID == idPassDiff {
+		t.Fatalf("different password must yield distinct logical ID: %s", baseID)
+	}
+
+	// 4. Different UUID -> distinct ID
+	uuidDiffCreds := baseCreds
+	uuidDiffCreds.UUID = "22222222-2222-2222-2222-222222222222"
+	idUUIDDiff := domain.ComputeConnectionLogicalID(domain.ProtocolVLESS, "proxy.example.com", 8080, baseTransport, uuidDiffCreds)
+	baseVLESS := domain.ComputeConnectionLogicalID(domain.ProtocolVLESS, "proxy.example.com", 8080, baseTransport, baseCreds)
+	if baseVLESS == idUUIDDiff {
+		t.Fatalf("different UUID must yield distinct logical ID: %s", baseVLESS)
+	}
+
+	// 5. Different WireGuard key -> distinct ID
+	wgCreds1 := domain.InboundProtocolCredential{
+		PrivateKey:   "priv-key-1",
+		PublicKey:    "pub-key-1",
+		LocalAddress: []string{"10.0.0.2/32"},
+	}
+	wgCreds2 := domain.InboundProtocolCredential{
+		PrivateKey:   "priv-key-2",
+		PublicKey:    "pub-key-1",
+		LocalAddress: []string{"10.0.0.2/32"},
+	}
+	idWG1 := domain.ComputeConnectionLogicalID(domain.ProtocolWireGuard, "wg.example.com", 51820, nil, wgCreds1)
+	idWG2 := domain.ComputeConnectionLogicalID(domain.ProtocolWireGuard, "wg.example.com", 51820, nil, wgCreds2)
+	if idWG1 == idWG2 {
+		t.Fatalf("different WireGuard private key must yield distinct logical ID: %s", idWG1)
+	}
+
+	// 6. Different TLS / transport param / header -> distinct ID
+	tlsDiffTransport := map[string]string{
+		"network": "ws",
+		"sni":     "example.com",
+		"path":    "/ws",
+		"tls":     "false",
+	}
+	idTLSDiff := domain.ComputeConnectionLogicalID(domain.ProtocolHTTP, "proxy.example.com", 8080, tlsDiffTransport, baseCreds)
+	if baseID == idTLSDiff {
+		t.Fatalf("different TLS flag must yield distinct logical ID: %s", baseID)
+	}
+
+	headerDiffTransport := map[string]string{
+		"network": "ws",
+		"sni":     "example.com",
+		"path":    "/ws",
+		"tls":     "true",
+		"headers": `{"X-Custom":"header-value"}`,
+	}
+	idHeaderDiff := domain.ComputeConnectionLogicalID(domain.ProtocolHTTP, "proxy.example.com", 8080, headerDiffTransport, baseCreds)
+	if baseID == idHeaderDiff {
+		t.Fatalf("different headers must yield distinct logical ID: %s", baseID)
+	}
+
+	// 7. Verify no auth_digest or plain secrets leak into ID
+	if strings.Contains(baseID, "auth_digest") || strings.Contains(baseID, "synthetic") {
+		t.Fatalf("logical ID must not contain auth_digest or secret substrings: %s", baseID)
+	}
+}

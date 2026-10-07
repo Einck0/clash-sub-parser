@@ -29,7 +29,7 @@ export const COMPILER_TARGETS: TargetMetadata[] = [
     ext: 'yaml',
     mimeType: 'application/x-yaml',
     desc: '导出完整 Mihomo 配置（含节点、策略组与分流规则）',
-    protocols: ['ss', 'vmess', 'vless', 'trojan', 'hysteria2', 'wireguard', 'tuic'],
+    protocols: ['ss', 'vmess', 'vless', 'trojan', 'hysteria2', 'wireguard', 'tuic', 'http', 'socks5', 'anytls'],
     groupTypes: ['select', 'urltest', 'fallback', 'loadbalance'],
     ruleKinds: [
       'DOMAIN',

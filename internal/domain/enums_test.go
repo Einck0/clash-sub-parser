@@ -15,6 +15,9 @@ func TestProtocolEnums(t *testing.T) {
 		domain.ProtocolHysteria2,
 		domain.ProtocolWireGuard,
 		domain.ProtocolTUIC,
+		domain.ProtocolHTTP,
+		domain.ProtocolSocks5,
+		domain.ProtocolAnyTLS,
 	}
 
 	for _, p := range validProtocols {
@@ -30,7 +33,13 @@ func TestProtocolEnums(t *testing.T) {
 		}
 	}
 
-	invalidProtocols := []string{"", "http", "socks5", "shadowsocksr", "openvpn"}
+	// Test "socks" alias
+	parsedSocks, err := domain.ParseProtocol("socks")
+	if err != nil || parsedSocks != domain.ProtocolSocks5 {
+		t.Errorf("expected ParseProtocol(\"socks\") to return ProtocolSocks5, got %v (err: %v)", parsedSocks, err)
+	}
+
+	invalidProtocols := []string{"", "shadowsocksr", "openvpn", "wireguard2"}
 	for _, ip := range invalidProtocols {
 		if domain.Protocol(ip).IsValid() {
 			t.Errorf("expected invalid protocol %s to return false from IsValid", ip)

@@ -310,4 +310,93 @@ describe('PolicyView Topology & Drawer Linkage', () => {
     expect(cards[0].textContent).toContain('probe_latency_ms lte "150"')
     expect(cards[0].textContent).toContain('从全局节点池中动态筛选匹配的候选节点')
   })
+
+  it('renders routing rules tab with inline error diagnostics and responsive mobile layout', async () => {
+    vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
+      if (path === '/api/v1/policies/groups') {
+        return {
+          items: [{ id: 'grp-other', name: '其他', group_type: 'select', edges: [] }],
+          total: 1,
+        }
+      }
+      if (path === '/api/v1/policies/rules') {
+        return {
+          admission_rules: [],
+          policy_rules: [
+            {
+              id: '01a0b9af-c118-72f9-9949-d94b49fa6ec2',
+              revision_id: 'rev-1',
+              target_group_id: 'grp-other',
+              expression: 'PROCESS-NAME,tr.com.kliq.app',
+              position: 0,
+            },
+          ],
+          total: 1,
+        }
+      }
+      return { items: [], total: 0 }
+    })
+
+    vi.spyOn(api, 'post').mockImplementation(async (path: string) => {
+      if (path === '/api/v1/policies/validate') {
+        return {
+          valid: false,
+          revision_id: 'rev-1',
+          errors: ['routed group 其他 has 0 available nodes'],
+          issues: [
+            {
+              code: 'empty_routed_group',
+              severity: 'error',
+              rule_id: '01a0b9af-c118-72f9-9949-d94b49fa6ec2',
+              position: 0,
+              type: 'PROCESS-NAME',
+              value: 'tr.com.kliq.app',
+              target_group_id: 'grp-other',
+              target_group_name: '其他',
+              message: 'routed group "其他" referenced by rule "PROCESS-NAME,tr.com.kliq.app" has 0 available nodes',
+            },
+          ],
+        }
+      }
+      return {}
+    })
+
+    await mountPolicyView()
+
+    // Switch to rules tab
+    const rulesTabBtn = container.querySelector('[data-testid="rules-tab-btn"]') as HTMLElement | null
+    expect(rulesTabBtn).not.toBeNull()
+    rulesTabBtn?.click()
+    await nextTick()
+    await new Promise((r) => setTimeout(r, 20))
+
+    // Verify rule card exists with testid
+    const ruleCard = container.querySelector('[data-testid="policy-rule-card-0"]') as HTMLElement | null
+    expect(ruleCard).not.toBeNull()
+    expect(ruleCard?.textContent).toContain('PROCESS-NAME')
+    expect(ruleCard?.textContent).toContain('tr.com.kliq.app')
+    expect(ruleCard?.textContent).toContain('其他')
+
+    // Verify inline error banner with error code and accessibility alert role
+    const inlineIssue = ruleCard?.querySelector('[role="alert"]')
+    expect(inlineIssue).not.toBeNull()
+    expect(inlineIssue?.textContent).toContain('empty_routed_group')
+    expect(inlineIssue?.textContent).toContain('routed group "其他"')
+
+    // Verify delete button is present on the rule card
+    const deleteBtn = ruleCard?.querySelector('[data-testid="delete-rule-btn-01a0b9af-c118-72f9-9949-d94b49fa6ec2"]')
+    expect(deleteBtn).not.toBeNull()
+  })
+
+  it('renders validation incomplete alert banner and allows user retry', async () => {
+    vi.spyOn(api, 'post').mockRejectedValueOnce(new Error('校验超时'))
+
+    await mountPolicyView()
+
+    // Validation incomplete alert should be visible
+    const incompleteBanner = container.querySelector('[role="alert"]')
+    expect(incompleteBanner).not.toBeNull()
+    expect(incompleteBanner?.textContent).toContain('校验未完成')
+    expect(incompleteBanner?.textContent).toContain('重试校验')
+  })
 })

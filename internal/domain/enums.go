@@ -16,7 +16,13 @@ const (
 	ProtocolHysteria2 Protocol = "hysteria2"
 	ProtocolWireGuard Protocol = "wireguard"
 	ProtocolTUIC      Protocol = "tuic"
+	ProtocolHTTP      Protocol = "http"
+	ProtocolSocks5    Protocol = "socks5"
+	ProtocolAnyTLS    Protocol = "anytls"
 )
+
+// ProtocolSOCKS5 is an alias for ProtocolSocks5.
+const ProtocolSOCKS5 = ProtocolSocks5
 
 var validProtocols = map[Protocol]bool{
 	ProtocolSS:        true,
@@ -26,6 +32,9 @@ var validProtocols = map[Protocol]bool{
 	ProtocolHysteria2: true,
 	ProtocolWireGuard: true,
 	ProtocolTUIC:      true,
+	ProtocolHTTP:      true,
+	ProtocolSocks5:    true,
+	ProtocolAnyTLS:    true,
 }
 
 func (p Protocol) IsValid() bool {
@@ -33,7 +42,11 @@ func (p Protocol) IsValid() bool {
 }
 
 func ParseProtocol(s string) (Protocol, error) {
-	p := Protocol(strings.ToLower(strings.TrimSpace(s)))
+	norm := strings.ToLower(strings.TrimSpace(s))
+	if norm == "socks" {
+		norm = "socks5"
+	}
+	p := Protocol(norm)
 	if !p.IsValid() {
 		return "", NewValidationError("invalid_protocol", fmt.Sprintf("unsupported protocol: %s", s))
 	}

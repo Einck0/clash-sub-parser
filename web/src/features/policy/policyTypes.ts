@@ -58,9 +58,23 @@ export interface PolicyRule {
   position: number
 }
 
+export interface ValidationIssue {
+  code: string
+  severity: 'error' | 'warning'
+  rule_id?: string
+  position?: number
+  type?: string
+  value?: string
+  target_group_id?: string
+  target_group_name?: string
+  message: string
+}
+
 export interface ValidationResult {
   valid: boolean
   errors?: string[]
+  revision_id?: string
+  issues?: ValidationIssue[]
 }
 
 export interface GroupTypeCapabilityInfo {

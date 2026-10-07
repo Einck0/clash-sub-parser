@@ -31,6 +31,9 @@ func mihomoCapability() Capability {
 			domain.ProtocolHysteria2,
 			domain.ProtocolWireGuard,
 			domain.ProtocolTUIC,
+			domain.ProtocolHTTP,
+			domain.ProtocolSocks5,
+			domain.ProtocolAnyTLS,
 		),
 		GroupTypes: groupSet(
 			domain.GroupTypeSelect,
@@ -133,6 +136,10 @@ var allowedMihomoTransportKeys = map[domain.Protocol]map[string]bool{
 		"headers":            true,
 		"xhttp-opts":         true,
 		"xhttp_opts":         true,
+		"ech-opts":           true,
+		"ech_opts":           true,
+		"udp":                true,
+		"encryption":         true,
 		"extra":              true,
 	},
 	domain.ProtocolTrojan: {
@@ -210,6 +217,63 @@ var allowedMihomoTransportKeys = map[domain.Protocol]map[string]bool{
 		"server_ports":          true,
 		"hy2_ports":             true,
 		"mport":                 true,
+	},
+	domain.ProtocolHTTP: {
+		"network":          true,
+		"tls":              true,
+		"sni":              true,
+		"servername":       true,
+		"serverName":       true,
+		"peer":             true,
+		"skip_cert_verify": true,
+		"skip-cert-verify": true,
+		"skipcert":         true,
+		"insecure":         true,
+		"allowInsecure":    true,
+		"headers":          true,
+	},
+	domain.ProtocolSocks5: {
+		"network":          true,
+		"tls":              true,
+		"sni":              true,
+		"servername":       true,
+		"serverName":       true,
+		"peer":             true,
+		"skip_cert_verify": true,
+		"skip-cert-verify": true,
+		"skipcert":         true,
+		"insecure":         true,
+		"allowInsecure":    true,
+		"udp":              true,
+	},
+	domain.ProtocolAnyTLS: {
+		"network":                     true,
+		"tls":                         true,
+		"sni":                         true,
+		"servername":                  true,
+		"serverName":                  true,
+		"peer":                        true,
+		"skip_cert_verify":            true,
+		"skip-cert-verify":            true,
+		"skipcert":                    true,
+		"insecure":                    true,
+		"allowInsecure":               true,
+		"alpn":                        true,
+		"fp":                          true,
+		"fingerprint":                 true,
+		"client-fingerprint":          true,
+		"client_fingerprint":          true,
+		"udp":                         true,
+		"ech-opts":                    true,
+		"ech_opts":                    true,
+		"idle-session-check-interval": true,
+		"idle_session_check_interval": true,
+		"idle-session-timeout":        true,
+		"idle_session_timeout":        true,
+		"min-idle-session":            true,
+		"min_idle_session":            true,
+		"disable-reuse":               true,
+		"disable_reuse":               true,
 	},
 }
 
@@ -295,6 +359,10 @@ func validateMihomoCredentials(snapshot *resolver.ResolvedPolicySnapshot) error 
 			if mode != "" && mode != "native" && mode != "quic" {
 				return mihomoError(loc, "tuic", fmt.Sprintf("unsupported udp relay mode %q in tuic credentials", mode))
 			}
+		case domain.ProtocolAnyTLS:
+			if strings.TrimSpace(c.Password) == "" {
+				return mihomoError(loc, "anytls", "missing required password in anytls credentials")
+			}
 		}
 	}
 	return nil
@@ -343,6 +411,16 @@ func splitMihomoWireGuardAddresses(loc string, addrs []string) (string, string, 
 		return "", "", mihomoError(loc, "wireguard", "missing required local_address in wireguard credentials")
 	}
 	return ipv4, ipv6, nil
+}
+
+func unmarshalJSONMap(s string) (map[string]any, error) {
+	d := json.NewDecoder(strings.NewReader(s))
+	d.UseNumber()
+	var out map[string]any
+	if err := d.Decode(&out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func transportValue(c domain.InboundProtocolCredential, keys ...string) string {
@@ -506,9 +584,54 @@ type mihomoVLESSProxy struct {
 	Flow              string             `yaml:"flow,omitempty"`
 	ClientFingerprint string             `yaml:"client-fingerprint,omitempty"`
 	RealityOpts       *mihomoRealityOpts `yaml:"reality-opts,omitempty"`
+	ECHOpts           map[string]any     `yaml:"ech-opts,omitempty"`
 	WSOpts            *mihomoWSOpts      `yaml:"ws-opts,omitempty"`
 	GRPCOpts          *mihomoGRPCOpts    `yaml:"grpc-opts,omitempty"`
-	XHTTPOpts         *mihomoXHTTPOpts   `yaml:"xhttp-opts,omitempty"`
+	XHTTPOpts         any                `yaml:"xhttp-opts,omitempty"`
+}
+
+type mihomoHTTPProxy struct {
+	Name           string            `yaml:"name"`
+	Type           string            `yaml:"type"`
+	Server         string            `yaml:"server"`
+	Port           int               `yaml:"port"`
+	Username       string            `yaml:"username,omitempty"`
+	Password       string            `yaml:"password,omitempty"`
+	TLS            bool              `yaml:"tls,omitempty"`
+	SNI            string            `yaml:"sni,omitempty"`
+	SkipCertVerify bool              `yaml:"skip-cert-verify,omitempty"`
+	Headers        map[string]string `yaml:"headers,omitempty"`
+}
+
+type mihomoSocks5Proxy struct {
+	Name           string `yaml:"name"`
+	Type           string `yaml:"type"`
+	Server         string `yaml:"server"`
+	Port           int    `yaml:"port"`
+	Username       string `yaml:"username,omitempty"`
+	Password       string `yaml:"password,omitempty"`
+	TLS            bool   `yaml:"tls,omitempty"`
+	SNI            string `yaml:"sni,omitempty"`
+	SkipCertVerify bool   `yaml:"skip-cert-verify,omitempty"`
+	UDP            bool   `yaml:"udp,omitempty"`
+}
+
+type mihomoAnyTLSProxy struct {
+	Name                     string         `yaml:"name"`
+	Type                     string         `yaml:"type"`
+	Server                   string         `yaml:"server"`
+	Port                     int            `yaml:"port"`
+	Password                 string         `yaml:"password"`
+	SNI                      string         `yaml:"sni,omitempty"`
+	ALPN                     []string       `yaml:"alpn,omitempty"`
+	ClientFingerprint        string         `yaml:"client-fingerprint,omitempty"`
+	SkipCertVerify           bool           `yaml:"skip-cert-verify,omitempty"`
+	UDP                      bool           `yaml:"udp,omitempty"`
+	ECHOpts                  map[string]any `yaml:"ech-opts,omitempty"`
+	IdleSessionCheckInterval int            `yaml:"idle-session-check-interval,omitempty"`
+	IdleSessionTimeout       int            `yaml:"idle-session-timeout,omitempty"`
+	MinIdleSession           int            `yaml:"min-idle-session,omitempty"`
+	DisableReuse             bool           `yaml:"disable-reuse,omitempty"`
 }
 
 type mihomoTrojanProxy struct {
@@ -660,6 +783,11 @@ func renderMihomo(snapshot *resolver.ResolvedPolicySnapshot) ([]byte, error) {
 				ClientFingerprint: transportValue(c, "fp", "fingerprint", "client-fingerprint", "client_fingerprint"),
 				RealityOpts:       realityOpts,
 			}
+			if echJSON := transportValue(c, "ech-opts", "ech_opts"); echJSON != "" {
+				if echOpts, err := unmarshalJSONMap(echJSON); err == nil && len(echOpts) > 0 {
+					p.ECHOpts = echOpts
+				}
+			}
 			if p.Network == "ws" {
 				ws := &mihomoWSOpts{}
 				if path := transportValue(c, "path"); path != "" {
@@ -674,23 +802,30 @@ func renderMihomo(snapshot *resolver.ResolvedPolicySnapshot) ([]byte, error) {
 					p.GRPCOpts = &mihomoGRPCOpts{GRPCServiceName: svc}
 				}
 			} else if p.Network == "xhttp" {
-				xhttp := &mihomoXHTTPOpts{}
-				if path := transportValue(c, "path"); path != "" {
-					xhttp.Path = path
-				}
-				if host := transportValue(c, "host"); host != "" {
-					xhttp.Host = host
-				}
-				if mode := transportValue(c, "mode"); mode != "" {
-					xhttp.Mode = mode
-				}
-				if hJSON := transportValue(c, "headers"); hJSON != "" {
-					var headers map[string]string
-					if err := json.Unmarshal([]byte(hJSON), &headers); err == nil && len(headers) > 0 {
-						xhttp.Headers = headers
+				if xhttpJSON := transportValue(c, "xhttp-opts", "xhttp_opts"); xhttpJSON != "" {
+					if xhttpMap, err := unmarshalJSONMap(xhttpJSON); err == nil && len(xhttpMap) > 0 {
+						p.XHTTPOpts = xhttpMap
 					}
 				}
-				p.XHTTPOpts = xhttp
+				if p.XHTTPOpts == nil {
+					xhttp := &mihomoXHTTPOpts{}
+					if path := transportValue(c, "path"); path != "" {
+						xhttp.Path = path
+					}
+					if host := transportValue(c, "host"); host != "" {
+						xhttp.Host = host
+					}
+					if mode := transportValue(c, "mode"); mode != "" {
+						xhttp.Mode = mode
+					}
+					if hJSON := transportValue(c, "headers"); hJSON != "" {
+						var headers map[string]string
+						if err := json.Unmarshal([]byte(hJSON), &headers); err == nil && len(headers) > 0 {
+							xhttp.Headers = headers
+						}
+					}
+					p.XHTTPOpts = xhttp
+				}
 			}
 			proxies = append(proxies, p)
 		case domain.ProtocolTrojan:
@@ -772,14 +907,95 @@ func renderMihomo(snapshot *resolver.ResolvedPolicySnapshot) ([]byte, error) {
 				SkipCertVerify:       domain.HasInsecureTransport(c.Transport),
 			}
 			proxies = append(proxies, p)
+		case domain.ProtocolHTTP:
+			var headers map[string]string
+			if hJSON := transportValue(c, "headers"); hJSON != "" {
+				_ = json.Unmarshal([]byte(hJSON), &headers)
+			}
+			p := mihomoHTTPProxy{
+				Name:           node.DisplayName,
+				Type:           "http",
+				Server:         node.Server,
+				Port:           node.Port,
+				Username:       c.Username,
+				Password:       c.Password,
+				TLS:            domain.IsTruthy(transportValue(c, "tls")),
+				SNI:            transportValue(c, "sni", "servername", "serverName", "peer"),
+				SkipCertVerify: domain.HasInsecureTransport(c.Transport),
+				Headers:        headers,
+			}
+			proxies = append(proxies, p)
+		case domain.ProtocolSocks5:
+			p := mihomoSocks5Proxy{
+				Name:           node.DisplayName,
+				Type:           "socks5",
+				Server:         node.Server,
+				Port:           node.Port,
+				Username:       c.Username,
+				Password:       c.Password,
+				TLS:            domain.IsTruthy(transportValue(c, "tls")),
+				SNI:            transportValue(c, "sni", "servername", "serverName", "peer"),
+				SkipCertVerify: domain.HasInsecureTransport(c.Transport),
+				UDP:            domain.IsTruthy(transportValue(c, "udp")),
+			}
+			proxies = append(proxies, p)
+		case domain.ProtocolAnyTLS:
+			var echOpts map[string]any
+			if echJSON := transportValue(c, "ech-opts", "ech_opts"); echJSON != "" {
+				if parsed, err := unmarshalJSONMap(echJSON); err == nil && len(parsed) > 0 {
+					echOpts = parsed
+				}
+			}
+			idleCheck, _ := strconv.Atoi(transportValue(c, "idle-session-check-interval", "idle_session_check_interval"))
+			idleTimeout, _ := strconv.Atoi(transportValue(c, "idle-session-timeout", "idle_session_timeout"))
+			minIdle, _ := strconv.Atoi(transportValue(c, "min-idle-session", "min_idle_session"))
+
+			p := mihomoAnyTLSProxy{
+				Name:                     node.DisplayName,
+				Type:                     "anytls",
+				Server:                   node.Server,
+				Port:                     node.Port,
+				Password:                 c.Password,
+				SNI:                      transportValue(c, "sni", "servername", "serverName", "peer"),
+				ALPN:                     extractMihomoALPN(c),
+				ClientFingerprint:        transportValue(c, "fp", "fingerprint", "client-fingerprint", "client_fingerprint"),
+				SkipCertVerify:           domain.HasInsecureTransport(c.Transport),
+				UDP:                      domain.IsTruthy(transportValue(c, "udp")),
+				ECHOpts:                  echOpts,
+				IdleSessionCheckInterval: idleCheck,
+				IdleSessionTimeout:       idleTimeout,
+				MinIdleSession:           minIdle,
+				DisableReuse:             domain.IsTruthy(transportValue(c, "disable-reuse", "disable_reuse")),
+			}
+			proxies = append(proxies, p)
 		}
 	}
 
 	groups := make([]mihomoGroup, 0, len(snapshot.Groups))
+	groupNameSet := make(map[string]bool, len(snapshot.Groups)*2)
+	for _, g := range snapshot.Groups {
+		if g.Name != "" {
+			groupNameSet[g.Name] = true
+		}
+		if g.ID != "" {
+			groupNameSet[g.ID] = true
+		}
+	}
+
 	for i, group := range snapshot.Groups {
 		loc := fmt.Sprintf("groups[%d]", i)
+		if len(group.Members) == 0 {
+			return nil, mihomoError(loc, group.Name, fmt.Sprintf("proxy group %q has no proxies (required_nonempty)", group.Name))
+		}
 		members := make([]string, 0, len(group.Members))
 		for _, member := range group.Members {
+			if member.Kind == resolver.MemberKindGroup {
+				tID := strings.TrimSpace(member.TargetID)
+				tName := strings.TrimSpace(member.DisplayName)
+				if (tID != "" && !groupNameSet[tID]) && (tName != "" && !groupNameSet[tName]) {
+					return nil, mihomoError(loc, group.Name, fmt.Sprintf("group %q references non-existent child group %q", group.Name, tName))
+				}
+			}
 			members = append(members, member.DisplayName)
 		}
 		mg, err := buildMihomoGroup(loc, group, members)
@@ -787,6 +1003,18 @@ func renderMihomo(snapshot *resolver.ResolvedPolicySnapshot) ([]byte, error) {
 			return nil, err
 		}
 		groups = append(groups, mg)
+	}
+
+	// Validate rule targets against rendered groups
+	for i, rule := range snapshot.Rules {
+		loc := fmt.Sprintf("rules[%d]", i)
+		tName := strings.TrimSpace(rule.TargetGroupName)
+		tID := strings.TrimSpace(rule.TargetGroupID)
+		if tName != "" && tName != "DIRECT" && tName != "REJECT" && tName != "REJECT-DROP" && tName != "PASS" {
+			if !groupNameSet[tName] && !groupNameSet[tID] {
+				return nil, mihomoError(loc, tName, fmt.Sprintf("rule %q targets non-existent group %q", rule.Expression, tName))
+			}
+		}
 	}
 
 	rules, ruleProviders, err := renderMihomoRules(snapshot.Rules)

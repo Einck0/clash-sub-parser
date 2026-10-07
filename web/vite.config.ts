@@ -51,5 +51,10 @@ export default defineConfig({
   test: {
     include: ['src/**/*.test.ts', 'e2e/**/*.test.ts'],
     exclude: ['**/*.spec.ts', 'node_modules', 'dist'],
+    poolOptions: {
+      forks: {
+        execArgv: ['--no-experimental-webstorage'],
+      },
+    },
   },
 })

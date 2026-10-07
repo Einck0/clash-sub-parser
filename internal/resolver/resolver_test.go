@@ -998,11 +998,12 @@ func TestResolver_EmptyRoutedGroup_FailClosedDiagnostic(t *testing.T) {
 	}
 }
 
-func TestResolver_OldConfigEmptyGroup_PreservesWarning(t *testing.T) {
+func TestResolver_DirectlyRoutedEmptyGroup_EmitsErrorRegardlessOfFilter(t *testing.T) {
 	r := resolver.New()
 	ctx := context.Background()
 
 	parentID := domain.MustNewUUIDv7()
+	unroutedID := domain.MustNewUUIDv7()
 
 	input := resolver.ResolveInput{
 		RevisionID:         "rev-old-1",
@@ -1010,7 +1011,8 @@ func TestResolver_OldConfigEmptyGroup_PreservesWarning(t *testing.T) {
 		CompilerVersion:    "1.0.0",
 		Nodes:              []domain.Node{},
 		Groups: []domain.NodeGroup{
-			{ID: parentID, Name: "EmptyOldGroup", GroupType: domain.GroupTypeSelect},
+			{ID: parentID, Name: "EmptyRoutedGroup", GroupType: domain.GroupTypeSelect},
+			{ID: unroutedID, Name: "EmptyUnroutedGroup", GroupType: domain.GroupTypeSelect},
 		},
 		Edges: map[string][]domain.GroupEdge{},
 		PolicyRules: []domain.PolicyRule{
@@ -1025,17 +1027,21 @@ func TestResolver_OldConfigEmptyGroup_PreservesWarning(t *testing.T) {
 		t.Fatalf("resolve failed: %v", err)
 	}
 
+	foundError := false
 	foundWarning := false
 	for _, d := range snap.Diagnostics {
-		if d.Code == "empty_routed_group" {
-			t.Fatalf("old config with no filters should not emit empty_routed_group error")
+		if d.Code == "empty_routed_group" && d.Severity == resolver.DiagnosticSeverityError && d.Target == parentID {
+			foundError = true
 		}
-		if d.Code == "empty_group" && d.Severity == resolver.DiagnosticSeverityWarning {
+		if d.Code == "empty_group" && d.Severity == resolver.DiagnosticSeverityWarning && d.Target == unroutedID {
 			foundWarning = true
 		}
 	}
+	if !foundError {
+		t.Fatalf("expected empty_routed_group error diagnostic for directly routed empty group regardless of filter, got %+v", snap.Diagnostics)
+	}
 	if !foundWarning {
-		t.Fatalf("expected empty_group warning diagnostic for old config, got %+v", snap.Diagnostics)
+		t.Fatalf("expected empty_group warning diagnostic for unrouted empty group, got %+v", snap.Diagnostics)
 	}
 }
 

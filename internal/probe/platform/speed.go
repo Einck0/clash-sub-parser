@@ -2,9 +2,13 @@ package platform
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -12,8 +16,8 @@ import (
 )
 
 const (
-	DefaultSpeedTestURL = "http://speed.cloudflare.com/__down?bytes=10485760"
-	DefaultDownloadMB   = 5
+	DefaultSpeedTestURL = "http://speed.cloudflare.com/__down?bytes=1048576"
+	DefaultDownloadMB   = 1
 	DefaultSpeedTimeout = 10 * time.Second
 )
 
@@ -25,15 +29,18 @@ type NetworkLimitedReader struct {
 	BytesCounter *uint64
 	StartBytes   uint64
 	Limit        uint64
+	readBytes    uint64
 }
 
 func (r *NetworkLimitedReader) Read(p []byte) (n int, err error) {
 	if r.Limit > 0 {
-		var currentBytes uint64
+		var networkRead uint64
 		if r.BytesCounter != nil {
-			currentBytes = atomic.LoadUint64(r.BytesCounter)
+			currentBytes := atomic.LoadUint64(r.BytesCounter)
+			networkRead = currentBytes - r.StartBytes
+		} else {
+			networkRead = r.readBytes
 		}
-		networkRead := currentBytes - r.StartBytes
 
 		if networkRead >= r.Limit {
 			return 0, io.EOF
@@ -43,7 +50,11 @@ func (r *NetworkLimitedReader) Read(p []byte) (n int, err error) {
 			p = p[:remaining]
 		}
 	}
-	return r.Reader.Read(p)
+	n, err = r.Reader.Read(p)
+	if n > 0 && r.BytesCounter == nil {
+		r.readBytes += uint64(n)
+	}
+	return n, err
 }
 
 // CheckSpeed measures throughput over an HTTP connection with bounded byte budget and monotonic deadline.
@@ -51,14 +62,22 @@ func CheckSpeed(ctx context.Context, httpClient *http.Client, bytesCounter *uint
 	now := time.Now().UTC()
 	start := time.Now()
 
-	if speedTestURL == "" {
-		speedTestURL = DefaultSpeedTestURL
-	}
 	if limitBytes == 0 {
 		limitBytes = uint64(DefaultDownloadMB) * 1024 * 1024
 	}
 	if timeout <= 0 {
 		timeout = DefaultSpeedTimeout
+	}
+
+	if speedTestURL == "" {
+		speedTestURL = fmt.Sprintf("http://speed.cloudflare.com/__down?bytes=%d", limitBytes)
+	} else if strings.Contains(speedTestURL, "__down") {
+		if parsedURL, parseErr := url.Parse(speedTestURL); parseErr == nil {
+			q := parsedURL.Query()
+			q.Set("bytes", fmt.Sprintf("%d", limitBytes))
+			parsedURL.RawQuery = q.Encode()
+			speedTestURL = parsedURL.String()
+		}
 	}
 
 	speedCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -75,6 +94,8 @@ func CheckSpeed(ctx context.Context, httpClient *http.Client, bytesCounter *uint
 		}, err
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
+	req.Header.Set("Accept", "*/*")
+	req.Close = true
 
 	var startBytes uint64
 	if bytesCounter != nil {
@@ -85,6 +106,15 @@ func CheckSpeed(ctx context.Context, httpClient *http.Client, bytesCounter *uint
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		lat := time.Since(start).Milliseconds()
+		if errors.Is(err, context.DeadlineExceeded) || (speedCtx.Err() == context.DeadlineExceeded) {
+			return domain.PlatformCapability{
+				Verdict:    domain.VerdictUnknown,
+				LatencyMS:  &lat,
+				ObservedAt: &now,
+				Summary:    "speed request timed out waiting for response headers",
+				Reason:     "speed_request_timeout",
+			}, nil
+		}
 		return domain.PlatformCapability{
 			Verdict:    domain.VerdictError,
 			LatencyMS:  &lat,
@@ -94,6 +124,26 @@ func CheckSpeed(ctx context.Context, httpClient *http.Client, bytesCounter *uint
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusTooManyRequests {
+		lat := time.Since(start).Milliseconds()
+		return domain.PlatformCapability{
+			Verdict:    domain.VerdictUnknown,
+			LatencyMS:  &lat,
+			ObservedAt: &now,
+			Summary:    "HTTP 429 target_rate_limited",
+			Reason:     "target_rate_limited",
+		}, nil
+	}
+	if resp.StatusCode == http.StatusForbidden {
+		lat := time.Since(start).Milliseconds()
+		return domain.PlatformCapability{
+			Verdict:    domain.VerdictUnknown,
+			LatencyMS:  &lat,
+			ObservedAt: &now,
+			Summary:    "HTTP 403 target_forbidden",
+			Reason:     "target_forbidden",
+		}, nil
+	}
 	if resp.StatusCode != http.StatusOK {
 		lat := time.Since(start).Milliseconds()
 		return domain.PlatformCapability{
@@ -115,6 +165,7 @@ func CheckSpeed(ctx context.Context, httpClient *http.Client, bytesCounter *uint
 	// Read and discard up to limit
 	discardBuf := make([]byte, 32*1024)
 	var appBytesRead int64
+	var timedOut bool
 	for {
 		n, rErr := limitedReader.Read(discardBuf)
 		if n > 0 {
@@ -128,6 +179,25 @@ func CheckSpeed(ctx context.Context, httpClient *http.Client, bytesCounter *uint
 			if rErr == io.EOF {
 				break
 			}
+			// Check if this error is due to timeout / context deadline exceeded
+			if errors.Is(rErr, context.DeadlineExceeded) ||
+				errors.Is(speedCtx.Err(), context.DeadlineExceeded) ||
+				(ctx != nil && errors.Is(ctx.Err(), context.DeadlineExceeded)) {
+				timedOut = true
+				break
+			}
+			var netErr net.Error
+			if errors.As(rErr, &netErr) && netErr.Timeout() {
+				timedOut = true
+				break
+			}
+
+			// If bytes were read before read error, consider as partial measurement
+			if appBytesRead > 0 {
+				timedOut = true
+				break
+			}
+
 			// Other read errors
 			lat := time.Since(start).Milliseconds()
 			return domain.PlatformCapability{
@@ -154,12 +224,18 @@ func CheckSpeed(ctx context.Context, httpClient *http.Client, bytesCounter *uint
 
 	if actualBytes < 1024 {
 		lat := time.Since(start).Milliseconds()
+		reason := "contract_drift"
+		summary := fmt.Sprintf("read %d bytes below minimum 1024", actualBytes)
+		if timedOut {
+			reason = "speed_budget_limited"
+			summary = fmt.Sprintf("read %d bytes below minimum 1024 in %d ms (time limit reached)", actualBytes, duration)
+		}
 		return domain.PlatformCapability{
 			Verdict:    domain.VerdictUnknown,
 			LatencyMS:  &lat,
 			ObservedAt: &now,
-			Summary:    fmt.Sprintf("read %d bytes below minimum 1024", actualBytes),
-			Reason:     "contract_drift",
+			Summary:    summary,
+			Reason:     reason,
 		}, nil
 	}
 
@@ -171,14 +247,21 @@ func CheckSpeed(ctx context.Context, httpClient *http.Client, bytesCounter *uint
 		throughputKbpsInt = (actualBytes * 8) / duration
 	}
 
-	summary := fmt.Sprintf("%.1f KB/s (read %d bytes in %d ms) bytes_read=%d throughput_kbps=%d",
-		throughputKBps, actualBytes, duration, actualBytes, throughputKbpsInt)
+	reason := "speed_test_completed"
+	budgetTag := ""
+	if timedOut {
+		reason = "speed_budget_limited"
+		budgetTag = " [speed_budget_limited]"
+	}
+
+	summary := fmt.Sprintf("%.1f KB/s (read %d bytes in %d ms) bytes_read=%d throughput_kbps=%d%s",
+		throughputKBps, actualBytes, duration, actualBytes, throughputKbpsInt, budgetTag)
 	return domain.PlatformCapability{
 		Verdict:    domain.VerdictAvailable,
 		LatencyMS:  &latency,
 		ObservedAt: &now,
 		Throughput: &throughputKBps,
 		Summary:    summary,
-		Reason:     "speed_test_completed",
+		Reason:     reason,
 	}, nil
 }

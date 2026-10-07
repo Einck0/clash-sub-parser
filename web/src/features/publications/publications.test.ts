@@ -31,7 +31,7 @@ describe('publication types and capability boundaries', () => {
 
   it('declares truthful capability boundaries per target without claiming all 4 support everything', () => {
     const mihomo = getTargetMetadata('mihomo')
-    expect(mihomo.protocols).toEqual(['ss', 'vmess', 'vless', 'trojan', 'hysteria2', 'wireguard', 'tuic'])
+    expect(mihomo.protocols).toEqual(['ss', 'vmess', 'vless', 'trojan', 'hysteria2', 'wireguard', 'tuic', 'http', 'socks5', 'anytls'])
     expect(mihomo.groupTypes).toEqual(['select', 'urltest', 'fallback', 'loadbalance'])
     expect(mihomo.ruleKinds).toContain('GEOSITE')
     expect(mihomo.ruleKinds).toContain('RULE-SET')

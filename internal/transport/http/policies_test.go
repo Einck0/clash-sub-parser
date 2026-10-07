@@ -421,9 +421,29 @@ func TestPolicyValidateEndpoint(t *testing.T) {
 
 	// 2. Persisted groups, edges, and rules in DB validate cleanly without client payload
 	t.Run("persisted_groups_edges_and_rules_validate", func(t *testing.T) {
+		// Provide an active node belonging to an enabled subscription so groups resolve with members
+		subID := domain.MustNewUUIDv7()
+		fetchID := domain.MustNewUUIDv7()
+		nodeID := "node_0123456789abcdef0123456789abcdef"
+		if _, err := db.Exec(`INSERT INTO subscriptions (id, name, source_url_secret_ref, enabled, revision, created_at, updated_at) VALUES (?, 'Sub 1', 'secret-ref', 1, 'rev-1', datetime('now'), datetime('now'))`, subID); err != nil {
+			t.Fatalf("failed to insert subscription: %v", err)
+		}
+		if _, err := db.Exec(`INSERT INTO subscription_fetches (id, subscription_id, started_at, finished_at, outcome) VALUES (?, ?, datetime('now'), datetime('now'), 'success')`, fetchID, subID); err != nil {
+			t.Fatalf("failed to insert subscription_fetch: %v", err)
+		}
+		if _, err := db.Exec(`INSERT INTO nodes (logical_id, protocol, display_name, server, port, config_json, active, created_at, updated_at) VALUES (?, 'ss', 'Node 1', '1.1.1.1', 8388, '{}', 1, datetime('now'), datetime('now'))`, nodeID); err != nil {
+			t.Fatalf("failed to insert node: %v", err)
+		}
+		if _, err := db.Exec(`INSERT INTO node_sources (node_logical_id, subscription_id, last_seen_fetch_id) VALUES (?, ?, ?)`, nodeID, subID, fetchID); err != nil {
+			t.Fatalf("failed to insert node_source: %v", err)
+		}
+
 		g2, err := policySvc.CreateGroup(ctx, policy.CreateGroupCommand{
 			Name:      "Auto",
 			GroupType: domain.GroupTypeURLTest,
+			Edges: []policy.EdgeInput{
+				{NodeLogicalID: &nodeID, Position: 0},
+			},
 			RequestID: "req-g2",
 			ActorKind: domain.ActorKindAdmin,
 		})

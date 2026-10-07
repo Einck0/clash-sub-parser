@@ -106,9 +106,21 @@ func WithNodeScope(scope domain.NodeScope) DefaultRunnerOption {
 	return func(r *DefaultRunner) { r.scope = scope }
 }
 
+// WithSpeedBudget overrides the default speed probe per-node byte and deadline limits.
+func WithSpeedBudget(maxBytesPerNode int64, deadline time.Duration) DefaultRunnerOption {
+	return func(r *DefaultRunner) {
+		r.speedBudget = &profiles.SpeedBudget{
+			OptInRequired:      true,
+			MaxBytesPerRequest: maxBytesPerNode,
+			Deadline:           deadline,
+		}
+	}
+}
+
 type DefaultRunner struct {
 	budget           RunBudget
 	stageConcurrency StageConcurrency
+	speedBudget      *profiles.SpeedBudget
 	nodes            domain.NodeRepository
 	observations     domain.ProbeObservationRepository
 	riskObs          domain.IPRiskObservationRepository
@@ -944,10 +956,21 @@ func (r *DefaultRunner) executeTask(ctx context.Context, run *domain.ProbeRun, n
 
 func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.ProbeRun, node domain.Node, kind domain.ProbeKind, session *nodeSession) (domain.ProbeVerdict, error) {
 	prof := profileForKind(kind)
+	if kind == domain.ProbeKindSpeed && r.speedBudget != nil {
+		if r.speedBudget.MaxBytesPerRequest > 0 {
+			prof.SpeedBudget.MaxBytesPerRequest = r.speedBudget.MaxBytesPerRequest
+		}
+		if r.speedBudget.Deadline > 0 {
+			prof.SpeedBudget.Deadline = r.speedBudget.Deadline
+		}
+	}
 	start := r.clock()
 	timeout := r.budget.TaskTimeout
-	if kind == domain.ProbeKindSpeed && prof.SpeedBudget.Deadline > 0 && prof.SpeedBudget.Deadline < timeout {
-		timeout = prof.SpeedBudget.Deadline
+	if kind == domain.ProbeKindSpeed && prof.SpeedBudget.Deadline > 0 {
+		speedDeadline := prof.SpeedBudget.Deadline
+		if speedDeadline+2*time.Second < timeout {
+			timeout = speedDeadline + 2*time.Second
+		}
 	}
 	taskCtx, taskCancel := context.WithTimeout(ctx, timeout)
 	defer taskCancel()
@@ -1081,8 +1104,12 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 				kbps := (float64(actualBytes) / 1024.0) * 1000.0 / float64(latency)
 				speedThroughput = &kbps
 				throughputKbps := (actualBytes * 8) / latency
-				speedCap.Summary = fmt.Sprintf("%.1f KB/s (read %d bytes in %d ms) bytes_read=%d throughput_kbps=%d",
-					kbps, actualBytes, latency, actualBytes, throughputKbps)
+				budgetTag := ""
+				if strings.Contains(speedCap.Summary, "[speed_budget_limited]") {
+					budgetTag = " [speed_budget_limited]"
+				}
+				speedCap.Summary = fmt.Sprintf("%.1f KB/s (read %d bytes in %d ms) bytes_read=%d throughput_kbps=%d%s",
+					kbps, actualBytes, latency, actualBytes, throughputKbps, budgetTag)
 			}
 		}
 		if speedErr != nil {
@@ -1092,11 +1119,18 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 			} else {
 				result.NetworkError = true
 			}
+		} else if speedCap.Verdict != domain.VerdictAvailable && speedCap.Reason != "" {
+			failureReason = speedCap.Reason
 		}
 		result.ContractMatched = (speedCap.Verdict == domain.VerdictAvailable)
 		result.ContractVersion = prof.Contract
 		if speedCap.Verdict == domain.VerdictAvailable {
 			result.StatusCode = http.StatusOK
+		} else if idx := strings.Index(speedCap.Summary, "HTTP "); idx != -1 {
+			var code int
+			if _, err := fmt.Sscanf(speedCap.Summary[idx:], "HTTP %d", &code); err == nil {
+				result.StatusCode = code
+			}
 		}
 	} else if kind == domain.ProbeKindIPRisk {
 		reqStart := r.clock()
@@ -1302,7 +1336,9 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 		revision := node.ConnectionRevision
 		obs.ConnectionRevision = &revision
 	}
-	if createErr := r.observations.Create(ctx, obs); createErr != nil {
+	persistCtx, persistCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer persistCancel()
+	if createErr := r.observations.Create(persistCtx, obs); createErr != nil {
 		return eval.Verdict, createErr
 	}
 	if r.riskObs != nil && kind == domain.ProbeKindIPRisk {
@@ -1334,7 +1370,7 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 			RedactedSummary:       obs.RedactedSummary,
 			ProbeObservationID:    &obs.ID,
 		}
-		_ = r.riskObs.Create(ctx, ipRiskObs)
+		_ = r.riskObs.Create(persistCtx, ipRiskObs)
 	}
 	if dialErr != nil && isFatalDialError(dialErr) {
 		return eval.Verdict, dialErr

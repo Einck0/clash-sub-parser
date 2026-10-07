@@ -14,7 +14,9 @@ import (
 	"clash-sub-parser/internal/compiler"
 	"clash-sub-parser/internal/domain"
 	"clash-sub-parser/internal/parser"
+	probeMihomo "clash-sub-parser/internal/probe/mihomo"
 	"clash-sub-parser/internal/resolver"
+	officialAdapter "github.com/metacubex/mihomo/adapter"
 	"gopkg.in/yaml.v3"
 )
 
@@ -74,6 +76,9 @@ func TestMihomoCapabilityMatrix_DeclaresOnlyRenderedCapabilities(t *testing.T) {
 		domain.ProtocolHysteria2: true,
 		domain.ProtocolWireGuard: true,
 		domain.ProtocolTUIC:      true,
+		domain.ProtocolHTTP:      true,
+		domain.ProtocolSocks5:    true,
+		domain.ProtocolAnyTLS:    true,
 	}
 	if !reflect.DeepEqual(capMatrix.Protocols, wantProtocols) {
 		t.Fatalf("Mihomo protocol capabilities mismatch:\ngot:  %#v\nwant: %#v", capMatrix.Protocols, wantProtocols)
@@ -110,11 +115,11 @@ func TestMihomoCapabilityMatrix_DeclaresOnlyRenderedCapabilities(t *testing.T) {
 	}
 }
 
-func TestCompileMihomo_AllSevenProtocolsFourGroupsFourteenRules_AndOfficialValidation(t *testing.T) {
+func TestCompileMihomo_AllTenProtocolsFourGroupsFourteenRules_AndOfficialValidation(t *testing.T) {
 	ctx := context.Background()
 
 	snapshot := &resolver.ResolvedPolicySnapshot{
-		SnapshotDigest:  "snap-mihomo-full-7p-4g-14r",
+		SnapshotDigest:  "snap-mihomo-full-10p-4g-14r",
 		CompilerVersion: "1.0.0",
 		Nodes: []resolver.ResolvedNode{
 			{
@@ -251,6 +256,66 @@ func TestCompileMihomo_AllSevenProtocolsFourGroupsFourteenRules_AndOfficialValid
 				Active:   true,
 				Position: 6,
 			},
+			{
+				LogicalID:   "node-http",
+				DisplayName: "http-edge",
+				Protocol:    domain.ProtocolHTTP,
+				Server:      "198.51.100.17",
+				Port:        8080,
+				Credentials: domain.InboundProtocolCredential{
+					Username: "http-user",
+					Password: "http-password",
+					Transport: map[string]string{
+						"tls":              "true",
+						"sni":              "http.example.com",
+						"skip_cert_verify": "true",
+						"headers":          `{"X-Custom-Header":"custom-http-val"}`,
+					},
+				},
+				Active:   true,
+				Position: 7,
+			},
+			{
+				LogicalID:   "node-socks5",
+				DisplayName: "socks5-edge",
+				Protocol:    domain.ProtocolSocks5,
+				Server:      "198.51.100.18",
+				Port:        1080,
+				Credentials: domain.InboundProtocolCredential{
+					Username: "socks-user",
+					Password: "socks-password",
+					Transport: map[string]string{
+						"udp":              "true",
+						"tls":              "true",
+						"sni":              "socks.example.com",
+						"skip_cert_verify": "true",
+					},
+				},
+				Active:   true,
+				Position: 8,
+			},
+			{
+				LogicalID:   "node-anytls",
+				DisplayName: "anytls-edge",
+				Protocol:    domain.ProtocolAnyTLS,
+				Server:      "198.51.100.19",
+				Port:        443,
+				Credentials: domain.InboundProtocolCredential{
+					Password: "anytls-secret-password",
+					Transport: map[string]string{
+						"sni":                         "anytls.example.com",
+						"alpn":                        "h2,http/1.1",
+						"fp":                          "chrome",
+						"skip_cert_verify":            "true",
+						"udp":                         "true",
+						"idle-session-check-interval": "30",
+						"idle-session-timeout":        "60",
+						"min-idle-session":            "1",
+					},
+				},
+				Active:   true,
+				Position: 9,
+			},
 		},
 		Groups: []resolver.ResolvedGroup{
 			{
@@ -262,6 +327,7 @@ func TestCompileMihomo_AllSevenProtocolsFourGroupsFourteenRules_AndOfficialValid
 					{Kind: resolver.MemberKindGroup, TargetID: "grp-fallback", DisplayName: "auto-fallback", Position: 1},
 					{Kind: resolver.MemberKindGroup, TargetID: "grp-lb", DisplayName: "auto-lb", Position: 2},
 					{Kind: resolver.MemberKindNode, TargetID: "node-ss", DisplayName: "ss-edge", Position: 3},
+					{Kind: resolver.MemberKindNode, TargetID: "node-http", DisplayName: "http-edge", Position: 4},
 				},
 				Position: 0,
 			},
@@ -272,6 +338,7 @@ func TestCompileMihomo_AllSevenProtocolsFourGroupsFourteenRules_AndOfficialValid
 				Members: []resolver.ResolvedGroupMember{
 					{Kind: resolver.MemberKindNode, TargetID: "node-vmess", DisplayName: "vmess-edge", Position: 0},
 					{Kind: resolver.MemberKindNode, TargetID: "node-vless", DisplayName: "vless-reality-edge", Position: 1},
+					{Kind: resolver.MemberKindNode, TargetID: "node-socks5", DisplayName: "socks5-edge", Position: 2},
 				},
 				Position: 1,
 			},
@@ -292,6 +359,7 @@ func TestCompileMihomo_AllSevenProtocolsFourGroupsFourteenRules_AndOfficialValid
 				Members: []resolver.ResolvedGroupMember{
 					{Kind: resolver.MemberKindNode, TargetID: "node-wg", DisplayName: "wg-edge", Position: 0},
 					{Kind: resolver.MemberKindNode, TargetID: "node-tuic", DisplayName: "tuic-edge", Position: 1},
+					{Kind: resolver.MemberKindNode, TargetID: "node-anytls", DisplayName: "anytls-edge", Position: 2},
 				},
 				Position: 3,
 			},
@@ -360,6 +428,18 @@ func TestCompileMihomo_AllSevenProtocolsFourGroupsFourteenRules_AndOfficialValid
 		"GEOSITE,category-ads-all,auto-fallback",
 		"RULE-SET,ads-ruleset,auto-lb,no-resolve",
 		"DST-PORT,8443,proxy",
+		"type: http",
+		"username: http-user",
+		"password: http-password",
+		"X-Custom-Header: custom-http-val",
+		"type: socks5",
+		"username: socks-user",
+		"password: socks-password",
+		"type: anytls",
+		"password: anytls-secret-password",
+		"idle-session-check-interval: 30",
+		"idle-session-timeout: 60",
+		"min-idle-session: 1",
 	} {
 		if !strings.Contains(out, wantSubstr) {
 			t.Errorf("Mihomo output missing expected substring %q:\n%s", wantSubstr, out)
@@ -375,13 +455,38 @@ func TestCompileMihomo_AllSevenProtocolsFourGroupsFourteenRules_AndOfficialValid
 		}
 	}
 
-	// Round-trip through parser.ExtractWithCredentials to verify all 7 protocols and credentials survive cleanly.
+	// Round-trip through parser.ExtractWithCredentials to verify all 10 protocols and credentials survive cleanly.
 	extracted, err := parser.ExtractWithCredentials(res1.Content)
 	if err != nil {
 		t.Fatalf("ExtractWithCredentials on rendered Mihomo output failed: %v", err)
 	}
-	if extracted.Rejected != 0 || len(extracted.Items) != 7 {
-		t.Fatalf("expected 7 extracted nodes and 0 rejected, got %d items and %d rejected", len(extracted.Items), extracted.Rejected)
+	if extracted.Rejected != 0 || len(extracted.Items) != 10 {
+		t.Fatalf("expected 10 extracted nodes and 0 rejected, got %d items and %d rejected", len(extracted.Items), extracted.Rejected)
+	}
+
+	// Verify each node can be mapped and parsed by official mihomo adapter.ParseProxy
+	for _, n := range snapshot.Nodes {
+		domainNode := domain.Node{
+			LogicalID:   n.LogicalID,
+			DisplayName: n.DisplayName,
+			Protocol:    n.Protocol,
+			Server:      n.Server,
+			Port:        n.Port,
+			Credentials: n.Credentials,
+		}
+		mapping, mapErr := probeMihomo.NodeToMapping(domainNode)
+		if mapErr != nil {
+			t.Errorf("NodeToMapping failed for node %s (%s): %v", n.DisplayName, n.Protocol, mapErr)
+			continue
+		}
+		proxy, parseErr := officialAdapter.ParseProxy(mapping)
+		if parseErr != nil {
+			t.Errorf("officialAdapter.ParseProxy failed for node %s (%s): %v", n.DisplayName, n.Protocol, parseErr)
+			continue
+		}
+		if proxy == nil {
+			t.Errorf("expected non-nil proxy for node %s", n.DisplayName)
+		}
 	}
 
 	mihomoBin := findMihomoBinary()
@@ -982,3 +1087,102 @@ func TestMihomoOutputIsValidYAML(t *testing.T) {
 		t.Fatalf("Mihomo missing expected proxy-groups array: %#v", parsed["proxy-groups"])
 	}
 }
+
+func TestMihomo_RejectsEmptyProxyGroups(t *testing.T) {
+	ctx := context.Background()
+	snap := fixtureSnapshot()
+	// Add an empty proxy group (e.g. 加拿大 with 0 members)
+	snap.Groups = append(snap.Groups, resolver.ResolvedGroup{
+		ID:        "grp-canada",
+		Name:      "加拿大",
+		GroupType: domain.GroupTypeURLTest,
+		Members:   []resolver.ResolvedGroupMember{},
+	})
+
+	// 1. ValidateTargetCapabilities must flag required_nonempty
+	diags := compiler.ValidateTargetCapabilities(snap, domain.TargetMihomo)
+	foundRequiredNonEmpty := false
+	for _, d := range diags {
+		if d.Code == "required_nonempty" && strings.Contains(d.Message, "加拿大") {
+			foundRequiredNonEmpty = true
+			break
+		}
+	}
+	if !foundRequiredNonEmpty {
+		t.Fatalf("expected required_nonempty diagnostic for group 加拿大, got: %+v", diags)
+	}
+
+	// 2. CompileMihomo must fail closed with CapabilityError
+	_, err := compiler.CompileMihomo(ctx, snap)
+	if err == nil {
+		t.Fatalf("expected CompileMihomo to fail on empty group 加拿大, got nil")
+	}
+	var capErr *compiler.CapabilityError
+	if !errors.As(err, &capErr) {
+		t.Fatalf("expected CapabilityError, got %T: %v", err, err)
+	}
+	if !strings.Contains(capErr.Reason, "required_nonempty") {
+		t.Fatalf("expected reason containing required_nonempty, got: %s", capErr.Reason)
+	}
+}
+
+func TestMihomo_RejectsDanglingRuleTarget(t *testing.T) {
+	ctx := context.Background()
+	snap := fixtureSnapshot()
+	// Add rule targeting non-existent group
+	snap.Rules = append(snap.Rules, resolver.ResolvedRule{
+		ID:              "rule-dangling",
+		TargetGroupName: "NonExistentGroup",
+		Expression:      "DOMAIN-SUFFIX,example.com",
+	})
+
+	// 1. ValidateTargetCapabilities must flag dangling_rule_target
+	diags := compiler.ValidateTargetCapabilities(snap, domain.TargetMihomo)
+	foundDangling := false
+	for _, d := range diags {
+		if d.Code == "dangling_rule_target" && strings.Contains(d.Message, "NonExistentGroup") {
+			foundDangling = true
+			break
+		}
+	}
+	if !foundDangling {
+		t.Fatalf("expected dangling_rule_target diagnostic, got: %+v", diags)
+	}
+
+	// 2. CompileMihomo must fail closed
+	_, err := compiler.CompileMihomo(ctx, snap)
+	if err == nil {
+		t.Fatalf("expected CompileMihomo to fail on dangling rule target, got nil")
+	}
+}
+
+func TestMihomo_RejectsDanglingGroupReference(t *testing.T) {
+	ctx := context.Background()
+	snap := fixtureSnapshot()
+	// Add group referencing non-existent child group
+	snap.Groups[0].Members = append(snap.Groups[0].Members, resolver.ResolvedGroupMember{
+		Kind:        resolver.MemberKindGroup,
+		TargetID:    "missing-child-id",
+		DisplayName: "MissingChildGroup",
+	})
+
+	// 1. ValidateTargetCapabilities must flag dangling_group_reference
+	diags := compiler.ValidateTargetCapabilities(snap, domain.TargetMihomo)
+	foundDangling := false
+	for _, d := range diags {
+		if d.Code == "dangling_group_reference" && strings.Contains(d.Message, "MissingChildGroup") {
+			foundDangling = true
+			break
+		}
+	}
+	if !foundDangling {
+		t.Fatalf("expected dangling_group_reference diagnostic, got: %+v", diags)
+	}
+
+	// 2. CompileMihomo must fail closed
+	_, err := compiler.CompileMihomo(ctx, snap)
+	if err == nil {
+		t.Fatalf("expected CompileMihomo to fail on dangling group reference, got nil")
+	}
+}
+

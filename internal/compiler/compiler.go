@@ -433,6 +433,19 @@ func validateCredentialEnvelope(target domain.CompilerTarget, index int, node re
 				Reason:   "missing required password in tuic credentials",
 			}
 		}
+	case domain.ProtocolHTTP:
+		// Username / Password optional, server & port already validated
+	case domain.ProtocolSocks5:
+		// Username / Password optional, server & port already validated
+	case domain.ProtocolAnyTLS:
+		if strings.TrimSpace(c.Password) == "" {
+			return &CapabilityError{
+				Target:   target,
+				Location: loc,
+				Feature:  feature,
+				Reason:   "missing required password in anytls credentials",
+			}
+		}
 	default:
 		return &CapabilityError{
 			Target:   target,
@@ -554,6 +567,59 @@ func ValidateTargetCapabilities(snapshot *resolver.ResolvedPolicySnapshot, targe
 				Message: err.Error(),
 				Target:  string(target),
 			})
+		}
+	}
+
+	// Target-specific group and rule topology validation
+	if target == domain.TargetMihomo {
+		groupNameSet := make(map[string]bool, len(snapshot.Groups)*2)
+		for _, g := range snapshot.Groups {
+			if g.Name != "" {
+				groupNameSet[g.Name] = true
+			}
+			if g.ID != "" {
+				groupNameSet[g.ID] = true
+			}
+		}
+
+		// 1. Check each rendered proxy group: must be non-empty (required_nonempty)
+		for _, g := range snapshot.Groups {
+			if len(g.Members) == 0 {
+				diags = append(diags, CapabilityDiagnostic{
+					Code:    "required_nonempty",
+					Message: fmt.Sprintf("proxy group %q has no proxies (required_nonempty)", g.Name),
+					Target:  string(target),
+				})
+			}
+			// Check member references to child groups
+			for _, m := range g.Members {
+				if m.Kind == resolver.MemberKindGroup {
+					tID := strings.TrimSpace(m.TargetID)
+					tName := strings.TrimSpace(m.DisplayName)
+					if (tID != "" && !groupNameSet[tID]) && (tName != "" && !groupNameSet[tName]) {
+						diags = append(diags, CapabilityDiagnostic{
+							Code:    "dangling_group_reference",
+							Message: fmt.Sprintf("group %q references non-existent child group %q", g.Name, tName),
+							Target:  string(target),
+						})
+					}
+				}
+			}
+		}
+
+		// 2. Check each routing rule: target group must exist in rendered groups
+		for _, r := range snapshot.Rules {
+			tName := strings.TrimSpace(r.TargetGroupName)
+			tID := strings.TrimSpace(r.TargetGroupID)
+			if tName != "" && tName != "DIRECT" && tName != "REJECT" && tName != "REJECT-DROP" && tName != "PASS" {
+				if !groupNameSet[tName] && !groupNameSet[tID] {
+					diags = append(diags, CapabilityDiagnostic{
+						Code:    "dangling_rule_target",
+						Message: fmt.Sprintf("rule %q targets non-existent group %q", r.Expression, tName),
+						Target:  string(target),
+					})
+				}
+			}
 		}
 	}
 

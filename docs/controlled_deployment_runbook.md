@@ -414,3 +414,55 @@ Critic 必须通过无头浏览器采集如下视口尺寸实机渲染截图并�
 - **预览环境清理**：
   - 隔离预览进程 PID `1080391` 已确认停止，端口 `18081` 完全释放；
   - 证据快照 `/tmp/csp_preview_18081/deeplink_test_examples.json` 及相关密文权限保留供溯源。
+
+---
+
+## 4. 2026-10-08 节点库存清空重置、源凭证恢复、策略组过滤与规则删除受控上线 (Commit 414a6b7)
+
+- **发布时间**：`2026-10-08 03:22:25 CST` (UTC `2026-10-07 19:22:25`)
+- **目标提交 (Git HEAD)**：`414a6b7` (`fix(csp): rebuild inventory safely and validate routing policies`)
+- **发布在线一致性热备与停机一致性快照**：
+  - 停机前一致性备份：`/home/service/backups/csp-v1-backup-20261008_pre_release_run_3091470.db`（大小 27.2MB，权限 `0600`，`integrity_check: ok`, `foreign_key_check: 0`）
+  - 最终停写一致性备份：`/home/service/backups/csp-v1-backup-20261008_post_stop_offline_consistent.db`（大小 27.3MB，权限 `0600`，`integrity_check: ok`, `foreign_key_check: 0`）
+  - 停写前基线对账：存量 1014 节点（31 活跃，983 失活保持禁用），9 订阅源（4 enabled，5 disabled），31 `node_sources`，998 `node_source_history`，163 分流规则，29 策略组，1 配置版本。
+- **旧镜像回滚标签固化与隔离副本实测 (Rollback Verified)**：
+  - 回滚目标：`clash-sub-parser-app:rollback-verified-84ed3` (`84ed3ba0baa5`)
+  - 实测验证：在 `--network none` 隔离模式下挂载一致性备份副本启动独立测试容器，实测 `curl http://127.0.0.1:18080/healthz` 响应 `{"data":{"status":"ok"}}`，验证回滚能力真实有效。
+- **离线数据库原子维护与清空重置 (Offline Maintenance Pipeline)**：
+  1. **节点库存清空重置 (`reset-node-inventory`)**：
+     - 清理表项：`nodes` 1014 -> 0, `node_connection_heads` 1014 -> 0, `node_connection_versions` 1014 -> 0, `node_sources` 31 -> 0, `node_source_history` 998 -> 0, `probe_runs` 10900 -> 0, `probe_observations` 14877 -> 0, `probe_batches` 10867 -> 0, `probe_batch_runs` 10877 -> 0；
+     - 外键约束：前置与后置 `PRAGMA foreign_key_check` 均为 0；
+     - 凭证修复：从冷归档稳定身份证据恢复 `7li` 与 `魔戒` 真实带 token 认证订阅 URL，其余 7 个订阅源状态与配置严格不变。
+  2. **策略组正则过滤器恢复 (`restore-group-filters`)**：
+     - 从冷备成功恢复 15 个策略组正则过滤器规范至 `group_node_filters`，保留 13 个静态边缘组与 1 个不支持语法组（`便宜`，含 PCRE 负向零宽断言 `(?![\\d.])`），守卫错误 0；
+     - 首轮执行生成新版本 `01a117b4-300b-7e42-b39e-e0da0643a9f0`，次轮执行报告 15 组跳过，实现严格幂等无状态变更。
+  3. **分流规则精准删除 (`maintain-inventory delete-rule`)**：
+     - 精准删除唯一规则 `01a0b9af-c118-72f9-9949-d94b49fa6ec2`（`PROCESS-NAME,tr.com.kliq.app`），指向「其他」组；
+     - 规则数由 163 扣减为 162，生成新配置版本 `01a117ca-a695-7ceb-91f5-0977d0a37317`，次轮执行验证 `already_deleted: true`，策略组维持 29 严格不变。
+- **全新启用订阅源拉取与探针评测 (Fresh Ingestion & Bounded Probing)**：
+  - **启用源刷新 (`maintain-inventory refresh`)**：4 个已启用源（7li、魔戒、Dogegg、einck-qzz）通过代理 `http://127.0.0.1:7890` 刷新；5 个禁用源未拉取；
+  - 刷新结果：7li 因内容为空如实记录 failed（不伪造历史节点）；魔戒解析 44 有效 44；Dogegg 解析 18 有效 18；einck-qzz 解析 33 有效 33；总解析 95 节点，规范去重后全新入库 90 节点，全部置为 `active = 1`；
+  - **全量有界探针 (`maintain-inventory probe`)**：针对 90 个新节点调度 540 项任务（涵盖 baseline, streaming, ai, ip_risk, geo, speed），历时 5m54s；
+  - 探针结果：69 存活可用，385 任务成功，50 失败，105 跳过，总下载流量 54.5MiB（严格受控于 128MiB 预算内）。
+- **发布策略门禁与局限性声明 (Publication Status & Limitations)**：
+  - 预览执行：`maintain-inventory preview --omit-unavailable-optional-groups` 触发 `BLOCKED`；
+  - 阻断原因：必需 fallback 策略组「自动切换」下属子组「低延迟」在 90 个真实新节点中匹配数为空（缺失 EPL 节点），因 fallback 组未定义可选修剪而触发 `proxy group "低延迟" has no proxies (required_nonempty)`；
+  - 保真策略：坚持不对用户策略作猜测改写或降级为 DIRECT，真实呈报政策边界，待后续补齐相应节点或调整 fallback 兜底策略。
+- **新生产容器与停机维护窗口**：
+  - 新镜像标签：`clash-sub-parser-app:latest`, `clash-sub-parser-app:v1-release-20261008-414a6b7` (`sha256:c77c1f6c321ede2ad458b95c7703ee97e03c1ee011b870f3256da11520b6ce43`)；
+  - 容器内二进制 SHA-256：`02b2c9f28d6ae342cf7205ba7b5596dea7210cadbcaedfd9f1984882d2f386d8`；
+  - 内嵌 Web 资产：`assets/index-CrGDGkKG.js` 与 `assets/index-CbE9lBWs.css`；
+  - 新容器实例：**`a430e97a76d6`**（替换旧容器 `054a174f7376`）；
+  - 实测停机窗口：**11 分 45 秒**（`2026-10-07T19:10:40Z` 停机 -> 离线维护与重置 -> 4 源全新抓取 -> 90 节点全量 6 阶段探针评测 -> 容器重建拉起 -> `2026-10-07T19:22:25Z` 双端口首次 ready 200 OK）。
+- **全链路健康与接口验证**：
+  - `GET http://127.0.0.1:18080/healthz` -> HTTP 200 `{"data":{"status":"ok"}}`
+  - `GET http://127.0.0.1:18080/readyz` -> HTTP 200 `{"data":{"ready":true,"required_tables":14,"schema_version":16}}`
+  - `GET http://127.0.0.1:17000/healthz` -> HTTP 200 `{"data":{"status":"ok"}}`
+  - `GET http://127.0.0.1:17000/readyz` -> HTTP 200 `{"data":{"ready":true,"required_tables":14,"schema_version":16}}`
+  - 未鉴权请求 `GET /api/v1/admin/sources` 严格返回 401 Unauthorized
+  - 静态资源请求 `GET /` 正常返回内嵌 `index-CrGDGkKG.js` 与 `index-CbE9lBWs.css`
+  - 生产数据库最终核验：`integrity_check: ok`, `foreign_key_check: 0`。
+- **环境清理与私有证据留存**：
+  - 隔离预览进程 PID `3186832` 经 `stop.sh` 释放，端口 `18081` 完全释放；
+  - 最终写入一致性数据库备份保存于 `/tmp/csp_continue_private/csp-v1-production-final-consistent.db`（权限 `0600`）。
+

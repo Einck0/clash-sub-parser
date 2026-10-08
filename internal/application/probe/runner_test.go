@@ -235,6 +235,13 @@ func (m *memoryNodes) List(_ context.Context, filter domain.NodeFilter) ([]domai
 	return res[offset:end], total, nil
 }
 
+func (m *memoryNodes) ListAll(ctx context.Context, filter domain.NodeFilter) ([]domain.Node, error) {
+	unpaginated := filter
+	unpaginated.Pagination.PageSize = 0
+	nodes, _, err := m.List(ctx, unpaginated)
+	return nodes, err
+}
+
 func (m *memoryNodes) ListReadModel(_ context.Context, filter domain.NodeFilter) ([]domain.NodeReadModel, int, error) {
 	return nil, 0, nil
 }
@@ -923,11 +930,11 @@ func TestServiceGetPoolStatusFiveMetrics(t *testing.T) {
 		})
 	}
 	_ = obsRepo.Create(ctx, &domain.ProbeObservation{
-		ID:                 "obs_deg_5",
+		ID:                 "obs_ai_5",
 		ProbeRunID:         "run_seed",
 		NodeLogicalID:      "node_05",
-		Kind:               domain.ProbeKindBaseline,
-		Verdict:            domain.VerdictRestricted,
+		Kind:               domain.ProbeKindAI,
+		Verdict:            domain.VerdictAvailable,
 		LatencyMS:          180,
 		ObservedAt:         now,
 		ConnectionRevision: &rev1,
@@ -1016,8 +1023,11 @@ func TestServiceGetPoolStatusFiveMetrics(t *testing.T) {
 	if status.QueueNodesCount != 5 || status.ProbingCount != 2 || status.QueuedWaitingCount != 3 {
 		t.Fatalf("expected queue_nodes_count=5 (probing=2, queued=3), got %+v", status)
 	}
-	if status.TotalCount != 10 || status.AvailableCount != 4 || status.HealthyCount != 4 || status.DegradedCount != 0 || status.UnavailableCount != 2 || status.UntestedCount != 4 {
-		t.Fatalf("unexpected 5 core metrics: %+v", status)
+	if status.TotalCount != 10 || status.AvailableCount != 4 || status.HealthyCount != 4 || status.DegradedCount != 0 || status.UnavailableCount != 2 || status.UndeterminedCount != 1 || status.UntestedCount != 3 {
+		t.Fatalf("unexpected pool status metrics: %+v", status)
+	}
+	if !status.ValidateConservation() {
+		t.Fatalf("expected status to satisfy conservation, got %+v", status)
 	}
 
 	close(holdWorkers)

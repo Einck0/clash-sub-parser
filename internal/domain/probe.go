@@ -189,6 +189,7 @@ type ProbePoolStatus struct {
 	ProbingCount       int       `json:"probing_count"`
 	QueuedWaitingCount int       `json:"queued_waiting_count"`
 	UntestedCount      int       `json:"untested_count"`
+	UndeterminedCount  int       `json:"undetermined_count"`
 	TotalCount         int       `json:"total_count"`
 	InventoryTotal     int       `json:"inventory_total"`
 	CandidateTotal     int       `json:"candidate_total"`
@@ -200,4 +201,21 @@ type ProbePoolStatus struct {
 	ProbingNodeIDs     []string  `json:"probing_node_ids"`
 	QueuedNodeIDs      []string  `json:"queued_node_ids"`
 	UpdatedAt          time.Time `json:"updated_at"`
+}
+
+// ValidateConservation checks whether all health status counters satisfy strict mutual exclusion conservation:
+// total_count == healthy_count + degraded_count + unavailable_count + undetermined_count + untested_count,
+// and available_count == healthy_count + degraded_count.
+func (s *ProbePoolStatus) ValidateConservation() bool {
+	if s == nil {
+		return false
+	}
+	expectedTotal := s.HealthyCount + s.DegradedCount + s.UnavailableCount + s.UndeterminedCount + s.UntestedCount
+	if s.TotalCount != expectedTotal {
+		return false
+	}
+	if s.AvailableCount != (s.HealthyCount + s.DegradedCount) {
+		return false
+	}
+	return true
 }

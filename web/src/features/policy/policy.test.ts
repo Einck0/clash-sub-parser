@@ -630,3 +630,138 @@ describe('usePolicy composable', () => {
     await pending
   })
 })
+
+describe('Policy server-side pagination, search race conditions, and topology decoupling', () => {
+  beforeEach(() => vi.restoreAllMocks())
+
+  it('supports paginating beyond 100 groups with accurate total and bounded pages', async () => {
+    const mockAllGroups: PolicyGroup[] = Array.from({ length: 120 }, (_, i) => ({
+      id: `grp-${i + 1}`,
+      name: `Group ${i + 1}`,
+      group_type: 'select',
+      edges: [],
+    }))
+
+    vi.spyOn(api, 'get').mockImplementation(async (path: string, options?: any) => {
+      if (path === '/api/v1/policies/groups') {
+        const page = Number(options?.params?.page || 1)
+        const pageSize = Number(options?.params?.page_size || 50)
+        const start = (page - 1) * pageSize
+        const items = mockAllGroups.slice(start, start + pageSize)
+        return {
+          items,
+          page,
+          page_size: pageSize,
+          total: 120,
+        }
+      }
+      return { items: [], total: 0 }
+    })
+
+    const policy = usePolicy()
+
+    // Page 1: 50 items
+    await policy.loadGroups(1, 50)
+    expect(policy.groups.value).toHaveLength(50)
+    expect(policy.groups.value[0].name).toBe('Group 1')
+    expect(policy.totalGroups.value).toBe(120)
+    expect(policy.page.value).toBe(1)
+
+    // Page 2: 50 items
+    await policy.loadGroups(2, 50)
+    expect(policy.groups.value).toHaveLength(50)
+    expect(policy.groups.value[0].name).toBe('Group 51')
+    expect(policy.page.value).toBe(2)
+
+    // Page 3: 20 items (total 120)
+    await policy.loadGroups(3, 50)
+    expect(policy.groups.value).toHaveLength(20)
+    expect(policy.groups.value[0].name).toBe('Group 101')
+    expect(policy.page.value).toBe(3)
+  })
+
+  it('loadAllTopologyGroups iterates pages to retrieve entire topology independent of current page', async () => {
+    const mockGroups100 = Array.from({ length: 100 }, (_, i) => ({
+      id: `grp-${i + 1}`,
+      name: `Group ${i + 1}`,
+      group_type: 'select' as const,
+      edges: [],
+    }))
+    const mockGroups50 = Array.from({ length: 50 }, (_, i) => ({
+      id: `grp-${i + 101}`,
+      name: `Group ${i + 101}`,
+      group_type: 'select' as const,
+      edges: [],
+    }))
+
+    vi.spyOn(api, 'get').mockImplementation(async (path: string, options?: any) => {
+      if (path === '/api/v1/policies/groups') {
+        const page = Number(options?.params?.page || 1)
+        if (page === 1) {
+          return { items: mockGroups100, page: 1, page_size: 100, total: 150 }
+        }
+        if (page === 2) {
+          return { items: mockGroups50, page: 2, page_size: 100, total: 150 }
+        }
+        return { items: [], total: 150 }
+      }
+      return { items: [], total: 0 }
+    })
+
+    const policy = usePolicy()
+    const all = await policy.loadAllTopologyGroups()
+    expect(all).toHaveLength(150)
+    expect(policy.allTopologyGroups.value).toHaveLength(150)
+    expect(policy.allTopologyGroups.value[149].name).toBe('Group 150')
+  })
+
+  it('race condition protection: stale search response does not overwrite latest response', async () => {
+    let resolveStale!: (val: any) => void
+    const stalePromise = new Promise((resolve) => {
+      resolveStale = resolve
+    })
+
+    vi.spyOn(api, 'get').mockImplementation(async (path: string, options?: any) => {
+      if (path === '/api/v1/policies/groups') {
+        const search = options?.params?.search
+        if (search === 'old') {
+          return await stalePromise
+        }
+        if (search === 'new') {
+          return {
+            items: [{ id: 'grp-new', name: 'New Result', group_type: 'select', edges: [] }],
+            page: 1,
+            page_size: 50,
+            total: 1,
+          }
+        }
+      }
+      return { items: [], total: 0 }
+    })
+
+    const policy = usePolicy()
+
+    // Dispatch slow 'old' request
+    const p1 = policy.loadGroups(1, 50, 'old')
+
+    // Dispatch fast 'new' request
+    const p2 = policy.loadGroups(1, 50, 'new')
+    await p2
+
+    expect(policy.groups.value).toHaveLength(1)
+    expect(policy.groups.value[0].name).toBe('New Result')
+
+    // Now resolve the late 'old' request
+    resolveStale({
+      items: [{ id: 'grp-old', name: 'Old Stale Result', group_type: 'select', edges: [] }],
+      page: 1,
+      page_size: 50,
+      total: 1,
+    })
+    await p1
+
+    // New result remains intact, NOT overwritten by stale response!
+    expect(policy.groups.value).toHaveLength(1)
+    expect(policy.groups.value[0].name).toBe('New Result')
+  })
+})

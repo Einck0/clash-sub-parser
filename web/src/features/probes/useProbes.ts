@@ -73,43 +73,101 @@ export function useProbes() {
     return map
   })
 
-  async function loadProbeNodes() {
+  let loadProbeNodesSeq = 0
+  async function loadProbeNodes(page = 1, pageSize = 50, filters: { search?: string; healthStatus?: string; protocol?: string } = {}) {
+    const seq = ++loadProbeNodesSeq
     loadingNodes.value = true
     try {
-      const collected: NormalizedNode[] = []
-      let page = 1
-      const pageSize = 100
-      let expectedTotal = 0
+      const params: Record<string, string | number> = {
+        page,
+        page_size: pageSize,
+        active_only: 'true',
+        scope: 'enabled_subscriptions',
+        sort_by: 'display_name',
+        sort_order: 'asc',
+      }
+      if (filters.search && filters.search.trim()) {
+        params.search = filters.search.trim()
+      }
+      if (filters.protocol && filters.protocol !== 'all') {
+        params.protocol = filters.protocol
+      }
+      if (filters.healthStatus && filters.healthStatus !== 'all') {
+        if (filters.healthStatus === 'available') {
+          params.health_status = 'healthy,degraded'
+        } else if (filters.healthStatus === 'unprobed' || filters.healthStatus === 'untested') {
+          params.health_status = 'untested'
+        } else if (['healthy', 'degraded', 'unhealthy', 'undetermined'].includes(filters.healthStatus)) {
+          params.health_status = filters.healthStatus
+        }
+      }
 
-      while (page <= 20) {
-        const res = await api.get<PaginatedResult<NodeRecord>>('/api/v1/nodes', {
-          params: {
-            page,
-            page_size: pageSize,
-            active_only: 'true',
-            scope: 'enabled_subscriptions',
-            sort_by: 'display_name',
-            sort_order: 'asc',
-          },
-        })
-        const items = Array.isArray(res?.items) ? res.items : []
-        expectedTotal = typeof res?.total === 'number' ? res.total : items.length
-        for (const raw of items) {
-          const normalized = normalizeNode(raw)
-          if (normalized.probeState === 'idle') {
-            if (probingNodeIds.value.has(normalized.logicalId)) {
-              normalized.probeState = 'probing'
-            } else if (queuedNodeIds.value.has(normalized.logicalId)) {
-              normalized.probeState = 'queued'
+      const res = await api.get<PaginatedResult<NodeRecord>>('/api/v1/nodes', { params })
+      if (seq !== loadProbeNodesSeq) return probeNodes.value
+
+      const items = Array.isArray(res?.items) ? [...res.items] : []
+
+      // If filtering by live pool state ('probing' or 'queued'), ensure targeted nodes are present
+      if (filters.healthStatus === 'probing' && probingNodeIds.value.size > 0) {
+        const missing = Array.from(probingNodeIds.value).filter((id) => !items.some((n) => n.logical_id === id))
+        if (missing.length > 0) {
+          const fetched = await Promise.all(
+            missing.map(async (id) => {
+              try {
+                const d = await api.get<{ node?: NodeRecord }>(`/api/v1/nodes/${id}`)
+                return d?.node ?? null
+              } catch {
+                return null
+              }
+            })
+          )
+          for (const n of fetched) {
+            if (n && !items.some((existing) => existing.logical_id === n.logical_id)) {
+              items.unshift(n)
             }
           }
-          collected.push(normalized)
         }
-        if (items.length === 0 || collected.length >= expectedTotal || items.length < pageSize) {
-          break
+      } else if (filters.healthStatus === 'queued' && queuedNodeIds.value.size > 0) {
+        const missing = Array.from(queuedNodeIds.value).filter((id) => !items.some((n) => n.logical_id === id))
+        if (missing.length > 0) {
+          const fetched = await Promise.all(
+            missing.map(async (id) => {
+              try {
+                const d = await api.get<{ node?: NodeRecord }>(`/api/v1/nodes/${id}`)
+                return d?.node ?? null
+              } catch {
+                return null
+              }
+            })
+          )
+          for (const n of fetched) {
+            if (n && !items.some((existing) => existing.logical_id === n.logical_id)) {
+              items.unshift(n)
+            }
+          }
         }
-        page += 1
       }
+
+      let expectedTotal = typeof res?.total === 'number' ? res.total : items.length
+      if (filters.healthStatus === 'probing') {
+        expectedTotal = Math.max(expectedTotal, probingNodeIds.value.size, items.length)
+      } else if (filters.healthStatus === 'queued') {
+        expectedTotal = Math.max(expectedTotal, queuedNodeIds.value.size, items.length)
+      } else {
+        expectedTotal = Math.max(expectedTotal, items.length)
+      }
+
+      const collected: NormalizedNode[] = items.map((raw) => {
+        const normalized = normalizeNode(raw)
+        if (normalized.probeState === 'idle') {
+          if (probingNodeIds.value.has(normalized.logicalId)) {
+            normalized.probeState = 'probing'
+          } else if (queuedNodeIds.value.has(normalized.logicalId)) {
+            normalized.probeState = 'queued'
+          }
+        }
+        return normalized
+      })
 
       probeNodes.value = collected
       totalNodes.value = expectedTotal || collected.length
@@ -118,7 +176,9 @@ export function useProbes() {
       // Keep workbench resilient if /api/v1/nodes is not mocked in isolated unit tests
       return probeNodes.value
     } finally {
-      loadingNodes.value = false
+      if (seq === loadProbeNodesSeq) {
+        loadingNodes.value = false
+      }
     }
   }
 
@@ -144,6 +204,7 @@ export function useProbes() {
     let healthy = 0
     let degraded = 0
     let unhealthy = 0
+    let undetermined = 0
     let untested = 0
 
     for (const node of nodes) {
@@ -156,6 +217,7 @@ export function useProbes() {
       if (cat === 'healthy') healthy += 1
       else if (cat === 'degraded') degraded += 1
       else if (cat === 'unhealthy') unhealthy += 1
+      else if (cat === 'undetermined') undetermined += 1
       else untested += 1
     }
 
@@ -173,6 +235,7 @@ export function useProbes() {
       probing_count: probingCount,
       queued_waiting_count: queuedWaitingCount,
       untested_count: untested,
+      undetermined_count: undetermined,
       total_count: candidateTotal,
       inventory_total: total,
       candidate_total: candidateTotal,
@@ -214,6 +277,7 @@ export function useProbes() {
           ? res.queued_waiting_count
           : nextQueued.size,
       untested_count: res.untested_count ?? 0,
+      undetermined_count: res.undetermined_count ?? 0,
       total_count: res.total_count ?? 0,
       unavailable_count: res.unavailable_count ?? 0,
       available_count: res.available_count ?? 0,

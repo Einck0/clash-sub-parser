@@ -793,3 +793,146 @@ func TestPolicyRulesDelete(t *testing.T) {
 		t.Fatalf("expected error code 'rule_not_found', got %q", errResp.Code)
 	}
 }
+
+func TestPolicyGroupsSearchAndPagination(t *testing.T) {
+	db := newCleanSQLiteDB(t)
+	router, _ := setupPolicyTestRouter(t, db)
+
+	groups := []struct {
+		name      string
+		groupType string
+	}{
+		{"US-Proxy", "select"},
+		{"HK-Auto", "urltest"},
+		{"SG-Auto", "urltest"},
+		{"JP-Fallback", "fallback"},
+		{"US-Direct", "select"},
+	}
+
+	for _, g := range groups {
+		payload := fmt.Sprintf(`{"name": "%s", "group_type": "%s"}`, g.name, g.groupType)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/policies/groups", strings.NewReader(payload))
+		req.Header.Set("Authorization", "Bearer "+testAdminToken)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("failed to create group %s, got %d: %s", g.name, rec.Code, rec.Body.String())
+		}
+	}
+
+	// 1. Pagination without search (page 1, pageSize 2)
+	reqP1 := httptest.NewRequest(http.MethodGet, "/api/v1/policies/groups?page=1&page_size=2", nil)
+	reqP1.Header.Set("Authorization", "Bearer "+testAdminToken)
+	recP1 := httptest.NewRecorder()
+	router.ServeHTTP(recP1, reqP1)
+	if recP1.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d: %s", recP1.Code, recP1.Body.String())
+	}
+	var respP1 groupListResponse
+	if err := json.Unmarshal(recP1.Body.Bytes(), &respP1); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	if respP1.Data.Total != 5 || respP1.Data.Page != 1 || respP1.Data.PageSize != 2 || len(respP1.Data.Items) != 2 {
+		t.Fatalf("expected total=5, page=1, page_size=2, items=2, got %+v", respP1.Data)
+	}
+	if respP1.Data.Items[0].Name != "HK-Auto" || respP1.Data.Items[1].Name != "JP-Fallback" {
+		t.Fatalf("expected HK-Auto, JP-Fallback; got %s, %s", respP1.Data.Items[0].Name, respP1.Data.Items[1].Name)
+	}
+
+	// Page 2
+	reqP2 := httptest.NewRequest(http.MethodGet, "/api/v1/policies/groups?page=2&page_size=2", nil)
+	reqP2.Header.Set("Authorization", "Bearer "+testAdminToken)
+	recP2 := httptest.NewRecorder()
+	router.ServeHTTP(recP2, reqP2)
+	var respP2 groupListResponse
+	if err := json.Unmarshal(recP2.Body.Bytes(), &respP2); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	if respP2.Data.Total != 5 || len(respP2.Data.Items) != 2 || respP2.Data.Items[0].Name != "SG-Auto" || respP2.Data.Items[1].Name != "US-Direct" {
+		t.Fatalf("expected SG-Auto, US-Direct; got %+v", respP2.Data)
+	}
+
+	// Page 3
+	reqP3 := httptest.NewRequest(http.MethodGet, "/api/v1/policies/groups?page=3&page_size=2", nil)
+	reqP3.Header.Set("Authorization", "Bearer "+testAdminToken)
+	recP3 := httptest.NewRecorder()
+	router.ServeHTTP(recP3, reqP3)
+	var respP3 groupListResponse
+	if err := json.Unmarshal(recP3.Body.Bytes(), &respP3); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	if respP3.Data.Total != 5 || len(respP3.Data.Items) != 1 || respP3.Data.Items[0].Name != "US-Proxy" {
+		t.Fatalf("expected US-Proxy on p3; got %+v", respP3.Data)
+	}
+
+	// 2. Search by name (case-insensitive)
+	reqSearchAuto := httptest.NewRequest(http.MethodGet, "/api/v1/policies/groups?search=auto", nil)
+	reqSearchAuto.Header.Set("Authorization", "Bearer "+testAdminToken)
+	recSearchAuto := httptest.NewRecorder()
+	router.ServeHTTP(recSearchAuto, reqSearchAuto)
+	var respSearchAuto groupListResponse
+	if err := json.Unmarshal(recSearchAuto.Body.Bytes(), &respSearchAuto); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	if respSearchAuto.Data.Total != 2 || len(respSearchAuto.Data.Items) != 2 {
+		t.Fatalf("expected 2 auto groups, got %+v", respSearchAuto.Data)
+	}
+	if respSearchAuto.Data.Items[0].Name != "HK-Auto" || respSearchAuto.Data.Items[1].Name != "SG-Auto" {
+		t.Fatalf("expected HK-Auto and SG-Auto, got %v", respSearchAuto.Data.Items)
+	}
+
+	// 3. Search by group_type
+	reqSearchType := httptest.NewRequest(http.MethodGet, "/api/v1/policies/groups?search=SELECT", nil)
+	reqSearchType.Header.Set("Authorization", "Bearer "+testAdminToken)
+	recSearchType := httptest.NewRecorder()
+	router.ServeHTTP(recSearchType, reqSearchType)
+	var respSearchType groupListResponse
+	if err := json.Unmarshal(recSearchType.Body.Bytes(), &respSearchType); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	if respSearchType.Data.Total != 2 || len(respSearchType.Data.Items) != 2 {
+		t.Fatalf("expected 2 select groups, got %+v", respSearchType.Data)
+	}
+	if respSearchType.Data.Items[0].Name != "US-Direct" || respSearchType.Data.Items[1].Name != "US-Proxy" {
+		t.Fatalf("expected US-Direct and US-Proxy, got %v", respSearchType.Data.Items)
+	}
+
+	// 4. Combined search + pagination with accurate total
+	reqSearchUSP1 := httptest.NewRequest(http.MethodGet, "/api/v1/policies/groups?search=us&page=1&page_size=1", nil)
+	reqSearchUSP1.Header.Set("Authorization", "Bearer "+testAdminToken)
+	recSearchUSP1 := httptest.NewRecorder()
+	router.ServeHTTP(recSearchUSP1, reqSearchUSP1)
+	var respSearchUSP1 groupListResponse
+	if err := json.Unmarshal(recSearchUSP1.Body.Bytes(), &respSearchUSP1); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	if respSearchUSP1.Data.Total != 2 || len(respSearchUSP1.Data.Items) != 1 || respSearchUSP1.Data.Items[0].Name != "US-Direct" {
+		t.Fatalf("expected US-Direct on p1, total=2; got %+v", respSearchUSP1.Data)
+	}
+
+	reqSearchUSP2 := httptest.NewRequest(http.MethodGet, "/api/v1/policies/groups?search=us&page=2&page_size=1", nil)
+	reqSearchUSP2.Header.Set("Authorization", "Bearer "+testAdminToken)
+	recSearchUSP2 := httptest.NewRecorder()
+	router.ServeHTTP(recSearchUSP2, reqSearchUSP2)
+	var respSearchUSP2 groupListResponse
+	if err := json.Unmarshal(recSearchUSP2.Body.Bytes(), &respSearchUSP2); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	if respSearchUSP2.Data.Total != 2 || len(respSearchUSP2.Data.Items) != 1 || respSearchUSP2.Data.Items[0].Name != "US-Proxy" {
+		t.Fatalf("expected US-Proxy on p2, total=2; got %+v", respSearchUSP2.Data)
+	}
+
+	// 5. Search with no matches
+	reqSearchNone := httptest.NewRequest(http.MethodGet, "/api/v1/policies/groups?search=nonexistent", nil)
+	reqSearchNone.Header.Set("Authorization", "Bearer "+testAdminToken)
+	recSearchNone := httptest.NewRecorder()
+	router.ServeHTTP(recSearchNone, reqSearchNone)
+	var respSearchNone groupListResponse
+	if err := json.Unmarshal(recSearchNone.Body.Bytes(), &respSearchNone); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	if respSearchNone.Data.Total != 0 || len(respSearchNone.Data.Items) != 0 {
+		t.Fatalf("expected total=0, items=0 for search=nonexistent, got %+v", respSearchNone.Data)
+	}
+}

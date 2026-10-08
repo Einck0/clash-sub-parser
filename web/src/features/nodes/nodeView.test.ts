@@ -197,12 +197,17 @@ describe('node view helpers & plaintext WireGuard / TUIC connection handling', (
     expect(nodeCapabilityLabel(node, 'ai')).toEqual({ label: '受限', tone: 'warning' })
     expect(nodeCapabilityLabel(node, 'geo')).toEqual({ label: '未知', tone: 'info' })
 
+    // Baseline-authoritative health: auxiliary capabilities alone without baseline must be undetermined, never healthy
     expect(nodeHealthBadge({ logical_id: 'n1', protocol: 'ss', display_name: 'N1', active: true, capabilities: { streaming: 'available' } })).toEqual({
+      label: '待复核',
+      tone: 'warning',
+    })
+    expect(nodeHealthBadge({ logical_id: 'n1-baseline', protocol: 'ss', display_name: 'N1', active: true, capabilities: { baseline: { verdict: 'available', latency_ms: 50 } } })).toEqual({
       label: '正常',
       tone: 'success',
     })
-    expect(nodeHealthBadge(node)).toEqual({ label: '降级', tone: 'warning' })
-    expect(nodeHealthBadge({ logical_id: 'n2', protocol: 'ss', display_name: 'N2', active: true, capabilities: { streaming: 'error' } })).toEqual({
+    expect(nodeHealthBadge(node)).toEqual({ label: '待复核', tone: 'warning' })
+    expect(nodeHealthBadge({ logical_id: 'n2', protocol: 'ss', display_name: 'N2', active: true, capabilities: { baseline: 'error' } })).toEqual({
       label: '异常',
       tone: 'error',
     })
@@ -291,7 +296,7 @@ describe('node view helpers & plaintext WireGuard / TUIC connection handling', (
     expect(formatNodeLatency(failedZeroLatencyNode)).toBe('--')
     expect(nodeLatencyTone(failedZeroLatencyNode)).toBe('error')
 
-    // Safety policy and probe config/build rejections remain unknown ('unprobed'), never misreported as 'unhealthy'
+    // Safety policy and probe config/build rejections remain undetermined, never misreported as 'unhealthy'
     const unsafeTlsNode = normalizeNode({
       logical_id: 'n-unsafe-tls',
       protocol: 'hysteria2',
@@ -307,7 +312,7 @@ describe('node view helpers & plaintext WireGuard / TUIC connection handling', (
         },
       },
     })
-    expect(nodeUnderlyingHealthCategory(unsafeTlsNode)).toBe('unprobed')
+    expect(nodeUnderlyingHealthCategory(unsafeTlsNode)).toBe('undetermined')
     expect(resolveNodeLatencyMs(unsafeTlsNode)).toBeNull()
     expect(nodeHealthBadge(unsafeTlsNode)).toEqual({ label: '未知 · 安全拒绝', tone: 'warning' })
     expect(nodeHealthDiagnostic(unsafeTlsNode)?.shortLabel).toContain('安全拒绝：跳过证书校验')
@@ -327,7 +332,7 @@ describe('node view helpers & plaintext WireGuard / TUIC connection handling', (
         },
       },
     })
-    expect(nodeUnderlyingHealthCategory(credsMissingNode)).toBe('unprobed')
+    expect(nodeUnderlyingHealthCategory(credsMissingNode)).toBe('undetermined')
     expect(nodeHealthBadge(credsMissingNode)).toEqual({ label: '未知 · 配置待核', tone: 'warning' })
     expect(nodeHealthDiagnostic(credsMissingNode)?.detail).toContain('不代表线路网络瘫痪')
 
@@ -344,10 +349,39 @@ describe('node view helpers & plaintext WireGuard / TUIC connection handling', (
         streaming: { verdict: 'available', latency_ms: 92, stale: false },
       },
     })
-    expect(nodeUnderlyingHealthCategory(staleBaselineNode)).toBe('unprobed')
+    expect(nodeUnderlyingHealthCategory(staleBaselineNode)).toBe('undetermined')
     expect(resolveNodeLatencyMs(staleBaselineNode)).toBeNull()
     expect(nodeHealthBadge(staleBaselineNode)).toEqual({ label: '未知 · 待重测', tone: 'info' })
     expect(nodeHealthDiagnostic(staleBaselineNode)?.code).toBe('probe_stale')
+
+    // AI available with missing baseline: classified as undetermined, does NOT fallback to healthy,
+    // and auxiliary probe latency does NOT pollute overall node latency
+    const aiOnlyNode = normalizeNode({
+      logical_id: 'n-ai-only',
+      protocol: 'ss',
+      display_name: 'AI Fast Node',
+      active: true,
+      health_status: 'unknown',
+      capabilities: {
+        ai: { verdict: 'available', latency_ms: 120, observed_at: '2026-09-26T10:00:00Z' },
+      },
+    })
+    expect(nodeUnderlyingHealthCategory(aiOnlyNode)).toBe('undetermined')
+    expect(resolveNodeLatencyMs(aiOnlyNode)).toBeNull()
+    expect(nodeHealthBadge(aiOnlyNode)).toEqual({ label: '待复核', tone: 'warning' })
+
+    // Zero observations: classified as untested
+    const unprobedNode = normalizeNode({
+      logical_id: 'n-unprobed',
+      protocol: 'ss',
+      display_name: 'Never Probed Node',
+      active: true,
+      health_status: 'unknown',
+      probe_missing: true,
+      capabilities: {},
+    })
+    expect(nodeUnderlyingHealthCategory(unprobedNode)).toBe('untested')
+    expect(nodeHealthBadge(unprobedNode)).toEqual({ label: '未探测', tone: 'info' })
   })
 
   it('includes plaintext source_url_secret_ref in subscriptionPatchPayload and omits blank URL', () => {

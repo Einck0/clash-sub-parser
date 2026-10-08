@@ -2,6 +2,7 @@ package http
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -145,6 +146,26 @@ func (h nodeHandler) list(w http.ResponseWriter, r *http.Request) {
 		for _, part := range strings.Split(value, ",") {
 			if part = strings.TrimSpace(part); part != "" {
 				filter.RiskPolicyRevisions = append(filter.RiskPolicyRevisions, part)
+			}
+		}
+	}
+
+	validHealthStatuses := map[string]bool{
+		"healthy":      true,
+		"degraded":     true,
+		"unhealthy":    true,
+		"undetermined": true,
+		"untested":     true,
+	}
+	for _, value := range q["health_status"] {
+		for _, part := range strings.Split(value, ",") {
+			part = strings.TrimSpace(strings.ToLower(part))
+			if part != "" {
+				if !validHealthStatuses[part] {
+					WriteError(w, r, http.StatusBadRequest, "invalid_health_status", fmt.Sprintf("invalid health_status '%s'", part))
+					return
+				}
+				filter.HealthStatuses = append(filter.HealthStatuses, part)
 			}
 		}
 	}

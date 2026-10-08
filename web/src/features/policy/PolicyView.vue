@@ -10,6 +10,7 @@ import {
   GlobeAltIcon,
   TrashIcon,
   ArrowPathIcon,
+  MagnifyingGlassIcon,
 } from '@heroicons/vue/24/outline'
 import { usePolicy } from './usePolicy'
 import type {
@@ -54,7 +55,13 @@ const {
   validationError,
   abortValidation,
   error,
+  page,
+  pageSize,
+  searchQuery,
+  totalGroups,
+  allTopologyGroups,
   loadGroups,
+  loadAllTopologyGroups,
   reload,
   createGroup,
   updateGroup,
@@ -76,7 +83,8 @@ const sortedPolicyRules = computed(() => {
 })
 
 function getTargetGroupName(groupId: string): string {
-  const g = groups.value.find((grp) => grp.id === groupId)
+  const all = allTopologyGroups.value.length > 0 ? allTopologyGroups.value : groups.value
+  const g = all.find((grp) => grp.id === groupId)
   return g ? g.name : groupId
 }
 
@@ -104,6 +112,30 @@ function parseRuleExpression(expr: string) {
     return { type: parts[0].trim(), value: parts.slice(1).join(',').trim() }
   }
   return { type: trimmed, value: '' }
+}
+
+const groupSearchInput = ref('')
+let groupSearchDebounceTimer: ReturnType<typeof setTimeout> | null = null
+
+function onGroupSearchInput(e: Event) {
+  const val = (e.target as HTMLInputElement).value
+  groupSearchInput.value = val
+  if (groupSearchDebounceTimer) clearTimeout(groupSearchDebounceTimer)
+  groupSearchDebounceTimer = setTimeout(() => {
+    loadGroups(1, pageSize.value, val)
+  }, 300)
+}
+
+function handlePrevPage() {
+  if (page.value > 1) {
+    loadGroups(page.value - 1, pageSize.value, groupSearchInput.value)
+  }
+}
+
+function handleNextPage() {
+  if (page.value * pageSize.value < totalGroups.value) {
+    loadGroups(page.value + 1, pageSize.value, groupSearchInput.value)
+  }
 }
 
 const confirmDeleteRuleOpen = ref(false)
@@ -554,6 +586,48 @@ onUnmounted(() => {
 
     <!-- Tab 1: Policy Groups View -->
     <div v-if="activeTab === 'groups'" class="space-y-4">
+      <!-- Search & Pagination Controls Bar -->
+      <div
+        data-testid="policy-groups-toolbar"
+        class="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 p-3 rounded-xl bg-base-200/50 border border-base-300"
+      >
+        <div class="relative flex-1 max-w-xs sm:max-w-sm">
+          <input
+            :value="groupSearchInput"
+            data-testid="policy-group-search-input"
+            type="search"
+            placeholder="搜索策略组名称或类型..."
+            class="input input-bordered input-xs sm:input-sm w-full pl-8 font-mono text-xs"
+            @input="onGroupSearchInput"
+          />
+          <MagnifyingGlassIcon class="w-4 h-4 opacity-50 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+        </div>
+
+        <div class="flex items-center justify-between sm:justify-end gap-3 text-xs font-mono opacity-80">
+          <span>第 {{ page }} / {{ Math.max(1, Math.ceil(totalGroups / pageSize)) }} 页 (共 {{ totalGroups }} 组)</span>
+          <div class="join">
+            <button
+              type="button"
+              data-testid="policy-prev-page-btn"
+              class="join-item btn btn-xs"
+              :disabled="loading || page <= 1"
+              @click="handlePrevPage"
+            >
+              上一页
+            </button>
+            <button
+              type="button"
+              data-testid="policy-next-page-btn"
+              class="join-item btn btn-xs"
+              :disabled="loading || page * pageSize >= totalGroups"
+              @click="handleNextPage"
+            >
+              下一页
+            </button>
+          </div>
+        </div>
+      </div>
+
       <div v-if="loading && groups.length === 0" class="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr))]">
         <div v-for="i in 6" :key="i" class="skeleton h-32 rounded-box" />
       </div>
@@ -582,7 +656,7 @@ onUnmounted(() => {
           v-for="grp in groups"
           :key="grp.id"
           :group="grp"
-          :available-groups="groups"
+          :available-groups="allTopologyGroups.length > 0 ? allTopologyGroups : groups"
           :selected="selectedGroupId === grp.id"
           @select="selectGroup"
           @edit="openEditGroup"
@@ -888,7 +962,7 @@ onUnmounted(() => {
     <PolicyEditorSheet
       :open="sheetOpen"
       :group="activeGroup"
-      :all-groups="groups"
+      :all-groups="allTopologyGroups.length > 0 ? allTopologyGroups : groups"
       :available-nodes="nodeItems"
       :mode="sheetMode"
       :saving="saving"

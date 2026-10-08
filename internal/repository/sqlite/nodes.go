@@ -199,6 +199,95 @@ func (r *nodeRepository) List(ctx context.Context, filter domain.NodeFilter) ([]
 	return items, total, nil
 }
 
+// ListAll returns all matching nodes without pagination truncation, preserving
+// subscription scope, active-only constraints, notice exclusions, and IP risk admissions.
+func (r *nodeRepository) ListAll(ctx context.Context, filter domain.NodeFilter) ([]domain.Node, error) {
+	if len(filter.RiskDecisions) > 0 || len(filter.RiskBands) > 0 || len(filter.RiskProviders) > 0 || len(filter.RiskStatuses) > 0 {
+		return r.listAllWithRisk(ctx, filter)
+	}
+
+	whereClauses, args := buildNodeFilterPredicates(filter, "n.")
+	whereSQL := ""
+	if len(whereClauses) > 0 {
+		whereSQL = "WHERE " + strings.Join(whereClauses, " AND ")
+	}
+
+	orderBy := "n.created_at DESC, n.logical_id ASC"
+	if filter.SortBy == "display_name" {
+		order := "ASC"
+		if strings.ToUpper(filter.SortOrder) == "DESC" {
+			order = "DESC"
+		}
+		orderBy = fmt.Sprintf("n.display_name %s, n.logical_id ASC", order)
+	}
+
+	selectQuery := fmt.Sprintf(`
+	SELECT n.logical_id, n.protocol, n.display_name,
+	       COALESCE(json_extract(v.effective_config_json, '$.server'), n.server),
+	       COALESCE(json_extract(v.effective_config_json, '$.port'), n.port),
+	       COALESCE(json_extract(v.effective_config_json, '$.credentials'), v.effective_config_json, n.config_json),
+	       n.active, n.created_at, n.updated_at,
+	       COALESCE(h.connection_revision, n.connection_revision)
+	FROM nodes n
+	LEFT JOIN node_connection_heads h ON n.logical_id = h.logical_id
+	LEFT JOIN node_connection_versions v ON h.logical_id = v.node_logical_id AND h.connection_revision = v.connection_revision
+	%s
+	ORDER BY %s;`, whereSQL, orderBy)
+
+	rows, err := r.db.QueryContext(ctx, selectQuery, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query all nodes: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]domain.Node, 0)
+	for rows.Next() {
+		var node domain.Node
+		var configJSON string
+		var activeInt int
+		var createdStr, updatedStr string
+
+		err := rows.Scan(
+			&node.LogicalID,
+			&node.Protocol,
+			&node.DisplayName,
+			&node.Server,
+			&node.Port,
+			&configJSON,
+			&activeInt,
+			&createdStr,
+			&updatedStr,
+			&node.ConnectionRevision,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan node in ListAll: %w", err)
+		}
+
+		creds, err := unmarshalNodeCredentials(configJSON)
+		if err != nil {
+			return nil, fmt.Errorf("failed to unmarshal credentials for node %s: %w", node.LogicalID, err)
+		}
+		node.Credentials = creds
+		node.Active = activeInt == 1
+		node.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdStr)
+		if node.CreatedAt.IsZero() {
+			node.CreatedAt, _ = time.Parse(time.RFC3339, createdStr)
+		}
+		node.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedStr)
+		if node.UpdatedAt.IsZero() {
+			node.UpdatedAt, _ = time.Parse(time.RFC3339, updatedStr)
+		}
+
+		items = append(items, node)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating all nodes in ListAll: %w", err)
+	}
+
+	return items, nil
+}
+
 func (r *nodeRepository) UpsertBatch(ctx context.Context, nodes []domain.Node) error {
 	if len(nodes) == 0 {
 		return nil

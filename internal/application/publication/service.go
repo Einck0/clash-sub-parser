@@ -809,7 +809,7 @@ func (s *Service) resolveSnapshot(ctx context.Context, revisionID string) (*reso
 		return nil, fmt.Errorf("failed to list admission rules for revision %s: %w", revID, err)
 	}
 
-	nodes, _, err := s.nodeRepo.List(ctx, domain.NodeFilter{
+	nodes, err := s.nodeRepo.ListAll(ctx, domain.NodeFilter{
 		Scope:          domain.NodeScopeEnabledSubscriptions,
 		ActiveOnly:     true,
 		ExcludeNotices: true,

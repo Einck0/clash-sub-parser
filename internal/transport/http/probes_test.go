@@ -1077,6 +1077,10 @@ func (m *poolNodeMemory) List(_ context.Context, f domain.NodeFilter) ([]domain.
 	}
 	return out, len(out), nil
 }
+func (m *poolNodeMemory) ListAll(ctx context.Context, f domain.NodeFilter) ([]domain.Node, error) {
+	out, _, err := m.List(ctx, f)
+	return out, err
+}
 func (m *poolNodeMemory) GetReadModel(context.Context, string, string) (*domain.NodeReadModel, error) {
 	return nil, nil
 }

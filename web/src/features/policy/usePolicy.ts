@@ -42,26 +42,79 @@ export function usePolicy() {
   const validationError = ref('')
   const latestRevisionId = ref('')
   const error = ref('')
+  const page = ref(1)
+  const pageSize = ref(50)
+  const searchQuery = ref('')
   const totalGroups = ref(0)
+  const allTopologyGroups = ref<PolicyGroup[]>([])
 
   let validateSeq = 0
   let validateAbortController: AbortController | null = null
+  let loadGroupsSeq = 0
 
-  async function loadGroups(search?: string) {
+  async function loadGroups(p = page.value, ps = pageSize.value, search?: string) {
+    const seq = ++loadGroupsSeq
     loading.value = true
     error.value = ''
     try {
-      const params: Record<string, string | number> = { page: 1, page_size: 100 }
-      if (search) params.search = search
+      const targetPage = Math.max(1, p)
+      const targetPageSize = Math.min(100, Math.max(1, ps || 50))
+      const params: Record<string, string | number> = { page: targetPage, page_size: targetPageSize }
+      const effectiveSearch = search !== undefined ? search : searchQuery.value
+      if (effectiveSearch && effectiveSearch.trim()) {
+        params.search = effectiveSearch.trim()
+      }
       const res = await api.get<PaginatedGroups>('/api/v1/policies/groups', { params })
+      if (seq !== loadGroupsSeq) return true
+
       groups.value = res.items || []
       totalGroups.value = res.total || 0
+      page.value = res.page || targetPage
+      pageSize.value = res.page_size || targetPageSize
+      if (search !== undefined) {
+        searchQuery.value = search
+      }
       return true
     } catch (err) {
-      error.value = err instanceof Error ? err.message : '加载策略组失败'
+      if (seq === loadGroupsSeq) {
+        error.value = err instanceof Error ? err.message : '加载策略组失败'
+      }
       return false
     } finally {
-      loading.value = false
+      if (seq === loadGroupsSeq) {
+        loading.value = false
+      }
+    }
+  }
+
+  async function loadAllTopologyGroups(force = false): Promise<PolicyGroup[]> {
+    if (!force && allTopologyGroups.value.length > 0 && totalGroups.value > 0 && allTopologyGroups.value.length >= totalGroups.value) {
+      return allTopologyGroups.value
+    }
+    if (!force && !searchQuery.value && page.value === 1 && totalGroups.value > 0 && groups.value.length >= totalGroups.value) {
+      allTopologyGroups.value = [...groups.value]
+      return allTopologyGroups.value
+    }
+    try {
+      const all: PolicyGroup[] = []
+      let p = 1
+      const ps = 100
+      while (true) {
+        const res = await api.get<PaginatedGroups>('/api/v1/policies/groups', {
+          params: { page: p, page_size: ps },
+        })
+        const items = res.items || []
+        all.push(...items)
+        if (items.length === 0 || all.length >= (res.total || 0) || items.length < ps) {
+          break
+        }
+        p++
+      }
+      allTopologyGroups.value = all
+      return all
+    } catch {
+      allTopologyGroups.value = groups.value
+      return groups.value
     }
   }
 
@@ -104,6 +157,9 @@ export function usePolicy() {
       const updated = await api.patch<PolicyGroup>(`/api/v1/policies/groups/${encodeURIComponent(id)}`, payload)
       const idx = groups.value.findIndex((g) => g.id === id)
       if (idx >= 0) groups.value[idx] = updated
+      const topoIdx = allTopologyGroups.value.findIndex((g) => g.id === id)
+      if (topoIdx >= 0) allTopologyGroups.value[topoIdx] = updated
+      else allTopologyGroups.value.push(updated)
       await reload()
       return updated
     } catch (err) {
@@ -121,6 +177,7 @@ export function usePolicy() {
     try {
       await api.delete(`/api/v1/policies/groups/${encodeURIComponent(id)}`)
       groups.value = groups.value.filter((g) => g.id !== id)
+      allTopologyGroups.value = allTopologyGroups.value.filter((g) => g.id !== id)
       await reload()
     } catch (err) {
       error.value = err instanceof Error ? err.message : '删除策略组失败'
@@ -136,6 +193,10 @@ export function usePolicy() {
     error.value = ''
     try {
       await api.put(`/api/v1/policies/groups/${encodeURIComponent(groupId)}/edges`, { edges })
+      const grp = groups.value.find((g) => g.id === groupId)
+      if (grp) grp.edges = edges
+      const topoGrp = allTopologyGroups.value.find((g) => g.id === groupId)
+      if (topoGrp) topoGrp.edges = edges
       await reload()
     } catch (err) {
       error.value = err instanceof Error ? err.message : '保存策略组连接边失败'
@@ -255,10 +316,12 @@ export function usePolicy() {
     validationState.value = 'incomplete'
     // Sequential loads keep the first failure visible; validate only the
     // successfully loaded current revision, never a half-loaded screen.
-    if (!await loadGroups() || seq !== reloadSeq) return
+    if (!await loadGroups(page.value, pageSize.value, searchQuery.value) || seq !== reloadSeq) return
     if (!await loadRules() || seq !== reloadSeq) return
     await loadGlobalFilter()
     if (error.value || seq !== reloadSeq) return
+    await loadAllTopologyGroups()
+    if (seq !== reloadSeq) return
     await validateGraph()
   }
 
@@ -391,8 +454,13 @@ export function usePolicy() {
     latestRevisionId,
     abortValidation,
     error,
+    page,
+    pageSize,
+    searchQuery,
     totalGroups,
+    allTopologyGroups,
     loadGroups,
+    loadAllTopologyGroups,
     reload,
     createGroup,
     updateGroup,

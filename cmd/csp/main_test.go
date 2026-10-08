@@ -123,7 +123,12 @@ func TestServeCLI(t *testing.T) {
 		}()
 
 		baseURL := fmt.Sprintf("http://%s", addr)
-		client := &http.Client{Timeout: 2 * time.Second}
+		client := &http.Client{
+			Timeout: 2 * time.Second,
+			Transport: &http.Transport{
+				DisableKeepAlives: true,
+			},
+		}
 
 		// Poll until server is responding
 		var healthzOK, readyzOK bool
@@ -198,6 +203,7 @@ func TestServeCLI(t *testing.T) {
 		}
 
 		// Trigger graceful shutdown
+		client.CloseIdleConnections()
 		cancel()
 
 		select {
@@ -245,7 +251,12 @@ func TestServeCLI(t *testing.T) {
 		}()
 
 		baseURL := fmt.Sprintf("http://%s", addr)
-		client := &http.Client{Timeout: 2 * time.Second}
+		client := &http.Client{
+			Timeout: 2 * time.Second,
+			Transport: &http.Transport{
+				DisableKeepAlives: true,
+			},
+		}
 
 		var healthzOK bool
 		deadline := time.Now().Add(10 * time.Second)
@@ -266,6 +277,7 @@ func TestServeCLI(t *testing.T) {
 			t.Fatalf("/healthz check failed with fetch-proxy configured. Stdout: %s, Stderr: %s", stdout.String(), stderr.String())
 		}
 
+		client.CloseIdleConnections()
 		cancel()
 		select {
 		case code := <-serveDone:

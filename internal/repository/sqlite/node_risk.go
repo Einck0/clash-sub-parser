@@ -937,3 +937,126 @@ func primaryRiskProvider(p *domain.RiskPolicy) (string, string) {
 	}
 	return "unknown", "v1"
 }
+
+func (r *nodeRepository) listAllWithRisk(ctx context.Context, filter domain.NodeFilter) ([]domain.Node, error) {
+	policy, err := r.resolveTargetRiskPolicy(ctx, filter.RiskPolicyRevisions)
+	if err != nil {
+		return nil, err
+	}
+
+	now := domain.NowUTC()
+	nowStr := now.Format(time.RFC3339Nano)
+
+	var (
+		whereClauses []string
+		args         []any
+		cteSQL       string
+	)
+
+	if policy != nil {
+		cteSQL, args = buildRiskEvaluationCTE(policy, nowStr)
+	} else {
+		cteSQL, args = buildNoPolicyCTE()
+	}
+
+	baseClauses, baseArgs := buildNodeFilterPredicates(filter, "")
+	whereClauses = append(whereClauses, baseClauses...)
+	args = append(args, baseArgs...)
+
+	if len(filter.RiskDecisions) > 0 {
+		placeholders := make([]string, len(filter.RiskDecisions))
+		for i, d := range filter.RiskDecisions {
+			placeholders[i] = "?"
+			args = append(args, string(d))
+		}
+		whereClauses = append(whereClauses, fmt.Sprintf("risk_decision IN (%s)", strings.Join(placeholders, ",")))
+	}
+	if len(filter.RiskBands) > 0 {
+		placeholders := make([]string, len(filter.RiskBands))
+		for i, b := range filter.RiskBands {
+			placeholders[i] = "?"
+			args = append(args, string(b))
+		}
+		whereClauses = append(whereClauses, fmt.Sprintf("risk_band IN (%s)", strings.Join(placeholders, ",")))
+	}
+	if len(filter.RiskProviders) > 0 {
+		placeholders := make([]string, len(filter.RiskProviders))
+		for i, p := range filter.RiskProviders {
+			placeholders[i] = "?"
+			args = append(args, p)
+		}
+		whereClauses = append(whereClauses, fmt.Sprintf("risk_provider IN (%s)", strings.Join(placeholders, ",")))
+	}
+	if len(filter.RiskStatuses) > 0 {
+		placeholders := make([]string, len(filter.RiskStatuses))
+		for i, s := range filter.RiskStatuses {
+			placeholders[i] = "?"
+			args = append(args, string(s))
+		}
+		whereClauses = append(whereClauses, fmt.Sprintf("risk_status IN (%s)", strings.Join(placeholders, ",")))
+	}
+
+	whereSQL := ""
+	if len(whereClauses) > 0 {
+		whereSQL = "WHERE " + strings.Join(whereClauses, " AND ")
+	}
+
+	orderBy := "created_at DESC, logical_id ASC"
+	if filter.SortBy == "display_name" {
+		order := "ASC"
+		if strings.EqualFold(filter.SortOrder, "DESC") {
+			order = "DESC"
+		}
+		orderBy = fmt.Sprintf("display_name %s, logical_id ASC", order)
+	}
+
+	selectQuery := fmt.Sprintf(`%s
+		SELECT logical_id, protocol, display_name, server, port, config_json, active,
+		       created_at, updated_at, connection_revision
+		FROM node_eval
+		%s
+		ORDER BY %s;`, cteSQL, whereSQL, orderBy)
+
+	rows, err := r.db.QueryContext(ctx, selectQuery, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query all nodes with risk: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]domain.Node, 0)
+	for rows.Next() {
+		var (
+			node                   domain.Node
+			configJSON             string
+			activeInt              int
+			createdStr, updatedStr string
+		)
+		if err := rows.Scan(
+			&node.LogicalID,
+			&node.Protocol,
+			&node.DisplayName,
+			&node.Server,
+			&node.Port,
+			&configJSON,
+			&activeInt,
+			&createdStr,
+			&updatedStr,
+			&node.ConnectionRevision,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan all nodes with risk: %w", err)
+		}
+		creds, err := unmarshalNodeCredentials(configJSON)
+		if err != nil {
+			return nil, fmt.Errorf("failed to unmarshal credentials for node %s: %w", node.LogicalID, err)
+		}
+		node.Credentials = creds
+		node.Active = activeInt == 1
+		node.CreatedAt = parseStoredTime(createdStr)
+		node.UpdatedAt = parseStoredTime(updatedStr)
+		items = append(items, node)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating all nodes with risk: %w", err)
+	}
+	return items, nil
+}

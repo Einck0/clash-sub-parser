@@ -202,6 +202,13 @@ func (m *memoryNodeRepo) List(_ context.Context, filter domain.NodeFilter) ([]do
 	return filtered[start:end], total, nil
 }
 
+func (m *memoryNodeRepo) ListAll(ctx context.Context, filter domain.NodeFilter) ([]domain.Node, error) {
+	unpaginated := filter
+	unpaginated.Pagination.PageSize = 0
+	nodes, _, err := m.List(ctx, unpaginated)
+	return nodes, err
+}
+
 func (m *memoryNodeRepo) GetByLogicalID(_ context.Context, id string) (*domain.Node, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1830,7 +1837,13 @@ func TestPoolStatus_BaselineIsolationAndSecurityRejectionsUnknown(t *testing.T) 
 	if pool.UnavailableCount != 1 {
 		t.Fatalf("expected unavailable_count=1 (only n-unhealthy), got %d", pool.UnavailableCount)
 	}
-	if pool.UntestedCount != 5 {
-		t.Fatalf("expected untested_count=5 (non-baseline + 4 security/build rejections), got %d", pool.UntestedCount)
+	if pool.UndeterminedCount != 5 {
+		t.Fatalf("expected undetermined_count=5 (non-baseline + 4 security/build rejections), got %d", pool.UndeterminedCount)
+	}
+	if pool.UntestedCount != 0 {
+		t.Fatalf("expected untested_count=0, got %d", pool.UntestedCount)
+	}
+	if !pool.ValidateConservation() {
+		t.Fatalf("pool conservation violated: %+v", pool)
 	}
 }

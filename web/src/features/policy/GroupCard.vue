@@ -29,6 +29,44 @@ const emit = defineEmits<{
 const expanded = ref(false)
 
 const edgeCount = computed(() => props.group.edges?.length || 0)
+const hasEdges = computed(() => Boolean(props.group.edges && props.group.edges.length > 0))
+const hasChildGroupEdges = computed(() => Boolean(props.group.edges && props.group.edges.some((e) => e.child_group_id)))
+const hasFilters = computed(() => Boolean(props.group.node_filter?.conditions && props.group.node_filter.conditions.length > 0))
+
+const membershipMode = computed(() => {
+  if (hasEdges.value) {
+    if (hasChildGroupEdges.value) {
+      return {
+        key: 'cascade',
+        label: '子策略组级联',
+        fullLabel: '子策略组级联模式（父级筛选条件向下级递归继承）',
+        badgeClass: 'badge-secondary',
+        secondaryNotice: hasFilters.value ? '组筛选作为入选边之二次过滤' : undefined,
+      }
+    }
+    return {
+      key: 'explicit',
+      label: '显式连接边',
+      fullLabel: '显式连接边模式（组筛选仅作为入选边之二次过滤）',
+      badgeClass: 'badge-accent',
+      secondaryNotice: hasFilters.value ? '二次过滤：仅对入选边生效' : undefined,
+    }
+  }
+  if (hasFilters.value) {
+    return {
+      key: 'dynamic',
+      label: '全池动态匹配',
+      fullLabel: '全池动态匹配模式（自动遍历全局活跃节点）',
+      badgeClass: 'badge-info',
+    }
+  }
+  return {
+    key: 'empty',
+    label: '空成员',
+    fullLabel: '未配置成员（空策略组）',
+    badgeClass: 'badge-ghost',
+  }
+})
 
 function handleHeaderClick() {
   emit('select', props.group)
@@ -90,6 +128,21 @@ function handleHeaderClick() {
             <span class="truncate">{{ edgeCount }} 条关联边</span>
           </span>
           <span
+            class="badge badge-xs font-semibold"
+            :class="membershipMode.badgeClass"
+            :title="membershipMode.fullLabel"
+            data-testid="group-membership-mode-badge"
+          >
+            {{ membershipMode.label }}
+          </span>
+          <span
+            v-if="membershipMode.secondaryNotice"
+            class="badge badge-xs badge-outline font-mono"
+            :title="membershipMode.secondaryNotice"
+          >
+            二次过滤
+          </span>
+          <span
             class="badge badge-xs badge-ghost font-mono"
             :title="`支持策略组的编译目标：${groupTypeSupportedTargets(group.group_type).join('/')}`"
           >
@@ -149,7 +202,13 @@ function handleHeaderClick() {
             <span v-if="!group.edges || group.edges.length === 0" class="badge badge-xs badge-info font-semibold">
               动态节点池
             </span>
+            <span v-else class="badge badge-xs badge-accent font-semibold">
+              {{ hasChildGroupEdges ? '子策略组级联二次过滤' : '显式边二次过滤' }}
+            </span>
           </div>
+          <p v-if="hasEdges" class="text-[11px] text-accent font-sans">
+            说明：当前处于显式连接边模式，此处的筛选条件仅作用于显式选定的关联目标，不会引入全局节点。
+          </p>
           <div class="flex flex-wrap gap-1">
             <span
               v-for="(c, cIdx) in group.node_filter.conditions"

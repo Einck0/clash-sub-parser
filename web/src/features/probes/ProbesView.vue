@@ -83,6 +83,7 @@ const {
   error,
   totalRuns,
   totalBatches,
+  totalNodes,
   loadProbeNodes,
   loadSubscriptions,
   loadNodeObservations,
@@ -115,9 +116,44 @@ const searchQuery = ref('')
 const protocolFilter = ref('all')
 const subscriptionFilter = ref('all')
 const healthFilter = ref<
-  'all' | 'probing' | 'available' | 'healthy' | 'degraded' | 'unhealthy' | 'unprobed'
+  'all' | 'probing' | 'queued' | 'available' | 'healthy' | 'degraded' | 'unhealthy' | 'undetermined' | 'unprobed' | 'untested'
 >('all')
 const sortBy = ref<'latency_asc' | 'latency_desc' | 'name_asc'>('latency_asc')
+const nodePage = ref(1)
+const nodePageSize = ref(50)
+
+async function fetchCurrentProbeNodes(p = nodePage.value) {
+  nodePage.value = p
+  await loadProbeNodes(p, nodePageSize.value, {
+    search: searchQuery.value,
+    healthStatus: healthFilter.value,
+    protocol: protocolFilter.value !== 'all' ? protocolFilter.value : undefined,
+  })
+}
+
+function handlePrevNodePage() {
+  if (nodePage.value > 1) {
+    fetchCurrentProbeNodes(nodePage.value - 1)
+  }
+}
+
+function handleNextNodePage() {
+  if (nodePage.value * nodePageSize.value < totalNodes.value) {
+    fetchCurrentProbeNodes(nodePage.value + 1)
+  }
+}
+
+let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null
+watch(searchQuery, () => {
+  if (searchDebounceTimer) clearTimeout(searchDebounceTimer)
+  searchDebounceTimer = setTimeout(() => {
+    fetchCurrentProbeNodes(1)
+  }, 300)
+})
+
+watch([healthFilter, protocolFilter], () => {
+  fetchCurrentProbeNodes(1)
+})
 
 // Multi-select nodes for targeted probing
 const selectedNodeIds = ref<Set<string>>(new Set())
@@ -216,6 +252,7 @@ const kpiStats = computed(() => {
   const healthy = pool.healthy_count
   const degraded = pool.degraded_count
   const unhealthy = pool.unavailable_count
+  const undetermined = pool.undetermined_count || 0
   const unprobed = pool.untested_count
   const queueNodesCount = pool.queue_nodes_count
   const probingCount = pool.probing_count
@@ -229,7 +266,8 @@ const kpiStats = computed(() => {
   const healthyPct = Math.round((healthy / denom) * 100)
   const degradedPct = Math.round((degraded / denom) * 100)
   const unhealthyPct = Math.round((unhealthy / denom) * 100)
-  const unprobedPct = Math.max(0, 100 - healthyPct - degradedPct - unhealthyPct)
+  const undeterminedPct = Math.round((undetermined / denom) * 100)
+  const unprobedPct = Math.max(0, 100 - healthyPct - degradedPct - unhealthyPct - undeterminedPct)
   const queueProgressPct =
     total > 0 && queueNodesCount > 0
       ? Math.max(8, Math.min(100, Math.round(((total - queueNodesCount) / total) * 100)))
@@ -247,6 +285,7 @@ const kpiStats = computed(() => {
     healthy,
     degraded,
     unhealthy,
+    undetermined,
     unprobed,
     avgLatency,
     latencyCount,
@@ -259,13 +298,14 @@ const kpiStats = computed(() => {
     healthyPct,
     degradedPct,
     unhealthyPct,
+    undeterminedPct,
     unprobedPct,
     queueProgressPct,
   }
 })
 
 function selectPoolMetricFilter(
-  target: 'all' | 'probing' | 'available' | 'healthy' | 'degraded' | 'unhealthy' | 'unprobed'
+  target: 'all' | 'probing' | 'queued' | 'available' | 'healthy' | 'degraded' | 'unhealthy' | 'undetermined' | 'unprobed' | 'untested'
 ) {
   activeTab.value = 'workbench'
   if (target === 'all') {
@@ -310,11 +350,13 @@ const filteredNodes = computed(() => {
       const liveState = getNodeProbeState(node)
       const category = nodeUnderlyingHealthCategory(node)
       if (health === 'probing' && liveState !== 'probing' && liveState !== 'queued') return false
+      if (health === 'queued' && liveState !== 'queued') return false
       if (health === 'available' && category !== 'healthy' && category !== 'degraded') return false
       if (health === 'healthy' && category !== 'healthy') return false
       if (health === 'degraded' && category !== 'degraded') return false
       if (health === 'unhealthy' && category !== 'unhealthy') return false
-      if (health === 'unprobed' && category !== 'unprobed') return false
+      if (health === 'undetermined' && category !== 'undetermined') return false
+      if (health === 'unprobed' && category !== 'untested' && (category as string) !== 'unprobed') return false
     }
     if (q) {
       const matchName = node.displayName.toLowerCase().includes(q)
@@ -427,7 +469,7 @@ async function handleProbeSingleNode(node: NormalizedNode) {
 
 async function handleProbeUntestedNodes() {
   const targetIds = probeNodes.value
-    .filter((n) => nodeUnderlyingHealthCategory(n) === 'unprobed')
+    .filter((n) => nodeUnderlyingHealthCategory(n) === 'untested')
     .map((n) => n.logicalId)
   if (targetIds.length === 0) {
     selectPoolMetricFilter('unprobed')
@@ -624,7 +666,7 @@ function handleFilterChange(state: ProbeRunState | '') {
 
 function refreshAll() {
   loadPoolStatus()
-  loadProbeNodes()
+  fetchCurrentProbeNodes(nodePage.value)
   loadSubscriptions()
   loadRuns(selectedStateFilter.value || undefined)
   loadSchedule()
@@ -663,7 +705,7 @@ onMounted(() => {
       // When transitioning from active probing to idle, refresh node inventory once
       if (hadActiveProbe) {
         hadActiveProbe = false
-        loadProbeNodes()
+        fetchCurrentProbeNodes(nodePage.value)
       }
       // Idle low-frequency baseline refresh every ~16 seconds (8 ticks * 2s)
       idleTickCount++
@@ -679,6 +721,10 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  if (searchDebounceTimer) {
+    clearTimeout(searchDebounceTimer)
+    searchDebounceTimer = null
+  }
   if (pollTimer) clearInterval(pollTimer)
 })
 </script>
@@ -937,7 +983,49 @@ onUnmounted(() => {
           </div>
         </article>
 
-        <!-- Metric 5: 未测数 -->
+        <!-- Metric 5: 待复核数 (Undetermined) -->
+        <article
+          data-testid="pool-metric-undetermined"
+          role="button"
+          tabindex="0"
+          class="card bg-base-200 border shadow-sm p-4 flex flex-col justify-between gap-2.5 cursor-pointer transition-all hover:border-info/60 hover:shadow-md"
+          :class="
+            healthFilter === 'undetermined'
+              ? 'border-info ring-2 ring-info/25 bg-info/5'
+              : 'border-base-300'
+          "
+          @click="selectPoolMetricFilter('undetermined')"
+          @keydown.enter.prevent="selectPoolMetricFilter('undetermined')"
+        >
+          <div class="flex items-center justify-between gap-2">
+            <span class="text-xs font-semibold opacity-75 whitespace-nowrap">待复核数</span>
+            <span class="badge badge-xs badge-info font-mono h-auto py-0.5 whitespace-nowrap">基线待复核</span>
+          </div>
+
+          <div class="flex items-baseline justify-between gap-2">
+            <span class="text-3xl font-extrabold font-mono text-info">
+              {{ kpiStats.undetermined }}
+            </span>
+            <span class="text-xs opacity-65 font-mono whitespace-nowrap">
+              {{ kpiStats.undeterminedPct }}%
+            </span>
+          </div>
+
+          <div class="flex items-center justify-between gap-2 pt-0.5" @click.stop>
+            <span class="text-[11px] opacity-65 truncate">有辅助能力但基线缺失/过期</span>
+            <button
+              type="button"
+              data-testid="pool-probe-undetermined-btn"
+              class="btn btn-xs btn-info btn-outline shrink-0 whitespace-nowrap"
+              :disabled="submitting || kpiStats.undetermined === 0"
+              @click="selectPoolMetricFilter('undetermined')"
+            >
+              筛选查看
+            </button>
+          </div>
+        </article>
+
+        <!-- Metric 6: 未测数 -->
         <article
           data-testid="pool-metric-untested"
           role="button"
@@ -1102,6 +1190,12 @@ onUnmounted(() => {
             class="h-full bg-error transition-all duration-300"
             :style="{ width: `${kpiStats.unhealthyPct}%` }"
             :title="`不可用: ${kpiStats.unhealthy}`"
+          />
+          <div
+            v-if="kpiStats.undeterminedPct > 0"
+            class="h-full bg-info transition-all duration-300"
+            :style="{ width: `${kpiStats.undeterminedPct}%` }"
+            :title="`待复核: ${kpiStats.undetermined}`"
           />
           <div
             v-if="kpiStats.unprobedPct > 0"
@@ -1328,6 +1422,15 @@ onUnmounted(() => {
           </button>
           <button
             type="button"
+            data-testid="status-pill-undetermined"
+            class="btn btn-xs rounded-full"
+            :class="healthFilter === 'undetermined' ? 'btn-info' : 'btn-ghost bg-base-300/60'"
+            @click="healthFilter = 'undetermined'"
+          >
+            待复核 ({{ kpiStats.undetermined }})
+          </button>
+          <button
+            type="button"
             data-testid="status-pill-unprobed"
             class="btn btn-xs rounded-full"
             :class="healthFilter === 'unprobed' ? 'btn-warning' : 'btn-ghost bg-base-300/60'"
@@ -1393,6 +1496,7 @@ onUnmounted(() => {
             <option value="healthy">正常 ({{ kpiStats.healthy }})</option>
             <option value="degraded">降级 ({{ kpiStats.degraded }})</option>
             <option value="unhealthy">异常 / 不可用 ({{ kpiStats.unhealthy }})</option>
+            <option value="undetermined">待复核 ({{ kpiStats.undetermined }})</option>
             <option value="unprobed">未测速 ({{ kpiStats.unprobed }})</option>
           </select>
 
@@ -1640,6 +1744,34 @@ onUnmounted(() => {
               </tr>
             </tbody>
           </table>
+        </div>
+
+        <!-- Node Probe Table Server-Side Pagination Bar -->
+        <div
+          data-testid="probe-nodes-pagination"
+          class="flex items-center justify-between p-3 border-t border-base-300 text-xs font-mono opacity-80"
+        >
+          <span>第 {{ nodePage }} / {{ Math.max(1, Math.ceil(totalNodes / nodePageSize)) }} 页 (共 {{ totalNodes }} 节点)</span>
+          <div class="join">
+            <button
+              type="button"
+              data-testid="probe-prev-page-btn"
+              class="join-item btn btn-xs"
+              :disabled="loadingNodes || nodePage <= 1"
+              @click="handlePrevNodePage"
+            >
+              上一页
+            </button>
+            <button
+              type="button"
+              data-testid="probe-next-page-btn"
+              class="join-item btn btn-xs"
+              :disabled="loadingNodes || nodePage * nodePageSize >= totalNodes"
+              @click="handleNextNodePage"
+            >
+              下一页
+            </button>
+          </div>
         </div>
       </div>
 

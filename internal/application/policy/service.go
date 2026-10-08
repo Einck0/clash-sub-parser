@@ -929,7 +929,7 @@ func (s *Service) ValidateGraph(ctx context.Context) (*ValidationResult, error) 
 	// 2. Fetch active nodes in CurrentEnabledSubscription scope
 	var nodes []domain.Node
 	if s.nodeRepo != nil {
-		nodes, _, err = s.nodeRepo.List(ctx, domain.NodeFilter{
+		nodes, err = s.nodeRepo.ListAll(ctx, domain.NodeFilter{
 			Scope:          domain.NodeScopeEnabledSubscriptions,
 			ActiveOnly:     true,
 			ExcludeNotices: true,

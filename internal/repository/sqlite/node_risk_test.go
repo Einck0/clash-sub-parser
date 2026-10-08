@@ -907,5 +907,30 @@ func TestNodeRiskRepository_MultiProviderAndHistoryPagination(t *testing.T) {
 		for _, item := range append(ipinfoPage1, ipinfoPage2...) {
 			assertExpectedNodeSummary(t, item)
 		}
+
+		// 8. Verify ListAll unpaginated execution preserves IP risk decisions
+		allowAll, err := repo.ListAll(ctx, domain.NodeFilter{
+			RiskDecisions: []domain.RiskAction{domain.RiskActionAllow},
+			SortBy:        "display_name",
+			SortOrder:     "ASC",
+		})
+		if err != nil {
+			t.Fatalf("ListAll with allow decision failed: %v", err)
+		}
+		if len(allowAll) != 8 {
+			t.Fatalf("expected 8 allow nodes via ListAll, got %d", len(allowAll))
+		}
+
+		reviewAll, err := repo.ListAll(ctx, domain.NodeFilter{
+			RiskDecisions: []domain.RiskAction{domain.RiskActionReview},
+			SortBy:        "display_name",
+			SortOrder:     "ASC",
+		})
+		if err != nil {
+			t.Fatalf("ListAll with review decision failed: %v", err)
+		}
+		if len(reviewAll) != 14 {
+			t.Fatalf("expected 14 review nodes via ListAll, got %d", len(reviewAll))
+		}
 	})
 }

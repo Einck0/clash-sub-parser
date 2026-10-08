@@ -55,7 +55,7 @@ func (r *policyRepository) ListGroups(ctx context.Context) ([]domain.NodeGroup, 
 	const query = `
 	SELECT id, name, group_type, created_at, updated_at, empty_fallback_pass
 	FROM node_groups
-	ORDER BY name ASC;`
+	ORDER BY name ASC, id ASC;`
 
 	rows, err := r.db.QueryContext(ctx, query)
 	if err != nil {

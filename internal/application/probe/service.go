@@ -772,34 +772,25 @@ func (s *Service) GetPoolStatus(ctx context.Context) (*domain.ProbePoolStatus, e
 	}
 	status.InventoryTotal = inventoryTotal
 
-	const fetchPageSize = 100
-	seen := make(map[string]struct{})
-	activeNodes := make([]domain.Node, 0)
-	activeIDs := make([]string, 0)
-	for fetchPage := 1; ; fetchPage++ {
-		chunk, total, err := nodesRepo.List(ctx, domain.NodeFilter{
-			Scope:          domain.NodeScopeEnabledSubscriptions,
-			ActiveOnly:     true,
-			ExcludeNotices: true,
-			Pagination:     domain.Pagination{Page: fetchPage, PageSize: fetchPageSize},
-		})
-		if err != nil {
-			return nil, err
+	activeNodes, err := nodesRepo.ListAll(ctx, domain.NodeFilter{
+		Scope:          domain.NodeScopeEnabledSubscriptions,
+		ActiveOnly:     true,
+		ExcludeNotices: true,
+	})
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]struct{}, len(activeNodes))
+	activeIDs := make([]string, 0, len(activeNodes))
+	dedupedNodes := make([]domain.Node, 0, len(activeNodes))
+	for _, n := range activeNodes {
+		if n.LogicalID == "" {
+			continue
 		}
-		added := 0
-		for _, n := range chunk {
-			if n.LogicalID == "" {
-				continue
-			}
-			if _, exists := seen[n.LogicalID]; !exists {
-				seen[n.LogicalID] = struct{}{}
-				activeNodes = append(activeNodes, n)
-				activeIDs = append(activeIDs, n.LogicalID)
-				added++
-			}
-		}
-		if len(activeIDs) >= total || len(chunk) == 0 || added == 0 {
-			break
+		if _, exists := seen[n.LogicalID]; !exists {
+			seen[n.LogicalID] = struct{}{}
+			activeIDs = append(activeIDs, n.LogicalID)
+			dedupedNodes = append(dedupedNodes, n)
 		}
 	}
 
@@ -821,25 +812,21 @@ func (s *Service) GetPoolStatus(ctx context.Context) (*domain.ProbePoolStatus, e
 	}
 
 	now := s.clock().UTC()
-	for _, n := range activeNodes {
-		var baselinePtr *domain.ProbeObservation
-		if nodeObs, ok := latestByNode[n.LogicalID]; ok {
-			if baselineObs, hasBaseline := nodeObs[domain.ProbeKindBaseline]; hasBaseline {
-				obsCopy := baselineObs
-				baselinePtr = &obsCopy
-			}
-		}
-		health, _ := domain.EvaluateBaselineHealth(baselinePtr, n.ConnectionRevision, now, DefaultProbeFreshnessTTL)
-		switch health {
-		case domain.BaselineHealthy:
+	for _, n := range dedupedNodes {
+		nodeObs := latestByNode[n.LogicalID]
+		cat := domain.ClassifyNodeHealth(nodeObs, n.ConnectionRevision, now, DefaultProbeFreshnessTTL)
+		switch cat {
+		case domain.HealthCategoryHealthy:
 			status.HealthyCount++
 			status.AvailableCount++
-		case domain.BaselineDegraded:
+		case domain.HealthCategoryDegraded:
 			status.DegradedCount++
 			status.AvailableCount++
-		case domain.BaselineUnhealthy:
+		case domain.HealthCategoryUnhealthy:
 			status.UnavailableCount++
-		default:
+		case domain.HealthCategoryUndetermined:
+			status.UndeterminedCount++
+		case domain.HealthCategoryUntested:
 			status.UntestedCount++
 		}
 	}

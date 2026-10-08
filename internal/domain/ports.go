@@ -56,6 +56,8 @@ type NodeFilter struct {
 	RiskProviders       []string       `json:"risk_providers,omitempty"`
 	RiskStatuses        []IPRiskStatus `json:"risk_statuses,omitempty"`
 	RiskPolicyRevisions []string       `json:"risk_policy_revisions,omitempty"`
+	HealthStatuses      []string       `json:"health_statuses,omitempty"`
+	Now                 *time.Time     `json:"-"`
 }
 
 // SubscriptionFilter defines query filters for subscriptions.
@@ -100,6 +102,7 @@ type SubscriptionFetchRepository interface {
 type NodeRepository interface {
 	GetByLogicalID(ctx context.Context, logicalID string) (*Node, error)
 	List(ctx context.Context, filter NodeFilter) ([]Node, int, error)
+	ListAll(ctx context.Context, filter NodeFilter) ([]Node, error)
 	ListReadModel(ctx context.Context, filter NodeFilter) ([]NodeReadModel, int, error)
 	GetReadModel(ctx context.Context, logicalID string, policyRevisionID string) (*NodeReadModel, error)
 	UpsertBatch(ctx context.Context, nodes []Node) error

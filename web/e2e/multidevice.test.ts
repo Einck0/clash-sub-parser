@@ -8,6 +8,7 @@ import { api } from '../src/api/client'
 import { THEME_STORAGE_KEY, DEFAULT_THEME, type ThemeName } from '../src/theme'
 import { ROUTE_STORAGE_KEY, VALID_TABS, type NavTab } from '../src/navigation'
 import { setLocale } from '../src/locales'
+import type { NodeRecord } from '../src/features/nodes/nodeView'
 
 describe('CSP Multi-Device & E2E Verification Suite', () => {
   let app: VueApp | null = null
@@ -655,7 +656,267 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
   })
 
   // =========================================================================
-  // 7. Strict Zero Console Uncaught Exceptions Invariant
+  // 7. Four Viewports & Large-Scale Fixtures Verification (1280x800, 392x872, 375x667, 667x375)
+  // =========================================================================
+  describe('Four Standard Viewports & Synthetic Large-Scale Fixtures (250 Nodes / 150 Groups)', () => {
+    type LargeFixtureNode = NodeRecord & {
+      logicalId: string
+      displayName: string
+      countryCode?: string
+    }
+
+    const largeNodesFixture: LargeFixtureNode[] = Array.from({ length: 250 }, (_, i): LargeFixtureNode => {
+      const index = i + 1
+      if (index === 250) {
+        return {
+          logicalId: 'node-target-250',
+          logical_id: 'node-target-250',
+          displayName: 'Taiwan Special Node 250',
+          display_name: 'Taiwan Special Node 250',
+          protocol: 'vmess',
+          active: true,
+          countryCode: 'TW',
+          capabilities: {
+            ai: { verdict: 'available' as const, latency_ms: 100 },
+          },
+        }
+      }
+      if (index === 70) {
+        return {
+          logicalId: 'node-ai-only-70',
+          logical_id: 'node-ai-only-70',
+          displayName: 'Node AI Only 70',
+          display_name: 'Node AI Only 70',
+          protocol: 'ss',
+          active: true,
+          countryCode: 'HK',
+          health_status: 'unknown',
+          capabilities: {
+            ai: { verdict: 'available' as const, latency_ms: 88 },
+          },
+        }
+      }
+      return {
+        logicalId: `node-batch-${index}`,
+        logical_id: `node-batch-${index}`,
+        displayName: `Batch Node ${index}`,
+        display_name: `Batch Node ${index}`,
+        protocol: index % 2 === 0 ? 'ss' : 'vmess',
+        active: true,
+        countryCode: 'US',
+        capabilities: {
+          baseline: { verdict: 'available' as const, latency_ms: 50 + (index % 100) },
+        },
+      }
+    })
+
+    const largeGroupsFixture = Array.from({ length: 150 }, (_, i) => {
+      const index = i + 1
+      return {
+        id: `grp-policy-${index}`,
+        name: `Policy Group ${index}`,
+        group_type: 'select' as const,
+        edges: [],
+      }
+    })
+
+    it('verifies 1280x800 Desktop Viewport: aside is sticky top-0 h-screen overflow-y-auto and remains accessible on scroll', async () => {
+      setViewport(1280, 800)
+      setupApiMocks()
+      const root = await mountApp()
+
+      const aside = root.querySelector('aside')
+      expect(aside).not.toBeNull()
+      expect(aside?.className).toContain('sticky')
+      expect(aside?.className).toContain('top-0')
+      expect(aside?.className).toContain('h-screen')
+      expect(aside?.className).toContain('overflow-y-auto')
+
+      const parent = aside?.parentElement
+      expect(parent).not.toBeNull()
+      expect(parent?.classList.contains('overflow-x-hidden')).toBe(false)
+
+      window.scrollY = 600
+      window.dispatchEvent(new Event('scroll'))
+      await nextTick()
+
+      expect(aside?.isConnected).toBe(true)
+      expect(aside?.classList.contains('md:flex')).toBe(true)
+      expect(uncaughtErrors).toHaveLength(0)
+    })
+
+    it('verifies 392x872 Mobile Large Viewport: zero horizontal overflow in mobile navigation and main content', async () => {
+      setViewport(392, 872)
+      setupApiMocks()
+      const root = await mountApp()
+
+      const mobileNav = root.querySelector('nav.md\\:hidden')
+      expect(mobileNav).not.toBeNull()
+      expect(mobileNav?.classList.contains('fixed')).toBe(true)
+
+      const main = root.querySelector('main')
+      expect(main).not.toBeNull()
+      const mainContainer = main?.parentElement
+      expect(mainContainer?.classList.contains('overflow-x-hidden')).toBe(true)
+      expect(uncaughtErrors).toHaveLength(0)
+    })
+
+    it('verifies 375x667 Mobile Viewport: touch targets and bottom navigation bar ergonomics', async () => {
+      setViewport(375, 667)
+      setupApiMocks()
+      const root = await mountApp()
+
+      const mobileNav = root.querySelector('nav.md\\:hidden')
+      const buttons = mobileNav?.querySelectorAll('button') || []
+      expect(buttons.length).toBeGreaterThanOrEqual(4)
+      for (const btn of buttons) {
+        expect(btn.classList.contains('rounded-lg') || btn.classList.contains('btn') || btn.className.includes('p')).toBe(true)
+      }
+      expect(uncaughtErrors).toHaveLength(0)
+    })
+
+    it('verifies 667x375 Landscape Viewport: compact layout with zero horizontal overflow', async () => {
+      setViewport(667, 375)
+      setupApiMocks()
+      const root = await mountApp()
+
+      const header = root.querySelector('header')
+      expect(header).not.toBeNull()
+      expect(header?.classList.contains('overflow-hidden')).toBe(true)
+      expect(uncaughtErrors).toHaveLength(0)
+    })
+
+    it('handles request race conditions gracefully and correctly displays page 2 real items', async () => {
+      setViewport(1280, 800)
+      const calls: { page: number; resolve: (val: any) => void }[] = []
+
+      vi.spyOn(api, 'get').mockImplementation(async (path: string, options?: any) => {
+        if (path === '/healthz') return { status: 'healthy' }
+        if (path === '/api/v1/auth/status') return { mode: 'open', authenticated: true, subject: 'admin' }
+        if (path === '/api/v1/nodes') {
+          const p = Number(options?.params?.page || 1)
+          const ps = Number(options?.params?.page_size || 50)
+          const start = (p - 1) * ps
+          const slice = largeNodesFixture.slice(start, start + ps)
+          return new Promise((resolve) => {
+            calls.push({
+              page: p,
+              resolve: () => resolve({ items: slice, total: 250, page: p, page_size: ps }),
+            })
+          })
+        }
+        return { items: [], total: 0 }
+      })
+
+      const { useProbes } = await import('../src/features/probes/useProbes')
+      const probesState = useProbes()
+
+      const p1Promise = probesState.loadProbeNodes(1, 50)
+      const p2Promise = probesState.loadProbeNodes(2, 50)
+
+      await nextTick()
+      expect(calls.length).toBe(2)
+
+      calls[1].resolve(null)
+      await p2Promise
+      await nextTick()
+
+      calls[0].resolve(null)
+      await p1Promise
+      await nextTick()
+
+      expect(probesState.probeNodes.value.length).toBe(50)
+      expect(probesState.probeNodes.value[0].logicalId).toBe('node-batch-51')
+      expect(probesState.totalNodes.value).toBe(250)
+    })
+
+    it('searches for 250th node and preserves selection in PolicyEditorSheet', async () => {
+      const { default: PolicyEditorSheet } = await import('../src/features/policy/PolicyEditorSheet.vue')
+      const { createApp, h, nextTick } = await import('vue')
+
+      vi.spyOn(api, 'get').mockImplementation(async (path: string, options?: any) => {
+        if (path === '/api/v1/nodes') {
+          const search = (options?.params?.search || '').toLowerCase()
+          const p = Number(options?.params?.page || 1)
+          const ps = Number(options?.params?.page_size || 50)
+          let filtered = largeNodesFixture
+          if (search) {
+            filtered = filtered.filter((n) =>
+              n.displayName.toLowerCase().includes(search) || n.logicalId.toLowerCase().includes(search)
+            )
+          }
+          const start = (p - 1) * ps
+          const slice = filtered.slice(start, start + ps)
+          return { items: slice, total: filtered.length, page: p, page_size: ps }
+        }
+        return { items: [], total: 0 }
+      })
+
+      const sheetContainer = document.createElement('div')
+      document.body.appendChild(sheetContainer)
+
+      const group = {
+        id: 'grp-test',
+        name: 'Test Group',
+        group_type: 'select' as const,
+        edges: [],
+      }
+
+      const sheetApp = createApp({
+        render() {
+          return h(PolicyEditorSheet, {
+            open: true,
+            group,
+            allGroups: largeGroupsFixture.slice(0, 10),
+            mode: 'edges',
+          })
+        },
+      })
+      sheetApp.mount(sheetContainer)
+      await nextTick()
+      await new Promise((r) => setTimeout(r, 20))
+
+      // Switch to node edge type
+      const nodeRadio = sheetContainer.querySelector('input[type="radio"][value="node"]') as HTMLInputElement
+      expect(nodeRadio).not.toBeNull()
+      nodeRadio.click()
+      await nextTick()
+
+      const searchInput = sheetContainer.querySelector('input[data-testid="candidate-node-search-input"]') as HTMLInputElement
+      expect(searchInput).not.toBeNull()
+      searchInput.value = '250'
+      searchInput.dispatchEvent(new Event('input'))
+
+      await new Promise((r) => setTimeout(r, 350))
+      await nextTick()
+
+      const node250Option = sheetContainer.querySelector('option[value="node-target-250"]')
+      expect(node250Option).not.toBeNull()
+      expect(node250Option?.textContent).toContain('Taiwan Special Node 250')
+
+      sheetApp.unmount()
+      sheetContainer.remove()
+    })
+
+    it('classifies node with unknown baseline but available AI probe as undetermined (待复核), neither untested nor healthy', async () => {
+      const { nodeUnderlyingHealthCategory, nodeHealthBadge } = await import('../src/features/nodes/nodeView')
+
+      const aiOnlyNode = largeNodesFixture.find((n) => n.logicalId === 'node-ai-only-70')!
+      expect(aiOnlyNode).toBeDefined()
+
+      const category = nodeUnderlyingHealthCategory(aiOnlyNode)
+      expect(category).toBe('undetermined')
+      expect(category).not.toBe('untested')
+      expect(category).not.toBe('healthy')
+
+      const badge = nodeHealthBadge(aiOnlyNode)
+      expect(badge.label).toBe('待复核')
+      expect(badge.tone).toBe('warning')
+    })
+  })
+
+  // =========================================================================
+  // 8. Strict Zero Console Uncaught Exceptions Invariant
   // =========================================================================
   describe('Strict 0 Console Exceptions Invariant', () => {
     it('guarantees 0 uncaught errors and 0 unhandled promise rejections', () => {

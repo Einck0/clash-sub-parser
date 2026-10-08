@@ -436,4 +436,140 @@ describe('PolicyView Topology & Drawer Linkage', () => {
     expect(incompleteBanner?.textContent).toContain('校验未完成')
     expect(incompleteBanner?.textContent).toContain('重试校验')
   })
+
+  it('displays membership mode badges for explicit edges vs dynamic full-pool filter', async () => {
+    vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
+      if (path === '/api/v1/policies/groups') {
+        return {
+          items: [
+            {
+              id: 'grp-explicit',
+              name: 'Explicit Edge Group',
+              group_type: 'select',
+              edges: [{ id: 'e-1', node_logical_id: 'node-hk-01', position: 0 }],
+              node_filter: {
+                conditions: [{ field: 'display_name', op: 'contains', value: 'hk' }],
+              },
+            },
+            {
+              id: 'grp-dynamic',
+              name: 'Dynamic Pool Group',
+              group_type: 'urltest',
+              edges: [],
+              node_filter: {
+                conditions: [{ field: 'display_name', op: 'contains', value: 'tw' }],
+              },
+            },
+          ],
+          total: 2,
+        }
+      }
+      return { items: [], total: 0 }
+    })
+
+    await mountPolicyView()
+
+    const cards = container.querySelectorAll('[data-testid="group-card"]')
+    expect(cards.length).toBe(2)
+
+    // Card 1: Explicit edge with secondary filter
+    expect(cards[0].textContent).toContain('显式连接边')
+    expect(cards[0].textContent).toContain('二次过滤')
+
+    // Card 2: Dynamic pool
+    expect(cards[1].textContent).toContain('全池动态匹配')
+  })
+
+  it('searches and paginates candidate nodes up to 250th item and preserves selection across pages', async () => {
+    // Generate 250 mock nodes where Canada is at index 249 (250th)
+    const all250Nodes = Array.from({ length: 250 }, (_, i) => ({
+      logical_id: `node-${i + 1}`,
+      display_name: i === 249 ? 'Canada Highspeed 250' : (i === 70 ? 'Taiwan Premium 71' : `Node ${i + 1}`),
+      protocol: 'ss',
+      active: true,
+    }))
+
+    vi.spyOn(api, 'get').mockImplementation(async (path: string, options?: any) => {
+      if (path === '/api/v1/policies/groups') {
+        return { items: [...mockGroups], total: 2 }
+      }
+      if (path === '/api/v1/nodes') {
+        const page = Number(options?.params?.page || 1)
+        const pageSize = Number(options?.params?.page_size || 50)
+        const search = options?.params?.search?.toLowerCase() || ''
+        let filtered = all250Nodes
+        if (search) {
+          filtered = filtered.filter((n) => n.display_name.toLowerCase().includes(search) || n.logical_id.includes(search))
+        }
+        const start = (page - 1) * pageSize
+        const items = filtered.slice(start, start + pageSize)
+        return {
+          items,
+          page,
+          page_size: pageSize,
+          total: filtered.length,
+        }
+      }
+      return { items: [], total: 0 }
+    })
+
+    await mountPolicyView()
+
+    // Open manage edges for first group
+    const cards = container.querySelectorAll('[data-testid="group-card"]')
+    const manageEdgesBtn = Array.from(cards[0].querySelectorAll('button')).find((b) => b.textContent?.includes('管理边'))
+    expect(manageEdgesBtn).toBeDefined()
+    manageEdgesBtn?.click()
+    await nextTick()
+    await new Promise((r) => setTimeout(r, 20))
+
+    const dialog = document.body.querySelector('[role="dialog"]')
+    expect(dialog).not.toBeNull()
+
+    // Switch to active node edge radio
+    const radios = dialog?.querySelectorAll('input[type="radio"]') as NodeListOf<HTMLInputElement>
+    const nodeRadio = Array.from(radios).find((r) => r.value === 'node')
+    expect(nodeRadio).toBeDefined()
+    if (nodeRadio) {
+      nodeRadio.checked = true
+      nodeRadio.dispatchEvent(new Event('change'))
+    }
+    await nextTick()
+    await new Promise((r) => setTimeout(r, 20))
+
+    // Verify search input is present
+    const searchInput = dialog?.querySelector('[data-testid="candidate-node-search-input"]') as HTMLInputElement
+    expect(searchInput).not.toBeNull()
+
+    // Search for Canada (250th item)
+    searchInput.value = 'Canada'
+    searchInput.dispatchEvent(new Event('input'))
+    await nextTick()
+    // Wait for 300ms debounce
+    await new Promise((r) => setTimeout(r, 350))
+
+    // Select should contain Canada node
+    const select = dialog?.querySelector('[data-testid="edge-node-select"]') as HTMLSelectElement
+    expect(select).not.toBeNull()
+    const canadaOption = Array.from(select.options).find((opt) => opt.textContent?.includes('Canada Highspeed 250'))
+    expect(canadaOption).toBeDefined()
+    expect(canadaOption?.value).toBe('node-250')
+
+    // Select Canada node
+    select.value = 'node-250'
+    select.dispatchEvent(new Event('change'))
+    await nextTick()
+
+    // Locked selection confirmation tag should display Canada
+    expect(dialog?.textContent).toContain('Canada Highspeed 250')
+    expect(dialog?.textContent).toContain('跨页锁定已保留')
+
+    // Now clear search and navigate to another page; selection must be preserved!
+    searchInput.value = ''
+    searchInput.dispatchEvent(new Event('input'))
+    await new Promise((r) => setTimeout(r, 350))
+
+    // Select should still show Canada option preserved
+    expect(dialog?.textContent).toContain('Canada Highspeed 250')
+  })
 })

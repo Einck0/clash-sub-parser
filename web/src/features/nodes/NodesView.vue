@@ -116,6 +116,8 @@ const healthCounts = computed(() => {
   let healthy = 0
   let degraded = 0
   let unhealthy = 0
+  let undetermined = 0
+  let untested = 0
   let unknown = 0
 
   for (const node of items.value) {
@@ -127,7 +129,13 @@ const healthCounts = computed(() => {
     if (cat === 'healthy') healthy += 1
     else if (cat === 'degraded') degraded += 1
     else if (cat === 'unhealthy') unhealthy += 1
-    else unknown += 1
+    else if (cat === 'undetermined') {
+      undetermined += 1
+      unknown += 1
+    } else {
+      untested += 1
+      unknown += 1
+    }
   }
 
   return {
@@ -136,6 +144,8 @@ const healthCounts = computed(() => {
     healthy,
     degraded,
     unhealthy,
+    undetermined,
+    untested,
     unknown,
   }
 })
@@ -152,7 +162,9 @@ const filteredItems = computed(() => {
     if (filter === 'healthy') return cat === 'healthy'
     if (filter === 'degraded') return cat === 'degraded'
     if (filter === 'unhealthy') return cat === 'unhealthy'
-    if (filter === 'unknown') return cat === 'unprobed'
+    if (filter === 'undetermined') return cat === 'undetermined'
+    if (filter === 'untested') return cat === 'untested'
+    if (filter === 'unknown') return cat === 'undetermined' || cat === 'untested' || (cat as string) === 'unprobed'
     return true
   })
 })
@@ -592,6 +604,8 @@ onUnmounted(() => {
             <option value="healthy">正常 ({{ healthCounts.healthy }})</option>
             <option value="degraded">降级 ({{ healthCounts.degraded }})</option>
             <option value="unhealthy">异常 ({{ healthCounts.unhealthy }})</option>
+            <option value="undetermined">待复核 ({{ healthCounts.undetermined }})</option>
+            <option value="untested">未探测 ({{ healthCounts.untested }})</option>
             <option value="unknown">未探测 / 待核验 ({{ healthCounts.unknown }})</option>
           </select>
 
@@ -662,6 +676,24 @@ onUnmounted(() => {
           @click="healthFilter = 'unhealthy'"
         >
           异常 ({{ healthCounts.unhealthy }})
+        </button>
+        <button
+          type="button"
+          data-testid="node-health-pill-undetermined"
+          class="btn btn-xs rounded-full"
+          :class="healthFilter === 'undetermined' ? 'btn-warning' : 'btn-ghost bg-base-200/70'"
+          @click="healthFilter = 'undetermined'"
+        >
+          待复核 ({{ healthCounts.undetermined }})
+        </button>
+        <button
+          type="button"
+          data-testid="node-health-pill-untested"
+          class="btn btn-xs rounded-full"
+          :class="healthFilter === 'untested' ? 'btn-neutral' : 'btn-ghost bg-base-200/70'"
+          @click="healthFilter = 'untested'"
+        >
+          未探测 ({{ healthCounts.untested }})
         </button>
         <button
           type="button"

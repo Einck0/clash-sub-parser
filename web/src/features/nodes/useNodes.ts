@@ -32,6 +32,16 @@ interface NodeDetailResponse {
   ip_risk_summary?: IPRiskSummaryRecord
 }
 
+export type HealthFilterType =
+  | 'all'
+  | 'probing'
+  | 'healthy'
+  | 'degraded'
+  | 'unhealthy'
+  | 'undetermined'
+  | 'untested'
+  | 'unknown'
+
 export function useNodes() {
   const items = ref<NormalizedNode[]>([])
   const loading = ref(false)
@@ -46,7 +56,7 @@ export function useNodes() {
   const pageSize = 100
   const total = ref(0)
   const protocolFilter = ref<string>('all')
-  const healthFilter = ref<'all' | 'probing' | 'healthy' | 'degraded' | 'unhealthy' | 'unknown'>('all')
+  const healthFilter = ref<HealthFilterType>('all')
   const searchQuery = ref<string>('')
   const selectedNode = ref<NormalizedNode | null>(null)
   const requestGeneration = ref(0)
@@ -116,6 +126,13 @@ export function useNodes() {
       }
       if (searchQuery.value.trim()) {
         params.search = searchQuery.value.trim()
+      }
+      if (healthFilter.value && healthFilter.value !== 'all' && healthFilter.value !== 'probing') {
+        if (healthFilter.value === 'unknown') {
+          params.health_status = 'undetermined,untested'
+        } else {
+          params.health_status = healthFilter.value
+        }
       }
       const [result] = await Promise.all([
         api.get<NodePage>('/api/v1/nodes', { params }),

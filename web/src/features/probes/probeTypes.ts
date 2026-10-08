@@ -535,6 +535,7 @@ export interface ProbePoolStatus {
   probing_count: number
   queued_waiting_count: number
   untested_count: number
+  undetermined_count?: number
   total_count: number
   unavailable_count: number
   available_count: number

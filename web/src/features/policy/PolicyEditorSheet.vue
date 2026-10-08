@@ -4,10 +4,14 @@ import {
   XMarkIcon,
   PlusIcon,
   TrashIcon,
+  MagnifyingGlassIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
 } from '@heroicons/vue/24/outline'
 import type { FilterCondition, FilterField, FilterOp, GroupEdge, GroupType, NodeFilterSpec, PolicyGroup } from './policyTypes'
 import { ALL_GROUP_TYPES, SUPPORTED_FILTER_FIELDS, groupTypeLabel, validateConditionInput, validateEdgeInput } from './policyTypes'
 import { api } from '../../api/client'
+import { useBodyScrollLock } from '../../composables/useBodyScrollLock'
 import { t } from '../../locales'
 
 interface Props {
@@ -30,6 +34,9 @@ const props = withDefaults(defineProps<Props>(), {
   saving: false,
   availableNodes: () => [],
 })
+
+// Engage mobile body scroll lock when sheet is open
+useBodyScrollLock(computed(() => props.open))
 
 const emit = defineEmits<{
   (e: 'close'): void
@@ -54,36 +61,119 @@ const conditionError = ref('')
 const newEdgeType = ref<'group' | 'node'>('group')
 const newEdgeTarget = ref('')
 const edgeError = ref('')
+
+// Debounced asynchronous search and paginated candidate nodes
+const nodeSearchQuery = ref('')
+const nodePage = ref(1)
+const nodePageSize = 50
+const nodeTotal = ref(0)
 const internalNodes = ref<Array<{ logicalId: string; displayName: string; active: boolean; protocol?: string }>>([])
 const loadingNodes = ref(false)
+const knownNodes = ref<Map<string, { logicalId: string; displayName: string; active: boolean; protocol?: string }>>(new Map())
 
-async function fetchNodesIfEmpty() {
-  if (props.availableNodes && props.availableNodes.length > 0) return
-  if (internalNodes.value.length > 0) return
-  try {
-    loadingNodes.value = true
-    const result = await api.get<{ items: Array<{ logical_id: string; display_name: string; active: boolean; protocol: string }> }>('/api/v1/nodes', {
-      params: { page: 1, page_size: 200, scope: 'enabled_subscriptions' },
+let candidateSearchDebounceTimer: ReturnType<typeof setTimeout> | null = null
+let candidateQuerySeq = 0
+
+function registerKnownNode(n: { logicalId: string; displayName: string; active?: boolean; protocol?: string }) {
+  if (n.logicalId) {
+    knownNodes.value.set(n.logicalId, {
+      logicalId: n.logicalId,
+      displayName: n.displayName || n.logicalId,
+      active: n.active !== false,
+      protocol: n.protocol,
     })
+  }
+}
+
+async function fetchCandidateNodes(p = 1, search = nodeSearchQuery.value) {
+  const seq = ++candidateQuerySeq
+  loadingNodes.value = true
+  try {
+    const params: Record<string, string | number> = {
+      page: p,
+      page_size: nodePageSize,
+      scope: 'enabled_subscriptions',
+      active_only: 'true',
+    }
+    if (search && search.trim()) {
+      params.search = search.trim()
+    }
+    const result = await api.get<{
+      items: Array<{ logical_id: string; display_name: string; active: boolean; protocol?: string }>
+      page?: number
+      total?: number
+    }>('/api/v1/nodes', { params })
+
+    if (seq !== candidateQuerySeq) return
+
     if (result && Array.isArray(result.items)) {
-      internalNodes.value = result.items.map((n) => ({
+      const mapped = result.items.map((n) => ({
         logicalId: n.logical_id,
         displayName: n.display_name?.trim() || n.logical_id,
         protocol: n.protocol,
         active: n.active !== false,
       }))
+      mapped.forEach(registerKnownNode)
+      internalNodes.value = mapped
+      nodePage.value = result.page || p
+      nodeTotal.value = typeof result.total === 'number' ? result.total : mapped.length
     }
   } catch {
     // Graceful fallback
   } finally {
-    loadingNodes.value = false
+    if (seq === candidateQuerySeq) {
+      loadingNodes.value = false
+    }
   }
 }
 
+function onNodeSearchInput(e: Event) {
+  const target = e.target as HTMLInputElement
+  const query = target.value
+  nodeSearchQuery.value = query
+  if (candidateSearchDebounceTimer) clearTimeout(candidateSearchDebounceTimer)
+  candidateSearchDebounceTimer = setTimeout(() => {
+    nodePage.value = 1
+    fetchCandidateNodes(1, query)
+  }, 300)
+}
+
+function prevCandidatePage() {
+  if (nodePage.value > 1) {
+    fetchCandidateNodes(nodePage.value - 1)
+  }
+}
+
+function nextCandidatePage() {
+  if (nodePage.value * nodePageSize < nodeTotal.value) {
+    fetchCandidateNodes(nodePage.value + 1)
+  }
+}
+
+// Populate available nodes from props if provided
+watch(
+  () => props.availableNodes,
+  (avail) => {
+    if (avail && avail.length > 0) {
+      avail.forEach((n) => {
+        const id = ('logicalId' in n ? n.logicalId : undefined) || ('logical_id' in n ? n.logical_id : undefined) || ''
+        const name = ('displayName' in n ? n.displayName : undefined) || ('display_name' in n ? n.display_name : undefined) || id
+        if (id) {
+          registerKnownNode({ logicalId: id, displayName: name, active: n.active !== false, protocol: n.protocol })
+        }
+      })
+    }
+  },
+  { immediate: true }
+)
+
 const activeNodes = computed(() => {
+  if (internalNodes.value.length > 0) {
+    return internalNodes.value
+  }
   const source = (props.availableNodes && props.availableNodes.length > 0)
     ? props.availableNodes
-    : internalNodes.value
+    : []
 
   const mapped = source
     .map((n) => ({
@@ -94,8 +184,55 @@ const activeNodes = computed(() => {
     }))
     .filter((n) => n.logicalId.length > 0)
 
+  mapped.forEach(registerKnownNode)
   const activeOnly = mapped.filter((n) => n.active)
   return activeOnly.length > 0 ? activeOnly : mapped
+})
+
+// Membership Resolution Semantics Indicator
+const hasEdges = computed(() => edges.value.length > 0)
+const hasChildGroupEdges = computed(() => edges.value.some((e) => Boolean(e.child_group_id)))
+const hasFilters = computed(() => filterConditions.value.length > 0)
+
+const membershipMode = computed(() => {
+  if (hasEdges.value) {
+    if (hasChildGroupEdges.value) {
+      return {
+        key: 'cascade',
+        label: '子策略组级联模式',
+        tone: 'badge-secondary',
+        desc: '包含子策略组连接边：父级策略组的筛选条件将向下级子策略组递归继承。',
+        secondaryNotice: hasFilters.value
+          ? '注意：组筛选条件仅作为入选边之二次过滤，不会从全局活跃池引入额外节点。'
+          : undefined,
+      }
+    }
+    return {
+      key: 'explicit',
+      label: '显式连接边模式',
+      tone: 'badge-accent',
+      desc: '包含显式指定的目标连接边：策略组仅在此候选边集合中评估。',
+      secondaryNotice: hasFilters.value
+        ? '注意：组筛选条件仅作为入选边之二次过滤，不会从全局活跃池引入额外节点。'
+        : undefined,
+    }
+  }
+  if (hasFilters.value) {
+    return {
+      key: 'dynamic',
+      label: '全池动态匹配模式',
+      tone: 'badge-info',
+      desc: '未配置显式连接边：策略组将自动遍历全局活跃节点池，动态匹配所有符合筛选条件的节点。',
+      secondaryNotice: undefined,
+    }
+  }
+  return {
+    key: 'empty',
+    label: '未配置成员（空策略组）',
+    tone: 'badge-ghost',
+    desc: '尚未配置显式连接边或筛选条件。',
+    secondaryNotice: undefined,
+  }
 })
 
 function getGroupName(id?: string): string {
@@ -106,6 +243,10 @@ function getGroupName(id?: string): string {
 
 function getNodeDisplayName(logicalId?: string): string {
   if (!logicalId) return ''
+  const known = knownNodes.value.get(logicalId)
+  if (known) {
+    return `${known.displayName} (${logicalId})`
+  }
   const n = activeNodes.value.find((x) => x.logicalId === logicalId)
   return n ? `${n.displayName} (${logicalId})` : logicalId
 }
@@ -130,9 +271,9 @@ watch(
       newEdgeTarget.value = ''
       edgeError.value = ''
       conditionError.value = ''
-      if (props.mode === 'edges') {
-        fetchNodesIfEmpty()
-      }
+      nodeSearchQuery.value = ''
+      nodePage.value = 1
+      fetchCandidateNodes(1, '')
     }
   },
   { immediate: true }
@@ -318,6 +459,23 @@ function close() {
       <div class="flex-1 min-h-0 p-4 sm:p-5 overflow-y-auto overscroll-contain space-y-4">
         <!-- Group Mode Form -->
         <form v-if="mode === 'group'" id="policy-editor-group-form" class="space-y-4" @submit.prevent="handleSaveGroup">
+          <!-- Membership Resolution Semantics Indicator -->
+          <div data-testid="membership-mode-indicator" class="p-3 rounded-xl bg-base-200/80 border border-base-300 space-y-1 text-xs">
+            <div class="flex items-center justify-between gap-2">
+              <span class="font-bold">成员解析模式</span>
+              <span class="badge badge-xs font-semibold" :class="membershipMode.tone">
+                {{ membershipMode.label }}
+              </span>
+            </div>
+            <p class="text-[11px] opacity-75 leading-relaxed">{{ membershipMode.desc }}</p>
+            <p v-if="membershipMode.secondaryNotice" class="text-[11px] text-accent font-medium">
+              {{ membershipMode.secondaryNotice }}
+            </p>
+            <p class="text-[10px] opacity-50 pt-0.5">
+              代数规则守恒：不执行任何自动静默删除边或筛选条件的破坏性操作。
+            </p>
+          </div>
+
           <label class="form-control">
             <span class="label-text font-semibold text-xs">策略组名称</span>
             <input
@@ -512,6 +670,23 @@ function close() {
 
         <!-- Edges Mode Form -->
         <div v-else class="space-y-4">
+          <!-- Membership Resolution Semantics Indicator in Edges Mode -->
+          <div data-testid="membership-mode-indicator" class="p-3 rounded-xl bg-base-200/80 border border-base-300 space-y-1 text-xs">
+            <div class="flex items-center justify-between gap-2">
+              <span class="font-bold">成员解析模式</span>
+              <span class="badge badge-xs font-semibold" :class="membershipMode.tone">
+                {{ membershipMode.label }}
+              </span>
+            </div>
+            <p class="text-[11px] opacity-75 leading-relaxed">{{ membershipMode.desc }}</p>
+            <p v-if="membershipMode.secondaryNotice" class="text-[11px] text-accent font-medium">
+              {{ membershipMode.secondaryNotice }}
+            </p>
+            <p class="text-[10px] opacity-50 pt-0.5">
+              代数规则守恒：不执行任何自动静默删除边或筛选条件的破坏性操作。
+            </p>
+          </div>
+
           <p class="text-xs opacity-70">
             配置从 <strong>{{ group?.name }}</strong> 指向子策略组或特定节点的有向连接边。
           </p>
@@ -569,51 +744,123 @@ function close() {
               </label>
             </div>
 
-            <div class="flex gap-2">
-              <select
-                v-if="newEdgeType === 'group'"
-                v-model="newEdgeTarget"
-                class="select select-bordered select-sm flex-1 text-xs"
-                data-testid="edge-group-select"
-              >
-                <option disabled value="">请选择子策略组...</option>
-                <option
-                  v-for="cg in availableChildGroups"
-                  :key="cg.id"
-                  :value="cg.id"
+              <div v-if="newEdgeType === 'group'" class="flex gap-2">
+                <select
+                  v-model="newEdgeTarget"
+                  class="select select-bordered select-sm flex-1 text-xs"
+                  data-testid="edge-group-select"
                 >
-                  {{ cg.name }} ({{ groupTypeLabel(cg.group_type) }})
-                </option>
-              </select>
+                  <option disabled value="">请选择子策略组...</option>
+                  <option
+                    v-for="cg in availableChildGroups"
+                    :key="cg.id"
+                    :value="cg.id"
+                  >
+                    {{ cg.name }} ({{ groupTypeLabel(cg.group_type) }})
+                  </option>
+                </select>
 
-              <select
-                v-else
-                v-model="newEdgeTarget"
-                class="select select-bordered select-sm flex-1 text-xs font-mono"
-                data-testid="edge-node-select"
-              >
-                <option disabled value="">
-                  {{ loadingNodes ? '加载节点中...' : (activeNodes.length ? '请选择活跃节点...' : '暂无活跃节点') }}
-                </option>
-                <option
-                  v-for="node in activeNodes"
-                  :key="node.logicalId"
-                  :value="node.logicalId"
+                <button
+                  type="button"
+                  class="btn btn-primary btn-sm gap-1 shrink-0"
+                  :disabled="!newEdgeTarget"
+                  @click="addEdge"
                 >
-                  {{ node.displayName }} ({{ node.protocol ? node.protocol.toUpperCase() + ' · ' : '' }}{{ node.logicalId }})
-                </option>
-              </select>
+                  <PlusIcon class="w-4 h-4" />
+                  添加
+                </button>
+              </div>
 
-              <button
-                type="button"
-                class="btn btn-primary btn-sm gap-1"
-                :disabled="!newEdgeTarget"
-                @click="addEdge"
-              >
-                <PlusIcon class="w-4 h-4" />
-                添加
-              </button>
-            </div>
+              <!-- Node Candidate Asynchronous Search, Debounce & Pagination -->
+              <div v-else class="space-y-2">
+                <div class="relative">
+                  <input
+                    :value="nodeSearchQuery"
+                    data-testid="candidate-node-search-input"
+                    type="search"
+                    placeholder="异步搜索候选节点（支持可检索超100/250项）..."
+                    class="input input-bordered input-xs sm:input-sm w-full pl-8 font-mono text-xs"
+                    @input="onNodeSearchInput"
+                  />
+                  <MagnifyingGlassIcon class="w-4 h-4 opacity-50 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                </div>
+
+                <div class="flex gap-2">
+                  <select
+                    v-model="newEdgeTarget"
+                    class="select select-bordered select-sm flex-1 text-xs font-mono"
+                    data-testid="edge-node-select"
+                  >
+                    <option disabled value="">
+                      {{ loadingNodes ? '加载候选节点中...' : (activeNodes.length ? '请选择活跃节点...' : '暂无匹配候选节点') }}
+                    </option>
+                    <option
+                      v-if="newEdgeTarget && !activeNodes.some((n) => n.logicalId === newEdgeTarget)"
+                      :value="newEdgeTarget"
+                    >
+                      [当前跨页已选] {{ getNodeDisplayName(newEdgeTarget) }}
+                    </option>
+                    <option
+                      v-for="node in activeNodes"
+                      :key="node.logicalId"
+                      :value="node.logicalId"
+                    >
+                      {{ node.displayName }} ({{ node.protocol ? node.protocol.toUpperCase() + ' · ' : '' }}{{ node.logicalId }})
+                    </option>
+                  </select>
+
+                  <button
+                    type="button"
+                    class="btn btn-primary btn-sm gap-1 shrink-0"
+                    :disabled="!newEdgeTarget"
+                    @click="addEdge"
+                  >
+                    <PlusIcon class="w-4 h-4" />
+                    添加
+                  </button>
+                </div>
+
+                <!-- Candidate Pagination Controls -->
+                <div class="flex items-center justify-between text-[11px] opacity-75 pt-0.5 px-0.5">
+                  <span class="font-mono">
+                    候选节点：第 {{ nodePage }} / {{ Math.max(1, Math.ceil(nodeTotal / nodePageSize)) }} 页
+                    <span v-if="nodeTotal > 0">（池中共 {{ nodeTotal }} 项）</span>
+                  </span>
+                  <div class="flex items-center gap-1">
+                    <button
+                      type="button"
+                      data-testid="candidate-prev-page"
+                      class="btn btn-ghost btn-xs btn-circle"
+                      :disabled="loadingNodes || nodePage <= 1"
+                      title="上一页候选"
+                      @click="prevCandidatePage"
+                    >
+                      <ChevronLeftIcon class="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="candidate-next-page"
+                      class="btn btn-ghost btn-xs btn-circle"
+                      :disabled="loadingNodes || nodePage * nodePageSize >= nodeTotal"
+                      title="下一页候选"
+                      @click="nextCandidatePage"
+                    >
+                      <ChevronRightIcon class="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Current Selection Confirmation Tag -->
+                <div
+                  v-if="newEdgeTarget"
+                  class="text-[11px] p-2 rounded-lg bg-base-100 border border-base-300 flex items-center justify-between gap-2"
+                >
+                  <span class="truncate">
+                    当前选定目标：<strong class="text-primary">{{ getNodeDisplayName(newEdgeTarget) }}</strong>
+                  </span>
+                  <span class="badge badge-xs badge-outline shrink-0 font-mono">跨页锁定已保留</span>
+                </div>
+              </div>
 
             <p v-if="edgeError" class="text-error text-xs">
               {{ edgeError }}

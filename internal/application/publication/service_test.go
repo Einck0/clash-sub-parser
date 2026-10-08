@@ -502,6 +502,11 @@ func (m *mockNodeRepo) List(ctx context.Context, filter domain.NodeFilter) ([]do
 	return res, len(res), nil
 }
 
+func (m *mockNodeRepo) ListAll(ctx context.Context, filter domain.NodeFilter) ([]domain.Node, error) {
+	nodes, _, err := m.List(ctx, filter)
+	return nodes, err
+}
+
 func (m *mockNodeRepo) ListReadModel(ctx context.Context, filter domain.NodeFilter) ([]domain.NodeReadModel, int, error) {
 	return nil, 0, nil
 }

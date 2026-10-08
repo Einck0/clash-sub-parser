@@ -21,6 +21,7 @@ import ToastContainer from './ui/ToastContainer.vue'
 import { useAuth } from './features/auth/useAuth'
 import AuthGate from './features/auth/AuthGate.vue'
 import { useContentInset } from './composables/useContentInset'
+import { useBodyScrollLock } from './composables/useBodyScrollLock'
 import { getRouteTab, setRouteTab, type NavTab } from './navigation'
 import { currentLocale, toggleLocale, t } from './locales'
 import { router as fallbackRouter } from './router'
@@ -118,6 +119,12 @@ const viewKey = ref(0)
 
 const isThemeOpen = ref(false)
 const themeDropdownRef = ref<HTMLElement | null>(null)
+
+const isMobileOverlayActive = computed(() => {
+  if (typeof window === 'undefined') return false
+  return isThemeOpen.value && window.innerWidth < 768
+})
+useBodyScrollLock(isMobileOverlayActive)
 const themeToggleBtnRef = ref<HTMLButtonElement | null>(null)
 
 const toggleThemeDropdown = () => {
@@ -211,10 +218,10 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="min-h-screen bg-base-100 flex flex-col md:flex-row text-base-content overflow-x-hidden">
+  <div class="min-h-screen bg-base-100 flex flex-col md:flex-row text-base-content">
     <!-- Desktop Collapsible Sidebar -->
     <aside
-      class="hidden md:flex flex-col bg-base-200 border-r border-base-300 select-none shrink-0 transition-[width] duration-200 ease-in-out"
+      class="hidden md:flex flex-col bg-base-200 border-r border-base-300 select-none shrink-0 sticky top-0 h-screen overflow-y-auto transition-[width] duration-200 ease-in-out"
       :class="isCollapsed ? 'w-20' : 'w-64'"
     >
       <div class="h-16 flex items-center justify-between px-4 border-b border-base-300">

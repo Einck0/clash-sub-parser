@@ -44,6 +44,8 @@ export type NodeHealthStatus =
   | 'unhealthy'
   | 'unknown'
   | 'missing'
+  | 'undetermined'
+  | 'untested'
 
 export type NodeProtocol =
   | 'ss'
@@ -706,19 +708,27 @@ export function resolveNodeProbeState(
 
 export function nodeUnderlyingHealthCategory(
   node: NodeRecord | NormalizedNode
-): 'healthy' | 'degraded' | 'unhealthy' | 'unprobed' {
+): 'healthy' | 'degraded' | 'unhealthy' | 'undetermined' | 'untested' {
   const health = (node as NormalizedNode).healthStatus ?? (node as NodeRecord).health_status
   if (health === 'healthy') return 'healthy'
   if (health === 'degraded') return 'degraded'
   if (health === 'unhealthy') return 'unhealthy'
-  if (health === 'missing' || health === 'unknown') {
-    return 'unprobed'
-  }
+  if (health === 'undetermined') return 'undetermined'
+  if (health === 'untested') return 'untested'
 
   const baseDetail = extractCapabilityDetail(node, 'baseline')
+  const caps = node.capabilities ?? {}
+  const rawValues = Object.values(caps)
+  const hasAnyObservation = rawValues.length > 0
+
+  if (!hasAnyObservation) {
+    return 'untested'
+  }
+
+  // Baseline-authoritative evaluation
   if (baseDetail) {
     if (baseDetail.stale || baseDetail.verdict === 'stale') {
-      return 'unprobed'
+      return 'undetermined'
     }
     if (baseDetail.verdict === 'available') {
       return 'healthy'
@@ -729,38 +739,17 @@ export function nodeUnderlyingHealthCategory(
     if (baseDetail.verdict === 'error') {
       const reason = extractSummaryReason(baseDetail.summary)
       if (reason && reason !== 'node_connect_failed') {
-        return 'unprobed'
+        return 'undetermined'
       }
       return 'unhealthy'
     }
-    return 'unprobed'
+    return 'undetermined'
   }
 
-  const caps = node.capabilities ?? {}
-  const rawValues = Object.values(caps)
-  const values = rawValues.map(extractCapabilityVerdict)
-  const probeMissing =
-    (node as NormalizedNode).probeMissing ??
-    (node as NodeRecord).probe_missing ??
-    values.length === 0
-  const probeStale =
-    (node as NormalizedNode).probeStale ??
-    (node as NodeRecord).probe_stale ??
-    rawValues.some(isCapabilityStale)
-
-  if (probeMissing || values.length === 0) {
-    return 'unprobed'
-  }
-  if (values.includes('error')) {
-    return 'unhealthy'
-  }
-  if (probeStale || values.includes('restricted') || values.includes('stale')) {
-    return 'degraded'
-  }
-  if (values.includes('available')) {
-    return 'healthy'
-  }
-  return 'unprobed'
+  // Node has observations (e.g. AI, streaming, geo), but NO baseline observation!
+  // CRITICAL: NEVER fall back AI.available or auxiliary capability to healthy!
+  // Stale or auxiliary-only observations classify node health as undetermined.
+  return 'undetermined'
 }
 
 export function nodeHealthDiagnostic(node: NodeRecord | NormalizedNode): NodeHealthDiagnostic | null {
@@ -824,7 +813,7 @@ export function nodeHealthDiagnostic(node: NodeRecord | NormalizedNode): NodeHea
       isBlockedByPolicyOrConfig: false,
     }
   }
-  if (reason === 'transport_error' && category === 'unprobed') {
+  if (reason === 'transport_error' && (category === 'undetermined' || (category as string) === 'unprobed')) {
     return {
       code: 'transport_error',
       shortLabel: '传输异常 · 待复核',
@@ -832,7 +821,7 @@ export function nodeHealthDiagnostic(node: NodeRecord | NormalizedNode): NodeHea
       isBlockedByPolicyOrConfig: false,
     }
   }
-  if ((reason === 'timeout' || reason === 'dial_timeout') && category === 'unprobed') {
+  if ((reason === 'timeout' || reason === 'dial_timeout') && (category === 'undetermined' || (category as string) === 'unprobed')) {
     return {
       code: reason,
       shortLabel: '探测超时 · 待复核',
@@ -840,7 +829,7 @@ export function nodeHealthDiagnostic(node: NodeRecord | NormalizedNode): NodeHea
       isBlockedByPolicyOrConfig: false,
     }
   }
-  if ((reason === 'dns_error' || reason === 'dns_resolution_failed') && category === 'unprobed') {
+  if ((reason === 'dns_error' || reason === 'dns_resolution_failed') && (category === 'undetermined' || (category as string) === 'unprobed')) {
     return {
       code: reason,
       shortLabel: 'DNS 解析异常 · 待复核',
@@ -926,9 +915,15 @@ export function nodeHealthBadge(
     if (diag.code === 'probe_stale') {
       return { label: '未知 · 待重测', tone: 'info' }
     }
+    if (diag.code === 'baseline_missing') {
+      return { label: '待复核', tone: 'warning' }
+    }
     if (diag.code !== 'probe_missing') {
       return { label: '未知 / 待核验', tone: 'info' }
     }
+  }
+  if (category === 'undetermined') {
+    return { label: '待复核', tone: 'warning' }
   }
   return { label: '未探测', tone: 'info' }
 }
@@ -1003,13 +998,15 @@ export function resolveNodeLatencyMs(node: NodeRecord | NormalizedNode): number 
     health === 'unhealthy' ||
     health === 'unknown' ||
     health === 'missing' ||
+    health === 'undetermined' ||
+    health === 'untested' ||
     category === 'unhealthy' ||
-    category === 'unprobed'
+    category === 'undetermined' ||
+    category === 'untested' ||
+    (category as string) === 'unprobed'
   ) {
     return null
   }
-  const top = (node as NormalizedNode).latencyMs ?? (node as NodeRecord).latency_ms
-  if (typeof top === 'number' && Number.isFinite(top) && top > 0) return top
   const baseDetail = extractCapabilityDetail(node, 'baseline')
   if (
     baseDetail &&
@@ -1021,6 +1018,8 @@ export function resolveNodeLatencyMs(node: NodeRecord | NormalizedNode): number 
   ) {
     return baseDetail.latency_ms
   }
+  const top = (node as NormalizedNode).latencyMs ?? (node as NodeRecord).latency_ms
+  if (typeof top === 'number' && Number.isFinite(top) && top > 0) return top
   return null
 }
 

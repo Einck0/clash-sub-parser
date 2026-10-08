@@ -1380,3 +1380,126 @@ func TestPolicyService_ValidateGraph_ExactRuleDeletion_VerificationCycle(t *test
 		}
 	}
 }
+
+func TestPolicyService_ListGroups_SearchAndPagination(t *testing.T) {
+	db := setupTestDB(t)
+	svc, _ := setupTestService(t, db)
+	ctx := context.Background()
+
+	groupsToCreate := []struct {
+		name      string
+		groupType domain.GroupType
+	}{
+		{"Alpha-Proxy", domain.GroupTypeSelect},
+		{"Beta-Fallback", domain.GroupTypeFallback},
+		{"Gamma-URLTest", domain.GroupTypeURLTest},
+		{"Delta-Proxy", domain.GroupTypeSelect},
+		{"Epsilon-LoadBalance", domain.GroupTypeLoadBalance},
+		{"Zeta-Auto", domain.GroupTypeURLTest},
+	}
+
+	for i, g := range groupsToCreate {
+		_, err := svc.CreateGroup(ctx, policy.CreateGroupCommand{
+			Name:      g.name,
+			GroupType: g.groupType,
+			RequestID: fmt.Sprintf("req-create-%d", i),
+			ActorKind: domain.ActorKindAdmin,
+		})
+		if err != nil {
+			t.Fatalf("failed to create group %s: %v", g.name, err)
+		}
+	}
+
+	// 1. Unfiltered query with pagination
+	p1, err := svc.ListGroups(ctx, policy.ListGroupsQuery{Page: 1, PageSize: 2})
+	if err != nil {
+		t.Fatalf("ListGroups page 1 failed: %v", err)
+	}
+	if p1.Total != 6 {
+		t.Fatalf("expected total 6, got %d", p1.Total)
+	}
+	if len(p1.Items) != 2 {
+		t.Fatalf("expected 2 items on page 1, got %d", len(p1.Items))
+	}
+	// Alphabetical order: Alpha-Proxy, Beta-Fallback
+	if p1.Items[0].Name != "Alpha-Proxy" || p1.Items[1].Name != "Beta-Fallback" {
+		t.Fatalf("expected Alpha-Proxy and Beta-Fallback, got %s and %s", p1.Items[0].Name, p1.Items[1].Name)
+	}
+
+	p2, err := svc.ListGroups(ctx, policy.ListGroupsQuery{Page: 2, PageSize: 2})
+	if err != nil {
+		t.Fatalf("ListGroups page 2 failed: %v", err)
+	}
+	if len(p2.Items) != 2 {
+		t.Fatalf("expected 2 items on page 2, got %d", len(p2.Items))
+	}
+	// Alphabetical order: Delta-Proxy, Epsilon-LoadBalance
+	if p2.Items[0].Name != "Delta-Proxy" || p2.Items[1].Name != "Epsilon-LoadBalance" {
+		t.Fatalf("expected Delta-Proxy and Epsilon-LoadBalance, got %s and %s", p2.Items[0].Name, p2.Items[1].Name)
+	}
+
+	p3, err := svc.ListGroups(ctx, policy.ListGroupsQuery{Page: 3, PageSize: 2})
+	if err != nil {
+		t.Fatalf("ListGroups page 3 failed: %v", err)
+	}
+	if len(p3.Items) != 2 {
+		t.Fatalf("expected 2 items on page 3, got %d", len(p3.Items))
+	}
+	// Alphabetical order: Gamma-URLTest, Zeta-Auto
+	if p3.Items[0].Name != "Gamma-URLTest" || p3.Items[1].Name != "Zeta-Auto" {
+		t.Fatalf("expected Gamma-URLTest and Zeta-Auto, got %s and %s", p3.Items[0].Name, p3.Items[1].Name)
+	}
+
+	// 2. Search by name (case-insensitive)
+	searchProxy, err := svc.ListGroups(ctx, policy.ListGroupsQuery{Search: "proxy", Page: 1, PageSize: 50})
+	if err != nil {
+		t.Fatalf("ListGroups search=proxy failed: %v", err)
+	}
+	if searchProxy.Total != 2 {
+		t.Fatalf("expected total 2 for search=proxy, got %d", searchProxy.Total)
+	}
+	if len(searchProxy.Items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(searchProxy.Items))
+	}
+	if searchProxy.Items[0].Name != "Alpha-Proxy" || searchProxy.Items[1].Name != "Delta-Proxy" {
+		t.Fatalf("expected Alpha-Proxy and Delta-Proxy, got %v", searchProxy.Items)
+	}
+
+	// Search with uppercase
+	searchAlpha, err := svc.ListGroups(ctx, policy.ListGroupsQuery{Search: "ALPHA"})
+	if err != nil {
+		t.Fatalf("ListGroups search=ALPHA failed: %v", err)
+	}
+	if searchAlpha.Total != 1 || len(searchAlpha.Items) != 1 || searchAlpha.Items[0].Name != "Alpha-Proxy" {
+		t.Fatalf("expected 1 item Alpha-Proxy for search=ALPHA, got %+v", searchAlpha)
+	}
+
+	// 3. Search by group_type
+	searchURLTest, err := svc.ListGroups(ctx, policy.ListGroupsQuery{Search: "urltest"})
+	if err != nil {
+		t.Fatalf("ListGroups search=urltest failed: %v", err)
+	}
+	if searchURLTest.Total != 2 {
+		t.Fatalf("expected 2 urltest groups, got %d", searchURLTest.Total)
+	}
+	if searchURLTest.Items[0].Name != "Gamma-URLTest" || searchURLTest.Items[1].Name != "Zeta-Auto" {
+		t.Fatalf("expected Gamma-URLTest and Zeta-Auto, got %v", searchURLTest.Items)
+	}
+
+	// 4. Combined search and pagination with accurate Total
+	searchProxyP1, err := svc.ListGroups(ctx, policy.ListGroupsQuery{Search: "proxy", Page: 1, PageSize: 1})
+	if err != nil {
+		t.Fatalf("ListGroups search=proxy p1 failed: %v", err)
+	}
+	if searchProxyP1.Total != 2 || len(searchProxyP1.Items) != 1 || searchProxyP1.Items[0].Name != "Alpha-Proxy" {
+		t.Fatalf("expected total=2, items=1 (Alpha-Proxy) on p1, got %+v", searchProxyP1)
+	}
+
+	searchProxyP2, err := svc.ListGroups(ctx, policy.ListGroupsQuery{Search: "proxy", Page: 2, PageSize: 1})
+	if err != nil {
+		t.Fatalf("ListGroups search=proxy p2 failed: %v", err)
+	}
+	if searchProxyP2.Total != 2 || len(searchProxyP2.Items) != 1 || searchProxyP2.Items[0].Name != "Delta-Proxy" {
+		t.Fatalf("expected total=2, items=1 (Delta-Proxy) on p2, got %+v", searchProxyP2)
+	}
+}

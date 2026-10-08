@@ -87,7 +87,7 @@ func run() error {
 		}
 		return json.NewEncoder(os.Stdout).Encode(map[string]any{"mappings": maps, "engine": mihomo.CoreVersion()})
 	}
-	if in.TimeoutMS != 15000 || time.Until(in.Deadline) <= 0 || time.Until(in.Deadline) > 30*time.Minute {
+	if in.TimeoutMS != 15000 || time.Until(in.Deadline) <= 0 || time.Until(in.Deadline) > 4*time.Hour {
 		return fmt.Errorf("invalid deadline/timeout")
 	}
 	kind := domain.ProbeKindBaseline
@@ -108,7 +108,7 @@ func run() error {
 	}
 	for _, n := range in.Nodes {
 		q := in.Quotas[n.LogicalID]
-		if q.Limit <= 0 || q.Limit > 128<<20 || q.Scope == "" {
+		if q.Limit <= 0 || q.Limit > 1<<30 || q.Scope == "" {
 			return fmt.Errorf("missing quota")
 		}
 		if kind == domain.ProbeKindBaseline && q.Limit > 64<<10 {

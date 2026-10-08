@@ -54,7 +54,7 @@ comparative CSP/same-engine baseline统一target、15s请求超时（既有维�
 
 ### 5. 共享跨启动 budget/deadline 与公平参与
 
-总应用响应 body cap =134217728 bytes；整批首次运行开始到结束/cleanup ≤1800s，不是每launch/每侧各30min。baseline实际node×side所有响应body合计≤65536 bytes，实际CSP runner必须接到该值，不能只改helper/事后摘要；不能用extra probe byte突破上限。四侧最坏 `90×4×65536=23592960 bytes=22.5MiB`，默认platform余量 `110624768 bytes=105.5MiB`，四侧各 `27656192 bytes=26.375MiB`。可选两native baseline最多额外11.25MiB，必须从首次冻结的同一128MiB分配中扣除；不另开预算/时间。
+总应用响应 body cap =134217728 bytes；整批首次运行开始到结束/cleanup ≤1800s，不是每launch/每侧各30min。（注：历史批次与旧合同保留 128MiB/1800s 硬限额；2026-10-08 用户及主脑新 reissue 授权仅对新绑定 manifest 生效，放宽至上限 1073741824 字节(1GiB)与 7200 秒一次性绝对期限，保持 baseline 四侧全量与既定 intersection 共同资格覆盖逻辑，不改动全项目旧默认与历史事实）。baseline实际node×side所有响应body合计≤65536 bytes，实际CSP runner必须接到该值，不能只改helper/事后摘要；不能用extra probe byte突破上限。四侧最坏 `90×4×65536=23592960 bytes=22.5MiB`，默认platform余量 `110624768 bytes=105.5MiB`，四侧各 `27656192 bytes=26.375MiB`。可选两native baseline最多额外11.25MiB，必须从首次冻结的同一128MiB分配中扣除；不另开预算/时间。
 
 平台额度四主侧完全相等，stage/node可预先冻结quotas算法，eligibility结算后将确定的参与表及SHA记为manifest派生工件，算法/次序不得自适应改动。每个common eligible node获得相同各侧额度和尝试机会：采用固定stage次序、同轮node顺序、逐node×stage×side子额度，不让前节点用完全盘；无额度/时间则skip精确列出。无跨side/stage临时借贷/隐藏重试。平台可能含Netflix/YouTube/Disney/OpenAI/Claude/Gemini/IPRisk，但只尝试manifest列明的能力，不承诺128MiB内全部原生media覆盖。
 
@@ -93,7 +93,7 @@ GOPROXY=off GOTOOLCHAIN=local GOCACHE=<private-cache> GOTMPDIR=<private-tmp> go 
 GOPROXY=off GOTOOLCHAIN=local GOCACHE=<private-cache> GOTMPDIR=<private-tmp> go test -race ./...
 ```
 
-`--native-baseline-sides` 只允许0或2；2必须plan-time可行性验证通过，否则拒绝。plan/freeze/report绝不网络；execute缺--allow-network、pin不符、manifest不完整/变更、预算超128MiB、speed>0/URL存在、deadline>1800、ledger绑定不符或自测/独立review未通过全部拒绝且不创建请求。显式allow-network也不绕过门禁。freeze输出完整实际child argv/schema（包括native Check/native config vs normalized stages）、二进制摘要，execute只接受已冻结参数；不能按新flag私改命令或自动探测endpoint。Go adapter基于既有入口扩展这一数据契约，需README列明真实参数与fixtures；本规划不猜未取证的入口名。网络执行仅父编排在最终review后启动，同一批准总盘子，没有计划外probe。
+`--native-baseline-sides` 只允许0或2；2必须plan-time可行性验证通过，否则拒绝。plan/freeze/report绝不网络；execute缺--allow-network、pin不符、manifest不完整/变更、预算超过对应 manifest 冻结限额（旧批次 128MiB/1800s，新 reissue 批次上限 1GiB/7200s）、speed>0/URL存在、deadline超时、ledger绑定不符或自测/独立review未通过全部拒绝且不创建请求。显式allow-network也不绕过门禁。freeze输出完整实际child argv/schema（包括native Check/native config vs normalized stages）、二进制摘要，execute只接受已冻结参数；不能按新flag私改命令或自动探测endpoint。Go adapter基于既有入口扩展这一数据契约，需README列明真实参数与fixtures；本规划不猜未取证的入口名。网络执行仅父编排在最终review后启动，同一批准总盘子，没有计划外probe。
 
 Web在web目录执行 `npm run type-check`、`npm test`、`NO_COPY_WEBASSETS=1 COPY_WEBASSETS=0 npm run build`；private native snapshot 用 `GOPROXY=off GOTOOLCHAIN=local go build ./...` / `go test ./...`，same-engine同样命令加 `-modfile=<frozen-samecore.mod>`，先记录必要`-mod=mod`产生的diff再冻结，禁止执行阶段更新modfile或联网。全部命令记录真实exit_code和日志/source指纹。
 

@@ -98,6 +98,29 @@
 - [ ] 15.1 最终源码/preview/Reviewer/Critic真实通过后准备者明确 `COPY_WEBASSETS=1 NO_COPY_WEBASSETS=0` 同步嵌入assets，与最终preview/build指纹绑定、无额外源码；根编排只git_commit授权CSP路径、核对staged不夹无关改动、记录hash。经验维护责任人仅给 `.exp.md`旧Python/pytest/backend-data段落加obsolete前缀与当前Go部署不适用说明，不无关重写；父编排按授权核对真实经验变更。源码追加变化回完整门禁。
 - [ ] 15.2 按真实controlled_deployment_runbook/operations做SQLite一致性online hot .backup，size/schema/integrity/FK/SHA/0600/owner核验、现image rollback tag与schema17兼容隔离演练；app-only/no-deps/no-build上线及双loopback healthz/readyz/401/schema/assets/FK0和合法管理/发布核对。保持用户group flags、源启停与业务配置，无reset/import/down/删卷/回灌/重复删规则；只CSP，不触碰无关服务。记录rollout完成，7200s观察归9.2另报。
 
+## 16. 新授权 Reissue 工程实现与离线自测 (reissue-*)
+
+本章节根据主脑定稿的新授权合同实施，覆盖旧1800s/128MiB单次运行限额（新限额7200s/1GiB，仅对新manifest生效，旧记录与旧工件保真不篡改）。
+
+- [x] reissue-1 run.py / ledger.py 预算、截止时间与 Change 参数化支持（保留旧默认 1800s/128MiB，支持新授权 7200s/1GiB，绑定 manifest，取消写死 change 名但保留 review-report 严格校验与 hash 绑定）
+- [x] reissue-2 子进程 invoke 增加 <=10 秒心跳机制（side/stage/elapsed/consumed/reserved/finished/deadline）、安全 stdout/stderr 双通道并发消费防死锁及内存/日志敏感信息脱敏
+- [x] reissue-3 独立守护进程启动与监督脚本/包装（daemon mode / wrapper，PID/启动时间/收据/progress.log/runner-exit.json 原子写盘，总 deadline/budget 进程内强制执行，崩溃不自动退款/刷新，stage 级失败归因）
+- [x] reissue-4 结果与报告原子落盘（terminal/eligibility/report 原子写入，全 90*4*4 阶段全量终态，平台级分层 supported/not_supported/error/unexecuted，无伪造 latency）
+- [x] reissue-5 完善脱敏报告生成器与指标汇总（新身份 hash、两端版本、各侧 baseline/交集、平台一致性、匿名归因、实际 vs 保守未结算 bytes、耗时与故障分类，无凭据泄漏）
+- [x] reissue-6 csp 与 reference runner 适配新限额（csp/main.go 与 reference_entry.go.txt 解除 30m / 128MiB 写死上限，支持至 4h / 1GiB）
+- [x] reissue-7 完整离线单元测试与 Go 编译门禁（Python py_compile/unittest 全绿、Go build/test 全绿，包含参数化、二次 start 拒绝、不退款、心跳/崩溃终态/原子写/资源限制 mock 测试）
+- [x] reissue-8 离线测试 plan 与 freeze，生成新 manifest 与 new ledger（不发网络，验证 sha256 绑定与状态）
+### 故障定点整改记录 (Remediation Incident 2026-10-08)
+- **事件**：首个守护进程启动在 `ledger.start()` 和外网调用前退出，原因为 `launch-daemon` 预先创建了 `output` 目录，而 `execute` 严格拒绝已存在的结果目录导致 `[Errno 17] File exists`。实机证实 `ledger` 处于未动用的全新 `new` 状态，消耗 0 字节，未发出任何外部网络请求。原 `results/` 仅含元数据，已完整归档至 `failed-launch-1/` 用于取证。
+- **纠偏方案**：execute 保持对已有结果目录的严格拒绝（防止覆盖历史结果）；`launch-daemon` 将控制与监督文件（progress.log, receipt.json 等）写入独立控制目录 `control/<launch_attempt_id>`（权限 0700/0600），形成追加式（append-only）启动历史；同一 ledger/manifest 存在存活进程时拒绝重复启动。
+- **凭据与身份校正**：旧审查工件 `prep_review.json` 中记载的人工 `run_id` 仅为本地会话字符串，本任务真实官方 `run_id` 确认为 `unknown`；不改写旧工件历史，后续新审查报告须绑定真实 `unknown`。
+- **限额作用域确认**：旧批次 128MiB/1800s 硬限额保留作为历史事实，新 1GiB/7200s 限额仅对经新授权的新 manifest 生效，不修改项目旧默认。
+
+- [x] reissue-10 修复 launch/execute 目录冲突与控制目录隔离：execute 保持拒绝已有结果目录，launch-daemon 控制文件移入 `control/<launch_attempt_id>` 独立目录，实现 append-only 历史与同 ledger 存活进程互斥检测
+- [x] reissue-11 编排源码 hash（run.py, ledger.py）加入 manifest 源码绑定，离线 plan/freeze 生成 v2 隔离目录及新 manifest 与 ledger
+- [x] reissue-12 真实 subprocess launch→execute 集成测试 fixture（验证结果目录预置拒绝、首次创建成功、二次启动拒绝、failed log 不覆盖、子进程退出证据）
+- [x] reissue-9 经新授权与独立审查批准后启动并完成真实外网全量批次（PID 4092797 正常收口 exit 0，16 主阶段全量终态，脱敏报告及对比分析生成于私有目录 /tmp/csp-reissue-20261008T192722Z-v2/）
+
 ## 写集合、验证与单写责任
 
 保留原授权A候选文件：`internal/domain/{policy,node_filter}.go`、migration000017、`internal/repository/sqlite/policy.go`、`internal/application/policy/{types,service}.go`、`internal/transport/http/policies.go`、resolver types/graph/digest、compiler compiler/mihomo/prune、publication service、inventory filter_recovery与colocated tests；Web policyTypes/usePolicy/PolicyEditorSheet/PolicyView/GroupCard及tests、zh-CN/en-US locale与tests。现有go.mod/go.sum无目标升级，不复制GPL算法；新公共schema先11.1确认单写。

@@ -50,7 +50,7 @@ class Ledger:
             db.execute('INSERT INTO quota(id,cap) VALUES (?,?)', (scope, cap))
 
     def reserve(self, scope, amount):
-        if not 0 < amount <= 16 << 20:
+        if not 0 < amount <= 64 << 20:
             raise ValueError('invalid reservation')
         with self.transaction() as db:
             cap, used, reserved, deadline, state = db.execute('SELECT cap,used,reserved,deadline,state FROM experiment').fetchone()
@@ -103,6 +103,15 @@ class Bridge:
         bridge=self
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *args): pass
+            def do_GET(self):
+                if self.path == '/ping':
+                    self.send_response(200)
+                    self.send_header('Content-Length', '11')
+                    self.end_headers()
+                    self.wfile.write(b'{"ok":true}')
+                else:
+                    self.send_response(404)
+                    self.end_headers()
             def do_POST(self):
                 try:
                     if self.headers.get('Authorization') != 'Bearer '+bridge.token:

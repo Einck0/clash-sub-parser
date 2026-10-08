@@ -60,7 +60,7 @@ CLI SHALL 复用现有SQLite/application、Go testing/httptest、Python unittest
 运行 SHALL 冻结所有side/node/stage/config/revision/source/engine/次序、真实target及子请求、timeout/TLS/SNI/redirect/HTTP2/UA/selection、8/2/0并发、全部quota、ledger原始start/deadline与exact child argv/hash。comparative客户端 MUST 统一target/timeout/TLS/redirect/HTTP2，native defaults差异 MUST 明示。execute MUST 验证manifest/pin/ledger绑定，不允许未记载的endpoint/并发/TLS变化、额外重试或自动扩额。
 
 #### Scenario: 默认无网络与manifest变更
-- **WHEN** plan/freeze/report或execute缺allow-network、manifest/pin不符、speed>0/测速URL、body>128MiB、deadline>1800s或review门禁未满足
+- **WHEN** plan/freeze/report或execute缺allow-network、manifest/pin不符、speed>0/测速URL、body超出对应manifest冻结限额（旧批次128MiB、新reissue授权1GiB）、deadline超时（旧批次1800s、新reissue授权7200s）或review门禁未满足
 - **THEN** 发请求前fail-closed，命令默认无外部网络，allow-network不能绕过门禁
 
 #### Scenario: 归一化与原生差异
@@ -68,11 +68,11 @@ CLI SHALL 复用现有SQLite/application、Go testing/httptest、Python unittest
 - **THEN** 标不可比/方法差异并分账，不能静默把native Check改为normalized stage或凭headline计数判缺陷
 
 ### Requirement: 整批跨launch原子响应body与deadline硬限制
-全部launch、全部side、成功/失败/redirect/内嵌client与非collector平台调用 SHALL 共享同一个aggregate ledger、原始start/deadline。整批body MUST ≤134217728 bytes、含cleanup MUST ≤1800s；不按每进程/每side重置，不额外512MiB。read前原子reservation、实际settle、未用refund和cancel MUST race-safe；崩溃未结算预留 MUST 保守占额不自动重试。NIC/header/TLS/transport MUST 单独标注，body cap不冒称NIC上限。
+全部launch、全部side、成功/失败/redirect/内嵌client与非collector平台调用 SHALL 共享同一个aggregate ledger、原始start/deadline。整批body MUST ≤对应manifest冻结上限（旧批次134217728 bytes、新reissue授权1073741824 bytes）、含cleanup MUST ≤冻结期限（旧批次1800s、新reissue授权7200s）；保持历史旧批次事实与128MiB/1800s记录不变，新限额仅限新manifest；不按每进程/每side重置，不额外512MiB。read前原子reservation、实际settle、未用refund和cancel MUST race-safe；崩溃未结算预留 MUST 保守占额不自动重试。NIC/header/TLS/transport MUST 单独标注，body cap不冒称NIC上限。
 
 #### Scenario: 四侧最坏baseline与平台公平配额
-- **WHEN** 冻结默认90×4×65536 baseline allocation
-- **THEN** 最坏22.5MiB，platform剩105.5MiB四侧各26.375MiB；逐node×stage公平参与算法先冻结，不能前节点吞全盘/借贷/隐形扩额；可选native两侧额外最多11.25MiB在同一盘内扣除
+- **WHEN** 冻结baseline allocation
+- **THEN** 旧批次128MiB按最坏22.5MiB/平台105.5MiB；新reissue授权1GiB同样保持baseline四侧全覆盖与四侧交集共同资格逻辑，平台额度四侧均分；逐node×stage公平参与算法先冻结，不能前节点吞全盘/借贷/隐形扩额；可选native两侧额外最多11.25MiB在同一盘内扣除
 
 #### Scenario: 并发耗尽/取消/跨launch恢复
 - **WHEN** 并发reader、第二launch、deadline/cancel或崩溃恢复

@@ -46,13 +46,13 @@ func referenceFinish(mapping map[string]any,stage string,passed bool,result *Res
 }
 func ReferenceMain(reader io.Reader,writer io.Writer)error{
  var in referenceInput;if err:=json.NewDecoder(reader).Decode(&in);err!=nil{return fmt.Errorf("invalid input")}
- if os.Getenv("SUB_CHECK_SKIP")!=""||in.TimeoutMS<=0||time.Until(in.Deadline)<=0||time.Until(in.Deadline)>30*time.Minute{return fmt.Errorf("invalid allocation")}
+ if os.Getenv("SUB_CHECK_SKIP")!=""||in.TimeoutMS<=0||time.Until(in.Deadline)<=0||time.Until(in.Deadline)>4*time.Hour{return fmt.Errorf("invalid allocation")}
  if in.Mode!="stage"&&in.Mode!="native"{return fmt.Errorf("invalid method")};if in.Stage!="baseline"&&in.Stage!="media"{return fmt.Errorf("no-speed stage required")};if in.Mode=="native"&&in.Stage!="baseline"{return fmt.Errorf("native network control is baseline only")}
  config.GlobalConfig=&config.Config{Concurrent:8,MediaConcurrent:2,SpeedConcurrent:0,Timeout:in.TimeoutMS,MediaCheckTimeout:in.TimeoutMS/1000,AliveTestUrl:"http://cp.cloudflare.com/generate_204",SpeedTestUrl:"",MediaCheck:in.Stage=="media",Platforms:in.Platforms,KeepDays:0,SuccessLimit:0,Filter:[]string{},SubUrls:[]string{},SubUrlsRemote:[]string{},ShuffleTestOrder:false,RenameNode:false}
  var cancel context.CancelFunc;referenceContext,cancel=context.WithDeadline(context.Background(),in.Deadline);defer cancel()
  referenceInputState=in;referenceRecords=map[string]*referenceRecord{};referenceBudgets=map[string]*BodyBudget{}
  for _,m:=range in.Mappings{name:=fmt.Sprint(m["name"]);q:=in.Quotas[name];var b *BodyBudget;var err error
-  if in.LedgerURL!=""{b,err=NewLedgerBodyBudget(q.Limit,in.LedgerURL,in.LedgerToken,q.Scope)}else if in.Remaining>0&&in.Remaining<=128<<20{limit:=in.Remaining;if in.Stage=="baseline"&&limit>64<<10{limit=64<<10};b=NewBodyBudget(limit)}else{return fmt.Errorf("missing ledger")};if err!=nil{return err};referenceBudgets[name]=b
+  if in.LedgerURL!=""{b,err=NewLedgerBodyBudget(q.Limit,in.LedgerURL,in.LedgerToken,q.Scope)}else if in.Remaining>0&&in.Remaining<=1<<30{limit:=in.Remaining;if in.Stage=="baseline"&&limit>64<<10{limit=64<<10};b=NewBodyBudget(limit)}else{return fmt.Errorf("missing ledger")};if err!=nil{return err};referenceBudgets[name]=b
  }
  slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard,nil)))
  config.GlobalProxies=in.Mappings

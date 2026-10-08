@@ -56,14 +56,16 @@ export function usePolicy() {
       const res = await api.get<PaginatedGroups>('/api/v1/policies/groups', { params })
       groups.value = res.items || []
       totalGroups.value = res.total || 0
+      return true
     } catch (err) {
       error.value = err instanceof Error ? err.message : '加载策略组失败'
+      return false
     } finally {
       loading.value = false
     }
   }
 
-  async function createGroup(name: string, groupType: GroupType, edges: GroupEdge[] = [], nodeFilter?: NodeFilterSpec | null): Promise<PolicyGroup> {
+  async function createGroup(name: string, groupType: GroupType, edges: GroupEdge[] = [], nodeFilter?: NodeFilterSpec | null, emptyFallbackPass = false): Promise<PolicyGroup> {
     saving.value = true
     validationStale.value = true
     error.value = ''
@@ -71,14 +73,14 @@ export function usePolicy() {
       const payload: Record<string, unknown> = {
         name: name.trim(),
         group_type: groupType,
+        empty_fallback_pass: emptyFallbackPass,
         edges,
       }
       if (nodeFilter !== undefined) {
         payload.node_filter = nodeFilter
       }
       const created = await api.post<PolicyGroup>('/api/v1/policies/groups', payload)
-      await loadGroups()
-      void validateGraph()
+      await reload()
       return created
     } catch (err) {
       const msg = err instanceof Error ? err.message : '创建策略组失败'
@@ -89,19 +91,20 @@ export function usePolicy() {
     }
   }
 
-  async function updateGroup(id: string, name?: string, groupType?: GroupType, nodeFilter?: NodeFilterSpec | null): Promise<PolicyGroup> {
+  async function updateGroup(id: string, name?: string, groupType?: GroupType, nodeFilter?: NodeFilterSpec | null, emptyFallbackPass?: boolean): Promise<PolicyGroup> {
     saving.value = true
     validationStale.value = true
     error.value = ''
     try {
       const payload: Record<string, unknown> = {}
+      if (emptyFallbackPass !== undefined) payload.empty_fallback_pass = emptyFallbackPass
       if (name !== undefined) payload.name = name.trim()
       if (groupType !== undefined) payload.group_type = groupType
       if (nodeFilter !== undefined) payload.node_filter = nodeFilter
       const updated = await api.patch<PolicyGroup>(`/api/v1/policies/groups/${encodeURIComponent(id)}`, payload)
       const idx = groups.value.findIndex((g) => g.id === id)
       if (idx >= 0) groups.value[idx] = updated
-      void validateGraph()
+      await reload()
       return updated
     } catch (err) {
       error.value = err instanceof Error ? err.message : '更新策略组失败'
@@ -118,7 +121,7 @@ export function usePolicy() {
     try {
       await api.delete(`/api/v1/policies/groups/${encodeURIComponent(id)}`)
       groups.value = groups.value.filter((g) => g.id !== id)
-      void validateGraph()
+      await reload()
     } catch (err) {
       error.value = err instanceof Error ? err.message : '删除策略组失败'
       throw err
@@ -133,8 +136,7 @@ export function usePolicy() {
     error.value = ''
     try {
       await api.put(`/api/v1/policies/groups/${encodeURIComponent(groupId)}/edges`, { edges })
-      await loadGroups()
-      void validateGraph()
+      await reload()
     } catch (err) {
       error.value = err instanceof Error ? err.message : '保存策略组连接边失败'
       throw err
@@ -152,11 +154,11 @@ export function usePolicy() {
       const res = await api.get<RulesResult>('/api/v1/policies/rules', { params })
       admissionRules.value = res.admission_rules || []
       policyRules.value = res.policy_rules || []
-      if (res.revision_id) {
-        latestRevisionId.value = res.revision_id
-      }
+      latestRevisionId.value = res.revision_id || ''
+      return true
     } catch (err) {
       error.value = err instanceof Error ? err.message : '加载规则失败'
+      return false
     } finally {
       loading.value = false
     }
@@ -245,7 +247,24 @@ export function usePolicy() {
     }
   }
 
+  let reloadSeq = 0
+  async function reload() {
+    const seq = ++reloadSeq
+    abortValidation()
+    validationStale.value = true
+    validationState.value = 'incomplete'
+    // Sequential loads keep the first failure visible; validate only the
+    // successfully loaded current revision, never a half-loaded screen.
+    if (!await loadGroups() || seq !== reloadSeq) return
+    if (!await loadRules() || seq !== reloadSeq) return
+    await loadGlobalFilter()
+    if (error.value || seq !== reloadSeq) return
+    await validateGraph()
+  }
+
   function abortValidation() {
+    ++validateSeq
+    validating.value = false
     if (validateAbortController) {
       validateAbortController.abort()
       validateAbortController = null
@@ -279,6 +298,7 @@ export function usePolicy() {
       // ensure they match; otherwise response is from a pre-mutation revision
       if (res.revision_id && latestRevisionId.value && res.revision_id !== latestRevisionId.value) {
         validationStale.value = true
+        validationState.value = 'incomplete'
         return res
       }
 
@@ -338,6 +358,7 @@ export function usePolicy() {
   }
 
   async function updateGlobalFilter(spec: NodeFilterSpec): Promise<GlobalNodeFilter> {
+    validationStale.value = true
     savingGlobalFilter.value = true
     error.value = ''
     try {
@@ -372,6 +393,7 @@ export function usePolicy() {
     error,
     totalGroups,
     loadGroups,
+    reload,
     createGroup,
     updateGroup,
     deleteGroup,

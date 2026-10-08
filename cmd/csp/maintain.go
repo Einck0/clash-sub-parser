@@ -246,24 +246,24 @@ func runMaintainInventory(args []string, stdout, stderr io.Writer) int {
 	}
 
 	var (
-		dbPath                 string
-		operationStr           string
-		dryRun                 bool
-		reportDir              string
+		dbPath                        string
+		operationStr                  string
+		dryRun                        bool
+		reportDir                     string
 		kindsStr                      string
 		snapshotPublish               bool
 		omitUnavailableOptionalGroups bool
 		fetchProxy                    string
-		aliveConcurrency       int
-		aliveTimeout           time.Duration
-		mediaConcurrency       int
-		speedConcurrency       int
-		speedTimeout           time.Duration
-		speedMaxBytesPerNode   int64
-		speedTotalBudget       int64
-		globalTimeout          time.Duration
-		allowConcurrentService bool
-		forceOffline           bool
+		aliveConcurrency              int
+		aliveTimeout                  time.Duration
+		mediaConcurrency              int
+		speedConcurrency              int
+		speedTimeout                  time.Duration
+		speedMaxBytesPerNode          int64
+		speedTotalBudget              int64
+		globalTimeout                 time.Duration
+		allowConcurrentService        bool
+		forceOffline                  bool
 
 		deleteRuleID          string
 		expectedRuleExpr      string
@@ -284,11 +284,11 @@ func runMaintainInventory(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&fetchProxy, "fetch-proxy", defaultFetchProxy, "outbound HTTP/HTTPS proxy for subscription fetching")
 	fs.IntVar(&aliveConcurrency, "alive-concurrency", 8, "concurrency for alive/baseline stage")
 	fs.DurationVar(&aliveTimeout, "alive-timeout", 15*time.Second, "timeout per alive/baseline probe task")
-	fs.IntVar(&mediaConcurrency, "media-concurrency", 4, "concurrency for media/AI/risk/geo stage")
+	fs.IntVar(&mediaConcurrency, "media-concurrency", 2, "concurrency for media/AI/risk/geo stage")
 	fs.IntVar(&speedConcurrency, "speed-concurrency", 1, "concurrency for speed probe stage")
 	fs.DurationVar(&speedTimeout, "speed-timeout", 3*time.Second, "timeout per speed probe task")
 	fs.Int64Var(&speedMaxBytesPerNode, "speed-max-bytes-per-node", 1048576, "maximum speed test bytes downloaded per node (e.g. 1MiB)")
-	fs.Int64Var(&speedTotalBudget, "speed-total-budget", 134217728, "total speed test bandwidth budget for entire run (e.g. 128MiB)")
+	fs.Int64Var(&speedTotalBudget, "speed-total-budget", 134217728, "total application response-body budget for ALL probe stages in the entire run (max 128MiB; excludes headers/TLS/NIC)")
 	fs.DurationVar(&globalTimeout, "global-timeout", 20*time.Minute, "global timeout for entire maintenance execution")
 	fs.BoolVar(&allowConcurrentService, "allow-concurrent-service", false, "allow running maintenance even if active service detected (dangerous)")
 	fs.BoolVar(&forceOffline, "force-offline", false, "alias for --allow-concurrent-service")
@@ -303,6 +303,11 @@ func runMaintainInventory(args []string, stdout, stderr io.Writer) int {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
+		return 2
+	}
+
+	if speedTotalBudget <= 0 || speedTotalBudget > 128<<20 || globalTimeout <= 0 || globalTimeout > 30*time.Minute {
+		fmt.Fprintln(stderr, "maintain-inventory: body budget must be 1..128MiB and global timeout must be positive and <=30m")
 		return 2
 	}
 
@@ -403,6 +408,7 @@ func runMaintainInventory(args []string, stdout, stderr io.Writer) int {
 		probe.WithRunBudget(probe.RunBudget{
 			MaxTasks:         10000,
 			MaxResponseBytes: 16 << 20,
+			MaxTotalBytes:    speedTotalBudget,
 			TaskTimeout:      aliveTimeout,
 		}),
 	}
@@ -437,23 +443,23 @@ func runMaintainInventory(args []string, stdout, stderr io.Writer) int {
 	)
 
 	cfg := inventory.MaintenanceConfig{
-		TargetDBPath:           dbPath,
-		Operation:              op,
-		DryRun:                 dryRun,
-		ReportDir:              reportDir,
+		TargetDBPath:                  dbPath,
+		Operation:                     op,
+		DryRun:                        dryRun,
+		ReportDir:                     reportDir,
 		Kinds:                         kinds,
 		SnapshotPublish:               snapshotPublish,
 		OmitUnavailableOptionalGroups: omitUnavailableOptionalGroups,
 		FetchProxy:                    fetchProxy,
-		AliveConcurrency:       aliveConcurrency,
-		AliveTimeout:           aliveTimeout,
-		MediaConcurrency:       mediaConcurrency,
-		SpeedConcurrency:       speedConcurrency,
-		SpeedTimeout:           speedTimeout,
-		SpeedMaxBytesPerNode:   speedMaxBytesPerNode,
-		SpeedTotalBudget:       speedTotalBudget,
-		GlobalTimeout:          globalTimeout,
-		AllowConcurrentService: allowConcurrentService,
+		AliveConcurrency:              aliveConcurrency,
+		AliveTimeout:                  aliveTimeout,
+		MediaConcurrency:              mediaConcurrency,
+		SpeedConcurrency:              speedConcurrency,
+		SpeedTimeout:                  speedTimeout,
+		SpeedMaxBytesPerNode:          speedMaxBytesPerNode,
+		SpeedTotalBudget:              speedTotalBudget,
+		GlobalTimeout:                 globalTimeout,
+		AllowConcurrentService:        allowConcurrentService,
 	}
 
 	report, err := orchestrator.Run(ctx, cfg)

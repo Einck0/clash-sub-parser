@@ -1,0 +1,72 @@
+package check
+
+import (
+ "context"
+ "encoding/json"
+ "errors"
+ "fmt"
+ "io"
+ "log/slog"
+ "net/http"
+ "os"
+ "runtime/debug"
+ "sync"
+ "time"
+ "github.com/beck-8/subs-check/config"
+)
+var referenceContext=context.Background()
+var referenceMu sync.Mutex
+var referenceRecords=map[string]*referenceRecord{}
+var referenceInputState referenceInput
+var referenceBudgets=map[string]*BodyBudget{}
+type referenceRecord struct {Node string `json:"node"`;Stage string `json:"stage"`;Queued bool `json:"queued"`;Executed bool `json:"executed"`;Category string `json:"category"`;Reason string `json:"reason"`;Started time.Time `json:"started"`;Finished time.Time `json:"finished"`;Responses []ResponseEvidence `json:"responses"`;Errors map[string]string `json:"errors"`;Platforms map[string]any `json:"platforms"`;Recorder *ResponseRecorder `json:"-"`}
+type referenceQuota struct {Scope string `json:"scope"`;Limit int64 `json:"limit"`}
+type referenceInput struct {Mappings []map[string]any `json:"mappings"`;Remaining int64 `json:"remaining"`;Deadline time.Time `json:"deadline"`;TimeoutMS int `json:"timeout_ms"`;Mode string `json:"mode"`;Stage string `json:"stage"`;Platforms []string `json:"platforms"`;Quotas map[string]referenceQuota `json:"quotas"`;LedgerURL string `json:"ledger_url"`;LedgerToken string `json:"ledger_token"`}
+func referenceEngine()string{if b,ok:=debug.ReadBuildInfo();ok{for _,d:=range b.Deps{if d.Path=="github.com/metacubex/mihomo"{return "mihomo/"+d.Version}}};return "unknown"}
+func referenceClient(mapping map[string]any,stage string)*ProxyClient{
+ name:=fmt.Sprint(mapping["name"]);client:=CreateClient(mapping)
+ row:=&referenceRecord{Node:name,Stage:stage,Queued:true,Category:"unknown",Started:time.Now().UTC(),Recorder:&ResponseRecorder{},Errors:map[string]string{},Platforms:map[string]any{}}
+ referenceMu.Lock();referenceRecords[name+"/"+stage]=row;referenceMu.Unlock()
+ if client!=nil{
+  if referenceInputState.Mode=="stage"{if tr,ok:=client.Transport.(*http.Transport);ok{tr.ForceAttemptHTTP2=false;tr.DisableKeepAlives=true;tr.TLSClientConfig=nil;tr.Proxy=nil};client.CheckRedirect=func(*http.Request,[]*http.Request)error{return http.ErrUseLastResponse}}
+  b:=referenceBudgets[name];if referenceInputState.Mode=="stage" {client.Transport=&referenceHeaders{base:client.Transport}}
+  client.Client=BudgetClient(client.Client,referenceContext,b,row.Recorder,nil)
+ }
+ return client
+}
+func referenceError(mapping map[string]any,stage,platformName string,err error){if err==nil{return};referenceMu.Lock();defer referenceMu.Unlock();if r:=referenceRecords[fmt.Sprint(mapping["name"])+"/"+stage];r!=nil{r.Errors[platformName]=ResponseReason(err)}}
+func referenceFinish(mapping map[string]any,stage string,passed bool,result *Result){
+ referenceMu.Lock();defer referenceMu.Unlock();row:=referenceRecords[fmt.Sprint(mapping["name"])+"/"+stage];if row==nil{return};row.Finished=time.Now().UTC()
+ var err error;row.Responses,err=row.Recorder.Snapshot();row.Executed=len(row.Responses)>0&&row.Responses[0].Reason!="budget_not_executed"
+ if stage=="baseline"{if passed{row.Category="available"}else{row.Category="fail"}}
+ if result!=nil{row.Platforms=map[string]any{"openai":result.Openai,"youtube":result.Youtube,"netflix":result.Netflix,"disney":result.Disney,"gemini":result.Gemini,"claude":result.Claude,"iprisk":result.IPRisk};row.Category="unknown"}
+ for _,r:=range row.Responses{if r.Status==401||r.Status==403||r.Status==451{row.Category="restricted"}}
+ if err!=nil{row.Reason=ResponseReason(err);row.Category=row.Reason}
+ if !row.Executed&&len(row.Responses)==0{row.Category="configuration_mismatch"}
+}
+func ReferenceMain(reader io.Reader,writer io.Writer)error{
+ var in referenceInput;if err:=json.NewDecoder(reader).Decode(&in);err!=nil{return fmt.Errorf("invalid input")}
+ if os.Getenv("SUB_CHECK_SKIP")!=""||in.TimeoutMS<=0||time.Until(in.Deadline)<=0||time.Until(in.Deadline)>30*time.Minute{return fmt.Errorf("invalid allocation")}
+ if in.Mode!="stage"&&in.Mode!="native"{return fmt.Errorf("invalid method")};if in.Stage!="baseline"&&in.Stage!="media"{return fmt.Errorf("no-speed stage required")};if in.Mode=="native"&&in.Stage!="baseline"{return fmt.Errorf("native network control is baseline only")}
+ config.GlobalConfig=&config.Config{Concurrent:8,MediaConcurrent:2,SpeedConcurrent:0,Timeout:in.TimeoutMS,MediaCheckTimeout:in.TimeoutMS/1000,AliveTestUrl:"http://cp.cloudflare.com/generate_204",SpeedTestUrl:"",MediaCheck:in.Stage=="media",Platforms:in.Platforms,KeepDays:0,SuccessLimit:0,Filter:[]string{},SubUrls:[]string{},SubUrlsRemote:[]string{},ShuffleTestOrder:false,RenameNode:false}
+ var cancel context.CancelFunc;referenceContext,cancel=context.WithDeadline(context.Background(),in.Deadline);defer cancel()
+ referenceInputState=in;referenceRecords=map[string]*referenceRecord{};referenceBudgets=map[string]*BodyBudget{}
+ for _,m:=range in.Mappings{name:=fmt.Sprint(m["name"]);q:=in.Quotas[name];var b *BodyBudget;var err error
+  if in.LedgerURL!=""{b,err=NewLedgerBodyBudget(q.Limit,in.LedgerURL,in.LedgerToken,q.Scope)}else if in.Remaining>0&&in.Remaining<=128<<20{limit:=in.Remaining;if in.Stage=="baseline"&&limit>64<<10{limit=64<<10};b=NewBodyBudget(limit)}else{return fmt.Errorf("missing ledger")};if err!=nil{return err};referenceBudgets[name]=b
+ }
+ slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard,nil)))
+ config.GlobalProxies=in.Mappings
+ if in.Mode=="native"{if _,err:=Check();err!=nil{return err}}else{
+  // Authentic empty Check initializes native lifecycle/rate limiter, no sources/speed.
+  config.GlobalProxies=nil;if _,err:=Check();err!=nil{return err}
+  limit:=8;if in.Stage=="media"{limit=2};sem:=make(chan struct{},limit);var wg sync.WaitGroup
+  for _,m:=range in.Mappings{select{case sem<-struct{}{}:case <-referenceContext.Done():break};if referenceContext.Err()!=nil{break};wg.Add(1);go func(mapping map[string]any){defer wg.Done();defer func(){<-sem}();pc:=&ProxyChecker{};if in.Stage=="baseline"{pc.checkAlive(mapping)}else{pc.checkMedia(aliveResult{Proxy:mapping})}}(m)};wg.Wait()
+ }
+ var used int64;for _,b:=range referenceBudgets{_,n:=b.Snapshot();used+=n}
+ for _,m:=range in.Mappings{name:=fmt.Sprint(m["name"]);key:=name+"/"+in.Stage;if referenceRecords[key]==nil{reason:="not_scheduled";if referenceContext.Err()!=nil{reason="cancelled"};referenceRecords[key]=&referenceRecord{Node:name,Stage:in.Stage,Category:reason,Finished:time.Now().UTC()}}}
+ return json.NewEncoder(writer).Encode(map[string]any{"side":"subs-check","method":in.Mode,"commit":"3c320fd58aff5235e16218c050ec5b8ce587e233","engine":referenceEngine(),"body_bytes":used,"rows":referenceRecords,"transport_bytes":TotalBytes.Load(),"incomplete":referenceContext.Err()!=nil,"platform_semantic_parity":"unverified"})
+}
+type referenceHeaders struct {base http.RoundTripper}
+func(t *referenceHeaders)RoundTrip(req *http.Request)(*http.Response,error){clone:=req.Clone(req.Context());if referenceInputState.Stage=="baseline"{clone.Header.Set("User-Agent","Mozilla/5.0 (compatible; CSP-Probe/1.0)")};return t.base.RoundTrip(clone)}
+func(t *referenceHeaders)CloseIdleConnections(){if c,ok:=t.base.(interface{CloseIdleConnections()});ok{c.CloseIdleConnections()}}
+var _ = errors.Is

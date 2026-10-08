@@ -36,6 +36,7 @@ export interface PolicyGroup {
   name: string
   group_type: GroupType
   edges: GroupEdge[]
+  empty_fallback_pass?: boolean
   node_filter?: NodeFilterSpec | null
   created_at?: string
   updated_at?: string
@@ -238,6 +239,8 @@ export type FilterField =
 export type FilterOp =
   | 'contains'
   | 'not_contains'
+  | 'regex'
+  | 'not_regex'
   | 'equals'
   | 'not_equals'
   | 'lte'
@@ -273,15 +276,17 @@ export function validateConditionInput(cond: Partial<FilterCondition>): string |
 
   switch (cond.field) {
     case 'display_name':
-      if (cond.op !== 'contains' && cond.op !== 'not_contains') {
-        return '显示名称仅支持"包含"或"不包含"运算符'
+      if (!['contains', 'not_contains', 'regex', 'not_regex'].includes(cond.op)) {
+        return '显示名称仅支持包含、不包含、正则或不匹配正则'
       }
       if (!cond.value || !cond.value.trim()) {
         return '显示名称值不能为空'
       }
-      if (cond.value.trim().length > 255) {
-        return '显示名称值长度不能超过 255 个字符'
+      const maxBytes = cond.op === 'regex' || cond.op === 'not_regex' ? 1024 : 255
+      if (new TextEncoder().encode(cond.value.trim()).length > maxBytes) {
+        return `显示名称值长度不能超过 ${maxBytes} 个字符（${maxBytes} 字节上限）`
       }
+      // PCRE lookaround is validated by the server, never rewritten as JS/RE2.
       break
 
     case 'protocol': {

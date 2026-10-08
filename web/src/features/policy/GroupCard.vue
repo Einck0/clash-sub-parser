@@ -11,6 +11,7 @@ import {
 import type { PolicyGroup } from './policyTypes'
 import { groupTypeLabel, groupTypeSupportedTargets } from './policyTypes'
 import StatusBadge from '../../ui/StatusBadge.vue'
+import { t } from '../../locales'
 
 const props = defineProps<{
   group: PolicyGroup
@@ -94,6 +95,7 @@ function handleHeaderClick() {
           >
             目标：{{ groupTypeSupportedTargets(group.group_type).join('/') }}
           </span>
+          <span v-if="group.empty_fallback_pass" class="badge badge-xs badge-outline" :title="t('policy.emptyFallbackPassHelp')">{{ t('policy.emptyFallbackPass') }}</span>
           <span
             v-if="group.node_filter && group.node_filter.conditions && group.node_filter.conditions.length > 0"
             class="badge badge-xs badge-primary font-mono"

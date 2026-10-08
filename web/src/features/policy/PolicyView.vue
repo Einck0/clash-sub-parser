@@ -55,6 +55,7 @@ const {
   abortValidation,
   error,
   loadGroups,
+  reload,
   createGroup,
   updateGroup,
   deleteGroup,
@@ -188,6 +189,7 @@ function removeGlobalCondition(idx: number) {
 async function saveGlobalFilter() {
   try {
     await updateGlobalFilter({ conditions: globalConditions.value })
+    await reload()
     globalFilterModalOpen.value = false
   } catch {
     // error handled in usePolicy
@@ -238,14 +240,14 @@ function openManageEdges(group: PolicyGroup) {
   sheetOpen.value = true
 }
 
-async function handleSaveGroup(data: { name: string; type: GroupType; nodeFilter?: any }) {
+async function handleSaveGroup(data: { name: string; type: GroupType; nodeFilter?: any; emptyFallbackPass: boolean }) {
   try {
     if (activeGroup.value) {
-      const updated = await updateGroup(activeGroup.value.id, data.name, data.type, data.nodeFilter)
+      const updated = await updateGroup(activeGroup.value.id, data.name, data.type, data.nodeFilter, data.emptyFallbackPass)
       activeGroup.value = updated
       selectedGroupId.value = updated.id
     } else {
-      const created = await createGroup(data.name, data.type, [], data.nodeFilter)
+      const created = await createGroup(data.name, data.type, [], data.nodeFilter, data.emptyFallbackPass)
       activeGroup.value = created
       selectedGroupId.value = created.id
     }
@@ -307,11 +309,8 @@ async function submitAdmissionRule() {
 }
 
 onMounted(() => {
-  loadGroups()
-  loadRules()
+  void reload()
   loadNodes()
-  loadGlobalFilter()
-  void validateGraph()
 })
 
 onUnmounted(() => {
@@ -387,7 +386,7 @@ onUnmounted(() => {
       v-if="error"
       :error="error"
       :retrying="loading"
-      @retry="() => { loadGroups(); loadRules(); }"
+      @retry="reload"
     />
 
     <!-- Stale Notification Banner -->
@@ -796,6 +795,8 @@ onUnmounted(() => {
               <template v-if="newGlobalField === 'display_name' || newGlobalField === 'source_subscription_ids'">
                 <option value="contains">包含 (contains)</option>
                 <option value="not_contains">不包含 (not_contains)</option>
+                <option v-if="newGlobalField === 'display_name'" value="regex">匹配正则 (regex)</option>
+                <option v-if="newGlobalField === 'display_name'" value="not_regex">不匹配正则 (not_regex)</option>
               </template>
               <template v-else-if="newGlobalField === 'probe_latency_ms'">
                 <option value="lte">小于等于 (lte)</option>

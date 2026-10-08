@@ -19,9 +19,10 @@ type canonicalInputNode struct {
 }
 
 type canonicalInputGroup struct {
-	ID        string           `json:"id"`
-	Name      string           `json:"name"`
-	GroupType domain.GroupType `json:"group_type"`
+	EmptyFallbackPass bool             `json:"empty_fallback_pass"`
+	ID                string           `json:"id"`
+	Name              string           `json:"name"`
+	GroupType         domain.GroupType `json:"group_type"`
 }
 
 type canonicalInputEdge struct {
@@ -92,9 +93,10 @@ func computeInputDigest(input ResolveInput) (string, error) {
 	groups := make([]canonicalInputGroup, len(input.Groups))
 	for i, g := range input.Groups {
 		groups[i] = canonicalInputGroup{
-			ID:        g.ID,
-			Name:      g.Name,
-			GroupType: g.GroupType,
+			EmptyFallbackPass: g.EmptyFallbackPass,
+			ID:                g.ID,
+			Name:              g.Name,
+			GroupType:         g.GroupType,
 		}
 	}
 	sort.SliceStable(groups, func(i, j int) bool {

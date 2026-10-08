@@ -106,10 +106,16 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 		defaultFetchProxy = os.Getenv("FETCH_PROXY")
 	}
 
+	defaultWebDir := os.Getenv("CSP_WEB_DIR")
+	if defaultWebDir == "" {
+		defaultWebDir = os.Getenv("WEBASSETS_DIST_DIR")
+	}
+
 	var addr string
 	var dbPath string
 	var adminToken string
 	var fetchProxy string
+	var webDir string
 
 	fs.StringVar(&addr, "addr", defaultAddr, "HTTP listen address [host:port] (default from CSP_ADDR/CSP_BIND/CSP_PORT or 0.0.0.0:18080)")
 	fs.StringVar(&addr, "a", defaultAddr, "HTTP listen address [host:port] (shorthand)")
@@ -117,12 +123,17 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 	fs.StringVar(&dbPath, "d", defaultDBPath, "path to target SQLite database file (shorthand)")
 	fs.StringVar(&adminToken, "admin-token", defaultAdminToken, "admin bearer/cookie token (default from CSP_ADMIN_TOKEN)")
 	fs.StringVar(&fetchProxy, "fetch-proxy", defaultFetchProxy, "outbound HTTP/HTTPS proxy for subscription fetching (default from CSP_FETCH_PROXY)")
+	fs.StringVar(&webDir, "web-dir", defaultWebDir, "path to custom web assets directory (default from CSP_WEB_DIR or WEBASSETS_DIST_DIR)")
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
 		return 2
+	}
+
+	if webDir != "" {
+		_ = os.Setenv("CSP_WEB_DIR", webDir)
 	}
 
 	// Ensure parent directory exists if not in-memory

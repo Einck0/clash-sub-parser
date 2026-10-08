@@ -18,18 +18,20 @@ type policyHandler struct {
 }
 
 type createGroupRequest struct {
-	ID         string                 `json:"id,omitempty"`
-	Name       string                 `json:"name"`
-	GroupType  domain.GroupType       `json:"group_type"`
-	Edges      []policy.EdgeInput     `json:"edges,omitempty"`
-	NodeFilter *domain.NodeFilterSpec `json:"node_filter,omitempty"`
+	EmptyFallbackPass bool                   `json:"empty_fallback_pass"`
+	ID                string                 `json:"id,omitempty"`
+	Name              string                 `json:"name"`
+	GroupType         domain.GroupType       `json:"group_type"`
+	Edges             []policy.EdgeInput     `json:"edges,omitempty"`
+	NodeFilter        *domain.NodeFilterSpec `json:"node_filter,omitempty"`
 }
 
 type updateGroupRequest struct {
-	Name       *string                `json:"name,omitempty"`
-	GroupType  *domain.GroupType      `json:"group_type,omitempty"`
-	Edges      *[]policy.EdgeInput    `json:"edges,omitempty"`
-	NodeFilter *domain.NodeFilterSpec `json:"node_filter,omitempty"`
+	EmptyFallbackPass *bool                  `json:"empty_fallback_pass,omitempty"`
+	Name              *string                `json:"name,omitempty"`
+	GroupType         *domain.GroupType      `json:"group_type,omitempty"`
+	Edges             *[]policy.EdgeInput    `json:"edges,omitempty"`
+	NodeFilter        *domain.NodeFilterSpec `json:"node_filter,omitempty"`
 }
 
 type setGlobalFilterRequest struct {
@@ -174,13 +176,14 @@ func (h policyHandler) createGroup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	view, err := h.service.CreateGroup(r.Context(), policy.CreateGroupCommand{
-		ID:         body.ID,
-		Name:       body.Name,
-		GroupType:  body.GroupType,
-		Edges:      body.Edges,
-		NodeFilter: body.NodeFilter,
-		RequestID:  GetRequestID(r.Context()),
-		ActorKind:  requestActorKind(r),
+		EmptyFallbackPass: body.EmptyFallbackPass,
+		ID:                body.ID,
+		Name:              body.Name,
+		GroupType:         body.GroupType,
+		Edges:             body.Edges,
+		NodeFilter:        body.NodeFilter,
+		RequestID:         GetRequestID(r.Context()),
+		ActorKind:         requestActorKind(r),
 	})
 	if err != nil {
 		WriteDomainError(w, r, err)
@@ -223,12 +226,13 @@ func (h policyHandler) updateGroup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cmd := policy.UpdateGroupCommand{
-		ID:        id,
-		Name:      body.Name,
-		GroupType: body.GroupType,
-		Edges:     body.Edges,
-		RequestID: GetRequestID(r.Context()),
-		ActorKind: requestActorKind(r),
+		EmptyFallbackPass: body.EmptyFallbackPass,
+		ID:                id,
+		Name:              body.Name,
+		GroupType:         body.GroupType,
+		Edges:             body.Edges,
+		RequestID:         GetRequestID(r.Context()),
+		ActorKind:         requestActorKind(r),
 	}
 
 	if rawFilter, exists := raw["node_filter"]; exists {

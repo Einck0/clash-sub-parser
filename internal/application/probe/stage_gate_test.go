@@ -281,8 +281,8 @@ func TestStageGateBaselineAvailabilityControlsStreaming(t *testing.T) {
 		wantRequests int
 	}{
 		{name: "unavailable_503", status: http.StatusServiceUnavailable, body: "unavailable", wantRequests: 1},
-		{name: "http_200_ok_rejected_as_drift", status: http.StatusOK, body: "ok", wantRequests: 1},
-		{name: "http_204_non_empty_rejected_as_drift", status: http.StatusNoContent, body: "unexpected", wantRequests: 1},
+		{name: "http_200_ok_normalized_available", status: http.StatusOK, body: "ok", wantRequests: 7},
+		{name: "http_204_non_empty_normalized_available", status: http.StatusNoContent, body: "unexpected", wantRequests: 6},
 		{name: "available_204_empty", status: http.StatusNoContent, body: "", wantRequests: 6},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -332,10 +332,7 @@ func TestStageGateBaselineAvailabilityControlsStreaming(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			wantObs := 1
-			if tc.wantRequests > 1 {
-				wantObs = 2
-			}
+			wantObs := 2 // includes the immutable dependency_skipped terminal record
 			if len(got) != wantObs {
 				t.Fatalf("observations=%d, want %d: %#v", len(got), wantObs, got)
 			}

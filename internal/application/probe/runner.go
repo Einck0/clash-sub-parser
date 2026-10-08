@@ -2,6 +2,9 @@ package probe
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -70,11 +73,12 @@ func WithRunnerClock(clock func() time.Time) DefaultRunnerOption {
 type RunBudget struct {
 	MaxTasks         int
 	MaxResponseBytes int64
+	MaxTotalBytes    int64 // application response bodies across ALL stages
 	TaskTimeout      time.Duration
 }
 
-// MaxResponseBytes is enforced independently for each probe task, not across a run.
-var DefaultRunBudget = RunBudget{MaxTasks: 10000, MaxResponseBytes: 16 << 20, TaskTimeout: 30 * time.Second}
+// MaxResponseBytes bounds one task; MaxTotalBytes bounds all response bodies.
+var DefaultRunBudget = RunBudget{MaxTasks: 10000, MaxResponseBytes: 16 << 20, MaxTotalBytes: 128 << 20, TaskTimeout: 30 * time.Second}
 
 var errResponseTooLarge = errors.New("probe response exceeds per-task byte limit")
 
@@ -93,7 +97,12 @@ func readBoundedResponse(body io.Reader, limit int64) ([]byte, error) {
 }
 
 func WithRunBudget(budget RunBudget) DefaultRunnerOption {
-	return func(r *DefaultRunner) { r.budget = budget }
+	return func(r *DefaultRunner) {
+		if budget.MaxTotalBytes == 0 {
+			budget.MaxTotalBytes = DefaultRunBudget.MaxTotalBytes
+		}
+		r.budget = budget
+	}
 }
 
 // WithIPRiskObservationRepository configures an optional IP risk repository for recording 1:N risk observations.
@@ -117,18 +126,60 @@ func WithSpeedBudget(maxBytesPerNode int64, deadline time.Duration) DefaultRunne
 	}
 }
 
+// WithBodyBudget supplies one experiment allocation shared by multiple runs/sides.
+func WithBodyBudget(b *platform.BodyBudget) DefaultRunnerOption {
+	return func(r *DefaultRunner) { r.bodyBudget = b }
+}
+
+type runMeterKey struct{}
+type runMeter struct {
+	budget   *platform.BodyBudget
+	cancel   context.CancelFunc
+	mu       sync.Mutex
+	seen     map[string]bool
+	baseline map[string]domain.ProbeVerdict
+}
+
+func nodeFingerprint(node domain.Node) string {
+	data, _ := json.Marshal(struct {
+		LogicalID   string
+		Revision    int64
+		Protocol    domain.Protocol
+		Server      string
+		Port        int
+		Credentials domain.InboundProtocolCredential
+	}{node.LogicalID, node.ConnectionRevision, node.Protocol, node.Server, node.Port, node.Credentials})
+	h := sha256.Sum256(data)
+	return "sha256:" + hex.EncodeToString(h[:])
+}
+
+// WithPlatforms restricts an explicitly selected comparison suite; nil preserves production suites.
+func WithPlatforms(names []string) DefaultRunnerOption {
+	return func(r *DefaultRunner) {
+		r.platformSelection = make(map[string]bool)
+		for _, name := range names {
+			r.platformSelection[name] = true
+		}
+	}
+}
+func (r *DefaultRunner) platformEnabled(name string) bool {
+	return r.platformSelection == nil || r.platformSelection[name]
+}
+
 type DefaultRunner struct {
-	budget           RunBudget
-	stageConcurrency StageConcurrency
-	speedBudget      *profiles.SpeedBudget
-	nodes            domain.NodeRepository
-	observations     domain.ProbeObservationRepository
-	riskObs          domain.IPRiskObservationRepository
-	scheduler        *queue.Scheduler
-	runs             domain.ProbeRunRepository
-	dialer           NodeDialer
-	clock            func() time.Time
-	scope            domain.NodeScope
+	platformSelection map[string]bool
+	bodyBudget        *platform.BodyBudget
+	budget            RunBudget
+	stageConcurrency  StageConcurrency
+	speedBudget       *profiles.SpeedBudget
+	nodes             domain.NodeRepository
+	observations      domain.ProbeObservationRepository
+	riskObs           domain.IPRiskObservationRepository
+	scheduler         *queue.Scheduler
+	runs              domain.ProbeRunRepository
+	dialer            NodeDialer
+	clock             func() time.Time
+	scope             domain.NodeScope
 }
 
 // NewDefaultRunner constructs a DefaultRunner.
@@ -264,7 +315,7 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 	if run.IsTerminal() {
 		return nil
 	}
-	if r.budget.MaxTasks <= 0 || r.budget.MaxResponseBytes <= 0 || r.budget.TaskTimeout <= 0 {
+	if r.budget.MaxTasks <= 0 || r.budget.MaxResponseBytes <= 0 || r.budget.MaxTotalBytes <= 0 || r.budget.TaskTimeout <= 0 {
 		return errors.New("invalid probe run budget")
 	}
 
@@ -356,12 +407,20 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 		_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateFailed)
 		return fmt.Errorf("probe run task budget exceeded: %d > %d", taskCount, r.budget.MaxTasks)
 	}
-	runCtx := ctx
-	if !run.DeadlineAt.IsZero() && run.DeadlineAt.After(r.clock().UTC()) {
-		var cancel context.CancelFunc
-		runCtx, cancel = context.WithDeadline(ctx, run.DeadlineAt)
-		defer cancel()
+	deadline := r.clock().UTC().Add(30 * time.Minute)
+	if !run.DeadlineAt.IsZero() && run.DeadlineAt.Before(deadline) {
+		deadline = run.DeadlineAt
 	}
+	runCtx, deadlineCancel := context.WithDeadline(ctx, deadline)
+	defer deadlineCancel()
+	runCtx, cancel := context.WithCancel(runCtx)
+	defer cancel()
+	bodyBudget := r.bodyBudget
+	if bodyBudget == nil {
+		bodyBudget = platform.NewBodyBudget(r.budget.MaxTotalBytes)
+	}
+	runCtx = context.WithValue(runCtx, runMeterKey{}, &runMeter{budget: bodyBudget, cancel: cancel, seen: make(map[string]bool), baseline: make(map[string]domain.ProbeVerdict)})
+	defer r.recordNotExecuted(ctx, run, targetNodes, validKinds, runCtx, bodyBudget)
 
 	pool := newNodeSessionPool(runCtx)
 	defer pool.closeAll()
@@ -949,12 +1008,66 @@ func aggregateGroupVerdict(platforms map[string]domain.PlatformCapability) (doma
 	return domain.VerdictUnknown, "contract_drift"
 }
 
+func (r *DefaultRunner) recordNotExecuted(parent context.Context, run *domain.ProbeRun, nodes []domain.Node, kinds []domain.ProbeKind, runCtx context.Context, budget *platform.BodyBudget) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), 5*time.Second)
+	defer cancel()
+	meter, _ := runCtx.Value(runMeterKey{}).(*runMeter)
+	seen := make(map[string]bool)
+	baseline := make(map[string]domain.ProbeVerdict)
+	if meter != nil {
+		meter.mu.Lock()
+		for key, value := range meter.seen {
+			seen[key] = value
+		}
+		for key, value := range meter.baseline {
+			baseline[key] = value
+		}
+		meter.mu.Unlock()
+	}
+	limit, used := budget.Snapshot()
+	for _, node := range nodes {
+		for _, kind := range kinds {
+			if seen[node.LogicalID+"/"+string(kind)] {
+				continue
+			}
+			reason := "not_scheduled"
+			if verdict, done := baseline[node.LogicalID]; kind != domain.ProbeKindBaseline && done && verdict != domain.VerdictAvailable {
+				reason = "dependency_skipped"
+			} else if used >= limit {
+				reason = "budget_not_executed"
+			} else if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+				reason = "deadline_exceeded"
+			} else if runCtx.Err() != nil {
+				reason = "cancelled"
+			}
+			now := r.clock().UTC()
+			prof := profileForKind(kind)
+			obs := &domain.ProbeObservation{ID: domain.MustNewUUIDv7(), ProbeRunID: run.ID, NodeLogicalID: node.LogicalID, Kind: kind, Verdict: domain.VerdictUnknown, ObservedAt: now, RedactedSummary: "reason=" + reason,
+				Attempt: &domain.ProbeAttemptEvidence{Executed: false, Category: reason, Reason: reason, RawVerdict: domain.VerdictUnknown, ConfigFingerprint: nodeFingerprint(node), ConfigRevision: run.ConfigRevision, Profile: prof.Version, Contract: prof.Contract, Engine: mihomo.CoreVersion(), Source: "csp-runner", AttemptID: run.ID + "/" + node.LogicalID + "/" + string(kind), StartedAt: now, FinishedAt: now, BudgetLimit: limit, BudgetUsed: used}}
+			obs.EvidenceDigest = domain.ComputeProbeEvidenceDigest(run.ID, node.LogicalID, prof.Version, obs.Verdict, 0, reason)
+			if node.ConnectionRevision > 0 {
+				rev := node.ConnectionRevision
+				obs.ConnectionRevision = &rev
+			}
+			obs.SyncEvidenceData()
+			_ = r.observations.Create(ctx, obs)
+		}
+	}
+}
+
 func (r *DefaultRunner) executeTask(ctx context.Context, run *domain.ProbeRun, node domain.Node, kind domain.ProbeKind, session *nodeSession) error {
 	_, err := r.executeTaskWithVerdict(ctx, run, node, kind, session)
 	return err
 }
 
 func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.ProbeRun, node domain.Node, kind domain.ProbeKind, session *nodeSession) (domain.ProbeVerdict, error) {
+	// Scheduler owns cancellation but intentionally creates a fresh context.
+	// Restore only our frozen run allocation from the session, not arbitrary values.
+	if session != nil {
+		if meter := session.sessionCtx.Value(runMeterKey{}); meter != nil {
+			ctx = context.WithValue(ctx, runMeterKey{}, meter)
+		}
+	}
 	prof := profileForKind(kind)
 	if kind == domain.ProbeKindSpeed && r.speedBudget != nil {
 		if r.speedBudget.MaxBytesPerRequest > 0 {
@@ -1009,6 +1122,15 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 		}
 	}
 
+	recorder := &platform.ResponseRecorder{}
+	meter, _ := ctx.Value(runMeterKey{}).(*runMeter)
+	if meter == nil {
+		meter = &runMeter{budget: platform.NewBodyBudget(r.budget.MaxTotalBytes)}
+	}
+	if client != nil {
+		client = platform.BudgetClient(client, ctx, meter.budget, recorder, meter.cancel)
+	}
+
 	if dialErr != nil {
 		failureReason = classifyDialFailure(dialErr)
 		result.NetworkError = true
@@ -1025,25 +1147,29 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 			yt  domain.PlatformCapability
 			dis domain.PlatformCapability
 		)
-		wg.Add(3)
-		go func() {
-			defer wg.Done()
-			nf = platform.CheckNetflix(ctx, client)
-		}()
-		go func() {
-			defer wg.Done()
-			yt = platform.CheckYoutube(ctx, client)
-		}()
-		go func() {
-			defer wg.Done()
-			dis = platform.CheckDisney(ctx, client)
-		}()
+		platformsMap = map[string]domain.PlatformCapability{}
+		if r.platformEnabled("netflix") {
+			wg.Add(1)
+			go func() { defer wg.Done(); nf = platform.CheckNetflix(ctx, client) }()
+		}
+		if r.platformEnabled("youtube") {
+			wg.Add(1)
+			go func() { defer wg.Done(); yt = platform.CheckYoutube(ctx, client) }()
+		}
+		if r.platformEnabled("disney") {
+			wg.Add(1)
+			go func() { defer wg.Done(); dis = platform.CheckDisney(ctx, client) }()
+		}
 		wg.Wait()
 		latency = r.clock().Sub(reqStart).Milliseconds()
-		platformsMap = map[string]domain.PlatformCapability{
-			"netflix": nf,
-			"youtube": yt,
-			"disney":  dis,
+		if r.platformEnabled("netflix") {
+			platformsMap["netflix"] = nf
+		}
+		if r.platformEnabled("youtube") {
+			platformsMap["youtube"] = yt
+		}
+		if r.platformEnabled("disney") {
+			platformsMap["disney"] = dis
 		}
 		result.ContractMatched = true
 		result.ContractVersion = prof.Contract
@@ -1055,25 +1181,29 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 			claude domain.PlatformCapability
 			gem    domain.PlatformCapability
 		)
-		wg.Add(3)
-		go func() {
-			defer wg.Done()
-			oai = platform.CheckOpenAI(ctx, client)
-		}()
-		go func() {
-			defer wg.Done()
-			claude = platform.CheckClaude(ctx, client)
-		}()
-		go func() {
-			defer wg.Done()
-			gem = platform.CheckGemini(ctx, client)
-		}()
+		platformsMap = map[string]domain.PlatformCapability{}
+		if r.platformEnabled("openai") {
+			wg.Add(1)
+			go func() { defer wg.Done(); oai = platform.CheckOpenAI(ctx, client) }()
+		}
+		if r.platformEnabled("claude") {
+			wg.Add(1)
+			go func() { defer wg.Done(); claude = platform.CheckClaude(ctx, client) }()
+		}
+		if r.platformEnabled("gemini") {
+			wg.Add(1)
+			go func() { defer wg.Done(); gem = platform.CheckGemini(ctx, client) }()
+		}
 		wg.Wait()
 		latency = r.clock().Sub(reqStart).Milliseconds()
-		platformsMap = map[string]domain.PlatformCapability{
-			"openai": oai,
-			"claude": claude,
-			"gemini": gem,
+		if r.platformEnabled("openai") {
+			platformsMap["openai"] = oai
+		}
+		if r.platformEnabled("claude") {
+			platformsMap["claude"] = claude
+		}
+		if r.platformEnabled("gemini") {
+			platformsMap["gemini"] = gem
 		}
 		result.ContractMatched = true
 		result.ContractVersion = prof.Contract
@@ -1184,7 +1314,16 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 				result.NetworkError = true
 			} else {
 				readLimit := r.budget.MaxResponseBytes
-				body, readErr := readBoundedResponse(resp.Body, readLimit)
+				var body []byte
+				var readErr error
+				if kind == domain.ProbeKindBaseline {
+					if readLimit > 64<<10 {
+						readLimit = 64 << 10
+					}
+					body, readErr = io.ReadAll(io.LimitReader(resp.Body, readLimit))
+				} else {
+					body, readErr = readBoundedResponse(resp.Body, readLimit)
+				}
 				_ = resp.Body.Close()
 				latency = r.clock().Sub(reqStart).Milliseconds()
 
@@ -1206,7 +1345,7 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 
 					switch kind {
 					case domain.ProbeKindBaseline:
-						result.ContractMatched = resp.StatusCode == http.StatusNoContent && len(body) == 0 && result.BytesRead == 0
+						result.ContractMatched = resp.StatusCode >= 200 && resp.StatusCode < 300
 					case domain.ProbeKindGeo:
 						if resp.StatusCode == http.StatusOK {
 							if cand, err := identity.ExtractCandidate(body); err == nil {
@@ -1233,6 +1372,15 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 		}
 	}
 
+	responses, responseErr := recorder.Snapshot()
+	var bodyBytes int64
+	for _, response := range responses {
+		bodyBytes += response.Bytes
+	}
+	// Keep actual status/body observations even if reading or a later stage failed.
+	if result.StatusCode == 0 && len(responses) > 0 {
+		result.StatusCode = responses[0].Status
+	}
 	var eval profiles.Evaluation
 	if kind == domain.ProbeKindSpeed {
 		eval.Verdict = speedCap.Verdict
@@ -1249,7 +1397,36 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 	if failureReason != "" {
 		eval.Reason = failureReason
 	}
+	rawVerdict := eval.Verdict
+	if responseErr != nil && !errors.Is(responseErr, platform.ErrBodyBudget) && ctx.Err() == nil {
+		if reason := platform.ResponseReason(responseErr); reason != "deadline_exceeded" && reason != "timeout" && reason != "transport_error" {
+			eval.Reason = reason
+		}
+	}
+	if errors.Is(responseErr, platform.ErrBodyBudget) {
+		eval.Verdict = domain.VerdictUnknown
+		eval.Reason = "budget_not_executed"
+	} else if ctx.Err() != nil {
+		eval.Verdict = domain.VerdictUnknown
+		eval.Reason = "cancelled"
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			eval.Reason = "deadline_exceeded"
+		}
+	}
 	now := r.clock().UTC()
+	category := string(eval.Verdict)
+	if eval.Verdict == domain.VerdictError {
+		category = "fail"
+	}
+	if eval.Reason == "budget_not_executed" || eval.Reason == "cancelled" || eval.Reason == "deadline_exceeded" {
+		category = eval.Reason
+	}
+	limit, used := meter.budget.Snapshot()
+	attempt := &domain.ProbeAttemptEvidence{Executed: len(responses) > 0 && responses[0].Reason != "budget_not_executed", Category: category, Reason: eval.Reason, RawVerdict: rawVerdict, Status: result.StatusCode, BodyBytes: bodyBytes, ConfigFingerprint: nodeFingerprint(node), ConfigRevision: run.ConfigRevision, Profile: prof.Version, Contract: prof.Contract, ContractSource: "csp-runner", Engine: mihomo.CoreVersion(), Source: "csp-runner", AttemptID: run.ID + "/" + node.LogicalID + "/" + string(kind), StartedAt: start.UTC(), FinishedAt: now, BudgetLimit: limit, BudgetUsed: used, Responses: responses}
+	if kind == domain.ProbeKindBaseline {
+		attempt.ContractSource = profiles.BaselineSource
+		attempt.LegacyContract = profiles.LegacyBaselineContract
+	}
 	summary := fmt.Sprintf("profile=%s version=%s verdict=%s reason=%s status=%d latency_ms=%d",
 		prof.Kind, prof.Version, eval.Verdict, eval.Reason, result.StatusCode, latency)
 	if kind == domain.ProbeKindGeo && geoCountry != "" {
@@ -1315,6 +1492,7 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 	}
 
 	obs := &domain.ProbeObservation{
+		Attempt:         attempt,
 		ID:              domain.MustNewUUIDv7(),
 		ProbeRunID:      run.ID,
 		NodeLogicalID:   node.LogicalID,
@@ -1336,10 +1514,19 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 		revision := node.ConnectionRevision
 		obs.ConnectionRevision = &revision
 	}
+	obs.SyncEvidenceData()
 	persistCtx, persistCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer persistCancel()
 	if createErr := r.observations.Create(persistCtx, obs); createErr != nil {
 		return eval.Verdict, createErr
+	}
+	if meter.seen != nil {
+		meter.mu.Lock()
+		meter.seen[node.LogicalID+"/"+string(kind)] = true
+		if kind == domain.ProbeKindBaseline && meter.baseline != nil && (attempt.Executed || failureReason != "" && !errors.Is(responseErr, platform.ErrBodyBudget)) {
+			meter.baseline[node.LogicalID] = eval.Verdict
+		}
+		meter.mu.Unlock()
 	}
 	if r.riskObs != nil && kind == domain.ProbeKindIPRisk {
 		ipRiskStatus := domain.IPRiskStatusAvailable

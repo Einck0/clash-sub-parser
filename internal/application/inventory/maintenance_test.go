@@ -406,7 +406,7 @@ func TestMaintenanceOrchestrator_ProbeAndGating_Hermetic(t *testing.T) {
 	// FailingNode: baseline failed/unavailable, streaming skipped with alive_gating_dependency_failed
 	var foundSkippedDependency bool
 	for _, row := range report.Probe.Rows {
-		if row.Kind == string(domain.ProbeKindStreaming) && row.Status == "skipped" && row.SkipReason == "alive_gating_dependency_failed" {
+		if row.Kind == string(domain.ProbeKindStreaming) && row.Status == "dependency_skipped" && row.SkipReason == "alive_gating_dependency_failed" {
 			foundSkippedDependency = true
 		}
 	}

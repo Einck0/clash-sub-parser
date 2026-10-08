@@ -1,0 +1,14 @@
+[
+  {
+    "edge_id": "01a11a6b-7580-7716-bf9d-4dc9eff7b8c2",
+    "parent_group_id": "01a11a6b-757f-7b02-be59-90591d699d60",
+    "old_node_logical_id": "01a11a6b-757f-7cc4-9d10-835230153a42",
+    "exact_connection_id": "node_388b6742ccc301b4f47d48090ba1c75a",
+    "protocol": "vmess",
+    "server": "1.2.3.4",
+    "port": 443,
+    "position": 0,
+    "status": "unbound_pending_fresh_match",
+    "diagnostic_message": "Node reference removed in clean reset; require exact match on fresh ComputeConnectionLogicalID"
+  }
+]

@@ -159,6 +159,11 @@ func validate(snapshot *resolver.ResolvedPolicySnapshot, target domain.CompilerT
 	}
 
 	if target != domain.TargetMihomo {
+		for i, group := range snapshot.Groups {
+			if group.UsesEmptyPass() {
+				return &CapabilityError{Target: target, Location: fmt.Sprintf("groups[%d]", i), Feature: "empty_fallback_pass", Reason: "target does not support explicit empty-group PASS routing"}
+			}
+		}
 		return nil
 	}
 
@@ -570,6 +575,14 @@ func ValidateTargetCapabilities(snapshot *resolver.ResolvedPolicySnapshot, targe
 		}
 	}
 
+	// PASS routing is native to Mihomo only, not a nodes-only substitution.
+	if target != domain.TargetMihomo {
+		for _, g := range snapshot.Groups {
+			if g.UsesEmptyPass() {
+				diags = append(diags, CapabilityDiagnostic{Code: "unsupported_target_capability", Message: "target does not support explicit empty-group PASS routing", Target: string(target)})
+			}
+		}
+	}
 	// Target-specific group and rule topology validation
 	if target == domain.TargetMihomo {
 		groupNameSet := make(map[string]bool, len(snapshot.Groups)*2)
@@ -584,7 +597,7 @@ func ValidateTargetCapabilities(snapshot *resolver.ResolvedPolicySnapshot, targe
 
 		// 1. Check each rendered proxy group: must be non-empty (required_nonempty)
 		for _, g := range snapshot.Groups {
-			if len(g.Members) == 0 {
+			if !g.UsesEmptyPass() && (len(g.Members) == 0 || (g.EmptyFallbackPass && len(g.AllNodeLogicalIDs) == 0)) {
 				diags = append(diags, CapabilityDiagnostic{
 					Code:    "required_nonempty",
 					Message: fmt.Sprintf("proxy group %q has no proxies (required_nonempty)", g.Name),
@@ -685,7 +698,6 @@ func FilterCompatibleSnapshot(snapshot *resolver.ResolvedPolicySnapshot, target 
 
 	return &copySnap, excludedNodes
 }
-
 
 // SortedCapabilities exposes target names without leaking the backing map.
 func SortedCapabilities() []domain.CompilerTarget {

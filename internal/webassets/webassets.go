@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"os"
 	"path"
 	"strings"
 )
@@ -17,7 +18,14 @@ import (
 var DistFS embed.FS
 
 // FS returns an fs.FS rooted at the dist directory.
+// When CSP_WEB_DIR or WEBASSETS_DIST_DIR is set, it serves from that filesystem directory instead.
 func FS() (fs.FS, error) {
+	if dir := os.Getenv("CSP_WEB_DIR"); dir != "" {
+		return os.DirFS(dir), nil
+	}
+	if dir := os.Getenv("WEBASSETS_DIST_DIR"); dir != "" {
+		return os.DirFS(dir), nil
+	}
 	sub, err := fs.Sub(DistFS, "dist")
 	if err != nil {
 		return nil, fmt.Errorf("failed to derive sub-filesystem for dist: %w", err)

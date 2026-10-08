@@ -1,185 +1,122 @@
 package inventory_test
 
 import (
-	"context"
-	"database/sql"
-	"os"
-	"path/filepath"
-	"testing"
-
 	"clash-sub-parser/internal/application/inventory"
 	"clash-sub-parser/internal/domain"
+	"clash-sub-parser/internal/repository/sqlite"
+	"clash-sub-parser/migrations"
+	"context"
+	"database/sql"
+	"encoding/json"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
 )
 
+var cheapArchiveRegex = []string{`去掉(流媒体|x(?:[0-5](?:\.[0-9]+)?)(?![\d.])|便宜|free )`, "Eeox", "einck"}
+
 func TestTranslateLegacyRegexRules(t *testing.T) {
-	// 1. Positive single regex
-	t.Run("CanadaPositiveRegex", func(t *testing.T) {
-		rules := []string{"加拿大|CA|Canada"}
+	for _, rules := range [][]string{{"加拿大|CA|Canada"}, {"美西|美国|US", "美西"}, {`^(?!.*(自动|故障|官网|套餐|机场|订阅)).*$`}, cheapArchiveRegex} {
 		cat, spec, err := inventory.TranslateLegacyRegexRulesForTest(rules)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+		if err != nil || cat != "positive_regex" || len(spec.Conditions) != 1 || spec.Conditions[0].Op != domain.FilterOpRegex {
+			t.Fatalf("translation: %s %+v %v", cat, spec, err)
 		}
-		if cat != "positive_regex" {
-			t.Fatalf("expected positive_regex, got %s", cat)
+		if len(rules) == 1 && spec.Conditions[0].Value != rules[0] {
+			t.Fatal("original assertion was rewritten")
 		}
-		if len(spec.Conditions) != 1 {
-			t.Fatalf("expected 1 condition, got %d", len(spec.Conditions))
-		}
-		if spec.Conditions[0].Op != domain.FilterOpRegex {
-			t.Fatalf("expected op regex, got %s", spec.Conditions[0].Op)
-		}
-	})
-
-	// 2. Positive composite regex
-	t.Run("USCompositeRegex", func(t *testing.T) {
-		rules := []string{"美西|美国|US", "美西"}
-		cat, spec, err := inventory.TranslateLegacyRegexRulesForTest(rules)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if cat != "positive_regex" {
-			t.Fatalf("expected positive_regex, got %s", cat)
-		}
-		if spec.Conditions[0].Value != "(?:美西|美国|US)|(?:美西)" {
-			t.Fatalf("unexpected combined value: %s", spec.Conditions[0].Value)
-		}
-	})
-
-	// 3. Negation regex
-	t.Run("AutoSelectNegationRegex", func(t *testing.T) {
-		rules := []string{"^(?!.*(自动|故障|官网|套餐|机场|订阅)).*$"}
-		cat, spec, err := inventory.TranslateLegacyRegexRulesForTest(rules)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if cat != "negation_regex" {
-			t.Fatalf("expected negation_regex, got %s", cat)
-		}
-		if spec.Conditions[0].Op != domain.FilterOpNotRegex {
-			t.Fatalf("expected op not_regex, got %s", spec.Conditions[0].Op)
-		}
-		if spec.Conditions[0].Value != "自动|故障|官网|套餐|机场|订阅" {
-			t.Fatalf("unexpected value: %s", spec.Conditions[0].Value)
-		}
-	})
+	}
 }
 
 func TestRunRestoreGroupFilters_DryRunAndApply(t *testing.T) {
-	archivePath := "/home/service/backups/csp-legacy-cold-archive-20260919.db"
-	if _, err := os.Stat(archivePath); err != nil {
-		t.Skip("legacy cold archive not found, skipping integration test")
-	}
-
-	sourceDBPath := "/tmp/csp_fresh_preview/csp-shadow.db"
-	if _, err := os.Stat(sourceDBPath); err != nil {
-		t.Skip("shadow db not found, skipping integration test")
-	}
-
-	tmpDir := t.TempDir()
-	testDBPath := filepath.Join(tmpDir, "test_restore.db")
-
-	// Copy shadow DB to temporary location
-	inputBytes, err := os.ReadFile(sourceDBPath)
-	if err != nil {
-		t.Fatalf("failed to read shadow db: %v", err)
-	}
-	if err := os.WriteFile(testDBPath, inputBytes, 0o600); err != nil {
-		t.Fatalf("failed to write test db copy: %v", err)
-	}
-
+	// Self-contained archive and target; no machine database or skipped recovery.
 	ctx := context.Background()
-	db, err := sql.Open("sqlite", testDBPath)
+	dir := t.TempDir()
+	archivePath := filepath.Join(dir, "archive.db")
+	archive, err := sql.Open("sqlite", archivePath)
 	if err != nil {
-		t.Fatalf("failed to open test db: %v", err)
+		t.Fatal(err)
+	}
+	if _, err := archive.Exec(`CREATE TABLE node_groups(id INTEGER PRIMARY KEY,name TEXT,kind TEXT,group_type TEXT,regex_rules TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(cheapArchiveRegex)
+	if _, err := archive.Exec(`INSERT INTO node_groups VALUES (2,'便宜','custom','select',?)`, string(raw)); err != nil {
+		t.Fatal(err)
+	}
+	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sqlite.Open(sqlite.DefaultConfig(filepath.Join(dir, "target.db")))
+	if err != nil {
+		t.Fatal(err)
 	}
 	defer db.Close()
-
-	// Ensure hermetic test starting state: testDB has clean filter state
-	_, _ = db.ExecContext(ctx, "DELETE FROM group_node_filters;")
-
-	// 1. Dry run
-	dryReport, err := inventory.RunRestoreGroupFilters(ctx, db, inventory.RestoreGroupFiltersOptions{
-		TargetDBPath:  testDBPath,
-		ArchiveDBPath: archivePath,
-		DryRun:        true,
-	})
+	if err := sqlite.NewMigrationRunner(db, migrations.FS).Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	repo := sqlite.NewPolicyRepository(db)
+	gid := inventory.CanonicalLegacyGroupMap[2]
+	if err := repo.CreateGroup(ctx, &domain.NodeGroup{ID: gid, Name: "便宜", GroupType: domain.GroupTypeSelect}); err != nil {
+		t.Fatal(err)
+	}
+	rev := domain.ConfigurationRevision{ID: domain.MustNewUUIDv7(), ContentDigest: "fixture", State: domain.RevisionStateDraft, CreatedAt: domain.NowUTC()}
+	if err := sqlite.NewRevisionRepository(db).CreateActive(ctx, &rev); err != nil {
+		t.Fatal(err)
+	}
+	opts := inventory.RestoreGroupFiltersOptions{ArchiveDBPath: archivePath, DryRun: true}
+	dry, err := inventory.RunRestoreGroupFilters(ctx, db, opts)
+	if err != nil || dry.RecoveredCount != 1 || dry.UnsupportedCount != 0 {
+		t.Fatalf("dry: %+v %v", dry, err)
+	}
+	var n int
+	_ = db.QueryRow(`SELECT count(*) FROM group_node_filters`).Scan(&n)
+	if n != 0 {
+		t.Fatal("dry wrote filters")
+	}
+	opts.DryRun = false
+	opts.ConfirmBackup = true
+	applied, err := inventory.RunRestoreGroupFilters(ctx, db, opts)
+	if err != nil || applied.RecoveredCount != 1 || applied.NewRevisionID == "" {
+		t.Fatalf("apply: %+v %v", applied, err)
+	}
+	stored, err := sqlite.NewNodeFilterRepository(db).GetGroupFilter(ctx, gid)
 	if err != nil {
-		t.Fatalf("dry run failed: %v", err)
+		t.Fatal(err)
 	}
-
-	if dryReport.TotalGroups != 29 {
-		t.Fatalf("expected 29 total groups, got %d", dryReport.TotalGroups)
+	pattern := stored.Spec.Conditions[0].Value
+	if !strings.Contains(pattern, `(?![\d.])`) {
+		t.Fatal("lookahead removed")
 	}
-	if dryReport.RecoveredCount != 15 {
-		for _, g := range dryReport.Groups {
-			t.Logf("Group %d %s: status=%s, reason=%s", g.LegacyID, g.TargetGroupName, g.Status, g.Reason)
+	for _, tc := range []struct {
+		name  string
+		match bool
+	}{{"去掉x5", true}, {"去掉x5.9", true}, {"去掉x50", false}, {"去掉x5.9.1", false}, {"x5", false}, {"EINCK 美国", true}, {"Eeox", true}, {"中文普通节点", false}} {
+		got, _ := domain.MatchesFilter(&stored.Spec, domain.Node{DisplayName: tc.name}, nil, nil, time.Time{})
+		if got != tc.match {
+			t.Fatalf("%q: got %v", tc.name, got)
 		}
-		t.Fatalf("expected 15 recovered groups with regex filters, got %d", dryReport.RecoveredCount)
 	}
-	if dryReport.RecoveredCount != 15 {
-		t.Fatalf("expected 15 recovered groups with regex filters, got %d", dryReport.RecoveredCount)
+	second, err := inventory.RunRestoreGroupFilters(ctx, db, opts)
+	if err != nil || second.RecoveredCount != 0 || second.SkippedCount != 1 || second.NewRevisionID != "" {
+		t.Fatalf("idempotence: %+v %v", second, err)
 	}
-	if dryReport.ManualCount != 13 {
-		t.Fatalf("expected 13 manual groups without regex filters, got %d", dryReport.ManualCount)
+	custom := domain.NodeFilterSpec{Conditions: []domain.FilterCondition{{Field: domain.FilterFieldDisplayName, Op: domain.FilterOpNotRegex, Value: "user-owned"}}}
+	if err := sqlite.NewNodeFilterRepository(db).SetGroupFilter(ctx, &domain.GroupNodeFilter{GroupID: gid, Spec: custom}); err != nil {
+		t.Fatal(err)
 	}
-	if dryReport.UnsupportedCount != 1 {
-		t.Fatalf("expected 1 unsupported regex group, got %d", dryReport.UnsupportedCount)
+	if _, err := inventory.RunRestoreGroupFilters(ctx, db, opts); err != nil {
+		t.Fatal(err)
 	}
-	if dryReport.GuardErrors != 0 {
-		t.Fatalf("expected 0 guard errors, got %d", dryReport.GuardErrors)
+	kept, _ := sqlite.NewNodeFilterRepository(db).GetGroupFilter(ctx, gid)
+	if kept.Spec.Conditions[0].Value != "user-owned" {
+		t.Fatal("overwrote user filter")
 	}
-
-	// Verify simulated match on Canada in dry run: should be 3 nodes!
-	for _, g := range dryReport.Groups {
-		if g.TargetGroupName == "加拿大" {
-			if g.MatchedNodeCount != 3 {
-				t.Fatalf("expected Canada to match 3 nodes, got %d", g.MatchedNodeCount)
-			}
-		}
-	}
-
-	// Verify DB is unchanged in dry-run
-	var countBefore int
-	_ = db.QueryRowContext(ctx, "SELECT count(*) FROM group_node_filters;").Scan(&countBefore)
-	if countBefore != 0 {
-		t.Fatalf("expected 0 filters in db after dry-run, got %d", countBefore)
-	}
-
-	// 2. Apply mode
-	applyReport, err := inventory.RunRestoreGroupFilters(ctx, db, inventory.RestoreGroupFiltersOptions{
-		TargetDBPath:  testDBPath,
-		ArchiveDBPath: archivePath,
-		DryRun:        false,
-		ConfirmBackup: true,
-	})
-	if err != nil {
-		t.Fatalf("apply failed: %v", err)
-	}
-
-	if applyReport.RecoveredCount != 15 {
-		t.Fatalf("expected 15 recovered filters in apply mode, got %d", applyReport.RecoveredCount)
-	}
-
-	var countAfter int
-	_ = db.QueryRowContext(ctx, "SELECT count(*) FROM group_node_filters;").Scan(&countAfter)
-	if countAfter != 15 {
-		t.Fatalf("expected 15 filters in db after apply, got %d", countAfter)
-	}
-
-	// 3. Idempotent re-run: should skip all 15 existing filters!
-	secondReport, err := inventory.RunRestoreGroupFilters(ctx, db, inventory.RestoreGroupFiltersOptions{
-		TargetDBPath:  testDBPath,
-		ArchiveDBPath: archivePath,
-		DryRun:        false,
-		ConfirmBackup: true,
-	})
-	if err != nil {
-		t.Fatalf("second apply failed: %v", err)
-	}
-	if secondReport.RecoveredCount != 0 {
-		t.Fatalf("expected 0 recovered on second run (idempotent), got %d", secondReport.RecoveredCount)
-	}
-	if secondReport.SkippedCount != 15 {
-		t.Fatalf("expected 15 skipped existing filters on second run, got %d", secondReport.SkippedCount)
+	group, _ := repo.GetGroupByID(ctx, gid)
+	group.Name = "different identity"
+	_ = repo.UpdateGroup(ctx, group)
+	guarded, err := inventory.RunRestoreGroupFilters(ctx, db, opts)
+	if err != nil || guarded.GuardErrors != 1 || guarded.RecoveredCount != 0 {
+		t.Fatalf("identity guard: %+v %v", guarded, err)
 	}
 }

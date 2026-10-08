@@ -493,7 +493,7 @@ func (s *Service) Preview(ctx context.Context, query PreviewQuery) (*PreviewResu
 	// Compatible mode
 	compatSnap, excludedNodes := compiler.FilterCompatibleSnapshot(snapshot, query.Target)
 	for _, g := range compatSnap.Groups {
-		if len(g.Members) == 0 {
+		if !g.UsesEmptyPass() && len(g.Members) == 0 {
 			return nil, domain.NewValidationError("empty_group_not_allowed", fmt.Sprintf("policy group %q has 0 members in compatible mode", g.Name))
 		}
 	}
@@ -746,6 +746,11 @@ func (s *Service) ValidateToken(ctx context.Context, publicationID, token string
 	return pub.IsActive(), nil
 }
 
+// ResolvePolicySnapshot is read-only and is shared by policy validation.
+func (s *Service) ResolvePolicySnapshot(ctx context.Context, revisionID string) (*resolver.ResolvedPolicySnapshot, error) {
+	return s.resolveSnapshot(ctx, revisionID)
+}
+
 func (s *Service) resolveSnapshot(ctx context.Context, revisionID string) (*resolver.ResolvedPolicySnapshot, error) {
 	if s.policyRepo == nil || s.revisionRepo == nil || s.nodeRepo == nil || s.resolver == nil {
 		return nil, domain.NewInternalError("missing_dependencies", "policy, revision, or node repository not configured")
@@ -840,9 +845,9 @@ func (s *Service) resolveSnapshot(ctx context.Context, revisionID string) (*reso
 	if needsSources && s.sourceRepo == nil {
 		return nil, domain.NewInternalError("node_sources_unavailable", "node sources required by configured filter are unavailable")
 	}
-	if s.sourceRepo != nil && len(nodeIDs) > 0 {
+	if needsSources && s.sourceRepo != nil && len(nodeIDs) > 0 {
 		nodeSources, err = s.sourceRepo.ListByNodes(ctx, nodeIDs)
-		if err != nil && needsSources {
+		if err != nil {
 			return nil, domain.NewInternalError("node_sources_unavailable", "failed to read node sources for configured filter")
 		}
 	}
@@ -851,9 +856,9 @@ func (s *Service) resolveSnapshot(ctx context.Context, revisionID string) (*reso
 	if needsObservations && s.obsRepo == nil {
 		return nil, domain.NewInternalError("probe_observations_unavailable", "probe observations required by configured filter are unavailable")
 	}
-	if s.obsRepo != nil && len(nodeIDs) > 0 {
+	if needsObservations && s.obsRepo != nil && len(nodeIDs) > 0 {
 		latestObs, err = s.obsRepo.ListLatestByNodes(ctx, nodeIDs, nil)
-		if err != nil && needsObservations {
+		if err != nil {
 			return nil, domain.NewInternalError("probe_observations_unavailable", "failed to read probe observations for configured filter")
 		}
 	}
@@ -880,7 +885,13 @@ func (s *Service) resolveSnapshot(ctx context.Context, revisionID string) (*reso
 
 	if s.ipriskSvc != nil {
 		activePolicy, pErr := s.ipriskSvc.GetActivePolicy(ctx)
-		if pErr == nil && activePolicy != nil && activePolicy.Active {
+		if pErr != nil {
+			var de *domain.DomainError
+			if !errors.As(pErr, &de) || de.Category != domain.CategoryNotFound {
+				return nil, domain.NewInternalError("risk_policy_unavailable", "failed to read active risk policy")
+			}
+		}
+		if activePolicy != nil && activePolicy.Active {
 			nodeIDs := make([]string, len(nodes))
 			for i, n := range nodes {
 				nodeIDs[i] = n.LogicalID
@@ -889,9 +900,12 @@ func (s *Service) resolveSnapshot(ctx context.Context, revisionID string) (*reso
 				NodeLogicalIDs:   nodeIDs,
 				Policy:           &activePolicy.RiskPolicy,
 				PolicyRevisionID: activePolicy.RevisionID,
-				EvaluatedAt:      domain.NowUTC(),
+				EvaluatedAt:      input.AsOf,
 			})
-			if bErr == nil && batchRes != nil {
+			if bErr != nil {
+				return nil, domain.NewInternalError("risk_evaluation_unavailable", "failed to evaluate active risk policy")
+			}
+			if batchRes != nil {
 				input.RiskPolicyRevision = activePolicy.RevisionID
 				input.RiskDecisionDigest = batchRes.DecisionDigest
 				evalAt := batchRes.EvaluatedAt
@@ -1235,4 +1249,3 @@ func extractMihomoRuleTarget(ruleLine string) string {
 	}
 	return last
 }
-

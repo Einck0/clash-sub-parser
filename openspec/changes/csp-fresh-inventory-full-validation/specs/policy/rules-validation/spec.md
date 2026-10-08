@@ -1,30 +1,75 @@
 ## Purpose
 
-规范 CSP 分流规则与策略组的只读动态校验 API、空策略组阻断判定、结构化 issues 诊断与前端规则页防竞态交互机制。
+规范 CSP 分流规则与策略组的只读动态校验、显式空组 PASS、过滤语义保真与前端规则页防竞态交互。历史规则管理已完成，本续作只补新增配置与验证缺口，不重复删除既有规则。
 
 ## ADDED Requirements
 
 ### Requirement: 只读分流规则与动态拓扑校验 API
-系统 SHALL 在 `POST /api/v1/policies/validate`（以及 `GET`）上提供当前已保存活跃配置版本（active revision）的只读校验能力。校验过程 MUST 仅基于当前已启用的订阅节点库存范围（`NodeScopeEnabledSubscriptions`），执行纯内存解析与诊断，绝不触发外部网络请求、商业出网、Mihomo 探针执行或任何数据库写入操作。返回结果 MUST 包含 `revision_id`，并保持既有 `valid` 与 `errors` 字段的向后兼容。
+系统 SHALL 在 `POST /api/v1/policies/validate`（以及 `GET`）上校验当前已保存 active revision，保持 `valid`、`errors`、`revision_id` 与结构化 issues 兼容。系统 MUST 使用与 publication 一致的启用源节点范围、filters、NodeSources、LatestObservations、AsOf 和风险上下文，纯内存解析，不触发网络、探针执行或数据库写入。依赖仓储错误 MUST 返回明确 incomplete/错误，不得伪造空库存或 valid。
 
-#### Scenario: 活跃配置版本只读校验返回结构化诊断
-- **WHEN** 客户端请求 `POST /api/v1/policies/validate`
-- **THEN** 系统返回当前 active revision 的校验结论，包含 `valid: boolean`、`errors: string[]`、`revision_id: string` 以及结构化 `issues: ValidationIssue[]`
+#### Scenario: 同一活跃版本返回结构化诊断
+- **WHEN** 客户端请求当前 active revision 的 validate
+- **THEN** 返回对应 revision_id、valid、errors 和包含规则定位信息的 issues，使用与发布相同的来源/探针过滤输入，且无网络与写入副作用
 
-### Requirement: 直接指向空策略组规则判定为致命错误
-系统 SHALL 在拓扑与分流校验中，将所有被分流规则（`policy_rules`）直接引用的空策略组（可用成员数或节点数为 0）严格判定为致命错误（Severity: `error`，Code: `empty_routed_group`），无论系统是否配置了节点筛选条件（`anyFilterDefined` 为 true 或 false）。对于未被任何分流规则直接引用的普通空策略组（如作为可选子候选组），系统 MUST 保持为警告（Severity: `warning`，Code: `empty_group`），不破坏编译器严格默认安全策略。当全局有效节点库存为空时，诊断信息 MUST 明确指示当前有效库存为空背景。
+#### Scenario: 仓储依赖读取失败
+- **WHEN** rules、nodes、filters、sources 或 observations 读取失败
+- **THEN** 返回明确不完整/错误诊断，不把失败当作空数组或校验成功
 
-#### Scenario: 分流规则直接指向无节点策略组触发错误
-- **WHEN** 存在分流规则（如 `PROCESS-NAME,tr.com.kliq.app`）直接指向无可用节点的策略组（如“其他”）
-- **THEN** 校验结果的 `valid` 为 false，`issues` 中包含对应规则的 `empty_routed_group` 错误项，标明 `rule_id`、`position`、`type`、`value`、`target_group_id` 及 `target_group_name`
+### Requirement: 默认严格与显式空组 PASS
+系统 SHALL 增加 `empty_fallback_pass` 布尔配置，SQLite 历史行和创建默认 false；domain、repository、Create/Get/List/Update API、UI 与 resolver/compiler/publication MUST 一致保真，PATCH omission 保持旧值而显式 false 关闭。系统 MUST 仅为该 flag=true 且静态解析为空的配置组允许 PASS；未勾选空组继续 required_nonempty，直接被规则引用的未许可空组返回 error/empty_routed_group，未直接引用的普通空组保持既有 empty_group warning 与编译安全策略。
 
-#### Scenario: 未被规则直接指向的可选空子组仅触发警告
-- **WHEN** 策略组无可用节点但未被任何分流规则直接引用（仅作为其他组的子组选项）
-- **THEN** 校验结果发出 `empty_group` 警告，不因此阻断规则级拓扑校验
+#### Scenario: 旧数据库迁移和 API 三态
+- **WHEN** 旧库升级且客户端创建或 PATCH 一个策略组
+- **THEN** 历史与新建默认 false，Get/List/回包返回真实值，PATCH 未提供保持原值、false 关闭、true 显式开启，失败校验不留下部分修改或新 revision
 
-### Requirement: 前端规则管理与防竞态校验守卫
-前端 `PolicyView` SHALL 增设“规则”Tab，按顺序展示分流规则列表（包含序号/位置、类型、匹配值及目标策略组），并提供单条规则的最小化删除操作。页面 SHALL 提供统一的校验结果诊断区域与“手动校验”按钮。在页面初始加载、刷新成功以及策略保存/删除成功后，前端 MUST 自动触发对新版本的校验；若保存操作失败，严禁显示假成功或伪造校验通过；校验请求 MUST 通过 AbortController 与请求序列守卫防止延迟响应覆盖最新版本状态。
+#### Scenario: 未勾选的被路由空组
+- **WHEN** 分流规则直接引用静态无有效普通成员或无递归真实节点的组，且该组 flag=false
+- **THEN** valid=false，返回 error/empty_routed_group 及 rule_id、position、type、value、target_group_id/name，编译/发布仍以 required_nonempty 阻断
 
-#### Scenario: 页面加载与策略变更自动触发校验
-- **WHEN** 用户进入策略页、刷新数据或成功删除/更新规则
-- **THEN** 前端自动调用校验接口，若存在晚到达的过时校验响应则被序列守卫丢弃，UI 展示对应最新版本的真实校验状态
+#### Scenario: 勾选空组与非空组区别
+- **WHEN** flag=true 的配置组为空或非空
+- **THEN** 只有为空的组获得有效 PASS 语义；非空组不得附加 PASS 成员或运行时 PASS fallback，实际节点 ID 集合和计数均不变
+
+### Requirement: PASS 继续规则匹配且无隐藏直连
+Mihomo 编译器 SHALL 为明确配置且有效为空的组输出 `proxies: [PASS]` 和原生 `empty-fallback: PASS`，MUST 通过官方 Mihomo 离线规则匹配 fixture 证明其继续后续规则而非 DIRECT。该特性 MUST NOT 通过 DIRECT 或缺省 COMPATIBLE 的 Direct fallback 隐藏绕行。非空勾选组不得被扩大为运行时探针失败后自动 PASS；如固定其 native empty-fallback，MUST 使用原生拒绝而非 DIRECT/COMPATIBLE。不支持 PASS 路由的目标 MUST 明确 capability 诊断，保持原 nodes-only 行为，不伪造映射。
+
+#### Scenario: 第一条命中 PASS 后匹配后续控制规则
+- **WHEN** 无网络内核 fixture 第一条规则命中有效 PASS 空组，下一控制规则为非 DIRECT 终点
+- **THEN** 实际规则执行落在后续控制规则，而不是提前 Direct 出口，仅有 YAML 字符串不构成语义证明
+
+#### Scenario: 必需 fallback 分支与兼容模式发布
+- **WHEN** 明确配置的空组被必需分支或规则引用并参与正常/compatible 发布
+- **THEN** resolver、policy 校验、capability、renderer、preflight 和冻结内容校验一致认可有效 PASS，不被 optional prune 删除，不通过 hidden COMPATIBLE/Direct 绕过
+
+### Requirement: PASS 不伪造节点或放宽独立守卫
+系统 SHALL 分离配置 flag 与有效 PASS 状态，将其纳入 input/snapshot digest。父组及 derived/filter projection MUST NOT 自动继承子组或原组许可，父组仅含 PASS 子组而无真实节点时仍按既有空定义处理。PASS MUST NOT 成为伪造 NodeLogicalID，不豁免循环、悬挂引用、risk、来源/探针条件、能力或全局过滤库存守卫，不覆盖生产用户 flags。
+
+#### Scenario: 子组许可不自动传播
+- **WHEN** 某子组获 PASS 许可但父组未配置，或出现过滤后为空的 derived projection
+- **THEN** 父组/投影不会因许可自动转为 PASS；仍执行真实空组/过滤诊断和拓扑安全校验
+
+#### Scenario: 重复编译与切换配置
+- **WHEN** 相同输入重复编译或单独切换 empty_fallback_pass
+- **THEN** 相同输入 digest/输出确定，切换配置改变语义 digest，历史 publication bytes 与真实节点数不受改写
+
+### Requirement: 有界 PCRE 兼容与过滤恢复保真
+系统 SHALL 优先复用 RE2，并对已知 RE2 不兼容模式使用现有 regexp2 依赖的有限正 MatchTimeout 和有界 pattern/input/cache。Validate 与 Match MUST 使用一致引擎选择与诊断，not_regex MUST NOT 将超时/错误取反成匹配通过。缺失“便宜”过滤器恢复 MUST 基于稳定归档身份、保持原表达式负向 lookahead 与已知 OR 语义、事务幂等且不覆盖用户非空配置，不能凭名称猜排除或删断言。
+
+#### Scenario: 原表达式黄金匹配保真
+- **WHEN** 对原正则与 x5、x5.9、x6、x50、x5.9.1、literal 前缀、Eeox/einck、大小写及中文黄金语料校验匹配
+- **THEN** Validate 与 Match 结果一致且符合原完整表达式语义，自建 fixture 不依赖私有机器数据库或被跳过的恢复测试
+
+#### Scenario: 回溯超时与已有配置
+- **WHEN** 输入触发 bounded timeout 或恢复目标已有用户 filter
+- **THEN** 超时报错误且 not_regex 不放行；已有配置不被覆盖，重复恢复不新增虚假修改
+
+### Requirement: 前端规则管理、正则编辑与刷新校验
+前端 SHALL 保留既有规则 Tab、warnings、规则定位、手动校验和 AbortController/seq/revision 守卫，增加默认未勾选的空组 PASS checkbox 和 regex/not_regex 创建编辑支持。UI MUST 明确 PASS 继续规则匹配不是直连；初始/保存/reload/retry 成功后基于一致最新 revision 自动 validate，失败加载/保存不得伪造通过，晚响应不得覆盖新状态。
+
+#### Scenario: 保存重载与正则编辑
+- **WHEN** 用户创建/编辑 group、checkbox 或 regex/not_regex 并保存后重载
+- **THEN** UI 展示持久化真实值与原正则，错误不产生半保存，文案明确 PASS 非 DIRECT
+
+#### Scenario: 重试加载与晚校验响应
+- **WHEN** 用户点击错误卡 retry 或 reload，旧 validate 响应晚到
+- **THEN** 成功加载后对最新 revision 触发 validate，旧响应被丢弃，失败保留真实错误与每条规则 issues

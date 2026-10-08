@@ -2,6 +2,7 @@ package platform
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"time"
 
@@ -12,9 +13,11 @@ const DefaultAliveURL = "http://cp.cloudflare.com/generate_204"
 
 // AliveResult encapsulates the outcome of a stage 1 alive check.
 type AliveResult struct {
-	Verdict   domain.ProbeVerdict
-	LatencyMS int64
-	Reason    string
+	Verdict    domain.ProbeVerdict
+	LatencyMS  int64
+	Reason     string
+	StatusCode int
+	BodyBytes  int64
 }
 
 // CheckAlive performs a lightweight stage 1 alive check against Cloudflare or CDN 204.
@@ -44,12 +47,19 @@ func CheckAlive(ctx context.Context, httpClient *http.Client, testURL string) (b
 		}
 	}
 	defer resp.Body.Close()
+	// Consume a bounded body through the shared limiter if one is installed.
+	n, readErr := io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+	if readErr != nil {
+		return false, AliveResult{Verdict: domain.VerdictUnknown, Reason: responseReason(readErr), StatusCode: resp.StatusCode, BodyBytes: n, LatencyMS: latency}
+	}
 
 	if resp.StatusCode == http.StatusNoContent || (resp.StatusCode >= 200 && resp.StatusCode < 300) {
 		return true, AliveResult{
-			Verdict:   domain.VerdictAvailable,
-			LatencyMS: latency,
-			Reason:    "alive_204",
+			Verdict:    domain.VerdictAvailable,
+			LatencyMS:  latency,
+			Reason:     "alive_any2xx",
+			StatusCode: resp.StatusCode,
+			BodyBytes:  n,
 		}
 	}
 

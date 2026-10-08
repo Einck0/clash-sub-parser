@@ -79,14 +79,21 @@ type ResolvedGroupMember struct {
 
 // ResolvedGroup represents a fully resolved policy group in the routing tree.
 type ResolvedGroup struct {
-	ID                string                `json:"id"`
-	Name              string                `json:"name"`
-	GroupType         domain.GroupType      `json:"group_type"`
-	Members           []ResolvedGroupMember `json:"members"`
-	ChildGroupIDs     []string              `json:"child_group_ids"`
-	NodeLogicalIDs    []string              `json:"node_logical_ids"`
-	AllNodeLogicalIDs []string              `json:"all_node_logical_ids"`
-	Position          int                   `json:"position"`
+	EmptyFallbackPass  bool                  `json:"empty_fallback_pass"`
+	EffectiveEmptyPass bool                  `json:"effective_empty_pass"`
+	ID                 string                `json:"id"`
+	Name               string                `json:"name"`
+	GroupType          domain.GroupType      `json:"group_type"`
+	Members            []ResolvedGroupMember `json:"members"`
+	ChildGroupIDs      []string              `json:"child_group_ids"`
+	NodeLogicalIDs     []string              `json:"node_logical_ids"`
+	AllNodeLogicalIDs  []string              `json:"all_node_logical_ids"`
+	Position           int                   `json:"position"`
+}
+
+// UsesEmptyPass never treats PASS as a node or inherits permission from children.
+func (g ResolvedGroup) UsesEmptyPass() bool {
+	return g.EmptyFallbackPass && g.EffectiveEmptyPass && len(g.AllNodeLogicalIDs) == 0
 }
 
 // ResolvedRule represents an ordered routing policy rule with terminal rule normalization.

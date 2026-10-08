@@ -649,7 +649,7 @@ func TestProbeRunnerBaselineUnavailableCompletesWithoutMediaStage(t *testing.T) 
 		t.Fatalf("state = %s", updated.State)
 	}
 	observations, _ := obsRepo.ListByRun(context.Background(), run.ID)
-	if len(observations) != 1 || observations[0].Verdict == domain.VerdictAvailable {
+	if len(observations) != 2 || observations[0].Verdict == domain.VerdictAvailable || observations[1].Attempt == nil || observations[1].Attempt.Category != "dependency_skipped" {
 		t.Fatalf("observations = %#v", observations)
 	}
 	if dialKinds.Load() != 1 {
@@ -676,7 +676,7 @@ func TestProbeRunnerAccessRestrictedVerdict(t *testing.T) {
 		sched,
 		runsRepo,
 		probe.WithNodeDialer(func(ctx context.Context, node domain.Node) (*http.Client, func() error, error) {
-			return mockHTTPClient(200, "<html><title>Just a moment...</title><body><div class=\"cf-turnstile\">verify you are human</div></body></html>", nil), nil, nil
+			return mockHTTPClient(403, "<html><title>Just a moment...</title><body><div class=\"cf-turnstile\">verify you are human</div></body></html>", nil), nil, nil
 		}),
 	)
 
@@ -1046,36 +1046,36 @@ func TestProbeRunnerTruthfulContractsPerKind(t *testing.T) {
 			wantReason:  "contract_matched",
 		},
 		{
-			name:        "baseline_200_ok_text_rejected_as_unknown",
+			name:        "baseline_200_ok_text_normalized_available",
 			kind:        domain.ProbeKindBaseline,
 			statusCode:  http.StatusOK,
 			body:        "OK",
-			wantVerdict: domain.VerdictUnknown,
-			wantReason:  "contract_drift",
+			wantVerdict: domain.VerdictAvailable,
+			wantReason:  "contract_matched",
 		},
 		{
-			name:        "baseline_200_empty_rejected_as_unknown",
+			name:        "baseline_200_empty_normalized_available",
 			kind:        domain.ProbeKindBaseline,
 			statusCode:  http.StatusOK,
 			body:        "",
-			wantVerdict: domain.VerdictUnknown,
-			wantReason:  "contract_drift",
+			wantVerdict: domain.VerdictAvailable,
+			wantReason:  "contract_matched",
 		},
 		{
-			name:        "baseline_200_captive_portal_html_rejected_as_unknown",
+			name:        "baseline_200_captive_portal_html_normalized_available",
 			kind:        domain.ProbeKindBaseline,
 			statusCode:  http.StatusOK,
 			body:        "<html><body>Welcome to Airport Wi-Fi</body></html>",
-			wantVerdict: domain.VerdictUnknown,
-			wantReason:  "contract_drift",
+			wantVerdict: domain.VerdictAvailable,
+			wantReason:  "contract_matched",
 		},
 		{
-			name:        "baseline_204_non_empty_rejected_as_unknown",
+			name:        "baseline_204_non_empty_normalized_available",
 			kind:        domain.ProbeKindBaseline,
 			statusCode:  http.StatusNoContent,
 			body:        "unexpected",
-			wantVerdict: domain.VerdictUnknown,
-			wantReason:  "contract_drift",
+			wantVerdict: domain.VerdictAvailable,
+			wantReason:  "contract_matched",
 		},
 		// Geo
 		{
@@ -1298,7 +1298,7 @@ func TestProbeRunnerNodeSessionReuseAndCleanupLifecycle(t *testing.T) {
 						mu.Unlock()
 
 						if node.LogicalID == "node_drift" && strings.Contains(req.URL.Path, "generate_204") {
-							// Returns HTTP 200 "OK" on baseline -> must be rejected as unknown/contract_drift
+							// Any 2xx, including nonempty HTTP 200, advances under the v2 contract.
 							return &http.Response{
 								StatusCode: http.StatusOK,
 								Header:     make(http.Header),
@@ -1354,8 +1354,8 @@ func TestProbeRunnerNodeSessionReuseAndCleanupLifecycle(t *testing.T) {
 		if dialCounts["node_drift"] != 1 || cleanCounts["node_drift"] != 1 {
 			t.Fatalf("node_drift dials=%d cleanups=%d, want 1 and 1", dialCounts["node_drift"], cleanCounts["node_drift"])
 		}
-		if reqCounts["node_drift"] != 1 {
-			t.Fatalf("node_drift requests=%d, want 1 (baseline 200 OK must not enter stage 2)", reqCounts["node_drift"])
+		if reqCounts["node_drift"] != 13 {
+			t.Fatalf("node_drift requests=%d, want 13 (normalized baseline 200 enters stage 2)", reqCounts["node_drift"])
 		}
 	})
 

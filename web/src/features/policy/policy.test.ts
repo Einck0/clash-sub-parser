@@ -16,6 +16,58 @@ import {
 import { usePolicy } from './usePolicy'
 import { api, ApiError } from '../../api/client'
 
+describe('Feature A reload and PCRE contract', () => {
+  beforeEach(() => vi.restoreAllMocks())
+
+  it('keeps PCRE lookahead editable without JS regex rewriting', () => {
+    for (const op of ['regex', 'not_regex'] as const) {
+      expect(validateConditionInput({ field: 'display_name', op, value: '去掉x5(?![\\\\d.])|Eeox|einck' })).toBeNull()
+    }
+  })
+
+  it('reload validates only after successful latest revision loads and rejects late old result', async () => {
+    let resolveOld!: (v: any) => void
+    const post = vi.spyOn(api, 'post').mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve }))
+      .mockResolvedValueOnce({ valid: true, revision_id: 'new', issues: [] })
+    vi.spyOn(api, 'get').mockImplementation(async (path) => path.endsWith('/rules')
+      ? { revision_id: 'new', policy_rules: [], admission_rules: [] }
+      : path.endsWith('/groups') ? { items: [], total: 0 } : { spec: { conditions: [] } })
+    const policy = usePolicy()
+    const old = policy.validateGraph()
+    await policy.reload()
+    expect(post).toHaveBeenCalledTimes(2)
+    expect(policy.validationResult.value?.revision_id).toBe('new')
+    resolveOld({ valid: false, revision_id: 'old', issues: [] })
+    await old
+    expect(policy.validationResult.value?.valid).toBe(true)
+    expect(policy.validationResult.value?.revision_id).toBe('new')
+  })
+
+  it('failed load does not validate; retry reload recovers', async () => {
+    const get = vi.spyOn(api, 'get').mockRejectedValueOnce(new Error('read failure'))
+    const post = vi.spyOn(api, 'post').mockResolvedValue({ valid: true, revision_id: 'latest' })
+    const policy = usePolicy()
+    await policy.reload()
+    expect(post).not.toHaveBeenCalled()
+    expect(policy.error.value).toBe('read failure')
+    expect(policy.validationState.value).toBe('incomplete')
+    get.mockImplementation(async (path) => path.endsWith('/rules') ? { revision_id: 'latest' } : { items: [], spec: { conditions: [] } })
+    await policy.reload()
+    expect(policy.validationState.value).toBe('success')
+  })
+
+  it('failed save neither enables a flag locally nor fabricates validation', async () => {
+    vi.spyOn(api, 'patch').mockRejectedValue(new Error('write failure'))
+    const post = vi.spyOn(api, 'post')
+    const policy = usePolicy()
+    policy.groups.value = [{ id: 'fixture', name: 'strict', group_type: 'select', edges: [], empty_fallback_pass: false }]
+    await expect(policy.updateGroup('fixture', undefined, undefined, undefined, true)).rejects.toThrow('write failure')
+    expect(policy.groups.value[0].empty_fallback_pass).toBe(false)
+    expect(post).not.toHaveBeenCalled()
+    expect(policy.validationStale.value).toBe(true)
+  })
+})
+
 describe('policy types and helpers', () => {
   it('formats group types into readable Chinese labels', () => {
     expect(groupTypeLabel('select')).toBe('手动选择 (select)')
@@ -62,7 +114,7 @@ describe('policy types and helpers', () => {
 
     // display_name
     expect(validateConditionInput({ field: 'display_name', op: 'equals', value: 'foo' })).toBe(
-      '显示名称仅支持"包含"或"不包含"运算符'
+      '显示名称仅支持包含、不包含、正则或不匹配正则'
     )
     expect(validateConditionInput({ field: 'display_name', op: 'contains', value: '' })).toBe(
       '显示名称值不能为空'
@@ -193,6 +245,7 @@ describe('usePolicy composable', () => {
     const result = await createGroup('Proxy Fallback', 'fallback')
 
     expect(postSpy).toHaveBeenCalledWith('/api/v1/policies/groups', {
+      empty_fallback_pass: false,
       name: 'Proxy Fallback',
       group_type: 'fallback',
       edges: [],
@@ -364,7 +417,7 @@ describe('usePolicy composable', () => {
   it('validates filter condition inputs against matrix bounds', () => {
     // Valid display_name
     expect(validateConditionInput({ field: 'display_name', op: 'contains', value: 'hk' })).toBeNull()
-    expect(validateConditionInput({ field: 'display_name', op: 'equals', value: 'hk' })).toContain('仅支持"包含"')
+    expect(validateConditionInput({ field: 'display_name', op: 'equals', value: 'hk' })).toContain('仅支持包含')
     expect(validateConditionInput({ field: 'display_name', op: 'contains', value: '' })).toContain('不能为空')
 
     // Valid protocol

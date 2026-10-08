@@ -488,13 +488,14 @@ type mihomoConfig struct {
 }
 
 type mihomoGroup struct {
-	Name      string   `yaml:"name"`
-	Type      string   `yaml:"type"`
-	Proxies   []string `yaml:"proxies"`
-	URL       string   `yaml:"url,omitempty"`
-	Interval  int      `yaml:"interval,omitempty"`
-	Tolerance int      `yaml:"tolerance,omitempty"`
-	Strategy  string   `yaml:"strategy,omitempty"`
+	EmptyFallback string   `yaml:"empty-fallback,omitempty"`
+	Name          string   `yaml:"name"`
+	Type          string   `yaml:"type"`
+	Proxies       []string `yaml:"proxies"`
+	URL           string   `yaml:"url,omitempty"`
+	Interval      int      `yaml:"interval,omitempty"`
+	Tolerance     int      `yaml:"tolerance,omitempty"`
+	Strategy      string   `yaml:"strategy,omitempty"`
 }
 
 type mihomoRuleProvider struct {
@@ -984,7 +985,7 @@ func renderMihomo(snapshot *resolver.ResolvedPolicySnapshot) ([]byte, error) {
 
 	for i, group := range snapshot.Groups {
 		loc := fmt.Sprintf("groups[%d]", i)
-		if len(group.Members) == 0 {
+		if !group.UsesEmptyPass() && (len(group.Members) == 0 || (group.EmptyFallbackPass && len(group.AllNodeLogicalIDs) == 0)) {
 			return nil, mihomoError(loc, group.Name, fmt.Sprintf("proxy group %q has no proxies (required_nonempty)", group.Name))
 		}
 		members := make([]string, 0, len(group.Members))
@@ -998,9 +999,20 @@ func renderMihomo(snapshot *resolver.ResolvedPolicySnapshot) ([]byte, error) {
 			}
 			members = append(members, member.DisplayName)
 		}
+		if group.UsesEmptyPass() {
+			members = []string{"PASS"}
+		}
 		mg, err := buildMihomoGroup(loc, group, members)
 		if err != nil {
 			return nil, err
+		}
+		// Never let a flagged nonempty group fall back to COMPATIBLE's DIRECT
+		// if its native health selection later runs out of candidates.
+		if group.EmptyFallbackPass {
+			mg.EmptyFallback = "REJECT"
+		}
+		if group.UsesEmptyPass() {
+			mg.EmptyFallback = "PASS"
 		}
 		groups = append(groups, mg)
 	}

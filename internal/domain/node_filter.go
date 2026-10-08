@@ -6,7 +6,60 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/dlclark/regexp2"
+	lru "github.com/hashicorp/golang-lru/v2"
 )
+
+// Bounds apply to both validation and matching. RE2 remains the first choice;
+// regexp2 is used only when RE2 cannot compile the original expression.
+const filterRegexTimeout = 50 * time.Millisecond
+const filterRegexInputLimit = 4096
+
+type filterRegex struct {
+	re2          *regexp.Regexp
+	backtracking *regexp2.Regexp
+}
+
+var filterRegexCache, _ = lru.New[string, *filterRegex](128)
+
+func compileFilterRegex(pattern string) (*filterRegex, error) {
+	pattern = strings.TrimSpace(pattern)
+	if len(pattern) == 0 || len(pattern) > 1024 {
+		return nil, fmt.Errorf("regex pattern must contain 1 to 1024 bytes")
+	}
+	if cached, ok := filterRegexCache.Get(pattern); ok {
+		return cached, nil
+	}
+	// Preserve the established case-insensitive name-filter contract.
+	pat := pattern
+	if !strings.HasPrefix(pat, "(?i)") {
+		pat = "(?i)" + pat
+	}
+	compiled := &filterRegex{}
+	if re, err := regexp.Compile(pat); err == nil {
+		compiled.re2 = re
+	} else {
+		re, err := regexp2.Compile(pat, regexp2.None)
+		if err != nil {
+			return nil, err
+		}
+		re.MatchTimeout = filterRegexTimeout
+		compiled.backtracking = re
+	}
+	filterRegexCache.Add(pattern, compiled)
+	return compiled, nil
+}
+
+func (r *filterRegex) match(input string) (bool, error) {
+	if len(input) > filterRegexInputLimit {
+		return false, fmt.Errorf("regex input exceeds %d bytes", filterRegexInputLimit)
+	}
+	if r.re2 != nil {
+		return r.re2.MatchString(input), nil
+	}
+	return r.backtracking.MatchString(input)
+}
 
 // FilterField represents the node attribute or evidence dimension to filter against.
 type FilterField string
@@ -115,14 +168,8 @@ func (c FilterCondition) Validate() error {
 			return NewValidationError("invalid_filter_value", fmt.Sprintf("display_name filter value cannot exceed %d characters", maxLen))
 		}
 		if c.Op == FilterOpRegex || c.Op == FilterOpNotRegex {
-			pat := val
-			if !strings.HasPrefix(pat, "(?i)") {
-				pat = "(?i)" + pat
-			}
-			if _, err := regexp.Compile(pat); err != nil {
-				if _, err2 := regexp.Compile(val); err2 != nil {
-					return NewValidationError("invalid_filter_value", fmt.Sprintf("invalid regex pattern: %v", err2))
-				}
+			if _, err := compileFilterRegex(val); err != nil {
+				return NewValidationError("invalid_filter_value", fmt.Sprintf("invalid regex pattern: %v", err))
 			}
 		}
 		if c.ProbeKind != nil {
@@ -242,18 +289,15 @@ func MatchesCondition(c FilterCondition, node Node, sources []NodeSource, latest
 	switch field {
 	case FilterFieldDisplayName:
 		if op == FilterOpRegex || op == FilterOpNotRegex {
-			pat := c.Value
-			if !strings.HasPrefix(pat, "(?i)") {
-				pat = "(?i)" + pat
-			}
-			re, err := regexp.Compile(pat)
+			re, err := compileFilterRegex(c.Value)
 			if err != nil {
-				re, err = regexp.Compile(c.Value)
+				return false, fmt.Sprintf("invalid regex: %v", err)
 			}
+			matched, err := re.match(node.DisplayName)
+			// In particular, not_regex must not invert errors/timeouts into success.
 			if err != nil {
-				return false, fmt.Sprintf("invalid regex %q: %v", c.Value, err)
+				return false, fmt.Sprintf("regex match failed: %v", err)
 			}
-			matched := re.MatchString(node.DisplayName)
 			if op == FilterOpRegex && !matched {
 				return false, fmt.Sprintf("display_name does not match regex %q", c.Value)
 			}

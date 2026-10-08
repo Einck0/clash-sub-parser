@@ -8,6 +8,7 @@ import {
 import type { FilterCondition, FilterField, FilterOp, GroupEdge, GroupType, NodeFilterSpec, PolicyGroup } from './policyTypes'
 import { ALL_GROUP_TYPES, SUPPORTED_FILTER_FIELDS, groupTypeLabel, validateConditionInput, validateEdgeInput } from './policyTypes'
 import { api } from '../../api/client'
+import { t } from '../../locales'
 
 interface Props {
   open: boolean
@@ -32,10 +33,11 @@ const props = withDefaults(defineProps<Props>(), {
 
 const emit = defineEmits<{
   (e: 'close'): void
-  (e: 'save-group', data: { name: string; type: GroupType; nodeFilter?: NodeFilterSpec | null }): void
+  (e: 'save-group', data: { name: string; type: GroupType; nodeFilter?: NodeFilterSpec | null; emptyFallbackPass: boolean }): void
   (e: 'save-edges', data: { groupId: string; edges: GroupEdge[] }): void
 }>()
 
+const emptyFallbackPass = ref(false)
 const name = ref('')
 const groupType = ref<GroupType>('select')
 const edges = ref<GroupEdge[]>([])
@@ -114,11 +116,13 @@ watch(
     if (isOpen) {
       if (props.group) {
         name.value = props.group.name
+        emptyFallbackPass.value = props.group.empty_fallback_pass === true
         groupType.value = props.group.group_type
         edges.value = (props.group.edges || []).map((e) => ({ ...e }))
         filterConditions.value = (props.group.node_filter?.conditions || []).map((c) => ({ ...c }))
       } else {
         name.value = ''
+        emptyFallbackPass.value = false
         groupType.value = 'select'
         edges.value = []
         filterConditions.value = []
@@ -143,7 +147,7 @@ watch(newField, (f) => {
   } else {
     newOp.value = 'equals'
   }
-})
+}, { flush: 'sync' })
 
 function addFilterCondition() {
   conditionError.value = ''
@@ -174,6 +178,16 @@ function addFilterCondition() {
   newValue.value = ''
 }
 
+function editFilterCondition(idx: number) {
+  const cond = filterConditions.value[idx]
+  newField.value = cond.field
+  newOp.value = cond.op
+  newValue.value = cond.value || ''
+  newProbeKind.value = cond.probe_kind || 'baseline'
+  newFreshnessSeconds.value = cond.freshness_seconds
+  filterConditions.value.splice(idx, 1)
+}
+
 function removeFilterCondition(idx: number) {
   filterConditions.value.splice(idx, 1)
 }
@@ -189,7 +203,7 @@ function handleSaveGroup() {
     nodeFilter = null
   }
 
-  emit('save-group', { name: name.value, type: groupType.value, nodeFilter })
+  emit('save-group', { name: name.value, type: groupType.value, nodeFilter, emptyFallbackPass: emptyFallbackPass.value })
 }
 
 function handleSaveEdges() {
@@ -340,6 +354,14 @@ function close() {
             </div>
           </div>
 
+          <label class="flex items-start gap-3 rounded-xl border border-base-300 p-3">
+            <input v-model="emptyFallbackPass" type="checkbox" class="checkbox checkbox-primary checkbox-sm" data-testid="empty-fallback-pass" />
+            <span class="min-w-0 text-sm">
+              <span class="font-semibold block">{{ t('policy.emptyFallbackPass') }}</span>
+              <span class="text-xs opacity-70">{{ t('policy.emptyFallbackPassHelp') }}</span>
+            </span>
+          </label>
+
           <!-- Group Node Filter Section -->
           <div class="p-3 rounded-xl bg-base-200/70 border border-base-300 space-y-3">
             <div class="flex items-center justify-between">
@@ -375,6 +397,7 @@ function close() {
                     ≤{{ cond.freshness_seconds }}s
                   </span>
                 </div>
+                <button type="button" class="btn btn-ghost btn-xs" @click="editFilterCondition(cIdx)">编辑</button>
                 <button
                   type="button"
                   class="btn btn-ghost btn-xs text-error p-1"
@@ -411,6 +434,8 @@ function close() {
                   <template v-if="newField === 'display_name' || newField === 'source_subscription_ids'">
                     <option value="contains">包含 (contains)</option>
                     <option value="not_contains">不包含 (not_contains)</option>
+                    <option v-if="newField === 'display_name'" value="regex">匹配正则 (regex)</option>
+                    <option v-if="newField === 'display_name'" value="not_regex">不匹配正则 (not_regex)</option>
                   </template>
                   <template v-else-if="newField === 'probe_latency_ms'">
                     <option value="lte">小于等于 (lte)</option>

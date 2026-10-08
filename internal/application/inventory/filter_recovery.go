@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"regexp"
 	"strings"
 	"time"
 
@@ -93,7 +92,7 @@ type RestoreGroupFiltersReport struct {
 // into CSP 1.0 group_node_filters specs, and restores them safely into the target SQLite database.
 func RunRestoreGroupFilters(ctx context.Context, targetDB *sql.DB, opts RestoreGroupFiltersOptions) (*RestoreGroupFiltersReport, error) {
 	if strings.TrimSpace(opts.ArchiveDBPath) == "" {
-		opts.ArchiveDBPath = "/home/service/backups/csp-legacy-cold-archive-20260919.db"
+		return nil, fmt.Errorf("archive db path is required")
 	}
 
 	// 1. Validate cold archive existence and readability
@@ -159,14 +158,19 @@ func RunRestoreGroupFilters(ctx context.Context, targetDB *sql.DB, opts RestoreG
 	// Read existing group_node_filters
 	existingFilters := make(map[string]string)
 	fRows, err := targetDB.QueryContext(ctx, "SELECT group_id, filter_spec FROM group_node_filters;")
-	if err == nil {
-		defer fRows.Close()
-		for fRows.Next() {
-			var gid, spec string
-			if err := fRows.Scan(&gid, &spec); err == nil {
-				existingFilters[gid] = spec
-			}
+	if err != nil {
+		return nil, fmt.Errorf("read existing filters: %w", err)
+	}
+	defer fRows.Close()
+	for fRows.Next() {
+		var gid, spec string
+		if err := fRows.Scan(&gid, &spec); err != nil {
+			return nil, err
 		}
+		existingFilters[gid] = spec
+	}
+	if err := fRows.Err(); err != nil {
+		return nil, err
 	}
 
 	// Read current active nodes for simulation
@@ -177,14 +181,19 @@ func RunRestoreGroupFilters(ctx context.Context, targetDB *sql.DB, opts RestoreG
 	}
 	var targetNodes []targetNodeRow
 	nRows, err := targetDB.QueryContext(ctx, "SELECT logical_id, display_name, protocol FROM nodes WHERE active = 1;")
-	if err == nil {
-		defer nRows.Close()
-		for nRows.Next() {
-			var n targetNodeRow
-			if err := nRows.Scan(&n.LogicalID, &n.DisplayName, &n.Protocol); err == nil {
-				targetNodes = append(targetNodes, n)
-			}
+	if err != nil {
+		return nil, fmt.Errorf("read target nodes: %w", err)
+	}
+	defer nRows.Close()
+	for nRows.Next() {
+		var n targetNodeRow
+		if err := nRows.Scan(&n.LogicalID, &n.DisplayName, &n.Protocol); err != nil {
+			return nil, err
 		}
+		targetNodes = append(targetNodes, n)
+	}
+	if err := nRows.Err(); err != nil {
+		return nil, err
 	}
 
 	// Get active revision
@@ -232,7 +241,7 @@ func RunRestoreGroupFilters(ctx context.Context, targetDB *sql.DB, opts RestoreG
 		}
 
 		// Verify matching attributes
-		if targetGroup.Name != lg.Name {
+		if targetGroup.Name != lg.Name || targetGroup.GroupType != lg.GroupType {
 			report.GuardErrors++
 			report.Groups = append(report.Groups, RecoveredGroupFilterDetails{
 				LegacyID:        lg.ID,
@@ -247,14 +256,19 @@ func RunRestoreGroupFilters(ctx context.Context, targetDB *sql.DB, opts RestoreG
 		// Parse raw regex rules
 		var rawRegexes []string
 		if lg.RegexRules != "" && lg.RegexRules != "[]" {
-			_ = json.Unmarshal([]byte(lg.RegexRules), &rawRegexes)
+			if err := json.Unmarshal([]byte(lg.RegexRules), &rawRegexes); err != nil {
+				return nil, fmt.Errorf("invalid archived regex for group %d: %w", lg.ID, err)
+			}
 		}
 
 		// Check if already has customized filter
 		existingSpecJSON := existingFilters[targetUUID]
 		if existingSpecJSON != "" && existingSpecJSON != `{"conditions":[]}` {
 			var parsedSpec domain.NodeFilterSpec
-			if err := json.Unmarshal([]byte(existingSpecJSON), &parsedSpec); err == nil && !parsedSpec.IsEmpty() {
+			if err := json.Unmarshal([]byte(existingSpecJSON), &parsedSpec); err != nil {
+				return nil, fmt.Errorf("invalid existing filter for group %s", targetUUID)
+			}
+			if !parsedSpec.IsEmpty() {
 				report.SkippedCount++
 				report.Groups = append(report.Groups, RecoveredGroupFilterDetails{
 					LegacyID:        lg.ID,
@@ -364,6 +378,15 @@ func RunRestoreGroupFilters(ctx context.Context, targetDB *sql.DB, opts RestoreG
 	defer stmt.Close()
 
 	for _, item := range pendingList {
+		// Recheck inside the write transaction; never overwrite an intervening edit.
+		var current string
+		err := tx.QueryRowContext(ctx, `SELECT filter_spec FROM group_node_filters WHERE group_id=?`, item.GroupID).Scan(&current)
+		if err != nil && err != sql.ErrNoRows {
+			return nil, err
+		}
+		if current != existingFilters[item.GroupID] {
+			return nil, domain.NewConflictError("filter_changed", "group filter changed during restoration")
+		}
 		specJSON, mErr := json.Marshal(item.FilterSpec)
 		if mErr != nil {
 			return nil, fmt.Errorf("marshal spec for group %s: %w", item.GroupID, mErr)
@@ -376,13 +399,18 @@ func RunRestoreGroupFilters(ctx context.Context, targetDB *sql.DB, opts RestoreG
 	// Create new configuration revision preserving immutable predecessor
 	if len(pendingList) > 0 {
 		newRevID, uErr := domain.NewUUIDv7()
-		if uErr == nil {
+		if uErr != nil {
+			return nil, uErr
+		}
+		{
 			h := sha256.New()
 			h.Write([]byte(newRevID + ":" + currentRevID + ":" + nowStr))
 			snapDigest := "sha256:" + hex.EncodeToString(h.Sum(nil))
 
 			// Archive previous active revision
-			_, _ = tx.ExecContext(ctx, "UPDATE configuration_revisions SET state = 'archived' WHERE state = 'active';")
+			if _, err := tx.ExecContext(ctx, "UPDATE configuration_revisions SET state = 'archived' WHERE state = 'active';"); err != nil {
+				return nil, err
+			}
 			_, revErr := tx.ExecContext(ctx, `
 				INSERT INTO configuration_revisions (id, parent_id, content_digest, state, created_at)
 				VALUES (?, ?, ?, 'active', ?);
@@ -411,27 +439,8 @@ func translateLegacyRegexRules(rawRegexes []string) (string, domain.NodeFilterSp
 		return "manual_edges", domain.NodeFilterSpec{}, nil
 	}
 
-	// Check if this is a negative lookahead pattern: e.g. ^(?!.*(WORD1|WORD2|...)).*$
-	negRegex := regexp.MustCompile(`^\^\(\?!.*\((.+?)\)\)\.\*\$$`)
-	if len(rawRegexes) == 1 {
-		if matches := negRegex.FindStringSubmatch(rawRegexes[0]); len(matches) > 1 {
-			excludedWords := matches[1]
-			spec := domain.NodeFilterSpec{
-				Conditions: []domain.FilterCondition{
-					{
-						Field: domain.FilterFieldDisplayName,
-						Op:    domain.FilterOpNotRegex,
-						Value: excludedWords,
-					},
-				},
-			}
-			if err := spec.Validate(); err != nil {
-				return "", domain.NodeFilterSpec{}, fmt.Errorf("invalid negation spec: %w", err)
-			}
-			return "negation_regex", spec, nil
-		}
-	}
-
+	// Preserve every original assertion and literal. Multiple archive expressions
+	// are a positive OR, not guessed exclusions based on group names.
 	// Positive regex rules
 	var combinedPattern string
 	if len(rawRegexes) == 1 {

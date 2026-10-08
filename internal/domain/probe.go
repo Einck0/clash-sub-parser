@@ -83,8 +83,35 @@ type PlatformCapability struct {
 	Reason     string       `json:"reason,omitempty"`
 }
 
+// ProbeAttemptEvidence records a safe, immutable stage attempt. Raw connection
+// configurations are hashed, never serialized into public evidence.
+type ProbeAttemptEvidence struct {
+	Executed          bool         `json:"executed"`
+	Category          string       `json:"category"`
+	Reason            string       `json:"reason"`
+	RawVerdict        ProbeVerdict `json:"raw_verdict"`
+	Status            int          `json:"status"`
+	BodyBytes         int64        `json:"body_bytes"`
+	ConfigFingerprint string       `json:"config_fingerprint"`
+	ConfigRevision    string       `json:"config_revision"`
+	Profile           string       `json:"profile"`
+	Contract          string       `json:"contract"`
+	ContractSource    string       `json:"contract_source"`
+	LegacyContract    string       `json:"legacy_contract,omitempty"`
+	Engine            string       `json:"engine"`
+	Source            string       `json:"source"`
+	AttemptID         string       `json:"attempt_id"`
+	ReverificationOf  string       `json:"reverification_of,omitempty"`
+	StartedAt         time.Time    `json:"started_at"`
+	FinishedAt        time.Time    `json:"finished_at"`
+	BudgetLimit       int64        `json:"budget_limit"`
+	BudgetUsed        int64        `json:"budget_used"`
+	Responses         any          `json:"responses,omitempty"`
+}
+
 // ObservationEvidenceData contains structured metadata persisted alongside an observation.
 type ObservationEvidenceData struct {
+	Attempt    *ProbeAttemptEvidence         `json:"attempt,omitempty"`
 	Region     string                        `json:"region,omitempty"`
 	SubTier    string                        `json:"sub_tier,omitempty"`
 	Throughput *float64                      `json:"throughput,omitempty"`
@@ -96,15 +123,16 @@ type ObservationEvidenceData struct {
 
 // ProbeObservation represents an immutable observation made during a probe execution.
 type ProbeObservation struct {
-	ID                 string                        `json:"id"`
-	ProbeRunID         string                        `json:"probe_run_id"`
-	NodeLogicalID      string                        `json:"node_logical_id"`
-	Kind               ProbeKind                     `json:"kind"`
-	Verdict            ProbeVerdict                  `json:"verdict"`
-	EvidenceDigest     string                        `json:"evidence_digest"`
-	ObservedAt         time.Time                     `json:"observed_at"`
-	LatencyMS          int64                         `json:"latency_ms"`
-	RedactedSummary    string                        `json:"redacted_summary"`
+	Attempt         *ProbeAttemptEvidence `json:"attempt,omitempty"`
+	ID              string                `json:"id"`
+	ProbeRunID      string                `json:"probe_run_id"`
+	NodeLogicalID   string                `json:"node_logical_id"`
+	Kind            ProbeKind             `json:"kind"`
+	Verdict         ProbeVerdict          `json:"verdict"`
+	EvidenceDigest  string                `json:"evidence_digest"`
+	ObservedAt      time.Time             `json:"observed_at"`
+	LatencyMS       int64                 `json:"latency_ms"`
+	RedactedSummary string                `json:"redacted_summary"`
 	// Nil identifies pre-migration history, which cannot certify a current connection.
 	ConnectionRevision *int64                        `json:"connection_revision,omitempty"`
 	EvidenceData       string                        `json:"evidence_data,omitempty"`
@@ -121,8 +149,9 @@ func (o *ProbeObservation) SyncEvidenceData() {
 	if o == nil {
 		return
 	}
-	if o.EvidenceData == "" && (o.Region != "" || o.SubTier != "" || o.Throughput != nil || o.RiskScore != "" || len(o.Platforms) > 0 || o.SafeDetail != nil) {
+	if o.EvidenceData == "" && (o.Region != "" || o.SubTier != "" || o.Throughput != nil || o.RiskScore != "" || len(o.Platforms) > 0 || o.SafeDetail != nil || o.Attempt != nil) {
 		ed := ObservationEvidenceData{
+			Attempt:    o.Attempt,
 			Region:     o.Region,
 			SubTier:    o.SubTier,
 			Throughput: o.Throughput,
@@ -133,7 +162,7 @@ func (o *ProbeObservation) SyncEvidenceData() {
 		if b, err := json.Marshal(ed); err == nil {
 			o.EvidenceData = string(b)
 		}
-	} else if o.EvidenceData != "" && o.Region == "" && o.SubTier == "" && o.Throughput == nil && o.RiskScore == "" && len(o.Platforms) == 0 && o.SafeDetail == nil {
+	} else if o.EvidenceData != "" && o.Region == "" && o.SubTier == "" && o.Throughput == nil && o.RiskScore == "" && len(o.Platforms) == 0 && o.SafeDetail == nil && o.Attempt == nil {
 		var ed ObservationEvidenceData
 		if err := json.Unmarshal([]byte(o.EvidenceData), &ed); err == nil {
 			o.Region = ed.Region
@@ -142,6 +171,7 @@ func (o *ProbeObservation) SyncEvidenceData() {
 			o.RiskScore = ed.RiskScore
 			o.Platforms = ed.Platforms
 			o.SafeDetail = ed.SafeDetail
+			o.Attempt = ed.Attempt
 		}
 	}
 }

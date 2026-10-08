@@ -47,6 +47,9 @@ type RouterConfig struct {
 
 // NewRouter constructs and configures the top-level Chi HTTP router.
 func NewRouter(cfg RouterConfig) http.Handler {
+	if cfg.PolicyService != nil && cfg.PublicationService != nil {
+		cfg.PolicyService.SetSnapshotProvider(cfg.PublicationService.ResolvePolicySnapshot)
+	}
 	if cfg.TokenHolder == nil {
 		cost := MinHashCost
 		if cfg.SettingsRepository != nil {
@@ -83,6 +86,8 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	if webHandler != nil {
 		r.Get("/", webHandler.ServeHTTP)
 		r.Get("/*", webHandler.ServeHTTP)
+		r.Head("/", webHandler.ServeHTTP)
+		r.Head("/*", webHandler.ServeHTTP)
 	}
 
 	// Publication endpoint: /publish/v1/{publication_id}

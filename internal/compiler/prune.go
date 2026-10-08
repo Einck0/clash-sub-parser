@@ -79,7 +79,7 @@ func pruneOnePass(snapshot *resolver.ResolvedPolicySnapshot) (*resolver.Resolved
 	var diagnostics []resolver.Diagnostic
 
 	for _, group := range snapshot.Groups {
-		if len(group.Members) > 0 {
+		if group.UsesEmptyPass() || len(group.Members) > 0 {
 			continue // Non-empty group, keep as-is
 		}
 

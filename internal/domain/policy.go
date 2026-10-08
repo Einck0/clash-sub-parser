@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -8,13 +9,20 @@ import (
 )
 
 // NodeGroup represents a policy group in the routing graph.
+// AtomicGroupRepository persists group metadata, edges and filter as one unit.
+// A nil edges pointer preserves edges; changeFilter distinguishes omission from deletion.
+type AtomicGroupRepository interface {
+	SaveGroup(context.Context, *NodeGroup, bool, *[]GroupEdge, bool, *NodeFilterSpec) error
+}
+
 type NodeGroup struct {
-	ID         string          `json:"id"`
-	Name       string          `json:"name"`
-	GroupType  GroupType       `json:"group_type"`
-	NodeFilter *NodeFilterSpec `json:"node_filter,omitempty"`
-	CreatedAt  time.Time       `json:"created_at"`
-	UpdatedAt  time.Time       `json:"updated_at"`
+	EmptyFallbackPass bool            `json:"empty_fallback_pass"`
+	ID                string          `json:"id"`
+	Name              string          `json:"name"`
+	GroupType         GroupType       `json:"group_type"`
+	NodeFilter        *NodeFilterSpec `json:"node_filter,omitempty"`
+	CreatedAt         time.Time       `json:"created_at"`
+	UpdatedAt         time.Time       `json:"updated_at"`
 }
 
 // GroupEdge represents a directed edge in the policy graph.

@@ -160,8 +160,8 @@ func TestPipelineAliveFailureSkipsMediaAndSpeed(t *testing.T) {
 			passObsCount++
 		}
 	}
-	if deadObsCount != 1 {
-		t.Fatalf("expected 1 observation for node_dead, got %d", deadObsCount)
+	if deadObsCount != 3 {
+		t.Fatalf("expected baseline plus 2 dependency_skipped observations for node_dead, got %d", deadObsCount)
 	}
 	if passObsCount != 3 {
 		t.Fatalf("expected 3 observations for node_pass (baseline, streaming, speed), got %d", passObsCount)

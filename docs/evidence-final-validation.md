@@ -1,4 +1,26 @@
-# CSP 全新库存重置、策略修复与受控上线终态实证
+# CSP 全新库存重置、策略修复与受控上线实证（历史与本次分开）
+
+## 2026-10-08 真实 AB/BA 与 B 离线整改补充：PARTIAL
+
+以下不覆盖历史部署证据。当前源码HEAD `8b26f079e852d707c4cc2f74bbac6fb202c7ada4` 加原有 A+B 工作树；reference 为 commit `3c320fd58aff5235e16218c050ec5b8ce587e233` 干净git archive，真实 Check/CreateClient/platform，缓存untracked测试未使用。Mihomo CSP1.19.32、primary upstream1.19.31、历史CLI1.19.30，未执行same-core网络control。
+
+只读 SQLite backup 快照 integrity ok/FK0；90 active节点全部属于enabled-current scope，未reset/import/source reload。AB/BA为CSP→upstream→upstream→CSP，alive8/media2/speed1；两侧speed请求固定1MiB，15s客户端超时、3s测速，每侧32MiB、共享总128MiB/15min deadline，无追加网络。
+
+| 侧 | body bytes | 秒 | baseline executed/90 | baseline available |
+|---|---:|---:|---:|---:|
+| CSP A1 |33554432|315.728|90|67|
+| upstream B1 |33554432|133.136|34|27|
+| upstream B2 |33554432|139.386|34|27|
+| CSP A2 |6874430|272.323|90|66|
+
+累计 **107537726 bytes / 102.56MiB**；子进程860.573s，总900.027s，1620 node×stage记录。前三侧预算耗尽，第四侧共同deadline到期；CSP speed未执行，upstream speed分别16/17执行、6/7available。不是full enabled-stage completion，更不是公平parity。双方失败不能解释为永久死亡。body不含headers/TLS/NIC；41节点原代理配置skip-cert-verify，目标站点TLS与代理层TLS须分开披露。
+
+私有证据句柄：`/tmp/csp-real-comparison-20261008T045932Z/`（0700、根层文件0600）。`SUMMARY.zh-CN.md`含逐节点脱敏失败ID/名称；`attribution.redacted.csv`完整分母1620条；private JSON保留status/target digest/平台原始字段；库存、mapping、SQLite、stderr不公开。摘要SHA256 `adcc2a3fc4cf7f602a916129f7c5d68fcc4221b6d69a9ad16a2e825f8d014927`。
+
+根因：native pipeline speed与media/alive重叠，早期吞吐吞掉预算；缺失记录末态budget/deadline遮蔽dependency；reference粗错误/只collector导出平台字段不足；引擎与HTTP2/redirect/算法差异未控制。离线correction新增fixed stage-first计划、禁用network入口、CSP dependency优先及typed errors、reference独立stage allocation/原方法baseline-speed错误、独立samecore.mod1.19.32控制。**共同eligibility执行器、reference完整平台错误与队列状态、精确samecoreengine标识仍未闭环，不ready-for-approved-run。**
+
+整改证据 `/tmp/csp-b-correction-plUdtk/`：Python黄金分配exit0；Go build ./... exit0；targeted platform+application/probe race exit0（首轮旧断言失败exit1已修）；真实reference build/fixture race exit0；samecore离线build初次要求mod更新exit1，独立modfile -mod=mod后exit0。全量go test ./... exit1为共享cache e2e linker对象缺失；go test -race ./...超时、没有exit0，不宣称全量race通过。旧12.5/13.4已撤销，14.2/9.2仍未勾选。代码变更触发Reviewer重新审查；未来512MiB/30min仅REQUESTED未授权，本轮无新增网络/生产写入/部署/提交。
+
 
 ## 1. 部署与停写备份确权 (Backup & Deployment Evidence)
 - **Git Commit (HEAD)**: `414a6b7` (`fix(csp): rebuild inventory safely and validate routing policies`)

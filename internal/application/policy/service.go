@@ -18,12 +18,13 @@ import (
 
 // Service orchestrates policy groups, edges, admission rules, and configuration revisions.
 type Service struct {
-	policyRepo     domain.PolicyRepository
-	revisionRepo   domain.RevisionRepository
-	nodeRepo       domain.NodeRepository
-	auditRepo      domain.AuditRepository
-	nodeFilterRepo domain.NodeFilterRepository
-	mu             sync.Mutex
+	policyRepo       domain.PolicyRepository
+	revisionRepo     domain.RevisionRepository
+	nodeRepo         domain.NodeRepository
+	auditRepo        domain.AuditRepository
+	nodeFilterRepo   domain.NodeFilterRepository
+	snapshotProvider func(context.Context, string) (*resolver.ResolvedPolicySnapshot, error)
+	mu               sync.Mutex
 }
 
 // NewService constructs a policy application service from domain repository ports.
@@ -44,6 +45,11 @@ func NewService(
 		s.nodeFilterRepo = nodeFilterRepo[0]
 	}
 	return s
+}
+
+// SetSnapshotProvider shares publication's read-only input assembly with validation.
+func (s *Service) SetSnapshotProvider(provider func(context.Context, string) (*resolver.ResolvedPolicySnapshot, error)) {
+	s.snapshotProvider = provider
 }
 
 // SetNodeFilterRepository configures the node filter repository dynamically.
@@ -84,11 +90,12 @@ func (s *Service) CreateGroup(ctx context.Context, cmd CreateGroupCommand) (*Gro
 
 	now := domain.NowUTC()
 	group := domain.NodeGroup{
-		ID:        groupID,
-		Name:      name,
-		GroupType: cmd.GroupType,
-		CreatedAt: now,
-		UpdatedAt: now,
+		EmptyFallbackPass: cmd.EmptyFallbackPass,
+		ID:                groupID,
+		Name:              name,
+		GroupType:         cmd.GroupType,
+		CreatedAt:         now,
+		UpdatedAt:         now,
 	}
 
 	if cmd.NodeFilter != nil {
@@ -151,7 +158,15 @@ func (s *Service) CreateGroup(ctx context.Context, cmd CreateGroupCommand) (*Gro
 		return nil, err
 	}
 
-	// Persist
+	// Persist all SQLite components atomically; other repository implementations
+	// retain their existing port behavior.
+	if atomic, ok := s.policyRepo.(domain.AtomicGroupRepository); ok {
+		if err := atomic.SaveGroup(ctx, &group, true, &edges, cmd.NodeFilter != nil, cmd.NodeFilter); err != nil {
+			return nil, err
+		}
+		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_group.create", domain.AuditResultSuccess, fmt.Sprintf("id=%s", group.ID))
+		return toGroupView(&group, edges), nil
+	}
 	if err := s.policyRepo.CreateGroup(ctx, &group); err != nil {
 		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_group.create", domain.AuditResultFailure, fmt.Sprintf("failed to save group: %v", err))
 		return nil, err
@@ -353,7 +368,43 @@ func (s *Service) UpdateGroup(ctx context.Context, cmd UpdateGroupCommand) (*Gro
 		}
 	}
 
+	// Validate all requested values before the first write.
+	if err := cmd.NodeFilter.Validate(); err != nil {
+		return nil, err
+	}
+	if cmd.EmptyFallbackPass != nil {
+		group.EmptyFallbackPass = *cmd.EmptyFallbackPass
+	}
+	changeFilter := cmd.ClearNodeFilter || cmd.NodeFilter != nil
+	if changeFilter {
+		group.NodeFilter = cmd.NodeFilter
+		if cmd.ClearNodeFilter || cmd.NodeFilter.IsEmpty() {
+			group.NodeFilter = nil
+		}
+	} else if s.nodeFilterRepo != nil {
+		gf, err := s.nodeFilterRepo.GetGroupFilter(ctx, group.ID)
+		if err != nil {
+			var de *domain.DomainError
+			if !errors.As(err, &de) || de.Category != domain.CategoryNotFound {
+				return nil, err
+			}
+		}
+		if gf != nil {
+			group.NodeFilter = &gf.Spec
+		}
+	}
 	group.UpdatedAt = domain.NowUTC()
+	if atomic, ok := s.policyRepo.(domain.AtomicGroupRepository); ok {
+		var edges *[]domain.GroupEdge
+		if cmd.Edges != nil {
+			edges = &newEdges
+		}
+		if err := atomic.SaveGroup(ctx, group, false, edges, changeFilter, group.NodeFilter); err != nil {
+			return nil, err
+		}
+		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_group.update", domain.AuditResultSuccess, fmt.Sprintf("id=%s", group.ID))
+		return toGroupView(group, newEdges), nil
+	}
 	if err := s.policyRepo.UpdateGroup(ctx, group); err != nil {
 		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_group.update", domain.AuditResultFailure, fmt.Sprintf("failed to update group: %v", err))
 		return nil, err
@@ -815,7 +866,14 @@ func (s *Service) ValidateGraph(ctx context.Context) (*ValidationResult, error) 
 
 	var activeRevID string
 	if s.revisionRepo != nil {
-		if active, err := s.revisionRepo.GetActive(ctx); err == nil && active != nil {
+		active, err := s.revisionRepo.GetActive(ctx)
+		if err != nil {
+			var de *domain.DomainError
+			if !errors.As(err, &de) || de.Category != domain.CategoryNotFound {
+				return nil, fmt.Errorf("validation incomplete: active revision: %w", err)
+			}
+		}
+		if active != nil {
 			activeRevID = active.ID
 		}
 	}
@@ -823,8 +881,14 @@ func (s *Service) ValidateGraph(ctx context.Context) (*ValidationResult, error) 
 	var polRules []domain.PolicyRule
 	var admRules []domain.AdmissionRule
 	if activeRevID != "" && s.policyRepo != nil {
-		polRules, _ = s.policyRepo.ListPolicyRules(ctx, activeRevID)
-		admRules, _ = s.policyRepo.ListAdmissionRules(ctx, activeRevID)
+		polRules, err = s.policyRepo.ListPolicyRules(ctx, activeRevID)
+		if err != nil {
+			return nil, fmt.Errorf("validation incomplete: policy rules: %w", err)
+		}
+		admRules, err = s.policyRepo.ListAdmissionRules(ctx, activeRevID)
+		if err != nil {
+			return nil, fmt.Errorf("validation incomplete: admission rules: %w", err)
+		}
 	}
 
 	var issues []ValidationIssue
@@ -865,22 +929,30 @@ func (s *Service) ValidateGraph(ctx context.Context) (*ValidationResult, error) 
 	// 2. Fetch active nodes in CurrentEnabledSubscription scope
 	var nodes []domain.Node
 	if s.nodeRepo != nil {
-		nodes, _, _ = s.nodeRepo.List(ctx, domain.NodeFilter{
+		nodes, _, err = s.nodeRepo.List(ctx, domain.NodeFilter{
 			Scope:          domain.NodeScopeEnabledSubscriptions,
 			ActiveOnly:     true,
 			ExcludeNotices: true,
 		})
+		if err != nil {
+			return nil, fmt.Errorf("validation incomplete: nodes: %w", err)
+		}
 	}
 
 	// 3. Fetch global & group filters
 	var globalFilter *domain.NodeFilterSpec
 	var groupFilters map[string]domain.NodeFilterSpec
 	if s.nodeFilterRepo != nil {
-		if gf, err := s.nodeFilterRepo.GetGlobalFilter(ctx); err == nil && gf != nil && !gf.Spec.IsEmpty() {
+		gf, err := s.nodeFilterRepo.GetGlobalFilter(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("validation incomplete: global filter: %w", err)
+		}
+		if gf != nil && !gf.Spec.IsEmpty() {
 			globalFilter = &gf.Spec
 		}
-		if gfs, err := s.nodeFilterRepo.ListGroupFilters(ctx); err == nil {
-			groupFilters = gfs
+		groupFilters, err = s.nodeFilterRepo.ListGroupFilters(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("validation incomplete: group filters: %w", err)
 		}
 	}
 
@@ -903,8 +975,32 @@ func (s *Service) ValidateGraph(ctx context.Context) (*ValidationResult, error) 
 		AsOf: domain.NowUTC(),
 	}
 
-	r := resolver.New()
-	snap, snapErr := r.Resolve(ctx, resInput)
+	var snap *resolver.ResolvedPolicySnapshot
+	var snapErr error
+	if s.snapshotProvider != nil && activeRevID != "" {
+		snap, snapErr = s.snapshotProvider(ctx, activeRevID)
+		if snapErr != nil {
+			return nil, fmt.Errorf("validation incomplete: %w", snapErr)
+		}
+	} else {
+		// Standalone services cannot silently validate evidence-dependent filters.
+		for _, spec := range groupFilters {
+			for _, c := range spec.Conditions {
+				if c.Field == domain.FilterFieldSourceSubscriptions || c.Field == domain.FilterFieldProbeVerdict || c.Field == domain.FilterFieldProbeLatencyMS {
+					return nil, domain.NewInternalError("validation_incomplete", "publication snapshot provider required for evidence filters")
+				}
+			}
+		}
+		if globalFilter != nil {
+			for _, c := range globalFilter.Conditions {
+				if c.Field == domain.FilterFieldSourceSubscriptions || c.Field == domain.FilterFieldProbeVerdict || c.Field == domain.FilterFieldProbeLatencyMS {
+					return nil, domain.NewInternalError("validation_incomplete", "publication snapshot provider required for evidence filters")
+				}
+			}
+		}
+		r := resolver.New()
+		snap, snapErr = r.Resolve(ctx, resInput)
+	}
 	if snapErr != nil {
 		if topErr == nil {
 			errorsList = append(errorsList, snapErr.Error())
@@ -942,7 +1038,7 @@ func (s *Service) ValidateGraph(ctx context.Context) (*ValidationResult, error) 
 			}
 
 			rg, ok := resolvedGroupMap[rule.TargetGroupID]
-			if !ok || len(rg.Members) == 0 || len(rg.AllNodeLogicalIDs) == 0 {
+			if !ok || (!rg.UsesEmptyPass() && (len(rg.Members) == 0 || len(rg.AllNodeLogicalIDs) == 0)) {
 				var errMsg string
 				if len(nodes) == 0 {
 					errMsg = fmt.Sprintf("当前有效库存为空，分流规则 %q (位置 %d) 指向的策略组 %q (%s) 无可用节点", rule.Expression, rule.Position, tGroup.Name, tGroup.ID)
@@ -971,7 +1067,7 @@ func (s *Service) ValidateGraph(ctx context.Context) (*ValidationResult, error) 
 		}
 
 		for _, rg := range snap.Groups {
-			if !routedTargetIDs[rg.ID] && (len(rg.Members) == 0 || len(rg.AllNodeLogicalIDs) == 0) {
+			if !rg.UsesEmptyPass() && !routedTargetIDs[rg.ID] && (len(rg.Members) == 0 || len(rg.AllNodeLogicalIDs) == 0) {
 				issues = append(issues, ValidationIssue{
 					Code:            "empty_group",
 					Severity:        "warning",
@@ -984,7 +1080,10 @@ func (s *Service) ValidateGraph(ctx context.Context) (*ValidationResult, error) 
 
 		// Collect other diagnostics from resolver (e.g. node_inactive_or_missing)
 		for _, d := range snap.Diagnostics {
-			if d.Code == "node_inactive_or_missing" {
+			if d.Code != "empty_routed_group" && d.Code != "empty_group" {
+				if d.Severity == resolver.DiagnosticSeverityError {
+					errorsList = append(errorsList, d.Message)
+				}
 				issues = append(issues, ValidationIssue{
 					Code:     d.Code,
 					Severity: string(d.Severity),
@@ -1255,13 +1354,14 @@ func toGroupView(group *domain.NodeGroup, edges []domain.GroupEdge) *GroupView {
 		}
 	}
 	return &GroupView{
-		ID:         group.ID,
-		Name:       group.Name,
-		GroupType:  group.GroupType,
-		Edges:      edgeViews,
-		NodeFilter: group.NodeFilter,
-		CreatedAt:  group.CreatedAt,
-		UpdatedAt:  group.UpdatedAt,
+		EmptyFallbackPass: group.EmptyFallbackPass,
+		ID:                group.ID,
+		Name:              group.Name,
+		GroupType:         group.GroupType,
+		Edges:             edgeViews,
+		NodeFilter:        group.NodeFilter,
+		CreatedAt:         group.CreatedAt,
+		UpdatedAt:         group.UpdatedAt,
 	}
 }
 

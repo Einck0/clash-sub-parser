@@ -20,12 +20,12 @@ import (
 type MaintenanceOperation string
 
 const (
-	OperationRefresh            MaintenanceOperation = "refresh"
-	OperationProbe              MaintenanceOperation = "probe"
-	OperationPreview            MaintenanceOperation = "preview"
-	OperationPublish            MaintenanceOperation = "publish"
-	OperationValidate           MaintenanceOperation = "validate"
-	OperationDeleteRule         MaintenanceOperation = "delete-rule"
+	OperationRefresh             MaintenanceOperation = "refresh"
+	OperationProbe               MaintenanceOperation = "probe"
+	OperationPreview             MaintenanceOperation = "preview"
+	OperationPublish             MaintenanceOperation = "publish"
+	OperationValidate            MaintenanceOperation = "validate"
+	OperationDeleteRule          MaintenanceOperation = "delete-rule"
 	OperationRestoreGroupFilters MaintenanceOperation = "restore-group-filters"
 )
 
@@ -101,35 +101,35 @@ type MaintenanceConfig struct {
 	SnapshotPublish               bool
 	OmitUnavailableOptionalGroups bool
 	FetchProxy                    string
-	AliveConcurrency       int
-	AliveTimeout           time.Duration
-	MediaConcurrency       int
-	SpeedConcurrency       int
-	SpeedTimeout           time.Duration
-	SpeedMaxBytesPerNode   int64
-	SpeedTotalBudget       int64
-	GlobalTimeout          time.Duration
-	Dialer                 probe.NodeDialer
-	FetchClient            fetch.Client
-	AllowConcurrentService bool
+	AliveConcurrency              int
+	AliveTimeout                  time.Duration
+	MediaConcurrency              int
+	SpeedConcurrency              int
+	SpeedTimeout                  time.Duration
+	SpeedMaxBytesPerNode          int64
+	SpeedTotalBudget              int64
+	GlobalTimeout                 time.Duration
+	Dialer                        probe.NodeDialer
+	FetchClient                   fetch.Client
+	AllowConcurrentService        bool
 }
 
 // MaintenanceReport provides the structured top-level report for the maintenance run.
 type MaintenanceReport struct {
-	RunID          string            `json:"run_id"`
-	Operation      string            `json:"operation"`
-	Status         string            `json:"status"` // PASS, PARTIAL, BLOCKED, FAILED
-	Summary        string            `json:"summary"`
-	DryRun         bool              `json:"dry_run"`
-	TargetDB       string            `json:"target_db"`
-	ReportFilePath string            `json:"report_file_path,omitempty"`
-	StartedAt      time.Time         `json:"started_at"`
-	FinishedAt     time.Time         `json:"finished_at"`
-	Elapsed        string            `json:"elapsed"`
-	Refresh        *RefreshSummary   `json:"refresh,omitempty"`
-	Probe          *ProbeSummary     `json:"probe,omitempty"`
-	Preview        *PreviewSummary   `json:"preview,omitempty"`
-	Publish        *PublishSummary   `json:"publish,omitempty"`
+	RunID          string          `json:"run_id"`
+	Operation      string          `json:"operation"`
+	Status         string          `json:"status"` // PASS, PARTIAL, BLOCKED, FAILED
+	Summary        string          `json:"summary"`
+	DryRun         bool            `json:"dry_run"`
+	TargetDB       string          `json:"target_db"`
+	ReportFilePath string          `json:"report_file_path,omitempty"`
+	StartedAt      time.Time       `json:"started_at"`
+	FinishedAt     time.Time       `json:"finished_at"`
+	Elapsed        string          `json:"elapsed"`
+	Refresh        *RefreshSummary `json:"refresh,omitempty"`
+	Probe          *ProbeSummary   `json:"probe,omitempty"`
+	Preview        *PreviewSummary `json:"preview,omitempty"`
+	Publish        *PublishSummary `json:"publish,omitempty"`
 }
 
 // RefreshSummary summarizes subscription refreshes.
@@ -160,32 +160,41 @@ type SourceRefreshResult struct {
 
 // ProbeSummary summarizes node probing tasks.
 type ProbeSummary struct {
-	RunID                 string           `json:"run_id"`
-	TotalNodesTargeted    int              `json:"total_nodes_targeted"`
-	TotalTasksScheduled   int              `json:"total_tasks_scheduled"`
-	CompletedTasks        int              `json:"completed_tasks"`
-	FailedTasks           int              `json:"failed_tasks"`
-	SkippedTasks          int              `json:"skipped_tasks"`
-	AvailableNodes        int              `json:"available_nodes"`
-	TotalBytesDownloaded  int64            `json:"total_bytes_downloaded"`
-	KindsRequested        []string         `json:"kinds_requested"`
-	Elapsed               string           `json:"elapsed"`
-	Summary               string           `json:"summary,omitempty"`
-	Rows                  []ProbeReportRow `json:"rows,omitempty"`
+	RunID                  string           `json:"run_id"`
+	TotalNodesTargeted     int              `json:"total_nodes_targeted"`
+	TotalTasksScheduled    int              `json:"total_tasks_scheduled"`
+	CompletedTasks         int              `json:"completed_tasks"`
+	FailedTasks            int              `json:"failed_tasks"`
+	SkippedTasks           int              `json:"skipped_tasks"`
+	RestrictedTasks        int              `json:"restricted_tasks"`
+	UnknownTasks           int              `json:"unknown_tasks"`
+	CancelledTasks         int              `json:"cancelled_tasks"`
+	BudgetNotExecutedTasks int              `json:"budget_not_executed_tasks"`
+	StaleTasks             int              `json:"stale_tasks"`
+	BodyBudgetLimit        int64            `json:"body_budget_limit"`
+	ByteMetric             string           `json:"byte_metric"`
+	AvailableNodes         int              `json:"available_nodes"`
+	TotalBytesDownloaded   int64            `json:"total_bytes_downloaded"`
+	KindsRequested         []string         `json:"kinds_requested"`
+	Elapsed                string           `json:"elapsed"`
+	Summary                string           `json:"summary,omitempty"`
+	Rows                   []ProbeReportRow `json:"rows,omitempty"`
 }
 
 // ProbeReportRow records the specific status of a node under a capability kind.
 type ProbeReportRow struct {
-	NodeID             string             `json:"node_id"`
-	Kind               string             `json:"kind"`
-	Status             string             `json:"status"` // available, unavailable, skipped, cancelled, untested
-	SkipReason         string             `json:"skip_reason,omitempty"`
-	ErrorCode          string             `json:"error_code,omitempty"`
-	SafeDetail         *domain.SafeDetail `json:"safe_detail,omitempty"`
-	LatencyMS          int64              `json:"latency_ms,omitempty"`
-	ConnectionRevision *int64             `json:"connection_revision,omitempty"`
-	Engine             string             `json:"engine"`
-	ObservedAt         string             `json:"observed_at,omitempty"`
+	Attempt            *domain.ProbeAttemptEvidence `json:"attempt,omitempty"`
+	RawVerdict         domain.ProbeVerdict          `json:"raw_verdict,omitempty"`
+	NodeID             string                       `json:"node_id"`
+	Kind               string                       `json:"kind"`
+	Status             string                       `json:"status"` // available, unavailable, skipped, cancelled, untested
+	SkipReason         string                       `json:"skip_reason,omitempty"`
+	ErrorCode          string                       `json:"error_code,omitempty"`
+	SafeDetail         *domain.SafeDetail           `json:"safe_detail,omitempty"`
+	LatencyMS          int64                        `json:"latency_ms,omitempty"`
+	ConnectionRevision *int64                       `json:"connection_revision,omitempty"`
+	Engine             string                       `json:"engine"`
+	ObservedAt         string                       `json:"observed_at,omitempty"`
 }
 
 // PreviewSummary summarizes compilation preview and policy preflight.
@@ -508,31 +517,34 @@ func (o *MaintenanceOrchestrator) executeProbe(ctx context.Context, cfg Maintena
 	runErr := o.probeRunner.Run(ctx, run, nodeIDs, cfg.Kinds)
 	summary.Elapsed = time.Since(probeStart).String()
 	if runErr != nil {
-		summary.Summary = fmt.Sprintf("probe execution returned: %v", runErr)
+		summary.Summary = "probe execution incomplete"
+		report.Status = "PARTIAL"
 	}
 
 	// Query recorded observations
-	obsList, err := o.obsRepo.ListByRun(ctx, run.ID)
+	readCtx, readCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer readCancel()
+	obsList, err := o.obsRepo.ListByRun(readCtx, run.ID)
 	if err != nil {
-		obsList = nil
+		return fmt.Errorf("probe observations unavailable: %w", err)
 	}
 
 	obsMap := make(map[string]map[domain.ProbeKind]domain.ProbeObservation)
-	var totalSpeedBytes int64
+	var totalBodyBytes int64
+	summary.ByteMetric = "application_response_body_excludes_headers_tls_transport_nic"
 	for _, obs := range obsList {
 		if _, ok := obsMap[obs.NodeLogicalID]; !ok {
 			obsMap[obs.NodeLogicalID] = make(map[domain.ProbeKind]domain.ProbeObservation)
 		}
 		obsMap[obs.NodeLogicalID][obs.Kind] = obs
-		if obs.Kind == domain.ProbeKindSpeed && obs.Throughput != nil {
-			var b int64
-			if idx := strings.Index(obs.RedactedSummary, "bytes_read="); idx != -1 {
-				_, _ = fmt.Sscanf(obs.RedactedSummary[idx:], "bytes_read=%d", &b)
-			}
-			totalSpeedBytes += b
+		obs.SyncEvidenceData()
+		obsMap[obs.NodeLogicalID][obs.Kind] = obs
+		if obs.Attempt != nil {
+			totalBodyBytes += obs.Attempt.BodyBytes
+			summary.BodyBudgetLimit = obs.Attempt.BudgetLimit
 		}
 	}
-	summary.TotalBytesDownloaded = totalSpeedBytes
+	summary.TotalBytesDownloaded = totalBodyBytes
 
 	var rows []ProbeReportRow
 	var availableNodesCount int
@@ -550,21 +562,49 @@ func (o *MaintenanceOrchestrator) executeProbe(ctx context.Context, cfg Maintena
 
 		for _, kind := range cfg.Kinds {
 			if obs, exists := nodeObs[kind]; exists {
-				status := "unavailable"
-				if obs.Verdict == domain.VerdictAvailable {
-					status = "available"
+				status := string(obs.Verdict)
+				if obs.Verdict == domain.VerdictError {
+					status = "fail"
+				}
+				if obs.Attempt != nil {
+					status = obs.Attempt.Category
+				}
+				if obs.ConnectionRevision == nil || *obs.ConnectionRevision != n.ConnectionRevision {
+					status = "stale"
+				}
+				switch status {
+				case "available":
 					completedTasks++
-				} else {
+				case "fail", "error":
 					failedTasks++
+				case "restricted":
+					summary.RestrictedTasks++
+				case "cancelled", "deadline_exceeded":
+					summary.CancelledTasks++
+				case "budget_not_executed":
+					summary.BudgetNotExecutedTasks++
+				case "dependency_skipped":
+					skippedTasks++
+				case "stale", "configuration_mismatch":
+					summary.StaleTasks++
+				default:
+					summary.UnknownTasks++
 				}
 				errCode := ""
 				if obs.SafeDetail != nil && obs.SafeDetail.Code != "" {
 					errCode = obs.SafeDetail.Code
-				} else if status == "unavailable" {
+				} else if status == "fail" {
 					errCode = "probe_failed"
 				}
 
+				skipReason := ""
+				if status == "dependency_skipped" {
+					skipReason = "alive_gating_dependency_failed"
+				}
 				rows = append(rows, ProbeReportRow{
+					SkipReason:         skipReason,
+					Attempt:            obs.Attempt,
+					RawVerdict:         obs.Verdict,
 					NodeID:             n.LogicalID,
 					Kind:               string(kind),
 					Status:             status,
@@ -588,7 +628,7 @@ func (o *MaintenanceOrchestrator) executeProbe(ctx context.Context, cfg Maintena
 						Engine:     "mihomo",
 					})
 				} else {
-					failedTasks++
+					summary.CancelledTasks++
 					rows = append(rows, ProbeReportRow{
 						NodeID:     n.LogicalID,
 						Kind:       string(kind),
@@ -610,6 +650,9 @@ func (o *MaintenanceOrchestrator) executeProbe(ctx context.Context, cfg Maintena
 	summary.Summary = fmt.Sprintf("probed %d nodes: %d available, %d completed tasks, %d skipped, %d failed",
 		total, availableNodesCount, completedTasks, skippedTasks, failedTasks)
 
+	if skippedTasks+summary.RestrictedTasks+summary.UnknownTasks+summary.CancelledTasks+summary.BudgetNotExecutedTasks+summary.StaleTasks > 0 {
+		report.Status = "PARTIAL"
+	}
 	report.Probe = summary
 	return nil
 }

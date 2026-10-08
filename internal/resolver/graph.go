@@ -189,6 +189,7 @@ func resolveGroups(
 		}
 
 		rg := ResolvedGroup{
+			EmptyFallbackPass: g.EmptyFallbackPass,
 			ID:                g.ID,
 			Name:              g.Name,
 			GroupType:         g.GroupType,
@@ -340,6 +341,7 @@ func resolveGroups(
 		}
 		sort.Strings(allNodesList)
 		rg.AllNodeLogicalIDs = allNodesList
+		rg.EffectiveEmptyPass = rg.EmptyFallbackPass && (len(rg.Members) == 0 || len(allNodesList) == 0)
 	}
 
 	// Empty group & empty routed group diagnostics
@@ -359,7 +361,7 @@ func resolveGroups(
 	}
 
 	for _, rg := range resolvedGroups {
-		if len(rg.Members) == 0 || len(rg.AllNodeLogicalIDs) == 0 {
+		if !rg.UsesEmptyPass() && (len(rg.Members) == 0 || len(rg.AllNodeLogicalIDs) == 0) {
 			if rule, isRouted := routedGroups[rg.ID]; isRouted {
 				msg := fmt.Sprintf("routed group %q (%s) referenced by rule %q has 0 available nodes", rg.Name, rg.ID, rule.Expression)
 				if len(globalAdmittedNodes) == 0 {

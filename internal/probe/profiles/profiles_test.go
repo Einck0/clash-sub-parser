@@ -33,6 +33,9 @@ func TestHTTP200WithoutSemanticContractIsNotAvailable(t *testing.T) {
 
 func TestChallengeAndLoginAreRestricted(t *testing.T) {
 	for _, profile := range profiles.All() {
+		if profile.Kind == domain.ProbeKindBaseline {
+			continue
+		} // v2 intentionally accepts arbitrary 2xx bodies
 		for _, body := range []string{
 			"<html>Just a moment... cf-chl-turnstile</html>",
 			"<html><form action='/login'>Sign in</form></html>",
@@ -195,7 +198,7 @@ func TestIPRiskExitIdentityWithoutRiskProviderProducesUnknown(t *testing.T) {
 	}
 }
 
-func TestBaselineStrictHTTP204EmptyBodyContract(t *testing.T) {
+func TestBaselineNormalizedAny2xxBodyContract(t *testing.T) {
 	profile := profiles.Baseline()
 
 	t.Run("204_empty_body_is_available", func(t *testing.T) {
@@ -231,8 +234,8 @@ func TestBaselineStrictHTTP204EmptyBodyContract(t *testing.T) {
 				ContractMatched: true,
 				ContractVersion: profile.Contract,
 			})
-			if got.Verdict != domain.VerdictUnknown || got.Reason != "contract_drift" {
-				t.Fatalf("baseline %s verdict = %s (reason=%s), want unknown (reason=contract_drift)", tc.name, got.Verdict, got.Reason)
+			if got.Verdict != domain.VerdictAvailable || got.Reason != "contract_matched" {
+				t.Fatalf("baseline %s verdict = %s (reason=%s), want available (reason=contract_matched)", tc.name, got.Verdict, got.Reason)
 			}
 		})
 	}

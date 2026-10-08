@@ -1,59 +1,24 @@
 ## Why
 
-当前 CSP 实例包含大量历史遗留节点数据（1014 节点，其中 983 历史失活/孤儿节点，31 活跃节点）与累积探针历史。根据用户最新明确授权，系统需要进行彻底的节点数据清空（Clean-slate Reset）与从当前启用订阅源的全新全量拉取及验证，彻底告别旧节点与历史派生关联。同时，前期排查发现历史上 `SanitizeSubscriptionURL` 的 `q.Del("token")` 缺陷导致 `7li` 与 `魔戒` 两个订阅源持久化了丢失 Token 的裸 URL，导致抓取返回 403。
-
-本项目需要在不破坏任何业务配置资产（订阅配置、启停状态、策略分组、规则、风险策略、定时调度、管理设置及不可变发布快照）的前提下：
-1. 实现完整、原子且满足严格外键约束的节点重置闭包（彻底将 nodes 及全部派生表归零，断开旧 last-good 指针，保留业务资产与不可变发布快照，生成受保护的私有重绑计划）；
-2. 基于冷归档稳定身份证据，精准修复 `7li` 与 `魔戒` 两个源的完整 URL（包含 token，不污染日志与其余 7 个源，具备幂等性与安全脱敏）；
-3. 拓展协议解析层对全量协议（HTTP, SOCKS5, VLESS, AnyTLS）的支持，基于 `ComputeConnectionLogicalID` 保证同端点不同凭据的正确区分与去重，不泄露凭据摘要；
-4. 提供正式的维护 CLI 子命令（`csp reset-node-inventory`），支持 `--confirm-backup` 与 `--backup-file` 校验，复用生产 application/repository wiring，在隔离副本上完成全量演练自测；
-5. 实施全新订阅源全量刷新与失败根因归因分析，并在隔离环境下执行公平 Benchmark 与预览发布验证，最终平滑交付生产稳定观察。
+本 Change 已完成库存清空、两源 Token 修复、协议身份扩展、维护 CLI、规则管理及历史生产切换，现有 A/B 实现必须保留。2026-10-08 最新只读预检证明新比较尚未公平覆盖 ALL90、stage-first 执行器及跨启动预算未闭环、最后源码没有全量成功门禁；本次按用户已接受的分阶段实验修订同一 Change，不重做历史操作、不以标题计数相等替代缺陷解释。
 
 ## What Changes
 
-- **节点派生数据彻底清空与不可变发布保护 (Clean-slate Node Reset)**：
-  - 新增原子重置事务能力，清除所有旧 `nodes` (1014 -> 0) 以及全部依赖派生表：`node_sources`, `node_source_history`, `node_connection_heads`, `node_connection_versions`, `node_overrides`, `probe_observations`, `probe_runs`, `probe_batches`, `probe_batch_runs`, `ip_risk_observations`；
-  - 检查并清理显式指向节点的 `group_edges`，在重置前生成受保护的私有重绑计划（Rebind Plan），记录原 group/key 关系与连接配置，避免悬挂外键引用，在 apply 模式下持久化至 0600 权限的私有维护清单；
-  - 保护不可变发布资产：保留 `publications` 与 `publication_payload_refs` 引用的 payloads 及其 body/config 字节与头信息不变，对其关联的 `subscription_entries` 执行 `node_logical_id = NULL` 解耦；清理未被发布引用的旧 raw payloads 与 entries；
-  - 保留留存抓取记录的不可变历史审计事实（`nodes_parsed` 与 `nodes_valid` 原始数值严禁清零伪造审计），通过清空 `node_sources` 切断历史 last-good 成员指针；
-  - 完整保留 9 个订阅配置、启停、分流组（29 个 node_groups 及组间边）、分流规则（163 条 policy_rules）、准入规则、全局过滤器、风险策略与定时调度；
-  - 重置前后执行严格 `PRAGMA foreign_key_check`，前置脏外键提前拒绝，支持失败事务回滚与幂等重复执行。
-- **已证实损坏订阅源配置修复 (Source Token URL Repair)**：
-  - 针对历史 `SanitizeSubscriptionURL` 导致的 token 剥离缺陷，以冷归档 `/home/service/backups/csp-legacy-cold-archive-20260919.db` 中的稳定导入 ID 与归档身份为唯一证据；
-  - 仅修复 `7li` 与 `魔戒` 两个源的持久化完整 URL（恢复 `?token=...`），严格不改动其他 7 个订阅的配置、启停状态（保持 4 enabled / 5 disabled）；
-  - 具备严格幂等性，已恢复或已有 Token 时跳过且不累增 revision 与审计事件；日志与对外报告严禁暴露 raw token 及敏感路径片段。
-- **协议解析与同端点多凭据区分 (Protocol & Connection Identity)**：
-  - 扩展完整 HTTP, SOCKS5, VLESS, AnyTLS 协议解析与 Mihomo 适配；
-  - 实现基于 `domain.ComputeConnectionLogicalID` 的确定性唯一身份计算，将完整认证与传输配置融入不透明哈希，使同端点不同账号节点具备独立 Logical ID，不泄露凭据摘要。
-- **正式维护 CLI 命令与服务复用 (`csp reset-node-inventory`)**：
-  - 在 `cmd/csp` 下新增 `reset-node-inventory` 子命令，提供 `--db`, `--dry-run`, `--apply`, `--confirm-backup`, `--backup-file`, `--restore-source-tokens` 等参数；
-  - 内部直接复用现有 SQLite 仓库与 inventory/subscription application service wiring，不新增额外免密 Web 接口或旁路 HTTP 桥接；
-  - 输出结构化 JSON 报告，包含各表前后计数、外键校验结论、受影响绑定统计与源修复状态。
-- **全新订阅源抓取、归因分析、公平基准与发布验证 (Fresh Fetch, Bench & Preview)**：
-  - 对 4 个已启用的订阅源执行全新全量抓取，对任何失败执行根本原因归因分析；
-  - 实施公平 Benchmark 探针评测与候选发布节点筛选；
-  - 构建预览发布快照，执行前端界面与黑盒验收验证；
-  - 生产发布后执行有界观察窗口，确保服务运行平稳与性能达标。
+- **保留特性 A 与既有 B**：显式空组 PASS 默认严格、非 DIRECT、真实节点计数不变；PCRE 兼容与规则校验/UI 语义保持原合同。只补最终版本回归和必要整改，不 blanket-enable 生产用户 group flag，不 reset/import、重复修 Token 或删除规则。
+- **完成一个 stage-first 比较整改包**：`tools/probe-comparison/run.py` 先执行 CSP 与独立标记的 same-engine Mihomo v1.19.32 comparator 的 ALL90 baseline AB/BA 四侧，然后在四侧 baseline 交集上执行平台阶段。共同资格之外的 discordant 节点保留逐节点诊断，不把未执行、取消或短时失败改写为永久 dead。
+- **native 与归一比较分离**：真实 upstream 固定 commit `3c320fd58aff5235e16218c050ec5b8ce587e233`，native v1.19.31 `Check` 方法保持真实原生配置与默认差异，测速关闭。same-engine comparator 的版本、modfile/传递依赖 diff 与 build provenance 单列。默认只跑主比较四侧；仅在首次请求前冻结且不损害主覆盖的同一总盘子中允许额外两侧 native baseline-only 控制，不强制六侧。
+- **新批次无测速且硬限额**：alive8/media2/speed0；没有 speed URL 或测速请求。实际 baseline runner 每 node×side 响应 body 上限 64 KiB，四侧最坏预留 22.5 MiB；所有 launches 共用原子 reservation/refund ledger、同一起点与截止，整批应用响应 body ≤128 MiB、整批含清理 ≤30 分钟。平台剩余额度四侧公平相等、逐节点参与有界；不保证原生全部 media 能在上限内完成，准确列出未尝试阶段，不漏算非 collector 平台调用，不增加重试、512 MiB 或自动扩额。
+- **真实终态顺序与现存授权**：离线全部代码自测（含 native/same-engine/reference fixtures）→独立最终 Reviewer→已批准的实网 staged batch→最终源码绑定的刷新隔离预览与 Critic→正确 COPY flag 同步嵌入资产→仅授权 CSP Git commit→一致性热备/rollback 演练/app-only runbook 部署与健康验证。7200 秒观察独立于 rollout 完成，不能以健康轮询冒充。发布依据解释清楚的缺陷与适用门禁，不要求 headline 数字一致。
 
 ## Capabilities
 
-### New Capabilities
-- `inventory/clean-slate-node-reset`: 规范节点库存及所有衍生表（连接版本、探针历史、观测数据、历史账本）的完整原子清空闭包，维护不可变发布快照与未受影响业务配置资产，断开旧 last-good 关联。
-- `subscription/source-token-repair`: 规范基于冷归档证据对 `7li` 和 `魔戒` 订阅源完整 URL 的精准恢复规范与脱敏审计机制。
-- `maintenance/reset-node-inventory-cli`: 规范一次性维护 CLI 工具 `csp reset-node-inventory` 的参数设计、dry-run 预检、原子 apply 事务及复用生产 service wiring 规范。
-- `policy/rules-validation`: 规范分流规则只读动态校验 API、空策略组致命错误判定、结构化 issues 诊断与前端规则页防竞态交互。
-
 ### Modified Capabilities
+- `policy/rules-validation`：保留显式空组 PASS、过滤保真、统一校验输入及 UI 刷新/编辑合同；新 UI 改动仍须最终独立审查和成品验收。
+- `maintenance/reset-node-inventory-cli`：补齐 ALL90 优先、四侧 same-engine/native 分离、无测速、整批跨启动预算/时间、固定 manifest 和逐节点阶段归因。
+- `inventory/clean-slate-node-reset`、`subscription/source-token-repair`：保留已完成合同，不新增重复执行授权。
 
 ## Impact
 
-- **数据存储层 (`internal/repository/sqlite/`)**：
-  - 在 inventory/node repository 中提供原子清空闭包方法，确保严格的外键执行顺序与事务边界；
-  - 确保外键校验无悬挂；
-- **应用逻辑层 (`internal/application/inventory/`, `internal/application/subscription/`)**：
-  - 提供 `ResetNodeInventory` 核心编排服务与结果结构；
-  - 提供源 Token URL 精准修复函数与安全审计；
-- **命令行工具 (`cmd/csp/`)**：
-  - 增加 `csp reset-node-inventory` 子命令；
-- **生产隔离性**：
-  - 本轮施工与自测完全在 SQLite 隔离副本及测试用例中执行，绝不直接修改生产容器数据库或生产环境数据。
+本次规划只修改官方 CLI 解析出的同一 Change 的既有 proposal/design/tasks 和 maintenance delta spec，不写业务、测试、生产配置，不派工、不执行实验、构建、部署、提交或 QQ 通知。后续整改写集合及拟定精确 CLI 接口见 design/tasks；已有 A/B 工作树、失败历史与私有证据均保留。
+
+最新证据来源为指定预检 session `2026-10-08T05-50-14-467Z_879111db-a2c3b028-3b1a3e40-48b9.jsonl` 的最终报告 `rep_exec_csp_continuation_preflight_1`。其报告当前 run 为 `pi_run_20261008_134941_3738865`；本规划会话环境无不同的 run_id，不杜撰新 run。READY 只代表此修订计划完整、严格校验通过，不代表施工或发布门禁 PASS，也不重复索取已存在的实施/发布授权。

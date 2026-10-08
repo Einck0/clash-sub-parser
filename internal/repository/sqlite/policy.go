@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -21,7 +22,7 @@ func NewPolicyRepository(db *sql.DB) domain.PolicyRepository {
 
 func (r *policyRepository) GetGroupByID(ctx context.Context, id string) (*domain.NodeGroup, error) {
 	const query = `
-	SELECT id, name, group_type, created_at, updated_at
+	SELECT id, name, group_type, created_at, updated_at, empty_fallback_pass
 	FROM node_groups
 	WHERE id = ?;`
 
@@ -34,6 +35,7 @@ func (r *policyRepository) GetGroupByID(ctx context.Context, id string) (*domain
 		&groupTypeStr,
 		&createdStr,
 		&updatedStr,
+		&group.EmptyFallbackPass,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -51,7 +53,7 @@ func (r *policyRepository) GetGroupByID(ctx context.Context, id string) (*domain
 
 func (r *policyRepository) ListGroups(ctx context.Context) ([]domain.NodeGroup, error) {
 	const query = `
-	SELECT id, name, group_type, created_at, updated_at
+	SELECT id, name, group_type, created_at, updated_at, empty_fallback_pass
 	FROM node_groups
 	ORDER BY name ASC;`
 
@@ -72,6 +74,7 @@ func (r *policyRepository) ListGroups(ctx context.Context) ([]domain.NodeGroup, 
 			&groupTypeStr,
 			&createdStr,
 			&updatedStr,
+			&group.EmptyFallbackPass,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan node group: %w", err)
@@ -92,8 +95,8 @@ func (r *policyRepository) ListGroups(ctx context.Context) ([]domain.NodeGroup, 
 
 func (r *policyRepository) CreateGroup(ctx context.Context, group *domain.NodeGroup) error {
 	const query = `
-	INSERT INTO node_groups (id, name, group_type, created_at, updated_at)
-	VALUES (?, ?, ?, ?, ?);`
+	INSERT INTO node_groups (id, name, group_type, created_at, updated_at, empty_fallback_pass)
+	VALUES (?, ?, ?, ?, ?, ?);`
 
 	nowStr := domain.NowUTC().Format(time.RFC3339)
 	createdStr := group.CreatedAt.Format(time.RFC3339)
@@ -111,6 +114,7 @@ func (r *policyRepository) CreateGroup(ctx context.Context, group *domain.NodeGr
 		string(group.GroupType),
 		createdStr,
 		updatedStr,
+		group.EmptyFallbackPass,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to insert node group: %w", err)
@@ -120,7 +124,7 @@ func (r *policyRepository) CreateGroup(ctx context.Context, group *domain.NodeGr
 
 func (r *policyRepository) UpdateGroup(ctx context.Context, group *domain.NodeGroup) error {
 	const query = `
-	UPDATE node_groups SET name = ?, group_type = ?, updated_at = ?
+	UPDATE node_groups SET name = ?, group_type = ?, updated_at = ?, empty_fallback_pass = ?
 	WHERE id = ?;`
 
 	updatedStr := domain.NowUTC().Format(time.RFC3339)
@@ -128,6 +132,7 @@ func (r *policyRepository) UpdateGroup(ctx context.Context, group *domain.NodeGr
 		group.Name,
 		string(group.GroupType),
 		updatedStr,
+		group.EmptyFallbackPass,
 		group.ID,
 	)
 	if err != nil {
@@ -142,6 +147,62 @@ func (r *policyRepository) UpdateGroup(ctx context.Context, group *domain.NodeGr
 		return domain.NewNotFoundError("node_group_not_found", fmt.Sprintf("node group %s not found", group.ID))
 	}
 	return nil
+}
+
+// SaveGroup uses the existing SQLite transaction boundary for all group components.
+func (r *policyRepository) SaveGroup(ctx context.Context, group *domain.NodeGroup, create bool, edges *[]domain.GroupEdge, changeFilter bool, filter *domain.NodeFilterSpec) error {
+	if err := filter.Validate(); err != nil {
+		return err
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := domain.NowUTC().Format(time.RFC3339)
+	if create {
+		_, err = tx.ExecContext(ctx, `INSERT INTO node_groups (id,name,group_type,created_at,updated_at,empty_fallback_pass) VALUES (?,?,?,?,?,?)`, group.ID, group.Name, group.GroupType, now, now, group.EmptyFallbackPass)
+	} else {
+		var result sql.Result
+		result, err = tx.ExecContext(ctx, `UPDATE node_groups SET name=?,group_type=?,updated_at=?,empty_fallback_pass=? WHERE id=?`, group.Name, group.GroupType, now, group.EmptyFallbackPass, group.ID)
+		if err == nil {
+			n, e := result.RowsAffected()
+			if e != nil {
+				return e
+			}
+			if n == 0 {
+				return domain.NewNotFoundError("node_group_not_found", "group not found")
+			}
+		}
+	}
+	if err != nil {
+		return err
+	}
+	if edges != nil {
+		if _, err = tx.ExecContext(ctx, `DELETE FROM group_edges WHERE parent_group_id=?`, group.ID); err != nil {
+			return err
+		}
+		for _, edge := range *edges {
+			if _, err = tx.ExecContext(ctx, `INSERT INTO group_edges (id,parent_group_id,child_group_id,node_logical_id,position) VALUES (?,?,?,?,?)`, edge.ID, group.ID, edge.ChildGroupID, edge.NodeLogicalID, edge.Position); err != nil {
+				return err
+			}
+		}
+	}
+	if changeFilter {
+		if filter.IsEmpty() {
+			_, err = tx.ExecContext(ctx, `DELETE FROM group_node_filters WHERE group_id=?`, group.ID)
+		} else {
+			var data []byte
+			data, err = json.Marshal(filter)
+			if err == nil {
+				_, err = tx.ExecContext(ctx, `INSERT INTO group_node_filters (group_id,filter_spec,updated_at) VALUES (?,?,?) ON CONFLICT(group_id) DO UPDATE SET filter_spec=excluded.filter_spec,updated_at=excluded.updated_at`, group.ID, string(data), now)
+			}
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (r *policyRepository) DeleteGroup(ctx context.Context, id string) error {

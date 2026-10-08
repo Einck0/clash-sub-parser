@@ -119,11 +119,15 @@ describe('PolicyView Topology & Drawer Linkage', () => {
   })
 
   it('saves group updates and updates topology state reactively', async () => {
-    const patchSpy = vi.spyOn(api, 'patch').mockResolvedValueOnce({
-      id: 'grp-1',
-      name: 'Proxy Group Renamed',
-      group_type: 'urltest',
-      edges: [],
+    let saved = false
+    vi.spyOn(api, 'get').mockImplementation(async (path) => {
+      if (path.endsWith('/groups')) return { items: saved ? [{ ...mockGroups[0], name: 'Proxy Group Renamed' }, mockGroups[1]] : [...mockGroups], total: 2 }
+      if (path.endsWith('/rules')) return { policy_rules: [], admission_rules: [] }
+      return { items: [], spec: { conditions: [] } }
+    })
+    const patchSpy = vi.spyOn(api, 'patch').mockImplementationOnce(async () => {
+      saved = true
+      return { id: 'grp-1', name: 'Proxy Group Renamed', group_type: 'select', edges: [], empty_fallback_pass: false }
     })
 
     await mountPolicyView()
@@ -148,6 +152,7 @@ describe('PolicyView Topology & Drawer Linkage', () => {
     await new Promise((r) => setTimeout(r, 20))
 
     expect(patchSpy).toHaveBeenCalledWith('/api/v1/policies/groups/grp-1', {
+      empty_fallback_pass: false,
       name: 'Proxy Group Renamed',
       group_type: 'select',
     })
@@ -386,6 +391,38 @@ describe('PolicyView Topology & Drawer Linkage', () => {
     // Verify delete button is present on the rule card
     const deleteBtn = ruleCard?.querySelector('[data-testid="delete-rule-btn-01a0b9af-c118-72f9-9949-d94b49fa6ec2"]')
     expect(deleteBtn).not.toBeNull()
+  })
+
+  it('editor keeps explicit PASS and archived regex/not_regex through edit and save', async () => {
+    const expression = '去掉x(?:[0-5](?:\\\\.[0-9]+)?)(?![\\\\d.])|Eeox|einck'
+    vi.spyOn(api, 'get').mockImplementation(async (path) => {
+      if (path.endsWith('/groups')) return { items: [{ ...mockGroups[0], empty_fallback_pass: true, node_filter: { conditions: [{ field: 'display_name', op: 'not_regex', value: expression }] } }], total: 1 }
+      if (path.endsWith('/rules')) return { revision_id: 'fixture', policy_rules: [], admission_rules: [] }
+      return { spec: { conditions: [] }, items: [] }
+    })
+    vi.spyOn(api, 'post').mockResolvedValue({ valid: true, revision_id: 'fixture' })
+    const patch = vi.spyOn(api, 'patch').mockResolvedValue({ ...mockGroups[0], empty_fallback_pass: true })
+    await mountPolicyView()
+    ;(container.querySelector('[data-testid="group-card"] .cursor-pointer') as HTMLElement).click()
+    await nextTick()
+    const dialog = container.querySelector('[role="dialog"]')!
+    const checkbox = dialog.querySelector('[data-testid="empty-fallback-pass"]') as HTMLInputElement
+    expect(checkbox.checked).toBe(true)
+    expect(dialog.textContent).toContain('不是直连')
+    const edit = Array.from(dialog.querySelectorAll('button')).find((b) => b.textContent?.trim() === '编辑')!
+    edit.click()
+    await nextTick()
+    const op = Array.from(dialog.querySelectorAll('select')).find((s) => s.value === 'not_regex')!
+    expect(op).toBeDefined()
+    const value = Array.from(dialog.querySelectorAll('input')).find((i) => i.value === expression)
+    expect(value).toBeDefined()
+    const add = Array.from(dialog.querySelectorAll('button')).find((b) => b.textContent?.includes('添加条件'))!
+    add.click()
+    await nextTick()
+    dialog.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    await nextTick()
+    await new Promise((r) => setTimeout(r, 20))
+    expect(patch).toHaveBeenCalledWith('/api/v1/policies/groups/grp-1', expect.objectContaining({ empty_fallback_pass: true, node_filter: { conditions: [{ field: 'display_name', op: 'not_regex', value: expression }] } }))
   })
 
   it('renders validation incomplete alert banner and allows user retry', async () => {

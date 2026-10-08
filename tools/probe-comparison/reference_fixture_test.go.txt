@@ -1,0 +1,42 @@
+package check
+import (
+ "bytes"
+ "encoding/json"
+ "fmt"
+ "io"
+ "net"
+ "net/http"
+ "net/http/httptest"
+ "strings"
+ "sync/atomic"
+ "testing"
+ "time"
+ "github.com/beck-8/subs-check/config"
+)
+func TestReferenceNativeAndConcurrentStagesNoSpeedNoFetch(t *testing.T){
+ var active,peak,requests atomic.Int32
+ server:=httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){
+  if strings.Contains(r.URL.String(),"speed")||strings.Contains(r.URL.String(),"__down"){t.Error("speed request")}
+  requests.Add(1);n:=active.Add(1);defer active.Add(-1);for old:=peak.Load();n>old&&!peak.CompareAndSwap(old,n);old=peak.Load(){}
+  time.Sleep(20*time.Millisecond)
+  if r.Method=="CONNECT" { conn,rw,err:=w.(http.Hijacker).Hijack();if err!=nil{t.Error(err);return};defer conn.Close();_,_=fmt.Fprint(conn,"HTTP/1.1 200 Connection Established\r\n\r\n");req,err:=http.ReadRequest(rw.Reader);if err!=nil{t.Error(err);return};if !strings.Contains(req.URL.Path,"generate_204"){t.Error("unexpected request")};body:=strings.Repeat("x",100000);resp:=http.Response{StatusCode:200,ProtoMajor:1,ProtoMinor:1,Body:io.NopCloser(strings.NewReader(body)),ContentLength:int64(len(body)),Header:make(http.Header)};_ = resp.Write(conn);return }
+  w.WriteHeader(200);_,_=io.WriteString(w,strings.Repeat("x",100000))
+ }));defer server.Close();host,port,_:=net.SplitHostPort(strings.TrimPrefix(server.URL,"http://"))
+ mappings:=[]map[string]any{};for i:=0;i<16;i++{mappings=append(mappings,map[string]any{"name":fmt.Sprint(i),"username":fmt.Sprint(i),"type":"http","server":host,"port":port})}
+ for _,mode:=range []string{"stage","native"}{peak.Store(0)
+  selected:=mappings;if mode=="native"{selected=mappings[:1]}
+  input:=map[string]any{"mappings":selected,"remaining":128<<20,"deadline":time.Now().Add(5*time.Second),"timeout_ms":3000,"mode":mode,"stage":"baseline"}
+  data,_:=json.Marshal(input);var output bytes.Buffer;t.Setenv("SUB_CHECK_SKIP","")
+  if err:=ReferenceMain(bytes.NewReader(data),&output);err!=nil{t.Fatal(err)}
+  var report struct{Engine string `json:"engine"`;BodyBytes int64 `json:"body_bytes"`;Rows map[string]referenceRecord `json:"rows"`};if err:=json.Unmarshal(output.Bytes(),&report);err!=nil{t.Fatal(err)}
+  if report.BodyBytes<=0||report.BodyBytes>16*65536||len(report.Rows)<len(selected){t.Fatalf("body/node terminal mismatch: %d/%d",report.BodyBytes,len(report.Rows))}
+  if (mode=="stage"&&peak.Load()<2)||peak.Load()>8{t.Fatalf("real alive concurrency=%d",peak.Load())}
+  if config.GlobalConfig.SpeedTestUrl!=""||config.GlobalConfig.SpeedConcurrent!=0||len(config.GlobalConfig.SubUrls)!=0||len(config.GlobalConfig.SubUrlsRemote)!=0||config.GlobalConfig.EnableWebUI||config.GlobalConfig.CallbackScript!=""{t.Fatal("external side effects configured")}
+  for _,row:=range report.Rows{if row.Stage!="baseline"{continue};if !row.Executed||row.Category!="available"{t.Fatalf("bad actual attempt: %+v",row)}}
+ }
+ if requests.Load()!=17{t.Fatalf("hidden requests: %d",requests.Load())}
+}
+func TestReferenceNoSpeedStageRejected(t *testing.T){
+ input:=map[string]any{"mode":"stage","stage":"speed","timeout_ms":1000,"deadline":time.Now().Add(time.Second)};data,_:=json.Marshal(input)
+ if ReferenceMain(bytes.NewReader(data),io.Discard)==nil{t.Fatal("speed permitted")}
+}

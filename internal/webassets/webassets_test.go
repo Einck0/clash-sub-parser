@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -129,5 +130,32 @@ func TestHandler_StaticAsset(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Errorf("expected status 200 for static asset %s, got %d", foundAsset, rec.Code)
 		}
+	}
+}
+
+func TestFS_CustomDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	indexFile := tmpDir + "/index.html"
+	if err := os.WriteFile(indexFile, []byte("<!DOCTYPE html><html><body><div id=\"app\">custom</div></body></html>"), 0644); err != nil {
+		t.Fatalf("failed to write test index.html: %v", err)
+	}
+
+	t.Setenv("CSP_WEB_DIR", tmpDir)
+	subFS, err := webassets.FS()
+	if err != nil {
+		t.Fatalf("FS() with CSP_WEB_DIR error: %v", err)
+	}
+	f, err := subFS.Open("index.html")
+	if err != nil {
+		t.Fatalf("failed to open index.html from custom dir: %v", err)
+	}
+	defer f.Close()
+
+	content, err := io.ReadAll(f)
+	if err != nil {
+		t.Fatalf("failed to read: %v", err)
+	}
+	if !strings.Contains(string(content), "custom") {
+		t.Fatalf("expected custom content, got %s", string(content))
 	}
 }

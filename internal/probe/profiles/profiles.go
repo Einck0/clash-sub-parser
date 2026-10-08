@@ -14,12 +14,14 @@ import (
 const (
 	MinValidSpeedBytes int64 = 1024
 
-	BaselineVersion  = "baseline-v1"
-	GeoVersion       = "geo-v1"
-	StreamingVersion = "streaming-v1"
-	AIVersion        = "ai-v1"
-	SpeedVersion     = "speed-v1"
-	IPRiskVersion    = "ip-risk-v1"
+	BaselineVersion        = "baseline-v2-any2xx"
+	BaselineSource         = "beck-8/subs-check@3c320fd58aff5235e16218c050ec5b8ce587e233/check/platform/alive.go"
+	LegacyBaselineContract = "csp-baseline-v1:204+empty"
+	GeoVersion             = "geo-v1"
+	StreamingVersion       = "streaming-v1"
+	AIVersion              = "ai-v1"
+	SpeedVersion           = "speed-v1"
+	IPRiskVersion          = "ip-risk-v1"
 )
 
 // SpeedBudget contains the hard limits for an opt-in throughput probe.
@@ -79,12 +81,13 @@ func (p Profile) Validate() error {
 	return nil
 }
 
-// Evaluate applies the profile contract. HTTP status alone never produces available.
+// Evaluate applies the versioned semantic contract. Baseline intentionally
+// uses upstream any-2xx; platform semantics remain stricter.
 func (p Profile) Evaluate(result Result) Evaluation {
 	if p.Kind == domain.ProbeKindIPRisk && result.ExitIdentityMissing {
 		return Evaluation{Verdict: domain.VerdictUnknown, Reason: "missing_exit_identity"}
 	}
-	if hasRestrictionMarker(result.Body) || result.StatusCode == http.StatusUnauthorized || result.StatusCode == http.StatusForbidden ||
+	if (p.Kind != domain.ProbeKindBaseline && hasRestrictionMarker(result.Body)) || result.StatusCode == http.StatusUnauthorized || result.StatusCode == http.StatusForbidden ||
 		((p.Kind == domain.ProbeKindStreaming || p.Kind == domain.ProbeKindAI) && result.StatusCode == http.StatusUnavailableForLegalReasons) {
 		if p.Kind == domain.ProbeKindIPRisk {
 			return Evaluation{Verdict: domain.VerdictUnknown, Reason: "access_restricted"}
@@ -109,7 +112,7 @@ func (p Profile) Evaluate(result Result) Evaluation {
 	if result.StatusCode < 200 || result.StatusCode >= 400 {
 		return Evaluation{Verdict: domain.VerdictUnknown, Reason: "unexpected_status"}
 	}
-	if p.Kind == domain.ProbeKindBaseline && (result.StatusCode != http.StatusNoContent || len(result.Body) != 0 || result.BytesRead != 0) {
+	if p.Kind == domain.ProbeKindBaseline && (result.StatusCode < 200 || result.StatusCode >= 300) {
 		return Evaluation{Verdict: domain.VerdictUnknown, Reason: "contract_drift"}
 	}
 	if p.Kind == domain.ProbeKindGeo {

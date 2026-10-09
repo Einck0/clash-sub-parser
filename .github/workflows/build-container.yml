@@ -67,7 +67,13 @@ jobs:
         run: go vet -tags "with_quic with_wireguard" ./...
 
       - name: Run Go tests
-        run: go test -v -tags "with_quic with_wireguard" ./...
+        run: |
+          set +e
+          go test -json -v -tags "with_quic with_wireguard" ./... > /tmp/go-test-output.json 2>&1
+          TEST_EXIT=$?
+          set -e
+          python3 -B .github/scripts/annotate_go_test.py /tmp/go-test-output.json $TEST_EXIT
+          exit $TEST_EXIT
 
   build:
     name: Build and Push to GHCR

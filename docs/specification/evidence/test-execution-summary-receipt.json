@@ -1,0 +1,108 @@
+{
+  "audit_metadata": {
+    "audit_timestamp": "2026-10-09T11:22:00Z",
+    "epoch": 3,
+    "change": "csp-living-spec-consolidation",
+    "head_commit": "1c5a604f9d4317dd7458710e30618dba13e26724",
+    "role": "executor",
+    "gate": "executor_self_test",
+    "original_receipt_sha256": "14a67e565050ab68180bf31d3ce1f1bafc58e0cb55008190217098f7de0608fb",
+    "confidentiality_notice": "Sanitized non-sensitive machine receipt summary; raw logs and environmental paths omitted; full verification preserved in private tmp archive."
+  },
+  "statistics": {
+    "total_commands": 41,
+    "total_executions": 178,
+    "top_level_executions": 125,
+    "subtest_executions": 53,
+    "unique_top_level_tests": 91,
+    "unique_subtests": 46,
+    "total_unique_tests": 137,
+    "zero_run_commands": [],
+    "failed_commands": []
+  },
+  "deduplication_audit": {
+    "explanation": "Multiple FRs reuse identical test commands/fixtures for shared domain logic. Cross-FR reuse accounts for the difference between total executions (178) and unique tests (137 = 91 top-level + 46 subtests). Reuse is documented as reuse, not independent test cases.",
+    "reused_tests": [
+      {
+        "command_ids": [
+          "CV-012",
+          "CV-014"
+        ],
+        "fr_ids": [
+          "FR-POL-04",
+          "FR-POL-06"
+        ],
+        "test": "TestResolver_DynamicGroup_MatchesFromGlobalPool"
+      },
+      {
+        "command_ids": [
+          "CV-007",
+          "CV-015"
+        ],
+        "fr_ids": [
+          "FR-INV-05",
+          "FR-POL-06"
+        ],
+        "test": "TestNodeRepository_ListAll_AndHealthPredicatesConservation"
+      },
+      {
+        "command_ids": [
+          "CV-008",
+          "CV-034"
+        ],
+        "fr_ids": [
+          "FR-INV-06",
+          "FR-AUTH-03"
+        ],
+        "test": "TestUpdateNodeConnectionPlaintextDirectEdit"
+      },
+      {
+        "command_ids": [
+          "CV-031",
+          "CV-033"
+        ],
+        "fr_ids": [
+          "FR-AUTH-01",
+          "FR-AUTH-02"
+        ],
+        "test": "TestAuthSettingsAPIAndAdminModes"
+      },
+      {
+        "command_ids": [
+          "CV-027",
+          "CV-028"
+        ],
+        "fr_ids": [
+          "FR-PUB-04",
+          "FR-PUB-05"
+        ],
+        "test": "TestPublicationClientExportAuthModes (1 top + 7 subtests)"
+      },
+      {
+        "command_ids": [
+          "CV-011",
+          "CV-038"
+        ],
+        "fr_ids": [
+          "FR-POL-03",
+          "FR-UI-03"
+        ],
+        "test": "web/src/features/policy/PolicyView.test.ts (13 cases)"
+      },
+      {
+        "command_ids": [
+          "CV-036",
+          "CV-037",
+          "CV-040"
+        ],
+        "fr_ids": [
+          "FR-UI-01",
+          "FR-UI-02",
+          "FR-UI-05"
+        ],
+        "test": "web/src/features/nodes/nodeView.test.ts (8 cases)"
+      }
+    ]
+  },
+  "command_summaries": []
+}

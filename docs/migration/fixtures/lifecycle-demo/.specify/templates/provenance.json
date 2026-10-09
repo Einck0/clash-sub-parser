@@ -1,0 +1,35 @@
+{
+  "provenance_metadata": {
+    "source_repository": "https://github.com/github/spec-kit",
+    "pinned_commit": "93989802b1401c99cc7de6e4ed76572f9cb662e8",
+    "retrieved_at": "2026-10-09T01:30:00Z",
+    "imported_by": "executor",
+    "governance_disclosure": "These templates are official reference copies of GitHub Spec-Kit adapted for the clash-sub-parser living specification layout. This directory does NOT install or execute the external SpecKit CLI runtime. Repo-local OpenSpec CLI (openspec) remains the official change execution, validation, and multi-agent governance framework under pi-governance. Replacement or migration of the execution framework requires explicit user consultation and authorization."
+  },
+  "templates": [
+    {
+      "path": "templates/spec-template.md",
+      "local_path": ".specify/templates/spec-template.md",
+      "source_url": "https://raw.githubusercontent.com/github/spec-kit/93989802b1401c99cc7de6e4ed76572f9cb662e8/templates/spec-template.md",
+      "sha256": "3945437fc35cd30a5b2bf7beea680337c3516826d3efa5a6b92c4a7eca1ba28e"
+    },
+    {
+      "path": "templates/plan-template.md",
+      "local_path": ".specify/templates/plan-template.md",
+      "source_url": "https://raw.githubusercontent.com/github/spec-kit/93989802b1401c99cc7de6e4ed76572f9cb662e8/templates/plan-template.md",
+      "sha256": "dfba43da2b2a207ff8c177a0fba03af074fd45e261696b4b64172041fad2e992"
+    },
+    {
+      "path": "templates/tasks-template.md",
+      "local_path": ".specify/templates/tasks-template.md",
+      "source_url": "https://raw.githubusercontent.com/github/spec-kit/93989802b1401c99cc7de6e4ed76572f9cb662e8/templates/tasks-template.md",
+      "sha256": "1e448e9153462e8c5b5a55231a54c756d870a82950d4dd9425a2bf5b7008a0d9"
+    },
+    {
+      "path": "docs/guides/evolving-specs.md",
+      "local_path": ".specify/templates/evolving-specs.md",
+      "source_url": "https://raw.githubusercontent.com/github/spec-kit/93989802b1401c99cc7de6e4ed76572f9cb662e8/docs/guides/evolving-specs.md",
+      "sha256": "8a1dfbc3f20f470f082ea75c9614e2f6992102b148870ddcfa1e2ba6ce93e978"
+    }
+  ]
+}

@@ -1,0 +1,61 @@
+{
+  "audit_metadata": {
+    "audit_timestamp": "2026-10-09T11:45:00Z",
+    "epoch": 3,
+    "change": "csp-living-spec-consolidation",
+    "target_repo": "/home/service/clash-sub-parser",
+    "head_commit": "1c5a604f9d4317dd7458710e30618dba13e26724",
+    "git_tree_status": "CLEAN (docs untracked only, zero code modified)",
+    "receipt_sha256": "14a67e565050ab68180bf31d3ce1f1bafc58e0cb55008190217098f7de0608fb",
+    "docs_manifest_sha256": "3d0e0407d94aa7b4367d80ac6c5a75f523fd7b86a3e8b245909ea0de3c3a0645",
+    "docs_manifest_file_sha256": "a25dea76ae9869592be57d922cd8a4c91f284cbe5b816e9a280e26597f3bc95b",
+    "governance_verdict": "PASS",
+    "verdict_scope": "DOCUMENTATION_AND_CONFORMANCE_SPECIFICATION_ONLY",
+    "production_acceptance": false,
+    "governance_role": "reviewer",
+    "gate": "reviewer"
+  },
+  "remediation_status": {
+    "P0_zero_case_and_regex_escape": {
+      "status": "RESOLVED",
+      "detail": "Commands decoupled from Markdown tables into docs/specification/verification-commands.md (CV-001 ~ CV-041); FR-PROB-07 mapped to CV-023 (^TestBuildOptionsRejectsUnsafeProtocolOptions$, 7 passed); regex pipe alternation uses Go standard parentheses with zero escape failures."
+    },
+    "P1_active_risk_boundary_in_Q1_4": {
+      "status": "RESOLVED",
+      "detail": "Q1.3 (formerly Q1.4) strictly applies to admitted active nodes (active=true, not risk-filtered), deciding only how parent health filters treat healthy/degraded/undetermined states without bypassing risk or inactive node exclusions."
+    },
+    "P1_Q6_cross_page_selection_assumptions": {
+      "status": "RESOLVED",
+      "detail": "Server-side pagination confirmed as standard baseline contract; cross-page batch selection explicitly classified as optional candidate (\"如果需要，待确定\"), defaulting to standard single-page selection."
+    },
+    "P1_Q3_historical_recovery_scope": {
+      "status": "RESOLVED",
+      "detail": "Scope clearly bounded to 3 audited round-robin groups and cheap nodes; PASS fallback explicitly rejected as an equivalent substitute for recovery."
+    },
+    "P2_historical_requirements_inventory": {
+      "status": "RESOLVED",
+      "detail": "Created docs/specification/historical-requirement-register.md covering all 259 HRs and 463 Scenarios across 63 historical spec files with exact line anchors; honestly categorized as inventory status (232 mapped pending reverification, 3 conflicts, 24 unverified stubs) rather than false complete compliance."
+    }
+  },
+  "test_execution_audit": {
+    "total_commands": 41,
+    "total_executions": 178,
+    "top_level_executions": 125,
+    "subtest_executions": 53,
+    "unique_top_level_tests": 91,
+    "unique_subtests": 46,
+    "total_unique_tests": 137,
+    "zero_run_commands": 0,
+    "failed_commands": 0
+  },
+  "conformance_matrix_summary": {
+    "total_frs": 37,
+    "compliant": 26,
+    "non_compliant": 3,
+    "partially_compliant": 6,
+    "needs_clarification": 2,
+    "unverified": 0,
+    "governance_limitation": "Compliant status represents local automated unit/contract verification at HEAD; 259 historical requirements remain tracked in register pending reverification."
+  },
+  "clarification_questions_ready": true
+}

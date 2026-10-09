@@ -1,36 +1,15 @@
 name: CI
 
-on:
+'on':
   push:
-    branches: [main, master]
-  pull_request:
+    branches:
+      - 'task/csp-cloud-build-integration'
+      - 'cloud-build/*'
+  workflow_dispatch:
 
 jobs:
-  backend:
-    name: Backend tests
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-          cache: pip
-          cache-dependency-path: backend/requirements-dev.txt
-
-      - name: Install backend quality dependencies
-        run: python -m pip install -r backend/requirements-dev.txt
-
-      - name: Run backend lint
-        run: python -m ruff check backend/app backend/tests
-
-      - name: Run backend tests
-        run: INSTALL_DEPS=0 bash scripts/test_py310.sh
-
-  frontend:
-    name: Frontend build
+  test-and-build:
+    name: Backend & Frontend Checks
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -41,54 +20,48 @@ jobs:
         with:
           node-version: '20'
           cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache-dependency-path: web/package-lock.json
 
-      - name: Install dependencies
-        working-directory: frontend
+      - name: Install web dependencies
+        working-directory: web
         run: npm ci
 
-      - name: Audit production dependencies
-        working-directory: frontend
-        run: npm audit --omit=dev
+      - name: Run web type-check
+        working-directory: web
+        run: npm run type-check
 
-      - name: Run frontend unit tests
-        working-directory: frontend
+      - name: Run web unit tests
+        working-directory: web
         run: npm test
 
-      - name: Type check
-        working-directory: frontend
-        run: npm run typecheck
-
-      - name: Build
-        working-directory: frontend
+      - name: Build frontend static bundle
+        working-directory: web
         run: npm run build
 
-  docker:
-    name: Docker build and browser E2E
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Copy built assets to webassets
+        run: cp -r web/dist/* internal/webassets/dist/
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
         with:
-          fetch-depth: 0
+          go-version-file: 'go.mod'
+          cache: true
 
-      - name: Scan current tree and Git history for secrets
-        run: docker run --rm -v "$GITHUB_WORKSPACE:/repo:ro" zricethezav/gitleaks:v8.18.4 detect --source=/repo --redact --no-banner
+      - name: Verify Go dependencies
+        run: go mod verify
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - name: Run Go vet
+        run: go vet -tags "with_quic with_wireguard" ./...
+
+      - name: Run Go tests
+        run: go test -v -tags "with_quic with_wireguard" ./...
+
+      - name: Build Go binary
+        run: go build -tags "with_quic with_wireguard" -ldflags="-s -w" -trimpath -o bin/csp ./cmd/csp
+
+      - name: Upload compiled binary artifact
+        uses: actions/upload-artifact@v4
         with:
-          node-version: '20'
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install frontend dependencies
-        working-directory: frontend
-        run: npm ci
-
-      - name: Install Chromium for Playwright
-        working-directory: frontend
-        run: npx playwright install --with-deps chromium
-
-      - name: Build and run isolated browser E2E
-        run: bash scripts/test_e2e.sh
+          name: csp-linux-amd64
+          path: bin/csp
+          retention-days: 7

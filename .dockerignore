@@ -1,8 +1,34 @@
+# VCS & Agent Metadata
 .git
+.pi
+.hermes
 .agents
 .codex
 .learnings
 .gitignore
+.github
+
+# Documentation & Specifications
+docs
+openspec
+graphify-out
+project.md
+DESIGN_REQUIREMENTS.md
+CODE_OF_CONDUCT.md
+CONTRIBUTING.md
+SECURITY.md
+README*.md
+
+# Web & Frontend Build Artifacts
+web/node_modules
+web/dist
+web/.vite
+frontend/node_modules
+frontend/dist
+frontend/.vite
+npm-debug.log*
+
+# Test, Cache & Python Artifacts
 .pytest_cache
 .ruff_cache
 .venv
@@ -13,6 +39,10 @@ __pycache__
 *.pyc
 *.pyo
 *.pyd
+*.test
+test/
+
+# Local databases & logs
 *.log
 *.db
 *.sqlite
@@ -22,10 +52,8 @@ backend/*.sqlite
 backend/*.sqlite3
 backend/.pytest_cache
 backend/tests
-frontend/node_modules
-frontend/dist
-frontend/.vite
-npm-debug.log*
+
+# Environment & Temp Files
 .env
 .env.*
 !.env.example

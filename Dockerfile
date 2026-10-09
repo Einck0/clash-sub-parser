@@ -17,7 +17,7 @@ COPY web/ ./
 RUN npm run build
 
 # Stage 2: Compile pure-static single Go executable with embedded assets
-FROM golang:alpine AS go-builder
+FROM golang:1.27.1-alpine AS go-builder
 
 ENV COMPILER_BUILD_EPOCH=20260925_periodic_filters_v1
 
@@ -39,14 +39,16 @@ COPY internal/ ./internal/
 COPY migrations/ ./migrations/
 COPY --from=frontend-builder /web/dist/ ./internal/webassets/dist/
 
-# Build pure-static stripped Go binary
-RUN go build -ldflags="-s -w" -trimpath -o /src/bin/csp ./cmd/csp
+# Build pure-static stripped Go binary with sing-box tags
+RUN go build -tags "with_quic with_wireguard" -ldflags="-s -w" -trimpath -o /src/bin/csp ./cmd/csp
 
 # Stage 3: Minimal Alpine 3.20 non-root runtime
 FROM alpine:3.20 AS runtime
 
+ARG ALPINE_MIRROR=mirrors.ustc.edu.cn
+
 # Install basic CA certificates, timezone data, curl, and sqlite for operations and container health check
-RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.ustc.edu.cn/g' /etc/apk/repositories && \
+RUN if [ -n "$ALPINE_MIRROR" ]; then sed -i "s|dl-cdn.alpinelinux.org|$ALPINE_MIRROR|g" /etc/apk/repositories; fi && \
     apk add --no-cache ca-certificates tzdata curl sqlite && \
     rm -rf /var/cache/apk/*
 

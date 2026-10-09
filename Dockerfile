@@ -5,11 +5,11 @@ FROM node:20-alpine AS frontend-builder
 
 WORKDIR /web
 
-ARG NPM_CONFIG_REGISTRY=https://registry.npmmirror.com
+ARG NPM_CONFIG_REGISTRY=https://registry.npmjs.org
 
 # Cache package dependencies
 COPY web/package*.json ./
-RUN npm ci ${NPM_CONFIG_REGISTRY:+--registry=$NPM_CONFIG_REGISTRY}
+RUN npm ci --include=dev ${NPM_CONFIG_REGISTRY:+--registry=$NPM_CONFIG_REGISTRY}
 
 # Copy web source and compile production static bundle into dist
 ENV FRONTEND_BUILD_EPOCH=20260925_periodic_filters_v1

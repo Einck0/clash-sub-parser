@@ -24,7 +24,7 @@ jobs:
 
       - name: Install web dependencies
         working-directory: web
-        run: npm ci
+        run: npm ci --include=dev
 
       - name: Run web type-check
         working-directory: web

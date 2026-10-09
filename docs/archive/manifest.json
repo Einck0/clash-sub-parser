@@ -1,0 +1,3803 @@
+{
+  "schema_version": "1.0.0",
+  "project": "clash-sub-parser",
+  "archived_at": "2026-10-09T16:26:14Z",
+  "source_directory": "openspec",
+  "destination_directory": "docs/archive/openspec",
+  "total_files_count": 189,
+  "total_bytes": 987997,
+  "census_parity_verified": true,
+  "pointer_mappings": [
+    {
+      "source_logical_id": "openspec/changes/csp-audit-and-defect-remediation-v1/.openspec.yaml",
+      "archive_pointer": "docs/archive/openspec/changes/csp-audit-and-defect-remediation-v1/.openspec.yaml",
+      "physical_sha256": "5edc88a042fdda2550686e54689bdd6779b13445bcaf782a1af9426634b9b4fb",
+      "size_bytes": 40,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-audit-and-defect-remediation-v1/design.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-audit-and-defect-remediation-v1/design.md",
+      "physical_sha256": "b276d5b74dee0baeb48a7ebdb4d052aa39abe66859030f7f7dfe0edf2766a006",
+      "size_bytes": 10813,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-audit-and-defect-remediation-v1/proposal.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-audit-and-defect-remediation-v1/proposal.md",
+      "physical_sha256": "070ab4619584a278fd6d887b4eaef971f16cfd4a675a91a3aaed068c600bc9af",
+      "size_bytes": 8780,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-audit-and-defect-remediation-v1/specs/audit-and-defect-remediation/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-audit-and-defect-remediation-v1/specs/audit-and-defect-remediation/spec.md",
+      "physical_sha256": "e135be9446a2912f57fbf69a275a03ca754030c2f3b5aa5f90d37975f275fe64",
+      "size_bytes": 15168,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-audit-and-defect-remediation-v1/tasks.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-audit-and-defect-remediation-v1/tasks.md",
+      "physical_sha256": "09bf15f390afcb5581e54282e4e2d23c7009e9af67f47e741111d82372ab3a4d",
+      "size_bytes": 7595,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-auth-deadlock-v1/.openspec.yaml",
+      "archive_pointer": "docs/archive/openspec/changes/csp-auth-deadlock-v1/.openspec.yaml",
+      "physical_sha256": "50c36dfa766b2fc52e8a7d270b1d67cc487bcd95d1b4c8a5f929d62738e3c77e",
+      "size_bytes": 40,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-auth-deadlock-v1/design.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-auth-deadlock-v1/design.md",
+      "physical_sha256": "663aa1398d387d660b3820bee8cbbed5093dabc0a97c3a45a844de805688f79f",
+      "size_bytes": 10409,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-auth-deadlock-v1/proposal.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-auth-deadlock-v1/proposal.md",
+      "physical_sha256": "ec6d3fecf6cd09621a7ca07617051cac5f0d09320fe3994cc67669145699e6aa",
+      "size_bytes": 4561,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-auth-deadlock-v1/specs/control-plane-auth-lifecycle/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-auth-deadlock-v1/specs/control-plane-auth-lifecycle/spec.md",
+      "physical_sha256": "7857048a49e348b5e1ae8a7102689415fbe7afe458e3eaa466802be594457630",
+      "size_bytes": 4078,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-auth-deadlock-v1/specs/critic-headless-adversarial-verification/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-auth-deadlock-v1/specs/critic-headless-adversarial-verification/spec.md",
+      "physical_sha256": "2981a2ae6bdbb6fa487980012f6fcb652ae1930c2e80ce2470c32c126920f003",
+      "size_bytes": 3654,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-auth-deadlock-v1/specs/frontend-credential-management/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-auth-deadlock-v1/specs/frontend-credential-management/spec.md",
+      "physical_sha256": "57e67d2dea80a2a96b3d728322eb20379169e5f872505bbb17fdff02213c9af2",
+      "size_bytes": 3978,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-auth-deadlock-v1/tasks.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-auth-deadlock-v1/tasks.md",
+      "physical_sha256": "932981dd9b32b7c4c674adeec01b4376d7f68c9f28d02912e285e9c103e0b36f",
+      "size_bytes": 4636,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-clean-slate-v1/.openspec.yaml",
+      "archive_pointer": "docs/archive/openspec/changes/csp-clean-slate-v1/.openspec.yaml",
+      "physical_sha256": "7cbda91d0db42e7f3a4c0edd23a86fbf0cb02498c21edb9ec0b20199c529e618",
+      "size_bytes": 40,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-clean-slate-v1/README.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-clean-slate-v1/README.md",
+      "physical_sha256": "79e6be07acf07435a408b1fae93cd34a584e7b14a3fffa960954add7b6898368",
+      "size_bytes": 90,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-clean-slate-v1/design.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-clean-slate-v1/design.md",
+      "physical_sha256": "716f45da8f62850cc3e7ecd3269a4110127b852074fb60eadcd8135d727d74e2",
+      "size_bytes": 15981,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-clean-slate-v1/proposal.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-clean-slate-v1/proposal.md",
+      "physical_sha256": "e300e72a069f772dddd392a308ce408b0bfd5ad0a69fe00722d7f23f62c6d5ae",
+      "size_bytes": 3276,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-clean-slate-v1/specs/admin-workbench-experience/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-clean-slate-v1/specs/admin-workbench-experience/spec.md",
+      "physical_sha256": "a6b516d5f2f903b08fb26d323d42ccd90d059f77dcfc39815f449bbaf236504f",
+      "size_bytes": 2395,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-clean-slate-v1/specs/clean-slate-import-and-operations/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-clean-slate-v1/specs/clean-slate-import-and-operations/spec.md",
+      "physical_sha256": "df26712fbe57c8eefe8410951f86dd8d84c7f89668f16e5adebeb880a35ae974",
+      "size_bytes": 2807,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-clean-slate-v1/specs/control-plane-boundary/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-clean-slate-v1/specs/control-plane-boundary/spec.md",
+      "physical_sha256": "cb02af33e49ee5c491dfa867fb688b2cb89bb9f49b13585ee41d7ebf76b3f466",
+      "size_bytes": 2537,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-clean-slate-v1/specs/policy-tree-and-compiler/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-clean-slate-v1/specs/policy-tree-and-compiler/spec.md",
+      "physical_sha256": "e94bd695e14aa29146fbe227f42cb6322b94399ee55ca3dbab31ded767a983f8",
+      "size_bytes": 2329,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-clean-slate-v1/specs/probe-evidence-engine/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-clean-slate-v1/specs/probe-evidence-engine/spec.md",
+      "physical_sha256": "83141ccecc73faf2d6e310ad2d0270d28889f7669ff2bd84eb4173830f0e9e84",
+      "size_bytes": 2853,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-clean-slate-v1/specs/subscription-inventory/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-clean-slate-v1/specs/subscription-inventory/spec.md",
+      "physical_sha256": "6d3ecd6755fb8b6c8b7624a2df98927443c25848d907ae98b2897785c39b4ed7",
+      "size_bytes": 2690,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-clean-slate-v1/tasks.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-clean-slate-v1/tasks.md",
+      "physical_sha256": "5ac3239897009e56e399651fbdbc6f072f864171843cde54afa29d1b5264c54d",
+      "size_bytes": 12290,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-debloat-over-engineering/.openspec.yaml",
+      "archive_pointer": "docs/archive/openspec/changes/csp-debloat-over-engineering/.openspec.yaml",
+      "physical_sha256": "062e545e250441aa0692c22d7a65e07334f1c0f2e706c0e297f36065b6a0699c",
+      "size_bytes": 40,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-debloat-over-engineering/design.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-debloat-over-engineering/design.md",
+      "physical_sha256": "0b0202be0d0766c63885038a3bf684b72fb338d908b85330be9ede091fd1a26a",
+      "size_bytes": 10263,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-debloat-over-engineering/proposal.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-debloat-over-engineering/proposal.md",
+      "physical_sha256": "17a3a943f58f3ddd82339612955737d6d3fcb0db145242dc6a29221b3a4f45f1",
+      "size_bytes": 3802,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-debloat-over-engineering/specs/debloat/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-debloat-over-engineering/specs/debloat/spec.md",
+      "physical_sha256": "ecb7abff881ba5c6a125c6f608132aa4501362fda82bdc70df489640c56dd3c3",
+      "size_bytes": 6499,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-debloat-over-engineering/tasks.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-debloat-over-engineering/tasks.md",
+      "physical_sha256": "6672d2f000a3250d3f918dbe381b03b7994a595878e8b60b60043f0c41b84cb2",
+      "size_bytes": 8497,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-decoupled-auth-settings-and-publication-recovery/.openspec.yaml",
+      "archive_pointer": "docs/archive/openspec/changes/csp-decoupled-auth-settings-and-publication-recovery/.openspec.yaml",
+      "physical_sha256": "dadfffd827282f22738d1215a8fa326bc6e3bda0a2aae3e3af6d203a1ef4c4aa",
+      "size_bytes": 40,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-decoupled-auth-settings-and-publication-recovery/design.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-decoupled-auth-settings-and-publication-recovery/design.md",
+      "physical_sha256": "0456225a99b927d97e38ae84bbf7fb72f4bfdb35c4a55353c71305a5c3405b50",
+      "size_bytes": 6725,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-decoupled-auth-settings-and-publication-recovery/proposal.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-decoupled-auth-settings-and-publication-recovery/proposal.md",
+      "physical_sha256": "3fd54e6cae0d69fcfcc9306db4d2870358f5c1d55105e4b0571752069b68d767",
+      "size_bytes": 4946,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-decoupled-auth-settings-and-publication-recovery/specs/baseline-auth-and-export/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-decoupled-auth-settings-and-publication-recovery/specs/baseline-auth-and-export/spec.md",
+      "physical_sha256": "2d21a15750d81ac3192813096fb77446e15d46ab25faf27bcc15e5f8b8f2456a",
+      "size_bytes": 4069,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-decoupled-auth-settings-and-publication-recovery/specs/decoupled-auth-settings/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-decoupled-auth-settings-and-publication-recovery/specs/decoupled-auth-settings/spec.md",
+      "physical_sha256": "1347fcd5a264b72597d8740dca852c91ed11bf2b565111de0f1b5552dfd12d26",
+      "size_bytes": 5979,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-decoupled-auth-settings-and-publication-recovery/specs/publication-export-auth-recovery/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-decoupled-auth-settings-and-publication-recovery/specs/publication-export-auth-recovery/spec.md",
+      "physical_sha256": "c2c95b41d875a11893b8d37f3e71a993aafd1209f4ab59148f20376b1264a616",
+      "size_bytes": 6032,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-decoupled-auth-settings-and-publication-recovery/tasks.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-decoupled-auth-settings-and-publication-recovery/tasks.md",
+      "physical_sha256": "294408a71d493c13b8fdaec947c42c0df5d700524a30fcfca2ba69d3fca84ff5",
+      "size_bytes": 5084,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-fresh-inventory-full-validation/.openspec.yaml",
+      "archive_pointer": "docs/archive/openspec/changes/csp-fresh-inventory-full-validation/.openspec.yaml",
+      "physical_sha256": "720b3de6231f9647898feba395449b03234e0c4fa3bd4ce47fc3bb341b0f16d6",
+      "size_bytes": 40,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-fresh-inventory-full-validation/README.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-fresh-inventory-full-validation/README.md",
+      "physical_sha256": "47e6036be41a0a37f951dacb572f6d92e42a7d65611cee699d923933e79a2c28",
+      "size_bytes": 116,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-fresh-inventory-full-validation/design.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-fresh-inventory-full-validation/design.md",
+      "physical_sha256": "0a1e3dad4ec43b55e1fdeec4b4d5a06a3f590cf646dcec7b0e228b9fec1822c6",
+      "size_bytes": 21062,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-fresh-inventory-full-validation/proposal.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-fresh-inventory-full-validation/proposal.md",
+      "physical_sha256": "3e5329b834a2dfd2dce3e5973ce288df919c84c8039f4c441f5a3d9e87640eb6",
+      "size_bytes": 4042,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-fresh-inventory-full-validation/specs/inventory/clean-slate-node-reset/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-fresh-inventory-full-validation/specs/inventory/clean-slate-node-reset/spec.md",
+      "physical_sha256": "4301d607543973a1b1c06ff65ce3e8f3620f160d8bf54749a85d9a8b657079d6",
+      "size_bytes": 5181,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-fresh-inventory-full-validation/specs/maintenance/reset-node-inventory-cli/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-fresh-inventory-full-validation/specs/maintenance/reset-node-inventory-cli/spec.md",
+      "physical_sha256": "20d68f67f2a12674529cec55f37012c8e8594839574fa4cf3be38ccd15e7bbd8",
+      "size_bytes": 10427,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-fresh-inventory-full-validation/specs/policy/rules-validation/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-fresh-inventory-full-validation/specs/policy/rules-validation/spec.md",
+      "physical_sha256": "ab05bb85cfebfe8c581e4d3bbe9459d5abfcfce74c36b56ff2cc6edb71f8de07",
+      "size_bytes": 7148,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-fresh-inventory-full-validation/specs/subscription/source-token-repair/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-fresh-inventory-full-validation/specs/subscription/source-token-repair/spec.md",
+      "physical_sha256": "70ca93c0167b152428f04b275fd48e6fefd435fb2bac338e982daaeab37bd6a7",
+      "size_bytes": 2583,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-fresh-inventory-full-validation/tasks.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-fresh-inventory-full-validation/tasks.md",
+      "physical_sha256": "a45471bd53d3e77abbd994019417f5aa31b98cc8d74bec8ed45f7068e7597f22",
+      "size_bytes": 22458,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-global-probe-export-filter-and-overlays/.openspec.yaml",
+      "archive_pointer": "docs/archive/openspec/changes/csp-global-probe-export-filter-and-overlays/.openspec.yaml",
+      "physical_sha256": "dadfffd827282f22738d1215a8fa326bc6e3bda0a2aae3e3af6d203a1ef4c4aa",
+      "size_bytes": 40,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-global-probe-export-filter-and-overlays/design.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-global-probe-export-filter-and-overlays/design.md",
+      "physical_sha256": "aebac2fba78d6e0a4764f7794b3bedd31c7665bebee95876fcf3086af8a27ca4",
+      "size_bytes": 6280,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-global-probe-export-filter-and-overlays/proposal.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-global-probe-export-filter-and-overlays/proposal.md",
+      "physical_sha256": "981f54f65f011e5fd6dee64c8ed083c5357bfeee127aded9bcf59f963c4a216b",
+      "size_bytes": 2379,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-global-probe-export-filter-and-overlays/specs/global-probe-export-filter/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-global-probe-export-filter-and-overlays/specs/global-probe-export-filter/spec.md",
+      "physical_sha256": "69b449e2d0e25b9bdfe6dd6847d630dc0d71edd427f00db8203ec24d5e24441f",
+      "size_bytes": 4703,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-global-probe-export-filter-and-overlays/specs/viewport-safe-overlays/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-global-probe-export-filter-and-overlays/specs/viewport-safe-overlays/spec.md",
+      "physical_sha256": "f0a0a9ce1a3a96a9b80fd2568085da6772a73a2595309b2ebf7df1ae30fa78a0",
+      "size_bytes": 2680,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-global-probe-export-filter-and-overlays/tasks.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-global-probe-export-filter-and-overlays/tasks.md",
+      "physical_sha256": "84e04cbe98f047bba038e8f55ea414b97f5988e9e19dbe7e3b8afce0dbf57688",
+      "size_bytes": 3394,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-incremental-expiry-probe-sweep/.openspec.yaml",
+      "archive_pointer": "docs/archive/openspec/changes/csp-incremental-expiry-probe-sweep/.openspec.yaml",
+      "physical_sha256": "5edc88a042fdda2550686e54689bdd6779b13445bcaf782a1af9426634b9b4fb",
+      "size_bytes": 40,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-incremental-expiry-probe-sweep/design.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-incremental-expiry-probe-sweep/design.md",
+      "physical_sha256": "d8464c0645eaf640d9ef70265ee226e7cf08b4a2cef6376c695446f984203570",
+      "size_bytes": 6576,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-incremental-expiry-probe-sweep/proposal.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-incremental-expiry-probe-sweep/proposal.md",
+      "physical_sha256": "6cd62a5ff3de70227de7c8914e60fd88fd273bc066c06cbc31080eecdcf34943",
+      "size_bytes": 3181,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-incremental-expiry-probe-sweep/specs/incremental-expiry-probe-sweep/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-incremental-expiry-probe-sweep/specs/incremental-expiry-probe-sweep/spec.md",
+      "physical_sha256": "99c6c24971d1225928c5ef3eff877403451d1c472d9a0d97b942c54b108c8954",
+      "size_bytes": 5109,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-incremental-expiry-probe-sweep/tasks.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-incremental-expiry-probe-sweep/tasks.md",
+      "physical_sha256": "a19410776168bb71a91ecea7b4c6cc88ec6d30a19dde28e688a6f3ae5165b349",
+      "size_bytes": 2660,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-ip-risk-v1/.citation-ledger.json",
+      "archive_pointer": "docs/archive/openspec/changes/csp-ip-risk-v1/.citation-ledger.json",
+      "physical_sha256": "732d32c54ebe7fd3f054065a825bdbe5ff20d2e09b89ddd04d4aa3d5d2a133b8",
+      "size_bytes": 848,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-ip-risk-v1/.openspec.yaml",
+      "archive_pointer": "docs/archive/openspec/changes/csp-ip-risk-v1/.openspec.yaml",
+      "physical_sha256": "50c36dfa766b2fc52e8a7d270b1d67cc487bcd95d1b4c8a5f929d62738e3c77e",
+      "size_bytes": 40,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-ip-risk-v1/design.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-ip-risk-v1/design.md",
+      "physical_sha256": "07d3e524395fe4ad26f18870ffcfc9e1610abf598194696f0494532e5708b810",
+      "size_bytes": 14620,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-ip-risk-v1/proposal.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-ip-risk-v1/proposal.md",
+      "physical_sha256": "8d8a51d33ceaa7f0e99e60d9a492b9f1184057f2f28fd993ad75c47928c91a93",
+      "size_bytes": 4418,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-ip-risk-v1/specs/admin-workbench-experience/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-ip-risk-v1/specs/admin-workbench-experience/spec.md",
+      "physical_sha256": "cf64cf53d7cdb7dfbc171591232e8899ef32ebd577de991b586aa940717de97e",
+      "size_bytes": 1819,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-ip-risk-v1/specs/ip-risk-evidence/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-ip-risk-v1/specs/ip-risk-evidence/spec.md",
+      "physical_sha256": "32093f7913a16a0b4aa96331cbde738f7d7c7f671a7e00b6c7ff26e838eacfd0",
+      "size_bytes": 3644,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-ip-risk-v1/specs/ip-risk-management-workbench/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-ip-risk-v1/specs/ip-risk-management-workbench/spec.md",
+      "physical_sha256": "38804eb1f78f47677bc500f71820f652b52ef86e419d6ae247a56fb5a6832945",
+      "size_bytes": 2556,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-ip-risk-v1/specs/policy-tree-and-compiler/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-ip-risk-v1/specs/policy-tree-and-compiler/spec.md",
+      "physical_sha256": "06dddc21174e32fe14a09fd35ef4da681f5c4c858e42d15520b9d6f03eebafab",
+      "size_bytes": 2843,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-ip-risk-v1/specs/probe-evidence-engine/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-ip-risk-v1/specs/probe-evidence-engine/spec.md",
+      "physical_sha256": "9965c7018215eba1abe75591c0a8525c2e94eec7b8cff85a85552aff1494ce79",
+      "size_bytes": 2004,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-ip-risk-v1/specs/risk-policy-admission-and-publication/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-ip-risk-v1/specs/risk-policy-admission-and-publication/spec.md",
+      "physical_sha256": "48b7887cc9d393c1ba2ba439db580af8f6c6ff5982cfda65ca92f18cbbb5be47",
+      "size_bytes": 3398,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-ip-risk-v1/specs/subscription-inventory/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-ip-risk-v1/specs/subscription-inventory/spec.md",
+      "physical_sha256": "84225bb5e51490dcb546dd03717413c4e0e6004ee809f49787eaba7d6e3e9377",
+      "size_bytes": 1023,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-ip-risk-v1/tasks.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-ip-risk-v1/tasks.md",
+      "physical_sha256": "ea847b04acd8155603079e6dd33c98572148fd67de7053db3d5ad1f6deaf3ea9",
+      "size_bytes": 9451,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-living-spec-consolidation/.openspec.yaml",
+      "archive_pointer": "docs/archive/openspec/changes/csp-living-spec-consolidation/.openspec.yaml",
+      "physical_sha256": "8ba8273010ceb66cd0ab320b2f49de179fac6fd6f648317c2cc129442eea7dc0",
+      "size_bytes": 40,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-living-spec-consolidation/design.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-living-spec-consolidation/design.md",
+      "physical_sha256": "e2e68390407d378eaf92613288be29bfed79db80bf40170e007ec4bd4609cfb9",
+      "size_bytes": 6502,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-living-spec-consolidation/proposal.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-living-spec-consolidation/proposal.md",
+      "physical_sha256": "0707deb099f9f2dcac158a0e6b38ea2886bb60c43923843a71bfba221fcf4d14",
+      "size_bytes": 3400,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-living-spec-consolidation/specs/living-spec-consolidation/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-living-spec-consolidation/specs/living-spec-consolidation/spec.md",
+      "physical_sha256": "9765a54daade03443c9a043135d5bce079636485ffd733c668d7a7686c43b8e5",
+      "size_bytes": 2651,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-living-spec-consolidation/tasks.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-living-spec-consolidation/tasks.md",
+      "physical_sha256": "929088c9f4120531bfd2a1d3a7e5d6cd8d43a8bba6aae0e92dd0fdb5b5d94908",
+      "size_bytes": 4114,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-node-probe-pool-priority-queue/.openspec.yaml",
+      "archive_pointer": "docs/archive/openspec/changes/csp-node-probe-pool-priority-queue/.openspec.yaml",
+      "physical_sha256": "65ff9df577b54daf8b21917c880c564135cf80d9e6a2de690feb0f4a842393f1",
+      "size_bytes": 40,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-node-probe-pool-priority-queue/design.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-node-probe-pool-priority-queue/design.md",
+      "physical_sha256": "22ccc93b242323f291aff2784eaf502ed8b3e2d35610b02bb69661cff9853865",
+      "size_bytes": 16058,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-node-probe-pool-priority-queue/proposal.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-node-probe-pool-priority-queue/proposal.md",
+      "physical_sha256": "674c4490d44e3254aac0b13e6ed37ddac12bf58d62ceb5db7a571cc71f43fb1c",
+      "size_bytes": 8085,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-node-probe-pool-priority-queue/specs/node-probe-pool/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-node-probe-pool-priority-queue/specs/node-probe-pool/spec.md",
+      "physical_sha256": "a14ad5c53acf86e1770634efc6bd330e953c8f9901f866bd1ebecb726e3f34f3",
+      "size_bytes": 5768,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-node-probe-pool-priority-queue/tasks.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-node-probe-pool-priority-queue/tasks.md",
+      "physical_sha256": "6e6dd98d789edd7a5c1d9845dc289746d03c80aeb1047f0141193a241fafabad",
+      "size_bytes": 7538,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-periodic-active-probes-global-group-filters/.openspec.yaml",
+      "archive_pointer": "docs/archive/openspec/changes/csp-periodic-active-probes-global-group-filters/.openspec.yaml",
+      "physical_sha256": "8ce533eab9c047a4566f79d81b21eb252f3437f591dee942f9dbb2669f23cdfb",
+      "size_bytes": 40,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-periodic-active-probes-global-group-filters/design.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-periodic-active-probes-global-group-filters/design.md",
+      "physical_sha256": "254d3f0d4fa6391fb1258f53a74b13e4356b5c2de49a451bc2369e2d9ecdccef",
+      "size_bytes": 10597,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-periodic-active-probes-global-group-filters/proposal.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-periodic-active-probes-global-group-filters/proposal.md",
+      "physical_sha256": "d0b0ccbf91a00de827c626af1477ec9d9eb7f3015f1d81c5ec95b5e7f3ee3786",
+      "size_bytes": 2291,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-periodic-active-probes-global-group-filters/specs/global-group-node-filters/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-periodic-active-probes-global-group-filters/specs/global-group-node-filters/spec.md",
+      "physical_sha256": "b10213cc25e2cad382594603d32280266992e97f4b4301cfcbe05037c863b429",
+      "size_bytes": 4055,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-periodic-active-probes-global-group-filters/specs/periodic-active-probes/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-periodic-active-probes-global-group-filters/specs/periodic-active-probes/spec.md",
+      "physical_sha256": "762ff2155ac3057edb95dc626de9ee02a13ae18133361cef985e7de79ad130d9",
+      "size_bytes": 3465,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-periodic-active-probes-global-group-filters/tasks.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-periodic-active-probes-global-group-filters/tasks.md",
+      "physical_sha256": "1632c9263cffef966e3f0820e3fa7fc042e6927cde309c5b3adc2ce9fca54e59",
+      "size_bytes": 7222,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-policy-membership-probe-state-pagination/.openspec.yaml",
+      "archive_pointer": "docs/archive/openspec/changes/csp-policy-membership-probe-state-pagination/.openspec.yaml",
+      "physical_sha256": "ec3a1b167d0ccdb9f7a3f8f370ba8038feb637051c90a0b3fbcc5e9cef45d7a5",
+      "size_bytes": 40,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-policy-membership-probe-state-pagination/README.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-policy-membership-probe-state-pagination/README.md",
+      "physical_sha256": "4c3727d5722af235d2dab51e5a3926b770cfeccf8a31809dd14d17668735150e",
+      "size_bytes": 181,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-policy-membership-probe-state-pagination/design.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-policy-membership-probe-state-pagination/design.md",
+      "physical_sha256": "fd9c6d3a09d4f21a4d4641cf303297abec9a55eecf73977ee661099f3e222cd3",
+      "size_bytes": 8762,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-policy-membership-probe-state-pagination/proposal.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-policy-membership-probe-state-pagination/proposal.md",
+      "physical_sha256": "4591c9e00baae13d740df41aa0ef9819e9a462229cddd8f8eb699d11f3a3d9cd",
+      "size_bytes": 5494,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-policy-membership-probe-state-pagination/specs/policy/full-inventory-resolution/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-policy-membership-probe-state-pagination/specs/policy/full-inventory-resolution/spec.md",
+      "physical_sha256": "4e65c7ea3232b19e6c3806dbfbd243c396323f3aa5b2f37114ba185b4c334729",
+      "size_bytes": 1859,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-policy-membership-probe-state-pagination/specs/policy/membership-semantics-and-pagination/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-policy-membership-probe-state-pagination/specs/policy/membership-semantics-and-pagination/spec.md",
+      "physical_sha256": "0992fd0d81f50a3b1425b3b9080269473f56c8fcd53bdedec73ee2476d43fbc2",
+      "size_bytes": 3021,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-policy-membership-probe-state-pagination/specs/probe/health-state-conservation-and-pagination/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-policy-membership-probe-state-pagination/specs/probe/health-state-conservation-and-pagination/spec.md",
+      "physical_sha256": "7d0e7bd7d98e7bb47ce8d864fdc737d81a4401d9790273a14e12d80e116c0021",
+      "size_bytes": 2529,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-policy-membership-probe-state-pagination/specs/ui/navigation-layout-and-viewport-resilience/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-policy-membership-probe-state-pagination/specs/ui/navigation-layout-and-viewport-resilience/spec.md",
+      "physical_sha256": "ebccb68def98ade2f5c016a65f17df1c68d496b4d2bc67f69e20bc8a31615998",
+      "size_bytes": 2338,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-policy-membership-probe-state-pagination/tasks.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-policy-membership-probe-state-pagination/tasks.md",
+      "physical_sha256": "ea00920107cd4762e4e05cc40ccc8aeec90cb7c862004923ba30ae5aed19e27b",
+      "size_bytes": 5114,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-preserve-inventory-and-verify-business-results/.openspec.yaml",
+      "archive_pointer": "docs/archive/openspec/changes/csp-preserve-inventory-and-verify-business-results/.openspec.yaml",
+      "physical_sha256": "c51317fdb09f4c0096f955c8beeb5f19a56ba49530c79732bb429ad0f423004d",
+      "size_bytes": 40,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-preserve-inventory-and-verify-business-results/design.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-preserve-inventory-and-verify-business-results/design.md",
+      "physical_sha256": "7bec13d5ca29598309c4469e4913586d904cf9c014eafe207e5713db2a18957f",
+      "size_bytes": 13438,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-preserve-inventory-and-verify-business-results/proposal.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-preserve-inventory-and-verify-business-results/proposal.md",
+      "physical_sha256": "e7d7285a8bbcdbb69ed3dd831cc2bd335840e611c7f656ea50b9c8570ab50569",
+      "size_bytes": 5784,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-preserve-inventory-and-verify-business-results/specs/api-semantic-verification-matrix/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-preserve-inventory-and-verify-business-results/specs/api-semantic-verification-matrix/spec.md",
+      "physical_sha256": "d78ab859a787b45811e429bc3d04474ad45d9c2b9f690cc6591155d48675d1dc",
+      "size_bytes": 5207,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-preserve-inventory-and-verify-business-results/specs/probe-construction-and-truthful-diagnostics/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-preserve-inventory-and-verify-business-results/specs/probe-construction-and-truthful-diagnostics/spec.md",
+      "physical_sha256": "c940e992383bed2d5f0858d5b0dcbd552516a6803caa9962520351dee66f0e2b",
+      "size_bytes": 6172,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-preserve-inventory-and-verify-business-results/specs/subscription-inventory-preservation/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-preserve-inventory-and-verify-business-results/specs/subscription-inventory-preservation/spec.md",
+      "physical_sha256": "9b93fa442712ba9b8df675b3a875800da66e1a7e99ca6ea17f4bebf0687b66cf",
+      "size_bytes": 7395,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-preserve-inventory-and-verify-business-results/tasks.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-preserve-inventory-and-verify-business-results/tasks.md",
+      "physical_sha256": "1acc81db3dbe0c8bccdf4b73ed8e9bb46f3920e5658d65b0d0e81e7ae4ec17b4",
+      "size_bytes": 7952,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-probe-engine-human-centric-redesign/.openspec.yaml",
+      "archive_pointer": "docs/archive/openspec/changes/csp-probe-engine-human-centric-redesign/.openspec.yaml",
+      "physical_sha256": "65ff9df577b54daf8b21917c880c564135cf80d9e6a2de690feb0f4a842393f1",
+      "size_bytes": 40,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-probe-engine-human-centric-redesign/design.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-probe-engine-human-centric-redesign/design.md",
+      "physical_sha256": "35dd882a04c76d0877aee207e2aeef24aa989e207e41c3484a5f321184c8fd8d",
+      "size_bytes": 17880,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-probe-engine-human-centric-redesign/proposal.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-probe-engine-human-centric-redesign/proposal.md",
+      "physical_sha256": "d40fc8557e37d1604e0dedf47a4b8ad9b05e7e8a652337c0663b4df15b2651c5",
+      "size_bytes": 7475,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-probe-engine-human-centric-redesign/specs/probe-engine-ux/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-probe-engine-human-centric-redesign/specs/probe-engine-ux/spec.md",
+      "physical_sha256": "889345b89ee760f82097651eadb432178c63b417e2b0d2a759d871926ab54cef",
+      "size_bytes": 11055,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-probe-engine-human-centric-redesign/tasks.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-probe-engine-human-centric-redesign/tasks.md",
+      "physical_sha256": "633ffe517a14d51c0b5760440587ee1d378138814030885e3da569b0fb1d8f2f",
+      "size_bytes": 7260,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-probe-health-minute-state-sweep/.openspec.yaml",
+      "archive_pointer": "docs/archive/openspec/changes/csp-probe-health-minute-state-sweep/.openspec.yaml",
+      "physical_sha256": "dadfffd827282f22738d1215a8fa326bc6e3bda0a2aae3e3af6d203a1ef4c4aa",
+      "size_bytes": 40,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-probe-health-minute-state-sweep/README.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-probe-health-minute-state-sweep/README.md",
+      "physical_sha256": "1021105247d84cd714eb8b537b9db84a3f67d80a544387a723c8880e0cc6c587",
+      "size_bytes": 121,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-probe-health-minute-state-sweep/design.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-probe-health-minute-state-sweep/design.md",
+      "physical_sha256": "6e5dff1ad66759672291199bd88b2cef02d587dcc1466d7f60079f89d702af83",
+      "size_bytes": 9413,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-probe-health-minute-state-sweep/proposal.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-probe-health-minute-state-sweep/proposal.md",
+      "physical_sha256": "b4b1dd6f21cb5c5c37acf09fd40c7019621b1df4c3269cbe9f311affc6f61e2a",
+      "size_bytes": 3047,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-probe-health-minute-state-sweep/specs/baseline-health-read-model/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-probe-health-minute-state-sweep/specs/baseline-health-read-model/spec.md",
+      "physical_sha256": "c50bb15dd48dd34b15e75a124c30333cd7e31ecd6d75433b9cb1ea638f552064",
+      "size_bytes": 2531,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-probe-health-minute-state-sweep/specs/minute-incremental-state-sweep/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-probe-health-minute-state-sweep/specs/minute-incremental-state-sweep/spec.md",
+      "physical_sha256": "287cb8bb456b5c1728773e9a72687044b6a2cc97335d9f8063216c4644910a3e",
+      "size_bytes": 3293,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-probe-health-minute-state-sweep/specs/probe-evidence-classification/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-probe-health-minute-state-sweep/specs/probe-evidence-classification/spec.md",
+      "physical_sha256": "fffecdd46ffb5a6c93215b992b6953e14689e412fff7c353959a5e40005f8ba1",
+      "size_bytes": 2104,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-probe-health-minute-state-sweep/tasks.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-probe-health-minute-state-sweep/tasks.md",
+      "physical_sha256": "80bbe0b01db99658f4fc33f7df6aff321e58459b47ee24bd90b850174844cb14",
+      "size_bytes": 4406,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-probe-truth-and-efficiency/.openspec.yaml",
+      "archive_pointer": "docs/archive/openspec/changes/csp-probe-truth-and-efficiency/.openspec.yaml",
+      "physical_sha256": "d707823457f58b4f938a99bc049bddd9b937affec2d09c976c9a16a9dcd03f77",
+      "size_bytes": 40,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-probe-truth-and-efficiency/design.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-probe-truth-and-efficiency/design.md",
+      "physical_sha256": "35166f4e2a5e9a16c6aba6219a6f752cdab0c3bc8846e3fa3729a2b2b7a95820",
+      "size_bytes": 20548,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-probe-truth-and-efficiency/proposal.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-probe-truth-and-efficiency/proposal.md",
+      "physical_sha256": "30357f95d591623d060274b4f4e7235934230682c86ace3a94f6de0662859c05",
+      "size_bytes": 8033,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-probe-truth-and-efficiency/specs/probe-truth-and-efficiency/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-probe-truth-and-efficiency/specs/probe-truth-and-efficiency/spec.md",
+      "physical_sha256": "72523b16e5ac5d7c4477ab017ae4d831394dde968f6c1023685a6302d6936d90",
+      "size_bytes": 12676,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-probe-truth-and-efficiency/tasks.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-probe-truth-and-efficiency/tasks.md",
+      "physical_sha256": "683dbfc2f095e47792f5d2d4fb4875772904c50890b771ba986eb3b75355ebc1",
+      "size_bytes": 9326,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-publication-theme-probe-recovery-v1/.openspec.yaml",
+      "archive_pointer": "docs/archive/openspec/changes/csp-publication-theme-probe-recovery-v1/.openspec.yaml",
+      "physical_sha256": "d04b6ad7c1b1e5eb9e8ec8cfdae94bc49d29216b59b73cea7a3cc1de9d508463",
+      "size_bytes": 40,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-publication-theme-probe-recovery-v1/design.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-publication-theme-probe-recovery-v1/design.md",
+      "physical_sha256": "02eb8a19dbdf7bacd3df9c8d2be1554ee16423847c213dd43b6c8395e7f63dbd",
+      "size_bytes": 10686,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-publication-theme-probe-recovery-v1/proposal.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-publication-theme-probe-recovery-v1/proposal.md",
+      "physical_sha256": "248014f5ea9b95431d84c3a7242c1a0c4abc8b57007a4919e334920934f90a3f",
+      "size_bytes": 4728,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-publication-theme-probe-recovery-v1/specs/publication-theme-probe-recovery/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-publication-theme-probe-recovery-v1/specs/publication-theme-probe-recovery/spec.md",
+      "physical_sha256": "e1e1d7fdfb79f230fc7f2295de659ca4da9743ccd372b21e3844f12c02ad1ff6",
+      "size_bytes": 13631,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-publication-theme-probe-recovery-v1/tasks.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-publication-theme-probe-recovery-v1/tasks.md",
+      "physical_sha256": "967f75cfed34c891c8e1ba3c6354f9158782a5d2dd0e061b3fc9781a0fb0caab",
+      "size_bytes": 9480,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-subscription-proxy-and-verge-headers/.openspec.yaml",
+      "archive_pointer": "docs/archive/openspec/changes/csp-subscription-proxy-and-verge-headers/.openspec.yaml",
+      "physical_sha256": "5edc88a042fdda2550686e54689bdd6779b13445bcaf782a1af9426634b9b4fb",
+      "size_bytes": 40,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-subscription-proxy-and-verge-headers/design.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-subscription-proxy-and-verge-headers/design.md",
+      "physical_sha256": "4a5c8410547479d645ca6bbd37f5299ba66897a44f21f2b639b37c8a69c7d5d0",
+      "size_bytes": 11905,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-subscription-proxy-and-verge-headers/proposal.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-subscription-proxy-and-verge-headers/proposal.md",
+      "physical_sha256": "0b7a3f2008751c66cb95f1576cc0d91cee3bfc0efc6de16e6bd1ca9ad6cc3b60",
+      "size_bytes": 7149,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-subscription-proxy-and-verge-headers/specs/subscription-proxy-and-verge-headers/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-subscription-proxy-and-verge-headers/specs/subscription-proxy-and-verge-headers/spec.md",
+      "physical_sha256": "d64559c6ee1faa193de39a1bb1e59a3aacca3f28471f869bfd15a39f91c348f1",
+      "size_bytes": 12263,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-subscription-proxy-and-verge-headers/tasks.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-subscription-proxy-and-verge-headers/tasks.md",
+      "physical_sha256": "952644bf6820bb33fcca00933149eb249ca8171dfdcf2258066a40923c186975",
+      "size_bytes": 4639,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-topology-i18n-and-node-targets/.openspec.yaml",
+      "archive_pointer": "docs/archive/openspec/changes/csp-topology-i18n-and-node-targets/.openspec.yaml",
+      "physical_sha256": "062e545e250441aa0692c22d7a65e07334f1c0f2e706c0e297f36065b6a0699c",
+      "size_bytes": 40,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-topology-i18n-and-node-targets/design.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-topology-i18n-and-node-targets/design.md",
+      "physical_sha256": "a61cab822be5453efb60c4a3cf290a025964e405ba239e62efbece7ce32673c8",
+      "size_bytes": 10956,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-topology-i18n-and-node-targets/proposal.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-topology-i18n-and-node-targets/proposal.md",
+      "physical_sha256": "6bec759645a452410b81a76e94b4830d05fe72a32f46096273eca1af7bcecfaf",
+      "size_bytes": 5424,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-topology-i18n-and-node-targets/specs/topology-i18n-export/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-topology-i18n-and-node-targets/specs/topology-i18n-export/spec.md",
+      "physical_sha256": "814153a8d489162440c5af52446c7ea708b3322f0ae0058387987fab314b6d37",
+      "size_bytes": 7776,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-topology-i18n-and-node-targets/tasks.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-topology-i18n-and-node-targets/tasks.md",
+      "physical_sha256": "ccf99c9630fb914e8c5da84b78af41f09aa436a89bef8609d4a1bfc242e86414",
+      "size_bytes": 4456,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-ui-device-governance-v1/.openspec.yaml",
+      "archive_pointer": "docs/archive/openspec/changes/csp-ui-device-governance-v1/.openspec.yaml",
+      "physical_sha256": "d04b6ad7c1b1e5eb9e8ec8cfdae94bc49d29216b59b73cea7a3cc1de9d508463",
+      "size_bytes": 40,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-ui-device-governance-v1/design.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-ui-device-governance-v1/design.md",
+      "physical_sha256": "fe90310a0b1947e45272ee0cc4a8a8979e9563d6a049a81bb967bb22a43a9afc",
+      "size_bytes": 4342,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-ui-device-governance-v1/proposal.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-ui-device-governance-v1/proposal.md",
+      "physical_sha256": "2122c6ecd2c97bf863af0b3938ad69d6d7026cc3bf3b16121f239a5e16b8419b",
+      "size_bytes": 2331,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-ui-device-governance-v1/specs/admin-ui-device-quality/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-ui-device-governance-v1/specs/admin-ui-device-quality/spec.md",
+      "physical_sha256": "ef3a491396f81434c2a40e79efd1b2e241282eeec91703e61ff3c7f615a29108",
+      "size_bytes": 4437,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-ui-device-governance-v1/tasks.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-ui-device-governance-v1/tasks.md",
+      "physical_sha256": "7ab32c94b25884a86d19a6f2405e1b40d4d05dd0869c286ce6a04177bbf67f86",
+      "size_bytes": 3967,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-ui-hardcode-governance-v1/.openspec.yaml",
+      "archive_pointer": "docs/archive/openspec/changes/csp-ui-hardcode-governance-v1/.openspec.yaml",
+      "physical_sha256": "d04b6ad7c1b1e5eb9e8ec8cfdae94bc49d29216b59b73cea7a3cc1de9d508463",
+      "size_bytes": 40,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-ui-hardcode-governance-v1/design.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-ui-hardcode-governance-v1/design.md",
+      "physical_sha256": "ddff2ed1b6cfcb1100f1c6d06961ebb102b356964fcee450e96e1d865301fe40",
+      "size_bytes": 5948,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-ui-hardcode-governance-v1/proposal.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-ui-hardcode-governance-v1/proposal.md",
+      "physical_sha256": "cb109bdf9a58f3d1557055a19ae1518e0e58bbcd62c3c55f46603ed794e61bdb",
+      "size_bytes": 1922,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-ui-hardcode-governance-v1/specs/admin-ui-adaptive-layout/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-ui-hardcode-governance-v1/specs/admin-ui-adaptive-layout/spec.md",
+      "physical_sha256": "55ead17e95b7ffe3ef5420626a0c9522da7905eded8b3cd78f98e83e6f41f146",
+      "size_bytes": 2630,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/csp-ui-hardcode-governance-v1/tasks.md",
+      "archive_pointer": "docs/archive/openspec/changes/csp-ui-hardcode-governance-v1/tasks.md",
+      "physical_sha256": "cce20fe39f31e75da119180f240add45b2609971d1645c1f7397080b4c2d2e33",
+      "size_bytes": 4233,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/finish-csp-live-validation-and-recovery/.openspec.yaml",
+      "archive_pointer": "docs/archive/openspec/changes/finish-csp-live-validation-and-recovery/.openspec.yaml",
+      "physical_sha256": "5d113f7d56015df3c7cad21b6f5da445ffbc4edc2785a2391465abec93ac5afc",
+      "size_bytes": 40,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/finish-csp-live-validation-and-recovery/README.md",
+      "archive_pointer": "docs/archive/openspec/changes/finish-csp-live-validation-and-recovery/README.md",
+      "physical_sha256": "90ad8b23503ddad71140535d1359793b63247bd21fb1a432f6a2c8a4c19008f4",
+      "size_bytes": 124,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/finish-csp-live-validation-and-recovery/design.md",
+      "archive_pointer": "docs/archive/openspec/changes/finish-csp-live-validation-and-recovery/design.md",
+      "physical_sha256": "88afb745cd41b59add98dea896c0cf4e21b8bf47598507cc4db02230b7bc0b8d",
+      "size_bytes": 18197,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/finish-csp-live-validation-and-recovery/proposal.md",
+      "archive_pointer": "docs/archive/openspec/changes/finish-csp-live-validation-and-recovery/proposal.md",
+      "physical_sha256": "bf00aaa136aad994071b0ffc5fc166c1dfddb9ae26767a969fdcf7400ce6185a",
+      "size_bytes": 3218,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/finish-csp-live-validation-and-recovery/specs/live-acceptance-and-qualified-recovery/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/finish-csp-live-validation-and-recovery/specs/live-acceptance-and-qualified-recovery/spec.md",
+      "physical_sha256": "778f55192223ca4eb7cfde0dd7477d9e89ec210808c0e06d9c2bd5ee571c0784",
+      "size_bytes": 5188,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/finish-csp-live-validation-and-recovery/tasks.md",
+      "archive_pointer": "docs/archive/openspec/changes/finish-csp-live-validation-and-recovery/tasks.md",
+      "physical_sha256": "3e1ba13a60c898bcf657d3e6eccb215644e57a4c7ea2130f5a3ac1d3c6cdacfc",
+      "size_bytes": 5444,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/fix-csp-legacy-source-attribution/.openspec.yaml",
+      "archive_pointer": "docs/archive/openspec/changes/fix-csp-legacy-source-attribution/.openspec.yaml",
+      "physical_sha256": "ad734da2ba5f4c5a6979a8bbb6bad4db20fb21ec275ceca5f24842fbdfaf5bef",
+      "size_bytes": 40,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/fix-csp-legacy-source-attribution/design.md",
+      "archive_pointer": "docs/archive/openspec/changes/fix-csp-legacy-source-attribution/design.md",
+      "physical_sha256": "41ece28cc73226f359634b1d28a962768b1045b11e1b49f6c284d7d09a8061a6",
+      "size_bytes": 7994,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/fix-csp-legacy-source-attribution/proposal.md",
+      "archive_pointer": "docs/archive/openspec/changes/fix-csp-legacy-source-attribution/proposal.md",
+      "physical_sha256": "bd5b9c2fe370c76ed49e19cfa779d564cc02de63868233738edfc70c47fa5562",
+      "size_bytes": 6418,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/fix-csp-legacy-source-attribution/specs/inventory/node-source-history-api-view/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/fix-csp-legacy-source-attribution/specs/inventory/node-source-history-api-view/spec.md",
+      "physical_sha256": "bbb4eb1c3ee075cf8dc6123d741245901db33d0883bfd0f6e43413942dd84b3e",
+      "size_bytes": 1630,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/fix-csp-legacy-source-attribution/specs/inventory/node-source-history-ledger/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/fix-csp-legacy-source-attribution/specs/inventory/node-source-history-ledger/spec.md",
+      "physical_sha256": "4b6362874d44a2d62d6ddf29a87d09447cf4bcc68e6cdaf6824084e8ff6e3065",
+      "size_bytes": 1606,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/fix-csp-legacy-source-attribution/specs/inventory/source-history-recovery-cli/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/fix-csp-legacy-source-attribution/specs/inventory/source-history-recovery-cli/spec.md",
+      "physical_sha256": "db5e0d13cd68424433d412d2ce57f01a15709dbafd26bbfb723b8a05be07a3d7",
+      "size_bytes": 1486,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/fix-csp-legacy-source-attribution/specs/inventory/source-history-write-chain/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/fix-csp-legacy-source-attribution/specs/inventory/source-history-write-chain/spec.md",
+      "physical_sha256": "678a4f7237b89c5aec10108fc7dbbc828af39cf4d2e6452431a559fa58fd150b",
+      "size_bytes": 1536,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/fix-csp-legacy-source-attribution/tasks.md",
+      "archive_pointer": "docs/archive/openspec/changes/fix-csp-legacy-source-attribution/tasks.md",
+      "physical_sha256": "ffc7d39cc7e34d156b7f48ee31b441f0ac15b356285aab066a04d55ce5722819",
+      "size_bytes": 5494,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/native-mihomo-export-clean-slate/.openspec.yaml",
+      "archive_pointer": "docs/archive/openspec/changes/native-mihomo-export-clean-slate/.openspec.yaml",
+      "physical_sha256": "8ce533eab9c047a4566f79d81b21eb252f3437f591dee942f9dbb2669f23cdfb",
+      "size_bytes": 40,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/native-mihomo-export-clean-slate/design.md",
+      "archive_pointer": "docs/archive/openspec/changes/native-mihomo-export-clean-slate/design.md",
+      "physical_sha256": "4704bf000b043a2f427c023c0a201cb84cbf6e18cc5fa448951aea78c966a517",
+      "size_bytes": 10245,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/native-mihomo-export-clean-slate/proposal.md",
+      "archive_pointer": "docs/archive/openspec/changes/native-mihomo-export-clean-slate/proposal.md",
+      "physical_sha256": "50d889afdac5ac7fb97d00fa34d09c7c045cd99524a54783b2023e29b1e5b610",
+      "size_bytes": 2329,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/native-mihomo-export-clean-slate/specs/native-mihomo-publications/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/native-mihomo-export-clean-slate/specs/native-mihomo-publications/spec.md",
+      "physical_sha256": "7f42bf175d461f60aca7b8e2f822e585fa6dd840e709acf4c51b572ba28747ed",
+      "size_bytes": 6401,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/native-mihomo-export-clean-slate/tasks.md",
+      "archive_pointer": "docs/archive/openspec/changes/native-mihomo-export-clean-slate/tasks.md",
+      "physical_sha256": "5c5899a979a66926dbc4f1f12171a22d9d1d2c97b8cae42e8a7c87de9156f5b0",
+      "size_bytes": 5260,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/redesign-csp-database-dataflow/.openspec.yaml",
+      "archive_pointer": "docs/archive/openspec/changes/redesign-csp-database-dataflow/.openspec.yaml",
+      "physical_sha256": "df4fb22c89b17a0d45d8ca25e98028a2244dceafe5a64ecbbc3bae35db97ccbc",
+      "size_bytes": 40,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/redesign-csp-database-dataflow/README.md",
+      "archive_pointer": "docs/archive/openspec/changes/redesign-csp-database-dataflow/README.md",
+      "physical_sha256": "ef10610a2346c046d57118471b9f09ea807f80c1fd65dbe98041901226b1683d",
+      "size_bytes": 2086,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/redesign-csp-database-dataflow/design.md",
+      "archive_pointer": "docs/archive/openspec/changes/redesign-csp-database-dataflow/design.md",
+      "physical_sha256": "7626afa05896cc5260f4d86f6892e6790d2a5ff157b9d3cb950a46d5c6725eb7",
+      "size_bytes": 13038,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/redesign-csp-database-dataflow/evidence-enabled-inventory-audit.md",
+      "archive_pointer": "docs/archive/openspec/changes/redesign-csp-database-dataflow/evidence-enabled-inventory-audit.md",
+      "physical_sha256": "8116aa98a5f8026cba06ed6b02e263b3137076c7ba926efe912909f4b95ec70c",
+      "size_bytes": 11906,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/redesign-csp-database-dataflow/proposal.md",
+      "archive_pointer": "docs/archive/openspec/changes/redesign-csp-database-dataflow/proposal.md",
+      "physical_sha256": "b98ef7d7cf4c811262010d11fb2a7e2ef5db1f9490e468d8483e2932ee17d5d6",
+      "size_bytes": 9767,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/redesign-csp-database-dataflow/specs/dataflow/downstream-matrix-and-publication/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/redesign-csp-database-dataflow/specs/dataflow/downstream-matrix-and-publication/spec.md",
+      "physical_sha256": "2102e0b5b0bdf5cbcccc2170a0fa6e3b67328382b168504e7e78fa8726819f45",
+      "size_bytes": 7753,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/redesign-csp-database-dataflow/specs/dataflow/enabled-subscription-inventory/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/redesign-csp-database-dataflow/specs/dataflow/enabled-subscription-inventory/spec.md",
+      "physical_sha256": "bf1e14834786e773c713bb5e0af68b59f068bb5ccec89385ad7cd8ce61bf021d",
+      "size_bytes": 7997,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/redesign-csp-database-dataflow/specs/dataflow/node-connection-versioning-cow/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/redesign-csp-database-dataflow/specs/dataflow/node-connection-versioning-cow/spec.md",
+      "physical_sha256": "9f242b597e7075d0cbdadf5fd833e6ffd3e7759620df21c55a7140bcb7015d5d",
+      "size_bytes": 4141,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/redesign-csp-database-dataflow/specs/dataflow/single-sqlite-domain-partition/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/redesign-csp-database-dataflow/specs/dataflow/single-sqlite-domain-partition/spec.md",
+      "physical_sha256": "4e72fe16f60824dc9019f8cab92613aff76562538697f1036624dabe03dd6844",
+      "size_bytes": 4483,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/redesign-csp-database-dataflow/specs/dataflow/upstream-payload-entry-fact-layer/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/redesign-csp-database-dataflow/specs/dataflow/upstream-payload-entry-fact-layer/spec.md",
+      "physical_sha256": "a004b5bf9dafd9e785e481f67881fdf9c2f4cbce8508020d14cfd5b7baadb52d",
+      "size_bytes": 6093,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/redesign-csp-database-dataflow/tasks.md",
+      "archive_pointer": "docs/archive/openspec/changes/redesign-csp-database-dataflow/tasks.md",
+      "physical_sha256": "529f776e579ba02ebc02b466ceafeeb9fc0ee4b30860f37dce349064a294c865",
+      "size_bytes": 13376,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/redo-node-probes-subcheck/.openspec.yaml",
+      "archive_pointer": "docs/archive/openspec/changes/redo-node-probes-subcheck/.openspec.yaml",
+      "physical_sha256": "df4fb22c89b17a0d45d8ca25e98028a2244dceafe5a64ecbbc3bae35db97ccbc",
+      "size_bytes": 40,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/redo-node-probes-subcheck/README.md",
+      "archive_pointer": "docs/archive/openspec/changes/redo-node-probes-subcheck/README.md",
+      "physical_sha256": "eedfd8697f04293f85aaa22656ac8f7cc674c81cf19a0b967b38dc58d0617ba3",
+      "size_bytes": 124,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/redo-node-probes-subcheck/design.md",
+      "archive_pointer": "docs/archive/openspec/changes/redo-node-probes-subcheck/design.md",
+      "physical_sha256": "af0ace8321965031a4b48ea789a3ca7aaac0ebc313a7dc079bfcef8b4bc4f35a",
+      "size_bytes": 12684,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/redo-node-probes-subcheck/proposal.md",
+      "archive_pointer": "docs/archive/openspec/changes/redo-node-probes-subcheck/proposal.md",
+      "physical_sha256": "21a3be9b7b38b4e16f5747924fc2d04a420351f1c49a7af64a229af24d88123f",
+      "size_bytes": 3981,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/redo-node-probes-subcheck/specs/node-probes/mihomo-subcheck-runtime/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/redo-node-probes-subcheck/specs/node-probes/mihomo-subcheck-runtime/spec.md",
+      "physical_sha256": "f496c0469d3ba34cc420631798c55a360b626845611a74d294ed728034edeccf",
+      "size_bytes": 2989,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/redo-node-probes-subcheck/specs/node-probes/pipeline-funnel/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/redo-node-probes-subcheck/specs/node-probes/pipeline-funnel/spec.md",
+      "physical_sha256": "b617329e430226b085109eecc6a032fca4d94444dc08165834b404ac2503877c",
+      "size_bytes": 2572,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/redo-node-probes-subcheck/specs/node-probes/platform-capability-matrix/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/redo-node-probes-subcheck/specs/node-probes/platform-capability-matrix/spec.md",
+      "physical_sha256": "7b3e1ec9c6a4c012e80883d88c9aad9db5299b4ebbe1a0cbf7c5ec04d5bdc971",
+      "size_bytes": 4210,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/redo-node-probes-subcheck/specs/node-probes/result-contract-and-ui/spec.md",
+      "archive_pointer": "docs/archive/openspec/changes/redo-node-probes-subcheck/specs/node-probes/result-contract-and-ui/spec.md",
+      "physical_sha256": "65b63d06632fb0cea19fad3f8e75129bb395e5e1292bcefc10cca50073348795",
+      "size_bytes": 4869,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/changes/redo-node-probes-subcheck/tasks.md",
+      "archive_pointer": "docs/archive/openspec/changes/redo-node-probes-subcheck/tasks.md",
+      "physical_sha256": "402d67cffcaa62eb5e94fa15b71696e282d84a9abf54e03aedb52e0a754ab979",
+      "size_bytes": 6968,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/config.yaml",
+      "archive_pointer": "docs/archive/openspec/config.yaml",
+      "physical_sha256": "8d44efe0996b047dcf2bd5801350971222d2a258ac877e961ea885068fc98b90",
+      "size_bytes": 777,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/specs/README.md",
+      "archive_pointer": "docs/archive/openspec/specs/README.md",
+      "physical_sha256": "40c62673d4e2f9957264f8035bfae7de14f10e91e432e132d47dacb3126cb2d5",
+      "size_bytes": 3572,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/specs/auth/spec.md",
+      "archive_pointer": "docs/archive/openspec/specs/auth/spec.md",
+      "physical_sha256": "109c4babb5301ff2e80f609217f7c4b3cda316bb2a96074ddb64439e6a41526a",
+      "size_bytes": 4080,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/specs/inventory/spec.md",
+      "archive_pointer": "docs/archive/openspec/specs/inventory/spec.md",
+      "physical_sha256": "dc135a39501263e1ee8b7e34dc0e52ee52c4b9882e6d8fc3b0b52315184dcb69",
+      "size_bytes": 5785,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/specs/policy/spec.md",
+      "archive_pointer": "docs/archive/openspec/specs/policy/spec.md",
+      "physical_sha256": "137a9603641de19be81d2b79e3ec02e1a07ab2604fd2d87ede9a47917561dd1d",
+      "size_bytes": 6180,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/specs/probe/spec.md",
+      "archive_pointer": "docs/archive/openspec/specs/probe/spec.md",
+      "physical_sha256": "fb15be479445dcdd31f5af41afad561d7c3d02bd361c32b4e1e026e7ee232f60",
+      "size_bytes": 5905,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/specs/publication/spec.md",
+      "archive_pointer": "docs/archive/openspec/specs/publication/spec.md",
+      "physical_sha256": "14882e5bd717527899d37934fbc5bb72384ecf82e91c1c4983fe8bc2f2adfb1c",
+      "size_bytes": 5270,
+      "verified_identical": true
+    },
+    {
+      "source_logical_id": "openspec/specs/ui/spec.md",
+      "archive_pointer": "docs/archive/openspec/specs/ui/spec.md",
+      "physical_sha256": "1103824b13088cb3a09a21b6e2b2f63bd626a3d8d6b794b93b58fad3fb253c75",
+      "size_bytes": 5259,
+      "verified_identical": true
+    }
+  ],
+  "before_census": [
+    {
+      "source_logical_path": "openspec/changes/csp-audit-and-defect-remediation-v1/.openspec.yaml",
+      "sha256": "5edc88a042fdda2550686e54689bdd6779b13445bcaf782a1af9426634b9b4fb",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-audit-and-defect-remediation-v1/design.md",
+      "sha256": "b276d5b74dee0baeb48a7ebdb4d052aa39abe66859030f7f7dfe0edf2766a006",
+      "size_bytes": 10813,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-audit-and-defect-remediation-v1/proposal.md",
+      "sha256": "070ab4619584a278fd6d887b4eaef971f16cfd4a675a91a3aaed068c600bc9af",
+      "size_bytes": 8780,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-audit-and-defect-remediation-v1/specs/audit-and-defect-remediation/spec.md",
+      "sha256": "e135be9446a2912f57fbf69a275a03ca754030c2f3b5aa5f90d37975f275fe64",
+      "size_bytes": 15168,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-audit-and-defect-remediation-v1/tasks.md",
+      "sha256": "09bf15f390afcb5581e54282e4e2d23c7009e9af67f47e741111d82372ab3a4d",
+      "size_bytes": 7595,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-auth-deadlock-v1/.openspec.yaml",
+      "sha256": "50c36dfa766b2fc52e8a7d270b1d67cc487bcd95d1b4c8a5f929d62738e3c77e",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-auth-deadlock-v1/design.md",
+      "sha256": "663aa1398d387d660b3820bee8cbbed5093dabc0a97c3a45a844de805688f79f",
+      "size_bytes": 10409,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-auth-deadlock-v1/proposal.md",
+      "sha256": "ec6d3fecf6cd09621a7ca07617051cac5f0d09320fe3994cc67669145699e6aa",
+      "size_bytes": 4561,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-auth-deadlock-v1/specs/control-plane-auth-lifecycle/spec.md",
+      "sha256": "7857048a49e348b5e1ae8a7102689415fbe7afe458e3eaa466802be594457630",
+      "size_bytes": 4078,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-auth-deadlock-v1/specs/critic-headless-adversarial-verification/spec.md",
+      "sha256": "2981a2ae6bdbb6fa487980012f6fcb652ae1930c2e80ce2470c32c126920f003",
+      "size_bytes": 3654,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-auth-deadlock-v1/specs/frontend-credential-management/spec.md",
+      "sha256": "57e67d2dea80a2a96b3d728322eb20379169e5f872505bbb17fdff02213c9af2",
+      "size_bytes": 3978,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-auth-deadlock-v1/tasks.md",
+      "sha256": "932981dd9b32b7c4c674adeec01b4376d7f68c9f28d02912e285e9c103e0b36f",
+      "size_bytes": 4636,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-clean-slate-v1/.openspec.yaml",
+      "sha256": "7cbda91d0db42e7f3a4c0edd23a86fbf0cb02498c21edb9ec0b20199c529e618",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-clean-slate-v1/README.md",
+      "sha256": "79e6be07acf07435a408b1fae93cd34a584e7b14a3fffa960954add7b6898368",
+      "size_bytes": 90,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-clean-slate-v1/design.md",
+      "sha256": "716f45da8f62850cc3e7ecd3269a4110127b852074fb60eadcd8135d727d74e2",
+      "size_bytes": 15981,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-clean-slate-v1/proposal.md",
+      "sha256": "e300e72a069f772dddd392a308ce408b0bfd5ad0a69fe00722d7f23f62c6d5ae",
+      "size_bytes": 3276,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-clean-slate-v1/specs/admin-workbench-experience/spec.md",
+      "sha256": "a6b516d5f2f903b08fb26d323d42ccd90d059f77dcfc39815f449bbaf236504f",
+      "size_bytes": 2395,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-clean-slate-v1/specs/clean-slate-import-and-operations/spec.md",
+      "sha256": "df26712fbe57c8eefe8410951f86dd8d84c7f89668f16e5adebeb880a35ae974",
+      "size_bytes": 2807,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-clean-slate-v1/specs/control-plane-boundary/spec.md",
+      "sha256": "cb02af33e49ee5c491dfa867fb688b2cb89bb9f49b13585ee41d7ebf76b3f466",
+      "size_bytes": 2537,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-clean-slate-v1/specs/policy-tree-and-compiler/spec.md",
+      "sha256": "e94bd695e14aa29146fbe227f42cb6322b94399ee55ca3dbab31ded767a983f8",
+      "size_bytes": 2329,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-clean-slate-v1/specs/probe-evidence-engine/spec.md",
+      "sha256": "83141ccecc73faf2d6e310ad2d0270d28889f7669ff2bd84eb4173830f0e9e84",
+      "size_bytes": 2853,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-clean-slate-v1/specs/subscription-inventory/spec.md",
+      "sha256": "6d3ecd6755fb8b6c8b7624a2df98927443c25848d907ae98b2897785c39b4ed7",
+      "size_bytes": 2690,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-clean-slate-v1/tasks.md",
+      "sha256": "5ac3239897009e56e399651fbdbc6f072f864171843cde54afa29d1b5264c54d",
+      "size_bytes": 12290,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-debloat-over-engineering/.openspec.yaml",
+      "sha256": "062e545e250441aa0692c22d7a65e07334f1c0f2e706c0e297f36065b6a0699c",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-debloat-over-engineering/design.md",
+      "sha256": "0b0202be0d0766c63885038a3bf684b72fb338d908b85330be9ede091fd1a26a",
+      "size_bytes": 10263,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-debloat-over-engineering/proposal.md",
+      "sha256": "17a3a943f58f3ddd82339612955737d6d3fcb0db145242dc6a29221b3a4f45f1",
+      "size_bytes": 3802,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-debloat-over-engineering/specs/debloat/spec.md",
+      "sha256": "ecb7abff881ba5c6a125c6f608132aa4501362fda82bdc70df489640c56dd3c3",
+      "size_bytes": 6499,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-debloat-over-engineering/tasks.md",
+      "sha256": "6672d2f000a3250d3f918dbe381b03b7994a595878e8b60b60043f0c41b84cb2",
+      "size_bytes": 8497,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-decoupled-auth-settings-and-publication-recovery/.openspec.yaml",
+      "sha256": "dadfffd827282f22738d1215a8fa326bc6e3bda0a2aae3e3af6d203a1ef4c4aa",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-decoupled-auth-settings-and-publication-recovery/design.md",
+      "sha256": "0456225a99b927d97e38ae84bbf7fb72f4bfdb35c4a55353c71305a5c3405b50",
+      "size_bytes": 6725,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-decoupled-auth-settings-and-publication-recovery/proposal.md",
+      "sha256": "3fd54e6cae0d69fcfcc9306db4d2870358f5c1d55105e4b0571752069b68d767",
+      "size_bytes": 4946,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-decoupled-auth-settings-and-publication-recovery/specs/baseline-auth-and-export/spec.md",
+      "sha256": "2d21a15750d81ac3192813096fb77446e15d46ab25faf27bcc15e5f8b8f2456a",
+      "size_bytes": 4069,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-decoupled-auth-settings-and-publication-recovery/specs/decoupled-auth-settings/spec.md",
+      "sha256": "1347fcd5a264b72597d8740dca852c91ed11bf2b565111de0f1b5552dfd12d26",
+      "size_bytes": 5979,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-decoupled-auth-settings-and-publication-recovery/specs/publication-export-auth-recovery/spec.md",
+      "sha256": "c2c95b41d875a11893b8d37f3e71a993aafd1209f4ab59148f20376b1264a616",
+      "size_bytes": 6032,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-decoupled-auth-settings-and-publication-recovery/tasks.md",
+      "sha256": "294408a71d493c13b8fdaec947c42c0df5d700524a30fcfca2ba69d3fca84ff5",
+      "size_bytes": 5084,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-fresh-inventory-full-validation/.openspec.yaml",
+      "sha256": "720b3de6231f9647898feba395449b03234e0c4fa3bd4ce47fc3bb341b0f16d6",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-fresh-inventory-full-validation/README.md",
+      "sha256": "47e6036be41a0a37f951dacb572f6d92e42a7d65611cee699d923933e79a2c28",
+      "size_bytes": 116,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-fresh-inventory-full-validation/design.md",
+      "sha256": "0a1e3dad4ec43b55e1fdeec4b4d5a06a3f590cf646dcec7b0e228b9fec1822c6",
+      "size_bytes": 21062,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-fresh-inventory-full-validation/proposal.md",
+      "sha256": "3e5329b834a2dfd2dce3e5973ce288df919c84c8039f4c441f5a3d9e87640eb6",
+      "size_bytes": 4042,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-fresh-inventory-full-validation/specs/inventory/clean-slate-node-reset/spec.md",
+      "sha256": "4301d607543973a1b1c06ff65ce3e8f3620f160d8bf54749a85d9a8b657079d6",
+      "size_bytes": 5181,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-fresh-inventory-full-validation/specs/maintenance/reset-node-inventory-cli/spec.md",
+      "sha256": "20d68f67f2a12674529cec55f37012c8e8594839574fa4cf3be38ccd15e7bbd8",
+      "size_bytes": 10427,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-fresh-inventory-full-validation/specs/policy/rules-validation/spec.md",
+      "sha256": "ab05bb85cfebfe8c581e4d3bbe9459d5abfcfce74c36b56ff2cc6edb71f8de07",
+      "size_bytes": 7148,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-fresh-inventory-full-validation/specs/subscription/source-token-repair/spec.md",
+      "sha256": "70ca93c0167b152428f04b275fd48e6fefd435fb2bac338e982daaeab37bd6a7",
+      "size_bytes": 2583,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-fresh-inventory-full-validation/tasks.md",
+      "sha256": "a45471bd53d3e77abbd994019417f5aa31b98cc8d74bec8ed45f7068e7597f22",
+      "size_bytes": 22458,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-global-probe-export-filter-and-overlays/.openspec.yaml",
+      "sha256": "dadfffd827282f22738d1215a8fa326bc6e3bda0a2aae3e3af6d203a1ef4c4aa",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-global-probe-export-filter-and-overlays/design.md",
+      "sha256": "aebac2fba78d6e0a4764f7794b3bedd31c7665bebee95876fcf3086af8a27ca4",
+      "size_bytes": 6280,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-global-probe-export-filter-and-overlays/proposal.md",
+      "sha256": "981f54f65f011e5fd6dee64c8ed083c5357bfeee127aded9bcf59f963c4a216b",
+      "size_bytes": 2379,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-global-probe-export-filter-and-overlays/specs/global-probe-export-filter/spec.md",
+      "sha256": "69b449e2d0e25b9bdfe6dd6847d630dc0d71edd427f00db8203ec24d5e24441f",
+      "size_bytes": 4703,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-global-probe-export-filter-and-overlays/specs/viewport-safe-overlays/spec.md",
+      "sha256": "f0a0a9ce1a3a96a9b80fd2568085da6772a73a2595309b2ebf7df1ae30fa78a0",
+      "size_bytes": 2680,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-global-probe-export-filter-and-overlays/tasks.md",
+      "sha256": "84e04cbe98f047bba038e8f55ea414b97f5988e9e19dbe7e3b8afce0dbf57688",
+      "size_bytes": 3394,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-incremental-expiry-probe-sweep/.openspec.yaml",
+      "sha256": "5edc88a042fdda2550686e54689bdd6779b13445bcaf782a1af9426634b9b4fb",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-incremental-expiry-probe-sweep/design.md",
+      "sha256": "d8464c0645eaf640d9ef70265ee226e7cf08b4a2cef6376c695446f984203570",
+      "size_bytes": 6576,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-incremental-expiry-probe-sweep/proposal.md",
+      "sha256": "6cd62a5ff3de70227de7c8914e60fd88fd273bc066c06cbc31080eecdcf34943",
+      "size_bytes": 3181,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-incremental-expiry-probe-sweep/specs/incremental-expiry-probe-sweep/spec.md",
+      "sha256": "99c6c24971d1225928c5ef3eff877403451d1c472d9a0d97b942c54b108c8954",
+      "size_bytes": 5109,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-incremental-expiry-probe-sweep/tasks.md",
+      "sha256": "a19410776168bb71a91ecea7b4c6cc88ec6d30a19dde28e688a6f3ae5165b349",
+      "size_bytes": 2660,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-ip-risk-v1/.citation-ledger.json",
+      "sha256": "732d32c54ebe7fd3f054065a825bdbe5ff20d2e09b89ddd04d4aa3d5d2a133b8",
+      "size_bytes": 848,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-ip-risk-v1/.openspec.yaml",
+      "sha256": "50c36dfa766b2fc52e8a7d270b1d67cc487bcd95d1b4c8a5f929d62738e3c77e",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-ip-risk-v1/design.md",
+      "sha256": "07d3e524395fe4ad26f18870ffcfc9e1610abf598194696f0494532e5708b810",
+      "size_bytes": 14620,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-ip-risk-v1/proposal.md",
+      "sha256": "8d8a51d33ceaa7f0e99e60d9a492b9f1184057f2f28fd993ad75c47928c91a93",
+      "size_bytes": 4418,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-ip-risk-v1/specs/admin-workbench-experience/spec.md",
+      "sha256": "cf64cf53d7cdb7dfbc171591232e8899ef32ebd577de991b586aa940717de97e",
+      "size_bytes": 1819,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-ip-risk-v1/specs/ip-risk-evidence/spec.md",
+      "sha256": "32093f7913a16a0b4aa96331cbde738f7d7c7f671a7e00b6c7ff26e838eacfd0",
+      "size_bytes": 3644,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-ip-risk-v1/specs/ip-risk-management-workbench/spec.md",
+      "sha256": "38804eb1f78f47677bc500f71820f652b52ef86e419d6ae247a56fb5a6832945",
+      "size_bytes": 2556,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-ip-risk-v1/specs/policy-tree-and-compiler/spec.md",
+      "sha256": "06dddc21174e32fe14a09fd35ef4da681f5c4c858e42d15520b9d6f03eebafab",
+      "size_bytes": 2843,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-ip-risk-v1/specs/probe-evidence-engine/spec.md",
+      "sha256": "9965c7018215eba1abe75591c0a8525c2e94eec7b8cff85a85552aff1494ce79",
+      "size_bytes": 2004,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-ip-risk-v1/specs/risk-policy-admission-and-publication/spec.md",
+      "sha256": "48b7887cc9d393c1ba2ba439db580af8f6c6ff5982cfda65ca92f18cbbb5be47",
+      "size_bytes": 3398,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-ip-risk-v1/specs/subscription-inventory/spec.md",
+      "sha256": "84225bb5e51490dcb546dd03717413c4e0e6004ee809f49787eaba7d6e3e9377",
+      "size_bytes": 1023,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-ip-risk-v1/tasks.md",
+      "sha256": "ea847b04acd8155603079e6dd33c98572148fd67de7053db3d5ad1f6deaf3ea9",
+      "size_bytes": 9451,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-living-spec-consolidation/.openspec.yaml",
+      "sha256": "8ba8273010ceb66cd0ab320b2f49de179fac6fd6f648317c2cc129442eea7dc0",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-living-spec-consolidation/design.md",
+      "sha256": "e2e68390407d378eaf92613288be29bfed79db80bf40170e007ec4bd4609cfb9",
+      "size_bytes": 6502,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-living-spec-consolidation/proposal.md",
+      "sha256": "0707deb099f9f2dcac158a0e6b38ea2886bb60c43923843a71bfba221fcf4d14",
+      "size_bytes": 3400,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-living-spec-consolidation/specs/living-spec-consolidation/spec.md",
+      "sha256": "9765a54daade03443c9a043135d5bce079636485ffd733c668d7a7686c43b8e5",
+      "size_bytes": 2651,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-living-spec-consolidation/tasks.md",
+      "sha256": "929088c9f4120531bfd2a1d3a7e5d6cd8d43a8bba6aae0e92dd0fdb5b5d94908",
+      "size_bytes": 4114,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-node-probe-pool-priority-queue/.openspec.yaml",
+      "sha256": "65ff9df577b54daf8b21917c880c564135cf80d9e6a2de690feb0f4a842393f1",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-node-probe-pool-priority-queue/design.md",
+      "sha256": "22ccc93b242323f291aff2784eaf502ed8b3e2d35610b02bb69661cff9853865",
+      "size_bytes": 16058,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-node-probe-pool-priority-queue/proposal.md",
+      "sha256": "674c4490d44e3254aac0b13e6ed37ddac12bf58d62ceb5db7a571cc71f43fb1c",
+      "size_bytes": 8085,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-node-probe-pool-priority-queue/specs/node-probe-pool/spec.md",
+      "sha256": "a14ad5c53acf86e1770634efc6bd330e953c8f9901f866bd1ebecb726e3f34f3",
+      "size_bytes": 5768,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-node-probe-pool-priority-queue/tasks.md",
+      "sha256": "6e6dd98d789edd7a5c1d9845dc289746d03c80aeb1047f0141193a241fafabad",
+      "size_bytes": 7538,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-periodic-active-probes-global-group-filters/.openspec.yaml",
+      "sha256": "8ce533eab9c047a4566f79d81b21eb252f3437f591dee942f9dbb2669f23cdfb",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-periodic-active-probes-global-group-filters/design.md",
+      "sha256": "254d3f0d4fa6391fb1258f53a74b13e4356b5c2de49a451bc2369e2d9ecdccef",
+      "size_bytes": 10597,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-periodic-active-probes-global-group-filters/proposal.md",
+      "sha256": "d0b0ccbf91a00de827c626af1477ec9d9eb7f3015f1d81c5ec95b5e7f3ee3786",
+      "size_bytes": 2291,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-periodic-active-probes-global-group-filters/specs/global-group-node-filters/spec.md",
+      "sha256": "b10213cc25e2cad382594603d32280266992e97f4b4301cfcbe05037c863b429",
+      "size_bytes": 4055,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-periodic-active-probes-global-group-filters/specs/periodic-active-probes/spec.md",
+      "sha256": "762ff2155ac3057edb95dc626de9ee02a13ae18133361cef985e7de79ad130d9",
+      "size_bytes": 3465,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-periodic-active-probes-global-group-filters/tasks.md",
+      "sha256": "1632c9263cffef966e3f0820e3fa7fc042e6927cde309c5b3adc2ce9fca54e59",
+      "size_bytes": 7222,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-policy-membership-probe-state-pagination/.openspec.yaml",
+      "sha256": "ec3a1b167d0ccdb9f7a3f8f370ba8038feb637051c90a0b3fbcc5e9cef45d7a5",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-policy-membership-probe-state-pagination/README.md",
+      "sha256": "4c3727d5722af235d2dab51e5a3926b770cfeccf8a31809dd14d17668735150e",
+      "size_bytes": 181,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-policy-membership-probe-state-pagination/design.md",
+      "sha256": "fd9c6d3a09d4f21a4d4641cf303297abec9a55eecf73977ee661099f3e222cd3",
+      "size_bytes": 8762,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-policy-membership-probe-state-pagination/proposal.md",
+      "sha256": "4591c9e00baae13d740df41aa0ef9819e9a462229cddd8f8eb699d11f3a3d9cd",
+      "size_bytes": 5494,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-policy-membership-probe-state-pagination/specs/policy/full-inventory-resolution/spec.md",
+      "sha256": "4e65c7ea3232b19e6c3806dbfbd243c396323f3aa5b2f37114ba185b4c334729",
+      "size_bytes": 1859,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-policy-membership-probe-state-pagination/specs/policy/membership-semantics-and-pagination/spec.md",
+      "sha256": "0992fd0d81f50a3b1425b3b9080269473f56c8fcd53bdedec73ee2476d43fbc2",
+      "size_bytes": 3021,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-policy-membership-probe-state-pagination/specs/probe/health-state-conservation-and-pagination/spec.md",
+      "sha256": "7d0e7bd7d98e7bb47ce8d864fdc737d81a4401d9790273a14e12d80e116c0021",
+      "size_bytes": 2529,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-policy-membership-probe-state-pagination/specs/ui/navigation-layout-and-viewport-resilience/spec.md",
+      "sha256": "ebccb68def98ade2f5c016a65f17df1c68d496b4d2bc67f69e20bc8a31615998",
+      "size_bytes": 2338,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-policy-membership-probe-state-pagination/tasks.md",
+      "sha256": "ea00920107cd4762e4e05cc40ccc8aeec90cb7c862004923ba30ae5aed19e27b",
+      "size_bytes": 5114,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-preserve-inventory-and-verify-business-results/.openspec.yaml",
+      "sha256": "c51317fdb09f4c0096f955c8beeb5f19a56ba49530c79732bb429ad0f423004d",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-preserve-inventory-and-verify-business-results/design.md",
+      "sha256": "7bec13d5ca29598309c4469e4913586d904cf9c014eafe207e5713db2a18957f",
+      "size_bytes": 13438,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-preserve-inventory-and-verify-business-results/proposal.md",
+      "sha256": "e7d7285a8bbcdbb69ed3dd831cc2bd335840e611c7f656ea50b9c8570ab50569",
+      "size_bytes": 5784,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-preserve-inventory-and-verify-business-results/specs/api-semantic-verification-matrix/spec.md",
+      "sha256": "d78ab859a787b45811e429bc3d04474ad45d9c2b9f690cc6591155d48675d1dc",
+      "size_bytes": 5207,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-preserve-inventory-and-verify-business-results/specs/probe-construction-and-truthful-diagnostics/spec.md",
+      "sha256": "c940e992383bed2d5f0858d5b0dcbd552516a6803caa9962520351dee66f0e2b",
+      "size_bytes": 6172,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-preserve-inventory-and-verify-business-results/specs/subscription-inventory-preservation/spec.md",
+      "sha256": "9b93fa442712ba9b8df675b3a875800da66e1a7e99ca6ea17f4bebf0687b66cf",
+      "size_bytes": 7395,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-preserve-inventory-and-verify-business-results/tasks.md",
+      "sha256": "1acc81db3dbe0c8bccdf4b73ed8e9bb46f3920e5658d65b0d0e81e7ae4ec17b4",
+      "size_bytes": 7952,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-probe-engine-human-centric-redesign/.openspec.yaml",
+      "sha256": "65ff9df577b54daf8b21917c880c564135cf80d9e6a2de690feb0f4a842393f1",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-probe-engine-human-centric-redesign/design.md",
+      "sha256": "35dd882a04c76d0877aee207e2aeef24aa989e207e41c3484a5f321184c8fd8d",
+      "size_bytes": 17880,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-probe-engine-human-centric-redesign/proposal.md",
+      "sha256": "d40fc8557e37d1604e0dedf47a4b8ad9b05e7e8a652337c0663b4df15b2651c5",
+      "size_bytes": 7475,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-probe-engine-human-centric-redesign/specs/probe-engine-ux/spec.md",
+      "sha256": "889345b89ee760f82097651eadb432178c63b417e2b0d2a759d871926ab54cef",
+      "size_bytes": 11055,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-probe-engine-human-centric-redesign/tasks.md",
+      "sha256": "633ffe517a14d51c0b5760440587ee1d378138814030885e3da569b0fb1d8f2f",
+      "size_bytes": 7260,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-probe-health-minute-state-sweep/.openspec.yaml",
+      "sha256": "dadfffd827282f22738d1215a8fa326bc6e3bda0a2aae3e3af6d203a1ef4c4aa",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-probe-health-minute-state-sweep/README.md",
+      "sha256": "1021105247d84cd714eb8b537b9db84a3f67d80a544387a723c8880e0cc6c587",
+      "size_bytes": 121,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-probe-health-minute-state-sweep/design.md",
+      "sha256": "6e5dff1ad66759672291199bd88b2cef02d587dcc1466d7f60079f89d702af83",
+      "size_bytes": 9413,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-probe-health-minute-state-sweep/proposal.md",
+      "sha256": "b4b1dd6f21cb5c5c37acf09fd40c7019621b1df4c3269cbe9f311affc6f61e2a",
+      "size_bytes": 3047,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-probe-health-minute-state-sweep/specs/baseline-health-read-model/spec.md",
+      "sha256": "c50bb15dd48dd34b15e75a124c30333cd7e31ecd6d75433b9cb1ea638f552064",
+      "size_bytes": 2531,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-probe-health-minute-state-sweep/specs/minute-incremental-state-sweep/spec.md",
+      "sha256": "287cb8bb456b5c1728773e9a72687044b6a2cc97335d9f8063216c4644910a3e",
+      "size_bytes": 3293,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-probe-health-minute-state-sweep/specs/probe-evidence-classification/spec.md",
+      "sha256": "fffecdd46ffb5a6c93215b992b6953e14689e412fff7c353959a5e40005f8ba1",
+      "size_bytes": 2104,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-probe-health-minute-state-sweep/tasks.md",
+      "sha256": "80bbe0b01db99658f4fc33f7df6aff321e58459b47ee24bd90b850174844cb14",
+      "size_bytes": 4406,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-probe-truth-and-efficiency/.openspec.yaml",
+      "sha256": "d707823457f58b4f938a99bc049bddd9b937affec2d09c976c9a16a9dcd03f77",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-probe-truth-and-efficiency/design.md",
+      "sha256": "35166f4e2a5e9a16c6aba6219a6f752cdab0c3bc8846e3fa3729a2b2b7a95820",
+      "size_bytes": 20548,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-probe-truth-and-efficiency/proposal.md",
+      "sha256": "30357f95d591623d060274b4f4e7235934230682c86ace3a94f6de0662859c05",
+      "size_bytes": 8033,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-probe-truth-and-efficiency/specs/probe-truth-and-efficiency/spec.md",
+      "sha256": "72523b16e5ac5d7c4477ab017ae4d831394dde968f6c1023685a6302d6936d90",
+      "size_bytes": 12676,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-probe-truth-and-efficiency/tasks.md",
+      "sha256": "683dbfc2f095e47792f5d2d4fb4875772904c50890b771ba986eb3b75355ebc1",
+      "size_bytes": 9326,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-publication-theme-probe-recovery-v1/.openspec.yaml",
+      "sha256": "d04b6ad7c1b1e5eb9e8ec8cfdae94bc49d29216b59b73cea7a3cc1de9d508463",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-publication-theme-probe-recovery-v1/design.md",
+      "sha256": "02eb8a19dbdf7bacd3df9c8d2be1554ee16423847c213dd43b6c8395e7f63dbd",
+      "size_bytes": 10686,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-publication-theme-probe-recovery-v1/proposal.md",
+      "sha256": "248014f5ea9b95431d84c3a7242c1a0c4abc8b57007a4919e334920934f90a3f",
+      "size_bytes": 4728,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-publication-theme-probe-recovery-v1/specs/publication-theme-probe-recovery/spec.md",
+      "sha256": "e1e1d7fdfb79f230fc7f2295de659ca4da9743ccd372b21e3844f12c02ad1ff6",
+      "size_bytes": 13631,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-publication-theme-probe-recovery-v1/tasks.md",
+      "sha256": "967f75cfed34c891c8e1ba3c6354f9158782a5d2dd0e061b3fc9781a0fb0caab",
+      "size_bytes": 9480,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-subscription-proxy-and-verge-headers/.openspec.yaml",
+      "sha256": "5edc88a042fdda2550686e54689bdd6779b13445bcaf782a1af9426634b9b4fb",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-subscription-proxy-and-verge-headers/design.md",
+      "sha256": "4a5c8410547479d645ca6bbd37f5299ba66897a44f21f2b639b37c8a69c7d5d0",
+      "size_bytes": 11905,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-subscription-proxy-and-verge-headers/proposal.md",
+      "sha256": "0b7a3f2008751c66cb95f1576cc0d91cee3bfc0efc6de16e6bd1ca9ad6cc3b60",
+      "size_bytes": 7149,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-subscription-proxy-and-verge-headers/specs/subscription-proxy-and-verge-headers/spec.md",
+      "sha256": "d64559c6ee1faa193de39a1bb1e59a3aacca3f28471f869bfd15a39f91c348f1",
+      "size_bytes": 12263,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-subscription-proxy-and-verge-headers/tasks.md",
+      "sha256": "952644bf6820bb33fcca00933149eb249ca8171dfdcf2258066a40923c186975",
+      "size_bytes": 4639,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-topology-i18n-and-node-targets/.openspec.yaml",
+      "sha256": "062e545e250441aa0692c22d7a65e07334f1c0f2e706c0e297f36065b6a0699c",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-topology-i18n-and-node-targets/design.md",
+      "sha256": "a61cab822be5453efb60c4a3cf290a025964e405ba239e62efbece7ce32673c8",
+      "size_bytes": 10956,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-topology-i18n-and-node-targets/proposal.md",
+      "sha256": "6bec759645a452410b81a76e94b4830d05fe72a32f46096273eca1af7bcecfaf",
+      "size_bytes": 5424,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-topology-i18n-and-node-targets/specs/topology-i18n-export/spec.md",
+      "sha256": "814153a8d489162440c5af52446c7ea708b3322f0ae0058387987fab314b6d37",
+      "size_bytes": 7776,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-topology-i18n-and-node-targets/tasks.md",
+      "sha256": "ccf99c9630fb914e8c5da84b78af41f09aa436a89bef8609d4a1bfc242e86414",
+      "size_bytes": 4456,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-ui-device-governance-v1/.openspec.yaml",
+      "sha256": "d04b6ad7c1b1e5eb9e8ec8cfdae94bc49d29216b59b73cea7a3cc1de9d508463",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-ui-device-governance-v1/design.md",
+      "sha256": "fe90310a0b1947e45272ee0cc4a8a8979e9563d6a049a81bb967bb22a43a9afc",
+      "size_bytes": 4342,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-ui-device-governance-v1/proposal.md",
+      "sha256": "2122c6ecd2c97bf863af0b3938ad69d6d7026cc3bf3b16121f239a5e16b8419b",
+      "size_bytes": 2331,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-ui-device-governance-v1/specs/admin-ui-device-quality/spec.md",
+      "sha256": "ef3a491396f81434c2a40e79efd1b2e241282eeec91703e61ff3c7f615a29108",
+      "size_bytes": 4437,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-ui-device-governance-v1/tasks.md",
+      "sha256": "7ab32c94b25884a86d19a6f2405e1b40d4d05dd0869c286ce6a04177bbf67f86",
+      "size_bytes": 3967,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-ui-hardcode-governance-v1/.openspec.yaml",
+      "sha256": "d04b6ad7c1b1e5eb9e8ec8cfdae94bc49d29216b59b73cea7a3cc1de9d508463",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-ui-hardcode-governance-v1/design.md",
+      "sha256": "ddff2ed1b6cfcb1100f1c6d06961ebb102b356964fcee450e96e1d865301fe40",
+      "size_bytes": 5948,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-ui-hardcode-governance-v1/proposal.md",
+      "sha256": "cb109bdf9a58f3d1557055a19ae1518e0e58bbcd62c3c55f46603ed794e61bdb",
+      "size_bytes": 1922,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-ui-hardcode-governance-v1/specs/admin-ui-adaptive-layout/spec.md",
+      "sha256": "55ead17e95b7ffe3ef5420626a0c9522da7905eded8b3cd78f98e83e6f41f146",
+      "size_bytes": 2630,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/csp-ui-hardcode-governance-v1/tasks.md",
+      "sha256": "cce20fe39f31e75da119180f240add45b2609971d1645c1f7397080b4c2d2e33",
+      "size_bytes": 4233,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/finish-csp-live-validation-and-recovery/.openspec.yaml",
+      "sha256": "5d113f7d56015df3c7cad21b6f5da445ffbc4edc2785a2391465abec93ac5afc",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/finish-csp-live-validation-and-recovery/README.md",
+      "sha256": "90ad8b23503ddad71140535d1359793b63247bd21fb1a432f6a2c8a4c19008f4",
+      "size_bytes": 124,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/finish-csp-live-validation-and-recovery/design.md",
+      "sha256": "88afb745cd41b59add98dea896c0cf4e21b8bf47598507cc4db02230b7bc0b8d",
+      "size_bytes": 18197,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/finish-csp-live-validation-and-recovery/proposal.md",
+      "sha256": "bf00aaa136aad994071b0ffc5fc166c1dfddb9ae26767a969fdcf7400ce6185a",
+      "size_bytes": 3218,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/finish-csp-live-validation-and-recovery/specs/live-acceptance-and-qualified-recovery/spec.md",
+      "sha256": "778f55192223ca4eb7cfde0dd7477d9e89ec210808c0e06d9c2bd5ee571c0784",
+      "size_bytes": 5188,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/finish-csp-live-validation-and-recovery/tasks.md",
+      "sha256": "3e1ba13a60c898bcf657d3e6eccb215644e57a4c7ea2130f5a3ac1d3c6cdacfc",
+      "size_bytes": 5444,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/fix-csp-legacy-source-attribution/.openspec.yaml",
+      "sha256": "ad734da2ba5f4c5a6979a8bbb6bad4db20fb21ec275ceca5f24842fbdfaf5bef",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/fix-csp-legacy-source-attribution/design.md",
+      "sha256": "41ece28cc73226f359634b1d28a962768b1045b11e1b49f6c284d7d09a8061a6",
+      "size_bytes": 7994,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/fix-csp-legacy-source-attribution/proposal.md",
+      "sha256": "bd5b9c2fe370c76ed49e19cfa779d564cc02de63868233738edfc70c47fa5562",
+      "size_bytes": 6418,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/fix-csp-legacy-source-attribution/specs/inventory/node-source-history-api-view/spec.md",
+      "sha256": "bbb4eb1c3ee075cf8dc6123d741245901db33d0883bfd0f6e43413942dd84b3e",
+      "size_bytes": 1630,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/fix-csp-legacy-source-attribution/specs/inventory/node-source-history-ledger/spec.md",
+      "sha256": "4b6362874d44a2d62d6ddf29a87d09447cf4bcc68e6cdaf6824084e8ff6e3065",
+      "size_bytes": 1606,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/fix-csp-legacy-source-attribution/specs/inventory/source-history-recovery-cli/spec.md",
+      "sha256": "db5e0d13cd68424433d412d2ce57f01a15709dbafd26bbfb723b8a05be07a3d7",
+      "size_bytes": 1486,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/fix-csp-legacy-source-attribution/specs/inventory/source-history-write-chain/spec.md",
+      "sha256": "678a4f7237b89c5aec10108fc7dbbc828af39cf4d2e6452431a559fa58fd150b",
+      "size_bytes": 1536,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/fix-csp-legacy-source-attribution/tasks.md",
+      "sha256": "ffc7d39cc7e34d156b7f48ee31b441f0ac15b356285aab066a04d55ce5722819",
+      "size_bytes": 5494,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/native-mihomo-export-clean-slate/.openspec.yaml",
+      "sha256": "8ce533eab9c047a4566f79d81b21eb252f3437f591dee942f9dbb2669f23cdfb",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/native-mihomo-export-clean-slate/design.md",
+      "sha256": "4704bf000b043a2f427c023c0a201cb84cbf6e18cc5fa448951aea78c966a517",
+      "size_bytes": 10245,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/native-mihomo-export-clean-slate/proposal.md",
+      "sha256": "50d889afdac5ac7fb97d00fa34d09c7c045cd99524a54783b2023e29b1e5b610",
+      "size_bytes": 2329,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/native-mihomo-export-clean-slate/specs/native-mihomo-publications/spec.md",
+      "sha256": "7f42bf175d461f60aca7b8e2f822e585fa6dd840e709acf4c51b572ba28747ed",
+      "size_bytes": 6401,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/native-mihomo-export-clean-slate/tasks.md",
+      "sha256": "5c5899a979a66926dbc4f1f12171a22d9d1d2c97b8cae42e8a7c87de9156f5b0",
+      "size_bytes": 5260,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/redesign-csp-database-dataflow/.openspec.yaml",
+      "sha256": "df4fb22c89b17a0d45d8ca25e98028a2244dceafe5a64ecbbc3bae35db97ccbc",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/redesign-csp-database-dataflow/README.md",
+      "sha256": "ef10610a2346c046d57118471b9f09ea807f80c1fd65dbe98041901226b1683d",
+      "size_bytes": 2086,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/redesign-csp-database-dataflow/design.md",
+      "sha256": "7626afa05896cc5260f4d86f6892e6790d2a5ff157b9d3cb950a46d5c6725eb7",
+      "size_bytes": 13038,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/redesign-csp-database-dataflow/evidence-enabled-inventory-audit.md",
+      "sha256": "8116aa98a5f8026cba06ed6b02e263b3137076c7ba926efe912909f4b95ec70c",
+      "size_bytes": 11906,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/redesign-csp-database-dataflow/proposal.md",
+      "sha256": "b98ef7d7cf4c811262010d11fb2a7e2ef5db1f9490e468d8483e2932ee17d5d6",
+      "size_bytes": 9767,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/redesign-csp-database-dataflow/specs/dataflow/downstream-matrix-and-publication/spec.md",
+      "sha256": "2102e0b5b0bdf5cbcccc2170a0fa6e3b67328382b168504e7e78fa8726819f45",
+      "size_bytes": 7753,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/redesign-csp-database-dataflow/specs/dataflow/enabled-subscription-inventory/spec.md",
+      "sha256": "bf1e14834786e773c713bb5e0af68b59f068bb5ccec89385ad7cd8ce61bf021d",
+      "size_bytes": 7997,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/redesign-csp-database-dataflow/specs/dataflow/node-connection-versioning-cow/spec.md",
+      "sha256": "9f242b597e7075d0cbdadf5fd833e6ffd3e7759620df21c55a7140bcb7015d5d",
+      "size_bytes": 4141,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/redesign-csp-database-dataflow/specs/dataflow/single-sqlite-domain-partition/spec.md",
+      "sha256": "4e72fe16f60824dc9019f8cab92613aff76562538697f1036624dabe03dd6844",
+      "size_bytes": 4483,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/redesign-csp-database-dataflow/specs/dataflow/upstream-payload-entry-fact-layer/spec.md",
+      "sha256": "a004b5bf9dafd9e785e481f67881fdf9c2f4cbce8508020d14cfd5b7baadb52d",
+      "size_bytes": 6093,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/redesign-csp-database-dataflow/tasks.md",
+      "sha256": "529f776e579ba02ebc02b466ceafeeb9fc0ee4b30860f37dce349064a294c865",
+      "size_bytes": 13376,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/redo-node-probes-subcheck/.openspec.yaml",
+      "sha256": "df4fb22c89b17a0d45d8ca25e98028a2244dceafe5a64ecbbc3bae35db97ccbc",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/redo-node-probes-subcheck/README.md",
+      "sha256": "eedfd8697f04293f85aaa22656ac8f7cc674c81cf19a0b967b38dc58d0617ba3",
+      "size_bytes": 124,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/redo-node-probes-subcheck/design.md",
+      "sha256": "af0ace8321965031a4b48ea789a3ca7aaac0ebc313a7dc079bfcef8b4bc4f35a",
+      "size_bytes": 12684,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/redo-node-probes-subcheck/proposal.md",
+      "sha256": "21a3be9b7b38b4e16f5747924fc2d04a420351f1c49a7af64a229af24d88123f",
+      "size_bytes": 3981,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/redo-node-probes-subcheck/specs/node-probes/mihomo-subcheck-runtime/spec.md",
+      "sha256": "f496c0469d3ba34cc420631798c55a360b626845611a74d294ed728034edeccf",
+      "size_bytes": 2989,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/redo-node-probes-subcheck/specs/node-probes/pipeline-funnel/spec.md",
+      "sha256": "b617329e430226b085109eecc6a032fca4d94444dc08165834b404ac2503877c",
+      "size_bytes": 2572,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/redo-node-probes-subcheck/specs/node-probes/platform-capability-matrix/spec.md",
+      "sha256": "7b3e1ec9c6a4c012e80883d88c9aad9db5299b4ebbe1a0cbf7c5ec04d5bdc971",
+      "size_bytes": 4210,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/redo-node-probes-subcheck/specs/node-probes/result-contract-and-ui/spec.md",
+      "sha256": "65b63d06632fb0cea19fad3f8e75129bb395e5e1292bcefc10cca50073348795",
+      "size_bytes": 4869,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/changes/redo-node-probes-subcheck/tasks.md",
+      "sha256": "402d67cffcaa62eb5e94fa15b71696e282d84a9abf54e03aedb52e0a754ab979",
+      "size_bytes": 6968,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/config.yaml",
+      "sha256": "8d44efe0996b047dcf2bd5801350971222d2a258ac877e961ea885068fc98b90",
+      "size_bytes": 777,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/specs/README.md",
+      "sha256": "40c62673d4e2f9957264f8035bfae7de14f10e91e432e132d47dacb3126cb2d5",
+      "size_bytes": 3572,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/specs/auth/spec.md",
+      "sha256": "109c4babb5301ff2e80f609217f7c4b3cda316bb2a96074ddb64439e6a41526a",
+      "size_bytes": 4080,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/specs/inventory/spec.md",
+      "sha256": "dc135a39501263e1ee8b7e34dc0e52ee52c4b9882e6d8fc3b0b52315184dcb69",
+      "size_bytes": 5785,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/specs/policy/spec.md",
+      "sha256": "137a9603641de19be81d2b79e3ec02e1a07ab2604fd2d87ede9a47917561dd1d",
+      "size_bytes": 6180,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/specs/probe/spec.md",
+      "sha256": "fb15be479445dcdd31f5af41afad561d7c3d02bd361c32b4e1e026e7ee232f60",
+      "size_bytes": 5905,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/specs/publication/spec.md",
+      "sha256": "14882e5bd717527899d37934fbc5bb72384ecf82e91c1c4983fe8bc2f2adfb1c",
+      "size_bytes": 5270,
+      "mode_octal": "0o100644"
+    },
+    {
+      "source_logical_path": "openspec/specs/ui/spec.md",
+      "sha256": "1103824b13088cb3a09a21b6e2b2f63bd626a3d8d6b794b93b58fad3fb253c75",
+      "size_bytes": 5259,
+      "mode_octal": "0o100644"
+    }
+  ],
+  "after_census": [
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-audit-and-defect-remediation-v1/.openspec.yaml",
+      "source_logical_path": "openspec/changes/csp-audit-and-defect-remediation-v1/.openspec.yaml",
+      "sha256": "5edc88a042fdda2550686e54689bdd6779b13445bcaf782a1af9426634b9b4fb",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-audit-and-defect-remediation-v1/design.md",
+      "source_logical_path": "openspec/changes/csp-audit-and-defect-remediation-v1/design.md",
+      "sha256": "b276d5b74dee0baeb48a7ebdb4d052aa39abe66859030f7f7dfe0edf2766a006",
+      "size_bytes": 10813,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-audit-and-defect-remediation-v1/proposal.md",
+      "source_logical_path": "openspec/changes/csp-audit-and-defect-remediation-v1/proposal.md",
+      "sha256": "070ab4619584a278fd6d887b4eaef971f16cfd4a675a91a3aaed068c600bc9af",
+      "size_bytes": 8780,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-audit-and-defect-remediation-v1/specs/audit-and-defect-remediation/spec.md",
+      "source_logical_path": "openspec/changes/csp-audit-and-defect-remediation-v1/specs/audit-and-defect-remediation/spec.md",
+      "sha256": "e135be9446a2912f57fbf69a275a03ca754030c2f3b5aa5f90d37975f275fe64",
+      "size_bytes": 15168,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-audit-and-defect-remediation-v1/tasks.md",
+      "source_logical_path": "openspec/changes/csp-audit-and-defect-remediation-v1/tasks.md",
+      "sha256": "09bf15f390afcb5581e54282e4e2d23c7009e9af67f47e741111d82372ab3a4d",
+      "size_bytes": 7595,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-auth-deadlock-v1/.openspec.yaml",
+      "source_logical_path": "openspec/changes/csp-auth-deadlock-v1/.openspec.yaml",
+      "sha256": "50c36dfa766b2fc52e8a7d270b1d67cc487bcd95d1b4c8a5f929d62738e3c77e",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-auth-deadlock-v1/design.md",
+      "source_logical_path": "openspec/changes/csp-auth-deadlock-v1/design.md",
+      "sha256": "663aa1398d387d660b3820bee8cbbed5093dabc0a97c3a45a844de805688f79f",
+      "size_bytes": 10409,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-auth-deadlock-v1/proposal.md",
+      "source_logical_path": "openspec/changes/csp-auth-deadlock-v1/proposal.md",
+      "sha256": "ec6d3fecf6cd09621a7ca07617051cac5f0d09320fe3994cc67669145699e6aa",
+      "size_bytes": 4561,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-auth-deadlock-v1/specs/control-plane-auth-lifecycle/spec.md",
+      "source_logical_path": "openspec/changes/csp-auth-deadlock-v1/specs/control-plane-auth-lifecycle/spec.md",
+      "sha256": "7857048a49e348b5e1ae8a7102689415fbe7afe458e3eaa466802be594457630",
+      "size_bytes": 4078,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-auth-deadlock-v1/specs/critic-headless-adversarial-verification/spec.md",
+      "source_logical_path": "openspec/changes/csp-auth-deadlock-v1/specs/critic-headless-adversarial-verification/spec.md",
+      "sha256": "2981a2ae6bdbb6fa487980012f6fcb652ae1930c2e80ce2470c32c126920f003",
+      "size_bytes": 3654,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-auth-deadlock-v1/specs/frontend-credential-management/spec.md",
+      "source_logical_path": "openspec/changes/csp-auth-deadlock-v1/specs/frontend-credential-management/spec.md",
+      "sha256": "57e67d2dea80a2a96b3d728322eb20379169e5f872505bbb17fdff02213c9af2",
+      "size_bytes": 3978,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-auth-deadlock-v1/tasks.md",
+      "source_logical_path": "openspec/changes/csp-auth-deadlock-v1/tasks.md",
+      "sha256": "932981dd9b32b7c4c674adeec01b4376d7f68c9f28d02912e285e9c103e0b36f",
+      "size_bytes": 4636,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-clean-slate-v1/.openspec.yaml",
+      "source_logical_path": "openspec/changes/csp-clean-slate-v1/.openspec.yaml",
+      "sha256": "7cbda91d0db42e7f3a4c0edd23a86fbf0cb02498c21edb9ec0b20199c529e618",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-clean-slate-v1/README.md",
+      "source_logical_path": "openspec/changes/csp-clean-slate-v1/README.md",
+      "sha256": "79e6be07acf07435a408b1fae93cd34a584e7b14a3fffa960954add7b6898368",
+      "size_bytes": 90,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-clean-slate-v1/design.md",
+      "source_logical_path": "openspec/changes/csp-clean-slate-v1/design.md",
+      "sha256": "716f45da8f62850cc3e7ecd3269a4110127b852074fb60eadcd8135d727d74e2",
+      "size_bytes": 15981,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-clean-slate-v1/proposal.md",
+      "source_logical_path": "openspec/changes/csp-clean-slate-v1/proposal.md",
+      "sha256": "e300e72a069f772dddd392a308ce408b0bfd5ad0a69fe00722d7f23f62c6d5ae",
+      "size_bytes": 3276,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-clean-slate-v1/specs/admin-workbench-experience/spec.md",
+      "source_logical_path": "openspec/changes/csp-clean-slate-v1/specs/admin-workbench-experience/spec.md",
+      "sha256": "a6b516d5f2f903b08fb26d323d42ccd90d059f77dcfc39815f449bbaf236504f",
+      "size_bytes": 2395,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-clean-slate-v1/specs/clean-slate-import-and-operations/spec.md",
+      "source_logical_path": "openspec/changes/csp-clean-slate-v1/specs/clean-slate-import-and-operations/spec.md",
+      "sha256": "df26712fbe57c8eefe8410951f86dd8d84c7f89668f16e5adebeb880a35ae974",
+      "size_bytes": 2807,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-clean-slate-v1/specs/control-plane-boundary/spec.md",
+      "source_logical_path": "openspec/changes/csp-clean-slate-v1/specs/control-plane-boundary/spec.md",
+      "sha256": "cb02af33e49ee5c491dfa867fb688b2cb89bb9f49b13585ee41d7ebf76b3f466",
+      "size_bytes": 2537,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-clean-slate-v1/specs/policy-tree-and-compiler/spec.md",
+      "source_logical_path": "openspec/changes/csp-clean-slate-v1/specs/policy-tree-and-compiler/spec.md",
+      "sha256": "e94bd695e14aa29146fbe227f42cb6322b94399ee55ca3dbab31ded767a983f8",
+      "size_bytes": 2329,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-clean-slate-v1/specs/probe-evidence-engine/spec.md",
+      "source_logical_path": "openspec/changes/csp-clean-slate-v1/specs/probe-evidence-engine/spec.md",
+      "sha256": "83141ccecc73faf2d6e310ad2d0270d28889f7669ff2bd84eb4173830f0e9e84",
+      "size_bytes": 2853,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-clean-slate-v1/specs/subscription-inventory/spec.md",
+      "source_logical_path": "openspec/changes/csp-clean-slate-v1/specs/subscription-inventory/spec.md",
+      "sha256": "6d3ecd6755fb8b6c8b7624a2df98927443c25848d907ae98b2897785c39b4ed7",
+      "size_bytes": 2690,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-clean-slate-v1/tasks.md",
+      "source_logical_path": "openspec/changes/csp-clean-slate-v1/tasks.md",
+      "sha256": "5ac3239897009e56e399651fbdbc6f072f864171843cde54afa29d1b5264c54d",
+      "size_bytes": 12290,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-debloat-over-engineering/.openspec.yaml",
+      "source_logical_path": "openspec/changes/csp-debloat-over-engineering/.openspec.yaml",
+      "sha256": "062e545e250441aa0692c22d7a65e07334f1c0f2e706c0e297f36065b6a0699c",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-debloat-over-engineering/design.md",
+      "source_logical_path": "openspec/changes/csp-debloat-over-engineering/design.md",
+      "sha256": "0b0202be0d0766c63885038a3bf684b72fb338d908b85330be9ede091fd1a26a",
+      "size_bytes": 10263,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-debloat-over-engineering/proposal.md",
+      "source_logical_path": "openspec/changes/csp-debloat-over-engineering/proposal.md",
+      "sha256": "17a3a943f58f3ddd82339612955737d6d3fcb0db145242dc6a29221b3a4f45f1",
+      "size_bytes": 3802,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-debloat-over-engineering/specs/debloat/spec.md",
+      "source_logical_path": "openspec/changes/csp-debloat-over-engineering/specs/debloat/spec.md",
+      "sha256": "ecb7abff881ba5c6a125c6f608132aa4501362fda82bdc70df489640c56dd3c3",
+      "size_bytes": 6499,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-debloat-over-engineering/tasks.md",
+      "source_logical_path": "openspec/changes/csp-debloat-over-engineering/tasks.md",
+      "sha256": "6672d2f000a3250d3f918dbe381b03b7994a595878e8b60b60043f0c41b84cb2",
+      "size_bytes": 8497,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-decoupled-auth-settings-and-publication-recovery/.openspec.yaml",
+      "source_logical_path": "openspec/changes/csp-decoupled-auth-settings-and-publication-recovery/.openspec.yaml",
+      "sha256": "dadfffd827282f22738d1215a8fa326bc6e3bda0a2aae3e3af6d203a1ef4c4aa",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-decoupled-auth-settings-and-publication-recovery/design.md",
+      "source_logical_path": "openspec/changes/csp-decoupled-auth-settings-and-publication-recovery/design.md",
+      "sha256": "0456225a99b927d97e38ae84bbf7fb72f4bfdb35c4a55353c71305a5c3405b50",
+      "size_bytes": 6725,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-decoupled-auth-settings-and-publication-recovery/proposal.md",
+      "source_logical_path": "openspec/changes/csp-decoupled-auth-settings-and-publication-recovery/proposal.md",
+      "sha256": "3fd54e6cae0d69fcfcc9306db4d2870358f5c1d55105e4b0571752069b68d767",
+      "size_bytes": 4946,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-decoupled-auth-settings-and-publication-recovery/specs/baseline-auth-and-export/spec.md",
+      "source_logical_path": "openspec/changes/csp-decoupled-auth-settings-and-publication-recovery/specs/baseline-auth-and-export/spec.md",
+      "sha256": "2d21a15750d81ac3192813096fb77446e15d46ab25faf27bcc15e5f8b8f2456a",
+      "size_bytes": 4069,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-decoupled-auth-settings-and-publication-recovery/specs/decoupled-auth-settings/spec.md",
+      "source_logical_path": "openspec/changes/csp-decoupled-auth-settings-and-publication-recovery/specs/decoupled-auth-settings/spec.md",
+      "sha256": "1347fcd5a264b72597d8740dca852c91ed11bf2b565111de0f1b5552dfd12d26",
+      "size_bytes": 5979,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-decoupled-auth-settings-and-publication-recovery/specs/publication-export-auth-recovery/spec.md",
+      "source_logical_path": "openspec/changes/csp-decoupled-auth-settings-and-publication-recovery/specs/publication-export-auth-recovery/spec.md",
+      "sha256": "c2c95b41d875a11893b8d37f3e71a993aafd1209f4ab59148f20376b1264a616",
+      "size_bytes": 6032,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-decoupled-auth-settings-and-publication-recovery/tasks.md",
+      "source_logical_path": "openspec/changes/csp-decoupled-auth-settings-and-publication-recovery/tasks.md",
+      "sha256": "294408a71d493c13b8fdaec947c42c0df5d700524a30fcfca2ba69d3fca84ff5",
+      "size_bytes": 5084,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-fresh-inventory-full-validation/.openspec.yaml",
+      "source_logical_path": "openspec/changes/csp-fresh-inventory-full-validation/.openspec.yaml",
+      "sha256": "720b3de6231f9647898feba395449b03234e0c4fa3bd4ce47fc3bb341b0f16d6",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-fresh-inventory-full-validation/README.md",
+      "source_logical_path": "openspec/changes/csp-fresh-inventory-full-validation/README.md",
+      "sha256": "47e6036be41a0a37f951dacb572f6d92e42a7d65611cee699d923933e79a2c28",
+      "size_bytes": 116,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-fresh-inventory-full-validation/design.md",
+      "source_logical_path": "openspec/changes/csp-fresh-inventory-full-validation/design.md",
+      "sha256": "0a1e3dad4ec43b55e1fdeec4b4d5a06a3f590cf646dcec7b0e228b9fec1822c6",
+      "size_bytes": 21062,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-fresh-inventory-full-validation/proposal.md",
+      "source_logical_path": "openspec/changes/csp-fresh-inventory-full-validation/proposal.md",
+      "sha256": "3e5329b834a2dfd2dce3e5973ce288df919c84c8039f4c441f5a3d9e87640eb6",
+      "size_bytes": 4042,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-fresh-inventory-full-validation/specs/inventory/clean-slate-node-reset/spec.md",
+      "source_logical_path": "openspec/changes/csp-fresh-inventory-full-validation/specs/inventory/clean-slate-node-reset/spec.md",
+      "sha256": "4301d607543973a1b1c06ff65ce3e8f3620f160d8bf54749a85d9a8b657079d6",
+      "size_bytes": 5181,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-fresh-inventory-full-validation/specs/maintenance/reset-node-inventory-cli/spec.md",
+      "source_logical_path": "openspec/changes/csp-fresh-inventory-full-validation/specs/maintenance/reset-node-inventory-cli/spec.md",
+      "sha256": "20d68f67f2a12674529cec55f37012c8e8594839574fa4cf3be38ccd15e7bbd8",
+      "size_bytes": 10427,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-fresh-inventory-full-validation/specs/policy/rules-validation/spec.md",
+      "source_logical_path": "openspec/changes/csp-fresh-inventory-full-validation/specs/policy/rules-validation/spec.md",
+      "sha256": "ab05bb85cfebfe8c581e4d3bbe9459d5abfcfce74c36b56ff2cc6edb71f8de07",
+      "size_bytes": 7148,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-fresh-inventory-full-validation/specs/subscription/source-token-repair/spec.md",
+      "source_logical_path": "openspec/changes/csp-fresh-inventory-full-validation/specs/subscription/source-token-repair/spec.md",
+      "sha256": "70ca93c0167b152428f04b275fd48e6fefd435fb2bac338e982daaeab37bd6a7",
+      "size_bytes": 2583,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-fresh-inventory-full-validation/tasks.md",
+      "source_logical_path": "openspec/changes/csp-fresh-inventory-full-validation/tasks.md",
+      "sha256": "a45471bd53d3e77abbd994019417f5aa31b98cc8d74bec8ed45f7068e7597f22",
+      "size_bytes": 22458,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-global-probe-export-filter-and-overlays/.openspec.yaml",
+      "source_logical_path": "openspec/changes/csp-global-probe-export-filter-and-overlays/.openspec.yaml",
+      "sha256": "dadfffd827282f22738d1215a8fa326bc6e3bda0a2aae3e3af6d203a1ef4c4aa",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-global-probe-export-filter-and-overlays/design.md",
+      "source_logical_path": "openspec/changes/csp-global-probe-export-filter-and-overlays/design.md",
+      "sha256": "aebac2fba78d6e0a4764f7794b3bedd31c7665bebee95876fcf3086af8a27ca4",
+      "size_bytes": 6280,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-global-probe-export-filter-and-overlays/proposal.md",
+      "source_logical_path": "openspec/changes/csp-global-probe-export-filter-and-overlays/proposal.md",
+      "sha256": "981f54f65f011e5fd6dee64c8ed083c5357bfeee127aded9bcf59f963c4a216b",
+      "size_bytes": 2379,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-global-probe-export-filter-and-overlays/specs/global-probe-export-filter/spec.md",
+      "source_logical_path": "openspec/changes/csp-global-probe-export-filter-and-overlays/specs/global-probe-export-filter/spec.md",
+      "sha256": "69b449e2d0e25b9bdfe6dd6847d630dc0d71edd427f00db8203ec24d5e24441f",
+      "size_bytes": 4703,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-global-probe-export-filter-and-overlays/specs/viewport-safe-overlays/spec.md",
+      "source_logical_path": "openspec/changes/csp-global-probe-export-filter-and-overlays/specs/viewport-safe-overlays/spec.md",
+      "sha256": "f0a0a9ce1a3a96a9b80fd2568085da6772a73a2595309b2ebf7df1ae30fa78a0",
+      "size_bytes": 2680,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-global-probe-export-filter-and-overlays/tasks.md",
+      "source_logical_path": "openspec/changes/csp-global-probe-export-filter-and-overlays/tasks.md",
+      "sha256": "84e04cbe98f047bba038e8f55ea414b97f5988e9e19dbe7e3b8afce0dbf57688",
+      "size_bytes": 3394,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-incremental-expiry-probe-sweep/.openspec.yaml",
+      "source_logical_path": "openspec/changes/csp-incremental-expiry-probe-sweep/.openspec.yaml",
+      "sha256": "5edc88a042fdda2550686e54689bdd6779b13445bcaf782a1af9426634b9b4fb",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-incremental-expiry-probe-sweep/design.md",
+      "source_logical_path": "openspec/changes/csp-incremental-expiry-probe-sweep/design.md",
+      "sha256": "d8464c0645eaf640d9ef70265ee226e7cf08b4a2cef6376c695446f984203570",
+      "size_bytes": 6576,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-incremental-expiry-probe-sweep/proposal.md",
+      "source_logical_path": "openspec/changes/csp-incremental-expiry-probe-sweep/proposal.md",
+      "sha256": "6cd62a5ff3de70227de7c8914e60fd88fd273bc066c06cbc31080eecdcf34943",
+      "size_bytes": 3181,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-incremental-expiry-probe-sweep/specs/incremental-expiry-probe-sweep/spec.md",
+      "source_logical_path": "openspec/changes/csp-incremental-expiry-probe-sweep/specs/incremental-expiry-probe-sweep/spec.md",
+      "sha256": "99c6c24971d1225928c5ef3eff877403451d1c472d9a0d97b942c54b108c8954",
+      "size_bytes": 5109,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-incremental-expiry-probe-sweep/tasks.md",
+      "source_logical_path": "openspec/changes/csp-incremental-expiry-probe-sweep/tasks.md",
+      "sha256": "a19410776168bb71a91ecea7b4c6cc88ec6d30a19dde28e688a6f3ae5165b349",
+      "size_bytes": 2660,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-ip-risk-v1/.citation-ledger.json",
+      "source_logical_path": "openspec/changes/csp-ip-risk-v1/.citation-ledger.json",
+      "sha256": "732d32c54ebe7fd3f054065a825bdbe5ff20d2e09b89ddd04d4aa3d5d2a133b8",
+      "size_bytes": 848,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-ip-risk-v1/.openspec.yaml",
+      "source_logical_path": "openspec/changes/csp-ip-risk-v1/.openspec.yaml",
+      "sha256": "50c36dfa766b2fc52e8a7d270b1d67cc487bcd95d1b4c8a5f929d62738e3c77e",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-ip-risk-v1/design.md",
+      "source_logical_path": "openspec/changes/csp-ip-risk-v1/design.md",
+      "sha256": "07d3e524395fe4ad26f18870ffcfc9e1610abf598194696f0494532e5708b810",
+      "size_bytes": 14620,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-ip-risk-v1/proposal.md",
+      "source_logical_path": "openspec/changes/csp-ip-risk-v1/proposal.md",
+      "sha256": "8d8a51d33ceaa7f0e99e60d9a492b9f1184057f2f28fd993ad75c47928c91a93",
+      "size_bytes": 4418,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-ip-risk-v1/specs/admin-workbench-experience/spec.md",
+      "source_logical_path": "openspec/changes/csp-ip-risk-v1/specs/admin-workbench-experience/spec.md",
+      "sha256": "cf64cf53d7cdb7dfbc171591232e8899ef32ebd577de991b586aa940717de97e",
+      "size_bytes": 1819,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-ip-risk-v1/specs/ip-risk-evidence/spec.md",
+      "source_logical_path": "openspec/changes/csp-ip-risk-v1/specs/ip-risk-evidence/spec.md",
+      "sha256": "32093f7913a16a0b4aa96331cbde738f7d7c7f671a7e00b6c7ff26e838eacfd0",
+      "size_bytes": 3644,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-ip-risk-v1/specs/ip-risk-management-workbench/spec.md",
+      "source_logical_path": "openspec/changes/csp-ip-risk-v1/specs/ip-risk-management-workbench/spec.md",
+      "sha256": "38804eb1f78f47677bc500f71820f652b52ef86e419d6ae247a56fb5a6832945",
+      "size_bytes": 2556,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-ip-risk-v1/specs/policy-tree-and-compiler/spec.md",
+      "source_logical_path": "openspec/changes/csp-ip-risk-v1/specs/policy-tree-and-compiler/spec.md",
+      "sha256": "06dddc21174e32fe14a09fd35ef4da681f5c4c858e42d15520b9d6f03eebafab",
+      "size_bytes": 2843,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-ip-risk-v1/specs/probe-evidence-engine/spec.md",
+      "source_logical_path": "openspec/changes/csp-ip-risk-v1/specs/probe-evidence-engine/spec.md",
+      "sha256": "9965c7018215eba1abe75591c0a8525c2e94eec7b8cff85a85552aff1494ce79",
+      "size_bytes": 2004,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-ip-risk-v1/specs/risk-policy-admission-and-publication/spec.md",
+      "source_logical_path": "openspec/changes/csp-ip-risk-v1/specs/risk-policy-admission-and-publication/spec.md",
+      "sha256": "48b7887cc9d393c1ba2ba439db580af8f6c6ff5982cfda65ca92f18cbbb5be47",
+      "size_bytes": 3398,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-ip-risk-v1/specs/subscription-inventory/spec.md",
+      "source_logical_path": "openspec/changes/csp-ip-risk-v1/specs/subscription-inventory/spec.md",
+      "sha256": "84225bb5e51490dcb546dd03717413c4e0e6004ee809f49787eaba7d6e3e9377",
+      "size_bytes": 1023,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-ip-risk-v1/tasks.md",
+      "source_logical_path": "openspec/changes/csp-ip-risk-v1/tasks.md",
+      "sha256": "ea847b04acd8155603079e6dd33c98572148fd67de7053db3d5ad1f6deaf3ea9",
+      "size_bytes": 9451,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-living-spec-consolidation/.openspec.yaml",
+      "source_logical_path": "openspec/changes/csp-living-spec-consolidation/.openspec.yaml",
+      "sha256": "8ba8273010ceb66cd0ab320b2f49de179fac6fd6f648317c2cc129442eea7dc0",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-living-spec-consolidation/design.md",
+      "source_logical_path": "openspec/changes/csp-living-spec-consolidation/design.md",
+      "sha256": "e2e68390407d378eaf92613288be29bfed79db80bf40170e007ec4bd4609cfb9",
+      "size_bytes": 6502,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-living-spec-consolidation/proposal.md",
+      "source_logical_path": "openspec/changes/csp-living-spec-consolidation/proposal.md",
+      "sha256": "0707deb099f9f2dcac158a0e6b38ea2886bb60c43923843a71bfba221fcf4d14",
+      "size_bytes": 3400,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-living-spec-consolidation/specs/living-spec-consolidation/spec.md",
+      "source_logical_path": "openspec/changes/csp-living-spec-consolidation/specs/living-spec-consolidation/spec.md",
+      "sha256": "9765a54daade03443c9a043135d5bce079636485ffd733c668d7a7686c43b8e5",
+      "size_bytes": 2651,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-living-spec-consolidation/tasks.md",
+      "source_logical_path": "openspec/changes/csp-living-spec-consolidation/tasks.md",
+      "sha256": "929088c9f4120531bfd2a1d3a7e5d6cd8d43a8bba6aae0e92dd0fdb5b5d94908",
+      "size_bytes": 4114,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-node-probe-pool-priority-queue/.openspec.yaml",
+      "source_logical_path": "openspec/changes/csp-node-probe-pool-priority-queue/.openspec.yaml",
+      "sha256": "65ff9df577b54daf8b21917c880c564135cf80d9e6a2de690feb0f4a842393f1",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-node-probe-pool-priority-queue/design.md",
+      "source_logical_path": "openspec/changes/csp-node-probe-pool-priority-queue/design.md",
+      "sha256": "22ccc93b242323f291aff2784eaf502ed8b3e2d35610b02bb69661cff9853865",
+      "size_bytes": 16058,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-node-probe-pool-priority-queue/proposal.md",
+      "source_logical_path": "openspec/changes/csp-node-probe-pool-priority-queue/proposal.md",
+      "sha256": "674c4490d44e3254aac0b13e6ed37ddac12bf58d62ceb5db7a571cc71f43fb1c",
+      "size_bytes": 8085,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-node-probe-pool-priority-queue/specs/node-probe-pool/spec.md",
+      "source_logical_path": "openspec/changes/csp-node-probe-pool-priority-queue/specs/node-probe-pool/spec.md",
+      "sha256": "a14ad5c53acf86e1770634efc6bd330e953c8f9901f866bd1ebecb726e3f34f3",
+      "size_bytes": 5768,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-node-probe-pool-priority-queue/tasks.md",
+      "source_logical_path": "openspec/changes/csp-node-probe-pool-priority-queue/tasks.md",
+      "sha256": "6e6dd98d789edd7a5c1d9845dc289746d03c80aeb1047f0141193a241fafabad",
+      "size_bytes": 7538,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-periodic-active-probes-global-group-filters/.openspec.yaml",
+      "source_logical_path": "openspec/changes/csp-periodic-active-probes-global-group-filters/.openspec.yaml",
+      "sha256": "8ce533eab9c047a4566f79d81b21eb252f3437f591dee942f9dbb2669f23cdfb",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-periodic-active-probes-global-group-filters/design.md",
+      "source_logical_path": "openspec/changes/csp-periodic-active-probes-global-group-filters/design.md",
+      "sha256": "254d3f0d4fa6391fb1258f53a74b13e4356b5c2de49a451bc2369e2d9ecdccef",
+      "size_bytes": 10597,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-periodic-active-probes-global-group-filters/proposal.md",
+      "source_logical_path": "openspec/changes/csp-periodic-active-probes-global-group-filters/proposal.md",
+      "sha256": "d0b0ccbf91a00de827c626af1477ec9d9eb7f3015f1d81c5ec95b5e7f3ee3786",
+      "size_bytes": 2291,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-periodic-active-probes-global-group-filters/specs/global-group-node-filters/spec.md",
+      "source_logical_path": "openspec/changes/csp-periodic-active-probes-global-group-filters/specs/global-group-node-filters/spec.md",
+      "sha256": "b10213cc25e2cad382594603d32280266992e97f4b4301cfcbe05037c863b429",
+      "size_bytes": 4055,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-periodic-active-probes-global-group-filters/specs/periodic-active-probes/spec.md",
+      "source_logical_path": "openspec/changes/csp-periodic-active-probes-global-group-filters/specs/periodic-active-probes/spec.md",
+      "sha256": "762ff2155ac3057edb95dc626de9ee02a13ae18133361cef985e7de79ad130d9",
+      "size_bytes": 3465,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-periodic-active-probes-global-group-filters/tasks.md",
+      "source_logical_path": "openspec/changes/csp-periodic-active-probes-global-group-filters/tasks.md",
+      "sha256": "1632c9263cffef966e3f0820e3fa7fc042e6927cde309c5b3adc2ce9fca54e59",
+      "size_bytes": 7222,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-policy-membership-probe-state-pagination/.openspec.yaml",
+      "source_logical_path": "openspec/changes/csp-policy-membership-probe-state-pagination/.openspec.yaml",
+      "sha256": "ec3a1b167d0ccdb9f7a3f8f370ba8038feb637051c90a0b3fbcc5e9cef45d7a5",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-policy-membership-probe-state-pagination/README.md",
+      "source_logical_path": "openspec/changes/csp-policy-membership-probe-state-pagination/README.md",
+      "sha256": "4c3727d5722af235d2dab51e5a3926b770cfeccf8a31809dd14d17668735150e",
+      "size_bytes": 181,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-policy-membership-probe-state-pagination/design.md",
+      "source_logical_path": "openspec/changes/csp-policy-membership-probe-state-pagination/design.md",
+      "sha256": "fd9c6d3a09d4f21a4d4641cf303297abec9a55eecf73977ee661099f3e222cd3",
+      "size_bytes": 8762,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-policy-membership-probe-state-pagination/proposal.md",
+      "source_logical_path": "openspec/changes/csp-policy-membership-probe-state-pagination/proposal.md",
+      "sha256": "4591c9e00baae13d740df41aa0ef9819e9a462229cddd8f8eb699d11f3a3d9cd",
+      "size_bytes": 5494,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-policy-membership-probe-state-pagination/specs/policy/full-inventory-resolution/spec.md",
+      "source_logical_path": "openspec/changes/csp-policy-membership-probe-state-pagination/specs/policy/full-inventory-resolution/spec.md",
+      "sha256": "4e65c7ea3232b19e6c3806dbfbd243c396323f3aa5b2f37114ba185b4c334729",
+      "size_bytes": 1859,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-policy-membership-probe-state-pagination/specs/policy/membership-semantics-and-pagination/spec.md",
+      "source_logical_path": "openspec/changes/csp-policy-membership-probe-state-pagination/specs/policy/membership-semantics-and-pagination/spec.md",
+      "sha256": "0992fd0d81f50a3b1425b3b9080269473f56c8fcd53bdedec73ee2476d43fbc2",
+      "size_bytes": 3021,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-policy-membership-probe-state-pagination/specs/probe/health-state-conservation-and-pagination/spec.md",
+      "source_logical_path": "openspec/changes/csp-policy-membership-probe-state-pagination/specs/probe/health-state-conservation-and-pagination/spec.md",
+      "sha256": "7d0e7bd7d98e7bb47ce8d864fdc737d81a4401d9790273a14e12d80e116c0021",
+      "size_bytes": 2529,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-policy-membership-probe-state-pagination/specs/ui/navigation-layout-and-viewport-resilience/spec.md",
+      "source_logical_path": "openspec/changes/csp-policy-membership-probe-state-pagination/specs/ui/navigation-layout-and-viewport-resilience/spec.md",
+      "sha256": "ebccb68def98ade2f5c016a65f17df1c68d496b4d2bc67f69e20bc8a31615998",
+      "size_bytes": 2338,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-policy-membership-probe-state-pagination/tasks.md",
+      "source_logical_path": "openspec/changes/csp-policy-membership-probe-state-pagination/tasks.md",
+      "sha256": "ea00920107cd4762e4e05cc40ccc8aeec90cb7c862004923ba30ae5aed19e27b",
+      "size_bytes": 5114,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-preserve-inventory-and-verify-business-results/.openspec.yaml",
+      "source_logical_path": "openspec/changes/csp-preserve-inventory-and-verify-business-results/.openspec.yaml",
+      "sha256": "c51317fdb09f4c0096f955c8beeb5f19a56ba49530c79732bb429ad0f423004d",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-preserve-inventory-and-verify-business-results/design.md",
+      "source_logical_path": "openspec/changes/csp-preserve-inventory-and-verify-business-results/design.md",
+      "sha256": "7bec13d5ca29598309c4469e4913586d904cf9c014eafe207e5713db2a18957f",
+      "size_bytes": 13438,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-preserve-inventory-and-verify-business-results/proposal.md",
+      "source_logical_path": "openspec/changes/csp-preserve-inventory-and-verify-business-results/proposal.md",
+      "sha256": "e7d7285a8bbcdbb69ed3dd831cc2bd335840e611c7f656ea50b9c8570ab50569",
+      "size_bytes": 5784,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-preserve-inventory-and-verify-business-results/specs/api-semantic-verification-matrix/spec.md",
+      "source_logical_path": "openspec/changes/csp-preserve-inventory-and-verify-business-results/specs/api-semantic-verification-matrix/spec.md",
+      "sha256": "d78ab859a787b45811e429bc3d04474ad45d9c2b9f690cc6591155d48675d1dc",
+      "size_bytes": 5207,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-preserve-inventory-and-verify-business-results/specs/probe-construction-and-truthful-diagnostics/spec.md",
+      "source_logical_path": "openspec/changes/csp-preserve-inventory-and-verify-business-results/specs/probe-construction-and-truthful-diagnostics/spec.md",
+      "sha256": "c940e992383bed2d5f0858d5b0dcbd552516a6803caa9962520351dee66f0e2b",
+      "size_bytes": 6172,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-preserve-inventory-and-verify-business-results/specs/subscription-inventory-preservation/spec.md",
+      "source_logical_path": "openspec/changes/csp-preserve-inventory-and-verify-business-results/specs/subscription-inventory-preservation/spec.md",
+      "sha256": "9b93fa442712ba9b8df675b3a875800da66e1a7e99ca6ea17f4bebf0687b66cf",
+      "size_bytes": 7395,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-preserve-inventory-and-verify-business-results/tasks.md",
+      "source_logical_path": "openspec/changes/csp-preserve-inventory-and-verify-business-results/tasks.md",
+      "sha256": "1acc81db3dbe0c8bccdf4b73ed8e9bb46f3920e5658d65b0d0e81e7ae4ec17b4",
+      "size_bytes": 7952,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-probe-engine-human-centric-redesign/.openspec.yaml",
+      "source_logical_path": "openspec/changes/csp-probe-engine-human-centric-redesign/.openspec.yaml",
+      "sha256": "65ff9df577b54daf8b21917c880c564135cf80d9e6a2de690feb0f4a842393f1",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-probe-engine-human-centric-redesign/design.md",
+      "source_logical_path": "openspec/changes/csp-probe-engine-human-centric-redesign/design.md",
+      "sha256": "35dd882a04c76d0877aee207e2aeef24aa989e207e41c3484a5f321184c8fd8d",
+      "size_bytes": 17880,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-probe-engine-human-centric-redesign/proposal.md",
+      "source_logical_path": "openspec/changes/csp-probe-engine-human-centric-redesign/proposal.md",
+      "sha256": "d40fc8557e37d1604e0dedf47a4b8ad9b05e7e8a652337c0663b4df15b2651c5",
+      "size_bytes": 7475,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-probe-engine-human-centric-redesign/specs/probe-engine-ux/spec.md",
+      "source_logical_path": "openspec/changes/csp-probe-engine-human-centric-redesign/specs/probe-engine-ux/spec.md",
+      "sha256": "889345b89ee760f82097651eadb432178c63b417e2b0d2a759d871926ab54cef",
+      "size_bytes": 11055,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-probe-engine-human-centric-redesign/tasks.md",
+      "source_logical_path": "openspec/changes/csp-probe-engine-human-centric-redesign/tasks.md",
+      "sha256": "633ffe517a14d51c0b5760440587ee1d378138814030885e3da569b0fb1d8f2f",
+      "size_bytes": 7260,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-probe-health-minute-state-sweep/.openspec.yaml",
+      "source_logical_path": "openspec/changes/csp-probe-health-minute-state-sweep/.openspec.yaml",
+      "sha256": "dadfffd827282f22738d1215a8fa326bc6e3bda0a2aae3e3af6d203a1ef4c4aa",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-probe-health-minute-state-sweep/README.md",
+      "source_logical_path": "openspec/changes/csp-probe-health-minute-state-sweep/README.md",
+      "sha256": "1021105247d84cd714eb8b537b9db84a3f67d80a544387a723c8880e0cc6c587",
+      "size_bytes": 121,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-probe-health-minute-state-sweep/design.md",
+      "source_logical_path": "openspec/changes/csp-probe-health-minute-state-sweep/design.md",
+      "sha256": "6e5dff1ad66759672291199bd88b2cef02d587dcc1466d7f60079f89d702af83",
+      "size_bytes": 9413,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-probe-health-minute-state-sweep/proposal.md",
+      "source_logical_path": "openspec/changes/csp-probe-health-minute-state-sweep/proposal.md",
+      "sha256": "b4b1dd6f21cb5c5c37acf09fd40c7019621b1df4c3269cbe9f311affc6f61e2a",
+      "size_bytes": 3047,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-probe-health-minute-state-sweep/specs/baseline-health-read-model/spec.md",
+      "source_logical_path": "openspec/changes/csp-probe-health-minute-state-sweep/specs/baseline-health-read-model/spec.md",
+      "sha256": "c50bb15dd48dd34b15e75a124c30333cd7e31ecd6d75433b9cb1ea638f552064",
+      "size_bytes": 2531,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-probe-health-minute-state-sweep/specs/minute-incremental-state-sweep/spec.md",
+      "source_logical_path": "openspec/changes/csp-probe-health-minute-state-sweep/specs/minute-incremental-state-sweep/spec.md",
+      "sha256": "287cb8bb456b5c1728773e9a72687044b6a2cc97335d9f8063216c4644910a3e",
+      "size_bytes": 3293,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-probe-health-minute-state-sweep/specs/probe-evidence-classification/spec.md",
+      "source_logical_path": "openspec/changes/csp-probe-health-minute-state-sweep/specs/probe-evidence-classification/spec.md",
+      "sha256": "fffecdd46ffb5a6c93215b992b6953e14689e412fff7c353959a5e40005f8ba1",
+      "size_bytes": 2104,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-probe-health-minute-state-sweep/tasks.md",
+      "source_logical_path": "openspec/changes/csp-probe-health-minute-state-sweep/tasks.md",
+      "sha256": "80bbe0b01db99658f4fc33f7df6aff321e58459b47ee24bd90b850174844cb14",
+      "size_bytes": 4406,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-probe-truth-and-efficiency/.openspec.yaml",
+      "source_logical_path": "openspec/changes/csp-probe-truth-and-efficiency/.openspec.yaml",
+      "sha256": "d707823457f58b4f938a99bc049bddd9b937affec2d09c976c9a16a9dcd03f77",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-probe-truth-and-efficiency/design.md",
+      "source_logical_path": "openspec/changes/csp-probe-truth-and-efficiency/design.md",
+      "sha256": "35166f4e2a5e9a16c6aba6219a6f752cdab0c3bc8846e3fa3729a2b2b7a95820",
+      "size_bytes": 20548,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-probe-truth-and-efficiency/proposal.md",
+      "source_logical_path": "openspec/changes/csp-probe-truth-and-efficiency/proposal.md",
+      "sha256": "30357f95d591623d060274b4f4e7235934230682c86ace3a94f6de0662859c05",
+      "size_bytes": 8033,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-probe-truth-and-efficiency/specs/probe-truth-and-efficiency/spec.md",
+      "source_logical_path": "openspec/changes/csp-probe-truth-and-efficiency/specs/probe-truth-and-efficiency/spec.md",
+      "sha256": "72523b16e5ac5d7c4477ab017ae4d831394dde968f6c1023685a6302d6936d90",
+      "size_bytes": 12676,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-probe-truth-and-efficiency/tasks.md",
+      "source_logical_path": "openspec/changes/csp-probe-truth-and-efficiency/tasks.md",
+      "sha256": "683dbfc2f095e47792f5d2d4fb4875772904c50890b771ba986eb3b75355ebc1",
+      "size_bytes": 9326,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-publication-theme-probe-recovery-v1/.openspec.yaml",
+      "source_logical_path": "openspec/changes/csp-publication-theme-probe-recovery-v1/.openspec.yaml",
+      "sha256": "d04b6ad7c1b1e5eb9e8ec8cfdae94bc49d29216b59b73cea7a3cc1de9d508463",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-publication-theme-probe-recovery-v1/design.md",
+      "source_logical_path": "openspec/changes/csp-publication-theme-probe-recovery-v1/design.md",
+      "sha256": "02eb8a19dbdf7bacd3df9c8d2be1554ee16423847c213dd43b6c8395e7f63dbd",
+      "size_bytes": 10686,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-publication-theme-probe-recovery-v1/proposal.md",
+      "source_logical_path": "openspec/changes/csp-publication-theme-probe-recovery-v1/proposal.md",
+      "sha256": "248014f5ea9b95431d84c3a7242c1a0c4abc8b57007a4919e334920934f90a3f",
+      "size_bytes": 4728,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-publication-theme-probe-recovery-v1/specs/publication-theme-probe-recovery/spec.md",
+      "source_logical_path": "openspec/changes/csp-publication-theme-probe-recovery-v1/specs/publication-theme-probe-recovery/spec.md",
+      "sha256": "e1e1d7fdfb79f230fc7f2295de659ca4da9743ccd372b21e3844f12c02ad1ff6",
+      "size_bytes": 13631,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-publication-theme-probe-recovery-v1/tasks.md",
+      "source_logical_path": "openspec/changes/csp-publication-theme-probe-recovery-v1/tasks.md",
+      "sha256": "967f75cfed34c891c8e1ba3c6354f9158782a5d2dd0e061b3fc9781a0fb0caab",
+      "size_bytes": 9480,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-subscription-proxy-and-verge-headers/.openspec.yaml",
+      "source_logical_path": "openspec/changes/csp-subscription-proxy-and-verge-headers/.openspec.yaml",
+      "sha256": "5edc88a042fdda2550686e54689bdd6779b13445bcaf782a1af9426634b9b4fb",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-subscription-proxy-and-verge-headers/design.md",
+      "source_logical_path": "openspec/changes/csp-subscription-proxy-and-verge-headers/design.md",
+      "sha256": "4a5c8410547479d645ca6bbd37f5299ba66897a44f21f2b639b37c8a69c7d5d0",
+      "size_bytes": 11905,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-subscription-proxy-and-verge-headers/proposal.md",
+      "source_logical_path": "openspec/changes/csp-subscription-proxy-and-verge-headers/proposal.md",
+      "sha256": "0b7a3f2008751c66cb95f1576cc0d91cee3bfc0efc6de16e6bd1ca9ad6cc3b60",
+      "size_bytes": 7149,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-subscription-proxy-and-verge-headers/specs/subscription-proxy-and-verge-headers/spec.md",
+      "source_logical_path": "openspec/changes/csp-subscription-proxy-and-verge-headers/specs/subscription-proxy-and-verge-headers/spec.md",
+      "sha256": "d64559c6ee1faa193de39a1bb1e59a3aacca3f28471f869bfd15a39f91c348f1",
+      "size_bytes": 12263,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-subscription-proxy-and-verge-headers/tasks.md",
+      "source_logical_path": "openspec/changes/csp-subscription-proxy-and-verge-headers/tasks.md",
+      "sha256": "952644bf6820bb33fcca00933149eb249ca8171dfdcf2258066a40923c186975",
+      "size_bytes": 4639,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-topology-i18n-and-node-targets/.openspec.yaml",
+      "source_logical_path": "openspec/changes/csp-topology-i18n-and-node-targets/.openspec.yaml",
+      "sha256": "062e545e250441aa0692c22d7a65e07334f1c0f2e706c0e297f36065b6a0699c",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-topology-i18n-and-node-targets/design.md",
+      "source_logical_path": "openspec/changes/csp-topology-i18n-and-node-targets/design.md",
+      "sha256": "a61cab822be5453efb60c4a3cf290a025964e405ba239e62efbece7ce32673c8",
+      "size_bytes": 10956,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-topology-i18n-and-node-targets/proposal.md",
+      "source_logical_path": "openspec/changes/csp-topology-i18n-and-node-targets/proposal.md",
+      "sha256": "6bec759645a452410b81a76e94b4830d05fe72a32f46096273eca1af7bcecfaf",
+      "size_bytes": 5424,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-topology-i18n-and-node-targets/specs/topology-i18n-export/spec.md",
+      "source_logical_path": "openspec/changes/csp-topology-i18n-and-node-targets/specs/topology-i18n-export/spec.md",
+      "sha256": "814153a8d489162440c5af52446c7ea708b3322f0ae0058387987fab314b6d37",
+      "size_bytes": 7776,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-topology-i18n-and-node-targets/tasks.md",
+      "source_logical_path": "openspec/changes/csp-topology-i18n-and-node-targets/tasks.md",
+      "sha256": "ccf99c9630fb914e8c5da84b78af41f09aa436a89bef8609d4a1bfc242e86414",
+      "size_bytes": 4456,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-ui-device-governance-v1/.openspec.yaml",
+      "source_logical_path": "openspec/changes/csp-ui-device-governance-v1/.openspec.yaml",
+      "sha256": "d04b6ad7c1b1e5eb9e8ec8cfdae94bc49d29216b59b73cea7a3cc1de9d508463",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-ui-device-governance-v1/design.md",
+      "source_logical_path": "openspec/changes/csp-ui-device-governance-v1/design.md",
+      "sha256": "fe90310a0b1947e45272ee0cc4a8a8979e9563d6a049a81bb967bb22a43a9afc",
+      "size_bytes": 4342,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-ui-device-governance-v1/proposal.md",
+      "source_logical_path": "openspec/changes/csp-ui-device-governance-v1/proposal.md",
+      "sha256": "2122c6ecd2c97bf863af0b3938ad69d6d7026cc3bf3b16121f239a5e16b8419b",
+      "size_bytes": 2331,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-ui-device-governance-v1/specs/admin-ui-device-quality/spec.md",
+      "source_logical_path": "openspec/changes/csp-ui-device-governance-v1/specs/admin-ui-device-quality/spec.md",
+      "sha256": "ef3a491396f81434c2a40e79efd1b2e241282eeec91703e61ff3c7f615a29108",
+      "size_bytes": 4437,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-ui-device-governance-v1/tasks.md",
+      "source_logical_path": "openspec/changes/csp-ui-device-governance-v1/tasks.md",
+      "sha256": "7ab32c94b25884a86d19a6f2405e1b40d4d05dd0869c286ce6a04177bbf67f86",
+      "size_bytes": 3967,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-ui-hardcode-governance-v1/.openspec.yaml",
+      "source_logical_path": "openspec/changes/csp-ui-hardcode-governance-v1/.openspec.yaml",
+      "sha256": "d04b6ad7c1b1e5eb9e8ec8cfdae94bc49d29216b59b73cea7a3cc1de9d508463",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-ui-hardcode-governance-v1/design.md",
+      "source_logical_path": "openspec/changes/csp-ui-hardcode-governance-v1/design.md",
+      "sha256": "ddff2ed1b6cfcb1100f1c6d06961ebb102b356964fcee450e96e1d865301fe40",
+      "size_bytes": 5948,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-ui-hardcode-governance-v1/proposal.md",
+      "source_logical_path": "openspec/changes/csp-ui-hardcode-governance-v1/proposal.md",
+      "sha256": "cb109bdf9a58f3d1557055a19ae1518e0e58bbcd62c3c55f46603ed794e61bdb",
+      "size_bytes": 1922,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-ui-hardcode-governance-v1/specs/admin-ui-adaptive-layout/spec.md",
+      "source_logical_path": "openspec/changes/csp-ui-hardcode-governance-v1/specs/admin-ui-adaptive-layout/spec.md",
+      "sha256": "55ead17e95b7ffe3ef5420626a0c9522da7905eded8b3cd78f98e83e6f41f146",
+      "size_bytes": 2630,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/csp-ui-hardcode-governance-v1/tasks.md",
+      "source_logical_path": "openspec/changes/csp-ui-hardcode-governance-v1/tasks.md",
+      "sha256": "cce20fe39f31e75da119180f240add45b2609971d1645c1f7397080b4c2d2e33",
+      "size_bytes": 4233,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/finish-csp-live-validation-and-recovery/.openspec.yaml",
+      "source_logical_path": "openspec/changes/finish-csp-live-validation-and-recovery/.openspec.yaml",
+      "sha256": "5d113f7d56015df3c7cad21b6f5da445ffbc4edc2785a2391465abec93ac5afc",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/finish-csp-live-validation-and-recovery/README.md",
+      "source_logical_path": "openspec/changes/finish-csp-live-validation-and-recovery/README.md",
+      "sha256": "90ad8b23503ddad71140535d1359793b63247bd21fb1a432f6a2c8a4c19008f4",
+      "size_bytes": 124,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/finish-csp-live-validation-and-recovery/design.md",
+      "source_logical_path": "openspec/changes/finish-csp-live-validation-and-recovery/design.md",
+      "sha256": "88afb745cd41b59add98dea896c0cf4e21b8bf47598507cc4db02230b7bc0b8d",
+      "size_bytes": 18197,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/finish-csp-live-validation-and-recovery/proposal.md",
+      "source_logical_path": "openspec/changes/finish-csp-live-validation-and-recovery/proposal.md",
+      "sha256": "bf00aaa136aad994071b0ffc5fc166c1dfddb9ae26767a969fdcf7400ce6185a",
+      "size_bytes": 3218,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/finish-csp-live-validation-and-recovery/specs/live-acceptance-and-qualified-recovery/spec.md",
+      "source_logical_path": "openspec/changes/finish-csp-live-validation-and-recovery/specs/live-acceptance-and-qualified-recovery/spec.md",
+      "sha256": "778f55192223ca4eb7cfde0dd7477d9e89ec210808c0e06d9c2bd5ee571c0784",
+      "size_bytes": 5188,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/finish-csp-live-validation-and-recovery/tasks.md",
+      "source_logical_path": "openspec/changes/finish-csp-live-validation-and-recovery/tasks.md",
+      "sha256": "3e1ba13a60c898bcf657d3e6eccb215644e57a4c7ea2130f5a3ac1d3c6cdacfc",
+      "size_bytes": 5444,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/fix-csp-legacy-source-attribution/.openspec.yaml",
+      "source_logical_path": "openspec/changes/fix-csp-legacy-source-attribution/.openspec.yaml",
+      "sha256": "ad734da2ba5f4c5a6979a8bbb6bad4db20fb21ec275ceca5f24842fbdfaf5bef",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/fix-csp-legacy-source-attribution/design.md",
+      "source_logical_path": "openspec/changes/fix-csp-legacy-source-attribution/design.md",
+      "sha256": "41ece28cc73226f359634b1d28a962768b1045b11e1b49f6c284d7d09a8061a6",
+      "size_bytes": 7994,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/fix-csp-legacy-source-attribution/proposal.md",
+      "source_logical_path": "openspec/changes/fix-csp-legacy-source-attribution/proposal.md",
+      "sha256": "bd5b9c2fe370c76ed49e19cfa779d564cc02de63868233738edfc70c47fa5562",
+      "size_bytes": 6418,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/fix-csp-legacy-source-attribution/specs/inventory/node-source-history-api-view/spec.md",
+      "source_logical_path": "openspec/changes/fix-csp-legacy-source-attribution/specs/inventory/node-source-history-api-view/spec.md",
+      "sha256": "bbb4eb1c3ee075cf8dc6123d741245901db33d0883bfd0f6e43413942dd84b3e",
+      "size_bytes": 1630,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/fix-csp-legacy-source-attribution/specs/inventory/node-source-history-ledger/spec.md",
+      "source_logical_path": "openspec/changes/fix-csp-legacy-source-attribution/specs/inventory/node-source-history-ledger/spec.md",
+      "sha256": "4b6362874d44a2d62d6ddf29a87d09447cf4bcc68e6cdaf6824084e8ff6e3065",
+      "size_bytes": 1606,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/fix-csp-legacy-source-attribution/specs/inventory/source-history-recovery-cli/spec.md",
+      "source_logical_path": "openspec/changes/fix-csp-legacy-source-attribution/specs/inventory/source-history-recovery-cli/spec.md",
+      "sha256": "db5e0d13cd68424433d412d2ce57f01a15709dbafd26bbfb723b8a05be07a3d7",
+      "size_bytes": 1486,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/fix-csp-legacy-source-attribution/specs/inventory/source-history-write-chain/spec.md",
+      "source_logical_path": "openspec/changes/fix-csp-legacy-source-attribution/specs/inventory/source-history-write-chain/spec.md",
+      "sha256": "678a4f7237b89c5aec10108fc7dbbc828af39cf4d2e6452431a559fa58fd150b",
+      "size_bytes": 1536,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/fix-csp-legacy-source-attribution/tasks.md",
+      "source_logical_path": "openspec/changes/fix-csp-legacy-source-attribution/tasks.md",
+      "sha256": "ffc7d39cc7e34d156b7f48ee31b441f0ac15b356285aab066a04d55ce5722819",
+      "size_bytes": 5494,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/native-mihomo-export-clean-slate/.openspec.yaml",
+      "source_logical_path": "openspec/changes/native-mihomo-export-clean-slate/.openspec.yaml",
+      "sha256": "8ce533eab9c047a4566f79d81b21eb252f3437f591dee942f9dbb2669f23cdfb",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/native-mihomo-export-clean-slate/design.md",
+      "source_logical_path": "openspec/changes/native-mihomo-export-clean-slate/design.md",
+      "sha256": "4704bf000b043a2f427c023c0a201cb84cbf6e18cc5fa448951aea78c966a517",
+      "size_bytes": 10245,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/native-mihomo-export-clean-slate/proposal.md",
+      "source_logical_path": "openspec/changes/native-mihomo-export-clean-slate/proposal.md",
+      "sha256": "50d889afdac5ac7fb97d00fa34d09c7c045cd99524a54783b2023e29b1e5b610",
+      "size_bytes": 2329,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/native-mihomo-export-clean-slate/specs/native-mihomo-publications/spec.md",
+      "source_logical_path": "openspec/changes/native-mihomo-export-clean-slate/specs/native-mihomo-publications/spec.md",
+      "sha256": "7f42bf175d461f60aca7b8e2f822e585fa6dd840e709acf4c51b572ba28747ed",
+      "size_bytes": 6401,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/native-mihomo-export-clean-slate/tasks.md",
+      "source_logical_path": "openspec/changes/native-mihomo-export-clean-slate/tasks.md",
+      "sha256": "5c5899a979a66926dbc4f1f12171a22d9d1d2c97b8cae42e8a7c87de9156f5b0",
+      "size_bytes": 5260,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/redesign-csp-database-dataflow/.openspec.yaml",
+      "source_logical_path": "openspec/changes/redesign-csp-database-dataflow/.openspec.yaml",
+      "sha256": "df4fb22c89b17a0d45d8ca25e98028a2244dceafe5a64ecbbc3bae35db97ccbc",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/redesign-csp-database-dataflow/README.md",
+      "source_logical_path": "openspec/changes/redesign-csp-database-dataflow/README.md",
+      "sha256": "ef10610a2346c046d57118471b9f09ea807f80c1fd65dbe98041901226b1683d",
+      "size_bytes": 2086,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/redesign-csp-database-dataflow/design.md",
+      "source_logical_path": "openspec/changes/redesign-csp-database-dataflow/design.md",
+      "sha256": "7626afa05896cc5260f4d86f6892e6790d2a5ff157b9d3cb950a46d5c6725eb7",
+      "size_bytes": 13038,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/redesign-csp-database-dataflow/evidence-enabled-inventory-audit.md",
+      "source_logical_path": "openspec/changes/redesign-csp-database-dataflow/evidence-enabled-inventory-audit.md",
+      "sha256": "8116aa98a5f8026cba06ed6b02e263b3137076c7ba926efe912909f4b95ec70c",
+      "size_bytes": 11906,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/redesign-csp-database-dataflow/proposal.md",
+      "source_logical_path": "openspec/changes/redesign-csp-database-dataflow/proposal.md",
+      "sha256": "b98ef7d7cf4c811262010d11fb2a7e2ef5db1f9490e468d8483e2932ee17d5d6",
+      "size_bytes": 9767,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/redesign-csp-database-dataflow/specs/dataflow/downstream-matrix-and-publication/spec.md",
+      "source_logical_path": "openspec/changes/redesign-csp-database-dataflow/specs/dataflow/downstream-matrix-and-publication/spec.md",
+      "sha256": "2102e0b5b0bdf5cbcccc2170a0fa6e3b67328382b168504e7e78fa8726819f45",
+      "size_bytes": 7753,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/redesign-csp-database-dataflow/specs/dataflow/enabled-subscription-inventory/spec.md",
+      "source_logical_path": "openspec/changes/redesign-csp-database-dataflow/specs/dataflow/enabled-subscription-inventory/spec.md",
+      "sha256": "bf1e14834786e773c713bb5e0af68b59f068bb5ccec89385ad7cd8ce61bf021d",
+      "size_bytes": 7997,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/redesign-csp-database-dataflow/specs/dataflow/node-connection-versioning-cow/spec.md",
+      "source_logical_path": "openspec/changes/redesign-csp-database-dataflow/specs/dataflow/node-connection-versioning-cow/spec.md",
+      "sha256": "9f242b597e7075d0cbdadf5fd833e6ffd3e7759620df21c55a7140bcb7015d5d",
+      "size_bytes": 4141,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/redesign-csp-database-dataflow/specs/dataflow/single-sqlite-domain-partition/spec.md",
+      "source_logical_path": "openspec/changes/redesign-csp-database-dataflow/specs/dataflow/single-sqlite-domain-partition/spec.md",
+      "sha256": "4e72fe16f60824dc9019f8cab92613aff76562538697f1036624dabe03dd6844",
+      "size_bytes": 4483,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/redesign-csp-database-dataflow/specs/dataflow/upstream-payload-entry-fact-layer/spec.md",
+      "source_logical_path": "openspec/changes/redesign-csp-database-dataflow/specs/dataflow/upstream-payload-entry-fact-layer/spec.md",
+      "sha256": "a004b5bf9dafd9e785e481f67881fdf9c2f4cbce8508020d14cfd5b7baadb52d",
+      "size_bytes": 6093,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/redesign-csp-database-dataflow/tasks.md",
+      "source_logical_path": "openspec/changes/redesign-csp-database-dataflow/tasks.md",
+      "sha256": "529f776e579ba02ebc02b466ceafeeb9fc0ee4b30860f37dce349064a294c865",
+      "size_bytes": 13376,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/redo-node-probes-subcheck/.openspec.yaml",
+      "source_logical_path": "openspec/changes/redo-node-probes-subcheck/.openspec.yaml",
+      "sha256": "df4fb22c89b17a0d45d8ca25e98028a2244dceafe5a64ecbbc3bae35db97ccbc",
+      "size_bytes": 40,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/redo-node-probes-subcheck/README.md",
+      "source_logical_path": "openspec/changes/redo-node-probes-subcheck/README.md",
+      "sha256": "eedfd8697f04293f85aaa22656ac8f7cc674c81cf19a0b967b38dc58d0617ba3",
+      "size_bytes": 124,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/redo-node-probes-subcheck/design.md",
+      "source_logical_path": "openspec/changes/redo-node-probes-subcheck/design.md",
+      "sha256": "af0ace8321965031a4b48ea789a3ca7aaac0ebc313a7dc079bfcef8b4bc4f35a",
+      "size_bytes": 12684,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/redo-node-probes-subcheck/proposal.md",
+      "source_logical_path": "openspec/changes/redo-node-probes-subcheck/proposal.md",
+      "sha256": "21a3be9b7b38b4e16f5747924fc2d04a420351f1c49a7af64a229af24d88123f",
+      "size_bytes": 3981,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/redo-node-probes-subcheck/specs/node-probes/mihomo-subcheck-runtime/spec.md",
+      "source_logical_path": "openspec/changes/redo-node-probes-subcheck/specs/node-probes/mihomo-subcheck-runtime/spec.md",
+      "sha256": "f496c0469d3ba34cc420631798c55a360b626845611a74d294ed728034edeccf",
+      "size_bytes": 2989,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/redo-node-probes-subcheck/specs/node-probes/pipeline-funnel/spec.md",
+      "source_logical_path": "openspec/changes/redo-node-probes-subcheck/specs/node-probes/pipeline-funnel/spec.md",
+      "sha256": "b617329e430226b085109eecc6a032fca4d94444dc08165834b404ac2503877c",
+      "size_bytes": 2572,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/redo-node-probes-subcheck/specs/node-probes/platform-capability-matrix/spec.md",
+      "source_logical_path": "openspec/changes/redo-node-probes-subcheck/specs/node-probes/platform-capability-matrix/spec.md",
+      "sha256": "7b3e1ec9c6a4c012e80883d88c9aad9db5299b4ebbe1a0cbf7c5ec04d5bdc971",
+      "size_bytes": 4210,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/redo-node-probes-subcheck/specs/node-probes/result-contract-and-ui/spec.md",
+      "source_logical_path": "openspec/changes/redo-node-probes-subcheck/specs/node-probes/result-contract-and-ui/spec.md",
+      "sha256": "65b63d06632fb0cea19fad3f8e75129bb395e5e1292bcefc10cca50073348795",
+      "size_bytes": 4869,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/changes/redo-node-probes-subcheck/tasks.md",
+      "source_logical_path": "openspec/changes/redo-node-probes-subcheck/tasks.md",
+      "sha256": "402d67cffcaa62eb5e94fa15b71696e282d84a9abf54e03aedb52e0a754ab979",
+      "size_bytes": 6968,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/config.yaml",
+      "source_logical_path": "openspec/config.yaml",
+      "sha256": "8d44efe0996b047dcf2bd5801350971222d2a258ac877e961ea885068fc98b90",
+      "size_bytes": 777,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/specs/README.md",
+      "source_logical_path": "openspec/specs/README.md",
+      "sha256": "40c62673d4e2f9957264f8035bfae7de14f10e91e432e132d47dacb3126cb2d5",
+      "size_bytes": 3572,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/specs/auth/spec.md",
+      "source_logical_path": "openspec/specs/auth/spec.md",
+      "sha256": "109c4babb5301ff2e80f609217f7c4b3cda316bb2a96074ddb64439e6a41526a",
+      "size_bytes": 4080,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/specs/inventory/spec.md",
+      "source_logical_path": "openspec/specs/inventory/spec.md",
+      "sha256": "dc135a39501263e1ee8b7e34dc0e52ee52c4b9882e6d8fc3b0b52315184dcb69",
+      "size_bytes": 5785,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/specs/policy/spec.md",
+      "source_logical_path": "openspec/specs/policy/spec.md",
+      "sha256": "137a9603641de19be81d2b79e3ec02e1a07ab2604fd2d87ede9a47917561dd1d",
+      "size_bytes": 6180,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/specs/probe/spec.md",
+      "source_logical_path": "openspec/specs/probe/spec.md",
+      "sha256": "fb15be479445dcdd31f5af41afad561d7c3d02bd361c32b4e1e026e7ee232f60",
+      "size_bytes": 5905,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/specs/publication/spec.md",
+      "source_logical_path": "openspec/specs/publication/spec.md",
+      "sha256": "14882e5bd717527899d37934fbc5bb72384ecf82e91c1c4983fe8bc2f2adfb1c",
+      "size_bytes": 5270,
+      "mode_octal": "0o100644"
+    },
+    {
+      "archive_pointer": "docs/archive/openspec/specs/ui/spec.md",
+      "source_logical_path": "openspec/specs/ui/spec.md",
+      "sha256": "1103824b13088cb3a09a21b6e2b2f63bd626a3d8d6b794b93b58fad3fb253c75",
+      "size_bytes": 5259,
+      "mode_octal": "0o100644"
+    }
+  ],
+  "state": "retired",
+  "status": "completed",
+  "retired_at": "2026-10-09T17:37:40.275Z",
+  "observed_at": "2026-10-09T17:37:40.275Z",
+  "manifest_recorded_at": "2026-10-09T17:37:57.671Z",
+  "reported_prior_retired_at": "2026-10-09T17:35:00Z",
+  "correction_reason": "Correct documentary timestamp from unsourced normalized business timestamp to actual rename command observed receipt timestamp (17:37:40.275Z) and manifest update receipt timestamp (17:37:57.671Z); exact per-root atomic operation instant was unobserved within the composite command."
+}

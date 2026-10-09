@@ -53,6 +53,15 @@ jobs:
       - name: Run Go vet
         run: go vet -tags "with_quic with_wireguard" ./...
 
+      - name: Install test binary dependencies (sing-box, mihomo)
+        run: bash .github/scripts/install_test_binaries.sh
+
+      - name: Set up synthetic legacy archive fixture
+        run: |
+          sudo mkdir -p /home/service/backups
+          sudo chown -R $(id -u):$(id -g) /home/service/backups
+          python3 -B .github/scripts/setup_test_archive.py
+
       - name: Run Go tests
         run: |
           set +e

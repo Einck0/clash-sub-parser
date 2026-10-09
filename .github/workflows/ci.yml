@@ -1,19 +1,55 @@
-name: CI
+name: CI & Cloud Delivery
 
 'on':
+  pull_request:
+    branches:
+      - main
+      - dev
+      - task/csp-cloud-build-integration
+    paths-ignore:
+      - 'docs/**'
+      - 'openspec/**'
+      - '.specify/**'
+      - '*.md'
   push:
     branches:
-      - 'task/csp-cloud-build-integration'
+      - main
+      - dev
+      - task/csp-cloud-build-integration
+      - 'release/**'
       - 'cloud-build/*'
+    tags:
+      - 'v*'
+    paths-ignore:
+      - 'docs/**'
+      - 'openspec/**'
+      - '.specify/**'
+      - '*.md'
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: 'Enable release container publish (requires release trigger & ENABLE_CSP_GHCR_PUBLISH repo var)'
+        required: false
+        default: 'false'
+        type: string
+
+permissions:
+  contents: read
 
 jobs:
   test-and-build:
     name: Backend & Frontend Checks
     runs-on: ubuntu-latest
+    concurrency:
+      group: checks-${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: ${{ !startsWith(github.ref, 'refs/heads/release/') && !startsWith(github.ref, 'refs/tags/') }}
+    permissions:
+      contents: read
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -71,12 +107,156 @@ jobs:
           python3 -B .github/scripts/annotate_go_test.py /tmp/go-test-output.json $TEST_EXIT
           exit $TEST_EXIT
 
-      - name: Build Go binary
-        run: go build -tags "with_quic with_wireguard" -ldflags="-s -w" -trimpath -o bin/csp ./cmd/csp
+      - name: Build pure-static Go binary
+        run: |
+          mkdir -p bin
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags "with_quic with_wireguard" -ldflags="-s -w -X main.version=${{ github.sha }}" -trimpath -o bin/csp-linux-amd64 ./cmd/csp
+
+      - name: Validate static ELF executable
+        run: |
+          file bin/csp-linux-amd64
+          readelf -l bin/csp-linux-amd64 | grep -i "program interpreter" && { echo "ERROR: Binary is dynamically linked!" >&2; exit 1; } || echo "ELF check passed: pure static binary."
+
+      - name: Generate binary sha256 checksum manifest
+        run: |
+          cd bin && sha256sum csp-linux-amd64 > csp-linux-amd64.sha256
+          cat csp-linux-amd64.sha256
 
       - name: Upload compiled binary artifact
         uses: actions/upload-artifact@v4
         with:
           name: csp-linux-amd64
-          path: bin/csp
+          path: |
+            bin/csp-linux-amd64
+            bin/csp-linux-amd64.sha256
           retention-days: 7
+
+  publish-runtime:
+    name: Build & Publish Runtime Container
+    needs: [test-and-build]
+    runs-on: ubuntu-latest
+    concurrency:
+      group: release-${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write
+    if: |
+      github.event_name != 'pull_request' && (
+        startsWith(github.ref, 'refs/tags/v') ||
+        startsWith(github.ref, 'refs/heads/release/') ||
+        (github.event_name == 'workflow_dispatch' && inputs.publish_release == 'true')
+      )
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Download compiled binary artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: csp-linux-amd64
+          path: bin
+
+      - name: Verify binary sha256 checksum
+        run: |
+          cd bin && sha256sum -c csp-linux-amd64.sha256
+          chmod +x csp-linux-amd64
+
+      - name: Validate binary static ELF linkage
+        run: |
+          file bin/csp-linux-amd64
+          readelf -l bin/csp-linux-amd64 | grep -i "program interpreter" && { echo "ERROR: Binary is not static!" >&2; exit 1; } || echo "Verified static binary."
+
+      - name: Pre-publish GHCR private gate validation
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER_PAT: ${{ secrets.OWNER_PAT }}
+          ENABLE_CSP_GHCR_PUBLISH: ${{ vars.ENABLE_CSP_GHCR_PUBLISH || 'false' }}
+          TARGET_IMAGE_NAME: ghcr.io/einck0/csp-runtime-private
+        run: |
+          python3 -B .github/scripts/check_ghcr_private_gate.py \
+            --mode pre-check \
+            --image-name "$TARGET_IMAGE_NAME" \
+            --owner einck0 \
+            --publish-enabled "$ENABLE_CSP_GHCR_PUBLISH"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tags
+        id: meta
+        env:
+          TARGET_IMAGE_NAME: ghcr.io/einck0/csp-runtime-private
+        run: |
+          COMMIT_SHA="${{ github.sha }}"
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          PRIMARY_TAG="${TARGET_IMAGE_NAME}:sha-${COMMIT_SHA}"
+          RUN_TAG="${TARGET_IMAGE_NAME}:run-${{ github.run_id }}"
+          BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          echo "commit_sha=${COMMIT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "build_date=${BUILD_DATE}" >> "$GITHUB_OUTPUT"
+          echo "primary_tag=${PRIMARY_TAG}" >> "$GITHUB_OUTPUT"
+          echo "run_tag=${RUN_TAG}" >> "$GITHUB_OUTPUT"
+          echo "target_image=${TARGET_IMAGE_NAME}" >> "$GITHUB_OUTPUT"
+          echo "tag_name=sha-${COMMIT_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push runtime container image
+        id: build-push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.runtime
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.primary_tag }}
+            ${{ steps.meta.outputs.run_tag }}
+          build-args: |
+            COMMIT_SHA=${{ github.sha }}
+            BUILD_DATE=${{ steps.meta.outputs.build_date }}
+            ALPINE_MIRROR=
+
+      - name: Verify image digest and post-push private gate
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER_PAT: ${{ secrets.OWNER_PAT }}
+          IMAGE_DIGEST: ${{ steps.build-push.outputs.digest }}
+          PRIMARY_TAG: ${{ steps.meta.outputs.primary_tag }}
+          TARGET_IMAGE_NAME: ghcr.io/einck0/csp-runtime-private
+          TAG_NAME: ${{ steps.meta.outputs.tag_name }}
+        run: |
+          echo "Buildx published digest: $IMAGE_DIGEST"
+          if [ -z "$IMAGE_DIGEST" ]; then
+            echo "ERROR: Docker buildx output digest is empty! Push failed or digest missing." >&2
+            exit 1
+          fi
+          python3 -B .github/scripts/check_ghcr_private_gate.py \
+            --mode post-check \
+            --image-name "$TARGET_IMAGE_NAME" \
+            --owner einck0 \
+            --tag "$TAG_NAME" \
+            --digest "$IMAGE_DIGEST"
+
+      - name: Output release delivery summary
+        run: |
+          echo "===================================================="
+          echo "CSP Cloud Runtime Container Delivery Summary"
+          echo "Triggered Ref: ${{ github.ref }}"
+          echo "Commit SHA: ${{ steps.meta.outputs.commit_sha }}"
+          echo "Image: ${{ steps.meta.outputs.target_image }}"
+          echo "Primary Tag: ${{ steps.meta.outputs.primary_tag }}"
+          echo "Run Tag: ${{ steps.meta.outputs.run_tag }}"
+          echo "Immutable Digest: ${{ steps.build-push.outputs.digest }}"
+          echo "Private Gate: Verified Fail-Closed (No Anonymous Access)"
+          echo "Notice: Container published to registry; production deployment requires explicit operator rollout."
+          echo "===================================================="

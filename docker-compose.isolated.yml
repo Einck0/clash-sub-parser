@@ -1,0 +1,40 @@
+name: ${CSP_ISOLATED_PROJECT:-csp-isolated}
+
+services:
+  app:
+    image: ${CSP_ISOLATED_IMAGE:-${CSP_IMAGE:?required}}
+    container_name: ${CSP_ISOLATED_CONTAINER_NAME:-csp-isolated-preview}
+    environment:
+      CSP_ADDR: 0.0.0.0:18080
+      CSP_DB_PATH: /data/csp-v1.db
+      CSP_ADMIN_TOKEN: ${CSP_ISOLATED_ADMIN_TOKEN:-synthetic-preview-token}
+      CSP_FETCH_PROXY: ${CSP_ISOLATED_FETCH_PROXY:-}
+      TZ: ${TZ:-Asia/Shanghai}
+    ports:
+      - "${CSP_ISOLATED_PORT_PRIMARY:-127.0.0.1:18081}:18080"
+      - "${CSP_ISOLATED_PORT_SECONDARY:-127.0.0.1:17001}:18080"
+    volumes:
+      - csp-isolated-data:/data
+    restart: "no"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:18080/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    labels:
+      com.csp.isolated.owner: "cloud-delivery"
+      com.csp.isolated.run-marker: "${CSP_ISOLATED_RUN_MARKER:-preview}"
+    networks:
+      - isolated-network
+
+volumes:
+  csp-isolated-data:
+    name: ${CSP_ISOLATED_VOLUME_NAME:-csp-isolated-data}
+    labels:
+      com.csp.isolated.owner: "cloud-delivery"
+      com.csp.isolated.run-marker: "${CSP_ISOLATED_RUN_MARKER:-preview}"
+
+networks:
+  isolated-network:
+    name: ${CSP_ISOLATED_NETWORK_NAME:-csp-isolated-net}

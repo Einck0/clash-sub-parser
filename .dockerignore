@@ -61,5 +61,7 @@ references
 references/
 info.txt
 backups
-bin
+bin/*
+!bin/csp-linux-amd64
+!bin/csp-linux-amd64.sha256
 tmp

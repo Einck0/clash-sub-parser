@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp, h, nextTick } from 'vue'
 import PolicyView from './PolicyView.vue'
-import { api } from '../../api/client'
+import { api, ApiError } from '../../api/client'
 import type { PolicyGroup } from './policyTypes'
 
 describe('PolicyView Topology & Drawer Linkage', () => {
@@ -151,11 +151,11 @@ describe('PolicyView Topology & Drawer Linkage', () => {
     await nextTick()
     await new Promise((r) => setTimeout(r, 20))
 
-    expect(patchSpy).toHaveBeenCalledWith('/api/v1/policies/groups/grp-1', {
+    expect(patchSpy).toHaveBeenCalledWith('/api/v1/policies/groups/grp-1', expect.objectContaining({
       empty_fallback_pass: false,
       name: 'Proxy Group Renamed',
       group_type: 'select',
-    })
+    }))
 
     // UI card updates to new name
     expect(container.textContent).toContain('Proxy Group Renamed')
@@ -302,7 +302,7 @@ describe('PolicyView Topology & Drawer Linkage', () => {
 
     const cards = container.querySelectorAll('[data-testid="group-card"]')
     expect(cards.length).toBe(1)
-    expect(cards[0].textContent).toContain('1 条筛选条件')
+    expect(cards[0].textContent).toContain('1 条来源条件')
 
     // Click to expand
     const header = cards[0].querySelector('.cursor-pointer') as HTMLElement | null
@@ -310,10 +310,10 @@ describe('PolicyView Topology & Drawer Linkage', () => {
     await nextTick()
     await new Promise((r) => setTimeout(r, 20))
 
-    // Verify dynamic pool indicator and filter conditions details
-    expect(cards[0].textContent).toContain('动态节点池')
-    expect(cards[0].textContent).toContain('probe_latency_ms lte "150"')
-    expect(cards[0].textContent).toContain('从全局节点池中动态筛选匹配的候选节点')
+    // Legacy input becomes one independent matching source, never a group wrapper.
+    expect(cards[0].textContent).toContain('全池动态匹配')
+    expect(cards[0].textContent).toContain('同级属性过滤')
+    expect(cards[0].textContent).not.toContain('策略组筛选条件')
   })
 
   it('renders routing rules tab with inline error diagnostics and responsive mobile layout', async () => {
@@ -409,6 +409,8 @@ describe('PolicyView Topology & Drawer Linkage', () => {
     const checkbox = dialog.querySelector('[data-testid="empty-fallback-pass"]') as HTMLInputElement
     expect(checkbox.checked).toBe(true)
     expect(dialog.textContent).toContain('不是直连')
+    ;(dialog.querySelector('button[title="编辑匹配条件"]') as HTMLButtonElement).click()
+    await nextTick()
     const edit = Array.from(dialog.querySelectorAll('button')).find((b) => b.textContent?.trim() === '编辑')!
     edit.click()
     await nextTick()
@@ -419,10 +421,66 @@ describe('PolicyView Topology & Drawer Linkage', () => {
     const add = Array.from(dialog.querySelectorAll('button')).find((b) => b.textContent?.includes('添加条件'))!
     add.click()
     await nextTick()
+    Array.from(dialog.querySelectorAll('button')).find(b => b.textContent?.trim() === '更新来源')!.click()
+    await nextTick()
     dialog.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
     await nextTick()
     await new Promise((r) => setTimeout(r, 20))
-    expect(patch).toHaveBeenCalledWith('/api/v1/policies/groups/grp-1', expect.objectContaining({ empty_fallback_pass: true, node_filter: { conditions: [{ field: 'display_name', op: 'not_regex', value: expression }] } }))
+    expect(patch).toHaveBeenCalledWith('/api/v1/policies/groups/grp-1', expect.objectContaining({ empty_fallback_pass: true, sources: [
+      { operation: 'add', kind: 'manual_node', position: 0, node_logical_id: 'node-hk-01' },
+      { operation: 'add', kind: 'filter', position: 1, filter_spec: { conditions: [{ field: 'display_name', op: 'not_regex', value: expression }] } },
+    ] }))
+    expect(patch.mock.calls[0][1]).not.toHaveProperty('node_filter')
+    expect(patch.mock.calls[0][1]).not.toHaveProperty('edges')
+  })
+
+  it.each([
+    { status: 409, code: 'revision_conflict', message: 'revision changed', details: { current_revision: 4 }, visible: '版本冲突' },
+    { status: 422, code: 'invalid_filter_value', message: 'invalid regex pattern', details: {}, visible: 'invalid regex pattern' },
+  ])('preserves filter source and editor text after server rejection $status', async ({ status, code, message, details, visible }) => {
+    const source = { operation: 'remove' as const, kind: 'filter' as const, position: 0, filter_spec: { conditions: [{ field: 'display_name' as const, op: 'regex' as const, value: 'HK' }] } }
+    vi.spyOn(api, 'get').mockImplementation(async path => {
+      if (path.endsWith('/groups')) return { items: [{ ...mockGroups[0], revision: 2, sources: [source] }], total: 1 }
+      if (path.endsWith('/rules')) return { revision_id: 'fixture', policy_rules: [], admission_rules: [] }
+      return { items: [], spec: { conditions: [] } }
+    })
+    vi.spyOn(api, 'post').mockResolvedValue({ valid: true })
+    const put = vi.spyOn(api, 'put').mockRejectedValue(new ApiError(status, code, message, undefined, details))
+    const patch = vi.spyOn(api, 'patch').mockResolvedValue({})
+    await mountPolicyView()
+    const manage = Array.from(container.querySelectorAll('[data-testid="group-card"] button')).find(b => b.textContent?.includes('管理来源')) as HTMLButtonElement
+    manage.click()
+    await nextTick()
+    const dialog = container.querySelector('[role="dialog"]')!
+    ;(dialog.querySelector('button[title="编辑匹配条件"]') as HTMLButtonElement).click()
+    await nextTick()
+    Array.from(dialog.querySelectorAll('button')).find(b => b.textContent?.trim() === '编辑')!.click()
+    await nextTick()
+    const input = dialog.querySelector('[data-testid="condition-value"]') as HTMLInputElement
+    input.value = '['
+    input.dispatchEvent(new Event('input'))
+    await nextTick()
+    Array.from(dialog.querySelectorAll('button')).find(b => b.textContent?.trim() === '添加条件')!.click()
+    await nextTick()
+    Array.from(dialog.querySelectorAll('button')).find(b => b.textContent?.trim() === '更新来源')!.click()
+    await nextTick()
+    const save = Array.from(dialog.querySelectorAll('button')).find(b => b.textContent?.trim() === '保存来源')!
+    save.click()
+    await nextTick()
+    await new Promise(r => setTimeout(r, 20))
+    expect(dialog.textContent).toContain(visible)
+    expect(dialog.textContent).toContain('"["')
+    expect(put).toHaveBeenCalledWith('/api/v1/policies/groups/grp-1', expect.objectContaining({ sources: [expect.objectContaining({ operation: 'remove', kind: 'filter' })] }))
+    expect(put.mock.calls[0][1]).not.toHaveProperty('edges')
+    expect(put.mock.calls[0][1]).not.toHaveProperty('node_filter')
+    expect(patch).not.toHaveBeenCalled()
+    if (status === 409) {
+      Array.from(dialog.querySelectorAll('button')).find(b => b.textContent?.trim() === '保留本地草稿')!.click()
+      await nextTick()
+      save.click()
+      await nextTick()
+      expect(put).toHaveBeenLastCalledWith('/api/v1/policies/groups/grp-1', expect.objectContaining({ expected_revision: 4 }))
+    }
   })
 
   it('renders validation incomplete alert banner and allows user retry', async () => {
@@ -472,9 +530,10 @@ describe('PolicyView Topology & Drawer Linkage', () => {
     const cards = container.querySelectorAll('[data-testid="group-card"]')
     expect(cards.length).toBe(2)
 
-    // Card 1: Explicit edge with secondary filter
-    expect(cards[0].textContent).toContain('显式连接边')
-    expect(cards[0].textContent).toContain('二次过滤')
+    // Card 1: manual and condition sources are independent ordered operations.
+    expect(cards[0].textContent).toContain('手工节点来源')
+    expect(cards[0].textContent).toContain('同级顺序增减')
+    expect(cards[0].textContent).not.toContain('二次过滤')
 
     // Card 2: Dynamic pool
     expect(cards[1].textContent).toContain('全池动态匹配')
@@ -517,7 +576,7 @@ describe('PolicyView Topology & Drawer Linkage', () => {
 
     // Open manage edges for first group
     const cards = container.querySelectorAll('[data-testid="group-card"]')
-    const manageEdgesBtn = Array.from(cards[0].querySelectorAll('button')).find((b) => b.textContent?.includes('管理边'))
+    const manageEdgesBtn = Array.from(cards[0].querySelectorAll('button')).find((b) => b.textContent?.includes('管理来源'))
     expect(manageEdgesBtn).toBeDefined()
     manageEdgesBtn?.click()
     await nextTick()

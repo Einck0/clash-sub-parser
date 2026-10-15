@@ -35,11 +35,7 @@ func setupRevisionTestRouter(t *testing.T, db *sql.DB) (http.Handler, *revision.
 
 func insertTestRevision(t *testing.T, db *sql.DB, id, digest string, state domain.ConfigurationRevisionState) {
 	t.Helper()
-	const query = `
-		INSERT INTO configuration_revisions (id, content_digest, state, created_at)
-		VALUES (?, ?, ?, ?);
-	`
-	if _, err := db.Exec(query, id, digest, string(state), time.Now().UTC().Format(time.RFC3339)); err != nil {
+	if err := sqlite.NewRevisionRepository(db).Create(context.Background(), &domain.ConfigurationRevision{ID: id, ContentDigest: digest, State: state, CreatedAt: time.Now().UTC()}); err != nil {
 		t.Fatalf("failed to insert test revision %s: %v", id, err)
 	}
 }

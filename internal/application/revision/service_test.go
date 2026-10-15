@@ -33,7 +33,7 @@ func setupRevisionDB(t *testing.T) *sql.DB {
 
 func insertRevision(t *testing.T, db *sql.DB, id string, state domain.ConfigurationRevisionState) {
 	t.Helper()
-	_, err := db.Exec(`INSERT INTO configuration_revisions (id, content_digest, state, created_at) VALUES (?, ?, ?, ?)`, id, "digest-"+id, state, "2026-09-16T00:00:00Z")
+	err := sqlite.NewRevisionRepository(db).Create(context.Background(), &domain.ConfigurationRevision{ID: id, ContentDigest: "digest-" + id, State: state, CreatedAt: time.Date(2026, 9, 16, 0, 0, 0, 0, time.UTC)})
 	if err != nil {
 		t.Fatal(err)
 	}

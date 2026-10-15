@@ -1000,16 +1000,15 @@ func TestProxy_ExactEndpointAndPortEnforcement(t *testing.T) {
 		}
 	})
 
-	// 7. Malicious userinfo rejected
-	t.Run("malicious userinfo in proxy URL rejected", func(t *testing.T) {
+	// Credentials do not broaden the exact trusted endpoint.
+	t.Run("credentialed exact endpoint allowed", func(t *testing.T) {
 		u, _ := url.Parse("http://admin:secret@host.docker.internal:7890")
-		err := policy.ValidateProxy(ctx, u)
-		if err == nil {
-			t.Fatal("expected error on userinfo, got nil")
+		if err := policy.ValidateProxy(ctx, u); err != nil {
+			t.Fatal(err)
 		}
-		de, ok := domain.AsDomainError(err)
-		if !ok || de.Code != "invalid_proxy_url" {
-			t.Fatalf("expected invalid_proxy_url for userinfo, got: %v", err)
+		u.Host = "host.docker.internal:2375"
+		if err := policy.ValidateProxy(ctx, u); err == nil {
+			t.Fatal("credentials bypassed exact endpoint trust")
 		}
 	})
 
@@ -1084,9 +1083,9 @@ func TestPolicy_AddAllowedProxy_Validation(t *testing.T) {
 		t.Error("expected error for port omission, got nil")
 	}
 
-	// Invalid: userinfo
-	if err := policy.AddAllowedProxy("http://user:pass@host.docker.internal:7890"); err == nil {
-		t.Error("expected error for userinfo, got nil")
+	// Credentials are supported, but trust remains credential-free and exact.
+	if err := policy.AddAllowedProxy("http://user:pass@host.docker.internal:7890"); err != nil {
+		t.Fatal(err)
 	}
 
 	// Invalid: unsupported scheme
@@ -1693,7 +1692,6 @@ func TestProxy_ProtocolAndPortConfusion_EdgeCases(t *testing.T) {
 
 	unsupportedSchemes := []string{
 		"socks5://host.docker.internal:7890",
-		"https://host.docker.internal:7890",
 		"ftp://host.docker.internal:7890",
 		"host.docker.internal:7890",
 	}

@@ -497,11 +497,11 @@ func TestPolicyValidateEndpoint(t *testing.T) {
 
 		// Inject a cycle directly in DB to verify backend graph validation catches persisted cycles
 		cycleEdgeID := domain.MustNewUUIDv7()
-		if _, err := db.Exec(`INSERT INTO group_edges (id, parent_group_id, child_group_id, position) VALUES (?, ?, ?, 0)`, cycleEdgeID, g2.ID, g1.ID); err != nil {
+		if _, err := db.Exec(`INSERT INTO policy_group_sources (id, group_id, target_group_id, position,operation,kind) VALUES (?, ?, ?, 0,'add','group_ref')`, cycleEdgeID, g2.ID, g1.ID); err != nil {
 			t.Fatalf("failed to insert cycle edge: %v", err)
 		}
 		defer func() {
-			_, _ = db.Exec(`DELETE FROM group_edges WHERE id = ?`, cycleEdgeID)
+			_, _ = db.Exec(`DELETE FROM policy_group_sources WHERE id = ?`, cycleEdgeID)
 		}()
 
 		cycleReq := httptest.NewRequest(http.MethodPost, "/api/v1/policies/validate", nil)

@@ -6,10 +6,16 @@ import {
   PencilSquareIcon,
   TrashIcon,
   PlusIcon,
-  ShareIcon,
 } from '@heroicons/vue/24/outline'
 import type { PolicyGroup } from './policyTypes'
-import { groupTypeLabel, groupTypeSupportedTargets } from './policyTypes'
+import {
+  groupTypeLabel,
+  groupTypeSupportedTargets,
+  normalizeGroupSources,
+  sourceKindLabel,
+  sourceOperationLabel,
+  computeSourceSemantics,
+} from './policyTypes'
 import StatusBadge from '../../ui/StatusBadge.vue'
 import { t } from '../../locales'
 
@@ -28,42 +34,59 @@ const emit = defineEmits<{
 
 const expanded = ref(false)
 
-const edgeCount = computed(() => props.group.edges?.length || 0)
-const hasEdges = computed(() => Boolean(props.group.edges && props.group.edges.length > 0))
-const hasChildGroupEdges = computed(() => Boolean(props.group.edges && props.group.edges.some((e) => e.child_group_id)))
-const hasFilters = computed(() => Boolean(props.group.node_filter?.conditions && props.group.node_filter.conditions.length > 0))
+const normalizedSources = computed(() => {
+  return Array.isArray(props.group.sources) && props.group.sources.length > 0
+    ? props.group.sources
+    : normalizeGroupSources(props.group)
+})
+
+const sourceSemantics = computed(() => computeSourceSemantics(normalizedSources.value))
+const sourceCount = computed(() => normalizedSources.value.length)
+const conditionCount = computed(() => normalizedSources.value.reduce((count, s) => count + (s.filter_spec?.conditions.length || 0), 0))
 
 const membershipMode = computed(() => {
-  if (hasEdges.value) {
-    if (hasChildGroupEdges.value) {
+  if (sourceCount.value > 0) {
+    const hasGroupRef = normalizedSources.value.some((s) => s.kind === 'group_ref')
+    const hasGroupNodes = normalizedSources.value.some((s) => s.kind === 'group_nodes')
+    const hasRegex = normalizedSources.value.some((s) => s.kind === 'regex')
+    const hasFilter = normalizedSources.value.some((s) => s.kind === 'filter')
+    const hasManual = normalizedSources.value.some((s) => s.kind === 'manual_node')
+
+    if (hasGroupRef || hasGroupNodes) {
       return {
         key: 'cascade',
-        label: '子策略组级联',
-        fullLabel: '子策略组级联模式（父级筛选条件向下级递归继承）',
+        label: hasGroupNodes ? '子组解包级联' : '子策略组级联',
+        fullLabel: '包含子策略组引用或解包展开',
         badgeClass: 'badge-secondary',
-        secondaryNotice: hasFilters.value ? '组筛选作为入选边之二次过滤' : undefined,
+        secondaryNotice: hasFilter || hasRegex ? '同级来源顺序增减，后续可重新加入' : undefined,
       }
     }
-    return {
-      key: 'explicit',
-      label: '显式连接边',
-      fullLabel: '显式连接边模式（组筛选仅作为入选边之二次过滤）',
-      badgeClass: 'badge-accent',
-      secondaryNotice: hasFilters.value ? '二次过滤：仅对入选边生效' : undefined,
+    if (hasManual) {
+      return {
+        key: 'explicit',
+        label: '手工节点来源',
+        fullLabel: '包含显式指定的手工节点来源',
+        badgeClass: 'badge-accent',
+        secondaryNotice: hasFilter || hasRegex ? '同级来源顺序增减，后续可重新加入' : undefined,
+      }
+    }
+    if (hasFilter || hasRegex) {
+      return {
+        key: 'dynamic',
+        label: '全池动态匹配',
+        fullLabel: '全池动态匹配模式（正则与条件动态匹配候选节点）',
+        badgeClass: 'badge-info',
+      }
     }
   }
-  if (hasFilters.value) {
-    return {
-      key: 'dynamic',
-      label: '全池动态匹配',
-      fullLabel: '全池动态匹配模式（自动遍历全局活跃节点）',
-      badgeClass: 'badge-info',
-    }
+
+  if (sourceCount.value > 0) {
+    return { key: 'builtin', label: '内建流控来源', fullLabel: '包含内建流控项来源', badgeClass: 'badge-warning' }
   }
   return {
     key: 'empty',
-    label: '空成员',
-    fullLabel: '未配置成员（空策略组）',
+    label: '无成员来源',
+    fullLabel: '未配置成员来源（空策略组）',
     badgeClass: 'badge-ghost',
   }
 })
@@ -120,12 +143,14 @@ function handleHeaderClick() {
         </div>
       </div>
 
-      <!-- Edge Count Indicator and Action Bar wrap cleanly on narrow widths -->
+      <!-- Edge / Sources Indicator and Action Bar wrap cleanly on narrow widths -->
       <div class="flex flex-wrap items-center justify-between gap-2 text-xs opacity-70 border-t border-base-300 pt-2.5 min-w-0">
         <div class="flex flex-wrap items-center gap-2 min-w-0">
-          <span class="flex items-center gap-1.5 font-mono min-w-0 truncate shrink-0">
-            <ShareIcon class="w-3.5 h-3.5 text-primary shrink-0" />
-            <span class="truncate">{{ edgeCount }} 条关联边</span>
+          <span v-if="sourceCount > 0" class="badge badge-xs badge-outline font-mono">
+            {{ sourceCount }} 项来源
+          </span>
+          <span v-if="group.revision !== undefined" class="badge badge-xs badge-ghost font-mono">
+            v{{ group.revision }}
           </span>
           <span
             class="badge badge-xs font-semibold"
@@ -140,7 +165,7 @@ function handleHeaderClick() {
             class="badge badge-xs badge-outline font-mono"
             :title="membershipMode.secondaryNotice"
           >
-            二次过滤
+            同级顺序增减
           </span>
           <span
             class="badge badge-xs badge-ghost font-mono"
@@ -150,11 +175,11 @@ function handleHeaderClick() {
           </span>
           <span v-if="group.empty_fallback_pass" class="badge badge-xs badge-outline" :title="t('policy.emptyFallbackPassHelp')">{{ t('policy.emptyFallbackPass') }}</span>
           <span
-            v-if="group.node_filter && group.node_filter.conditions && group.node_filter.conditions.length > 0"
+            v-if="conditionCount > 0"
             class="badge badge-xs badge-primary font-mono"
-            title="已启用策略组专属节点筛选"
+            title="各来源内部的匹配条件，不是整组筛选器"
           >
-            {{ group.node_filter.conditions.length }} 条筛选条件
+            {{ conditionCount }} 条来源条件
           </span>
         </div>
 
@@ -162,11 +187,11 @@ function handleHeaderClick() {
           <button
             type="button"
             class="btn btn-ghost btn-xs gap-1 touch-manipulation"
-            title="管理关联边"
+            title="管理成员来源"
             @click="emit('manage-edges', group)"
           >
             <PlusIcon class="w-3.5 h-3.5 shrink-0" />
-            管理边
+            管理来源
           </button>
           <button
             type="button"
@@ -187,63 +212,64 @@ function handleHeaderClick() {
         </div>
       </div>
 
-      <!-- Expandable Edges Container (Smooth 200ms ease-out) -->
+      <!-- Expandable Edges / Sources Container (Smooth 200ms ease-out) -->
       <div
         v-if="expanded"
         class="mt-1 pt-3 border-t border-base-300/80 space-y-2 transition-all duration-200 ease-out min-w-0 overflow-hidden"
       >
-        <!-- Group Filter Conditions details if configured -->
-        <div
-          v-if="group.node_filter && group.node_filter.conditions && group.node_filter.conditions.length > 0"
-          class="p-2.5 rounded-lg bg-base-100 border border-base-300/80 text-xs font-mono space-y-1"
-        >
+        <!-- Sources Pipeline breakdown when sources present -->
+        <div v-if="sourceCount > 0" class="space-y-1.5">
           <div class="flex items-center justify-between text-[11px] font-sans opacity-70">
-            <span>策略组筛选条件（在全局筛选之后生效）：</span>
-            <span v-if="!group.edges || group.edges.length === 0" class="badge badge-xs badge-info font-semibold">
-              动态节点池
-            </span>
-            <span v-else class="badge badge-xs badge-accent font-semibold">
-              {{ hasChildGroupEdges ? '子策略组级联二次过滤' : '显式边二次过滤' }}
-            </span>
+            <span>有序成员来源流水线（由上至下执行）：</span>
+            <span class="badge badge-xs badge-ghost font-mono">{{ sourceCount }} 步</span>
           </div>
-          <p v-if="hasEdges" class="text-[11px] text-accent font-sans">
-            说明：当前处于显式连接边模式，此处的筛选条件仅作用于显式选定的关联目标，不会引入全局节点。
-          </p>
-          <div class="flex flex-wrap gap-1">
+          <div
+            v-for="(item, sIdx) in sourceSemantics"
+            :key="item.source.id || sIdx"
+            class="flex items-center justify-between p-2 rounded-lg bg-base-100 border border-base-300/80 text-xs font-mono min-w-0 overflow-hidden gap-2"
+          >
+            <div class="flex items-center gap-2 min-w-0 flex-1 truncate">
+              <span class="badge badge-xs badge-ghost font-semibold shrink-0">#{{ sIdx + 1 }}</span>
+              <span
+                class="badge badge-xs shrink-0 font-bold"
+                :class="item.source.operation === 'remove' ? 'badge-error text-error-content' : 'badge-primary text-primary-content'"
+              >
+                {{ item.source.operation === 'remove' ? '-' : '+' }}
+              </span>
+              <span class="badge badge-xs badge-outline shrink-0 font-sans">
+                {{ sourceKindLabel(item.source.kind) }}
+              </span>
+              <span v-if="item.source.kind === 'manual_node'" class="text-primary truncate">
+                节点: {{ item.source.node_logical_id }}
+              </span>
+              <span v-else-if="item.source.kind === 'group_ref'" class="text-secondary truncate">
+                组引用: {{ item.source.target_group_id }}
+              </span>
+              <span v-else-if="item.source.kind === 'group_nodes'" class="text-secondary truncate">
+                展开子组: {{ item.source.target_group_id }}
+              </span>
+              <span v-else-if="item.source.kind === 'regex'" class="text-accent truncate">
+                正则: /{{ item.source.pattern }}/
+              </span>
+              <span v-else-if="item.source.kind === 'filter'" class="text-info truncate">
+                过滤条件: {{ item.source.filter_spec?.conditions?.length || 0 }} 条
+              </span>
+              <span v-else-if="item.source.kind === 'typed_builtin'" class="text-warning truncate">
+                内建: {{ item.source.builtin_name }}
+              </span>
+            </div>
             <span
-              v-for="(c, cIdx) in group.node_filter.conditions"
-              :key="cIdx"
-              class="badge badge-xs badge-outline"
+              v-if="item.isReEntry"
+              class="badge badge-xs badge-secondary shrink-0 font-sans"
+              title="先前排除后重新加入"
             >
-              {{ c.field }} {{ c.op }} "{{ c.value }}"
-              <span v-if="c.probe_kind" class="opacity-75 ml-1">({{ c.probe_kind }})</span>
+              重入入选
             </span>
           </div>
         </div>
 
-        <div v-if="!group.edges || group.edges.length === 0" class="text-xs opacity-50 italic py-1">
-          <span v-if="group.node_filter && group.node_filter.conditions && group.node_filter.conditions.length > 0">
-            未配置显式节点边：策略组将从全局节点池中动态筛选匹配的候选节点。
-          </span>
-          <span v-else>
-            当前策略组尚未配置关联边，点击「管理边」挂载子策略组或节点。
-          </span>
-        </div>
-
-        <div
-          v-for="(edge, idx) in group.edges"
-          :key="edge.id || idx"
-          class="flex items-center justify-between p-2 rounded-lg bg-base-100 border border-base-300/80 text-xs font-mono min-w-0 overflow-hidden"
-        >
-          <div class="flex items-center gap-2 min-w-0 flex-1">
-            <span class="badge badge-xs badge-ghost font-semibold shrink-0">{{ edge.position }}</span>
-            <span v-if="edge.child_group_id" class="text-secondary truncate min-w-0 flex-1">
-              子策略组：{{ edge.child_group_id }}
-            </span>
-            <span v-else-if="edge.node_logical_id" class="text-primary truncate min-w-0 flex-1">
-              节点：{{ edge.node_logical_id }}
-            </span>
-          </div>
+        <div v-if="sourceCount === 0" class="text-xs opacity-50 italic py-1">
+          当前策略组尚未配置成员来源，点击「管理来源」添加节点、子策略组或匹配条件。
         </div>
       </div>
     </div>

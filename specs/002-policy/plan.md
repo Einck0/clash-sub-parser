@@ -1,34 +1,61 @@
-# Technical Plan: Policy Capability
+# Technical plan — CSP complete-delivery convergence
 
-- **Feature Directory**: `specs/002-policy/`
-- **Capability Domain**: `policy`
-- **Status**: CANDIDATE (Spec Kit Native Architecture)
+Feature: `specs/002-policy`; current run `pi_run_20261015_230722_1113226`; change `change_pi_run_20261015_230722_1113226`; package `whole_task`, epoch 1. This is an implementation-authorized continuation, not a fresh initialization. Historical implementation and failed gates remain preserved. The current delivery amendment in spec.md takes precedence over historical execution prose in linked artifacts.
 
-## 1. Architecture Overview
+## Context and scope
 
-本能力负责 策略组拓扑、双模式成员嵌套引用、动态全池匹配与空组安全兜底。在架构分层中，该领域保持与其他五大能力的高度解耦，通过领域模型与数据库持久化事实进行交互。
+- Host verified: Linux amd64, Go 1.27.1, Node 26.7, Python 3.14.7. Go/Chi/SQLite plus embedded Vue/TypeScript web assets. Native verification: Go build/test/tagged/race, web Vitest/type-check/build, Playwright.
+- Baseline: local dev HEAD `cd020b8c23c5c8cd899074fc80288116a8ba8641`, 82 dirty entries including existing substantial source/editor/migration18 work and test-generated maintenance files. Preserve tracked/untracked user work; no reset/restore/checkout/clean/force-push.
+- Deterministic feature resolution: `.specify/feature.json` binds 002-policy, confirmed by official check-prerequisites script. No graphify graph currently exists. Related inventory/probe/publication/auth/UI domain specs remain baselines, not new roots.
+- Actual production is schema17, old image ID `sha256:906d757381727bbdb166003522adefd31c160f9775d2518d2cfe54a41bbf1d65`, version `commit: dev, built: unknown`; public management/export were actually open at investigation time. Do not change authentication.
+- Initial read-only evidence: `/tmp/csp-delivery-20261015-230722/scout/findings.md`. Four enabled subscriptions: two current-copy fetches succeeded (31/18 nodes), two failed before parsing; proxy host.docker.internal:7890 reachable. Concrete errors are obscured by over-greedy secret-query redaction. These results do not establish the deployed binary is repaired.
 
-## 2. Dependencies & Data Flow
+## Constitution check
 
-- **数据库表**: 依赖相关数据库契约（详见 `conformance-matrix.md` 精确映射）。
-- **内部包**: Go `internal/policy`（或相关解析/控制器包）。
-- **上游依赖**: 依赖配置与上下文输入，下游提供规范化读取与导出契约。
+Zero asset loss and stable logical identity are mandatory. Keep six domains decoupled through existing services/repositories. Reuse plaintext SQLite and existing fetch policy; no credential vault, extra middleware, legacy dual-authority bridge, global-rule edits or new project root. Preserve requirements and failed verification history. Update living specifications with current behavior; no weakening of TLS/public-target validation/private-image gates. All principles remain unchanged.
 
-## 3. Knowns & Unknowns (已知与未知架构事实)
+## Frozen business and interface design
 
-### Knowns (已验证事实)
-- 图解析器支持显式节点、按国家/正则动态规则筛选以及直接组引用 (Direct Group Reference)
-- 空组支持 empty_fallback_pass: PASS 与 REJECT 安全兜底
+### Subscription route settings and errors (FR-DEL-01..03)
 
-### Unknowns & Retained Blockers (保留待决事项)
-- FR-POL-02 解包叶节点 (Unpack / Flatten Leaf Nodes) 代码实现完全缺失 (代码不符合)
-- FR-POL-04 混合交错顺序 (Mixed Interleaved Order) 解析器硬编码先显式节点后子组，破坏用户编排顺序
-- Q1 待决问题：解包模式叶节点去重与递归循环保护策略
-- Q2 待决问题：混合顺序严格交错保序要求
-- Q4 待决问题：历史遗留空组（0 显式节点 0 规则）数据迁移恢复规则
+Use existing settings persistence and inventory/fetch integration, not a second configuration authority. Add migration19 after existing migration18 for persistent fetch-route settings. API `GET/PUT /api/v1/settings/subscription-fetch` under the existing management authentication/CSRF boundary:
 
-## 4. Conformance & Verification Baseline
+- PUT `mode`: `environment | direct | proxy`; `proxy_url` supplied only to explicitly set/replace a proxy. Environment inherits CLI/env fallback; direct bypasses fallback; proxy uses the persisted endpoint. Default on migration: environment. Credential retention without resend must be explicit, not accidentally overwrite with a masked URL.
+- GET returns mode, effective source/mode, masked configured/effective proxy endpoint and whether credentials are configured; never a reusable credential or full secret-bearing URL. UI clearly labels inherited/direct/custom state, supports save/reset without losing unsaved input on error, and does not need a restart. Reuse existing UI components and translations.
+- Existing explicit per-subscription override remains higher precedence. Global save affects the NEXT manual and scheduled refresh, captures one coherent immutable route/policy snapshot per fetch and survives restart. Requests already running retain their own snapshot. No accumulating previous proxy allowlists after updates. Invalid settings fail atomically without altering existing behavior or unrelated auth settings.
+- Explicit administrator-configured HTTP/HTTPS proxy endpoint is the only newly trusted private endpoint. Target and every redirect still undergo public-IP validation and IP pinning. Proxy trust does not set global AllowPrivate or permit loopback/private subscription targets. Reject malformed scheme/host/path/fragment/port as appropriate to the existing canonical policy.
+- Retain safe structured causes at fetch/HTTP/parse boundaries and redact secrets without swallowing following diagnostic suffixes. Fix userinfo/query/assignment/wrapped URL errors using behavior tests; never expose upstream URLs or response bodies in reports. Real-upstream failures may remain genuine failures, but must be explained and must preserve assets.
 
-- **符合度现状**: 详见 `docs/specification/conformance-matrix.md`；
-- **历史需求追溯**: 详见 `docs/specification/historical-requirement-register.md`；
-- **测试证据原则**: 本迁移计划不虚构新执行的测试，所有历史测试退出码与证据均标明出处与时效性。
+Subscription scheduling is an existing exposed capability, not a new enhancement: interval_seconds and cron_schedule already appear in the subscription drawer but the current service has no periodic refresh executor. Implement a bounded lifecycle-owned scheduler using the existing subscription.Refresh/inventory route, disabled for isolated previews. Interval uses latest completed attempt (success or failure) plus interval to avoid hot retries; never-fetched uses creation time. A nonblank standard five-field cron in server TZ overrides the interval; validate it on save with a mature parser (no handwritten cron grammar). At most one refresh per subscription at a time across manual/scheduled entry points, bounded total concurrency <=2, cancel on service shutdown, skip disabled subscriptions, honor edits next scan, and no catch-up flood. Manual refresh updates the same history used by scheduling. Missing reconciler returns an explicit unavailable error, never a fabricated successful refresh. Unit/temp-DB tests inject time to prove due/not-due/disabled/config-change/retry/shutdown and actual updated route; no real network loops in tests.
+
+### Policy source authority and confirmed fixes (FR-DEL-04)
+
+One ordered source list supports add/remove and later re-entry; deduplicate identities in the current result only. Six kinds: manual_node, group_ref, group_nodes, regex, filter, typed_builtin. Preserve mixed ordering, typed identities, child-own evaluation then expansion-item conditions, and active/subscription/global/risk admission without new health restrictions. Both reference and expansion cycles return explicit paths. Pure-node export targets ignore irrelevant policy-graph errors but retain node/filter/risk fail-closed checks; Mihomo retains full-graph constraints.
+
+After one-time migration18, policy_group_sources is authoritative. Remove ongoing edge mirrors, read-on-empty legacy fallback and errors swallowed as legacy reads. Existing supported edit/revision/rollback/delete operations must operate on sources coherently; obsolete edge-write APIs may reject explicitly rather than silently overwrite sources. Draft preview is no-write and uses the same assembled resolve input as publication. PUT/GET preserve source order and revision; conflicts retain drafts. Repository-level and HTTP real SQLite scale tests (>250 nodes, 150 groups) verify integration, not mocks alone.
+
+Failed/partial subscription fetch preserves old node-source associations and history; complete success updates only that subscription's relations and retains historical node assets. No unrelated node deactivation. Existing immutable publications stay unchanged during migration.
+
+Historical archive restoration remains copy-only until an unambiguous plan and appropriate authorization exist. Preserve original literal `去掉(...)`; do not invent an exclusion DSL or partially rewrite the user's group. Three round-robin expansions must use group_nodes, not group_ref or fallback substitution. HR-143 describes historical migration equivalence only.
+
+### Release and acceptance (FR-DEL-05..06)
+
+1. Complete feature implementation and final merged-state local self-tests. Never count older successful tests predating later edits as proof of the final patch.
+2. Independent reviewer examines the final patch, migration equivalence, route trust/secret handling, source authority and regression coverage. Fix defects and independently reverify failures with report lineage.
+3. A non-critic prepares an isolated ready instance on non-production ports with temp DB, disabled external schedulers, healthy URL and standard instance JSON (instanceId/url/health/allowedOrigins/sourceManifest/testDataBoundary/scenarios/shutdownOwner/cleanupToken). Critic performs actual interactions and PNG visual analysis in desktop and mobile viewports. The phone is explicitly excluded by the latest instruction; do not connect to it.
+4. Integrate existing remote cloud-delivery files without overwriting either local dirty work or remote changes. Local vs remote divergence is real; preserve local commits and remote additions using an isolated integration work area, reviewed before publishing. Reuse existing CI, Dockerfile.runtime, docker-compose.prod.yml, cloud-delivery scripts/docs, not a parallel release system. No force-push or silent replacement of main. Secrets stay out of source/artifacts.
+5. After applicable gates, sync embedded assets and validate that final asset delta, make scoped commits via git_commit, push the verified integration branch normally, obtain cloud checks/build/publish on that exact SHA. A skipped publish is incomplete. Private package visibility is an actual gate: existing csp-runtime-private is anonymously readable; authenticated owner/API capability is currently unavailable. Do not publish/deploy it as private until corrected and verifiable. Do not read Docker credentials to obtain GitHub API tokens.
+6. Acquire immutable digest/OCI revision; run official image preflight and isolated acceptance of the exact image. Hot-backup SQLite online, integrity/hash and business preimages before authorized production writes; preserve current image/volume/ports/proxy and rollback procedure. Deploy only CSP through its official image path after gates; verify new migration/version/assets against SHA/digest.
+7. Execute the existing production-coverage-register as a concrete operation inventory, correcting unsupported endpoints and assertions as discovered, without laundering NOT_EXECUTED into PASS. Verify actual refresh outcomes by enabled subscription, settings persistence/routing, ordered editor/preview/export, inventory preservation, probe truth, downloads and revocation, and existing auth behavior without production auth changes. Use uniquely named test objects, restore temporary changes and check cleanup. Backend assertions plus actual browser/visual evidence are required; health-only is insufficient.
+
+## Validation and resource boundaries
+
+- Ordinary tests: isolated DB/ports; `NO_COPY_WEBASSETS=1`, build web output to private tmp until final asset synchronization. Never tests on production ports 17000/18080. Full native Go build, all packages ordinary/tagged tests; substantive affected-package races (inventory, SQLite, HTTP, policy/resolver/compiler/publication/domain) with realistic timeouts and recorded nonzero/matched-case counts. Web typecheck, Vitest, production build. Eliminate test-generated repository litter through fixture fixes; remove only provably generated files after retaining provenance.
+- Existing all-tags include with_quic, with_dhcp, with_wireguard, with_utls, with_clash_api, with_gvisor; derive actual project build tags/commands rather than guessing invalid test names. Exact exits/log hashes in private artifacts.
+- Manual external business testing budget: 128 MiB response bodies / 30 minutes active external testing total; investigation has consumed conservative upper bound 4,470,628 bytes and 97 seconds. Alive concurrency <=4, media <=2, speed <=1 with <=2 nodes x4MiB. Cloud build/pull transfer is separate release traffic, not a proxy comparison/probe budget. Do not rerun historical large comparisons.
+- No phone, Pi/Hermes/Tools Hub/Nginx/Webhook/MCP or gateway operations. No credential dumping, vault access, network scanning, auth toggles, clearing DB/history or deleting existing assets.
+- Evidence root `/tmp/csp-delivery-20261015-230722/`, directories0700/files0600. Reports contain safe counts/codes/anonymous IDs, not subscription URLs, credentials or raw node configs.
+
+## Delivery chain and honest limitations
+
+Task completion requires implementation/self-test, independent reviewer and applicable critic plus authorized cloud/production evidence, not process exit. Current machine contract remains whole_task; logical task names below do not invent work-package identities. Advanced-executor is the user-requested actual implementation role. Reviewer/critic keep their named roles; model overrides only if runtime explicitly supports the user's requested concrete model. If unavailable, disclose actual model rather than pretending an upgrade. Known upstream/source failures, ambiguous old-group restoration, missing authenticated private-package capability and any untested operations remain explicit; they cannot be marked complete or erased.

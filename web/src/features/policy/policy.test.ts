@@ -248,7 +248,7 @@ describe('usePolicy composable', () => {
       empty_fallback_pass: false,
       name: 'Proxy Fallback',
       group_type: 'fallback',
-      edges: [],
+      sources: [],
     })
     expect(result.id).toBe('grp-new')
   })

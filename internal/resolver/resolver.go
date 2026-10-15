@@ -35,8 +35,18 @@ func (r *defaultResolver) Resolve(ctx context.Context, input ResolveInput) (*Res
 	}
 	input.CompilerVersion = compilerVer
 
+	// Sources are the sole graph input. Legacy edges/filters never resurrect an empty pipeline.
+	input.Groups = append([]domain.NodeGroup(nil), input.Groups...)
+	for i := range input.Groups {
+		if input.GroupSources != nil {
+			input.Groups[i].Sources = input.GroupSources[input.Groups[i].ID]
+		}
+		input.Groups[i].NodeFilter = nil
+	}
+	input.Edges = nil
+	input.GroupFilters = nil
 	// 1. Validate topology, self-loops, cycles, and rule references
-	if err := validateTopology(input.Groups, input.Edges, input.PolicyRules); err != nil {
+	if err := validateTopology(input.Groups, nil, input.PolicyRules); err != nil {
 		return nil, err
 	}
 

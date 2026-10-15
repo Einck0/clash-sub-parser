@@ -70,7 +70,7 @@ func TestRunRestoreGroupFilters_DryRunAndApply(t *testing.T) {
 		t.Fatalf("dry: %+v %v", dry, err)
 	}
 	var n int
-	_ = db.QueryRow(`SELECT count(*) FROM group_node_filters`).Scan(&n)
+	_ = db.QueryRow(`SELECT count(*) FROM policy_group_sources`).Scan(&n)
 	if n != 0 {
 		t.Fatal("dry wrote filters")
 	}
@@ -83,6 +83,17 @@ func TestRunRestoreGroupFilters_DryRunAndApply(t *testing.T) {
 	stored, err := sqlite.NewNodeFilterRepository(db).GetGroupFilter(ctx, gid)
 	if err != nil {
 		t.Fatal(err)
+	}
+	groupAfter, err := repo.GetGroupByID(ctx, gid)
+	if err != nil || len(groupAfter.Sources) != 1 || groupAfter.Sources[0].Kind != domain.SourceKindFilter || groupAfter.Revision != 2 {
+		t.Fatalf("sources not restored: %+v %v", groupAfter, err)
+	}
+	if err := db.QueryRow(`SELECT count(*) FROM group_node_filters`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("wrote legacy mirror: %d %v", n, err)
+	}
+	snapshot, err := sqlite.NewRevisionRepository(db).(domain.RevisionSnapshotRepository).GetPolicySnapshot(ctx, applied.NewRevisionID)
+	if err != nil || len(snapshot) != 1 || len(snapshot[0].Sources) != 1 {
+		t.Fatalf("recovery revision missing snapshot: %+v %v", snapshot, err)
 	}
 	pattern := stored.Spec.Conditions[0].Value
 	if !strings.Contains(pattern, `(?![\d.])`) {

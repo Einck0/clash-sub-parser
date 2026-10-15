@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"clash-sub-parser/internal/fetch"
+	"clash-sub-parser/internal/repository/sqlite"
 )
 
 // Task 5.3: TestAPISemantic_SubscriptionsNodesPolicies
@@ -33,8 +34,8 @@ func TestAPISemantic_SubscriptionsNodesPolicies(t *testing.T) {
 		"source_url_secret_ref": subURL,
 		"enabled":               true,
 		"refresh_policy": map[string]any{
-			"interval_seconds":    3600,
-			"timeout_seconds":     15,
+			"interval_seconds":   3600,
+			"timeout_seconds":    15,
 			"max_response_bytes": 1048576,
 		},
 	}
@@ -422,11 +423,15 @@ func TestAPISemantic_SubscriptionsNodesPolicies(t *testing.T) {
 		t.Fatalf("PUT /api/v1/policies/groups/%s/edges failed: %d body=%s", groupID, resp.StatusCode, resp.Body)
 	}
 
-	// DB verification: group_edges table has the node edge
+	// Legacy writes normalize into the sole source authority; legacy reads
+	// remain a projection, not a second physical edge store.
 	var memberCount int
-	_ = harness.DB.QueryRowContext(ctx, "SELECT count(1) FROM group_edges WHERE parent_group_id = ? AND node_logical_id = ?", groupID, hkNodeID).Scan(&memberCount)
-	if memberCount < 1 {
-		t.Fatalf("group_edges edge not inserted in DB")
+	if err := harness.DB.QueryRowContext(ctx, "SELECT count(1) FROM policy_group_sources WHERE group_id = ? AND node_logical_id = ? AND kind='manual_node' AND operation='add' AND position=0", groupID, hkNodeID).Scan(&memberCount); err != nil || memberCount != 1 {
+		t.Fatalf("normalized source missing: count=%d err=%v", memberCount, err)
+	}
+	projected, err := sqlite.NewPolicyRepository(harness.DB).ListEdgesByGroup(ctx, groupID)
+	if err != nil || len(projected) != 1 || projected[0].NodeLogicalID == nil || *projected[0].NodeLogicalID != hkNodeID || projected[0].Position != 0 {
+		t.Fatalf("legacy projection mismatch: %+v %v", projected, err)
 	}
 
 	// 3.5b Group Edges: POST /api/v1/policies/groups/{id}/edges
@@ -439,9 +444,12 @@ func TestAPISemantic_SubscriptionsNodesPolicies(t *testing.T) {
 	if err != nil || resp.StatusCode != http.StatusOK {
 		t.Fatalf("POST /api/v1/policies/groups/%s/edges failed: %d body=%s", groupID, resp.StatusCode, resp.Body)
 	}
-	_ = harness.DB.QueryRowContext(ctx, "SELECT count(1) FROM group_edges WHERE parent_group_id = ? AND node_logical_id = ?", groupID, hkNodeID).Scan(&memberCount)
-	if memberCount < 1 {
-		t.Fatalf("group_edges edge not found after POST /edges")
+	if err := harness.DB.QueryRowContext(ctx, "SELECT count(1) FROM policy_group_sources WHERE group_id = ? AND node_logical_id = ? AND kind='manual_node' AND operation='add' AND position=0", groupID, hkNodeID).Scan(&memberCount); err != nil || memberCount != 1 {
+		t.Fatalf("normalized source missing after POST: count=%d err=%v", memberCount, err)
+	}
+	projected, err = sqlite.NewPolicyRepository(harness.DB).ListEdgesByGroup(ctx, groupID)
+	if err != nil || len(projected) != 1 || projected[0].NodeLogicalID == nil || *projected[0].NodeLogicalID != hkNodeID {
+		t.Fatalf("POST legacy projection mismatch: %+v %v", projected, err)
 	}
 
 	// 3.6 Create Rule: POST /api/v1/policies/rules

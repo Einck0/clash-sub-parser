@@ -179,6 +179,10 @@ type PolicyRepository interface {
 	UpdateGroup(ctx context.Context, group *NodeGroup) error
 	DeleteGroup(ctx context.Context, id string) error
 
+	SaveGroupWithSources(ctx context.Context, group *NodeGroup, expectedRevision int64, sources []MemberSource) (*NodeGroup, error)
+	GetSourcesByGroup(ctx context.Context, groupID string) ([]MemberSource, error)
+	ListAllSources(ctx context.Context) (map[string][]MemberSource, error)
+
 	ListEdgesByGroup(ctx context.Context, parentGroupID string) ([]GroupEdge, error)
 	SetEdgesForGroup(ctx context.Context, parentGroupID string, edges []GroupEdge) error
 
@@ -202,6 +206,12 @@ type RevisionRepository interface {
 	SetActive(ctx context.Context, id string) error
 }
 
+// RevisionSnapshotRepository preserves immutable policy sources independently of the editable graph.
+type RevisionSnapshotRepository interface {
+	GetPolicySnapshot(context.Context, string) ([]NodeGroup, error)
+	RestorePolicySnapshot(context.Context, string, map[string]int64) error
+}
+
 // PublicationRepository defines the atomic persistence port for immutable configuration publications.
 type PublicationRepository interface {
 	GetByID(ctx context.Context, id string) (*Publication, error)
@@ -216,6 +226,8 @@ type SettingsRepository interface {
 	Get(ctx context.Context) (*Settings, error)
 	Update(ctx context.Context, settings *Settings) error
 	UpdateAdminToken(ctx context.Context, tokenVerifier string) error
+	// UpdateSubscriptionFetch atomically changes only fetch settings. Nil proxyURL retains the stored URL.
+	UpdateSubscriptionFetch(ctx context.Context, mode string, proxyURL *string) error
 	// UpdateAuthSettings atomically sets both switches and optionally replaces the token verifier.
 	// A nil verifier preserves the currently configured system token.
 	UpdateAuthSettings(ctx context.Context, adminAuthEnabled, exportAuthEnabled bool, tokenVerifier *string) error

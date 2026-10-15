@@ -44,8 +44,8 @@ func TestExplicitEmptyPassCompilerAndCapabilities(t *testing.T) {
 		t.Fatalf("PASS pruned: %+v %v", diags, err)
 	}
 	for _, target := range []domain.CompilerTarget{domain.TargetSingBox, domain.TargetSurge, domain.TargetQuantumultX} {
-		if _, err := compiler.Compile(ctx, snap, target); err == nil {
-			t.Fatalf("%s accepted unsupported PASS routing", target)
+		if _, err := compiler.Compile(ctx, snap, target); err != nil {
+			t.Fatalf("%s should not fail due to empty group PASS: %v", target, err)
 		}
 	}
 	snap.Groups[0].EmptyFallbackPass = false

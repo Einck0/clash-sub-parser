@@ -81,6 +81,22 @@ func NewClientWithPolicy(policy *Policy) *Client {
 	}
 }
 
+// PolicyForProxy takes an immutable request-scoped copy, trusting only the current configured relay.
+func (c *Client) PolicyForProxy(configuredProxy string) (*Policy, error) {
+	base := c.policy
+	if base == nil {
+		base = DefaultPolicy()
+	}
+	policy := *base
+	policy.AllowedProxyHosts = nil
+	if configuredProxy != "" {
+		if err := policy.AddAllowedProxy(configuredProxy); err != nil {
+			return nil, err
+		}
+	}
+	return &policy, nil
+}
+
 // OptionsFromPolicy translates domain.RefreshPolicy into fetch Options.
 func OptionsFromPolicy(rawURL string, refPolicy domain.RefreshPolicy, fetchProxyURL string) Options {
 	timeout := time.Duration(refPolicy.TimeoutSeconds) * time.Second
@@ -112,7 +128,23 @@ func RedactError(err error) string {
 }
 
 // Fetch executes a safe HTTP GET request adhering to SSRF policies, timeouts, and body size limits.
-func (c *Client) Fetch(ctx context.Context, opts Options) (*Response, error) {
+func (c *Client) Fetch(ctx context.Context, opts Options) (response *Response, fetchErr error) {
+	defer func() {
+		if de, ok := domain.AsDomainError(fetchErr); ok && de.Details == nil {
+			stage := "fetch"
+			switch de.Code {
+			case "http_error":
+				stage = "http"
+			case "dns_resolution_failed", "proxy_dns_resolution_failed":
+				stage = "dns"
+			case "ssrf_blocked", "proxy_ssrf_blocked", "invalid_proxy_url", "unsupported_scheme", "too_many_redirects":
+				stage = "policy"
+			case "read_error", "response_too_large", "decompression_failed", "invalid_gzip", "decompression_limit_exceeded":
+				stage = "body"
+			}
+			de.Details = map[string]string{"stage": stage, "reason_code": de.Code}
+		}
+	}()
 	policy := opts.Policy
 	if policy == nil {
 		policy = c.policy
@@ -347,6 +379,11 @@ func (c *Client) Fetch(ctx context.Context, opts Options) (*Response, error) {
 			}
 		}
 
+		if activeProxyURL != nil && activeProxyURL.Scheme == "https" {
+			proxyTLS := &tls.Dialer{NetDialer: dialer, Config: &tls.Config{ServerName: activeProxyURL.Hostname(), RootCAs: opts.RootCAs, MinVersion: tls.VersionTLS12}}
+			transport.DialTLSContext = proxyTLS.DialContext
+		}
+
 		defer transport.CloseIdleConnections()
 
 		hopReq.Header.Set("User-Agent", ua)
@@ -363,12 +400,18 @@ func (c *Client) Fetch(ctx context.Context, opts Options) (*Response, error) {
 		resp, err := hopClient.Do(hopReq)
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) || errors.Is(reqCtx.Err(), context.DeadlineExceeded) {
-				return nil, domain.NewDomainError("fetch_timeout", fmt.Sprintf("fetch timed out after %v", timeout), domain.CategoryInternal)
+				de := networkFailure(err)
+				de.Code = "fetch_timeout"
+				de.Message = fmt.Sprintf("fetch timed out after %v: %s", timeout, RedactError(err))
+				if de.Details["reason_code"] == "network_error" {
+					de.Details["reason_code"] = "fetch_timeout"
+				}
+				return nil, de
 			}
 			if de, ok := domain.AsDomainError(err); ok {
 				return nil, de
 			}
-			return nil, domain.NewDomainError("fetch_failed", RedactError(err), domain.CategoryInternal)
+			return nil, networkFailure(err)
 		}
 
 		if resp.StatusCode == http.StatusMovedPermanently || resp.StatusCode == http.StatusFound ||

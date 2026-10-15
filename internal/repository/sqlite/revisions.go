@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -168,17 +169,15 @@ func (r *revisionRepository) Create(ctx context.Context, rev *domain.Configurati
 		createdStr = domain.NowUTC().Format(time.RFC3339)
 	}
 
-	_, err := r.db.ExecContext(ctx, query,
-		rev.ID,
-		parentStr,
-		rev.ContentDigest,
-		string(rev.State),
-		createdStr,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to insert configuration revision: %w", err)
-	}
-	return nil
+	return WithTx(ctx, r.db, func(ctx context.Context, tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, query, rev.ID, parentStr, rev.ContentDigest, string(rev.State), createdStr); err != nil {
+			return err
+		}
+		if err := CapturePolicyRevisionSnapshot(ctx, tx, rev.ID); err != nil {
+			return err
+		}
+		return tx.QueryRowContext(ctx, `SELECT content_digest FROM configuration_revisions WHERE id=?`, rev.ID).Scan(&rev.ContentDigest)
+	})
 }
 
 // CreateActive rolls back the new revision and previous active state if activation fails.
@@ -196,6 +195,12 @@ func (r *revisionRepository) CreateActive(ctx context.Context, rev *domain.Confi
 			rev.ID, parent, rev.ContentDigest, created.Format(time.RFC3339)); err != nil {
 			return fmt.Errorf("failed to insert configuration revision: %w", err)
 		}
+		if err := CapturePolicyRevisionSnapshot(ctx, tx, rev.ID); err != nil {
+			return err
+		}
+		if err := tx.QueryRowContext(ctx, `SELECT content_digest FROM configuration_revisions WHERE id=?`, rev.ID).Scan(&rev.ContentDigest); err != nil {
+			return err
+		}
 		return setActiveRevision(ctx, tx, rev.ID)
 	})
 }
@@ -207,8 +212,48 @@ func (r *revisionRepository) SetActive(ctx context.Context, id string) error {
 }
 
 func setActiveRevision(ctx context.Context, tx *sql.Tx, id string) error {
+	// Repeat the stale-draft check in the same transaction as activation: a
+	// service-level check alone can race another graph writer.
+	var captured string
+	err := tx.QueryRowContext(ctx, `SELECT groups_json FROM policy_revision_snapshots WHERE revision_id=?`, id).Scan(&captured)
+	if err == nil {
+		var snapshot []domain.NodeGroup
+		if err := json.Unmarshal([]byte(captured), &snapshot); err != nil {
+			return err
+		}
+		want, err := policyGroupsDigest(snapshot)
+		if err != nil {
+			return err
+		}
+		if err := withPolicyGroups(ctx, tx, func(current []domain.NodeGroup) error {
+			if len(current) != len(snapshot) {
+				return domain.NewConflictError("revision_conflict", "policy group set changed since revision creation")
+			}
+			vector := make(map[string]int64, len(snapshot))
+			for _, g := range snapshot {
+				vector[g.ID] = g.Revision
+			}
+			for _, g := range current {
+				if want, ok := vector[g.ID]; !ok || want != g.Revision {
+					return domain.NewConflictError("revision_conflict", "policy changed since revision creation")
+				}
+			}
+			got, err := policyGroupsDigest(current)
+			if err != nil {
+				return err
+			}
+			if got != want {
+				return domain.NewConflictError("revision_graph_changed", "policy graph changed since draft creation; create a new revision")
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
 	// Archive previously active revisions
-	_, err := tx.ExecContext(ctx, "UPDATE configuration_revisions SET state = 'archived' WHERE state = 'active';")
+	_, err = tx.ExecContext(ctx, "UPDATE configuration_revisions SET state = 'archived' WHERE state = 'active';")
 	if err != nil {
 		return fmt.Errorf("failed to archive previously active revisions: %w", err)
 	}

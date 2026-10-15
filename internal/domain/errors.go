@@ -13,6 +13,7 @@ var (
 	ErrCredentialsUnavailable = errors.New("credentials_unavailable")
 	ErrClientBuildFailed      = errors.New("client_build_failed")
 )
+
 type ErrorCategory string
 
 const (
@@ -28,10 +29,13 @@ const (
 // DomainError represents a structured, safe domain error.
 // It guarantees that internal secrets are redacted and machine codes are stable.
 type DomainError struct {
-	Code     string            `json:"code"`
-	Message  string            `json:"message"`
-	Category ErrorCategory     `json:"category"`
-	Details  map[string]string `json:"details,omitempty"`
+	Code            string            `json:"code"`
+	Message         string            `json:"message"`
+	Category        ErrorCategory     `json:"category"`
+	Details         map[string]string `json:"details,omitempty"`
+	CyclePath       []string          `json:"cycle_path,omitempty"`
+	CurrentRevision *int64            `json:"current_revision,omitempty"`
+	Field           string            `json:"field,omitempty"`
 }
 
 func (e *DomainError) Error() string {
@@ -91,12 +95,12 @@ func AsDomainError(err error) (*DomainError, bool) {
 }
 
 var (
-	urlPasswordRegex      = regexp.MustCompile(`(?i)(https?://[^:/@\s]+):([^@\s]+)@`)
-	bearerTokenRegex      = regexp.MustCompile(`(?i)(bearer\s+)[A-Za-z0-9._~+/-]+`)
-	querySecretRegex      = regexp.MustCompile(`(?i)([?&](?:token|secret|password|key|auth|api_key|access_token)=)[^&]+`)
+	urlPasswordRegex      = regexp.MustCompile(`(?i)(https?://)[^/@\s"'<>]+@`)
+	bearerTokenRegex      = regexp.MustCompile(`(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+`)
+	querySecretRegex      = regexp.MustCompile(`(?i)([?&](?:token|secret|password|key|auth|api_key|access_token)=)[^&\s"'<>\x60)\]}]+`)
 	privateKeyRegex       = regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----`)
 	cookieHeaderRegex     = regexp.MustCompile(`(?i)(\bcookie\s*:\s*)[^\r\n]+`)
-	secretAssignmentRegex = regexp.MustCompile(`(?i)(["']?(?:api[_-]?key|access[_-]?token|secret|password|token|cookie)["']?\s*[:=]\s*["']?)[^"',\s}&]+`)
+	secretAssignmentRegex = regexp.MustCompile(`(?i)(["']?(?:api[_-]?key|access[_-]?token|secret|password|token|cookie)["']?\s*[:=]\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^"',\s}&]+)`)
 	ipv4TokenRegex        = regexp.MustCompile(`(?:^|[^0-9])((?:[0-9]{1,3}\.){3}[0-9]{1,3})(?:$|[^0-9])`)
 	ipv6TokenRegex        = regexp.MustCompile(`(?i)[0-9a-f:]{2,}`)
 )
@@ -107,7 +111,7 @@ func RedactSensitiveInfo(input string) string {
 		return ""
 	}
 
-	result := urlPasswordRegex.ReplaceAllString(input, "${1}:***@")
+	result := urlPasswordRegex.ReplaceAllString(input, "${1}***@")
 	result = bearerTokenRegex.ReplaceAllString(result, "${1}***")
 	result = querySecretRegex.ReplaceAllString(result, "${1}***")
 	result = cookieHeaderRegex.ReplaceAllString(result, "${1}[REDACTED]")

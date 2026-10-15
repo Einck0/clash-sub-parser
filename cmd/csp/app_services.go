@@ -20,41 +20,43 @@ import (
 )
 
 type applicationServices struct {
-	settingsRepo        domain.SettingsRepository
-	subRepo             domain.SubscriptionRepository
-	nodeRepo            domain.NodeRepository
-	nodeSourceRepo      domain.NodeSourceRepository
-	fetchRepo           domain.SubscriptionFetchRepository
-	auditRepo           domain.AuditRepository
-	probeRunRepo        domain.ProbeRunRepository
-	probeObsRepo        domain.ProbeObservationRepository
-	policyRepo          domain.PolicyRepository
-	revisionRepo        domain.RevisionRepository
-	pubRepo             domain.PublicationRepository
-	riskPolicyRepo      domain.RiskPolicyRevisionRepository
-	riskBindingRepo     domain.RiskPolicyGroupBindingRepository
-	riskObsRepo         domain.IPRiskObservationRepository
-	probeScheduleRepo   domain.ProbeScheduleRepository
-	nodeFilterRepo      domain.NodeFilterRepository
-	pubPayloadRefRepo   domain.PublicationPayloadRefRepository
+	settingsRepo      domain.SettingsRepository
+	subRepo           domain.SubscriptionRepository
+	nodeRepo          domain.NodeRepository
+	nodeSourceRepo    domain.NodeSourceRepository
+	fetchRepo         domain.SubscriptionFetchRepository
+	auditRepo         domain.AuditRepository
+	probeRunRepo      domain.ProbeRunRepository
+	probeObsRepo      domain.ProbeObservationRepository
+	policyRepo        domain.PolicyRepository
+	revisionRepo      domain.RevisionRepository
+	pubRepo           domain.PublicationRepository
+	riskPolicyRepo    domain.RiskPolicyRevisionRepository
+	riskBindingRepo   domain.RiskPolicyGroupBindingRepository
+	riskObsRepo       domain.IPRiskObservationRepository
+	probeScheduleRepo domain.ProbeScheduleRepository
+	nodeFilterRepo    domain.NodeFilterRepository
+	pubPayloadRefRepo domain.PublicationPayloadRefRepository
 
-	fetchClient         *fetch.Client
-	subService          *subscription.Service
-	invService          *inventory.Service
-	probeScheduler      *queue.Scheduler
-	probeRunner         probe.Runner
-	probeService        *probe.Service
-	periodicCoordinator *probe.PeriodicCoordinator
-	policyService       *policy.Service
-	revisionService     *revision.Service
-	ipriskService       *iprisk.Service
-	pubService          *publication.Service
+	fetchClient           *fetch.Client
+	subscriptionScheduler *subscription.Scheduler
+	subService            *subscription.Service
+	invService            *inventory.Service
+	probeScheduler        *queue.Scheduler
+	probeRunner           probe.Runner
+	probeService          *probe.Service
+	periodicCoordinator   *probe.PeriodicCoordinator
+	policyService         *policy.Service
+	revisionService       *revision.Service
+	ipriskService         *iprisk.Service
+	pubService            *publication.Service
 }
 
 type appServiceOptions struct {
 	fetchProxy          string
 	newProbeRunner      func(db *sql.DB, nodeRepo domain.NodeRepository, obsRepo domain.ProbeObservationRepository, scheduler *queue.Scheduler, runRepo domain.ProbeRunRepository, opts ...probe.DefaultRunnerOption) probe.Runner
 	probeRunnerOpts     []probe.DefaultRunnerOption
+	startSubscriptions  bool
 	startCoordinator    bool
 	fetchClientOverride *fetch.Client
 }
@@ -85,7 +87,7 @@ func makeApplicationServices(ctx context.Context, db *sql.DB, opts appServiceOpt
 		fetchPolicy := fetch.DefaultPolicy()
 		if opts.fetchProxy != "" {
 			if err := fetchPolicy.AddAllowedProxy(opts.fetchProxy); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: invalid CSP_FETCH_PROXY %q: %v\n", opts.fetchProxy, err)
+				fmt.Fprintln(os.Stderr, "warning: invalid CSP_FETCH_PROXY:", fetch.RedactError(err))
 			}
 		}
 		fetchClient = fetch.NewClientWithPolicy(fetchPolicy)
@@ -95,6 +97,7 @@ func makeApplicationServices(ctx context.Context, db *sql.DB, opts appServiceOpt
 	invOpts := []inventory.Option{
 		inventory.WithProbeObservationRepository(probeObsRepo),
 		inventory.WithDefaultFetchProxy(opts.fetchProxy),
+		inventory.WithFetchSettingsRepository(settingsRepo),
 	}
 	invService := inventory.NewService(db, subRepo, fetchRepo, nodeRepo, nodeSourceRepo, fetchClient, invOpts...)
 	subService.SetReconciler(invService)
@@ -182,34 +185,40 @@ func makeApplicationServices(ctx context.Context, db *sql.DB, opts appServiceOpt
 		pubOpts...,
 	)
 
+	subscriptionScheduler := subscription.NewScheduler(subRepo, subService, nil)
+	if opts.startSubscriptions {
+		subscriptionScheduler.Start(ctx)
+	}
+
 	return &applicationServices{
-		settingsRepo:        settingsRepo,
-		subRepo:             subRepo,
-		nodeRepo:            nodeRepo,
-		nodeSourceRepo:      nodeSourceRepo,
-		fetchRepo:           fetchRepo,
-		auditRepo:           auditRepo,
-		probeRunRepo:        probeRunRepo,
-		probeObsRepo:        probeObsRepo,
-		policyRepo:          policyRepo,
-		revisionRepo:        revisionRepo,
-		pubRepo:             pubRepo,
-		riskPolicyRepo:      riskPolicyRepo,
-		riskBindingRepo:     riskBindingRepo,
-		riskObsRepo:         riskObsRepo,
-		probeScheduleRepo:   probeScheduleRepo,
-		nodeFilterRepo:      nodeFilterRepo,
-		pubPayloadRefRepo:   pubPayloadRefRepo,
-		fetchClient:         fetchClient,
-		subService:          subService,
-		invService:          invService,
-		probeScheduler:      probeScheduler,
-		probeRunner:         probeRunner,
-		probeService:        probeService,
-		periodicCoordinator: periodicCoordinator,
-		policyService:       policyService,
-		revisionService:     revisionService,
-		ipriskService:       ipriskService,
-		pubService:          pubService,
+		subscriptionScheduler: subscriptionScheduler,
+		settingsRepo:          settingsRepo,
+		subRepo:               subRepo,
+		nodeRepo:              nodeRepo,
+		nodeSourceRepo:        nodeSourceRepo,
+		fetchRepo:             fetchRepo,
+		auditRepo:             auditRepo,
+		probeRunRepo:          probeRunRepo,
+		probeObsRepo:          probeObsRepo,
+		policyRepo:            policyRepo,
+		revisionRepo:          revisionRepo,
+		pubRepo:               pubRepo,
+		riskPolicyRepo:        riskPolicyRepo,
+		riskBindingRepo:       riskBindingRepo,
+		riskObsRepo:           riskObsRepo,
+		probeScheduleRepo:     probeScheduleRepo,
+		nodeFilterRepo:        nodeFilterRepo,
+		pubPayloadRefRepo:     pubPayloadRefRepo,
+		fetchClient:           fetchClient,
+		subService:            subService,
+		invService:            invService,
+		probeScheduler:        probeScheduler,
+		probeRunner:           probeRunner,
+		probeService:          probeService,
+		periodicCoordinator:   periodicCoordinator,
+		policyService:         policyService,
+		revisionService:       revisionService,
+		ipriskService:         ipriskService,
+		pubService:            pubService,
 	}, nil
 }

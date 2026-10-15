@@ -1,0 +1,28 @@
+services:
+  app:
+    image: ${CSP_IMAGE:?required}
+    container_name: ${CSP_CONTAINER_NAME:-clash-sub-parser}
+    environment:
+      CSP_ADDR: ${CSP_ADDR:-0.0.0.0:18080}
+      CSP_DB_PATH: ${CSP_DB_PATH:-/data/csp-v1.db}
+      CSP_ADMIN_TOKEN: ${CSP_ADMIN_TOKEN:-}
+      CSP_FETCH_PROXY: ${CSP_FETCH_PROXY:-http://host.docker.internal:7890}
+      TZ: ${TZ:-Asia/Shanghai}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:17000:18080"
+      - "127.0.0.1:18080:18080"
+    volumes:
+      - csp-v1-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:18080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  csp-v1-data:
+    name: ${CSP_VOLUME_NAME:-csp-v1-data}

@@ -1,15 +1,15 @@
 # syntax=docker/dockerfile:1
 
 # Stage 1: Build the Vue 3 + Tailwind CSS + DaisyUI web control plane
-FROM node:20-alpine AS frontend-builder
+FROM node:22-alpine AS frontend-builder
 
 WORKDIR /web
 
-ARG NPM_CONFIG_REGISTRY=https://registry.npmmirror.com
+ARG NPM_CONFIG_REGISTRY=https://registry.npmjs.org
 
 # Cache package dependencies
 COPY web/package*.json ./
-RUN npm ci ${NPM_CONFIG_REGISTRY:+--registry=$NPM_CONFIG_REGISTRY}
+RUN npm ci --include=dev ${NPM_CONFIG_REGISTRY:+--registry=$NPM_CONFIG_REGISTRY}
 
 # Copy web source and compile production static bundle into dist
 ENV FRONTEND_BUILD_EPOCH=20260925_periodic_filters_v1
@@ -17,7 +17,7 @@ COPY web/ ./
 RUN npm run build
 
 # Stage 2: Compile pure-static single Go executable with embedded assets
-FROM golang:alpine AS go-builder
+FROM golang:1.27.1-alpine AS go-builder
 
 ENV COMPILER_BUILD_EPOCH=20260925_periodic_filters_v1
 
@@ -39,14 +39,21 @@ COPY internal/ ./internal/
 COPY migrations/ ./migrations/
 COPY --from=frontend-builder /web/dist/ ./internal/webassets/dist/
 
-# Build pure-static stripped Go binary
-RUN go build -ldflags="-s -w" -trimpath -o /src/bin/csp ./cmd/csp
+# Local builds default to dev; release callers supply the reviewed source SHA.
+ARG COMMIT_SHA=dev
+ARG BUILD_DATE=
+RUN BUILD_TIME="${BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}" && \
+    go build -tags "with_quic with_wireguard" \
+      -ldflags="-s -w -X main.commit=${COMMIT_SHA} -X main.buildTime=${BUILD_TIME}" \
+      -trimpath -o /src/bin/csp ./cmd/csp
 
 # Stage 3: Minimal Alpine 3.20 non-root runtime
 FROM alpine:3.20 AS runtime
 
+ARG ALPINE_MIRROR=mirrors.ustc.edu.cn
+
 # Install basic CA certificates, timezone data, curl, and sqlite for operations and container health check
-RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.ustc.edu.cn/g' /etc/apk/repositories && \
+RUN if [ -n "$ALPINE_MIRROR" ]; then sed -i "s|dl-cdn.alpinelinux.org|$ALPINE_MIRROR|g" /etc/apk/repositories; fi && \
     apk add --no-cache ca-certificates tzdata curl sqlite && \
     rm -rf /var/cache/apk/*
 

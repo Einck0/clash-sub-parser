@@ -3,15 +3,13 @@ package policy
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"sync"
 
+	"clash-sub-parser/internal/compiler"
 	"clash-sub-parser/internal/domain"
 	"clash-sub-parser/internal/resolver"
 )
@@ -24,6 +22,7 @@ type Service struct {
 	auditRepo        domain.AuditRepository
 	nodeFilterRepo   domain.NodeFilterRepository
 	snapshotProvider func(context.Context, string) (*resolver.ResolvedPolicySnapshot, error)
+	inputProvider    func(context.Context, string) (*resolver.ResolveInput, error)
 	mu               sync.Mutex
 }
 
@@ -50,6 +49,13 @@ func NewService(
 // SetSnapshotProvider shares publication's read-only input assembly with validation.
 func (s *Service) SetSnapshotProvider(provider func(context.Context, string) (*resolver.ResolvedPolicySnapshot, error)) {
 	s.snapshotProvider = provider
+}
+
+// SetInputProvider shares publication's raw input assembly for accurate draft preview.
+func (s *Service) SetInputProvider(provider func(context.Context, string) (*resolver.ResolveInput, error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.inputProvider = provider
 }
 
 // SetNodeFilterRepository configures the node filter repository dynamically.
@@ -91,6 +97,7 @@ func (s *Service) CreateGroup(ctx context.Context, cmd CreateGroupCommand) (*Gro
 	now := domain.NowUTC()
 	group := domain.NodeGroup{
 		EmptyFallbackPass: cmd.EmptyFallbackPass,
+		Sources:           append([]domain.MemberSource(nil), cmd.Sources...),
 		ID:                groupID,
 		Name:              name,
 		GroupType:         cmd.GroupType,
@@ -160,6 +167,31 @@ func (s *Service) CreateGroup(ctx context.Context, cmd CreateGroupCommand) (*Gro
 
 	// Persist all SQLite components atomically; other repository implementations
 	// retain their existing port behavior.
+	if len(cmd.Sources) > 0 {
+		sources := make([]domain.MemberSource, len(cmd.Sources))
+		copy(sources, cmd.Sources)
+		for i := range sources {
+			sources[i].Position = i
+			sources[i].GroupID = groupID
+			if err := domain.ValidateMemberSource(sources[i]); err != nil {
+				s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_group.create", domain.AuditResultFailure, fmt.Sprintf("invalid source: %v", err))
+				return nil, err
+			}
+		}
+		group.Sources = sources
+		allGroups := append(existingGroups, group)
+		if err := domain.ValidatePolicyTopology(allGroups, nil, nil, false); err != nil {
+			s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_group.create", domain.AuditResultFailure, fmt.Sprintf("topology validation failed: %v", err))
+			return nil, err
+		}
+		saved, err := s.policyRepo.SaveGroupWithSources(ctx, &group, 0, sources)
+		if err != nil {
+			s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_group.create", domain.AuditResultFailure, fmt.Sprintf("failed to save group: %v", err))
+			return nil, err
+		}
+		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_group.create", domain.AuditResultSuccess, fmt.Sprintf("id=%s, name=%s", saved.ID, saved.Name))
+		return toGroupView(saved, nil), nil
+	}
 	if atomic, ok := s.policyRepo.(domain.AtomicGroupRepository); ok {
 		if err := atomic.SaveGroup(ctx, &group, true, &edges, cmd.NodeFilter != nil, cmd.NodeFilter); err != nil {
 			return nil, err
@@ -200,13 +232,6 @@ func (s *Service) GetGroup(ctx context.Context, id string) (*GroupView, error) {
 	group, err := s.policyRepo.GetGroupByID(ctx, id)
 	if err != nil {
 		return nil, err
-	}
-
-	if s.nodeFilterRepo != nil {
-		gf, err := s.nodeFilterRepo.GetGroupFilter(ctx, id)
-		if err == nil && gf != nil {
-			group.NodeFilter = &gf.Spec
-		}
 	}
 
 	edges, err := s.policyRepo.ListEdgesByGroup(ctx, id)
@@ -259,22 +284,9 @@ func (s *Service) ListGroups(ctx context.Context, query ListGroupsQuery) (*ListG
 		end = total
 	}
 
-	var groupFilters map[string]domain.NodeFilterSpec
-	if s.nodeFilterRepo != nil {
-		gf, err := s.nodeFilterRepo.ListGroupFilters(ctx)
-		if err == nil {
-			groupFilters = gf
-		}
-	}
-
 	sliced := filtered[start:end]
 	items := make([]GroupView, len(sliced))
 	for i, g := range sliced {
-		if groupFilters != nil {
-			if spec, ok := groupFilters[g.ID]; ok {
-				g.NodeFilter = &spec
-			}
-		}
 		edges, err := s.policyRepo.ListEdgesByGroup(ctx, g.ID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to list edges for group %s: %w", g.ID, err)
@@ -323,138 +335,89 @@ func (s *Service) UpdateGroup(ctx context.Context, cmd UpdateGroupCommand) (*Gro
 		return nil, fmt.Errorf("failed to query existing groups: %w", err)
 	}
 
-	edgeMap := make(map[string][]domain.GroupEdge, len(existingGroups))
-	for _, g := range existingGroups {
-		gEdges, err := s.policyRepo.ListEdgesByGroup(ctx, g.ID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to query edges for group %s: %w", g.ID, err)
-		}
-		edgeMap[g.ID] = gEdges
-	}
-
-	var newEdges []domain.GroupEdge
-	if cmd.Edges != nil {
-		newEdges = make([]domain.GroupEdge, len(*cmd.Edges))
-		for i, in := range *cmd.Edges {
-			edgeID := in.ID
-			if edgeID == "" {
-				var err error
-				edgeID, err = domain.NewUUIDv7()
-				if err != nil {
-					return nil, err
-				}
+	if cmd.Sources == nil {
+		var legacyEdges *[]domain.GroupEdge
+		if cmd.Edges != nil {
+			list := make([]domain.GroupEdge, len(*cmd.Edges))
+			for i, e := range *cmd.Edges {
+				list[i] = domain.GroupEdge{ID: e.ID, ParentGroupID: group.ID, ChildGroupID: e.ChildGroupID, NodeLogicalID: e.NodeLogicalID, Position: i}
 			}
-			newEdges[i] = domain.GroupEdge{
-				ID:            edgeID,
-				ParentGroupID: cmd.ID,
-				ChildGroupID:  in.ChildGroupID,
-				NodeLogicalID: in.NodeLogicalID,
-				Position:      i,
+			if err := s.validateNodeTargets(ctx, list); err != nil {
+				return nil, err
 			}
+			legacyEdges = &list
 		}
-		edgeMap[cmd.ID] = newEdges
-	} else {
-		newEdges = edgeMap[cmd.ID]
-	}
-
-	if err := ValidatePolicyGraph(existingGroups, edgeMap, nil, nil); err != nil {
-		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_group.update", domain.AuditResultFailure, fmt.Sprintf("validation failed: %v", err))
-		return nil, err
-	}
-	if cmd.Edges != nil {
-		if err := s.validateNodeTargets(ctx, newEdges); err != nil {
-			s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_group.update", domain.AuditResultFailure, fmt.Sprintf("node target validation failed: %v", err))
-			return nil, err
+		sources := group.Sources
+		if legacyEdges != nil || cmd.ClearNodeFilter || cmd.NodeFilter != nil {
+			filter := cmd.NodeFilter
+			if cmd.ClearNodeFilter {
+				filter = nil
+			}
+			converted, err := domain.EditLegacySources(group.ID, sources, legacyEdges, cmd.ClearNodeFilter || cmd.NodeFilter != nil, filter)
+			if err != nil {
+				return nil, err
+			}
+			sources = converted
+		}
+		cmd.Sources = &sources
+		if cmd.ExpectedRevision == nil {
+			revision := group.Revision
+			cmd.ExpectedRevision = &revision
 		}
 	}
-
-	// Validate all requested values before the first write.
-	if err := cmd.NodeFilter.Validate(); err != nil {
-		return nil, err
-	}
-	if cmd.EmptyFallbackPass != nil {
-		group.EmptyFallbackPass = *cmd.EmptyFallbackPass
-	}
-	changeFilter := cmd.ClearNodeFilter || cmd.NodeFilter != nil
-	if changeFilter {
-		group.NodeFilter = cmd.NodeFilter
-		if cmd.ClearNodeFilter || cmd.NodeFilter.IsEmpty() {
-			group.NodeFilter = nil
-		}
-	} else if s.nodeFilterRepo != nil {
-		gf, err := s.nodeFilterRepo.GetGroupFilter(ctx, group.ID)
-		if err != nil {
-			var de *domain.DomainError
-			if !errors.As(err, &de) || de.Category != domain.CategoryNotFound {
+	if cmd.Sources != nil {
+		sources := make([]domain.MemberSource, len(*cmd.Sources))
+		copy(sources, *cmd.Sources)
+		for i := range sources {
+			sources[i].Position = i
+			sources[i].GroupID = group.ID
+			if err := domain.ValidateMemberSource(sources[i]); err != nil {
+				s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_group.update", domain.AuditResultFailure, fmt.Sprintf("invalid source: %v", err))
 				return nil, err
 			}
 		}
-		if gf != nil {
-			group.NodeFilter = &gf.Spec
+		if cmd.EmptyFallbackPass != nil {
+			group.EmptyFallbackPass = *cmd.EmptyFallbackPass
 		}
-	}
-	group.UpdatedAt = domain.NowUTC()
-	if atomic, ok := s.policyRepo.(domain.AtomicGroupRepository); ok {
-		var edges *[]domain.GroupEdge
-		if cmd.Edges != nil {
-			edges = &newEdges
+		if s.nodeRepo != nil {
+			var nodeEdges []domain.GroupEdge
+			for _, src := range sources {
+				if src.Kind == domain.SourceKindManualNode {
+					nodeEdges = append(nodeEdges, domain.GroupEdge{NodeLogicalID: src.NodeLogicalID})
+				}
+			}
+			if err := s.validateNodeTargets(ctx, nodeEdges); err != nil {
+				return nil, err
+			}
 		}
-		if err := atomic.SaveGroup(ctx, group, false, edges, changeFilter, group.NodeFilter); err != nil {
+		group.Sources = sources
+		for i := range existingGroups {
+			if existingGroups[i].ID == group.ID {
+				existingGroups[i] = *group
+				break
+			}
+		}
+		if err := domain.ValidatePolicyTopology(existingGroups, nil, nil, false); err != nil {
+			s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_group.update", domain.AuditResultFailure, fmt.Sprintf("validation failed: %v", err))
+			return nil, err
+		}
+		expectedRev := group.Revision
+		if cmd.ExpectedRevision != nil {
+			if *cmd.ExpectedRevision <= 0 {
+				return nil, domain.NewValidationError("invalid_revision", "expected_revision must be positive")
+			}
+			expectedRev = *cmd.ExpectedRevision
+		}
+		saved, err := s.policyRepo.SaveGroupWithSources(ctx, group, expectedRev, sources)
+		if err != nil {
+			s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_group.update", domain.AuditResultFailure, fmt.Sprintf("failed to save group with sources: %v", err))
 			return nil, err
 		}
 		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_group.update", domain.AuditResultSuccess, fmt.Sprintf("id=%s", group.ID))
-		return toGroupView(group, newEdges), nil
-	}
-	if err := s.policyRepo.UpdateGroup(ctx, group); err != nil {
-		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_group.update", domain.AuditResultFailure, fmt.Sprintf("failed to update group: %v", err))
-		return nil, err
+		return toGroupView(saved, nil), nil
 	}
 
-	if cmd.Edges != nil {
-		if err := s.policyRepo.SetEdgesForGroup(ctx, cmd.ID, newEdges); err != nil {
-			s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_group.update", domain.AuditResultFailure, fmt.Sprintf("failed to update edges: %v", err))
-			return nil, err
-		}
-	}
-
-	if cmd.ClearNodeFilter {
-		group.NodeFilter = nil
-		if s.nodeFilterRepo != nil {
-			_ = s.nodeFilterRepo.DeleteGroupFilter(ctx, cmd.ID)
-		}
-	} else if cmd.NodeFilter != nil {
-		if cmd.NodeFilter.IsEmpty() {
-			group.NodeFilter = nil
-			if s.nodeFilterRepo != nil {
-				_ = s.nodeFilterRepo.DeleteGroupFilter(ctx, cmd.ID)
-			}
-		} else {
-			if err := cmd.NodeFilter.Validate(); err != nil {
-				s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_group.update", domain.AuditResultFailure, fmt.Sprintf("invalid node filter: %v", err))
-				return nil, err
-			}
-			group.NodeFilter = cmd.NodeFilter
-			if s.nodeFilterRepo != nil {
-				err := s.nodeFilterRepo.SetGroupFilter(ctx, &domain.GroupNodeFilter{
-					GroupID:   group.ID,
-					Spec:      *cmd.NodeFilter,
-					UpdatedAt: group.UpdatedAt,
-				})
-				if err != nil {
-					s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_group.update", domain.AuditResultFailure, fmt.Sprintf("failed to update group filter: %v", err))
-					return nil, err
-				}
-			}
-		}
-	} else if s.nodeFilterRepo != nil {
-		gf, err := s.nodeFilterRepo.GetGroupFilter(ctx, group.ID)
-		if err == nil && gf != nil {
-			group.NodeFilter = &gf.Spec
-		}
-	}
-
-	s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_group.update", domain.AuditResultSuccess, fmt.Sprintf("id=%s", cmd.ID))
-	return toGroupView(group, newEdges), nil
+	return nil, domain.NewInternalError("sources_required", "group update requires normalized sources")
 }
 
 // DeleteGroup deletes a group by ID after verifying no other groups reference it.
@@ -471,10 +434,6 @@ func (s *Service) DeleteGroup(ctx context.Context, cmd DeleteGroupCommand) error
 	if err := s.policyRepo.DeleteGroup(ctx, cmd.ID); err != nil {
 		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_group.delete", domain.AuditResultFailure, fmt.Sprintf("failed to delete group: %v", err))
 		return err
-	}
-
-	if s.nodeFilterRepo != nil {
-		_ = s.nodeFilterRepo.DeleteGroupFilter(ctx, cmd.ID)
 	}
 
 	s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_group.delete", domain.AuditResultSuccess, fmt.Sprintf("id=%s, name=%s", group.ID, group.Name))
@@ -845,6 +804,257 @@ func (s *Service) ListRules(ctx context.Context, query ListRulesQuery) (*ListRul
 	}, nil
 }
 
+// PreviewGroup generates an in-RAM preview of a policy group draft without persisting to database.
+func (s *Service) PreviewGroup(ctx context.Context, cmd PreviewGroupCommand) (*GroupPreviewResponse, error) {
+	sources := make([]domain.MemberSource, len(cmd.Sources))
+	copy(sources, cmd.Sources)
+	for i := range sources {
+		sources[i].Position = i
+		if err := domain.ValidateMemberSource(sources[i]); err != nil {
+			return nil, err
+		}
+	}
+
+	var groupID string
+	var name string
+	var groupType domain.GroupType = domain.GroupTypeSelect
+	var emptyFallback bool = false
+	var revision int64 = 1
+
+	if cmd.GroupID != nil && *cmd.GroupID != "" {
+		groupID = *cmd.GroupID
+		existing, err := s.policyRepo.GetGroupByID(ctx, groupID)
+		if err != nil {
+			return nil, err
+		}
+		name = existing.Name
+		groupType = existing.GroupType
+		emptyFallback = existing.EmptyFallbackPass
+		revision = existing.Revision
+
+		if cmd.ExpectedRevision != nil && *cmd.ExpectedRevision > 0 && *cmd.ExpectedRevision != revision {
+			conflictErr := domain.NewConflictError("revision_conflict", fmt.Sprintf("Policy group revision mismatch. Current revision is %d.", revision))
+			conflictErr.CurrentRevision = &revision
+			return nil, conflictErr
+		}
+	} else {
+		var err error
+		groupID, err = domain.NewUUIDv7()
+		if err != nil {
+			return nil, err
+		}
+		name = "Preview Group"
+	}
+
+	if cmd.Name != nil && strings.TrimSpace(*cmd.Name) != "" {
+		name = strings.TrimSpace(*cmd.Name)
+	}
+	if cmd.GroupType != nil {
+		if !cmd.GroupType.IsValid() {
+			return nil, domain.NewValidationError("invalid_group_type", fmt.Sprintf("unsupported group type: %s", *cmd.GroupType))
+		}
+		groupType = *cmd.GroupType
+	}
+	if cmd.EmptyFallbackPass != nil {
+		emptyFallback = *cmd.EmptyFallbackPass
+	}
+
+	previewGroup := domain.NodeGroup{
+		ID:                groupID,
+		Name:              name,
+		GroupType:         groupType,
+		EmptyFallbackPass: emptyFallback,
+		Revision:          revision,
+		Sources:           sources,
+		CreatedAt:         domain.NowUTC(),
+		UpdatedAt:         domain.NowUTC(),
+	}
+
+	existingGroups, err := s.policyRepo.ListGroups(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list groups: %w", err)
+	}
+	allSources := make(map[string][]domain.MemberSource, len(existingGroups))
+	for _, g := range existingGroups {
+		allSources[g.ID] = g.Sources
+	}
+
+	found := false
+	simulatedGroups := make([]domain.NodeGroup, len(existingGroups))
+	copy(simulatedGroups, existingGroups)
+	for i := range simulatedGroups {
+		if simulatedGroups[i].ID == groupID {
+			simulatedGroups[i] = previewGroup
+			found = true
+			break
+		}
+	}
+	if !found {
+		simulatedGroups = append(simulatedGroups, previewGroup)
+	}
+	allSources[groupID] = sources
+	for i := range simulatedGroups {
+		simulatedGroups[i].Sources = allSources[simulatedGroups[i].ID]
+	}
+
+	if err := domain.ValidatePolicyTopology(simulatedGroups, nil, nil, false); err != nil {
+		return nil, err
+	}
+
+	var activeRevID string
+	if s.revisionRepo != nil {
+		active, err := s.revisionRepo.GetActive(ctx)
+		if err == nil && active != nil {
+			activeRevID = active.ID
+		}
+	}
+
+	var polRules []domain.PolicyRule
+	var admRules []domain.AdmissionRule
+	if activeRevID != "" && s.policyRepo != nil {
+		polRules, _ = s.policyRepo.ListPolicyRules(ctx, activeRevID)
+		admRules, _ = s.policyRepo.ListAdmissionRules(ctx, activeRevID)
+	}
+
+	var nodes []domain.Node
+	if s.nodeRepo != nil {
+		nodes, _ = s.nodeRepo.ListAll(ctx, domain.NodeFilter{
+			Scope:          domain.NodeScopeEnabledSubscriptions,
+			ActiveOnly:     true,
+			ExcludeNotices: true,
+		})
+	}
+
+	var globalFilter *domain.NodeFilterSpec
+	var groupFilters map[string]domain.NodeFilterSpec
+	if s.nodeFilterRepo != nil {
+		gf, err := s.nodeFilterRepo.GetGlobalFilter(ctx)
+		if err == nil && gf != nil && !gf.Spec.IsEmpty() {
+			globalFilter = &gf.Spec
+		}
+		groupFilters, _ = s.nodeFilterRepo.ListGroupFilters(ctx)
+	}
+
+	var resInput resolver.ResolveInput
+	if s.inputProvider != nil && activeRevID != "" {
+		baseInput, err := s.inputProvider(ctx, activeRevID)
+		if err != nil {
+			return nil, err
+		}
+		if baseInput == nil {
+			return nil, domain.NewInternalError("preview_input_unavailable", "publication input is unavailable")
+		}
+		if baseInput != nil {
+			resInput = *baseInput
+			simGroups := make([]domain.NodeGroup, len(baseInput.Groups))
+			copy(simGroups, baseInput.Groups)
+			simSources := make(map[string][]domain.MemberSource, len(baseInput.GroupSources)+1)
+			for k, v := range baseInput.GroupSources {
+				simSources[k] = v
+			}
+			foundGroup := false
+			for i := range simGroups {
+				if simGroups[i].ID == groupID {
+					simGroups[i] = previewGroup
+					foundGroup = true
+					break
+				}
+			}
+			if !foundGroup {
+				simGroups = append(simGroups, previewGroup)
+			}
+			simSources[groupID] = sources
+			for i := range simGroups {
+				simGroups[i].Sources = simSources[simGroups[i].ID]
+			}
+			resInput.Groups = simGroups
+			resInput.GroupSources = simSources
+		}
+	}
+	if len(resInput.Groups) == 0 {
+		resInput = resolver.ResolveInput{
+			RevisionID:         activeRevID,
+			InventoryWatermark: "preview-ram",
+			CompilerVersion:    "1.0.0",
+			Nodes:              nodes,
+			Groups:             simulatedGroups,
+			GroupSources:       allSources,
+			PolicyRules:        polRules,
+			AdmissionRules:     admRules,
+			GlobalFilter:       globalFilter,
+			GroupFilters:       groupFilters,
+			DNS: resolver.DNSConfig{
+				Enabled:     true,
+				Nameservers: []string{"1.1.1.1", "8.8.8.8"},
+			},
+			AsOf: domain.NowUTC(),
+		}
+	}
+
+	r := resolver.New()
+	snap, err := r.Resolve(ctx, resInput)
+	if err != nil {
+		return nil, err
+	}
+
+	var targetRG *resolver.ResolvedGroup
+	for i := range snap.Groups {
+		if snap.Groups[i].ID == groupID {
+			targetRG = &snap.Groups[i]
+			break
+		}
+	}
+	if targetRG == nil {
+		return nil, domain.NewInternalError("preview_resolution_failed", "preview group not found in resolved snapshot")
+	}
+
+	previewMembers := make([]GroupPreviewMember, len(targetRG.Members))
+	for i, m := range targetRG.Members {
+		pm := GroupPreviewMember{
+			Kind:        m.Kind,
+			DisplayName: m.DisplayName,
+			Position:    m.Position,
+		}
+		switch m.Kind {
+		case resolver.MemberKindNode:
+			targetID := m.TargetID
+			pm.NodeLogicalID = &targetID
+		case resolver.MemberKindGroup:
+			targetID := m.TargetID
+			pm.GroupID = &targetID
+		case resolver.MemberKindBuiltin:
+			name := m.DisplayName
+			pm.BuiltinName = &name
+		}
+		previewMembers[i] = pm
+	}
+
+	var groupDiags []resolver.Diagnostic
+	for _, d := range snap.Diagnostics {
+		if d.Target == groupID || d.Target == name || d.Severity == resolver.DiagnosticSeverityError {
+			groupDiags = append(groupDiags, d)
+		}
+	}
+
+	resp := &GroupPreviewResponse{
+		GroupID:         groupID,
+		Revision:        revision,
+		SelectionDigest: snap.SnapshotDigest,
+		Members:         previewMembers,
+		NodeCount:       len(targetRG.AllNodeLogicalIDs),
+		Diagnostics:     groupDiags,
+	}
+
+	if cmd.Target != nil && *cmd.Target != "" {
+		res, compErr := compiler.Compile(ctx, snap, *cmd.Target)
+		if compErr != nil {
+			return nil, compErr
+		}
+		resp.ContentDigest = &res.ContentDigest
+	}
+	return resp, nil
+}
+
 // ValidateGraph checks the complete graph and rules currently persisted in the database.
 // It performs static topology validation, admission rule checks, and dynamic group resolution against active nodes.
 func (s *Service) ValidateGraph(ctx context.Context) (*ValidationResult, error) {
@@ -957,12 +1167,22 @@ func (s *Service) ValidateGraph(ctx context.Context) (*ValidationResult, error) 
 	}
 
 	// 4. Deterministic Resolver execution (in-memory, no mutation, no external network)
+	allSources, _ := s.policyRepo.ListAllSources(ctx)
+	if allSources != nil {
+		for i := range groups {
+			if s, ok := allSources[groups[i].ID]; ok && len(s) > 0 {
+				groups[i].Sources = s
+			}
+		}
+	}
+
 	resInput := resolver.ResolveInput{
 		RevisionID:         activeRevID,
 		InventoryWatermark: "v1",
 		CompilerVersion:    "1.0.0",
 		Nodes:              nodes,
 		Groups:             groups,
+		GroupSources:       allSources,
 		Edges:              edgeMap,
 		PolicyRules:        polRules,
 		AdmissionRules:     admRules,
@@ -1343,6 +1563,14 @@ func (s *Service) recordAudit(ctx context.Context, actorKind domain.ActorKind, r
 }
 
 func toGroupView(group *domain.NodeGroup, edges []domain.GroupEdge) *GroupView {
+	// The old filter field is only a lossless view of a filter-only source.
+	groupCopy := *group
+	group = &groupCopy
+	group.NodeFilter = nil
+	if len(group.Sources) == 1 && group.Sources[0].Kind == domain.SourceKindFilter && group.Sources[0].Operation == domain.OperationAdd {
+		group.NodeFilter = group.Sources[0].FilterSpec
+	}
+	edges = domain.ProjectSourceEdges(group.Sources)
 	edgeViews := make([]GroupEdgeView, len(edges))
 	for i, e := range edges {
 		edgeViews[i] = GroupEdgeView{
@@ -1353,11 +1581,21 @@ func toGroupView(group *domain.NodeGroup, edges []domain.GroupEdge) *GroupView {
 			Position:      e.Position,
 		}
 	}
+	sources := group.Sources
+	if sources == nil {
+		sources = make([]domain.MemberSource, 0)
+	}
+	rev := group.Revision
+	if rev <= 0 {
+		rev = 1
+	}
 	return &GroupView{
 		EmptyFallbackPass: group.EmptyFallbackPass,
 		ID:                group.ID,
 		Name:              group.Name,
 		GroupType:         group.GroupType,
+		Revision:          rev,
+		Sources:           sources,
 		Edges:             edgeViews,
 		NodeFilter:        group.NodeFilter,
 		CreatedAt:         group.CreatedAt,
@@ -1402,43 +1640,11 @@ func (s *Service) SetGlobalNodeFilter(ctx context.Context, cmd SetGlobalNodeFilt
 	return filter, nil
 }
 
-type canonicalSnapshot struct {
-	Groups []domain.NodeGroup            `json:"groups"`
-	Edges  map[string][]domain.GroupEdge `json:"edges"`
-}
-
 // ComputeConfigurationDigest computes a canonical SHA-256 content digest for the given policy groups and edges.
 func ComputeConfigurationDigest(groups []domain.NodeGroup, edges map[string][]domain.GroupEdge) (string, error) {
 	return computeConfigurationDigest(groups, edges)
 }
 
 func computeConfigurationDigest(groups []domain.NodeGroup, edges map[string][]domain.GroupEdge) (string, error) {
-	sortedGroups := make([]domain.NodeGroup, len(groups))
-	copy(sortedGroups, groups)
-	sort.SliceStable(sortedGroups, func(i, j int) bool {
-		return sortedGroups[i].ID < sortedGroups[j].ID
-	})
-
-	canonicalEdges := make(map[string][]domain.GroupEdge, len(edges))
-	for k, list := range edges {
-		sortedList := make([]domain.GroupEdge, len(list))
-		copy(sortedList, list)
-		sort.SliceStable(sortedList, func(i, j int) bool {
-			return sortedList[i].Position < sortedList[j].Position
-		})
-		canonicalEdges[k] = sortedList
-	}
-
-	snap := canonicalSnapshot{
-		Groups: sortedGroups,
-		Edges:  canonicalEdges,
-	}
-
-	data, err := json.Marshal(snap)
-	if err != nil {
-		return "", err
-	}
-
-	hash := sha256.Sum256(data)
-	return hex.EncodeToString(hash[:]), nil
+	return domain.ComputeConfigurationDigest(groups, edges)
 }

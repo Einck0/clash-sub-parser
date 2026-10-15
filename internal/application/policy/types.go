@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"clash-sub-parser/internal/domain"
+	"clash-sub-parser/internal/resolver"
 )
 
 // EdgeInput defines input for a group edge.
@@ -20,6 +21,7 @@ type CreateGroupCommand struct {
 	ID                string                 `json:"id,omitempty"`
 	Name              string                 `json:"name"`
 	GroupType         domain.GroupType       `json:"group_type"`
+	Sources           []domain.MemberSource  `json:"sources,omitempty"`
 	Edges             []EdgeInput            `json:"edges,omitempty"`
 	NodeFilter        *domain.NodeFilterSpec `json:"node_filter,omitempty"`
 	RequestID         string                 `json:"request_id,omitempty"`
@@ -32,6 +34,8 @@ type UpdateGroupCommand struct {
 	ID                string                 `json:"id"`
 	Name              *string                `json:"name,omitempty"`
 	GroupType         *domain.GroupType      `json:"group_type,omitempty"`
+	ExpectedRevision  *int64                 `json:"expected_revision,omitempty"`
+	Sources           *[]domain.MemberSource `json:"sources,omitempty"`
 	Edges             *[]EdgeInput           `json:"edges,omitempty"`
 	NodeFilter        *domain.NodeFilterSpec `json:"node_filter,omitempty"`
 	ClearNodeFilter   bool                   `json:"clear_node_filter,omitempty"`
@@ -76,10 +80,58 @@ type GroupView struct {
 	ID                string                 `json:"id"`
 	Name              string                 `json:"name"`
 	GroupType         domain.GroupType       `json:"group_type"`
+	Revision          int64                  `json:"revision"`
+	Sources           []domain.MemberSource  `json:"sources"`
 	Edges             []GroupEdgeView        `json:"edges"`
 	NodeFilter        *domain.NodeFilterSpec `json:"node_filter,omitempty"`
 	CreatedAt         time.Time              `json:"created_at"`
 	UpdatedAt         time.Time              `json:"updated_at"`
+}
+
+// GroupPreviewResult represents resolved preview data for a policy group.
+type GroupPreviewResult struct {
+	GroupID            string                         `json:"group_id"`
+	Name               string                         `json:"name"`
+	GroupType          domain.GroupType               `json:"group_type"`
+	EmptyFallbackPass  bool                           `json:"empty_fallback_pass"`
+	EffectiveEmptyPass bool                           `json:"effective_empty_pass"`
+	Members            []resolver.ResolvedGroupMember `json:"members"`
+	ExpandedNodeIDs    []string                       `json:"expanded_node_ids"`
+	ExpandedNodeCount  int                            `json:"expanded_node_count"`
+}
+
+// PreviewGroupCommand defines parameters for in-RAM preview of a policy group.
+type PreviewGroupCommand struct {
+	GroupID           *string                `json:"group_id,omitempty"`
+	ExpectedRevision  *int64                 `json:"expected_revision,omitempty"`
+	Name              *string                `json:"name,omitempty"`
+	GroupType         *domain.GroupType      `json:"group_type,omitempty"`
+	EmptyFallbackPass *bool                  `json:"empty_fallback_pass,omitempty"`
+	Sources           []domain.MemberSource  `json:"sources"`
+	Target            *domain.CompilerTarget `json:"target,omitempty"`
+	RequestID         string                 `json:"request_id,omitempty"`
+	ActorKind         domain.ActorKind       `json:"actor_kind,omitempty"`
+}
+
+// GroupPreviewMember represents a member in the preview result without exposing secrets.
+type GroupPreviewMember struct {
+	Kind          resolver.MemberKind `json:"kind"`
+	NodeLogicalID *string             `json:"node_logical_id,omitempty"`
+	GroupID       *string             `json:"group_id,omitempty"`
+	BuiltinName   *string             `json:"builtin_name,omitempty"`
+	DisplayName   string              `json:"display_name"`
+	Position      int                 `json:"position"`
+}
+
+// GroupPreviewResponse represents the resolved in-memory preview of a policy group draft.
+type GroupPreviewResponse struct {
+	GroupID         string                `json:"group_id"`
+	Revision        int64                 `json:"revision"`
+	SelectionDigest string                `json:"selection_digest"`
+	ContentDigest   *string               `json:"content_digest,omitempty"`
+	Members         []GroupPreviewMember  `json:"members"`
+	NodeCount       int                   `json:"node_count"`
+	Diagnostics     []resolver.Diagnostic `json:"diagnostics"`
 }
 
 // ListGroupsQuery defines pagination and search filters for listing groups.

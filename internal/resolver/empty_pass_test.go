@@ -10,7 +10,7 @@ import (
 func TestResolverExplicitPassNoInheritanceAndDigest(t *testing.T) {
 	child, parent := domain.MustNewUUIDv7(), domain.MustNewUUIDv7()
 	input := resolver.ResolveInput{Groups: []domain.NodeGroup{{ID: child, Name: "child", GroupType: domain.GroupTypeSelect, EmptyFallbackPass: true}, {ID: parent, Name: "parent", GroupType: domain.GroupTypeFallback}}, Edges: map[string][]domain.GroupEdge{parent: {{ParentGroupID: parent, ChildGroupID: &child}}}, PolicyRules: []domain.PolicyRule{{TargetGroupID: parent, Expression: "MATCH"}}}
-	r := resolver.New()
+	r := sourceFixtureResolver{}
 	snap, err := r.Resolve(context.Background(), input)
 	if err != nil {
 		t.Fatal(err)
@@ -61,7 +61,7 @@ func TestResolverNonemptyFlagAndDerivedProjection(t *testing.T) {
 	child, parent := domain.MustNewUUIDv7(), domain.MustNewUUIDv7()
 	n := domain.Node{LogicalID: testNodeLogicalID("pass-node"), DisplayName: "HK", Protocol: domain.ProtocolTrojan, Active: true}
 	input := resolver.ResolveInput{Nodes: []domain.Node{n}, Groups: []domain.NodeGroup{{ID: child, Name: "child", GroupType: domain.GroupTypeSelect, EmptyFallbackPass: true}, {ID: parent, Name: "parent", GroupType: domain.GroupTypeSelect}}, Edges: map[string][]domain.GroupEdge{child: {{ParentGroupID: child, NodeLogicalID: &n.LogicalID}}, parent: {{ParentGroupID: parent, ChildGroupID: &child}}}}
-	r := resolver.New()
+	r := sourceFixtureResolver{}
 	snap, err := r.Resolve(context.Background(), input)
 	if err != nil {
 		t.Fatal(err)

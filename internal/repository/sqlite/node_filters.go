@@ -99,9 +99,10 @@ func (r *nodeFilterRepository) GetGroupFilter(ctx context.Context, groupID strin
 	}
 
 	const query = `
-	SELECT group_id, filter_spec, updated_at
-	FROM group_node_filters
-	WHERE group_id = ?;`
+	SELECT group_id, filter_spec_json, updated_at
+	FROM policy_group_sources
+	WHERE group_id = ? AND filter_spec_json IS NOT NULL
+	ORDER BY position LIMIT 1;`
 
 	var gid, specJSON, updatedAtStr string
 	err := r.db.QueryRowContext(ctx, query, groupID).Scan(&gid, &specJSON, &updatedAtStr)
@@ -145,28 +146,12 @@ func (r *nodeFilterRepository) SetGroupFilter(ctx context.Context, filter *domai
 		return err
 	}
 
-	specJSON, err := json.Marshal(filter.Spec)
+	policy := &policyRepository{db: r.db}
+	group, err := policy.GetGroupByID(ctx, filter.GroupID)
 	if err != nil {
-		return fmt.Errorf("failed to marshal group node filter spec: %w", err)
+		return err
 	}
-
-	now := domain.NowUTC()
-	if !filter.UpdatedAt.IsZero() {
-		now = filter.UpdatedAt
-	}
-
-	const query = `
-	INSERT INTO group_node_filters (group_id, filter_spec, updated_at)
-	VALUES (?, ?, ?)
-	ON CONFLICT(group_id) DO UPDATE SET
-		filter_spec = excluded.filter_spec,
-		updated_at = excluded.updated_at;`
-
-	_, err = r.db.ExecContext(ctx, query, filter.GroupID, string(specJSON), now.Format(time.RFC3339))
-	if err != nil {
-		return fmt.Errorf("failed to upsert group node filter for %s: %w", filter.GroupID, err)
-	}
-	return nil
+	return policy.SaveGroup(ctx, group, false, nil, true, &filter.Spec)
 }
 
 func (r *nodeFilterRepository) DeleteGroupFilter(ctx context.Context, groupID string) error {
@@ -174,18 +159,18 @@ func (r *nodeFilterRepository) DeleteGroupFilter(ctx context.Context, groupID st
 		return domain.NewValidationError("invalid_group_id", "group_id cannot be empty")
 	}
 
-	const query = `DELETE FROM group_node_filters WHERE group_id = ?;`
-	_, err := r.db.ExecContext(ctx, query, groupID)
+	policy := &policyRepository{db: r.db}
+	group, err := policy.GetGroupByID(ctx, groupID)
 	if err != nil {
-		return fmt.Errorf("failed to delete group node filter for %s: %w", groupID, err)
+		return err
 	}
-	return nil
+	return policy.SaveGroup(ctx, group, false, nil, true, nil)
 }
 
 func (r *nodeFilterRepository) ListGroupFilters(ctx context.Context) (map[string]domain.NodeFilterSpec, error) {
 	const query = `
-	SELECT group_id, filter_spec
-	FROM group_node_filters;`
+	SELECT group_id, filter_spec_json
+	FROM policy_group_sources WHERE filter_spec_json IS NOT NULL ORDER BY group_id,position;`
 
 	rows, err := r.db.QueryContext(ctx, query)
 	if err != nil {

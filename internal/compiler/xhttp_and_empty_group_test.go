@@ -2,6 +2,7 @@ package compiler_test
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -130,5 +131,81 @@ func TestEmptyGroupRejection(t *testing.T) {
 		if strings.Contains(content, "- DIRECT") {
 			t.Fatalf("Mihomo output must never auto-insert DIRECT into empty group, got:\n%s", content)
 		}
+	}
+}
+
+// TASK-FIX-02 Requirement: Pure node targets (SingBox, Surge, QuantumultX) decouple from empty groups and compile valid nodes successfully
+func TestPureNodeTargets_DecoupleFromEmptyGroups(t *testing.T) {
+	ctx := context.Background()
+
+	node := resolver.ResolvedNode{
+		LogicalID:   "node_ss_01",
+		Protocol:    domain.ProtocolSS,
+		DisplayName: "SS-Node-01",
+		Server:      "198.51.100.50",
+		Port:        8388,
+		Credentials: domain.InboundProtocolCredential{
+			Method:   "aes-128-gcm",
+			Password: "test-password",
+		},
+		Active: true,
+	}
+
+	snapEmptyGroup := &resolver.ResolvedPolicySnapshot{
+		SnapshotDigest:  "sha256:snap_empty_pure_nodes",
+		CompilerVersion: "1.0.0",
+		Nodes:           []resolver.ResolvedNode{node},
+		Groups: []resolver.ResolvedGroup{
+			{
+				Name:      "FilteredEmptyGroup",
+				GroupType: domain.GroupTypeSelect,
+				Members:   []resolver.ResolvedGroupMember{}, // 0 members!
+			},
+		},
+	}
+
+	// 1. SingBox compiles pure nodes successfully, ignoring empty groups
+	resSingBox, err := compiler.Compile(ctx, snapEmptyGroup, domain.TargetSingBox)
+	if err != nil {
+		t.Fatalf("expected SingBox compile to succeed with empty group: %v", err)
+	}
+	var sbConfig map[string]any
+	if err := json.Unmarshal(resSingBox.Content, &sbConfig); err != nil {
+		t.Fatalf("failed to unmarshal SingBox JSON: %v", err)
+	}
+	// Verify actual parsed node count is 1 (not just checking error)
+	outbounds, _ := sbConfig["outbounds"].([]any)
+	endpoints, _ := sbConfig["endpoints"].([]any)
+	if len(outbounds)+len(endpoints) != 1 {
+		t.Fatalf("expected 1 outbound/endpoint for SingBox, got %d", len(outbounds)+len(endpoints))
+	}
+
+	// 2. Surge compiles pure nodes successfully, ignoring empty groups
+	resSurge, err := compiler.Compile(ctx, snapEmptyGroup, domain.TargetSurge)
+	if err != nil {
+		t.Fatalf("expected Surge compile to succeed with empty group: %v", err)
+	}
+	surgeLines := strings.Split(strings.TrimSpace(string(resSurge.Content)), "\n")
+	if len(surgeLines) != 1 || !strings.Contains(surgeLines[0], "SS-Node-01") {
+		t.Fatalf("expected 1 proxy line for Surge, got %d lines:\n%s", len(surgeLines), string(resSurge.Content))
+	}
+
+	// 3. QuantumultX compiles pure nodes successfully, ignoring empty groups
+	resQX, err := compiler.Compile(ctx, snapEmptyGroup, domain.TargetQuantumultX)
+	if err != nil {
+		t.Fatalf("expected QuantumultX compile to succeed with empty group: %v", err)
+	}
+	qxLines := strings.Split(strings.TrimSpace(string(resQX.Content)), "\n")
+	if len(qxLines) != 1 || !strings.Contains(qxLines[0], "SS-Node-01") {
+		t.Fatalf("expected 1 server line for QuantumultX, got %d lines:\n%s", len(qxLines), string(resQX.Content))
+	}
+
+	// 4. Mihomo must still strictly reject empty group without PASS fallback
+	_, errMihomo := compiler.Compile(ctx, snapEmptyGroup, domain.TargetMihomo)
+	if errMihomo == nil {
+		t.Fatal("expected Mihomo compile to fail on empty group without PASS fallback, but succeeded")
+	}
+	if !strings.Contains(errMihomo.Error(), "required_nonempty") && !strings.Contains(errMihomo.Error(), "empty_group_not_allowed") {
+		t.Fatalf("expected empty group error for Mihomo, got: %v", errMihomo)
 	}
 }

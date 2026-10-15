@@ -33,6 +33,24 @@ func registerRevisionRoutes(r chi.Router, svc *revision.Service) {
 	r.Get("/revisions/{id}", h.get)
 	r.Post("/revisions/{id}/review", h.review)
 	r.Post("/revisions/{id}/activate", h.activate)
+	r.Post("/revisions/{id}/rollback", h.rollback)
+}
+
+func (h revisionHandler) rollback(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ExpectedRevisions map[string]int64 `json:"expected_revisions"`
+	}
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&body); err != nil {
+		WriteDomainError(w, r, domain.NewValidationError("invalid_json", "request body must contain expected_revisions"))
+		return
+	}
+	if err := h.service.Rollback(r.Context(), chi.URLParam(r, "id"), body.ExpectedRevisions, revision.Action{RequestID: GetRequestID(r.Context()), ActorKind: requestActorKind(r)}); err != nil {
+		WriteDomainError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h revisionHandler) create(w http.ResponseWriter, r *http.Request) {

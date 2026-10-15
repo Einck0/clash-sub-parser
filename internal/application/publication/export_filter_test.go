@@ -80,6 +80,21 @@ func exportFilterFixture(t *testing.T, withGroup bool, filter *filterReadRepo, o
 			t.Fatal(err)
 		}
 	}
+	// Group conditions live on sources, not the obsolete group filter repository.
+	if filter.groupErr != nil {
+		policy.listErr = filter.groupErr
+	}
+	for id, spec := range filter.groups {
+		if g := policy.groups[id]; g != nil {
+			if g.NodeFilter != nil {
+				spec.Conditions = append(spec.Conditions, g.NodeFilter.Conditions...)
+				g.NodeFilter = nil
+			}
+			for i := range g.Sources {
+				g.Sources[i].FilterSpec = &spec
+			}
+		}
+	}
 	pubs := newMockPublicationRepo()
 	nodes := setupSampleNodeSource()
 	nodes.mu.Lock()
@@ -165,7 +180,7 @@ func TestExportFilterReadFailuresFailClosedAcrossTargetsAndEntrypoints(t *testin
 		code    string
 	}{
 		{"global", &filterReadRepo{globalErr: errors.New(secret)}, nil, nil, false, "global_filter_unavailable"},
-		{"group", &filterReadRepo{groupErr: errors.New(secret)}, nil, nil, false, "group_filters_unavailable"},
+		{"group", &filterReadRepo{groupErr: errors.New("group_sources_unavailable")}, nil, nil, false, "group_sources_unavailable"},
 		{"probe", &filterReadRepo{global: probeFilter()}, &observationReadRepo{err: errors.New(secret)}, nil, false, "probe_observations_unavailable"},
 		{"missing probe dependency", &filterReadRepo{global: probeFilter()}, nil, nil, false, "probe_observations_unavailable"},
 		{"group probe", &filterReadRepo{groups: map[string]domain.NodeFilterSpec{"01944aa0-0000-7000-8000-000000000002": probeFilter()}}, &observationReadRepo{err: errors.New(secret)}, nil, true, "probe_observations_unavailable"},
@@ -175,6 +190,10 @@ func TestExportFilterReadFailuresFailClosedAcrossTargetsAndEntrypoints(t *testin
 		t.Run(tc.name, func(t *testing.T) {
 			svc, pubs := exportFilterFixture(t, tc.group, tc.filter, tc.obs, tc.sources)
 			for _, target := range exportTargets {
+				if target != domain.TargetMihomo && (tc.name == "group" || tc.name == "group probe") {
+					assertPureNodeExportAllowed(t, svc, target)
+					continue
+				}
 				assertDeniedNewExport(t, svc, pubs, target, tc.code)
 			}
 			if _, err := svc.Preview(context.Background(), publication.PreviewQuery{Target: domain.TargetSingBox}); err != nil && strings.Contains(err.Error(), secret) {
@@ -231,13 +250,36 @@ func TestExportFilterUnconfiguredDependenciesRemainOptional(t *testing.T) {
 	}
 }
 
-func TestExportFilterGroupOnlyZeroBlocksAllTargets(t *testing.T) {
+func assertPureNodeExportAllowed(t *testing.T, svc *publication.Service, target domain.CompilerTarget) {
+	t.Helper()
+	ctx := context.Background()
+	pre, err := svc.Preflight(ctx, publication.PreflightCommand{Target: target})
+	if err != nil || !pre.Allowed {
+		t.Fatalf("pure-node graph independence: %+v %v", pre, err)
+	}
+	if _, err := svc.Preview(ctx, publication.PreviewQuery{Target: target}); err != nil {
+		t.Fatal(err)
+	}
+	pub, err := svc.Publish(ctx, publication.PublishCommand{Target: target})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ResolveAndServe(ctx, pub.Publication.ID, pub.RawToken); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExportFilterGroupOnlyZeroBlocksMihomoNotPureNodes(t *testing.T) {
 	filter := &filterReadRepo{groups: map[string]domain.NodeFilterSpec{
 		"01944aa0-0000-7000-8000-000000000002": probeFilter(),
 	}}
 	svc, pubs := exportFilterFixture(t, true, filter, &observationReadRepo{latest: map[string]map[domain.ProbeKind]domain.ProbeObservation{}}, nil)
 	for _, target := range exportTargets {
-		assertDeniedNewExport(t, svc, pubs, target, "filtered_nodes_empty")
+		if target == domain.TargetMihomo {
+			assertDeniedNewExport(t, svc, pubs, target, "filtered_nodes_empty")
+		} else {
+			assertPureNodeExportAllowed(t, svc, target)
+		}
 	}
 }
 
@@ -250,6 +292,10 @@ func TestExportFilterEmptyRoutedGroupAndGroupAND(t *testing.T) {
 	}}
 	svc, pubs := exportFilterFixture(t, true, filter, obs, nil)
 	for _, target := range exportTargets {
+		if target != domain.TargetMihomo {
+			assertPureNodeExportAllowed(t, svc, target)
+			continue
+		}
 		assertDeniedNewExport(t, svc, pubs, target, "filtered_nodes_empty")
 		if target == domain.TargetMihomo {
 			pre, err := svc.Preflight(context.Background(), publication.PreflightCommand{Target: target})

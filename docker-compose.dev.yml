@@ -1,0 +1,33 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NPM_CONFIG_REGISTRY: https://registry.npmmirror.com
+        GOPROXY: https://goproxy.cn,direct
+    image: ${CSP_DEV_IMAGE:-clash-sub-parser-dev:latest}
+    container_name: ${CSP_DEV_CONTAINER_NAME:-clash-sub-parser-dev}
+    environment:
+      CSP_ADDR: ${CSP_ADDR:-0.0.0.0:18080}
+      CSP_DB_PATH: ${CSP_DB_PATH:-/data/csp-v1.db}
+      CSP_ADMIN_TOKEN: ${CSP_ADMIN_TOKEN:-}
+      CSP_FETCH_PROXY: ${CSP_FETCH_PROXY:-http://host.docker.internal:7890}
+      TZ: ${TZ:-Asia/Shanghai}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "${CSP_DEV_PORT:-127.0.0.1:18080}:18080"
+    volumes:
+      - csp-v1-dev-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:18080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  csp-v1-dev-data:
+    name: ${CSP_DEV_VOLUME_NAME:-csp-v1-dev-data}

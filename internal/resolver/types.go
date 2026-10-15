@@ -10,8 +10,9 @@ import (
 type MemberKind string
 
 const (
-	MemberKindGroup MemberKind = "group"
-	MemberKindNode  MemberKind = "node"
+	MemberKindGroup   MemberKind = "group"
+	MemberKindNode    MemberKind = "node"
+	MemberKindBuiltin MemberKind = "builtin"
 )
 
 // DiagnosticSeverity denotes the level of a diagnostic entry.
@@ -88,6 +89,8 @@ type ResolvedGroup struct {
 	ChildGroupIDs      []string              `json:"child_group_ids"`
 	NodeLogicalIDs     []string              `json:"node_logical_ids"`
 	AllNodeLogicalIDs  []string              `json:"all_node_logical_ids"`
+	ExpandedNodeIDs    []string              `json:"expanded_node_ids,omitempty"`
+	Sources            []domain.MemberSource `json:"sources,omitempty"`
 	Position           int                   `json:"position"`
 }
 
@@ -140,6 +143,7 @@ type ResolveInput struct {
 	CompilerVersion    string
 	Nodes              []domain.Node
 	Groups             []domain.NodeGroup
+	GroupSources       map[string][]domain.MemberSource
 	Edges              map[string][]domain.GroupEdge
 	PolicyRules        []domain.PolicyRule
 	AdmissionRules     []domain.AdmissionRule

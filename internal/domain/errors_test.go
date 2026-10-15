@@ -61,7 +61,7 @@ func TestSecretRedaction(t *testing.T) {
 		{
 			name:     "url with password",
 			input:    "failed to connect to https://alice:secretPass123@sub.example.com/sub.yaml",
-			expected: "https://alice:***@sub.example.com/sub.yaml",
+			expected: "https://***@sub.example.com/sub.yaml",
 		},
 		{
 			name:     "bearer token in header or log",

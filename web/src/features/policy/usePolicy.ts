@@ -3,20 +3,26 @@ import { api, ApiError } from '../../api/client'
 import type {
   AdmissionRule,
   GlobalNodeFilter,
+  GroupDraftPreviewPayload,
+  GroupDraftPreviewResponse,
   GroupEdge,
   GroupType,
+  MemberSource,
   NodeFilterSpec,
   PolicyGroup,
   PolicyRule,
   RuleAction,
   ValidationResult,
 } from './policyTypes'
+import { normalizeGroupSources } from './policyTypes'
+import type { PreviewResult } from '../publications/publicationTypes'
 
 interface PaginatedGroups {
-  items: PolicyGroup[]
-  page: number
-  page_size: number
-  total: number
+  items?: PolicyGroup[]
+  groups?: PolicyGroup[]
+  page?: number
+  page_size?: number
+  total?: number
 }
 
 interface RulesResult {
@@ -24,6 +30,25 @@ interface RulesResult {
   admission_rules: AdmissionRule[]
   policy_rules: PolicyRule[]
   total: number
+}
+
+export interface CreateGroupInput {
+  name: string
+  group_type: GroupType
+  sources?: MemberSource[]
+  edges?: GroupEdge[]
+  node_filter?: NodeFilterSpec | null
+  empty_fallback_pass?: boolean
+}
+
+export interface UpdateGroupInput {
+  name?: string
+  group_type?: GroupType
+  sources?: MemberSource[]
+  empty_fallback_pass?: boolean
+  expected_revision?: number
+  node_filter?: NodeFilterSpec | null
+  edges?: GroupEdge[]
 }
 
 export function usePolicy() {
@@ -67,8 +92,13 @@ export function usePolicy() {
       const res = await api.get<PaginatedGroups>('/api/v1/policies/groups', { params })
       if (seq !== loadGroupsSeq) return true
 
-      groups.value = res.items || []
-      totalGroups.value = res.total || 0
+      const rawItems = res.items || res.groups || []
+      const normalized = rawItems.map((g) => ({
+        ...g,
+        sources: normalizeGroupSources(g),
+      }))
+      groups.value = normalized
+      totalGroups.value = res.total ?? normalized.length
       page.value = res.page || targetPage
       pageSize.value = res.page_size || targetPageSize
       if (search !== undefined) {
@@ -103,7 +133,10 @@ export function usePolicy() {
         const res = await api.get<PaginatedGroups>('/api/v1/policies/groups', {
           params: { page: p, page_size: ps },
         })
-        const items = res.items || []
+        const items = (res.items || res.groups || []).map((g) => ({
+          ...g,
+          sources: normalizeGroupSources(g),
+        }))
         all.push(...items)
         if (items.length === 0 || all.length >= (res.total || 0) || items.length < ps) {
           break
@@ -118,23 +151,51 @@ export function usePolicy() {
     }
   }
 
-  async function createGroup(name: string, groupType: GroupType, edges: GroupEdge[] = [], nodeFilter?: NodeFilterSpec | null, emptyFallbackPass = false): Promise<PolicyGroup> {
+  async function createGroup(
+    dataOrName: CreateGroupInput | string,
+    groupTypeLegacy?: GroupType,
+    edgesLegacy: GroupEdge[] = [],
+    nodeFilterLegacy?: NodeFilterSpec | null,
+    emptyFallbackPassLegacy = false
+  ): Promise<PolicyGroup> {
     saving.value = true
     validationStale.value = true
     error.value = ''
     try {
+      let name = ''
+      let groupType: GroupType = 'select'
+      let emptyFallbackPass = false
+      let sources: MemberSource[] = []
+
+      if (typeof dataOrName === 'string') {
+        name = dataOrName.trim()
+        groupType = groupTypeLegacy || 'select'
+        emptyFallbackPass = emptyFallbackPassLegacy
+        sources = normalizeGroupSources({ edges: edgesLegacy, node_filter: nodeFilterLegacy })
+      } else {
+        name = dataOrName.name.trim()
+        groupType = dataOrName.group_type
+        emptyFallbackPass = Boolean(dataOrName.empty_fallback_pass)
+        if (Array.isArray(dataOrName.sources)) {
+          sources = dataOrName.sources.map((s, idx) => ({ ...s, position: idx }))
+        } else {
+          sources = normalizeGroupSources({ edges: dataOrName.edges, node_filter: dataOrName.node_filter })
+        }
+      }
+
       const payload: Record<string, unknown> = {
-        name: name.trim(),
+        name,
         group_type: groupType,
         empty_fallback_pass: emptyFallbackPass,
-        edges,
       }
-      if (nodeFilter !== undefined) {
-        payload.node_filter = nodeFilter
-      }
+      payload.sources = sources
       const created = await api.post<PolicyGroup>('/api/v1/policies/groups', payload)
+      const normalized: PolicyGroup = {
+        ...created,
+        sources: normalizeGroupSources(created),
+      }
       await reload()
-      return created
+      return normalized
     } catch (err) {
       const msg = err instanceof Error ? err.message : '创建策略组失败'
       error.value = msg
@@ -144,24 +205,65 @@ export function usePolicy() {
     }
   }
 
-  async function updateGroup(id: string, name?: string, groupType?: GroupType, nodeFilter?: NodeFilterSpec | null, emptyFallbackPass?: boolean): Promise<PolicyGroup> {
+  async function updateGroup(
+    id: string,
+    dataOrName?: UpdateGroupInput | string,
+    groupTypeLegacy?: GroupType,
+    nodeFilterLegacy?: NodeFilterSpec | null,
+    emptyFallbackPassLegacy?: boolean
+  ): Promise<PolicyGroup> {
     saving.value = true
     validationStale.value = true
     error.value = ''
     try {
       const payload: Record<string, unknown> = {}
-      if (emptyFallbackPass !== undefined) payload.empty_fallback_pass = emptyFallbackPass
-      if (name !== undefined) payload.name = name.trim()
-      if (groupType !== undefined) payload.group_type = groupType
-      if (nodeFilter !== undefined) payload.node_filter = nodeFilter
-      const updated = await api.patch<PolicyGroup>(`/api/v1/policies/groups/${encodeURIComponent(id)}`, payload)
+      if (typeof dataOrName === 'object' && dataOrName !== null) {
+        if (dataOrName.name !== undefined) payload.name = dataOrName.name.trim()
+        if (dataOrName.group_type !== undefined) payload.group_type = dataOrName.group_type
+        if (dataOrName.empty_fallback_pass !== undefined) payload.empty_fallback_pass = dataOrName.empty_fallback_pass
+        if (dataOrName.expected_revision !== undefined) payload.expected_revision = dataOrName.expected_revision
+        if (Array.isArray(dataOrName.sources)) {
+          payload.sources = dataOrName.sources.map((s, idx) => ({ ...s, position: idx }))
+        } else if (dataOrName.edges !== undefined || dataOrName.node_filter !== undefined) {
+          payload.sources = normalizeGroupSources({ edges: dataOrName.edges, node_filter: dataOrName.node_filter })
+        }
+      } else {
+        if (typeof dataOrName === 'string') payload.name = dataOrName.trim()
+        if (groupTypeLegacy !== undefined) payload.group_type = groupTypeLegacy
+        if (nodeFilterLegacy !== undefined) payload.node_filter = nodeFilterLegacy
+        if (emptyFallbackPassLegacy !== undefined) payload.empty_fallback_pass = emptyFallbackPassLegacy
+      }
+
+      let updated: PolicyGroup
+      if (typeof dataOrName === 'object' && dataOrName !== null) {
+        try {
+          updated = await api.put<PolicyGroup>(`/api/v1/policies/groups/${encodeURIComponent(id)}`, payload)
+        } catch (putErr: any) {
+          if ((putErr && !(putErr instanceof ApiError)) || putErr?.status === 405 || putErr?.status === 404) {
+            try {
+              updated = await api.patch<PolicyGroup>(`/api/v1/policies/groups/${encodeURIComponent(id)}`, payload)
+            } catch (patchErr) {
+              throw patchErr
+            }
+          } else {
+            throw putErr
+          }
+        }
+      } else {
+        updated = await api.patch<PolicyGroup>(`/api/v1/policies/groups/${encodeURIComponent(id)}`, payload)
+      }
+
+      const normalized: PolicyGroup = {
+        ...updated,
+        sources: normalizeGroupSources(updated),
+      }
       const idx = groups.value.findIndex((g) => g.id === id)
-      if (idx >= 0) groups.value[idx] = updated
+      if (idx >= 0) groups.value[idx] = normalized
       const topoIdx = allTopologyGroups.value.findIndex((g) => g.id === id)
-      if (topoIdx >= 0) allTopologyGroups.value[topoIdx] = updated
-      else allTopologyGroups.value.push(updated)
+      if (topoIdx >= 0) allTopologyGroups.value[topoIdx] = normalized
+      else allTopologyGroups.value.push(normalized)
       await reload()
-      return updated
+      return normalized
     } catch (err) {
       error.value = err instanceof Error ? err.message : '更新策略组失败'
       throw err
@@ -199,7 +301,7 @@ export function usePolicy() {
       if (topoGrp) topoGrp.edges = edges
       await reload()
     } catch (err) {
-      error.value = err instanceof Error ? err.message : '保存策略组连接边失败'
+      error.value = err instanceof Error ? err.message : '保存策略组来源失败'
       throw err
     } finally {
       saving.value = false
@@ -437,6 +539,23 @@ export function usePolicy() {
     }
   }
 
+  async function fetchGroupSnapshotPreview(
+    payload: GroupDraftPreviewPayload
+  ): Promise<GroupDraftPreviewResponse> {
+    const body = {
+      group_id: payload.group_id,
+      expected_revision: payload.expected_revision,
+      name: payload.name,
+      group_type: payload.group_type,
+      sources: (payload.sources || []).map((s, idx) => ({
+        ...s,
+        position: s.position !== undefined ? s.position : idx,
+      })),
+      target: payload.target || 'mihomo',
+    }
+    return await api.post<GroupDraftPreviewResponse>('/api/v1/policies/groups/preview', body)
+  }
+
   return {
     groups,
     globalFilter,
@@ -473,5 +592,6 @@ export function usePolicy() {
     validateGraph,
     loadGlobalFilter,
     updateGlobalFilter,
+    fetchGroupSnapshotPreview,
   }
 }

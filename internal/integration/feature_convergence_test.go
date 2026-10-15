@@ -51,8 +51,8 @@ func (r *controlledFakeRunner) Run(ctx context.Context, run *domain.ProbeRun, no
 	return nil
 }
 
-// TestFeatureConvergence_SchemaMigrationTo8 verifies migrating from scratch through all 8 migrations.
-func TestFeatureConvergence_SchemaMigrationTo8(t *testing.T) {
+// TestFeatureConvergence_SchemaMigrationTo20 verifies all current migrations.
+func TestFeatureConvergence_SchemaMigrationTo20(t *testing.T) {
 	ctx := context.Background()
 	db, err := sqlite.Open(sqlite.Config{
 		Path:        fmt.Sprintf("file:migration_test_%d?mode=memory&cache=shared", time.Now().UnixNano()),
@@ -76,8 +76,8 @@ func TestFeatureConvergence_SchemaMigrationTo8(t *testing.T) {
 	if !report.Ready {
 		t.Fatalf("expected readiness report Ready=true, got report: %+v", report)
 	}
-	if report.SchemaVersion != 17 {
-		t.Fatalf("expected schema version 17 (explicit empty PASS migration), got %d", report.SchemaVersion)
+	if report.SchemaVersion != 20 {
+		t.Fatalf("expected schema version 20 (sources, fetch settings, revision snapshots), got %d", report.SchemaVersion)
 	}
 	if len(report.MissingTables) > 0 {
 		t.Fatalf("unexpected missing tables: %v", report.MissingTables)
@@ -509,7 +509,7 @@ func TestFeatureConvergence_FullStack(t *testing.T) {
 	// Final group_filtered_total = 1 (only node1)
 	// -------------------------------------------------------------------------
 	previewReq := map[string]any{
-		"target":      "singbox",
+		"target":      "mihomo",
 		"revision_id": rev.ID,
 	}
 	resp, body = doReq(http.MethodPost, "/api/v1/publications/preview", previewReq)
@@ -596,7 +596,7 @@ func TestFeatureConvergence_FullStack(t *testing.T) {
 		domain.TargetQuantumultX,
 	}
 
-	expectedDigest := previewData.Data.SnapshotDigest
+	var expectedDigest string
 	for _, target := range targets {
 		tResp, tBody := doReq(http.MethodPost, "/api/v1/publications/preview", map[string]any{
 			"target":      string(target),
@@ -613,6 +613,9 @@ func TestFeatureConvergence_FullStack(t *testing.T) {
 		}
 		if err := json.Unmarshal(tBody, &targetData); err != nil {
 			t.Fatalf("unmarshal target %s failed: %v", target, err)
+		}
+		if expectedDigest == "" {
+			expectedDigest = targetData.Data.SnapshotDigest
 		}
 		if targetData.Data.SnapshotDigest != expectedDigest {
 			t.Errorf("target %s snapshot digest mismatch: expected %s, got %s",

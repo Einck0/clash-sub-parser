@@ -98,6 +98,14 @@ Variables supported in `.env` and `docker-compose.yml`:
 
 ---
 
+## Subscription update routing
+
+Settings → Subscription Update Route controls the **next** fetch without restarting. `environment` (migration default) inherits `--fetch-proxy` / `CSP_FETCH_PROXY`; `direct` ignores that fallback; `proxy` uses the persisted HTTP/HTTPS endpoint. An explicit per-subscription override takes precedence, but private overrides must match the currently trusted global relay. Subscription targets and every redirect still require public IPs and are IP-pinned.
+
+Management-authenticated `GET/PUT /api/v1/settings/subscription-fetch` uses the existing cookie CSRF protection. Example PUT: `{"mode":"proxy","proxy_url":"http://user:password@proxy.example:7890"}`. HTTP/HTTPS and an explicit port are required. Omitting `proxy_url` retains the saved URL **and credentials**; `{"mode":"direct","clear_proxy_url":true}` clears them. `{"mode":"environment"}` restores inheritance without erasing the saved proxy. Invalid requests change nothing, including auth settings. GET returns only credential-free configured/effective endpoints, credential-presence flags, and effective source/mode; never resend a masked URL. Proxy credentials are stored in the existing SQLite settings record (not a vault), so protect database and backup access.
+
+Fetch history retains safe stage/reason codes for DNS, connection, TLS, HTTP, body and parse failures. Failure/partial refresh preserves old source associations; complete success prunes only that subscription’s associations and retains node assets/history. A configured proxy cannot repair an unavailable upstream.
+
 ## Local Development & Testing
 
 ### Standalone Go Server

@@ -195,6 +195,7 @@ type Service struct {
 	sourceHistoryRepo domain.NodeSourceHistoryRepository
 	poolProvider      NodePoolStateProvider
 	defaultFetchProxy string
+	settingsRepo      domain.SettingsRepository
 	clock             func() time.Time
 	mu                sync.Mutex
 }
@@ -267,6 +268,10 @@ func WithNodePoolStateProvider(provider NodePoolStateProvider) Option {
 	return func(s *Service) {
 		s.poolProvider = provider
 	}
+}
+
+func WithFetchSettingsRepository(repo domain.SettingsRepository) Option {
+	return func(s *Service) { s.settingsRepo = repo }
 }
 
 // WithDefaultFetchProxy configures the fallback outbound proxy for subscriptions without an explicit proxy ref.
@@ -372,12 +377,30 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 	}
 
 	startedAt := domain.NowUTC()
+	configuredProxy := s.defaultFetchProxy
+	var fetchErr error
+	if s.settingsRepo != nil {
+		settings, err := s.settingsRepo.Get(ctx)
+		if err != nil {
+			fetchErr = domain.NewInternalError("fetch_settings_failed", "cannot read subscription fetch settings")
+		} else {
+			configuredProxy = settings.EffectiveSubscriptionFetchProxy(s.defaultFetchProxy)
+		}
+	}
 	proxyURL := sub.RefreshPolicy.FetchProxyRef
 	if proxyURL == "" {
-		proxyURL = s.defaultFetchProxy
+		proxyURL = configuredProxy
 	}
 	opts := fetch.OptionsFromPolicy(sub.SourceURLSecretRef, sub.RefreshPolicy, proxyURL)
-	fetchResp, fetchErr := s.fetcher.Fetch(ctx, opts)
+	if fetchErr == nil && s.settingsRepo != nil {
+		if client, ok := s.fetcher.(*fetch.Client); ok {
+			opts.Policy, fetchErr = client.PolicyForProxy(configuredProxy)
+		}
+	}
+	var fetchResp *fetch.Response
+	if fetchErr == nil {
+		fetchResp, fetchErr = s.fetcher.Fetch(ctx, opts)
+	}
 	if fetchErr != nil {
 		finishedAt := domain.NowUTC()
 		fetchID := domain.MustNewUUIDv7()
@@ -418,7 +441,7 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 	if extractErr != nil {
 		finishedAt := domain.NowUTC()
 		fetchID := domain.MustNewUUIDv7()
-		redactedErr := domain.RedactSensitiveInfo(extractErr.Error())
+		redactedErr := "[stage:parse reason_code:parse_failed] " + domain.RedactSensitiveInfo(extractErr.Error())
 
 		failedFetch := domain.SubscriptionFetch{
 			ID:             fetchID,
@@ -455,7 +478,7 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 	if len(extractResult.Items) == 0 {
 		finishedAt := domain.NowUTC()
 		fetchID := domain.MustNewUUIDv7()
-		redactedErr := "extracted 0 valid nodes from subscription content"
+		redactedErr := "[stage:parse reason_code:empty_subscription] extracted 0 valid nodes from subscription content"
 
 		failedFetch := domain.SubscriptionFetch{
 			ID:             fetchID,
@@ -494,8 +517,10 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 	nodesParsed := len(extractResult.Items) + extractResult.Rejected
 	nodesValid := len(extractResult.Items)
 	outcome := domain.FetchOutcomeSuccess
+	partialDiagnostic := ""
 	if extractResult.Rejected > 0 {
 		outcome = domain.FetchOutcomePartial
+		partialDiagnostic = fmt.Sprintf("[stage:parse reason_code:partial_subscription] rejected %d entries", extractResult.Rejected)
 	}
 
 	fetchID := domain.MustNewUUIDv7()
@@ -520,7 +545,7 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 			finishedStr,
 			string(outcome),
 			fetchResp.ContentDigest,
-			"",
+			partialDiagnostic,
 			nodesParsed,
 			nodesValid,
 		); err != nil {
@@ -969,11 +994,13 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 								}
 							}
 
-							if _, err := tx.ExecContext(ctx, `
+							if outcome == domain.FetchOutcomeSuccess {
+								if _, err := tx.ExecContext(ctx, `
 								DELETE FROM node_sources
 								WHERE node_logical_id = ? AND subscription_id = ?;
-							`, matchedNode.logicalID, sub.ID); err != nil {
-								return fmt.Errorf("failed to unlink old shared node source: %w", err)
+							 `, matchedNode.logicalID, sub.ID); err != nil {
+									return fmt.Errorf("failed to unlink old shared node source: %w", err)
+								}
 							}
 						} else {
 							targetLogicalID = matchedNode.logicalID
@@ -1177,74 +1204,77 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 			}
 		}
 
-		// 4. Archive obsolete node sources under current subscription before pruning
-		var histTableExists int
-		_ = tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='node_source_history';").Scan(&histTableExists)
-		if histTableExists > 0 {
-			type pruneRow struct {
-				nodeID    string
-				fetchID   string
-				rev       int64
-				startedAt sql.NullString
-			}
-			rows, qErr := tx.QueryContext(ctx, `
-				SELECT ns.node_logical_id, ns.last_seen_fetch_id, COALESCE(n.connection_revision, 1), sf.started_at
-				FROM node_sources ns
-				JOIN nodes n ON ns.node_logical_id = n.logical_id
-				LEFT JOIN subscription_fetches sf ON ns.last_seen_fetch_id = sf.id
-				WHERE ns.subscription_id = ? AND ns.last_seen_fetch_id != ?;
-			`, sub.ID, fetchID)
-			if qErr == nil {
-				var toPrune []pruneRow
-				for rows.Next() {
-					var p pruneRow
-					if scanErr := rows.Scan(&p.nodeID, &p.fetchID, &p.rev, &p.startedAt); scanErr == nil {
-						toPrune = append(toPrune, p)
-					}
+		// 4. Archive obsolete node sources and prune diff ONLY on full success
+		// Failed or partial refreshes preserve unseen old sources and history without pruning.
+		if outcome == domain.FetchOutcomeSuccess {
+			var histTableExists int
+			_ = tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='node_source_history';").Scan(&histTableExists)
+			if histTableExists > 0 {
+				type pruneRow struct {
+					nodeID    string
+					fetchID   string
+					rev       int64
+					startedAt sql.NullString
 				}
-				rows.Close()
+				rows, qErr := tx.QueryContext(ctx, `
+					SELECT ns.node_logical_id, ns.last_seen_fetch_id, COALESCE(n.connection_revision, 1), sf.started_at
+					FROM node_sources ns
+					JOIN nodes n ON ns.node_logical_id = n.logical_id
+					LEFT JOIN subscription_fetches sf ON ns.last_seen_fetch_id = sf.id
+					WHERE ns.subscription_id = ? AND ns.last_seen_fetch_id != ?;
+				`, sub.ID, fetchID)
+				if qErr == nil {
+					var toPrune []pruneRow
+					for rows.Next() {
+						var p pruneRow
+						if scanErr := rows.Scan(&p.nodeID, &p.fetchID, &p.rev, &p.startedAt); scanErr == nil {
+							toPrune = append(toPrune, p)
+						}
+					}
+					rows.Close()
 
-				if len(toPrune) > 0 {
-					histStmt, prepErr := tx.PrepareContext(ctx, `
-						INSERT INTO node_source_history (
-							id, node_logical_id, subscription_id, source_identity, source_label,
-							connection_revision, relation_state, cause, first_observed_at,
-							last_observed_at, evidence_kind, evidence_key, evidence_json, created_at
-						) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-						ON CONFLICT(node_logical_id, evidence_key) DO UPDATE SET
-							last_observed_at = excluded.last_observed_at;
-					`)
-					if prepErr == nil {
-						defer histStmt.Close()
-						for _, p := range toPrune {
-							histID := domain.MustNewUUIDv7()
-							evidenceKey := fmt.Sprintf("refresh_removed:%s:%s", sub.ID, p.fetchID)
-							evidenceJSON := fmt.Sprintf(`{"subscription_id":%q,"subscription_name":%q,"pruned_by_fetch_id":%q,"last_seen_fetch_id":%q}`, sub.ID, sub.Name, fetchID, p.fetchID)
-							var firstObs any = nil
-							if p.startedAt.Valid && strings.TrimSpace(p.startedAt.String) != "" {
-								firstObs = p.startedAt.String
-							}
-							if _, execErr := histStmt.ExecContext(ctx,
-								histID, p.nodeID, sub.ID, "sub:"+sub.ID, sub.Name,
-								p.rev, string(domain.RelationStateVerified), string(domain.CauseRefreshRemoved),
-								firstObs, nowStr, "subscription_refresh_prune", evidenceKey,
-								evidenceJSON, nowStr,
-							); execErr != nil {
-								return fmt.Errorf("failed to insert history snapshot on refresh prune (node=%s): %w", p.nodeID, execErr)
+					if len(toPrune) > 0 {
+						histStmt, prepErr := tx.PrepareContext(ctx, `
+							INSERT INTO node_source_history (
+								id, node_logical_id, subscription_id, source_identity, source_label,
+								connection_revision, relation_state, cause, first_observed_at,
+								last_observed_at, evidence_kind, evidence_key, evidence_json, created_at
+							) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+							ON CONFLICT(node_logical_id, evidence_key) DO UPDATE SET
+								last_observed_at = excluded.last_observed_at;
+						`)
+						if prepErr == nil {
+							defer histStmt.Close()
+							for _, p := range toPrune {
+								histID := domain.MustNewUUIDv7()
+								evidenceKey := fmt.Sprintf("refresh_removed:%s:%s", sub.ID, p.fetchID)
+								evidenceJSON := fmt.Sprintf(`{"subscription_id":%q,"subscription_name":%q,"pruned_by_fetch_id":%q,"last_seen_fetch_id":%q}`, sub.ID, sub.Name, fetchID, p.fetchID)
+								var firstObs any = nil
+								if p.startedAt.Valid && strings.TrimSpace(p.startedAt.String) != "" {
+									firstObs = p.startedAt.String
+								}
+								if _, execErr := histStmt.ExecContext(ctx,
+									histID, p.nodeID, sub.ID, "sub:"+sub.ID, sub.Name,
+									p.rev, string(domain.RelationStateVerified), string(domain.CauseRefreshRemoved),
+									firstObs, nowStr, "subscription_refresh_prune", evidenceKey,
+									evidenceJSON, nowStr,
+								); execErr != nil {
+									return fmt.Errorf("failed to insert history snapshot on refresh prune (node=%s): %w", p.nodeID, execErr)
+								}
 							}
 						}
 					}
 				}
 			}
-		}
 
-		// Prune obsolete node_sources associations from current subscription
-		const pruneSourcesSQL = `
-		DELETE FROM node_sources
-		WHERE subscription_id = ? AND last_seen_fetch_id != ?;`
+			// Prune obsolete node_sources associations from current subscription
+			const pruneSourcesSQL = `
+			DELETE FROM node_sources
+			WHERE subscription_id = ? AND last_seen_fetch_id != ?;`
 
-		if _, err := tx.ExecContext(ctx, pruneSourcesSQL, sub.ID, fetchID); err != nil {
-			return fmt.Errorf("failed to prune obsolete node sources for sub %s: %w", sub.ID, err)
+			if _, err := tx.ExecContext(ctx, pruneSourcesSQL, sub.ID, fetchID); err != nil {
+				return fmt.Errorf("failed to prune obsolete node sources for sub %s: %w", sub.ID, err)
+			}
 		}
 
 		// NON-DESTRUCTIVE INVARIANT: Nodes themselves are NEVER deactivated or deleted on refresh pruning.
@@ -1261,6 +1291,7 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 		SubscriptionID: sub.ID,
 		Outcome:        outcome,
 		ContentDigest:  fetchResp.ContentDigest,
+		RedactedError:  partialDiagnostic,
 		NodesParsed:    nodesParsed,
 		NodesValid:     nodesValid,
 	}, nil
@@ -2088,4 +2119,3 @@ func (s *Service) GetNodeSourceHistory(ctx context.Context, logicalID string) (*
 		AttributionStatus: aggStatus,
 	}, nil
 }
-

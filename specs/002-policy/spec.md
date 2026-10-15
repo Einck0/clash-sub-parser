@@ -1,80 +1,182 @@
 ---
 feature: 002-policy
-title: Policy Capability Specification
-status: candidate
+title: Policy Capability Specification (Unified Member Sources Rebuild)
+status: READY
 schema: speckit-native
 ---
 
 # Policy Capability Specification
 
+## Current delivery amendment (2026-10-15)
+
+This section governs the current delivery; superseded prose below remains historical evidence, not a second authority. Current run: `pi_run_20261015_230722_1113226`, change: `change_pi_run_20261015_230722_1113226`, package: `whole_task`, epoch 1. Feature ownership stays `specs/002-policy`; related domain baselines are 001-inventory, 003-probe, 004-publication, 005-auth, 006-ui. Previous run outcomes are not current acceptance.
+
+- **FR-DEL-01 (P1 subscription recovery)**: Diagnose every enabled production subscription by actual fetch/HTTP/parse stage; do not infer global failure or a proxy-only cause. Preserve stable identities, source/history associations on failed/partial refresh, and immutable publications. Report genuine upstream failures separately from application defects; do not fabricate successful refreshes or weaken TLS/SSRF to obtain them.
+- **FR-DEL-02 (P1 settings proxy)**: Settings SHALL expose persistent subscription-fetch routing: `environment` (inherit startup configuration), `direct` (explicit bypass), `proxy` (explicit HTTP/HTTPS proxy). Default after migration is environment. Saving affects the next manual AND scheduled refresh without restart and survives restart. Existing subscription-specific override takes precedence. Each refresh captures a coherent configuration snapshot. Explicit configured proxy endpoint trust must never exempt subscription or redirect destinations from public-IP validation/pinning. Invalid saves are atomic and preserve the effective setting. Management-only GET/audit/errors must not reveal proxy credentials.
+- **FR-DEL-03 (P1 diagnosability)**: Redaction SHALL hide secrets without consuming safe trailing causes. Stable sanitized error stages/codes must distinguish proxy connection, DNS, TLS, HTTP, parse, empty and partial outcomes where observed, including wrapped errors. Secrets in userinfo, query parameters, assignments and URL errors remain protected.
+- **FR-DEL-04 (P1 single authority)**: Ordered sources are the sole persistent membership authority after one-time migration. No ongoing sources/edges double-write, empty-source legacy fallback, or silent loss of remove/regex/mixed order. Existing supported business actions are migrated to sources or explicitly rejected when obsolete; previews, revisions/rollback, delete and exports remain coherent. Historical HR-143 is retained for migration equivalence ONLY, not a new group-global filter. Conditions are peer source operations; sequential add/remove permits re-entry.
+- **FR-DEL-05 (P1 reproducible release)**: Current source, embedded assets, local gates, independent review, applicable browser/visual acceptance, committed Git SHA, cloud checks/build/publish, image digest/OCI revision and deployed identity must form an auditable chain. Preserve remote changes and local dirty work; no forced push. Reuse existing cloud-delivery mechanism. A skipped publication job or an old successful image cannot satisfy this requirement. A package requiring private visibility must pass genuine private/anonymous-access gates before publication/deployment; do not silently publish publicly or bypass missing API authorization.
+- **FR-DEL-06 (P1 production acceptance)**: Back up SQLite online with integrity/hash, record preimages/rollback point before authorized production writes. Use identifiable test objects, restore all temporary setting/object changes, preserve user assets. Test confirmed core user-visible inventory/policy/probe/publication/auth/UI actions against the actual deployment, with real business assertions and explicit pending/failed/not-applicable status. Existing coverage register is a starting inventory, not a completion score. Latest instruction removes phone testing from required scope and forbids connecting to or modifying the phone. Four browser viewports still apply; never call them real-phone evidence.
+
+Acceptance examples: setting direct then proxy changes the actual next fetch route; invalid proxy preserves prior setting; reset to environment restores fallback; a credentialed proxy is masked on GET and causes a real proxy request without leaking; wrong route/upstream failure retains original assets; error suffix remains actionable; source add/remove/add and group_ref/group_nodes round-trip, draft no-write/conflict, over-250-node/150-group integration, and target-specific export validation pass on the final source.
+
+Production deployment is authorized by the current complete-delivery instruction after applicable gates. This does not authorize ambiguous historical group restoration, package visibility mutation without the necessary authenticated owner capability, authentication changes, or unrelated services/framework work. The old literal `去掉(...)` has no evidenced exclusion DSL; its intended reinterpretation is unresolved and MUST NOT be invented. Copy-only historical proposals remain possible; no ambiguous permanent rewrite. Optional unsupported product enhancements are not mandatory new scope.
+
+
+> **治理状态**: `READY` (All Requirements, Contracts & Packages Frozen; Sequential Add/Remove Pipeline Confirmed)
+> **说明**: 本规范为策略组子系统彻底重构（Rebuild）的最终冻结规格。历史运行态曾绑定 `pi_run_20261011_190715_2256208`；当前身份见上方交付修订。用户已确认『组级条件与regex同级、按顺序加减』流水线（候选 A 顺序重入生效；候选 B 全局差集彻底废除；历史 B1/B2 彻底废除；A/B pending 消除）。
+> **独立子包就绪状态**: 用户确认的库存拉取源保留与纯节点导出空组解耦修复包已冻结并具备独立契约 (`specs/002-policy/confirmed-fixes-contract.md`)，状态为 `READY`，对齐 `specs/001-inventory` (FR-INV-02, 07) 与 `specs/004-publication` (FR-PUB-02, 03)。
+
 ## Purpose
 
-本规范定义 Clash 订阅解析器（clash-sub-parser）的策略组与图解析器核心能力。系统必须支持灵活的代理分流拓扑，提供两种核心的成员引用模式——直接将子策略组作为节点引用（Direct Group Reference）与解包获取其中的叶节点（Unpack / Flatten Leaf Nodes），支持准入规则 REST 安全删除与 URL 编码防护，并在策略组为空时提供受控的 PASS 兜底机制与防越权隔离。
+本规范定义 Clash 订阅解析器（clash-sub-parser）的策略组与图解析器核心能力。系统必须支持灵活的代理分流拓扑，废除分裂的 `group_edges` 与 `group_node_filters` 双重真源缺陷，建立唯一权威的有序成员来源操作模型（`member_sources`，支持 `add` 与 `exclude` 增减操作，涵盖 `node`、`group_ref`、`group_nodes`、`matching` 与 `builtin` 类别）。系统废除额外全局套壳业务 filter，来源条件仅影响自身候选；严格保证成员顺序的交错保持、首次出现去重、解包递归叶节点展开、双向环路阻断、单事务原子更新与乐观并发控制；并在策略组为空时提供受控的 PASS 兜底机制与防越权隔离。
 
 ## User Scenarios & Priority
 
-### User Story 1 - 策略组双模式嵌套引用 (Priority: P1)
-- **GIVEN** 管理员创建了一个顶级策略组 G1 和一个地区子组 G2
-- **WHEN** 管理员在 G1 中选择引用 G2
-- **THEN** 系统必须支持直接以组名引用 G2（Mihomo 原生组嵌套），亦必须支持解包模式将 G2 内的最终叶节点直接平铺展开至 G1
+### User Story 1 - 统一有序成员来源增减混排编排 (Priority: P1)
+- **GIVEN** 管理员在策略组编辑工作台中配置策略组成员
+- **WHEN** 管理员按顺序混合编排了 `[+group_nodes(HK), -matching(regex:.*01.*), +node(HK-01-Backup)]`
+- **THEN** 系统以单一权威有序列表 `member_sources` 持久化，图解析器严格按照编排顺序全序求值并执行首次出现去重，严禁代码硬编码“节点在前、子组在后”的分块破坏顺序。
 
-### User Story 2 - 全池动态条件无截断匹配 (Priority: P1)
+### User Story 2 - 子组解包展开叶节点与同级条件匹配 (Priority: P1)
+- **GIVEN** 管理员创建了包含子节点 N_A 与 N_B 的地区子组 G_sub，并在 G_sub 内部配置了地区匹配来源
+- **WHEN** 顶级策略组 G_top 以解包模式（`group_nodes`）引用 G_sub，且该解包项自身配置了延迟或可用性匹配条件
+- **THEN** 解析器首先对 G_sub 按其自身内部来源操作求值产出真实叶节点，随后平铺展开至 G_top，并由该项自带的匹配条件对展开叶节点执行过滤，最终输出真实节点列表，不包含 G_sub 组名。
+
+### User Story 3 - 循环拓扑全方位 DAG 检测阻断 (Priority: P1)
+- **GIVEN** 管理员配置策略组拓扑
+- **WHEN** 产生 `group_ref` 直接成环（如 A -> B -> A）或 `group_nodes` 展开成环（如 A 展开 B，B 展开 A）
+- **THEN** 系统在保存与发布预览时均立即阻断，返回 HTTP 422 `cycle_detected` 并输出精准的可视化环路路径（Cycle Path）。
+
+### User Story 4 - 全池动态条件无截断匹配 (Priority: P1)
 - **GIVEN** 系统导入了超过 200 个有效节点
-- **WHEN** 管理员配置了一个按国家代码或正则匹配的动态策略组
-- **THEN** 图解析器全量遍历所有活动节点，返回所有匹配项，严禁施加 50 节点的隐藏硬分页截断
+- **WHEN** 管理员配置了一个按国家代码或正则匹配的动态来源项
+- **THEN** 图解析器全量遍历所有活动节点，返回所有匹配项，严禁施加 50 节点的隐藏硬分页截断。
 
-### User Story 3 - 准入规则安全删除与 REST 编码防护 (Priority: P2)
-- **GIVEN** 管理员需要调整分流规则或删除失效规则
-- **WHEN** 发起 HTTP DELETE 请求或引用特殊字符命名的策略组
-- **THEN** 系统按 REST 语义安全删除并记录审计，支持 URL 编码转义并抵御路径穿越
+### User Story 5 - 单事务原子替换与乐观版本控制 (Priority: P2)
+- **GIVEN** 管理员在 Web 端编辑并保存策略组
+- **WHEN** 提交包含元数据、全量 `member_sources` 与可选约束的请求
+- **THEN** 服务端在单数据库事务中原子执行校验与全量替换；若提交的 `expected_revision` 与数据库当前版本不一致，服务端返回 HTTP 409 `revision_conflict`，杜绝脏写。
+
+### User Story 6 - 空策略组安全兜底与纯节点导出解耦 (Priority: P2)
+- **GIVEN** 某个策略组由于筛选条件过严导致成员解析为 0
+- **WHEN** 导出为 Mihomo 配置且启用了 `empty_fallback_pass` 时输出 `proxies: [PASS]`；未启用时输出 `REJECT`；当导出为纯节点目标（SingBox, Surge, QX）时，空策略组不阻断纯节点配置生成。
 
 ---
 
 ## Requirements
 
-### 1. 策略组结构与成员引用模式
+### 1. 统一有序来源与成员解析引擎
 
-#### Requirement: 直接将其他策略组作为节点引用 [FR-POL-01] <a id="req-pol-direct-ref"></a>
-图解析器与编译器 SHALL 支持将现有策略组作为目标策略组的直属成员引用（Mihomo 原生组嵌套）。在导出时直接在 proxies 数组中保留子策略组名称。包含循环引用防御。
+#### Requirement: 唯一权威有序来源增减操作模型 [FR-POL-01] <a id="req-pol-unified-sources"></a>
+策略组成员编排 SHALL 废除 `group_edges` 与 `group_node_filters` 的双源分立，改为单一权威有序的 `member_sources` 列表。每个来源项具备明确的操作类型（`op: add | remove`）、相对位置（`position`）与类别（`kind`）。系统 MUST 支持核心类别并实行类型域严格隔离：
+1. `manual_node`: 显式手工指定的稳定逻辑 ID 节点；
+2. `group_ref`: 直接策略组引用（面向支持组嵌套的目标，输出组名；删除时仅匹配组名引用自身 identity，绝不移除叶节点）；
+3. `group_nodes`: 解包展开子组（递归求值并平铺其最终真实叶节点；删除时仅匹配叶节点，绝不移除直接组引用）；
+4. `regex` / `filter`: 条件匹配来源（支持包含 regex 正则、国家地区 geo、协议 protocol、探测 probe 的同级条件，同级条件不是全组隐式交集；`pattern` 正则仅匹配候选节点名称，严禁误匹配组 ID；条件仅影响自身候选）；
+5. `typed_builtin`: 类型化内建流控项（PASS, DIRECT, REJECT），严禁伪造虚假 UUID。
 
-##### Scenario: Mihomo 原生嵌套组引用 <a id="scenario-pol-direct-nesting"></a>
-- **GIVEN** 顶级策略组 Proxy 与子策略组 Auto-HK
-- **WHEN** 管理员在 Proxy 中添加 Auto-HK 作为直接引用
-- **THEN** 编译器在 Proxy 的 proxies 成员中输出 "Auto-HK"，客户端可直接执行嵌套切换
+系统 SHALL 彻底废除策略组上的全局套壳业务 filter（`constraints`），不搞长期双重真源（Dual Authority），避免新策略组出现旧 B1 现象。存量 filter-only 策略组平滑迁移为 `inventory_query_source`。
 
-##### Scenario: 循环引用检测与防护 <a id="scenario-pol-cycle-protect"></a>
-- **GIVEN** 策略组 A 引用了策略组 B
-- **WHEN** 管理员尝试在策略组 B 中添加引用策略组 A
-- **THEN** 系统检测出 DAG 环路并阻断保存，返回 400 Bad Request 与明确循环依赖报错
+##### Scenario: 混合增减来源有序编排保存与读取 <a id="scenario-pol-unified-sources-save"></a>
+- **GIVEN** 管理员在策略组中编排了 `[+manual_node:A, +group_ref:B, -regex:C, +group_nodes:D, +typed_builtin:PASS]`
+- **WHEN** 客户端请求保存该策略组
+- **THEN** 服务端持久化至 `policy_group_sources` 表，重读返回相同顺序且属性完全一致的来源操作列表
 
-#### Requirement: 解包获得子策略组叶节点 [FR-POL-02] [NEEDS CLARIFICATION] <a id="req-pol-unpack-leaf"></a>
-系统 SHALL 支持“解包获得其中节点”模式（Unpack / Flatten Leaf Nodes）。当启用解包时，图解析器必须递归展开子组引用的所有末端叶节点，平铺合并至当前策略组中。
+#### Requirement: 严格交错保序与首次出现去重 [FR-POL-02] <a id="req-pol-order-dedup"></a>
+图解析器在求值 `member_sources` 时，MUST 严格保持各来源项产生的候选条目的相对全序，**严禁硬编码分类分块（如将节点前置、组后置）**。系统 MUST 在全局命名空间（`node:<id>`, `group:<id>`, `builtin:<name>`）下对当前有序集合实行 **First-seen wins** 去重规则，首次出现的条目保留其位置。删除操作仅剔除当前已入选条目，删除后不留下永久“墓碑”，后续追加条目可重新加入新位置。节点准入严格复用 Scope、IP Risk 与 Active 状态判定，无额外强加“必须健康”门禁，杜绝静默 drop。
 
-##### Scenario: 解包平铺叶节点至父组 <a id="scenario-pol-flatten-leaf"></a>
-- **GIVEN** 子策略组 G2 包含叶节点 N1 与 N2
-- **WHEN** 顶级策略组 G1 启用解包模式引用 G2
-- **THEN** G1 在最终解析结果中直接包含 N1 与 N2，而不包含 G2 本身
+##### Scenario: 相对交错顺序保持 <a id="scenario-pol-interleaved-preserve"></a>
+- **GIVEN** 来源编排为 `[+manual_node:N1, +group_ref:G2, +manual_node:N3]`
+- **WHEN** 图解析器输出解析快照
+- **THEN** 成员列表中严格保持 N1、G2 组名、N3 的前后相对顺序
 
-##### Scenario: 解包展开去重保序 <a id="scenario-pol-dedup-order"></a>
-- **GIVEN** 多个解包子组包含重复的叶节点
-- **WHEN** 解析器执行叶节点展开
-- **THEN** 依据用户在 Q1 中的决策执行稳定去重并保持相对展开顺序
+##### Scenario: 首次出现去重与无墓碑重入 <a id="scenario-pol-first-seen-dedup"></a>
+- **GIVEN** 来源编排为 `[+manual_node:N1, -manual_node:N1, +manual_node:N1]`
+- **WHEN** 图解析器求值
+- **THEN** 最终成员列表包含 N1，N1 成功重新加入新位置，未被历史删除遗留的永久墓碑拦截
 
-#### Requirement: 成员模式数据契约与前端编辑 [FR-POL-03] [NEEDS CLARIFICATION] <a id="req-pol-member-contract"></a>
-策略组配置契约与前端抽屉 SHALL 明确区分 direct 与 unpack 两种成员模式，向管理面板提供清晰的单选/勾选交互。
+#### Requirement: 子组解包展开与同级条件匹配 [FR-POL-03] <a id="req-pol-unpack-expansion"></a>
+当来源项为 `group_nodes` 时，图解析器 MUST 递归求值目标子组。求值过程遵循以下原则（用户已确认）：
+1. 子组首先依据其自身内部的 `member_sources` 来源操作项完整求值，产出其真实叶节点；子组内部的原始正则来源与手工节点在同级合并，父组不能将过滤套在子组所有来源上；
+2. 若该解包来源项配置了同级匹配条件，该条件仅作用于这批解包产出的真实叶节点集合；
+3. 若子组内部又包含 `group_ref`，解包递归深入收集其叶节点，最终平铺输出具体节点，不输出子组名；
+4. 内建项（如 PASS）依据目标编译器支持能力决定是否保留。
 
-##### Scenario: 策略组抽屉配置双模式 <a id="scenario-pol-drawer-schema"></a>
-- **GIVEN** 管理员打开策略组编辑抽屉
-- **WHEN** 选择添加策略组成员
-- **THEN** 界面清晰提供“直接引用子组”与“解包叶节点”选项
+##### Scenario: 子组先自决求值展开 <a id="scenario-pol-unpack-filter-flow"></a>
+- **GIVEN** 子组 G_child 配置了匹配来源产出合格节点 N_fast；父组 G_parent 配置了解包 G_child 并附加地区条件 `HK`
+- **WHEN** G_parent 执行解析
+- **THEN** G_child 先求值出 N_fast，随后 G_parent 的 `HK` 条件检验 N_fast 是否为香港节点，匹配则入选
 
-#### Requirement: 成员来源混合交错顺序保持 [FR-POL-04] [NEEDS CLARIFICATION] <a id="req-pol-interleaved-order"></a>
-当策略组同时包含显式节点、子策略组引用及规则筛选成员时，系统 SHALL 依据用户在 Q2 中的决策，保持各来源成员在配置界面中的相对交错保序性。
+#### Requirement: 全拓扑深度 DAG 检测与环路阻断 [FR-POL-04] <a id="req-pol-dag-cycle-block"></a>
+系统 SHALL 对所有策略组拓扑执行严格的 DAG 环路检测。无论是 `group_ref` 形成的直接引用环，还是 `group_nodes` 形成的解包展开环，或两者的混合环路，在策略组保存（`SaveGroup`）与发布预览（`Preview`）阶段 MUST 予以明确阻断，返回 HTTP 422 `cycle_detected` 并输出准确的 `cycle_path`。系统设置有界深度边界（最大 16 层），杜绝栈溢出，且不进行静默截断。
 
-##### Scenario: 相对交错顺序严格保持 <a id="scenario-pol-interleaved-preserve"></a>
-- **GIVEN** 管理员编排了 [节点A, 子组B, 节点C] 的混合交错序列
-- **WHEN** 解析器执行序列化输出
-- **THEN** 输出序列中严格保持节点 A、子组 B 展开、节点 C 的前后相对顺序
+##### Scenario: 混合解包成环拦截 <a id="scenario-pol-cycle-block-unpack"></a>
+- **GIVEN** G1 以 `group_nodes` 展开 G2，G2 以 `group_ref` 引用 G1
+- **WHEN** 管理员尝试保存 G2
+- **THEN** 系统返回 422 错误且 `cycle_path` 为 `["G2", "G1", "G2"]`，保存被完全回滚
+
+#### Requirement: 顺序重入式来源增减与条件求值规范 [FR-POL-05] <a id="req-pol-ordered-add-remove"></a>
+系统废除全局套壳业务 filter，统一在有序来源列表中通过 `op: add | remove` 表达增减。求值算法严格采用用户已确认的**顺序重入流水线**：
+1. **顺序执行**: 严格按照 `position` 顺序遍历执行每个条目；
+2. **Remove 局部剔除**: `remove` 操作仅从**当前已经进入临时工作集**的条目中剔除匹配项；
+3. **后续 Add 重入**: 后续 `add` 操作可将先前被 `remove` 的条目重新追加至新位置；
+4. **去重针对当前集合**: First-seen 去重仅针对当前集合存在性，被删除条目不保留永久墓碑；
+5. **类型域防污染**:
+   - `remove group_ref`: 仅剔除工作集中的组名引用 identity，绝不误删展开的叶节点；
+   - `remove group_nodes`: 仅剔除工作集中的叶节点，绝不误删直接组名引用；
+   - `regex` / `filter`: 仅作用于候选节点名称与元数据，严禁误匹配组 ID；
+6. **准入规则不绕行**: 全量候选池严格执行既有 Active、Scope、IP Risk 准入判定，无静默丢弃，无额外“必须健康”门禁。
+
+##### Scenario: 排除仅作用于自身类型域 <a id="scenario-pol-constraints-leaves"></a>
+- **GIVEN** 策略组包含 `[+manual_node:N1, +group_ref:G2, -group_ref:G2]`
+- **WHEN** 解析器执行排除
+- **THEN** G2 组引用被排除；N1 节点不受组排除影响，正常保留；若存在同名叶节点展开，叶节点亦不受影响
+
+#### Requirement: 单事务原子持久化与乐观并发控制 [FR-POL-06] <a id="req-pol-atomic-optimistic"></a>
+策略组保存接口（`PUT /api/v1/policies/groups/{id}`）SHALL 实行单数据库事务原子更新。更新时全量替换该组的 `policy_group_sources` 记录。请求必须携带 `expected_revision`，若版本号不匹配，服务端 MUST 拒绝写入并返回 HTTP 409 `revision_conflict`，保存成功后自增版本号并重读返回一致数据。
+
+##### Scenario: 并发编辑版本冲突保护 <a id="scenario-pol-revision-conflict"></a>
+- **GIVEN** 策略组当前数据库 revision 为 5
+- **WHEN** 客户端提交 `expected_revision: 4` 的保存请求
+- **THEN** 服务端立即拒绝写入，返回 409 Conflict 与当前最新 revision 5
+
+#### Requirement: 全池动态筛选与无截断全量解析 [FR-POL-07] <a id="req-pol-full-inventory"></a>
+图解析器在评估 `regex_nodes` 或复合库存查询时，MUST 全量遍历所有处于活动准入状态的节点，严禁在后端施加 50 个节点的隐藏硬分页截断。
+
+##### Scenario: 动态匹配超过 200 个节点 <a id="scenario-pol-no-truncation"></a>
+- **GIVEN** 准入节点池包含 250 个匹配某正则的活跃节点
+- **WHEN** 策略组解析该 `regex_nodes` 来源
+- **THEN** 解析器产出包含全部 250 个节点的候选列表，截断率为 0
+
+#### Requirement: 空策略组 PASS 兜底与防越权隔离 [FR-POL-08] <a id="req-pol-empty-fallback"></a>
+当策略组由于动态筛选无匹配导致成员解析为 0 时：
+1. 启用 `empty_fallback_pass` 时，Mihomo 编译器输出 `proxies: [PASS]` 与 `empty-fallback: PASS`；
+2. 未启用时，编译器输出 `REJECT`，防止非授权穿透；
+3. 对于纯节点导出目标（SingBox, Surge, QX），空策略组的存在 MUST NOT 阻断纯节点配置生成。
+
+##### Scenario: Mihomo 导出空组 PASS 兜底 <a id="scenario-pol-fallback-pass"></a>
+- **GIVEN** 成员数为 0 且启用 `empty_fallback_pass` 的策略组
+- **WHEN** 导出 Mihomo 配置
+- **THEN** 导出的 proxy-group 包含 `proxies: [PASS]` 与 `empty-fallback: PASS`
+
+##### Scenario: 纯节点目标不受空组阻断 <a id="scenario-pol-node-targets-unblocked"></a>
+- **GIVEN** 存在成员数为 0 且未配置兜底的空策略组
+- **WHEN** 导出 SingBox 或 Surge 订阅
+- **THEN** 编译器正常渲染活跃节点出站配置，不因策略组空状态报错
+
+#### Requirement: 存量数据无损迁移与审计台账 [FR-POL-09] <a id="req-pol-zero-loss-migration"></a>
+系统 SHALL 提供存量数据无损迁移机制，将旧 `group_edges` 与 `group_node_filters` 转换至 `policy_group_sources`：
+1. 纯边策略组按存储 position 准确转换为 `manual_node` 或 `group_ref`；
+2. 纯过滤策略组转换为 `inventory_query_source`（保留完整国家/协议/正则/探测复合筛选能力）；
+3. 边与过滤旧交集策略组明确迁移为来源约束条目或带谓词来源项，一次迁移绝对保持现结果，严禁偷扩增候选；
+4. `policy_group_sources` 为唯一权威来源，不搞长期遗留双写；
+5. 历史 3 个轮询组与“便宜”组基于归档数据库证据在隔离副本完成恢复校核并出具 receipt，生产安全写保持原授权复验，不默认永久覆盖生产配置；
+6. 保持现有 groupIDs、revision、position 与 COW 不可变发布物契约不变，不原样迁移历史 bug。
+
+##### Scenario: 迁移试运行验证 <a id="scenario-pol-migration-dryrun"></a>
+- **WHEN** 管理员执行 `POST /api/v1/policies/migration/dry-run`
+- **THEN** 服务端返回转换前后的组总数、来源总数及哈希对比，不产生实际数据库写入
 
 ---
 
@@ -93,11 +195,6 @@ schema: speckit-native
 - **WHEN** 客户端向 `DELETE /api/v1/policies/rules/{non_existent_id}` 发送请求
 - **THEN** 服务端返回 404 Not Found 且错误码为 `rule_not_found`
 
-##### Scenario: 删除操作记录审计事件 <a id="scenario-pol-rule-delete-audit"></a>
-- **GIVEN** 管理员成功删除了某条规则
-- **WHEN** 检视系统操作审计日志
-- **THEN** 审计日志记录操作人、目标规则 ID、删除时间及状态，保证可追溯性
-
 #### Requirement: REST 路由路径标识符安全编码 <a id="req-pol-url-encoding"></a>
 所有以策略组名称或节点 ID 为路径参数的 RESTful API 端点 MUST 支持标准的 URL 安全编码（Percent-Encoding / encodeURIComponent）。系统 SHALL 正确处理包含空格、斜杠、中文及特殊符号的标识符，严禁触发路径遍历或 HTTP 400 误判。
 
@@ -110,45 +207,6 @@ schema: speckit-native
 - **GIVEN** 包含 `../` 路径穿越特征的恶意参数
 - **WHEN** 客户端尝试请求非法的路径
 - **THEN** 路由器安全拦截并返回 400 Bad Request，防止越权访问底层系统文件
-
----
-
-### 3. 图解析、安全兜底与历史兼容
-
-#### Requirement: 空策略组 PASS 兜底与防越权隔离 [FR-POL-05] <a id="req-pol-empty-fallback"></a>
-当策略组由于动态筛选无匹配、上游订阅离线等原因导致成员解析为 0 时，系统 SHALL 提供受控的兜底机制。启用 `empty_fallback_pass` 时输出 `proxies: [PASS]` 与 `empty-fallback: PASS`，未启用时输出 `REJECT`。
-
-##### Scenario: 启用 empty_fallback_pass 输出 PASS <a id="scenario-pol-fallback-pass"></a>
-- **GIVEN** 解析成员数为 0 且启用了空组兜底的策略组
-- **WHEN** 编译器生成 Mihomo 导出配置
-- **THEN** 该策略组包含 `proxies: [PASS]` 且 `empty-fallback: PASS`，客户端基础流量不断网
-
-##### Scenario: 未启用空组输出 REJECT <a id="scenario-pol-fallback-reject"></a>
-- **GIVEN** 解析成员数为 0 且未启用兜底的策略组
-- **WHEN** 编译器生成导出配置
-- **THEN** 编译器输出 REJECT 兜底或阻断无效流量
-
-#### Requirement: 全池动态筛选与无截断全量解析 [FR-POL-06] <a id="req-pol-dynamic-match"></a>
-图解析器在评估国家代码、正则匹配或标签筛选规则时，MUST 全量遍历所有处于活动状态的节点，严禁在后端施加 50 个节点的隐藏硬分页截断。
-
-##### Scenario: 超过 200 节点全量匹配无 50 截断 <a id="scenario-pol-no-truncation"></a>
-- **GIVEN** 数据库中包含 200 个匹配某国家代码的活动节点
-- **WHEN** 动态策略组执行解析
-- **THEN** 成员列表中全量包含 200 个节点，截断损耗为 0
-
-#### Requirement: 历史遗留策略组数据迁移恢复 [FR-POL-07] [NEEDS CLARIFICATION] <a id="req-pol-legacy-migration"></a>
-针对历史版本中存在的无显式节点且无规则的空策略组数据，系统 SHALL 依据用户在 Q4 中的裁决执行平滑迁移或归档恢复。
-
-##### Scenario: 历史空组数据平滑过渡 <a id="scenario-pol-migrate-empty-group"></a>
-- **GIVEN** 历史数据库中存在存量空策略组
-- **WHEN** 启动数据版本迁移程序
-- **THEN** 系统按设定规则安全保留或归档该记录，不破坏配置树完整性
-
----
-
----
-
----
 
 ---
 

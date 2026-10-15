@@ -22,7 +22,7 @@ func NewPolicyRepository(db *sql.DB) domain.PolicyRepository {
 
 func (r *policyRepository) GetGroupByID(ctx context.Context, id string) (*domain.NodeGroup, error) {
 	const query = `
-	SELECT id, name, group_type, created_at, updated_at, empty_fallback_pass
+	SELECT id, name, group_type, created_at, updated_at, empty_fallback_pass, COALESCE(revision, 1)
 	FROM node_groups
 	WHERE id = ?;`
 
@@ -36,6 +36,7 @@ func (r *policyRepository) GetGroupByID(ctx context.Context, id string) (*domain
 		&createdStr,
 		&updatedStr,
 		&group.EmptyFallbackPass,
+		&group.Revision,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -48,12 +49,18 @@ func (r *policyRepository) GetGroupByID(ctx context.Context, id string) (*domain
 	group.CreatedAt, _ = time.Parse(time.RFC3339, createdStr)
 	group.UpdatedAt, _ = time.Parse(time.RFC3339, updatedStr)
 
+	sources, err := fetchSourcesForGroup(ctx, r.db, group.ID)
+	if err != nil {
+		return nil, err
+	}
+	group.Sources = sources
+
 	return &group, nil
 }
 
 func (r *policyRepository) ListGroups(ctx context.Context) ([]domain.NodeGroup, error) {
 	const query = `
-	SELECT id, name, group_type, created_at, updated_at, empty_fallback_pass
+	SELECT id, name, group_type, created_at, updated_at, empty_fallback_pass, COALESCE(revision, 1)
 	FROM node_groups
 	ORDER BY name ASC, id ASC;`
 
@@ -75,6 +82,7 @@ func (r *policyRepository) ListGroups(ctx context.Context) ([]domain.NodeGroup, 
 			&createdStr,
 			&updatedStr,
 			&group.EmptyFallbackPass,
+			&group.Revision,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan node group: %w", err)
@@ -90,6 +98,18 @@ func (r *policyRepository) ListGroups(ctx context.Context) ([]domain.NodeGroup, 
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("error iterating node groups: %w", err)
 	}
+
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	allSources, err := fetchAllSources(ctx, r.db)
+	if err != nil {
+		return nil, err
+	}
+	for i := range items {
+		items[i].Sources = allSources[items[i].ID]
+	}
+
 	return items, nil
 }
 
@@ -123,30 +143,7 @@ func (r *policyRepository) CreateGroup(ctx context.Context, group *domain.NodeGr
 }
 
 func (r *policyRepository) UpdateGroup(ctx context.Context, group *domain.NodeGroup) error {
-	const query = `
-	UPDATE node_groups SET name = ?, group_type = ?, updated_at = ?, empty_fallback_pass = ?
-	WHERE id = ?;`
-
-	updatedStr := domain.NowUTC().Format(time.RFC3339)
-	res, err := r.db.ExecContext(ctx, query,
-		group.Name,
-		string(group.GroupType),
-		updatedStr,
-		group.EmptyFallbackPass,
-		group.ID,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to update node group: %w", err)
-	}
-
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if affected == 0 {
-		return domain.NewNotFoundError("node_group_not_found", fmt.Sprintf("node group %s not found", group.ID))
-	}
-	return nil
+	return r.SaveGroup(ctx, group, false, nil, false, nil)
 }
 
 // SaveGroup uses the existing SQLite transaction boundary for all group components.
@@ -154,167 +151,72 @@ func (r *policyRepository) SaveGroup(ctx context.Context, group *domain.NodeGrou
 	if err := filter.Validate(); err != nil {
 		return err
 	}
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	now := domain.NowUTC().Format(time.RFC3339)
+	sources := group.Sources
+	expected := group.Revision
 	if create {
-		_, err = tx.ExecContext(ctx, `INSERT INTO node_groups (id,name,group_type,created_at,updated_at,empty_fallback_pass) VALUES (?,?,?,?,?,?)`, group.ID, group.Name, group.GroupType, now, now, group.EmptyFallbackPass)
+		expected = 0
 	} else {
-		var result sql.Result
-		result, err = tx.ExecContext(ctx, `UPDATE node_groups SET name=?,group_type=?,updated_at=?,empty_fallback_pass=? WHERE id=?`, group.Name, group.GroupType, now, group.EmptyFallbackPass, group.ID)
-		if err == nil {
-			n, e := result.RowsAffected()
-			if e != nil {
-				return e
-			}
-			if n == 0 {
-				return domain.NewNotFoundError("node_group_not_found", "group not found")
-			}
-		}
-	}
-	if err != nil {
-		return err
-	}
-	if edges != nil {
-		if _, err = tx.ExecContext(ctx, `DELETE FROM group_edges WHERE parent_group_id=?`, group.ID); err != nil {
+		current, err := r.GetGroupByID(ctx, group.ID)
+		if err != nil {
 			return err
 		}
-		for _, edge := range *edges {
-			if _, err = tx.ExecContext(ctx, `INSERT INTO group_edges (id,parent_group_id,child_group_id,node_logical_id,position) VALUES (?,?,?,?,?)`, edge.ID, group.ID, edge.ChildGroupID, edge.NodeLogicalID, edge.Position); err != nil {
-				return err
-			}
+		if expected == 0 {
+			expected = current.Revision
 		}
+		sources = current.Sources
 	}
-	if changeFilter {
-		if filter.IsEmpty() {
-			_, err = tx.ExecContext(ctx, `DELETE FROM group_node_filters WHERE group_id=?`, group.ID)
-		} else {
-			var data []byte
-			data, err = json.Marshal(filter)
-			if err == nil {
-				_, err = tx.ExecContext(ctx, `INSERT INTO group_node_filters (group_id,filter_spec,updated_at) VALUES (?,?,?) ON CONFLICT(group_id) DO UPDATE SET filter_spec=excluded.filter_spec,updated_at=excluded.updated_at`, group.ID, string(data), now)
-			}
-		}
+	if edges != nil || changeFilter {
+		var err error
+		sources, err = domain.EditLegacySources(group.ID, sources, edges, changeFilter, filter)
 		if err != nil {
 			return err
 		}
 	}
-	return tx.Commit()
+	saved, err := r.SaveGroupWithSources(ctx, group, expected, sources)
+	if err == nil {
+		*group = *saved
+	}
+	return err
 }
 
 func (r *policyRepository) DeleteGroup(ctx context.Context, id string) error {
-	res, err := r.db.ExecContext(ctx, "DELETE FROM node_groups WHERE id = ?;", id)
-	if err != nil {
-		return fmt.Errorf("failed to delete node group: %w", err)
-	}
-
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if affected == 0 {
-		return domain.NewNotFoundError("node_group_not_found", fmt.Sprintf("node group %s not found", id))
-	}
-	return nil
+	return WithTx(ctx, r.db, func(ctx context.Context, tx *sql.Tx) error {
+		var n int
+		if err := tx.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM policy_group_sources WHERE target_group_id=? AND group_id<>?)+(SELECT count(*) FROM policy_rules WHERE target_group_id=?)`, id, id, id).Scan(&n); err != nil {
+			return err
+		}
+		if n > 0 {
+			return domain.NewConflictError("group_in_use", "group is referenced by member sources or routing rules")
+		}
+		res, err := tx.ExecContext(ctx, `DELETE FROM node_groups WHERE id=?`, id)
+		if err != nil {
+			return err
+		}
+		num, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if num == 0 {
+			return domain.NewNotFoundError("node_group_not_found", "group not found")
+		}
+		return nil
+	})
 }
 
 func (r *policyRepository) ListEdgesByGroup(ctx context.Context, parentGroupID string) ([]domain.GroupEdge, error) {
-	const query = `
-	SELECT id, parent_group_id, child_group_id, node_logical_id, position
-	FROM group_edges
-	WHERE parent_group_id = ?
-	ORDER BY position ASC;`
-
-	rows, err := r.db.QueryContext(ctx, query, parentGroupID)
+	sources, err := r.GetSourcesByGroup(ctx, parentGroupID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query edges for parent group %s: %w", parentGroupID, err)
+		return nil, err
 	}
-	defer rows.Close()
-
-	items := make([]domain.GroupEdge, 0)
-	for rows.Next() {
-		var edge domain.GroupEdge
-		var childID, nodeID sql.NullString
-
-		err := rows.Scan(
-			&edge.ID,
-			&edge.ParentGroupID,
-			&childID,
-			&nodeID,
-			&edge.Position,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan group edge: %w", err)
-		}
-
-		if childID.Valid && childID.String != "" {
-			edge.ChildGroupID = &childID.String
-		}
-		if nodeID.Valid && nodeID.String != "" {
-			edge.NodeLogicalID = &nodeID.String
-		}
-
-		items = append(items, edge)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating group edges: %w", err)
-	}
-	return items, nil
+	return domain.ProjectSourceEdges(sources), nil
 }
 
 func (r *policyRepository) SetEdgesForGroup(ctx context.Context, parentGroupID string, edges []domain.GroupEdge) error {
-	return WithTx(ctx, r.db, func(ctx context.Context, tx *sql.Tx) error {
-		// Delete existing edges for this parent group
-		if _, err := tx.ExecContext(ctx, "DELETE FROM group_edges WHERE parent_group_id = ?;", parentGroupID); err != nil {
-			return fmt.Errorf("failed to clear existing edges: %w", err)
-		}
-
-		const insertQuery = `
-		INSERT INTO group_edges (id, parent_group_id, child_group_id, node_logical_id, position)
-		VALUES (?, ?, ?, ?, ?);`
-
-		stmt, err := tx.PrepareContext(ctx, insertQuery)
-		if err != nil {
-			return fmt.Errorf("failed to prepare insert group edge: %w", err)
-		}
-		defer stmt.Close()
-
-		for i, edge := range edges {
-			edge.ParentGroupID = parentGroupID
-			edge.Position = i
-			if err := domain.ValidateGroupEdge(edge); err != nil {
-				return err
-			}
-
-			var childStr, nodeStr sql.NullString
-			if edge.ChildGroupID != nil && *edge.ChildGroupID != "" {
-				childStr = sql.NullString{String: *edge.ChildGroupID, Valid: true}
-			}
-			if edge.NodeLogicalID != nil && *edge.NodeLogicalID != "" {
-				nodeStr = sql.NullString{String: *edge.NodeLogicalID, Valid: true}
-			}
-
-			id := edge.ID
-			if id == "" {
-				newID, idErr := domain.NewUUIDv7()
-				if idErr != nil {
-					return idErr
-				}
-				id = newID
-			}
-
-			_, err := stmt.ExecContext(ctx, id, parentGroupID, childStr, nodeStr, edge.Position)
-			if err != nil {
-				return fmt.Errorf("failed to insert group edge: %w", err)
-			}
-		}
-
-		return nil
-	})
+	group, err := r.GetGroupByID(ctx, parentGroupID)
+	if err != nil {
+		return err
+	}
+	return r.SaveGroup(ctx, group, false, &edges, false, nil)
 }
 
 func (r *policyRepository) ListAdmissionRules(ctx context.Context, revisionID string) ([]domain.AdmissionRule, error) {
@@ -461,4 +363,275 @@ func (r *policyRepository) DeletePolicyRule(ctx context.Context, id string) erro
 		return domain.NewNotFoundError("rule_not_found", fmt.Sprintf("policy rule %s not found", id))
 	}
 	return nil
+}
+
+func (r *policyRepository) SaveGroupWithSources(ctx context.Context, group *domain.NodeGroup, expectedRevision int64, sources []domain.MemberSource) (*domain.NodeGroup, error) {
+	for i := range sources {
+		sources[i].Position = i
+		if err := domain.ValidateMemberSource(sources[i]); err != nil {
+			return nil, err
+		}
+	}
+
+	var savedGroup domain.NodeGroup
+	err := WithTx(ctx, r.db, func(ctx context.Context, tx *sql.Tx) error {
+		var currentRev int64 = 1
+		var existingID string
+		err := tx.QueryRowContext(ctx, `SELECT id, COALESCE(revision, 1) FROM node_groups WHERE id = ?`, group.ID).Scan(&existingID, &currentRev)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("failed to check group revision: %w", err)
+		}
+
+		nowStr := domain.NowUTC().Format(time.RFC3339)
+		isNew := errors.Is(err, sql.ErrNoRows)
+
+		if !isNew {
+			if expectedRevision > 0 && expectedRevision != currentRev {
+				conflictErr := domain.NewConflictError("revision_conflict", fmt.Sprintf("Policy group revision mismatch. Current revision is %d.", currentRev))
+				conflictErr.CurrentRevision = &currentRev
+				return conflictErr
+			}
+			currentRev++
+			_, err = tx.ExecContext(ctx,
+				`UPDATE node_groups SET name = ?, group_type = ?, empty_fallback_pass = ?, revision = ?, updated_at = ? WHERE id = ?`,
+				group.Name, string(group.GroupType), group.EmptyFallbackPass, currentRev, nowStr, group.ID)
+			if err != nil {
+				return fmt.Errorf("failed to update node group: %w", err)
+			}
+		} else {
+			if expectedRevision > 0 {
+				conflictErr := domain.NewConflictError("revision_conflict", fmt.Sprintf("Policy group revision mismatch. Current revision is %d.", 0))
+				var zero int64 = 0
+				conflictErr.CurrentRevision = &zero
+				return conflictErr
+			}
+			currentRev = 1
+			_, err = tx.ExecContext(ctx,
+				`INSERT INTO node_groups (id, name, group_type, empty_fallback_pass, revision, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				group.ID, group.Name, string(group.GroupType), group.EmptyFallbackPass, currentRev, nowStr, nowStr)
+			if err != nil {
+				return fmt.Errorf("failed to insert node group: %w", err)
+			}
+		}
+
+		// Clear existing sources
+		if _, err := tx.ExecContext(ctx, `DELETE FROM policy_group_sources WHERE group_id = ?`, group.ID); err != nil {
+			return fmt.Errorf("failed to clear existing sources: %w", err)
+		}
+
+		// Insert new sources
+		const insertSourceQ = `
+		INSERT INTO policy_group_sources (id, group_id, operation, kind, position, node_logical_id, target_group_id, pattern, filter_spec_json, builtin_name, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
+
+		stmt, err := tx.PrepareContext(ctx, insertSourceQ)
+		if err != nil {
+			return fmt.Errorf("failed to prepare insert source statement: %w", err)
+		}
+		defer stmt.Close()
+
+		savedSources := make([]domain.MemberSource, len(sources))
+		for i, s := range sources {
+			s.GroupID = group.ID
+			s.Position = i
+			if s.ID == "" {
+				newID, idErr := domain.NewUUIDv7()
+				if idErr != nil {
+					return idErr
+				}
+				s.ID = newID
+			}
+
+			var filterJSON sql.NullString
+			if s.FilterSpec != nil {
+				bytes, mErr := json.Marshal(s.FilterSpec)
+				if mErr != nil {
+					return mErr
+				}
+				filterJSON = sql.NullString{String: string(bytes), Valid: true}
+			}
+
+			var nodeID, targetID, pattern, builtin sql.NullString
+			if s.NodeLogicalID != nil && *s.NodeLogicalID != "" {
+				nodeID = sql.NullString{String: *s.NodeLogicalID, Valid: true}
+			}
+			if s.TargetGroupID != nil && *s.TargetGroupID != "" {
+				targetID = sql.NullString{String: *s.TargetGroupID, Valid: true}
+			}
+			if s.Pattern != nil && *s.Pattern != "" {
+				pattern = sql.NullString{String: *s.Pattern, Valid: true}
+			}
+			if s.BuiltinName != nil && *s.BuiltinName != "" {
+				builtin = sql.NullString{String: *s.BuiltinName, Valid: true}
+			}
+
+			s.CreatedAt = domain.NowUTC()
+			s.UpdatedAt = s.CreatedAt
+
+			_, err = stmt.ExecContext(ctx,
+				s.ID, s.GroupID, string(s.Operation.Normalize()), string(s.Kind.Normalize()), s.Position,
+				nodeID, targetID, pattern, filterJSON, builtin, nowStr, nowStr,
+			)
+			if err != nil {
+				return fmt.Errorf("failed to insert source %d: %w", i, err)
+			}
+			savedSources[i] = s
+		}
+
+		savedGroup = *group
+		savedGroup.Revision = currentRev
+		savedGroup.Sources = savedSources
+		savedGroup.UpdatedAt = domain.NowUTC()
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	return &savedGroup, nil
+}
+
+func (r *policyRepository) GetSourcesByGroup(ctx context.Context, groupID string) ([]domain.MemberSource, error) {
+	return fetchSourcesForGroup(ctx, r.db, groupID)
+}
+
+func (r *policyRepository) ListAllSources(ctx context.Context) (map[string][]domain.MemberSource, error) {
+	return fetchAllSources(ctx, r.db)
+}
+
+func fetchSourcesForGroup(ctx context.Context, db *sql.DB, groupID string) ([]domain.MemberSource, error) {
+	const q = `
+	SELECT id, group_id, operation, kind, position, node_logical_id, target_group_id, pattern, filter_spec_json, builtin_name, created_at, updated_at
+	FROM policy_group_sources
+	WHERE group_id = ?
+	ORDER BY position ASC;`
+
+	rows, err := db.QueryContext(ctx, q, groupID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read policy sources: %w", err)
+	}
+	defer rows.Close()
+
+	var sources []domain.MemberSource
+	for rows.Next() {
+		var s domain.MemberSource
+		var opStr, kindStr, createdStr, updatedStr string
+		var nodeID, targetID, pattern, filterJSON, builtin sql.NullString
+
+		err := rows.Scan(
+			&s.ID,
+			&s.GroupID,
+			&opStr,
+			&kindStr,
+			&s.Position,
+			&nodeID,
+			&targetID,
+			&pattern,
+			&filterJSON,
+			&builtin,
+			&createdStr,
+			&updatedStr,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan member source: %w", err)
+		}
+
+		s.Operation = domain.SourceOperation(opStr)
+		s.Kind = domain.MemberSourceKind(kindStr)
+		if nodeID.Valid {
+			s.NodeLogicalID = &nodeID.String
+		}
+		if targetID.Valid {
+			s.TargetGroupID = &targetID.String
+		}
+		if pattern.Valid {
+			s.Pattern = &pattern.String
+		}
+		if filterJSON.Valid && filterJSON.String != "" {
+			var spec domain.NodeFilterSpec
+			if err := json.Unmarshal([]byte(filterJSON.String), &spec); err != nil {
+				return nil, fmt.Errorf("invalid stored source filter: %w", err)
+			}
+			s.FilterSpec = &spec
+		}
+		if builtin.Valid {
+			s.BuiltinName = &builtin.String
+		}
+		s.CreatedAt, _ = time.Parse(time.RFC3339, createdStr)
+		s.UpdatedAt, _ = time.Parse(time.RFC3339, updatedStr)
+		sources = append(sources, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return sources, nil
+}
+
+func fetchAllSources(ctx context.Context, db *sql.DB) (map[string][]domain.MemberSource, error) {
+	const q = `
+	SELECT id, group_id, operation, kind, position, node_logical_id, target_group_id, pattern, filter_spec_json, builtin_name, created_at, updated_at
+	FROM policy_group_sources
+	ORDER BY group_id ASC, position ASC;`
+
+	rows, err := db.QueryContext(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read policy sources: %w", err)
+	}
+	defer rows.Close()
+
+	res := make(map[string][]domain.MemberSource)
+	for rows.Next() {
+		var s domain.MemberSource
+		var opStr, kindStr, createdStr, updatedStr string
+		var nodeID, targetID, pattern, filterJSON, builtin sql.NullString
+
+		err := rows.Scan(
+			&s.ID,
+			&s.GroupID,
+			&opStr,
+			&kindStr,
+			&s.Position,
+			&nodeID,
+			&targetID,
+			&pattern,
+			&filterJSON,
+			&builtin,
+			&createdStr,
+			&updatedStr,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan member source: %w", err)
+		}
+
+		s.Operation = domain.SourceOperation(opStr)
+		s.Kind = domain.MemberSourceKind(kindStr)
+		if nodeID.Valid {
+			s.NodeLogicalID = &nodeID.String
+		}
+		if targetID.Valid {
+			s.TargetGroupID = &targetID.String
+		}
+		if pattern.Valid {
+			s.Pattern = &pattern.String
+		}
+		if filterJSON.Valid && filterJSON.String != "" {
+			var spec domain.NodeFilterSpec
+			if err := json.Unmarshal([]byte(filterJSON.String), &spec); err != nil {
+				return nil, fmt.Errorf("invalid stored source filter: %w", err)
+			}
+			s.FilterSpec = &spec
+		}
+		if builtin.Valid {
+			s.BuiltinName = &builtin.String
+		}
+		s.CreatedAt, _ = time.Parse(time.RFC3339, createdStr)
+		s.UpdatedAt, _ = time.Parse(time.RFC3339, updatedStr)
+		res[s.GroupID] = append(res[s.GroupID], s)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return res, nil
 }

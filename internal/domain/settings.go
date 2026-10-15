@@ -6,7 +6,7 @@ import (
 )
 
 // Settings encapsulates global system parameters and resource bounds.
-// Note: Settings NEVER contains plaintext secrets.
+// Secret fields are persistence-only and are never serialized to management responses.
 type Settings struct {
 	ProbeConcurrencyWindow int   `json:"probe_concurrency_window"` // default 16, valid 10-20, hard limit 32
 	MaxConcurrentProbes    int   `json:"max_concurrent_probes"`
@@ -16,10 +16,12 @@ type Settings struct {
 	MaxPageSize            int   `json:"max_page_size"`     // default 50, maximum allowed 100
 	DefaultPageSize        int   `json:"default_page_size"` // default 50
 	// AdminToken stores the cryptographic verifier/hash for admin authentication, NEVER usable plaintext secret.
-	AdminToken        string    `json:"-"`
-	AdminAuthEnabled  bool      `json:"admin_auth_enabled"`
-	ExportAuthEnabled bool      `json:"export_auth_enabled"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	AdminToken                string    `json:"-"`
+	AdminAuthEnabled          bool      `json:"admin_auth_enabled"`
+	ExportAuthEnabled         bool      `json:"export_auth_enabled"`
+	SubscriptionFetchMode     string    `json:"subscription_fetch_mode"`
+	SubscriptionFetchProxyURL string    `json:"-"`
+	UpdatedAt                 time.Time `json:"updated_at"`
 }
 
 // DefaultSettings returns the standard production baseline settings.
@@ -32,6 +34,7 @@ func DefaultSettings() Settings {
 		FetchMaxResponseBytes:  10 * 1024 * 1024, // 10 MB
 		MaxPageSize:            100,
 		DefaultPageSize:        50,
+		SubscriptionFetchMode:  "environment",
 		AdminToken:             "",
 		AdminAuthEnabled:       true,
 		ExportAuthEnabled:      true,
@@ -41,6 +44,9 @@ func DefaultSettings() Settings {
 
 // Validate checks that settings values adhere to system boundary constraints.
 func (s Settings) Validate() error {
+	if err := ValidateSubscriptionFetchSettings(s.SubscriptionFetchMode, s.SubscriptionFetchProxyURL); err != nil {
+		return err
+	}
 	if s.ProbeConcurrencyWindow < 10 || s.ProbeConcurrencyWindow > 32 {
 		return NewValidationError("invalid_probe_concurrency_window",
 			fmt.Sprintf("probe_concurrency_window must be between 10 and 32, got %d", s.ProbeConcurrencyWindow))

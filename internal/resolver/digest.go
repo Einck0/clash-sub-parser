@@ -18,11 +18,43 @@ type canonicalInputNode struct {
 	Active      bool            `json:"active"`
 }
 
+type canonicalSourceLogical struct {
+	Operation     domain.SourceOperation  `json:"operation"`
+	Kind          domain.MemberSourceKind `json:"kind"`
+	Position      int                     `json:"position"`
+	NodeLogicalID *string                 `json:"node_logical_id,omitempty"`
+	TargetGroupID *string                 `json:"target_group_id,omitempty"`
+	Pattern       *string                 `json:"pattern,omitempty"`
+	FilterSpec    *domain.NodeFilterSpec  `json:"filter_spec,omitempty"`
+	BuiltinName   *string                 `json:"builtin_name,omitempty"`
+}
+
+func canonicalizeSources(sources []domain.MemberSource) []canonicalSourceLogical {
+	if len(sources) == 0 {
+		return nil
+	}
+	out := make([]canonicalSourceLogical, len(sources))
+	for i, s := range sources {
+		out[i] = canonicalSourceLogical{
+			Operation:     s.Operation,
+			Kind:          s.Kind,
+			Position:      s.Position,
+			NodeLogicalID: s.NodeLogicalID,
+			TargetGroupID: s.TargetGroupID,
+			Pattern:       s.Pattern,
+			FilterSpec:    s.FilterSpec,
+			BuiltinName:   s.BuiltinName,
+		}
+	}
+	return out
+}
+
 type canonicalInputGroup struct {
-	EmptyFallbackPass bool             `json:"empty_fallback_pass"`
-	ID                string           `json:"id"`
-	Name              string           `json:"name"`
-	GroupType         domain.GroupType `json:"group_type"`
+	EmptyFallbackPass bool                     `json:"empty_fallback_pass"`
+	ID                string                   `json:"id"`
+	Name              string                   `json:"name"`
+	GroupType         domain.GroupType         `json:"group_type"`
+	Sources           []canonicalSourceLogical `json:"sources,omitempty"`
 }
 
 type canonicalInputEdge struct {
@@ -92,11 +124,16 @@ func computeInputDigest(input ResolveInput) (string, error) {
 	// Canonicalize groups (sort by ID)
 	groups := make([]canonicalInputGroup, len(input.Groups))
 	for i, g := range input.Groups {
+		srcs := g.Sources
+		if len(srcs) == 0 && input.GroupSources != nil {
+			srcs = input.GroupSources[g.ID]
+		}
 		groups[i] = canonicalInputGroup{
 			EmptyFallbackPass: g.EmptyFallbackPass,
 			ID:                g.ID,
 			Name:              g.Name,
 			GroupType:         g.GroupType,
+			Sources:           canonicalizeSources(srcs),
 		}
 	}
 	sort.SliceStable(groups, func(i, j int) bool {
@@ -259,31 +296,64 @@ func computeInputDigest(input ResolveInput) (string, error) {
 	return hex.EncodeToString(h[:]), nil
 }
 
+type canonicalSnapshotGroup struct {
+	EmptyFallbackPass  bool                     `json:"empty_fallback_pass"`
+	EffectiveEmptyPass bool                     `json:"effective_empty_pass"`
+	ID                 string                   `json:"id"`
+	Name               string                   `json:"name"`
+	GroupType          domain.GroupType         `json:"group_type"`
+	Members            []ResolvedGroupMember    `json:"members"`
+	ChildGroupIDs      []string                 `json:"child_group_ids"`
+	NodeLogicalIDs     []string                 `json:"node_logical_ids"`
+	AllNodeLogicalIDs  []string                 `json:"all_node_logical_ids"`
+	ExpandedNodeIDs    []string                 `json:"expanded_node_ids,omitempty"`
+	Sources            []canonicalSourceLogical `json:"sources,omitempty"`
+	Position           int                      `json:"position"`
+}
+
 type canonicalSnapshotPayload struct {
-	RevisionID         string          `json:"revision_id,omitempty"`
-	InventoryWatermark string          `json:"inventory_watermark,omitempty"`
-	CompilerVersion    string          `json:"compiler_version,omitempty"`
-	Nodes              []ResolvedNode  `json:"nodes"`
-	NodeLogicalIDs     []string        `json:"node_logical_ids"`
-	Groups             []ResolvedGroup `json:"groups"`
-	Rules              []ResolvedRule  `json:"rules"`
-	DNS                DNSConfig       `json:"dns"`
-	Diagnostics        []Diagnostic    `json:"diagnostics"`
-	AdmittedNodeIDs    []string        `json:"admitted_node_ids,omitempty"`
-	ExcludedNodeIDs    []string        `json:"excluded_node_ids,omitempty"`
-	RiskPolicyRevision string          `json:"risk_policy_revision,omitempty"`
-	RiskEvaluatedAt    string          `json:"risk_evaluated_at,omitempty"`
-	RiskDecisionDigest string          `json:"risk_decision_digest,omitempty"`
+	RevisionID         string                   `json:"revision_id,omitempty"`
+	InventoryWatermark string                   `json:"inventory_watermark,omitempty"`
+	CompilerVersion    string                   `json:"compiler_version,omitempty"`
+	Nodes              []ResolvedNode           `json:"nodes"`
+	NodeLogicalIDs     []string                 `json:"node_logical_ids"`
+	Groups             []canonicalSnapshotGroup `json:"groups"`
+	Rules              []ResolvedRule           `json:"rules"`
+	DNS                DNSConfig                `json:"dns"`
+	Diagnostics        []Diagnostic             `json:"diagnostics"`
+	AdmittedNodeIDs    []string                 `json:"admitted_node_ids,omitempty"`
+	ExcludedNodeIDs    []string                 `json:"excluded_node_ids,omitempty"`
+	RiskPolicyRevision string                   `json:"risk_policy_revision,omitempty"`
+	RiskEvaluatedAt    string                   `json:"risk_evaluated_at,omitempty"`
+	RiskDecisionDigest string                   `json:"risk_decision_digest,omitempty"`
 }
 
 func computeSnapshotDigest(snap *ResolvedPolicySnapshot) (string, error) {
+	cGroups := make([]canonicalSnapshotGroup, len(snap.Groups))
+	for i, g := range snap.Groups {
+		cGroups[i] = canonicalSnapshotGroup{
+			EmptyFallbackPass:  g.EmptyFallbackPass,
+			EffectiveEmptyPass: g.EffectiveEmptyPass,
+			ID:                 g.ID,
+			Name:               g.Name,
+			GroupType:          g.GroupType,
+			Members:            g.Members,
+			ChildGroupIDs:      g.ChildGroupIDs,
+			NodeLogicalIDs:     g.NodeLogicalIDs,
+			AllNodeLogicalIDs:  g.AllNodeLogicalIDs,
+			ExpandedNodeIDs:    g.ExpandedNodeIDs,
+			Sources:            canonicalizeSources(g.Sources),
+			Position:           g.Position,
+		}
+	}
+
 	payload := canonicalSnapshotPayload{
 		RevisionID:         snap.RevisionID,
 		InventoryWatermark: snap.InventoryWatermark,
 		CompilerVersion:    snap.CompilerVersion,
 		Nodes:              snap.Nodes,
 		NodeLogicalIDs:     snap.NodeLogicalIDs,
-		Groups:             snap.Groups,
+		Groups:             cGroups,
 		Rules:              snap.Rules,
 		DNS:                snap.DNS,
 		Diagnostics:        snap.Diagnostics,

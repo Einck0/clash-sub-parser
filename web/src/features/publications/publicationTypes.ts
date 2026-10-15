@@ -136,6 +136,7 @@ export interface PreviewResult {
   target: CompilerTarget
   snapshot_digest: string
   content_digest: string
+  selection_digest?: string
   content: string
   content_type: string
   filename: string

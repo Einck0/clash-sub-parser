@@ -25,6 +25,7 @@ type RouterConfig struct {
 	AdminToken                 string // Plaintext token fallback for unit tests; TokenHolder is preferred
 	TokenHolder                AdminTokenHolder
 	SettingsRepository         domain.SettingsRepository
+	EnvironmentFetchProxy      string
 	ReadinessChecker           ReadinessCheckerFunc
 	PublicationTokenValidator  PublicationTokenValidatorFunc
 	SessionValidator           SessionValidatorFunc
@@ -49,6 +50,7 @@ type RouterConfig struct {
 func NewRouter(cfg RouterConfig) http.Handler {
 	if cfg.PolicyService != nil && cfg.PublicationService != nil {
 		cfg.PolicyService.SetSnapshotProvider(cfg.PublicationService.ResolvePolicySnapshot)
+		cfg.PolicyService.SetInputProvider(cfg.PublicationService.AssembleResolveInput)
 	}
 	if cfg.TokenHolder == nil {
 		cost := MinHashCost

@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -620,6 +622,7 @@ func (m *mockRevisionRepo) SetActive(ctx context.Context, id string) error {
 
 // mockPolicyRepo implements domain.PolicyRepository in memory.
 type mockPolicyRepo struct {
+	listErr        error
 	mu             sync.RWMutex
 	groups         map[string]*domain.NodeGroup
 	edges          map[string][]domain.GroupEdge
@@ -650,6 +653,9 @@ func (m *mockPolicyRepo) GetGroupByID(ctx context.Context, id string) (*domain.N
 func (m *mockPolicyRepo) ListGroups(ctx context.Context) ([]domain.NodeGroup, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	if m.listErr != nil {
+		return nil, m.listErr
+	}
 	res := make([]domain.NodeGroup, 0, len(m.groups))
 	for _, g := range m.groups {
 		res = append(res, *g)
@@ -673,6 +679,39 @@ func (m *mockPolicyRepo) UpdateGroup(ctx context.Context, group *domain.NodeGrou
 	return nil
 }
 
+func (m *mockPolicyRepo) SaveGroupWithSources(ctx context.Context, group *domain.NodeGroup, expectedRevision int64, sources []domain.MemberSource) (*domain.NodeGroup, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cp := *group
+	if cp.Revision == 0 {
+		cp.Revision = 1
+	} else {
+		cp.Revision++
+	}
+	cp.Sources = append([]domain.MemberSource(nil), sources...)
+	m.groups[group.ID] = &cp
+	return &cp, nil
+}
+
+func (m *mockPolicyRepo) GetSourcesByGroup(ctx context.Context, groupID string) ([]domain.MemberSource, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if g, ok := m.groups[groupID]; ok {
+		return append([]domain.MemberSource(nil), g.Sources...), nil
+	}
+	return nil, nil
+}
+
+func (m *mockPolicyRepo) ListAllSources(ctx context.Context) (map[string][]domain.MemberSource, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	res := make(map[string][]domain.MemberSource, len(m.groups))
+	for id, g := range m.groups {
+		res[id] = append([]domain.MemberSource(nil), g.Sources...)
+	}
+	return res, nil
+}
+
 func (m *mockPolicyRepo) DeleteGroup(ctx context.Context, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -690,6 +729,15 @@ func (m *mockPolicyRepo) ListEdgesByGroup(ctx context.Context, parentGroupID str
 func (m *mockPolicyRepo) SetEdgesForGroup(ctx context.Context, parentGroupID string, edges []domain.GroupEdge) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	group, ok := m.groups[parentGroupID]
+	if !ok {
+		return domain.NewNotFoundError("group_not_found", "group not found")
+	}
+	sources, err := domain.EditLegacySources(parentGroupID, group.Sources, &edges, false, nil)
+	if err != nil {
+		return err
+	}
+	group.Sources = sources
 	m.edges[parentGroupID] = edges
 	return nil
 }
@@ -1112,5 +1160,340 @@ func TestZeroNodeEmptySnapshot_ValidAcrossAllFourTargets(t *testing.T) {
 		if err != nil || pubRes.ContentDigest != prevRes.ContentDigest {
 			t.Fatalf("expected 0-node empty snapshot publish to succeed for %s, got err=%v", target, err)
 		}
+	}
+}
+
+// TASK-FIX-02 Requirement 4: Pure node targets ignore empty groups across Validate/Preflight, Preview, Publish, Serve
+func TestPublication_PureNodeTargets_IgnoreEmptyGroups_AcrossAllActions(t *testing.T) {
+	ctx := context.Background()
+	svc, _, _ := setupService()
+
+	validNode := resolver.ResolvedNode{
+		LogicalID:   "node-valid-ss-1",
+		Protocol:    domain.ProtocolSS,
+		DisplayName: "Pure-Node-SS-1",
+		Server:      "198.51.100.99",
+		Port:        8388,
+		Credentials: domain.InboundProtocolCredential{
+			Method:   "aes-128-gcm",
+			Password: "pass-pure-node",
+		},
+		Active: true,
+	}
+
+	// Snapshot with valid nodes AND an empty policy group (0 members, no PASS)
+	snap := &resolver.ResolvedPolicySnapshot{
+		SnapshotDigest:  "sha256:snap-pure-node-empty-group",
+		CompilerVersion: "1.0.0",
+		Nodes:           []resolver.ResolvedNode{validNode},
+		Groups: []resolver.ResolvedGroup{
+			{
+				ID:        "grp-empty",
+				Name:      "UnrelatedEmptyGroup",
+				GroupType: domain.GroupTypeSelect,
+				Members:   []resolver.ResolvedGroupMember{}, // 0 members!
+			},
+		},
+		Rules: []resolver.ResolvedRule{},
+	}
+
+	pureNodeTargets := []domain.CompilerTarget{
+		domain.TargetSingBox,
+		domain.TargetSurge,
+		domain.TargetQuantumultX,
+	}
+
+	for _, target := range pureNodeTargets {
+		t.Run(string(target), func(t *testing.T) {
+			// 1. Preflight (validate)
+			preRes, err := svc.Preflight(ctx, publication.PreflightCommand{
+				Target:   target,
+				Snapshot: snap,
+			})
+			if err != nil || preRes == nil || !preRes.Allowed {
+				t.Fatalf("expected preflight Allowed=true for %s, got allowed=%v err=%v", target, preRes != nil && preRes.Allowed, err)
+			}
+
+			// 2. Preview - strict mode
+			prevStrict, err := svc.Preview(ctx, publication.PreviewQuery{
+				Target:     target,
+				Snapshot:   snap,
+				CompatMode: "strict",
+			})
+			if err != nil {
+				t.Fatalf("expected strict preview to succeed for %s, got: %v", target, err)
+			}
+			if len(prevStrict.Content) == 0 {
+				t.Fatalf("strict preview content empty for %s", target)
+			}
+
+			// 3. Preview - compatible mode
+			prevCompat, err := svc.Preview(ctx, publication.PreviewQuery{
+				Target:     target,
+				Snapshot:   snap,
+				CompatMode: "compatible",
+			})
+			if err != nil {
+				t.Fatalf("expected compatible preview to succeed for %s, got: %v", target, err)
+			}
+			if len(prevCompat.Content) == 0 {
+				t.Fatalf("compatible preview content empty for %s", target)
+			}
+
+			// 4. Publish
+			pubRes, err := svc.Publish(ctx, publication.PublishCommand{
+				Target:    target,
+				Snapshot:  snap,
+				ActorKind: domain.ActorKindAdmin,
+				RequestID: fmt.Sprintf("req-publish-%s", target),
+			})
+			if err != nil {
+				t.Fatalf("expected publish to succeed for %s, got: %v", target, err)
+			}
+			if pubRes.Publication.Target != target {
+				t.Fatalf("expected target %s, got %s", target, pubRes.Publication.Target)
+			}
+
+			// 5. Serve (ResolveAndServe)
+			art, err := svc.ResolveAndServe(ctx, pubRes.Publication.ID, pubRes.RawToken)
+			if err != nil {
+				t.Fatalf("expected serve to succeed for %s, got: %v", target, err)
+			}
+
+			// Content parsing verification: verify actual node count, NOT just 200 / non-empty
+			switch target {
+			case domain.TargetSingBox:
+				var sbConfig map[string]any
+				if err := json.Unmarshal(art.Content, &sbConfig); err != nil {
+					t.Fatalf("failed to parse SingBox JSON: %v", err)
+				}
+				outbounds, _ := sbConfig["outbounds"].([]any)
+				endpoints, _ := sbConfig["endpoints"].([]any)
+				if len(outbounds)+len(endpoints) != 1 {
+					t.Fatalf("expected exactly 1 node in SingBox content, got %d", len(outbounds)+len(endpoints))
+				}
+			case domain.TargetSurge:
+				lines := strings.Split(strings.TrimSpace(string(art.Content)), "\n")
+				var proxyLines []string
+				for _, l := range lines {
+					if strings.Contains(l, "Pure-Node-SS-1") {
+						proxyLines = append(proxyLines, l)
+					}
+				}
+				if len(proxyLines) != 1 {
+					t.Fatalf("expected exactly 1 proxy line in Surge content, got %d:\n%s", len(proxyLines), string(art.Content))
+				}
+			case domain.TargetQuantumultX:
+				lines := strings.Split(strings.TrimSpace(string(art.Content)), "\n")
+				var serverLines []string
+				for _, l := range lines {
+					if strings.Contains(l, "Pure-Node-SS-1") {
+						serverLines = append(serverLines, l)
+					}
+				}
+				if len(serverLines) != 1 {
+					t.Fatalf("expected exactly 1 server line in QuantumultX content, got %d:\n%s", len(serverLines), string(art.Content))
+				}
+			}
+		})
+	}
+}
+
+// TASK-FIX-02 Requirement 5: Retain node filter fail-closed across all targets
+func TestPublication_PureNodeTargets_RetainNodeFilterFailClosed(t *testing.T) {
+	ctx := context.Background()
+	svc, _, _ := setupService()
+
+	// Snapshot where filter excluded all nodes -> filtered_nodes_empty diagnostic
+	filteredSnap := &resolver.ResolvedPolicySnapshot{
+		SnapshotDigest:  "sha256:snap-filtered-empty",
+		CompilerVersion: "1.0.0",
+		Nodes:           []resolver.ResolvedNode{},
+		Groups: []resolver.ResolvedGroup{
+			{
+				ID:        "grp-select",
+				Name:      "Selector",
+				GroupType: domain.GroupTypeSelect,
+				Members:   []resolver.ResolvedGroupMember{},
+			},
+		},
+		Diagnostics: []resolver.Diagnostic{
+			{
+				Severity: resolver.DiagnosticSeverityError,
+				Code:     "filtered_nodes_empty",
+				Message:  "configured node filters left no exportable nodes",
+			},
+		},
+	}
+
+	allTargets := []domain.CompilerTarget{
+		domain.TargetMihomo,
+		domain.TargetSingBox,
+		domain.TargetSurge,
+		domain.TargetQuantumultX,
+	}
+
+	for _, target := range allTargets {
+		t.Run(string(target), func(t *testing.T) {
+			// 1. Preflight must fail closed
+			preRes, err := svc.Preflight(ctx, publication.PreflightCommand{
+				Target:   target,
+				Snapshot: filteredSnap,
+			})
+			if err == nil && (preRes != nil && preRes.Allowed) {
+				t.Fatalf("expected preflight to fail closed for %s, got allowed=%v err=%v", target, preRes != nil && preRes.Allowed, err)
+			}
+
+			// 2. Preview must fail closed with filtered_nodes_empty diagnostic
+			_, errPrev := svc.Preview(ctx, publication.PreviewQuery{
+				Target:   target,
+				Snapshot: filteredSnap,
+			})
+			if errPrev == nil {
+				t.Fatalf("expected preview to fail closed with filtered_nodes_empty for %s", target)
+			}
+			var prevPFE *publication.PreflightError
+			if !errors.As(errPrev, &prevPFE) {
+				t.Fatalf("expected PreflightError for %s, got: %v", target, errPrev)
+			}
+			foundPrevDiag := false
+			for _, d := range prevPFE.Result.Diagnostics {
+				if d.Code == "filtered_nodes_empty" {
+					foundPrevDiag = true
+					break
+				}
+			}
+			if !foundPrevDiag {
+				t.Fatalf("expected filtered_nodes_empty diagnostic in preview for %s, got: %+v", target, prevPFE.Result.Diagnostics)
+			}
+
+			// 3. Publish must fail closed with filtered_nodes_empty diagnostic
+			_, errPub := svc.Publish(ctx, publication.PublishCommand{
+				Target:    target,
+				Snapshot:  filteredSnap,
+				ActorKind: domain.ActorKindAdmin,
+				RequestID: fmt.Sprintf("req-fail-closed-%s", target),
+			})
+			if errPub == nil {
+				t.Fatalf("expected publish to fail closed with filtered_nodes_empty for %s", target)
+			}
+			var pubPFE *publication.PreflightError
+			if !errors.As(errPub, &pubPFE) {
+				t.Fatalf("expected PreflightError for %s, got: %v", target, errPub)
+			}
+			foundPubDiag := false
+			for _, d := range pubPFE.Result.Diagnostics {
+				if d.Code == "filtered_nodes_empty" {
+					foundPubDiag = true
+					break
+				}
+			}
+			if !foundPubDiag {
+				t.Fatalf("expected filtered_nodes_empty diagnostic in publish for %s, got: %+v", target, pubPFE.Result.Diagnostics)
+			}
+		})
+	}
+}
+
+// TASK-FIX-02 Requirement 6: Mihomo retains strict empty group validation
+func TestPublication_Mihomo_RetainsEmptyGroupValidation(t *testing.T) {
+	ctx := context.Background()
+	svc, _, _ := setupService()
+
+	validNode := resolver.ResolvedNode{
+		LogicalID:   "node-valid-ss-mihomo",
+		Protocol:    domain.ProtocolSS,
+		DisplayName: "SS-Node-Mihomo",
+		Server:      "198.51.100.100",
+		Port:        8388,
+		Credentials: domain.InboundProtocolCredential{
+			Method:   "aes-128-gcm",
+			Password: "pass-mihomo",
+		},
+		Active: true,
+	}
+
+	// Snapshot with 0-member group without PASS fallback
+	snapEmptyGroup := &resolver.ResolvedPolicySnapshot{
+		SnapshotDigest:  "sha256:snap-mihomo-empty-group",
+		CompilerVersion: "1.0.0",
+		Nodes:           []resolver.ResolvedNode{validNode},
+		Groups: []resolver.ResolvedGroup{
+			{
+				ID:                "grp-empty-no-pass",
+				Name:              "StrictEmptyGroup",
+				GroupType:         domain.GroupTypeSelect,
+				EmptyFallbackPass: false,
+				Members:           []resolver.ResolvedGroupMember{}, // 0 members!
+			},
+		},
+		Rules: []resolver.ResolvedRule{},
+	}
+
+	// 1. Mihomo Preflight must fail (Allowed == false, diagnostics contain required_nonempty)
+	preRes, preErr := svc.Preflight(ctx, publication.PreflightCommand{
+		Target:   domain.TargetMihomo,
+		Snapshot: snapEmptyGroup,
+	})
+	if preErr == nil && (preRes != nil && preRes.Allowed) {
+		t.Fatalf("expected Mihomo preflight to be rejected for empty group, got allowed=%v err=%v", preRes != nil && preRes.Allowed, preErr)
+	}
+
+	// 2. Mihomo Preview (strict mode) must fail
+	_, errPrevStrict := svc.Preview(ctx, publication.PreviewQuery{
+		Target:     domain.TargetMihomo,
+		Snapshot:   snapEmptyGroup,
+		CompatMode: "strict",
+	})
+	if errPrevStrict == nil {
+		t.Fatal("expected Mihomo strict preview to fail for empty group, but succeeded")
+	}
+
+	// 3. Mihomo Preview (compatible mode) must fail with empty_group_not_allowed
+	_, errPrevCompat := svc.Preview(ctx, publication.PreviewQuery{
+		Target:     domain.TargetMihomo,
+		Snapshot:   snapEmptyGroup,
+		CompatMode: "compatible",
+	})
+	if errPrevCompat == nil {
+		t.Fatal("expected Mihomo compatible preview to fail with empty_group_not_allowed, but succeeded")
+	}
+	if !strings.Contains(errPrevCompat.Error(), "empty_group_not_allowed") {
+		t.Fatalf("expected empty_group_not_allowed error, got: %v", errPrevCompat)
+	}
+
+	// 4. Mihomo Publish must fail
+	_, errPub := svc.Publish(ctx, publication.PublishCommand{
+		Target:    domain.TargetMihomo,
+		Snapshot:  snapEmptyGroup,
+		ActorKind: domain.ActorKindAdmin,
+		RequestID: "req-publish-mihomo-empty",
+	})
+	if errPub == nil {
+		t.Fatal("expected Mihomo publish to fail for empty group, but succeeded")
+	}
+
+	// 5. ValidatePublicationContent must reject empty group in Mihomo YAML
+	const badMihomoYAML = `
+proxies:
+  - name: "Node-1"
+    type: ss
+    server: 198.51.100.1
+    port: 8388
+    cipher: aes-128-gcm
+    password: pass
+proxy-groups:
+  - name: "EmptyGroup"
+    type: select
+    proxies: []
+rules:
+  - MATCH,DIRECT
+`
+	errContent := publication.ValidatePublicationContent([]byte(badMihomoYAML), domain.TargetMihomo)
+	if errContent == nil {
+		t.Fatal("expected ValidatePublicationContent to reject Mihomo YAML with empty group, but succeeded")
+	}
+	if !strings.Contains(errContent.Error(), "required_nonempty") {
+		t.Fatalf("expected required_nonempty error, got: %v", errContent)
 	}
 }

@@ -3,6 +3,7 @@ package inventory_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -1359,5 +1360,267 @@ proxies:
 	err = db.QueryRowContext(ctx, "SELECT node_logical_id FROM group_edges WHERE id = ?;", edgeID).Scan(&edgeTargetNode)
 	if err != nil || edgeTargetNode != sharedNodeID {
 		t.Fatalf("policy group edge was corrupted! want %s, got %s (err: %v)", sharedNodeID, edgeTargetNode, err)
+	}
+}
+
+// TASK-FIX-01 Requirement 1: Partial outcome preserves all existing node_sources associations and history
+func TestReconcile_PartialRejected_RetainsSourcesAndHistory(t *testing.T) {
+	ctx := context.Background()
+	db, subRepo, fetchRepo, nodeRepo, sourceRepo := setupTestEnv(t)
+	fetcher := newMockFetcher()
+
+	subID := domain.MustNewUUIDv7()
+	url := "https://partial-retention.example.com/sub"
+	createTestSub(t, subRepo, subID, "Partial Retention Sub", url, true)
+
+	const yamlInitial = `
+proxies:
+  - name: "Alpha Node"
+    type: ss
+    server: 198.51.100.11
+    port: 8388
+    cipher: aes-128-gcm
+    password: pass-alpha
+  - name: "Beta Node"
+    type: ss
+    server: 198.51.100.12
+    port: 8388
+    cipher: aes-128-gcm
+    password: pass-beta
+`
+	fetcher.setResponse(url, &fetch.Response{StatusCode: 200, Body: []byte(yamlInitial), ContentDigest: "d-init-ab"})
+	svc := inventory.NewService(db, subRepo, fetchRepo, nodeRepo, sourceRepo, fetcher)
+	res1, err := svc.ReconcileSubscription(ctx, subID)
+	if err != nil || res1.Outcome != domain.FetchOutcomeSuccess {
+		t.Fatalf("initial reconcile failed: %v", err)
+	}
+
+	var initialSourcesCount int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM node_sources WHERE subscription_id = ?;", subID).Scan(&initialSourcesCount); err != nil {
+		t.Fatalf("failed to query initial node_sources: %v", err)
+	}
+	if initialSourcesCount != 2 {
+		t.Fatalf("expected 2 initial node_sources, got %d", initialSourcesCount)
+	}
+
+	// Second fetch: contains 1 new valid node (Gamma), but also 1 malformed invalid node
+	const yamlPartial = `
+proxies:
+  - name: "Gamma Node (New)"
+    type: ss
+    server: 198.51.100.13
+    port: 8388
+    cipher: aes-128-gcm
+    password: pass-gamma
+  - name: "Malformed Invalid Node"
+    type: ss
+    server: ""
+    port: 0
+`
+	fetcher.setResponse(url, &fetch.Response{StatusCode: 200, Body: []byte(yamlPartial), ContentDigest: "d-partial-gamma"})
+	res2, err := svc.ReconcileSubscription(ctx, subID)
+	if err != nil {
+		t.Fatalf("reconcile partial failed: %v", err)
+	}
+	if res2.Outcome != domain.FetchOutcomePartial {
+		t.Fatalf("expected FetchOutcomePartial, got %s", res2.Outcome)
+	}
+
+	// Invariant 1: Existing node_sources are NOT deleted, and new node is added -> total 3 sources!
+	var sourcesAfterPartial int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM node_sources WHERE subscription_id = ?;", subID).Scan(&sourcesAfterPartial); err != nil {
+		t.Fatalf("failed to query node_sources after partial: %v", err)
+	}
+	if sourcesAfterPartial != 3 {
+		t.Fatalf("expected 3 node_sources after partial fetch (Alpha, Beta, Gamma retained), got %d", sourcesAfterPartial)
+	}
+
+	// Invariant 2: node_source_history must NOT have any refresh prune records!
+	var pruneHistoryCount int
+	if err := db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM node_source_history
+		WHERE subscription_id = ? AND evidence_kind = 'subscription_refresh_prune';
+	`, subID).Scan(&pruneHistoryCount); err != nil {
+		t.Fatalf("failed to query node_source_history: %v", err)
+	}
+	if pruneHistoryCount != 0 {
+		t.Fatalf("expected 0 prune history records on partial refresh, got %d", pruneHistoryCount)
+	}
+
+	// Invariant 3: All 3 nodes exist in nodes table and active == true
+	nodes, total, err := svc.ListNodes(ctx, domain.NodeFilter{ActiveOnly: true})
+	if err != nil || total != 3 || len(nodes) != 3 {
+		t.Fatalf("expected 3 active nodes, got total=%d len=%d", total, len(nodes))
+	}
+}
+
+// TASK-FIX-01 Requirement 2: Successful diff updates prune node_sources and archive history, but retain node physical assets
+func TestReconcile_SuccessfulDiffUpdates_RetainsNodeAssets(t *testing.T) {
+	ctx := context.Background()
+	db, subRepo, fetchRepo, nodeRepo, sourceRepo := setupTestEnv(t)
+	fetcher := newMockFetcher()
+
+	subID := domain.MustNewUUIDv7()
+	url := "https://diff-retention.example.com/sub"
+	createTestSub(t, subRepo, subID, "Diff Retention Sub", url, true)
+
+	const yamlInitial = `
+proxies:
+  - name: "Node Alpha"
+    type: ss
+    server: 198.51.100.21
+    port: 8388
+    cipher: aes-128-gcm
+    password: pass-a
+  - name: "Node Beta"
+    type: ss
+    server: 198.51.100.22
+    port: 8388
+    cipher: aes-128-gcm
+    password: pass-b
+`
+	fetcher.setResponse(url, &fetch.Response{StatusCode: 200, Body: []byte(yamlInitial), ContentDigest: "d-diff-init"})
+	svc := inventory.NewService(db, subRepo, fetchRepo, nodeRepo, sourceRepo, fetcher)
+	if _, err := svc.ReconcileSubscription(ctx, subID); err != nil {
+		t.Fatalf("initial reconcile failed: %v", err)
+	}
+
+	// Second fetch: strictly SUCCESS, containing only Node Alpha (Node Beta is omitted)
+	const yamlSuccessShrink = `
+proxies:
+  - name: "Node Alpha"
+    type: ss
+    server: 198.51.100.21
+    port: 8388
+    cipher: aes-128-gcm
+    password: pass-a
+`
+	fetcher.setResponse(url, &fetch.Response{StatusCode: 200, Body: []byte(yamlSuccessShrink), ContentDigest: "d-diff-shrink"})
+	res2, err := svc.ReconcileSubscription(ctx, subID)
+	if err != nil {
+		t.Fatalf("reconcile success shrink failed: %v", err)
+	}
+	if res2.Outcome != domain.FetchOutcomeSuccess {
+		t.Fatalf("expected FetchOutcomeSuccess, got %s", res2.Outcome)
+	}
+
+	// Node Beta should be pruned from node_sources for this sub
+	var remainingSources int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM node_sources WHERE subscription_id = ?;", subID).Scan(&remainingSources); err != nil {
+		t.Fatalf("failed to query node_sources: %v", err)
+	}
+	if remainingSources != 1 {
+		t.Fatalf("expected exactly 1 node_source for subID after successful shrink, got %d", remainingSources)
+	}
+
+	// Node Beta must be archived into node_source_history
+	var betaHistoryCount int
+	if err := db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM node_source_history
+		WHERE subscription_id = ? AND evidence_kind = 'subscription_refresh_prune';
+	`, subID).Scan(&betaHistoryCount); err != nil {
+		t.Fatalf("failed to query node_source_history: %v", err)
+	}
+	if betaHistoryCount != 1 {
+		t.Fatalf("expected 1 history archive entry for pruned Node Beta, got %d", betaHistoryCount)
+	}
+
+	// NON-DESTRUCTIVE INVARIANT: Node Beta in nodes table STILL EXISTS and is active!
+	allNodes, totalNodes, err := svc.ListNodes(ctx, domain.NodeFilter{})
+	if err != nil || totalNodes != 2 || len(allNodes) != 2 {
+		t.Fatalf("expected 2 nodes preserved in nodes table, got total=%d len=%d", totalNodes, len(allNodes))
+	}
+	for _, n := range allNodes {
+		if !n.Active {
+			t.Fatalf("node %s was deactivated unexpectedly (non-destructive invariant violated)", n.DisplayName)
+		}
+	}
+}
+
+// TASK-FIX-01 Requirement 3: Multi-subscription refresh failure isolation - no global deactivation
+func TestReconcile_MultiSubscriptionFailure_NoGlobalDeactivation(t *testing.T) {
+	ctx := context.Background()
+	db, subRepo, fetchRepo, nodeRepo, sourceRepo := setupTestEnv(t)
+	fetcher := newMockFetcher()
+
+	sub1ID := domain.MustNewUUIDv7()
+	sub2ID := domain.MustNewUUIDv7()
+	url1 := "https://sub1.example.com/feed"
+	url2 := "https://sub2.example.com/feed"
+
+	createTestSub(t, subRepo, sub1ID, "Subscription One", url1, true)
+	createTestSub(t, subRepo, sub2ID, "Subscription Two", url2, true)
+
+	// Sub 1 has 10 valid nodes
+	var b1 strings.Builder
+	b1.WriteString("proxies:\n")
+	for i := 1; i <= 10; i++ {
+		b1.WriteString(fmt.Sprintf("  - name: \"Sub1 Node %02d\"\n    type: ss\n    server: 198.51.100.%d\n    port: 8388\n    cipher: aes-128-gcm\n    password: p-%d\n", i, i, i))
+	}
+	fetcher.setResponse(url1, &fetch.Response{StatusCode: 200, Body: []byte(b1.String()), ContentDigest: "d-sub1-10"})
+
+	// Sub 2 has 2 valid nodes
+	const yamlSub2 = `
+proxies:
+  - name: "Sub2 Node A"
+    type: ss
+    server: 203.0.113.1
+    port: 8388
+    cipher: aes-128-gcm
+    password: p-sub2-a
+  - name: "Sub2 Node B"
+    type: ss
+    server: 203.0.113.2
+    port: 8388
+    cipher: aes-128-gcm
+    password: p-sub2-b
+`
+	fetcher.setResponse(url2, &fetch.Response{StatusCode: 200, Body: []byte(yamlSub2), ContentDigest: "d-sub2-2"})
+
+	svc := inventory.NewService(db, subRepo, fetchRepo, nodeRepo, sourceRepo, fetcher)
+	if _, err := svc.ReconcileSubscription(ctx, sub1ID); err != nil {
+		t.Fatalf("sub1 reconcile failed: %v", err)
+	}
+	if _, err := svc.ReconcileSubscription(ctx, sub2ID); err != nil {
+		t.Fatalf("sub2 reconcile failed: %v", err)
+	}
+
+	// Verify initial inventory: 12 active nodes
+	nodesInit, totalInit, err := svc.ListNodes(ctx, domain.NodeFilter{ActiveOnly: true})
+	if err != nil || totalInit != 12 || len(nodesInit) != 12 {
+		t.Fatalf("expected 12 active nodes initially, got %d", totalInit)
+	}
+
+	// Now Sub 2 refresh FAILS (HTTP 500 error from remote fetcher)
+	fetcher.setError(url2, fmt.Errorf("remote HTTP 500 Internal Server Error"))
+
+	resFail, errFail := svc.ReconcileSubscription(ctx, sub2ID)
+	if errFail == nil {
+		t.Fatalf("expected reconcile failure for sub2, got nil error")
+	}
+	if resFail == nil || resFail.Outcome != domain.FetchOutcomeFailed {
+		t.Fatalf("expected outcome Failed, got %v", resFail)
+	}
+
+	// Invariant: Sub 1's 10 nodes and Sub 2's 2 nodes remain 100% active and untouched
+	nodesAfterFail, totalAfterFail, err := svc.ListNodes(ctx, domain.NodeFilter{ActiveOnly: true})
+	if err != nil || totalAfterFail != 12 || len(nodesAfterFail) != 12 {
+		t.Fatalf("expected all 12 nodes to remain active after Sub 2 failure, got %d", totalAfterFail)
+	}
+
+	var sub1SourcesCount int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM node_sources WHERE subscription_id = ?;", sub1ID).Scan(&sub1SourcesCount); err != nil {
+		t.Fatalf("failed to query sub1 sources: %v", err)
+	}
+	if sub1SourcesCount != 10 {
+		t.Fatalf("sub1 sources corrupted! expected 10, got %d", sub1SourcesCount)
+	}
+
+	var sub2SourcesCount int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM node_sources WHERE subscription_id = ?;", sub2ID).Scan(&sub2SourcesCount); err != nil {
+		t.Fatalf("failed to query sub2 sources: %v", err)
+	}
+	if sub2SourcesCount != 2 {
+		t.Fatalf("sub2 sources corrupted! expected 2, got %d", sub2SourcesCount)
 	}
 }

@@ -2,9 +2,7 @@ package inventory
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -139,8 +137,9 @@ func RunRestoreGroupFilters(ctx context.Context, targetDB *sql.DB, opts RestoreG
 		ID        string
 		Name      string
 		GroupType string
+		Revision  int64
 	}
-	tRows, err := targetDB.QueryContext(ctx, "SELECT id, name, group_type FROM node_groups;")
+	tRows, err := targetDB.QueryContext(ctx, "SELECT id, name, group_type, revision FROM node_groups;")
 	if err != nil {
 		return nil, fmt.Errorf("failed to query target node_groups: %w", err)
 	}
@@ -149,15 +148,20 @@ func RunRestoreGroupFilters(ctx context.Context, targetDB *sql.DB, opts RestoreG
 	targetGroupsByID := make(map[string]targetGroupRow)
 	for tRows.Next() {
 		var tg targetGroupRow
-		if err := tRows.Scan(&tg.ID, &tg.Name, &tg.GroupType); err != nil {
+		if err := tRows.Scan(&tg.ID, &tg.Name, &tg.GroupType, &tg.Revision); err != nil {
 			return nil, fmt.Errorf("scan target group row: %w", err)
 		}
 		targetGroupsByID[tg.ID] = tg
 	}
 
-	// Read existing group_node_filters
+	if err := tRows.Err(); err != nil {
+		return nil, err
+	}
+	tRows.Close()
+	// Source table is the sole authority. Any existing filtered source protects
+	// the user's pipeline, including rich operations that legacy APIs cannot express.
 	existingFilters := make(map[string]string)
-	fRows, err := targetDB.QueryContext(ctx, "SELECT group_id, filter_spec FROM group_node_filters;")
+	fRows, err := targetDB.QueryContext(ctx, "SELECT group_id, filter_spec_json FROM policy_group_sources WHERE filter_spec_json IS NOT NULL ORDER BY group_id,position;")
 	if err != nil {
 		return nil, fmt.Errorf("read existing filters: %w", err)
 	}
@@ -213,6 +217,7 @@ func RunRestoreGroupFilters(ctx context.Context, targetDB *sql.DB, opts RestoreG
 	type pendingRestore struct {
 		GroupID    string
 		FilterSpec domain.NodeFilterSpec
+		Before     targetGroupRow
 	}
 	var pendingList []pendingRestore
 
@@ -344,6 +349,7 @@ func RunRestoreGroupFilters(ctx context.Context, targetDB *sql.DB, opts RestoreG
 		pendingList = append(pendingList, pendingRestore{
 			GroupID:    targetUUID,
 			FilterSpec: spec,
+			Before:     targetGroup,
 		})
 	}
 
@@ -365,34 +371,43 @@ func RunRestoreGroupFilters(ctx context.Context, targetDB *sql.DB, opts RestoreG
 	now := domain.NowUTC()
 	nowStr := now.Format(time.RFC3339)
 
-	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO group_node_filters (group_id, filter_spec, updated_at)
-		VALUES (?, ?, ?)
-		ON CONFLICT(group_id) DO UPDATE SET
-			filter_spec = excluded.filter_spec,
-			updated_at = excluded.updated_at;
-	`)
-	if err != nil {
-		return nil, fmt.Errorf("prepare upsert statement: %w", err)
-	}
-	defer stmt.Close()
-
 	for _, item := range pendingList {
 		// Recheck inside the write transaction; never overwrite an intervening edit.
-		var current string
-		err := tx.QueryRowContext(ctx, `SELECT filter_spec FROM group_node_filters WHERE group_id=?`, item.GroupID).Scan(&current)
-		if err != nil && err != sql.ErrNoRows {
+		var current targetGroupRow
+		if err := tx.QueryRowContext(ctx, `SELECT id,name,group_type,revision FROM node_groups WHERE id=?`, item.GroupID).Scan(&current.ID, &current.Name, &current.GroupType, &current.Revision); err != nil {
 			return nil, err
 		}
-		if current != existingFilters[item.GroupID] {
-			return nil, domain.NewConflictError("filter_changed", "group filter changed during restoration")
+		if current != item.Before {
+			return nil, domain.NewConflictError("filter_changed", "group changed during restoration")
+		}
+		var count int
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM policy_group_sources WHERE group_id=? AND filter_spec_json IS NOT NULL`, item.GroupID).Scan(&count); err != nil {
+			return nil, err
+		}
+		if count > 0 {
+			return nil, domain.NewConflictError("filter_changed", "filtered sources changed during restoration")
 		}
 		specJSON, mErr := json.Marshal(item.FilterSpec)
 		if mErr != nil {
 			return nil, fmt.Errorf("marshal spec for group %s: %w", item.GroupID, mErr)
 		}
-		if _, err := stmt.ExecContext(ctx, item.GroupID, string(specJSON), nowStr); err != nil {
-			return nil, fmt.Errorf("upsert filter for group %s: %w", item.GroupID, err)
+		// Archive predicates were group filters: apply to existing manual/ref
+		// candidates, or add one dynamic filter source for an empty group.
+		res, err := tx.ExecContext(ctx, `UPDATE policy_group_sources SET filter_spec_json=?,updated_at=? WHERE group_id=?`, string(specJSON), nowStr, item.GroupID)
+		if err != nil {
+			return nil, err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return nil, err
+		}
+		if n == 0 {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO policy_group_sources(id,group_id,operation,kind,position,filter_spec_json,created_at,updated_at) VALUES(?,?,'add','filter',0,?,?,?)`, domain.MustNewUUIDv7(), item.GroupID, string(specJSON), nowStr, nowStr); err != nil {
+				return nil, err
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE node_groups SET revision=revision+1,updated_at=? WHERE id=?`, nowStr, item.GroupID); err != nil {
+			return nil, err
 		}
 	}
 
@@ -403,9 +418,7 @@ func RunRestoreGroupFilters(ctx context.Context, targetDB *sql.DB, opts RestoreG
 			return nil, uErr
 		}
 		{
-			h := sha256.New()
-			h.Write([]byte(newRevID + ":" + currentRevID + ":" + nowStr))
-			snapDigest := "sha256:" + hex.EncodeToString(h.Sum(nil))
+			snapDigest := "pending-snapshot"
 
 			// Archive previous active revision
 			if _, err := tx.ExecContext(ctx, "UPDATE configuration_revisions SET state = 'archived' WHERE state = 'active';"); err != nil {
@@ -417,6 +430,9 @@ func RunRestoreGroupFilters(ctx context.Context, targetDB *sql.DB, opts RestoreG
 			`, newRevID, currentRevID, snapDigest, nowStr)
 			if revErr != nil {
 				return nil, fmt.Errorf("insert configuration revision: %w", revErr)
+			}
+			if err := sqlite.CapturePolicyRevisionSnapshot(ctx, tx, newRevID); err != nil {
+				return nil, err
 			}
 			report.NewRevisionID = newRevID
 		}

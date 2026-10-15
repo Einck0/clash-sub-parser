@@ -18,6 +18,7 @@ import { fetchAuthSettings, type AuthSettings } from '../auth/authSettings'
 import { t, getLocale, setLocale, type Locale } from '../../locales'
 import { applyTheme, getStoredTheme, THEME_NAMES, type ThemeName } from '../../theme'
 import GlobalNodeFilterSettings from './GlobalNodeFilterSettings.vue'
+import SubscriptionFetchSettings from './SubscriptionFetchSettings.vue'
 
 const authMode = ref<'open' | 'token' | 'loading' | 'error'>('loading')
 const authModeError = ref('')
@@ -405,6 +406,7 @@ onMounted(() => {
       </div>
     </section>
 
+    <SubscriptionFetchSettings />
     <GlobalNodeFilterSettings />
 
     <!-- Language & Visual System Settings -->

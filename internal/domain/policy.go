@@ -20,9 +20,191 @@ type NodeGroup struct {
 	ID                string          `json:"id"`
 	Name              string          `json:"name"`
 	GroupType         GroupType       `json:"group_type"`
+	Revision          int64           `json:"revision"`
+	Sources           []MemberSource  `json:"sources,omitempty"`
 	NodeFilter        *NodeFilterSpec `json:"node_filter,omitempty"`
 	CreatedAt         time.Time       `json:"created_at"`
 	UpdatedAt         time.Time       `json:"updated_at"`
+}
+
+// SourceOperation defines candidate additions and removals.
+type SourceOperation string
+
+const (
+	OperationAdd    SourceOperation = "add"
+	OperationRemove SourceOperation = "remove"
+)
+
+func (op SourceOperation) Normalize() SourceOperation {
+	return op
+}
+
+func (op SourceOperation) IsValid() bool {
+	return op == OperationAdd || op == OperationRemove
+}
+
+// MemberSourceKind defines the kind of member source item.
+type MemberSourceKind string
+
+const (
+	SourceKindManualNode   MemberSourceKind = "manual_node"
+	SourceKindGroupRef     MemberSourceKind = "group_ref"
+	SourceKindGroupNodes   MemberSourceKind = "group_nodes"
+	SourceKindRegex        MemberSourceKind = "regex"
+	SourceKindFilter       MemberSourceKind = "filter"
+	SourceKindTypedBuiltin MemberSourceKind = "typed_builtin"
+)
+
+func (k MemberSourceKind) Normalize() MemberSourceKind {
+	return k
+}
+
+func (k MemberSourceKind) IsValid() bool {
+	switch k {
+	case SourceKindManualNode, SourceKindGroupRef, SourceKindGroupNodes,
+		SourceKindRegex, SourceKindFilter, SourceKindTypedBuiltin:
+		return true
+	default:
+		return false
+	}
+}
+
+// MemberSource represents an ordered candidate member operation inside a policy group.
+type MemberSource struct {
+	ID        string           `json:"id"`
+	GroupID   string           `json:"group_id"`
+	Operation SourceOperation  `json:"operation"`
+	Kind      MemberSourceKind `json:"kind"`
+	Position  int              `json:"position"`
+
+	NodeLogicalID *string         `json:"node_logical_id,omitempty"`
+	TargetGroupID *string         `json:"target_group_id,omitempty"`
+	Pattern       *string         `json:"pattern,omitempty"`
+	FilterSpec    *NodeFilterSpec `json:"filter_spec,omitempty"`
+	BuiltinName   *string         `json:"builtin_name,omitempty"`
+
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func ValidateMemberSource(s MemberSource) error {
+	if !s.Operation.IsValid() {
+		return NewValidationError("invalid_source_operation", fmt.Sprintf("invalid source operation: %s", s.Operation))
+	}
+	if !s.Kind.IsValid() {
+		return NewValidationError("invalid_source_kind", fmt.Sprintf("invalid source kind: %s", s.Kind))
+	}
+	if s.Position < 0 {
+		return NewValidationError("invalid_position", "source position must be non-negative")
+	}
+
+	normKind := s.Kind.Normalize()
+	switch normKind {
+	case SourceKindManualNode:
+		if s.NodeLogicalID == nil || strings.TrimSpace(*s.NodeLogicalID) == "" {
+			err := NewValidationError("invalid_source_entry", "manual_node requires non-empty node_logical_id")
+			err.Field = fmt.Sprintf("sources[%d].node_logical_id", s.Position)
+			return err
+		}
+		if !IsValidLogicalID(*s.NodeLogicalID) {
+			return NewValidationError("invalid_node_logical_id", fmt.Sprintf("invalid node logical ID: %s", *s.NodeLogicalID))
+		}
+		if s.TargetGroupID != nil || s.BuiltinName != nil {
+			err := NewValidationError("invalid_source_entry", "manual_node cannot specify target_group_id or builtin_name")
+			err.Field = fmt.Sprintf("sources[%d]", s.Position)
+			return err
+		}
+
+	case SourceKindGroupRef:
+		if s.TargetGroupID == nil || strings.TrimSpace(*s.TargetGroupID) == "" {
+			err := NewValidationError("invalid_source_entry", "Source kind 'group_ref' requires non-empty target_group_id and pattern must be empty")
+			err.Field = fmt.Sprintf("sources[%d].target_group_id", s.Position)
+			return err
+		}
+		if !IsValidUUIDv7(*s.TargetGroupID) {
+			return NewValidationError("invalid_target_group_id", fmt.Sprintf("invalid target group UUIDv7: %s", *s.TargetGroupID))
+		}
+		if s.NodeLogicalID != nil || s.BuiltinName != nil || (s.Pattern != nil && strings.TrimSpace(*s.Pattern) != "") {
+			err := NewValidationError("invalid_source_entry", "Source kind 'group_ref' requires non-empty target_group_id and pattern must be empty")
+			err.Field = fmt.Sprintf("sources[%d].target_group_id", s.Position)
+			return err
+		}
+
+	case SourceKindGroupNodes:
+		if s.TargetGroupID == nil || strings.TrimSpace(*s.TargetGroupID) == "" {
+			err := NewValidationError("invalid_source_entry", "group_nodes requires non-empty target_group_id")
+			err.Field = fmt.Sprintf("sources[%d].target_group_id", s.Position)
+			return err
+		}
+		if !IsValidUUIDv7(*s.TargetGroupID) {
+			return NewValidationError("invalid_target_group_id", fmt.Sprintf("invalid target group UUIDv7: %s", *s.TargetGroupID))
+		}
+		if s.NodeLogicalID != nil || s.BuiltinName != nil {
+			err := NewValidationError("invalid_source_entry", "group_nodes cannot specify node_logical_id or builtin_name")
+			err.Field = fmt.Sprintf("sources[%d]", s.Position)
+			return err
+		}
+		if s.Pattern != nil && strings.TrimSpace(*s.Pattern) != "" {
+			if _, err := CompileFilterRegex(*s.Pattern); err != nil {
+				return NewValidationError("invalid_regex", fmt.Sprintf("invalid group_nodes pattern: %v", err))
+			}
+		}
+		if s.FilterSpec != nil {
+			if err := s.FilterSpec.Validate(); err != nil {
+				return NewValidationError("invalid_filter_spec", fmt.Sprintf("invalid group_nodes filter_spec: %v", err))
+			}
+		}
+
+	case SourceKindRegex:
+		if s.Pattern == nil || strings.TrimSpace(*s.Pattern) == "" {
+			err := NewValidationError("invalid_source_entry", "regex requires non-empty pattern")
+			err.Field = fmt.Sprintf("sources[%d].pattern", s.Position)
+			return err
+		}
+		if _, err := CompileFilterRegex(*s.Pattern); err != nil {
+			return NewValidationError("invalid_regex", fmt.Sprintf("invalid regex pattern: %v", err))
+		}
+		if s.NodeLogicalID != nil || s.TargetGroupID != nil || s.BuiltinName != nil {
+			err := NewValidationError("invalid_source_entry", "regex cannot specify node_logical_id, target_group_id, or builtin_name")
+			err.Field = fmt.Sprintf("sources[%d]", s.Position)
+			return err
+		}
+
+	case SourceKindFilter:
+		if s.FilterSpec == nil {
+			err := NewValidationError("invalid_source_entry", "filter requires non-empty filter_spec")
+			err.Field = fmt.Sprintf("sources[%d].filter_spec", s.Position)
+			return err
+		}
+		if err := s.FilterSpec.Validate(); err != nil {
+			return NewValidationError("invalid_filter_spec", fmt.Sprintf("invalid filter_spec: %v", err))
+		}
+		if s.NodeLogicalID != nil || s.TargetGroupID != nil || s.BuiltinName != nil {
+			err := NewValidationError("invalid_source_entry", "filter cannot specify node_logical_id, target_group_id, or builtin_name")
+			err.Field = fmt.Sprintf("sources[%d]", s.Position)
+			return err
+		}
+
+	case SourceKindTypedBuiltin:
+		if s.BuiltinName == nil || strings.TrimSpace(*s.BuiltinName) == "" {
+			err := NewValidationError("invalid_source_entry", "typed_builtin requires non-empty builtin_name")
+			err.Field = fmt.Sprintf("sources[%d].builtin_name", s.Position)
+			return err
+		}
+		name := strings.ToUpper(strings.TrimSpace(*s.BuiltinName))
+		if name != "PASS" && name != "DIRECT" && name != "REJECT" && name != "REJECT-DROP" {
+			err := NewValidationError("invalid_source_entry", fmt.Sprintf("unsupported builtin_name: %s", *s.BuiltinName))
+			err.Field = fmt.Sprintf("sources[%d].builtin_name", s.Position)
+			return err
+		}
+		if s.NodeLogicalID != nil || s.TargetGroupID != nil || s.Pattern != nil || s.FilterSpec != nil {
+			err := NewValidationError("invalid_source_entry", "typed_builtin cannot specify node_logical_id, target_group_id, pattern, or filter_spec")
+			err.Field = fmt.Sprintf("sources[%d]", s.Position)
+			return err
+		}
+	}
+
+	return nil
 }
 
 // GroupEdge represents a directed edge in the policy graph.
@@ -159,6 +341,29 @@ func ValidatePolicyTopology(
 		}
 	}
 
+	for _, g := range groups {
+		if len(g.Sources) > 0 {
+			for _, src := range g.Sources {
+				if err := ValidateMemberSource(src); err != nil {
+					return err
+				}
+				normKind := src.Kind.Normalize()
+				if normKind == SourceKindGroupRef || normKind == SourceKindGroupNodes {
+					if src.TargetGroupID != nil && *src.TargetGroupID != "" {
+						childID := *src.TargetGroupID
+						if childID == g.ID {
+							return NewValidationError("self_loop_forbidden", fmt.Sprintf("self-loop detected: parent group %s cannot reference itself", g.ID))
+						}
+						if !groupSet[childID] {
+							return NewValidationError("target_group_not_found", fmt.Sprintf("target child group %s does not exist in policy graph", childID))
+						}
+						adj[g.ID] = append(adj[g.ID], childID)
+					}
+				}
+			}
+		}
+	}
+
 	// Cycle detection using 3-color DFS (0 = white, 1 = gray, 2 = black)
 	color := make(map[string]int, len(groups))
 	var stack []string
@@ -196,6 +401,7 @@ func ValidatePolicyTopology(
 				}
 				pathStr := strings.Join(cyclePath, " -> ")
 				domErr := NewValidationError("cycle_detected", fmt.Sprintf("cycle detected in policy graph: %s", pathStr))
+				domErr.CyclePath = cyclePath
 				domErr.Details = map[string]string{
 					"cycle":    pathStr,
 					"group_id": v,

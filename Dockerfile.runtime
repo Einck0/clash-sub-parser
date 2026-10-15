@@ -1,0 +1,51 @@
+# syntax=docker/dockerfile:1
+
+# Minimal Alpine 3.20 non-root container runtime
+# Reuses pre-compiled pure-static single binary from cloud CI checks (no in-container compilation)
+FROM alpine:3.20
+
+ARG ALPINE_MIRROR=
+ARG COMMIT_SHA=unknown
+ARG BUILD_DATE=unknown
+
+# OCI Metadata Annotations
+LABEL org.opencontainers.image.title="clash-sub-parser" \
+      org.opencontainers.image.description="Clash Sub Parser - Pure Static Container Runtime" \
+      org.opencontainers.image.source="https://github.com/einck0/clash-sub-parser" \
+      org.opencontainers.image.revision="${COMMIT_SHA}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.licenses="Apache-2.0"
+
+# Install runtime dependencies matching original Dockerfile (ca-certificates, tzdata, curl, sqlite)
+RUN if [ -n "$ALPINE_MIRROR" ]; then sed -i "s|dl-cdn.alpinelinux.org|$ALPINE_MIRROR|g" /etc/apk/repositories; fi && \
+    apk add --no-cache ca-certificates tzdata curl sqlite && \
+    rm -rf /var/cache/apk/*
+
+# Dedicated non-root application user appuser (UID 10001, GID 10001)
+RUN addgroup -g 10001 -S appuser && \
+    adduser -u 10001 -S -G appuser -s /sbin/nologin -h /app appuser && \
+    mkdir -p /app /data && \
+    chown -R appuser:appuser /app /data && \
+    chmod 750 /data
+
+# Copy pre-compiled pure-static single binary artifact from CI checks
+COPY --chown=appuser:appuser bin/csp-linux-amd64 /app/csp
+RUN chmod 755 /app/csp
+
+# Environment configurations for containerized runtime
+ENV CSP_ADDR=0.0.0.0:18080 \
+    CSP_DB_PATH=/data/csp-v1.db \
+    TZ=Asia/Shanghai
+
+WORKDIR /app
+USER appuser
+
+EXPOSE 18080
+VOLUME ["/data"]
+
+# Container-level health check probe
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -f http://127.0.0.1:18080/healthz || exit 1
+
+ENTRYPOINT ["/app/csp"]
+CMD ["serve"]

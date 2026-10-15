@@ -31,12 +31,48 @@ export interface GroupEdge {
   position: number
 }
 
+export type SourceOperation = 'add' | 'remove'
+
+export type MemberSourceKind =
+  | 'manual_node'
+  | 'group_ref'
+  | 'group_nodes'
+  | 'regex'
+  | 'filter'
+  | 'typed_builtin'
+
+export type BuiltinName = 'PASS' | 'DIRECT' | 'REJECT' | 'REJECT-DROP'
+
+export const VALID_BUILTIN_NAMES: readonly BuiltinName[] = [
+  'PASS',
+  'DIRECT',
+  'REJECT',
+  'REJECT-DROP',
+] as const
+
+export interface MemberSource {
+  id?: string
+  group_id?: string
+  operation: SourceOperation
+  kind: MemberSourceKind
+  position: number
+  node_logical_id?: string
+  target_group_id?: string
+  pattern?: string
+  filter_spec?: NodeFilterSpec
+  builtin_name?: BuiltinName
+  created_at?: string
+  updated_at?: string
+}
+
 export interface PolicyGroup {
   id: string
   name: string
   group_type: GroupType
-  edges: GroupEdge[]
   empty_fallback_pass?: boolean
+  revision?: number
+  sources?: MemberSource[]
+  edges?: GroupEdge[]
   node_filter?: NodeFilterSpec | null
   created_at?: string
   updated_at?: string
@@ -352,4 +388,335 @@ export function validateConditionInput(cond: Partial<FilterCondition>): string |
   }
 
   return null
+}
+
+export function sourceKindLabel(kind: MemberSourceKind | string): string {
+  switch (kind) {
+    case 'manual_node':
+    case 'node':
+      return '手工节点'
+    case 'group_ref':
+    case 'group':
+      return '策略组引用'
+    case 'group_nodes':
+      return '解包策略组'
+    case 'regex':
+      return '节点名称正则'
+    case 'filter':
+    case 'matching':
+      return '同级属性过滤'
+    case 'typed_builtin':
+    case 'builtin':
+      return '内建流控项'
+    default:
+      return kind
+  }
+}
+
+export function sourceOperationLabel(op: SourceOperation | string): string {
+  switch (op) {
+    case 'add':
+      return '加入 (+)'
+    case 'remove':
+    case 'exclude':
+      return '排除 (-)'
+    default:
+      return op
+  }
+}
+
+export function normalizeGroupSources(group?: Partial<PolicyGroup> | null): MemberSource[] {
+  if (!group) return []
+  if (Array.isArray(group.sources)) {
+    return group.sources.map((s, idx) => {
+      const opStr = (s.operation as string) || 'add'
+      const kindStr = (s.kind as string) || 'manual_node'
+      const operation: SourceOperation = opStr === 'exclude' ? 'remove' : (opStr === 'remove' ? 'remove' : 'add')
+      const kind: MemberSourceKind =
+        kindStr === 'node'
+          ? 'manual_node'
+          : kindStr === 'builtin'
+            ? 'typed_builtin'
+            : kindStr === 'matching'
+              ? 'filter'
+              : (s.kind as MemberSourceKind) || 'manual_node'
+      return {
+        ...s,
+        position: s.position !== undefined ? s.position : idx,
+        operation,
+        kind,
+      }
+    })
+  }
+
+  const result: MemberSource[] = []
+  let pos = 0
+
+  if (Array.isArray(group.edges) && group.edges.length > 0) {
+    const sortedEdges = [...group.edges].sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+    for (const edge of sortedEdges) {
+      if (edge.node_logical_id) {
+        result.push({
+          operation: 'add',
+          kind: 'manual_node',
+          position: pos++,
+          node_logical_id: edge.node_logical_id,
+        })
+      } else if (edge.child_group_id) {
+        result.push({
+          operation: 'add',
+          kind: 'group_ref',
+          position: pos++,
+          target_group_id: edge.child_group_id,
+        })
+      }
+    }
+  }
+
+  if (group.node_filter?.conditions && group.node_filter.conditions.length > 0) {
+    result.push({
+      operation: 'add',
+      kind: 'filter',
+      position: pos++,
+      filter_spec: {
+        conditions: [...group.node_filter.conditions],
+      },
+    })
+  }
+
+  return result
+}
+
+export function validateRegexPattern(pattern: string): string | null {
+  if (!pattern || !pattern.trim()) {
+    return '节点匹配正则表达式不能为空'
+  }
+  const trimmed = pattern.trim()
+  const maxBytes = 1024
+  if (new TextEncoder().encode(trimmed).length > maxBytes) {
+    return `正则表达式长度不能超过 ${maxBytes} 字节`
+  }
+  // Try JS RegExp validation, stripping PCRE inline flags like (?i) for JS compatibility
+  const jsCompatible = trimmed.replace(/^\(\?[imsUx-]+\)/, '')
+  try {
+    new RegExp(jsCompatible)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    return `正则表达式语法无效: ${msg}`
+  }
+  return null
+}
+
+export function validateSourceInput(
+  source: Partial<MemberSource>,
+  parentGroupId?: string
+): string | null {
+  if (!source.operation) {
+    return '必须指定操作类型（加入或排除）'
+  }
+  const opStr = source.operation as string
+  const op = opStr === 'exclude' ? 'remove' : source.operation
+  if (op !== 'add' && op !== 'remove') {
+    return '操作类型必须为"add"或"remove"'
+  }
+
+  if (!source.kind) {
+    return '必须指定来源类别'
+  }
+
+  const kindStr = source.kind as string
+  const kind = kindStr === 'node' ? 'manual_node' : kindStr === 'builtin' ? 'typed_builtin' : kindStr === 'matching' ? 'filter' : source.kind
+
+  switch (kind) {
+    case 'manual_node': {
+      if (!source.node_logical_id || !source.node_logical_id.trim()) {
+        return '手工节点必须指定节点逻辑 ID'
+      }
+      break
+    }
+
+    case 'group_ref': {
+      if (!source.target_group_id || !source.target_group_id.trim()) {
+        return '策略组引用必须指定目标策略组 ID'
+      }
+      if (parentGroupId && source.target_group_id.trim() === parentGroupId.trim()) {
+        return '禁止自环：父策略组不能引用自身'
+      }
+      break
+    }
+
+    case 'group_nodes': {
+      if (!source.target_group_id || !source.target_group_id.trim()) {
+        return '解包策略组必须指定目标策略组 ID'
+      }
+      if (parentGroupId && source.target_group_id.trim() === parentGroupId.trim()) {
+        return '禁止自环：父策略组不能展开自身'
+      }
+      break
+    }
+
+    case 'regex': {
+      const err = validateRegexPattern(source.pattern || '')
+      if (err) return err
+      break
+    }
+
+    case 'filter': {
+      if (
+        !source.filter_spec?.conditions ||
+        source.filter_spec.conditions.length === 0
+      ) {
+        return '同级属性过滤来源至少需要包含一个有效条件'
+      }
+      if (source.filter_spec.conditions.length > 32) {
+        return '单个来源项最多允许添加 32 条过滤条件'
+      }
+      for (const cond of source.filter_spec.conditions) {
+        const err = validateConditionInput(cond)
+        if (err) return err
+      }
+      break
+    }
+
+    case 'typed_builtin': {
+      if (!source.builtin_name) {
+        return '必须选择内建流控项名称'
+      }
+      if (!VALID_BUILTIN_NAMES.includes(source.builtin_name)) {
+        return `不支持的内建项"${source.builtin_name}"（有效项：${VALID_BUILTIN_NAMES.join(', ')}）`
+      }
+      break
+    }
+
+    default:
+      return `不支持的来源类别：${source.kind}`
+  }
+
+  if (source.position !== undefined && source.position < 0) {
+    return '位置序号必须为非负数'
+  }
+
+  return null
+}
+
+export interface GroupDraftPreviewPayload {
+  group_id?: string
+  expected_revision?: number
+  name?: string
+  group_type?: GroupType
+  sources: MemberSource[]
+  target?: string
+}
+
+export type ResolvedMemberKind = 'node' | 'group' | 'builtin' | MemberSourceKind
+
+export interface ResolvedGroupMember {
+  kind: ResolvedMemberKind
+  display_name?: string
+  position?: number
+  node_logical_id?: string
+  group_id?: string
+  builtin_name?: string
+}
+
+export interface GroupDraftPreviewResponse {
+  group_id?: string
+  revision?: number
+  selection_digest: string
+  content_digest?: string
+  content?: string
+  members: ResolvedGroupMember[]
+  node_count: number
+  diagnostics?: string[]
+}
+
+export interface SourceSemanticInfo {
+  source: MemberSource
+  position: number
+  isReEntry: boolean
+  isDuplicate: boolean
+  semanticText: string
+}
+
+export function computeSourceSemantics(sources: MemberSource[]): SourceSemanticInfo[] {
+  const seenTargets = new Map<string, { lastOp: SourceOperation; firstPos: number }>()
+
+  return sources.map((s, idx) => {
+    const opStr = s.operation as string
+    const op: SourceOperation = opStr === 'exclude' ? 'remove' : s.operation
+    let targetKey = ''
+    const isDynamic = s.kind === 'regex' || s.kind === 'filter' || s.kind === 'group_nodes'
+
+    switch (s.kind) {
+      case 'manual_node':
+        targetKey = `node:${s.node_logical_id || ''}`
+        break
+      case 'group_ref':
+        targetKey = `group_ref:${s.target_group_id || ''}`
+        break
+      case 'group_nodes':
+        targetKey = `group_nodes:${s.target_group_id || ''}`
+        break
+      case 'regex':
+        targetKey = `regex:${s.pattern || ''}`
+        break
+      case 'filter':
+        targetKey = `filter:${JSON.stringify(s.filter_spec?.conditions || [])}`
+        break
+      case 'typed_builtin':
+        targetKey = `builtin:${s.builtin_name || ''}`
+        break
+      default:
+        targetKey = `${s.kind}:${s.position}`
+    }
+
+    const previous = seenTargets.get(targetKey)
+    let isReEntry = false
+    let isDuplicate = false
+    let semanticText = ''
+
+    if (isDynamic) {
+      // Dynamic pattern/filter/expansion: actual resolved members are determined by backend resolver
+      if (op === 'remove') {
+        semanticText = `动态排除匹配项（第 #${idx + 1} 步，实际成员由后端解析管道计算）`
+      } else {
+        if (previous && previous.lastOp === 'add') {
+          isDuplicate = true
+          semanticText = `重复定义匹配规则（首次定义于 #${previous.firstPos + 1} 步）`
+        } else {
+          semanticText = `动态加入匹配项（第 #${idx + 1} 步，实际成员由后端解析管道计算）`
+        }
+      }
+    } else {
+      // Static discrete entities: manual_node, group_ref, typed_builtin
+      if (op === 'remove') {
+        semanticText = '排除仅当前成员，后续可加入'
+      } else {
+        if (previous) {
+          if (previous.lastOp === 'remove') {
+            isReEntry = true
+            semanticText = `重入入选（位置 #${idx + 1}，恢复前置排除）`
+          } else {
+            isDuplicate = true
+            semanticText = `重复项（首次出现于 #${previous.firstPos + 1}）`
+          }
+        } else {
+          semanticText = '首次出现，加入候选'
+        }
+      }
+    }
+
+    seenTargets.set(targetKey, {
+      lastOp: op,
+      firstPos: previous ? previous.firstPos : idx,
+    })
+
+    return {
+      source: s,
+      position: idx,
+      isReEntry,
+      isDuplicate,
+      semanticText,
+    }
+  })
 }

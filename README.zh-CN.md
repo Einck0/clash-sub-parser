@@ -98,6 +98,14 @@ openssl rand -hex 32
 
 ---
 
+## 订阅更新路由
+
+在“全局配置 → 订阅更新路由”设置下次抓取使用的路由，无需重启。`environment`（迁移默认）继承 `--fetch-proxy` / `CSP_FETCH_PROXY`；`direct` 忽略环境代理；`proxy` 使用持久化的 HTTP/HTTPS 代理。单订阅 override 优先，但私有 override 必须匹配当前信任的全局代理。订阅目标和每次重定向仍须通过公共 IP 校验与 IP 固定。
+
+管理接口 `GET/PUT /api/v1/settings/subscription-fetch` 沿用现有鉴权和 Cookie CSRF 保护。PUT 示例：`{"mode":"proxy","proxy_url":"http://user:password@proxy.example:7890"}`（必须显式端口）。省略 `proxy_url` 会保留已保存 URL **及凭据**；`{"mode":"direct","clear_proxy_url":true}` 明确清除；`{"mode":"environment"}` 恢复继承但不清除代理。非法请求不改变旧配置或鉴权。GET 只返回不含用户信息的配置/生效 endpoint、凭据存在标记与生效来源，不回传可用凭据。代理凭据保存在既有 SQLite settings 中，而非凭据保险库，须保护数据库及备份访问权限。
+
+抓取失败记录保留安全的 DNS、连接、TLS、HTTP、正文和解析阶段/原因码。失败或部分成功保留旧来源关系；完整成功仅清理当前订阅已移除的关系并保留历史节点资产。代理设置不能修复不可达的上游。
+
 ## 本地开发与测试
 
 ### 单二进制运行

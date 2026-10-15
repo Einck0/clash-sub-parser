@@ -17,7 +17,7 @@ import type {
   FilterCondition,
   FilterField,
   FilterOp,
-  GroupEdge,
+  MemberSource,
   GroupType,
   PolicyGroup,
   PolicyRule,
@@ -66,7 +66,6 @@ const {
   createGroup,
   updateGroup,
   deleteGroup,
-  setGroupEdges,
   loadRules,
   createAdmissionRule,
   createPolicyRule,
@@ -233,6 +232,9 @@ const sheetOpen = ref(false)
 const sheetMode = ref<'group' | 'edges'>('group')
 const activeGroup = ref<PolicyGroup | null>(null)
 const selectedGroupId = ref<string | null>(null)
+const conflictData = ref<{ currentRevision: number; message: string } | null>(null)
+const cycleData = ref<{ cyclePath: string[]; message: string } | null>(null)
+const sheetServerError = ref<string | null>(null)
 
 function selectGroup(group: PolicyGroup) {
   selectedGroupId.value = group.id
@@ -243,6 +245,9 @@ function handleSheetClose() {
   sheetOpen.value = false
   // Clean up selected group pointer on close so UI doesn't leave stale error state
   selectedGroupId.value = null
+  conflictData.value = null
+  cycleData.value = null
+  sheetServerError.value = null
 }
 
 // Admission Rule Modal State
@@ -255,6 +260,9 @@ function openCreateGroup() {
   activeGroup.value = null
   selectedGroupId.value = null
   sheetMode.value = 'group'
+  conflictData.value = null
+  cycleData.value = null
+  sheetServerError.value = null
   sheetOpen.value = true
 }
 
@@ -262,6 +270,9 @@ function openEditGroup(group: PolicyGroup) {
   activeGroup.value = group
   selectedGroupId.value = group.id
   sheetMode.value = 'group'
+  conflictData.value = null
+  cycleData.value = null
+  sheetServerError.value = null
   sheetOpen.value = true
 }
 
@@ -269,36 +280,70 @@ function openManageEdges(group: PolicyGroup) {
   activeGroup.value = group
   selectedGroupId.value = group.id
   sheetMode.value = 'edges'
+  conflictData.value = null
+  cycleData.value = null
+  sheetServerError.value = null
   sheetOpen.value = true
 }
 
-async function handleSaveGroup(data: { name: string; type: GroupType; nodeFilter?: any; emptyFallbackPass: boolean }) {
+async function handleReloadGroup(groupId: string) {
+  await loadGroups(page.value, pageSize.value)
+  const found = groups.value.find((g) => g.id === groupId)
+  if (found) {
+    activeGroup.value = found
+  }
+  conflictData.value = null
+  cycleData.value = null
+  sheetServerError.value = null
+}
+
+async function handleSaveGroup(data: {
+  name: string
+  type: GroupType
+  emptyFallbackPass: boolean
+  sources: MemberSource[]
+  expectedRevision?: number
+}) {
+  conflictData.value = null
+  cycleData.value = null
+  sheetServerError.value = null
   try {
     if (activeGroup.value) {
-      const updated = await updateGroup(activeGroup.value.id, data.name, data.type, data.nodeFilter, data.emptyFallbackPass)
+      const updated = await updateGroup(activeGroup.value.id, {
+        name: data.name,
+        group_type: data.type,
+        empty_fallback_pass: data.emptyFallbackPass,
+        expected_revision: data.expectedRevision ?? activeGroup.value.revision,
+        sources: data.sources,
+      })
       activeGroup.value = updated
       selectedGroupId.value = updated.id
     } else {
-      const created = await createGroup(data.name, data.type, [], data.nodeFilter, data.emptyFallbackPass)
+      const created = await createGroup({
+        name: data.name,
+        group_type: data.type,
+        empty_fallback_pass: data.emptyFallbackPass,
+        sources: data.sources,
+      })
       activeGroup.value = created
       selectedGroupId.value = created.id
     }
     sheetOpen.value = false
-  } catch {
-    // error handled in usePolicy
-  }
-}
-
-async function handleSaveEdges(data: { groupId: string; edges: GroupEdge[] }) {
-  try {
-    await setGroupEdges(data.groupId, data.edges)
-    const refreshed = groups.value.find((g) => g.id === data.groupId)
-    if (refreshed) {
-      activeGroup.value = refreshed
+  } catch (err: any) {
+    if (err?.status === 409 || err?.code === 'revision_conflict') {
+      const rev = (err.details as any)?.current_revision ?? (err as any).current_revision ?? ((activeGroup.value?.revision || 1) + 1)
+      conflictData.value = {
+        currentRevision: rev,
+        message: err.message || '策略组版本冲突，服务端已更新。',
+      }
+    } else if (err?.status === 422 && ((err.details as any)?.cycle_path || err?.code === 'cycle_detected')) {
+      cycleData.value = {
+        cyclePath: (err.details as any)?.cycle_path ?? err.cycle_path ?? [],
+        message: err.message || '检测到循环依赖环路',
+      }
+    } else {
+      sheetServerError.value = err instanceof Error ? err.message : '保存策略组失败'
     }
-    sheetOpen.value = false
-  } catch {
-    // error handled in usePolicy
   }
 }
 
@@ -792,11 +837,11 @@ onUnmounted(() => {
     <ModalDialog
       v-model="globalFilterModalOpen"
       title="全局节点筛选"
-      description="在所有策略组条件之前评估，在此处被排除的节点将不会进入任何策略组。"
+      description="在策略组来源流水线之前评估，在此处被排除的节点不会进入任何策略组。"
     >
       <div class="space-y-4">
         <div class="p-3 bg-info/10 border border-info/30 rounded-xl text-xs text-info leading-relaxed">
-          <p><strong>执行优先级：</strong>硬性风险/准入拒绝 → 全局节点筛选 → 策略组专属筛选条件。</p>
+          <p><strong>执行优先级：</strong>硬性风险/准入拒绝 → 全局节点筛选 → 策略组有序来源流水线（逐项加入 / 排除，后续可重新加入）。</p>
           <p class="mt-1">留空筛选条件时将允许所有通过准入的节点，不做额外全局过滤。</p>
           <p class="mt-1 opacity-80">{{ t('settings.filterExplanation') }}</p>
           <p class="mt-1 opacity-80">{{ t('settings.filterScope') }}</p>
@@ -966,9 +1011,13 @@ onUnmounted(() => {
       :available-nodes="nodeItems"
       :mode="sheetMode"
       :saving="saving"
+      :conflict-error="conflictData"
+      :cycle-error="cycleData"
+      :server-error="sheetServerError"
       @close="handleSheetClose"
       @save-group="handleSaveGroup"
-      @save-edges="handleSaveEdges"
+      @reload-group="handleReloadGroup"
+      @clear-conflict="conflictData = null"
     />
 
     <!-- Add Admission Rule Modal -->

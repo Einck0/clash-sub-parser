@@ -275,8 +275,8 @@ func TestCompiler_DerivedProjectedGroupsAcrossAllTargets(t *testing.T) {
 		CompilerVersion:    "1.0.0",
 		Nodes:              []domain.Node{n1, n2},
 		Groups: []domain.NodeGroup{
-			{ID: parentID, Name: "Proxy", GroupType: domain.GroupTypeSelect},
-			{ID: childID, Name: "Auto", GroupType: domain.GroupTypeSelect},
+			{ID: parentID, Name: "Proxy", GroupType: domain.GroupTypeSelect, Sources: []domain.MemberSource{{Operation: domain.OperationAdd, Kind: domain.SourceKindGroupRef, TargetGroupID: &childID, FilterSpec: &domain.NodeFilterSpec{Conditions: []domain.FilterCondition{{Field: domain.FilterFieldDisplayName, Op: domain.FilterOpContains, Value: "Fast"}}}}}},
+			{ID: childID, Name: "Auto", GroupType: domain.GroupTypeSelect, Sources: []domain.MemberSource{{Operation: domain.OperationAdd, Kind: domain.SourceKindManualNode, NodeLogicalID: &n1.LogicalID}, {Operation: domain.OperationAdd, Kind: domain.SourceKindManualNode, NodeLogicalID: &n2.LogicalID, Position: 1}}},
 		},
 		Edges: map[string][]domain.GroupEdge{
 			parentID: {{ID: "e1", ParentGroupID: parentID, ChildGroupID: &childID, Position: 0}},

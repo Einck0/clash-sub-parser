@@ -23,7 +23,7 @@ func testNodeLogicalID(name string) string {
 }
 
 func TestDeterministicResolver_IdenticalInputProducesExactSameDigest(t *testing.T) {
-	r := resolver.New()
+	r := sourceFixtureResolver{}
 	ctx := context.Background()
 
 	parentID := domain.MustNewUUIDv7()
@@ -87,7 +87,7 @@ func TestDeterministicResolver_IdenticalInputProducesExactSameDigest(t *testing.
 }
 
 func TestDeterministicResolver_ShuffledInputProducesIdenticalSnapshotAndDigest(t *testing.T) {
-	r := resolver.New()
+	r := sourceFixtureResolver{}
 	ctx := context.Background()
 
 	parentID := domain.MustNewUUIDv7()
@@ -211,7 +211,7 @@ func TestDeterministicResolver_ShuffledInputProducesIdenticalSnapshotAndDigest(t
 }
 
 func TestDeterministicResolver_RejectsGraphCycle(t *testing.T) {
-	r := resolver.New()
+	r := sourceFixtureResolver{}
 	ctx := context.Background()
 
 	gA := domain.MustNewUUIDv7()
@@ -248,7 +248,7 @@ func TestDeterministicResolver_RejectsGraphCycle(t *testing.T) {
 }
 
 func TestDeterministicResolver_RejectsSelfLoop(t *testing.T) {
-	r := resolver.New()
+	r := sourceFixtureResolver{}
 	ctx := context.Background()
 
 	gA := domain.MustNewUUIDv7()
@@ -274,7 +274,7 @@ func TestDeterministicResolver_RejectsSelfLoop(t *testing.T) {
 }
 
 func TestDeterministicResolver_RejectsMissingTargetGroup(t *testing.T) {
-	r := resolver.New()
+	r := sourceFixtureResolver{}
 	ctx := context.Background()
 
 	gA := domain.MustNewUUIDv7()
@@ -301,7 +301,7 @@ func TestDeterministicResolver_RejectsMissingTargetGroup(t *testing.T) {
 }
 
 func TestDeterministicResolver_RejectsMultipleMatchRules(t *testing.T) {
-	r := resolver.New()
+	r := sourceFixtureResolver{}
 	ctx := context.Background()
 
 	gA := domain.MustNewUUIDv7()
@@ -328,7 +328,7 @@ func TestDeterministicResolver_RejectsMultipleMatchRules(t *testing.T) {
 }
 
 func TestDeterministicResolver_MatchRulePlacedTerminal(t *testing.T) {
-	r := resolver.New()
+	r := sourceFixtureResolver{}
 	ctx := context.Background()
 
 	gID := domain.MustNewUUIDv7()
@@ -368,7 +368,7 @@ func TestDeterministicResolver_MatchRulePlacedTerminal(t *testing.T) {
 }
 
 func TestDeterministicResolver_AdmissionRulesAndExpressions(t *testing.T) {
-	r := resolver.New()
+	r := sourceFixtureResolver{}
 	ctx := context.Background()
 
 	gID := domain.MustNewUUIDv7()
@@ -417,7 +417,7 @@ func TestDeterministicResolver_AdmissionRulesAndExpressions(t *testing.T) {
 }
 
 func TestDeterministicResolver_SubtreeNodeExpansion(t *testing.T) {
-	r := resolver.New()
+	r := sourceFixtureResolver{}
 	ctx := context.Background()
 
 	gRoot := domain.MustNewUUIDv7()
@@ -483,7 +483,7 @@ func TestDeterministicResolver_SubtreeNodeExpansion(t *testing.T) {
 }
 
 func TestDeterministicResolver_RiskMetadataPreserved(t *testing.T) {
-	r := resolver.New()
+	r := sourceFixtureResolver{}
 	ctx := context.Background()
 
 	gID := domain.MustNewUUIDv7()
@@ -532,7 +532,7 @@ func TestDeterministicResolver_ContextCancellation(t *testing.T) {
 }
 
 func TestRiskAwareResolver_ExcludesBlockedAndReviewNodesWithStableDiagnostics(t *testing.T) {
-	r := resolver.New()
+	r := sourceFixtureResolver{}
 	groupID := domain.MustNewUUIDv7()
 	nodeBlock := testNodeLogicalID("risk-block")
 	nodeReview := testNodeLogicalID("risk-review")
@@ -602,7 +602,7 @@ func TestRiskAwareResolver_ExcludesBlockedAndReviewNodesWithStableDiagnostics(t 
 }
 
 func TestRiskAwareResolver_ReviewAllowKeepsReviewedNode(t *testing.T) {
-	r := resolver.New()
+	r := sourceFixtureResolver{}
 	groupID := domain.MustNewUUIDv7()
 	nodeID := testNodeLogicalID("risk-review-allow")
 	evaluatedAt := time.Date(2026, 9, 16, 12, 0, 0, 0, time.UTC)
@@ -633,7 +633,7 @@ func TestRiskAwareResolver_ReviewAllowKeepsReviewedNode(t *testing.T) {
 }
 
 func TestRiskAwareResolver_UnboundInputPreservesOriginalAdmission(t *testing.T) {
-	r := resolver.New()
+	r := sourceFixtureResolver{}
 	groupID := domain.MustNewUUIDv7()
 	nodeID := testNodeLogicalID("unbound-risk")
 	input := resolver.ResolveInput{
@@ -660,7 +660,7 @@ func hasDiagnostic(diagnostics []resolver.Diagnostic, code, target string) bool 
 }
 
 func TestDeterministicResolver_ConcurrentResolutionsAreIdentical(t *testing.T) {
-	r := resolver.New()
+	r := sourceFixtureResolver{}
 	ctx := context.Background()
 
 	parentID := domain.MustNewUUIDv7()
@@ -734,7 +734,7 @@ func TestDeterministicResolver_ConcurrentResolutionsAreIdentical(t *testing.T) {
 }
 
 func TestResolver_TwoLevelFiltering_GlobalAndGroup(t *testing.T) {
-	r := resolver.New()
+	r := sourceFixtureResolver{}
 	ctx := context.Background()
 
 	parentID := domain.MustNewUUIDv7()
@@ -814,7 +814,7 @@ func TestResolver_TwoLevelFiltering_GlobalAndGroup(t *testing.T) {
 }
 
 func TestResolver_DynamicGroup_MatchesFromGlobalPool(t *testing.T) {
-	r := resolver.New()
+	r := sourceFixtureResolver{}
 	ctx := context.Background()
 
 	gid := domain.MustNewUUIDv7()
@@ -864,7 +864,7 @@ func TestResolver_DynamicGroup_MatchesFromGlobalPool(t *testing.T) {
 }
 
 func TestResolver_NestedGroupProjection_RestrictsChildNodes(t *testing.T) {
-	r := resolver.New()
+	r := sourceFixtureResolver{}
 	ctx := context.Background()
 
 	parentID := domain.MustNewUUIDv7()
@@ -946,7 +946,7 @@ func TestResolver_NestedGroupProjection_RestrictsChildNodes(t *testing.T) {
 }
 
 func TestResolver_EmptyRoutedGroup_FailClosedDiagnostic(t *testing.T) {
-	r := resolver.New()
+	r := sourceFixtureResolver{}
 	ctx := context.Background()
 
 	parentID := domain.MustNewUUIDv7()
@@ -999,7 +999,7 @@ func TestResolver_EmptyRoutedGroup_FailClosedDiagnostic(t *testing.T) {
 }
 
 func TestResolver_DirectlyRoutedEmptyGroup_EmitsErrorRegardlessOfFilter(t *testing.T) {
-	r := resolver.New()
+	r := sourceFixtureResolver{}
 	ctx := context.Background()
 
 	parentID := domain.MustNewUUIDv7()
@@ -1046,7 +1046,7 @@ func TestResolver_DirectlyRoutedEmptyGroup_EmitsErrorRegardlessOfFilter(t *testi
 }
 
 func TestResolver_ProbeFailClosed_MissingExpiredMismatchNotEquals(t *testing.T) {
-	r := resolver.New()
+	r := sourceFixtureResolver{}
 	ctx := context.Background()
 
 	gid := domain.MustNewUUIDv7()
@@ -1178,7 +1178,7 @@ func TestResolver_ProbeFailClosed_MissingExpiredMismatchNotEquals(t *testing.T) 
 }
 
 func TestResolver_MultiParentNestedGroupProjection(t *testing.T) {
-	r := resolver.New()
+	r := sourceFixtureResolver{}
 	ctx := context.Background()
 
 	parent1ID := domain.MustNewUUIDv7()
@@ -1260,7 +1260,7 @@ func TestResolver_MultiParentNestedGroupProjection(t *testing.T) {
 }
 
 func TestResolver_FreshnessBoundaryDigestChange(t *testing.T) {
-	r := resolver.New()
+	r := sourceFixtureResolver{}
 	ctx := context.Background()
 
 	gid := domain.MustNewUUIDv7()

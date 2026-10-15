@@ -205,7 +205,7 @@ func TestControlPlaneEndToEndFixture(t *testing.T) {
 		RevisionID:      "integration-revision",
 		CompilerVersion: "1.0.0",
 		Nodes:           nodes,
-		Groups:          []domain.NodeGroup{{ID: groupID, Name: "Integration Select", GroupType: domain.GroupTypeSelect}},
+		Groups:          []domain.NodeGroup{{ID: groupID, Name: "Integration Select", GroupType: domain.GroupTypeSelect, Sources: []domain.MemberSource{{Operation: domain.OperationAdd, Kind: domain.SourceKindManualNode, NodeLogicalID: &groupEdgeNodeID}}}},
 		Edges:           map[string][]domain.GroupEdge{groupID: {{ID: domain.MustNewUUIDv7(), ParentGroupID: groupID, NodeLogicalID: &groupEdgeNodeID}}},
 		PolicyRules:     []domain.PolicyRule{{ID: "integration-rule", TargetGroupID: groupID, Expression: "MATCH", Position: 0}},
 	})
@@ -542,7 +542,7 @@ func TestControlPlaneEndToEndWithIPRiskFakeProvider(t *testing.T) {
 		RevisionID:         "rev-iprisk-e2e",
 		CompilerVersion:    "1.0.0",
 		Nodes:              nodes,
-		Groups:             []domain.NodeGroup{{ID: groupID, Name: "All Nodes", GroupType: domain.GroupTypeSelect}},
+		Groups:             []domain.NodeGroup{{ID: groupID, Name: "All Nodes", GroupType: domain.GroupTypeSelect, Sources: []domain.MemberSource{{Operation: domain.OperationAdd, Kind: domain.SourceKindManualNode, NodeLogicalID: &groupEdgeClean}, {Operation: domain.OperationAdd, Kind: domain.SourceKindManualNode, NodeLogicalID: &groupEdgeTor, Position: 1}}}},
 		Edges:              map[string][]domain.GroupEdge{groupID: {{ID: domain.MustNewUUIDv7(), ParentGroupID: groupID, NodeLogicalID: &groupEdgeClean}, {ID: domain.MustNewUUIDv7(), ParentGroupID: groupID, NodeLogicalID: &groupEdgeTor}}},
 		PolicyRules:        []domain.PolicyRule{{ID: "rule-match-all", TargetGroupID: groupID, Expression: "MATCH", Position: 0}},
 		RiskPolicyRevision: policyRev.RevisionID,

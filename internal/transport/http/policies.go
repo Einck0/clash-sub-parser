@@ -22,6 +22,7 @@ type createGroupRequest struct {
 	ID                string                 `json:"id,omitempty"`
 	Name              string                 `json:"name"`
 	GroupType         domain.GroupType       `json:"group_type"`
+	Sources           []domain.MemberSource  `json:"sources,omitempty"`
 	Edges             []policy.EdgeInput     `json:"edges,omitempty"`
 	NodeFilter        *domain.NodeFilterSpec `json:"node_filter,omitempty"`
 }
@@ -30,8 +31,20 @@ type updateGroupRequest struct {
 	EmptyFallbackPass *bool                  `json:"empty_fallback_pass,omitempty"`
 	Name              *string                `json:"name,omitempty"`
 	GroupType         *domain.GroupType      `json:"group_type,omitempty"`
+	ExpectedRevision  *int64                 `json:"expected_revision,omitempty"`
+	Sources           *[]domain.MemberSource `json:"sources,omitempty"`
 	Edges             *[]policy.EdgeInput    `json:"edges,omitempty"`
 	NodeFilter        *domain.NodeFilterSpec `json:"node_filter,omitempty"`
+}
+
+type previewGroupRequest struct {
+	GroupID           *string                `json:"group_id,omitempty"`
+	ExpectedRevision  *int64                 `json:"expected_revision,omitempty"`
+	Name              *string                `json:"name,omitempty"`
+	GroupType         *domain.GroupType      `json:"group_type,omitempty"`
+	EmptyFallbackPass *bool                  `json:"empty_fallback_pass,omitempty"`
+	Sources           []domain.MemberSource  `json:"sources"`
+	Target            *domain.CompilerTarget `json:"target,omitempty"`
 }
 
 type setGlobalFilterRequest struct {
@@ -65,6 +78,7 @@ func registerPolicyRoutes(r chi.Router, service *policy.Service, audit domain.Au
 
 		sub.Get("/groups", h.listGroups)
 		sub.Post("/groups", h.createGroup)
+		sub.Post("/groups/preview", h.previewGroup)
 		sub.Get("/groups/{id}", h.getGroup)
 		sub.Patch("/groups/{id}", h.updateGroup)
 		sub.Put("/groups/{id}", h.updateGroup)
@@ -180,6 +194,7 @@ func (h policyHandler) createGroup(w http.ResponseWriter, r *http.Request) {
 		ID:                body.ID,
 		Name:              body.Name,
 		GroupType:         body.GroupType,
+		Sources:           body.Sources,
 		Edges:             body.Edges,
 		NodeFilter:        body.NodeFilter,
 		RequestID:         GetRequestID(r.Context()),
@@ -230,6 +245,8 @@ func (h policyHandler) updateGroup(w http.ResponseWriter, r *http.Request) {
 		ID:                id,
 		Name:              body.Name,
 		GroupType:         body.GroupType,
+		ExpectedRevision:  body.ExpectedRevision,
+		Sources:           body.Sources,
 		Edges:             body.Edges,
 		RequestID:         GetRequestID(r.Context()),
 		ActorKind:         requestActorKind(r),
@@ -251,6 +268,31 @@ func (h policyHandler) updateGroup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	WriteSuccess(w, r, http.StatusOK, view)
+}
+
+func (h policyHandler) previewGroup(w http.ResponseWriter, r *http.Request) {
+	var body previewGroupRequest
+	if err := decodeJSON(w, r, &body); err != nil {
+		return
+	}
+
+	res, err := h.service.PreviewGroup(r.Context(), policy.PreviewGroupCommand{
+		GroupID:           body.GroupID,
+		ExpectedRevision:  body.ExpectedRevision,
+		Name:              body.Name,
+		GroupType:         body.GroupType,
+		EmptyFallbackPass: body.EmptyFallbackPass,
+		Sources:           body.Sources,
+		Target:            body.Target,
+		RequestID:         GetRequestID(r.Context()),
+		ActorKind:         requestActorKind(r),
+	})
+	if err != nil {
+		WriteDomainError(w, r, err)
+		return
+	}
+
+	WriteSuccess(w, r, http.StatusOK, res)
 }
 
 func (h policyHandler) deleteGroup(w http.ResponseWriter, r *http.Request) {

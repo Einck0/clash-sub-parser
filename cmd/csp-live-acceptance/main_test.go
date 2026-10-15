@@ -1141,15 +1141,32 @@ func TestRun_PaginationInconsistency_DuplicatesFailClosed(t *testing.T) {
 func TestRun_Security_TokenFileSymlink_Rejected(t *testing.T) {
 	tempDir := t.TempDir()
 	realToken := filepath.Join(tempDir, "real_token.secret")
-	_ = os.WriteFile(realToken, []byte("valid-token"), 0600)
+	if err := os.WriteFile(realToken, []byte("valid-token"), 0600); err != nil {
+		t.Fatalf("write token: %v", err)
+	}
 
 	symlinkToken := filepath.Join(tempDir, "symlink_token.secret")
 	if err := os.Symlink(realToken, symlinkToken); err != nil {
 		t.Fatalf("create symlink: %v", err)
 	}
 
+	var requests atomic.Int64
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		http.Error(w, "unexpected network access", http.StatusServiceUnavailable)
+	}))
+	defer ts.Close()
+	outReport := filepath.Join(tempDir, "report.json")
+
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"-token-file", symlinkToken}, &stdout, &stderr)
+	code := run([]string{"-addr", ts.URL, "-output", outReport, "-token-file", symlinkToken}, &stdout, &stderr)
+	if count := requests.Load(); count != 0 {
+		t.Errorf("expected credential rejection before any network access, got %d requests", count)
+	}
+	if _, err := os.Stat(outReport); !os.IsNotExist(err) {
+		t.Errorf("expected no report for rejected credentials, stat error: %v", err)
+	}
+	t.Logf("credential rejection network requests: %d", requests.Load())
 	if code != ExitCodeFailure {
 		t.Fatalf("expected ExitCodeFailure (1) when token-file is a symlink, got %d", code)
 	}
@@ -1161,11 +1178,31 @@ func TestRun_Security_TokenFileSymlink_Rejected(t *testing.T) {
 func TestRun_Security_TokenFileGroupReadable_Rejected(t *testing.T) {
 	tempDir := t.TempDir()
 	insecureToken := filepath.Join(tempDir, "insecure_token.secret")
-	// Write with 0644 permissions (group/other readable)
-	_ = os.WriteFile(insecureToken, []byte("valid-token"), 0644)
+	if err := os.WriteFile(insecureToken, []byte("valid-token"), 0600); err != nil {
+		t.Fatalf("write token: %v", err)
+	}
+	// Chmod sets the intended insecure permissions independently of the process umask.
+	if err := os.Chmod(insecureToken, 0644); err != nil {
+		t.Fatalf("set group/other-readable token permissions: %v", err)
+	}
+
+	var requests atomic.Int64
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		http.Error(w, "unexpected network access", http.StatusServiceUnavailable)
+	}))
+	defer ts.Close()
+	outReport := filepath.Join(tempDir, "report.json")
 
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"-token-file", insecureToken}, &stdout, &stderr)
+	code := run([]string{"-addr", ts.URL, "-output", outReport, "-token-file", insecureToken}, &stdout, &stderr)
+	if count := requests.Load(); count != 0 {
+		t.Errorf("expected credential rejection before any network access, got %d requests", count)
+	}
+	if _, err := os.Stat(outReport); !os.IsNotExist(err) {
+		t.Errorf("expected no report for rejected credentials, stat error: %v", err)
+	}
+	t.Logf("credential rejection network requests: %d", requests.Load())
 	if code != ExitCodeFailure {
 		t.Fatalf("expected ExitCodeFailure (1) when token-file is group/other readable, got %d", code)
 	}
@@ -1271,8 +1308,12 @@ func TestRun_WriteFileFailure(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	// Attempt to write report to an impossible location: /dev/null/report.json
-	invalidReportPath := "/dev/null/report.json"
+	// A regular file cannot be the report's parent directory.
+	notDirectory := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(notDirectory, []byte("fixture"), 0600); err != nil {
+		t.Fatalf("create non-directory fixture: %v", err)
+	}
+	invalidReportPath := filepath.Join(notDirectory, "report.json")
 
 	var stdout, stderr bytes.Buffer
 	code := run([]string{"-addr", ts.URL, "-output", invalidReportPath}, &stdout, &stderr)

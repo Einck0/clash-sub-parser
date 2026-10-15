@@ -45,7 +45,7 @@ func TestEmptyPassOldMigrationAndAtomicRollback(t *testing.T) {
 	}
 	atomic := repo.(domain.AtomicGroupRepository)
 	// A real SQLite trigger injects a storage failure after metadata and edges.
-	if _, err := db.ExecContext(ctx, `CREATE TRIGGER fail_filter BEFORE INSERT ON group_node_filters BEGIN SELECT RAISE(ABORT,'fixture failure'); END;`); err != nil {
+	if _, err := db.ExecContext(ctx, `CREATE TRIGGER fail_filter BEFORE INSERT ON policy_group_sources BEGIN SELECT RAISE(ABORT,'fixture failure'); END;`); err != nil {
 		t.Fatal(err)
 	}
 	filter := &domain.NodeFilterSpec{Conditions: []domain.FilterCondition{{Field: domain.FilterFieldDisplayName, Op: domain.FilterOpContains, Value: "HK"}}}

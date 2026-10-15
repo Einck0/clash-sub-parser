@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"clash-sub-parser/internal/domain"
@@ -28,6 +29,24 @@ func deterministicDerivedUUID(parentID, childID string) string {
 		raw[0:4], raw[4:6], raw[6:8], raw[8:10], raw[10:16])
 }
 
+type resolvedItem struct {
+	id          string // "node:<id>", "group:<id>", "builtin:<name>"
+	kind        MemberKind
+	targetID    string
+	displayName string
+}
+
+type groupMemo struct {
+	members            []ResolvedGroupMember
+	childGroupIDs      []string
+	nodeLogicalIDs     []string
+	expandedNodeIDs    []string
+	effectiveEmptyPass bool
+	leafItems          []resolvedItem
+	leafNodeSet        map[string]bool
+	candidateCount     int
+}
+
 // resolveGroups constructs resolved groups with ordered members, child group links, and recursive node expansion.
 func resolveGroups(
 	groups []domain.NodeGroup,
@@ -47,17 +66,17 @@ func resolveGroups(
 
 	// Map groups by ID for rapid lookup
 	groupMap := make(map[string]domain.NodeGroup, len(groups))
-	groupFilterMap := make(map[string]domain.NodeFilterSpec, len(groups))
+	groupSources := make(map[string][]domain.MemberSource, len(groups))
+
 	for _, g := range groups {
 		groupMap[g.ID] = g
-		gf := groupFilters[g.ID]
-		if gf.IsEmpty() && g.NodeFilter != nil {
-			gf = *g.NodeFilter
-		}
-		groupFilterMap[g.ID] = gf
+
+		srcs := append([]domain.MemberSource(nil), g.Sources...)
+		sort.SliceStable(srcs, func(a, b int) bool { return srcs[a].Position < srcs[b].Position })
+		groupSources[g.ID] = srcs
 	}
 
-	// Sort globalAdmittedNodes by DisplayName ASC, LogicalID ASC for deterministic dynamic selection
+	// Sort globalAdmittedNodes by DisplayName ASC, LogicalID ASC
 	sortedGlobalNodes := make([]domain.Node, len(globalAdmittedNodes))
 	copy(sortedGlobalNodes, globalAdmittedNodes)
 	sort.SliceStable(sortedGlobalNodes, func(i, j int) bool {
@@ -77,166 +96,391 @@ func resolveGroups(
 		return sortedGroups[i].Name < sortedGroups[j].Name
 	})
 
-	resolvedGroups := make([]ResolvedGroup, len(sortedGroups))
-	resolvedGroupMap := make(map[string]*ResolvedGroup, len(sortedGroups))
+	memo := make(map[string]*groupMemo, len(groups))
+	resolving := make(map[string]bool, len(groups))
 
-	for i, g := range sortedGroups {
-		edgeList := edges[g.ID]
-		// Sort edges by Position ASC
-		sortedEdges := make([]domain.GroupEdge, len(edgeList))
-		copy(sortedEdges, edgeList)
-		sort.SliceStable(sortedEdges, func(a, b int) bool {
-			return sortedEdges[a].Position < sortedEdges[b].Position
-		})
+	var resolveGroupMemo func(gid string) *groupMemo
+	resolveGroupMemo = func(gid string) *groupMemo {
+		if m, ok := memo[gid]; ok {
+			return m
+		}
+		if resolving[gid] {
+			return &groupMemo{leafNodeSet: make(map[string]bool)}
+		}
+		resolving[gid] = true
+		defer func() { resolving[gid] = false }()
 
-		var explicitNodeEdges []domain.GroupEdge
-		var childGroupEdges []domain.GroupEdge
-		for _, e := range sortedEdges {
-			if e.NodeLogicalID != nil && *e.NodeLogicalID != "" {
-				explicitNodeEdges = append(explicitNodeEdges, e)
-			} else if e.ChildGroupID != nil && *e.ChildGroupID != "" {
-				childGroupEdges = append(childGroupEdges, e)
-			}
+		g, ok := groupMap[gid]
+		if !ok {
+			return &groupMemo{leafNodeSet: make(map[string]bool)}
 		}
 
-		gFilter := groupFilterMap[g.ID]
-		members := make([]ResolvedGroupMember, 0, len(sortedEdges))
-		childGroupIDs := make([]string, 0)
-		nodeLogicalIDs := make([]string, 0)
+		sources := groupSources[gid]
+		var currentItems []resolvedItem
+		seenInCurrentSet := make(map[string]bool)
+		candidateCount := 0
 
-		if len(explicitNodeEdges) > 0 {
-			// Case A: Explicit node edges
-			for _, edge := range explicitNodeEdges {
-				nodeID := *edge.NodeLogicalID
-				if node, ok := globalAdmittedMap[nodeID]; ok {
-					if !gFilter.IsEmpty() {
-						srcs := nodeSources[nodeID]
-						lobs := latestObs[nodeID]
-						matched, reason := domain.MatchesFilter(&gFilter, node, srcs, lobs, asOf)
-						if matched {
-							members = append(members, ResolvedGroupMember{
-								Kind:        MemberKindNode,
-								TargetID:    nodeID,
-								DisplayName: node.DisplayName,
-								Position:    len(members),
-							})
-							nodeLogicalIDs = append(nodeLogicalIDs, nodeID)
-						} else {
+		for _, s := range sources {
+			op := s.Operation.Normalize()
+			normKind := s.Kind.Normalize()
+
+			if op == domain.OperationAdd {
+				switch normKind {
+				case domain.SourceKindManualNode:
+					candidateCount++
+					if s.NodeLogicalID != nil {
+						nodeID := *s.NodeLogicalID
+						if node, ok := globalAdmittedMap[nodeID]; ok {
+							if s.FilterSpec != nil {
+								srcs := nodeSources[nodeID]
+								lobs := latestObs[nodeID]
+								matched, reason := domain.MatchesFilter(s.FilterSpec, node, srcs, lobs, asOf)
+								if !matched {
+									diagnostics = append(diagnostics, Diagnostic{
+										Severity: DiagnosticSeverityWarning,
+										Code:     "group_member_filtered",
+										Message:  fmt.Sprintf("group %q explicit member %q (%s) excluded by source filter: %s", g.Name, node.DisplayName, nodeID, reason),
+										Target:   nodeID,
+										Reason:   reason,
+									})
+									continue
+								}
+							}
+							id := "node:" + nodeID
+							if !seenInCurrentSet[id] {
+								seenInCurrentSet[id] = true
+								currentItems = append(currentItems, resolvedItem{id: id, kind: MemberKindNode, targetID: nodeID, displayName: node.DisplayName})
+							}
+						} else if origNode, inAdm := admittedNodeMap[nodeID]; inAdm {
 							diagnostics = append(diagnostics, Diagnostic{
 								Severity: DiagnosticSeverityWarning,
 								Code:     "group_member_filtered",
-								Message:  fmt.Sprintf("group %q explicit member %q (%s) excluded by group filter: %s", g.Name, node.DisplayName, nodeID, reason),
+								Message:  fmt.Sprintf("group %q explicit member %q (%s) excluded by global filter", g.Name, origNode.DisplayName, nodeID),
 								Target:   nodeID,
-								Reason:   reason,
+								Reason:   "excluded by global filter",
+							})
+						} else {
+							diagnostics = append(diagnostics, Diagnostic{
+								Severity: DiagnosticSeverityWarning,
+								Code:     "node_inactive_or_missing",
+								Message:  fmt.Sprintf("group %q references node %s which is missing, inactive, or excluded", g.Name, nodeID),
+								Target:   nodeID,
 							})
 						}
-					} else {
-						members = append(members, ResolvedGroupMember{
-							Kind:        MemberKindNode,
-							TargetID:    nodeID,
-							DisplayName: node.DisplayName,
-							Position:    len(members),
-						})
-						nodeLogicalIDs = append(nodeLogicalIDs, nodeID)
 					}
-				} else if origNode, inAdm := admittedNodeMap[nodeID]; inAdm {
-					diagnostics = append(diagnostics, Diagnostic{
-						Severity: DiagnosticSeverityWarning,
-						Code:     "group_member_filtered",
-						Message:  fmt.Sprintf("group %q explicit member %q (%s) excluded by global filter", g.Name, origNode.DisplayName, nodeID),
-						Target:   nodeID,
-						Reason:   "excluded by global filter",
-					})
-				} else {
-					diagnostics = append(diagnostics, Diagnostic{
-						Severity: DiagnosticSeverityWarning,
-						Code:     "node_inactive_or_missing",
-						Message:  fmt.Sprintf("group %q references node %s which is missing, inactive, or excluded", g.Name, nodeID),
-						Target:   nodeID,
-					})
+
+				case domain.SourceKindGroupRef:
+					if s.TargetGroupID != nil {
+						targetID := *s.TargetGroupID
+						if tg, ok := groupMap[targetID]; ok {
+							id := "group:" + targetID
+							if !seenInCurrentSet[id] {
+								seenInCurrentSet[id] = true
+								currentItems = append(currentItems, resolvedItem{id: id, kind: MemberKindGroup, targetID: targetID, displayName: tg.Name})
+							}
+						} else {
+							diagnostics = append(diagnostics, Diagnostic{
+								Severity: DiagnosticSeverityWarning,
+								Code:     "target_group_not_found",
+								Message:  fmt.Sprintf("target group %s not found", targetID),
+								Target:   targetID,
+							})
+						}
+					}
+
+				case domain.SourceKindGroupNodes:
+					if s.TargetGroupID != nil {
+						targetID := *s.TargetGroupID
+						if _, ok := groupMap[targetID]; ok {
+							childRes := resolveGroupMemo(targetID)
+							candidateCount += len(childRes.leafItems)
+							for _, leaf := range childRes.leafItems {
+								if leaf.kind == MemberKindNode {
+									node, ok := globalAdmittedMap[leaf.targetID]
+									if !ok {
+										continue
+									}
+									if s.Pattern != nil && strings.TrimSpace(*s.Pattern) != "" {
+										re, err := domain.CompileFilterRegex(*s.Pattern)
+										if err == nil {
+											matched, _ := re.Match(node.DisplayName)
+											if !matched {
+												continue
+											}
+										}
+									}
+									if s.FilterSpec != nil {
+										srcs := nodeSources[leaf.targetID]
+										lobs := latestObs[leaf.targetID]
+										matched, _ := domain.MatchesFilter(s.FilterSpec, node, srcs, lobs, asOf)
+										if !matched {
+											continue
+										}
+									}
+								}
+								if !seenInCurrentSet[leaf.id] {
+									seenInCurrentSet[leaf.id] = true
+									currentItems = append(currentItems, leaf)
+								}
+							}
+						}
+					}
+
+				case domain.SourceKindRegex:
+					candidateCount += len(sortedGlobalNodes)
+					if s.Pattern != nil && strings.TrimSpace(*s.Pattern) != "" {
+						re, err := domain.CompileFilterRegex(*s.Pattern)
+						if err != nil {
+							diagnostics = append(diagnostics, Diagnostic{
+								Severity: DiagnosticSeverityError,
+								Code:     "invalid_regex",
+								Message:  fmt.Sprintf("group %q regex invalid: %v", g.Name, err),
+							})
+							continue
+						}
+						for _, node := range sortedGlobalNodes {
+							matched, _ := re.Match(node.DisplayName)
+							if matched {
+								id := "node:" + node.LogicalID
+								if !seenInCurrentSet[id] {
+									seenInCurrentSet[id] = true
+									currentItems = append(currentItems, resolvedItem{id: id, kind: MemberKindNode, targetID: node.LogicalID, displayName: node.DisplayName})
+								}
+							}
+						}
+					}
+
+				case domain.SourceKindFilter:
+					candidateCount += len(sortedGlobalNodes)
+					if s.FilterSpec != nil {
+						for _, node := range sortedGlobalNodes {
+							srcs := nodeSources[node.LogicalID]
+							lobs := latestObs[node.LogicalID]
+							matched, _ := domain.MatchesFilter(s.FilterSpec, node, srcs, lobs, asOf)
+							if matched {
+								id := "node:" + node.LogicalID
+								if !seenInCurrentSet[id] {
+									seenInCurrentSet[id] = true
+									currentItems = append(currentItems, resolvedItem{id: id, kind: MemberKindNode, targetID: node.LogicalID, displayName: node.DisplayName})
+								}
+							}
+						}
+					}
+
+				case domain.SourceKindTypedBuiltin:
+					if s.BuiltinName != nil {
+						name := strings.ToUpper(strings.TrimSpace(*s.BuiltinName))
+						id := "builtin:" + name
+						if !seenInCurrentSet[id] {
+							seenInCurrentSet[id] = true
+							currentItems = append(currentItems, resolvedItem{id: id, kind: MemberKindBuiltin, targetID: name, displayName: name})
+						}
+					}
 				}
+			} else if op == domain.OperationRemove {
+				shouldRemove := func(item resolvedItem) bool {
+					switch normKind {
+					case domain.SourceKindManualNode:
+						return s.NodeLogicalID != nil && item.kind == MemberKindNode && item.targetID == *s.NodeLogicalID
+					case domain.SourceKindGroupRef:
+						return s.TargetGroupID != nil && item.kind == MemberKindGroup && item.targetID == *s.TargetGroupID
+					case domain.SourceKindGroupNodes:
+						if s.TargetGroupID != nil && item.kind == MemberKindNode {
+							childRes := resolveGroupMemo(*s.TargetGroupID)
+							return childRes.leafNodeSet[item.targetID]
+						}
+						return false
+					case domain.SourceKindRegex:
+						if s.Pattern != nil && item.kind == MemberKindNode {
+							re, err := domain.CompileFilterRegex(*s.Pattern)
+							if err == nil {
+								matched, _ := re.Match(item.displayName)
+								return matched
+							}
+						}
+						return false
+					case domain.SourceKindFilter:
+						if s.FilterSpec != nil && item.kind == MemberKindNode {
+							node, ok := globalAdmittedMap[item.targetID]
+							if !ok {
+								return false
+							}
+							srcs := nodeSources[item.targetID]
+							lobs := latestObs[item.targetID]
+							matched, _ := domain.MatchesFilter(s.FilterSpec, node, srcs, lobs, asOf)
+							return matched
+						}
+						return false
+					case domain.SourceKindTypedBuiltin:
+						return s.BuiltinName != nil && item.kind == MemberKindBuiltin && item.targetID == strings.ToUpper(strings.TrimSpace(*s.BuiltinName))
+					default:
+						return false
+					}
+				}
+
+				var remaining []resolvedItem
+				for _, item := range currentItems {
+					if shouldRemove(item) {
+						delete(seenInCurrentSet, item.id) // Crucial: removes seen marker so item can be added back later!
+					} else {
+						remaining = append(remaining, item)
+					}
+				}
+				currentItems = remaining
 			}
-		} else if len(childGroupEdges) == 0 && !gFilter.IsEmpty() {
-			// Case B: Dynamic group dynamically selects from global admitted pool
-			for _, node := range sortedGlobalNodes {
-				srcs := nodeSources[node.LogicalID]
-				lobs := latestObs[node.LogicalID]
-				matched, _ := domain.MatchesFilter(&gFilter, node, srcs, lobs, asOf)
-				if matched {
-					members = append(members, ResolvedGroupMember{
-						Kind:        MemberKindNode,
-						TargetID:    node.LogicalID,
-						DisplayName: node.DisplayName,
-						Position:    len(members),
-					})
-					nodeLogicalIDs = append(nodeLogicalIDs, node.LogicalID)
+		}
+
+		members := make([]ResolvedGroupMember, len(currentItems))
+		var childGroupIDs []string
+		var nodeLogicalIDs []string
+		leafItems := make([]resolvedItem, 0)
+		leafNodeSet := make(map[string]bool)
+
+		for idx, item := range currentItems {
+			members[idx] = ResolvedGroupMember{
+				Kind:        item.kind,
+				TargetID:    item.targetID,
+				DisplayName: item.displayName,
+				Position:    idx,
+			}
+			switch item.kind {
+			case MemberKindGroup:
+				childGroupIDs = append(childGroupIDs, item.targetID)
+				childRes := resolveGroupMemo(item.targetID)
+				var srcFilter *domain.NodeFilterSpec
+				for _, src := range g.Sources {
+					if src.Kind == domain.SourceKindGroupRef && src.TargetGroupID != nil && *src.TargetGroupID == item.targetID {
+						if src.FilterSpec != nil {
+							srcFilter = src.FilterSpec
+							break
+						}
+					}
+				}
+				for _, leaf := range childRes.leafItems {
+					if leaf.kind == MemberKindNode && srcFilter != nil {
+						node, ok := globalAdmittedMap[leaf.targetID]
+						if !ok {
+							continue
+						}
+						srcs := nodeSources[leaf.targetID]
+						lobs := latestObs[leaf.targetID]
+						matched, _ := domain.MatchesFilter(srcFilter, node, srcs, lobs, asOf)
+						if !matched {
+							continue
+						}
+					}
+					leafItems = append(leafItems, leaf)
+					if leaf.kind == MemberKindNode {
+						leafNodeSet[leaf.targetID] = true
+					}
+				}
+			case MemberKindNode:
+				nodeLogicalIDs = append(nodeLogicalIDs, item.targetID)
+				leafItems = append(leafItems, item)
+				leafNodeSet[item.targetID] = true
+			case MemberKindBuiltin:
+				leafItems = append(leafItems, item)
+			}
+		}
+
+		expandedNodeIDs := make([]string, 0, len(leafNodeSet))
+		for nid := range leafNodeSet {
+			expandedNodeIDs = append(expandedNodeIDs, nid)
+		}
+		sort.Strings(expandedNodeIDs)
+
+		hasDestinations := len(expandedNodeIDs) > 0
+		if !hasDestinations {
+			for _, item := range currentItems {
+				if item.kind == MemberKindBuiltin {
+					hasDestinations = true
+					break
 				}
 			}
 		}
 
-		// Child group edges
-		for _, edge := range childGroupEdges {
-			childID := *edge.ChildGroupID
-			if childGroup, ok := groupMap[childID]; ok {
-				members = append(members, ResolvedGroupMember{
-					Kind:        MemberKindGroup,
-					TargetID:    childID,
-					DisplayName: childGroup.Name,
-					Position:    len(members),
-				})
-				childGroupIDs = append(childGroupIDs, childID)
-			}
+		effectiveEmptyPass := g.EmptyFallbackPass && !hasDestinations
+
+		res := &groupMemo{
+			members:            members,
+			childGroupIDs:      childGroupIDs,
+			nodeLogicalIDs:     nodeLogicalIDs,
+			expandedNodeIDs:    expandedNodeIDs,
+			effectiveEmptyPass: effectiveEmptyPass,
+			leafItems:          leafItems,
+			leafNodeSet:        leafNodeSet,
+			candidateCount:     candidateCount,
 		}
+		memo[gid] = res
+		return res
+	}
+
+	resolvedGroups := make([]ResolvedGroup, len(sortedGroups))
+	for i, g := range sortedGroups {
+		m := resolveGroupMemo(g.ID)
 
 		rg := ResolvedGroup{
-			EmptyFallbackPass: g.EmptyFallbackPass,
-			ID:                g.ID,
-			Name:              g.Name,
-			GroupType:         g.GroupType,
-			Members:           members,
-			ChildGroupIDs:     childGroupIDs,
-			NodeLogicalIDs:    nodeLogicalIDs,
-			AllNodeLogicalIDs: nil, // Will compute after all groups initialized
-			Position:          i,
+			EmptyFallbackPass:  g.EmptyFallbackPass,
+			EffectiveEmptyPass: m.effectiveEmptyPass,
+			ID:                 g.ID,
+			Name:               g.Name,
+			GroupType:          g.GroupType,
+			Members:            m.members,
+			ChildGroupIDs:      m.childGroupIDs,
+			NodeLogicalIDs:     m.nodeLogicalIDs,
+			AllNodeLogicalIDs:  m.expandedNodeIDs,
+			ExpandedNodeIDs:    m.expandedNodeIDs,
+			Sources:            groupSources[g.ID],
+			Position:           i,
 		}
+		resolvedGroups[i] = rg
 
-		candidate := len(nodeLogicalIDs)
-		if len(explicitNodeEdges) > 0 {
-			candidate = len(explicitNodeEdges)
-		} else if len(childGroupEdges) == 0 && !gFilter.IsEmpty() {
-			candidate = len(sortedGlobalNodes)
+		candidate := m.candidateCount
+		if candidate < len(m.expandedNodeIDs) {
+			candidate = len(m.expandedNodeIDs)
 		}
-		excl := candidate - len(nodeLogicalIDs)
+		excl := candidate - len(m.expandedNodeIDs)
 		if excl < 0 {
 			excl = 0
 		}
 		groupCounts[g.ID] = GroupFilterCount{
 			Candidate: candidate,
-			Kept:      len(nodeLogicalIDs),
+			Kept:      len(m.expandedNodeIDs),
 			Excluded:  excl,
 		}
-
-		resolvedGroups[i] = rg
-		resolvedGroupMap[g.ID] = &resolvedGroups[i]
 	}
 
-	// Nested Group Projection:
-	// A parent group's filter restricts all its descendant nodes.
-	// If a child group contains nodes that violate the parent's filter,
-	// create a derived child group projection restricted by parent's filter.
+	// Empty group & empty routed group diagnostics
+	routedGroups := make(map[string]domain.PolicyRule)
+	for _, rule := range rules {
+		routedGroups[rule.TargetGroupID] = rule
+	}
+
+	resolvedGroupMap := make(map[string]*ResolvedGroup, len(resolvedGroups))
+	for i := range resolvedGroups {
+		resolvedGroupMap[resolvedGroups[i].ID] = &resolvedGroups[i]
+	}
+
+	// A group_ref retains a reference. Item filters project the child's own
+	// evaluated leaf set into a derived group without altering the child.
 	var derivedGroups []ResolvedGroup
 	for i := range resolvedGroups {
 		parent := &resolvedGroups[i]
-		pFilter := groupFilterMap[parent.ID]
-		if pFilter.IsEmpty() {
-			continue
-		}
-
 		for mIdx, member := range parent.Members {
 			if member.Kind != MemberKindGroup {
 				continue
 			}
 			childID := member.TargetID
+			var pFilter *domain.NodeFilterSpec
+			for _, s := range groupSources[parent.ID] {
+				if s.Operation == domain.OperationAdd && s.Kind == domain.SourceKindGroupRef && s.TargetGroupID != nil && *s.TargetGroupID == childID {
+					pFilter = s.FilterSpec
+					break
+				}
+			}
+			if pFilter.IsEmpty() {
+				continue
+			}
 			childGroup := resolvedGroupMap[childID]
 			if childGroup == nil {
 				continue
@@ -246,13 +490,14 @@ func resolveGroups(
 			var filteredChildNodeIDs []string
 			anyFilteredOut := false
 
-			for _, cMember := range childGroup.Members {
+			for _, leaf := range resolveGroupMemo(childID).leafItems {
+				cMember := ResolvedGroupMember{Kind: leaf.kind, TargetID: leaf.targetID, DisplayName: leaf.displayName, Position: len(filteredChildMembers)}
 				if cMember.Kind == MemberKindNode {
 					cNodeID := cMember.TargetID
 					if node, ok := globalAdmittedMap[cNodeID]; ok {
 						srcs := nodeSources[cNodeID]
 						lobs := latestObs[cNodeID]
-						matched, _ := domain.MatchesFilter(&pFilter, node, srcs, lobs, asOf)
+						matched, _ := domain.MatchesFilter(pFilter, node, srcs, lobs, asOf)
 						if matched {
 							filteredChildMembers = append(filteredChildMembers, ResolvedGroupMember{
 								Kind:        MemberKindNode,
@@ -281,9 +526,10 @@ func resolveGroups(
 					Name:              derivedName,
 					GroupType:         childGroup.GroupType,
 					Members:           filteredChildMembers,
-					ChildGroupIDs:     childGroup.ChildGroupIDs,
+					ChildGroupIDs:     nil,
 					NodeLogicalIDs:    filteredChildNodeIDs,
 					AllNodeLogicalIDs: filteredChildNodeIDs,
+					ExpandedNodeIDs:   filteredChildNodeIDs,
 					Position:          len(resolvedGroups) + len(derivedGroups),
 				}
 				derivedGroups = append(derivedGroups, derivedGroup)
@@ -308,7 +554,7 @@ func resolveGroups(
 		}
 	}
 
-	// Compute recursive AllNodeLogicalIDs for each group (DAG traversal)
+	// Compute recursive AllNodeLogicalIDs for each group
 	for i := range resolvedGroups {
 		rg := &resolvedGroups[i]
 		allNodesMap := make(map[string]bool)
@@ -341,18 +587,20 @@ func resolveGroups(
 		}
 		sort.Strings(allNodesList)
 		rg.AllNodeLogicalIDs = allNodesList
-		rg.EffectiveEmptyPass = rg.EmptyFallbackPass && (len(rg.Members) == 0 || len(allNodesList) == 0)
-	}
-
-	// Empty group & empty routed group diagnostics
-	routedGroups := make(map[string]domain.PolicyRule)
-	for _, rule := range rules {
-		routedGroups[rule.TargetGroupID] = rule
+		rg.ExpandedNodeIDs = allNodesList
+		hasBuiltin := false
+		for _, m := range rg.Members {
+			if m.Kind == MemberKindBuiltin {
+				hasBuiltin = true
+				break
+			}
+		}
+		rg.EffectiveEmptyPass = rg.EmptyFallbackPass && len(allNodesList) == 0 && !hasBuiltin
 	}
 
 	anyFilterDefined := (globalFilter != nil && !globalFilter.IsEmpty())
 	if !anyFilterDefined {
-		for _, gf := range groupFilterMap {
+		for _, gf := range groupFilters {
 			if !gf.IsEmpty() {
 				anyFilterDefined = true
 				break
@@ -361,7 +609,16 @@ func resolveGroups(
 	}
 
 	for _, rg := range resolvedGroups {
-		if !rg.UsesEmptyPass() && (len(rg.Members) == 0 || len(rg.AllNodeLogicalIDs) == 0) {
+		hasDest := len(rg.AllNodeLogicalIDs) > 0
+		if !hasDest {
+			for _, m := range rg.Members {
+				if m.Kind == MemberKindBuiltin {
+					hasDest = true
+					break
+				}
+			}
+		}
+		if !rg.UsesEmptyPass() && (len(rg.Members) == 0 || !hasDest) {
 			if rule, isRouted := routedGroups[rg.ID]; isRouted {
 				msg := fmt.Sprintf("routed group %q (%s) referenced by rule %q has 0 available nodes", rg.Name, rg.ID, rule.Expression)
 				if len(globalAdmittedNodes) == 0 {

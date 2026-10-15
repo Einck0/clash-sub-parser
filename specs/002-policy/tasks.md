@@ -1,19 +1,66 @@
-# Implementation Tasks: Policy Capability
+# Implementation tasks — CSP complete-delivery convergence
 
-- **Feature Directory**: `specs/002-policy/`
-- **Capability Domain**: `policy`
-- **Status**: CANDIDATE
+Feature `specs/002-policy`; current run `pi_run_20261015_230722_1113226`, change `change_pi_run_20261015_230722_1113226`, package `whole_task`, epoch1. Previous runs/failed tests are historical, not current PASS. Baseline copies of spec/plan/tasks before this amendment: `/tmp/csp-delivery-20261015-230722/planning-baseline/` with SHA evidence in the current session. Duplicate TASK-FIX entries were merged below without dropping their requirements. Checkbox totals are not a product completion percentage.
 
-## 1. Specification Migration & Governance Tasks (Migration-Only)
+## Phase 1 — Current scope and safety
 
-- [x] **TASK-MIG-01**: 从历史 OpenSpec 规格提炼并建立 Spec Kit 原生主干能力规范 (`specs/002-policy/spec.md`)
-- [x] **TASK-MIG-02**: 编制架构方案与已知/未知事实台账 (`specs/002-policy/plan.md`)
-- [x] **TASK-MIG-03**: 建立对应功能的历史需求条目映射与证据锚点 (`docs/specification/migration-ledger.json`)
-- [x] **TASK-MIG-04**: 保持既有代码符合度审计结果客观不变（不擅自伪造测试通过）
+- [x] TASK-SPEC-01 Preserve existing rebuild contracts, models, historical requirement registers and 82-entry dirty baseline; resolve Feature deterministically with official prerequisite script. Reconcile latest user instruction: dynamic proxy settings and actual subscription failures are P1; phone access/testing is excluded.
+- [x] TASK-SPEC-02 Amend `spec.md` FR-DEL-01..06, `plan.md` and this task list; preserve old sequential source semantics and explicit literal `去掉(...)` ambiguity. Reuse existing domains and cloud release mechanism, no new product extras or framework writes.
+- [x] TASK-DIAG-01 Read-only production/scout evidence: schema17/open mode, proxy configured and reachable, enabled subscriptions two fetch successes/two fetch failures, error-redaction suffix bug, cloud publish skipped in latest known dev run, anonymously readable private-named image, unavailable local GitHub API auth. Evidence `/tmp/csp-delivery-20261015-230722/scout/`. No production refresh/write occurred.
+- [x] TASK-SPEC-03 Run speckit-analyze across amended artifacts and constitution; fix critical contradictions before implementation. Record scope/coverage and residual ambiguities honestly.
 
-## 2. Business Implementation Tasks (Pending User Clarification & Future Sprints)
+## Phase 2 — Subscription recovery and dynamic proxy (FR-DEL-01..03)
 
-> **注意**：以下任务属于业务功能修复或待决问题落地，保持未完成 (`- [ ]`) 状态，绝不带病勾选或降级不实现。
-- [ ] **TASK-BIZ-01**: 实现 FR-POL-02 策略组解包叶节点 (Unpack Leaf Nodes) 展开引擎与 DAG 循环检测
-- [ ] **TASK-BIZ-02**: 重构 internal/resolver/graph.go 修复 FR-POL-04 混合交错保序
-- [ ] **TASK-BIZ-03**: 根据 Q4 裁决实施历史空策略组数据迁移脚本
+- [ ] TASK-FETCH-01 Implement persisted environment/direct/proxy route mode in existing settings repository with migration19; `GET/PUT /api/v1/settings/subscription-fetch` management auth/CSRF boundary, validation, safe masked responses, audit and atomic saves. Existing subscription override remains highest precedence; no unintended auth/other settings overwrite.
+- [ ] TASK-FETCH-02 Wire coherent per-refresh route/policy snapshot for actual manual/scheduled inventory reconciliation. Saving changes next refresh without restart, survives restart; precise configured-proxy trust does not widen target or redirect SSRF policy. Retired proxy trust does not accumulate.
+- [ ] TASK-FETCH-03 Add settings UI with clear inherited/direct/custom state, password-safe endpoint edit/retain/replace behavior, save/error/reset semantics and translations. Actual API route selection is exercised, not a mock-only input.
+- [ ] TASK-FETCH-04 Fix redaction so query/userinfo/assignment/wrapped errors retain safe cause suffixes and stable fetch failure stages. Tests prove no secret leaks and distinguish actual DNS/proxy/TLS/HTTP/parse/empty/partial cases; do not weaken TLS or target validation.
+- [ ] TASK-FETCH-05 Verify temporary real SQLite + controlled HTTP/proxy servers: route changes, retained credentials, invalid-save rollback, restart persistence, concurrent settings/read behavior, subscription override, redirects/private targets, failed/partial/zero-source asset preservation. Obtain actionable bounded diagnosis of the two real failing sources if current evidence remains inadequate; genuine upstream failure is not silently labeled repaired.
+
+- [ ] TASK-FETCH-06 Close existing subscription scheduling gap: lifecycle-owned bounded interval/standard-five-field-cron execution through the real refresh path, validation, disabled-state/config-change/shutdown behavior, no fake success without reconciler, no overlapping manual/scheduled refresh per source; deterministic time-controlled tests. See plan scheduling contract.
+
+## Phase 3 — Existing rebuild closure and asset correctness (FR-DEL-04)
+
+- [ ] TASK-FIX-01 Complete existing failed/partial source-association preservation and successful scoped pruning with historical node retention in inventory; multi-subscription failure isolation, actual SQLite regression tests.
+- [ ] TASK-FIX-02 Complete pure-node target validate/preview/publish/serve independence from irrelevant group errors; keep global node/filter/risk fail-closed behavior and Mihomo full-graph validation. Typed builtins count correctly without fake outbound substitutions.
+- [ ] TASK-BE-01 Enforce policy_group_sources sole authority after one-time migration18. Remove ongoing edge/source mirror and empty/error legacy fallback. Migrate supported edit/revision/rollback/delete actions to sources; obsolete writes reject explicitly without source corruption. Repository operations are transactional and revision-safe.
+- [ ] TASK-BE-02 Validate sequential add/remove/re-entry/current-set dedup, all six kinds, mixed ordering, group_ref vs group_nodes, child-then-item conditions, reference and expansion cycles, global/subscription/risk admission without extra healthy-only constraint.
+- [ ] TASK-FE-01 Complete existing unified ordered-source editor, add/remove/reorder/candidate pagination and cross-page selection; retain draft on409, show cycle errors, no group-global condition wrapper. Preview actual unsaved draft without DB writes and use common resolve-input/snapshot semantics.
+- [x] TASK-MIG-01 Run migration18+19 on private production backup copy; prove group IDs/order/admitted membership/route semantics and immutable publication digests preserved. Do not claim PRAGMA user_version is schema version. Record before/after evidence without credentials.
+- [ ] TASK-MIG-02 Finish historical three-round-robin/fourth-cheap-group copy-only proposal with actual archive mapping/order and resolved counts. Preserve original literal `去掉(...)`; do not invent exclusion interpretation or permanently rewrite ambiguous user configuration. Mark any unresolved business interpretation, not false completion.
+- [ ] TASK-SCALE-01 Verify >250 nodes/150 groups real SQLite/HTTP save→GET order, conflict rollback, invalid regex/cycle, draft no-write and saved preview/export consistency. Fix relevant existing future-timestamp/health-filter pagination defects only where actual evidence shows confirmed functionality is broken; no unrelated enhancement expansion.
+
+## Phase 4 — Cloud source alignment and final self-tests (FR-DEL-05)
+
+- [ ] TASK-CLOUD-01 Preserve both local commits/dirty work and latest remote additions in an isolated integration work area; reuse existing remote CI/Dockerfile.runtime/compose.prod/cloud-delivery scripts/docs. Remove outdated Python/frontend references from current pipeline only after confirming replacements. No forced push, default-branch overwrite or duplicate release path.
+- [ ] TASK-GATE-01 Final merged-state `go build ./...`, native full ordinary/tagged tests including tools, substantive affected-package race checks, web type-check/Vitest/isolated production build and diff checks. Record matched test cases >0, actual commands/exits/log hashes. Fix failing source-authority test instead of weakening constraints. Preserve prior failures and linkage. No premature embedded-asset dirt.
+- [ ] TASK-REV-01 Independent reviewer against final merged patch/spec/plan: source authority, migration equivalence including refs/filters, revision/rollback, fetch trust lifecycle/redaction/secrets, asset preservation and export semantics; independently reproduce significant risks and confirm tests are effective. Correct failures and reverify with valid report lineage.
+- [ ] TASK-PREVIEW-01 Non-critic prepares healthy isolated ready URL/temporary DB/disabled external schedulers/nonproduction ports and standard instance JSON with shutdown/cleanup ownership, source/asset manifest and real scenarios.
+- [ ] TASK-CRITIC-01 Actual black-box interactions and PNG visual analysis of settings route save/error state, ordered-source edit/preview/conflict/pagination and representative existing pages in desktop/mobile four viewports. No phone access; browser mobile viewport is not physical-device proof. Critic cannot prepare/start/modify instance.
+
+## Phase 5 — Authorized release and actual production acceptance (FR-DEL-05..06)
+
+- [ ] TASK-RELEASE-01 After applicable gates, synchronize embedded assets and verify final generated delta; create scoped Git commit(s) via git_commit and non-force push the verified integration branch. Record Git SHA/patch identity; do not commit secret data or test-generated maintenance litter.
+- [ ] TASK-RELEASE-02 Run existing GitHub checks/build/publish for exact current commit, record run URLs and non-skipped job results, OCI revision/image digest. Private visibility must be verified via authenticated gate and anonymous denial; existing anonymously readable package and missing API auth are explicit blockers until actually resolved. Do not read Docker credentials as API tokens, silently make images public, or claim cloud success for old SHA.
+- [ ] TASK-IMAGE-01 Official immutable-image preflight/pull and isolated image acceptance; source/embedded assets/image revision consistency. Do not use mutable latest or substitute a local build to disguise blocked cloud publication.
+- [ ] TASK-PROD-01 Fresh SQLite hot backup with integrity/hash plus safe business preimages/current-image rollback point. Deploy only CSP through official existing path after gates and scope authorization; preserve DB volume/ports/proxy/auth. Verify migration/version/assets/health and prove source-SHA→image-digest→container mapping; rollback if necessary without casually overwriting current DB.
+- [ ] TASK-PROD-02 Execute concrete operations from production-coverage-register against actual domain/API/downloads, recording expected/actual business results, cleanup and retests. Check every enabled subscription refresh stage/count, actual settings effect/persistence, inventory/history, ordered policies/preview, probe truth, all publication targets/download/revocation and auth behavior without toggling production auth. Preserve users' assets, clean only task-owned objects, restore temporary settings. Unsupported/stale coverage entries are corrected and explicitly dispositioned, never silently skipped or treated as pass.
+- [ ] TASK-DELIVER-01 Shut down/clean task previews and task-owned sensitive exports only, record retained processes and unresolved upstream/ambiguity/capability/coverage limits. Update `.exp.md` only with reusable verified lessons. Final Chinese plain-text QQ report: completed/not completed first, modifications, independent/local/cloud/browser/production verification, Git SHA, Actions URLs, digest and deployed identity, backup/rollback/cleanup and explicit uncompleted scope. No internal attachments or fake whole-task PASS.
+
+## Dependency and ownership notes
+
+Phase2 and Phase3 are separate functional scopes, but share inventory/domain/HTTP entry points; serialize shared-source implementation rather than race two writers. Cloud-only file preparation can be isolated after the source manifest is stable. Final combined-state self-test precedes independent review and critic; source/asset changes after gates require proportional re-verification. Runtime work_package remains whole_task for all launches; task IDs do not fabricate additional frozen packages. External manual testing aggregate budget is in plan.md; scout has already consumed <=4,470,628 bytes /97s. Any hard credential/external upstream/owner-visibility barrier is reported precisely while authorized independent local work continues.
+
+## Current evidence update (2026-10-16, local delivery only)
+
+- Subscription routing implemented and exercised with real temporary HTTP/proxy/SQLite; stage diagnosis of S02/S06 is TLS handshake timeout. S03/S08 source-copy success is not production-new-version acceptance. TASK-FETCH-05 remains open for complete final combined coverage/real-upstream recovery; no success fabricated.
+- Latest full tagged Go suite: 1538 passed, 1 skipped, process exit0; tagged build0. Web final347/34files, typecheck/build0; affected-package race evidence in release-freeze/ready-instance and safety fix logs. Earlier failures/timeouts remain preserved. Graphify unavailable (127), no graph exists; not a graph-maintenance success.
+- Backend/cloud independent review PASS `rep_rev_whole_task_1fd3ec05-27ce-46ee-a9b4-94912902a0e1`; final frontend delta PASS `rep_rev_whole_task_98732c18-71d2-4628-ab31-aa6eb58d354b`.
+- Final critic PASS `rep_crit_whole_task_5d81f21a-42c7-43a9-913a-7db628a7e04f`, verified 17 native PNG read calls in actual session. Earlier critic report claimed visual/publication coverage without supporting execution; not accepted as evidence. Final critic explicitly excludes external upstreams/all-kernel/production/device verification.
+- Final preview59865 source403files and3assets matched latest source/dist; preceding previews33677/48231 are task-owned and require shutdown. Synthetic DB only, both schedulers disabled. Preparing commit embeds only these exact assets, not a new build variant.
+- Real production-copy migration17→19 proved29groups, ordered memberships, routes and immutable publications preserved. Schema20 snapshot table was subsequently introduced; final17→20 copy equivalence still to be explicitly receipted, TASK-MIG-01 stays open. Historical cold-archive proposals remain incomplete and ambiguous group unchanged.
+- `auto_test` exposed but not implemented remains an explicit functional gap. GHCR private-named package was anonymously readable and local GitHub API auth unavailable; owner has been notified (delivery239921b3cca24300abc7370fbc1510a8). No new image, production deploy or complete production register has passed.
+
+Checkboxes above refer to specific implementation/local review scopes, never whole-project completion. Latest upstream production state is not replaced by a local isolated acceptance.
+
+Final asset/migration delta: `/tmp/csp-delivery-20261015-230722/finalize0700/verification-index.json` SHA7658e4692e0053ec8bd307753493e1d47a56e534e7cc279c7e295504e26939c0. Final production-copy17→20 conservation passed integrity/FK and all29group/publication checks. Exact3critic-reviewed assets synchronized and embedded build/test passed; all3task previews stopped and ports closed. Authorised storage-state export no longer exists. No production migration/deploy or cloud image publication occurred. TASK-RELEASE-01 remains partially open until commit and non-force push are actually receipted.

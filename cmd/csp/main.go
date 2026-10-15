@@ -32,6 +32,17 @@ const (
 	appName = "csp"
 )
 
+// commit and buildTime are injected by release builds through -X main.*.
+var (
+	commit    = platform.Commit
+	buildTime = platform.BuildDate
+)
+
+func init() {
+	platform.Commit = commit
+	platform.BuildDate = buildTime
+}
+
 // runServe executes the long-running HTTP control plane and SPA server.
 func runServe(args []string, stdout, stderr io.Writer) int {
 	return runServeWithContext(context.Background(), args, stdout, stderr)
@@ -116,6 +127,7 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 	var adminToken string
 	var fetchProxy string
 	var webDir string
+	var disableSubscriptionScheduler, disableProbeCoordinator bool
 
 	fs.StringVar(&addr, "addr", defaultAddr, "HTTP listen address [host:port] (default from CSP_ADDR/CSP_BIND/CSP_PORT or 0.0.0.0:18080)")
 	fs.StringVar(&addr, "a", defaultAddr, "HTTP listen address [host:port] (shorthand)")
@@ -124,6 +136,8 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 	fs.StringVar(&adminToken, "admin-token", defaultAdminToken, "admin bearer/cookie token (default from CSP_ADMIN_TOKEN)")
 	fs.StringVar(&fetchProxy, "fetch-proxy", defaultFetchProxy, "outbound HTTP/HTTPS proxy for subscription fetching (default from CSP_FETCH_PROXY)")
 	fs.StringVar(&webDir, "web-dir", defaultWebDir, "path to custom web assets directory (default from CSP_WEB_DIR or WEBASSETS_DIST_DIR)")
+	fs.BoolVar(&disableSubscriptionScheduler, "disable-subscription-scheduler", false, "disable automatic subscription refresh (isolated previews/tests)")
+	fs.BoolVar(&disableProbeCoordinator, "disable-probe-coordinator", false, "disable periodic probe coordinator (isolated previews/tests)")
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -196,10 +210,11 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 	}
 
 	appOpts := appServiceOptions{
-		fetchProxy:       fetchProxy,
-		newProbeRunner:   newRunnerFn,
-		probeRunnerOpts:  runnerOpts,
-		startCoordinator: true,
+		fetchProxy:         fetchProxy,
+		newProbeRunner:     newRunnerFn,
+		probeRunnerOpts:    runnerOpts,
+		startCoordinator:   !disableProbeCoordinator,
+		startSubscriptions: !disableSubscriptionScheduler,
 	}
 
 	appServices, err := makeApplicationServices(startupCtx, db, appOpts)
@@ -219,6 +234,10 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
+		if err := appServices.subscriptionScheduler.Stop(ctx); err != nil {
+			closeDBOnReturn = false
+			fmt.Fprintf(stderr, "serve: subscription scheduler cleanup incomplete: %v\n", err)
+		}
 		if err := appServices.probeScheduler.Drain(ctx); err != nil {
 			closeDBOnReturn = false
 			fmt.Fprintf(stderr, "serve: probe scheduler drain incomplete during cleanup; terminating without closing database: %v\n", err)
@@ -267,10 +286,11 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 	})
 
 	routerCfg := transporthttp.RouterConfig{
-		AdminToken:         adminToken,
-		TokenHolder:        tokenHolder,
-		SettingsRepository: appServices.settingsRepo,
-		SessionStore:       sessionStore,
+		AdminToken:            adminToken,
+		TokenHolder:           tokenHolder,
+		SettingsRepository:    appServices.settingsRepo,
+		EnvironmentFetchProxy: fetchProxy,
+		SessionStore:          sessionStore,
 		SessionValidator: func(sessionID string) (*transporthttp.SessionInfo, bool) {
 			return sessionStore.Get(sessionID)
 		},
@@ -325,6 +345,12 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer shutdownCancel()
+	// Cancel scheduled HTTP work before waiting for HTTP handlers and before DB close.
+	if err := appServices.subscriptionScheduler.Stop(shutdownCtx); err != nil {
+		closeDBOnReturn = false
+		fmt.Fprintf(stderr, "serve: subscription scheduler shutdown incomplete: %v\n", err)
+		return 1
+	}
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		fmt.Fprintf(stderr, "serve: shutdown error: %v\n", err)
 		return 1

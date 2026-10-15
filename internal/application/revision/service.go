@@ -199,6 +199,27 @@ func (s *Service) Create(ctx context.Context, cmd CreateCommand) (*domain.Config
 	return &rev, nil
 }
 
+// Rollback restores only the editable policy graph; stored revisions/publications remain immutable.
+func (s *Service) Rollback(ctx context.Context, id string, expected map[string]int64, action Action) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := s.revisions.GetByID(ctx, id); err != nil {
+		return err
+	}
+	snapshots, ok := s.revisions.(domain.RevisionSnapshotRepository)
+	if !ok {
+		return domain.NewConflictError("revision_snapshot_unavailable", "policy snapshot repository unavailable")
+	}
+	if expected == nil {
+		return domain.NewValidationError("missing_expected_revisions", "rollback requires the complete group revision vector")
+	}
+	if err := snapshots.RestorePolicySnapshot(ctx, id, expected); err != nil {
+		return err
+	}
+	s.recordAudit(ctx, action, "revision.rollback", domain.AuditResultSuccess, fmt.Sprintf("revision_id=%s", id))
+	return nil
+}
+
 func (s *Service) computeCurrentDigestLocked(ctx context.Context) (string, error) {
 	var groups []domain.NodeGroup
 	edgeMap := make(map[string][]domain.GroupEdge)
@@ -311,8 +332,14 @@ func (s *Service) Activate(ctx context.Context, id string, action Action) (*doma
 				}
 				edgeMap[g.ID] = edges
 			}
-			polRules, _ := s.policyRepo.ListPolicyRules(ctx, id)
-			admRules, _ := s.policyRepo.ListAdmissionRules(ctx, id)
+			polRules, err := s.policyRepo.ListPolicyRules(ctx, id)
+			if err != nil {
+				return nil, err
+			}
+			admRules, err := s.policyRepo.ListAdmissionRules(ctx, id)
+			if err != nil {
+				return nil, err
+			}
 			if vErr := policy.ValidatePolicyGraph(groups, edgeMap, polRules, admRules); vErr != nil {
 				s.recordAudit(ctx, action, "revision.activate", domain.AuditResultFailure, fmt.Sprintf("policy graph validation failed for %s: %v", id, vErr))
 				return nil, vErr
@@ -320,6 +347,32 @@ func (s *Service) Activate(ctx context.Context, id string, action Action) (*doma
 		}
 	}
 
+	if snapshots, ok := s.revisions.(domain.RevisionSnapshotRepository); ok {
+		groups, err := snapshots.GetPolicySnapshot(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if s.policyRepo != nil {
+			current, err := s.policyRepo.ListGroups(ctx)
+			if err != nil {
+				return nil, err
+			}
+			if len(current) != len(groups) {
+				return nil, domain.NewConflictError("revision_conflict", "policy group set changed since revision creation")
+			}
+			byID := map[string]int64{}
+			for _, g := range groups {
+				byID[g.ID] = g.Revision
+			}
+			for _, g := range current {
+				if want, ok := byID[g.ID]; !ok || want != g.Revision {
+					e := domain.NewConflictError("revision_conflict", "policy changed since revision creation")
+					e.CurrentRevision = &g.Revision
+					return nil, e
+				}
+			}
+		}
+	}
 	if err := s.revisions.SetActive(ctx, id); err != nil {
 		s.recordAudit(ctx, action, "revision.activate", domain.AuditResultFailure, fmt.Sprintf("failed to set active for %s: %v", id, err))
 		return nil, err

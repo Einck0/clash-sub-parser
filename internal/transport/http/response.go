@@ -19,9 +19,13 @@ type SuccessResponse[T any] struct {
 
 // ErrorResponse defines the standard error envelope {"code": "...", "message": "...", "request_id": "..."}.
 type ErrorResponse struct {
-	Code      string `json:"code"`
-	Message   string `json:"message"`
-	RequestID string `json:"request_id"`
+	Code            string         `json:"code"`
+	Message         string         `json:"message"`
+	RequestID       string         `json:"request_id"`
+	Details         map[string]any `json:"details,omitempty"`
+	CyclePath       []string       `json:"cycle_path,omitempty"`
+	CurrentRevision *int64         `json:"current_revision,omitempty"`
+	Field           string         `json:"field,omitempty"`
 }
 
 // PaginatedData holds standard pagination items and metadata.
@@ -96,7 +100,32 @@ func WriteDomainError(w http.ResponseWriter, r *http.Request, err error) {
 		case domain.CategoryInternal:
 			statusCode = http.StatusInternalServerError
 		}
-		WriteError(w, r, statusCode, domErr.Code, domErr.Message)
+		reqID := GetRequestID(r.Context())
+		if reqID == "" {
+			reqID = r.Header.Get(RequestIDHeader)
+		}
+		var details map[string]any
+		if len(domErr.CyclePath) > 0 || domErr.CurrentRevision != nil || domErr.Field != "" {
+			details = make(map[string]any)
+			if len(domErr.CyclePath) > 0 {
+				details["cycle_path"] = domErr.CyclePath
+			}
+			if domErr.CurrentRevision != nil {
+				details["current_revision"] = *domErr.CurrentRevision
+			}
+			if domErr.Field != "" {
+				details["field"] = domErr.Field
+			}
+		}
+		WriteJSON(w, statusCode, ErrorResponse{
+			Code:            domErr.Code,
+			Message:         sanitizeErrorMessage(domErr.Message),
+			RequestID:       reqID,
+			Details:         details,
+			CyclePath:       domErr.CyclePath,
+			CurrentRevision: domErr.CurrentRevision,
+			Field:           domErr.Field,
+		})
 		return
 	}
 

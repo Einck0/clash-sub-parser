@@ -168,6 +168,20 @@ func run(args []string, stdout, stderr io.Writer) int {
 		*maxProbes = 6
 	}
 
+	// Reject invalid credential files before any target network access.
+	resolvedToken := strings.TrimSpace(*token)
+	if resolvedToken == "" && *tokenFile != "" {
+		secToken, err := readTokenFileSecurely(*tokenFile)
+		if err != nil {
+			fmt.Fprintf(stderr, "ERROR: token file security verification failed: %v\n", err)
+			return ExitCodeFailure
+		}
+		resolvedToken = secToken
+	}
+	if resolvedToken == "" && *tokenEnv != "" {
+		resolvedToken = strings.TrimSpace(os.Getenv(*tokenEnv))
+	}
+
 	runStartTime := time.Now()
 	overallRunDeadline := runStartTime.Add(*timeout)
 
@@ -285,18 +299,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// Phase 2: Credential Discovery
 	// --------------------------------------------------------------------------
 	fmt.Fprintf(stdout, "\n[Phase 2] Discovering Legally Managed Credentials...\n")
-	resolvedToken := strings.TrimSpace(*token)
-	if resolvedToken == "" && *tokenFile != "" {
-		secToken, err := readTokenFileSecurely(*tokenFile)
-		if err != nil {
-			fmt.Fprintf(stderr, "ERROR: token file security verification failed: %v\n", err)
-			return ExitCodeFailure
-		}
-		resolvedToken = secToken
-	}
-	if resolvedToken == "" && *tokenEnv != "" {
-		resolvedToken = strings.TrimSpace(os.Getenv(*tokenEnv))
-	}
 
 	if resolvedToken == "" && authMode == "protected" {
 		fmt.Fprintf(stdout, "  [NOTICE] Auth mode is protected but no legal managed token is available.\n")

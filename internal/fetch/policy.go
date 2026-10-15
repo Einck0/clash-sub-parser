@@ -149,37 +149,32 @@ func isObfuscatedIP(host string) bool {
 }
 
 // parseCanonicalProxyURL validates a raw proxy endpoint and returns its normalized form:
-// "http://<canonical-host>:<canonical-port>".
-// Only explicit "http://" scheme is allowed. Ports must be explicit without leading zeros.
-// Obfuscated IPs, IPv4-mapped IPv6, IPv6 Zone IDs, trailing dots, userinfo, and paths are rejected.
+// "<scheme>://<canonical-host>:<canonical-port>" (without credentials).
+// Only HTTP/HTTPS with explicit ports are accepted; paths and ambiguous IP forms are rejected.
 func parseCanonicalProxyURL(raw string) (string, error) {
 	clean := strings.TrimSpace(raw)
 	if clean == "" {
 		return "", domain.NewValidationError("invalid_proxy_url", "empty proxy endpoint")
 	}
 
-	if !strings.HasPrefix(strings.ToLower(clean), "http://") {
-		return "", domain.NewValidationError("invalid_proxy_url", fmt.Sprintf("unsupported proxy scheme in %q, only explicit http:// is allowed", raw))
+	if !strings.HasPrefix(strings.ToLower(clean), "http://") && !strings.HasPrefix(strings.ToLower(clean), "https://") {
+		return "", domain.NewValidationError("invalid_proxy_url", "only explicit HTTP/HTTPS proxy URLs are allowed")
 	}
 
 	u, err := url.Parse(clean)
 	if err != nil {
-		return "", domain.NewValidationError("invalid_proxy_url", fmt.Sprintf("malformed proxy URL %q: %v", raw, err))
+		return "", domain.NewValidationError("invalid_proxy_url", "malformed proxy URL")
 	}
 
-	if strings.ToLower(u.Scheme) != "http" {
-		return "", domain.NewValidationError("invalid_proxy_url", fmt.Sprintf("unsupported proxy scheme %q, only explicit http:// is allowed", u.Scheme))
-	}
-
-	if u.User != nil {
-		return "", domain.NewValidationError("invalid_proxy_url", "userinfo in proxy endpoint is not allowed")
+	if strings.ToLower(u.Scheme) != "http" && strings.ToLower(u.Scheme) != "https" {
+		return "", domain.NewValidationError("invalid_proxy_url", "only HTTP/HTTPS proxy URLs are allowed")
 	}
 
 	if u.Path != "" && u.Path != "/" {
 		return "", domain.NewValidationError("invalid_proxy_url", fmt.Sprintf("path %q in proxy endpoint is not allowed", u.Path))
 	}
 
-	if u.RawQuery != "" || u.Fragment != "" {
+	if u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(clean, "#") {
 		return "", domain.NewValidationError("invalid_proxy_url", "query or fragment in proxy endpoint is not allowed")
 	}
 
@@ -236,12 +231,39 @@ func parseCanonicalProxyURL(raw string) (string, error) {
 		canonicalHost = strings.ToLower(rawHost)
 	}
 
-	return fmt.Sprintf("http://%s:%d", canonicalHost, portNum), nil
+	return fmt.Sprintf("%s://%s:%d", strings.ToLower(u.Scheme), canonicalHost, portNum), nil
+}
+
+// NormalizeProxyURL validates an endpoint and preserves optional URL-encoded proxy credentials.
+func NormalizeProxyURL(raw string) (string, error) {
+	canonical, err := parseCanonicalProxyURL(raw)
+	if err != nil {
+		return "", err
+	}
+	u, _ := url.Parse(strings.TrimSpace(raw))
+	if u.User != nil {
+		password, _ := u.User.Password()
+		if strings.Contains(u.User.Username(), "***") || strings.Contains(password, "***") || strings.Contains(u.User.String(), "•") {
+			return "", domain.NewValidationError("invalid_proxy_url", "masked proxy credentials cannot be saved; omit proxy_url to retain credentials")
+		}
+	}
+	result, _ := url.Parse(canonical)
+	result.User = u.User
+	return result.String(), nil
+}
+
+// ProxyEndpoint returns a non-usable display endpoint and credential-presence flag.
+func ProxyEndpoint(raw string) (string, bool) {
+	canonical, err := parseCanonicalProxyURL(raw)
+	if err != nil {
+		return "", false
+	}
+	u, _ := url.Parse(strings.TrimSpace(raw))
+	return canonical, u.User != nil
 }
 
 // AddAllowedProxy parses, validates, and registers a trusted outbound proxy endpoint.
-// Only explicit http:// scheme is permitted. Ports must be explicitly specified without leading zeros.
-// Endpoints are normalized into canonical http://<canonical-host>:<canonical-port> format.
+// HTTP/HTTPS endpoints are normalized without credentials and with explicit canonical ports.
 func (p *Policy) AddAllowedProxy(rawProxy string) error {
 	canonical, err := parseCanonicalProxyURL(rawProxy)
 	if err != nil {
@@ -273,7 +295,7 @@ func (p *Policy) IsHostAllowed(target string) bool {
 }
 
 // IsProxyHostAllowed checks if an address or URL is explicitly trusted as an outbound proxy relay.
-// Only exact matches against canonical http://<canonical-host>:<canonical-port> are permitted.
+// Only exact matches against canonical scheme://host:port are permitted.
 func (p *Policy) IsProxyHostAllowed(target string) bool {
 	if p.AllowPrivate {
 		return true
@@ -299,7 +321,7 @@ func (p *Policy) IsProxyHostAllowed(target string) bool {
 
 // ValidateProxy validates an outbound proxy endpoint.
 // Explicitly allowed proxy endpoints (e.g. http://host.docker.internal:7890) are trusted as proxy relays.
-// Any other proxy URL must have an explicit http:// scheme, explicit port without leading zeros, no userinfo,
+// Any other proxy URL must have an explicit HTTP/HTTPS scheme and port without leading zeros,
 // no obfuscated IP, and pass SSRF IP checks to ensure arbitrary user input cannot target private networks,
 // loopback, or cloud metadata.
 func (p *Policy) ValidateProxy(ctx context.Context, u *url.URL) error {

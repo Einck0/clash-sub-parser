@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -179,7 +180,7 @@ func (s *Service) Preflight(ctx context.Context, cmd PreflightCommand) (*Preflig
 	snapshot := cmd.Snapshot
 	if snapshot == nil {
 		var err error
-		snapshot, err = s.resolveSnapshot(ctx, cmd.RevisionID)
+		snapshot, err = s.resolveTargetSnapshot(ctx, cmd.RevisionID, cmd.Target)
 		if err != nil {
 			return nil, err
 		}
@@ -218,7 +219,7 @@ func (s *Service) Publish(ctx context.Context, cmd PublishCommand) (*PublishResu
 		snapshot := cmd.Snapshot
 		if snapshot == nil {
 			var err error
-			snapshot, err = s.resolveSnapshot(ctx, cmd.RevisionID)
+			snapshot, err = s.resolveTargetSnapshot(ctx, cmd.RevisionID, cmd.Target)
 			if err != nil {
 				return nil, err
 			}
@@ -329,7 +330,7 @@ func (s *Service) Preview(ctx context.Context, query PreviewQuery) (*PreviewResu
 	snapshot := query.Snapshot
 	if snapshot == nil {
 		var err error
-		snapshot, err = s.resolveSnapshot(ctx, query.RevisionID)
+		snapshot, err = s.resolveTargetSnapshot(ctx, query.RevisionID, query.Target)
 		if err != nil {
 			return nil, err
 		}
@@ -492,9 +493,11 @@ func (s *Service) Preview(ctx context.Context, query PreviewQuery) (*PreviewResu
 
 	// Compatible mode
 	compatSnap, excludedNodes := compiler.FilterCompatibleSnapshot(snapshot, query.Target)
-	for _, g := range compatSnap.Groups {
-		if !g.UsesEmptyPass() && len(g.Members) == 0 {
-			return nil, domain.NewValidationError("empty_group_not_allowed", fmt.Sprintf("policy group %q has 0 members in compatible mode", g.Name))
+	if query.Target == domain.TargetMihomo {
+		for _, g := range compatSnap.Groups {
+			if !g.UsesEmptyPass() && len(g.Members) == 0 {
+				return nil, domain.NewValidationError("empty_group_not_allowed", fmt.Sprintf("policy group %q has 0 members in compatible mode", g.Name))
+			}
 		}
 	}
 
@@ -685,7 +688,7 @@ func (s *Service) ResolveAndServeAuthorized(ctx context.Context, publicationID s
 	}
 
 	// 5. Fallback for legacy publications without persisted Content: recompile by RevisionID
-	snapshot, err := s.resolveSnapshot(ctx, pub.RevisionID)
+	snapshot, err := s.resolveTargetSnapshot(ctx, pub.RevisionID, pub.Target)
 	if err != nil {
 		return nil, err
 	}
@@ -751,12 +754,18 @@ func (s *Service) ResolvePolicySnapshot(ctx context.Context, revisionID string) 
 	return s.resolveSnapshot(ctx, revisionID)
 }
 
-func (s *Service) resolveSnapshot(ctx context.Context, revisionID string) (*resolver.ResolvedPolicySnapshot, error) {
+// AssembleResolveInput compiles all necessary domain inputs (nodes, group sources, filters, risk decisions) into a resolver.ResolveInput.
+func (s *Service) AssembleResolveInput(ctx context.Context, revisionID string) (*resolver.ResolveInput, error) {
+	return s.assembleResolveInput(ctx, revisionID, true)
+}
+
+func (s *Service) assembleResolveInput(ctx context.Context, revisionID string, includeGraph bool) (*resolver.ResolveInput, error) {
 	if s.policyRepo == nil || s.revisionRepo == nil || s.nodeRepo == nil || s.resolver == nil {
 		return nil, domain.NewInternalError("missing_dependencies", "policy, revision, or node repository not configured")
 	}
 
 	var revID string
+	var selectedRevision *domain.ConfigurationRevision
 	if revisionID != "" {
 		rev, err := s.revisionRepo.GetByID(ctx, revisionID)
 		if err != nil {
@@ -770,6 +779,7 @@ func (s *Service) resolveSnapshot(ctx context.Context, revisionID string) (*reso
 			return nil, domain.NewNotFoundError("revision_not_found", fmt.Sprintf("configuration revision %s not found", revisionID))
 		}
 		revID = rev.ID
+		selectedRevision = rev
 	} else {
 		activeRev, err := s.revisionRepo.GetActive(ctx)
 		if err != nil {
@@ -785,23 +795,39 @@ func (s *Service) resolveSnapshot(ctx context.Context, revisionID string) (*reso
 		revID = activeRev.ID
 	}
 
-	groups, err := s.policyRepo.ListGroups(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list policy groups: %w", err)
+	var groups []domain.NodeGroup
+	var err error
+	if includeGraph {
+		groups, err = s.policyRepo.ListGroups(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list policy groups: %w", err)
+		}
+	}
+	if includeGraph && selectedRevision != nil && selectedRevision.State != domain.RevisionStateActive {
+		if snapshots, ok := s.revisionRepo.(domain.RevisionSnapshotRepository); ok {
+			groups, err = snapshots.GetPolicySnapshot(ctx, revID)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	groupSources := make(map[string][]domain.MemberSource, len(groups))
+	for _, group := range groups {
+		groupSources[group.ID] = group.Sources
 	}
 
 	edgeMap := make(map[string][]domain.GroupEdge, len(groups))
 	for _, g := range groups {
-		edges, err := s.policyRepo.ListEdgesByGroup(ctx, g.ID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to list edges for group %s: %w", g.ID, err)
-		}
-		edgeMap[g.ID] = edges
+		edgeMap[g.ID] = domain.ProjectSourceEdges(g.Sources)
 	}
 
-	policyRules, err := s.policyRepo.ListPolicyRules(ctx, revID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list policy rules for revision %s: %w", revID, err)
+	var policyRules []domain.PolicyRule
+	if includeGraph {
+		policyRules, err = s.policyRepo.ListPolicyRules(ctx, revID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list policy rules for revision %s: %w", revID, err)
+		}
 	}
 
 	admissionRules, err := s.policyRepo.ListAdmissionRules(ctx, revID)
@@ -829,10 +855,6 @@ func (s *Service) resolveSnapshot(ctx context.Context, revisionID string) (*reso
 			globalFilter = &gf.Spec
 		}
 
-		groupFilters, err = s.nodeFilterRepo.ListGroupFilters(ctx)
-		if err != nil {
-			return nil, domain.NewInternalError("group_filters_unavailable", "failed to read group node filters")
-		}
 	}
 
 	nodeIDs := make([]string, len(nodes))
@@ -869,6 +891,7 @@ func (s *Service) resolveSnapshot(ctx context.Context, revisionID string) (*reso
 		CompilerVersion:    "1.0.0",
 		Nodes:              nodes,
 		Groups:             groups,
+		GroupSources:       groupSources,
 		Edges:              edgeMap,
 		PolicyRules:        policyRules,
 		AdmissionRules:     admissionRules,
@@ -916,23 +939,47 @@ func (s *Service) resolveSnapshot(ctx context.Context, revisionID string) (*reso
 		}
 	}
 
-	snapshot, err := s.resolver.Resolve(ctx, input)
+	return &input, nil
+}
+
+func (s *Service) resolveSnapshot(ctx context.Context, revisionID string) (*resolver.ResolvedPolicySnapshot, error) {
+	return s.resolveTargetSnapshot(ctx, revisionID, domain.TargetMihomo)
+}
+
+func (s *Service) resolveTargetSnapshot(ctx context.Context, revisionID string, target domain.CompilerTarget) (*resolver.ResolvedPolicySnapshot, error) {
+	input, err := s.assembleResolveInput(ctx, revisionID, target == domain.TargetMihomo)
 	if err != nil {
 		return nil, err
 	}
-	// Only configured filters can trigger the empty-filter gate. Existing empty
-	// inventory and unrelated missing group edges retain their previous behavior.
+
+	// Pure-node formats do not consume a policy graph. Do not validate an
+	// irrelevant cyclic/missing/invalid group before compiling admitted nodes.
+	resolveInput := *input
+	if target != domain.TargetMihomo {
+		resolveInput.Groups = nil
+		resolveInput.Edges = nil
+		resolveInput.GroupSources = nil
+		resolveInput.GroupFilters = nil
+		resolveInput.PolicyRules = nil
+	}
+	snapshot, err := s.resolver.Resolve(ctx, resolveInput)
+	if err != nil {
+		return nil, err
+	}
 	counts := snapshot.FilterCounts
 	if counts != nil && counts.AdmittedTotal > 0 {
-		globallyEmpty := globalFilter != nil && !globalFilter.IsEmpty() && counts.GlobalFilteredTotal == 0
+		globallyEmpty := input.GlobalFilter != nil && !input.GlobalFilter.IsEmpty() && counts.GlobalFilteredTotal == 0
 		groupEmpty := false
 		if !globallyEmpty && counts.GroupFilteredTotal == 0 {
-			for _, group := range groups {
-				gf := groupFilters[group.ID]
-				if gf.IsEmpty() && group.NodeFilter != nil {
-					gf = *group.NodeFilter
+			for _, group := range input.Groups {
+				hasFilter := false
+				for _, source := range group.Sources {
+					if !source.FilterSpec.IsEmpty() {
+						hasFilter = true
+						break
+					}
 				}
-				if count := counts.GroupCounts[group.ID]; !gf.IsEmpty() && count.Candidate > 0 && count.Excluded > 0 {
+				if count := counts.GroupCounts[group.ID]; hasFilter && count.Candidate > 0 && count.Excluded > 0 {
 					groupEmpty = true
 					break
 				}
@@ -971,6 +1018,11 @@ func filterDependencies(global *domain.NodeFilterSpec, groupFilters map[string]d
 	}
 	for _, group := range groups {
 		inspect(group.NodeFilter)
+		for _, src := range group.Sources {
+			if src.FilterSpec != nil {
+				inspect(src.FilterSpec)
+			}
+		}
 	}
 	return sources, observations
 }
@@ -1225,6 +1277,13 @@ func ValidatePublicationContent(content []byte, target domain.CompilerTarget) er
 					return domain.NewValidationError("dangling_rule_target", fmt.Sprintf("rule %q targets non-existent group %q", r, targetGroup))
 				}
 			}
+		}
+	}
+
+	if target == domain.TargetSingBox {
+		var rawCfg map[string]any
+		if err := json.Unmarshal(content, &rawCfg); err != nil {
+			return domain.NewValidationError("invalid_publication_content", fmt.Sprintf("failed to parse sing-box JSON: %v", err))
 		}
 	}
 

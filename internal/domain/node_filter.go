@@ -51,6 +51,19 @@ func compileFilterRegex(pattern string) (*filterRegex, error) {
 	return compiled, nil
 }
 
+// FilterRegex wraps either standard RE2 or PCRE/backtracking regexp2.
+type FilterRegex = filterRegex
+
+// CompileFilterRegex compiles a pattern with case-insensitive contract and regex cache.
+func CompileFilterRegex(pattern string) (*FilterRegex, error) {
+	return compileFilterRegex(pattern)
+}
+
+// Match tests whether the string matches the compiled filter regex.
+func (r *filterRegex) Match(input string) (bool, error) {
+	return r.match(input)
+}
+
 func (r *filterRegex) match(input string) (bool, error) {
 	if len(input) > filterRegexInputLimit {
 		return false, fmt.Errorf("regex input exceeds %d bytes", filterRegexInputLimit)

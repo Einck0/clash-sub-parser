@@ -57,6 +57,16 @@ func (m *mockSettingsRepo) UpdateAuthSettings(ctx context.Context, adminAuthEnab
 	return nil
 }
 
+func (m *mockSettingsRepo) UpdateSubscriptionFetch(ctx context.Context, mode string, proxyURL *string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.settings.SubscriptionFetchMode = mode
+	if proxyURL != nil {
+		m.settings.SubscriptionFetchProxyURL = *proxyURL
+	}
+	return nil
+}
+
 func TestDynamicAdminTokenLifecycle(t *testing.T) {
 	ctx := context.Background()
 	repo := newMockSettingsRepo("")

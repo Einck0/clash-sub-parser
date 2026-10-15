@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"clash-sub-parser/internal/domain"
+	"clash-sub-parser/internal/fetch"
 )
 
 type settingsRepository struct {
@@ -24,7 +25,8 @@ func (r *settingsRepository) Get(ctx context.Context) (*domain.Settings, error) 
 	const query = `
 	SELECT probe_concurrency_window, max_concurrent_probes, probe_per_node_ttl_seconds,
 	       fetch_timeout_seconds, fetch_max_response_bytes, max_page_size, default_page_size,
-	       admin_token, admin_auth_enabled, export_auth_enabled, updated_at
+	       admin_token, admin_auth_enabled, export_auth_enabled, updated_at,
+        subscription_fetch_mode, subscription_fetch_proxy_url
 	FROM settings
 	WHERE id = 1;`
 
@@ -44,6 +46,8 @@ func (r *settingsRepository) Get(ctx context.Context) (*domain.Settings, error) 
 		&adminAuthInt,
 		&exportAuthInt,
 		&updatedStr,
+		&s.SubscriptionFetchMode,
+		&s.SubscriptionFetchProxyURL,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -64,13 +68,21 @@ func (r *settingsRepository) Update(ctx context.Context, settings *domain.Settin
 	if err := settings.Validate(); err != nil {
 		return err
 	}
+	if settings.SubscriptionFetchProxyURL != "" {
+		normalized, err := fetch.NormalizeProxyURL(settings.SubscriptionFetchProxyURL)
+		if err != nil {
+			return err
+		}
+		settings.SubscriptionFetchProxyURL = normalized
+	}
 
 	const query = `
 	INSERT INTO settings (
 		id, probe_concurrency_window, max_concurrent_probes, probe_per_node_ttl_seconds,
 		fetch_timeout_seconds, fetch_max_response_bytes, max_page_size, default_page_size,
-		admin_token, admin_auth_enabled, export_auth_enabled, updated_at
-	) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		admin_token, admin_auth_enabled, export_auth_enabled, updated_at,
+        subscription_fetch_mode, subscription_fetch_proxy_url
+	) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(id) DO UPDATE SET
 		probe_concurrency_window = excluded.probe_concurrency_window,
 		max_concurrent_probes = excluded.max_concurrent_probes,
@@ -82,6 +94,8 @@ func (r *settingsRepository) Update(ctx context.Context, settings *domain.Settin
 		admin_token = excluded.admin_token,
 		admin_auth_enabled = excluded.admin_auth_enabled,
 		export_auth_enabled = excluded.export_auth_enabled,
+        subscription_fetch_mode = excluded.subscription_fetch_mode,
+        subscription_fetch_proxy_url = excluded.subscription_fetch_proxy_url,
 		updated_at = excluded.updated_at;`
 
 	updatedStr := domain.NowUTC().Format(time.RFC3339)
@@ -108,11 +122,52 @@ func (r *settingsRepository) Update(ctx context.Context, settings *domain.Settin
 		adminAuthInt,
 		exportAuthInt,
 		updatedStr,
+		settings.SubscriptionFetchMode,
+		settings.SubscriptionFetchProxyURL,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to update settings: %w", err)
 	}
 
+	return nil
+}
+
+func (r *settingsRepository) UpdateSubscriptionFetch(ctx context.Context, mode string, proxyURL *string) error {
+	// Validate a replacement before writing. Omission retains the URL in the same SQL statement.
+	candidate := ""
+	var replacement any
+	if proxyURL != nil {
+		candidate = *proxyURL
+		if candidate != "" {
+			normalized, err := fetch.NormalizeProxyURL(candidate)
+			if err != nil {
+				return err
+			}
+			candidate = normalized
+		}
+		replacement = candidate
+	}
+	validationURL := candidate
+	if proxyURL == nil {
+		validationURL = "retained"
+	}
+	if err := domain.ValidateSubscriptionFetchSettings(mode, validationURL); err != nil {
+		return err
+	}
+	result, err := r.db.ExecContext(ctx, `UPDATE settings SET
+  subscription_fetch_mode = ?, subscription_fetch_proxy_url = COALESCE(?, subscription_fetch_proxy_url), updated_at = ?
+  WHERE id = 1 AND (? != 'proxy' OR length(COALESCE(?, subscription_fetch_proxy_url)) > 0)`,
+		mode, replacement, domain.NowUTC().Format(time.RFC3339), mode, replacement)
+	if err != nil {
+		return fmt.Errorf("failed to update subscription fetch settings: %w", err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count != 1 {
+		return domain.NewValidationError("invalid_subscription_fetch", "proxy mode requires a configured proxy URL")
+	}
 	return nil
 }
 

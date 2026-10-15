@@ -159,11 +159,6 @@ func validate(snapshot *resolver.ResolvedPolicySnapshot, target domain.CompilerT
 	}
 
 	if target != domain.TargetMihomo {
-		for i, group := range snapshot.Groups {
-			if group.UsesEmptyPass() {
-				return &CapabilityError{Target: target, Location: fmt.Sprintf("groups[%d]", i), Feature: "empty_fallback_pass", Reason: "target does not support explicit empty-group PASS routing"}
-			}
-		}
 		return nil
 	}
 
@@ -198,6 +193,10 @@ func validate(snapshot *resolver.ResolvedPolicySnapshot, target domain.CompilerT
 			case resolver.MemberKindGroup:
 				if (strings.TrimSpace(member.TargetID) != "" && !groupIDs[member.TargetID]) || !groupNames[memberName] {
 					return &CapabilityError{Target: target, Location: loc, Feature: memberName, Reason: "group member references unknown policy group"}
+				}
+			case resolver.MemberKindBuiltin:
+				if !isBuiltInPolicyTarget(memberName) {
+					return &CapabilityError{Target: target, Location: loc, Feature: memberName, Reason: fmt.Sprintf("unsupported builtin policy target %q", memberName)}
 				}
 			case "":
 				if !nodeNames[memberName] && !groupNames[memberName] && !isBuiltInPolicyTarget(memberName) {
@@ -575,15 +574,7 @@ func ValidateTargetCapabilities(snapshot *resolver.ResolvedPolicySnapshot, targe
 		}
 	}
 
-	// PASS routing is native to Mihomo only, not a nodes-only substitution.
-	if target != domain.TargetMihomo {
-		for _, g := range snapshot.Groups {
-			if g.UsesEmptyPass() {
-				diags = append(diags, CapabilityDiagnostic{Code: "unsupported_target_capability", Message: "target does not support explicit empty-group PASS routing", Target: string(target)})
-			}
-		}
-	}
-	// Target-specific group and rule topology validation
+	// Target-specific group and rule topology validation (Mihomo only)
 	if target == domain.TargetMihomo {
 		groupNameSet := make(map[string]bool, len(snapshot.Groups)*2)
 		for _, g := range snapshot.Groups {
@@ -597,7 +588,16 @@ func ValidateTargetCapabilities(snapshot *resolver.ResolvedPolicySnapshot, targe
 
 		// 1. Check each rendered proxy group: must be non-empty (required_nonempty)
 		for _, g := range snapshot.Groups {
-			if !g.UsesEmptyPass() && (len(g.Members) == 0 || (g.EmptyFallbackPass && len(g.AllNodeLogicalIDs) == 0)) {
+			hasProxies := len(g.AllNodeLogicalIDs) > 0
+			if !hasProxies {
+				for _, m := range g.Members {
+					if m.Kind == resolver.MemberKindBuiltin {
+						hasProxies = true
+						break
+					}
+				}
+			}
+			if !g.UsesEmptyPass() && (len(g.Members) == 0 || (g.EmptyFallbackPass && !hasProxies)) {
 				diags = append(diags, CapabilityDiagnostic{
 					Code:    "required_nonempty",
 					Message: fmt.Sprintf("proxy group %q has no proxies (required_nonempty)", g.Name),

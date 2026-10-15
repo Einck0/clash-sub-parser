@@ -3,7 +3,9 @@ module clash-sub-parser
 go 1.27.1
 
 require (
+	github.com/dlclark/regexp2 v1.12.0
 	github.com/go-chi/chi/v5 v5.2.5
+	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/sagernet/sing v0.9.6-0.20260922013359-4ca3bebe0b8e
 	github.com/sagernet/sing-box v1.15.0-alpha.7
 	github.com/sagernet/sing-tun v0.9.6-0.20260922105247-aff4131a9e9e
@@ -40,7 +42,6 @@ require (
 	github.com/dblohm7/wingoes v0.0.0-20240119213807-a09d6be7affa // indirect
 	github.com/dgryski/go-camellia v0.0.0-20191119043421-69a8a13fb23d // indirect
 	github.com/dgryski/go-metro v0.0.0-20180109044635-280f6062b5bc // indirect
-	github.com/dlclark/regexp2 v1.12.0
 	github.com/dunglas/httpsfv v1.0.2 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/easytier/easytier/easytier-go v0.0.0-20260910071355-3d0c9c3ca5e2 // indirect
@@ -73,7 +74,6 @@ require (
 	github.com/google/nftables v0.2.1-0.20240414091927-5e242ec57806 // indirect
 	github.com/google/pprof v0.0.0-20260802141513-ef3492d7dac3 // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/hashicorp/yamux v0.1.2 // indirect
 	github.com/hdevalence/ed25519consensus v0.2.0 // indirect
 	github.com/huin/goupnp v1.3.0 // indirect
@@ -165,6 +165,7 @@ require (
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/rasky/go-lzo v0.0.0-20200203143853-96a758eda86e // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
+	github.com/robfig/cron/v3 v3.0.1 // indirect
 	github.com/safchain/ethtool v0.3.0 // indirect
 	github.com/sagernet/bbolt v0.0.0-20260915102804-500ee1e84832 // indirect
 	github.com/sagernet/cors v1.2.1 // indirect

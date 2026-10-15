@@ -30,6 +30,8 @@ func registerSettingsRoutes(r chi.Router, cfg RouterConfig) {
 	r.Get("/settings/admin-token", settingsGetAdminTokenStatusHandler(cfg))
 	r.Get("/settings/auth", settingsGetAuthHandler(cfg))
 	r.Put("/settings/auth", settingsPutAuthHandler(cfg))
+	r.Get("/settings/subscription-fetch", settingsGetSubscriptionFetchHandler(cfg))
+	r.Put("/settings/subscription-fetch", settingsPutSubscriptionFetchHandler(cfg))
 }
 
 type authSettingsResponse struct {

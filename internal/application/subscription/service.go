@@ -128,11 +128,13 @@ type Service struct {
 	audit         domain.AuditRepository
 	reconciler    Reconciler
 	mu            sync.Mutex
+	refreshMu     sync.Mutex
+	refreshing    map[string]bool
 }
 
 // NewService constructs a subscription service from its domain ports.
 func NewService(subscriptions domain.SubscriptionRepository, audit domain.AuditRepository, opts ...Option) *Service {
-	s := &Service{subscriptions: subscriptions, audit: audit}
+	s := &Service{subscriptions: subscriptions, audit: audit, refreshing: map[string]bool{}}
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -148,6 +150,9 @@ func (s *Service) SetReconciler(r Reconciler) {
 
 // Create validates and persists a new subscription with UUIDv7 identity and revision.
 func (s *Service) Create(ctx context.Context, command CreateSubscriptionCommand) (SubscriptionView, error) {
+	if err := validateSchedule(command.Config); err != nil {
+		return SubscriptionView{}, err
+	}
 	if err := validateCreate(command); err != nil {
 		s.recordFailure(ctx, command.ActorKind, command.RequestID, "subscription.create")
 		return SubscriptionView{}, err
@@ -212,6 +217,9 @@ func (s *Service) Update(ctx context.Context, command UpdateSubscriptionCommand)
 		sub.RefreshPolicy = normalizedPolicy(*command.RefreshPolicy)
 	}
 	if command.Config != nil {
+		if err := validateSchedule(*command.Config); err != nil {
+			return SubscriptionView{}, err
+		}
 		sub.Config = *command.Config
 	}
 	sub.Revision = domain.MustNewUUIDv7()
@@ -283,6 +291,25 @@ func (s *Service) List(ctx context.Context, query ListSubscriptionsQuery) (ListR
 
 // Refresh 执行真正的刷新并返回数据摘要
 func (s *Service) Refresh(ctx context.Context, id, requestID string, actorKind domain.ActorKind) (*ReconcileSummary, error) {
+	return s.refresh(ctx, id, requestID, actorKind, nil, time.Time{})
+}
+
+func (s *Service) refresh(ctx context.Context, id, requestID string, actorKind domain.ActorKind, scheduledAt *time.Time, lastAttempt time.Time) (*ReconcileSummary, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	s.refreshMu.Lock()
+	if s.refreshing[id] {
+		s.refreshMu.Unlock()
+		return nil, domain.NewConflictError("subscription_refresh_in_progress", "subscription is already refreshing")
+	}
+	if len(s.refreshing) >= 2 {
+		s.refreshMu.Unlock()
+		return nil, domain.NewConflictError("subscription_refresh_busy", "subscription refresh capacity reached")
+	}
+	s.refreshing[id] = true
+	s.refreshMu.Unlock()
+	defer func() { s.refreshMu.Lock(); delete(s.refreshing, id); s.refreshMu.Unlock() }()
 	sub, err := s.subscriptions.GetByID(ctx, id)
 	if err != nil {
 		s.recordFailure(ctx, actorKind, requestID, "subscription.refresh")
@@ -294,18 +321,20 @@ func (s *Service) Refresh(ctx context.Context, id, requestID string, actorKind d
 		return nil, err
 	}
 
-	if s.reconciler == nil {
-		if err := s.record(ctx, actorKind, requestID, "subscription.refresh", domain.AuditResultSuccess); err != nil {
-			return nil, err
-		}
-		return &ReconcileSummary{
-			SubscriptionID: sub.ID,
-			Outcome:        "success",
-			RefreshedAt:    domain.NowUTC().Format(time.RFC3339),
-		}, nil
+	// Re-read due state after admission so a manual completion or configuration
+	// edit between the scheduler scan and worker cannot cause a duplicate fetch.
+	if scheduledAt != nil && !refreshDue(*sub, *scheduledAt, lastAttempt) {
+		return nil, nil
+	}
+	s.mu.Lock()
+	reconciler := s.reconciler
+	s.mu.Unlock()
+	if reconciler == nil {
+		s.recordFailure(ctx, actorKind, requestID, "subscription.refresh")
+		return nil, domain.NewInternalError("subscription_reconciler_unavailable", "subscription refresh reconciler is unavailable")
 	}
 
-	result, err := s.reconciler.ReconcileSubscription(ctx, id)
+	result, err := reconciler.ReconcileSubscription(ctx, id)
 	if err != nil {
 		s.recordFailure(ctx, actorKind, requestID, "subscription.refresh")
 		summary := &ReconcileSummary{

@@ -338,11 +338,14 @@ func TestSubscriptionRefreshWithoutReconcilerGraceful(t *testing.T) {
 	service := subscription.NewService(repo, audit)
 
 	summary, err := service.Refresh(context.Background(), subID, "req-refresh-noreconciler", domain.ActorKindAdmin)
-	if err != nil {
-		t.Fatalf("Refresh() unexpected error = %v", err)
+	de, ok := domain.AsDomainError(err)
+	if !ok || de.Code != "subscription_reconciler_unavailable" || summary != nil {
+		t.Fatalf("missing reconciler fabricated success: summary=%+v err=%v", summary, err)
 	}
-	if summary == nil || summary.Outcome != "success" {
-		t.Fatalf("summary = %#v, want success outcome", summary)
+	for _, event := range audit.events {
+		if event.Result == domain.AuditResultSuccess {
+			t.Fatal("success audit without refresh")
+		}
 	}
 }
 

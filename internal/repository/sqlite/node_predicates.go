@@ -29,6 +29,18 @@ WHERE s.enabled = 1
         AND sf.outcome IN ('success', 'partial')
       ORDER BY sf.started_at DESC, sf.id DESC
       LIMIT 1
+  )
+UNION
+SELECT n.logical_id
+FROM nodes n
+WHERE n.active = 1
+  AND NOT EXISTS (SELECT 1 FROM node_sources ns WHERE ns.node_logical_id = n.logical_id)
+  AND (
+    EXISTS (SELECT 1 FROM node_source_history h WHERE h.node_logical_id = n.logical_id AND h.cause = 'manual_confirmed')
+    OR (
+      NOT EXISTS (SELECT 1 FROM subscription_entries se WHERE se.node_logical_id = n.logical_id)
+      AND NOT EXISTS (SELECT 1 FROM node_source_history h WHERE h.node_logical_id = n.logical_id)
+    )
   )`
 
 // buildNodeFilterPredicates constructs standard WHERE clauses and arguments for node queries.

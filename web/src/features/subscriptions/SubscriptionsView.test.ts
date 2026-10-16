@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { setImmediate } from 'node:timers'
 import { createApp, h, nextTick } from 'vue'
 import SubscriptionsView from './SubscriptionsView.vue'
 import { api } from '../../api/client'
@@ -8,6 +9,7 @@ import { setLocale } from '../../locales'
 import {
   formatRefreshTime,
   formatFullDateTime,
+  useSubscriptions,
   type SubscriptionRecord,
 } from './useSubscriptions'
 
@@ -115,6 +117,85 @@ describe('SubscriptionsView - Last Refreshed Display & Refresh Flow', () => {
       last_refresh_outcome: 'partial',
     },
   ]
+
+  it.each([['zh-CN', '正在刷新'], ['en-US', 'Refreshing']] as const)(
+    'keeps all triggers pending and clears a disabled source refresh in %s', async (locale, pendingText) => {
+      setLocale(locale)
+      const disabled = { ...sampleSubscriptions[0]!, enabled: false }
+      vi.spyOn(api, 'get').mockResolvedValue({ items: [disabled], page: 1, page_size: 50, total: 1 })
+      let resolve!: (value: unknown) => void
+      const post = vi.spyOn(api, 'post').mockImplementation(() => new Promise((done) => { resolve = done }) as any)
+      mountView()
+      await nextTick()
+      await nextTick()
+      const direct = container.querySelector<HTMLButtonElement>('[data-testid="subscription-card-refresh-btn"]')!
+      expect(direct.disabled).toBe(false)
+      direct.click()
+      await nextTick()
+      expect(direct.disabled).toBe(true)
+      expect(direct.textContent).toContain(pendingText)
+      expect(direct.querySelector('.animate-spin')).not.toBeNull()
+      expect(container.querySelector('[data-testid="sub-refresh-loading"]')?.textContent).toContain(pendingText)
+      container.querySelector<HTMLButtonElement>('[data-testid="subscription-actions-trigger"]')!.click()
+      await nextTick()
+      const menu = document.querySelector<HTMLButtonElement>('[data-testid="sub-action-refresh"]')!
+      expect(menu.disabled).toBe(true)
+      expect(menu.textContent).toContain(pendingText)
+      expect(menu.querySelector('.animate-spin')).not.toBeNull()
+      direct.click()
+      menu.click()
+      expect(post).toHaveBeenCalledTimes(1)
+      expect(post.mock.calls[0]?.[0]).toBe('/api/v1/subscriptions/sub-never/refresh')
+      resolve({ status: 'completed' })
+      // Flush the resolved API and list reload before Vue's render flush (no wall-clock delay).
+      await new Promise<void>((done) => { setImmediate(done) })
+      await nextTick()
+      expect(container.querySelector('[data-testid="sub-refresh-loading"]')).toBeNull()
+      expect(container.querySelector<HTMLButtonElement>('[data-testid="subscription-card-refresh-btn"]')?.disabled).toBe(false)
+      expect(toastStore.items.value.at(-1)?.message).toBe(locale === 'zh-CN' ? '订阅刷新已完成' : 'Subscription refresh completed')
+    }
+  )
+
+  it('restores card and menu controls when a disabled manual refresh fails', async () => {
+    const disabled = { ...sampleSubscriptions[0]!, enabled: false }
+    vi.spyOn(api, 'get').mockResolvedValue({ items: [disabled], page: 1, page_size: 50, total: 1 })
+    let reject!: (reason: Error) => void
+    vi.spyOn(api, 'post').mockImplementation(() => new Promise((_resolve, fail) => { reject = fail }) as any)
+    mountView()
+    await nextTick()
+    await nextTick()
+    container.querySelector<HTMLButtonElement>('[data-testid="subscription-actions-trigger"]')!.click()
+    await nextTick()
+    document.querySelector<HTMLButtonElement>('[data-testid="sub-action-refresh"]')!.click()
+    await nextTick()
+    expect(container.querySelector('[data-testid="sub-refresh-loading"]')).not.toBeNull()
+    reject(new Error('fixture unavailable'))
+    // Drain the rejected API and subsequent list reload without a wall-clock delay.
+    await new Promise<void>((done) => { setImmediate(done) })
+    await nextTick()
+    expect(container.querySelector('[data-testid="sub-refresh-loading"]')).toBeNull()
+    expect(container.querySelector<HTMLButtonElement>('[data-testid="subscription-card-refresh-btn"]')!.disabled).toBe(false)
+    container.querySelector<HTMLButtonElement>('[data-testid="subscription-actions-trigger"]')!.click()
+    await nextTick()
+    expect(document.querySelector<HTMLButtonElement>('[data-testid="sub-action-refresh"]')!.disabled).toBe(false)
+    expect(toastStore.items.value.at(-1)).toMatchObject({ message: 'fixture unavailable', tone: 'error' })
+  })
+
+  it('rejects duplicate programmatic refreshes and always cleans up after rejection', async () => {
+    let reject!: (reason: Error) => void
+    const post = vi.spyOn(api, 'post').mockImplementation(() => new Promise((_resolve, fail) => { reject = fail }) as any)
+    vi.spyOn(api, 'get').mockResolvedValue({ items: [], total: 0 })
+    const state = useSubscriptions()
+    const disabled = { ...sampleSubscriptions[0]!, enabled: false }
+    const pending = state.refresh(disabled)
+    await state.refresh(disabled)
+    expect(post).toHaveBeenCalledTimes(1)
+    expect(state.refreshingIDs.value.has(disabled.id)).toBe(true)
+    reject(new Error('fixture refresh failed'))
+    await pending
+    expect(state.refreshingIDs.value.size).toBe(0)
+    expect(toastStore.items.value.at(-1)).toMatchObject({ message: 'fixture refresh failed', tone: 'error' })
+  })
 
   it('renders "从未刷新" for subscription without refresh records', async () => {
     vi.spyOn(api, 'get').mockResolvedValue({
@@ -388,6 +469,41 @@ describe('formatRefreshTime and formatFullDateTime helpers', () => {
 })
 
 describe('SubscriptionConfigDrawer validation guards', () => {
+  it('loads, edits and clears only the authoritative top-level prefix', async () => {
+    const { default: SubscriptionConfigDrawer } = await import('./SubscriptionConfigDrawer.vue')
+    const mountEl = document.createElement('div')
+    document.body.appendChild(mountEl)
+    const saved = vi.fn()
+    const source: SubscriptionRecord = {
+      id: 'prefix-source', name: 'Prefix source', source_url_secret_ref: 'https://example.com/feed',
+      enabled: false, prefix: 'A ', refresh_policy: { interval_seconds: 3600, timeout_seconds: 30, user_agent_policy: 'default', max_response_bytes: 1024 },
+      revision: 'rev', created_at: '', updated_at: '',
+      // A legacy config value must not override an intentionally cleared top-level value.
+      config: { auto_test: false, ...({ prefix: 'legacy' } as object) },
+    }
+    const app = createApp({ render: () => h(SubscriptionConfigDrawer, { modelValue: true, subscription: source, onSave: saved }) })
+    app.mount(mountEl)
+    try {
+      await nextTick()
+      const input = document.querySelector<HTMLInputElement>('[data-testid="subscription-prefix-input"]')!
+      expect(input.value).toBe('A ')
+      for (const prefix of ['B ', '']) {
+        input.value = prefix
+        input.dispatchEvent(new Event('input'))
+        document.querySelector<HTMLButtonElement>('[data-testid="subscription-drawer-save-btn"]')!.click()
+        await nextTick()
+        const payload = saved.mock.calls.at(-1)?.[0]
+        expect(payload.prefix).toBe(prefix)
+        expect(payload.config).not.toHaveProperty('prefix')
+      }
+    } finally {
+      app.unmount()
+      mountEl.remove()
+    }
+    // Clearing persists as an empty top-level field, never a fallback to old config.
+    const { subscriptionPatchPayload } = await import('./useSubscriptions')
+    expect(subscriptionPatchPayload(saved.mock.calls.at(-1)?.[0]).prefix).toBe('')
+  })
   it('blocks save and forces basic tab when saving with blank name or source URL', async () => {
     const { default: SubscriptionConfigDrawer } = await import('./SubscriptionConfigDrawer.vue')
     const { createApp, h, nextTick } = await import('vue')

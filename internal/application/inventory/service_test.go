@@ -597,27 +597,29 @@ func TestReconcile_ParseFailurePreservesExisting(t *testing.T) {
 	}
 }
 
-// 5. Disabled subscription rejection test.
-func TestReconcile_DisabledSubscriptionRejected(t *testing.T) {
+// 5. Disabled subscription manual refresh succeeds test.
+func TestReconcile_DisabledSubscriptionSucceeds(t *testing.T) {
 	ctx := context.Background()
 	db, subRepo, fetchRepo, nodeRepo, sourceRepo := setupTestEnv(t)
 	fetcher := newMockFetcher()
 
 	subID := domain.MustNewUUIDv7()
 	url := "https://disabled.example.com/sub"
+	fetcher.setResponse(url, &fetch.Response{
+		StatusCode:    200,
+		Body:          []byte(clashYAMLSharedNode),
+		ContentType:   "text/yaml",
+		ContentDigest: "sha256:fixture",
+	})
 	createTestSub(t, subRepo, subID, "Disabled Sub", url, false) // enabled = false
 
 	svc := inventory.NewService(db, subRepo, fetchRepo, nodeRepo, sourceRepo, fetcher)
 	res, err := svc.ReconcileSubscription(ctx, subID)
-	if err == nil {
-		t.Fatalf("expected error for disabled subscription, got nil")
+	if err != nil {
+		t.Fatalf("expected manual reconcile for disabled subscription to succeed, got: %v", err)
 	}
-	if res != nil {
-		t.Fatalf("expected nil result on preflight rejection, got %#v", res)
-	}
-	de, ok := domain.AsDomainError(err)
-	if !ok || de.Category != domain.CategoryValidation || de.Code != "subscription_disabled" {
-		t.Fatalf("expected validation error (subscription_disabled), got: %v", err)
+	if res == nil || res.Outcome != domain.FetchOutcomeSuccess {
+		t.Fatalf("expected success outcome, got %#v", res)
 	}
 }
 

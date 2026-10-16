@@ -304,19 +304,13 @@ func (c *Client) Fetch(ctx context.Context, opts Options) (response *Response, f
 				return dialer.DialContext(dCtx, network, addr)
 			}
 
-			if scheme == "http" {
-				hopReq, err = http.NewRequestWithContext(reqCtx, http.MethodGet, currURL.String(), nil)
-				if err != nil {
-					return nil, domain.NewValidationError("invalid_request", fmt.Sprintf("failed to create request: %v", err))
-				}
-				hopReq.URL.Host = pinnedAddr
-				escapedPath := currURL.EscapedPath()
-				if escapedPath == "" {
-					escapedPath = "/"
-				}
-				hopReq.URL.Opaque = "//" + pinnedAddr + escapedPath
-				hopReq.Host = origHostHeader
+			hopReq, err = http.NewRequestWithContext(reqCtx, http.MethodGet, currURL.String(), nil)
+			if err != nil {
+				return nil, domain.NewValidationError("invalid_request", fmt.Sprintf("failed to create request: %v", err))
+			}
+			hopReq.Host = origHostHeader
 
+			if scheme == "http" {
 				transport = &http.Transport{
 					Proxy:                 http.ProxyURL(activeProxyURL),
 					DialContext:           proxyDialContext,
@@ -326,14 +320,6 @@ func (c *Client) Fetch(ctx context.Context, opts Options) (response *Response, f
 					ResponseHeaderTimeout: timeout,
 				}
 			} else {
-				hopReq, err = http.NewRequestWithContext(reqCtx, http.MethodGet, currURL.String(), nil)
-				if err != nil {
-					return nil, domain.NewValidationError("invalid_request", fmt.Sprintf("failed to create request: %v", err))
-				}
-				hopReq.URL.Host = pinnedAddr
-				hopReq.URL.Opaque = ""
-				hopReq.Host = origHostHeader
-
 				transport = &http.Transport{
 					Proxy:       http.ProxyURL(activeProxyURL),
 					DialContext: proxyDialContext,

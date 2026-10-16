@@ -99,3 +99,22 @@ Current frozen run `pi_run_20261016_085304_1567276`, change002-policy/default/ep
 ## Current evidence update (2026-10-16 dev-prelease)
 
 CI synthetic 33 tests pass exit0 (PYTHONPATH=.github/scripts confirmed); cloud-delivery 22+1=23 tests; Go cmd/csp native+race pass. promote_prelease.py AST valid, all subprocess.run with shell=False, no token/secret print, immutable-reuse/orphan/digest-mismatch/fail-closed all unit-covered. prelease job: dev push only, contents:write isolated, prelease-* tag no v* loop. Image package csp-runtime-private is historical name authorized as public (user: "没必要私有啊"); publish remains explicit trigger. Independent reviewers: e53c PASS (shutdown+build metadata), b4a1 PASS (dev→prelease pipeline). Critic PASS 280ef (9 native PNGs read). No commit/push/release/production executed. Preview PID1548536 port46623 cleanup remains main brain owner.
+
+## Current Engineering Tasks (2026-10-16 Run pi_run_20261016_104303_1679144)
+
+- [x] TASK-ENH-01 (Proxy DNS Fix): In `internal/fetch/fetch.go`, do not override `hopReq.URL.Host` with `pinnedAddr` when `activeProxyURL != nil`; preserve original domain in `hopReq.URL.Host` so proxy performs remote DNS resolution. Align `internal/fetch/route_diagnostic_test.go` wire semantics assertion.
+- [x] TASK-ENH-02 (Subscription Prefix): Add single authoritative top-level `prefix` to `Subscription` domain model; add migration `000021_subscription_prefix.sql`; implement prefix prepending on node extraction in `internal/application/inventory/service.go` and retroactive prefix renaming for existing nodes in `internal/application/inventory/` and `internal/application/subscription/`.
+- [x] TASK-ENH-03 (Manual Refresh for Disabled Subs): Allow manual refresh on disabled subscriptions in `internal/application/inventory/service.go` and `internal/application/subscription/service.go` while keeping cron scheduler restricted to enabled subscriptions; update affected unit tests.
+- [x] TASK-ENH-04 (WARP Node & Manual Protection; restoration audit exception retained): Restore `WARP-83d9` (`node_9f2515f807595e984f6081ac58d244bd`) into SQLite; update `enabledSubscriptionsInventorySubquery` in `internal/repository/sqlite/node_predicates.go` to include manual/static nodes (true manual nodes without subscription-origin evidence, not all no-live-source nodes); protect manual nodes from deactivation in `deactivateOrphansSQL`.
+- [x] TASK-ENH-05 (Frontend Subscription Polish): In `SubscriptionConfigDrawer.vue`, add node prefix input field; in `SubscriptionsView.vue`, add visible refresh button/status with "正在刷新" spinner and disabled button state during active refresh; support manual refresh on disabled subscriptions.
+- [x] TASK-ENH-06 (Local Verification & Self-Test): Use lightweight targeted verification locally and full Go/web/build checks on dev CI, isolated fixtures only.
+- [ ] TASK-ENH-07 (Review & Promotion): Independent review, critic verification, Git commit via tool, push to `dev`, and verify GitHub Actions build and promotion to `prelease-<shortSHA>`.
+
+### Review failure and targeted repair (same feature/run)
+- [x] TASK-ENH-R01 Fix atomic subscription/prefix persistence, remove duplicate config authority, fail/rollback injections and stale-save tests. Trace FR-POL-11; review P0-01/P1-01.
+- [x] TASK-ENH-R02 Implement deterministic shared prefix labels without source raw-name/identity/connection revision or user-override corruption; import/save/remove/clear tests. Trace FR-POL-11; P1-02.
+- [x] TASK-ENH-R03 Exclude refresh-pruned subscription assets from manual branch; preserve real manual WARP/scope/delete/shared semantics and assert policy/export. Trace FR-POL-14; P0-02.
+- [x] TASK-ENH-R04 Rename proxy wire tests and document remote resolver trust, add new UI regression tests/i18n/responsive flow; no phone. Trace FR-POL-10/12; P2-01/02.
+- [ ] TASK-ENH-R05 Independent re-review names rejected report, scoped commit and dev CI exact-SHA tests/build/prerelease, artifact-based isolated preview critic, preserve 76 baseline maintenance files. Capture WARP operation audit without further production writes; never seed credentials.
+
+Current status: implementation/targeted self-test and independent re-review pass (IDs in plan). TASK-ENH-06 covers lightweight current source evidence; full cloud tests/build remain TASK-ENH-07/R05, not yet passed. WARP active/node/head/version read-back successful, write-before-backup process exception is unresolved and not a safe-production-rollout PASS. No further prod writes permitted in this continuation.

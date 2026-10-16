@@ -372,9 +372,6 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 	if err != nil {
 		return nil, err
 	}
-	if !sub.Enabled {
-		return nil, domain.NewValidationError("subscription_disabled", "disabled subscriptions cannot be refreshed")
-	}
 
 	startedAt := domain.NowUTC()
 	configuredProxy := s.defaultFetchProxy
@@ -609,14 +606,17 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 		var qErr error
 		if histTableExistsPre > 0 {
 			selectExistingSQL = `
-			SELECT n.logical_id, n.protocol, n.display_name, n.server, n.port, n.config_json, n.active, n.connection_revision
+			SELECT n.logical_id, n.protocol, COALESCE((SELECT se.raw_name FROM subscription_entries se
+			    WHERE se.node_logical_id = n.logical_id AND se.subscription_id = ?
+			    ORDER BY se.created_at DESC, se.rowid DESC LIMIT 1), n.display_name),
+			    n.server, n.port, n.config_json, n.active, n.connection_revision
 			FROM nodes n
 			WHERE n.logical_id IN (
 				SELECT node_logical_id FROM node_sources WHERE subscription_id = ?
 				UNION
 				SELECT node_logical_id FROM node_source_history WHERE subscription_id = ?
 			);`
-			rows, qErr = tx.QueryContext(ctx, selectExistingSQL, sub.ID, sub.ID)
+			rows, qErr = tx.QueryContext(ctx, selectExistingSQL, sub.ID, sub.ID, sub.ID)
 		} else {
 			rows, qErr = tx.QueryContext(ctx, selectExistingSQL, sub.ID)
 		}
@@ -825,12 +825,13 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 		seenLogicalIDs := make(map[string]bool)
 		for i, item := range extractResult.Items {
 			node := item.Normalized.Node
+			rawName := node.DisplayName
 			npKey := node.DisplayName + "|" + string(node.Protocol)
 			ordinal := i
 			entryID := "entry_" + domain.MustNewUUIDv7()
 
-			sourceKey := fmt.Sprintf("%s|%s|%d|%s", node.Protocol, node.Server, node.Port, node.DisplayName)
-			kind, classReason, classVer := domain.ClassifySubscriptionEntry(isVerifiedSource, node.Server, node.Port, node.Credentials, node.DisplayName)
+			sourceKey := fmt.Sprintf("%s|%s|%d|%s", node.Protocol, node.Server, node.Port, rawName)
+			kind, classReason, classVer := domain.ClassifySubscriptionEntry(isVerifiedSource, node.Server, node.Port, node.Credentials, rawName)
 
 			var userKindOverride *domain.EntryKind
 			var overrideAnchor, overrideReason, actorRef string
@@ -1176,13 +1177,13 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 					warningsJSON = fmt.Sprintf("[%q]", conflict)
 				}
 
-				_, _ = entryStmt.ExecContext(ctx,
+				_, entryErr := entryStmt.ExecContext(ctx,
 					entryID,
 					payloadID,
 					sub.ID,
 					ordinal,
 					sourceKey,
-					node.DisplayName,
+					rawName,
 					string(node.Protocol),
 					node.Server,
 					node.Port,
@@ -1201,6 +1202,9 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 					targetLogicalIDVal,
 					nowStr,
 				)
+				if entryErr != nil {
+					return fmt.Errorf("failed to persist raw subscription entry: %w", entryErr)
+				}
 			}
 		}
 
@@ -1279,7 +1283,14 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 
 		// NON-DESTRUCTIVE INVARIANT: Nodes themselves are NEVER deactivated or deleted on refresh pruning.
 		// node.active remains intact even when omitted from the latest fetch.
-		return nil
+		affectedIDs := make([]string, 0, len(existingNodes)+len(seenLogicalIDs))
+		for id := range existingNodes {
+			affectedIDs = append(affectedIDs, id)
+		}
+		for id := range seenLogicalIDs {
+			affectedIDs = append(affectedIDs, id)
+		}
+		return sqlite.RecomputeNodeDisplayNames(ctx, tx, affectedIDs, nil, nowStr)
 	})
 
 	if err != nil {

@@ -1173,7 +1173,7 @@ func generateTestCertificate(t *testing.T, dnsName string) (tls.Certificate, *x5
 	return tlsCert, certPool
 }
 
-func TestProxy_TargetIPPinning_WireFormat_HTTP(t *testing.T) {
+func TestProxy_RemoteResolverOriginalDomain_WireFormat_HTTP(t *testing.T) {
 	ctx := context.Background()
 
 	// 1. Mock proxy listener recording wire format
@@ -1233,7 +1233,7 @@ func TestProxy_TargetIPPinning_WireFormat_HTTP(t *testing.T) {
 
 	client := fetch.NewClientWithPolicy(policy)
 	resp, err := client.Fetch(ctx, fetch.Options{
-		URL:           "http://sub.example.com/sub/feed?token=xyz",
+		URL:           "http://sub.example.com:8081/sub/feed?token=xyz",
 		FetchProxyURL: proxyURLStr,
 		Policy:        policy,
 	})
@@ -1248,16 +1248,13 @@ func TestProxy_TargetIPPinning_WireFormat_HTTP(t *testing.T) {
 	captureMu.Lock()
 	defer captureMu.Unlock()
 
-	expectedReqLine := "GET http://93.184.216.34:80/sub/feed?token=xyz HTTP/1.1"
+	expectedReqLine := "GET http://sub.example.com:8081/sub/feed?token=xyz HTTP/1.1"
 	if capturedRequestLine != expectedReqLine {
 		t.Errorf("expected request line %q, got %q", expectedReqLine, capturedRequestLine)
 	}
-	if strings.Contains(capturedRequestLine, "sub.example.com") {
-		t.Errorf("request line leaked unpinned domain name: %s", capturedRequestLine)
-	}
 
-	if h := capturedHeaders.Get("Host"); h != "sub.example.com" {
-		t.Errorf("expected Host header 'sub.example.com', got %q", h)
+	if h := capturedHeaders.Get("Host"); h != "sub.example.com:8081" {
+		t.Errorf("expected original domain and explicit port, got %q", h)
 	}
 	if ua := capturedHeaders.Get("User-Agent"); ua != "clash-verge/v2.5.6" {
 		t.Errorf("expected User-Agent 'clash-verge/v2.5.6', got %q", ua)
@@ -1270,13 +1267,14 @@ func TestProxy_TargetIPPinning_WireFormat_HTTP(t *testing.T) {
 	}
 }
 
-func TestProxy_TargetIPPinning_WireFormat_HTTPS(t *testing.T) {
+func TestProxy_RemoteResolverOriginalDomain_WireFormat_HTTPS(t *testing.T) {
 	ctx := context.Background()
 
 	tlsCert, rootCAs := generateTestCertificate(t, "sub.example.com")
 
 	var targetReceivedSNI string
 	var targetReceivedHost string
+	var targetRequestURI string
 	originListener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to listen: %v", err)
@@ -1288,8 +1286,9 @@ func TestProxy_TargetIPPinning_WireFormat_HTTPS(t *testing.T) {
 			targetReceivedSNI = r.TLS.ServerName
 		}
 		targetReceivedHost = r.Host
+		targetRequestURI = r.RequestURI
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("https-pinned-success"))
+		w.Write([]byte("https-remote-dns-success"))
 	}))
 	tlsServer.Listener = originListener
 	tlsServer.TLS = &tls.Config{
@@ -1372,7 +1371,7 @@ func TestProxy_TargetIPPinning_WireFormat_HTTPS(t *testing.T) {
 	client := fetch.NewClientWithPolicy(policy)
 
 	resp, err := client.Fetch(ctx, fetch.Options{
-		URL:           "https://sub.example.com/feed?token=xyz",
+		URL:           "https://sub.example.com:8443/feed?token=xyz",
 		FetchProxyURL: proxyURLStr,
 		Policy:        policy,
 		RootCAs:       rootCAs,
@@ -1381,29 +1380,26 @@ func TestProxy_TargetIPPinning_WireFormat_HTTPS(t *testing.T) {
 		t.Fatalf("https fetch via proxy failed: %v", err)
 	}
 
-	if string(resp.Body) != "https-pinned-success" {
+	if string(resp.Body) != "https-remote-dns-success" {
 		t.Fatalf("unexpected body: %s", string(resp.Body))
 	}
 
 	connectMu.Lock()
 	defer connectMu.Unlock()
 
-	expectedConnect := "CONNECT 93.184.216.34:443 HTTP/1.1"
+	expectedConnect := "CONNECT sub.example.com:8443 HTTP/1.1"
 	if capturedConnectLine != expectedConnect {
 		t.Errorf("expected CONNECT line %q, got %q", expectedConnect, capturedConnectLine)
 	}
-	if strings.Contains(capturedConnectLine, "sub.example.com") {
-		t.Errorf("CONNECT line leaked unpinned domain name: %s", capturedConnectLine)
-	}
-	if capturedConnectHost != "93.184.216.34:443" {
-		t.Errorf("expected CONNECT Host header '93.184.216.34:443', got %q", capturedConnectHost)
+	if capturedConnectHost != "sub.example.com:8443" {
+		t.Errorf("expected CONNECT Host header 'sub.example.com:8443', got %q", capturedConnectHost)
 	}
 
 	if targetReceivedSNI != "sub.example.com" {
 		t.Errorf("expected origin TLS SNI 'sub.example.com', got %q", targetReceivedSNI)
 	}
-	if targetReceivedHost != "sub.example.com" {
-		t.Errorf("expected origin Host header 'sub.example.com', got %q", targetReceivedHost)
+	if targetReceivedHost != "sub.example.com:8443" || targetRequestURI != "/feed?token=xyz" {
+		t.Errorf("original origin host/path/query lost: host=%q URI=%q", targetReceivedHost, targetRequestURI)
 	}
 
 	t.Run("strict TLS verification fails on domain mismatch", func(t *testing.T) {
@@ -1467,7 +1463,8 @@ func TestProxy_TargetIPPinning_WireFormat_HTTPS(t *testing.T) {
 	})
 }
 
-func TestProxy_ProxySideDNSPoisoningDefense(t *testing.T) {
+// Local public-IP checks do not constrain the trusted proxy's remote DNS answer.
+func TestProxy_RemoteResolverTrustAndLocalTargetValidation(t *testing.T) {
 	ctx := context.Background()
 
 	var receivedAuthority string
@@ -1516,11 +1513,8 @@ func TestProxy_ProxySideDNSPoisoningDefense(t *testing.T) {
 		t.Fatalf("fetch failed: %v", err)
 	}
 
-	if !strings.Contains(receivedAuthority, "93.184.216.34") {
-		t.Errorf("proxy request line did not contain pinned public IP: %s", receivedAuthority)
-	}
-	if strings.Contains(receivedAuthority, "poisoned.example.com") {
-		t.Errorf("proxy request line leaked poisoned domain name: %s", receivedAuthority)
+	if !strings.Contains(receivedAuthority, "poisoned.example.com") {
+		t.Errorf("proxy request line did not contain domain name: %s", receivedAuthority)
 	}
 
 	t.Run("local DNS resolving to loopback blocked before proxy", func(t *testing.T) {
@@ -1589,7 +1583,7 @@ func TestProxy_ProxySideDNSPoisoningDefense(t *testing.T) {
 	})
 }
 
-func TestProxy_MultiHopRedirectIPRebinding(t *testing.T) {
+func TestProxy_RedirectDomainsPreservedWithPerHopValidation(t *testing.T) {
 	ctx := context.Background()
 
 	var hopRequests []string
@@ -1671,14 +1665,14 @@ func TestProxy_MultiHopRedirectIPRebinding(t *testing.T) {
 		t.Fatalf("expected 3 hops recorded, got %d", len(hopRequests))
 	}
 
-	if !strings.Contains(hopRequests[0], "93.184.216.10:80") || hopHosts[0] != "hop1.example.com" {
+	if !strings.Contains(hopRequests[0], "hop1.example.com") || hopHosts[0] != "hop1.example.com" {
 		t.Errorf("hop 1 mismatch: req=%q, host=%q", hopRequests[0], hopHosts[0])
 	}
-	if !strings.Contains(hopRequests[1], "93.184.216.20:80") || hopHosts[1] != "hop2.example.com" {
+	if !strings.Contains(hopRequests[1], "hop2.example.com") || hopHosts[1] != "hop2.example.com" {
 		t.Errorf("hop 2 mismatch: req=%q, host=%q", hopRequests[1], hopHosts[1])
 	}
-	if !strings.Contains(hopRequests[2], "93.184.216.30:80") || hopHosts[2] != "hop3.example.com" {
-		t.Errorf("hop 3 mismatch: req=%q, host=%q", hopRequests[2], hopHosts[2])
+	if !strings.Contains(hopRequests[2], "hop3.example.com") || hopHosts[2] != "hop3.example.com" {
+		t.Errorf("hop 2 mismatch: req=%q, host=%q", hopRequests[2], hopHosts[2])
 	}
 }
 

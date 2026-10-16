@@ -40,6 +40,7 @@ type Subscription struct {
 	Name               string             `json:"name"`
 	SourceURLSecretRef string             `json:"source_url_secret_ref"`
 	Enabled            bool               `json:"enabled"`
+	Prefix             string             `json:"prefix,omitempty"`
 	RefreshPolicy      RefreshPolicy      `json:"refresh_policy"`
 	Config             SubscriptionConfig `json:"config"`
 	Revision           string             `json:"revision"`

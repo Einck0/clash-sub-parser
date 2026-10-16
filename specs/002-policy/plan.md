@@ -1,6 +1,6 @@
 # Technical plan — CSP complete-delivery convergence
 
-Feature: `specs/002-policy`; current run `pi_run_20261016_085304_1567276`; change `002-policy`; package `default`, epoch 1. This is an implementation-authorized continuation, not a fresh initialization. Historical implementation and failed gates remain preserved. The current delivery amendment in spec.md takes precedence over historical execution prose in linked artifacts.
+Feature: `specs/002-policy`; current run `pi_run_20261016_104303_1679144`; change `002-policy`; package `default`, epoch 1. This is an implementation-authorized continuation, not a fresh initialization. Historical implementation and failed gates remain preserved. The current delivery amendment in spec.md takes precedence over historical execution prose in linked artifacts.
 
 ## Context and scope
 
@@ -75,3 +75,39 @@ Live user append `csp-public-image-authorized-20261016` supersedes prior private
 ### Dev → prelease convention (latest user instruction)
 
 No remote prelease branch or release entity exists; establish GitHub prerelease `prelease-<shortSHA>` targeting the successful dev SHA. Reuse the CI artifact for the runtime image and release assets (binary/SHA256/delivery identity). Only successful dev checks permit promotion; failed/PR runs never publish. Token write permissions are job-scoped, secrets not available to PR publication. Explicit older release/tag paths may remain supported but are not used for current test compilation. Avoid automatic production rollout. Normal merge origin/dev in an isolated integration tree, preserve both parents and reviewed current behavior; no local heavy rebuild. Validate CI syntax/semantics with lightweight native scripts and independent reviewer, then dev cloud handles heavy tests/build.
+
+## Current Engineering Design (2026-10-16 Run pi_run_20261016_104303_1679144)
+
+### Proxy Fetch DNS Handling
+In `internal/fetch/fetch.go`:
+When `activeProxyURL != nil`, preserve original domain in `hopReq.URL.Host` and `hopReq.Host`. Do not override `hopReq.URL.Host` with `pinnedAddr`. In `route_diagnostic_test.go`, update wire assertions to expect original domain name rather than pinned IP on proxy requests.
+
+### Subscription Prefix Architecture
+- Model: Single authoritative `Subscription.Prefix` (top-level API + SQLite column). No config_json duplicate.
+- Storage: Add `migrations/000021_subscription_prefix.sql` adding column `prefix TEXT NOT NULL DEFAULT ''` to `subscriptions`.
+- Ingestion: Preserve raw entry names/anchors, then recompute display labels inside the ingestion transaction from current authoritative source prefixes.
+- Retroactive Renaming: Save subscription and recompute all affected names in one repository transaction, stable source-ID label order and explicit user override precedence.
+
+### Disabled Subscription Manual Refresh
+In `internal/application/inventory/service.go` and `internal/application/subscription/service.go`, remove the validation error `subscription_disabled`. The cron scheduler in `scheduler.go` remains the sole component filtering by `enabled = 1`. Update unit tests expecting `subscription_disabled` to expect success.
+
+### Manual Node Protection & WARP Restoration
+- In `internal/repository/sqlite/node_predicates.go`: Expand `enabledSubscriptionsInventorySubquery` with a `UNION` for manual nodes (`active=1`, no live sources AND no entries/history of subscription origin, or explicit manual_confirmed evidence).
+- In `internal/repository/sqlite/subscriptions.go`: Modify `deactivateOrphansSQL` so it only deactivates nodes that were associated with the deleted subscription (`logical_id IN (SELECT node_logical_id FROM node_sources WHERE subscription_id = ?)`), protecting independent manual nodes.
+- Restoration: Insert `WARP-83d9` (`node_9f2515f807595e984f6081ac58d244bd`) with `active = 1` into `nodes`, `node_connection_heads`, and `node_connection_versions` from backup `csp-v1-backup-20261008_pre_release_run_3091470.db`.
+
+### Frontend Polish
+- `SubscriptionConfigDrawer.vue`: Add node prefix input field bound solely to `draft.prefix`.
+- `SubscriptionsView.vue`: Show "正在刷新" with animated spinner and disabled button state on active refresh; add a direct card refresh button; allow manual refresh for disabled subscriptions.
+
+## Review remediation authority (current run, epoch 1)
+Reviewer `rep_rev_default_d568141d-a870-46ec-9a42-72cad371107d` rejected: independent rename transaction/error swallowing, duplicate config prefix, shared-name overwrite, orphan re-admission, misleading proxy tests and narrow header/i18n. Prior PASS self-test does not override review. Its suggested stale If-Match reproduction is inaccurate: service validates revision before rename; real failure is rename commit followed by repository update failure, or rename error swallowed.
+
+- Prefix has one authority: top-level field/column; remove config prefix (unreleased API). Subscription update and affected display names MUST share one SQLite transaction; rollback all on either write failure. No best-effort callback. Raw source entries/classification/IDs/connection revisions/publication snapshots remain unchanged. Existing repo.Update boundary may perform transactionally affected-node rename using old/new prefix.
+- Shared node display name: preserve one stable logical ID; render unique nonempty source prefixes in stable subscription-ID order followed by the unprefixed original name from latest entry of first source (fallback strips exactly known prior labels, no heuristic arbitrary bracket removal). This honestly represents all source labels without last-writer wins or identity forks; no duplicating equal labels. Empty prefix removes only that source label. Reconcile/save/delete of owning sources recomputes same deterministic label. Manual display-name overrides retain precedence. UI explains shared labels combine; imported raw names and overrides never contain synthetic prefix.
+- Manual/static scope eligibility: active nodes with no live sources AND no evidence of subscription origin (subscription_entries/history); explicit manual_confirmed evidence may authorize manually recovered assets. Do not re-admit refresh-pruned subscription assets. Scope stays unchanged for enabled/latest-fetch and disabled-source nodes. Do not alter explicit destructive reset semantics.
+- WARP restore was already executed out of order on production by prior executor, before independent review/backup gate; preserve fact, do NOT reseed, write production further, or claim safe rollout. Schema21 stays credential-free; never embed real WARP secrets in repository/fixtures/public assets. Need private receipt/preimage evidence from session, current count/head integrity verification; current existing WARP filter may still be subject to unreviewed old production scope.
+- Heavy compile/full tests only dev CI; local lightweight targeted cached tests/typecheck optional, no broad rebuild. Need independent review before scoped commit; push dev obtains authoritative self-test/build, then exact artifact preview on isolated port for critic before completion. No production image switch implicit in new request. No phone, CPA, Nginx or gateway.
+
+## Current gate evidence (2026-10-16 enhancement)
+Self-test repair PASS `rep_exec_repair_47243e6d-2ec1-4faa-b691-e8e5fbeb5c87` follows typecheck failure `rep_exec_repair_6eb4fc18-4f23-4db7-bf40-d5c3d6398b1c`; independent re-review PASS `rep_rev_default_a4ffc11c-1334-4e25-aac7-aad0796bf403` resolves original rejection `rep_rev_default_d568141d-a870-46ec-9a42-72cad371107d`. Go97/E2E11/Vitest29/typecheck0; private manifest `/tmp/csp-enhancement-repair/manifest.json` sha2565f0fd29924429d4dd6e0a35b6cec1fcb2eb36f35c2ed46cce01283672d965fb6. First stale generated UI delta was removed by verified restoration of only parent-created assets; dev CI builds current source into final artifact. No graph output exists and graphify unavailable; update not claimed. The reviewed dev commit is a TEST CANDIDATE, not completion or production release. Cloud full checks/build/prerelease and final artifact critic remain mandatory delivery gates. Prior WARP restore was out-of-order; no write-preimage backup receipt found, current node/head/version read-back counts1/revision1 only. No further production changes.

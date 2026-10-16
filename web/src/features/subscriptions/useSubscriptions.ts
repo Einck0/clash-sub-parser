@@ -2,6 +2,7 @@ import { computed, ref } from 'vue'
 import { api } from '../../api/client'
 import { toastStore } from '../../ui/toast'
 import { generateUUID } from '../../utils/uuid'
+import { t } from '../../locales'
 
 export { generateUUID }
 
@@ -57,6 +58,7 @@ export interface SubscriptionRecord {
   name: string
   source_url_secret_ref: string
   enabled: boolean
+  prefix?: string
   refresh_policy: {
     interval_seconds: number
     user_agent_policy: string
@@ -86,6 +88,7 @@ export interface SubscriptionDraft {
   name: string
   source_url_secret_ref: string
   enabled: boolean
+  prefix?: string
   refresh_policy: SubscriptionRecord['refresh_policy']
   config: SubscriptionConfig
 }
@@ -143,10 +146,10 @@ export function formatFullDateTime(iso: string | null | undefined, locale: strin
 }
 
 export function subscriptionPatchPayload(draft: SubscriptionDraft): Partial<SubscriptionDraft> {
-
   const payload: Partial<SubscriptionDraft> = {
     name: draft.name,
     enabled: draft.enabled,
+    prefix: draft.prefix,
     refresh_policy: draft.refresh_policy,
     config: draft.config,
   }
@@ -223,10 +226,10 @@ export function useSubscriptions() {
       await api.post(`/api/v1/subscriptions/${encodeURIComponent(subscription.id)}/refresh`, undefined, {
         headers: { 'Idempotency-Key': generateUUID() },
       })
-      toastStore.push({ message: '订阅刷新任务已加入队列', tone: 'success' })
+      toastStore.push({ message: t('subscriptions.refreshCompleted'), tone: 'success' })
       await load()
     } catch (cause) {
-      toastStore.push({ message: cause instanceof Error ? cause.message : '刷新订阅源失败', tone: 'error' })
+      toastStore.push({ message: cause instanceof Error ? cause.message : t('subscriptions.refreshFailed'), tone: 'error' })
       await load().catch(() => {})
     } finally {
       const pending = new Set(refreshingIDs.value)

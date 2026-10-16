@@ -210,30 +210,30 @@ func TestEnabledSubscriptionInventoryE2E(t *testing.T) {
 		// - node-inactive-a (subA enabled, active=0 is NOT excluded from E!)
 		// - node-unknown-a (subA enabled, not notice)
 		// - node-d-member (subD enabled, last good fetchD1)
-		// Total = 5!
+		// - node-orphan (manual node without subscription sources)
+		// Total = 6!
 		// Excluded:
-		// - node-orphan (no source)
 		// - node-b-only (subB disabled)
 		// - node-notice-a (confirmed notice)
 		// - node-removed-a (stale fetch)
-		if body.Data.Total != 5 {
+		if body.Data.Total != 6 {
 			var ids []string
 			for _, it := range body.Data.Items {
 				ids = append(ids, it.LogicalID)
 			}
-			t.Fatalf("expected total 5 in Scope E, got %d (ids: %v)", body.Data.Total, ids)
+			t.Fatalf("expected total 6 in Scope E, got %d (ids: %v)", body.Data.Total, ids)
 		}
 
 		idsMap := make(map[string]bool)
 		for _, it := range body.Data.Items {
 			idsMap[it.LogicalID] = true
 		}
-		for _, expectedID := range []string{"node-a-only", "node-shared-ab", "node-inactive-a", "node-unknown-a", "node-d-member"} {
+		for _, expectedID := range []string{"node-a-only", "node-shared-ab", "node-inactive-a", "node-unknown-a", "node-d-member", "node-orphan"} {
 			if !idsMap[expectedID] {
 				t.Errorf("expected node %s in Scope E", expectedID)
 			}
 		}
-		for _, excludedID := range []string{"node-orphan", "node-b-only", "node-notice-a", "node-removed-a"} {
+		for _, excludedID := range []string{"node-b-only", "node-notice-a", "node-removed-a"} {
 			if idsMap[excludedID] {
 				t.Errorf("node %s must NOT be in Scope E", excludedID)
 			}
@@ -260,9 +260,9 @@ func TestEnabledSubscriptionInventoryE2E(t *testing.T) {
 		}
 		_ = json.NewDecoder(resp.Body).Decode(&body)
 
-		// node-inactive-a excluded, so 5 - 1 = 4
-		if body.Data.Total != 4 {
-			t.Fatalf("expected total 4, got %d", body.Data.Total)
+		// node-inactive-a excluded, so 6 - 1 = 5
+		if body.Data.Total != 5 {
+			t.Fatalf("expected total 5, got %d", body.Data.Total)
 		}
 	})
 
@@ -467,8 +467,8 @@ func TestEnabledSubscriptionInventoryE2E(t *testing.T) {
 		_ = json.NewDecoder(resp.Body).Decode(&bodyAfterDisable)
 		resp.Body.Close()
 
-		if bodyAfterDisable.Data.Total != 1 || len(bodyAfterDisable.Data.Items) != 1 || bodyAfterDisable.Data.Items[0].LogicalID != "node-d-member" {
-			t.Fatalf("expected Scope E to only contain node-d-member after disabling subA, got total %d", bodyAfterDisable.Data.Total)
+		if bodyAfterDisable.Data.Total != 2 {
+			t.Fatalf("expected Scope E to contain node-d-member and node-orphan after disabling subA, got total %d", bodyAfterDisable.Data.Total)
 		}
 
 		// Re-enable subA:
@@ -479,7 +479,7 @@ func TestEnabledSubscriptionInventoryE2E(t *testing.T) {
 		enableResp, _ := http.DefaultClient.Do(enableReq)
 		enableResp.Body.Close()
 
-		// Verify Scope E restored back to 5!
+		// Verify Scope E restored back to 6!
 		req2, _ := http.NewRequest(http.MethodGet, harness.Server.URL+"/api/v1/nodes", nil)
 		req2.Header.Set("Authorization", authHeader)
 		resp2, _ := http.DefaultClient.Do(req2)
@@ -491,8 +491,8 @@ func TestEnabledSubscriptionInventoryE2E(t *testing.T) {
 		_ = json.NewDecoder(resp2.Body).Decode(&bodyAfterReenable)
 		resp2.Body.Close()
 
-		if bodyAfterReenable.Data.Total != 5 {
-			t.Fatalf("expected Scope E restored to 5, got %d", bodyAfterReenable.Data.Total)
+		if bodyAfterReenable.Data.Total != 6 {
+			t.Fatalf("expected Scope E restored to 6, got %d", bodyAfterReenable.Data.Total)
 		}
 	})
 
@@ -513,19 +513,19 @@ func TestEnabledSubscriptionInventoryE2E(t *testing.T) {
 		}
 		_ = json.NewDecoder(resp.Body).Decode(&poolResp)
 
-		// Scope E total inventory = 5
-		// Scope E candidate (active=1) = 4 (node-inactive-a has active=0)
+		// Scope E total inventory = 6
+		// Scope E candidate (active=1) = 5 (node-inactive-a has active=0)
 		if poolResp.Data.Scope != "enabled_subscriptions" {
 			t.Errorf("expected pool scope enabled_subscriptions, got %s", poolResp.Data.Scope)
 		}
-		if poolResp.Data.InventoryTotal != 5 {
-			t.Errorf("expected inventory_total 5, got %d", poolResp.Data.InventoryTotal)
+		if poolResp.Data.InventoryTotal != 6 {
+			t.Errorf("expected inventory_total 6, got %d", poolResp.Data.InventoryTotal)
 		}
-		if poolResp.Data.CandidateTotal != 4 {
-			t.Errorf("expected candidate_total 4, got %d", poolResp.Data.CandidateTotal)
+		if poolResp.Data.CandidateTotal != 5 {
+			t.Errorf("expected candidate_total 5, got %d", poolResp.Data.CandidateTotal)
 		}
-		if poolResp.Data.TotalCount != 4 {
-			t.Errorf("expected legacy total_count 4 (matching candidate_total), got %d", poolResp.Data.TotalCount)
+		if poolResp.Data.TotalCount != 5 {
+			t.Errorf("expected legacy total_count 5 (matching candidate_total), got %d", poolResp.Data.TotalCount)
 		}
 	})
 
@@ -643,7 +643,8 @@ func TestEnabledSubscriptionInventoryE2E(t *testing.T) {
 			res.Body.Close()
 		}
 
-		// 3. Disable all subscriptions (subA, subD)
+		// 3. Disable all subscriptions (subA, subD) and remove orphan node to test zero-node condition
+		_, _ = harness.DB.ExecContext(ctx, "DELETE FROM nodes WHERE logical_id = 'node-orphan';")
 		toggleSub(subA, false)
 		toggleSub(subD, false)
 

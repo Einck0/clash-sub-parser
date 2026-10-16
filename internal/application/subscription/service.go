@@ -22,6 +22,7 @@ type CreateSubscriptionCommand struct {
 	Name               string
 	SourceURLSecretRef string
 	Enabled            bool
+	Prefix             string
 	RefreshPolicy      domain.RefreshPolicy
 	Config             domain.SubscriptionConfig
 	RequestID          string
@@ -35,6 +36,7 @@ type UpdateSubscriptionCommand struct {
 	Name               *string
 	SourceURLSecretRef *string
 	Enabled            *bool
+	Prefix             *string
 	RefreshPolicy      *domain.RefreshPolicy
 	Config             *domain.SubscriptionConfig
 	RequestID          string
@@ -76,6 +78,7 @@ type SubscriptionView struct {
 	Name               string                    `json:"name"`
 	SourceURLSecretRef string                    `json:"source_url_secret_ref"`
 	Enabled            bool                      `json:"enabled"`
+	Prefix             string                    `json:"prefix,omitempty"`
 	RefreshPolicy      domain.RefreshPolicy      `json:"refresh_policy"`
 	Config             domain.SubscriptionConfig `json:"config"`
 	Revision           string                    `json:"revision"`
@@ -163,6 +166,7 @@ func (s *Service) Create(ctx context.Context, command CreateSubscriptionCommand)
 		Name:               strings.TrimSpace(command.Name),
 		SourceURLSecretRef: strings.TrimSpace(command.SourceURLSecretRef),
 		Enabled:            command.Enabled,
+		Prefix:             command.Prefix,
 		RefreshPolicy:      normalizedPolicy(command.RefreshPolicy),
 		Config:             command.Config,
 		Revision:           domain.MustNewUUIDv7(),
@@ -221,6 +225,10 @@ func (s *Service) Update(ctx context.Context, command UpdateSubscriptionCommand)
 			return SubscriptionView{}, err
 		}
 		sub.Config = *command.Config
+	}
+
+	if command.Prefix != nil {
+		sub.Prefix = *command.Prefix
 	}
 	sub.Revision = domain.MustNewUUIDv7()
 	sub.UpdatedAt = domain.NowUTC()
@@ -315,11 +323,6 @@ func (s *Service) refresh(ctx context.Context, id, requestID string, actorKind d
 		s.recordFailure(ctx, actorKind, requestID, "subscription.refresh")
 		return nil, err
 	}
-	if !sub.Enabled {
-		err = domain.NewValidationError("subscription_disabled", "disabled subscriptions cannot be refreshed")
-		s.recordFailure(ctx, actorKind, requestID, "subscription.refresh")
-		return nil, err
-	}
 
 	// Re-read due state after admission so a manual completion or configuration
 	// edit between the scheduler scan and worker cannot cause a duplicate fetch.
@@ -397,7 +400,7 @@ func redact(sub domain.Subscription) SubscriptionView {
 		scope = "enabled_subscriptions"
 	}
 	view := SubscriptionView{
-		ID: sub.ID, Name: sub.Name, SourceURLSecretRef: sub.SourceURLSecretRef, Enabled: sub.Enabled, RefreshPolicy: sub.RefreshPolicy,
+		ID: sub.ID, Name: sub.Name, SourceURLSecretRef: sub.SourceURLSecretRef, Enabled: sub.Enabled, Prefix: sub.Prefix, RefreshPolicy: sub.RefreshPolicy,
 		Config: sub.Config, Revision: sub.Revision,
 		CreatedAt: sub.CreatedAt.Format("2006-01-02T15:04:05Z07:00"), UpdatedAt: sub.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		NodeCount:       sub.NodeCount,

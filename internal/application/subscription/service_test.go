@@ -118,13 +118,14 @@ func TestServiceCreatesRedactedSubscriptionAndAudits(t *testing.T) {
 	}
 }
 
-func TestServiceRejectsStaleRevisionAndDisabledRefresh(t *testing.T) {
+func TestServiceRejectsStaleRevisionAndAllowsDisabledRefresh(t *testing.T) {
 	repo := &memorySubscriptions{items: map[string]domain.Subscription{
 		"0191e4a0-0000-7000-8000-000000000001": {
 			ID: "0191e4a0-0000-7000-8000-000000000001", Name: "Disabled source", SourceURLSecretRef: "secret://subscriptions/disabled", Revision: "0191e4a0-0000-7000-8000-000000000002", Enabled: false,
 		},
 	}}
-	service := subscription.NewService(repo, &memoryAudit{})
+	mock := &mockReconciler{returnResult: &inventory.ReconcileResult{Outcome: domain.FetchOutcomeSuccess}}
+	service := subscription.NewService(repo, &memoryAudit{}, subscription.WithReconciler(mock))
 
 	name := "Updated"
 	_, err := service.Update(context.Background(), subscription.UpdateSubscriptionCommand{
@@ -137,10 +138,12 @@ func TestServiceRejectsStaleRevisionAndDisabledRefresh(t *testing.T) {
 		t.Fatalf("Update() error = %v, want conflict", err)
 	}
 
-	_, err = service.Refresh(context.Background(), "0191e4a0-0000-7000-8000-000000000001", "req-refresh", domain.ActorKindAdmin)
-	var validation *domain.DomainError
-	if !errors.As(err, &validation) || validation.Code != "subscription_disabled" {
-		t.Fatalf("Refresh() error = %v, want subscription_disabled", err)
+	summary, err := service.Refresh(context.Background(), "0191e4a0-0000-7000-8000-000000000001", "req-refresh", domain.ActorKindAdmin)
+	if err != nil {
+		t.Fatalf("Refresh() error = %v, want success on disabled subscription", err)
+	}
+	if summary == nil || summary.Outcome != "success" {
+		t.Fatalf("Refresh() summary = %#v, want success", summary)
 	}
 }
 

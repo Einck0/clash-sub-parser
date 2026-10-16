@@ -23,7 +23,7 @@ func NewSubscriptionRepository(db *sql.DB) domain.SubscriptionRepository {
 
 func (r *subscriptionRepository) GetByID(ctx context.Context, id string) (*domain.Subscription, error) {
 	const query = `
-	SELECT id, name, source_url_secret_ref, enabled,
+	SELECT id, name, source_url_secret_ref, enabled, prefix,
 	       refresh_interval_seconds, refresh_user_agent_policy, refresh_fetch_proxy_ref,
 	       refresh_timeout_seconds, refresh_max_response_bytes,
 	       config_json, revision, created_at, updated_at
@@ -40,6 +40,7 @@ func (r *subscriptionRepository) GetByID(ctx context.Context, id string) (*domai
 		&sub.Name,
 		&sub.SourceURLSecretRef,
 		&enabledInt,
+		&sub.Prefix,
 		&sub.RefreshPolicy.IntervalSeconds,
 		&sub.RefreshPolicy.UserAgentPolicy,
 		&sub.RefreshPolicy.FetchProxyRef,
@@ -109,7 +110,7 @@ func (r *subscriptionRepository) List(ctx context.Context, filter domain.Subscri
 	offset := (page - 1) * pageSize
 
 	selectQuery := fmt.Sprintf(`
-	SELECT id, name, source_url_secret_ref, enabled,
+	SELECT id, name, source_url_secret_ref, enabled, prefix,
 	       refresh_interval_seconds, refresh_user_agent_policy, refresh_fetch_proxy_ref,
 	       refresh_timeout_seconds, refresh_max_response_bytes,
 	       config_json, revision, created_at, updated_at
@@ -137,6 +138,7 @@ func (r *subscriptionRepository) List(ctx context.Context, filter domain.Subscri
 			&sub.Name,
 			&sub.SourceURLSecretRef,
 			&enabledInt,
+			&sub.Prefix,
 			&sub.RefreshPolicy.IntervalSeconds,
 			&sub.RefreshPolicy.UserAgentPolicy,
 			&sub.RefreshPolicy.FetchProxyRef,
@@ -349,11 +351,11 @@ func (r *subscriptionRepository) attachLatestFetches(ctx context.Context, subs [
 func (r *subscriptionRepository) Create(ctx context.Context, sub *domain.Subscription) error {
 	const query = `
 	INSERT INTO subscriptions (
-		id, name, source_url_secret_ref, enabled,
+		id, name, source_url_secret_ref, enabled, prefix,
 		refresh_interval_seconds, refresh_user_agent_policy, refresh_fetch_proxy_ref,
 		refresh_timeout_seconds, refresh_max_response_bytes,
 		config_json, revision, created_at, updated_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
 
 	enabledInt := 0
 	if sub.Enabled {
@@ -381,6 +383,7 @@ func (r *subscriptionRepository) Create(ctx context.Context, sub *domain.Subscri
 		sub.Name,
 		sub.SourceURLSecretRef,
 		enabledInt,
+		sub.Prefix,
 		sub.RefreshPolicy.IntervalSeconds,
 		sub.RefreshPolicy.UserAgentPolicy,
 		sub.RefreshPolicy.FetchProxyRef,
@@ -403,6 +406,7 @@ func (r *subscriptionRepository) Update(ctx context.Context, sub *domain.Subscri
 		name = ?,
 		source_url_secret_ref = ?,
 		enabled = ?,
+		prefix = ?,
 		refresh_interval_seconds = ?,
 		refresh_user_agent_policy = ?,
 		refresh_fetch_proxy_ref = ?,
@@ -425,40 +429,57 @@ func (r *subscriptionRepository) Update(ctx context.Context, sub *domain.Subscri
 	}
 
 	updatedStr := domain.NowUTC().Format(time.RFC3339)
-	res, err := r.db.ExecContext(ctx, query,
-		sub.Name,
-		sub.SourceURLSecretRef,
-		enabledInt,
-		sub.RefreshPolicy.IntervalSeconds,
-		sub.RefreshPolicy.UserAgentPolicy,
-		sub.RefreshPolicy.FetchProxyRef,
-		sub.RefreshPolicy.TimeoutSeconds,
-		sub.RefreshPolicy.MaxResponseBytes,
-		configStr,
-		sub.Revision,
-		updatedStr,
-		sub.ID,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to update subscription: %w", err)
-	}
+	return WithTx(ctx, r.db, func(ctx context.Context, tx *sql.Tx) error {
+		var oldPrefix string
+		if err := tx.QueryRowContext(ctx, "SELECT prefix FROM subscriptions WHERE id = ?", sub.ID).Scan(&oldPrefix); err != nil {
+			if err == sql.ErrNoRows {
+				return domain.NewNotFoundError("subscription_not_found", fmt.Sprintf("subscription %s not found", sub.ID))
+			}
+			return err
+		}
+		res, err := tx.ExecContext(ctx, query,
+			sub.Name,
+			sub.SourceURLSecretRef,
+			enabledInt,
+			sub.Prefix,
+			sub.RefreshPolicy.IntervalSeconds,
+			sub.RefreshPolicy.UserAgentPolicy,
+			sub.RefreshPolicy.FetchProxyRef,
+			sub.RefreshPolicy.TimeoutSeconds,
+			sub.RefreshPolicy.MaxResponseBytes,
+			configStr,
+			sub.Revision,
+			updatedStr,
+			sub.ID,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to update subscription: %w", err)
+		}
 
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if affected == 0 {
-		return domain.NewNotFoundError("subscription_not_found", fmt.Sprintf("subscription %s not found", sub.ID))
-	}
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if affected == 0 {
+			return domain.NewNotFoundError("subscription_not_found", fmt.Sprintf("subscription %s not found", sub.ID))
+		}
 
-	return nil
+		if oldPrefix != sub.Prefix {
+			ids, err := subscriptionNodeIDs(ctx, tx, sub.ID)
+			if err != nil {
+				return err
+			}
+			return RecomputeNodeDisplayNames(ctx, tx, ids, map[string]string{sub.ID: oldPrefix}, updatedStr)
+		}
+		return nil
+	})
 }
 
 func (r *subscriptionRepository) Delete(ctx context.Context, id string) error {
 	return WithTx(ctx, r.db, func(ctx context.Context, tx *sql.Tx) error {
 		// 1. Check if subscription exists and get its name
-		var subName string
-		err := tx.QueryRowContext(ctx, "SELECT name FROM subscriptions WHERE id = ?;", id).Scan(&subName)
+		var subName, oldPrefix string
+		err := tx.QueryRowContext(ctx, "SELECT name, prefix FROM subscriptions WHERE id = ?;", id).Scan(&subName, &oldPrefix)
 		if err == sql.ErrNoRows {
 			return domain.NewNotFoundError("subscription_not_found", fmt.Sprintf("subscription %s not found", id))
 		}
@@ -466,6 +487,10 @@ func (r *subscriptionRepository) Delete(ctx context.Context, id string) error {
 			return fmt.Errorf("failed to query subscription for deletion: %w", err)
 		}
 
+		ids, err := subscriptionNodeIDs(ctx, tx, id)
+		if err != nil {
+			return err
+		}
 		now := domain.NowUTC()
 		nowStr := now.Format(time.RFC3339)
 
@@ -530,6 +555,20 @@ func (r *subscriptionRepository) Delete(ctx context.Context, id string) error {
 			}
 		}
 
+		const deactivateOrphansSQL = `
+		UPDATE nodes
+		SET active = 0, updated_at = ?
+		WHERE active = 1
+		  AND logical_id IN (SELECT node_logical_id FROM node_sources WHERE subscription_id = ?)
+		  AND NOT EXISTS (SELECT 1 FROM node_source_history h WHERE h.node_logical_id = nodes.logical_id AND h.cause = 'manual_confirmed')
+		  AND NOT EXISTS (
+		      SELECT 1 FROM node_sources WHERE node_sources.node_logical_id = nodes.logical_id AND node_sources.subscription_id != ?
+		  );`
+
+		if _, err := tx.ExecContext(ctx, deactivateOrphansSQL, nowStr, id, id); err != nil {
+			return fmt.Errorf("failed to deactivate orphan nodes after subscription delete: %w", err)
+		}
+
 		res, err := tx.ExecContext(ctx, "DELETE FROM subscriptions WHERE id = ?;", id)
 		if err != nil {
 			return fmt.Errorf("failed to delete subscription: %w", err)
@@ -547,19 +586,7 @@ func (r *subscriptionRepository) Delete(ctx context.Context, id string) error {
 			return fmt.Errorf("failed to delete subscription node sources: %w", err)
 		}
 
-		const deactivateOrphansSQL = `
-		UPDATE nodes
-		SET active = 0, updated_at = ?
-		WHERE active = 1
-		  AND NOT EXISTS (
-			  SELECT 1 FROM node_sources WHERE node_sources.node_logical_id = nodes.logical_id
-		  );`
-
-		if _, err := tx.ExecContext(ctx, deactivateOrphansSQL, nowStr); err != nil {
-			return fmt.Errorf("failed to deactivate orphan nodes after subscription delete: %w", err)
-		}
-
-		return nil
+		return RecomputeNodeDisplayNames(ctx, tx, ids, map[string]string{id: oldPrefix}, nowStr)
 	})
 }
 

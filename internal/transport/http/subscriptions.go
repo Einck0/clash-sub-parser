@@ -46,6 +46,7 @@ type createSubscriptionRequest struct {
 	Name               string                    `json:"name"`
 	SourceURLSecretRef string                    `json:"source_url_secret_ref"`
 	Enabled            bool                      `json:"enabled"`
+	Prefix             *string                   `json:"prefix,omitempty"`
 	RefreshPolicy      domain.RefreshPolicy      `json:"refresh_policy"`
 	Config             domain.SubscriptionConfig `json:"config"`
 }
@@ -54,6 +55,7 @@ type updateSubscriptionRequest struct {
 	Name               *string                    `json:"name"`
 	SourceURLSecretRef *string                    `json:"source_url_secret_ref"`
 	Enabled            *bool                      `json:"enabled"`
+	Prefix             *string                    `json:"prefix,omitempty"`
 	RefreshPolicy      *domain.RefreshPolicy      `json:"refresh_policy"`
 	Config             *domain.SubscriptionConfig `json:"config"`
 }
@@ -199,8 +201,13 @@ func (h subscriptionHandler) create(w http.ResponseWriter, r *http.Request) {
 	if err := decodeSubscriptionJSON(w, r, &body); err != nil {
 		return
 	}
+	prefix := ""
+	if body.Prefix != nil {
+		prefix = *body.Prefix
+	}
 	view, err := h.service.Create(r.Context(), subscription.CreateSubscriptionCommand{
-		Name: body.Name, SourceURLSecretRef: body.SourceURLSecretRef, Enabled: body.Enabled, RefreshPolicy: body.RefreshPolicy,
+		Name: body.Name, SourceURLSecretRef: body.SourceURLSecretRef, Enabled: body.Enabled,
+		Prefix: prefix, RefreshPolicy: body.RefreshPolicy,
 		Config:    body.Config,
 		RequestID: GetRequestID(r.Context()), ActorKind: requestActorKind(r),
 	})
@@ -228,7 +235,7 @@ func (h subscriptionHandler) update(w http.ResponseWriter, r *http.Request) {
 
 	view, err := h.service.Update(r.Context(), subscription.UpdateSubscriptionCommand{
 		ID: chi.URLParam(r, "id"), Revision: strings.TrimSpace(r.Header.Get("If-Match")), Name: body.Name,
-		SourceURLSecretRef: body.SourceURLSecretRef, Enabled: body.Enabled, RefreshPolicy: body.RefreshPolicy,
+		SourceURLSecretRef: body.SourceURLSecretRef, Enabled: body.Enabled, Prefix: body.Prefix, RefreshPolicy: body.RefreshPolicy,
 		Config:    body.Config,
 		RequestID: GetRequestID(r.Context()), ActorKind: requestActorKind(r),
 	})

@@ -508,6 +508,51 @@ The probe workbench composable `useProbes` SHALL eliminate synchronous multi-pag
 
 ---
 
+
+### Current Engineering Enhancements (2026-10-16 Run pi_run_20261016_104303_1679144)
+
+#### Requirement: Proxy Fetch DNS Resolution Preservation [FR-POL-10]
+When an active proxy (`FetchProxyURL` / `activeProxyURL`) is configured for subscription fetching, the HTTP transport MUST NOT override `hopReq.URL.Host` with locally resolved `pinnedAddr`. The original target host (and port) MUST be preserved in `hopReq.URL.Host` so that the proxy handles remote DNS resolution, avoiding connection failures caused by poisoned local DNS IPs. SSRF protection for explicit IP addresses remains strictly enforced.
+
+##### Scenario: Proxy fetch with remote DNS resolution
+- **GIVEN** a subscription URL with a domain name and an active HTTP/HTTPS proxy configured
+- **WHEN** the system fetches the subscription content via the proxy
+- **THEN** the request to the proxy retains the original domain in the request URL and CONNECT tunnel, delegating resolution to the proxy, and TLS handshake succeeds.
+
+#### Requirement: Subscription Source Prefix and Retroactive Update [FR-POL-11]
+The subscription model SHALL include one optional top-level `prefix` field (e.g. `[魔戒]`, `[Dogegg]`). When importing or reconciling subscription nodes, the configured prefix MUST be prepended to the node's display name. When the subscription's prefix is updated or cleared, the system MUST support retroactively updating all existing nodes belonging to that subscription to reflect the new prefix without duplicating prefixes.
+
+##### Scenario: Subscription prefix configuration and retroactive rename
+- **GIVEN** a subscription with imported nodes
+- **WHEN** the user sets or updates the subscription's `prefix`
+- **THEN** all existing nodes belonging to that subscription have their `display_name` updated with the prefix, and subsequent refreshes maintain the prefixed name. For shared logical nodes, unique source prefixes combine in stable source-ID order; identity and immutable publications do not change. Save and all retroactive renames are one transaction, failures roll back all changes.
+
+#### Requirement: Subscription Refresh UI Status Indicator [FR-POL-12]
+The subscription user interface SHALL display a visual loading spinner and "正在刷新" status text while a subscription refresh is in progress. All refresh trigger buttons for that subscription MUST be disabled during the active refresh to prevent duplicate concurrent triggers.
+
+##### Scenario: Active subscription refresh UI state
+- **GIVEN** a user initiates a manual refresh on a subscription
+- **WHEN** the refresh request is dispatched and pending
+- **THEN** the subscription card and actions menu display "正在刷新" with a spinner, and refresh buttons are disabled.
+
+#### Requirement: Manual Refresh for Disabled Subscriptions [FR-POL-13]
+A subscription with `enabled = false` SHALL only be excluded from automated cron/periodic scheduling. The manual refresh API (`POST /api/v1/subscriptions/{id}/refresh`) and user interface refresh action MUST permit manual refresh on disabled subscriptions, returning 200/202 and reconciling the subscription nodes.
+
+##### Scenario: Manual refresh of disabled subscription
+- **GIVEN** a subscription with `enabled = false`
+- **WHEN** the user manually triggers a refresh via API or Web UI
+- **THEN** the system executes the refresh successfully and updates the subscription's inventory and last refresh status.
+
+#### Requirement: Manual and Static Node Protection and WARP Restoration [FR-POL-14]
+Nodes not originating from subscriptions (active manual/static nodes with neither live subscription sources nor subscription-origin evidence, or explicitly manual-confirmed) SHALL be protected from deactivation or deletion during subscription reconciliation, deletion, or garbage collection. `NodeScopeEnabledSubscriptions` queries SHALL include true active manual/static nodes without re-admitting refresh-pruned assets merely because their live source edges were deleted. The historical `WARP-83d9` WireGuard node (logical_id `node_9f2515f807595e984f6081ac58d244bd`, server `engage.cloudflareclient.com:2408`) SHALL be restored to active status in the database with connection heads and versions, and be matched by the existing `WARP` policy group filter.
+
+##### Scenario: Manual node preservation across subscription operations
+- **GIVEN** a manual node `WARP-83d9` in the database without any subscription sources
+- **WHEN** any subscription is reconciled, refreshed, or deleted
+- **THEN** `WARP-83d9` remains active (`active = 1`), is resolved into policy groups matching its name or filter, and is exported in published configurations.
+
+---
+
 ## Success Criteria
 
 ### Measurable Outcomes
@@ -515,3 +560,7 @@ The probe workbench composable `useProbes` SHALL eliminate synchronous multi-pag
 - **[SC-POL-02]** 全池动态匹配无截断率达到 100%，200+ 节点全量检出。
 - **[SC-POL-03]** 准入规则删除 204 与 404 响应准确率达到 100%。
 - **[SC-POL-04]** 特殊字符 URL 编码路径解析成功率达到 100%。
+- **[SC-POL-05]** Proxy fetch for domain targets passes original host to proxy and completes TLS handshake.
+- **[SC-POL-06]** Subscription prefix correctly prepended on import and retroactively updated on existing nodes.
+- **[SC-POL-07]** Disabled subscriptions successfully refreshed via manual API and UI actions.
+- **[SC-POL-08]** `WARP-83d9` restored, active, and immune to subscription GC/deletion.

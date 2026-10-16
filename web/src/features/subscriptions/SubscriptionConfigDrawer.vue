@@ -28,6 +28,7 @@ const draft = ref<SubscriptionDraft>({
   name: '',
   source_url_secret_ref: '',
   enabled: true,
+  prefix: '',
   refresh_policy: defaultPolicy(),
   config: defaultConfig(),
 })
@@ -52,6 +53,7 @@ watch(
         name: sub.name,
         source_url_secret_ref: sub.source_url_secret_ref || '',
         enabled: sub.enabled,
+        prefix: sub.prefix || '',
         refresh_policy: { ...defaultPolicy(), ...sub.refresh_policy },
         config: {
           cron_schedule: sub.config?.cron_schedule || '',
@@ -67,6 +69,7 @@ watch(
         name: '',
         source_url_secret_ref: '',
         enabled: true,
+        prefix: '',
         refresh_policy: defaultPolicy(),
         config: defaultConfig(),
       }
@@ -154,7 +157,6 @@ function handleSubmit() {
     .map((g) => g.trim())
     .filter((g) => g.length > 0)
   draft.value.config.target_groups = groups
-
   emit('save', draft.value)
 }
 </script>
@@ -212,6 +214,17 @@ function handleSubmit() {
         <span v-if="nameError" class="text-error text-[11px] mt-1" data-testid="subscription-name-error">
           {{ nameError }}
         </span>
+      </label>
+
+      <label class="form-control">
+        <span class="label-text text-xs font-semibold mb-1">{{ t('subscriptions.prefixLabel') }}</span>
+        <input
+          v-model="draft.prefix"
+          class="input input-bordered input-sm focus:input-primary font-mono text-xs"
+          :placeholder="t('subscriptions.prefixPlaceholder')"
+          data-testid="subscription-prefix-input"
+        />
+        <span class="text-[11px] text-base-content/60 mt-0.5">{{ t('subscriptions.prefixHint') }}</span>
       </label>
 
       <label class="form-control">

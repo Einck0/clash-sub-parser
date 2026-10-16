@@ -38,7 +38,7 @@ func TestCredentialedHTTPSProxyAndStrictTargets(t *testing.T) {
 	if err != nil || string(response.Body) != "trusted-proxy" {
 		t.Fatalf("HTTPS proxy: %+v %v", response, err)
 	}
-	if receivedHost != "93.184.216.34:80" || receivedAuth != "Basic Zml4dHVyZTpwYXNzd29yZA==" || requestURI != "http://93.184.216.34:80/feed?token=fixture" {
+	if receivedHost != "feed.example" || receivedAuth != "Basic Zml4dHVyZTpwYXNzd29yZA==" || requestURI != "http://feed.example/feed?token=fixture" {
 		t.Fatalf("wrong wire semantics host=%s URI=%s auth-present=%v", receivedHost, requestURI, receivedAuth != "")
 	}
 	for _, target := range []string{"http://127.0.0.1/feed", "http://feed.example/redirect"} {

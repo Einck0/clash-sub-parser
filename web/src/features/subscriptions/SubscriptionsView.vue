@@ -140,12 +140,23 @@ onMounted(load)
         class="card border border-base-300 bg-base-200 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md min-w-0 w-full overflow-hidden"
       >
         <div class="card-body gap-3 sm:gap-4 p-4 sm:p-5 min-w-0 max-w-full">
-          <div class="flex items-start justify-between gap-2 min-w-0">
-            <div class="min-w-0 flex-1">
+          <div class="flex flex-wrap items-start justify-between gap-2 min-w-0" data-testid="subscription-card-header">
+            <div class="min-w-0 flex-1 basis-full sm:basis-40">
               <h3 class="truncate font-semibold text-sm sm:text-base text-base-content">{{ subscription.name }}</h3>
               <p class="mt-1 truncate font-mono text-xs opacity-60 break-all">{{ subscription.source_url_secret_ref }}</p>
             </div>
-            <div class="flex items-center gap-1.5 shrink-0">
+            <div class="flex flex-wrap items-center gap-1.5 min-w-0 max-w-full">
+              <button
+                type="button"
+                class="btn btn-ghost btn-xs border border-base-300/80 px-2 gap-1 touch-manipulation hover:bg-base-300"
+                data-testid="subscription-card-refresh-btn"
+                :disabled="refreshingIDs.has(subscription.id)"
+                :title="refreshingIDs.has(subscription.id) ? t('subscriptions.refreshing') : t('common.refresh')"
+                @click="refresh(subscription)"
+              >
+                <ArrowPathIcon class="h-3.5 w-3.5" :class="{ 'animate-spin': refreshingIDs.has(subscription.id) }" />
+                <span>{{ refreshingIDs.has(subscription.id) ? t('subscriptions.refreshing') : t('common.refresh') }}</span>
+              </button>
               <button
                 type="button"
                 class="btn btn-ghost btn-xs border border-base-300/80 px-2 gap-1 touch-manipulation hover:bg-base-300"
@@ -196,7 +207,7 @@ onMounted(load)
                       data-testid="sub-action-refresh"
                     >
                       <ArrowPathIcon class="h-3.5 w-3.5 shrink-0" :class="{ 'animate-spin': refreshingIDs.has(subscription.id) }" />
-                      <span>{{ t('common.refresh') }}</span>
+                      <span>{{ refreshingIDs.has(subscription.id) ? t('subscriptions.refreshing') : t('common.refresh') }}</span>
                     </button>
 
                     <!-- Toggle Enabled -->
@@ -321,7 +332,13 @@ onMounted(load)
             <div class="col-span-2 min-w-0" data-testid="subscription-last-refresh">
               <dt class="opacity-60">{{ t('subscriptions.lastRefreshed') }}</dt>
               <dd class="mt-1 font-medium min-w-0">
-                <span v-if="!subscription.last_refreshed_at" class="opacity-60" data-testid="sub-never-refreshed">
+                <div v-if="refreshingIDs.has(subscription.id)" class="flex items-center gap-2 flex-wrap min-w-0" data-testid="sub-refresh-loading">
+                  <span class="badge badge-info badge-sm h-auto min-h-[1.25rem] py-0.5 px-2 font-medium shrink-0 whitespace-nowrap text-info-content gap-1">
+                    <ArrowPathIcon class="h-3 w-3 animate-spin" />
+                    <span>{{ t('subscriptions.refreshing') }}</span>
+                  </span>
+                </div>
+                <span v-else-if="!subscription.last_refreshed_at" class="opacity-60" data-testid="sub-never-refreshed">
                   {{ t('subscriptions.neverRefreshed') }}
                 </span>
                 <div v-else-if="subscription.last_refresh_outcome === 'failed'" class="flex items-center gap-2 flex-wrap min-w-0" data-testid="sub-refresh-failed">

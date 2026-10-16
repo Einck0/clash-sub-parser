@@ -5,6 +5,7 @@ CSP 日常云交付合成验证测试套件 (Zero External Dependencies, 标准 
 验证 Compose 模板规范、运行前置脚本、隔离环境约束与运维文档。
 """
 
+import ast
 import json
 import os
 import subprocess
@@ -19,6 +20,62 @@ SYNTHETIC_IMAGE = (
     "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 )
 SYNTHETIC_REVISION = "0123456789abcdef0123456789abcdef01234567"
+
+
+def safe_eval_bool(expr: str, env: dict) -> bool:
+    """Bounded AST boolean evaluator for workflow conditions."""
+    parsed = ast.parse(expr, mode="eval")
+    allowed_nodes = (
+        ast.Expression,
+        ast.BoolOp,
+        ast.And,
+        ast.Or,
+        ast.UnaryOp,
+        ast.Not,
+        ast.Compare,
+        ast.Eq,
+        ast.NotEq,
+        ast.Name,
+        ast.Load,
+        ast.Constant,
+    )
+    for node in ast.walk(parsed):
+        if not isinstance(node, allowed_nodes):
+            raise ValueError(f"Disallowed AST node: {type(node).__name__}")
+
+    def _eval(node):
+        if isinstance(node, ast.Expression):
+            return _eval(node.body)
+        if isinstance(node, ast.Constant):
+            return node.value
+        if isinstance(node, ast.Name):
+            if node.id in env:
+                return env[node.id]
+            raise ValueError(f"Unbound variable: {node.id}")
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+            return not _eval(node.operand)
+        if isinstance(node, ast.BoolOp):
+            if isinstance(node.op, ast.And):
+                return all(_eval(v) for v in node.values)
+            if isinstance(node.op, ast.Or):
+                return any(_eval(v) for v in node.values)
+        if isinstance(node, ast.Compare):
+            left = _eval(node.left)
+            for op, comparator in zip(node.ops, node.comparators):
+                right = _eval(comparator)
+                if isinstance(op, ast.Eq):
+                    if not (left == right):
+                        return False
+                elif isinstance(op, ast.NotEq):
+                    if not (left != right):
+                        return False
+                else:
+                    raise ValueError(f"Disallowed comparison op: {type(op).__name__}")
+                left = right
+            return True
+        raise ValueError(f"Unsupported node: {type(node).__name__}")
+
+    return bool(_eval(parsed.body))
 
 
 class TestComposeConfigurations(unittest.TestCase):
@@ -467,6 +524,127 @@ class TestDocumentationCompleteness(unittest.TestCase):
         self.assertIn("0600", content)
         self.assertIn("base64", content)
         self.assertTrue("严禁向用户索取明文 Token" in content or "聊天不索" in content)
+
+
+class TestBranchGovernanceInvariants(unittest.TestCase):
+    """验证长期分支收敛、触发门禁、Dependabot 目标与零编译晋级规则"""
+
+    def setUp(self):
+        import yaml
+        self.yaml = yaml
+        self.ci_path = REPO_ROOT / ".github/workflows/ci.yml"
+        self.dependabot_path = REPO_ROOT / ".github/dependabot.yml"
+        self.doc_path = REPO_ROOT / "docs/operations/csp-cloud-delivery.md"
+
+    def test_ci_workflow_dev_only_and_required_check_name(self):
+        self.assertTrue(self.ci_path.exists(), "CI workflow 必须存在")
+        with open(self.ci_path, "r", encoding="utf-8") as f:
+            wf = self.yaml.safe_load(f)
+
+        on = wf.get("on") or wf.get(True, {})
+        # Push 严格限定 dev，无 tags，无 paths-ignore
+        push = on.get("push", {})
+        self.assertEqual(push.get("branches"), ["dev"], "Push 必须严格限定仅 dev 分支")
+        self.assertNotIn("tags", push, "Push tags 必须彻底退出 CI 触发入口")
+        self.assertNotIn("paths-ignore", push, "Push 绝不能包含 paths-ignore，避免文档变更死锁")
+
+        # Pull Request 严格限定目标为 dev，无 paths-ignore
+        pr = on.get("pull_request", {})
+        self.assertEqual(pr.get("branches"), ["dev"], "PR 必须严格限定目标为 dev 分支")
+        self.assertNotIn("paths-ignore", pr, "PR 绝不能包含 paths-ignore")
+
+        # Required check job 名称必须为精确匹配的 "Backend & Frontend Checks"
+        jobs = wf.get("jobs", {})
+        self.assertIn("test-and-build", jobs)
+        self.assertEqual(jobs["test-and-build"].get("name"), "Backend & Frontend Checks")
+
+        # Entry job 门禁：限制非 dev 的 workflow_dispatch，同时保留 PR checks 与 dev push/dispatch
+        entry_if = jobs["test-and-build"].get("if", "")
+        self.assertIn("github.event_name != 'workflow_dispatch'", entry_if)
+        self.assertIn("github.ref == 'refs/heads/dev'", entry_if)
+
+        # publish-runtime 必须限定 dev 并排除 pull_request
+        pub_if = jobs["publish-runtime"].get("if", "")
+        self.assertIn("github.ref == 'refs/heads/dev'", pub_if)
+        self.assertIn("github.event_name != 'pull_request'", pub_if)
+        self.assertNotIn("refs/tags/v", pub_if)
+        self.assertNotIn("refs/heads/release/", pub_if)
+        self.assertNotIn("main", pub_if)
+
+    def test_dependabot_dev_target_and_no_legacy_ecosystems(self):
+        self.assertTrue(self.dependabot_path.exists(), "Dependabot 配置文件必须存在")
+        with open(self.dependabot_path, "r", encoding="utf-8") as f:
+            cfg = self.yaml.safe_load(f)
+
+        self.assertEqual(cfg.get("version"), 2)
+        updates = cfg.get("updates", [])
+        self.assertEqual(len(updates), 1, "仅保留单一 github-actions 更新配置")
+        entry = updates[0]
+        self.assertEqual(entry.get("package-ecosystem"), "github-actions")
+        self.assertEqual(entry.get("target-branch"), "dev", "Dependabot 目标分支必须为 dev")
+        self.assertNotIn("npm", [u.get("package-ecosystem") for u in updates])
+        self.assertNotIn("pip", [u.get("package-ecosystem") for u in updates])
+
+    def test_operations_doc_governance_amendment(self):
+        content = self.doc_path.read_text(encoding="utf-8")
+        self.assertIn("Fast-Forward", content)
+        self.assertIn("15368", content)
+        self.assertIn("Backend & Frontend Checks", content)
+        self.assertIn("paths-ignore", content)
+
+    def test_workflow_dispatch_other_ref_skips_entry_and_publish(self):
+        """workflow_dispatch 触发在非 dev 分支时必须同时跳过 entry (test-and-build) 与 publish-runtime"""
+        with open(self.ci_path, "r", encoding="utf-8") as f:
+            wf = self.yaml.safe_load(f)
+
+        jobs = wf.get("jobs", {})
+        entry_if = jobs["test-and-build"].get("if", "")
+        pub_if = jobs["publish-runtime"].get("if", "")
+
+        def eval_entry(event: str, ref: str) -> bool:
+            expr = entry_if.replace("&&", " and ").replace("||", " or ")
+            expr = expr.replace("github.event_name", "event").replace("github.ref", "ref")
+            return safe_eval_bool(expr, {"event": event, "ref": ref})
+
+        def eval_pub(event: str, ref: str, pub: str, result: str = "success") -> bool:
+            expr = pub_if.replace("&&", " and ").replace("||", " or ")
+            expr = (
+                expr.replace("needs.test-and-build.result", "result")
+                .replace("github.event_name", "event")
+                .replace("github.ref", "ref")
+                .replace("inputs.publish_release", "pub")
+            )
+            return safe_eval_bool(expr, {"result": result, "event": event, "ref": ref, "pub": pub})
+
+        # dev 分支授权路径：entry 执行，publish 在显式 opt-in 时执行
+        self.assertTrue(eval_entry("workflow_dispatch", "refs/heads/dev"),
+                        "dev workflow_dispatch 必须执行 entry 检查")
+        self.assertTrue(eval_pub("workflow_dispatch", "refs/heads/dev", "true"),
+                        "dev workflow_dispatch 显式发布时必须执行 publish")
+        self.assertFalse(eval_pub("workflow_dispatch", "refs/heads/dev", "false"),
+                         "dev workflow_dispatch 默认未 opt-in 时不执行 publish")
+
+        # 非 dev 分支 (main, task/*, release/*, tags) 的 workflow_dispatch：entry 与 publish 均跳过
+        for other_ref in (
+            "refs/heads/main",
+            "refs/heads/task/csp-cloud-build-integration",
+            "refs/heads/release/20261010-01",
+            "refs/tags/v1.0.0",
+        ):
+            self.assertFalse(eval_entry("workflow_dispatch", other_ref),
+                             f"非 dev 分支 {other_ref} 的 workflow_dispatch 必须跳过 entry 检查")
+            self.assertFalse(eval_pub("workflow_dispatch", other_ref, "true"),
+                             f"非 dev 分支 {other_ref} 的 workflow_dispatch 必须跳过 publish")
+
+        # PR 流程保护：PR (merge ref) 必须执行 entry 检查以提供绿标，且绝不执行 publish
+        self.assertTrue(eval_entry("pull_request", "refs/pull/99/merge"),
+                        "PR 必须执行 entry 检查以提供绿标")
+        self.assertFalse(eval_pub("pull_request", "refs/pull/99/merge", "true"),
+                         "PR 绝不能执行 publish")
+
+        # dev push 正常流程：entry 与 publish 均执行
+        self.assertTrue(eval_entry("push", "refs/heads/dev"))
+        self.assertTrue(eval_pub("push", "refs/heads/dev", "false"))
 
 
 if __name__ == "__main__":

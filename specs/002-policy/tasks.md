@@ -118,3 +118,19 @@ CI synthetic 33 tests pass exit0 (PYTHONPATH=.github/scripts confirmed); cloud-d
 - [ ] TASK-ENH-R05 Independent re-review names rejected report, scoped commit and dev CI exact-SHA tests/build/prerelease, artifact-based isolated preview critic, preserve 76 baseline maintenance files. Capture WARP operation audit without further production writes; never seed credentials.
 
 Current status: implementation/targeted self-test and independent re-review pass (IDs in plan). TASK-ENH-06 covers lightweight current source evidence; full cloud tests/build remain TASK-ENH-07/R05, not yet passed. WARP active/node/head/version read-back successful, write-before-backup process exception is unresolved and not a safe-production-rollout PASS. No further prod writes permitted in this continuation.
+
+## Current branch governance tasks — run pi_run_20261016_134459_1816216
+
+- [x] TASK-GOV-01 Read-only current ref/PR/CI/protection/worktree/old-gate evidence, protect80untracked+3ignored files; scout evidence directory linked in plan. FR-GOV01..05.
+- [ ] TASK-GOV-02 Update `.github/workflows/ci.yml`, `.github/dependabot.yml`, existing synthetic/cloud tests and `docs/operations/csp-cloud-delivery.md` to dev-only build/publish, current Dependabot targetdev, exact-SHA main promotion/no retired-ref triggers/no path-filter check deadlock. FR-GOV01/02/04.
+- [ ] TASK-GOV-03 Executor lightweight Python/config self-check, independent source/release-safety reviewer, scoped commit tool + normal devpush, exact-SHA full cloud checks/image/prerelease; no host compilation. FR-GOV02/05.
+- [ ] TASK-GOV-04 Verify reviewed dev cloudSHA and current ancestry; promote main normal FF exactSHA without rebuilding/production switch. Snapshot all8obsolete refs into private bundle; review exact mutation eligibility. FR-GOV02/03.
+- [ ] TASK-GOV-05 Authorized minimal main/dev branch protections, verify delete/force disabled/check semantics; only then enable auto-delete merged branches. If current PAT denied, preserve403 and report Administration write blocker (no alternate credentials). FR-GOV04/05.
+- [ ] TASK-GOV-06 Close oldPR19..23 with reason; recheck exact refs/ancestry/active use then delete8obsolete remote refs with oldSHA lease; preserve all localbranches/worktree/ignored/untracked hashes. FR-GOV03/05.
+- [ ] TASK-GOV-07 Independent final post-state audit+required gates, task ledger honest partial status, final QQ delivery receipts. No changedUI→criticN/A. FR-GOV01..05.
+
+### Governance review remediation
+- [ ] TASK-GOV-R01 Rejected reviewer `rep_rev_default_c3bad93c-8f5b-42c0-af50-aeffa43af882`: gate test-and-build against nondev workflow_dispatch, add positive/negative semantic tests in both existing suites; use bounded AST boolean evaluation instead of arbitrary eval (empty eval globals are NOT a sandbox). Independent re-review required before commit.
+
+### Governance continuation binding (2026-10-16 15:02)
+Current run `pi_run_20261016_150206_1862343`, change `002-policy`, package `default`, epoch1. Continue FR-GOV01..05 and TASK-GOV/R01 only; previous run identity/rejection remain history, not current gate evidence. Previous repair resume returned no result; current diff still lacks job guard and contains eval. No commit/remote mutation yet. Fresh executor and independent reviewer provide current-contract evidence. Source scope unchanged, no production/local Go or web compile. All80maintenance/oldworktree preserved. Permissions blocker remains to verify with actual authorized write, no credential change.

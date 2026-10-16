@@ -23,6 +23,7 @@ Executes:
 8. Docker buildx build --check contract verification (no runtime image rebuild)
 """
 
+import ast
 import hashlib
 import json
 import os
@@ -44,10 +45,73 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 SCRIPTS_DIR = os.path.join(REPO_ROOT, ".github/scripts")
 WORKFLOW_FILE = os.path.join(REPO_ROOT, ".github/workflows/ci.yml")
 DOCKERFILE_RUNTIME = os.path.join(REPO_ROOT, "Dockerfile.runtime")
+DEPENDABOT_FILE = os.path.join(REPO_ROOT, ".github/dependabot.yml")
 
 # Import check_ghcr_private_gate module dynamically
 sys.path.insert(0, SCRIPTS_DIR)
 import check_ghcr_private_gate as gate
+
+
+def safe_eval_bool(expr: str, env: dict) -> bool:
+    """Bounded AST boolean evaluator for workflow condition expressions.
+
+    Strict allowlist of AST nodes:
+      - Expression, Constant, Name, Load, BoolOp (And, Or), UnaryOp (Not), Compare (Eq, NotEq).
+    Rejects Calls, Attributes, Subscripts, builtins, and any unallowed nodes
+    without execution.
+    """
+    parsed = ast.parse(expr, mode="eval")
+    allowed_nodes = (
+        ast.Expression,
+        ast.BoolOp,
+        ast.And,
+        ast.Or,
+        ast.UnaryOp,
+        ast.Not,
+        ast.Compare,
+        ast.Eq,
+        ast.NotEq,
+        ast.Name,
+        ast.Load,
+        ast.Constant,
+    )
+    for node in ast.walk(parsed):
+        if not isinstance(node, allowed_nodes):
+            raise ValueError(f"Disallowed AST node: {type(node).__name__}")
+
+    def _eval(node):
+        if isinstance(node, ast.Expression):
+            return _eval(node.body)
+        if isinstance(node, ast.Constant):
+            return node.value
+        if isinstance(node, ast.Name):
+            if node.id in env:
+                return env[node.id]
+            raise ValueError(f"Unbound variable: {node.id}")
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+            return not _eval(node.operand)
+        if isinstance(node, ast.BoolOp):
+            if isinstance(node.op, ast.And):
+                return all(_eval(v) for v in node.values)
+            if isinstance(node.op, ast.Or):
+                return any(_eval(v) for v in node.values)
+        if isinstance(node, ast.Compare):
+            left = _eval(node.left)
+            for op, comparator in zip(node.ops, node.comparators):
+                right = _eval(comparator)
+                if isinstance(op, ast.Eq):
+                    if not (left == right):
+                        return False
+                elif isinstance(op, ast.NotEq):
+                    if not (left != right):
+                        return False
+                else:
+                    raise ValueError(f"Disallowed comparison op: {type(op).__name__}")
+                left = right
+            return True
+        raise ValueError(f"Unsupported node: {type(node).__name__}")
+
+    return bool(_eval(parsed.body))
 
 
 class TestPythonAndShellSyntax(unittest.TestCase):
@@ -102,26 +166,29 @@ class TestWorkflowLogicAndSchema(unittest.TestCase):
         self.assertIn("push", on, "push trigger must be present")
         self.assertIn("workflow_dispatch", on, "workflow_dispatch trigger must be present")
 
-        # Paths ignore for docs
-        pr_paths_ignore = on["pull_request"].get("paths-ignore", [])
-        self.assertTrue(any("docs/**" in p for p in pr_paths_ignore), "PR paths-ignore must include docs/**")
-        self.assertTrue(any("openspec/**" in p for p in pr_paths_ignore), "PR paths-ignore must include openspec/**")
+        # Paths ignore MUST be removed to ensure doc-only dev changes get required checks
+        self.assertNotIn("paths-ignore", on["pull_request"], "PR paths-ignore must be removed to avoid check deadlocks")
+        self.assertNotIn("paths-ignore", on["push"], "Push paths-ignore must be removed to avoid check deadlocks")
 
-        push_paths_ignore = on["push"].get("paths-ignore", [])
-        self.assertTrue(any("docs/**" in p for p in push_paths_ignore), "Push paths-ignore must include docs/**")
-
-        # Push branches & tags
+        # Push branches & tags: ONLY 'dev'
         push_branches = on["push"].get("branches", [])
-        self.assertIn("main", push_branches)
-        self.assertIn("dev", push_branches)
-        self.assertIn("task/csp-cloud-build-integration", push_branches)
-        self.assertTrue(any("release/" in b for b in push_branches))
+        self.assertEqual(push_branches, ["dev"], f"Push branches must strictly be ['dev'], got {push_branches}")
+        for forbidden in ("main", "task/csp-cloud-build-integration", "cloud-build/*", "release/**", "master"):
+            self.assertNotIn(forbidden, push_branches, f"Forbidden branch in push trigger: {forbidden}")
 
-        push_tags = on["push"].get("tags", [])
-        self.assertTrue(any("v*" in t for t in push_tags), "Tags v* must be present for release trigger")
-        import fnmatch
-        self.assertFalse(any(fnmatch.fnmatch('prelease-0123456', pattern) for pattern in push_tags),
-                         'Prerelease tag must not loop back into CI')
+        # Push tags must be completely retired
+        self.assertNotIn("tags", on["push"], "Push tags must be retired (no v* or prelease tags)")
+
+        # Pull request branches: ONLY 'dev'
+        pr_branches = on["pull_request"].get("branches", [])
+        self.assertEqual(pr_branches, ["dev"], f"Pull request branches must strictly be ['dev'], got {pr_branches}")
+        for forbidden in ("main", "task/csp-cloud-build-integration", "cloud-build/*", "release/**", "master"):
+            self.assertNotIn(forbidden, pr_branches, f"Forbidden branch in pull_request trigger: {forbidden}")
+
+        # Workflow dispatch inputs: dev only with explicit publish opt-in
+        wd_inputs = on["workflow_dispatch"].get("inputs", {})
+        self.assertIn("publish_release", wd_inputs, "workflow_dispatch must have publish_release input")
+        self.assertEqual(wd_inputs["publish_release"].get("default"), "false")
 
     def test_concurrency_and_permissions(self):
         jobs = self.wf.get("jobs", {})
@@ -130,9 +197,12 @@ class TestWorkflowLogicAndSchema(unittest.TestCase):
 
         checks_job = jobs["test-and-build"]
         checks_concurrency = checks_job.get("concurrency", {})
-        cancel_expr = str(checks_concurrency.get("cancel-in-progress", ""))
-        self.assertIn("release/", cancel_expr, "Checks concurrency must protect release branches from auto-cancellation")
-        self.assertIn("tags/", cancel_expr, "Checks concurrency must protect tags from auto-cancellation")
+        self.assertFalse(
+            checks_concurrency.get("cancel-in-progress", True),
+            "Checks concurrency cancel-in-progress must be false",
+        )
+        self.assertNotIn("release/", str(checks_concurrency), "Retired release/ clause must be removed from checks concurrency")
+        self.assertNotIn("tags/", str(checks_concurrency), "Retired tags/ clause must be removed from checks concurrency")
 
         self.assertEqual(
             checks_job.get("permissions", {}).get("contents"),
@@ -163,13 +233,133 @@ class TestWorkflowLogicAndSchema(unittest.TestCase):
         self.assertIn("test-and-build", needs, "publish-runtime MUST depend on test-and-build")
 
         condition = publish_job.get("if", "")
-        self.assertIn("pull_request", condition, "Condition must exclude pull_request")
-        self.assertIn("refs/tags/v", condition, "Condition must support v* tags")
-        self.assertIn("refs/heads/release/", condition, "Condition must support release/* branches")
+        # String clause assertions
         self.assertIn("needs.test-and-build.result == 'success'", condition)
         self.assertIn("github.event_name != 'pull_request'", condition)
-        self.assertIn("(github.event_name == 'push' && github.ref == 'refs/heads/dev')", condition)
-        self.assertNotIn('always()', condition)
+        self.assertIn("github.ref == 'refs/heads/dev'", condition)
+        self.assertIn("github.event_name == 'push'", condition)
+        self.assertIn("github.event_name == 'workflow_dispatch'", condition)
+        self.assertIn("inputs.publish_release == 'true'", condition)
+        self.assertNotIn("refs/tags/v", condition, "Condition must NOT support retired v* tags")
+        self.assertNotIn("refs/heads/release/", condition, "Condition must NOT support retired release/* branches")
+        self.assertNotIn("refs/heads/main", condition, "Condition must NOT allow main branch publishing")
+        self.assertNotIn("always()", condition)
+
+        # Exact semantic evaluation (using bounded AST allowlist, no arbitrary eval)
+        def eval_condition(result="success", event="push", ref="refs/heads/dev", pub="false"):
+            expr = condition.replace("&&", " and ").replace("||", " or ")
+            expr = expr.replace("needs.test-and-build.result", "result")
+            expr = expr.replace("github.event_name", "event")
+            expr = expr.replace("github.ref", "ref")
+            expr = expr.replace("inputs.publish_release", "pub")
+            return safe_eval_bool(expr, {"result": result, "event": event, "ref": ref, "pub": pub})
+
+        # Positive authorized paths
+        self.assertTrue(eval_condition(result="success", event="push", ref="refs/heads/dev"),
+                        "dev push with successful checks must publish")
+        self.assertTrue(eval_condition(result="success", event="workflow_dispatch", ref="refs/heads/dev", pub="true"),
+                        "dev workflow_dispatch with explicit publish_release=true must publish")
+
+        # Negative paths: old branches, main, tags, and manual other refs
+        self.assertFalse(eval_condition(result="success", event="push", ref="refs/heads/main"),
+                         "main push must never trigger publish")
+        self.assertFalse(eval_condition(result="success", event="push", ref="refs/heads/release/20261010-01"),
+                         "retired release branch must not publish")
+        self.assertFalse(eval_condition(result="success", event="push", ref="refs/tags/v1.0.0"),
+                         "v* tag push must not publish")
+        self.assertFalse(eval_condition(result="success", event="push", ref="refs/heads/task/csp-cloud-build-integration"),
+                         "retired task branch must not publish")
+        self.assertFalse(eval_condition(result="success", event="push", ref="refs/heads/cloud-build/csp-complete-20261016-230722"),
+                         "retired cloud-build branch must not publish")
+        self.assertFalse(eval_condition(result="success", event="pull_request", ref="refs/heads/dev"),
+                         "pull_request must never trigger publish")
+        self.assertFalse(eval_condition(result="success", event="pull_request", ref="refs/pull/20/merge"),
+                         "pull_request merge ref must never trigger publish")
+        self.assertFalse(eval_condition(result="success", event="workflow_dispatch", ref="refs/heads/dev", pub="false"),
+                         "workflow_dispatch without publish_release must not publish")
+        self.assertFalse(eval_condition(result="success", event="workflow_dispatch", ref="refs/heads/main", pub="true"),
+                         "workflow_dispatch on non-dev ref (main) must not publish")
+        self.assertFalse(eval_condition(result="success", event="workflow_dispatch", ref="refs/heads/task/custom", pub="true"),
+                         "workflow_dispatch on arbitrary task ref must not publish")
+        self.assertFalse(eval_condition(result="failure", event="push", ref="refs/heads/dev"),
+                         "failed test-and-build must never trigger publish")
+
+    def test_entry_job_condition_and_dispatch_gating(self):
+        """Entry job (test-and-build) must gate against non-dev workflow_dispatch,
+
+        while preserving PR checks and dev push/dispatch.
+        """
+        checks_job = self.wf["jobs"]["test-and-build"]
+        self.assertIn("if", checks_job, "test-and-build entry job must define an if condition")
+        condition = checks_job["if"]
+
+        self.assertIn("github.event_name != 'workflow_dispatch'", condition)
+        self.assertIn("github.ref == 'refs/heads/dev'", condition)
+
+        def eval_entry_condition(event="push", ref="refs/heads/dev"):
+            expr = condition.replace("&&", " and ").replace("||", " or ")
+            expr = expr.replace("github.event_name", "event")
+            expr = expr.replace("github.ref", "ref")
+            return safe_eval_bool(expr, {"event": event, "ref": ref})
+
+        # Positive paths: dev push, dev workflow_dispatch, and pull_request (which uses refs/pull/*/merge)
+        self.assertTrue(eval_entry_condition(event="push", ref="refs/heads/dev"),
+                        "dev push must run entry checks")
+        self.assertTrue(eval_entry_condition(event="workflow_dispatch", ref="refs/heads/dev"),
+                        "dev workflow_dispatch must run entry checks")
+        self.assertTrue(eval_entry_condition(event="pull_request", ref="refs/pull/42/merge"),
+                        "pull_request must run entry checks even with non-dev merge ref")
+
+        # Negative paths: workflow_dispatch on other refs must skip entry checks
+        self.assertFalse(eval_entry_condition(event="workflow_dispatch", ref="refs/heads/main"),
+                         "workflow_dispatch on main must skip entry checks")
+        self.assertFalse(eval_entry_condition(event="workflow_dispatch", ref="refs/heads/task/custom"),
+                         "workflow_dispatch on task ref must skip entry checks")
+        self.assertFalse(eval_entry_condition(event="workflow_dispatch", ref="refs/heads/release/20261010-01"),
+                         "workflow_dispatch on release ref must skip entry checks")
+        self.assertFalse(eval_entry_condition(event="workflow_dispatch", ref="refs/tags/v1.0.0"),
+                         "workflow_dispatch on tag must skip entry checks")
+
+    def test_safe_eval_ast_rejects_malicious_call_and_attribute(self):
+        """Bounded AST evaluator must reject function calls and attribute access without execution."""
+        # Malicious Call
+        with self.assertRaises(ValueError) as ctx:
+            safe_eval_bool("__import__('os').system('echo pwned')", {})
+        self.assertIn("Disallowed AST node: Call", str(ctx.exception))
+
+        with self.assertRaises(ValueError) as ctx:
+            safe_eval_bool("maliciousCall()", {})
+        self.assertIn("Disallowed AST node: Call", str(ctx.exception))
+
+        # Malicious Attribute
+        with self.assertRaises(ValueError) as ctx:
+            safe_eval_bool("().__class__", {})
+        self.assertIn("Disallowed AST node: Attribute", str(ctx.exception))
+
+        with self.assertRaises(ValueError) as ctx:
+            safe_eval_bool("event.attr == 'dev'", {"event": "dev"})
+        self.assertIn("Disallowed AST node: Attribute", str(ctx.exception))
+
+        # Disallowed Subscript
+        with self.assertRaises(ValueError) as ctx:
+            safe_eval_bool("env['secret'] == 'val'", {"env": {}})
+        self.assertIn("Disallowed AST node: Subscript", str(ctx.exception))
+
+    def test_dependabot_configuration(self):
+        self.assertTrue(os.path.isfile(DEPENDABOT_FILE), f"Dependabot file missing: {DEPENDABOT_FILE}")
+        with open(DEPENDABOT_FILE, "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f)
+        self.assertEqual(cfg.get("version"), 2)
+        updates = cfg.get("updates", [])
+        self.assertEqual(len(updates), 1, "Must have exactly 1 update ecosystem")
+        gh_actions = updates[0]
+        self.assertEqual(gh_actions.get("package-ecosystem"), "github-actions")
+        self.assertEqual(gh_actions.get("directory"), "/")
+        self.assertEqual(gh_actions.get("target-branch"), "dev")
+        # Assert absence of old frontend/backend ecosystems
+        ecosystems = [u.get("package-ecosystem") for u in updates]
+        for retired in ("npm", "pip", "docker", "gomod"):
+            self.assertNotIn(retired, ecosystems, f"Retired ecosystem {retired} must not be present")
 
     def test_dev_promotion_is_job_scoped_and_uses_same_artifact(self):
         jobs = self.wf['jobs']

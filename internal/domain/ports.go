@@ -221,6 +221,18 @@ type PublicationRepository interface {
 	Activate(ctx context.Context, id, tokenHash string) error
 }
 
+// SubscriptionLinkRepository defines atomic persistence and lookup for real-time subscription links.
+type SubscriptionLinkRepository interface {
+	Create(ctx context.Context, link *SubscriptionLink) error
+	GetByID(ctx context.Context, id string) (*SubscriptionLink, error)
+	GetByTokenHash(ctx context.Context, tokenHash string) (*SubscriptionLink, error)
+	GetDefaultByTarget(ctx context.Context, target CompilerTarget) (*SubscriptionLink, error)
+	List(ctx context.Context) ([]SubscriptionLink, error)
+	UpdateLabel(ctx context.Context, id string, label string, updatedAt time.Time) error
+	RotateToken(ctx context.Context, id string, newToken, newTokenHash string, updatedAt time.Time) error
+	Revoke(ctx context.Context, id string, revokedAt time.Time) error
+}
+
 // SettingsRepository defines the persistence port for global settings.
 type SettingsRepository interface {
 	Get(ctx context.Context) (*Settings, error)
@@ -231,6 +243,8 @@ type SettingsRepository interface {
 	// UpdateAuthSettings atomically sets both switches and optionally replaces the token verifier.
 	// A nil verifier preserves the currently configured system token.
 	UpdateAuthSettings(ctx context.Context, adminAuthEnabled, exportAuthEnabled bool, tokenVerifier *string) error
+	// UpdatePublicBaseURL atomically updates only the public base URL setting.
+	UpdatePublicBaseURL(ctx context.Context, publicBaseURL string) error
 }
 
 // IPRiskObservationRepository defines append-only normalized risk evidence persistence.

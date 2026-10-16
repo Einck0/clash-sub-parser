@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -26,7 +27,7 @@ func (r *settingsRepository) Get(ctx context.Context) (*domain.Settings, error) 
 	SELECT probe_concurrency_window, max_concurrent_probes, probe_per_node_ttl_seconds,
 	       fetch_timeout_seconds, fetch_max_response_bytes, max_page_size, default_page_size,
 	       admin_token, admin_auth_enabled, export_auth_enabled, updated_at,
-        subscription_fetch_mode, subscription_fetch_proxy_url
+        subscription_fetch_mode, subscription_fetch_proxy_url, COALESCE(public_base_url, '')
 	FROM settings
 	WHERE id = 1;`
 
@@ -48,6 +49,7 @@ func (r *settingsRepository) Get(ctx context.Context) (*domain.Settings, error) 
 		&updatedStr,
 		&s.SubscriptionFetchMode,
 		&s.SubscriptionFetchProxyURL,
+		&s.PublicBaseURL,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -81,8 +83,8 @@ func (r *settingsRepository) Update(ctx context.Context, settings *domain.Settin
 		id, probe_concurrency_window, max_concurrent_probes, probe_per_node_ttl_seconds,
 		fetch_timeout_seconds, fetch_max_response_bytes, max_page_size, default_page_size,
 		admin_token, admin_auth_enabled, export_auth_enabled, updated_at,
-        subscription_fetch_mode, subscription_fetch_proxy_url
-	) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        subscription_fetch_mode, subscription_fetch_proxy_url, public_base_url
+	) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(id) DO UPDATE SET
 		probe_concurrency_window = excluded.probe_concurrency_window,
 		max_concurrent_probes = excluded.max_concurrent_probes,
@@ -96,6 +98,7 @@ func (r *settingsRepository) Update(ctx context.Context, settings *domain.Settin
 		export_auth_enabled = excluded.export_auth_enabled,
         subscription_fetch_mode = excluded.subscription_fetch_mode,
         subscription_fetch_proxy_url = excluded.subscription_fetch_proxy_url,
+        public_base_url = excluded.public_base_url,
 		updated_at = excluded.updated_at;`
 
 	updatedStr := domain.NowUTC().Format(time.RFC3339)
@@ -124,11 +127,47 @@ func (r *settingsRepository) Update(ctx context.Context, settings *domain.Settin
 		updatedStr,
 		settings.SubscriptionFetchMode,
 		settings.SubscriptionFetchProxyURL,
+		settings.PublicBaseURL,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to update settings: %w", err)
 	}
 
+	return nil
+}
+
+func (r *settingsRepository) UpdatePublicBaseURL(ctx context.Context, publicBaseURL string) error {
+	trimmed := strings.TrimRight(strings.TrimSpace(publicBaseURL), "/")
+	if trimmed != "" {
+		u, err := url.ParseRequestURI(trimmed)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return domain.NewValidationError("invalid_public_base_url", "public_base_url must be a valid absolute HTTP or HTTPS URL")
+		}
+		if u.User != nil {
+			return domain.NewValidationError("invalid_public_base_url", "public_base_url must not contain userinfo")
+		}
+		if u.RawQuery != "" || strings.Contains(trimmed, "?") {
+			return domain.NewValidationError("invalid_public_base_url", "public_base_url must not contain query parameters")
+		}
+		if u.Fragment != "" || strings.Contains(trimmed, "#") {
+			return domain.NewValidationError("invalid_public_base_url", "public_base_url must not contain a fragment")
+		}
+	}
+
+	const query = `UPDATE settings SET public_base_url = ?, updated_at = ? WHERE id = 1;`
+	res, err := r.db.ExecContext(ctx, query, trimmed, domain.NowUTC().Format(time.RFC3339))
+	if err != nil {
+		return fmt.Errorf("failed to update public_base_url: %w", err)
+	}
+	count, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		def := domain.DefaultSettings()
+		def.PublicBaseURL = trimmed
+		return r.Update(ctx, &def)
+	}
 	return nil
 }
 

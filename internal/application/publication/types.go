@@ -22,6 +22,21 @@ var (
 
 	// ErrUnsupportedTarget indicates the requested compiler target is unknown or invalid.
 	ErrUnsupportedTarget = errors.New("unsupported compiler target")
+
+	// ErrLinkRevoked indicates the subscription link has been explicitly revoked.
+	ErrLinkRevoked = errors.New("subscription link has been revoked")
+
+	// ErrLinkNotFound indicates the subscription link was not found.
+	ErrLinkNotFound = errors.New("subscription link not found")
+
+	// ErrTokenAmbiguous indicates both query and header Bearer tokens were provided.
+	ErrTokenAmbiguous = errors.New("token query and bearer header are ambiguous")
+
+	// ErrOverrideParamsRejected indicates forbidden configuration override parameters were provided.
+	ErrOverrideParamsRejected = errors.New("override parameters rejected")
+
+	// ErrRateLimitExceeded indicates generation concurrency limit has been reached.
+	ErrRateLimitExceeded = errors.New("generation concurrency limit exceeded")
 )
 
 // PreflightDiagnostic describes a safe, actionable publication admission finding.
@@ -160,4 +175,25 @@ type PublicationDetail struct {
 	SnapshotDigest string             `json:"snapshot_digest,omitempty"`
 	ContentType    string             `json:"content_type,omitempty"`
 	Filename       string             `json:"filename,omitempty"`
+}
+
+// CreateSubscriptionLinkCommand defines parameters for creating or idempotently ensuring a default link.
+type CreateSubscriptionLinkCommand struct {
+	Label     string                `json:"label"`
+	Target    domain.CompilerTarget `json:"target"`
+	IsDefault bool                  `json:"is_default"`
+	ActorKind domain.ActorKind      `json:"-"`
+	RequestID string                `json:"-"`
+}
+
+// CheckSubscriptionLinkResult holds live generation diagnostics evaluated without side-effects.
+type CheckSubscriptionLinkResult struct {
+	ID            string                `json:"id"`
+	Target        domain.CompilerTarget `json:"target"`
+	Allowed       bool                  `json:"allowed"`
+	Diagnostics   []PreflightDiagnostic `json:"diagnostics,omitempty"`
+	AsOf          string                `json:"as_of"`
+	ContentDigest string                `json:"content_digest,omitempty"`
+	NodeCount     int                   `json:"node_count"`
+	Message       string                `json:"message,omitempty"`
 }

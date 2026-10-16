@@ -2,6 +2,8 @@ package domain
 
 import (
 	"fmt"
+	"net/url"
+	"strings"
 	"time"
 )
 
@@ -21,6 +23,7 @@ type Settings struct {
 	ExportAuthEnabled         bool      `json:"export_auth_enabled"`
 	SubscriptionFetchMode     string    `json:"subscription_fetch_mode"`
 	SubscriptionFetchProxyURL string    `json:"-"`
+	PublicBaseURL             string    `json:"public_base_url"`
 	UpdatedAt                 time.Time `json:"updated_at"`
 }
 
@@ -38,12 +41,28 @@ func DefaultSettings() Settings {
 		AdminToken:             "",
 		AdminAuthEnabled:       true,
 		ExportAuthEnabled:      true,
+		PublicBaseURL:          "",
 		UpdatedAt:              NowUTC(),
 	}
 }
 
 // Validate checks that settings values adhere to system boundary constraints.
 func (s Settings) Validate() error {
+	if s.PublicBaseURL != "" {
+		u, err := url.ParseRequestURI(s.PublicBaseURL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return NewValidationError("invalid_public_base_url", "public_base_url must be a valid absolute HTTP or HTTPS URL")
+		}
+		if u.User != nil {
+			return NewValidationError("invalid_public_base_url", "public_base_url must not contain userinfo")
+		}
+		if u.RawQuery != "" || strings.Contains(s.PublicBaseURL, "?") {
+			return NewValidationError("invalid_public_base_url", "public_base_url must not contain query parameters")
+		}
+		if u.Fragment != "" || strings.Contains(s.PublicBaseURL, "#") {
+			return NewValidationError("invalid_public_base_url", "public_base_url must not contain a fragment")
+		}
+	}
 	if err := ValidateSubscriptionFetchSettings(s.SubscriptionFetchMode, s.SubscriptionFetchProxyURL); err != nil {
 		return err
 	}

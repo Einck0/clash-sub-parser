@@ -35,13 +35,14 @@ type NodeEvaluation struct {
 
 // EvaluateBatchInput describes input for batch risk evaluation over multiple nodes.
 type EvaluateBatchInput struct {
-	NodeLogicalIDs      []string
-	ExitIdentityDigests map[string]string
-	Policy              *domain.RiskPolicy
-	PolicyRevisionID    string
-	InventoryWatermark  string
-	EvaluatedAt         time.Time
-	Observations        []domain.IPRiskObservation
+	NodeLogicalIDs           []string
+	ExitIdentityDigests      map[string]string
+	Policy                   *domain.RiskPolicy
+	PolicyRevisionID         string
+	InventoryWatermark       string
+	EvaluatedAt              time.Time
+	Observations             []domain.IPRiskObservation
+	DisableObservationLookup bool
 }
 
 // RiskDiagnostic records a diagnosis for an admitted, reviewed, or blocked node.
@@ -261,7 +262,7 @@ func (s *Service) EvaluateBatch(ctx context.Context, input EvaluateBatchInput) (
 
 	for _, nodeID := range uniqueNodeIDs {
 		nodeObs := obsByNode[nodeID]
-		if len(nodeObs) == 0 && s.obsRepo != nil {
+		if len(nodeObs) == 0 && s.obsRepo != nil && !input.DisableObservationLookup && input.Observations == nil {
 			fetched, _, fetchErr := s.obsRepo.List(ctx, domain.IPRiskObservationFilter{
 				NodeLogicalID: nodeID,
 				Page:          1,

@@ -8,6 +8,10 @@ import {
   type Diagnostic,
   type PreviewResult,
   type PublicationDetail,
+  type SubscriptionLink,
+  type SubscriptionLinkCheckResult,
+  type SubscriptionLinkCopyResult,
+  type PublicBaseURLResponse,
 } from './publicationTypes'
 
 export const TARGET_STORAGE_KEY = 'csp_publication_target'
@@ -140,6 +144,25 @@ export function usePublications(initialTarget?: CompilerTarget) {
   let previewRequest = 0
   const publishRequests = new Map<CompilerTarget, number>()
 
+  // Client subscription links state
+  const subscriptionLinks = ref<SubscriptionLink[]>([])
+  const loadingLinks = ref(false)
+  const copyingLink = ref(false)
+  const rotatingLinkId = ref<string | null>(null)
+  const revokingLinkId = ref<string | null>(null)
+  const checkingLinkId = ref<string | null>(null)
+  const updatingLinkId = ref<string | null>(null)
+  const linkCheckResults = ref<Record<string, SubscriptionLinkCheckResult>>({})
+  const publicBaseUrl = ref<string>('')
+  const publicBaseUrlMissing = ref(false)
+  const savingPublicBaseUrl = ref(false)
+  const generationWarning = ref<string>('')
+  const manualCopyUrl = ref<string>('')
+  const manualCopyModalOpen = ref(false)
+  const linkError = ref<string>('')
+  const linkActionRequests = new Map<string, number>()
+  const clientCopyRequests = new Map<CompilerTarget, number>()
+
   // Selection belongs to the user, never to an asynchronous server response.
   watch(selectedTarget, target => {
     ++previewRequest
@@ -150,6 +173,11 @@ export function usePublications(initialTarget?: CompilerTarget) {
     error.value = ''
     errorDetail.value = null
     preflightDiagnostics.value = []
+    generationWarning.value = ''
+    manualCopyUrl.value = ''
+    manualCopyModalOpen.value = false
+    publicBaseUrlMissing.value = false
+    linkError.value = ''
   }, { flush: 'sync' })
 
   watch(compatMode, () => {
@@ -412,6 +440,268 @@ export function usePublications(initialTarget?: CompilerTarget) {
     return url.toString()
   }
 
+  const defaultLinkForSelectedTarget = computed(() => {
+    return (
+      subscriptionLinks.value.find(
+        (l) => l.target === selectedTarget.value && l.is_default && l.state === 'active'
+      ) ?? null
+    )
+  })
+
+  async function fetchSubscriptionLinks(): Promise<SubscriptionLink[]> {
+    const session = publicationSession.value
+    loadingLinks.value = true
+    try {
+      const res = await api.get<SubscriptionLink[]>('/api/v1/subscription-links')
+      if (session === publicationSession.value) {
+        subscriptionLinks.value = Array.isArray(res) ? res : []
+      }
+      return subscriptionLinks.value
+    } catch (err: any) {
+      if (session === publicationSession.value) {
+        linkError.value = err instanceof Error ? err.message : '获取订阅链接失败'
+      }
+      return []
+    } finally {
+      loadingLinks.value = false
+    }
+  }
+
+  async function fetchPublicBaseUrl(): Promise<string> {
+    try {
+      const res = await api.get<PublicBaseURLResponse>('/api/v1/settings/public-base-url')
+      if (res && typeof res.public_base_url === 'string') {
+        publicBaseUrl.value = res.public_base_url
+      }
+      return publicBaseUrl.value
+    } catch {
+      return publicBaseUrl.value
+    }
+  }
+
+  async function savePublicBaseUrl(url: string): Promise<string> {
+    savingPublicBaseUrl.value = true
+    try {
+      const res = await api.put<PublicBaseURLResponse>('/api/v1/settings/public-base-url', {
+        public_base_url: url.trim(),
+      })
+      publicBaseUrl.value = res?.public_base_url || url.trim()
+      publicBaseUrlMissing.value = false
+      return publicBaseUrl.value
+    } finally {
+      savingPublicBaseUrl.value = false
+    }
+  }
+
+  async function ensureDefaultSubscriptionLink(target: CompilerTarget): Promise<SubscriptionLink> {
+    const session = publicationSession.value
+    const found = subscriptionLinks.value.find(
+      (l) => l.target === target && l.is_default && l.state === 'active'
+    )
+    if (found) return found
+
+    const res = await api.post<SubscriptionLink>('/api/v1/subscription-links', {
+      target,
+      is_default: true,
+    })
+    if (session === publicationSession.value && res && res.id) {
+      const idx = subscriptionLinks.value.findIndex((l) => l.id === res.id)
+      if (idx >= 0) {
+        subscriptionLinks.value[idx] = res
+      } else {
+        subscriptionLinks.value = [res, ...subscriptionLinks.value]
+      }
+    }
+    return res
+  }
+
+  async function copySubscriptionLink(
+    linkId: string,
+    target?: CompilerTarget
+  ): Promise<{ url: string; copied: boolean; allowed: boolean; warning?: string }> {
+    const session = publicationSession.value
+    linkError.value = ''
+    publicBaseUrlMissing.value = false
+    generationWarning.value = ''
+
+    let copyRes: SubscriptionLinkCopyResult
+    try {
+      copyRes = await api.post<SubscriptionLinkCopyResult>(`/api/v1/subscription-links/${linkId}/copy`)
+    } catch (err: any) {
+      if (err instanceof ApiError && err.status === 422 && err.code === 'public_base_url_not_configured') {
+        publicBaseUrlMissing.value = true
+      }
+      linkError.value = err instanceof Error ? err.message : '复制订阅链接失败'
+      throw err
+    }
+
+    const fullUrl = copyRes.url
+    const clipOk = await copyToClipboard(fullUrl)
+    if (!clipOk) {
+      manualCopyUrl.value = fullUrl
+      manualCopyModalOpen.value = true
+    }
+
+    // Evaluate generation check without blocking copy
+    let allowed = true
+    let warning: string | undefined
+    try {
+      const checkRes = await api.post<SubscriptionLinkCheckResult>(`/api/v1/subscription-links/${linkId}/check`)
+      if (session === publicationSession.value) {
+        linkCheckResults.value[linkId] = checkRes
+        if (!checkRes.allowed) {
+          allowed = false
+          warning = '链接已创建，当前不可更新'
+          generationWarning.value = warning
+        }
+      }
+    } catch (err: any) {
+      if (session === publicationSession.value) {
+        allowed = false
+        warning = '链接已创建，当前不可更新'
+        generationWarning.value = warning
+        linkCheckResults.value[linkId] = {
+          id: linkId,
+          target: target ?? selectedTarget.value,
+          allowed: false,
+          as_of: new Date().toISOString(),
+          node_count: 0,
+          message: err?.message || '生成检查失败',
+        }
+      }
+    }
+
+    return { url: fullUrl, copied: clipOk, allowed, warning }
+  }
+
+  async function copyDefaultClientSubscription(
+    target: CompilerTarget = selectedTarget.value
+  ): Promise<{ url: string; copied: boolean; allowed: boolean; warning?: string }> {
+    const session = publicationSession.value
+    const req = (clientCopyRequests.get(target) ?? 0) + 1
+    clientCopyRequests.set(target, req)
+    copyingLink.value = true
+    linkError.value = ''
+    try {
+      const link = await ensureDefaultSubscriptionLink(target)
+      if (session !== publicationSession.value || req !== clientCopyRequests.get(target)) {
+        return { url: '', copied: false, allowed: false }
+      }
+      const res = await copySubscriptionLink(link.id, target)
+      return res
+    } finally {
+      if (req === clientCopyRequests.get(target)) {
+        copyingLink.value = false
+      }
+    }
+  }
+
+  async function rotateSubscriptionToken(linkId: string): Promise<SubscriptionLink> {
+    const session = publicationSession.value
+    const req = (linkActionRequests.get(linkId) ?? 0) + 1
+    linkActionRequests.set(linkId, req)
+    rotatingLinkId.value = linkId
+    linkError.value = ''
+    try {
+      const res = await api.post<SubscriptionLink>(`/api/v1/subscription-links/${linkId}/rotate-token`)
+      if (session === publicationSession.value && req === linkActionRequests.get(linkId) && res && res.id) {
+        const idx = subscriptionLinks.value.findIndex((l) => l.id === linkId)
+        if (idx >= 0) {
+          subscriptionLinks.value[idx] = res
+        }
+      }
+      return res
+    } catch (err: any) {
+      linkError.value = err instanceof Error ? err.message : '轮换 Token 失败'
+      throw err
+    } finally {
+      if (req === linkActionRequests.get(linkId)) {
+        rotatingLinkId.value = null
+      }
+    }
+  }
+
+  async function revokeSubscriptionLink(linkId: string): Promise<void> {
+    const session = publicationSession.value
+    const req = (linkActionRequests.get(linkId) ?? 0) + 1
+    linkActionRequests.set(linkId, req)
+    revokingLinkId.value = linkId
+    linkError.value = ''
+    try {
+      await api.post(`/api/v1/subscription-links/${linkId}/revoke`)
+      if (session === publicationSession.value && req === linkActionRequests.get(linkId)) {
+        const idx = subscriptionLinks.value.findIndex((l) => l.id === linkId)
+        if (idx >= 0) {
+          subscriptionLinks.value[idx] = {
+            ...subscriptionLinks.value[idx],
+            state: 'revoked',
+            revoked_at: new Date().toISOString(),
+          }
+        }
+      }
+    } catch (err: any) {
+      linkError.value = err instanceof Error ? err.message : '停用订阅链接失败'
+      throw err
+    } finally {
+      if (req === linkActionRequests.get(linkId)) {
+        revokingLinkId.value = null
+      }
+    }
+  }
+
+  async function updateSubscriptionLinkLabel(linkId: string, label: string): Promise<SubscriptionLink> {
+    const session = publicationSession.value
+    updatingLinkId.value = linkId
+    linkError.value = ''
+    try {
+      const res = await api.patch<SubscriptionLink>(`/api/v1/subscription-links/${linkId}`, { label })
+      if (session === publicationSession.value && res && res.id) {
+        const idx = subscriptionLinks.value.findIndex((l) => l.id === linkId)
+        if (idx >= 0) {
+          subscriptionLinks.value[idx] = res
+        }
+      }
+      return res
+    } catch (err: any) {
+      linkError.value = err instanceof Error ? err.message : '更新订阅链接名称失败'
+      throw err
+    } finally {
+      updatingLinkId.value = null
+    }
+  }
+
+  async function checkSubscriptionLink(linkId: string): Promise<SubscriptionLinkCheckResult> {
+    const session = publicationSession.value
+    checkingLinkId.value = linkId
+    linkError.value = ''
+    try {
+      const res = await api.post<SubscriptionLinkCheckResult>(`/api/v1/subscription-links/${linkId}/check`)
+      if (session === publicationSession.value) {
+        linkCheckResults.value[linkId] = res
+        if (!res.allowed) {
+          generationWarning.value = '链接已创建，当前不可更新'
+        }
+      }
+      return res
+    } catch (err: any) {
+      const dummyRes: SubscriptionLinkCheckResult = {
+        id: linkId,
+        target: selectedTarget.value,
+        allowed: false,
+        as_of: new Date().toISOString(),
+        node_count: 0,
+        message: err instanceof Error ? err.message : '检查失败',
+      }
+      if (session === publicationSession.value) {
+        linkCheckResults.value[linkId] = dummyRes
+        generationWarning.value = '链接已创建，当前不可更新'
+      }
+      return dummyRes
+    } finally {
+      checkingLinkId.value = null
+    }
+  }
+
   return {
     selectedTarget,
     compatMode,
@@ -433,5 +723,32 @@ export function usePublications(initialTarget?: CompilerTarget) {
     downloadFile,
     restoreActivePublication,
     getFullExportUrl,
+    // Client subscription link exports
+    subscriptionLinks,
+    loadingLinks,
+    copyingLink,
+    rotatingLinkId,
+    revokingLinkId,
+    checkingLinkId,
+    updatingLinkId,
+    linkCheckResults,
+    publicBaseUrl,
+    publicBaseUrlMissing,
+    savingPublicBaseUrl,
+    generationWarning,
+    manualCopyUrl,
+    manualCopyModalOpen,
+    linkError,
+    defaultLinkForSelectedTarget,
+    fetchSubscriptionLinks,
+    fetchPublicBaseUrl,
+    savePublicBaseUrl,
+    ensureDefaultSubscriptionLink,
+    copySubscriptionLink,
+    copyDefaultClientSubscription,
+    rotateSubscriptionToken,
+    revokeSubscriptionLink,
+    updateSubscriptionLinkLabel,
+    checkSubscriptionLink,
   }
 }

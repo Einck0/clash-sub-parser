@@ -97,6 +97,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		client := publicationClientHandler(cfg.PublicationService, cfg.TokenHolder)
 		r.Get("/publish/v1/{publication_id}", client)
 		r.Get("/p/{publication_id}", client)
+		r.Get("/subscribe/v1/{id}", liveSubscriptionClientHandler(cfg.PublicationService))
 	}
 
 	// Public auth endpoints
@@ -126,6 +127,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		}
 		if cfg.PublicationService != nil {
 			registerPublicationRoutes(api, cfg.PublicationService, cfg.AuditRepository)
+			registerSubscriptionLinkRoutes(api, cfg.PublicationService, cfg.SettingsRepository, cfg.AuditRepository)
 		}
 		registerIPRiskRoutes(api, cfg)
 		registerSettingsRoutes(api, cfg)

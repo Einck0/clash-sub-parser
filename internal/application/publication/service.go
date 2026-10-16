@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"clash-sub-parser/internal/application/iprisk"
 	"clash-sub-parser/internal/compiler"
@@ -38,6 +39,10 @@ type Service struct {
 	sourceRepo     domain.NodeSourceRepository
 	obsRepo        domain.ProbeObservationRepository
 	payloadRefRepo domain.PublicationPayloadRefRepository
+
+	subLinkRepo    domain.SubscriptionLinkRepository
+	factsLoader    domain.ConsistentFactsLoader
+	concurrencySem chan struct{}
 }
 
 // Option configures optional Service dependencies.
@@ -127,6 +132,29 @@ func WithProbeObservationRepository(repo domain.ProbeObservationRepository) Opti
 	}
 }
 
+// WithSubscriptionLinkRepository sets the subscription link repository for live subscriptions.
+func WithSubscriptionLinkRepository(repo domain.SubscriptionLinkRepository) Option {
+	return func(s *Service) {
+		s.subLinkRepo = repo
+	}
+}
+
+// WithConsistentFactsLoader sets the transactional consistent facts loader.
+func WithConsistentFactsLoader(loader domain.ConsistentFactsLoader) Option {
+	return func(s *Service) {
+		s.factsLoader = loader
+	}
+}
+
+// WithConcurrencyLimit sets the bounded concurrency for live artifact compilation.
+func WithConcurrencyLimit(limit int) Option {
+	return func(s *Service) {
+		if limit > 0 {
+			s.concurrencySem = make(chan struct{}, limit)
+		}
+	}
+}
+
 // SetNodeFilterRepository allows dynamic configuration of the node filter repository.
 func (s *Service) SetNodeFilterRepository(repo domain.NodeFilterRepository) {
 	s.nodeFilterRepo = repo
@@ -142,6 +170,16 @@ func (s *Service) SetProbeObservationRepository(repo domain.ProbeObservationRepo
 	s.obsRepo = repo
 }
 
+// SetSubscriptionLinkRepository allows dynamic configuration of the subscription link repository.
+func (s *Service) SetSubscriptionLinkRepository(repo domain.SubscriptionLinkRepository) {
+	s.subLinkRepo = repo
+}
+
+// SetConsistentFactsLoader allows dynamic configuration of the consistent facts loader.
+func (s *Service) SetConsistentFactsLoader(loader domain.ConsistentFactsLoader) {
+	s.factsLoader = loader
+}
+
 // NewService constructs a new publication application service.
 func NewService(pubRepo domain.PublicationRepository, auditRepo domain.AuditRepository, opts ...Option) *Service {
 	s := &Service{
@@ -151,6 +189,9 @@ func NewService(pubRepo domain.PublicationRepository, auditRepo domain.AuditRepo
 	}
 	for _, opt := range opts {
 		opt(s)
+	}
+	if s.concurrencySem == nil {
+		s.concurrencySem = make(chan struct{}, 16)
 	}
 	if s.ipriskSvc == nil && s.riskPolicy != nil && s.riskObs != nil {
 		ipriskOpts := make([]iprisk.Option, 0)
@@ -713,18 +754,29 @@ func (s *Service) ResolveAndServeAuthorized(ctx context.Context, publicationID s
 	}, nil
 }
 
-// IsPublicationToken checks whether a token belongs to an active publication.
+// IsPublicationToken checks whether a token belongs to an active publication or active subscription link.
 // This is called by AdminAuthMiddleware to forbid valid export tokens from protected admin APIs.
 func (s *Service) IsPublicationToken(ctx context.Context, token string) bool {
 	if strings.TrimSpace(token) == "" {
 		return false
 	}
 	tokenHash := hashToken(token)
-	pub, err := s.pubRepo.GetByTokenHash(ctx, tokenHash)
-	return err == nil && pub != nil
+	if s.pubRepo != nil {
+		pub, err := s.pubRepo.GetByTokenHash(ctx, tokenHash)
+		if err == nil && pub != nil && pub.IsActive() {
+			return true
+		}
+	}
+	if s.subLinkRepo != nil {
+		link, err := s.subLinkRepo.GetByTokenHash(ctx, tokenHash)
+		if err == nil && link != nil && link.IsActive() {
+			return true
+		}
+	}
+	return false
 }
 
-// ValidateToken validates whether a token belongs to a specific publication or any active publication.
+// ValidateToken validates whether a token belongs to a specific publication/link or any active publication/link.
 func (s *Service) ValidateToken(ctx context.Context, publicationID, token string) (bool, error) {
 	if strings.TrimSpace(token) == "" {
 		return false, nil
@@ -732,21 +784,34 @@ func (s *Service) ValidateToken(ctx context.Context, publicationID, token string
 	tokenHash := hashToken(token)
 
 	if publicationID != "" {
-		pub, err := s.pubRepo.GetByID(ctx, publicationID)
-		if err != nil {
-			return false, nil
+		if s.pubRepo != nil {
+			pub, err := s.pubRepo.GetByID(ctx, publicationID)
+			if err == nil && pub != nil && pub.IsActive() {
+				return subtle.ConstantTimeCompare([]byte(pub.TokenHash), []byte(tokenHash)) == 1, nil
+			}
 		}
-		if !pub.IsActive() {
-			return false, nil
+		if s.subLinkRepo != nil {
+			link, err := s.subLinkRepo.GetByID(ctx, publicationID)
+			if err == nil && link != nil && link.IsActive() {
+				return subtle.ConstantTimeCompare([]byte(link.TokenHash), []byte(tokenHash)) == 1, nil
+			}
 		}
-		return subtle.ConstantTimeCompare([]byte(pub.TokenHash), []byte(tokenHash)) == 1, nil
-	}
-
-	pub, err := s.pubRepo.GetByTokenHash(ctx, tokenHash)
-	if err != nil || pub == nil {
 		return false, nil
 	}
-	return pub.IsActive(), nil
+
+	if s.pubRepo != nil {
+		pub, err := s.pubRepo.GetByTokenHash(ctx, tokenHash)
+		if err == nil && pub != nil && pub.IsActive() {
+			return true, nil
+		}
+	}
+	if s.subLinkRepo != nil {
+		link, err := s.subLinkRepo.GetByTokenHash(ctx, tokenHash)
+		if err == nil && link != nil && link.IsActive() {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // ResolvePolicySnapshot is read-only and is shared by policy validation.
@@ -1234,6 +1299,11 @@ func hashToken(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// HashToken computes the SHA-256 hex digest of a token.
+func HashToken(token string) string {
+	return hashToken(token)
+}
+
 // ValidatePublicationContent performs frozen-bytes verification of compiled output
 // before publication commit/activation to guarantee official kernel schema conformance.
 func ValidatePublicationContent(content []byte, target domain.CompilerTarget) error {
@@ -1307,4 +1377,563 @@ func extractMihomoRuleTarget(ruleLine string) string {
 		return ""
 	}
 	return last
+}
+
+func generateSubscriptionToken() (string, string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", "", fmt.Errorf("failed to generate crypto random bytes: %w", err)
+	}
+	rawToken := "sub_" + hex.EncodeToString(b)
+	return rawToken, hashToken(rawToken), nil
+}
+
+// BuildCurrentArtifact executes pure, deterministic, side-effect-free configuration compilation from consistent facts.
+// It performs in-memory policy resolution, preflight checks, and kernel schema validation without writing drafts or references.
+func (s *Service) BuildCurrentArtifact(ctx context.Context, facts *domain.ConsistentFacts, target domain.CompilerTarget) (*Artifact, *resolver.ResolvedPolicySnapshot, error) {
+	if !isValidTarget(target) {
+		return nil, nil, domain.NewValidationError("unsupported_target", fmt.Sprintf("unsupported compiler target: %s", target))
+	}
+	if facts == nil || facts.Revision == nil {
+		return nil, nil, domain.NewConflictError("no_active_revision", "cannot resolve policy without an active configuration revision")
+	}
+
+	revID := facts.Revision.ID
+	input := resolver.ResolveInput{
+		RevisionID:         revID,
+		InventoryWatermark: "v1",
+		CompilerVersion:    "1.0.0",
+		Nodes:              facts.Nodes,
+		AdmissionRules:     facts.AdmissionRules,
+		GlobalFilter:       facts.GlobalFilter,
+		NodeSources:        facts.NodeSources,
+		LatestObservations: facts.LatestObservations,
+		AsOf:               facts.AsOf,
+	}
+
+	if target == domain.TargetMihomo {
+		input.Groups = facts.Groups
+		input.GroupSources = facts.GroupSources
+		input.Edges = facts.GroupEdges
+		input.PolicyRules = facts.PolicyRules
+		input.GroupFilters = facts.GroupFilters
+		input.DNS = resolver.DNSConfig{
+			Enabled:     true,
+			Nameservers: []string{"1.1.1.1", "8.8.8.8"},
+		}
+	}
+
+	if facts.ActiveRiskPolicy != nil && facts.ActiveRiskPolicy.Active && len(facts.Nodes) > 0 && s.ipriskSvc != nil {
+		nodeIDs := make([]string, len(facts.Nodes))
+		for i, n := range facts.Nodes {
+			nodeIDs[i] = n.LogicalID
+		}
+		riskObs := facts.RiskObservations
+		if riskObs == nil {
+			riskObs = []domain.IPRiskObservation{}
+		}
+		batchRes, bErr := s.ipriskSvc.EvaluateBatch(ctx, iprisk.EvaluateBatchInput{
+			NodeLogicalIDs:           nodeIDs,
+			Policy:                   &facts.ActiveRiskPolicy.RiskPolicy,
+			PolicyRevisionID:         facts.ActiveRiskPolicy.RevisionID,
+			EvaluatedAt:              facts.AsOf,
+			Observations:             riskObs,
+			DisableObservationLookup: true,
+		})
+		if bErr != nil {
+			return nil, nil, domain.NewInternalError("risk_evaluation_unavailable", "failed to evaluate active risk policy")
+		}
+		if batchRes != nil {
+			input.RiskPolicyRevision = facts.ActiveRiskPolicy.RevisionID
+			input.RiskDecisionDigest = batchRes.DecisionDigest
+			evalAt := batchRes.EvaluatedAt
+			input.RiskEvaluatedAt = &evalAt
+			input.RiskReviewAction = facts.ActiveRiskPolicy.EffectiveReviewAction()
+			input.RiskDecisions = batchRes.Decisions
+		}
+	}
+
+	snapshot, err := s.resolver.Resolve(ctx, input)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	counts := snapshot.FilterCounts
+	if counts != nil && counts.AdmittedTotal > 0 {
+		globallyEmpty := input.GlobalFilter != nil && !input.GlobalFilter.IsEmpty() && counts.GlobalFilteredTotal == 0
+		groupEmpty := false
+		if !globallyEmpty && counts.GroupFilteredTotal == 0 && target == domain.TargetMihomo {
+			for _, group := range input.Groups {
+				hasFilter := false
+				for _, source := range group.Sources {
+					if source.FilterSpec != nil && !source.FilterSpec.IsEmpty() {
+						hasFilter = true
+						break
+					}
+				}
+				if count := counts.GroupCounts[group.ID]; hasFilter && count.Candidate > 0 && count.Excluded > 0 {
+					groupEmpty = true
+					break
+				}
+			}
+		}
+		if globallyEmpty || groupEmpty {
+			snapshot.Diagnostics = append(snapshot.Diagnostics, resolver.Diagnostic{
+				Severity: resolver.DiagnosticSeverityError,
+				Code:     "filtered_nodes_empty",
+				Message:  "configured node filters left no exportable nodes; check probe observations, freshness and filter conditions",
+			})
+		}
+	}
+
+	if len(snapshot.Nodes) == 0 {
+		hasEmptyDiag := false
+		for _, d := range snapshot.Diagnostics {
+			if d.Code == "filtered_nodes_empty" {
+				hasEmptyDiag = true
+				break
+			}
+		}
+		if !hasEmptyDiag {
+			snapshot.Diagnostics = append(snapshot.Diagnostics, resolver.Diagnostic{
+				Severity: resolver.DiagnosticSeverityError,
+				Code:     "filtered_nodes_empty",
+				Message:  "configured node filters left no exportable nodes; check probe observations, freshness and filter conditions",
+			})
+		}
+	}
+
+	for _, diagnostic := range snapshot.Diagnostics {
+		if diagnostic.Code == "filtered_nodes_empty" {
+			preflight := s.evaluatePreflightFromSnapshot(ctx, snapshot, target, facts.ActiveRiskPolicy, facts.RiskObservations, facts.AsOf)
+			return nil, snapshot, newPreflightError(preflight)
+		}
+	}
+
+	// Live subscriptions are strictly validated for kernel capabilities
+	diags := compiler.ValidateTargetCapabilities(snapshot, target)
+	if len(diags) > 0 {
+		msg := "target capability validation failed in strict mode"
+		if len(diags) > 0 {
+			msg = fmt.Sprintf("target capability validation failed in strict mode: %s", diags[0].Message)
+		}
+		return nil, snapshot, &StrictCapabilityError{
+			Code:        "unsupported_target_capability",
+			Message:     msg,
+			Diagnostics: diags,
+		}
+	}
+
+	preflight := s.evaluatePreflightFromSnapshot(ctx, snapshot, target, facts.ActiveRiskPolicy, facts.RiskObservations, facts.AsOf)
+	if !preflight.Allowed {
+		return nil, snapshot, newPreflightError(preflight)
+	}
+
+	compileRes, err := compiler.Compile(ctx, snapshot, target)
+	if err != nil {
+		var capErr *compiler.CapabilityError
+		if errors.As(err, &capErr) {
+			return nil, snapshot, domain.NewValidationError("unsupported_target_capability", capErr.Error())
+		}
+		return nil, snapshot, err
+	}
+
+	if err := ValidatePublicationContent(compileRes.Content, target); err != nil {
+		return nil, snapshot, err
+	}
+
+	return &Artifact{
+		Target:         target,
+		Content:        compileRes.Content,
+		ContentType:    compileRes.ContentType,
+		Filename:       compileRes.Filename,
+		ContentDigest:  compileRes.ContentDigest,
+		SnapshotDigest: compileRes.SnapshotDigest,
+	}, snapshot, nil
+}
+
+func (s *Service) evaluatePreflightFromSnapshot(ctx context.Context, snapshot *resolver.ResolvedPolicySnapshot, target domain.CompilerTarget, activePolicy *domain.RiskPolicyRevision, observations []domain.IPRiskObservation, asOf time.Time) PreflightResult {
+	result := PreflightResult{Allowed: true, Diagnostics: make([]PreflightDiagnostic, 0)}
+	if snapshot == nil {
+		return result
+	}
+	result.SnapshotDigest = snapshot.SnapshotDigest
+	if activePolicy != nil {
+		result.PolicyRevision = activePolicy.RevisionID
+	}
+
+	seen := make(map[string]struct{})
+	addDiagnostic := func(d PreflightDiagnostic) {
+		key := d.Code + ":" + d.Target
+		if _, exists := seen[key]; exists {
+			return
+		}
+		seen[key] = struct{}{}
+		result.Diagnostics = append(result.Diagnostics, d)
+	}
+
+	// 1. Inspect existing snapshot diagnostics
+	for _, diagnostic := range snapshot.Diagnostics {
+		if target != domain.TargetMihomo && diagnostic.Code != "filtered_nodes_empty" {
+			if diagnostic.Code != "risk_blocked" && diagnostic.Code != "risk_review" && diagnostic.Code != "risk_unknown" {
+				continue
+			}
+		}
+		if diagnostic.Code == "risk_blocked" || diagnostic.Code == "risk_review" || diagnostic.Code == "risk_unknown" || diagnostic.Severity == resolver.DiagnosticSeverityError || diagnostic.Code == "empty_routed_group" || diagnostic.Code == "required_nonempty" {
+			result.Allowed = false
+			addDiagnostic(PreflightDiagnostic{
+				Severity: diagnostic.Severity,
+				Code:     diagnostic.Code,
+				Message:  diagnostic.Message,
+				Target:   diagnostic.Target,
+			})
+		}
+	}
+
+	if target == domain.TargetMihomo {
+		capDiags := compiler.ValidateTargetCapabilities(snapshot, target)
+		for _, cd := range capDiags {
+			result.Allowed = false
+			addDiagnostic(PreflightDiagnostic{
+				Severity: resolver.DiagnosticSeverityError,
+				Code:     cd.Code,
+				Message:  cd.Message,
+				Target:   cd.Target,
+			})
+		}
+	}
+
+	// 2. Perform real-time risk recomputation over snapshot members using in-memory observations
+	if s.ipriskSvc != nil && activePolicy != nil && activePolicy.Active {
+		nodeIDSet := make(map[string]struct{})
+		for _, n := range snapshot.Nodes {
+			nodeIDSet[n.LogicalID] = struct{}{}
+		}
+		if target == domain.TargetMihomo {
+			for _, g := range snapshot.Groups {
+				for _, nid := range g.NodeLogicalIDs {
+					nodeIDSet[nid] = struct{}{}
+				}
+				for _, nid := range g.AllNodeLogicalIDs {
+					nodeIDSet[nid] = struct{}{}
+				}
+			}
+		}
+
+		nodeIDs := make([]string, 0, len(nodeIDSet))
+		for nid := range nodeIDSet {
+			if domain.IsValidLogicalID(nid) {
+				nodeIDs = append(nodeIDs, nid)
+			}
+		}
+		sort.Strings(nodeIDs)
+
+		if len(nodeIDs) > 0 {
+			riskObs := observations
+			if riskObs == nil {
+				riskObs = []domain.IPRiskObservation{}
+			}
+			batchRes, err := s.ipriskSvc.EvaluateBatch(ctx, iprisk.EvaluateBatchInput{
+				NodeLogicalIDs:           nodeIDs,
+				Policy:                   &activePolicy.RiskPolicy,
+				PolicyRevisionID:         activePolicy.RevisionID,
+				EvaluatedAt:              asOf,
+				Observations:             riskObs,
+				DisableObservationLookup: true,
+			})
+			if err == nil && batchRes != nil {
+				reviewAction := activePolicy.EffectiveReviewAction()
+				unknownAction := activePolicy.EffectiveUnknownAction()
+
+				for _, decision := range batchRes.Decisions {
+					switch decision.Decision {
+					case domain.RiskActionBlock:
+						result.Allowed = false
+						addDiagnostic(PreflightDiagnostic{
+							Severity: resolver.DiagnosticSeverityError,
+							Code:     "risk_blocked",
+							Message:  fmt.Sprintf("node %s was blocked by risk policy: %s", decision.NodeLogicalID, decision.ReasonCode),
+							Target:   decision.NodeLogicalID,
+						})
+					case domain.RiskActionReview:
+						if reviewAction != domain.RiskActionAllow {
+							result.Allowed = false
+							addDiagnostic(PreflightDiagnostic{
+								Severity: resolver.DiagnosticSeverityWarning,
+								Code:     "risk_review",
+								Message:  fmt.Sprintf("node %s requires risk review and cannot be published: %s", decision.NodeLogicalID, decision.ReasonCode),
+								Target:   decision.NodeLogicalID,
+							})
+						}
+					case domain.RiskActionUnknown:
+						if unknownAction != domain.RiskActionAllow {
+							result.Allowed = false
+							addDiagnostic(PreflightDiagnostic{
+								Severity: resolver.DiagnosticSeverityWarning,
+								Code:     "risk_unknown",
+								Message:  fmt.Sprintf("node %s has unknown risk and cannot be published: %s", decision.NodeLogicalID, decision.ReasonCode),
+								Target:   decision.NodeLogicalID,
+							})
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return result
+}
+
+// GenerateLiveArtifact coordinates the end-to-end generation of an authorized client subscription export.
+func (s *Service) GenerateLiveArtifact(ctx context.Context, linkID string, token string) (*Artifact, error) {
+	if s.subLinkRepo == nil {
+		return nil, domain.NewInternalError("missing_repository", "subscription link repository not configured")
+	}
+	if s.factsLoader == nil {
+		return nil, domain.NewInternalError("missing_loader", "consistent facts loader not configured")
+	}
+
+	// Bounded concurrency check
+	select {
+	case s.concurrencySem <- struct{}{}:
+		defer func() { <-s.concurrencySem }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+		return nil, ErrRateLimitExceeded
+	}
+
+	link, err := s.subLinkRepo.GetByID(ctx, linkID)
+	if err != nil {
+		return nil, ErrLinkNotFound
+	}
+	if !link.IsActive() {
+		return nil, ErrLinkRevoked
+	}
+	if subtle.ConstantTimeCompare([]byte(link.TokenHash), []byte(hashToken(token))) != 1 {
+		return nil, ErrUnauthorized
+	}
+
+	facts, err := s.factsLoader.LoadConsistentFacts(ctx, "", link.Target, domain.NowUTC())
+	if err != nil {
+		return nil, err
+	}
+
+	artifact, _, err := s.BuildCurrentArtifact(ctx, facts, link.Target)
+	if err != nil {
+		return nil, err
+	}
+	artifact.PublicationID = link.ID
+	return artifact, nil
+}
+
+// CheckSubscriptionLink performs real-time diagnostic evaluation of a link without persistent side-effects.
+func (s *Service) CheckSubscriptionLink(ctx context.Context, id string) (*CheckSubscriptionLinkResult, error) {
+	if s.subLinkRepo == nil {
+		return nil, domain.NewInternalError("missing_repository", "subscription link repository not configured")
+	}
+	if s.factsLoader == nil {
+		return nil, domain.NewInternalError("missing_loader", "consistent facts loader not configured")
+	}
+
+	// Bounded concurrency check
+	select {
+	case s.concurrencySem <- struct{}{}:
+		defer func() { <-s.concurrencySem }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+		return nil, ErrRateLimitExceeded
+	}
+
+	link, err := s.subLinkRepo.GetByID(ctx, id)
+	if err != nil {
+		return nil, ErrLinkNotFound
+	}
+	if !link.IsActive() {
+		return nil, ErrLinkRevoked
+	}
+
+	facts, err := s.factsLoader.LoadConsistentFacts(ctx, "", link.Target, domain.NowUTC())
+	if err != nil {
+		return nil, err
+	}
+
+	artifact, snapshot, err := s.BuildCurrentArtifact(ctx, facts, link.Target)
+	if err == nil {
+		return &CheckSubscriptionLinkResult{
+			ID:            link.ID,
+			Target:        link.Target,
+			Allowed:       true,
+			AsOf:          facts.AsOf.Format(time.RFC3339Nano),
+			ContentDigest: artifact.ContentDigest,
+			NodeCount:     len(snapshot.Nodes),
+			Message:       "Configuration generated successfully",
+		}, nil
+	}
+
+	var pfErr *PreflightError
+	if errors.As(err, &pfErr) {
+		nodeCount := 0
+		if snapshot != nil {
+			nodeCount = len(snapshot.Nodes)
+		}
+		return &CheckSubscriptionLinkResult{
+			ID:          link.ID,
+			Target:      link.Target,
+			Allowed:     false,
+			Diagnostics: pfErr.Result.Diagnostics,
+			AsOf:        facts.AsOf.Format(time.RFC3339Nano),
+			NodeCount:   nodeCount,
+			Message:     "Configuration blocked by preflight checks",
+		}, nil
+	}
+
+	var capErr *StrictCapabilityError
+	if errors.As(err, &capErr) {
+		var diags []PreflightDiagnostic
+		for _, cd := range capErr.Diagnostics {
+			diags = append(diags, PreflightDiagnostic{
+				Severity: resolver.DiagnosticSeverityError,
+				Code:     cd.Code,
+				Message:  cd.Message,
+				Target:   cd.Target,
+			})
+		}
+		nodeCount := 0
+		if snapshot != nil {
+			nodeCount = len(snapshot.Nodes)
+		}
+		return &CheckSubscriptionLinkResult{
+			ID:          link.ID,
+			Target:      link.Target,
+			Allowed:     false,
+			Diagnostics: diags,
+			AsOf:        facts.AsOf.Format(time.RFC3339Nano),
+			NodeCount:   nodeCount,
+			Message:     capErr.Message,
+		}, nil
+	}
+
+	return nil, err
+}
+
+// ListSubscriptionLinks lists all registered subscription links.
+func (s *Service) ListSubscriptionLinks(ctx context.Context) ([]domain.SubscriptionLink, error) {
+	if s.subLinkRepo == nil {
+		return nil, domain.NewInternalError("missing_repository", "subscription link repository not configured")
+	}
+	return s.subLinkRepo.List(ctx)
+}
+
+// CreateSubscriptionLink creates a new link or idempotently returns the existing active default link for target.
+func (s *Service) CreateSubscriptionLink(ctx context.Context, cmd CreateSubscriptionLinkCommand) (*domain.SubscriptionLink, error) {
+	if !isValidTarget(cmd.Target) {
+		return nil, domain.NewValidationError("unsupported_target", fmt.Sprintf("unsupported compiler target: %s", cmd.Target))
+	}
+	if s.subLinkRepo == nil {
+		return nil, domain.NewInternalError("missing_repository", "subscription link repository not configured")
+	}
+
+	if cmd.IsDefault {
+		existing, err := s.subLinkRepo.GetDefaultByTarget(ctx, cmd.Target)
+		if err == nil && existing != nil && existing.IsActive() {
+			return existing, nil
+		}
+	}
+
+	rawToken, tokenHash, err := generateSubscriptionToken()
+	if err != nil {
+		return nil, err
+	}
+
+	link := &domain.SubscriptionLink{
+		ID:        domain.MustNewUUIDv7(),
+		Label:     strings.TrimSpace(cmd.Label),
+		Target:    cmd.Target,
+		Token:     rawToken,
+		TokenHash: tokenHash,
+		State:     domain.SubscriptionLinkStateActive,
+		IsDefault: cmd.IsDefault,
+		CreatedAt: domain.NowUTC(),
+		UpdatedAt: domain.NowUTC(),
+	}
+
+	if err := s.subLinkRepo.Create(ctx, link); err != nil {
+		return nil, err
+	}
+
+	s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "subscription_link.create", domain.AuditResultSuccess,
+		fmt.Sprintf("created subscription link %s for target %s (default: %v)", link.ID, link.Target, link.IsDefault))
+
+	return link, nil
+}
+
+// GetSubscriptionLink returns a single subscription link by ID.
+func (s *Service) GetSubscriptionLink(ctx context.Context, id string) (*domain.SubscriptionLink, error) {
+	if s.subLinkRepo == nil {
+		return nil, domain.NewInternalError("missing_repository", "subscription link repository not configured")
+	}
+	return s.subLinkRepo.GetByID(ctx, id)
+}
+
+// RotateSubscriptionLinkToken replaces the credentials of an active link with new values.
+func (s *Service) RotateSubscriptionLinkToken(ctx context.Context, id string, actorKind domain.ActorKind, requestID string) (*domain.SubscriptionLink, error) {
+	if s.subLinkRepo == nil {
+		return nil, domain.NewInternalError("missing_repository", "subscription link repository not configured")
+	}
+	link, err := s.subLinkRepo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if !link.IsActive() {
+		return nil, ErrLinkRevoked
+	}
+	rawToken, tokenHash, err := generateSubscriptionToken()
+	if err != nil {
+		return nil, err
+	}
+	now := domain.NowUTC()
+	if err := s.subLinkRepo.RotateToken(ctx, id, rawToken, tokenHash, now); err != nil {
+		return nil, err
+	}
+	link.Token = rawToken
+	link.TokenHash = tokenHash
+	link.UpdatedAt = now
+
+	s.recordAudit(ctx, actorKind, requestID, "subscription_link.rotate", domain.AuditResultSuccess,
+		fmt.Sprintf("rotated token for subscription link %s", link.ID))
+
+	return link, nil
+}
+
+// RevokeSubscriptionLink marks an active link as revoked.
+func (s *Service) RevokeSubscriptionLink(ctx context.Context, id string, actorKind domain.ActorKind, requestID string) error {
+	if s.subLinkRepo == nil {
+		return domain.NewInternalError("missing_repository", "subscription link repository not configured")
+	}
+	link, err := s.subLinkRepo.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if link.State == domain.SubscriptionLinkStateRevoked {
+		return nil
+	}
+	now := domain.NowUTC()
+	if err := s.subLinkRepo.Revoke(ctx, id, now); err != nil {
+		return err
+	}
+
+	s.recordAudit(ctx, actorKind, requestID, "subscription_link.revoke", domain.AuditResultSuccess,
+		fmt.Sprintf("revoked subscription link %s", id))
+
+	return nil
+}
+
+// UpdateSubscriptionLinkLabel updates the label of a subscription link.
+func (s *Service) UpdateSubscriptionLinkLabel(ctx context.Context, id, label string) error {
+	if s.subLinkRepo == nil {
+		return domain.NewInternalError("missing_repository", "subscription link repository not configured")
+	}
+	return s.subLinkRepo.UpdateLabel(ctx, id, label, domain.NowUTC())
 }

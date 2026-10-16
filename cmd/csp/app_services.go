@@ -37,6 +37,8 @@ type applicationServices struct {
 	probeScheduleRepo domain.ProbeScheduleRepository
 	nodeFilterRepo    domain.NodeFilterRepository
 	pubPayloadRefRepo domain.PublicationPayloadRefRepository
+	subLinkRepo       domain.SubscriptionLinkRepository
+	factsLoader       domain.ConsistentFactsLoader
 
 	fetchClient           *fetch.Client
 	subscriptionScheduler *subscription.Scheduler
@@ -79,6 +81,8 @@ func makeApplicationServices(ctx context.Context, db *sql.DB, opts appServiceOpt
 	probeScheduleRepo := sqlite.NewProbeScheduleRepository(db)
 	nodeFilterRepo := sqlite.NewNodeFilterRepository(db)
 	pubPayloadRefRepo := sqlite.NewPublicationPayloadRefRepository(db)
+	subLinkRepo := sqlite.NewSubscriptionLinkRepository(db)
+	factsLoader := sqlite.NewConsistentFactsLoader(db)
 
 	var fetchClient *fetch.Client
 	if opts.fetchClientOverride != nil {
@@ -178,6 +182,8 @@ func makeApplicationServices(ctx context.Context, db *sql.DB, opts appServiceOpt
 		publication.WithRiskBindingRepository(riskBindingRepo),
 		publication.WithRiskObservationRepository(riskObsRepo),
 		publication.WithPayloadRefRepository(pubPayloadRefRepo),
+		publication.WithSubscriptionLinkRepository(subLinkRepo),
+		publication.WithConsistentFactsLoader(factsLoader),
 	}
 	pubService := publication.NewService(
 		pubRepo,
@@ -209,6 +215,8 @@ func makeApplicationServices(ctx context.Context, db *sql.DB, opts appServiceOpt
 		probeScheduleRepo:     probeScheduleRepo,
 		nodeFilterRepo:        nodeFilterRepo,
 		pubPayloadRefRepo:     pubPayloadRefRepo,
+		subLinkRepo:           subLinkRepo,
+		factsLoader:           factsLoader,
 		fetchClient:           fetchClient,
 		subService:            subService,
 		invService:            invService,

@@ -2,8 +2,11 @@ package http
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -32,6 +35,8 @@ func registerSettingsRoutes(r chi.Router, cfg RouterConfig) {
 	r.Put("/settings/auth", settingsPutAuthHandler(cfg))
 	r.Get("/settings/subscription-fetch", settingsGetSubscriptionFetchHandler(cfg))
 	r.Put("/settings/subscription-fetch", settingsPutSubscriptionFetchHandler(cfg))
+	r.Get("/settings/public-base-url", settingsGetPublicBaseURLHandler(cfg))
+	r.Put("/settings/public-base-url", settingsPutPublicBaseURLHandler(cfg))
 }
 
 type authSettingsResponse struct {
@@ -213,6 +218,86 @@ func settingsGetAdminTokenStatusHandler(cfg RouterConfig) http.HandlerFunc {
 			Mode:       mode,
 			Configured: isConfigured,
 			Message:    msg,
+		})
+	}
+}
+
+type publicBaseURLRequest struct {
+	PublicBaseURL string `json:"public_base_url"`
+}
+
+func settingsGetPublicBaseURLHandler(cfg RouterConfig) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if cfg.SettingsRepository == nil {
+			WriteError(w, r, http.StatusInternalServerError, "internal_error", "Settings repository not configured")
+			return
+		}
+		s, err := cfg.SettingsRepository.Get(r.Context())
+		if err != nil {
+			WriteError(w, r, http.StatusInternalServerError, "internal_error", "Failed to get settings")
+			return
+		}
+		WriteSuccess(w, r, http.StatusOK, map[string]string{
+			"public_base_url": s.PublicBaseURL,
+		})
+	}
+}
+
+func settingsPutPublicBaseURLHandler(cfg RouterConfig) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if cfg.SettingsRepository == nil {
+			WriteError(w, r, http.StatusInternalServerError, "internal_error", "Settings repository not configured")
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 16*1024)
+		var req publicBaseURLRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			WriteError(w, r, http.StatusBadRequest, "bad_request", "Invalid request body")
+			return
+		}
+		trimmed := strings.TrimSpace(req.PublicBaseURL)
+		if trimmed != "" {
+			trimmed = strings.TrimRight(trimmed, "/")
+			u, err := url.ParseRequestURI(trimmed)
+			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+				WriteError(w, r, http.StatusUnprocessableEntity, "invalid_public_base_url", "public_base_url must be a valid absolute HTTP or HTTPS URL")
+				return
+			}
+			if u.User != nil {
+				WriteError(w, r, http.StatusUnprocessableEntity, "invalid_public_base_url", "public_base_url must not contain userinfo")
+				return
+			}
+			if u.RawQuery != "" || strings.Contains(trimmed, "?") {
+				WriteError(w, r, http.StatusUnprocessableEntity, "invalid_public_base_url", "public_base_url must not contain query parameters")
+				return
+			}
+			if u.Fragment != "" || strings.Contains(trimmed, "#") {
+				WriteError(w, r, http.StatusUnprocessableEntity, "invalid_public_base_url", "public_base_url must not contain a fragment")
+				return
+			}
+		}
+		if err := cfg.SettingsRepository.UpdatePublicBaseURL(r.Context(), trimmed); err != nil {
+			var de *domain.DomainError
+			if errors.As(err, &de) {
+				WriteError(w, r, http.StatusUnprocessableEntity, de.Code, de.Message)
+				return
+			}
+			WriteError(w, r, http.StatusInternalServerError, "internal_error", "Failed to update public base URL")
+			return
+		}
+		if cfg.AuditRepository != nil {
+			_ = cfg.AuditRepository.Record(r.Context(), &domain.AuditEvent{
+				ID:              domain.MustNewUUIDv7(),
+				ActorKind:       domain.ActorKindAdmin,
+				RequestID:       GetRequestID(r.Context()),
+				Action:          "settings.public_base_url.update",
+				Result:          domain.AuditResultSuccess,
+				RedactedSummary: fmt.Sprintf("Updated public_base_url to %q", trimmed),
+				CreatedAt:       domain.NowUTC(),
+			})
+		}
+		WriteSuccess(w, r, http.StatusOK, map[string]string{
+			"public_base_url": trimmed,
 		})
 	}
 }

@@ -229,4 +229,60 @@ export function auditEventLabel(event?: string): string {
   return AUDIT_EVENT_LABELS[event] ?? event
 }
 
+export type SubscriptionLinkState = 'active' | 'revoked'
+
+export interface SubscriptionLink {
+  id: string
+  label: string
+  target: CompilerTarget
+  token?: string
+  token_masked?: string
+  state: SubscriptionLinkState
+  is_default: boolean
+  created_at: string
+  updated_at: string
+  revoked_at?: string
+}
+
+export interface SubscriptionLinkCopyResult {
+  id: string
+  target: string
+  url: string
+  token?: string
+  public_base_url: string
+}
+
+export interface SubscriptionLinkCheckResult {
+  id: string
+  target: CompilerTarget
+  allowed: boolean
+  diagnostics?: Diagnostic[]
+  as_of: string
+  content_digest?: string
+  node_count: number
+  message?: string
+}
+
+export interface PublicBaseURLResponse {
+  public_base_url: string
+}
+
+export function subscriptionLinkStateLabel(state: SubscriptionLinkState | string): string {
+  if (state === 'revoked') {
+    return '已停用'
+  }
+  return '已生效'
+}
+
+export function formatDateTime(isoStr?: string): string {
+  if (!isoStr) return '--'
+  try {
+    const d = new Date(isoStr)
+    if (isNaN(d.getTime())) return isoStr
+    return d.toLocaleString()
+  } catch {
+    return isoStr
+  }
+}
+
 

@@ -22,6 +22,12 @@ func AdminAuthMiddleware(cfg RouterConfig) func(http.Handler) http.Handler {
 				}
 			}
 
+			// Export-only credentials must never cross into administration APIs, even if admin auth is disabled (open mode).
+			if token != "" && isPublicationToken(r.Context(), cfg, token) {
+				WriteError(w, r, http.StatusForbidden, "invalid_token_scope", "Publication export token cannot access administration API")
+				return
+			}
+
 			// 2. Open Mode 核心放行铁律：
 			// 当服务端处于 Open Mode 时，不论请求头是否包含脏 Bearer Token 或历史 Cookie，
 			// 一律作为 Open Mode 管理员无条件放行，彻底消除 401 死锁！
@@ -34,12 +40,6 @@ func AdminAuthMiddleware(cfg RouterConfig) func(http.Handler) http.Handler {
 				}
 				ctx := WithAuthContext(r.Context(), auth)
 				next.ServeHTTP(w, r.WithContext(ctx))
-				return
-			}
-
-			// Export-only credentials must never cross into protected admin APIs.
-			if token != "" && isPublicationToken(r.Context(), cfg, token) {
-				WriteError(w, r, http.StatusForbidden, "invalid_token_scope", "Publication export token cannot access administration API")
 				return
 			}
 

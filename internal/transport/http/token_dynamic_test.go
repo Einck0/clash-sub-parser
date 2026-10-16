@@ -67,6 +67,13 @@ func (m *mockSettingsRepo) UpdateSubscriptionFetch(ctx context.Context, mode str
 	return nil
 }
 
+func (m *mockSettingsRepo) UpdatePublicBaseURL(ctx context.Context, publicBaseURL string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.settings.PublicBaseURL = publicBaseURL
+	return nil
+}
+
 func TestDynamicAdminTokenLifecycle(t *testing.T) {
 	ctx := context.Background()
 	repo := newMockSettingsRepo("")

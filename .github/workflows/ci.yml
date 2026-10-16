@@ -108,7 +108,7 @@ jobs:
           sudo mkdir -p /home/service/backups
           sudo chown -R $(id -u):$(id -g) /home/service/backups
           # Compatibility path required only by legacy tests on this fresh CI runner.
-          python3 -B .github/scripts/setup_test_archive.py /home/service/backups/csp-legacy-cold-archive-20260919.db
+          python3 -B .github/scripts/setup_test_archive.py
 
       - name: Run Go tests
         run: |

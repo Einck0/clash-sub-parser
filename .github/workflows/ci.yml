@@ -245,7 +245,7 @@ jobs:
       - name: Build and push runtime container image
         if: needs.test-and-build.outputs.reused != 'true'
         id: build-push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ./Dockerfile.runtime

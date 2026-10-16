@@ -132,3 +132,12 @@ Review failure retained: `rep_rev_default_c3bad93c-8f5b-42c0-af50-aeffa43af882` 
 
 ### Governance continuation binding (2026-10-16 15:02)
 Current run `pi_run_20261016_150206_1862343`, change `002-policy`, package `default`, epoch1. Continue FR-GOV01..05 and TASK-GOV/R01 only; previous run identity/rejection remain history, not current gate evidence. Previous repair resume returned no result; current diff still lacks job guard and contains eval. No commit/remote mutation yet. Fresh executor and independent reviewer provide current-contract evidence. Source scope unchanged, no production/local Go or web compile. All80maintenance/oldworktree preserved. Permissions blocker remains to verify with actual authorized write, no credential change.
+
+## Governance Execution Completion (2026-10-16)
+- CI & Dependabot restricted to dev branch. Entry job test-and-build protected against non-dev manual dispatch.
+- Tested and reviewed dev commit `971835fc4f936c9c4dec26778ceb631f82caeb08` succeeded in GitHub Actions Run 38866783340 (all 3 jobs success).
+- Prerelease `prelease-971835f` published with binary, checksum, and metadata.
+- Main branch successfully fast-forwarded to `971835fc4f936c9c4dec26778ceb631f82caeb08` without rebuilding.
+- All 8 obsolete remote refs (3 temp branches + 5 old dependabot frontend branches) archived to private bundle `/tmp/csp-branch-governance-150206/archive/obsolete_refs_archive.bundle` (SHA-256 `2e555c5c24803e2aa431d74b8590194888405de6e394fdbd67e3639e47f84ffd`) and deleted via safe force-with-lease. Old PRs #19..#23 closed.
+- Dependabot automatically reopened 5 modern PRs targeting dev (#24..#28) against unified workflow.
+- Branch protection and auto-delete settings attempted and returned HTTP 403 (current PAT lacks Administration:write); explicitly documented as environment limitation, no unauthorized token tampering.

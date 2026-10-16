@@ -2,7 +2,7 @@
 # Verify immutable image identity, not registry visibility. Docker manages auth.
 set -euo pipefail
 
-EXPECTED_PACKAGE="${EXPECTED_PACKAGE:-ghcr.io/einck0/csp-runtime-private}"
+EXPECTED_PACKAGE="${EXPECTED_PACKAGE:-ghcr.io/einck0/clash-sub-parser}"
 IMAGE_REF="${CSP_IMAGE:-}"
 EXPECTED_REVISION="${EXPECTED_REVISION:-}"
 CHECK_ONLY=false
@@ -11,7 +11,7 @@ DRY_RUN=false
 usage() {
   cat <<'EOF'
 用法: scripts/cloud-delivery/preflight-pull.sh --image <package@sha256:64hex> --expected-revision <40或64hex> [选项]
-  --expected-package <pkg>  期望的 ghcr.io/einck0 包（默认 csp-runtime-private，历史名称不代表私有）
+  --expected-package <pkg>  期望的 ghcr.io/einck0 包（默认 clash-sub-parser）
   --check-only             只验证本地镜像 identity；缺失即失败，不访问注册表
   --dry-run                仅检查参数格式，不拉取、不宣称镜像验证成功
   -h, --help               显示帮助

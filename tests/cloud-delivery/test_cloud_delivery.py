@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 SYNTHETIC_IMAGE = (
-    "ghcr.io/einck0/csp-runtime-private@"
+    "ghcr.io/einck0/clash-sub-parser@"
     "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 )
 SYNTHETIC_REVISION = "0123456789abcdef0123456789abcdef01234567"
@@ -268,7 +268,7 @@ class TestPreflightPullLogic(unittest.TestCase):
             [
                 script,
                 "--image",
-                "ghcr.io/einck0/csp-runtime-private:latest",
+                "ghcr.io/einck0/clash-sub-parser:latest",
                 "--expected-revision",
                 SYNTHETIC_REVISION,
             ],
@@ -285,7 +285,7 @@ class TestPreflightPullLogic(unittest.TestCase):
             [
                 script,
                 "--image",
-                "ghcr.io/einck0/csp-runtime-private@sha256:1234abcd",
+                "ghcr.io/einck0/clash-sub-parser@sha256:1234abcd",
                 "--expected-revision",
                 SYNTHETIC_REVISION,
             ],
@@ -299,7 +299,7 @@ class TestPreflightPullLogic(unittest.TestCase):
             [
                 script,
                 "--image",
-                "ghcr.io/einck0/csp-runtime-private@sha256:" + "z" * 64,
+                "ghcr.io/einck0/clash-sub-parser@sha256:" + "z" * 64,
                 "--expected-revision",
                 SYNTHETIC_REVISION,
             ],
@@ -308,13 +308,13 @@ class TestPreflightPullLogic(unittest.TestCase):
         )
         self.assertEqual(res2.returncode, 1)
 
-    def test_reject_legacy_public_package(self):
+    def test_reject_legacy_package(self):
         script = str(REPO_ROOT / "scripts/cloud-delivery/preflight-pull.sh")
         result = subprocess.run(
             [
                 script,
                 "--image",
-                "ghcr.io/einck0/clash-sub-parser@sha256:" + "a" * 64,
+                "ghcr.io/einck0/csp-runtime-private@sha256:" + "a" * 64,
                 "--expected-revision",
                 SYNTHETIC_REVISION,
             ],
@@ -411,7 +411,7 @@ class TestPreflightPullLogic(unittest.TestCase):
                 self.assertNotIn('镜像确权验证通过', result.stdout)
 
     def test_foreign_owner_cannot_override_expected_package(self):
-        result, calls = self.run_docker_fixture(extra_args=("--expected-package", "ghcr.io/attacker/csp-runtime-private"))
+        result, calls = self.run_docker_fixture(extra_args=("--expected-package", "ghcr.io/attacker/clash-sub-parser"))
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('owner/包名不合规', result.stderr)
         self.assertEqual(calls, [])

@@ -15,7 +15,7 @@ import shutil
 import subprocess
 import tempfile
 
-IMAGE = "ghcr.io/einck0/csp-runtime-private"
+IMAGE = "ghcr.io/einck0/clash-sub-parser"
 BINARY = "csp-linux-amd64"
 CHECKSUM = BINARY + ".sha256"
 METADATA = "release-metadata.json"

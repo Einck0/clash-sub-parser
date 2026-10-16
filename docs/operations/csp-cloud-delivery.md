@@ -10,8 +10,9 @@
 
 ### 当前验收边界
 
-- 沿用 `ghcr.io/einck0/csp-runtime-private`，名字只是历史名称，不再声称私有。允许匿名拉取；无需新包或修改仓库 visibility/变量/凭据。
-- 发布不依赖 OWNER_PAT 或 GitHub Packages visibility API；使用既有 Actions `GITHUB_TOKEN` 实际 push/read 证明权限。先前私有门禁阻断与通知属于被新授权覆盖的历史事实，不再作为当前阻断。
+- 镜像命名全面标准化为公开包 `ghcr.io/einck0/clash-sub-parser`。先前过渡期使用的历史包名 `ghcr.io/einck0/csp-runtime-private` 及其人工私有门禁已废除。CSP 容器镜像与源码均公开，不包含任何机密或敏感数据（数据库与 Token 为外部挂载/环境变量传入），严禁擅自删除历史公开包。
+- 镜像发布允许匿名拉取；发布不依赖 OWNER_PAT 或 GitHub Packages visibility API；使用既有 Actions `GITHUB_TOKEN` 实际 push/read 证明权限。先前私有门禁阻断与通知属于被新授权覆盖的历史事实，不再作为当前阻断。
+- 宿主机零编译红线：宿主机严禁执行 `go build`、`go test`、`npm run build`、`npm test` 等重型编译操作。生产环境严格通过预构建容器镜像拉取部署。
 - `auto_test` 尚未完整实现，不能把兼容导入或本地绿色测试称作完整产品验收。
 - 本地合成预览可由当前源码构建，但不证明云镜像已发布或已上线。独立 reviewer、主脑风险核对、适用 Critic、真实云构建/push/pull/digest 和生产验收仍是独立步骤。
 
@@ -34,6 +35,30 @@
 分支治理与触发门禁收敛：仅 `dev` 分支的 push 与 PR（指向 `dev`）在云端触发构建与检查；`main`、`task/*`、`release/*`、`cloud-build/*` 及 `v*` tag 均已彻底退出 CI 触发入口。`workflow_dispatch` 即使从其他 ref 手动发起，`test-and-build` 入口 job 也会跳过；只有 `dev` ref 执行检查，并仅在 `publish_release='true'` 时开启镜像发布。`main` 分支的晋级通过严格的正常 Fast-Forward 将已完全通过测试的 `dev` SHA 推进，复用同一 commit 已由 GitHub Actions（App ID 15368）跑出的 `Backend & Frontend Checks` 绿标，不在 `main` 上重复编译，避免检查死锁。移除了 `paths-ignore` 过滤规则（历史上 Tag push 不应用 `paths-ignore`，现 dev CI 全量无过滤运行，确保纯文档改动亦能获得必选检查状态）。删除旧 `ENABLE_CSP_GHCR_PUBLISH` 私有流程开关，不修改远端变量。只有 publish job 具备 `packages: write`，只有实际 prerelease job 具备 `contents: write`；其余/default 为 contents read。正常 Actions `GITHUB_TOKEN` 执行 gh create/download，无本机 token/OWNER_PAT 前提。发布 concurrency 不取消在途 release。`prelease-*` 不触发循环流水线。
 
 本地开发 [Dockerfile](../../Dockerfile) 是独立多阶段构建入口，使用官方 npm HTTPS lockfile、构建 tags 和同样的 platform.Commit/platform.BuildDate 链接参数（以 COMMIT_SHA/BUILD_DATE 构建参数传入），不经 main 别名或 init 动态覆盖；它不是生产现场编译入口。
+
+### 开源行业标杆对照（Prior Art）
+
+针对构建、容器设计与交付模型，对比成熟的 Go + Web 全栈开源项目（Gitea、Mihomo / Sing-box、Caddy），确立标准交付规范：
+
+| 标杆项目 | Dockerfile 设计 | CI/CD 构建流 | 镜像命名与可见性 | 宿主机部署模型 |
+| :--- | :--- | :--- | :--- | :--- |
+| **Gitea** (Go + Vue) | 多阶段 `Dockerfile` (Node 构建前端 -> Go 构建二进制 -> Alpine/Rootless 运行时，固定 UID/GID)。 | GitHub Actions 编译二进制发布 Release，构建多架构容器推送至 GHCR / Docker Hub。 | 公开 `ghcr.io/go-gitea/gitea`，标签 `:latest`、`:version`、`:dev`。无 `-private` 命名。 | 服务器通过 Docker Compose 拉取预构建镜像。生产宿主绝不执行本地编译。 |
+| **Mihomo / Sing-box** (Go 核心 + Web 控制台) | 独立容器用多阶段构建；CI 构建发布二进制后单阶段打包镜像以降低 Runner 负载。 | GitHub Actions 响应 `dev`/`main` 推送，跑全量测试矩阵，发布 prerelease 与标签。 | 公开 `ghcr.io/metacubex/mihomo`、`ghcr.io/sagernet/sing-box`。 | 终端与服务器拉取制品或镜像，零临时远端分支蔓延。 |
+| **Caddy** (Go + 插件) | 多阶段 `builder` + 极简 `alpine` 运行时。自定义构建在本地或官方镜像中使用 `xcaddy`。 | CI 自动化构建 Release，发布带 SHA256 校验和的二进制并推送官方镜像。 | 公开 `caddy:latest`、`caddy:alpine`。 | 生产拉取预构建镜像或官方二进制。 |
+| **CSP（标准化交付）** | 双 Dockerfile 架构：多阶段 `Dockerfile` 供独立复现；轻量 `Dockerfile.runtime` 供 CI 制品直装。 | 推送 `dev` 触发 CI，测试一次性静态二进制，直装镜像推送到 GHCR，发布 Prerelease。废除废弃工作流 `pages.yml`。 | 标准化公开包 `ghcr.io/einck0/clash-sub-parser`，标签 `:sha-<fullsha>`、`:prelease-<shortsha>`。 | 宿主机严格拉取预构建镜像（零本地编译）。开发者直推 `dev`，绝不在 origin 创建临时分支。 |
+
+### 双 Dockerfile 设计原则
+
+1. **标准多阶段 `Dockerfile`**：
+   - 包含完整三阶段（`node:22-alpine` -> `golang:1.27.1-alpine` -> `alpine:3.20`）。
+   - 为开发者或外部自动化构建系统提供“开箱即用”的标准容器构建能力，零外部工具链依赖。
+2. **轻量 CI 制品打包 `Dockerfile.runtime`**：
+   - 基于 `alpine:3.20`，直接 `COPY` CI Runner 中已经过 vet、单元测试与 static ELF 校验的 `bin/csp-linux-amd64`。
+   - 避免在容器构建阶段二次执行 `npm ci && npm run build` 和 `go build`，消除 Runner 负载冗余，并保证“测试的二进制”与“容器内的二进制”100% 字节一致。
+3. **一致的运行时安全约束**：
+   - 两个 Dockerfile 共享相同的运行时特征：Alpine 3.20 基础镜像、非 root 用户 `appuser` (UID/GID 10001:10001)、工作目录 `/app`、数据卷 `/data` (权限 750)、服务端口 18080 以及 `/healthz` 探针。
+4. **废除冗余工作流**：
+   - 彻底删除历史废弃的 `.github/workflows/pages.yml`。CSP 前端控制台直接通过 Go `//go:embed` 嵌入二进制并在端口 18080 提供服务，无需且不再维护独立的静态 GitHub Pages。
 
 ### 本地验证
 
@@ -67,7 +92,7 @@ scripts/cloud-delivery/preflight-pull.sh --image "$APPROVED_IMAGE_DIGEST" \
   --expected-revision "$REVIEWED_SOURCE_SHA" --check-only
 ```
 
-`--dry-run` 只验证格式，绝不声称已验证镜像。默认包继续使用历史名称；`ghcr.io/einck0/clash-sub-parser` 不作为默认发布目标，严禁擅自删除历史公开包。需要其他同 owner 包时必须显式传 `--expected-package`，不修改默认发布 scope。
+`--dry-run` 只验证格式，绝不声称已验证镜像。默认包使用标准化公开名称 `ghcr.io/einck0/clash-sub-parser`，历史名称 `ghcr.io/einck0/csp-runtime-private` 已废弃，严禁擅自删除历史公开包。需要其他同 owner 包时必须显式传 `--expected-package`，不修改默认发布 scope。
 
 严禁向用户索取明文 Token。如普通 Docker 拉取需要凭据，由操作者在安全终端自行使用 `docker login --password-stdin`（拉取最小 `read:packages`），不由本脚本配置。Docker config 的 base64 不是加密，文件应为 0600；不读取、打印或提取现存凭据，不将其写进报告。
 

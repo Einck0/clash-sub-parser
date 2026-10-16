@@ -227,7 +227,7 @@ jobs:
       - name: Compute image tags
         id: meta
         env:
-          TARGET_IMAGE_NAME: ghcr.io/einck0/csp-runtime-private
+          TARGET_IMAGE_NAME: ghcr.io/einck0/clash-sub-parser
         run: |
           COMMIT_SHA="${{ github.sha }}"
           SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
@@ -265,7 +265,7 @@ jobs:
           IMAGE_DIGEST: ${{ needs.test-and-build.outputs.image_digest || steps.build-push.outputs.digest }}
           REUSED: ${{ needs.test-and-build.outputs.reused }}
           PRIMARY_TAG: ${{ steps.meta.outputs.primary_tag }}
-          TARGET_IMAGE_NAME: ghcr.io/einck0/csp-runtime-private
+          TARGET_IMAGE_NAME: ghcr.io/einck0/clash-sub-parser
           EXPECTED_REVISION: ${{ github.sha }}
         run: |
           set -euo pipefail

@@ -438,7 +438,7 @@ class TestWorkflowLogicAndSchema(unittest.TestCase):
         self.assertTrue(any("Verify downloaded binary source revision" in n for n in step_names))
         self.assertTrue(any("Build and push" in n for n in step_names))
         postcheck = next(s for s in steps if "Verify pushed tag digest" in s.get("name", ""))
-        self.assertEqual(postcheck['env']['TARGET_IMAGE_NAME'], 'ghcr.io/einck0/csp-runtime-private')
+        self.assertEqual(postcheck['env']['TARGET_IMAGE_NAME'], 'ghcr.io/einck0/clash-sub-parser')
         self.assertIn('preflight-pull.sh', postcheck['run'])
         self.assertIn('manifest.get("digest") == sys.argv[2]', postcheck['run'])
         self.assertIn('steps.build-push.outputs.digest', postcheck['env']['IMAGE_DIGEST'])

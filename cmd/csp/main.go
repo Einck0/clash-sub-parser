@@ -32,17 +32,6 @@ const (
 	appName = "csp"
 )
 
-// commit and buildTime are injected by release builds through -X main.*.
-var (
-	commit    = platform.Commit
-	buildTime = platform.BuildDate
-)
-
-func init() {
-	platform.Commit = commit
-	platform.BuildDate = buildTime
-}
-
 // runServe executes the long-running HTTP control plane and SPA server.
 func runServe(args []string, stdout, stderr io.Writer) int {
 	return runServeWithContext(context.Background(), args, stdout, stderr)
@@ -61,6 +50,7 @@ func serveShutdownResult(drainErr error, closeDB func()) bool {
 type serveDependencies struct {
 	shutdownTimeout      time.Duration
 	closeDBFn            func(*sql.DB) error
+	configureServices    func(*sql.DB, *applicationServices)
 	newProbeRunner       func(db *sql.DB, nodeRepo domain.NodeRepository, obsRepo domain.ProbeObservationRepository, scheduler *queue.Scheduler, runRepo domain.ProbeRunRepository, opts ...probe.DefaultRunnerOption) probe.Runner
 	observeDrainBegin    func()
 	observeDrainDecision func(drainErr error)
@@ -223,6 +213,10 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 		return 1
 	}
 
+	if deps != nil && deps.configureServices != nil {
+		deps.configureServices(db, appServices)
+	}
+
 	shutdownTimeout := 5 * time.Second
 	if deps != nil && deps.shutdownTimeout > 0 {
 		shutdownTimeout = deps.shutdownTimeout
@@ -352,7 +346,10 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 		return 1
 	}
 	if err := server.Shutdown(shutdownCtx); err != nil {
-		fmt.Fprintf(stderr, "serve: shutdown error: %v\n", err)
+		// Scheduler Stop does not wait for manual HTTP refreshes. Shutdown may
+		// leave those handlers running, so only process exit may reclaim the DB.
+		closeDBOnReturn = false
+		fmt.Fprintf(stderr, "serve: shutdown error; terminating without closing database: %v\n", err)
 		return 1
 	}
 	appServices.periodicCoordinator.Stop()

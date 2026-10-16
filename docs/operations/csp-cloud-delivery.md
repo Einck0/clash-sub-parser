@@ -4,16 +4,16 @@
 
 当前需求入口是 [002-policy 当前交付修订](../../specs/002-policy/spec.md)、[实施计划](../../specs/002-policy/plan.md) 和 [任务](../../specs/002-policy/tasks.md)。`openspec/` 仅可作为历史材料，不是当前活动规格；不要导入远端旧规格覆盖本地 Spec Kit。
 
-本地源码施工已获授权；这不等于 Git 提交、推送、发布、包 visibility 变更或生产部署授权。当前只收敛发布源与本地证据，不修改 ignored 的 owner 生产配置 `docker-compose.yml`，不触碰生产数据库、不 refresh 真实订阅、不启停生产容器。
+完整交付已取得有条件授权，包括通过全部门禁后的目标生产替换与重启。最新用户“没必要私有啊”明确允许公开镜像，撤销私有 visibility/API/匿名拒绝门禁，不撤销独立审查、编译质量、不可变制品验证与敏感数据保护。本轮只收敛发布源与本地证据，不修改 ignored 的 owner 生产配置 `docker-compose.yml`，不触碰生产数据库、不 refresh 真实订阅、不启停生产容器。
 
 已确认远端 `origin/dev` 有云交付与工具链历史，本地有尚未提交的业务改动。导入正规交付文件不表示已合并分支。后续必须先完成独立审查、按明确授权提交源码，再在独立 integration tree 正常合并并保留 `origin/dev` 祖先；不在 dirty 工作树 merge/rebase，不 force push。具体提交、双亲与归档冲突处理记录在本次交付的 `integration-plan.json`，不把旧 SHA 写成未来发布版本。
 
-### 当前外部阻断
+### 当前验收边界
 
-- 新项目交付授权已取得，不再等待旧“包名审批”；生产替换与重启仍未授权。
-- 先前检查中 `gh auth` 失败，且名为 `ghcr.io/einck0/csp-runtime-private` 的包匿名可读。**名字含 private 不证明私有**；未满足门禁前不发布、不拉取冒充私有制品。此安全问题已由主脑通知用户，本手册不要求重新登录、索取凭据或更改可见性。
+- 沿用 `ghcr.io/einck0/csp-runtime-private`，名字只是历史名称，不再声称私有。允许匿名拉取；无需新包或修改仓库 visibility/变量/凭据。
+- 发布不依赖 OWNER_PAT 或 GitHub Packages visibility API；使用既有 Actions `GITHUB_TOKEN` 实际 push/read 证明权限。先前私有门禁阻断与通知属于被新授权覆盖的历史事实，不再作为当前阻断。
 - `auto_test` 尚未完整实现，不能把兼容导入或本地绿色测试称作完整产品验收。
-- 本地合成预览可以由当前源码构建，不依赖不合格云镜像；它不证明已上线或云私有门禁通过。独立 reviewer、主脑风险核对和适用 Critic 是后续独立步骤。
+- 本地合成预览可由当前源码构建，但不证明云镜像已发布或已上线。独立 reviewer、主脑风险核对、适用 Critic、真实云构建/push/pull/digest 和生产验收仍是独立步骤。
 
 ## 2. Same-SHA 构建链与官方入口
 
@@ -22,46 +22,54 @@
 1. 固定 checkout `${{ github.sha }}`；Node 22 下 `web/npm ci --include=dev`、type-check、unit tests 和 build。
 2. 清空 **CI runner 内** `internal/webassets/dist`，完整复制该次 `web/dist`，避免混入旧 bundle。不要在正式工作树提前刷新 embedded assets。
 3. 按 `go.mod` 设置 Go，执行 mod verify、带 `with_quic with_wireguard` 的 vet/tests，安装 CI 测试所需协议二进制、准备合成 legacy archive。
-4. `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags "with_quic with_wireguard"` 仅编译一次到 `bin/csp-linux-amd64`；通过 `-X main.commit=<sha> -X main.buildTime=<RFC3339>` 接入实际 CLI/platform 元数据，并检查 `--version`。
+4. `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags "with_quic with_wireguard"` 仅编译一次到 `bin/csp-linux-amd64`；通过 `-X clash-sub-parser/internal/platform.Commit=<sha> -X clash-sub-parser/internal/platform.BuildDate=<RFC3339>` 接入实际 CLI/platform 元数据，并检查 `--version`。
 5. 校验 static ELF（readelf 失败或存在 INTERP 都失败），生成 `csp-linux-amd64.sha256`、上传 artifact。
-6. publish job 下载并验算同一个 binary，交给 [Dockerfile.runtime](../../Dockerfile.runtime)；此镜像不包含 Go/Node 编译过程，不重复构建前端或 Go。
+6. publish job 下载并验算同一个 binary，再检查 static ELF 与 `--version` 的同 SHA；交给 [Dockerfile.runtime](../../Dockerfile.runtime)。此镜像不包含 Go/Node 编译过程，不重复构建前端或 Go；只 COPY 编译后二进制，不带配置、数据库、维护清单或秘密。
 7. OCI `COMMIT_SHA`/`BUILD_DATE` 表示源码版本和镜像打包时间，二进制 buildTime 为上一步实际编译时间；两者不必相等。镜像绑定 `sha-<完整SHA>` 和 run 标签，交付使用 `@sha256:<digest>`，不使用可变 latest。
 
-普通 `main`/`dev` push 与 PR 只 checks；发布必须有 release/tag/明确 workflow_dispatch 触发，且仓库变量 `ENABLE_CSP_GHCR_PUBLISH=true` 和私有门禁全部满足。发布 concurrency 不取消在途 release。Tag push 不应用 `paths-ignore`；参考 [GitHub workflow trigger 语义](https://docs.github.com/en/actions/writing-workflows/workflow-syntax-for-github-actions#onpushpull_requestpull_request_targetpathspaths-ignore)。
+`dev` push 自动执行完整 Go/web 检查与编译；只有 `test-and-build` 成功，`publish-runtime` 才下载该 run 的同一个 binary/SHA256 artifact，构建并 push 公开允许的历史包、真实 pull 不可变 digest 并验证 OCI revision。随后仅 `promote-prelease` job 创建 GitHub **prerelease entity** `prelease-<tested-dev-SHA前7位>`，显示名相同、target 为完整 `${{ github.sha }}`；不创建 `prelease`/`prerelease` 分支。附加原 binary、原 SHA256 和 `release-metadata.json`（source_sha、repository、tag、artifact、binary_sha256、image完整@digest、image_digest、run_id/run_attempt/run_url）。不重编译、不自动切换生产。
 
-本地开发 [Dockerfile](../../Dockerfile) 是独立多阶段构建入口，使用官方 npm HTTPS lockfile、构建 tags 和同样的 commit/buildTime 参数；它不是生产现场编译入口。
+同 SHA 的 dev workflow 全链串行且不取消在途发布，重跑仍执行 Go/web 检查；若已有完整 prerelease，则先验证精确 tag→commit、target SHA、资产清单、binary/SHA256 和 metadata，复用原 binary/digest/run identity，不重建或覆盖 immutable 资产。随后重新真实 pull/OCI 验证。短 SHA 冲突、孤立 tag、不完整 release、API 权限/服务错误均 fail-closed，保留现场，不能 `--clobber` 或移动 tag。完整性失败不能晋级；首次发布失败产生的残留需人工核查，流水线不自动删除重试。
+
+普通 `main`/`cloud-build/*` push 与 PR 只 checks；保留 `release/**`、`v*` tag 或 `workflow_dispatch` 的 `publish_release=true` 显式镜像发布入口，但只有成功 dev push 创建上述 prerelease。删除旧 `ENABLE_CSP_GHCR_PUBLISH` 私有流程开关，不修改远端变量。只有 publish job 具备 `packages: write`，只有实际 prerelease job 具备 `contents: write`；其余/default 为 contents read。正常 Actions `GITHUB_TOKEN` 执行 gh create/download，无本机 token/OWNER_PAT 前提。发布 concurrency 不取消在途 release。`prelease-*` 不匹配 `v*` tag trigger，避免循环；Tag push 不应用 `paths-ignore`，参考 [GitHub workflow trigger 语义](https://docs.github.com/en/actions/writing-workflows/workflow-syntax-for-github-actions#onpushpull_requestpull_request_targetpathspaths-ignore)。
+
+本地开发 [Dockerfile](../../Dockerfile) 是独立多阶段构建入口，使用官方 npm HTTPS lockfile、构建 tags 和同样的 platform.Commit/platform.BuildDate 链接参数（以 COMMIT_SHA/BUILD_DATE 构建参数传入），不经 main 别名或 init 动态覆盖；它不是生产现场编译入口。
 
 ### 本地验证
 
 ```bash
-python3 -B -m unittest discover -s tests/cloud-delivery -p 'test_*.py' -v
+# 本机轻量验证（不触发真实 Go 双 build 用例）
+python3 -B -m unittest discover -s tests/cloud-delivery -p 'test_cloud_delivery.py' -v
 python3 -B .github/scripts/test_ci_synthetic.py
 # 必须显式使用 scratch 路径；现存 archive 会被拒绝覆盖。
 python3 -B .github/scripts/setup_test_archive.py "${TMPDIR:-/tmp}/csp-synthetic-archive.db"
-go build ./...
-go vet -tags 'with_quic with_wireguard' ./...
+# tests/cloud-delivery/test_build_metadata.py 仍保留，执行真实 CI/Docker Go 双 build；
+# 本机按用户要求不运行。此 metadata 回归及 Go/web 编译、vet、测试均在 dev Actions 执行。
 ```
 
-Synthetic CI suite 使用 Python unittest/PyYAML、Compose config 和 buildx definition check；registry 响应全部 mock，不调用真实发布 API。Compose config 不启动服务。真实 archive 不是测试输出路径；旧 Go archive tests 仍有历史固定路径约束，只在已具备隔离测试宿主时运行，不用本机真实备份填造夹具。
+Synthetic CI suite 使用 Python unittest/PyYAML、Compose config 和 buildx definition check；registry/GitHub prerelease 响应全部 mock，不调用真实发布 API。覆盖 dev 成功依赖、PR/失败不发布、同 artifact/exact-SHA、不可变重跑、metadata digest 与拒绝覆盖；不把模拟权限视为云端实测。Compose config 不启动服务。真实 archive 不是测试输出路径；旧 Go archive tests 仍有历史固定路径约束，只在已具备隔离测试宿主时运行，不用本机真实备份填造夹具。
 
-## 3. 私有门禁：双证明且 fail-closed
+## 3. 公开允许的不可变 identity 门禁（fail-closed）
 
-[check_ghcr_private_gate.py](../../.github/scripts/check_ghcr_private_gate.py) 必须同时验证：
+Active CI 不调用 [check_ghcr_private_gate.py](../../.github/scripts/check_ghcr_private_gate.py)。该文件及其 mock 测试仅保留历史私有工具语义，不代表当前发布策略，也不被改成无条件成功。
 
-- 官方 GitHub Packages API 返回 `visibility=private`；API 不可用、鉴权不足、不明状态一律阻断。初次创建只有完整分页证明目标包不存在后才可按既有门禁继续。
-- 匿名 manifest 访问（包括 401 challenge 后匿名 token 重试）仍被拒绝；200 即失败，不因包名或登录成功放行。
-- push 后 digest 非空、格式正确，并重新验证官方 API 私有性及匿名拒绝。
-
-`ghcr.io/einck0/clash-sub-parser` 是历史公开包：停止向该公开包推送，严禁擅自删除历史公开包。不得用 public 发布或跳过 API 来“修复”门禁。
-
-[preflight-pull.sh](../../scripts/cloud-delivery/preflight-pull.sh) 验证包名、完整 revision 和不可变 digest 后才允许授权拉取：
+1. Buildx push 必须产生 `sha256:<64hex>` digest，远端 primary tag 的 manifest digest 必须与它相等。
+2. [preflight-pull.sh](../../scripts/cloud-delivery/preflight-pull.sh) 约束固定 owner `einck0`、预期包、完整 source revision 与不可变引用，拒绝 mutable tag/错误 owner/短 digest。
+3. 真实 `docker pull --platform linux/amd64 package@digest` 后解析 Docker inspect JSON，必须是单镜像、linux/amd64、`RepoDigests` 精确包含完整 package@digest，且 OCI `org.opencontainers.image.revision` 等于预期 source SHA。其他 label 中出现 digest 不算证明；缺 revision/拉取失败均失败。
+4. PUBLIC/匿名 pull 成功不是 failure。Docker 使用匿名访问或正常 credential helper/config；脚本不读取 config 原文或提取 token，不要求私有 API/PAT。
 
 ```bash
+# 显式授权的实际拉取与 identity 验证，不启动容器
+scripts/cloud-delivery/preflight-pull.sh --image "$APPROVED_IMAGE_DIGEST" \
+  --expected-revision "$REVIEWED_SOURCE_SHA"
+# 已缓存镜像的本地 identity 验证；缺失或不一致即非零
 scripts/cloud-delivery/preflight-pull.sh --image "$APPROVED_IMAGE_DIGEST" \
   --expected-revision "$REVIEWED_SOURCE_SHA" --check-only
 ```
 
-`--check-only` 的 2/BLOCKED 不是成功。后续凭据若确需配置，由用户在安全终端执行：Classic PAT 最小 `read:packages`，官方 API 访问还须实际权限；`OWNER_PAT` 是配置名，不要求聊天发送明文。严禁向用户索取明文 Token。Docker config 的 base64 不是加密，文件应为 0600；不读取或打印现存凭据、不将其写进报告。脚本的显式 `--configure-pat` 会写登录配置，仅可另获授权后执行。
+`--dry-run` 只验证格式，绝不声称已验证镜像。默认包继续使用历史名称；`ghcr.io/einck0/clash-sub-parser` 不作为默认发布目标，严禁擅自删除历史公开包。需要其他同 owner 包时必须显式传 `--expected-package`，不修改默认发布 scope。
+
+严禁向用户索取明文 Token。如普通 Docker 拉取需要凭据，由操作者在安全终端自行使用 `docker login --password-stdin`（拉取最小 `read:packages`），不由本脚本配置。Docker config 的 base64 不是加密，文件应为 0600；不读取、打印或提取现存凭据，不将其写进报告。
 
 ## 4. Compose 职责与不变量
 
@@ -101,4 +109,4 @@ scripts/cloud-delivery/run-isolated.sh --image "$APPROVED_IMAGE_DIGEST" \
 
 SQLite WAL 不能用裸文件 copy 当在线备份：另获授权后用容器内 sqlite3 `.backup` 生成一致性快照，在**相同容器路径命名空间**检查非空、`PRAGMA schema_version;`、`PRAGMA integrity_check;` 为 ok、`PRAGMA foreign_key_check;` 为空。不要用宿主 `test -s` 检查容器内路径，也不要自动写入不存在/未挂载的备份目录。
 
-默认回滚是将 owner 配置恢复到前一已知良好 digest 并 `up -d --no-build`，仅当 schema 向后兼容时适用。确需数据库恢复时必须先停目标服务、保存故障 DB/WAL/SHM、验证备份、按已核实挂载点恢复与权限，再启动旧 digest；不要在在线服务上直接移除 WAL/SHM。恢复后核验 healthz、readyz 与关键数据行为。未获明确生产写入与重启授权时只交计划，不执行这些命令。
+默认回滚是将 owner 配置恢复到前一已知良好 digest 并 `up -d --no-build`，仅当 schema 向后兼容时适用。确需数据库恢复时必须先停目标服务、保存故障 DB/WAL/SHM、验证备份、按已核实挂载点恢复与权限，再启动旧 digest；不要在在线服务上直接移除 WAL/SHM。恢复后核验 healthz、readyz 与关键数据行为。目标生产写入与重启已有完整交付的有条件授权，但只有独立工程/视觉门禁、官方云构建 image/digest、owner 配置及远端历史前提均核实后才可执行；本轮尚未发布或部署，不能用本地构建替代云制品验收。

@@ -42,7 +42,12 @@ __pycache__
 *.test
 test/
 
-# Local databases & logs
+# Local databases, maintenance manifests & secrets (never part of build context)
+**/data/maintenance
+**/secrets
+*.secret
+*.pem
+*.key
 *.log
 *.db
 *.sqlite

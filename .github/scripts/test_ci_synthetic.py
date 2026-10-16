@@ -8,7 +8,7 @@ Executes:
 3. GitHub Actions workflow schema & logic validation (.github/workflows/ci.yml)
 4. Dockerfile.runtime contract validation (no compilers, non-root, OCI labels)
 5. SHA binding & checksum manifest verification
-6. Strict Private registry probing HTTP mock suite:
+6. Historical private-tool HTTP mock suite (not an active release policy):
    - Direct unauthenticated 200 manifest -> MUST reject (Fail-Closed)
    - Anonymous bearer challenge token retrieval returning 200 -> MUST reject (Fail-Closed)
    - Missing/false ENABLE_CSP_GHCR_PUBLISH variable -> FAIL-CLOSED
@@ -36,6 +36,9 @@ import urllib.error
 import yaml
 from io import BytesIO
 from unittest.mock import MagicMock, patch
+from pathlib import Path
+
+import promote_prelease as promotion
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 SCRIPTS_DIR = os.path.join(REPO_ROOT, ".github/scripts")
@@ -53,6 +56,7 @@ class TestPythonAndShellSyntax(unittest.TestCase):
             os.path.join(SCRIPTS_DIR, "annotate_go_test.py"),
             os.path.join(SCRIPTS_DIR, "setup_test_archive.py"),
             os.path.join(SCRIPTS_DIR, "check_ghcr_private_gate.py"),
+            os.path.join(SCRIPTS_DIR, "promote_prelease.py"),
         ]
         for script_path in scripts:
             with self.subTest(script=os.path.basename(script_path)):
@@ -115,6 +119,9 @@ class TestWorkflowLogicAndSchema(unittest.TestCase):
 
         push_tags = on["push"].get("tags", [])
         self.assertTrue(any("v*" in t for t in push_tags), "Tags v* must be present for release trigger")
+        import fnmatch
+        self.assertFalse(any(fnmatch.fnmatch('prelease-0123456', pattern) for pattern in push_tags),
+                         'Prerelease tag must not loop back into CI')
 
     def test_concurrency_and_permissions(self):
         jobs = self.wf.get("jobs", {})
@@ -159,6 +166,48 @@ class TestWorkflowLogicAndSchema(unittest.TestCase):
         self.assertIn("pull_request", condition, "Condition must exclude pull_request")
         self.assertIn("refs/tags/v", condition, "Condition must support v* tags")
         self.assertIn("refs/heads/release/", condition, "Condition must support release/* branches")
+        self.assertIn("needs.test-and-build.result == 'success'", condition)
+        self.assertIn("github.event_name != 'pull_request'", condition)
+        self.assertIn("(github.event_name == 'push' && github.ref == 'refs/heads/dev')", condition)
+        self.assertNotIn('always()', condition)
+
+    def test_dev_promotion_is_job_scoped_and_uses_same_artifact(self):
+        jobs = self.wf['jobs']
+        self.assertEqual(self.wf['permissions'], {'contents': 'read'})
+        self.assertEqual(jobs['publish-runtime']['permissions'], {'contents': 'read', 'packages': 'write'})
+        promote = jobs['promote-prelease']
+        self.assertEqual(promote['permissions'], {'contents': 'write'})
+        self.assertCountEqual(promote['needs'], ['test-and-build', 'publish-runtime'])
+        for clause in ("github.event_name == 'push'", "github.ref == 'refs/heads/dev'",
+                       "needs.test-and-build.result == 'success'", "needs.publish-runtime.result == 'success'"):
+            self.assertIn(clause, promote['if'])
+        self.assertNotIn('always()', promote['if'])
+        self.assertFalse(promote['concurrency']['cancel-in-progress'])
+        self.assertIn('github.sha', self.wf['concurrency']['group'])
+        self.assertFalse(self.wf['concurrency']['cancel-in-progress'])
+        for job in jobs.values():
+            for step in job['steps']:
+                self.assertFalse(step.get('continue-on-error', False))
+        downloads = [next(step for step in jobs[name]['steps'] if 'download-artifact' in step.get('uses', ''))
+                     for name in ('publish-runtime', 'promote-prelease')]
+        self.assertEqual(downloads[0]['with'], downloads[1]['with'])
+        self.assertEqual(downloads[0]['with'], {'name': 'csp-linux-amd64', 'path': 'bin'})
+        promote_runs = '\n'.join(step.get('run', '') for step in promote['steps'])
+        self.assertIn('promote_prelease.py publish', promote_runs)
+        for forbidden in ('go build', 'npm ', '--clobber', 'git push', 'docker compose'):
+            self.assertNotIn(forbidden, promote_runs)
+        publish = promote['steps'][-1]
+        self.assertEqual(publish['env']['IMAGE_DIGEST'], '${{ needs.publish-runtime.outputs.image_digest }}')
+        self.assertEqual(publish['env']['GH_TOKEN'], '${{ github.token }}')
+        checks = jobs['test-and-build']['steps']
+        build = next(step for step in checks if step.get('name') == 'Build pure-static Go binary')
+        self.assertEqual(build['if'], "steps.reuse.outputs.reused != 'true'")
+        metadata_test = next(step for step in checks if step.get('name') == 'Run real build-entry metadata regression (cloud only)')
+        self.assertIn("-p 'test_build_metadata.py'", metadata_test['run'])
+        reuse = next(step for step in checks if step.get('id') == 'reuse')
+        self.assertEqual(reuse['if'], "github.event_name == 'push' && github.ref == 'refs/heads/dev'")
+        image_build = next(step for step in jobs['publish-runtime']['steps'] if step.get('id') == 'build-push')
+        self.assertEqual(image_build['if'], "needs.test-and-build.outputs.reused != 'true'")
 
     def test_checks_job_steps(self):
         steps = self.wf["jobs"]["test-and-build"].get("steps", [])
@@ -196,17 +245,157 @@ class TestWorkflowLogicAndSchema(unittest.TestCase):
         step_names = [s.get("name", "") for s in steps]
         self.assertTrue(any("Download" in n for n in step_names))
         self.assertTrue(any("Verify binary sha256" in n for n in step_names))
-        self.assertTrue(any("Pre-publish GHCR" in n for n in step_names))
+        self.assertTrue(any("Verify downloaded binary source revision" in n for n in step_names))
         self.assertTrue(any("Build and push" in n for n in step_names))
-        self.assertTrue(any("Verify image digest" in n for n in step_names))
+        postcheck = next(s for s in steps if "Verify pushed tag digest" in s.get("name", ""))
+        self.assertEqual(postcheck['env']['TARGET_IMAGE_NAME'], 'ghcr.io/einck0/csp-runtime-private')
+        self.assertIn('preflight-pull.sh', postcheck['run'])
+        self.assertIn('manifest.get("digest") == sys.argv[2]', postcheck['run'])
+        self.assertIn('steps.build-push.outputs.digest', postcheck['env']['IMAGE_DIGEST'])
+        self.assertIn('github.sha', postcheck['env']['EXPECTED_REVISION'])
+        serialized = json.dumps(self.wf)
+        for revoked in ('check_ghcr_private_gate.py', 'OWNER_PAT', 'ENABLE_CSP_GHCR_PUBLISH'):
+            self.assertNotIn(revoked, serialized, 'Revoked private policy must not remain in active CI')
+        login = next(s for s in steps if 'docker/login-action' in s.get('uses', ''))
+        self.assertEqual(login['with']['password'], '${{ secrets.GITHUB_TOKEN }}')
+        build = next(s for s in steps if 'docker/build-push-action' in s.get('uses', ''))
+        self.assertTrue(build['with']['push'])
+        self.assertEqual(build['with']['file'], './Dockerfile.runtime')
 
-        # Ensure image name is strictly locked to approved private namespace
-        precheck_step = next(s for s in steps if "Pre-publish GHCR" in s.get("name", ""))
-        self.assertIn(
-            "ghcr.io/einck0/csp-runtime-private",
-            precheck_step.get("env", {}).get("TARGET_IMAGE_NAME", ""),
-            "Target image name must be strictly locked to approved private namespace",
-        )
+
+class TestImmutableDevPrerelease(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.directory = Path(self.temporary.name)
+        self.revision = '0123456789abcdef0123456789abcdef01234567'
+        self.tag = 'prelease-0123456'
+        self.repository = 'einck0/clash-sub-parser'
+        self.image_digest = 'sha256:' + 'a' * 64
+        self.payload = b'synthetic binary, never executed'
+        self.checksum = hashlib.sha256(self.payload).hexdigest()
+        (self.directory / promotion.BINARY).write_bytes(self.payload)
+        (self.directory / promotion.CHECKSUM).write_text(f'{self.checksum}  {promotion.BINARY}\n')
+        self.metadata = {
+            'schema': 1, 'repository': self.repository, 'source_sha': self.revision, 'tag': self.tag,
+            'artifact': promotion.BINARY, 'binary_sha256': self.checksum,
+            'image': f'{promotion.IMAGE}@{self.image_digest}', 'image_digest': self.image_digest,
+            'run_id': '1234', 'run_attempt': '1',
+            'run_url': f'https://github.com/{self.repository}/actions/runs/1234',
+        }
+        self.release = {'tag_name': self.tag, 'name': self.tag, 'target_commitish': self.revision,
+                        'prerelease': True, 'draft': False,
+                        'assets': [{'name': name} for name in promotion.ASSETS]}
+        self.ref = {'object': {'type': 'commit', 'sha': self.revision}}
+        self.environment = patch.dict(os.environ, GITHUB_REPOSITORY=self.repository, GITHUB_SHA=self.revision,
+                                      GITHUB_RUN_ID='5678', GITHUB_RUN_ATTEMPT='2',
+                                      IMAGE_DIGEST=self.image_digest, GITHUB_OUTPUT=str(self.directory / 'output'))
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
+        self.created = False
+        self.absent = False
+        self.tag_only = False
+
+    def fake_gh(self, *args, **kwargs):
+        if args[0] == 'api':
+            if '/releases/tags/' in args[1]:
+                return None if self.absent and not self.created else json.dumps(self.release)
+            return None if self.absent and not self.created and not self.tag_only else json.dumps(self.ref)
+        if args[:2] == ('release', 'create'):
+            self.created = True
+            self.metadata = json.loads((self.directory / promotion.METADATA).read_text())
+            return ''
+        if args[:2] == ('release', 'download'):
+            target = Path(args[args.index('--dir') + 1])
+            (target / promotion.BINARY).write_bytes(self.payload)
+            (target / promotion.CHECKSUM).write_text(f'{self.checksum}  {promotion.BINARY}\n')
+            (target / promotion.METADATA).write_text(json.dumps(self.metadata))
+            return ''
+        self.fail('Unexpected GitHub command')
+
+    def test_new_release_targets_exact_sha_and_attaches_same_binary_checksum_metadata(self):
+        self.absent = True
+        with patch.object(promotion, 'gh', side_effect=self.fake_gh) as api:
+            promotion.publish(self.directory)
+        create = next(call.args for call in api.call_args_list if call.args[:2] == ('release', 'create'))
+        self.assertEqual(create[2], self.tag)
+        self.assertEqual(create[create.index('--target') + 1], self.revision)
+        self.assertEqual(create[create.index('--title') + 1], self.tag)
+        self.assertIn('--prerelease', create)
+        self.assertNotIn('--clobber', create)
+        self.assertEqual(create[-3:], tuple(str(self.directory / name) for name in promotion.ASSETS))
+        self.assertEqual((self.directory / promotion.BINARY).read_bytes(), self.payload)
+        self.assertEqual(self.metadata['binary_sha256'], self.checksum)
+        self.assertEqual(self.metadata['image'], f'{promotion.IMAGE}@{self.image_digest}')
+        self.assertEqual(self.metadata['source_sha'], self.revision)
+        self.assertEqual((self.metadata['run_id'], self.metadata['run_attempt']), ('5678', '2'))
+
+    def test_same_sha_rerun_reuses_assets_digest_and_original_run_without_edit(self):
+        with patch.object(promotion, 'gh', side_effect=self.fake_gh) as api:
+            promotion.reuse(self.directory)
+            promotion.publish(self.directory)
+        self.assertEqual((self.directory / 'output').read_text(), f'reused=true\nimage_digest={self.image_digest}\n')
+        self.assertEqual(json.loads((self.directory / promotion.METADATA).read_text())['run_id'], '1234')
+        self.assertTrue(all(call.args[0] == 'api' or call.args[:2] == ('release', 'download')
+                            for call in api.call_args_list))
+
+    def test_first_run_has_no_reuse_and_orphan_tag_blocks_instead_of_overwriting(self):
+        self.absent = True
+        with patch.object(promotion, 'gh', side_effect=self.fake_gh) as api:
+            promotion.reuse(self.directory)
+            self.assertEqual((self.directory / 'output').read_text(), 'reused=false\n')
+            self.tag_only = True
+            with self.assertRaisesRegex(ValueError, 'refusing overwrite'):
+                promotion.publish(self.directory)
+        self.assertFalse(any(call.args[:2] == ('release', 'create') for call in api.call_args_list))
+
+    def test_wrong_sha_collision_or_incomplete_release_never_reused(self):
+        mutations = [('release', 'target_commitish', 'f' * 40), ('release', 'prerelease', False),
+                     ('release', 'assets', []), ('metadata', 'source_sha', 'f' * 40),
+                     ('metadata', 'binary_sha256', '0' * 64), ('metadata', 'image_digest', '$(touch /tmp/no)\n'),
+                     ('metadata', 'image', 'ghcr.io/foreign/package@' + self.image_digest)]
+        for target, key, bad in mutations:
+            with self.subTest(target=target, key=key):
+                mapping = getattr(self, target)
+                original = mapping[key]
+                mapping[key] = bad
+                try:
+                    with patch.object(promotion, 'gh', side_effect=self.fake_gh) as api:
+                        with self.assertRaises(ValueError):
+                            promotion.reuse(self.directory)
+                        self.assertFalse(any(call.args[:2] == ('release', 'create') for call in api.call_args_list))
+                finally:
+                    mapping[key] = original
+        self.ref['object']['sha'] = 'f' * 40
+        with patch.object(promotion, 'gh', side_effect=self.fake_gh):
+            with self.assertRaisesRegex(ValueError, 'exact source SHA'):
+                promotion.reuse(self.directory)
+
+    def test_different_image_or_binary_cannot_overwrite_same_tag(self):
+        with patch.object(promotion, 'gh', side_effect=self.fake_gh) as api:
+            with patch.dict(os.environ, IMAGE_DIGEST='sha256:' + 'b' * 64):
+                with self.assertRaisesRegex(ValueError, 'refusing overwrite'):
+                    promotion.publish(self.directory)
+            (self.directory / promotion.BINARY).write_bytes(b'changed')
+            with self.assertRaisesRegex(ValueError, 'checksum mismatch'):
+                promotion.publish(self.directory)
+        self.assertFalse(any(call.args[:2] == ('release', 'create') for call in api.call_args_list))
+
+    def test_gh_errors_fail_closed_and_untrusted_text_is_never_a_shell_command(self):
+        for code in (403, 500):
+            with self.subTest(code=code), patch.object(promotion.subprocess, 'run', return_value=
+                    subprocess.CompletedProcess(['gh'], 1, '', f'API error (HTTP {code})')):
+                with self.assertRaises(RuntimeError):
+                    promotion.gh('api', 'repos/owner/repository', missing_ok=True)
+        with patch.object(promotion.subprocess, 'run', return_value=
+                subprocess.CompletedProcess(['gh'], 1, '', 'Not Found (HTTP 404)')):
+            self.assertIsNone(promotion.gh('api', 'repos/owner/repository', missing_ok=True))
+        malicious = '$(touch /tmp/no); echo injected'
+        with patch.object(promotion.subprocess, 'run', return_value=
+                subprocess.CompletedProcess(['gh'], 0, '{}', '')) as run:
+            promotion.gh('release', 'view', malicious)
+        self.assertEqual(run.call_args.args[0], ['gh', 'release', 'view', malicious])
+        self.assertNotIn('shell', run.call_args.kwargs)
 
 
 class TestDockerfileRuntimeContract(unittest.TestCase):
@@ -447,8 +636,8 @@ class TestDeliveryArtifacts(unittest.TestCase):
             workflow = yaml.safe_load(f)
         checks = workflow["jobs"]["test-and-build"]["steps"]
         runs = "\n".join(step.get("run", "") for step in checks)
-        self.assertIn("-X main.commit=${{ github.sha }}", runs)
-        self.assertIn("-X main.buildTime=${BUILD_TIME}", runs)
+        self.assertIn("-X clash-sub-parser/internal/platform.Commit=${{ github.sha }}", runs)
+        self.assertIn("-X clash-sub-parser/internal/platform.BuildDate=${BUILD_TIME}", runs)
         self.assertIn("bin/csp-linux-amd64 --version", runs)
         self.assertIn("cp -a web/dist/. internal/webassets/dist/", runs)
         self.assertEqual(runs.count("go build -tags"), 1)
@@ -456,8 +645,8 @@ class TestDeliveryArtifacts(unittest.TestCase):
             self.assertIn("bin/csp-linux-amd64 /app/csp", f.read())
         with open(os.path.join(REPO_ROOT, "Dockerfile"), encoding="utf-8") as f:
             dockerfile = f.read()
-        self.assertIn("-X main.commit=${COMMIT_SHA}", dockerfile)
-        self.assertIn("-X main.buildTime=${BUILD_TIME}", dockerfile)
+        self.assertIn("-X clash-sub-parser/internal/platform.Commit=${COMMIT_SHA}", dockerfile)
+        self.assertIn("-X clash-sub-parser/internal/platform.BuildDate=${BUILD_TIME}", dockerfile)
 
     def test_dockerfile_runtime_buildx_check(self):
         # Enforces Docker Buildx syntax and definition checking without rebuilding images locally

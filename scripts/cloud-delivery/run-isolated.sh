@@ -113,9 +113,9 @@ if ! docker image inspect "${IMAGE_REF}" >/dev/null 2>&1; then
   echo "------------------------------------------------------------------"
   echo "STATUS: BLOCKED (镜像未在本地就绪)"
   echo "镜像 ${IMAGE_REF} 不在本地 Docker 缓存中。"
-  echo "由于私有镜像访问需要 Classic PAT (read:packages) 凭据，脚本严禁在此处盲目拉取。"
-  echo "前置步骤: 请先运行 scripts/cloud-delivery/preflight-pull.sh 拉取并校验镜像。"
-  echo "责任人: 操作员 / 主脑（仅在私有性门禁与显式授权满足后配置安全凭据）"
+  echo "本脚本不盲目拉取；镜像可公开，也可使用 Docker 正常凭据。"
+  echo "前置步骤: 请先运行 scripts/cloud-delivery/preflight-pull.sh 拉取并校验 digest/revision。"
+  echo "责任人: 操作员 / 主脑（仅在镜像 identity 验证与显式授权满足后启动）"
   echo "------------------------------------------------------------------"
   if [ "${CHECK_ONLY}" = true ]; then
     echo "Check-only 检查完毕: 端口空闲，但本地镜像缺失。"

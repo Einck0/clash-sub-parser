@@ -1,6 +1,6 @@
 # Implementation tasks — CSP complete-delivery convergence
 
-Feature `specs/002-policy`; current run `pi_run_20261015_230722_1113226`, change `change_pi_run_20261015_230722_1113226`, package `whole_task`, epoch1. Previous runs/failed tests are historical, not current PASS. Baseline copies of spec/plan/tasks before this amendment: `/tmp/csp-delivery-20261015-230722/planning-baseline/` with SHA evidence in the current session. Duplicate TASK-FIX entries were merged below without dropping their requirements. Checkbox totals are not a product completion percentage.
+Feature `specs/002-policy`; current run `pi_run_20261016_085304_1567276`, change `002-policy`, package `default`, epoch1. Previous runs/failed tests are historical, not current PASS. Baseline copies of spec/plan/tasks before this amendment: `/tmp/csp-delivery-20261015-230722/planning-baseline/` with SHA evidence in the current session. Duplicate TASK-FIX entries were merged below without dropping their requirements. Checkbox totals are not a product completion percentage.
 
 ## Phase 1 — Current scope and safety
 
@@ -64,3 +64,38 @@ Phase2 and Phase3 are separate functional scopes, but share inventory/domain/HTT
 Checkboxes above refer to specific implementation/local review scopes, never whole-project completion. Latest upstream production state is not replaced by a local isolated acceptance.
 
 Final asset/migration delta: `/tmp/csp-delivery-20261015-230722/finalize0700/verification-index.json` SHA7658e4692e0053ec8bd307753493e1d47a56e534e7cc279c7e295504e26939c0. Final production-copy17→20 conservation passed integrity/FK and all29group/publication checks. Exact3critic-reviewed assets synchronized and embedded build/test passed; all3task previews stopped and ports closed. Authorised storage-state export no longer exists. No production migration/deploy or cloud image publication occurred. TASK-RELEASE-01 remains partially open until commit and non-force push are actually receipted.
+
+## Interrupted-run continuation tasks (current contract)
+
+Historical open checkboxes above are not silently marked passed by reports; reconcile final evidence by explicit source/phase, never completion percentage.
+
+- [x] TASK-RES-01 Verify current SHA, unchanged tracked worktree/76 preserved maintenance files, no known task preview worker, old production healthy/schema17, CI38793153064 sameSHA success/artifact and publish skipped. New per-source controlled fetch evidence, current subscription race13pass; retain prior FAILED143 and earlier race timeout, no sender invented. Evidence `subscription/deliverables.json` and `release0700/deliverables.json` under current evidence root.
+- [x] TASK-RES-02 Implement FR-RES-01 in cmd/csp shutdown path/tests and FR-RES-02 Dockerfile/version regression/docs; substantive targeted native/race/build version tests. No UI/asset changes.
+- [ ] TASK-RES-03 Bounded strict-TLS direct/path comparison for two failed sources in isolated copy, no production writes/proxy changes/secrets; report stage and actual successes/failures without changing upstream identity.
+- [x] TASK-RES-04 Independent final delta review including old CI metadata fix, DB-lifetime behavior, security/asset-preservation evidence eligibility, exact code/asset manifests, no weakened tests.
+- [x] TASK-RES-05 Prepare final healthy synthetic isolated instance with both coordinators disabled, standard instance/source/cleanup identity; final critic actual settings/policy flows + PNG read, explicitly not physical-phone/production acceptance. Clean only owned preview.
+- [ ] TASK-RES-06 Scoped git_commit after review/critic, non-force push reviewed branch, record exactSHA cloud build result. No unreviewed merge or default-branch overwrite.
+- [ ] TASK-RES-07 Official private-image/digest gate and remote-ancestry integration, production online backup/rollout/94-operation coverage only when authenticated owner preconditions met. Until then report BLOCKED, not PASS. User notified delivery609c21a7875c4e3b8e1888393125f9be.
+- [ ] TASK-RES-08 Update project experience and final Chinese QQ delivery, preserve auto_test/ambiguous recovery/TLS/production limitations and verified cleanup. CPA out of scope.
+
+### Live visibility amendment tasks
+
+Latest “没必要私有啊” supersedes private-image portion of TASK-RES-07 and older TASK-RELEASE/PROD private gates, not quality/backup/production safety. Earlier QQ delivery609c21... is historical, now corrected.
+
+- [x] TASK-RES-PUB-01 Update existing `.github/workflows/ci.yml`, native cloud tests and operational docs for public-allowed exact-SHA release. Keep least privilege, build-once artifact, explicit release triggers, checksum/ELF/version/OCI digest verification and actual registry push/read; stop calling private visibility/API/OWNER_PAT gate. Preserve legacy private-gate script only as unused historical tool if tests still intentionally cover it; never execute its now-revoked visibility policy.
+- [ ] TASK-RES-PUB-02 Independently review final combined shutdown/metadata/public-release delta, commit via tool, normal push dedicated release ref after all applicable gates, obtain actual cloud checks/publish/digest/run artifacts. Actual registry write/read proves permission, not Git dry-run/scopes.
+- [ ] TASK-RES-PUB-03 Verify exact cloud image in isolated synthetic instance then scoped production hot backup/authorized official image-only deployment and actual business acceptance/cleanup. User private-policy change does not expose business data or bypass this step.
+
+## Second interrupted-run recovery (2026-10-16 08:53)
+
+Current frozen run `pi_run_20261016_085304_1567276`, change002-policy/default/epoch1; prior run pi_run_20261016_074108_1448746 FAILED143 retained. Last reviewer provider HTTP500 has no verdict; exact process termination sender/cause unverified. Same models retained, no gateway changes. Worktree/11-codefile delta and synthetic preview46623 retained; main brain assumes verified cleanup ownership from prior run (PID1548536/instance marker). Prior local selftest report4c756583 eligible only after manifest/source match; cmd native33/race33/cloud23/CI26/vet/build all0. New reviewer must produce current-contract report; old failed provider call is not a gate PASS. Current tasks continue without restarting implementation or restoring cancelled node-count work. Public-image override remains authoritative; no private gate returns. CPA/phone out of scope.
+
+### Dev → prelease amendment
+
+- [x] TASK-DEV-01 Update current CI/docs/tests for dev cloud test/build and only-after-success GitHub prerelease `prelease-<tested-shortSHA>` with exact same binary/checksum/image digest; no server heavy compile, no production auto-switch. Independent review of changed orchestration required, unchanged UI critic9PNG may be reused after hash match.
+- [ ] TASK-DEV-02 Commit scoped reviewed changes, normal isolated merge current origin/dev preserving both histories; independently review any conflicts/new functional delta; commit merge via tool then normal non-force push dev. No replacing dirty worktree or committing76maintenance.
+- [ ] TASK-DEV-03 Obtain exact devSHA Actions test/build/image push/pull/OCI outcome and GitHub prerelease correspondence. Failed steps remain failures, no promotion until passed. No production deployment inferred by this instruction.
+
+## Current evidence update (2026-10-16 dev-prelease)
+
+CI synthetic 33 tests pass exit0 (PYTHONPATH=.github/scripts confirmed); cloud-delivery 22+1=23 tests; Go cmd/csp native+race pass. promote_prelease.py AST valid, all subprocess.run with shell=False, no token/secret print, immutable-reuse/orphan/digest-mismatch/fail-closed all unit-covered. prelease job: dev push only, contents:write isolated, prelease-* tag no v* loop. Image package csp-runtime-private is historical name authorized as public (user: "没必要私有啊"); publish remains explicit trigger. Independent reviewers: e53c PASS (shutdown+build metadata), b4a1 PASS (dev→prelease pipeline). Critic PASS 280ef (9 native PNGs read). No commit/push/release/production executed. Preview PID1548536 port46623 cleanup remains main brain owner.

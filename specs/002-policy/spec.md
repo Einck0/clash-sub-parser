@@ -7,6 +7,27 @@ schema: speckit-native
 
 # Policy Capability Specification
 
+## Latest dev → prelease instruction (2026-10-16)
+
+User says: “你要测试编译就放进dev分支，测试完成的版本推进到prelease版本”. This supersedes older cloud-build/release-branch testing arrangements. Preserve remote dev history by a normal isolated merge (no force/overwriting dirty working tree). Run heavy tests/build only on GitHub dev; this host uses artifact pulls/lightweight verification, not redundant compilation. Existing independently verified local component evidence remains valid for unchanged files; it is not a reason to rebuild them here.
+
+No prelease/prerelease branch or GitHub Release entity exists on current remote (dev9350531f, releases list empty). The chosen project convention is a **GitHub prerelease entity**, display/tag spelled `prelease-<tested-dev-short-SHA>` (not a newly invented mandatory branch). It targets the exact successful dev SHA and contains the same binary/checksum plus image digest/revision metadata. Publish/advance only after dev tests/build pass; reuse that artifact, no rebuild on promotion. A per-SHA release tag `prelease-*` is not a v* tag and must not recursively trigger another build. Public image is permitted. Prerelease publication is not production deployment; existing production scope/gates are separate.
+
+## Interrupted-run continuation (2026-10-16)
+
+Current binding: run `pi_run_20261016_085304_1567276`, change `002-policy`, work_package `default`, epoch 1. Prior `pi_run_20261015_230722_1113226` exited FAILED/143; sender/cause unverified. Prior passing component evidence remains historical and can be reused only after matching source/environment. No production switch happened. CPA is outside this project and handled by the frontend.
+
+**Latest user override (live append `csp-public-image-authorized-20261016`)**: User says “没必要私有啊”. This supersedes historical private-image/anonymous-denial/API-visibility requirements throughout older sections below. Public CSP delivery images are authorized; source repository visibility is unchanged. No new private package or owner-token setup is required solely for visibility. Public image contains only the reviewed binary/runtime, never production DB, real subscriptions, credentials or runtime config. Current frozen run/change/package/gates remain unchanged. Earlier recommendation to turn an already-public package private was incorrect and withdrawn; lack of local API credentials never proved Actions Secret invalid. Actual cloud push/read under normal Actions credentials is the permission test, without reading secret values.
+
+**FR-RES-04 (public release)**: Reuse the official CI same-SHA artifact→Dockerfile.runtime→immutable digest path. Retain explicit release/tag/manual triggers, least-privilege GITHUB_TOKEN packages:write, checksum/static/version/OCI and post-push digest/pull verification; remove only the superseded private-visibility gates and OWNER_PAT dependency. Existing publicly readable `ghcr.io/einck0/csp-runtime-private` may be reused (name is historical, not a visibility claim), using immutable sha/run tags. A successful push alone is not deployment. No default-branch overwrite, credential disclosure or local-build production bypass.
+
+
+- **FR-RES-01** Existing subscription interval/cron/manual refresh must not race SQLite closure on HTTP shutdown failure/timeout. Failure exits must retain the DB handle until process termination if handlers can still be running; successful graceful shutdown closes only after work drains. Avoid new unbounded workers or silent cancellation success. Preserve existing two-worker/per-source admission.
+- **FR-RES-02** Every supported build entry must inject the same truthful version metadata. The CI fix using `clash-sub-parser/internal/platform.Commit` and `.BuildDate` is authoritative; Dockerfile and current runbook/tests must agree. A local development build does not substitute for a private production release.
+- **FR-RES-03** Current upstream evidence: two sources parse successfully; two fail TLS handshake using both CSP and same-proxy curl. Diagnose remaining feasible bounded direct/path comparisons without weakening strict TLS/SSRF or modifying shared proxy settings. Path failure is not proof of upstream blame. Genuine upstream/unavailable-path failures remain explicit.
+- `auto_test` persists and displays but has no backend trigger. Neither 001 nor003 defines its target set/kinds/partial semantics; this continuation does not invent a new all-inventory probe behavior. Preserve and explicitly list the gap; proposed semantics may be reviewed later, not claimed implemented. Historical ambiguous group restoration is still copy-only/unresolved.
+- Production uses the official cloud private-image/digest path after all gates; local Docker build is not rollout authority. Existing complete-delivery authorization permits target production switch only once these preconditions are met; no bypass of private visibility/API proof, owner config, or remote history. No phone, auth changes, CPA or unrelated systems.
+
 ## Current delivery amendment (2026-10-15)
 
 This section governs the current delivery; superseded prose below remains historical evidence, not a second authority. Current run: `pi_run_20261015_230722_1113226`, change: `change_pi_run_20261015_230722_1113226`, package: `whole_task`, epoch 1. Feature ownership stays `specs/002-policy`; related domain baselines are 001-inventory, 003-probe, 004-publication, 005-auth, 006-ui. Previous run outcomes are not current acceptance.

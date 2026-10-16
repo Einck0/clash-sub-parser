@@ -1,6 +1,6 @@
 # Technical plan — CSP complete-delivery convergence
 
-Feature: `specs/002-policy`; current run `pi_run_20261015_230722_1113226`; change `change_pi_run_20261015_230722_1113226`; package `whole_task`, epoch 1. This is an implementation-authorized continuation, not a fresh initialization. Historical implementation and failed gates remain preserved. The current delivery amendment in spec.md takes precedence over historical execution prose in linked artifacts.
+Feature: `specs/002-policy`; current run `pi_run_20261016_085304_1567276`; change `002-policy`; package `default`, epoch 1. This is an implementation-authorized continuation, not a fresh initialization. Historical implementation and failed gates remain preserved. The current delivery amendment in spec.md takes precedence over historical execution prose in linked artifacts.
 
 ## Context and scope
 
@@ -59,3 +59,19 @@ Historical archive restoration remains copy-only until an unambiguous plan and a
 ## Delivery chain and honest limitations
 
 Task completion requires implementation/self-test, independent reviewer and applicable critic plus authorized cloud/production evidence, not process exit. Current machine contract remains whole_task; logical task names below do not invent work-package identities. Advanced-executor is the user-requested actual implementation role. Reviewer/critic keep their named roles; model overrides only if runtime explicitly supports the user's requested concrete model. If unavailable, disclose actual model rather than pretending an upgrade. Known upstream/source failures, ambiguous old-group restoration, missing authenticated private-package capability and any untested operations remain explicit; they cannot be marked complete or erased.
+
+## Resume delta and acceptance
+
+Original plan is continued, not reinitialized. FR-RES-01 repair is confined to serve shutdown bookkeeping and actual blocking-handler tests, retaining DB on uncertain HTTP termination. FR-RES-02 uses full platform linker paths consistently in Dockerfile, CI and current operational docs, with real static-binary/version assertion rather than string-only tests. Advanced executor owns these non-UI fixes and an isolated synthetic ready instance; independent reviewer rechecks final code/build delta and eligible prior component evidence. UI source/assets are unchanged, so critic revisits settings/policy core scenarios and actual PNGs on the final ready binary without rebuilding the UI. Neither independent gate may claim production/private-image acceptance.
+
+Owner private-package capability remains an external release blocker (anonymous manifest200; visibility API401); send verified QQ notice, preserve production schema17/current healthy image. Remote ancestor merge is a separate isolated integration operation, not source import equivalence; do not force/publish before reviewing any merge deltas. New diagnostic attempts are limited to existing two failed sources, direct vs saved proxy route, strict TLS/public-target validation, no repeated broad endpoint scans or proxy config writes. Preserve private backup/artifacts and anonymous labels.
+
+`auto_test` is an acknowledged unsupported behavior requiring defined target/kind/partial semantics, not a silently implemented whole-inventory side effect. All final reports must list it and unresolved historical restoration/production coverage, even if current local delta passes. Artifact root `/tmp/csp-resume-20261016-074108/`. Previous private evidence roots remain intact.
+
+### Latest visibility override, current authority
+
+Live user append `csp-public-image-authorized-20261016` supersedes prior private-image constraints, including FR-DEL-05 older visibility clauses and the former external blocker above. Release remains cloud-built, exact-SHA, checksum/static/version validated with immutable digest and OCI revision. Reuse the existing public historical-named `csp-runtime-private` package; no new private package/OWNER_PAT workflow is needed. Keep normal release/tag/explicit-dispatch triggers and runtime minimal Dockerfile, verify actual push and authenticated pull/digest; public anonymous pull is permitted rather than a failure. Test publication through existing Actions GITHUB_TOKEN, not credential extraction. Update workflow and native cloud tests/docs consistently, independent reviewer checks no secret/config enters image. Public permission does not authorize default branch overwrite, changing repo visibility, unrelated services or release before quality gates.
+
+### Dev → prelease convention (latest user instruction)
+
+No remote prelease branch or release entity exists; establish GitHub prerelease `prelease-<shortSHA>` targeting the successful dev SHA. Reuse the CI artifact for the runtime image and release assets (binary/SHA256/delivery identity). Only successful dev checks permit promotion; failed/PR runs never publish. Token write permissions are job-scoped, secrets not available to PR publication. Explicit older release/tag paths may remain supported but are not used for current test compilation. Avoid automatic production rollout. Normal merge origin/dev in an isolated integration tree, preserve both parents and reviewed current behavior; no local heavy rebuild. Validate CI syntax/semantics with lightweight native scripts and independent reviewer, then dev cloud handles heavy tests/build.

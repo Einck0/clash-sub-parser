@@ -265,7 +265,7 @@ class TestPreflightPullLogic(unittest.TestCase):
             text=True,
         )
         self.assertEqual(result.returncode, 1)
-        self.assertIn("严禁使用历史公开包", result.stderr)
+        self.assertIn("镜像包名不匹配", result.stderr)
 
     def test_reject_package_name_mismatch(self):
         script = str(REPO_ROOT / "scripts/cloud-delivery/preflight-pull.sh")
@@ -283,35 +283,94 @@ class TestPreflightPullLogic(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("镜像包名不匹配", result.stderr)
 
-    def test_fail_closed_when_token_missing(self):
-        """当本地环境中无 OWNER_PAT / GHCR_TOKEN 时，必须返回状态码 2 (BLOCKED)"""
-        script = str(REPO_ROOT / "scripts/cloud-delivery/preflight-pull.sh")
-        env = os.environ.copy()
-        env.pop("OWNER_PAT", None)
-        env.pop("GHCR_TOKEN", None)
-        result = subprocess.run(
-            [
-                script,
-                "--image",
-                SYNTHETIC_IMAGE,
-                "--expected-revision",
-                SYNTHETIC_REVISION,
-                "--check-only",
-            ],
-            env=env,
-            capture_output=True,
-            text=True,
-        )
-        self.assertEqual(result.returncode, 2)
-        self.assertIn("STATUS: BLOCKED", result.stdout)
-        self.assertIn("缺少 GHCR 鉴权凭据", result.stdout)
+    def run_docker_fixture(self, image=None, *, check_only=False, pull_exit=0, inspect_exit=0, extra_args=()):
+        """Only Docker is replaced: execute the real shell and JSON validation."""
+        with tempfile.TemporaryDirectory(prefix="csp-preflight-") as tmp:
+            directory = Path(tmp)
+            fixture = directory / "inspect.json"
+            fixture.write_text(json.dumps([image or self.valid_image()]))
+            calls = directory / "calls.jsonl"
+            docker = directory / "docker"
+            docker.write_text(
+                "#!/usr/bin/env python3\n"
+                "import json, os, pathlib, sys\n"
+                "with open(os.environ['CALLS'], 'a') as log: log.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+                "if sys.argv[1] == 'pull': sys.exit(int(os.environ['PULL_EXIT']))\n"
+                "if sys.argv[1:3] == ['image', 'inspect']:\n"
+                "    print(pathlib.Path(os.environ['FIXTURE']).read_text())\n"
+                "    sys.exit(int(os.environ['INSPECT_EXIT']))\n"
+                "sys.exit('unexpected Docker operation')\n"
+            )
+            docker.chmod(0o700)
+            env = {k: v for k, v in os.environ.items() if not k.startswith(('CSP_', 'EXPECTED_')) and k not in ('OWNER_PAT', 'GHCR_TOKEN')}
+            env.update(PATH=tmp + os.pathsep + env['PATH'], FIXTURE=str(fixture), CALLS=str(calls), PULL_EXIT=str(pull_exit), INSPECT_EXIT=str(inspect_exit))
+            result = subprocess.run(
+                [str(REPO_ROOT / "scripts/cloud-delivery/preflight-pull.sh"), "--image", SYNTHETIC_IMAGE,
+                 "--expected-revision", SYNTHETIC_REVISION, *(["--check-only"] if check_only else []), *extra_args],
+                env=env, capture_output=True, text=True, timeout=10,
+            )
+            return result, [json.loads(line) for line in calls.read_text().splitlines()] if calls.exists() else []
+
+    @staticmethod
+    def valid_image():
+        return {"Os": "linux", "Architecture": "amd64", "RepoDigests": [SYNTHETIC_IMAGE],
+                "Config": {"Labels": {"org.opencontainers.image.revision": SYNTHETIC_REVISION}}}
+
+    def test_public_pull_without_owner_pat_verifies_identity(self):
+        result, calls = self.run_docker_fixture()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, [["pull", "--platform", "linux/amd64", SYNTHETIC_IMAGE], ["image", "inspect", SYNTHETIC_IMAGE]])
+        self.assertIn("exact RepoDigests and OCI revision verified", result.stdout)
+
+    def test_check_only_validates_cached_image_without_pull(self):
+        result, calls = self.run_docker_fixture(check_only=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, [["image", "inspect", SYNTHETIC_IMAGE]])
+
+    def test_reject_wrong_identity_even_if_digest_appears_elsewhere(self):
+        for mutation in ('digest', 'owner', 'revision', 'missing_revision', 'platform'):
+            with self.subTest(mutation=mutation):
+                image = self.valid_image()
+                if mutation == 'digest':
+                    image['RepoDigests'] = [SYNTHETIC_IMAGE[:-64] + 'b' * 64]
+                    image['Config']['Labels']['untrusted-digest'] = SYNTHETIC_IMAGE
+                elif mutation == 'owner':
+                    image['RepoDigests'] = [SYNTHETIC_IMAGE.replace('/einck0/', '/attacker/')]
+                elif mutation == 'revision':
+                    image['Config']['Labels']['org.opencontainers.image.revision'] = 'f' * 40
+                elif mutation == 'missing_revision':
+                    image['Config']['Labels'] = {'revision': SYNTHETIC_REVISION}
+                else:
+                    image['Architecture'] = 'arm64'
+                result, _ = self.run_docker_fixture(image)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn('image identity verification failed', result.stderr)
+
+    def test_pull_or_inspect_failure_is_not_success(self):
+        for exits in ({'pull_exit': 1}, {'inspect_exit': 1}):
+            with self.subTest(exits=exits):
+                result, _ = self.run_docker_fixture(**exits)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn('镜像确权验证通过', result.stdout)
+
+    def test_foreign_owner_cannot_override_expected_package(self):
+        result, calls = self.run_docker_fixture(extra_args=("--expected-package", "ghcr.io/attacker/csp-runtime-private"))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('owner/包名不合规', result.stderr)
+        self.assertEqual(calls, [])
+
+    def test_dry_run_never_claims_image_verification(self):
+        result, calls = self.run_docker_fixture(extra_args=("--dry-run",))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('未验证镜像', result.stdout)
+        self.assertEqual(calls, [])
 
 
 class TestRunIsolatedScriptLogic(unittest.TestCase):
     """验证隔离运行脚本边界与前置检查"""
 
     def test_check_only_uncached_image(self):
-        """待测镜像不在本地且无私有凭据时，run-isolated 必须干净阻断退出 (code 2)"""
+        """待测镜像不在本地时必须干净阻断，不自动 pull 或要求 OWNER_PAT。"""
         script = str(REPO_ROOT / "scripts/cloud-delivery/run-isolated.sh")
         result = subprocess.run(
             [script, "--image", SYNTHETIC_IMAGE, "--check-only"],
@@ -378,7 +437,7 @@ class TestDocumentationCompleteness(unittest.TestCase):
         self.assertIn("Dockerfile.runtime", content)
         self.assertIn("BUILD_DATE", content)
 
-        # 4. 私有包名与历史包不擅删
+        # 4. 历史命名不代表私有；旧包不擅删
         self.assertIn("ghcr.io/einck0/csp-runtime-private", content)
         self.assertIn("ghcr.io/einck0/clash-sub-parser", content)
         self.assertTrue("严禁擅自删除历史公开包" in content or "停止向该公开包推送" in content)
@@ -401,8 +460,9 @@ class TestDocumentationCompleteness(unittest.TestCase):
         self.assertIn(".backup", content)
         self.assertIn("PRAGMA integrity_check;", content)
 
-        # 9. 凭据与权限规范 (OWNER_PAT / 沟通纪律)
-        self.assertIn("OWNER_PAT", content)
+        # 9. 公开镜像允许，凭据由 Docker 管理，不提取或索取。
+        self.assertIn("允许匿名", content)
+        self.assertIn("不依赖 OWNER_PAT", content)
         self.assertIn("read:packages", content)
         self.assertIn("0600", content)
         self.assertIn("base64", content)

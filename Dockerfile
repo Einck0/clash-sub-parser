@@ -44,7 +44,7 @@ ARG COMMIT_SHA=dev
 ARG BUILD_DATE=
 RUN BUILD_TIME="${BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}" && \
     go build -tags "with_quic with_wireguard" \
-      -ldflags="-s -w -X main.commit=${COMMIT_SHA} -X main.buildTime=${BUILD_TIME}" \
+      -ldflags="-s -w -X clash-sub-parser/internal/platform.Commit=${COMMIT_SHA} -X clash-sub-parser/internal/platform.BuildDate=${BUILD_TIME}" \
       -trimpath -o /src/bin/csp ./cmd/csp
 
 # Stage 3: Minimal Alpine 3.20 non-root runtime

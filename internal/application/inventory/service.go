@@ -28,7 +28,7 @@ type ReconcileResult struct {
 	NodesValid     int                 `json:"nodes_valid"`
 }
 
-const defaultProbeFreshnessTTL = time.Hour
+// Observations persist until revised or reprobed; no arbitrary wall-clock staleness deadline.
 
 // CapabilityStatus represents the latest probe observation summary for a single probe dimension on a node.
 type CapabilityStatus struct {
@@ -1482,12 +1482,12 @@ func applyProbeObservationsToView(v *NodeView, obsByKind map[domain.ProbeKind]do
 		obsCopy := baselineObs
 		baselinePtr = &obsCopy
 	}
-	baseHealth, baseLatencyValid := domain.EvaluateBaselineHealth(baselinePtr, v.ConnectionRevision, now, defaultProbeFreshnessTTL)
+	baseHealth, baseLatencyValid := domain.EvaluateBaselineHealth(baselinePtr, v.ConnectionRevision, now, 0)
 
 	var latestAt time.Time
 	for kind, obs := range obsByKind {
 		revisionMismatch := obs.ConnectionRevision == nil || v.ConnectionRevision < 1 || *obs.ConnectionRevision != v.ConnectionRevision
-		ageExpired := obs.ObservedAt.IsZero() || obs.ObservedAt.After(now) || now.Sub(obs.ObservedAt) >= defaultProbeFreshnessTTL
+		ageExpired := obs.ObservedAt.IsZero() || obs.ObservedAt.After(now)
 		stale := obs.Verdict == domain.VerdictStale || ageExpired || revisionMismatch
 
 		var capLatency int64
@@ -1530,7 +1530,7 @@ func applyProbeObservationsToView(v *NodeView, obsByKind map[domain.ProbeKind]do
 	if baselineCap, hasBaseline := caps[string(domain.ProbeKindBaseline)]; hasBaseline {
 		v.ProbeStale = baselineCap.Stale
 	} else if !latestAt.IsZero() {
-		v.ProbeStale = latestAt.After(now) || now.Sub(latestAt) >= defaultProbeFreshnessTTL
+		v.ProbeStale = latestAt.After(now)
 	} else {
 		v.ProbeStale = false
 	}

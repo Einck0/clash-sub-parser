@@ -314,11 +314,11 @@ func (r *Runtime) ListenPacket(ctx context.Context, destination string) (net.Pac
 func (r *Runtime) HTTPClient(options HTTPClientOptions) *http.Client {
 	timeout := options.Timeout
 	if timeout <= 0 {
-		timeout = 10 * time.Second
+		timeout = 5 * time.Second
 	}
 	handshakeTimeout := options.TLSHandshakeTimeout
 	if handshakeTimeout <= 0 {
-		handshakeTimeout = 5 * time.Second
+		handshakeTimeout = 3 * time.Second
 	}
 	idleTimeout := options.IdleConnTimeout
 	if idleTimeout <= 0 {

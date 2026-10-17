@@ -39,14 +39,14 @@ func policyGroupsDigest(groups []domain.NodeGroup) (string, error) {
 }
 
 func withPolicyGroups(ctx context.Context, tx *sql.Tx, use func([]domain.NodeGroup) error) error {
-	rows, err := tx.QueryContext(ctx, `SELECT id,name,group_type,empty_fallback_pass,revision,position FROM node_groups ORDER BY position ASC, created_at ASC, id ASC`)
+	rows, err := tx.QueryContext(ctx, `SELECT id,name,group_type,empty_fallback_pass,revision,position,COALESCE(inherit_global_filter, 1) FROM node_groups ORDER BY position ASC, created_at ASC, id ASC`)
 	if err != nil {
 		return err
 	}
 	groups := make([]domain.NodeGroup, 0)
 	for rows.Next() {
 		var g domain.NodeGroup
-		if err := rows.Scan(&g.ID, &g.Name, &g.GroupType, &g.EmptyFallbackPass, &g.Revision, &g.Position); err != nil {
+		if err := rows.Scan(&g.ID, &g.Name, &g.GroupType, &g.EmptyFallbackPass, &g.Revision, &g.Position, &g.InheritGlobalFilter); err != nil {
 			rows.Close()
 			return err
 		}
@@ -161,7 +161,7 @@ func (r *revisionRepository) RestorePolicySnapshot(ctx context.Context, revision
 			if next <= g.Revision {
 				next = g.Revision + 1
 			}
-			if _, err = tx.ExecContext(ctx, `INSERT INTO node_groups(id,name,group_type,empty_fallback_pass,revision,created_at,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,group_type=excluded.group_type,empty_fallback_pass=excluded.empty_fallback_pass,revision=excluded.revision,updated_at=excluded.updated_at`, g.ID, g.Name, g.GroupType, g.EmptyFallbackPass, next, now, now); err != nil {
+			if _, err = tx.ExecContext(ctx, `INSERT INTO node_groups(id,name,group_type,empty_fallback_pass,revision,created_at,updated_at,position,inherit_global_filter) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,group_type=excluded.group_type,empty_fallback_pass=excluded.empty_fallback_pass,revision=excluded.revision,updated_at=excluded.updated_at,position=excluded.position,inherit_global_filter=excluded.inherit_global_filter`, g.ID, g.Name, g.GroupType, g.EmptyFallbackPass, next, now, now, g.Position, g.InheritGlobalFilter); err != nil {
 				return err
 			}
 		}

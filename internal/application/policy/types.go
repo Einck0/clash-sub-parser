@@ -17,8 +17,9 @@ type EdgeInput struct {
 
 // CreateGroupCommand defines parameters for creating a node group.
 type CreateGroupCommand struct {
-	EmptyFallbackPass bool                   `json:"empty_fallback_pass"`
-	ID                string                 `json:"id,omitempty"`
+	EmptyFallbackPass   bool                   `json:"empty_fallback_pass"`
+	InheritGlobalFilter *bool                  `json:"inherit_global_filter,omitempty"`
+	ID                  string                 `json:"id,omitempty"`
 	Name              string                 `json:"name"`
 	GroupType         domain.GroupType       `json:"group_type"`
 	Position          *int                   `json:"position,omitempty"`
@@ -31,8 +32,9 @@ type CreateGroupCommand struct {
 
 // UpdateGroupCommand defines parameters for updating a node group.
 type UpdateGroupCommand struct {
-	EmptyFallbackPass *bool                  `json:"empty_fallback_pass,omitempty"`
-	ID                string                 `json:"id"`
+	EmptyFallbackPass   *bool                  `json:"empty_fallback_pass,omitempty"`
+	InheritGlobalFilter *bool                  `json:"inherit_global_filter,omitempty"`
+	ID                  string                 `json:"id"`
 	Name              *string                `json:"name,omitempty"`
 	GroupType         *domain.GroupType      `json:"group_type,omitempty"`
 	Position          *int                   `json:"position,omitempty"`
@@ -78,8 +80,9 @@ type GroupEdgeView struct {
 
 // GroupView is the view representation of a policy group.
 type GroupView struct {
-	EmptyFallbackPass bool                   `json:"empty_fallback_pass"`
-	ID                string                 `json:"id"`
+	EmptyFallbackPass   bool                   `json:"empty_fallback_pass"`
+	InheritGlobalFilter bool                   `json:"inherit_global_filter"`
+	ID                  string                 `json:"id"`
 	Name              string                 `json:"name"`
 	GroupType         domain.GroupType       `json:"group_type"`
 	Position          int                    `json:"position"`
@@ -105,12 +108,13 @@ type GroupPreviewResult struct {
 
 // PreviewGroupCommand defines parameters for in-RAM preview of a policy group.
 type PreviewGroupCommand struct {
-	GroupID           *string                `json:"group_id,omitempty"`
-	ExpectedRevision  *int64                 `json:"expected_revision,omitempty"`
-	Name              *string                `json:"name,omitempty"`
-	GroupType         *domain.GroupType      `json:"group_type,omitempty"`
-	EmptyFallbackPass *bool                  `json:"empty_fallback_pass,omitempty"`
-	Sources           []domain.MemberSource  `json:"sources"`
+	GroupID             *string                `json:"group_id,omitempty"`
+	ExpectedRevision    *int64                 `json:"expected_revision,omitempty"`
+	Name                *string                `json:"name,omitempty"`
+	GroupType           *domain.GroupType      `json:"group_type,omitempty"`
+	EmptyFallbackPass   *bool                  `json:"empty_fallback_pass,omitempty"`
+	InheritGlobalFilter *bool                  `json:"inherit_global_filter,omitempty"`
+	Sources             []domain.MemberSource  `json:"sources"`
 	Target            *domain.CompilerTarget `json:"target,omitempty"`
 	RequestID         string                 `json:"request_id,omitempty"`
 	ActorKind         domain.ActorKind       `json:"actor_kind,omitempty"`

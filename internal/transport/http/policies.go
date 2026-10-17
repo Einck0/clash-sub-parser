@@ -18,35 +18,38 @@ type policyHandler struct {
 }
 
 type createGroupRequest struct {
-	EmptyFallbackPass bool                   `json:"empty_fallback_pass"`
-	ID                string                 `json:"id,omitempty"`
-	Name              string                 `json:"name"`
-	GroupType         domain.GroupType       `json:"group_type"`
-	Position          *int                   `json:"position,omitempty"`
-	Sources           []domain.MemberSource  `json:"sources,omitempty"`
-	Edges             []policy.EdgeInput     `json:"edges,omitempty"`
-	NodeFilter        *domain.NodeFilterSpec `json:"node_filter,omitempty"`
+	EmptyFallbackPass   bool                   `json:"empty_fallback_pass"`
+	InheritGlobalFilter *bool                  `json:"inherit_global_filter,omitempty"`
+	ID                  string                 `json:"id,omitempty"`
+	Name                string                 `json:"name"`
+	GroupType           domain.GroupType       `json:"group_type"`
+	Position            *int                   `json:"position,omitempty"`
+	Sources             []domain.MemberSource  `json:"sources,omitempty"`
+	Edges               []policy.EdgeInput     `json:"edges,omitempty"`
+	NodeFilter          *domain.NodeFilterSpec `json:"node_filter,omitempty"`
 }
 
 type updateGroupRequest struct {
-	EmptyFallbackPass *bool                  `json:"empty_fallback_pass,omitempty"`
-	Name              *string                `json:"name,omitempty"`
-	GroupType         *domain.GroupType      `json:"group_type,omitempty"`
-	Position          *int                   `json:"position,omitempty"`
-	ExpectedRevision  *int64                 `json:"expected_revision,omitempty"`
-	Sources           *[]domain.MemberSource `json:"sources,omitempty"`
-	Edges             *[]policy.EdgeInput    `json:"edges,omitempty"`
-	NodeFilter        *domain.NodeFilterSpec `json:"node_filter,omitempty"`
+	EmptyFallbackPass   *bool                  `json:"empty_fallback_pass,omitempty"`
+	InheritGlobalFilter *bool                  `json:"inherit_global_filter,omitempty"`
+	Name                *string                `json:"name,omitempty"`
+	GroupType           *domain.GroupType      `json:"group_type,omitempty"`
+	Position            *int                   `json:"position,omitempty"`
+	ExpectedRevision    *int64                 `json:"expected_revision,omitempty"`
+	Sources             *[]domain.MemberSource `json:"sources,omitempty"`
+	Edges               *[]policy.EdgeInput    `json:"edges,omitempty"`
+	NodeFilter          *domain.NodeFilterSpec `json:"node_filter,omitempty"`
 }
 
 type previewGroupRequest struct {
-	GroupID           *string                `json:"group_id,omitempty"`
-	ExpectedRevision  *int64                 `json:"expected_revision,omitempty"`
-	Name              *string                `json:"name,omitempty"`
-	GroupType         *domain.GroupType      `json:"group_type,omitempty"`
-	EmptyFallbackPass *bool                  `json:"empty_fallback_pass,omitempty"`
-	Sources           []domain.MemberSource  `json:"sources"`
-	Target            *domain.CompilerTarget `json:"target,omitempty"`
+	GroupID             *string                `json:"group_id,omitempty"`
+	ExpectedRevision    *int64                 `json:"expected_revision,omitempty"`
+	Name                *string                `json:"name,omitempty"`
+	GroupType           *domain.GroupType      `json:"group_type,omitempty"`
+	EmptyFallbackPass   *bool                  `json:"empty_fallback_pass,omitempty"`
+	InheritGlobalFilter *bool                  `json:"inherit_global_filter,omitempty"`
+	Sources             []domain.MemberSource  `json:"sources"`
+	Target              *domain.CompilerTarget `json:"target,omitempty"`
 }
 
 type setGlobalFilterRequest struct {
@@ -192,9 +195,10 @@ func (h policyHandler) createGroup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	view, err := h.service.CreateGroup(r.Context(), policy.CreateGroupCommand{
-		EmptyFallbackPass: body.EmptyFallbackPass,
-		ID:                body.ID,
-		Name:              body.Name,
+		EmptyFallbackPass:   body.EmptyFallbackPass,
+		InheritGlobalFilter: body.InheritGlobalFilter,
+		ID:                  body.ID,
+		Name:                body.Name,
 		GroupType:         body.GroupType,
 		Position:          body.Position,
 		Sources:           body.Sources,
@@ -244,9 +248,10 @@ func (h policyHandler) updateGroup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cmd := policy.UpdateGroupCommand{
-		EmptyFallbackPass: body.EmptyFallbackPass,
-		ID:                id,
-		Name:              body.Name,
+		EmptyFallbackPass:   body.EmptyFallbackPass,
+		InheritGlobalFilter: body.InheritGlobalFilter,
+		ID:                  id,
+		Name:                body.Name,
 		GroupType:         body.GroupType,
 		Position:          body.Position,
 		ExpectedRevision:  body.ExpectedRevision,
@@ -281,12 +286,13 @@ func (h policyHandler) previewGroup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	res, err := h.service.PreviewGroup(r.Context(), policy.PreviewGroupCommand{
-		GroupID:           body.GroupID,
-		ExpectedRevision:  body.ExpectedRevision,
-		Name:              body.Name,
-		GroupType:         body.GroupType,
-		EmptyFallbackPass: body.EmptyFallbackPass,
-		Sources:           body.Sources,
+		GroupID:             body.GroupID,
+		ExpectedRevision:    body.ExpectedRevision,
+		Name:                body.Name,
+		GroupType:           body.GroupType,
+		EmptyFallbackPass:   body.EmptyFallbackPass,
+		InheritGlobalFilter: body.InheritGlobalFilter,
+		Sources:             body.Sources,
 		Target:            body.Target,
 		RequestID:         GetRequestID(r.Context()),
 		ActorKind:         requestActorKind(r),

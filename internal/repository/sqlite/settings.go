@@ -27,7 +27,8 @@ func (r *settingsRepository) Get(ctx context.Context) (*domain.Settings, error) 
 	SELECT probe_concurrency_window, max_concurrent_probes, probe_per_node_ttl_seconds,
 	       fetch_timeout_seconds, fetch_max_response_bytes, max_page_size, default_page_size,
 	       admin_token, admin_auth_enabled, export_auth_enabled, updated_at,
-        subscription_fetch_mode, subscription_fetch_proxy_url, COALESCE(public_base_url, '')
+        subscription_fetch_mode, subscription_fetch_proxy_url, COALESCE(public_base_url, ''),
+        COALESCE(probe_timeout_seconds, 5)
 	FROM settings
 	WHERE id = 1;`
 
@@ -50,6 +51,7 @@ func (r *settingsRepository) Get(ctx context.Context) (*domain.Settings, error) 
 		&s.SubscriptionFetchMode,
 		&s.SubscriptionFetchProxyURL,
 		&s.PublicBaseURL,
+		&s.ProbeTimeoutSeconds,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -83,8 +85,8 @@ func (r *settingsRepository) Update(ctx context.Context, settings *domain.Settin
 		id, probe_concurrency_window, max_concurrent_probes, probe_per_node_ttl_seconds,
 		fetch_timeout_seconds, fetch_max_response_bytes, max_page_size, default_page_size,
 		admin_token, admin_auth_enabled, export_auth_enabled, updated_at,
-        subscription_fetch_mode, subscription_fetch_proxy_url, public_base_url
-	) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        subscription_fetch_mode, subscription_fetch_proxy_url, public_base_url, probe_timeout_seconds
+	) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(id) DO UPDATE SET
 		probe_concurrency_window = excluded.probe_concurrency_window,
 		max_concurrent_probes = excluded.max_concurrent_probes,
@@ -99,6 +101,7 @@ func (r *settingsRepository) Update(ctx context.Context, settings *domain.Settin
         subscription_fetch_mode = excluded.subscription_fetch_mode,
         subscription_fetch_proxy_url = excluded.subscription_fetch_proxy_url,
         public_base_url = excluded.public_base_url,
+        probe_timeout_seconds = excluded.probe_timeout_seconds,
 		updated_at = excluded.updated_at;`
 
 	updatedStr := domain.NowUTC().Format(time.RFC3339)
@@ -128,6 +131,7 @@ func (r *settingsRepository) Update(ctx context.Context, settings *domain.Settin
 		settings.SubscriptionFetchMode,
 		settings.SubscriptionFetchProxyURL,
 		settings.PublicBaseURL,
+		settings.ProbeTimeoutSeconds,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to update settings: %w", err)
@@ -167,6 +171,30 @@ func (r *settingsRepository) UpdatePublicBaseURL(ctx context.Context, publicBase
 		def := domain.DefaultSettings()
 		def.PublicBaseURL = trimmed
 		return r.Update(ctx, &def)
+	}
+	return nil
+}
+
+func (r *settingsRepository) UpdateProbeTimeout(ctx context.Context, seconds int) error {
+	if seconds < 1 || seconds > 30 {
+		return domain.NewValidationError("invalid_probe_timeout_seconds",
+			fmt.Sprintf("probe_timeout_seconds must be between 1 and 30, got %d", seconds))
+	}
+	const query = `
+	INSERT INTO settings (
+		id, probe_concurrency_window, max_concurrent_probes, probe_per_node_ttl_seconds,
+		fetch_timeout_seconds, fetch_max_response_bytes, max_page_size, default_page_size,
+		admin_token, admin_auth_enabled, export_auth_enabled, updated_at,
+        subscription_fetch_mode, subscription_fetch_proxy_url, public_base_url, probe_timeout_seconds
+	) VALUES (1, 16, 16, 300, 30, 10485760, 100, 50, '', 1, 1, ?, 'environment', '', '', ?)
+	ON CONFLICT(id) DO UPDATE SET
+		probe_timeout_seconds = excluded.probe_timeout_seconds,
+		updated_at = excluded.updated_at;`
+
+	updatedStr := domain.NowUTC().Format(time.RFC3339)
+	_, err := r.db.ExecContext(ctx, query, updatedStr, seconds)
+	if err != nil {
+		return fmt.Errorf("failed to update probe timeout: %w", err)
 	}
 	return nil
 }

@@ -74,6 +74,13 @@ func (m *mockSettingsRepo) UpdatePublicBaseURL(ctx context.Context, publicBaseUR
 	return nil
 }
 
+func (m *mockSettingsRepo) UpdateProbeTimeout(ctx context.Context, seconds int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.settings.ProbeTimeoutSeconds = seconds
+	return nil
+}
+
 func TestDynamicAdminTokenLifecycle(t *testing.T) {
 	ctx := context.Background()
 	repo := newMockSettingsRepo("")

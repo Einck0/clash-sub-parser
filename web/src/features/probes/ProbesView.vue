@@ -2015,7 +2015,7 @@ onUnmounted(() => {
               当前计划窗口内无可用于探测的活跃节点。
             </div>
             <div v-else-if="batch.counts.skipped_nodes > 0" class="p-2 bg-warning/10 border border-warning/20 rounded-lg text-warning text-xs">
-              已跳过 {{ batch.counts.skipped_nodes }} 个凭据缺失或无效的节点。
+              本次跳过 {{ batch.counts.skipped_nodes }} 个状态最新/无需重测的节点。
             </div>
             <div v-if="batch.state === 'expired'" class="p-2 bg-neutral/20 border border-base-300 rounded-lg text-xs opacity-75">
               批次时间窗口已超时结束。

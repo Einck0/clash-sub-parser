@@ -748,7 +748,7 @@ func TestResolver_TwoLevelFiltering_GlobalAndGroup(t *testing.T) {
 		CompilerVersion:    "1.0.0",
 		Nodes:              []domain.Node{n1, n2, n3},
 		Groups: []domain.NodeGroup{
-			{ID: parentID, Name: "PROXY", GroupType: domain.GroupTypeSelect},
+			{ID: parentID, Name: "PROXY", GroupType: domain.GroupTypeSelect, InheritGlobalFilter: true},
 		},
 		Edges: map[string][]domain.GroupEdge{
 			parentID: {
@@ -1068,7 +1068,7 @@ func TestResolver_ProbeFailClosed_MissingExpiredMismatchNotEquals(t *testing.T) 
 			InventoryWatermark: "wm-1",
 			CompilerVersion:    "1.0.0",
 			Nodes:              []domain.Node{node},
-			Groups:             []domain.NodeGroup{{ID: gid, Name: "G1", GroupType: domain.GroupTypeSelect}},
+			Groups:             []domain.NodeGroup{{ID: gid, Name: "G1", GroupType: domain.GroupTypeSelect, InheritGlobalFilter: true}},
 			Edges: map[string][]domain.GroupEdge{
 				gid: {{ID: "e1", ParentGroupID: gid, NodeLogicalID: &nID, Position: 0}},
 			},
@@ -1330,5 +1330,76 @@ func TestResolver_FreshnessBoundaryDigestChange(t *testing.T) {
 	// Crossing the 24h freshness boundary MUST alter input digest
 	if snap1.InputDigest == snapExp.InputDigest {
 		t.Fatalf("input digest MUST change when crossing freshness expiration boundary")
+	}
+}
+
+func TestResolver_InheritGlobalFilter_False_WARP_IncludesNodeInProxies(t *testing.T) {
+	r := sourceFixtureResolver{}
+	ctx := context.Background()
+
+	warpGroupID := domain.MustNewUUIDv7()
+	proxyGroupID := domain.MustNewUUIDv7()
+
+	nSS := domain.Node{LogicalID: testNodeLogicalID("node-ss"), DisplayName: "Regular SS", Protocol: domain.ProtocolSS, Active: true}
+	nWARP := domain.Node{LogicalID: testNodeLogicalID("node-warp"), DisplayName: "WARP-WireGuard", Protocol: domain.ProtocolWireGuard, Active: true}
+
+	input := resolver.ResolveInput{
+		RevisionID:         "rev-warp-1",
+		InventoryWatermark: "wm-1",
+		CompilerVersion:    "1.0.0",
+		Nodes:              []domain.Node{nSS, nWARP},
+		Groups: []domain.NodeGroup{
+			{ID: proxyGroupID, Name: "PROXY", GroupType: domain.GroupTypeSelect, InheritGlobalFilter: true},
+			{ID: warpGroupID, Name: "WARP", GroupType: domain.GroupTypeSelect, InheritGlobalFilter: false},
+		},
+		Edges: map[string][]domain.GroupEdge{
+			proxyGroupID: {{ID: "e1", ParentGroupID: proxyGroupID, NodeLogicalID: &nSS.LogicalID, Position: 0}},
+			warpGroupID:  {{ID: "e2", ParentGroupID: warpGroupID, NodeLogicalID: &nWARP.LogicalID, Position: 0}},
+		},
+		PolicyRules: []domain.PolicyRule{
+			{ID: "r1", TargetGroupID: proxyGroupID, Expression: "MATCH", Position: 0},
+			{ID: "r2", TargetGroupID: warpGroupID, Expression: "DOMAIN-SUFFIX,warp.dev", Position: 1},
+		},
+		GlobalFilter: &domain.NodeFilterSpec{
+			Conditions: []domain.FilterCondition{
+				// Only SS allowed by global filter; WireGuard node excluded
+				{Field: domain.FilterFieldProtocol, Op: domain.FilterOpEquals, Value: "ss"},
+			},
+		},
+		DNS: resolver.DNSConfig{Enabled: true, Nameservers: []string{"1.1.1.1"}},
+	}
+
+	snap, err := r.Resolve(ctx, input)
+	if err != nil {
+		t.Fatalf("resolve failed: %v", err)
+	}
+
+	// 1. Verify WARP group successfully picked up nWARP
+	var warpGroup *resolver.ResolvedGroup
+	for i := range snap.Groups {
+		if snap.Groups[i].ID == warpGroupID {
+			warpGroup = &snap.Groups[i]
+			break
+		}
+	}
+	if warpGroup == nil {
+		t.Fatalf("WARP group not found in snapshot")
+	}
+	if len(warpGroup.Members) != 1 || warpGroup.Members[0].TargetID != nWARP.LogicalID {
+		t.Fatalf("expected WARP group to contain nWARP (%s), got %+v", nWARP.LogicalID, warpGroup.Members)
+	}
+
+	// 2. Verify snapshot.Nodes contains BOTH nSS and nWARP (for proxies in YAML)
+	var foundSS, foundWARP bool
+	for _, n := range snap.Nodes {
+		if n.LogicalID == nSS.LogicalID {
+			foundSS = true
+		}
+		if n.LogicalID == nWARP.LogicalID {
+			foundWARP = true
+		}
+	}
+	if !foundSS || !foundWARP {
+		t.Fatalf("expected both nSS and nWARP in snapshot.Nodes, foundSS=%v foundWARP=%v (total %d nodes)", foundSS, foundWARP, len(snap.Nodes))
 	}
 }

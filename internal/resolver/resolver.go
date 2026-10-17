@@ -110,54 +110,6 @@ func (r *defaultResolver) Resolve(ctx context.Context, input ResolveInput) (*Res
 		}
 	}
 
-	// Build sorted admitted nodes (sorted by DisplayName ASC, then LogicalID ASC)
-	sortedAdmittedNodes := make([]ResolvedNode, len(globalAdmittedNodes))
-	for i, n := range globalAdmittedNodes {
-		sortedAdmittedNodes[i] = ResolvedNode{
-			LogicalID:          n.LogicalID,
-			DisplayName:        n.DisplayName,
-			Protocol:           n.Protocol,
-			Server:             n.Server,
-			Port:               n.Port,
-			Credentials:        n.Credentials,
-			Active:             n.Active,
-			ConnectionRevision: n.ConnectionRevision,
-			Position:           i,
-		}
-	}
-	sort.SliceStable(sortedAdmittedNodes, func(i, j int) bool {
-		if sortedAdmittedNodes[i].DisplayName == sortedAdmittedNodes[j].DisplayName {
-			return sortedAdmittedNodes[i].LogicalID < sortedAdmittedNodes[j].LogicalID
-		}
-		return sortedAdmittedNodes[i].DisplayName < sortedAdmittedNodes[j].DisplayName
-	})
-	for i := range sortedAdmittedNodes {
-		sortedAdmittedNodes[i].Position = i
-	}
-
-	admittedLogicalIDs := make([]string, len(sortedAdmittedNodes))
-	for i, n := range sortedAdmittedNodes {
-		admittedLogicalIDs[i] = n.LogicalID
-	}
-
-	finalAdmittedIDs := make([]string, len(globalAdmittedNodes))
-	for i, n := range globalAdmittedNodes {
-		finalAdmittedIDs[i] = n.LogicalID
-	}
-	sort.Strings(finalAdmittedIDs)
-
-	finalExcludedIDs := append(append([]string(nil), admissionRes.ExcludedNodeIDs...), globalExcludedIDs...)
-	sort.Strings(finalExcludedIDs)
-	if len(finalExcludedIDs) > 1 {
-		dedup := make([]string, 0, len(finalExcludedIDs))
-		for i, id := range finalExcludedIDs {
-			if i == 0 || id != finalExcludedIDs[i-1] {
-				dedup = append(dedup, id)
-			}
-		}
-		finalExcludedIDs = dedup
-	}
-
 	// 4. Resolve groups, ordered members, dynamic groups, and nested group expansion
 	resolvedGroups, groupDiagnostics, groupFilterCounts := resolveGroups(
 		input.Groups,
@@ -206,6 +158,56 @@ func (r *defaultResolver) Resolve(ctx context.Context, input ResolveInput) (*Res
 			uniqueGroupNodes[nid] = struct{}{}
 		}
 	}
+
+	// snapshot.Nodes contains all nodes that passed global filter plus any node
+	// referenced by any resolved policy group (ensuring non-inheriting groups like WARP have proxies in YAML).
+	includedNodeIDs := make(map[string]bool)
+	for _, n := range globalAdmittedNodes {
+		includedNodeIDs[n.LogicalID] = true
+	}
+	for nid := range uniqueGroupNodes {
+		includedNodeIDs[nid] = true
+	}
+
+	snapshotNodes := make([]ResolvedNode, 0, len(includedNodeIDs))
+	for nid := range includedNodeIDs {
+		if node, ok := admissionRes.AdmittedNodeMap[nid]; ok {
+			snapshotNodes = append(snapshotNodes, ResolvedNode{
+				LogicalID:          node.LogicalID,
+				DisplayName:        node.DisplayName,
+				Protocol:           node.Protocol,
+				Server:             node.Server,
+				Port:               node.Port,
+				Credentials:        node.Credentials,
+				Active:             node.Active,
+				ConnectionRevision: node.ConnectionRevision,
+			})
+		}
+	}
+	sort.SliceStable(snapshotNodes, func(i, j int) bool {
+		if snapshotNodes[i].DisplayName == snapshotNodes[j].DisplayName {
+			return snapshotNodes[i].LogicalID < snapshotNodes[j].LogicalID
+		}
+		return snapshotNodes[i].DisplayName < snapshotNodes[j].DisplayName
+	})
+	snapshotLogicalIDs := make([]string, len(snapshotNodes))
+	for i := range snapshotNodes {
+		snapshotNodes[i].Position = i
+		snapshotLogicalIDs[i] = snapshotNodes[i].LogicalID
+	}
+
+	finalAdmittedIDs := make([]string, len(snapshotNodes))
+	copy(finalAdmittedIDs, snapshotLogicalIDs)
+	sort.Strings(finalAdmittedIDs)
+
+	finalExcludedIDs := make([]string, 0)
+	for _, n := range input.Nodes {
+		if !includedNodeIDs[n.LogicalID] {
+			finalExcludedIDs = append(finalExcludedIDs, n.LogicalID)
+		}
+	}
+	sort.Strings(finalExcludedIDs)
+
 	filterCounts := &FilterLayerCounts{
 		RawTotal:            len(input.Nodes),
 		AdmittedTotal:       len(admissionRes.AdmittedNodes),
@@ -220,8 +222,8 @@ func (r *defaultResolver) Resolve(ctx context.Context, input ResolveInput) (*Res
 		RevisionID:         input.RevisionID,
 		InventoryWatermark: input.InventoryWatermark,
 		CompilerVersion:    input.CompilerVersion,
-		Nodes:              sortedAdmittedNodes,
-		NodeLogicalIDs:     admittedLogicalIDs,
+		Nodes:              snapshotNodes,
+		NodeLogicalIDs:     snapshotLogicalIDs,
 		Groups:             resolvedGroups,
 		Rules:              resolvedRules,
 		DNS:                input.DNS,

@@ -82,6 +82,12 @@ const sortedPolicyRules = computed(() => {
   return [...policyRules.value].sort((a, b) => a.position - b.position)
 })
 
+const hasWarningOrErrorIssues = computed(() => {
+  return validationResult.value?.issues?.some(
+    (issue) => issue.severity === 'warning' || issue.severity === 'error'
+  ) ?? false
+})
+
 function getTargetGroupName(groupId: string): string {
   const all = allTopologyGroups.value.length > 0 ? allTopologyGroups.value : groups.value
   const g = all.find((grp) => grp.id === groupId)
@@ -303,6 +309,7 @@ async function handleSaveGroup(data: {
   type: GroupType
   position?: number
   emptyFallbackPass: boolean
+  inheritGlobalFilter?: boolean
   sources: MemberSource[]
   expectedRevision?: number
 }) {
@@ -316,6 +323,7 @@ async function handleSaveGroup(data: {
         group_type: data.type,
         position: data.position,
         empty_fallback_pass: data.emptyFallbackPass,
+        inherit_global_filter: data.inheritGlobalFilter,
         expected_revision: data.expectedRevision ?? activeGroup.value.revision,
         sources: data.sources,
       })
@@ -327,6 +335,7 @@ async function handleSaveGroup(data: {
         group_type: data.type,
         position: data.position,
         empty_fallback_pass: data.emptyFallbackPass,
+        inherit_global_filter: data.inheritGlobalFilter,
         sources: data.sources,
       })
       activeGroup.value = created
@@ -522,16 +531,16 @@ onUnmounted(() => {
       <div
         v-if="validationResult"
         class="p-4 rounded-xl border text-sm flex items-start justify-between gap-3"
-        :class="validationResult.valid ? ((validationResult.issues && validationResult.issues.length > 0) ? 'bg-warning/10 border-warning/30 text-warning' : 'bg-success/10 border-success/30 text-success') : 'bg-error/10 border-error/30 text-error'"
+        :class="validationResult.valid ? (hasWarningOrErrorIssues ? 'bg-warning/10 border-warning/30 text-warning' : 'bg-success/10 border-success/30 text-success') : 'bg-error/10 border-error/30 text-error'"
       >
         <div class="flex items-start gap-2.5 min-w-0">
-          <CheckBadgeIcon v-if="validationResult.valid && (!validationResult.issues || validationResult.issues.length === 0)" class="w-5 h-5 flex-shrink-0 mt-0.5" />
+          <CheckBadgeIcon v-if="validationResult.valid && !hasWarningOrErrorIssues" class="w-5 h-5 flex-shrink-0 mt-0.5" />
           <ExclamationTriangleIcon v-else class="w-5 h-5 flex-shrink-0 mt-0.5" />
           <div class="min-w-0 space-y-1">
             <h4 class="font-bold">
-              {{ validationResult.valid ? ((validationResult.issues && validationResult.issues.length > 0) ? '拓扑校验通过（存在配置警告）' : '拓扑与分流校验通过') : '拓扑与分流校验存在阻断问题' }}
+              {{ validationResult.valid ? (hasWarningOrErrorIssues ? '拓扑校验通过（存在配置警告）' : '拓扑与分流校验通过') : '拓扑与分流校验存在阻断问题' }}
             </h4>
-            <p v-if="validationResult.valid && (!validationResult.issues || validationResult.issues.length === 0)" class="text-xs opacity-90 mt-0.5">
+            <p v-if="validationResult.valid && !hasWarningOrErrorIssues" class="text-xs opacity-90 mt-0.5">
               {{ t('policy.validationSuccess') }}
             </p>
             <div v-else-if="validationResult.issues && validationResult.issues.length > 0" class="space-y-1.5 mt-1.5">

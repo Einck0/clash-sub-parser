@@ -67,7 +67,7 @@ func exportFilterFixture(t *testing.T, withGroup bool, filter *filterReadRepo, o
 	policy := newMockPolicyRepo()
 	if withGroup {
 		groupID := "01944aa0-0000-7000-8000-000000000002"
-		if err := policy.CreateGroup(ctx, &domain.NodeGroup{ID: groupID, Name: "PROXY", GroupType: domain.GroupTypeSelect}); err != nil {
+		if err := policy.CreateGroup(ctx, &domain.NodeGroup{ID: groupID, Name: "PROXY", GroupType: domain.GroupTypeSelect, InheritGlobalFilter: true}); err != nil {
 			t.Fatal(err)
 		}
 		if err := policy.SetEdgesForGroup(ctx, groupID, []domain.GroupEdge{

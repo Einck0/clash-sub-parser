@@ -95,6 +95,10 @@ func (m *memoryRuns) List(_ context.Context, state *domain.ProbeRunState, page, 
 	return items[start:end], len(items), nil
 }
 
+func (m *memoryRuns) PruneHistory(_ context.Context, _ int) error {
+	return nil
+}
+
 func TestServiceCreateIsIdempotentWithinTTL(t *testing.T) {
 	repo := &memoryRuns{items: map[string]domain.ProbeRun{}}
 	svc := NewService(repo)

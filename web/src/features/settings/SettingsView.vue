@@ -20,6 +20,7 @@ import { applyTheme, getStoredTheme, THEME_NAMES, type ThemeName } from '../../t
 import GlobalNodeFilterSettings from './GlobalNodeFilterSettings.vue'
 import SubscriptionFetchSettings from './SubscriptionFetchSettings.vue'
 import PublicBaseUrlSettings from './PublicBaseUrlSettings.vue'
+import ProbeTimeoutSettings from './ProbeTimeoutSettings.vue'
 
 const authMode = ref<'open' | 'token' | 'loading' | 'error'>('loading')
 const authModeError = ref('')
@@ -410,6 +411,7 @@ onMounted(() => {
     <SubscriptionFetchSettings />
     <PublicBaseUrlSettings />
     <GlobalNodeFilterSettings />
+    <ProbeTimeoutSettings />
 
     <!-- Language & Visual System Settings -->
     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">

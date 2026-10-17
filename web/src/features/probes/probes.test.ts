@@ -577,7 +577,7 @@ describe('ProbesView Component Interaction & Feedback', () => {
     // Batch 1: Human-readable batch title, sub-task links and skipped nodes feedback
     expect(batchCards[0].textContent).toContain('自动定时批次')
     expect(batchCards[0].textContent).toContain('子任务 #1')
-    expect(batchCards[0].textContent).toContain('已跳过 20 个凭据缺失或无效的节点')
+    expect(batchCards[0].textContent).toContain('本次跳过 20 个状态最新/无需重测的节点')
 
     // Batch 2: Empty inventory feedback
     expect(batchCards[1].textContent).toContain('当前计划窗口内无可用于探测的活跃节点。')
@@ -1363,9 +1363,9 @@ describe('ProbesView Component Interaction & Feedback', () => {
 
     const rows = container.querySelectorAll('[data-testid="probe-node-row"]')
     expect(rows.length).toBe(2)
-    expect(rows[0].textContent).toContain('未知 · 安全拒绝')
+    expect(rows[0].textContent).toContain('异常')
     expect(rows[0].textContent).toContain('安全拒绝：跳过证书校验')
-    expect(rows[1].textContent).toContain('未知 · 配置待核')
+    expect(rows[1].textContent).toContain('异常')
     expect(rows[1].textContent).toContain('探针构建失败')
 
     // Open Evidence Sheet on first node and verify diagnostic banner & observation badge

@@ -24,7 +24,7 @@ func NewPolicyRepository(db *sql.DB) domain.PolicyRepository {
 
 func (r *policyRepository) GetGroupByID(ctx context.Context, id string) (*domain.NodeGroup, error) {
 	const query = `
-	SELECT id, name, group_type, created_at, updated_at, empty_fallback_pass, COALESCE(revision, 1), position
+	SELECT id, name, group_type, created_at, updated_at, empty_fallback_pass, COALESCE(revision, 1), position, COALESCE(inherit_global_filter, 1)
 	FROM node_groups
 	WHERE id = ?;`
 
@@ -40,6 +40,7 @@ func (r *policyRepository) GetGroupByID(ctx context.Context, id string) (*domain
 		&group.EmptyFallbackPass,
 		&group.Revision,
 		&group.Position,
+		&group.InheritGlobalFilter,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -69,7 +70,7 @@ func (r *policyRepository) GetGroupByID(ctx context.Context, id string) (*domain
 
 func (r *policyRepository) ListGroups(ctx context.Context) ([]domain.NodeGroup, error) {
 	const query = `
-	SELECT id, name, group_type, created_at, updated_at, empty_fallback_pass, COALESCE(revision, 1), position
+	SELECT id, name, group_type, created_at, updated_at, empty_fallback_pass, COALESCE(revision, 1), position, COALESCE(inherit_global_filter, 1)
 	FROM node_groups
 	ORDER BY position ASC, created_at ASC, id ASC;`
 
@@ -93,6 +94,7 @@ func (r *policyRepository) ListGroups(ctx context.Context) ([]domain.NodeGroup, 
 			&group.EmptyFallbackPass,
 			&group.Revision,
 			&group.Position,
+			&group.InheritGlobalFilter,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan node group: %w", err)
@@ -131,8 +133,8 @@ func (r *policyRepository) ListGroups(ctx context.Context) ([]domain.NodeGroup, 
 
 func (r *policyRepository) CreateGroup(ctx context.Context, group *domain.NodeGroup) error {
 	const query = `
-	INSERT INTO node_groups (id, name, group_type, created_at, updated_at, empty_fallback_pass, position)
-	VALUES (?, ?, ?, ?, ?, ?, ?);`
+	INSERT INTO node_groups (id, name, group_type, created_at, updated_at, empty_fallback_pass, position, inherit_global_filter)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?);`
 
 	nowStr := domain.NowUTC().Format(timeFormatFixed)
 	createdStr := group.CreatedAt.Format(timeFormatFixed)
@@ -152,6 +154,7 @@ func (r *policyRepository) CreateGroup(ctx context.Context, group *domain.NodeGr
 		updatedStr,
 		group.EmptyFallbackPass,
 		group.Position,
+		group.InheritGlobalFilter,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to insert node group: %w", err)
@@ -410,8 +413,8 @@ func (r *policyRepository) SaveGroupWithSources(ctx context.Context, group *doma
 			}
 			currentRev++
 			_, err = tx.ExecContext(ctx,
-				`UPDATE node_groups SET name = ?, group_type = ?, empty_fallback_pass = ?, revision = ?, position = ?, updated_at = ? WHERE id = ?`,
-				group.Name, string(group.GroupType), group.EmptyFallbackPass, currentRev, group.Position, nowStr, group.ID)
+				`UPDATE node_groups SET name = ?, group_type = ?, empty_fallback_pass = ?, revision = ?, position = ?, inherit_global_filter = ?, updated_at = ? WHERE id = ?`,
+				group.Name, string(group.GroupType), group.EmptyFallbackPass, currentRev, group.Position, group.InheritGlobalFilter, nowStr, group.ID)
 			if err != nil {
 				return fmt.Errorf("failed to update node group: %w", err)
 			}
@@ -424,8 +427,8 @@ func (r *policyRepository) SaveGroupWithSources(ctx context.Context, group *doma
 			}
 			currentRev = 1
 			_, err = tx.ExecContext(ctx,
-				`INSERT INTO node_groups (id, name, group_type, empty_fallback_pass, revision, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-				group.ID, group.Name, string(group.GroupType), group.EmptyFallbackPass, currentRev, group.Position, nowStr, nowStr)
+				`INSERT INTO node_groups (id, name, group_type, empty_fallback_pass, revision, position, inherit_global_filter, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				group.ID, group.Name, string(group.GroupType), group.EmptyFallbackPass, currentRev, group.Position, group.InheritGlobalFilter, nowStr, nowStr)
 			if err != nil {
 				return fmt.Errorf("failed to insert node group: %w", err)
 			}

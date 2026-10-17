@@ -40,6 +40,7 @@ export interface CreateGroupInput {
   edges?: GroupEdge[]
   node_filter?: NodeFilterSpec | null
   empty_fallback_pass?: boolean
+  inherit_global_filter?: boolean
 }
 
 export interface UpdateGroupInput {
@@ -48,6 +49,7 @@ export interface UpdateGroupInput {
   position?: number
   sources?: MemberSource[]
   empty_fallback_pass?: boolean
+  inherit_global_filter?: boolean
   expected_revision?: number
   node_filter?: NodeFilterSpec | null
   edges?: GroupEdge[]
@@ -167,6 +169,7 @@ export function usePolicy() {
       let name = ''
       let groupType: GroupType = 'select'
       let emptyFallbackPass = false
+      let inheritGlobalFilter = true
       let sources: MemberSource[] = []
 
       if (typeof dataOrName === 'string') {
@@ -178,6 +181,9 @@ export function usePolicy() {
         name = dataOrName.name.trim()
         groupType = dataOrName.group_type
         emptyFallbackPass = Boolean(dataOrName.empty_fallback_pass)
+        if (dataOrName.inherit_global_filter !== undefined) {
+          inheritGlobalFilter = Boolean(dataOrName.inherit_global_filter)
+        }
         if (Array.isArray(dataOrName.sources)) {
           sources = dataOrName.sources.map((s, idx) => ({ ...s, position: idx }))
         } else {
@@ -189,6 +195,7 @@ export function usePolicy() {
         name,
         group_type: groupType,
         empty_fallback_pass: emptyFallbackPass,
+        inherit_global_filter: inheritGlobalFilter,
       }
       if (typeof dataOrName === 'object' && dataOrName !== null && dataOrName.position !== undefined) {
         payload.position = dataOrName.position
@@ -227,6 +234,7 @@ export function usePolicy() {
         if (dataOrName.group_type !== undefined) payload.group_type = dataOrName.group_type
         if (dataOrName.position !== undefined) payload.position = dataOrName.position
         if (dataOrName.empty_fallback_pass !== undefined) payload.empty_fallback_pass = dataOrName.empty_fallback_pass
+        if (dataOrName.inherit_global_filter !== undefined) payload.inherit_global_filter = dataOrName.inherit_global_filter
         if (dataOrName.expected_revision !== undefined) payload.expected_revision = dataOrName.expected_revision
         if (Array.isArray(dataOrName.sources)) {
           payload.sources = dataOrName.sources.map((s, idx) => ({ ...s, position: idx }))
@@ -479,9 +487,12 @@ export function usePolicy() {
 
       validationResult.value = res
       validationStale.value = false
+      const hasWarningOrError = res.issues?.some(
+        (issue: any) => issue.severity === 'warning' || issue.severity === 'error'
+      )
       if (!res.valid) {
         validationState.value = 'error'
-      } else if (res.issues && res.issues.length > 0) {
+      } else if (hasWarningOrError) {
         validationState.value = 'warning'
       } else {
         validationState.value = 'success'

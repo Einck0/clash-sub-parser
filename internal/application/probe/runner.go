@@ -78,7 +78,7 @@ type RunBudget struct {
 }
 
 // MaxResponseBytes bounds one task; MaxTotalBytes bounds all response bodies.
-var DefaultRunBudget = RunBudget{MaxTasks: 10000, MaxResponseBytes: 16 << 20, MaxTotalBytes: 128 << 20, TaskTimeout: 30 * time.Second}
+var DefaultRunBudget = RunBudget{MaxTasks: 10000, MaxResponseBytes: 16 << 20, MaxTotalBytes: 128 << 20, TaskTimeout: 5 * time.Second}
 
 var errResponseTooLarge = errors.New("probe response exceeds per-task byte limit")
 
@@ -102,6 +102,23 @@ func WithRunBudget(budget RunBudget) DefaultRunnerOption {
 			budget.MaxTotalBytes = DefaultRunBudget.MaxTotalBytes
 		}
 		r.budget = budget
+	}
+}
+
+// WithSettingsRepository configures an optional settings repository for dynamic timeout.
+func WithSettingsRepository(repo domain.SettingsRepository) DefaultRunnerOption {
+	return func(r *DefaultRunner) {
+		r.settingsRepo = repo
+	}
+}
+
+// WithTaskTimeout overrides the task execution timeout.
+func WithTaskTimeout(timeout time.Duration) DefaultRunnerOption {
+	return func(r *DefaultRunner) {
+		if timeout > 0 {
+			r.budget.TaskTimeout = timeout
+			r.dialer = mihomo.NewNodeDialer(timeout)
+		}
 	}
 }
 
@@ -177,6 +194,7 @@ type DefaultRunner struct {
 	riskObs           domain.IPRiskObservationRepository
 	scheduler         *queue.Scheduler
 	runs              domain.ProbeRunRepository
+	settingsRepo      domain.SettingsRepository
 	dialer            NodeDialer
 	clock             func() time.Time
 	scope             domain.NodeScope
@@ -195,7 +213,7 @@ func NewDefaultRunner(
 		observations:     observations,
 		scheduler:        scheduler,
 		runs:             runs,
-		dialer:           mihomo.NewNodeDialer(15 * time.Second),
+		dialer:           mihomo.NewNodeDialer(5 * time.Second),
 		clock:            time.Now,
 		budget:           DefaultRunBudget,
 		stageConcurrency: DefaultStageConcurrency,
@@ -308,6 +326,16 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 	if run == nil {
 		return domain.NewValidationError("nil_run", "probe run is nil")
 	}
+
+	defer func() {
+		go func() {
+			if r.runs != nil {
+				pruneCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				_ = r.runs.PruneHistory(pruneCtx, 100)
+			}
+		}()
+	}()
 	if r.scheduler == nil {
 		return errors.New("scheduler is nil")
 	}
@@ -1079,6 +1107,14 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 	}
 	start := r.clock()
 	timeout := r.budget.TaskTimeout
+	if r.settingsRepo != nil {
+		if s, err := r.settingsRepo.Get(ctx); err == nil && s.ProbeTimeoutSeconds > 0 {
+			timeout = time.Duration(s.ProbeTimeoutSeconds) * time.Second
+		}
+	}
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
 	if kind == domain.ProbeKindSpeed && prof.SpeedBudget.Deadline > 0 {
 		speedDeadline := prof.SpeedBudget.Deadline
 		if speedDeadline+2*time.Second < timeout {

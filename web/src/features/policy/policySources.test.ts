@@ -494,7 +494,7 @@ describe('Feature-Level Policy Sources & Pipeline Rebuild', () => {
     await policy.updateGroup('g', mixed)
     expect(put).toHaveBeenLastCalledWith('/api/v1/policies/groups/g', { sources: saved.sources })
     await policy.createGroup({ name: 'G', group_type: 'select', ...mixed })
-    expect(post).toHaveBeenCalledWith('/api/v1/policies/groups', { name: 'G', group_type: 'select', empty_fallback_pass: false, sources: saved.sources })
+    expect(post).toHaveBeenCalledWith('/api/v1/policies/groups', { name: 'G', group_type: 'select', empty_fallback_pass: false, inherit_global_filter: true, sources: saved.sources })
     await policy.updateGroup('g', { name: 'Renamed' })
     expect(put).toHaveBeenLastCalledWith('/api/v1/policies/groups/g', { name: 'Renamed' })
   })

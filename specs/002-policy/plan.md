@@ -1,143 +1,82 @@
-# Technical plan — CSP complete-delivery convergence
+# Technical Plan: Policy Topology Hygiene, Inherited Filter & Probe State Governance
 
-Feature: `specs/002-policy`; current run `pi_run_20261016_104303_1679144`; change `002-policy`; package `default`, epoch 1. This is an implementation-authorized continuation, not a fresh initialization. Historical implementation and failed gates remain preserved. The current delivery amendment in spec.md takes precedence over historical execution prose in linked artifacts.
+- **Feature**: `specs/002-policy/`
+- **Run ID**: `pi_run_20261017_203412_2919528`
+- **Status**: IMPLEMENTING
 
-## Context and scope
+---
 
-- Host verified: Linux amd64, Go 1.27.1, Node 26.7, Python 3.14.7. Go/Chi/SQLite plus embedded Vue/TypeScript web assets. Native verification: Go build/test/tagged/race, web Vitest/type-check/build, Playwright.
-- Baseline: local dev HEAD `cd020b8c23c5c8cd899074fc80288116a8ba8641`, 82 dirty entries including existing substantial source/editor/migration18 work and test-generated maintenance files. Preserve tracked/untracked user work; no reset/restore/checkout/clean/force-push.
-- Deterministic feature resolution: `.specify/feature.json` binds 002-policy, confirmed by official check-prerequisites script. No graphify graph currently exists. Related inventory/probe/publication/auth/UI domain specs remain baselines, not new roots.
-- Actual production is schema17, old image ID `sha256:906d757381727bbdb166003522adefd31c160f9775d2518d2cfe54a41bbf1d65`, version `commit: dev, built: unknown`; public management/export were actually open at investigation time. Do not change authentication.
-- Initial read-only evidence: `/tmp/csp-delivery-20261015-230722/scout/findings.md`. Four enabled subscriptions: two current-copy fetches succeeded (31/18 nodes), two failed before parsing; proxy host.docker.internal:7890 reachable. Concrete errors are obscured by over-greedy secret-query redaction. These results do not establish the deployed binary is repaired.
+## 1. 架构定位与设计要点
 
-## Constitution check
+### 1.1 策略拓扑校验去噪
+- **问题**：`resolver.Resolve` 在应用全局过滤时产生 `DiagnosticSeverityInfo` 级别的 `global_filter_excluded` 诊断。`application/policy/service.go` 的 `Validate` 将所有非 `empty_routed_group`/`empty_group` 诊断不加区分地全量转成 `ValidationIssue`；前端只要 `issues.length > 0` 立即将校验框标黄为“存在配置警告”，把原本正常的分流节点排除误当成策略拓扑配置错误。
+- **方案**：
+  1. `policy.Service.Validate`: 过滤掉 `DiagnosticSeverityInfo`（尤其是 `global_filter_excluded`），仅保留 `DiagnosticSeverityError` 及显式策略组空置警告（`empty_group`）；
+  2. `PolicyView.vue`: 检查有效警告，仅在存在 `severity: 'warning' | 'error'` 时呈现黄色警告框。
 
-Zero asset loss and stable logical identity are mandatory. Keep six domains decoupled through existing services/repositories. Reuse plaintext SQLite and existing fetch policy; no credential vault, extra middleware, legacy dual-authority bridge, global-rule edits or new project root. Preserve requirements and failed verification history. Update living specifications with current behavior; no weakening of TLS/public-target validation/private-image gates. All principles remain unchanged.
+### 1.2 策略组「继承全局过滤」开关 (Inherit Global Filter)
+- **问题**：全局过滤器（如仅保留可用节点）作用于全系统，导致未探活或特殊节点（如 Cloudflare WARP WireGuard 节点）被从候选池中剔除，进而使专属策略组（如 WARP）由于无可用节点而清空并阻断导出。
+- **方案**：
+  1. 数据库迁移 `000024_inherit_global_filter_and_probe_governance.sql`：
+     ```sql
+     ALTER TABLE node_groups ADD COLUMN inherit_global_filter INTEGER NOT NULL DEFAULT 1;
+     UPDATE node_groups SET inherit_global_filter = 0 WHERE UPPER(name) = 'WARP' OR id = 'WARP';
+     ```
+  2. 领域层 `domain.NodeGroup` 增加 `InheritGlobalFilter bool`；
+  3. `internal/resolver/graph.go`:
+     - 策略组在计算成员候选节点时，检查 `group.InheritGlobalFilter`；
+     - 若为 `true`：从 `globalAdmittedNodes` 中挑选；
+     - 若为 `false`：从 `admissionRes.AdmittedNodes` 中挑选；
+  4. `internal/resolver/resolver.go`:
+     - 确保 `snapshot.Nodes` 包含所有被任何策略组引用的节点，保证编译器 `proxies:` 完整包含目标组引用的所有节点；
+  5. 前后端接口与界面同步支持该字段。
 
-## Frozen business and interface design
+### 1.3 节点探针健康状态极净化 (收敛消除「已过期」与「待复核」)
+- **问题**：
+  - `defaultProbeFreshnessTTL = 1 * time.Hour`：节点超过 1 小时未被探测就会被置为 `stale` / `undetermined`，导致客户端订阅节点随时间流逝突然丢失；
+  - `nodeView.ts` 中只有 `node_connect_failed` 算 `unhealthy`，超时、连接拒绝、DNS 解析失败等所有其他错误都被强行推脱成“待复核（undetermined）”，造成“不可用为0、待复核几十个”的虚假指标。
+- **方案**：
+  1. 移除自然时间超过 1 小时强制变 `stale` 的逻辑：只要节点的连接凭据版本（`connection_revision`）一致，上一轮的探测结果持续有效，直到新一轮探测覆盖它；
+  2. `nodeView.ts`: 凡 baseline 探测报错（`verdict === 'error'`），均归为 `unhealthy`（不可用），彻底废弃将 timeout / transport_error 归入 `undetermined` 的多余分支；
+  3. 节点卡片清晰展示三种核心状态：可用（绿）、不可用（红，附具体原因如“超时”）、未测试（灰）。
 
-### Subscription route settings and errors (FR-DEL-01..03)
+### 1.4 探针探测超时动态可配置
+- **问题**：Mihomo 出站客户端、Sing-box 运行参数及 Probe Runner 均硬编码 15s 或 30s 超时，无法根据用户需求灵活调整。
+- **方案**：
+  1. `settings` 表增加 `probe_timeout_seconds INTEGER NOT NULL DEFAULT 5`；
+  2. `domain.Settings` 增加 `ProbeTimeoutSeconds int`；
+  3. 探针拨号与任务超时使用该配置；
+  4. 前端设置页 `SettingsView.vue` 支持配置。
 
-Use existing settings persistence and inventory/fetch integration, not a second configuration authority. Add migration19 after existing migration18 for persistent fetch-route settings. API `GET/PUT /api/v1/settings/subscription-fetch` under the existing management authentication/CSRF boundary:
+### 1.5 探针历史记录治理与滚动上限
+- **问题**：现存 14,000+ 条 `probe_runs`、80,000+ 条 `probe_observations` 无清理机制，数据库冗余庞大。
+- **方案**：
+  1. 迁移中修剪历史：
+     ```sql
+     -- 保留最新 100 条 probe_runs，删除多余记录
+     DELETE FROM probe_runs WHERE id NOT IN (SELECT id FROM probe_runs ORDER BY started_at DESC LIMIT 100);
+     DELETE FROM probe_batches WHERE id NOT IN (SELECT id FROM probe_batches ORDER BY started_at DESC LIMIT 100);
+     -- 保留最新 100 条 run 对应的 observations，以及每个节点每个 kind 最新的 1 条 observation
+     DELETE FROM probe_observations 
+     WHERE run_id NOT IN (SELECT id FROM probe_runs)
+       AND id NOT IN (
+         SELECT po.id FROM probe_observations po
+         JOIN (
+           SELECT node_logical_id, probe_kind, MAX(observed_at) AS max_at
+           FROM probe_observations GROUP BY node_logical_id, probe_kind
+         ) latest ON po.node_logical_id = latest.node_logical_id AND po.probe_kind = latest.probe_kind AND po.observed_at = latest.max_at
+       );
+     ```
+  2. 运行时修剪：`internal/application/probe` 在每次 run 完成后触发异步滚动修剪，限制最多保留 100 批次。
 
-- PUT `mode`: `environment | direct | proxy`; `proxy_url` supplied only to explicitly set/replace a proxy. Environment inherits CLI/env fallback; direct bypasses fallback; proxy uses the persisted endpoint. Default on migration: environment. Credential retention without resend must be explicit, not accidentally overwrite with a masked URL.
-- GET returns mode, effective source/mode, masked configured/effective proxy endpoint and whether credentials are configured; never a reusable credential or full secret-bearing URL. UI clearly labels inherited/direct/custom state, supports save/reset without losing unsaved input on error, and does not need a restart. Reuse existing UI components and translations.
-- Existing explicit per-subscription override remains higher precedence. Global save affects the NEXT manual and scheduled refresh, captures one coherent immutable route/policy snapshot per fetch and survives restart. Requests already running retain their own snapshot. No accumulating previous proxy allowlists after updates. Invalid settings fail atomically without altering existing behavior or unrelated auth settings.
-- Explicit administrator-configured HTTP/HTTPS proxy endpoint is the only newly trusted private endpoint. Target and every redirect still undergo public-IP validation and IP pinning. Proxy trust does not set global AllowPrivate or permit loopback/private subscription targets. Reject malformed scheme/host/path/fragment/port as appropriate to the existing canonical policy.
-- Retain safe structured causes at fetch/HTTP/parse boundaries and redact secrets without swallowing following diagnostic suffixes. Fix userinfo/query/assignment/wrapped URL errors using behavior tests; never expose upstream URLs or response bodies in reports. Real-upstream failures may remain genuine failures, but must be explained and must preserve assets.
+### 1.6 纠正批次跳过文案
+- **方案**：在 `web/src/features/probes/ProbesView.vue:2018` 将“已跳过 X 个凭据缺失或无效的节点”改为“本次跳过 X 个状态最新/无需重测的节点”。
 
-Subscription scheduling is an existing exposed capability, not a new enhancement: interval_seconds and cron_schedule already appear in the subscription drawer but the current service has no periodic refresh executor. Implement a bounded lifecycle-owned scheduler using the existing subscription.Refresh/inventory route, disabled for isolated previews. Interval uses latest completed attempt (success or failure) plus interval to avoid hot retries; never-fetched uses creation time. A nonblank standard five-field cron in server TZ overrides the interval; validate it on save with a mature parser (no handwritten cron grammar). At most one refresh per subscription at a time across manual/scheduled entry points, bounded total concurrency <=2, cancel on service shutdown, skip disabled subscriptions, honor edits next scan, and no catch-up flood. Manual refresh updates the same history used by scheduling. Missing reconciler returns an explicit unavailable error, never a fabricated successful refresh. Unit/temp-DB tests inject time to prove due/not-due/disabled/config-change/retry/shutdown and actual updated route; no real network loops in tests.
+---
 
-### Policy source authority and confirmed fixes (FR-DEL-04)
-
-One ordered source list supports add/remove and later re-entry; deduplicate identities in the current result only. Six kinds: manual_node, group_ref, group_nodes, regex, filter, typed_builtin. Preserve mixed ordering, typed identities, child-own evaluation then expansion-item conditions, and active/subscription/global/risk admission without new health restrictions. Both reference and expansion cycles return explicit paths. Pure-node export targets ignore irrelevant policy-graph errors but retain node/filter/risk fail-closed checks; Mihomo retains full-graph constraints.
-
-After one-time migration18, policy_group_sources is authoritative. Remove ongoing edge mirrors, read-on-empty legacy fallback and errors swallowed as legacy reads. Existing supported edit/revision/rollback/delete operations must operate on sources coherently; obsolete edge-write APIs may reject explicitly rather than silently overwrite sources. Draft preview is no-write and uses the same assembled resolve input as publication. PUT/GET preserve source order and revision; conflicts retain drafts. Repository-level and HTTP real SQLite scale tests (>250 nodes, 150 groups) verify integration, not mocks alone.
-
-Failed/partial subscription fetch preserves old node-source associations and history; complete success updates only that subscription's relations and retains historical node assets. No unrelated node deactivation. Existing immutable publications stay unchanged during migration.
-
-Historical archive restoration remains copy-only until an unambiguous plan and appropriate authorization exist. Preserve original literal `去掉(...)`; do not invent an exclusion DSL or partially rewrite the user's group. Three round-robin expansions must use group_nodes, not group_ref or fallback substitution. HR-143 describes historical migration equivalence only.
-
-### Release and acceptance (FR-DEL-05..06)
-
-1. Complete feature implementation and final merged-state local self-tests. Never count older successful tests predating later edits as proof of the final patch.
-2. Independent reviewer examines the final patch, migration equivalence, route trust/secret handling, source authority and regression coverage. Fix defects and independently reverify failures with report lineage.
-3. A non-critic prepares an isolated ready instance on non-production ports with temp DB, disabled external schedulers, healthy URL and standard instance JSON (instanceId/url/health/allowedOrigins/sourceManifest/testDataBoundary/scenarios/shutdownOwner/cleanupToken). Critic performs actual interactions and PNG visual analysis in desktop and mobile viewports. The phone is explicitly excluded by the latest instruction; do not connect to it.
-4. Integrate existing remote cloud-delivery files without overwriting either local dirty work or remote changes. Local vs remote divergence is real; preserve local commits and remote additions using an isolated integration work area, reviewed before publishing. Reuse existing CI, Dockerfile.runtime, docker-compose.prod.yml, cloud-delivery scripts/docs, not a parallel release system. No force-push or silent replacement of main. Secrets stay out of source/artifacts.
-5. After applicable gates, sync embedded assets and validate that final asset delta, make scoped commits via git_commit, push the verified integration branch normally, obtain cloud checks/build/publish on that exact SHA. A skipped publish is incomplete. Private package visibility is an actual gate: existing csp-runtime-private is anonymously readable; authenticated owner/API capability is currently unavailable. Do not publish/deploy it as private until corrected and verifiable. Do not read Docker credentials to obtain GitHub API tokens.
-6. Acquire immutable digest/OCI revision; run official image preflight and isolated acceptance of the exact image. Hot-backup SQLite online, integrity/hash and business preimages before authorized production writes; preserve current image/volume/ports/proxy and rollback procedure. Deploy only CSP through its official image path after gates; verify new migration/version/assets against SHA/digest.
-7. Execute the existing production-coverage-register as a concrete operation inventory, correcting unsupported endpoints and assertions as discovered, without laundering NOT_EXECUTED into PASS. Verify actual refresh outcomes by enabled subscription, settings persistence/routing, ordered editor/preview/export, inventory preservation, probe truth, downloads and revocation, and existing auth behavior without production auth changes. Use uniquely named test objects, restore temporary changes and check cleanup. Backend assertions plus actual browser/visual evidence are required; health-only is insufficient.
-
-## Validation and resource boundaries
-
-- Ordinary tests: isolated DB/ports; `NO_COPY_WEBASSETS=1`, build web output to private tmp until final asset synchronization. Never tests on production ports 17000/18080. Full native Go build, all packages ordinary/tagged tests; substantive affected-package races (inventory, SQLite, HTTP, policy/resolver/compiler/publication/domain) with realistic timeouts and recorded nonzero/matched-case counts. Web typecheck, Vitest, production build. Eliminate test-generated repository litter through fixture fixes; remove only provably generated files after retaining provenance.
-- Existing all-tags include with_quic, with_dhcp, with_wireguard, with_utls, with_clash_api, with_gvisor; derive actual project build tags/commands rather than guessing invalid test names. Exact exits/log hashes in private artifacts.
-- Manual external business testing budget: 128 MiB response bodies / 30 minutes active external testing total; investigation has consumed conservative upper bound 4,470,628 bytes and 97 seconds. Alive concurrency <=4, media <=2, speed <=1 with <=2 nodes x4MiB. Cloud build/pull transfer is separate release traffic, not a proxy comparison/probe budget. Do not rerun historical large comparisons.
-- No phone, Pi/Hermes/Tools Hub/Nginx/Webhook/MCP or gateway operations. No credential dumping, vault access, network scanning, auth toggles, clearing DB/history or deleting existing assets.
-- Evidence root `/tmp/csp-delivery-20261015-230722/`, directories0700/files0600. Reports contain safe counts/codes/anonymous IDs, not subscription URLs, credentials or raw node configs.
-
-## Delivery chain and honest limitations
-
-Task completion requires implementation/self-test, independent reviewer and applicable critic plus authorized cloud/production evidence, not process exit. Current machine contract remains whole_task; logical task names below do not invent work-package identities. Advanced-executor is the user-requested actual implementation role. Reviewer/critic keep their named roles; model overrides only if runtime explicitly supports the user's requested concrete model. If unavailable, disclose actual model rather than pretending an upgrade. Known upstream/source failures, ambiguous old-group restoration, missing authenticated private-package capability and any untested operations remain explicit; they cannot be marked complete or erased.
-
-## Resume delta and acceptance
-
-Original plan is continued, not reinitialized. FR-RES-01 repair is confined to serve shutdown bookkeeping and actual blocking-handler tests, retaining DB on uncertain HTTP termination. FR-RES-02 uses full platform linker paths consistently in Dockerfile, CI and current operational docs, with real static-binary/version assertion rather than string-only tests. Advanced executor owns these non-UI fixes and an isolated synthetic ready instance; independent reviewer rechecks final code/build delta and eligible prior component evidence. UI source/assets are unchanged, so critic revisits settings/policy core scenarios and actual PNGs on the final ready binary without rebuilding the UI. Neither independent gate may claim production/private-image acceptance.
-
-Owner private-package capability remains an external release blocker (anonymous manifest200; visibility API401); send verified QQ notice, preserve production schema17/current healthy image. Remote ancestor merge is a separate isolated integration operation, not source import equivalence; do not force/publish before reviewing any merge deltas. New diagnostic attempts are limited to existing two failed sources, direct vs saved proxy route, strict TLS/public-target validation, no repeated broad endpoint scans or proxy config writes. Preserve private backup/artifacts and anonymous labels.
-
-`auto_test` is an acknowledged unsupported behavior requiring defined target/kind/partial semantics, not a silently implemented whole-inventory side effect. All final reports must list it and unresolved historical restoration/production coverage, even if current local delta passes. Artifact root `/tmp/csp-resume-20261016-074108/`. Previous private evidence roots remain intact.
-
-### Latest visibility override, current authority
-
-Live user append `csp-public-image-authorized-20261016` supersedes prior private-image constraints, including FR-DEL-05 older visibility clauses and the former external blocker above. Release remains cloud-built, exact-SHA, checksum/static/version validated with immutable digest and OCI revision. Reuse the existing public historical-named `csp-runtime-private` package; no new private package/OWNER_PAT workflow is needed. Keep normal release/tag/explicit-dispatch triggers and runtime minimal Dockerfile, verify actual push and authenticated pull/digest; public anonymous pull is permitted rather than a failure. Test publication through existing Actions GITHUB_TOKEN, not credential extraction. Update workflow and native cloud tests/docs consistently, independent reviewer checks no secret/config enters image. Public permission does not authorize default branch overwrite, changing repo visibility, unrelated services or release before quality gates.
-
-### Dev → prelease convention (latest user instruction)
-
-No remote prelease branch or release entity exists; establish GitHub prerelease `prelease-<shortSHA>` targeting the successful dev SHA. Reuse the CI artifact for the runtime image and release assets (binary/SHA256/delivery identity). Only successful dev checks permit promotion; failed/PR runs never publish. Token write permissions are job-scoped, secrets not available to PR publication. Explicit older release/tag paths may remain supported but are not used for current test compilation. Avoid automatic production rollout. Normal merge origin/dev in an isolated integration tree, preserve both parents and reviewed current behavior; no local heavy rebuild. Validate CI syntax/semantics with lightweight native scripts and independent reviewer, then dev cloud handles heavy tests/build.
-
-## Current Engineering Design (2026-10-16 Run pi_run_20261016_104303_1679144)
-
-### Proxy Fetch DNS Handling
-In `internal/fetch/fetch.go`:
-When `activeProxyURL != nil`, preserve original domain in `hopReq.URL.Host` and `hopReq.Host`. Do not override `hopReq.URL.Host` with `pinnedAddr`. In `route_diagnostic_test.go`, update wire assertions to expect original domain name rather than pinned IP on proxy requests.
-
-### Subscription Prefix Architecture
-- Model: Single authoritative `Subscription.Prefix` (top-level API + SQLite column). No config_json duplicate.
-- Storage: Add `migrations/000021_subscription_prefix.sql` adding column `prefix TEXT NOT NULL DEFAULT ''` to `subscriptions`.
-- Ingestion: Preserve raw entry names/anchors, then recompute display labels inside the ingestion transaction from current authoritative source prefixes.
-- Retroactive Renaming: Save subscription and recompute all affected names in one repository transaction, stable source-ID label order and explicit user override precedence.
-
-### Disabled Subscription Manual Refresh
-In `internal/application/inventory/service.go` and `internal/application/subscription/service.go`, remove the validation error `subscription_disabled`. The cron scheduler in `scheduler.go` remains the sole component filtering by `enabled = 1`. Update unit tests expecting `subscription_disabled` to expect success.
-
-### Manual Node Protection & WARP Restoration
-- In `internal/repository/sqlite/node_predicates.go`: Expand `enabledSubscriptionsInventorySubquery` with a `UNION` for manual nodes (`active=1`, no live sources AND no entries/history of subscription origin, or explicit manual_confirmed evidence).
-- In `internal/repository/sqlite/subscriptions.go`: Modify `deactivateOrphansSQL` so it only deactivates nodes that were associated with the deleted subscription (`logical_id IN (SELECT node_logical_id FROM node_sources WHERE subscription_id = ?)`), protecting independent manual nodes.
-- Restoration: Insert `WARP-83d9` (`node_9f2515f807595e984f6081ac58d244bd`) with `active = 1` into `nodes`, `node_connection_heads`, and `node_connection_versions` from backup `csp-v1-backup-20261008_pre_release_run_3091470.db`.
-
-### Frontend Polish
-- `SubscriptionConfigDrawer.vue`: Add node prefix input field bound solely to `draft.prefix`.
-- `SubscriptionsView.vue`: Show "正在刷新" with animated spinner and disabled button state on active refresh; add a direct card refresh button; allow manual refresh for disabled subscriptions.
-
-## Review remediation authority (current run, epoch 1)
-Reviewer `rep_rev_default_d568141d-a870-46ec-9a42-72cad371107d` rejected: independent rename transaction/error swallowing, duplicate config prefix, shared-name overwrite, orphan re-admission, misleading proxy tests and narrow header/i18n. Prior PASS self-test does not override review. Its suggested stale If-Match reproduction is inaccurate: service validates revision before rename; real failure is rename commit followed by repository update failure, or rename error swallowed.
-
-- Prefix has one authority: top-level field/column; remove config prefix (unreleased API). Subscription update and affected display names MUST share one SQLite transaction; rollback all on either write failure. No best-effort callback. Raw source entries/classification/IDs/connection revisions/publication snapshots remain unchanged. Existing repo.Update boundary may perform transactionally affected-node rename using old/new prefix.
-- Shared node display name: preserve one stable logical ID; render unique nonempty source prefixes in stable subscription-ID order followed by the unprefixed original name from latest entry of first source (fallback strips exactly known prior labels, no heuristic arbitrary bracket removal). This honestly represents all source labels without last-writer wins or identity forks; no duplicating equal labels. Empty prefix removes only that source label. Reconcile/save/delete of owning sources recomputes same deterministic label. Manual display-name overrides retain precedence. UI explains shared labels combine; imported raw names and overrides never contain synthetic prefix.
-- Manual/static scope eligibility: active nodes with no live sources AND no evidence of subscription origin (subscription_entries/history); explicit manual_confirmed evidence may authorize manually recovered assets. Do not re-admit refresh-pruned subscription assets. Scope stays unchanged for enabled/latest-fetch and disabled-source nodes. Do not alter explicit destructive reset semantics.
-- WARP restore was already executed out of order on production by prior executor, before independent review/backup gate; preserve fact, do NOT reseed, write production further, or claim safe rollout. Schema21 stays credential-free; never embed real WARP secrets in repository/fixtures/public assets. Need private receipt/preimage evidence from session, current count/head integrity verification; current existing WARP filter may still be subject to unreviewed old production scope.
-- Heavy compile/full tests only dev CI; local lightweight targeted cached tests/typecheck optional, no broad rebuild. Need independent review before scoped commit; push dev obtains authoritative self-test/build, then exact artifact preview on isolated port for critic before completion. No production image switch implicit in new request. No phone, CPA, Nginx or gateway.
-
-## Current gate evidence (2026-10-16 enhancement)
-Self-test repair PASS `rep_exec_repair_47243e6d-2ec1-4faa-b691-e8e5fbeb5c87` follows typecheck failure `rep_exec_repair_6eb4fc18-4f23-4db7-bf40-d5c3d6398b1c`; independent re-review PASS `rep_rev_default_a4ffc11c-1334-4e25-aac7-aad0796bf403` resolves original rejection `rep_rev_default_d568141d-a870-46ec-9a42-72cad371107d`. Go97/E2E11/Vitest29/typecheck0; private manifest `/tmp/csp-enhancement-repair/manifest.json` sha2565f0fd29924429d4dd6e0a35b6cec1fcb2eb36f35c2ed46cce01283672d965fb6. First stale generated UI delta was removed by verified restoration of only parent-created assets; dev CI builds current source into final artifact. No graph output exists and graphify unavailable; update not claimed. The reviewed dev commit is a TEST CANDIDATE, not completion or production release. Cloud full checks/build/prerelease and final artifact critic remain mandatory delivery gates. Prior WARP restore was out-of-order; no write-preimage backup receipt found, current node/head/version read-back counts1/revision1 only. No further production changes.
-
-## Current branch governance plan (2026-10-16)
-
-Current run `pi_run_20261016_134459_1816216` supersedes prior run identity only for FR-GOV tasks; prior failure records and functional specs stay unchanged. Official skills specify/plan/tasks were loaded; existing feature retained via `.specify/feature.json`, no destructive setup-plan regeneration. Constitution: preserve assets/stable IDs (no runtime edits), minimal existing CI/config reuse, full evidence traceability.
-
-Evidence: `/tmp/csp-branch-governance-134459/scout/`: remote10 refs, main behind147 with ahead0; temp ahead0;5old PR each one obsolete dependency commit; no queued/in-progress run; main/dev unprotected; rulesets empty; classic protection GET403 current PAT. Old worktree clean tracked/untracked but3ignored files preserved. Source44 checks app15368 succeeded, independent review+critic evidence eligible source-only after fingerprint checks; source preview was ELF, not container/physical phone despite loose scout wording.
-
-Design/order:
-1. Executor updates existing CI/test contracts/runbook, no business files: PR targetdev only (future dev→main promotion uses exact SHA check), pushdev only, dispatchdev only, remove retired branches/v-tag build entrances and release/* publishing clauses. Remove paths-ignore that prevents required checks on doc-only candidates. Keep explicit dispatch publish opt-in onlydev and same artifact immutable prerelease mechanics. Dependabot actions targetdev (no legacy dirs), no invented new ecosystems. Parent spec authority FR-GOV supersedes historical release-trigger prose.
-2. Executor lightweight Python/YAML/source contracts only, NEVER local Go/npm tests/build. Independent reviewer verifies source diff, promotion conditions, source44 evidence, anti-deadlock and least privileges. Parent scoped commit ondev then normal nonforce push; cloud full gates mandatory. Failure→fix samefeature/review/CI.
-3. After current devSHA success, normal fast-forward remote main to exact reviewed devSHA, check current main is ancestor; no arbitrary merges, force, production deployment or defaultbranch rename. If protected gate blocks, stop and report specific gap, never bypass checks.
-4. Independently audit planned mutations before operations. Use current credential only; attempt authorized minimal main protection (checks app15368 strict, no PR peer-review requirement) and dev protection (no required status before directpush), force/delete false. If403 retain response and do not enable auto-delete until protection verified. Do not broaden token scopes or swap to ruleset route to evade denial.
-5. Private git bundle holds all8 stale head commits before cleanup (not published tags/branches); close exact oldPRs after default config updated. Remote deletions with per-ref expected-old-SHA lease, no branch force update. Preserve all local refs/worktrees and hash80maintenance+3ignored files before/after. No detach is needed for remote deletion. Recheck active Actions/task ownership before deletion.
-6. Independent reviewer verifies actual post-state+cloud results+receipts and marks partial permission blocks honestly. Parent QQ report with successful items and residual required permissions. No critic because pure repository/config changes.
-
-Gate coverage: self-test includes lightweight source contracts and real cloud checks; reviewer required; critic N/A. Completion can be partial if Administration writes denied, while source/config/PR/ref cleanup safely proceeds. No assertion that root cause fully prevented until protections/autodelete both verified.
-
-Review failure retained: `rep_rev_default_c3bad93c-8f5b-42c0-af50-aeffa43af882` P1 nondev manual dispatch can still build. Add entry job guard event!=workflow_dispatch OR refdev; targeted tests. Reviewer called eval({},locals) sandboxed, but Python auto-injects builtins; use small ast.parse allowlist for existing boolean literals/names/equals/and/or only, fail closed on unsupported constructs, no generic interpreter/framework. Archive unique dependabot objects via narrow fetch into private bare repo+bundle before closure/deletion.
-
-### Governance continuation binding (2026-10-16 15:02)
-Current run `pi_run_20261016_150206_1862343`, change `002-policy`, package `default`, epoch1. Continue FR-GOV01..05 and TASK-GOV/R01 only; previous run identity/rejection remain history, not current gate evidence. Previous repair resume returned no result; current diff still lacks job guard and contains eval. No commit/remote mutation yet. Fresh executor and independent reviewer provide current-contract evidence. Source scope unchanged, no production/local Go or web compile. All80maintenance/oldworktree preserved. Permissions blocker remains to verify with actual authorized write, no credential change.
-
-## Governance Execution Completion (2026-10-16)
-- CI & Dependabot restricted to dev branch. Entry job test-and-build protected against non-dev manual dispatch.
-- Tested and reviewed dev commit `971835fc4f936c9c4dec26778ceb631f82caeb08` succeeded in GitHub Actions Run 38866783340 (all 3 jobs success).
-- Prerelease `prelease-971835f` published with binary, checksum, and metadata.
-- Main branch successfully fast-forwarded to `971835fc4f936c9c4dec26778ceb631f82caeb08` without rebuilding.
-- All 8 obsolete remote refs (3 temp branches + 5 old dependabot frontend branches) archived to private bundle `/tmp/csp-branch-governance-150206/archive/obsolete_refs_archive.bundle` (SHA-256 `2e555c5c24803e2aa431d74b8590194888405de6e394fdbd67e3639e47f84ffd`) and deleted via safe force-with-lease. Old PRs #19..#23 closed.
-- Dependabot automatically reopened 5 modern PRs targeting dev (#24..#28) against unified workflow.
-- Branch protection and auto-delete settings attempted and returned HTTP 403 (current PAT lacks Administration:write); explicitly documented as environment limitation, no unauthorized token tampering.
+## 2. 数据库迁移方案 (Migration 000024)
+- `migrations/000024_inherit_global_filter_and_probe_governance.sql`:
+  1. `ALTER TABLE node_groups ADD COLUMN inherit_global_filter INTEGER NOT NULL DEFAULT 1;`
+  2. `UPDATE node_groups SET inherit_global_filter = 0 WHERE UPPER(name) = 'WARP' OR id = 'WARP';`
+  3. `ALTER TABLE settings ADD COLUMN probe_timeout_seconds INTEGER NOT NULL DEFAULT 5;`
+  4. 滚动修剪历史冗余 `probe_runs` / `probe_batches` / `probe_observations`。

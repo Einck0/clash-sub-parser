@@ -230,6 +230,35 @@ func (r *probeRunRepository) ListActive(ctx context.Context) ([]domain.ProbeRun,
 	return runs, nil
 }
 
+func (r *probeRunRepository) PruneHistory(ctx context.Context, keep int) error {
+	if keep <= 0 {
+		keep = 100
+	}
+	// 1. Delete old probe_runs beyond latest 'keep'
+	const deleteRunsQ = `DELETE FROM probe_runs WHERE id NOT IN (SELECT id FROM probe_runs ORDER BY created_at DESC LIMIT ?);`
+	if _, err := r.db.ExecContext(ctx, deleteRunsQ, keep); err != nil {
+		return fmt.Errorf("failed to prune probe_runs: %w", err)
+	}
+
+	// 2. Delete old probe_batches beyond latest 'keep'
+	const deleteBatchesQ = `DELETE FROM probe_batches WHERE id NOT IN (SELECT id FROM probe_batches ORDER BY created_at DESC LIMIT ?);`
+	_, _ = r.db.ExecContext(ctx, deleteBatchesQ, keep)
+
+	// 3. Delete orphaned probe_observations that are not in latest probe_runs and not the latest per node+kind
+	const deleteObsQ = `
+	DELETE FROM probe_observations 
+	WHERE probe_run_id NOT IN (SELECT id FROM probe_runs)
+	  AND id NOT IN (
+	    SELECT po.id FROM probe_observations po
+	    JOIN (
+	      SELECT node_logical_id, kind, MAX(observed_at) AS max_at
+	      FROM probe_observations GROUP BY node_logical_id, kind
+	    ) latest ON po.node_logical_id = latest.node_logical_id AND po.kind = latest.kind AND po.observed_at = latest.max_at
+	  );`
+	_, _ = r.db.ExecContext(ctx, deleteObsQ)
+	return nil
+}
+
 // ProbeObservationRepository implementation
 
 type probeObservationRepository struct {

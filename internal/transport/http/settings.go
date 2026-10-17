@@ -37,6 +37,8 @@ func registerSettingsRoutes(r chi.Router, cfg RouterConfig) {
 	r.Put("/settings/subscription-fetch", settingsPutSubscriptionFetchHandler(cfg))
 	r.Get("/settings/public-base-url", settingsGetPublicBaseURLHandler(cfg))
 	r.Put("/settings/public-base-url", settingsPutPublicBaseURLHandler(cfg))
+	r.Get("/settings/probe-timeout", settingsGetProbeTimeoutHandler(cfg))
+	r.Put("/settings/probe-timeout", settingsPutProbeTimeoutHandler(cfg))
 }
 
 type authSettingsResponse struct {
@@ -298,6 +300,77 @@ func settingsPutPublicBaseURLHandler(cfg RouterConfig) http.HandlerFunc {
 		}
 		WriteSuccess(w, r, http.StatusOK, map[string]string{
 			"public_base_url": trimmed,
+		})
+	}
+}
+
+type probeTimeoutRequest struct {
+	ProbeTimeoutSeconds int `json:"probe_timeout_seconds"`
+}
+
+type probeTimeoutResponse struct {
+	ProbeTimeoutSeconds int `json:"probe_timeout_seconds"`
+}
+
+func settingsGetProbeTimeoutHandler(cfg RouterConfig) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if cfg.SettingsRepository == nil {
+			WriteError(w, r, http.StatusInternalServerError, "internal_error", "Settings repository not configured")
+			return
+		}
+		s, err := cfg.SettingsRepository.Get(r.Context())
+		if err != nil {
+			WriteError(w, r, http.StatusInternalServerError, "internal_error", "Failed to get settings")
+			return
+		}
+		sec := s.ProbeTimeoutSeconds
+		if sec < 1 || sec > 30 {
+			sec = 5
+		}
+		WriteSuccess(w, r, http.StatusOK, probeTimeoutResponse{
+			ProbeTimeoutSeconds: sec,
+		})
+	}
+}
+
+func settingsPutProbeTimeoutHandler(cfg RouterConfig) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if cfg.SettingsRepository == nil {
+			WriteError(w, r, http.StatusInternalServerError, "internal_error", "Settings repository not configured")
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 16*1024)
+		var req probeTimeoutRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			WriteError(w, r, http.StatusBadRequest, "bad_request", "Invalid request body")
+			return
+		}
+		if req.ProbeTimeoutSeconds < 1 || req.ProbeTimeoutSeconds > 30 {
+			WriteError(w, r, http.StatusUnprocessableEntity, "invalid_probe_timeout_seconds", "probe_timeout_seconds must be between 1 and 30")
+			return
+		}
+		if err := cfg.SettingsRepository.UpdateProbeTimeout(r.Context(), req.ProbeTimeoutSeconds); err != nil {
+			var de *domain.DomainError
+			if errors.As(err, &de) {
+				WriteError(w, r, http.StatusUnprocessableEntity, de.Code, de.Message)
+				return
+			}
+			WriteError(w, r, http.StatusInternalServerError, "internal_error", "Failed to update probe timeout")
+			return
+		}
+		if cfg.AuditRepository != nil {
+			_ = cfg.AuditRepository.Record(r.Context(), &domain.AuditEvent{
+				ID:              domain.MustNewUUIDv7(),
+				ActorKind:       domain.ActorKindAdmin,
+				RequestID:       GetRequestID(r.Context()),
+				Action:          "settings.probe_timeout.update",
+				Result:          domain.AuditResultSuccess,
+				RedactedSummary: fmt.Sprintf("Updated probe_timeout_seconds to %d", req.ProbeTimeoutSeconds),
+				CreatedAt:       domain.NowUTC(),
+			})
+		}
+		WriteSuccess(w, r, http.StatusOK, probeTimeoutResponse{
+			ProbeTimeoutSeconds: req.ProbeTimeoutSeconds,
 		})
 	}
 }

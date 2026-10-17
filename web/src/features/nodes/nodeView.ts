@@ -727,8 +727,8 @@ export function nodeUnderlyingHealthCategory(
 
   // Baseline-authoritative evaluation
   if (baseDetail) {
-    if (baseDetail.stale || baseDetail.verdict === 'stale') {
-      return 'undetermined'
+    if (baseDetail.verdict === 'error') {
+      return 'unhealthy'
     }
     if (baseDetail.verdict === 'available') {
       return 'healthy'
@@ -736,12 +736,12 @@ export function nodeUnderlyingHealthCategory(
     if (baseDetail.verdict === 'restricted') {
       return 'degraded'
     }
-    if (baseDetail.verdict === 'error') {
-      const reason = extractSummaryReason(baseDetail.summary)
-      if (reason && reason !== 'node_connect_failed') {
-        return 'undetermined'
+    if (baseDetail.stale || baseDetail.verdict === 'stale') {
+      const prevVerdict = (baseDetail as any).previous_verdict || (baseDetail as any).previousVerdict
+      if (prevVerdict === 'available') {
+        return 'healthy'
       }
-      return 'unhealthy'
+      return 'undetermined'
     }
     return 'undetermined'
   }
@@ -809,31 +809,31 @@ export function nodeHealthDiagnostic(node: NodeRecord | NormalizedNode): NodeHea
     return {
       code: 'target_unresolvable',
       shortLabel: '入口域名无法解析',
-      detail: '节点入口域名 DNS 解析失败 (target_unresolvable)，暂无法建立探测连接，状态待复核',
+      detail: '节点入口域名 DNS 解析失败 (target_unresolvable)，无法建立探测连接',
       isBlockedByPolicyOrConfig: false,
     }
   }
-  if (reason === 'transport_error' && (category === 'undetermined' || (category as string) === 'unprobed')) {
+  if (reason === 'transport_error') {
     return {
       code: 'transport_error',
-      shortLabel: '传输异常 · 待复核',
-      detail: '探测传输异常 (transport_error)，缺乏连接握手阶段失败确权证据，暂列为未知/待核验，不直接断定线路瘫痪',
+      shortLabel: '传输异常',
+      detail: '探测传输异常 (transport_error)，连接或握手失败',
       isBlockedByPolicyOrConfig: false,
     }
   }
-  if ((reason === 'timeout' || reason === 'dial_timeout') && (category === 'undetermined' || (category as string) === 'unprobed')) {
+  if (reason === 'timeout' || reason === 'dial_timeout') {
     return {
       code: reason,
-      shortLabel: '探测超时 · 待复核',
-      detail: '探测请求超时，暂列为未知/待核验状态，等待下轮巡检复核',
+      shortLabel: '探测超时',
+      detail: '探测请求超时，节点代理连接不可达',
       isBlockedByPolicyOrConfig: false,
     }
   }
-  if ((reason === 'dns_error' || reason === 'dns_resolution_failed') && (category === 'undetermined' || (category as string) === 'unprobed')) {
+  if (reason === 'dns_error' || reason === 'dns_resolution_failed') {
     return {
       code: reason,
-      shortLabel: 'DNS 解析异常 · 待复核',
-      detail: '探测过程中 DNS 解析异常，暂列为未知/待核验状态',
+      shortLabel: 'DNS 解析异常',
+      detail: '探测过程中 DNS 解析异常，无法连接节点',
       isBlockedByPolicyOrConfig: false,
     }
   }
@@ -842,18 +842,6 @@ export function nodeHealthDiagnostic(node: NodeRecord | NormalizedNode): NodeHea
       code: reason || 'node_connect_failed',
       shortLabel: '连接或握手失败',
       detail: '节点代理连接或握手阶段失败，已证实当前不可达',
-      isBlockedByPolicyOrConfig: false,
-    }
-  }
-
-  const probeStale =
-    Boolean(baseDetail?.stale) ||
-    Boolean((node as NormalizedNode).probeStale ?? (node as NodeRecord).probe_stale)
-  if (probeStale) {
-    return {
-      code: 'probe_stale',
-      shortLabel: '观测已过期 / 配置已更新',
-      detail: '基础连通性观测已超保鲜期或节点连接参数已更新，等待 1 分钟增量巡检或手动刷新按需重测',
       isBlockedByPolicyOrConfig: false,
     }
   }

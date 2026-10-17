@@ -80,9 +80,10 @@ type ResolvedGroupMember struct {
 
 // ResolvedGroup represents a fully resolved policy group in the routing tree.
 type ResolvedGroup struct {
-	EmptyFallbackPass  bool                  `json:"empty_fallback_pass"`
-	EffectiveEmptyPass bool                  `json:"effective_empty_pass"`
-	ID                 string                `json:"id"`
+	EmptyFallbackPass   bool                  `json:"empty_fallback_pass"`
+	EffectiveEmptyPass  bool                  `json:"effective_empty_pass"`
+	InheritGlobalFilter bool                  `json:"inherit_global_filter"`
+	ID                  string                `json:"id"`
 	Name               string                `json:"name"`
 	GroupType          domain.GroupType      `json:"group_type"`
 	Members            []ResolvedGroupMember `json:"members"`

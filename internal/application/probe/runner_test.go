@@ -98,6 +98,10 @@ func (m *memoryRuns) ListActive(_ context.Context) ([]domain.ProbeRun, error) {
 	return res, nil
 }
 
+func (m *memoryRuns) PruneHistory(_ context.Context, _ int) error {
+	return nil
+}
+
 type memoryObservations struct {
 	mu    sync.RWMutex
 	items []domain.ProbeObservation

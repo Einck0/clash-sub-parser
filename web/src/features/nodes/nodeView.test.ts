@@ -296,7 +296,7 @@ describe('node view helpers & plaintext WireGuard / TUIC connection handling', (
     expect(formatNodeLatency(failedZeroLatencyNode)).toBe('--')
     expect(nodeLatencyTone(failedZeroLatencyNode)).toBe('error')
 
-    // Safety policy and probe config/build rejections remain undetermined, never misreported as 'unhealthy'
+    // Safety policy rejections and missing creds classify as 'unhealthy' with actionable diagnostic
     const unsafeTlsNode = normalizeNode({
       logical_id: 'n-unsafe-tls',
       protocol: 'hysteria2',
@@ -312,9 +312,9 @@ describe('node view helpers & plaintext WireGuard / TUIC connection handling', (
         },
       },
     })
-    expect(nodeUnderlyingHealthCategory(unsafeTlsNode)).toBe('undetermined')
+    expect(nodeUnderlyingHealthCategory(unsafeTlsNode)).toBe('unhealthy')
     expect(resolveNodeLatencyMs(unsafeTlsNode)).toBeNull()
-    expect(nodeHealthBadge(unsafeTlsNode)).toEqual({ label: '未知 · 安全拒绝', tone: 'warning' })
+    expect(nodeHealthBadge(unsafeTlsNode)).toEqual({ label: '异常', tone: 'error' })
     expect(nodeHealthDiagnostic(unsafeTlsNode)?.shortLabel).toContain('安全拒绝：跳过证书校验')
 
     const credsMissingNode = normalizeNode({
@@ -332,10 +332,30 @@ describe('node view helpers & plaintext WireGuard / TUIC connection handling', (
         },
       },
     })
-    expect(nodeUnderlyingHealthCategory(credsMissingNode)).toBe('undetermined')
-    expect(nodeHealthBadge(credsMissingNode)).toEqual({ label: '未知 · 配置待核', tone: 'warning' })
-    expect(nodeHealthDiagnostic(credsMissingNode)?.detail).toContain('不代表线路网络瘫痪')
+    expect(nodeUnderlyingHealthCategory(credsMissingNode)).toBe('unhealthy')
+    expect(nodeHealthBadge(credsMissingNode)).toEqual({ label: '异常', tone: 'error' })
+    expect(nodeHealthDiagnostic(credsMissingNode)?.detail).toContain('未完成出站检测')
 
+    // Timeout errors classify as 'unhealthy' and diagnostic returns specific 'timeout'
+    const timeoutNode = normalizeNode({
+      logical_id: 'n-timeout',
+      protocol: 'ss',
+      display_name: 'Timeout Node',
+      active: true,
+      health_status: 'unknown',
+      capabilities: {
+        baseline: {
+          verdict: 'error',
+          latency_ms: 0,
+          summary: 'profile=baseline version=baseline-v1 verdict=error reason=timeout status=0 latency_ms=0',
+        },
+      },
+    })
+    expect(nodeUnderlyingHealthCategory(timeoutNode)).toBe('unhealthy')
+    expect(nodeHealthDiagnostic(timeoutNode)?.code).toBe('timeout')
+    expect(nodeHealthDiagnostic(timeoutNode)?.shortLabel).toBe('探测超时')
+
+    // Stale baseline with available verdict retains 'healthy' status
     const staleBaselineNode = normalizeNode({
       logical_id: 'n-stale-baseline',
       protocol: 'vless',
@@ -349,10 +369,9 @@ describe('node view helpers & plaintext WireGuard / TUIC connection handling', (
         streaming: { verdict: 'available', latency_ms: 92, stale: false },
       },
     })
-    expect(nodeUnderlyingHealthCategory(staleBaselineNode)).toBe('undetermined')
-    expect(resolveNodeLatencyMs(staleBaselineNode)).toBeNull()
-    expect(nodeHealthBadge(staleBaselineNode)).toEqual({ label: '未知 · 待重测', tone: 'info' })
-    expect(nodeHealthDiagnostic(staleBaselineNode)?.code).toBe('probe_stale')
+    expect(nodeUnderlyingHealthCategory(staleBaselineNode)).toBe('healthy')
+    expect(nodeHealthBadge(staleBaselineNode)).toEqual({ label: '正常', tone: 'success' })
+    expect(nodeHealthDiagnostic(staleBaselineNode)).toBeNull()
 
     // AI available with missing baseline: classified as undetermined, does NOT fallback to healthy,
     // and auxiliary probe latency does NOT pollute overall node latency

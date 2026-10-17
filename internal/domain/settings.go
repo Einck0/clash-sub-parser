@@ -13,6 +13,7 @@ type Settings struct {
 	ProbeConcurrencyWindow int   `json:"probe_concurrency_window"` // default 16, valid 10-20, hard limit 32
 	MaxConcurrentProbes    int   `json:"max_concurrent_probes"`
 	ProbePerNodeTTLSeconds int   `json:"probe_per_node_ttl_seconds"`
+	ProbeTimeoutSeconds    int   `json:"probe_timeout_seconds"` // default 5, valid 1-30
 	FetchTimeoutSeconds    int   `json:"fetch_timeout_seconds"`
 	FetchMaxResponseBytes  int64 `json:"fetch_max_response_bytes"`
 	MaxPageSize            int   `json:"max_page_size"`     // default 50, maximum allowed 100
@@ -33,6 +34,7 @@ func DefaultSettings() Settings {
 		ProbeConcurrencyWindow: 16,
 		MaxConcurrentProbes:    16,
 		ProbePerNodeTTLSeconds: 300,
+		ProbeTimeoutSeconds:    5,
 		FetchTimeoutSeconds:    30,
 		FetchMaxResponseBytes:  10 * 1024 * 1024, // 10 MB
 		MaxPageSize:            100,
@@ -65,6 +67,10 @@ func (s Settings) Validate() error {
 	}
 	if err := ValidateSubscriptionFetchSettings(s.SubscriptionFetchMode, s.SubscriptionFetchProxyURL); err != nil {
 		return err
+	}
+	if s.ProbeTimeoutSeconds < 1 || s.ProbeTimeoutSeconds > 30 {
+		return NewValidationError("invalid_probe_timeout_seconds",
+			fmt.Sprintf("probe_timeout_seconds must be between 1 and 30, got %d", s.ProbeTimeoutSeconds))
 	}
 	if s.ProbeConcurrencyWindow < 10 || s.ProbeConcurrencyWindow > 32 {
 		return NewValidationError("invalid_probe_concurrency_window",

@@ -189,6 +189,14 @@ function handleHeaderClick() {
           >
             目标：{{ groupTypeSupportedTargets(group.group_type).join('/') }}
           </span>
+          <span
+            v-if="group.inherit_global_filter === false"
+            class="badge badge-xs badge-warning font-semibold"
+            data-testid="group-standalone-pool-badge"
+            title="关闭继承全局过滤，可从全量接入节点中匹配（如 WARP 或专用线路）"
+          >
+            全池直通
+          </span>
           <span v-if="group.empty_fallback_pass" class="badge badge-xs badge-outline" :title="t('policy.emptyFallbackPassHelp')">{{ t('policy.emptyFallbackPass') }}</span>
           <span
             v-if="conditionCount > 0"

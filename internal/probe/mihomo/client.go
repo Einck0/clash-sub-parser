@@ -49,7 +49,7 @@ func NewProxyClientFromOutbound(proxy ProxyOutbound, timeout time.Duration, name
 	}
 
 	if timeout <= 0 {
-		timeout = 15 * time.Second
+		timeout = 5 * time.Second
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

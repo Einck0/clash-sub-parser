@@ -99,15 +99,20 @@ func (s *Service) CreateGroup(ctx context.Context, cmd CreateGroupCommand) (*Gro
 	if cmd.Position != nil {
 		pos = *cmd.Position
 	}
+	inheritFilter := true
+	if cmd.InheritGlobalFilter != nil {
+		inheritFilter = *cmd.InheritGlobalFilter
+	}
 	group := domain.NodeGroup{
-		EmptyFallbackPass: cmd.EmptyFallbackPass,
-		Sources:           append([]domain.MemberSource(nil), cmd.Sources...),
-		ID:                groupID,
-		Name:              name,
-		GroupType:         cmd.GroupType,
-		Position:          pos,
-		CreatedAt:         now,
-		UpdatedAt:         now,
+		EmptyFallbackPass:   cmd.EmptyFallbackPass,
+		InheritGlobalFilter: inheritFilter,
+		Sources:             append([]domain.MemberSource(nil), cmd.Sources...),
+		ID:                  groupID,
+		Name:                name,
+		GroupType:           cmd.GroupType,
+		Position:            pos,
+		CreatedAt:           now,
+		UpdatedAt:           now,
 	}
 
 	if cmd.NodeFilter != nil {
@@ -383,6 +388,9 @@ func (s *Service) UpdateGroup(ctx context.Context, cmd UpdateGroupCommand) (*Gro
 		}
 		if cmd.EmptyFallbackPass != nil {
 			group.EmptyFallbackPass = *cmd.EmptyFallbackPass
+		}
+		if cmd.InheritGlobalFilter != nil {
+			group.InheritGlobalFilter = *cmd.InheritGlobalFilter
 		}
 		if cmd.Position != nil {
 			group.Position = *cmd.Position
@@ -867,15 +875,21 @@ func (s *Service) PreviewGroup(ctx context.Context, cmd PreviewGroupCommand) (*G
 		emptyFallback = *cmd.EmptyFallbackPass
 	}
 
+	inheritFilter := true
+	if cmd.InheritGlobalFilter != nil {
+		inheritFilter = *cmd.InheritGlobalFilter
+	}
+
 	previewGroup := domain.NodeGroup{
-		ID:                groupID,
-		Name:              name,
-		GroupType:         groupType,
-		EmptyFallbackPass: emptyFallback,
-		Revision:          revision,
-		Sources:           sources,
-		CreatedAt:         domain.NowUTC(),
-		UpdatedAt:         domain.NowUTC(),
+		ID:                  groupID,
+		Name:                name,
+		GroupType:           groupType,
+		EmptyFallbackPass:   emptyFallback,
+		InheritGlobalFilter: inheritFilter,
+		Revision:            revision,
+		Sources:             sources,
+		CreatedAt:           domain.NowUTC(),
+		UpdatedAt:           domain.NowUTC(),
 	}
 
 	existingGroups, err := s.policyRepo.ListGroups(ctx)
@@ -1308,6 +1322,9 @@ func (s *Service) ValidateGraph(ctx context.Context) (*ValidationResult, error) 
 
 		// Collect other diagnostics from resolver (e.g. node_inactive_or_missing)
 		for _, d := range snap.Diagnostics {
+			if d.Severity == resolver.DiagnosticSeverityInfo || d.Code == "global_filter_excluded" {
+				continue
+			}
 			if d.Code != "empty_routed_group" && d.Code != "empty_group" {
 				if d.Severity == resolver.DiagnosticSeverityError {
 					errorsList = append(errorsList, d.Message)
@@ -1598,9 +1615,10 @@ func toGroupView(group *domain.NodeGroup, edges []domain.GroupEdge) *GroupView {
 		rev = 1
 	}
 	return &GroupView{
-		EmptyFallbackPass: group.EmptyFallbackPass,
-		ID:                group.ID,
-		Name:              group.Name,
+		EmptyFallbackPass:   group.EmptyFallbackPass,
+		InheritGlobalFilter: group.InheritGlobalFilter,
+		ID:                  group.ID,
+		Name:                group.Name,
 		GroupType:         group.GroupType,
 		Position:          group.Position,
 		Revision:          rev,

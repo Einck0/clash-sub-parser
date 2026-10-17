@@ -134,6 +134,7 @@ type ProbeRunRepository interface {
 	UpdateState(ctx context.Context, id string, state ProbeRunState) error
 	List(ctx context.Context, state *ProbeRunState, page, pageSize int) ([]ProbeRun, int, error)
 	ListActive(ctx context.Context) ([]ProbeRun, error)
+	PruneHistory(ctx context.Context, keep int) error
 }
 
 // ProbeObservationRepository defines the persistence port for probe observations.
@@ -246,6 +247,8 @@ type SettingsRepository interface {
 	UpdateAuthSettings(ctx context.Context, adminAuthEnabled, exportAuthEnabled bool, tokenVerifier *string) error
 	// UpdatePublicBaseURL atomically updates only the public base URL setting.
 	UpdatePublicBaseURL(ctx context.Context, publicBaseURL string) error
+	// UpdateProbeTimeout atomically updates only the probe timeout setting.
+	UpdateProbeTimeout(ctx context.Context, seconds int) error
 }
 
 // IPRiskObservationRepository defines append-only normalized risk evidence persistence.

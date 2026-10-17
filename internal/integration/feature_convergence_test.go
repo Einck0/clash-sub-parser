@@ -76,8 +76,8 @@ func TestFeatureConvergence_SchemaMigrationTo22(t *testing.T) {
 	if !report.Ready {
 		t.Fatalf("expected readiness report Ready=true, got report: %+v", report)
 	}
-	if report.SchemaVersion != 23 {
-		t.Fatalf("expected schema version 23 (sources, fetch settings, revision snapshots, prefix, subscription links, group position and primary subscription), got %d", report.SchemaVersion)
+	if report.SchemaVersion != 24 {
+		t.Fatalf("expected schema version 24 (sources, fetch settings, revision snapshots, prefix, subscription links, group position, primary subscription and inherit global filter), got %d", report.SchemaVersion)
 	}
 	if len(report.MissingTables) > 0 {
 		t.Fatalf("unexpected missing tables: %v", report.MissingTables)

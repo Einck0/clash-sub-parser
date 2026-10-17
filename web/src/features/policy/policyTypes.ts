@@ -71,6 +71,7 @@ export interface PolicyGroup {
   group_type: GroupType
   position?: number
   empty_fallback_pass?: boolean
+  inherit_global_filter?: boolean
   revision?: number
   sources?: MemberSource[]
   edges?: GroupEdge[]

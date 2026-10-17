@@ -246,6 +246,7 @@ describe('usePolicy composable', () => {
 
     expect(postSpy).toHaveBeenCalledWith('/api/v1/policies/groups', {
       empty_fallback_pass: false,
+      inherit_global_filter: true,
       name: 'Proxy Fallback',
       group_type: 'fallback',
       sources: [],

@@ -418,16 +418,16 @@ func TestInventoryService_ReadModelWithProbeObservationsAndSources(t *testing.T)
 		t.Fatalf("unexpected nodeHealthy capabilities: %+v", vh.Capabilities)
 	}
 
-	// Verify nodeStale (no baseline, AI restricted 2h ago) -> baseline is missing, overall health must be unknown and latency nil
+	// Verify nodeStale (no baseline, AI restricted 2h ago, but matching revision persists without arbitrary 1h expiration)
 	vs := byID[nodeStale]
 	if vs.LatencyMS != nil {
 		t.Fatalf("expected nodeStale latency_ms=nil (non-baseline does not populate latency), got %v", vs.LatencyMS)
 	}
-	if vs.HealthStatus != "unknown" || vs.ProbeMissing || !vs.ProbeStale {
-		t.Fatalf("expected nodeStale health=unknown missing=false stale=true, got health=%s missing=%v stale=%v", vs.HealthStatus, vs.ProbeMissing, vs.ProbeStale)
+	if vs.HealthStatus != "unknown" || vs.ProbeMissing || vs.ProbeStale {
+		t.Fatalf("expected nodeStale health=unknown missing=false stale=false (persists across natural time), got health=%s missing=%v stale=%v", vs.HealthStatus, vs.ProbeMissing, vs.ProbeStale)
 	}
-	if !vs.Capabilities["ai"].Stale {
-		t.Fatalf("expected nodeStale ai capability stale=true, got %+v", vs.Capabilities["ai"])
+	if vs.Capabilities["ai"].Stale {
+		t.Fatalf("expected nodeStale ai capability stale=false, got %+v", vs.Capabilities["ai"])
 	}
 
 	// Verify nodeMissing

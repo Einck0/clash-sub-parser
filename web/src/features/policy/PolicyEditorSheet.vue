@@ -84,6 +84,7 @@ const emit = defineEmits<{
     type: GroupType
     position?: number
     emptyFallbackPass: boolean
+    inheritGlobalFilter: boolean
     sources: MemberSource[]
     expectedRevision?: number
   }): void
@@ -99,6 +100,7 @@ const name = ref('')
 const position = ref<number>(0)
 const groupType = ref<GroupType>('select')
 const emptyFallbackPass = ref(false)
+const inheritGlobalFilter = ref(true)
 const expectedRevision = ref<number>(1)
 
 // Ordered sources pipeline
@@ -340,6 +342,7 @@ watch(
         name.value = props.group.name
         position.value = props.group.position ?? 0
         emptyFallbackPass.value = props.group.empty_fallback_pass === true
+        inheritGlobalFilter.value = props.group.inherit_global_filter !== false
         groupType.value = props.group.group_type
         expectedRevision.value = props.group.revision ?? 1
 
@@ -352,6 +355,7 @@ watch(
         name.value = ''
         position.value = 0
         emptyFallbackPass.value = false
+        inheritGlobalFilter.value = true
         groupType.value = 'select'
         expectedRevision.value = 1
         sources.value = []
@@ -746,6 +750,7 @@ function handleSave() {
     type: groupType.value,
     position: position.value,
     emptyFallbackPass: emptyFallbackPass.value,
+    inheritGlobalFilter: inheritGlobalFilter.value,
     sources: sources.value.map((s, idx) => ({ ...s, position: idx })),
     expectedRevision: expectedRevision.value,
   })
@@ -953,21 +958,38 @@ function close() {
               </div>
             </div>
 
-            <!-- 3. Empty Fallback Pass Checkbox -->
-            <label class="flex items-start gap-3 rounded-xl border border-base-300 p-3 bg-base-200/50">
-              <input
-                v-model="emptyFallbackPass"
-                type="checkbox"
-                class="checkbox checkbox-primary checkbox-sm"
-                data-testid="empty-fallback-pass"
-              />
-              <span class="min-w-0 text-sm">
-                <span class="font-semibold block text-xs">{{ t('policy.emptyFallbackPass') }}</span>
-                <span class="text-[11px] opacity-70 leading-snug block mt-0.5">
-                  {{ t('policy.emptyFallbackPassHelp') }}
+            <!-- 3. Inherit Global Filter & Empty Fallback Pass Checkboxes -->
+            <div class="space-y-2">
+              <label class="flex items-start gap-3 rounded-xl border border-base-300 p-3 bg-base-200/50 cursor-pointer">
+                <input
+                  v-model="inheritGlobalFilter"
+                  type="checkbox"
+                  class="checkbox checkbox-primary checkbox-sm mt-0.5"
+                  data-testid="inherit-global-filter"
+                />
+                <span class="min-w-0 text-sm">
+                  <span class="font-semibold block text-xs">继承全局过滤</span>
+                  <span class="text-[11px] opacity-70 leading-snug block mt-0.5">
+                    开启时仅匹配符合全局过滤条件的节点；关闭后可从全量接入节点中匹配（如用于 WARP 或专用线路）。
+                  </span>
                 </span>
-              </span>
-            </label>
+              </label>
+
+              <label class="flex items-start gap-3 rounded-xl border border-base-300 p-3 bg-base-200/50 cursor-pointer">
+                <input
+                  v-model="emptyFallbackPass"
+                  type="checkbox"
+                  class="checkbox checkbox-primary checkbox-sm mt-0.5"
+                  data-testid="empty-fallback-pass"
+                />
+                <span class="min-w-0 text-sm">
+                  <span class="font-semibold block text-xs">{{ t('policy.emptyFallbackPass') }}</span>
+                  <span class="text-[11px] opacity-70 leading-snug block mt-0.5">
+                    {{ t('policy.emptyFallbackPassHelp') }}
+                  </span>
+                </span>
+              </label>
+            </div>
 
             <!-- 5. Ordered Sources Pipeline Section -->
             <div class="p-3.5 rounded-xl bg-base-200/80 border border-base-300 space-y-3">

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"time"
 
 	"clash-sub-parser/internal/application/inventory"
 	"clash-sub-parser/internal/application/iprisk"
@@ -116,7 +117,10 @@ func makeApplicationServices(ctx context.Context, db *sql.DB, opts appServiceOpt
 	invService.SetNodePoolStateProvider(probeScheduler)
 
 	var runnerOpts []probe.DefaultRunnerOption
-	runnerOpts = append(runnerOpts, probe.WithIPRiskObservationRepository(riskObsRepo))
+	runnerOpts = append(runnerOpts, probe.WithIPRiskObservationRepository(riskObsRepo), probe.WithSettingsRepository(settingsRepo))
+	if s, err := settingsRepo.Get(ctx); err == nil && s.ProbeTimeoutSeconds > 0 {
+		runnerOpts = append(runnerOpts, probe.WithTaskTimeout(time.Duration(s.ProbeTimeoutSeconds)*time.Second))
+	}
 	if len(opts.probeRunnerOpts) > 0 {
 		runnerOpts = append(runnerOpts, opts.probeRunnerOpts...)
 	}

@@ -16,16 +16,17 @@ type AtomicGroupRepository interface {
 }
 
 type NodeGroup struct {
-	EmptyFallbackPass bool            `json:"empty_fallback_pass"`
-	ID                string          `json:"id"`
-	Name              string          `json:"name"`
-	GroupType         GroupType       `json:"group_type"`
-	Position          int             `json:"position"`
-	Revision          int64           `json:"revision"`
-	Sources           []MemberSource  `json:"sources,omitempty"`
-	NodeFilter        *NodeFilterSpec `json:"node_filter,omitempty"`
-	CreatedAt         time.Time       `json:"created_at"`
-	UpdatedAt         time.Time       `json:"updated_at"`
+	EmptyFallbackPass   bool            `json:"empty_fallback_pass"`
+	InheritGlobalFilter bool            `json:"inherit_global_filter"`
+	ID                  string          `json:"id"`
+	Name                string          `json:"name"`
+	GroupType           GroupType       `json:"group_type"`
+	Position            int             `json:"position"`
+	Revision            int64           `json:"revision"`
+	Sources             []MemberSource  `json:"sources,omitempty"`
+	NodeFilter          *NodeFilterSpec `json:"node_filter,omitempty"`
+	CreatedAt           time.Time       `json:"created_at"`
+	UpdatedAt           time.Time       `json:"updated_at"`
 }
 
 // SourceOperation defines candidate additions and removals.

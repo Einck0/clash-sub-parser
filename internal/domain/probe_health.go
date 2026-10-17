@@ -18,11 +18,14 @@ const (
 )
 
 // EvaluateBaselineHealth returns overall health and whether baseline latency can be displayed.
-// A nil observation, expired observation, or unversioned observation cannot certify this connection.
+// A nil observation, revision-mismatched observation, or future-dated observation cannot certify this connection.
+// If freshness > 0, an observation older than freshness is also treated as expired.
 func EvaluateBaselineHealth(obs *ProbeObservation, revision int64, now time.Time, freshness time.Duration) (BaselineHealth, bool) {
 	if obs == nil || obs.Kind != ProbeKindBaseline || obs.ConnectionRevision == nil || revision < 1 ||
-		*obs.ConnectionRevision != revision || freshness <= 0 || obs.ObservedAt.After(now) ||
-		now.Sub(obs.ObservedAt) >= freshness {
+		*obs.ConnectionRevision != revision || obs.ObservedAt.After(now) {
+		return BaselineUnknown, false
+	}
+	if freshness > 0 && now.Sub(obs.ObservedAt) >= freshness {
 		return BaselineUnknown, false
 	}
 	if obs.Verdict == VerdictAvailable {

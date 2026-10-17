@@ -215,7 +215,7 @@ func loadMihomoGraph(ctx context.Context, tx *sql.Tx, rev *domain.ConfigurationR
 
 func loadNodeGroups(ctx context.Context, tx *sql.Tx, facts *ConsistentFacts) error {
 	const groupQuery = `
-	SELECT id, name, group_type, created_at, updated_at, empty_fallback_pass, COALESCE(revision, 1), position
+	SELECT id, name, group_type, created_at, updated_at, empty_fallback_pass, COALESCE(revision, 1), position, COALESCE(inherit_global_filter, 1)
 	FROM node_groups
 	ORDER BY position ASC, created_at ASC, id ASC;`
 	gRows, err := tx.QueryContext(ctx, groupQuery)
@@ -236,6 +236,7 @@ func loadNodeGroups(ctx context.Context, tx *sql.Tx, facts *ConsistentFacts) err
 			&group.EmptyFallbackPass,
 			&group.Revision,
 			&group.Position,
+			&group.InheritGlobalFilter,
 		); err != nil {
 			return fmt.Errorf("failed to scan node group: %w", err)
 		}

@@ -86,6 +86,18 @@ func resolveGroups(
 		return sortedGlobalNodes[i].DisplayName < sortedGlobalNodes[j].DisplayName
 	})
 
+	// Sort all admitted nodes by DisplayName ASC, LogicalID ASC (used when InheritGlobalFilter is false)
+	sortedAdmittedNodes := make([]domain.Node, 0, len(admittedNodeMap))
+	for _, n := range admittedNodeMap {
+		sortedAdmittedNodes = append(sortedAdmittedNodes, n)
+	}
+	sort.SliceStable(sortedAdmittedNodes, func(i, j int) bool {
+		if sortedAdmittedNodes[i].DisplayName == sortedAdmittedNodes[j].DisplayName {
+			return sortedAdmittedNodes[i].LogicalID < sortedAdmittedNodes[j].LogicalID
+		}
+		return sortedAdmittedNodes[i].DisplayName < sortedAdmittedNodes[j].DisplayName
+	})
+
 	// Sort groups deterministically by Position ASC, Name ASC, ID ASC
 	sortedGroups := make([]domain.NodeGroup, len(groups))
 	copy(sortedGroups, groups)
@@ -118,6 +130,14 @@ func resolveGroups(
 			return &groupMemo{leafNodeSet: make(map[string]bool)}
 		}
 
+		inheritFilter := g.InheritGlobalFilter
+		candidateNodes := sortedGlobalNodes
+		candidateMap := globalAdmittedMap
+		if !inheritFilter {
+			candidateNodes = sortedAdmittedNodes
+			candidateMap = admittedNodeMap
+		}
+
 		sources := groupSources[gid]
 		var currentItems []resolvedItem
 		seenInCurrentSet := make(map[string]bool)
@@ -133,7 +153,7 @@ func resolveGroups(
 					candidateCount++
 					if s.NodeLogicalID != nil {
 						nodeID := *s.NodeLogicalID
-						if node, ok := globalAdmittedMap[nodeID]; ok {
+						if node, ok := candidateMap[nodeID]; ok {
 							if s.FilterSpec != nil {
 								srcs := nodeSources[nodeID]
 								lobs := latestObs[nodeID]
@@ -154,7 +174,7 @@ func resolveGroups(
 								seenInCurrentSet[id] = true
 								currentItems = append(currentItems, resolvedItem{id: id, kind: MemberKindNode, targetID: nodeID, displayName: node.DisplayName})
 							}
-						} else if origNode, inAdm := admittedNodeMap[nodeID]; inAdm {
+						} else if origNode, inAdm := admittedNodeMap[nodeID]; inAdm && inheritFilter {
 							diagnostics = append(diagnostics, Diagnostic{
 								Severity: DiagnosticSeverityWarning,
 								Code:     "group_member_filtered",
@@ -199,7 +219,7 @@ func resolveGroups(
 							candidateCount += len(childRes.leafItems)
 							for _, leaf := range childRes.leafItems {
 								if leaf.kind == MemberKindNode {
-									node, ok := globalAdmittedMap[leaf.targetID]
+									node, ok := candidateMap[leaf.targetID]
 									if !ok {
 										continue
 									}
@@ -230,7 +250,7 @@ func resolveGroups(
 					}
 
 				case domain.SourceKindRegex:
-					candidateCount += len(sortedGlobalNodes)
+					candidateCount += len(candidateNodes)
 					if s.Pattern != nil && strings.TrimSpace(*s.Pattern) != "" {
 						re, err := domain.CompileFilterRegex(*s.Pattern)
 						if err != nil {
@@ -241,7 +261,7 @@ func resolveGroups(
 							})
 							continue
 						}
-						for _, node := range sortedGlobalNodes {
+						for _, node := range candidateNodes {
 							matched, _ := re.Match(node.DisplayName)
 							if matched {
 								id := "node:" + node.LogicalID
@@ -254,9 +274,9 @@ func resolveGroups(
 					}
 
 				case domain.SourceKindFilter:
-					candidateCount += len(sortedGlobalNodes)
+					candidateCount += len(candidateNodes)
 					if s.FilterSpec != nil {
-						for _, node := range sortedGlobalNodes {
+						for _, node := range candidateNodes {
 							srcs := nodeSources[node.LogicalID]
 							lobs := latestObs[node.LogicalID]
 							matched, _ := domain.MatchesFilter(s.FilterSpec, node, srcs, lobs, asOf)
@@ -361,7 +381,7 @@ func resolveGroups(
 				}
 				for _, leaf := range childRes.leafItems {
 					if leaf.kind == MemberKindNode && srcFilter != nil {
-						node, ok := globalAdmittedMap[leaf.targetID]
+						node, ok := candidateMap[leaf.targetID]
 						if !ok {
 							continue
 						}
@@ -423,10 +443,11 @@ func resolveGroups(
 		m := resolveGroupMemo(g.ID)
 
 		rg := ResolvedGroup{
-			EmptyFallbackPass:  g.EmptyFallbackPass,
-			EffectiveEmptyPass: m.effectiveEmptyPass,
-			ID:                 g.ID,
-			Name:               g.Name,
+			EmptyFallbackPass:   g.EmptyFallbackPass,
+			EffectiveEmptyPass:  m.effectiveEmptyPass,
+			InheritGlobalFilter: g.InheritGlobalFilter,
+			ID:                  g.ID,
+			Name:                g.Name,
 			GroupType:          g.GroupType,
 			Members:            m.members,
 			ChildGroupIDs:      m.childGroupIDs,
@@ -489,6 +510,12 @@ func resolveGroups(
 				continue
 			}
 
+			parentGroup := groupMap[parent.ID]
+			candMap := globalAdmittedMap
+			if !parentGroup.InheritGlobalFilter {
+				candMap = admittedNodeMap
+			}
+
 			var filteredChildMembers []ResolvedGroupMember
 			var filteredChildNodeIDs []string
 			anyFilteredOut := false
@@ -497,7 +524,7 @@ func resolveGroups(
 				cMember := ResolvedGroupMember{Kind: leaf.kind, TargetID: leaf.targetID, DisplayName: leaf.displayName, Position: len(filteredChildMembers)}
 				if cMember.Kind == MemberKindNode {
 					cNodeID := cMember.TargetID
-					if node, ok := globalAdmittedMap[cNodeID]; ok {
+					if node, ok := candMap[cNodeID]; ok {
 						srcs := nodeSources[cNodeID]
 						lobs := latestObs[cNodeID]
 						matched, _ := domain.MatchesFilter(pFilter, node, srcs, lobs, asOf)
@@ -525,10 +552,11 @@ func resolveGroups(
 				derivedName := fmt.Sprintf("%s [%s]", childGroup.Name, parent.Name)
 
 				derivedGroup := ResolvedGroup{
-					ID:                derivedID,
-					Name:              derivedName,
-					GroupType:         childGroup.GroupType,
-					Members:           filteredChildMembers,
+					ID:                  derivedID,
+					Name:                derivedName,
+					GroupType:           childGroup.GroupType,
+					InheritGlobalFilter: parentGroup.InheritGlobalFilter,
+					Members:             filteredChildMembers,
 					ChildGroupIDs:     nil,
 					NodeLogicalIDs:    filteredChildNodeIDs,
 					AllNodeLogicalIDs: filteredChildNodeIDs,

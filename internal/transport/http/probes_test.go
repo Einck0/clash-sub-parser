@@ -101,6 +101,10 @@ func (m *probeRunMemory) List(_ context.Context, state *domain.ProbeRunState, pa
 	return items[start:end], len(items), nil
 }
 
+func (m *probeRunMemory) PruneHistory(_ context.Context, _ int) error {
+	return nil
+}
+
 type observationMemory struct {
 	mu    sync.Mutex
 	items []domain.ProbeObservation

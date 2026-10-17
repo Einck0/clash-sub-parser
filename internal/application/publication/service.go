@@ -1684,6 +1684,35 @@ func (s *Service) evaluatePreflightFromSnapshot(ctx context.Context, snapshot *r
 	return result
 }
 
+// GenerateTargetArtifact coordinates the dynamic on-request compilation of consistent facts for a given compiler target.
+func (s *Service) GenerateTargetArtifact(ctx context.Context, target domain.CompilerTarget) (*Artifact, error) {
+	if s.factsLoader == nil {
+		return nil, domain.NewInternalError("missing_loader", "consistent facts loader not configured")
+	}
+
+	if s.concurrencySem != nil {
+		select {
+		case s.concurrencySem <- struct{}{}:
+			defer func() { <-s.concurrencySem }()
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+			return nil, ErrRateLimitExceeded
+		}
+	}
+
+	facts, err := s.factsLoader.LoadConsistentFacts(ctx, "", target, domain.NowUTC())
+	if err != nil {
+		return nil, err
+	}
+
+	artifact, _, err := s.BuildCurrentArtifact(ctx, facts, target)
+	if err != nil {
+		return nil, err
+	}
+	return artifact, nil
+}
+
 // GenerateLiveArtifact coordinates the end-to-end generation of an authorized client subscription export.
 func (s *Service) GenerateLiveArtifact(ctx context.Context, linkID string, token string) (*Artifact, error) {
 	if s.subLinkRepo == nil {

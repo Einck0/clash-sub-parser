@@ -81,6 +81,29 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	r.HandleFunc("/script", Legacy410Handler)
 	r.HandleFunc("/script/*", Legacy410Handler)
 
+	// Direct human-readable client subscription export endpoints & historical endpoints
+	if cfg.PublicationService != nil {
+		directMihomo := directSubscriptionHandler(cfg.PublicationService, cfg.TokenHolder, domain.TargetMihomo)
+		directSingBox := directSubscriptionHandler(cfg.PublicationService, cfg.TokenHolder, domain.TargetSingBox)
+		directSurge := directSubscriptionHandler(cfg.PublicationService, cfg.TokenHolder, domain.TargetSurge)
+		directQX := directSubscriptionHandler(cfg.PublicationService, cfg.TokenHolder, domain.TargetQuantumultX)
+		directGeneric := directSubscriptionHandler(cfg.PublicationService, cfg.TokenHolder, "")
+
+		r.Get("/clash", directMihomo)
+		r.Get("/mihomo", directMihomo)
+		r.Get("/singbox", directSingBox)
+		r.Get("/surge", directSurge)
+		r.Get("/qx", directQX)
+		r.Get("/quantumult-x", directQX)
+		r.Get("/sub/{target}", directGeneric)
+
+		// Historical endpoints
+		client := publicationClientHandler(cfg.PublicationService, cfg.TokenHolder)
+		r.Get("/publish/v1/{publication_id}", client)
+		r.Get("/p/{publication_id}", client)
+		r.Get("/subscribe/v1/{id}", liveSubscriptionClientHandler(cfg.PublicationService))
+	}
+
 	webHandler := cfg.WebHandler
 	if webHandler == nil {
 		webHandler, _ = webassets.Handler()
@@ -90,14 +113,6 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Get("/*", webHandler.ServeHTTP)
 		r.Head("/", webHandler.ServeHTTP)
 		r.Head("/*", webHandler.ServeHTTP)
-	}
-
-	// Publication endpoint: /publish/v1/{publication_id}
-	if cfg.PublicationService != nil {
-		client := publicationClientHandler(cfg.PublicationService, cfg.TokenHolder)
-		r.Get("/publish/v1/{publication_id}", client)
-		r.Get("/p/{publication_id}", client)
-		r.Get("/subscribe/v1/{id}", liveSubscriptionClientHandler(cfg.PublicationService))
 	}
 
 	// Public auth endpoints

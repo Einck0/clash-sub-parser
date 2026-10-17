@@ -936,6 +936,7 @@ describe('PublicationsView component rendering', () => {
           id: '01925b3a-96e0-7e12-8e6f-7f7f98e6c4ba',
           target: 'mihomo' as const,
           path: '/subscribe/v1/01925b3a-96e0-7e12-8e6f-7f7f98e6c4ba?token=valid-tok-123',
+          url: '/subscribe/v1/01925b3a-96e0-7e12-8e6f-7f7f98e6c4ba?token=valid-tok-123',
           token: 'valid-tok-123',
           public_base_url: '',
         }
@@ -948,6 +949,7 @@ describe('PublicationsView component rendering', () => {
           id: 'link-abc',
           target: 'surge' as const,
           path: '/subscribe/v1/link-abc?token=tok-abc',
+          url: '/subscribe/v1/link-abc?token=tok-abc',
           token: 'tok-abc',
           public_base_url: 'https://cdn.example.org:8443/custom-prefix/',
         }
@@ -960,6 +962,7 @@ describe('PublicationsView component rendering', () => {
           id: 'link-1',
           target: 'mihomo' as const,
           path: 'https://evil.attacker.com/subscribe/v1/link-1?token=tok',
+          url: 'https://evil.attacker.com/subscribe/v1/link-1?token=tok',
           token: 'tok',
           public_base_url: '',
         }
@@ -971,6 +974,7 @@ describe('PublicationsView component rendering', () => {
           id: 'link-1',
           target: 'mihomo' as const,
           path: '//evil.com/subscribe/v1/link-1?token=tok',
+          url: '//evil.com/subscribe/v1/link-1?token=tok',
           token: 'tok',
           public_base_url: '',
         }
@@ -982,6 +986,7 @@ describe('PublicationsView component rendering', () => {
           id: 'link-1',
           target: 'mihomo' as const,
           path: '/subscribe/v1/link-1?token=tok#injected-hash',
+          url: '/subscribe/v1/link-1?token=tok#injected-hash',
           token: 'tok',
           public_base_url: '',
         }
@@ -993,6 +998,7 @@ describe('PublicationsView component rendering', () => {
           id: 'link-1',
           target: 'mihomo' as const,
           path: '/subscribe/v1/link-1?token=tok&role=admin',
+          url: '/subscribe/v1/link-1?token=tok&role=admin',
           token: 'tok',
           public_base_url: '',
         }
@@ -1004,6 +1010,7 @@ describe('PublicationsView component rendering', () => {
           id: 'link-1',
           target: 'mihomo' as const,
           path: '/subscribe/v1/link-other?token=tok',
+          url: '/subscribe/v1/link-other?token=tok',
           token: 'tok',
           public_base_url: '',
         }

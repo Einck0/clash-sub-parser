@@ -516,10 +516,11 @@ describe('Enabled Subscriptions Inventory & Live Validation Specification', () =
     await nextTick()
     await new Promise((r) => setTimeout(r, 40))
 
-    // Renders immutable snapshot label and live pipeline label
+    // Renders immutable snapshot label alongside live client subscription and advanced historical freeze
     expect(container.textContent).toContain('历史快照语义')
     expect(container.textContent).toContain('不可变定格快照')
-    expect(container.textContent).toContain('当前启用订阅流水线')
+    expect(container.textContent).toContain('客户端实时订阅')
+    expect(container.textContent).toContain('高级选项：配置预览与历史不可变发布')
   })
 
   // --------------------------------------------------------------------------

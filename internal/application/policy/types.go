@@ -21,6 +21,7 @@ type CreateGroupCommand struct {
 	ID                string                 `json:"id,omitempty"`
 	Name              string                 `json:"name"`
 	GroupType         domain.GroupType       `json:"group_type"`
+	Position          *int                   `json:"position,omitempty"`
 	Sources           []domain.MemberSource  `json:"sources,omitempty"`
 	Edges             []EdgeInput            `json:"edges,omitempty"`
 	NodeFilter        *domain.NodeFilterSpec `json:"node_filter,omitempty"`
@@ -34,6 +35,7 @@ type UpdateGroupCommand struct {
 	ID                string                 `json:"id"`
 	Name              *string                `json:"name,omitempty"`
 	GroupType         *domain.GroupType      `json:"group_type,omitempty"`
+	Position          *int                   `json:"position,omitempty"`
 	ExpectedRevision  *int64                 `json:"expected_revision,omitempty"`
 	Sources           *[]domain.MemberSource `json:"sources,omitempty"`
 	Edges             *[]EdgeInput           `json:"edges,omitempty"`
@@ -80,6 +82,7 @@ type GroupView struct {
 	ID                string                 `json:"id"`
 	Name              string                 `json:"name"`
 	GroupType         domain.GroupType       `json:"group_type"`
+	Position          int                    `json:"position"`
 	Revision          int64                  `json:"revision"`
 	Sources           []domain.MemberSource  `json:"sources"`
 	Edges             []GroupEdgeView        `json:"edges"`

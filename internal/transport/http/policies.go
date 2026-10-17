@@ -22,6 +22,7 @@ type createGroupRequest struct {
 	ID                string                 `json:"id,omitempty"`
 	Name              string                 `json:"name"`
 	GroupType         domain.GroupType       `json:"group_type"`
+	Position          *int                   `json:"position,omitempty"`
 	Sources           []domain.MemberSource  `json:"sources,omitempty"`
 	Edges             []policy.EdgeInput     `json:"edges,omitempty"`
 	NodeFilter        *domain.NodeFilterSpec `json:"node_filter,omitempty"`
@@ -31,6 +32,7 @@ type updateGroupRequest struct {
 	EmptyFallbackPass *bool                  `json:"empty_fallback_pass,omitempty"`
 	Name              *string                `json:"name,omitempty"`
 	GroupType         *domain.GroupType      `json:"group_type,omitempty"`
+	Position          *int                   `json:"position,omitempty"`
 	ExpectedRevision  *int64                 `json:"expected_revision,omitempty"`
 	Sources           *[]domain.MemberSource `json:"sources,omitempty"`
 	Edges             *[]policy.EdgeInput    `json:"edges,omitempty"`
@@ -194,6 +196,7 @@ func (h policyHandler) createGroup(w http.ResponseWriter, r *http.Request) {
 		ID:                body.ID,
 		Name:              body.Name,
 		GroupType:         body.GroupType,
+		Position:          body.Position,
 		Sources:           body.Sources,
 		Edges:             body.Edges,
 		NodeFilter:        body.NodeFilter,
@@ -245,6 +248,7 @@ func (h policyHandler) updateGroup(w http.ResponseWriter, r *http.Request) {
 		ID:                id,
 		Name:              body.Name,
 		GroupType:         body.GroupType,
+		Position:          body.Position,
 		ExpectedRevision:  body.ExpectedRevision,
 		Sources:           body.Sources,
 		Edges:             body.Edges,

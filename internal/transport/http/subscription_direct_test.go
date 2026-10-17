@@ -302,3 +302,127 @@ func TestDirectSubscriptionEndpoints_LiveDynamicUpdate(t *testing.T) {
 		t.Fatal("expected content to change after node update")
 	}
 }
+
+func TestDirectSubscriptionEndpoints_PrimarySubscriptionUserinfo(t *testing.T) {
+	masterToken := "settings-secret-token-userinfo"
+	router, db, _ := setupDirectSubRouter(t, masterToken, false, false)
+
+	// 1. Initial state: sub-direct-1 is not primary -> no Subscription-Userinfo header
+	rec := doRequest(router, http.MethodGet, "/clash", "", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if h := rec.Header().Get("Subscription-Userinfo"); h != "" {
+		t.Fatalf("expected no Subscription-Userinfo header when no primary sub, got %q", h)
+	}
+
+	// 2. Mark sub-direct-1 as primary with userinfo
+	sampleUserinfo := "upload=10240; download=20480; total=107374182400; expire=1893456000"
+	_, err := db.Exec(`
+		UPDATE subscriptions SET is_primary = 1, userinfo = ? WHERE id = 'sub-direct-1';
+	`, sampleUserinfo)
+	if err != nil {
+		t.Fatalf("failed to update subscription: %v", err)
+	}
+
+	// 3. Request /clash, /singbox, /surge, /qx -> All should return Subscription-Userinfo header (for both GET and HEAD)!
+	for _, path := range []string{"/clash", "/singbox", "/surge", "/qx", "/sub/mihomo"} {
+		r := doRequest(router, http.MethodGet, path, "", "")
+		if r.Code != http.StatusOK {
+			t.Fatalf("GET %s returned %d", path, r.Code)
+		}
+		if got := r.Header().Get("Subscription-Userinfo"); got != sampleUserinfo {
+			t.Errorf("GET %s Subscription-Userinfo = %q, want %q", path, got, sampleUserinfo)
+		}
+
+		rHead := doRequest(router, http.MethodHead, path, "", "")
+		if rHead.Code != http.StatusOK {
+			t.Fatalf("HEAD %s returned %d", path, rHead.Code)
+		}
+		if got := rHead.Header().Get("Subscription-Userinfo"); got != sampleUserinfo {
+			t.Errorf("HEAD %s Subscription-Userinfo = %q, want %q", path, got, sampleUserinfo)
+		}
+	}
+
+	// 4. Disable sub-direct-1 (enabled = 0) -> header should NOT be present
+	_, err = db.Exec(`UPDATE subscriptions SET enabled = 0 WHERE id = 'sub-direct-1';`)
+	if err != nil {
+		t.Fatalf("failed to disable subscription: %v", err)
+	}
+	rDisabled := doRequest(router, http.MethodGet, "/clash", "", "")
+	if rDisabled.Code == http.StatusOK {
+		if got := rDisabled.Header().Get("Subscription-Userinfo"); got != "" {
+			t.Errorf("disabled primary sub should not forward userinfo header, got %q", got)
+		}
+	}
+
+	// 5. Re-enable and verify second subscription taking over primary
+	_, _ = db.Exec(`UPDATE subscriptions SET enabled = 1, is_primary = 0 WHERE id = 'sub-direct-1';`)
+	now := time.Now().UTC()
+	sub2Userinfo := "upload=1; download=2; total=5000; expire=1900000000"
+	_, err = db.Exec(`
+		INSERT INTO subscriptions (id, name, source_url_secret_ref, enabled, revision, is_primary, userinfo, created_at, updated_at)
+		VALUES ('sub-direct-2', 'Sub Direct 2', 'secret://url2', 1, '1', 1, ?, ?, ?);
+	`, sub2Userinfo, now.Format(time.RFC3339), now.Format(time.RFC3339))
+	if err != nil {
+		t.Fatalf("failed to insert sub 2: %v", err)
+	}
+
+	rSub2 := doRequest(router, http.MethodGet, "/clash", "", "")
+	if rSub2.Code != http.StatusOK {
+		t.Fatalf("GET /clash returned %d", rSub2.Code)
+	}
+	if got := rSub2.Header().Get("Subscription-Userinfo"); got != sub2Userinfo {
+		t.Errorf("Subscription-Userinfo = %q, want %q", got, sub2Userinfo)
+	}
+}
+
+func TestDirectSubscriptionEndpoints_PolicyGroupOrdering(t *testing.T) {
+	masterToken := "settings-secret-token-order"
+	router, db, _ := setupDirectSubRouter(t, masterToken, false, false)
+
+	now := time.Now().UTC()
+	// Add two more groups with explicit positions:
+	// Group ZZZ with position 1
+	// Group AAA with position 10
+	// Group Proxy (existing from setupDirectSubRouter) has position 0
+	// Without position sorting, AAA would sort before ZZZ alphabetically.
+	// With position sorting: Proxy (pos 0) -> ZZZ (pos 1) -> AAA (pos 10)
+	gidZZZ := domain.MustNewUUIDv7()
+	gidAAA := domain.MustNewUUIDv7()
+
+	_, err := db.Exec(`
+		INSERT INTO node_groups (id, name, group_type, position, created_at, updated_at, empty_fallback_pass, revision)
+		VALUES (?, 'ZZZ-First-By-Position', 'select', 1, ?, ?, 0, 1),
+		       (?, 'AAA-Second-By-Position', 'select', 10, ?, ?, 0, 1);
+	`, gidZZZ, now.Format(time.RFC3339), now.Format(time.RFC3339),
+		gidAAA, now.Format(time.RFC3339), now.Format(time.RFC3339))
+	if err != nil {
+		t.Fatalf("failed to insert test groups: %v", err)
+	}
+
+	// Link node to both groups
+	_, _ = db.Exec(`
+		INSERT INTO policy_group_sources (id, group_id, operation, kind, position, node_logical_id, created_at, updated_at)
+		VALUES ('pgs-zzz-1', ?, 'add', 'manual_node', 0, 'node_0123456789abcdef', ?, ?),
+		       ('pgs-aaa-1', ?, 'add', 'manual_node', 0, 'node_0123456789abcdef', ?, ?);
+	`, gidZZZ, now.Format(time.RFC3339), now.Format(time.RFC3339),
+		gidAAA, now.Format(time.RFC3339), now.Format(time.RFC3339))
+
+	rec := doRequest(router, http.MethodGet, "/clash", "", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /clash returned %d: %s", rec.Code, rec.Body.String())
+	}
+
+	body := rec.Body.String()
+	posZZZ := strings.Index(body, "ZZZ-First-By-Position")
+	posAAA := strings.Index(body, "AAA-Second-By-Position")
+
+	if posZZZ == -1 || posAAA == -1 {
+		t.Fatalf("groups not found in output: posZZZ=%d posAAA=%d\nBody:\n%s", posZZZ, posAAA, body)
+	}
+
+	if posZZZ >= posAAA {
+		t.Errorf("expected ZZZ (position 1) to appear before AAA (position 10) in output, got posZZZ=%d, posAAA=%d", posZZZ, posAAA)
+	}
+}

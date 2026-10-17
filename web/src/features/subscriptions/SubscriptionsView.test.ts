@@ -424,6 +424,50 @@ describe('SubscriptionsView - Last Refreshed Display & Refresh Flow', () => {
     // Verify api.get was called again to reload the list immediately
     expect(getCalls).toBe(2)
   })
+
+  it('renders primary badge and userinfo traffic stats when configured', async () => {
+    const primarySub: SubscriptionRecord = {
+      id: 'sub-primary',
+      name: 'Primary Airport',
+      source_url_secret_ref: 'https://example.com/sub',
+      enabled: true,
+      is_primary: true,
+      userinfo: 'upload=1073741824; download=4294967296; total=107374182400; expire=1893456000',
+      refresh_policy: {
+        interval_seconds: 86400,
+        user_agent_policy: 'default',
+        timeout_seconds: 30,
+        max_response_bytes: 10485760,
+      },
+      revision: 'rev-primary',
+      created_at: '2026-10-17T00:00:00Z',
+      updated_at: '2026-10-17T00:00:00Z',
+    }
+
+    vi.spyOn(api, 'get').mockResolvedValueOnce({
+      items: [primarySub],
+      page: 1,
+      page_size: 50,
+      total: 1,
+    })
+
+    mountView()
+    await nextTick()
+    await new Promise((resolve) => setImmediate(resolve))
+    await nextTick()
+
+    // 1. Verify primary badge
+    const badge = container.querySelector('[data-testid="primary-sub-badge"]')
+    expect(badge).not.toBeNull()
+    expect(badge?.textContent).toContain('主订阅')
+
+    // 2. Verify userinfo panel
+    const userinfoPanel = container.querySelector('[data-testid="subscription-userinfo"]')
+    expect(userinfoPanel).not.toBeNull()
+    expect(userinfoPanel?.textContent).toContain('流量与周期')
+    expect(userinfoPanel?.textContent).toContain('已用:')
+    expect(userinfoPanel?.textContent).toContain('剩余:')
+  })
 })
 
 describe('formatRefreshTime and formatFullDateTime helpers', () => {

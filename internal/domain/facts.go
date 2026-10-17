@@ -21,6 +21,7 @@ type ConsistentFacts struct {
 	LatestObservations map[string]map[ProbeKind]ProbeObservation
 	ActiveRiskPolicy   *RiskPolicyRevision
 	RiskObservations   []IPRiskObservation
+	PrimaryUserInfo    string
 }
 
 // ConsistentFactsLoader defines the persistence port for transactional loading of consistent domain facts.

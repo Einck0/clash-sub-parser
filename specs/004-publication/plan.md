@@ -1,8 +1,8 @@
 # Technical Plan: Minimal Client Subscriptions (Zero-Glue Clean Slate)
 
 - Feature: `specs/004-publication/`
-- Status: **IMPLEMENTING** — 2026-10-17 架构重塑与过度设计消除
-- Reference: Einck 当前原话最高指令；彻底推平过度工程化模型，统一采用 Settings Token。
+- Status: **IMPLEMENTING** — 2026-10-17 架构重塑与主订阅/策略组顺序修复
+- Reference: Einck 当前原话最高指令；彻底推平过度工程化模型，统一采用 Settings Token，修复主订阅流量透传与策略组顺序。
 
 ---
 
@@ -29,7 +29,6 @@
 废除查询 `subscription_links` 表与校验专用哈希的逻辑。
 在导出请求处理函数中直接集成 `AdminTokenHolder`：
 ```go
-// 逻辑流程：
 if holder != nil && holder.IsExportAuthRequired() && holder.AdminMode() == SecurityModeProtected {
     candidate := extractCandidateToken(r) // 从 ?token=... 或 Authorization: Bearer ... 提取
     if candidate == "" || !holder.Verify(candidate) {
@@ -37,29 +36,60 @@ if holder != nil && holder.IsExportAuthRequired() && holder.AdminMode() == Secur
         return
     }
 }
-// Open Mode 或 exportAuthEnabled == false 时直接免密放行
 ```
 - **单一真源**：整个系统的密钥管理只有系统“设置”里的全局 Token，修改设置即全局生效；
 - **免密无缝**：Open Mode 下无需提供任何 Token，在本地回环或受信任局域网中直接裸拉。
 
 ### 2.3 现场动态编译链路 (Live On-Request Compilation)
-在 `internal/application/publication/service.go` 中新增/精简导出方法：
+在 `internal/application/publication/service.go` 中提供导出方法：
 ```go
-func (s *Service) GenerateLiveTargetArtifact(ctx context.Context, target domain.CompilerTarget) (*Artifact, error)
+func (s *Service) GenerateTargetArtifact(ctx context.Context, target domain.CompilerTarget) (*Artifact, error)
 ```
-- 请求到达时现场通过 `factsLoader.LoadConsistentFacts(ctx, "", target, domain.NowUTC())` 读取已提交的最新节点、分组、规则与准入事实；
-- 通过 `BuildCurrentArtifact(ctx, facts, target)` 在内存中执行策略解析与目标编译渲染；
-- 保留并发信号量（`concurrencySem`）保护服务器资源；
-- 支持标准 `ETag` 与 `If-None-Match`，匹配时返回 `304 Not Modified`。
+- 请求到达时现场通过 `ConsistentFacts` 读取已提交的最新节点、分组、规则与准入事实；
+- 在内存中执行策略解析与目标编译渲染，支持 `ETag` 与 `If-None-Match`（304 Not Modified）；
+- 严格设置 `Cache-Control: no-store` 与 `Referrer-Policy: no-referrer`。
 
-### 2.4 前端极简化改造 (`web/src/features/publications/`)
-- 彻底移除 `usePublications.ts` 中对 `subscription_links` CRUD 接口的调用；
-- 移除“添加订阅链接”“轮转 Token”“吊销”“掩码”“公网基准地址强制配置”等全部伪需求逻辑；
-- `PublicationsView.vue` 仅保留 4 张卡片（或 4 行）：
-  - 目标：Mihomo/Clash（完整配置）、Sing-box（节点订阅）、Surge（节点订阅）、Quantumult X（节点订阅）；
-  - 直链地址：结合 `window.location.origin` 与客户端路由（如 `${origin}/clash`）；如果系统处于保护模式，自动从 `localStorage.getItem('csp_token')` 拼接 `?token=${storedToken}`；
-  - 按钮：“复制订阅链接”、“下载配置”；
-  - 剪贴板失败时提供手动选择全选框。
+### 2.4 主订阅与流量透传方案 (Primary Subscription & Userinfo Forwarding)
+- **数据库扩展（Migration 000023）**：
+  ```sql
+  ALTER TABLE subscriptions ADD COLUMN is_primary INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE subscriptions ADD COLUMN userinfo TEXT NOT NULL DEFAULT '';
+  ```
+- **拉取阶段（Fetch）**：
+  - `internal/fetch/fetch.go`: 在 `fetch.Response` 中增加 `UserInfo string` 字段，提取响应中的 `Subscription-Userinfo` 头部；
+  - `inventory.Service` / `subscription.Service`: 拉取成功后，将提取到的 `UserInfo` 存入 `subscriptions.userinfo`。
+- **设置主订阅**：
+  - `PATCH /api/v1/subscriptions/{id}` 接收 `{"is_primary": true}`；
+  - 事务更新目标订阅 `is_primary = 1`，其他所有订阅 `is_primary = 0`；若传入 `false` 则置为 `0`；
+  - 遵循 `.exp.md` 规范：只在列表卡片操作，不在添加/编辑弹窗里塞选项。
+- **直链导出透传**：
+  - `internal/transport/http/subscription_direct.go`: 导出配置时，查询 `SELECT userinfo FROM subscriptions WHERE is_primary = 1 AND enabled = 1 LIMIT 1`；
+  - 若存在且不为空，注入响应头 `Subscription-Userinfo: <userinfo>`。
+
+### 2.5 策略组顺序与保序方案 (Policy Group Ordering)
+- **数据库扩展（Migration 000023）**：
+  ```sql
+  ALTER TABLE node_groups ADD COLUMN position INTEGER NOT NULL DEFAULT 0;
+  ```
+- **仓储层与一致性快照**：
+  - `internal/repository/sqlite/policy.go`、`consistent_facts.go`、`revision_snapshots.go`:
+    读取与保存 `position`；查询排序改为 `ORDER BY position ASC, created_at ASC, id ASC`。
+- **解析器与编译器**：
+  - `internal/resolver/graph.go`: 排序改为：
+    ```go
+    sort.SliceStable(sortedGroups, func(i, j int) bool {
+        if sortedGroups[i].Position != sortedGroups[j].Position {
+            return sortedGroups[i].Position < sortedGroups[j].Position
+        }
+        if sortedGroups[i].Name != sortedGroups[j].Name {
+            return sortedGroups[i].Name < sortedGroups[j].Name
+        }
+        return sortedGroups[i].ID < sortedGroups[j].ID
+    })
+    ```
+- **API 与前端**：
+  - 后端：`PATCH /api/v1/policies/groups/{id}` 支持更新 `position`；提供顺序调整接口；
+  - 前端：`GroupCard.vue` 支持“上移 / 下移”操作，直观调整顺序并保存。
 
 ---
 
@@ -68,20 +98,8 @@ func (s *Service) GenerateLiveTargetArtifact(ctx context.Context, target domain.
 1. **旧历史路由保全**：
    - 历史只读快照 `/publish/v1/{publication_id}` 与 `/p/{publication_id}` 依然保留支持；
    - 遗留路由 `/yaml` 与 `/script` 维持 410 Gone；
-2. **安全防护**：
-   - 导出端点强制设置 `Cache-Control: no-store` 与 `Referrer-Policy: no-referrer`；
-   - Nginx 已有的 CSP 专属安全日志（去 query 参数）继续提供反代层防泄漏保护；
-3. **资产零丢失**：
-   - 数据库中不需要增加新表，原有业务表 100% 保持；
-   - 筛选算法 `cheap = all - expensive - other` 严格不变。
-
----
-
-## 4. 验证与上线规划
-
-1. **执行子机自测**：
-   - 编写针对 `/clash`、`/singbox`、`/surge`、`/qx` 及 `/sub/{target}` 路由的单元测试与 Settings Token 鉴权测试；
-   - 前端 Vitest 单元测试与 vue-tsc 类型检查全绿；
-2. **独立 Reviewer 审查**：核对是否彻底消除了过度设计与多余的数据库状态机；
-3. **Critic 真机多模态验收**：在隔离预览端口执行端到端流程与多视口 PNG 视觉审视；
-4. **Dev 云构建与生产上线**：提交代码至 `dev`，由官方 Actions 构建镜像，在线热备数据库，更新生产容器并做公网 TLS 域名健康核验。
+2. **存量数据与筛选规则保护**：
+   - 保护存量节点与订阅数据；
+   - 核心筛选公式 `cheap = all - expensive - other` 严格保留，绝不破坏原有筛选契约；
+3. **单轨发布约束**：
+   - 宿主机禁止重型编译；通过 Git 提交推送到 `dev` 分支，由官方 GitHub Actions 云端构建不可变容器镜像。

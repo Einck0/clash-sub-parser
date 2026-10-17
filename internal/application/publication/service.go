@@ -1549,6 +1549,7 @@ func (s *Service) BuildCurrentArtifact(ctx context.Context, facts *domain.Consis
 		Filename:       compileRes.Filename,
 		ContentDigest:  compileRes.ContentDigest,
 		SnapshotDigest: compileRes.SnapshotDigest,
+		UserInfo:       facts.PrimaryUserInfo,
 	}, snapshot, nil
 }
 

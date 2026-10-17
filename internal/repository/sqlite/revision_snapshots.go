@@ -39,14 +39,14 @@ func policyGroupsDigest(groups []domain.NodeGroup) (string, error) {
 }
 
 func withPolicyGroups(ctx context.Context, tx *sql.Tx, use func([]domain.NodeGroup) error) error {
-	rows, err := tx.QueryContext(ctx, `SELECT id,name,group_type,empty_fallback_pass,revision FROM node_groups ORDER BY id`)
+	rows, err := tx.QueryContext(ctx, `SELECT id,name,group_type,empty_fallback_pass,revision,position FROM node_groups ORDER BY position ASC, created_at ASC, id ASC`)
 	if err != nil {
 		return err
 	}
 	groups := make([]domain.NodeGroup, 0)
 	for rows.Next() {
 		var g domain.NodeGroup
-		if err := rows.Scan(&g.ID, &g.Name, &g.GroupType, &g.EmptyFallbackPass, &g.Revision); err != nil {
+		if err := rows.Scan(&g.ID, &g.Name, &g.GroupType, &g.EmptyFallbackPass, &g.Revision, &g.Position); err != nil {
 			rows.Close()
 			return err
 		}

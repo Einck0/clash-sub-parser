@@ -1048,3 +1048,39 @@ func TestReconcile_ProxyResolutionAndFailureAudit(t *testing.T) {
 		t.Errorf("audit record contains unredacted secret: %s", auditRecord.RedactedError)
 	}
 }
+
+func TestReconcileSubscription_PersistsUserInfo(t *testing.T) {
+	ctx := context.Background()
+	db, subRepo, fetchRepo, nodeRepo, sourceRepo := setupTestEnv(t)
+	fetcher := newMockFetcher()
+
+	subID := "sub-userinfo-test"
+	url := "https://provider.example.com/sub"
+	createTestSub(t, subRepo, subID, "UserInfo Sub", url, true)
+
+	sampleUserInfo := "upload=512; download=1024; total=204800; expire=1799999999"
+	fetcher.setResponse(url, &fetch.Response{
+		StatusCode:    200,
+		Body:          []byte(clashYAMLSub1WithTwoNodes),
+		ContentDigest: "digest-sub-userinfo",
+		UserInfo:      sampleUserInfo,
+	})
+
+	svc := inventory.NewService(db, subRepo, fetchRepo, nodeRepo, sourceRepo, fetcher)
+	res, err := svc.ReconcileSubscription(ctx, subID)
+	if err != nil {
+		t.Fatalf("ReconcileSubscription failed: %v", err)
+	}
+	if res.Outcome != domain.FetchOutcomeSuccess {
+		t.Fatalf("expected success, got %v", res.Outcome)
+	}
+
+	// Verify UserInfo is persisted in subscription
+	sub, err := subRepo.GetByID(ctx, subID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if sub.UserInfo != sampleUserInfo {
+		t.Errorf("UserInfo = %q, want %q", sub.UserInfo, sampleUserInfo)
+	}
+}

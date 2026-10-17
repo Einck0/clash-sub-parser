@@ -549,6 +549,12 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 			return fmt.Errorf("failed to insert subscription fetch: %w", err)
 		}
 
+		if fetchResp.UserInfo != "" {
+			if _, uErr := tx.ExecContext(ctx, `UPDATE subscriptions SET userinfo = ? WHERE id = ?;`, fetchResp.UserInfo, sub.ID); uErr != nil {
+				return fmt.Errorf("failed to update subscription userinfo: %w", uErr)
+			}
+		}
+
 		payloadID := "payload_" + domain.MustNewUUIDv7()
 		headersMap := map[string]string{
 			"content_type":  fetchResp.ContentType,

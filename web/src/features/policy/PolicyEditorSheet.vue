@@ -82,6 +82,7 @@ const emit = defineEmits<{
   (e: 'save-group', data: {
     name: string
     type: GroupType
+    position?: number
     emptyFallbackPass: boolean
     sources: MemberSource[]
     expectedRevision?: number
@@ -95,6 +96,7 @@ const activeSheetTab = ref<'editor' | 'preview'>('editor')
 
 // Group metadata
 const name = ref('')
+const position = ref<number>(0)
 const groupType = ref<GroupType>('select')
 const emptyFallbackPass = ref(false)
 const expectedRevision = ref<number>(1)
@@ -336,6 +338,7 @@ watch(
 
       if (props.group) {
         name.value = props.group.name
+        position.value = props.group.position ?? 0
         emptyFallbackPass.value = props.group.empty_fallback_pass === true
         groupType.value = props.group.group_type
         expectedRevision.value = props.group.revision ?? 1
@@ -347,6 +350,7 @@ watch(
         }))
       } else {
         name.value = ''
+        position.value = 0
         emptyFallbackPass.value = false
         groupType.value = 'select'
         expectedRevision.value = 1
@@ -740,6 +744,7 @@ function handleSave() {
   emit('save-group', {
     name: name.value.trim(),
     type: groupType.value,
+    position: position.value,
     emptyFallbackPass: emptyFallbackPass.value,
     sources: sources.value.map((s, idx) => ({ ...s, position: idx })),
     expectedRevision: expectedRevision.value,
@@ -898,15 +903,28 @@ function close() {
         <div v-if="activeSheetTab === 'editor'">
           <form id="policy-editor-group-form" class="space-y-4" @submit.prevent="handleSave">
             <!-- 1. Policy Group Name: Always FIRST input in the dialog! -->
-            <label class="form-control">
-              <span class="label-text font-semibold text-xs">策略组名称</span>
-              <input
-                v-model="name"
-                required
-                placeholder="例如：代理节点、自动优选、流媒体解锁"
-                class="input input-bordered input-sm mt-1"
-              />
-            </label>
+            <div class="grid grid-cols-1 sm:grid-cols-4 gap-3">
+              <label class="form-control sm:col-span-3">
+                <span class="label-text font-semibold text-xs">策略组名称</span>
+                <input
+                  v-model="name"
+                  required
+                  placeholder="例如：代理节点、自动优选、流媒体解锁"
+                  class="input input-bordered input-sm mt-1"
+                />
+              </label>
+              <label class="form-control sm:col-span-1">
+                <span class="label-text font-semibold text-xs">排序序号</span>
+                <input
+                  v-model.number="position"
+                  type="number"
+                  min="0"
+                  placeholder="0"
+                  class="input input-bordered input-sm mt-1 font-mono"
+                  data-testid="group-position-input"
+                />
+              </label>
+            </div>
 
             <!-- 2. Group Type Selector -->
             <div>

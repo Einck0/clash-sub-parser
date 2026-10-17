@@ -30,6 +30,17 @@ func (r *memorySubscriptions) GetByID(_ context.Context, id string) (*domain.Sub
 	return &sub, nil
 }
 
+func (r *memorySubscriptions) GetPrimary(_ context.Context) (*domain.Subscription, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, sub := range r.items {
+		if sub.IsPrimary && sub.Enabled {
+			return &sub, nil
+		}
+	}
+	return nil, nil
+}
+
 func (r *memorySubscriptions) List(_ context.Context, filter domain.SubscriptionFilter) ([]domain.Subscription, int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

@@ -327,7 +327,7 @@ func TestNodeSourceRepositoryListByNodes(t *testing.T) {
 	}
 }
 
-// TestTask1_2BaselineCompatibilityAndProcessNameVerification fulfills OpenSpec Task 1.2:
+// TestTask1_2BaselineCompatibilityAndProcessNameVerification fulfills Spec Kit Task 1.2:
 // Verifies baseline behavior in an isolated test DB: manual probe runs, inventory, legacy policy
 // output with nil filters ("旧配置默认恒真"), and checks PROCESS-NAME regression test against 7289b4c.
 // Also formally records that the user report "csp出错" has no accompanying logs/traces,

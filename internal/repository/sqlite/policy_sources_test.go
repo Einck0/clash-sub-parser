@@ -245,6 +245,10 @@ func TestPolicyRepository_Migration_000018_ZeroLoss(t *testing.T) {
 	if err := runner.RunUpTo(ctx, 18); err != nil {
 		t.Fatalf("failed to run migration 18: %v", err)
 	}
+	// Run remaining migrations to match the latest repository schema (e.g. migration 23)
+	if err := runner.Run(ctx); err != nil {
+		t.Fatalf("failed to run remaining migrations: %v", err)
+	}
 
 	repo := sqlite.NewPolicyRepository(db)
 

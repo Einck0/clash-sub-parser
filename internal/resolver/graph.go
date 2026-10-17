@@ -86,14 +86,17 @@ func resolveGroups(
 		return sortedGlobalNodes[i].DisplayName < sortedGlobalNodes[j].DisplayName
 	})
 
-	// Sort groups deterministically by Name ASC, then ID ASC
+	// Sort groups deterministically by Position ASC, Name ASC, ID ASC
 	sortedGroups := make([]domain.NodeGroup, len(groups))
 	copy(sortedGroups, groups)
 	sort.SliceStable(sortedGroups, func(i, j int) bool {
-		if sortedGroups[i].Name == sortedGroups[j].Name {
-			return sortedGroups[i].ID < sortedGroups[j].ID
+		if sortedGroups[i].Position != sortedGroups[j].Position {
+			return sortedGroups[i].Position < sortedGroups[j].Position
 		}
-		return sortedGroups[i].Name < sortedGroups[j].Name
+		if sortedGroups[i].Name != sortedGroups[j].Name {
+			return sortedGroups[i].Name < sortedGroups[j].Name
+		}
+		return sortedGroups[i].ID < sortedGroups[j].ID
 	})
 
 	memo := make(map[string]*groupMemo, len(groups))
@@ -431,7 +434,7 @@ func resolveGroups(
 			AllNodeLogicalIDs:  m.expandedNodeIDs,
 			ExpandedNodeIDs:    m.expandedNodeIDs,
 			Sources:            groupSources[g.ID],
-			Position:           i,
+			Position:           g.Position,
 		}
 		resolvedGroups[i] = rg
 

@@ -69,6 +69,7 @@ export interface PolicyGroup {
   id: string
   name: string
   group_type: GroupType
+  position?: number
   empty_fallback_pass?: boolean
   revision?: number
   sources?: MemberSource[]

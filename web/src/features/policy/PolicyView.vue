@@ -65,6 +65,7 @@ const {
   reload,
   createGroup,
   updateGroup,
+  moveGroup,
   deleteGroup,
   loadRules,
   createAdmissionRule,
@@ -300,6 +301,7 @@ async function handleReloadGroup(groupId: string) {
 async function handleSaveGroup(data: {
   name: string
   type: GroupType
+  position?: number
   emptyFallbackPass: boolean
   sources: MemberSource[]
   expectedRevision?: number
@@ -312,6 +314,7 @@ async function handleSaveGroup(data: {
       const updated = await updateGroup(activeGroup.value.id, {
         name: data.name,
         group_type: data.type,
+        position: data.position,
         empty_fallback_pass: data.emptyFallbackPass,
         expected_revision: data.expectedRevision ?? activeGroup.value.revision,
         sources: data.sources,
@@ -322,6 +325,7 @@ async function handleSaveGroup(data: {
       const created = await createGroup({
         name: data.name,
         group_type: data.type,
+        position: data.position,
         empty_fallback_pass: data.emptyFallbackPass,
         sources: data.sources,
       })
@@ -351,6 +355,14 @@ const { items: nodeItems, load: loadNodes } = useNodes()
 const confirmDeleteGroupOpen = ref(false)
 const pendingDeleteGroupId = ref<string | null>(null)
 const deletingGroup = ref(false)
+
+async function handleMoveUp(grp: PolicyGroup) {
+  await moveGroup(grp.id, 'up')
+}
+
+async function handleMoveDown(grp: PolicyGroup) {
+  await moveGroup(grp.id, 'down')
+}
 
 function handleDeleteGroup(id: string) {
   pendingDeleteGroupId.value = id
@@ -698,15 +710,19 @@ onUnmounted(() => {
 
       <div v-else class="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr))]">
         <GroupCard
-          v-for="grp in groups"
+          v-for="(grp, idx) in groups"
           :key="grp.id"
           :group="grp"
           :available-groups="allTopologyGroups.length > 0 ? allTopologyGroups : groups"
           :selected="selectedGroupId === grp.id"
+          :can-move-up="idx > 0"
+          :can-move-down="idx < groups.length - 1"
           @select="selectGroup"
           @edit="openEditGroup"
           @delete="handleDeleteGroup"
           @manage-edges="openManageEdges"
+          @move-up="handleMoveUp"
+          @move-down="handleMoveDown"
         />
       </div>
     </div>

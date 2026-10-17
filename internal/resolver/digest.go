@@ -54,6 +54,7 @@ type canonicalInputGroup struct {
 	ID                string                   `json:"id"`
 	Name              string                   `json:"name"`
 	GroupType         domain.GroupType         `json:"group_type"`
+	Position          int                      `json:"position"`
 	Sources           []canonicalSourceLogical `json:"sources,omitempty"`
 }
 
@@ -133,6 +134,7 @@ func computeInputDigest(input ResolveInput) (string, error) {
 			ID:                g.ID,
 			Name:              g.Name,
 			GroupType:         g.GroupType,
+			Position:          g.Position,
 			Sources:           canonicalizeSources(srcs),
 		}
 	}

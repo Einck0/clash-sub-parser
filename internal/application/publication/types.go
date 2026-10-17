@@ -165,6 +165,7 @@ type Artifact struct {
 	Filename       string                `json:"filename"`
 	ContentDigest  string                `json:"content_digest"`
 	SnapshotDigest string                `json:"snapshot_digest"`
+	UserInfo       string                `json:"userinfo,omitempty"`
 }
 
 // PublicationDetail represents detailed publication state returned to management endpoints.

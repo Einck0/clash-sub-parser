@@ -98,6 +98,13 @@ func (l *consistentFactsLoader) LoadConsistentFacts(ctx context.Context, revisio
 		return nil, err
 	}
 
+	// 8. Primary Subscription UserInfo
+	var primaryUserInfo sql.NullString
+	_ = tx.QueryRowContext(ctx, "SELECT userinfo FROM subscriptions WHERE is_primary = 1 AND enabled = 1 LIMIT 1;").Scan(&primaryUserInfo)
+	if primaryUserInfo.Valid {
+		facts.PrimaryUserInfo = primaryUserInfo.String
+	}
+
 	return facts, nil
 }
 
@@ -208,9 +215,9 @@ func loadMihomoGraph(ctx context.Context, tx *sql.Tx, rev *domain.ConfigurationR
 
 func loadNodeGroups(ctx context.Context, tx *sql.Tx, facts *ConsistentFacts) error {
 	const groupQuery = `
-	SELECT id, name, group_type, created_at, updated_at, empty_fallback_pass, COALESCE(revision, 1)
+	SELECT id, name, group_type, created_at, updated_at, empty_fallback_pass, COALESCE(revision, 1), position
 	FROM node_groups
-	ORDER BY name ASC, id ASC;`
+	ORDER BY position ASC, created_at ASC, id ASC;`
 	gRows, err := tx.QueryContext(ctx, groupQuery)
 	if err != nil {
 		return fmt.Errorf("failed to list node groups: %w", err)
@@ -228,6 +235,7 @@ func loadNodeGroups(ctx context.Context, tx *sql.Tx, facts *ConsistentFacts) err
 			&updatedStr,
 			&group.EmptyFallbackPass,
 			&group.Revision,
+			&group.Position,
 		); err != nil {
 			return fmt.Errorf("failed to scan node group: %w", err)
 		}

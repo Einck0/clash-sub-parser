@@ -14,6 +14,9 @@ type mockSubscriptionRepo struct{}
 func (m *mockSubscriptionRepo) GetByID(ctx context.Context, id string) (*domain.Subscription, error) {
 	return nil, nil
 }
+func (m *mockSubscriptionRepo) GetPrimary(ctx context.Context) (*domain.Subscription, error) {
+	return nil, nil
+}
 func (m *mockSubscriptionRepo) List(ctx context.Context, filter domain.SubscriptionFilter) ([]domain.Subscription, int, error) {
 	return nil, 0, nil
 }

@@ -58,6 +58,8 @@ export interface SubscriptionRecord {
   name: string
   source_url_secret_ref: string
   enabled: boolean
+  is_primary?: boolean
+  userinfo?: string
   prefix?: string
   refresh_policy: {
     interval_seconds: number
@@ -159,6 +161,54 @@ export function subscriptionPatchPayload(draft: SubscriptionDraft): Partial<Subs
   return payload
 }
 
+export interface ParsedUserInfo {
+  upload: number
+  download: number
+  used: number
+  total: number
+  remaining: number
+  expire: number | null
+  expireDate: string | null
+}
+
+export function parseUserInfo(header?: string | null): ParsedUserInfo | null {
+  if (!header || typeof header !== 'string') return null
+  const parts = header.split(';')
+  const map: Record<string, number> = {}
+  for (const part of parts) {
+    const [k, v] = part.split('=').map((s) => s.trim())
+    if (k && v && !isNaN(Number(v))) {
+      map[k.toLowerCase()] = Number(v)
+    }
+  }
+  const upload = map['upload'] || 0
+  const download = map['download'] || 0
+  const total = map['total'] || 0
+  const used = upload + download
+  const remaining = total > used ? total - used : 0
+  const expire = map['expire'] || null
+  let expireDate: string | null = null
+  if (expire && expire > 0) {
+    const d = new Date(expire * 1000)
+    if (!isNaN(d.getTime())) {
+      const year = d.getFullYear()
+      const month = String(d.getMonth() + 1).padStart(2, '0')
+      const day = String(d.getDate()).padStart(2, '0')
+      expireDate = `${year}-${month}-${day}`
+    }
+  }
+  return { upload, download, used, total, remaining, expire, expireDate }
+}
+
+export function formatBytes(bytes: number): string {
+  if (!bytes || bytes <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  const i = Math.floor(Math.log(bytes) / Math.log(1024))
+  const idx = Math.min(Math.max(0, i), units.length - 1)
+  const val = bytes / Math.pow(1024, idx)
+  return `${val.toFixed(val >= 100 || idx === 0 ? 0 : 1)} ${units[idx]}`
+}
+
 export function useSubscriptions() {
   const items = ref<SubscriptionRecord[]>([])
   const loading = ref(false)
@@ -171,6 +221,38 @@ export function useSubscriptions() {
   const hasItems = computed(() => items.value.length > 0)
   const refreshingIDs = ref(new Set<string>())
   const togglingIDs = ref(new Set<string>())
+  const settingPrimaryIDs = ref(new Set<string>())
+
+  async function setPrimary(subscription: SubscriptionRecord): Promise<boolean> {
+    if (settingPrimaryIDs.value.has(subscription.id)) return false
+    settingPrimaryIDs.value = new Set(settingPrimaryIDs.value).add(subscription.id)
+    try {
+      await api.patch(
+        `/api/v1/subscriptions/${encodeURIComponent(subscription.id)}`,
+        { is_primary: true },
+        {
+          headers: { 'If-Match': subscription.revision },
+        }
+      )
+      toastStore.push({
+        message: '已设为主订阅',
+        tone: 'success',
+      })
+      await load()
+      return true
+    } catch (cause) {
+      toastStore.push({
+        message: cause instanceof Error ? cause.message : '设置主订阅失败',
+        tone: 'error',
+      })
+      await load().catch(() => {})
+      throw cause
+    } finally {
+      const pending = new Set(settingPrimaryIDs.value)
+      pending.delete(subscription.id)
+      settingPrimaryIDs.value = pending
+    }
+  }
 
   async function load() {
     loading.value = true
@@ -269,7 +351,7 @@ export function useSubscriptions() {
     }
   }
 
-  return { items, loading, saving, error, total, hasItems, refreshingIDs, togglingIDs, load, save, remove, refresh, toggle }
+  return { items, loading, saving, error, total, hasItems, refreshingIDs, togglingIDs, settingPrimaryIDs, load, save, remove, refresh, toggle, setPrimary }
 }
 
 export function useSubscriptionEntries() {

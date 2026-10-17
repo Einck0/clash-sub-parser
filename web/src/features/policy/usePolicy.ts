@@ -35,6 +35,7 @@ interface RulesResult {
 export interface CreateGroupInput {
   name: string
   group_type: GroupType
+  position?: number
   sources?: MemberSource[]
   edges?: GroupEdge[]
   node_filter?: NodeFilterSpec | null
@@ -44,6 +45,7 @@ export interface CreateGroupInput {
 export interface UpdateGroupInput {
   name?: string
   group_type?: GroupType
+  position?: number
   sources?: MemberSource[]
   empty_fallback_pass?: boolean
   expected_revision?: number
@@ -188,6 +190,9 @@ export function usePolicy() {
         group_type: groupType,
         empty_fallback_pass: emptyFallbackPass,
       }
+      if (typeof dataOrName === 'object' && dataOrName !== null && dataOrName.position !== undefined) {
+        payload.position = dataOrName.position
+      }
       payload.sources = sources
       const created = await api.post<PolicyGroup>('/api/v1/policies/groups', payload)
       const normalized: PolicyGroup = {
@@ -220,6 +225,7 @@ export function usePolicy() {
       if (typeof dataOrName === 'object' && dataOrName !== null) {
         if (dataOrName.name !== undefined) payload.name = dataOrName.name.trim()
         if (dataOrName.group_type !== undefined) payload.group_type = dataOrName.group_type
+        if (dataOrName.position !== undefined) payload.position = dataOrName.position
         if (dataOrName.empty_fallback_pass !== undefined) payload.empty_fallback_pass = dataOrName.empty_fallback_pass
         if (dataOrName.expected_revision !== undefined) payload.expected_revision = dataOrName.expected_revision
         if (Array.isArray(dataOrName.sources)) {
@@ -556,6 +562,46 @@ export function usePolicy() {
     return await api.post<GroupDraftPreviewResponse>('/api/v1/policies/groups/preview', body)
   }
 
+  async function moveGroup(groupId: string, direction: 'up' | 'down'): Promise<boolean> {
+    const list = [...groups.value]
+    const idx = list.findIndex((g) => g.id === groupId)
+    if (idx < 0) return false
+    const targetIdx = direction === 'up' ? idx - 1 : idx + 1
+    if (targetIdx < 0 || targetIdx >= list.length) return false
+
+    const current = list[idx]
+    const target = list[targetIdx]
+
+    saving.value = true
+    try {
+      const targetPos = target.position !== undefined ? target.position : targetIdx
+      const currentPos = current.position !== undefined ? current.position : idx
+
+      let newCurrentPos = targetPos
+      let newTargetPos = currentPos
+      if (newCurrentPos === newTargetPos) {
+        newCurrentPos = direction === 'up' ? targetPos : targetPos + 1
+        newTargetPos = direction === 'up' ? targetPos + 1 : targetPos
+      }
+
+      await api.patch(`/api/v1/policies/groups/${encodeURIComponent(current.id)}`, {
+        position: newCurrentPos,
+        expected_revision: current.revision,
+      })
+      await api.patch(`/api/v1/policies/groups/${encodeURIComponent(target.id)}`, {
+        position: newTargetPos,
+        expected_revision: target.revision,
+      })
+      await loadGroups()
+      return true
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : '调整策略组顺序失败'
+      return false
+    } finally {
+      saving.value = false
+    }
+  }
+
   return {
     groups,
     globalFilter,
@@ -583,6 +629,7 @@ export function usePolicy() {
     reload,
     createGroup,
     updateGroup,
+    moveGroup,
     deleteGroup,
     setGroupEdges,
     loadRules,

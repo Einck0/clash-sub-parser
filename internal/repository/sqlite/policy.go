@@ -16,13 +16,15 @@ type policyRepository struct {
 }
 
 // NewPolicyRepository constructs a SQLite implementation of domain.PolicyRepository.
+const timeFormatFixed = "2006-01-02T15:04:05.000000000Z07:00"
+
 func NewPolicyRepository(db *sql.DB) domain.PolicyRepository {
 	return &policyRepository{db: db}
 }
 
 func (r *policyRepository) GetGroupByID(ctx context.Context, id string) (*domain.NodeGroup, error) {
 	const query = `
-	SELECT id, name, group_type, created_at, updated_at, empty_fallback_pass, COALESCE(revision, 1)
+	SELECT id, name, group_type, created_at, updated_at, empty_fallback_pass, COALESCE(revision, 1), position
 	FROM node_groups
 	WHERE id = ?;`
 
@@ -37,6 +39,7 @@ func (r *policyRepository) GetGroupByID(ctx context.Context, id string) (*domain
 		&updatedStr,
 		&group.EmptyFallbackPass,
 		&group.Revision,
+		&group.Position,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -46,8 +49,14 @@ func (r *policyRepository) GetGroupByID(ctx context.Context, id string) (*domain
 	}
 
 	group.GroupType = domain.GroupType(groupTypeStr)
-	group.CreatedAt, _ = time.Parse(time.RFC3339, createdStr)
-	group.UpdatedAt, _ = time.Parse(time.RFC3339, updatedStr)
+	group.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdStr)
+	if group.CreatedAt.IsZero() {
+		group.CreatedAt, _ = time.Parse(time.RFC3339, createdStr)
+	}
+	group.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedStr)
+	if group.UpdatedAt.IsZero() {
+		group.UpdatedAt, _ = time.Parse(time.RFC3339, updatedStr)
+	}
 
 	sources, err := fetchSourcesForGroup(ctx, r.db, group.ID)
 	if err != nil {
@@ -60,9 +69,9 @@ func (r *policyRepository) GetGroupByID(ctx context.Context, id string) (*domain
 
 func (r *policyRepository) ListGroups(ctx context.Context) ([]domain.NodeGroup, error) {
 	const query = `
-	SELECT id, name, group_type, created_at, updated_at, empty_fallback_pass, COALESCE(revision, 1)
+	SELECT id, name, group_type, created_at, updated_at, empty_fallback_pass, COALESCE(revision, 1), position
 	FROM node_groups
-	ORDER BY name ASC, id ASC;`
+	ORDER BY position ASC, created_at ASC, id ASC;`
 
 	rows, err := r.db.QueryContext(ctx, query)
 	if err != nil {
@@ -83,14 +92,21 @@ func (r *policyRepository) ListGroups(ctx context.Context) ([]domain.NodeGroup, 
 			&updatedStr,
 			&group.EmptyFallbackPass,
 			&group.Revision,
+			&group.Position,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan node group: %w", err)
 		}
 
 		group.GroupType = domain.GroupType(groupTypeStr)
-		group.CreatedAt, _ = time.Parse(time.RFC3339, createdStr)
-		group.UpdatedAt, _ = time.Parse(time.RFC3339, updatedStr)
+		group.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdStr)
+		if group.CreatedAt.IsZero() {
+			group.CreatedAt, _ = time.Parse(time.RFC3339, createdStr)
+		}
+		group.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedStr)
+		if group.UpdatedAt.IsZero() {
+			group.UpdatedAt, _ = time.Parse(time.RFC3339, updatedStr)
+		}
 
 		items = append(items, group)
 	}
@@ -115,15 +131,15 @@ func (r *policyRepository) ListGroups(ctx context.Context) ([]domain.NodeGroup, 
 
 func (r *policyRepository) CreateGroup(ctx context.Context, group *domain.NodeGroup) error {
 	const query = `
-	INSERT INTO node_groups (id, name, group_type, created_at, updated_at, empty_fallback_pass)
-	VALUES (?, ?, ?, ?, ?, ?);`
+	INSERT INTO node_groups (id, name, group_type, created_at, updated_at, empty_fallback_pass, position)
+	VALUES (?, ?, ?, ?, ?, ?, ?);`
 
-	nowStr := domain.NowUTC().Format(time.RFC3339)
-	createdStr := group.CreatedAt.Format(time.RFC3339)
+	nowStr := domain.NowUTC().Format(timeFormatFixed)
+	createdStr := group.CreatedAt.Format(timeFormatFixed)
 	if group.CreatedAt.IsZero() {
 		createdStr = nowStr
 	}
-	updatedStr := group.UpdatedAt.Format(time.RFC3339)
+	updatedStr := group.UpdatedAt.Format(timeFormatFixed)
 	if group.UpdatedAt.IsZero() {
 		updatedStr = nowStr
 	}
@@ -135,6 +151,7 @@ func (r *policyRepository) CreateGroup(ctx context.Context, group *domain.NodeGr
 		createdStr,
 		updatedStr,
 		group.EmptyFallbackPass,
+		group.Position,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to insert node group: %w", err)
@@ -382,7 +399,7 @@ func (r *policyRepository) SaveGroupWithSources(ctx context.Context, group *doma
 			return fmt.Errorf("failed to check group revision: %w", err)
 		}
 
-		nowStr := domain.NowUTC().Format(time.RFC3339)
+		nowStr := domain.NowUTC().Format(timeFormatFixed)
 		isNew := errors.Is(err, sql.ErrNoRows)
 
 		if !isNew {
@@ -393,8 +410,8 @@ func (r *policyRepository) SaveGroupWithSources(ctx context.Context, group *doma
 			}
 			currentRev++
 			_, err = tx.ExecContext(ctx,
-				`UPDATE node_groups SET name = ?, group_type = ?, empty_fallback_pass = ?, revision = ?, updated_at = ? WHERE id = ?`,
-				group.Name, string(group.GroupType), group.EmptyFallbackPass, currentRev, nowStr, group.ID)
+				`UPDATE node_groups SET name = ?, group_type = ?, empty_fallback_pass = ?, revision = ?, position = ?, updated_at = ? WHERE id = ?`,
+				group.Name, string(group.GroupType), group.EmptyFallbackPass, currentRev, group.Position, nowStr, group.ID)
 			if err != nil {
 				return fmt.Errorf("failed to update node group: %w", err)
 			}
@@ -407,8 +424,8 @@ func (r *policyRepository) SaveGroupWithSources(ctx context.Context, group *doma
 			}
 			currentRev = 1
 			_, err = tx.ExecContext(ctx,
-				`INSERT INTO node_groups (id, name, group_type, empty_fallback_pass, revision, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-				group.ID, group.Name, string(group.GroupType), group.EmptyFallbackPass, currentRev, nowStr, nowStr)
+				`INSERT INTO node_groups (id, name, group_type, empty_fallback_pass, revision, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+				group.ID, group.Name, string(group.GroupType), group.EmptyFallbackPass, currentRev, group.Position, nowStr, nowStr)
 			if err != nil {
 				return fmt.Errorf("failed to insert node group: %w", err)
 			}

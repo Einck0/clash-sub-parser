@@ -85,6 +85,7 @@ type RevisionFilter struct {
 // SubscriptionRepository defines the persistence port for subscriptions.
 type SubscriptionRepository interface {
 	GetByID(ctx context.Context, id string) (*Subscription, error)
+	GetPrimary(ctx context.Context) (*Subscription, error)
 	List(ctx context.Context, filter SubscriptionFilter) ([]Subscription, int, error)
 	Create(ctx context.Context, sub *Subscription) error
 	Update(ctx context.Context, sub *Subscription) error

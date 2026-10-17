@@ -21,6 +21,8 @@ type subscriptionResponse struct {
 	Name               string                    `json:"name"`
 	SourceURLSecretRef string                    `json:"source_url_secret_ref"`
 	Enabled            bool                      `json:"enabled"`
+	IsPrimary          bool                      `json:"is_primary"`
+	UserInfo           string                    `json:"userinfo,omitempty"`
 	Config             domain.SubscriptionConfig `json:"config"`
 	Revision           string                    `json:"revision"`
 }
@@ -512,5 +514,106 @@ func TestSubscriptionDelete_DeactivatesOrphanNodesAndPreservesSharedNodes(t *tes
 	}
 	if !sharedNode.Active {
 		t.Fatalf("expected shared-node Active=true because Sub B still owns it, got false")
+	}
+}
+
+func TestSubscriptionPatch_PrimarySubscription(t *testing.T) {
+	router := subscriptionTestRouter(t)
+
+	// 1. Create Sub A and Sub B
+	createSub := func(name string) (string, string) {
+		t.Helper()
+		payload := fmt.Sprintf(`{"name": "%s", "source_url_secret_ref": "https://example.com/%s"}`, name, name)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/subscriptions", strings.NewReader(payload))
+		req.Header.Set("Authorization", "Bearer "+testAdminToken)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("failed to create %s: %d, body: %s", name, rec.Code, rec.Body.String())
+		}
+		var resp testDataResponse[subscriptionResponse]
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to parse: %v", err)
+		}
+		return resp.Data.ID, resp.Data.Revision
+	}
+
+	subAID, revA := createSub("SubA")
+	subBID, revB := createSub("SubB")
+
+	// Helper to get subscription
+	getSub := func(id string) subscriptionResponse {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/subscriptions/"+id, nil)
+		req.Header.Set("Authorization", "Bearer "+testAdminToken)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("failed to get %s: %d", id, rec.Code)
+		}
+		var resp testDataResponse[subscriptionResponse]
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to parse: %v", err)
+		}
+		return resp.Data
+	}
+
+	// 2. Neither is primary initially
+	viewA := getSub(subAID)
+	viewB := getSub(subBID)
+	if viewA.IsPrimary || viewB.IsPrimary {
+		t.Fatalf("neither should be primary initially, got A=%v B=%v", viewA.IsPrimary, viewB.IsPrimary)
+	}
+
+	// 3. PATCH Sub A to primary
+	patchA := httptest.NewRequest(http.MethodPatch, "/api/v1/subscriptions/"+subAID, strings.NewReader(`{"is_primary": true}`))
+	patchA.Header.Set("Authorization", "Bearer "+testAdminToken)
+	patchA.Header.Set("If-Match", revA)
+	patchA.Header.Set("Content-Type", "application/json")
+	recA := httptest.NewRecorder()
+	router.ServeHTTP(recA, patchA)
+	if recA.Code != http.StatusOK {
+		t.Fatalf("failed to patch Sub A: %d, body: %s", recA.Code, recA.Body.String())
+	}
+	var patchedAResp testDataResponse[subscriptionResponse]
+	_ = json.Unmarshal(recA.Body.Bytes(), &patchedAResp)
+	if !patchedAResp.Data.IsPrimary {
+		t.Fatal("expected Sub A to be primary after patch")
+	}
+
+	// 4. PATCH Sub B to primary -> Mutual exclusion must clear Sub A
+	patchB := httptest.NewRequest(http.MethodPatch, "/api/v1/subscriptions/"+subBID, strings.NewReader(`{"is_primary": true}`))
+	patchB.Header.Set("Authorization", "Bearer "+testAdminToken)
+	patchB.Header.Set("If-Match", revB)
+	patchB.Header.Set("Content-Type", "application/json")
+	recB := httptest.NewRecorder()
+	router.ServeHTTP(recB, patchB)
+	if recB.Code != http.StatusOK {
+		t.Fatalf("failed to patch Sub B: %d, body: %s", recB.Code, recB.Body.String())
+	}
+
+	viewAAfter := getSub(subAID)
+	viewBAfter := getSub(subBID)
+	if !viewBAfter.IsPrimary {
+		t.Fatal("expected Sub B to be primary")
+	}
+	if viewAAfter.IsPrimary {
+		t.Fatal("expected Sub A to no longer be primary (mutual exclusion)")
+	}
+
+	// 5. Unset Sub B as primary
+	patchBUnset := httptest.NewRequest(http.MethodPatch, "/api/v1/subscriptions/"+subBID, strings.NewReader(`{"is_primary": false}`))
+	patchBUnset.Header.Set("Authorization", "Bearer "+testAdminToken)
+	patchBUnset.Header.Set("If-Match", viewBAfter.Revision)
+	patchBUnset.Header.Set("Content-Type", "application/json")
+	recBUnset := httptest.NewRecorder()
+	router.ServeHTTP(recBUnset, patchBUnset)
+	if recBUnset.Code != http.StatusOK {
+		t.Fatalf("failed to unset Sub B: %d", recBUnset.Code)
+	}
+	viewBFinal := getSub(subBID)
+	if viewBFinal.IsPrimary {
+		t.Fatal("expected Sub B to not be primary after unset")
 	}
 }

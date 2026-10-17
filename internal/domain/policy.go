@@ -20,6 +20,7 @@ type NodeGroup struct {
 	ID                string          `json:"id"`
 	Name              string          `json:"name"`
 	GroupType         GroupType       `json:"group_type"`
+	Position          int             `json:"position"`
 	Revision          int64           `json:"revision"`
 	Sources           []MemberSource  `json:"sources,omitempty"`
 	NodeFilter        *NodeFilterSpec `json:"node_filter,omitempty"`

@@ -116,7 +116,12 @@ func directSubscriptionHandler(svc *publication.Service, holder AdminTokenHolder
 			return
 		}
 
-		// 4. Conditional caching evaluation (ETag / If-None-Match)
+		// 4. Primary Subscription Userinfo forwarding
+		if artifact.UserInfo != "" {
+			w.Header().Set("Subscription-Userinfo", artifact.UserInfo)
+		}
+
+		// 5. Conditional caching evaluation (ETag / If-None-Match)
 		ifNoneMatch := strings.TrimSpace(r.Header.Get("If-None-Match"))
 		if ifNoneMatch != "" {
 			digest := artifact.ContentDigest
@@ -129,7 +134,7 @@ func directSubscriptionHandler(svc *publication.Service, holder AdminTokenHolder
 			}
 		}
 
-		// 5. Successful response
+		// 6. Successful response
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Content-Type", artifact.ContentType)

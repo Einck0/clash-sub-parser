@@ -36,6 +36,8 @@ type UpdateSubscriptionCommand struct {
 	Name               *string
 	SourceURLSecretRef *string
 	Enabled            *bool
+	IsPrimary          *bool
+	UserInfo           *string
 	Prefix             *string
 	RefreshPolicy      *domain.RefreshPolicy
 	Config             *domain.SubscriptionConfig
@@ -78,6 +80,8 @@ type SubscriptionView struct {
 	Name               string                    `json:"name"`
 	SourceURLSecretRef string                    `json:"source_url_secret_ref"`
 	Enabled            bool                      `json:"enabled"`
+	IsPrimary          bool                      `json:"is_primary"`
+	UserInfo           string                    `json:"userinfo,omitempty"`
 	Prefix             string                    `json:"prefix,omitempty"`
 	RefreshPolicy      domain.RefreshPolicy      `json:"refresh_policy"`
 	Config             domain.SubscriptionConfig `json:"config"`
@@ -216,6 +220,12 @@ func (s *Service) Update(ctx context.Context, command UpdateSubscriptionCommand)
 	}
 	if command.Enabled != nil {
 		sub.Enabled = *command.Enabled
+	}
+	if command.IsPrimary != nil {
+		sub.IsPrimary = *command.IsPrimary
+	}
+	if command.UserInfo != nil {
+		sub.UserInfo = *command.UserInfo
 	}
 	if command.RefreshPolicy != nil {
 		sub.RefreshPolicy = normalizedPolicy(*command.RefreshPolicy)
@@ -400,7 +410,7 @@ func redact(sub domain.Subscription) SubscriptionView {
 		scope = "enabled_subscriptions"
 	}
 	view := SubscriptionView{
-		ID: sub.ID, Name: sub.Name, SourceURLSecretRef: sub.SourceURLSecretRef, Enabled: sub.Enabled, Prefix: sub.Prefix, RefreshPolicy: sub.RefreshPolicy,
+		ID: sub.ID, Name: sub.Name, SourceURLSecretRef: sub.SourceURLSecretRef, Enabled: sub.Enabled, IsPrimary: sub.IsPrimary, UserInfo: sub.UserInfo, Prefix: sub.Prefix, RefreshPolicy: sub.RefreshPolicy,
 		Config: sub.Config, Revision: sub.Revision,
 		CreatedAt: sub.CreatedAt.Format("2006-01-02T15:04:05Z07:00"), UpdatedAt: sub.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		NodeCount:       sub.NodeCount,

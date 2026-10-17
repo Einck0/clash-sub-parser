@@ -90,18 +90,28 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		directGeneric := directSubscriptionHandler(cfg.PublicationService, cfg.TokenHolder, "")
 
 		r.Get("/clash", directMihomo)
+		r.Head("/clash", directMihomo)
 		r.Get("/mihomo", directMihomo)
+		r.Head("/mihomo", directMihomo)
 		r.Get("/singbox", directSingBox)
+		r.Head("/singbox", directSingBox)
 		r.Get("/surge", directSurge)
+		r.Head("/surge", directSurge)
 		r.Get("/qx", directQX)
+		r.Head("/qx", directQX)
 		r.Get("/quantumult-x", directQX)
+		r.Head("/quantumult-x", directQX)
 		r.Get("/sub/{target}", directGeneric)
+		r.Head("/sub/{target}", directGeneric)
 
 		// Historical endpoints
 		client := publicationClientHandler(cfg.PublicationService, cfg.TokenHolder)
 		r.Get("/publish/v1/{publication_id}", client)
+		r.Head("/publish/v1/{publication_id}", client)
 		r.Get("/p/{publication_id}", client)
+		r.Head("/p/{publication_id}", client)
 		r.Get("/subscribe/v1/{id}", liveSubscriptionClientHandler(cfg.PublicationService))
+		r.Head("/subscribe/v1/{id}", liveSubscriptionClientHandler(cfg.PublicationService))
 	}
 
 	webHandler := cfg.WebHandler

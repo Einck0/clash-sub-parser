@@ -52,6 +52,7 @@ type Response struct {
 	ContentType   string
 	ETag          string
 	LastModified  string
+	UserInfo      string
 }
 
 // Fetcher defines the contract for fetching subscription content safely.
@@ -525,6 +526,7 @@ func (c *Client) Fetch(ctx context.Context, opts Options) (response *Response, f
 		ContentType:   httpResp.Header.Get("Content-Type"),
 		ETag:          httpResp.Header.Get("ETag"),
 		LastModified:  httpResp.Header.Get("Last-Modified"),
+		UserInfo:      httpResp.Header.Get("Subscription-Userinfo"),
 	}, nil
 }
 

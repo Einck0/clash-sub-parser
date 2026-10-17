@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import {
   CpuChipIcon,
   ChevronDownIcon,
+  ChevronUpIcon,
   PencilSquareIcon,
   TrashIcon,
   PlusIcon,
@@ -19,17 +20,29 @@ import {
 import StatusBadge from '../../ui/StatusBadge.vue'
 import { t } from '../../locales'
 
-const props = defineProps<{
-  group: PolicyGroup
-  availableGroups?: PolicyGroup[]
-  selected?: boolean
-}>()
+const props = withDefaults(
+  defineProps<{
+    group: PolicyGroup
+    availableGroups?: PolicyGroup[]
+    selected?: boolean
+    canMoveUp?: boolean
+    canMoveDown?: boolean
+  }>(),
+  {
+    availableGroups: () => [],
+    selected: false,
+    canMoveUp: false,
+    canMoveDown: false,
+  }
+)
 
 const emit = defineEmits<{
   (e: 'select', group: PolicyGroup): void
   (e: 'edit', group: PolicyGroup): void
   (e: 'delete', id: string): void
   (e: 'manage-edges', group: PolicyGroup): void
+  (e: 'move-up', group: PolicyGroup): void
+  (e: 'move-down', group: PolicyGroup): void
 }>()
 
 const expanded = ref(false)
@@ -146,6 +159,9 @@ function handleHeaderClick() {
       <!-- Edge / Sources Indicator and Action Bar wrap cleanly on narrow widths -->
       <div class="flex flex-wrap items-center justify-between gap-2 text-xs opacity-70 border-t border-base-300 pt-2.5 min-w-0">
         <div class="flex flex-wrap items-center gap-2 min-w-0">
+          <span class="badge badge-xs badge-neutral font-mono font-bold" title="策略组排序序号">
+            #{{ group.position ?? 0 }}
+          </span>
           <span v-if="sourceCount > 0" class="badge badge-xs badge-outline font-mono">
             {{ sourceCount }} 项来源
           </span>
@@ -184,6 +200,26 @@ function handleHeaderClick() {
         </div>
 
         <div class="flex flex-wrap items-center gap-1 shrink-0" @click.stop>
+          <button
+            v-if="canMoveUp"
+            type="button"
+            class="btn btn-ghost btn-xs gap-1 touch-manipulation"
+            title="上移策略组"
+            data-testid="group-move-up-btn"
+            @click="emit('move-up', group)"
+          >
+            <ChevronUpIcon class="w-3.5 h-3.5 shrink-0" />
+          </button>
+          <button
+            v-if="canMoveDown"
+            type="button"
+            class="btn btn-ghost btn-xs gap-1 touch-manipulation"
+            title="下移策略组"
+            data-testid="group-move-down-btn"
+            @click="emit('move-down', group)"
+          >
+            <ChevronDownIcon class="w-3.5 h-3.5 shrink-0" />
+          </button>
           <button
             type="button"
             class="btn btn-ghost btn-xs gap-1 touch-manipulation"

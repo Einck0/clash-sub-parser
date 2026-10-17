@@ -1399,6 +1399,7 @@ func TestPolicyService_ListGroups_SearchAndPagination(t *testing.T) {
 	}
 
 	for i, g := range groupsToCreate {
+		time.Sleep(2 * time.Millisecond)
 		_, err := svc.CreateGroup(ctx, policy.CreateGroupCommand{
 			Name:      g.name,
 			GroupType: g.groupType,
@@ -1421,7 +1422,7 @@ func TestPolicyService_ListGroups_SearchAndPagination(t *testing.T) {
 	if len(p1.Items) != 2 {
 		t.Fatalf("expected 2 items on page 1, got %d", len(p1.Items))
 	}
-	// Alphabetical order: Alpha-Proxy, Beta-Fallback
+	// Sequential order (position ASC, created_at ASC, id ASC): Alpha-Proxy, Beta-Fallback
 	if p1.Items[0].Name != "Alpha-Proxy" || p1.Items[1].Name != "Beta-Fallback" {
 		t.Fatalf("expected Alpha-Proxy and Beta-Fallback, got %s and %s", p1.Items[0].Name, p1.Items[1].Name)
 	}
@@ -1433,9 +1434,9 @@ func TestPolicyService_ListGroups_SearchAndPagination(t *testing.T) {
 	if len(p2.Items) != 2 {
 		t.Fatalf("expected 2 items on page 2, got %d", len(p2.Items))
 	}
-	// Alphabetical order: Delta-Proxy, Epsilon-LoadBalance
-	if p2.Items[0].Name != "Delta-Proxy" || p2.Items[1].Name != "Epsilon-LoadBalance" {
-		t.Fatalf("expected Delta-Proxy and Epsilon-LoadBalance, got %s and %s", p2.Items[0].Name, p2.Items[1].Name)
+	// Sequential order (position ASC, created_at ASC, id ASC): Gamma-URLTest, Delta-Proxy
+	if p2.Items[0].Name != "Gamma-URLTest" || p2.Items[1].Name != "Delta-Proxy" {
+		t.Fatalf("expected Gamma-URLTest and Delta-Proxy, got %s and %s", p2.Items[0].Name, p2.Items[1].Name)
 	}
 
 	p3, err := svc.ListGroups(ctx, policy.ListGroupsQuery{Page: 3, PageSize: 2})
@@ -1445,9 +1446,9 @@ func TestPolicyService_ListGroups_SearchAndPagination(t *testing.T) {
 	if len(p3.Items) != 2 {
 		t.Fatalf("expected 2 items on page 3, got %d", len(p3.Items))
 	}
-	// Alphabetical order: Gamma-URLTest, Zeta-Auto
-	if p3.Items[0].Name != "Gamma-URLTest" || p3.Items[1].Name != "Zeta-Auto" {
-		t.Fatalf("expected Gamma-URLTest and Zeta-Auto, got %s and %s", p3.Items[0].Name, p3.Items[1].Name)
+	// Sequential order (position ASC, created_at ASC, id ASC): Epsilon-LoadBalance, Zeta-Auto
+	if p3.Items[0].Name != "Epsilon-LoadBalance" || p3.Items[1].Name != "Zeta-Auto" {
+		t.Fatalf("expected Epsilon-LoadBalance and Zeta-Auto, got %s and %s", p3.Items[0].Name, p3.Items[1].Name)
 	}
 
 	// 2. Search by name (case-insensitive)

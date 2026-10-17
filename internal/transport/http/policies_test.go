@@ -801,16 +801,17 @@ func TestPolicyGroupsSearchAndPagination(t *testing.T) {
 	groups := []struct {
 		name      string
 		groupType string
+		position  int
 	}{
-		{"US-Proxy", "select"},
-		{"HK-Auto", "urltest"},
-		{"SG-Auto", "urltest"},
-		{"JP-Fallback", "fallback"},
-		{"US-Direct", "select"},
+		{"HK-Auto", "urltest", 1},
+		{"JP-Fallback", "fallback", 2},
+		{"SG-Auto", "urltest", 3},
+		{"US-Direct", "select", 4},
+		{"US-Proxy", "select", 5},
 	}
 
 	for _, g := range groups {
-		payload := fmt.Sprintf(`{"name": "%s", "group_type": "%s"}`, g.name, g.groupType)
+		payload := fmt.Sprintf(`{"name": "%s", "group_type": "%s", "position": %d}`, g.name, g.groupType, g.position)
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/policies/groups", strings.NewReader(payload))
 		req.Header.Set("Authorization", "Bearer "+testAdminToken)
 		req.Header.Set("Content-Type", "application/json")

@@ -26,12 +26,12 @@ func (r *subscriptionRepository) GetByID(ctx context.Context, id string) (*domai
 	SELECT id, name, source_url_secret_ref, enabled, prefix,
 	       refresh_interval_seconds, refresh_user_agent_policy, refresh_fetch_proxy_ref,
 	       refresh_timeout_seconds, refresh_max_response_bytes,
-	       config_json, revision, created_at, updated_at
+	       config_json, revision, is_primary, userinfo, created_at, updated_at
 	FROM subscriptions
 	WHERE id = ?;`
 
 	var sub domain.Subscription
-	var enabledInt int
+	var enabledInt, isPrimaryInt int
 	var configJSON sql.NullString
 	var createdAtStr, updatedAtStr string
 
@@ -48,6 +48,8 @@ func (r *subscriptionRepository) GetByID(ctx context.Context, id string) (*domai
 		&sub.RefreshPolicy.MaxResponseBytes,
 		&configJSON,
 		&sub.Revision,
+		&isPrimaryInt,
+		&sub.UserInfo,
 		&createdAtStr,
 		&updatedAtStr,
 	)
@@ -59,6 +61,7 @@ func (r *subscriptionRepository) GetByID(ctx context.Context, id string) (*domai
 	}
 
 	sub.Enabled = enabledInt == 1
+	sub.IsPrimary = isPrimaryInt == 1
 	if configJSON.Valid && strings.TrimSpace(configJSON.String) != "" {
 		_ = json.Unmarshal([]byte(configJSON.String), &sub.Config)
 	}
@@ -113,7 +116,7 @@ func (r *subscriptionRepository) List(ctx context.Context, filter domain.Subscri
 	SELECT id, name, source_url_secret_ref, enabled, prefix,
 	       refresh_interval_seconds, refresh_user_agent_policy, refresh_fetch_proxy_ref,
 	       refresh_timeout_seconds, refresh_max_response_bytes,
-	       config_json, revision, created_at, updated_at
+	       config_json, revision, is_primary, userinfo, created_at, updated_at
 	FROM subscriptions
 	%s
 	ORDER BY created_at DESC
@@ -129,7 +132,7 @@ func (r *subscriptionRepository) List(ctx context.Context, filter domain.Subscri
 	items := make([]domain.Subscription, 0)
 	for rows.Next() {
 		var sub domain.Subscription
-		var enabledInt int
+		var enabledInt, isPrimaryInt int
 		var configJSON sql.NullString
 		var createdAtStr, updatedAtStr string
 
@@ -146,6 +149,8 @@ func (r *subscriptionRepository) List(ctx context.Context, filter domain.Subscri
 			&sub.RefreshPolicy.MaxResponseBytes,
 			&configJSON,
 			&sub.Revision,
+			&isPrimaryInt,
+			&sub.UserInfo,
 			&createdAtStr,
 			&updatedAtStr,
 		)
@@ -154,6 +159,7 @@ func (r *subscriptionRepository) List(ctx context.Context, filter domain.Subscri
 		}
 
 		sub.Enabled = enabledInt == 1
+		sub.IsPrimary = isPrimaryInt == 1
 		if configJSON.Valid && strings.TrimSpace(configJSON.String) != "" {
 			_ = json.Unmarshal([]byte(configJSON.String), &sub.Config)
 		}
@@ -348,18 +354,77 @@ func (r *subscriptionRepository) attachLatestFetches(ctx context.Context, subs [
 	return nil
 }
 
+func (r *subscriptionRepository) GetPrimary(ctx context.Context) (*domain.Subscription, error) {
+	const query = `
+	SELECT id, name, source_url_secret_ref, enabled, prefix,
+	       refresh_interval_seconds, refresh_user_agent_policy, refresh_fetch_proxy_ref,
+	       refresh_timeout_seconds, refresh_max_response_bytes,
+	       config_json, revision, is_primary, userinfo, created_at, updated_at
+	FROM subscriptions
+	WHERE is_primary = 1 AND enabled = 1
+	LIMIT 1;`
+
+	var sub domain.Subscription
+	var enabledInt, isPrimaryInt int
+	var configJSON sql.NullString
+	var createdAtStr, updatedAtStr string
+
+	err := r.db.QueryRowContext(ctx, query).Scan(
+		&sub.ID,
+		&sub.Name,
+		&sub.SourceURLSecretRef,
+		&enabledInt,
+		&sub.Prefix,
+		&sub.RefreshPolicy.IntervalSeconds,
+		&sub.RefreshPolicy.UserAgentPolicy,
+		&sub.RefreshPolicy.FetchProxyRef,
+		&sub.RefreshPolicy.TimeoutSeconds,
+		&sub.RefreshPolicy.MaxResponseBytes,
+		&configJSON,
+		&sub.Revision,
+		&isPrimaryInt,
+		&sub.UserInfo,
+		&createdAtStr,
+		&updatedAtStr,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to query primary subscription: %w", err)
+	}
+
+	sub.Enabled = enabledInt == 1
+	sub.IsPrimary = isPrimaryInt == 1
+	if configJSON.Valid && strings.TrimSpace(configJSON.String) != "" {
+		_ = json.Unmarshal([]byte(configJSON.String), &sub.Config)
+	}
+	sub.CreatedAt, _ = time.Parse(time.RFC3339, createdAtStr)
+	sub.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAtStr)
+
+	if err := r.attachMetadata(ctx, []*domain.Subscription{&sub}); err != nil {
+		return nil, err
+	}
+
+	return &sub, nil
+}
+
 func (r *subscriptionRepository) Create(ctx context.Context, sub *domain.Subscription) error {
 	const query = `
 	INSERT INTO subscriptions (
 		id, name, source_url_secret_ref, enabled, prefix,
 		refresh_interval_seconds, refresh_user_agent_policy, refresh_fetch_proxy_ref,
 		refresh_timeout_seconds, refresh_max_response_bytes,
-		config_json, revision, created_at, updated_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
+		config_json, revision, is_primary, userinfo, created_at, updated_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
 
 	enabledInt := 0
 	if sub.Enabled {
 		enabledInt = 1
+	}
+	isPrimaryInt := 0
+	if sub.IsPrimary {
+		isPrimaryInt = 1
 	}
 
 	configBytes, _ := json.Marshal(sub.Config)
@@ -378,26 +443,36 @@ func (r *subscriptionRepository) Create(ctx context.Context, sub *domain.Subscri
 		updatedStr = nowStr
 	}
 
-	_, err := r.db.ExecContext(ctx, query,
-		sub.ID,
-		sub.Name,
-		sub.SourceURLSecretRef,
-		enabledInt,
-		sub.Prefix,
-		sub.RefreshPolicy.IntervalSeconds,
-		sub.RefreshPolicy.UserAgentPolicy,
-		sub.RefreshPolicy.FetchProxyRef,
-		sub.RefreshPolicy.TimeoutSeconds,
-		sub.RefreshPolicy.MaxResponseBytes,
-		configStr,
-		sub.Revision,
-		createdStr,
-		updatedStr,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to insert subscription: %w", err)
-	}
-	return nil
+	return WithTx(ctx, r.db, func(ctx context.Context, tx *sql.Tx) error {
+		if sub.IsPrimary {
+			if _, err := tx.ExecContext(ctx, "UPDATE subscriptions SET is_primary = 0 WHERE is_primary = 1;"); err != nil {
+				return fmt.Errorf("failed to clear other primary subscriptions: %w", err)
+			}
+		}
+
+		_, err := tx.ExecContext(ctx, query,
+			sub.ID,
+			sub.Name,
+			sub.SourceURLSecretRef,
+			enabledInt,
+			sub.Prefix,
+			sub.RefreshPolicy.IntervalSeconds,
+			sub.RefreshPolicy.UserAgentPolicy,
+			sub.RefreshPolicy.FetchProxyRef,
+			sub.RefreshPolicy.TimeoutSeconds,
+			sub.RefreshPolicy.MaxResponseBytes,
+			configStr,
+			sub.Revision,
+			isPrimaryInt,
+			sub.UserInfo,
+			createdStr,
+			updatedStr,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to insert subscription: %w", err)
+		}
+		return nil
+	})
 }
 
 func (r *subscriptionRepository) Update(ctx context.Context, sub *domain.Subscription) error {
@@ -414,12 +489,18 @@ func (r *subscriptionRepository) Update(ctx context.Context, sub *domain.Subscri
 		refresh_max_response_bytes = ?,
 		config_json = ?,
 		revision = ?,
+		is_primary = ?,
+		userinfo = ?,
 		updated_at = ?
 	WHERE id = ?;`
 
 	enabledInt := 0
 	if sub.Enabled {
 		enabledInt = 1
+	}
+	isPrimaryInt := 0
+	if sub.IsPrimary {
+		isPrimaryInt = 1
 	}
 
 	configBytes, _ := json.Marshal(sub.Config)
@@ -437,6 +518,13 @@ func (r *subscriptionRepository) Update(ctx context.Context, sub *domain.Subscri
 			}
 			return err
 		}
+
+		if sub.IsPrimary {
+			if _, err := tx.ExecContext(ctx, "UPDATE subscriptions SET is_primary = 0 WHERE id != ? AND is_primary = 1;", sub.ID); err != nil {
+				return fmt.Errorf("failed to clear other primary subscriptions: %w", err)
+			}
+		}
+
 		res, err := tx.ExecContext(ctx, query,
 			sub.Name,
 			sub.SourceURLSecretRef,
@@ -449,6 +537,8 @@ func (r *subscriptionRepository) Update(ctx context.Context, sub *domain.Subscri
 			sub.RefreshPolicy.MaxResponseBytes,
 			configStr,
 			sub.Revision,
+			isPrimaryInt,
+			sub.UserInfo,
 			updatedStr,
 			sub.ID,
 		)

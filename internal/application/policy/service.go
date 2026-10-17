@@ -95,12 +95,17 @@ func (s *Service) CreateGroup(ctx context.Context, cmd CreateGroupCommand) (*Gro
 	}
 
 	now := domain.NowUTC()
+	pos := 0
+	if cmd.Position != nil {
+		pos = *cmd.Position
+	}
 	group := domain.NodeGroup{
 		EmptyFallbackPass: cmd.EmptyFallbackPass,
 		Sources:           append([]domain.MemberSource(nil), cmd.Sources...),
 		ID:                groupID,
 		Name:              name,
 		GroupType:         cmd.GroupType,
+		Position:          pos,
 		CreatedAt:         now,
 		UpdatedAt:         now,
 	}
@@ -378,6 +383,9 @@ func (s *Service) UpdateGroup(ctx context.Context, cmd UpdateGroupCommand) (*Gro
 		}
 		if cmd.EmptyFallbackPass != nil {
 			group.EmptyFallbackPass = *cmd.EmptyFallbackPass
+		}
+		if cmd.Position != nil {
+			group.Position = *cmd.Position
 		}
 		if s.nodeRepo != nil {
 			var nodeEdges []domain.GroupEdge
@@ -1594,6 +1602,7 @@ func toGroupView(group *domain.NodeGroup, edges []domain.GroupEdge) *GroupView {
 		ID:                group.ID,
 		Name:              group.Name,
 		GroupType:         group.GroupType,
+		Position:          group.Position,
 		Revision:          rev,
 		Sources:           sources,
 		Edges:             edgeViews,

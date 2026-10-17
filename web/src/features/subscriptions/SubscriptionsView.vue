@@ -8,6 +8,7 @@ import {
   EllipsisVerticalIcon,
   ListBulletIcon,
   PlusIcon,
+  StarIcon,
   TrashIcon,
 } from '@heroicons/vue/24/outline'
 import ConfirmModal from '../../ui/ConfirmModal.vue'
@@ -23,11 +24,13 @@ import {
   useSubscriptions,
   formatRefreshTime,
   formatFullDateTime,
+  parseUserInfo,
+  formatBytes,
   type SubscriptionDraft,
   type SubscriptionRecord,
 } from './useSubscriptions'
 
-const { items, loading, saving, error, total, load, save, remove, refresh, refreshingIDs, toggle, togglingIDs } = useSubscriptions()
+const { items, loading, saving, error, total, load, save, remove, refresh, refreshingIDs, toggle, togglingIDs, setPrimary, settingPrimaryIDs } = useSubscriptions()
 const drawerOpen = ref(false)
 const editing = ref<SubscriptionRecord>()
 const confirmDeleteOpen = ref(false)
@@ -35,6 +38,14 @@ const pendingDeleteSubscription = ref<SubscriptionRecord | null>(null)
 const deleting = ref(false)
 const entriesDrawerOpen = ref(false)
 const viewingEntriesSub = ref<SubscriptionRecord>()
+
+async function handleSetPrimary(subscription: SubscriptionRecord) {
+  try {
+    await setPrimary(subscription)
+  } catch {
+    // handled with toast
+  }
+}
 
 async function handleToggle(subscription: SubscriptionRecord) {
   try {
@@ -142,7 +153,18 @@ onMounted(load)
         <div class="card-body gap-3 sm:gap-4 p-4 sm:p-5 min-w-0 max-w-full">
           <div class="flex flex-wrap items-start justify-between gap-2 min-w-0" data-testid="subscription-card-header">
             <div class="min-w-0 flex-1 basis-full sm:basis-40">
-              <h3 class="truncate font-semibold text-sm sm:text-base text-base-content">{{ subscription.name }}</h3>
+              <div class="flex items-center gap-1.5 min-w-0 flex-wrap">
+                <h3 class="truncate font-semibold text-sm sm:text-base text-base-content">{{ subscription.name }}</h3>
+                <span
+                  v-if="subscription.is_primary"
+                  class="badge badge-warning badge-sm font-semibold shrink-0 gap-1 text-[11px]"
+                  data-testid="primary-sub-badge"
+                  title="当前主力订阅，流量与过期时间将透传至客户端"
+                >
+                  <StarIcon class="h-3 w-3 fill-current" />
+                  主订阅
+                </span>
+              </div>
               <p class="mt-1 truncate font-mono text-xs opacity-60 break-all">{{ subscription.source_url_secret_ref }}</p>
             </div>
             <div class="flex flex-wrap items-center gap-1.5 min-w-0 max-w-full">
@@ -208,6 +230,20 @@ onMounted(load)
                     >
                       <ArrowPathIcon class="h-3.5 w-3.5 shrink-0" :class="{ 'animate-spin': refreshingIDs.has(subscription.id) }" />
                       <span>{{ refreshingIDs.has(subscription.id) ? t('subscriptions.refreshing') : t('common.refresh') }}</span>
+                    </button>
+
+                    <!-- Set as Primary -->
+                    <button
+                      v-if="!subscription.is_primary"
+                      type="button"
+                      class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-left hover:bg-base-300/80 text-warning transition-colors"
+                      :disabled="settingPrimaryIDs.has(subscription.id)"
+                      @click="close(); handleSetPrimary(subscription)"
+                      role="menuitem"
+                      data-testid="sub-action-set-primary"
+                    >
+                      <StarIcon class="h-3.5 w-3.5 shrink-0" />
+                      <span>{{ settingPrimaryIDs.has(subscription.id) ? '设置中...' : '设为主订阅' }}</span>
                     </button>
 
                     <!-- Toggle Enabled -->
@@ -299,6 +335,32 @@ onMounted(load)
             <div v-else-if="subscription.enabled && subscription.source_node_count !== undefined && subscription.source_node_count !== subscription.node_count" class="text-[11px] opacity-60 font-mono truncate">
               {{ t('subscriptions.sourceTotal', { count: subscription.source_node_count }) }}
             </div>
+          </div>
+
+          <!-- UserInfo / Traffic & Expire Info -->
+          <div
+            v-if="subscription.userinfo && parseUserInfo(subscription.userinfo)"
+            class="p-2.5 rounded-lg bg-base-300/30 border border-base-300/60 text-xs space-y-1.5"
+            data-testid="subscription-userinfo"
+          >
+            <div class="flex items-center justify-between text-[11px] opacity-70">
+              <span class="font-medium">流量与周期</span>
+              <span v-if="parseUserInfo(subscription.userinfo)?.expireDate" class="font-mono">
+                到期: {{ parseUserInfo(subscription.userinfo)?.expireDate }}
+              </span>
+            </div>
+            <div class="flex items-center justify-between font-mono text-[11px]">
+              <span>已用: <strong>{{ formatBytes(parseUserInfo(subscription.userinfo)!.used) }}</strong></span>
+              <span v-if="parseUserInfo(subscription.userinfo)!.total > 0">
+                剩余: <strong class="text-success">{{ formatBytes(parseUserInfo(subscription.userinfo)!.remaining) }}</strong> / {{ formatBytes(parseUserInfo(subscription.userinfo)!.total) }}
+              </span>
+            </div>
+            <progress
+              v-if="parseUserInfo(subscription.userinfo)!.total > 0"
+              class="progress progress-primary w-full h-1.5"
+              :value="parseUserInfo(subscription.userinfo)!.used"
+              :max="parseUserInfo(subscription.userinfo)!.total"
+            />
           </div>
 
           <!-- Badges for Advanced Config -->

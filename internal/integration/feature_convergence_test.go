@@ -51,8 +51,8 @@ func (r *controlledFakeRunner) Run(ctx context.Context, run *domain.ProbeRun, no
 	return nil
 }
 
-// TestFeatureConvergence_SchemaMigrationTo21 verifies all current migrations.
-func TestFeatureConvergence_SchemaMigrationTo21(t *testing.T) {
+// TestFeatureConvergence_SchemaMigrationTo22 verifies all current migrations.
+func TestFeatureConvergence_SchemaMigrationTo22(t *testing.T) {
 	ctx := context.Background()
 	db, err := sqlite.Open(sqlite.Config{
 		Path:        fmt.Sprintf("file:migration_test_%d?mode=memory&cache=shared", time.Now().UnixNano()),
@@ -66,7 +66,7 @@ func TestFeatureConvergence_SchemaMigrationTo21(t *testing.T) {
 
 	runner := sqlite.NewMigrationRunner(db, migrations.FS)
 	if err := runner.Run(ctx); err != nil {
-		t.Fatalf("failed to run migrations 1..21: %v", err)
+		t.Fatalf("failed to run migrations 1..22: %v", err)
 	}
 
 	report, err := sqlite.CheckReadiness(ctx, db)
@@ -76,8 +76,8 @@ func TestFeatureConvergence_SchemaMigrationTo21(t *testing.T) {
 	if !report.Ready {
 		t.Fatalf("expected readiness report Ready=true, got report: %+v", report)
 	}
-	if report.SchemaVersion != 21 {
-		t.Fatalf("expected schema version 21 (sources, fetch settings, revision snapshots, prefix), got %d", report.SchemaVersion)
+	if report.SchemaVersion != 22 {
+		t.Fatalf("expected schema version 22 (sources, fetch settings, revision snapshots, prefix, subscription links), got %d", report.SchemaVersion)
 	}
 	if len(report.MissingTables) > 0 {
 		t.Fatalf("unexpected missing tables: %v", report.MissingTables)
@@ -86,8 +86,8 @@ func TestFeatureConvergence_SchemaMigrationTo21(t *testing.T) {
 		t.Fatalf("unexpected FK violations: %v", report.ForeignKeyViolations)
 	}
 
-	// Verify tables from migration 7 and 8 exist, plus index from migration 10
-	for _, tbl := range []string{"probe_schedules", "probe_batches", "probe_batch_runs", "global_node_filters", "group_node_filters"} {
+	// Verify tables from migration 7 and 8 exist, plus subscription_links from migration 22
+	for _, tbl := range []string{"probe_schedules", "probe_batches", "probe_batch_runs", "global_node_filters", "group_node_filters", "subscription_links"} {
 		var name string
 		err := db.QueryRowContext(ctx, "SELECT name FROM sqlite_master WHERE type='table' AND name=?", tbl).Scan(&name)
 		if err != nil {
@@ -97,6 +97,18 @@ func TestFeatureConvergence_SchemaMigrationTo21(t *testing.T) {
 	var idxName string
 	if err := db.QueryRowContext(ctx, "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_ip_risk_obs_node_observed_id'").Scan(&idxName); err != nil {
 		t.Fatalf("expected index idx_ip_risk_obs_node_observed_id from migration 10 to exist: %v", err)
+	}
+	if err := db.QueryRowContext(ctx, "SELECT name FROM sqlite_master WHERE type='index' AND name='uq_subscription_links_default_target'").Scan(&idxName); err != nil {
+		t.Fatalf("expected unique partial index uq_subscription_links_default_target from migration 22 to exist: %v", err)
+	}
+
+	// Verify settings.public_base_url exists with default empty string from migration 22
+	var publicBaseURL string
+	if err := db.QueryRowContext(ctx, "SELECT public_base_url FROM settings WHERE id = 1").Scan(&publicBaseURL); err != nil {
+		t.Fatalf("expected settings.public_base_url column to exist: %v", err)
+	}
+	if publicBaseURL != "" {
+		t.Fatalf("expected settings.public_base_url default empty string, got %q", publicBaseURL)
 	}
 }
 

@@ -24,6 +24,8 @@ const (
 // AdminTokenHolder provides thread-safe dynamic admin token authentication, verification, and rotation.
 type AdminTokenHolder interface {
 	Mode() SecurityMode
+	AdminMode() SecurityMode
+	IsExportAuthRequired() bool
 	Verify(candidate string) bool
 	UpdateToken(ctx context.Context, token string) error
 	SetVerifier(verifier string)

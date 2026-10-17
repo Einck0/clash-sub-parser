@@ -50,7 +50,7 @@
 - [x] **S413 [CRITIC]** 委派 Critic 执行黑盒验收：
   - 在隔离预览环境中黑盒验证桌面与移动端 UI 体验；
   - 验证直链导出包含正确的 `Subscription-Userinfo` 响应头与有序 `proxy-groups`。
-- [ ] **S414 [DEPLOY]** 提交源码、推送 dev、官方 Actions 云构建与平滑更新生产：
+- [x] **S414 [DEPLOY]** 提交源码、推送 dev、官方 Actions 云构建与平滑更新生产：
   - 提交确证源码，推送到 `dev`；
   - 跟踪 GitHub Actions 构建不可变镜像；
   - 生产 SQLite 数据库一致性热备；

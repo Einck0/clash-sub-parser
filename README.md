@@ -33,7 +33,7 @@ Default endpoints:
 - **Web UI & Management API**: `http://127.0.0.1:18080` (API under `/api/v1/*`)
 - **Liveness probe**: `http://127.0.0.1:18080/healthz`
 - **Readiness probe**: `http://127.0.0.1:18080/readyz`
-- **Legacy endpoints**: `GET /yaml` and `GET /script` return `HTTP 410 Gone` (directing clients to versioned publications).
+- **Legacy endpoints**: `GET /yaml` and `GET /script` return `HTTP 410 Gone` (directing clients to client subscription links).
 
 Verify running status:
 ```bash
@@ -62,7 +62,7 @@ CSP supports two operational authentication modes:
    - Required for any deployment reachable over a LAN or the public Internet.
    - Web UI presents an interactive `AuthGate` requiring the Admin Token.
    - API endpoints require `Authorization: Bearer <token>` or authenticated session cookie with `X-CSRF-Token` protection.
-   - Published subscription URLs require their own per-publication export token (`?token=<export-token>`), not `CSP_ADMIN_TOKEN`.
+   - Client subscription URLs require their own independent export token (`?token=<export-token>`), not `CSP_ADMIN_TOKEN`.
 
 ### Configuring Credentials
 

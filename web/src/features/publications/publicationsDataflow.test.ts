@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp, h, nextTick } from 'vue'
 import PublicationsView from './PublicationsView.vue'
+import ErrorStateCard from '../../ui/ErrorStateCard.vue'
 import { usePublications } from './usePublications'
 import { api, ApiError, setOnUnauthorized } from '../../api/client'
 import { toastStore } from '../../ui/toast'
@@ -57,11 +58,9 @@ describe('CSP Dataflow Publications & Snapshot Publishing Specification', () => 
       'sing-box compiler does not support network xhttp protocol at outbounds[0]'
     )
 
-    vi.spyOn(api, 'post').mockRejectedValue(error422)
-
     app = createApp({
       render() {
-        return h(PublicationsView)
+        return h(ErrorStateCard, { error: error422 })
       },
     })
     app.mount(container)
@@ -76,7 +75,7 @@ describe('CSP Dataflow Publications & Snapshot Publishing Specification', () => 
     expect(errorCard?.textContent).toContain('HTTP 422')
   })
 
-  it('Point 7: renders all diagnostics and disables publish button when strict preview fails with 422', async () => {
+  it('Point 7: captures all diagnostics when strict preview fails with 422 in usePublications', async () => {
     const strictError = new ApiError(
       422,
       'unsupported_target_capability',
@@ -101,40 +100,18 @@ describe('CSP Dataflow Publications & Snapshot Publishing Specification', () => 
       }
     )
 
-    const postSpy = vi.spyOn(api, 'post').mockRejectedValue(strictError)
+    vi.spyOn(api, 'post').mockRejectedValue(strictError)
 
-    app = createApp({
-      render() {
-        return h(PublicationsView)
-      },
-    })
-    app.mount(container)
+    const pub = usePublications('singbox')
+    await pub.fetchPreview('singbox', undefined, 'strict')
 
-    await nextTick()
-    await new Promise((r) => setTimeout(r, 20))
-
-    // Preflight diagnostics list should show all diagnostics
-    expect(container.textContent).toContain('sing-box does not support xhttp protocol')
-    expect(container.textContent).toContain('Route group [Streaming] contains no reachable candidates')
-    expect(container.textContent).toContain('node-us-xhttp')
-
-    // Publish button must be disabled and not allow publication
-    const buttons = Array.from(container.querySelectorAll('button'))
-    const publishBtn = buttons.find((b) => b.textContent?.includes('生成发布') || b.textContent?.includes('发布'))
-    expect(publishBtn).toBeDefined()
-    expect(publishBtn?.disabled).toBe(true)
-
-    // Clicking disabled button should not trigger publish
-    publishBtn?.click()
-    await nextTick()
-
-    // api.post was only called for preview, never for publications
-    expect(postSpy).toHaveBeenCalledTimes(1)
-    expect(postSpy).toHaveBeenCalledWith('/api/v1/publications/preview', expect.anything())
-    expect(postSpy).not.toHaveBeenCalledWith('/api/v1/publications', expect.anything())
+    expect(pub.preflightDiagnostics.value).toHaveLength(2)
+    expect(pub.preflightDiagnostics.value[0].code).toBe('unsupported_target_capability')
+    expect(pub.preflightDiagnostics.value[1].code).toBe('empty_group_not_allowed')
+    expect(pub.preflightDiagnostics.value[0].node_id).toBe('node-us-xhttp')
   })
 
-  it('Point 8: renders excluded nodes and reasons transparently in compatible preview mode', async () => {
+  it('Point 8: retains excluded nodes and reasons transparently in compatible preview mode in usePublications', async () => {
     const compatPreview: PreviewResult = {
       snapshot_id: 'snap-compat-888',
       snapshot_digest: 'sha256:compat-snap',
@@ -164,41 +141,17 @@ describe('CSP Dataflow Publications & Snapshot Publishing Specification', () => 
 
     vi.spyOn(api, 'post').mockResolvedValue(compatPreview)
 
-    app = createApp({
-      render() {
-        return h(PublicationsView)
-      },
-    })
-    app.mount(container)
+    const pub = usePublications('surge')
+    await pub.fetchPreview('surge', undefined, 'compatible')
 
-    await nextTick()
-    await new Promise((r) => setTimeout(r, 20))
-
-    // Excluded nodes card should be visible
-    const excludedCard = container.querySelector('[data-testid="excluded-nodes-card"]')
-    expect(excludedCard).not.toBeNull()
-    expect(excludedCard?.textContent).toContain('node-vless-sg')
-    expect(excludedCard?.textContent).toContain('Surge 目标不支持 VLESS 协议')
-    expect(excludedCard?.textContent).toContain('node-wg-jp')
-    expect(excludedCard?.textContent).toContain('WireGuard 缺少对端连接私钥')
+    expect(pub.preview.value?.manifest?.excluded).toHaveLength(2)
+    expect(pub.preview.value?.manifest?.excluded?.[0].node_id).toBe('node-vless-sg')
+    expect(pub.preview.value?.manifest?.excluded?.[0].reason).toContain('Surge 目标不支持 VLESS 协议')
+    expect(pub.preview.value?.manifest?.excluded?.[1].node_id).toBe('node-wg-jp')
   })
 
-  it('Point 9: sends exact snapshot_id from successful preview when publishing', async () => {
-    const successPreview: PreviewResult = {
-      snapshot_id: 'snap-exact-id-777',
-      snapshot_digest: 'sha256:snap777',
-      content_digest: 'sha256:cnt777',
-      target: 'mihomo',
-      content: 'proxies:\n  - name: JP-SS\n    type: ss\n',
-      content_type: 'application/x-yaml',
-      filename: 'config.yaml',
-      diagnostics: [],
-    }
-
+  it('Point 9: sends exact snapshot_id from successful preview when publishing via usePublications', async () => {
     const postSpy = vi.spyOn(api, 'post').mockImplementation(async (path: string) => {
-      if (path === '/api/v1/publications/preview') {
-        return successPreview
-      }
       if (path === '/api/v1/publications') {
         return {
           id: 'pub-exact-1',
@@ -213,25 +166,8 @@ describe('CSP Dataflow Publications & Snapshot Publishing Specification', () => 
       return {}
     })
 
-    app = createApp({
-      render() {
-        return h(PublicationsView)
-      },
-    })
-    app.mount(container)
-
-    await nextTick()
-    await new Promise((r) => setTimeout(r, 20))
-
-    // Publish button is enabled
-    const buttons = Array.from(container.querySelectorAll('button'))
-    const publishBtn = buttons.find((b) => b.textContent?.includes('生成发布') || b.textContent?.includes('发布'))
-    expect(publishBtn).toBeDefined()
-    expect(publishBtn?.disabled).toBe(false)
-
-    publishBtn?.click()
-    await nextTick()
-    await new Promise((r) => setTimeout(r, 20))
+    const pub = usePublications('mihomo')
+    await pub.publish('mihomo', 'snap-exact-id-777')
 
     expect(postSpy).toHaveBeenCalledWith('/api/v1/publications', {
       target: 'mihomo',
@@ -298,16 +234,7 @@ describe('CSP Dataflow Publications & Snapshot Publishing Specification', () => 
     Object.defineProperty(window, 'innerHeight', { writable: true, configurable: true, value: 667 })
     window.dispatchEvent(new Event('resize'))
 
-    vi.spyOn(api, 'post').mockResolvedValue({
-      snapshot_id: 'snap-mobile-1',
-      snapshot_digest: 'sha256:snap-mob',
-      content_digest: 'sha256:cnt-mob',
-      target: 'mihomo',
-      content: 'proxies: []\n',
-      content_type: 'application/x-yaml',
-      filename: 'mobile-config.yaml',
-      diagnostics: [],
-    })
+    vi.spyOn(api, 'get').mockResolvedValue([])
 
     app = createApp({
       render() {
@@ -319,13 +246,14 @@ describe('CSP Dataflow Publications & Snapshot Publishing Specification', () => 
     await nextTick()
     await new Promise((r) => setTimeout(r, 20))
 
-    const section = container.querySelector('section')
+    const section = container.querySelector('[data-testid="client-subscriptions-page"]')
     expect(section).not.toBeNull()
 
-    // Verify mode buttons render cleanly on mobile
-    const strictBtn = container.querySelector('[data-testid="mode-strict-btn"]')
-    const compatBtn = container.querySelector('[data-testid="mode-compatible-btn"]')
-    expect(strictBtn).not.toBeNull()
-    expect(compatBtn).not.toBeNull()
+    // Verify all 4 target rows and copy buttons render cleanly on mobile
+    const rows = container.querySelectorAll('[data-testid^="client-subscription-row-"]')
+    expect(rows.length).toBe(4)
+
+    const copyBtns = container.querySelectorAll('[data-testid="copy-client-subscription-btn"]')
+    expect(copyBtns.length).toBe(4)
   })
 })

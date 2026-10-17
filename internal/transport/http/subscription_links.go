@@ -174,13 +174,11 @@ func (h subscriptionLinkAdminHandler) copy(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
-	if publicBaseURL == "" {
-		WriteError(w, r, http.StatusUnprocessableEntity, "public_base_url_not_configured",
-			"Public base URL is not configured. Please configure a trusted public base URL in Settings before copying client subscription links.")
-		return
+	subPath := fmt.Sprintf("/subscribe/v1/%s?token=%s", link.ID, link.Token)
+	fullURL := subPath
+	if publicBaseURL != "" {
+		fullURL = fmt.Sprintf("%s%s", publicBaseURL, subPath)
 	}
-
-	fullURL := fmt.Sprintf("%s/subscribe/v1/%s?token=%s", publicBaseURL, link.ID, link.Token)
 
 	if h.audit != nil {
 		_ = h.audit.Record(r.Context(), &domain.AuditEvent{
@@ -199,6 +197,7 @@ func (h subscriptionLinkAdminHandler) copy(w http.ResponseWriter, r *http.Reques
 	WriteSuccess(w, r, http.StatusOK, map[string]string{
 		"id":              link.ID,
 		"target":          string(link.Target),
+		"path":            subPath,
 		"url":             fullURL,
 		"token":           link.Token,
 		"public_base_url": publicBaseURL,

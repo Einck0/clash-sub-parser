@@ -118,13 +118,7 @@ describe('T107/T108 Client Subscription UI Specification', () => {
     expect(postSpy).not.toHaveBeenCalledWith('/api/v1/publications', expect.anything())
   })
 
-  it('FR-PUB-LIVE-05: Prompts for public base URL when copy returns 422 public_base_url_not_configured and guides saving without auto-injecting window origin', async () => {
-    const error422 = new ApiError(
-      422,
-      'public_base_url_not_configured',
-      'Public base URL is not configured. Please configure a trusted public base URL in Settings before copying client subscription links.'
-    )
-
+  it('FR-PUB-LIVE-07 & SC-S01: Automatically resolves relative path against window.location.origin when public_base_url is empty, without requiring public base URL setup', async () => {
     vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
       if (path === '/api/v1/subscription-links') return []
       if (path === '/api/v1/settings/public-base-url') return { public_base_url: '' }
@@ -143,11 +137,20 @@ describe('T107/T108 Client Subscription UI Specification', () => {
           updated_at: '2026-10-16T10:00:00Z',
         }
       }
-      if (path.includes('/copy')) throw error422
-      return {}
+      if (path.includes('/copy')) {
+        return {
+          id: 'link-unconf',
+          target: 'mihomo',
+          path: '/subscribe/v1/link-unconf?token=sec_live_tok',
+          url: '/subscribe/v1/link-unconf?token=sec_live_tok',
+          public_base_url: '',
+        }
+      }
+      return { allowed: true }
     })
 
-    const putSpy = vi.spyOn(api, 'put').mockResolvedValue({ public_base_url: 'https://sub.mycorp.org' })
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, { clipboard: { writeText } })
 
     app = createApp({ render: () => h(PublicationsView) })
     app.mount(container)
@@ -160,30 +163,12 @@ describe('T107/T108 Client Subscription UI Specification', () => {
     await nextTick()
     await new Promise((r) => setTimeout(r, 40))
 
-    // Public base URL setup guide should appear
-    const guideBox = container.querySelector('[data-testid="public-base-url-guide"]')
-    expect(guideBox).not.toBeNull()
-    expect(guideBox?.textContent).toContain('未配置公网可信基准地址')
+    // Verified: No public base URL setup form or warning appears
+    expect(container.querySelector('[data-testid="public-base-url-guide"]')).toBeNull()
 
-    // Suggest origin button should set input but NOT automatically call PUT
-    const suggestBtn = container.querySelector('[data-testid="suggest-current-origin-btn"]') as HTMLButtonElement
-    expect(suggestBtn).not.toBeNull()
-    suggestBtn.click()
-    await nextTick()
-
-    const input = container.querySelector('[data-testid="public-base-url-input"]') as HTMLInputElement
-    expect(input.value).toBe(window.location.origin)
-    expect(putSpy).not.toHaveBeenCalled()
-
-    // Explicit confirmation save
-    const saveBtn = container.querySelector('[data-testid="save-public-base-url-btn"]') as HTMLButtonElement
-    saveBtn.click()
-    await nextTick()
-    await new Promise((r) => setTimeout(r, 20))
-
-    expect(putSpy).toHaveBeenCalledWith('/api/v1/settings/public-base-url', {
-      public_base_url: window.location.origin,
-    })
+    // Verified: Full URL is automatically constructed using window.location.origin
+    const expectedUrl = `${window.location.origin}/subscribe/v1/link-unconf?token=sec_live_tok`
+    expect(writeText).toHaveBeenCalledWith(expectedUrl)
   })
 
   it('FR-PUB-LIVE-01: Opens manual copy fallback modal when clipboard API write fails', async () => {
@@ -293,11 +278,11 @@ describe('T107/T108 Client Subscription UI Specification', () => {
     expect(warningBanner?.textContent).toContain('链接已创建，当前不可更新')
   })
 
-  it('FR-PUB-LIVE-05: Restores server subscription links across browsers and allows rotate/revoke with confirmation dialogs', async () => {
+  it('FR-PUB-LIVE-05 & SC-S02: Restores server subscription links across browsers and allows rotate with confirmation dialog, cancel has no side effects', async () => {
     const serverLinks: SubscriptionLink[] = [
       {
         id: 'link-corp-1',
-        label: '办公电脑订阅',
+        label: 'Mihomo 默认订阅',
         target: 'mihomo',
         token_masked: 'sec_1234****',
         state: 'active',
@@ -307,11 +292,11 @@ describe('T107/T108 Client Subscription UI Specification', () => {
       },
       {
         id: 'link-corp-2',
-        label: '手机 Surge 订阅',
+        label: 'Surge 默认订阅',
         target: 'surge',
         token_masked: 'sec_5678****',
         state: 'active',
-        is_default: false,
+        is_default: true,
         created_at: '2026-10-16T09:00:00Z',
         updated_at: '2026-10-16T09:00:00Z',
       },
@@ -319,7 +304,6 @@ describe('T107/T108 Client Subscription UI Specification', () => {
 
     vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
       if (path === '/api/v1/subscription-links') return serverLinks
-      if (path === '/api/v1/settings/public-base-url') return { public_base_url: 'https://sub.example.com' }
       return {}
     })
 
@@ -331,9 +315,6 @@ describe('T107/T108 Client Subscription UI Specification', () => {
           updated_at: '2026-10-16T12:00:00Z',
         }
       }
-      if (path === '/api/v1/subscription-links/link-corp-2/revoke') {
-        return { id: 'link-corp-2', state: 'revoked' }
-      }
       return {}
     })
 
@@ -343,38 +324,33 @@ describe('T107/T108 Client Subscription UI Specification', () => {
     await nextTick()
     await new Promise((r) => setTimeout(r, 30))
 
-    // Verify both links restored from server list
-    expect(container.querySelector('[data-testid="subscription-link-row-link-corp-1"]')).not.toBeNull()
-    expect(container.querySelector('[data-testid="subscription-link-row-link-corp-2"]')).not.toBeNull()
+    // Verify both target rows render in the simplified list
+    expect(container.querySelector('[data-testid="client-subscription-row-mihomo"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="client-subscription-row-surge"]')).not.toBeNull()
 
-    // Test Token Rotation confirmation
-    const rotateBtn = container.querySelector('[data-testid="rotate-link-btn-link-corp-1"]') as HTMLButtonElement
-    expect(rotateBtn).not.toBeNull()
-    rotateBtn.click()
+    // Test Token Reset: first cancel confirmation (SC-S02: cancel has no side effects)
+    const resetBtn = container.querySelector('[data-testid-target="reset-client-subscription-mihomo"]') as HTMLButtonElement
+    expect(resetBtn).not.toBeNull()
+    resetBtn.click()
     await nextTick()
 
-    // Find the ConfirmModal confirm button for rotate
-    const confirmButtons = Array.from(document.querySelectorAll('button')).filter((b) => b.textContent?.includes('确认轮换'))
+    const cancelButtons = Array.from(document.querySelectorAll('button')).filter((b) => b.textContent?.includes('取消'))
+    expect(cancelButtons.length).toBeGreaterThan(0)
+    cancelButtons[0].click()
+    await nextTick()
+    expect(postSpy).not.toHaveBeenCalledWith('/api/v1/subscription-links/link-corp-1/rotate-token')
+
+    // Now re-open and confirm reset
+    resetBtn.click()
+    await nextTick()
+
+    const confirmButtons = Array.from(document.querySelectorAll('button')).filter((b) => b.textContent?.includes('确认重置'))
     expect(confirmButtons.length).toBeGreaterThan(0)
     confirmButtons[0].click()
     await nextTick()
     await new Promise((r) => setTimeout(r, 20))
 
     expect(postSpy).toHaveBeenCalledWith('/api/v1/subscription-links/link-corp-1/rotate-token')
-
-    // Test Revoke confirmation
-    const revokeBtn = container.querySelector('[data-testid="revoke-link-btn-link-corp-2"]') as HTMLButtonElement
-    expect(revokeBtn).not.toBeNull()
-    revokeBtn.click()
-    await nextTick()
-
-    const revokeButtons = Array.from(document.querySelectorAll('button')).filter((b) => b.textContent?.includes('确认停用'))
-    expect(revokeButtons.length).toBeGreaterThan(0)
-    revokeButtons[0].click()
-    await nextTick()
-    await new Promise((r) => setTimeout(r, 20))
-
-    expect(postSpy).toHaveBeenCalledWith('/api/v1/subscription-links/link-corp-2/revoke')
   })
 
   it('FR-PUB-LIVE-07: Isolates asynchronous responses when switching targets rapidly', async () => {
@@ -438,28 +414,8 @@ describe('T107/T108 Client Subscription UI Specification', () => {
     expect(composable.selectedTarget.value).toBe('singbox')
   })
 
-  it('SC-PUB-LIVE-01: Renaming subscription link calls PATCH /api/v1/subscription-links/{id} with new label', async () => {
-    const patchSpy = vi.spyOn(api, 'patch').mockResolvedValue({
-      id: 'link-rename-1',
-      label: '公司专用 Mihomo',
-      target: 'mihomo',
-      state: 'active',
-      is_default: true,
-      created_at: '2026-10-16T10:00:00Z',
-      updated_at: '2026-10-16T11:00:00Z',
-    })
-
-    vi.spyOn(api, 'get').mockResolvedValue([
-      {
-        id: 'link-rename-1',
-        label: '旧名称',
-        target: 'mihomo',
-        state: 'active',
-        is_default: true,
-        created_at: '2026-10-16T10:00:00Z',
-        updated_at: '2026-10-16T10:00:00Z',
-      },
-    ])
+  it('SC-S01: Renders four client rows with full config vs node-only badges, without publication form or link management table', async () => {
+    vi.spyOn(api, 'get').mockResolvedValue([])
 
     app = createApp({ render: () => h(PublicationsView) })
     app.mount(container)
@@ -467,24 +423,28 @@ describe('T107/T108 Client Subscription UI Specification', () => {
     await nextTick()
     await new Promise((r) => setTimeout(r, 30))
 
-    const editBtn = container.querySelector('[data-testid="edit-label-btn-link-rename-1"]') as HTMLButtonElement
-    expect(editBtn).not.toBeNull()
-    editBtn.click()
-    await nextTick()
+    // Verify 4 target rows exist
+    const rows = container.querySelectorAll('[data-testid^="client-subscription-row-"]')
+    expect(rows.length).toBe(4)
 
-    const input = container.querySelector('[data-testid="edit-link-label-input"]') as HTMLInputElement
-    expect(input).not.toBeNull()
-    input.value = '公司专用 Mihomo'
-    input.dispatchEvent(new Event('input'))
-    await nextTick()
+    // Verify Mihomo is marked as full config
+    const mihomoRow = container.querySelector('[data-testid="client-subscription-row-mihomo"]')
+    expect(mihomoRow?.textContent).toContain('完整配置')
+    expect(mihomoRow?.textContent).toContain('Mihomo')
 
-    const saveBtn = container.querySelector('[data-testid="confirm-save-label-btn"]') as HTMLButtonElement
-    saveBtn.click()
-    await nextTick()
-    await new Promise((r) => setTimeout(r, 20))
+    // Verify other three are marked as node subscriptions
+    const singboxRow = container.querySelector('[data-testid="client-subscription-row-singbox"]')
+    expect(singboxRow?.textContent).toContain('节点订阅')
 
-    expect(patchSpy).toHaveBeenCalledWith('/api/v1/subscription-links/link-rename-1', {
-      label: '公司专用 Mihomo',
-    })
+    const surgeRow = container.querySelector('[data-testid="client-subscription-row-surge"]')
+    expect(surgeRow?.textContent).toContain('节点订阅')
+
+    const qxRow = container.querySelector('[data-testid="client-subscription-row-qx"]')
+    expect(qxRow?.textContent).toContain('节点订阅')
+
+    // Verified: No obsolete publication or link asset management elements
+    expect(container.querySelector('[data-testid="server-subscription-links-section"]')).toBeNull()
+    expect(container.querySelector('[data-testid="target-capability-boundary"]')).toBeNull()
+    expect(container.querySelector('table')).toBeNull()
   })
 })

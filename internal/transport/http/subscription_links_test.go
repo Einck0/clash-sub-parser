@@ -5,8 +5,10 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -168,10 +170,33 @@ func TestSubscriptionLinksAdminAPI_FullLifecycle(t *testing.T) {
 		t.Fatalf("expected idempotent create to return existing ID %s, got %s", linkID, createResp2.Data.ID)
 	}
 
-	// 4. Copy URL when PublicBaseURL is not configured -> must fail with 422 public_base_url_not_configured
-	recCopyFail := doRequest(router, http.MethodPost, "/api/v1/subscription-links/"+linkID+"/copy", "", adminToken)
-	if recCopyFail.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("expected 422 when public base URL is empty, got %d", recCopyFail.Code)
+	// 4. Copy URL when PublicBaseURL is not configured -> must succeed with 200 OK returning relative path and url
+	recCopyNoBase := doRequest(router, http.MethodPost, "/api/v1/subscription-links/"+linkID+"/copy", "", adminToken)
+	if recCopyNoBase.Code != http.StatusOK {
+		t.Fatalf("expected 200 when public base URL is empty, got %d, body: %s", recCopyNoBase.Code, recCopyNoBase.Body.String())
+	}
+	var copyNoBaseResp struct {
+		Data struct {
+			ID            string `json:"id"`
+			Target        string `json:"target"`
+			Path          string `json:"path"`
+			URL           string `json:"url"`
+			Token         string `json:"token"`
+			PublicBaseURL string `json:"public_base_url"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(recCopyNoBase.Body.Bytes(), &copyNoBaseResp); err != nil {
+		t.Fatalf("failed to decode copyNoBase response: %v", err)
+	}
+	expectedRelativePath := "/subscribe/v1/" + linkID + "?token=" + createResp.Data.Token
+	if copyNoBaseResp.Data.Path != expectedRelativePath {
+		t.Fatalf("expected relative path %s, got %s", expectedRelativePath, copyNoBaseResp.Data.Path)
+	}
+	if copyNoBaseResp.Data.URL != expectedRelativePath {
+		t.Fatalf("expected relative URL %s when publicBaseURL is empty, got %s", expectedRelativePath, copyNoBaseResp.Data.URL)
+	}
+	if copyNoBaseResp.Data.PublicBaseURL != "" {
+		t.Fatalf("expected empty public_base_url, got %s", copyNoBaseResp.Data.PublicBaseURL)
 	}
 
 	// Configure PublicBaseURL via PUT /api/v1/settings/public-base-url
@@ -187,7 +212,7 @@ func TestSubscriptionLinksAdminAPI_FullLifecycle(t *testing.T) {
 		t.Fatalf("GET /api/v1/settings/public-base-url failed: %d", recGetBase.Code)
 	}
 
-	// 5. Copy URL now -> must return 200 with full URL containing public base URL and link token
+	// 5. Copy URL now -> must return 200 with full URL containing public base URL, path, and link token
 	recCopy := doRequest(router, http.MethodPost, "/api/v1/subscription-links/"+linkID+"/copy", "", adminToken)
 	if recCopy.Code != http.StatusOK {
 		t.Fatalf("POST copy failed: %d, body: %s", recCopy.Code, recCopy.Body.String())
@@ -195,6 +220,8 @@ func TestSubscriptionLinksAdminAPI_FullLifecycle(t *testing.T) {
 	var copyResp struct {
 		Data struct {
 			ID            string `json:"id"`
+			Target        string `json:"target"`
+			Path          string `json:"path"`
 			URL           string `json:"url"`
 			Token         string `json:"token"`
 			PublicBaseURL string `json:"public_base_url"`
@@ -202,6 +229,9 @@ func TestSubscriptionLinksAdminAPI_FullLifecycle(t *testing.T) {
 	}
 	if err := json.Unmarshal(recCopy.Body.Bytes(), &copyResp); err != nil {
 		t.Fatalf("failed to decode copy response: %v", err)
+	}
+	if copyResp.Data.Path != expectedRelativePath {
+		t.Fatalf("expected path %s, got %s", expectedRelativePath, copyResp.Data.Path)
 	}
 	expectedPrefix := "https://sub.mycsp.example.com/subscribe/v1/" + linkID + "?token="
 	if len(copyResp.Data.URL) < len(expectedPrefix) || copyResp.Data.URL[:len(expectedPrefix)] != expectedPrefix {
@@ -300,5 +330,94 @@ func TestSettingsPublicBaseURL_Rejections(t *testing.T) {
 				t.Fatalf("expected 422 for %s, got %d body: %s", tt.name, rec.Code, rec.Body.String())
 			}
 		})
+	}
+}
+
+func TestSubscriptionLinksAdminAPI_AllFourTargetsDefaultAndCopyNoBase(t *testing.T) {
+	router, _, _, _ := setupLiveSubTestRouter(t)
+	adminToken := "admin-secret-token"
+
+	targets := []string{"mihomo", "singbox", "surge", "qx"}
+	for _, target := range targets {
+		t.Run(target, func(t *testing.T) {
+			createPayload := fmt.Sprintf(`{"target":%q,"is_default":true}`, target)
+			recCreate := doRequest(router, http.MethodPost, "/api/v1/subscription-links", createPayload, adminToken)
+			if recCreate.Code != http.StatusCreated {
+				t.Fatalf("create failed for %s: %d, body: %s", target, recCreate.Code, recCreate.Body.String())
+			}
+			var created struct {
+				Data struct {
+					ID     string `json:"id"`
+					Target string `json:"target"`
+					Token  string `json:"token"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(recCreate.Body.Bytes(), &created); err != nil {
+				t.Fatalf("unmarshal create: %v", err)
+			}
+			if created.Data.Target != target || created.Data.ID == "" || created.Data.Token == "" {
+				t.Fatalf("invalid created data: %+v", created.Data)
+			}
+
+			// Copy without public base url -> must succeed with 200 OK and relative path
+			recCopy := doRequest(router, http.MethodPost, "/api/v1/subscription-links/"+created.Data.ID+"/copy", "", adminToken)
+			if recCopy.Code != http.StatusOK {
+				t.Fatalf("copy failed for %s without base url: %d, body: %s", target, recCopy.Code, recCopy.Body.String())
+			}
+			var copyResp struct {
+				Data struct {
+					ID            string `json:"id"`
+					Target        string `json:"target"`
+					Path          string `json:"path"`
+					URL           string `json:"url"`
+					Token         string `json:"token"`
+					PublicBaseURL string `json:"public_base_url"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(recCopy.Body.Bytes(), &copyResp); err != nil {
+				t.Fatalf("unmarshal copy: %v", err)
+			}
+			expectedPath := fmt.Sprintf("/subscribe/v1/%s?token=%s", created.Data.ID, created.Data.Token)
+			if copyResp.Data.Path != expectedPath || copyResp.Data.URL != expectedPath {
+				t.Fatalf("expected path and URL to be %q, got path=%q url=%q", expectedPath, copyResp.Data.Path, copyResp.Data.URL)
+			}
+			if copyResp.Data.PublicBaseURL != "" {
+				t.Fatalf("expected empty public_base_url, got %q", copyResp.Data.PublicBaseURL)
+			}
+		})
+	}
+}
+
+func TestSubscriptionLinksAdminAPI_MaliciousHostHeadersIgnored(t *testing.T) {
+	router, _, _, _ := setupLiveSubTestRouter(t)
+	adminToken := "admin-secret-token"
+
+	createPayload := `{"target":"mihomo","is_default":true}`
+	recCreate := doRequest(router, http.MethodPost, "/api/v1/subscription-links", createPayload, adminToken)
+	var created struct {
+		Data struct {
+			ID    string `json:"id"`
+			Token string `json:"token"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal(recCreate.Body.Bytes(), &created)
+
+	// Send copy request with spoofed Host and X-Forwarded-Host
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/subscription-links/"+created.Data.ID+"/copy", nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Host = "attacker.example.com"
+	req.Header.Set("X-Forwarded-Host", "malicious.org")
+	req.Header.Set("X-Forwarded-Proto", "https")
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	bodyStr := rec.Body.String()
+	if strings.Contains(bodyStr, "attacker.example.com") || strings.Contains(bodyStr, "malicious.org") {
+		t.Fatalf("malicious host header leaked into copy response: %s", bodyStr)
 	}
 }

@@ -247,6 +247,7 @@ export interface SubscriptionLink {
 export interface SubscriptionLinkCopyResult {
   id: string
   target: string
+  path?: string
   url: string
   token?: string
   public_base_url: string

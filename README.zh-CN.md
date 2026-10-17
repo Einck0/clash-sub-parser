@@ -33,7 +33,7 @@ docker compose up -d --build
 - **控制台与管理 API**：`http://127.0.0.1:18080`（API 路由统一位于 `/api/v1/*`）
 - **存活检测探针**：`http://127.0.0.1:18080/healthz`
 - **就绪检测探针**：`http://127.0.0.1:18080/readyz`
-- **遗留端点状态**：`GET /yaml` 与 `GET /script` 明确返回 `HTTP 410 Gone`（指引客户端切换至带版本的订阅发布链接）。
+- **遗留端点状态**：`GET /yaml` 与 `GET /script` 明确返回 `HTTP 410 Gone`（指引客户端切换至客户端订阅直链）。
 
 运行态健康检查：
 ```bash
@@ -62,7 +62,7 @@ CSP 支持两种运行鉴权模式：
    - 任何暴露于局域网或公网的环境必须开启。
    - 前端挂载 `AuthGate` 访问控制门禁，需要输入管理令牌。
    - 管理 API 需附带 `Authorization: Bearer <token>` 或 Cookie 会话（自动注入 `X-CSRF-Token` 头）。
-   - 外部订阅链接需携带发布接口返回的独立导出令牌 `?token=<export-token>`，不能使用 `CSP_ADMIN_TOKEN`。
+   - 外部订阅链接需携带独立导出令牌 `?token=<export-token>`，不能使用 `CSP_ADMIN_TOKEN`。
 
 ### 配置环境变量
 

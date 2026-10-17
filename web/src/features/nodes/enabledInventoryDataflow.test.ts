@@ -516,11 +516,10 @@ describe('Enabled Subscriptions Inventory & Live Validation Specification', () =
     await nextTick()
     await new Promise((r) => setTimeout(r, 40))
 
-    // Renders immutable snapshot label alongside live client subscription and advanced historical freeze
-    expect(container.textContent).toContain('历史快照语义')
-    expect(container.textContent).toContain('不可变定格快照')
-    expect(container.textContent).toContain('客户端实时订阅')
-    expect(container.textContent).toContain('高级选项：配置预览与历史不可变发布')
+    // Renders client subscription rows with full config vs node-only badges
+    expect(container.textContent).toContain('完整配置')
+    expect(container.textContent).toContain('节点订阅')
+    expect(container.textContent).toContain('客户端订阅')
   })
 
   // --------------------------------------------------------------------------

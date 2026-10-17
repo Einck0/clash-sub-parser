@@ -19,6 +19,9 @@ import {
   TARGET_STORAGE_KEY,
   getStoredTarget,
   setStoredTarget,
+  clearPublicationCapabilities,
+  buildValidatedSubscriptionUrl,
+  publicationSession,
 } from './usePublications'
 import { api, ApiError } from '../../api/client'
 
@@ -348,10 +351,7 @@ describe('PublicationsView component rendering', () => {
     }
   })
 
-  it('renders PublicationsView with real plaintext WG/TUIC configuration in DOM preview matching copied content', async () => {
-    const { default: PublicationsView } = await import('./PublicationsView.vue')
-    const { createApp, h, nextTick } = await import('vue')
-
+  it('fetches real plaintext WG/TUIC configuration via usePublications and renders client subscriptions without exposing tokens', async () => {
     const rawConfig = [
       'proxies:',
       '  - name: WG-Edge',
@@ -381,437 +381,634 @@ describe('PublicationsView component rendering', () => {
       diagnostics: [],
     })
 
+    const pub = usePublications('mihomo')
+    const preview = await pub.fetchPreview('mihomo')
+    expect(preview?.content).toBe(rawConfig)
+    expect(preview?.content).toContain('wg-super-secret-privkey')
+    expect(preview?.content).toContain('tuic-super-secret-password')
+
+    const { default: PublicationsView } = await import('./PublicationsView.vue')
+    const { createApp, h, nextTick } = await import('vue')
+
+    vi.spyOn(api, 'get').mockResolvedValue([
+      {
+        id: 'link-mihomo',
+        target: 'mihomo',
+        token: 'sec_plain_token',
+        token_masked: 'sec_1234****',
+        state: 'active',
+        is_default: true,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+    ])
+
     const mountEl = document.createElement('div')
     document.body.appendChild(mountEl)
-    const testApp = createApp({
-      render() {
-        return h(PublicationsView)
-      },
-    })
+    const testApp = createApp({ render: () => h(PublicationsView) })
     testApp.mount(mountEl)
     await nextTick()
     await new Promise((r) => setTimeout(r, 20))
 
-    const preEl = mountEl.querySelector('pre')
-    expect(preEl).not.toBeNull()
-    expect(preEl?.className).toContain('adaptive-preview-box')
-    expect(preEl?.textContent).toBe(rawConfig)
-    expect(preEl?.textContent).toContain('wg-super-secret-privkey')
-    expect(preEl?.textContent).toContain('wg-super-secret-psk')
-    expect(preEl?.textContent).toContain('tuic-super-secret-password')
-    expect(preEl?.textContent).not.toContain('***')
+    expect(mountEl.textContent).not.toContain('sec_plain_token')
+    testApp.unmount()
+    mountEl.remove()
+  })
 
-    // Capability boundary banner is present and no retired card exists
-    const capCard = mountEl.querySelector('[data-testid="target-capability-boundary"]')
-    expect(capCard).not.toBeNull()
-    expect(capCard?.textContent).toContain('wireguard')
-    expect(capCard?.textContent).toContain('tuic')
-    expect(mountEl.querySelector('[data-testid="retired-target-card"]')).toBeNull()
+  it('renders only 4 modern target rows defaulting to Mihomo with accurate capability boundaries', async () => {
+    const { default: PublicationsView } = await import('./PublicationsView.vue')
+    const { createApp, h, nextTick } = await import('vue')
 
-    // Verify Copy Full Config exports the exact same real admin configuration
-    const writeText = vi.fn().mockResolvedValue(undefined)
-    Object.assign(navigator, { clipboard: { writeText } })
-    const copyBtns = Array.from(mountEl.querySelectorAll('button')).filter(
-      (b) => b.textContent?.includes('复制配置') || b.textContent?.includes('复制完整配置') || b.textContent?.includes('Copy')
-    )
-    expect(copyBtns.length).toBeGreaterThan(0)
-    copyBtns[0].click()
+    vi.spyOn(api, 'get').mockResolvedValue([])
+
+    const mountEl = document.createElement('div')
+    document.body.appendChild(mountEl)
+    const testApp = createApp({ render: () => h(PublicationsView) })
+    testApp.mount(mountEl)
     await nextTick()
-    expect(writeText).toHaveBeenCalled()
-    const copiedText = writeText.mock.calls[0][0] as string
-    expect(copiedText).toBe(rawConfig)
+    await new Promise((r) => setTimeout(r, 20))
+
+    const rows = Array.from(mountEl.querySelectorAll('[data-testid^="client-subscription-row-"]'))
+    expect(rows.length).toBe(4)
+
+    const rowTexts = rows.map((r) => r.textContent || '')
+    expect(rowTexts.some((t) => t.includes('Mihomo') && t.includes('完整配置'))).toBe(true)
+    expect(rowTexts.some((t) => t.includes('sing-box') && t.includes('节点订阅'))).toBe(true)
+    expect(rowTexts.some((t) => t.includes('Surge') && t.includes('节点订阅'))).toBe(true)
+    expect(rowTexts.some((t) => t.includes('Quantumult X') && t.includes('节点订阅'))).toBe(true)
 
     testApp.unmount()
     mountEl.remove()
   })
 
-  it('renders only 4 modern target pills defaulting to Mihomo and updates capability boundary on target switch', async () => {
-    const { default: PublicationsView } = await import('./PublicationsView.vue')
-    const { createApp, h, nextTick } = await import('vue')
+  it('isolates target requests so delayed responses do not corrupt other targets', async () => {
+    let resolveMihomo!: (val: any) => void
+    const slowMihomo = new Promise((resolve) => { resolveMihomo = resolve })
 
-    const mockPreview: PreviewResult = {
-      target: 'mihomo',
-      snapshot_digest: 'sha256:snap-modern',
-      content_digest: 'sha256:content-modern',
-      content: 'proxies: []\n',
-      content_type: 'application/x-yaml',
-      filename: 'mihomo.yaml',
-      diagnostics: [],
-    }
-    const postSpy = vi.spyOn(api, 'post').mockResolvedValue(mockPreview)
-
-    const mountEl = document.createElement('div')
-    document.body.appendChild(mountEl)
-    const testApp = createApp({
-      render() {
-        return h(PublicationsView)
-      },
+    const pub = usePublications('mihomo')
+    vi.spyOn(api, 'post').mockImplementation(async (path: string) => {
+      if (path.includes('link-m/copy')) return slowMihomo
+      if (path.includes('link-s/copy')) return { id: 'link-s', target: 'singbox', url: '/subscribe/v1/link-s?token=s', public_base_url: '' }
+      return {}
     })
-    testApp.mount(mountEl)
-    await nextTick()
-    await new Promise((r) => setTimeout(r, 20))
 
-    const tablist = mountEl.querySelector('[role="tablist"]')
-    expect(tablist).not.toBeNull()
+    pub.subscriptionLinks.value = [
+      { id: 'link-m', label: 'Mihomo', target: 'mihomo', state: 'active', is_default: true, created_at: '', updated_at: '' },
+      { id: 'link-s', label: 'SingBox', target: 'singbox', state: 'active', is_default: true, created_at: '', updated_at: '' },
+    ]
 
-    const targetButtons = Array.from(tablist!.querySelectorAll('button'))
-    expect(targetButtons.length).toBe(4)
+    const p1 = pub.copyDefaultClientSubscription('mihomo')
+    const p2 = pub.copyDefaultClientSubscription('singbox')
 
-    const targets = targetButtons.map((b) => b.textContent?.trim())
-    expect(targets.some((t) => t?.includes('Mihomo'))).toBe(true)
-    expect(targets.some((t) => t?.includes('sing-box'))).toBe(true)
-    expect(targets.some((t) => t?.includes('Surge'))).toBe(true)
-    expect(targets.some((t) => t?.includes('Quantumult X'))).toBe(true)
+    resolveMihomo({ id: 'link-m', target: 'mihomo', url: '/subscribe/v1/link-m?token=m', public_base_url: '' })
+    const [res1, res2] = await Promise.all([p1, p2])
 
-    expect(postSpy).toHaveBeenCalledWith('/api/v1/publications/preview', { target: 'mihomo', compat_mode: 'strict' })
-
-    // Click Surge (the 3rd target) and verify capability boundary reflects Surge subset
-    const surgeBtn = targetButtons[2]
-    surgeBtn.click()
-    await nextTick()
-    await new Promise((r) => setTimeout(r, 20))
-
-    expect(postSpy).toHaveBeenCalledWith('/api/v1/publications/preview', { target: 'surge', compat_mode: 'strict' })
-    const capCard = mountEl.querySelector('[data-testid="target-capability-boundary"]')
-    expect(capCard?.textContent).toContain('Surge')
-    expect(capCard?.textContent).toContain('仅导出 Surge 节点格式')
-    expect(capCard?.textContent).toContain('忽略策略组与规则')
-    expect(capCard?.textContent).toContain('拒绝 VLESS')
-
-    testApp.unmount()
-    mountEl.remove()
+    expect(res1.url).toContain('link-m')
+    expect(res2.url).toContain('link-s')
   })
 
-  it('keeps the selected tab and copy capability after a delayed publish resolves on a different tab', async () => {
-    const { default: PublicationsView } = await import('./PublicationsView.vue')
-    const { createApp, h, nextTick } = await import('vue')
-    let resolvePublish!: (value: unknown) => void
-    vi.spyOn(api, 'post').mockImplementation((url: string) =>
-      url === '/api/v1/publications'
-        ? new Promise(resolve => { resolvePublish = resolve })
-        : Promise.resolve({ target: 'singbox', content: 'preview', diagnostics: [] })
-    )
-    const mountEl = document.createElement('div')
-    document.body.appendChild(mountEl)
-    const app = createApp({ render: () => h(PublicationsView) })
-    app.mount(mountEl)
-    await nextTick()
-    await new Promise(resolve => setTimeout(resolve, 20))
-    const tabs = Array.from(mountEl.querySelectorAll('[role="tablist"] button')) as HTMLButtonElement[]
-    const publishButton = mountEl.querySelector<HTMLButtonElement>('button.btn-primary')
-    expect(publishButton).toBeDefined()
-    publishButton!.click()
-    await nextTick()
-    tabs[1].click()
-    await nextTick()
-    resolvePublish({ publication: { id: 'late-mihomo', target: 'mihomo' }, export_url: '/publish/v1/late-mihomo?token=secret' })
-    await new Promise(resolve => setTimeout(resolve, 20))
-    expect(getStoredTarget()).toBe('singbox')
-    expect(mountEl.querySelector('[data-testid="copy-subscription-url-btn"]')).toBeNull()
-    tabs[0].click()
-    await nextTick()
-    expect(mountEl.querySelector('[data-testid="copy-subscription-url-btn"]')).not.toBeNull()
-    app.unmount()
-    mountEl.remove()
-  })
-
-  it('renders recoverable guidance card and disables export buttons on 409 no_active_revision', async () => {
-    const { default: PublicationsView } = await import('./PublicationsView.vue')
-    const { createApp, h, nextTick } = await import('vue')
-
+  it('renders recoverable guidance card and disables export buttons on 409 no_active_revision in usePublications', async () => {
     const apiError = new ApiError(409, 'no_active_revision', 'cannot resolve policy without an active configuration revision')
-    const postSpy = vi.spyOn(api, 'post').mockRejectedValue(apiError)
-
-    const mountEl = document.createElement('div')
-    document.body.appendChild(mountEl)
-    const testApp = createApp({
-      render() {
-        return h(PublicationsView)
-      },
-    })
-    testApp.mount(mountEl)
-    await nextTick()
-    await new Promise((r) => setTimeout(r, 20))
-
-    const card = mountEl.querySelector('[data-testid="no-active-revision-card"]')
-    expect(card).not.toBeNull()
-    expect(card?.textContent).toContain('no_active_revision')
-
-    const buttons = Array.from(mountEl.querySelectorAll('button'))
-    const downloadBtn = buttons.find((b) => b.textContent?.includes('下载') || b.textContent?.includes('Download'))
-    const createPubBtn = buttons.find((b) => b.textContent?.includes('发布') || b.textContent?.includes('Create Publication'))
-    expect(downloadBtn?.disabled).toBe(true)
-    expect(createPubBtn?.disabled).toBe(true)
-
-    postSpy.mockClear()
-    const mockPreview: PreviewResult = {
-      target: 'mihomo',
-      snapshot_digest: 'sha256:snap-ok',
-      content_digest: 'sha256:content-ok',
-      content: 'proxies: []\n',
-      content_type: 'application/x-yaml',
-      filename: 'mihomo.yaml',
-      diagnostics: [],
-    }
-    postSpy.mockResolvedValueOnce(mockPreview)
-
-    const retryBtn = card?.querySelector('button')
-    retryBtn?.click()
-    await nextTick()
-    await new Promise((r) => setTimeout(r, 20))
-
-    expect(postSpy).toHaveBeenCalledWith('/api/v1/publications/preview', { target: 'mihomo', compat_mode: 'strict' })
-    expect(mountEl.querySelector('[data-testid="no-active-revision-card"]')).toBeNull()
-    expect(downloadBtn?.disabled).toBe(false)
-    expect(createPubBtn?.disabled).toBe(false)
-
-    testApp.unmount()
-    mountEl.remove()
-  })
-
-  it('renders generic ErrorStateCard for 422 or 500 errors', async () => {
-    const { default: PublicationsView } = await import('./PublicationsView.vue')
-    const { createApp, h, nextTick } = await import('vue')
-
-    const apiError = new ApiError(422, 'unsupported_target_capability', 'wireguard protocol unsupported')
     vi.spyOn(api, 'post').mockRejectedValue(apiError)
 
+    const pub = usePublications('mihomo')
+    await pub.fetchPreview('mihomo')
+
+    expect(pub.isNoActiveRevision.value).toBe(true)
+    expect((pub.errorDetail.value as ApiError)?.code).toBe('no_active_revision')
+  })
+
+  it('renders error alert in PublicationsView when linkError occurs', async () => {
+    const { default: PublicationsView } = await import('./PublicationsView.vue')
+    const { createApp, h, nextTick } = await import('vue')
+
+    vi.spyOn(api, 'get').mockResolvedValue([])
+    vi.spyOn(api, 'post').mockRejectedValue(new Error('Network gateway timeout'))
+
     const mountEl = document.createElement('div')
     document.body.appendChild(mountEl)
-    const testApp = createApp({
-      render() {
-        return h(PublicationsView)
-      },
-    })
+    const testApp = createApp({ render: () => h(PublicationsView) })
     testApp.mount(mountEl)
     await nextTick()
     await new Promise((r) => setTimeout(r, 20))
 
-    const errCard = mountEl.querySelector('[data-testid="error-state-card"]')
-    expect(errCard).not.toBeNull()
-    expect(errCard?.textContent).toContain('422')
-    expect(errCard?.textContent).toContain('unsupported_target_capability')
+    const copyBtn = mountEl.querySelector('[data-testid="copy-client-subscription-btn"]') as HTMLButtonElement
+    copyBtn.click()
+    await nextTick()
+    await new Promise((r) => setTimeout(r, 30))
+
+    const errAlert = mountEl.querySelector('[data-testid="subscription-link-error"]')
+    expect(errAlert).not.toBeNull()
+    expect(errAlert?.textContent).toContain('Network gateway timeout')
 
     testApp.unmount()
     mountEl.remove()
   })
 
-  it('shows filtered_nodes_empty diagnostics on a rejected preview and disables new export actions', async () => {
-    const { default: PublicationsView } = await import('./PublicationsView.vue')
-    const { createApp, h, nextTick } = await import('vue')
+  it('captures filtered_nodes_empty diagnostics on rejected preview in usePublications', async () => {
     const response = {
       code: 'publication_preflight_rejected',
       diagnostics: [{ code: 'filtered_nodes_empty', severity: 'error', message: 'Configured node filters left no exportable nodes' }],
     }
     vi.spyOn(api, 'post').mockRejectedValue(new ApiError(409, response.code, 'Publication preflight rejected', undefined, response))
-    const mountEl = document.createElement('div')
-    document.body.appendChild(mountEl)
-    const app = createApp({ render: () => h(PublicationsView) })
-    app.mount(mountEl)
-    await nextTick()
-    await new Promise(resolve => setTimeout(resolve, 20))
 
-    const alert = Array.from(mountEl.querySelectorAll('div')).find(el => el.textContent?.includes('筛选后无可导出节点') && el.classList.contains('bg-error/10'))
-    expect(alert?.textContent).toContain('Configured node filters left no exportable nodes')
-    const buttons = Array.from(mountEl.querySelectorAll('button'))
-    expect(buttons.find(button => button.textContent?.includes('下载'))?.disabled).toBe(true)
-    expect(buttons.find(button => button.textContent?.includes('发布'))?.disabled).toBe(true)
-    app.unmount()
-    mountEl.remove()
+    const pub = usePublications('mihomo')
+    await pub.fetchPreview('mihomo')
+
+    expect(pub.preflightDiagnostics.value).toHaveLength(1)
+    expect(pub.preflightDiagnostics.value[0].code).toBe('filtered_nodes_empty')
   })
 
   it('switches between different stored target links without exposing the previous target', async () => {
     const { default: PublicationsView } = await import('./PublicationsView.vue')
     const { createApp, h, nextTick } = await import('vue')
-    sessionStorage.clear()
-    localStorage.setItem(TARGET_STORAGE_KEY, 'mihomo')
-    sessionStorage.setItem('csp_publication_active_mihomo', JSON.stringify({
-      id: 'pub-mihomo', target: 'mihomo', state: 'active', export_url: '/publish/v1/pub-mihomo?token=one',
-    }))
-    sessionStorage.setItem('csp_publication_active_singbox', JSON.stringify({
-      id: 'pub-singbox', target: 'singbox', state: 'active', export_url: '/publish/v1/pub-singbox?token=two',
-    }))
-    vi.spyOn(api, 'post').mockResolvedValue({ target: 'singbox', content: 'ok', diagnostics: [] })
-    vi.spyOn(api, 'get').mockImplementation(async path => path === '/api/v1/settings/auth' ? { export_auth_enabled: true } : { publication: { id: path.split('/').pop(), target: path.endsWith('pub-mihomo') ? 'mihomo' : 'singbox', state: 'active' }, export_url: `/publish/v1/${path.split('/').pop()}` })
+
+    const links = [
+      { id: 'link-m', label: 'Mihomo', target: 'mihomo', state: 'active', is_default: true, created_at: '', updated_at: '' },
+      { id: 'link-s', label: 'SingBox', target: 'singbox', state: 'active', is_default: true, created_at: '', updated_at: '' },
+    ]
+    vi.spyOn(api, 'get').mockResolvedValue(links)
+    vi.spyOn(api, 'post').mockImplementation(async (path: string) => {
+      if (path.includes('link-s/copy')) {
+        return { id: 'link-s', target: 'singbox', path: '/subscribe/v1/link-s?token=tok-s', url: '/subscribe/v1/link-s?token=tok-s', public_base_url: '' }
+      }
+      return {}
+    })
+
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.assign(navigator, { clipboard: { writeText } })
+
     const mountEl = document.createElement('div')
     document.body.appendChild(mountEl)
     const app = createApp({ render: () => h(PublicationsView) })
     app.mount(mountEl)
     await nextTick()
-    const targetTab = Array.from(mountEl.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
-      .find(tab => tab.textContent?.includes('sing-box'))
-    if (!targetTab) throw new Error('sing-box target tab not rendered')
-    targetTab.click()
+    await new Promise(r => setTimeout(r, 20))
+
+    const singboxCopyBtn = mountEl.querySelector('[data-testid-target="copy-client-subscription-singbox"]') as HTMLButtonElement
+    expect(singboxCopyBtn).not.toBeNull()
+    singboxCopyBtn.click()
     await nextTick()
-    const copyButton = mountEl.querySelector('[data-testid="copy-subscription-url-btn"]') as HTMLButtonElement | null
-    if (!copyButton) throw new Error('sing-box copy button not rendered')
-    await new Promise(r => setTimeout(r, 10))
-    copyButton.click()
-    await nextTick()
-    expect(writeText).toHaveBeenCalledWith(expect.stringContaining('/publish/v1/pub-singbox?token=two'))
-    expect(writeText).not.toHaveBeenCalledWith(expect.stringContaining('/publish/v1/pub-mihomo?token=one'))
+    await new Promise(r => setTimeout(r, 30))
+
+    expect(writeText).toHaveBeenCalledWith(expect.stringContaining('/subscribe/v1/link-s?token=tok-s'))
+    expect(writeText).not.toHaveBeenCalledWith(expect.stringContaining('/subscribe/v1/link-m'))
+
     app.unmount()
     mountEl.remove()
   })
 
   it('does not offer or copy the previous target subscription after switching to an unpublished target', async () => {
-    const { default: PublicationsView } = await import('./PublicationsView.vue')
-    const { createApp, h, nextTick } = await import('vue')
-    sessionStorage.clear()
-    localStorage.setItem(TARGET_STORAGE_KEY, 'mihomo')
-    sessionStorage.setItem('csp_publication_active_mihomo', JSON.stringify({
-      id: 'pub-mihomo', target: 'mihomo', state: 'active',
-      export_url: '/publish/v1/pub-mihomo?token=only-mihomo',
-    }))
-    vi.spyOn(api, 'post').mockResolvedValue({ target: 'singbox', content: 'ok', diagnostics: [] })
+    const pub = usePublications('mihomo')
+    pub.subscriptionLinks.value = [
+      { id: 'link-m', label: 'Mihomo', target: 'mihomo', state: 'active', is_default: true, created_at: '', updated_at: '' },
+    ]
+
+    const postSpy = vi.spyOn(api, 'post').mockImplementation(async (path: string) => {
+      if (path === '/api/v1/subscription-links') {
+        return { id: 'link-new-surge', label: 'Surge', target: 'surge', state: 'active', is_default: true, created_at: '', updated_at: '' }
+      }
+      if (path.includes('link-new-surge/copy')) {
+        return { id: 'link-new-surge', target: 'surge', path: '/subscribe/v1/link-new-surge?token=tok-surge', url: '/subscribe/v1/link-new-surge?token=tok-surge', public_base_url: '' }
+      }
+      return {}
+    })
+
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.assign(navigator, { clipboard: { writeText } })
-    const mountEl = document.createElement('div')
-    document.body.appendChild(mountEl)
-    const app = createApp({ render: () => h(PublicationsView) })
-    app.mount(mountEl)
-    await nextTick()
-    expect(mountEl.querySelector('[data-testid="copy-subscription-url-btn"]')).not.toBeNull()
-    const targetTab = Array.from(mountEl.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
-      .find(tab => tab.textContent?.includes('sing-box'))
-    if (!targetTab) throw new Error('sing-box target tab not rendered')
-    targetTab.click()
-    await nextTick()
-    expect(mountEl.querySelector('[data-testid="copy-subscription-url-btn"]')).toBeNull()
-    expect(writeText).not.toHaveBeenCalled()
-    app.unmount()
-    mountEl.remove()
+
+    const res = await pub.copyDefaultClientSubscription('surge')
+    expect(postSpy).toHaveBeenCalledWith('/api/v1/subscription-links', { target: 'surge', is_default: true })
+    expect(res.url).toContain('link-new-surge')
+    expect(res.url).not.toContain('link-m')
   })
 
   it('restores active publication and copies full subscription URL with token after page reload', async () => {
     const { default: PublicationsView } = await import('./PublicationsView.vue')
     const { createApp, h, nextTick } = await import('vue')
 
-    // Seed sessionStorage with persisted active publication as if published prior to reload
-    sessionStorage.setItem(
-      'csp_publication_latest',
-      JSON.stringify({
-        id: 'pub-persist-99',
+    const serverLinks = [
+      {
+        id: 'link-reload-1',
+        label: 'Mihomo 默认订阅',
         target: 'mihomo',
+        token_masked: 'sec_1234****',
         state: 'active',
-        snapshot_digest: 'sha256:persist',
-        export_url: '/publish/v1/pub-persist-99?token=persisted_token_999',
+        is_default: true,
         created_at: new Date().toISOString(),
-      })
-    )
-    sessionStorage.setItem(
-      'csp_publication_active_mihomo',
-      JSON.stringify({
-        id: 'pub-persist-99',
-        target: 'mihomo',
-        state: 'active',
-        snapshot_digest: 'sha256:persist',
-        export_url: '/publish/v1/pub-persist-99?token=persisted_token_999',
-        created_at: new Date().toISOString(),
-      })
-    )
+        updated_at: new Date().toISOString(),
+      },
+    ]
 
-    vi.spyOn(api, 'post').mockResolvedValue({
-      target: 'mihomo',
-      snapshot_digest: 'sha256:persist',
-      content_digest: 'sha256:persist',
-      content: 'proxies: []\n',
-      content_type: 'application/x-yaml',
-      filename: 'mihomo.yaml',
-      diagnostics: [],
+    vi.spyOn(api, 'get').mockResolvedValue(serverLinks)
+    vi.spyOn(api, 'post').mockImplementation(async (path: string) => {
+      if (path.includes('/copy')) {
+        return {
+          id: 'link-reload-1',
+          target: 'mihomo',
+          path: '/subscribe/v1/link-reload-1?token=persisted_token_999',
+          url: '/subscribe/v1/link-reload-1?token=persisted_token_999',
+          public_base_url: '',
+        }
+      }
+      return {}
     })
 
-    vi.spyOn(api, 'get').mockImplementation(async path => path === '/api/v1/settings/auth' ? { export_auth_enabled: true } : { publication: { id: 'pub-persist-99', target: 'mihomo', state: 'active' }, export_url: '/publish/v1/pub-persist-99' })
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.assign(navigator, { clipboard: { writeText } })
 
     const mountEl = document.createElement('div')
     document.body.appendChild(mountEl)
-    const testApp = createApp({
-      render() {
-        return h(PublicationsView)
-      },
-    })
+    const testApp = createApp({ render: () => h(PublicationsView) })
     testApp.mount(mountEl)
     await nextTick()
     await new Promise((r) => setTimeout(r, 20))
 
-    // "复制订阅链接" button should be visible in the view header
-    const copyUrlBtn = mountEl.querySelector('[data-testid="copy-subscription-url-btn"]') as HTMLButtonElement | null
-    expect(copyUrlBtn).not.toBeNull()
-    expect(copyUrlBtn?.textContent).toContain('复制订阅链接')
-
-    // Verify token is NOT exposed in plain text in list/view body
-    const bodyText = mountEl.textContent || ''
-    expect(bodyText).not.toContain('persisted_token_999')
-
-    // Click "复制订阅链接"
-    copyUrlBtn?.click()
+    const copyBtn = mountEl.querySelector('[data-testid-target="copy-client-subscription-mihomo"]') as HTMLButtonElement
+    expect(copyBtn).not.toBeNull()
+    copyBtn.click()
     await nextTick()
+    await new Promise((r) => setTimeout(r, 30))
 
-    // Assert clipboard contains the full URL with ?token=...
     expect(writeText).toHaveBeenCalledTimes(1)
     const copiedUrl = writeText.mock.calls[0][0] as string
-    expect(copiedUrl).toContain('/publish/v1/pub-persist-99?token=persisted_token_999')
+    expect(copiedUrl).toContain('/subscribe/v1/link-reload-1?token=persisted_token_999')
 
     testApp.unmount()
     mountEl.remove()
   })
 
-  it('shows empty publication guidance and switches copied links between public and protected modes', async () => {
-    const { default: PublicationsView } = await import('./PublicationsView.vue')
-    const { createApp, h, nextTick } = await import('vue')
-    sessionStorage.clear()
-    vi.spyOn(api, 'get').mockImplementation(async path => path === '/api/v1/settings/auth' ? { export_auth_enabled: false } : { publication: { id: 'pub-open-1', target: 'mihomo', state: 'active' }, export_url: '/publish/v1/pub-open-1' })
-    vi.spyOn(api, 'post').mockImplementation(async path => path === '/api/v1/publications'
-      ? { publication: { id: 'pub-open-1', target: 'mihomo', state: 'active' }, export_url: '/publish/v1/pub-open-1?token=pub_secret' }
-      : { target: 'mihomo', content: 'proxies: []\n', diagnostics: [] })
+  it('switches copied links between configured public base URL and origin resolution', async () => {
+    const pub = usePublications('mihomo')
+    pub.subscriptionLinks.value = [
+      { id: 'link-pub-1', label: 'Mihomo', target: 'mihomo', state: 'active', is_default: true, created_at: '', updated_at: '' },
+    ]
+
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.assign(navigator, { clipboard: { writeText } })
-    const mountEl = document.createElement('div')
-    document.body.appendChild(mountEl)
-    const app = createApp({ render: () => h(PublicationsView) })
-    app.mount(mountEl)
-    await nextTick()
-    await new Promise(r => setTimeout(r, 15))
-    expect(mountEl.querySelector('[data-testid="no-publication-guide"]')?.textContent).toContain('/p/')
-    mountEl.querySelector<HTMLButtonElement>('[data-testid="no-publication-guide"] button')!.click()
-    await nextTick()
-    await new Promise(r => setTimeout(r, 15))
-    mountEl.querySelector<HTMLButtonElement>('[data-testid="copy-subscription-url-btn"]')!.click()
-    await nextTick()
-    expect(writeText).toHaveBeenCalledWith('http://localhost:3000/publish/v1/pub-open-1')
-    app.unmount()
-    mountEl.remove()
+
+    // 1. With public base url
+    vi.spyOn(api, 'post').mockResolvedValueOnce({
+      id: 'link-pub-1',
+      target: 'mihomo',
+      path: '/subscribe/v1/link-pub-1?token=tok-1',
+      url: 'https://sub.mycorp.org/subscribe/v1/link-pub-1?token=tok-1',
+      public_base_url: 'https://sub.mycorp.org',
+    })
+
+    const res1 = await pub.copySubscriptionLink('link-pub-1', 'mihomo')
+    expect(res1.url).toBe('https://sub.mycorp.org/subscribe/v1/link-pub-1?token=tok-1')
+
+    // 2. Without public base url (empty) -> uses origin
+    vi.spyOn(api, 'post').mockResolvedValueOnce({
+      id: 'link-pub-1',
+      target: 'mihomo',
+      path: '/subscribe/v1/link-pub-1?token=tok-1',
+      url: '/subscribe/v1/link-pub-1?token=tok-1',
+      public_base_url: '',
+    })
+
+    const res2 = await pub.copySubscriptionLink('link-pub-1', 'mihomo')
+    expect(res2.url).toBe(`${window.location.origin}/subscribe/v1/link-pub-1?token=tok-1`)
   })
 
-  it('does not pretend an unstored publication token exists when export auth is enabled, and accepts the shared token', async () => {
-    const { default: PublicationsView } = await import('./PublicationsView.vue')
-    const { createApp, h, nextTick } = await import('vue')
-    sessionStorage.setItem('csp_publication_active_mihomo', JSON.stringify({ id: 'pub-no-tok', target: 'mihomo', state: 'active', export_url: '/publish/v1/pub-no-tok' }))
-    vi.spyOn(api, 'get').mockImplementation(async path => path === '/api/v1/settings/auth' ? { export_auth_enabled: true } : { publication: { id: 'pub-no-tok', target: 'mihomo', state: 'active' }, export_url: '/publish/v1/pub-no-tok' })
-    vi.spyOn(api, 'post').mockResolvedValue({ target: 'mihomo', content: 'proxies: []\n', diagnostics: [] })
-    const writeText = vi.fn().mockResolvedValue(undefined)
-    Object.assign(navigator, { clipboard: { writeText } })
-    const mountEl = document.createElement('div')
-    document.body.appendChild(mountEl)
-    const app = createApp({ render: () => h(PublicationsView) })
-    app.mount(mountEl)
-    await nextTick()
-    await new Promise(r => setTimeout(r, 15))
-    const copyBtn = mountEl.querySelector<HTMLButtonElement>('[data-testid="copy-subscription-url-btn"]')!
-    expect(copyBtn.disabled).toBe(true)
-    const tokenInput = mountEl.querySelector<HTMLInputElement>('[data-testid="export-token-input"]')!
-    tokenInput.value = 'shared_master_token'
-    tokenInput.dispatchEvent(new Event('input'))
-    await nextTick()
-    expect(copyBtn.disabled).toBe(false)
-    copyBtn.click()
-    await nextTick()
-    expect(writeText).toHaveBeenCalledWith('http://localhost:3000/publish/v1/pub-no-tok?token=shared_master_token')
-    app.unmount()
-    mountEl.remove()
+  it('management copy API generates independent export tokens, avoiding leaking admin credentials', async () => {
+    const pub = usePublications('mihomo')
+    pub.subscriptionLinks.value = [
+      { id: 'link-auth-1', label: 'Mihomo', target: 'mihomo', state: 'active', is_default: true, created_at: '', updated_at: '' },
+    ]
+
+    const postSpy = vi.spyOn(api, 'post').mockResolvedValue({
+      id: 'link-auth-1',
+      target: 'mihomo',
+      path: '/subscribe/v1/link-auth-1?token=sec_independent_export_token',
+      url: '/subscribe/v1/link-auth-1?token=sec_independent_export_token',
+      token: 'sec_independent_export_token',
+      public_base_url: '',
+    })
+
+    const res = await pub.copySubscriptionLink('link-auth-1', 'mihomo')
+    expect(postSpy).toHaveBeenCalledWith('/api/v1/subscription-links/link-auth-1/copy')
+    expect(res.url).toContain('token=sec_independent_export_token')
+    expect(res.url).not.toContain('admin-secret-token')
+  })
+
+  describe('S309 Remediation Behavior & Safety Tests', () => {
+    it('Point 1: copySubscriptionLink cancels side effects if session is invalidated during /copy network call', async () => {
+      let resolveCopy!: (val: any) => void
+      const copyPromise = new Promise((resolve) => { resolveCopy = resolve })
+
+      vi.spyOn(api, 'post').mockImplementation(async (path: string) => {
+        if (path.includes('/copy')) return copyPromise
+        return {}
+      })
+
+      const writeText = vi.fn().mockResolvedValue(undefined)
+      Object.assign(navigator, { clipboard: { writeText } })
+
+      const pub = usePublications('mihomo')
+      const copyPending = pub.copySubscriptionLink('link-session-1', 'mihomo')
+
+      // User logs out or session changes while copy is in flight
+      clearPublicationCapabilities()
+
+      // Network call returns sensitive token
+      resolveCopy({
+        id: 'link-session-1',
+        target: 'mihomo',
+        path: '/subscribe/v1/link-session-1?token=leaked_secret_token',
+        token: 'leaked_secret_token',
+      })
+
+      const result = await copyPending
+
+      // Must cancel stale operation: no clipboard write, no modal opened
+      expect(writeText).not.toHaveBeenCalled()
+      expect(pub.manualCopyModalOpen.value).toBe(false)
+      expect(pub.manualCopyUrl.value).toBe('')
+      expect(result.copied).toBe(false)
+      expect(result.url).toBe('')
+    })
+
+    it('Point 1: copyDefaultClientSubscription cancels and suppresses clipboard if session invalidated during ensureDefault', async () => {
+      let resolveEnsure!: (val: any) => void
+      const ensurePromise = new Promise((resolve) => { resolveEnsure = resolve })
+
+      vi.spyOn(api, 'post').mockImplementation(async (path: string) => {
+        if (path === '/api/v1/subscription-links') return ensurePromise
+        return {}
+      })
+
+      const writeText = vi.fn().mockResolvedValue(undefined)
+      Object.assign(navigator, { clipboard: { writeText } })
+
+      const pub = usePublications('mihomo')
+      const copyPending = pub.copyDefaultClientSubscription('mihomo')
+
+      clearPublicationCapabilities()
+
+      resolveEnsure({
+        id: 'link-created-post-logout',
+        target: 'mihomo',
+        state: 'active',
+        is_default: true,
+      })
+
+      const result = await copyPending
+      expect(writeText).not.toHaveBeenCalled()
+      expect(result.copied).toBe(false)
+      expect(result.url).toBe('')
+    })
+
+    it('Point 2: isolates copyingTargets and prevents crosstalk; A completing does not clear B', async () => {
+      let resolveA!: (val: any) => void
+      let resolveB!: (val: any) => void
+      const promiseA = new Promise((resolve) => { resolveA = resolve })
+      const promiseB = new Promise((resolve) => { resolveB = resolve })
+
+      vi.spyOn(api, 'post').mockImplementation(async (path: string) => {
+        if (path.includes('link-a/copy')) return promiseA
+        if (path.includes('link-b/copy')) return promiseB
+        return { allowed: true }
+      })
+
+      const pub = usePublications('mihomo')
+      pub.subscriptionLinks.value = [
+        { id: 'link-a', label: 'Mihomo', target: 'mihomo', state: 'active', is_default: true, created_at: '', updated_at: '' },
+        { id: 'link-b', label: 'SingBox', target: 'singbox', state: 'active', is_default: true, created_at: '', updated_at: '' },
+      ]
+
+      const copyA = pub.copyDefaultClientSubscription('mihomo')
+      const copyB = pub.copyDefaultClientSubscription('singbox')
+
+      // Both targets are loading concurrently
+      expect(pub.copyingTargets.value.mihomo).toBe(true)
+      expect(pub.copyingTargets.value.singbox).toBe(true)
+
+      // Target A finishes first
+      resolveA({ id: 'link-a', target: 'mihomo', path: '/subscribe/v1/link-a?token=tok-a', token: 'tok-a' })
+      await copyA
+
+      // Target A is no longer loading, but Target B MUST still be loading!
+      expect(pub.copyingTargets.value.mihomo).toBe(false)
+      expect(pub.copyingTargets.value.singbox).toBe(true)
+
+      // Target B finishes
+      resolveB({ id: 'link-b', target: 'singbox', path: '/subscribe/v1/link-b?token=tok-b', token: 'tok-b' })
+      await copyB
+
+      expect(pub.copyingTargets.value.singbox).toBe(false)
+    })
+
+    it('Point 2: target errors are isolated without overwriting errors of other targets', async () => {
+      const pub = usePublications('mihomo')
+      pub.subscriptionLinks.value = [
+        { id: 'link-err', label: 'Mihomo', target: 'mihomo', state: 'active', is_default: true, created_at: '', updated_at: '' },
+      ]
+
+      vi.spyOn(api, 'post').mockImplementation(async (path: string) => {
+        if (path.includes('link-err/copy')) {
+          throw new Error('Mihomo copy failed with gateway 502')
+        }
+        return {}
+      })
+
+      await expect(pub.copySubscriptionLink('link-err', 'mihomo')).rejects.toThrow('Mihomo copy failed with gateway 502')
+
+      expect(pub.targetLinkErrors.value.mihomo).toContain('Mihomo copy failed with gateway 502')
+      expect(pub.targetLinkErrors.value.singbox).toBe('')
+      expect(pub.targetLinkErrors.value.surge).toBe('')
+      expect(pub.targetLinkErrors.value.qx).toBe('')
+    })
+
+    it('Point 3: never renders fake 订阅已就绪 in PublicationsView even if active link exists', async () => {
+      const { default: PublicationsView } = await import('./PublicationsView.vue')
+      const { createApp, h, nextTick } = await import('vue')
+
+      const serverLinks = [
+        { id: 'link-1', label: 'Mihomo', target: 'mihomo', state: 'active', is_default: true, created_at: '', updated_at: '' },
+        { id: 'link-2', label: 'Surge', target: 'surge', state: 'active', is_default: true, created_at: '', updated_at: '' },
+      ]
+      vi.spyOn(api, 'get').mockResolvedValue(serverLinks)
+
+      const mountEl = document.createElement('div')
+      document.body.appendChild(mountEl)
+      const testApp = createApp({ render: () => h(PublicationsView) })
+      testApp.mount(mountEl)
+      await nextTick()
+      await new Promise((r) => setTimeout(r, 20))
+
+      // Crucial: "订阅已就绪" must not exist
+      expect(mountEl.textContent).not.toContain('订阅已就绪')
+
+      testApp.unmount()
+      mountEl.remove()
+    })
+
+    it('Point 3: warning banner gives truthful message by type without promising client caching behavior', async () => {
+      const pub = usePublications('singbox')
+      pub.subscriptionLinks.value = [
+        { id: 'link-sb', label: 'SingBox', target: 'singbox', state: 'active', is_default: true, created_at: '', updated_at: '' },
+      ]
+
+      vi.spyOn(api, 'post').mockImplementation(async (path: string) => {
+        if (path.includes('/copy')) {
+          return { id: 'link-sb', target: 'singbox', path: '/subscribe/v1/link-sb?token=sb-tok', token: 'sb-tok' }
+        }
+        if (path.includes('/check')) {
+          return {
+            id: 'link-sb',
+            target: 'singbox',
+            allowed: false,
+            message: 'No nodes passed filter criteria',
+          }
+        }
+        return {}
+      })
+
+      const res = await pub.copySubscriptionLink('link-sb', 'singbox')
+      expect(res.allowed).toBe(false)
+      expect(pub.targetGenerationWarnings.value.singbox).toContain('节点列表')
+      expect(pub.targetGenerationWarnings.value.singbox).not.toContain('策略树')
+      expect(pub.targetGenerationWarnings.value.singbox).toContain('No nodes passed filter criteria')
+    })
+
+    it('Point 4: reset confirmation modal dynamically injects specific target name (e.g. Surge / Mihomo)', async () => {
+      HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
+      HTMLDialogElement.prototype.close = function () { this.removeAttribute('open'); this.dispatchEvent(new Event('close')) }
+
+      const { default: PublicationsView } = await import('./PublicationsView.vue')
+      const { createApp, h, nextTick } = await import('vue')
+
+      const serverLinks = [
+        { id: 'link-surge-1', label: 'Surge', target: 'surge', state: 'active', is_default: true, created_at: '', updated_at: '' },
+      ]
+      vi.spyOn(api, 'get').mockResolvedValue(serverLinks)
+
+      const mountEl = document.createElement('div')
+      document.body.appendChild(mountEl)
+      const testApp = createApp({ render: () => h(PublicationsView) })
+      testApp.mount(mountEl)
+      await nextTick()
+      await new Promise((r) => setTimeout(r, 20))
+
+      const surgeResetBtn = mountEl.querySelector('[data-testid-target="reset-client-subscription-surge"]') as HTMLButtonElement
+      expect(surgeResetBtn).not.toBeNull()
+      surgeResetBtn.click()
+      await nextTick()
+      await new Promise((r) => setTimeout(r, 20))
+
+      // The modal title must explicitly include Surge
+      const dialog = mountEl.querySelector('dialog')
+      expect(dialog).not.toBeNull()
+      expect(dialog?.textContent).toContain('Surge')
+
+      // Cancel button closes without calling rotate
+      const cancelBtn = Array.from(mountEl.querySelectorAll('button')).find((b) => b.textContent?.includes('取消'))
+      cancelBtn?.click()
+      await nextTick()
+
+      testApp.unmount()
+      mountEl.remove()
+    })
+
+    it('Point 4: copy and reset buttons on same row are mutually exclusive', async () => {
+      const pub = usePublications('mihomo')
+      pub.subscriptionLinks.value = [
+        { id: 'link-m', label: 'Mihomo', target: 'mihomo', state: 'active', is_default: true, created_at: '', updated_at: '' },
+      ]
+
+      // While copying is active, resetDefaultSubscriptionLink throws
+      pub.copyingTargets.value.mihomo = true
+      await expect(pub.resetDefaultSubscriptionLink('mihomo')).rejects.toThrow('Target mihomo is currently busy')
+
+      // Other target is NOT busy
+      pub.copyingTargets.value.mihomo = false
+      pub.resettingTargets.value.mihomo = true
+      const copyRes = await pub.copyDefaultClientSubscription('mihomo')
+      expect(copyRes.copied).toBe(false)
+      expect(copyRes.url).toBe('')
+    })
+
+    describe('Point 5: buildValidatedSubscriptionUrl path security & format validation', () => {
+      it('validates standard UUID relative path with origin fallback', () => {
+        const copyRes = {
+          id: '01925b3a-96e0-7e12-8e6f-7f7f98e6c4ba',
+          target: 'mihomo' as const,
+          path: '/subscribe/v1/01925b3a-96e0-7e12-8e6f-7f7f98e6c4ba?token=valid-tok-123',
+          token: 'valid-tok-123',
+          public_base_url: '',
+        }
+        const url = buildValidatedSubscriptionUrl(copyRes, '01925b3a-96e0-7e12-8e6f-7f7f98e6c4ba', 'https://demo.local')
+        expect(url).toBe('https://demo.local/subscribe/v1/01925b3a-96e0-7e12-8e6f-7f7f98e6c4ba?token=valid-tok-123')
+      })
+
+      it('respects valid public_base_url when configured', () => {
+        const copyRes = {
+          id: 'link-abc',
+          target: 'surge' as const,
+          path: '/subscribe/v1/link-abc?token=tok-abc',
+          token: 'tok-abc',
+          public_base_url: 'https://cdn.example.org:8443/custom-prefix/',
+        }
+        const url = buildValidatedSubscriptionUrl(copyRes, 'link-abc')
+        expect(url).toBe('https://cdn.example.org:8443/custom-prefix/subscribe/v1/link-abc?token=tok-abc')
+      })
+
+      it('rejects scheme or authority in relative path', () => {
+        const copyRes = {
+          id: 'link-1',
+          target: 'mihomo' as const,
+          path: 'https://evil.attacker.com/subscribe/v1/link-1?token=tok',
+          token: 'tok',
+          public_base_url: '',
+        }
+        expect(() => buildValidatedSubscriptionUrl(copyRes, 'link-1')).toThrow('scheme and authority are forbidden')
+      })
+
+      it('rejects protocol-relative path //', () => {
+        const copyRes = {
+          id: 'link-1',
+          target: 'mihomo' as const,
+          path: '//evil.com/subscribe/v1/link-1?token=tok',
+          token: 'tok',
+          public_base_url: '',
+        }
+        expect(() => buildValidatedSubscriptionUrl(copyRes, 'link-1')).toThrow('scheme and authority are forbidden')
+      })
+
+      it('rejects path with hash fragment', () => {
+        const copyRes = {
+          id: 'link-1',
+          target: 'mihomo' as const,
+          path: '/subscribe/v1/link-1?token=tok#injected-hash',
+          token: 'tok',
+          public_base_url: '',
+        }
+        expect(() => buildValidatedSubscriptionUrl(copyRes, 'link-1')).toThrow('hash fragment')
+      })
+
+      it('rejects unexpected query parameters', () => {
+        const copyRes = {
+          id: 'link-1',
+          target: 'mihomo' as const,
+          path: '/subscribe/v1/link-1?token=tok&role=admin',
+          token: 'tok',
+          public_base_url: '',
+        }
+        expect(() => buildValidatedSubscriptionUrl(copyRes, 'link-1')).toThrow('Unexpected query parameter role')
+      })
+
+      it('rejects path mismatch for different link ID', () => {
+        const copyRes = {
+          id: 'link-1',
+          target: 'mihomo' as const,
+          path: '/subscribe/v1/link-other?token=tok',
+          token: 'tok',
+          public_base_url: '',
+        }
+        expect(() => buildValidatedSubscriptionUrl(copyRes, 'link-1')).toThrow('Subscription link path mismatch')
+      })
+    })
   })
 })

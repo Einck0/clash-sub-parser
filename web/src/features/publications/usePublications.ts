@@ -2,7 +2,9 @@ import { computed, ref, watch } from 'vue'
 import { api, ApiError } from '../../api/client'
 import {
   DEFAULT_COMPILER_TARGET,
+  VALID_COMPILER_TARGETS,
   isValidCompilerTarget,
+  targetLabel,
   type CompilerTarget,
   type CompatMode,
   type Diagnostic,
@@ -18,11 +20,98 @@ export const TARGET_STORAGE_KEY = 'csp_publication_target'
 export const PUBLICATION_STORAGE_PREFIX = 'csp_publication_active_'
 export const PUBLICATION_LATEST_KEY = 'csp_publication_latest'
 
-const publicationSession = ref(0)
+export const publicationSession = ref(0)
 
 export function clearPublicationCapabilities(): void {
   clearStoredPublication()
   publicationSession.value++
+}
+
+export function buildValidatedSubscriptionUrl(
+  copyRes: SubscriptionLinkCopyResult,
+  linkId: string,
+  originOverride?: string
+): string {
+  const expectedPathname = `/subscribe/v1/${encodeURIComponent(linkId)}`
+
+  let candidatePath = (copyRes.path || '').trim()
+  let candidateBase = (copyRes.public_base_url || '').trim()
+
+  if (!candidatePath && copyRes.url) {
+    const trimmedUrl = copyRes.url.trim()
+    if (/^https?:\/\//i.test(trimmedUrl)) {
+      try {
+        const u = new URL(trimmedUrl)
+        candidatePath = u.pathname + u.search
+        if (!candidateBase) {
+          candidateBase = u.origin
+        }
+      } catch {
+        throw new Error('Invalid subscription link url format')
+      }
+    } else {
+      candidatePath = trimmedUrl
+    }
+  }
+
+  if (!candidatePath) {
+    throw new Error('Subscription link path is missing')
+  }
+
+  // Must be a relative path: forbid scheme (e.g. javascript:, https:), authority, protocol-relative (//)
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(candidatePath) || candidatePath.startsWith('//')) {
+    throw new Error('Subscription link path must be relative: scheme and authority are forbidden')
+  }
+
+  let parsed: URL
+  try {
+    parsed = new URL(candidatePath, 'http://127.0.0.1')
+  } catch {
+    throw new Error('Invalid subscription link path format')
+  }
+
+  if (parsed.hash) {
+    throw new Error('Subscription link path cannot contain hash fragment')
+  }
+
+  if (parsed.pathname !== expectedPathname && decodeURIComponent(parsed.pathname) !== `/subscribe/v1/${linkId}`) {
+    throw new Error(`Subscription link path mismatch: expected ${expectedPathname}, got ${parsed.pathname}`)
+  }
+
+  for (const [key] of parsed.searchParams.entries()) {
+    if (key !== 'token') {
+      throw new Error(`Unexpected query parameter ${key} in subscription link path`)
+    }
+  }
+
+  const token = parsed.searchParams.get('token') || copyRes.token || ''
+  if (!token) {
+    throw new Error('Subscription link token is missing')
+  }
+
+  const verifiedSubPath = `${expectedPathname}?token=${encodeURIComponent(token)}`
+
+  let resolvedBase = ''
+  if (candidateBase) {
+    try {
+      const baseParsed = new URL(candidateBase)
+      if (baseParsed.protocol !== 'http:' && baseParsed.protocol !== 'https:') {
+        throw new Error('public_base_url must use http or https protocol')
+      }
+      resolvedBase = baseParsed.origin + (baseParsed.pathname === '/' ? '' : baseParsed.pathname.replace(/\/+$/, ''))
+    } catch {
+      throw new Error('Invalid public_base_url format')
+    }
+  } else if (originOverride && originOverride.trim()) {
+    resolvedBase = originOverride.trim().replace(/\/+$/, '')
+  } else if (typeof window !== 'undefined' && window.location && window.location.origin) {
+    resolvedBase = window.location.origin.replace(/\/+$/, '')
+  }
+
+  if (resolvedBase) {
+    return `${resolvedBase}${verifiedSubPath}`
+  }
+  return verifiedSubPath
 }
 
 export function getStoredTarget(
@@ -148,6 +237,30 @@ export function usePublications(initialTarget?: CompilerTarget) {
   const subscriptionLinks = ref<SubscriptionLink[]>([])
   const loadingLinks = ref(false)
   const copyingLink = ref(false)
+  const copyingTargets = ref<Record<CompilerTarget, boolean>>({
+    mihomo: false,
+    singbox: false,
+    surge: false,
+    qx: false,
+  })
+  const resettingTargets = ref<Record<CompilerTarget, boolean>>({
+    mihomo: false,
+    singbox: false,
+    surge: false,
+    qx: false,
+  })
+  const copyingTarget = computed<CompilerTarget | null>(() => {
+    for (const t of VALID_COMPILER_TARGETS) {
+      if (copyingTargets.value[t]) return t
+    }
+    return null
+  })
+  const resettingTarget = computed<CompilerTarget | null>(() => {
+    for (const t of VALID_COMPILER_TARGETS) {
+      if (resettingTargets.value[t]) return t
+    }
+    return null
+  })
   const rotatingLinkId = ref<string | null>(null)
   const revokingLinkId = ref<string | null>(null)
   const checkingLinkId = ref<string | null>(null)
@@ -156,10 +269,68 @@ export function usePublications(initialTarget?: CompilerTarget) {
   const publicBaseUrl = ref<string>('')
   const publicBaseUrlMissing = ref(false)
   const savingPublicBaseUrl = ref(false)
-  const generationWarning = ref<string>('')
   const manualCopyUrl = ref<string>('')
   const manualCopyModalOpen = ref(false)
-  const linkError = ref<string>('')
+
+  const targetLinkErrors = ref<Record<CompilerTarget, string>>({
+    mihomo: '',
+    singbox: '',
+    surge: '',
+    qx: '',
+  })
+  const targetGenerationWarnings = ref<Record<CompilerTarget, string>>({
+    mihomo: '',
+    singbox: '',
+    surge: '',
+    qx: '',
+  })
+  const generalLinkError = ref<string>('')
+  const generalGenerationWarning = ref<string>('')
+
+  const linkError = computed({
+    get: () => {
+      if (targetLinkErrors.value[selectedTarget.value]) {
+        return targetLinkErrors.value[selectedTarget.value]
+      }
+      for (const t of VALID_COMPILER_TARGETS) {
+        if (targetLinkErrors.value[t]) return targetLinkErrors.value[t]
+      }
+      return generalLinkError.value
+    },
+    set: (val: string) => {
+      generalLinkError.value = val
+      if (!val) {
+        for (const t of VALID_COMPILER_TARGETS) {
+          targetLinkErrors.value[t] = ''
+        }
+      } else {
+        targetLinkErrors.value[selectedTarget.value] = val
+      }
+    },
+  })
+
+  const generationWarning = computed({
+    get: () => {
+      if (targetGenerationWarnings.value[selectedTarget.value]) {
+        return targetGenerationWarnings.value[selectedTarget.value]
+      }
+      for (const t of VALID_COMPILER_TARGETS) {
+        if (targetGenerationWarnings.value[t]) return targetGenerationWarnings.value[t]
+      }
+      return generalGenerationWarning.value
+    },
+    set: (val: string) => {
+      generalGenerationWarning.value = val
+      if (!val) {
+        for (const t of VALID_COMPILER_TARGETS) {
+          targetGenerationWarnings.value[t] = ''
+        }
+      } else {
+        targetGenerationWarnings.value[selectedTarget.value] = val
+      }
+    },
+  })
+
   const linkActionRequests = new Map<string, number>()
   const clientCopyRequests = new Map<CompilerTarget, number>()
 
@@ -173,11 +344,11 @@ export function usePublications(initialTarget?: CompilerTarget) {
     error.value = ''
     errorDetail.value = null
     preflightDiagnostics.value = []
-    generationWarning.value = ''
+    generalGenerationWarning.value = ''
     manualCopyUrl.value = ''
     manualCopyModalOpen.value = false
     publicBaseUrlMissing.value = false
-    linkError.value = ''
+    generalLinkError.value = ''
   }, { flush: 'sync' })
 
   watch(compatMode, () => {
@@ -520,23 +691,47 @@ export function usePublications(initialTarget?: CompilerTarget) {
     target?: CompilerTarget
   ): Promise<{ url: string; copied: boolean; allowed: boolean; warning?: string }> {
     const session = publicationSession.value
-    linkError.value = ''
+    const tgt = target ?? selectedTarget.value
+    targetLinkErrors.value[tgt] = ''
+    targetGenerationWarnings.value[tgt] = ''
     publicBaseUrlMissing.value = false
-    generationWarning.value = ''
 
     let copyRes: SubscriptionLinkCopyResult
     try {
       copyRes = await api.post<SubscriptionLinkCopyResult>(`/api/v1/subscription-links/${linkId}/copy`)
     } catch (err: any) {
+      if (session !== publicationSession.value) {
+        return { url: '', copied: false, allowed: false }
+      }
       if (err instanceof ApiError && err.status === 422 && err.code === 'public_base_url_not_configured') {
         publicBaseUrlMissing.value = true
       }
-      linkError.value = err instanceof Error ? err.message : '复制订阅链接失败'
+      const msg = err instanceof Error ? err.message : '复制订阅链接失败'
+      targetLinkErrors.value[tgt] = msg
       throw err
     }
 
-    const fullUrl = copyRes.url
+    // Cancel immediately if session invalidated during network call
+    if (session !== publicationSession.value) {
+      return { url: '', copied: false, allowed: false }
+    }
+
+    // Validate path and URL strictly
+    let fullUrl: string
+    try {
+      fullUrl = buildValidatedSubscriptionUrl(copyRes, linkId)
+    } catch (err: any) {
+      const msg = err instanceof Error ? err.message : '订阅链接地址校验失败'
+      targetLinkErrors.value[tgt] = msg
+      throw err
+    }
+
     const clipOk = await copyToClipboard(fullUrl)
+    // Check session again after clipboard operation
+    if (session !== publicationSession.value) {
+      return { url: '', copied: false, allowed: false }
+    }
+
     if (!clipOk) {
       manualCopyUrl.value = fullUrl
       manualCopyModalOpen.value = true
@@ -547,26 +742,42 @@ export function usePublications(initialTarget?: CompilerTarget) {
     let warning: string | undefined
     try {
       const checkRes = await api.post<SubscriptionLinkCheckResult>(`/api/v1/subscription-links/${linkId}/check`)
-      if (session === publicationSession.value) {
-        linkCheckResults.value[linkId] = checkRes
-        if (!checkRes.allowed) {
-          allowed = false
-          warning = '链接已创建，当前不可更新'
-          generationWarning.value = warning
+      if (session !== publicationSession.value) {
+        return { url: '', copied: false, allowed: false }
+      }
+      linkCheckResults.value[linkId] = checkRes
+      if (!checkRes.allowed) {
+        allowed = false
+        const safeDetail = checkRes.message && !checkRes.message.includes('token') && !checkRes.message.includes('secret')
+          ? checkRes.message
+          : ''
+        if (tgt === 'mihomo') {
+          warning = safeDetail
+            ? `链接已创建，当前不可更新（Mihomo 配置未通过校验：${safeDetail}）`
+            : '链接已创建，当前不可更新（Mihomo 完整拓扑配置未通过校验）'
+        } else {
+          const label = targetLabel(tgt)
+          warning = safeDetail
+            ? `链接已创建，当前不可更新（${label} 节点列表校验未通过：${safeDetail}）`
+            : `链接已创建，当前不可更新（${label} 节点列表未通过校验）`
         }
+        targetGenerationWarnings.value[tgt] = warning
       }
     } catch (err: any) {
       if (session === publicationSession.value) {
         allowed = false
-        warning = '链接已创建，当前不可更新'
-        generationWarning.value = warning
+        const safeErr = err?.message && !err.message.includes('token') && !err.message.includes('secret')
+          ? err.message
+          : '生成检查失败'
+        warning = `链接已创建，当前不可更新（${safeErr}）`
+        targetGenerationWarnings.value[tgt] = warning
         linkCheckResults.value[linkId] = {
           id: linkId,
-          target: target ?? selectedTarget.value,
+          target: tgt,
           allowed: false,
           as_of: new Date().toISOString(),
           node_count: 0,
-          message: err?.message || '生成检查失败',
+          message: safeErr,
         }
       }
     }
@@ -578,21 +789,56 @@ export function usePublications(initialTarget?: CompilerTarget) {
     target: CompilerTarget = selectedTarget.value
   ): Promise<{ url: string; copied: boolean; allowed: boolean; warning?: string }> {
     const session = publicationSession.value
+    if (copyingTargets.value[target] || resettingTargets.value[target]) {
+      return { url: '', copied: false, allowed: false }
+    }
     const req = (clientCopyRequests.get(target) ?? 0) + 1
     clientCopyRequests.set(target, req)
+    copyingTargets.value[target] = true
     copyingLink.value = true
-    linkError.value = ''
+    targetLinkErrors.value[target] = ''
+
     try {
       const link = await ensureDefaultSubscriptionLink(target)
       if (session !== publicationSession.value || req !== clientCopyRequests.get(target)) {
         return { url: '', copied: false, allowed: false }
       }
       const res = await copySubscriptionLink(link.id, target)
+      if (session !== publicationSession.value || req !== clientCopyRequests.get(target)) {
+        return { url: '', copied: false, allowed: false }
+      }
       return res
+    } catch (err: any) {
+      if (session === publicationSession.value && req === clientCopyRequests.get(target)) {
+        targetLinkErrors.value[target] = err instanceof Error ? err.message : '复制订阅链接失败'
+      }
+      throw err
     } finally {
       if (req === clientCopyRequests.get(target)) {
+        copyingTargets.value[target] = false
         copyingLink.value = false
       }
+    }
+  }
+
+  async function resetDefaultSubscriptionLink(target: CompilerTarget): Promise<SubscriptionLink> {
+    const session = publicationSession.value
+    if (copyingTargets.value[target] || resettingTargets.value[target]) {
+      throw new Error(`Target ${target} is currently busy`)
+    }
+    clientCopyRequests.set(target, (clientCopyRequests.get(target) ?? 0) + 1)
+    resettingTargets.value[target] = true
+    targetLinkErrors.value[target] = ''
+
+    try {
+      const link = await ensureDefaultSubscriptionLink(target)
+      if (session !== publicationSession.value) {
+        throw new Error('publication session changed')
+      }
+      const res = await rotateSubscriptionToken(link.id)
+      return res
+    } finally {
+      resettingTargets.value[target] = false
     }
   }
 
@@ -727,6 +973,12 @@ export function usePublications(initialTarget?: CompilerTarget) {
     subscriptionLinks,
     loadingLinks,
     copyingLink,
+    copyingTarget,
+    resettingTarget,
+    copyingTargets,
+    resettingTargets,
+    targetLinkErrors,
+    targetGenerationWarnings,
     rotatingLinkId,
     revokingLinkId,
     checkingLinkId,
@@ -746,6 +998,7 @@ export function usePublications(initialTarget?: CompilerTarget) {
     ensureDefaultSubscriptionLink,
     copySubscriptionLink,
     copyDefaultClientSubscription,
+    resetDefaultSubscriptionLink,
     rotateSubscriptionToken,
     revokeSubscriptionLink,
     updateSubscriptionLinkLabel,

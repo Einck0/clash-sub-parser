@@ -383,7 +383,7 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
         { tab: 'nodes', label: 'Node Ledger', expectedText: 'Node Ledger' },
         { tab: 'probes', label: 'Probe Engine', expectedText: 'Probe Engine' },
         { tab: 'policy', label: 'Policy Tree', expectedText: 'Policy Groups' },
-        { tab: 'publications', label: 'Exports', expectedText: 'Configuration Exports' },
+        { tab: 'publications', label: 'Client Subscriptions', expectedText: 'Client Subscriptions' },
         { tab: 'dashboard', label: 'Dashboard', expectedText: 'Clash Sub Parser Zashboard Foundation' },
       ]
 
@@ -486,7 +486,7 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       await nextTick()
       await new Promise((r) => setTimeout(r, 20))
 
-      expect(root.querySelector('#publications-title')?.textContent).toContain('Configuration Exports')
+      expect(root.querySelector('#publications-title')?.textContent).toContain('Client Subscriptions')
 
       // Simulate browser Back button to #subscriptions
       window.location.hash = '#subscriptions'
@@ -626,12 +626,11 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       await nextTick()
       await new Promise((r) => setTimeout(r, 25))
 
-      // Check code preview pre element exists and has adaptive-preview-box class
-      const preEl = root.querySelector('pre')
-      expect(preEl).not.toBeNull()
-      expect(preEl?.className).toContain('adaptive-preview-box')
-      // Ensure content is rendered and readable
-      expect(preEl?.textContent).toContain('proxies:')
+      // Check client subscriptions section exists and is readable
+      const pageEl = root.querySelector('[data-testid="client-subscriptions-page"]')
+      expect(pageEl).not.toBeNull()
+      const copyBtns = root.querySelectorAll('[data-testid="copy-client-subscription-btn"]')
+      expect(copyBtns.length).toBe(4)
 
       // Navigate to Policy tab and open group sheet in landscape
       window.location.hash = '#policy'

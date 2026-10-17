@@ -53,7 +53,7 @@
   - 查看策略组视图、节点视图卡片状态、设置页与探针批次页面截图；
   - 出具 `CRITIC_VISUAL_VERDICT: PASSED` 与治理报告。
 
-- [ ] **T08 [DEPLOY]** 提交源码、推送 dev、官方 Actions 云构建与平滑更新生产：
+- [x] **T08 [DEPLOY]** 提交源码、推送 dev、官方 Actions 云构建与平滑更新生产：
   - 提交确证源码，推送至 `dev`；
   - 跟踪 GitHub Actions 完成构建与不可变镜像发布；
   - 生产 SQLite 数据库一致性热备（并验证历史数据清理与 VACUUM）；

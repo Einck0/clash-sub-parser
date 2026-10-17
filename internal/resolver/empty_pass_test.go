@@ -80,8 +80,8 @@ func TestResolverNonemptyFlagAndDerivedProjection(t *testing.T) {
 	for _, g := range snap.Groups {
 		if g.ID != child && g.ID != parent {
 			derived = true
-			if g.EmptyFallbackPass || g.UsesEmptyPass() {
-				t.Fatal("derived projection inherited permission")
+			if !g.EmptyFallbackPass || !g.UsesEmptyPass() {
+				t.Fatal("derived projection should inherit EmptyFallbackPass from child group and use empty PASS when empty")
 			}
 		}
 	}

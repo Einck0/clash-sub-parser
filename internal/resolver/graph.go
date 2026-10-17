@@ -512,7 +512,7 @@ func resolveGroups(
 
 			parentGroup := groupMap[parent.ID]
 			candMap := globalAdmittedMap
-			if !parentGroup.InheritGlobalFilter {
+			if !childGroup.InheritGlobalFilter || !parentGroup.InheritGlobalFilter {
 				candMap = admittedNodeMap
 			}
 
@@ -555,13 +555,15 @@ func resolveGroups(
 					ID:                  derivedID,
 					Name:                derivedName,
 					GroupType:           childGroup.GroupType,
-					InheritGlobalFilter: parentGroup.InheritGlobalFilter,
+					EmptyFallbackPass:   childGroup.EmptyFallbackPass,
+					EffectiveEmptyPass:  childGroup.EffectiveEmptyPass,
+					InheritGlobalFilter: childGroup.InheritGlobalFilter,
 					Members:             filteredChildMembers,
-					ChildGroupIDs:     nil,
-					NodeLogicalIDs:    filteredChildNodeIDs,
-					AllNodeLogicalIDs: filteredChildNodeIDs,
-					ExpandedNodeIDs:   filteredChildNodeIDs,
-					Position:          len(resolvedGroups) + len(derivedGroups),
+					ChildGroupIDs:       nil,
+					NodeLogicalIDs:      filteredChildNodeIDs,
+					AllNodeLogicalIDs:   filteredChildNodeIDs,
+					ExpandedNodeIDs:     filteredChildNodeIDs,
+					Position:            len(resolvedGroups) + len(derivedGroups),
 				}
 				derivedGroups = append(derivedGroups, derivedGroup)
 

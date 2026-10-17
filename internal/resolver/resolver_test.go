@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"clash-sub-parser/internal/compiler"
 	"clash-sub-parser/internal/domain"
 	"clash-sub-parser/internal/resolver"
 )
@@ -1401,5 +1402,203 @@ func TestResolver_InheritGlobalFilter_False_WARP_IncludesNodeInProxies(t *testin
 	}
 	if !foundSS || !foundWARP {
 		t.Fatalf("expected both nSS and nWARP in snapshot.Nodes, foundSS=%v foundWARP=%v (total %d nodes)", foundSS, foundWARP, len(snap.Nodes))
+	}
+}
+
+func TestResolver_InheritedFilterGroupRef_PreservesChildNodesAndDerivedEmptyFallback(t *testing.T) {
+	ctx := context.Background()
+	r := resolver.New()
+
+	nSS := domain.Node{
+		LogicalID:   testNodeLogicalID("node-ss-valid"),
+		DisplayName: "SS-01",
+		Protocol:    domain.ProtocolSS,
+		Server:      "198.51.100.10",
+		Port:        8388,
+		Credentials: domain.InboundProtocolCredential{
+			Method:   "aes-256-gcm",
+			Password: "ss-password",
+		},
+		Active: true,
+	}
+	nWARPHK := domain.Node{
+		LogicalID:   testNodeLogicalID("node-warp-hk-valid"),
+		DisplayName: "WARP-HK",
+		Protocol:    domain.ProtocolWireGuard,
+		Server:      "162.159.192.1",
+		Port:        2408,
+		Credentials: domain.InboundProtocolCredential{
+			PrivateKey:   "aGVsbG8td29ybGQtdGVzdC1wcml2YXRlLWtleS0xMjM=",
+			PublicKey:    "aGVsbG8td29ybGQtdGVzdC1wdWJsaWMta2V5LTEyMzQ=",
+			LocalAddress: []string{"10.0.0.2/32"},
+			MTU:          1420,
+		},
+		Active: true,
+	}
+	nWARPUS := domain.Node{
+		LogicalID:   testNodeLogicalID("node-warp-us-valid"),
+		DisplayName: "WARP-US",
+		Protocol:    domain.ProtocolWireGuard,
+		Server:      "162.159.192.2",
+		Port:        2408,
+		Credentials: domain.InboundProtocolCredential{
+			PrivateKey:   "aGVsbG8td29ybGQtdGVzdC1wcml2YXRlLWtleS0xMjM=",
+			PublicKey:    "aGVsbG8td29ybGQtdGVzdC1wdWJsaWMta2V5LTEyMzQ=",
+			LocalAddress: []string{"10.0.0.3/32"},
+			MTU:          1420,
+		},
+		Active: true,
+	}
+
+	parentGroupID := domain.MustNewUUIDv7()
+	childGroupID := domain.MustNewUUIDv7()
+
+	childSources := []domain.MemberSource{
+		{Operation: domain.OperationAdd, Kind: domain.SourceKindManualNode, Position: 0, NodeLogicalID: &nWARPHK.LogicalID},
+		{Operation: domain.OperationAdd, Kind: domain.SourceKindManualNode, Position: 1, NodeLogicalID: &nWARPUS.LogicalID},
+	}
+	parentSources := []domain.MemberSource{
+		{Operation: domain.OperationAdd, Kind: domain.SourceKindManualNode, Position: 0, NodeLogicalID: &nSS.LogicalID},
+		{
+			Operation:     domain.OperationAdd,
+			Kind:          domain.SourceKindGroupRef,
+			Position:      1,
+			TargetGroupID: &childGroupID,
+			FilterSpec: &domain.NodeFilterSpec{
+				Conditions: []domain.FilterCondition{
+					{Field: domain.FilterFieldDisplayName, Op: domain.FilterOpContains, Value: "HK"},
+				},
+			},
+		},
+	}
+
+	input := resolver.ResolveInput{
+		RevisionID:         "rev-warp-proj-1",
+		InventoryWatermark: "wm-1",
+		CompilerVersion:    "1.0.0",
+		Nodes:              []domain.Node{nSS, nWARPHK, nWARPUS},
+		Groups: []domain.NodeGroup{
+			{
+				ID:                  parentGroupID,
+				Name:                "选择节点",
+				GroupType:           domain.GroupTypeSelect,
+				InheritGlobalFilter: true,
+				Sources:             parentSources,
+			},
+			{
+				ID:                  childGroupID,
+				Name:                "WARP",
+				GroupType:           domain.GroupTypeSelect,
+				InheritGlobalFilter: false,
+				EmptyFallbackPass:   true,
+				Sources:             childSources,
+			},
+		},
+		PolicyRules: []domain.PolicyRule{
+			{ID: "r1", TargetGroupID: parentGroupID, Expression: "MATCH", Position: 0},
+		},
+		GlobalFilter: &domain.NodeFilterSpec{
+			Conditions: []domain.FilterCondition{
+				{Field: domain.FilterFieldProtocol, Op: domain.FilterOpEquals, Value: "ss"},
+			},
+		},
+		DNS: resolver.DNSConfig{Enabled: true, Nameservers: []string{"1.1.1.1"}},
+	}
+
+	snap, err := r.Resolve(ctx, input)
+	if err != nil {
+		t.Fatalf("resolve failed: %v", err)
+	}
+
+	// Verify derived group was created
+	var derivedGroup *resolver.ResolvedGroup
+	for i := range snap.Groups {
+		if strings.Contains(snap.Groups[i].Name, "WARP [选择节点]") {
+			derivedGroup = &snap.Groups[i]
+			break
+		}
+	}
+	if derivedGroup == nil {
+		t.Fatalf("expected derived group 'WARP [选择节点]' to be created, groups: %+v", snap.Groups)
+	}
+
+	// Verify derived group inherited childGroup's settings and candidate selection
+	if derivedGroup.InheritGlobalFilter {
+		t.Errorf("expected derived group to have InheritGlobalFilter=false from child group")
+	}
+	if !derivedGroup.EmptyFallbackPass {
+		t.Errorf("expected derived group to have EmptyFallbackPass=true from child group")
+	}
+	if len(derivedGroup.NodeLogicalIDs) != 1 || derivedGroup.NodeLogicalIDs[0] != nWARPHK.LogicalID {
+		t.Fatalf("expected derived group to contain WARP-HK node (%s), got %+v", nWARPHK.LogicalID, derivedGroup.NodeLogicalIDs)
+	}
+
+	// Verify compiler succeeds for Mihomo (Clash)
+	res, err := compiler.Compile(ctx, snap, domain.TargetMihomo)
+	if err != nil {
+		t.Fatalf("compiler.Compile for Mihomo failed: %v", err)
+	}
+	content := string(res.Content)
+	if !strings.Contains(content, "WARP [选择节点]") {
+		t.Errorf("expected compiled output to contain 'WARP [选择节点]', got:\n%s", content)
+	}
+	if !strings.Contains(content, "WARP-HK") {
+		t.Errorf("expected compiled output to contain 'WARP-HK', got:\n%s", content)
+	}
+
+	// Sub-test: empty fallback degradation when filter matches 0 nodes
+	parentSourcesEmpty := []domain.MemberSource{
+		{Operation: domain.OperationAdd, Kind: domain.SourceKindManualNode, Position: 0, NodeLogicalID: &nSS.LogicalID},
+		{
+			Operation:     domain.OperationAdd,
+			Kind:          domain.SourceKindGroupRef,
+			Position:      1,
+			TargetGroupID: &childGroupID,
+			FilterSpec: &domain.NodeFilterSpec{
+				Conditions: []domain.FilterCondition{
+					{Field: domain.FilterFieldDisplayName, Op: domain.FilterOpContains, Value: "NONEXISTENT"},
+				},
+			},
+		},
+	}
+	inputEmpty := input
+	inputEmpty.Groups = []domain.NodeGroup{
+		{
+			ID:                  parentGroupID,
+			Name:                "选择节点",
+			GroupType:           domain.GroupTypeSelect,
+			InheritGlobalFilter: true,
+			Sources:             parentSourcesEmpty,
+		},
+		input.Groups[1],
+	}
+
+	snapEmpty, err := r.Resolve(ctx, inputEmpty)
+	if err != nil {
+		t.Fatalf("resolve with empty filter failed: %v", err)
+	}
+
+	var derivedEmptyGroup *resolver.ResolvedGroup
+	for i := range snapEmpty.Groups {
+		if strings.Contains(snapEmpty.Groups[i].Name, "WARP [选择节点]") {
+			derivedEmptyGroup = &snapEmpty.Groups[i]
+			break
+		}
+	}
+	if derivedEmptyGroup == nil {
+		t.Fatalf("expected derived empty group 'WARP [选择节点]' to be created")
+	}
+	if !derivedEmptyGroup.UsesEmptyPass() {
+		t.Errorf("expected derived empty group to use EmptyPass, got UsesEmptyPass=false, EffectiveEmptyPass=%v, EmptyFallbackPass=%v",
+			derivedEmptyGroup.EffectiveEmptyPass, derivedEmptyGroup.EmptyFallbackPass)
+	}
+
+	resEmpty, err := compiler.Compile(ctx, snapEmpty, domain.TargetMihomo)
+	if err != nil {
+		t.Fatalf("compiler.Compile with empty derived group failed: %v", err)
+	}
+	contentEmpty := string(resEmpty.Content)
+	if !strings.Contains(contentEmpty, "WARP [选择节点]") {
+		t.Errorf("expected compiled output to contain 'WARP [选择节点]', got:\n%s", contentEmpty)
 	}
 }

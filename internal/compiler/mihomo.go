@@ -1113,8 +1113,11 @@ func renderMihomoRules(resolvedRules []resolver.ResolvedRule) ([]string, map[str
 			return nil, nil, mihomoError(loc, kind, "routing rule value is required")
 		}
 		val := strings.TrimSpace(parts[1])
-		if strings.ContainsAny(val, " \t\r\n") {
+		if kind != "PROCESS-NAME" && strings.ContainsAny(val, " \t\r\n") {
 			return nil, nil, mihomoError(loc, kind, fmt.Sprintf("invalid whitespace in %s rule value", kind))
+		}
+		if kind == "PROCESS-NAME" && strings.ContainsAny(val, "\r\n") {
+			return nil, nil, mihomoError(loc, kind, "invalid newline in PROCESS-NAME rule value")
 		}
 
 		switch kind {

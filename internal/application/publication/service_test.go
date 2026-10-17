@@ -796,6 +796,78 @@ func (m *mockPolicyRepo) DeletePolicyRule(ctx context.Context, id string) error 
 	return domain.NewNotFoundError("rule_not_found", "policy rule not found")
 }
 
+func (m *mockPolicyRepo) ListRuleCategories(ctx context.Context) ([]domain.RuleCategory, error) {
+	return nil, nil
+}
+
+func (m *mockPolicyRepo) GetRuleCategory(ctx context.Context, id string) (*domain.RuleCategory, error) {
+	return nil, domain.NewNotFoundError("category_not_found", "category not found")
+}
+
+func (m *mockPolicyRepo) CreateRuleCategory(ctx context.Context, cat *domain.RuleCategory) error {
+	return nil
+}
+
+func (m *mockPolicyRepo) UpdateRuleCategory(ctx context.Context, cat *domain.RuleCategory) error {
+	return nil
+}
+
+func (m *mockPolicyRepo) DeleteRuleCategory(ctx context.Context, id string) error {
+	return nil
+}
+
+func (m *mockPolicyRepo) ReorderRuleCategories(ctx context.Context, orderedIDs []string) error {
+	return nil
+}
+
+func (m *mockPolicyRepo) ListPolicyRulesByCategory(ctx context.Context, revisionID string, categoryID string) ([]domain.PolicyRule, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var res []domain.PolicyRule
+	for _, r := range m.policyRules[revisionID] {
+		if r.CategoryID == categoryID {
+			res = append(res, r)
+		}
+	}
+	return res, nil
+}
+
+func (m *mockPolicyRepo) GetPolicyRule(ctx context.Context, id string) (*domain.PolicyRule, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, rules := range m.policyRules {
+		for _, r := range rules {
+			if r.ID == id {
+				cp := r
+				return &cp, nil
+			}
+		}
+	}
+	return nil, domain.NewNotFoundError("rule_not_found", "policy rule not found")
+}
+
+func (m *mockPolicyRepo) UpdatePolicyRule(ctx context.Context, rule *domain.PolicyRule) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for revID, rules := range m.policyRules {
+		for i, r := range rules {
+			if r.ID == rule.ID {
+				m.policyRules[revID][i] = *rule
+				return nil
+			}
+		}
+	}
+	return domain.NewNotFoundError("rule_not_found", "policy rule not found")
+}
+
+func (m *mockPolicyRepo) ReorderPolicyRules(ctx context.Context, revisionID string, categoryID string, orderedIDs []string) error {
+	return nil
+}
+
+func (m *mockPolicyRepo) BackfillRules(ctx context.Context, revisionID string, fallbackDBPath string) (int, error) {
+	return 470, nil
+}
+
 func TestMihomoPublishAndPreview_PlaintextPersistenceAndRestartRecovery(t *testing.T) {
 	ctx := context.Background()
 	nodeRepo := newMockNodeRepo()

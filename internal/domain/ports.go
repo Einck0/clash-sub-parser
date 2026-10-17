@@ -192,9 +192,21 @@ type PolicyRepository interface {
 	CreateAdmissionRule(ctx context.Context, rule *AdmissionRule) error
 	DeleteAdmissionRule(ctx context.Context, id string) error
 
+	ListRuleCategories(ctx context.Context) ([]RuleCategory, error)
+	GetRuleCategory(ctx context.Context, id string) (*RuleCategory, error)
+	CreateRuleCategory(ctx context.Context, cat *RuleCategory) error
+	UpdateRuleCategory(ctx context.Context, cat *RuleCategory) error
+	DeleteRuleCategory(ctx context.Context, id string) error
+	ReorderRuleCategories(ctx context.Context, orderedIDs []string) error
+
 	ListPolicyRules(ctx context.Context, revisionID string) ([]PolicyRule, error)
+	ListPolicyRulesByCategory(ctx context.Context, revisionID string, categoryID string) ([]PolicyRule, error)
+	GetPolicyRule(ctx context.Context, id string) (*PolicyRule, error)
 	CreatePolicyRule(ctx context.Context, rule *PolicyRule) error
+	UpdatePolicyRule(ctx context.Context, rule *PolicyRule) error
 	DeletePolicyRule(ctx context.Context, id string) error
+	ReorderPolicyRules(ctx context.Context, revisionID string, categoryID string, orderedIDs []string) error
+	BackfillRules(ctx context.Context, revisionID string, fallbackDBPath string) (int, error)
 }
 
 // RevisionRepository defines the persistence port for configuration revisions.

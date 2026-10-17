@@ -272,13 +272,27 @@ type AdmissionRule struct {
 	Position   int        `json:"position"`
 }
 
-// PolicyRule defines routing rules that steer traffic matching an expression to a target group.
+// RuleCategory defines a logical category for organizing routing policy rules.
+type RuleCategory struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	SortOrder int       `json:"sort_order"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// PolicyRule defines routing rules that steer traffic matching an expression to a target group or builtin target.
 type PolicyRule struct {
 	ID            string `json:"id"`
 	RevisionID    string `json:"revision_id"`
-	TargetGroupID string `json:"target_group_id"`
+	CategoryID    string `json:"category_id,omitempty"`
+	Category      string `json:"category,omitempty"`
+	Name          string `json:"name,omitempty"`
+	TargetGroupID string `json:"target_group_id,omitempty"`
+	BuiltinTarget string `json:"builtin_target,omitempty"`
 	Expression    string `json:"expression"`
 	Position      int    `json:"position"`
+	Enabled       bool   `json:"enabled"`
 }
 
 // IsMatchRule checks if a routing rule expression represents a MATCH/FINAL termination catch-all rule.
@@ -433,17 +447,27 @@ func ValidatePolicyTopology(
 	return ValidatePolicyRules(rules, groupSet, requireTerminalMatch)
 }
 
-// ValidatePolicyRules verifies rule expressions, positions, target group references, and MATCH rule constraints.
+// ValidatePolicyRules verifies rule expressions, positions, target group references, builtin targets, and MATCH rule constraints.
 func ValidatePolicyRules(rules []PolicyRule, groupSet map[string]bool, requireTerminalMatch bool) error {
 	if len(rules) == 0 {
 		return nil
 	}
 
+	hasCategories := false
+	for _, r := range rules {
+		if r.CategoryID != "" || (r.Category != "" && r.Category != "default") {
+			hasCategories = true
+			break
+		}
+	}
+
 	sorted := make([]PolicyRule, len(rules))
 	copy(sorted, rules)
-	sort.SliceStable(sorted, func(i, j int) bool {
-		return sorted[i].Position < sorted[j].Position
-	})
+	if !hasCategories {
+		sort.SliceStable(sorted, func(i, j int) bool {
+			return sorted[i].Position < sorted[j].Position
+		})
+	}
 
 	var matchIndices []int
 	for i, rule := range sorted {
@@ -453,9 +477,25 @@ func ValidatePolicyRules(rules []PolicyRule, groupSet map[string]bool, requireTe
 		if rule.Position < 0 {
 			return NewValidationError("invalid_position", "policy rule position must be non-negative")
 		}
-		if len(groupSet) > 0 && !groupSet[rule.TargetGroupID] {
-			return NewValidationError("target_group_not_found", fmt.Sprintf("target group %s does not exist for policy rule", rule.TargetGroupID))
+
+		hasBuiltin := strings.TrimSpace(rule.BuiltinTarget) != ""
+		hasGroup := strings.TrimSpace(rule.TargetGroupID) != ""
+
+		if !hasBuiltin && !hasGroup {
+			return NewValidationError("missing_rule_target", "policy rule must specify either target_group_id or builtin_target")
 		}
+
+		if hasBuiltin {
+			bt := strings.ToUpper(strings.TrimSpace(rule.BuiltinTarget))
+			if bt != "DIRECT" && bt != "REJECT" && bt != "REJECT-DROP" && bt != "PASS" {
+				return NewValidationError("invalid_builtin_target", fmt.Sprintf("invalid builtin target %q; must be DIRECT, REJECT, REJECT-DROP, or PASS", rule.BuiltinTarget))
+			}
+		} else if hasGroup {
+			if len(groupSet) > 0 && !groupSet[rule.TargetGroupID] {
+				return NewValidationError("target_group_not_found", fmt.Sprintf("target group %s does not exist for policy rule", rule.TargetGroupID))
+			}
+		}
+
 		if IsMatchRule(rule.Expression) {
 			matchIndices = append(matchIndices, i)
 		}

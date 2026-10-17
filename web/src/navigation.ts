@@ -4,6 +4,7 @@ export const VALID_TABS = [
   'nodes',
   'probes',
   'policy',
+  'rules',
   'publications',
   'settings',
 ] as const

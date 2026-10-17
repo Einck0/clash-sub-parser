@@ -314,14 +314,132 @@ func (r *policyRepository) DeleteAdmissionRule(ctx context.Context, id string) e
 	return nil
 }
 
-func (r *policyRepository) ListPolicyRules(ctx context.Context, revisionID string) ([]domain.PolicyRule, error) {
+func (r *policyRepository) ListRuleCategories(ctx context.Context) ([]domain.RuleCategory, error) {
 	const query = `
-	SELECT id, revision_id, target_group_id, expression, position
-	FROM policy_rules
-	WHERE revision_id = ?
-	ORDER BY position ASC;`
+	SELECT id, name, sort_order, created_at, updated_at
+	FROM rule_categories
+	ORDER BY sort_order ASC, id ASC;`
 
-	rows, err := r.db.QueryContext(ctx, query, revisionID)
+	rows, err := r.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list rule categories: %w", err)
+	}
+	defer rows.Close()
+
+	var items []domain.RuleCategory
+	for rows.Next() {
+		var cat domain.RuleCategory
+		var createdStr, updatedStr string
+		if err := rows.Scan(&cat.ID, &cat.Name, &cat.SortOrder, &createdStr, &updatedStr); err != nil {
+			return nil, fmt.Errorf("failed to scan rule category: %w", err)
+		}
+		cat.CreatedAt = parseStoredTime(createdStr)
+		cat.UpdatedAt = parseStoredTime(updatedStr)
+		items = append(items, cat)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating rule categories: %w", err)
+	}
+	return items, nil
+}
+
+func (r *policyRepository) GetRuleCategory(ctx context.Context, id string) (*domain.RuleCategory, error) {
+	const query = `
+	SELECT id, name, sort_order, created_at, updated_at
+	FROM rule_categories
+	WHERE id = ?;`
+
+	var cat domain.RuleCategory
+	var createdStr, updatedStr string
+	err := r.db.QueryRowContext(ctx, query, id).Scan(&cat.ID, &cat.Name, &cat.SortOrder, &createdStr, &updatedStr)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, domain.NewNotFoundError("category_not_found", fmt.Sprintf("category %s not found", id))
+		}
+		return nil, fmt.Errorf("failed to query rule category %s: %w", id, err)
+	}
+	cat.CreatedAt = parseStoredTime(createdStr)
+	cat.UpdatedAt = parseStoredTime(updatedStr)
+	return &cat, nil
+}
+
+func (r *policyRepository) CreateRuleCategory(ctx context.Context, cat *domain.RuleCategory) error {
+	const query = `
+	INSERT INTO rule_categories (id, name, sort_order, created_at, updated_at)
+	VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);`
+
+	_, err := r.db.ExecContext(ctx, query, cat.ID, cat.Name, cat.SortOrder)
+	if err != nil {
+		return fmt.Errorf("failed to insert rule category: %w", err)
+	}
+	return nil
+}
+
+func (r *policyRepository) UpdateRuleCategory(ctx context.Context, cat *domain.RuleCategory) error {
+	const query = `
+	UPDATE rule_categories
+	SET name = ?, sort_order = ?, updated_at = CURRENT_TIMESTAMP
+	WHERE id = ?;`
+
+	res, err := r.db.ExecContext(ctx, query, cat.Name, cat.SortOrder, cat.ID)
+	if err != nil {
+		return fmt.Errorf("failed to update rule category: %w", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return domain.NewNotFoundError("category_not_found", fmt.Sprintf("category %s not found", cat.ID))
+	}
+	return nil
+}
+
+func (r *policyRepository) DeleteRuleCategory(ctx context.Context, id string) error {
+	res, err := r.db.ExecContext(ctx, "DELETE FROM rule_categories WHERE id = ?;", id)
+	if err != nil {
+		return fmt.Errorf("failed to delete rule category: %w", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return domain.NewNotFoundError("category_not_found", fmt.Sprintf("category %s not found", id))
+	}
+	return nil
+}
+
+func (r *policyRepository) ReorderRuleCategories(ctx context.Context, orderedIDs []string) error {
+	return WithTx(ctx, r.db, func(ctx context.Context, tx *sql.Tx) error {
+		stmt, err := tx.PrepareContext(ctx, "UPDATE rule_categories SET sort_order = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?;")
+		if err != nil {
+			return err
+		}
+		defer stmt.Close()
+
+		for i, id := range orderedIDs {
+			if _, err := stmt.ExecContext(ctx, i*10, id); err != nil {
+				return fmt.Errorf("failed to update sort_order for category %s: %w", id, err)
+			}
+		}
+		return nil
+	})
+}
+
+func (r *policyRepository) ListPolicyRules(ctx context.Context, revisionID string) ([]domain.PolicyRule, error) {
+	query := `
+	SELECT r.id, r.revision_id, COALESCE(r.category_id, ''), r.category, r.name, COALESCE(r.target_group_id, ''), COALESCE(r.builtin_target, ''), r.expression, r.position, r.enabled
+	FROM policy_rules r
+	LEFT JOIN rule_categories c ON (r.category_id IS NOT NULL AND r.category_id = c.id) OR (r.category_id IS NULL AND r.category = c.name)`
+	args := []any{}
+	if revisionID != "" {
+		query += ` WHERE r.revision_id = ?`
+		args = append(args, revisionID)
+	}
+	query += ` ORDER BY COALESCE(c.sort_order, 999999) ASC, r.position ASC, r.id ASC;`
+
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list policy rules: %w", err)
 	}
@@ -330,18 +448,24 @@ func (r *policyRepository) ListPolicyRules(ctx context.Context, revisionID strin
 	items := make([]domain.PolicyRule, 0)
 	for rows.Next() {
 		var rule domain.PolicyRule
+		var enabledInt int
 
 		err := rows.Scan(
 			&rule.ID,
 			&rule.RevisionID,
+			&rule.CategoryID,
+			&rule.Category,
+			&rule.Name,
 			&rule.TargetGroupID,
+			&rule.BuiltinTarget,
 			&rule.Expression,
 			&rule.Position,
+			&enabledInt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan policy rule: %w", err)
 		}
-
+		rule.Enabled = enabledInt == 1
 		items = append(items, rule)
 	}
 
@@ -351,22 +475,174 @@ func (r *policyRepository) ListPolicyRules(ctx context.Context, revisionID strin
 	return items, nil
 }
 
+func (r *policyRepository) ListPolicyRulesByCategory(ctx context.Context, revisionID string, categoryID string) ([]domain.PolicyRule, error) {
+	query := `
+	SELECT r.id, r.revision_id, COALESCE(r.category_id, ''), r.category, r.name, COALESCE(r.target_group_id, ''), COALESCE(r.builtin_target, ''), r.expression, r.position, r.enabled
+	FROM policy_rules r
+	LEFT JOIN rule_categories c ON (r.category_id IS NOT NULL AND r.category_id = c.id) OR (r.category_id IS NULL AND r.category = c.name)
+	WHERE (r.category_id = ? OR r.category = ?) `
+	args := []any{categoryID, categoryID}
+	if revisionID != "" {
+		query += ` AND r.revision_id = ?`
+		args = append(args, revisionID)
+	}
+	query += ` ORDER BY COALESCE(c.sort_order, 999999) ASC, r.position ASC, r.id ASC;`
+
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list policy rules by category: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]domain.PolicyRule, 0)
+	for rows.Next() {
+		var rule domain.PolicyRule
+		var enabledInt int
+
+		err := rows.Scan(
+			&rule.ID,
+			&rule.RevisionID,
+			&rule.CategoryID,
+			&rule.Category,
+			&rule.Name,
+			&rule.TargetGroupID,
+			&rule.BuiltinTarget,
+			&rule.Expression,
+			&rule.Position,
+			&enabledInt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan policy rule: %w", err)
+		}
+		rule.Enabled = enabledInt == 1
+		items = append(items, rule)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating policy rules by category: %w", err)
+	}
+	return items, nil
+}
+
+func (r *policyRepository) GetPolicyRule(ctx context.Context, id string) (*domain.PolicyRule, error) {
+	const query = `
+	SELECT r.id, r.revision_id, COALESCE(r.category_id, ''), r.category, r.name, COALESCE(r.target_group_id, ''), COALESCE(r.builtin_target, ''), r.expression, r.position, r.enabled
+	FROM policy_rules r
+	WHERE r.id = ?;`
+
+	var rule domain.PolicyRule
+	var enabledInt int
+	err := r.db.QueryRowContext(ctx, query, id).Scan(
+		&rule.ID,
+		&rule.RevisionID,
+		&rule.CategoryID,
+		&rule.Category,
+		&rule.Name,
+		&rule.TargetGroupID,
+		&rule.BuiltinTarget,
+		&rule.Expression,
+		&rule.Position,
+		&enabledInt,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, domain.NewNotFoundError("rule_not_found", fmt.Sprintf("policy rule %s not found", id))
+		}
+		return nil, fmt.Errorf("failed to query policy rule %s: %w", id, err)
+	}
+	rule.Enabled = enabledInt == 1
+	return &rule, nil
+}
+
 func (r *policyRepository) CreatePolicyRule(ctx context.Context, rule *domain.PolicyRule) error {
 	const query = `
-	INSERT INTO policy_rules (id, revision_id, target_group_id, expression, position)
-	VALUES (?, ?, ?, ?, ?);`
+	INSERT INTO policy_rules (id, revision_id, category_id, category, name, target_group_id, builtin_target, expression, position, enabled)
+	VALUES (?, ?, NULLIF(?, ''), ?, ?, NULLIF(?, ''), NULLIF(?, ''), ?, ?, ?);`
+
+	enabledInt := 1
+	if !rule.Enabled {
+		enabledInt = 0
+	}
 
 	_, err := r.db.ExecContext(ctx, query,
 		rule.ID,
 		rule.RevisionID,
+		rule.CategoryID,
+		rule.Category,
+		rule.Name,
 		rule.TargetGroupID,
+		rule.BuiltinTarget,
 		rule.Expression,
 		rule.Position,
+		enabledInt,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to insert policy rule: %w", err)
 	}
 	return nil
+}
+
+func (r *policyRepository) UpdatePolicyRule(ctx context.Context, rule *domain.PolicyRule) error {
+	const query = `
+	UPDATE policy_rules
+	SET category_id = NULLIF(?, ''),
+	    category = ?,
+	    name = ?,
+	    target_group_id = NULLIF(?, ''),
+	    builtin_target = NULLIF(?, ''),
+	    expression = ?,
+	    position = ?,
+	    enabled = ?
+	WHERE id = ?;`
+
+	enabledInt := 1
+	if !rule.Enabled {
+		enabledInt = 0
+	}
+
+	res, err := r.db.ExecContext(ctx, query,
+		rule.CategoryID,
+		rule.Category,
+		rule.Name,
+		rule.TargetGroupID,
+		rule.BuiltinTarget,
+		rule.Expression,
+		rule.Position,
+		enabledInt,
+		rule.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update policy rule: %w", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return domain.NewNotFoundError("rule_not_found", fmt.Sprintf("policy rule %s not found", rule.ID))
+	}
+	return nil
+}
+
+func (r *policyRepository) ReorderPolicyRules(ctx context.Context, revisionID string, categoryID string, orderedIDs []string) error {
+	return WithTx(ctx, r.db, func(ctx context.Context, tx *sql.Tx) error {
+		stmt, err := tx.PrepareContext(ctx, "UPDATE policy_rules SET position = ? WHERE id = ?;")
+		if err != nil {
+			return err
+		}
+		defer stmt.Close()
+
+		for i, id := range orderedIDs {
+			if _, err := stmt.ExecContext(ctx, i, id); err != nil {
+				return fmt.Errorf("failed to update position for rule %s: %w", id, err)
+			}
+		}
+		return nil
+	})
+}
+
+func (r *policyRepository) BackfillRules(ctx context.Context, revID string, fallbackDBPath string) (int, error) {
+	return BackfillPolicyRules(ctx, r.db, revID, fallbackDBPath)
 }
 
 func (r *policyRepository) DeletePolicyRule(ctx context.Context, id string) error {

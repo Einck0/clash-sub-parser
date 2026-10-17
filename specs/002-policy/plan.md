@@ -1,82 +1,75 @@
-# Technical Plan: Policy Topology Hygiene, Inherited Filter & Probe State Governance
+# Technical Plan: Policy Routing Rules Modernization & Legacy 470 Rules Restoration
 
-- **Feature**: `specs/002-policy/`
-- **Run ID**: `pi_run_20261017_203412_2919528`
+- **Feature Directory**: `specs/002-policy/`
+- **Run ID**: `pi_run_20261018_022832_3123769`
 - **Status**: IMPLEMENTING
 
 ---
 
 ## 1. 架构定位与设计要点
 
-### 1.1 策略拓扑校验去噪
-- **问题**：`resolver.Resolve` 在应用全局过滤时产生 `DiagnosticSeverityInfo` 级别的 `global_filter_excluded` 诊断。`application/policy/service.go` 的 `Validate` 将所有非 `empty_routed_group`/`empty_group` 诊断不加区分地全量转成 `ValidationIssue`；前端只要 `issues.length > 0` 立即将校验框标黄为“存在配置警告”，把原本正常的分流节点排除误当成策略拓扑配置错误。
-- **方案**：
-  1. `policy.Service.Validate`: 过滤掉 `DiagnosticSeverityInfo`（尤其是 `global_filter_excluded`），仅保留 `DiagnosticSeverityError` 及显式策略组空置警告（`empty_group`）；
-  2. `PolicyView.vue`: 检查有效警告，仅在存在 `severity: 'warning' | 'error'` 时呈现黄色警告框。
+### 1.1 规则丢失根因诊断与外键解耦
+- **历史根因**：原 `policy_rules` 表定义了 `target_group_id TEXT NOT NULL REFERENCES node_groups(id)`，在系统初始化迁移时，无法存储目标为 `DIRECT`（292 条）与 `REJECT`（15 条）的规则，导致 308 条关键分流规则被粗暴丢弃，生产环境仅残留 162 条规则。
+- **解耦设计**：
+  - 允许 `target_group_id` 为 NULL，增设 `builtin_target TEXT CHECK (builtin_target IS NULL OR builtin_target IN ('DIRECT', 'REJECT', 'REJECT-DROP', 'PASS'))`；
+  - 约束保证合法性：`CHECK (target_group_id IS NOT NULL OR builtin_target IS NOT NULL)`；
+  - 增设 `category_id` 与冗余 `category` 字段，建立与 `rule_categories` 的关联。
 
-### 1.2 策略组「继承全局过滤」开关 (Inherit Global Filter)
-- **问题**：全局过滤器（如仅保留可用节点）作用于全系统，导致未探活或特殊节点（如 Cloudflare WARP WireGuard 节点）被从候选池中剔除，进而使专属策略组（如 WARP）由于无可用节点而清空并阻断导出。
-- **方案**：
-  1. 数据库迁移 `000024_inherit_global_filter_and_probe_governance.sql`：
-     ```sql
-     ALTER TABLE node_groups ADD COLUMN inherit_global_filter INTEGER NOT NULL DEFAULT 1;
-     UPDATE node_groups SET inherit_global_filter = 0 WHERE UPPER(name) = 'WARP' OR id = 'WARP';
-     ```
-  2. 领域层 `domain.NodeGroup` 增加 `InheritGlobalFilter bool`；
-  3. `internal/resolver/graph.go`:
-     - 策略组在计算成员候选节点时，检查 `group.InheritGlobalFilter`；
-     - 若为 `true`：从 `globalAdmittedNodes` 中挑选；
-     - 若为 `false`：从 `admissionRes.AdmittedNodes` 中挑选；
-  4. `internal/resolver/resolver.go`:
-     - 确保 `snapshot.Nodes` 包含所有被任何策略组引用的节点，保证编译器 `proxies:` 完整包含目标组引用的所有节点；
-  5. 前后端接口与界面同步支持该字段。
+### 1.2 历史数据无损回填方案
+- **数据源**：历史稳定基准 SQLite `/data/clash_sub_parser.db`：
+  - 14 个 `rule_categories`：广告/拦截 (0), 国内日常服务 (10), 移动应用/系统工具 (20), 桌面应用进程 (30), 游戏 (40), 流媒体 (50), 下载 (60), AI (70), 个人 (80), GEOSITE/平台 (90), 负载均衡 (100), 国内/直连 (110), 常规代理 (120), 兜底 (130)；
+  - 470 条 `rules`：DIRECT 292 条，REJECT 15 条，策略组规则 163 条（包括常规代理 94 条、AI 22 条等）；
+- **回填算法**：
+  - 提取当前活跃 revision_id；
+  - 插入 14 个 `rule_categories`（使用确定性或 UUIDv7 ID）；
+  - 查询 `node_groups` 构建 `name -> id` 字典；
+  - 遍历 470 条规则：
+    - 若 proxy 为 `DIRECT` 或 `REJECT`：`builtin_target = proxy`，`target_group_id = NULL`；
+    - 若 proxy 为策略组名：从字典查找对应 group_id 填入 `target_group_id`，`builtin_target = NULL`；
+    - 若 options 包含 `no-resolve`：拼接至 expression；
+    - 组内 position 从 0 递增赋值；
+    - 验证迁移后规则总数恰好等于 470 条。
 
-### 1.3 节点探针健康状态极净化 (收敛消除「已过期」与「待复核」)
-- **问题**：
-  - `defaultProbeFreshnessTTL = 1 * time.Hour`：节点超过 1 小时未被探测就会被置为 `stale` / `undetermined`，导致客户端订阅节点随时间流逝突然丢失；
-  - `nodeView.ts` 中只有 `node_connect_failed` 算 `unhealthy`，超时、连接拒绝、DNS 解析失败等所有其他错误都被强行推脱成“待复核（undetermined）”，造成“不可用为0、待复核几十个”的虚假指标。
-- **方案**：
-  1. 移除自然时间超过 1 小时强制变 `stale` 的逻辑：只要节点的连接凭据版本（`connection_revision`）一致，上一轮的探测结果持续有效，直到新一轮探测覆盖它；
-  2. `nodeView.ts`: 凡 baseline 探测报错（`verdict === 'error'`），均归为 `unhealthy`（不可用），彻底废弃将 timeout / transport_error 归入 `undetermined` 的多余分支；
-  3. 节点卡片清晰展示三种核心状态：可用（绿）、不可用（红，附具体原因如“超时”）、未测试（灰）。
+### 1.3 排序与终结兜底保序
+- **宏观与微观联合排序**：
+  - SQL 查询通过 `LEFT JOIN rule_categories rc ON pr.category_id = rc.id ORDER BY COALESCE(rc.sort_order, 999) ASC, pr.position ASC, pr.id ASC` 导出；
+- **终结规则置底**：
+  - `resolveRules` 遍历识别 `domain.IsMatchRule(expr)`；
+  - 普通规则在前，MATCH 规则强制压栈至最底端。
 
-### 1.4 探针探测超时动态可配置
-- **问题**：Mihomo 出站客户端、Sing-box 运行参数及 Probe Runner 均硬编码 15s 或 30s 超时，无法根据用户需求灵活调整。
-- **方案**：
-  1. `settings` 表增加 `probe_timeout_seconds INTEGER NOT NULL DEFAULT 5`；
-  2. `domain.Settings` 增加 `ProbeTimeoutSeconds int`；
-  3. 探针拨号与任务超时使用该配置；
-  4. 前端设置页 `SettingsView.vue` 支持配置。
+### 1.4 API 控制面扩展
+- 分类管理：`GET/POST/PUT/DELETE /api/v1/policies/categories` 与 `PUT /api/v1/policies/categories/reorder`；
+- 规则管理：
+  - `GET /api/v1/policies/rules` 支持 `category_id` / `category` 筛选；
+  - `POST /api/v1/policies/rules` 原生接收 `builtin_target` 与 `category_id`；
+  - `PUT /api/v1/policies/rules/{id}` 支持就地修改目标、表达式与分类；
+  - `PUT /api/v1/policies/rules/reorder` 支持组内规则位置批量保存。
 
-### 1.5 探针历史记录治理与滚动上限
-- **问题**：现存 14,000+ 条 `probe_runs`、80,000+ 条 `probe_observations` 无清理机制，数据库冗余庞大。
-- **方案**：
-  1. 迁移中修剪历史：
-     ```sql
-     -- 保留最新 100 条 probe_runs，删除多余记录
-     DELETE FROM probe_runs WHERE id NOT IN (SELECT id FROM probe_runs ORDER BY started_at DESC LIMIT 100);
-     DELETE FROM probe_batches WHERE id NOT IN (SELECT id FROM probe_batches ORDER BY started_at DESC LIMIT 100);
-     -- 保留最新 100 条 run 对应的 observations，以及每个节点每个 kind 最新的 1 条 observation
-     DELETE FROM probe_observations 
-     WHERE run_id NOT IN (SELECT id FROM probe_runs)
-       AND id NOT IN (
-         SELECT po.id FROM probe_observations po
-         JOIN (
-           SELECT node_logical_id, probe_kind, MAX(observed_at) AS max_at
-           FROM probe_observations GROUP BY node_logical_id, probe_kind
-         ) latest ON po.node_logical_id = latest.node_logical_id AND po.probe_kind = latest.probe_kind AND po.observed_at = latest.max_at
-       );
-     ```
-  2. 运行时修剪：`internal/application/probe` 在每次 run 完成后触发异步滚动修剪，限制最多保留 100 批次。
-
-### 1.6 纠正批次跳过文案
-- **方案**：在 `web/src/features/probes/ProbesView.vue:2018` 将“已跳过 X 个凭据缺失或无效的节点”改为“本次跳过 X 个状态最新/无需重测的节点”。
+### 1.5 现代化独立规则工作台前端
+- 恢复顶级路由：在 `router/index.ts` 中注册 `/rules`，在 `navigation.ts` 加入 `rules`，在 `App.vue` 侧边栏呈现「规则管理」；
+- 界面架构：
+  - 头部统揽与搜索栏（即时模糊匹配域名/IP/标签）；
+  - 分类折叠面板（DaisyUI collapse 或自定义 card），显示分类名称、权重 badge、规则数 badge；
+  - 分类内规则表格：支持上下移动、就地开关启用、编辑与删除；
+  - 友好新建/编辑对话框：内置动作（DIRECT/REJECT）与策略组分立单选，直观便捷。
 
 ---
 
-## 2. 数据库迁移方案 (Migration 000024)
-- `migrations/000024_inherit_global_filter_and_probe_governance.sql`:
-  1. `ALTER TABLE node_groups ADD COLUMN inherit_global_filter INTEGER NOT NULL DEFAULT 1;`
-  2. `UPDATE node_groups SET inherit_global_filter = 0 WHERE UPPER(name) = 'WARP' OR id = 'WARP';`
-  3. `ALTER TABLE settings ADD COLUMN probe_timeout_seconds INTEGER NOT NULL DEFAULT 5;`
-  4. 滚动修剪历史冗余 `probe_runs` / `probe_batches` / `probe_observations`。
+## 2. 变更文件清单
+
+- `migrations/000025_rule_categories_and_builtin_targets.sql`：数据库表结构与 470 条规则回填迁移
+- `internal/domain/policy.go`：领域实体与规则校验
+- `internal/domain/ports.go`：仓储接口定义
+- `internal/repository/sqlite/policy.go`：分类与规则 CRUD
+- `internal/repository/sqlite/consistent_facts.go`：事实加载排序与分类关联
+- `internal/resolver/graph.go`：内置目标名称解析与置底保序
+- `internal/application/policy/service.go`：服务层分类与规则业务逻辑
+- `internal/application/policy/types.go`：API 请求与响应结构体
+- `internal/transport/http/policies.go`：HTTP 路由与处理函数
+- `web/src/navigation.ts`：导航 Tab 注册
+- `web/src/router/index.ts`：路由定义
+- `web/src/App.vue`：左侧导航栏图标与菜单
+- `web/src/features/rules/RulesView.vue`：独立规则工作台主页面
+- `web/src/features/rules/useRules.ts`：规则与分类响应式状态与 API 交互
+- `web/src/features/rules/RuleDialog.vue`：规则新建/编辑对话框
+- `web/src/locales/messages.ts`：中英文双语翻译字典

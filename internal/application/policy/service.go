@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"clash-sub-parser/internal/compiler"
 	"clash-sub-parser/internal/domain"
@@ -281,8 +282,8 @@ func (s *Service) ListGroups(ctx context.Context, query ListGroupsQuery) (*ListG
 	if pageSize < 1 {
 		pageSize = 50
 	}
-	if pageSize > 100 {
-		pageSize = 100
+	if pageSize > 500 {
+		pageSize = 500
 	}
 
 	start := (page - 1) * pageSize
@@ -633,10 +634,31 @@ func (s *Service) CreatePolicyRule(ctx context.Context, cmd CreatePolicyRuleComm
 		return nil, domain.NewValidationError("invalid_position", "position must be non-negative")
 	}
 
-	// Verify target group exists
-	if _, err := s.policyRepo.GetGroupByID(ctx, cmd.TargetGroupID); err != nil {
-		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_rule.create", domain.AuditResultFailure, fmt.Sprintf("target group %s not found", cmd.TargetGroupID))
-		return nil, domain.NewValidationError("target_group_not_found", fmt.Sprintf("target group %s does not exist", cmd.TargetGroupID))
+	hasBuiltin := strings.TrimSpace(cmd.BuiltinTarget) != ""
+	hasGroup := strings.TrimSpace(cmd.TargetGroupID) != ""
+
+	if !hasBuiltin && !hasGroup {
+		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_rule.create", domain.AuditResultFailure, "missing target")
+		return nil, domain.NewValidationError("missing_rule_target", "policy rule must specify either target_group_id or builtin_target")
+	}
+
+	var builtinTarget string
+	var targetGroupID string
+
+	if hasBuiltin {
+		bt := strings.ToUpper(strings.TrimSpace(cmd.BuiltinTarget))
+		if bt != "DIRECT" && bt != "REJECT" && bt != "REJECT-DROP" && bt != "PASS" {
+			s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_rule.create", domain.AuditResultFailure, fmt.Sprintf("invalid builtin target %s", cmd.BuiltinTarget))
+			return nil, domain.NewValidationError("invalid_builtin_target", fmt.Sprintf("invalid builtin target %q; must be DIRECT, REJECT, REJECT-DROP, or PASS", cmd.BuiltinTarget))
+		}
+		builtinTarget = bt
+	} else if hasGroup {
+		// Verify target group exists
+		if _, err := s.policyRepo.GetGroupByID(ctx, cmd.TargetGroupID); err != nil {
+			s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_rule.create", domain.AuditResultFailure, fmt.Sprintf("target group %s not found", cmd.TargetGroupID))
+			return nil, domain.NewValidationError("target_group_not_found", fmt.Sprintf("target group %s does not exist", cmd.TargetGroupID))
+		}
+		targetGroupID = cmd.TargetGroupID
 	}
 
 	ruleID := cmd.ID
@@ -666,12 +688,22 @@ func (s *Service) CreatePolicyRule(ctx context.Context, cmd CreatePolicyRuleComm
 		return nil, fmt.Errorf("failed to query existing policy rules: %w", err)
 	}
 
+	enabled := true
+	if cmd.Enabled != nil {
+		enabled = *cmd.Enabled
+	}
+
 	newRule := domain.PolicyRule{
 		ID:            ruleID,
 		RevisionID:    revID,
-		TargetGroupID: cmd.TargetGroupID,
+		CategoryID:    cmd.CategoryID,
+		Category:      cmd.Category,
+		Name:          cmd.Name,
+		TargetGroupID: targetGroupID,
+		BuiltinTarget: builtinTarget,
 		Expression:    expr,
 		Position:      cmd.Position,
+		Enabled:       enabled,
 	}
 
 	combinedRules := append(existingRules, newRule)
@@ -689,10 +721,266 @@ func (s *Service) CreatePolicyRule(ctx context.Context, cmd CreatePolicyRuleComm
 	return &PolicyRuleView{
 		ID:            newRule.ID,
 		RevisionID:    newRule.RevisionID,
+		CategoryID:    newRule.CategoryID,
+		Category:      newRule.Category,
+		Name:          newRule.Name,
 		TargetGroupID: newRule.TargetGroupID,
+		BuiltinTarget: newRule.BuiltinTarget,
 		Expression:    newRule.Expression,
 		Position:      newRule.Position,
+		Enabled:       newRule.Enabled,
 	}, nil
+}
+
+// UpdatePolicyRule updates an existing routing policy rule.
+func (s *Service) UpdatePolicyRule(ctx context.Context, cmd UpdatePolicyRuleCommand) (*PolicyRuleView, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	existing, err := s.policyRepo.GetPolicyRule(ctx, cmd.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	if cmd.Expression != nil {
+		expr := strings.TrimSpace(*cmd.Expression)
+		if expr == "" {
+			return nil, domain.NewValidationError("invalid_expression", "policy rule expression cannot be empty")
+		}
+		existing.Expression = expr
+	}
+	if cmd.Position != nil {
+		if *cmd.Position < 0 {
+			return nil, domain.NewValidationError("invalid_position", "position must be non-negative")
+		}
+		existing.Position = *cmd.Position
+	}
+	if cmd.CategoryID != nil {
+		existing.CategoryID = *cmd.CategoryID
+	}
+	if cmd.Category != nil {
+		existing.Category = *cmd.Category
+	}
+	if cmd.Name != nil {
+		existing.Name = *cmd.Name
+	}
+	if cmd.Enabled != nil {
+		existing.Enabled = *cmd.Enabled
+	}
+
+	if cmd.BuiltinTarget != nil && strings.TrimSpace(*cmd.BuiltinTarget) != "" {
+		bt := strings.ToUpper(strings.TrimSpace(*cmd.BuiltinTarget))
+		if bt != "DIRECT" && bt != "REJECT" && bt != "REJECT-DROP" && bt != "PASS" {
+			return nil, domain.NewValidationError("invalid_builtin_target", fmt.Sprintf("invalid builtin target %q; must be DIRECT, REJECT, REJECT-DROP, or PASS", *cmd.BuiltinTarget))
+		}
+		existing.BuiltinTarget = bt
+		existing.TargetGroupID = ""
+	} else if cmd.TargetGroupID != nil && strings.TrimSpace(*cmd.TargetGroupID) != "" {
+		if _, err := s.policyRepo.GetGroupByID(ctx, *cmd.TargetGroupID); err != nil {
+			return nil, domain.NewValidationError("target_group_not_found", fmt.Sprintf("target group %s does not exist", *cmd.TargetGroupID))
+		}
+		existing.TargetGroupID = *cmd.TargetGroupID
+		existing.BuiltinTarget = ""
+	}
+
+	if existing.BuiltinTarget == "" && existing.TargetGroupID == "" {
+		return nil, domain.NewValidationError("missing_rule_target", "policy rule must specify either target_group_id or builtin_target")
+	}
+
+	if err := s.policyRepo.UpdatePolicyRule(ctx, existing); err != nil {
+		return nil, fmt.Errorf("failed to update policy rule: %w", err)
+	}
+
+	s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_rule.update", domain.AuditResultSuccess, fmt.Sprintf("id=%s", existing.ID))
+	return &PolicyRuleView{
+		ID:            existing.ID,
+		RevisionID:    existing.RevisionID,
+		CategoryID:    existing.CategoryID,
+		Category:      existing.Category,
+		Name:          existing.Name,
+		TargetGroupID: existing.TargetGroupID,
+		BuiltinTarget: existing.BuiltinTarget,
+		Expression:    existing.Expression,
+		Position:      existing.Position,
+		Enabled:       existing.Enabled,
+	}, nil
+}
+
+// BackfillRules fills the specified or active revision with 470 standard routing rules.
+func (s *Service) BackfillRules(ctx context.Context, revisionID string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	revID := strings.TrimSpace(revisionID)
+	if revID == "" {
+		active, err := s.ensureActiveRevisionLocked(ctx)
+		if err != nil {
+			return 0, err
+		}
+		if active == nil {
+			return 0, domain.NewValidationError("missing_revision_id", "no active revision exists")
+		}
+		revID = active.ID
+	}
+
+	count, err := s.policyRepo.BackfillRules(ctx, revID, "")
+	if err != nil {
+		s.recordAudit(ctx, domain.ActorKindSystem, "", "policy_rule.backfill", domain.AuditResultFailure, err.Error())
+		return 0, err
+	}
+
+	s.recordAudit(ctx, domain.ActorKindSystem, "", "policy_rule.backfill", domain.AuditResultSuccess, fmt.Sprintf("rev=%s, count=%d", revID, count))
+	return count, nil
+}
+
+// ReorderPolicyRules reorders policy rules within a category or revision.
+func (s *Service) ReorderPolicyRules(ctx context.Context, cmd ReorderPolicyRulesCommand) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := s.policyRepo.ReorderPolicyRules(ctx, cmd.RevisionID, cmd.CategoryID, cmd.Order); err != nil {
+		return err
+	}
+	s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_rule.reorder", domain.AuditResultSuccess, fmt.Sprintf("count=%d", len(cmd.Order)))
+	return nil
+}
+
+// ListCategories returns all rule categories with their associated rule counts.
+func (s *Service) ListCategories(ctx context.Context) ([]RuleCategoryView, error) {
+	cats, err := s.policyRepo.ListRuleCategories(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	activeRevID := ""
+	if active, err := s.revisionRepo.GetActive(ctx); err == nil && active != nil {
+		activeRevID = active.ID
+	}
+
+	rules, _ := s.policyRepo.ListPolicyRules(ctx, activeRevID)
+	countByCat := make(map[string]int)
+	for _, r := range rules {
+		if r.CategoryID != "" {
+			countByCat[r.CategoryID]++
+		} else if r.Category != "" {
+			countByCat[r.Category]++
+		}
+	}
+
+	views := make([]RuleCategoryView, len(cats))
+	for i, c := range cats {
+		cnt := countByCat[c.ID]
+		if cnt == 0 {
+			cnt = countByCat[c.Name]
+		}
+		views[i] = RuleCategoryView{
+			ID:        c.ID,
+			Name:      c.Name,
+			SortOrder: c.SortOrder,
+			RuleCount: cnt,
+			CreatedAt: c.CreatedAt.Format(time.RFC3339),
+			UpdatedAt: c.UpdatedAt.Format(time.RFC3339),
+		}
+	}
+	return views, nil
+}
+
+// CreateCategory creates a new rule category.
+func (s *Service) CreateCategory(ctx context.Context, cmd CreateCategoryCommand) (*RuleCategoryView, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	name := strings.TrimSpace(cmd.Name)
+	if name == "" {
+		return nil, domain.NewValidationError("invalid_name", "category name cannot be empty")
+	}
+
+	catID := cmd.ID
+	if catID == "" {
+		var err error
+		catID, err = domain.NewUUIDv7()
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	now := time.Now().UTC()
+	cat := domain.RuleCategory{
+		ID:        catID,
+		Name:      name,
+		SortOrder: cmd.SortOrder,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	if err := s.policyRepo.CreateRuleCategory(ctx, &cat); err != nil {
+		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "rule_category.create", domain.AuditResultFailure, err.Error())
+		return nil, err
+	}
+
+	s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "rule_category.create", domain.AuditResultSuccess, fmt.Sprintf("id=%s, name=%s", cat.ID, cat.Name))
+	return &RuleCategoryView{
+		ID:        cat.ID,
+		Name:      cat.Name,
+		SortOrder: cat.SortOrder,
+		RuleCount: 0,
+		CreatedAt: now.Format(time.RFC3339),
+		UpdatedAt: now.Format(time.RFC3339),
+	}, nil
+}
+
+// UpdateCategory updates an existing rule category.
+func (s *Service) UpdateCategory(ctx context.Context, cmd UpdateCategoryCommand) (*RuleCategoryView, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	existing, err := s.policyRepo.GetRuleCategory(ctx, cmd.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	name := strings.TrimSpace(cmd.Name)
+	if name != "" {
+		existing.Name = name
+	}
+	existing.SortOrder = cmd.SortOrder
+	existing.UpdatedAt = time.Now().UTC()
+
+	if err := s.policyRepo.UpdateRuleCategory(ctx, existing); err != nil {
+		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "rule_category.update", domain.AuditResultFailure, err.Error())
+		return nil, err
+	}
+
+	s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "rule_category.update", domain.AuditResultSuccess, fmt.Sprintf("id=%s", existing.ID))
+	return &RuleCategoryView{
+		ID:        existing.ID,
+		Name:      existing.Name,
+		SortOrder: existing.SortOrder,
+		CreatedAt: existing.CreatedAt.Format(time.RFC3339),
+		UpdatedAt: existing.UpdatedAt.Format(time.RFC3339),
+	}, nil
+}
+
+// DeleteCategory deletes a rule category.
+func (s *Service) DeleteCategory(ctx context.Context, cmd DeleteCategoryCommand) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := s.policyRepo.DeleteRuleCategory(ctx, cmd.ID); err != nil {
+		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "rule_category.delete", domain.AuditResultFailure, err.Error())
+		return err
+	}
+
+	s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "rule_category.delete", domain.AuditResultSuccess, fmt.Sprintf("id=%s", cmd.ID))
+	return nil
+}
+
+// ReorderCategories reorders rule categories by their given ID sequence.
+func (s *Service) ReorderCategories(ctx context.Context, orderedIDs []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.policyRepo.ReorderRuleCategories(ctx, orderedIDs)
 }
 
 // DeleteRule deletes an admission or routing policy rule by ID.
@@ -792,7 +1080,13 @@ func (s *Service) ListRules(ctx context.Context, query ListRulesQuery) (*ListRul
 	}
 
 	if kind == "" || kind == "policy" {
-		polRules, err := s.policyRepo.ListPolicyRules(ctx, revID)
+		var polRules []domain.PolicyRule
+		var err error
+		if query.CategoryID != "" {
+			polRules, err = s.policyRepo.ListPolicyRulesByCategory(ctx, revID, query.CategoryID)
+		} else {
+			polRules, err = s.policyRepo.ListPolicyRules(ctx, revID)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("failed to query policy rules: %w", err)
 		}
@@ -801,9 +1095,14 @@ func (s *Service) ListRules(ctx context.Context, query ListRulesQuery) (*ListRul
 			polViews[i] = PolicyRuleView{
 				ID:            r.ID,
 				RevisionID:    r.RevisionID,
+				CategoryID:    r.CategoryID,
+				Category:      r.Category,
+				Name:          r.Name,
 				TargetGroupID: r.TargetGroupID,
+				BuiltinTarget: r.BuiltinTarget,
 				Expression:    r.Expression,
 				Position:      r.Position,
+				Enabled:       r.Enabled,
 			}
 		}
 	}
@@ -1260,6 +1559,9 @@ func (s *Service) ValidateGraph(ctx context.Context) (*ValidationResult, error) 
 
 		// Check each policy rule against its target group
 		for _, rule := range polRules {
+			if rule.BuiltinTarget != "" {
+				continue
+			}
 			rType, rVal := parseRuleExpr(rule.Expression)
 			tGroup, exists := groupMap[rule.TargetGroupID]
 			if !exists {
@@ -1305,7 +1607,9 @@ func (s *Service) ValidateGraph(ctx context.Context) (*ValidationResult, error) 
 		// Check unrouted empty groups (warnings only)
 		routedTargetIDs := make(map[string]bool, len(polRules))
 		for _, rule := range polRules {
-			routedTargetIDs[rule.TargetGroupID] = true
+			if rule.TargetGroupID != "" {
+				routedTargetIDs[rule.TargetGroupID] = true
+			}
 		}
 
 		for _, rg := range snap.Groups {

@@ -4,6 +4,7 @@ import SubscriptionsView from '../features/subscriptions/SubscriptionsView.vue'
 import NodesView from '../features/nodes/NodesView.vue'
 import ProbesView from '../features/probes/ProbesView.vue'
 import PolicyView from '../features/policy/PolicyView.vue'
+import RulesView from '../features/rules/RulesView.vue'
 import PublicationsView from '../features/publications/PublicationsView.vue'
 import SettingsView from '../features/settings/SettingsView.vue'
 import { ROUTE_STORAGE_KEY } from '../navigation'
@@ -44,6 +45,12 @@ export const routes: RouteRecordRaw[] = [
     meta: { title: 'Policy Tree', icon: 'CpuChipIcon' },
   },
   {
+    path: '/rules',
+    name: 'rules',
+    component: RulesView,
+    meta: { title: 'Rule Desk', icon: 'ShieldCheckIcon' },
+  },
+  {
     path: '/publications',
     name: 'publications',
     component: PublicationsView,
@@ -61,7 +68,7 @@ export const routes: RouteRecordRaw[] = [
       // If someone passed hash like #subscriptions without leading slash, pathMatch is "subscriptions"
       const path = to.params.pathMatch
       const matchedTab = Array.isArray(path) ? path[0] : path
-      if (['dashboard', 'subscriptions', 'nodes', 'probes', 'policy', 'publications', 'settings'].includes(matchedTab)) {
+      if (['dashboard', 'subscriptions', 'nodes', 'probes', 'policy', 'rules', 'publications', 'settings'].includes(matchedTab)) {
         return `/${matchedTab}`
       }
       return '/dashboard'

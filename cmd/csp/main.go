@@ -213,6 +213,20 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 		return 1
 	}
 
+	// Ensure active revision has complete policy rules (backfill 470 rules if missing or partial)
+	if activeRev, revErr := appServices.revisionRepo.GetActive(startupCtx); revErr == nil && activeRev != nil {
+		var ruleCount int
+		_ = db.QueryRowContext(startupCtx, "SELECT count(*) FROM policy_rules WHERE revision_id = ?;", activeRev.ID).Scan(&ruleCount)
+		if ruleCount < 470 {
+			backfilled, bfErr := appServices.policyService.BackfillRules(startupCtx, activeRev.ID)
+			if bfErr != nil {
+				fmt.Fprintf(stderr, "serve: warning: policy rule backfill encountered error: %v\n", bfErr)
+			} else {
+				fmt.Fprintf(stdout, "serve: successfully backfilled %d policy rules into active revision %s\n", backfilled, activeRev.ID)
+			}
+		}
+	}
+
 	if deps != nil && deps.configureServices != nil {
 		deps.configureServices(db, appServices)
 	}

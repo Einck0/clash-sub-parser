@@ -61,14 +61,49 @@ type setGroupEdgesRequest struct {
 	Edges []policy.EdgeInput `json:"edges"`
 }
 
+type createCategoryRequest struct {
+	Name      string `json:"name"`
+	SortOrder int    `json:"sort_order"`
+}
+
+type updateCategoryRequest struct {
+	Name      string `json:"name"`
+	SortOrder int    `json:"sort_order"`
+}
+
+type reorderCategoriesRequest struct {
+	Order []string `json:"order"`
+}
+
 type createRuleRequest struct {
 	Kind          string            `json:"kind,omitempty"` // "policy" or "admission"
 	RevisionID    string            `json:"revision_id,omitempty"`
-	TargetGroupID string            `json:"target_group_id,omitempty"`
+	CategoryID    string            `json:"category_id,omitempty"`
+	Category      string            `json:"category,omitempty"`
 	Name          string            `json:"name,omitempty"`
+	TargetGroupID string            `json:"target_group_id,omitempty"`
+	BuiltinTarget string            `json:"builtin_target,omitempty"`
 	Expression    string            `json:"expression"`
 	Action        domain.RuleAction `json:"action,omitempty"`
 	Position      int               `json:"position"`
+	Enabled       *bool             `json:"enabled,omitempty"`
+}
+
+type updateRuleRequest struct {
+	CategoryID    *string `json:"category_id,omitempty"`
+	Category      *string `json:"category,omitempty"`
+	Name          *string `json:"name,omitempty"`
+	TargetGroupID *string `json:"target_group_id,omitempty"`
+	BuiltinTarget *string `json:"builtin_target,omitempty"`
+	Expression    *string `json:"expression,omitempty"`
+	Position      *int    `json:"position,omitempty"`
+	Enabled       *bool   `json:"enabled,omitempty"`
+}
+
+type reorderRulesRequest struct {
+	RevisionID string   `json:"revision_id,omitempty"`
+	CategoryID string   `json:"category_id,omitempty"`
+	Order      []string `json:"order"`
 }
 
 func registerPolicyRoutes(r chi.Router, service *policy.Service, audit domain.AuditRepository) {
@@ -91,8 +126,17 @@ func registerPolicyRoutes(r chi.Router, service *policy.Service, audit domain.Au
 		sub.Put("/groups/{id}/edges", h.setGroupEdges)
 		sub.Post("/groups/{id}/edges", h.setGroupEdges)
 
+		sub.Get("/categories", h.listCategories)
+		sub.Post("/categories", h.createCategory)
+		sub.Put("/categories/reorder", h.reorderCategories)
+		sub.Put("/categories/{id}", h.updateCategory)
+		sub.Delete("/categories/{id}", h.deleteCategory)
+
 		sub.Get("/rules", h.listRules)
 		sub.Post("/rules", h.createRule)
+		sub.Post("/rules/backfill", h.backfillRules)
+		sub.Put("/rules/reorder", h.reorderRules)
+		sub.Put("/rules/{id}", h.updateRule)
 		sub.Delete("/rules/{id}", h.deleteRule)
 
 		sub.Post("/validate", h.validate)
@@ -121,7 +165,7 @@ func RegisterPolicyFilterRoutes(r chi.Router, service *policy.Service, audit dom
 }
 
 func (h policyHandler) listGroups(w http.ResponseWriter, r *http.Request) {
-	page, pageSize, err := ParsePagination(r)
+	page, pageSize, err := ParsePaginationWithLimit(r, 500)
 	if err != nil {
 		WriteDomainError(w, r, err)
 		return
@@ -344,8 +388,80 @@ func (h policyHandler) setGroupEdges(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h policyHandler) listCategories(w http.ResponseWriter, r *http.Request) {
+	cats, err := h.service.ListCategories(r.Context())
+	if err != nil {
+		WriteDomainError(w, r, err)
+		return
+	}
+	WriteSuccess(w, r, http.StatusOK, cats)
+}
+
+func (h policyHandler) createCategory(w http.ResponseWriter, r *http.Request) {
+	var body createCategoryRequest
+	if err := decodeJSON(w, r, &body); err != nil {
+		return
+	}
+	view, err := h.service.CreateCategory(r.Context(), policy.CreateCategoryCommand{
+		Name:      body.Name,
+		SortOrder: body.SortOrder,
+		RequestID: GetRequestID(r.Context()),
+		ActorKind: requestActorKind(r),
+	})
+	if err != nil {
+		WriteDomainError(w, r, err)
+		return
+	}
+	WriteSuccess(w, r, http.StatusCreated, view)
+}
+
+func (h policyHandler) updateCategory(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var body updateCategoryRequest
+	if err := decodeJSON(w, r, &body); err != nil {
+		return
+	}
+	view, err := h.service.UpdateCategory(r.Context(), policy.UpdateCategoryCommand{
+		ID:        id,
+		Name:      body.Name,
+		SortOrder: body.SortOrder,
+		RequestID: GetRequestID(r.Context()),
+		ActorKind: requestActorKind(r),
+	})
+	if err != nil {
+		WriteDomainError(w, r, err)
+		return
+	}
+	WriteSuccess(w, r, http.StatusOK, view)
+}
+
+func (h policyHandler) deleteCategory(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if err := h.service.DeleteCategory(r.Context(), policy.DeleteCategoryCommand{
+		ID:        id,
+		RequestID: GetRequestID(r.Context()),
+		ActorKind: requestActorKind(r),
+	}); err != nil {
+		WriteDomainError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h policyHandler) reorderCategories(w http.ResponseWriter, r *http.Request) {
+	var body reorderCategoriesRequest
+	if err := decodeJSON(w, r, &body); err != nil {
+		return
+	}
+	if err := h.service.ReorderCategories(r.Context(), body.Order); err != nil {
+		WriteDomainError(w, r, err)
+		return
+	}
+	WriteSuccess(w, r, http.StatusOK, map[string]any{"status": "reordered"})
+}
+
 func (h policyHandler) listRules(w http.ResponseWriter, r *http.Request) {
-	page, pageSize, err := ParsePagination(r)
+	page, pageSize, err := ParsePaginationWithLimit(r, 1000)
 	if err != nil {
 		WriteDomainError(w, r, err)
 		return
@@ -354,6 +470,7 @@ func (h policyHandler) listRules(w http.ResponseWriter, r *http.Request) {
 	res, err := h.service.ListRules(r.Context(), policy.ListRulesQuery{
 		RevisionID: strings.TrimSpace(r.URL.Query().Get("revision_id")),
 		Kind:       strings.TrimSpace(r.URL.Query().Get("kind")),
+		CategoryID: strings.TrimSpace(r.URL.Query().Get("category_id")),
 		Page:       page,
 		PageSize:   pageSize,
 	})
@@ -392,9 +509,14 @@ func (h policyHandler) createRule(w http.ResponseWriter, r *http.Request) {
 
 	polView, err := h.service.CreatePolicyRule(r.Context(), policy.CreatePolicyRuleCommand{
 		RevisionID:    body.RevisionID,
+		CategoryID:    body.CategoryID,
+		Category:      body.Category,
+		Name:          body.Name,
 		TargetGroupID: body.TargetGroupID,
+		BuiltinTarget: body.BuiltinTarget,
 		Expression:    body.Expression,
 		Position:      body.Position,
+		Enabled:       body.Enabled,
 		RequestID:     GetRequestID(r.Context()),
 		ActorKind:     requestActorKind(r),
 	})
@@ -403,6 +525,65 @@ func (h policyHandler) createRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	WriteSuccess(w, r, http.StatusCreated, polView)
+}
+
+func (h policyHandler) backfillRules(w http.ResponseWriter, r *http.Request) {
+	revID := strings.TrimSpace(r.URL.Query().Get("revision_id"))
+	count, err := h.service.BackfillRules(r.Context(), revID)
+	if err != nil {
+		WriteDomainError(w, r, err)
+		return
+	}
+	WriteSuccess(w, r, http.StatusOK, map[string]any{
+		"count":  count,
+		"status": "backfilled",
+	})
+}
+
+func (h policyHandler) updateRule(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var body updateRuleRequest
+	if err := decodeJSON(w, r, &body); err != nil {
+		return
+	}
+
+	view, err := h.service.UpdatePolicyRule(r.Context(), policy.UpdatePolicyRuleCommand{
+		ID:            id,
+		CategoryID:    body.CategoryID,
+		Category:      body.Category,
+		Name:          body.Name,
+		TargetGroupID: body.TargetGroupID,
+		BuiltinTarget: body.BuiltinTarget,
+		Expression:    body.Expression,
+		Position:      body.Position,
+		Enabled:       body.Enabled,
+		RequestID:     GetRequestID(r.Context()),
+		ActorKind:     requestActorKind(r),
+	})
+	if err != nil {
+		WriteDomainError(w, r, err)
+		return
+	}
+	WriteSuccess(w, r, http.StatusOK, view)
+}
+
+func (h policyHandler) reorderRules(w http.ResponseWriter, r *http.Request) {
+	var body reorderRulesRequest
+	if err := decodeJSON(w, r, &body); err != nil {
+		return
+	}
+
+	if err := h.service.ReorderPolicyRules(r.Context(), policy.ReorderPolicyRulesCommand{
+		RevisionID: body.RevisionID,
+		CategoryID: body.CategoryID,
+		Order:      body.Order,
+		RequestID:  GetRequestID(r.Context()),
+		ActorKind:  requestActorKind(r),
+	}); err != nil {
+		WriteDomainError(w, r, err)
+		return
+	}
+	WriteSuccess(w, r, http.StatusOK, map[string]any{"status": "reordered"})
 }
 
 func (h policyHandler) createAdmissionRule(w http.ResponseWriter, r *http.Request) {

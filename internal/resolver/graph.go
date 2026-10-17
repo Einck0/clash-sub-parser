@@ -686,21 +686,38 @@ func resolveRules(rules []domain.PolicyRule, groups []domain.NodeGroup) []Resolv
 		groupNameMap[g.ID] = g.Name
 	}
 
-	// Sort input rules by Position ASC
+	hasCategories := false
+	for _, r := range rules {
+		if r.CategoryID != "" || (r.Category != "" && r.Category != "default") {
+			hasCategories = true
+			break
+		}
+	}
+
+	// Sort input rules by Position ASC if no categories; otherwise preserve category order
 	sorted := make([]domain.PolicyRule, len(rules))
 	copy(sorted, rules)
-	sort.SliceStable(sorted, func(i, j int) bool {
-		return sorted[i].Position < sorted[j].Position
-	})
+	if !hasCategories {
+		sort.SliceStable(sorted, func(i, j int) bool {
+			return sorted[i].Position < sorted[j].Position
+		})
+	}
 
 	standardRules := make([]ResolvedRule, 0, len(rules))
 	terminalRules := make([]ResolvedRule, 0, 1)
 
 	for _, r := range sorted {
+		targetName := ""
+		if r.TargetGroupID != "" {
+			targetName = groupNameMap[r.TargetGroupID]
+		} else if r.BuiltinTarget != "" {
+			targetName = r.BuiltinTarget
+		}
+
 		rr := ResolvedRule{
 			ID:              r.ID,
 			TargetGroupID:   r.TargetGroupID,
-			TargetGroupName: groupNameMap[r.TargetGroupID],
+			TargetGroupName: targetName,
 			Expression:      r.Expression,
 			Position:        r.Position,
 			IsTerminal:      domain.IsMatchRule(r.Expression),

@@ -156,6 +156,17 @@ func WritePaginated[T any](w http.ResponseWriter, r *http.Request, items []T, pa
 // Defaults: page = 1, page_size = 50. Maximum page_size = 100.
 // If page_size > 100, returns a validation domain error.
 func ParsePagination(r *http.Request) (int, int, error) {
+	return ParsePaginationWithLimit(r, MaxPageSize)
+}
+
+// ParsePaginationWithLimit extracts page and page_size from request query parameters with a custom max limit.
+// Defaults: page = 1, page_size = DefaultPageSize. If maxLimit <= 0, MaxPageSize is used.
+// If page_size > maxLimit, returns a validation domain error.
+func ParsePaginationWithLimit(r *http.Request, maxLimit int) (int, int, error) {
+	if maxLimit <= 0 {
+		maxLimit = MaxPageSize
+	}
+
 	page := 1
 	pageSize := DefaultPageSize
 
@@ -173,8 +184,8 @@ func ParsePagination(r *http.Request) (int, int, error) {
 		if err != nil || ps < 1 {
 			return 0, 0, domain.NewValidationError("invalid_page_size", "page_size must be a positive integer")
 		}
-		if ps > MaxPageSize {
-			return 0, 0, domain.NewValidationError("invalid_page_size", fmt.Sprintf("page_size exceeds maximum allowed limit of %d", MaxPageSize))
+		if ps > maxLimit {
+			return 0, 0, domain.NewValidationError("invalid_page_size", fmt.Sprintf("page_size exceeds maximum allowed limit of %d", maxLimit))
 		}
 		pageSize = ps
 	}

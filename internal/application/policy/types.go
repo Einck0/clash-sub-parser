@@ -178,24 +178,93 @@ type AdmissionRuleView struct {
 	Position   int               `json:"position"`
 }
 
+// RuleCategoryView is the view representation of a rule category.
+type RuleCategoryView struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	SortOrder int    `json:"sort_order"`
+	RuleCount int    `json:"rule_count"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+// CreateCategoryCommand defines parameters for creating a rule category.
+type CreateCategoryCommand struct {
+	ID        string           `json:"id,omitempty"`
+	Name      string           `json:"name"`
+	SortOrder int              `json:"sort_order"`
+	RequestID string           `json:"request_id,omitempty"`
+	ActorKind domain.ActorKind `json:"actor_kind,omitempty"`
+}
+
+// UpdateCategoryCommand defines parameters for updating a rule category.
+type UpdateCategoryCommand struct {
+	ID        string           `json:"id"`
+	Name      string           `json:"name"`
+	SortOrder int              `json:"sort_order"`
+	RequestID string           `json:"request_id,omitempty"`
+	ActorKind domain.ActorKind `json:"actor_kind,omitempty"`
+}
+
+// DeleteCategoryCommand defines parameters for deleting a rule category.
+type DeleteCategoryCommand struct {
+	ID        string           `json:"id"`
+	RequestID string           `json:"request_id,omitempty"`
+	ActorKind domain.ActorKind `json:"actor_kind,omitempty"`
+}
+
 // CreatePolicyRuleCommand defines parameters for creating a routing policy rule.
 type CreatePolicyRuleCommand struct {
 	ID            string           `json:"id,omitempty"`
 	RevisionID    string           `json:"revision_id"`
-	TargetGroupID string           `json:"target_group_id"`
+	CategoryID    string           `json:"category_id,omitempty"`
+	Category      string           `json:"category,omitempty"`
+	Name          string           `json:"name,omitempty"`
+	TargetGroupID string           `json:"target_group_id,omitempty"`
+	BuiltinTarget string           `json:"builtin_target,omitempty"`
 	Expression    string           `json:"expression"`
 	Position      int              `json:"position"`
+	Enabled       *bool            `json:"enabled,omitempty"`
 	RequestID     string           `json:"request_id,omitempty"`
 	ActorKind     domain.ActorKind `json:"actor_kind,omitempty"`
+}
+
+// UpdatePolicyRuleCommand defines parameters for updating a routing policy rule.
+type UpdatePolicyRuleCommand struct {
+	ID            string           `json:"id"`
+	CategoryID    *string          `json:"category_id,omitempty"`
+	Category      *string          `json:"category,omitempty"`
+	Name          *string          `json:"name,omitempty"`
+	TargetGroupID *string          `json:"target_group_id,omitempty"`
+	BuiltinTarget *string          `json:"builtin_target,omitempty"`
+	Expression    *string          `json:"expression,omitempty"`
+	Position      *int             `json:"position,omitempty"`
+	Enabled       *bool            `json:"enabled,omitempty"`
+	RequestID     string           `json:"request_id,omitempty"`
+	ActorKind     domain.ActorKind `json:"actor_kind,omitempty"`
+}
+
+// ReorderPolicyRulesCommand defines parameters for reordering routing policy rules within a category or revision.
+type ReorderPolicyRulesCommand struct {
+	RevisionID string           `json:"revision_id,omitempty"`
+	CategoryID string           `json:"category_id,omitempty"`
+	Order      []string         `json:"order"`
+	RequestID  string           `json:"request_id,omitempty"`
+	ActorKind  domain.ActorKind `json:"actor_kind,omitempty"`
 }
 
 // PolicyRuleView is the view representation of a routing policy rule.
 type PolicyRuleView struct {
 	ID            string `json:"id"`
 	RevisionID    string `json:"revision_id"`
-	TargetGroupID string `json:"target_group_id"`
+	CategoryID    string `json:"category_id,omitempty"`
+	Category      string `json:"category,omitempty"`
+	Name          string `json:"name,omitempty"`
+	TargetGroupID string `json:"target_group_id,omitempty"`
+	BuiltinTarget string `json:"builtin_target,omitempty"`
 	Expression    string `json:"expression"`
 	Position      int    `json:"position"`
+	Enabled       bool   `json:"enabled"`
 }
 
 // DeleteRuleCommand defines parameters for deleting an admission or routing policy rule.
@@ -210,6 +279,7 @@ type DeleteRuleCommand struct {
 type ListRulesQuery struct {
 	RevisionID string `json:"revision_id,omitempty"`
 	Kind       string `json:"kind,omitempty"` // "admission", "policy", or "" for both
+	CategoryID string `json:"category_id,omitempty"`
 	Page       int    `json:"page,omitempty"`
 	PageSize   int    `json:"page_size,omitempty"`
 }

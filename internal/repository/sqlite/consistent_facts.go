@@ -352,10 +352,11 @@ func loadGroupNodeFilters(ctx context.Context, tx *sql.Tx, facts *ConsistentFact
 
 func loadPolicyRules(ctx context.Context, tx *sql.Tx, revID string, facts *ConsistentFacts) error {
 	const policyRuleQuery = `
-	SELECT id, revision_id, target_group_id, expression, position
-	FROM policy_rules
-	WHERE revision_id = ?
-	ORDER BY position ASC;`
+	SELECT r.id, r.revision_id, COALESCE(r.category_id, ''), r.category, r.name, COALESCE(r.target_group_id, ''), COALESCE(r.builtin_target, ''), r.expression, r.position, r.enabled
+	FROM policy_rules r
+	LEFT JOIN rule_categories c ON (r.category_id IS NOT NULL AND r.category_id = c.id) OR (r.category_id IS NULL AND r.category = c.name)
+	WHERE r.revision_id = ?
+	ORDER BY COALESCE(c.sort_order, 999999) ASC, r.position ASC, r.id ASC;`
 	prRows, err := tx.QueryContext(ctx, policyRuleQuery, revID)
 	if err != nil {
 		return fmt.Errorf("failed to list policy rules: %w", err)
@@ -364,15 +365,22 @@ func loadPolicyRules(ctx context.Context, tx *sql.Tx, revID string, facts *Consi
 
 	for prRows.Next() {
 		var rule domain.PolicyRule
+		var enabledInt int
 		if err := prRows.Scan(
 			&rule.ID,
 			&rule.RevisionID,
+			&rule.CategoryID,
+			&rule.Category,
+			&rule.Name,
 			&rule.TargetGroupID,
+			&rule.BuiltinTarget,
 			&rule.Expression,
 			&rule.Position,
+			&enabledInt,
 		); err != nil {
 			return fmt.Errorf("failed to scan policy rule: %w", err)
 		}
+		rule.Enabled = enabledInt == 1
 		facts.PolicyRules = append(facts.PolicyRules, rule)
 	}
 	if err := prRows.Err(); err != nil {

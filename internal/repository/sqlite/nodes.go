@@ -611,3 +611,215 @@ func (r *nodeSourceRepository) DeleteBySubscriptionAndFetch(ctx context.Context,
 	}
 	return nil
 }
+
+// PurgeOrphanNodes deletes nodes that are not referenced by any subscription in node_sources,
+// cascading the deletion across all dependent tables to preserve foreign key integrity.
+// Manual confirmed nodes are always preserved.
+func PurgeOrphanNodes(ctx context.Context, tx *sql.Tx) (int64, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT n.logical_id FROM nodes n
+		WHERE n.logical_id NOT IN (SELECT DISTINCT node_logical_id FROM node_sources)
+		  AND NOT EXISTS (
+		      SELECT 1 FROM node_source_history h
+		      WHERE h.node_logical_id = n.logical_id AND h.cause = 'manual_confirmed'
+		  );
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("failed to query orphan nodes: %w", err)
+	}
+	defer rows.Close()
+
+	var orphanIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err == nil {
+			orphanIDs = append(orphanIDs, id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("error reading orphan nodes: %w", err)
+	}
+
+	return purgeSpecificNodes(ctx, tx, orphanIDs)
+}
+
+// PurgeOrphanNodesForSubscription deletes nodes previously associated with the given subscription
+// that are not referenced by any subscription in node_sources.
+// Manual confirmed nodes are always preserved.
+func PurgeOrphanNodesForSubscription(ctx context.Context, tx *sql.Tx, subID string) (int64, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT n.logical_id FROM nodes n
+		WHERE n.logical_id NOT IN (SELECT DISTINCT node_logical_id FROM node_sources)
+		  AND (
+		      n.logical_id IN (SELECT node_logical_id FROM node_source_history WHERE subscription_id = ?)
+		      OR n.logical_id IN (SELECT node_logical_id FROM subscription_entries WHERE subscription_id = ?)
+		  )
+		  AND NOT EXISTS (
+		      SELECT 1 FROM node_source_history h
+		      WHERE h.node_logical_id = n.logical_id AND h.cause = 'manual_confirmed'
+		  );
+	`, subID, subID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to query subscription orphan nodes: %w", err)
+	}
+	defer rows.Close()
+
+	var orphanIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err == nil {
+			orphanIDs = append(orphanIDs, id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("error reading subscription orphan nodes: %w", err)
+	}
+
+	return purgeSpecificNodes(ctx, tx, orphanIDs)
+}
+
+func purgeSpecificNodes(ctx context.Context, tx *sql.Tx, orphanIDs []string) (int64, error) {
+	if len(orphanIDs) == 0 {
+		return 0, nil
+	}
+
+	if _, err := tx.ExecContext(ctx, `CREATE TEMP TABLE IF NOT EXISTS _purge_orphan_ids (logical_id TEXT PRIMARY KEY);`); err != nil {
+		return 0, fmt.Errorf("failed to create temp table for purge: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM _purge_orphan_ids;`); err != nil {
+		return 0, fmt.Errorf("failed to clear temp table for purge: %w", err)
+	}
+
+	stmt, err := tx.PrepareContext(ctx, `INSERT OR IGNORE INTO _purge_orphan_ids (logical_id) VALUES (?);`)
+	if err != nil {
+		return 0, fmt.Errorf("failed to prepare temp insert: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, id := range orphanIDs {
+		if _, err := stmt.ExecContext(ctx, id); err != nil {
+			return 0, fmt.Errorf("failed to populate temp orphan id: %w", err)
+		}
+	}
+
+	// 2. Cascade cleanup for tables referencing nodes.logical_id
+	// Table 1: node_connection_heads (has RESTRICT on node_connection_versions)
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM node_connection_heads
+		WHERE logical_id IN (SELECT logical_id FROM _purge_orphan_ids);
+	`); err != nil {
+		return 0, fmt.Errorf("failed to delete orphan node_connection_heads: %w", err)
+	}
+
+	// Table 2: node_connection_versions
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM node_connection_versions
+		WHERE node_logical_id IN (SELECT logical_id FROM _purge_orphan_ids);
+	`); err != nil {
+		return 0, fmt.Errorf("failed to delete orphan node_connection_versions: %w", err)
+	}
+
+	// Table 3: node_overrides
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM node_overrides
+		WHERE node_logical_id IN (SELECT logical_id FROM _purge_orphan_ids);
+	`); err != nil {
+		return 0, fmt.Errorf("failed to delete orphan node_overrides: %w", err)
+	}
+
+	// Table 4: probe_observations
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM probe_observations
+		WHERE node_logical_id IN (SELECT logical_id FROM _purge_orphan_ids);
+	`); err != nil {
+		return 0, fmt.Errorf("failed to delete orphan probe_observations: %w", err)
+	}
+
+	// Table 5: policy_group_sources
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM policy_group_sources
+		WHERE node_logical_id IS NOT NULL
+		  AND node_logical_id IN (SELECT logical_id FROM _purge_orphan_ids);
+	`); err != nil {
+		return 0, fmt.Errorf("failed to delete orphan policy_group_sources: %w", err)
+	}
+
+	// Table 6: group_edges
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM group_edges
+		WHERE node_logical_id IS NOT NULL
+		  AND node_logical_id IN (SELECT logical_id FROM _purge_orphan_ids);
+	`); err != nil {
+		return 0, fmt.Errorf("failed to delete orphan group_edges: %w", err)
+	}
+
+	// Table 7: node_source_history
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM node_source_history
+		WHERE node_logical_id IN (SELECT logical_id FROM _purge_orphan_ids);
+	`); err != nil {
+		return 0, fmt.Errorf("failed to delete orphan node_source_history: %w", err)
+	}
+
+	// Table 8: ip_risk_observations (safely bypass append-only trigger if needed)
+	var riskCount int
+	_ = tx.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM ip_risk_observations
+		WHERE node_logical_id IN (SELECT logical_id FROM _purge_orphan_ids);
+	`).Scan(&riskCount)
+	if riskCount > 0 {
+		_, _ = tx.ExecContext(ctx, `DROP TRIGGER IF EXISTS ip_risk_observations_no_delete;`)
+		_, err = tx.ExecContext(ctx, `
+			DELETE FROM ip_risk_observations
+			WHERE node_logical_id IN (SELECT logical_id FROM _purge_orphan_ids);
+		`)
+		_, _ = tx.ExecContext(ctx, `
+			CREATE TRIGGER IF NOT EXISTS ip_risk_observations_no_delete
+			BEFORE DELETE ON ip_risk_observations
+			BEGIN
+				SELECT RAISE(ABORT, 'ip risk observations are append-only');
+			END;
+		`)
+		if err != nil {
+			return 0, fmt.Errorf("failed to delete orphan ip_risk_observations: %w", err)
+		}
+	}
+
+	// Table 9: subscription_entries (SET NULL)
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE subscription_entries
+		SET node_logical_id = NULL
+		WHERE node_logical_id IN (SELECT logical_id FROM _purge_orphan_ids);
+	`); err != nil {
+		return 0, fmt.Errorf("failed to unlink orphan subscription_entries: %w", err)
+	}
+
+	// Table 10: nodes
+	res, err := tx.ExecContext(ctx, `
+		DELETE FROM nodes
+		WHERE logical_id IN (SELECT logical_id FROM _purge_orphan_ids);
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("failed to delete orphan nodes: %w", err)
+	}
+
+	_, _ = tx.ExecContext(ctx, `DELETE FROM _purge_orphan_ids;`)
+
+	count, _ := res.RowsAffected()
+	return count, nil
+}
+
+// PurgeOrphanNodesDB runs PurgeOrphanNodes inside a transaction on db.
+func PurgeOrphanNodesDB(ctx context.Context, db *sql.DB) (int64, error) {
+	var count int64
+	err := WithTx(ctx, db, func(ctx context.Context, tx *sql.Tx) error {
+		c, err := PurgeOrphanNodes(ctx, tx)
+		if err != nil {
+			return err
+		}
+		count = c
+		return nil
+	})
+	return count, err
+}
+

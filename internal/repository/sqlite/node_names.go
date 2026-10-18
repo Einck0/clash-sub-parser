@@ -20,6 +20,9 @@ func RecomputeNodeDisplayNames(ctx context.Context, tx *sql.Tx, ids []string, pr
 		seen[id] = true
 		var current string
 		if err := tx.QueryRowContext(ctx, "SELECT display_name FROM nodes WHERE logical_id = ?", id).Scan(&current); err != nil {
+			if err == sql.ErrNoRows {
+				continue
+			}
 			return err
 		}
 		var overrideJSON string

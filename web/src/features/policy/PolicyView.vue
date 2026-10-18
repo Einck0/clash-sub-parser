@@ -172,7 +172,6 @@ const newGlobalField = ref<FilterField>('display_name')
 const newGlobalOp = ref<FilterOp>('contains')
 const newGlobalValue = ref('')
 const newGlobalProbeKind = ref<'baseline' | 'geo' | 'streaming' | 'ai' | 'speed' | 'ip_risk'>('baseline')
-const newGlobalFreshnessSeconds = ref<number | undefined>(undefined)
 const globalConditionError = ref('')
 
 watch(newGlobalField, (f) => {
@@ -201,9 +200,6 @@ function addGlobalCondition() {
   }
   if (newGlobalField.value === 'probe_verdict' || newGlobalField.value === 'probe_latency_ms') {
     cond.probe_kind = newGlobalProbeKind.value
-    if (newGlobalFreshnessSeconds.value !== undefined && newGlobalFreshnessSeconds.value > 0) {
-      cond.freshness_seconds = Number(newGlobalFreshnessSeconds.value)
-    }
   }
 
   const err = validateConditionInput(cond)
@@ -222,17 +218,6 @@ function addGlobalCondition() {
 
 function removeGlobalCondition(idx: number) {
   globalConditions.value.splice(idx, 1)
-}
-
-function formatFreshness(seconds?: number): string {
-  if (!seconds || seconds === 86400) return ''
-  if (seconds === 3600) return '1小时内'
-  if (seconds === 21600) return '6小时内'
-  if (seconds === 43200) return '12小时内'
-  if (seconds === 259200) return '3天内'
-  if (seconds === 604800) return '7天内'
-  if (seconds < 3600) return `${Math.round(seconds / 60)}分钟内`
-  return `${Math.round(seconds / 3600)}小时内`
 }
 
 async function saveGlobalFilter() {
@@ -909,9 +894,6 @@ onUnmounted(() => {
               <span v-if="cond.probe_kind" class="badge badge-xs badge-ghost">
                 {{ cond.probe_kind }}
               </span>
-              <span v-if="cond.freshness_seconds && cond.freshness_seconds !== 86400" class="badge badge-xs badge-ghost">
-                {{ formatFreshness(cond.freshness_seconds) || `≤${cond.freshness_seconds}s` }}
-              </span>
             </div>
             <button
               type="button"
@@ -984,11 +966,11 @@ onUnmounted(() => {
           <!-- Extra fields for probe kinds -->
           <div
             v-if="newGlobalField === 'probe_verdict' || newGlobalField === 'probe_latency_ms'"
-            class="grid grid-cols-1 sm:grid-cols-2 gap-2"
+            class="space-y-1"
           >
             <select
               v-model="newGlobalProbeKind"
-              class="select select-bordered select-xs"
+              class="select select-bordered select-xs w-full"
             >
               <option value="baseline">基础连通性 (baseline)</option>
               <option value="geo">地域与出口 IP (geo)</option>
@@ -997,31 +979,6 @@ onUnmounted(() => {
               <option value="speed">带宽测速 (speed)</option>
               <option value="ip_risk">IP 风险度 (ip_risk)</option>
             </select>
-
-            <div class="space-y-1">
-              <div class="flex items-center gap-1.5">
-                <input
-                  v-model.number="newGlobalFreshnessSeconds"
-                  type="number"
-                  aria-label="最大有效期（秒）"
-                  placeholder="探针时效（秒，默认86400）"
-                  class="input input-bordered input-xs font-mono flex-1"
-                />
-                <select
-                  class="select select-bordered select-xs text-[11px]"
-                  aria-label="探针时效快捷选择"
-                  @change="newGlobalFreshnessSeconds = ($event.target as HTMLSelectElement).value ? Number(($event.target as HTMLSelectElement).value) : undefined"
-                >
-                  <option value="">默认(24h)</option>
-                  <option value="3600">1小时内</option>
-                  <option value="21600">6小时内</option>
-                  <option value="86400">24小时内</option>
-                  <option value="259200">3天内</option>
-                  <option value="604800">7天内</option>
-                </select>
-              </div>
-              <span class="text-[10px] opacity-60 block">探针检测时效，默认 24 小时内有效</span>
-            </div>
           </div>
 
           <div class="flex items-center justify-between pt-1">

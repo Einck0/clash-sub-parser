@@ -1164,6 +1164,15 @@ func TestReconcileSubscription_FilterRulesAndRenameRules(t *testing.T) {
 		t.Fatalf("expected exactly 1 node in enabled subscription inventory, got total=%d len=%d", total, len(activeNodes))
 	}
 
+	// Verify nodes table itself ONLY contains the passing node (filtered-out nodes NOT written/retained in nodes table)
+	var rawNodeCount int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM nodes;").Scan(&rawNodeCount); err != nil {
+		t.Fatalf("failed to count nodes table: %v", err)
+	}
+	if rawNodeCount != 1 {
+		t.Errorf("expected exactly 1 row in nodes table, got %d", rawNodeCount)
+	}
+
 	// Rename rule stripped "魔戒 - ", so display name should be "加拿大 01"
 	if activeNodes[0].DisplayName != "加拿大 01" {
 		t.Errorf("expected renamed display name %q, got %q", "加拿大 01", activeNodes[0].DisplayName)
@@ -1209,6 +1218,15 @@ func TestReconcileSubscription_FilterRulesAndRenameRules(t *testing.T) {
 		t.Errorf("expected '香港 01', got %q", activeNodes2[0].DisplayName)
 	}
 
+	// Verify old Canada node was purged from nodes table when filter switched to HK
+	var rawNodeCount2 int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM nodes;").Scan(&rawNodeCount2); err != nil {
+		t.Fatalf("failed to count nodes table: %v", err)
+	}
+	if rawNodeCount2 != 1 {
+		t.Errorf("expected exactly 1 row in nodes table after filter switch, got %d", rawNodeCount2)
+	}
+
 	// 3. Exclude rule: include all except "日本"
 	sub.Config.FilterRules = []domain.FilterRule{
 		{Type: "exclude", Pattern: "日本"},
@@ -1240,6 +1258,14 @@ func TestReconcileSubscription_FilterRulesAndRenameRules(t *testing.T) {
 		if strings.Contains(n.DisplayName, "日本") {
 			t.Errorf("Japan node should be excluded, found: %q", n.DisplayName)
 		}
+	}
+
+	var rawNodeCount3 int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM nodes;").Scan(&rawNodeCount3); err != nil {
+		t.Fatalf("failed to count nodes table: %v", err)
+	}
+	if rawNodeCount3 != 2 {
+		t.Errorf("expected exactly 2 rows in nodes table after exclude filter, got %d", rawNodeCount3)
 	}
 }
 

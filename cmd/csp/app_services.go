@@ -107,6 +107,11 @@ func makeApplicationServices(ctx context.Context, db *sql.DB, opts appServiceOpt
 	invService := inventory.NewService(db, subRepo, fetchRepo, nodeRepo, nodeSourceRepo, fetchClient, invOpts...)
 	subService.SetReconciler(invService)
 
+	// Clean up any historical orphan nodes on startup
+	if db != nil {
+		_, _ = sqlite.PurgeOrphanNodesDB(ctx, db)
+	}
+
 	probeScheduler, err := queue.NewScheduler(queue.Config{
 		Concurrency: queue.DefaultConcurrency,
 		Context:     ctx,

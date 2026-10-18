@@ -124,7 +124,6 @@ const newField = ref<FilterField>('display_name')
 const newOp = ref<FilterOp>('contains')
 const newValue = ref('')
 const newProbeKind = ref<'baseline' | 'geo' | 'streaming' | 'ai' | 'speed' | 'ip_risk'>('baseline')
-const newFreshnessSeconds = ref<number | undefined>(undefined)
 const conditionError = ref('')
 
 // New source entry form state
@@ -393,9 +392,6 @@ function addFilterCondition() {
   }
   if (newField.value === 'probe_verdict' || newField.value === 'probe_latency_ms') {
     cond.probe_kind = newProbeKind.value
-    if (newFreshnessSeconds.value !== undefined && newFreshnessSeconds.value > 0) {
-      cond.freshness_seconds = Number(newFreshnessSeconds.value)
-    }
   }
 
   const err = validateConditionInput(cond)
@@ -420,7 +416,6 @@ function editFilterCondition(idx: number) {
   newOp.value = cond.op
   newValue.value = cond.value || ''
   newProbeKind.value = cond.probe_kind || 'baseline'
-  newFreshnessSeconds.value = cond.freshness_seconds
   filterConditions.value.splice(idx, 1)
 
 }
@@ -441,7 +436,6 @@ function discardSourceDraft() {
   newOp.value = 'contains'
   newValue.value = ''
   newProbeKind.value = 'baseline'
-  newFreshnessSeconds.value = undefined
   newSourcePattern.value = ''
   sourceFormError.value = ''
   conditionError.value = ''
@@ -700,17 +694,6 @@ const COMMON_REGEX_PRESETS = [
 
 function applyRegexPreset(pattern: string) {
   newSourcePattern.value = pattern
-}
-
-function formatFreshness(seconds?: number): string {
-  if (!seconds || seconds === 86400) return ''
-  if (seconds === 3600) return '1小时内有效'
-  if (seconds === 21600) return '6小时内有效'
-  if (seconds === 43200) return '12小时内有效'
-  if (seconds === 259200) return '3天内有效'
-  if (seconds === 604800) return '7天内有效'
-  if (seconds < 3600) return `${Math.round(seconds / 60)}分钟内有效`
-  return `${Math.round(seconds / 3600)}小时内有效`
 }
 
 // Conflict resolutions
@@ -1154,28 +1137,10 @@ function close() {
                     <input
                       v-model="selectedSourceKind"
                       type="radio"
-                      value="group"
-                      class="radio radio-primary radio-xs"
-                    />
-                    <span>子策略组引用</span>
-                  </label>
-                  <label class="flex items-center gap-1.5 cursor-pointer">
-                    <input
-                      v-model="selectedSourceKind"
-                      type="radio"
-                      value="group_nodes"
-                      class="radio radio-primary radio-xs"
-                    />
-                    <span>解包子组节点</span>
-                  </label>
-                  <label class="flex items-center gap-1.5 cursor-pointer">
-                    <input
-                      v-model="selectedSourceKind"
-                      type="radio"
                       value="node"
                       class="radio radio-primary radio-xs"
                     />
-                    <span>活跃节点</span>
+                    <span>节点选择</span>
                   </label>
                   <label class="flex items-center gap-1.5 cursor-pointer">
                     <input
@@ -1184,7 +1149,25 @@ function close() {
                       value="regex"
                       class="radio radio-primary radio-xs"
                     />
-                    <span>节点正则</span>
+                    <span>名称正则</span>
+                  </label>
+                  <label class="flex items-center gap-1.5 cursor-pointer">
+                    <input
+                      v-model="selectedSourceKind"
+                      type="radio"
+                      value="group"
+                      class="radio radio-primary radio-xs"
+                    />
+                    <span>策略组引用</span>
+                  </label>
+                  <label class="flex items-center gap-1.5 cursor-pointer">
+                    <input
+                      v-model="selectedSourceKind"
+                      type="radio"
+                      value="group_nodes"
+                      class="radio radio-primary radio-xs"
+                    />
+                    <span>解包子组</span>
                   </label>
                   <label class="flex items-center gap-1.5 cursor-pointer">
                     <input
@@ -1193,7 +1176,7 @@ function close() {
                       value="filter"
                       class="radio radio-primary radio-xs"
                     />
-                    <span>属性过滤</span>
+                    <span>高级过滤</span>
                   </label>
                   <label class="flex items-center gap-1.5 cursor-pointer">
                     <input
@@ -1276,7 +1259,7 @@ function close() {
                       :value="nodeSearchQuery"
                       data-testid="candidate-node-search-input"
                       type="search"
-                      placeholder="异步搜索候选节点（支持可检索超100/250项）..."
+                      placeholder="搜索节点名称或协议（可检索全部候选节点）..."
                       class="input input-bordered input-xs sm:input-sm w-full pl-8 font-mono text-xs"
                       @input="onNodeSearchInput"
                     />
@@ -1446,7 +1429,7 @@ function close() {
                   </p>
                   <div v-if="filterConditions.length" class="space-y-1.5">
                     <div v-for="(cond, cIdx) in filterConditions" :key="cIdx" class="flex flex-wrap items-center justify-between gap-2 p-2 rounded-lg bg-base-200 border border-base-300 text-xs font-mono">
-                      <span class="min-w-0 break-all">{{ cond.field }} {{ cond.op }} "{{ cond.value }}" <span v-if="cond.probe_kind">({{ cond.probe_kind }})</span> <span v-if="cond.freshness_seconds && cond.freshness_seconds !== 86400" class="badge badge-xs badge-ghost font-sans">{{ formatFreshness(cond.freshness_seconds) || `≤${cond.freshness_seconds}s` }}</span></span>
+                      <span class="min-w-0 break-all">{{ cond.field }} {{ cond.op }} "{{ cond.value }}" <span v-if="cond.probe_kind">({{ cond.probe_kind }})</span></span>
                       <div class="flex gap-1 shrink-0">
                         <button type="button" class="btn btn-ghost btn-xs" @click="editFilterCondition(cIdx)">编辑</button>
                         <button type="button" class="btn btn-ghost btn-xs text-error" title="删除条件" @click="removeFilterCondition(cIdx)"><TrashIcon class="w-3.5 h-3.5" /></button>
@@ -1482,8 +1465,8 @@ function close() {
                       </select>
                       <input v-else v-model="newValue" data-testid="condition-value" aria-label="匹配目标值" class="input input-bordered input-xs" placeholder="匹配目标值..." @keydown.enter.prevent="addFilterCondition" />
                     </div>
-                    <div v-if="newField === 'probe_verdict' || newField === 'probe_latency_ms'" class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      <select v-model="newProbeKind" aria-label="探针类型" class="select select-bordered select-xs">
+                    <div v-if="newField === 'probe_verdict' || newField === 'probe_latency_ms'">
+                      <select v-model="newProbeKind" aria-label="探针类型" class="select select-bordered select-xs w-full">
                         <option value="baseline">基础连通性 (baseline)</option>
                         <option value="geo">地域与出口 IP (geo)</option>
                         <option value="streaming">流媒体解锁 (streaming)</option>
@@ -1491,24 +1474,6 @@ function close() {
                         <option value="speed">带宽测速 (speed)</option>
                         <option value="ip_risk">IP 风险度 (ip_risk)</option>
                       </select>
-                      <div class="space-y-1">
-                        <div class="flex items-center gap-1.5">
-                          <input v-model.number="newFreshnessSeconds" type="number" aria-label="最大有效期（秒）" placeholder="探针时效（秒，默认86400）" class="input input-bordered input-xs font-mono flex-1" />
-                          <select
-                            class="select select-bordered select-xs text-[11px]"
-                            aria-label="探针时效快捷选择"
-                            @change="newFreshnessSeconds = ($event.target as HTMLSelectElement).value ? Number(($event.target as HTMLSelectElement).value) : undefined"
-                          >
-                            <option value="">默认(24h)</option>
-                            <option value="3600">1小时内</option>
-                            <option value="21600">6小时内</option>
-                            <option value="86400">24小时内</option>
-                            <option value="259200">3天内</option>
-                            <option value="604800">7天内</option>
-                          </select>
-                        </div>
-                        <span class="text-[10px] opacity-60 block">探针检测时效，默认 24 小时内有效</span>
-                      </div>
                     </div>
                     <p v-if="conditionError" role="alert" class="text-error text-xs">{{ conditionError }}</p>
                     <div class="flex flex-wrap gap-2">

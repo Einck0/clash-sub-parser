@@ -1317,14 +1317,17 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 			if _, err := tx.ExecContext(ctx, pruneSourcesSQL, sub.ID, fetchID); err != nil {
 				return fmt.Errorf("failed to prune obsolete node sources for sub %s: %w", sub.ID, err)
 			}
+
+			// When filter rules are present, immediately purge any nodes previously from this
+			// subscription that were filtered out and have no other valid subscriptions.
+			if len(sub.Config.FilterRules) > 0 {
+				if _, err := sqlite.PurgeOrphanNodesForSubscription(ctx, tx, sub.ID); err != nil {
+					return fmt.Errorf("failed to purge orphan nodes: %w", err)
+				}
+			}
 		}
 
-		// NON-DESTRUCTIVE INVARIANT: Nodes themselves are NEVER deactivated or deleted on refresh pruning.
-		// node.active remains intact even when omitted from the latest fetch.
-		affectedIDs := make([]string, 0, len(existingNodes)+len(seenLogicalIDs))
-		for id := range existingNodes {
-			affectedIDs = append(affectedIDs, id)
-		}
+		affectedIDs := make([]string, 0, len(seenLogicalIDs))
 		for id := range seenLogicalIDs {
 			affectedIDs = append(affectedIDs, id)
 		}
@@ -2191,9 +2194,12 @@ func matchesFilterPattern(name string, pattern string) bool {
 	if pattern == "" {
 		return true
 	}
-	re, err := regexp.Compile(pattern)
+	re, err := regexp.Compile("(?i)" + pattern)
 	if err == nil {
 		return re.MatchString(name)
+	}
+	if reRaw, errRaw := regexp.Compile(pattern); errRaw == nil {
+		return reRaw.MatchString(name)
 	}
 	return strings.Contains(strings.ToLower(name), strings.ToLower(pattern))
 }

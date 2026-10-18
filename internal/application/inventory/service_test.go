@@ -1084,3 +1084,162 @@ func TestReconcileSubscription_PersistsUserInfo(t *testing.T) {
 		t.Errorf("UserInfo = %q, want %q", sub.UserInfo, sampleUserInfo)
 	}
 }
+
+func TestReconcileSubscription_FilterRulesAndRenameRules(t *testing.T) {
+	ctx := context.Background()
+	db, subRepo, fetchRepo, nodeRepo, sourceRepo := setupTestEnv(t)
+	fetcher := newMockFetcher()
+
+	subID := domain.MustNewUUIDv7()
+	url := "https://example.com/mojie-sub"
+
+	sub := &domain.Subscription{
+		ID:                 subID,
+		Name:               "魔戒订阅",
+		SourceURLSecretRef: url,
+		Enabled:            true,
+		Revision:           "rev-1",
+		CreatedAt:          time.Now().UTC(),
+		UpdatedAt:          time.Now().UTC(),
+		Config: domain.SubscriptionConfig{
+			RenameRules: []domain.RenameRule{
+				{Pattern: `^魔戒\s*-\s*`, Replace: ""},
+			},
+			FilterRules: []domain.FilterRule{
+				{Type: "include", Pattern: "加拿大"},
+			},
+		},
+	}
+	if err := subRepo.Create(ctx, sub); err != nil {
+		t.Fatalf("subRepo.Create failed: %v", err)
+	}
+
+	rawMultiRegionYAML := `proxies:
+  - name: "魔戒 - 加拿大 01"
+    type: ss
+    server: 198.51.100.1
+    port: 8388
+    cipher: aes-128-gcm
+    password: pass-canada
+  - name: "魔戒 - 日本 01"
+    type: ss
+    server: 198.51.100.2
+    port: 8388
+    cipher: aes-128-gcm
+    password: pass-japan
+  - name: "魔戒 - 香港 01"
+    type: ss
+    server: 198.51.100.3
+    port: 8388
+    cipher: aes-128-gcm
+    password: pass-hk
+`
+	fetcher.setResponse(url, &fetch.Response{
+		StatusCode:    200,
+		Body:          []byte(rawMultiRegionYAML),
+		ContentDigest: "digest-mojie-1",
+	})
+
+	svc := inventory.NewService(db, subRepo, fetchRepo, nodeRepo, sourceRepo, fetcher)
+	res, err := svc.ReconcileSubscription(ctx, subID)
+	if err != nil {
+		t.Fatalf("ReconcileSubscription failed: %v", err)
+	}
+	if res.Outcome != domain.FetchOutcomeSuccess {
+		t.Fatalf("expected outcome success, got %v", res.Outcome)
+	}
+	if res.NodesValid != 1 {
+		t.Fatalf("expected 1 valid node passing filter, got %d", res.NodesValid)
+	}
+
+	// Verify only the Canada node is in ScopeE inventory
+	activeNodes, total, err := nodeRepo.List(ctx, domain.NodeFilter{
+		Scope:      domain.NodeScopeEnabledSubscriptions,
+		ActiveOnly: true,
+	})
+	if err != nil {
+		t.Fatalf("nodeRepo.List failed: %v", err)
+	}
+	if total != 1 || len(activeNodes) != 1 {
+		t.Fatalf("expected exactly 1 node in enabled subscription inventory, got total=%d len=%d", total, len(activeNodes))
+	}
+
+	// Rename rule stripped "魔戒 - ", so display name should be "加拿大 01"
+	if activeNodes[0].DisplayName != "加拿大 01" {
+		t.Errorf("expected renamed display name %q, got %q", "加拿大 01", activeNodes[0].DisplayName)
+	}
+
+	// Check subscription node count
+	loadedSub, err := subRepo.GetByID(ctx, subID)
+	if err != nil {
+		t.Fatalf("subRepo.GetByID failed: %v", err)
+	}
+	if loadedSub.SourceNodeCount != 1 {
+		t.Errorf("expected SourceNodeCount=1, got %d", loadedSub.SourceNodeCount)
+	}
+
+	// 2. Change filter to include "香港", re-reconcile
+	sub.Config.FilterRules = []domain.FilterRule{
+		{Type: "include", Pattern: "香港"},
+	}
+	if err := subRepo.Update(ctx, sub); err != nil {
+		t.Fatalf("subRepo.Update failed: %v", err)
+	}
+	fetcher.setResponse(url, &fetch.Response{
+		StatusCode:    200,
+		Body:          []byte(rawMultiRegionYAML),
+		ContentDigest: "digest-mojie-2",
+	})
+	res2, err := svc.ReconcileSubscription(ctx, subID)
+	if err != nil {
+		t.Fatalf("second ReconcileSubscription failed: %v", err)
+	}
+	if res2.NodesValid != 1 {
+		t.Fatalf("expected 1 valid node passing HK filter, got %d", res2.NodesValid)
+	}
+
+	activeNodes2, total2, err := nodeRepo.List(ctx, domain.NodeFilter{
+		Scope:      domain.NodeScopeEnabledSubscriptions,
+		ActiveOnly: true,
+	})
+	if err != nil || total2 != 1 || len(activeNodes2) != 1 {
+		t.Fatalf("expected 1 node in ScopeE after switching filter, got total=%d len=%d", total2, len(activeNodes2))
+	}
+	if activeNodes2[0].DisplayName != "香港 01" {
+		t.Errorf("expected '香港 01', got %q", activeNodes2[0].DisplayName)
+	}
+
+	// 3. Exclude rule: include all except "日本"
+	sub.Config.FilterRules = []domain.FilterRule{
+		{Type: "exclude", Pattern: "日本"},
+	}
+	if err := subRepo.Update(ctx, sub); err != nil {
+		t.Fatalf("subRepo.Update failed: %v", err)
+	}
+	fetcher.setResponse(url, &fetch.Response{
+		StatusCode:    200,
+		Body:          []byte(rawMultiRegionYAML),
+		ContentDigest: "digest-mojie-3",
+	})
+	res3, err := svc.ReconcileSubscription(ctx, subID)
+	if err != nil {
+		t.Fatalf("third ReconcileSubscription failed: %v", err)
+	}
+	if res3.NodesValid != 2 {
+		t.Fatalf("expected 2 valid nodes (Canada and HK, Japan excluded), got %d", res3.NodesValid)
+	}
+
+	activeNodes3, total3, err := nodeRepo.List(ctx, domain.NodeFilter{
+		Scope:      domain.NodeScopeEnabledSubscriptions,
+		ActiveOnly: true,
+	})
+	if err != nil || total3 != 2 || len(activeNodes3) != 2 {
+		t.Fatalf("expected 2 nodes in ScopeE with exclude rule, got total=%d len=%d", total3, len(activeNodes3))
+	}
+	for _, n := range activeNodes3 {
+		if strings.Contains(n.DisplayName, "日本") {
+			t.Errorf("Japan node should be excluded, found: %q", n.DisplayName)
+		}
+	}
+}
+

@@ -344,10 +344,15 @@ function handleSubmit() {
       <!-- Filter Rules -->
       <div class="space-y-3">
         <div class="flex items-center justify-between">
-          <span class="text-xs font-bold uppercase tracking-wider text-base-content/70">
-            {{ t('subscriptions.filterRules') }}
-          </span>
-          <button type="button" class="btn btn-ghost btn-xs gap-1 text-primary" @click="addFilterRule">
+          <div>
+            <span class="text-xs font-bold uppercase tracking-wider text-base-content/70">
+              {{ t('subscriptions.filterRules') }}
+            </span>
+            <p class="text-[11px] text-base-content/60 mt-0.5">
+              仅通过筛选的节点才会存入节点池并参与探针探测。例如保留加拿大节点：选择 include 并填 <code>加拿大</code>。
+            </p>
+          </div>
+          <button type="button" class="btn btn-ghost btn-xs gap-1 text-primary shrink-0" @click="addFilterRule">
             <PlusIcon class="w-3.5 h-3.5" /> {{ t('subscriptions.addFilterRule') }}
           </button>
         </div>

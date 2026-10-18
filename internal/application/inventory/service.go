@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/netip"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -513,6 +514,20 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 
 	nodesParsed := len(extractResult.Items) + extractResult.Rejected
 	nodesValid := len(extractResult.Items)
+	if len(sub.Config.FilterRules) > 0 {
+		filteredCount := 0
+		for _, item := range extractResult.Items {
+			rName := item.Normalized.Node.DisplayName
+			dName := rName
+			if len(sub.Config.RenameRules) > 0 {
+				dName = applyRenameRules(rName, sub.Config.RenameRules)
+			}
+			if shouldIncludeNode(dName, rName, sub.Config.FilterRules) {
+				filteredCount++
+			}
+		}
+		nodesValid = filteredCount
+	}
 	outcome := domain.FetchOutcomeSuccess
 	partialDiagnostic := ""
 	if extractResult.Rejected > 0 {
@@ -723,8 +738,15 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 
 		incomingByNameProto := make(map[string]int)
 		for _, item := range extractResult.Items {
-			node := item.Normalized.Node
-			npKey := node.DisplayName + "|" + string(node.Protocol)
+			rName := item.Normalized.Node.DisplayName
+			dName := rName
+			if len(sub.Config.RenameRules) > 0 {
+				dName = applyRenameRules(rName, sub.Config.RenameRules)
+			}
+			if len(sub.Config.FilterRules) > 0 && !shouldIncludeNode(dName, rName, sub.Config.FilterRules) {
+				continue
+			}
+			npKey := dName + "|" + string(item.Normalized.Node.Protocol)
 			incomingByNameProto[npKey]++
 		}
 
@@ -832,12 +854,20 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 		for i, item := range extractResult.Items {
 			node := item.Normalized.Node
 			rawName := node.DisplayName
+			if len(sub.Config.RenameRules) > 0 {
+				node.DisplayName = applyRenameRules(rawName, sub.Config.RenameRules)
+			}
+			isFilteredOut := len(sub.Config.FilterRules) > 0 && !shouldIncludeNode(node.DisplayName, rawName, sub.Config.FilterRules)
+
 			npKey := node.DisplayName + "|" + string(node.Protocol)
 			ordinal := i
 			entryID := "entry_" + domain.MustNewUUIDv7()
 
 			sourceKey := fmt.Sprintf("%s|%s|%d|%s", node.Protocol, node.Server, node.Port, rawName)
 			kind, classReason, classVer := domain.ClassifySubscriptionEntry(isVerifiedSource, node.Server, node.Port, node.Credentials, rawName)
+			if isFilteredOut {
+				classReason = "Filtered out by subscription filter rules"
+			}
 
 			var userKindOverride *domain.EntryKind
 			var overrideAnchor, overrideReason, actorRef string
@@ -882,8 +912,8 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 
 			var targetLogicalIDPtr *string
 
-			if effectiveKind == domain.EntryKindNotice {
-				// Notices do NOT enter active proxy inventory!
+			if effectiveKind == domain.EntryKindNotice || isFilteredOut {
+				// Notices or filtered-out nodes do NOT enter active proxy inventory!
 				var matchedNoticeNode *existingNodeRow
 				if node.LogicalID != "" {
 					if ex, ok := existingNodes[node.LogicalID]; ok {
@@ -894,7 +924,7 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 					m := existingByNameProto[npKey][0]
 					matchedNoticeNode = &m
 				}
-				if matchedNoticeNode != nil {
+				if matchedNoticeNode != nil && !isFilteredOut {
 					// Notice pseudo-node linked for provenance; do NOT mutate nodes.active (lifecycle separated from classification)
 					targetLogicalIDPtr = &matchedNoticeNode.logicalID
 				}
@@ -1179,7 +1209,9 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 				}
 
 				warningsJSON := "[]"
-				if conflict != "" {
+				if isFilteredOut {
+					warningsJSON = "[\"filtered_by_subscription_rules\"]"
+				} else if conflict != "" {
 					warningsJSON = fmt.Sprintf("[%q]", conflict)
 				}
 
@@ -1189,7 +1221,7 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 					sub.ID,
 					ordinal,
 					sourceKey,
-					rawName,
+					node.DisplayName,
 					string(node.Protocol),
 					node.Server,
 					node.Port,
@@ -2136,3 +2168,70 @@ func (s *Service) GetNodeSourceHistory(ctx context.Context, logicalID string) (*
 		AttributionStatus: aggStatus,
 	}, nil
 }
+
+// applyRenameRules applies pattern replacement rules to display name.
+func applyRenameRules(name string, rules []domain.RenameRule) string {
+	res := name
+	for _, r := range rules {
+		if r.Pattern == "" {
+			continue
+		}
+		re, err := regexp.Compile(r.Pattern)
+		if err == nil {
+			res = re.ReplaceAllString(res, r.Replace)
+		} else {
+			res = strings.ReplaceAll(res, r.Pattern, r.Replace)
+		}
+	}
+	return res
+}
+
+func matchesFilterPattern(name string, pattern string) bool {
+	pattern = strings.TrimSpace(pattern)
+	if pattern == "" {
+		return true
+	}
+	re, err := regexp.Compile(pattern)
+	if err == nil {
+		return re.MatchString(name)
+	}
+	return strings.Contains(strings.ToLower(name), strings.ToLower(pattern))
+}
+
+// shouldIncludeNode determines if node passes subscription filter rules.
+// If include rules exist: must match at least one include rule.
+// If exclude rules exist: must NOT match any exclude rule.
+func shouldIncludeNode(name, rawName string, rules []domain.FilterRule) bool {
+	if len(rules) == 0 {
+		return true
+	}
+
+	hasIncludeRules := false
+	matchedInclude := false
+
+	for _, rule := range rules {
+		ruleType := strings.ToLower(strings.TrimSpace(rule.Type))
+		pattern := strings.TrimSpace(rule.Pattern)
+		if pattern == "" {
+			continue
+		}
+
+		if ruleType == "exclude" {
+			if matchesFilterPattern(name, pattern) || matchesFilterPattern(rawName, pattern) {
+				return false
+			}
+		} else { // "include" or default
+			hasIncludeRules = true
+			if matchesFilterPattern(name, pattern) || matchesFilterPattern(rawName, pattern) {
+				matchedInclude = true
+			}
+		}
+	}
+
+	if hasIncludeRules && !matchedInclude {
+		return false
+	}
+
+	return true
+}
+

@@ -661,6 +661,58 @@ function onDrop(idx: number, e: DragEvent) {
   draggedIndex.value = null
 }
 
+const selectedManualNodes = computed(() => {
+  return sources.value
+    .map((s, idx) => ({ s, idx }))
+    .filter(({ s }) => s.kind === 'manual_node' && s.node_logical_id)
+})
+
+function removeManualNode(logicalId: string) {
+  const foundIdx = sources.value.findIndex(
+    (s) => s.kind === 'manual_node' && s.node_logical_id === logicalId
+  )
+  if (foundIdx !== -1) {
+    sources.value.splice(foundIdx, 1)
+  }
+}
+
+function isNodeSelected(logicalId: string): boolean {
+  return sources.value.some((s) => s.kind === 'manual_node' && s.node_logical_id === logicalId)
+}
+
+function quickToggleNode(logicalId: string) {
+  if (isNodeSelected(logicalId)) {
+    removeManualNode(logicalId)
+  } else {
+    newEdgeTarget.value = logicalId
+    addSourceItem()
+  }
+}
+
+const COMMON_REGEX_PRESETS = [
+  { label: '🇭🇰 香港', pattern: '.*(HK|HongKong|香港).*' },
+  { label: '🇯🇵 日本', pattern: '.*(JP|Japan|日本).*' },
+  { label: '🇺🇸 美国', pattern: '.*(US|USA|United States|美国).*' },
+  { label: '🇸🇬 新加坡', pattern: '.*(SG|Singapore|狮城|新加坡).*' },
+  { label: '🇨🇦 加拿大', pattern: '.*(CA|Canada|加拿大).*' },
+  { label: '🇹🇼 台湾', pattern: '.*(TW|Taiwan|台湾).*' },
+]
+
+function applyRegexPreset(pattern: string) {
+  newSourcePattern.value = pattern
+}
+
+function formatFreshness(seconds?: number): string {
+  if (!seconds || seconds === 86400) return ''
+  if (seconds === 3600) return '1小时内有效'
+  if (seconds === 21600) return '6小时内有效'
+  if (seconds === 43200) return '12小时内有效'
+  if (seconds === 259200) return '3天内有效'
+  if (seconds === 604800) return '7天内有效'
+  if (seconds < 3600) return `${Math.round(seconds / 60)}分钟内有效`
+  return `${Math.round(seconds / 3600)}小时内有效`
+}
+
 // Conflict resolutions
 function handleReloadFromServer() {
   if (props.group) {
@@ -995,9 +1047,9 @@ function close() {
             <div class="p-3.5 rounded-xl bg-base-200/80 border border-base-300 space-y-3">
               <div class="flex items-center justify-between">
                 <div>
-                  <span class="font-bold text-xs">有序成员来源流水线</span>
+                  <span class="font-bold text-xs">策略组成员节点与来源</span>
                   <p class="text-[11px] opacity-60 mt-0.5">
-                    由上至下顺序执行。支持节点、组引用、子组解包、正则与内建流控混排。
+                    按配置顺序生成成员。支持指定具体节点、按关键词/正则匹配节点、引用子策略组及内建项。
                   </p>
                 </div>
                 <span class="badge badge-sm badge-info font-mono">{{ sources.length }} 项</span>
@@ -1194,6 +1246,31 @@ function close() {
 
                 <!-- Node candidate search & dropdown -->
                 <div v-else-if="selectedSourceKind === 'node'" class="space-y-2">
+                  <!-- Already Selected Nodes Quick-Remove Tag Cloud -->
+                  <div v-if="selectedManualNodes.length > 0" class="p-2.5 rounded-lg bg-base-100 border border-base-300 space-y-1.5">
+                    <div class="flex items-center justify-between text-xs">
+                      <span class="font-semibold text-primary">已添加的具体节点 ({{ selectedManualNodes.length }} 项)：</span>
+                      <span class="text-[10px] opacity-60">点击 ✕ 快速移除</span>
+                    </div>
+                    <div class="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto">
+                      <span
+                        v-for="item in selectedManualNodes"
+                        :key="item.s.node_logical_id"
+                        class="badge badge-sm badge-neutral gap-1 py-2 font-mono text-[11px]"
+                      >
+                        <span class="truncate max-w-[200px]">{{ getNodeDisplayName(item.s.node_logical_id) }}</span>
+                        <button
+                          type="button"
+                          class="btn btn-ghost btn-circle btn-xs text-error hover:bg-error/20 -mr-1"
+                          title="从当前策略组移除此节点"
+                          @click="removeManualNode(item.s.node_logical_id!)"
+                        >
+                          ✕
+                        </button>
+                      </span>
+                    </div>
+                  </div>
+
                   <div class="relative">
                     <input
                       :value="nodeSearchQuery"
@@ -1204,6 +1281,25 @@ function close() {
                       @input="onNodeSearchInput"
                     />
                     <MagnifyingGlassIcon class="w-4 h-4 opacity-50 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  </div>
+
+                  <!-- Quick Candidate Toggle Chips -->
+                  <div v-if="activeNodes.length > 0" class="space-y-1 pt-0.5">
+                    <span class="text-[11px] opacity-70 block">候选节点快捷选择（点击加入/移除）：</span>
+                    <div class="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto">
+                      <button
+                        v-for="node in activeNodes.slice(0, 16)"
+                        :key="node.logicalId"
+                        type="button"
+                        class="btn btn-xs font-mono text-[11px]"
+                        :class="isNodeSelected(node.logicalId) ? 'btn-primary' : 'btn-outline'"
+                        :title="isNodeSelected(node.logicalId) ? '已加入（点击移除）' : '点击加入当前策略组'"
+                        @click="quickToggleNode(node.logicalId)"
+                      >
+                        <span class="truncate max-w-[140px]">{{ node.displayName }}</span>
+                        <span class="text-[10px] font-bold">{{ isNodeSelected(node.logicalId) ? '✓' : '+' }}</span>
+                      </button>
+                    </div>
                   </div>
 
                   <div class="flex gap-2">
@@ -1302,23 +1398,40 @@ function close() {
                 </div>
 
                 <!-- Regex input -->
-                <div v-else-if="selectedSourceKind === 'regex'" class="flex gap-2">
-                  <input
-                    v-model="newSourcePattern"
-                    type="text"
-                    placeholder="例如：.*(HK|香港|HongKong).*"
-                    class="input input-bordered input-sm flex-1 font-mono text-xs"
-                    @keyup.enter="addSourceItem"
-                  />
-                  <button
-                    type="button"
-                    class="btn btn-primary btn-sm gap-1 shrink-0"
-                    :disabled="!newSourcePattern.trim()"
-                    @click="addSourceItem"
-                  >
-                    <PlusIcon class="w-4 h-4" />
-                    {{ newSourceOp === 'remove' ? '添加排除正则 (-)' : '添加加入正则 (+)' }}
-                  </button>
+                <div v-else-if="selectedSourceKind === 'regex'" class="space-y-2">
+                  <div class="flex flex-wrap items-center gap-1.5">
+                    <span class="text-[11px] opacity-70 mr-1">常用地域预设：</span>
+                    <button
+                      v-for="pre in COMMON_REGEX_PRESETS"
+                      :key="pre.label"
+                      type="button"
+                      class="btn btn-xs btn-ghost border border-base-300"
+                      @click="applyRegexPreset(pre.pattern)"
+                    >
+                      {{ pre.label }}
+                    </button>
+                  </div>
+                  <div class="flex gap-2">
+                    <input
+                      v-model="newSourcePattern"
+                      type="text"
+                      placeholder="例如：.*(HK|香港|HongKong).*"
+                      class="input input-bordered input-sm flex-1 font-mono text-xs"
+                      @keyup.enter="addSourceItem"
+                    />
+                    <button
+                      type="button"
+                      class="btn btn-primary btn-sm gap-1 shrink-0"
+                      :disabled="!newSourcePattern.trim()"
+                      @click="addSourceItem"
+                    >
+                      <PlusIcon class="w-4 h-4" />
+                      {{ newSourceOp === 'remove' ? '添加排除正则 (-)' : '添加加入正则 (+)' }}
+                    </button>
+                  </div>
+                  <p class="text-[11px] opacity-60">
+                    提示：支持简单关键词或正则，例如输入 <code>加拿大</code> 可自动包含所有名称含加拿大的节点。
+                  </p>
                 </div>
 
                 <!-- Filter source input -->
@@ -1333,7 +1446,7 @@ function close() {
                   </p>
                   <div v-if="filterConditions.length" class="space-y-1.5">
                     <div v-for="(cond, cIdx) in filterConditions" :key="cIdx" class="flex flex-wrap items-center justify-between gap-2 p-2 rounded-lg bg-base-200 border border-base-300 text-xs font-mono">
-                      <span class="min-w-0 break-all">{{ cond.field }} {{ cond.op }} "{{ cond.value }}" <span v-if="cond.probe_kind">({{ cond.probe_kind }})</span> <span v-if="cond.freshness_seconds">≤{{ cond.freshness_seconds }}s</span></span>
+                      <span class="min-w-0 break-all">{{ cond.field }} {{ cond.op }} "{{ cond.value }}" <span v-if="cond.probe_kind">({{ cond.probe_kind }})</span> <span v-if="cond.freshness_seconds && cond.freshness_seconds !== 86400" class="badge badge-xs badge-ghost font-sans">{{ formatFreshness(cond.freshness_seconds) || `≤${cond.freshness_seconds}s` }}</span></span>
                       <div class="flex gap-1 shrink-0">
                         <button type="button" class="btn btn-ghost btn-xs" @click="editFilterCondition(cIdx)">编辑</button>
                         <button type="button" class="btn btn-ghost btn-xs text-error" title="删除条件" @click="removeFilterCondition(cIdx)"><TrashIcon class="w-3.5 h-3.5" /></button>
@@ -1378,7 +1491,24 @@ function close() {
                         <option value="speed">带宽测速 (speed)</option>
                         <option value="ip_risk">IP 风险度 (ip_risk)</option>
                       </select>
-                      <input v-model.number="newFreshnessSeconds" type="number" aria-label="最大有效期（秒）" placeholder="最大有效期（秒，可选）" class="input input-bordered input-xs font-mono" />
+                      <div class="space-y-1">
+                        <div class="flex items-center gap-1.5">
+                          <input v-model.number="newFreshnessSeconds" type="number" aria-label="最大有效期（秒）" placeholder="探针时效（秒，默认86400）" class="input input-bordered input-xs font-mono flex-1" />
+                          <select
+                            class="select select-bordered select-xs text-[11px]"
+                            aria-label="探针时效快捷选择"
+                            @change="newFreshnessSeconds = ($event.target as HTMLSelectElement).value ? Number(($event.target as HTMLSelectElement).value) : undefined"
+                          >
+                            <option value="">默认(24h)</option>
+                            <option value="3600">1小时内</option>
+                            <option value="21600">6小时内</option>
+                            <option value="86400">24小时内</option>
+                            <option value="259200">3天内</option>
+                            <option value="604800">7天内</option>
+                          </select>
+                        </div>
+                        <span class="text-[10px] opacity-60 block">探针检测时效，默认 24 小时内有效</span>
+                      </div>
                     </div>
                     <p v-if="conditionError" role="alert" class="text-error text-xs">{{ conditionError }}</p>
                     <div class="flex flex-wrap gap-2">

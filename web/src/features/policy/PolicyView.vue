@@ -33,6 +33,7 @@ import {
 } from './policyTypes'
 import GroupCard from './GroupCard.vue'
 import PolicyEditorSheet from './PolicyEditorSheet.vue'
+import StructuredFilterEditor from './StructuredFilterEditor.vue'
 import ConfirmModal from '../../ui/ConfirmModal.vue'
 import ModalDialog from '../../ui/ModalDialog.vue'
 import StatusBadge from '../../ui/StatusBadge.vue'
@@ -168,22 +169,7 @@ async function handleConfirmDeleteRule() {
 // Global Filter Modal State
 const globalFilterModalOpen = ref(false)
 const globalConditions = ref<FilterCondition[]>([])
-const newGlobalField = ref<FilterField>('display_name')
-const newGlobalOp = ref<FilterOp>('contains')
-const newGlobalValue = ref('')
-const newGlobalProbeKind = ref<'baseline' | 'geo' | 'streaming' | 'ai' | 'speed' | 'ip_risk'>('baseline')
 const globalConditionError = ref('')
-
-watch(newGlobalField, (f) => {
-  globalConditionError.value = ''
-  if (f === 'display_name' || f === 'source_subscription_ids') {
-    newGlobalOp.value = 'contains'
-  } else if (f === 'probe_latency_ms') {
-    newGlobalOp.value = 'lte'
-  } else {
-    newGlobalOp.value = 'equals'
-  }
-})
 
 function openGlobalFilterModal() {
   globalConditions.value = (globalFilter.value?.spec?.conditions || []).map((c) => ({ ...c }))
@@ -191,42 +177,13 @@ function openGlobalFilterModal() {
   globalFilterModalOpen.value = true
 }
 
-function addGlobalCondition() {
-  globalConditionError.value = ''
-  const cond: FilterCondition = {
-    field: newGlobalField.value,
-    op: newGlobalOp.value,
-    value: newGlobalValue.value.trim(),
-  }
-  if (newGlobalField.value === 'probe_verdict' || newGlobalField.value === 'probe_latency_ms') {
-    cond.probe_kind = newGlobalProbeKind.value
-  }
-
-  const err = validateConditionInput(cond)
-  if (err) {
-    globalConditionError.value = err
-    return
-  }
-  if (globalConditions.value.length >= 32) {
-    globalConditionError.value = '最多允许添加 32 条筛选条件'
-    return
-  }
-
-  globalConditions.value.push(cond)
-  newGlobalValue.value = ''
-}
-
-function removeGlobalCondition(idx: number) {
-  globalConditions.value.splice(idx, 1)
-}
-
 async function saveGlobalFilter() {
   try {
     await updateGlobalFilter({ conditions: globalConditions.value })
     await reload()
     globalFilterModalOpen.value = false
-  } catch {
-    // error handled in usePolicy
+  } catch (err: any) {
+    globalConditionError.value = err?.message || '保存全局筛选失败'
   }
 }
 
@@ -868,134 +825,15 @@ onUnmounted(() => {
           <p class="mt-1 opacity-80">{{ t('settings.filterScope') }}</p>
         </div>
 
-        <div class="flex items-center justify-between">
-          <span class="text-xs font-semibold uppercase opacity-70">已配置条件 ({{ globalConditions.length }})</span>
-          <button
-            v-if="globalConditions.length > 0"
-            type="button"
-            class="btn btn-ghost btn-xs text-error gap-1"
-            @click="globalConditions = []"
-          >
-            <TrashIcon class="w-3.5 h-3.5" />
-            清空全部
-          </button>
-        </div>
+        <p v-if="globalConditionError" role="alert" class="text-error text-xs" data-testid="filter-request-error">
+          {{ globalConditionError }}
+        </p>
 
-        <div class="space-y-2 max-h-48 overflow-y-auto">
-          <div
-            v-for="(cond, cIdx) in globalConditions"
-            :key="cIdx"
-            class="flex items-center justify-between p-2 rounded-lg bg-base-200 border border-base-300 text-xs font-mono"
-          >
-            <div class="flex items-center gap-1.5 truncate min-w-0">
-              <span class="badge badge-xs badge-outline">{{ cond.field }}</span>
-              <span class="text-primary font-semibold">{{ cond.op }}</span>
-              <span class="truncate">"{{ cond.value }}"</span>
-              <span v-if="cond.probe_kind" class="badge badge-xs badge-ghost">
-                {{ cond.probe_kind }}
-              </span>
-            </div>
-            <button
-              type="button"
-              class="btn btn-ghost btn-xs text-error p-1"
-              @click="removeGlobalCondition(cIdx)"
-            >
-              <TrashIcon class="w-3.5 h-3.5" />
-            </button>
-          </div>
-          <p v-if="globalConditions.length === 0" class="text-xs opacity-50 italic text-center py-2">
-            暂未配置全局筛选条件（默认允许所有节点）。
-          </p>
-        </div>
-
-        <!-- Add Condition Inline Control -->
-        <div class="p-3 rounded-xl bg-base-200/60 border border-base-300 space-y-2">
-          <span class="font-semibold text-xs block">添加全局筛选条件</span>
-          <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
-            <select
-              v-model="newGlobalField"
-              class="select select-bordered select-xs"
-            >
-              <option
-                v-for="f in SUPPORTED_FILTER_FIELDS"
-                :key="f.field"
-                :value="f.field"
-              >
-                {{ f.label }}
-              </option>
-            </select>
-
-            <select
-              v-model="newGlobalOp"
-              class="select select-bordered select-xs font-mono"
-            >
-              <template v-if="newGlobalField === 'display_name' || newGlobalField === 'source_subscription_ids'">
-                <option value="contains">包含 (contains)</option>
-                <option value="not_contains">不包含 (not_contains)</option>
-                <option v-if="newGlobalField === 'display_name'" value="regex">匹配正则 (regex)</option>
-                <option v-if="newGlobalField === 'display_name'" value="not_regex">不匹配正则 (not_regex)</option>
-              </template>
-              <template v-else-if="newGlobalField === 'probe_latency_ms'">
-                <option value="lte">小于等于 (lte)</option>
-              </template>
-              <template v-else>
-                <option value="equals">等于 (equals)</option>
-                <option value="not_equals">不等于 (not_equals)</option>
-              </template>
-            </select>
-
-            <select
-              v-if="newGlobalField === 'probe_verdict'"
-              v-model="newGlobalValue"
-              class="select select-bordered select-xs"
-            >
-              <option value="available">可用 (available)</option>
-              <option value="restricted">受限 (restricted)</option>
-              <option value="unknown">未知 (unknown)</option>
-              <option value="error">错误 (error)</option>
-              <option value="stale">已过期 (stale)</option>
-            </select>
-            <input
-              v-else
-              v-model="newGlobalValue"
-              class="input input-bordered input-xs"
-              placeholder="匹配目标值..."
-            />
-          </div>
-
-          <!-- Extra fields for probe kinds -->
-          <div
-            v-if="newGlobalField === 'probe_verdict' || newGlobalField === 'probe_latency_ms'"
-            class="space-y-1"
-          >
-            <select
-              v-model="newGlobalProbeKind"
-              class="select select-bordered select-xs w-full"
-            >
-              <option value="baseline">基础连通性 (baseline)</option>
-              <option value="geo">地域与出口 IP (geo)</option>
-              <option value="streaming">流媒体解锁 (streaming)</option>
-              <option value="ai">AI 服务可用性 (ai)</option>
-              <option value="speed">带宽测速 (speed)</option>
-              <option value="ip_risk">IP 风险度 (ip_risk)</option>
-            </select>
-          </div>
-
-          <div class="flex items-center justify-between pt-1">
-            <span v-if="globalConditionError" class="text-error text-xs">
-              {{ globalConditionError }}
-            </span>
-            <span v-else />
-            <button
-              type="button"
-              class="btn btn-outline btn-xs gap-1 ml-auto"
-              @click="addGlobalCondition"
-            >
-              <PlusIcon class="w-3.5 h-3.5" />
-              添加条件
-            </button>
-          </div>
-        </div>
+        <StructuredFilterEditor
+          v-model="globalConditions"
+          :max-conditions="32"
+          :allow-clear="true"
+        />
 
         <div class="modal-action border-t border-base-300 pt-3">
           <button type="button" class="btn btn-ghost btn-sm" @click="globalFilterModalOpen = false">

@@ -16,7 +16,10 @@ import DrawerCard from '../../ui/DrawerCard.vue'
 import EmptyState from '../../ui/EmptyState.vue'
 import ErrorStateCard from '../../ui/ErrorStateCard.vue'
 import StatusBadge from '../../ui/StatusBadge.vue'
+import ConfirmModal from '../../ui/ConfirmModal.vue'
 import NodeSourceHistoryPanel from './NodeSourceHistoryPanel.vue'
+import NodeProbeHistoryDrawer from './NodeProbeHistoryDrawer.vue'
+import { toastStore } from '../../ui/toast'
 import type { NodeSourceHistoryData } from './sourceHistoryTypes'
 import { ApiError } from '../../api/client'
 import {
@@ -41,9 +44,8 @@ import { useNodes } from './useNodes'
 import { deriveColumns } from '../../composables/useResponsiveColumns'
 import { t } from '../../locales'
 
-const GAP = 16
-const MIN_CARD_WIDTH = 288
-const ESTIMATED_ROW_HEIGHT = 172
+const GAP = 8
+const ESTIMATED_ROW_HEIGHT = 56
 
 const {
   items,
@@ -65,7 +67,9 @@ const {
   syncPoolStatus,
   fetchNodeDetail,
   fetchNodeSourceHistory,
+  fetchGlobalScheduleKinds,
   probeSingleNode,
+  probeNodesBatch,
   updateNodeConnection,
 } = useNodes()
 
@@ -96,6 +100,93 @@ const sourceHistoryError = ref('')
 const currentHistoryTargetId = ref('')
 const deepLinkError = ref('')
 const loadingDeepLink = ref(false)
+
+const selectedIds = ref<Set<string>>(new Set())
+const confirmProbeAllOpen = ref(false)
+const historyDrawerOpen = ref(false)
+
+function toggleSelectNode(id: string) {
+  const set = new Set(selectedIds.value)
+  if (set.has(id)) {
+    set.delete(id)
+  } else {
+    set.add(id)
+  }
+  selectedIds.value = set
+}
+
+const isAllVisibleSelected = computed(() => {
+  if (filteredItems.value.length === 0) return false
+  return filteredItems.value.every((n) => selectedIds.value.has(n.logicalId))
+})
+
+function toggleSelectAllVisible() {
+  const set = new Set(selectedIds.value)
+  if (isAllVisibleSelected.value) {
+    for (const n of filteredItems.value) {
+      set.delete(n.logicalId)
+    }
+  } else {
+    for (const n of filteredItems.value) {
+      set.add(n.logicalId)
+    }
+  }
+  selectedIds.value = set
+}
+
+function clearSelection() {
+  selectedIds.value = new Set()
+}
+
+function pruneInvalidSelectedIds() {
+  if (selectedIds.value.size === 0) return
+  if (items.value.length === 0 && !loading.value) {
+    selectedIds.value = new Set()
+    return
+  }
+  if (!hasMore.value) {
+    const validIds = new Set(items.value.map((n) => n.logicalId))
+    const next = new Set<string>()
+    for (const id of selectedIds.value) {
+      if (validIds.has(id)) next.add(id)
+    }
+    if (next.size !== selectedIds.value.size) {
+      selectedIds.value = next
+    }
+  }
+}
+
+watch(items, () => {
+  pruneInvalidSelectedIds()
+})
+
+async function handleProbeSelected() {
+  if (selectedIds.value.size === 0) {
+    toastStore.push({ message: t('nodes.noNodeSelected') || '请先勾选需要检测的节点', tone: 'warning' })
+    return
+  }
+  const ids = Array.from(selectedIds.value)
+  const res = await probeNodesBatch(ids)
+  if (res.ok) {
+    toastStore.push({ message: `已对所选 ${ids.length} 个节点发起测速`, tone: 'success' })
+  } else {
+    toastStore.push({ message: res.error || '发起测速失败', tone: 'error' })
+  }
+}
+
+function handleProbeAll() {
+  confirmProbeAllOpen.value = true
+}
+
+async function confirmExecuteProbeAll() {
+  confirmProbeAllOpen.value = false
+  const res = await probeNodesBatch([])
+  if (res.ok) {
+    toastStore.push({ message: t('nodes.probingStarted') || '已发起全量节点测速任务', tone: 'success' })
+  } else {
+    toastStore.push({ message: res.error || '全量测速失败', tone: 'error' })
+  }
+}
 
 const effectiveProbingIds = computed(() => {
   const set = new Set<string>(probingNodeIds.value)
@@ -293,6 +384,11 @@ async function openNodeByLogicalId(logicalId: string) {
   } catch (err: any) {
     const status = err?.status || (err instanceof ApiError ? err.status : 404)
     deepLinkError.value = `未找到节点「${logicalId}」(${status})`
+    if (status === 404 && selectedIds.value.has(logicalId)) {
+      const next = new Set(selectedIds.value)
+      next.delete(logicalId)
+      selectedIds.value = next
+    }
   } finally {
     loadingDeepLink.value = false
   }
@@ -366,12 +462,11 @@ function selectProtocolFilter(proto: string) {
 const containerRef = ref<HTMLElement | null>(null)
 const { width } = useElementSize(containerRef)
 
-const columns = computed(() => deriveColumns(width.value, MIN_CARD_WIDTH, GAP))
-const rowCount = computed(() => Math.ceil(filteredItems.value.length / columns.value))
+const columns = computed(() => 1)
+const rowCount = computed(() => filteredItems.value.length)
 
 function getRowItems(rowIndex: number) {
-  const start = rowIndex * columns.value
-  return filteredItems.value.slice(start, start + columns.value)
+  return filteredItems.value.slice(rowIndex, rowIndex + 1)
 }
 
 const scrollMargin = ref(0)
@@ -510,19 +605,39 @@ if (route) {
 
 let poolPollTimer: ReturnType<typeof setInterval> | null = null
 
+function isPageVisible(): boolean {
+  if (typeof document === 'undefined') return true
+  return document.visibilityState === 'visible'
+}
+
+function hasActiveRuns(): boolean {
+  return (
+    probingNodeIds.value.size > 0 ||
+    queuedNodeIds.value.size > 0 ||
+    probingNodeId.value !== null
+  )
+}
+
+function handleVisibilityChange() {
+  if (isPageVisible() && hasActiveRuns()) {
+    syncPoolStatus()
+  }
+}
+
 onMounted(async () => {
+  void fetchGlobalScheduleKinds()
   await load()
+  pruneInvalidSelectedIds()
   checkViewportStarvation()
   if (typeof window !== 'undefined') {
     window.addEventListener('scroll', onScroll, { passive: true })
     nextTick(updateScrollMargin)
   }
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+  }
   poolPollTimer = setInterval(() => {
-    if (
-      probingNodeIds.value.size > 0 ||
-      queuedNodeIds.value.size > 0 ||
-      healthFilter.value === 'probing'
-    ) {
+    if (isPageVisible() && hasActiveRuns()) {
       syncPoolStatus()
     }
   }, 2000)
@@ -534,9 +649,15 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
-  if (poolPollTimer) clearInterval(poolPollTimer)
+  if (poolPollTimer) {
+    clearInterval(poolPollTimer)
+    poolPollTimer = null
+  }
   if (typeof window !== 'undefined') {
     window.removeEventListener('scroll', onScroll)
+  }
+  if (typeof document !== 'undefined') {
+    document.removeEventListener('visibilitychange', handleVisibilityChange)
   }
 })
 </script>
@@ -707,6 +828,83 @@ onUnmounted(() => {
       </div>
     </div>
 
+    <!-- Probe Actions & Selection Control Toolbar -->
+    <div
+      data-testid="node-selection-toolbar"
+      class="flex flex-wrap items-center justify-between gap-3 p-3 rounded-2xl bg-base-200/80 backdrop-blur-xl border border-base-300 shadow-sm"
+    >
+      <div class="flex items-center gap-2.5">
+        <label class="flex items-center gap-1.5 cursor-pointer text-xs font-semibold select-none">
+          <input
+            type="checkbox"
+            data-testid="select-all-visible-checkbox"
+            class="checkbox checkbox-primary checkbox-xs sm:checkbox-sm"
+            :checked="isAllVisibleSelected"
+            @change="toggleSelectAllVisible"
+          />
+          <span class="hidden sm:inline">{{ t('nodes.selectAllVisible') }}</span>
+        </label>
+
+        <span
+          data-testid="selected-count-badge"
+          class="badge badge-sm font-mono text-xs"
+          :class="selectedIds.size > 0 ? 'badge-primary' : 'badge-ghost'"
+        >
+          {{ t('nodes.selectedCount', { count: selectedIds.size }) }}
+        </span>
+
+        <button
+          v-if="selectedIds.size > 0"
+          type="button"
+          data-testid="clear-selection-btn"
+          class="btn btn-ghost btn-xs text-base-content/60 hover:text-base-content"
+          @click="clearSelection"
+        >
+          {{ t('nodes.clearSelection') }}
+        </button>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-2">
+        <!-- Probe Selected Button (Disabled when selectedIds.size === 0) -->
+        <button
+          type="button"
+          data-testid="probe-selected-btn"
+          class="btn btn-primary btn-xs sm:btn-sm gap-1.5 shadow-sm"
+          :disabled="selectedIds.size === 0"
+          :title="selectedIds.size === 0 ? t('nodes.noNodeSelected') : t('nodes.probeSelected')"
+          @click="handleProbeSelected"
+        >
+          <BoltIcon class="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+          <span>{{ t('nodes.probeSelected') }}</span>
+          <span v-if="selectedIds.size > 0" class="badge badge-xs badge-neutral font-mono">
+            {{ selectedIds.size }}
+          </span>
+        </button>
+
+        <!-- Probe All (Full fleet) Button with Explicit Confirm -->
+        <button
+          type="button"
+          data-testid="probe-all-btn"
+          class="btn btn-outline btn-warning btn-xs sm:btn-sm gap-1.5"
+          @click="handleProbeAll"
+        >
+          <BoltIcon class="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+          <span>{{ t('nodes.probeAll') }}</span>
+        </button>
+
+        <!-- Probe Runs & Batch History Drawer Button -->
+        <button
+          type="button"
+          data-testid="node-probe-history-btn"
+          class="btn btn-ghost btn-xs sm:btn-sm gap-1.5 font-normal text-base-content/80 hover:bg-base-300/60"
+          @click="historyDrawerOpen = true"
+        >
+          <ClockIcon class="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+          <span>{{ t('nodes.probeHistory') }}</span>
+        </button>
+      </div>
+    </div>
+
     <!-- Deep Link Error Alert -->
     <div
       v-if="deepLinkError"
@@ -742,8 +940,27 @@ onUnmounted(() => {
       <div v-for="index in 6" :key="index" class="skeleton h-32 rounded-box" />
     </div>
 
-    <!-- Virtualized Responsive Node Grid Normal page flow with width-derived columns -->
+    <!-- Virtualized Responsive Node List: Desktop Compact Row & Mobile Streamlined Card -->
     <div v-else ref="containerRef" class="w-full min-w-0">
+      <!-- Desktop Table Header -->
+      <div
+        v-if="filteredItems.length > 0"
+        class="hidden md:flex items-center justify-between gap-3 px-4 py-2 text-xs font-semibold text-base-content/60 border-b border-base-300 mb-2 select-none"
+      >
+        <div class="w-1/4 flex items-center gap-2">
+          <span>节点信息</span>
+        </div>
+        <div class="w-1/5">
+          <span>协议与端点</span>
+        </div>
+        <div class="flex-1">
+          <span>探测健康与能力</span>
+        </div>
+        <div class="shrink-0 text-right pr-2">
+          <span>状态与操作</span>
+        </div>
+      </div>
+
       <div
         v-if="filteredItems.length > 0"
         class="relative w-full"
@@ -760,33 +977,36 @@ onUnmounted(() => {
             paddingBottom: `${GAP}px`,
           }"
         >
-          <div
-            class="grid min-w-0 max-w-full"
-            :style="{
-              gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
-              gap: `${GAP}px`,
-            }"
-          >
+          <div class="w-full min-w-0">
             <article
               v-for="node in getRowItems(virtualRow.index)"
               :key="node.logicalId"
               data-testid="node-card"
-              class="card border border-base-300 bg-base-200 shadow-sm transition hover:border-primary/40 hover:shadow-md min-w-0 max-w-full overflow-hidden cursor-pointer"
+              class="border border-base-300 bg-base-200/70 hover:bg-base-200 shadow-sm transition hover:border-primary/40 rounded-xl overflow-hidden cursor-pointer p-3 md:py-2.5 md:px-4"
+              :class="{ 'ring-2 ring-primary/40 bg-primary/5': selectedIds.has(node.logicalId) }"
               @click="openNodeDetail(node)"
             >
-              <div class="card-body gap-3 p-4 sm:p-5 min-w-0 max-w-full overflow-hidden">
-                <div class="flex flex-wrap items-start justify-between gap-2 sm:gap-3 min-w-0">
-                  <div class="flex min-w-0 items-center gap-2.5 sm:gap-3 flex-1">
-                    <div class="rounded-xl bg-primary/10 p-2 text-primary shrink-0">
-                      <CheckCircleIcon v-if="node.active" class="h-5 w-5" />
-                      <ExclamationTriangleIcon v-else class="h-5 w-5" />
-                    </div>
-                    <div class="min-w-0 flex-1">
-                      <h3 class="truncate font-semibold text-sm sm:text-base">{{ node.displayName }}</h3>
-                      <p class="mt-0.5 truncate font-mono text-xs opacity-60">{{ node.logicalId }}</p>
-                    </div>
+              <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-2.5 md:gap-3 text-xs min-w-0">
+                <!-- Col 1: Identity & Selection -->
+                <div class="flex items-center gap-2.5 min-w-0 md:w-1/4 shrink-0">
+                  <input
+                    type="checkbox"
+                    :checked="selectedIds.has(node.logicalId)"
+                    :data-testid="`node-checkbox-${node.logicalId}`"
+                    class="checkbox checkbox-primary checkbox-xs shrink-0"
+                    @click.stop
+                    @change="toggleSelectNode(node.logicalId)"
+                  />
+                  <div class="rounded-lg bg-primary/10 p-1.5 md:p-2 text-primary shrink-0">
+                    <CheckCircleIcon v-if="node.active" class="h-4 w-4 md:h-5 md:w-5" />
+                    <ExclamationTriangleIcon v-else class="h-4 w-4 md:h-5 md:w-5" />
                   </div>
-                  <div class="flex items-center gap-1.5 sm:gap-2 shrink-0">
+                  <div class="min-w-0 flex-1">
+                    <h3 class="truncate font-semibold text-sm">{{ node.displayName }}</h3>
+                    <p class="truncate font-mono text-[11px] opacity-60">{{ node.logicalId }}</p>
+                  </div>
+                  <!-- Mobile-only status badge next to name -->
+                  <div class="flex md:hidden items-center gap-1.5 shrink-0">
                     <span class="badge badge-outline font-mono text-xs uppercase">{{ node.protocol }}</span>
                     <StatusBadge
                       :label="node.active ? t('common.enabled') : t('common.disabled')"
@@ -795,17 +1015,18 @@ onUnmounted(() => {
                   </div>
                 </div>
 
-                <!-- Protocol Connection Summary & Target Boundary Badges -->
-                <div class="flex flex-wrap items-center gap-1.5 text-[11px] font-mono opacity-80">
-                  <span class="badge badge-xs badge-ghost">
-                    兼容目标: {{ protocolSupportedTargets(node.protocol).join('/') }}
+                <!-- Col 2: Protocol Connection & Targets -->
+                <div class="flex flex-wrap md:flex-nowrap items-center gap-1.5 text-[11px] font-mono opacity-80 min-w-0 md:w-1/5 shrink-0">
+                  <span class="hidden md:inline-flex badge badge-outline font-mono text-xs uppercase shrink-0">{{ node.protocol }}</span>
+                  <span class="badge badge-xs badge-ghost truncate">
+                    兼容: {{ protocolSupportedTargets(node.protocol).join('/') }}
                   </span>
-                  <span v-if="node.connection.server && node.connection.port" class="badge badge-xs badge-ghost">
+                  <span v-if="node.connection.server && node.connection.port" class="badge badge-xs badge-ghost truncate" :title="`${node.connection.server}:${node.connection.port}`">
                     {{ node.connection.server }}:{{ node.connection.port }}
                   </span>
                   <template v-if="node.protocol.toLowerCase() === 'wireguard'">
-                    <span v-if="node.connection.localAddress.length" class="badge badge-xs badge-info badge-outline">
-                      内网 IP: {{ node.connection.localAddress.join(', ') }}
+                    <span v-if="node.connection.localAddress.length" class="badge badge-xs badge-info badge-outline truncate">
+                      {{ node.connection.localAddress.join(', ') }}
                     </span>
                     <span v-if="node.connection.mtu" class="badge badge-xs badge-ghost">
                       MTU: {{ node.connection.mtu }}
@@ -813,100 +1034,107 @@ onUnmounted(() => {
                   </template>
                   <template v-else-if="node.protocol.toLowerCase() === 'tuic'">
                     <span v-if="node.connection.congestionControl" class="badge badge-xs badge-info badge-outline">
-                      拥塞控制: {{ node.connection.congestionControl }}
+                      {{ node.connection.congestionControl }}
                     </span>
                     <span v-if="node.connection.udpRelayMode" class="badge badge-xs badge-ghost">
-                      UDP 模式: {{ node.connection.udpRelayMode }}
+                      {{ node.connection.udpRelayMode }}
                     </span>
                   </template>
                 </div>
 
-                <div class="flex flex-wrap items-center justify-between gap-2 border-t border-base-300 pt-3 text-xs min-w-0">
-                  <div class="flex flex-wrap items-center gap-1.5 sm:gap-2 min-w-0">
-                    <span class="mr-1 text-xs opacity-60 shrink-0">{{ t('nodes.capabilities') }}</span>
+                <!-- Col 3: Health, Latency & Capabilities Badges -->
+                <div class="flex flex-wrap items-center gap-1.5 min-w-0 md:flex-1">
+                  <StatusBadge
+                    data-testid="node-health-badge"
+                    :label="
+                      getNodeProbeState(node) === 'probing'
+                        ? '⚡ 检测中'
+                        : getNodeProbeState(node) === 'queued'
+                        ? '⏳ 队列等待'
+                        : `健康: ${getNodeHealthBadge(node).label}`
+                    "
+                    :tone="getNodeHealthBadge(node).tone"
+                    :pulse="getNodeProbeState(node) !== 'idle'"
+                  />
+                  <StatusBadge
+                    v-if="resolveNodeLatencyMs(node) !== null"
+                    data-testid="node-latency-badge"
+                    :label="`延迟: ${formatNodeLatency(node)}`"
+                    :tone="nodeLatencyTone(node)"
+                  />
+                  <StatusBadge
+                    :label="`风险: ${nodeRiskBadge(node).label}`"
+                    :tone="nodeRiskBadge(node).tone"
+                  />
+                  <StatusBadge
+                    v-if="getNodeSpeedBadge(node)"
+                    :label="getNodeSpeedBadge(node)!.label"
+                    :tone="getNodeSpeedBadge(node)!.tone"
+                  />
+                  <!-- Streaming Badges -->
+                  <template v-if="getNodePlatformBadges(node, 'streaming').length > 0">
                     <StatusBadge
-                      data-testid="node-health-badge"
-                      :label="
-                        getNodeProbeState(node) === 'probing'
-                          ? '⚡ 检测中'
-                          : getNodeProbeState(node) === 'queued'
-                          ? '⏳ 队列等待'
-                          : `健康: ${getNodeHealthBadge(node).label}`
-                      "
-                      :tone="getNodeHealthBadge(node).tone"
-                      :pulse="getNodeProbeState(node) !== 'idle'"
+                      v-for="badge in getNodePlatformBadges(node, 'streaming')"
+                      :key="`streaming-${badge.platform}`"
+                      :label="badge.label"
+                      :tone="badge.tone"
+                      :title="badge.tooltip"
                     />
+                  </template>
+                  <StatusBadge
+                    v-else
+                    :label="`${t('nodes.streaming')}: ${nodeCapabilityLabel(node, 'streaming').label}`"
+                    :tone="nodeCapabilityLabel(node, 'streaming').tone"
+                  />
+                  <!-- AI Badges -->
+                  <template v-if="getNodePlatformBadges(node, 'ai').length > 0">
                     <StatusBadge
-                      v-if="resolveNodeLatencyMs(node) !== null"
-                      data-testid="node-latency-badge"
-                      :label="`延迟: ${formatNodeLatency(node)}`"
-                      :tone="nodeLatencyTone(node)"
+                      v-for="badge in getNodePlatformBadges(node, 'ai')"
+                      :key="`ai-${badge.platform}`"
+                      :label="badge.label"
+                      :tone="badge.tone"
+                      :title="badge.tooltip"
                     />
-                    <StatusBadge
-                      :label="`风险: ${nodeRiskBadge(node).label}`"
-                      :tone="nodeRiskBadge(node).tone"
-                    />
-                    <StatusBadge
-                      v-if="getNodeSpeedBadge(node)"
-                      :label="getNodeSpeedBadge(node)!.label"
-                      :tone="getNodeSpeedBadge(node)!.tone"
-                    />
-                    <!-- Streaming: individual platform badges if available, fallback to single badge -->
-                    <template v-if="getNodePlatformBadges(node, 'streaming').length > 0">
-                      <StatusBadge
-                        v-for="badge in getNodePlatformBadges(node, 'streaming')"
-                        :key="`streaming-${badge.platform}`"
-                        :label="badge.label"
-                        :tone="badge.tone"
-                        :title="badge.tooltip"
-                      />
-                    </template>
-                    <StatusBadge
-                      v-else
-                      :label="`${t('nodes.streaming')}: ${nodeCapabilityLabel(node, 'streaming').label}`"
-                      :tone="nodeCapabilityLabel(node, 'streaming').tone"
-                    />
-                    <!-- AI: individual platform badges if available, fallback to single badge -->
-                    <template v-if="getNodePlatformBadges(node, 'ai').length > 0">
-                      <StatusBadge
-                        v-for="badge in getNodePlatformBadges(node, 'ai')"
-                        :key="`ai-${badge.platform}`"
-                        :label="badge.label"
-                        :tone="badge.tone"
-                        :title="badge.tooltip"
-                      />
-                    </template>
-                    <StatusBadge
-                      v-else
-                      :label="`${t('nodes.ai')}: ${nodeCapabilityLabel(node, 'ai').label}`"
-                      :tone="nodeCapabilityLabel(node, 'ai').tone"
-                    />
-                    <span
-                      v-if="node.probeStale"
-                      class="badge badge-warning badge-sm gap-1 font-mono text-[11px]"
-                      title="探测观测数据已过期（超出保鲜窗口）"
-                    >
-                      探测已过期
-                    </span>
-                    <span
-                      v-if="node.probeMissing"
-                      class="badge badge-ghost badge-sm gap-1 font-mono text-[11px] opacity-75"
-                      title="尚无探针观测记录"
-                    >
-                      未探测
-                    </span>
-                    <span
-                      v-if="getNodeProbeState(node) === 'idle' && nodeHealthDiagnostic(node) && nodeHealthDiagnostic(node)?.code !== 'probe_missing'"
-                      data-testid="node-card-diagnostic-badge"
-                      class="badge badge-sm gap-1 text-[11px] h-auto py-0.5 whitespace-normal"
-                      :class="nodeHealthDiagnostic(node)?.isBlockedByPolicyOrConfig ? 'badge-warning badge-outline' : 'badge-ghost opacity-80'"
-                      :title="nodeHealthDiagnostic(node)?.detail"
-                    >
-                      {{ nodeHealthDiagnostic(node)?.shortLabel }}
-                    </span>
-                  </div>
+                  </template>
+                  <StatusBadge
+                    v-else
+                    :label="`${t('nodes.ai')}: ${nodeCapabilityLabel(node, 'ai').label}`"
+                    :tone="nodeCapabilityLabel(node, 'ai').tone"
+                  />
+                  <span
+                    v-if="node.probeStale"
+                    class="badge badge-warning badge-sm md:badge-xs gap-1 font-mono text-[11px]"
+                    title="探测观测数据已过期（超出保鲜窗口）"
+                  >
+                    探测已过期
+                  </span>
+                  <span
+                    v-if="node.probeMissing"
+                    class="badge badge-ghost badge-sm md:badge-xs gap-1 font-mono text-[11px] opacity-75"
+                    title="尚无探针观测记录"
+                  >
+                    未探测
+                  </span>
+                  <span
+                    v-if="getNodeProbeState(node) === 'idle' && nodeHealthDiagnostic(node) && nodeHealthDiagnostic(node)?.code !== 'probe_missing'"
+                    data-testid="node-card-diagnostic-badge"
+                    class="badge badge-sm md:badge-xs gap-1 text-[11px] h-auto py-0.5 whitespace-normal"
+                    :class="nodeHealthDiagnostic(node)?.isBlockedByPolicyOrConfig ? 'badge-warning badge-outline' : 'badge-ghost opacity-80'"
+                    :title="nodeHealthDiagnostic(node)?.detail"
+                  >
+                    {{ nodeHealthDiagnostic(node)?.shortLabel }}
+                  </span>
+                </div>
 
-                  <div class="flex items-center gap-1.5 shrink-0">
+                <!-- Col 4: Status and Action Buttons -->
+                <div class="flex items-center justify-between md:justify-end gap-2 border-t md:border-t-0 border-base-300 pt-2 md:pt-0 shrink-0">
+                  <div class="hidden md:block">
+                    <StatusBadge
+                      :label="node.active ? t('common.enabled') : t('common.disabled')"
+                      :tone="node.active ? 'success' : 'warning'"
+                    />
+                  </div>
+                  <div class="flex items-center gap-1.5 ml-auto md:ml-0">
                     <button
                       type="button"
                       data-testid="node-card-probe-btn"
@@ -1518,5 +1746,22 @@ onUnmounted(() => {
         </div>
       </template>
     </DrawerCard>
+
+    <!-- Full Fleet Probe Confirmation Modal -->
+    <ConfirmModal
+      :model-value="confirmProbeAllOpen"
+      :title="t('nodes.confirmProbeAllTitle')"
+      :message="t('nodes.confirmProbeAllMessage')"
+      tone="warning"
+      data-testid="confirm-probe-all-modal"
+      @confirm="confirmExecuteProbeAll"
+      @cancel="confirmProbeAllOpen = false"
+      @update:model-value="confirmProbeAllOpen = $event"
+    />
+
+    <!-- Probe Runs & Batches History Drawer -->
+    <NodeProbeHistoryDrawer
+      v-model="historyDrawerOpen"
+    />
   </section>
 </template>

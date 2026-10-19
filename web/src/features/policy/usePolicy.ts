@@ -559,7 +559,7 @@ export function usePolicy() {
   async function fetchGroupSnapshotPreview(
     payload: GroupDraftPreviewPayload
   ): Promise<GroupDraftPreviewResponse> {
-    const body = {
+    const body: Record<string, unknown> = {
       group_id: payload.group_id,
       expected_revision: payload.expected_revision,
       name: payload.name,
@@ -569,6 +569,12 @@ export function usePolicy() {
         position: s.position !== undefined ? s.position : idx,
       })),
       target: payload.target || 'mihomo',
+    }
+    if (payload.empty_fallback_pass !== undefined) {
+      body.empty_fallback_pass = payload.empty_fallback_pass
+    }
+    if (payload.inherit_global_filter !== undefined) {
+      body.inherit_global_filter = payload.inherit_global_filter
     }
     return await api.post<GroupDraftPreviewResponse>('/api/v1/policies/groups/preview', body)
   }

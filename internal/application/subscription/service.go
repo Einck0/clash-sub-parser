@@ -41,6 +41,7 @@ type UpdateSubscriptionCommand struct {
 	Prefix             *string
 	RefreshPolicy      *domain.RefreshPolicy
 	Config             *domain.SubscriptionConfig
+	ConfigPatch        *domain.SubscriptionConfigPatch
 	RequestID          string
 	ActorKind          domain.ActorKind
 }
@@ -157,7 +158,8 @@ func (s *Service) SetReconciler(r Reconciler) {
 
 // Create validates and persists a new subscription with UUIDv7 identity and revision.
 func (s *Service) Create(ctx context.Context, command CreateSubscriptionCommand) (SubscriptionView, error) {
-	if err := validateSchedule(command.Config); err != nil {
+	if err := validateConfig(command.Config); err != nil {
+		s.recordFailure(ctx, command.ActorKind, command.RequestID, "subscription.create")
 		return SubscriptionView{}, err
 	}
 	if err := validateCreate(command); err != nil {
@@ -172,7 +174,7 @@ func (s *Service) Create(ctx context.Context, command CreateSubscriptionCommand)
 		Enabled:            command.Enabled,
 		Prefix:             command.Prefix,
 		RefreshPolicy:      normalizedPolicy(command.RefreshPolicy),
-		Config:             command.Config,
+		Config:             normalizedConfig(command.Config),
 		Revision:           domain.MustNewUUIDv7(),
 		CreatedAt:          domain.NowUTC(),
 		UpdatedAt:          domain.NowUTC(),
@@ -230,11 +232,22 @@ func (s *Service) Update(ctx context.Context, command UpdateSubscriptionCommand)
 	if command.RefreshPolicy != nil {
 		sub.RefreshPolicy = normalizedPolicy(*command.RefreshPolicy)
 	}
-	if command.Config != nil {
-		if err := validateSchedule(*command.Config); err != nil {
+	if command.ConfigPatch != nil {
+		if err := sub.Config.ApplyPatch(command.ConfigPatch); err != nil {
+			s.recordFailure(ctx, command.ActorKind, command.RequestID, "subscription.update")
 			return SubscriptionView{}, err
 		}
-		sub.Config = *command.Config
+		if err := validateConfig(sub.Config); err != nil {
+			s.recordFailure(ctx, command.ActorKind, command.RequestID, "subscription.update")
+			return SubscriptionView{}, err
+		}
+		sub.Config = normalizedConfig(sub.Config)
+	} else if command.Config != nil {
+		if err := validateConfig(*command.Config); err != nil {
+			s.recordFailure(ctx, command.ActorKind, command.RequestID, "subscription.update")
+			return SubscriptionView{}, err
+		}
+		sub.Config = normalizedConfig(*command.Config)
 	}
 
 	if command.Prefix != nil {
@@ -381,6 +394,29 @@ func (s *Service) refresh(ctx context.Context, id, requestID string, actorKind d
 	return summary, nil
 }
 
+func validateConfig(config domain.SubscriptionConfig) error {
+	if err := validateSchedule(config); err != nil {
+		return err
+	}
+	if config.ProbePolicy != nil && config.ProbePolicy.Mode != "" {
+		if err := config.ProbePolicy.Validate(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func normalizedConfig(cfg domain.SubscriptionConfig) domain.SubscriptionConfig {
+	if cfg.ProbePolicy == nil || cfg.ProbePolicy.Mode == "" {
+		cfg.ProbePolicy = &domain.SubscriptionProbePolicy{
+			Mode: domain.ProbePolicyModeInherit,
+		}
+	} else if cfg.ProbePolicy.Mode != domain.ProbePolicyModeCustom {
+		cfg.ProbePolicy.IntervalSeconds = nil
+	}
+	return cfg
+}
+
 func validateCreate(command CreateSubscriptionCommand) error {
 	if strings.TrimSpace(command.Name) == "" {
 		return domain.NewValidationError("invalid_subscription_name", "subscription name is required")
@@ -411,7 +447,7 @@ func redact(sub domain.Subscription) SubscriptionView {
 	}
 	view := SubscriptionView{
 		ID: sub.ID, Name: sub.Name, SourceURLSecretRef: sub.SourceURLSecretRef, Enabled: sub.Enabled, IsPrimary: sub.IsPrimary, UserInfo: sub.UserInfo, Prefix: sub.Prefix, RefreshPolicy: sub.RefreshPolicy,
-		Config: sub.Config, Revision: sub.Revision,
+		Config: normalizedConfig(sub.Config), Revision: sub.Revision,
 		CreatedAt: sub.CreatedAt.Format("2006-01-02T15:04:05Z07:00"), UpdatedAt: sub.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		NodeCount:       sub.NodeCount,
 		SourceNodeCount: sub.SourceNodeCount,

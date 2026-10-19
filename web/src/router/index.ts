@@ -2,7 +2,6 @@ import { createRouter, createWebHashHistory, type RouteRecordRaw } from 'vue-rou
 import DashboardView from '../features/dashboard/DashboardView.vue'
 import SubscriptionsView from '../features/subscriptions/SubscriptionsView.vue'
 import NodesView from '../features/nodes/NodesView.vue'
-import ProbesView from '../features/probes/ProbesView.vue'
 import PolicyView from '../features/policy/PolicyView.vue'
 import RulesView from '../features/rules/RulesView.vue'
 import PublicationsView from '../features/publications/PublicationsView.vue'
@@ -34,9 +33,7 @@ export const routes: RouteRecordRaw[] = [
   },
   {
     path: '/probes',
-    name: 'probes',
-    component: ProbesView,
-    meta: { title: 'Probe Engine', icon: 'BoltIcon' },
+    redirect: '/nodes',
   },
   {
     path: '/policy',
@@ -68,7 +65,10 @@ export const routes: RouteRecordRaw[] = [
       // If someone passed hash like #subscriptions without leading slash, pathMatch is "subscriptions"
       const path = to.params.pathMatch
       const matchedTab = Array.isArray(path) ? path[0] : path
-      if (['dashboard', 'subscriptions', 'nodes', 'probes', 'policy', 'rules', 'publications', 'settings'].includes(matchedTab)) {
+      if (matchedTab === 'probes') {
+        return '/nodes'
+      }
+      if (['dashboard', 'subscriptions', 'nodes', 'policy', 'rules', 'publications', 'settings'].includes(matchedTab)) {
         return `/${matchedTab}`
       }
       return '/dashboard'

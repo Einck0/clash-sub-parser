@@ -14,6 +14,7 @@ import (
 	"clash-sub-parser/internal/application/policy"
 	"clash-sub-parser/internal/domain"
 	"clash-sub-parser/internal/repository/sqlite"
+	"clash-sub-parser/internal/resolver"
 	transporthttp "clash-sub-parser/internal/transport/http"
 )
 
@@ -935,5 +936,177 @@ func TestPolicyGroupsSearchAndPagination(t *testing.T) {
 	}
 	if respSearchNone.Data.Total != 0 || len(respSearchNone.Data.Items) != 0 {
 		t.Fatalf("expected total=0, items=0 for search=nonexistent, got %+v", respSearchNone.Data)
+	}
+}
+
+func TestPolicyHandler_PreviewGroup_Fields(t *testing.T) {
+	db := newCleanSQLiteDB(t)
+	router, policySvc := setupPolicyTestRouter(t, db)
+
+	// Inject inputProvider so preview produces deterministic candidate counts and members
+	n1 := domain.Node{LogicalID: "node-hk-01", DisplayName: "HK 01", Protocol: domain.ProtocolHysteria2, Active: true}
+	n2 := domain.Node{LogicalID: "node-us-02", DisplayName: "US 02", Protocol: domain.ProtocolHysteria2, Active: true}
+	patHK := "HK.*"
+
+	policySvc.SetInputProvider(func(ctx context.Context, revID string) (*resolver.ResolveInput, error) {
+		return &resolver.ResolveInput{
+			RevisionID:         "rev-preview-test",
+			InventoryWatermark: "wm-1",
+			CompilerVersion:    "1.0.0",
+			Nodes:              []domain.Node{n1, n2},
+			DNS: resolver.DNSConfig{
+				Enabled:     true,
+				Nameservers: []string{"1.1.1.1"},
+			},
+		}, nil
+	})
+
+	previewPayload := map[string]interface{}{
+		"name": "HK Group Preview",
+		"sources": []map[string]interface{}{
+			{
+				"operation": "add",
+				"kind":      "regex",
+				"position":  0,
+				"pattern":   patHK,
+			},
+		},
+	}
+	body, _ := json.Marshal(previewPayload)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/policies/groups/preview", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+testAdminToken)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/v1/policies/groups/preview returned status %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Data struct {
+			GroupID          string                      `json:"group_id"`
+			SelectionDigest  string                      `json:"selection_digest"`
+			MemberCount      int                         `json:"member_count"`
+			NodeCount        int                         `json:"node_count"`
+			CandidateCount   int                         `json:"candidate_count"`
+			ExcludedCount    int                         `json:"excluded_count"`
+			ExclusionSummary map[string]int              `json:"exclusion_summary"`
+			FilterCounts     *resolver.GroupFilterCount  `json:"filter_counts"`
+			Members          []policy.GroupPreviewMember `json:"members"`
+		} `json:"data"`
+	}
+
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to unmarshal preview response: %v\nBody: %s", err, rec.Body.String())
+	}
+
+	if resp.Data.MemberCount != 1 || len(resp.Data.Members) != 1 {
+		t.Fatalf("expected member_count=1, got %d, members: %+v", resp.Data.MemberCount, resp.Data.Members)
+	}
+	if resp.Data.CandidateCount != 2 {
+		t.Errorf("expected candidate_count=2, got %d", resp.Data.CandidateCount)
+	}
+	if resp.Data.ExcludedCount != 1 {
+		t.Errorf("expected excluded_count=1, got %d", resp.Data.ExcludedCount)
+	}
+	if resp.Data.FilterCounts == nil {
+		t.Fatalf("expected filter_counts to be non-nil")
+	}
+	if resp.Data.FilterCounts.Candidate != 2 || resp.Data.FilterCounts.Kept != 1 || resp.Data.FilterCounts.Excluded != 1 {
+		t.Errorf("expected filter_counts {2, 1, 1}, got %+v", resp.Data.FilterCounts)
+	}
+}
+
+func TestPolicyHandler_PreviewGroup_Pipeline_AddRemoveReentrantExclusion(t *testing.T) {
+	db := newCleanSQLiteDB(t)
+	router, policySvc := setupPolicyTestRouter(t, db)
+
+	n1 := domain.Node{LogicalID: "0192e100-0000-7000-9100-000000000001", DisplayName: "Tokyo Synthetic Alpha", Protocol: domain.ProtocolVMess, Active: true}
+	n2 := domain.Node{LogicalID: "0192e100-0000-7000-9100-000000000002", DisplayName: "London Synthetic Beta", Protocol: domain.ProtocolVLESS, Active: true}
+	n3 := domain.Node{LogicalID: "0192e100-0000-7000-9100-000000000003", DisplayName: "Singapore Synthetic Gamma", Protocol: domain.ProtocolTrojan, Active: true}
+
+	policySvc.SetInputProvider(func(ctx context.Context, revID string) (*resolver.ResolveInput, error) {
+		return &resolver.ResolveInput{
+			RevisionID:         "rev-preview-pipeline",
+			InventoryWatermark: "wm-1",
+			CompilerVersion:    "1.0.0",
+			Nodes:              []domain.Node{n1, n2, n3},
+			DNS: resolver.DNSConfig{
+				Enabled:     true,
+				Nameservers: []string{"1.1.1.1"},
+			},
+		}, nil
+	})
+
+	patTokyoLondon := ".*(Tokyo|London).*"
+	patLondon := ".*London.*"
+
+	previewPayload := map[string]interface{}{
+		"name": "Critic Pipeline Preview",
+		"sources": []map[string]interface{}{
+			// 1. Add Tokyo and London
+			{
+				"operation": "add",
+				"kind":      "regex",
+				"position":  0,
+				"pattern":   patTokyoLondon,
+			},
+			// 2. Remove London
+			{
+				"operation": "remove",
+				"kind":      "regex",
+				"position":  1,
+				"pattern":   patLondon,
+			},
+		},
+	}
+	body, _ := json.Marshal(previewPayload)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/policies/groups/preview", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+testAdminToken)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/v1/policies/groups/preview returned status %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Data struct {
+			GroupID          string                      `json:"group_id"`
+			MemberCount      int                         `json:"member_count"`
+			NodeCount        int                         `json:"node_count"`
+			CandidateCount   int                         `json:"candidate_count"`
+			ExcludedCount    int                         `json:"excluded_count"`
+			ExclusionSummary map[string]int              `json:"exclusion_summary"`
+			Members          []policy.GroupPreviewMember `json:"members"`
+		} `json:"data"`
+	}
+
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+
+	// Active member should only be Tokyo (1 node)
+	if resp.Data.MemberCount != 1 || resp.Data.NodeCount != 1 {
+		t.Errorf("expected MemberCount=1, NodeCount=1, got MemberCount=%d, NodeCount=%d", resp.Data.MemberCount, resp.Data.NodeCount)
+	}
+	// Candidate nodes evaluated: Tokyo, London, Singapore (from the regex scan over candidate pool) = 3
+	if resp.Data.CandidateCount != 3 {
+		t.Errorf("expected CandidateCount=3, got %d", resp.Data.CandidateCount)
+	}
+	// Excluded count = Candidate (3) - NodeCount (1) = 2
+	if resp.Data.ExcludedCount != 2 {
+		t.Errorf("expected ExcludedCount=2, got %d", resp.Data.ExcludedCount)
+	}
+	// Candidate = NodeCount + ExcludedCount
+	if resp.Data.CandidateCount != resp.Data.NodeCount+resp.Data.ExcludedCount {
+		t.Errorf("expected CandidateCount == NodeCount + ExcludedCount, got %d != %d + %d",
+			resp.Data.CandidateCount, resp.Data.NodeCount, resp.Data.ExcludedCount)
+	}
+	// Exclusion summary should have "regex removed": 1
+	if resp.Data.ExclusionSummary["regex removed"] != 1 {
+		t.Errorf("expected ExclusionSummary['regex removed']=1, got %d", resp.Data.ExclusionSummary["regex removed"])
 	}
 }

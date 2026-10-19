@@ -51,14 +51,14 @@ var FrontendCallSites = []struct {
 	{http.MethodGet, "/api/v1/nodes/{logical_id}/observations", "web/src/features/nodes/NodesView.vue"},
 
 	// Probes
-	{http.MethodPost, "/api/v1/probes/runs", "web/src/features/probes/ProbesView.vue"},
-	{http.MethodGet, "/api/v1/probes/runs", "web/src/features/probes/ProbesView.vue"},
-	{http.MethodGet, "/api/v1/probes/runs/{run_id}", "web/src/features/probes/ProbesView.vue"},
-	{http.MethodPost, "/api/v1/probes/runs/{run_id}/cancel", "web/src/features/probes/ProbesView.vue"},
-	{http.MethodGet, "/api/v1/probes/runs/{run_id}/observations", "web/src/features/probes/ProbesView.vue"},
-	{http.MethodGet, "/api/v1/probes/pool", "web/src/features/probes/ProbesView.vue"},
-	{http.MethodGet, "/api/v1/probes/schedule", "web/src/features/probes/ProbesView.vue"},
-	{http.MethodPut, "/api/v1/probes/schedule", "web/src/features/probes/ProbesView.vue"},
+	{http.MethodPost, "/api/v1/probes/runs", "web/src/features/nodes/NodesView.vue"},
+	{http.MethodGet, "/api/v1/probes/runs", "web/src/features/nodes/NodeProbeHistoryDrawer.vue"},
+	{http.MethodGet, "/api/v1/probes/runs/{run_id}", "web/src/features/nodes/NodeProbeHistoryDrawer.vue"},
+	{http.MethodPost, "/api/v1/probes/runs/{run_id}/cancel", "web/src/features/nodes/NodeProbeHistoryDrawer.vue"},
+	{http.MethodGet, "/api/v1/probes/runs/{run_id}/observations", "web/src/features/nodes/NodeProbeHistoryDrawer.vue"},
+	{http.MethodGet, "/api/v1/probes/pool", "web/src/features/nodes/NodesView.vue"},
+	{http.MethodGet, "/api/v1/probes/schedule", "web/src/features/settings/ProbeScheduleSettings.vue"},
+	{http.MethodPut, "/api/v1/probes/schedule", "web/src/features/settings/ProbeScheduleSettings.vue"},
 
 	// Policies & Rules
 	{http.MethodGet, "/api/v1/policies/global-node-filter", "web/src/features/settings/GlobalNodeFilterSettings.vue"},

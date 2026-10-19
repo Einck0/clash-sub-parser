@@ -267,6 +267,27 @@ export function validateEdgeInput(edge: Partial<GroupEdge>, parentId: string): s
   return null
 }
 
+export const SUPPORTED_PROBE_KINDS = [
+  'baseline',
+  'geo',
+  'streaming',
+  'ai',
+  'speed',
+  'ip_risk',
+] as const
+
+export type ProbeKind = typeof SUPPORTED_PROBE_KINDS[number]
+
+export const SUPPORTED_PROBE_VERDICTS = [
+  'available',
+  'restricted',
+  'unknown',
+  'error',
+  'stale',
+] as const
+
+export type ProbeVerdict = typeof SUPPORTED_PROBE_VERDICTS[number]
+
 export type FilterField =
   | 'display_name'
   | 'protocol'
@@ -287,8 +308,25 @@ export interface FilterCondition {
   field: FilterField
   op: FilterOp
   value?: string
-  probe_kind?: 'baseline' | 'geo' | 'streaming' | 'ai' | 'speed' | 'ip_risk'
+  probe_kind?: ProbeKind
   freshness_seconds?: number
+}
+
+export function filterFieldOperators(field: FilterField): FilterOp[] {
+  switch (field) {
+    case 'display_name':
+      return ['contains', 'not_contains', 'regex', 'not_regex']
+    case 'protocol':
+      return ['equals', 'not_equals']
+    case 'source_subscription_ids':
+      return ['contains', 'not_contains']
+    case 'probe_verdict':
+      return ['equals', 'not_equals']
+    case 'probe_latency_ms':
+      return ['lte']
+    default:
+      return ['equals']
+  }
 }
 
 export interface NodeFilterSpec {
@@ -606,6 +644,8 @@ export interface GroupDraftPreviewPayload {
   expected_revision?: number
   name?: string
   group_type?: GroupType
+  empty_fallback_pass?: boolean
+  inherit_global_filter?: boolean
   sources: MemberSource[]
   target?: string
 }
@@ -621,6 +661,22 @@ export interface ResolvedGroupMember {
   builtin_name?: string
 }
 
+export interface GroupFilterCount {
+  candidate: number
+  kept: number
+  excluded: number
+  exclusion_summary?: Record<string, number>
+}
+
+export interface ResolverDiagnostic {
+  severity: 'info' | 'warning' | 'error' | string
+  code: string
+  message: string
+  target?: string
+  reason?: string
+  excluded_count?: number
+}
+
 export interface GroupDraftPreviewResponse {
   group_id?: string
   revision?: number
@@ -628,8 +684,14 @@ export interface GroupDraftPreviewResponse {
   content_digest?: string
   content?: string
   members: ResolvedGroupMember[]
+  member_count?: number
   node_count: number
-  diagnostics?: string[]
+  candidate_count?: number
+  excluded_count?: number
+  exclusion_summary?: Record<string, number>
+  excluded_reasons?: string[]
+  filter_counts?: GroupFilterCount
+  diagnostics?: Array<ResolverDiagnostic | string>
 }
 
 export interface SourceSemanticInfo {

@@ -60,7 +60,6 @@ const navItems = [
   { id: 'dashboard', path: '/dashboard', labelKey: 'nav.dashboard', defaultLabel: 'Dashboard', icon: Squares2X2Icon },
   { id: 'subscriptions', path: '/subscriptions', labelKey: 'nav.subscriptions', defaultLabel: 'Subscriptions', icon: DocumentDuplicateIcon },
   { id: 'nodes', path: '/nodes', labelKey: 'nav.nodes', defaultLabel: 'Node Ledger', icon: ServerStackIcon },
-  { id: 'probes', path: '/probes', labelKey: 'nav.probes', defaultLabel: 'Probe Engine', icon: BoltIcon },
   { id: 'policy', path: '/policy', labelKey: 'nav.policy', defaultLabel: 'Policy Tree', icon: CpuChipIcon },
   { id: 'rules', path: '/rules', labelKey: 'nav.rules', defaultLabel: 'Rule Desk', icon: ShieldCheckIcon },
   { id: 'publications', path: '/publications', labelKey: 'nav.publications', defaultLabel: 'Exports', icon: ArrowDownTrayIcon },

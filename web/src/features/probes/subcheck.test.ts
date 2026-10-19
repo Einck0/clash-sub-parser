@@ -18,7 +18,6 @@ import {
 } from '../nodes/nodeView'
 import ProbeEvidenceSheet from './ProbeEvidenceSheet.vue'
 import NodesView from '../nodes/NodesView.vue'
-import ProbesView from './ProbesView.vue'
 import { api } from '../../api/client'
 
 export const subcheckFixtureNodes: Record<string, NodeRecord> = {
@@ -529,15 +528,15 @@ describe('Subcheck Platform Capability Matrix & Fixture Tests', () => {
       mountEl.remove()
     })
 
-    it('renders platform badges in ProbesView workbench table', async () => {
+    it('renders platform badges in NodesView ledger', async () => {
       const mockNodes = [
         subcheckFixtureNodes.streamingFull,
         subcheckFixtureNodes.aiWeb,
       ]
 
       vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
-        if (path.includes('/api/v1/probes/pool/status')) {
-          return { queue_nodes_count: 0, probing_count: 0, probing_node_ids: [], queued_node_ids: [] }
+        if (path.includes('/api/v1/probes/pool')) {
+          return { queue_nodes_count: 0, probing_count: 0, probing_node_ids: [], queued_node_ids: [], total_count: 2 }
         }
         if (path.includes('/api/v1/probes/runs')) {
           return { items: [], total: 0 }
@@ -552,7 +551,7 @@ describe('Subcheck Platform Capability Matrix & Fixture Tests', () => {
           return { items: mockNodes, total: mockNodes.length, page: 1, page_size: 50 }
         }
         if (path.includes('/api/v1/subscriptions')) {
-          return { items: [], total: 0 }
+          return []
         }
         return {}
       })
@@ -560,11 +559,11 @@ describe('Subcheck Platform Capability Matrix & Fixture Tests', () => {
       const mountEl = document.createElement('div')
       document.body.appendChild(mountEl)
       const app = createApp({
-        render: () => h(ProbesView),
+        render: () => h(NodesView),
       })
       app.mount(mountEl)
       await nextTick()
-      await new Promise((r) => setTimeout(r, 40))
+      await new Promise((r) => setTimeout(r, 60))
 
       const text = mountEl.textContent || ''
       expect(text).toContain('NF (HK)')

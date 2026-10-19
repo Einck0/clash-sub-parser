@@ -65,6 +65,7 @@ func (r *subscriptionRepository) GetByID(ctx context.Context, id string) (*domai
 	if configJSON.Valid && strings.TrimSpace(configJSON.String) != "" {
 		_ = json.Unmarshal([]byte(configJSON.String), &sub.Config)
 	}
+	normalizeSubscriptionConfig(&sub.Config)
 	sub.CreatedAt, _ = time.Parse(time.RFC3339, createdAtStr)
 	sub.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAtStr)
 
@@ -163,6 +164,7 @@ func (r *subscriptionRepository) List(ctx context.Context, filter domain.Subscri
 		if configJSON.Valid && strings.TrimSpace(configJSON.String) != "" {
 			_ = json.Unmarshal([]byte(configJSON.String), &sub.Config)
 		}
+		normalizeSubscriptionConfig(&sub.Config)
 		sub.CreatedAt, _ = time.Parse(time.RFC3339, createdAtStr)
 		sub.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAtStr)
 
@@ -184,6 +186,16 @@ func (r *subscriptionRepository) List(ctx context.Context, filter domain.Subscri
 	}
 
 	return items, total, nil
+}
+
+func normalizeSubscriptionConfig(cfg *domain.SubscriptionConfig) {
+	if cfg.ProbePolicy == nil || cfg.ProbePolicy.Mode == "" {
+		cfg.ProbePolicy = &domain.SubscriptionProbePolicy{
+			Mode: domain.ProbePolicyModeInherit,
+		}
+	} else if cfg.ProbePolicy.Mode != domain.ProbePolicyModeCustom {
+		cfg.ProbePolicy.IntervalSeconds = nil
+	}
 }
 
 func (r *subscriptionRepository) attachMetadata(ctx context.Context, subs []*domain.Subscription) error {
@@ -399,6 +411,7 @@ func (r *subscriptionRepository) GetPrimary(ctx context.Context) (*domain.Subscr
 	if configJSON.Valid && strings.TrimSpace(configJSON.String) != "" {
 		_ = json.Unmarshal([]byte(configJSON.String), &sub.Config)
 	}
+	normalizeSubscriptionConfig(&sub.Config)
 	sub.CreatedAt, _ = time.Parse(time.RFC3339, createdAtStr)
 	sub.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAtStr)
 
@@ -427,6 +440,7 @@ func (r *subscriptionRepository) Create(ctx context.Context, sub *domain.Subscri
 		isPrimaryInt = 1
 	}
 
+	normalizeSubscriptionConfig(&sub.Config)
 	configBytes, _ := json.Marshal(sub.Config)
 	configStr := string(configBytes)
 	if configStr == "" || configStr == "null" {
@@ -503,6 +517,7 @@ func (r *subscriptionRepository) Update(ctx context.Context, sub *domain.Subscri
 		isPrimaryInt = 1
 	}
 
+	normalizeSubscriptionConfig(&sub.Config)
 	configBytes, _ := json.Marshal(sub.Config)
 	configStr := string(configBytes)
 	if configStr == "" || configStr == "null" {

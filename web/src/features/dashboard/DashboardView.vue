@@ -196,7 +196,7 @@ onMounted(() => {
 
       <div
         class="card bg-base-200/60 backdrop-blur-xl border border-white/10 shadow-sm hover:border-primary/40 transition-all cursor-pointer group"
-        @click="navigateTo('probes')"
+        @click="navigateTo('nodes')"
       >
         <div class="card-body p-4 sm:p-5 gap-2">
           <div class="flex items-center justify-between">
@@ -246,7 +246,7 @@ onMounted(() => {
           <button
             type="button"
             class="btn btn-outline btn-secondary btn-sm sm:btn-md justify-start gap-2.5 font-semibold text-xs touch-manipulation hover:shadow-md"
-            @click="navigateTo('probes')"
+            @click="navigateTo('nodes')"
           >
             <BoltIcon class="w-4 h-4 shrink-0" />
             <span>{{ t('dashboard.runProbe') }}</span>

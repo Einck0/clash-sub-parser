@@ -54,7 +54,7 @@ describe('App.vue Navigation Dock & Layout Adaptability', () => {
     expect(dock!.classList.contains('rounded-2xl') || dock!.classList.contains('rounded-full')).toBe(true)
 
     // Verify all 7 routes are accessible from the dock (including Dashboard)
-    const expectedRouteIds = ['dashboard', 'subscriptions', 'nodes', 'probes', 'policy', 'publications', 'settings']
+    const expectedRouteIds = ['dashboard', 'subscriptions', 'nodes', 'policy', 'rules', 'publications', 'settings']
     for (const routeId of expectedRouteIds) {
       const linkBtn = dock!.querySelector(`[data-testid="dock-link-${routeId}"]`)
       expect(linkBtn, `Mobile dock must contain explicit entry for ${routeId}`).toBeTruthy()

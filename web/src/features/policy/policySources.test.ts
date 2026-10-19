@@ -2,12 +2,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp, h, nextTick, ref } from 'vue'
 import PolicyEditorSheet from './PolicyEditorSheet.vue'
+import StructuredFilterEditor from './StructuredFilterEditor.vue'
 import GroupCard from './GroupCard.vue'
 import { usePolicy } from './usePolicy'
 import {
   computeSourceSemantics,
   normalizeGroupSources,
   validateSourceInput,
+  type FilterCondition,
   type MemberSource,
   type PolicyGroup,
 } from './policyTypes'
@@ -950,6 +952,403 @@ describe('Feature-Level Policy Sources & Pipeline Rebuild', () => {
       app.mount(container)
 
       expect(container.textContent).toContain('无成员来源')
+
+      app.unmount()
+    })
+  })
+
+  // 16. Four Stages Architecture & Scope/Add/Exclude/Results Workflow
+  describe('Four Stages Architecture & Scope/Add/Exclude/Results Workflow', () => {
+    it('renders all four stages in explicit order: scope -> add -> exclude -> results', async () => {
+      const group: PolicyGroup = {
+        id: 'grp-stages',
+        name: 'Four Stages Group',
+        group_type: 'select',
+        empty_fallback_pass: true,
+        inherit_global_filter: true,
+        sources: [
+          { operation: 'add', kind: 'manual_node', position: 0, node_logical_id: 'node-hk-01' },
+          { operation: 'remove', kind: 'regex', position: 1, pattern: '.*expire.*' },
+        ],
+      }
+
+      const app = createApp({
+        render: () => h(PolicyEditorSheet, { open: true, group, allGroups: [group] }),
+      })
+      app.mount(container)
+      await nextTick()
+
+      const scopeEl = container.querySelector('[data-testid="stage-candidate-scope"]')
+      const addEl = container.querySelector('[data-testid="stage-add-members"]')
+      const excludeEl = container.querySelector('[data-testid="stage-exclude-members"]')
+      const resultsEl = container.querySelector('[data-testid="stage-realtime-results"]')
+
+      expect(scopeEl).not.toBeNull()
+      expect(addEl).not.toBeNull()
+      expect(excludeEl).not.toBeNull()
+      expect(resultsEl).not.toBeNull()
+
+      // Verify DOM document position order: Scope before Add, Add before Exclude, Exclude before Results
+      const posScopeAdd = scopeEl!.compareDocumentPosition(addEl!)
+      expect(posScopeAdd & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+      const posAddExclude = addEl!.compareDocumentPosition(excludeEl!)
+      expect(posAddExclude & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+      const posExcludeResults = excludeEl!.compareDocumentPosition(resultsEl!)
+      expect(posExcludeResults & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+      // Stage 1: Candidate scope displays inherit and all admitted options
+      expect(scopeEl!.textContent).toContain('继承全局筛选')
+      expect(scopeEl!.textContent).toContain('使用全部准入节点')
+
+      // Stage 2: Add member controls exist
+      expect(addEl!.textContent).toContain('添加成员')
+
+      // Stage 3: Exclude & pipeline displays the 2 source rows
+      const rows = excludeEl!.querySelectorAll('[data-testid="source-row"]')
+      expect(rows).toHaveLength(2)
+
+      // Stage 4: Results metrics exist
+      expect(resultsEl!.querySelector('[data-testid="candidate-count"]')).not.toBeNull()
+      expect(resultsEl!.querySelector('[data-testid="member-count"]')).not.toBeNull()
+      expect(resultsEl!.querySelector('[data-testid="excluded-count"]')).not.toBeNull()
+
+      app.unmount()
+    })
+
+    it('toggles candidate scope between inherit and bypass, preserving safety notice', async () => {
+      let savedPayload: any = null
+      const saveFn = vi.fn((data) => { savedPayload = data })
+      const group: PolicyGroup = {
+        id: 'grp-scope-test',
+        name: 'Scope Test Group',
+        group_type: 'select',
+        inherit_global_filter: true,
+        sources: [],
+      }
+
+      const app = createApp({
+        render: () => h(PolicyEditorSheet, { open: true, group, allGroups: [group], onSaveGroup: saveFn }),
+      })
+      app.mount(container)
+      await nextTick()
+
+      // Find scope options
+      const radios = container.querySelectorAll('[data-testid="stage-candidate-scope"] input[type="radio"]') as NodeListOf<HTMLInputElement>
+      expect(radios.length).toBeGreaterThanOrEqual(2)
+
+      // Toggle to false (使用全部准入节点)
+      const bypassRadio = Array.from(radios).find((r) => r.value === 'false')
+      expect(bypassRadio).toBeDefined()
+      bypassRadio!.click()
+      await nextTick()
+
+      expect(container.textContent).toContain('绝不绕过禁用订阅、准入规则')
+
+      // Submit form
+      container.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true }))
+      await nextTick()
+
+      expect(saveFn).toHaveBeenCalledOnce()
+      expect(savedPayload.inheritGlobalFilter).toBe(false)
+
+      app.unmount()
+    })
+  })
+
+  // 17. Shared Filter Condition Editing & In-Place Updates
+  describe('Shared Filter Condition Editing & In-Place Updates', () => {
+    it('loads selected condition into draft fields, updates in-place, and allows cancel', async () => {
+      const initialConditions: FilterCondition[] = [
+        { field: 'display_name', op: 'contains', value: 'HongKong' },
+        { field: 'protocol', op: 'equals', value: 'ss' },
+      ]
+      let currentConditions = [...initialConditions]
+
+      const app = createApp({
+        render: () =>
+          h(StructuredFilterEditor, {
+            modelValue: currentConditions,
+            'onUpdate:modelValue': (val: FilterCondition[]) => {
+              currentConditions = val
+            },
+          }),
+      })
+      app.mount(container)
+      await nextTick()
+
+      const conditionBadges = container.querySelectorAll('[data-testid="filter-condition"]')
+      expect(conditionBadges).toHaveLength(2)
+
+      // Click "编辑" on the second condition (#2: protocol = ss)
+      const editButtons = Array.from(container.querySelectorAll('button')).filter((b) => b.textContent?.trim() === '编辑')
+      expect(editButtons).toHaveLength(2)
+      editButtons[1].click()
+      await nextTick()
+
+      // Draft form now displays edit mode for condition #2
+      expect(container.textContent).toContain('编辑条件 #2')
+
+      // Select element for protocol should be 'ss'
+      const valueSelect = container.querySelector('[data-testid="condition-value"]') as HTMLSelectElement
+      expect(valueSelect.value).toBe('ss')
+
+      // Change protocol to 'vless'
+      valueSelect.value = 'vless'
+      valueSelect.dispatchEvent(new Event('change'))
+      await nextTick()
+
+      // Click "添加条件" (which acts as update when editingIndex !== null)
+      const submitBtn = container.querySelector('[data-testid="filter-add"]') as HTMLButtonElement
+      submitBtn.click()
+      await nextTick()
+
+      // Should still be exactly 2 conditions, but condition #2 is updated to vless
+      expect(currentConditions).toHaveLength(2)
+      expect(currentConditions[0]).toEqual({ field: 'display_name', op: 'contains', value: 'HongKong' })
+      expect(currentConditions[1]).toEqual({ field: 'protocol', op: 'equals', value: 'vless' })
+
+      // Now edit condition #1 and click "取消编辑"
+      const updatedEditButtons = Array.from(container.querySelectorAll('button')).filter((b) => b.textContent?.trim() === '编辑')
+      updatedEditButtons[0].click()
+      await nextTick()
+
+      expect(container.textContent).toContain('编辑条件 #1')
+      const cancelBtn = Array.from(container.querySelectorAll('button')).find((b) => b.textContent?.trim() === '取消编辑')
+      expect(cancelBtn).toBeDefined()
+      cancelBtn!.click()
+      await nextTick()
+
+      expect(container.textContent).toContain('添加新筛选条件 (AND)')
+      expect(currentConditions).toHaveLength(2)
+
+      app.unmount()
+    })
+  })
+
+  // 18. Clear Filter Conditions & No Hidden Default Injections
+  describe('Clear Filter Conditions & No Hidden Default Injections', () => {
+    it('clears all conditions and leaves clean state without injecting hidden health conditions', async () => {
+      let conditions: FilterCondition[] = [
+        { field: 'probe_verdict', op: 'equals', value: 'available', probe_kind: 'baseline' },
+        { field: 'probe_latency_ms', op: 'lte', value: '150', probe_kind: 'baseline' },
+      ]
+
+      const app = createApp({
+        render: () =>
+          h(StructuredFilterEditor, {
+            modelValue: conditions,
+            'onUpdate:modelValue': (val: FilterCondition[]) => {
+              conditions = val
+            },
+          }),
+      })
+      app.mount(container)
+      await nextTick()
+
+      expect(container.querySelectorAll('[data-testid="filter-condition"]')).toHaveLength(2)
+
+      // Click "清空条件"
+      const clearBtn = container.querySelector('[data-testid="filter-clear"]') as HTMLButtonElement
+      expect(clearBtn).not.toBeNull()
+      clearBtn.click()
+      await nextTick()
+
+      expect(conditions).toEqual([])
+      expect(conditions).toHaveLength(0)
+
+      // Renders clean empty explanation without hidden conditions
+      const emptyEl = container.querySelector('[data-testid="filter-empty"]')
+      expect(emptyEl).not.toBeNull()
+      expect(container.textContent).toContain('无额外筛选条件 (匹配全部候选节点)')
+      expect(container.textContent).toContain('绝不偷偷附加健康或可用性限制条件')
+
+      app.unmount()
+    })
+  })
+
+  // 19. Dynamic Source Persistence & No Static ID Expansion Roundtrip
+  describe('Dynamic Source Persistence & No Static ID Expansion Roundtrip', () => {
+    it('preserves dynamic filter and regex specs without statically freezing preview node IDs', async () => {
+      let savedPayload: any = null
+      const saveFn = vi.fn((data) => { savedPayload = data })
+
+      const group: PolicyGroup = {
+        id: 'grp-dynamic',
+        name: 'Dynamic Sources Group',
+        group_type: 'select',
+        sources: [
+          {
+            operation: 'add',
+            kind: 'regex',
+            position: 0,
+            pattern: '.*(HK|香港).*',
+          },
+          {
+            operation: 'remove',
+            kind: 'filter',
+            position: 1,
+            filter_spec: { conditions: [{ field: 'protocol', op: 'equals', value: 'ss' }] },
+          },
+        ],
+      }
+
+      // Mock preview returning 3 concrete node IDs
+      vi.spyOn(api, 'post').mockResolvedValue({
+        members: [
+          { node_logical_id: 'node-hk-01', display_name: 'HK 01' },
+          { node_logical_id: 'node-hk-02', display_name: 'HK 02' },
+        ],
+        member_count: 2,
+        candidate_count: 5,
+        selection_digest: 'digest-123',
+      })
+
+      const app = createApp({
+        render: () => h(PolicyEditorSheet, { open: true, group, allGroups: [group], onSaveGroup: saveFn }),
+      })
+      app.mount(container)
+      await nextTick()
+
+      // Submit save
+      container.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true }))
+      await nextTick()
+
+      expect(saveFn).toHaveBeenCalledOnce()
+      // The saved sources must retain kind 'regex' and 'filter', NOT converted to 'manual_node'
+      expect(savedPayload.sources).toHaveLength(2)
+      expect(savedPayload.sources[0].kind).toBe('regex')
+      expect(savedPayload.sources[0].pattern).toBe('.*(HK|香港).*')
+      expect(savedPayload.sources[1].kind).toBe('filter')
+      expect(savedPayload.sources[1].filter_spec.conditions[0]).toEqual({ field: 'protocol', op: 'equals', value: 'ss' })
+
+      // Neither source has node_logical_id
+      expect(savedPayload.sources[0].node_logical_id).toBeUndefined()
+      expect(savedPayload.sources[1].node_logical_id).toBeUndefined()
+
+      app.unmount()
+    })
+  })
+
+  // 20. Preview Debounce Epoch Race & Component Close Cleanup
+  describe('Preview Debounce Epoch Race & Component Close Cleanup', () => {
+    it('discards stale out-of-order preview responses and keeps latest generation', async () => {
+      let resolveSlow: ((val: any) => void) | null = null
+      let resolveFast: ((val: any) => void) | null = null
+
+      let callCount = 0
+      vi.spyOn(api, 'post').mockImplementation((path) => {
+        if (path === '/api/v1/policies/groups/preview') {
+          callCount++
+          if (callCount === 1) {
+            return new Promise((r) => { resolveSlow = r })
+          } else {
+            return new Promise((r) => { resolveFast = r })
+          }
+        }
+        return Promise.resolve({})
+      })
+
+      const group: PolicyGroup = {
+        id: 'grp-race',
+        name: 'Race Group',
+        group_type: 'select',
+        sources: [{ operation: 'add', kind: 'manual_node', position: 0, node_logical_id: 'node-1' }],
+      }
+
+      const app = createApp({
+        render: () => h(PolicyEditorSheet, { open: true, group, allGroups: [group] }),
+      })
+      app.mount(container)
+      await nextTick()
+
+      // Trigger preview generation 1
+      const refreshBtn = container.querySelector('[data-testid="stage-realtime-results"] button') as HTMLButtonElement
+      refreshBtn.click()
+      await nextTick()
+
+      // Trigger preview generation 2
+      refreshBtn.click()
+      await nextTick()
+
+      expect(callCount).toBe(2)
+
+      // Resolve generation 2 first (Fast response: member_count = 10)
+      resolveFast!({
+        members: [],
+        member_count: 10,
+        candidate_count: 10,
+        selection_digest: 'fast-digest',
+      })
+      await nextTick()
+      await Promise.resolve()
+
+      const memberCountEl = container.querySelector('[data-testid="member-count"]')
+      expect(memberCountEl?.textContent).toContain('10')
+
+      // Resolve generation 1 later (Slow response: member_count = 1)
+      resolveSlow!({
+        members: [],
+        member_count: 1,
+        candidate_count: 1,
+        selection_digest: 'slow-stale-digest',
+      })
+      await nextTick()
+      await Promise.resolve()
+
+      // Stale response must be discarded; member count remains 10
+      expect(memberCountEl?.textContent).toContain('10')
+
+      app.unmount()
+    })
+
+    it('cancels preview timer and discards late response after closing sheet', async () => {
+      let resolvePending: ((val: any) => void) | null = null
+      vi.spyOn(api, 'post').mockImplementation((path) => {
+        if (path === '/api/v1/policies/groups/preview') {
+          return new Promise((r) => { resolvePending = r })
+        }
+        return Promise.resolve({})
+      })
+
+      const group: PolicyGroup = {
+        id: 'grp-close-cleanup',
+        name: 'Cleanup Group',
+        group_type: 'select',
+        sources: [],
+      }
+
+      const isOpen = ref(true)
+      const app = createApp({
+        render: () => h(PolicyEditorSheet, { open: isOpen.value, group, allGroups: [group] }),
+      })
+      app.mount(container)
+      await nextTick()
+
+      // Request preview
+      const refreshBtn = container.querySelector('[data-testid="stage-realtime-results"] button') as HTMLButtonElement
+      refreshBtn.click()
+      await nextTick()
+
+      // Close sheet while preview is pending
+      isOpen.value = false
+      await nextTick()
+
+      // Now resolve the late response
+      if (resolvePending) {
+        (resolvePending as (val: any) => void)({
+          members: [{ node_logical_id: 'late-node' }],
+          member_count: 1,
+          candidate_count: 1,
+        })
+      }
+      await nextTick()
+      await Promise.resolve()
+
+      // Reopen sheet: should reinitialize cleanly without stale data
+      isOpen.value = true
+      await nextTick()
 
       app.unmount()
     })

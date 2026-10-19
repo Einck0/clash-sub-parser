@@ -3,6 +3,7 @@ package policy_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"clash-sub-parser/internal/application/policy"
 	"clash-sub-parser/internal/domain"
 	"clash-sub-parser/internal/repository/sqlite"
+	"clash-sub-parser/internal/resolver"
 	"clash-sub-parser/migrations"
 )
 
@@ -1502,5 +1504,132 @@ func TestPolicyService_ListGroups_SearchAndPagination(t *testing.T) {
 	}
 	if searchProxyP2.Total != 2 || len(searchProxyP2.Items) != 1 || searchProxyP2.Items[0].Name != "Delta-Proxy" {
 		t.Fatalf("expected total=2, items=1 (Delta-Proxy) on p2, got %+v", searchProxyP2)
+	}
+}
+
+func stringPtr(s string) *string {
+	return &s
+}
+
+func TestPolicyService_PreviewGroup_InputProvider_ConsistentFacts_And_Errors(t *testing.T) {
+	db := setupTestDB(t)
+	svc, _ := setupTestService(t, db)
+	ctx := context.Background()
+
+	// 1. Error propagation: if inputProvider returns an error, PreviewGroup must return the error, not fallback.
+	expectedErr := fmt.Errorf("database connection pool exhausted")
+	svc.SetInputProvider(func(ctx context.Context, revID string) (*resolver.ResolveInput, error) {
+		return nil, expectedErr
+	})
+
+	patHK := "HK.*"
+	_, err := svc.PreviewGroup(ctx, policy.PreviewGroupCommand{
+		Name: stringPtr("Test Preview"),
+		Sources: []domain.MemberSource{
+			{Operation: domain.OperationAdd, Kind: domain.SourceKindRegex, Position: 0, Pattern: &patHK},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "database connection pool exhausted") {
+		t.Fatalf("expected inputProvider error to be propagated, got: %v", err)
+	}
+
+	// 2. Consistent facts: when inputProvider provides resolved input, PreviewGroup uses those exact nodes,
+	// returning consistent candidate_count, member_count, excluded_count, and filter_counts.
+	n1 := domain.Node{LogicalID: "node-hk-01", DisplayName: "HK 01", Protocol: domain.ProtocolHysteria2, Active: true}
+	n2 := domain.Node{LogicalID: "node-us-02", DisplayName: "US 02", Protocol: domain.ProtocolHysteria2, Active: true}
+	mockInput := resolver.ResolveInput{
+		RevisionID:         "rev-consistent-1",
+		InventoryWatermark: "wm-1",
+		CompilerVersion:    "1.0.0",
+		Nodes:              []domain.Node{n1, n2},
+		DNS: resolver.DNSConfig{
+			Enabled:     true,
+			Nameservers: []string{"1.1.1.1"},
+		},
+	}
+	svc.SetInputProvider(func(ctx context.Context, revID string) (*resolver.ResolveInput, error) {
+		return &mockInput, nil
+	})
+
+	resp, err := svc.PreviewGroup(ctx, policy.PreviewGroupCommand{
+		Name: stringPtr("Test HK Group"),
+		Sources: []domain.MemberSource{
+			{Operation: domain.OperationAdd, Kind: domain.SourceKindRegex, Position: 0, Pattern: &patHK},
+		},
+	})
+	if err != nil {
+		t.Fatalf("PreviewGroup failed: %v", err)
+	}
+
+	if resp.MemberCount != 1 || len(resp.Members) != 1 {
+		t.Fatalf("expected 1 member, got member_count=%d, members=%+v", resp.MemberCount, resp.Members)
+	}
+	if *resp.Members[0].NodeLogicalID != n1.LogicalID {
+		t.Errorf("expected member %s, got %s", n1.LogicalID, *resp.Members[0].NodeLogicalID)
+	}
+	if resp.CandidateCount != 2 {
+		t.Errorf("expected candidate_count 2, got %d", resp.CandidateCount)
+	}
+	if resp.ExcludedCount != 1 {
+		t.Errorf("expected excluded_count 1, got %d", resp.ExcludedCount)
+	}
+	if resp.FilterCounts == nil {
+		t.Fatalf("expected FilterCounts to be present in response")
+	}
+	if resp.FilterCounts.Candidate != 2 || resp.FilterCounts.Kept != 1 || resp.FilterCounts.Excluded != 1 {
+		t.Errorf("expected FilterCounts {2, 1, 1}, got %+v", resp.FilterCounts)
+	}
+}
+
+func TestPolicyService_PreviewGroup_Standalone_EvidenceFilterContract(t *testing.T) {
+	db := setupTestDB(t)
+	svc, _ := setupTestService(t, db)
+	ctx := context.Background()
+
+	// Ensure inputProvider is nil
+	svc.SetInputProvider(nil)
+
+	// A standalone service cannot evaluate evidence filters (like probe latency or subscription).
+	// Calling PreviewGroup with probe condition on standalone service must return DomainError with Code "preview_incomplete".
+	baselineProbe := domain.ProbeKindBaseline
+	_, err := svc.PreviewGroup(ctx, policy.PreviewGroupCommand{
+		Name: stringPtr("Evidence Filter Group"),
+		Sources: []domain.MemberSource{
+			{
+				Operation: domain.OperationAdd,
+				Kind:      domain.SourceKindFilter,
+				Position:  0,
+				FilterSpec: &domain.NodeFilterSpec{
+					Conditions: []domain.FilterCondition{
+						{Field: domain.FilterFieldProbeLatencyMS, Op: domain.FilterOpLTE, Value: "100", ProbeKind: &baselineProbe},
+					},
+				},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatalf("expected preview_incomplete error for evidence filter on standalone service, got nil")
+	}
+	var de *domain.DomainError
+	if !errors.As(err, &de) || de.Code != "preview_incomplete" {
+		t.Fatalf("expected DomainError with code 'preview_incomplete', got: %v", err)
+	}
+}
+
+func TestPolicyService_ValidateGraph_WithInputProvider(t *testing.T) {
+	db := setupTestDB(t)
+	svc, _ := setupTestService(t, db)
+	ctx := context.Background()
+
+	// Set inputProvider that returns error
+	svc.SetSnapshotProvider(nil)
+	expectedErr := fmt.Errorf("underlying storage unavailable")
+	svc.SetInputProvider(func(ctx context.Context, revID string) (*resolver.ResolveInput, error) {
+		return nil, expectedErr
+	})
+
+	_, err := svc.ValidateGraph(ctx)
+	if err == nil || !strings.Contains(err.Error(), "underlying storage unavailable") {
+		t.Fatalf("expected ValidateGraph to return provider error, got: %v", err)
 	}
 }

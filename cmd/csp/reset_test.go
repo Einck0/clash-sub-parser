@@ -162,13 +162,35 @@ func TestResetNodeInventoryCLI_DryRun(t *testing.T) {
 	}
 }
 
+func createTestArchiveDBFile(t *testing.T, archivePath string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", archivePath)
+	if err != nil {
+		t.Fatalf("failed to open test archive db: %v", err)
+	}
+	defer db.Close()
+
+	_, err = db.Exec(`
+		CREATE TABLE subscriptions (name TEXT, url TEXT, enabled INTEGER);
+		INSERT INTO subscriptions VALUES
+			('7li', 'https://z.7li7li.com/api/v1/client/subscribe?token=token7li', 1),
+			('魔戒', 'https://msub.xn--m7r52rosihxm.com/api/v1/client/subscribe?token=tokenmojie', 1);
+	`)
+	if err != nil {
+		t.Fatalf("failed to insert test archive subscriptions: %v", err)
+	}
+}
+
 func TestResetNodeInventoryCLI_Apply(t *testing.T) {
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "apply.db")
 	createTestDBFile(t, dbPath)
 
+	archivePath := filepath.Join(tempDir, "archive.db")
+	createTestArchiveDBFile(t, archivePath)
+
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"reset-node-inventory", "--db", dbPath, "--apply", "--confirm-backup", "--restore-source-tokens", "--archive-db", "/home/service/backups/csp-legacy-cold-archive-20260919.db"}, &stdout, &stderr)
+	code := run([]string{"reset-node-inventory", "--db", dbPath, "--apply", "--confirm-backup", "--restore-source-tokens", "--archive-db", archivePath}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("expected exit code 0, got %d. stderr: %s", code, stderr.String())
 	}

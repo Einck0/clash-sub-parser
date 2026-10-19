@@ -10,6 +10,7 @@ import {
   CommandLineIcon,
   LanguageIcon,
   PaintBrushIcon,
+  BoltIcon,
 } from '@heroicons/vue/24/outline'
 import { api } from '../../api/client'
 import { toastStore } from '../../ui/toast'
@@ -20,6 +21,7 @@ import { applyTheme, getStoredTheme, THEME_NAMES, type ThemeName } from '../../t
 import GlobalNodeFilterSettings from './GlobalNodeFilterSettings.vue'
 import SubscriptionFetchSettings from './SubscriptionFetchSettings.vue'
 import PublicBaseUrlSettings from './PublicBaseUrlSettings.vue'
+import ProbeScheduleSettings from './ProbeScheduleSettings.vue'
 import ProbeTimeoutSettings from './ProbeTimeoutSettings.vue'
 
 const authMode = ref<'open' | 'token' | 'loading' | 'error'>('loading')
@@ -411,7 +413,25 @@ onMounted(() => {
     <SubscriptionFetchSettings />
     <PublicBaseUrlSettings />
     <GlobalNodeFilterSettings />
-    <ProbeTimeoutSettings />
+
+    <!-- Unified Probe Partition: Automatic Schedule, Detection Kinds & Handshake Timeout -->
+    <section class="card bg-base-200/80 backdrop-blur-xl shadow-sm border border-white/10" data-testid="settings-probe-partition">
+      <div class="card-body p-5 space-y-6">
+        <div class="flex items-center gap-2.5">
+          <BoltIcon class="w-5 h-5 text-primary" />
+          <div>
+            <h3 class="text-sm sm:text-base font-bold">{{ t('settings.probePartitionTitle') }}</h3>
+            <p class="text-xs text-base-content/60">
+              {{ t('settings.probePartitionSubtitle') }}
+            </p>
+          </div>
+        </div>
+
+        <ProbeScheduleSettings />
+        <div class="divider my-1 opacity-50" />
+        <ProbeTimeoutSettings />
+      </div>
+    </section>
 
     <!-- Language & Visual System Settings -->
     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">

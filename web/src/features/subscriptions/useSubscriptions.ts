@@ -16,12 +16,20 @@ export interface FilterRule {
   pattern: string
 }
 
+export type ProbePolicyMode = 'inherit' | 'disabled' | 'custom'
+
+export interface SubscriptionProbePolicy {
+  mode: ProbePolicyMode
+  interval_seconds?: number
+}
+
 export interface SubscriptionConfig {
   cron_schedule?: string
   auto_test?: boolean
   rename_rules?: RenameRule[]
   filter_rules?: FilterRule[]
   target_groups?: string[]
+  probe_policy?: SubscriptionProbePolicy
 }
 
 export type EntryKind = 'proxy' | 'notice' | 'unknown'
@@ -104,10 +112,12 @@ export const defaultPolicy = () => ({
 
 export const defaultConfig = (): SubscriptionConfig => ({
   cron_schedule: '',
-  auto_test: false,
   rename_rules: [],
   filter_rules: [],
   target_groups: [],
+  probe_policy: {
+    mode: 'inherit',
+  },
 })
 
 export function formatRefreshTime(iso: string | null | undefined, locale: string = 'zh-CN'): string {

@@ -3,6 +3,7 @@ package inventory
 import (
 	"context"
 	"database/sql"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -80,13 +81,34 @@ func TestRedactTokenURL(t *testing.T) {
 	}
 }
 
+func getTestArchiveDB(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	archivePath := filepath.Join(dir, "archive.db")
+	db, err := sql.Open("sqlite", archivePath)
+	if err != nil {
+		t.Fatalf("failed to open test archive db: %v", err)
+	}
+	defer db.Close()
+	_, err = db.Exec(`
+		CREATE TABLE subscriptions (name TEXT, url TEXT, enabled INTEGER);
+		INSERT INTO subscriptions VALUES
+			('7li', 'https://z.7li7li.com/api/v1/client/subscribe?token=token7li', 1),
+			('魔戒', 'https://msub.xn--m7r52rosihxm.com/api/v1/client/subscribe?token=tokenmojie', 1);
+	`)
+	if err != nil {
+		t.Fatalf("failed to insert test archive subscriptions: %v", err)
+	}
+	return archivePath
+}
+
 func TestRestoreSourceTokensFromArchive(t *testing.T) {
 	db := setupInventoryTestDB(t)
 	defer db.Close()
 
 	populateTestSubscriptions(t, db)
 	ctx := context.Background()
-	archivePath := "/home/service/backups/csp-legacy-cold-archive-20260919.db"
+	archivePath := getTestArchiveDB(t)
 
 	res, err := RestoreSourceTokensFromArchive(ctx, db, archivePath)
 	if err != nil {
@@ -189,7 +211,7 @@ func TestRunResetNodeInventory_WithTokenRestore(t *testing.T) {
 	opts := ResetOptions{
 		DryRun:              false,
 		RestoreSourceTokens: true,
-		ArchiveDBPath:       "/home/service/backups/csp-legacy-cold-archive-20260919.db",
+		ArchiveDBPath:       getTestArchiveDB(t),
 	}
 
 	report, err := RunResetNodeInventory(ctx, db, opts)

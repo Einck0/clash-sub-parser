@@ -361,9 +361,9 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       expect(sidebar?.textContent).toContain('CSP Control Plane')
       expect(sidebar?.textContent).toContain('v1.0 Clean-Slate')
 
-      // Desktop navigation items (8 items: dashboard, subscriptions, nodes, probes, policy, rules, publications, settings)
+      // Desktop navigation items (7 items: dashboard, subscriptions, nodes, policy, rules, publications, settings)
       const navButtons = sidebar?.querySelectorAll('nav button')
-      expect(navButtons?.length).toBe(8)
+      expect(navButtons?.length).toBe(7)
 
       // Mobile bottom nav remains hidden on desktop
       const mobileNav = root.querySelector('nav.md\\:hidden')
@@ -381,7 +381,7 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       const tabsToTest: { tab: NavTab; label: string; expectedText: string }[] = [
         { tab: 'subscriptions', label: 'Subscriptions', expectedText: 'Subscriptions' },
         { tab: 'nodes', label: 'Node Ledger', expectedText: 'Node Ledger' },
-        { tab: 'probes', label: 'Probe Engine', expectedText: 'Probe Engine' },
+        { tab: 'rules', label: 'Rule Desk', expectedText: 'Rules' },
         { tab: 'policy', label: 'Policy Tree', expectedText: 'Policy Groups' },
         { tab: 'publications', label: 'Client Subscriptions', expectedText: 'Client Subscriptions' },
         { tab: 'dashboard', label: 'Dashboard', expectedText: 'Clash Sub Parser Zashboard Foundation' },
@@ -461,14 +461,14 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       expect(uncaughtErrors).toHaveLength(0)
     })
 
-    it('restores active view from localStorage when URL hash is omitted', async () => {
+    it('restores active view from localStorage when URL hash is omitted and redirects legacy probes to nodes', async () => {
       window.localStorage.setItem(ROUTE_STORAGE_KEY, 'probes')
       window.location.hash = ''
       setViewport(390, 844)
       setupApiMocks()
       const root = await mountApp()
 
-      expect(root.querySelector('#probes-title')?.textContent).toContain('Probe Engine')
+      expect(root.querySelector('#nodes-title')?.textContent).toContain('Node Ledger')
       expect(uncaughtErrors).toHaveLength(0)
     })
 
@@ -568,33 +568,41 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       setupApiMocks()
       const root = await mountApp()
 
-      // Navigate to Probes tab
-      window.location.hash = '#probes'
+      // Navigate to Probes tab (which redirects to /nodes)
+      window.location.hash = '#nodes'
       window.dispatchEvent(new HashChangeEvent('hashchange'))
       await nextTick()
-      await new Promise((r) => setTimeout(r, 25))
+      await new Promise((r) => setTimeout(r, 60))
 
-      // Trigger "Trigger Probe" modal
-      const triggerBtn = Array.from(root.querySelectorAll('button')).find((b) =>
-        (b.textContent?.includes('Trigger Probe') || b.textContent?.includes('Run Batch Probe') || b.textContent?.includes('发起批量探针'))
-      )
+      // Trigger full probe confirmation modal
+      const triggerBtn = root.querySelector('[data-testid="probe-all-btn"]') as HTMLButtonElement | null ||
+        Array.from(root.querySelectorAll('button')).find((b) =>
+          b.textContent?.includes('全量检测') || b.textContent?.includes('Trigger Probe') || b.textContent?.includes('Run Batch Probe') || b.textContent?.includes('发起批量探针')
+        )
       expect(triggerBtn).toBeDefined()
       triggerBtn?.click()
       await nextTick()
       await new Promise((r) => setTimeout(r, 25))
 
       // Verify modal dialog structure
-      const dialog = root.querySelector('dialog[open], .modal[open], dialog')
+      const dialog = document.body.querySelector('dialog[open], .modal[open], dialog')
       expect(dialog).not.toBeNull()
 
-      // Now test inspecting Evidence Sheet with touch grab handle and 40% soft backdrop blur
+      // Now close dialog
       const closeDialogBtn = dialog?.querySelector('button')
       closeDialogBtn?.click()
       await nextTick()
 
+      // Open probe history drawer to inspect runs & evidence
+      const historyBtn = root.querySelector('[data-testid="node-probe-history-btn"]') as HTMLButtonElement | null
+      expect(historyBtn).toBeDefined()
+      historyBtn?.click()
+      await nextTick()
+      await new Promise((r) => setTimeout(r, 30))
+
       // Click "Evidence" button on probe run card
-      const evidenceBtn = Array.from(root.querySelectorAll('button')).find((b) =>
-        b.textContent?.includes('Evidence')
+      const evidenceBtn = Array.from(document.body.querySelectorAll('button')).find((b) =>
+        b.textContent?.includes('Evidence') || b.closest('[data-testid="probe-run-card"]')
       )
       expect(evidenceBtn).toBeDefined()
       evidenceBtn?.click()
@@ -602,12 +610,12 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       await new Promise((r) => setTimeout(r, 25))
 
       // Verify 40% soft backdrop blur overlay exists in DOM
-      const backdrop = root.querySelector('.bg-black\\/40')
+      const backdrop = document.body.querySelector('.bg-black\\/40')
       expect(backdrop).not.toBeNull()
       expect(backdrop?.className).toContain('backdrop-blur-sm')
 
       // Verify mobile grab handle exists for touch ergonomics
-      const grabHandle = root.querySelector('.cursor-grab')
+      const grabHandle = document.body.querySelector('.cursor-grab')
       expect(grabHandle).not.toBeNull()
       expect(grabHandle?.querySelector('.rounded-full')).not.toBeNull()
 

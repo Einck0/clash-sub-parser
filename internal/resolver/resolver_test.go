@@ -1602,3 +1602,485 @@ func TestResolver_InheritedFilterGroupRef_PreservesChildNodesAndDerivedEmptyFall
 		t.Errorf("expected compiled output to contain 'WARP [选择节点]', got:\n%s", contentEmpty)
 	}
 }
+
+func TestResolver_NonInheritingGroup_RemoveFilter_UsesActualCandidateScope(t *testing.T) {
+	r := resolver.New()
+	ctx := context.Background()
+
+	warpGroupID := domain.MustNewUUIDv7()
+
+	nWG1 := domain.Node{LogicalID: testNodeLogicalID("node-wg-hk"), DisplayName: "WARP HK 01", Protocol: domain.ProtocolWireGuard, Active: true}
+	nWG2 := domain.Node{LogicalID: testNodeLogicalID("node-wg-us"), DisplayName: "WARP US 02", Protocol: domain.ProtocolWireGuard, Active: true}
+	nSS := domain.Node{LogicalID: testNodeLogicalID("node-ss-hk"), DisplayName: "SS HK 01", Protocol: domain.ProtocolSS, Active: true}
+
+	// Global filter permits only SS protocol. WireGuard nodes fail global filter.
+	globalFilter := &domain.NodeFilterSpec{
+		Conditions: []domain.FilterCondition{
+			{Field: domain.FilterFieldProtocol, Op: domain.FilterOpEquals, Value: string(domain.ProtocolSS)},
+		},
+	}
+
+	// Group has InheritGlobalFilter = false, so it can select WireGuard nodes.
+	// Step 1: Add all WARP nodes via regex "WARP.*" (adds nWG1 and nWG2).
+	// Step 2: Remove filter with DisplayName contains "US" (must remove nWG2!).
+	patWARP := "WARP.*"
+	warpSources := []domain.MemberSource{
+		{
+			Operation: domain.OperationAdd,
+			Kind:      domain.SourceKindRegex,
+			Position:  0,
+			Pattern:   &patWARP,
+		},
+		{
+			Operation: domain.OperationRemove,
+			Kind:      domain.SourceKindFilter,
+			Position:  1,
+			FilterSpec: &domain.NodeFilterSpec{
+				Conditions: []domain.FilterCondition{
+					{Field: domain.FilterFieldDisplayName, Op: domain.FilterOpContains, Value: "US"},
+				},
+			},
+		},
+	}
+
+	input := resolver.ResolveInput{
+		RevisionID:         "rev-warp-remove",
+		InventoryWatermark: "wm-1",
+		CompilerVersion:    "1.0.0",
+		Nodes:              []domain.Node{nSS, nWG1, nWG2},
+		Groups: []domain.NodeGroup{
+			{
+				ID:                  warpGroupID,
+				Name:                "WARP",
+				GroupType:           domain.GroupTypeSelect,
+				InheritGlobalFilter: false,
+				Sources:             warpSources,
+			},
+		},
+		GlobalFilter: globalFilter,
+		DNS: resolver.DNSConfig{
+			Enabled:     true,
+			Nameservers: []string{"1.1.1.1"},
+		},
+	}
+
+	snap, err := r.Resolve(ctx, input)
+	if err != nil {
+		t.Fatalf("resolve failed: %v", err)
+	}
+
+	if len(snap.Groups) != 1 {
+		t.Fatalf("expected 1 group, got %d", len(snap.Groups))
+	}
+
+	rg := snap.Groups[0]
+	// nWG2 ("WARP US 02") must have been removed! Only nWG1 ("WARP HK 01") should remain!
+	if len(rg.Members) != 1 {
+		t.Fatalf("expected exactly 1 member in WARP group after remove filter, got %d: %+v", len(rg.Members), rg.Members)
+	}
+	if rg.Members[0].TargetID != nWG1.LogicalID {
+		t.Errorf("expected member %s (WARP HK 01), got %s (%s)", nWG1.LogicalID, rg.Members[0].TargetID, rg.Members[0].DisplayName)
+	}
+
+	// Verify FilterCounts for the group
+	if snap.FilterCounts == nil || snap.FilterCounts.GroupCounts == nil {
+		t.Fatalf("expected group counts in snap.FilterCounts")
+	}
+	gc := snap.FilterCounts.GroupCounts[warpGroupID]
+	if gc.Candidate != 3 {
+		t.Errorf("expected 3 candidates evaluated, got %d", gc.Candidate)
+	}
+	if gc.Kept != 1 {
+		t.Errorf("expected 1 kept, got %d", gc.Kept)
+	}
+	if gc.Excluded != 2 {
+		t.Errorf("expected 2 excluded, got %d", gc.Excluded)
+	}
+	if len(gc.ExclusionSummary) == 0 {
+		t.Errorf("expected non-empty ExclusionSummary in GroupFilterCount")
+	}
+}
+
+func TestResolver_DynamicSources_CompoundFilter_And_Ordering(t *testing.T) {
+	r := resolver.New()
+	ctx := context.Background()
+
+	now := time.Now().UTC()
+	grpID := domain.MustNewUUIDv7()
+
+	n1 := domain.Node{LogicalID: testNodeLogicalID("n1"), DisplayName: "HK Hysteria Fast", Protocol: domain.ProtocolHysteria2, Active: true}
+	n2 := domain.Node{LogicalID: testNodeLogicalID("n2"), DisplayName: "HK Hysteria Slow", Protocol: domain.ProtocolHysteria2, Active: true}
+	n3 := domain.Node{LogicalID: testNodeLogicalID("n3"), DisplayName: "US VMess Fast", Protocol: domain.ProtocolVMess, Active: true}
+
+	sub1 := domain.MustNewUUIDv7()
+	sub2 := domain.MustNewUUIDv7()
+
+	nodeSources := map[string][]domain.NodeSource{
+		n1.LogicalID: {{SubscriptionID: sub1, NodeLogicalID: n1.LogicalID}},
+		n2.LogicalID: {{SubscriptionID: sub2, NodeLogicalID: n2.LogicalID}},
+		n3.LogicalID: {{SubscriptionID: sub1, NodeLogicalID: n3.LogicalID}},
+	}
+	latestObs := map[string]map[domain.ProbeKind]domain.ProbeObservation{
+		n1.LogicalID: {
+			domain.ProbeKindBaseline: {Verdict: domain.VerdictAvailable, LatencyMS: 50, ObservedAt: now},
+		},
+		n2.LogicalID: {
+			domain.ProbeKindBaseline: {Verdict: domain.VerdictAvailable, LatencyMS: 300, ObservedAt: now},
+		},
+		n3.LogicalID: {
+			domain.ProbeKindBaseline: {Verdict: domain.VerdictAvailable, LatencyMS: 60, ObservedAt: now},
+		},
+	}
+
+	baselineProbe := domain.ProbeKindBaseline
+	patHK := "HK.*"
+	builtinDirect := "DIRECT"
+	sources := []domain.MemberSource{
+		// 1. Add HK nodes via regex
+		{Operation: domain.OperationAdd, Kind: domain.SourceKindRegex, Position: 0, Pattern: &patHK},
+		// 2. Add via compound filter: Protocol == hysteria2 AND probe verdict == available AND latency <= 100
+		{
+			Operation: domain.OperationAdd,
+			Kind:      domain.SourceKindFilter,
+			Position:  1,
+			FilterSpec: &domain.NodeFilterSpec{
+				Conditions: []domain.FilterCondition{
+					{Field: domain.FilterFieldProtocol, Op: domain.FilterOpEquals, Value: string(domain.ProtocolHysteria2)},
+					{Field: domain.FilterFieldProbeVerdict, Op: domain.FilterOpEquals, Value: string(domain.VerdictAvailable), ProbeKind: &baselineProbe},
+					{Field: domain.FilterFieldProbeLatencyMS, Op: domain.FilterOpLTE, Value: "100", ProbeKind: &baselineProbe},
+				},
+			},
+		},
+		// 3. Add DIRECT builtin
+		{Operation: domain.OperationAdd, Kind: domain.SourceKindTypedBuiltin, Position: 2, BuiltinName: &builtinDirect},
+		// 4. Remove nodes from sub-2 (which removes n2!)
+		{
+			Operation: domain.OperationRemove,
+			Kind:      domain.SourceKindFilter,
+			Position:  3,
+			FilterSpec: &domain.NodeFilterSpec{
+				Conditions: []domain.FilterCondition{
+					{Field: domain.FilterFieldSourceSubscriptions, Op: domain.FilterOpContains, Value: sub2},
+				},
+			},
+		},
+	}
+
+	input := resolver.ResolveInput{
+		RevisionID:         "rev-dyn-1",
+		InventoryWatermark: "wm-1",
+		CompilerVersion:    "1.0.0",
+		Nodes:              []domain.Node{n1, n2, n3},
+		Groups: []domain.NodeGroup{
+			{ID: grpID, Name: "DYNAMIC_PROXY", GroupType: domain.GroupTypeSelect, InheritGlobalFilter: true, Sources: sources},
+		},
+		NodeSources:        nodeSources,
+		LatestObservations: latestObs,
+		AsOf:               now,
+		DNS: resolver.DNSConfig{
+			Enabled:     true,
+			Nameservers: []string{"1.1.1.1"},
+		},
+	}
+
+	snap, err := r.Resolve(ctx, input)
+	if err != nil {
+		t.Fatalf("resolve failed: %v", err)
+	}
+
+	rg := snap.Groups[0]
+	// Expected members: n1 ("HK Hysteria Fast") and DIRECT builtin! n2 is removed by sub-2 filter, n3 was never added.
+	if len(rg.Members) != 2 {
+		t.Fatalf("expected 2 members (n1 and DIRECT), got %d: %+v", len(rg.Members), rg.Members)
+	}
+	if rg.Members[0].Kind != resolver.MemberKindNode || rg.Members[0].TargetID != n1.LogicalID {
+		t.Errorf("expected member 0 to be n1, got %+v", rg.Members[0])
+	}
+	if rg.Members[1].Kind != resolver.MemberKindBuiltin || rg.Members[1].TargetID != "DIRECT" {
+		t.Errorf("expected member 1 to be DIRECT builtin, got %+v", rg.Members[1])
+	}
+}
+
+func TestResolver_ChildGroup_Penetration_NonInheriting(t *testing.T) {
+	r := resolver.New()
+	ctx := context.Background()
+
+	parentID := domain.MustNewUUIDv7()
+	childID := domain.MustNewUUIDv7()
+
+	nSS := domain.Node{LogicalID: testNodeLogicalID("n-ss"), DisplayName: "Regular SS", Protocol: domain.ProtocolSS, Active: true}
+	nWARP1 := domain.Node{LogicalID: testNodeLogicalID("n-warp1"), DisplayName: "WARP HK Fast", Protocol: domain.ProtocolWireGuard, Active: true}
+	nWARP2 := domain.Node{LogicalID: testNodeLogicalID("n-warp2"), DisplayName: "WARP US Slow", Protocol: domain.ProtocolWireGuard, Active: true}
+
+	// Global filter permits only SS protocol
+	globalFilter := &domain.NodeFilterSpec{
+		Conditions: []domain.FilterCondition{
+			{Field: domain.FilterFieldProtocol, Op: domain.FilterOpEquals, Value: string(domain.ProtocolSS)},
+		},
+	}
+
+	patWARP := "WARP.*"
+	childSources := []domain.MemberSource{
+		{Operation: domain.OperationAdd, Kind: domain.SourceKindRegex, Position: 0, Pattern: &patWARP},
+	}
+
+	// Parent has InheritGlobalFilter = true, references child group (which has InheritGlobalFilter = false)
+	// with an item filter: DisplayName contains "HK"
+	parentSources := []domain.MemberSource{
+		{
+			Operation:     domain.OperationAdd,
+			Kind:          domain.SourceKindGroupRef,
+			Position:      0,
+			TargetGroupID: &childID,
+			FilterSpec: &domain.NodeFilterSpec{
+				Conditions: []domain.FilterCondition{
+					{Field: domain.FilterFieldDisplayName, Op: domain.FilterOpContains, Value: "HK"},
+				},
+			},
+		},
+	}
+
+	input := resolver.ResolveInput{
+		RevisionID:         "rev-pen-1",
+		InventoryWatermark: "wm-1",
+		CompilerVersion:    "1.0.0",
+		Nodes:              []domain.Node{nSS, nWARP1, nWARP2},
+		Groups: []domain.NodeGroup{
+			{ID: parentID, Name: "PARENT", GroupType: domain.GroupTypeSelect, InheritGlobalFilter: true, Sources: parentSources},
+			{ID: childID, Name: "WARP_CHILD", GroupType: domain.GroupTypeURLTest, InheritGlobalFilter: false, Sources: childSources},
+		},
+		GlobalFilter: globalFilter,
+		DNS: resolver.DNSConfig{
+			Enabled:     true,
+			Nameservers: []string{"1.1.1.1"},
+		},
+	}
+
+	snap, err := r.Resolve(ctx, input)
+	if err != nil {
+		t.Fatalf("resolve failed: %v", err)
+	}
+
+	// Should create a derived group for child under parent
+	var derivedGroup *resolver.ResolvedGroup
+	for i := range snap.Groups {
+		if strings.Contains(snap.Groups[i].Name, "WARP_CHILD [PARENT]") {
+			derivedGroup = &snap.Groups[i]
+			break
+		}
+	}
+	if derivedGroup == nil {
+		t.Fatalf("expected derived group 'WARP_CHILD [PARENT]' to be created")
+	}
+
+	// The derived group should contain nWARP1 ("WARP HK Fast") and NOT nWARP2 ("WARP US Slow")
+	if len(derivedGroup.NodeLogicalIDs) != 1 || derivedGroup.NodeLogicalIDs[0] != nWARP1.LogicalID {
+		t.Errorf("expected derived group to contain exactly nWARP1 (%s), got %+v", nWARP1.LogicalID, derivedGroup.NodeLogicalIDs)
+	}
+
+	// The parent group should reference the derived group
+	var parentRG *resolver.ResolvedGroup
+	for i := range snap.Groups {
+		if snap.Groups[i].ID == parentID {
+			parentRG = &snap.Groups[i]
+			break
+		}
+	}
+	if parentRG == nil {
+		t.Fatalf("parent group not found in snapshot")
+	}
+	if len(parentRG.Members) != 1 || parentRG.Members[0].TargetID != derivedGroup.ID {
+		t.Errorf("expected parent to reference derived group %s, got %+v", derivedGroup.ID, parentRG.Members)
+	}
+	// And parent's AllNodeLogicalIDs must include nWARP1!
+	if len(parentRG.AllNodeLogicalIDs) != 1 || parentRG.AllNodeLogicalIDs[0] != nWARP1.LogicalID {
+		t.Errorf("expected parent AllNodeLogicalIDs to contain nWARP1, got %+v", parentRG.AllNodeLogicalIDs)
+	}
+}
+
+func TestResolver_SoftFilter_NotTopologyError(t *testing.T) {
+	r := resolver.New()
+	ctx := context.Background()
+
+	gID := domain.MustNewUUIDv7()
+	n1 := domain.Node{LogicalID: testNodeLogicalID("n1"), DisplayName: "HK 01", Protocol: domain.ProtocolSS, Active: true}
+	n2 := domain.Node{LogicalID: testNodeLogicalID("n2"), DisplayName: "US 02", Protocol: domain.ProtocolSS, Active: true}
+
+	patHK := "HK.*"
+	sources := []domain.MemberSource{
+		{Operation: domain.OperationAdd, Kind: domain.SourceKindRegex, Position: 0, Pattern: &patHK},
+	}
+
+	groups := []domain.NodeGroup{
+		{ID: gID, Name: "PROXY", GroupType: domain.GroupTypeSelect, InheritGlobalFilter: true, Sources: sources},
+	}
+
+	// Topology validation should succeed cleanly
+	if err := domain.ValidatePolicyTopology(groups, nil, nil, false); err != nil {
+		t.Fatalf("expected topology to be valid, got: %v", err)
+	}
+
+	input := resolver.ResolveInput{
+		RevisionID:         "rev-soft-1",
+		InventoryWatermark: "wm-1",
+		CompilerVersion:    "1.0.0",
+		Nodes:              []domain.Node{n1, n2},
+		Groups:             groups,
+		DNS: resolver.DNSConfig{
+			Enabled:     true,
+			Nameservers: []string{"1.1.1.1"},
+		},
+	}
+
+	snap, err := r.Resolve(ctx, input)
+	if err != nil {
+		t.Fatalf("resolve failed: %v", err)
+	}
+
+	// No error diagnostics should be emitted for soft filtering
+	for _, d := range snap.Diagnostics {
+		if d.Severity == resolver.DiagnosticSeverityError {
+			t.Errorf("unexpected error diagnostic: %+v", d)
+		}
+	}
+
+	// FilterCounts should record candidate: 2, kept: 1, excluded: 1
+	gc := snap.FilterCounts.GroupCounts[gID]
+	if gc.Candidate != 2 || gc.Kept != 1 || gc.Excluded != 1 {
+		t.Errorf("expected counts {Candidate: 2, Kept: 1, Excluded: 1}, got %+v", gc)
+	}
+}
+
+func TestResolver_Pipeline_EdgeCases_AddRemoveReentrantDuplicatesSubgroupBuiltinMissing(t *testing.T) {
+	r := resolver.New()
+	ctx := context.Background()
+
+	now := time.Now().UTC()
+	g1ID := domain.MustNewUUIDv7()
+	c1ID := domain.MustNewUUIDv7()
+	g2ID := domain.MustNewUUIDv7()
+
+	n1 := domain.Node{LogicalID: testNodeLogicalID("n1-hk"), DisplayName: "HK Alpha", Protocol: domain.ProtocolHysteria2, Active: true}
+	n2 := domain.Node{LogicalID: testNodeLogicalID("n2-us"), DisplayName: "US Beta", Protocol: domain.ProtocolVMess, Active: true}
+	n3 := domain.Node{LogicalID: testNodeLogicalID("n3-jp"), DisplayName: "JP Gamma", Protocol: domain.ProtocolSS, Active: true}
+	missingNodeID := testNodeLogicalID("missing-node-id")
+
+	// Global filter: exclude ProtocolSS (n3)
+	globalFilter := &domain.NodeFilterSpec{
+		Conditions: []domain.FilterCondition{
+			{Field: domain.FilterFieldProtocol, Op: domain.FilterOpNotEquals, Value: string(domain.ProtocolSS)},
+		},
+	}
+
+	builtinDirect := "DIRECT"
+	c1Sources := []domain.MemberSource{
+		{Operation: domain.OperationAdd, Kind: domain.SourceKindTypedBuiltin, Position: 0, BuiltinName: &builtinDirect},
+	}
+
+	g1Sources := []domain.MemberSource{
+		// 1. Add n1
+		{Operation: domain.OperationAdd, Kind: domain.SourceKindManualNode, Position: 0, NodeLogicalID: &n1.LogicalID},
+		// 2. Remove n1
+		{Operation: domain.OperationRemove, Kind: domain.SourceKindManualNode, Position: 1, NodeLogicalID: &n1.LogicalID},
+		// 3. Re-add n1 (re-entrancy)
+		{Operation: domain.OperationAdd, Kind: domain.SourceKindManualNode, Position: 2, NodeLogicalID: &n1.LogicalID},
+		// 4. Duplicate add n1
+		{Operation: domain.OperationAdd, Kind: domain.SourceKindManualNode, Position: 3, NodeLogicalID: &n1.LogicalID},
+		// 5. Add n3 (excluded by global filter)
+		{Operation: domain.OperationAdd, Kind: domain.SourceKindManualNode, Position: 4, NodeLogicalID: &n3.LogicalID},
+		// 6. Add missing node
+		{Operation: domain.OperationAdd, Kind: domain.SourceKindManualNode, Position: 5, NodeLogicalID: &missingNodeID},
+		// 7. Add subgroup reference C1 (which has DIRECT builtin)
+		{Operation: domain.OperationAdd, Kind: domain.SourceKindGroupRef, Position: 6, TargetGroupID: &c1ID},
+	}
+
+	patHK := ".*HK.*"
+	g2Sources := []domain.MemberSource{
+		// Add group_nodes from C2 (which has n1 and n2), filtered by regex HK
+		{Operation: domain.OperationAdd, Kind: domain.SourceKindGroupNodes, Position: 0, TargetGroupID: &g1ID, Pattern: &patHK},
+	}
+
+	input := resolver.ResolveInput{
+		RevisionID:         "rev-edge-cases",
+		InventoryWatermark: "wm-edge",
+		CompilerVersion:    "1.0.0",
+		Nodes:              []domain.Node{n1, n2, n3},
+		Groups: []domain.NodeGroup{
+			{ID: c1ID, Name: "CHILD_BUILTIN", GroupType: domain.GroupTypeSelect, InheritGlobalFilter: true, Sources: c1Sources},
+			{ID: g1ID, Name: "PARENT_PIPELINE", GroupType: domain.GroupTypeSelect, InheritGlobalFilter: true, EmptyFallbackPass: true, Sources: g1Sources},
+			{ID: g2ID, Name: "GROUP_NODES_TEST", GroupType: domain.GroupTypeSelect, InheritGlobalFilter: true, Sources: g2Sources},
+		},
+		GlobalFilter: globalFilter,
+		AsOf:         now,
+		DNS: resolver.DNSConfig{
+			Enabled:     true,
+			Nameservers: []string{"1.1.1.1"},
+		},
+	}
+
+	snap, err := r.Resolve(ctx, input)
+	if err != nil {
+		t.Fatalf("resolve failed: %v", err)
+	}
+
+	// 1. Verify G1 counts
+	if snap.FilterCounts == nil || snap.FilterCounts.GroupCounts == nil {
+		t.Fatalf("expected FilterCounts in snapshot")
+	}
+	gc1, ok := snap.FilterCounts.GroupCounts[g1ID]
+	if !ok {
+		t.Fatalf("group G1 missing from FilterCounts")
+	}
+
+	// Candidates evaluated: n1 (valid), n3 (excluded by global), missingNode (missing) = 3 unique node IDs
+	if gc1.Candidate != 3 {
+		t.Errorf("expected G1 Candidate=3, got %d", gc1.Candidate)
+	}
+	// Kept: n1 = 1 node
+	if gc1.Kept != 1 {
+		t.Errorf("expected G1 Kept=1, got %d", gc1.Kept)
+	}
+	// Excluded: Candidate - Kept = 2
+	if gc1.Excluded != 2 {
+		t.Errorf("expected G1 Excluded=2, got %d", gc1.Excluded)
+	}
+
+	// Check exclusion reasons in G1
+	if gc1.ExclusionSummary["manually removed"] != 1 {
+		t.Errorf("expected 1 'manually removed', got %d", gc1.ExclusionSummary["manually removed"])
+	}
+	if gc1.ExclusionSummary["excluded by global filter"] != 1 {
+		t.Errorf("expected 1 'excluded by global filter', got %d", gc1.ExclusionSummary["excluded by global filter"])
+	}
+	if gc1.ExclusionSummary["node inactive or missing"] != 1 {
+		t.Errorf("expected 1 'node inactive or missing', got %d", gc1.ExclusionSummary["node inactive or missing"])
+	}
+
+	// G1 resolved members: n1 and C1 -> 2 members
+	var g1RG *resolver.ResolvedGroup
+	for i := range snap.Groups {
+		if snap.Groups[i].ID == g1ID {
+			g1RG = &snap.Groups[i]
+			break
+		}
+	}
+	if g1RG == nil {
+		t.Fatalf("G1 not found in resolved snapshot")
+	}
+	if len(g1RG.Members) != 2 {
+		t.Fatalf("expected G1 to have 2 members (n1 + C1), got %d: %+v", len(g1RG.Members), g1RG.Members)
+	}
+	// Destination check: since C1 has DIRECT builtin, G1 has destinations, so EffectiveEmptyPass must be false
+	if g1RG.EffectiveEmptyPass {
+		t.Errorf("expected EffectiveEmptyPass to be false for G1 because it has destinations (n1 and DIRECT)")
+	}
+
+	// 2. Verify G2 counts (unpacks G1 which has n1, filtered by regex patHK)
+	gc2, ok := snap.FilterCounts.GroupCounts[g2ID]
+	if !ok {
+		t.Fatalf("group G2 missing from FilterCounts")
+	}
+	if gc2.Candidate != 1 || gc2.Kept != 1 || gc2.Excluded != 0 {
+		t.Errorf("expected G2 {Candidate: 1, Kept: 1, Excluded: 0}, got %+v", gc2)
+	}
+}

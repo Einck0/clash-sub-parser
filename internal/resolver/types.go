@@ -36,9 +36,10 @@ type Diagnostic struct {
 
 // GroupFilterCount tracks candidate, kept, and excluded node counts for a single policy group.
 type GroupFilterCount struct {
-	Candidate int `json:"candidate"`
-	Kept      int `json:"kept"`
-	Excluded  int `json:"excluded"`
+	Candidate        int            `json:"candidate"`
+	Kept             int            `json:"kept"`
+	Excluded         int            `json:"excluded"`
+	ExclusionSummary map[string]int `json:"exclusion_summary,omitempty"`
 }
 
 // FilterLayerCounts tracks aggregate counts at each stage of the multi-layer node filtering pipeline.

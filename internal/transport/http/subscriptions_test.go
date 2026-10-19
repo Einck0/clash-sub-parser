@@ -617,3 +617,119 @@ func TestSubscriptionPatch_PrimarySubscription(t *testing.T) {
 		t.Fatal("expected Sub B to not be primary after unset")
 	}
 }
+
+func TestSubscriptionProbePolicy_Endpoints(t *testing.T) {
+	router := subscriptionTestRouter(t)
+
+	// 1. POST with omitted probe_policy defaults to inherit
+	createBody1 := `{"name":"PolicySub1","source_url_secret_ref":"https://example.com/sub1","config":{"rename_rules":[{"pattern":"p","replace":"r"}],"filter_rules":[{"type":"include","pattern":"US"}]}}`
+	req1 := httptest.NewRequest(http.MethodPost, "/api/v1/subscriptions", strings.NewReader(createBody1))
+	req1.Header.Set("Authorization", "Bearer "+testAdminToken)
+	req1.Header.Set("Content-Type", "application/json")
+	rec1 := httptest.NewRecorder()
+	router.ServeHTTP(rec1, req1)
+	if rec1.Code != http.StatusCreated {
+		t.Fatalf("POST sub1 status = %d, body = %s", rec1.Code, rec1.Body.String())
+	}
+	var resp1 testDataResponse[subscriptionResponse]
+	if err := json.Unmarshal(rec1.Body.Bytes(), &resp1); err != nil {
+		t.Fatalf("unmarshal resp1: %v", err)
+	}
+	if resp1.Data.Config.ProbePolicy == nil || resp1.Data.Config.ProbePolicy.Mode != domain.ProbePolicyModeInherit {
+		t.Fatalf("expected probe_policy inherit on create, got %#v", resp1.Data.Config.ProbePolicy)
+	}
+	sub1ID := resp1.Data.ID
+	sub1Rev := resp1.Data.Revision
+
+	// 2. POST with custom probe_policy (interval: 120)
+	createBody2 := `{"name":"PolicySub2","source_url_secret_ref":"https://example.com/sub2","config":{"probe_policy":{"mode":"custom","interval_seconds":120}}}`
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/subscriptions", strings.NewReader(createBody2))
+	req2.Header.Set("Authorization", "Bearer "+testAdminToken)
+	req2.Header.Set("Content-Type", "application/json")
+	rec2 := httptest.NewRecorder()
+	router.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusCreated {
+		t.Fatalf("POST sub2 status = %d, body = %s", rec2.Code, rec2.Body.String())
+	}
+	var resp2 testDataResponse[subscriptionResponse]
+	if err := json.Unmarshal(rec2.Body.Bytes(), &resp2); err != nil {
+		t.Fatalf("unmarshal resp2: %v", err)
+	}
+	if resp2.Data.Config.ProbePolicy == nil || resp2.Data.Config.ProbePolicy.Mode != domain.ProbePolicyModeCustom || resp2.Data.Config.ProbePolicy.IntervalSeconds == nil || *resp2.Data.Config.ProbePolicy.IntervalSeconds != 120 {
+		t.Fatalf("expected probe_policy custom(120), got %#v", resp2.Data.Config.ProbePolicy)
+	}
+
+	// 3. POST with invalid probe_policy interval below min (59s) returns 422
+	createBodyBad := `{"name":"PolicySubBad","source_url_secret_ref":"https://example.com/subbad","config":{"probe_policy":{"mode":"custom","interval_seconds":59}}}`
+	reqBad := httptest.NewRequest(http.MethodPost, "/api/v1/subscriptions", strings.NewReader(createBodyBad))
+	reqBad.Header.Set("Authorization", "Bearer "+testAdminToken)
+	reqBad.Header.Set("Content-Type", "application/json")
+	recBad := httptest.NewRecorder()
+	router.ServeHTTP(recBad, reqBad)
+	if recBad.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 for bad probe interval, got %d (body: %s)", recBad.Code, recBad.Body.String())
+	}
+
+	// 4. PATCH sub1 probe_policy to custom(300) without providing rename_rules or filter_rules:
+	// must preserve rename_rules and filter_rules
+	patchBody1 := `{"config":{"probe_policy":{"mode":"custom","interval_seconds":300}}}`
+	patchReq1 := httptest.NewRequest(http.MethodPatch, "/api/v1/subscriptions/"+sub1ID, strings.NewReader(patchBody1))
+	patchReq1.Header.Set("Authorization", "Bearer "+testAdminToken)
+	patchReq1.Header.Set("If-Match", sub1Rev)
+	patchReq1.Header.Set("Content-Type", "application/json")
+	patchRec1 := httptest.NewRecorder()
+	router.ServeHTTP(patchRec1, patchReq1)
+	if patchRec1.Code != http.StatusOK {
+		t.Fatalf("PATCH sub1 status = %d, body = %s", patchRec1.Code, patchRec1.Body.String())
+	}
+	var patchResp1 testDataResponse[subscriptionResponse]
+	if err := json.Unmarshal(patchRec1.Body.Bytes(), &patchResp1); err != nil {
+		t.Fatalf("unmarshal patchResp1: %v", err)
+	}
+	if patchResp1.Data.Config.ProbePolicy.Mode != domain.ProbePolicyModeCustom || *patchResp1.Data.Config.ProbePolicy.IntervalSeconds != 300 {
+		t.Fatalf("expected probe_policy custom(300), got %#v", patchResp1.Data.Config.ProbePolicy)
+	}
+	if len(patchResp1.Data.Config.RenameRules) != 1 || patchResp1.Data.Config.RenameRules[0].Pattern != "p" {
+		t.Fatalf("expected rename_rules preserved, got %#v", patchResp1.Data.Config.RenameRules)
+	}
+	if len(patchResp1.Data.Config.FilterRules) != 1 || patchResp1.Data.Config.FilterRules[0].Pattern != "US" {
+		t.Fatalf("expected filter_rules preserved, got %#v", patchResp1.Data.Config.FilterRules)
+	}
+
+	// 5. PATCH sub1 with explicit empty rename_rules: clears rename_rules, retains filter_rules and probe_policy
+	patchBody2 := `{"config":{"rename_rules":[]}}`
+	patchReq2 := httptest.NewRequest(http.MethodPatch, "/api/v1/subscriptions/"+sub1ID, strings.NewReader(patchBody2))
+	patchReq2.Header.Set("Authorization", "Bearer "+testAdminToken)
+	patchReq2.Header.Set("If-Match", patchResp1.Data.Revision)
+	patchReq2.Header.Set("Content-Type", "application/json")
+	patchRec2 := httptest.NewRecorder()
+	router.ServeHTTP(patchRec2, patchReq2)
+	if patchRec2.Code != http.StatusOK {
+		t.Fatalf("PATCH sub1 rename_rules:[] status = %d, body = %s", patchRec2.Code, patchRec2.Body.String())
+	}
+	var patchResp2 testDataResponse[subscriptionResponse]
+	if err := json.Unmarshal(patchRec2.Body.Bytes(), &patchResp2); err != nil {
+		t.Fatalf("unmarshal patchResp2: %v", err)
+	}
+	if len(patchResp2.Data.Config.RenameRules) != 0 {
+		t.Fatalf("expected rename_rules cleared to empty, got %#v", patchResp2.Data.Config.RenameRules)
+	}
+	if len(patchResp2.Data.Config.FilterRules) != 1 {
+		t.Fatalf("expected filter_rules preserved, got %#v", patchResp2.Data.Config.FilterRules)
+	}
+	if patchResp2.Data.Config.ProbePolicy.Mode != domain.ProbePolicyModeCustom || *patchResp2.Data.Config.ProbePolicy.IntervalSeconds != 300 {
+		t.Fatalf("expected probe_policy preserved custom(300), got %#v", patchResp2.Data.Config.ProbePolicy)
+	}
+
+	// 6. PATCH with invalid mode returns 422
+	patchBodyBad := `{"config":{"probe_policy":{"mode":"invalid_mode"}}}`
+	patchReqBad := httptest.NewRequest(http.MethodPatch, "/api/v1/subscriptions/"+sub1ID, strings.NewReader(patchBodyBad))
+	patchReqBad.Header.Set("Authorization", "Bearer "+testAdminToken)
+	patchReqBad.Header.Set("If-Match", patchResp2.Data.Revision)
+	patchReqBad.Header.Set("Content-Type", "application/json")
+	patchRecBad := httptest.NewRecorder()
+	router.ServeHTTP(patchRecBad, patchReqBad)
+	if patchRecBad.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 for invalid patch probe mode, got %d (body: %s)", patchRecBad.Code, patchRecBad.Body.String())
+	}
+}

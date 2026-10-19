@@ -1225,39 +1225,18 @@ func (s *Service) PreviewGroup(ctx context.Context, cmd PreviewGroupCommand) (*G
 	var activeRevID string
 	if s.revisionRepo != nil {
 		active, err := s.revisionRepo.GetActive(ctx)
-		if err == nil && active != nil {
+		if err != nil {
+			var de *domain.DomainError
+			if !errors.As(err, &de) || de.Category != domain.CategoryNotFound {
+				return nil, fmt.Errorf("failed to get active revision: %w", err)
+			}
+		} else if active != nil {
 			activeRevID = active.ID
 		}
 	}
 
-	var polRules []domain.PolicyRule
-	var admRules []domain.AdmissionRule
-	if activeRevID != "" && s.policyRepo != nil {
-		polRules, _ = s.policyRepo.ListPolicyRules(ctx, activeRevID)
-		admRules, _ = s.policyRepo.ListAdmissionRules(ctx, activeRevID)
-	}
-
-	var nodes []domain.Node
-	if s.nodeRepo != nil {
-		nodes, _ = s.nodeRepo.ListAll(ctx, domain.NodeFilter{
-			Scope:          domain.NodeScopeEnabledSubscriptions,
-			ActiveOnly:     true,
-			ExcludeNotices: true,
-		})
-	}
-
-	var globalFilter *domain.NodeFilterSpec
-	var groupFilters map[string]domain.NodeFilterSpec
-	if s.nodeFilterRepo != nil {
-		gf, err := s.nodeFilterRepo.GetGlobalFilter(ctx)
-		if err == nil && gf != nil && !gf.Spec.IsEmpty() {
-			globalFilter = &gf.Spec
-		}
-		groupFilters, _ = s.nodeFilterRepo.ListGroupFilters(ctx)
-	}
-
 	var resInput resolver.ResolveInput
-	if s.inputProvider != nil && activeRevID != "" {
+	if s.inputProvider != nil {
 		baseInput, err := s.inputProvider(ctx, activeRevID)
 		if err != nil {
 			return nil, err
@@ -1265,34 +1244,99 @@ func (s *Service) PreviewGroup(ctx context.Context, cmd PreviewGroupCommand) (*G
 		if baseInput == nil {
 			return nil, domain.NewInternalError("preview_input_unavailable", "publication input is unavailable")
 		}
-		if baseInput != nil {
-			resInput = *baseInput
-			simGroups := make([]domain.NodeGroup, len(baseInput.Groups))
-			copy(simGroups, baseInput.Groups)
-			simSources := make(map[string][]domain.MemberSource, len(baseInput.GroupSources)+1)
-			for k, v := range baseInput.GroupSources {
-				simSources[k] = v
+		resInput = *baseInput
+		simGroups := make([]domain.NodeGroup, len(baseInput.Groups))
+		copy(simGroups, baseInput.Groups)
+		simSources := make(map[string][]domain.MemberSource, len(baseInput.GroupSources)+1)
+		for k, v := range baseInput.GroupSources {
+			simSources[k] = v
+		}
+		foundGroup := false
+		for i := range simGroups {
+			if simGroups[i].ID == groupID {
+				simGroups[i] = previewGroup
+				foundGroup = true
+				break
 			}
-			foundGroup := false
-			for i := range simGroups {
-				if simGroups[i].ID == groupID {
-					simGroups[i] = previewGroup
-					foundGroup = true
-					break
+		}
+		if !foundGroup {
+			simGroups = append(simGroups, previewGroup)
+		}
+		simSources[groupID] = sources
+		for i := range simGroups {
+			simGroups[i].Sources = simSources[simGroups[i].ID]
+		}
+		resInput.Groups = simGroups
+		resInput.GroupSources = simSources
+	} else {
+		var polRules []domain.PolicyRule
+		var admRules []domain.AdmissionRule
+		if activeRevID != "" && s.policyRepo != nil {
+			var err error
+			polRules, err = s.policyRepo.ListPolicyRules(ctx, activeRevID)
+			if err != nil {
+				return nil, fmt.Errorf("failed to list policy rules: %w", err)
+			}
+			admRules, err = s.policyRepo.ListAdmissionRules(ctx, activeRevID)
+			if err != nil {
+				return nil, fmt.Errorf("failed to list admission rules: %w", err)
+			}
+		}
+
+		var nodes []domain.Node
+		if s.nodeRepo != nil {
+			var err error
+			nodes, err = s.nodeRepo.ListAll(ctx, domain.NodeFilter{
+				Scope:          domain.NodeScopeEnabledSubscriptions,
+				ActiveOnly:     true,
+				ExcludeNotices: true,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("failed to list nodes: %w", err)
+			}
+		}
+
+		var globalFilter *domain.NodeFilterSpec
+		var groupFilters map[string]domain.NodeFilterSpec
+		if s.nodeFilterRepo != nil {
+			gf, err := s.nodeFilterRepo.GetGlobalFilter(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get global filter: %w", err)
+			}
+			if gf != nil && !gf.Spec.IsEmpty() {
+				globalFilter = &gf.Spec
+			}
+			groupFilters, err = s.nodeFilterRepo.ListGroupFilters(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("failed to list group filters: %w", err)
+			}
+		}
+
+		// Standalone services cannot silently validate evidence-dependent filters.
+		for _, spec := range groupFilters {
+			for _, c := range spec.Conditions {
+				if c.Field == domain.FilterFieldSourceSubscriptions || c.Field == domain.FilterFieldProbeVerdict || c.Field == domain.FilterFieldProbeLatencyMS {
+					return nil, domain.NewInternalError("preview_incomplete", "publication input provider required for evidence filters")
 				}
 			}
-			if !foundGroup {
-				simGroups = append(simGroups, previewGroup)
-			}
-			simSources[groupID] = sources
-			for i := range simGroups {
-				simGroups[i].Sources = simSources[simGroups[i].ID]
-			}
-			resInput.Groups = simGroups
-			resInput.GroupSources = simSources
 		}
-	}
-	if len(resInput.Groups) == 0 {
+		if globalFilter != nil {
+			for _, c := range globalFilter.Conditions {
+				if c.Field == domain.FilterFieldSourceSubscriptions || c.Field == domain.FilterFieldProbeVerdict || c.Field == domain.FilterFieldProbeLatencyMS {
+					return nil, domain.NewInternalError("preview_incomplete", "publication input provider required for evidence filters")
+				}
+			}
+		}
+		for _, src := range sources {
+			if src.FilterSpec != nil {
+				for _, c := range src.FilterSpec.Conditions {
+					if c.Field == domain.FilterFieldSourceSubscriptions || c.Field == domain.FilterFieldProbeVerdict || c.Field == domain.FilterFieldProbeLatencyMS {
+						return nil, domain.NewInternalError("preview_incomplete", "publication input provider required for evidence filters")
+					}
+				}
+			}
+		}
+
 		resInput = resolver.ResolveInput{
 			RevisionID:         activeRevID,
 			InventoryWatermark: "preview-ram",
@@ -1357,21 +1401,67 @@ func (s *Service) PreviewGroup(ctx context.Context, cmd PreviewGroupCommand) (*G
 		}
 	}
 
+	var candidateCount int
+	var excludedCount int
+	var filterCounts *resolver.GroupFilterCount
+	var exclusionSummary map[string]int
+	var excludedReasons []string
+
+	if snap.FilterCounts != nil && snap.FilterCounts.GroupCounts != nil {
+		if gc, ok := snap.FilterCounts.GroupCounts[groupID]; ok {
+			candidateCount = gc.Candidate
+			excludedCount = gc.Excluded
+			filterCounts = &gc
+			if len(gc.ExclusionSummary) > 0 {
+				exclusionSummary = make(map[string]int, len(gc.ExclusionSummary))
+				for k, v := range gc.ExclusionSummary {
+					exclusionSummary[k] = v
+					excludedReasons = append(excludedReasons, k)
+				}
+			}
+		}
+	}
+
+	for _, d := range groupDiags {
+		if d.Reason != "" {
+			if exclusionSummary == nil {
+				exclusionSummary = make(map[string]int)
+			}
+			if _, exists := exclusionSummary[d.Reason]; !exists {
+				exclusionSummary[d.Reason] = 1
+				excludedReasons = append(excludedReasons, d.Reason)
+			}
+		}
+	}
+	sort.Strings(excludedReasons)
+
 	resp := &GroupPreviewResponse{
-		GroupID:         groupID,
-		Revision:        revision,
-		SelectionDigest: snap.SnapshotDigest,
-		Members:         previewMembers,
-		NodeCount:       len(targetRG.AllNodeLogicalIDs),
-		Diagnostics:     groupDiags,
+		GroupID:          groupID,
+		Revision:         revision,
+		SelectionDigest:  snap.SnapshotDigest,
+		Members:          previewMembers,
+		MemberCount:      len(previewMembers),
+		NodeCount:        len(targetRG.AllNodeLogicalIDs),
+		CandidateCount:   candidateCount,
+		ExcludedCount:    excludedCount,
+		ExclusionSummary: exclusionSummary,
+		ExcludedReasons:  excludedReasons,
+		FilterCounts:     filterCounts,
+		Diagnostics:      groupDiags,
 	}
 
 	if cmd.Target != nil && *cmd.Target != "" {
 		res, compErr := compiler.Compile(ctx, snap, *cmd.Target)
 		if compErr != nil {
-			return nil, compErr
+			groupDiags = append(groupDiags, resolver.Diagnostic{
+				Severity: resolver.DiagnosticSeverityWarning,
+				Code:     "target_compilation_warning",
+				Message:  fmt.Sprintf("target %s compilation warning: %v", *cmd.Target, compErr),
+			})
+			resp.Diagnostics = groupDiags
+		} else {
+			resp.ContentDigest = &res.ContentDigest
 		}
-		resp.ContentDigest = &res.ContentDigest
 	}
 	return resp, nil
 }
@@ -1518,8 +1608,18 @@ func (s *Service) ValidateGraph(ctx context.Context) (*ValidationResult, error) 
 
 	var snap *resolver.ResolvedPolicySnapshot
 	var snapErr error
-	if s.snapshotProvider != nil && activeRevID != "" {
+	if s.snapshotProvider != nil {
 		snap, snapErr = s.snapshotProvider(ctx, activeRevID)
+		if snapErr != nil {
+			return nil, fmt.Errorf("validation incomplete: %w", snapErr)
+		}
+	} else if s.inputProvider != nil {
+		input, err := s.inputProvider(ctx, activeRevID)
+		if err != nil {
+			return nil, fmt.Errorf("validation incomplete: %w", err)
+		}
+		r := resolver.New()
+		snap, snapErr = r.Resolve(ctx, *input)
 		if snapErr != nil {
 			return nil, fmt.Errorf("validation incomplete: %w", snapErr)
 		}
@@ -1584,7 +1684,13 @@ func (s *Service) ValidateGraph(ctx context.Context) (*ValidationResult, error) 
 			rg, ok := resolvedGroupMap[rule.TargetGroupID]
 			if !ok || (!rg.UsesEmptyPass() && (len(rg.Members) == 0 || len(rg.AllNodeLogicalIDs) == 0)) {
 				var errMsg string
-				if len(nodes) == 0 {
+				totalAdmitted := len(nodes)
+				if snap != nil && snap.FilterCounts != nil {
+					totalAdmitted = snap.FilterCounts.AdmittedTotal
+				} else if snap != nil {
+					totalAdmitted = len(snap.Nodes)
+				}
+				if totalAdmitted == 0 {
 					errMsg = fmt.Sprintf("当前有效库存为空，分流规则 %q (位置 %d) 指向的策略组 %q (%s) 无可用节点", rule.Expression, rule.Position, tGroup.Name, tGroup.ID)
 				} else {
 					errMsg = fmt.Sprintf("分流规则 %q (位置 %d) 指向的策略组 %q (%s) 经解析无可用节点 (0 个可用节点)", rule.Expression, rule.Position, tGroup.Name, tGroup.ID)

@@ -494,3 +494,127 @@ func TestSubscriptionDeleteDeactivatesOrphanNodes(t *testing.T) {
 		t.Fatalf("expected 0 active nodes after deleting Sub B, got total=%d len=%d", totalActiveAfterB, len(activeNodesAfterB))
 	}
 }
+
+func TestSubscriptionsSQLite_ProbePolicyRoundtrip(t *testing.T) {
+	ctx := context.Background()
+	db, repo := newSubscriptionsTestDB(t)
+
+	// 1. Custom policy
+	customInterval := 180
+	sub1 := &domain.Subscription{
+		ID:                 domain.MustNewUUIDv7(),
+		Name:               "Custom Sub",
+		SourceURLSecretRef: "secret://custom",
+		Enabled:            true,
+		Config: domain.SubscriptionConfig{
+			ProbePolicy: &domain.SubscriptionProbePolicy{
+				Mode:            domain.ProbePolicyModeCustom,
+				IntervalSeconds: &customInterval,
+			},
+		},
+		Revision:  domain.MustNewUUIDv7(),
+		CreatedAt: domain.NowUTC(),
+		UpdatedAt: domain.NowUTC(),
+	}
+	if err := repo.Create(ctx, sub1); err != nil {
+		t.Fatalf("Create sub1 failed: %v", err)
+	}
+	got1, err := repo.GetByID(ctx, sub1.ID)
+	if err != nil {
+		t.Fatalf("GetByID sub1 failed: %v", err)
+	}
+	if got1.Config.ProbePolicy == nil || got1.Config.ProbePolicy.Mode != domain.ProbePolicyModeCustom || got1.Config.ProbePolicy.IntervalSeconds == nil || *got1.Config.ProbePolicy.IntervalSeconds != 180 {
+		t.Fatalf("expected custom 180s, got %#v", got1.Config.ProbePolicy)
+	}
+
+	// 2. Disabled policy
+	sub2 := &domain.Subscription{
+		ID:                 domain.MustNewUUIDv7(),
+		Name:               "Disabled Sub",
+		SourceURLSecretRef: "secret://disabled",
+		Enabled:            true,
+		Config: domain.SubscriptionConfig{
+			ProbePolicy: &domain.SubscriptionProbePolicy{
+				Mode: domain.ProbePolicyModeDisabled,
+			},
+		},
+		Revision:  domain.MustNewUUIDv7(),
+		CreatedAt: domain.NowUTC(),
+		UpdatedAt: domain.NowUTC(),
+	}
+	if err := repo.Create(ctx, sub2); err != nil {
+		t.Fatalf("Create sub2 failed: %v", err)
+	}
+	got2, err := repo.GetByID(ctx, sub2.ID)
+	if err != nil {
+		t.Fatalf("GetByID sub2 failed: %v", err)
+	}
+	if got2.Config.ProbePolicy == nil || got2.Config.ProbePolicy.Mode != domain.ProbePolicyModeDisabled || got2.Config.ProbePolicy.IntervalSeconds != nil {
+		t.Fatalf("expected disabled with nil interval, got %#v", got2.Config.ProbePolicy)
+	}
+
+	// 3. Inherit policy
+	sub3 := &domain.Subscription{
+		ID:                 domain.MustNewUUIDv7(),
+		Name:               "Inherit Sub",
+		SourceURLSecretRef: "secret://inherit",
+		Enabled:            true,
+		Config: domain.SubscriptionConfig{
+			ProbePolicy: &domain.SubscriptionProbePolicy{
+				Mode: domain.ProbePolicyModeInherit,
+			},
+		},
+		Revision:  domain.MustNewUUIDv7(),
+		CreatedAt: domain.NowUTC(),
+		UpdatedAt: domain.NowUTC(),
+	}
+	if err := repo.Create(ctx, sub3); err != nil {
+		t.Fatalf("Create sub3 failed: %v", err)
+	}
+	got3, err := repo.GetByID(ctx, sub3.ID)
+	if err != nil {
+		t.Fatalf("GetByID sub3 failed: %v", err)
+	}
+	if got3.Config.ProbePolicy == nil || got3.Config.ProbePolicy.Mode != domain.ProbePolicyModeInherit {
+		t.Fatalf("expected inherit mode, got %#v", got3.Config.ProbePolicy)
+	}
+
+	// 4. Legacy subscription inserted with empty/raw JSON without probe_policy
+	legacyID := domain.MustNewUUIDv7()
+	nowStr := domain.NowUTC().Format(time.RFC3339)
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO subscriptions (
+			id, name, source_url_secret_ref, enabled, prefix,
+			refresh_interval_seconds, refresh_user_agent_policy, refresh_fetch_proxy_ref,
+			refresh_timeout_seconds, refresh_max_response_bytes,
+			config_json, revision, is_primary, userinfo, created_at, updated_at
+		) VALUES (?, 'Legacy Sub', 'secret://legacy', 1, '', 3600, 'default', '', 30, 1048576, '{}', ?, 0, '', ?, ?)`,
+		legacyID, domain.MustNewUUIDv7(), nowStr, nowStr,
+	)
+	if err != nil {
+		t.Fatalf("insert legacy sub failed: %v", err)
+	}
+	gotLegacy, err := repo.GetByID(ctx, legacyID)
+	if err != nil {
+		t.Fatalf("GetByID legacy sub failed: %v", err)
+	}
+	if gotLegacy.Config.ProbePolicy == nil || gotLegacy.Config.ProbePolicy.Mode != domain.ProbePolicyModeInherit {
+		t.Fatalf("expected legacy sub to default to inherit, got %#v", gotLegacy.Config.ProbePolicy)
+	}
+
+	// 5. List subscriptions: all items have normalized probe_policy
+	listSubs, total, err := repo.List(ctx, domain.SubscriptionFilter{
+		Pagination: domain.Pagination{Page: 1, PageSize: 10},
+	})
+	if err != nil {
+		t.Fatalf("List subscriptions failed: %v", err)
+	}
+	if total < 4 || len(listSubs) < 4 {
+		t.Fatalf("expected at least 4 subscriptions, got total=%d len=%d", total, len(listSubs))
+	}
+	for _, s := range listSubs {
+		if s.Config.ProbePolicy == nil || s.Config.ProbePolicy.Mode == "" {
+			t.Fatalf("subscription %s has unpopulated probe_policy in List", s.ID)
+		}
+	}
+}

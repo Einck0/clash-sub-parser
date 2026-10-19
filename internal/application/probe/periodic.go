@@ -133,6 +133,27 @@ func WithCoordinatorObservations(observations domain.ProbeObservationRepository)
 	}
 }
 
+// WithCoordinatorSubscriptions sets the subscription repository for source-specific probe policies.
+func WithCoordinatorSubscriptions(subscriptions domain.SubscriptionRepository) PeriodicCoordinatorOption {
+	return func(c *PeriodicCoordinator) {
+		c.subscriptions = subscriptions
+	}
+}
+
+// WithCoordinatorNodeSources sets the node source repository for source-to-node association resolution.
+func WithCoordinatorNodeSources(nodeSources domain.NodeSourceRepository) PeriodicCoordinatorOption {
+	return func(c *PeriodicCoordinator) {
+		c.nodeSources = nodeSources
+	}
+}
+
+// WithCoordinatorSourceHistory sets the node source history repository for manual node confirmation checks.
+func WithCoordinatorSourceHistory(sourceHistory domain.NodeSourceHistoryRepository) PeriodicCoordinatorOption {
+	return func(c *PeriodicCoordinator) {
+		c.sourceHistory = sourceHistory
+	}
+}
+
 // PeriodicCoordinator supervises periodic probe scheduling, lease coordination,
 // active node sharding, and graceful drain.
 type PeriodicCoordinator struct {
@@ -140,6 +161,9 @@ type PeriodicCoordinator struct {
 	nodes           domain.NodeRepository
 	runs            domain.ProbeRunRepository
 	observations    domain.ProbeObservationRepository
+	subscriptions   domain.SubscriptionRepository
+	nodeSources     domain.NodeSourceRepository
+	sourceHistory   domain.NodeSourceHistoryRepository
 	runner          Runner
 	ownerID         string
 	leaseDuration   time.Duration
@@ -438,7 +462,7 @@ func (c *PeriodicCoordinator) TriggerImmediate(ctx context.Context) error {
 		return nil
 	}
 
-	return c.executeBatch(ctx, newBatch, sched)
+	return c.executeBatch(ctx, newBatch, sched, true)
 }
 
 func (c *PeriodicCoordinator) triggerWindow() error {
@@ -521,10 +545,10 @@ func (c *PeriodicCoordinator) triggerWindow() error {
 	}
 	c.mu.Unlock()
 
-	return c.executeBatch(ctx, batch, sched)
+	return c.executeBatch(ctx, batch, sched, false)
 }
 
-func (c *PeriodicCoordinator) executeBatch(parentCtx context.Context, batch *domain.ProbeBatch, sched *domain.ProbeSchedule) error {
+func (c *PeriodicCoordinator) executeBatch(parentCtx context.Context, batch *domain.ProbeBatch, sched *domain.ProbeSchedule, isManual bool) error {
 	if c.nodes == nil {
 		return domain.NewValidationError("missing_nodes_repository", "node repository is not configured")
 	}
@@ -706,6 +730,26 @@ func (c *PeriodicCoordinator) executeBatch(parentCtx context.Context, batch *dom
 		cooldown = defaultFailureCooldown
 	}
 
+	var nodePolicies map[string]nodePolicyResolution
+	if !isManual {
+		var err error
+		nodePolicies, err = c.resolveNodePolicies(batchCtx, candidateNodes, interval)
+		if err != nil {
+			select {
+			case <-leaseLost:
+				return domain.NewConflictError("lease_lost", "batch lease lost to another instance")
+			default:
+			}
+			batch.RedactedError = "failed to resolve node probe policies: " + domain.RedactSensitiveInfo(err.Error())
+			_ = batch.TransitionTo(domain.ProbeBatchStateFailed)
+			if c.schedules != nil {
+				_ = c.schedules.UpdateBatch(context.Background(), batch)
+				_ = c.schedules.ReleaseLease(context.Background(), batch.ID, c.ownerID)
+			}
+			return err
+		}
+	}
+
 	var latestObsMap map[string]map[domain.ProbeKind]domain.ProbeObservation
 	if c.observations != nil {
 		nodeIDs := make([]string, len(candidateNodes))
@@ -741,6 +785,17 @@ func (c *PeriodicCoordinator) executeBatch(parentCtx context.Context, batch *dom
 
 	var candidates []nodeExpiredCandidate
 	for _, n := range candidateNodes {
+		var nodeInterval time.Duration
+		if !isManual {
+			pol, ok := nodePolicies[n.LogicalID]
+			if !ok || !pol.participates {
+				continue
+			}
+			nodeInterval = pol.interval
+		} else {
+			nodeInterval = interval
+		}
+
 		var expiredKinds []domain.ProbeKind
 		hasUnobserved := false
 		hasRevisionMismatch := false
@@ -780,7 +835,7 @@ func (c *PeriodicCoordinator) executeBatch(parentCtx context.Context, batch *dom
 			}
 
 			revisionMismatch := n.ConnectionRevision > 0 && (obs.ConnectionRevision == nil || *obs.ConnectionRevision != n.ConnectionRevision)
-			if revisionMismatch || obsAge >= interval {
+			if revisionMismatch || obsAge >= nodeInterval {
 				expiredKinds = append(expiredKinds, k)
 				if revisionMismatch {
 					hasRevisionMismatch = true
@@ -1113,4 +1168,131 @@ func (c *PeriodicCoordinator) executeBatch(parentCtx context.Context, batch *dom
 	}
 
 	return nil
+}
+
+type nodePolicyResolution struct {
+	participates bool
+	interval     time.Duration
+}
+
+func (c *PeriodicCoordinator) resolveNodePolicies(ctx context.Context, nodes []domain.Node, globalInterval time.Duration) (map[string]nodePolicyResolution, error) {
+	result := make(map[string]nodePolicyResolution, len(nodes))
+	if len(nodes) == 0 {
+		return result, nil
+	}
+
+	if c.subscriptions == nil || c.nodeSources == nil {
+		for _, n := range nodes {
+			result[n.LogicalID] = nodePolicyResolution{
+				participates: true,
+				interval:     globalInterval,
+			}
+		}
+		return result, nil
+	}
+
+	nodeIDs := make([]string, len(nodes))
+	for i, n := range nodes {
+		nodeIDs[i] = n.LogicalID
+	}
+
+	sourcesByNode, err := c.nodeSources.ListByNodes(ctx, nodeIDs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list node sources: %w", err)
+	}
+
+	subMap := make(map[string]*domain.Subscription)
+	subPage := 1
+	const subPageSize = 100
+	for {
+		subs, total, err := c.subscriptions.List(ctx, domain.SubscriptionFilter{
+			Pagination: domain.Pagination{Page: subPage, PageSize: subPageSize},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to list subscriptions: %w", err)
+		}
+		for i := range subs {
+			subMap[subs[i].ID] = &subs[i]
+		}
+		if len(subMap) >= total || len(subs) == 0 {
+			break
+		}
+		subPage++
+	}
+
+	for _, n := range nodes {
+		sources := sourcesByNode[n.LogicalID]
+		hasValidSource := false
+		var activeIntervals []time.Duration
+
+		for _, src := range sources {
+			sub, ok := subMap[src.SubscriptionID]
+			if !ok {
+				continue
+			}
+			hasValidSource = true
+			if !sub.Enabled {
+				// Disabled subscription source: does not participate in automatic probing
+				continue
+			}
+			policy := sub.Config.EffectiveProbePolicy()
+			if policy.Mode == domain.ProbePolicyModeDisabled {
+				// Explicitly disabled probing for this source
+				continue
+			}
+			if policy.Mode == domain.ProbePolicyModeCustom && policy.IntervalSeconds != nil && *policy.IntervalSeconds > 0 {
+				activeIntervals = append(activeIntervals, time.Duration(*policy.IntervalSeconds)*time.Second)
+			} else {
+				// Inherit global interval
+				activeIntervals = append(activeIntervals, globalInterval)
+			}
+		}
+
+		if hasValidSource {
+			if len(activeIntervals) == 0 {
+				// All sources are stopped/disabled: do not automatically schedule
+				result[n.LogicalID] = nodePolicyResolution{participates: false}
+			} else {
+				minInterval := activeIntervals[0]
+				for _, iv := range activeIntervals[1:] {
+					if iv < minInterval {
+						minInterval = iv
+					}
+				}
+				result[n.LogicalID] = nodePolicyResolution{
+					participates: true,
+					interval:     minInterval,
+				}
+			}
+			continue
+		}
+
+		// Node has no valid source in node_sources.
+		// "manual confirmed 无有效源继承全局，普通孤立不复活"
+		isManualConfirmed := false
+		if c.sourceHistory != nil {
+			histories, err := c.sourceHistory.ListByNodeLogicalID(ctx, n.LogicalID)
+			if err == nil {
+				for _, h := range histories {
+					if h.Cause == domain.CauseManualConfirmed {
+						isManualConfirmed = true
+						break
+					}
+				}
+			}
+		}
+
+		if isManualConfirmed {
+			result[n.LogicalID] = nodePolicyResolution{
+				participates: true,
+				interval:     globalInterval,
+			}
+		} else {
+			result[n.LogicalID] = nodePolicyResolution{
+				participates: false,
+			}
+		}
+	}
+
+	return result, nil
 }

@@ -154,6 +154,9 @@ func makeApplicationServices(ctx context.Context, db *sql.DB, opts appServiceOpt
 		probeRunner,
 		probe.WithCoordinatorOwner("csp-instance-"+domain.MustNewUUIDv7()),
 		probe.WithCoordinatorObservations(probeObsRepo),
+		probe.WithCoordinatorSubscriptions(subRepo),
+		probe.WithCoordinatorNodeSources(nodeSourceRepo),
+		probe.WithCoordinatorSourceHistory(sqlite.NewNodeSourceHistoryRepository(db)),
 	)
 	probeService.SetCoordinator(periodicCoordinator)
 

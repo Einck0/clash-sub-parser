@@ -531,3 +531,131 @@ func TestServiceUpdate_RejectsBlankSecretRefWithoutMutatingState(t *testing.T) {
 		t.Fatalf("unexpected updated view: %+v", updated)
 	}
 }
+
+func TestService_ProbePolicyCreateAndUpdate(t *testing.T) {
+	subs := &memorySubscriptions{items: make(map[string]domain.Subscription)}
+	audit := &memoryAudit{}
+	service := subscription.NewService(subs, audit)
+	ctx := context.Background()
+
+	// 1. Create with omitted probe_policy defaults to inherit
+	subDefault, err := service.Create(ctx, subscription.CreateSubscriptionCommand{
+		Name:               "DefaultSub",
+		SourceURLSecretRef: "https://example.com/sub1",
+		Enabled:            true,
+		Config: domain.SubscriptionConfig{
+			RenameRules: []domain.RenameRule{{Pattern: "p1", Replace: "r1"}},
+		},
+		RequestID: "req-1",
+		ActorKind: domain.ActorKindAdmin,
+	})
+	if err != nil {
+		t.Fatalf("Create() subDefault err = %v", err)
+	}
+	if subDefault.Config.ProbePolicy == nil || subDefault.Config.ProbePolicy.Mode != domain.ProbePolicyModeInherit {
+		t.Fatalf("expected default probe_policy inherit, got %#v", subDefault.Config.ProbePolicy)
+	}
+
+	// 2. Create with custom probe_policy
+	customInterval := 180
+	subCustom, err := service.Create(ctx, subscription.CreateSubscriptionCommand{
+		Name:               "CustomSub",
+		SourceURLSecretRef: "https://example.com/sub2",
+		Enabled:            true,
+		Config: domain.SubscriptionConfig{
+			ProbePolicy: &domain.SubscriptionProbePolicy{
+				Mode:            domain.ProbePolicyModeCustom,
+				IntervalSeconds: &customInterval,
+			},
+		},
+		RequestID: "req-2",
+		ActorKind: domain.ActorKindAdmin,
+	})
+	if err != nil {
+		t.Fatalf("Create() subCustom err = %v", err)
+	}
+	if subCustom.Config.ProbePolicy == nil || subCustom.Config.ProbePolicy.Mode != domain.ProbePolicyModeCustom || *subCustom.Config.ProbePolicy.IntervalSeconds != 180 {
+		t.Fatalf("expected custom probe_policy 180s, got %#v", subCustom.Config.ProbePolicy)
+	}
+
+	// 3. Create with invalid probe_policy (e.g. interval out of range) is rejected
+	badInterval := 10
+	_, err = service.Create(ctx, subscription.CreateSubscriptionCommand{
+		Name:               "BadSub",
+		SourceURLSecretRef: "https://example.com/sub3",
+		Config: domain.SubscriptionConfig{
+			ProbePolicy: &domain.SubscriptionProbePolicy{
+				Mode:            domain.ProbePolicyModeCustom,
+				IntervalSeconds: &badInterval,
+			},
+		},
+		RequestID: "req-3",
+		ActorKind: domain.ActorKindAdmin,
+	})
+	if err == nil {
+		t.Fatalf("expected error creating subscription with out of range probe interval")
+	}
+
+	// 4. Update via ConfigPatch updates probe_policy and preserves RenameRules
+	newInterval := 600
+	customMode := domain.ProbePolicyModeCustom
+	updated, err := service.Update(ctx, subscription.UpdateSubscriptionCommand{
+		ID:       subDefault.ID,
+		Revision: subDefault.Revision,
+		ConfigPatch: &domain.SubscriptionConfigPatch{
+			ProbePolicy: &domain.SubscriptionProbePolicyPatch{
+				Mode:            &customMode,
+				IntervalSeconds: &newInterval,
+			},
+		},
+		RequestID: "req-4",
+		ActorKind: domain.ActorKindAdmin,
+	})
+	if err != nil {
+		t.Fatalf("Update() with ConfigPatch failed: %v", err)
+	}
+	if updated.Config.ProbePolicy.Mode != domain.ProbePolicyModeCustom || *updated.Config.ProbePolicy.IntervalSeconds != 600 {
+		t.Fatalf("expected probe_policy custom(600), got %#v", updated.Config.ProbePolicy)
+	}
+	if len(updated.Config.RenameRules) != 1 || updated.Config.RenameRules[0].Pattern != "p1" {
+		t.Fatalf("expected RenameRules preserved, got %#v", updated.Config.RenameRules)
+	}
+
+	// 5. Update via ConfigPatch with explicit empty [] clears RenameRules
+	emptyRename := []domain.RenameRule{}
+	updated2, err := service.Update(ctx, subscription.UpdateSubscriptionCommand{
+		ID:       updated.ID,
+		Revision: updated.Revision,
+		ConfigPatch: &domain.SubscriptionConfigPatch{
+			RenameRules: &emptyRename,
+		},
+		RequestID: "req-5",
+		ActorKind: domain.ActorKindAdmin,
+	})
+	if err != nil {
+		t.Fatalf("Update() with empty RenameRules failed: %v", err)
+	}
+	if len(updated2.Config.RenameRules) != 0 {
+		t.Fatalf("expected RenameRules cleared, got %#v", updated2.Config.RenameRules)
+	}
+	if updated2.Config.ProbePolicy.Mode != domain.ProbePolicyModeCustom || *updated2.Config.ProbePolicy.IntervalSeconds != 600 {
+		t.Fatalf("expected probe_policy still custom(600), got %#v", updated2.Config.ProbePolicy)
+	}
+
+	// 6. Update with invalid probe policy mode is rejected
+	badMode := domain.ProbePolicyMode("invalid_mode")
+	_, err = service.Update(ctx, subscription.UpdateSubscriptionCommand{
+		ID:       updated2.ID,
+		Revision: updated2.Revision,
+		ConfigPatch: &domain.SubscriptionConfigPatch{
+			ProbePolicy: &domain.SubscriptionProbePolicyPatch{
+				Mode: &badMode,
+			},
+		},
+		RequestID: "req-6",
+		ActorKind: domain.ActorKindAdmin,
+	})
+	if err == nil {
+		t.Fatalf("expected error on invalid probe policy mode update")
+	}
+}

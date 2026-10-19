@@ -10,6 +10,7 @@ import {
   type SubscriptionRecord,
   type RenameRule,
   type FilterRule,
+  type ProbePolicyMode,
 } from './useSubscriptions'
 
 const props = defineProps<{
@@ -37,6 +38,8 @@ const targetGroupsInput = ref('')
 const nameError = ref('')
 const urlError = ref('')
 const generalError = ref('')
+const probePolicyMode = ref<ProbePolicyMode>('inherit')
+const probeIntervalSeconds = ref<number>(3600)
 
 function clearErrors() {
   nameError.value = ''
@@ -61,9 +64,22 @@ watch(
           rename_rules: sub.config?.rename_rules ? [...sub.config.rename_rules] : [],
           filter_rules: sub.config?.filter_rules ? [...sub.config.filter_rules] : [],
           target_groups: sub.config?.target_groups ? [...sub.config.target_groups] : [],
+          probe_policy: sub.config?.probe_policy
+            ? { ...sub.config.probe_policy }
+            : { mode: 'inherit' },
         },
       }
       targetGroupsInput.value = (sub.config?.target_groups || []).join(', ')
+      if (sub.config?.probe_policy) {
+        probePolicyMode.value = sub.config.probe_policy.mode || 'inherit'
+        probeIntervalSeconds.value =
+          typeof sub.config.probe_policy.interval_seconds === 'number'
+            ? sub.config.probe_policy.interval_seconds
+            : 3600
+      } else {
+        probePolicyMode.value = 'inherit'
+        probeIntervalSeconds.value = 3600
+      }
     } else {
       draft.value = {
         name: '',
@@ -74,6 +90,8 @@ watch(
         config: defaultConfig(),
       }
       targetGroupsInput.value = ''
+      probePolicyMode.value = 'inherit'
+      probeIntervalSeconds.value = 3600
     }
   },
   { immediate: true }
@@ -134,6 +152,14 @@ function validate(): boolean {
     valid = false
   }
 
+  if (probePolicyMode.value === 'custom') {
+    const pInterval = Number(probeIntervalSeconds.value)
+    if (isNaN(pInterval) || pInterval < 60 || pInterval > 604800) {
+      generalError.value = '自定义探测周期必须在 60 到 604800 秒之间'
+      valid = false
+    }
+  }
+
   if (!valid) {
     activeTab.value = 'basic'
     if (!trimmedName) {
@@ -157,6 +183,18 @@ function handleSubmit() {
     .map((g) => g.trim())
     .filter((g) => g.length > 0)
   draft.value.config.target_groups = groups
+
+  if (probePolicyMode.value === 'custom') {
+    draft.value.config.probe_policy = {
+      mode: 'custom',
+      interval_seconds: Number(probeIntervalSeconds.value),
+    }
+  } else {
+    draft.value.config.probe_policy = {
+      mode: probePolicyMode.value,
+    }
+  }
+
   emit('save', draft.value)
 }
 </script>
@@ -282,7 +320,7 @@ function handleSubmit() {
 
     <!-- Tab 2: Advanced Settings -->
     <div v-show="activeTab === 'advanced'" class="space-y-6">
-      <!-- Cron Schedule & Auto Test -->
+      <!-- Cron Schedule -->
       <div class="p-4 rounded-xl bg-base-200/50 border border-base-300 space-y-4">
         <label class="form-control">
           <span class="label-text text-xs font-semibold mb-1">{{ t('subscriptions.cronSchedule') }}</span>
@@ -292,11 +330,79 @@ function handleSubmit() {
             :placeholder="t('subscriptions.cronPlaceholder')"
           />
         </label>
+      </div>
 
-        <label class="label cursor-pointer justify-start gap-3 pt-2">
-          <input v-model="draft.config.auto_test" type="checkbox" class="toggle toggle-secondary toggle-sm" />
-          <span class="label-text text-xs font-semibold">{{ t('subscriptions.autoTest') }}</span>
-        </label>
+      <!-- Probe Policy Card -->
+      <div class="p-4 rounded-xl bg-base-200/50 border border-base-300 space-y-4" data-testid="subscription-probe-policy-section">
+        <div>
+          <span class="text-xs font-bold uppercase tracking-wider text-base-content/70">
+            {{ t('subscriptions.probePolicyTitle') }}
+          </span>
+          <p class="text-[11px] text-base-content/60 mt-0.5">
+            {{ t('subscriptions.probePolicyDesc') }}
+          </p>
+        </div>
+
+        <div class="space-y-2">
+          <label class="label cursor-pointer justify-start gap-3 py-1">
+            <input
+              v-model="probePolicyMode"
+              type="radio"
+              value="inherit"
+              name="probe_policy_mode"
+              class="radio radio-primary radio-sm"
+              data-testid="probe-policy-mode-inherit"
+            />
+            <div class="flex flex-col">
+              <span class="text-xs font-medium">{{ t('subscriptions.probePolicyInherit') }}</span>
+            </div>
+          </label>
+
+          <label class="label cursor-pointer justify-start gap-3 py-1">
+            <input
+              v-model="probePolicyMode"
+              type="radio"
+              value="disabled"
+              name="probe_policy_mode"
+              class="radio radio-primary radio-sm"
+              data-testid="probe-policy-mode-disabled"
+            />
+            <div class="flex flex-col">
+              <span class="text-xs font-medium">{{ t('subscriptions.probePolicyDisabled') }}</span>
+            </div>
+          </label>
+
+          <label class="label cursor-pointer justify-start gap-3 py-1">
+            <input
+              v-model="probePolicyMode"
+              type="radio"
+              value="custom"
+              name="probe_policy_mode"
+              class="radio radio-primary radio-sm"
+              data-testid="probe-policy-mode-custom"
+            />
+            <div class="flex flex-col">
+              <span class="text-xs font-medium">{{ t('subscriptions.probePolicyCustom') }}</span>
+            </div>
+          </label>
+        </div>
+
+        <!-- Custom interval input visible only when mode is custom -->
+        <div v-if="probePolicyMode === 'custom'" class="pt-2 border-t border-base-300" data-testid="probe-policy-custom-interval-block">
+          <label class="form-control">
+            <span class="label-text text-xs font-semibold mb-1">{{ t('subscriptions.probeIntervalSeconds') }}</span>
+            <input
+              v-model.number="probeIntervalSeconds"
+              type="number"
+              min="60"
+              max="604800"
+              class="input input-bordered input-sm font-mono text-xs focus:input-primary max-w-xs"
+              placeholder="3600"
+              data-testid="probe-policy-interval-input"
+            />
+            <span class="text-[11px] text-base-content/60 mt-0.5">{{ t('subscriptions.probeIntervalHint') }}</span>
+          </label>
+        </div>
       </div>
 
       <!-- Rename Rules -->

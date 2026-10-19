@@ -60,7 +60,20 @@ export function useNodes() {
   const searchQuery = ref<string>('')
   const selectedNode = ref<NormalizedNode | null>(null)
   const requestGeneration = ref(0)
+  const globalProbeKinds = ref<ProbeKind[]>(['baseline', 'streaming', 'ai', 'ip_risk', 'geo'])
   const hasMore = computed(() => items.value.length < total.value)
+
+  async function fetchGlobalScheduleKinds(): Promise<ProbeKind[]> {
+    try {
+      const res = await api.get<{ kinds?: ProbeKind[] }>('/api/v1/probes/schedule')
+      if (res && Array.isArray(res.kinds) && res.kinds.length > 0) {
+        globalProbeKinds.value = [...res.kinds]
+      }
+    } catch {
+      // Non-blocking fallback to default kinds
+    }
+    return globalProbeKinds.value
+  }
 
   function applyPoolStateToNode(node: NormalizedNode): NormalizedNode {
     if (probingNodeIds.value.has(node.logicalId) || probingNodeId.value === node.logicalId) {
@@ -231,8 +244,9 @@ export function useNodes() {
 
   async function probeSingleNode(
     logicalId: string,
-    kinds: ProbeKind[] = ['baseline', 'streaming', 'ai', 'ip_risk', 'geo']
+    kinds?: ProbeKind[]
   ): Promise<{ ok: boolean; runId?: string; error?: string }> {
+    const effectiveKinds = kinds && kinds.length > 0 ? kinds : globalProbeKinds.value
     probingNodeId.value = logicalId
     const idx = items.value.findIndex((n) => n.logicalId === logicalId)
     if (idx >= 0) {
@@ -247,7 +261,7 @@ export function useNodes() {
         {
           config_revision: '',
           node_logical_ids: [logicalId],
-          kinds,
+          kinds: effectiveKinds,
         },
         {
           headers: {
@@ -291,6 +305,47 @@ export function useNodes() {
       ) {
         selectedNode.value = { ...selectedNode.value, probeState: 'idle' }
       }
+    }
+  }
+
+  async function probeNodesBatch(
+    logicalIds: string[],
+    kinds?: ProbeKind[]
+  ): Promise<{ ok: boolean; runId?: string; error?: string }> {
+    const effectiveKinds = kinds && kinds.length > 0 ? kinds : globalProbeKinds.value
+    const idsToMark = logicalIds.length > 0 ? logicalIds : items.value.map((n) => n.logicalId)
+    const nextProbing = new Set(probingNodeIds.value)
+    for (const id of idsToMark) {
+      nextProbing.add(id)
+    }
+    probingNodeIds.value = nextProbing
+
+    items.value = items.value.map((node) => {
+      if (idsToMark.includes(node.logicalId)) {
+        return { ...node, probeState: 'probing' as const }
+      }
+      return node
+    })
+
+    try {
+      const res = await api.post<CreateProbeRunResponse>(
+        '/api/v1/probes/runs',
+        {
+          config_revision: '',
+          node_logical_ids: logicalIds,
+          kinds: effectiveKinds,
+        },
+        {
+          headers: {
+            'Idempotency-Key': generateIdempotencyKey(),
+          },
+        }
+      )
+      await syncPoolStatus()
+      return { ok: true, runId: res?.run_id }
+    } catch (cause) {
+      const msg = cause instanceof Error ? cause.message : '批量发起节点测速失败'
+      return { ok: false, error: msg }
     }
   }
 
@@ -397,12 +452,15 @@ export function useNodes() {
     healthFilter,
     searchQuery,
     selectedNode,
+    globalProbeKinds,
+    fetchGlobalScheduleKinds,
     load,
     loadMore,
     syncPoolStatus,
     fetchNodeDetail,
     fetchNodeSourceHistory,
     probeSingleNode,
+    probeNodesBatch,
     updateNodeConnection,
   }
 }

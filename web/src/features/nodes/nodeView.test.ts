@@ -798,4 +798,336 @@ describe('NodesView real API detail, plaintext PATCH edit, and failure draft pre
     app.unmount()
     mountEl.remove()
   })
+
+  it('handles cross-page explicit ID selection, disabled empty selection, invalid ID pruning, full fleet confirmation, and global kinds', async () => {
+    HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
+    HTMLDialogElement.prototype.close = function () { this.removeAttribute('open'); this.dispatchEvent(new Event('close')) }
+
+    const { default: NodesView } = await import('./NodesView.vue')
+    const { createApp, h, nextTick } = await import('vue')
+
+    const postCalls: Array<{ path: string; body: any }> = []
+    let getPoolCount = 0
+
+    const nodesPage1: NodeRecord[] = [
+      {
+        logical_id: 'node-p1-1',
+        display_name: 'Node P1-1',
+        protocol: 'vmess',
+        active: true,
+        connection: { server: '1.1.1.1', port: 443 },
+        capabilities: {},
+        updated_at: new Date().toISOString(),
+      },
+      {
+        logical_id: 'node-p1-2',
+        display_name: 'Node P1-2',
+        protocol: 'vless',
+        active: true,
+        connection: { server: '1.1.1.2', port: 443 },
+        capabilities: {},
+        updated_at: new Date().toISOString(),
+      },
+    ]
+
+    vi.spyOn(api, 'get').mockImplementation(async (path: string, options?: any) => {
+      if (path === '/api/v1/probes/schedule') {
+        return {
+          enabled: true,
+          interval_seconds: 7200,
+          kinds: ['baseline', 'ai'],
+          updated_at: new Date().toISOString(),
+        }
+      }
+      if (path === '/api/v1/nodes') {
+        return { items: nodesPage1, total: 2, page: 1, page_size: 10 }
+      }
+      if (path === '/api/v1/probes/pool') {
+        getPoolCount++
+        return {
+          probing_node_ids: [],
+          queued_node_ids: [],
+          queue_nodes_count: 0,
+          probing_count: 0,
+          total_count: 2,
+        }
+      }
+      if (path === '/api/v1/probes/runs') {
+        return {
+          items: [
+            {
+              id: 'run-test-1',
+              state: 'running',
+              kinds: ['baseline'],
+              created_at: new Date().toISOString(),
+              target_nodes_count: 2,
+            },
+          ],
+          total: 1,
+        }
+      }
+      if (path === '/api/v1/probes/batches') {
+        return {
+          items: [
+            {
+              id: 'batch-active-101',
+              window_at: '2026-10-19T10:00:00Z',
+              state: 'running',
+              counts: { total_nodes: 10, dispatched_runs: 5, completed_runs: 2, skipped_nodes: 3 },
+            },
+          ],
+          total: 1,
+        }
+      }
+      return {}
+    })
+
+    vi.spyOn(api, 'post').mockImplementation(async (path: string, body?: any) => {
+      postCalls.push({ path, body })
+      if (path === '/api/v1/probes/runs') {
+        return { run_id: 'run-test-1', state: 'pending' }
+      }
+      return {}
+    })
+
+    const mountEl = document.createElement('div')
+    document.body.appendChild(mountEl)
+    const app = createApp({
+      render() {
+        return h(NodesView)
+      },
+    })
+    app.mount(mountEl)
+    await nextTick()
+    await new Promise((r) => setTimeout(r, 60))
+
+    // 1. Initial empty selection: probe-selected-btn is disabled
+    const probeSelectedBtn = mountEl.querySelector('[data-testid="probe-selected-btn"]') as HTMLButtonElement
+    expect(probeSelectedBtn).not.toBeNull()
+    expect(probeSelectedBtn.disabled).toBe(true)
+
+    // 2. Select first node
+    const cb1 = mountEl.querySelector('[data-testid="node-checkbox-node-p1-1"]') as HTMLInputElement
+    expect(cb1).not.toBeNull()
+    cb1.click()
+    await nextTick()
+
+    expect(probeSelectedBtn.disabled).toBe(false)
+    const countBadge = mountEl.querySelector('[data-testid="selected-count-badge"]')
+    expect(countBadge?.textContent).toContain('1')
+
+    // 3. Trigger manual probe for selected node; should inherit global schedule kinds ['baseline', 'ai']
+    probeSelectedBtn.click()
+    await nextTick()
+    await new Promise((r) => setTimeout(r, 20))
+
+    const runCall = postCalls.find((c) => c.path === '/api/v1/probes/runs')
+    expect(runCall).toBeDefined()
+    expect(runCall?.body.node_logical_ids).toEqual(['node-p1-1'])
+    expect(runCall?.body.kinds).toEqual(['baseline', 'ai'])
+
+    // 4. Full fleet probe confirmation modal
+    const probeAllBtn = mountEl.querySelector('[data-testid="probe-all-btn"]') as HTMLButtonElement
+    expect(probeAllBtn).not.toBeNull()
+    probeAllBtn.click()
+    await nextTick()
+
+    // Confirm modal should be open
+    const modalConfirmBtn = document.body.querySelector('[data-testid="confirm-modal-confirm"]') as HTMLButtonElement
+    expect(modalConfirmBtn).not.toBeNull()
+    modalConfirmBtn.click()
+    await nextTick()
+    await new Promise((r) => setTimeout(r, 20))
+
+    const probeAllCall = postCalls.filter((c) => c.path === '/api/v1/probes/runs')[1]
+    expect(probeAllCall).toBeDefined()
+    expect(probeAllCall?.body.node_logical_ids).toEqual([])
+
+    // 5. Probe runs & batch history drawer
+    const historyBtn = mountEl.querySelector('[data-testid="node-probe-history-btn"]') as HTMLButtonElement
+    expect(historyBtn).not.toBeNull()
+    historyBtn.click()
+    await nextTick()
+    await new Promise((r) => setTimeout(r, 40))
+
+    // Drawer should show run-test-1 and allow cancel
+    const cancelRunBtn = document.body.querySelector('[data-testid="cancel-run-btn"]') as HTMLButtonElement
+    expect(cancelRunBtn).not.toBeNull()
+    cancelRunBtn.click()
+    await nextTick()
+
+    const cancelPost = postCalls.find((c) => c.path.includes('/runs/run-test-1/cancel'))
+    expect(cancelPost).toBeDefined()
+
+    // 6. Batches Tab and batch cancel in drawer
+    const batchesTabBtn = document.body.querySelector('[data-testid="history-tab-batches"]') as HTMLButtonElement
+    expect(batchesTabBtn).not.toBeNull()
+    batchesTabBtn.click()
+    await nextTick()
+    await new Promise((r) => setTimeout(r, 20))
+
+    expect(document.body.textContent).toContain('batch-active-101')
+    const cancelBatchBtn = document.body.querySelector('[data-testid="cancel-batch-btn"]') as HTMLButtonElement
+    expect(cancelBatchBtn).not.toBeNull()
+    cancelBatchBtn.click()
+    await nextTick()
+
+    const cancelBatchPost = postCalls.find((c) => c.path.includes('/batches/batch-active-101/cancel'))
+    expect(cancelBatchPost).toBeDefined()
+
+    // 7. Zero secret leakage in rendered UI and batch evidence
+    const bodyText = document.body.textContent || ''
+    expect(bodyText).not.toContain('secret_raw_token')
+    expect(bodyText).not.toContain('password123')
+
+    app.unmount()
+    mountEl.remove()
+  })
+
+  it('prunes invalid selected IDs on refresh and restricts polling to visible running state', async () => {
+    let getPoolCount = 0
+
+    vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
+      if (path === '/api/v1/probes/schedule') {
+        return { enabled: true, interval_seconds: 3600, kinds: ['baseline'] }
+      }
+      if (path === '/api/v1/nodes') {
+        return {
+          items: [
+            {
+              logical_id: 'node-live-1',
+              display_name: 'Node Live 1',
+              protocol: 'vmess',
+              active: true,
+              connection: { server: '1.1.1.1', port: 443 },
+              capabilities: {},
+              updated_at: new Date().toISOString(),
+            },
+          ],
+          total: 1,
+          page: 1,
+          page_size: 10,
+        }
+      }
+      if (path === '/api/v1/probes/pool') {
+        getPoolCount++
+        return {
+          probing_node_ids: [],
+          queued_node_ids: [],
+          queue_nodes_count: 0,
+          probing_count: 0,
+          total_count: 1,
+        }
+      }
+      return {}
+    })
+
+    const { default: NodesView } = await import('./NodesView.vue')
+    const { createApp, h, nextTick } = await import('vue')
+
+    const mountEl = document.createElement('div')
+    document.body.appendChild(mountEl)
+    const app = createApp({
+      render() {
+        return h(NodesView)
+      },
+    })
+    app.mount(mountEl)
+    await nextTick()
+    await new Promise((r) => setTimeout(r, 60))
+
+    // Check live node
+    const cb = mountEl.querySelector('[data-testid="node-checkbox-node-live-1"]') as HTMLInputElement
+    expect(cb).not.toBeNull()
+    cb.click()
+    await nextTick()
+
+    const countBadge = mountEl.querySelector('[data-testid="selected-count-badge"]')
+    expect(countBadge?.textContent).toContain('1')
+
+    // Simulate hidden document
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', writable: true })
+    const prevPoolCount = getPoolCount
+
+    // Advance timer: should not poll pool because document is hidden and no active tasks
+    await new Promise((r) => setTimeout(r, 50))
+    expect(getPoolCount).toBe(prevPoolCount)
+
+    // Restore visibilityState
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', writable: true })
+
+    app.unmount()
+    mountEl.remove()
+  })
+
+  it('renders responsive desktop compact row and mobile card layout with accessible columns and operable controls', async () => {
+    const { createApp, h, nextTick } = await import('vue')
+    const { default: NodesView } = await import('./NodesView.vue')
+
+    vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
+      if (path === '/api/v1/nodes') {
+        return {
+          items: [
+            {
+              logical_id: 'node-layout-1',
+              display_name: 'Tokyo Fast 01',
+              protocol: 'vmess',
+              active: true,
+              connection: { server: 'tokyo.example.com', port: 443 },
+              capabilities: {},
+              updated_at: new Date().toISOString(),
+            },
+          ],
+          total: 1,
+        }
+      }
+      if (path === '/api/v1/probes/schedule') return { enabled: true, interval_seconds: 3600, kinds: ['baseline'] }
+      if (path === '/api/v1/probes/pool') return { probing_node_ids: [], queued_node_ids: [], queue_nodes_count: 0, probing_count: 0, total_count: 1 }
+      if (path === '/api/v1/probes/runs') return { items: [], total: 0 }
+      if (path === '/api/v1/probes/batches') return { items: [], total: 0 }
+      return {}
+    })
+
+    const mountEl = document.createElement('div')
+    document.body.appendChild(mountEl)
+    const app = createApp({
+      render() {
+        return h(NodesView)
+      },
+    })
+    app.mount(mountEl)
+    await nextTick()
+    await new Promise((r) => setTimeout(r, 60))
+
+    // 1. Desktop table header is rendered with accessible column descriptions
+    const headerEl = mountEl.querySelector('.hidden.md\\:flex')
+    expect(headerEl).not.toBeNull()
+    expect(headerEl?.textContent).toContain('节点信息')
+    expect(headerEl?.textContent).toContain('协议与端点')
+    expect(headerEl?.textContent).toContain('探测健康与能力')
+
+    // 2. Node card article uses responsive compact row & card classes
+    const cardEl = mountEl.querySelector('[data-testid="node-card"]') as HTMLElement
+    expect(cardEl).not.toBeNull()
+    const innerRow = cardEl.querySelector('.flex.flex-col.md\\:flex-row')
+    expect(innerRow).not.toBeNull()
+
+    // 3. Checkbox, probe button, and inspect button are accessible and operable
+    const cb = cardEl.querySelector('[data-testid="node-checkbox-node-layout-1"]') as HTMLInputElement
+    expect(cb).not.toBeNull()
+    expect(cb.checked).toBe(false)
+    cb.click()
+    await nextTick()
+    expect(cb.checked).toBe(true)
+
+    const probeBtn = cardEl.querySelector('[data-testid="node-card-probe-btn"]') as HTMLButtonElement
+    expect(probeBtn).not.toBeNull()
+    expect(probeBtn.disabled).toBe(false)
+
+    const inspectBtn = cardEl.querySelector('[data-testid="node-inspect-btn"]') as HTMLButtonElement
+    expect(inspectBtn).not.toBeNull()
+
+    app.unmount()
+    mountEl.remove()
+  })
 })

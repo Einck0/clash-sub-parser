@@ -52,14 +52,14 @@ type createSubscriptionRequest struct {
 }
 
 type updateSubscriptionRequest struct {
-	Name               *string                    `json:"name"`
-	SourceURLSecretRef *string                    `json:"source_url_secret_ref"`
-	Enabled            *bool                      `json:"enabled"`
-	IsPrimary          *bool                      `json:"is_primary,omitempty"`
-	UserInfo           *string                    `json:"userinfo,omitempty"`
-	Prefix             *string                    `json:"prefix,omitempty"`
-	RefreshPolicy      *domain.RefreshPolicy      `json:"refresh_policy"`
-	Config             *domain.SubscriptionConfig `json:"config"`
+	Name               *string                         `json:"name"`
+	SourceURLSecretRef *string                         `json:"source_url_secret_ref"`
+	Enabled            *bool                           `json:"enabled"`
+	IsPrimary          *bool                           `json:"is_primary,omitempty"`
+	UserInfo           *string                         `json:"userinfo,omitempty"`
+	Prefix             *string                         `json:"prefix,omitempty"`
+	RefreshPolicy      *domain.RefreshPolicy           `json:"refresh_policy"`
+	Config             *domain.SubscriptionConfigPatch `json:"config"`
 }
 
 func registerSubscriptionRoutes(r chi.Router, service *subscription.Service, invService *inventory.Service) {
@@ -238,8 +238,8 @@ func (h subscriptionHandler) update(w http.ResponseWriter, r *http.Request) {
 	view, err := h.service.Update(r.Context(), subscription.UpdateSubscriptionCommand{
 		ID: chi.URLParam(r, "id"), Revision: strings.TrimSpace(r.Header.Get("If-Match")), Name: body.Name,
 		SourceURLSecretRef: body.SourceURLSecretRef, Enabled: body.Enabled, IsPrimary: body.IsPrimary, UserInfo: body.UserInfo, Prefix: body.Prefix, RefreshPolicy: body.RefreshPolicy,
-		Config:    body.Config,
-		RequestID: GetRequestID(r.Context()), ActorKind: requestActorKind(r),
+		ConfigPatch: body.Config,
+		RequestID:   GetRequestID(r.Context()), ActorKind: requestActorKind(r),
 	})
 	if err != nil {
 		WriteDomainError(w, r, err)

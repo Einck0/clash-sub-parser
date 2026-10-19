@@ -45,6 +45,7 @@ type groupMemo struct {
 	leafItems          []resolvedItem
 	leafNodeSet        map[string]bool
 	candidateCount     int
+	exclusionReasons   map[string]int
 }
 
 // resolveGroups constructs resolved groups with ordered members, child group links, and recursive node expansion.
@@ -141,7 +142,8 @@ func resolveGroups(
 		sources := groupSources[gid]
 		var currentItems []resolvedItem
 		seenInCurrentSet := make(map[string]bool)
-		candidateCount := 0
+		candidateNodeSet := make(map[string]bool)
+		exclusionReasons := make(map[string]int)
 
 		for _, s := range sources {
 			op := s.Operation.Normalize()
@@ -150,15 +152,19 @@ func resolveGroups(
 			if op == domain.OperationAdd {
 				switch normKind {
 				case domain.SourceKindManualNode:
-					candidateCount++
 					if s.NodeLogicalID != nil {
 						nodeID := *s.NodeLogicalID
+						candidateNodeSet[nodeID] = true
 						if node, ok := candidateMap[nodeID]; ok {
 							if s.FilterSpec != nil {
 								srcs := nodeSources[nodeID]
 								lobs := latestObs[nodeID]
 								matched, reason := domain.MatchesFilter(s.FilterSpec, node, srcs, lobs, asOf)
 								if !matched {
+									if reason == "" {
+										reason = "source filter excluded"
+									}
+									exclusionReasons[reason]++
 									diagnostics = append(diagnostics, Diagnostic{
 										Severity: DiagnosticSeverityWarning,
 										Code:     "group_member_filtered",
@@ -175,6 +181,7 @@ func resolveGroups(
 								currentItems = append(currentItems, resolvedItem{id: id, kind: MemberKindNode, targetID: nodeID, displayName: node.DisplayName})
 							}
 						} else if origNode, inAdm := admittedNodeMap[nodeID]; inAdm && inheritFilter {
+							exclusionReasons["excluded by global filter"]++
 							diagnostics = append(diagnostics, Diagnostic{
 								Severity: DiagnosticSeverityWarning,
 								Code:     "group_member_filtered",
@@ -183,6 +190,7 @@ func resolveGroups(
 								Reason:   "excluded by global filter",
 							})
 						} else {
+							exclusionReasons["node inactive or missing"]++
 							diagnostics = append(diagnostics, Diagnostic{
 								Severity: DiagnosticSeverityWarning,
 								Code:     "node_inactive_or_missing",
@@ -214,13 +222,22 @@ func resolveGroups(
 				case domain.SourceKindGroupNodes:
 					if s.TargetGroupID != nil {
 						targetID := *s.TargetGroupID
-						if _, ok := groupMap[targetID]; ok {
+						if tg, ok := groupMap[targetID]; ok {
 							childRes := resolveGroupMemo(targetID)
-							candidateCount += len(childRes.leafItems)
+							candMap := candidateMap
+							if !tg.InheritGlobalFilter {
+								candMap = admittedNodeMap
+							}
 							for _, leaf := range childRes.leafItems {
 								if leaf.kind == MemberKindNode {
-									node, ok := candidateMap[leaf.targetID]
+									candidateNodeSet[leaf.targetID] = true
+									node, ok := candMap[leaf.targetID]
 									if !ok {
+										if _, inAdm := admittedNodeMap[leaf.targetID]; inAdm && inheritFilter {
+											exclusionReasons["excluded by global filter"]++
+										} else {
+											exclusionReasons["node inactive or missing"]++
+										}
 										continue
 									}
 									if s.Pattern != nil && strings.TrimSpace(*s.Pattern) != "" {
@@ -228,6 +245,7 @@ func resolveGroups(
 										if err == nil {
 											matched, _ := re.Match(node.DisplayName)
 											if !matched {
+												exclusionReasons["regex mismatch"]++
 												continue
 											}
 										}
@@ -235,8 +253,12 @@ func resolveGroups(
 									if s.FilterSpec != nil {
 										srcs := nodeSources[leaf.targetID]
 										lobs := latestObs[leaf.targetID]
-										matched, _ := domain.MatchesFilter(s.FilterSpec, node, srcs, lobs, asOf)
+										matched, reason := domain.MatchesFilter(s.FilterSpec, node, srcs, lobs, asOf)
 										if !matched {
+											if reason == "" {
+												reason = "filter mismatch"
+											}
+											exclusionReasons[reason]++
 											continue
 										}
 									}
@@ -250,7 +272,9 @@ func resolveGroups(
 					}
 
 				case domain.SourceKindRegex:
-					candidateCount += len(candidateNodes)
+					for _, node := range candidateNodes {
+						candidateNodeSet[node.LogicalID] = true
+					}
 					if s.Pattern != nil && strings.TrimSpace(*s.Pattern) != "" {
 						re, err := domain.CompileFilterRegex(*s.Pattern)
 						if err != nil {
@@ -274,7 +298,9 @@ func resolveGroups(
 					}
 
 				case domain.SourceKindFilter:
-					candidateCount += len(candidateNodes)
+					for _, node := range candidateNodes {
+						candidateNodeSet[node.LogicalID] = true
+					}
 					if s.FilterSpec != nil {
 						for _, node := range candidateNodes {
 							srcs := nodeSources[node.LogicalID]
@@ -301,50 +327,75 @@ func resolveGroups(
 					}
 				}
 			} else if op == domain.OperationRemove {
-				shouldRemove := func(item resolvedItem) bool {
+				type removeCheckResult struct {
+					remove bool
+					reason string
+				}
+				checkRemove := func(item resolvedItem) removeCheckResult {
 					switch normKind {
 					case domain.SourceKindManualNode:
-						return s.NodeLogicalID != nil && item.kind == MemberKindNode && item.targetID == *s.NodeLogicalID
+						if s.NodeLogicalID != nil && item.kind == MemberKindNode && item.targetID == *s.NodeLogicalID {
+							return removeCheckResult{remove: true, reason: "manually removed"}
+						}
+						return removeCheckResult{}
 					case domain.SourceKindGroupRef:
-						return s.TargetGroupID != nil && item.kind == MemberKindGroup && item.targetID == *s.TargetGroupID
+						if s.TargetGroupID != nil && item.kind == MemberKindGroup && item.targetID == *s.TargetGroupID {
+							return removeCheckResult{remove: true, reason: "group ref removed"}
+						}
+						return removeCheckResult{}
 					case domain.SourceKindGroupNodes:
 						if s.TargetGroupID != nil && item.kind == MemberKindNode {
 							childRes := resolveGroupMemo(*s.TargetGroupID)
-							return childRes.leafNodeSet[item.targetID]
+							if childRes.leafNodeSet[item.targetID] {
+								return removeCheckResult{remove: true, reason: "group membership removed"}
+							}
 						}
-						return false
+						return removeCheckResult{}
 					case domain.SourceKindRegex:
 						if s.Pattern != nil && item.kind == MemberKindNode {
 							re, err := domain.CompileFilterRegex(*s.Pattern)
 							if err == nil {
 								matched, _ := re.Match(item.displayName)
-								return matched
+								if matched {
+									return removeCheckResult{remove: true, reason: "regex removed"}
+								}
 							}
 						}
-						return false
+						return removeCheckResult{}
 					case domain.SourceKindFilter:
 						if s.FilterSpec != nil && item.kind == MemberKindNode {
-							node, ok := globalAdmittedMap[item.targetID]
+							node, ok := candidateMap[item.targetID]
 							if !ok {
-								return false
+								return removeCheckResult{}
 							}
 							srcs := nodeSources[item.targetID]
 							lobs := latestObs[item.targetID]
-							matched, _ := domain.MatchesFilter(s.FilterSpec, node, srcs, lobs, asOf)
-							return matched
+							matched, reason := domain.MatchesFilter(s.FilterSpec, node, srcs, lobs, asOf)
+							if matched {
+								r := reason
+								if r == "" {
+									r = "filter removed"
+								}
+								return removeCheckResult{remove: true, reason: r}
+							}
 						}
-						return false
+						return removeCheckResult{}
 					case domain.SourceKindTypedBuiltin:
-						return s.BuiltinName != nil && item.kind == MemberKindBuiltin && item.targetID == strings.ToUpper(strings.TrimSpace(*s.BuiltinName))
+						if s.BuiltinName != nil && item.kind == MemberKindBuiltin && item.targetID == strings.ToUpper(strings.TrimSpace(*s.BuiltinName)) {
+							return removeCheckResult{remove: true, reason: "builtin removed"}
+						}
+						return removeCheckResult{}
 					default:
-						return false
+						return removeCheckResult{}
 					}
 				}
 
 				var remaining []resolvedItem
 				for _, item := range currentItems {
-					if shouldRemove(item) {
+					res := checkRemove(item)
+					if res.remove {
 						delete(seenInCurrentSet, item.id) // Crucial: removes seen marker so item can be added back later!
+						exclusionReasons[res.reason]++
 					} else {
 						remaining = append(remaining, item)
 					}
@@ -379,16 +430,33 @@ func resolveGroups(
 						}
 					}
 				}
+				childGroup := groupMap[item.targetID]
+				candMap := candidateMap
+				if !childGroup.InheritGlobalFilter {
+					candMap = admittedNodeMap
+				}
 				for _, leaf := range childRes.leafItems {
+					if leaf.kind == MemberKindNode {
+						candidateNodeSet[leaf.targetID] = true
+					}
 					if leaf.kind == MemberKindNode && srcFilter != nil {
-						node, ok := candidateMap[leaf.targetID]
+						node, ok := candMap[leaf.targetID]
 						if !ok {
+							if _, inAdm := admittedNodeMap[leaf.targetID]; inAdm && inheritFilter {
+								exclusionReasons["excluded by global filter"]++
+							} else {
+								exclusionReasons["node inactive or missing"]++
+							}
 							continue
 						}
 						srcs := nodeSources[leaf.targetID]
 						lobs := latestObs[leaf.targetID]
-						matched, _ := domain.MatchesFilter(srcFilter, node, srcs, lobs, asOf)
+						matched, reason := domain.MatchesFilter(srcFilter, node, srcs, lobs, asOf)
 						if !matched {
+							if reason == "" {
+								reason = "filter mismatch"
+							}
+							exclusionReasons[reason]++
 							continue
 						}
 					}
@@ -409,12 +477,13 @@ func resolveGroups(
 		expandedNodeIDs := make([]string, 0, len(leafNodeSet))
 		for nid := range leafNodeSet {
 			expandedNodeIDs = append(expandedNodeIDs, nid)
+			candidateNodeSet[nid] = true
 		}
 		sort.Strings(expandedNodeIDs)
 
 		hasDestinations := len(expandedNodeIDs) > 0
 		if !hasDestinations {
-			for _, item := range currentItems {
+			for _, item := range leafItems {
 				if item.kind == MemberKindBuiltin {
 					hasDestinations = true
 					break
@@ -432,7 +501,8 @@ func resolveGroups(
 			effectiveEmptyPass: effectiveEmptyPass,
 			leafItems:          leafItems,
 			leafNodeSet:        leafNodeSet,
-			candidateCount:     candidateCount,
+			candidateCount:     len(candidateNodeSet),
+			exclusionReasons:   exclusionReasons,
 		}
 		memo[gid] = res
 		return res
@@ -468,9 +538,10 @@ func resolveGroups(
 			excl = 0
 		}
 		groupCounts[g.ID] = GroupFilterCount{
-			Candidate: candidate,
-			Kept:      len(m.expandedNodeIDs),
-			Excluded:  excl,
+			Candidate:        candidate,
+			Kept:             len(m.expandedNodeIDs),
+			Excluded:         excl,
+			ExclusionSummary: m.exclusionReasons,
 		}
 	}
 

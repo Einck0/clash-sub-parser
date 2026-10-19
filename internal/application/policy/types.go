@@ -132,13 +132,19 @@ type GroupPreviewMember struct {
 
 // GroupPreviewResponse represents the resolved in-memory preview of a policy group draft.
 type GroupPreviewResponse struct {
-	GroupID         string                `json:"group_id"`
-	Revision        int64                 `json:"revision"`
-	SelectionDigest string                `json:"selection_digest"`
-	ContentDigest   *string               `json:"content_digest,omitempty"`
-	Members         []GroupPreviewMember  `json:"members"`
-	NodeCount       int                   `json:"node_count"`
-	Diagnostics     []resolver.Diagnostic `json:"diagnostics"`
+	GroupID          string                     `json:"group_id"`
+	Revision         int64                      `json:"revision"`
+	SelectionDigest  string                     `json:"selection_digest"`
+	ContentDigest    *string                    `json:"content_digest,omitempty"`
+	Members          []GroupPreviewMember       `json:"members"`
+	MemberCount      int                        `json:"member_count"`
+	NodeCount        int                        `json:"node_count"`
+	CandidateCount   int                        `json:"candidate_count"`
+	ExcludedCount    int                        `json:"excluded_count"`
+	ExclusionSummary map[string]int             `json:"exclusion_summary,omitempty"`
+	ExcludedReasons  []string                   `json:"excluded_reasons,omitempty"`
+	FilterCounts     *resolver.GroupFilterCount `json:"filter_counts,omitempty"`
+	Diagnostics      []resolver.Diagnostic      `json:"diagnostics"`
 }
 
 // ListGroupsQuery defines pagination and search filters for listing groups.

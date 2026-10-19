@@ -2,7 +2,6 @@ export const VALID_TABS = [
   'dashboard',
   'subscriptions',
   'nodes',
-  'probes',
   'policy',
   'rules',
   'publications',
@@ -24,6 +23,9 @@ export function getRouteTab(
   if (typeof window !== 'undefined' || hashProvider !== undefined) {
     const rawHash = hashProvider !== undefined ? hashProvider : (window.location?.hash || '')
     const cleanHash = rawHash.replace(/^#\/?/, '').trim().toLowerCase()
+    if (cleanHash === 'probes') {
+      return 'nodes'
+    }
     if (isValidTab(cleanHash)) {
       return cleanHash
     }
@@ -32,6 +34,9 @@ export function getRouteTab(
   try {
     const storage = storageProvider ?? (typeof window !== 'undefined' ? window.localStorage : undefined)
     const stored = storage?.getItem(ROUTE_STORAGE_KEY)
+    if (stored === 'probes') {
+      return 'nodes'
+    }
     if (isValidTab(stored)) {
       return stored
     }

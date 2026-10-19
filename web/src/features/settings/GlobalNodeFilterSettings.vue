@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { usePolicy } from '../policy/usePolicy'
+import StructuredFilterEditor from '../policy/StructuredFilterEditor.vue'
 import {
   SUPPORTED_FILTER_FIELDS,
   SUPPORTED_PROTOCOLS,
@@ -137,44 +138,14 @@ onMounted(refresh)
       <p v-if="validationError" role="alert" class="text-error text-sm" data-testid="filter-validation-error">{{ validationError }}</p>
       <p v-if="loadingGlobalFilter" role="status">{{ t('settings.filterLoading') }}</p>
       <template v-if="loaded">
-        <p v-if="conditions.length === 0" data-testid="filter-empty" class="text-sm text-base-content/60">{{ t('settings.filterEmpty') }}</p>
-        <p v-else class="text-xs text-base-content/70">{{ t('settings.filterAnd') }}</p>
-        <div v-for="(condition, index) in conditions" :key="index" class="rounded-xl bg-base-100/70 border border-base-300 p-3 space-y-3" data-testid="filter-condition">
-          <div class="flex flex-wrap gap-2 items-center">
-            <label class="text-xs font-medium">{{ t('settings.filterField') }}
-              <select v-model="condition.field" class="select select-bordered select-sm block" :aria-label="t('settings.filterField')" @change="changeField(condition)">
-                <option v-for="item in SUPPORTED_FILTER_FIELDS" :key="item.field" :value="item.field">{{ t(`settings.filterField_${item.field}`) }}</option>
-              </select>
-            </label>
-            <label class="text-xs font-medium">{{ t('settings.filterOperator') }}
-              <select v-model="condition.op" class="select select-bordered select-sm block" :aria-label="t('settings.filterOperator')" @change="edited">
-                <option v-for="op in operators(condition.field)" :key="op" :value="op">{{ t(`settings.filterOp_${op}`) }}</option>
-              </select>
-            </label>
-            <label v-if="isProbe(condition.field)" class="text-xs font-medium">{{ t('settings.filterKind') }}
-              <select v-model="condition.probe_kind" class="select select-bordered select-sm block" :aria-label="t('settings.filterKind')" @change="edited">
-                <option v-for="kind in kinds" :key="kind" :value="kind">{{ t(`settings.filterKind_${kind}`) }}</option>
-              </select>
-            </label>
-            <label class="text-xs font-medium">{{ t('settings.filterValue') }}
-              <select v-if="condition.field === 'probe_verdict'" v-model="condition.value" class="select select-bordered select-sm block" :aria-label="t('settings.filterValue')" @change="edited">
-                <option v-for="verdict in verdicts" :key="verdict" :value="verdict">{{ t(`settings.filterVerdict_${verdict}`) }}</option>
-              </select>
-              <select v-else-if="condition.field === 'protocol'" v-model="condition.value" class="select select-bordered select-sm block" :aria-label="t('settings.filterValue')" @change="edited">
-                <option value="" disabled>{{ t('settings.filterSelect') }}</option>
-                <option v-for="protocol in SUPPORTED_PROTOCOLS" :key="protocol" :value="protocol">{{ protocol }}</option>
-              </select>
-              <input v-else v-model="condition.value" class="input input-bordered input-sm block max-w-full" :aria-label="t('settings.filterValue')" @input="edited" />
-            </label>
-            <label v-if="isProbe(condition.field)" class="text-xs font-medium">{{ t('settings.filterFreshness') }}
-              <input :value="condition.freshness_seconds ?? ''" type="number" min="1" max="604800" step="1" class="input input-bordered input-sm block max-w-full" :aria-label="t('settings.filterFreshness')" :placeholder="t('settings.filterDefaultFreshness')" @input="condition.freshness_seconds = ($event.target as HTMLInputElement).value === '' ? undefined : Number(($event.target as HTMLInputElement).value); edited()" />
-            </label>
-            <button type="button" class="btn btn-ghost btn-sm text-error self-end" :aria-label="t('settings.filterRemove')" @click="conditions.splice(index, 1); edited()">{{ t('settings.filterRemove') }}</button>
-          </div>
-        </div>
-        <div class="flex flex-wrap gap-2">
-          <button type="button" class="btn btn-outline btn-sm" data-testid="filter-add" :disabled="conditions.length >= 32" @click="addCondition">{{ t('settings.filterAdd') }}</button>
-          <button type="button" class="btn btn-ghost btn-sm" data-testid="filter-clear" :disabled="conditions.length === 0" @click="conditions = []; edited()">{{ t('settings.filterClear') }}</button>
+        <StructuredFilterEditor
+          v-model="conditions"
+          :max-conditions="32"
+          :allow-clear="true"
+          :inline="true"
+          @change="edited"
+        />
+        <div class="flex flex-wrap gap-2 pt-2 border-t border-base-300/40">
           <button type="button" class="btn btn-primary btn-sm" data-testid="filter-save" :disabled="savingGlobalFilter || loadingGlobalFilter" @click="save">{{ savingGlobalFilter ? t('settings.filterSaving') : t('settings.filterSave') }}</button>
         </div>
       </template>

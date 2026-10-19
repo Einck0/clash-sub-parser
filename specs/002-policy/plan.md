@@ -73,3 +73,24 @@
 - `web/src/features/rules/useRules.ts`：规则与分类响应式状态与 API 交互
 - `web/src/features/rules/RuleDialog.vue`：规则新建/编辑对话框
 - `web/src/locales/messages.ts`：中英文双语翻译字典
+
+
+## 2026-10-19 增量实施计划
+
+Run `pi_run_20261019_115729_4186512` / change `change_pi_run_20261019_115729_4186512` / package `whole_task` / epoch 1。
+基线 f00d49537f9788057c97232e531666c7587a5800；前序章节为历史已完成方案，当前施工仅以下增量及 probe-ledger-redesign.md。
+
+### 技术上下文与宪章核验
+Go 1.27.1、Chi、SQLite、Vue3/TS、DaisyUI；构建工具已在 Docker 中可用，宿主禁止重型测试/构建。graphify-out 不存在且 CLI 未安装，不能声称图更新成功。保留全量初始 status 到 /tmp/csp-4186512-initial-status.txt。既有修改跨文档及归档，完全不清理、不混入提交。
+宪章：失败保全资产、稳定 logical_id、六域接口、极简直接存储、活规范均 PASS；无豁免。无 extensions.yml，前后 hooks 不适用。用户本次未授权生产发布，严禁主动部署/外部订阅探测。
+
+### 阶段 A：探针业务与数据
+在 domain/subscription.go 的 SubscriptionConfig 中加入可验证 probe_policy JSON 字段；在 subscription 服务/HTTP/SQLite 路径透传且部分更新保留旧配置。协调器 periodic.go 注入最小来源读取依赖，结合 node_sources 计算每节点最短有效周期，复用现有 schedule/recovery/lease/cooldown/pool；不建立每源计时器。先写可控 clock/runner 的单元与 SQLite/HTTP 集成测试，再实现。API 沿用现有 settings、schedule、subscription 入口，无额外控制面。
+
+### 阶段 B：业务前端与筛选
+NodesView/useNodes 接入运行及批次结果，分离出必要小组件，不把旧 ProbesView 直接套入 tab；SettingsView 统一持久配置；SubscriptionConfigDrawer 提供继承/关闭/自定义。路由、导航、dashboard、本地 tab 同步更新，旧 probes 只重定向。
+策略编辑按范围/选入/排除/结果重组，复用结构化条件组件，保留存量有序来源的完整编辑。resolver/graph.go 修正 remove-filter 候选范围；PreviewGroup 和 ValidateGraph 事实组装与发布同源，拒绝加载失败的静默降级。维持动态来源、PCRE 能力、风险准入、子组投影和 WARP；不修改规则工作台。全局配置接口及过滤结构保持一份事实。
+
+### 阶段 C：整体门禁
+同一施工工作包顺序实施 A+B，避免共享 domain/ports、locale、service 等冲突。施工完成容器全量 Go/Vitest/typecheck/build，交付真实预览（loopback 临时端口，合成 DB，禁外联）及完整命令退出码、源码指纹、URL/清理合同。主脑核对后派独立 reviewer，整改后复验；工程 PASS 才派 critic 桌面及移动视口实际交互。critic 不代表物理手机验证。
+全部通过才逐文件 git_commit，不自动推送/发布。结束清理本次预览并 QQ 汇报完成/遗留。graphify 若仍未安装明示限制，不为此私自安装工具。

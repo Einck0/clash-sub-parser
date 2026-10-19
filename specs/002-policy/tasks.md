@@ -59,3 +59,19 @@
   - 生产 SQLite 数据库一致性热备（`.backup`）；
   - 平滑更新生产容器，在线验证 `https://sub.einck.top` 与 `/clash` 导出；
   - 向随身 QQ 终端发送终态战报。
+
+
+## 当前增量任务：节点/探针/策略筛选重做（前述 T01..T08 为历史）
+
+当前 run `pi_run_20261020_015412_446000`，change `002-policy`，work_package `default`，epoch 1；R02–R10 已完成；业务提交 `778b579`，隔离预览已清理，最终报告随本规范记录交付。此前规划 BLOCKED 与上一实施轮 TIMEOUT 均保留在 redesign-execution-status.md；本轮不沿用历史发布状态。
+
+- [x] R01 主脑完成有界证据与业务收敛，spec/plan/tasks 增量一致性分析；契约 probe-ledger-redesign.md。
+- [x] R02 [US-R3] domain/subscription.go、application/subscription、repository/sqlite、transport/http 贯通 config.probe_policy；缺省继承、部分更新、非法周期/模式测试。
+- [x] R03 [US-R2/3] application/probe/periodic.go 与 wiring 实现多来源最短有效周期、停测/停源/手动/版本/冷却/恢复/去重；容器定向测试。不引入每源定时器。
+- [x] R04 [US-R1/2/3] web/src/features/nodes、settings、subscriptions 重做统一节点操作工作台、全局探针配置及来源周期表单；导航/router/dashboard 去除第二入口、旧地址直达；测试选择/分页/异常/卸载清理。
+- [x] R05 [US-R4] web/src/features/policy 的全局/组内筛选共享条件编辑，候选范围/添加/排除/实时结果；保留有序高级来源和动态正则，防抖/旧请求隔离；同步 locales/测试。
+- [x] R06 [US-R4] internal/resolver/graph.go 与 application/policy/service.go 统一候选范围与事实提供，预览/校验/导出一致且失败不静默；WARP/子组/来源变动/规则MATCH回归。
+- [x] R07 容器 Go/Vitest/typecheck/build 全量自测，更新相关稳定使用说明但保护用户改动；交付独立预览、合成数据场景及 URL-ready 元数据、源码 hash。
+- [x] R08 独立 reviewer 审查最终整合状态；失败项保留历史并整改复验。
+- [x] R09 工程门禁放行后 critic 桌面/移动视口真实流程与截图：节点检测操作、全局配置/源周期保存、策略动态筛选、错误及脏 token；本轮合同明确 critic=true，记录真实桌面/移动视口验收。
+- [x] R10 全部适用门禁通过后逐文件提交，预览清理、QQ 交付；不部署生产，不沿用前序上线授权。

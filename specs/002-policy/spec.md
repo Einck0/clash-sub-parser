@@ -126,3 +126,8 @@ schema: speckit-native
 - **数据完整性 (Data Integrity)**：迁移前后验证规则总数严格等于 470，分类总数严格等于 14，无任何旧规则遗漏；
 - **零胶水原则 (Zero Glue)**：不搞临时映射表，`policy_rules` 原生容纳内置目标与策略组目标；
 - **编译性能 (Compiler Throughput)**：470 条规则在各类客户端编译器中毫秒级产出（< 15ms），内存零额外开销。
+
+
+## 当前增量：2026-10-19 节点/探针与策略筛选重做
+
+最新授权、业务决策与 FR-R1..R4 以 [probe-ledger-redesign.md](probe-ledger-redesign.md) 为本规范组成部分。原有规则工作台要求继续有效；本次实施不包含生产发布。

@@ -747,7 +747,7 @@ func TestPolicyRulesDelete(t *testing.T) {
 
 	// Insert legacy admission rule directly into SQLite DB
 	legacyAdmID := "legacy-adm-bootstrap-1"
-	_, err = db.Exec(`INSERT INTO admission_rules (id, revision_id, name, expression, action, position) VALUES (?, ?, 'BlockHighRisk', 'country != "CN"', 'allow', 0)`, legacyAdmID, polRuleResp.Data.RevisionID)
+	_, err := db.Exec(`INSERT INTO admission_rules (id, revision_id, name, expression, action, position) VALUES (?, ?, 'BlockHighRisk', 'country != "CN"', 'allow', 0)`, legacyAdmID, polRuleResp.Data.RevisionID)
 	if err != nil {
 		t.Fatalf("failed to insert legacy admission rule: %v", err)
 	}

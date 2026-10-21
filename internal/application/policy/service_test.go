@@ -1999,7 +1999,7 @@ func TestPolicyService_CreatePolicyRule_CategorizedModeWithExistingMATCH(t *test
 	if err == nil {
 		t.Fatalf("expected duplicate MATCH rule to fail validation, got nil")
 	}
-	domErr, ok = domain.AsDomainError(err)
+	domErr, ok := domain.AsDomainError(err)
 	if !ok || domErr.Code != "invalid_match_rule_ordering" {
 		t.Fatalf("expected invalid_match_rule_ordering error, got: %v", err)
 	}

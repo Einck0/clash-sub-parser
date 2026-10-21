@@ -106,3 +106,7 @@ Run `pi_run_20261020_111741_708234` / change `002-policy` / default / epoch 1。
 宪章复核：失败保全/稳定ID/六域边界/单一存储/活规范均可满足；不重置生产数据/不扩展外联/不改constitution。官方check-prerequisites已解析同Feature，无extensions.yml，不重跑覆盖setup。构建测试只Docker或云，保护现有dirty及与ops-tasks隔离；图工具缺失只记限制。
 
 接口/数据受影响辅助说明以本契约单点定义：health_status/exit_region/platform_verdict条件、DNS singleton+GET/PUT/409、DNS快照digest；原其他模型说明不覆盖。门禁为当前源码容器自测→独审→主脑实际风险核对→适用真实UI质检→本地逐文件提交。当前冻结合同 critic.applicable=true；真实预览就绪并通过工程审查后执行必需黑盒验收，不虚报门禁。最终实施/失败复验与场景证据见 [continuation-1346392.md](continuation-1346392.md)。
+
+## 2026-10-21 当前增量实施计划
+
+以 [dns-policy-cleanup-1574174.md](dns-policy-cleanup-1574174.md) 收敛模块A前端/B resolver/C policy应用与HTTP/D生产DNS单项恢复。A/B/C写集独立并行，D仅CAS恢复DNS与在线备份，不与代码施工共享写入。复用原生DNS服务，不新增数据模型/迁移；旧准入数据只读兼容、实时不生效并警告，拒新建删除，安全硬约束不变；真实分流规则唯一Rules页且分类新增不能破坏MATCH。当前根AGENTS云测试顺序覆盖上文旧本地Docker测试/最终才commit条款：主脑逐文件开发提交推dev→同SHA Actions测试构建发布→拉预构建云镜像到合成DB隔离验收→独审及实际UI Critic→交付，禁止服务器及本地Docker编译测试。程序生产部署不是默认授权，DNS数据恢复单项独立验收。宪章六域/资产保全/稳定身份/单一存储均保持。

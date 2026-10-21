@@ -103,3 +103,19 @@ Run `pi_run_20261020_111741_708234` / change `002-policy` / work_package `defaul
 - [x] S08 独立Reviewer对FR-S1..4及旧资产/WARP/MATCH/失败路径审查；缺陷整改保留失败复验链。
 - [x] S09 主脑亲自真实业务流程及Critic桌面/移动视口验收：已有香港组改节点状态和出口地区单次保存、DNS持久化与导出、无待复核和时效回潮；不宣称实屏。
 - [x] S10 适用门禁全部通过后逐文件本地提交，清理预览，完整QQ交付三项目标；不push/部署，不影响清盘任务。
+
+## 2026-10-21 当前实施：DNS数据与策略去重
+
+当前run pi_run_20261021_160307_1574174/default/epoch1，详细冻结业务见dns-policy-cleanup-1574174.md；旧任务勾选仅历史。
+
+- [x] C01 主脑核实唯一已确认旧DNS、生产准入0、重复页签与额外拦截调用链，冻结FR-C1..3模块/接口/场景。
+- [x] C02 [FR-C1] 单DNS基线与在线backup、候选validate、CAS恢复17键；GET及实际/clash深等价与静态数据保全，记录恢复来源，不整库恢复。
+- [x] C03 [P] [FR-C1/2] web DNS去header/defaultbanner；policy视图及usePolicy去重复路由/准入/模拟CRUD，保留组编辑与唯一Rules导航，更新行为tests。
+- [x] C04 [P] [FR-C3] resolver/admission.go去旧DSL保inactive/riskexcluded；历史输入一次warning，更新WARP/globalsoft/hard边界tests。
+- [x] C05 [P] [FR-C3] application/policy与HTTP所有admission写422、无revision副作用、GET历史保留、删除不误删同IDpolicy；修分类新规则validation顺序并保MATCH唯一/末位，更新service/HTTP/revisions相关tests。
+- [x] C06 主脑核对源diff/secret、逐文件开发commit并pushdev；Actions同SHA前后端必需jobs全成功，云失败保留/修复后新提交，不本地编译。
+- [x] C07 同SHA不可变云镜像+revision核对、合成隔离DB/禁调度/无出网预览，executor云自测凭据，独立reviewer核源码/当前Actions/生产DNS恢复；按发现针对整改复验。
+- [x] C08 真实desktop/mobilebrowser：DNS无横幅且编辑工作；policy无重复tabs而Rules创建DIRECT/REJECT/分类/MATCH正常；组filter/WARP/legacyadmission422与硬约束不回归，Critic亲读PNG，主脑实际风险复验。
+- [x] C09 回收专属预览/敏感副本保真实backup，记录开发commit/cloudreview/验收/生产DNS来源与上线未授权状态，QQ交付；程序部署如需另请示。
+
+终态与当前SHA/云测、独审、桌面及移动浏览器证据见 [cleanup-completion-1574174.md](cleanup-completion-1574174.md)。C09交付对应当前会话及QQ完工报告，程序部署仍未授权、未执行。旧S系列的Docker/不push限制只记历史，不适用于本轮。

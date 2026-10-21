@@ -88,3 +88,18 @@ Run `pi_run_20261020_083521_627930` / change `002-policy` / package `default` / 
 发布路径沿用现有 plan 阶段 C 与云交付手册，源码门禁复用原实施有效证据，本轮仅验证云制品及运行变化。当前无新增 schema 迁移；若发现部署链路需要源码/公共接口变更，先回报，不临时改业务或 CI 绕门禁。
 
 发布结果：同 SHA 云任务 39349217297 三 job success，生产 image digest `211f442205b26656e00cda8a14f610dd61c6341de182ea7555c3aab3031600ff` 已上线，Schema25、Clash470/MATCH末位、资源指纹与数据保全经独立核验；隔离资源及敏感副本已回收。其他客户端遇 HTTP 协议节点严格422为已知限制，不宣称全目标正常。详见 [release-20261020.md](release-20261020.md)。磁盘与自动清理脚本不在本发布执行范围。
+
+## 2026-10-20 当前实施：筛选、DNS、待复核（旧R/D勾选不代表本轮）
+
+Run `pi_run_20261020_111741_708234` / change `002-policy` / work_package `default` / epoch 1。详细边界见 filter-dns-redesign.md。该run为历史规划断点；当前续办验收见 [continuation-1346392.md](continuation-1346392.md)。
+
+- [x] S01 主脑定位待复核/区域条件/DNS消失真实调用链与生产只读概要，完成详细业务/实现方案并Spec Kit一致性分析。
+- [x] S02 [FR-S1] domain/probe_health.go、application/{inventory,probe}、sqlite/node_predicates.go三态单一事实，去掉健康/筛选时效与旧待复核；真实失败/版本/操作态/SQL守恒回归。
+- [x] S03 [FR-S2] domain/node_filter.go与facts依赖加载、policy/resolver：health_status/exit_region/platform_verdict、baseline延迟及legacy probe条件，零时效/真实地区/同事实预览导出测试。
+- [x] S04 [FR-S4] 新migration/DNS领域与repo、Settings GET/PUT及409、snapshot与Mihomo编译贯通；默认不导入旧库，复杂Raw无损与安全输入/持久化/导出测试。
+- [x] S05 [FR-S3] web policy编辑共享组件/types改单草稿一次保存；真实来源名称、独立维度、普通/高级有序来源无损，计数原因解释；行为测试。
+- [x] S06 [FR-S1/4] web节点/详情去待复核时效与操作态覆盖；恢复DNS页面/nav/router/Settings跳转、Raw/可视化/并发保存/错误回读及响应式测试。
+- [x] S07 最终合并Docker Go/Vitest/typecheck/build，合成独立DB与无出网真实预览、源码指纹/健康/回收合同。
+- [x] S08 独立Reviewer对FR-S1..4及旧资产/WARP/MATCH/失败路径审查；缺陷整改保留失败复验链。
+- [x] S09 主脑亲自真实业务流程及Critic桌面/移动视口验收：已有香港组改节点状态和出口地区单次保存、DNS持久化与导出、无待复核和时效回潮；不宣称实屏。
+- [x] S10 适用门禁全部通过后逐文件本地提交，清理预览，完整QQ交付三项目标；不push/部署，不影响清盘任务。

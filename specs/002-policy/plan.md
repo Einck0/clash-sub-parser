@@ -94,3 +94,15 @@ NodesView/useNodes 接入运行及批次结果，分离出必要小组件，不�
 ### 阶段 C：整体门禁
 同一施工工作包顺序实施 A+B，避免共享 domain/ports、locale、service 等冲突。施工完成容器全量 Go/Vitest/typecheck/build，交付真实预览（loopback 临时端口，合成 DB，禁外联）及完整命令退出码、源码指纹、URL/清理合同。主脑核对后派独立 reviewer，整改后复验；工程 PASS 才派 critic 桌面及移动视口实际交互。critic 不代表物理手机验证。
 全部通过才逐文件 git_commit，不自动推送/发布。结束清理本次预览并 QQ 汇报完成/遗留。graphify 若仍未安装明示限制，不为此私自安装工具。
+
+## 2026-10-20 当前修订：面向业务的筛选与DNS
+
+Run `pi_run_20261020_111741_708234` / change `002-policy` / default / epoch 1。详细方案及API/数据设计见 [filter-dns-redesign.md](filter-dns-redesign.md) 第3–7节。先后端单一健康事实/筛选字段/DNS持久导出，再前端单草稿与DNS工作台；后端/前端工作包顺序，避免共享types、locale、生成物并发写。
+
+技术：复用Go1.27/SQLite/yaml.v3/Chi/Vue3/现有探针，新增最小DNS单例表及domain值对象，沿NodeFilterSpec增加真实维度，不造平行DSL。DNS归Publication输出事实+Settings配置入口，不改宿主DNS。三态规范在domain收敛，SQL/pool/read model与resolver等价。
+
+取证：线上69节点快照26healthy/43unknown；unknown含11transport_error/4timeout及28无baseline，另有遗留SQL1h/probe filter24h判断；旧DNS821字符在归档但新库无表、compiler无DNS输出。详细依据见契约，不能擅将未知改成功或自动导入旧库。
+
+宪章复核：失败保全/稳定ID/六域边界/单一存储/活规范均可满足；不重置生产数据/不扩展外联/不改constitution。官方check-prerequisites已解析同Feature，无extensions.yml，不重跑覆盖setup。构建测试只Docker或云，保护现有dirty及与ops-tasks隔离；图工具缺失只记限制。
+
+接口/数据受影响辅助说明以本契约单点定义：health_status/exit_region/platform_verdict条件、DNS singleton+GET/PUT/409、DNS快照digest；原其他模型说明不覆盖。门禁为当前源码容器自测→独审→主脑实际风险核对→适用真实UI质检→本地逐文件提交。当前冻结合同 critic.applicable=true；真实预览就绪并通过工程审查后执行必需黑盒验收，不虚报门禁。最终实施/失败复验与场景证据见 [continuation-1346392.md](continuation-1346392.md)。

@@ -131,3 +131,9 @@ schema: speckit-native
 ## 当前增量：2026-10-19 节点/探针与策略筛选重做
 
 最新授权、业务决策与 FR-R1..R4 以 [probe-ledger-redesign.md](probe-ledger-redesign.md) 为本规范组成部分。原有规则工作台要求继续有效；本次实施不包含生产发布。
+
+## 当前授权增量：2026-10-20 筛选业务重做、DNS恢复与待复核治理
+
+本轮需求/业务定义/接口与验收以 [filter-dns-redesign.md](filter-dns-redesign.md) FR-S1..S4为组成部分；其对前轮探针时效、普通编辑动线的纠正优先。旧实施/发布状态仅历史。本轮允许实施验证本地提交，不允许生产发布或自动导入历史DNS。
+
+2026-10-21 实施与验收终态见 [continuation-1346392.md](continuation-1346392.md)，不覆盖旧失败历史；授权仍限本地交付，不包含生产发布。

@@ -327,7 +327,7 @@ func TestPolicyRulesEndpointsAndMATCHOrdering(t *testing.T) {
 		t.Errorf("expected error code 'invalid_match_rule_ordering', got %s", errResp.Code)
 	}
 
-	// 4. Create an admission rule
+	// 4. Create an admission rule -> rejected with 422 Unprocessable Entity (admission_rules_retired)
 	admBody := fmt.Sprintf(`{
 		"kind": "admission",
 		"revision_id": "%s",
@@ -343,8 +343,21 @@ func TestPolicyRulesEndpointsAndMATCHOrdering(t *testing.T) {
 	recAdm := httptest.NewRecorder()
 	router.ServeHTTP(recAdm, reqAdm)
 
-	if recAdm.Code != http.StatusCreated {
-		t.Fatalf("expected 201 Created for admission rule, got %d: %s", recAdm.Code, recAdm.Body.String())
+	if recAdm.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 UnprocessableEntity for admission rule, got %d: %s", recAdm.Code, recAdm.Body.String())
+	}
+	var admErrResp testErrorResponse
+	if err := json.Unmarshal(recAdm.Body.Bytes(), &admErrResp); err != nil {
+		t.Fatalf("failed to parse admission error response: %v", err)
+	}
+	if admErrResp.Code != "admission_rules_retired" {
+		t.Errorf("expected error code 'admission_rules_retired', got %s", admErrResp.Code)
+	}
+
+	// Legacy admission rules can still be read if present in database
+	_, err = db.Exec(`INSERT INTO admission_rules (id, revision_id, name, expression, action, position) VALUES ('legacy-adm-1', ?, 'filter-us', 'country == "US"', 'allow', 0)`, rev.ID)
+	if err != nil {
+		t.Fatalf("failed to insert legacy admission rule: %v", err)
 	}
 
 	// 5. Query rules via GET /api/v1/policies/rules
@@ -708,7 +721,7 @@ func TestPolicyRulesDelete(t *testing.T) {
 		t.Fatalf("expected valid rule ID and bootstrapped revision_id, got %+v", polRuleResp.Data)
 	}
 
-	// 3. Create an admission rule WITHOUT revision_id -> must succeed with 201 Created
+	// 3. Create an admission rule WITHOUT revision_id -> must fail with 422 Unprocessable Entity
 	admRulePayload := `{
 		"kind": "admission",
 		"name": "BlockHighRisk",
@@ -721,12 +734,22 @@ func TestPolicyRulesDelete(t *testing.T) {
 	reqAdm.Header.Set("Content-Type", "application/json")
 	recAdm := httptest.NewRecorder()
 	router.ServeHTTP(recAdm, reqAdm)
-	if recAdm.Code != http.StatusCreated {
-		t.Fatalf("expected 201 Created for admission rule without revision_id, got %d: %s", recAdm.Code, recAdm.Body.String())
+	if recAdm.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 UnprocessableEntity for admission rule, got %d: %s", recAdm.Code, recAdm.Body.String())
 	}
-	var admRuleResp testDataResponse[policy.AdmissionRuleView]
-	if err := json.Unmarshal(recAdm.Body.Bytes(), &admRuleResp); err != nil {
-		t.Fatalf("failed to parse admission rule response: %v", err)
+	var admErrResp testErrorResponse
+	if err := json.Unmarshal(recAdm.Body.Bytes(), &admErrResp); err != nil {
+		t.Fatalf("failed to parse admission rule error response: %v", err)
+	}
+	if admErrResp.Code != "admission_rules_retired" {
+		t.Fatalf("expected error code 'admission_rules_retired', got %s", admErrResp.Code)
+	}
+
+	// Insert legacy admission rule directly into SQLite DB
+	legacyAdmID := "legacy-adm-bootstrap-1"
+	_, err = db.Exec(`INSERT INTO admission_rules (id, revision_id, name, expression, action, position) VALUES (?, ?, 'BlockHighRisk', 'country != "CN"', 'allow', 0)`, legacyAdmID, polRuleResp.Data.RevisionID)
+	if err != nil {
+		t.Fatalf("failed to insert legacy admission rule: %v", err)
 	}
 
 	// 4. Delete the policy rule -> 204 No Content
@@ -757,16 +780,25 @@ func TestPolicyRulesDelete(t *testing.T) {
 		t.Fatalf("expected 1 admission rule remaining, got %d", len(listResp.Data.AdmissionRules))
 	}
 
-	// 6. Delete the admission rule -> 204 No Content
-	reqDelAdm := httptest.NewRequest(http.MethodDelete, "/api/v1/policies/rules/"+admRuleResp.Data.ID, nil)
-	reqDelAdm.Header.Set("Authorization", "Bearer "+testAdminToken)
-	recDelAdm := httptest.NewRecorder()
-	router.ServeHTTP(recDelAdm, reqDelAdm)
-	if recDelAdm.Code != http.StatusNoContent {
-		t.Fatalf("expected 204 No Content deleting admission rule, got %d: %s", recDelAdm.Code, recDelAdm.Body.String())
+	// 6. Delete admission rule via DELETE /api/v1/policies/rules/{id}?kind=admission -> 422 Unprocessable Entity
+	reqDelAdmKind := httptest.NewRequest(http.MethodDelete, "/api/v1/policies/rules/"+legacyAdmID+"?kind=admission", nil)
+	reqDelAdmKind.Header.Set("Authorization", "Bearer "+testAdminToken)
+	recDelAdmKind := httptest.NewRecorder()
+	router.ServeHTTP(recDelAdmKind, reqDelAdmKind)
+	if recDelAdmKind.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 UnprocessableEntity deleting admission rule, got %d: %s", recDelAdmKind.Code, recDelAdmKind.Body.String())
 	}
 
-	// Verify admission rule is also gone
+	// Generic delete on admission rule ID -> 404 Not Found (no fallback from policy to admission)
+	reqDelAdmGeneric := httptest.NewRequest(http.MethodDelete, "/api/v1/policies/rules/"+legacyAdmID, nil)
+	reqDelAdmGeneric.Header.Set("Authorization", "Bearer "+testAdminToken)
+	recDelAdmGeneric := httptest.NewRecorder()
+	router.ServeHTTP(recDelAdmGeneric, reqDelAdmGeneric)
+	if recDelAdmGeneric.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 Not Found for generic delete on admission rule ID, got %d: %s", recDelAdmGeneric.Code, recDelAdmGeneric.Body.String())
+	}
+
+	// Verify admission rule is still present in database
 	reqList2 := httptest.NewRequest(http.MethodGet, "/api/v1/policies/rules", nil)
 	reqList2.Header.Set("Authorization", "Bearer "+testAdminToken)
 	recList2 := httptest.NewRecorder()
@@ -774,8 +806,8 @@ func TestPolicyRulesDelete(t *testing.T) {
 	if err := json.Unmarshal(recList2.Body.Bytes(), &listResp); err != nil {
 		t.Fatalf("failed to parse list rules response: %v", err)
 	}
-	if len(listResp.Data.AdmissionRules) != 0 {
-		t.Fatalf("expected 0 admission rules after delete, got %d", len(listResp.Data.AdmissionRules))
+	if len(listResp.Data.AdmissionRules) != 1 {
+		t.Fatalf("expected 1 legacy admission rule preserved, got %d", len(listResp.Data.AdmissionRules))
 	}
 
 	// 7. Deleting a non-existent rule -> 404 Not Found with code rule_not_found
@@ -1108,5 +1140,320 @@ func TestPolicyHandler_PreviewGroup_Pipeline_AddRemoveReentrantExclusion(t *test
 	// Exclusion summary should have "regex removed": 1
 	if resp.Data.ExclusionSummary["regex removed"] != 1 {
 		t.Errorf("expected ExclusionSummary['regex removed']=1, got %d", resp.Data.ExclusionSummary["regex removed"])
+	}
+}
+
+func TestPoliciesAdmissionRulesRetiredWorkflow(t *testing.T) {
+	db := newCleanSQLiteDB(t)
+	router, policySvc := setupPolicyTestRouter(t, db)
+	ctx := context.Background()
+
+	// 1. Create an active revision
+	rev, err := policySvc.CreateRevision(ctx, policy.CreateRevisionCommand{
+		State:     domain.RevisionStateActive,
+		RequestID: "req-rev-retire-test",
+		ActorKind: domain.ActorKindAdmin,
+	})
+	if err != nil {
+		t.Fatalf("failed to create revision: %v", err)
+	}
+
+	// 2. Reject POST /api/v1/admission/rules -> 422 admission_rules_retired
+	reqAdmAlias := httptest.NewRequest(http.MethodPost, "/api/v1/admission/rules", strings.NewReader(`{
+		"name": "retired-alias",
+		"expression": "country == 'US'",
+		"action": "allow",
+		"position": 0
+	}`))
+	reqAdmAlias.Header.Set("Authorization", "Bearer "+testAdminToken)
+	reqAdmAlias.Header.Set("Content-Type", "application/json")
+	recAdmAlias := httptest.NewRecorder()
+	router.ServeHTTP(recAdmAlias, reqAdmAlias)
+	if recAdmAlias.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 for POST /api/v1/admission/rules, got %d: %s", recAdmAlias.Code, recAdmAlias.Body.String())
+	}
+	var errResp testErrorResponse
+	if err := json.Unmarshal(recAdmAlias.Body.Bytes(), &errResp); err != nil {
+		t.Fatalf("failed to parse error response: %v", err)
+	}
+	if errResp.Code != "admission_rules_retired" {
+		t.Fatalf("expected code admission_rules_retired, got %s", errResp.Code)
+	}
+
+	// 3. Reject POST /api/v1/policies/rules with kind=admission -> 422 admission_rules_retired
+	reqAdmKind := httptest.NewRequest(http.MethodPost, "/api/v1/policies/rules", strings.NewReader(`{
+		"kind": "admission",
+		"name": "retired-kind",
+		"expression": "country == 'HK'",
+		"action": "allow",
+		"position": 0
+	}`))
+	reqAdmKind.Header.Set("Authorization", "Bearer "+testAdminToken)
+	reqAdmKind.Header.Set("Content-Type", "application/json")
+	recAdmKind := httptest.NewRecorder()
+	router.ServeHTTP(recAdmKind, reqAdmKind)
+	if recAdmKind.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 for POST /api/v1/policies/rules with kind=admission, got %d", recAdmKind.Code)
+	}
+	if err := json.Unmarshal(recAdmKind.Body.Bytes(), &errResp); err != nil {
+		t.Fatalf("failed to parse error response: %v", err)
+	}
+	if errResp.Code != "admission_rules_retired" {
+		t.Fatalf("expected code admission_rules_retired, got %s", errResp.Code)
+	}
+
+	// 4. Reject POST /api/v1/policies/rules with implicit action (action non-empty, kind empty) -> 422 admission_rules_retired
+	reqAdmImplicit := httptest.NewRequest(http.MethodPost, "/api/v1/policies/rules", strings.NewReader(`{
+		"name": "retired-implicit",
+		"expression": "country == 'JP'",
+		"action": "reject",
+		"position": 0
+	}`))
+	reqAdmImplicit.Header.Set("Authorization", "Bearer "+testAdminToken)
+	reqAdmImplicit.Header.Set("Content-Type", "application/json")
+	recAdmImplicit := httptest.NewRecorder()
+	router.ServeHTTP(recAdmImplicit, reqAdmImplicit)
+	if recAdmImplicit.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 for implicit admission action, got %d", recAdmImplicit.Code)
+	}
+	if err := json.Unmarshal(recAdmImplicit.Body.Bytes(), &errResp); err != nil {
+		t.Fatalf("failed to parse error response: %v", err)
+	}
+	if errResp.Code != "admission_rules_retired" {
+		t.Fatalf("expected code admission_rules_retired, got %s", errResp.Code)
+	}
+
+	// 5. Reject POST /api/v1/policies/rules with unknown kind -> 422 invalid_rule_kind
+	reqUnknownKind := httptest.NewRequest(http.MethodPost, "/api/v1/policies/rules", strings.NewReader(`{
+		"kind": "unsupported_kind",
+		"expression": "DOMAIN,example.com",
+		"builtin_target": "DIRECT"
+	}`))
+	reqUnknownKind.Header.Set("Authorization", "Bearer "+testAdminToken)
+	reqUnknownKind.Header.Set("Content-Type", "application/json")
+	recUnknownKind := httptest.NewRecorder()
+	router.ServeHTTP(recUnknownKind, reqUnknownKind)
+	if recUnknownKind.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 for unknown kind, got %d", recUnknownKind.Code)
+	}
+	if err := json.Unmarshal(recUnknownKind.Body.Bytes(), &errResp); err != nil {
+		t.Fatalf("failed to parse error response: %v", err)
+	}
+	if errResp.Code != "invalid_rule_kind" {
+		t.Fatalf("expected code invalid_rule_kind, got %s", errResp.Code)
+	}
+
+	// 6. Legitimate policy rule creation still succeeds
+	sharedID := "0192a000-0000-7000-8000-000000000001"
+	reqCreatePol := httptest.NewRequest(http.MethodPost, "/api/v1/policies/rules", strings.NewReader(fmt.Sprintf(`{
+		"id": "%s",
+		"kind": "policy",
+		"expression": "DOMAIN-SUFFIX,shared-target.com",
+		"builtin_target": "DIRECT",
+		"position": 0
+	}`, sharedID)))
+	reqCreatePol.Header.Set("Authorization", "Bearer "+testAdminToken)
+	reqCreatePol.Header.Set("Content-Type", "application/json")
+	recCreatePol := httptest.NewRecorder()
+	router.ServeHTTP(recCreatePol, reqCreatePol)
+	if recCreatePol.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created for policy rule, got %d: %s", recCreatePol.Code, recCreatePol.Body.String())
+	}
+
+	// Directly insert a legacy admission rule with the SAME ID into SQLite
+	_, err = db.Exec(`INSERT INTO admission_rules (id, revision_id, name, expression, action, position) VALUES (?, ?, 'SameIDLegacyAdm', 'protocol == "vless"', 'allow', 0)`, sharedID, rev.ID)
+	if err != nil {
+		t.Fatalf("failed to insert legacy admission rule with shared ID: %v", err)
+	}
+
+	// 7. Calling DELETE /api/v1/admission/rules/{id} must reject with 422 and NOT delete the policy rule with the same ID!
+	reqDelAdmRoute := httptest.NewRequest(http.MethodDelete, "/api/v1/admission/rules/"+sharedID, nil)
+	reqDelAdmRoute.Header.Set("Authorization", "Bearer "+testAdminToken)
+	recDelAdmRoute := httptest.NewRecorder()
+	router.ServeHTTP(recDelAdmRoute, reqDelAdmRoute)
+	if recDelAdmRoute.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 UnprocessableEntity for DELETE /api/v1/admission/rules/{id}, got %d: %s", recDelAdmRoute.Code, recDelAdmRoute.Body.String())
+	}
+	if err := json.Unmarshal(recDelAdmRoute.Body.Bytes(), &errResp); err != nil {
+		t.Fatalf("failed to parse error response: %v", err)
+	}
+	if errResp.Code != "admission_rules_retired" {
+		t.Fatalf("expected code admission_rules_retired, got %s", errResp.Code)
+	}
+
+	// Verify policy rule with sharedID is STILL ALIVE
+	reqCheckPol := httptest.NewRequest(http.MethodGet, "/api/v1/policies/rules?kind=policy", nil)
+	reqCheckPol.Header.Set("Authorization", "Bearer "+testAdminToken)
+	recCheckPol := httptest.NewRecorder()
+	router.ServeHTTP(recCheckPol, reqCheckPol)
+	var polListResp testDataResponse[policy.ListRulesResult]
+	if err := json.Unmarshal(recCheckPol.Body.Bytes(), &polListResp); err != nil {
+		t.Fatalf("failed to parse list response: %v", err)
+	}
+	if len(polListResp.Data.PolicyRules) != 1 || polListResp.Data.PolicyRules[0].ID != sharedID {
+		t.Fatalf("expected policy rule %s to be preserved after admission delete attempt, got %+v", sharedID, polListResp.Data.PolicyRules)
+	}
+
+	// 8. DELETE /api/v1/policies/rules/{id}?kind=admission also rejects with 422 and preserves both rules
+	reqDelKindAdm := httptest.NewRequest(http.MethodDelete, "/api/v1/policies/rules/"+sharedID+"?kind=admission", nil)
+	reqDelKindAdm.Header.Set("Authorization", "Bearer "+testAdminToken)
+	recDelKindAdm := httptest.NewRecorder()
+	router.ServeHTTP(recDelKindAdm, reqDelKindAdm)
+	if recDelKindAdm.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 for DELETE with kind=admission, got %d", recDelKindAdm.Code)
+	}
+
+	// 9. Generic DELETE /api/v1/policies/rules/{id} (kind empty) deletes the policy rule, and leaves admission rule untouched
+	reqDelGeneric := httptest.NewRequest(http.MethodDelete, "/api/v1/policies/rules/"+sharedID, nil)
+	reqDelGeneric.Header.Set("Authorization", "Bearer "+testAdminToken)
+	recDelGeneric := httptest.NewRecorder()
+	router.ServeHTTP(recDelGeneric, reqDelGeneric)
+	if recDelGeneric.Code != http.StatusNoContent {
+		t.Fatalf("expected 204 No Content for generic DELETE, got %d: %s", recDelGeneric.Code, recDelGeneric.Body.String())
+	}
+
+	// Verify policy rule is gone
+	recCheckPol2 := httptest.NewRecorder()
+	router.ServeHTTP(recCheckPol2, reqCheckPol)
+	if err := json.Unmarshal(recCheckPol2.Body.Bytes(), &polListResp); err != nil {
+		t.Fatalf("failed to parse list response: %v", err)
+	}
+	if len(polListResp.Data.PolicyRules) != 0 {
+		t.Fatalf("expected 0 policy rules after generic delete, got %d", len(polListResp.Data.PolicyRules))
+	}
+
+	// Verify legacy admission rule in database is STILL intact
+	var legacyAdmCount int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM admission_rules WHERE id = ?", sharedID).Scan(&legacyAdmCount); err != nil {
+		t.Fatalf("failed to query admission_rules table: %v", err)
+	}
+	if legacyAdmCount != 1 {
+		t.Fatalf("expected legacy admission rule to remain in table, got count %d", legacyAdmCount)
+	}
+
+	// 10. Legacy GET /api/v1/admission/rules returns 200 OK with legacy admission rules
+	reqGetLegacyAdm := httptest.NewRequest(http.MethodGet, "/api/v1/admission/rules", nil)
+	reqGetLegacyAdm.Header.Set("Authorization", "Bearer "+testAdminToken)
+	recGetLegacyAdm := httptest.NewRecorder()
+	router.ServeHTTP(recGetLegacyAdm, reqGetLegacyAdm)
+	if recGetLegacyAdm.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for GET /api/v1/admission/rules, got %d", recGetLegacyAdm.Code)
+	}
+	var legacyListResp testDataResponse[policy.ListRulesResult]
+	if err := json.Unmarshal(recGetLegacyAdm.Body.Bytes(), &legacyListResp); err != nil {
+		t.Fatalf("failed to parse list response: %v", err)
+	}
+	if len(legacyListResp.Data.AdmissionRules) != 1 || legacyListResp.Data.AdmissionRules[0].ID != sharedID {
+		t.Fatalf("expected 1 legacy admission rule returned, got %+v", legacyListResp.Data.AdmissionRules)
+	}
+}
+
+func TestPoliciesCreateRule_CategorizedWithMATCH(t *testing.T) {
+	db := newCleanSQLiteDB(t)
+	router, policySvc := setupPolicyTestRouter(t, db)
+	ctx := context.Background()
+
+	rev, err := policySvc.CreateRevision(ctx, policy.CreateRevisionCommand{
+		State:     domain.RevisionStateActive,
+		RequestID: "req-rev-cat-test",
+		ActorKind: domain.ActorKindAdmin,
+	})
+	if err != nil {
+		t.Fatalf("failed to create revision: %v", err)
+	}
+
+	// 1. Create categories "Default" and "Final" via service
+	catDefault, err := policySvc.CreateCategory(ctx, policy.CreateCategoryCommand{
+		Name:      "Default",
+		SortOrder: 1,
+	})
+	if err != nil {
+		t.Fatalf("failed to create Default category: %v", err)
+	}
+	catFinal, err := policySvc.CreateCategory(ctx, policy.CreateCategoryCommand{
+		Name:      "Final",
+		SortOrder: 99,
+	})
+	if err != nil {
+		t.Fatalf("failed to create Final category: %v", err)
+	}
+
+	// 2. Create MATCH rule in Final category via HTTP POST /api/v1/policies/rules
+	matchPayload := fmt.Sprintf(`{
+		"revision_id": "%s",
+		"category_id": "%s",
+		"builtin_target": "DIRECT",
+		"expression": "MATCH",
+		"position": 0
+	}`, rev.ID, catFinal.ID)
+	reqMatch := httptest.NewRequest(http.MethodPost, "/api/v1/policies/rules", strings.NewReader(matchPayload))
+	reqMatch.Header.Set("Authorization", "Bearer "+testAdminToken)
+	reqMatch.Header.Set("Content-Type", "application/json")
+	recMatch := httptest.NewRecorder()
+	router.ServeHTTP(recMatch, reqMatch)
+	if recMatch.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created for MATCH rule, got %d: %s", recMatch.Code, recMatch.Body.String())
+	}
+
+	// 3. Create a new routing rule in Default category via HTTP POST /api/v1/policies/rules
+	// This exercises the RulesView workflow where an existing MATCH rule exists and a new categorized rule is created.
+	newRulePayload := fmt.Sprintf(`{
+		"revision_id": "%s",
+		"category_id": "%s",
+		"builtin_target": "DIRECT",
+		"expression": "DOMAIN-KEYWORD,github",
+		"position": 0
+	}`, rev.ID, catDefault.ID)
+	reqNewRule := httptest.NewRequest(http.MethodPost, "/api/v1/policies/rules", strings.NewReader(newRulePayload))
+	reqNewRule.Header.Set("Authorization", "Bearer "+testAdminToken)
+	reqNewRule.Header.Set("Content-Type", "application/json")
+	recNewRule := httptest.NewRecorder()
+	router.ServeHTTP(recNewRule, reqNewRule)
+	if recNewRule.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created for new categorized rule when MATCH already exists, got %d: %s", recNewRule.Code, recNewRule.Body.String())
+	}
+
+	// 4. Verify GET /api/v1/policies/rules shows both rules
+	reqList := httptest.NewRequest(http.MethodGet, "/api/v1/policies/rules?revision_id="+rev.ID, nil)
+	reqList.Header.Set("Authorization", "Bearer "+testAdminToken)
+	recList := httptest.NewRecorder()
+	router.ServeHTTP(recList, reqList)
+	if recList.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK listing rules, got %d: %s", recList.Code, recList.Body.String())
+	}
+	var listResp testDataResponse[policy.ListRulesResult]
+	if err := json.Unmarshal(recList.Body.Bytes(), &listResp); err != nil {
+		t.Fatalf("failed to decode list rules response: %v", err)
+	}
+	if len(listResp.Data.PolicyRules) != 2 {
+		t.Fatalf("expected 2 policy rules, got %d", len(listResp.Data.PolicyRules))
+	}
+
+	// 5. Verify resolver.Resolve maintains MATCH as the terminal rule
+	rulesForResolve := make([]domain.PolicyRule, len(listResp.Data.PolicyRules))
+	for i, r := range listResp.Data.PolicyRules {
+		rulesForResolve[i] = domain.PolicyRule{
+			ID:            r.ID,
+			RevisionID:    r.RevisionID,
+			CategoryID:    r.CategoryID,
+			Category:      r.Category,
+			BuiltinTarget: r.BuiltinTarget,
+			Expression:    r.Expression,
+			Position:      r.Position,
+			Enabled:       r.Enabled,
+		}
+	}
+	snap, err := resolver.New().Resolve(ctx, resolver.ResolveInput{
+		PolicyRules: rulesForResolve,
+	})
+	if err != nil {
+		t.Fatalf("resolver.Resolve failed: %v", err)
+	}
+	if len(snap.Rules) != 2 {
+		t.Fatalf("expected 2 resolved rules, got %d", len(snap.Rules))
+	}
+	lastRule := snap.Rules[len(snap.Rules)-1]
+	if !lastRule.IsTerminal || lastRule.Expression != "MATCH" {
+		t.Fatalf("expected terminal MATCH rule at end of resolved export, got: %+v", lastRule)
 	}
 }

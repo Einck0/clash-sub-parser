@@ -1,7 +1,6 @@
 import { ref } from 'vue'
 import { api, ApiError } from '../../api/client'
 import type {
-  AdmissionRule,
   GlobalNodeFilter,
   GroupDraftPreviewPayload,
   GroupDraftPreviewResponse,
@@ -10,12 +9,9 @@ import type {
   MemberSource,
   NodeFilterSpec,
   PolicyGroup,
-  PolicyRule,
-  RuleAction,
   ValidationResult,
 } from './policyTypes'
 import { normalizeGroupSources } from './policyTypes'
-import type { PreviewResult } from '../publications/publicationTypes'
 
 interface PaginatedGroups {
   items?: PolicyGroup[]
@@ -23,13 +19,6 @@ interface PaginatedGroups {
   page?: number
   page_size?: number
   total?: number
-}
-
-interface RulesResult {
-  revision_id: string
-  admission_rules: AdmissionRule[]
-  policy_rules: PolicyRule[]
-  total: number
 }
 
 export interface CreateGroupInput {
@@ -58,8 +47,6 @@ export interface UpdateGroupInput {
 export function usePolicy() {
   const groups = ref<PolicyGroup[]>([])
   const globalFilter = ref<GlobalNodeFilter | null>(null)
-  const admissionRules = ref<AdmissionRule[]>([])
-  const policyRules = ref<PolicyRule[]>([])
   const loading = ref(false)
   const loadingGlobalFilter = ref(false)
   const saving = ref(false)
@@ -322,108 +309,6 @@ export function usePolicy() {
     }
   }
 
-  async function loadRules(revisionId?: string) {
-    loading.value = true
-    error.value = ''
-    try {
-      const params: Record<string, string> = {}
-      if (revisionId) params.revision_id = revisionId
-      const res = await api.get<RulesResult>('/api/v1/policies/rules', { params })
-      admissionRules.value = res.admission_rules || []
-      policyRules.value = res.policy_rules || []
-      latestRevisionId.value = res.revision_id || ''
-      return true
-    } catch (err) {
-      error.value = err instanceof Error ? err.message : '加载规则失败'
-      return false
-    } finally {
-      loading.value = false
-    }
-  }
-
-  async function createAdmissionRule(rule: {
-    name: string
-    expression: string
-    action: RuleAction
-    position?: number
-    revision_id?: string
-  }) {
-    saving.value = true
-    validationStale.value = true
-    error.value = ''
-    try {
-      const payload = {
-        kind: 'admission',
-        name: rule.name.trim(),
-        expression: rule.expression.trim(),
-        action: rule.action,
-        position: rule.position ?? admissionRules.value.length,
-        revision_id: rule.revision_id || '',
-      }
-      const created = await api.post<AdmissionRule>('/api/v1/policies/rules', payload)
-      admissionRules.value.push(created)
-      if (created.revision_id) {
-        latestRevisionId.value = created.revision_id
-      }
-      void validateGraph()
-      return created
-    } catch (err) {
-      error.value = err instanceof Error ? err.message : '创建准入规则失败'
-      throw err
-    } finally {
-      saving.value = false
-    }
-  }
-
-  async function createPolicyRule(rule: {
-    target_group_id: string
-    expression: string
-    position?: number
-    revision_id?: string
-  }) {
-    saving.value = true
-    validationStale.value = true
-    error.value = ''
-    try {
-      const payload = {
-        kind: 'policy',
-        target_group_id: rule.target_group_id,
-        expression: rule.expression.trim(),
-        position: rule.position ?? policyRules.value.length,
-        revision_id: rule.revision_id || '',
-      }
-      const created = await api.post<PolicyRule>('/api/v1/policies/rules', payload)
-      policyRules.value.push(created)
-      if (created.revision_id) {
-        latestRevisionId.value = created.revision_id
-      }
-      void validateGraph()
-      return created
-    } catch (err) {
-      error.value = err instanceof Error ? err.message : '创建分流规则失败'
-      throw err
-    } finally {
-      saving.value = false
-    }
-  }
-
-  async function deleteRule(id: string): Promise<void> {
-    saving.value = true
-    validationStale.value = true
-    error.value = ''
-    try {
-      await api.delete(`/api/v1/policies/rules/${encodeURIComponent(id)}`)
-      admissionRules.value = admissionRules.value.filter((r) => r.id !== id)
-      policyRules.value = policyRules.value.filter((r) => r.id !== id)
-      void validateGraph()
-    } catch (err) {
-      error.value = err instanceof Error ? err.message : '删除规则失败'
-      throw err
-    } finally {
-      saving.value = false
-    }
-  }
-
   let reloadSeq = 0
   async function reload() {
     const seq = ++reloadSeq
@@ -433,7 +318,6 @@ export function usePolicy() {
     // Sequential loads keep the first failure visible; validate only the
     // successfully loaded current revision, never a half-loaded screen.
     if (!await loadGroups(page.value, pageSize.value, searchQuery.value) || seq !== reloadSeq) return
-    if (!await loadRules() || seq !== reloadSeq) return
     await loadGlobalFilter()
     if (error.value || seq !== reloadSeq) return
     await loadAllTopologyGroups()
@@ -649,10 +533,6 @@ export function usePolicy() {
     moveGroup,
     deleteGroup,
     setGroupEdges,
-    loadRules,
-    createAdmissionRule,
-    createPolicyRule,
-    deleteRule,
     validateGraph,
     loadGlobalFilter,
     updateGlobalFilter,

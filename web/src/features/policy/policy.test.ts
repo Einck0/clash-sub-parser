@@ -10,8 +10,6 @@ import {
   validateEdgeInput,
   validateConditionInput,
   type PolicyGroup,
-  type AdmissionRule,
-  type PolicyRule,
 } from './policyTypes'
 import { usePolicy } from './usePolicy'
 import { api, ApiError } from '../../api/client'
@@ -29,9 +27,9 @@ describe('Feature A reload and PCRE contract', () => {
     let resolveOld!: (v: any) => void
     const post = vi.spyOn(api, 'post').mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve }))
       .mockResolvedValueOnce({ valid: true, revision_id: 'new', issues: [] })
-    vi.spyOn(api, 'get').mockImplementation(async (path) => path.endsWith('/rules')
-      ? { revision_id: 'new', policy_rules: [], admission_rules: [] }
-      : path.endsWith('/groups') ? { items: [], total: 0 } : { spec: { conditions: [] } })
+    vi.spyOn(api, 'get').mockImplementation(async (path) => path.endsWith('/groups')
+      ? { items: [], total: 0 }
+      : { spec: { conditions: [] } })
     const policy = usePolicy()
     const old = policy.validateGraph()
     await policy.reload()
@@ -51,7 +49,7 @@ describe('Feature A reload and PCRE contract', () => {
     expect(post).not.toHaveBeenCalled()
     expect(policy.error.value).toBe('read failure')
     expect(policy.validationState.value).toBe('incomplete')
-    get.mockImplementation(async (path) => path.endsWith('/rules') ? { revision_id: 'latest' } : { items: [], spec: { conditions: [] } })
+    get.mockImplementation(async (path) => path.endsWith('/groups') ? { items: [], total: 0 } : { spec: { conditions: [] } })
     await policy.reload()
     expect(policy.validationState.value).toBe('success')
   })
@@ -345,41 +343,21 @@ describe('usePolicy composable', () => {
     expect(groups.value).toHaveLength(0)
   })
 
-  it('loads admission and routing rules from /api/v1/policies/rules', async () => {
-    const mockAdmission: AdmissionRule[] = [
-      {
-        id: 'adm-1',
-        revision_id: 'rev-1',
-        name: 'Allow HK and JP',
-        expression: 'country in ["HK", "JP"]',
-        action: 'allow',
-        position: 0,
-      },
-    ]
-    const mockPolicy: PolicyRule[] = [
-      {
-        id: 'pol-1',
-        revision_id: 'rev-1',
-        target_group_id: 'grp-1',
-        expression: 'domain_suffix("google.com")',
-        position: 0,
-      },
-    ]
-
-    vi.spyOn(api, 'get').mockResolvedValueOnce({
-      revision_id: 'rev-1',
-      admission_rules: mockAdmission,
-      policy_rules: mockPolicy,
-      total: 2,
+  it('reload loads groups and global filter without fetching /api/v1/policies/rules', async () => {
+    const getSpy = vi.spyOn(api, 'get').mockImplementation(async (path) => {
+      if (path.endsWith('/groups')) return { items: [], total: 0 }
+      if (path.endsWith('/global-node-filter')) return { spec: { conditions: [] } }
+      return {}
     })
+    vi.spyOn(api, 'post').mockResolvedValue({ valid: true, revision_id: 'latest' })
 
-    const { admissionRules, policyRules, loadRules } = usePolicy()
-    await loadRules()
+    const policy = usePolicy()
+    await policy.reload()
 
-    expect(admissionRules.value).toHaveLength(1)
-    expect(admissionRules.value[0].action).toBe('allow')
-    expect(policyRules.value).toHaveLength(1)
-    expect(policyRules.value[0].target_group_id).toBe('grp-1')
+    const calledUrls = getSpy.mock.calls.map(([url]) => url)
+    expect(calledUrls.some((u) => u.includes('/policies/rules'))).toBe(false)
+    expect(calledUrls.some((u) => u.includes('/policies/groups'))).toBe(true)
+    expect(calledUrls.some((u) => u.includes('/policies/global-node-filter'))).toBe(true)
   })
 
   it('validates persisted backend graph topology via POST /api/v1/policies/validate without client payload', async () => {
@@ -546,40 +524,14 @@ describe('usePolicy composable', () => {
     })
   })
 
-  it('deletes admission and policy rules via deleteRule with proper URL encoding and local reactive state updates', async () => {
-    const deleteSpy = vi.spyOn(api, 'delete').mockResolvedValue(undefined)
-
-    const { admissionRules, policyRules, deleteRule } = usePolicy()
-
-    admissionRules.value = [
-      { id: 'adm/rule 1', revision_id: 'rev-1', name: 'Rule 1', expression: 'DOMAIN,google.com', action: 'allow', position: 0 },
-      { id: 'adm-2', revision_id: 'rev-1', name: 'Rule 2', expression: 'DOMAIN,facebook.com', action: 'reject', position: 1 },
-    ]
-    policyRules.value = [
-      { id: 'pol/rule 1', revision_id: 'rev-1', target_group_id: 'grp-1', expression: 'MATCH', position: 0 },
-    ]
-
-    // Delete admission rule with special char
-    await deleteRule('adm/rule 1')
-    expect(deleteSpy).toHaveBeenCalledWith('/api/v1/policies/rules/adm%2Frule%201')
-    expect(admissionRules.value).toHaveLength(1)
-    expect(admissionRules.value[0].id).toBe('adm-2')
-
-    // Delete policy rule
-    await deleteRule('pol/rule 1')
-    expect(deleteSpy).toHaveBeenCalledWith('/api/v1/policies/rules/pol%2Frule%201')
-    expect(policyRules.value).toHaveLength(0)
-  })
-
-  it('successful save and delete actions trigger autovalidation of latest revision', async () => {
-    const postSpy = vi.spyOn(api, 'post').mockImplementation(async (path: string, body?: any) => {
-      if (path === '/api/v1/policies/rules') {
+  it('successful group creation triggers reload and autovalidation of latest revision', async () => {
+    const postSpy = vi.spyOn(api, 'post').mockImplementation(async (path: string) => {
+      if (path === '/api/v1/policies/groups') {
         return {
-          id: 'new-rule-1',
-          revision_id: 'rev-latest-99',
-          target_group_id: 'grp-1',
-          expression: 'DOMAIN,example.com',
-          position: 0,
+          id: 'grp-new-1',
+          name: 'New Group',
+          group_type: 'select',
+          revision: 1,
         }
       }
       if (path === '/api/v1/policies/validate') {
@@ -592,15 +544,20 @@ describe('usePolicy composable', () => {
       }
       return {}
     })
-
-    const { createPolicyRule, latestRevisionId, validationResult, validationState } = usePolicy()
-
-    const created = await createPolicyRule({
-      target_group_id: 'grp-1',
-      expression: 'DOMAIN,example.com',
+    vi.spyOn(api, 'get').mockImplementation(async (path) => {
+      if (path.endsWith('/groups')) return { items: [], total: 0 }
+      if (path.endsWith('/global-node-filter')) return { spec: { conditions: [] } }
+      return {}
     })
 
-    expect(created.id).toBe('new-rule-1')
+    const { createGroup, latestRevisionId, validationResult, validationState } = usePolicy()
+
+    const created = await createGroup({
+      name: 'New Group',
+      group_type: 'select',
+    })
+
+    expect(created.id).toBe('grp-new-1')
     expect(latestRevisionId.value).toBe('rev-latest-99')
     expect(postSpy).toHaveBeenCalledWith('/api/v1/policies/validate', undefined, expect.objectContaining({ signal: expect.any(Object) }))
     expect(validationResult.value?.valid).toBe(true)
@@ -610,12 +567,12 @@ describe('usePolicy composable', () => {
   it('save failure does not fake valid or trigger invalid state transition', async () => {
     vi.spyOn(api, 'post').mockRejectedValueOnce(new Error('Network error on save'))
 
-    const { createPolicyRule, validationResult, validationState, error } = usePolicy()
+    const { createGroup, validationResult, validationState, error } = usePolicy()
 
     await expect(
-      createPolicyRule({
-        target_group_id: 'grp-1',
-        expression: 'DOMAIN,bad.com',
+      createGroup({
+        name: 'Bad Group',
+        group_type: 'select',
       })
     ).rejects.toThrow('Network error on save')
 

@@ -51,8 +51,6 @@ const dirty = computed(() => {
   return raw.value !== settings.value.raw_yaml
 })
 
-const configurationScope = '此设置仅控制 Mihomo / Clash 客户端配置的 DNS，不改变服务器、探针或 WireGuard DNS。'
-
 function apply(settingsValue: DnsSettings) {
   settings.value = settingsValue
   enabled.value = settingsValue.enabled
@@ -206,12 +204,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <section class="space-y-5" data-testid="dns-view">
-    <header>
-      <p class="text-xs font-semibold uppercase tracking-widest text-primary">DNS</p>
-      <h1 class="mt-1 text-2xl font-bold">客户端 DNS 配置</h1>
-      <p class="mt-1 text-sm opacity-70">{{ configurationScope }}</p>
-    </header>
+  <section class="space-y-5" data-testid="dns-view" aria-label="客户端 DNS 配置">
     <div v-if="loading" role="status" class="alert">正在读取 DNS 设置…</div>
     <div v-if="error" role="alert" data-testid="dns-error" class="alert alert-error">
       <span>{{ error }}</span>
@@ -219,9 +212,6 @@ onMounted(() => {
     </div>
     <div v-if="notice" role="status" class="alert alert-success">{{ notice }}</div>
     <template v-if="settings">
-      <div v-if="settings.source === 'default'" class="alert alert-info" data-testid="dns-default-source">
-        当前使用服务默认值；恢复页面尚未导入历史配置。
-      </div>
       <section class="card bg-base-200/80 border border-base-300">
         <div class="card-body p-4 sm:p-6 space-y-4">
           <label class="flex items-center justify-between gap-4">

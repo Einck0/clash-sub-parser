@@ -486,8 +486,8 @@ func TestPolicyService_ValidGraphAndRevision(t *testing.T) {
 		t.Errorf("expected active state, got %s", rev.State)
 	}
 
-	// Add admission rule
-	admRule, err := svc.CreateAdmissionRule(ctx, policy.CreateAdmissionRuleCommand{
+	// Admission rules are retired; CreateAdmissionRule must reject writes with admission_rules_retired
+	_, err = svc.CreateAdmissionRule(ctx, policy.CreateAdmissionRuleCommand{
 		RevisionID: rev.ID,
 		Name:       "allow-hk",
 		Expression: "country == 'HK'",
@@ -496,11 +496,24 @@ func TestPolicyService_ValidGraphAndRevision(t *testing.T) {
 		RequestID:  "req-adm-1",
 		ActorKind:  domain.ActorKindAdmin,
 	})
-	if err != nil {
-		t.Fatalf("unexpected error creating admission rule: %v", err)
+	if err == nil {
+		t.Fatalf("expected CreateAdmissionRule to fail with admission_rules_retired, got nil")
 	}
-	if admRule.ID == "" || admRule.Action != domain.RuleActionAllow {
-		t.Errorf("invalid admission rule: %#v", admRule)
+	if domErr, ok := domain.AsDomainError(err); !ok || domErr.Code != "admission_rules_retired" {
+		t.Fatalf("expected admission_rules_retired, got %v", err)
+	}
+
+	// Legacy admission rules already in repository remain read-only readable via ListRules
+	legacyAdmRule := domain.AdmissionRule{
+		ID:         "legacy-adm-1",
+		RevisionID: rev.ID,
+		Name:       "allow-hk",
+		Expression: "country == 'HK'",
+		Action:     domain.RuleActionAllow,
+		Position:   0,
+	}
+	if err := policyRepo.CreateAdmissionRule(ctx, &legacyAdmRule); err != nil {
+		t.Fatalf("failed to insert test legacy admission rule: %v", err)
 	}
 
 	// Add policy rules
@@ -839,8 +852,8 @@ func TestPolicy_AutoBootstrapActiveRevisionAndDeleteRules(t *testing.T) {
 		t.Fatalf("expected auto-assigned revision_id, got empty")
 	}
 
-	// Create admission rule without revision_id -> must bind to the same active revision
-	admRule, err := svc.CreateAdmissionRule(ctx, policy.CreateAdmissionRuleCommand{
+	// Create admission rule without revision_id -> must be rejected with admission_rules_retired
+	_, err = svc.CreateAdmissionRule(ctx, policy.CreateAdmissionRuleCommand{
 		Name:       "AllowHK",
 		Expression: "country == 'HK'",
 		Action:     domain.RuleActionAllow,
@@ -848,11 +861,24 @@ func TestPolicy_AutoBootstrapActiveRevisionAndDeleteRules(t *testing.T) {
 		RequestID:  "req-bootstrap-adm",
 		ActorKind:  domain.ActorKindAdmin,
 	})
-	if err != nil {
-		t.Fatalf("expected CreateAdmissionRule without revision_id to succeed, got: %v", err)
+	if err == nil {
+		t.Fatalf("expected CreateAdmissionRule to fail with admission_rules_retired, got nil")
 	}
-	if admRule.RevisionID != polRule.RevisionID {
-		t.Fatalf("expected admission rule revision %s to match policy rule revision %s", admRule.RevisionID, polRule.RevisionID)
+	if domErr, ok := domain.AsDomainError(err); !ok || domErr.Code != "admission_rules_retired" {
+		t.Fatalf("expected admission_rules_retired error, got: %v", err)
+	}
+
+	// Insert legacy admission rule directly in repository to verify read and delete behavior
+	legacyAdm := domain.AdmissionRule{
+		ID:         "legacy-adm-bootstrap",
+		RevisionID: polRule.RevisionID,
+		Name:       "AllowHK",
+		Expression: "country == 'HK'",
+		Action:     domain.RuleActionAllow,
+		Position:   0,
+	}
+	if err := policyRepo.CreateAdmissionRule(ctx, &legacyAdm); err != nil {
+		t.Fatalf("failed to insert legacy admission rule: %v", err)
 	}
 
 	// EnsureActiveRevision must be idempotent and return the existing active revision
@@ -873,7 +899,7 @@ func TestPolicy_AutoBootstrapActiveRevisionAndDeleteRules(t *testing.T) {
 		t.Fatalf("DeleteRule for policy rule failed: %v", err)
 	}
 
-	// Verify policy rule is removed while admission rule remains
+	// Verify policy rule is removed while legacy admission rule remains readable
 	listed, err := svc.ListRules(ctx, policy.ListRulesQuery{})
 	if err != nil {
 		t.Fatalf("ListRules failed: %v", err)
@@ -885,24 +911,40 @@ func TestPolicy_AutoBootstrapActiveRevisionAndDeleteRules(t *testing.T) {
 		t.Fatalf("expected 1 admission rule remaining, got %d", len(listed.AdmissionRules))
 	}
 
-	// Delete admission rule
-	if err := svc.DeleteRule(ctx, policy.DeleteRuleCommand{
-		ID:        admRule.ID,
+	// Attempting to delete legacy admission rule via DeleteAdmissionRule must fail with admission_rules_retired
+	if err := svc.DeleteAdmissionRule(ctx, policy.DeleteRuleCommand{
+		ID:        legacyAdm.ID,
 		RequestID: "req-del-adm",
 		ActorKind: domain.ActorKindAdmin,
-	}); err != nil {
-		t.Fatalf("DeleteRule for admission rule failed: %v", err)
+	}); err == nil {
+		t.Fatalf("expected DeleteAdmissionRule to fail with admission_rules_retired, got nil")
+	} else if domErr, ok := domain.AsDomainError(err); !ok || domErr.Code != "admission_rules_retired" {
+		t.Fatalf("expected admission_rules_retired error, got: %v", err)
 	}
 
+	// Legacy admission rule must still exist
 	listedAfter, err := svc.ListRules(ctx, policy.ListRulesQuery{})
 	if err != nil {
 		t.Fatalf("ListRules failed: %v", err)
 	}
-	if len(listedAfter.AdmissionRules) != 0 {
-		t.Fatalf("expected 0 admission rules after deletion, got %d", len(listedAfter.AdmissionRules))
+	if len(listedAfter.AdmissionRules) != 1 {
+		t.Fatalf("expected 1 admission rule remaining, got %d", len(listedAfter.AdmissionRules))
 	}
 
-	// Deleting already deleted rule returns NotFound with code rule_not_found
+	// Generic DeleteRule with empty kind must NOT fallback to delete admission rule
+	err = svc.DeleteRule(ctx, policy.DeleteRuleCommand{
+		ID:        legacyAdm.ID,
+		RequestID: "req-del-adm-generic",
+		ActorKind: domain.ActorKindAdmin,
+	})
+	if err == nil {
+		t.Fatalf("expected DeleteRule without kind to fail on admission rule ID, got nil")
+	}
+	if domErr, ok := domain.AsDomainError(err); !ok || domErr.Category != domain.CategoryNotFound {
+		t.Fatalf("expected NotFound error for generic delete of non-policy ID, got: %+v", err)
+	}
+
+	// Deleting already deleted policy rule returns NotFound with code rule_not_found
 	err = svc.DeleteRule(ctx, policy.DeleteRuleCommand{
 		ID:        polRule.ID,
 		RequestID: "req-del-missing",
@@ -1009,11 +1051,13 @@ func TestPolicyRuleCreate_BootstrapRevision(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "database disk error") {
 		t.Fatalf("expected database query error propagated, got %v", err)
 	}
-	_, err = failingSvc.CreateAdmissionRule(ctx, policy.CreateAdmissionRuleCommand{
-		Name: "deny", Expression: "DOMAIN-SUFFIX,msn.com", Action: domain.RuleActionAllow,
+	_, err = failingSvc.CreatePolicyRule(ctx, policy.CreatePolicyRuleCommand{
+		BuiltinTarget: "DIRECT",
+		Expression:    "DOMAIN-SUFFIX,apple.com",
+		Position:      3,
 	})
 	if err == nil || !strings.Contains(err.Error(), "database disk error") {
-		t.Fatalf("expected admission rule query error propagated, got %v", err)
+		t.Fatalf("expected policy rule query error propagated, got %v", err)
 	}
 }
 
@@ -1109,8 +1153,10 @@ func TestPolicyRevisionBootstrapFailures(t *testing.T) {
 			db := setupTestDB(t)
 			repo := &bootstrapFailureRevisionRepo{RevisionRepository: sqlite.NewRevisionRepository(db), failure: failure}
 			svc := policy.NewService(sqlite.NewPolicyRepository(db), repo, sqlite.NewNodeRepository(db), sqlite.NewAuditRepository(db))
-			_, err := svc.CreateAdmissionRule(ctx, policy.CreateAdmissionRuleCommand{
-				Name: "deny", Expression: "DOMAIN-SUFFIX,msn.com", Action: domain.RuleActionAllow,
+			_, err := svc.CreatePolicyRule(ctx, policy.CreatePolicyRuleCommand{
+				BuiltinTarget: "DIRECT",
+				Expression:    "DOMAIN-SUFFIX,msn.com",
+				Position:      0,
 			})
 			if err == nil || !strings.Contains(err.Error(), failure+" failed") {
 				t.Fatalf("expected %s error propagated, got %v", failure, err)
@@ -1631,5 +1677,328 @@ func TestPolicyService_ValidateGraph_WithInputProvider(t *testing.T) {
 	_, err := svc.ValidateGraph(ctx)
 	if err == nil || !strings.Contains(err.Error(), "underlying storage unavailable") {
 		t.Fatalf("expected ValidateGraph to return provider error, got: %v", err)
+	}
+}
+
+func TestPolicyService_AdmissionRulesRetired(t *testing.T) {
+	ctx := context.Background()
+	db := setupTestDB(t)
+	policyRepo := sqlite.NewPolicyRepository(db)
+	revRepo := sqlite.NewRevisionRepository(db)
+	auditRepo := sqlite.NewAuditRepository(db)
+	svc := policy.NewService(policyRepo, revRepo, sqlite.NewNodeRepository(db), auditRepo)
+
+	// 1. Fresh DB: CreateAdmissionRule must fail immediately without creating revisions or table rows
+	_, err := svc.CreateAdmissionRule(ctx, policy.CreateAdmissionRuleCommand{
+		Name:       "RetiredRule",
+		Expression: "country == 'US'",
+		Action:     domain.RuleActionAllow,
+		Position:   0,
+		RequestID:  "req-adm-retired-1",
+		ActorKind:  domain.ActorKindAdmin,
+	})
+	if err == nil {
+		t.Fatalf("expected CreateAdmissionRule to fail, got nil")
+	}
+	domErr, ok := domain.AsDomainError(err)
+	if !ok || domErr.Code != "admission_rules_retired" || domErr.Category != domain.CategoryValidation {
+		t.Fatalf("expected validation error with code 'admission_rules_retired', got: %+v (%v)", domErr, err)
+	}
+
+	// Verify no revision was created
+	_, revCount, err := revRepo.List(ctx, domain.RevisionFilter{})
+	if err != nil {
+		t.Fatalf("failed to list revisions: %v", err)
+	}
+	if revCount != 0 {
+		t.Fatalf("expected 0 revisions after rejected CreateAdmissionRule, got %d", revCount)
+	}
+
+	// Verify no admission rule in table
+	var admTableCount int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM admission_rules").Scan(&admTableCount); err != nil {
+		t.Fatalf("failed to query admission_rules count: %v", err)
+	}
+	if admTableCount != 0 {
+		t.Fatalf("expected 0 rows in admission_rules, got %d", admTableCount)
+	}
+
+	// 2. Active revision exists: CreateAdmissionRule still fails
+	activeRev, err := svc.EnsureActiveRevision(ctx)
+	if err != nil || activeRev == nil {
+		t.Fatalf("EnsureActiveRevision failed: %v", err)
+	}
+
+	_, err = svc.CreateAdmissionRule(ctx, policy.CreateAdmissionRuleCommand{
+		RevisionID: activeRev.ID,
+		Name:       "RetiredRule2",
+		Expression: "protocol == 'vless'",
+		Action:     domain.RuleActionReject,
+		Position:   0,
+		RequestID:  "req-adm-retired-2",
+		ActorKind:  domain.ActorKindAdmin,
+	})
+	if err == nil {
+		t.Fatalf("expected CreateAdmissionRule with revision_id to fail, got nil")
+	}
+	domErr, ok = domain.AsDomainError(err)
+	if !ok || domErr.Code != "admission_rules_retired" {
+		t.Fatalf("expected admission_rules_retired, got %+v", domErr)
+	}
+
+	// 3. Seed a legacy admission rule directly in repository
+	legacyAdm := domain.AdmissionRule{
+		ID:         "legacy-adm-read-only",
+		RevisionID: activeRev.ID,
+		Name:       "LegacyRule",
+		Expression: "country == 'HK'",
+		Action:     domain.RuleActionAllow,
+		Position:   0,
+	}
+	if err := policyRepo.CreateAdmissionRule(ctx, &legacyAdm); err != nil {
+		t.Fatalf("failed to seed legacy admission rule: %v", err)
+	}
+
+	// Also seed a policy rule
+	polRule, err := svc.CreatePolicyRule(ctx, policy.CreatePolicyRuleCommand{
+		RevisionID:    activeRev.ID,
+		BuiltinTarget: "DIRECT",
+		Expression:    "DOMAIN-SUFFIX,google.com",
+		Position:      0,
+		RequestID:     "req-pol-valid",
+		ActorKind:     domain.ActorKindAdmin,
+	})
+	if err != nil {
+		t.Fatalf("failed to create policy rule: %v", err)
+	}
+
+	// ListRules returns both: legacy admission rule is read-only readable
+	listRes, err := svc.ListRules(ctx, policy.ListRulesQuery{RevisionID: activeRev.ID})
+	if err != nil {
+		t.Fatalf("ListRules failed: %v", err)
+	}
+	if len(listRes.AdmissionRules) != 1 || listRes.AdmissionRules[0].ID != legacyAdm.ID {
+		t.Fatalf("expected 1 legacy admission rule in list, got %+v", listRes.AdmissionRules)
+	}
+	if len(listRes.PolicyRules) != 1 || listRes.PolicyRules[0].ID != polRule.ID {
+		t.Fatalf("expected 1 policy rule in list, got %+v", listRes.PolicyRules)
+	}
+
+	// 4. DeleteAdmissionRule must reject with admission_rules_retired (422) and preserve the rule
+	err = svc.DeleteAdmissionRule(ctx, policy.DeleteRuleCommand{
+		ID:        legacyAdm.ID,
+		RequestID: "req-del-adm-reject",
+		ActorKind: domain.ActorKindAdmin,
+	})
+	if err == nil {
+		t.Fatalf("expected DeleteAdmissionRule to fail, got nil")
+	}
+	domErr, ok = domain.AsDomainError(err)
+	if !ok || domErr.Code != "admission_rules_retired" || domErr.Category != domain.CategoryValidation {
+		t.Fatalf("expected validation error admission_rules_retired, got %+v", err)
+	}
+
+	// 5. DeleteRule with explicit Kind: "admission" must also reject with admission_rules_retired
+	err = svc.DeleteRule(ctx, policy.DeleteRuleCommand{
+		ID:        legacyAdm.ID,
+		Kind:      "admission",
+		RequestID: "req-del-adm-kind",
+		ActorKind: domain.ActorKindAdmin,
+	})
+	if err == nil {
+		t.Fatalf("expected DeleteRule(kind=admission) to fail, got nil")
+	}
+	domErr, ok = domain.AsDomainError(err)
+	if !ok || domErr.Code != "admission_rules_retired" || domErr.Category != domain.CategoryValidation {
+		t.Fatalf("expected validation error admission_rules_retired, got %+v", err)
+	}
+
+	// 6. Generic DeleteRule with empty kind targeting legacy admission rule ID must NOT delete it
+	// (Fallback from policy not-found to admission deletion is completely removed)
+	err = svc.DeleteRule(ctx, policy.DeleteRuleCommand{
+		ID:        legacyAdm.ID,
+		Kind:      "",
+		RequestID: "req-del-generic-no-fallback",
+		ActorKind: domain.ActorKindAdmin,
+	})
+	if err == nil {
+		t.Fatalf("expected generic DeleteRule on admission rule ID to fail, got nil")
+	}
+	domErr, ok = domain.AsDomainError(err)
+	if !ok || domErr.Category != domain.CategoryNotFound || domErr.Code != "rule_not_found" {
+		t.Fatalf("expected NotFound rule_not_found, got %+v (%v)", domErr, err)
+	}
+
+	// Verify legacy admission rule is STILL in table
+	var admRemaining int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM admission_rules WHERE id = ?", legacyAdm.ID).Scan(&admRemaining); err != nil {
+		t.Fatalf("failed to query admission_rules count: %v", err)
+	}
+	if admRemaining != 1 {
+		t.Fatalf("expected legacy admission rule to remain in table, got count %d", admRemaining)
+	}
+
+	// 7. Generic DeleteRule with empty kind targeting policy rule ID deletes the policy rule
+	err = svc.DeleteRule(ctx, policy.DeleteRuleCommand{
+		ID:        polRule.ID,
+		Kind:      "",
+		RequestID: "req-del-pol-generic",
+		ActorKind: domain.ActorKindAdmin,
+	})
+	if err != nil {
+		t.Fatalf("expected generic DeleteRule on policy rule to succeed, got %v", err)
+	}
+
+	// Verify policy rule is gone, but legacy admission rule STILL remains
+	listAfter, err := svc.ListRules(ctx, policy.ListRulesQuery{RevisionID: activeRev.ID})
+	if err != nil {
+		t.Fatalf("ListRules failed: %v", err)
+	}
+	if len(listAfter.PolicyRules) != 0 {
+		t.Fatalf("expected 0 policy rules, got %d", len(listAfter.PolicyRules))
+	}
+	if len(listAfter.AdmissionRules) != 1 {
+		t.Fatalf("expected 1 legacy admission rule to remain, got %d", len(listAfter.AdmissionRules))
+	}
+
+	// 8. DeleteRule with invalid kind returns invalid_rule_kind (CategoryValidation)
+	err = svc.DeleteRule(ctx, policy.DeleteRuleCommand{
+		ID:        "some-id",
+		Kind:      "invalid_kind",
+		RequestID: "req-del-invalid-kind",
+		ActorKind: domain.ActorKindAdmin,
+	})
+	if err == nil {
+		t.Fatalf("expected DeleteRule with invalid kind to fail, got nil")
+	}
+	domErr, ok = domain.AsDomainError(err)
+	if !ok || domErr.Code != "invalid_rule_kind" || domErr.Category != domain.CategoryValidation {
+		t.Fatalf("expected validation error invalid_rule_kind, got %+v (%v)", domErr, err)
+	}
+}
+
+func TestPolicyService_CreatePolicyRule_CategorizedModeWithExistingMATCH(t *testing.T) {
+	ctx := context.Background()
+	db := setupTestDB(t)
+	policyRepo := sqlite.NewPolicyRepository(db)
+	revRepo := sqlite.NewRevisionRepository(db)
+	auditRepo := sqlite.NewAuditRepository(db)
+	svc := policy.NewService(policyRepo, revRepo, sqlite.NewNodeRepository(db), auditRepo)
+
+	activeRev, err := svc.EnsureActiveRevision(ctx)
+	if err != nil || activeRev == nil {
+		t.Fatalf("EnsureActiveRevision failed: %v", err)
+	}
+
+	// 1. Create two categories: "Apps" (sort_order 1) and "Final" (sort_order 99)
+	catApps, err := svc.CreateCategory(ctx, policy.CreateCategoryCommand{
+		Name:      "Apps",
+		SortOrder: 1,
+	})
+	if err != nil {
+		t.Fatalf("CreateCategory Apps failed: %v", err)
+	}
+
+	catFinal, err := svc.CreateCategory(ctx, policy.CreateCategoryCommand{
+		Name:      "Final",
+		SortOrder: 99,
+	})
+	if err != nil {
+		t.Fatalf("CreateCategory Final failed: %v", err)
+	}
+
+	// 2. Create the terminal MATCH rule in the Final category
+	matchRule, err := svc.CreatePolicyRule(ctx, policy.CreatePolicyRuleCommand{
+		RevisionID:    activeRev.ID,
+		CategoryID:    catFinal.ID,
+		Category:      catFinal.Name,
+		BuiltinTarget: "DIRECT",
+		Expression:    "MATCH",
+		Position:      0,
+		RequestID:     "req-cat-match-1",
+		ActorKind:     domain.ActorKindAdmin,
+	})
+	if err != nil {
+		t.Fatalf("failed to create terminal MATCH rule in Final category: %v", err)
+	}
+	if matchRule.ID == "" || matchRule.Expression != "MATCH" {
+		t.Fatalf("unexpected match rule view: %+v", matchRule)
+	}
+
+	// 3. Create a new routing rule in the Apps category
+	// Since categorized rules already have MATCH, appending to existing rules puts new rule after MATCH in naive slice.
+	// Our fix constructs validation candidate placing non-terminal rules before MATCH, so creation must succeed!
+	newRule, err := svc.CreatePolicyRule(ctx, policy.CreatePolicyRuleCommand{
+		RevisionID:    activeRev.ID,
+		CategoryID:    catApps.ID,
+		Category:      catApps.Name,
+		BuiltinTarget: "DIRECT",
+		Expression:    "DOMAIN-SUFFIX,openai.com",
+		Position:      0,
+		RequestID:     "req-cat-new-rule",
+		ActorKind:     domain.ActorKindAdmin,
+	})
+	if err != nil {
+		t.Fatalf("expected CreatePolicyRule in categorized mode with existing MATCH to succeed, got: %v", err)
+	}
+	if newRule.ID == "" || newRule.Expression != "DOMAIN-SUFFIX,openai.com" {
+		t.Fatalf("unexpected new rule view: %+v", newRule)
+	}
+
+	// 4. Verify ListRules returns both rules
+	listRes, err := svc.ListRules(ctx, policy.ListRulesQuery{RevisionID: activeRev.ID})
+	if err != nil {
+		t.Fatalf("ListRules failed: %v", err)
+	}
+	if len(listRes.PolicyRules) != 2 {
+		t.Fatalf("expected 2 policy rules in list, got %d", len(listRes.PolicyRules))
+	}
+
+	// 5. Verify resolver.Resolve places MATCH at the terminal position
+	res := resolver.New()
+	rulesForResolve := make([]domain.PolicyRule, len(listRes.PolicyRules))
+	for i, r := range listRes.PolicyRules {
+		rulesForResolve[i] = domain.PolicyRule{
+			ID:            r.ID,
+			RevisionID:    r.RevisionID,
+			CategoryID:    r.CategoryID,
+			Category:      r.Category,
+			BuiltinTarget: r.BuiltinTarget,
+			Expression:    r.Expression,
+			Position:      r.Position,
+			Enabled:       r.Enabled,
+		}
+	}
+	snap, err := res.Resolve(ctx, resolver.ResolveInput{
+		PolicyRules: rulesForResolve,
+	})
+	if err != nil {
+		t.Fatalf("resolver.Resolve failed: %v", err)
+	}
+	if len(snap.Rules) != 2 {
+		t.Fatalf("expected 2 resolved rules, got %d", len(snap.Rules))
+	}
+	lastResolved := snap.Rules[len(snap.Rules)-1]
+	if !lastResolved.IsTerminal || lastResolved.Expression != "MATCH" {
+		t.Fatalf("expected terminal MATCH rule at end of resolved export, got: %+v", lastResolved)
+	}
+
+	// 6. Verify attempting to add a second MATCH rule STILL fails with invalid_match_rule_ordering
+	_, err = svc.CreatePolicyRule(ctx, policy.CreatePolicyRuleCommand{
+		RevisionID:    activeRev.ID,
+		CategoryID:    catApps.ID,
+		Category:      catApps.Name,
+		BuiltinTarget: "DIRECT",
+		Expression:    "MATCH",
+		Position:      1,
+		RequestID:     "req-duplicate-match",
+		ActorKind:     domain.ActorKindAdmin,
+	})
+	if err == nil {
+		t.Fatalf("expected duplicate MATCH rule to fail validation, got nil")
+	}
+	domErr, ok = domain.AsDomainError(err)
+	if !ok || domErr.Code != "invalid_match_rule_ordering" {
+		t.Fatalf("expected invalid_match_rule_ordering error, got: %v", err)
 	}
 }

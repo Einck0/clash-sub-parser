@@ -186,45 +186,19 @@ describe('PolicyView Topology & Drawer Linkage', () => {
     expect(errorCard?.textContent).toContain('加载策略组失败')
   })
 
-  it('renders admission rules tab with min-w-0 responsive layout and break-all expressions', async () => {
-    vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
-      if (path === '/api/v1/policies/groups') return { items: [], total: 0 }
-      if (path === '/api/v1/policies/rules') {
-        return {
-          admission_rules: [
-            {
-              id: 'rule-test-1',
-              name: 'Long Expression Rule',
-              expression: 'country in ["HK","TW","SG","JP"] && protocol == "ss" && speed >= 10000000',
-              action: 'allow',
-              position: 1,
-            },
-          ],
-          routing_rules: [],
-        }
-      }
-      return { items: [], total: 0 }
-    })
-
+  it('does not render admission or routing tabs, and provides a direct link to /#/rules', async () => {
     await mountPolicyView()
 
-    // Click the admission tab
+    // No admission tab or cards
+    expect(container.querySelector('[data-testid="admission-rule-card"]')).toBeNull()
     const tabs = Array.from(container.querySelectorAll('button'))
-    const admissionTab = tabs.find((b) => b.textContent?.includes('准入规则'))
-    expect(admissionTab).toBeTruthy()
-    admissionTab?.click()
-    await nextTick()
-    await new Promise((r) => setTimeout(r, 20))
+    expect(tabs.some((b) => b.textContent?.includes('准入规则'))).toBe(false)
 
-    const ruleCard = container.querySelector('[data-testid="admission-rule-card"]')
-    expect(ruleCard).not.toBeNull()
-    expect(ruleCard?.className).toContain('min-w-0')
-    expect(ruleCard?.className).toContain('overflow-hidden')
-    expect(ruleCard?.textContent).toContain('允许')
-
-    const expr = ruleCard?.querySelector('p')
-    expect(expr?.className).toContain('break-all')
-    expect(expr?.className).toContain('whitespace-pre-wrap')
+    // Direct link to rules
+    const rulesLink = container.querySelector('[data-testid="rules-nav-link"]') as HTMLAnchorElement | null
+    expect(rulesLink).not.toBeNull()
+    expect(rulesLink?.getAttribute('href')).toBe('#/rules')
+    expect(rulesLink?.textContent).toContain('分流规则')
   })
 
   it('opens Global Filter modal, displays precedence info, and saves updated conditions', async () => {
@@ -316,81 +290,17 @@ describe('PolicyView Topology & Drawer Linkage', () => {
     expect(cards[0].textContent).not.toContain('策略组筛选条件')
   })
 
-  it('renders routing rules tab with inline error diagnostics and responsive mobile layout', async () => {
-    vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
-      if (path === '/api/v1/policies/groups') {
-        return {
-          items: [{ id: 'grp-other', name: '其他', group_type: 'select', edges: [] }],
-          total: 1,
-        }
-      }
-      if (path === '/api/v1/policies/rules') {
-        return {
-          admission_rules: [],
-          policy_rules: [
-            {
-              id: '01a0b9af-c118-72f9-9949-d94b49fa6ec2',
-              revision_id: 'rev-1',
-              target_group_id: 'grp-other',
-              expression: 'PROCESS-NAME,tr.com.kliq.app',
-              position: 0,
-            },
-          ],
-          total: 1,
-        }
-      }
-      return { items: [], total: 0 }
-    })
-
-    vi.spyOn(api, 'post').mockImplementation(async (path: string) => {
-      if (path === '/api/v1/policies/validate') {
-        return {
-          valid: false,
-          revision_id: 'rev-1',
-          errors: ['routed group 其他 has 0 available nodes'],
-          issues: [
-            {
-              code: 'empty_routed_group',
-              severity: 'error',
-              rule_id: '01a0b9af-c118-72f9-9949-d94b49fa6ec2',
-              position: 0,
-              type: 'PROCESS-NAME',
-              value: 'tr.com.kliq.app',
-              target_group_id: 'grp-other',
-              target_group_name: '其他',
-              message: 'routed group "其他" referenced by rule "PROCESS-NAME,tr.com.kliq.app" has 0 available nodes',
-            },
-          ],
-        }
-      }
-      return {}
-    })
-
+  it('confirms single-entry navigation link to /#/rules without duplicate routing rules cards', async () => {
     await mountPolicyView()
 
-    // Switch to rules tab
-    const rulesTabBtn = container.querySelector('[data-testid="rules-tab-btn"]') as HTMLElement | null
-    expect(rulesTabBtn).not.toBeNull()
-    rulesTabBtn?.click()
-    await nextTick()
-    await new Promise((r) => setTimeout(r, 20))
+    // No policy rule cards
+    expect(container.querySelector('[data-testid^="policy-rule-card-"]')).toBeNull()
 
-    // Verify rule card exists with testid
-    const ruleCard = container.querySelector('[data-testid="policy-rule-card-0"]') as HTMLElement | null
-    expect(ruleCard).not.toBeNull()
-    expect(ruleCard?.textContent).toContain('PROCESS-NAME')
-    expect(ruleCard?.textContent).toContain('tr.com.kliq.app')
-    expect(ruleCard?.textContent).toContain('其他')
-
-    // Verify inline error banner with error code and accessibility alert role
-    const inlineIssue = ruleCard?.querySelector('[role="alert"]')
-    expect(inlineIssue).not.toBeNull()
-    expect(inlineIssue?.textContent).toContain('empty_routed_group')
-    expect(inlineIssue?.textContent).toContain('routed group "其他"')
-
-    // Verify delete button is present on the rule card
-    const deleteBtn = ruleCard?.querySelector('[data-testid="delete-rule-btn-01a0b9af-c118-72f9-9949-d94b49fa6ec2"]')
-    expect(deleteBtn).not.toBeNull()
+    // Rules navigation link is present and points to #/rules
+    const rulesLink = container.querySelector('[data-testid="rules-nav-link"]') as HTMLAnchorElement | null
+    expect(rulesLink).not.toBeNull()
+    expect(rulesLink?.tagName.toLowerCase()).toBe('a')
+    expect(rulesLink?.getAttribute('href')).toBe('#/rules')
   })
 
   it('editor keeps explicit PASS and archived regex/not_regex through edit and save', async () => {

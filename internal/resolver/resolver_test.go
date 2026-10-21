@@ -369,6 +369,10 @@ func TestDeterministicResolver_MatchRulePlacedTerminal(t *testing.T) {
 }
 
 func TestDeterministicResolver_AdmissionRulesAndExpressions(t *testing.T) {
+	// FR-C3: Admission rule DSL matching is retired. Legacy admission rules
+	// (such as reject or quarantine expressions) are ignored and no longer filter active nodes.
+	// All active nodes remain admitted, and a single diagnostic warning
+	// "legacy_admission_rules_ignored" is emitted without expression text.
 	r := sourceFixtureResolver{}
 	ctx := context.Background()
 
@@ -403,17 +407,209 @@ func TestDeterministicResolver_AdmissionRulesAndExpressions(t *testing.T) {
 		t.Fatalf("resolve failed: %v", err)
 	}
 
-	if len(snap.Nodes) != 1 || snap.Nodes[0].LogicalID != nHK {
-		t.Fatalf("expected only nHK admitted, got %d nodes: %#v", len(snap.Nodes), snap.Nodes)
+	// Under retired contract, all 3 active nodes remain admitted despite legacy reject/quarantine rules
+	if len(snap.Nodes) != 3 {
+		t.Fatalf("expected all 3 active nodes admitted under retired admission contract, got %d nodes: %#v", len(snap.Nodes), snap.Nodes)
 	}
 
-	if len(snap.ExcludedNodeIDs) != 2 {
-		t.Fatalf("expected 2 excluded nodes, got %d", len(snap.ExcludedNodeIDs))
+	if len(snap.ExcludedNodeIDs) != 0 {
+		t.Fatalf("expected 0 excluded nodes (active nodes not excluded by legacy admission), got %d: %v", len(snap.ExcludedNodeIDs), snap.ExcludedNodeIDs)
 	}
 
 	group := snap.Groups[0]
-	if len(group.Members) != 1 || group.Members[0].TargetID != nHK {
-		t.Fatalf("expected group to contain only nHK, got %#v", group.Members)
+	if len(group.Members) != 3 {
+		t.Fatalf("expected group to contain all 3 admitted members, got %d: %#v", len(group.Members), group.Members)
+	}
+
+	// Verify exactly one stable diagnostic warning is emitted for legacy admission rules
+	legacyDiagCount := 0
+	for _, d := range snap.Diagnostics {
+		if d.Code == "legacy_admission_rules_ignored" {
+			legacyDiagCount++
+			if d.Severity != resolver.DiagnosticSeverityWarning {
+				t.Errorf("expected warning severity for legacy_admission_rules_ignored, got: %s", d.Severity)
+			}
+			if strings.Contains(d.Message, "country == 'US'") || strings.Contains(d.Message, "contains 'Quarantined'") {
+				t.Errorf("diagnostic message must NOT contain raw expression text, got: %s", d.Message)
+			}
+		}
+	}
+	if legacyDiagCount != 1 {
+		t.Fatalf("expected exactly 1 legacy_admission_rules_ignored diagnostic, got %d", legacyDiagCount)
+	}
+}
+
+func TestDeterministicResolver_WARPGroup_LegacyAdmissionIgnored_RiskAndInactiveStillExcluded(t *testing.T) {
+	// FR-C3 & Spec Scenario 2:
+	// Active VLESS node has legacy admission rule (reject protocol vless), does not match global filter,
+	// but belongs to a WARP group with InheritGlobalFilter = false.
+	// Contract:
+	// 1. Legacy admission reject rule is ignored -> node is admitted at admission layer.
+	// 2. WARP group (InheritGlobalFilter = false) can reference and include the active VLESS node.
+	// 3. Normal group (InheritGlobalFilter = true) filters it out via GlobalFilter.
+	// 4. Inactive VLESS node and risk-excluded VLESS node are strictly excluded by hard constraints,
+	//    and cannot enter either normal or WARP groups.
+	// 5. Exactly 1 stable diagnostic warning legacy_admission_rules_ignored is emitted without expression text.
+	r := resolver.New()
+	ctx := context.Background()
+
+	proxyGroupID := domain.MustNewUUIDv7()
+	warpGroupID := domain.MustNewUUIDv7()
+
+	nHK := domain.Node{
+		LogicalID:   testNodeLogicalID("node-hk-vmess"),
+		DisplayName: "HK Active VMess",
+		Protocol:    domain.ProtocolVMess,
+		Active:      true,
+	}
+	nWARPActive := domain.Node{
+		LogicalID:   testNodeLogicalID("node-warp-active-vless"),
+		DisplayName: "WARP Active VLess",
+		Protocol:    domain.ProtocolVLess,
+		Active:      true,
+	}
+	nWARPInactive := domain.Node{
+		LogicalID:   testNodeLogicalID("node-warp-inactive-vless"),
+		DisplayName: "WARP Inactive VLess",
+		Protocol:    domain.ProtocolVLess,
+		Active:      false,
+	}
+	nWARPRisk := domain.Node{
+		LogicalID:   testNodeLogicalID("node-warp-risk-vless"),
+		DisplayName: "WARP Risk VLess",
+		Protocol:    domain.ProtocolVLess,
+		Active:      true,
+	}
+
+	input := resolver.ResolveInput{
+		RevisionID:         "rev-warp-admission-test",
+		InventoryWatermark: "wm-warp-1",
+		CompilerVersion:    "1.0.0",
+		Nodes:              []domain.Node{nHK, nWARPActive, nWARPInactive, nWARPRisk},
+		ExcludedNodeIDs:    []string{nWARPRisk.LogicalID}, // Explicit risk exclusion hard constraint
+		Groups: []domain.NodeGroup{
+			{
+				ID:                  proxyGroupID,
+				Name:                "PROXY",
+				GroupType:           domain.GroupTypeSelect,
+				InheritGlobalFilter: true,
+				Sources: []domain.MemberSource{
+					{ID: "s1", GroupID: proxyGroupID, Operation: domain.OperationAdd, Kind: domain.SourceKindManualNode, Position: 0, NodeLogicalID: &nHK.LogicalID},
+					{ID: "s2", GroupID: proxyGroupID, Operation: domain.OperationAdd, Kind: domain.SourceKindManualNode, Position: 1, NodeLogicalID: &nWARPActive.LogicalID},
+				},
+			},
+			{
+				ID:                  warpGroupID,
+				Name:                "WARP",
+				GroupType:           domain.GroupTypeSelect,
+				InheritGlobalFilter: false,
+				Sources: []domain.MemberSource{
+					{ID: "w1", GroupID: warpGroupID, Operation: domain.OperationAdd, Kind: domain.SourceKindManualNode, Position: 0, NodeLogicalID: &nHK.LogicalID},
+					{ID: "w2", GroupID: warpGroupID, Operation: domain.OperationAdd, Kind: domain.SourceKindManualNode, Position: 1, NodeLogicalID: &nWARPActive.LogicalID},
+					{ID: "w3", GroupID: warpGroupID, Operation: domain.OperationAdd, Kind: domain.SourceKindManualNode, Position: 2, NodeLogicalID: &nWARPInactive.LogicalID},
+					{ID: "w4", GroupID: warpGroupID, Operation: domain.OperationAdd, Kind: domain.SourceKindManualNode, Position: 3, NodeLogicalID: &nWARPRisk.LogicalID},
+				},
+			},
+		},
+		GlobalFilter: &domain.NodeFilterSpec{
+			Conditions: []domain.FilterCondition{
+				// Global filter allows only VMess protocols
+				{Field: domain.FilterFieldProtocol, Op: domain.FilterOpEquals, Value: "vmess"},
+			},
+		},
+		AdmissionRules: []domain.AdmissionRule{
+			{ID: "adm1", Name: "legacy-reject-vless", Expression: "protocol == 'vless'", Action: domain.RuleActionReject, Position: 0},
+			{ID: "adm2", Name: "legacy-quarantine-warp", Expression: "name contains 'WARP'", Action: domain.RuleActionQuarantine, Position: 1},
+		},
+		PolicyRules: []domain.PolicyRule{
+			{ID: "r1", TargetGroupID: proxyGroupID, Expression: "MATCH", Position: 0},
+		},
+		DNS: resolver.DNSConfig{Enabled: true, Nameservers: []string{"1.1.1.1"}},
+	}
+
+	snap, err := r.Resolve(ctx, input)
+	if err != nil {
+		t.Fatalf("resolve failed: %v", err)
+	}
+
+	// 1. Verify Normal Group (InheritGlobalFilter = true):
+	// - Contains nHK (matches global filter)
+	// - Does NOT contain nWARPActive (filtered by global filter)
+	var proxyGroup *resolver.ResolvedGroup
+	var warpGroup *resolver.ResolvedGroup
+	for i := range snap.Groups {
+		if snap.Groups[i].ID == proxyGroupID {
+			proxyGroup = &snap.Groups[i]
+		}
+		if snap.Groups[i].ID == warpGroupID {
+			warpGroup = &snap.Groups[i]
+		}
+	}
+	if proxyGroup == nil || warpGroup == nil {
+		t.Fatalf("expected both proxy and warp groups in snapshot")
+	}
+
+	if len(proxyGroup.Members) != 1 || proxyGroup.Members[0].TargetID != nHK.LogicalID {
+		t.Fatalf("expected proxy group to only contain nHK, got: %#v", proxyGroup.Members)
+	}
+
+	// 2. Verify WARP Group (InheritGlobalFilter = false):
+	// - Contains nHK
+	// - Contains nWARPActive (exempt from global filter, and legacy admission reject is ignored!)
+	// - Does NOT contain nWARPInactive (hard inactive constraint excluded at admission)
+	// - Does NOT contain nWARPRisk (hard risk constraint excluded at admission)
+	warpMemberIDs := make(map[string]bool)
+	for _, m := range warpGroup.Members {
+		warpMemberIDs[m.TargetID] = true
+	}
+	if !warpMemberIDs[nHK.LogicalID] {
+		t.Errorf("expected WARP group to contain nHK")
+	}
+	if !warpMemberIDs[nWARPActive.LogicalID] {
+		t.Errorf("expected WARP group to contain active nWARPActive (legacy reject rule must be ignored and global filter exempted)")
+	}
+	if warpMemberIDs[nWARPInactive.LogicalID] {
+		t.Errorf("WARP group must NOT contain inactive node nWARPInactive")
+	}
+	if warpMemberIDs[nWARPRisk.LogicalID] {
+		t.Errorf("WARP group must NOT contain risk-excluded node nWARPRisk")
+	}
+	if len(warpGroup.Members) != 2 {
+		t.Fatalf("expected exactly 2 members in WARP group, got %d: %#v", len(warpGroup.Members), warpGroup.Members)
+	}
+
+	// 3. ExcludedNodeIDs must contain nWARPInactive and nWARPRisk
+	excludedMap := make(map[string]bool)
+	for _, id := range snap.ExcludedNodeIDs {
+		excludedMap[id] = true
+	}
+	if !excludedMap[nWARPInactive.LogicalID] {
+		t.Errorf("expected nWARPInactive in ExcludedNodeIDs")
+	}
+	if !excludedMap[nWARPRisk.LogicalID] {
+		t.Errorf("expected nWARPRisk in ExcludedNodeIDs")
+	}
+	if excludedMap[nWARPActive.LogicalID] {
+		t.Errorf("nWARPActive must NOT be in ExcludedNodeIDs")
+	}
+
+	// 4. Verify diagnostics
+	var legacyDiagFound bool
+	var legacyDiagCount int
+	for _, d := range snap.Diagnostics {
+		if d.Code == "legacy_admission_rules_ignored" {
+			legacyDiagCount++
+			legacyDiagFound = true
+			if d.Severity != resolver.DiagnosticSeverityWarning {
+				t.Errorf("expected warning severity for legacy_admission_rules_ignored, got: %s", d.Severity)
+			}
+			if strings.Contains(d.Message, "vless") || strings.Contains(d.Message, "WARP") {
+				t.Errorf("legacy_admission_rules_ignored diagnostic message must NOT contain raw expression text: %s", d.Message)
+			}
+		}
+	}
+	if !legacyDiagFound || legacyDiagCount != 1 {
+		t.Errorf("expected exactly 1 legacy_admission_rules_ignored diagnostic, got count: %d", legacyDiagCount)
 	}
 }
 

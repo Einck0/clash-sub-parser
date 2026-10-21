@@ -148,7 +148,7 @@ func registerPolicyRoutes(r chi.Router, service *policy.Service, audit domain.Au
 	r.Route("/admission", func(sub chi.Router) {
 		sub.Get("/rules", h.listRules)
 		sub.Post("/rules", h.createAdmissionRule)
-		sub.Delete("/rules/{id}", h.deleteRule)
+		sub.Delete("/rules/{id}", h.deleteAdmissionRule)
 	})
 }
 
@@ -243,13 +243,13 @@ func (h policyHandler) createGroup(w http.ResponseWriter, r *http.Request) {
 		InheritGlobalFilter: body.InheritGlobalFilter,
 		ID:                  body.ID,
 		Name:                body.Name,
-		GroupType:         body.GroupType,
-		Position:          body.Position,
-		Sources:           body.Sources,
-		Edges:             body.Edges,
-		NodeFilter:        body.NodeFilter,
-		RequestID:         GetRequestID(r.Context()),
-		ActorKind:         requestActorKind(r),
+		GroupType:           body.GroupType,
+		Position:            body.Position,
+		Sources:             body.Sources,
+		Edges:               body.Edges,
+		NodeFilter:          body.NodeFilter,
+		RequestID:           GetRequestID(r.Context()),
+		ActorKind:           requestActorKind(r),
 	})
 	if err != nil {
 		WriteDomainError(w, r, err)
@@ -296,13 +296,13 @@ func (h policyHandler) updateGroup(w http.ResponseWriter, r *http.Request) {
 		InheritGlobalFilter: body.InheritGlobalFilter,
 		ID:                  id,
 		Name:                body.Name,
-		GroupType:         body.GroupType,
-		Position:          body.Position,
-		ExpectedRevision:  body.ExpectedRevision,
-		Sources:           body.Sources,
-		Edges:             body.Edges,
-		RequestID:         GetRequestID(r.Context()),
-		ActorKind:         requestActorKind(r),
+		GroupType:           body.GroupType,
+		Position:            body.Position,
+		ExpectedRevision:    body.ExpectedRevision,
+		Sources:             body.Sources,
+		Edges:               body.Edges,
+		RequestID:           GetRequestID(r.Context()),
+		ActorKind:           requestActorKind(r),
 	}
 
 	if rawFilter, exists := raw["node_filter"]; exists {
@@ -337,9 +337,9 @@ func (h policyHandler) previewGroup(w http.ResponseWriter, r *http.Request) {
 		EmptyFallbackPass:   body.EmptyFallbackPass,
 		InheritGlobalFilter: body.InheritGlobalFilter,
 		Sources:             body.Sources,
-		Target:            body.Target,
-		RequestID:         GetRequestID(r.Context()),
-		ActorKind:         requestActorKind(r),
+		Target:              body.Target,
+		RequestID:           GetRequestID(r.Context()),
+		ActorKind:           requestActorKind(r),
 	})
 	if err != nil {
 		WriteDomainError(w, r, err)
@@ -507,6 +507,11 @@ func (h policyHandler) createRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if kind != "" && kind != "policy" {
+		WriteDomainError(w, r, domain.NewValidationError("invalid_rule_kind", fmt.Sprintf("unsupported rule kind: %s", body.Kind)))
+		return
+	}
+
 	polView, err := h.service.CreatePolicyRule(r.Context(), policy.CreatePolicyRuleCommand{
 		RevisionID:    body.RevisionID,
 		CategoryID:    body.CategoryID,
@@ -614,6 +619,20 @@ func (h policyHandler) deleteRule(w http.ResponseWriter, r *http.Request) {
 	err := h.service.DeleteRule(r.Context(), policy.DeleteRuleCommand{
 		ID:        id,
 		Kind:      kind,
+		RequestID: GetRequestID(r.Context()),
+		ActorKind: requestActorKind(r),
+	})
+	if err != nil {
+		WriteDomainError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h policyHandler) deleteAdmissionRule(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	err := h.service.DeleteAdmissionRule(r.Context(), policy.DeleteRuleCommand{
+		ID:        id,
 		RequestID: GetRequestID(r.Context()),
 		ActorKind: requestActorKind(r),
 	})

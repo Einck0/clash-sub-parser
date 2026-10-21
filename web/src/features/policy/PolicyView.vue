@@ -1,42 +1,31 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
   PlusIcon,
   CheckBadgeIcon,
   ExclamationTriangleIcon,
-  ShieldCheckIcon,
   CpuChipIcon,
   Squares2X2Icon,
   GlobeAltIcon,
-  TrashIcon,
   ArrowPathIcon,
   MagnifyingGlassIcon,
 } from '@heroicons/vue/24/outline'
 import { usePolicy } from './usePolicy'
 import type {
   FilterCondition,
-  FilterField,
-  FilterOp,
   MemberSource,
   GroupType,
   PolicyGroup,
-  PolicyRule,
-  RuleAction,
 } from './policyTypes'
 import {
   ALL_GROUP_TYPES,
   MODERN_RULE_CAPABILITY_MATRIX,
-  SUPPORTED_FILTER_FIELDS,
-  ruleActionLabel,
-  ruleActionTone,
-  validateConditionInput,
 } from './policyTypes'
 import GroupCard from './GroupCard.vue'
 import PolicyEditorSheet from './PolicyEditorSheet.vue'
 import StructuredFilterEditor from './StructuredFilterEditor.vue'
 import ConfirmModal from '../../ui/ConfirmModal.vue'
 import ModalDialog from '../../ui/ModalDialog.vue'
-import StatusBadge from '../../ui/StatusBadge.vue'
 import ErrorStateCard from '../../ui/ErrorStateCard.vue'
 import { useNodes } from '../nodes/useNodes'
 import { t } from '../../locales'
@@ -44,8 +33,6 @@ import { t } from '../../locales'
 const {
   groups,
   globalFilter,
-  admissionRules,
-  policyRules,
   loading,
   saving,
   savingGlobalFilter,
@@ -68,58 +55,16 @@ const {
   updateGroup,
   moveGroup,
   deleteGroup,
-  loadRules,
-  createAdmissionRule,
-  createPolicyRule,
-  deleteRule,
   validateGraph,
   loadGlobalFilter,
   updateGlobalFilter,
 } = usePolicy()
-
-const activeTab = ref<'groups' | 'rules' | 'admission'>('groups')
-
-const sortedPolicyRules = computed(() => {
-  return [...policyRules.value].sort((a, b) => a.position - b.position)
-})
 
 const hasWarningOrErrorIssues = computed(() => {
   return validationResult.value?.issues?.some(
     (issue) => issue.severity === 'warning' || issue.severity === 'error'
   ) ?? false
 })
-
-function getTargetGroupName(groupId: string): string {
-  const all = allTopologyGroups.value.length > 0 ? allTopologyGroups.value : groups.value
-  const g = all.find((grp) => grp.id === groupId)
-  return g ? g.name : groupId
-}
-
-function getRuleIssue(ruleId: string, position: number) {
-  if (!validationResult.value?.issues) return null
-  return validationResult.value.issues.find(
-    (iss) => (iss.rule_id && iss.rule_id === ruleId) || iss.position === position
-  )
-}
-
-function parseRuleExpression(expr: string) {
-  const trimmed = expr.trim()
-  if (
-    trimmed.toUpperCase() === 'MATCH' ||
-    trimmed.toUpperCase().startsWith('MATCH,') ||
-    trimmed.toUpperCase().startsWith('MATCH ') ||
-    trimmed.toUpperCase() === 'FINAL' ||
-    trimmed.toUpperCase().startsWith('FINAL,') ||
-    trimmed.toUpperCase().startsWith('FINAL ')
-  ) {
-    return { type: 'MATCH', value: '' }
-  }
-  const parts = trimmed.split(',')
-  if (parts.length >= 2) {
-    return { type: parts[0].trim(), value: parts.slice(1).join(',').trim() }
-  }
-  return { type: trimmed, value: '' }
-}
 
 const groupSearchInput = ref('')
 let groupSearchDebounceTimer: ReturnType<typeof setTimeout> | null = null
@@ -142,27 +87,6 @@ function handlePrevPage() {
 function handleNextPage() {
   if (page.value * pageSize.value < totalGroups.value) {
     loadGroups(page.value + 1, pageSize.value, groupSearchInput.value)
-  }
-}
-
-const confirmDeleteRuleOpen = ref(false)
-const pendingDeleteRuleId = ref<string | null>(null)
-const deletingRule = ref(false)
-
-function handleDeleteRule(id: string) {
-  pendingDeleteRuleId.value = id
-  confirmDeleteRuleOpen.value = true
-}
-
-async function handleConfirmDeleteRule() {
-  if (!pendingDeleteRuleId.value) return
-  deletingRule.value = true
-  try {
-    await deleteRule(pendingDeleteRuleId.value)
-    confirmDeleteRuleOpen.value = false
-    pendingDeleteRuleId.value = null
-  } finally {
-    deletingRule.value = false
   }
 }
 
@@ -209,12 +133,6 @@ function handleSheetClose() {
   cycleData.value = null
   sheetServerError.value = null
 }
-
-// Admission Rule Modal State
-const ruleModalOpen = ref(false)
-const ruleName = ref('')
-const ruleExpression = ref('')
-const ruleAction = ref<RuleAction>('allow')
 
 function openCreateGroup() {
   activeGroup.value = null
@@ -343,22 +261,6 @@ async function handleConfirmDeleteGroup() {
   }
 }
 
-async function submitAdmissionRule() {
-  try {
-    await createAdmissionRule({
-      name: ruleName.value,
-      expression: ruleExpression.value,
-      action: ruleAction.value,
-    })
-    ruleModalOpen.value = false
-    ruleName.value = ''
-    ruleExpression.value = ''
-    ruleAction.value = 'allow'
-  } catch {
-    // error handled in usePolicy
-  }
-}
-
 onMounted(() => {
   void reload()
   loadNodes()
@@ -382,6 +284,15 @@ onUnmounted(() => {
       </div>
 
       <div class="flex flex-wrap items-center gap-2 shrink-0">
+        <a
+          href="#/rules"
+          data-testid="rules-nav-link"
+          class="btn btn-outline btn-sm gap-2"
+        >
+          <ArrowPathIcon class="w-4 h-4 text-primary" />
+          {{ t('policy.routingRulesTab') }}
+        </a>
+
         <button
           type="button"
           data-testid="global-filter-btn"
@@ -411,23 +322,13 @@ onUnmounted(() => {
         </button>
 
         <button
-          v-if="activeTab === 'groups'"
           type="button"
+          data-testid="add-group-btn"
           class="btn btn-primary btn-sm gap-2"
           @click="openCreateGroup"
         >
           <PlusIcon class="w-4 h-4" />
           {{ t('policy.addGroup') }}
-        </button>
-
-        <button
-          v-else
-          type="button"
-          class="btn btn-primary btn-sm gap-2"
-          @click="ruleModalOpen = true"
-        >
-          <PlusIcon class="w-4 h-4" />
-          {{ t('policy.addRule') }}
         </button>
       </div>
     </div>
@@ -571,40 +472,8 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- Navigation Tabs -->
-    <div class="flex flex-wrap items-center gap-2 border-b border-base-300 pb-2 text-xs w-full min-w-0">
-      <button
-        type="button"
-        class="btn btn-sm gap-2"
-        :class="activeTab === 'groups' ? 'btn-primary' : 'btn-ghost'"
-        @click="activeTab = 'groups'"
-      >
-        <CpuChipIcon class="w-4 h-4" />
-        {{ t('policy.groupsTab') }} ({{ groups.length }})
-      </button>
-      <button
-        type="button"
-        data-testid="rules-tab-btn"
-        class="btn btn-sm gap-2"
-        :class="activeTab === 'rules' ? 'btn-primary' : 'btn-ghost'"
-        @click="activeTab = 'rules'"
-      >
-        <ArrowPathIcon class="w-4 h-4" />
-        {{ t('policy.routingRulesTab') }} ({{ policyRules.length }})
-      </button>
-      <button
-        type="button"
-        class="btn btn-sm gap-2"
-        :class="activeTab === 'admission' ? 'btn-primary' : 'btn-ghost'"
-        @click="activeTab = 'admission'"
-      >
-        <ShieldCheckIcon class="w-4 h-4" />
-        {{ t('policy.rulesTab') }} ({{ admissionRules.length }})
-      </button>
-    </div>
-
-    <!-- Tab 1: Policy Groups View -->
-    <div v-if="activeTab === 'groups'" class="space-y-4">
+    <!-- Policy Groups View -->
+    <div class="space-y-4">
       <!-- Search & Pagination Controls Bar -->
       <div
         data-testid="policy-groups-toolbar"
@@ -689,128 +558,6 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- Tab 2: Policy Routing Rules View -->
-    <div v-else-if="activeTab === 'rules'" class="space-y-4">
-      <div
-        v-if="policyRules.length === 0"
-        class="rounded-box border border-dashed border-base-300 p-12 text-center"
-      >
-        <ArrowPathIcon class="w-10 h-10 mx-auto opacity-40 text-primary" />
-        <p class="mt-3 font-semibold text-base">{{ t('policy.emptyPolicyRulesTitle') }}</p>
-        <p class="mt-1 text-sm opacity-60">
-          {{ t('policy.emptyPolicyRulesDesc') }}
-        </p>
-      </div>
-
-      <div v-else class="space-y-2.5">
-        <article
-          v-for="rule in sortedPolicyRules"
-          :key="rule.id"
-          :data-testid="`policy-rule-card-${rule.position}`"
-          class="rounded-xl border border-base-300 bg-base-100 p-3 sm:p-4 transition hover:border-primary/40 space-y-2"
-        >
-          <div class="flex flex-wrap items-center justify-between gap-2">
-            <div class="flex items-center gap-2">
-              <span class="badge badge-neutral badge-sm font-mono font-bold">
-                #{{ rule.position + 1 }}
-              </span>
-              <span class="badge badge-primary badge-outline badge-sm font-mono font-semibold">
-                {{ parseRuleExpression(rule.expression).type }}
-              </span>
-              <span class="text-xs font-mono opacity-80 truncate max-w-xs sm:max-w-md">
-                {{ parseRuleExpression(rule.expression).value || rule.expression }}
-              </span>
-            </div>
-
-            <div class="flex items-center gap-2">
-              <div class="text-xs flex items-center gap-1.5 bg-base-200 px-2.5 py-1 rounded-lg">
-                <span class="opacity-60 text-[11px]">指向策略组:</span>
-                <span class="font-semibold text-primary truncate max-w-[140px]">
-                  {{ getTargetGroupName(rule.target_group_id) }}
-                </span>
-              </div>
-
-              <button
-                type="button"
-                :data-testid="`delete-rule-btn-${rule.id}`"
-                class="btn btn-ghost btn-xs btn-square text-error"
-                title="删除分流规则"
-                @click="handleDeleteRule(rule.id)"
-              >
-                <TrashIcon class="w-4 h-4" />
-              </button>
-            </div>
-          </div>
-
-          <!-- Associated Validation Finding on Rule -->
-          <div
-            v-if="getRuleIssue(rule.id, rule.position)"
-            role="alert"
-            aria-live="polite"
-            class="mt-1 px-3 py-1.5 rounded-lg text-xs flex items-start gap-2"
-            :class="getRuleIssue(rule.id, rule.position)?.severity === 'error' ? 'bg-error/10 text-error border border-error/20' : 'bg-warning/10 text-warning border border-warning/20'"
-          >
-            <ExclamationTriangleIcon class="w-4 h-4 flex-shrink-0 mt-0.5" />
-            <div class="min-w-0">
-              <span class="font-bold mr-1">
-                [{{ getRuleIssue(rule.id, rule.position)?.code }}]
-              </span>
-              <span>{{ getRuleIssue(rule.id, rule.position)?.message }}</span>
-            </div>
-          </div>
-        </article>
-      </div>
-    </div>
-
-    <!-- Tab 3: Admission Rules View -->
-    <div v-else-if="activeTab === 'admission'" class="space-y-4">
-      <div
-        v-if="admissionRules.length === 0"
-        class="rounded-box border border-dashed border-base-300 p-12 text-center"
-      >
-        <ShieldCheckIcon class="w-10 h-10 mx-auto opacity-40 text-primary" />
-        <p class="mt-3 font-semibold text-base">暂无准入规则</p>
-        <p class="mt-1 text-sm opacity-60">
-          定义节点准入条件以过滤并分类导入的节点（允许、拒绝、隔离）。
-        </p>
-        <button
-          type="button"
-          class="btn btn-primary btn-sm mt-4 gap-2"
-          @click="ruleModalOpen = true"
-        >
-          <PlusIcon class="w-4 h-4" />
-          {{ t('policy.addRule') }}
-        </button>
-      </div>
-
-      <div v-else class="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr))] w-full min-w-0">
-        <article
-          v-for="rule in admissionRules"
-          :key="rule.id"
-          data-testid="admission-rule-card"
-          class="card border border-base-300 bg-base-200 shadow-sm p-4 rounded-xl transition-all duration-200 ease-out hover:border-primary/40 active:scale-[0.99] min-w-0 w-full overflow-hidden"
-        >
-          <div class="flex items-start justify-between gap-2 min-w-0">
-            <div class="min-w-0 flex-1">
-              <h4 class="font-bold text-sm truncate">{{ rule.name }}</h4>
-              <p class="mt-1 font-mono text-xs bg-base-100 p-2 rounded-lg border border-base-300/60 overflow-x-auto whitespace-pre-wrap break-all max-w-full">
-                {{ rule.expression }}
-              </p>
-            </div>
-            <StatusBadge
-              class="shrink-0"
-              :label="ruleActionLabel(rule.action)"
-              :tone="ruleActionTone(rule.action)"
-            />
-          </div>
-          <div class="mt-2.5 pt-2 border-t border-base-300/60 text-[11px] opacity-60 flex justify-between font-mono min-w-0">
-            <span class="shrink-0">优先级序号：{{ rule.position }}</span>
-            <span class="truncate ml-2 text-right">ID: {{ rule.id }}</span>
-          </div>
-        </article>
-      </div>
-    </div>
-
     <!-- Global Filter Modal Dialog -->
     <ModalDialog
       v-model="globalFilterModalOpen"
@@ -869,68 +616,6 @@ onUnmounted(() => {
       @clear-conflict="conflictData = null"
     />
 
-    <!-- Add Admission Rule Modal -->
-    <ModalDialog
-      v-model="ruleModalOpen"
-      title="新建准入规则"
-      description="准入规则在节点入库前评估节点属性并决定放行、拒绝或隔离"
-    >
-      <form class="space-y-4" @submit.prevent="submitAdmissionRule">
-        <label class="form-control">
-          <span class="label-text text-xs font-semibold">规则名称</span>
-          <input
-            v-model="ruleName"
-            required
-            placeholder="例如：拒绝低速节点 或 允许香港节点"
-            class="input input-bordered input-sm mt-1"
-          />
-        </label>
-
-        <label class="form-control">
-          <span class="label-text text-xs font-semibold">规则表达式</span>
-          <input
-            v-model="ruleExpression"
-            required
-            placeholder="例如：country in ['HK', 'TW'] && protocol == 'ss'"
-            class="input input-bordered input-sm font-mono text-xs mt-1"
-          />
-        </label>
-
-        <div>
-          <span class="label-text text-xs font-semibold block mb-1.5">准入动作</span>
-          <div class="flex gap-2">
-            <label
-              v-for="act in (['allow', 'reject', 'quarantine'] as RuleAction[])"
-              :key="act"
-              class="flex items-center gap-2 p-2 px-3 rounded-lg border border-base-300 bg-base-200/50 cursor-pointer text-xs font-medium"
-              :class="{ 'border-primary bg-primary/10 text-primary': ruleAction === act }"
-            >
-              <input
-                v-model="ruleAction"
-                type="radio"
-                :value="act"
-                class="radio radio-primary radio-xs"
-              />
-              <span>{{ ruleActionLabel(act) }}</span>
-            </label>
-          </div>
-        </div>
-
-        <div class="modal-action border-t border-base-300 pt-3">
-          <button type="button" class="btn btn-ghost btn-sm" @click="ruleModalOpen = false">
-            取消
-          </button>
-          <button
-            type="submit"
-            class="btn btn-primary btn-sm"
-            :disabled="!ruleName.trim() || !ruleExpression.trim()"
-          >
-            创建规则
-          </button>
-        </div>
-      </form>
-    </ModalDialog>
-
     <!-- Confirm Delete Policy Group Modal -->
     <ConfirmModal
       v-model="confirmDeleteGroupOpen"
@@ -941,14 +626,6 @@ onUnmounted(() => {
       tone="danger"
       :loading="deletingGroup"
       @confirm="handleConfirmDeleteGroup"
-    />
-    <ConfirmModal
-      :open="confirmDeleteRuleOpen"
-      title="删除分流规则"
-      :message="t('policy.deletePolicyRuleConfirm')"
-      :confirming="deletingRule"
-      @confirm="handleConfirmDeleteRule"
-      @cancel="confirmDeleteRuleOpen = false"
     />
   </section>
 </template>

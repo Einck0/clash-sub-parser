@@ -556,76 +556,13 @@ func (s *Service) GetGroupEdges(ctx context.Context, groupID string) ([]GroupEdg
 	return views, nil
 }
 
-// CreateAdmissionRule validates and persists an admission rule.
+// CreateAdmissionRule rejects writes because admission rules have been retired.
 func (s *Service) CreateAdmissionRule(ctx context.Context, cmd CreateAdmissionRuleCommand) (*AdmissionRuleView, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	name := strings.TrimSpace(cmd.Name)
-	if name == "" {
-		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "admission_rule.create", domain.AuditResultFailure, "empty name")
-		return nil, domain.NewValidationError("invalid_admission_rule_name", "admission rule name cannot be empty")
-	}
-
-	expr := strings.TrimSpace(cmd.Expression)
-	if expr == "" {
-		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "admission_rule.create", domain.AuditResultFailure, "empty expression")
-		return nil, domain.NewValidationError("invalid_expression", "admission rule expression cannot be empty")
-	}
-
-	if !cmd.Action.IsValid() {
-		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "admission_rule.create", domain.AuditResultFailure, fmt.Sprintf("invalid rule action: %s", cmd.Action))
-		return nil, domain.NewValidationError("invalid_rule_action", fmt.Sprintf("unsupported rule action: %s", cmd.Action))
-	}
-
-	if cmd.Position < 0 {
-		return nil, domain.NewValidationError("invalid_position", "position must be non-negative")
-	}
-
-	ruleID := cmd.ID
-	if ruleID == "" {
-		var err error
-		ruleID, err = domain.NewUUIDv7()
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	revID := strings.TrimSpace(cmd.RevisionID)
-	if revID == "" {
-		active, err := s.ensureActiveRevisionLocked(ctx)
-		if err != nil {
-			return nil, err
-		}
-		if active == nil {
-			return nil, domain.NewValidationError("missing_revision_id", "no active revision exists; specify a revision_id or activate a revision")
-		}
-		revID = active.ID
-	}
-
-	rule := domain.AdmissionRule{
-		ID:         ruleID,
-		RevisionID: revID,
-		Name:       name,
-		Expression: expr,
-		Action:     cmd.Action,
-		Position:   cmd.Position,
-	}
-
-	if err := s.policyRepo.CreateAdmissionRule(ctx, &rule); err != nil {
-		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "admission_rule.create", domain.AuditResultFailure, fmt.Sprintf("failed to save admission rule: %v", err))
-		return nil, err
-	}
-
-	s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "admission_rule.create", domain.AuditResultSuccess, fmt.Sprintf("id=%s, name=%s", rule.ID, rule.Name))
-	return &AdmissionRuleView{
-		ID:         rule.ID,
-		RevisionID: rule.RevisionID,
-		Name:       rule.Name,
-		Expression: rule.Expression,
-		Action:     rule.Action,
-		Position:   rule.Position,
-	}, nil
+	s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "admission_rule.create", domain.AuditResultFailure, "admission rules are retired")
+	return nil, domain.NewValidationError("admission_rules_retired", "准入规则已退役，请改用全局规则或组成员筛选")
 }
 
 // CreatePolicyRule validates target existence and MATCH ordering before persisting a policy rule.
@@ -716,7 +653,31 @@ func (s *Service) CreatePolicyRule(ctx context.Context, cmd CreatePolicyRuleComm
 	}
 
 	combinedRules := append(existingRules, newRule)
-	if err := ValidatePolicyRules(combinedRules, nil); err != nil {
+
+	validationRules := combinedRules
+	hasCategories := false
+	for _, r := range combinedRules {
+		if r.CategoryID != "" || (r.Category != "" && r.Category != "default") {
+			hasCategories = true
+			break
+		}
+	}
+
+	if hasCategories {
+		candidate := make([]domain.PolicyRule, 0, len(combinedRules))
+		terminalRules := make([]domain.PolicyRule, 0, 1)
+		for _, r := range combinedRules {
+			if domain.IsMatchRule(r.Expression) {
+				terminalRules = append(terminalRules, r)
+			} else {
+				candidate = append(candidate, r)
+			}
+		}
+		candidate = append(candidate, terminalRules...)
+		validationRules = candidate
+	}
+
+	if err := ValidatePolicyRules(validationRules, nil); err != nil {
 		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_rule.create", domain.AuditResultFailure, fmt.Sprintf("rule validation failed: %v", err))
 		return nil, err
 	}
@@ -1006,12 +967,8 @@ func (s *Service) DeleteRule(ctx context.Context, cmd DeleteRuleCommand) error {
 	kind := strings.ToLower(strings.TrimSpace(cmd.Kind))
 	switch kind {
 	case "admission":
-		if err := s.policyRepo.DeleteAdmissionRule(ctx, id); err != nil {
-			s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "admission_rule.delete", domain.AuditResultFailure, fmt.Sprintf("rule %s: %v", id, err))
-			return err
-		}
-		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "admission_rule.delete", domain.AuditResultSuccess, fmt.Sprintf("id=%s", id))
-		return nil
+		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "admission_rule.delete", domain.AuditResultFailure, "admission rules are retired")
+		return domain.NewValidationError("admission_rules_retired", "准入规则已退役，历史规则为只读且不支持删除，请改用全局规则或组成员筛选")
 	case "policy":
 		if err := s.policyRepo.DeletePolicyRule(ctx, id); err != nil {
 			s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_rule.delete", domain.AuditResultFailure, fmt.Sprintf("rule %s: %v", id, err))
@@ -1020,22 +977,12 @@ func (s *Service) DeleteRule(ctx context.Context, cmd DeleteRuleCommand) error {
 		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_rule.delete", domain.AuditResultSuccess, fmt.Sprintf("id=%s", id))
 		return nil
 	case "":
-		err := s.policyRepo.DeletePolicyRule(ctx, id)
-		if err == nil {
-			s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_rule.delete", domain.AuditResultSuccess, fmt.Sprintf("id=%s", id))
-			return nil
+		if err := s.policyRepo.DeletePolicyRule(ctx, id); err != nil {
+			s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_rule.delete", domain.AuditResultFailure, fmt.Sprintf("rule %s: %v", id, err))
+			return err
 		}
-		if domErr, ok := domain.AsDomainError(err); ok && domErr.Category == domain.CategoryNotFound {
-			admErr := s.policyRepo.DeleteAdmissionRule(ctx, id)
-			if admErr == nil {
-				s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "admission_rule.delete", domain.AuditResultSuccess, fmt.Sprintf("id=%s", id))
-				return nil
-			}
-			s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_rule.delete", domain.AuditResultFailure, fmt.Sprintf("rule %s not found", id))
-			return admErr
-		}
-		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_rule.delete", domain.AuditResultFailure, fmt.Sprintf("rule %s: %v", id, err))
-		return err
+		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_rule.delete", domain.AuditResultSuccess, fmt.Sprintf("id=%s", id))
+		return nil
 	default:
 		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_rule.delete", domain.AuditResultFailure, fmt.Sprintf("invalid rule kind: %s", kind))
 		return domain.NewValidationError("invalid_rule_kind", fmt.Sprintf("unsupported rule kind: %s", cmd.Kind))
@@ -1048,7 +995,7 @@ func (s *Service) DeletePolicyRule(ctx context.Context, cmd DeleteRuleCommand) e
 	return s.DeleteRule(ctx, cmd)
 }
 
-// DeleteAdmissionRule deletes an admission rule by ID.
+// DeleteAdmissionRule rejects deletion because admission rules have been retired.
 func (s *Service) DeleteAdmissionRule(ctx context.Context, cmd DeleteRuleCommand) error {
 	cmd.Kind = "admission"
 	return s.DeleteRule(ctx, cmd)
@@ -2038,14 +1985,14 @@ func toGroupView(group *domain.NodeGroup, edges []domain.GroupEdge) *GroupView {
 		InheritGlobalFilter: group.InheritGlobalFilter,
 		ID:                  group.ID,
 		Name:                group.Name,
-		GroupType:         group.GroupType,
-		Position:          group.Position,
-		Revision:          rev,
-		Sources:           sources,
-		Edges:             edgeViews,
-		NodeFilter:        group.NodeFilter,
-		CreatedAt:         group.CreatedAt,
-		UpdatedAt:         group.UpdatedAt,
+		GroupType:           group.GroupType,
+		Position:            group.Position,
+		Revision:            rev,
+		Sources:             sources,
+		Edges:               edgeViews,
+		NodeFilter:          group.NodeFilter,
+		CreatedAt:           group.CreatedAt,
+		UpdatedAt:           group.UpdatedAt,
 	}
 }
 

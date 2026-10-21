@@ -74,7 +74,8 @@ describe('DNS settings page', () => {
     mount()
     await flush()
     expect(api.get).toHaveBeenCalledWith('/api/v1/settings/dns')
-    expect(mountEl.textContent).toContain('客户端 DNS 配置')
+    expect(mountEl.querySelector('[data-testid="dns-view"]')?.getAttribute('aria-label')).toBe('客户端 DNS 配置')
+    expect(mountEl.querySelector('header')).toBeNull()
 
     // Test visual controls: multiline nameserver
     const nameserver = mountEl.querySelector('[aria-label="nameserver"]') as HTMLTextAreaElement
@@ -275,11 +276,12 @@ describe('DNS settings page', () => {
     expect(mountEl.querySelector('[data-testid="dns-error"]')?.textContent).toContain('Invalid DNS YAML parameters')
   })
 
-  it('displays default source banner when source is default', async () => {
+  it('does not display default source banner even when source is default', async () => {
     vi.mocked(api.get).mockResolvedValueOnce({ ...base(), source: 'default' } as never)
     mount()
     await flush()
-    expect(mountEl.querySelector('[data-testid="dns-default-source"]')?.textContent).toContain('服务默认值')
+    expect(mountEl.querySelector('[data-testid="dns-default-source"]')).toBeNull()
+    expect(mountEl.querySelector('header')).toBeNull()
   })
 
   it('confirms before discarding dirty draft on reload', async () => {

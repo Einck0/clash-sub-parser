@@ -445,22 +445,47 @@ func TestRevisionsCreateEndpointAndBootstrap(t *testing.T) {
 	routerCfg.AuditRepository = auditRepo
 	router := transporthttp.NewRouter(routerCfg)
 
-	// 1. Fresh DB: POST /api/v1/admission/rules without revision_id auto-bootstraps active revision and returns 201
+	// 1. Fresh DB: POST /api/v1/admission/rules without revision_id must be rejected (422) and must not write any revision
 	admBody := `{"name": "InitialAdmission", "expression": "protocol != ''", "action": "allow", "position": 0}`
 	reqAdm := httptest.NewRequest(http.MethodPost, "/api/v1/admission/rules", strings.NewReader(admBody))
 	reqAdm.Header.Set("Authorization", "Bearer "+testAdminToken)
 	reqAdm.Header.Set("Content-Type", "application/json")
 	recAdm := httptest.NewRecorder()
 	router.ServeHTTP(recAdm, reqAdm)
-	if recAdm.Code != http.StatusCreated {
-		t.Fatalf("expected 201 Created on fresh DB rule creation without revision_id, got %d: %s", recAdm.Code, recAdm.Body.String())
+	if recAdm.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 UnprocessableEntity on retired admission rule POST, got %d: %s", recAdm.Code, recAdm.Body.String())
 	}
-	var admResp testDataResponse[policy.AdmissionRuleView]
-	if err := json.Unmarshal(recAdm.Body.Bytes(), &admResp); err != nil {
-		t.Fatalf("failed to decode admission rule response: %v", err)
+	var admErr testErrorResponse
+	if err := json.Unmarshal(recAdm.Body.Bytes(), &admErr); err != nil {
+		t.Fatalf("failed to decode error response: %v", err)
 	}
-	if admResp.Data.RevisionID == "" {
-		t.Fatalf("expected non-empty bootstrapped revision_id, got %+v", admResp.Data)
+	if admErr.Code != "admission_rules_retired" {
+		t.Fatalf("expected code admission_rules_retired, got %s", admErr.Code)
+	}
+	revisions, revCount, err := revRepo.List(context.Background(), domain.RevisionFilter{})
+	if err != nil {
+		t.Fatalf("failed to list revisions: %v", err)
+	}
+	if revCount != 0 || len(revisions) != 0 {
+		t.Fatalf("expected 0 revisions after rejected admission rule creation, got %d", revCount)
+	}
+
+	// Policy rule bootstrap on fresh DB: POST /api/v1/policies/rules without revision_id auto-bootstraps active revision and returns 201
+	polBody := `{"expression": "DOMAIN-SUFFIX,example.com", "builtin_target": "DIRECT", "position": 0}`
+	reqPol := httptest.NewRequest(http.MethodPost, "/api/v1/policies/rules", strings.NewReader(polBody))
+	reqPol.Header.Set("Authorization", "Bearer "+testAdminToken)
+	reqPol.Header.Set("Content-Type", "application/json")
+	recPol := httptest.NewRecorder()
+	router.ServeHTTP(recPol, reqPol)
+	if recPol.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created on fresh DB policy rule creation without revision_id, got %d: %s", recPol.Code, recPol.Body.String())
+	}
+	var polResp testDataResponse[policy.PolicyRuleView]
+	if err := json.Unmarshal(recPol.Body.Bytes(), &polResp); err != nil {
+		t.Fatalf("failed to decode policy rule response: %v", err)
+	}
+	if polResp.Data.RevisionID == "" {
+		t.Fatalf("expected non-empty bootstrapped revision_id, got %+v", polResp.Data)
 	}
 
 	// 2. POST /api/v1/revisions creates a new draft revision (201 Created)
@@ -481,7 +506,7 @@ func TestRevisionsCreateEndpointAndBootstrap(t *testing.T) {
 	}
 
 	// 3. POST /api/v1/revisions with state=active creates and activates a new revision
-	reqCreateActive := httptest.NewRequest(http.MethodPost, "/api/v1/revisions", strings.NewReader(fmt.Sprintf(`{"state":"active","parent_id":"%s"}`, admResp.Data.RevisionID)))
+	reqCreateActive := httptest.NewRequest(http.MethodPost, "/api/v1/revisions", strings.NewReader(fmt.Sprintf(`{"state":"active","parent_id":"%s"}`, polResp.Data.RevisionID)))
 	reqCreateActive.Header.Set("Authorization", "Bearer "+testAdminToken)
 	reqCreateActive.Header.Set("Content-Type", "application/json")
 	recCreateActive := httptest.NewRecorder()

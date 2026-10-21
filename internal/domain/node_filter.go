@@ -83,6 +83,9 @@ const (
 	FilterFieldSourceSubscriptions FilterField = "source_subscription_ids"
 	FilterFieldProbeVerdict        FilterField = "probe_verdict"
 	FilterFieldProbeLatencyMS      FilterField = "probe_latency_ms"
+	FilterFieldHealthStatus        FilterField = "health_status"
+	FilterFieldExitRegion          FilterField = "exit_region"
+	FilterFieldPlatformVerdict     FilterField = "platform_verdict"
 )
 
 var validFilterFields = map[FilterField]bool{
@@ -91,6 +94,9 @@ var validFilterFields = map[FilterField]bool{
 	FilterFieldSourceSubscriptions: true,
 	FilterFieldProbeVerdict:        true,
 	FilterFieldProbeLatencyMS:      true,
+	FilterFieldHealthStatus:        true,
+	FilterFieldExitRegion:          true,
+	FilterFieldPlatformVerdict:     true,
 }
 
 func (f FilterField) IsValid() bool {
@@ -146,10 +152,19 @@ type FilterCondition struct {
 	Op               FilterOp    `json:"op"`
 	Value            string      `json:"value,omitempty"`
 	ProbeKind        *ProbeKind  `json:"probe_kind,omitempty"`
+	Platform         string      `json:"platform,omitempty"`
 	FreshnessSeconds *int        `json:"freshness_seconds,omitempty"`
 }
 
 // Validate checks that the filter condition has valid fields, operators, values, and bounds.
+func validPlatformForKind(kind ProbeKind, platform string) bool {
+	platforms := map[ProbeKind]map[string]bool{
+		ProbeKindAI: {"openai": true, "claude": true, "gemini": true},
+		ProbeKindStreaming: {"netflix": true, "disney": true, "youtube": true},
+	}
+	return platforms[kind][strings.ToLower(strings.TrimSpace(platform))]
+}
+
 func (c FilterCondition) Validate() error {
 	field, err := ParseFilterField(string(c.Field))
 	if err != nil {
@@ -231,16 +246,55 @@ func (c FilterCondition) Validate() error {
 			return NewValidationError("invalid_freshness_seconds", fmt.Sprintf("freshness_seconds must be between 1 and 604800, got %d", *c.FreshnessSeconds))
 		}
 
+	case FilterFieldHealthStatus:
+		if c.Op != FilterOpEquals && c.Op != FilterOpNotEquals {
+			return NewValidationError("invalid_filter_op", "health_status only supports equals/not_equals")
+		}
+		if val != string(HealthCategoryHealthy) && val != string(HealthCategoryUnhealthy) && val != string(HealthCategoryUntested) {
+			return NewValidationError("invalid_filter_value", "health_status must be healthy, unhealthy, or untested")
+		}
+		if c.ProbeKind != nil || c.Platform != "" || c.FreshnessSeconds != nil {
+			return NewValidationError("invalid_filter_field", "health_status does not accept probe parameters")
+		}
+
+	case FilterFieldExitRegion:
+		if c.Op != FilterOpEquals && c.Op != FilterOpNotEquals {
+			return NewValidationError("invalid_filter_op", "exit_region only supports equals/not_equals")
+		}
+		if len(val) != 2 || val[0] < 'A' || val[0] > 'Z' || val[1] < 'A' || val[1] > 'Z' {
+			return NewValidationError("invalid_filter_value", "exit_region must be an ISO alpha-2 code")
+		}
+		if c.ProbeKind != nil || c.Platform != "" || c.FreshnessSeconds != nil {
+			return NewValidationError("invalid_filter_field", "exit_region does not accept probe parameters")
+		}
+
+	case FilterFieldPlatformVerdict:
+		if c.Op != FilterOpEquals && c.Op != FilterOpNotEquals {
+			return NewValidationError("invalid_filter_op", "platform_verdict only supports equals/not_equals")
+		}
+		if val != "available" && val != "restricted" && val != "unknown" && val != "error" {
+			return NewValidationError("invalid_filter_value", "platform_verdict must be available, restricted, unknown, or error")
+		}
+		if c.ProbeKind == nil || (*c.ProbeKind != ProbeKindAI && *c.ProbeKind != ProbeKindStreaming) {
+			return NewValidationError("invalid_probe_kind", "platform_verdict requires ai or streaming probe_kind")
+		}
+		if !validPlatformForKind(*c.ProbeKind, c.Platform) {
+			return NewValidationError("invalid_platform", "unsupported platform for probe kind")
+		}
+		if c.FreshnessSeconds != nil {
+			return NewValidationError("invalid_filter_field", "platform_verdict does not accept freshness_seconds")
+		}
+
 	case FilterFieldProbeLatencyMS:
+		if c.ProbeKind != nil && *c.ProbeKind != ProbeKindBaseline {
+			return NewValidationError("invalid_probe_kind", "probe_latency_ms is fixed to baseline")
+		}
 		if c.Op != FilterOpLTE {
 			return NewValidationError("invalid_filter_op", fmt.Sprintf("probe_latency_ms only supports lte, got %s", c.Op))
 		}
 		latency, err := strconv.ParseInt(val, 10, 64)
 		if err != nil || latency < 0 || latency > 60000 {
 			return NewValidationError("invalid_filter_value", fmt.Sprintf("latency_ms must be an integer between 0 and 60000, got: %s", val))
-		}
-		if c.ProbeKind == nil || !c.ProbeKind.IsValid() {
-			return NewValidationError("invalid_probe_kind", "probe_latency_ms condition requires a valid probe_kind")
 		}
 		if c.FreshnessSeconds != nil && (*c.FreshnessSeconds < 1 || *c.FreshnessSeconds > 604800) {
 			return NewValidationError("invalid_freshness_seconds", fmt.Sprintf("freshness_seconds must be between 1 and 604800, got %d", *c.FreshnessSeconds))
@@ -278,6 +332,16 @@ func (s *NodeFilterSpec) Validate() error {
 		}
 	}
 	return nil
+}
+
+// NormalizeForSave strips deprecated freshness_seconds so persisted filters no longer store natural-time TTLs.
+func (s *NodeFilterSpec) NormalizeForSave() {
+	if s == nil {
+		return
+	}
+	for i := range s.Conditions {
+		s.Conditions[i].FreshnessSeconds = nil
+	}
 }
 
 // GlobalNodeFilter represents the singleton global filter configuration.
@@ -354,41 +418,61 @@ func MatchesCondition(c FilterCondition, node Node, sources []NodeSource, latest
 		}
 		return true, ""
 
-	case FilterFieldProbeVerdict, FilterFieldProbeLatencyMS:
-		if c.ProbeKind == nil {
-			return false, "missing probe kind in filter condition"
-		}
-		obs, found := latestObs[*c.ProbeKind]
-		if !found {
-			return false, fmt.Sprintf("no %s probe observation available", *c.ProbeKind)
-		}
+	case FilterFieldHealthStatus:
+		category := ClassifyNodeHealth(latestObs, node.ConnectionRevision, asOf, 0)
+		return compareFilterValue(string(category), strings.ToLower(strings.TrimSpace(c.Value)), op)
 
-		// Freshness check: default 86400s (24h) if not specified
-		freshnessSec := 86400
-		if c.FreshnessSeconds != nil && *c.FreshnessSeconds > 0 {
-			freshnessSec = *c.FreshnessSeconds
+	case FilterFieldExitRegion:
+		obs, ok := latestObs[ProbeKindGeo]
+		if !ok || obs.Kind != ProbeKindGeo || obs.ConnectionRevision == nil || *obs.ConnectionRevision != node.ConnectionRevision || node.ConnectionRevision < 1 || obs.ObservedAt.IsZero() || obs.ObservedAt.After(asOf) || obs.Verdict != VerdictAvailable || strings.TrimSpace(obs.Region) == "" {
+			return false, "no current successful geo region evidence"
 		}
-		freshnessDuration := time.Duration(freshnessSec) * time.Second
-		if asOf.Sub(obs.ObservedAt) > freshnessDuration {
-			return false, fmt.Sprintf("observation expired (freshness %ds exceeded)", freshnessSec)
+		return compareFilterValue(strings.ToUpper(strings.TrimSpace(obs.Region)), strings.ToUpper(strings.TrimSpace(c.Value)), op)
+
+	case FilterFieldPlatformVerdict:
+		if c.ProbeKind == nil {
+			return false, "missing probe kind for platform verdict"
+		}
+		kind := *c.ProbeKind
+		obs, ok := latestObs[kind]
+		if !ok || obs.Kind != kind || obs.ConnectionRevision == nil || *obs.ConnectionRevision != node.ConnectionRevision || node.ConnectionRevision < 1 || obs.ObservedAt.IsZero() || obs.ObservedAt.After(asOf) {
+			return false, "no current platform observation available"
+		}
+		capability, ok := obs.Platforms[strings.ToLower(strings.TrimSpace(c.Platform))]
+		if !ok {
+			return false, "platform evidence missing"
+		}
+		return compareFilterValue(string(capability.Verdict), strings.ToLower(strings.TrimSpace(c.Value)), op)
+
+	case FilterFieldProbeVerdict, FilterFieldProbeLatencyMS:
+		kind := ProbeKindBaseline
+		if c.ProbeKind != nil {
+			kind = *c.ProbeKind
+		}
+		obs, found := latestObs[kind]
+		if !found {
+			return false, fmt.Sprintf("no %s probe observation available", kind)
+		}
+		if obs.ConnectionRevision == nil || *obs.ConnectionRevision != node.ConnectionRevision || node.ConnectionRevision < 1 || obs.ObservedAt.IsZero() || obs.ObservedAt.After(asOf) {
+			return false, fmt.Sprintf("observation not from current valid connection revision")
 		}
 
 		if field == FilterFieldProbeVerdict {
 			expectedVerdict := ProbeVerdict(strings.ToLower(strings.TrimSpace(c.Value)))
 			match := obs.Verdict == expectedVerdict
 			if op == FilterOpEquals && !match {
-				return false, fmt.Sprintf("probe %s verdict %s != %s", *c.ProbeKind, obs.Verdict, expectedVerdict)
+				return false, fmt.Sprintf("probe %s verdict %s != %s", kind, obs.Verdict, expectedVerdict)
 			}
 			if op == FilterOpNotEquals && match {
-				return false, fmt.Sprintf("probe %s verdict %s == %s", *c.ProbeKind, obs.Verdict, expectedVerdict)
+				return false, fmt.Sprintf("probe %s verdict %s == %s", kind, obs.Verdict, expectedVerdict)
 			}
 			return true, ""
 		}
 
 		if field == FilterFieldProbeLatencyMS {
-			// Quality latency condition only valid for available verdict
-			if obs.Verdict != VerdictAvailable {
-				return false, fmt.Sprintf("probe %s verdict is %s (latency requires available)", *c.ProbeKind, obs.Verdict)
+			health, hasLatency := EvaluateBaselineHealth(&obs, node.ConnectionRevision, asOf, 0)
+			if kind != ProbeKindBaseline || health != BaselineHealthy || !hasLatency || obs.LatencyMS <= 0 || obs.Verdict != VerdictAvailable {
+				return false, "baseline latency requires current healthy evidence with real positive latency"
 			}
 			maxLatency, err := strconv.ParseInt(c.Value, 10, 64)
 			if err != nil {
@@ -409,6 +493,14 @@ func MatchesCondition(c FilterCondition, node Node, sources []NodeSource, latest
 
 // MatchesFilter evaluates all conditions in a NodeFilterSpec with AND semantics.
 // Returns (true, "") if all conditions pass, or (false, reason) on first failure.
+func compareFilterValue(actual, expected string, op FilterOp) (bool, string) {
+	match := strings.EqualFold(actual, expected)
+	if (op == FilterOpEquals && !match) || (op == FilterOpNotEquals && match) {
+		return false, fmt.Sprintf("value %q does not satisfy %s %q", actual, op, expected)
+	}
+	return true, ""
+}
+
 func MatchesFilter(spec *NodeFilterSpec, node Node, sources []NodeSource, latestObs map[ProbeKind]ProbeObservation, asOf time.Time) (bool, string) {
 	if spec == nil || spec.IsEmpty() {
 		return true, ""

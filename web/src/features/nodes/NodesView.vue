@@ -199,17 +199,14 @@ function getNodeProbeState(node: NormalizedNode): 'probing' | 'queued' | 'idle' 
 }
 
 function getNodeHealthBadge(node: NormalizedNode) {
-  return nodeHealthBadge(node, effectiveProbingIds.value, queuedNodeIds.value)
+  return nodeHealthBadge(node)
 }
 
 const healthCounts = computed(() => {
   let probing = 0
   let healthy = 0
-  let degraded = 0
   let unhealthy = 0
-  let undetermined = 0
   let untested = 0
-  let unknown = 0
 
   for (const node of items.value) {
     const live = getNodeProbeState(node)
@@ -218,26 +215,16 @@ const healthCounts = computed(() => {
     }
     const cat = nodeUnderlyingHealthCategory(node)
     if (cat === 'healthy') healthy += 1
-    else if (cat === 'degraded') degraded += 1
     else if (cat === 'unhealthy') unhealthy += 1
-    else if (cat === 'undetermined') {
-      undetermined += 1
-      unknown += 1
-    } else {
-      untested += 1
-      unknown += 1
-    }
+    else untested += 1
   }
 
   return {
     all: items.value.length,
     probing,
     healthy,
-    degraded,
     unhealthy,
-    undetermined,
     untested,
-    unknown,
   }
 })
 
@@ -251,11 +238,9 @@ const filteredItems = computed(() => {
     }
     const cat = nodeUnderlyingHealthCategory(node)
     if (filter === 'healthy') return cat === 'healthy'
-    if (filter === 'degraded') return cat === 'degraded'
     if (filter === 'unhealthy') return cat === 'unhealthy'
-    if (filter === 'undetermined') return cat === 'undetermined'
-    if (filter === 'untested') return cat === 'untested'
-    if (filter === 'unknown') return cat === 'undetermined' || cat === 'untested' || (cat as string) === 'unprobed'
+    if (filter === 'untested' || filter === 'unknown' || filter === 'undetermined') return cat === 'untested'
+    if (filter === 'degraded') return cat === 'healthy'
     return true
   })
 })
@@ -723,11 +708,8 @@ onUnmounted(() => {
             <option value="all">全部 ({{ healthCounts.all }})</option>
             <option value="probing">检测中 ({{ healthCounts.probing }})</option>
             <option value="healthy">正常 ({{ healthCounts.healthy }})</option>
-            <option value="degraded">降级 ({{ healthCounts.degraded }})</option>
             <option value="unhealthy">异常 ({{ healthCounts.unhealthy }})</option>
-            <option value="undetermined">待复核 ({{ healthCounts.undetermined }})</option>
-            <option value="untested">未探测 ({{ healthCounts.untested }})</option>
-            <option value="unknown">未探测 / 待核验 ({{ healthCounts.unknown }})</option>
+            <option value="untested">未测试 ({{ healthCounts.untested }})</option>
           </select>
 
           <input
@@ -782,15 +764,6 @@ onUnmounted(() => {
         </button>
         <button
           type="button"
-          data-testid="node-health-pill-degraded"
-          class="btn btn-xs rounded-full"
-          :class="healthFilter === 'degraded' ? 'btn-warning' : 'btn-ghost bg-base-200/70'"
-          @click="healthFilter = 'degraded'"
-        >
-          降级 ({{ healthCounts.degraded }})
-        </button>
-        <button
-          type="button"
           data-testid="node-health-pill-unhealthy"
           class="btn btn-xs rounded-full"
           :class="healthFilter === 'unhealthy' ? 'btn-error' : 'btn-ghost bg-base-200/70'"
@@ -800,30 +773,12 @@ onUnmounted(() => {
         </button>
         <button
           type="button"
-          data-testid="node-health-pill-undetermined"
-          class="btn btn-xs rounded-full"
-          :class="healthFilter === 'undetermined' ? 'btn-warning' : 'btn-ghost bg-base-200/70'"
-          @click="healthFilter = 'undetermined'"
-        >
-          待复核 ({{ healthCounts.undetermined }})
-        </button>
-        <button
-          type="button"
           data-testid="node-health-pill-untested"
           class="btn btn-xs rounded-full"
           :class="healthFilter === 'untested' ? 'btn-neutral' : 'btn-ghost bg-base-200/70'"
           @click="healthFilter = 'untested'"
         >
-          未探测 ({{ healthCounts.untested }})
-        </button>
-        <button
-          type="button"
-          data-testid="node-health-pill-unknown"
-          class="btn btn-xs rounded-full"
-          :class="healthFilter === 'unknown' ? 'btn-neutral' : 'btn-ghost bg-base-200/70'"
-          @click="healthFilter = 'unknown'"
-        >
-          未探测 / 待核验 ({{ healthCounts.unknown }})
+          未测试 ({{ healthCounts.untested }})
         </button>
       </div>
     </div>
@@ -1045,16 +1000,16 @@ onUnmounted(() => {
                 <!-- Col 3: Health, Latency & Capabilities Badges -->
                 <div class="flex flex-wrap items-center gap-1.5 min-w-0 md:flex-1">
                   <StatusBadge
+                    v-if="getNodeProbeState(node) !== 'idle'"
+                    data-testid="node-probe-state-badge"
+                    :label="getNodeProbeState(node) === 'probing' ? '⚡ 检测中' : '⏳ 队列等待'"
+                    :tone="getNodeProbeState(node) === 'probing' ? 'info' : 'warning'"
+                    :pulse="true"
+                  />
+                  <StatusBadge
                     data-testid="node-health-badge"
-                    :label="
-                      getNodeProbeState(node) === 'probing'
-                        ? '⚡ 检测中'
-                        : getNodeProbeState(node) === 'queued'
-                        ? '⏳ 队列等待'
-                        : `健康: ${getNodeHealthBadge(node).label}`
-                    "
+                    :label="`健康: ${getNodeHealthBadge(node).label}`"
                     :tone="getNodeHealthBadge(node).tone"
-                    :pulse="getNodeProbeState(node) !== 'idle'"
                   />
                   <StatusBadge
                     v-if="resolveNodeLatencyMs(node) !== null"
@@ -1063,6 +1018,7 @@ onUnmounted(() => {
                     :tone="nodeLatencyTone(node)"
                   />
                   <StatusBadge
+                    data-testid="node-risk-badge"
                     :label="`风险: ${nodeRiskBadge(node).label}`"
                     :tone="nodeRiskBadge(node).tone"
                   />
@@ -1102,7 +1058,7 @@ onUnmounted(() => {
                     :tone="nodeCapabilityLabel(node, 'ai').tone"
                   />
                   <span
-                    v-if="node.probeStale"
+                    v-if="false"
                     class="badge badge-warning badge-sm md:badge-xs gap-1 font-mono text-[11px]"
                     title="探测观测数据已过期（超出保鲜窗口）"
                   >
@@ -1245,16 +1201,16 @@ onUnmounted(() => {
           </div>
           <div class="flex flex-wrap items-center gap-1.5">
             <StatusBadge
+              v-if="getNodeProbeState(selectedNode) !== 'idle'"
+              data-testid="node-drawer-probe-state-badge"
+              :label="getNodeProbeState(selectedNode) === 'probing' ? '⚡ 检测中' : '⏳ 队列等待'"
+              :tone="getNodeProbeState(selectedNode) === 'probing' ? 'info' : 'warning'"
+              :pulse="true"
+            />
+            <StatusBadge
               data-testid="node-drawer-health-badge"
-              :label="
-                getNodeProbeState(selectedNode) === 'probing'
-                  ? '⚡ 检测中'
-                  : getNodeProbeState(selectedNode) === 'queued'
-                  ? '⏳ 队列等待'
-                  : `健康: ${getNodeHealthBadge(selectedNode).label}`
-              "
+              :label="`健康: ${getNodeHealthBadge(selectedNode).label}`"
               :tone="getNodeHealthBadge(selectedNode).tone"
-              :pulse="getNodeProbeState(selectedNode) !== 'idle'"
             />
             <StatusBadge
               data-testid="node-drawer-latency-badge"
@@ -1295,6 +1251,7 @@ onUnmounted(() => {
               :tone="nodeCapabilityLabel(selectedNode, 'ai').tone"
             />
             <StatusBadge
+              data-testid="node-drawer-risk-badge"
               :label="`IP 风险: ${nodeRiskBadge(selectedNode).label}`"
               :tone="nodeRiskBadge(selectedNode).tone"
             />

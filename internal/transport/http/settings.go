@@ -39,6 +39,9 @@ func registerSettingsRoutes(r chi.Router, cfg RouterConfig) {
 	r.Put("/settings/public-base-url", settingsPutPublicBaseURLHandler(cfg))
 	r.Get("/settings/probe-timeout", settingsGetProbeTimeoutHandler(cfg))
 	r.Put("/settings/probe-timeout", settingsPutProbeTimeoutHandler(cfg))
+	r.Get("/settings/dns", settingsGetDNSHandler(cfg))
+	r.Put("/settings/dns", settingsPutDNSHandler(cfg))
+	r.Post("/settings/dns/validate", settingsValidateDNSHandler(cfg))
 }
 
 type authSettingsResponse struct {

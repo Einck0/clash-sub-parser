@@ -304,7 +304,7 @@ describe('Feature-Level Policy Sources & Pipeline Rebuild', () => {
       container.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true }))
     }
 
-    it('does not apply conditions until explicit add; uses chosen operation and append position; blocks pending saves', async () => {
+    it('appends inline filter with chosen operation, edits conditions directly inline, previews and saves in one step', async () => {
       const save = vi.fn()
       const post = vi.spyOn(api, 'post').mockResolvedValue({ members: [], node_count: 0, selection_digest: '' })
       app = createApp({ render: () => h(PolicyEditorSheet, { open: true, group, allGroups: [group], onSaveGroup: save }) })
@@ -312,32 +312,57 @@ describe('Feature-Level Policy Sources & Pipeline Rebuild', () => {
       await nextTick()
       expect(container.textContent).not.toContain('策略组节点筛选条件')
       await choose('filter')
-      expect(container.textContent).not.toContain('"legacy"')
       await choose('remove')
-      await condition('display_name', 'HK|JP', 'regex')
-      await condition('protocol', 'ss')
-      await condition('probe_verdict', 'available', 'equals', 'geo')
-      await condition('probe_latency_ms', '200', 'lte', 'baseline')
-      expect(container.querySelectorAll('[data-testid="source-row"]')).toHaveLength(1)
+      const addFilterBtn = Array.from(container.querySelectorAll('button')).find(b => b.textContent?.includes('过滤来源'))!
+      expect(addFilterBtn).toBeDefined()
+      addFilterBtn.click()
+      await nextTick()
+
+      const rows = container.querySelectorAll('[data-testid="source-row"]')
+      expect(rows).toHaveLength(2)
+
+      const inlineEditor = container.querySelector('[data-testid="primary-filter-section"] [data-testid="inline-filter-editor"]')!
+      expect(inlineEditor).not.toBeNull()
+
+      // The pipeline row inside details only shows a summary, avoiding double editors
+      expect(rows[1].querySelector('[data-testid="filter-row-summary"]')).not.toBeNull()
+      expect(rows[1].querySelector('[data-testid="structured-filter-editor"]')).toBeNull()
+
+      const fieldSelect = inlineEditor.querySelector('[data-testid="condition-field"]') as HTMLSelectElement
+      fieldSelect.value = 'display_name'
+      fieldSelect.dispatchEvent(new Event('change'))
+      await nextTick()
+
+      const opSelect = inlineEditor.querySelector('[data-testid="condition-op"]') as HTMLSelectElement
+      opSelect.value = 'regex'
+      opSelect.dispatchEvent(new Event('change'))
+      await nextTick()
+
+      const valueInput = inlineEditor.querySelector('[data-testid="condition-value"]') as HTMLInputElement
+      valueInput.value = 'HK|JP'
+      valueInput.dispatchEvent(new Event('input'))
+      await nextTick()
+
       submit()
       await nextTick()
-      expect(save).not.toHaveBeenCalled()
-      expect(container.textContent).toContain('尚未应用')
-      button('添加来源').click()
-      await nextTick()
-      submit()
+      expect(save).toHaveBeenCalledOnce()
       const payload = save.mock.calls[0][0]
       expect(payload).not.toHaveProperty('nodeFilter')
       expect(payload).not.toHaveProperty('edges')
       expect(payload.sources).toHaveLength(2)
+      expect(payload.sources[0]).not.toHaveProperty('_clientKey')
+      expect(payload.sources[1]).not.toHaveProperty('_clientKey')
+      expect(payload.sources[0]).toMatchObject({ kind: 'typed_builtin', builtin_name: 'DIRECT', position: 0 })
       expect(payload.sources[1]).toMatchObject({ kind: 'filter', operation: 'remove', position: 1 })
-      expect(payload.sources[1].filter_spec.conditions).toHaveLength(4)
-      expect(payload.sources[1].filter_spec.conditions[2]).toEqual({ field: 'probe_verdict', op: 'equals', probe_kind: 'geo', value: 'available' })
       expect(payload.sources[1].filter_spec.conditions[0]).toEqual({ field: 'display_name', op: 'regex', value: 'HK|JP' })
-      expect(group.sources).toHaveLength(1)
-      button('解析快照预览').click()
+
+      const previewBtn = Array.from(container.querySelectorAll('button')).find(b => b.textContent?.includes('刷新计算'))!
+      previewBtn.click()
       await nextTick()
       expect(post).toHaveBeenLastCalledWith('/api/v1/policies/groups/preview', expect.objectContaining({ sources: payload.sources }))
+      const previewPayload = post.mock.calls.at(-1)?.[1] as any
+      expect(previewPayload.sources[0]).not.toHaveProperty('_clientKey')
+      expect(previewPayload.sources[1]).not.toHaveProperty('_clientKey')
     })
 
     it('edits the selected saved filter only, preserves it through 409, and previews the same reopened sources', async () => {
@@ -353,33 +378,58 @@ describe('Feature-Level Policy Sources & Pipeline Rebuild', () => {
       app = createApp({ render: () => h(PolicyEditorSheet, { open: open.value, group: current.value, allGroups: [saved], conflictError: conflict.value, onSaveGroup: save }) })
       app.mount(container)
       await nextTick()
+
       const rows = container.querySelectorAll('[data-testid="source-row"]')
-      ;(rows[1].querySelector('button[title="编辑匹配条件"]') as HTMLButtonElement).click()
+      expect(rows).toHaveLength(2)
+
+      // The filter editors are in the primary filter section at the top of the form
+      const filterEditors = container.querySelectorAll('[data-testid="primary-filter-section"] [data-testid="inline-filter-editor"]')
+      expect(filterEditors).toHaveLength(2)
+
+      // The pipeline row in details only has a summary to avoid double editors
+      expect(rows[1].querySelector('[data-testid="filter-row-summary"]')).not.toBeNull()
+      expect(rows[1].querySelector('[data-testid="structured-filter-editor"]')).toBeNull()
+
+      const addCondBtn = filterEditors[1].querySelector('[data-testid="filter-add"]') as HTMLButtonElement
+      expect(addCondBtn).not.toBeNull()
+      addCondBtn.click()
       await nextTick()
-      expect(container.querySelector('[data-testid="condition-draft"]')?.textContent).toContain('"JP"')
-      await condition('protocol', 'ss')
+
+      const conditionRows = filterEditors[1].querySelectorAll('[data-testid="filter-condition"]')
+      expect(conditionRows).toHaveLength(2)
+      const condField = conditionRows[1].querySelector('[data-testid="condition-field"]') as HTMLSelectElement
+      condField.value = 'protocol'
+      condField.dispatchEvent(new Event('change'))
+      await nextTick()
+      const condVal = conditionRows[1].querySelector('[data-testid="condition-value"]') as HTMLSelectElement
+      condVal.value = 'ss'
+      condVal.dispatchEvent(new Event('change'))
+      await nextTick()
+
       conflict.value = { currentRevision: 4, message: 'conflict' }
       await nextTick()
       button('保留本地草稿').click()
       await nextTick()
+
       submit()
-      expect(save).not.toHaveBeenCalled()
-      button('更新来源').click()
       await nextTick()
-      submit()
+      expect(save).toHaveBeenCalledOnce()
       const payload = save.mock.calls[0][0]
       expect(payload.expectedRevision).toBe(4)
       expect(payload.sources[0]).toEqual(saved.sources![0])
       expect(payload.sources[1]).toMatchObject({ operation: 'remove', position: 1, filter_spec: { conditions: [
-        { field: 'display_name', op: 'regex', value: 'JP' }, { field: 'protocol', op: 'equals', value: 'ss' },
+        { field: 'display_name', op: 'regex', value: 'JP' },
+        { field: 'protocol', op: 'equals', value: 'ss' },
       ] } })
       expect(saved.sources![1].filter_spec!.conditions).toHaveLength(1)
+
       open.value = false
       await nextTick()
       current.value = { ...saved, sources: payload.sources, revision: 5 }
       open.value = true
       await nextTick()
-      button('解析快照预览').click()
+      const refreshBtn = Array.from(container.querySelectorAll('button')).find(b => b.textContent?.includes('刷新计算'))!
+      refreshBtn.click()
       await nextTick()
       expect(post).toHaveBeenLastCalledWith('/api/v1/policies/groups/preview', expect.objectContaining({ sources: payload.sources }))
     })
@@ -389,16 +439,29 @@ describe('Feature-Level Policy Sources & Pipeline Rebuild', () => {
       app = createApp({ render: () => h(PolicyEditorSheet, { open: true, group, allGroups: [group], onSaveGroup: save }) })
       app.mount(container)
       await nextTick()
+
       await choose('filter')
-      const value = container.querySelector('[data-testid="condition-value"]') as HTMLInputElement
-      value.value = 'unfinished'
-      value.dispatchEvent(new Event('input'))
+      const addFilterBtn = Array.from(container.querySelectorAll('button')).find(b => b.textContent?.includes('过滤来源'))!
+      addFilterBtn.click()
       await nextTick()
+
+      const rows = container.querySelectorAll('[data-testid="source-row"]')
+      expect(rows).toHaveLength(2)
+
+      const fieldSelect = container.querySelector('[data-testid="primary-filter-section"] [data-testid="condition-field"]') as HTMLSelectElement
+      fieldSelect.value = 'display_name'
+      fieldSelect.dispatchEvent(new Event('change'))
+      await nextTick()
+
       submit()
+      await nextTick()
       expect(save).not.toHaveBeenCalled()
+
+      const valInput = container.querySelector('[data-testid="primary-filter-section"] [data-testid="condition-value"]') as HTMLInputElement
+      valInput.value = 'valid-name'
+      valInput.dispatchEvent(new Event('input'))
       await nextTick()
-      button('放弃来源草稿').click()
-      await nextTick()
+
       await choose('regex')
       const regex = container.querySelector('input[placeholder="例如：.*(HK|香港|HongKong).*"]') as HTMLInputElement
       regex.value = '['
@@ -414,6 +477,49 @@ describe('Feature-Level Policy Sources & Pipeline Rebuild', () => {
       await nextTick()
       submit()
       expect(save).toHaveBeenCalledOnce()
+    })
+
+    it('handles delete and reorder of invalid filter without key drift and strips _clientKey from payload', async () => {
+      const save = vi.fn()
+      app = createApp({ render: () => h(PolicyEditorSheet, { open: true, group, allGroups: [group], onSaveGroup: save }) })
+      app.mount(container)
+      await nextTick()
+
+      // Add a filter source
+      await choose('filter')
+      const addFilterBtn = Array.from(container.querySelectorAll('button')).find(b => b.textContent?.includes('过滤来源'))!
+      addFilterBtn.click()
+      await nextTick()
+
+      let rows = container.querySelectorAll('[data-testid="source-row"]')
+      expect(rows).toHaveLength(2)
+
+      // Make row 1 invalid by selecting display_name without value in primary filter section
+      const fieldSelect = container.querySelector('[data-testid="primary-filter-section"] [data-testid="condition-field"]') as HTMLSelectElement
+      fieldSelect.value = 'display_name'
+      fieldSelect.dispatchEvent(new Event('change'))
+      await nextTick()
+
+      submit()
+      await nextTick()
+      expect(save).not.toHaveBeenCalled()
+
+      // Delete the invalid row 1
+      const trashBtns = rows[1].querySelectorAll('button[title="删除"]')
+      const trashBtn = trashBtns[trashBtns.length - 1] as HTMLButtonElement
+      trashBtn.click()
+      await nextTick()
+
+      rows = container.querySelectorAll('[data-testid="source-row"]')
+      expect(rows).toHaveLength(1)
+
+      // Now save should succeed because the invalid filter was deleted
+      submit()
+      await nextTick()
+      expect(save).toHaveBeenCalledOnce()
+      const payload = save.mock.calls[0][0]
+      expect(payload.sources).toHaveLength(1)
+      expect(payload.sources[0]).not.toHaveProperty('_clientKey')
     })
   })
 
@@ -959,7 +1065,7 @@ describe('Feature-Level Policy Sources & Pipeline Rebuild', () => {
 
   // 16. Four Stages Architecture & Scope/Add/Exclude/Results Workflow
   describe('Four Stages Architecture & Scope/Add/Exclude/Results Workflow', () => {
-    it('renders all four stages in explicit order: scope -> add -> exclude -> results', async () => {
+    it('renders primary filter section at the top, and manual selection within closed details', async () => {
       const group: PolicyGroup = {
         id: 'grp-stages',
         name: 'Four Stages Group',
@@ -969,47 +1075,79 @@ describe('Feature-Level Policy Sources & Pipeline Rebuild', () => {
         sources: [
           { operation: 'add', kind: 'manual_node', position: 0, node_logical_id: 'node-hk-01' },
           { operation: 'remove', kind: 'regex', position: 1, pattern: '.*expire.*' },
+          { operation: 'add', kind: 'filter', position: 2, filter_spec: { conditions: [{ field: 'display_name', op: 'contains', value: 'HK' }] } },
         ],
       }
 
+      let savedPayload: any = null
+      const saveFn = vi.fn((data) => { savedPayload = data })
+
       const app = createApp({
-        render: () => h(PolicyEditorSheet, { open: true, group, allGroups: [group] }),
+        render: () => h(PolicyEditorSheet, { open: true, group, allGroups: [group], onSaveGroup: saveFn }),
       })
       app.mount(container)
       await nextTick()
 
       const scopeEl = container.querySelector('[data-testid="stage-candidate-scope"]')
-      const addEl = container.querySelector('[data-testid="stage-add-members"]')
-      const excludeEl = container.querySelector('[data-testid="stage-exclude-members"]')
+      const primaryFilter = container.querySelector('[data-testid="primary-filter-section"]')
+      const detailsEl = container.querySelector('details[data-testid="advanced-pipeline-details"]') as HTMLDetailsElement
       const resultsEl = container.querySelector('[data-testid="stage-realtime-results"]')
 
       expect(scopeEl).not.toBeNull()
-      expect(addEl).not.toBeNull()
-      expect(excludeEl).not.toBeNull()
+      expect(primaryFilter).not.toBeNull()
+      expect(detailsEl).not.toBeNull()
       expect(resultsEl).not.toBeNull()
 
-      // Verify DOM document position order: Scope before Add, Add before Exclude, Exclude before Results
-      const posScopeAdd = scopeEl!.compareDocumentPosition(addEl!)
-      expect(posScopeAdd & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      // 1. First business section is primary filter section, directly visible at top without scrolling past manual node pickers
+      expect(primaryFilter!.textContent).toContain('属性筛选条件')
+      const inlineEditor = primaryFilter!.querySelector('[data-testid="inline-filter-editor"]')
+      expect(inlineEditor).not.toBeNull()
 
-      const posAddExclude = addEl!.compareDocumentPosition(excludeEl!)
-      expect(posAddExclude & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      // 2. Advanced settings and manual selection are placed inside details which is CLOSED by default
+      expect(detailsEl.open).toBe(false)
 
-      const posExcludeResults = excludeEl!.compareDocumentPosition(resultsEl!)
-      expect(posExcludeResults & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-
-      // Stage 1: Candidate scope displays inherit and all admitted options
-      expect(scopeEl!.textContent).toContain('继承全局筛选')
-      expect(scopeEl!.textContent).toContain('使用全部准入节点')
-
-      // Stage 2: Add member controls exist
+      const addEl = detailsEl.querySelector('[data-testid="stage-add-members"]')
+      const excludeEl = detailsEl.querySelector('[data-testid="stage-exclude-members"]')
+      expect(addEl).not.toBeNull()
       expect(addEl!.textContent).toContain('添加成员')
+      expect(excludeEl).not.toBeNull()
 
-      // Stage 3: Exclude & pipeline displays the 2 source rows
+      // Verify DOM document position order: Scope before Primary Filter, Filter before Details, Details before Results
+      const posScopeFilter = scopeEl!.compareDocumentPosition(primaryFilter!)
+      expect(posScopeFilter & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+      const posFilterDetails = primaryFilter!.compareDocumentPosition(detailsEl)
+      expect(posFilterDetails & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+      const posDetailsResults = detailsEl.compareDocumentPosition(resultsEl!)
+      expect(posDetailsResults & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+      // 3. In the pipeline inside details, the filter row only shows summary (no duplicate editor)
       const rows = excludeEl!.querySelectorAll('[data-testid="source-row"]')
-      expect(rows).toHaveLength(2)
+      expect(rows).toHaveLength(3)
+      expect(rows[2].querySelector('[data-testid="filter-row-summary"]')).not.toBeNull()
+      expect(rows[2].querySelector('[data-testid="structured-filter-editor"]')).toBeNull()
 
-      // Stage 4: Results metrics exist
+      // 4. Modifying conditions in primary filter saves in one single save, preserving complex pipeline original order
+      const valInput = primaryFilter!.querySelector('[data-testid="condition-value"]') as HTMLInputElement
+      valInput.value = 'HK-Updated'
+      valInput.dispatchEvent(new Event('input'))
+      await nextTick()
+
+      container.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true }))
+      await nextTick()
+
+      expect(saveFn).toHaveBeenCalledOnce()
+      expect(savedPayload.sources).toHaveLength(3)
+      expect(savedPayload.sources[0]).toMatchObject({ kind: 'manual_node', node_logical_id: 'node-hk-01', position: 0 })
+      expect(savedPayload.sources[1]).toMatchObject({ kind: 'regex', pattern: '.*expire.*', position: 1 })
+      expect(savedPayload.sources[2]).toMatchObject({
+        kind: 'filter',
+        position: 2,
+        filter_spec: { conditions: [{ field: 'display_name', op: 'contains', value: 'HK-Updated' }] },
+      })
+
+      // Results metrics exist
       expect(resultsEl!.querySelector('[data-testid="candidate-count"]')).not.toBeNull()
       expect(resultsEl!.querySelector('[data-testid="member-count"]')).not.toBeNull()
       expect(resultsEl!.querySelector('[data-testid="excluded-count"]')).not.toBeNull()
@@ -1059,7 +1197,7 @@ describe('Feature-Level Policy Sources & Pipeline Rebuild', () => {
 
   // 17. Shared Filter Condition Editing & In-Place Updates
   describe('Shared Filter Condition Editing & In-Place Updates', () => {
-    it('loads selected condition into draft fields, updates in-place, and allows cancel', async () => {
+    it('updates condition in-place directly inline and emits updated modelValue', async () => {
       const initialConditions: FilterCondition[] = [
         { field: 'display_name', op: 'contains', value: 'HongKong' },
         { field: 'protocol', op: 'equals', value: 'ss' },
@@ -1081,47 +1219,16 @@ describe('Feature-Level Policy Sources & Pipeline Rebuild', () => {
       const conditionBadges = container.querySelectorAll('[data-testid="filter-condition"]')
       expect(conditionBadges).toHaveLength(2)
 
-      // Click "编辑" on the second condition (#2: protocol = ss)
-      const editButtons = Array.from(container.querySelectorAll('button')).filter((b) => b.textContent?.trim() === '编辑')
-      expect(editButtons).toHaveLength(2)
-      editButtons[1].click()
-      await nextTick()
-
-      // Draft form now displays edit mode for condition #2
-      expect(container.textContent).toContain('编辑条件 #2')
-
-      // Select element for protocol should be 'ss'
-      const valueSelect = container.querySelector('[data-testid="condition-value"]') as HTMLSelectElement
-      expect(valueSelect.value).toBe('ss')
-
-      // Change protocol to 'vless'
+      const selects = conditionBadges[1].querySelectorAll('select')
+      const valueSelect = Array.from(selects).find((s) => s.value === 'ss') as HTMLSelectElement
+      expect(valueSelect).toBeDefined()
       valueSelect.value = 'vless'
       valueSelect.dispatchEvent(new Event('change'))
       await nextTick()
 
-      // Click "添加条件" (which acts as update when editingIndex !== null)
-      const submitBtn = container.querySelector('[data-testid="filter-add"]') as HTMLButtonElement
-      submitBtn.click()
-      await nextTick()
-
-      // Should still be exactly 2 conditions, but condition #2 is updated to vless
       expect(currentConditions).toHaveLength(2)
       expect(currentConditions[0]).toEqual({ field: 'display_name', op: 'contains', value: 'HongKong' })
       expect(currentConditions[1]).toEqual({ field: 'protocol', op: 'equals', value: 'vless' })
-
-      // Now edit condition #1 and click "取消编辑"
-      const updatedEditButtons = Array.from(container.querySelectorAll('button')).filter((b) => b.textContent?.trim() === '编辑')
-      updatedEditButtons[0].click()
-      await nextTick()
-
-      expect(container.textContent).toContain('编辑条件 #1')
-      const cancelBtn = Array.from(container.querySelectorAll('button')).find((b) => b.textContent?.trim() === '取消编辑')
-      expect(cancelBtn).toBeDefined()
-      cancelBtn!.click()
-      await nextTick()
-
-      expect(container.textContent).toContain('添加新筛选条件 (AND)')
-      expect(currentConditions).toHaveLength(2)
 
       app.unmount()
     })
@@ -1351,6 +1458,61 @@ describe('Feature-Level Policy Sources & Pipeline Rebuild', () => {
       await nextTick()
 
       app.unmount()
+    })
+
+    it('renders preview tab header with responsive flex-wrap and shrink-0 badges for narrow screens', async () => {
+      const group: PolicyGroup = {
+        id: 'grp-responsive',
+        name: 'Responsive Group',
+        group_type: 'select',
+        revision: 1,
+        sources: [{ operation: 'add', kind: 'filter', position: 0, filter_spec: { conditions: [{ field: 'exit_region', op: 'equals', value: 'HK' }] } }],
+      }
+
+      vi.spyOn(api, 'post').mockResolvedValue({
+        members: [{ node_logical_id: 'n1', display_name: 'HK 01' }, { node_logical_id: 'n2', display_name: 'HK 02' }],
+        member_count: 2,
+        node_count: 2,
+        candidate_count: 4,
+        revision: 1,
+      })
+
+      const container = document.createElement('div')
+      document.body.appendChild(container)
+      const app = createApp({
+        render: () => h(PolicyEditorSheet, { open: true, group, allGroups: [group] }),
+      })
+      app.mount(container)
+      await nextTick()
+
+      // Switch to Snapshot Preview tab
+      const tabButtons = Array.from(container.querySelectorAll('button')).filter((b) => b.textContent?.includes('快照预览') || b.textContent?.includes('Snapshot'))
+      expect(tabButtons.length).toBeGreaterThan(0)
+      tabButtons[0]?.click()
+      await nextTick()
+      await Promise.resolve()
+      await nextTick()
+
+      // Header container must have flex-wrap
+      const headerBox = container.querySelector('.p-3.rounded-xl.bg-base-200\\/70') as HTMLElement | null
+      expect(headerBox).not.toBeNull()
+      const headerFlex = headerBox?.querySelector('.flex.flex-wrap.items-center.justify-between') as HTMLElement | null
+      expect(headerFlex).not.toBeNull()
+
+      // Inner badges container must have flex-wrap and min-w-0
+      const badgesContainer = headerFlex?.querySelector('.flex.flex-wrap.items-center.min-w-0') as HTMLElement | null
+      expect(badgesContainer).not.toBeNull()
+
+      // All badges should have shrink-0
+      const draftBadge = headerFlex?.querySelector('.badge-warning') as HTMLElement | null
+      expect(draftBadge?.classList.contains('shrink-0')).toBe(true)
+
+      // Recalculate button must have shrink-0
+      const recalcBtn = headerFlex?.querySelector('button') as HTMLButtonElement | null
+      expect(recalcBtn?.classList.contains('shrink-0')).toBe(true)
+
+      app.unmount()
+      container.remove()
     })
   })
 })

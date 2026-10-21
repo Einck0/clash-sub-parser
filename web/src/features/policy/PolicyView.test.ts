@@ -409,20 +409,11 @@ describe('PolicyView Topology & Drawer Linkage', () => {
     const checkbox = dialog.querySelector('[data-testid="empty-fallback-pass"]') as HTMLInputElement
     expect(checkbox.checked).toBe(true)
     expect(dialog.textContent).toContain('不是直连')
-    ;(dialog.querySelector('button[title="编辑匹配条件"]') as HTMLButtonElement).click()
-    await nextTick()
-    const edit = Array.from(dialog.querySelectorAll('button')).find((b) => b.textContent?.trim() === '编辑')!
-    edit.click()
-    await nextTick()
+    ;(dialog.querySelector('[data-testid="group-card"] .cursor-pointer') as HTMLElement | null)?.click()
     const op = Array.from(dialog.querySelectorAll('select')).find((s) => s.value === 'not_regex')!
     expect(op).toBeDefined()
     const value = Array.from(dialog.querySelectorAll('input')).find((i) => i.value === expression)
     expect(value).toBeDefined()
-    const add = Array.from(dialog.querySelectorAll('button')).find((b) => b.textContent?.includes('添加条件'))!
-    add.click()
-    await nextTick()
-    Array.from(dialog.querySelectorAll('button')).find(b => b.textContent?.trim() === '更新来源')!.click()
-    await nextTick()
     dialog.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
     await nextTick()
     await new Promise((r) => setTimeout(r, 20))
@@ -452,17 +443,9 @@ describe('PolicyView Topology & Drawer Linkage', () => {
     manage.click()
     await nextTick()
     const dialog = container.querySelector('[role="dialog"]')!
-    ;(dialog.querySelector('button[title="编辑匹配条件"]') as HTMLButtonElement).click()
-    await nextTick()
-    Array.from(dialog.querySelectorAll('button')).find(b => b.textContent?.trim() === '编辑')!.click()
-    await nextTick()
     const input = dialog.querySelector('[data-testid="condition-value"]') as HTMLInputElement
     input.value = '['
     input.dispatchEvent(new Event('input'))
-    await nextTick()
-    Array.from(dialog.querySelectorAll('button')).find(b => b.textContent?.trim() === '添加条件')!.click()
-    await nextTick()
-    Array.from(dialog.querySelectorAll('button')).find(b => b.textContent?.trim() === '更新来源')!.click()
     await nextTick()
     const save = Array.from(dialog.querySelectorAll('button')).find(b => b.textContent?.trim() === '保存来源')!
     save.click()

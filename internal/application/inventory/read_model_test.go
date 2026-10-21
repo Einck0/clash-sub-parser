@@ -423,8 +423,8 @@ func TestInventoryService_ReadModelWithProbeObservationsAndSources(t *testing.T)
 	if vs.LatencyMS != nil {
 		t.Fatalf("expected nodeStale latency_ms=nil (non-baseline does not populate latency), got %v", vs.LatencyMS)
 	}
-	if vs.HealthStatus != "unknown" || vs.ProbeMissing || vs.ProbeStale {
-		t.Fatalf("expected nodeStale health=unknown missing=false stale=false (persists across natural time), got health=%s missing=%v stale=%v", vs.HealthStatus, vs.ProbeMissing, vs.ProbeStale)
+	if vs.HealthStatus != "untested" || vs.ProbeMissing || vs.ProbeStale {
+		t.Fatalf("expected nodeStale health=untested missing=false stale=false (persists across natural time), got health=%s missing=%v stale=%v", vs.HealthStatus, vs.ProbeMissing, vs.ProbeStale)
 	}
 	if vs.Capabilities["ai"].Stale {
 		t.Fatalf("expected nodeStale ai capability stale=false, got %+v", vs.Capabilities["ai"])
@@ -432,7 +432,7 @@ func TestInventoryService_ReadModelWithProbeObservationsAndSources(t *testing.T)
 
 	// Verify nodeMissing
 	vm := byID[nodeMissing]
-	if vm.LatencyMS != nil || vm.LastProbedAt != nil || vm.HealthStatus != "unknown" || !vm.ProbeMissing || vm.ProbeStale {
+	if vm.LatencyMS != nil || vm.LastProbedAt != nil || vm.HealthStatus != "untested" || !vm.ProbeMissing || vm.ProbeStale {
 		t.Fatalf("unexpected nodeMissing view: %+v", vm)
 	}
 
@@ -535,8 +535,8 @@ func TestInventoryService_NodeViewProbeStateProbingAndQueued(t *testing.T) {
 		byID[v.LogicalID] = v
 	}
 
-	if byID[n1].ProbeState != "probing" || byID[n1].HealthStatus != "probing" {
-		t.Fatalf("expected %s probe_state=probing and health_status=probing, got %+v", n1, byID[n1])
+	if byID[n1].ProbeState != "probing" || byID[n1].HealthStatus != "healthy" {
+		t.Fatalf("expected %s probe_state=probing and health_status=healthy, got %+v", n1, byID[n1])
 	}
 	if byID[n1].LatencyMS == nil || *byID[n1].LatencyMS != 55 {
 		t.Fatalf("expected %s historical latency_ms=55 preserved while probing, got %v", n1, byID[n1].LatencyMS)
@@ -552,8 +552,8 @@ func TestInventoryService_NodeViewProbeStateProbingAndQueued(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetNodeDetailWithRisk: %v", err)
 	}
-	if detail.ProbeState != "probing" || detail.HealthStatus != "probing" || detail.ToNodeView().ProbeState != "probing" {
-		t.Fatalf("expected detail probe_state=probing and health_status=probing, got %+v", detail)
+	if detail.ProbeState != "probing" || detail.HealthStatus != "healthy" || detail.ToNodeView().ProbeState != "probing" {
+		t.Fatalf("expected detail probe_state=probing and health_status=healthy, got %+v", detail)
 	}
 
 	// Verify failed/unhealthy observation (verdict=error, latency_ms=0 or >0) never populates valid LatencyMS
@@ -704,17 +704,17 @@ func TestInventoryService_BaselineEvidenceClassificationAndNonBaselineIsolation(
 		byID[v.LogicalID] = v
 	}
 
-	// Verify non-baseline error does not pollute overall health (must be unknown, latency nil)
+	// Verify non-baseline error does not pollute overall health (must be untested, latency nil)
 	vNonBase := byID["node_non_baseline_err"]
-	if vNonBase.HealthStatus != "unknown" || vNonBase.LatencyMS != nil {
-		t.Fatalf("node_non_baseline_err: expected health=unknown latency=nil, got health=%s latency=%v", vNonBase.HealthStatus, vNonBase.LatencyMS)
+	if vNonBase.HealthStatus != "untested" || vNonBase.LatencyMS != nil {
+		t.Fatalf("node_non_baseline_err: expected health=untested latency=nil, got health=%s latency=%v", vNonBase.HealthStatus, vNonBase.LatencyMS)
 	}
 
-	// Verify security rejections and build failures all evaluate to unknown
+	// Verify security rejections and build failures all evaluate to unhealthy
 	for _, sc := range securityCases {
 		vSec := byID[sc.nodeID]
-		if vSec.HealthStatus != "unknown" || vSec.LatencyMS != nil {
-			t.Fatalf("%s (%s): expected health=unknown latency=nil, got health=%s latency=%v", sc.nodeID, sc.reason, vSec.HealthStatus, vSec.LatencyMS)
+		if vSec.HealthStatus != "unhealthy" || vSec.LatencyMS != nil {
+			t.Fatalf("%s (%s): expected health=unhealthy latency=nil, got health=%s latency=%v", sc.nodeID, sc.reason, vSec.HealthStatus, vSec.LatencyMS)
 		}
 	}
 

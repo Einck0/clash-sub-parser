@@ -172,13 +172,15 @@ func TestNodeFilterRepository_BatchAndTransactionConsistency(t *testing.T) {
 }
 
 func TestNodeFilter_ProbeVerdictWithoutCredentialVersionGate(t *testing.T) {
+	rev1 := int64(1)
 	node := domain.Node{
-		LogicalID:   "0195c500-0000-7000-8000-000000000001",
-		DisplayName: "Node-Probe-Filter-Test",
-		Protocol:    domain.ProtocolSS,
-		Server:      "203.0.113.10",
-		Port:        8388,
-		Credentials: domain.InboundProtocolCredential{Method: "aes-256-gcm", Password: "secret"},
+		LogicalID:          "0195c500-0000-7000-8000-000000000001",
+		DisplayName:        "Node-Probe-Filter-Test",
+		Protocol:           domain.ProtocolSS,
+		Server:             "203.0.113.10",
+		Port:               8388,
+		Credentials:        domain.InboundProtocolCredential{Method: "aes-256-gcm", Password: "secret"},
+		ConnectionRevision: rev1,
 	}
 
 	kind := domain.ProbeKindBaseline
@@ -192,16 +194,25 @@ func TestNodeFilter_ProbeVerdictWithoutCredentialVersionGate(t *testing.T) {
 	}
 
 	obs := domain.ProbeObservation{
-		ID:            "obs-fresh",
-		NodeLogicalID: node.LogicalID,
-		Kind:          kind,
-		Verdict:       domain.VerdictAvailable,
-		ObservedAt:    time.Now().UTC(),
+		ID:                 "obs-fresh",
+		NodeLogicalID:      node.LogicalID,
+		Kind:               kind,
+		Verdict:            domain.VerdictAvailable,
+		ObservedAt:         time.Now().UTC(),
+		ConnectionRevision: &rev1,
 	}
 
 	matched, reason := domain.MatchesCondition(cond, node, nil, map[domain.ProbeKind]domain.ProbeObservation{kind: obs}, time.Now().UTC())
 	if !matched {
 		t.Fatalf("fresh observation must match without credential version gate, got matched=false (%s)", reason)
+	}
+
+	// Verify mismatched revision fails
+	rev2 := int64(2)
+	wrongObs := obs
+	wrongObs.ConnectionRevision = &rev2
+	if m, _ := domain.MatchesCondition(cond, node, nil, map[domain.ProbeKind]domain.ProbeObservation{kind: wrongObs}, time.Now().UTC()); m {
+		t.Fatal("expected mismatched revision observation to be rejected")
 	}
 }
 

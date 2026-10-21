@@ -233,7 +233,16 @@ func TestFilterConditionValidationMatrix(t *testing.T) {
 
 		// 5. Probe Latency MS
 		{
-			name: "probe_latency_ms valid lte",
+			name: "probe_latency_ms valid lte with nil probe_kind",
+			condition: domain.FilterCondition{
+				Field: domain.FilterFieldProbeLatencyMS,
+				Op:    domain.FilterOpLTE,
+				Value: "300",
+			},
+			wantError: false,
+		},
+		{
+			name: "probe_latency_ms valid lte with baseline",
 			condition: domain.FilterCondition{
 				Field:            domain.FilterFieldProbeLatencyMS,
 				Op:               domain.FilterOpLTE,
@@ -242,6 +251,17 @@ func TestFilterConditionValidationMatrix(t *testing.T) {
 				FreshnessSeconds: intPtr(7200),
 			},
 			wantError: false,
+		},
+		{
+			name: "probe_latency_ms rejects non-baseline probe_kind",
+			condition: domain.FilterCondition{
+				Field:     domain.FilterFieldProbeLatencyMS,
+				Op:        domain.FilterOpLTE,
+				Value:     "300",
+				ProbeKind: probeKindPtr(domain.ProbeKindGeo),
+			},
+			wantError: true,
+			errSubstr: "probe_latency_ms is fixed to baseline",
 		},
 		{
 			name: "probe_latency_ms legacy alias <= rejected",
@@ -320,6 +340,177 @@ func TestFilterConditionValidationMatrix(t *testing.T) {
 			errSubstr: "probe_latency_ms only supports lte",
 		},
 
+		// 6. Health Status
+		{
+			name: "health_status valid healthy",
+			condition: domain.FilterCondition{
+				Field: domain.FilterFieldHealthStatus,
+				Op:    domain.FilterOpEquals,
+				Value: "healthy",
+			},
+			wantError: false,
+		},
+		{
+			name: "health_status valid not_equals unhealthy",
+			condition: domain.FilterCondition{
+				Field: domain.FilterFieldHealthStatus,
+				Op:    domain.FilterOpNotEquals,
+				Value: "unhealthy",
+			},
+			wantError: false,
+		},
+		{
+			name: "health_status valid untested",
+			condition: domain.FilterCondition{
+				Field: domain.FilterFieldHealthStatus,
+				Op:    domain.FilterOpEquals,
+				Value: "untested",
+			},
+			wantError: false,
+		},
+		{
+			name: "health_status invalid value degraded",
+			condition: domain.FilterCondition{
+				Field: domain.FilterFieldHealthStatus,
+				Op:    domain.FilterOpEquals,
+				Value: "degraded",
+			},
+			wantError: true,
+			errSubstr: "health_status must be healthy, unhealthy, or untested",
+		},
+		{
+			name: "health_status invalid op contains",
+			condition: domain.FilterCondition{
+				Field: domain.FilterFieldHealthStatus,
+				Op:    domain.FilterOpContains,
+				Value: "healthy",
+			},
+			wantError: true,
+			errSubstr: "health_status only supports equals/not_equals",
+		},
+		{
+			name: "health_status rejects probe_kind",
+			condition: domain.FilterCondition{
+				Field:     domain.FilterFieldHealthStatus,
+				Op:        domain.FilterOpEquals,
+				Value:     "healthy",
+				ProbeKind: probeKindPtr(domain.ProbeKindBaseline),
+			},
+			wantError: true,
+			errSubstr: "health_status does not accept probe parameters",
+		},
+
+		// 7. Exit Region
+		{
+			name: "exit_region valid HK",
+			condition: domain.FilterCondition{
+				Field: domain.FilterFieldExitRegion,
+				Op:    domain.FilterOpEquals,
+				Value: "HK",
+			},
+			wantError: false,
+		},
+		{
+			name: "exit_region valid not_equals US",
+			condition: domain.FilterCondition{
+				Field: domain.FilterFieldExitRegion,
+				Op:    domain.FilterOpNotEquals,
+				Value: "US",
+			},
+			wantError: false,
+		},
+		{
+			name: "exit_region invalid 3 letters",
+			condition: domain.FilterCondition{
+				Field: domain.FilterFieldExitRegion,
+				Op:    domain.FilterOpEquals,
+				Value: "HKG",
+			},
+			wantError: true,
+			errSubstr: "exit_region must be an ISO alpha-2 code",
+		},
+		{
+			name: "exit_region invalid lowercase",
+			condition: domain.FilterCondition{
+				Field: domain.FilterFieldExitRegion,
+				Op:    domain.FilterOpEquals,
+				Value: "hk",
+			},
+			wantError: true,
+			errSubstr: "exit_region must be an ISO alpha-2 code",
+		},
+		{
+			name: "exit_region rejects probe_kind",
+			condition: domain.FilterCondition{
+				Field:     domain.FilterFieldExitRegion,
+				Op:        domain.FilterOpEquals,
+				Value:     "HK",
+				ProbeKind: probeKindPtr(domain.ProbeKindGeo),
+			},
+			wantError: true,
+			errSubstr: "exit_region does not accept probe parameters",
+		},
+
+		// 8. Platform Verdict
+		{
+			name: "platform_verdict valid streaming disney",
+			condition: domain.FilterCondition{
+				Field:     domain.FilterFieldPlatformVerdict,
+				Op:        domain.FilterOpEquals,
+				Value:     "available",
+				ProbeKind: probeKindPtr(domain.ProbeKindStreaming),
+				Platform:  "disney",
+			},
+			wantError: false,
+		},
+		{
+			name: "platform_verdict valid ai openai",
+			condition: domain.FilterCondition{
+				Field:     domain.FilterFieldPlatformVerdict,
+				Op:        domain.FilterOpEquals,
+				Value:     "restricted",
+				ProbeKind: probeKindPtr(domain.ProbeKindAI),
+				Platform:  "openai",
+			},
+			wantError: false,
+		},
+		{
+			name: "platform_verdict invalid platform for streaming",
+			condition: domain.FilterCondition{
+				Field:     domain.FilterFieldPlatformVerdict,
+				Op:        domain.FilterOpEquals,
+				Value:     "available",
+				ProbeKind: probeKindPtr(domain.ProbeKindStreaming),
+				Platform:  "openai",
+			},
+			wantError: true,
+			errSubstr: "unsupported platform for probe kind",
+		},
+		{
+			name: "platform_verdict invalid probe_kind geo",
+			condition: domain.FilterCondition{
+				Field:     domain.FilterFieldPlatformVerdict,
+				Op:        domain.FilterOpEquals,
+				Value:     "available",
+				ProbeKind: probeKindPtr(domain.ProbeKindGeo),
+				Platform:  "disney",
+			},
+			wantError: true,
+			errSubstr: "platform_verdict requires ai or streaming probe_kind",
+		},
+		{
+			name: "platform_verdict invalid verdict value",
+			condition: domain.FilterCondition{
+				Field:     domain.FilterFieldPlatformVerdict,
+				Op:        domain.FilterOpEquals,
+				Value:     "passed",
+				ProbeKind: probeKindPtr(domain.ProbeKindStreaming),
+				Platform:  "disney",
+			},
+			wantError: true,
+			errSubstr: "platform_verdict must be available, restricted, unknown, or error",
+		},
+
 		// Unknown field
 		{
 			name: "unknown field",
@@ -390,12 +581,15 @@ func TestFilterConditionMatchingSemantics(t *testing.T) {
 	asOf := now
 	subID1 := "0191e4a0-0000-7000-8000-000000000010"
 	subID2 := "0191e4a0-0000-7000-8000-000000000020"
+	rev1 := int64(1)
+	rev2 := int64(2)
 
 	node := domain.Node{
-		LogicalID:   "node-test-01",
-		Protocol:    domain.ProtocolSS,
-		DisplayName: "Hong Kong [01] Premium",
-		Active:      true,
+		LogicalID:          "node-test-01",
+		Protocol:           domain.ProtocolSS,
+		DisplayName:        "Hong Kong [01] Premium",
+		Active:             true,
+		ConnectionRevision: rev1,
 	}
 
 	sources := []domain.NodeSource{
@@ -403,12 +597,13 @@ func TestFilterConditionMatchingSemantics(t *testing.T) {
 	}
 
 	freshObs := domain.ProbeObservation{
-		ID:            "obs-01",
-		NodeLogicalID: node.LogicalID,
-		Kind:          domain.ProbeKindBaseline,
-		Verdict:       domain.VerdictAvailable,
-		LatencyMS:     180,
-		ObservedAt:    now.Add(-10 * time.Minute),
+		ID:                 "obs-01",
+		NodeLogicalID:      node.LogicalID,
+		Kind:               domain.ProbeKindBaseline,
+		Verdict:            domain.VerdictAvailable,
+		LatencyMS:          180,
+		ObservedAt:         now.Add(-10 * time.Minute),
+		ConnectionRevision: &rev1,
 	}
 
 	latestObs := map[domain.ProbeKind]domain.ProbeObservation{
@@ -495,6 +690,42 @@ func TestFilterConditionMatchingSemantics(t *testing.T) {
 			t.Fatal("expected fresh available probe to match")
 		}
 
+		// Stale observation with same revision STILL MATCHES (age does not invalidate valid revision)
+		staleObs := freshObs
+		staleObs.ObservedAt = now.Add(-72 * time.Hour)
+		staleMap := map[domain.ProbeKind]domain.ProbeObservation{domain.ProbeKindBaseline: staleObs}
+		matchedStale, _ := domain.MatchesCondition(condAvail, node, sources, staleMap, asOf)
+		if !matchedStale {
+			t.Fatal("expected observation on same valid revision to match regardless of age")
+		}
+
+		// Wrong revision fails
+		wrongRevObs := freshObs
+		wrongRevObs.ConnectionRevision = &rev2
+		wrongRevMap := map[domain.ProbeKind]domain.ProbeObservation{domain.ProbeKindBaseline: wrongRevObs}
+		matchedWrongRev, _ := domain.MatchesCondition(condAvail, node, sources, wrongRevMap, asOf)
+		if matchedWrongRev {
+			t.Fatal("expected wrong connection revision to fail closed")
+		}
+
+		// Future observation fails
+		futureObs := freshObs
+		futureObs.ObservedAt = now.Add(2 * time.Hour)
+		futureMap := map[domain.ProbeKind]domain.ProbeObservation{domain.ProbeKindBaseline: futureObs}
+		matchedFuture, _ := domain.MatchesCondition(condAvail, node, sources, futureMap, asOf)
+		if matchedFuture {
+			t.Fatal("expected future observation to fail closed")
+		}
+
+		// Zero observed_at fails
+		zeroObs := freshObs
+		zeroObs.ObservedAt = time.Time{}
+		zeroMap := map[domain.ProbeKind]domain.ProbeObservation{domain.ProbeKindBaseline: zeroObs}
+		matchedZero, _ := domain.MatchesCondition(condAvail, node, sources, zeroMap, asOf)
+		if matchedZero {
+			t.Fatal("expected zero observation time to fail closed")
+		}
+
 		// Missing observation kind -> fails closed
 		condGeo := domain.FilterCondition{
 			Field:     domain.FilterFieldProbeVerdict,
@@ -507,16 +738,7 @@ func TestFilterConditionMatchingSemantics(t *testing.T) {
 			t.Fatal("expected missing probe kind to fail closed")
 		}
 
-		// Expired observation -> fails closed
-		staleObs := freshObs
-		staleObs.ObservedAt = now.Add(-2 * time.Hour) // 2 hours old
-		staleMap := map[domain.ProbeKind]domain.ProbeObservation{domain.ProbeKindBaseline: staleObs}
-		matchedStale, _ := domain.MatchesCondition(condAvail, node, sources, staleMap, asOf)
-		if matchedStale {
-			t.Fatal("expected expired observation to fail closed")
-		}
-
-		// Negated condition with missing/expired observation -> MUST ALSO BE FALSE (fail-closed, not bypassable)
+		// Negated condition with missing observation -> MUST ALSO BE FALSE (fail-closed, not bypassable)
 		condNotError := domain.FilterCondition{
 			Field:     domain.FilterFieldProbeVerdict,
 			Op:        domain.FilterOpNotEquals,
@@ -529,7 +751,7 @@ func TestFilterConditionMatchingSemantics(t *testing.T) {
 		}
 	})
 
-	t.Run("probe latency condition requires available verdict and latency threshold", func(t *testing.T) {
+	t.Run("probe latency condition requires baseline available verdict and latency threshold", func(t *testing.T) {
 		condLatency300 := domain.FilterCondition{
 			Field:     domain.FilterFieldProbeLatencyMS,
 			Op:        domain.FilterOpLTE,
@@ -539,6 +761,17 @@ func TestFilterConditionMatchingSemantics(t *testing.T) {
 		matched, _ := domain.MatchesCondition(condLatency300, node, sources, latestObs, asOf)
 		if !matched {
 			t.Fatal("expected latency 180ms <= 300ms to match")
+		}
+
+		// nil probe_kind defaults to baseline
+		condLatencyNilKind := domain.FilterCondition{
+			Field: domain.FilterFieldProbeLatencyMS,
+			Op:    domain.FilterOpLTE,
+			Value: "300",
+		}
+		matchedNilKind, _ := domain.MatchesCondition(condLatencyNilKind, node, sources, latestObs, asOf)
+		if !matchedNilKind {
+			t.Fatal("expected nil probe_kind to default to baseline and match")
 		}
 
 		condLatency100 := domain.FilterCondition{
@@ -559,6 +792,209 @@ func TestFilterConditionMatchingSemantics(t *testing.T) {
 		matchedRestricted, _ := domain.MatchesCondition(condLatency300, node, sources, nonAvailMap, asOf)
 		if matchedRestricted {
 			t.Fatal("expected restricted verdict to fail latency condition even if numeric latency is low")
+		}
+
+		// Zero or negative latency -> fails closed
+		zeroLatencyObs := freshObs
+		zeroLatencyObs.LatencyMS = 0
+		zeroLatencyMap := map[domain.ProbeKind]domain.ProbeObservation{domain.ProbeKindBaseline: zeroLatencyObs}
+		matchedZeroLatency, _ := domain.MatchesCondition(condLatency300, node, sources, zeroLatencyMap, asOf)
+		if matchedZeroLatency {
+			t.Fatal("expected latency <= 0 to fail closed")
+		}
+	})
+
+	t.Run("health_status evaluates baseline 3 categories and rejects smuggling", func(t *testing.T) {
+		condHealthy := domain.FilterCondition{
+			Field: domain.FilterFieldHealthStatus,
+			Op:    domain.FilterOpEquals,
+			Value: "healthy",
+		}
+		matched, _ := domain.MatchesCondition(condHealthy, node, sources, latestObs, asOf)
+		if !matched {
+			t.Fatal("expected healthy condition to match fresh available baseline")
+		}
+
+		condNotUnhealthy := domain.FilterCondition{
+			Field: domain.FilterFieldHealthStatus,
+			Op:    domain.FilterOpNotEquals,
+			Value: "unhealthy",
+		}
+		matchedNotUnhealthy, _ := domain.MatchesCondition(condNotUnhealthy, node, sources, latestObs, asOf)
+		if !matchedNotUnhealthy {
+			t.Fatal("healthy node should satisfy not_equals unhealthy")
+		}
+
+		// Empty observations => untested
+		condUntested := domain.FilterCondition{
+			Field: domain.FilterFieldHealthStatus,
+			Op:    domain.FilterOpEquals,
+			Value: "untested",
+		}
+		emptyMap := map[domain.ProbeKind]domain.ProbeObservation{}
+		matchedUntested, _ := domain.MatchesCondition(condUntested, node, sources, emptyMap, asOf)
+		if !matchedUntested {
+			t.Fatal("empty observations should evaluate to untested")
+		}
+		// Untested must NOT match healthy
+		matchedUntestedAsHealthy, _ := domain.MatchesCondition(condHealthy, node, sources, emptyMap, asOf)
+		if matchedUntestedAsHealthy {
+			t.Fatal("untested node must not match healthy")
+		}
+
+		// Unhealthy verdict
+		unhealthyObs := freshObs
+		unhealthyObs.Verdict = domain.VerdictError
+		unhealthyMap := map[domain.ProbeKind]domain.ProbeObservation{domain.ProbeKindBaseline: unhealthyObs}
+		condUnhealthy := domain.FilterCondition{
+			Field: domain.FilterFieldHealthStatus,
+			Op:    domain.FilterOpEquals,
+			Value: "unhealthy",
+		}
+		matchedUnhealthy, _ := domain.MatchesCondition(condUnhealthy, node, sources, unhealthyMap, asOf)
+		if !matchedUnhealthy {
+			t.Fatal("expected error verdict to evaluate to unhealthy")
+		}
+	})
+
+	t.Run("exit_region requires current successful geo observation with non-empty region", func(t *testing.T) {
+		geoObs := domain.ProbeObservation{
+			ID:                 "obs-geo-01",
+			NodeLogicalID:      node.LogicalID,
+			Kind:               domain.ProbeKindGeo,
+			Verdict:            domain.VerdictAvailable,
+			Region:             "HK",
+			ConnectionRevision: &rev1,
+			ObservedAt:         now.Add(-5 * time.Minute),
+		}
+		geoMap := map[domain.ProbeKind]domain.ProbeObservation{
+			domain.ProbeKindBaseline: freshObs,
+			domain.ProbeKindGeo:      geoObs,
+		}
+
+		condHK := domain.FilterCondition{
+			Field: domain.FilterFieldExitRegion,
+			Op:    domain.FilterOpEquals,
+			Value: "HK",
+		}
+		matchedHK, _ := domain.MatchesCondition(condHK, node, sources, geoMap, asOf)
+		if !matchedHK {
+			t.Fatal("expected exit_region HK to match")
+		}
+
+		condNotUS := domain.FilterCondition{
+			Field: domain.FilterFieldExitRegion,
+			Op:    domain.FilterOpNotEquals,
+			Value: "US",
+		}
+		matchedNotUS, _ := domain.MatchesCondition(condNotUS, node, sources, geoMap, asOf)
+		if !matchedNotUS {
+			t.Fatal("expected exit_region not_equals US to match HK")
+		}
+
+		// Failed geo -> both equals and not_equals FAIL closed
+		failedGeoObs := geoObs
+		failedGeoObs.Verdict = domain.VerdictError
+		failedGeoObs.Region = "HK"
+		failedGeoMap := map[domain.ProbeKind]domain.ProbeObservation{
+			domain.ProbeKindBaseline: freshObs,
+			domain.ProbeKindGeo:      failedGeoObs,
+		}
+		matchedEqFailed, _ := domain.MatchesCondition(condHK, node, sources, failedGeoMap, asOf)
+		if matchedEqFailed {
+			t.Fatal("failed geo observation must not match equals")
+		}
+		matchedNeqFailed, _ := domain.MatchesCondition(condNotUS, node, sources, failedGeoMap, asOf)
+		if matchedNeqFailed {
+			t.Fatal("failed geo observation must not match not_equals (fail-closed)")
+		}
+
+		// Missing geo observation -> fails closed for both
+		matchedEqMissing, _ := domain.MatchesCondition(condHK, node, sources, latestObs, asOf)
+		if matchedEqMissing {
+			t.Fatal("missing geo observation must not match equals")
+		}
+		matchedNeqMissing, _ := domain.MatchesCondition(condNotUS, node, sources, latestObs, asOf)
+		if matchedNeqMissing {
+			t.Fatal("missing geo observation must not match not_equals")
+		}
+
+		// Cross revision -> fails closed
+		crossRevGeoObs := geoObs
+		crossRevGeoObs.ConnectionRevision = &rev2
+		crossRevGeoMap := map[domain.ProbeKind]domain.ProbeObservation{
+			domain.ProbeKindBaseline: freshObs,
+			domain.ProbeKindGeo:      crossRevGeoObs,
+		}
+		matchedCrossRev, _ := domain.MatchesCondition(condHK, node, sources, crossRevGeoMap, asOf)
+		if matchedCrossRev {
+			t.Fatal("cross revision geo observation must fail closed")
+		}
+	})
+
+	t.Run("platform_verdict checks specific platform evidence on current revision", func(t *testing.T) {
+		streamingObs := domain.ProbeObservation{
+			ID:                 "obs-streaming-01",
+			NodeLogicalID:      node.LogicalID,
+			Kind:               domain.ProbeKindStreaming,
+			Verdict:            domain.VerdictAvailable,
+			ConnectionRevision: &rev1,
+			ObservedAt:         now.Add(-5 * time.Minute),
+			Platforms: map[string]domain.PlatformCapability{
+				"disney": {Verdict: domain.VerdictAvailable},
+			},
+		}
+		platformMap := map[domain.ProbeKind]domain.ProbeObservation{
+			domain.ProbeKindBaseline:  freshObs,
+			domain.ProbeKindStreaming: streamingObs,
+		}
+
+		condDisneyAvail := domain.FilterCondition{
+			Field:     domain.FilterFieldPlatformVerdict,
+			Op:        domain.FilterOpEquals,
+			Value:     "available",
+			ProbeKind: probeKindPtr(domain.ProbeKindStreaming),
+			Platform:  "disney",
+		}
+		matchedDisney, _ := domain.MatchesCondition(condDisneyAvail, node, sources, platformMap, asOf)
+		if !matchedDisney {
+			t.Fatal("expected disney available to match")
+		}
+
+		// Missing platform within streaming observation -> fails closed
+		condNetflix := domain.FilterCondition{
+			Field:     domain.FilterFieldPlatformVerdict,
+			Op:        domain.FilterOpEquals,
+			Value:     "available",
+			ProbeKind: probeKindPtr(domain.ProbeKindStreaming),
+			Platform:  "netflix",
+		}
+		matchedNetflix, _ := domain.MatchesCondition(condNetflix, node, sources, platformMap, asOf)
+		if matchedNetflix {
+			t.Fatal("missing platform evidence must fail closed")
+		}
+		condNetflixNeq := domain.FilterCondition{
+			Field:     domain.FilterFieldPlatformVerdict,
+			Op:        domain.FilterOpNotEquals,
+			Value:     "error",
+			ProbeKind: probeKindPtr(domain.ProbeKindStreaming),
+			Platform:  "netflix",
+		}
+		matchedNetflixNeq, _ := domain.MatchesCondition(condNetflixNeq, node, sources, platformMap, asOf)
+		if matchedNetflixNeq {
+			t.Fatal("missing platform evidence must fail closed even on not_equals")
+		}
+
+		// nil ProbeKind in condition does not panic, returns false
+		condNilProbeKind := domain.FilterCondition{
+			Field:    domain.FilterFieldPlatformVerdict,
+			Op:       domain.FilterOpEquals,
+			Value:    "available",
+			Platform: "disney",
+		}
+		matchedNilKind, _ := domain.MatchesCondition(condNilProbeKind, node, sources, platformMap, asOf)
+		if matchedNilKind {
+			t.Fatal("nil ProbeKind on platform verdict must return false")
 		}
 	})
 }

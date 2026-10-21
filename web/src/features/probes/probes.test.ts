@@ -438,4 +438,26 @@ describe('useProbes composable', () => {
     expect(triggered?.queue_nodes_count).toBe(7)
     expect(poolStatus.value.queue_nodes_count).toBe(7)
   })
+
+  it('derives pool status locally using 3-state health and zero legacy degraded/undetermined counts', () => {
+    const { poolStatus, probeNodes } = useProbes()
+    probeNodes.value = [
+      { logicalId: 'n1', active: true, healthStatus: 'healthy', capabilities: { baseline: 'available' } } as any,
+      { logicalId: 'n2', active: true, healthStatus: 'degraded' } as any, // legacy degraded maps to healthy
+      { logicalId: 'n3', active: true, healthStatus: 'unhealthy' } as any,
+      { logicalId: 'n4', active: true, healthStatus: 'untested' } as any,
+      { logicalId: 'n5', active: true, probeState: 'probing', healthStatus: 'healthy' } as any,
+      { logicalId: 'n6', active: true, probeState: 'queued', healthStatus: 'untested' } as any,
+    ]
+
+    const status = poolStatus.value
+    expect(status.healthy_count).toBe(3) // n1, n2, n5
+    expect(status.available_count).toBe(3)
+    expect(status.unavailable_count).toBe(1) // n3
+    expect(status.untested_count).toBe(2) // n4, n6
+    expect(status.degraded_count).toBe(0) // legacy count 0
+    expect(status.undetermined_count).toBe(0) // legacy count 0
+    expect(status.probing_count).toBe(1) // n5
+    expect(status.queued_waiting_count).toBe(1) // n6
+  })
 })

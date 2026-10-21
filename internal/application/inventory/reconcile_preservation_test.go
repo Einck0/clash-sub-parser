@@ -512,8 +512,8 @@ proxies:
 	if detail3.HealthStatus == "healthy" {
 		t.Fatalf("HealthStatus must NOT be healthy after connection changed! got: %s", detail3.HealthStatus)
 	}
-	if detail3.HealthStatus != "unknown" {
-		t.Fatalf("expected health status 'unknown', got %s", detail3.HealthStatus)
+	if detail3.HealthStatus != "untested" {
+		t.Fatalf("expected health status 'untested', got %s", detail3.HealthStatus)
 	}
 }
 

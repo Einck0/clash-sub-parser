@@ -1,66 +1,54 @@
 package domain
 
 import (
-	"strings"
 	"time"
 )
 
-// BaselineHealth is the shared, conservative overall connectivity classification.
-// Capability observations cannot substitute for the baseline. Historical NULL revisions
-// and ambiguous network failures are unknown, never evidence of a broken node.
+// BaselineHealth is the shared overall connectivity classification.
+// Capability observations cannot substitute for the current connection's baseline.
 type BaselineHealth string
 
 const (
 	BaselineHealthy   BaselineHealth = "healthy"
+	// BaselineDegraded is retained for source compatibility; canonical health never emits it.
 	BaselineDegraded  BaselineHealth = "degraded"
 	BaselineUnhealthy BaselineHealth = "unhealthy"
 	BaselineUnknown   BaselineHealth = "unknown"
 )
 
-// EvaluateBaselineHealth returns overall health and whether baseline latency can be displayed.
-// A nil observation, revision-mismatched observation, or future-dated observation cannot certify this connection.
-// If freshness > 0, an observation older than freshness is also treated as expired.
+// EvaluateBaselineHealth returns the canonical health and whether real baseline latency can be displayed.
+// Freshness is retained for API compatibility but does not change health; connection revision does.
 func EvaluateBaselineHealth(obs *ProbeObservation, revision int64, now time.Time, freshness time.Duration) (BaselineHealth, bool) {
+	_ = freshness
 	if obs == nil || obs.Kind != ProbeKindBaseline || obs.ConnectionRevision == nil || revision < 1 ||
-		*obs.ConnectionRevision != revision || obs.ObservedAt.After(now) {
+		*obs.ConnectionRevision != revision || obs.ObservedAt.IsZero() || obs.ObservedAt.After(now) {
 		return BaselineUnknown, false
 	}
-	if freshness > 0 && now.Sub(obs.ObservedAt) >= freshness {
-		return BaselineUnknown, false
-	}
-	if obs.Verdict == VerdictAvailable {
+	switch obs.Verdict {
+	case VerdictAvailable, VerdictRestricted:
 		return BaselineHealthy, obs.LatencyMS > 0
-	}
-	if obs.Verdict == VerdictRestricted {
-		return BaselineDegraded, obs.LatencyMS > 0
-	}
-	// Only a specifically identified failure at the node connection/handshake stage
-	// certifies node unavailability. Legacy transport_error lacks that evidence.
-	if obs.Verdict == VerdictError && strings.Contains(obs.RedactedSummary, "reason=node_connect_failed") {
+	case VerdictError:
 		return BaselineUnhealthy, false
+	default:
+		return BaselineUnknown, false
 	}
-	return BaselineUnknown, false
 }
 
-// NodeHealthCategory defines the mutually exclusive health classification of a node.
+// NodeHealthCategory defines the mutually exclusive canonical health classification of a node.
 type NodeHealthCategory string
 
 const (
 	HealthCategoryHealthy      NodeHealthCategory = "healthy"
+	// Retained for compatibility; canonical classification does not emit degraded.
 	HealthCategoryDegraded     NodeHealthCategory = "degraded"
 	HealthCategoryUnhealthy    NodeHealthCategory = "unhealthy"
+	// Retained for compatibility; missing or invalid current baseline is untested.
 	HealthCategoryUndetermined NodeHealthCategory = "undetermined"
 	HealthCategoryUntested     NodeHealthCategory = "untested"
 )
 
-// ClassifyNodeHealth evaluates the mutually exclusive health category of a node based on its latest observations.
-// - If observations map is empty or nil: HealthCategoryUntested
-// - If fresh baseline probe exists with current revision:
-//   - VerdictAvailable -> HealthCategoryHealthy
-//   - VerdictRestricted -> HealthCategoryDegraded
-//   - VerdictError with reason=node_connect_failed -> HealthCategoryUnhealthy
-//
-// - Otherwise (has observations, but baseline is missing, stale, revision-mismatched, future-dated, or inconclusive): HealthCategoryUndetermined
+// ClassifyNodeHealth classifies only the current baseline observation; auxiliary observations do not establish health.
+// Missing or invalid baseline evidence is untested. Observation age does not expire a valid current-revision result.
 func ClassifyNodeHealth(observations map[ProbeKind]ProbeObservation, currentRevision int64, now time.Time, freshness time.Duration) NodeHealthCategory {
 	if len(observations) == 0 {
 		return HealthCategoryUntested
@@ -74,12 +62,10 @@ func ClassifyNodeHealth(observations map[ProbeKind]ProbeObservation, currentRevi
 	switch health {
 	case BaselineHealthy:
 		return HealthCategoryHealthy
-	case BaselineDegraded:
-		return HealthCategoryDegraded
 	case BaselineUnhealthy:
 		return HealthCategoryUnhealthy
 	default:
-		return HealthCategoryUndetermined
+		return HealthCategoryUntested
 	}
 }
 

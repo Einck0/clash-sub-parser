@@ -258,10 +258,17 @@ function resolveObservationPlatforms(obs: ProbeObservation): PlatformBadge[] {
               {{ t('probes.evidenceTitle') }}
             </span>
             <StatusBadge
+              v-if="node && reprobing"
+              data-testid="evidence-node-probe-state-badge"
+              label="⚡ 检测中"
+              tone="info"
+              :pulse="true"
+            />
+            <StatusBadge
               v-if="node"
               data-testid="evidence-node-health-badge"
-              :label="nodeHealthBadge(node, reprobing ? [node.logicalId] : undefined).label"
-              :tone="nodeHealthBadge(node, reprobing ? [node.logicalId] : undefined).tone"
+              :label="nodeHealthBadge(node).label"
+              :tone="nodeHealthBadge(node).tone"
             />
             <StatusBadge
               v-if="node && resolveNodeLatencyMs(node) !== null"

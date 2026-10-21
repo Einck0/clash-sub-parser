@@ -36,16 +36,7 @@ export type CapabilityInput =
 
 export type NodeProbeState = 'probing' | 'queued' | 'idle'
 
-export type NodeHealthStatus =
-  | 'probing'
-  | 'queued'
-  | 'healthy'
-  | 'degraded'
-  | 'unhealthy'
-  | 'unknown'
-  | 'missing'
-  | 'undetermined'
-  | 'untested'
+export type NodeHealthStatus = 'healthy' | 'unhealthy' | 'untested' | 'degraded' | 'unknown' | 'missing' | 'undetermined' | 'probing' | 'queued'
 
 export type NodeProtocol =
   | 'ss'
@@ -708,53 +699,36 @@ export function resolveNodeProbeState(
 
 export function nodeUnderlyingHealthCategory(
   node: NodeRecord | NormalizedNode
-): 'healthy' | 'degraded' | 'unhealthy' | 'undetermined' | 'untested' {
+): 'healthy' | 'unhealthy' | 'untested' {
   const health = (node as NormalizedNode).healthStatus ?? (node as NodeRecord).health_status
-  if (health === 'healthy') return 'healthy'
-  if (health === 'degraded') return 'degraded'
+  if (health === 'healthy' || health === 'degraded' || (health as string) === 'restricted') return 'healthy'
   if (health === 'unhealthy') return 'unhealthy'
-  if (health === 'undetermined') return 'undetermined'
-  if (health === 'untested') return 'untested'
 
   const baseDetail = extractCapabilityDetail(node, 'baseline')
-  const caps = node.capabilities ?? {}
-  const rawValues = Object.values(caps)
-  const hasAnyObservation = rawValues.length > 0
-
-  if (!hasAnyObservation) {
-    return 'untested'
-  }
-
-  // Baseline-authoritative evaluation
   if (baseDetail) {
     if (baseDetail.verdict === 'error') {
       return 'unhealthy'
     }
-    if (baseDetail.verdict === 'available') {
+    if (baseDetail.verdict === 'available' || baseDetail.verdict === 'restricted') {
       return 'healthy'
-    }
-    if (baseDetail.verdict === 'restricted') {
-      return 'degraded'
     }
     if (baseDetail.stale || baseDetail.verdict === 'stale') {
       const prevVerdict = (baseDetail as any).previous_verdict || (baseDetail as any).previousVerdict
       if (prevVerdict === 'available') {
         return 'healthy'
       }
-      return 'undetermined'
     }
-    return 'undetermined'
   }
 
   // Node has observations (e.g. AI, streaming, geo), but NO baseline observation!
   // CRITICAL: NEVER fall back AI.available or auxiliary capability to healthy!
-  // Stale or auxiliary-only observations classify node health as undetermined.
-  return 'undetermined'
+  // Stale or auxiliary-only observations classify node health as untested.
+  return 'untested'
 }
 
 export function nodeHealthDiagnostic(node: NodeRecord | NormalizedNode): NodeHealthDiagnostic | null {
   const category = nodeUnderlyingHealthCategory(node)
-  if (category === 'healthy' || category === 'degraded') {
+  if (category === 'healthy') {
     return null
   }
 
@@ -866,54 +840,13 @@ export function nodeHealthDiagnostic(node: NodeRecord | NormalizedNode): NodeHea
 }
 
 export function nodeHealthBadge(
-  node: NodeRecord | NormalizedNode,
-  probingIds?: Set<string> | Iterable<string>,
-  queuedIds?: Set<string> | Iterable<string>
+  node: NodeRecord | NormalizedNode
 ): { label: string; tone: ToastTone } {
-  const liveProbeState = resolveNodeProbeState(node, probingIds, queuedIds)
-  if (liveProbeState === 'probing') {
-    return { label: '检测中', tone: 'info' }
-  }
-  if (liveProbeState === 'queued') {
-    return { label: '队列中', tone: 'warning' }
-  }
-
   const category = nodeUnderlyingHealthCategory(node)
   if (category === 'healthy') return { label: '正常', tone: 'success' }
-  if (category === 'degraded') return { label: '降级', tone: 'warning' }
   if (category === 'unhealthy') return { label: '异常', tone: 'error' }
 
-  const diag = nodeHealthDiagnostic(node)
-  if (diag) {
-    if (
-      diag.code === 'unsafe_tls_rejected' ||
-      diag.code === 'unsafe_option_rejected' ||
-      diag.code === 'private_target_rejected'
-    ) {
-      return { label: '未知 · 安全拒绝', tone: 'warning' }
-    }
-    if (
-      diag.code === 'credentials_unavailable' ||
-      diag.code === 'client_build_failed' ||
-      diag.code === 'probe_dialing_not_configured' ||
-      diag.code === 'request_build_failed'
-    ) {
-      return { label: '未知 · 配置待核', tone: 'warning' }
-    }
-    if (diag.code === 'probe_stale') {
-      return { label: '未知 · 待重测', tone: 'info' }
-    }
-    if (diag.code === 'baseline_missing') {
-      return { label: '待复核', tone: 'warning' }
-    }
-    if (diag.code !== 'probe_missing') {
-      return { label: '未知 / 待核验', tone: 'info' }
-    }
-  }
-  if (category === 'undetermined') {
-    return { label: '待复核', tone: 'warning' }
-  }
-  return { label: '未探测', tone: 'info' }
+  return { label: '未测试', tone: 'info' }
 }
 
 export function nodeRiskBadge(node: NodeRecord | NormalizedNode): { label: string; tone: ToastTone } {
@@ -986,10 +919,8 @@ export function resolveNodeLatencyMs(node: NodeRecord | NormalizedNode): number 
     health === 'unhealthy' ||
     health === 'unknown' ||
     health === 'missing' ||
-    health === 'undetermined' ||
     health === 'untested' ||
     category === 'unhealthy' ||
-    category === 'undetermined' ||
     category === 'untested' ||
     (category as string) === 'unprobed'
   ) {

@@ -21,12 +21,50 @@ func New() Resolver {
 	return &defaultResolver{}
 }
 
+func dnsStringList(value any) []string {
+	items, ok := value.([]any)
+	if !ok {
+		strings, ok := value.([]string)
+		if ok {
+			return append([]string(nil), strings...)
+		}
+		return nil
+	}
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		if text, ok := item.(string); ok {
+			result = append(result, text)
+		}
+	}
+	return result
+}
+
 // Resolve executes deterministic policy graph resolution and produces a ResolvedPolicySnapshot with a stable digest.
 func (r *defaultResolver) Resolve(ctx context.Context, input ResolveInput) (*ResolvedPolicySnapshot, error) {
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	default:
+	}
+
+	if input.DNS.Config != nil {
+		config := make(map[string]any, len(input.DNS.Config))
+		for key, value := range input.DNS.Config {
+			config[key] = value
+		}
+		config["enable"] = input.DNS.Enabled
+		input.DNS.Config = config
+		input.DNS.Nameservers = dnsStringList(config["nameserver"])
+		input.DNS.Fallback = dnsStringList(config["fallback"])
+	} else {
+		config := map[string]any{"enable": input.DNS.Enabled}
+		if input.DNS.Nameservers != nil {
+			config["nameserver"] = input.DNS.Nameservers
+		}
+		if input.DNS.Fallback != nil {
+			config["fallback"] = input.DNS.Fallback
+		}
+		input.DNS.Config = config
 	}
 
 	compilerVer := input.CompilerVersion

@@ -366,20 +366,20 @@ func TestNodeRepository_ListAll_AndHealthPredicatesConservation(t *testing.T) {
 	undeterminedCount := queryHealth("undetermined")
 	untestedCount := queryHealth("untested")
 
-	if healthyCount != 10 {
-		t.Fatalf("expected healthy=10, got %d", healthyCount)
+	if healthyCount != 18 {
+		t.Fatalf("expected healthy=18, got %d", healthyCount)
 	}
-	if degradedCount != 5 {
-		t.Fatalf("expected degraded=5, got %d", degradedCount)
+	if degradedCount != 0 {
+		t.Fatalf("expected degraded=0, got %d", degradedCount)
 	}
-	if unhealthyCount != 5 {
-		t.Fatalf("expected unhealthy=5, got %d", unhealthyCount)
+	if unhealthyCount != 8 {
+		t.Fatalf("expected unhealthy=8, got %d", unhealthyCount)
 	}
-	if undeterminedCount != 15 {
-		t.Fatalf("expected undetermined=15, got %d", undeterminedCount)
+	if undeterminedCount != 0 {
+		t.Fatalf("expected undetermined=0, got %d", undeterminedCount)
 	}
-	if untestedCount != 215 {
-		t.Fatalf("expected untested=215, got %d", untestedCount)
+	if untestedCount != 224 {
+		t.Fatalf("expected untested=224, got %d", untestedCount)
 	}
 
 	// Conservation check: sum of all 5 disjoint categories MUST equal total active nodes (250)
@@ -389,15 +389,15 @@ func TestNodeRepository_ListAll_AndHealthPredicatesConservation(t *testing.T) {
 			healthyCount, degradedCount, unhealthyCount, undeterminedCount, untestedCount, sum, totalActive)
 	}
 
-	// Multi-value check: healthy + degraded = 15
+	// Multi-value check: healthy + degraded = 18
 	multiCount := queryHealth("healthy", "degraded")
-	if multiCount != 15 {
-		t.Fatalf("expected multi healthy+degraded=15, got %d", multiCount)
+	if multiCount != 18 {
+		t.Fatalf("expected multi healthy+degraded=18, got %d", multiCount)
 	}
 
-	// Multi-value check: undetermined + untested = 230
+	// Multi-value check: undetermined + untested = 224
 	multiUndetUntested := queryHealth("undetermined", "untested")
-	if multiUndetUntested != 230 {
-		t.Fatalf("expected multi undetermined+untested=230, got %d", multiUndetUntested)
+	if multiUndetUntested != 224 {
+		t.Fatalf("expected multi undetermined+untested=224, got %d", multiUndetUntested)
 	}
 }

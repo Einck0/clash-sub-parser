@@ -11,7 +11,9 @@ import {
   LanguageIcon,
   PaintBrushIcon,
   BoltIcon,
+  GlobeAltIcon,
 } from '@heroicons/vue/24/outline'
+import { useRouter } from 'vue-router'
 import { api } from '../../api/client'
 import { toastStore } from '../../ui/toast'
 import type { AuthStatus } from '../auth/useAuth'
@@ -33,6 +35,15 @@ const exportEnabled = ref(true)
 const settingsError = ref('')
 const showStoredToken = ref(false)
 const inputToken = ref('')
+const router = useRouter()
+
+function goToDns() {
+  if (router) {
+    void router.push('/dns')
+  } else if (typeof window !== 'undefined') {
+    window.location.hash = '#/dns'
+  }
+}
 const isTesting = ref(false)
 const isSaving = ref(false)
 const isClearing = ref(false)
@@ -413,6 +424,31 @@ onMounted(() => {
     <SubscriptionFetchSettings />
     <PublicBaseUrlSettings />
     <GlobalNodeFilterSettings />
+
+    <!-- Client DNS Configuration Jump Card -->
+    <section class="card bg-base-200/80 backdrop-blur-xl shadow-sm border border-white/10" data-testid="settings-dns-card">
+      <div class="card-body p-5 space-y-4">
+        <div class="flex items-center justify-between gap-4 flex-wrap">
+          <div class="flex items-center gap-2.5">
+            <GlobeAltIcon class="w-5 h-5 text-primary" />
+            <div>
+              <h3 class="text-sm sm:text-base font-bold">{{ t('settings.dnsCardTitle') }}</h3>
+              <p class="text-xs text-base-content/60">
+                {{ t('settings.dnsCardDesc') }}
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            class="btn btn-sm btn-primary"
+            data-testid="jump-to-dns-btn"
+            @click="goToDns"
+          >
+            {{ t('settings.goToDns') }}
+          </button>
+        </div>
+      </div>
+    </section>
 
     <!-- Unified Probe Partition: Automatic Schedule, Detection Kinds & Handshake Timeout -->
     <section class="card bg-base-200/80 backdrop-blur-xl shadow-sm border border-white/10" data-testid="settings-probe-partition">

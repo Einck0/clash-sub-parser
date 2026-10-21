@@ -263,6 +263,25 @@ describe('SettingsView Component', () => {
     expect(statusBadge?.textContent?.trim()).toBe('Active')
     expect(statusBadge?.textContent).not.toContain('Active Active')
   })
+
+  it('renders DNS configuration jump card and button triggers navigation to /dns', async () => {
+    vi.spyOn(api, 'get').mockImplementation(async path => path === '/api/v1/settings/auth' ? settings() : { mode: 'open' })
+
+    mountSettings()
+    await nextTick()
+
+    const dnsCard = container.querySelector('[data-testid="settings-dns-card"]')
+    expect(dnsCard).toBeTruthy()
+    expect(dnsCard?.textContent).toContain('客户端 DNS 配置')
+
+    const jumpBtn = container.querySelector('[data-testid="jump-to-dns-btn"]') as HTMLButtonElement
+    expect(jumpBtn).toBeTruthy()
+    expect(jumpBtn.textContent).toContain('前往 DNS 配置')
+
+    jumpBtn.click()
+    await nextTick()
+    expect(window.location.hash).toContain('/dns')
+  })
 })
 
 describe('App.vue Integration: Settings View & Topbar Auth Badge', () => {

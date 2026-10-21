@@ -101,8 +101,8 @@ func TestRunnerReasonCategoriesHaveNoSecretLeakageAndAssociateRevision(t *testin
 				t.Fatalf("observation revision %+v want %d", got.ConnectionRevision, tc.node.ConnectionRevision)
 			}
 			if tc.reason == "transport_error" {
-				if status, _ := domain.EvaluateBaselineHealth(&got, tc.node.ConnectionRevision, time.Now().UTC(), time.Hour); status != domain.BaselineUnknown {
-					t.Fatalf("ambiguous transport_error must remain unknown, got %s", status)
+				if status, _ := domain.EvaluateBaselineHealth(&got, tc.node.ConnectionRevision, time.Now().UTC(), time.Hour); status != domain.BaselineUnhealthy {
+					t.Fatalf("transport_error must evaluate to unhealthy, got %s", status)
 				}
 			}
 		})

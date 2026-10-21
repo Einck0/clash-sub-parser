@@ -184,6 +184,9 @@ func (s *Service) CreateGroup(ctx context.Context, cmd CreateGroupCommand) (*Gro
 		for i := range sources {
 			sources[i].Position = i
 			sources[i].GroupID = groupID
+			if sources[i].FilterSpec != nil {
+				sources[i].FilterSpec.NormalizeForSave()
+			}
 			if err := domain.ValidateMemberSource(sources[i]); err != nil {
 				s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_group.create", domain.AuditResultFailure, fmt.Sprintf("invalid source: %v", err))
 				return nil, err
@@ -202,6 +205,9 @@ func (s *Service) CreateGroup(ctx context.Context, cmd CreateGroupCommand) (*Gro
 		}
 		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_group.create", domain.AuditResultSuccess, fmt.Sprintf("id=%s, name=%s", saved.ID, saved.Name))
 		return toGroupView(saved, nil), nil
+	}
+	if cmd.NodeFilter != nil {
+		cmd.NodeFilter.NormalizeForSave()
 	}
 	if atomic, ok := s.policyRepo.(domain.AtomicGroupRepository); ok {
 		if err := atomic.SaveGroup(ctx, &group, true, &edges, cmd.NodeFilter != nil, cmd.NodeFilter); err != nil {
@@ -382,6 +388,9 @@ func (s *Service) UpdateGroup(ctx context.Context, cmd UpdateGroupCommand) (*Gro
 		for i := range sources {
 			sources[i].Position = i
 			sources[i].GroupID = group.ID
+			if sources[i].FilterSpec != nil {
+				sources[i].FilterSpec.NormalizeForSave()
+			}
 			if err := domain.ValidateMemberSource(sources[i]); err != nil {
 				s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_group.update", domain.AuditResultFailure, fmt.Sprintf("invalid source: %v", err))
 				return nil, err
@@ -1315,14 +1324,14 @@ func (s *Service) PreviewGroup(ctx context.Context, cmd PreviewGroupCommand) (*G
 		// Standalone services cannot silently validate evidence-dependent filters.
 		for _, spec := range groupFilters {
 			for _, c := range spec.Conditions {
-				if c.Field == domain.FilterFieldSourceSubscriptions || c.Field == domain.FilterFieldProbeVerdict || c.Field == domain.FilterFieldProbeLatencyMS {
+				if c.Field == domain.FilterFieldSourceSubscriptions || c.Field == domain.FilterFieldProbeVerdict || c.Field == domain.FilterFieldProbeLatencyMS || c.Field == domain.FilterFieldHealthStatus || c.Field == domain.FilterFieldExitRegion || c.Field == domain.FilterFieldPlatformVerdict {
 					return nil, domain.NewInternalError("preview_incomplete", "publication input provider required for evidence filters")
 				}
 			}
 		}
 		if globalFilter != nil {
 			for _, c := range globalFilter.Conditions {
-				if c.Field == domain.FilterFieldSourceSubscriptions || c.Field == domain.FilterFieldProbeVerdict || c.Field == domain.FilterFieldProbeLatencyMS {
+				if c.Field == domain.FilterFieldSourceSubscriptions || c.Field == domain.FilterFieldProbeVerdict || c.Field == domain.FilterFieldProbeLatencyMS || c.Field == domain.FilterFieldHealthStatus || c.Field == domain.FilterFieldExitRegion || c.Field == domain.FilterFieldPlatformVerdict {
 					return nil, domain.NewInternalError("preview_incomplete", "publication input provider required for evidence filters")
 				}
 			}
@@ -1330,7 +1339,7 @@ func (s *Service) PreviewGroup(ctx context.Context, cmd PreviewGroupCommand) (*G
 		for _, src := range sources {
 			if src.FilterSpec != nil {
 				for _, c := range src.FilterSpec.Conditions {
-					if c.Field == domain.FilterFieldSourceSubscriptions || c.Field == domain.FilterFieldProbeVerdict || c.Field == domain.FilterFieldProbeLatencyMS {
+					if c.Field == domain.FilterFieldSourceSubscriptions || c.Field == domain.FilterFieldProbeVerdict || c.Field == domain.FilterFieldProbeLatencyMS || c.Field == domain.FilterFieldHealthStatus || c.Field == domain.FilterFieldExitRegion || c.Field == domain.FilterFieldPlatformVerdict {
 						return nil, domain.NewInternalError("preview_incomplete", "publication input provider required for evidence filters")
 					}
 				}
@@ -1627,14 +1636,14 @@ func (s *Service) ValidateGraph(ctx context.Context) (*ValidationResult, error) 
 		// Standalone services cannot silently validate evidence-dependent filters.
 		for _, spec := range groupFilters {
 			for _, c := range spec.Conditions {
-				if c.Field == domain.FilterFieldSourceSubscriptions || c.Field == domain.FilterFieldProbeVerdict || c.Field == domain.FilterFieldProbeLatencyMS {
+				if c.Field == domain.FilterFieldSourceSubscriptions || c.Field == domain.FilterFieldProbeVerdict || c.Field == domain.FilterFieldProbeLatencyMS || c.Field == domain.FilterFieldHealthStatus || c.Field == domain.FilterFieldExitRegion || c.Field == domain.FilterFieldPlatformVerdict {
 					return nil, domain.NewInternalError("validation_incomplete", "publication snapshot provider required for evidence filters")
 				}
 			}
 		}
 		if globalFilter != nil {
 			for _, c := range globalFilter.Conditions {
-				if c.Field == domain.FilterFieldSourceSubscriptions || c.Field == domain.FilterFieldProbeVerdict || c.Field == domain.FilterFieldProbeLatencyMS {
+				if c.Field == domain.FilterFieldSourceSubscriptions || c.Field == domain.FilterFieldProbeVerdict || c.Field == domain.FilterFieldProbeLatencyMS || c.Field == domain.FilterFieldHealthStatus || c.Field == domain.FilterFieldExitRegion || c.Field == domain.FilterFieldPlatformVerdict {
 					return nil, domain.NewInternalError("validation_incomplete", "publication snapshot provider required for evidence filters")
 				}
 			}
@@ -2056,6 +2065,7 @@ func (s *Service) SetGlobalNodeFilter(ctx context.Context, cmd SetGlobalNodeFilt
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	cmd.Spec.NormalizeForSave()
 	if err := cmd.Spec.Validate(); err != nil {
 		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy.global_filter.update", domain.AuditResultFailure, fmt.Sprintf("validation failed: %v", err))
 		return nil, err

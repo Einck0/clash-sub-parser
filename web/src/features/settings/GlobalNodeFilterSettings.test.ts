@@ -43,10 +43,16 @@ describe('global export filter settings', () => {
     expect(api.get).toHaveBeenCalledWith(endpoint)
     expect(conditions()).toHaveLength(1)
     expect([...conditions()[0]!.querySelectorAll('select')].map((s) => s.value)).toEqual(['probe_verdict', 'equals', 'baseline', 'available'])
-    expect((conditions()[0]!.querySelector('input[type=number]') as HTMLInputElement).value).toBe('3600')
-    expect(root.textContent).toContain('24 小时')
+    expect(conditions()[0]!.querySelector('input[type=number]')).toBeNull()
+    expect(root.textContent).toContain('当前连接版本')
+    expect(root.textContent).toContain('最新有效检测')
+    expect(root.textContent).toContain('未知地区或平台判定对等于与不等于（neq）均不匹配')
+    expect(root.textContent).toContain('时间不自然失效')
     expect(root.textContent).toContain('queued/probing')
-    expect(root.textContent).toContain('重新发布')
+    expect(root.textContent).toContain('直接导出')
+    expect(root.textContent).toContain('WARP')
+    expect(root.textContent).toContain('当前凭据版本门槛')
+    expect(root.textContent).not.toContain('重新发布')
     app!.unmount(); app = undefined
     mount()
     await flush()
@@ -77,10 +83,22 @@ describe('global export filter settings', () => {
   it('supports all domain fields and en-US labels, restores server values after refresh', async () => {
     setLocale('en-US'); mount(); await flush()
     const field = conditions()[0]!.querySelector('select[aria-label="Field"]') as HTMLSelectElement
-    expect([...field.options].map((o) => o.value)).toEqual(['display_name', 'protocol', 'source_subscription_ids', 'probe_verdict', 'probe_latency_ms'])
+    expect([...field.options].map((o) => o.value)).toEqual([
+      'health_status',
+      'exit_region',
+      'platform_verdict',
+      'display_name',
+      'protocol',
+      'source_subscription_ids',
+      'probe_latency_ms',
+      'probe_verdict',
+    ])
     expect([...conditions()[0]!.querySelectorAll<HTMLOptionElement>('select[aria-label="Probe kind"] option')].map((o) => o.value)).toEqual(['baseline', 'geo', 'streaming', 'ai', 'speed', 'ip_risk'])
     expect([...conditions()[0]!.querySelectorAll<HTMLOptionElement>('select[aria-label="Value"] option')].map((o) => o.value)).toEqual(['available', 'restricted', 'unknown', 'error', 'stale'])
-    expect(root.textContent).toContain('24 hours')
+    expect(root.textContent).toContain('current connection revision')
+    expect(root.textContent).toContain('latest valid check')
+    expect(root.textContent).toContain('matches neither equals nor not_equals (neq)')
+    expect(root.textContent).toContain('do not naturally expire over time')
     input(field, 'display_name'); await flush()
     input(conditions()[0]!.querySelector('input[aria-label="Value"]')!, 'My node'); await flush()
     expect(root.textContent).toContain('Unsaved changes')
@@ -89,12 +107,8 @@ describe('global export filter settings', () => {
     expect(root.textContent).not.toContain('Unsaved changes')
   })
 
-  it('rejects invalid freshness, kind, verdict and missing values without PUT', async () => {
+  it('rejects invalid kind, verdict and missing values without PUT', async () => {
     mount(); await flush()
-    const fresh = conditions()[0]!.querySelector('input[type=number]') as HTMLInputElement
-    input(fresh, '0'); button('filter-save').click(); await flush()
-    expect(find('filter-validation-error')?.textContent).toMatch(/有效期/)
-    input(fresh, '3600')
     input(conditions()[0]!.querySelector('select[aria-label="探针类型"]')!, 'invalid'); button('filter-save').click(); await flush()
     expect(find('filter-validation-error')?.textContent).toMatch(/探针类型/)
     input(conditions()[0]!.querySelector('select[aria-label="探针类型"]')!, 'baseline')
@@ -173,7 +187,9 @@ describe('global export filter settings', () => {
     expect(entry).not.toBeNull()
     entry.click(); await flush()
     expect(root.textContent).toContain('queued/probing')
-    expect(root.textContent).toContain('重新发布')
-    expect(root.textContent).not.toContain('当前凭据版本匹配')
+    expect(root.textContent).toContain('直接导出')
+    expect(root.textContent).toContain('WARP')
+    expect(root.textContent).toContain('当前凭据版本门槛')
+    expect(root.textContent).not.toContain('重新发布')
   })
 })

@@ -76,8 +76,8 @@ func TestFeatureConvergence_SchemaMigrationTo22(t *testing.T) {
 	if !report.Ready {
 		t.Fatalf("expected readiness report Ready=true, got report: %+v", report)
 	}
-	if report.SchemaVersion != 25 {
-		t.Fatalf("expected schema version 25 (sources, fetch settings, revision snapshots, prefix, subscription links, group position, primary subscription, inherit global filter, and rule categories), got %d", report.SchemaVersion)
+	if report.SchemaVersion != 26 {
+		t.Fatalf("expected schema version 26 (sources, fetch settings, revision snapshots, prefix, subscription links, group position, primary subscription, inherit global filter, rule categories, and dns config), got %d", report.SchemaVersion)
 	}
 	if len(report.MissingTables) > 0 {
 		t.Fatalf("unexpected missing tables: %v", report.MissingTables)
@@ -86,8 +86,8 @@ func TestFeatureConvergence_SchemaMigrationTo22(t *testing.T) {
 		t.Fatalf("unexpected FK violations: %v", report.ForeignKeyViolations)
 	}
 
-	// Verify tables from migration 7 and 8 exist, plus subscription_links from migration 22
-	for _, tbl := range []string{"probe_schedules", "probe_batches", "probe_batch_runs", "global_node_filters", "group_node_filters", "subscription_links"} {
+	// Verify tables from migration 7 and 8 exist, plus subscription_links from migration 22 and dns_config from migration 26
+	for _, tbl := range []string{"probe_schedules", "probe_batches", "probe_batch_runs", "global_node_filters", "group_node_filters", "subscription_links", "dns_config"} {
 		var name string
 		err := db.QueryRowContext(ctx, "SELECT name FROM sqlite_master WHERE type='table' AND name=?", tbl).Scan(&name)
 		if err != nil {
@@ -100,6 +100,15 @@ func TestFeatureConvergence_SchemaMigrationTo22(t *testing.T) {
 	}
 	if err := db.QueryRowContext(ctx, "SELECT name FROM sqlite_master WHERE type='index' AND name='uq_subscription_links_default_target'").Scan(&idxName); err != nil {
 		t.Fatalf("expected unique partial index uq_subscription_links_default_target from migration 22 to exist: %v", err)
+	}
+
+	// Verify dns_config schema from migration 26
+	var dnsTableSQL string
+	if err := db.QueryRowContext(ctx, "SELECT sql FROM sqlite_master WHERE type='table' AND name='dns_config'").Scan(&dnsTableSQL); err != nil {
+		t.Fatalf("expected table dns_config to exist: %v", err)
+	}
+	if !strings.Contains(dnsTableSQL, "id = 1") || !strings.Contains(dnsTableSQL, "raw_yaml") {
+		t.Fatalf("expected dns_config schema to enforce singleton and raw_yaml: %s", dnsTableSQL)
 	}
 
 	// Verify settings.public_base_url exists with default empty string from migration 22
@@ -153,6 +162,7 @@ func TestFeatureConvergence_FullStack(t *testing.T) {
 	riskBindingRepo := sqlite.NewRiskPolicyGroupBindingRepository(db)
 	riskObsRepo := sqlite.NewIPRiskObservationRepository(db)
 	nodeFilterRepo := sqlite.NewNodeFilterRepository(db)
+	dnsRepo := sqlite.NewDNSSettingsRepository(db)
 
 	fakeRunner := newControlledFakeRunner()
 
@@ -216,6 +226,7 @@ func TestFeatureConvergence_FullStack(t *testing.T) {
 		publication.WithRiskPolicyRepository(riskPolicyRepo),
 		publication.WithRiskBindingRepository(riskBindingRepo),
 		publication.WithRiskObservationRepository(riskObsRepo),
+		publication.WithDNSSettingsRepository(dnsRepo),
 	)
 
 	const adminToken = "test-admin-token-xyz-12345"
@@ -238,6 +249,7 @@ func TestFeatureConvergence_FullStack(t *testing.T) {
 	router := transporthttp.NewRouter(transporthttp.RouterConfig{
 		TokenHolder:                tokenHolder,
 		SettingsRepository:         settingsRepo,
+		DNSSettingsRepository:      dnsRepo,
 		SessionStore:               sessionStore,
 		SubscriptionService:        subService,
 		InventoryService:           invService,
@@ -292,7 +304,8 @@ func TestFeatureConvergence_FullStack(t *testing.T) {
 	// -------------------------------------------------------------------------
 	// 1. Seed Nodes & Observations in DB directly
 	// -------------------------------------------------------------------------
-	now := time.Now().UTC()
+	now := time.Now().UTC().Add(-10 * time.Minute).Truncate(time.Second)
+	rev1 := int64(1)
 	node1 := domain.Node{
 		LogicalID:   domain.ComputeNodeLogicalID(domain.ProtocolTrojan, "tokyo1.example.com", 443, nil),
 		Protocol:    domain.ProtocolTrojan,
@@ -331,6 +344,11 @@ func TestFeatureConvergence_FullStack(t *testing.T) {
 		t.Fatalf("failed to insert nodes: %v", err)
 	}
 
+	// Update node3's connection_revision in DB to 2 so node3 has mismatched revision with observation (rev 1)
+	if _, err := db.ExecContext(ctx, "UPDATE nodes SET connection_revision = 2 WHERE logical_id = ?;", node3.LogicalID); err != nil {
+		t.Fatalf("failed to update node3 connection_revision: %v", err)
+	}
+
 	subID := "sub-conv-01"
 	fetchID := "fetch-conv-01"
 	nowStr := now.Format(time.RFC3339)
@@ -355,35 +373,38 @@ func TestFeatureConvergence_FullStack(t *testing.T) {
 	}
 
 	// Observations:
-	// Node 1: baseline latency 45ms (<= 100ms)
+	// Node 1: baseline latency 45ms (<= 100ms), matching connection_revision 1
 	obs1 := domain.ProbeObservation{
-		ID:            domain.MustNewUUIDv7(),
-		ProbeRunID:    run.ID,
-		NodeLogicalID: node1.LogicalID,
-		Kind:          domain.ProbeKindBaseline,
-		Verdict:       domain.VerdictAvailable,
-		LatencyMS:     45,
-		ObservedAt:    now,
+		ID:                 domain.MustNewUUIDv7(),
+		ProbeRunID:         run.ID,
+		NodeLogicalID:      node1.LogicalID,
+		Kind:               domain.ProbeKindBaseline,
+		Verdict:            domain.VerdictAvailable,
+		LatencyMS:          45,
+		ConnectionRevision: &rev1,
+		ObservedAt:         now,
 	}
-	// Node 2: baseline latency 250ms
+	// Node 2: baseline latency 250ms, matching connection_revision 1
 	obs2 := domain.ProbeObservation{
-		ID:            domain.MustNewUUIDv7(),
-		ProbeRunID:    run.ID,
-		NodeLogicalID: node2.LogicalID,
-		Kind:          domain.ProbeKindBaseline,
-		Verdict:       domain.VerdictAvailable,
-		LatencyMS:     250,
-		ObservedAt:    now,
+		ID:                 domain.MustNewUUIDv7(),
+		ProbeRunID:         run.ID,
+		NodeLogicalID:      node2.LogicalID,
+		Kind:               domain.ProbeKindBaseline,
+		Verdict:            domain.VerdictAvailable,
+		LatencyMS:          250,
+		ConnectionRevision: &rev1,
+		ObservedAt:         now,
 	}
-	// Node 3: baseline latency 240ms (> 100ms, excluded by group filter)
+	// Node 3: baseline latency 240ms, connection_revision 1 (mismatched with node3 revision 2)
 	obs3 := domain.ProbeObservation{
-		ID:            domain.MustNewUUIDv7(),
-		ProbeRunID:    run.ID,
-		NodeLogicalID: node3.LogicalID,
-		Kind:          domain.ProbeKindBaseline,
-		Verdict:       domain.VerdictAvailable,
-		LatencyMS:     240,
-		ObservedAt:    now,
+		ID:                 domain.MustNewUUIDv7(),
+		ProbeRunID:         run.ID,
+		NodeLogicalID:      node3.LogicalID,
+		Kind:               domain.ProbeKindBaseline,
+		Verdict:            domain.VerdictAvailable,
+		LatencyMS:          240,
+		ConnectionRevision: &rev1,
+		ObservedAt:         now,
 	}
 
 	for _, o := range []domain.ProbeObservation{obs1, obs2, obs3} {
@@ -595,6 +616,27 @@ func TestFeatureConvergence_FullStack(t *testing.T) {
 	}
 	if !hasGroupExcl {
 		t.Errorf("expected group_member_filtered diagnostic for node3")
+	}
+
+	// Verify DNS Settings API and Mihomo Content containing DNS config
+	dnsResp, dnsBody := doReq(http.MethodGet, "/api/v1/settings/dns", nil)
+	if dnsResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/v1/settings/dns returned %d: %s", dnsResp.StatusCode, string(dnsBody))
+	}
+	var dnsData struct {
+		Data struct {
+			Enabled bool   `json:"enabled"`
+			RawYAML string `json:"raw_yaml"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(dnsBody, &dnsData); err != nil {
+		t.Fatalf("unmarshal dns response failed: %v", err)
+	}
+	if !dnsData.Data.Enabled {
+		t.Errorf("expected default DNS enabled to be true")
+	}
+	if !strings.Contains(previewData.Data.Content, "dns:") {
+		t.Errorf("expected dns section in mihomo preview content")
 	}
 
 	// -------------------------------------------------------------------------

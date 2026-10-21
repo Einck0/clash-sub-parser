@@ -361,9 +361,9 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       expect(sidebar?.textContent).toContain('CSP Control Plane')
       expect(sidebar?.textContent).toContain('v1.0 Clean-Slate')
 
-      // Desktop navigation items (7 items: dashboard, subscriptions, nodes, policy, rules, publications, settings)
+      // Desktop navigation items (8 items: dashboard, subscriptions, nodes, dns, policy, rules, publications, settings)
       const navButtons = sidebar?.querySelectorAll('nav button')
-      expect(navButtons?.length).toBe(7)
+      expect(navButtons?.length).toBe(8)
 
       // Mobile bottom nav remains hidden on desktop
       const mobileNav = root.querySelector('nav.md\\:hidden')
@@ -905,20 +905,20 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       sheetContainer.remove()
     })
 
-    it('classifies node with unknown baseline but available AI probe as undetermined (待复核), neither untested nor healthy', async () => {
+    it('classifies node with unknown baseline but available AI probe as untested, neither healthy nor unhealthy', async () => {
       const { nodeUnderlyingHealthCategory, nodeHealthBadge } = await import('../src/features/nodes/nodeView')
 
       const aiOnlyNode = largeNodesFixture.find((n) => n.logicalId === 'node-ai-only-70')!
       expect(aiOnlyNode).toBeDefined()
 
       const category = nodeUnderlyingHealthCategory(aiOnlyNode)
-      expect(category).toBe('undetermined')
-      expect(category).not.toBe('untested')
+      expect(category).toBe('untested')
       expect(category).not.toBe('healthy')
+      expect(category).not.toBe('unhealthy')
 
       const badge = nodeHealthBadge(aiOnlyNode)
-      expect(badge.label).toBe('待复核')
-      expect(badge.tone).toBe('warning')
+      expect(badge.label).toBe('未测试')
+      expect(badge.tone).toBe('info')
     })
   })
 

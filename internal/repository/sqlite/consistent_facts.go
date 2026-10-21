@@ -105,7 +105,37 @@ func (l *consistentFactsLoader) LoadConsistentFacts(ctx context.Context, revisio
 		facts.PrimaryUserInfo = primaryUserInfo.String
 	}
 
+	// 9. DNS Settings
+	dns, err := loadDNSSettings(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	facts.DNSSettings = dns
+
 	return facts, nil
+}
+
+func loadDNSSettings(ctx context.Context, tx *sql.Tx) (*domain.DNSSettings, error) {
+	const q = `SELECT enabled, raw_yaml, revision, updated_at FROM dns_config WHERE id = 1;`
+	var enabledInt int
+	var rawYAML string
+	var revision int64
+	var updatedAt time.Time
+	err := tx.QueryRowContext(ctx, q).Scan(&enabledInt, &rawYAML, &revision, &updatedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			def := domain.DefaultDNSSettings()
+			return &def, nil
+		}
+		return nil, fmt.Errorf("failed to load dns settings: %w", err)
+	}
+	return &domain.DNSSettings{
+		Enabled:   enabledInt == 1,
+		RawYAML:   rawYAML,
+		Revision:  revision,
+		UpdatedAt: updatedAt,
+		Source:    "saved",
+	}, nil
 }
 
 func loadRevision(ctx context.Context, tx *sql.Tx, revisionID string) (*domain.ConfigurationRevision, error) {
@@ -561,6 +591,7 @@ func loadProbeObservations(ctx context.Context, tx *sql.Tx, nodeIDs []string, la
 			if obs.ObservedAt.IsZero() {
 				obs.ObservedAt, _ = time.Parse(time.RFC3339, observedStr)
 			}
+			obs.SyncEvidenceData()
 			if latestObs[obs.NodeLogicalID] == nil {
 				latestObs[obs.NodeLogicalID] = make(map[domain.ProbeKind]domain.ProbeObservation)
 			}
@@ -741,7 +772,7 @@ func inspectFilterDependencies(global *domain.NodeFilterSpec, groupFilters map[s
 			switch condition.Field {
 			case domain.FilterFieldSourceSubscriptions:
 				sources = true
-			case domain.FilterFieldProbeVerdict, domain.FilterFieldProbeLatencyMS:
+			case domain.FilterFieldProbeVerdict, domain.FilterFieldProbeLatencyMS, domain.FilterFieldHealthStatus, domain.FilterFieldExitRegion, domain.FilterFieldPlatformVerdict:
 				observations = true
 			}
 		}

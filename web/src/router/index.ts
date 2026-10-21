@@ -2,6 +2,7 @@ import { createRouter, createWebHashHistory, type RouteRecordRaw } from 'vue-rou
 import DashboardView from '../features/dashboard/DashboardView.vue'
 import SubscriptionsView from '../features/subscriptions/SubscriptionsView.vue'
 import NodesView from '../features/nodes/NodesView.vue'
+import DnsView from '../features/dns/DnsView.vue'
 import PolicyView from '../features/policy/PolicyView.vue'
 import RulesView from '../features/rules/RulesView.vue'
 import PublicationsView from '../features/publications/PublicationsView.vue'
@@ -36,6 +37,12 @@ export const routes: RouteRecordRaw[] = [
     redirect: '/nodes',
   },
   {
+    path: '/dns',
+    name: 'dns',
+    component: DnsView,
+    meta: { title: 'DNS', icon: 'GlobeAltIcon' },
+  },
+  {
     path: '/policy',
     name: 'policy',
     component: PolicyView,
@@ -68,7 +75,7 @@ export const routes: RouteRecordRaw[] = [
       if (matchedTab === 'probes') {
         return '/nodes'
       }
-      if (['dashboard', 'subscriptions', 'nodes', 'policy', 'rules', 'publications', 'settings'].includes(matchedTab)) {
+      if (['dashboard', 'subscriptions', 'nodes', 'dns', 'policy', 'rules', 'publications', 'settings'].includes(matchedTab)) {
         return `/${matchedTab}`
       }
       return '/dashboard'

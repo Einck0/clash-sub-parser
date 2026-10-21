@@ -202,9 +202,7 @@ export function useProbes() {
     const probingSet = new Set<string>(probingNodeIds.value)
     const queuedSet = new Set<string>(queuedNodeIds.value)
     let healthy = 0
-    let degraded = 0
     let unhealthy = 0
-    let undetermined = 0
     let untested = 0
 
     for (const node of nodes) {
@@ -215,9 +213,7 @@ export function useProbes() {
       }
       const cat = nodeUnderlyingHealthCategory(node)
       if (cat === 'healthy') healthy += 1
-      else if (cat === 'degraded') degraded += 1
       else if (cat === 'unhealthy') unhealthy += 1
-      else if (cat === 'undetermined') undetermined += 1
       else untested += 1
     }
 
@@ -235,15 +231,15 @@ export function useProbes() {
       probing_count: probingCount,
       queued_waiting_count: queuedWaitingCount,
       untested_count: untested,
-      undetermined_count: undetermined,
+      undetermined_count: 0,
       total_count: candidateTotal,
       inventory_total: total,
       candidate_total: candidateTotal,
       scope: 'enabled_subscriptions',
       unavailable_count: unhealthy,
-      available_count: healthy + degraded,
+      available_count: healthy,
       healthy_count: healthy,
-      degraded_count: degraded,
+      degraded_count: 0,
       probing_node_ids: probingIds,
       queued_node_ids: queuedIds,
       updated_at: new Date().toISOString(),

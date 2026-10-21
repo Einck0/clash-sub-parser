@@ -53,9 +53,10 @@ type FilterLayerCounts struct {
 
 // DNSConfig specifies DNS settings included in the resolved snapshot.
 type DNSConfig struct {
-	Enabled     bool     `json:"enabled"`
-	Nameservers []string `json:"nameservers"`
-	Fallback    []string `json:"fallback,omitempty"`
+	Enabled     bool           `json:"enabled"`
+	Nameservers []string       `json:"nameservers"`
+	Fallback    []string       `json:"fallback,omitempty"`
+	Config      map[string]any `json:"config,omitempty"`
 }
 
 // ResolvedNode represents an active, admitted node in the resolved policy snapshot.

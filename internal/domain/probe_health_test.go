@@ -7,38 +7,41 @@ import (
 	"clash-sub-parser/internal/domain"
 )
 
-func TestEvaluateBaselineHealthRequiresCurrentVersionAndEvidence(t *testing.T) {
+func TestEvaluateBaselineHealthCanonicalClassification(t *testing.T) {
 	now := time.Date(2026, 9, 30, 5, 0, 0, 0, time.UTC)
 	rev := int64(3)
-	obs := domain.ProbeObservation{Kind: domain.ProbeKindBaseline, Verdict: domain.VerdictAvailable, ObservedAt: now.Add(-time.Minute), LatencyMS: 20, ConnectionRevision: &rev}
-	currentRevision := rev
+	obs := domain.ProbeObservation{Kind: domain.ProbeKindBaseline, Verdict: domain.VerdictAvailable, ObservedAt: now.Add(-48 * time.Hour), LatencyMS: 20, ConnectionRevision: &rev}
 	check := func(want domain.BaselineHealth, latency bool) {
 		t.Helper()
-		status, valid := domain.EvaluateBaselineHealth(&obs, currentRevision, now, time.Hour)
+		status, valid := domain.EvaluateBaselineHealth(&obs, rev, now, time.Hour)
 		if status != want || valid != latency {
 			t.Fatalf("status %s latency %v want %s %v", status, valid, want, latency)
 		}
 	}
+	check(domain.BaselineHealthy, true) // age >24h and freshness do not downgrade current revision
+	obs.Verdict = domain.VerdictRestricted
 	check(domain.BaselineHealthy, true)
+	for _, reason := range []string{"transport_error", "timeout", "node_connect_failed"} {
+		obs.Verdict = domain.VerdictError
+		obs.RedactedSummary = "reason=" + reason
+		check(domain.BaselineUnhealthy, false)
+	}
+	obs.Verdict = domain.VerdictStale
+	check(domain.BaselineUnknown, false)
+	obs.Verdict = domain.VerdictAvailable
 	obs.ConnectionRevision = nil
 	check(domain.BaselineUnknown, false)
 	obs.ConnectionRevision = &rev
-	currentRevision++
+	obs.ObservedAt = time.Time{}
 	check(domain.BaselineUnknown, false)
-	currentRevision--
-	obs.ObservedAt = now.Add(-2 * time.Hour)
+	obs.ObservedAt = now.Add(time.Second)
 	check(domain.BaselineUnknown, false)
 	obs.ObservedAt = now
 	obs.Kind = domain.ProbeKindAI
 	check(domain.BaselineUnknown, false)
 	obs.Kind = domain.ProbeKindBaseline
-	obs.Verdict = domain.VerdictError
-	obs.RedactedSummary = "profile=baseline reason=credentials_unavailable"
-	check(domain.BaselineUnknown, false)
-	obs.RedactedSummary = "profile=baseline reason=transport_error"
-	check(domain.BaselineUnknown, false)
-	obs.RedactedSummary = "profile=baseline reason=node_connect_failed"
-	check(domain.BaselineUnhealthy, false)
+	obs.LatencyMS = 0
+	check(domain.BaselineHealthy, false)
 }
 
 func TestClassifyNodeHealthAndConservation(t *testing.T) {
@@ -63,8 +66,8 @@ func TestClassifyNodeHealthAndConservation(t *testing.T) {
 			ConnectionRevision: &rev,
 		},
 	}
-	if cat := domain.ClassifyNodeHealth(aiObs, rev, now, freshness); cat != domain.HealthCategoryUndetermined {
-		t.Fatalf("expected undetermined for AI available without baseline, got %s", cat)
+	if cat := domain.ClassifyNodeHealth(aiObs, rev, now, freshness); cat != domain.HealthCategoryUntested {
+		t.Fatalf("expected untested for AI available without baseline, got %s", cat)
 	}
 
 	// 3. Healthy: fresh baseline, available, matching revision
@@ -91,8 +94,8 @@ func TestClassifyNodeHealthAndConservation(t *testing.T) {
 			ConnectionRevision: &rev,
 		},
 	}
-	if cat := domain.ClassifyNodeHealth(degradedObs, rev, now, freshness); cat != domain.HealthCategoryDegraded {
-		t.Fatalf("expected degraded, got %s", cat)
+	if cat := domain.ClassifyNodeHealth(degradedObs, rev, now, freshness); cat != domain.HealthCategoryHealthy {
+		t.Fatalf("expected healthy for restricted baseline, got %s", cat)
 	}
 
 	// 4. Unhealthy: fresh baseline, error with node_connect_failed
@@ -118,8 +121,8 @@ func TestClassifyNodeHealthAndConservation(t *testing.T) {
 			ConnectionRevision: &rev,
 		},
 	}
-	if cat := domain.ClassifyNodeHealth(staleObs, rev, now, freshness); cat != domain.HealthCategoryUndetermined {
-		t.Fatalf("expected undetermined for stale baseline, got %s", cat)
+	if cat := domain.ClassifyNodeHealth(staleObs, rev, now, freshness); cat != domain.HealthCategoryHealthy {
+		t.Fatalf("expected healthy for old current-revision baseline, got %s", cat)
 	}
 
 	// 6. Future timestamp baseline: undetermined
@@ -131,8 +134,8 @@ func TestClassifyNodeHealthAndConservation(t *testing.T) {
 			ConnectionRevision: &rev,
 		},
 	}
-	if cat := domain.ClassifyNodeHealth(futureObs, rev, now, freshness); cat != domain.HealthCategoryUndetermined {
-		t.Fatalf("expected undetermined for future baseline, got %s", cat)
+	if cat := domain.ClassifyNodeHealth(futureObs, rev, now, freshness); cat != domain.HealthCategoryUntested {
+		t.Fatalf("expected untested for future baseline, got %s", cat)
 	}
 
 	// 7. Revision mismatch: undetermined
@@ -145,8 +148,8 @@ func TestClassifyNodeHealthAndConservation(t *testing.T) {
 			ConnectionRevision: &oldRev,
 		},
 	}
-	if cat := domain.ClassifyNodeHealth(mismatchObs, rev, now, freshness); cat != domain.HealthCategoryUndetermined {
-		t.Fatalf("expected undetermined for revision mismatch, got %s", cat)
+	if cat := domain.ClassifyNodeHealth(mismatchObs, rev, now, freshness); cat != domain.HealthCategoryUntested {
+		t.Fatalf("expected untested for revision mismatch, got %s", cat)
 	}
 
 	// 8. Transport error: undetermined
@@ -159,8 +162,8 @@ func TestClassifyNodeHealthAndConservation(t *testing.T) {
 			ConnectionRevision: &rev,
 		},
 	}
-	if cat := domain.ClassifyNodeHealth(transportErrObs, rev, now, freshness); cat != domain.HealthCategoryUndetermined {
-		t.Fatalf("expected undetermined for transport error, got %s", cat)
+	if cat := domain.ClassifyNodeHealth(transportErrObs, rev, now, freshness); cat != domain.HealthCategoryUnhealthy {
+		t.Fatalf("expected unhealthy for transport error, got %s", cat)
 	}
 
 	// 9. Conservation verification

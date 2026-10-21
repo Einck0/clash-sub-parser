@@ -42,6 +42,7 @@ type Service struct {
 
 	subLinkRepo    domain.SubscriptionLinkRepository
 	factsLoader    domain.ConsistentFactsLoader
+	dnsRepo        domain.DNSSettingsRepository
 	concurrencySem chan struct{}
 }
 
@@ -146,6 +147,13 @@ func WithConsistentFactsLoader(loader domain.ConsistentFactsLoader) Option {
 	}
 }
 
+// WithDNSSettingsRepository sets the DNS settings repository.
+func WithDNSSettingsRepository(repo domain.DNSSettingsRepository) Option {
+	return func(s *Service) {
+		s.dnsRepo = repo
+	}
+}
+
 // WithConcurrencyLimit sets the bounded concurrency for live artifact compilation.
 func WithConcurrencyLimit(limit int) Option {
 	return func(s *Service) {
@@ -178,6 +186,11 @@ func (s *Service) SetSubscriptionLinkRepository(repo domain.SubscriptionLinkRepo
 // SetConsistentFactsLoader allows dynamic configuration of the consistent facts loader.
 func (s *Service) SetConsistentFactsLoader(loader domain.ConsistentFactsLoader) {
 	s.factsLoader = loader
+}
+
+// SetDNSSettingsRepository allows dynamic configuration of the DNS settings repository.
+func (s *Service) SetDNSSettingsRepository(repo domain.DNSSettingsRepository) {
+	s.dnsRepo = repo
 }
 
 // NewService constructs a new publication application service.
@@ -950,6 +963,22 @@ func (s *Service) assembleResolveInput(ctx context.Context, revisionID string, i
 		}
 	}
 
+	var dnsSettings *domain.DNSSettings
+	if s.dnsRepo != nil {
+		ds, err := s.dnsRepo.Get(ctx)
+		if err != nil {
+			return nil, domain.NewInternalError("dns_settings_unavailable", fmt.Sprintf("failed to read dns settings: %v", err))
+		}
+		dnsSettings = ds
+	} else {
+		def := domain.DefaultDNSSettings()
+		dnsSettings = &def
+	}
+	dnsCfg, err := dnsConfigFromSettings(dnsSettings)
+	if err != nil {
+		return nil, domain.NewInternalError("invalid_dns_settings", fmt.Sprintf("failed to parse dns settings: %v", err))
+	}
+
 	input := resolver.ResolveInput{
 		RevisionID:         revID,
 		InventoryWatermark: "v1",
@@ -960,10 +989,7 @@ func (s *Service) assembleResolveInput(ctx context.Context, revisionID string, i
 		Edges:              edgeMap,
 		PolicyRules:        policyRules,
 		AdmissionRules:     admissionRules,
-		DNS: resolver.DNSConfig{
-			Enabled:     true,
-			Nameservers: []string{"1.1.1.1", "8.8.8.8"},
-		},
+		DNS:                dnsCfg,
 		GlobalFilter:       globalFilter,
 		GroupFilters:       groupFilters,
 		NodeSources:        nodeSources,
@@ -1072,7 +1098,7 @@ func filterDependencies(global *domain.NodeFilterSpec, groupFilters map[string]d
 			switch condition.Field {
 			case domain.FilterFieldSourceSubscriptions:
 				sources = true
-			case domain.FilterFieldProbeVerdict, domain.FilterFieldProbeLatencyMS:
+			case domain.FilterFieldProbeVerdict, domain.FilterFieldProbeLatencyMS, domain.FilterFieldHealthStatus, domain.FilterFieldExitRegion, domain.FilterFieldPlatformVerdict:
 				observations = true
 			}
 		}
@@ -1411,16 +1437,18 @@ func (s *Service) BuildCurrentArtifact(ctx context.Context, facts *domain.Consis
 		AsOf:               facts.AsOf,
 	}
 
+	dnsCfg, err := dnsConfigFromSettings(facts.DNSSettings)
+	if err != nil {
+		return nil, nil, domain.NewInternalError("invalid_dns_settings", fmt.Sprintf("failed to parse dns settings: %v", err))
+	}
+
 	if target == domain.TargetMihomo {
 		input.Groups = facts.Groups
 		input.GroupSources = facts.GroupSources
 		input.Edges = facts.GroupEdges
 		input.PolicyRules = facts.PolicyRules
 		input.GroupFilters = facts.GroupFilters
-		input.DNS = resolver.DNSConfig{
-			Enabled:     true,
-			Nameservers: []string{"1.1.1.1", "8.8.8.8"},
-		}
+		input.DNS = dnsCfg
 	}
 
 	if facts.ActiveRiskPolicy != nil && facts.ActiveRiskPolicy.Active && len(facts.Nodes) > 0 && s.ipriskSvc != nil {
@@ -1966,4 +1994,19 @@ func (s *Service) UpdateSubscriptionLinkLabel(ctx context.Context, id, label str
 		return domain.NewInternalError("missing_repository", "subscription link repository not configured")
 	}
 	return s.subLinkRepo.UpdateLabel(ctx, id, label, domain.NowUTC())
+}
+
+func dnsConfigFromSettings(s *domain.DNSSettings) (resolver.DNSConfig, error) {
+	if s == nil {
+		def := domain.DefaultDNSSettings()
+		s = &def
+	}
+	cfgMap, err := domain.ParseDNSSettings(s.Enabled, s.RawYAML)
+	if err != nil {
+		return resolver.DNSConfig{}, err
+	}
+	return resolver.DNSConfig{
+		Enabled: s.Enabled,
+		Config:  cfgMap,
+	}, nil
 }

@@ -102,6 +102,7 @@ func exportFilterFixture(t *testing.T, withGroup bool, filter *filterReadRepo, o
 		n := *nodes.nodes[oldID]
 		delete(nodes.nodes, oldID)
 		n.LogicalID = newID
+		n.ConnectionRevision = 1
 		nodes.nodes[newID] = &n
 	}
 	delete(nodes.nodes, "node-hy2-01") // QX does not support Hysteria2.
@@ -208,6 +209,7 @@ func TestExportFilterProbeFreshnessAndFrozenPublication(t *testing.T) {
 	filter := &filterReadRepo{}
 	obs := &observationReadRepo{}
 	svc, pubs := exportFilterFixture(t, false, filter, obs, nil)
+	rev := int64(1)
 	for _, target := range exportTargets {
 		old, err := svc.Publish(ctx, publication.PublishCommand{Target: target})
 		if err != nil {
@@ -215,21 +217,22 @@ func TestExportFilterProbeFreshnessAndFrozenPublication(t *testing.T) {
 		}
 		filter.global = probeFilter()
 		obs.latest = map[string]map[domain.ProbeKind]domain.ProbeObservation{
-			hkNodeID: {domain.ProbeKindBaseline: {NodeLogicalID: hkNodeID, Kind: domain.ProbeKindBaseline, Verdict: domain.VerdictAvailable, ObservedAt: time.Now().UTC()}},
-			usNodeID: {domain.ProbeKindBaseline: {NodeLogicalID: usNodeID, Kind: domain.ProbeKindBaseline, Verdict: domain.VerdictAvailable, ObservedAt: time.Now().UTC().Add(-48 * time.Hour)}},
+			hkNodeID: {domain.ProbeKindBaseline: {NodeLogicalID: hkNodeID, Kind: domain.ProbeKindBaseline, Verdict: domain.VerdictAvailable, ObservedAt: domain.NowUTC().Add(-time.Second), ConnectionRevision: &rev}},
+			usNodeID: {domain.ProbeKindBaseline: {NodeLogicalID: usNodeID, Kind: domain.ProbeKindBaseline, Verdict: domain.VerdictAvailable, ObservedAt: domain.NowUTC().Add(-48 * time.Hour), ConnectionRevision: &rev}},
 		}
 		preview, err := svc.Preview(ctx, publication.PreviewQuery{Target: target})
 		if err != nil {
 			t.Fatalf("filtered %s preview: %v", target, err)
 		}
-		if preview.FilterCounts == nil || preview.FilterCounts.GlobalFilteredTotal != 1 || strings.Contains(string(preview.Content), "United States 01") || !strings.Contains(string(preview.Content), "Hong Kong 01") {
-			t.Fatalf("%s failed to exclude stale observation: counts=%+v content=%s", target, preview.FilterCounts, preview.Content)
+		if preview.FilterCounts == nil || preview.FilterCounts.GlobalFilteredTotal != 2 || !strings.Contains(string(preview.Content), "United States 01") || !strings.Contains(string(preview.Content), "Hong Kong 01") {
+			t.Fatalf("%s should accept current and old observations from the current connection revision: counts=%+v content=%s", target, preview.FilterCounts, preview.Content)
 		}
 		fresh, err := svc.Publish(ctx, publication.PublishCommand{Target: target})
 		if err != nil || fresh.ContentDigest != preview.ContentDigest {
 			t.Fatalf("%s filtered publish mismatch: %v", target, err)
 		}
-		delete(obs.latest, hkNodeID) // one stale, one untested: no trusted candidates
+		delete(obs.latest, hkNodeID)
+		delete(obs.latest, usNodeID) // missing evidence is not synthesized as success
 		assertDeniedNewExport(t, svc, pubs, target, "filtered_nodes_empty")
 		artifact, err := svc.ResolveAndServe(ctx, old.Publication.ID, old.RawToken)
 		if err != nil || artifact.ContentDigest != old.ContentDigest || !strings.Contains(string(artifact.Content), "United States 01") {
@@ -287,8 +290,9 @@ func TestExportFilterEmptyRoutedGroupAndGroupAND(t *testing.T) {
 	filter := &filterReadRepo{global: probeFilter(), groups: map[string]domain.NodeFilterSpec{
 		"01944aa0-0000-7000-8000-000000000002": {Conditions: []domain.FilterCondition{{Field: domain.FilterFieldDisplayName, Op: domain.FilterOpContains, Value: "United States"}}},
 	}}
+	rev := int64(1)
 	obs := &observationReadRepo{latest: map[string]map[domain.ProbeKind]domain.ProbeObservation{
-		hkNodeID: {domain.ProbeKindBaseline: {NodeLogicalID: hkNodeID, Kind: domain.ProbeKindBaseline, Verdict: domain.VerdictAvailable, ObservedAt: time.Now().UTC()}},
+		hkNodeID: {domain.ProbeKindBaseline: {NodeLogicalID: hkNodeID, Kind: domain.ProbeKindBaseline, Verdict: domain.VerdictAvailable, ObservedAt: domain.NowUTC().Add(-time.Second), ConnectionRevision: &rev}},
 	}}
 	svc, pubs := exportFilterFixture(t, true, filter, obs, nil)
 	for _, target := range exportTargets {

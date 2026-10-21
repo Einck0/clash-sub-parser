@@ -1052,11 +1052,13 @@ func TestResolver_ProbeFailClosed_MissingExpiredMismatchNotEquals(t *testing.T) 
 
 	gid := domain.MustNewUUIDv7()
 	nID := testNodeLogicalID("node-probe-test")
+	rev := int64(1)
 	node := domain.Node{
-		LogicalID:   nID,
-		DisplayName: "Probe Test Node",
-		Protocol:    domain.ProtocolTrojan,
-		Active:      true,
+		LogicalID:          nID,
+		DisplayName:        "Probe Test Node",
+		Protocol:           domain.ProtocolTrojan,
+		Active:             true,
+		ConnectionRevision: rev,
 	}
 
 	freshness := 300
@@ -1104,8 +1106,8 @@ func TestResolver_ProbeFailClosed_MissingExpiredMismatchNotEquals(t *testing.T) 
 		}
 	})
 
-	// 2. Expired observation
-	t.Run("expired observation rejects", func(t *testing.T) {
+	// 2. Ancient observation on same revision passes (redesigned age semantics)
+	t.Run("ancient observation on same revision passes", func(t *testing.T) {
 		inp := baseInput()
 		inp.GlobalFilter = &domain.NodeFilterSpec{
 			Conditions: []domain.FilterCondition{
@@ -1122,11 +1124,49 @@ func TestResolver_ProbeFailClosed_MissingExpiredMismatchNotEquals(t *testing.T) 
 		inp.LatestObservations = map[string]map[domain.ProbeKind]domain.ProbeObservation{
 			nID: {
 				domain.ProbeKindBaseline: {
-					ID:            "obs-1",
-					NodeLogicalID: nID,
-					Kind:          domain.ProbeKindBaseline,
-					Verdict:       domain.VerdictAvailable,
-					ObservedAt:    expiredTime,
+					ID:                 "obs-1",
+					NodeLogicalID:      nID,
+					Kind:               domain.ProbeKindBaseline,
+					Verdict:            domain.VerdictAvailable,
+					ConnectionRevision: &rev,
+					ObservedAt:         expiredTime,
+				},
+			},
+		}
+
+		snap, err := r.Resolve(ctx, inp)
+		if err != nil {
+			t.Fatalf("resolve failed: %v", err)
+		}
+		if len(snap.Nodes) != 1 {
+			t.Fatalf("ancient observation on same revision should pass, got %d nodes", len(snap.Nodes))
+		}
+	})
+
+	// 3. Future observation rejects
+	t.Run("future observation rejects", func(t *testing.T) {
+		inp := baseInput()
+		inp.GlobalFilter = &domain.NodeFilterSpec{
+			Conditions: []domain.FilterCondition{
+				{
+					Field:            domain.FilterFieldProbeVerdict,
+					Op:               domain.FilterOpEquals,
+					Value:            "available",
+					ProbeKind:        &kind,
+					FreshnessSeconds: &freshness,
+				},
+			},
+		}
+		futureTime := now.Add(10 * time.Minute)
+		inp.LatestObservations = map[string]map[domain.ProbeKind]domain.ProbeObservation{
+			nID: {
+				domain.ProbeKindBaseline: {
+					ID:                 "obs-future",
+					NodeLogicalID:      nID,
+					Kind:               domain.ProbeKindBaseline,
+					Verdict:            domain.VerdictAvailable,
+					ConnectionRevision: &rev,
+					ObservedAt:         futureTime,
 				},
 			},
 		}
@@ -1136,11 +1176,84 @@ func TestResolver_ProbeFailClosed_MissingExpiredMismatchNotEquals(t *testing.T) 
 			t.Fatalf("resolve failed: %v", err)
 		}
 		if len(snap.Nodes) != 0 {
-			t.Fatalf("expired observation should fail-closed and reject node")
+			t.Fatalf("future observation should be rejected")
 		}
 	})
 
-	// 3. Valid observation passes
+	// 4. Mismatched revision rejects
+	t.Run("mismatched revision rejects", func(t *testing.T) {
+		inp := baseInput()
+		inp.GlobalFilter = &domain.NodeFilterSpec{
+			Conditions: []domain.FilterCondition{
+				{
+					Field:            domain.FilterFieldProbeVerdict,
+					Op:               domain.FilterOpEquals,
+					Value:            "available",
+					ProbeKind:        &kind,
+					FreshnessSeconds: &freshness,
+				},
+			},
+		}
+		diffRev := int64(2)
+		inp.LatestObservations = map[string]map[domain.ProbeKind]domain.ProbeObservation{
+			nID: {
+				domain.ProbeKindBaseline: {
+					ID:                 "obs-mismatch",
+					NodeLogicalID:      nID,
+					Kind:               domain.ProbeKindBaseline,
+					Verdict:            domain.VerdictAvailable,
+					ConnectionRevision: &diffRev,
+					ObservedAt:         now.Add(-50 * time.Second),
+				},
+			},
+		}
+
+		snap, err := r.Resolve(ctx, inp)
+		if err != nil {
+			t.Fatalf("resolve failed: %v", err)
+		}
+		if len(snap.Nodes) != 0 {
+			t.Fatalf("mismatched revision should be rejected")
+		}
+	})
+
+	// 5. Missing revision on observation rejects
+	t.Run("missing revision on observation rejects", func(t *testing.T) {
+		inp := baseInput()
+		inp.GlobalFilter = &domain.NodeFilterSpec{
+			Conditions: []domain.FilterCondition{
+				{
+					Field:            domain.FilterFieldProbeVerdict,
+					Op:               domain.FilterOpEquals,
+					Value:            "available",
+					ProbeKind:        &kind,
+					FreshnessSeconds: &freshness,
+				},
+			},
+		}
+		inp.LatestObservations = map[string]map[domain.ProbeKind]domain.ProbeObservation{
+			nID: {
+				domain.ProbeKindBaseline: {
+					ID:                 "obs-nil-rev",
+					NodeLogicalID:      nID,
+					Kind:               domain.ProbeKindBaseline,
+					Verdict:            domain.VerdictAvailable,
+					ConnectionRevision: nil,
+					ObservedAt:         now.Add(-50 * time.Second),
+				},
+			},
+		}
+
+		snap, err := r.Resolve(ctx, inp)
+		if err != nil {
+			t.Fatalf("resolve failed: %v", err)
+		}
+		if len(snap.Nodes) != 0 {
+			t.Fatalf("observation with nil revision should be rejected")
+		}
+	})
+
+	// 6. Valid observation passes
 	t.Run("valid observation passes", func(t *testing.T) {
 		inp := baseInput()
 		inp.GlobalFilter = &domain.NodeFilterSpec{
@@ -1158,12 +1271,13 @@ func TestResolver_ProbeFailClosed_MissingExpiredMismatchNotEquals(t *testing.T) 
 		inp.LatestObservations = map[string]map[domain.ProbeKind]domain.ProbeObservation{
 			nID: {
 				domain.ProbeKindBaseline: {
-					ID:            "obs-1",
-					NodeLogicalID: nID,
-					Kind:          domain.ProbeKindBaseline,
-					Verdict:       domain.VerdictAvailable,
-					LatencyMS:     45,
-					ObservedAt:    validTime,
+					ID:                 "obs-1",
+					NodeLogicalID:      nID,
+					Kind:               domain.ProbeKindBaseline,
+					Verdict:            domain.VerdictAvailable,
+					LatencyMS:          45,
+					ConnectionRevision: &rev,
+					ObservedAt:         validTime,
 				},
 			},
 		}

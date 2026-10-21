@@ -1752,7 +1752,7 @@ func TestPeriodicCoordinator_Default512TaskBudget(t *testing.T) {
 	}
 }
 
-func TestPoolStatus_BaselineIsolationAndSecurityRejectionsUnknown(t *testing.T) {
+func TestPoolStatus_BaselineIsolationAndSecurityRejections(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Second)
 	rev1 := int64(1)
@@ -1797,7 +1797,7 @@ func TestPoolStatus_BaselineIsolationAndSecurityRejectionsUnknown(t *testing.T) 
 		ObservedAt:         now,
 		ConnectionRevision: &rev1,
 	})
-	// 4. Security / build rejections -> must be counted as Untested/Unknown, NOT Unavailable
+	// 4. Completed error observations count as unavailable, regardless of failure reason.
 	for _, tc := range []struct {
 		id     string
 		reason string
@@ -1834,14 +1834,14 @@ func TestPoolStatus_BaselineIsolationAndSecurityRejectionsUnknown(t *testing.T) 
 	if pool.HealthyCount != 1 || pool.AvailableCount != 1 {
 		t.Fatalf("expected healthy=1 available=1, got healthy=%d available=%d", pool.HealthyCount, pool.AvailableCount)
 	}
-	if pool.UnavailableCount != 1 {
-		t.Fatalf("expected unavailable_count=1 (only n-unhealthy), got %d", pool.UnavailableCount)
+	if pool.UnavailableCount != 5 {
+		t.Fatalf("expected unavailable_count=5 (1 connect_fail + 4 baseline rejection/build errors), got %d", pool.UnavailableCount)
 	}
-	if pool.UndeterminedCount != 5 {
-		t.Fatalf("expected undetermined_count=5 (non-baseline + 4 security/build rejections), got %d", pool.UndeterminedCount)
+	if pool.UndeterminedCount != 0 {
+		t.Fatalf("expected undetermined_count=0, got %d", pool.UndeterminedCount)
 	}
-	if pool.UntestedCount != 0 {
-		t.Fatalf("expected untested_count=0, got %d", pool.UntestedCount)
+	if pool.UntestedCount != 1 {
+		t.Fatalf("expected untested_count=1 (only n-nonbase-err without baseline), got %d", pool.UntestedCount)
 	}
 	if !pool.ValidateConservation() {
 		t.Fatalf("pool conservation violated: %+v", pool)

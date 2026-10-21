@@ -288,7 +288,39 @@ export const SUPPORTED_PROBE_VERDICTS = [
 
 export type ProbeVerdict = typeof SUPPORTED_PROBE_VERDICTS[number]
 
+export const SUPPORTED_HEALTH_STATUSES = [
+  'healthy',
+  'unhealthy',
+  'untested',
+] as const
+export type HealthStatus = typeof SUPPORTED_HEALTH_STATUSES[number]
+
+export const SUPPORTED_PLATFORM_VERDICTS = [
+  'available',
+  'restricted',
+  'unknown',
+  'error',
+] as const
+export type PlatformVerdict = typeof SUPPORTED_PLATFORM_VERDICTS[number]
+
+export const SUPPORTED_AI_PLATFORMS = [
+  'openai',
+  'claude',
+  'gemini',
+] as const
+export type AiPlatform = typeof SUPPORTED_AI_PLATFORMS[number]
+
+export const SUPPORTED_STREAMING_PLATFORMS = [
+  'netflix',
+  'disney',
+  'youtube',
+] as const
+export type StreamingPlatform = typeof SUPPORTED_STREAMING_PLATFORMS[number]
+
 export type FilterField =
+  | 'health_status'
+  | 'exit_region'
+  | 'platform_verdict'
   | 'display_name'
   | 'protocol'
   | 'source_subscription_ids'
@@ -310,10 +342,15 @@ export interface FilterCondition {
   value?: string
   probe_kind?: ProbeKind
   freshness_seconds?: number
+  platform?: string
 }
 
 export function filterFieldOperators(field: FilterField): FilterOp[] {
   switch (field) {
+    case 'health_status':
+    case 'exit_region':
+    case 'platform_verdict':
+      return ['equals', 'not_equals']
     case 'display_name':
       return ['contains', 'not_contains', 'regex', 'not_regex']
     case 'protocol':
@@ -325,7 +362,7 @@ export function filterFieldOperators(field: FilterField): FilterOp[] {
     case 'probe_latency_ms':
       return ['lte']
     default:
-      return ['equals']
+      return ['equals', 'not_equals']
   }
 }
 
@@ -339,10 +376,13 @@ export interface GlobalNodeFilter {
 }
 
 export const SUPPORTED_FILTER_FIELDS: Array<{ field: FilterField; label: string }> = [
+  { field: 'health_status', label: '节点可用性 (健康状态)' },
+  { field: 'exit_region', label: '出口地区 (国家/地区代码)' },
+  { field: 'platform_verdict', label: '服务解锁 (平台判定)' },
   { field: 'display_name', label: '显示名称' },
   { field: 'protocol', label: '协议类型' },
   { field: 'source_subscription_ids', label: '来源订阅' },
-  { field: 'probe_verdict', label: '探针判定' },
+  { field: 'probe_verdict', label: '探针判定 (高级)' },
   { field: 'probe_latency_ms', label: '探针延迟 (ms)' },
 ]
 
@@ -351,6 +391,60 @@ export function validateConditionInput(cond: Partial<FilterCondition>): string |
   if (!cond.op) return '必须选择运算符'
 
   switch (cond.field) {
+    case 'health_status': {
+      if (cond.op !== 'equals' && cond.op !== 'not_equals') {
+        return '节点可用性仅支持"等于"或"不等于"运算符'
+      }
+      if (!cond.value || !cond.value.trim()) {
+        return '健康状态值不能为空'
+      }
+      const normHealth = cond.value.trim().toLowerCase()
+      if (!(SUPPORTED_HEALTH_STATUSES as readonly string[]).includes(normHealth)) {
+        return `不支持的健康状态"${cond.value.trim()}"（有效值：${SUPPORTED_HEALTH_STATUSES.join(', ')}）`
+      }
+      break
+    }
+
+    case 'exit_region': {
+      if (cond.op !== 'equals' && cond.op !== 'not_equals') {
+        return '出口地区仅支持"等于"或"不等于"运算符'
+      }
+      if (!cond.value || !cond.value.trim()) {
+        return '出口地区代码不能为空'
+      }
+      const normRegion = cond.value.trim().toUpperCase()
+      if (!/^[A-Z]{2}$/.test(normRegion)) {
+        return '出口地区必须为 2 位 ISO 3166-1 alpha-2 地区代码（例如 HK、JP、US）'
+      }
+      break
+    }
+
+    case 'platform_verdict': {
+      if (cond.op !== 'equals' && cond.op !== 'not_equals') {
+        return '服务判定仅支持"等于"或"不等于"运算符'
+      }
+      if (cond.probe_kind !== 'ai' && cond.probe_kind !== 'streaming') {
+        return '服务判定必须指定平台类型 (ai 或 streaming)'
+      }
+      if (!cond.value || !cond.value.trim()) {
+        return '判定结果值不能为空'
+      }
+      const normVerdict = cond.value.trim().toLowerCase()
+      if (!(SUPPORTED_PLATFORM_VERDICTS as readonly string[]).includes(normVerdict)) {
+        return `不支持的平台判定结果"${cond.value.trim()}"（有效结果：${SUPPORTED_PLATFORM_VERDICTS.join(', ')}）`
+      }
+      if (cond.platform && cond.platform.trim()) {
+        const normPlat = cond.platform.trim().toLowerCase()
+        if (cond.probe_kind === 'ai' && !(SUPPORTED_AI_PLATFORMS as readonly string[]).includes(normPlat as any)) {
+          return `不支持的 AI 服务平台"${cond.platform.trim()}"（有效平台：${SUPPORTED_AI_PLATFORMS.join(', ')}）`
+        }
+        if (cond.probe_kind === 'streaming' && !(SUPPORTED_STREAMING_PLATFORMS as readonly string[]).includes(normPlat as any)) {
+          return `不支持的流媒体平台"${cond.platform.trim()}"（有效平台：${SUPPORTED_STREAMING_PLATFORMS.join(', ')}）`
+        }
+      }
+      break
+    }
+
     case 'display_name':
       if (!['contains', 'not_contains', 'regex', 'not_regex'].includes(cond.op)) {
         return '显示名称仅支持包含、不包含、正则或不匹配正则'
@@ -407,13 +501,14 @@ export function validateConditionInput(cond: Partial<FilterCondition>): string |
       if (cond.op !== 'lte') {
         return '探针延迟仅支持"小于等于"运算符'
       }
-      if (!cond.probe_kind) {
-        return '探针延迟条件必须指定探针类型'
+      if (cond.probe_kind && cond.probe_kind !== 'baseline') {
+        return '基础延迟仅支持 baseline 探针类型'
       }
-      if (!cond.value || !cond.value.trim()) {
+      const valStr = cond.value !== undefined && cond.value !== null ? String(cond.value).trim() : ''
+      if (!valStr) {
         return '延迟阈值 (ms) 不能为空'
       }
-      const lat = Number(cond.value)
+      const lat = Number(valStr)
       if (isNaN(lat) || lat < 0 || lat > 60000) {
         return '延迟阈值必须在 0 到 60000 ms 之间'
       }

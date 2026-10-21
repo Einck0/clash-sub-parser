@@ -189,6 +189,84 @@ describe('policy types and helpers', () => {
         freshness_seconds: 600,
       })
     ).toBeNull()
+
+    // health_status
+    expect(validateConditionInput({ field: 'health_status', op: 'contains', value: 'healthy' })).toBe(
+      '节点可用性仅支持"等于"或"不等于"运算符'
+    )
+    expect(validateConditionInput({ field: 'health_status', op: 'equals', value: '' })).toBe(
+      '健康状态值不能为空'
+    )
+    expect(validateConditionInput({ field: 'health_status', op: 'equals', value: 'invalid_status' })).toContain(
+      '不支持的健康状态'
+    )
+    expect(validateConditionInput({ field: 'health_status', op: 'equals', value: 'healthy' })).toBeNull()
+    expect(validateConditionInput({ field: 'health_status', op: 'not_equals', value: 'unhealthy' })).toBeNull()
+    expect(validateConditionInput({ field: 'health_status', op: 'equals', value: 'untested' })).toBeNull()
+
+    // exit_region
+    expect(validateConditionInput({ field: 'exit_region', op: 'contains', value: 'HK' })).toBe(
+      '出口地区仅支持"等于"或"不等于"运算符'
+    )
+    expect(validateConditionInput({ field: 'exit_region', op: 'equals', value: '' })).toBe(
+      '出口地区代码不能为空'
+    )
+    expect(validateConditionInput({ field: 'exit_region', op: 'equals', value: 'HongKong' })).toContain(
+      '2 位 ISO 3166-1 alpha-2'
+    )
+    expect(validateConditionInput({ field: 'exit_region', op: 'equals', value: 'HK' })).toBeNull()
+    expect(validateConditionInput({ field: 'exit_region', op: 'not_equals', value: 'JP' })).toBeNull()
+
+    // platform_verdict
+    expect(validateConditionInput({ field: 'platform_verdict', op: 'contains', value: 'available' })).toBe(
+      '服务判定仅支持"等于"或"不等于"运算符'
+    )
+    expect(validateConditionInput({ field: 'platform_verdict', op: 'equals', value: 'available' })).toBe(
+      '服务判定必须指定平台类型 (ai 或 streaming)'
+    )
+    expect(
+      validateConditionInput({
+        field: 'platform_verdict',
+        op: 'equals',
+        probe_kind: 'ai',
+        value: 'stale',
+      })
+    ).toContain('不支持的平台判定结果')
+    expect(
+      validateConditionInput({
+        field: 'platform_verdict',
+        op: 'equals',
+        probe_kind: 'ai',
+        value: 'available',
+        platform: 'unsupported_ai',
+      })
+    ).toContain('不支持的 AI 服务平台')
+    expect(
+      validateConditionInput({
+        field: 'platform_verdict',
+        op: 'equals',
+        probe_kind: 'ai',
+        value: 'available',
+        platform: 'openai',
+      })
+    ).toBeNull()
+    expect(
+      validateConditionInput({
+        field: 'platform_verdict',
+        op: 'equals',
+        probe_kind: 'streaming',
+        value: 'restricted',
+        platform: 'netflix',
+      })
+    ).toBeNull()
+    expect(
+      validateConditionInput({
+        field: 'platform_verdict',
+        op: 'not_equals',
+        probe_kind: 'streaming',
+        value: 'unknown',
+      })
+    ).toBeNull()
   })
 })
 

@@ -22,6 +22,7 @@ const conditions = ref<FilterCondition[]>([])
 const loaded = ref(false)
 const dirty = ref(false)
 const validationError = ref('')
+const filterInvalid = ref(false)
 
 const isProbe = (field: FilterField) => field === 'probe_verdict' || field === 'probe_latency_ms'
 const operators = (field: FilterField): FilterOp[] => field === 'probe_latency_ms'
@@ -73,7 +74,7 @@ function validate(condition: FilterCondition): string | null {
     if (condition.field === 'probe_latency_ms' && !/^(0|[1-9]\d*)$/.test(condition.value ?? '')) {
       return t('settings.filterInvalidLatency')
     }
-  } else if (condition.probe_kind !== undefined || condition.freshness_seconds !== undefined) {
+  } else if (condition.field !== 'platform_verdict' && (condition.probe_kind !== undefined || condition.freshness_seconds !== undefined)) {
     return t('settings.filterInvalidKind')
   }
   // The server requires a UUIDv7 source id. Reject invalid values before sending.
@@ -107,6 +108,10 @@ async function save() {
       return
     }
   }
+  if (filterInvalid.value) {
+    validationError.value = '存在未完成或无效的筛选条件，请完善或删除后再保存。'
+    return
+  }
   try {
     await updateGlobalFilter({ conditions: conditions.value.map((condition) => ({ ...condition })) })
     dirty.value = false
@@ -132,7 +137,9 @@ onMounted(refresh)
         </button>
       </div>
       <p class="text-xs text-base-content/70 leading-relaxed">{{ t('settings.filterExplanation') }}</p>
-      <p class="text-xs text-base-content/70 leading-relaxed">{{ t('settings.filterScope') }}</p>
+      <p class="text-xs text-base-content/70 leading-relaxed">
+        说明：全局软筛选在直接导出与预览时即时生效；WARP 或专用免检线路等策略组可关闭「继承全局筛选」以软豁免并使用全量准入节点。当前凭据版本门槛与硬性准入规则始终保留生效。
+      </p>
       <p v-if="dirty" class="text-warning text-xs">{{ t('settings.filterUnsaved') }}</p>
       <p v-if="requestError" role="alert" class="text-error text-sm" data-testid="filter-request-error">{{ requestError }}</p>
       <p v-if="validationError" role="alert" class="text-error text-sm" data-testid="filter-validation-error">{{ validationError }}</p>
@@ -144,6 +151,7 @@ onMounted(refresh)
           :allow-clear="true"
           :inline="true"
           @change="edited"
+          @invalid="filterInvalid = $event"
         />
         <div class="flex flex-wrap gap-2 pt-2 border-t border-base-300/40">
           <button type="button" class="btn btn-primary btn-sm" data-testid="filter-save" :disabled="savingGlobalFilter || loadingGlobalFilter" @click="save">{{ savingGlobalFilter ? t('settings.filterSaving') : t('settings.filterSave') }}</button>

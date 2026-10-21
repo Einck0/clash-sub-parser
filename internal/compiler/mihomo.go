@@ -481,6 +481,7 @@ func extractMihomoALPN(c domain.InboundProtocolCredential) []string {
 }
 
 type mihomoConfig struct {
+	DNS           map[string]any                `yaml:"dns,omitempty"`
 	Proxies       []any                         `yaml:"proxies"`
 	ProxyGroups   []mihomoGroup                 `yaml:"proxy-groups"`
 	RuleProviders map[string]mihomoRuleProvider `yaml:"rule-providers,omitempty"`
@@ -1044,11 +1045,35 @@ func renderMihomo(snapshot *resolver.ResolvedPolicySnapshot) ([]byte, error) {
 	}
 
 	return yaml.Marshal(mihomoConfig{
+		DNS:           renderMihomoDNS(snapshot.DNS),
 		Proxies:       proxies,
 		ProxyGroups:   groups,
 		RuleProviders: ruleProviders,
 		Rules:         rules,
 	})
+}
+
+func renderMihomoDNS(dns resolver.DNSConfig) map[string]any {
+	if dns.Config == nil && len(dns.Nameservers) == 0 && len(dns.Fallback) == 0 && !dns.Enabled {
+		return nil
+	}
+
+	out := make(map[string]any)
+	if dns.Config != nil {
+		for k, v := range dns.Config {
+			out[k] = v
+		}
+	} else {
+		if len(dns.Nameservers) > 0 {
+			out["nameserver"] = dns.Nameservers
+		}
+		if len(dns.Fallback) > 0 {
+			out["fallback"] = dns.Fallback
+		}
+	}
+
+	out["enable"] = dns.Enabled
+	return out
 }
 
 func buildMihomoGroup(loc string, group resolver.ResolvedGroup, members []string) (mihomoGroup, error) {

@@ -197,22 +197,22 @@ describe('node view helpers & plaintext WireGuard / TUIC connection handling', (
     expect(nodeCapabilityLabel(node, 'ai')).toEqual({ label: '受限', tone: 'warning' })
     expect(nodeCapabilityLabel(node, 'geo')).toEqual({ label: '未知', tone: 'info' })
 
-    // Baseline-authoritative health: auxiliary capabilities alone without baseline must be undetermined, never healthy
+    // Auxiliary-only capability records do not establish health
     expect(nodeHealthBadge({ logical_id: 'n1', protocol: 'ss', display_name: 'N1', active: true, capabilities: { streaming: 'available' } })).toEqual({
-      label: '待复核',
-      tone: 'warning',
+      label: '未测试',
+      tone: 'info',
     })
     expect(nodeHealthBadge({ logical_id: 'n1-baseline', protocol: 'ss', display_name: 'N1', active: true, capabilities: { baseline: { verdict: 'available', latency_ms: 50 } } })).toEqual({
       label: '正常',
       tone: 'success',
     })
-    expect(nodeHealthBadge(node)).toEqual({ label: '待复核', tone: 'warning' })
+    expect(nodeHealthBadge(node)).toEqual({ label: '未测试', tone: 'info' })
     expect(nodeHealthBadge({ logical_id: 'n2', protocol: 'ss', display_name: 'N2', active: true, capabilities: { baseline: 'error' } })).toEqual({
       label: '异常',
       tone: 'error',
     })
     expect(nodeHealthBadge({ logical_id: 'n3', protocol: 'ss', display_name: 'N3', active: true })).toEqual({
-      label: '未探测',
+      label: '未测试',
       tone: 'info',
     })
 
@@ -257,7 +257,7 @@ describe('node view helpers & plaintext WireGuard / TUIC connection handling', (
       latency_ms: 35,
     })
     expect(probingNode.probeState).toBe('probing')
-    expect(nodeHealthBadge(probingNode)).toEqual({ label: '检测中', tone: 'info' })
+    expect(nodeHealthBadge(probingNode)).toEqual({ label: '未测试', tone: 'info' })
 
     const queuedNode = normalizeNode({
       logical_id: 'n-queued',
@@ -267,16 +267,12 @@ describe('node view helpers & plaintext WireGuard / TUIC connection handling', (
       probe_state: 'queued',
     })
     expect(queuedNode.probeState).toBe('queued')
-    expect(nodeHealthBadge(queuedNode)).toEqual({ label: '队列中', tone: 'warning' })
+    expect(nodeHealthBadge(queuedNode)).toEqual({ label: '未测试', tone: 'info' })
 
-    // Live pool ID sets override static idle node state
-    expect(nodeHealthBadge(enrichedNode, new Set(['n-enriched']))).toEqual({
-      label: '检测中',
-      tone: 'info',
-    })
-    expect(nodeHealthBadge(enrichedNode, new Set(), new Set(['n-enriched']))).toEqual({
-      label: '队列中',
-      tone: 'warning',
+    // Health badge remains underlying canonical health
+    expect(nodeHealthBadge(enrichedNode)).toEqual({
+      label: '正常',
+      tone: 'success',
     })
 
     // Unhealthy / failed node with latency_ms=0 never resolves to 0 ms or green 'success' badge
@@ -370,11 +366,16 @@ describe('node view helpers & plaintext WireGuard / TUIC connection handling', (
       },
     })
     expect(nodeUnderlyingHealthCategory(staleBaselineNode)).toBe('healthy')
+    expect(nodeHealthBadge({ logical_id: 'legacy-degraded', protocol: 'ss', display_name: 'legacy', active: true, health_status: 'degraded' })).toEqual({ label: '正常', tone: 'success' })
+    for (const status of ['unknown', 'undetermined', 'missing'] as const) {
+      expect(nodeUnderlyingHealthCategory({ logical_id: status, protocol: 'ss', display_name: status, active: true, health_status: status })).toBe('untested')
+    }
+    expect(nodeHealthBadge({ logical_id: 'queued-healthy', protocol: 'ss', display_name: 'queued', active: true, health_status: 'healthy', probe_state: 'queued' })).toEqual({ label: '正常', tone: 'success' })
+    expect(nodeHealthBadge({ logical_id: 'transport-fail', protocol: 'ss', display_name: 'failed', active: true, health_status: 'unhealthy', capabilities: { baseline: { verdict: 'error', summary: 'reason=transport_error' } } })).toEqual({ label: '异常', tone: 'error' })
     expect(nodeHealthBadge(staleBaselineNode)).toEqual({ label: '正常', tone: 'success' })
     expect(nodeHealthDiagnostic(staleBaselineNode)).toBeNull()
 
-    // AI available with missing baseline: classified as undetermined, does NOT fallback to healthy,
-    // and auxiliary probe latency does NOT pollute overall node latency
+    // Auxiliary-only records remain untested and do not pollute baseline latency
     const aiOnlyNode = normalizeNode({
       logical_id: 'n-ai-only',
       protocol: 'ss',
@@ -385,9 +386,9 @@ describe('node view helpers & plaintext WireGuard / TUIC connection handling', (
         ai: { verdict: 'available', latency_ms: 120, observed_at: '2026-09-26T10:00:00Z' },
       },
     })
-    expect(nodeUnderlyingHealthCategory(aiOnlyNode)).toBe('undetermined')
+    expect(nodeUnderlyingHealthCategory(aiOnlyNode)).toBe('untested')
     expect(resolveNodeLatencyMs(aiOnlyNode)).toBeNull()
-    expect(nodeHealthBadge(aiOnlyNode)).toEqual({ label: '待复核', tone: 'warning' })
+    expect(nodeHealthBadge(aiOnlyNode)).toEqual({ label: '未测试', tone: 'info' })
 
     // Zero observations: classified as untested
     const unprobedNode = normalizeNode({
@@ -400,7 +401,7 @@ describe('node view helpers & plaintext WireGuard / TUIC connection handling', (
       capabilities: {},
     })
     expect(nodeUnderlyingHealthCategory(unprobedNode)).toBe('untested')
-    expect(nodeHealthBadge(unprobedNode)).toEqual({ label: '未探测', tone: 'info' })
+    expect(nodeHealthBadge(unprobedNode)).toEqual({ label: '未测试', tone: 'info' })
   })
 
   it('includes plaintext source_url_secret_ref in subscriptionPatchPayload and omits blank URL', () => {
@@ -1126,6 +1127,74 @@ describe('NodesView real API detail, plaintext PATCH edit, and failure draft pre
 
     const inspectBtn = cardEl.querySelector('[data-testid="node-inspect-btn"]') as HTMLButtonElement
     expect(inspectBtn).not.toBeNull()
+
+    app.unmount()
+    mountEl.remove()
+  })
+
+  it('renders underlying canonical health badge and active operation badge simultaneously when probing', async () => {
+    const { createApp, h, nextTick } = await import('vue')
+    const { default: NodesView } = await import('./NodesView.vue')
+
+    vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
+      if (path === '/api/v1/nodes') {
+        return {
+          items: [
+            {
+              logical_id: 'node-probing-live',
+              display_name: 'Tokyo Live Probing',
+              protocol: 'ss',
+              active: true,
+              health_status: 'healthy',
+              probe_state: 'probing',
+              connection: { server: 'tokyo.example.com', port: 8388 },
+              capabilities: {
+                baseline: { verdict: 'available', latency_ms: 45 },
+                ip_risk: { verdict: 'available', risk_score: '10' },
+              },
+              updated_at: new Date().toISOString(),
+            },
+          ],
+          total: 1,
+        }
+      }
+      if (path === '/api/v1/probes/schedule') return { enabled: true, interval_seconds: 3600, kinds: ['baseline'] }
+      if (path === '/api/v1/probes/pool') return {
+        probing_node_ids: ['node-probing-live'],
+        queued_node_ids: [],
+        queue_nodes_count: 1,
+        probing_count: 1,
+        total_count: 1,
+      }
+      if (path === '/api/v1/probes/runs') return { items: [], total: 0 }
+      if (path === '/api/v1/probes/batches') return { items: [], total: 0 }
+      return {}
+    })
+
+    const mountEl = document.createElement('div')
+    document.body.appendChild(mountEl)
+    const app = createApp({
+      render() {
+        return h(NodesView)
+      },
+    })
+    app.mount(mountEl)
+    await nextTick()
+    await new Promise((r) => setTimeout(r, 60))
+
+    // Both operational state and underlying health are visible simultaneously
+    const probeBadge = mountEl.querySelector('[data-testid="node-probe-state-badge"]')
+    expect(probeBadge).not.toBeNull()
+    expect(probeBadge?.textContent).toContain('检测中')
+
+    const healthBadge = mountEl.querySelector('[data-testid="node-health-badge"]')
+    expect(healthBadge).not.toBeNull()
+    expect(healthBadge?.textContent).toContain('健康: 正常')
+
+    // Risk badge is rendered independently
+    const riskBadge = mountEl.querySelector('[data-testid="node-risk-badge"]')
+    expect(riskBadge).not.toBeNull()
+    expect(riskBadge?.textContent).toContain('低风险')
 
     app.unmount()
     mountEl.remove()

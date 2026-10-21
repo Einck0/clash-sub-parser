@@ -22,6 +22,7 @@ import (
 
 type applicationServices struct {
 	settingsRepo      domain.SettingsRepository
+	dnsRepo           domain.DNSSettingsRepository
 	subRepo           domain.SubscriptionRepository
 	nodeRepo          domain.NodeRepository
 	nodeSourceRepo    domain.NodeSourceRepository
@@ -84,6 +85,7 @@ func makeApplicationServices(ctx context.Context, db *sql.DB, opts appServiceOpt
 	pubPayloadRefRepo := sqlite.NewPublicationPayloadRefRepository(db)
 	subLinkRepo := sqlite.NewSubscriptionLinkRepository(db)
 	factsLoader := sqlite.NewConsistentFactsLoader(db)
+	dnsRepo := sqlite.NewDNSSettingsRepository(db)
 
 	var fetchClient *fetch.Client
 	if opts.fetchClientOverride != nil {
@@ -196,6 +198,7 @@ func makeApplicationServices(ctx context.Context, db *sql.DB, opts appServiceOpt
 		publication.WithPayloadRefRepository(pubPayloadRefRepo),
 		publication.WithSubscriptionLinkRepository(subLinkRepo),
 		publication.WithConsistentFactsLoader(factsLoader),
+		publication.WithDNSSettingsRepository(dnsRepo),
 	}
 	pubService := publication.NewService(
 		pubRepo,
@@ -211,6 +214,7 @@ func makeApplicationServices(ctx context.Context, db *sql.DB, opts appServiceOpt
 	return &applicationServices{
 		subscriptionScheduler: subscriptionScheduler,
 		settingsRepo:          settingsRepo,
+		dnsRepo:               dnsRepo,
 		subRepo:               subRepo,
 		nodeRepo:              nodeRepo,
 		nodeSourceRepo:        nodeSourceRepo,

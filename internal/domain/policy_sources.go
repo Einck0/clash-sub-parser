@@ -45,6 +45,7 @@ func EditLegacySources(groupID string, current []MemberSource, edges *[]GroupEdg
 		}
 	}
 	if changeFilter {
+		filter.NormalizeForSave()
 		if err := filter.Validate(); err != nil {
 			return nil, err
 		}
@@ -62,6 +63,11 @@ func EditLegacySources(groupID string, current []MemberSource, edges *[]GroupEdg
 		out = filtered
 		if len(out) == 0 && !filter.IsEmpty() {
 			out = append(out, MemberSource{GroupID: groupID, Operation: OperationAdd, Kind: SourceKindFilter, FilterSpec: filter})
+		}
+	}
+	for i := range out {
+		if out[i].FilterSpec != nil {
+			out[i].FilterSpec.NormalizeForSave()
 		}
 	}
 	return out, nil

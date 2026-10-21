@@ -814,19 +814,15 @@ func (s *Service) GetPoolStatus(ctx context.Context) (*domain.ProbePoolStatus, e
 	now := s.clock().UTC()
 	for _, n := range dedupedNodes {
 		nodeObs := latestByNode[n.LogicalID]
-		cat := domain.ClassifyNodeHealth(nodeObs, n.ConnectionRevision, now, DefaultProbeFreshnessTTL)
+		cat := domain.ClassifyNodeHealth(nodeObs, n.ConnectionRevision, now, 0)
 		switch cat {
 		case domain.HealthCategoryHealthy:
 			status.HealthyCount++
 			status.AvailableCount++
-		case domain.HealthCategoryDegraded:
-			status.DegradedCount++
-			status.AvailableCount++
 		case domain.HealthCategoryUnhealthy:
 			status.UnavailableCount++
-		case domain.HealthCategoryUndetermined:
-			status.UndeterminedCount++
-		case domain.HealthCategoryUntested:
+		default:
+			// Missing or invalid current-revision baseline evidence is untested.
 			status.UntestedCount++
 		}
 	}

@@ -1027,7 +1027,7 @@ func TestServiceGetPoolStatusFiveMetrics(t *testing.T) {
 	if status.QueueNodesCount != 5 || status.ProbingCount != 2 || status.QueuedWaitingCount != 3 {
 		t.Fatalf("expected queue_nodes_count=5 (probing=2, queued=3), got %+v", status)
 	}
-	if status.TotalCount != 10 || status.AvailableCount != 4 || status.HealthyCount != 4 || status.DegradedCount != 0 || status.UnavailableCount != 2 || status.UndeterminedCount != 1 || status.UntestedCount != 3 {
+	if status.TotalCount != 10 || status.AvailableCount != 4 || status.HealthyCount != 4 || status.DegradedCount != 0 || status.UnavailableCount != 2 || status.UndeterminedCount != 0 || status.UntestedCount != 4 {
 		t.Fatalf("unexpected pool status metrics: %+v", status)
 	}
 	if !status.ValidateConservation() {

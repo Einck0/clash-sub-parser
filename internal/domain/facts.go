@@ -22,6 +22,7 @@ type ConsistentFacts struct {
 	ActiveRiskPolicy   *RiskPolicyRevision
 	RiskObservations   []IPRiskObservation
 	PrimaryUserInfo    string
+	DNSSettings        *DNSSettings
 }
 
 // ConsistentFactsLoader defines the persistence port for transactional loading of consistent domain facts.

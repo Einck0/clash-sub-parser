@@ -2,6 +2,7 @@ export const VALID_TABS = [
   'dashboard',
   'subscriptions',
   'nodes',
+  'dns',
   'policy',
   'rules',
   'publications',

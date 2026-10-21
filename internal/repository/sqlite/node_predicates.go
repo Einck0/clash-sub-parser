@@ -111,32 +111,21 @@ func buildNodeFilterPredicates(filter domain.NodeFilter, colPrefix string) ([]st
 					WHEN NOT EXISTS (SELECT 1 FROM probe_observations WHERE node_logical_id = %[1]s)
 					THEN 'untested'
 
-					WHEN lb.verdict = 'available'
+					WHEN lb.verdict IN ('available', 'restricted')
 					     AND lb.connection_revision IS NOT NULL
 					     AND lb.connection_revision = %[2]s
 					     AND %[2]s > 0
 					     AND datetime(lb.observed_at) <= datetime(?)
-					     AND datetime(lb.observed_at) > datetime(?, '-1 hour')
 					THEN 'healthy'
 
-					WHEN lb.verdict = 'restricted'
-					     AND lb.connection_revision IS NOT NULL
-					     AND lb.connection_revision = %[2]s
-					     AND %[2]s > 0
-					     AND datetime(lb.observed_at) <= datetime(?)
-					     AND datetime(lb.observed_at) > datetime(?, '-1 hour')
-					THEN 'degraded'
-
 					WHEN lb.verdict = 'error'
-					     AND lb.redacted_summary LIKE '%%reason=node_connect_failed%%'
 					     AND lb.connection_revision IS NOT NULL
 					     AND lb.connection_revision = %[2]s
 					     AND %[2]s > 0
 					     AND datetime(lb.observed_at) <= datetime(?)
-					     AND datetime(lb.observed_at) > datetime(?, '-1 hour')
 					THEN 'unhealthy'
 
-					ELSE 'undetermined'
+					ELSE 'untested'
 				END
 			FROM (SELECT 1)
 			LEFT JOIN (
@@ -153,7 +142,7 @@ func buildNodeFilterPredicates(filter domain.NodeFilter, colPrefix string) ([]st
 			placeholders[i] = "?"
 		}
 		where = append(where, fmt.Sprintf("%s IN (%s)", healthSubquery, strings.Join(placeholders, ",")))
-		args = append(args, nowStr, nowStr, nowStr, nowStr, nowStr, nowStr)
+		args = append(args, nowStr, nowStr)
 		for _, hs := range filter.HealthStatuses {
 			args = append(args, strings.ToLower(strings.TrimSpace(hs)))
 		}

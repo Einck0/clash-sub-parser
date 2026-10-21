@@ -815,14 +815,14 @@ onUnmounted(() => {
     <ModalDialog
       v-model="globalFilterModalOpen"
       title="全局节点筛选"
-      description="在策略组来源流水线之前评估，在此处被排除的节点不会进入任何策略组。"
+      description="在策略组来源流水线之前评估软筛选；被排除的节点默认不进入继承全局过滤的策略组，关闭继承的策略组（如 WARP 或专用免检线路）享有软豁免并直接匹配全量准入节点。"
     >
       <div class="space-y-4">
         <div class="p-3 bg-info/10 border border-info/30 rounded-xl text-xs text-info leading-relaxed">
-          <p><strong>执行优先级：</strong>硬性风险/准入拒绝 → 全局节点筛选 → 策略组有序来源流水线（逐项加入 / 排除，后续可重新加入）。</p>
-          <p class="mt-1">留空筛选条件时将允许所有通过准入的节点，不做额外全局过滤。</p>
+          <p><strong>执行优先级：</strong>硬性风险/准入拒绝 → 全局节点软筛选 → 策略组有序来源流水线（逐项加入 / 排除，后续可重新加入）。</p>
+          <p class="mt-1">留空筛选条件时将允许所有通过准入的节点，不做额外全局过滤；WARP 或专用免检线路等策略组可关闭「继承全局筛选」以软豁免并使用全量准入节点。</p>
           <p class="mt-1 opacity-80">{{ t('settings.filterExplanation') }}</p>
-          <p class="mt-1 opacity-80">{{ t('settings.filterScope') }}</p>
+          <p class="mt-1 opacity-80">说明：全局软筛选在直接导出与预览时即时生效；WARP 或专用免检线路等策略组可关闭「继承全局筛选」以软豁免并使用全量准入节点。当前凭据版本门槛与硬性准入规则始终保留生效。</p>
         </div>
 
         <p v-if="globalConditionError" role="alert" class="text-error text-xs" data-testid="filter-request-error">

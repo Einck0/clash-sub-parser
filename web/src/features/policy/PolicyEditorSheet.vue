@@ -25,6 +25,7 @@ import type {
   GroupType,
   MemberSource,
   MemberSourceKind,
+  NodeFilterSpec,
   PolicyGroup,
   ResolvedGroupMember,
   ResolverDiagnostic,
@@ -122,9 +123,7 @@ const expectedRevision = ref<number>(1)
 
 // Ordered sources pipeline
 const sources = ref<MemberSource[]>([])
-const filterConditions = ref<FilterCondition[]>([])
-const editingFilterSource = ref<MemberSource | null>(null)
-const filterDraftActive = ref(false)
+const invalidFilterSources = ref(new Set<string>())
 
 // Local conflict / cycle state
 const localConflict = ref<{ currentRevision: number; message: string } | null>(null)
@@ -137,18 +136,12 @@ watch(() => props.cycleError, (c) => {
   if (c) localCycle.value = c
 }, { immediate: true })
 
-// Conditions remain a local source draft until explicitly added or updated.
-const newField = ref<FilterField>('display_name')
-const newOp = ref<FilterOp>('contains')
-const newValue = ref('')
-const newProbeKind = ref<'baseline' | 'geo' | 'streaming' | 'ai' | 'speed' | 'ip_risk'>('baseline')
-const conditionError = ref('')
 
 // New source entry form state
 const newEdgeTarget = ref('')
 const edgeError = ref('')
 
-const selectedSourceKind = ref<'node' | 'group' | 'group_nodes' | 'regex' | 'filter' | 'typed_builtin'>('node')
+const selectedSourceKind = ref<'node' | 'group' | 'group_nodes' | 'regex' | 'filter' | 'typed_builtin'>('filter')
 const newSourceOp = ref<SourceOperation>('add')
 const newSourcePattern = ref('')
 const newSourceBuiltin = ref<BuiltinName>('DIRECT')
@@ -337,6 +330,25 @@ function getNodeDisplayName(logicalId?: string): string {
   return n ? `${n.displayName} (${logicalId})` : logicalId
 }
 
+// Stable client key management and payload sanitization
+let sourceKeyCounter = 0
+const sourceKeyMap = new WeakMap<MemberSource, string>()
+
+function getSourceKey(source: MemberSource): string {
+  let key = sourceKeyMap.get(source)
+  if (!key) {
+    key = `src_${++sourceKeyCounter}_${source.id || Math.random().toString(36).slice(2, 7)}`
+    sourceKeyMap.set(source, key)
+  }
+  return key
+}
+
+function sanitizeSourceForPayload(source: MemberSource): MemberSource {
+  const clean = { ...source } as any
+  delete clean._clientKey
+  return clean
+}
+
 // Semantics analysis for current sources pipeline
 const computedSemantics = computed(() => computeSourceSemantics(sources.value))
 
@@ -348,7 +360,6 @@ watch(
       localConflict.value = props.conflictError || null
       localCycle.value = props.cycleError || null
       sourceFormError.value = ''
-      conditionError.value = ''
       edgeError.value = ''
       nodeSearchQuery.value = ''
       newEdgeTarget.value = ''
@@ -364,10 +375,18 @@ watch(
         expectedRevision.value = props.group.revision ?? 1
 
         const normalized = normalizeGroupSources(props.group)
-        sources.value = normalized.map((s, idx) => ({
-          ...s, position: idx,
-          ...(s.filter_spec ? { filter_spec: { conditions: s.filter_spec.conditions.map(c => ({ ...c })) } } : {}),
-        }))
+        sources.value = normalized.map((s, idx) => {
+          const item: MemberSource = {
+            ...s,
+            position: idx,
+            ...(s.kind === 'filter'
+              ? { filter_spec: { conditions: (s.filter_spec?.conditions || []).map((c) => ({ ...c })) } }
+              : (s.filter_spec ? { filter_spec: { conditions: s.filter_spec.conditions.map((c) => ({ ...c })) } } : {})),
+          }
+          getSourceKey(item)
+          return item
+        })
+        invalidFilterSources.value = new Set()
       } else {
         name.value = ''
         position.value = 0
@@ -376,111 +395,87 @@ watch(
         groupType.value = 'select'
         expectedRevision.value = 1
         sources.value = []
-
+        invalidFilterSources.value = new Set()
       }
 
       discardSourceDraft()
-      selectedSourceKind.value = 'node'
+      selectedSourceKind.value = 'filter'
       newSourceOp.value = 'add'
       fetchCandidateNodes(1, '')
       fetchCandidateGroups()
     } else {
       clearPreviewTimer()
       previewGeneration.value++
+      snapshotPreview.value = null
+      previewDiagnostics.value = []
     }
   },
   { immediate: true }
 )
 
-// Condition builder watch
-watch(newField, (f) => {
-  conditionError.value = ''
-  if (f === 'display_name' || f === 'source_subscription_ids') {
-    newOp.value = 'contains'
-  } else if (f === 'probe_latency_ms') {
-    newOp.value = 'lte'
-  } else {
-    newOp.value = 'equals'
+function ensureFilterSpec(source: MemberSource): NodeFilterSpec {
+  if (!source.filter_spec) {
+    source.filter_spec = { conditions: [] }
   }
-}, { flush: 'sync' })
-
-function addFilterCondition() {
-  conditionError.value = ''
-  const cond: FilterCondition = {
-    field: newField.value,
-    op: newOp.value,
-    value: newValue.value.trim(),
+  if (!source.filter_spec.conditions) {
+    source.filter_spec.conditions = []
   }
-  if (newField.value === 'probe_verdict' || newField.value === 'probe_latency_ms') {
-    cond.probe_kind = newProbeKind.value
-  }
-
-  const err = validateConditionInput(cond)
-  if (err) {
-    conditionError.value = err
-    return
-  }
-
-  if (filterConditions.value.length >= 32) {
-    conditionError.value = '最多允许添加 32 条筛选条件'
-    return
-  }
-
-  filterConditions.value.push(cond)
-
-  newValue.value = ''
+  return source.filter_spec
 }
 
-function editFilterCondition(idx: number) {
-  const cond = filterConditions.value[idx]
-  newField.value = cond.field
-  newOp.value = cond.op
-  newValue.value = cond.value || ''
-  newProbeKind.value = cond.probe_kind || 'baseline'
-  filterConditions.value.splice(idx, 1)
-
-}
-
-function removeFilterCondition(idx: number) {
-  filterConditions.value.splice(idx, 1)
-}
-
-const hasPendingSourceDraft = computed(() =>
-  editingFilterSource.value !== null || filterConditions.value.length > 0 ||
-  filterDraftActive.value ||
-  newValue.value.trim().length > 0 || newSourcePattern.value.trim().length > 0
-)
+const hasPendingSourceDraft = computed(() => newSourcePattern.value.trim().length > 0)
 
 function discardSourceDraft() {
-  editingFilterSource.value = null
-  filterConditions.value = []
-  filterDraftActive.value = false
-  newField.value = 'display_name'
-  newOp.value = 'contains'
-  newValue.value = ''
-  newProbeKind.value = 'baseline'
   newSourcePattern.value = ''
   sourceFormError.value = ''
-  conditionError.value = ''
   edgeError.value = ''
 }
 
-function editFilterSource(idx: number) {
-  if (hasPendingSourceDraft.value) {
-    sourceFormError.value = '已有来源草稿尚未应用，请先添加、更新或放弃来源草稿。'
-    return
+function setFilterSourceInvalid(key: string, invalid: boolean) {
+  const next = new Set(invalidFilterSources.value)
+  if (invalid) {
+    next.add(key)
+    clearPreviewTimer()
+    previewGeneration.value++
+    snapshotPreview.value = null
+    previewDiagnostics.value = []
+    previewLoading.value = false
+  } else {
+    next.delete(key)
   }
-  const source = sources.value[idx]
-  editingFilterSource.value = source
-  filterConditions.value = (source.filter_spec?.conditions || []).map(c => ({ ...c }))
-  selectedSourceKind.value = 'filter'
-  newSourceOp.value = source.operation
+  invalidFilterSources.value = next
 }
 
+const hasInvalidFilterSources = computed(() => {
+  return invalidFilterSources.value.size > 0
+})
+
 function checkPendingSourceDraft(): boolean {
+  if (hasInvalidFilterSources.value) {
+    sourceFormError.value = '存在未完成或无效的筛选条件，请完善或删除后再保存。'
+    return false
+  }
   if (!hasPendingSourceDraft.value) return true
-  sourceFormError.value = '来源草稿尚未应用：请先点击「添加来源」或「更新来源」，或明确放弃来源草稿后再保存。'
+  sourceFormError.value = '来源草稿尚未应用：请先添加正则来源或明确放弃来源草稿后再保存。'
   return false
+}
+
+const filterSources = computed(() => {
+  return sources.value
+    .map((source, originalIndex) => ({ source, originalIndex }))
+    .filter((item) => item.source.kind === 'filter')
+})
+
+function addFilterSource(op: SourceOperation = 'add') {
+  const nextPos = sources.value.length
+  const newSource: MemberSource = {
+    operation: op,
+    kind: 'filter',
+    position: nextPos,
+    filter_spec: { conditions: [{ field: 'display_name', op: 'contains', value: '' }] },
+  }
+  getSourceKey(newSource)
+  sources.value.push(newSource)
 }
 
 // Add new source item to the ordered pipeline
@@ -507,9 +502,10 @@ function addSourceItem() {
   } else if (actualKind === 'regex') {
     newSource.pattern = newSourcePattern.value.trim()
   } else if (actualKind === 'filter') {
-    newSource.filter_spec = {
-      conditions: [...filterConditions.value],
-    }
+    newSource.filter_spec = { conditions: [{ field: 'display_name', op: 'contains', value: '' }] }
+    getSourceKey(newSource)
+    sources.value.push(newSource)
+    return
   } else if (actualKind === 'typed_builtin') {
     newSource.builtin_name = newSourceBuiltin.value
   }
@@ -522,24 +518,10 @@ function addSourceItem() {
     return
   }
 
-  if (actualKind === 'filter' && newValue.value.trim()) {
-    sourceFormError.value = '还有未添加的匹配条件，请先点击「添加条件」。'
-    return
-  }
+  getSourceKey(newSource)
+  sources.value.push(newSource)
 
-  if (actualKind === 'filter' && editingFilterSource.value) {
-    const idx = sources.value.indexOf(editingFilterSource.value)
-    newSource.position = idx
-    sources.value[idx] = { ...editingFilterSource.value, ...newSource }
-  } else {
-    sources.value.push(newSource)
-  }
-
-  if (actualKind === 'filter') {
-    editingFilterSource.value = null
-    filterConditions.value = []
-    newValue.value = ''
-  } else if (actualKind === 'regex') {
+  if (actualKind === 'regex') {
     newSourcePattern.value = ''
   }
 }
@@ -555,6 +537,7 @@ function selectAllCurrentPageNodes() {
       position: nextPos,
       node_logical_id: node.logicalId,
     }
+    getSourceKey(source)
     sources.value.push(source)
   }
 }
@@ -611,6 +594,7 @@ async function selectAllFilteredNodes() {
         position: nextPos,
         node_logical_id: node.logicalId,
       }
+      getSourceKey(source)
       sources.value.push(source)
     }
   } catch {
@@ -645,7 +629,12 @@ function toggleSourceOperation(idx: number) {
 }
 
 function removeSourceItem(idx: number) {
-  if (sources.value[idx] === editingFilterSource.value) discardSourceDraft()
+  const item = sources.value[idx]
+  if (item) {
+    const next = new Set(invalidFilterSources.value)
+    next.delete(getSourceKey(item))
+    invalidFilterSources.value = next
+  }
   sources.value.splice(idx, 1)
   sources.value.forEach((s, i) => { s.position = i })
 }
@@ -746,9 +735,17 @@ function sanitizeErrorMessage(msg: string): string {
     .replace(/[A-Za-z0-9_\-]{32,}/g, '[REDACTED]')
 }
 
-async function requestLivePreview() {
+async function requestLivePreview(forcedGen?: number) {
   if (!props.open) return
-  const currentGen = ++previewGeneration.value
+  if (hasInvalidFilterSources.value) {
+    clearPreviewTimer()
+    previewGeneration.value++
+    snapshotPreview.value = null
+    previewDiagnostics.value = []
+    previewLoading.value = false
+    return
+  }
+  const currentGen = forcedGen ?? ++previewGeneration.value
   previewLoading.value = true
   previewError.value = ''
   try {
@@ -759,15 +756,15 @@ async function requestLivePreview() {
       group_type: groupType.value,
       empty_fallback_pass: emptyFallbackPass.value,
       inherit_global_filter: inheritGlobalFilter.value,
-      sources: sources.value.map((s, idx) => ({ ...s, position: idx })),
+      sources: sources.value.map((s, idx) => sanitizeSourceForPayload({ ...s, position: idx })),
       target: 'mihomo',
     }
     const res = await api.post<GroupDraftPreviewResponse>('/api/v1/policies/groups/preview', payload)
-    if (currentGen !== previewGeneration.value || !props.open) return
+    if (currentGen !== previewGeneration.value || !props.open || hasInvalidFilterSources.value) return
     snapshotPreview.value = res
     previewDiagnostics.value = res.diagnostics || []
   } catch (err: any) {
-    if (currentGen !== previewGeneration.value || !props.open) return
+    if (currentGen !== previewGeneration.value || !props.open || hasInvalidFilterSources.value) return
     snapshotPreview.value = null
     if (err instanceof ApiError) {
       if (err.status === 422 && err.code === 'cycle_detected') {
@@ -790,16 +787,43 @@ async function requestLivePreview() {
 
 function triggerDebouncedPreview(delayMs = 250) {
   clearPreviewTimer()
-  previewGeneration.value++
+  if (hasInvalidFilterSources.value) {
+    previewGeneration.value++
+    snapshotPreview.value = null
+    previewDiagnostics.value = []
+    previewLoading.value = false
+    return
+  }
+  const gen = ++previewGeneration.value
   previewDebounceTimer = setTimeout(() => {
-    requestLivePreview()
+    if (gen === previewGeneration.value && !hasInvalidFilterSources.value) {
+      requestLivePreview(gen)
+    }
   }, delayMs)
 }
 
 async function loadSnapshotPreview() {
   clearPreviewTimer()
+  if (hasInvalidFilterSources.value) {
+    previewGeneration.value++
+    snapshotPreview.value = null
+    previewDiagnostics.value = []
+    return
+  }
   await requestLivePreview()
 }
+
+watch(hasInvalidFilterSources, (invalid) => {
+  if (invalid) {
+    clearPreviewTimer()
+    previewGeneration.value++
+    snapshotPreview.value = null
+    previewDiagnostics.value = []
+    previewLoading.value = false
+  } else if (props.open) {
+    triggerDebouncedPreview(250)
+  }
+})
 
 // Watch draft changes for debounced preview
 watch(
@@ -845,7 +869,7 @@ function handleSave() {
     position: position.value,
     emptyFallbackPass: emptyFallbackPass.value,
     inheritGlobalFilter: inheritGlobalFilter.value,
-    sources: sources.value.map((s, idx) => ({ ...s, position: idx })),
+    sources: sources.value.map((s, idx) => sanitizeSourceForPayload({ ...s, position: idx })),
     expectedRevision: expectedRevision.value,
   })
 }
@@ -853,6 +877,8 @@ function handleSave() {
 function close() {
   clearPreviewTimer()
   previewGeneration.value++
+  snapshotPreview.value = null
+  previewDiagnostics.value = []
   emit('close')
 }
 </script>
@@ -1003,20 +1029,11 @@ function close() {
         <!-- TAB 1: Editor View (Group form or Edges form) -->
         <div v-if="activeSheetTab === 'editor'">
           <form id="policy-editor-group-form" class="space-y-4" @submit.prevent="handleSave">
-            <!-- STAGE 1: Candidate Scope & Basic Config -->
-            <div data-testid="stage-candidate-scope" class="space-y-4 p-3.5 rounded-xl bg-base-200/80 border border-base-300">
-              <div class="flex items-center justify-between">
-                <div>
-                  <h4 class="font-bold text-xs text-primary">阶段 1：候选范围与基础策略 (Candidate Scope)</h4>
-                  <p class="text-[11px] opacity-70 mt-0.5">
-                    配置策略组基本信息、节点候选范围（全局软筛选继承）与空成员回退行为。
-                  </p>
-                </div>
-              </div>
-
-              <!-- 1. Policy Group Name: Always FIRST input in the dialog! -->
-              <div class="grid grid-cols-1 sm:grid-cols-4 gap-3">
-                <label class="form-control sm:col-span-3">
+            <!-- Top Compact Config: Name, Type (select), Position, and Candidate Scope (Inherit) -->
+            <div data-testid="stage-candidate-scope" class="p-3.5 rounded-xl bg-base-200/80 border border-base-300 space-y-3">
+              <!-- Row 1: Name, Type (<select>), Position -->
+              <div class="grid grid-cols-1 sm:grid-cols-12 gap-3">
+                <label class="form-control sm:col-span-6">
                   <span class="label-text font-semibold text-xs">策略组名称</span>
                   <input
                     v-model="name"
@@ -1025,7 +1042,21 @@ function close() {
                     class="input input-bordered input-sm mt-1"
                   />
                 </label>
-                <label class="form-control sm:col-span-1">
+
+                <label class="form-control sm:col-span-4">
+                  <span class="label-text font-semibold text-xs">策略组类型</span>
+                  <select
+                    v-model="groupType"
+                    class="select select-bordered select-sm mt-1 w-full text-xs font-medium"
+                    data-testid="group-type-select"
+                  >
+                    <option v-for="item in ALL_GROUP_TYPES" :key="item.type" :value="item.type">
+                      {{ item.label }} ({{ item.type }})
+                    </option>
+                  </select>
+                </label>
+
+                <label class="form-control sm:col-span-2">
                   <span class="label-text font-semibold text-xs">排序序号</span>
                   <input
                     v-model.number="position"
@@ -1038,111 +1069,144 @@ function close() {
                 </label>
               </div>
 
-              <!-- 2. Group Type Selector -->
-              <div>
-                <span class="label-text font-semibold text-xs block mb-1.5">策略组类型</span>
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  <label
-                    v-for="item in ALL_GROUP_TYPES"
-                    :key="item.type"
-                    class="flex items-start gap-2.5 p-2.5 rounded-lg border border-base-300 bg-base-100/70 cursor-pointer hover:border-primary/40 transition-colors"
-                    :class="{ 'border-primary bg-primary/5': groupType === item.type }"
-                  >
-                    <input
-                      v-model="groupType"
-                      type="radio"
-                      :value="item.type"
-                      class="radio radio-primary radio-sm mt-0.5"
-                    />
-                    <div class="min-w-0">
-                      <span class="font-medium text-xs block leading-tight">{{ item.label }}</span>
-                      <span class="text-[11px] opacity-60 block mt-0.5 leading-snug">{{ item.desc }}</span>
-                      <span class="text-[10px] text-primary/90 font-mono block mt-1 leading-snug">
-                        支持目标：{{ item.supportedTargets.join(', ') }}
-                      </span>
-                    </div>
-                  </label>
+              <!-- Row 2: Candidate Scope (Inherit vs All Admitted) - Unique Control at Top -->
+              <div class="space-y-1.5 pt-2 border-t border-base-300/50">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                  <span class="label-text font-semibold text-xs">候选范围与软筛选继承</span>
+                  <div class="flex items-center gap-3 text-xs">
+                    <label
+                      data-testid="scope-inherit"
+                      class="flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <input
+                        v-model="inheritGlobalFilter"
+                        type="radio"
+                        :value="true"
+                        class="radio radio-primary radio-xs"
+                      />
+                      <span class="font-medium">继承全局筛选 (Inherit)</span>
+                    </label>
+
+                    <label
+                      data-testid="scope-all"
+                      class="flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <input
+                        v-model="inheritGlobalFilter"
+                        type="radio"
+                        :value="false"
+                        class="radio radio-primary radio-xs"
+                      />
+                      <span class="font-medium">使用全部准入节点 (All Admitted)</span>
+                    </label>
+                  </div>
                 </div>
-              </div>
-
-              <!-- 3. Candidate Scope: Inherit vs All Admitted -->
-              <div class="space-y-2">
-                <span class="label-text font-semibold text-xs block">候选范围设置</span>
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  <label
-                    data-testid="scope-inherit"
-                    class="flex items-start gap-2.5 p-2.5 rounded-lg border border-base-300 bg-base-100/70 cursor-pointer hover:border-primary/40 transition-colors"
-                    :class="{ 'border-primary bg-primary/5': inheritGlobalFilter }"
-                  >
-                    <input
-                      v-model="inheritGlobalFilter"
-                      type="radio"
-                      :value="true"
-                      class="radio radio-primary radio-sm mt-0.5"
-                    />
-                    <div class="min-w-0">
-                      <span class="font-medium text-xs block leading-tight">继承全局筛选 (Inherit)</span>
-                      <span class="text-[11px] opacity-60 block mt-0.5 leading-snug">
-                        仅匹配符合全局过滤条件的节点（默认推荐）
-                      </span>
-                    </div>
-                  </label>
-
-                  <label
-                    data-testid="scope-all"
-                    class="flex items-start gap-2.5 p-2.5 rounded-lg border border-base-300 bg-base-100/70 cursor-pointer hover:border-primary/40 transition-colors"
-                    :class="{ 'border-primary bg-primary/5': !inheritGlobalFilter }"
-                  >
-                    <input
-                      v-model="inheritGlobalFilter"
-                      type="radio"
-                      :value="false"
-                      class="radio radio-primary radio-sm mt-0.5"
-                    />
-                    <div class="min-w-0">
-                      <span class="font-medium text-xs block leading-tight">使用全部准入节点 (All Admitted)</span>
-                      <span class="text-[11px] opacity-60 block mt-0.5 leading-snug">
-                        关闭继承软筛选，可从全量准入节点中匹配（用于 WARP 或专用线路）
-                      </span>
-                    </div>
-                  </label>
-                </div>
-
-                <label class="flex items-start gap-3 rounded-xl border border-base-300 p-2.5 bg-base-100/70 cursor-pointer">
-                  <input
-                    v-model="inheritGlobalFilter"
-                    type="checkbox"
-                    class="checkbox checkbox-primary checkbox-sm mt-0.5"
-                    data-testid="inherit-global-filter"
-                  />
-                  <span class="min-w-0 text-sm">
-                    <span class="font-semibold block text-xs">继承全局过滤开关</span>
-                    <span class="text-[11px] opacity-70 leading-snug block mt-0.5">
-                      开启时仅匹配符合全局过滤条件的节点；关闭后可从全量接入节点中匹配（如用于 WARP 或专用线路）。
-                    </span>
-                  </span>
-                </label>
-
-                <div class="p-2.5 rounded-lg bg-info/10 border border-info/30 text-[11px] text-info leading-relaxed">
+                <p class="text-[11px] opacity-70 leading-snug">
+                  {{ inheritGlobalFilter ? '仅匹配符合全局过滤条件的节点（默认推荐）。' : '关闭继承软筛选，可从全量准入节点中匹配（用于 WARP 或专用免检线路）。' }}
                   说明：选择「使用全部准入节点」只绕过全局软筛选，绝不绕过禁用订阅、准入规则、硬性风险限制或凭据校验。
-                </div>
-
-                <label class="flex items-start gap-3 rounded-xl border border-base-300 p-2.5 bg-base-100/70 cursor-pointer">
-                  <input
-                    v-model="emptyFallbackPass"
-                    type="checkbox"
-                    class="checkbox checkbox-primary checkbox-sm mt-0.5"
-                    data-testid="empty-fallback-pass"
-                  />
-                  <span class="min-w-0 text-sm">
-                    <span class="font-semibold block text-xs">{{ t('policy.emptyFallbackPass') }}</span>
-                    <span class="text-[11px] opacity-70 leading-snug block mt-0.5">
-                      {{ t('policy.emptyFallbackPassHelp') }}
-                    </span>
-                  </span>
-                </label>
+                </p>
               </div>
             </div>
+
+            <!-- Primary Inline Filter Sources Section (Top of Sheet) -->
+            <div data-testid="primary-filter-section" class="p-3.5 rounded-xl bg-base-200/80 border border-base-300 space-y-3">
+              <div class="flex items-center justify-between">
+                <div>
+                  <h4 class="font-bold text-xs text-primary">属性筛选条件 (Filter Conditions)</h4>
+                  <p class="text-[11px] opacity-70 mt-0.5">
+                    直接配置策略组节点属性过滤规则；修改即时触发 250ms 快照预览，支持一键保存。
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  class="btn btn-outline btn-xs gap-1"
+                  data-testid="add-filter-source-btn"
+                  @click="addFilterSource('add')"
+                >
+                  <PlusIcon class="w-3.5 h-3.5" />
+                  添加属性筛选
+                </button>
+              </div>
+
+              <div v-if="filterSources.length > 0" class="space-y-3">
+                <div
+                  v-for="item in filterSources"
+                  :key="getSourceKey(item.source)"
+                  data-testid="inline-filter-editor"
+                  class="p-2.5 rounded-lg bg-base-100 border border-base-300 space-y-2 font-sans"
+                >
+                  <div class="flex items-center justify-between text-xs pb-1 border-b border-base-300/40">
+                    <div class="flex items-center gap-2">
+                      <span
+                        class="badge badge-xs font-mono font-bold"
+                        :class="item.source.operation === 'remove' ? 'badge-error' : 'badge-primary'"
+                      >
+                        {{ item.source.operation === 'remove' ? '- 排除筛选' : '+ 加入筛选' }}
+                      </span>
+                      <span class="text-[11px] opacity-70 font-mono">流水线位置 #{{ item.originalIndex + 1 }}</span>
+                    </div>
+                    <button
+                      type="button"
+                      class="btn btn-ghost btn-xs text-error p-1"
+                      title="删除此筛选来源"
+                      @click="removeSourceItem(item.originalIndex)"
+                    >
+                      <TrashIcon class="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  <StructuredFilterEditor
+                    inline
+                    v-model="ensureFilterSpec(item.source).conditions"
+                    @invalid="(inv) => setFilterSourceInvalid(getSourceKey(item.source), inv)"
+                  />
+                </div>
+              </div>
+              <div v-else class="p-3 rounded-lg bg-base-100/60 border border-dashed border-base-300 text-xs text-base-content/60 flex items-center justify-between">
+                <span>当前暂无属性筛选条件。空条件默认匹配全部候选节点。</span>
+                <button
+                  type="button"
+                  class="btn btn-primary btn-xs gap-1"
+                  @click="addFilterSource('add')"
+                >
+                  <PlusIcon class="w-3.5 h-3.5" />
+                  添加筛选规则
+                </button>
+              </div>
+            </div>
+
+            <!-- Advanced Configuration & Execution Pipeline (Default Closed) -->
+            <details
+              data-testid="advanced-pipeline-details"
+              class="rounded-xl border border-base-300 bg-base-200/60 overflow-hidden"
+            >
+              <summary class="p-3.5 font-bold text-xs cursor-pointer flex items-center justify-between hover:bg-base-200/90 transition-colors select-none">
+                <div class="flex items-center gap-2">
+                  <span class="text-primary font-bold">高级配置与完整执行流水线 (Advanced Pipeline)</span>
+                  <span class="badge badge-xs badge-info font-mono">{{ sources.length }} 项</span>
+                </div>
+                <span class="text-[11px] font-normal opacity-60">展开查看/调整具体节点手选、正则、引用与执行原序 &darr;</span>
+              </summary>
+
+              <div class="p-3.5 pt-2 space-y-4 border-t border-base-300/60">
+                <!-- Advanced Candidate Scope Setting: Empty fallback pass -->
+                <div class="p-2.5 rounded-lg bg-base-100 border border-base-300 text-xs space-y-1">
+                  <span class="font-semibold block text-xs">高级回退策略</span>
+                  <label class="flex items-start gap-3 cursor-pointer">
+                    <input
+                      v-model="emptyFallbackPass"
+                      type="checkbox"
+                      class="checkbox checkbox-primary checkbox-sm mt-0.5"
+                      data-testid="empty-fallback-pass"
+                    />
+                    <span class="min-w-0 text-sm">
+                      <span class="font-semibold block text-xs">{{ t('policy.emptyFallbackPass') }}</span>
+                      <span class="text-[11px] opacity-70 leading-snug block mt-0.5">
+                        {{ t('policy.emptyFallbackPassHelp') }}
+                      </span>
+                    </span>
+                  </label>
+                </div>
 
             <!-- STAGE 2: Add Members (Source Add Controls) -->
             <div data-testid="stage-add-members" class="p-3.5 rounded-xl bg-base-200/80 border border-base-300 space-y-3">
@@ -1460,44 +1524,22 @@ function close() {
                   </p>
                 </div>
 
-                <!-- Filter source input using shared StructuredFilterEditor -->
-                <div v-else-if="selectedSourceKind === 'filter'" data-testid="condition-draft" class="space-y-3 p-2.5 rounded-lg bg-base-100 border border-base-300 text-xs">
-                  <div class="flex flex-wrap items-center justify-between gap-2">
-                    <span class="font-semibold">条件来源草稿 / 匹配条件</span>
-                    <span class="badge badge-xs badge-info font-mono">{{ filterConditions.length }}/32 条条件</span>
-                  </div>
-                  <p class="text-[11px] opacity-70">
-                    多个条件同时匹配（AND），包括名称正则、协议及地域等探针结果。这里只编辑草稿，不是整组筛选器。
-                    {{ editingFilterSource ? `点击「更新来源」后在第 ${sources.indexOf(editingFilterSource) + 1} 项原位置生效` : `仅点击「添加来源」后追加为第 ${sources.length + 1} 项` }}，按当前操作{{ newSourceOp === 'remove' ? '排除 (-)' : '加入 (+)' }}匹配节点；后续来源仍可重新加入。
-                  </p>
-
-                  <StructuredFilterEditor
-                    v-model="filterConditions"
-                    :max-conditions="32"
-                    :allow-clear="true"
-                    @draft-change="filterDraftActive = $event"
-                  />
-
-                  <p v-if="conditionError" role="alert" class="text-error text-xs">{{ conditionError }}</p>
-                  <div class="flex flex-wrap gap-2 pt-2 border-t border-base-300/60">
+                <!-- Filter source input: Add direct filter source -->
+                <div v-else-if="selectedSourceKind === 'filter'" data-testid="condition-draft" class="space-y-2 p-2.5 rounded-lg bg-base-100 border border-base-300 text-xs">
+                  <div class="flex items-center justify-between gap-2">
+                    <span class="font-semibold">属性筛选来源</span>
                     <button
                       type="button"
-                      class="btn btn-primary btn-xs gap-1"
-                      :disabled="!filterConditions.length"
+                      class="btn btn-primary btn-sm gap-1"
                       @click="addSourceItem"
                     >
-                      <PlusIcon class="w-3.5 h-3.5" />
-                      {{ editingFilterSource ? '更新来源' : '添加来源' }}
-                    </button>
-                    <button
-                      v-if="editingFilterSource || filterConditions.length"
-                      type="button"
-                      class="btn btn-ghost btn-xs text-warning"
-                      @click="discardSourceDraft"
-                    >
-                      放弃草稿
+                      <PlusIcon class="w-4 h-4" />
+                      {{ newSourceOp === 'remove' ? '添加排除过滤来源 (-)' : '添加加入过滤来源 (+)' }}
                     </button>
                   </div>
+                  <p class="text-[11px] opacity-70">
+                    点击添加后将在下方流水线中生成过滤来源项，可直接在行内配置匹配条件（AND 关系）。空条件默认匹配全部候选节点。
+                  </p>
                 </div>
 
                 <!-- Typed builtin input -->
@@ -1541,66 +1583,79 @@ function close() {
               <div v-if="sources.length > 0" class="space-y-1.5">
                 <div
                   v-for="(item, idx) in computedSemantics"
-                  :key="item.source.id || idx"
+                  :key="getSourceKey(item.source)"
                   data-testid="source-row"
                   draggable="true"
-                  class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2 rounded-lg bg-base-100 border border-base-300 text-xs font-mono hover:border-primary/40"
+                  class="flex flex-col gap-2 p-2 rounded-lg bg-base-100 border border-base-300 text-xs font-mono hover:border-primary/40"
                   :class="{ 'opacity-50 border-dashed': draggedIndex === idx }"
                   @dragstart="onDragStart(idx, $event)"
                   @dragover="onDragOver(idx, $event)"
                   @drop="onDrop(idx, $event)"
                 >
-                  <div class="flex items-center gap-2 min-w-0 flex-1 truncate">
-                    <button type="button" class="cursor-grab active:cursor-grabbing p-1 opacity-40 hover:opacity-100 shrink-0" title="拖拽排序">
-                      <Bars3Icon class="w-3.5 h-3.5" />
-                    </button>
-                    <span class="badge badge-xs badge-ghost font-mono shrink-0">#{{ idx + 1 }}</span>
-                    <button
-                      type="button"
-                      class="btn btn-xs shrink-0 font-bold"
-                      :class="item.source.operation === 'remove' ? 'btn-error' : 'btn-primary'"
-                      :title="item.source.operation === 'remove' ? '切换为加入 (+)' : '切换为排除 (-)'"
-                      @click="toggleSourceOperation(idx)"
-                    >
-                      {{ item.source.operation === 'remove' ? '- 排除' : '+ 加入' }}
-                    </button>
-                    <span class="badge badge-xs badge-outline shrink-0 font-sans">
-                      {{ sourceKindLabel(item.source.kind) }}
-                    </span>
-                    <div class="min-w-0 flex-1 truncate text-[11px]">
-                      <span v-if="item.source.kind === 'manual_node'" class="text-primary truncate">
-                        {{ getNodeDisplayName(item.source.node_logical_id) }}
+                  <div class="flex flex-wrap sm:flex-nowrap items-center justify-between gap-2 w-full">
+                    <div class="flex items-center gap-2 min-w-0 flex-1 truncate">
+                      <button type="button" class="cursor-grab active:cursor-grabbing p-1 opacity-40 hover:opacity-100 shrink-0" title="拖拽排序">
+                        <Bars3Icon class="w-3.5 h-3.5" />
+                      </button>
+                      <span class="badge badge-xs badge-ghost font-mono shrink-0">#{{ idx + 1 }}</span>
+                      <button
+                        type="button"
+                        class="btn btn-xs shrink-0 font-bold"
+                        :class="item.source.operation === 'remove' ? 'btn-error' : 'btn-primary'"
+                        :title="item.source.operation === 'remove' ? '切换为加入 (+)' : '切换为排除 (-)'"
+                        @click="toggleSourceOperation(idx)"
+                      >
+                        {{ item.source.operation === 'remove' ? '- 排除' : '+ 加入' }}
+                      </button>
+                      <span class="badge badge-xs badge-outline shrink-0 font-sans">
+                        {{ sourceKindLabel(item.source.kind) }}
                       </span>
-                      <span v-else-if="item.source.kind === 'group_ref'" class="text-secondary truncate">
-                        组引用: {{ getGroupName(item.source.target_group_id) }}
-                      </span>
-                      <span v-else-if="item.source.kind === 'group_nodes'" class="text-secondary truncate">
-                        解包子组: {{ getGroupName(item.source.target_group_id) }}
-                      </span>
-                      <span v-else-if="item.source.kind === 'regex'" class="text-accent truncate">
-                        /{{ item.source.pattern }}/
-                      </span>
-                      <span v-else-if="item.source.kind === 'filter'" class="text-info truncate">
-                        {{ item.source.filter_spec?.conditions?.map(c => `${c.field} ${c.op} "${c.value}"`).join(' && ') || '空条件' }}
-                      </span>
-                      <span v-else-if="item.source.kind === 'typed_builtin'" class="text-warning truncate">
-                        {{ item.source.builtin_name }}
-                      </span>
+                      <div class="min-w-0 flex-1 truncate text-[11px]">
+                        <span v-if="item.source.kind === 'manual_node'" class="text-primary truncate">
+                          {{ getNodeDisplayName(item.source.node_logical_id) }}
+                        </span>
+                        <span v-else-if="item.source.kind === 'group_ref'" class="text-secondary truncate">
+                          组引用: {{ getGroupName(item.source.target_group_id) }}
+                        </span>
+                        <span v-else-if="item.source.kind === 'group_nodes'" class="text-secondary truncate">
+                          解包子组: {{ getGroupName(item.source.target_group_id) }}
+                        </span>
+                        <span v-else-if="item.source.kind === 'regex'" class="text-accent truncate">
+                          /{{ item.source.pattern }}/
+                        </span>
+                        <span v-else-if="item.source.kind === 'filter'" class="text-info truncate">
+                          {{ item.source.filter_spec?.conditions?.map(c => `${c.field} ${c.op} "${c.value}"`).join(' && ') || '空条件' }}
+                        </span>
+                        <span v-else-if="item.source.kind === 'typed_builtin'" class="text-warning truncate">
+                          {{ item.source.builtin_name }}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div class="flex items-center gap-1 shrink-0 self-end sm:self-auto">
+                      <span v-if="item.isReEntry" class="badge badge-xs badge-secondary font-sans">重入入选</span>
+                      <button type="button" class="btn btn-ghost btn-xs p-1" :disabled="idx === 0" title="上移" @click="moveSourceUp(idx)">
+                        <ChevronUpIcon class="w-3.5 h-3.5" />
+                      </button>
+                      <button type="button" class="btn btn-ghost btn-xs p-1" :disabled="idx === sources.length - 1" title="下移" @click="moveSourceDown(idx)">
+                        <ChevronDownIcon class="w-3.5 h-3.5" />
+                      </button>
+                      <button type="button" class="btn btn-ghost btn-xs text-error p-1" title="删除" @click="removeSourceItem(idx)">
+                        <TrashIcon class="w-3.5 h-3.5" />
+                      </button>
                     </div>
                   </div>
 
-                  <div class="flex items-center gap-1 shrink-0 self-end sm:self-auto">
-                    <span v-if="item.isReEntry" class="badge badge-xs badge-secondary font-sans">重入入选</span>
-                    <button v-if="item.source.kind === 'filter'" type="button" class="btn btn-ghost btn-xs" title="编辑匹配条件" @click="editFilterSource(idx)">编辑条件</button>
-                    <button type="button" class="btn btn-ghost btn-xs p-1" :disabled="idx === 0" title="上移" @click="moveSourceUp(idx)">
-                      <ChevronUpIcon class="w-3.5 h-3.5" />
-                    </button>
-                    <button type="button" class="btn btn-ghost btn-xs p-1" :disabled="idx === sources.length - 1" title="下移" @click="moveSourceDown(idx)">
-                      <ChevronDownIcon class="w-3.5 h-3.5" />
-                    </button>
-                    <button type="button" class="btn btn-ghost btn-xs text-error p-1" title="删除" @click="removeSourceItem(idx)">
-                      <TrashIcon class="w-3.5 h-3.5" />
-                    </button>
+                  <!-- Filter Row Summary: Avoid double editor! -->
+                  <div
+                    v-if="item.source.kind === 'filter'"
+                    class="w-full pt-1.5 border-t border-base-300/40 text-[11px] text-base-content/70 font-sans flex items-center justify-between"
+                    data-testid="filter-row-summary"
+                  >
+                    <span>
+                      条件摘要：{{ item.source.filter_spec?.conditions?.map(c => `${c.field} ${c.op} "${c.value}"`).join(' && ') || '空条件 (匹配全部候选节点)' }}
+                    </span>
+                    <span class="badge badge-xs badge-ghost">已在上方筛选区编辑</span>
                   </div>
                 </div>
               </div>
@@ -1608,6 +1663,8 @@ function close() {
                 尚未添加来源项（空策略组）。
               </p>
             </div>
+          </div>
+        </details>
 
             <!-- STAGE 4: Real-time Results & Preview -->
             <div data-testid="stage-realtime-results" class="p-3.5 rounded-xl bg-base-200/80 border border-base-300 space-y-3">
@@ -1622,6 +1679,7 @@ function close() {
                   type="button"
                   class="btn btn-ghost btn-xs gap-1"
                   :class="{ loading: previewLoading }"
+                  :disabled="hasInvalidFilterSources"
                   @click="loadSnapshotPreview"
                 >
                   <ArrowPathIcon class="w-3.5 h-3.5" />
@@ -1634,14 +1692,14 @@ function close() {
                 <div data-testid="candidate-count" class="p-2.5 rounded-lg bg-base-100 border border-base-300">
                   <span class="text-[10px] opacity-70 block">候选节点数</span>
                   <div class="text-base font-bold font-mono text-primary mt-0.5">
-                    {{ snapshotPreview?.candidate_count !== undefined ? snapshotPreview.candidate_count : '-' }}
+                    {{ snapshotPreview ? (snapshotPreview.candidate_count ?? ((snapshotPreview.node_count ?? 0) + (snapshotPreview.excluded_count ?? 0))) : '-' }}
                   </div>
                 </div>
 
                 <div data-testid="member-count" class="p-2.5 rounded-lg bg-base-100 border border-base-300">
                   <span class="text-[10px] opacity-70 block">生效成员数</span>
                   <div class="text-base font-bold font-mono text-success mt-0.5">
-                    {{ snapshotPreview ? (snapshotPreview.member_count ?? snapshotPreview.node_count ?? 0) : '-' }}
+                    {{ snapshotPreview ? (snapshotPreview.member_count ?? snapshotPreview.members?.length ?? snapshotPreview.node_count ?? 0) : '-' }}
                   </div>
                   <span v-if="snapshotPreview && snapshotPreview.node_count !== undefined" class="text-[10px] opacity-60 block mt-0.5 font-mono">
                     {{ snapshotPreview.node_count }} 节点
@@ -1689,7 +1747,9 @@ function close() {
                   </span>
                 </div>
                 <p v-else class="text-[11px] opacity-60 italic">
-                  {{ snapshotPreview ? '当前草稿无排除节点' : '等待草稿解析中…' }}
+                  <template v-if="!snapshotPreview">等待草稿解析中…</template>
+                  <template v-else-if="(snapshotPreview.excluded_count ?? 0) > 0">已排除 {{ snapshotPreview.excluded_count }} 个节点（未提供细因明细）</template>
+                  <template v-else>当前草稿无排除节点</template>
                 </p>
               </div>
 
@@ -1732,25 +1792,26 @@ function close() {
         <!-- TAB 2: Snapshot Preview -->
         <div v-else-if="activeSheetTab === 'preview'" class="space-y-4">
           <div class="p-3 rounded-xl bg-base-200/70 border border-base-300 text-xs space-y-2">
-            <div class="flex items-center justify-between">
-              <div class="flex items-center gap-2">
-                <span class="badge badge-warning badge-sm font-semibold">草稿预览 (Draft Preview)</span>
-                <span class="font-bold text-xs">实时未保存草稿解析</span>
-                <span v-if="snapshotPreview" class="badge badge-xs badge-ghost font-mono">
+            <div class="flex flex-wrap items-center justify-between gap-2.5">
+              <div class="flex flex-wrap items-center gap-1.5 sm:gap-2 min-w-0">
+                <span class="badge badge-warning badge-sm font-semibold shrink-0">草稿预览 (Draft Preview)</span>
+                <span class="font-bold text-xs shrink-0">实时未保存草稿解析</span>
+                <span v-if="snapshotPreview" class="badge badge-xs badge-ghost font-mono shrink-0">
                   v{{ snapshotPreview.revision ?? expectedRevision }}
                 </span>
-                <span v-if="snapshotPreview" class="badge badge-xs badge-outline font-mono">
+                <span v-if="snapshotPreview" class="badge badge-xs badge-outline font-mono shrink-0">
                   共 {{ snapshotPreview.node_count }} 节点
                 </span>
               </div>
               <button
                 type="button"
-                class="btn btn-ghost btn-xs gap-1"
+                class="btn btn-ghost btn-xs gap-1 shrink-0 ml-auto sm:ml-0"
                 :class="{ loading: previewLoading }"
+                :disabled="hasInvalidFilterSources"
                 @click="loadSnapshotPreview"
               >
-                <ArrowPathIcon class="w-3.5 h-3.5" />
-                重新计算草稿预览
+                <ArrowPathIcon class="w-3.5 h-3.5 shrink-0" />
+                <span>重新计算草稿预览</span>
               </button>
             </div>
             <p class="text-[11px] opacity-75">
@@ -1866,7 +1927,7 @@ function close() {
             class="btn btn-primary btn-sm"
             @click.prevent="handleSave"
             :class="{ loading: saving }"
-            :disabled="saving || !name.trim()"
+            :disabled="saving || !name.trim() || hasInvalidFilterSources"
           >
             {{ mode === 'edges' ? '保存来源' : (group ? '保存策略组' : '创建策略组') }}
           </button>

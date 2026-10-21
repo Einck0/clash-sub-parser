@@ -25,6 +25,7 @@ type RouterConfig struct {
 	AdminToken                 string // Plaintext token fallback for unit tests; TokenHolder is preferred
 	TokenHolder                AdminTokenHolder
 	SettingsRepository         domain.SettingsRepository
+	DNSSettingsRepository      domain.DNSSettingsRepository
 	EnvironmentFetchProxy      string
 	ReadinessChecker           ReadinessCheckerFunc
 	PublicationTokenValidator  PublicationTokenValidatorFunc

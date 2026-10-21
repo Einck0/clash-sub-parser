@@ -427,6 +427,7 @@ func TestPolicyValidation_PolicyRuleTargetGroupMustExist(t *testing.T) {
 func TestPolicyService_ValidGraphAndRevision(t *testing.T) {
 	db := setupTestDB(t)
 	svc, auditRepo := setupTestService(t, db)
+	policyRepo := sqlite.NewPolicyRepository(db)
 	ctx := context.Background()
 
 	nodeLogicalID := "node_0123456789abcdef"
@@ -825,6 +826,7 @@ func TestPolicyService_FilterSpecValidationErrors(t *testing.T) {
 func TestPolicy_AutoBootstrapActiveRevisionAndDeleteRules(t *testing.T) {
 	db := setupTestDB(t)
 	svc, auditRepo := setupTestService(t, db)
+	policyRepo := sqlite.NewPolicyRepository(db)
 	ctx := context.Background()
 
 	grp, err := svc.CreateGroup(ctx, policy.CreateGroupCommand{

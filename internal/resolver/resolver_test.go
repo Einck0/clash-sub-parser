@@ -465,19 +465,19 @@ func TestDeterministicResolver_WARPGroup_LegacyAdmissionIgnored_RiskAndInactiveS
 	nWARPActive := domain.Node{
 		LogicalID:   testNodeLogicalID("node-warp-active-vless"),
 		DisplayName: "WARP Active VLess",
-		Protocol:    domain.ProtocolVLess,
+		Protocol:    domain.ProtocolVLESS,
 		Active:      true,
 	}
 	nWARPInactive := domain.Node{
 		LogicalID:   testNodeLogicalID("node-warp-inactive-vless"),
 		DisplayName: "WARP Inactive VLess",
-		Protocol:    domain.ProtocolVLess,
+		Protocol:    domain.ProtocolVLESS,
 		Active:      false,
 	}
 	nWARPRisk := domain.Node{
 		LogicalID:   testNodeLogicalID("node-warp-risk-vless"),
 		DisplayName: "WARP Risk VLess",
-		Protocol:    domain.ProtocolVLess,
+		Protocol:    domain.ProtocolVLESS,
 		Active:      true,
 	}
 

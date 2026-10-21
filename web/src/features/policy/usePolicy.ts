@@ -506,8 +506,6 @@ export function usePolicy() {
   return {
     groups,
     globalFilter,
-    admissionRules,
-    policyRules,
     loading,
     loadingGlobalFilter,
     saving,

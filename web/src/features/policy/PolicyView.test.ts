@@ -226,6 +226,13 @@ describe('PolicyView Topology & Drawer Linkage', () => {
     const modal = allDialogs.find((d) => d.textContent?.includes('全局节点筛选'))
     expect(modal).toBeDefined()
     expect(modal?.textContent).toContain('执行优先级')
+    expect(modal?.textContent).toContain('执行优先级：节点停用与显式风险排除')
+    expect(modal?.textContent).toContain('符合启用状态与风险限制的候选节点')
+    expect(modal?.textContent).toContain('全部候选节点(不应用全局筛选)')
+    expect(modal?.textContent).toContain('当前凭据版本门槛、节点停用、来源订阅禁用与显式风险排除始终保留生效')
+    expect(modal?.textContent).not.toContain('硬性准入规则')
+    expect(modal?.textContent).not.toContain('全量准入节点')
+    expect(modal?.textContent).not.toContain('通过准入的节点')
     expect(modal?.textContent).toContain('全局节点筛选')
 
     // Add a condition

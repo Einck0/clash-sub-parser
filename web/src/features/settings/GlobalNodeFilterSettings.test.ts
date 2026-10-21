@@ -191,5 +191,16 @@ describe('global export filter settings', () => {
     expect(root.textContent).toContain('WARP')
     expect(root.textContent).toContain('当前凭据版本门槛')
     expect(root.textContent).not.toContain('重新发布')
+    expect(root.textContent).toContain('全部候选节点(不应用全局筛选)')
+    expect(root.textContent).not.toContain('硬性准入规则')
+    expect(root.textContent).not.toContain('全量准入节点')
+  })
+
+  it('displays updated candidate-scope guidance without retired admission rules claim', async () => {
+    mount(GlobalNodeFilterSettings); await flush()
+    expect(root.textContent).toContain('全部候选节点(不应用全局筛选)')
+    expect(root.textContent).toContain('当前凭据版本门槛、节点停用、来源订阅禁用与显式风险排除始终保留生效')
+    expect(root.textContent).not.toContain('硬性准入规则')
+    expect(root.textContent).not.toContain('全量准入节点')
   })
 })

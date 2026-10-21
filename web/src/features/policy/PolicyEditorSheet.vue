@@ -1069,7 +1069,7 @@ function close() {
                 </label>
               </div>
 
-              <!-- Row 2: Candidate Scope (Inherit vs All Admitted) - Unique Control at Top -->
+              <!-- Row 2: Candidate Scope (Inherit vs All Candidates) - Unique Control at Top -->
               <div class="space-y-1.5 pt-2 border-t border-base-300/50">
                 <div class="flex flex-wrap items-center justify-between gap-2">
                   <span class="label-text font-semibold text-xs">候选范围与软筛选继承</span>
@@ -1097,13 +1097,13 @@ function close() {
                         :value="false"
                         class="radio radio-primary radio-xs"
                       />
-                      <span class="font-medium">使用全部准入节点 (All Admitted)</span>
+                      <span class="font-medium">全部候选节点 (不应用全局筛选)</span>
                     </label>
                   </div>
                 </div>
                 <p class="text-[11px] opacity-70 leading-snug">
-                  {{ inheritGlobalFilter ? '仅匹配符合全局过滤条件的节点（默认推荐）。' : '关闭继承软筛选，可从全量准入节点中匹配（用于 WARP 或专用免检线路）。' }}
-                  说明：选择「使用全部准入节点」只绕过全局软筛选，绝不绕过禁用订阅、准入规则、硬性风险限制或凭据校验。
+                  {{ inheritGlobalFilter ? '仅匹配符合全局过滤条件的节点（默认推荐）。' : '关闭继承软筛选，可匹配符合启用状态与风险限制的全部候选节点（用于 WARP 或专用免检线路）。' }}
+                  说明：选择「全部候选节点(不应用全局筛选)」只绕过全局软筛选，绝不绕过节点停用、来源订阅禁用、显式风险排除或凭据/当前连接版本校验。
                 </p>
               </div>
             </div>

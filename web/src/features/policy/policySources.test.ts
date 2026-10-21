@@ -1176,13 +1176,16 @@ describe('Feature-Level Policy Sources & Pipeline Rebuild', () => {
       const radios = container.querySelectorAll('[data-testid="stage-candidate-scope"] input[type="radio"]') as NodeListOf<HTMLInputElement>
       expect(radios.length).toBeGreaterThanOrEqual(2)
 
-      // Toggle to false (使用全部准入节点)
+      // Toggle to false (全部候选节点)
       const bypassRadio = Array.from(radios).find((r) => r.value === 'false')
       expect(bypassRadio).toBeDefined()
       bypassRadio!.click()
       await nextTick()
 
-      expect(container.textContent).toContain('绝不绕过禁用订阅、准入规则')
+      expect(container.textContent).toContain('全部候选节点 (不应用全局筛选)')
+      expect(container.textContent).toContain('绝不绕过节点停用、来源订阅禁用、显式风险排除')
+      expect(container.textContent).not.toContain('准入规则')
+      expect(container.textContent).not.toContain('全量准入节点')
 
       // Submit form
       container.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true }))

@@ -1243,21 +1243,27 @@ func TestPoliciesAdmissionRulesRetiredWorkflow(t *testing.T) {
 		t.Fatalf("expected code invalid_rule_kind, got %s", errResp.Code)
 	}
 
-	// 6. Legitimate policy rule creation still succeeds
-	sharedID := "0192a000-0000-7000-8000-000000000001"
-	reqCreatePol := httptest.NewRequest(http.MethodPost, "/api/v1/policies/rules", strings.NewReader(fmt.Sprintf(`{
-		"id": "%s",
+	// 6. Legitimate policy rule creation still succeeds (do not pass id in body; parse created id as sharedID)
+	reqCreatePol := httptest.NewRequest(http.MethodPost, "/api/v1/policies/rules", strings.NewReader(`{
 		"kind": "policy",
 		"expression": "DOMAIN-SUFFIX,shared-target.com",
 		"builtin_target": "DIRECT",
 		"position": 0
-	}`, sharedID)))
+	}`))
 	reqCreatePol.Header.Set("Authorization", "Bearer "+testAdminToken)
 	reqCreatePol.Header.Set("Content-Type", "application/json")
 	recCreatePol := httptest.NewRecorder()
 	router.ServeHTTP(recCreatePol, reqCreatePol)
 	if recCreatePol.Code != http.StatusCreated {
 		t.Fatalf("expected 201 Created for policy rule, got %d: %s", recCreatePol.Code, recCreatePol.Body.String())
+	}
+	var createdPolResp testDataResponse[policy.PolicyRuleView]
+	if err := json.Unmarshal(recCreatePol.Body.Bytes(), &createdPolResp); err != nil {
+		t.Fatalf("failed to parse created policy rule response: %v", err)
+	}
+	sharedID := createdPolResp.Data.ID
+	if sharedID == "" {
+		t.Fatalf("expected non-empty ID for created policy rule")
 	}
 
 	// Directly insert a legacy admission rule with the SAME ID into SQLite

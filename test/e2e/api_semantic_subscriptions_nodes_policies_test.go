@@ -611,7 +611,11 @@ func TestAPISemantic_SubscriptionsNodesPolicies(t *testing.T) {
 		t.Fatalf("DELETE /api/v1/policies/groups/%s/risk-policy failed: %d", groupID, resp.StatusCode)
 	}
 
-	// 3.9d Admission Rules Endpoints: POST, GET, DELETE /api/v1/admission/rules
+	// 3.9d Admission Rules Endpoints: POST, GET, DELETE /api/v1/admission/rules (Retired workflow)
+	// Track revision count before retired admission rule POST to ensure no new revision is created
+	var revCountBefore int
+	_ = harness.DB.QueryRowContext(ctx, "SELECT count(1) FROM configuration_revisions").Scan(&revCountBefore)
+
 	createAdmBody := map[string]any{
 		"name":       "Reject Bad ASN",
 		"expression": "ASN,12345",
@@ -619,36 +623,96 @@ func TestAPISemantic_SubscriptionsNodesPolicies(t *testing.T) {
 		"position":   0,
 	}
 	resp, err = harness.AuthRequest(http.MethodPost, "/api/v1/admission/rules", createAdmBody, nil)
-	if err != nil || resp.StatusCode != http.StatusCreated {
-		t.Fatalf("POST /api/v1/admission/rules failed: %d body=%s", resp.StatusCode, resp.Body)
+	if err != nil || resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("POST /api/v1/admission/rules expected 422 UnprocessableEntity, got %d body=%s", resp.StatusCode, resp.Body)
 	}
-	var createdAdm struct {
-		Data struct {
-			ID string `json:"id"`
-		} `json:"data"`
+	var admErrResp struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
 	}
-	_ = resp.JSON(&createdAdm)
-	admRuleID := createdAdm.Data.ID
-	if admRuleID == "" {
-		t.Fatalf("expected admission rule ID, got empty")
+	_ = resp.JSON(&admErrResp)
+	if admErrResp.Code != "admission_rules_retired" {
+		t.Fatalf("expected code admission_rules_retired for POST /api/v1/admission/rules, got %s body=%s", admErrResp.Code, resp.Body)
 	}
 
-	// GET /api/v1/admission/rules
+	// Verify no new revision was created by the rejected admission rule POST
+	var revCountAfter int
+	_ = harness.DB.QueryRowContext(ctx, "SELECT count(1) FROM configuration_revisions").Scan(&revCountAfter)
+	if revCountAfter != revCountBefore {
+		t.Fatalf("expected revision count unchanged (%d), got %d after rejected admission rule POST", revCountBefore, revCountAfter)
+	}
+
+	// Insert legacy admission rule directly into SQLite test fixture to verify read-only historical GET
+	legacyAdmID := "legacy-adm-e2e-001"
+	_, err = harness.DB.ExecContext(ctx, `INSERT INTO admission_rules (id, revision_id, name, expression, action, position) VALUES (?, ?, 'Reject Bad ASN', 'ASN,12345', 'reject', 0)`, legacyAdmID, draftRevID)
+	if err != nil {
+		t.Fatalf("failed to insert legacy admission rule fixture: %v", err)
+	}
+
+	// GET /api/v1/admission/rules (verify historical read-only retrieval)
 	resp, err = harness.AuthRequest(http.MethodGet, "/api/v1/admission/rules", nil, nil)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET /api/v1/admission/rules failed: %d", resp.StatusCode)
 	}
+	var admListResp struct {
+		Data struct {
+			AdmissionRules []struct {
+				ID string `json:"id"`
+			} `json:"admission_rules"`
+		} `json:"data"`
+	}
+	if err := resp.JSON(&admListResp); err != nil {
+		t.Fatalf("failed to parse GET /api/v1/admission/rules response: %v", err)
+	}
+	foundLegacy := false
+	for _, r := range admListResp.Data.AdmissionRules {
+		if r.ID == legacyAdmID {
+			foundLegacy = true
+			break
+		}
+	}
+	if !foundLegacy {
+		t.Fatalf("expected legacy admission rule %s in GET /api/v1/admission/rules, got %+v", legacyAdmID, admListResp.Data.AdmissionRules)
+	}
 
-	// DELETE /api/v1/admission/rules/{id}
-	resp, err = harness.AuthRequest(http.MethodDelete, "/api/v1/admission/rules/"+admRuleID, nil, nil)
-	if err != nil || (resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent) {
-		t.Fatalf("DELETE /api/v1/admission/rules/%s failed: %d", admRuleID, resp.StatusCode)
+	// DELETE /api/v1/admission/rules/{id} must reject with 422 admission_rules_retired and preserve DB record
+	resp, err = harness.AuthRequest(http.MethodDelete, "/api/v1/admission/rules/"+legacyAdmID, nil, nil)
+	if err != nil || resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("DELETE /api/v1/admission/rules/%s expected 422, got %d body=%s", legacyAdmID, resp.StatusCode, resp.Body)
+	}
+	var delErrResp struct {
+		Code string `json:"code"`
+	}
+	_ = resp.JSON(&delErrResp)
+	if delErrResp.Code != "admission_rules_retired" {
+		t.Fatalf("expected code admission_rules_retired for DELETE /api/v1/admission/rules, got %s body=%s", delErrResp.Code, resp.Body)
 	}
 	var admDbRemain int
-	_ = harness.DB.QueryRowContext(ctx, "SELECT count(1) FROM admission_rules WHERE id = ?", admRuleID).Scan(&admDbRemain)
-	if admDbRemain != 0 {
-		t.Fatalf("admission rule was not removed from DB after DELETE")
+	_ = harness.DB.QueryRowContext(ctx, "SELECT count(1) FROM admission_rules WHERE id = ?", legacyAdmID).Scan(&admDbRemain)
+	if admDbRemain != 1 {
+		t.Fatalf("expected legacy admission rule to remain in DB after retired DELETE, got %d", admDbRemain)
 	}
+
+	// Verify DELETE /api/v1/admission/rules/{ruleID} (with existing policy rule ID) also rejects 422 and does NOT delete policy rule
+	resp, err = harness.AuthRequest(http.MethodDelete, "/api/v1/admission/rules/"+ruleID, nil, nil)
+	if err != nil || resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("DELETE /api/v1/admission/rules/%s (policy rule ID) expected 422, got %d body=%s", ruleID, resp.StatusCode, resp.Body)
+	}
+	var delPolByAdmErr struct {
+		Code string `json:"code"`
+	}
+	_ = resp.JSON(&delPolByAdmErr)
+	if delPolByAdmErr.Code != "admission_rules_retired" {
+		t.Fatalf("expected code admission_rules_retired for DELETE /api/v1/admission/rules with policy ID, got %s", delPolByAdmErr.Code)
+	}
+	var polDbRemain int
+	_ = harness.DB.QueryRowContext(ctx, "SELECT count(1) FROM policy_rules WHERE id = ?", ruleID).Scan(&polDbRemain)
+	if polDbRemain != 1 {
+		t.Fatalf("expected existing policy rule %s to remain untouched, got %d", ruleID, polDbRemain)
+	}
+
+	// Clean up legacy fixture rule
+	_, _ = harness.DB.ExecContext(ctx, "DELETE FROM admission_rules WHERE id = ?", legacyAdmID)
 
 	// 3.10 Clean up Rule and Group
 	resp, err = harness.AuthRequest(http.MethodDelete, "/api/v1/policies/rules/"+ruleID, nil, nil)

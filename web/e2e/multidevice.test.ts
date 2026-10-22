@@ -17,6 +17,37 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
   let consoleWarnSpy: ReturnType<typeof vi.spyOn>
   const uncaughtErrors: Error[] = []
 
+  let recentNavEvents: Array<{ event: string; hash: string; route: string; time: number }> = []
+
+  function recordNavEvent(event: string) {
+    recentNavEvents.push({
+      event,
+      hash: typeof window !== 'undefined' ? window.location.hash : '',
+      route: router.currentRoute.value.fullPath,
+      time: Date.now(),
+    })
+    if (recentNavEvents.length > 25) {
+      recentNavEvents.shift()
+    }
+  }
+
+  if (typeof window !== 'undefined') {
+    window.addEventListener('popstate', () => recordNavEvent('popstate'))
+    window.addEventListener('hashchange', () => recordNavEvent('hashchange'))
+  }
+  router.beforeEach((to, from) => {
+    recordNavEvent(`router:beforeEach(${from.fullPath}->${to.fullPath})`)
+  })
+  router.afterEach((to, from, failure) => {
+    recordNavEvent(`router:afterEach(${from.fullPath}->${to.fullPath}${failure ? ':failed(' + (failure.type ?? failure.message) + ')' : ''})`)
+  })
+
+  async function drainAsyncEvents(): Promise<void> {
+    // Flush both macro-tasks (timers/popstate in jsdom) and micro-tasks (promises/nextTick)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await nextTick()
+  }
+
   // Sample mock responses for deterministic, no-white-screen rendering
   const mockSubscription = {
     id: 'sub-test-1',
@@ -129,11 +160,19 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
     window.dispatchEvent(new Event('resize'))
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
     uncaughtErrors.length = 0
     window.localStorage.clear()
     setLocale('en-US')
-    window.location.hash = ''
+    recentNavEvents = []
+
+    // Controlled reset: use history.replaceState and await router.replace rather than bare window.location.hash = ''
+    // Bare window.location.hash = '' triggers jsdom's fragment navigation setter, scheduling an asynchronous
+    // non-blocking setTimeout popstate/hashchange event in the jsdom timer queue that collides with subsequent test pushes.
+    window.history.replaceState(null, '', window.location.pathname)
+    await router.replace({ path: '/' }).catch(() => {})
+    await drainAsyncEvents()
+
     document.documentElement.removeAttribute('data-theme')
 
     // Track console output to assert 0 uncaught exceptions
@@ -183,6 +222,8 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
     }
     vi.restoreAllMocks()
     await router.replace({ path: '/' }).catch(() => {})
+    window.history.replaceState(null, '', window.location.pathname)
+    await drainAsyncEvents()
   })
 
   async function waitForView(
@@ -253,6 +294,7 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
         selector: viewSelector,
         failureType: recordedFailure ? recordedFailure.type || recordedFailure.name || 'UNKNOWN_FAILURE' : 'TIMEOUT_WITHOUT_NAVIGATION_EVENT',
         failureMessage: recordedFailure ? recordedFailure.message || String(recordedFailure) : 'Element not found within timeout window',
+        recentNavEvents: [...recentNavEvents],
       }
       console.warn('[ROUTER_TRANSITION_DIAGNOSTIC]', JSON.stringify(diagnostic))
       throw new Error(`[waitForView Diagnostic Failure] ${JSON.stringify(diagnostic)}`)
@@ -267,12 +309,14 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       await router.replace({ name: targetTab }).catch(() => {})
     }
     await router.isReady()
+    await drainAsyncEvents()
     app = createApp(App)
     app.use(router)
     app.use(i18n)
     app.mount(container!)
     await nextTick()
     await nextTick()
+    await drainAsyncEvents()
     return container!
   }
 
@@ -377,6 +421,7 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       expect(titleSpan).not.toBeNull()
 
       // 6. Interactive test: clicking auth badge navigates to Settings view
+      await drainAsyncEvents()
       ;(authBadge as HTMLButtonElement).click()
       const settingsView = await waitForView('[data-testid="settings-view"]', root, 'settings')
       expect(settingsView).not.toBeNull()
@@ -404,6 +449,7 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       // Click "Subscriptions" button on mobile nav
       const subBtn = Array.from(navButtons).find((b) => b.textContent?.includes('Subscriptions'))
       expect(subBtn).toBeDefined()
+      await drainAsyncEvents()
       subBtn?.click()
       const subTitle = await waitForView('#subscriptions-title', root, 'subscriptions')
       expect(subTitle?.textContent).toContain('Subscriptions')
@@ -412,6 +458,7 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       // Click "Node Ledger" button on mobile nav
       const nodeBtn = Array.from(mobileNav?.querySelectorAll('button') || []).find((b) => b.textContent?.includes('Node Ledger'))
       expect(nodeBtn).toBeDefined()
+      await drainAsyncEvents()
       nodeBtn?.click()
       const nodeTitle = await waitForView('#nodes-title', root, 'nodes')
       expect(nodeTitle?.textContent).toContain('Node Management & Probing')
@@ -468,6 +515,7 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
           b.textContent?.trim().includes(t.label)
         )
         expect(button).toBeDefined()
+        await drainAsyncEvents()
         button?.click()
         await waitForView(t.viewSelector, root, t.tab)
 
@@ -538,7 +586,8 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
 
     it('restores active view from localStorage when URL hash is omitted and redirects legacy probes to nodes', async () => {
       window.localStorage.setItem(ROUTE_STORAGE_KEY, 'probes')
-      window.location.hash = ''
+      window.history.replaceState(null, '', window.location.pathname)
+      await drainAsyncEvents()
       setViewport(390, 844)
       setupApiMocks()
       const root = await mountApp()

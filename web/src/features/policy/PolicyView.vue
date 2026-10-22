@@ -275,6 +275,8 @@ onUnmounted(() => {
 
 <template>
   <section class="space-y-5" aria-labelledby="policy-title">
+    <h2 id="policy-title" class="sr-only">{{ t('policy.title') }}</h2>
+
     <!-- Header with PageToolbar & Main Actions -->
     <PageToolbar :title="t('policy.title')" :description="t('policy.subtitle')">
       <template #actions>

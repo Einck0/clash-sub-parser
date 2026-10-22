@@ -268,21 +268,23 @@ const checkHealth = async () => {
   }
 }
 
-function handleNavigation(tabId: NavTab, path: string, navigate?: (e: MouseEvent) => void, event?: MouseEvent) {
+function handleNavigation(tabId: NavTab, path: string) {
   activeTab.value = tabId
-  setRouteTab(tabId)
   closeMore()
-  if (navigate && event) {
-    navigate(event)
-  } else {
-    router.push(path)
-  }
+  router.push(path).catch(() => {})
 }
 
+router.afterEach((to) => {
+  if (to.name) {
+    activeTab.value = String(to.name)
+  }
+})
+
 const handleHashChange = () => {
-  activeTab.value = getRouteTab()
-  if (activeTab.value && router?.currentRoute?.value?.name !== activeTab.value) {
-    router.replace({ name: activeTab.value }).catch(() => {})
+  const targetTab = getRouteTab()
+  if (targetTab && router?.currentRoute?.value?.name !== targetTab) {
+    activeTab.value = targetTab
+    router.replace({ name: targetTab }).catch(() => {})
   }
 }
 
@@ -368,12 +370,12 @@ onUnmounted(() => {
             :key="item.id"
             :to="item.path"
             custom
-            v-slot="{ href, navigate, isActive }"
+            v-slot="{ href, isActive }"
           >
             <button
               :href="href"
               type="button"
-              @click="(e) => handleNavigation(item.id, item.path, navigate, e)"
+              @click="handleNavigation(item.id, item.path)"
               class="w-full flex items-center gap-3 rounded-lg text-sm font-medium transition-colors cursor-pointer"
               :class="[
                 isActive || isItemActive(item)
@@ -437,7 +439,7 @@ onUnmounted(() => {
 
         <div class="flex items-center gap-1.5 sm:gap-3 shrink-0">
           <!-- Auth Badge -->
-          <RouterLink to="/settings" custom v-slot="{ href, navigate }">
+          <RouterLink to="/settings" custom v-slot="{ href }">
             <button
               :href="href"
               type="button"
@@ -451,7 +453,7 @@ onUnmounted(() => {
                 'bg-error/10 text-error border-error/30': authState === 'error',
               }"
               :title="authState === 'open' ? t('topbar.openModeTooltip') : authState === 'authenticated' ? t('topbar.protectedAuthTooltip') : authState === 'unauthenticated' ? t('topbar.protectedUnauthTooltip') : t('topbar.probingTooltip')"
-              @click="(e) => handleNavigation('settings', '/settings', navigate, e)"
+              @click="handleNavigation('settings', '/settings')"
             >
               <span
                 class="w-2 h-2 rounded-full inline-block shrink-0"
@@ -584,13 +586,13 @@ onUnmounted(() => {
             :key="item.id"
             :to="item.path"
             custom
-            v-slot="{ href, navigate, isActive }"
+            v-slot="{ href, isActive }"
           >
             <button
               :href="href"
               type="button"
               :data-testid="`dock-link-${item.id}`"
-              @click="(e) => handleNavigation(item.id, item.path, navigate, e)"
+              @click="handleNavigation(item.id, item.path)"
               class="flex flex-col items-center justify-center py-1.5 px-1 rounded-xl text-[10px] sm:text-xs font-medium transition-all duration-150 touch-manipulation select-none active:scale-95 cursor-pointer"
               :class="isActive || isItemActive(item) ? 'bg-primary/15 text-primary font-semibold shadow-sm' : 'text-base-content/70 hover:text-base-content hover:bg-base-300/40'"
             >
@@ -652,13 +654,13 @@ onUnmounted(() => {
                   :key="item.id"
                   :to="item.path"
                   custom
-                  v-slot="{ href, navigate, isActive }"
+                  v-slot="{ href, isActive }"
                 >
                   <button
                     :href="href"
                     type="button"
                     :data-testid="`dock-link-${item.id}`"
-                    @click="(e) => handleNavigation(item.id, item.path, navigate, e)"
+                    @click="handleNavigation(item.id, item.path)"
                     class="flex items-center gap-2.5 p-2.5 rounded-xl text-xs font-medium transition-colors text-left w-full cursor-pointer"
                     :class="isActive || isItemActive(item) ? 'bg-primary text-primary-content shadow-sm font-semibold' : 'bg-base-100/60 hover:bg-base-100 text-base-content/80'"
                   >

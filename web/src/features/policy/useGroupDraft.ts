@@ -159,6 +159,9 @@ export function useGroupDraft() {
       next.delete(key)
     }
     invalidFilterSources.value = next
+    if (next.size === 0 && formError.value === '存在未完成或无效的筛选条件，请完善或删除后再保存。') {
+      formError.value = ''
+    }
   }
 
   function addSource(source: MemberSource) {
@@ -193,6 +196,9 @@ export function useGroupDraft() {
       const next = new Set(invalidFilterSources.value)
       next.delete(key)
       invalidFilterSources.value = next
+      if (next.size === 0 && formError.value === '存在未完成或无效的筛选条件，请完善或删除后再保存。') {
+        formError.value = ''
+      }
     }
     sources.value.splice(index, 1)
     sources.value.forEach((s, i) => {
@@ -258,7 +264,9 @@ export function useGroupDraft() {
 
   function clearPendingSourceDraft() {
     pendingRegexPattern.value = ''
-    formError.value = ''
+    if (formError.value === '来源草稿尚未应用：请先添加正则来源或明确放弃来源草稿后再保存。') {
+      formError.value = ''
+    }
   }
 
   function checkDraftValidity(): boolean {

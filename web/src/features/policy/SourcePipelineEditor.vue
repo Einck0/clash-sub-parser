@@ -473,12 +473,12 @@ onMounted(() => {
   <div class="space-y-4 text-xs font-sans min-w-0" data-testid="source-pipeline-editor">
     <!-- Validation error alert -->
     <div
-      v-if="formError || localValidationError"
+      v-if="localValidationError || formError"
       role="alert"
       class="p-2.5 rounded-lg bg-error/10 border border-error/30 text-error text-xs flex items-center gap-2"
     >
       <ExclamationTriangleIcon class="w-4 h-4 shrink-0" />
-      <span>{{ formError || localValidationError }}</span>
+      <span>{{ localValidationError || formError }}</span>
     </div>
 
     <!-- 1. Stage Candidate Scope: Name, Type, Position, and Candidate Scope (Inherit vs All) -->
@@ -579,7 +579,7 @@ onMounted(() => {
         </div>
         <button
           type="button"
-          class="btn btn-primary btn-xs gap-1"
+          class="btn btn-primary btn-xs gap-1 condition-action-btn"
           data-testid="add-filter-source-btn"
           @click="emit('add-filter', 'add')"
         >
@@ -823,7 +823,7 @@ onMounted(() => {
 
               <button
                 type="button"
-                class="btn btn-primary btn-sm gap-1 shrink-0"
+                class="btn btn-primary btn-sm gap-1 shrink-0 condition-action-btn"
                 data-testid="add-edge-btn"
                 :disabled="!newEdgeTarget.trim()"
                 @click="handleAddSourceItem"
@@ -879,7 +879,7 @@ onMounted(() => {
               />
               <button
                 type="button"
-                class="btn btn-primary btn-sm gap-1 shrink-0"
+                class="btn btn-primary btn-sm gap-1 shrink-0 condition-action-btn"
                 data-testid="add-edge-btn"
                 :disabled="!newSourcePattern.trim()"
                 @click="handleAddSourceItem"
@@ -901,6 +901,9 @@ onMounted(() => {
                 {{ pre.label }}
               </button>
             </div>
+            <p v-if="localValidationError" class="text-error text-xs pt-0.5">
+              {{ localValidationError }}
+            </p>
           </div>
 
           <!-- 3. Group ref or unpack -->
@@ -961,7 +964,7 @@ onMounted(() => {
             <span class="text-xs opacity-80">点击右侧按钮添加新的属性过滤来源项，并可在流水线中行内编辑。</span>
             <button
               type="button"
-              class="btn btn-primary btn-sm gap-1 shrink-0"
+              class="btn btn-primary btn-sm gap-1 shrink-0 condition-action-btn"
               data-testid="add-edge-btn"
               @click="handleAddSourceItem"
             >
@@ -969,6 +972,11 @@ onMounted(() => {
               添加过滤来源
             </button>
           </div>
+
+          <!-- Add Source Local Error Message -->
+          <p v-if="localValidationError" class="text-error text-xs pt-1 font-medium">
+            {{ localValidationError }}
+          </p>
         </div>
 
         <!-- Stage Exclude Members / Ordered Pipeline -->

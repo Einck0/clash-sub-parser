@@ -127,7 +127,20 @@ describe('useGroupPreview Composable', () => {
     preview.triggerImmediate(testPayload)
     await Promise.resolve()
 
-    expect(preview.previewError.value).toBe('Network timeout')
+    expect(preview.previewError.value).toBe('快照解析失败: Network timeout')
+    expect(preview.previewLoading.value).toBe(false)
+  })
+
+  it('sanitizes sensitive tokens in preview error without leaking credentials', async () => {
+    vi.spyOn(api, 'post').mockRejectedValue(new Error('Authentication failed with token secret-token-1234567890'))
+    const preview = useGroupPreview()
+
+    preview.triggerImmediate(testPayload)
+    await Promise.resolve()
+
+    expect(preview.previewError.value).toContain('快照解析失败')
+    expect(preview.previewError.value).not.toContain('secret-token-1234567890')
+    expect(preview.previewError.value).toContain('[REDACTED]')
     expect(preview.previewLoading.value).toBe(false)
   })
 })

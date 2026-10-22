@@ -425,7 +425,7 @@ function handleDiscardSourceDraft() {
           <span>来源草稿尚未应用，不参与预览或保存。请先添加 / 更新来源。</span>
           <button
             type="button"
-            class="btn btn-ghost btn-xs"
+            class="btn btn-ghost btn-xs condition-action-btn"
             @click="handleDiscardSourceDraft"
           >
             放弃来源草稿

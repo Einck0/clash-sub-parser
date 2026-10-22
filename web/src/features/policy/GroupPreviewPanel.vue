@@ -112,12 +112,12 @@ const exclusionBreakdown = computed(() => {
 
         <button
           type="button"
-          class="btn btn-ghost btn-xs gap-1 shrink-0"
+          class="btn btn-ghost btn-xs gap-1 shrink-0 condition-action-btn"
           :class="{ loading }"
           @click="emit('refresh')"
         >
           <ArrowPathIcon class="w-3.5 h-3.5" :class="{ 'animate-spin': loading }" />
-          {{ uiText('重新计算', 'Recalculate') }}
+          {{ uiText('刷新计算', 'Refresh Calculation') }}
         </button>
       </div>
     </div>
@@ -153,10 +153,10 @@ const exclusionBreakdown = computed(() => {
         </span>
         <button
           type="button"
-          class="btn btn-ghost btn-xs opacity-70"
+          class="btn btn-ghost btn-xs opacity-70 condition-action-btn"
           @click="emit('refresh')"
         >
-          {{ uiText('刷新', 'Refresh') }}
+          {{ uiText('刷新计算', 'Refresh Calculation') }}
         </button>
       </div>
 

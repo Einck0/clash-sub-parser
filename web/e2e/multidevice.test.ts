@@ -184,20 +184,33 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
     vi.restoreAllMocks()
   })
 
-  async function waitForRouteTransition(targetTab?: string) {
-    if (targetTab && router.currentRoute.value.name === targetTab) {
-      await nextTick()
-      return
-    }
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, 500)
-      const unhook = router.afterEach(() => {
-        clearTimeout(timer)
-        unhook()
-        resolve()
-      })
-    })
+  async function waitForView(viewSelector: string, root: HTMLElement = container!): Promise<Element | null> {
+    const existing = root.querySelector(viewSelector)
+    if (existing) return existing
+
     await nextTick()
+    const afterTick1 = root.querySelector(viewSelector)
+    if (afterTick1) return afterTick1
+
+    await nextTick()
+    const afterTick2 = root.querySelector(viewSelector)
+    if (afterTick2) return afterTick2
+
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        observer.disconnect()
+        resolve(root.querySelector(viewSelector))
+      }, 1000)
+      const observer = new MutationObserver(() => {
+        const found = root.querySelector(viewSelector)
+        if (found) {
+          clearTimeout(timer)
+          observer.disconnect()
+          resolve(found)
+        }
+      })
+      observer.observe(root, { childList: true, subtree: true, characterData: true })
+    })
   }
 
   async function mountApp(): Promise<HTMLDivElement> {
@@ -211,8 +224,6 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
     app.use(i18n)
     app.mount(container!)
     await nextTick()
-    // Allow pending async onMounted promises to resolve
-    await new Promise((r) => setTimeout(r, 20))
     await nextTick()
     return container!
   }
@@ -318,11 +329,8 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       expect(titleSpan).not.toBeNull()
 
       // 6. Interactive test: clicking auth badge navigates to Settings view
-      const navPromise = waitForRouteTransition('settings')
       ;(authBadge as HTMLButtonElement).click()
-      await navPromise
-      await nextTick()
-      const settingsView = root.querySelector('[data-testid="settings-view"]')
+      const settingsView = await waitForView('[data-testid="settings-view"]', root)
       expect(settingsView).not.toBeNull()
       expect(['#settings', '#/settings']).toContain(window.location.hash)
 
@@ -348,24 +356,17 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       // Click "Subscriptions" button on mobile nav
       const subBtn = Array.from(navButtons).find((b) => b.textContent?.includes('Subscriptions'))
       expect(subBtn).toBeDefined()
-      const navPromise1 = waitForRouteTransition('subscriptions')
       subBtn?.click()
-      await navPromise1
-      await nextTick()
-
-      // Section title should be Subscriptions
-      expect(root.querySelector('#subscriptions-title')?.textContent).toContain('Subscriptions')
+      const subTitle = await waitForView('#subscriptions-title', root)
+      expect(subTitle?.textContent).toContain('Subscriptions')
       expect(['#subscriptions', '#/subscriptions']).toContain(window.location.hash)
 
       // Click "Node Ledger" button on mobile nav
-      const nodeBtn = Array.from(navButtons).find((b) => b.textContent?.includes('Node Ledger'))
+      const nodeBtn = Array.from(mobileNav?.querySelectorAll('button') || []).find((b) => b.textContent?.includes('Node Ledger'))
       expect(nodeBtn).toBeDefined()
-      const navPromise2 = waitForRouteTransition('nodes')
       nodeBtn?.click()
-      await navPromise2
-      await nextTick()
-
-      expect(root.querySelector('#nodes-title')?.textContent).toContain('Node Management & Probing')
+      const nodeTitle = await waitForView('#nodes-title', root)
+      expect(nodeTitle?.textContent).toContain('Node Management & Probing')
       expect(['#nodes', '#/nodes']).toContain(window.location.hash)
 
       // Zero console exceptions
@@ -404,13 +405,13 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       setupApiMocks()
       const root = await mountApp()
 
-      const tabsToTest: { tab: NavTab; label: string; expectedText: string }[] = [
-        { tab: 'subscriptions', label: 'Subscriptions', expectedText: 'Subscriptions' },
-        { tab: 'nodes', label: 'Node Ledger', expectedText: 'Node Management & Probing' },
-        { tab: 'rules', label: 'Rule Desk', expectedText: 'Rules' },
-        { tab: 'policy', label: 'Policy Tree', expectedText: 'Policy Groups' },
-        { tab: 'publications', label: 'Client Subscriptions', expectedText: 'Client Subscriptions' },
-        { tab: 'dashboard', label: 'Dashboard', expectedText: 'Clash Sub Parser Zashboard Foundation' },
+      const tabsToTest: { tab: NavTab; label: string; viewSelector: string; expectedText: string }[] = [
+        { tab: 'subscriptions', label: 'Subscriptions', viewSelector: '#subscriptions-title', expectedText: 'Subscriptions' },
+        { tab: 'nodes', label: 'Node Ledger', viewSelector: '#nodes-title', expectedText: 'Node Management & Probing' },
+        { tab: 'rules', label: 'Rule Desk', viewSelector: '#rules-title', expectedText: 'Rules' },
+        { tab: 'policy', label: 'Policy Tree', viewSelector: '#policy-title', expectedText: 'Policy Groups' },
+        { tab: 'publications', label: 'Client Subscriptions', viewSelector: '#publications-title', expectedText: 'Client Subscriptions' },
+        { tab: 'dashboard', label: 'Dashboard', viewSelector: '[data-testid="health-telemetry-card"]', expectedText: 'Clash Sub Parser Zashboard Foundation' },
       ]
 
       for (const t of tabsToTest) {
@@ -418,10 +419,9 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
         const button = Array.from(sidebar?.querySelectorAll('button') || []).find((b) =>
           b.textContent?.trim().includes(t.label)
         )
-        const navPromise = waitForRouteTransition(t.tab)
+        expect(button).toBeDefined()
         button?.click()
-        await navPromise
-        await nextTick()
+        await waitForView(t.viewSelector, root)
 
         expect(root.textContent).toContain(t.expectedText)
         expect([`#${t.tab}`, `#/${t.tab}`]).toContain(window.location.hash)
@@ -508,22 +508,16 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       expect(root.textContent).toContain('Zashboard Foundation')
 
       // Simulate browser URL hash navigation to #publications
-      const navPromise1 = waitForRouteTransition('publications')
       window.location.hash = '#publications'
       window.dispatchEvent(new HashChangeEvent('hashchange'))
-      await navPromise1
-      await nextTick()
-
-      expect(root.querySelector('#publications-title')?.textContent).toContain('Client Subscriptions')
+      const pubTitle = await waitForView('#publications-title', root)
+      expect(pubTitle?.textContent).toContain('Client Subscriptions')
 
       // Simulate browser Back button to #subscriptions
-      const navPromise2 = waitForRouteTransition('subscriptions')
       window.location.hash = '#subscriptions'
       window.dispatchEvent(new HashChangeEvent('hashchange'))
-      await navPromise2
-      await nextTick()
-
-      expect(root.querySelector('#subscriptions-title')?.textContent).toContain('Subscriptions')
+      const subTitle = await waitForView('#subscriptions-title', root)
+      expect(subTitle?.textContent).toContain('Subscriptions')
       expect(uncaughtErrors).toHaveLength(0)
     })
 
@@ -549,27 +543,24 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       const root = await mountApp()
 
       // Subscriptions empty state
-      const pSub = waitForRouteTransition('subscriptions')
       window.location.hash = '#subscriptions'
       window.dispatchEvent(new HashChangeEvent('hashchange'))
-      await pSub
-      await nextTick()
+      await waitForView('#subscriptions-title', root)
+      await waitForView('[data-testid="empty-state"]', root)
       expect(root.textContent).toContain('No subscriptions yet')
 
       // Nodes empty state
-      const pNodes = waitForRouteTransition('nodes')
       window.location.hash = '#nodes'
       window.dispatchEvent(new HashChangeEvent('hashchange'))
-      await pNodes
-      await nextTick()
+      await waitForView('#nodes-title', root)
+      await waitForView('[data-testid="empty-state"]', root)
       expect(root.textContent).toContain('No nodes found')
 
       // Policy empty state
-      const pPol = waitForRouteTransition('policy')
       window.location.hash = '#policy'
       window.dispatchEvent(new HashChangeEvent('hashchange'))
-      await pPol
-      await nextTick()
+      await waitForView('#policy-title', root)
+      await waitForView('[data-testid="empty-state"]', root)
       expect(root.textContent).toContain('No policy groups defined')
 
       expect(uncaughtErrors).toHaveLength(0)
@@ -601,11 +592,9 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       const root = await mountApp()
 
       // Navigate to Probes tab (which redirects to /nodes)
-      const pNodes = waitForRouteTransition('nodes')
       window.location.hash = '#nodes'
       window.dispatchEvent(new HashChangeEvent('hashchange'))
-      await pNodes
-      await nextTick()
+      await waitForView('#nodes-title', root)
 
       // Trigger full probe confirmation modal
       const triggerBtn = root.querySelector('[data-testid="probe-all-btn"]') as HTMLButtonElement | null ||
@@ -662,11 +651,9 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       const root = await mountApp()
 
       // Navigate to Publications tab
-      const pPub = waitForRouteTransition('publications')
       window.location.hash = '#publications'
       window.dispatchEvent(new HashChangeEvent('hashchange'))
-      await pPub
-      await nextTick()
+      await waitForView('[data-testid="client-subscriptions-page"]', root)
 
       // Check client subscriptions section exists and is readable
       const pageEl = root.querySelector('[data-testid="client-subscriptions-page"]')
@@ -675,11 +662,9 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       expect(copyBtns.length).toBe(4)
 
       // Navigate to Policy tab and open group sheet in landscape
-      const pPol = waitForRouteTransition('policy')
       window.location.hash = '#policy'
       window.dispatchEvent(new HashChangeEvent('hashchange'))
-      await pPol
-      await nextTick()
+      await waitForView('#policy-title', root)
 
       const addGroupBtn = Array.from(root.querySelectorAll('button')).find((b) =>
         b.textContent?.includes('Add Group') || b.textContent?.includes('New Group')

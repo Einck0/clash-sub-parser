@@ -513,7 +513,7 @@ function opLabel(op: FilterOp): string {
         <button
           v-if="!readOnly"
           type="button"
-          class="btn btn-ghost btn-sm text-error self-end"
+          class="btn btn-ghost btn-sm text-error self-end condition-action-btn"
           data-testid="filter-remove"
           :aria-label="t('settings.filterRemove')"
           @click="removeCondition(index)"
@@ -527,7 +527,7 @@ function opLabel(op: FilterOp): string {
     <div v-if="!readOnly" class="flex flex-wrap gap-2">
       <button
         type="button"
-        class="btn btn-outline btn-sm"
+        class="btn btn-outline btn-sm condition-action-btn"
         data-testid="filter-add"
         :disabled="activeConditions.length >= maxConditions"
         @click="addDirectCondition"
@@ -537,7 +537,7 @@ function opLabel(op: FilterOp): string {
       <button
         v-if="allowClear"
         type="button"
-        class="btn btn-ghost btn-sm"
+        class="btn btn-ghost btn-sm condition-action-btn"
         data-testid="filter-clear"
         :disabled="activeConditions.length === 0"
         @click="clearAllConditions"

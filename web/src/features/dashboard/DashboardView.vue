@@ -49,7 +49,7 @@ onMounted(() => {
         <button
           type="button"
           class="btn btn-ghost btn-sm gap-1.5 touch-manipulation hover:bg-base-300/60"
-          :disabled="isRefreshingStats || refreshingHealth"
+          :disabled="isRefreshingStats"
           data-testid="refresh-all-btn"
           @click="refreshAll"
         >
@@ -88,9 +88,7 @@ onMounted(() => {
               v-if="healthStatus === 'healthy' && healthLatency !== null"
               class="text-xs font-mono text-success font-medium"
               data-testid="health-latency"
-            >
-              {{ healthLatency }}ms
-            </span>
+            >{{ healthLatency }}ms</span>
           </div>
           <p class="text-xs text-base-content/60 truncate" data-testid="health-status-desc">
             {{

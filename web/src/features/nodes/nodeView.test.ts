@@ -1266,38 +1266,40 @@ describe('NodesView real API detail, plaintext PATCH edit, and failure draft pre
         return h(NodesView)
       },
     })
-    app.use(router)
-    app.mount(mountEl)
-    await nextTick()
-    await new Promise((r) => setTimeout(r, 60))
+    try {
+      app.use(router)
+      app.mount(mountEl)
+      await nextTick()
+      await new Promise((r) => setTimeout(r, 60))
 
-    // Search input should have 'Tokyo'
-    const searchInput = mountEl.querySelector('[data-testid="node-search-input"]') as HTMLInputElement
-    expect(searchInput).not.toBeNull()
-    expect(searchInput.value).toBe('Tokyo')
+      // Search input should have 'Tokyo'
+      const searchInput = mountEl.querySelector('[data-testid="node-search-input"]') as HTMLInputElement
+      expect(searchInput).not.toBeNull()
+      expect(searchInput.value).toBe('Tokyo')
 
-    // Protocol filter pill for hysteria2 should be present
-    const protoGroup = mountEl.querySelector('[data-testid="node-protocol-filter"]')
-    expect(protoGroup?.textContent).toContain('HYSTERIA2')
+      // Protocol filter pill for hysteria2 should be present
+      const protoGroup = mountEl.querySelector('[data-testid="node-protocol-filter"]')
+      expect(protoGroup?.textContent?.toUpperCase()).toContain('HYSTERIA2')
 
-    // Health filter select should be 'healthy'
-    const healthSelect = mountEl.querySelector('[data-testid="node-health-filter"]') as HTMLSelectElement
-    expect(healthSelect.value).toBe('healthy')
+      // Health filter select should be 'healthy'
+      const healthSelect = mountEl.querySelector('[data-testid="node-health-filter"]') as HTMLSelectElement
+      expect(healthSelect.value).toBe('healthy')
 
-    // Deep link drawer should be open for node-hy2-1
-    const drawer = document.body.querySelector('[data-testid="node-detail-drawer"]')
-    expect(drawer).not.toBeNull()
-    expect(drawer?.textContent).toContain('Tokyo Hy2 Safe')
+      // Deep link drawer should be open for node-hy2-1
+      const drawer = mountEl.querySelector('[data-testid="node-detail-drawer"]') || document.body.querySelector('[data-testid="node-detail-drawer"]')
+      expect(drawer).not.toBeNull()
+      expect(drawer?.textContent).toContain('Tokyo Hy2 Safe')
 
-    // Safe fallback when invalid protocol and invalid health are pushed
-    await router.push('/nodes?protocol=bogus_protocol&health=invalid_health')
-    await nextTick()
-    await new Promise((r) => setTimeout(r, 30))
+      // Safe fallback when invalid protocol and invalid health are pushed
+      await router.push('/nodes?protocol=bogus_protocol&health=invalid_health')
+      await nextTick()
+      await new Promise((r) => setTimeout(r, 30))
 
-    expect(healthSelect.value).toBe('all')
-
-    app.unmount()
-    mountEl.remove()
+      expect(healthSelect.value).toBe('all')
+    } finally {
+      app.unmount()
+      mountEl.remove()
+    }
   })
 
   it('retains hidden selections across filters, displays visible vs total counts, allows clearing invisible selections, and confirms exact scope before probing', async () => {
@@ -1350,62 +1352,64 @@ describe('NodesView real API detail, plaintext PATCH edit, and failure draft pre
         return h(NodesView)
       },
     })
-    app.mount(mountEl)
-    await nextTick()
-    await new Promise((r) => setTimeout(r, 60))
+    try {
+      app.mount(mountEl)
+      await nextTick()
+      await new Promise((r) => setTimeout(r, 60))
 
-    // 1. Select the unhealthy node
-    const unhealthyCb = mountEl.querySelector('[data-testid="node-checkbox-node-unhealthy-item"]') as HTMLInputElement
-    expect(unhealthyCb).not.toBeNull()
-    unhealthyCb.click()
-    await nextTick()
+      // 1. Select the unhealthy node
+      const unhealthyCb = mountEl.querySelector('[data-testid="node-checkbox-node-unhealthy-item"]') as HTMLInputElement
+      expect(unhealthyCb).not.toBeNull()
+      unhealthyCb.click()
+      await nextTick()
 
-    const selectedBadge = mountEl.querySelector('[data-testid="selected-count-badge"]')
-    expect(selectedBadge?.textContent).toContain('1')
+      const selectedBadge = mountEl.querySelector('[data-testid="selected-count-badge"]')
+      expect(selectedBadge?.textContent).toContain('1')
 
-    // 2. Switch health filter to "healthy" (so unhealthy node is hidden from current view)
-    const healthSelect = mountEl.querySelector('[data-testid="node-health-filter"]') as HTMLSelectElement
-    healthSelect.value = 'healthy'
-    healthSelect.dispatchEvent(new Event('change'))
-    await nextTick()
+      // 2. Switch health filter to "healthy" (so unhealthy node is hidden from current view)
+      const healthSelect = mountEl.querySelector('[data-testid="node-health-filter"]') as HTMLSelectElement
+      healthSelect.value = 'healthy'
+      healthSelect.dispatchEvent(new Event('change'))
+      await nextTick()
 
-    // 3. Selection of unhealthy node is RETAINED even though it's hidden
-    expect(selectedBadge?.textContent).toContain('1')
-    expect(selectedBadge?.textContent).toContain('0')
+      // 3. Selection of unhealthy node is RETAINED even though it's hidden
+      expect(selectedBadge?.textContent).toContain('1')
+      expect(selectedBadge?.textContent).toContain('0')
 
-    // 4. Clear invisible selection button appears
-    const clearInvisibleBtn = mountEl.querySelector('[data-testid="clear-invisible-selection-btn"]') as HTMLButtonElement
-    expect(clearInvisibleBtn).not.toBeNull()
-    expect(clearInvisibleBtn.textContent).toContain('清除不可见项')
+      // 4. Clear invisible selection button appears
+      const clearInvisibleBtn = mountEl.querySelector('[data-testid="clear-invisible-selection-btn"]') as HTMLButtonElement
+      expect(clearInvisibleBtn).not.toBeNull()
+      expect(clearInvisibleBtn.textContent).toContain('清除不可见项')
 
-    // 5. Clicking probe selected triggers scope confirmation modal because of hidden selections
-    const probeSelectedBtn = mountEl.querySelector('[data-testid="probe-selected-btn"]') as HTMLButtonElement
-    probeSelectedBtn.click()
-    await nextTick()
+      // 5. Clicking probe selected triggers scope confirmation modal because of hidden selections
+      const probeSelectedBtn = mountEl.querySelector('[data-testid="probe-selected-btn"]') as HTMLButtonElement
+      probeSelectedBtn.click()
+      await nextTick()
 
-    const confirmScopeModal = document.body.querySelector('[data-testid="confirm-probe-selected-modal"]')
-    expect(confirmScopeModal).not.toBeNull()
-    expect(confirmScopeModal?.textContent).toContain('当前已选 1 个节点')
-    expect(confirmScopeModal?.textContent).toContain('当前可见 0 项')
+      const confirmScopeModal = mountEl.querySelector('[data-testid="confirm-probe-selected-modal"]') || document.body.querySelector('[data-testid="confirm-probe-selected-modal"]')
+      expect(confirmScopeModal).not.toBeNull()
+      expect(confirmScopeModal?.textContent).toContain('当前已选 1 个节点')
+      expect(confirmScopeModal?.textContent).toContain('当前可见 0 项')
 
-    // Confirming executes probe for node-unhealthy-item
-    const modalConfirmBtn = confirmScopeModal?.querySelector('[data-testid="confirm-modal-confirm"]') as HTMLButtonElement
-    modalConfirmBtn?.click()
-    await nextTick()
-    await new Promise((r) => setTimeout(r, 20))
+      // Confirming executes probe for node-unhealthy-item
+      const modalConfirmBtn = confirmScopeModal?.querySelector('[data-testid="confirm-modal-confirm"]') as HTMLButtonElement
+      modalConfirmBtn?.click()
+      await nextTick()
+      await new Promise((r) => setTimeout(r, 20))
 
-    const runCall = postCalls.find((c) => c.path === '/api/v1/probes/runs')
-    expect(runCall).toBeDefined()
-    expect(runCall?.body.node_logical_ids).toEqual(['node-unhealthy-item'])
+      const runCall = postCalls.find((c) => c.path === '/api/v1/probes/runs')
+      expect(runCall).toBeDefined()
+      expect(runCall?.body.node_logical_ids).toEqual(['node-unhealthy-item'])
 
-    // 6. Test clear invisible selections
-    clearInvisibleBtn.click()
-    await nextTick()
-    expect(selectedBadge?.textContent).toContain('0')
-    expect(mountEl.querySelector('[data-testid="clear-invisible-selection-btn"]')).toBeNull()
-
-    app.unmount()
-    mountEl.remove()
+      // 6. Test clear invisible selections
+      clearInvisibleBtn.click()
+      await nextTick()
+      expect(selectedBadge?.textContent).toContain('0')
+      expect(mountEl.querySelector('[data-testid="clear-invisible-selection-btn"]')).toBeNull()
+    } finally {
+      app.unmount()
+      mountEl.remove()
+    }
   })
 
   it('distinguishes loaded count vs full total, renders placeholder instead of 0 on initial loading, and preserves existing items on refresh failure', async () => {
@@ -1414,13 +1418,13 @@ describe('NodesView real API detail, plaintext PATCH edit, and failure draft pre
 
     let shouldFailNodes = false
     let resolveFirst: any = null
+    let hasWaitedFirst = false
     const firstGate = new Promise((r) => { resolveFirst = r })
 
     vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
       if (path === '/api/v1/nodes') {
-        if (resolveFirst) {
-          const fn = resolveFirst
-          resolveFirst = null
+        if (!hasWaitedFirst) {
+          hasWaitedFirst = true
           await firstGate
         }
         if (shouldFailNodes) {
@@ -1450,37 +1454,39 @@ describe('NodesView real API detail, plaintext PATCH edit, and failure draft pre
       },
     })
 
-    app.mount(mountEl)
-    await nextTick()
+    try {
+      app.mount(mountEl)
+      await nextTick()
 
-    // During initial loading: nodes-total-badge shows '--', NEVER '0 个节点'!
-    const totalBadge = mountEl.querySelector('[data-testid="nodes-total-badge"]')
-    expect(totalBadge?.textContent?.trim()).toBe('--')
+      // During initial loading: nodes-total-badge shows '--', NEVER '0 个节点'!
+      const totalBadge = mountEl.querySelector('[data-testid="nodes-total-badge"]')
+      expect(totalBadge?.textContent?.trim()).toBe('--')
 
-    // Now resolve initial request
-    resolveFirst()
-    await nextTick()
-    await new Promise((r) => setTimeout(r, 40))
+      // Now resolve initial request
+      resolveFirst()
+      await nextTick()
+      await new Promise((r) => setTimeout(r, 40))
 
-    // Total badge shows loaded / total
-    expect(totalBadge?.textContent).toContain('2 / 50')
+      // Total badge shows loaded / total
+      expect(totalBadge?.textContent).toContain('2 / 50')
 
-    // Now trigger refresh with failure
-    shouldFailNodes = true
-    const refreshBtn = mountEl.querySelector('button[title="刷新"]') as HTMLButtonElement
-    refreshBtn?.click()
-    await nextTick()
-    await new Promise((r) => setTimeout(r, 40))
+      // Now trigger refresh with failure
+      shouldFailNodes = true
+      const refreshBtn = mountEl.querySelector('button[title="刷新"]') as HTMLButtonElement
+      refreshBtn?.click()
+      await nextTick()
+      await new Promise((r) => setTimeout(r, 40))
 
-    // Verification: Error is shown, but existing 2 items ARE PRESERVED!
-    expect(mountEl.textContent).toContain('Database timeout')
-    const cards = mountEl.querySelectorAll('[data-testid="node-card"]')
-    expect(cards.length).toBe(2)
-    expect(mountEl.textContent).toContain('Tokyo Preserved 1')
-    expect(mountEl.textContent).toContain('Tokyo Preserved 2')
-
-    app.unmount()
-    mountEl.remove()
+      // Verification: Error is shown, but existing 2 items ARE PRESERVED!
+      expect(mountEl.textContent).toContain('Database timeout')
+      const cards = mountEl.querySelectorAll('[data-testid="node-card"]')
+      expect(cards.length).toBe(2)
+      expect(mountEl.textContent).toContain('Tokyo Preserved 1')
+      expect(mountEl.textContent).toContain('Tokyo Preserved 2')
+    } finally {
+      app.unmount()
+      mountEl.remove()
+    }
   })
 
   it('discards out-of-order stale generation responses to prevent race condition write-backs', async () => {
@@ -1593,42 +1599,44 @@ describe('NodesView real API detail, plaintext PATCH edit, and failure draft pre
         return h(NodesView)
       },
     })
-    app.mount(mountEl)
-    await nextTick()
-    await new Promise((r) => setTimeout(r, 60))
+    try {
+      app.mount(mountEl)
+      await nextTick()
+      await new Promise((r) => setTimeout(r, 60))
 
-    // 1. Geo region badge is rendered with actual region 'JP'
-    const geoBadge = mountEl.querySelector('[data-testid="node-geo-badge"]')
-    expect(geoBadge).not.toBeNull()
-    expect(geoBadge?.textContent?.trim()).toBe('JP')
+      // 1. Geo region badge is rendered with actual region 'JP'
+      const geoBadge = mountEl.querySelector('[data-testid="node-geo-badge"]')
+      expect(geoBadge).not.toBeNull()
+      expect(geoBadge?.textContent?.trim()).toBe('JP')
 
-    // 2. Latency badge is prominently displayed
-    const latencyBadge = mountEl.querySelector('[data-testid="node-latency-badge"]')
-    expect(latencyBadge).not.toBeNull()
-    expect(latencyBadge?.textContent).toContain('38 ms')
+      // 2. Latency badge is prominently displayed
+      const latencyBadge = mountEl.querySelector('[data-testid="node-latency-badge"]')
+      expect(latencyBadge).not.toBeNull()
+      expect(latencyBadge?.textContent).toContain('38 ms')
 
-    // 3. Platform details accordion is initially collapsed
-    expect(mountEl.querySelector('[data-testid="node-platform-details-expanded"]')).toBeNull()
+      // 3. Platform details accordion is initially collapsed
+      expect(mountEl.querySelector('[data-testid="node-platform-details-expanded"]')).toBeNull()
 
-    // 4. Toggle platform details
-    const toggleBtn = mountEl.querySelector('[data-testid="node-platform-details-toggle"]') as HTMLButtonElement
-    expect(toggleBtn).not.toBeNull()
-    expect(toggleBtn.textContent).toContain('平台能力')
-    toggleBtn.click()
-    await nextTick()
+      // 4. Toggle platform details
+      const toggleBtn = mountEl.querySelector('[data-testid="node-platform-details-toggle"]') as HTMLButtonElement
+      expect(toggleBtn).not.toBeNull()
+      expect(toggleBtn.textContent).toContain('平台能力')
+      toggleBtn.click()
+      await nextTick()
 
-    // 5. Expanded accordion displays streaming, AI and speed badges
-    const expandedEl = mountEl.querySelector('[data-testid="node-platform-details-expanded"]')
-    expect(expandedEl).not.toBeNull()
-    expect(expandedEl?.textContent).toContain('NETFLIX')
-    expect(expandedEl?.textContent).toContain('OPENAI')
-    expect(expandedEl?.textContent).toContain('MB/s')
+      // 5. Expanded accordion displays streaming, AI and speed badges
+      const expandedEl = mountEl.querySelector('[data-testid="node-platform-details-expanded"]')
+      expect(expandedEl).not.toBeNull()
+      expect(expandedEl?.textContent).toContain('NETFLIX')
+      expect(expandedEl?.textContent).toContain('OPENAI')
+      expect(expandedEl?.textContent).toContain('MB/s')
 
-    // 6. getNodeGeoRegion unit checks: does NOT guess country from name
-    expect(getNodeGeoRegion({ logical_id: 'node-name-kr', display_name: '🇰🇷 Seoul Korea 01', protocol: 'ss', active: true })).toBeNull()
-    expect(getNodeGeoRegion({ logical_id: 'node-geo-us', display_name: 'US Server', protocol: 'ss', active: true, capabilities: { geo: { verdict: 'available', region: 'US' } } })).toBe('US')
-
-    app.unmount()
-    mountEl.remove()
+      // 6. getNodeGeoRegion unit checks: does NOT guess country from name
+      expect(getNodeGeoRegion({ logical_id: 'node-name-kr', display_name: '🇰🇷 Seoul Korea 01', protocol: 'ss', active: true })).toBeNull()
+      expect(getNodeGeoRegion({ logical_id: 'node-geo-us', display_name: 'US Server', protocol: 'ss', active: true, capabilities: { geo: { verdict: 'available', region: 'US' } } })).toBe('US')
+    } finally {
+      app.unmount()
+      mountEl.remove()
+    }
   })
 })

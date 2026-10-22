@@ -27,6 +27,7 @@ defineProps<{
 
 const emit = defineEmits<{
   'update:searchQuery': [query: string]
+  'clear-search': []
   'new-rule': []
   'manage-categories': []
   'validate-rules': []
@@ -42,6 +43,7 @@ function onSearchInput(event: Event) {
 
 function clearSearch() {
   emit('update:searchQuery', '')
+  emit('clear-search')
 }
 </script>
 

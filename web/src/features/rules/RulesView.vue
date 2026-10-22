@@ -73,6 +73,20 @@ watch([searchQuery, selectedCategoryId], () => {
   syncToUrl()
 })
 
+// Cross-category search should not be truncated by a previously active category
+watch(searchQuery, (newQ) => {
+  if (newQ.trim()) {
+    selectedCategoryId.value = null
+  }
+})
+
+// If user explicitly chooses a category while search is active, clear search query to show that category
+watch(selectedCategoryId, (newCat) => {
+  if (newCat && newCat !== 'all' && searchQuery.value) {
+    searchQuery.value = ''
+  }
+})
+
 // Category accordion collapse state
 const collapsedCategories = ref<Record<string, boolean>>({})
 
@@ -241,11 +255,12 @@ async function handleValidateRules() {
 
 function handleClearSearch() {
   searchQuery.value = ''
+  selectedCategoryId.value = null
 }
 </script>
 
 <template>
-  <div class="space-y-4 pb-24 md:pb-8">
+  <div class="space-y-4 pb-24 md:pb-8" data-testid="rules-root">
     <!-- Unified Page Toolbar (Search + Small Counts + Primary New Rule + More Actions) -->
     <RuleToolbar
       v-model:search-query="searchQuery"
@@ -262,6 +277,7 @@ function handleClearSearch() {
       @backfill-rules="confirmBackfill"
       @expand-all="expandAll"
       @collapse-all="collapseAll"
+      @clear-search="handleClearSearch"
     />
 
     <!-- Topology Validation Banner (if executed) -->

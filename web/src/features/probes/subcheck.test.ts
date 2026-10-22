@@ -502,30 +502,32 @@ describe('Subcheck Platform Capability Matrix & Fixture Tests', () => {
       const app = createApp({
         render: () => h(NodesView),
       })
-      app.mount(mountEl)
-      await nextTick()
-      await new Promise((r) => setTimeout(r, 40))
+      try {
+        app.mount(mountEl)
+        await nextTick()
+        await new Promise((r) => setTimeout(r, 40))
 
-      const text = mountEl.textContent || ''
-      expect(text).toContain('GPT⁺ (US)')
-      expect(text).toContain('NF 仅自制 (HK)')
-      expect(text).toContain('D+ 尚未开放 (HK)')
-      expect(text).toContain('5.1 MB/s')
+        const text = mountEl.textContent || ''
+        expect(text).toContain('GPT⁺ (US)')
+        expect(text).toContain('NF 仅自制 (HK)')
+        expect(text).toContain('D+ 尚未开放 (HK)')
+        expect(text).toContain('5.1 MB/s')
 
-      // Click first card to inspect
-      const card = mountEl.querySelector('[data-testid="node-card"]') as HTMLElement
-      expect(card).not.toBeNull()
-      card.click()
-      await nextTick()
-      await new Promise((r) => setTimeout(r, 40))
+        // Click first card to inspect
+        const card = mountEl.querySelector('[data-testid="node-card"]') as HTMLElement
+        expect(card).not.toBeNull()
+        card.click()
+        await nextTick()
+        await new Promise((r) => setTimeout(r, 40))
 
-      const drawer = document.body.querySelector('[data-testid="node-detail-drawer"]')
-      expect(drawer).not.toBeNull()
-      expect(drawer?.textContent).toContain('GPT⁺ (US)')
-      expect(drawer?.textContent).toContain('Claude (US)')
-
-      app.unmount()
-      mountEl.remove()
+        const drawer = mountEl.querySelector('[data-testid="node-detail-drawer"]') || document.body.querySelector('[data-testid="node-detail-drawer"]')
+        expect(drawer).not.toBeNull()
+        expect(drawer?.textContent).toContain('GPT⁺ (US)')
+        expect(drawer?.textContent).toContain('Claude (US)')
+      } finally {
+        app.unmount()
+        mountEl.remove()
+      }
     })
 
     it('renders platform badges in NodesView ledger', async () => {
@@ -561,18 +563,20 @@ describe('Subcheck Platform Capability Matrix & Fixture Tests', () => {
       const app = createApp({
         render: () => h(NodesView),
       })
-      app.mount(mountEl)
-      await nextTick()
-      await new Promise((r) => setTimeout(r, 60))
+      try {
+        app.mount(mountEl)
+        await nextTick()
+        await new Promise((r) => setTimeout(r, 60))
 
-      const text = mountEl.textContent || ''
-      expect(text).toContain('NF (HK)')
-      expect(text).toContain('YT (SG)')
-      expect(text).toContain('D+ (HK)')
-      expect(text).toContain('GPT (US)')
-
-      app.unmount()
-      mountEl.remove()
+        const text = mountEl.textContent || ''
+        expect(text).toContain('NF (HK)')
+        expect(text).toContain('YT (SG)')
+        expect(text).toContain('D+ (HK)')
+        expect(text).toContain('GPT (US)')
+      } finally {
+        app.unmount()
+        mountEl.remove()
+      }
     })
 
     it('renders detailed subcheck platform breakdown in ProbeEvidenceSheet', async () => {

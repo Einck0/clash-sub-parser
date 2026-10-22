@@ -876,6 +876,35 @@ export function nodeRiskBadge(node: NodeRecord | NormalizedNode): { label: strin
   return { label: '未探测', tone: 'info' }
 }
 
+export function formatExpandedPlatformLabel(badge: PlatformBadge): string {
+  const platMap: Record<string, string> = {
+    netflix: 'NETFLIX',
+    openai: 'OPENAI',
+    disney: 'DISNEY+',
+    youtube: 'YOUTUBE',
+    claude: 'CLAUDE',
+    gemini: 'GEMINI',
+  }
+  const fullPlat = platMap[badge.platform.toLowerCase()] || badge.platform.toUpperCase()
+  let expanded = badge.label
+  if (badge.platform.toLowerCase() === 'netflix') {
+    expanded = expanded.replace(/^NF\b/, fullPlat)
+  } else if (badge.platform.toLowerCase() === 'openai') {
+    expanded = expanded.replace(/^GPT⁺?\b/, (m) => (m.includes('⁺') ? `${fullPlat}⁺` : fullPlat))
+  } else if (badge.platform.toLowerCase() === 'youtube') {
+    expanded = expanded.replace(/^YT\b/, fullPlat)
+  } else if (badge.platform.toLowerCase() === 'disney') {
+    expanded = expanded.replace(/^D\+\b/, fullPlat)
+  } else if (badge.platform.toLowerCase() === 'claude') {
+    expanded = expanded.replace(/^Claude\b/i, fullPlat)
+  } else if (badge.platform.toLowerCase() === 'gemini') {
+    expanded = expanded.replace(/^Gemini\b/i, fullPlat)
+  } else if (!expanded.toUpperCase().includes(fullPlat)) {
+    expanded = `${fullPlat}: ${expanded}`
+  }
+  return expanded
+}
+
 export function getNodePlatformBadges(
   node: NodeRecord | NormalizedNode,
   kind: 'streaming' | 'ai'

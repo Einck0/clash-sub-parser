@@ -325,9 +325,10 @@ function hasTerminalRule(list: PolicyRuleView[]): boolean {
         <!-- Category Accordion Header -->
         <div
           class="flex items-center justify-between px-4 py-3 bg-base-200/40 hover:bg-base-200/70 cursor-pointer select-none border-b border-base-300/40 transition-colors"
+          data-testid="category-header"
           @click="$emit('toggle-collapse', cat.id)"
         >
-          <div class="flex flex-wrap items-center gap-2 min-w-0">
+          <div class="flex flex-wrap items-center gap-2 min-w-0" data-testid="category-header-left">
             <button
               type="button"
               class="btn btn-ghost btn-xs btn-circle shrink-0"
@@ -337,7 +338,7 @@ function hasTerminalRule(list: PolicyRuleView[]): boolean {
               <ChevronDownIcon v-else class="w-4 h-4" />
             </button>
 
-            <span class="font-bold text-sm md:text-base tracking-tight">{{ cat.name }}</span>
+            <span class="font-bold text-sm md:text-base tracking-tight" data-testid="category-title">{{ cat.name }}</span>
 
             <span class="badge badge-sm badge-neutral gap-1 font-mono text-xs">
               <span>{{ t('rules.categoryWeight') }}</span>
@@ -620,9 +621,10 @@ function hasTerminalRule(list: PolicyRuleView[]): boolean {
             <div
               v-if="hasTerminalRule(rulesByCategory.map.get(cat.id) || [])"
               class="m-3 p-3 rounded-lg bg-base-200/50 border border-base-300/40 text-xs flex items-center gap-2.5 text-base-content/75"
+              data-testid="terminal-tail-notice"
             >
               <ShieldCheckIcon class="w-4 h-4 text-primary shrink-0" />
-              <span>{{ t('rules.matchNotice') }}</span>
+              <span>{{ uiText('兜底终结规则：' + t('rules.matchNotice'), 'Terminal Catch-all Rule: ' + t('rules.matchNotice')) }}</span>
             </div>
           </div>
         </div>
@@ -721,7 +723,7 @@ function hasTerminalRule(list: PolicyRuleView[]): boolean {
                       <button
                         type="button"
                         class="btn btn-ghost btn-xs btn-square"
-                        :title="t('rules.moveUp')"
+                        :title="parseRuleExpression(rule.expression).isTerminal ? uiText('终结规则不可前移', 'Terminal rule cannot move up') : t('rules.moveUp')"
                         :disabled="isMoveUpDisabled(rule, rulesByCategory.uncategorized, idx)"
                         @click="$emit('move-rule', rule.id, 'up')"
                       >
@@ -807,7 +809,7 @@ function hasTerminalRule(list: PolicyRuleView[]): boolean {
                   <button
                     type="button"
                     class="btn btn-ghost btn-xs btn-square"
-                    :title="t('rules.moveUp')"
+                    :title="parseRuleExpression(rule.expression).isTerminal ? uiText('终结规则不可前移', 'Terminal rule cannot move up') : t('rules.moveUp')"
                     :disabled="isMoveUpDisabled(rule, rulesByCategory.uncategorized, idx)"
                     @click="$emit('move-rule', rule.id, 'up')"
                   >
@@ -841,6 +843,16 @@ function hasTerminalRule(list: PolicyRuleView[]): boolean {
                 </div>
               </div>
             </div>
+          </div>
+
+          <!-- Terminal MATCH Tail Info Section (if uncategorized contains terminal MATCH) -->
+          <div
+            v-if="hasTerminalRule(rulesByCategory.uncategorized)"
+            class="m-3 p-3 rounded-lg bg-base-200/50 border border-base-300/40 text-xs flex items-center gap-2.5 text-base-content/75"
+            data-testid="terminal-tail-notice"
+          >
+            <ShieldCheckIcon class="w-4 h-4 text-primary shrink-0" />
+            <span>{{ uiText('兜底终结规则：' + t('rules.matchNotice'), 'Terminal Catch-all Rule: ' + t('rules.matchNotice')) }}</span>
           </div>
         </div>
       </div>

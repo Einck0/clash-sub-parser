@@ -279,6 +279,19 @@ function handleNavigation(tabId: NavTab, path: string, navigate?: (e: MouseEvent
   }
 }
 
+const handleHashChange = () => {
+  activeTab.value = getRouteTab()
+  if (activeTab.value && router?.currentRoute?.value?.name !== activeTab.value) {
+    router.replace({ name: activeTab.value }).catch(() => {})
+  }
+}
+
+const handleAuthSuccess = () => {
+  viewKey.value++
+  probeAuth()
+  checkHealth()
+}
+
 onMounted(() => {
   const initialTab = getRouteTab()
   activeTab.value = initialTab
@@ -289,17 +302,8 @@ onMounted(() => {
   if (typeof window !== 'undefined') {
     window.addEventListener('click', handleDocumentClick)
     window.addEventListener('keydown', handleGlobalKeydown)
-    window.addEventListener('hashchange', () => {
-      activeTab.value = getRouteTab()
-      if (activeTab.value && router?.currentRoute?.value?.name !== activeTab.value) {
-        router.replace({ name: activeTab.value }).catch(() => {})
-      }
-    })
-    window.addEventListener('csp:auth-success', () => {
-      viewKey.value++
-      probeAuth()
-      checkHealth()
-    })
+    window.addEventListener('hashchange', handleHashChange)
+    window.addEventListener('csp:auth-success', handleAuthSuccess)
   }
   switchTheme(getStoredTheme())
   checkHealth()
@@ -310,6 +314,8 @@ onUnmounted(() => {
   if (typeof window !== 'undefined') {
     window.removeEventListener('click', handleDocumentClick)
     window.removeEventListener('keydown', handleGlobalKeydown)
+    window.removeEventListener('hashchange', handleHashChange)
+    window.removeEventListener('csp:auth-success', handleAuthSuccess)
   }
 })
 </script>

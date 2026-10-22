@@ -381,6 +381,11 @@ describe('SettingsView Component', () => {
       resolveFirstProbe = resolve
     })
 
+    let resolveConnectionTest!: (val: any) => void
+    const connectionTestPromise = new Promise((resolve) => {
+      resolveConnectionTest = resolve
+    })
+
     let probeCount = 0
     vi.spyOn(api, 'get').mockImplementation(async (path) => {
       if (path === '/api/v1/settings/auth') {
@@ -388,19 +393,46 @@ describe('SettingsView Component', () => {
         if (probeCount === 1) return firstProbePromise
         return settings(true, true, true)
       }
+      if (path === '/api/v1/auth/status') {
+        return connectionTestPromise
+      }
       return { mode: 'protected' }
     })
 
-    const { getAuthModeBadge } = mountSettings()
+    const { getAuthModeBadge, getTestConnectionBtn } = mountSettings()
     await nextTick()
 
-    // While first probe is pending, badge is in loading/probing state
-    expect(getAuthModeBadge()?.textContent).toContain('检测中')
+    const badge = getAuthModeBadge()
+    const testBtn = getTestConnectionBtn()
 
-    // Simulate late response resolving with open mode after another session was processed
+    // While first probe is pending, badge is in loading/probing state (session busy)
+    expect(badge?.textContent).toContain('探测中')
+    expect(badge?.classList.contains('animate-pulse')).toBe(true)
+
+    // Trigger second session via test connection
+    expect(testBtn).toBeTruthy()
+    testBtn.click()
+    await nextTick()
+
+    // During connection test, button indicates busy state
+    expect(testBtn.disabled).toBe(true)
+
+    // Complete second session in protected mode
+    resolveConnectionTest({ mode: 'protected', authenticated: true, subject: 'admin' })
+    await nextTick()
+    await new Promise((r) => setTimeout(r, 10))
+
+    expect(testBtn.disabled).toBe(false)
+    expect(badge?.textContent).toContain('受保护')
+
+    // Simulate late response resolving with open mode from outdated initial session
     resolveFirstProbe(settings(false, false, false))
     await nextTick()
     await new Promise((r) => setTimeout(r, 10))
+
+    // Session protection: late response does NOT overwrite the active auth mode
+    expect(badge?.textContent).toContain('受保护')
+    expect(badge?.textContent).not.toContain('开放模式')
   })
 })
 

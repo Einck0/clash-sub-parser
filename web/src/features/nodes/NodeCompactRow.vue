@@ -8,6 +8,7 @@ import {
 } from '@heroicons/vue/24/outline'
 import StatusBadge from '../../ui/StatusBadge.vue'
 import {
+  formatExpandedPlatformLabel,
   formatNodeLatency,
   getNodeGeoRegion,
   getNodePlatformBadges,
@@ -175,6 +176,29 @@ const hasPlatformDetails = computed(() => {
           <span>{{ detailsExpanded ? uiText('收起能力', 'Collapse') : uiText('平台能力', 'Platforms') }}</span>
           <ChevronDownIcon class="w-3 h-3 transition-transform" :class="{ 'rotate-180': detailsExpanded }" />
         </button>
+
+        <!-- Compact platform badge previews (abbreviated) -->
+        <template v-if="!detailsExpanded">
+          <StatusBadge
+            v-if="speedBadge"
+            :label="speedBadge.label"
+            :tone="speedBadge.tone"
+          />
+          <StatusBadge
+            v-for="badge in streamingBadges"
+            :key="`compact-streaming-${badge.platform}`"
+            :label="badge.label"
+            :tone="badge.tone"
+            :title="badge.tooltip"
+          />
+          <StatusBadge
+            v-for="badge in aiBadges"
+            :key="`compact-ai-${badge.platform}`"
+            :label="badge.label"
+            :tone="badge.tone"
+            :title="badge.tooltip"
+          />
+        </template>
       </div>
 
       <!-- Col 4: Status and Action Buttons -->
@@ -227,7 +251,7 @@ const hasPlatformDetails = computed(() => {
         <StatusBadge
           v-for="badge in streamingBadges"
           :key="`streaming-${badge.platform}`"
-          :label="badge.label"
+          :label="formatExpandedPlatformLabel(badge)"
           :tone="badge.tone"
           :title="badge.tooltip"
         />
@@ -241,7 +265,7 @@ const hasPlatformDetails = computed(() => {
         <StatusBadge
           v-for="badge in aiBadges"
           :key="`ai-${badge.platform}`"
-          :label="badge.label"
+          :label="formatExpandedPlatformLabel(badge)"
           :tone="badge.tone"
           :title="badge.tooltip"
         />

@@ -196,18 +196,21 @@ describe('DashboardView Component', () => {
     let resolveFirstRequest: ((val: any) => void) | null = null
 
     let callCount = 0
-    vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
+    vi.spyOn(api, 'get').mockImplementation(async (path: string, options?: any) => {
       if (path === '/healthz') return { status: 'healthy' }
       if (path === '/api/v1/nodes') {
-        callCount++
-        if (callCount === 1) {
-          // Slow first request
-          return new Promise((resolve) => {
-            resolveFirstRequest = resolve
-          })
+        if (!options?.params?.active_only) {
+          callCount++
+          if (callCount === 1) {
+            // Slow first request
+            return new Promise((resolve) => {
+              resolveFirstRequest = resolve
+            })
+          }
+          // Fast second request
+          return { total: 99 }
         }
-        // Fast second request
-        return { total: 99 }
+        return { total: 50 }
       }
       return { total: 1 }
     })
@@ -223,6 +226,7 @@ describe('DashboardView Component', () => {
 
     // Trigger second request (refresh)
     const refreshBtn = container.querySelector('[data-testid="refresh-all-btn"]') as HTMLButtonElement
+    expect(refreshBtn).toBeTruthy()
     refreshBtn.click()
     await nextTick()
     await new Promise((r) => setTimeout(r, 25))
@@ -308,8 +312,8 @@ describe('DashboardView Component', () => {
     // Real latency: must end with 'ms' and not be '<10ms'
     const latencyEl = container.querySelector('[data-testid="health-latency"]')
     expect(latencyEl).toBeTruthy()
-    expect(latencyEl?.textContent).toMatch(/^\d+ms$/)
-    expect(latencyEl?.textContent).not.toContain('<10ms')
+    expect(latencyEl?.textContent?.trim()).toMatch(/^\d+ms$/)
+    expect(latencyEl?.textContent?.trim()).not.toContain('<10ms')
 
     // Topology status: MUST be '未校验' (Unvalidated), NOT 'ready' or 'badge-success'
     const topologyBadge = container.querySelector('[data-testid="topology-status-badge"]')

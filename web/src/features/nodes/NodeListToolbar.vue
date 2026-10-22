@@ -113,7 +113,7 @@ const totalBadgeText = computed(() => {
             :class="protocolFilter === proto ? 'btn-primary' : 'btn-ghost bg-base-200/70'"
             @click="$emit('update:protocolFilter', proto)"
           >
-            {{ proto }}
+            {{ proto.toUpperCase() }}
           </button>
         </div>
 

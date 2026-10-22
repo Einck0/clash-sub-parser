@@ -114,7 +114,6 @@ const exclusionBreakdown = computed(() => {
           type="button"
           class="btn btn-ghost btn-xs gap-1 shrink-0"
           :class="{ loading }"
-          :disabled="loading"
           @click="emit('refresh')"
         >
           <ArrowPathIcon class="w-3.5 h-3.5" :class="{ 'animate-spin': loading }" />
@@ -155,7 +154,6 @@ const exclusionBreakdown = computed(() => {
         <button
           type="button"
           class="btn btn-ghost btn-xs opacity-70"
-          :disabled="loading"
           @click="emit('refresh')"
         >
           {{ uiText('刷新', 'Refresh') }}
@@ -237,11 +235,22 @@ const exclusionBreakdown = computed(() => {
       data-testid="stage-diagnostics"
       class="space-y-2"
     >
+      <!-- Empty sources warning vs No query matches diagnostic -->
       <div
         v-if="sourcesCount === 0"
-        class="p-3 rounded-xl bg-base-200/50 border border-dashed border-base-300 text-xs opacity-75"
+        role="alert"
+        class="alert alert-warning text-xs p-3"
       >
-        {{ uiText('当前策略组尚未配置成员来源，请添加节点、子策略组或匹配条件。', 'No member sources configured yet. Add nodes, groups, or filters.') }}
+        <ExclamationTriangleIcon class="w-4 h-4 shrink-0" />
+        <span>空来源项 (Empty Sources)：当前策略组未配置任何成员来源项。请在编排配置页添加来源项。</span>
+      </div>
+      <div
+        v-else-if="snapshot && snapshot.node_count === 0"
+        role="alert"
+        class="alert alert-info text-xs p-3"
+      >
+        <InformationCircleIcon class="w-4 h-4 shrink-0" />
+        <span>无匹配节点 (No Nodes Matched)：当前规则或筛选条件下未匹配到任何可用节点。</span>
       </div>
 
       <div

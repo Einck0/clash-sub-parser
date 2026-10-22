@@ -51,6 +51,7 @@ let currentSettings = base()
 
 describe('DNS settings page', () => {
   beforeEach(() => {
+    document.body.innerHTML = ''
     currentSettings = base()
     vi.spyOn(api, 'get').mockImplementation(async () => ({ ...currentSettings }))
     vi.spyOn(api, 'post').mockImplementation(async (_path, body) => {
@@ -77,6 +78,7 @@ describe('DNS settings page', () => {
   afterEach(() => {
     app?.unmount()
     mountEl?.remove()
+    document.body.innerHTML = ''
     vi.restoreAllMocks()
   })
 
@@ -278,6 +280,77 @@ describe('DNS settings page', () => {
 
     expect(api.post).toHaveBeenCalledWith(
       '/api/v1/settings/dns/validate',
+      expect.objectContaining({
+        raw_yaml: expect.stringContaining('223.5.5.5'),
+      })
+    )
+  })
+
+  it('replaces known invalid JSON fields and restores save and mode-switch capabilities', async () => {
+    mount()
+    await flush()
+
+    // Verify querySelectorAll on container works cleanly without throwing TypeError
+    const jsonEditors = mountEl.querySelectorAll<HTMLTextAreaElement>(
+      '[aria-label="nameserver-policy"], [aria-label="fallback-filter"]'
+    )
+    expect(jsonEditors.length).toBe(2)
+
+    const policyEditor = jsonEditors[0]
+    const fallbackEditor = jsonEditors[1]
+
+    // Type invalid JSON into both known JSON fields
+    policyEditor.value = '{ bad-policy-json'
+    policyEditor.dispatchEvent(new Event('input', { bubbles: true }))
+    policyEditor.dispatchEvent(new Event('change', { bubbles: true }))
+
+    fallbackEditor.value = '{ bad-fallback-json'
+    fallbackEditor.dispatchEvent(new Event('input', { bubbles: true }))
+    fallbackEditor.dispatchEvent(new Event('change', { bubbles: true }))
+    await flush()
+
+    // Verify errors are displayed and save/mode-switch are blocked
+    expect(mountEl.querySelector('[data-testid="dns-error"]')).not.toBeNull()
+    const saveBtn = mountEl.querySelector('[data-testid="dns-save"]') as HTMLButtonElement
+    expect(saveBtn.disabled).toBe(true)
+
+    const rawTab = mountEl.querySelector('[data-testid="dns-raw-tab"]') as HTMLButtonElement
+    rawTab.click()
+    await flush()
+    expect(mountEl.querySelector('[data-testid="dns-raw-editor"]')).toBeNull()
+
+    // Repair nameserver-policy
+    policyEditor.value = '{"geosite:cn": "223.5.5.5"}'
+    policyEditor.dispatchEvent(new Event('input', { bubbles: true }))
+    policyEditor.dispatchEvent(new Event('change', { bubbles: true }))
+    await flush()
+
+    // Fallback-filter still invalid -> save still blocked
+    expect(saveBtn.disabled).toBe(true)
+    expect(mountEl.querySelector('[data-testid="dns-error"]')?.textContent).toContain('fallback-filter 必须是有效 JSON')
+
+    // Repair fallback-filter
+    fallbackEditor.value = '{"geoip": true}'
+    fallbackEditor.dispatchEvent(new Event('input', { bubbles: true }))
+    fallbackEditor.dispatchEvent(new Event('change', { bubbles: true }))
+    await flush()
+
+    // Now save is enabled and error is cleared
+    expect(saveBtn.disabled).toBe(false)
+    expect(mountEl.querySelector('[data-testid="dns-error"]')).toBeNull()
+
+    // Mode switch to raw editor now succeeds
+    rawTab.click()
+    await flush()
+    const rawEditor = mountEl.querySelector('[data-testid="dns-raw-editor"]') as HTMLTextAreaElement
+    expect(rawEditor).not.toBeNull()
+    expect(rawEditor.value).toContain('223.5.5.5')
+
+    // Save sends repaired payload
+    ;(mountEl.querySelector('[data-testid="dns-save"]') as HTMLButtonElement).click()
+    await flush()
+    expect(api.put).toHaveBeenCalledWith(
+      '/api/v1/settings/dns',
       expect.objectContaining({
         raw_yaml: expect.stringContaining('223.5.5.5'),
       })

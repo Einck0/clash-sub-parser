@@ -256,6 +256,11 @@ export function useGroupDraft() {
     serverError.value = null
   }
 
+  function clearPendingSourceDraft() {
+    pendingRegexPattern.value = ''
+    formError.value = ''
+  }
+
   function checkDraftValidity(): boolean {
     if (hasInvalidFilterSources.value) {
       formError.value = '存在未完成或无效的筛选条件，请完善或删除后再保存。'
@@ -329,6 +334,7 @@ export function useGroupDraft() {
     clearConflict,
     clearCycle,
     clearServerError,
+    clearPendingSourceDraft,
     checkDraftValidity,
     buildSavePayload,
   }

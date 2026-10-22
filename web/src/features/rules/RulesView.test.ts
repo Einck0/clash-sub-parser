@@ -54,6 +54,7 @@ describe('RulesView Component', () => {
   const mockGroups = [{ id: 'grp-ai', name: 'AI Services', group_type: 'select' }]
 
   beforeEach(() => {
+    window.history.replaceState({}, '', '/')
     container = document.createElement('div')
     document.body.appendChild(container)
 
@@ -105,6 +106,7 @@ describe('RulesView Component', () => {
       app = null
     }
     container.remove()
+    window.history.replaceState({}, '', '/')
     vi.restoreAllMocks()
   })
 
@@ -192,19 +194,21 @@ describe('RulesView Component', () => {
     await mountRulesView()
 
     // Verify container padding includes pb-24 md:pb-8
-    const rootEl = container.firstElementChild as HTMLElement
+    const rootEl = (container.querySelector('[data-testid="rules-root"]') || container.firstElementChild) as HTMLElement
     expect(rootEl).not.toBeNull()
     expect(rootEl.className).toContain('pb-24')
     expect(rootEl.className).toContain('md:pb-8')
 
     // Verify category header flex-wrap layout and title without truncate class
-    const categoryHeaderLeft = container.querySelector('.card .cursor-pointer > div') as HTMLElement
+    const categoryHeaderLeft = (container.querySelector('[data-testid="category-header-left"]') ||
+      container.querySelector('.card .cursor-pointer > div')) as HTMLElement
     expect(categoryHeaderLeft).not.toBeNull()
     expect(categoryHeaderLeft.className).toContain('flex')
     expect(categoryHeaderLeft.className).toContain('flex-wrap')
     expect(categoryHeaderLeft.className).toContain('gap-2')
 
-    const categoryTitle = categoryHeaderLeft.querySelector('span.font-bold') as HTMLElement
+    const categoryTitle = (categoryHeaderLeft.querySelector('[data-testid="category-title"]') ||
+      categoryHeaderLeft.querySelector('span.font-bold')) as HTMLElement
     expect(categoryTitle).not.toBeNull()
     expect(categoryTitle.className).not.toContain('truncate')
   })
@@ -277,6 +281,12 @@ describe('RulesView Component', () => {
 
     // Tail notice is rendered in category tail
     expect(container.textContent).toContain('兜底终结规则')
+
+    // Ensure there are no duplicate virtual MATCH rows
+    const matchRows = Array.from(container.querySelectorAll('tbody tr')).filter(
+      (el) => el.textContent?.includes('MATCH')
+    )
+    expect(matchRows.length).toBe(1)
   })
 
   it('guards unsaved changes in rule editor modal before discarding', async () => {

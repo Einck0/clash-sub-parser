@@ -1,10 +1,20 @@
 import { onUnmounted, ref } from 'vue'
-import { api } from '../../api/client'
+import { api, ApiError } from '../../api/client'
 import type {
   GroupDraftPreviewPayload,
   GroupDraftPreviewResponse,
   ResolverDiagnostic,
 } from './policyTypes'
+
+export function sanitizeErrorMessage(msg: string): string {
+  if (!msg) return ''
+  return msg
+    .replace(/(?:token|secret|password|key|auth|bearer|credential)[=:\s]+[A-Za-z0-9_\-\.]{8,}/gi, (match) => {
+      const prefix = match.split(/[=:\s]+/)[0]
+      return `${prefix}: [REDACTED]`
+    })
+    .replace(/[A-Za-z0-9_\-]{32,}/g, '[REDACTED]')
+}
 
 export function useGroupPreview() {
   const previewLoading = ref(false)
@@ -62,8 +72,19 @@ export function useGroupPreview() {
       if (gen !== previewGeneration.value) {
         return
       }
-      // Request failure is not business invalid: preserve draft and report network/service error
-      previewError.value = err?.message || '预览请求失败'
+      snapshotPreview.value = null
+      if (err instanceof ApiError) {
+        if (err.status === 422 && err.code === 'cycle_detected') {
+          const cycle = (err.details as any)?.cycle_path || []
+          previewError.value = `检测到循环依赖：${cycle.join(' → ')}`
+        } else {
+          const raw = err.message || `HTTP ${err.status}`
+          previewError.value = `快照解析失败: ${sanitizeErrorMessage(raw)}`
+        }
+      } else {
+        const raw = err instanceof Error ? err.message : '未知异常'
+        previewError.value = `快照解析失败: ${sanitizeErrorMessage(raw)}`
+      }
     } finally {
       if (gen === previewGeneration.value) {
         previewLoading.value = false

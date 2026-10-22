@@ -453,10 +453,12 @@ export function useRules() {
       const q = params.get('q')
       if (q) {
         searchQuery.value = q
-      }
-      const cat = params.get('category')
-      if (cat) {
-        selectedCategoryId.value = cat
+        selectedCategoryId.value = null
+      } else {
+        const cat = params.get('category')
+        if (cat) {
+          selectedCategoryId.value = cat
+        }
       }
     } catch {
       // ignore
@@ -469,13 +471,14 @@ export function useRules() {
       const url = new URL(window.location.href)
       if (searchQuery.value.trim()) {
         url.searchParams.set('q', searchQuery.value.trim())
+        url.searchParams.delete('category')
       } else {
         url.searchParams.delete('q')
-      }
-      if (selectedCategoryId.value && selectedCategoryId.value !== 'all') {
-        url.searchParams.set('category', selectedCategoryId.value)
-      } else {
-        url.searchParams.delete('category')
+        if (selectedCategoryId.value && selectedCategoryId.value !== 'all') {
+          url.searchParams.set('category', selectedCategoryId.value)
+        } else {
+          url.searchParams.delete('category')
+        }
       }
       window.history.replaceState({}, '', url.toString())
     } catch {

@@ -178,6 +178,38 @@ describe('useDnsDraft', () => {
     expect(draft.hasValidationErrors.value).toBe(false)
   })
 
+  it('replaces known invalid JSON fields sequentially and recovers clean draft validation state', async () => {
+    const draft = useDnsDraft()
+    await draft.load(true)
+
+    // Set invalid JSON on both known JSON fields
+    expect(draft.setJsonText('nameserver-policy', '{ bad-json-1')).toBe(false)
+    expect(draft.setJsonText('fallback-filter', '{ bad-json-2')).toBe(false)
+    expect(draft.hasValidationErrors.value).toBe(true)
+    expect(Object.keys(draft.fieldErrors.value).length).toBe(2)
+
+    // Repairing one field keeps the remaining error and continues blocking save and switch
+    expect(draft.setJsonText('nameserver-policy', '{"geosite:cn": "223.5.5.5"}')).toBe(true)
+    expect(draft.fieldErrors.value['nameserver-policy']).toBeUndefined()
+    expect(draft.fieldErrors.value['fallback-filter']).toContain('fallback-filter 必须是有效 JSON')
+    expect(draft.hasValidationErrors.value).toBe(true)
+
+    await draft.switchMode('raw')
+    expect(draft.mode.value).toBe('visual')
+
+    // Repairing the second field clears all validation errors
+    expect(draft.setJsonText('fallback-filter', '{"geoip": true}')).toBe(true)
+    expect(draft.fieldErrors.value['fallback-filter']).toBeUndefined()
+    expect(draft.hasValidationErrors.value).toBe(false)
+    expect(draft.error.value).toBe('')
+
+    // Switch mode now succeeds
+    await draft.switchMode('raw')
+    expect(draft.mode.value).toBe('raw')
+    expect(draft.raw.value).toContain('223.5.5.5')
+    expect(draft.raw.value).toContain('geoip')
+  })
+
   it('performs atomic save: validates, sends expected_revision PUT, then GET confirms and resets dirty', async () => {
     const draft = useDnsDraft()
     await draft.load(true)

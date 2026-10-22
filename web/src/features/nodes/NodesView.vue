@@ -176,6 +176,16 @@ const visibleSelectedCount = computed(() => {
   return filteredItems.value.filter((n) => selectedIds.value.has(n.logicalId)).length
 })
 
+const selectedScopeConfirmMessage = computed(() => {
+  const total = selectedIds.value.size
+  const visible = visibleSelectedCount.value
+  const hidden = total - visible
+  return uiText(
+    `当前已选 ${total} 个节点（其中当前可见 ${visible} 项，其他页面/筛选隐藏 ${hidden} 项）。确认对全部 ${total} 个节点发起测速？`,
+    `Currently selected ${total} nodes (${visible} visible, ${hidden} hidden). Probe all ${total} nodes?`
+  )
+})
+
 function toggleSelectAllVisible() {
   const set = new Set(selectedIds.value)
   if (isAllVisibleSelected.value) {
@@ -879,10 +889,7 @@ onUnmounted(() => {
     <ConfirmModal
       :model-value="confirmProbeSelectedOpen"
       :title="uiText('确认发起所选测速', 'Confirm Selected Probe')"
-      :message="uiText(
-        `当前已选 ${selectedIds.size} 个节点（其中当前可见 ${visibleSelectedCount} 项，其他页面/筛选隐藏 ${selectedIds.size - visibleSelectedCount} 项）。确认对全部 ${selectedIds.size} 个节点发起测速？`,
-        `Currently selected ${selectedIds.size} nodes (${visibleSelectedCount} visible, ${selectedIds.size - visibleSelectedCount} hidden). Probe all ${selectedIds.size} nodes?`
-      )"
+      :message="selectedScopeConfirmMessage"
       tone="warning"
       data-testid="confirm-probe-selected-modal"
       @confirm="executeProbeSelected"

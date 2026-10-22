@@ -110,7 +110,7 @@ export function useDnsDraft(): UseDnsDraftReturn {
   function apply(settingsValue: DnsSettings) {
     settings.value = settingsValue
     enabled.value = settingsValue.enabled
-    raw.value = settingsValue.raw_yaml
+    raw.value = settingsValue.raw_yaml || JSON.stringify(settingsValue.config || {}, null, 2)
     draft.value = structuredClone(settingsValue.config || {})
     fieldErrors.value = {}
     invalidJsonInputs.value = {}
@@ -162,8 +162,14 @@ export function useDnsDraft(): UseDnsDraftReturn {
       draft.value = { ...draft.value, [key]: parsed }
       delete invalidJsonInputs.value[key]
       delete fieldErrors.value[key]
-      if (Object.keys(fieldErrors.value).length === 0 && error.value.includes('必须是有效 JSON')) {
-        error.value = ''
+      const remainingKeys = Object.keys(fieldErrors.value)
+      if (remainingKeys.length === 0) {
+        if (error.value.includes('必须是有效 JSON') || error.value.includes('请先修正字段格式错误')) {
+          error.value = ''
+        }
+      } else {
+        const nextKey = remainingKeys[0]
+        error.value = fieldErrors.value[nextKey]
       }
       return true
     } catch {

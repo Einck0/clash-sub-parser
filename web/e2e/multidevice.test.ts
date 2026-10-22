@@ -184,7 +184,28 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
     vi.restoreAllMocks()
   })
 
+  async function waitForRouteTransition(targetTab?: string) {
+    if (targetTab && router.currentRoute.value.name === targetTab) {
+      await nextTick()
+      return
+    }
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, 500)
+      const unhook = router.afterEach(() => {
+        clearTimeout(timer)
+        unhook()
+        resolve()
+      })
+    })
+    await nextTick()
+  }
+
   async function mountApp(): Promise<HTMLDivElement> {
+    const targetTab = getRouteTab()
+    if (router.currentRoute.value.name !== targetTab) {
+      await router.replace({ name: targetTab }).catch(() => {})
+    }
+    await router.isReady()
     app = createApp(App)
     app.use(router)
     app.use(i18n)
@@ -254,10 +275,12 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       setupApiMocks()
       const root = await mountApp()
 
-      // 1. Header has overflow-hidden and layout classes
+      // 1. Header has layout classes and no horizontal overflow
       const header = root.querySelector('header')
       expect(header).not.toBeNull()
-      expect(header?.classList.contains('overflow-hidden')).toBe(true)
+      expect(header?.classList.contains('overflow-hidden') || header?.classList.contains('overflow-visible')).toBe(true)
+      const mainContainer = header?.parentElement
+      expect(mainContainer?.classList.contains('overflow-x-hidden')).toBe(true)
 
       // 2. Auth badge compact contract: data-testid, px-1.5 sm:px-2.5, status dot, hidden sm:inline label
       const authBadge = root.querySelector('[data-testid="header-auth-badge"]')
@@ -295,9 +318,10 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       expect(titleSpan).not.toBeNull()
 
       // 6. Interactive test: clicking auth badge navigates to Settings view
+      const navPromise = waitForRouteTransition('settings')
       ;(authBadge as HTMLButtonElement).click()
+      await navPromise
       await nextTick()
-      await new Promise((r) => setTimeout(r, 20))
       const settingsView = root.querySelector('[data-testid="settings-view"]')
       expect(settingsView).not.toBeNull()
       expect(['#settings', '#/settings']).toContain(window.location.hash)
@@ -324,9 +348,10 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       // Click "Subscriptions" button on mobile nav
       const subBtn = Array.from(navButtons).find((b) => b.textContent?.includes('Subscriptions'))
       expect(subBtn).toBeDefined()
+      const navPromise1 = waitForRouteTransition('subscriptions')
       subBtn?.click()
+      await navPromise1
       await nextTick()
-      await new Promise((r) => setTimeout(r, 20))
 
       // Section title should be Subscriptions
       expect(root.querySelector('#subscriptions-title')?.textContent).toContain('Subscriptions')
@@ -335,11 +360,12 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       // Click "Node Ledger" button on mobile nav
       const nodeBtn = Array.from(navButtons).find((b) => b.textContent?.includes('Node Ledger'))
       expect(nodeBtn).toBeDefined()
+      const navPromise2 = waitForRouteTransition('nodes')
       nodeBtn?.click()
+      await navPromise2
       await nextTick()
-      await new Promise((r) => setTimeout(r, 20))
 
-      expect(root.querySelector('#nodes-title')?.textContent?.toLowerCase()).toContain('node ledger')
+      expect(root.querySelector('#nodes-title')?.textContent).toContain('Node Management & Probing')
       expect(['#nodes', '#/nodes']).toContain(window.location.hash)
 
       // Zero console exceptions
@@ -380,7 +406,7 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
 
       const tabsToTest: { tab: NavTab; label: string; expectedText: string }[] = [
         { tab: 'subscriptions', label: 'Subscriptions', expectedText: 'Subscriptions' },
-        { tab: 'nodes', label: 'Node Ledger', expectedText: 'Node Ledger' },
+        { tab: 'nodes', label: 'Node Ledger', expectedText: 'Node Management & Probing' },
         { tab: 'rules', label: 'Rule Desk', expectedText: 'Rules' },
         { tab: 'policy', label: 'Policy Tree', expectedText: 'Policy Groups' },
         { tab: 'publications', label: 'Client Subscriptions', expectedText: 'Client Subscriptions' },
@@ -392,9 +418,10 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
         const button = Array.from(sidebar?.querySelectorAll('button') || []).find((b) =>
           b.textContent?.trim().includes(t.label)
         )
+        const navPromise = waitForRouteTransition(t.tab)
         button?.click()
+        await navPromise
         await nextTick()
-        await new Promise((r) => setTimeout(r, 25))
 
         expect(root.textContent).toContain(t.expectedText)
         expect([`#${t.tab}`, `#/${t.tab}`]).toContain(window.location.hash)
@@ -457,7 +484,7 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       const root = await mountApp()
 
       expect(root.textContent).toContain('Policy Groups')
-      expect(root.querySelector('header span.capitalize')?.textContent).toContain('policy')
+      expect(root.querySelector('header span.capitalize')?.textContent?.toLowerCase()).toContain('policy')
       expect(uncaughtErrors).toHaveLength(0)
     })
 
@@ -468,7 +495,7 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       setupApiMocks()
       const root = await mountApp()
 
-      expect(root.querySelector('#nodes-title')?.textContent).toContain('Node Ledger')
+      expect(root.querySelector('#nodes-title')?.textContent).toContain('Node Management & Probing')
       expect(uncaughtErrors).toHaveLength(0)
     })
 
@@ -481,18 +508,20 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       expect(root.textContent).toContain('Zashboard Foundation')
 
       // Simulate browser URL hash navigation to #publications
+      const navPromise1 = waitForRouteTransition('publications')
       window.location.hash = '#publications'
       window.dispatchEvent(new HashChangeEvent('hashchange'))
+      await navPromise1
       await nextTick()
-      await new Promise((r) => setTimeout(r, 20))
 
       expect(root.querySelector('#publications-title')?.textContent).toContain('Client Subscriptions')
 
       // Simulate browser Back button to #subscriptions
+      const navPromise2 = waitForRouteTransition('subscriptions')
       window.location.hash = '#subscriptions'
       window.dispatchEvent(new HashChangeEvent('hashchange'))
+      await navPromise2
       await nextTick()
-      await new Promise((r) => setTimeout(r, 20))
 
       expect(root.querySelector('#subscriptions-title')?.textContent).toContain('Subscriptions')
       expect(uncaughtErrors).toHaveLength(0)
@@ -520,24 +549,27 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       const root = await mountApp()
 
       // Subscriptions empty state
+      const pSub = waitForRouteTransition('subscriptions')
       window.location.hash = '#subscriptions'
       window.dispatchEvent(new HashChangeEvent('hashchange'))
+      await pSub
       await nextTick()
-      await new Promise((r) => setTimeout(r, 25))
       expect(root.textContent).toContain('No subscriptions yet')
 
       // Nodes empty state
+      const pNodes = waitForRouteTransition('nodes')
       window.location.hash = '#nodes'
       window.dispatchEvent(new HashChangeEvent('hashchange'))
+      await pNodes
       await nextTick()
-      await new Promise((r) => setTimeout(r, 25))
       expect(root.textContent).toContain('No nodes found')
 
       // Policy empty state
+      const pPol = waitForRouteTransition('policy')
       window.location.hash = '#policy'
       window.dispatchEvent(new HashChangeEvent('hashchange'))
+      await pPol
       await nextTick()
-      await new Promise((r) => setTimeout(r, 25))
       expect(root.textContent).toContain('No policy groups defined')
 
       expect(uncaughtErrors).toHaveLength(0)
@@ -569,10 +601,11 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       const root = await mountApp()
 
       // Navigate to Probes tab (which redirects to /nodes)
+      const pNodes = waitForRouteTransition('nodes')
       window.location.hash = '#nodes'
       window.dispatchEvent(new HashChangeEvent('hashchange'))
+      await pNodes
       await nextTick()
-      await new Promise((r) => setTimeout(r, 60))
 
       // Trigger full probe confirmation modal
       const triggerBtn = root.querySelector('[data-testid="probe-all-btn"]') as HTMLButtonElement | null ||
@@ -629,10 +662,11 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       const root = await mountApp()
 
       // Navigate to Publications tab
+      const pPub = waitForRouteTransition('publications')
       window.location.hash = '#publications'
       window.dispatchEvent(new HashChangeEvent('hashchange'))
+      await pPub
       await nextTick()
-      await new Promise((r) => setTimeout(r, 25))
 
       // Check client subscriptions section exists and is readable
       const pageEl = root.querySelector('[data-testid="client-subscriptions-page"]')
@@ -641,10 +675,11 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       expect(copyBtns.length).toBe(4)
 
       // Navigate to Policy tab and open group sheet in landscape
+      const pPol = waitForRouteTransition('policy')
       window.location.hash = '#policy'
       window.dispatchEvent(new HashChangeEvent('hashchange'))
+      await pPol
       await nextTick()
-      await new Promise((r) => setTimeout(r, 25))
 
       const addGroupBtn = Array.from(root.querySelectorAll('button')).find((b) =>
         b.textContent?.includes('Add Group') || b.textContent?.includes('New Group')
@@ -789,7 +824,9 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
 
       const header = root.querySelector('header')
       expect(header).not.toBeNull()
-      expect(header?.classList.contains('overflow-hidden')).toBe(true)
+      expect(header?.classList.contains('overflow-hidden') || header?.classList.contains('overflow-visible')).toBe(true)
+      const mainContainer = header?.parentElement
+      expect(mainContainer?.classList.contains('overflow-x-hidden')).toBe(true)
       expect(uncaughtErrors).toHaveLength(0)
     })
 

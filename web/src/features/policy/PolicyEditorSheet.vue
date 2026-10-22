@@ -200,6 +200,10 @@ function handlePreserveLocalDraft() {
   }
   emit('clear-conflict')
 }
+
+function handleDiscardSourceDraft() {
+  draft.clearPendingSourceDraft()
+}
 </script>
 
 <template>
@@ -356,18 +360,25 @@ function handlePreserveLocalDraft() {
         </div>
       </div>
 
-      <!-- Main Body: Two-column side-by-side on wide screens (lg:), tabbed on mobile -->
+      <!-- Main Body: Responsive side-by-side on wide screens (lg:), tabbed on mobile -->
       <main class="flex-1 overflow-y-auto p-4 min-w-0">
-        <!-- Wide screens: Side-by-side layout (lg:grid lg:grid-cols-12 gap-6) -->
-        <div class="hidden lg:grid lg:grid-cols-12 gap-6 items-start min-w-0">
-          <!-- Left Column: Source Pipeline Editor (7 cols) -->
-          <div class="lg:col-span-7 space-y-4 min-w-0">
+        <form
+          id="policy-editor-group-form"
+          class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start min-w-0"
+          @submit.prevent="handleSave"
+        >
+          <!-- Left Column: Source Pipeline Editor (7 cols on lg) -->
+          <div
+            class="lg:col-span-7 space-y-4 min-w-0"
+            :class="{ 'hidden lg:block': activeSheetTab !== 'editor' }"
+          >
             <SourcePipelineEditor
               v-model:name="draft.name.value"
               v-model:group-type="draft.groupType.value"
               v-model:position="draft.position.value"
               v-model:empty-fallback-pass="draft.emptyFallbackPass.value"
               v-model:inherit-global-filter="draft.inheritGlobalFilter.value"
+              v-model:pending-pattern="draft.pendingRegexPattern.value"
               :sources="draft.sources.value"
               :has-invalid-filter-sources="draft.hasInvalidFilterSources.value"
               :form-error="draft.formError.value"
@@ -386,8 +397,11 @@ function handlePreserveLocalDraft() {
             />
           </div>
 
-          <!-- Right Column: Live Snapshot Preview Panel (5 cols) -->
-          <div class="lg:col-span-5 sticky top-0 min-w-0">
+          <!-- Right Column: Live Snapshot Preview Panel (5 cols on lg) -->
+          <div
+            class="lg:col-span-5 sticky top-0 min-w-0"
+            :class="{ 'hidden lg:block': activeSheetTab !== 'preview' }"
+          >
             <GroupPreviewPanel
               :loading="preview.previewLoading.value"
               :snapshot="preview.snapshotPreview.value"
@@ -398,48 +412,27 @@ function handlePreserveLocalDraft() {
               @refresh="handleRefreshPreview"
             />
           </div>
-        </div>
-
-        <!-- Narrow / Mobile screens: Single column tabbed view -->
-        <div class="lg:hidden min-w-0">
-          <div v-show="activeSheetTab === 'editor'">
-            <SourcePipelineEditor
-              v-model:name="draft.name.value"
-              v-model:group-type="draft.groupType.value"
-              v-model:position="draft.position.value"
-              v-model:empty-fallback-pass="draft.emptyFallbackPass.value"
-              v-model:inherit-global-filter="draft.inheritGlobalFilter.value"
-              :sources="draft.sources.value"
-              :has-invalid-filter-sources="draft.hasInvalidFilterSources.value"
-              :form-error="draft.formError.value"
-              :all-groups="allGroups"
-              :available-nodes="availableNodes"
-              :group-id="group?.id || ''"
-              :mode="mode"
-              @add-source="draft.addSource"
-              @add-filter="draft.addFilterSource"
-              @remove-source="draft.removeSource"
-              @move-source-up="draft.moveSourceUp"
-              @move-source-down="draft.moveSourceDown"
-              @move-source="draft.moveSource"
-              @toggle-source-op="draft.toggleSourceOp"
-              @filter-invalid="draft.setFilterInvalid"
-            />
-          </div>
-
-          <div v-show="activeSheetTab === 'preview'">
-            <GroupPreviewPanel
-              :loading="preview.previewLoading.value"
-              :snapshot="preview.snapshotPreview.value"
-              :error="preview.previewError.value"
-              :diagnostics="preview.previewDiagnostics.value"
-              :is-draft="true"
-              :sources-count="draft.sources.value.length"
-              @refresh="handleRefreshPreview"
-            />
-          </div>
-        </div>
+        </form>
       </main>
+
+      <!-- Pending source draft banner -->
+      <div
+        v-if="draft.hasPendingSourceDraft.value"
+        role="status"
+        class="px-4 py-2 border-t border-base-300 bg-base-200 text-xs space-y-1 shrink-0"
+      >
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <span>来源草稿尚未应用，不参与预览或保存。请先添加 / 更新来源。</span>
+          <button
+            type="button"
+            class="btn btn-ghost btn-xs"
+            @click="handleDiscardSourceDraft"
+          >
+            放弃来源草稿
+          </button>
+        </div>
+        <p v-if="draft.formError.value" class="text-error">{{ draft.formError.value }}</p>
+      </div>
 
       <!-- Sheet Footer: Cancel & Atomic Save -->
       <footer class="p-4 border-t border-base-300 flex items-center justify-between gap-3 shrink-0 bg-base-100">

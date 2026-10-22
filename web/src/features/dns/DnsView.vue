@@ -292,6 +292,7 @@ onMounted(() => {
                   <textarea
                     class="textarea textarea-sm min-h-24 font-mono text-xs w-full bg-base-100 border border-base-300 rounded-lg"
                     :aria-label="key"
+                    :data-testid="`dns-list-${key}`"
                     :value="getListText(key)"
                     :placeholder="uiText('每行一个条目', 'One entry per line')"
                     @input="e => setListText(key, (e.target as HTMLTextAreaElement).value)"
@@ -326,6 +327,7 @@ onMounted(() => {
                     class="textarea textarea-sm min-h-28 font-mono text-xs w-full bg-base-100 border border-base-300 rounded-lg"
                     :class="{ 'textarea-error border-error': fieldErrors[key] }"
                     :aria-label="key"
+                    :data-testid="`dns-json-${key}`"
                     :value="getJsonText(key)"
                     @input="e => setJsonText(key, (e.target as HTMLTextAreaElement).value)"
                     @change="e => setJsonText(key, (e.target as HTMLTextAreaElement).value)"
@@ -358,6 +360,7 @@ onMounted(() => {
               class="textarea min-h-96 font-mono text-xs w-full bg-base-100 border border-base-300 rounded-lg"
               spellcheck="false"
               @input="e => onRawInput((e.target as HTMLTextAreaElement).value)"
+              @change="e => onRawInput((e.target as HTMLTextAreaElement).value)"
             />
           </div>
 

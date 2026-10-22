@@ -27,8 +27,8 @@ import { useContentInset } from './composables/useContentInset'
 import { useBodyScrollLock } from './composables/useBodyScrollLock'
 import {
   getRouteTab,
-  setRouteTab,
   isMobileMoreTab,
+  isLegacyHash,
   type NavTab,
 } from './navigation'
 import { currentLocale, toggleLocale, t } from './locales'
@@ -271,12 +271,16 @@ function handleNavigation(tabId: NavTab, path: string) {
   return router.push(path).catch(() => {})
 }
 
-let unhookAfterEach: (() => void) | null = null
-
 const handleHashChange = () => {
-  const targetTab = getRouteTab()
-  if (targetTab && router?.currentRoute?.value?.name !== targetTab) {
-    router.replace({ name: targetTab }).catch(() => {})
+  if (typeof window === 'undefined') return
+  const rawHash = window.location.hash || ''
+  // Only normalize non-canonical legacy hashes (e.g. #nodes, #subscriptions without leading slash).
+  // Canonical hashes (#/nodes, #/settings) and empty hashes are governed exclusively by VueRouter.
+  if (isLegacyHash(rawHash)) {
+    const targetTab = getRouteTab(rawHash)
+    if (targetTab && router?.currentRoute?.value?.name !== targetTab) {
+      router.replace({ name: targetTab }).catch(() => {})
+    }
   }
 }
 
@@ -287,15 +291,13 @@ const handleAuthSuccess = () => {
 }
 
 onMounted(() => {
-  unhookAfterEach = router.afterEach(() => {
-    // Router authority state synchronization
-  })
-
   if (typeof window !== 'undefined') {
     window.addEventListener('click', handleDocumentClick)
     window.addEventListener('keydown', handleGlobalKeydown)
     window.addEventListener('hashchange', handleHashChange)
     window.addEventListener('csp:auth-success', handleAuthSuccess)
+    // If mounted with a legacy non-canonical hash (e.g. #nodes), normalize it once
+    handleHashChange()
   }
   switchTheme(getStoredTheme())
   checkHealth()
@@ -303,10 +305,6 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  if (unhookAfterEach) {
-    unhookAfterEach()
-    unhookAfterEach = null
-  }
   if (typeof window !== 'undefined') {
     window.removeEventListener('click', handleDocumentClick)
     window.removeEventListener('keydown', handleGlobalKeydown)

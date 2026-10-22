@@ -33,6 +33,16 @@ export function isMobileMoreTab(tab: string | null | undefined): tab is MobileMo
   return tab !== null && tab !== undefined && (MOBILE_MORE_TABS as readonly string[]).includes(tab)
 }
 
+/**
+ * Detects whether a hash is a non-canonical legacy hash (e.g. `#nodes`, `#subscriptions`).
+ * Canonical hashes start with `#/` (e.g. `#/nodes`, `#/settings`, `#/`) or are empty.
+ */
+export function isLegacyHash(hash: string | null | undefined): boolean {
+  if (!hash) return false
+  const trimmed = hash.trim()
+  return trimmed.startsWith('#') && !trimmed.startsWith('#/') && trimmed.length > 1
+}
+
 export function getRouteTab(
   hashProvider?: string,
   storageProvider?: Pick<Storage, 'getItem'>
@@ -69,8 +79,9 @@ export function setRouteTab(
   storageProvider?: Pick<Storage, 'setItem'>
 ): void {
   if (typeof window !== 'undefined') {
-    if (window.location?.hash !== `#${tab}`) {
-      window.location.hash = `#${tab}`
+    const canonicalHash = `#/${tab}`
+    if (window.location?.hash !== canonicalHash && window.location?.hash !== `#${tab}`) {
+      window.location.hash = canonicalHash
     }
   }
   try {

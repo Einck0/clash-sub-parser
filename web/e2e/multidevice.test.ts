@@ -6,7 +6,7 @@ import { router } from '../src/router'
 import { i18n } from '../src/locales'
 import { api } from '../src/api/client'
 import { THEME_STORAGE_KEY, DEFAULT_THEME, type ThemeName } from '../src/theme'
-import { ROUTE_STORAGE_KEY, VALID_TABS, getRouteTab, type NavTab } from '../src/navigation'
+import { ROUTE_STORAGE_KEY, VALID_TABS, getRouteTab, isLegacyHash, type NavTab } from '../src/navigation'
 import { setLocale } from '../src/locales'
 import type { NodeRecord } from '../src/features/nodes/nodeView'
 
@@ -193,6 +193,8 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
     const existing = root.querySelector(viewSelector)
     if (existing && (!targetTab || router.currentRoute.value.name === targetTab)) return existing
 
+    let recordedFailure: any = null
+
     // Listen to real router navigation events if a target route transition is expected or underway
     if (targetTab && router.currentRoute.value.name !== targetTab) {
       await new Promise<void>((resolve, reject) => {
@@ -202,6 +204,7 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
             clearTimeout(timer)
             unhook()
             if (failure) {
+              recordedFailure = failure
               reject(failure)
             } else {
               resolve()
@@ -212,32 +215,50 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
           unhook()
           resolve()
         }, 1500)
-      }).catch(() => {})
+      }).catch((err) => {
+        recordedFailure = err
+      })
     }
 
     await nextTick()
     const afterTick1 = root.querySelector(viewSelector)
-    if (afterTick1) return afterTick1
+    if (afterTick1 && (!targetTab || router.currentRoute.value.name === targetTab)) return afterTick1
 
     await nextTick()
     const afterTick2 = root.querySelector(viewSelector)
-    if (afterTick2) return afterTick2
+    if (afterTick2 && (!targetTab || router.currentRoute.value.name === targetTab)) return afterTick2
 
-    return new Promise((resolve) => {
+    const found = await new Promise<Element | null>((resolve) => {
       const timer = setTimeout(() => {
         observer.disconnect()
         resolve(root.querySelector(viewSelector))
       }, 1500)
       const observer = new MutationObserver(() => {
-        const found = root.querySelector(viewSelector)
-        if (found) {
+        const el = root.querySelector(viewSelector)
+        if (el && (!targetTab || router.currentRoute.value.name === targetTab)) {
           clearTimeout(timer)
           observer.disconnect()
-          resolve(found)
+          resolve(el)
         }
       })
       observer.observe(root, { childList: true, subtree: true, characterData: true })
     })
+
+    if (!found) {
+      const diagnostic = {
+        currentRoute: router.currentRoute.value.fullPath,
+        currentRouteName: String(router.currentRoute.value.name),
+        hash: typeof window !== 'undefined' ? window.location.hash : '',
+        targetTab: targetTab || null,
+        selector: viewSelector,
+        failureType: recordedFailure ? recordedFailure.type || recordedFailure.name || 'UNKNOWN_FAILURE' : 'TIMEOUT_WITHOUT_NAVIGATION_EVENT',
+        failureMessage: recordedFailure ? recordedFailure.message || String(recordedFailure) : 'Element not found within timeout window',
+      }
+      console.warn('[ROUTER_TRANSITION_DIAGNOSTIC]', JSON.stringify(diagnostic))
+      throw new Error(`[waitForView Diagnostic Failure] ${JSON.stringify(diagnostic)}`)
+    }
+
+    return found
   }
 
   async function mountApp(): Promise<HTMLDivElement> {
@@ -557,6 +578,49 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       // Should safely render Dashboard without crashing or blank screen
       expect(root.textContent).toContain('Clash Sub Parser Zashboard Foundation')
       expect(uncaughtErrors).toHaveLength(0)
+    })
+
+    it('preserves in-flight route push when stale hashchange occurs without cancelling navigation', async () => {
+      setViewport(1440, 900)
+      setupApiMocks()
+      const root = await mountApp()
+
+      expect(router.currentRoute.value.name).toBe('dashboard')
+
+      let resolveDeferredNav!: () => void
+      const deferredGate = new Promise<void>((resolve) => {
+        resolveDeferredNav = resolve
+      })
+
+      // Gate /policy navigation with a controlled deferred guard
+      const unhookGuard = router.beforeEach(async (to) => {
+        if (to.name === 'policy') {
+          await deferredGate
+        }
+      })
+
+      try {
+        // Trigger in-flight route push to /policy
+        const pushPromise = router.push('/policy')
+
+        // While navigation is in flight, dispatch a stale/delayed hashchange event (e.g. hash = '' from beforeEach)
+        window.location.hash = ''
+        window.dispatchEvent(new HashChangeEvent('hashchange'))
+
+        // Release the deferred navigation gate
+        resolveDeferredNav()
+
+        // Wait for the push to conclude; it must NOT be cancelled
+        const failure = await pushPromise
+        expect(failure).toBeUndefined()
+
+        // Router must be on policy and view must render Policy Groups
+        const policyView = await waitForView('#policy-title', root, 'policy')
+        expect(policyView).not.toBeNull()
+        expect(router.currentRoute.value.name).toBe('policy')
+      } finally {
+        unhookGuard()
+      }
     })
   })
 

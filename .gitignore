@@ -94,3 +94,25 @@ critic-evidence/
 /csp
 .vite/
 node_modules/
+
+# Internal containment (agent experience, governance & maintenance data)
+.exp.md
+AGENTS.md
+internal/repository/sqlite/data/maintenance/*.json
+
+# Internal run records, execution status & evidence receipts
+specs/002-policy/cleanup-completion-1574174.md
+specs/002-policy/continuation-1346392.md
+specs/002-policy/continuation-20261020.md
+specs/002-policy/continuation-990606.md
+specs/002-policy/dns-policy-cleanup-1574174.md
+specs/002-policy/module-execution-808995.md
+specs/002-policy/release-20261020.md
+specs/002-policy/release-20261021.md
+specs/002-policy/filter-dns-execution-status.md
+specs/002-policy/redesign-execution-status.md
+docs/controlled_deployment_runbook.md
+docs/production_live_acceptance_and_recovery_plan.md
+docs/evidence-final-validation.md
+docs/specification/evidence/final-reviewer-receipt.json
+docs/specification/evidence/test-execution-summary-receipt.json

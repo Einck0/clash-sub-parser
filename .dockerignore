@@ -70,3 +70,9 @@ bin/*
 !bin/csp-linux-amd64
 !bin/csp-linux-amd64.sha256
 tmp
+
+# Internal containment (agent experience, governance & internal specs)
+.exp.md
+AGENTS.md
+specs
+specs/

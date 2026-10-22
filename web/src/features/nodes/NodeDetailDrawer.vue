@@ -9,9 +9,9 @@ import DrawerCard from '../../ui/DrawerCard.vue'
 import StatusBadge from '../../ui/StatusBadge.vue'
 import NodeSourceHistoryPanel from './NodeSourceHistoryPanel.vue'
 import type { NodeSourceHistoryData } from './sourceHistoryTypes'
+import { formatRelativeTime } from '../probes/probeTypes'
 import {
   formatNodeLatency,
-  formatRelativeTime,
   getNodePlatformBadges,
   getNodeSpeedBadge,
   nodeCapabilityLabel,

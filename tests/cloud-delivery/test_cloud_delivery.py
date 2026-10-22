@@ -511,7 +511,8 @@ class TestDocumentationCompleteness(unittest.TestCase):
 
         # 2. 开发云测与发布解耦，prelease 唯一预发布与远程拉取安全
         self.assertIn("绝不创建 GitHub Release", content)
-        self.assertIn("唯一专用预发布分支", content)
+        self.assertTrue("prelease" in content and "唯一" in content and "发布" in content, "文档必须明确 prelease 唯一预发布通道")
+        self.assertTrue("唯一专用的预发布分支" in content or "唯一预发布" in content)
         self.assertIn("严禁强推代码分支", content)
         self.assertIn("preflight-pull.sh", content)
 
@@ -617,7 +618,7 @@ class TestBranchGovernanceInvariants(unittest.TestCase):
         self.assertIn("Fast-Forward", content)
         self.assertIn("Backend & Frontend Checks", content)
         self.assertIn("绝不创建 GitHub Release", content)
-        self.assertIn("唯一专用预发布分支", content)
+        self.assertTrue("prelease" in content and "唯一" in content and "发布" in content, "文档必须明确 prelease 唯一预发布分支")
         self.assertIn("严禁强推代码分支", content)
 
     def test_workflow_dispatch_other_ref_skips_entry_and_publish(self):

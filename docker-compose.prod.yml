@@ -1,6 +1,7 @@
 services:
   app:
     image: ${CSP_IMAGE:?required}
+    pull_policy: always
     container_name: ${CSP_CONTAINER_NAME:-clash-sub-parser}
     environment:
       CSP_ADDR: ${CSP_ADDR:-0.0.0.0:18080}

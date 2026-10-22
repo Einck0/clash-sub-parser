@@ -2,11 +2,9 @@
 
 ## 1. 范围、当前权威与授权边界
 
-当前需求入口是 [002-policy 当前交付修订](../../specs/002-policy/spec.md)、[实施计划](../../specs/002-policy/plan.md) 和 [任务](../../specs/002-policy/tasks.md)。`openspec/` 仅可作为历史材料，不是当前活动规格；不要导入远端旧规格覆盖本地 Spec Kit。
+本手册规范 CSP 预构建容器镜像的云端发布、隔离验证与生产受控部署流程。交付遵循规范收敛原则，明确发布通道、镜像策略与文档安全边界。当前用户明确允许公开镜像，撤销私有 visibility/API/匿名拒绝门禁，不撤销独立审查、编译质量、不可变制品验证与敏感数据保护。本轮只收敛发布源与部署配置规范，不修改 ignored 的 owner 生产配置 `docker-compose.yml`，不触碰生产数据库、不 refresh 真实订阅、不启停生产容器；目前本轮没有生产部署授权。
 
-完整交付已取得有条件授权，包括通过全部门禁后的目标生产替换与重启。最新用户“没必要私有啊”明确允许公开镜像，撤销私有 visibility/API/匿名拒绝门禁，不撤销独立审查、编译质量、不可变制品验证与敏感数据保护。本轮只收敛发布源与本地证据，不修改 ignored 的 owner 生产配置 `docker-compose.yml`，不触碰生产数据库、不 refresh 真实订阅、不启停生产容器。
-
-已确认远端 `origin/dev` 有云交付与工具链历史，本地有尚未提交的业务改动。导入正规交付文件不表示已合并分支。后续必须先完成独立审查、按明确授权提交源码，再在独立 integration tree 正常合并并保留 `origin/dev` 祖先；不在 dirty 工作树 merge/rebase，不 force push。具体提交、双亲与归档冲突处理记录在本次交付的 `integration-plan.json`，不把旧 SHA 写成未来发布版本。
+已确认远端 `origin/dev` 有云交付与工具链历史，本地有尚未提交的业务改动。导入正规交付文件不表示已合并分支。后续必须先完成独立审查、按明确授权提交源码，再在独立 integration tree 正常合并并保留 `origin/dev` 祖先；不在 dirty 工作树 merge/rebase，不 force push。具体提交与归档冲突处理记录在受控工件中，不把旧 SHA 写成未来发布版本。
 
 ### 当前验收边界
 
@@ -28,11 +26,16 @@
 6. publish job 下载并验算同一个 binary，再检查 static ELF 与 `--version` 的同 SHA；交给 [Dockerfile.runtime](../../Dockerfile.runtime)。此镜像不包含 Go/Node 编译过程，不重复构建前端或 Go；只 COPY 编译后二进制，不带配置、数据库、维护清单或秘密。
 7. OCI `COMMIT_SHA`/`BUILD_DATE` 表示源码版本和镜像打包时间，二进制 buildTime 为上一步实际编译时间；两者不必相等。镜像绑定 `sha-<完整SHA>` 和 run 标签，交付使用 `@sha256:<digest>`，不使用可变 latest。
 
-`dev` push 自动执行完整 Go/web 检查与编译；只有 `test-and-build` 成功，`publish-runtime` 才下载该 run 的同一个 binary/SHA256 artifact，构建并 push 公开允许的历史包、真实 pull 不可变 digest 并验证 OCI revision。随后仅 `promote-prelease` job 创建 GitHub **prerelease entity** `prelease-<tested-dev-SHA前7位>`，显示名相同、target 为完整 `${{ github.sha }}`；不创建 `prelease`/`prerelease` 分支。附加原 binary、原 SHA256 和 `release-metadata.json`（source_sha、repository、tag、artifact、binary_sha256、image完整@digest、image_digest、run_id/run_attempt/run_url）。不重编译、不自动切换生产。
+### 开发云测与发布分离机制
 
-同 SHA 的 dev workflow 全链串行且不取消在途发布，重跑仍执行 Go/web 检查；若已有完整 prerelease，则先验证精确 tag→commit、target SHA、资产清单、binary/SHA256 和 metadata，复用原 binary/digest/run identity，不重建或覆盖 immutable 资产。随后重新真实 pull/OCI 验证。短 SHA 冲突、孤立 tag、不完整 release、API 权限/服务错误均 fail-closed，保留现场，不能 `--clobber` 或移动 tag。完整性失败不能晋级；首次发布失败产生的残留需人工核查，流水线不自动删除重试。
+依据 GitHub 交付新契约，开发测试与预发布彻底解耦：
 
-分支治理与触发门禁收敛：仅 `dev` 分支的 push 与 PR（指向 `dev`）在云端触发构建与检查；`main`、`task/*`、`release/*`、`cloud-build/*` 及 `v*` tag 均已彻底退出 CI 触发入口。`workflow_dispatch` 即使从其他 ref 手动发起，`test-and-build` 入口 job 也会跳过；只有 `dev` ref 执行检查，并仅在 `publish_release='true'` 时开启镜像发布。`main` 分支的晋级通过严格的正常 Fast-Forward 将已完全通过测试的 `dev` SHA 推进，复用同一 commit 已由 GitHub Actions（App ID 15368）跑出的 `Backend & Frontend Checks` 绿标，不在 `main` 上重复编译，避免检查死锁。移除了 `paths-ignore` 过滤规则（历史上 Tag push 不应用 `paths-ignore`，现 dev CI 全量无过滤运行，确保纯文档改动亦能获得必选检查状态）。删除旧 `ENABLE_CSP_GHCR_PUBLISH` 私有流程开关，不修改远端变量。只有 publish job 具备 `packages: write`，只有实际 prerelease job 具备 `contents: write`；其余/default 为 contents read。正常 Actions `GITHUB_TOKEN` 执行 gh create/download，无本机 token/OWNER_PAT 前提。发布 concurrency 不取消在途 release。`prelease-*` 不触发循环流水线。
+- **`dev` 推送云测**：`dev` 分支的 push 自动触发完整的 Go/Web 检查与编译（`Backend & Frontend Checks`）；通过后 `publish-runtime` 构建并推送不可变镜像 `sha-<fullsha>` 与 `@sha256:<digest>`。此时 `promote-prelease` 发布 job **严格被跳过（skipped）**。`dev` 推送绝不创建 GitHub Release，绝不修改发布 tag，确保日常云端验证不污染公开发布渠道。
+- **`prelease` 分支与唯一预发布**：`prelease` 是唯一专用的预发布分支。在 `dev` 云端验证全绿且经独立审查后，由主脑通过 Fast-Forward 快进推进远端 `prelease` 分支（严禁强推代码分支）。仅当 `prelease` 分支触发并跑通完整门禁后，`promote-prelease` 才会创建或原子更新唯一的滚动 GitHub Release `prelease`（Tag 名固定为 `prelease`，`prerelease=true`，`make_latest=false`）。
+- **发布制品与元数据**：唯一 Release 挂载 `csp-linux-amd64` 二进制、`csp-linux-amd64.sha256` 校验和，以及 `release-metadata.json`（包含 `source_sha`、`run_id`、`binary_sha256`、`image_digest` 等）。固定 tag `prelease` 是明确可移动的渠道指针，而镜像 sha 标签与 digest 保持物理不可变。发布过程严格串行，下载校验资产，失败不假报完成。
+- **历史 Release 收敛**：历史由每 dev 提交自动生成的 17 个旧 `prelease-<7hex>` Release 对象予以收敛清理，但在清理前已在受控本地环境中提取并核对了现生产 `062955f` 与回滚基线 `4b1fbcb` 的离线恢复材料。收敛操作不删除任何 GHCR 镜像 digest，不删除历史 git tag 或 commit。
+
+分支治理与触发门禁收敛：仅 `dev` 与 `prelease` 分支在云端触发构建与检查；`main`、`task/*`、`release/*`、`cloud-build/*` 及 `v*` tag 均已彻底退出 CI 触发入口。`workflow_dispatch` 即使从其他 ref 手动发起，`test-and-build` 入口 job 也会跳过；只有目标分支执行检查。`main` 分支的晋级通过严格的正常 Fast-Forward 将已完全通过测试的 commit 推进，复用同一 commit 已由 GitHub Actions（App ID 15368）跑出的 `Backend & Frontend Checks` 绿标，不在 `main` 上重复编译，避免检查死锁。移除了 `paths-ignore` 过滤规则（历史上 Tag push 不应用 `paths-ignore`，现 dev CI 全量无过滤运行，确保纯文档改动亦能获得必选检查状态）。删除旧 `ENABLE_CSP_GHCR_PUBLISH` 私有流程开关，不修改远端变量。只有 publish job 具备 `packages: write`，只有实际 prerelease job 具备 `contents: write`；其余/default 为 contents read。正常 Actions `GITHUB_TOKEN` 执行 gh release 操作，无本机 token/OWNER_PAT 前提。
 
 本地开发 [Dockerfile](../../Dockerfile) 是独立多阶段构建入口，使用官方 npm HTTPS lockfile、构建 tags 和同样的 platform.Commit/platform.BuildDate 链接参数（以 COMMIT_SHA/BUILD_DATE 构建参数传入），不经 main 别名或 init 动态覆盖；它不是生产现场编译入口。
 
@@ -45,7 +48,7 @@
 | **Gitea** (Go + Vue) | 多阶段 `Dockerfile` (Node 构建前端 -> Go 构建二进制 -> Alpine/Rootless 运行时，固定 UID/GID)。 | GitHub Actions 编译二进制发布 Release，构建多架构容器推送至 GHCR / Docker Hub。 | 公开 `ghcr.io/go-gitea/gitea`，标签 `:latest`、`:version`、`:dev`。无 `-private` 命名。 | 服务器通过 Docker Compose 拉取预构建镜像。生产宿主绝不执行本地编译。 |
 | **Mihomo / Sing-box** (Go 核心 + Web 控制台) | 独立容器用多阶段构建；CI 构建发布二进制后单阶段打包镜像以降低 Runner 负载。 | GitHub Actions 响应 `dev`/`main` 推送，跑全量测试矩阵，发布 prerelease 与标签。 | 公开 `ghcr.io/metacubex/mihomo`、`ghcr.io/sagernet/sing-box`。 | 终端与服务器拉取制品或镜像，零临时远端分支蔓延。 |
 | **Caddy** (Go + 插件) | 多阶段 `builder` + 极简 `alpine` 运行时。自定义构建在本地或官方镜像中使用 `xcaddy`。 | CI 自动化构建 Release，发布带 SHA256 校验和的二进制并推送官方镜像。 | 公开 `caddy:latest`、`caddy:alpine`。 | 生产拉取预构建镜像或官方二进制。 |
-| **CSP（标准化交付）** | 双 Dockerfile 架构：多阶段 `Dockerfile` 供独立复现；轻量 `Dockerfile.runtime` 供 CI 制品直装。 | 推送 `dev` 触发 CI，测试一次性静态二进制，直装镜像推送到 GHCR，发布 Prerelease。废除废弃工作流 `pages.yml`。 | 标准化公开包 `ghcr.io/einck0/clash-sub-parser`，标签 `:sha-<fullsha>`、`:prelease-<shortsha>`。 | 宿主机严格拉取预构建镜像（零本地编译）。开发者直推 `dev`，绝不在 origin 创建临时分支。 |
+| **CSP（标准化交付）** | 双 Dockerfile 架构：多阶段 `Dockerfile` 供独立复现；轻量 `Dockerfile.runtime` 供 CI 制品直装。 | 推送 `dev` 触发 CI，测试一次性静态二进制，直装镜像推送到 GHCR，发布单一预发布。废除废弃工作流 `pages.yml`。 | 标准化公开包 `ghcr.io/einck0/clash-sub-parser`，标签 `:sha-<fullsha>`、`:prelease`（单一滚动渠道指针）与不可变 `@sha256:<digest>`。 | 宿主机严格拉取预构建镜像（零本地编译）。开发者直推 `dev`，绝不在 origin 创建临时分支。 |
 
 ### 双 Dockerfile 设计原则
 
@@ -60,7 +63,7 @@
 4. **废除冗余工作流**：
    - 彻底删除历史废弃的 `.github/workflows/pages.yml`。CSP 前端控制台直接通过 Go `//go:embed` 嵌入二进制并在端口 18080 提供服务，无需且不再维护独立的静态 GitHub Pages。
 
-### 本地验证
+### 本地轻量验证
 
 ```bash
 # 本机轻量验证（不触发真实 Go 双 build 用例）
@@ -100,14 +103,45 @@ scripts/cloud-delivery/preflight-pull.sh --image "$APPROVED_IMAGE_DIGEST" \
 
 | 文件 | 职责 | 约束 |
 | --- | --- | --- |
-| [docker-compose.dev.yml](../../docker-compose.dev.yml) | 明确 local build | 独立 dev 容器/卷；不用于生产 rollout |
-| [docker-compose.prod.yml](../../docker-compose.prod.yml) | image-only 发布模板 | `CSP_IMAGE` 必填，无 build；保留 loopback 17000/18080 → 18080、`csp-v1-data`、host proxy extra_hosts |
+| [docker-compose.dev.yml](../../docker-compose.dev.yml) | 明确 local build | 独立 dev 容器/卷；供本地源码编译开发使用，不用于生产 rollout |
+| [docker-compose.prod.yml](../../docker-compose.prod.yml) | image-only 发布模板 | `CSP_IMAGE` 必填，无 build，显式 `pull_policy: always`；保留 loopback 17000/18080 → 18080、`csp-v1-data`、host proxy extra_hosts |
+| [docker-compose.example.yml](../../docker-compose.example.yml) | 普通用户部署样例 | 默认引用预构建公开 GHCR 镜像（`:prelease` 渠道或指定 digest），显式 `pull_policy: always`，无 build |
 | [docker-compose.isolated.yml](../../docker-compose.isolated.yml) | 合成隔离预览 | 独立 project/端口/全新卷、run-marker 标签、无 restart，无 build |
 | `docker-compose.yml` | ignored owner 生产配置 | 本轮不修改；模板不自动替换此文件 |
 
-生产 owner 路径为 `/home/service/clash-sub-parser`；历史记录的非 root UID/GID 是 10001:10001、卷目录权限 750。它们不是永远有效的动态证据，正式运维前只读核对，不能据此自动 chown/chmod。生产端口 17000/18080 不供自动测试或预览使用。
+生产部署目录由环境变量 `$PROJECT_DIR`（或项目部署根目录 `./`）指定；历史记录的非 root UID/GID 是 10001:10001、卷目录权限 750。它们不是永远有效的动态证据，正式运维前只读核对，不能据此自动 chown/chmod。生产端口 17000/18080 不供自动测试或预览使用。
 
 隔离 Compose 默认命令包含 `--disable-subscription-scheduler --disable-probe-coordinator`，两个后台协调器均被真正禁用；internal Docker network 阻止外部连通。代理为空不等于禁网，不能只靠清空代理宣称隔离。不要导入真实 source、生产 DB 或默认启用 copy 后的订阅定时任务。
+
+### 部署路径规范
+
+#### 1. 普通用户路径（预构建镜像）
+
+普通用户部署建议直接通过预构建公开镜像运行：
+
+```bash
+cp docker-compose.example.yml docker-compose.yml
+docker compose pull app && docker compose up -d --no-build
+```
+
+- **失败立即终止**：必须使用 `&&` 连接 pull 与 up；若远程镜像拉取失败，流程立即终止，绝不允许分号继续而静默回退至旧版本或未知缓存。
+- **防止现场编译**：带 `--no-build` 保证容器引擎不尝试在部署主机上执行编译构建。
+- **渠道指针与不可变摘要**：默认使用 `:prelease` 滚动预发布通道。生产正式环境强烈建议通过 `.env` 中的 `CSP_IMAGE` 指定精确且不可变的 SHA 摘要（如 `ghcr.io/einck0/clash-sub-parser@sha256:<digest>`）。
+
+#### 2. 受控运维确权部署路径（两阶段门禁）
+
+在生产或受控自动化运维环境中，部署分为明确的两个独立阶段：
+
+```bash
+# 阶段一：前置拉取并严格进行身份与 OCI 审计（核对 RepoDigests 与 commit revision）
+scripts/cloud-delivery/preflight-pull.sh --image "$APPROVED_IMAGE_DIGEST" \
+  --expected-revision "$REVIEWED_SOURCE_SHA"
+
+# 阶段二：使用已确权本地镜像以 --pull never 启动
+CSP_IMAGE="$APPROVED_IMAGE_DIGEST" docker compose -f docker-compose.prod.yml up -d --no-build --pull never
+```
+
+- **`--pull never` 的真实含义**：此处的 `--pull never` 决不代表“从不远程拉取”，而是明确表示**已经在阶段一通过 `preflight-pull.sh` 完成了远程拉取并严格校验了 OCI revision 与 RepoDigests**。因此在阶段二启动时使用 `--pull never` 锁定使用该已确权的不可变本地缓存镜像，彻底杜绝在启动瞬间发生二次拉取网络漂移或意外覆写。
 
 ## 5. 隔离启动、交接与受控清理
 

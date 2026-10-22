@@ -170,25 +170,25 @@ class TestWorkflowLogicAndSchema(unittest.TestCase):
         self.assertNotIn("paths-ignore", on["pull_request"], "PR paths-ignore must be removed to avoid check deadlocks")
         self.assertNotIn("paths-ignore", on["push"], "Push paths-ignore must be removed to avoid check deadlocks")
 
-        # Push branches & tags: ONLY 'dev'
+        # Push branches & tags: ['dev', 'prelease', 'main']
         push_branches = on["push"].get("branches", [])
-        self.assertEqual(push_branches, ["dev"], f"Push branches must strictly be ['dev'], got {push_branches}")
-        for forbidden in ("main", "task/csp-cloud-build-integration", "cloud-build/*", "release/**", "master"):
+        self.assertEqual(set(push_branches), {"dev", "prelease", "main"}, f"Push branches must be ['dev', 'prelease', 'main'], got {push_branches}")
+        for forbidden in ("task/csp-cloud-build-integration", "cloud-build/*", "release/**", "master"):
             self.assertNotIn(forbidden, push_branches, f"Forbidden branch in push trigger: {forbidden}")
 
         # Push tags must be completely retired
         self.assertNotIn("tags", on["push"], "Push tags must be retired (no v* or prelease tags)")
 
-        # Pull request branches: ONLY 'dev'
+        # Pull request branches: ['dev', 'prelease', 'main']
         pr_branches = on["pull_request"].get("branches", [])
-        self.assertEqual(pr_branches, ["dev"], f"Pull request branches must strictly be ['dev'], got {pr_branches}")
-        for forbidden in ("main", "task/csp-cloud-build-integration", "cloud-build/*", "release/**", "master"):
+        self.assertEqual(set(pr_branches), {"dev", "prelease", "main"}, f"Pull request branches must be ['dev', 'prelease', 'main'], got {pr_branches}")
+        for forbidden in ("task/csp-cloud-build-integration", "cloud-build/*", "release/**", "master"):
             self.assertNotIn(forbidden, pr_branches, f"Forbidden branch in pull_request trigger: {forbidden}")
 
-        # Workflow dispatch inputs: dev only with explicit publish opt-in
-        wd_inputs = on["workflow_dispatch"].get("inputs", {})
-        self.assertIn("publish_release", wd_inputs, "workflow_dispatch must have publish_release input")
-        self.assertEqual(wd_inputs["publish_release"].get("default"), "false")
+        # Workflow dispatch inputs: bypass input publish_release must be removed
+        wd = on.get("workflow_dispatch")
+        if isinstance(wd, dict):
+            self.assertNotIn("publish_release", wd.get("inputs", {}), "publish_release bypass input must be removed")
 
     def test_concurrency_and_permissions(self):
         jobs = self.wf.get("jobs", {})
@@ -236,65 +236,45 @@ class TestWorkflowLogicAndSchema(unittest.TestCase):
         # String clause assertions
         self.assertIn("needs.test-and-build.result == 'success'", condition)
         self.assertIn("github.event_name != 'pull_request'", condition)
-        self.assertIn("github.ref == 'refs/heads/dev'", condition)
-        self.assertIn("github.event_name == 'push'", condition)
-        self.assertIn("github.event_name == 'workflow_dispatch'", condition)
-        self.assertIn("inputs.publish_release == 'true'", condition)
         self.assertNotIn("refs/tags/v", condition, "Condition must NOT support retired v* tags")
         self.assertNotIn("refs/heads/release/", condition, "Condition must NOT support retired release/* branches")
-        self.assertNotIn("refs/heads/main", condition, "Condition must NOT allow main branch publishing")
         self.assertNotIn("always()", condition)
 
-        # Exact semantic evaluation (using bounded AST allowlist, no arbitrary eval)
-        def eval_condition(result="success", event="push", ref="refs/heads/dev", pub="false"):
+        def eval_condition(result="success", event="push", ref="refs/heads/dev"):
             expr = condition.replace("&&", " and ").replace("||", " or ")
             expr = expr.replace("needs.test-and-build.result", "result")
             expr = expr.replace("github.event_name", "event")
             expr = expr.replace("github.ref", "ref")
-            expr = expr.replace("inputs.publish_release", "pub")
-            return safe_eval_bool(expr, {"result": result, "event": event, "ref": ref, "pub": pub})
+            return safe_eval_bool(expr, {"result": result, "event": event, "ref": ref})
 
-        # Positive authorized paths
+        # Positive paths: dev push builds runtime image, prelease push/dispatch builds runtime image
         self.assertTrue(eval_condition(result="success", event="push", ref="refs/heads/dev"),
-                        "dev push with successful checks must publish")
-        self.assertTrue(eval_condition(result="success", event="workflow_dispatch", ref="refs/heads/dev", pub="true"),
-                        "dev workflow_dispatch with explicit publish_release=true must publish")
+                        "dev push with successful checks must publish runtime image")
+        self.assertTrue(eval_condition(result="success", event="push", ref="refs/heads/prelease"),
+                        "prelease push with successful checks must publish runtime image")
+        self.assertTrue(eval_condition(result="success", event="workflow_dispatch", ref="refs/heads/prelease"),
+                        "prelease workflow_dispatch must publish runtime image")
 
-        # Negative paths: old branches, main, tags, and manual other refs
+        # Negative paths: main push (checks only!), old branches, PRs, failures
         self.assertFalse(eval_condition(result="success", event="push", ref="refs/heads/main"),
-                         "main push must never trigger publish")
-        self.assertFalse(eval_condition(result="success", event="push", ref="refs/heads/release/20261010-01"),
-                         "retired release branch must not publish")
-        self.assertFalse(eval_condition(result="success", event="push", ref="refs/tags/v1.0.0"),
-                         "v* tag push must not publish")
-        self.assertFalse(eval_condition(result="success", event="push", ref="refs/heads/task/csp-cloud-build-integration"),
-                         "retired task branch must not publish")
-        self.assertFalse(eval_condition(result="success", event="push", ref="refs/heads/cloud-build/csp-complete-20261016-230722"),
-                         "retired cloud-build branch must not publish")
+                         "main push must not publish runtime image (checks only)")
+        self.assertFalse(eval_condition(result="success", event="workflow_dispatch", ref="refs/heads/main"),
+                         "main workflow_dispatch must not publish runtime image")
         self.assertFalse(eval_condition(result="success", event="pull_request", ref="refs/heads/dev"),
                          "pull_request must never trigger publish")
-        self.assertFalse(eval_condition(result="success", event="pull_request", ref="refs/pull/20/merge"),
-                         "pull_request merge ref must never trigger publish")
-        self.assertFalse(eval_condition(result="success", event="workflow_dispatch", ref="refs/heads/dev", pub="false"),
-                         "workflow_dispatch without publish_release must not publish")
-        self.assertFalse(eval_condition(result="success", event="workflow_dispatch", ref="refs/heads/main", pub="true"),
-                         "workflow_dispatch on non-dev ref (main) must not publish")
-        self.assertFalse(eval_condition(result="success", event="workflow_dispatch", ref="refs/heads/task/custom", pub="true"),
-                         "workflow_dispatch on arbitrary task ref must not publish")
+        self.assertFalse(eval_condition(result="success", event="pull_request", ref="refs/heads/prelease"),
+                         "pull_request must never trigger publish")
         self.assertFalse(eval_condition(result="failure", event="push", ref="refs/heads/dev"),
                          "failed test-and-build must never trigger publish")
 
     def test_entry_job_condition_and_dispatch_gating(self):
-        """Entry job (test-and-build) must gate against non-dev workflow_dispatch,
+        """Entry job (test-and-build) must gate against unauthorized workflow_dispatch,
 
-        while preserving PR checks and dev push/dispatch.
+        while preserving PR checks and dev/prelease/main push/dispatch.
         """
         checks_job = self.wf["jobs"]["test-and-build"]
         self.assertIn("if", checks_job, "test-and-build entry job must define an if condition")
         condition = checks_job["if"]
-
-        self.assertIn("github.event_name != 'workflow_dispatch'", condition)
-        self.assertIn("github.ref == 'refs/heads/dev'", condition)
 
         def eval_entry_condition(event="push", ref="refs/heads/dev"):
             expr = condition.replace("&&", " and ").replace("||", " or ")
@@ -302,23 +282,18 @@ class TestWorkflowLogicAndSchema(unittest.TestCase):
             expr = expr.replace("github.ref", "ref")
             return safe_eval_bool(expr, {"event": event, "ref": ref})
 
-        # Positive paths: dev push, dev workflow_dispatch, and pull_request (which uses refs/pull/*/merge)
-        self.assertTrue(eval_entry_condition(event="push", ref="refs/heads/dev"),
-                        "dev push must run entry checks")
-        self.assertTrue(eval_entry_condition(event="workflow_dispatch", ref="refs/heads/dev"),
-                        "dev workflow_dispatch must run entry checks")
-        self.assertTrue(eval_entry_condition(event="pull_request", ref="refs/pull/42/merge"),
-                        "pull_request must run entry checks even with non-dev merge ref")
+        # Positive paths: dev, prelease, main push & dispatch; PR merge refs
+        self.assertTrue(eval_entry_condition(event="push", ref="refs/heads/dev"))
+        self.assertTrue(eval_entry_condition(event="push", ref="refs/heads/prelease"))
+        self.assertTrue(eval_entry_condition(event="push", ref="refs/heads/main"))
+        self.assertTrue(eval_entry_condition(event="workflow_dispatch", ref="refs/heads/dev"))
+        self.assertTrue(eval_entry_condition(event="workflow_dispatch", ref="refs/heads/prelease"))
+        self.assertTrue(eval_entry_condition(event="workflow_dispatch", ref="refs/heads/main"))
+        self.assertTrue(eval_entry_condition(event="pull_request", ref="refs/pull/42/merge"))
 
-        # Negative paths: workflow_dispatch on other refs must skip entry checks
-        self.assertFalse(eval_entry_condition(event="workflow_dispatch", ref="refs/heads/main"),
-                         "workflow_dispatch on main must skip entry checks")
-        self.assertFalse(eval_entry_condition(event="workflow_dispatch", ref="refs/heads/task/custom"),
-                         "workflow_dispatch on task ref must skip entry checks")
-        self.assertFalse(eval_entry_condition(event="workflow_dispatch", ref="refs/heads/release/20261010-01"),
-                         "workflow_dispatch on release ref must skip entry checks")
-        self.assertFalse(eval_entry_condition(event="workflow_dispatch", ref="refs/tags/v1.0.0"),
-                         "workflow_dispatch on tag must skip entry checks")
+        # Negative paths: arbitrary other refs skip entry checks
+        self.assertFalse(eval_entry_condition(event="workflow_dispatch", ref="refs/heads/task/custom"))
+        self.assertFalse(eval_entry_condition(event="workflow_dispatch", ref="refs/tags/v1.0.0"))
 
     def test_safe_eval_ast_rejects_malicious_call_and_attribute(self):
         """Bounded AST evaluator must reject function calls and attribute access without execution."""
@@ -361,20 +336,36 @@ class TestWorkflowLogicAndSchema(unittest.TestCase):
         for retired in ("npm", "pip", "docker", "gomod"):
             self.assertNotIn(retired, ecosystems, f"Retired ecosystem {retired} must not be present")
 
-    def test_dev_promotion_is_job_scoped_and_uses_same_artifact(self):
+    def test_prelease_promotion_job_condition_and_security(self):
         jobs = self.wf['jobs']
         self.assertEqual(self.wf['permissions'], {'contents': 'read'})
         self.assertEqual(jobs['publish-runtime']['permissions'], {'contents': 'read', 'packages': 'write'})
         promote = jobs['promote-prelease']
         self.assertEqual(promote['permissions'], {'contents': 'write'})
         self.assertCountEqual(promote['needs'], ['test-and-build', 'publish-runtime'])
-        for clause in ("github.event_name == 'push'", "github.ref == 'refs/heads/dev'",
-                       "needs.test-and-build.result == 'success'", "needs.publish-runtime.result == 'success'"):
-            self.assertIn(clause, promote['if'])
-        self.assertNotIn('always()', promote['if'])
+        condition = promote['if']
+        self.assertNotIn('always()', condition)
         self.assertFalse(promote['concurrency']['cancel-in-progress'])
-        self.assertIn('github.sha', self.wf['concurrency']['group'])
-        self.assertFalse(self.wf['concurrency']['cancel-in-progress'])
+
+        def eval_promote(event="push", ref="refs/heads/prelease", tb_res="success", pub_res="success"):
+            expr = condition.replace("&&", " and ").replace("||", " or ")
+            expr = expr.replace("needs.test-and-build.result", "tb_res")
+            expr = expr.replace("needs.publish-runtime.result", "pub_res")
+            expr = expr.replace("github.event_name", "event")
+            expr = expr.replace("github.ref", "ref")
+            return safe_eval_bool(expr, {"tb_res": tb_res, "pub_res": pub_res, "event": event, "ref": ref})
+
+        # Positive paths: prelease push or workflow_dispatch when upstream succeeded
+        self.assertTrue(eval_promote(event="push", ref="refs/heads/prelease"))
+        self.assertTrue(eval_promote(event="workflow_dispatch", ref="refs/heads/prelease"))
+
+        # Negative paths: dev push must NEVER promote, main push must NEVER promote, PR must never promote
+        self.assertFalse(eval_promote(event="push", ref="refs/heads/dev"), "dev push must NEVER promote a release!")
+        self.assertFalse(eval_promote(event="push", ref="refs/heads/main"), "main push must NEVER promote a release!")
+        self.assertFalse(eval_promote(event="pull_request", ref="refs/heads/prelease"))
+        self.assertFalse(eval_promote(event="push", ref="refs/heads/prelease", tb_res="failure"))
+        self.assertFalse(eval_promote(event="push", ref="refs/heads/prelease", pub_res="failure"))
+
         for job in jobs.values():
             for step in job['steps']:
                 self.assertFalse(step.get('continue-on-error', False))
@@ -384,20 +375,17 @@ class TestWorkflowLogicAndSchema(unittest.TestCase):
         self.assertEqual(downloads[0]['with'], {'name': 'csp-linux-amd64', 'path': 'bin'})
         promote_runs = '\n'.join(step.get('run', '') for step in promote['steps'])
         self.assertIn('promote_prelease.py publish', promote_runs)
-        for forbidden in ('go build', 'npm ', '--clobber', 'git push', 'docker compose'):
+        for forbidden in ('go build', 'npm ', 'git push', 'docker compose'):
             self.assertNotIn(forbidden, promote_runs)
         publish = promote['steps'][-1]
         self.assertEqual(publish['env']['IMAGE_DIGEST'], '${{ needs.publish-runtime.outputs.image_digest }}')
         self.assertEqual(publish['env']['GH_TOKEN'], '${{ github.token }}')
+
+        # Verify reuse step is completely removed from CI
         checks = jobs['test-and-build']['steps']
+        self.assertFalse(any(step.get('id') == 'reuse' for step in checks), "reuse step must be completely removed")
         build = next(step for step in checks if step.get('name') == 'Build pure-static Go binary')
-        self.assertEqual(build['if'], "steps.reuse.outputs.reused != 'true'")
-        metadata_test = next(step for step in checks if step.get('name') == 'Run real build-entry metadata regression (cloud only)')
-        self.assertIn("-p 'test_build_metadata.py'", metadata_test['run'])
-        reuse = next(step for step in checks if step.get('id') == 'reuse')
-        self.assertEqual(reuse['if'], "github.event_name == 'push' && github.ref == 'refs/heads/dev'")
-        image_build = next(step for step in jobs['publish-runtime']['steps'] if step.get('id') == 'build-push')
-        self.assertEqual(image_build['if'], "needs.test-and-build.outputs.reused != 'true'")
+        self.assertNotIn('if', build, "Go build must not be conditioned on reuse")
 
     def test_checks_job_steps(self):
         steps = self.wf["jobs"]["test-and-build"].get("steps", [])
@@ -453,13 +441,13 @@ class TestWorkflowLogicAndSchema(unittest.TestCase):
         self.assertEqual(build['with']['file'], './Dockerfile.runtime')
 
 
-class TestImmutableDevPrerelease(unittest.TestCase):
+class TestPreleaseChannelPromotion(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.directory = Path(self.temporary.name)
         self.revision = '0123456789abcdef0123456789abcdef01234567'
-        self.tag = 'prelease-0123456'
+        self.tag = 'prelease'
         self.repository = 'einck0/clash-sub-parser'
         self.image_digest = 'sha256:' + 'a' * 64
         self.payload = b'synthetic binary, never executed'
@@ -470,29 +458,53 @@ class TestImmutableDevPrerelease(unittest.TestCase):
             'schema': 1, 'repository': self.repository, 'source_sha': self.revision, 'tag': self.tag,
             'artifact': promotion.BINARY, 'binary_sha256': self.checksum,
             'image': f'{promotion.IMAGE}@{self.image_digest}', 'image_digest': self.image_digest,
-            'run_id': '1234', 'run_attempt': '1',
-            'run_url': f'https://github.com/{self.repository}/actions/runs/1234',
+            'run_id': '5678', 'run_attempt': '2',
+            'run_url': f'https://github.com/{self.repository}/actions/runs/5678',
         }
         self.release = {'tag_name': self.tag, 'name': self.tag, 'target_commitish': self.revision,
                         'prerelease': True, 'draft': False,
                         'assets': [{'name': name} for name in promotion.ASSETS]}
         self.ref = {'object': {'type': 'commit', 'sha': self.revision}}
-        self.environment = patch.dict(os.environ, GITHUB_REPOSITORY=self.repository, GITHUB_SHA=self.revision,
-                                      GITHUB_RUN_ID='5678', GITHUB_RUN_ATTEMPT='2',
-                                      IMAGE_DIGEST=self.image_digest, GITHUB_OUTPUT=str(self.directory / 'output'))
+        self.environment = patch.dict(os.environ,
+                                      GITHUB_REPOSITORY=self.repository,
+                                      GITHUB_SHA=self.revision,
+                                      GITHUB_REF='refs/heads/prelease',
+                                      GITHUB_EVENT_NAME='push',
+                                      GITHUB_RUN_ID='5678',
+                                      GITHUB_RUN_ATTEMPT='2',
+                                      IMAGE_DIGEST=self.image_digest)
         self.environment.start()
         self.addCleanup(self.environment.stop)
-        self.created = False
-        self.absent = False
-        self.tag_only = False
+        self.created_release = False
+        self.edited_release = False
+        self.uploaded_assets = False
+        self.absent_release = False
+        self.absent_ref = False
+        self.api_calls = []
 
     def fake_gh(self, *args, **kwargs):
+        self.api_calls.append(args)
         if args[0] == 'api':
-            if '/releases/tags/' in args[1]:
-                return None if self.absent and not self.created else json.dumps(self.release)
-            return None if self.absent and not self.created and not self.tag_only else json.dumps(self.ref)
+            endpoint = args[1]
+            if endpoint.startswith('-X'):
+                return ''
+            if '/releases/tags/' in endpoint:
+                return None if self.absent_release else json.dumps(self.release)
+            if '/git/ref/tags/' in endpoint:
+                return None if self.absent_ref else json.dumps(self.ref)
+            if '/git/refs' in endpoint:
+                return ''
+            return '{}'
         if args[:2] == ('release', 'create'):
-            self.created = True
+            self.created_release = True
+            self.absent_release = False
+            self.metadata = json.loads((self.directory / promotion.METADATA).read_text())
+            return ''
+        if args[:2] == ('release', 'edit'):
+            self.edited_release = True
+            return ''
+        if args[:2] == ('release', 'upload'):
+            self.uploaded_assets = True
             self.metadata = json.loads((self.directory / promotion.METADATA).read_text())
             return ''
         if args[:2] == ('release', 'download'):
@@ -501,75 +513,88 @@ class TestImmutableDevPrerelease(unittest.TestCase):
             (target / promotion.CHECKSUM).write_text(f'{self.checksum}  {promotion.BINARY}\n')
             (target / promotion.METADATA).write_text(json.dumps(self.metadata))
             return ''
-        self.fail('Unexpected GitHub command')
+        self.fail('Unexpected GitHub command: ' + repr(args))
 
-    def test_new_release_targets_exact_sha_and_attaches_same_binary_checksum_metadata(self):
-        self.absent = True
+    def test_guard_refuses_dev_branch_or_pull_request(self):
+        for bad_env, expected_err in [
+            ({'GITHUB_REF': 'refs/heads/dev'}, 'Refusal.*refs/heads/prelease'),
+            ({'GITHUB_REF': 'refs/heads/main'}, 'Refusal.*refs/heads/prelease'),
+            ({'GITHUB_EVENT_NAME': 'pull_request'}, 'Refusal.*pull_request'),
+            ({'GITHUB_EVENT_NAME': 'release'}, 'Refusal.*unexpected event'),
+        ]:
+            with self.subTest(bad_env=bad_env):
+                with patch.dict(os.environ, bad_env):
+                    with self.assertRaisesRegex(ValueError, expected_err):
+                        promotion.publish(self.directory)
+
+    def test_publish_creates_release_and_channel_tag_when_absent(self):
+        self.absent_release = True
+        self.absent_ref = True
         with patch.object(promotion, 'gh', side_effect=self.fake_gh) as api:
             promotion.publish(self.directory)
-        create = next(call.args for call in api.call_args_list if call.args[:2] == ('release', 'create'))
+        self.assertTrue(self.created_release)
+        tag_calls = [call for call in self.api_calls if call[:2] == ('api', f'repos/{self.repository}/git/refs')]
+        self.assertEqual(len(tag_calls), 1)
+        self.assertIn(f'ref=refs/tags/{self.tag}', tag_calls[0])
+        self.assertIn(f'sha={self.revision}', tag_calls[0])
+        create = next(call for call in self.api_calls if call[:2] == ('release', 'create'))
         self.assertEqual(create[2], self.tag)
         self.assertEqual(create[create.index('--target') + 1], self.revision)
-        self.assertEqual(create[create.index('--title') + 1], self.tag)
         self.assertIn('--prerelease', create)
-        self.assertNotIn('--clobber', create)
+        self.assertIn('--latest=false', create)
         self.assertEqual(create[-3:], tuple(str(self.directory / name) for name in promotion.ASSETS))
-        self.assertEqual((self.directory / promotion.BINARY).read_bytes(), self.payload)
-        self.assertEqual(self.metadata['binary_sha256'], self.checksum)
-        self.assertEqual(self.metadata['image'], f'{promotion.IMAGE}@{self.image_digest}')
-        self.assertEqual(self.metadata['source_sha'], self.revision)
-        self.assertEqual((self.metadata['run_id'], self.metadata['run_attempt']), ('5678', '2'))
 
-    def test_same_sha_rerun_reuses_assets_digest_and_original_run_without_edit(self):
-        with patch.object(promotion, 'gh', side_effect=self.fake_gh) as api:
-            promotion.reuse(self.directory)
-            promotion.publish(self.directory)
-        self.assertEqual((self.directory / 'output').read_text(), f'reused=true\nimage_digest={self.image_digest}\n')
-        self.assertEqual(json.loads((self.directory / promotion.METADATA).read_text())['run_id'], '1234')
-        self.assertTrue(all(call.args[0] == 'api' or call.args[:2] == ('release', 'download')
-                            for call in api.call_args_list))
-
-    def test_first_run_has_no_reuse_and_orphan_tag_blocks_instead_of_overwriting(self):
-        self.absent = True
-        with patch.object(promotion, 'gh', side_effect=self.fake_gh) as api:
-            promotion.reuse(self.directory)
-            self.assertEqual((self.directory / 'output').read_text(), 'reused=false\n')
-            self.tag_only = True
-            with self.assertRaisesRegex(ValueError, 'refusing overwrite'):
-                promotion.publish(self.directory)
-        self.assertFalse(any(call.args[:2] == ('release', 'create') for call in api.call_args_list))
-
-    def test_wrong_sha_collision_or_incomplete_release_never_reused(self):
-        mutations = [('release', 'target_commitish', 'f' * 40), ('release', 'prerelease', False),
-                     ('release', 'assets', []), ('metadata', 'source_sha', 'f' * 40),
-                     ('metadata', 'binary_sha256', '0' * 64), ('metadata', 'image_digest', '$(touch /tmp/no)\n'),
-                     ('metadata', 'image', 'ghcr.io/foreign/package@' + self.image_digest)]
-        for target, key, bad in mutations:
-            with self.subTest(target=target, key=key):
-                mapping = getattr(self, target)
-                original = mapping[key]
-                mapping[key] = bad
-                try:
-                    with patch.object(promotion, 'gh', side_effect=self.fake_gh) as api:
-                        with self.assertRaises(ValueError):
-                            promotion.reuse(self.directory)
-                        self.assertFalse(any(call.args[:2] == ('release', 'create') for call in api.call_args_list))
-                finally:
-                    mapping[key] = original
+    def test_publish_updates_existing_release_with_force_tag_and_clobber(self):
+        self.release['target_commitish'] = 'f' * 40
         self.ref['object']['sha'] = 'f' * 40
-        with patch.object(promotion, 'gh', side_effect=self.fake_gh):
-            with self.assertRaisesRegex(ValueError, 'exact source SHA'):
-                promotion.reuse(self.directory)
-
-    def test_different_image_or_binary_cannot_overwrite_same_tag(self):
         with patch.object(promotion, 'gh', side_effect=self.fake_gh) as api:
-            with patch.dict(os.environ, IMAGE_DIGEST='sha256:' + 'b' * 64):
-                with self.assertRaisesRegex(ValueError, 'refusing overwrite'):
-                    promotion.publish(self.directory)
-            (self.directory / promotion.BINARY).write_bytes(b'changed')
-            with self.assertRaisesRegex(ValueError, 'checksum mismatch'):
+            promotion.publish(self.directory)
+        self.assertTrue(self.edited_release)
+        self.assertTrue(self.uploaded_assets)
+        patch_calls = [call for call in self.api_calls if len(call) >= 3 and call[1] == '-X' and call[2] == 'PATCH']
+        self.assertEqual(len(patch_calls), 1)
+        self.assertIn(f'repos/{self.repository}/git/refs/tags/{self.tag}', patch_calls[0])
+        self.assertIn('-F', patch_calls[0])
+        self.assertIn('force=true', patch_calls[0])
+        upload = next(call for call in self.api_calls if call[:2] == ('release', 'upload'))
+        self.assertIn('--clobber', upload)
+
+    def test_same_sha_rerun_is_idempotent_without_edit(self):
+        with patch.object(promotion, 'gh', side_effect=self.fake_gh) as api:
+            promotion.publish(self.directory)
+        self.assertFalse(self.created_release)
+        self.assertFalse(self.edited_release)
+        self.assertFalse(self.uploaded_assets)
+
+    def test_checksum_mismatch_fails_closed_before_gh_calls(self):
+        (self.directory / promotion.BINARY).write_bytes(b'corrupted binary')
+        with patch.object(promotion, 'gh', side_effect=self.fake_gh) as api:
+            with self.assertRaisesRegex(ValueError, 'Binary checksum mismatch'):
                 promotion.publish(self.directory)
-        self.assertFalse(any(call.args[:2] == ('release', 'create') for call in api.call_args_list))
+        self.assertEqual(len(self.api_calls), 0)
+
+    def test_checksum_exact_formats_and_rejections(self):
+        # Valid text mode (two spaces)
+        (self.directory / promotion.CHECKSUM).write_text(f"{self.checksum}  {promotion.BINARY}\n")
+        self.assertEqual(promotion.binary_hash(self.directory), self.checksum)
+
+        # Valid binary mode (space + asterisk)
+        (self.directory / promotion.CHECKSUM).write_text(f"{self.checksum} *{promotion.BINARY}\n")
+        self.assertEqual(promotion.binary_hash(self.directory), self.checksum)
+
+        # Rejections: malformed prefix, fake binary name, trailing junk, extra lines
+        invalid_manifests = [
+            f"{self.checksum[:20]}  {promotion.BINARY}\n",  # malformed prefix
+            f"{self.checksum}  fake-binary-name\n",           # wrong binary name
+            f"{self.checksum}  {promotion.BINARY}extra\n",    # trailing junk on name
+            f"{self.checksum}  {promotion.BINARY}\nextra\n",  # extra line
+            f"prefix {self.checksum}  {promotion.BINARY}\n",  # prefixed line
+        ]
+        for invalid in invalid_manifests:
+            with self.subTest(invalid=invalid):
+                (self.directory / promotion.CHECKSUM).write_text(invalid)
+                with self.assertRaisesRegex(ValueError, "Binary checksum mismatch"):
+                    promotion.binary_hash(self.directory)
 
     def test_gh_errors_fail_closed_and_untrusted_text_is_never_a_shell_command(self):
         for code in (403, 500):

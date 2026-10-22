@@ -4,38 +4,33 @@ name: CI & Cloud Delivery
   pull_request:
     branches:
       - dev
+      - prelease
+      - main
   push:
     branches:
       - dev
+      - prelease
+      - main
   workflow_dispatch:
-    inputs:
-      publish_release:
-        description: 'Explicitly publish the checked revision (dev only; public image allowed)'
-        required: false
-        default: 'false'
-        type: string
 
 permissions:
   contents: read
 
-# Serialize same-SHA dev reruns across all three jobs, not only each stage.
+# Serialize same-ref runs across all jobs.
 concurrency:
-  group: delivery-${{ github.workflow }}-${{ github.event_name == 'push' && github.ref == 'refs/heads/dev' && github.sha || github.run_id }}
+  group: delivery-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   test-and-build:
     name: Backend & Frontend Checks
-    if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/dev'
+    if: github.event_name != 'workflow_dispatch' || (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/prelease' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     concurrency:
       group: checks-${{ github.workflow }}-${{ github.ref }}
       cancel-in-progress: false
     permissions:
       contents: read
-    outputs:
-      reused: ${{ steps.reuse.outputs.reused }}
-      image_digest: ${{ steps.reuse.outputs.image_digest }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -105,21 +100,14 @@ jobs:
       - name: Run real build-entry metadata regression (cloud only)
         run: python3 -B -m unittest discover -s tests/cloud-delivery -p 'test_build_metadata.py' -v
 
-      - name: Reuse verified immutable dev prerelease on rerun
-        id: reuse
-        if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: python3 -B .github/scripts/promote_prelease.py reuse
-
       - name: Build pure-static Go binary
         run: |
           mkdir -p bin
-          BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          COMMIT_EPOCH=$(git show -s --format=%ct "${{ github.sha }}")
+          BUILD_TIME=$(date -u -d "@${COMMIT_EPOCH}" +"%Y-%m-%dT%H:%M:%SZ")
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags "with_quic with_wireguard" -ldflags="-s -w -X clash-sub-parser/internal/platform.Commit=${{ github.sha }} -X clash-sub-parser/internal/platform.BuildDate=${BUILD_TIME}" -trimpath -o bin/csp-linux-amd64 ./cmd/csp
           bin/csp-linux-amd64 --version | tee bin/build-version.txt
           grep -F "commit: ${{ github.sha }}, built: ${BUILD_TIME}" bin/build-version.txt
-        if: steps.reuse.outputs.reused != 'true'
 
       - name: Validate static ELF executable
         run: |
@@ -132,7 +120,6 @@ jobs:
           echo "ELF check passed: pure static binary."
 
       - name: Generate binary sha256 checksum manifest
-        if: steps.reuse.outputs.reused != 'true'
         run: |
           cd bin && sha256sum csp-linux-amd64 > csp-linux-amd64.sha256
           cat csp-linux-amd64.sha256
@@ -168,17 +155,17 @@ jobs:
     needs: [test-and-build]
     runs-on: ubuntu-latest
     concurrency:
-      group: release-${{ github.workflow }}-${{ github.ref }}
+      group: runtime-${{ github.workflow }}-${{ github.ref }}
       cancel-in-progress: false
     permissions:
       contents: read
       packages: write
     outputs:
-      image_digest: ${{ steps.delivery.outputs.image_digest }}
+      image_digest: ${{ steps.check-existing.outputs.image_digest || steps.delivery.outputs.image_digest }}
     if: |
-      needs.test-and-build.result == 'success' && github.event_name != 'pull_request' && github.ref == 'refs/heads/dev' && (
-        github.event_name == 'push' ||
-        (github.event_name == 'workflow_dispatch' && inputs.publish_release == 'true')
+      needs.test-and-build.result == 'success' && github.event_name != 'pull_request' && (
+        (github.event_name == 'push' && github.ref == 'refs/heads/dev') ||
+        github.ref == 'refs/heads/prelease'
       )
     steps:
       - name: Checkout repository
@@ -233,7 +220,12 @@ jobs:
           SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
           PRIMARY_TAG="${TARGET_IMAGE_NAME}:sha-${COMMIT_SHA}"
           RUN_TAG="${TARGET_IMAGE_NAME}:run-${{ github.run_id }}"
-          BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          COMMIT_EPOCH=$(git show -s --format=%ct "${COMMIT_SHA}")
+          BUILD_DATE=$(date -u -d "@${COMMIT_EPOCH}" +"%Y-%m-%dT%H:%M:%SZ")
+          PUSH_TAGS=$(printf "%s\n%s" "${PRIMARY_TAG}" "${RUN_TAG}")
+          if [[ "${{ github.ref }}" == "refs/heads/prelease" ]]; then
+            PUSH_TAGS=$(printf "%s\n%s:prelease" "${PUSH_TAGS}" "${TARGET_IMAGE_NAME}")
+          fi
           echo "commit_sha=${COMMIT_SHA}" >> "$GITHUB_OUTPUT"
           echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
           echo "build_date=${BUILD_DATE}" >> "$GITHUB_OUTPUT"
@@ -241,9 +233,58 @@ jobs:
           echo "run_tag=${RUN_TAG}" >> "$GITHUB_OUTPUT"
           echo "target_image=${TARGET_IMAGE_NAME}" >> "$GITHUB_OUTPUT"
           echo "tag_name=sha-${COMMIT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "push_tags<<EOF" >> "$GITHUB_OUTPUT"
+          echo "${PUSH_TAGS}" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Check existing immutable SHA image
+        id: check-existing
+        env:
+          PRIMARY_TAG: ${{ steps.meta.outputs.primary_tag }}
+          TARGET_IMAGE_NAME: ghcr.io/einck0/clash-sub-parser
+          EXPECTED_REVISION: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          EXPECTED_BINARY_HASH=$(awk '{print $1}' bin/csp-linux-amd64.sha256)
+          echo "Checking whether immutable image tag exists: ${PRIMARY_TAG}"
+          set +e
+          INSPECT_OUTPUT=$(docker buildx imagetools inspect "$PRIMARY_TAG" --format '{{json .Manifest}}' 2>&1)
+          INSPECT_EXIT=$?
+          set -e
+          if [[ $INSPECT_EXIT -eq 0 ]]; then
+            EXISTING_DIGEST=$(python3 -B -c 'import json,sys; m=json.loads(sys.argv[1]); sys.exit(0 if m.get("digest") else 1)' "$INSPECT_OUTPUT" 2>/dev/null && python3 -B -c 'import json,sys; print(json.loads(sys.argv[1]).get("digest"))' "$INSPECT_OUTPUT")
+            echo "Found existing tag with digest: ${EXISTING_DIGEST}"
+            scripts/cloud-delivery/preflight-pull.sh \
+              --image "${TARGET_IMAGE_NAME}@${EXISTING_DIGEST}" \
+              --expected-revision "$EXPECTED_REVISION"
+            CONTAINER_HASH=$(docker run --rm --entrypoint sha256sum "${TARGET_IMAGE_NAME}@${EXISTING_DIGEST}" /app/csp | awk '{print $1}')
+            if [[ "$CONTAINER_HASH" != "$EXPECTED_BINARY_HASH" ]]; then
+              echo "ERROR: Existing image binary hash (${CONTAINER_HASH}) does not match expected (${EXPECTED_BINARY_HASH})!" >&2
+              exit 1
+            fi
+            echo "Verified existing immutable image binary checksum: ${CONTAINER_HASH}"
+            if [[ "${{ github.ref }}" == "refs/heads/prelease" ]]; then
+              echo "Updating rolling prelease image tag to existing digest ${EXISTING_DIGEST}"
+              docker buildx imagetools create --prefer-index=false -t "${TARGET_IMAGE_NAME}:prelease" "${TARGET_IMAGE_NAME}@${EXISTING_DIGEST}"
+              docker buildx imagetools inspect "${TARGET_IMAGE_NAME}:prelease" --format '{{json .Manifest}}' > /tmp/csp-alias-manifest.json
+              python3 -B -c 'import json,sys; manifest=json.load(open(sys.argv[1])); sys.exit(0 if manifest.get("digest") == sys.argv[2] else "ERROR: prelease alias tag digest mismatch")' /tmp/csp-alias-manifest.json "${EXISTING_DIGEST}"
+            fi
+            echo "image_exists=true" >> "$GITHUB_OUTPUT"
+            echo "image_digest=${EXISTING_DIGEST}" >> "$GITHUB_OUTPUT"
+          else
+            if echo "$INSPECT_OUTPUT" | grep -qi "not found\|404"; then
+              echo "Image tag does not exist in registry; proceeding to build."
+              echo "image_exists=false" >> "$GITHUB_OUTPUT"
+              echo "image_digest=" >> "$GITHUB_OUTPUT"
+            else
+              echo "ERROR: Unexpected failure while inspecting image tag (Fail-Closed):" >&2
+              echo "$INSPECT_OUTPUT" >&2
+              exit 1
+            fi
+          fi
 
       - name: Build and push runtime container image
-        if: needs.test-and-build.outputs.reused != 'true'
+        if: steps.check-existing.outputs.image_exists != 'true'
         id: build-push
         uses: docker/build-push-action@v6
         with:
@@ -251,19 +292,17 @@ jobs:
           file: ./Dockerfile.runtime
           platforms: linux/amd64
           push: true
-          tags: |
-            ${{ steps.meta.outputs.primary_tag }}
-            ${{ steps.meta.outputs.run_tag }}
+          tags: ${{ steps.meta.outputs.push_tags }}
           build-args: |
             COMMIT_SHA=${{ github.sha }}
             BUILD_DATE=${{ steps.meta.outputs.build_date }}
             ALPINE_MIRROR=
 
       - name: Verify pushed tag digest and pull immutable image
+        if: steps.check-existing.outputs.image_exists != 'true'
         id: delivery
         env:
-          IMAGE_DIGEST: ${{ needs.test-and-build.outputs.image_digest || steps.build-push.outputs.digest }}
-          REUSED: ${{ needs.test-and-build.outputs.reused }}
+          IMAGE_DIGEST: ${{ steps.build-push.outputs.digest }}
           PRIMARY_TAG: ${{ steps.meta.outputs.primary_tag }}
           TARGET_IMAGE_NAME: ghcr.io/einck0/clash-sub-parser
           EXPECTED_REVISION: ${{ github.sha }}
@@ -273,9 +312,11 @@ jobs:
             echo "ERROR: Missing or malformed buildx digest." >&2
             exit 1
           fi
-          if [[ "$REUSED" != 'true' ]]; then
-            docker buildx imagetools inspect "$PRIMARY_TAG" --format '{{json .Manifest}}' > /tmp/csp-pushed-manifest.json
-            python3 -B -c 'import json,sys; manifest=json.load(open(sys.argv[1])); sys.exit(0 if manifest.get("digest") == sys.argv[2] else "ERROR: pushed tag digest mismatch")' /tmp/csp-pushed-manifest.json "$IMAGE_DIGEST"
+          docker buildx imagetools inspect "$PRIMARY_TAG" --format '{{json .Manifest}}' > /tmp/csp-pushed-manifest.json
+          python3 -B -c 'import json,sys; manifest=json.load(open(sys.argv[1])); sys.exit(0 if manifest.get("digest") == sys.argv[2] else "ERROR: pushed tag digest mismatch")' /tmp/csp-pushed-manifest.json "$IMAGE_DIGEST"
+          if [[ "${{ github.ref }}" == "refs/heads/prelease" ]]; then
+            docker buildx imagetools inspect "${TARGET_IMAGE_NAME}:prelease" --format '{{json .Manifest}}' > /tmp/csp-alias-manifest.json
+            python3 -B -c 'import json,sys; manifest=json.load(open(sys.argv[1])); sys.exit(0 if manifest.get("digest") == sys.argv[2] else "ERROR: prelease alias tag digest mismatch")' /tmp/csp-alias-manifest.json "$IMAGE_DIGEST"
           fi
           scripts/cloud-delivery/preflight-pull.sh \
             --image "${TARGET_IMAGE_NAME}@${IMAGE_DIGEST}" \
@@ -285,7 +326,7 @@ jobs:
       - name: Output release delivery summary
         env:
           TRIGGERED_REF: ${{ github.ref }}
-          DELIVERED_DIGEST: ${{ steps.delivery.outputs.image_digest }}
+          DELIVERED_DIGEST: ${{ steps.check-existing.outputs.image_digest || steps.delivery.outputs.image_digest }}
         run: |
           echo "===================================================="
           echo "CSP Cloud Runtime Container Delivery Summary"
@@ -300,14 +341,16 @@ jobs:
           echo "===================================================="
 
   promote-prelease:
-    name: Promote Tested Dev Artifact to GitHub Prerelease
+    name: Promote Tested Artifact to Prelease Channel
     needs: [test-and-build, publish-runtime]
-    if: >-
-      github.event_name == 'push' && github.ref == 'refs/heads/dev' &&
-      needs.test-and-build.result == 'success' && needs.publish-runtime.result == 'success'
+    if: |
+      needs.test-and-build.result == 'success' &&
+      needs.publish-runtime.result == 'success' &&
+      github.event_name != 'pull_request' &&
+      github.ref == 'refs/heads/prelease'
     runs-on: ubuntu-latest
     concurrency:
-      group: prelease-${{ github.sha }}
+      group: prelease-promotion
       cancel-in-progress: false
     permissions:
       contents: write
@@ -323,7 +366,7 @@ jobs:
           name: csp-linux-amd64
           path: bin
 
-      - name: Publish or verify immutable prerelease assets
+      - name: Publish or update rolling prelease release
         env:
           GH_TOKEN: ${{ github.token }}
           IMAGE_DIGEST: ${{ needs.publish-runtime.outputs.image_digest }}

@@ -6,7 +6,7 @@ import { router } from '../src/router'
 import { i18n } from '../src/locales'
 import { api } from '../src/api/client'
 import { THEME_STORAGE_KEY, DEFAULT_THEME, type ThemeName } from '../src/theme'
-import { ROUTE_STORAGE_KEY, VALID_TABS, type NavTab } from '../src/navigation'
+import { ROUTE_STORAGE_KEY, VALID_TABS, getRouteTab, type NavTab } from '../src/navigation'
 import { setLocale } from '../src/locales'
 import type { NodeRecord } from '../src/features/nodes/nodeView'
 

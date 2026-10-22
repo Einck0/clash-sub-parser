@@ -1,12 +1,9 @@
 services:
   app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      # Optional build mirrors for users in mainland China:
-      # args:
-      #   NPM_CONFIG_REGISTRY: https://registry.npmmirror.com
-      #   GOPROXY: https://goproxy.cn,direct
+    # Recommended: use prebuilt multi-platform GHCR image (rolling prelease channel or pinned immutable digest)
+    # For local source compilation development, use docker-compose.dev.yml instead.
+    image: ${CSP_IMAGE:-ghcr.io/einck0/clash-sub-parser:prelease}
+    pull_policy: always
     container_name: ${CSP_CONTAINER_NAME:-clash-sub-parser}
     environment:
       CSP_ADDR: ${CSP_ADDR:-0.0.0.0:18080}

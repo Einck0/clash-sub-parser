@@ -83,10 +83,9 @@ class TestComposeConfigurations(unittest.TestCase):
 
     def test_production_compose_requires_image(self):
         """生产 compose (docker-compose.prod.yml) 必须强制要求 CSP_IMAGE 环境变量，未提供时立即失败"""
-        env = os.environ.copy()
-        env.pop("CSP_IMAGE", None)
+        env = {k: v for k, v in os.environ.items() if not k.startswith("CSP_")}
         result = subprocess.run(
-            ["docker", "compose", "-f", "docker-compose.prod.yml", "config"],
+            ["docker", "compose", "--env-file", "/dev/null", "-f", "docker-compose.prod.yml", "config"],
             cwd=str(REPO_ROOT),
             env=env,
             capture_output=True,
@@ -97,11 +96,11 @@ class TestComposeConfigurations(unittest.TestCase):
         self.assertIn("required", result.stderr)
 
     def test_production_compose_rendering_and_invariants(self):
-        """生产 compose (docker-compose.prod.yml) 提供合法镜像后成功渲染，且无 build 块，保留既有端口/数据卷"""
-        env = os.environ.copy()
+        """生产 compose (docker-compose.prod.yml) 提供合法镜像后成功渲染，且无 build 块，保留既有端口/数据卷与 pull_policy: always"""
+        env = {k: v for k, v in os.environ.items() if not k.startswith("CSP_")}
         env["CSP_IMAGE"] = SYNTHETIC_IMAGE
         result = subprocess.run(
-            ["docker", "compose", "-f", "docker-compose.prod.yml", "config", "--format", "json"],
+            ["docker", "compose", "--env-file", "/dev/null", "-f", "docker-compose.prod.yml", "config", "--format", "json"],
             cwd=str(REPO_ROOT),
             env=env,
             capture_output=True,
@@ -116,6 +115,7 @@ class TestComposeConfigurations(unittest.TestCase):
 
         # 核心防现场编译铁律：严禁包含 build 块
         self.assertNotIn("build", app, "生产 compose 绝不能包含 build 语法块！")
+        self.assertEqual(app.get("pull_policy"), "always", "生产 compose 必须显式声明 pull_policy: always")
         self.assertEqual(app.get("image"), SYNTHETIC_IMAGE)
 
         # 容器名保持 clash-sub-parser
@@ -139,11 +139,35 @@ class TestComposeConfigurations(unittest.TestCase):
         self.assertIn("test", hc)
         self.assertTrue(any("/healthz" in str(arg) for arg in hc["test"]))
 
+    def test_example_compose_rendering_and_invariants(self):
+        """示例 compose (docker-compose.example.yml) 渲染正常，无 build 块，显式 pull_policy: always 且默认使用 prelease 镜像"""
+        env = {k: v for k, v in os.environ.items() if not k.startswith("CSP_")}
+        result = subprocess.run(
+            ["docker", "compose", "--env-file", "/dev/null", "-f", "docker-compose.example.yml", "config", "--format", "json"],
+            cwd=str(REPO_ROOT),
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, f"Example config render failed: {result.stderr}")
+
+        cfg = json.loads(result.stdout)
+        services = cfg.get("services", {})
+        self.assertIn("app", services, "示例 compose 必须包含 app 服务")
+        app = services["app"]
+
+        self.assertNotIn("build", app, "示例 compose 绝不能包含 build 语法块！")
+        self.assertEqual(app.get("pull_policy"), "always", "示例 compose 必须显式声明 pull_policy: always")
+        self.assertEqual(app.get("image"), "ghcr.io/einck0/clash-sub-parser:prelease")
+        self.assertEqual(app.get("container_name"), "clash-sub-parser")
+
     def test_dev_compose_has_explicit_build(self):
         """本地开发 compose 必须显式定义 build 块与现场编译上下文"""
+        env = {k: v for k, v in os.environ.items() if not k.startswith("CSP_")}
         result = subprocess.run(
-            ["docker", "compose", "-f", "docker-compose.dev.yml", "config", "--format", "json"],
+            ["docker", "compose", "--env-file", "/dev/null", "-f", "docker-compose.dev.yml", "config", "--format", "json"],
             cwd=str(REPO_ROOT),
+            env=env,
             capture_output=True,
             text=True,
         )
@@ -162,12 +186,12 @@ class TestComposeConfigurations(unittest.TestCase):
 
     def test_isolated_compose_invariants_and_labels(self):
         """隔离运行 compose 必须属于独立 project，使用 18081/17001 端口与独立测试卷，并具有所有权标签"""
-        env = os.environ.copy()
+        env = {k: v for k, v in os.environ.items() if not k.startswith("CSP_")}
         env["CSP_IMAGE"] = SYNTHETIC_IMAGE
         env["CSP_ISOLATED_PROJECT"] = "csp-isolated-test"
         env["CSP_ISOLATED_RUN_MARKER"] = "run-marker-1234"
         result = subprocess.run(
-            ["docker", "compose", "-f", "docker-compose.isolated.yml", "config", "--format", "json"],
+            ["docker", "compose", "--env-file", "/dev/null", "-f", "docker-compose.isolated.yml", "config", "--format", "json"],
             cwd=str(REPO_ROOT),
             env=env,
             capture_output=True,
@@ -484,10 +508,11 @@ class TestDocumentationCompleteness(unittest.TestCase):
         self.assertIn("docker-compose.dev.yml", content)
         self.assertIn("--no-build", content)
 
-        # 2. 当前规格入口与 GitHub tag paths-ignore 官方语义说明
-        self.assertIn("specs/002-policy/spec.md", content)
-        self.assertIn("origin/dev", content)
-        self.assertTrue("Tag" in content and "paths-ignore" in content)
+        # 2. 开发云测与发布解耦，prelease 唯一预发布与远程拉取安全
+        self.assertIn("绝不创建 GitHub Release", content)
+        self.assertIn("唯一专用预发布分支", content)
+        self.assertIn("严禁强推代码分支", content)
+        self.assertIn("preflight-pull.sh", content)
 
         # 3. 制品复用与零重复编译
         self.assertIn("csp-linux-amd64", content)
@@ -504,7 +529,6 @@ class TestDocumentationCompleteness(unittest.TestCase):
         self.assertIn("@sha256:", content)
 
         # 6. 生产目录确权与只读 stat 事实 (750 / 10001:10001)
-        self.assertIn("/home/service/clash-sub-parser", content)
         self.assertIn("750", content)
         self.assertIn("10001", content)
 
@@ -542,15 +566,15 @@ class TestBranchGovernanceInvariants(unittest.TestCase):
             wf = self.yaml.safe_load(f)
 
         on = wf.get("on") or wf.get(True, {})
-        # Push 严格限定 dev，无 tags，无 paths-ignore
+        # Push 覆盖 dev, prelease, main，无 tags，无 paths-ignore
         push = on.get("push", {})
-        self.assertEqual(push.get("branches"), ["dev"], "Push 必须严格限定仅 dev 分支")
+        self.assertEqual(set(push.get("branches", [])), {"dev", "prelease", "main"}, "Push 必须包含 dev, prelease, main 分支")
         self.assertNotIn("tags", push, "Push tags 必须彻底退出 CI 触发入口")
         self.assertNotIn("paths-ignore", push, "Push 绝不能包含 paths-ignore，避免文档变更死锁")
 
-        # Pull Request 严格限定目标为 dev，无 paths-ignore
+        # Pull Request 覆盖 dev, prelease, main，无 paths-ignore
         pr = on.get("pull_request", {})
-        self.assertEqual(pr.get("branches"), ["dev"], "PR 必须严格限定目标为 dev 分支")
+        self.assertEqual(set(pr.get("branches", [])), {"dev", "prelease", "main"}, "PR 必须包含 dev, prelease, main 分支")
         self.assertNotIn("paths-ignore", pr, "PR 绝不能包含 paths-ignore")
 
         # Required check job 名称必须为精确匹配的 "Backend & Frontend Checks"
@@ -558,18 +582,20 @@ class TestBranchGovernanceInvariants(unittest.TestCase):
         self.assertIn("test-and-build", jobs)
         self.assertEqual(jobs["test-and-build"].get("name"), "Backend & Frontend Checks")
 
-        # Entry job 门禁：限制非 dev 的 workflow_dispatch，同时保留 PR checks 与 dev push/dispatch
+        # Entry job 门禁：限制非授权分支的 workflow_dispatch，同时保留 PR checks 与 dev/prelease/main push/dispatch
         entry_if = jobs["test-and-build"].get("if", "")
         self.assertIn("github.event_name != 'workflow_dispatch'", entry_if)
-        self.assertIn("github.ref == 'refs/heads/dev'", entry_if)
 
-        # publish-runtime 必须限定 dev 并排除 pull_request
+        # publish-runtime 必须排除 pull_request，仅在 dev push 或 prelease 上构建镜像
         pub_if = jobs["publish-runtime"].get("if", "")
-        self.assertIn("github.ref == 'refs/heads/dev'", pub_if)
         self.assertIn("github.event_name != 'pull_request'", pub_if)
         self.assertNotIn("refs/tags/v", pub_if)
         self.assertNotIn("refs/heads/release/", pub_if)
-        self.assertNotIn("main", pub_if)
+
+        # promote-prelease 必须限定 prelease 分支
+        promote_if = jobs["promote-prelease"].get("if", "")
+        self.assertIn("github.ref == 'refs/heads/prelease'", promote_if)
+        self.assertIn("github.event_name != 'pull_request'", promote_if)
 
     def test_dependabot_dev_target_and_no_legacy_ecosystems(self):
         self.assertTrue(self.dependabot_path.exists(), "Dependabot 配置文件必须存在")
@@ -588,63 +614,84 @@ class TestBranchGovernanceInvariants(unittest.TestCase):
     def test_operations_doc_governance_amendment(self):
         content = self.doc_path.read_text(encoding="utf-8")
         self.assertIn("Fast-Forward", content)
-        self.assertIn("15368", content)
         self.assertIn("Backend & Frontend Checks", content)
-        self.assertIn("paths-ignore", content)
+        self.assertIn("绝不创建 GitHub Release", content)
+        self.assertIn("唯一专用预发布分支", content)
+        self.assertIn("严禁强推代码分支", content)
 
     def test_workflow_dispatch_other_ref_skips_entry_and_publish(self):
-        """workflow_dispatch 触发在非 dev 分支时必须同时跳过 entry (test-and-build) 与 publish-runtime"""
+        """workflow_dispatch 触发规则与发布分支隔离验证"""
         with open(self.ci_path, "r", encoding="utf-8") as f:
             wf = self.yaml.safe_load(f)
 
         jobs = wf.get("jobs", {})
         entry_if = jobs["test-and-build"].get("if", "")
         pub_if = jobs["publish-runtime"].get("if", "")
+        promote_if = jobs["promote-prelease"].get("if", "")
 
         def eval_entry(event: str, ref: str) -> bool:
             expr = entry_if.replace("&&", " and ").replace("||", " or ")
             expr = expr.replace("github.event_name", "event").replace("github.ref", "ref")
             return safe_eval_bool(expr, {"event": event, "ref": ref})
 
-        def eval_pub(event: str, ref: str, pub: str, result: str = "success") -> bool:
+        def eval_pub(event: str, ref: str, result: str = "success") -> bool:
             expr = pub_if.replace("&&", " and ").replace("||", " or ")
             expr = (
                 expr.replace("needs.test-and-build.result", "result")
                 .replace("github.event_name", "event")
                 .replace("github.ref", "ref")
-                .replace("inputs.publish_release", "pub")
             )
-            return safe_eval_bool(expr, {"result": result, "event": event, "ref": ref, "pub": pub})
+            return safe_eval_bool(expr, {"result": result, "event": event, "ref": ref})
 
-        # dev 分支授权路径：entry 执行，publish 在显式 opt-in 时执行
-        self.assertTrue(eval_entry("workflow_dispatch", "refs/heads/dev"),
-                        "dev workflow_dispatch 必须执行 entry 检查")
-        self.assertTrue(eval_pub("workflow_dispatch", "refs/heads/dev", "true"),
-                        "dev workflow_dispatch 显式发布时必须执行 publish")
-        self.assertFalse(eval_pub("workflow_dispatch", "refs/heads/dev", "false"),
-                         "dev workflow_dispatch 默认未 opt-in 时不执行 publish")
+        def eval_promote(event: str, ref: str, tb_res: str = "success", pub_res: str = "success") -> bool:
+            expr = promote_if.replace("&&", " and ").replace("||", " or ")
+            expr = (
+                expr.replace("needs.test-and-build.result", "tb_res")
+                .replace("needs.publish-runtime.result", "pub_res")
+                .replace("github.event_name", "event")
+                .replace("github.ref", "ref")
+            )
+            return safe_eval_bool(expr, {"tb_res": tb_res, "pub_res": pub_res, "event": event, "ref": ref})
 
-        # 非 dev 分支 (main, task/*, release/*, tags) 的 workflow_dispatch：entry 与 publish 均跳过
+        # prelease 分支：entry 执行，publish 执行，promote 执行
+        self.assertTrue(eval_entry("push", "refs/heads/prelease"))
+        self.assertTrue(eval_pub("push", "refs/heads/prelease"))
+        self.assertTrue(eval_promote("push", "refs/heads/prelease"))
+
+        self.assertTrue(eval_entry("workflow_dispatch", "refs/heads/prelease"))
+        self.assertTrue(eval_pub("workflow_dispatch", "refs/heads/prelease"))
+        self.assertTrue(eval_promote("workflow_dispatch", "refs/heads/prelease"))
+
+        # dev 分支：entry 执行，publish 执行（构建测试镜像），但 promote 绝不执行！
+        self.assertTrue(eval_entry("push", "refs/heads/dev"))
+        self.assertTrue(eval_pub("push", "refs/heads/dev"))
+        self.assertFalse(eval_promote("push", "refs/heads/dev"), "dev push 绝不能触发发布 promote")
+
+        # main 分支：entry 执行，publish 与 promote 绝不执行！
+        self.assertTrue(eval_entry("push", "refs/heads/main"))
+        self.assertFalse(eval_pub("push", "refs/heads/main"), "main push 绝不构建/推送运行时镜像")
+        self.assertFalse(eval_promote("push", "refs/heads/main"), "main push 绝不触发发布 promote")
+
+        # 非授权分支 (task/*, release/*, tags) 的 workflow_dispatch：entry、publish、promote 均跳过
         for other_ref in (
-            "refs/heads/main",
             "refs/heads/task/csp-cloud-build-integration",
             "refs/heads/release/20261010-01",
             "refs/tags/v1.0.0",
         ):
             self.assertFalse(eval_entry("workflow_dispatch", other_ref),
-                             f"非 dev 分支 {other_ref} 的 workflow_dispatch 必须跳过 entry 检查")
-            self.assertFalse(eval_pub("workflow_dispatch", other_ref, "true"),
-                             f"非 dev 分支 {other_ref} 的 workflow_dispatch 必须跳过 publish")
+                             f"非授权分支 {other_ref} 的 workflow_dispatch 必须跳过 entry 检查")
+            self.assertFalse(eval_pub("workflow_dispatch", other_ref),
+                             f"非授权分支 {other_ref} 的 workflow_dispatch 必须跳过 publish")
+            self.assertFalse(eval_promote("workflow_dispatch", other_ref),
+                             f"非授权分支 {other_ref} 的 workflow_dispatch 必须跳过 promote")
 
-        # PR 流程保护：PR (merge ref) 必须执行 entry 检查以提供绿标，且绝不执行 publish
+        # PR 流程保护：PR (merge ref) 必须执行 entry 检查以提供绿标，且绝不执行 publish 与 promote
         self.assertTrue(eval_entry("pull_request", "refs/pull/99/merge"),
                         "PR 必须执行 entry 检查以提供绿标")
-        self.assertFalse(eval_pub("pull_request", "refs/pull/99/merge", "true"),
+        self.assertFalse(eval_pub("pull_request", "refs/pull/99/merge"),
                          "PR 绝不能执行 publish")
-
-        # dev push 正常流程：entry 与 publish 均执行
-        self.assertTrue(eval_entry("push", "refs/heads/dev"))
-        self.assertTrue(eval_pub("push", "refs/heads/dev", "false"))
+        self.assertFalse(eval_promote("pull_request", "refs/pull/99/merge"),
+                         "PR 绝不能执行 promote")
 
 
 if __name__ == "__main__":

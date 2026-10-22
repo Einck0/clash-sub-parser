@@ -24,10 +24,29 @@ Static assets are embedded directly into the Go executable, providing a self-con
 
 ### Docker Compose
 
+Standard deployment uses the prebuilt multi-platform container image from GitHub Container Registry (GHCR):
+
 ```bash
 cp docker-compose.example.yml docker-compose.yml
-docker compose up -d --build
+docker compose pull app && docker compose up -d --no-build
 ```
+
+> **Pull & Launch Invariants**:
+> - Always use `docker compose pull app && docker compose up -d --no-build` (chained with `&&`) so that if remote image pulling fails, execution terminates immediately instead of silently falling back to a stale or missing local cache.
+> - The `--no-build` flag guarantees that the host will never attempt local compilation on deployment servers.
+> - **Image Channels vs. Pinned Digests**: By default, `docker-compose.example.yml` tracks the rolling pre-release channel `ghcr.io/einck0/clash-sub-parser:prelease`. Because channel tags are mutable pointers updated on every verified prelease delivery, production deployments are strongly recommended to pin an exact immutable digest (e.g. `CSP_IMAGE=ghcr.io/einck0/clash-sub-parser@sha256:<64hex-digest>`).
+>
+> **Controlled Ops Deployment**:
+> For production environments requiring strict cryptographic verification prior to container execution:
+> 1. Run `scripts/cloud-delivery/preflight-pull.sh --image <package@sha256:...> --expected-revision <git-sha>` to pull the image and assert exact OCI revision and RepoDigests.
+> 2. Start the service with the pinned digest and `--pull never`:
+>    ```bash
+>    CSP_IMAGE="ghcr.io/einck0/clash-sub-parser@sha256:<digest>" docker compose -f docker-compose.prod.yml up -d --no-build --pull never
+>    ```
+>    Here `--pull never` explicitly operates on the cryptographically verified local image from step 1, preventing runtime drift or external pull failures.
+>
+> **Local Source Compilation**:
+> If developing locally with source builds, use `docker-compose.dev.yml` (`docker compose -f docker-compose.dev.yml up -d --build`). In accordance with CSP cloud delivery rules, local compilation is strictly prohibited on production and CI server hosts.
 
 Default endpoints:
 - **Web UI & Management API**: `http://127.0.0.1:18080` (API under `/api/v1/*`)
@@ -152,3 +171,44 @@ npm run dev
   ```bash
   bash scripts/smoke_test.sh
   ```
+
+---
+
+## Core Workbenches & Features
+
+- **Unified Nodes Workbench (`/nodes`)**: Centralized inventory and probe operations. Replaces the legacy separate probe engine view (`/probes` permanently redirects to `/nodes`). Supports desktop compact table and mobile card views, multi-page explicit selection, selective manual probing, full fleet probe confirmations, and non-blocking drawer run inspection and cancellation.
+- **Global Probe Settings (`/settings`)**: Unified management for automated probe scheduling toggle, default interval (60–604800s), active probe kinds (`baseline`, `ai`, `streaming`), and per-node probe timeout (1–30s). Disabling automated scheduling leaves manual probing fully functional.
+- **Per-Subscription Probe Policy (`/subscriptions`)**: Each subscription source independently configures its probe policy (`inherit`, `custom` interval, or `disabled`). Shared nodes across multiple sources dynamically evaluate the shortest valid interval under global coordination.
+- **Structured Policy Filter Pipeline (`/policy`)**: Deterministic policy group member composition organized as Candidate Scope (global filter inheritance toggle) &rarr; Ordered Add Sources &rarr; Ordered Remove Filters &rarr; Live Verification. Live preview accurately reports evaluated candidates, active node count, and structured exclusion reasons (`regex removed`, `filter removed`).
+
+---
+
+## Agent Operations & Automated Skills (skills/csp-ops)
+
+To enable external autonomous agents (e.g. Hermes Agent, Pi multi-agent clusters) and automation scripts to interact with, manage, and configure CSP 1.0 **without modifying source code or rebuilding containers**, CSP provides a dedicated agent skill package in [`skills/csp-ops/`](skills/csp-ops/SKILL.md).
+
+### Built-in Agent CLI (`csp_ctl.py`)
+Located at `skills/csp-ops/scripts/csp_ctl.py`, written in pure Python 3 standard library (zero external dependencies), ready for any container or host environment:
+
+```bash
+# 1. Cluster Status & Diagnostics
+python3 skills/csp-ops/scripts/csp_ctl.py status
+
+# 2. Routing Rules Management (fuzzy category & group resolution)
+python3 skills/csp-ops/scripts/csp_ctl.py rule list --limit 100
+python3 skills/csp-ops/scripts/csp_ctl.py rule list --search "openai"
+python3 skills/csp-ops/scripts/csp_ctl.py rule add --expression "DOMAIN-SUFFIX,anthropic.com" --target "AI" --category "AI"
+python3 skills/csp-ops/scripts/csp_ctl.py rule delete --id "<rule-uuid>"
+
+# 3. Policy Group Pipeline & Empty Node Fallback Controls
+python3 skills/csp-ops/scripts/csp_ctl.py group list
+python3 skills/csp-ops/scripts/csp_ctl.py group get "选择节点"
+python3 skills/csp-ops/scripts/csp_ctl.py group add-source "选择节点" --kind filter --filter-display-not-regex "自动|故障|官网|套餐|机场|订阅"
+python3 skills/csp-ops/scripts/csp_ctl.py group set-empty-pass "加拿大" --enable
+
+# 4. Subscriptions Management & Synchronous Refresh
+python3 skills/csp-ops/scripts/csp_ctl.py sub list
+python3 skills/csp-ops/scripts/csp_ctl.py sub refresh --all
+```
+
+For complete SDK usage, optimistic concurrency locking details, and REST API contracts, see [skills/csp-ops/SKILL.md](skills/csp-ops/SKILL.md).

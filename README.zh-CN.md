@@ -24,10 +24,32 @@ Clash Subscription Parser (CSP 1.0) 是基于 Go 1.27.1 与 Vue 3 单二进制�
 
 ### Docker Compose 部署
 
+推荐通过 GitHub Container Registry (GHCR) 托管的预构建云端镜像进行开箱即用部署：
+
 ```bash
 cp docker-compose.example.yml docker-compose.yml
-docker compose up -d --build
+docker compose pull app && docker compose up -d --no-build
 ```
+
+> **拉取与启动注意**：
+> - 务必使用 `docker compose pull app && docker compose up -d --no-build`（通过 `&&` 串联），确保若远程镜像拉取失败时流程立即终止，绝不允许分号继续而静默回退至未知或陈旧的本地缓存镜像。
+> - 显式携带 `--no-build` 标志，确保部署宿主机上绝不触发本地源码构建。
+> - **镜像通道与版本固定**：`docker-compose.example.yml` 默认跟踪滚动预发布通道 `ghcr.io/einck0/clash-sub-parser:prelease`。由于预发布标签是可移动的渠道指针（每次通过完整云端检查并发布的 prelease 会更新该 tag），生产环境强烈建议通过环境变量固定精确的不可变摘要（如 `CSP_IMAGE=ghcr.io/einck0/clash-sub-parser@sha256:<64hex-digest>`）。
+>
+> **受控运维部署路径**：
+> 针对生产高可靠场景，执行两阶段确权部署：
+> 1. 先通过前置脚本拉取并核验镜像 OCI revision 与 RepoDigests：
+>    ```bash
+>    scripts/cloud-delivery/preflight-pull.sh --image <package@sha256:...> --expected-revision <git-sha>
+>    ```
+> 2. 验证通过后，以不可变摘要启动并指定 `--pull never`：
+>    ```bash
+>    CSP_IMAGE="ghcr.io/einck0/clash-sub-parser@sha256:<digest>" docker compose -f docker-compose.prod.yml up -d --no-build --pull never
+>    ```
+>    此处的 `--pull never` 明确建立在步骤 1 已显式完成远程拉取与 OCI 验签的基础之上，锁定使用已校验的不可变镜像，避免运行时重复拉取发生变动。
+>
+> **本地源码编译开发**：
+> 如需在本地开发环境进行现场编译，请使用专门的开发模板 `docker-compose.dev.yml`（`docker compose -f docker-compose.dev.yml up -d --build`）。请注意：根据 CSP 云交付规范，生产服务器与 CI 宿主机严禁承担本地编译工作。
 
 默认访问端点：
 - **控制台与管理 API**：`http://127.0.0.1:18080`（API 路由统一位于 `/api/v1/*`）
@@ -151,3 +173,44 @@ npm run dev
   ```bash
   bash scripts/smoke_test.sh
   ```
+
+---
+
+## 核心工作台与功能特性
+
+- **统一节点工作台 (`/nodes`)**：单一节点账本与检测操作入口，取代独立「探针引擎」导航（历史 `/probes` 永久重定向至 `/nodes`）。支持桌面紧凑表格与移动端精简卡片自适应、跨页明确 ID 选择、按需手动探测、全库检测防误触二次确认，以及后台运行状态轮询与明细抽屉。
+- **全局探针配置 (`/settings`)**：在全局配置统一管理自动探测主开关、默认周期（60..604800 秒）、检测种类（baseline、AI、流媒体）及单节点探测超时（1..30 秒）。自动探测关闭不影响原位手动排队。
+- **每订阅源独立探测周期 (`/subscriptions`)**：订阅源可单独配置探针策略（`inherit` 继承全局、`custom` 自定义周期、`disabled` 停用探测）。多源共享节点在统一调度器中按最短有效周期计算到期。
+- **策略树结构化筛选管线 (`/policy`)**：按「候选范围 → 顺序添加源 → 顺序排除源 → 实时预览」管线编排，消除复杂嵌套。实时预览精准呈现候选数、保留节点数与排除原因结构化摘要（如 `regex removed`、`filter removed`），支持全局筛选继承与终端兜底 MATCH 规则。
+
+---
+
+## 智能体自动化运维与 API 技能 (Agent Operations & Skills)
+
+为了让外部智能体（Hermes Agent、Pi 多智能体集群等）或自动化脚本能够在**无需修改源码、无需重新构建容器**的前提下便捷地调用与操作 CSP 1.0，我们在仓库中提供了专用的智能体技能目录：[`skills/csp-ops/`](skills/csp-ops/SKILL.md)。
+
+### 内置运维工具 CLI (`csp_ctl.py`)
+位于 `skills/csp-ops/scripts/csp_ctl.py`，采用 Python 3 原生标准库编写（零外部依赖），提供开箱即用的命令行工具与 Python SDK：
+
+```bash
+# 1. 查看集群全貌与健康状态（节点数、策略组数、470 条规则、订阅状态与诊断）
+python3 skills/csp-ops/scripts/csp_ctl.py status
+
+# 2. 分流规则管理（模糊分类与目标组解析）
+python3 skills/csp-ops/scripts/csp_ctl.py rule list --limit 100
+python3 skills/csp-ops/scripts/csp_ctl.py rule list --search "openai"
+python3 skills/csp-ops/scripts/csp_ctl.py rule add --expression "DOMAIN-SUFFIX,anthropic.com" --target "AI" --category "AI"
+python3 skills/csp-ops/scripts/csp_ctl.py rule delete --id "<rule-uuid>"
+
+# 3. 策略组管线编排与空节点兜底控制
+python3 skills/csp-ops/scripts/csp_ctl.py group list
+python3 skills/csp-ops/scripts/csp_ctl.py group get "选择节点"
+python3 skills/csp-ops/scripts/csp_ctl.py group add-source "选择节点" --kind filter --filter-display-not-regex "自动|故障|官网|套餐|机场|订阅"
+python3 skills/csp-ops/scripts/csp_ctl.py group set-empty-pass "加拿大" --enable
+
+# 4. 订阅同步管理
+python3 skills/csp-ops/scripts/csp_ctl.py sub list
+python3 skills/csp-ops/scripts/csp_ctl.py sub refresh --all
+```
+
+完整规范、Python SDK 导入范例与全量 RESTful API 契约详见：[skills/csp-ops/SKILL.md](skills/csp-ops/SKILL.md)。

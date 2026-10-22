@@ -187,7 +187,7 @@ jobs:
           ref: ${{ github.sha }}
 
       - name: Download compiled binary artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: csp-linux-amd64
           path: bin
@@ -318,7 +318,7 @@ jobs:
           ref: ${{ github.sha }}
 
       - name: Download same tested binary and checksum
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: csp-linux-amd64
           path: bin

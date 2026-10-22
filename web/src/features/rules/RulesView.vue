@@ -261,6 +261,8 @@ function handleClearSearch() {
 
 <template>
   <div class="space-y-4 pb-24 md:pb-8" data-testid="rules-root">
+    <h2 id="rules-title" class="sr-only">{{ t('rules.title') }}</h2>
+
     <!-- Unified Page Toolbar (Search + Small Counts + Primary New Rule + More Actions) -->
     <RuleToolbar
       v-model:search-query="searchQuery"

@@ -543,6 +543,7 @@ onUnmounted(() => {
       <div
         v-else-if="groups.length === 0"
         class="rounded-2xl border border-dashed border-base-300 p-12 text-center"
+        data-testid="empty-state"
       >
         <Squares2X2Icon class="w-10 h-10 mx-auto opacity-40 text-primary" />
         <p class="mt-3 font-semibold text-base">{{ t('policy.emptyTitle') }}</p>

@@ -1,15 +1,16 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { PlusIcon, TrashIcon } from '@heroicons/vue/24/outline'
 import DrawerCard from '../../ui/DrawerCard.vue'
 import { t } from '../../locales'
+import { uiText } from '../../locales/redesign'
+import { useUnsavedChanges } from '../../composables/useUnsavedChanges'
 import {
   defaultPolicy,
   defaultConfig,
+  extractSecondLevelDomainName,
   type SubscriptionDraft,
   type SubscriptionRecord,
-  type RenameRule,
-  type FilterRule,
   type ProbePolicyMode,
 } from './useSubscriptions'
 
@@ -41,16 +42,36 @@ const generalError = ref('')
 const probePolicyMode = ref<ProbePolicyMode>('inherit')
 const probeIntervalSeconds = ref<number>(3600)
 
+const userManuallyEditedName = ref(false)
+const lastAutoName = ref('')
+
 function clearErrors() {
   nameError.value = ''
   urlError.value = ''
   generalError.value = ''
 }
 
+function getDraftSnapshot(): string {
+  return JSON.stringify({
+    name: draft.value.name,
+    source_url_secret_ref: draft.value.source_url_secret_ref,
+    enabled: draft.value.enabled,
+    prefix: draft.value.prefix,
+    refresh_policy: draft.value.refresh_policy,
+    config: draft.value.config,
+    targetGroups: targetGroupsInput.value,
+    probeMode: probePolicyMode.value,
+    probeInterval: probeIntervalSeconds.value,
+  })
+}
+
+const initialSnapshot = ref<string>('')
+
 watch(
-  () => props.subscription,
-  (sub) => {
+  () => [props.modelValue, props.subscription],
+  ([open]) => {
     clearErrors()
+    const sub = props.subscription
     if (sub) {
       draft.value = {
         name: sub.name,
@@ -80,6 +101,8 @@ watch(
         probePolicyMode.value = 'inherit'
         probeIntervalSeconds.value = 3600
       }
+      userManuallyEditedName.value = true
+      lastAutoName.value = ''
     } else {
       draft.value = {
         name: '',
@@ -92,10 +115,86 @@ watch(
       targetGroupsInput.value = ''
       probePolicyMode.value = 'inherit'
       probeIntervalSeconds.value = 3600
+      userManuallyEditedName.value = false
+      lastAutoName.value = ''
+    }
+    if (open) {
+      initialSnapshot.value = getDraftSnapshot()
     }
   },
   { immediate: true }
 )
+
+const isDirty = computed(() => {
+  if (!props.modelValue) return false
+  return getDraftSnapshot() !== initialSnapshot.value
+})
+
+let unsavedGuard: ReturnType<typeof useUnsavedChanges> | null = null
+try {
+  unsavedGuard = useUnsavedChanges(
+    isDirty,
+    () => uiText('当前有未保存的订阅源修改，确定要放弃吗？', 'You have unsaved subscription changes. Are you sure you want to discard them?')
+  )
+} catch {
+  // Graceful fallback for routerless unit tests
+}
+
+function confirmBeforeClose(): boolean {
+  if (isDirty.value) {
+    if (unsavedGuard && typeof unsavedGuard.confirmDiscard === 'function') {
+      const allowed = unsavedGuard.confirmDiscard()
+      if (!allowed) return false
+    } else if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
+      const allowed = window.confirm(
+        uiText('当前有未保存的订阅源修改，确定要放弃吗？', 'You have unsaved subscription changes. Are you sure you want to discard them?')
+      )
+      if (!allowed) return false
+    }
+    initialSnapshot.value = getDraftSnapshot()
+  }
+  clearErrors()
+  return true
+}
+
+function handleClose() {
+  if (confirmBeforeClose()) {
+    emit('update:modelValue', false)
+  }
+}
+
+function handleDrawerUpdateModelValue(value: boolean) {
+  if (!value) {
+    if (confirmBeforeClose()) {
+      emit('update:modelValue', false)
+    }
+  } else {
+    emit('update:modelValue', true)
+  }
+}
+
+function onNameInput() {
+  nameError.value = ''
+  generalError.value = ''
+  const trimmed = draft.value.name.trim()
+  if (trimmed !== lastAutoName.value) {
+    userManuallyEditedName.value = true
+  } else if (!trimmed) {
+    userManuallyEditedName.value = false
+  }
+}
+
+function onUrlInput() {
+  urlError.value = ''
+  generalError.value = ''
+  if (!userManuallyEditedName.value || !draft.value.name.trim() || draft.value.name === lastAutoName.value) {
+    const auto = extractSecondLevelDomainName(draft.value.source_url_secret_ref)
+    if (auto) {
+      draft.value.name = auto
+      lastAutoName.value = auto
+    }
+  }
+}
 
 function addRenameRule() {
   if (!draft.value.config.rename_rules) {
@@ -117,11 +216,6 @@ function addFilterRule() {
 
 function removeFilterRule(index: number) {
   draft.value.config.filter_rules?.splice(index, 1)
-}
-
-function handleClose() {
-  clearErrors()
-  emit('update:modelValue', false)
 }
 
 function validate(): boolean {
@@ -195,6 +289,7 @@ function handleSubmit() {
     }
   }
 
+  initialSnapshot.value = getDraftSnapshot()
   emit('save', draft.value)
 }
 </script>
@@ -205,9 +300,10 @@ function handleSubmit() {
     :title="subscription ? t('subscriptions.configDrawerTitle') : t('subscriptions.add')"
     :description="t('subscriptions.configDrawerDesc')"
     width-class="max-w-2xl"
-    @update:model-value="emit('update:modelValue', $event)"
+    @update:model-value="handleDrawerUpdateModelValue"
+    @close="handleClose"
   >
-    <!-- Tab Selector -->
+    <!-- General Error Banner -->
     <div
       v-if="generalError"
       role="alert"
@@ -217,119 +313,134 @@ function handleSubmit() {
       {{ generalError }}
     </div>
 
-    <div class="tabs tabs-boxed bg-base-300/60 p-1 rounded-xl">
+    <!-- Progressive Disclosure Tabs -->
+    <div class="tabs tabs-box bg-base-300/60 p-1 rounded-xl flex">
       <button
         type="button"
-        class="tab tab-sm flex-1 font-semibold transition-all"
-        :class="{ 'tab-active bg-primary text-primary-content shadow': activeTab === 'basic' }"
+        class="tab tab-sm flex-1 font-semibold transition-all rounded-lg"
+        :class="{ 'tab-active bg-primary text-primary-content shadow-xs': activeTab === 'basic' }"
         @click="activeTab = 'basic'"
       >
         {{ t('subscriptions.basicTab') }}
       </button>
       <button
         type="button"
-        class="tab tab-sm flex-1 font-semibold transition-all"
-        :class="{ 'tab-active bg-primary text-primary-content shadow': activeTab === 'advanced' }"
+        class="tab tab-sm flex-1 font-semibold transition-all rounded-lg"
+        :class="{ 'tab-active bg-primary text-primary-content shadow-xs': activeTab === 'advanced' }"
         @click="activeTab = 'advanced'"
       >
         {{ t('subscriptions.advancedTab') }}
       </button>
     </div>
 
-    <!-- Tab 1: Basic Settings -->
+    <!-- Tab 1: Basic Settings (Progressive Disclosure) -->
     <form v-show="activeTab === 'basic'" class="space-y-4" @submit.prevent="handleSubmit">
-      <label class="form-control">
-        <span class="label-text text-xs font-semibold mb-1">{{ t('subscriptions.name') }}</span>
+      <div class="flex flex-col gap-1.5">
+        <label for="sub-name-input" class="text-xs font-semibold text-base-content/80">
+          {{ t('subscriptions.name') }}
+        </label>
         <input
+          id="sub-name-input"
           v-model="draft.name"
           required
-          class="input input-bordered input-sm focus:input-primary font-medium"
+          class="input input-sm w-full focus:input-primary font-medium"
           :class="{ 'input-error': nameError }"
           placeholder="例如：香港专线订阅源"
           data-testid="subscription-name-input"
-          @input="nameError = ''; generalError = ''"
+          @input="onNameInput"
         />
-        <span v-if="nameError" class="text-error text-[11px] mt-1" data-testid="subscription-name-error">
+        <span v-if="nameError" class="text-error text-[11px]" data-testid="subscription-name-error">
           {{ nameError }}
         </span>
-      </label>
+      </div>
 
-      <label class="form-control">
-        <span class="label-text text-xs font-semibold mb-1">{{ t('subscriptions.prefixLabel') }}</span>
+      <div class="flex flex-col gap-1.5">
+        <label for="sub-prefix-input" class="text-xs font-semibold text-base-content/80">
+          {{ t('subscriptions.prefixLabel') }}
+        </label>
         <input
+          id="sub-prefix-input"
           v-model="draft.prefix"
-          class="input input-bordered input-sm focus:input-primary font-mono text-xs"
+          class="input input-sm w-full focus:input-primary font-mono text-xs"
           :placeholder="t('subscriptions.prefixPlaceholder')"
           data-testid="subscription-prefix-input"
         />
-        <span class="text-[11px] text-base-content/60 mt-0.5">{{ t('subscriptions.prefixHint') }}</span>
-      </label>
+        <span class="text-[11px] text-base-content/60">{{ t('subscriptions.prefixHint') }}</span>
+      </div>
 
-      <label class="form-control">
-        <div class="flex justify-between items-center mb-1">
-          <span class="label-text text-xs font-semibold">{{ t('subscriptions.sourceUrl') }}</span>
-        </div>
+      <div class="flex flex-col gap-1.5">
+        <label for="sub-url-input" class="text-xs font-semibold text-base-content/80">
+          {{ t('subscriptions.sourceUrl') }}
+        </label>
         <input
+          id="sub-url-input"
           v-model="draft.source_url_secret_ref"
           required
-          class="input input-bordered input-sm font-mono text-xs focus:input-primary"
+          class="input input-sm w-full font-mono text-xs focus:input-primary"
           :class="{ 'input-error': urlError }"
           :placeholder="t('subscriptions.sourceUrlPlaceholder')"
           data-testid="subscription-url-input"
-          @input="urlError = ''; generalError = ''"
+          @input="onUrlInput"
         />
-        <span v-if="urlError" class="text-error text-[11px] mt-1" data-testid="subscription-url-error">
+        <span v-if="urlError" class="text-error text-[11px]" data-testid="subscription-url-error">
           {{ urlError }}
         </span>
-      </label>
+      </div>
 
-      <div class="grid grid-cols-2 gap-4">
-        <label class="form-control">
-          <span class="label-text text-xs font-semibold mb-1">{{ t('subscriptions.refreshInterval') }}</span>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div class="flex flex-col gap-1.5">
+          <label for="sub-interval-input" class="text-xs font-semibold text-base-content/80">
+            {{ t('subscriptions.refreshInterval') }}
+          </label>
           <input
+            id="sub-interval-input"
             v-model.number="draft.refresh_policy.interval_seconds"
             type="number"
             min="60"
             required
-            class="input input-bordered input-sm font-mono"
+            class="input input-sm w-full font-mono"
           />
-        </label>
-        <label class="form-control">
-          <span class="label-text text-xs font-semibold mb-1">{{ t('subscriptions.timeout') }}</span>
+        </div>
+        <div class="flex flex-col gap-1.5">
+          <label for="sub-timeout-input" class="text-xs font-semibold text-base-content/80">
+            {{ t('subscriptions.timeout') }}
+          </label>
           <input
+            id="sub-timeout-input"
             v-model.number="draft.refresh_policy.timeout_seconds"
             type="number"
             min="5"
             max="120"
             required
-            class="input input-bordered input-sm font-mono"
+            class="input input-sm w-full font-mono"
           />
-        </label>
+        </div>
       </div>
 
       <div class="pt-2">
-        <label class="label cursor-pointer justify-start gap-3 bg-base-200/60 p-3 rounded-xl border border-base-300">
-          <input v-model="draft.enabled" type="checkbox" class="toggle toggle-primary toggle-sm" />
+        <label class="flex items-center gap-3 bg-base-200/60 p-3 rounded-xl border border-base-300 cursor-pointer">
+          <input v-model="draft.enabled" type="checkbox" class="toggle toggle-primary toggle-sm shrink-0" />
           <div class="flex flex-col">
-            <span class="label-text text-xs font-semibold">{{ t('subscriptions.enabled') }}</span>
+            <span class="text-xs font-semibold text-base-content">{{ t('subscriptions.enabled') }}</span>
             <span class="text-[11px] text-base-content/60">将该订阅源纳入节点汇聚与自动同步</span>
           </div>
         </label>
       </div>
     </form>
 
-    <!-- Tab 2: Advanced Settings -->
+    <!-- Tab 2: Advanced Settings (Fidelity preserved in the same draft) -->
     <div v-show="activeTab === 'advanced'" class="space-y-6">
       <!-- Cron Schedule -->
-      <div class="p-4 rounded-xl bg-base-200/50 border border-base-300 space-y-4">
-        <label class="form-control">
-          <span class="label-text text-xs font-semibold mb-1">{{ t('subscriptions.cronSchedule') }}</span>
-          <input
-            v-model="draft.config.cron_schedule"
-            class="input input-bordered input-sm font-mono text-xs focus:input-primary"
-            :placeholder="t('subscriptions.cronPlaceholder')"
-          />
+      <div class="p-4 rounded-xl bg-base-200/50 border border-base-300 space-y-1.5">
+        <label for="sub-cron-input" class="block text-xs font-semibold text-base-content/80">
+          {{ t('subscriptions.cronSchedule') }}
         </label>
+        <input
+          id="sub-cron-input"
+          v-model="draft.config.cron_schedule"
+          class="input input-sm w-full font-mono text-xs focus:input-primary"
+          :placeholder="t('subscriptions.cronPlaceholder')"
+        />
       </div>
 
       <!-- Probe Policy Card -->
@@ -344,7 +455,7 @@ function handleSubmit() {
         </div>
 
         <div class="space-y-2">
-          <label class="label cursor-pointer justify-start gap-3 py-1">
+          <label class="flex items-center gap-3 py-1 cursor-pointer">
             <input
               v-model="probePolicyMode"
               type="radio"
@@ -358,7 +469,7 @@ function handleSubmit() {
             </div>
           </label>
 
-          <label class="label cursor-pointer justify-start gap-3 py-1">
+          <label class="flex items-center gap-3 py-1 cursor-pointer">
             <input
               v-model="probePolicyMode"
               type="radio"
@@ -372,7 +483,7 @@ function handleSubmit() {
             </div>
           </label>
 
-          <label class="label cursor-pointer justify-start gap-3 py-1">
+          <label class="flex items-center gap-3 py-1 cursor-pointer">
             <input
               v-model="probePolicyMode"
               type="radio"
@@ -388,20 +499,21 @@ function handleSubmit() {
         </div>
 
         <!-- Custom interval input visible only when mode is custom -->
-        <div v-if="probePolicyMode === 'custom'" class="pt-2 border-t border-base-300" data-testid="probe-policy-custom-interval-block">
-          <label class="form-control">
-            <span class="label-text text-xs font-semibold mb-1">{{ t('subscriptions.probeIntervalSeconds') }}</span>
-            <input
-              v-model.number="probeIntervalSeconds"
-              type="number"
-              min="60"
-              max="604800"
-              class="input input-bordered input-sm font-mono text-xs focus:input-primary max-w-xs"
-              placeholder="3600"
-              data-testid="probe-policy-interval-input"
-            />
-            <span class="text-[11px] text-base-content/60 mt-0.5">{{ t('subscriptions.probeIntervalHint') }}</span>
+        <div v-if="probePolicyMode === 'custom'" class="pt-2 border-t border-base-300 space-y-1.5" data-testid="probe-policy-custom-interval-block">
+          <label for="sub-probe-interval-input" class="block text-xs font-semibold text-base-content/80">
+            {{ t('subscriptions.probeIntervalSeconds') }}
           </label>
+          <input
+            id="sub-probe-interval-input"
+            v-model.number="probeIntervalSeconds"
+            type="number"
+            min="60"
+            max="604800"
+            class="input input-sm font-mono text-xs focus:input-primary max-w-xs w-full"
+            placeholder="3600"
+            data-testid="probe-policy-interval-input"
+          />
+          <span class="text-[11px] text-base-content/60 block">{{ t('subscriptions.probeIntervalHint') }}</span>
         </div>
       </div>
 
@@ -427,13 +539,13 @@ function handleSubmit() {
           >
             <input
               v-model="rule.pattern"
-              class="input input-bordered input-xs flex-1 font-mono text-[11px]"
+              class="input input-xs flex-1 font-mono text-[11px]"
               :placeholder="t('subscriptions.pattern')"
             />
             <span class="text-xs text-base-content/50">&rarr;</span>
             <input
               v-model="rule.replace"
-              class="input input-bordered input-xs flex-1 font-mono text-[11px]"
+              class="input input-xs flex-1 font-mono text-[11px]"
               :placeholder="t('subscriptions.replace')"
             />
             <button
@@ -472,13 +584,13 @@ function handleSubmit() {
             :key="idx"
             class="flex items-center gap-2 bg-base-200/80 p-2 rounded-lg border border-base-300"
           >
-            <select v-model="rule.type" class="select select-bordered select-xs text-[11px]">
+            <select v-model="rule.type" class="select select-xs text-[11px]">
               <option value="include">{{ t('subscriptions.include') }}</option>
               <option value="exclude">{{ t('subscriptions.exclude') }}</option>
             </select>
             <input
               v-model="rule.pattern"
-              class="input input-bordered input-xs flex-1 font-mono text-[11px]"
+              class="input input-xs flex-1 font-mono text-[11px]"
               :placeholder="t('subscriptions.pattern')"
             />
             <button
@@ -493,28 +605,29 @@ function handleSubmit() {
       </div>
 
       <!-- Target Groups -->
-      <div class="space-y-2">
-        <label class="form-control">
-          <span class="label-text text-xs font-semibold mb-1">{{ t('subscriptions.targetGroups') }}</span>
-          <input
-            v-model="targetGroupsInput"
-            class="input input-bordered input-sm font-mono text-xs focus:input-primary"
-            :placeholder="t('subscriptions.targetGroupsPlaceholder')"
-          />
-          <span class="text-[11px] text-base-content/60 mt-1">{{ t('subscriptions.targetGroupsDesc') }}</span>
+      <div class="space-y-1.5">
+        <label for="sub-target-groups-input" class="block text-xs font-semibold text-base-content/80">
+          {{ t('subscriptions.targetGroups') }}
         </label>
+        <input
+          id="sub-target-groups-input"
+          v-model="targetGroupsInput"
+          class="input input-sm w-full font-mono text-xs focus:input-primary"
+          :placeholder="t('subscriptions.targetGroupsPlaceholder')"
+        />
+        <span class="text-[11px] text-base-content/60 block">{{ t('subscriptions.targetGroupsDesc') }}</span>
       </div>
     </div>
 
     <!-- Sticky Footer Slot -->
     <template #footer>
-      <div class="flex items-center justify-end gap-2">
+      <div class="flex items-center justify-end gap-2 w-full">
         <button type="button" class="btn btn-ghost btn-sm touch-manipulation" @click="handleClose">
           {{ t('common.cancel') }}
         </button>
         <button
           type="button"
-          class="btn btn-primary btn-sm touch-manipulation shadow-sm"
+          class="btn btn-primary btn-sm touch-manipulation shadow-xs"
           :class="{ loading: saving }"
           :disabled="saving"
           data-testid="subscription-drawer-save-btn"

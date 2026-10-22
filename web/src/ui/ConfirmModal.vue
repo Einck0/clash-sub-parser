@@ -42,12 +42,27 @@ const displayMessage = computed(() => props.message || props.description || '')
 const displayConfirmText = computed(() => props.confirmText || t('common.confirm'))
 const displayCancelText = computed(() => props.cancelText || t('common.cancel'))
 const dialog = ref<HTMLDialogElement>()
+let previousActiveElement: HTMLElement | null = null
+
+function restoreFocus() {
+  if (previousActiveElement && typeof previousActiveElement.focus === 'function') {
+    previousActiveElement.focus()
+    previousActiveElement = null
+  }
+}
 
 async function syncDialog(open: boolean) {
   await nextTick()
   if (!dialog.value) return
-  if (open && !dialog.value.open) dialog.value.showModal()
-  if (!open && dialog.value.open) dialog.value.close()
+  if (open) {
+    if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
+      previousActiveElement = document.activeElement
+    }
+    if (!dialog.value.open) dialog.value.showModal()
+  } else {
+    if (dialog.value.open) dialog.value.close()
+    restoreFocus()
+  }
 }
 watch(() => props.modelValue, syncDialog)
 onMounted(() => syncDialog(props.modelValue))
@@ -69,6 +84,7 @@ function handleCancel() {
   if (props.loading || !props.closable) return
   emit('update:modelValue', false)
   emit('cancel')
+  restoreFocus()
 }
 
 function handleBackdrop(event: MouseEvent) {
@@ -104,38 +120,37 @@ function handleBackdrop(event: MouseEvent) {
       <!-- Title, message and optional content share the scrollable area. Actions remain visible. -->
       <div class="flex-1 min-h-0 overflow-y-auto overscroll-contain">
         <div class="flex items-start gap-3">
-
-        <div
-          class="p-2.5 rounded-xl border shrink-0"
-          :class="{
-            'bg-error/10 text-error border-error/20': tone === 'danger',
-            'bg-warning/10 text-warning border-warning/20': tone === 'warning',
-            'bg-primary/10 text-primary border-primary/20': tone === 'primary',
-          }"
-          data-testid="confirm-modal-tone-icon"
-        >
-          <ExclamationTriangleIcon v-if="tone === 'danger'" class="w-6 h-6" />
-          <ExclamationCircleIcon v-else-if="tone === 'warning'" class="w-6 h-6" />
-          <InformationCircleIcon v-else class="w-6 h-6" />
-        </div>
-
-        <div class="min-w-0 flex-1 pr-8">
-          <h2
-            id="confirm-modal-title"
-            class="text-base sm:text-lg font-bold tracking-tight text-base-content break-words"
-            data-testid="confirm-modal-title"
+          <div
+            class="p-2.5 rounded-xl border shrink-0"
+            :class="{
+              'bg-error/10 text-error border-error/20': tone === 'danger',
+              'bg-warning/10 text-warning border-warning/20': tone === 'warning',
+              'bg-primary/10 text-primary border-primary/20': tone === 'primary',
+            }"
+            data-testid="confirm-modal-tone-icon"
           >
-            {{ displayTitle }}
-          </h2>
-          <p
-            v-if="displayMessage"
-            id="confirm-modal-description"
-            class="text-xs sm:text-sm text-base-content/70 mt-1 leading-relaxed break-words"
-            data-testid="confirm-modal-message"
-          >
-            {{ displayMessage }}
-          </p>
-        </div>
+            <ExclamationTriangleIcon v-if="tone === 'danger'" class="w-6 h-6" />
+            <ExclamationCircleIcon v-else-if="tone === 'warning'" class="w-6 h-6" />
+            <InformationCircleIcon v-else class="w-6 h-6" />
+          </div>
+
+          <div class="min-w-0 flex-1 pr-8">
+            <h2
+              id="confirm-modal-title"
+              class="text-base sm:text-lg font-bold tracking-tight text-base-content break-words"
+              data-testid="confirm-modal-title"
+            >
+              {{ displayTitle }}
+            </h2>
+            <p
+              v-if="displayMessage"
+              id="confirm-modal-description"
+              class="text-xs sm:text-sm text-base-content/70 mt-1 leading-relaxed break-words"
+              data-testid="confirm-modal-message"
+            >
+              {{ displayMessage }}
+            </p>
+          </div>
         </div>
         <div v-if="$slots.default" class="py-3"><slot /></div>
       </div>

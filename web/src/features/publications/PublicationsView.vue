@@ -5,11 +5,14 @@ import {
   ArrowDownTrayIcon,
 } from '@heroicons/vue/24/outline'
 import ModalDialog from '../../ui/ModalDialog.vue'
+import PageToolbar from '../../ui/PageToolbar.vue'
 import { toastStore } from '../../ui/toast'
 import { t } from '../../locales'
+import { uiText } from '../../locales/redesign'
 import {
   COMPILER_TARGETS,
   type CompilerTarget,
+  targetLabel,
 } from './publicationTypes'
 import { usePublications } from './usePublications'
 
@@ -20,6 +23,7 @@ const {
   copiedTarget,
   manualCopyUrl,
   manualCopyModalOpen,
+  downloadingTargets,
 } = usePublications()
 
 async function handleCopy(target: CompilerTarget) {
@@ -32,18 +36,42 @@ async function handleCopy(target: CompilerTarget) {
   }
 }
 
-function handleDownload(target: CompilerTarget) {
-  downloadDirectConfig(target)
+async function handleDownload(target: CompilerTarget) {
+  if (downloadingTargets.value[target]) return
+  try {
+    await downloadDirectConfig(target)
+    toastStore.push({
+      message: uiText(
+        `已成功开始下载 ${targetLabel(target)} 配置文件`,
+        `Started downloading ${targetLabel(target)} configuration file`
+      ),
+      tone: 'success',
+    })
+  } catch (err: any) {
+    const errorMsg =
+      err?.message ||
+      uiText('配置编译或下载失败', 'Configuration compilation or download failed')
+    toastStore.push({
+      message: errorMsg,
+      tone: 'error',
+    })
+  }
 }
 </script>
 
 <template>
   <section class="mx-auto w-full max-w-5xl space-y-5" aria-labelledby="publications-title" data-testid="client-subscriptions-page">
-    <header class="space-y-1">
-      <p class="text-xs font-semibold uppercase tracking-[0.16em] text-primary">{{ t('publications.tag') }}</p>
-      <h2 id="publications-title" class="text-2xl font-bold">{{ t('publications.title') }}</h2>
-      <p class="text-sm opacity-70">{{ t('publications.subtitle') }}</p>
-    </header>
+    <h2 id="publications-title" class="sr-only">{{ t('publications.title') }}</h2>
+
+    <!-- Compact Toolbar without redundant header -->
+    <PageToolbar :title="t('publications.title')" :description="t('publications.subtitle')" sr-only-title>
+      <template #default>
+        <div class="flex items-center gap-2">
+          <span class="text-xs font-semibold uppercase tracking-[0.16em] text-primary">{{ t('publications.tag') }}</span>
+          <span class="text-xs text-base-content/60">{{ uiText('4 种客户端直链导出与配置下载', '4 Client Direct Links & Configuration Downloads') }}</span>
+        </div>
+      </template>
+    </PageToolbar>
 
     <div class="divide-y divide-base-300 rounded-2xl border border-base-300 bg-base-100 shadow-sm" data-testid="client-subscription-list">
       <article
@@ -70,11 +98,17 @@ function handleDownload(target: CompilerTarget) {
               type="text"
               readonly
               :value="getDirectUrl(item.target)"
-              class="input input-bordered input-xs w-full max-w-md font-mono text-xs select-all bg-base-200/60"
+              class="input input-xs w-full max-w-md font-mono text-xs select-all bg-base-200/60"
               :data-testid="`direct-url-input-${item.target}`"
               @focus="($event.target as HTMLInputElement).select()"
             />
           </div>
+          <!-- Truthful near-action capability hint -->
+          <p class="text-[11px] text-base-content/50 font-mono">
+            {{ item.target === 'mihomo'
+              ? uiText('✓ 包含完整分流规则与策略组', '✓ Includes full rules and policy groups')
+              : uiText('ℹ 仅导出节点格式（忽略策略组与规则）', 'ℹ Nodes-only export (ignores groups and rules)') }}
+          </p>
         </div>
 
         <div class="flex shrink-0 items-center gap-2">
@@ -93,13 +127,15 @@ function handleDownload(target: CompilerTarget) {
           <button
             type="button"
             class="btn btn-outline btn-sm gap-1 text-xs"
+            :disabled="downloadingTargets[item.target]"
             data-testid="download-client-subscription-btn"
             :data-target="item.target"
             :data-testid-target="`download-client-subscription-${item.target}`"
             @click="handleDownload(item.target)"
           >
-            <ArrowDownTrayIcon class="h-3.5 w-3.5" />
-            <span>下载配置</span>
+            <span v-if="downloadingTargets[item.target]" class="loading loading-spinner loading-xs" />
+            <ArrowDownTrayIcon v-else class="h-3.5 w-3.5" />
+            <span>{{ downloadingTargets[item.target] ? uiText('下载中...', 'Downloading...') : '下载配置' }}</span>
           </button>
         </div>
       </article>
@@ -117,7 +153,7 @@ function handleDownload(target: CompilerTarget) {
           rows="3"
           :value="manualCopyUrl"
           data-testid="manual-copy-textarea"
-          class="textarea textarea-bordered w-full font-mono text-xs select-all bg-base-200"
+          class="textarea w-full font-mono text-xs select-all bg-base-200"
           @focus="($event.target as HTMLTextAreaElement).select()"
         />
         <p class="text-[11px] opacity-70">

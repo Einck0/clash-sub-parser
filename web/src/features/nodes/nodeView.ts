@@ -912,6 +912,18 @@ export function getNodeSpeedBadge(
   return null
 }
 
+export function getNodeGeoRegion(node: NodeRecord | NormalizedNode): string | null {
+  const geoDetail = extractCapabilityDetail(node, 'geo')
+  if (geoDetail?.region && geoDetail.region.trim()) {
+    return geoDetail.region.trim().toUpperCase()
+  }
+  const baseDetail = extractCapabilityDetail(node, 'baseline')
+  if (baseDetail?.region && baseDetail.region.trim()) {
+    return baseDetail.region.trim().toUpperCase()
+  }
+  return null
+}
+
 export function resolveNodeLatencyMs(node: NodeRecord | NormalizedNode): number | null {
   const health = (node as NormalizedNode).healthStatus ?? (node as NodeRecord).health_status
   const category = nodeUnderlyingHealthCategory(node)

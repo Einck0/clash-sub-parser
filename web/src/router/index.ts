@@ -1,12 +1,4 @@
 import { createRouter, createWebHashHistory, type RouteRecordRaw } from 'vue-router'
-import DashboardView from '../features/dashboard/DashboardView.vue'
-import SubscriptionsView from '../features/subscriptions/SubscriptionsView.vue'
-import NodesView from '../features/nodes/NodesView.vue'
-import DnsView from '../features/dns/DnsView.vue'
-import PolicyView from '../features/policy/PolicyView.vue'
-import RulesView from '../features/rules/RulesView.vue'
-import PublicationsView from '../features/publications/PublicationsView.vue'
-import SettingsView from '../features/settings/SettingsView.vue'
 import { ROUTE_STORAGE_KEY } from '../navigation'
 
 export const routes: RouteRecordRaw[] = [
@@ -17,19 +9,19 @@ export const routes: RouteRecordRaw[] = [
   {
     path: '/dashboard',
     name: 'dashboard',
-    component: DashboardView,
+    component: () => import('../features/dashboard/DashboardView.vue'),
     meta: { title: 'Dashboard', icon: 'Squares2X2Icon' },
   },
   {
     path: '/subscriptions',
     name: 'subscriptions',
-    component: SubscriptionsView,
+    component: () => import('../features/subscriptions/SubscriptionsView.vue'),
     meta: { title: 'Subscriptions', icon: 'DocumentDuplicateIcon' },
   },
   {
     path: '/nodes',
     name: 'nodes',
-    component: NodesView,
+    component: () => import('../features/nodes/NodesView.vue'),
     meta: { title: 'Node Ledger', icon: 'ServerStackIcon' },
   },
   {
@@ -39,31 +31,31 @@ export const routes: RouteRecordRaw[] = [
   {
     path: '/dns',
     name: 'dns',
-    component: DnsView,
+    component: () => import('../features/dns/DnsView.vue'),
     meta: { title: 'DNS', icon: 'GlobeAltIcon' },
   },
   {
     path: '/policy',
     name: 'policy',
-    component: PolicyView,
+    component: () => import('../features/policy/PolicyView.vue'),
     meta: { title: 'Policy Tree', icon: 'CpuChipIcon' },
   },
   {
     path: '/rules',
     name: 'rules',
-    component: RulesView,
+    component: () => import('../features/rules/RulesView.vue'),
     meta: { title: 'Rule Desk', icon: 'ShieldCheckIcon' },
   },
   {
     path: '/publications',
     name: 'publications',
-    component: PublicationsView,
+    component: () => import('../features/publications/PublicationsView.vue'),
     meta: { title: 'Exports', icon: 'ArrowDownTrayIcon' },
   },
   {
     path: '/settings',
     name: 'settings',
-    component: SettingsView,
+    component: () => import('../features/settings/SettingsView.vue'),
     meta: { title: 'Settings', icon: 'Cog6ToothIcon' },
   },
   {

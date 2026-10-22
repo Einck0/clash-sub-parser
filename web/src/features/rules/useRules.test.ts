@@ -254,4 +254,129 @@ describe('useRules composable', () => {
     expect(rulesState.rules.value.length).toBe(3)
     expect(rulesState.groups.value.length).toBe(2)
   })
+
+  it('moves rules respecting real unfiltered category order, even when search query is active', async () => {
+    const multiCatRules: PolicyRuleView[] = [
+      {
+        id: 'rule-A',
+        revision_id: 'rev-1',
+        category_id: 'cat-lan',
+        expression: 'DOMAIN,a.com',
+        position: 1,
+        enabled: true,
+      },
+      {
+        id: 'rule-B',
+        revision_id: 'rev-1',
+        category_id: 'cat-lan',
+        expression: 'DOMAIN,b.com',
+        position: 2,
+        enabled: true,
+      },
+      {
+        id: 'rule-C',
+        revision_id: 'rev-1',
+        category_id: 'cat-lan',
+        expression: 'DOMAIN,c.com',
+        position: 3,
+        enabled: true,
+      },
+    ]
+
+    vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
+      if (path === '/api/v1/policies/categories') {
+        return [{ id: 'cat-lan', name: 'LAN', sort_order: 10 }]
+      }
+      if (path === '/api/v1/policies/rules') {
+        return {
+          revision_id: 'rev-1',
+          policy_rules: multiCatRules,
+          total: 3,
+        }
+      }
+      return []
+    })
+
+    const rulesState = useRules()
+    await rulesState.loadData()
+
+    // Filter by 'c.com'
+    rulesState.searchQuery.value = 'c.com'
+    expect(rulesState.filteredRules.value.length).toBe(1)
+    expect(rulesState.filteredRules.value[0].id).toBe('rule-C')
+
+    // Move rule-C UP in the category
+    // In real order: rule-A (0), rule-B (1), rule-C (2)
+    // Moving rule-C UP must swap it with rule-B, resulting in [rule-A, rule-C, rule-B]
+    await rulesState.moveRule('rule-C', 'up')
+
+    expect(api.put).toHaveBeenCalledWith('/api/v1/policies/rules/reorder', {
+      category_id: 'cat-lan',
+      order: ['rule-A', 'rule-C', 'rule-B'],
+      revision_id: 'rev-1',
+    })
+  })
+
+  it('strictly disallows moving terminal MATCH rule ahead', async () => {
+    const terminalRules: PolicyRuleView[] = [
+      {
+        id: 'rule-regular',
+        revision_id: 'rev-1',
+        category_id: 'cat-match',
+        expression: 'DOMAIN,example.com',
+        position: 1,
+        enabled: true,
+      },
+      {
+        id: 'rule-match',
+        revision_id: 'rev-1',
+        category_id: 'cat-match',
+        expression: 'MATCH',
+        position: 2,
+        enabled: true,
+      },
+    ]
+
+    vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
+      if (path === '/api/v1/policies/categories') {
+        return [{ id: 'cat-match', name: 'Match Category', sort_order: 999 }]
+      }
+      if (path === '/api/v1/policies/rules') {
+        return {
+          revision_id: 'rev-1',
+          policy_rules: terminalRules,
+          total: 2,
+        }
+      }
+      return []
+    })
+
+    const rulesState = useRules()
+    await rulesState.loadData()
+
+    const reorderSpy = vi.spyOn(api, 'put')
+    reorderSpy.mockClear()
+
+    // Try moving terminal MATCH rule UP
+    await rulesState.moveRule('rule-match', 'up')
+    expect(reorderSpy).not.toHaveBeenCalled()
+
+    // Try moving rule-regular DOWN past terminal MATCH
+    await rulesState.moveRule('rule-regular', 'down')
+    expect(reorderSpy).not.toHaveBeenCalled()
+  })
+
+  it('retains existing rules on refresh error', async () => {
+    const rulesState = useRules()
+    await rulesState.loadData()
+    expect(rulesState.rules.value.length).toBe(3)
+
+    // Simulate network error on subsequent fetchRules
+    vi.spyOn(api, 'get').mockRejectedValueOnce(new Error('Network disconnected'))
+
+    await expect(rulesState.fetchRules()).rejects.toThrow('Network disconnected')
+    // Rules must NOT be wiped!
+    expect(rulesState.rules.value.length).toBe(3)
+    expect(rulesState.error.value).toBe('Network disconnected')
+  })
 })

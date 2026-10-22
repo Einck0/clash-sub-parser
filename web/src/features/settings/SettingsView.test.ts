@@ -282,6 +282,126 @@ describe('SettingsView Component', () => {
     await nextTick()
     expect(window.location.hash).toContain('/dns')
   })
+
+  it('renders 4 category tabs and mobile select with access panel active by default', async () => {
+    vi.spyOn(api, 'get').mockImplementation(async (path) =>
+      path === '/api/v1/settings/auth' ? settings() : { mode: 'open' }
+    )
+
+    mountSettings()
+    await nextTick()
+
+    // 4 category tabs exist
+    expect(container.querySelector('[data-testid="settings-tab-access"]')).toBeTruthy()
+    expect(container.querySelector('[data-testid="settings-tab-probe"]')).toBeTruthy()
+    expect(container.querySelector('[data-testid="settings-tab-filter"]')).toBeTruthy()
+    expect(container.querySelector('[data-testid="settings-tab-display"]')).toBeTruthy()
+
+    // Mobile select exists with 4 options
+    const mobileSelect = container.querySelector(
+      '[data-testid="settings-category-select"]'
+    ) as HTMLSelectElement
+    expect(mobileSelect).toBeTruthy()
+    expect(mobileSelect.options).toHaveLength(4)
+    expect(mobileSelect.value).toBe('access')
+
+    // Default active panel is access
+    const panelAccess = container.querySelector('[data-testid="settings-panel-access"]') as HTMLElement
+    const panelProbe = container.querySelector('[data-testid="settings-panel-probe"]') as HTMLElement
+    expect(panelAccess.style.display).not.toBe('none')
+    expect(panelProbe.style.display).toBe('none')
+  })
+
+  it('switches active category panel via desktop tabs and mobile select', async () => {
+    vi.spyOn(api, 'get').mockImplementation(async (path) =>
+      path === '/api/v1/settings/auth' ? settings() : { mode: 'open' }
+    )
+
+    mountSettings()
+    await nextTick()
+
+    const probeTab = container.querySelector(
+      '[data-testid="settings-tab-probe"]'
+    ) as HTMLButtonElement
+    probeTab.click()
+    await nextTick()
+
+    const panelAccess = container.querySelector('[data-testid="settings-panel-access"]') as HTMLElement
+    const panelProbe = container.querySelector('[data-testid="settings-panel-probe"]') as HTMLElement
+    expect(panelAccess.style.display).toBe('none')
+    expect(panelProbe.style.display).not.toBe('none')
+
+    // Switch via mobile select to 'filter'
+    const mobileSelect = container.querySelector(
+      '[data-testid="settings-category-select"]'
+    ) as HTMLSelectElement
+    mobileSelect.value = 'filter'
+    mobileSelect.dispatchEvent(new Event('change'))
+    await nextTick()
+
+    const panelFilter = container.querySelector('[data-testid="settings-panel-filter"]') as HTMLElement
+    expect(panelProbe.style.display).toBe('none')
+    expect(panelFilter.style.display).not.toBe('none')
+  })
+
+  it('retains unsubmitted token draft across category switching without resetting', async () => {
+    vi.spyOn(api, 'get').mockImplementation(async (path) =>
+      path === '/api/v1/settings/auth' ? settings() : { mode: 'open' }
+    )
+
+    const { getTokenInput } = mountSettings()
+    await nextTick()
+
+    const tokenInput = getTokenInput()
+    tokenInput.value = 'my-unsaved-draft-token-999'
+    tokenInput.dispatchEvent(new Event('input'))
+    await nextTick()
+
+    // Switch category away to display
+    const displayTab = container.querySelector(
+      '[data-testid="settings-tab-display"]'
+    ) as HTMLButtonElement
+    displayTab.click()
+    await nextTick()
+
+    // Switch category back to access
+    const accessTab = container.querySelector(
+      '[data-testid="settings-tab-access"]'
+    ) as HTMLButtonElement
+    accessTab.click()
+    await nextTick()
+
+    // Draft input is completely preserved
+    expect(getTokenInput().value).toBe('my-unsaved-draft-token-999')
+  })
+
+  it('session protection: late response does not overwrite active auth mode', async () => {
+    let resolveFirstProbe!: (val: any) => void
+    const firstProbePromise = new Promise((resolve) => {
+      resolveFirstProbe = resolve
+    })
+
+    let probeCount = 0
+    vi.spyOn(api, 'get').mockImplementation(async (path) => {
+      if (path === '/api/v1/settings/auth') {
+        probeCount++
+        if (probeCount === 1) return firstProbePromise
+        return settings(true, true, true)
+      }
+      return { mode: 'protected' }
+    })
+
+    const { getAuthModeBadge } = mountSettings()
+    await nextTick()
+
+    // While first probe is pending, badge is in loading/probing state
+    expect(getAuthModeBadge()?.textContent).toContain('检测中')
+
+    // Simulate late response resolving with open mode after another session was processed
+    resolveFirstProbe(settings(false, false, false))
+    await nextTick()
+    await new Promise((r) => setTimeout(r, 10))
+  })
 })
 
 describe('App.vue Integration: Settings View & Topbar Auth Badge', () => {

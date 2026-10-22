@@ -2,47 +2,30 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch, type VNodeRef } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
-  ArrowPathIcon,
-  BoltIcon,
-  CheckCircleIcon,
-  ClockIcon,
   ExclamationTriangleIcon,
   EyeIcon,
-  ShieldCheckIcon,
 } from '@heroicons/vue/24/outline'
 import { useWindowVirtualizer } from '@tanstack/vue-virtual'
 import { useElementSize, useResizeObserver } from '@vueuse/core'
-import DrawerCard from '../../ui/DrawerCard.vue'
 import EmptyState from '../../ui/EmptyState.vue'
 import ErrorStateCard from '../../ui/ErrorStateCard.vue'
-import StatusBadge from '../../ui/StatusBadge.vue'
 import ConfirmModal from '../../ui/ConfirmModal.vue'
-import NodeSourceHistoryPanel from './NodeSourceHistoryPanel.vue'
+import NodeListToolbar from './NodeListToolbar.vue'
+import NodeCompactRow from './NodeCompactRow.vue'
+import NodeDetailDrawer from './NodeDetailDrawer.vue'
 import NodeProbeHistoryDrawer from './NodeProbeHistoryDrawer.vue'
 import { toastStore } from '../../ui/toast'
 import type { NodeSourceHistoryData } from './sourceHistoryTypes'
 import { ApiError } from '../../api/client'
 import {
   SUPPORTED_NODE_PROTOCOLS,
-  formatNodeLatency,
-  nodeCapabilityLabel,
-  nodeHealthBadge,
-  nodeHealthDiagnostic,
-  nodeLatencyTone,
-  nodeRiskBadge,
   nodeUnderlyingHealthCategory,
-  protocolSupportedTargets,
-  renderNodePreview,
-  resolveNodeLatencyMs,
   resolveNodeProbeState,
-  getNodePlatformBadges,
-  getNodeSpeedBadge,
   type NormalizedNode,
 } from './nodeView'
-import { formatRelativeTime } from '../probes/probeTypes'
-import { useNodes } from './useNodes'
-import { deriveColumns } from '../../composables/useResponsiveColumns'
+import { useNodes, type HealthFilterType } from './useNodes'
 import { t } from '../../locales'
+import { uiText } from '../../locales/redesign'
 
 const GAP = 8
 const ESTIMATED_ROW_HEIGHT = 56
@@ -58,6 +41,7 @@ const {
   error,
   total,
   hasMore,
+  initialLoaded,
   protocolFilter,
   healthFilter,
   searchQuery,
@@ -89,10 +73,77 @@ const router = (() => {
   }
 })()
 
+// URL query normalization and safe fallbacks
+function parseQueryProtocol(queryProto: unknown): string {
+  if (typeof queryProto === 'string') {
+    const norm = queryProto.trim().toLowerCase()
+    if (norm === 'all' || (SUPPORTED_NODE_PROTOCOLS as readonly string[]).includes(norm)) {
+      return norm
+    }
+  }
+  return 'all'
+}
+
+function parseQueryHealth(queryHealth: unknown): HealthFilterType {
+  if (typeof queryHealth === 'string') {
+    const norm = queryHealth.trim().toLowerCase()
+    const valid: HealthFilterType[] = [
+      'all',
+      'probing',
+      'healthy',
+      'degraded',
+      'unhealthy',
+      'undetermined',
+      'untested',
+      'unknown',
+    ]
+    if (valid.includes(norm as HealthFilterType)) {
+      return norm as HealthFilterType
+    }
+  }
+  return 'all'
+}
+
+function parseQuerySearch(querySearch: unknown): string {
+  if (typeof querySearch === 'string') {
+    return querySearch.trim()
+  }
+  return ''
+}
+
+function syncUrlFromState() {
+  if (!router || !route) return
+  const query: Record<string, string> = {}
+
+  if (searchQuery.value.trim()) {
+    query.q = searchQuery.value.trim()
+  }
+  if (protocolFilter.value && protocolFilter.value !== 'all') {
+    query.protocol = protocolFilter.value
+  }
+  if (healthFilter.value && healthFilter.value !== 'all') {
+    query.health = healthFilter.value
+  }
+  if (drawerOpen.value && selectedNode.value?.logicalId) {
+    query.node = selectedNode.value.logicalId
+  }
+
+  const currentQuery = route.query || {}
+  const allKeys = new Set([...Object.keys(currentQuery), ...Object.keys(query)])
+  let hasDiff = false
+  for (const k of allKeys) {
+    if ((currentQuery[k] || '') !== (query[k] || '')) {
+      hasDiff = true
+      break
+    }
+  }
+
+  if (hasDiff) {
+    router.replace({ query }).catch(() => {})
+  }
+}
+
 const drawerOpen = ref(false)
-const previewTarget = ref<'mihomo' | 'singbox'>('mihomo')
-const connectionError = ref('')
-const connectionSaved = ref(false)
 const probeFeedback = ref('')
 const sourceHistory = ref<NodeSourceHistoryData | null>(null)
 const loadingSourceHistory = ref(false)
@@ -103,6 +154,7 @@ const loadingDeepLink = ref(false)
 
 const selectedIds = ref<Set<string>>(new Set())
 const confirmProbeAllOpen = ref(false)
+const confirmProbeSelectedOpen = ref(false)
 const historyDrawerOpen = ref(false)
 
 function toggleSelectNode(id: string) {
@@ -118,6 +170,10 @@ function toggleSelectNode(id: string) {
 const isAllVisibleSelected = computed(() => {
   if (filteredItems.value.length === 0) return false
   return filteredItems.value.every((n) => selectedIds.value.has(n.logicalId))
+})
+
+const visibleSelectedCount = computed(() => {
+  return filteredItems.value.filter((n) => selectedIds.value.has(n.logicalId)).length
 })
 
 function toggleSelectAllVisible() {
@@ -138,13 +194,28 @@ function clearSelection() {
   selectedIds.value = new Set()
 }
 
+function clearInvisibleSelections() {
+  const visibleIds = new Set(filteredItems.value.map((n) => n.logicalId))
+  const next = new Set<string>()
+  for (const id of selectedIds.value) {
+    if (visibleIds.has(id)) {
+      next.add(id)
+    }
+  }
+  selectedIds.value = next
+}
+
 function pruneInvalidSelectedIds() {
   if (selectedIds.value.size === 0) return
-  if (items.value.length === 0 && !loading.value) {
-    selectedIds.value = new Set()
-    return
-  }
-  if (!hasMore.value) {
+  // Only prune if we have loaded the full unfiltered dataset and know the exact total
+  if (
+    !hasMore.value &&
+    !loading.value &&
+    items.value.length > 0 &&
+    healthFilter.value === 'all' &&
+    protocolFilter.value === 'all' &&
+    !searchQuery.value.trim()
+  ) {
     const validIds = new Set(items.value.map((n) => n.logicalId))
     const next = new Set<string>()
     for (const id of selectedIds.value) {
@@ -160,21 +231,40 @@ watch(items, () => {
   pruneInvalidSelectedIds()
 })
 
-async function handleProbeSelected() {
+function handleProbeSelectedClick() {
   if (selectedIds.value.size === 0) {
-    toastStore.push({ message: t('nodes.noNodeSelected') || '请先勾选需要检测的节点', tone: 'warning' })
+    toastStore.push({
+      message: t('nodes.noNodeSelected') || '请先勾选需要检测的节点',
+      tone: 'warning',
+    })
     return
   }
+  // When there are selections outside the current visible filter/page, confirm scope
+  if (selectedIds.value.size > visibleSelectedCount.value) {
+    confirmProbeSelectedOpen.value = true
+    return
+  }
+  executeProbeSelected()
+}
+
+async function executeProbeSelected() {
+  confirmProbeSelectedOpen.value = false
   const ids = Array.from(selectedIds.value)
   const res = await probeNodesBatch(ids)
   if (res.ok) {
-    toastStore.push({ message: `已对所选 ${ids.length} 个节点发起测速`, tone: 'success' })
+    toastStore.push({
+      message: uiText(
+        `已对所选 ${ids.length} 个节点发起测速`,
+        `Started probe for ${ids.length} selected nodes`
+      ),
+      tone: 'success',
+    })
   } else {
     toastStore.push({ message: res.error || '发起测速失败', tone: 'error' })
   }
 }
 
-function handleProbeAll() {
+function handleProbeAllClick() {
   confirmProbeAllOpen.value = true
 }
 
@@ -182,7 +272,10 @@ async function confirmExecuteProbeAll() {
   confirmProbeAllOpen.value = false
   const res = await probeNodesBatch([])
   if (res.ok) {
-    toastStore.push({ message: t('nodes.probingStarted') || '已发起全量节点测速任务', tone: 'success' })
+    toastStore.push({
+      message: t('nodes.probingStarted') || '已发起全量节点测速任务',
+      tone: 'success',
+    })
   } else {
     toastStore.push({ message: res.error || '全量测速失败', tone: 'error' })
   }
@@ -196,10 +289,6 @@ const effectiveProbingIds = computed(() => {
 
 function getNodeProbeState(node: NormalizedNode): 'probing' | 'queued' | 'idle' {
   return resolveNodeProbeState(node, effectiveProbingIds.value, queuedNodeIds.value)
-}
-
-function getNodeHealthBadge(node: NormalizedNode) {
-  return nodeHealthBadge(node)
 }
 
 const healthCounts = computed(() => {
@@ -239,7 +328,8 @@ const filteredItems = computed(() => {
     const cat = nodeUnderlyingHealthCategory(node)
     if (filter === 'healthy') return cat === 'healthy'
     if (filter === 'unhealthy') return cat === 'unhealthy'
-    if (filter === 'untested' || filter === 'unknown' || filter === 'undetermined') return cat === 'untested'
+    if (filter === 'untested' || filter === 'unknown' || filter === 'undetermined')
+      return cat === 'untested'
     if (filter === 'degraded') return cat === 'healthy'
     return true
   })
@@ -253,51 +343,6 @@ async function handleProbeSelectedNode(node: NormalizedNode) {
   } else {
     probeFeedback.value = res.error || '测速请求失败'
   }
-}
-
-// Editable plaintext connection draft fields inside the Node Detail Drawer
-const draftDisplayName = ref('')
-const draftServer = ref('')
-const draftPort = ref<number>(0)
-// WireGuard fields
-const draftWgLocalAddress = ref('')
-const draftWgPublicKey = ref('')
-const draftWgPrivateKey = ref('')
-const draftWgPreSharedKey = ref('')
-const draftWgMtu = ref<number | undefined>(undefined)
-const draftWgDns = ref('')
-const draftWgReserved = ref('')
-// TUIC / Generic protocol fields
-const draftUuid = ref('')
-const draftPassword = ref('')
-const draftMethod = ref('')
-const draftCongestionControl = ref('')
-const draftUdpRelayMode = ref('')
-const draftAlpn = ref('')
-const draftSni = ref('')
-const draftDisableSni = ref(false)
-
-function syncDraftFromNode(node: NormalizedNode) {
-  connectionError.value = ''
-  connectionSaved.value = false
-  draftDisplayName.value = node.displayName
-  draftServer.value = node.connection.server
-  draftPort.value = node.connection.port
-  draftWgLocalAddress.value = node.connection.localAddress.join(', ')
-  draftWgPublicKey.value = node.connection.publicKey
-  draftWgPrivateKey.value = node.connection.privateKey
-  draftWgPreSharedKey.value = node.connection.preSharedKey
-  draftWgMtu.value = node.connection.mtu
-  draftWgDns.value = node.connection.dns.join(', ')
-  draftWgReserved.value = node.connection.reserved.join(', ')
-  draftUuid.value = node.connection.uuid
-  draftPassword.value = node.connection.password
-  draftMethod.value = node.connection.method || ''
-  draftCongestionControl.value = node.connection.congestionControl
-  draftUdpRelayMode.value = node.connection.udpRelayMode
-  draftAlpn.value = node.connection.alpn.join(', ')
-  draftSni.value = node.connection.sni
-  draftDisableSni.value = node.connection.disableSni
 }
 
 async function fetchSourceHistory(logicalId: string) {
@@ -330,19 +375,12 @@ async function fetchSourceHistory(logicalId: string) {
 async function openNodeDetail(node: NormalizedNode) {
   selectedNode.value = node
   probeFeedback.value = ''
-  syncDraftFromNode(node)
   drawerOpen.value = true
-
-  if (router && route && route.query?.node !== node.logicalId) {
-    router.replace({ query: { ...route.query, node: node.logicalId } }).catch(() => {})
-  }
+  syncUrlFromState()
 
   await Promise.all([
     (async () => {
-      const detailed = await fetchNodeDetail(node.logicalId)
-      if (detailed && selectedNode.value?.logicalId === node.logicalId) {
-        syncDraftFromNode(detailed)
-      }
+      await fetchNodeDetail(node.logicalId)
     })(),
     fetchSourceHistory(node.logicalId),
   ])
@@ -379,75 +417,48 @@ async function openNodeByLogicalId(logicalId: string) {
   }
 }
 
-async function handleApplyConnectionUpdate() {
+async function handleSaveConnectionPayload({
+  draft,
+  onSuccess,
+  onError,
+}: {
+  draft: any
+  onSuccess: (node: NormalizedNode) => void
+  onError: (err: string) => void
+}) {
   if (!selectedNode.value) return
-  connectionError.value = ''
-  connectionSaved.value = false
-
-  const localAddress = draftWgLocalAddress.value
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean)
-  const dns = draftWgDns.value
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean)
-  const reserved = draftWgReserved.value
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .map((s) => Number(s))
-    .filter((n) => !Number.isNaN(n))
-  const alpn = draftAlpn.value
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean)
-
-  const res = await updateNodeConnection(selectedNode.value.logicalId, {
-    displayName: draftDisplayName.value,
-    server: draftServer.value,
-    port: Number(draftPort.value),
-    localAddress,
-    publicKey: draftWgPublicKey.value,
-    privateKey: draftWgPrivateKey.value,
-    preSharedKey: draftWgPreSharedKey.value,
-    mtu: draftWgMtu.value ? Number(draftWgMtu.value) : undefined,
-    dns,
-    reserved,
-    uuid: draftUuid.value,
-    password: draftPassword.value,
-    method: draftMethod.value,
-    congestionControl: draftCongestionControl.value,
-    udpRelayMode: draftUdpRelayMode.value,
-    alpn,
-    sni: draftSni.value,
-    disableSni: draftDisableSni.value,
-  })
-
+  const res = await updateNodeConnection(selectedNode.value.logicalId, draft)
   if (!res.ok) {
-    connectionError.value = res.error || '连接参数无效'
+    onError(res.error || '连接参数无效')
     return
   }
   if (res.node) {
-    syncDraftFromNode(res.node)
+    onSuccess(res.node)
   }
-  connectionSaved.value = true
 }
 
-const previewNodeSnippet = computed(() => {
-  if (!selectedNode.value) return ''
-  return renderNodePreview(selectedNode.value, previewTarget.value)
-})
-
-function selectProtocolFilter(proto: string) {
+function handleProtocolFilterChange(proto: string) {
   protocolFilter.value = proto
   load()
+  syncUrlFromState()
+}
+
+function handleHealthFilterChange(health: string) {
+  healthFilter.value = health as HealthFilterType
+  syncUrlFromState()
+}
+
+function handleSearchQueryChange(query: string) {
+  searchQuery.value = query
+}
+
+function handleSearchSubmit() {
+  load()
+  syncUrlFromState()
 }
 
 const containerRef = ref<HTMLElement | null>(null)
 const { width } = useElementSize(containerRef)
-
-const columns = computed(() => 1)
 const rowCount = computed(() => filteredItems.value.length)
 
 function getRowItems(rowIndex: number) {
@@ -480,7 +491,7 @@ const rowVirtualizer = useWindowVirtualizer(
         window.scrollTo({ top: offset, behavior: options?.behavior })
       }
     },
-  })),
+  }))
 )
 
 const measureRow: VNodeRef = (element) => {
@@ -518,12 +529,6 @@ function manualLoadMore() {
   loadMore()
 }
 
-watch(columns, () => {
-  nextTick(() => {
-    rowVirtualizer.value.measure()
-  })
-})
-
 watch(width, () => {
   nextTick(() => {
     rowVirtualizer.value.measure()
@@ -558,11 +563,7 @@ function onScroll() {
 
 watch(drawerOpen, (isOpen) => {
   if (!isOpen) {
-    if (router && route && route.query?.node) {
-      const query = { ...route.query }
-      delete query.node
-      router.replace({ query }).catch(() => {})
-    }
+    syncUrlFromState()
     sourceHistory.value = null
     sourceHistoryError.value = ''
     loadingSourceHistory.value = false
@@ -584,6 +585,31 @@ if (route) {
         return
       }
       await openNodeByLogicalId(targetId)
+    }
+  )
+
+  watch(
+    () => [route.query?.q, route.query?.protocol, route.query?.health],
+    ([newQ, newProto, newHealth]) => {
+      const safeQ = parseQuerySearch(newQ)
+      const safeProto = parseQueryProtocol(newProto)
+      const safeHealth = parseQueryHealth(newHealth)
+
+      let needReload = false
+      if (safeQ !== searchQuery.value) {
+        searchQuery.value = safeQ
+        needReload = true
+      }
+      if (safeProto !== protocolFilter.value) {
+        protocolFilter.value = safeProto
+        needReload = true
+      }
+      if (safeHealth !== healthFilter.value) {
+        healthFilter.value = safeHealth
+      }
+      if (needReload) {
+        load()
+      }
     }
   )
 }
@@ -610,6 +636,17 @@ function handleVisibilityChange() {
 }
 
 onMounted(async () => {
+  // Restore initial URL query params if present
+  if (route?.query) {
+    const initQ = parseQuerySearch(route.query.q)
+    const initProto = parseQueryProtocol(route.query.protocol)
+    const initHealth = parseQueryHealth(route.query.health)
+
+    if (initQ) searchQuery.value = initQ
+    if (initProto !== 'all') protocolFilter.value = initProto
+    if (initHealth !== 'all') healthFilter.value = initHealth
+  }
+
   void fetchGlobalScheduleKinds()
   await load()
   pruneInvalidSelectedIds()
@@ -649,216 +686,35 @@ onUnmounted(() => {
 
 <template>
   <section class="space-y-5" aria-labelledby="nodes-title">
-    <!-- Header -->
-    <div class="flex flex-wrap items-end justify-between gap-3">
-      <div>
-        <p class="text-xs font-semibold uppercase tracking-[0.18em] text-primary">{{ t('nodes.tag') }}</p>
-        <h2 id="nodes-title" class="mt-1 text-2xl font-bold">{{ t('nodes.title') }}</h2>
-        <p class="mt-1 text-sm opacity-70">{{ t('nodes.subtitle') }}</p>
-      </div>
-      <div class="flex items-center gap-2">
-        <span class="badge badge-primary badge-outline text-xs" data-testid="nodes-scope-badge">
-          {{ t('nodes.scopeEnabledBadge') }}
-        </span>
-        <span class="badge badge-ghost text-xs" data-testid="nodes-total-badge">
-          {{ healthFilter === 'all' ? `${total.toLocaleString()} ${t('nodes.totalNodes')}` : `${filteredItems.length} / ${total.toLocaleString()} ${t('nodes.totalNodes')}` }}
-        </span>
-        <button class="btn btn-ghost btn-sm btn-square touch-manipulation" type="button" :title="t('common.refresh')" @click="load">
-          <ArrowPathIcon class="h-4 w-4" :class="{ 'animate-spin': loading }" />
-        </button>
-      </div>
-    </div>
+    <!-- Screen-reader accessible section heading -->
+    <h2 id="nodes-title" class="sr-only">{{ uiText('节点列表与测速', 'Node Management & Probing') }}</h2>
 
-    <!-- Protocol Filter Pills, Health Status Filter & Search Bar -->
-    <div class="flex flex-col gap-3">
-      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div
-          data-testid="node-protocol-filter"
-          class="flex flex-wrap items-center gap-1.5 text-xs"
-          role="group"
-          aria-label="协议筛选"
-        >
-          <button
-            type="button"
-            class="btn btn-xs rounded-lg font-mono"
-            :class="protocolFilter === 'all' ? 'btn-primary' : 'btn-ghost bg-base-200/70'"
-            @click="selectProtocolFilter('all')"
-          >
-            {{ t('nodes.protocolAll') }}
-          </button>
-          <button
-            v-for="proto in SUPPORTED_NODE_PROTOCOLS"
-            :key="proto"
-            type="button"
-            class="btn btn-xs rounded-lg font-mono uppercase"
-            :class="protocolFilter === proto ? 'btn-primary' : 'btn-ghost bg-base-200/70'"
-            @click="selectProtocolFilter(proto)"
-          >
-            {{ proto }}
-          </button>
-        </div>
-
-        <div class="flex flex-wrap items-center gap-2">
-          <select
-            v-model="healthFilter"
-            data-testid="node-health-filter"
-            aria-label="按节点状态筛选"
-            class="select select-bordered select-xs sm:select-sm text-xs"
-          >
-            <option value="all">全部 ({{ healthCounts.all }})</option>
-            <option value="probing">检测中 ({{ healthCounts.probing }})</option>
-            <option value="healthy">正常 ({{ healthCounts.healthy }})</option>
-            <option value="unhealthy">异常 ({{ healthCounts.unhealthy }})</option>
-            <option value="untested">未测试 ({{ healthCounts.untested }})</option>
-          </select>
-
-          <input
-            v-model="searchQuery"
-            data-testid="node-search-input"
-            type="search"
-            :placeholder="t('nodes.searchPlaceholder')"
-            class="input input-bordered input-xs sm:input-sm w-full sm:w-60 font-mono text-xs"
-            @keydown.enter="load"
-          />
-        </div>
-      </div>
-
-      <!-- Health Status Quick Filter Capsules -->
-      <div
-        data-testid="node-health-pills"
-        class="flex flex-wrap items-center gap-1.5 text-xs"
-        role="group"
-        aria-label="节点状态筛选"
-      >
-        <span class="opacity-60 mr-1 font-medium">节点状态：</span>
-        <button
-          type="button"
-          data-testid="node-health-pill-all"
-          class="btn btn-xs rounded-full"
-          :class="healthFilter === 'all' ? 'btn-primary' : 'btn-ghost bg-base-200/70'"
-          @click="healthFilter = 'all'"
-        >
-          全部 ({{ healthCounts.all }})
-        </button>
-        <button
-          type="button"
-          data-testid="node-health-pill-probing"
-          class="btn btn-xs rounded-full gap-1"
-          :class="healthFilter === 'probing' ? 'btn-info' : 'btn-ghost bg-base-200/70'"
-          @click="healthFilter = 'probing'"
-        >
-          <span
-            class="w-1.5 h-1.5 rounded-full bg-current"
-            :class="{ 'animate-ping': healthCounts.probing > 0 }"
-          />
-          <span>检测中 ({{ healthCounts.probing }})</span>
-        </button>
-        <button
-          type="button"
-          data-testid="node-health-pill-healthy"
-          class="btn btn-xs rounded-full"
-          :class="healthFilter === 'healthy' ? 'btn-success' : 'btn-ghost bg-base-200/70'"
-          @click="healthFilter = 'healthy'"
-        >
-          正常 ({{ healthCounts.healthy }})
-        </button>
-        <button
-          type="button"
-          data-testid="node-health-pill-unhealthy"
-          class="btn btn-xs rounded-full"
-          :class="healthFilter === 'unhealthy' ? 'btn-error' : 'btn-ghost bg-base-200/70'"
-          @click="healthFilter = 'unhealthy'"
-        >
-          异常 ({{ healthCounts.unhealthy }})
-        </button>
-        <button
-          type="button"
-          data-testid="node-health-pill-untested"
-          class="btn btn-xs rounded-full"
-          :class="healthFilter === 'untested' ? 'btn-neutral' : 'btn-ghost bg-base-200/70'"
-          @click="healthFilter = 'untested'"
-        >
-          未测试 ({{ healthCounts.untested }})
-        </button>
-      </div>
-    </div>
-
-    <!-- Probe Actions & Selection Control Toolbar -->
-    <div
-      data-testid="node-selection-toolbar"
-      class="flex flex-wrap items-center justify-between gap-3 p-3 rounded-2xl bg-base-200/80 backdrop-blur-xl border border-base-300 shadow-sm"
-    >
-      <div class="flex items-center gap-2.5">
-        <label class="flex items-center gap-1.5 cursor-pointer text-xs font-semibold select-none">
-          <input
-            type="checkbox"
-            data-testid="select-all-visible-checkbox"
-            class="checkbox checkbox-primary checkbox-xs sm:checkbox-sm"
-            :checked="isAllVisibleSelected"
-            @change="toggleSelectAllVisible"
-          />
-          <span class="hidden sm:inline">{{ t('nodes.selectAllVisible') }}</span>
-        </label>
-
-        <span
-          data-testid="selected-count-badge"
-          class="badge badge-sm font-mono text-xs"
-          :class="selectedIds.size > 0 ? 'badge-primary' : 'badge-ghost'"
-        >
-          {{ t('nodes.selectedCount', { count: selectedIds.size }) }}
-        </span>
-
-        <button
-          v-if="selectedIds.size > 0"
-          type="button"
-          data-testid="clear-selection-btn"
-          class="btn btn-ghost btn-xs text-base-content/60 hover:text-base-content"
-          @click="clearSelection"
-        >
-          {{ t('nodes.clearSelection') }}
-        </button>
-      </div>
-
-      <div class="flex flex-wrap items-center gap-2">
-        <!-- Probe Selected Button (Disabled when selectedIds.size === 0) -->
-        <button
-          type="button"
-          data-testid="probe-selected-btn"
-          class="btn btn-primary btn-xs sm:btn-sm gap-1.5 shadow-sm"
-          :disabled="selectedIds.size === 0"
-          :title="selectedIds.size === 0 ? t('nodes.noNodeSelected') : t('nodes.probeSelected')"
-          @click="handleProbeSelected"
-        >
-          <BoltIcon class="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-          <span>{{ t('nodes.probeSelected') }}</span>
-          <span v-if="selectedIds.size > 0" class="badge badge-xs badge-neutral font-mono">
-            {{ selectedIds.size }}
-          </span>
-        </button>
-
-        <!-- Probe All (Full fleet) Button with Explicit Confirm -->
-        <button
-          type="button"
-          data-testid="probe-all-btn"
-          class="btn btn-outline btn-warning btn-xs sm:btn-sm gap-1.5"
-          @click="handleProbeAll"
-        >
-          <BoltIcon class="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-          <span>{{ t('nodes.probeAll') }}</span>
-        </button>
-
-        <!-- Probe Runs & Batch History Drawer Button -->
-        <button
-          type="button"
-          data-testid="node-probe-history-btn"
-          class="btn btn-ghost btn-xs sm:btn-sm gap-1.5 font-normal text-base-content/80 hover:bg-base-300/60"
-          @click="historyDrawerOpen = true"
-        >
-          <ClockIcon class="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-          <span>{{ t('nodes.probeHistory') }}</span>
-        </button>
-      </div>
-    </div>
+    <!-- Modern Compact Toolbar with Filter Pills & Selection Controls -->
+    <NodeListToolbar
+      :total="total"
+      :items-count="items.length"
+      :filtered-count="filteredItems.length"
+      :initial-loaded="initialLoaded"
+      :loading="loading"
+      :protocol-filter="protocolFilter"
+      :health-filter="healthFilter"
+      :search-query="searchQuery"
+      :health-counts="healthCounts"
+      :is-all-visible-selected="isAllVisibleSelected"
+      :selected-count="selectedIds.size"
+      :visible-selected-count="visibleSelectedCount"
+      @update:protocol-filter="handleProtocolFilterChange"
+      @update:health-filter="handleHealthFilterChange"
+      @update:search-query="handleSearchQueryChange"
+      @refresh="load"
+      @search-submit="handleSearchSubmit"
+      @toggle-select-all-visible="toggleSelectAllVisible"
+      @clear-selection="clearSelection"
+      @clear-invisible-selections="clearInvisibleSelections"
+      @probe-selected="handleProbeSelectedClick"
+      @probe-all="handleProbeAllClick"
+      @open-history="historyDrawerOpen = true"
+    />
 
     <!-- Deep Link Error Alert -->
     <div
@@ -887,7 +743,7 @@ onUnmounted(() => {
       @retry="load"
     />
 
-    <!-- Skeleton Loading with identical responsive min-card width -->
+    <!-- Skeleton Loading during initial fetch -->
     <div
       v-if="loading && items.length === 0"
       class="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(min(100%,288px),1fr))]"
@@ -933,189 +789,16 @@ onUnmounted(() => {
           }"
         >
           <div class="w-full min-w-0">
-            <article
+            <NodeCompactRow
               v-for="node in getRowItems(virtualRow.index)"
               :key="node.logicalId"
-              data-testid="node-card"
-              class="border border-base-300 bg-base-200/70 hover:bg-base-200 shadow-sm transition hover:border-primary/40 rounded-xl overflow-hidden cursor-pointer p-3 md:py-2.5 md:px-4"
-              :class="{ 'ring-2 ring-primary/40 bg-primary/5': selectedIds.has(node.logicalId) }"
-              @click="openNodeDetail(node)"
-            >
-              <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-2.5 md:gap-3 text-xs min-w-0">
-                <!-- Col 1: Identity & Selection -->
-                <div class="flex items-center gap-2.5 min-w-0 md:w-1/4 shrink-0">
-                  <input
-                    type="checkbox"
-                    :checked="selectedIds.has(node.logicalId)"
-                    :data-testid="`node-checkbox-${node.logicalId}`"
-                    class="checkbox checkbox-primary checkbox-xs shrink-0"
-                    @click.stop
-                    @change="toggleSelectNode(node.logicalId)"
-                  />
-                  <div class="rounded-lg bg-primary/10 p-1.5 md:p-2 text-primary shrink-0">
-                    <CheckCircleIcon v-if="node.active" class="h-4 w-4 md:h-5 md:w-5" />
-                    <ExclamationTriangleIcon v-else class="h-4 w-4 md:h-5 md:w-5" />
-                  </div>
-                  <div class="min-w-0 flex-1">
-                    <h3 class="truncate font-semibold text-sm">{{ node.displayName }}</h3>
-                    <p class="truncate font-mono text-[11px] opacity-60">{{ node.logicalId }}</p>
-                  </div>
-                  <!-- Mobile-only status badge next to name -->
-                  <div class="flex md:hidden items-center gap-1.5 shrink-0">
-                    <span class="badge badge-outline font-mono text-xs uppercase">{{ node.protocol }}</span>
-                    <StatusBadge
-                      :label="node.active ? t('common.enabled') : t('common.disabled')"
-                      :tone="node.active ? 'success' : 'warning'"
-                    />
-                  </div>
-                </div>
-
-                <!-- Col 2: Protocol Connection & Targets -->
-                <div class="flex flex-wrap md:flex-nowrap items-center gap-1.5 text-[11px] font-mono opacity-80 min-w-0 md:w-1/5 shrink-0">
-                  <span class="hidden md:inline-flex badge badge-outline font-mono text-xs uppercase shrink-0">{{ node.protocol }}</span>
-                  <span class="badge badge-xs badge-ghost truncate">
-                    兼容: {{ protocolSupportedTargets(node.protocol).join('/') }}
-                  </span>
-                  <span v-if="node.connection.server && node.connection.port" class="badge badge-xs badge-ghost truncate" :title="`${node.connection.server}:${node.connection.port}`">
-                    {{ node.connection.server }}:{{ node.connection.port }}
-                  </span>
-                  <template v-if="node.protocol.toLowerCase() === 'wireguard'">
-                    <span v-if="node.connection.localAddress.length" class="badge badge-xs badge-info badge-outline truncate">
-                      {{ node.connection.localAddress.join(', ') }}
-                    </span>
-                    <span v-if="node.connection.mtu" class="badge badge-xs badge-ghost">
-                      MTU: {{ node.connection.mtu }}
-                    </span>
-                  </template>
-                  <template v-else-if="node.protocol.toLowerCase() === 'tuic'">
-                    <span v-if="node.connection.congestionControl" class="badge badge-xs badge-info badge-outline">
-                      {{ node.connection.congestionControl }}
-                    </span>
-                    <span v-if="node.connection.udpRelayMode" class="badge badge-xs badge-ghost">
-                      {{ node.connection.udpRelayMode }}
-                    </span>
-                  </template>
-                </div>
-
-                <!-- Col 3: Health, Latency & Capabilities Badges -->
-                <div class="flex flex-wrap items-center gap-1.5 min-w-0 md:flex-1">
-                  <StatusBadge
-                    v-if="getNodeProbeState(node) !== 'idle'"
-                    data-testid="node-probe-state-badge"
-                    :label="getNodeProbeState(node) === 'probing' ? '⚡ 检测中' : '⏳ 队列等待'"
-                    :tone="getNodeProbeState(node) === 'probing' ? 'info' : 'warning'"
-                    :pulse="true"
-                  />
-                  <StatusBadge
-                    data-testid="node-health-badge"
-                    :label="`健康: ${getNodeHealthBadge(node).label}`"
-                    :tone="getNodeHealthBadge(node).tone"
-                  />
-                  <StatusBadge
-                    v-if="resolveNodeLatencyMs(node) !== null"
-                    data-testid="node-latency-badge"
-                    :label="`延迟: ${formatNodeLatency(node)}`"
-                    :tone="nodeLatencyTone(node)"
-                  />
-                  <StatusBadge
-                    data-testid="node-risk-badge"
-                    :label="`风险: ${nodeRiskBadge(node).label}`"
-                    :tone="nodeRiskBadge(node).tone"
-                  />
-                  <StatusBadge
-                    v-if="getNodeSpeedBadge(node)"
-                    :label="getNodeSpeedBadge(node)!.label"
-                    :tone="getNodeSpeedBadge(node)!.tone"
-                  />
-                  <!-- Streaming Badges -->
-                  <template v-if="getNodePlatformBadges(node, 'streaming').length > 0">
-                    <StatusBadge
-                      v-for="badge in getNodePlatformBadges(node, 'streaming')"
-                      :key="`streaming-${badge.platform}`"
-                      :label="badge.label"
-                      :tone="badge.tone"
-                      :title="badge.tooltip"
-                    />
-                  </template>
-                  <StatusBadge
-                    v-else
-                    :label="`${t('nodes.streaming')}: ${nodeCapabilityLabel(node, 'streaming').label}`"
-                    :tone="nodeCapabilityLabel(node, 'streaming').tone"
-                  />
-                  <!-- AI Badges -->
-                  <template v-if="getNodePlatformBadges(node, 'ai').length > 0">
-                    <StatusBadge
-                      v-for="badge in getNodePlatformBadges(node, 'ai')"
-                      :key="`ai-${badge.platform}`"
-                      :label="badge.label"
-                      :tone="badge.tone"
-                      :title="badge.tooltip"
-                    />
-                  </template>
-                  <StatusBadge
-                    v-else
-                    :label="`${t('nodes.ai')}: ${nodeCapabilityLabel(node, 'ai').label}`"
-                    :tone="nodeCapabilityLabel(node, 'ai').tone"
-                  />
-                  <span
-                    v-if="false"
-                    class="badge badge-warning badge-sm md:badge-xs gap-1 font-mono text-[11px]"
-                    title="探测观测数据已过期（超出保鲜窗口）"
-                  >
-                    探测已过期
-                  </span>
-                  <span
-                    v-if="node.probeMissing"
-                    class="badge badge-ghost badge-sm md:badge-xs gap-1 font-mono text-[11px] opacity-75"
-                    title="尚无探针观测记录"
-                  >
-                    未探测
-                  </span>
-                  <span
-                    v-if="getNodeProbeState(node) === 'idle' && nodeHealthDiagnostic(node) && nodeHealthDiagnostic(node)?.code !== 'probe_missing'"
-                    data-testid="node-card-diagnostic-badge"
-                    class="badge badge-sm md:badge-xs gap-1 text-[11px] h-auto py-0.5 whitespace-normal"
-                    :class="nodeHealthDiagnostic(node)?.isBlockedByPolicyOrConfig ? 'badge-warning badge-outline' : 'badge-ghost opacity-80'"
-                    :title="nodeHealthDiagnostic(node)?.detail"
-                  >
-                    {{ nodeHealthDiagnostic(node)?.shortLabel }}
-                  </span>
-                </div>
-
-                <!-- Col 4: Status and Action Buttons -->
-                <div class="flex items-center justify-between md:justify-end gap-2 border-t md:border-t-0 border-base-300 pt-2 md:pt-0 shrink-0">
-                  <div class="hidden md:block">
-                    <StatusBadge
-                      :label="node.active ? t('common.enabled') : t('common.disabled')"
-                      :tone="node.active ? 'success' : 'warning'"
-                    />
-                  </div>
-                  <div class="flex items-center gap-1.5 ml-auto md:ml-0">
-                    <button
-                      type="button"
-                      data-testid="node-card-probe-btn"
-                      class="btn btn-outline btn-primary btn-xs gap-1"
-                      :disabled="getNodeProbeState(node) === 'probing'"
-                      @click.stop="handleProbeSelectedNode(node)"
-                    >
-                      <BoltIcon
-                        class="w-3.5 h-3.5"
-                        :class="{ 'animate-spin': getNodeProbeState(node) === 'probing' }"
-                      />
-                      <span>{{ getNodeProbeState(node) === 'probing' ? '检测中...' : '立即重测' }}</span>
-                    </button>
-                    <button
-                      type="button"
-                      data-testid="node-inspect-btn"
-                      class="btn btn-ghost btn-xs font-mono shrink-0"
-                      @click.stop="openNodeDetail(node)"
-                    >
-                      {{ t('nodes.inspectNode') }}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </article>
+              :node="node"
+              :selected="selectedIds.has(node.logicalId)"
+              :probe-state="getNodeProbeState(node)"
+              @toggle-select="toggleSelectNode"
+              @open-detail="openNodeDetail"
+              @probe-node="handleProbeSelectedNode"
+            />
           </div>
         </div>
       </div>
@@ -1166,543 +849,19 @@ onUnmounted(() => {
     </div>
 
     <!-- Node Detail, Edit & Preview Drawer -->
-    <DrawerCard
+    <NodeDetailDrawer
       v-model="drawerOpen"
-      :title="selectedNode ? `${selectedNode.displayName} (${selectedNode.protocol.toUpperCase()})` : t('nodes.inspectNode')"
-      :description="t('nodes.connectionProfile')"
-    >
-      <div v-if="selectedNode" data-testid="node-detail-drawer" class="space-y-4 text-xs">
-        <!-- Real-Time Probe Telemetry & Single-Node Quick Probe Bar -->
-        <div
-          data-testid="node-drawer-probe-panel"
-          class="p-3 rounded-xl bg-base-200 border border-base-300 space-y-2.5"
-        >
-          <div class="flex flex-wrap items-center justify-between gap-2">
-            <div class="flex items-center gap-1.5 font-semibold">
-              <BoltIcon class="w-4 h-4 text-primary shrink-0" />
-              <span>实时测速与解锁状态</span>
-              <span v-if="selectedNode.lastProbedAt" class="text-[11px] font-normal opacity-65">
-                · 最后测速: {{ formatRelativeTime(selectedNode.lastProbedAt) }}
-              </span>
-            </div>
-            <button
-              type="button"
-              data-testid="node-probe-btn"
-              class="btn btn-primary btn-xs gap-1"
-              :disabled="getNodeProbeState(selectedNode) === 'probing'"
-              @click="handleProbeSelectedNode(selectedNode)"
-            >
-              <BoltIcon
-                class="w-3.5 h-3.5"
-                :class="{ 'animate-spin': getNodeProbeState(selectedNode) === 'probing' }"
-              />
-              <span>{{ getNodeProbeState(selectedNode) === 'probing' ? '检测中...' : '立即重测 (插队)' }}</span>
-            </button>
-          </div>
-          <div class="flex flex-wrap items-center gap-1.5">
-            <StatusBadge
-              v-if="getNodeProbeState(selectedNode) !== 'idle'"
-              data-testid="node-drawer-probe-state-badge"
-              :label="getNodeProbeState(selectedNode) === 'probing' ? '⚡ 检测中' : '⏳ 队列等待'"
-              :tone="getNodeProbeState(selectedNode) === 'probing' ? 'info' : 'warning'"
-              :pulse="true"
-            />
-            <StatusBadge
-              data-testid="node-drawer-health-badge"
-              :label="`健康: ${getNodeHealthBadge(selectedNode).label}`"
-              :tone="getNodeHealthBadge(selectedNode).tone"
-            />
-            <StatusBadge
-              data-testid="node-drawer-latency-badge"
-              :label="`响应延迟: ${formatNodeLatency(selectedNode)}`"
-              :tone="nodeLatencyTone(selectedNode)"
-            />
-            <StatusBadge
-              v-if="getNodeSpeedBadge(selectedNode)"
-              :label="getNodeSpeedBadge(selectedNode)!.label"
-              :tone="getNodeSpeedBadge(selectedNode)!.tone"
-            />
-            <template v-if="getNodePlatformBadges(selectedNode, 'streaming').length > 0">
-              <StatusBadge
-                v-for="badge in getNodePlatformBadges(selectedNode, 'streaming')"
-                :key="`drawer-streaming-${badge.platform}`"
-                :label="badge.label"
-                :tone="badge.tone"
-                :title="badge.tooltip"
-              />
-            </template>
-            <StatusBadge
-              v-else
-              :label="`流媒体: ${nodeCapabilityLabel(selectedNode, 'streaming').label}`"
-              :tone="nodeCapabilityLabel(selectedNode, 'streaming').tone"
-            />
-            <template v-if="getNodePlatformBadges(selectedNode, 'ai').length > 0">
-              <StatusBadge
-                v-for="badge in getNodePlatformBadges(selectedNode, 'ai')"
-                :key="`drawer-ai-${badge.platform}`"
-                :label="badge.label"
-                :tone="badge.tone"
-                :title="badge.tooltip"
-              />
-            </template>
-            <StatusBadge
-              v-else
-              :label="`AI 解锁: ${nodeCapabilityLabel(selectedNode, 'ai').label}`"
-              :tone="nodeCapabilityLabel(selectedNode, 'ai').tone"
-            />
-            <StatusBadge
-              data-testid="node-drawer-risk-badge"
-              :label="`IP 风险: ${nodeRiskBadge(selectedNode).label}`"
-              :tone="nodeRiskBadge(selectedNode).tone"
-            />
-          </div>
-          <div
-            v-if="getNodeProbeState(selectedNode) === 'idle' && nodeHealthDiagnostic(selectedNode)"
-            data-testid="node-drawer-diagnostic-notice"
-            class="rounded-lg px-2.5 py-2 text-[11px] leading-relaxed border"
-            :class="
-              nodeHealthDiagnostic(selectedNode)?.isBlockedByPolicyOrConfig
-                ? 'bg-warning/10 border-warning/30 text-warning'
-                : 'bg-base-300/50 border-base-300 text-base-content/80'
-            "
-          >
-            <span class="font-semibold">{{ nodeHealthDiagnostic(selectedNode)?.shortLabel }}：</span>
-            <span>{{ nodeHealthDiagnostic(selectedNode)?.detail }}</span>
-          </div>
-          <p v-if="probeFeedback" data-testid="node-probe-feedback" class="text-[11px] text-primary font-medium">
-            {{ probeFeedback }}
-          </p>
-        </div>
-
-        <!-- Platform Capabilities Breakdown (subcheck matrix) -->
-        <div
-          v-if="
-            getNodePlatformBadges(selectedNode, 'streaming').length > 0 ||
-            getNodePlatformBadges(selectedNode, 'ai').length > 0 ||
-            getNodeSpeedBadge(selectedNode)
-          "
-          class="p-3 rounded-xl bg-base-200 border border-base-300 space-y-2"
-        >
-          <div class="flex items-center justify-between">
-            <span class="font-semibold text-xs text-primary">{{ t('nodes.platformMatrix') }}</span>
-            <span v-if="getNodeSpeedBadge(selectedNode)" class="font-mono text-[11px] opacity-75">
-              {{ getNodeSpeedBadge(selectedNode)!.label }}
-            </span>
-          </div>
-          <div class="grid grid-cols-2 gap-2 text-[11px]">
-            <div
-              v-for="badge in [
-                ...getNodePlatformBadges(selectedNode, 'streaming'),
-                ...getNodePlatformBadges(selectedNode, 'ai'),
-              ]"
-              :key="`matrix-${badge.platform}`"
-              class="flex items-center justify-between p-2 rounded-lg bg-base-100 border border-base-300"
-            >
-              <div class="min-w-0 pr-1">
-                <span class="font-medium block truncate">{{ badge.platform.toUpperCase() }}</span>
-                <span v-if="badge.subTier" class="text-[10px] opacity-60 block truncate">{{ badge.subTier }}</span>
-              </div>
-              <StatusBadge
-                :label="badge.label"
-                :tone="badge.tone"
-                :title="badge.tooltip"
-              />
-            </div>
-          </div>
-        </div>
-
-        <!-- Subscription Provenance & Reconcile Notice -->
-        <div
-          data-testid="node-reconcile-overwrite-notice"
-          class="p-3 rounded-xl bg-base-200 border border-base-300 space-y-1"
-        >
-          <p class="font-semibold flex items-center justify-between gap-1.5">
-            <span class="flex items-center gap-1.5">
-              <ArrowPathIcon class="w-4 h-4 shrink-0 text-primary" />
-              <span>订阅溯源与自动同步 (Reconcile)</span>
-            </span>
-            <span class="font-mono text-[11px] opacity-75">逻辑 ID: {{ selectedNode.logicalId }}</span>
-          </p>
-          <p class="opacity-80 leading-relaxed">
-            直接编辑明文连接参数将原地更新当前节点；后续上游订阅源触发自动同步 (Reconcile) 时将从订阅源刷新节点配置。
-          </p>
-          <p
-            v-if="selectedNode.sources && selectedNode.sources.length > 0"
-            data-testid="node-provenance-sources"
-            class="font-mono text-[11px] opacity-80"
-          >
-            来源订阅: {{ selectedNode.sources.map((s) => s.subscription_id).join(', ') }}
-          </p>
-        </div>
-
-        <!-- Dedicated Source Attribution & Provenance Panel -->
-        <NodeSourceHistoryPanel
-          :logical-id="selectedNode.logicalId"
-          :source-history="sourceHistory"
-          :loading="loadingSourceHistory"
-          :error="sourceHistoryError"
-          @retry="fetchSourceHistory(selectedNode.logicalId)"
-        />
-
-        <!-- Compiler Target Compatibility for this Node Protocol -->
-        <div
-          data-testid="node-target-compatibility"
-          class="p-3 rounded-xl bg-base-200 border border-base-300 space-y-1.5"
-        >
-          <div class="flex items-center gap-1.5 font-semibold">
-            <ShieldCheckIcon class="w-4 h-4 text-primary" />
-            <span>{{ t('nodes.targetCompatibility') }} ({{ selectedNode.protocol.toUpperCase() }})</span>
-          </div>
-          <div class="flex flex-wrap items-center gap-1.5 font-mono">
-            <span
-              v-for="target in protocolSupportedTargets(selectedNode.protocol)"
-              :key="target"
-              class="badge badge-xs badge-success badge-outline uppercase"
-            >
-              {{ target }}: 已支持
-            </span>
-            <span
-              v-if="selectedNode.protocol.toLowerCase() === 'vless'"
-              class="badge badge-xs badge-warning badge-outline"
-            >
-              surge / qx: 不支持该协议
-            </span>
-            <span
-              v-else-if="['wireguard', 'tuic', 'hysteria2'].includes(selectedNode.protocol.toLowerCase())"
-              class="badge badge-xs badge-warning badge-outline"
-            >
-              qx: 不支持该协议
-            </span>
-          </div>
-        </div>
-
-        <!-- Connection Parameters Form (Direct Plaintext Edit & Inspect) -->
-        <form
-          data-testid="node-connection-form"
-          class="p-3.5 rounded-xl bg-base-200/70 border border-base-300 space-y-3"
-          @submit.prevent="handleApplyConnectionUpdate"
-        >
-          <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-            <label class="form-control sm:col-span-1">
-              <span class="label-text text-xs font-semibold">节点显示名称</span>
-              <input
-                v-model="draftDisplayName"
-                data-testid="node-display-name-input"
-                class="input input-bordered input-xs font-mono mt-1"
-              />
-            </label>
-            <label class="form-control sm:col-span-1">
-              <span class="label-text text-xs font-semibold">服务器地址 / IP</span>
-              <input
-                v-model="draftServer"
-                data-testid="node-server-input"
-                class="input input-bordered input-xs font-mono mt-1"
-              />
-            </label>
-            <label class="form-control sm:col-span-1">
-              <span class="label-text text-xs font-semibold">端口</span>
-              <input
-                v-model.number="draftPort"
-                data-testid="node-port-input"
-                type="number"
-                min="1"
-                max="65535"
-                class="input input-bordered input-xs font-mono mt-1"
-              />
-            </label>
-          </div>
-
-          <!-- WireGuard Specific Fields -->
-          <div v-if="selectedNode.protocol.toLowerCase() === 'wireguard'" class="space-y-2.5 pt-2 border-t border-base-300">
-            <div class="font-bold text-primary uppercase tracking-wider text-[11px]">
-              WireGuard 端点与对端配置
-            </div>
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-              <label class="form-control">
-                <span class="label-text text-xs font-semibold">内网地址 (CIDR)</span>
-                <input
-                  v-model="draftWgLocalAddress"
-                  data-testid="wg-local-address-input"
-                  placeholder="10.0.0.2/32, fd00::2/128"
-                  class="input input-bordered input-xs font-mono mt-1"
-                />
-              </label>
-              <label class="form-control">
-                <span class="label-text text-xs font-semibold">对端公钥 (Peer Public Key)</span>
-                <input
-                  v-model="draftWgPublicKey"
-                  data-testid="wg-public-key-input"
-                  placeholder="Base64 对端公钥"
-                  class="input input-bordered input-xs font-mono mt-1"
-                />
-              </label>
-              <label class="form-control">
-                <span class="label-text text-xs font-semibold">客户端私钥 (Private Key)</span>
-                <input
-                  v-model="draftWgPrivateKey"
-                  data-testid="wg-private-key-input"
-                  placeholder="Base64 客户端私钥"
-                  class="input input-bordered input-xs font-mono mt-1"
-                />
-              </label>
-              <label class="form-control">
-                <span class="label-text text-xs font-semibold">预共享密钥 (可选)</span>
-                <input
-                  v-model="draftWgPreSharedKey"
-                  data-testid="wg-psk-input"
-                  placeholder="Base64 预共享密钥"
-                  class="input input-bordered input-xs font-mono mt-1"
-                />
-              </label>
-              <label class="form-control">
-                <span class="label-text text-xs font-semibold">最大传输单元 (MTU)</span>
-                <input
-                  v-model.number="draftWgMtu"
-                  data-testid="wg-mtu-input"
-                  type="number"
-                  min="576"
-                  max="9000"
-                  class="input input-bordered input-xs font-mono mt-1"
-                />
-              </label>
-              <label class="form-control">
-                <span class="label-text text-xs font-semibold">DNS 服务器</span>
-                <input
-                  v-model="draftWgDns"
-                  data-testid="wg-dns-input"
-                  placeholder="1.1.1.1, 8.8.8.8"
-                  class="input input-bordered input-xs font-mono mt-1"
-                />
-              </label>
-              <label class="form-control sm:col-span-2">
-                <span class="label-text text-xs font-semibold">保留字节 (可选，3 个 uint8)</span>
-                <input
-                  v-model="draftWgReserved"
-                  data-testid="wg-reserved-input"
-                  placeholder="0, 0, 0"
-                  class="input input-bordered input-xs font-mono mt-1"
-                />
-              </label>
-            </div>
-          </div>
-
-          <!-- TUIC Specific Fields -->
-          <div v-else-if="selectedNode.protocol.toLowerCase() === 'tuic'" class="space-y-2.5 pt-2 border-t border-base-300">
-            <div class="font-bold text-primary uppercase tracking-wider text-[11px]">
-              TUIC v5 连接与 QUIC 传输参数
-            </div>
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-              <label class="form-control">
-                <span class="label-text text-xs font-semibold">UUID</span>
-                <input
-                  v-model="draftUuid"
-                  data-testid="tuic-uuid-input"
-                  placeholder="00000000-0000-4000-8000-000000000001"
-                  class="input input-bordered input-xs font-mono mt-1"
-                />
-              </label>
-              <label class="form-control">
-                <span class="label-text text-xs font-semibold">认证密码</span>
-                <input
-                  v-model="draftPassword"
-                  data-testid="tuic-password-input"
-                  placeholder="TUIC 认证密码"
-                  class="input input-bordered input-xs font-mono mt-1"
-                />
-              </label>
-              <label class="form-control">
-                <span class="label-text text-xs font-semibold">拥塞控制算法</span>
-                <select
-                  v-model="draftCongestionControl"
-                  data-testid="tuic-cc-select"
-                  class="select select-bordered select-xs font-mono mt-1"
-                >
-                  <option value="">（默认 / 未设置）</option>
-                  <option value="bbr">bbr</option>
-                  <option value="cubic">cubic</option>
-                  <option value="new_reno">new_reno</option>
-                </select>
-              </label>
-              <label class="form-control">
-                <span class="label-text text-xs font-semibold">UDP 转发模式</span>
-                <select
-                  v-model="draftUdpRelayMode"
-                  data-testid="tuic-udp-mode-select"
-                  class="select select-bordered select-xs font-mono mt-1"
-                >
-                  <option value="">（默认 / 未设置）</option>
-                  <option value="native">native</option>
-                  <option value="quic">quic</option>
-                </select>
-              </label>
-              <label class="form-control">
-                <span class="label-text text-xs font-semibold">ALPN 协议协商</span>
-                <input
-                  v-model="draftAlpn"
-                  data-testid="tuic-alpn-input"
-                  placeholder="h3"
-                  class="input input-bordered input-xs font-mono mt-1"
-                />
-              </label>
-              <label class="form-control">
-                <span class="label-text text-xs font-semibold">SNI 域名</span>
-                <input
-                  v-model="draftSni"
-                  data-testid="tuic-sni-input"
-                  placeholder="tuic.example.com"
-                  class="input input-bordered input-xs font-mono mt-1"
-                />
-              </label>
-              <label class="flex items-center gap-2 cursor-pointer sm:col-span-2 pt-1">
-                <input
-                  v-model="draftDisableSni"
-                  data-testid="tuic-disable-sni-checkbox"
-                  type="checkbox"
-                  class="checkbox checkbox-primary checkbox-xs"
-                />
-                <span class="label-text text-xs font-mono">禁用 SNI (disable_sni)</span>
-              </label>
-            </div>
-          </div>
-
-          <!-- Other Protocols (SS, VMess, VLESS, Trojan, Hysteria2) Plaintext Credential Fields -->
-          <div v-else class="pt-2 border-t border-base-300 space-y-2.5">
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-              <label
-                v-if="['vmess', 'vless'].includes(selectedNode.protocol.toLowerCase())"
-                class="form-control"
-              >
-                <span class="label-text text-xs font-semibold">UUID</span>
-                <input
-                  v-model="draftUuid"
-                  data-testid="node-uuid-input"
-                  placeholder="UUID"
-                  class="input input-bordered input-xs font-mono mt-1"
-                />
-              </label>
-              <label
-                v-if="['ss', 'shadowsocks', 'vmess'].includes(selectedNode.protocol.toLowerCase())"
-                class="form-control"
-              >
-                <span class="label-text text-xs font-semibold">加密方式 (Cipher)</span>
-                <input
-                  v-model="draftMethod"
-                  data-testid="node-method-input"
-                  placeholder="aes-256-gcm, chacha20-ietf-poly1305..."
-                  class="input input-bordered input-xs font-mono mt-1"
-                />
-              </label>
-              <label class="form-control sm:col-span-2">
-                <span class="label-text text-xs font-semibold">连接密码 / 密钥</span>
-                <input
-                  v-model="draftPassword"
-                  data-testid="node-password-input"
-                  placeholder="输入协议连接密码或密钥"
-                  class="input input-bordered input-xs font-mono mt-1"
-                />
-              </label>
-              <label class="form-control">
-                <span class="label-text text-xs font-semibold">SNI 域名</span>
-                <input
-                  v-model="draftSni"
-                  data-testid="node-sni-input"
-                  placeholder="sni.example.com"
-                  class="input input-bordered input-xs font-mono mt-1"
-                />
-              </label>
-              <label class="form-control">
-                <span class="label-text text-xs font-semibold">ALPN 协议协商</span>
-                <input
-                  v-model="draftAlpn"
-                  data-testid="node-alpn-input"
-                  placeholder="h2, http/1.1"
-                  class="input input-bordered input-xs font-mono mt-1"
-                />
-              </label>
-              <label class="flex items-center gap-2 cursor-pointer sm:col-span-2 pt-1">
-                <input
-                  v-model="draftDisableSni"
-                  data-testid="node-disable-sni-checkbox"
-                  type="checkbox"
-                  class="checkbox checkbox-primary checkbox-xs"
-                />
-                <span class="label-text text-xs font-mono">禁用 SNI (disable_sni)</span>
-              </label>
-            </div>
-          </div>
-
-          <div class="flex items-center justify-between pt-2">
-            <span
-              v-if="connectionError"
-              data-testid="node-connection-error"
-              class="text-error font-medium"
-            >
-              {{ connectionError }}
-            </span>
-            <span
-              v-else-if="connectionSaved"
-              data-testid="node-connection-saved"
-              class="text-success font-medium"
-            >
-              连接参数已保存
-            </span>
-            <span v-else />
-            <button
-              type="submit"
-              data-testid="node-save-connection-btn"
-              class="btn btn-primary btn-xs"
-              :disabled="savingConnection"
-            >
-              {{ t('common.save') }}
-            </button>
-          </div>
-        </form>
-
-        <!-- Node Config Snippet Preview (Mihomo YAML / sing-box JSON) -->
-        <div class="space-y-2">
-          <div class="flex items-center justify-between">
-            <span class="font-bold text-xs">节点导出格式预览</span>
-            <div class="flex items-center gap-1">
-              <button
-                type="button"
-                data-testid="node-preview-target-mihomo"
-                class="btn btn-xs font-mono"
-                :class="previewTarget === 'mihomo' ? 'btn-primary' : 'btn-ghost'"
-                @click="previewTarget = 'mihomo'"
-              >
-                Mihomo (YAML)
-              </button>
-              <button
-                type="button"
-                data-testid="node-preview-target-singbox"
-                class="btn btn-xs font-mono"
-                :class="previewTarget === 'singbox' ? 'btn-primary' : 'btn-ghost'"
-                @click="previewTarget = 'singbox'"
-              >
-                sing-box (JSON)
-              </button>
-            </div>
-          </div>
-          <pre
-            data-testid="node-config-preview"
-            class="p-3 rounded-xl bg-base-300/50 border border-base-300 font-mono text-xs overflow-x-auto leading-relaxed"
-          >{{ previewNodeSnippet }}</pre>
-        </div>
-      </div>
-
-      <template #footer>
-        <div class="flex justify-end w-full">
-          <button
-            type="button"
-            data-testid="node-drawer-close-btn"
-            class="btn btn-ghost btn-sm"
-            @click="drawerOpen = false"
-          >
-            {{ t('common.close') }}
-          </button>
-        </div>
-      </template>
-    </DrawerCard>
+      :node="selectedNode"
+      :source-history="sourceHistory"
+      :loading-source-history="loadingSourceHistory"
+      :source-history-error="sourceHistoryError"
+      :probe-state="selectedNode ? getNodeProbeState(selectedNode) : 'idle'"
+      :probe-feedback="probeFeedback"
+      :saving-connection="savingConnection"
+      @probe-node="handleProbeSelectedNode"
+      @retry-source-history="selectedNode ? fetchSourceHistory(selectedNode.logicalId) : undefined"
+      @save-connection="handleSaveConnectionPayload"
+    />
 
     <!-- Full Fleet Probe Confirmation Modal -->
     <ConfirmModal
@@ -1714,6 +873,21 @@ onUnmounted(() => {
       @confirm="confirmExecuteProbeAll"
       @cancel="confirmProbeAllOpen = false"
       @update:model-value="confirmProbeAllOpen = $event"
+    />
+
+    <!-- Scope Confirmation Modal for Selected Probes when hidden nodes exist -->
+    <ConfirmModal
+      :model-value="confirmProbeSelectedOpen"
+      :title="uiText('确认发起所选测速', 'Confirm Selected Probe')"
+      :message="uiText(
+        `当前已选 ${selectedIds.size} 个节点（其中当前可见 ${visibleSelectedCount} 项，其他页面/筛选隐藏 ${selectedIds.size - visibleSelectedCount} 项）。确认对全部 ${selectedIds.size} 个节点发起测速？`,
+        `Currently selected ${selectedIds.size} nodes (${visibleSelectedCount} visible, ${selectedIds.size - visibleSelectedCount} hidden). Probe all ${selectedIds.size} nodes?`
+      )"
+      tone="warning"
+      data-testid="confirm-probe-selected-modal"
+      @confirm="executeProbeSelected"
+      @cancel="confirmProbeSelectedOpen = false"
+      @update:model-value="confirmProbeSelectedOpen = $event"
     />
 
     <!-- Probe Runs & Batches History Drawer -->

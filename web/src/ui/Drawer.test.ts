@@ -3,12 +3,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp, h, nextTick, reactive } from 'vue'
 import Drawer from './Drawer.vue'
 import DrawerCard from './DrawerCard.vue'
+import { resetBodyScrollLockForTesting } from '../composables/useBodyScrollLock'
 
 describe('Drawer and DrawerCard Components', () => {
   let container: HTMLDivElement
   let app: ReturnType<typeof createApp> | null = null
 
   beforeEach(() => {
+    resetBodyScrollLockForTesting()
+    document.body.style.overflow = ''
     container = document.createElement('div')
     document.body.appendChild(container)
   })
@@ -20,6 +23,8 @@ describe('Drawer and DrawerCard Components', () => {
     }
     container.remove()
     document.body.innerHTML = ''
+    resetBodyScrollLockForTesting()
+    document.body.style.overflow = ''
     vi.restoreAllMocks()
   })
 
@@ -145,5 +150,117 @@ describe('Drawer and DrawerCard Components', () => {
 
     expect(emitted['update:modelValue']).toContain(false)
     expect(emitted.close.length).toBe(1)
+  })
+
+  it('closes and emits events when clicking the backdrop overlay', async () => {
+    const propsState = reactive({
+      modelValue: true,
+      title: 'Backdrop test',
+    })
+
+    const emitted: Record<string, any[]> = {
+      'update:modelValue': [],
+      close: [],
+    }
+
+    app = createApp({
+      render() {
+        return h(Drawer, {
+          ...propsState,
+          'onUpdate:modelValue': (val: boolean) => {
+            propsState.modelValue = val
+            emitted['update:modelValue'].push(val)
+          },
+          onClose: () => {
+            emitted.close.push(true)
+          },
+        })
+      },
+    })
+
+    app.mount(container)
+    await nextTick()
+
+    const backdrop = document.querySelector('[data-testid="drawer-backdrop"]') as HTMLElement
+    expect(backdrop).toBeTruthy()
+
+    backdrop.click()
+    await nextTick()
+
+    expect(emitted['update:modelValue']).toContain(false)
+    expect(emitted.close.length).toBe(1)
+  })
+
+  it('acquires body scroll lock when open and releases when closed or unmounted', async () => {
+    const propsState = reactive({
+      modelValue: false,
+      title: 'Scroll lock test',
+    })
+
+    app = createApp({
+      render() {
+        return h(Drawer, {
+          ...propsState,
+        })
+      },
+    })
+
+    app.mount(container)
+    await nextTick()
+    expect(document.body.style.overflow).toBe('')
+
+    // Open drawer
+    propsState.modelValue = true
+    await nextTick()
+    expect(document.body.style.overflow).toBe('hidden')
+
+    // Close drawer
+    propsState.modelValue = false
+    await nextTick()
+    expect(document.body.style.overflow).toBe('')
+
+    // Re-open and unmount
+    propsState.modelValue = true
+    await nextTick()
+    expect(document.body.style.overflow).toBe('hidden')
+
+    app.unmount()
+    app = null
+    await nextTick()
+    expect(document.body.style.overflow).toBe('')
+  })
+
+  it('restores focus to previous active element upon close', async () => {
+    const triggerBtn = document.createElement('button')
+    triggerBtn.id = 'trigger-btn'
+    document.body.appendChild(triggerBtn)
+    triggerBtn.focus()
+    expect(document.activeElement).toBe(triggerBtn)
+
+    const propsState = reactive({
+      modelValue: true,
+      title: 'Focus restore test',
+    })
+
+    app = createApp({
+      render() {
+        return h(Drawer, {
+          ...propsState,
+          'onUpdate:modelValue': (val: boolean) => {
+            propsState.modelValue = val
+          },
+        })
+      },
+    })
+
+    app.mount(container)
+    await nextTick()
+
+    // Close the drawer
+    propsState.modelValue = false
+    await nextTick()
+
+    expect(document.activeElement).toBe(triggerBtn)
+    triggerBtn.remove()
   })
 })

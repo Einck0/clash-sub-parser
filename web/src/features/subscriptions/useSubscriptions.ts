@@ -219,6 +219,44 @@ export function formatBytes(bytes: number): string {
   return `${val.toFixed(val >= 100 || idx === 0 ? 0 : 1)} ${units[idx]}`
 }
 
+/**
+ * Extract second-level label from a URL hostname and capitalize its first letter.
+ * Following project experience contract:
+ * - https://z.7li7li.com/sub -> '7li7li'
+ * - https://msub.example.com/api -> 'Example'
+ * - https://www.example.com -> 'Example'
+ * - https://example.com -> 'Example'
+ */
+export function extractSecondLevelDomainName(urlStr: string): string {
+  if (!urlStr || typeof urlStr !== 'string') return ''
+  try {
+    const trimmed = urlStr.trim()
+    if (!trimmed) return ''
+    const normalized = trimmed.includes('://') ? trimmed : `https://${trimmed}`
+    const parsed = new URL(normalized)
+    const hostname = parsed.hostname.toLowerCase()
+    if (!hostname) return ''
+
+    // If it is an IPv4, IPv6, or localhost address
+    if (/^(\d{1,3}\.){3}\d{1,3}$/.test(hostname) || hostname.startsWith('[') || hostname === 'localhost') {
+      return hostname.charAt(0).toUpperCase() + hostname.slice(1)
+    }
+
+    const parts = hostname.split('.').filter(Boolean)
+    if (parts.length === 0) return ''
+    let label = ''
+    if (parts.length === 1) {
+      label = parts[0]
+    } else {
+      label = parts[parts.length - 2]
+    }
+    if (!label) return ''
+    return label.charAt(0).toUpperCase() + label.slice(1)
+  } catch {
+    return ''
+  }
+}
+
 export function useSubscriptions() {
   const items = ref<SubscriptionRecord[]>([])
   const loading = ref(false)
@@ -232,9 +270,25 @@ export function useSubscriptions() {
   const refreshingIDs = ref(new Set<string>())
   const togglingIDs = ref(new Set<string>())
   const settingPrimaryIDs = ref(new Set<string>())
+  const rowErrors = ref<Record<string, string>>({})
+
+  function clearRowError(id: string) {
+    if (rowErrors.value[id]) {
+      const copy = { ...rowErrors.value }
+      delete copy[id]
+      rowErrors.value = copy
+    }
+  }
+
+  function setRowError(id: string, message: string) {
+    rowErrors.value = { ...rowErrors.value, [id]: message }
+  }
+
+  let loadSequence = 0
 
   async function setPrimary(subscription: SubscriptionRecord): Promise<boolean> {
     if (settingPrimaryIDs.value.has(subscription.id)) return false
+    clearRowError(subscription.id)
     settingPrimaryIDs.value = new Set(settingPrimaryIDs.value).add(subscription.id)
     try {
       await api.patch(
@@ -251,8 +305,10 @@ export function useSubscriptions() {
       await load()
       return true
     } catch (cause) {
+      const msg = cause instanceof Error ? cause.message : '设置主订阅失败'
+      setRowError(subscription.id, msg)
       toastStore.push({
-        message: cause instanceof Error ? cause.message : '设置主订阅失败',
+        message: msg,
         tone: 'error',
       })
       await load().catch(() => {})
@@ -265,18 +321,23 @@ export function useSubscriptions() {
   }
 
   async function load() {
+    const thisSeq = ++loadSequence
     loading.value = true
     error.value = ''
     try {
       const result = await api.get<Page<SubscriptionRecord>>('/api/v1/subscriptions', {
         params: { page: page.value, page_size: pageSize },
       })
-      items.value = result.items
-      total.value = result.total
+      if (thisSeq !== loadSequence) return
+      items.value = result?.items ?? []
+      total.value = result?.total ?? items.value.length
     } catch (cause) {
+      if (thisSeq !== loadSequence) return
       error.value = cause instanceof Error ? cause.message : '加载订阅源列表失败'
     } finally {
-      loading.value = false
+      if (thisSeq === loadSequence) {
+        loading.value = false
+      }
     }
   }
 
@@ -305,6 +366,7 @@ export function useSubscriptions() {
     try {
       await api.delete(`/api/v1/subscriptions/${encodeURIComponent(subscription.id)}`)
       toastStore.push({ message: '订阅源已删除', tone: 'success' })
+      clearRowError(subscription.id)
       await load()
     } catch (cause) {
       toastStore.push({ message: cause instanceof Error ? cause.message : '删除订阅源失败', tone: 'error' })
@@ -313,6 +375,7 @@ export function useSubscriptions() {
 
   async function refresh(subscription: SubscriptionRecord) {
     if (refreshingIDs.value.has(subscription.id)) return
+    clearRowError(subscription.id)
     refreshingIDs.value = new Set(refreshingIDs.value).add(subscription.id)
     try {
       await api.post(`/api/v1/subscriptions/${encodeURIComponent(subscription.id)}/refresh`, undefined, {
@@ -321,7 +384,9 @@ export function useSubscriptions() {
       toastStore.push({ message: t('subscriptions.refreshCompleted'), tone: 'success' })
       await load()
     } catch (cause) {
-      toastStore.push({ message: cause instanceof Error ? cause.message : t('subscriptions.refreshFailed'), tone: 'error' })
+      const msg = cause instanceof Error ? cause.message : t('subscriptions.refreshFailed')
+      setRowError(subscription.id, msg)
+      toastStore.push({ message: msg, tone: 'error' })
       await load().catch(() => {})
     } finally {
       const pending = new Set(refreshingIDs.value)
@@ -332,6 +397,7 @@ export function useSubscriptions() {
 
   async function toggle(subscription: SubscriptionRecord): Promise<boolean> {
     if (togglingIDs.value.has(subscription.id)) return false
+    clearRowError(subscription.id)
     togglingIDs.value = new Set(togglingIDs.value).add(subscription.id)
     try {
       await api.patch(
@@ -348,8 +414,10 @@ export function useSubscriptions() {
       await load()
       return true
     } catch (cause) {
+      const msg = cause instanceof Error ? cause.message : '切换订阅状态失败'
+      setRowError(subscription.id, msg)
       toastStore.push({
-        message: cause instanceof Error ? cause.message : '切换订阅状态失败',
+        message: msg,
         tone: 'error',
       })
       await load().catch(() => {})
@@ -361,7 +429,25 @@ export function useSubscriptions() {
     }
   }
 
-  return { items, loading, saving, error, total, hasItems, refreshingIDs, togglingIDs, settingPrimaryIDs, load, save, remove, refresh, toggle, setPrimary }
+  return {
+    items,
+    loading,
+    saving,
+    error,
+    total,
+    hasItems,
+    refreshingIDs,
+    togglingIDs,
+    settingPrimaryIDs,
+    rowErrors,
+    clearRowError,
+    load,
+    save,
+    remove,
+    refresh,
+    toggle,
+    setPrimary,
+  }
 }
 
 export function useSubscriptionEntries() {

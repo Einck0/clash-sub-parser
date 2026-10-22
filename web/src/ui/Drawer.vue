@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { watch, onMounted, onUnmounted } from 'vue'
+import { ref, watch, onMounted, onUnmounted } from 'vue'
 import { XMarkIcon } from '@heroicons/vue/24/outline'
+import { useBodyScrollLock } from '../composables/useBodyScrollLock'
 
 const props = withDefaults(
   defineProps<{
@@ -21,14 +22,28 @@ const emit = defineEmits<{
   (e: 'close'): void
 }>()
 
+let previousActiveElement: HTMLElement | null = null
+const closeBtnRef = ref<HTMLButtonElement | null>(null)
+
+function restoreFocus() {
+  if (previousActiveElement && typeof previousActiveElement.focus === 'function') {
+    previousActiveElement.focus()
+    previousActiveElement = null
+  }
+}
+
 function close() {
   emit('update:modelValue', false)
   emit('close')
+  restoreFocus()
 }
 
 function handleKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape' && props.modelValue) {
-    if (!document.querySelector('dialog[open]')) close()
+    if (typeof document !== 'undefined' && !document.querySelector('dialog[open]')) {
+      e.stopPropagation()
+      close()
+    }
   }
 }
 
@@ -44,15 +59,19 @@ onUnmounted(() => {
   }
 })
 
+useBodyScrollLock(() => props.modelValue)
+
 watch(
   () => props.modelValue,
-  (val, _, onCleanup) => {
-    if (!val || typeof document === 'undefined') return
-    const previous = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    onCleanup(() => { document.body.style.overflow = previous })
-  },
-  { immediate: true }
+  (val) => {
+    if (val) {
+      if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
+        previousActiveElement = document.activeElement
+      }
+    } else {
+      restoreFocus()
+    }
+  }
 )
 </script>
 
@@ -63,6 +82,7 @@ watch(
       <div
         class="fixed inset-0 bg-black/40 backdrop-blur-sm transition-opacity"
         aria-hidden="true"
+        data-testid="drawer-backdrop"
         @click="close"
       />
 
@@ -73,6 +93,7 @@ watch(
         role="dialog"
         aria-modal="true"
         aria-labelledby="drawer-title"
+        :aria-describedby="description ? 'drawer-desc' : undefined"
       >
         <!-- Mobile touch grab handle -->
         <div class="md:hidden flex justify-center py-2.5 cursor-grab shrink-0 select-none">
@@ -85,11 +106,12 @@ watch(
             <h3 id="drawer-title" class="text-lg md:text-xl font-bold tracking-tight break-words text-base-content">
               {{ title }}
             </h3>
-            <p v-if="description" class="text-xs md:text-sm text-base-content/60 mt-1 break-words">
+            <p v-if="description" id="drawer-desc" class="text-xs md:text-sm text-base-content/60 mt-1 break-words">
               {{ description }}
             </p>
           </div>
           <button
+            ref="closeBtnRef"
             type="button"
             class="btn btn-ghost btn-circle btn-sm shrink-0 sticky top-0 touch-manipulation hover:bg-base-300/50"
             aria-label="Close drawer"

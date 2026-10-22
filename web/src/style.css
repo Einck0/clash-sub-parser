@@ -1,6 +1,8 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@plugin "daisyui" {
+  themes: dark --default, light, dim, cyberpunk, cupcake, dracula, nord;
+  exclude: rootscrollgutter;
+}
 
 :root {
   color-scheme: light dark;
@@ -14,6 +16,13 @@ html, body {
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
   -webkit-touch-callout: none;
+}
+
+@layer base {
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
 }
 
 /* Safe area insets for notched mobile devices */
@@ -55,18 +64,16 @@ html, body {
 
 /* ==========================================================================
    Semantic Touch and Interaction Standards
-   Replaces rigid 44px/24px hardcoded overrides with DaisyUI semantic sizing,
-   focus accessibility, and proportional hit-targets.
+   DaisyUI 5 / Tailwind 4 focus accessibility using OKLCH primary variable
    ========================================================================== */
 
-/* Enhanced focus indicators across interactive controls for accessibility */
 button:focus-visible,
 a:focus-visible,
 input:focus-visible,
 select:focus-visible,
 textarea:focus-visible,
 [role="button"]:focus-visible {
-  outline: 2px solid hsl(var(--p, 259 94% 51%));
+  outline: 2px solid var(--color-primary);
   outline-offset: 2px;
 }
 

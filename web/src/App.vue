@@ -6,7 +6,6 @@ import {
   DocumentDuplicateIcon,
   ServerStackIcon,
   GlobeAltIcon,
-  BoltIcon,
   CpuChipIcon,
   ShieldCheckIcon,
   ArrowDownTrayIcon,
@@ -16,6 +15,8 @@ import {
   ArrowPathIcon,
   ChevronDoubleLeftIcon,
   ChevronDoubleRightIcon,
+  EllipsisHorizontalIcon,
+  XMarkIcon,
 } from '@heroicons/vue/24/outline'
 import { api, ApiError } from './api/client'
 import { applyTheme, getStoredTheme, THEME_NAMES, type ThemeName } from './theme'
@@ -24,8 +25,14 @@ import { useAuth } from './features/auth/useAuth'
 import AuthGate from './features/auth/AuthGate.vue'
 import { useContentInset } from './composables/useContentInset'
 import { useBodyScrollLock } from './composables/useBodyScrollLock'
-import { getRouteTab, setRouteTab, type NavTab } from './navigation'
+import {
+  getRouteTab,
+  setRouteTab,
+  isMobileMoreTab,
+  type NavTab,
+} from './navigation'
 import { currentLocale, toggleLocale, t } from './locales'
+import { uiText } from './locales/redesign'
 import { router as fallbackRouter } from './router'
 
 const injectedRouter = useRouter()
@@ -57,24 +64,94 @@ function toggleCollapse() {
   }
 }
 
-const navItems = [
-  { id: 'dashboard', path: '/dashboard', labelKey: 'nav.dashboard', defaultLabel: 'Dashboard', icon: Squares2X2Icon },
-  { id: 'subscriptions', path: '/subscriptions', labelKey: 'nav.subscriptions', defaultLabel: 'Subscriptions', icon: DocumentDuplicateIcon },
-  { id: 'nodes', path: '/nodes', labelKey: 'nav.nodes', defaultLabel: 'Node Ledger', icon: ServerStackIcon },
-  { id: 'dns', path: '/dns', labelKey: 'nav.dns', defaultLabel: 'DNS', icon: GlobeAltIcon },
-  { id: 'policy', path: '/policy', labelKey: 'nav.policy', defaultLabel: 'Policy Tree', icon: CpuChipIcon },
-  { id: 'rules', path: '/rules', labelKey: 'nav.rules', defaultLabel: 'Rule Desk', icon: ShieldCheckIcon },
-  { id: 'publications', path: '/publications', labelKey: 'nav.publications', defaultLabel: 'Exports', icon: ArrowDownTrayIcon },
-  { id: 'settings', path: '/settings', labelKey: 'nav.settings', defaultLabel: 'Settings', icon: Cog6ToothIcon },
+interface NavItemDef {
+  id: NavTab
+  path: string
+  labelKey: string
+  defaultLabel: string
+  icon: any
+}
+
+// 8 Routes grouped logically for desktop sidebar
+const navGroups: Array<{
+  id: string
+  titleZh: string
+  titleEn: string
+  items: NavItemDef[]
+}> = [
+  {
+    id: 'core',
+    titleZh: '核心路由',
+    titleEn: 'Routing Core',
+    items: [
+      { id: 'nodes', path: '/nodes', labelKey: 'nav.nodes', defaultLabel: 'Node Ledger', icon: ServerStackIcon },
+      { id: 'policy', path: '/policy', labelKey: 'nav.policy', defaultLabel: 'Policy Tree', icon: CpuChipIcon },
+      { id: 'subscriptions', path: '/subscriptions', labelKey: 'nav.subscriptions', defaultLabel: 'Subscriptions', icon: DocumentDuplicateIcon },
+    ],
+  },
+  {
+    id: 'rules-dns',
+    titleZh: '规则与解析',
+    titleEn: 'Rules & DNS',
+    items: [
+      { id: 'rules', path: '/rules', labelKey: 'nav.rules', defaultLabel: 'Rule Desk', icon: ShieldCheckIcon },
+      { id: 'dns', path: '/dns', labelKey: 'nav.dns', defaultLabel: 'DNS', icon: GlobeAltIcon },
+    ],
+  },
+  {
+    id: 'system',
+    titleZh: '系统与发布',
+    titleEn: 'System & Exports',
+    items: [
+      { id: 'dashboard', path: '/dashboard', labelKey: 'nav.dashboard', defaultLabel: 'Dashboard', icon: Squares2X2Icon },
+      { id: 'publications', path: '/publications', labelKey: 'nav.publications', defaultLabel: 'Exports', icon: ArrowDownTrayIcon },
+      { id: 'settings', path: '/settings', labelKey: 'nav.settings', defaultLabel: 'Settings', icon: Cog6ToothIcon },
+    ],
+  },
 ]
 
+// Flattened list for lookup
+const allNavItems: NavItemDef[] = navGroups.flatMap((g) => g.items)
+
+// Mobile primary items: Nodes, Policy, Subscriptions
+const mobilePrimaryItems: NavItemDef[] = [
+  allNavItems.find((i) => i.id === 'nodes')!,
+  allNavItems.find((i) => i.id === 'policy')!,
+  allNavItems.find((i) => i.id === 'subscriptions')!,
+]
+
+// Mobile more items: Dashboard, DNS, Rules, Publications, Settings
+const mobileMoreItems: NavItemDef[] = [
+  allNavItems.find((i) => i.id === 'dashboard')!,
+  allNavItems.find((i) => i.id === 'dns')!,
+  allNavItems.find((i) => i.id === 'rules')!,
+  allNavItems.find((i) => i.id === 'publications')!,
+  allNavItems.find((i) => i.id === 'settings')!,
+]
+
+const currentActiveId = computed<string>(() => {
+  return String(injectedRoute?.name || activeTab.value || 'dashboard')
+})
+
+const isMoreActive = computed<boolean>(() => {
+  return isMobileMoreTab(currentActiveId.value)
+})
+
+const isMoreOpen = ref<boolean>(false)
+
+function toggleMore() {
+  isMoreOpen.value = !isMoreOpen.value
+}
+
+function closeMore() {
+  isMoreOpen.value = false
+}
+
 const currentTitle = computed(() => {
-  const rName = String(injectedRoute?.name || activeTab.value || 'dashboard')
-  if (currentLocale.value === 'zh-CN') {
-    const matched = navItems.find((item) => item.id === rName)
-    if (matched) {
-      return t(matched.labelKey)
-    }
+  const rName = currentActiveId.value
+  const matched = allNavItems.find((item) => item.id === rName)
+  if (matched) {
+    return t(matched.labelKey)
   }
   return rName.replace('-', ' ')
 })
@@ -100,7 +177,7 @@ function themeLabel(theme: ThemeName): string {
   }
 }
 
-const isItemActive = (item: typeof navItems[0]) => {
+const isItemActive = (item: NavItemDef) => {
   if (injectedRoute) {
     return injectedRoute.name === item.id || injectedRoute.path === item.path
   }
@@ -125,7 +202,7 @@ const themeDropdownRef = ref<HTMLElement | null>(null)
 
 const isMobileOverlayActive = computed(() => {
   if (typeof window === 'undefined') return false
-  return isThemeOpen.value && window.innerWidth < 768
+  return (isThemeOpen.value || isMoreOpen.value) && window.innerWidth < 768
 })
 useBodyScrollLock(isMobileOverlayActive)
 const themeToggleBtnRef = ref<HTMLButtonElement | null>(null)
@@ -155,16 +232,22 @@ const switchTheme = (theme: ThemeName) => {
 }
 
 const handleDocumentClick = (e: MouseEvent) => {
-  if (!isThemeOpen.value) return
   const target = e.target as Node | null
-  if (themeDropdownRef.value && target && !themeDropdownRef.value.contains(target)) {
-    closeThemeDropdown()
+  if (isThemeOpen.value) {
+    if (themeDropdownRef.value && target && !themeDropdownRef.value.contains(target)) {
+      closeThemeDropdown()
+    }
   }
 }
 
 const handleGlobalKeydown = (e: KeyboardEvent) => {
-  if (e.key === 'Escape' && isThemeOpen.value) {
-    closeThemeDropdown()
+  if (e.key === 'Escape') {
+    if (isThemeOpen.value) {
+      closeThemeDropdown()
+    }
+    if (isMoreOpen.value) {
+      closeMore()
+    }
   }
 }
 
@@ -182,6 +265,17 @@ const checkHealth = async () => {
     } else {
       healthDetails.value = String(err)
     }
+  }
+}
+
+function handleNavigation(tabId: NavTab, path: string, navigate?: (e: MouseEvent) => void, event?: MouseEvent) {
+  activeTab.value = tabId
+  setRouteTab(tabId)
+  closeMore()
+  if (navigate && event) {
+    navigate(event)
+  } else {
+    router.push(path)
   }
 }
 
@@ -222,12 +316,13 @@ onUnmounted(() => {
 
 <template>
   <div class="min-h-screen bg-base-100 flex flex-col md:flex-row text-base-content">
-    <!-- Desktop Collapsible Sidebar -->
+    <!-- Desktop Collapsible Grouped Sidebar -->
     <aside
-      class="hidden md:flex flex-col bg-base-200 border-r border-base-300 select-none shrink-0 sticky top-0 h-screen overflow-y-auto transition-[width] duration-200 ease-in-out"
+      class="hidden md:flex flex-col bg-base-200 border-r border-base-300 select-none shrink-0 sticky top-0 h-screen overflow-y-auto transition-[width] duration-200 ease-in-out z-20"
       :class="isCollapsed ? 'w-20' : 'w-64'"
     >
-      <div class="h-16 flex items-center justify-between px-4 border-b border-base-300">
+      <!-- Sidebar Header / Logo -->
+      <div class="h-16 flex items-center justify-between px-4 border-b border-base-300 shrink-0">
         <div class="flex items-center gap-3 overflow-hidden">
           <div class="w-8 h-8 rounded-lg bg-primary text-primary-content flex items-center justify-center font-bold text-lg shadow-sm shrink-0">
             C
@@ -241,7 +336,7 @@ onUnmounted(() => {
         <button
           type="button"
           @click="toggleCollapse"
-          class="btn btn-ghost btn-xs btn-circle text-base-content/60 hover:text-base-content"
+          class="btn btn-ghost btn-xs btn-circle text-base-content/60 hover:text-base-content shrink-0"
           :title="isCollapsed ? t('nav.expand') : t('nav.collapse')"
           aria-label="Toggle Sidebar"
           data-testid="sidebar-collapse-toggle"
@@ -251,34 +346,46 @@ onUnmounted(() => {
         </button>
       </div>
 
-      <nav class="flex-1 p-3 space-y-1.5 overflow-y-auto">
-        <RouterLink
-          v-for="item in navItems"
-          :key="item.id"
-          :to="item.path"
-          custom
-          v-slot="{ href, navigate, isActive }"
-        >
-          <button
-            :href="href"
-            type="button"
-            @click="(e) => { activeTab = item.id; setRouteTab(item.id as NavTab); if (navigate) navigate(e); else router.push(item.path); }"
-            class="w-full flex items-center gap-3 rounded-lg text-sm font-medium transition-colors"
-            :class="[
-              isActive || isItemActive(item)
-                ? 'bg-primary text-primary-content shadow-sm'
-                : 'hover:bg-base-300/60 text-base-content/80',
-              isCollapsed ? 'justify-center px-2 py-2.5' : 'px-3.5 py-2.5',
-            ]"
-            :title="isCollapsed ? t(item.labelKey) : undefined"
+      <!-- Sidebar Grouped Navigation Links -->
+      <nav class="flex-1 p-3 space-y-4 overflow-y-auto" aria-label="Desktop Navigation">
+        <div v-for="group in navGroups" :key="group.id" class="space-y-1">
+          <div
+            v-if="!isCollapsed"
+            class="px-3 pt-2 pb-1 text-[11px] font-semibold uppercase tracking-wider text-base-content/40 truncate select-none"
           >
-            <component :is="item.icon" class="w-5 h-5 flex-shrink-0" />
-            <span v-if="!isCollapsed" class="truncate">{{ t(item.labelKey) }}</span>
-          </button>
-        </RouterLink>
+            {{ uiText(group.titleZh, group.titleEn) }}
+          </div>
+          <div v-else class="h-px bg-base-300/40 my-2 mx-2" />
+
+          <RouterLink
+            v-for="item in group.items"
+            :key="item.id"
+            :to="item.path"
+            custom
+            v-slot="{ href, navigate, isActive }"
+          >
+            <button
+              :href="href"
+              type="button"
+              @click="(e) => handleNavigation(item.id, item.path, navigate, e)"
+              class="w-full flex items-center gap-3 rounded-lg text-sm font-medium transition-colors cursor-pointer"
+              :class="[
+                isActive || isItemActive(item)
+                  ? 'bg-primary text-primary-content shadow-sm'
+                  : 'hover:bg-base-300/60 text-base-content/80',
+                isCollapsed ? 'justify-center px-2 py-2.5' : 'px-3.5 py-2.5',
+              ]"
+              :title="isCollapsed ? t(item.labelKey) : undefined"
+            >
+              <component :is="item.icon" class="w-5 h-5 shrink-0" />
+              <span v-if="!isCollapsed" class="truncate">{{ t(item.labelKey) }}</span>
+            </button>
+          </RouterLink>
+        </div>
       </nav>
 
-      <div class="p-3 border-t border-base-300">
+      <!-- Desktop Sidebar Footer (Themes) -->
+      <div class="p-3 border-t border-base-300 shrink-0">
         <div v-if="!isCollapsed" class="flex items-center justify-between text-xs text-base-content/60">
           <span>{{ t('themes.label') }}：{{ themeLabel(currentTheme) }}</span>
           <div class="flex gap-1">
@@ -297,7 +404,7 @@ onUnmounted(() => {
           <button
             @click="switchTheme(currentTheme === 'dark' ? 'light' : 'dark')"
             class="btn btn-ghost btn-xs btn-circle"
-            :title="`${t('themes.label')}：${themeLabel(currentTheme)}`"
+            :title="`${t('themes.label')}：{{ themeLabel(currentTheme) }}`"
           >
             <SunIcon v-if="currentTheme === 'light'" class="w-4 h-4" />
             <MoonIcon v-else class="w-4 h-4" />
@@ -306,10 +413,10 @@ onUnmounted(() => {
       </div>
     </aside>
 
-    <!-- Main Container -->
+    <!-- Main Content Container -->
     <div class="flex-1 flex flex-col min-w-0 overflow-x-hidden">
       <!-- Topbar Header -->
-      <header class="h-16 bg-base-100 border-b border-base-300 flex items-center justify-between px-3 sm:px-6 sticky top-0 z-10 backdrop-blur bg-base-100/80 w-full overflow-hidden overflow-visible">
+      <header class="h-16 bg-base-100 border-b border-base-300 flex items-center justify-between px-3 sm:px-6 sticky top-0 z-20 backdrop-blur bg-base-100/80 w-full overflow-visible">
         <div class="flex items-center gap-2 sm:gap-3 min-w-0 shrink">
           <RouterLink
             to="/dashboard"
@@ -318,6 +425,7 @@ onUnmounted(() => {
           >
             C
           </RouterLink>
+          <!-- Single visible title level -->
           <span class="font-semibold text-sm sm:text-base capitalize truncate">{{ currentTitle }}</span>
         </div>
 
@@ -337,7 +445,7 @@ onUnmounted(() => {
                 'bg-error/10 text-error border-error/30': authState === 'error',
               }"
               :title="authState === 'open' ? t('topbar.openModeTooltip') : authState === 'authenticated' ? t('topbar.protectedAuthTooltip') : authState === 'unauthenticated' ? t('topbar.protectedUnauthTooltip') : t('topbar.probingTooltip')"
-              @click="(e) => { activeTab = 'settings'; setRouteTab('settings'); if (navigate) navigate(e); else router.push('/settings'); }"
+              @click="(e) => handleNavigation('settings', '/settings', navigate, e)"
             >
               <span
                 class="w-2 h-2 rounded-full inline-block shrink-0"
@@ -379,7 +487,7 @@ onUnmounted(() => {
             {{ currentLocale === 'zh-CN' ? '中 / EN' : 'EN / 中' }}
           </button>
 
-          <!-- Theme Dropdown -->
+          <!-- Theme Dropdown (with focus and menu-active support) -->
           <div
             ref="themeDropdownRef"
             class="dropdown dropdown-end shrink-0"
@@ -401,7 +509,7 @@ onUnmounted(() => {
             </button>
             <ul
               tabindex="0"
-              class="dropdown-content menu p-2 shadow-lg bg-base-200 rounded-box w-40 z-20 border border-base-300 text-xs mt-1 max-h-[calc(100vh-5rem)] overflow-y-auto"
+              class="dropdown-content menu p-2 shadow-lg bg-base-200 rounded-box w-40 z-30 border border-base-300 text-xs mt-1 max-h-[calc(100vh-5rem)] overflow-y-auto"
               role="menu"
               aria-label="Themes"
             >
@@ -411,7 +519,7 @@ onUnmounted(() => {
                   role="menuitem"
                   @click="switchTheme(tName)"
                   class="capitalize touch-manipulation w-full text-left"
-                  :class="{ 'active': currentTheme === tName }"
+                  :class="{ 'menu-active': currentTheme === tName, 'active': currentTheme === tName }"
                 >
                   {{ themeLabel(tName) }}
                 </button>
@@ -455,16 +563,18 @@ onUnmounted(() => {
 
       <ToastContainer />
 
-      <!-- Mobile Bottom Navigation (Floating Pill Island) -->
+      <!-- Mobile Bottom Navigation: 4 items (Nodes, Policy, Subscriptions, More) -->
       <nav
         ref="dockRef"
         data-testid="mobile-dock"
         class="md:hidden fixed bottom-3 sm:bottom-4 inset-x-3 sm:inset-x-6 mx-auto max-w-md py-2 px-2.5 bg-base-200/90 backdrop-blur-xl border border-white/10 shadow-2xl rounded-2xl z-20 pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))] touch-manipulation select-none"
         aria-label="Mobile Navigation Dock"
       >
+        <!-- Single 4-column row -->
         <div class="grid grid-cols-4 gap-1.5 w-full">
+          <!-- 1. Node Ledger -->
           <RouterLink
-            v-for="item in navItems.slice(0, 4)"
+            v-for="item in mobilePrimaryItems"
             :key="item.id"
             :to="item.path"
             custom
@@ -474,36 +584,86 @@ onUnmounted(() => {
               :href="href"
               type="button"
               :data-testid="`dock-link-${item.id}`"
-              @click="(e) => { activeTab = item.id; setRouteTab(item.id as NavTab); if (navigate) navigate(e); else router.push(item.path); }"
-              class="flex flex-col items-center justify-center py-1.5 px-1 rounded-xl text-[10px] sm:text-xs font-medium transition-all duration-150 touch-manipulation select-none active:scale-95"
+              @click="(e) => handleNavigation(item.id, item.path, navigate, e)"
+              class="flex flex-col items-center justify-center py-1.5 px-1 rounded-xl text-[10px] sm:text-xs font-medium transition-all duration-150 touch-manipulation select-none active:scale-95 cursor-pointer"
               :class="isActive || isItemActive(item) ? 'bg-primary/15 text-primary font-semibold shadow-sm' : 'text-base-content/70 hover:text-base-content hover:bg-base-300/40'"
             >
               <component :is="item.icon" class="w-4 h-4 sm:w-5 sm:h-5 mb-0.5 shrink-0" />
               <span class="truncate max-w-full leading-tight text-center">{{ t(item.labelKey) }}</span>
             </button>
           </RouterLink>
-        </div>
-        <div class="grid grid-cols-3 gap-1.5 w-full mt-1.5">
-          <RouterLink
-            v-for="item in navItems.slice(4)"
-            :key="item.id"
-            :to="item.path"
-            custom
-            v-slot="{ href, navigate, isActive }"
+
+          <!-- 4. More Button -->
+          <button
+            type="button"
+            data-testid="dock-link-more"
+            @click="toggleMore"
+            class="flex flex-col items-center justify-center py-1.5 px-1 rounded-xl text-[10px] sm:text-xs font-medium transition-all duration-150 touch-manipulation select-none active:scale-95 cursor-pointer"
+            :class="isMoreActive || isMoreOpen ? 'bg-primary/15 text-primary font-semibold shadow-sm' : 'text-base-content/70 hover:text-base-content hover:bg-base-300/40'"
+            :aria-expanded="isMoreOpen ? 'true' : 'false'"
+            aria-label="More Navigation Options"
           >
-            <button
-              :href="href"
-              type="button"
-              :data-testid="`dock-link-${item.id}`"
-              @click="(e) => { activeTab = item.id; setRouteTab(item.id as NavTab); if (navigate) navigate(e); else router.push(item.path); }"
-              class="flex flex-col items-center justify-center py-1.5 px-1 rounded-xl text-[10px] sm:text-xs font-medium transition-all duration-150 touch-manipulation select-none active:scale-95"
-              :class="isActive || isItemActive(item) ? 'bg-primary/15 text-primary font-semibold shadow-sm' : 'text-base-content/70 hover:text-base-content hover:bg-base-300/40'"
-            >
-              <component :is="item.icon" class="w-4 h-4 sm:w-5 sm:h-5 mb-0.5 shrink-0" />
-              <span class="truncate max-w-full leading-tight text-center">{{ t(item.labelKey) }}</span>
-            </button>
-          </RouterLink>
+            <EllipsisHorizontalIcon class="w-4 h-4 sm:w-5 sm:h-5 mb-0.5 shrink-0" />
+            <span class="truncate max-w-full leading-tight text-center">{{ uiText('更多', 'More') }}</span>
+          </button>
         </div>
+
+        <!-- Mobile "More" Drawer / Sheet for the remaining 5 routes -->
+        <Teleport to="body">
+          <div v-if="isMoreOpen" class="md:hidden fixed inset-0 z-50 flex flex-col justify-end">
+            <!-- Backdrop -->
+            <div
+              class="fixed inset-0 bg-black/40 backdrop-blur-sm transition-opacity"
+              aria-hidden="true"
+              @click="closeMore"
+            />
+
+            <!-- More Content Sheet -->
+            <div
+              class="relative z-10 w-full bg-base-200/95 backdrop-blur-2xl border-t border-white/10 shadow-2xl rounded-t-3xl p-4 pb-[max(1.5rem,calc(1rem+env(safe-area-inset-bottom,0px)))] space-y-3"
+              role="dialog"
+              aria-modal="true"
+              aria-label="More Navigation Pages"
+              data-testid="mobile-more-sheet"
+            >
+              <!-- Grab handle & header -->
+              <div class="flex items-center justify-between px-2 pt-1 pb-2 border-b border-base-300/40">
+                <span class="text-sm font-bold text-base-content">{{ uiText('更多页面', 'More Pages') }}</span>
+                <button
+                  type="button"
+                  class="btn btn-ghost btn-circle btn-xs text-base-content/60"
+                  aria-label="Close more navigation"
+                  @click="closeMore"
+                >
+                  <XMarkIcon class="w-4 h-4" />
+                </button>
+              </div>
+
+              <!-- 5 Secondary Route Options in Grid -->
+              <div class="grid grid-cols-2 gap-2">
+                <RouterLink
+                  v-for="item in mobileMoreItems"
+                  :key="item.id"
+                  :to="item.path"
+                  custom
+                  v-slot="{ href, navigate, isActive }"
+                >
+                  <button
+                    :href="href"
+                    type="button"
+                    :data-testid="`dock-link-${item.id}`"
+                    @click="(e) => handleNavigation(item.id, item.path, navigate, e)"
+                    class="flex items-center gap-2.5 p-2.5 rounded-xl text-xs font-medium transition-colors text-left w-full cursor-pointer"
+                    :class="isActive || isItemActive(item) ? 'bg-primary text-primary-content shadow-sm font-semibold' : 'bg-base-100/60 hover:bg-base-100 text-base-content/80'"
+                  >
+                    <component :is="item.icon" class="w-4 h-4 shrink-0" />
+                    <span class="truncate">{{ t(item.labelKey) }}</span>
+                  </button>
+                </RouterLink>
+              </div>
+            </div>
+          </div>
+        </Teleport>
       </nav>
     </div>
   </div>

@@ -721,19 +721,94 @@ export function usePublications(initialTarget?: CompilerTarget) {
     return { url, copied: false }
   }
 
-  function downloadDirectConfig(
+  function redactSensitive(text: string): string {
+    if (!text) return ''
+    return text
+      .replace(/(token=)[^& \s"']+/gi, '$1***')
+      .replace(/(Bearer\s+)[a-zA-Z0-9._-]+/gi, '$1***')
+      .replace(/(password=)[^& \s"']+/gi, '$1***')
+      .replace(/("password"\s*:\s*")[^"]+(")/gi, '$1***$2')
+      .replace(/("token"\s*:\s*")[^"]+(")/gi, '$1***$2')
+  }
+
+  const downloadingTargets = ref<Record<CompilerTarget, boolean>>({
+    mihomo: false,
+    singbox: false,
+    surge: false,
+    qx: false,
+  })
+
+  async function downloadDirectConfig(
     target: CompilerTarget,
     options?: { origin?: string; token?: string; mode?: 'open' | 'protected' }
-  ): void {
-    const url = getDirectUrl(target, options)
-    const filename = getTargetFilename(target)
-    if (typeof document !== 'undefined') {
-      const a = document.createElement('a')
-      a.href = url
-      a.download = filename
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
+  ): Promise<boolean> {
+    downloadingTargets.value[target] = true
+    try {
+      const url = getDirectUrl(target, options)
+      const filename = getTargetFilename(target)
+
+      const headers: Record<string, string> = {
+        Accept: '*/*',
+      }
+      const token =
+        options?.token !== undefined
+          ? options.token
+          : typeof window !== 'undefined' && window.localStorage
+          ? window.localStorage.getItem('csp_token') || ''
+          : ''
+      if (token && !headers.Authorization) {
+        headers.Authorization = `Bearer ${token}`
+      }
+
+      const fetcher = globalThis.fetch || fetch
+      const res = await fetcher(url, {
+        method: 'GET',
+        headers,
+      })
+
+      if (!res.ok) {
+        let errorMsg = `HTTP ${res.status}`
+        try {
+          const text = await res.text()
+          if (text) {
+            try {
+              const json = JSON.parse(text)
+              const errObj = json.error && typeof json.error === 'object' ? json.error : json
+              errorMsg = errObj.message || json.message || text
+            } catch {
+              errorMsg = text.length > 200 ? text.slice(0, 200) : text
+            }
+          }
+        } catch {
+          // fallback
+        }
+        errorMsg = redactSensitive(errorMsg)
+        throw new ApiError(res.status, 'download_compiler_error', errorMsg)
+      }
+
+      const blob = await res.blob()
+      if (typeof document !== 'undefined') {
+        let blobUrl = ''
+        if (typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
+          try {
+            blobUrl = URL.createObjectURL(blob)
+          } catch {
+            blobUrl = ''
+          }
+        }
+        const a = document.createElement('a')
+        a.href = blobUrl || url
+        a.download = filename
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+        if (blobUrl && typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
+          URL.revokeObjectURL(blobUrl)
+        }
+      }
+      return true
+    } finally {
+      downloadingTargets.value[target] = false
     }
   }
 
@@ -829,6 +904,7 @@ export function usePublications(initialTarget?: CompilerTarget) {
     getDirectUrl,
     copyDirectUrl,
     downloadDirectConfig,
+    downloadingTargets,
     copiedTarget,
     // Client subscription link exports
     subscriptionLinks,

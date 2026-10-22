@@ -96,3 +96,39 @@ export const COMMON_RULE_TYPES = [
 ] as const
 
 export type CommonRuleType = (typeof COMMON_RULE_TYPES)[number]
+
+export interface ParsedRuleExpression {
+  type: string
+  value: string
+  noResolve: boolean
+  isTerminal: boolean
+}
+
+export function parseRuleExpression(expr: string): ParsedRuleExpression {
+  const parts = (expr || '').split(',').map((p) => p.trim())
+  const type = (parts[0] || 'MATCH').toUpperCase()
+  const isTerminal = type === 'MATCH' || type === 'FINAL'
+  const value = parts.slice(1).filter((p) => p.toLowerCase() !== 'no-resolve').join(',')
+  const noResolve = parts.some((p) => p.toLowerCase() === 'no-resolve')
+  return { type, value, noResolve, isTerminal }
+}
+
+export function ruleTypeBadgeClass(type: string): string {
+  const upper = (type || '').toUpperCase()
+  if (upper.startsWith('DOMAIN')) {
+    return 'badge-primary text-primary-content'
+  }
+  if (upper.startsWith('IP-CIDR')) {
+    return 'badge-secondary text-secondary-content'
+  }
+  if (upper.startsWith('GEO')) {
+    return 'badge-accent text-accent-content'
+  }
+  if (upper === 'MATCH' || upper === 'FINAL') {
+    return 'badge-neutral text-neutral-content'
+  }
+  if (upper.startsWith('PROCESS')) {
+    return 'badge-info text-info-content'
+  }
+  return 'badge-ghost'
+}

@@ -1,36 +1,45 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import {
-  AdjustmentsHorizontalIcon,
-  ArrowPathIcon,
-  ClipboardDocumentIcon,
   DocumentDuplicateIcon,
-  EllipsisVerticalIcon,
-  ListBulletIcon,
   PlusIcon,
   StarIcon,
-  TrashIcon,
 } from '@heroicons/vue/24/outline'
+import PageToolbar from '../../ui/PageToolbar.vue'
 import ConfirmModal from '../../ui/ConfirmModal.vue'
 import EmptyState from '../../ui/EmptyState.vue'
 import ErrorStateCard from '../../ui/ErrorStateCard.vue'
-import StatusBadge from '../../ui/StatusBadge.vue'
-import Popover from '../../ui/Popover.vue'
 import { toastStore } from '../../ui/toast'
 import SubscriptionConfigDrawer from './SubscriptionConfigDrawer.vue'
 import SubscriptionEntriesDrawer from './SubscriptionEntriesDrawer.vue'
-import { t, currentLocale } from '../../locales'
+import SubscriptionCard from './SubscriptionCard.vue'
+import { t } from '../../locales'
+import { uiText } from '../../locales/redesign'
 import {
   useSubscriptions,
-  formatRefreshTime,
-  formatFullDateTime,
-  parseUserInfo,
-  formatBytes,
   type SubscriptionDraft,
   type SubscriptionRecord,
 } from './useSubscriptions'
 
-const { items, loading, saving, error, total, load, save, remove, refresh, refreshingIDs, toggle, togglingIDs, setPrimary, settingPrimaryIDs } = useSubscriptions()
+const {
+  items,
+  loading,
+  saving,
+  error,
+  total,
+  load,
+  save,
+  remove,
+  refresh,
+  refreshingIDs,
+  toggle,
+  togglingIDs,
+  setPrimary,
+  settingPrimaryIDs,
+  rowErrors,
+  clearRowError,
+} = useSubscriptions()
+
 const drawerOpen = ref(false)
 const editing = ref<SubscriptionRecord>()
 const confirmDeleteOpen = ref(false)
@@ -39,11 +48,13 @@ const deleting = ref(false)
 const entriesDrawerOpen = ref(false)
 const viewingEntriesSub = ref<SubscriptionRecord>()
 
+const primarySubscription = computed(() => items.value.find((s) => s.is_primary))
+
 async function handleSetPrimary(subscription: SubscriptionRecord) {
   try {
     await setPrimary(subscription)
   } catch {
-    // handled with toast
+    // handled with toast & rowErrors
   }
 }
 
@@ -51,7 +62,7 @@ async function handleToggle(subscription: SubscriptionRecord) {
   try {
     await toggle(subscription)
   } catch {
-    // handled with toast
+    // handled with toast & rowErrors
   }
 }
 
@@ -110,29 +121,60 @@ onMounted(load)
 </script>
 
 <template>
-  <section class="space-y-5" aria-labelledby="subscriptions-title">
-    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 w-full min-w-0">
-      <div class="min-w-0">
-        <p class="text-xs font-semibold uppercase tracking-[0.18em] text-primary">订阅源管理</p>
-        <h2 id="subscriptions-title" class="mt-1 text-2xl font-bold truncate">{{ t('subscriptions.title') }}</h2>
-        <p class="mt-1 text-sm opacity-70">{{ t('subscriptions.subtitle') }}</p>
+  <section class="space-y-5" aria-labelledby="subscriptions-title" data-testid="subscriptions-view">
+    <!-- Non-redundant Toolbar: renders page title without duplicate visible h1 -->
+    <PageToolbar
+      id="subscriptions-title"
+      :title="t('subscriptions.title')"
+      :description="t('subscriptions.subtitle')"
+    >
+      <!-- Center stats: Compact summary, no fake 0 on initial loading or error -->
+      <div class="flex items-center gap-2 text-xs text-base-content/70">
+        <span v-if="loading && items.length === 0" class="loading loading-spinner loading-xs text-primary" />
+        <template v-else-if="!error">
+          <span class="font-medium text-base-content" data-testid="toolbar-sources-count">
+            {{ uiText(`${items.length} 个订阅源`, `${items.length} sources`) }}
+          </span>
+          <span
+            v-if="primarySubscription"
+            class="badge badge-xs badge-warning font-semibold gap-0.5"
+            data-testid="toolbar-primary-badge"
+          >
+            <StarIcon class="w-3 h-3 fill-current" />
+            {{ uiText('主订阅生效中', 'Primary active') }}
+          </span>
+        </template>
       </div>
-      <button class="btn btn-primary btn-sm gap-2 touch-manipulation shadow-sm shrink-0 self-start sm:self-auto" type="button" @click="openCreate">
-        <PlusIcon class="h-4 w-4" />{{ t('subscriptions.add') }}
-      </button>
-    </div>
 
+      <!-- Actions Slot: Add Subscription button -->
+      <template #actions>
+        <button
+          class="btn btn-primary btn-sm gap-2 touch-manipulation shadow-xs shrink-0 self-start sm:self-auto"
+          type="button"
+          @click="openCreate"
+        >
+          <PlusIcon class="h-4 w-4" />
+          <span>{{ t('subscriptions.add') }}</span>
+        </button>
+      </template>
+    </PageToolbar>
+
+    <!-- Error State -->
     <ErrorStateCard
       v-if="error"
       :error="error"
       :retrying="loading"
       @retry="load"
     />
-    <div v-if="loading" class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-      <div v-for="index in 3" :key="index" class="skeleton h-44 rounded-box" />
+
+    <!-- Initial Loading State (Skeletons) -->
+    <div v-if="loading && items.length === 0" class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+      <div v-for="index in 3" :key="index" class="skeleton h-44 rounded-2xl" />
     </div>
+
+    <!-- Empty State -->
     <EmptyState
-      v-else-if="items.length === 0"
+      v-else-if="!loading && !error && items.length === 0"
       :icon="DocumentDuplicateIcon"
       :title="t('subscriptions.emptyTitle')"
       :description="t('subscriptions.emptyDesc')"
@@ -143,309 +185,30 @@ onMounted(load)
         <PlusIcon class="h-4 w-4" />
       </template>
     </EmptyState>
+
+    <!-- Subscriptions Cards Grid -->
     <div v-else class="grid gap-4 md:grid-cols-2 xl:grid-cols-3 w-full min-w-0">
-      <article
+      <SubscriptionCard
         v-for="subscription in items"
         :key="subscription.id"
-        data-testid="subscription-card"
-        class="card border border-base-300 bg-base-200 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md min-w-0 w-full overflow-hidden"
-      >
-        <div class="card-body gap-3 sm:gap-4 p-4 sm:p-5 min-w-0 max-w-full">
-          <div class="flex flex-wrap items-start justify-between gap-2 min-w-0" data-testid="subscription-card-header">
-            <div class="min-w-0 flex-1 basis-full sm:basis-40">
-              <div class="flex items-center gap-1.5 min-w-0 flex-wrap">
-                <h3 class="truncate font-semibold text-sm sm:text-base text-base-content">{{ subscription.name }}</h3>
-                <span
-                  v-if="subscription.is_primary"
-                  class="badge badge-warning badge-sm font-semibold shrink-0 gap-1 text-[11px]"
-                  data-testid="primary-sub-badge"
-                  title="当前主力订阅，流量与过期时间将透传至客户端"
-                >
-                  <StarIcon class="h-3 w-3 fill-current" />
-                  主订阅
-                </span>
-              </div>
-              <p class="mt-1 truncate font-mono text-xs opacity-60 break-all">{{ subscription.source_url_secret_ref }}</p>
-            </div>
-            <div class="flex flex-wrap items-center gap-1.5 min-w-0 max-w-full">
-              <button
-                type="button"
-                class="btn btn-ghost btn-xs border border-base-300/80 px-2 gap-1 touch-manipulation hover:bg-base-300"
-                data-testid="subscription-card-refresh-btn"
-                :disabled="refreshingIDs.has(subscription.id)"
-                :title="refreshingIDs.has(subscription.id) ? t('subscriptions.refreshing') : t('common.refresh')"
-                @click="refresh(subscription)"
-              >
-                <ArrowPathIcon class="h-3.5 w-3.5" :class="{ 'animate-spin': refreshingIDs.has(subscription.id) }" />
-                <span>{{ refreshingIDs.has(subscription.id) ? t('subscriptions.refreshing') : t('common.refresh') }}</span>
-              </button>
-              <button
-                type="button"
-                class="btn btn-ghost btn-xs border border-base-300/80 px-2 gap-1 touch-manipulation hover:bg-base-300"
-                data-testid="sub-view-entries"
-                :title="t('subscriptions.viewEntries')"
-                @click="openEntries(subscription)"
-              >
-                <ListBulletIcon class="h-3.5 w-3.5" />
-                <span>{{ t('subscriptions.viewEntries') }}</span>
-              </button>
-              <button
-                type="button"
-                data-testid="subscription-toggle-btn"
-                class="btn btn-xs gap-1 touch-manipulation transition-all"
-                :class="subscription.enabled ? 'btn-success btn-outline' : 'btn-ghost text-base-content/60 border border-base-300'"
-                :disabled="togglingIDs.has(subscription.id)"
-                :title="subscription.enabled ? '点击停用订阅源' : '点击启用订阅源'"
-                @click="handleToggle(subscription)"
-              >
-                <span
-                  class="w-2 h-2 rounded-full"
-                  :class="subscription.enabled ? 'bg-success animate-pulse' : 'bg-base-content/40'"
-                />
-                <span>{{ subscription.enabled ? t('common.enabled') : t('common.disabled') }}</span>
-              </button>
-              <Popover placement="bottom-end" panel-class="w-44 max-w-[calc(100vw-2rem)]">
-                <template #trigger="{ open }">
-                  <button
-                    type="button"
-                    class="btn btn-ghost btn-xs btn-circle text-base-content/70 hover:text-base-content touch-manipulation"
-                    :class="{ 'btn-active': open }"
-                    :title="t('common.actions')"
-                    aria-label="订阅源操作菜单"
-                    data-testid="subscription-actions-trigger"
-                  >
-                    <EllipsisVerticalIcon class="h-4 w-4" />
-                  </button>
-                </template>
-                <template #default="{ close }">
-                  <div class="flex flex-col gap-0.5 text-xs font-medium">
-                    <!-- Refresh -->
-                    <button
-                      type="button"
-                      class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-left hover:bg-base-300/80 transition-colors"
-                      :disabled="refreshingIDs.has(subscription.id)"
-                      @click="close(); refresh(subscription)"
-                      role="menuitem"
-                      data-testid="sub-action-refresh"
-                    >
-                      <ArrowPathIcon class="h-3.5 w-3.5 shrink-0" :class="{ 'animate-spin': refreshingIDs.has(subscription.id) }" />
-                      <span>{{ refreshingIDs.has(subscription.id) ? t('subscriptions.refreshing') : t('common.refresh') }}</span>
-                    </button>
-
-                    <!-- Set as Primary -->
-                    <button
-                      v-if="!subscription.is_primary"
-                      type="button"
-                      class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-left hover:bg-base-300/80 text-warning transition-colors"
-                      :disabled="settingPrimaryIDs.has(subscription.id)"
-                      @click="close(); handleSetPrimary(subscription)"
-                      role="menuitem"
-                      data-testid="sub-action-set-primary"
-                    >
-                      <StarIcon class="h-3.5 w-3.5 shrink-0" />
-                      <span>{{ settingPrimaryIDs.has(subscription.id) ? '设置中...' : '设为主订阅' }}</span>
-                    </button>
-
-                    <!-- Toggle Enabled -->
-                    <button
-                      type="button"
-                      class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-left hover:bg-base-300/80 transition-colors"
-                      :disabled="togglingIDs.has(subscription.id)"
-                      @click="close(); handleToggle(subscription)"
-                      role="menuitem"
-                      data-testid="sub-action-toggle"
-                    >
-                      <ArrowPathIcon v-if="togglingIDs.has(subscription.id)" class="h-3.5 w-3.5 shrink-0 animate-spin" />
-                      <span v-else class="w-3.5 h-3.5 inline-flex items-center justify-center font-bold text-xs">
-                        {{ subscription.enabled ? '⏸' : '▶' }}
-                      </span>
-                      <span>{{ subscription.enabled ? t('common.disable') : t('common.enable') }}</span>
-                    </button>
-
-                    <!-- View Source Entries -->
-                    <button
-                      type="button"
-                      class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-left hover:bg-base-300/80 text-info transition-colors"
-                      @click="close(); openEntries(subscription)"
-                      role="menuitem"
-                      data-testid="sub-action-view-entries"
-                    >
-                      <ListBulletIcon class="h-3.5 w-3.5 shrink-0" />
-                      <span>{{ t('subscriptions.viewEntries') }}</span>
-                    </button>
-
-                    <!-- Configure / Open Drawer -->
-                    <button
-                      type="button"
-                      class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-left hover:bg-base-300/80 text-primary transition-colors"
-                      @click="close(); openEdit(subscription)"
-                      role="menuitem"
-                      data-testid="sub-action-configure"
-                    >
-                      <AdjustmentsHorizontalIcon class="h-3.5 w-3.5 shrink-0" />
-                      <span>{{ t('subscriptions.configure') }}</span>
-                    </button>
-
-                    <!-- Copy Reference -->
-                    <button
-                      type="button"
-                      class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-left hover:bg-base-300/80 transition-colors"
-                      @click="close(); copyReference(subscription)"
-                      role="menuitem"
-                      data-testid="sub-action-copy-ref"
-                    >
-                      <ClipboardDocumentIcon class="h-3.5 w-3.5 shrink-0" />
-                      <span>{{ t('subscriptions.copyRef') }}</span>
-                    </button>
-
-                    <div class="my-1 border-t border-white/10" />
-
-                    <!-- Dangerous Delete -->
-                    <button
-                      type="button"
-                      class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-left hover:bg-error/20 text-error transition-colors"
-                      @click="close(); confirmRemove(subscription)"
-                      role="menuitem"
-                      data-testid="sub-action-delete"
-                    >
-                      <TrashIcon class="h-3.5 w-3.5 shrink-0" />
-                      <span>{{ t('common.delete') }}</span>
-                    </button>
-                  </div>
-                </template>
-              </Popover>
-            </div>
-          </div>
-
-          <!-- Node Count Badge / Retained Source Member Info -->
-          <div class="flex items-center justify-between gap-2 p-2 rounded-lg bg-base-300/40 text-xs" data-testid="subscription-node-count-bar">
-            <div class="flex items-center gap-1.5 min-w-0">
-              <span class="opacity-70 whitespace-nowrap">当前节点:</span>
-              <strong
-                data-testid="sub-current-node-count"
-                class="font-mono text-sm"
-                :class="subscription.enabled ? 'text-primary' : 'text-base-content/50'"
-              >
-                {{ subscription.enabled ? (subscription.node_count ?? 0) : 0 }}
-              </strong>
-            </div>
-            <div v-if="!subscription.enabled && (subscription.source_node_count ?? 0) > 0" class="text-[11px] opacity-65 font-mono truncate" data-testid="sub-retained-members" :title="t('subscriptions.retainedSourceMemberHint')">
-              {{ t('subscriptions.retainedSourceMembers', { count: subscription.source_node_count }) }}
-            </div>
-            <div v-else-if="subscription.enabled && subscription.source_node_count !== undefined && subscription.source_node_count !== subscription.node_count" class="text-[11px] opacity-60 font-mono truncate">
-              {{ t('subscriptions.sourceTotal', { count: subscription.source_node_count }) }}
-            </div>
-          </div>
-
-          <!-- UserInfo / Traffic & Expire Info -->
-          <div
-            v-if="subscription.userinfo && parseUserInfo(subscription.userinfo)"
-            class="p-2.5 rounded-lg bg-base-300/30 border border-base-300/60 text-xs space-y-1.5"
-            data-testid="subscription-userinfo"
-          >
-            <div class="flex items-center justify-between text-[11px] opacity-70">
-              <span class="font-medium">流量与周期</span>
-              <span v-if="parseUserInfo(subscription.userinfo)?.expireDate" class="font-mono">
-                到期: {{ parseUserInfo(subscription.userinfo)?.expireDate }}
-              </span>
-            </div>
-            <div class="flex items-center justify-between font-mono text-[11px]">
-              <span>已用: <strong>{{ formatBytes(parseUserInfo(subscription.userinfo)!.used) }}</strong></span>
-              <span v-if="parseUserInfo(subscription.userinfo)!.total > 0">
-                剩余: <strong class="text-success">{{ formatBytes(parseUserInfo(subscription.userinfo)!.remaining) }}</strong> / {{ formatBytes(parseUserInfo(subscription.userinfo)!.total) }}
-              </span>
-            </div>
-            <progress
-              v-if="parseUserInfo(subscription.userinfo)!.total > 0"
-              class="progress progress-primary w-full h-1.5"
-              :value="parseUserInfo(subscription.userinfo)!.used"
-              :max="parseUserInfo(subscription.userinfo)!.total"
-            />
-          </div>
-
-          <!-- Badges for Advanced Config -->
-          <div v-if="subscription.config?.cron_schedule || subscription.config?.auto_test || subscription.config?.rename_rules?.length || subscription.config?.filter_rules?.length || subscription.config?.target_groups?.length" class="flex flex-wrap gap-1.5 pt-1">
-            <span v-if="subscription.config?.cron_schedule" class="badge badge-neutral badge-xs font-mono text-[10px]">
-              {{ subscription.config.cron_schedule }}
-            </span>
-            <span v-if="subscription.config?.auto_test" class="badge badge-primary badge-outline badge-xs text-[10px]">
-              自动探测
-            </span>
-            <span v-if="subscription.config?.rename_rules?.length" class="badge badge-info badge-outline badge-xs text-[10px]">
-              {{ subscription.config.rename_rules.length }} 条重命名
-            </span>
-            <span v-if="subscription.config?.filter_rules?.length" class="badge badge-accent badge-outline badge-xs text-[10px]">
-              {{ subscription.config.filter_rules.length }} 条过滤
-            </span>
-            <span v-if="subscription.config?.target_groups?.length" class="badge badge-secondary badge-outline badge-xs text-[10px]">
-              {{ subscription.config.target_groups.length }} 个目标组
-            </span>
-          </div>
-
-          <dl class="grid grid-cols-2 gap-3 text-xs">
-            <div>
-              <dt class="opacity-60">{{ t('subscriptions.refreshInterval') }}</dt>
-              <dd class="mt-1 font-medium">{{ subscription.refresh_policy.interval_seconds }} 秒</dd>
-            </div>
-            <div>
-              <dt class="opacity-60">{{ t('subscriptions.timeout') }}</dt>
-              <dd class="mt-1 font-medium">{{ subscription.refresh_policy.timeout_seconds }} 秒</dd>
-            </div>
-            <div class="col-span-2 min-w-0" data-testid="subscription-last-refresh">
-              <dt class="opacity-60">{{ t('subscriptions.lastRefreshed') }}</dt>
-              <dd class="mt-1 font-medium min-w-0">
-                <div v-if="refreshingIDs.has(subscription.id)" class="flex items-center gap-2 flex-wrap min-w-0" data-testid="sub-refresh-loading">
-                  <span class="badge badge-info badge-sm h-auto min-h-[1.25rem] py-0.5 px-2 font-medium shrink-0 whitespace-nowrap text-info-content gap-1">
-                    <ArrowPathIcon class="h-3 w-3 animate-spin" />
-                    <span>{{ t('subscriptions.refreshing') }}</span>
-                  </span>
-                </div>
-                <span v-else-if="!subscription.last_refreshed_at" class="opacity-60" data-testid="sub-never-refreshed">
-                  {{ t('subscriptions.neverRefreshed') }}
-                </span>
-                <div v-else-if="subscription.last_refresh_outcome === 'failed'" class="flex items-center gap-2 flex-wrap min-w-0" data-testid="sub-refresh-failed">
-                  <span class="badge badge-error badge-sm h-auto min-h-[1.25rem] py-0.5 px-2 font-medium shrink-0 whitespace-nowrap text-error-content">
-                    {{ t('subscriptions.refreshFailed') }}
-                  </span>
-                  <span
-                    :title="formatFullDateTime(subscription.last_refreshed_at, currentLocale)"
-                    class="truncate text-error/90 font-mono text-[11px] cursor-help"
-                    data-testid="sub-refresh-time"
-                  >
-                    {{ formatRefreshTime(subscription.last_refreshed_at, currentLocale) }}
-                  </span>
-                </div>
-                <div v-else-if="subscription.last_refresh_outcome === 'partial'" class="flex items-center gap-2 flex-wrap min-w-0" data-testid="sub-refresh-partial">
-                  <span class="badge badge-warning badge-sm h-auto min-h-[1.25rem] py-0.5 px-2 font-medium shrink-0 whitespace-nowrap text-warning-content">
-                    {{ t('subscriptions.refreshPartial') }}
-                  </span>
-                  <span
-                    :title="formatFullDateTime(subscription.last_refreshed_at, currentLocale)"
-                    class="truncate opacity-80 font-mono text-[11px] cursor-help"
-                    data-testid="sub-refresh-time"
-                  >
-                    {{ formatRefreshTime(subscription.last_refreshed_at, currentLocale) }}
-                  </span>
-                </div>
-                <div v-else class="flex items-center gap-2 flex-wrap min-w-0" data-testid="sub-refresh-success">
-                  <span class="badge badge-success badge-outline badge-sm h-auto min-h-[1.25rem] py-0.5 px-2 font-medium shrink-0 whitespace-nowrap">
-                    {{ t('subscriptions.refreshSuccess') }}
-                  </span>
-                  <span
-                    :title="formatFullDateTime(subscription.last_refreshed_at, currentLocale)"
-                    class="truncate opacity-80 font-mono text-[11px] cursor-help"
-                    data-testid="sub-refresh-time"
-                  >
-                    {{ formatRefreshTime(subscription.last_refreshed_at, currentLocale) }}
-                  </span>
-                </div>
-              </dd>
-            </div>
-          </dl>
-        </div>
-      </article>
+        :subscription="subscription"
+        :refreshing="refreshingIDs.has(subscription.id)"
+        :toggling="togglingIDs.has(subscription.id)"
+        :setting-primary="settingPrimaryIDs.has(subscription.id)"
+        :row-error="rowErrors[subscription.id]"
+        @refresh="refresh(subscription)"
+        @toggle="handleToggle(subscription)"
+        @set-primary="handleSetPrimary(subscription)"
+        @open-entries="openEntries(subscription)"
+        @edit="openEdit(subscription)"
+        @confirm-remove="confirmRemove(subscription)"
+        @copy="copyReference(subscription)"
+        @clear-error="clearRowError(subscription.id)"
+      />
     </div>
-    <div v-if="items.length" class="flex flex-wrap items-center justify-between gap-2 text-xs opacity-60 pt-1">
+
+    <!-- Total count footer -->
+    <div v-if="items.length && !loading && !error" class="flex flex-wrap items-center justify-between gap-2 text-xs opacity-60 pt-1">
       <span class="italic">{{ t('subscriptions.perSubCountNotice') }}</span>
       <p data-testid="subscription-total-count">
         {{ t('subscriptions.totalOf', { count: items.length, total }) }}
@@ -466,6 +229,7 @@ onMounted(load)
       :subscription="viewingEntriesSub"
     />
 
+    <!-- Confirm Remove Modal -->
     <ConfirmModal
       v-model="confirmDeleteOpen"
       :title="t('subscriptions.deleteConfirmTitle')"

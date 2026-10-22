@@ -13,8 +13,24 @@ export type NavTab = (typeof VALID_TABS)[number]
 
 export const ROUTE_STORAGE_KEY = 'csp_active_tab'
 
+export const MOBILE_PRIMARY_TABS = ['nodes', 'policy', 'subscriptions'] as const
+export type MobilePrimaryTab = (typeof MOBILE_PRIMARY_TABS)[number]
+
+export const MOBILE_MORE_TABS = [
+  'dashboard',
+  'dns',
+  'rules',
+  'publications',
+  'settings',
+] as const
+export type MobileMoreTab = (typeof MOBILE_MORE_TABS)[number]
+
 export function isValidTab(tab: string | null | undefined): tab is NavTab {
   return tab !== null && tab !== undefined && (VALID_TABS as readonly string[]).includes(tab)
+}
+
+export function isMobileMoreTab(tab: string | null | undefined): tab is MobileMoreTab {
+  return tab !== null && tab !== undefined && (MOBILE_MORE_TABS as readonly string[]).includes(tab)
 }
 
 export function getRouteTab(

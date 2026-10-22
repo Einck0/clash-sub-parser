@@ -305,12 +305,13 @@ function opLabel(op: FilterOp): string {
       class="rounded-xl bg-base-100/70 border border-base-300 p-3 space-y-3"
       data-testid="filter-condition"
     >
-      <div class="flex flex-wrap gap-2 items-center">
-        <label class="text-xs font-medium">{{ t('settings.filterField') }}
+      <div class="flex flex-wrap gap-2 items-end">
+        <label class="flex flex-col gap-1 text-xs font-medium">
+          <span>{{ t('settings.filterField') }}</span>
           <select
             v-model="condition.field"
             data-testid="condition-field"
-            class="select select-bordered select-sm block"
+            class="select select-sm"
             :aria-label="t('settings.filterField')"
             :disabled="readOnly"
             @change="onInlineRowFieldChange(condition)"
@@ -321,11 +322,12 @@ function opLabel(op: FilterOp): string {
           </select>
         </label>
 
-        <label class="text-xs font-medium">{{ t('settings.filterOperator') }}
+        <label class="flex flex-col gap-1 text-xs font-medium">
+          <span>{{ t('settings.filterOperator') }}</span>
           <select
             v-model="condition.op"
             data-testid="condition-op"
-            class="select select-bordered select-sm block font-mono"
+            class="select select-sm font-mono"
             :aria-label="t('settings.filterOperator')"
             :disabled="readOnly"
             @change="emitConditions"
@@ -337,10 +339,11 @@ function opLabel(op: FilterOp): string {
         </label>
 
         <!-- Probe kind for probe fields -->
-        <label v-if="isConditionProbe(condition.field)" class="text-xs font-medium">{{ t('settings.filterKind') }}
+        <label v-if="isConditionProbe(condition.field)" class="flex flex-col gap-1 text-xs font-medium">
+          <span>{{ t('settings.filterKind') }}</span>
           <select
             v-model="condition.probe_kind"
-            class="select select-bordered select-sm block font-mono"
+            class="select select-sm font-mono"
             :aria-label="t('settings.filterKind')"
             :disabled="readOnly"
             @change="emitConditions"
@@ -352,11 +355,12 @@ function opLabel(op: FilterOp): string {
         </label>
 
         <!-- Health Status Value -->
-        <label v-if="condition.field === 'health_status'" class="text-xs font-medium">{{ t('settings.filterValue') }}
+        <label v-if="condition.field === 'health_status'" class="flex flex-col gap-1 text-xs font-medium">
+          <span>{{ t('settings.filterValue') }}</span>
           <select
             v-model="condition.value"
             data-testid="condition-value"
-            class="select select-bordered select-sm block font-mono"
+            class="select select-sm font-mono"
             :aria-label="t('settings.filterValue')"
             :disabled="readOnly"
             @change="emitConditions"
@@ -368,11 +372,12 @@ function opLabel(op: FilterOp): string {
         </label>
 
         <!-- Exit Region Value -->
-        <label v-else-if="condition.field === 'exit_region'" class="text-xs font-medium">{{ t('settings.filterValue') }}
+        <label v-else-if="condition.field === 'exit_region'" class="flex flex-col gap-1 text-xs font-medium">
+          <span>{{ t('settings.filterValue') }}</span>
           <input
             v-model="condition.value"
             data-testid="condition-value"
-            class="input input-bordered input-sm block font-mono uppercase"
+            class="input input-sm font-mono uppercase"
             :aria-label="t('settings.filterValue')"
             placeholder="如 HK, JP..."
             maxlength="2"
@@ -383,10 +388,11 @@ function opLabel(op: FilterOp): string {
 
         <!-- Platform Verdict -->
         <template v-else-if="condition.field === 'platform_verdict'">
-          <label class="text-xs font-medium">平台类型
+          <label class="flex flex-col gap-1 text-xs font-medium">
+            <span>平台类型</span>
             <select
               v-model="condition.probe_kind"
-              class="select select-bordered select-sm block font-mono"
+              class="select select-sm font-mono"
               aria-label="平台类型"
               :disabled="readOnly"
               @change="condition.platform = condition.probe_kind === 'ai' ? 'openai' : 'netflix'; emitConditions()"
@@ -395,10 +401,11 @@ function opLabel(op: FilterOp): string {
               <option value="streaming">streaming</option>
             </select>
           </label>
-          <label class="text-xs font-medium">服务平台
+          <label class="flex flex-col gap-1 text-xs font-medium">
+            <span>服务平台</span>
             <select
               v-model="condition.platform"
-              class="select select-bordered select-sm block font-mono"
+              class="select select-sm font-mono"
               aria-label="服务平台"
               :disabled="readOnly"
               @change="emitConditions"
@@ -411,11 +418,12 @@ function opLabel(op: FilterOp): string {
               </template>
             </select>
           </label>
-          <label class="text-xs font-medium">{{ t('settings.filterValue') }}
+          <label class="flex flex-col gap-1 text-xs font-medium">
+            <span>{{ t('settings.filterValue') }}</span>
             <select
               v-model="condition.value"
               data-testid="condition-value"
-              class="select select-bordered select-sm block font-mono"
+              class="select select-sm font-mono"
               :aria-label="t('settings.filterValue')"
               :disabled="readOnly"
               @change="emitConditions"
@@ -429,11 +437,12 @@ function opLabel(op: FilterOp): string {
         </template>
 
         <!-- Protocol -->
-        <label v-else-if="condition.field === 'protocol'" class="text-xs font-medium">{{ t('settings.filterValue') }}
+        <label v-else-if="condition.field === 'protocol'" class="flex flex-col gap-1 text-xs font-medium">
+          <span>{{ t('settings.filterValue') }}</span>
           <select
             v-model="condition.value"
             data-testid="condition-value"
-            class="select select-bordered select-sm block font-mono"
+            class="select select-sm font-mono"
             :aria-label="t('settings.filterValue')"
             :disabled="readOnly"
             @change="emitConditions"
@@ -444,11 +453,12 @@ function opLabel(op: FilterOp): string {
         </label>
 
         <!-- Probe Verdict (Legacy) -->
-        <label v-else-if="condition.field === 'probe_verdict'" class="text-xs font-medium">{{ t('settings.filterValue') }}
+        <label v-else-if="condition.field === 'probe_verdict'" class="flex flex-col gap-1 text-xs font-medium">
+          <span>{{ t('settings.filterValue') }}</span>
           <select
             v-model="condition.value"
             data-testid="condition-value"
-            class="select select-bordered select-sm block font-mono"
+            class="select select-sm font-mono"
             :aria-label="t('settings.filterValue')"
             :disabled="readOnly"
             @change="emitConditions"
@@ -460,11 +470,12 @@ function opLabel(op: FilterOp): string {
         </label>
 
         <!-- Probe Latency -->
-        <label v-else-if="condition.field === 'probe_latency_ms'" class="text-xs font-medium">{{ t('settings.filterValue') }}
+        <label v-else-if="condition.field === 'probe_latency_ms'" class="flex flex-col gap-1 text-xs font-medium">
+          <span>{{ t('settings.filterValue') }}</span>
           <input
             v-model="condition.value"
             data-testid="condition-value"
-            class="input input-bordered input-sm block font-mono max-w-full"
+            class="input input-sm font-mono max-w-full"
             :aria-label="t('settings.filterValue')"
             placeholder="毫秒 (例如: 200)"
             :disabled="readOnly"
@@ -473,11 +484,12 @@ function opLabel(op: FilterOp): string {
         </label>
 
         <!-- Source Subscription IDs -->
-        <label v-else-if="condition.field === 'source_subscription_ids'" class="text-xs font-medium">{{ t('settings.filterValue') }}
+        <label v-else-if="condition.field === 'source_subscription_ids'" class="flex flex-col gap-1 text-xs font-medium">
+          <span>{{ t('settings.filterValue') }}</span>
           <input
             v-model="condition.value"
             data-testid="condition-value"
-            class="input input-bordered input-sm block font-mono max-w-full"
+            class="input input-sm font-mono max-w-full"
             :aria-label="t('settings.filterValue')"
             placeholder="订阅 UUIDv7..."
             :disabled="readOnly"
@@ -486,11 +498,12 @@ function opLabel(op: FilterOp): string {
         </label>
 
         <!-- Display Name (Default) -->
-        <label v-else class="text-xs font-medium">{{ t('settings.filterValue') }}
+        <label v-else class="flex flex-col gap-1 text-xs font-medium">
+          <span>{{ t('settings.filterValue') }}</span>
           <input
             v-model="condition.value"
             data-testid="condition-value"
-            class="input input-bordered input-sm block font-mono max-w-full"
+            class="input input-sm font-mono max-w-full"
             :aria-label="t('settings.filterValue')"
             :disabled="readOnly"
             @input="emitConditions"

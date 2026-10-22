@@ -27,7 +27,9 @@ import StructuredFilterEditor from './StructuredFilterEditor.vue'
 import ConfirmModal from '../../ui/ConfirmModal.vue'
 import ModalDialog from '../../ui/ModalDialog.vue'
 import ErrorStateCard from '../../ui/ErrorStateCard.vue'
+import PageToolbar from '../../ui/PageToolbar.vue'
 import { useNodes } from '../nodes/useNodes'
+import { uiText } from '../../locales/redesign'
 import { t } from '../../locales'
 
 const {
@@ -273,17 +275,9 @@ onUnmounted(() => {
 
 <template>
   <section class="space-y-5" aria-labelledby="policy-title">
-    <!-- Header -->
-    <div class="flex flex-col sm:flex-row sm:items-end justify-between gap-3 w-full min-w-0">
-      <div class="min-w-0">
-        <p class="text-xs font-semibold uppercase tracking-[0.18em] text-primary">{{ t('policy.tag') }}</p>
-        <h2 id="policy-title" class="mt-1 text-2xl font-bold truncate">{{ t('policy.title') }}</h2>
-        <p class="mt-1 text-sm opacity-70">
-          {{ t('policy.subtitle') }}
-        </p>
-      </div>
-
-      <div class="flex flex-wrap items-center gap-2 shrink-0">
+    <!-- Header with PageToolbar & Main Actions -->
+    <PageToolbar :title="t('policy.title')" :description="t('policy.subtitle')">
+      <template #actions>
         <a
           href="#/rules"
           data-testid="rules-nav-link"
@@ -330,8 +324,8 @@ onUnmounted(() => {
           <PlusIcon class="w-4 h-4" />
           {{ t('policy.addGroup') }}
         </button>
-      </div>
-    </div>
+      </template>
+    </PageToolbar>
 
     <!-- Error Alert / Degraded State Card -->
     <ErrorStateCard
@@ -341,136 +335,160 @@ onUnmounted(() => {
       @retry="reload"
     />
 
-    <!-- Stale Notification Banner -->
-    <div
-      v-if="validationStale"
-      class="p-2.5 rounded-lg border border-warning/30 bg-warning/10 text-warning text-xs flex items-center justify-between"
-    >
-      <div class="flex items-center gap-2">
-        <ArrowPathIcon class="w-4 h-4 animate-spin flex-shrink-0" />
-        <span>{{ t('policy.validationStaleNotice') }}</span>
-      </div>
-    </div>
-
-    <!-- Validation Incomplete / Retry Alert -->
-    <div
-      v-if="validationState === 'incomplete'"
-      role="alert"
-      aria-live="polite"
-      class="p-3.5 rounded-xl border border-error/30 bg-error/10 text-error text-xs flex items-center justify-between gap-3"
-    >
-      <div class="flex items-center gap-2">
-        <ExclamationTriangleIcon class="w-5 h-5 flex-shrink-0" />
-        <div>
-          <span class="font-bold">{{ t('policy.validationIncomplete') }}</span>
-          <p class="opacity-80 mt-0.5">{{ validationError || '服务校验响应异常，请点击右侧重试' }}</p>
-        </div>
-      </div>
-      <button
-        type="button"
-        class="btn btn-error btn-xs"
-        :disabled="validating"
-        @click="validateGraph"
-      >
-        {{ t('policy.retryValidate') }}
-      </button>
-    </div>
-
-    <!-- Graph Validation Result Banner -->
-    <Transition
-      enter-active-class="transition-all duration-200 ease-out"
-      enter-from-class="opacity-0 -translate-y-2"
-      enter-to-class="opacity-100 translate-y-0"
-    >
+    <!-- Single Unified Validation Status Region (never stacks stale + incomplete + result alerts) -->
+    <div data-testid="validation-status-region" class="space-y-2">
+      <!-- Priority 1: Incomplete validation (request error / timeout / network failure) -->
       <div
-        v-if="validationResult"
-        class="p-4 rounded-xl border text-sm flex items-start justify-between gap-3"
-        :class="validationResult.valid ? (hasWarningOrErrorIssues ? 'bg-warning/10 border-warning/30 text-warning' : 'bg-success/10 border-success/30 text-success') : 'bg-error/10 border-error/30 text-error'"
+        v-if="validationState === 'incomplete'"
+        role="alert"
+        aria-live="polite"
+        class="p-3.5 rounded-xl border border-error/30 bg-error/10 text-error text-xs flex items-center justify-between gap-3"
       >
-        <div class="flex items-start gap-2.5 min-w-0">
-          <CheckBadgeIcon v-if="validationResult.valid && !hasWarningOrErrorIssues" class="w-5 h-5 flex-shrink-0 mt-0.5" />
-          <ExclamationTriangleIcon v-else class="w-5 h-5 flex-shrink-0 mt-0.5" />
-          <div class="min-w-0 space-y-1">
-            <h4 class="font-bold">
-              {{ validationResult.valid ? (hasWarningOrErrorIssues ? '拓扑校验通过（存在配置警告）' : '拓扑与分流校验通过') : '拓扑与分流校验存在阻断问题' }}
-            </h4>
-            <p v-if="validationResult.valid && !hasWarningOrErrorIssues" class="text-xs opacity-90 mt-0.5">
-              {{ t('policy.validationSuccess') }}
+        <div class="flex items-center gap-2 min-w-0">
+          <ExclamationTriangleIcon class="w-5 h-5 shrink-0" />
+          <div class="min-w-0">
+            <span class="font-bold">{{ t('policy.validationIncomplete') }}</span>
+            <p class="opacity-80 mt-0.5 truncate">
+              {{ validationError || uiText('校验服务请求失败 (网络/服务异常)，非策略无效，请点击右侧重试', 'Validation request failed (network/service error), draft is not invalid. Please retry.') }}
             </p>
-            <div v-else-if="validationResult.issues && validationResult.issues.length > 0" class="space-y-1.5 mt-1.5">
-              <div
-                v-for="(iss, idx) in validationResult.issues"
-                :key="idx"
-                class="text-xs flex flex-wrap items-center gap-1.5 p-1.5 rounded bg-base-100/60 border border-base-300/40"
-              >
-                <span
-                  class="badge badge-xs font-bold"
-                  :class="iss.severity === 'error' ? 'badge-error' : 'badge-warning'"
-                >
-                  {{ iss.severity === 'error' ? '错误' : '警告' }}
-                </span>
-                <span v-if="iss.position !== undefined" class="badge badge-ghost badge-xs font-mono">
-                  #{{ iss.position + 1 }}
-                </span>
-                <span v-if="iss.type" class="badge badge-outline badge-xs font-mono">
-                  {{ iss.type }}
-                </span>
-                <span v-if="iss.target_group_name" class="badge badge-neutral badge-xs">
-                  {{ iss.target_group_name }}
-                </span>
-                <span class="opacity-90">{{ iss.message }}</span>
-              </div>
-            </div>
-            <ul v-else class="mt-1 text-xs list-disc list-inside space-y-0.5 font-mono">
-              <li v-for="(err, idx) in validationResult.errors" :key="idx">{{ err }}</li>
-            </ul>
           </div>
         </div>
         <button
           type="button"
-          class="btn btn-ghost btn-xs btn-circle"
-          @click="validationResult = null"
+          class="btn btn-error btn-xs shrink-0"
+          :disabled="validating"
+          @click="validateGraph"
         >
-          ✕
+          {{ t('policy.retryValidate') }}
         </button>
       </div>
-    </Transition>
 
-    <!-- Group & Routing Rule Target Capability Boundary Banner -->
-    <div
-      data-testid="policy-capability-boundary"
-      class="rounded-xl border border-base-300 bg-base-200/70 p-3.5 sm:p-4 text-xs space-y-2.5 min-w-0 w-full"
-    >
-      <div class="flex flex-wrap items-center justify-between gap-2">
-        <span class="font-bold text-base-content">编译目标能力边界说明（策略组与分流规则）</span>
-        <span class="badge badge-xs badge-ghost font-mono">仅 Mihomo 导出完整策略组与分流规则；其他目标仅导出节点格式（忽略策略组与规则）</span>
-      </div>
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px] font-mono">
-        <div class="p-2.5 rounded-lg bg-base-100/70 border border-base-300/60 space-y-1">
-          <span class="font-sans font-semibold opacity-75 block">策略组类型支持目标</span>
-          <div
-            v-for="gt in ALL_GROUP_TYPES"
-            :key="gt.type"
-            class="flex flex-wrap items-center justify-between gap-1"
-          >
-            <span class="text-primary font-semibold">{{ gt.label }}</span>
-            <span class="opacity-80">{{ gt.supportedTargets.join(', ') }}</span>
-          </div>
+      <!-- Priority 2: Stale validation notification (when not validating and not incomplete) -->
+      <div
+        v-else-if="validationStale && validationState !== 'validating'"
+        class="p-2.5 rounded-lg border border-warning/30 bg-warning/10 text-warning text-xs flex items-center justify-between"
+      >
+        <div class="flex items-center gap-2">
+          <ArrowPathIcon class="w-4 h-4 animate-spin shrink-0" />
+          <span>{{ t('policy.validationStaleNotice') }}</span>
         </div>
-        <div class="p-2.5 rounded-lg bg-base-100/70 border border-base-300/60 space-y-1">
-          <span class="font-sans font-semibold opacity-75 block">分流规则子集支持目标</span>
-          <div
-            v-for="band in MODERN_RULE_CAPABILITY_MATRIX"
-            :key="band.category"
-            class="leading-snug"
-          >
-            <span class="font-sans opacity-75 mr-1">{{ band.category }}：</span>
-            <span class="text-secondary font-semibold">{{ band.ruleKinds.join(', ') }}</span> →
-            <span class="opacity-80">{{ band.supportedTargets.join(', ') }}</span>
-          </div>
-        </div>
+        <button
+          type="button"
+          class="btn btn-warning btn-xs btn-outline shrink-0"
+          :disabled="validating"
+          @click="validateGraph"
+        >
+          {{ uiText('重新校验', 'Re-validate') }}
+        </button>
       </div>
+
+      <!-- Priority 3: Currently validating -->
+      <div
+        v-else-if="validationState === 'validating'"
+        class="p-2.5 rounded-lg border border-info/30 bg-info/10 text-info text-xs flex items-center gap-2"
+      >
+        <ArrowPathIcon class="w-4 h-4 animate-spin shrink-0" />
+        <span>{{ uiText('正在校验策略拓扑与分流规则...', 'Validating policy topology and routing rules...') }}</span>
+      </div>
+
+      <!-- Priority 4: Clean validation result banner (when not stale and not incomplete) -->
+      <Transition
+        enter-active-class="transition-all duration-200 ease-out"
+        enter-from-class="opacity-0 -translate-y-2"
+        enter-to-class="opacity-100 translate-y-0"
+      >
+        <div
+          v-if="validationResult"
+          class="p-4 rounded-xl border text-sm flex items-start justify-between gap-3"
+          :class="validationResult.valid ? (hasWarningOrErrorIssues ? 'bg-warning/10 border-warning/30 text-warning' : 'bg-success/10 border-success/30 text-success') : 'bg-error/10 border-error/30 text-error'"
+        >
+          <div class="flex items-start gap-2.5 min-w-0">
+            <CheckBadgeIcon v-if="validationResult.valid && !hasWarningOrErrorIssues" class="w-5 h-5 shrink-0 mt-0.5" />
+            <ExclamationTriangleIcon v-else class="w-5 h-5 shrink-0 mt-0.5" />
+            <div class="min-w-0 space-y-1">
+              <h4 class="font-bold">
+                {{ validationResult.valid ? (hasWarningOrErrorIssues ? '拓扑校验通过（存在配置警告）' : '拓扑与分流校验通过') : '拓扑与分流校验存在阻断问题' }}
+              </h4>
+              <p v-if="validationResult.valid && !hasWarningOrErrorIssues" class="text-xs opacity-90 mt-0.5">
+                {{ t('policy.validationSuccess') }}
+              </p>
+              <div v-else-if="validationResult.issues && validationResult.issues.length > 0" class="space-y-1.5 mt-1.5">
+                <div
+                  v-for="(iss, idx) in validationResult.issues"
+                  :key="idx"
+                  class="text-xs flex flex-wrap items-center gap-1.5 p-1.5 rounded bg-base-100/60 border border-base-300/40"
+                >
+                  <span
+                    class="badge badge-xs font-bold"
+                    :class="iss.severity === 'error' ? 'badge-error' : 'badge-warning'"
+                  >
+                    {{ iss.severity === 'error' ? '错误' : '警告' }}
+                  </span>
+                  <span v-if="iss.position !== undefined" class="badge badge-ghost badge-xs font-mono">
+                    #{{ iss.position + 1 }}
+                  </span>
+                  <span v-if="iss.type" class="badge badge-outline badge-xs font-mono">
+                    {{ iss.type }}
+                  </span>
+                  <span v-if="iss.target_group_name" class="badge badge-neutral badge-xs">
+                    {{ iss.target_group_name }}
+                  </span>
+                  <span class="opacity-90">{{ iss.message }}</span>
+                </div>
+              </div>
+              <ul v-else class="mt-1 text-xs list-disc list-inside space-y-0.5 font-mono">
+                <li v-for="(err, idx) in validationResult.errors" :key="idx">{{ err }}</li>
+              </ul>
+            </div>
+          </div>
+          <button
+            type="button"
+            class="btn btn-ghost btn-xs btn-circle"
+            @click="validationResult = null"
+          >
+            ✕
+          </button>
+        </div>
+      </Transition>
     </div>
+
+    <!-- Group & Routing Rule Target Capability Boundary (On-Demand Accessible Details, not a permanent giant banner) -->
+    <details
+      data-testid="policy-capability-boundary"
+      class="collapse collapse-arrow rounded-xl border border-base-300 bg-base-200/50 text-xs min-w-0 w-full"
+    >
+      <summary class="collapse-title text-xs font-semibold py-2.5 px-4 min-h-0 flex items-center justify-between cursor-pointer select-none">
+        <span>{{ uiText('编译目标能力边界说明（策略组与分流规则）', 'Compiler Target Capabilities (Policy Groups & Routing Rules)') }}</span>
+        <span class="badge badge-xs badge-ghost font-mono ml-2">仅 Mihomo 完整导出</span>
+      </summary>
+      <div class="collapse-content space-y-2.5 pt-2">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px] font-mono">
+          <div class="p-2.5 rounded-lg bg-base-100/70 border border-base-300/60 space-y-1">
+            <span class="font-sans font-semibold opacity-75 block">策略组类型支持目标</span>
+            <div
+              v-for="gt in ALL_GROUP_TYPES"
+              :key="gt.type"
+              class="flex flex-wrap items-center justify-between gap-1"
+            >
+              <span class="text-primary font-semibold">{{ gt.label }}</span>
+              <span class="opacity-80">{{ gt.supportedTargets.join(', ') }}</span>
+            </div>
+          </div>
+          <div class="p-2.5 rounded-lg bg-base-100/70 border border-base-300/60 space-y-1">
+            <span class="font-sans font-semibold opacity-75 block">分流规则子集支持目标</span>
+            <div
+              v-for="band in MODERN_RULE_CAPABILITY_MATRIX"
+              :key="band.category"
+              class="leading-snug"
+            >
+              <span class="font-sans opacity-75 mr-1">{{ band.category }}：</span>
+              <span class="text-secondary font-semibold">{{ band.ruleKinds.join(', ') }}</span> →
+              <span class="opacity-80">{{ band.supportedTargets.join(', ') }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </details>
 
     <!-- Policy Groups View -->
     <div class="space-y-4">
@@ -485,7 +503,7 @@ onUnmounted(() => {
             data-testid="policy-group-search-input"
             type="search"
             placeholder="搜索策略组名称或类型..."
-            class="input input-bordered input-xs sm:input-sm w-full pl-8 font-mono text-xs"
+            class="input input-xs sm:input-sm w-full pl-8 font-mono text-xs"
             @input="onGroupSearchInput"
           />
           <MagnifyingGlassIcon class="w-4 h-4 opacity-50 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
@@ -517,12 +535,12 @@ onUnmounted(() => {
       </div>
 
       <div v-if="loading && groups.length === 0" class="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr))]">
-        <div v-for="i in 6" :key="i" class="skeleton h-32 rounded-box" />
+        <div v-for="i in 6" :key="i" class="skeleton h-32 rounded-xl" />
       </div>
 
       <div
         v-else-if="groups.length === 0"
-        class="rounded-box border border-dashed border-base-300 p-12 text-center"
+        class="rounded-2xl border border-dashed border-base-300 p-12 text-center"
       >
         <Squares2X2Icon class="w-10 h-10 mx-auto opacity-40 text-primary" />
         <p class="mt-3 font-semibold text-base">{{ t('policy.emptyTitle') }}</p>

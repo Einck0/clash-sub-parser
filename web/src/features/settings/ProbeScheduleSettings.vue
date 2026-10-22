@@ -153,7 +153,7 @@ onMounted(() => {
             min="60"
             max="604800"
             data-testid="probe-schedule-interval-input"
-            class="input input-bordered input-sm font-mono text-xs w-full max-w-xs"
+            class="input input-sm font-mono text-xs w-full max-w-xs"
             placeholder="3600"
             :disabled="loading || saving"
           />

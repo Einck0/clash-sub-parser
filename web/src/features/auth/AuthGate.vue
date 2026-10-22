@@ -75,20 +75,20 @@ function handleReset() {
 
     <!-- Login Form -->
     <form @submit.prevent="handleSubmit" class="space-y-4">
-      <div class="form-control">
-        <label class="label py-1" for="auth-gate-token-input">
-          <span class="label-text font-medium text-xs flex items-center gap-1">
+      <div class="flex flex-col gap-1.5">
+        <div class="flex items-center justify-between py-0.5">
+          <label for="auth-gate-token-input" class="text-xs font-medium text-base-content flex items-center gap-1 cursor-pointer">
             <KeyIcon class="w-3.5 h-3.5 text-primary" /> Admin Token 凭据
-          </span>
-          <span class="label-text-alt text-base-content/50 text-[11px] font-mono">Authorization: Bearer</span>
-        </label>
+          </label>
+          <span class="text-base-content/50 text-[11px] font-mono">Authorization: Bearer</span>
+        </div>
         <div class="relative flex items-center">
           <input
             id="auth-gate-token-input"
             ref="inputRef"
             v-model="token"
             :type="showPassword ? 'text' : 'password'"
-            class="input input-bordered input-sm sm:input-md w-full pr-10 font-mono text-sm focus:input-primary transition-colors"
+            class="input input-sm sm:input-md w-full pr-10 font-mono text-sm focus:input-primary transition-colors"
             placeholder="请输入管理员令牌..."
             autocomplete="current-password"
             data-testid="auth-gate-token-input"

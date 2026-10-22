@@ -32,7 +32,7 @@ describe('App.vue Navigation Dock & Layout Adaptability', () => {
     vi.restoreAllMocks()
   })
 
-  it('renders mobile navigation dock without hardcoded fixed height or hardcoded 48px min-height', async () => {
+  it('renders mobile navigation dock with 4-item single row (Nodes, Policy, Subscriptions, More)', async () => {
     router.push('/dashboard')
     await router.isReady()
 
@@ -53,11 +53,35 @@ describe('App.vue Navigation Dock & Layout Adaptability', () => {
     expect(dock!.classList.contains('py-2')).toBe(true)
     expect(dock!.classList.contains('rounded-2xl') || dock!.classList.contains('rounded-full')).toBe(true)
 
-    // Verify all 7 routes are accessible from the dock (including Dashboard)
-    const expectedRouteIds = ['dashboard', 'subscriptions', 'nodes', 'policy', 'rules', 'publications', 'settings']
-    for (const routeId of expectedRouteIds) {
+    // Verify single-row 4-column grid layout
+    const grid = dock!.querySelector('.grid-cols-4')
+    expect(grid).toBeTruthy()
+
+    // Primary 3 routes on dock
+    const primaryRouteIds = ['nodes', 'policy', 'subscriptions']
+    for (const routeId of primaryRouteIds) {
       const linkBtn = dock!.querySelector(`[data-testid="dock-link-${routeId}"]`)
       expect(linkBtn, `Mobile dock must contain explicit entry for ${routeId}`).toBeTruthy()
+    }
+
+    // 4th item: More button
+    const moreBtn = dock!.querySelector('[data-testid="dock-link-more"]') as HTMLButtonElement
+    expect(moreBtn).toBeTruthy()
+    expect(moreBtn.getAttribute('aria-expanded')).toBe('false')
+
+    // Click More to open More sheet
+    moreBtn.click()
+    await nextTick()
+    expect(moreBtn.getAttribute('aria-expanded')).toBe('true')
+
+    const moreSheet = document.querySelector('[data-testid="mobile-more-sheet"]')
+    expect(moreSheet).toBeTruthy()
+
+    // The other 5 routes are accessible in the More sheet
+    const secondaryRouteIds = ['dashboard', 'dns', 'rules', 'publications', 'settings']
+    for (const routeId of secondaryRouteIds) {
+      const linkBtn = moreSheet!.querySelector(`[data-testid="dock-link-${routeId}"]`)
+      expect(linkBtn, `More sheet must contain entry for ${routeId}`).toBeTruthy()
     }
 
     // Verify nav action buttons do not enforce rigid min-h-[48px] or h-full
@@ -66,6 +90,33 @@ describe('App.vue Navigation Dock & Layout Adaptability', () => {
     for (const btn of Array.from(navButtons)) {
       expect(btn.classList.contains('min-h-[48px]')).toBe(false)
       expect(btn.classList.contains('h-full')).toBe(false)
+    }
+  })
+
+  it('renders desktop grouped sidebar navigation with collapse toggle', async () => {
+    router.push('/dashboard')
+    await router.isReady()
+
+    app = createApp(App)
+    app.use(router)
+    app.use(i18n)
+    app.mount(container!)
+    await nextTick()
+
+    const sidebar = container!.querySelector('aside')
+    expect(sidebar).toBeTruthy()
+
+    const collapseToggle = sidebar!.querySelector('[data-testid="sidebar-collapse-toggle"]') as HTMLButtonElement
+    expect(collapseToggle).toBeTruthy()
+
+    const nav = sidebar!.querySelector('nav')
+    expect(nav).toBeTruthy()
+
+    // All 8 routes must exist in desktop sidebar
+    const allRouteIds = ['dashboard', 'subscriptions', 'nodes', 'dns', 'policy', 'rules', 'publications', 'settings']
+    for (const routeId of allRouteIds) {
+      const link = sidebar!.querySelector(`button[href="#/${routeId}"], button[href="/${routeId}"]`)
+      expect(link, `Desktop sidebar must contain entry for ${routeId}`).toBeTruthy()
     }
   })
 
@@ -155,7 +206,7 @@ describe('App.vue Navigation Dock & Layout Adaptability', () => {
     expect(themeToggleBtn.getAttribute('aria-expanded')).toBe('false')
   })
 
-  it('escape key closes open theme dropdown', async () => {
+  it('escape key closes open theme dropdown and more sheet', async () => {
     router.push('/dashboard')
     await router.isReady()
 

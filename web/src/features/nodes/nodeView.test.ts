@@ -15,10 +15,32 @@ import {
   renderNodePreview,
   renderSafeNodePreview,
   validateNodeConnectionProfile,
+  getNodeGeoRegion,
   type NodeRecord,
 } from './nodeView'
 import { subscriptionPatchPayload } from '../subscriptions/useSubscriptions'
 import { api } from '../../api/client'
+
+vi.mock('../../locales/redesign', () => ({
+  uiText: (zh: string, _en: string) => zh,
+}))
+
+vi.mock('../../ui/PageToolbar.vue', () => ({
+  default: {
+    name: 'PageToolbar',
+    props: ['title', 'description'],
+    template: `
+      <div data-testid="page-toolbar" class="flex flex-wrap items-center justify-between gap-3 mb-2">
+        <div class="flex items-center gap-2">
+          <slot name="default" />
+        </div>
+        <div class="flex items-center gap-2">
+          <slot name="actions" />
+        </div>
+      </div>
+    `,
+  },
+}))
 
 describe('node view helpers & plaintext WireGuard / TUIC connection handling', () => {
   it('supports all 7 modern protocols and maps target compatibility accurately', () => {
@@ -1195,6 +1217,416 @@ describe('NodesView real API detail, plaintext PATCH edit, and failure draft pre
     const riskBadge = mountEl.querySelector('[data-testid="node-risk-badge"]')
     expect(riskBadge).not.toBeNull()
     expect(riskBadge?.textContent).toContain('低风险')
+
+    app.unmount()
+    mountEl.remove()
+  })
+
+  it('restores URL q, protocol, health, and node params with safe defaults on invalid input, and resets page on query change', async () => {
+    const { createApp, h, nextTick } = await import('vue')
+    const { createRouter, createMemoryHistory } = await import('vue-router')
+    const { default: NodesView } = await import('./NodesView.vue')
+
+    const mockNodes: NodeRecord[] = [
+      {
+        logical_id: 'node-hy2-1',
+        display_name: 'Tokyo Hy2 Safe',
+        protocol: 'hysteria2',
+        active: true,
+        health_status: 'healthy',
+        capabilities: { baseline: { verdict: 'available', latency_ms: 35 } },
+      },
+    ]
+
+    vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
+      if (path === '/api/v1/nodes') {
+        return { items: mockNodes, total: 1, page: 1, page_size: 100 }
+      }
+      if (path === '/api/v1/probes/pool') {
+        return { probing_node_ids: [], queued_node_ids: [], total_count: 1 }
+      }
+      if (path === '/api/v1/nodes/node-hy2-1') {
+        return { node: mockNodes[0], sources: [] }
+      }
+      return {}
+    })
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/nodes', component: NodesView }],
+    })
+
+    await router.push('/nodes?q=Tokyo&protocol=hysteria2&health=healthy&node=node-hy2-1')
+    await router.isReady()
+
+    const mountEl = document.createElement('div')
+    document.body.appendChild(mountEl)
+    const app = createApp({
+      render() {
+        return h(NodesView)
+      },
+    })
+    app.use(router)
+    app.mount(mountEl)
+    await nextTick()
+    await new Promise((r) => setTimeout(r, 60))
+
+    // Search input should have 'Tokyo'
+    const searchInput = mountEl.querySelector('[data-testid="node-search-input"]') as HTMLInputElement
+    expect(searchInput).not.toBeNull()
+    expect(searchInput.value).toBe('Tokyo')
+
+    // Protocol filter pill for hysteria2 should be present
+    const protoGroup = mountEl.querySelector('[data-testid="node-protocol-filter"]')
+    expect(protoGroup?.textContent).toContain('HYSTERIA2')
+
+    // Health filter select should be 'healthy'
+    const healthSelect = mountEl.querySelector('[data-testid="node-health-filter"]') as HTMLSelectElement
+    expect(healthSelect.value).toBe('healthy')
+
+    // Deep link drawer should be open for node-hy2-1
+    const drawer = document.body.querySelector('[data-testid="node-detail-drawer"]')
+    expect(drawer).not.toBeNull()
+    expect(drawer?.textContent).toContain('Tokyo Hy2 Safe')
+
+    // Safe fallback when invalid protocol and invalid health are pushed
+    await router.push('/nodes?protocol=bogus_protocol&health=invalid_health')
+    await nextTick()
+    await new Promise((r) => setTimeout(r, 30))
+
+    expect(healthSelect.value).toBe('all')
+
+    app.unmount()
+    mountEl.remove()
+  })
+
+  it('retains hidden selections across filters, displays visible vs total counts, allows clearing invisible selections, and confirms exact scope before probing', async () => {
+    HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
+    HTMLDialogElement.prototype.close = function () { this.removeAttribute('open'); this.dispatchEvent(new Event('close')) }
+
+    const { createApp, h, nextTick } = await import('vue')
+    const { default: NodesView } = await import('./NodesView.vue')
+
+    const postCalls: Array<{ path: string; body: any }> = []
+
+    const mockNodes: NodeRecord[] = [
+      {
+        logical_id: 'node-healthy-item',
+        display_name: 'Tokyo Healthy Node',
+        protocol: 'vmess',
+        active: true,
+        health_status: 'healthy',
+        capabilities: { baseline: { verdict: 'available', latency_ms: 45 } },
+      },
+      {
+        logical_id: 'node-unhealthy-item',
+        display_name: 'Seoul Unhealthy Node',
+        protocol: 'vless',
+        active: true,
+        health_status: 'unhealthy',
+        capabilities: { baseline: { verdict: 'error' } },
+      },
+    ]
+
+    vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
+      if (path === '/api/v1/nodes') {
+        return { items: mockNodes, total: 2, page: 1, page_size: 100 }
+      }
+      if (path === '/api/v1/probes/pool') {
+        return { probing_node_ids: [], queued_node_ids: [], total_count: 2 }
+      }
+      return {}
+    })
+
+    vi.spyOn(api, 'post').mockImplementation(async (path: string, body?: any) => {
+      postCalls.push({ path, body })
+      return { run_id: 'run-selected-1', state: 'pending' }
+    })
+
+    const mountEl = document.createElement('div')
+    document.body.appendChild(mountEl)
+    const app = createApp({
+      render() {
+        return h(NodesView)
+      },
+    })
+    app.mount(mountEl)
+    await nextTick()
+    await new Promise((r) => setTimeout(r, 60))
+
+    // 1. Select the unhealthy node
+    const unhealthyCb = mountEl.querySelector('[data-testid="node-checkbox-node-unhealthy-item"]') as HTMLInputElement
+    expect(unhealthyCb).not.toBeNull()
+    unhealthyCb.click()
+    await nextTick()
+
+    const selectedBadge = mountEl.querySelector('[data-testid="selected-count-badge"]')
+    expect(selectedBadge?.textContent).toContain('1')
+
+    // 2. Switch health filter to "healthy" (so unhealthy node is hidden from current view)
+    const healthSelect = mountEl.querySelector('[data-testid="node-health-filter"]') as HTMLSelectElement
+    healthSelect.value = 'healthy'
+    healthSelect.dispatchEvent(new Event('change'))
+    await nextTick()
+
+    // 3. Selection of unhealthy node is RETAINED even though it's hidden
+    expect(selectedBadge?.textContent).toContain('1')
+    expect(selectedBadge?.textContent).toContain('0')
+
+    // 4. Clear invisible selection button appears
+    const clearInvisibleBtn = mountEl.querySelector('[data-testid="clear-invisible-selection-btn"]') as HTMLButtonElement
+    expect(clearInvisibleBtn).not.toBeNull()
+    expect(clearInvisibleBtn.textContent).toContain('清除不可见项')
+
+    // 5. Clicking probe selected triggers scope confirmation modal because of hidden selections
+    const probeSelectedBtn = mountEl.querySelector('[data-testid="probe-selected-btn"]') as HTMLButtonElement
+    probeSelectedBtn.click()
+    await nextTick()
+
+    const confirmScopeModal = document.body.querySelector('[data-testid="confirm-probe-selected-modal"]')
+    expect(confirmScopeModal).not.toBeNull()
+    expect(confirmScopeModal?.textContent).toContain('当前已选 1 个节点')
+    expect(confirmScopeModal?.textContent).toContain('当前可见 0 项')
+
+    // Confirming executes probe for node-unhealthy-item
+    const modalConfirmBtn = confirmScopeModal?.querySelector('[data-testid="confirm-modal-confirm"]') as HTMLButtonElement
+    modalConfirmBtn?.click()
+    await nextTick()
+    await new Promise((r) => setTimeout(r, 20))
+
+    const runCall = postCalls.find((c) => c.path === '/api/v1/probes/runs')
+    expect(runCall).toBeDefined()
+    expect(runCall?.body.node_logical_ids).toEqual(['node-unhealthy-item'])
+
+    // 6. Test clear invisible selections
+    clearInvisibleBtn.click()
+    await nextTick()
+    expect(selectedBadge?.textContent).toContain('0')
+    expect(mountEl.querySelector('[data-testid="clear-invisible-selection-btn"]')).toBeNull()
+
+    app.unmount()
+    mountEl.remove()
+  })
+
+  it('distinguishes loaded count vs full total, renders placeholder instead of 0 on initial loading, and preserves existing items on refresh failure', async () => {
+    const { createApp, h, nextTick } = await import('vue')
+    const { default: NodesView } = await import('./NodesView.vue')
+
+    let shouldFailNodes = false
+    let resolveFirst: any = null
+    const firstGate = new Promise((r) => { resolveFirst = r })
+
+    vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
+      if (path === '/api/v1/nodes') {
+        if (resolveFirst) {
+          const fn = resolveFirst
+          resolveFirst = null
+          await firstGate
+        }
+        if (shouldFailNodes) {
+          throw new Error('500 Internal Server Error: Database timeout')
+        }
+        return {
+          items: [
+            { logical_id: 'node-persist-1', display_name: 'Tokyo Preserved 1', protocol: 'ss', active: true, health_status: 'healthy' },
+            { logical_id: 'node-persist-2', display_name: 'Tokyo Preserved 2', protocol: 'ss', active: true, health_status: 'healthy' },
+          ],
+          total: 50,
+          page: 1,
+          page_size: 2,
+        }
+      }
+      if (path === '/api/v1/probes/pool') {
+        return { probing_node_ids: [], queued_node_ids: [], total_count: 50 }
+      }
+      return {}
+    })
+
+    const mountEl = document.createElement('div')
+    document.body.appendChild(mountEl)
+    const app = createApp({
+      render() {
+        return h(NodesView)
+      },
+    })
+
+    app.mount(mountEl)
+    await nextTick()
+
+    // During initial loading: nodes-total-badge shows '--', NEVER '0 个节点'!
+    const totalBadge = mountEl.querySelector('[data-testid="nodes-total-badge"]')
+    expect(totalBadge?.textContent?.trim()).toBe('--')
+
+    // Now resolve initial request
+    resolveFirst()
+    await nextTick()
+    await new Promise((r) => setTimeout(r, 40))
+
+    // Total badge shows loaded / total
+    expect(totalBadge?.textContent).toContain('2 / 50')
+
+    // Now trigger refresh with failure
+    shouldFailNodes = true
+    const refreshBtn = mountEl.querySelector('button[title="刷新"]') as HTMLButtonElement
+    refreshBtn?.click()
+    await nextTick()
+    await new Promise((r) => setTimeout(r, 40))
+
+    // Verification: Error is shown, but existing 2 items ARE PRESERVED!
+    expect(mountEl.textContent).toContain('Database timeout')
+    const cards = mountEl.querySelectorAll('[data-testid="node-card"]')
+    expect(cards.length).toBe(2)
+    expect(mountEl.textContent).toContain('Tokyo Preserved 1')
+    expect(mountEl.textContent).toContain('Tokyo Preserved 2')
+
+    app.unmount()
+    mountEl.remove()
+  })
+
+  it('discards out-of-order stale generation responses to prevent race condition write-backs', async () => {
+    const { useNodes } = await import('./useNodes')
+
+    let resolveReq1: any
+    let resolveReq2: any
+
+    const req1Promise = new Promise((r) => { resolveReq1 = r })
+    const req2Promise = new Promise((r) => { resolveReq2 = r })
+
+    let callCount = 0
+    vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
+      if (path === '/api/v1/nodes') {
+        callCount++
+        if (callCount === 1) {
+          await req1Promise
+          return {
+            items: [{ logical_id: 'node-slow-1', display_name: 'Slow Response Node', protocol: 'ss', active: true }],
+            total: 1,
+            page: 1,
+            page_size: 10,
+          }
+        }
+        if (callCount === 2) {
+          await req2Promise
+          return {
+            items: [{ logical_id: 'node-fast-2', display_name: 'Fast Response Node', protocol: 'ss', active: true }],
+            total: 1,
+            page: 1,
+            page_size: 10,
+          }
+        }
+      }
+      if (path === '/api/v1/probes/pool') {
+        return { probing_node_ids: [], queued_node_ids: [], total_count: 1 }
+      }
+      return {}
+    })
+
+    const hook = useNodes()
+
+    // Trigger request 1
+    const p1 = hook.load()
+    // Trigger request 2 immediately
+    const p2 = hook.load()
+
+    // Resolve request 2 first (fast response)
+    resolveReq2()
+    await p2
+    expect(hook.items.value[0]?.logicalId).toBe('node-fast-2')
+
+    // Now resolve request 1 later (stale out-of-order response)
+    resolveReq1()
+    await p1
+
+    // State MUST remain fast response 2, slow response 1 must be discarded!
+    expect(hook.items.value[0]?.logicalId).toBe('node-fast-2')
+  })
+
+  it('displays actual geo region from capabilities without fake country guessing and expands platform details on toggle', async () => {
+    const { createApp, h, nextTick } = await import('vue')
+    const { default: NodesView } = await import('./NodesView.vue')
+
+    const mockNodes: NodeRecord[] = [
+      {
+        logical_id: 'node-geo-jp',
+        display_name: 'JP Linode 101',
+        protocol: 'vmess',
+        active: true,
+        health_status: 'healthy',
+        capabilities: {
+          baseline: { verdict: 'available', latency_ms: 38 },
+          geo: { verdict: 'available', region: 'JP' },
+          streaming: {
+            verdict: 'available',
+            platforms: {
+              netflix: { verdict: 'available', region: 'JP' },
+              youtube: { verdict: 'available' },
+            },
+          },
+          ai: {
+            verdict: 'available',
+            platforms: {
+              openai: { verdict: 'available' },
+            },
+          },
+          speed: {
+            verdict: 'available',
+            throughput: 12500000,
+          },
+        },
+      },
+    ]
+
+    vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
+      if (path === '/api/v1/nodes') {
+        return { items: mockNodes, total: 1, page: 1, page_size: 10 }
+      }
+      if (path === '/api/v1/probes/pool') {
+        return { probing_node_ids: [], queued_node_ids: [], total_count: 1 }
+      }
+      return {}
+    })
+
+    const mountEl = document.createElement('div')
+    document.body.appendChild(mountEl)
+    const app = createApp({
+      render() {
+        return h(NodesView)
+      },
+    })
+    app.mount(mountEl)
+    await nextTick()
+    await new Promise((r) => setTimeout(r, 60))
+
+    // 1. Geo region badge is rendered with actual region 'JP'
+    const geoBadge = mountEl.querySelector('[data-testid="node-geo-badge"]')
+    expect(geoBadge).not.toBeNull()
+    expect(geoBadge?.textContent?.trim()).toBe('JP')
+
+    // 2. Latency badge is prominently displayed
+    const latencyBadge = mountEl.querySelector('[data-testid="node-latency-badge"]')
+    expect(latencyBadge).not.toBeNull()
+    expect(latencyBadge?.textContent).toContain('38 ms')
+
+    // 3. Platform details accordion is initially collapsed
+    expect(mountEl.querySelector('[data-testid="node-platform-details-expanded"]')).toBeNull()
+
+    // 4. Toggle platform details
+    const toggleBtn = mountEl.querySelector('[data-testid="node-platform-details-toggle"]') as HTMLButtonElement
+    expect(toggleBtn).not.toBeNull()
+    expect(toggleBtn.textContent).toContain('平台能力')
+    toggleBtn.click()
+    await nextTick()
+
+    // 5. Expanded accordion displays streaming, AI and speed badges
+    const expandedEl = mountEl.querySelector('[data-testid="node-platform-details-expanded"]')
+    expect(expandedEl).not.toBeNull()
+    expect(expandedEl?.textContent).toContain('NETFLIX')
+    expect(expandedEl?.textContent).toContain('OPENAI')
+    expect(expandedEl?.textContent).toContain('MB/s')
+
+    // 6. getNodeGeoRegion unit checks: does NOT guess country from name
+    expect(getNodeGeoRegion({ logical_id: 'node-name-kr', display_name: '🇰🇷 Seoul Korea 01', protocol: 'ss', active: true })).toBeNull()
+    expect(getNodeGeoRegion({ logical_id: 'node-geo-us', display_name: 'US Server', protocol: 'ss', active: true, capabilities: { geo: { verdict: 'available', region: 'US' } } })).toBe('US')
 
     app.unmount()
     mountEl.remove()

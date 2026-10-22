@@ -10,6 +10,7 @@ import {
   formatRefreshTime,
   formatFullDateTime,
   useSubscriptions,
+  extractSecondLevelDomainName,
   type SubscriptionRecord,
 } from './useSubscriptions'
 
@@ -615,5 +616,357 @@ describe('SubscriptionConfigDrawer validation guards', () => {
 
     app.unmount()
     mountEl.remove()
+  })
+})
+
+describe('Auto-naming & Domain Extraction Logic', () => {
+  it('extracts capitalized second-level domain name according to project contract', () => {
+    expect(extractSecondLevelDomainName('https://z.7li7li.com/sub')).toBe('7li7li')
+    expect(extractSecondLevelDomainName('https://msub.example.com/api')).toBe('Example')
+    expect(extractSecondLevelDomainName('https://www.example.com')).toBe('Example')
+    expect(extractSecondLevelDomainName('https://example.com')).toBe('Example')
+    expect(extractSecondLevelDomainName('http://localhost:8080/feed')).toBe('Localhost')
+    expect(extractSecondLevelDomainName('http://192.168.1.1/feed')).toBe('192.168.1.1')
+    expect(extractSecondLevelDomainName('')).toBe('')
+  })
+
+  it('auto-fills name from URL unless user has manually modified the name', async () => {
+    const { default: SubscriptionConfigDrawer } = await import('./SubscriptionConfigDrawer.vue')
+    const mountEl = document.createElement('div')
+    document.body.appendChild(mountEl)
+    const app = createApp({
+      render: () => h(SubscriptionConfigDrawer, { modelValue: true }),
+    })
+    app.mount(mountEl)
+
+    try {
+      await nextTick()
+      const nameInput = document.querySelector<HTMLInputElement>('[data-testid="subscription-name-input"]')!
+      const urlInput = document.querySelector<HTMLInputElement>('[data-testid="subscription-url-input"]')!
+
+      // 1. Entering URL auto-populates name
+      urlInput.value = 'https://msub.example.com/feed'
+      urlInput.dispatchEvent(new Event('input'))
+      await nextTick()
+      expect(nameInput.value).toBe('Example')
+
+      // 2. Changing URL updates auto-name when user hasn't manually edited
+      urlInput.value = 'https://z.7li7li.com/sub'
+      urlInput.dispatchEvent(new Event('input'))
+      await nextTick()
+      expect(nameInput.value).toBe('7li7li')
+
+      // 3. User manually modifies name
+      nameInput.value = 'My Custom Airport'
+      nameInput.dispatchEvent(new Event('input'))
+      await nextTick()
+      expect(nameInput.value).toBe('My Custom Airport')
+
+      // 4. Changing URL subsequently must NOT overwrite user's manual name
+      urlInput.value = 'https://another.provider.com/sub'
+      urlInput.dispatchEvent(new Event('input'))
+      await nextTick()
+      expect(nameInput.value).toBe('My Custom Airport')
+    } finally {
+      app.unmount()
+      mountEl.remove()
+    }
+  })
+
+  it('does not overwrite existing subscription name when editing URL', async () => {
+    const { default: SubscriptionConfigDrawer } = await import('./SubscriptionConfigDrawer.vue')
+    const mountEl = document.createElement('div')
+    document.body.appendChild(mountEl)
+    const existing: SubscriptionRecord = {
+      id: 'sub-edit-1',
+      name: 'Existing Handcrafted Name',
+      source_url_secret_ref: 'https://old.provider.com/sub',
+      enabled: true,
+      refresh_policy: { interval_seconds: 3600, timeout_seconds: 30, user_agent_policy: 'default', max_response_bytes: 1024 },
+      revision: 'rev-1',
+      created_at: '',
+      updated_at: '',
+    }
+    const app = createApp({
+      render: () => h(SubscriptionConfigDrawer, { modelValue: true, subscription: existing }),
+    })
+    app.mount(mountEl)
+
+    try {
+      await nextTick()
+      const nameInput = document.querySelector<HTMLInputElement>('[data-testid="subscription-name-input"]')!
+      const urlInput = document.querySelector<HTMLInputElement>('[data-testid="subscription-url-input"]')!
+      expect(nameInput.value).toBe('Existing Handcrafted Name')
+
+      urlInput.value = 'https://new.provider.com/sub'
+      urlInput.dispatchEvent(new Event('input'))
+      await nextTick()
+
+      // Must retain existing name
+      expect(nameInput.value).toBe('Existing Handcrafted Name')
+    } finally {
+      app.unmount()
+      mountEl.remove()
+    }
+  })
+})
+
+describe('Unsaved Changes Guard & Progressive Disclosure Fidelity', () => {
+  it('allows clean drawer to close immediately without confirm prompt', async () => {
+    const { default: SubscriptionConfigDrawer } = await import('./SubscriptionConfigDrawer.vue')
+    const mountEl = document.createElement('div')
+    document.body.appendChild(mountEl)
+    const confirmSpy = vi.spyOn(window, 'confirm')
+    const updateModelSpy = vi.fn()
+
+    const app = createApp({
+      render: () => h(SubscriptionConfigDrawer, { modelValue: true, 'onUpdate:modelValue': updateModelSpy }),
+    })
+    app.mount(mountEl)
+
+    try {
+      await nextTick()
+      const cancelBtn = Array.from(document.body.querySelectorAll('button')).find((b) =>
+        b.textContent?.includes('取消') || b.textContent?.includes('Cancel')
+      )
+      expect(cancelBtn).toBeTruthy()
+      cancelBtn?.click()
+      await nextTick()
+
+      expect(confirmSpy).not.toHaveBeenCalled()
+      expect(updateModelSpy).toHaveBeenCalledWith(false)
+    } finally {
+      app.unmount()
+      mountEl.remove()
+      confirmSpy.mockRestore()
+    }
+  })
+
+  it('prompts user and preserves dirty draft when discard is cancelled', async () => {
+    const { default: SubscriptionConfigDrawer } = await import('./SubscriptionConfigDrawer.vue')
+    const mountEl = document.createElement('div')
+    document.body.appendChild(mountEl)
+    // User cancels discard prompt
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    const updateModelSpy = vi.fn()
+
+    const app = createApp({
+      render: () => h(SubscriptionConfigDrawer, { modelValue: true, 'onUpdate:modelValue': updateModelSpy }),
+    })
+    app.mount(mountEl)
+
+    try {
+      await nextTick()
+      const nameInput = document.querySelector<HTMLInputElement>('[data-testid="subscription-name-input"]')!
+      nameInput.value = 'Unsaved Dirty Name'
+      nameInput.dispatchEvent(new Event('input'))
+      await nextTick()
+
+      const cancelBtn = Array.from(document.body.querySelectorAll('button')).find((b) =>
+        b.textContent?.includes('取消') || b.textContent?.includes('Cancel')
+      )
+      cancelBtn?.click()
+      await nextTick()
+
+      // Prompt was shown, but since user cancelled, update:modelValue(false) was NOT emitted!
+      expect(confirmSpy).toHaveBeenCalled()
+      expect(updateModelSpy).not.toHaveBeenCalledWith(false)
+
+      // When user confirms discard:
+      confirmSpy.mockReturnValue(true)
+      cancelBtn?.click()
+      await nextTick()
+      expect(updateModelSpy).toHaveBeenCalledWith(false)
+    } finally {
+      app.unmount()
+      mountEl.remove()
+      confirmSpy.mockRestore()
+    }
+  })
+
+  it('preserves advanced tab configuration in the same draft across tab switches', async () => {
+    const { default: SubscriptionConfigDrawer } = await import('./SubscriptionConfigDrawer.vue')
+    const mountEl = document.createElement('div')
+    document.body.appendChild(mountEl)
+    const saved = vi.fn()
+
+    const app = createApp({
+      render: () => h(SubscriptionConfigDrawer, { modelValue: true, onSave: saved }),
+    })
+    app.mount(mountEl)
+
+    try {
+      await nextTick()
+      // Fill basic fields
+      const nameInput = document.querySelector<HTMLInputElement>('[data-testid="subscription-name-input"]')!
+      const urlInput = document.querySelector<HTMLInputElement>('[data-testid="subscription-url-input"]')!
+      nameInput.value = 'Full Fidelity Sub'
+      nameInput.dispatchEvent(new Event('input'))
+      urlInput.value = 'https://example.com/fidelity.yaml'
+      urlInput.dispatchEvent(new Event('input'))
+
+      // Switch to advanced tab
+      const tabs = document.body.querySelectorAll('.tab')
+      ;(tabs[1] as HTMLElement).click()
+      await nextTick()
+
+      // Edit probe policy mode to disabled
+      const disabledRadio = document.querySelector<HTMLInputElement>('[data-testid="probe-policy-mode-disabled"]')!
+      disabledRadio.click()
+      await nextTick()
+
+      // Switch back to basic tab
+      ;(tabs[0] as HTMLElement).click()
+      await nextTick()
+
+      // Save from basic tab
+      const saveBtn = document.querySelector<HTMLButtonElement>('[data-testid="subscription-drawer-save-btn"]')!
+      saveBtn.click()
+      await nextTick()
+
+      expect(saved).toHaveBeenCalledTimes(1)
+      const payload = saved.mock.calls[0][0]
+      expect(payload.name).toBe('Full Fidelity Sub')
+      expect(payload.source_url_secret_ref).toBe('https://example.com/fidelity.yaml')
+      // Advanced configuration was preserved in the same draft
+      expect(payload.config.probe_policy).toEqual({ mode: 'disabled' })
+    } finally {
+      app.unmount()
+      mountEl.remove()
+    }
+  })
+})
+
+describe('Per-Row State, Concurrency & Layout Invariants', () => {
+  it('isolates refresh failure and row error to the specific subscription', async () => {
+    const subA: SubscriptionRecord = {
+      id: 'sub-A',
+      name: 'Sub Alpha',
+      source_url_secret_ref: 'https://example.com/a',
+      enabled: true,
+      refresh_policy: { interval_seconds: 3600, timeout_seconds: 30, user_agent_policy: 'default', max_response_bytes: 1024 },
+      revision: 'rev-a',
+      created_at: '',
+      updated_at: '',
+    }
+    const subB: SubscriptionRecord = {
+      id: 'sub-B',
+      name: 'Sub Beta',
+      source_url_secret_ref: 'https://example.com/b',
+      enabled: true,
+      refresh_policy: { interval_seconds: 3600, timeout_seconds: 30, user_agent_policy: 'default', max_response_bytes: 1024 },
+      revision: 'rev-b',
+      created_at: '',
+      updated_at: '',
+    }
+
+    vi.spyOn(api, 'get').mockResolvedValue({ items: [subA, subB], page: 1, page_size: 50, total: 2 })
+    vi.spyOn(api, 'post').mockImplementation((url: string) => {
+      if (url.includes('sub-A')) {
+        return Promise.reject(new Error('Sub A timeout failure'))
+      }
+      return Promise.resolve({ status: 'completed' })
+    })
+
+    const hook = useSubscriptions()
+    await hook.load()
+    expect(hook.items.value).toHaveLength(2)
+
+    // Refresh Sub A
+    await hook.refresh(subA).catch(() => {})
+    expect(hook.rowErrors.value['sub-A']).toBe('Sub A timeout failure')
+    expect(hook.rowErrors.value['sub-B']).toBeUndefined()
+
+    // Dismiss Sub A row error
+    hook.clearRowError('sub-A')
+    expect(hook.rowErrors.value['sub-A']).toBeUndefined()
+  })
+
+  it('prevents out-of-order reload race conditions from overwriting newer state', async () => {
+    let resolveFirst!: (value: any) => void
+    let resolveSecond!: (value: any) => void
+
+    const firstPromise = new Promise((res) => { resolveFirst = res })
+    const secondPromise = new Promise((res) => { resolveSecond = res })
+
+    let callCount = 0
+    vi.spyOn(api, 'get').mockImplementation(() => {
+      callCount++
+      if (callCount === 1) return firstPromise as any
+      return secondPromise as any
+    })
+
+    const hook = useSubscriptions()
+    const p1 = hook.load() // sequence 1
+    const p2 = hook.load() // sequence 2
+
+    // Resolve second request first (newer response)
+    resolveSecond({
+      items: [{ id: 'sub-newer', name: 'Newer Subscription', source_url_secret_ref: 'https://new.com', enabled: true, refresh_policy: { interval_seconds: 3600, timeout_seconds: 30, user_agent_policy: 'default', max_response_bytes: 1024 }, revision: 'r2', created_at: '', updated_at: '' }],
+      page: 1,
+      page_size: 50,
+      total: 1,
+    })
+    await p2
+    expect(hook.items.value[0]?.id).toBe('sub-newer')
+
+    // Now resolve first request later (stale response)
+    resolveFirst({
+      items: [{ id: 'sub-stale', name: 'Stale Subscription', source_url_secret_ref: 'https://old.com', enabled: true, refresh_policy: { interval_seconds: 3600, timeout_seconds: 30, user_agent_policy: 'default', max_response_bytes: 1024 }, revision: 'r1', created_at: '', updated_at: '' }],
+      page: 1,
+      page_size: 50,
+      total: 1,
+    })
+    await p1
+
+    // State must NOT be overwritten by stale out-of-order response
+    expect(hook.items.value[0]?.id).toBe('sub-newer')
+  })
+
+  it('does not display fake 0 sources on initial loading or error', async () => {
+    vi.spyOn(api, 'get').mockImplementation(() => new Promise(() => {})) // never resolves (simulating loading)
+
+    const mountEl = document.createElement('div')
+    document.body.appendChild(mountEl)
+    const app = createApp({ render: () => h(SubscriptionsView) })
+    app.mount(mountEl)
+
+    try {
+      await nextTick()
+      // On initial loading, total count footer must NOT be rendered with fake 0
+      expect(document.querySelector('[data-testid="subscription-total-count"]')).toBeNull()
+      // Skeletons must be present
+      expect(document.querySelectorAll('.skeleton').length).toBeGreaterThan(0)
+    } finally {
+      app.unmount()
+      mountEl.remove()
+    }
+  })
+
+  it('renders PageToolbar without duplicate visible h1 headings', async () => {
+    vi.spyOn(api, 'get').mockResolvedValue({ items: [], page: 1, page_size: 50, total: 0 })
+
+    const mountEl = document.createElement('div')
+    document.body.appendChild(mountEl)
+    const app = createApp({ render: () => h(SubscriptionsView) })
+    app.mount(mountEl)
+
+    try {
+      await nextTick()
+      await new Promise((r) => setTimeout(r, 10))
+      await nextTick()
+
+      // PageToolbar should exist
+      const toolbar = document.querySelector('[data-testid="page-toolbar"]')
+      expect(toolbar).not.toBeNull()
+
+      // No visible duplicate h1 elements
+      const h1List = Array.from(document.querySelectorAll('h1'))
+      const visibleH1 = h1List.filter((h1) => !h1.classList.contains('sr-only'))
+      expect(visibleH1.length).toBe(0)
+    } finally {
+      app.unmount()
+      mountEl.remove()
+    }
   })
 })

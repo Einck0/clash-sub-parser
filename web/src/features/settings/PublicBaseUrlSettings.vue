@@ -71,12 +71,12 @@ onMounted(() => {
             v-model="publicBaseUrl"
             type="text"
             data-testid="settings-public-base-url-input"
-            class="input input-sm input-bordered flex-1 font-mono text-xs"
+            class="input input-sm flex-1 font-mono text-xs"
             placeholder="https://sub.example.com"
           />
           <button
             type="button"
-            class="btn btn-sm btn-outline btn-neutral"
+            class="btn btn-sm btn-outline"
             data-testid="settings-suggest-origin-btn"
             @click="suggestOrigin"
           >
@@ -87,10 +87,10 @@ onMounted(() => {
             class="btn btn-sm btn-primary"
             data-testid="settings-save-public-base-url-btn"
             :disabled="saving"
-            :class="{ loading: saving }"
             @click="savePublicBaseUrl"
           >
-            保存配置
+            <span v-if="saving" class="loading loading-spinner loading-xs" />
+            <span>保存配置</span>
           </button>
         </div>
 

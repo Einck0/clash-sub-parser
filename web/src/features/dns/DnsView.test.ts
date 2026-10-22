@@ -16,10 +16,19 @@ const base = () => ({
     'enhanced-mode': 'fake-ip',
     listen: '0.0.0.0:1053',
     'fake-ip-range': '198.18.0.1/16',
+    'cache-algorithm': 'arc',
+    'use-hosts': true,
+    'use-system-hosts': false,
+    'respect-rules': true,
     'fake-ip-filter': ['*.lan', '+.local'],
     nameserver: ['1.1.1.1'],
+    'default-nameserver': ['114.114.114.114'],
+    fallback: ['8.8.8.8'],
+    'proxy-server-nameserver': ['1.0.0.1'],
+    'direct-nameserver': ['223.5.5.5'],
     'nameserver-policy': {},
-    extra: { kept: true },
+    'fallback-filter': {},
+    extra: { kept: true, deep: { id: 100 } },
   },
 })
 
@@ -64,6 +73,7 @@ describe('DNS settings page', () => {
       return { ...currentSettings }
     })
   })
+
   afterEach(() => {
     app?.unmount()
     mountEl?.remove()
@@ -81,6 +91,7 @@ describe('DNS settings page', () => {
     const nameserver = mountEl.querySelector('[aria-label="nameserver"]') as HTMLTextAreaElement
     expect(nameserver).not.toBeNull()
     nameserver.value = '9.9.9.9\n8.8.8.8'
+    nameserver.dispatchEvent(new Event('input', { bubbles: true }))
     nameserver.dispatchEvent(new Event('change', { bubbles: true }))
     await flush()
 
@@ -129,6 +140,39 @@ describe('DNS settings page', () => {
       })
     )
     expect(api.get).toHaveBeenCalledTimes(2)
+  })
+
+  it('supports light grouping and preserves 17 keys + custom nested keys', async () => {
+    mount()
+    await flush()
+
+    // Check presence of basic group keys
+    const cacheAlgo = mountEl.querySelector('[aria-label="cache-algorithm"]') as HTMLSelectElement
+    expect(cacheAlgo.value).toBe('arc')
+    cacheAlgo.value = 'bip'
+    cacheAlgo.dispatchEvent(new Event('change', { bubbles: true }))
+    await flush()
+
+    const useHosts = mountEl.querySelector('[aria-label="use-hosts"]') as HTMLInputElement
+    expect(useHosts.checked).toBe(true)
+    useHosts.checked = false
+    useHosts.dispatchEvent(new Event('change', { bubbles: true }))
+    await flush()
+
+    const directNs = mountEl.querySelector('[aria-label="direct-nameserver"]') as HTMLTextAreaElement
+    expect(directNs.value).toContain('223.5.5.5')
+
+    const saveBtn = mountEl.querySelector('[data-testid="dns-save"]') as HTMLButtonElement
+    expect(saveBtn.disabled).toBe(false)
+    saveBtn.click()
+    await flush()
+
+    expect(api.put).toHaveBeenCalledWith(
+      '/api/v1/settings/dns',
+      expect.objectContaining({
+        raw_yaml: expect.stringContaining('bip'),
+      })
+    )
   })
 
   it('performs enabled toggle roundtrip: disabled -> validate sends enabled:false, enabled again -> validate sends enabled:true', async () => {
@@ -218,6 +262,7 @@ describe('DNS settings page', () => {
     const rawTab = mountEl.querySelector('[data-testid="dns-raw-tab"]') as HTMLButtonElement
     rawTab.click()
     await flush()
+
     expect(mountEl.querySelector('[data-testid="dns-raw-editor"]')).toBeNull()
     expect(mountEl.querySelector('[data-testid="dns-error"]')?.textContent).toContain('请先修正字段格式错误')
 
@@ -310,5 +355,29 @@ describe('DNS settings page', () => {
     expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('放弃未保存的 DNS 草稿'))
     // Since user declined (returned false), api.get should not be called again
     expect(api.get).toHaveBeenCalledTimes(1)
+  })
+
+  it('uses PageToolbar with accessible sr-only heading and no duplicate visible header', async () => {
+    mount()
+    await flush()
+
+    const toolbar = mountEl.querySelector('[data-testid="page-toolbar"]')
+    expect(toolbar).not.toBeNull()
+    expect(mountEl.querySelector('header')).toBeNull()
+    const srTitle = toolbar?.querySelector('h1.sr-only')
+    expect(srTitle?.textContent).toBe('客户端 DNS 配置')
+  })
+
+  it('triggers beforeunload warning when draft is dirty', async () => {
+    mount()
+    await flush()
+
+    const toggle = mountEl.querySelector('[data-testid="dns-enabled"]') as HTMLInputElement
+    toggle.click()
+    await flush()
+
+    const event = new Event('beforeunload', { cancelable: true }) as BeforeUnloadEvent
+    window.dispatchEvent(event)
+    expect(event.defaultPrevented).toBe(true)
   })
 })

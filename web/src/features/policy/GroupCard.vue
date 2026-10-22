@@ -18,6 +18,7 @@ import {
   computeSourceSemantics,
 } from './policyTypes'
 import StatusBadge from '../../ui/StatusBadge.vue'
+import { uiText } from '../../locales/redesign'
 import { t } from '../../locales'
 
 const props = withDefaults(
@@ -164,6 +165,14 @@ function handleHeaderClick() {
           </span>
           <span v-if="sourceCount > 0" class="badge badge-xs badge-outline font-mono">
             {{ sourceCount }} 项来源
+          </span>
+          <span
+            v-if="sourceCount > 0"
+            class="badge badge-xs badge-ghost font-mono opacity-80"
+            data-testid="group-preview-status"
+            title="策略组解析节点需在编辑抽屉中预览，列表不发额外请求"
+          >
+            {{ uiText('成员: 待预览', 'Members: Pending preview') }}
           </span>
           <span v-if="group.revision !== undefined" class="badge badge-xs badge-ghost font-mono">
             v{{ group.revision }}

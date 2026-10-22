@@ -14,6 +14,25 @@ import { useProbes } from '../probes/useProbes'
 import type { NodeRecord } from './nodeView'
 import type { ProbePoolStatus } from '../probes/probeTypes'
 
+vi.mock('../../locales/redesign', () => ({
+  uiText: (zh: string, _en: string) => zh,
+}))
+
+vi.mock('../../ui/PageToolbar.vue', () => ({
+  default: {
+    name: 'PageToolbar',
+    props: ['title', 'description'],
+    template: `
+      <div data-testid="page-toolbar" class="flex flex-wrap items-center justify-between gap-3 mb-2">
+        <slot name="default" />
+        <div class="flex items-center gap-2">
+          <slot name="actions" />
+        </div>
+      </div>
+    `,
+  },
+}))
+
 describe('Enabled Subscriptions Inventory & Live Validation Specification', () => {
   let container: HTMLDivElement
   let app: ReturnType<typeof createApp> | null = null

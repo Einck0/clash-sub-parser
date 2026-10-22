@@ -127,7 +127,7 @@ watch(
     <div data-testid="node-probe-history-drawer-content" class="space-y-4">
     <!-- Tab Controls & Refresh -->
     <div class="flex items-center justify-between gap-3 mb-4">
-      <div class="tabs tabs-boxed bg-base-300/60 p-1 rounded-xl">
+      <div class="tabs tabs-box bg-base-300/60 p-1 rounded-xl">
         <button
           type="button"
           data-testid="history-tab-runs"

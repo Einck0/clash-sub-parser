@@ -14,6 +14,25 @@ import {
 } from './sourceHistoryTypes'
 import type { NodeRecord } from './nodeView'
 
+vi.mock('../../locales/redesign', () => ({
+  uiText: (zh: string, _en: string) => zh,
+}))
+
+vi.mock('../../ui/PageToolbar.vue', () => ({
+  default: {
+    name: 'PageToolbar',
+    props: ['title', 'description'],
+    template: `
+      <div data-testid="page-toolbar" class="flex flex-wrap items-center justify-between gap-3 mb-2">
+        <slot name="default" />
+        <div class="flex items-center gap-2">
+          <slot name="actions" />
+        </div>
+      </div>
+    `,
+  },
+}))
+
 describe('Node Source Attribution & History Specification', () => {
   beforeEach(() => {
     vi.restoreAllMocks()

@@ -11,6 +11,8 @@ import {
   type FilterOp,
 } from '../policy/policyTypes'
 import { t } from '../../locales'
+import { uiText } from '../../locales/redesign'
+import { useUnsavedChanges } from '../../composables/useUnsavedChanges'
 
 const kinds = ['baseline', 'geo', 'streaming', 'ai', 'speed', 'ip_risk'] as const
 const verdicts = ['available', 'restricted', 'unknown', 'error', 'stale'] as const
@@ -23,6 +25,13 @@ const loaded = ref(false)
 const dirty = ref(false)
 const validationError = ref('')
 const filterInvalid = ref(false)
+
+useUnsavedChanges(dirty, () =>
+  uiText(
+    '全局筛选条件有未保存的草稿修改，离开将丢失这些修改。确定要离开吗？',
+    'Global filter conditions have unsaved changes. Are you sure you want to leave?'
+  )
+)
 
 const isProbe = (field: FilterField) => field === 'probe_verdict' || field === 'probe_latency_ms'
 const operators = (field: FilterField): FilterOp[] => field === 'probe_latency_ms'

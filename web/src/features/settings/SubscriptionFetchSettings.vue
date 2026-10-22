@@ -66,31 +66,31 @@ onMounted(load)
     <div v-if="error" role="alert" class="alert alert-error break-words" data-testid="fetch-settings-error">{{ error }}</div>
     <button v-if="!loading && !settings" class="btn btn-sm" @click="load">{{ t('common.refresh') }}</button>
     <template v-if="settings">
-      <label class="form-control w-full">
-        <span class="label-text mb-2">{{ t('settings.fetchMode') }}</span>
-        <select v-model="mode" class="select select-bordered w-full" :disabled="saving" data-testid="fetch-mode">
+      <div class="space-y-1.5 w-full">
+        <label class="text-xs font-semibold text-base-content/80 block">{{ t('settings.fetchMode') }}</label>
+        <select v-model="mode" class="select select-sm sm:select-md w-full" :disabled="saving" data-testid="fetch-mode">
           <option value="environment">{{ t('settings.fetchEnvironment') }}</option>
           <option value="direct">{{ t('settings.fetchDirect') }}</option>
           <option value="proxy">{{ t('settings.fetchProxy') }}</option>
         </select>
-      </label>
+      </div>
       <div class="text-sm space-y-1" aria-live="polite">
         <p>{{ t('settings.fetchEffective') }}: <span class="font-mono break-all" data-testid="fetch-effective">{{ settings.effective_proxy_endpoint || t('settings.fetchDirect') }}</span></p>
         <p>{{ t('settings.fetchSource') }}: {{ settings.effective_source === 'environment' ? t('settings.fetchEnvironment') : settings.effective_source === 'direct' ? t('settings.fetchDirect') : t('settings.fetchProxy') }}</p>
         <p v-if="settings.configured_proxy_endpoint" class="break-all">{{ t('settings.fetchConfigured') }}: {{ settings.configured_proxy_endpoint }} · {{ settings.credentials_present ? t('settings.fetchCredentialsPresent') : t('settings.fetchNoCredentials') }}</p>
       </div>
-      <label class="form-control w-full">
-        <span class="label-text mb-2">{{ t('settings.fetchReplacement') }}</span>
-        <input v-model="proxyURL" type="password" autocomplete="new-password" spellcheck="false" class="input input-bordered w-full min-w-0" :disabled="saving || clearProxy" placeholder="http://proxy.example:7890" data-testid="fetch-proxy-url" />
-        <span class="text-xs text-base-content/60 mt-2">{{ t('settings.fetchRetainHint') }}</span>
-      </label>
-      <label class="flex items-center gap-2 text-sm">
-        <input v-model="clearProxy" type="checkbox" class="checkbox checkbox-sm" :disabled="saving" data-testid="fetch-clear-proxy" />
-        {{ t('settings.fetchClear') }}
+      <div class="space-y-1.5 w-full">
+        <label class="text-xs font-semibold text-base-content/80 block">{{ t('settings.fetchReplacement') }}</label>
+        <input v-model="proxyURL" type="password" autocomplete="new-password" spellcheck="false" class="input input-sm sm:input-md w-full min-w-0 font-mono" :disabled="saving || clearProxy" placeholder="http://proxy.example:7890" data-testid="fetch-proxy-url" />
+        <span class="text-xs text-base-content/60 mt-1 block">{{ t('settings.fetchRetainHint') }}</span>
+      </div>
+      <label class="flex items-center gap-2 text-sm cursor-pointer">
+        <input v-model="clearProxy" type="checkbox" class="checkbox checkbox-sm checkbox-primary" :disabled="saving" data-testid="fetch-clear-proxy" />
+        <span>{{ t('settings.fetchClear') }}</span>
       </label>
       <div class="flex flex-wrap gap-3">
-        <button class="btn btn-primary" :disabled="saving" @click="save()" data-testid="fetch-save">{{ saving ? t('settings.filterSaving') : t('settings.saveAndApply') }}</button>
-        <button class="btn btn-ghost" :disabled="saving" @click="save(true)" data-testid="fetch-reset">{{ t('settings.fetchReset') }}</button>
+        <button class="btn btn-primary btn-sm" :disabled="saving" @click="save()" data-testid="fetch-save">{{ saving ? t('settings.filterSaving') : t('settings.saveAndApply') }}</button>
+        <button class="btn btn-ghost btn-sm" :disabled="saving" @click="save(true)" data-testid="fetch-reset">{{ t('settings.fetchReset') }}</button>
       </div>
       <p class="text-xs text-base-content/60">{{ t('settings.fetchScope') }}</p>
     </template>

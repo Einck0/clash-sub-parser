@@ -146,24 +146,112 @@ describe('Clean Minimal Client Subscriptions Specification (Zero-Overengineering
     expect(textarea.value).toBe(`${window.location.origin}/qx?token=fallback-token-456`)
   })
 
-  it('Download configuration button triggers download of correct target file', async () => {
+  it('Download configuration button triggers download of correct target file via fetchBlob', async () => {
     const pub = usePublications()
     const appendSpy = vi.spyOn(document.body, 'appendChild')
     const originalClick = HTMLAnchorElement.prototype.click
     HTMLAnchorElement.prototype.click = vi.fn()
 
+    const mockBlob = new Blob(['singbox-config-json'])
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      blob: async () => mockBlob,
+      text: async () => 'singbox-config-json',
+    } as any)
+
     try {
-      pub.downloadDirectConfig('singbox')
+      const res = await pub.downloadDirectConfig('singbox')
+      expect(res).toBe(true)
+      expect(fetchSpy).toHaveBeenCalledWith(
+        expect.stringContaining('/singbox'),
+        expect.objectContaining({ method: 'GET' })
+      )
       expect(appendSpy).toHaveBeenCalled()
 
       const createdAnchor = appendSpy.mock.calls[0][0] as HTMLAnchorElement
       expect(createdAnchor.tagName).toBe('A')
       expect(createdAnchor.download).toBe('sing-box.json')
-      expect(createdAnchor.href).toContain('/singbox')
     } finally {
       HTMLAnchorElement.prototype.click = originalClick
       appendSpy.mockRestore()
     }
+  })
+
+  it('Compiler 422 error is not treated as a successful download and does not download error file', async () => {
+    const pub = usePublications()
+    const appendSpy = vi.spyOn(document.body, 'appendChild')
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 422,
+      headers: new Headers(),
+      text: async () => JSON.stringify({
+        error: {
+          code: 'empty_group',
+          message: 'Route group [Streaming] contains no reachable candidates',
+        },
+      }),
+    } as any)
+
+    await expect(pub.downloadDirectConfig('mihomo')).rejects.toThrow(
+      'Route group [Streaming] contains no reachable candidates'
+    )
+
+    // Essential contract: anchor must NEVER be created or clicked for 422 compiler error
+    expect(appendSpy).not.toHaveBeenCalled()
+  })
+
+  it('Redacts sensitive tokens from compiler download error messages without leaking secret', async () => {
+    const pub = usePublications()
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 422,
+      headers: new Headers(),
+      text: async () => 'Failed compilation for token=my-secret-credential-value in query',
+    } as any)
+
+    try {
+      await pub.downloadDirectConfig('surge')
+      expect.fail('should have thrown error')
+    } catch (err: any) {
+      expect(err.message).not.toContain('my-secret-credential-value')
+      expect(err.message).toContain('token=***')
+    }
+  })
+
+  it('PublicationsView download button catches 422 compiler error and notifies via error toast', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 422,
+      headers: new Headers(),
+      text: async () => JSON.stringify({
+        error: {
+          code: 'unsupported_capability',
+          message: 'sing-box does not support wireguard protocol',
+        },
+      }),
+    } as any)
+
+    app = createApp({ render: () => h(PublicationsView) })
+    app.mount(container)
+
+    await nextTick()
+
+    const downloadBtn = container.querySelector(
+      '[data-testid-target="download-client-subscription-singbox"]'
+    ) as HTMLButtonElement
+    expect(downloadBtn).not.toBeNull()
+
+    downloadBtn.click()
+    await nextTick()
+    await new Promise((r) => setTimeout(r, 20))
+
+    expect(toastStore.items.value.some((t) => t.tone === 'error')).toBe(true)
+    const errToast = toastStore.items.value.find((t) => t.tone === 'error')
+    expect(errToast?.message).toContain('sing-box does not support wireguard protocol')
   })
 
   it('Zero backend CRUD calls: completely eliminates /api/v1/subscription-links', async () => {

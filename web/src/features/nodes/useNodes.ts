@@ -62,6 +62,8 @@ export function useNodes() {
   const requestGeneration = ref(0)
   const globalProbeKinds = ref<ProbeKind[]>(['baseline', 'streaming', 'ai', 'ip_risk', 'geo'])
   const hasMore = computed(() => items.value.length < total.value)
+  const initialLoaded = ref(false)
+  const currentDetailId = ref('')
 
   async function fetchGlobalScheduleKinds(): Promise<ProbeKind[]> {
     try {
@@ -156,6 +158,7 @@ export function useNodes() {
       items.value = append ? [...items.value, ...normalized] : normalized
       page.value = result.page
       total.value = result.total
+      initialLoaded.value = true
     } catch (cause) {
       if (generation === requestGeneration.value) {
         error.value = cause instanceof Error ? cause.message : '加载节点列表失败'
@@ -170,8 +173,9 @@ export function useNodes() {
 
   async function load() {
     requestGeneration.value += 1
+    const currentGen = requestGeneration.value
     if (loadingMore.value) loadingMore.value = false
-    await loadPage(1, false, requestGeneration.value)
+    await loadPage(1, false, currentGen)
   }
 
   async function loadMore() {
@@ -199,8 +203,10 @@ export function useNodes() {
       selectedNode.value = existing
     }
     loadingDetail.value = true
+    currentDetailId.value = logicalId
     try {
       const res = await api.get<NodeDetailResponse | NodeRecord>(`/api/v1/nodes/${encodeURIComponent(logicalId)}`)
+      if (currentDetailId.value !== logicalId) return null
       const rawNode = extractNodeRecord(res)
       if (rawNode) {
         const detailed = normalizeNode(rawNode)
@@ -215,7 +221,9 @@ export function useNodes() {
     } catch {
       return existing
     } finally {
-      loadingDetail.value = false
+      if (currentDetailId.value === logicalId) {
+        loadingDetail.value = false
+      }
     }
   }
 
@@ -448,6 +456,7 @@ export function useNodes() {
     error,
     total,
     hasMore,
+    initialLoaded,
     protocolFilter,
     healthFilter,
     searchQuery,

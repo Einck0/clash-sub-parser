@@ -57,4 +57,5 @@ export function t(key: string, named?: Record<string, unknown>): string {
 }
 
 export { zhCN, enUS }
+export { uiText } from './redesign'
 export type { Locale }

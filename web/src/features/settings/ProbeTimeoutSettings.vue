@@ -75,7 +75,7 @@ onMounted(() => {
             max="30"
             data-testid="probe-timeout-input"
             placeholder="5"
-            class="input input-bordered input-sm flex-1 font-mono text-xs bg-base-100/80 max-w-xs"
+            class="input input-sm flex-1 font-mono text-xs bg-base-100/80 max-w-xs"
             :disabled="loading || saving"
           />
           <button
@@ -86,7 +86,7 @@ onMounted(() => {
             @click="saveProbeTimeout"
           >
             <span v-if="saving" class="loading loading-spinner loading-xs" />
-            保存超时设置
+            <span>保存超时设置</span>
           </button>
         </div>
 

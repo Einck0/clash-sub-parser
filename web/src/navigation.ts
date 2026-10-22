@@ -40,7 +40,7 @@ export function getRouteTab(
   if (typeof window !== 'undefined' || hashProvider !== undefined) {
     const rawHash = hashProvider !== undefined ? hashProvider : (window.location?.hash || '')
     const cleanHash = rawHash.replace(/^#\/?/, '').trim().toLowerCase()
-    if (cleanHash === 'probes') {
+    if (cleanHash === 'probes' || cleanHash === 'nodes/probes') {
       return 'nodes'
     }
     if (isValidTab(cleanHash)) {
@@ -51,7 +51,7 @@ export function getRouteTab(
   try {
     const storage = storageProvider ?? (typeof window !== 'undefined' ? window.localStorage : undefined)
     const stored = storage?.getItem(ROUTE_STORAGE_KEY)
-    if (stored === 'probes') {
+    if (stored === 'probes' || stored === 'nodes/probes') {
       return 'nodes'
     }
     if (isValidTab(stored)) {

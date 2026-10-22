@@ -44,8 +44,6 @@ const { dockRef, style: contentInsetStyle } = useContentInset(52)
 const currentTheme = ref<ThemeName>('dark')
 const themes = THEME_NAMES
 
-const activeTab = ref<string>(getRouteTab())
-
 const isCollapsed = ref<boolean>(false)
 if (typeof window !== 'undefined') {
   try {
@@ -130,7 +128,7 @@ const mobileMoreItems: NavItemDef[] = [
 ]
 
 const currentActiveId = computed<string>(() => {
-  return String(injectedRoute?.name || activeTab.value || 'dashboard')
+  return String(injectedRoute?.name || getRouteTab() || 'dashboard')
 })
 
 const isMoreActive = computed<boolean>(() => {
@@ -178,10 +176,10 @@ function themeLabel(theme: ThemeName): string {
 }
 
 const isItemActive = (item: NavItemDef) => {
-  if (injectedRoute) {
+  if (injectedRoute && injectedRoute.name) {
     return injectedRoute.name === item.id || injectedRoute.path === item.path
   }
-  return activeTab.value === item.id
+  return currentActiveId.value === item.id
 }
 
 const healthStatus = ref<'checking' | 'healthy' | 'unhealthy'>('checking')
@@ -269,21 +267,15 @@ const checkHealth = async () => {
 }
 
 function handleNavigation(tabId: NavTab, path: string) {
-  activeTab.value = tabId
   closeMore()
-  router.push(path).catch(() => {})
+  return router.push(path).catch(() => {})
 }
 
-router.afterEach((to) => {
-  if (to.name) {
-    activeTab.value = String(to.name)
-  }
-})
+let unhookAfterEach: (() => void) | null = null
 
 const handleHashChange = () => {
   const targetTab = getRouteTab()
   if (targetTab && router?.currentRoute?.value?.name !== targetTab) {
-    activeTab.value = targetTab
     router.replace({ name: targetTab }).catch(() => {})
   }
 }
@@ -295,11 +287,9 @@ const handleAuthSuccess = () => {
 }
 
 onMounted(() => {
-  const initialTab = getRouteTab()
-  activeTab.value = initialTab
-  if (initialTab && router?.currentRoute?.value?.name !== initialTab) {
-    router.replace({ name: initialTab }).catch(() => {})
-  }
+  unhookAfterEach = router.afterEach(() => {
+    // Router authority state synchronization
+  })
 
   if (typeof window !== 'undefined') {
     window.addEventListener('click', handleDocumentClick)
@@ -313,6 +303,10 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  if (unhookAfterEach) {
+    unhookAfterEach()
+    unhookAfterEach = null
+  }
   if (typeof window !== 'undefined') {
     window.removeEventListener('click', handleDocumentClick)
     window.removeEventListener('keydown', handleGlobalKeydown)

@@ -29,6 +29,10 @@ export const routes: RouteRecordRaw[] = [
     redirect: '/nodes',
   },
   {
+    path: '/nodes/probes',
+    redirect: '/nodes',
+  },
+  {
     path: '/dns',
     name: 'dns',
     component: () => import('../features/dns/DnsView.vue'),

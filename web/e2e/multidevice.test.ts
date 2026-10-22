@@ -172,7 +172,7 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
     document.body.appendChild(container)
   })
 
-  afterEach(() => {
+  afterEach(async () => {
     if (app && container) {
       app.unmount()
       app = null
@@ -182,11 +182,38 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       container = null
     }
     vi.restoreAllMocks()
+    await router.replace({ path: '/' }).catch(() => {})
   })
 
-  async function waitForView(viewSelector: string, root: HTMLElement = container!): Promise<Element | null> {
+  async function waitForView(
+    viewSelector: string,
+    root: HTMLElement = container!,
+    targetTab?: string
+  ): Promise<Element | null> {
     const existing = root.querySelector(viewSelector)
-    if (existing) return existing
+    if (existing && (!targetTab || router.currentRoute.value.name === targetTab)) return existing
+
+    // Listen to real router navigation events if a target route transition is expected or underway
+    if (targetTab && router.currentRoute.value.name !== targetTab) {
+      await new Promise<void>((resolve, reject) => {
+        let timer: any = null
+        const unhook = router.afterEach((to, _from, failure) => {
+          if (to.name === targetTab) {
+            clearTimeout(timer)
+            unhook()
+            if (failure) {
+              reject(failure)
+            } else {
+              resolve()
+            }
+          }
+        })
+        timer = setTimeout(() => {
+          unhook()
+          resolve()
+        }, 1500)
+      }).catch(() => {})
+    }
 
     await nextTick()
     const afterTick1 = root.querySelector(viewSelector)
@@ -200,7 +227,7 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       const timer = setTimeout(() => {
         observer.disconnect()
         resolve(root.querySelector(viewSelector))
-      }, 1000)
+      }, 1500)
       const observer = new MutationObserver(() => {
         const found = root.querySelector(viewSelector)
         if (found) {
@@ -330,7 +357,7 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
 
       // 6. Interactive test: clicking auth badge navigates to Settings view
       ;(authBadge as HTMLButtonElement).click()
-      const settingsView = await waitForView('[data-testid="settings-view"]', root)
+      const settingsView = await waitForView('[data-testid="settings-view"]', root, 'settings')
       expect(settingsView).not.toBeNull()
       expect(['#settings', '#/settings']).toContain(window.location.hash)
 
@@ -357,7 +384,7 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       const subBtn = Array.from(navButtons).find((b) => b.textContent?.includes('Subscriptions'))
       expect(subBtn).toBeDefined()
       subBtn?.click()
-      const subTitle = await waitForView('#subscriptions-title', root)
+      const subTitle = await waitForView('#subscriptions-title', root, 'subscriptions')
       expect(subTitle?.textContent).toContain('Subscriptions')
       expect(['#subscriptions', '#/subscriptions']).toContain(window.location.hash)
 
@@ -365,7 +392,7 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       const nodeBtn = Array.from(mobileNav?.querySelectorAll('button') || []).find((b) => b.textContent?.includes('Node Ledger'))
       expect(nodeBtn).toBeDefined()
       nodeBtn?.click()
-      const nodeTitle = await waitForView('#nodes-title', root)
+      const nodeTitle = await waitForView('#nodes-title', root, 'nodes')
       expect(nodeTitle?.textContent).toContain('Node Management & Probing')
       expect(['#nodes', '#/nodes']).toContain(window.location.hash)
 
@@ -421,7 +448,7 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
         )
         expect(button).toBeDefined()
         button?.click()
-        await waitForView(t.viewSelector, root)
+        await waitForView(t.viewSelector, root, t.tab)
 
         expect(root.textContent).toContain(t.expectedText)
         expect([`#${t.tab}`, `#/${t.tab}`]).toContain(window.location.hash)

@@ -24,7 +24,8 @@ SYNTHETIC_REVISION = "0123456789abcdef0123456789abcdef01234567"
 
 def safe_eval_bool(expr: str, env: dict) -> bool:
     """Bounded AST boolean evaluator for workflow conditions."""
-    parsed = ast.parse(expr, mode="eval")
+    normalized = " ".join(expr.split())
+    parsed = ast.parse(normalized, mode="eval")
     allowed_nodes = (
         ast.Expression,
         ast.BoolOp,

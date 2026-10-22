@@ -60,7 +60,8 @@ def safe_eval_bool(expr: str, env: dict) -> bool:
     Rejects Calls, Attributes, Subscripts, builtins, and any unallowed nodes
     without execution.
     """
-    parsed = ast.parse(expr, mode="eval")
+    normalized = " ".join(expr.split())
+    parsed = ast.parse(normalized, mode="eval")
     allowed_nodes = (
         ast.Expression,
         ast.BoolOp,
@@ -485,33 +486,50 @@ class TestPreleaseChannelPromotion(unittest.TestCase):
     def fake_gh(self, *args, **kwargs):
         self.api_calls.append(args)
         if args[0] == 'api':
-            endpoint = args[1]
-            if endpoint.startswith('-X'):
+            if '-X' in args and 'PATCH' in args:
+                self.absent_ref = False
+                for arg in args:
+                    if isinstance(arg, str) and arg.startswith('sha='):
+                        self.ref['object']['sha'] = arg.split('=', 1)[1]
                 return ''
+            endpoint = args[1]
             if '/releases/tags/' in endpoint:
                 return None if self.absent_release else json.dumps(self.release)
             if '/git/ref/tags/' in endpoint:
                 return None if self.absent_ref else json.dumps(self.ref)
             if '/git/refs' in endpoint:
+                self.absent_ref = False
+                for arg in args:
+                    if isinstance(arg, str) and arg.startswith('sha='):
+                        self.ref['object']['sha'] = arg.split('=', 1)[1]
                 return ''
             return '{}'
         if args[:2] == ('release', 'create'):
             self.created_release = True
             self.absent_release = False
-            self.metadata = json.loads((self.directory / promotion.METADATA).read_text())
+            if '--target' in args:
+                self.release['target_commitish'] = args[args.index('--target') + 1]
+            for arg in args:
+                if str(arg).endswith(promotion.METADATA):
+                    self.metadata = json.loads(Path(arg).read_text())
             return ''
         if args[:2] == ('release', 'edit'):
             self.edited_release = True
+            self.absent_release = False
+            if '--target' in args:
+                self.release['target_commitish'] = args[args.index('--target') + 1]
             return ''
         if args[:2] == ('release', 'upload'):
             self.uploaded_assets = True
-            self.metadata = json.loads((self.directory / promotion.METADATA).read_text())
+            for arg in args:
+                if str(arg).endswith(promotion.METADATA):
+                    self.metadata = json.loads(Path(arg).read_text())
             return ''
         if args[:2] == ('release', 'download'):
             target = Path(args[args.index('--dir') + 1])
             (target / promotion.BINARY).write_bytes(self.payload)
             (target / promotion.CHECKSUM).write_text(f'{self.checksum}  {promotion.BINARY}\n')
-            (target / promotion.METADATA).write_text(json.dumps(self.metadata))
+            (target / promotion.METADATA).write_text(json.dumps(self.metadata, indent=2, sort_keys=True) + '\n')
             return ''
         self.fail('Unexpected GitHub command: ' + repr(args))
 

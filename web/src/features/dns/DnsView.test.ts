@@ -181,8 +181,9 @@ describe('DNS settings page (DnsView)', () => {
     mount()
     await flush()
 
-    // Initially clean
+    // Initially clean (source = saved)
     expect(mountEl.querySelector('[data-testid="dns-clean-badge"]')?.textContent).toContain('已保存')
+    expect(mountEl.querySelector('[data-testid="dns-clean-badge"]')?.textContent).not.toContain('默认配置')
     expect(mountEl.querySelector('[data-testid="dns-dirty-badge"]')).toBeNull()
 
     // Modify a field -> becomes dirty
@@ -316,6 +317,11 @@ describe('DNS settings page (DnsView)', () => {
     // Primary nameserver is visible and editable
     const nameserver = mountEl.querySelector('[aria-label="nameserver"]') as HTMLTextAreaElement
     expect(nameserver.value).toBe('1.1.1.1')
+
+    // Clean badge reflects default config source instead of '已保存'
+    const cleanBadge = mountEl.querySelector('[data-testid="dns-clean-badge"]')
+    expect(cleanBadge?.textContent).toContain('默认配置')
+    expect(cleanBadge?.textContent).not.toContain('已保存')
 
     // enhanced-mode displays unspecified (''), NOT forced fake-ip
     const modeSelect = mountEl.querySelector('[aria-label="enhanced-mode"]') as HTMLSelectElement
@@ -680,6 +686,28 @@ describe('DNS settings page (DnsView)', () => {
 
     const rawEditor = mountEl.querySelector('[data-testid="dns-raw-editor"]') as HTMLTextAreaElement
     expect(rawEditor.getAttribute('aria-label')).toBe('完整 YAML 配置草稿')
+  })
+
+  it('supports mobile-responsive toolbar wrapping and non-squeezed enable label', async () => {
+    mount()
+    await flush()
+
+    const toolbar = mountEl.querySelector('[data-testid="page-toolbar"]')
+    expect(toolbar).not.toBeNull()
+    expect(toolbar?.className).toContain('flex-col')
+    expect(toolbar?.className).toContain('sm:flex-row')
+
+    const enableLabel = mountEl.querySelector('[data-testid="dns-enabled-label"]')
+    expect(enableLabel).not.toBeNull()
+    expect(enableLabel?.className).toContain('shrink-0')
+
+    const enableSpan = enableLabel?.querySelector('span')
+    expect(enableSpan?.className).toContain('whitespace-nowrap')
+
+    const actions = mountEl.querySelector('[data-testid="toolbar-actions"]')
+    expect(actions).not.toBeNull()
+    expect(actions?.className).toContain('w-full')
+    expect(actions?.className).toContain('sm:w-auto')
   })
 
   it('triggers beforeunload warning when draft is dirty', async () => {

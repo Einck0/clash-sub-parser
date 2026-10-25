@@ -6,7 +6,6 @@ import {
   InformationCircleIcon,
   XMarkIcon,
 } from '@heroicons/vue/24/outline'
-import PageToolbar from '../../ui/PageToolbar.vue'
 import { uiText } from '../../locales/redesign'
 import { useDnsDraft } from './useDnsDraft'
 import {
@@ -97,24 +96,31 @@ onMounted(() => {
     data-testid="dns-view"
     :aria-label="uiText('客户端 DNS 配置', 'Client DNS Settings')"
   >
-    <!-- Non-redundant Toolbar: Accessible SR-only title, quick mode tabs, actions -->
-    <PageToolbar :title="uiText('客户端 DNS 配置', 'Client DNS Settings')" :sr-only-title="true">
-      <div class="flex flex-wrap items-center gap-2">
+    <!-- DNS-local responsive toolbar: Accessible SR-only title, natural wrapping on mobile -->
+    <div
+      class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5 sm:gap-3 min-w-0 w-full"
+      data-testid="page-toolbar"
+    >
+      <h1 class="sr-only">{{ uiText('客户端 DNS 配置', 'Client DNS Settings') }}</h1>
+
+      <!-- Left controls: Enable toggle and mode tabs -->
+      <div class="flex flex-wrap items-center gap-2 min-w-0" data-testid="toolbar-controls">
         <label
-          class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-base-200/80 border border-base-300 cursor-pointer select-none transition-opacity"
+          class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-base-200/80 border border-base-300 cursor-pointer select-none transition-opacity shrink-0"
           :class="{ 'opacity-50 pointer-events-none': busy }"
+          data-testid="dns-enabled-label"
         >
           <input
             v-model="enabled"
             data-testid="dns-enabled"
             type="checkbox"
-            class="toggle toggle-primary toggle-sm"
+            class="toggle toggle-primary toggle-sm shrink-0"
             :disabled="busy"
           />
-          <span class="text-xs font-semibold">{{ uiText('启用客户端 DNS', 'Enable Client DNS') }}</span>
+          <span class="text-xs font-semibold whitespace-nowrap">{{ uiText('启用客户端 DNS', 'Enable Client DNS') }}</span>
         </label>
 
-        <div class="join" role="tablist" :aria-label="uiText('DNS 编辑模式', 'DNS Edit Mode')">
+        <div class="join shrink-0" role="tablist" :aria-label="uiText('DNS 编辑模式', 'DNS Edit Mode')">
           <button
             role="tab"
             :aria-selected="mode === 'visual'"
@@ -140,9 +146,14 @@ onMounted(() => {
         </div>
       </div>
 
-      <template #actions>
-        <div v-if="settings" class="flex items-center gap-2">
-          <!-- Dirty indicator badge -->
+      <!-- Right actions: Status badges and reload button -->
+      <div
+        v-if="settings"
+        class="flex items-center justify-between sm:justify-end gap-2 w-full sm:w-auto shrink-0 pt-0.5 sm:pt-0"
+        data-testid="toolbar-actions"
+      >
+        <div class="flex items-center gap-1.5">
+          <!-- Dirty indicator badge (source-aware: default config vs saved) -->
           <span
             v-if="dirty"
             class="badge badge-sm badge-warning font-semibold text-[11px]"
@@ -155,24 +166,25 @@ onMounted(() => {
             class="badge badge-sm badge-ghost opacity-60 text-[11px]"
             data-testid="dns-clean-badge"
           >
-            {{ uiText('已保存', 'Saved') }}
+            {{ settings.source === 'default' ? uiText('默认配置', 'Default config') : uiText('已保存', 'Saved') }}
           </span>
 
           <span class="badge badge-sm badge-neutral font-mono text-[11px] opacity-75">
             rev {{ settings.revision }}
           </span>
-          <button
-            class="btn btn-ghost btn-sm text-xs"
-            :disabled="busy"
-            data-testid="dns-reload"
-            @click="load(false)"
-          >
-            <ArrowPathIcon class="w-3.5 h-3.5 mr-1" />
-            {{ uiText('重新载入', 'Reload') }}
-          </button>
         </div>
-      </template>
-    </PageToolbar>
+
+        <button
+          class="btn btn-ghost btn-sm text-xs shrink-0"
+          :disabled="busy"
+          data-testid="dns-reload"
+          @click="load(false)"
+        >
+          <ArrowPathIcon class="w-3.5 h-3.5 mr-1" />
+          {{ uiText('重新载入', 'Reload') }}
+        </button>
+      </div>
+    </div>
 
     <!-- DNS Status Alert (shows when either saved is off, or draft differs from saved) -->
     <div

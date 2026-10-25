@@ -445,7 +445,7 @@ describe('DNS settings page (DnsView)', () => {
     expect(mountEl.querySelector('[data-testid="dns-error"]')?.textContent).toContain('nameserver-policy 必须是有效 JSON')
     expect(policyEditor.value).toBe('{ invalid json')
 
-    // Save button is disabled
+    // Save button is disabled (has validation errors)
     const saveBtn = mountEl.querySelector('[data-testid="dns-save"]') as HTMLButtonElement
     expect(saveBtn.disabled).toBe(true)
 
@@ -461,21 +461,32 @@ describe('DNS settings page (DnsView)', () => {
     expect(mountEl.querySelector('[data-testid="dns-raw-editor"]')).toBeNull()
     expect(mountEl.querySelector('[data-testid="dns-error"]')?.textContent).toContain('请先修正字段格式错误')
 
-    // Fix the JSON
+    // Scenario A: Restore to baseline JSON {"geosite:cn": "223.5.5.5"} -> error cleared, preview available, but save remains disabled because unchanged (!dirty)
     policyEditor.value = '{"geosite:cn": "223.5.5.5"}'
     policyEditor.dispatchEvent(new Event('input', { bubbles: true }))
     await flush()
 
-    // Save button and preview button become enabled
+    expect(mountEl.querySelector('[data-testid="dns-error"]')).toBeNull()
+    expect(previewBtn.disabled).toBe(false)
+    expect(mountEl.querySelector('[data-testid="dns-clean-badge"]')?.textContent).toContain('已保存')
+    expect(saveBtn.disabled).toBe(true) // properly disabled because draft is clean
+
+    // Scenario B: Make a distinct meaningful valid edit -> save becomes enabled
+    policyEditor.value = '{"geosite:cn": "119.29.29.29"}'
+    policyEditor.dispatchEvent(new Event('input', { bubbles: true }))
+    await flush()
+
+    expect(mountEl.querySelector('[data-testid="dns-dirty-badge"]')?.textContent).toContain('未保存')
     expect(saveBtn.disabled).toBe(false)
     expect(previewBtn.disabled).toBe(false)
+
     saveBtn.click()
     await flush()
 
     expect(api.post).toHaveBeenCalledWith(
       '/api/v1/settings/dns/validate',
       expect.objectContaining({
-        raw_yaml: expect.stringContaining('223.5.5.5'),
+        raw_yaml: expect.stringContaining('119.29.29.29'),
       })
     )
   })
@@ -518,6 +529,8 @@ describe('DNS settings page (DnsView)', () => {
 
     const policyEditor = mountEl.querySelector('[aria-label="nameserver-policy"]') as HTMLTextAreaElement
     const fallbackEditor = mountEl.querySelector('[aria-label="fallback-filter"]') as HTMLTextAreaElement
+    const previewBtn = mountEl.querySelector('[data-testid="dns-preview-btn"]') as HTMLButtonElement
+    const saveBtn = mountEl.querySelector('[data-testid="dns-save"]') as HTMLButtonElement
 
     // Type invalid JSON into both known JSON fields
     policyEditor.value = '{ bad-policy-json'
@@ -527,26 +540,45 @@ describe('DNS settings page (DnsView)', () => {
     fallbackEditor.dispatchEvent(new Event('input', { bubbles: true }))
     await flush()
 
-    const saveBtn = mountEl.querySelector('[data-testid="dns-save"]') as HTMLButtonElement
     expect(saveBtn.disabled).toBe(true)
+    expect(previewBtn.disabled).toBe(true)
 
     // Repair nameserver-policy
     policyEditor.value = '{"geosite:cn": "223.5.5.5"}'
     policyEditor.dispatchEvent(new Event('input', { bubbles: true }))
     await flush()
 
-    // Fallback-filter still invalid -> save still blocked
+    // Fallback-filter still invalid -> save and preview still blocked
     expect(saveBtn.disabled).toBe(true)
+    expect(previewBtn.disabled).toBe(true)
     expect(mountEl.querySelector('[data-testid="dns-error"]')?.textContent).toContain('fallback-filter 必须是有效 JSON')
 
-    // Repair fallback-filter
+    // Repair fallback-filter back to baseline -> error is cleared, preview becomes available, draft is clean (!dirty)
     fallbackEditor.value = '{"geoip": true}'
     fallbackEditor.dispatchEvent(new Event('input', { bubbles: true }))
     await flush()
 
-    // Now save is enabled and error is cleared
-    expect(saveBtn.disabled).toBe(false)
     expect(mountEl.querySelector('[data-testid="dns-error"]')).toBeNull()
+    expect(previewBtn.disabled).toBe(false)
+    expect(saveBtn.disabled).toBe(true) // identical to baseline, not dirty
+
+    // Make a genuine distinct change to nameserver-policy -> save becomes enabled
+    policyEditor.value = '{"geosite:google": "8.8.8.8"}'
+    policyEditor.dispatchEvent(new Event('input', { bubbles: true }))
+    await flush()
+
+    expect(saveBtn.disabled).toBe(false)
+    expect(mountEl.querySelector('[data-testid="dns-dirty-badge"]')?.textContent).toContain('未保存')
+
+    saveBtn.click()
+    await flush()
+
+    expect(api.post).toHaveBeenCalledWith(
+      '/api/v1/settings/dns/validate',
+      expect.objectContaining({
+        raw_yaml: expect.stringContaining('8.8.8.8'),
+      })
+    )
   })
 
   it('sends the standalone enabled toggle and preserves drafts on revision conflict (409)', async () => {

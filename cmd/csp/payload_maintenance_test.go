@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -316,14 +317,22 @@ func TestRetirePayloadBodies_ConcurrencyAndLockRejection(t *testing.T) {
 		}
 		defer os.Remove(lockFile)
 
+		deps := &retirePayloadBodiesDeps{
+			checkConcurrentService: func(path string) (int, error) {
+				return 0, nil
+			},
+			checkOpenFiles: func(canonicalPath string) (int, error) {
+				return 0, nil
+			},
+		}
+
 		var stdout, stderr bytes.Buffer
-		code := run([]string{
-			"retire-payload-bodies",
+		code := runRetirePayloadBodiesWithDeps(context.Background(), []string{
 			"--db", dbPath,
 			"--apply",
 			"--offline",
 			"--backup-file", backupPath,
-		}, &stdout, &stderr)
+		}, &stdout, &stderr, deps)
 		if code != 1 {
 			t.Errorf("expected exit code 1, got %d", code)
 		}
@@ -336,6 +345,9 @@ func TestRetirePayloadBodies_ConcurrencyAndLockRejection(t *testing.T) {
 		deps := &retirePayloadBodiesDeps{
 			checkConcurrentService: func(path string) (int, error) {
 				return 12345, errors.New("concurrent csp serve process (PID 12345) running")
+			},
+			checkOpenFiles: func(canonicalPath string) (int, error) {
+				return 0, nil
 			},
 		}
 
@@ -691,16 +703,9 @@ func TestRetirePayloadBodies_PostClearIntegrityFailure(t *testing.T) {
 	_ = db.Close()
 	backupPath := createTestBackupFile(t, dbPath)
 
+	integrityCalls := 0
 	deps := &retirePayloadBodiesDeps{
 		clearPayloadBodies: func(ctx context.Context, db *sql.DB) (*sqlite.PayloadStorageReport, error) {
-			// Deliberately introduce an FK violation during clear
-			_, _ = db.ExecContext(ctx, "PRAGMA foreign_keys = OFF;")
-			_, _ = db.ExecContext(ctx, `
-				INSERT INTO subscription_entries (
-					id, payload_id, subscription_id, ordinal, source_key, raw_name, protocol, created_at
-				) VALUES ('bad_entry', 'non_existent_payload_id', 'non_existent_sub_id', 1, 'sk', 'rn', 'vmess', '2026-10-25T00:00:00Z');
-			`)
-			_, _ = db.ExecContext(ctx, "PRAGMA foreign_keys = ON;")
 			return mockClearReport(), nil
 		},
 		checkConcurrentService: func(path string) (int, error) {
@@ -708,6 +713,15 @@ func TestRetirePayloadBodies_PostClearIntegrityFailure(t *testing.T) {
 		},
 		checkOpenFiles: func(canonicalPath string) (int, error) {
 			return 0, nil
+		},
+		verifyIntegrity: func(ctx context.Context, db *sql.DB) (string, string, error) {
+			integrityCalls++
+			if integrityCalls == 1 {
+				// Pre-flight check passes
+				return "ok", "ok (0 violations)", nil
+			}
+			// Post-clear check fails
+			return "ok", "1 violations (table subscription_entries row 1 -> subscription_payloads)", errors.New("foreign_key_check found 1 violations: table subscription_entries row 1 -> subscription_payloads")
 		},
 	}
 
@@ -767,14 +781,22 @@ func TestRetirePayloadBodies_CanonicalLockPath(t *testing.T) {
 	}
 	defer os.Remove(expectedLockFile)
 
+	deps := &retirePayloadBodiesDeps{
+		checkConcurrentService: func(path string) (int, error) {
+			return 0, nil
+		},
+		checkOpenFiles: func(canonicalPath string) (int, error) {
+			return 0, nil
+		},
+	}
+
 	var stdout, stderr bytes.Buffer
-	code := run([]string{
-		"retire-payload-bodies",
+	code := runRetirePayloadBodiesWithDeps(context.Background(), []string{
 		"--db", symlinkPath, // Pass symlink
 		"--apply",
 		"--offline",
 		"--backup-file", backupPath,
-	}, &stdout, &stderr)
+	}, &stdout, &stderr, deps)
 
 	if code != 1 {
 		t.Errorf("expected exit code 1 due to canonical lock, got %d", code)
@@ -849,5 +871,57 @@ func TestRetirePayloadBodies_NoSecretsInReport(t *testing.T) {
 		if strings.Contains(strings.ToLower(output), `"`+kw+`"`) {
 			t.Errorf("report leaked sensitive keyword %q: %s", kw, output)
 		}
+	}
+}
+
+func TestCheckOpenDatabaseFiles_RealProcess(t *testing.T) {
+	if _, err := os.Stat("/proc"); os.IsNotExist(err) {
+		t.Skip("skipping /proc test: not a Linux procfs environment")
+	}
+
+	tempDir := t.TempDir()
+	tempDBPath := filepath.Join(tempDir, "proc-test.db")
+	if err := os.WriteFile(tempDBPath, []byte("SQLite format 3\x00"), 0600); err != nil {
+		t.Fatalf("failed to write temp DB file: %v", err)
+	}
+
+	// Verify fail-closed behavior on systems with unreadable process directories (e.g. unprivileged CI runner)
+	if _, err := os.ReadDir("/proc/1/fd"); err != nil && os.IsPermission(err) {
+		_, err := checkOpenDatabaseFiles(tempDBPath)
+		if err == nil {
+			t.Fatalf("expected fail-closed error when /proc/1/fd is permission denied, got nil")
+		}
+		if !strings.Contains(err.Error(), "permission") && !strings.Contains(err.Error(), "cannot inspect") {
+			t.Errorf("expected permission/inspection error from checkOpenDatabaseFiles, got: %v", err)
+		}
+		return
+	}
+
+	// When current process has permissions to inspect /proc/*/fd (e.g. root/container environment),
+	// start an independent controlled child process that holds the synthetic temp DB file open.
+	f, err := os.OpenFile(tempDBPath, os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatalf("failed to open temp DB: %v", err)
+	}
+	defer f.Close()
+
+	cmd := exec.Command("sleep", "5")
+	cmd.ExtraFiles = []*os.File{f}
+	if err := cmd.Start(); err != nil {
+		t.Skipf("cannot start background child process: %v", err)
+	}
+	defer func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+		}
+	}()
+
+	pid, err := checkOpenDatabaseFiles(tempDBPath)
+	if err == nil {
+		t.Fatalf("expected checkOpenDatabaseFiles to detect child process opening temp DB, got nil error")
+	}
+	if pid != cmd.Process.Pid {
+		t.Errorf("expected detected PID %d, got %d (err: %v)", cmd.Process.Pid, pid, err)
 	}
 }

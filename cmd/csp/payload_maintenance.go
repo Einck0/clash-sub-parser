@@ -58,6 +58,7 @@ type retirePayloadBodiesDeps struct {
 	openReadWrite          func(cfg sqlite.Config) (*sql.DB, error)
 	vacuumDB               func(ctx context.Context, db *sql.DB) error
 	closeDB                func(db *sql.DB) error
+	verifyIntegrity        func(ctx context.Context, db *sql.DB) (string, string, error)
 }
 
 func defaultRetirePayloadBodiesDeps() *retirePayloadBodiesDeps {
@@ -78,6 +79,7 @@ func defaultRetirePayloadBodiesDeps() *retirePayloadBodiesDeps {
 			}
 			return nil
 		},
+		verifyIntegrity: verifySQLiteIntegrity,
 	}
 }
 
@@ -397,6 +399,9 @@ func runRetirePayloadBodiesWithDeps(ctx context.Context, args []string, stdout, 
 		if deps.closeDB == nil {
 			deps.closeDB = defaults.closeDB
 		}
+		if deps.verifyIntegrity == nil {
+			deps.verifyIntegrity = defaults.verifyIntegrity
+		}
 	}
 
 	fs := flag.NewFlagSet("retire-payload-bodies", flag.ContinueOnError)
@@ -526,7 +531,7 @@ func runRetirePayloadBodiesWithDeps(ctx context.Context, args []string, stdout, 
 		}
 		defer db.Close()
 
-		qc, fk, err := verifySQLiteIntegrity(ctx, db)
+		qc, fk, err := deps.verifyIntegrity(ctx, db)
 		if err != nil {
 			fmt.Fprintf(stderr, "retire-payload-bodies: pre-flight integrity check failed: %v\n", err)
 			return 1
@@ -566,7 +571,7 @@ func runRetirePayloadBodiesWithDeps(ctx context.Context, args []string, stdout, 
 		fmt.Fprintf(stderr, "retire-payload-bodies: failed to open target database for pre-flight check: %v\n", err)
 		return 1
 	}
-	preQC, preFK, err := verifySQLiteIntegrity(ctx, preDB)
+	preQC, preFK, err := deps.verifyIntegrity(ctx, preDB)
 	_ = preDB.Close()
 	if err != nil {
 		fmt.Fprintf(stderr, "retire-payload-bodies: target database pre-flight integrity check failed: %v\n", err)
@@ -598,7 +603,7 @@ func runRetirePayloadBodiesWithDeps(ctx context.Context, args []string, stdout, 
 	}
 
 	// Verify integrity immediately after logical commit
-	postQC, postFK, err := verifySQLiteIntegrity(ctx, db)
+	postQC, postFK, err := deps.verifyIntegrity(ctx, db)
 	if err != nil {
 		fmt.Fprintf(stderr, "retire-payload-bodies: post-clear integrity check failed: %v (note: logical cleanup was already committed successfully; database is consistent)\n", err)
 		_, _ = db.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE);")
@@ -639,7 +644,7 @@ func runRetirePayloadBodiesWithDeps(ctx context.Context, args []string, stdout, 
 			fmt.Fprintf(stderr, "retire-payload-bodies: VACUUM failed: %v (note: logical cleanup was already committed successfully; database is consistent but physical disk space was not reclaimed)\n", vacErr)
 
 			// Still verify integrity even after failed vacuum
-			qcAfter, fkAfter, _ := verifySQLiteIntegrity(ctx, db)
+			qcAfter, fkAfter, _ := deps.verifyIntegrity(ctx, db)
 			_, _ = db.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE);")
 			closeDBOnce()
 			afterMainBytes, afterWALBytes := getFileSizes(canonicalDBPath)
@@ -670,7 +675,7 @@ func runRetirePayloadBodiesWithDeps(ctx context.Context, args []string, stdout, 
 		}
 
 		vacuumStatus = "SUCCESS"
-		postQC, postFK, err = verifySQLiteIntegrity(ctx, db)
+		postQC, postFK, err = deps.verifyIntegrity(ctx, db)
 		if err != nil {
 			fmt.Fprintf(stderr, "retire-payload-bodies: post-vacuum integrity check failed: %v (note: logical cleanup was already committed successfully)\n", err)
 			_, _ = db.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE);")

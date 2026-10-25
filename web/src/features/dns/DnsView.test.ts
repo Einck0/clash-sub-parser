@@ -2,14 +2,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp, nextTick } from 'vue'
 import { api } from '../../api/client'
+import type { DnsSettings, ValidatedDns } from './dnsTypes'
 import DnsView from './DnsView.vue'
 
-const base = () => ({
+const base = (overrides?: Partial<DnsSettings>): DnsSettings => ({
   enabled: true,
   raw_yaml: 'dns:\n  enable: true\n',
   revision: 3,
   updated_at: '2026-10-25T10:00:00Z',
-  source: 'saved' as const,
+  source: 'saved',
   config: {
     enable: true,
     ipv6: false,
@@ -33,6 +34,7 @@ const base = () => ({
     'prefer-h3': false,
     extra: { kept: true, deep: { id: 100 } },
   },
+  ...overrides,
 })
 
 let mountEl: HTMLDivElement
@@ -50,7 +52,7 @@ function mount() {
   app.mount(mountEl)
 }
 
-let currentSettings = base()
+let currentSettings: DnsSettings = base()
 
 describe('DNS settings page (DnsView)', () => {
   beforeEach(() => {
@@ -65,7 +67,7 @@ describe('DNS settings page (DnsView)', () => {
       } catch {
         cfg = { enable: false }
       }
-      return { raw_yaml: rawYaml, config: cfg } as never
+      return { raw_yaml: rawYaml, config: cfg } as ValidatedDns
     })
     vi.spyOn(api, 'put').mockImplementation(async (_path, body: any) => {
       currentSettings = {
@@ -148,13 +150,12 @@ describe('DNS settings page (DnsView)', () => {
   })
 
   it('displays actual saved custom enum in scalar-select without overwriting (regression)', async () => {
-    currentSettings = {
-      ...base(),
+    currentSettings = base({
       config: {
         ...base().config,
         'cache-algorithm': 'future-cache',
       },
-    }
+    })
     mount()
     await flush()
 
@@ -586,7 +587,7 @@ describe('DNS settings page (DnsView)', () => {
   })
 
   it('does not display default source banner even when source is default', async () => {
-    vi.mocked(api.get).mockResolvedValueOnce({ ...base(), source: 'default' } as never)
+    vi.mocked(api.get).mockResolvedValueOnce(base({ source: 'default' }))
     mount()
     await flush()
     expect(mountEl.querySelector('[data-testid="dns-default-source"]')).toBeNull()

@@ -82,6 +82,10 @@ const dnsDisabledNotice = computed(() => {
   return null
 })
 
+function clearPreview() {
+  previewYaml.value = ''
+}
+
 onMounted(() => {
   void load(true)
 })
@@ -365,7 +369,7 @@ onMounted(() => {
                 data-testid="dns-close-preview"
                 :aria-label="uiText('关闭预览', 'Close preview')"
                 :title="uiText('关闭预览', 'Close preview')"
-                @click="previewYaml = ''"
+                @click="clearPreview"
               >
                 <XMarkIcon class="w-4 h-4" aria-hidden="true" />
               </button>

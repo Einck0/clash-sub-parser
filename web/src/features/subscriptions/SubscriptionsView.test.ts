@@ -991,7 +991,12 @@ describe('Per-Row State, Concurrency & Layout Invariants', () => {
     }
 
     it('retains confirmation modal and pending object on DELETE failure, unlocking button for retry', async () => {
-      vi.spyOn(api, 'get').mockResolvedValue([testSub])
+      vi.spyOn(api, 'get').mockResolvedValue({
+        items: [testSub],
+        page: 1,
+        page_size: 50,
+        total: 1,
+      })
       vi.spyOn(api, 'delete').mockRejectedValueOnce(
         new ApiError(500, 'server_error', 'Database write lock timeout')
       )
@@ -1053,7 +1058,12 @@ describe('Per-Row State, Concurrency & Layout Invariants', () => {
       vi.spyOn(api, 'get').mockImplementation(async () => {
         getCallCount++
         if (getCallCount === 1) {
-          return [testSub]
+          return {
+            items: [testSub],
+            page: 1,
+            page_size: 50,
+            total: 1,
+          }
         }
         // Subsequent reload after delete fails
         throw new ApiError(500, 'server_error', 'Failed to reload subscription list')

@@ -110,3 +110,7 @@ Run `pi_run_20261020_111741_708234` / change `002-policy` / default / epoch 1。
 ## 2026-10-21 当前增量实施计划
 
 以 [dns-policy-cleanup-1574174.md](dns-policy-cleanup-1574174.md) 收敛模块A前端/B resolver/C policy应用与HTTP/D生产DNS单项恢复。A/B/C写集独立并行，D仅CAS恢复DNS与在线备份，不与代码施工共享写入。复用原生DNS服务，不新增数据模型/迁移；旧准入数据只读兼容、实时不生效并警告，拒新建删除，安全硬约束不变；真实分流规则唯一Rules页且分类新增不能破坏MATCH。当前根AGENTS云测试顺序覆盖上文旧本地Docker测试/最终才commit条款：主脑逐文件开发提交推dev→同SHA Actions测试构建发布→拉预构建云镜像到合成DB隔离验收→独审及实际UI Critic→交付，禁止服务器及本地Docker编译测试。程序生产部署不是默认授权，DNS数据恢复单项独立验收。宪章六域/资产保全/稳定身份/单一存储均保持。
+
+## 2026-10-25 DNS 前端增量计划
+
+见 [dns-ui-redesign.md](dns-ui-redesign.md)：A 单草稿状态与 B 呈现组件两个不相交模块并行，冻结 removeKey/preview/previewYaml/previewing 接口；复用既有 API，不新增后端/数据表/依赖。先开发 commit/push dev → 同SHA Actions → 云镜像合成DB预览 → 独立reviewer → critic → 回收与交付；禁止宿主/本地Docker测试编译，不生产部署。入口规划基线已在覆盖前保存 /tmp/csp-dns-590576/baseline/，本轮不运行覆盖性setup。

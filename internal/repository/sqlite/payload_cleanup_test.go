@@ -141,19 +141,19 @@ func TestInspectPayloadStorage_DryRun(t *testing.T) {
 	if rep.ClearedBodyBytes != 0 {
 		t.Errorf("expected ClearedBodyBytes=0 for inspect, got %d", rep.ClearedBodyBytes)
 	}
-	if rep.RetainedEntries != 1 || rep.RetainedEntryCount != 1 {
+	if rep.RetainedEntries != 1 {
 		t.Errorf("expected RetainedEntries=1, got %d", rep.RetainedEntries)
 	}
-	if rep.RetainedNodes != 1 || rep.RetainedNodeCount != 1 {
+	if rep.RetainedNodes != 1 {
 		t.Errorf("expected RetainedNodes=1, got %d", rep.RetainedNodes)
 	}
-	if rep.RetainedSubscriptions != 1 || rep.RetainedSubscriptionCount != 1 {
+	if rep.RetainedSubscriptions != 1 {
 		t.Errorf("expected RetainedSubscriptions=1, got %d", rep.RetainedSubscriptions)
 	}
-	if rep.RetainedPublications != 1 || rep.RetainedPublicationCount != 1 {
+	if rep.RetainedPublications != 1 {
 		t.Errorf("expected RetainedPublications=1, got %d", rep.RetainedPublications)
 	}
-	if rep.RetainedRefs != 1 || rep.RetainedPubRefCount != 1 {
+	if rep.RetainedRefs != 1 {
 		t.Errorf("expected RetainedRefs=1, got %d", rep.RetainedRefs)
 	}
 
@@ -535,6 +535,81 @@ func TestClearPayloadBodies_RollbackOnFKViolation(t *testing.T) {
 	}
 
 	// Verify rollback: initial body must still exist in database
+	var storedBlobLen int
+	if err := db.QueryRow("SELECT LENGTH(body_blob) FROM subscription_payloads WHERE id = ?;", pID).Scan(&storedBlobLen); err != nil {
+		t.Fatalf("failed to query stored body_blob: %v", err)
+	}
+	if storedBlobLen != len(initialBody) {
+		t.Errorf("expected body to NOT be cleared due to rollback, got length %d (expected %d)", storedBlobLen, len(initialBody))
+	}
+}
+
+func TestClearPayloadBodies_RollbackOnWithoutRowIDFKViolation(t *testing.T) {
+	ctx := context.Background()
+	db, _ := setupTestDB(t)
+
+	now := domain.NowUTC()
+	subID := "sub_worowid_" + domain.MustNewUUIDv7()
+	subRepo := sqlite.NewSubscriptionRepository(db)
+	_ = subRepo.Create(ctx, &domain.Subscription{
+		ID:                 subID,
+		Name:               "WORowID Sub",
+		SourceURLSecretRef: "secret://worowid",
+		Enabled:            true,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	})
+
+	fetchRepo := sqlite.NewSubscriptionFetchRepository(db)
+	fetchID := "fetch_worowid_" + domain.MustNewUUIDv7()
+	_ = fetchRepo.Create(ctx, &domain.SubscriptionFetch{
+		ID:             fetchID,
+		SubscriptionID: subID,
+		StartedAt:      now,
+		FinishedAt:     &now,
+		Outcome:        domain.FetchOutcomeSuccess,
+		ContentDigest:  "sha256:worowiddigest",
+	})
+
+	pID := "payload_worowid_" + domain.MustNewUUIDv7()
+	initialBody := []byte("body that must not clear on without rowid fk error")
+	const insertSQL = `
+	INSERT INTO subscription_payloads (
+		id, subscription_id, fetch_id, content_digest, body_blob,
+		http_status, headers_json, pinned, created_at
+	) VALUES (?, ?, ?, ?, ?, 200, '{}', 0, ?);`
+	_, _ = db.Exec(insertSQL, pID, subID, fetchID, "sha256:worowiddigest", initialBody, now.Format(time.RFC3339))
+
+	// Create a WITHOUT ROWID table with a foreign key referencing subscriptions
+	const createWORowIDTable = `
+	CREATE TABLE test_without_rowid (
+		item_key TEXT PRIMARY KEY,
+		sub_id TEXT,
+		FOREIGN KEY (sub_id) REFERENCES subscriptions(id)
+	) WITHOUT ROWID;`
+	if _, err := db.Exec(createWORowIDTable); err != nil {
+		t.Fatalf("failed to create without rowid table: %v", err)
+	}
+
+	// Insert invalid foreign key while FK checks are off
+	if _, err := db.Exec("PRAGMA foreign_keys = OFF;"); err != nil {
+		t.Fatalf("failed to disable foreign keys: %v", err)
+	}
+	if _, err := db.Exec("INSERT INTO test_without_rowid (item_key, sub_id) VALUES ('k1', 'nonexistent_subscription_id');"); err != nil {
+		t.Fatalf("failed to insert invalid fk into without rowid table: %v", err)
+	}
+	if _, err := db.Exec("PRAGMA foreign_keys = ON;"); err != nil {
+		t.Fatalf("failed to re-enable foreign keys: %v", err)
+	}
+
+	// Attempt ClearPayloadBodies: PRAGMA foreign_key_check will return rowid NULL.
+	// Must detect violation, fail-closed, and rollback.
+	_, err := sqlite.ClearPayloadBodies(ctx, db)
+	if err == nil {
+		t.Fatal("expected ClearPayloadBodies to fail due to WITHOUT ROWID foreign key violation")
+	}
+
+	// Verify rollback: body must remain untouched
 	var storedBlobLen int
 	if err := db.QueryRow("SELECT LENGTH(body_blob) FROM subscription_payloads WHERE id = ?;", pID).Scan(&storedBlobLen); err != nil {
 		t.Fatalf("failed to query stored body_blob: %v", err)

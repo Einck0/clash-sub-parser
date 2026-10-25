@@ -91,10 +91,23 @@ func TestDataflowRepositories(t *testing.T) {
 	// Historical non-empty body injection test (FR-RAW-02):
 	// Even if database has historical non-empty body bytes, GetByID, GetLatestBySubscription,
 	// and GetByDigest must return empty body and never load historical bytes into memory.
+	histSubID := "sub_hist_" + domain.MustNewUUIDv7()
+	histSub := domain.Subscription{
+		ID:                 histSubID,
+		Name:               "Hist Sub",
+		SourceURLSecretRef: "secret://hist-key",
+		Enabled:            true,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	}
+	if err := subRepo.Create(ctx, &histSub); err != nil {
+		t.Fatalf("failed to create hist subscription: %v", err)
+	}
+
 	histFetchID := "fetch_hist_" + domain.MustNewUUIDv7()
 	histFetch := domain.SubscriptionFetch{
 		ID:             histFetchID,
-		SubscriptionID: subID,
+		SubscriptionID: histSubID,
 		StartedAt:      now,
 		FinishedAt:     &now,
 		Outcome:        domain.FetchOutcomeSuccess,
@@ -110,7 +123,7 @@ func TestDataflowRepositories(t *testing.T) {
 		id, subscription_id, fetch_id, content_digest, body_blob,
 		http_status, headers_json, pinned, created_at
 	) VALUES (?, ?, ?, ?, ?, 200, '{}', 0, ?);`
-	if _, err := db.Exec(insertHistSQL, histPayloadID, subID, histFetchID, "sha256:histdigest", []byte("historical raw subscription body"), now.Add(time.Second).Format(time.RFC3339)); err != nil {
+	if _, err := db.Exec(insertHistSQL, histPayloadID, histSubID, histFetchID, "sha256:histdigest", []byte("historical raw subscription body"), now.Format(time.RFC3339)); err != nil {
 		t.Fatalf("failed to inject historical payload: %v", err)
 	}
 
@@ -133,7 +146,7 @@ func TestDataflowRepositories(t *testing.T) {
 	}
 
 	// GetLatestBySubscription returns empty BodyBlob
-	gotHistLatest, err := payloadRepo.GetLatestBySubscription(ctx, subID)
+	gotHistLatest, err := payloadRepo.GetLatestBySubscription(ctx, histSubID)
 	if err != nil {
 		t.Fatalf("GetLatestBySubscription failed: %v", err)
 	}

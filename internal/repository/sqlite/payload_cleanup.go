@@ -24,14 +24,6 @@ type PayloadStorageReport struct {
 	RetainedSubscriptions int64 `json:"retained_subscriptions"`
 	RetainedPublications  int64 `json:"retained_publications"`
 	RetainedRefs          int64 `json:"retained_refs"`
-
-	// Explicit count aliases for interoperability with CLI and other consumers
-	RetainedEntryCount          int64 `json:"retained_entry_count"`
-	RetainedNodeCount           int64 `json:"retained_node_count"`
-	RetainedSubscriptionCount   int64 `json:"retained_subscription_count"`
-	RetainedPublicationCount    int64 `json:"retained_publication_count"`
-	RetainedPubRefCount         int64 `json:"retained_pub_ref_count"`
-	RetainedPublicationRefCount int64 `json:"retained_publication_ref_count"`
 }
 
 var requiredPayloadStorageTables = []string{
@@ -98,22 +90,16 @@ func queryStorageCounts(ctx context.Context, q queryExecutor) (storageCounts, er
 
 func buildReport(payloadCount, nonemptyBodyCount, bodyBytes, clearedCount, clearedBytes int64, sc storageCounts) *PayloadStorageReport {
 	return &PayloadStorageReport{
-		PayloadCount:                payloadCount,
-		NonemptyBodyCount:           nonemptyBodyCount,
-		BodyBytes:                   bodyBytes,
-		ClearedBodyCount:            clearedCount,
-		ClearedBodyBytes:            clearedBytes,
-		RetainedEntries:             sc.entryCount,
-		RetainedNodes:               sc.nodeCount,
-		RetainedSubscriptions:       sc.subCount,
-		RetainedPublications:        sc.pubCount,
-		RetainedRefs:                sc.refCount,
-		RetainedEntryCount:          sc.entryCount,
-		RetainedNodeCount:           sc.nodeCount,
-		RetainedSubscriptionCount:   sc.subCount,
-		RetainedPublicationCount:    sc.pubCount,
-		RetainedPubRefCount:         sc.refCount,
-		RetainedPublicationRefCount: sc.refCount,
+		PayloadCount:          payloadCount,
+		NonemptyBodyCount:     nonemptyBodyCount,
+		BodyBytes:             bodyBytes,
+		ClearedBodyCount:      clearedCount,
+		ClearedBodyBytes:      clearedBytes,
+		RetainedEntries:       sc.entryCount,
+		RetainedNodes:         sc.nodeCount,
+		RetainedSubscriptions: sc.subCount,
+		RetainedPublications:  sc.pubCount,
+		RetainedRefs:          sc.refCount,
 	}
 }
 
@@ -233,16 +219,23 @@ func ClearPayloadBodies(ctx context.Context, db *sql.DB) (*PayloadStorageReport,
 	if err != nil {
 		return nil, fmt.Errorf("failed to run foreign_key_check in cleanup transaction: %w", err)
 	}
+	defer fkRows.Close()
+
 	var violations []string
 	for fkRows.Next() {
-		var table, parent string
-		var rowid int64
-		var fkid int
-		if scanErr := fkRows.Scan(&table, &rowid, &parent, &fkid); scanErr == nil {
-			violations = append(violations, fmt.Sprintf("table %s (rowid %d) references parent %s (fkid %d)", table, rowid, parent, fkid))
+		var table, parent sql.NullString
+		var rowid sql.NullInt64
+		var fkid sql.NullInt64
+		if scanErr := fkRows.Scan(&table, &rowid, &parent, &fkid); scanErr != nil {
+			violations = append(violations, fmt.Sprintf("unscannable foreign key violation row: %v", scanErr))
+			continue
 		}
+		rowidStr := "NULL"
+		if rowid.Valid {
+			rowidStr = fmt.Sprintf("%d", rowid.Int64)
+		}
+		violations = append(violations, fmt.Sprintf("table %s (rowid %s) references parent %s (fkid %d)", table.String, rowidStr, parent.String, fkid.Int64))
 	}
-	_ = fkRows.Close()
 	if err := fkRows.Err(); err != nil {
 		return nil, fmt.Errorf("error reading foreign_key_check results: %w", err)
 	}

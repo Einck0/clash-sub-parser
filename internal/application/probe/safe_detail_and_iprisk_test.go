@@ -5,9 +5,11 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -811,6 +813,7 @@ func TestRunner_IPRisk_StrictScoringAndPersistenceConsistency(t *testing.T) {
 		name               string
 		scamalyticsHTML    string
 		dialErr            error
+		roundTripErr       error
 		wantProbeVerdict   domain.ProbeVerdict
 		wantProbeRiskScore string
 		wantSummaryReason  string
@@ -930,10 +933,20 @@ func TestRunner_IPRisk_StrictScoringAndPersistenceConsistency(t *testing.T) {
 		},
 		{
 			name:               "dial_error_network_failure",
-			dialErr:            fmt.Errorf("dial tcp 1.2.3.4:8388: connect: connection refused"),
+			roundTripErr:       &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED},
 			wantProbeVerdict:   domain.VerdictError,
 			wantProbeRiskScore: "",
 			wantSummaryReason:  "connection_refused",
+			wantRiskStatus:     domain.IPRiskStatusError,
+			wantRiskScore:      nil,
+			wantRiskConfidence: nil,
+		},
+		{
+			name:               "client_build_dialer_failure",
+			dialErr:            fmt.Errorf("dial tcp 1.2.3.4:8388: client build error"),
+			wantProbeVerdict:   domain.VerdictError,
+			wantProbeRiskScore: "",
+			wantSummaryReason:  "client_build_failed",
 			wantRiskStatus:     domain.IPRiskStatusError,
 			wantRiskScore:      nil,
 			wantRiskConfidence: nil,
@@ -976,6 +989,9 @@ func TestRunner_IPRisk_StrictScoringAndPersistenceConsistency(t *testing.T) {
 
 			mockClient := &http.Client{
 				Transport: probeMockRoundTripper(func(req *http.Request) (*http.Response, error) {
+					if tc.roundTripErr != nil {
+						return nil, tc.roundTripErr
+					}
 					if strings.Contains(req.URL.String(), "cloudflare.com/cdn-cgi/trace") {
 						return &http.Response{
 							StatusCode: http.StatusOK,

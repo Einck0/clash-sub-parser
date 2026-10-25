@@ -1427,7 +1427,10 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 		result.StatusCode = responses[0].Status
 	}
 	var eval profiles.Evaluation
-	if kind == domain.ProbeKindSpeed {
+	if dialErr != nil || client == nil {
+		eval.Verdict = domain.VerdictError
+		eval.Reason = failureReason
+	} else if kind == domain.ProbeKindSpeed {
 		eval.Verdict = speedCap.Verdict
 		eval.Reason = speedCap.Reason
 	} else if kind == domain.ProbeKindIPRisk {
@@ -1441,6 +1444,13 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 	}
 	if failureReason != "" {
 		eval.Reason = failureReason
+	}
+	if eval.Verdict == "" {
+		if result.NetworkError || result.DNSError || result.DeadlineExceeded || dialErr != nil || client == nil {
+			eval.Verdict = domain.VerdictError
+		} else {
+			eval.Verdict = domain.VerdictUnknown
+		}
 	}
 	rawVerdict := eval.Verdict
 	if responseErr != nil && !errors.Is(responseErr, platform.ErrBodyBudget) && ctx.Err() == nil {

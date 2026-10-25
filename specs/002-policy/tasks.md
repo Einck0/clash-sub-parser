@@ -125,8 +125,10 @@ Run `pi_run_20261020_111741_708234` / change `002-policy` / work_package `defaul
 身份 pi_run_20261025_123522_590576 / change_pi_run_20261025_123522_590576 / whole_task / epoch 1。本轮所有任务按 [dns-ui-redesign.md](dns-ui-redesign.md)；旧勾选不代表本轮门禁通过。
 
 - [x] D25-00 主脑核对入口dirty/AGENTS、官方Feature解析、规格/模块契约及speckit-analyze一致性，保存规划原基线。
-- [ ] D25-01 [P] [DU2/DU3/DU4] 草稿模块 useDnsDraft.ts/dnsTypes.ts/useDnsDraft.test.ts：键删除、对象校验、预览失效、异步防护及相应回归；不本地运行测试编译，待同SHA云测收敛。
-- [ ] D25-02 [P] [DU1/DU2/DU3/DU5] 呈现模块 DnsView.vue/DnsView.test.ts 与必要专属字段组件：主路径、高级分组、三态/重置、busy锁定、可访问响应式及中英文，消费冻结A接口。
-- [ ] D25-03 主脑逐文件核对→开发提交推dev→同SHA Actions checks/runtime必需成功（dev发布job skipped预期）；施工机提供当前源码云测结果与自测报告，禁止本地编译。
-- [ ] D25-04 同SHA云镜像digest/OCI revision、合成DB隔离预览与API/导出验收、独立reviewer后实际UI critic桌面/移动视口与截图；失败保留并定向整改复验。
-- [ ] D25-05 图工具可用性如实报告，核对任务现场/回收专属预览、逐文件最终提交、QQ交付完成/未做，禁止生产部署。
+- [x] D25-01 [P] [DU2/DU3/DU4] 草稿模块 useDnsDraft.ts/dnsTypes.ts/useDnsDraft.test.ts：键删除、对象校验、预览失效、异步防护及相应回归；不本地运行测试编译，待同SHA云测收敛。
+- [x] D25-02 [P] [DU1/DU2/DU3/DU5] 呈现模块 DnsView.vue/DnsView.test.ts 与必要专属字段组件：主路径、高级分组、三态/重置、busy锁定、可访问响应式及中英文，消费冻结A接口。
+- [x] D25-03 主脑逐文件核对→开发提交推dev→同SHA Actions checks/runtime必需成功（dev发布job skipped预期）；施工机提供当前源码云测结果与自测报告，禁止本地编译。
+- [x] D25-04 同SHA云镜像digest/OCI revision、合成DB隔离预览与API/导出验收、独立reviewer后实际UI critic桌面/移动视口与截图；失败保留并定向整改复验。
+- [x] D25-05 图工具可用性如实报告，核对任务现场/回收专属预览、逐文件最终提交、QQ交付完成/未做，禁止生产部署。
+
+当前D25终态证据、失败整改链、当前业务SHA、云测/镜像/独审/视觉复验及隔离清理见 [dns-ui-completion-590576.md](dns-ui-completion-590576.md)。程序和生产DNS配置未上线/未写入。

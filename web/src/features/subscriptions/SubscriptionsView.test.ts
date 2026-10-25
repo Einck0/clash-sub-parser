@@ -971,6 +971,26 @@ describe('Per-Row State, Concurrency & Layout Invariants', () => {
   })
 
   describe('FR-RM6 Subscription Delete Retry & Mutation vs Reload Isolation', () => {
+    const originalShowModal = HTMLDialogElement.prototype.showModal
+    const originalClose = HTMLDialogElement.prototype.close
+
+    beforeEach(() => {
+      HTMLDialogElement.prototype.showModal = function (this: HTMLDialogElement) {
+        this.setAttribute('open', '')
+        Object.defineProperty(this, 'open', { value: true, writable: true, configurable: true })
+      }
+      HTMLDialogElement.prototype.close = function (this: HTMLDialogElement) {
+        this.removeAttribute('open')
+        Object.defineProperty(this, 'open', { value: false, writable: true, configurable: true })
+        this.dispatchEvent(new Event('close'))
+      }
+    })
+
+    afterEach(() => {
+      HTMLDialogElement.prototype.showModal = originalShowModal
+      HTMLDialogElement.prototype.close = originalClose
+    })
+
     const testSub: SubscriptionRecord = {
       id: 'sub-to-delete',
       name: 'Delete Target Subscription',

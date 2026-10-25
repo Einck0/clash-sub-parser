@@ -138,7 +138,7 @@ func TestPolicyRules_CategoryCRUDAndBackfill(t *testing.T) {
 
 func TestRevisionRepository_CreateActiveWithSeed_AtomicRollback(t *testing.T) {
 	ctx := context.Background()
-	db := setupTestDB(t)
+	db, _ := setupTestDB(t)
 	revRepo := sqlite.NewRevisionRepository(db)
 
 	seeder, ok := revRepo.(interface {
@@ -173,7 +173,7 @@ func TestRevisionRepository_CreateActiveWithSeed_AtomicRollback(t *testing.T) {
 	}
 
 	// 2. Failure path: trigger on policy_rules aborts -> entire transaction rolls back
-	db2 := setupTestDB(t)
+	db2, _ := setupTestDB(t)
 	revRepo2 := sqlite.NewRevisionRepository(db2)
 	seeder2 := revRepo2.(interface {
 		CreateActiveWithSeed(ctx context.Context, rev *domain.ConfigurationRevision) error

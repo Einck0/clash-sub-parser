@@ -3,6 +3,7 @@ package sqlite_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 

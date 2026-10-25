@@ -5,11 +5,63 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"clash-sub-parser/internal/domain"
 )
+
+// ParseScoreInt strictly parses a raw integer score string.
+// It requires an integer in the range 0..100.
+// It rejects non-numeric characters, signs, decimals, empty strings,
+// leading zeros (except single '0'), and values outside 0..100.
+func ParseScoreInt(raw string) (int, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || len(raw) > 3 {
+		return 0, false
+	}
+	for i := 0; i < len(raw); i++ {
+		if raw[i] < '0' || raw[i] > '9' {
+			return 0, false
+		}
+	}
+	if len(raw) > 1 && raw[0] == '0' {
+		return 0, false
+	}
+	val, err := strconv.Atoi(raw)
+	if err != nil || val < 0 || val > 100 {
+		return 0, false
+	}
+	return val, true
+}
+
+// ParseRiskScore parses a risk score string (e.g. "15% low", "15%", "0%", "100%")
+// or a raw score integer (e.g. "15", "0", "100").
+// It strictly requires a complete 0..100 integer.
+// It rejects negative numbers, >100, decimals, empty strings, non-numeric strings,
+// multiple '%' symbols, and trailing garbage attached to the percent sign.
+func ParseRiskScore(scoreStr string) (int, bool) {
+	scoreStr = strings.TrimSpace(scoreStr)
+	if scoreStr == "" {
+		return 0, false
+	}
+	if strings.Count(scoreStr, "%") > 1 {
+		return 0, false
+	}
+	var numStr string
+	if idx := strings.IndexByte(scoreStr, '%'); idx != -1 {
+		numStr = scoreStr[:idx]
+		rest := scoreStr[idx+1:]
+		if len(rest) > 0 && !unicode.IsSpace(rune(rest[0])) {
+			return 0, false
+		}
+	} else {
+		numStr = scoreStr
+	}
+	return ParseScoreInt(numStr)
+}
 
 // CheckIPRisk queries Scamalytics for the node exit IP and extracts the IP Fraud Risk score.
 func CheckIPRisk(ctx context.Context, httpClient *http.Client, ip string) domain.PlatformCapability {
@@ -111,30 +163,51 @@ func CheckIPRisk(ctx context.Context, httpClient *http.Client, ip string) domain
 
 	scoreLine := bytes.TrimSpace(lines[4])
 	scoreParts := bytes.Split(scoreLine, []byte(":"))
-	riskLine := bytes.TrimSpace(lines[5])
-	riskParts := bytes.Split(riskLine, []byte(":"))
-
-	if len(scoreParts) >= 2 {
-		score := bytes.TrimSpace(bytes.ReplaceAll(bytes.ReplaceAll(scoreParts[1], []byte(`"`), nil), []byte(`,`), nil))
-		risk := ""
-		if len(riskParts) >= 2 {
-			risk = string(bytes.TrimSpace(bytes.ReplaceAll(bytes.ReplaceAll(riskParts[1], []byte(`"`), nil), []byte(`,`), nil)))
-		}
-
-		scoreStr := string(score) + "%"
-		if risk != "" {
-			scoreStr = scoreStr + " " + risk
-		}
-
-		cap.Verdict = domain.VerdictAvailable
-		cap.RiskScore = scoreStr
-		cap.Summary = scoreStr
-		cap.Reason = "scamalytics_scored"
+	if len(scoreParts) < 2 {
+		cap.Verdict = domain.VerdictUnknown
+		cap.Reason = "contract_drift"
+		cap.Summary = "Score Unavailable"
 		return cap
 	}
 
-	cap.Verdict = domain.VerdictUnknown
-	cap.Reason = "contract_drift"
+	key := strings.ToLower(strings.Trim(string(bytes.TrimSpace(scoreParts[0])), `"`))
+	if key != "score" {
+		cap.Verdict = domain.VerdictUnknown
+		cap.Reason = "contract_drift"
+		cap.Summary = "Score Unavailable"
+		return cap
+	}
+
+	rawScore := strings.Trim(string(bytes.TrimSpace(scoreParts[1])), `",`)
+	rawScore = strings.TrimSpace(rawScore)
+	scoreInt, ok := ParseScoreInt(rawScore)
+	if !ok {
+		cap.Verdict = domain.VerdictUnknown
+		cap.Reason = "contract_drift"
+		cap.Summary = "Score Unavailable"
+		return cap
+	}
+
+	riskLine := bytes.TrimSpace(lines[5])
+	riskParts := bytes.Split(riskLine, []byte(":"))
+	risk := ""
+	if len(riskParts) >= 2 {
+		rKey := strings.ToLower(strings.Trim(string(bytes.TrimSpace(riskParts[0])), `"`))
+		if rKey == "risk" {
+			risk = strings.Trim(string(bytes.TrimSpace(riskParts[1])), `",`)
+			risk = strings.TrimSpace(risk)
+		}
+	}
+
+	scoreStr := fmt.Sprintf("%d%%", scoreInt)
+	if risk != "" {
+		scoreStr = scoreStr + " " + risk
+	}
+
+	cap.Verdict = domain.VerdictAvailable
+	cap.RiskScore = scoreStr
+	cap.Summary = scoreStr
+	cap.Reason = "scamalytics_scored"
 	return cap
 }
 

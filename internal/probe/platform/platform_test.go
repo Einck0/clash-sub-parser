@@ -527,3 +527,321 @@ func TestCheckIPRisk(t *testing.T) {
 		t.Fatalf("expected '12%% low', got: %+v", cap)
 	}
 }
+
+func TestParseScoreInt_And_ParseRiskScore(t *testing.T) {
+	intTests := []struct {
+		input   string
+		wantVal int
+		wantOk  bool
+	}{
+		// Valid intermediate and boundaries
+		{"0", 0, true},
+		{"1", 1, true},
+		{"12", 12, true},
+		{"15", 15, true},
+		{"50", 50, true},
+		{"99", 99, true},
+		{"100", 100, true},
+		{" 42 ", 42, true},
+
+		// Out of bounds
+		{"-1", 0, false},
+		{"-50", 0, false},
+		{"101", 0, false},
+		{"200", 0, false},
+		{"999", 0, false},
+
+		// Decimals
+		{"12.5", 0, false},
+		{"0.0", 0, false},
+		{"0.5", 0, false},
+
+		// Non-numeric / empty
+		{"", 0, false},
+		{"   ", 0, false},
+		{"abc", 0, false},
+		{"low", 0, false},
+		{"none", 0, false},
+
+		// Suffix and format garbage
+		{"12%", 0, false},
+		{"12abc", 0, false},
+		{"12px", 0, false},
+		{"12 34", 0, false},
+		{"+12", 0, false},
+		{"00", 0, false},
+		{"012", 0, false},
+	}
+
+	for _, tc := range intTests {
+		val, ok := platform.ParseScoreInt(tc.input)
+		if ok != tc.wantOk || val != tc.wantVal {
+			t.Errorf("ParseScoreInt(%q) = (%d, %v), want (%d, %v)", tc.input, val, ok, tc.wantVal, tc.wantOk)
+		}
+	}
+
+	scoreTests := []struct {
+		input   string
+		wantVal int
+		wantOk  bool
+	}{
+		{"15% low", 15, true},
+		{"12% low", 12, true},
+		{"0% very low", 0, true},
+		{"100% high", 100, true},
+		{"50%", 50, true},
+		{"0%", 0, true},
+		{"100%", 100, true},
+		{" 15%  medium ", 15, true},
+		{"15", 15, true},
+		{"0", 0, true},
+		{"100", 100, true},
+
+		// Invalid
+		{"", 0, false},
+		{"   ", 0, false},
+		{"abc", 0, false},
+		{"12%abc", 0, false},
+		{"12abc%", 0, false},
+		{"12.5%", 0, false},
+		{"-1%", 0, false},
+		{"101%", 0, false},
+		{"12%%", 0, false},
+		{"12% low %", 0, false},
+	}
+
+	for _, tc := range scoreTests {
+		val, ok := platform.ParseRiskScore(tc.input)
+		if ok != tc.wantOk || val != tc.wantVal {
+			t.Errorf("ParseRiskScore(%q) = (%d, %v), want (%d, %v)", tc.input, val, ok, tc.wantVal, tc.wantOk)
+		}
+	}
+}
+
+func TestCheckIPRisk_StrictScoringTable(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name          string
+		body          string
+		statusCode    int
+		wantVerdict   domain.ProbeVerdict
+		wantRiskScore string
+		wantSummary   string
+		wantReason    string
+	}{
+		// Valid intermediate values
+		{
+			name:          "valid_intermediate_with_risk",
+			body:          "IP Fraud Risk API\n1\n2\n3\n\"score\": \"12\",\n\"risk\": \"low\"\n6",
+			statusCode:    200,
+			wantVerdict:   domain.VerdictAvailable,
+			wantRiskScore: "12% low",
+			wantSummary:   "12% low",
+			wantReason:    "scamalytics_scored",
+		},
+		{
+			name:          "valid_intermediate_15",
+			body:          "<html>\nIP Fraud Risk API\n1\n2\n3\n\"score\": \"15\",\n\"risk\": \"low\"\n</html>",
+			statusCode:    200,
+			wantVerdict:   domain.VerdictAvailable,
+			wantRiskScore: "15% low",
+			wantSummary:   "15% low",
+			wantReason:    "scamalytics_scored",
+		},
+		{
+			name:          "valid_boundary_0",
+			body:          "IP Fraud Risk API\n1\n2\n3\n\"score\": \"0\",\n\"risk\": \"very low\"\n6",
+			statusCode:    200,
+			wantVerdict:   domain.VerdictAvailable,
+			wantRiskScore: "0% very low",
+			wantSummary:   "0% very low",
+			wantReason:    "scamalytics_scored",
+		},
+		{
+			name:          "valid_boundary_100",
+			body:          "IP Fraud Risk API\n1\n2\n3\n\"score\": \"100\",\n\"risk\": \"very high\"\n6",
+			statusCode:    200,
+			wantVerdict:   domain.VerdictAvailable,
+			wantRiskScore: "100% very high",
+			wantSummary:   "100% very high",
+			wantReason:    "scamalytics_scored",
+		},
+		{
+			name:          "valid_without_risk_field",
+			body:          "IP Fraud Risk API\n1\n2\n3\n\"score\": \"50\",\n\"unknown_key\": \"foo\"\n6",
+			statusCode:    200,
+			wantVerdict:   domain.VerdictAvailable,
+			wantRiskScore: "50%",
+			wantSummary:   "50%",
+			wantReason:    "scamalytics_scored",
+		},
+		{
+			name:          "valid_unquoted_number",
+			body:          "IP Fraud Risk API\n1\n2\n3\n\"score\": 42,\n\"risk\": \"medium\"\n6",
+			statusCode:    200,
+			wantVerdict:   domain.VerdictAvailable,
+			wantRiskScore: "42% medium",
+			wantSummary:   "42% medium",
+			wantReason:    "scamalytics_scored",
+		},
+
+		// Negative / out of bounds
+		{
+			name:          "negative_score",
+			body:          "IP Fraud Risk API\n1\n2\n3\n\"score\": \"-1\",\n\"risk\": \"low\"\n6",
+			statusCode:    200,
+			wantVerdict:   domain.VerdictUnknown,
+			wantRiskScore: "",
+			wantSummary:   "Score Unavailable",
+			wantReason:    "contract_drift",
+		},
+		{
+			name:          "out_of_bounds_101",
+			body:          "IP Fraud Risk API\n1\n2\n3\n\"score\": \"101\",\n\"risk\": \"high\"\n6",
+			statusCode:    200,
+			wantVerdict:   domain.VerdictUnknown,
+			wantRiskScore: "",
+			wantSummary:   "Score Unavailable",
+			wantReason:    "contract_drift",
+		},
+		{
+			name:          "decimal_score",
+			body:          "IP Fraud Risk API\n1\n2\n3\n\"score\": \"12.5\",\n\"risk\": \"low\"\n6",
+			statusCode:    200,
+			wantVerdict:   domain.VerdictUnknown,
+			wantRiskScore: "",
+			wantSummary:   "Score Unavailable",
+			wantReason:    "contract_drift",
+		},
+
+		// Empty / non-numeric text
+		{
+			name:          "empty_score",
+			body:          "IP Fraud Risk API\n1\n2\n3\n\"score\": \"\",\n\"risk\": \"low\"\n6",
+			statusCode:    200,
+			wantVerdict:   domain.VerdictUnknown,
+			wantRiskScore: "",
+			wantSummary:   "Score Unavailable",
+			wantReason:    "contract_drift",
+		},
+		{
+			name:          "text_score",
+			body:          "IP Fraud Risk API\n1\n2\n3\n\"score\": \"none\",\n\"risk\": \"low\"\n6",
+			statusCode:    200,
+			wantVerdict:   domain.VerdictUnknown,
+			wantRiskScore: "",
+			wantSummary:   "Score Unavailable",
+			wantReason:    "contract_drift",
+		},
+
+		// Suffix garbage
+		{
+			name:          "suffix_garbage_percent_in_json",
+			body:          "IP Fraud Risk API\n1\n2\n3\n\"score\": \"12%\",\n\"risk\": \"low\"\n6",
+			statusCode:    200,
+			wantVerdict:   domain.VerdictUnknown,
+			wantRiskScore: "",
+			wantSummary:   "Score Unavailable",
+			wantReason:    "contract_drift",
+		},
+		{
+			name:          "suffix_garbage_alpha",
+			body:          "IP Fraud Risk API\n1\n2\n3\n\"score\": \"12abc\",\n\"risk\": \"low\"\n6",
+			statusCode:    200,
+			wantVerdict:   domain.VerdictUnknown,
+			wantRiskScore: "",
+			wantSummary:   "Score Unavailable",
+			wantReason:    "contract_drift",
+		},
+		{
+			name:          "suffix_garbage_px",
+			body:          "IP Fraud Risk API\n1\n2\n3\n\"score\": \"12px\",\n\"risk\": \"low\"\n6",
+			statusCode:    200,
+			wantVerdict:   domain.VerdictUnknown,
+			wantRiskScore: "",
+			wantSummary:   "Score Unavailable",
+			wantReason:    "contract_drift",
+		},
+
+		// Abnormal layout / missing marker / missing lines
+		{
+			name:          "missing_marker",
+			body:          "<html><body>Some other content without API marker</body></html>",
+			statusCode:    200,
+			wantVerdict:   domain.VerdictUnknown,
+			wantRiskScore: "",
+			wantSummary:   "Score Unavailable",
+			wantReason:    "contract_drift",
+		},
+		{
+			name:          "fewer_than_7_lines",
+			body:          "IP Fraud Risk API\nline 1\nline 2",
+			statusCode:    200,
+			wantVerdict:   domain.VerdictUnknown,
+			wantRiskScore: "",
+			wantSummary:   "Score Unavailable",
+			wantReason:    "contract_drift",
+		},
+		{
+			name:          "wrong_key_on_score_line",
+			body:          "IP Fraud Risk API\n1\n2\n3\n\"unrelated_key\": \"12\",\n\"risk\": \"low\"\n6",
+			statusCode:    200,
+			wantVerdict:   domain.VerdictUnknown,
+			wantRiskScore: "",
+			wantSummary:   "Score Unavailable",
+			wantReason:    "contract_drift",
+		},
+		{
+			name:          "malformed_score_line_no_colon",
+			body:          "IP Fraud Risk API\n1\n2\n3\nno_colon_here\n\"risk\": \"low\"\n6",
+			statusCode:    200,
+			wantVerdict:   domain.VerdictUnknown,
+			wantRiskScore: "",
+			wantSummary:   "Score Unavailable",
+			wantReason:    "contract_drift",
+		},
+
+		// HTTP status variants
+		{
+			name:          "http_403_access_restricted",
+			body:          "Forbidden",
+			statusCode:    403,
+			wantVerdict:   domain.VerdictUnknown,
+			wantRiskScore: "",
+			wantSummary:   "HTTP 403",
+			wantReason:    "access_restricted",
+		},
+		{
+			name:          "http_500_non_200",
+			body:          "Internal Server Error",
+			statusCode:    500,
+			wantVerdict:   domain.VerdictRestricted,
+			wantRiskScore: "",
+			wantSummary:   "HTTP 500",
+			wantReason:    "non_200_status",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			client := mockClient(func(req *http.Request) (*http.Response, error) {
+				return htmlResponse(tc.statusCode, tc.body)
+			})
+			cap := platform.CheckIPRisk(ctx, client, "1.2.3.4")
+
+			if cap.Verdict != tc.wantVerdict {
+				t.Errorf("Verdict = %v, want %v", cap.Verdict, tc.wantVerdict)
+			}
+			if cap.RiskScore != tc.wantRiskScore {
+				t.Errorf("RiskScore = %q, want %q", cap.RiskScore, tc.wantRiskScore)
+			}
+			if cap.Summary != tc.wantSummary {
+				t.Errorf("Summary = %q, want %q", cap.Summary, tc.wantSummary)
+			}
+			if cap.Reason != tc.wantReason {
+				t.Errorf("Reason = %q, want %q", cap.Reason, tc.wantReason)
+			}
+		})
+	}
+}

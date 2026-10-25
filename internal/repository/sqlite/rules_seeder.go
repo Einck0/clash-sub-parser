@@ -167,16 +167,15 @@ func insertSeedRule(ctx context.Context, stmt *sql.Stmt, revID string, item seed
 	return nil
 }
 
-// BackfillPolicyRules imports or restores all 470 rules from /data/clash_sub_parser.db
-// or the embedded seed dataset into the specified revision.
-func BackfillPolicyRules(ctx context.Context, db *sql.DB, revID string, fallbackDBPath string) (int, error) {
+// SeedDefaultPolicyRulesTx seeds all 470 default rules into the given revision within an active transaction.
+func SeedDefaultPolicyRulesTx(ctx context.Context, tx *sql.Tx, revID string, fallbackDBPath string) (int, error) {
 	if revID == "" {
-		return 0, fmt.Errorf("revision_id cannot be empty for rule backfill")
+		return 0, fmt.Errorf("revision_id cannot be empty for rule seed")
 	}
 
 	// 1. Fetch node groups to map group names to UUIDs
 	groupMap := make(map[string]string)
-	gRows, err := db.QueryContext(ctx, "SELECT id, name FROM node_groups;")
+	gRows, err := tx.QueryContext(ctx, "SELECT id, name FROM node_groups;")
 	if err != nil {
 		return 0, fmt.Errorf("failed to query node groups: %w", err)
 	}
@@ -192,7 +191,7 @@ func BackfillPolicyRules(ctx context.Context, db *sql.DB, revID string, fallback
 
 	// 2. Fetch rule categories to map category names to IDs
 	catMap := make(map[string]string)
-	cRows, err := db.QueryContext(ctx, "SELECT id, name FROM rule_categories;")
+	cRows, err := tx.QueryContext(ctx, "SELECT id, name FROM rule_categories;")
 	if err != nil {
 		return 0, fmt.Errorf("failed to query rule categories: %w", err)
 	}
@@ -242,34 +241,46 @@ func BackfillPolicyRules(ctx context.Context, db *sql.DB, revID string, fallback
 		}
 	}
 
-	// 4. Insert in transaction into policy_rules
+	// 4. Insert into policy_rules within the active transaction
+	if _, err := tx.ExecContext(ctx, "DELETE FROM policy_rules WHERE revision_id = ?;", revID); err != nil {
+		return 0, fmt.Errorf("failed to clean existing rules for revision %s: %w", revID, err)
+	}
+
+	insertStmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO policy_rules (
+			id, revision_id, category_id, category, name,
+			target_group_id, builtin_target, expression, position, enabled
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("failed to prepare insert statement: %w", err)
+	}
+	defer insertStmt.Close()
+
 	insertedCount := 0
-	err = WithTx(ctx, db, func(ctx context.Context, tx *sql.Tx) error {
-		// Delete existing rules in this revision to guarantee exactly 470 clean rules
-		if _, err := tx.ExecContext(ctx, "DELETE FROM policy_rules WHERE revision_id = ?;", revID); err != nil {
-			return fmt.Errorf("failed to clean existing rules for revision %s: %w", revID, err)
+	for _, item := range seedRecords {
+		if err := insertSeedRule(ctx, insertStmt, revID, item, catMap, groupMap); err != nil {
+			return 0, err
 		}
+		insertedCount++
+	}
 
-		insertStmt, err := tx.PrepareContext(ctx, `
-			INSERT INTO policy_rules (
-				id, revision_id, category_id, category, name,
-				target_group_id, builtin_target, expression, position, enabled
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-		`)
-		if err != nil {
-			return fmt.Errorf("failed to prepare insert statement: %w", err)
-		}
-		defer insertStmt.Close()
+	return insertedCount, nil
+}
 
-		for _, item := range seedRecords {
-			if err := insertSeedRule(ctx, insertStmt, revID, item, catMap, groupMap); err != nil {
-				return err
-			}
-			insertedCount++
-		}
-		return nil
+// BackfillPolicyRules imports or restores all 470 rules from /data/clash_sub_parser.db
+// or the embedded seed dataset into the specified revision.
+func BackfillPolicyRules(ctx context.Context, db *sql.DB, revID string, fallbackDBPath string) (int, error) {
+	if revID == "" {
+		return 0, fmt.Errorf("revision_id cannot be empty for rule backfill")
+	}
+
+	var insertedCount int
+	err := WithTx(ctx, db, func(ctx context.Context, tx *sql.Tx) error {
+		var err error
+		insertedCount, err = SeedDefaultPolicyRulesTx(ctx, tx, revID, fallbackDBPath)
+		return err
 	})
-
 	if err != nil {
 		return 0, err
 	}

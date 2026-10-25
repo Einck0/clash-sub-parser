@@ -1307,8 +1307,17 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 		}
 		ipRiskScore = ipRiskCap.RiskScore
 		if ipRiskCap.Verdict == domain.VerdictAvailable {
-			result.ContractMatched = true
-			result.StatusCode = http.StatusOK
+			if _, ok := platform.ParseRiskScore(ipRiskScore); ok {
+				result.ContractMatched = true
+				result.StatusCode = http.StatusOK
+			} else {
+				ipRiskCap.Verdict = domain.VerdictUnknown
+				ipRiskCap.Reason = "contract_drift"
+				ipRiskCap.Summary = "Score Unavailable"
+				ipRiskScore = ""
+				result.ContractMatched = false
+				failureReason = "contract_drift"
+			}
 		} else {
 			result.ContractMatched = false
 			failureReason = ipRiskCap.Reason
@@ -1565,18 +1574,25 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 		meter.mu.Unlock()
 	}
 	if r.riskObs != nil && kind == domain.ProbeKindIPRisk {
-		ipRiskStatus := domain.IPRiskStatusAvailable
-		if eval.Verdict != domain.VerdictAvailable {
+		var ipRiskStatus domain.IPRiskStatus
+		var parsedScore *int
+		var conf *int
+
+		if eval.Verdict == domain.VerdictAvailable {
+			if sc, ok := platform.ParseRiskScore(ipRiskScore); ok {
+				ipRiskStatus = domain.IPRiskStatusAvailable
+				parsedScore = &sc
+				defaultConf := 80
+				conf = &defaultConf
+			} else {
+				ipRiskStatus = domain.IPRiskStatusUnknown
+			}
+		} else if eval.Verdict == domain.VerdictUnknown {
+			ipRiskStatus = domain.IPRiskStatusUnknown
+		} else {
 			ipRiskStatus = domain.IPRiskStatusError
 		}
-		var parsedScore *int
-		if ipRiskScore != "" {
-			var sc int
-			if n, _ := fmt.Sscanf(ipRiskScore, "%d%%", &sc); n > 0 && sc >= 0 && sc <= 100 {
-				parsedScore = &sc
-			}
-		}
-		conf := 80
+
 		ipRiskObs := &domain.IPRiskObservation{
 			ID:                    domain.MustNewUUIDv7(),
 			NodeLogicalID:         node.LogicalID,
@@ -1587,7 +1603,7 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 			ExpiresAt:             now.Add(24 * time.Hour),
 			Status:                ipRiskStatus,
 			Score:                 parsedScore,
-			Confidence:            &conf,
+			Confidence:            conf,
 			NetworkClass:          domain.NetworkClassDatacenter,
 			EvidenceDigest:        obs.EvidenceDigest,
 			RedactedSummary:       obs.RedactedSummary,

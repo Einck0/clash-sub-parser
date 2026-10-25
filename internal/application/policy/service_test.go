@@ -1184,6 +1184,47 @@ func TestPolicyRevisionBootstrapFailures(t *testing.T) {
 	}
 }
 
+func TestPolicyRevisionBootstrapWithDefaultRulesSeed(t *testing.T) {
+	ctx := context.Background()
+	db := setupTestDB(t)
+	svc, _ := setupTestService(t, db)
+
+	// 1. Initial bootstrap with WithDefaultRulesSeed seeds exactly 470 rules
+	active, err := svc.EnsureActiveRevision(ctx, policy.WithDefaultRulesSeed())
+	if err != nil || active == nil {
+		t.Fatalf("EnsureActiveRevision with seed failed: %v", err)
+	}
+
+	var count int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM policy_rules WHERE revision_id=?", active.ID).Scan(&count); err != nil {
+		t.Fatalf("query policy_rules count failed: %v", err)
+	}
+	if count != 470 {
+		t.Fatalf("expected 470 rules seeded, got %d", count)
+	}
+
+	// 2. Second invocation is idempotent
+	again, err := svc.EnsureActiveRevision(ctx, policy.WithDefaultRulesSeed())
+	if err != nil || again == nil || again.ID != active.ID {
+		t.Fatalf("second EnsureActiveRevision failed or returned different revision: %+v err=%v", again, err)
+	}
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM policy_rules WHERE revision_id=?", active.ID).Scan(&count); err != nil || count != 470 {
+		t.Fatalf("expected rule count to remain 470, got %d (err: %v)", count, err)
+	}
+
+	// 3. Deleting rules does not trigger auto-backfill on subsequent calls
+	if _, err := db.ExecContext(ctx, "DELETE FROM policy_rules WHERE revision_id=?", active.ID); err != nil {
+		t.Fatalf("clearing rules failed: %v", err)
+	}
+	rechecked, err := svc.EnsureActiveRevision(ctx, policy.WithDefaultRulesSeed())
+	if err != nil || rechecked == nil {
+		t.Fatalf("EnsureActiveRevision after clear failed: %v", err)
+	}
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM policy_rules WHERE revision_id=?", active.ID).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("cleared rules must NOT be resurrected by EnsureActiveRevision: count=%d", count)
+	}
+}
+
 type bootstrapFailureRevisionRepo struct {
 	domain.RevisionRepository
 	failure string
@@ -1200,6 +1241,83 @@ func (r *bootstrapFailureRevisionRepo) CreateActive(ctx context.Context, rev *do
 		return fmt.Errorf("activation failed")
 	}
 	return r.RevisionRepository.CreateActive(ctx, rev)
+}
+
+func (r *bootstrapFailureRevisionRepo) CreateActiveWithSeed(ctx context.Context, rev *domain.ConfigurationRevision) error {
+	if r.failure == "activation" {
+		return fmt.Errorf("activation failed")
+	}
+	if seeder, ok := r.RevisionRepository.(interface {
+		CreateActiveWithSeed(ctx context.Context, rev *domain.ConfigurationRevision) error
+	}); ok {
+		return seeder.CreateActiveWithSeed(ctx, rev)
+	}
+	return fmt.Errorf("underlying repository does not support atomic initial seeding")
+}
+
+type unsupportedRevisionRepo struct {
+	domain.RevisionRepository
+	createActiveCalled bool
+}
+
+func (u *unsupportedRevisionRepo) CreateActive(ctx context.Context, rev *domain.ConfigurationRevision) error {
+	u.createActiveCalled = true
+	return u.RevisionRepository.CreateActive(ctx, rev)
+}
+
+type spyPolicyRepo struct {
+	domain.PolicyRepository
+	backfillCalled bool
+}
+
+func (s *spyPolicyRepo) BackfillRules(ctx context.Context, revisionID string, fallbackDBPath string) (int, error) {
+	s.backfillCalled = true
+	return s.PolicyRepository.BackfillRules(ctx, revisionID, fallbackDBPath)
+}
+
+func TestPolicyRevisionBootstrap_UnsupportedRepo_FailsSafeWithoutWrites(t *testing.T) {
+	ctx := context.Background()
+	db := setupTestDB(t)
+
+	// Wrap repos with spies; unsupportedRevisionRepo embeds domain.RevisionRepository,
+	// so it intentionally does NOT implement CreateActiveWithSeed.
+	baseRevRepo := sqlite.NewRevisionRepository(db)
+	unsupportedRepo := &unsupportedRevisionRepo{RevisionRepository: baseRevRepo}
+	spyPolRepo := &spyPolicyRepo{PolicyRepository: sqlite.NewPolicyRepository(db)}
+
+	svc := policy.NewService(
+		spyPolRepo,
+		unsupportedRepo,
+		sqlite.NewNodeRepository(db),
+		sqlite.NewAuditRepository(db),
+	)
+
+	// Attempting bootstrap with WithDefaultRulesSeed on an unsupported repository must fail-safe
+	rev, err := svc.EnsureActiveRevision(ctx, policy.WithDefaultRulesSeed())
+	if err == nil || !strings.Contains(err.Error(), "does not support atomic initial seeding") {
+		t.Fatalf("expected unsupported atomic initial seeding error, got rev=%+v err=%v", rev, err)
+	}
+
+	// Verify fail-safe: CreateActive was NEVER called
+	if unsupportedRepo.createActiveCalled {
+		t.Fatalf("unsupported repository must not have CreateActive called")
+	}
+
+	// Verify fail-safe: BackfillRules was NEVER called
+	if spyPolRepo.backfillCalled {
+		t.Fatalf("policy repository must not have BackfillRules called")
+	}
+
+	// Verify database remains completely clean (zero revisions, zero rules)
+	var revCount int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM configuration_revisions;").Scan(&revCount); err != nil || revCount != 0 {
+		t.Fatalf("expected 0 configuration revisions in DB, got %d (err: %v)", revCount, err)
+	}
+
+	var ruleCount int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM policy_rules;").Scan(&ruleCount); err != nil || ruleCount != 0 {
+		t.Fatalf("expected 0 policy rules in DB, got %d (err: %v)", ruleCount, err)
+	}
 }
 
 type failingRevisionRepo struct {

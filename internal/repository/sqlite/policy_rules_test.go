@@ -135,3 +135,80 @@ func TestPolicyRules_CategoryCRUDAndBackfill(t *testing.T) {
 		t.Fatalf("expected 470 listed rules from embedded seed, got %d (err: %v)", len(rules2), err)
 	}
 }
+
+func TestRevisionRepository_CreateActiveWithSeed_AtomicRollback(t *testing.T) {
+	ctx := context.Background()
+	db := setupTestDB(t)
+	revRepo := sqlite.NewRevisionRepository(db)
+
+	seeder, ok := revRepo.(interface {
+		CreateActiveWithSeed(ctx context.Context, rev *domain.ConfigurationRevision) error
+	})
+	if !ok {
+		t.Fatalf("expected revision repository to implement CreateActiveWithSeed")
+	}
+
+	// 1. Success path: inserts revision, snapshot, active state and 470 rules
+	revID := domain.MustNewUUIDv7()
+	rev := domain.ConfigurationRevision{
+		ID:            revID,
+		ContentDigest: "digest-initial-seed",
+		State:         domain.RevisionStateDraft,
+		CreatedAt:     domain.NowUTC(),
+	}
+
+	if err := seeder.CreateActiveWithSeed(ctx, &rev); err != nil {
+		t.Fatalf("CreateActiveWithSeed failed: %v", err)
+	}
+
+	active, err := revRepo.GetActive(ctx)
+	if err != nil || active == nil || active.ID != revID {
+		t.Fatalf("expected active revision %s, got %+v (err: %v)", revID, active, err)
+	}
+
+	policyRepo := sqlite.NewPolicyRepository(db)
+	rules, err := policyRepo.ListPolicyRules(ctx, revID)
+	if err != nil || len(rules) != 470 {
+		t.Fatalf("expected 470 seeded rules, got %d (err: %v)", len(rules), err)
+	}
+
+	// 2. Failure path: trigger on policy_rules aborts -> entire transaction rolls back
+	db2 := setupTestDB(t)
+	revRepo2 := sqlite.NewRevisionRepository(db2)
+	seeder2 := revRepo2.(interface {
+		CreateActiveWithSeed(ctx context.Context, rev *domain.ConfigurationRevision) error
+	})
+
+	_, err = db2.ExecContext(ctx, `
+		CREATE TRIGGER abort_seed BEFORE INSERT ON policy_rules
+		BEGIN
+			SELECT RAISE(ABORT, 'abort initial seed');
+		END;
+	`)
+	if err != nil {
+		t.Fatalf("create trigger failed: %v", err)
+	}
+
+	failRevID := domain.MustNewUUIDv7()
+	failRev := domain.ConfigurationRevision{
+		ID:            failRevID,
+		ContentDigest: "digest-fail-seed",
+		State:         domain.RevisionStateDraft,
+		CreatedAt:     domain.NowUTC(),
+	}
+
+	if err := seeder2.CreateActiveWithSeed(ctx, &failRev); err == nil || !strings.Contains(err.Error(), "abort initial seed") {
+		t.Fatalf("expected abort initial seed error, got: %v", err)
+	}
+
+	var count int
+	if err := db2.QueryRowContext(ctx, "SELECT COUNT(*) FROM configuration_revisions;").Scan(&count); err != nil || count != 0 {
+		t.Fatalf("failed seed must roll back revision: count=%d", count)
+	}
+	if err := db2.QueryRowContext(ctx, "SELECT COUNT(*) FROM policy_rules;").Scan(&count); err != nil || count != 0 {
+		t.Fatalf("failed seed must roll back rules: count=%d", count)
+	}
+	if err := db2.QueryRowContext(ctx, "SELECT COUNT(*) FROM policy_revision_snapshots;").Scan(&count); err != nil || count != 0 {
+		t.Fatalf("failed seed must roll back snapshots: count=%d", count)
+	}
+}

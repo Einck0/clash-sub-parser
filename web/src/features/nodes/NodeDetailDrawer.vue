@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import {
   ArrowPathIcon,
   BoltIcon,
+  ExclamationTriangleIcon,
   ShieldCheckIcon,
 } from '@heroicons/vue/24/outline'
 import DrawerCard from '../../ui/DrawerCard.vue'
@@ -34,12 +35,16 @@ const props = defineProps<{
   probeState: 'probing' | 'queued' | 'idle'
   probeFeedback: string
   savingConnection: boolean
+  loadingDetail?: boolean
+  detailStale?: boolean
+  detailErrorMessage?: string
 }>()
 
 const emit = defineEmits<{
   (e: 'update:modelValue', value: boolean): void
   (e: 'probe-node', node: NormalizedNode): void
   (e: 'retry-source-history'): void
+  (e: 'retry-detail', logicalId: string): void
   (
     e: 'save-connection',
     payload: {
@@ -184,6 +189,30 @@ function handleClose() {
     @update:model-value="emit('update:modelValue', $event)"
   >
     <div v-if="node" data-testid="node-detail-drawer" class="space-y-4 text-xs">
+      <!-- Stale / Detail Error Alert Banner with In-Place Retry -->
+      <div
+        v-if="detailStale"
+        data-testid="node-detail-stale-banner"
+        class="p-2.5 rounded-xl bg-warning/10 border border-warning/30 flex items-center justify-between gap-2 text-warning-content"
+      >
+        <div class="flex items-center gap-2 min-w-0">
+          <ExclamationTriangleIcon class="w-4 h-4 text-warning shrink-0" />
+          <span class="truncate">
+            {{ detailErrorMessage || '最新节点详情未能成功刷新，当前展示列表缓存数据' }}
+          </span>
+        </div>
+        <button
+          type="button"
+          data-testid="node-detail-retry-btn"
+          class="btn btn-warning btn-xs shrink-0 gap-1"
+          :disabled="loadingDetail"
+          @click="emit('retry-detail', node.logicalId)"
+        >
+          <ArrowPathIcon class="w-3.5 h-3.5" :class="{ 'animate-spin': loadingDetail }" />
+          <span>{{ loadingDetail ? '刷新中...' : '重试' }}</span>
+        </button>
+      </div>
+
       <!-- Real-Time Probe Telemetry & Single-Node Quick Probe Bar -->
       <div
         data-testid="node-drawer-probe-panel"

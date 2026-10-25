@@ -114,3 +114,7 @@ Run `pi_run_20261020_111741_708234` / change `002-policy` / default / epoch 1。
 ## 2026-10-25 DNS 前端增量计划
 
 见 [dns-ui-redesign.md](dns-ui-redesign.md)：A 单草稿状态与 B 呈现组件两个不相交模块并行，冻结 removeKey/preview/previewYaml/previewing 接口；复用既有 API，不新增后端/数据表/依赖。先开发 commit/push dev → 同SHA Actions → 云镜像合成DB预览 → 独立reviewer → critic → 回收与交付；禁止宿主/本地Docker测试编译，不生产部署。入口规划基线已在覆盖前保存 /tmp/csp-dns-590576/baseline/，本轮不运行覆盖性setup。
+
+## 2026-10-25 Review整改实施计划（优先于旧自动恢复语义）
+
+设计、场景、接口、依赖与取舍见 [review-remediation-20261025.md](review-remediation-20261025.md)。A 首次初始化/启动保护，B 探测证据校验，C 前端错误反馈；写集合不相交并行，主脑统一Git与云端集成。无新增依赖/用户配置。既有revision包括空规则不得seed；默认初始化局限首次创建并安全事务化。R4保留待决，不擅清理；条件加密与HTTP资源加固不顺带实施。开发提交/push dev后Actions同SHA云测，预构建镜像隔离验收，独审后critic、清理、最终交付；无生产授权。旧plan中“本地Go/Vitest通过”不是本轮验证入口。

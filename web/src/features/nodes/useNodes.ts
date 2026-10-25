@@ -18,6 +18,13 @@ import {
   type NormalizedNode,
 } from './nodeView'
 
+export interface NodeDetailError {
+  logicalId: string
+  status: number
+  message: string
+  isStale: boolean
+}
+
 interface NodePage {
   items: NodeRecord[]
   page: number
@@ -64,6 +71,22 @@ export function useNodes() {
   const hasMore = computed(() => items.value.length < total.value)
   const initialLoaded = ref(false)
   const currentDetailId = ref('')
+  const nodeDetailError = ref<NodeDetailError | null>(null)
+  let nodeDetailSeq = 0
+
+  const isDetailStale = computed(() => {
+    return Boolean(
+      nodeDetailError.value?.isStale &&
+      nodeDetailError.value?.logicalId === selectedNode.value?.logicalId
+    )
+  })
+
+  const detailErrorMessage = computed(() => {
+    if (!nodeDetailError.value || nodeDetailError.value.logicalId !== selectedNode.value?.logicalId) {
+      return ''
+    }
+    return nodeDetailError.value.message
+  })
 
   async function fetchGlobalScheduleKinds(): Promise<ProbeKind[]> {
     try {
@@ -198,19 +221,24 @@ export function useNodes() {
   }
 
   async function fetchNodeDetail(logicalId: string): Promise<NormalizedNode | null> {
+    const seq = ++nodeDetailSeq
     const existing = items.value.find((n) => n.logicalId === logicalId) ?? null
     if (existing) {
       selectedNode.value = existing
     }
     loadingDetail.value = true
     currentDetailId.value = logicalId
+    if (nodeDetailError.value?.logicalId === logicalId) {
+      nodeDetailError.value = null
+    }
     try {
       const res = await api.get<NodeDetailResponse | NodeRecord>(`/api/v1/nodes/${encodeURIComponent(logicalId)}`)
-      if (currentDetailId.value !== logicalId) return null
+      if (seq !== nodeDetailSeq || currentDetailId.value !== logicalId) return null
       const rawNode = extractNodeRecord(res)
       if (rawNode) {
         const detailed = normalizeNode(rawNode)
         selectedNode.value = detailed
+        nodeDetailError.value = null
         const idx = items.value.findIndex((n) => n.logicalId === logicalId)
         if (idx >= 0) {
           items.value[idx] = detailed
@@ -218,10 +246,27 @@ export function useNodes() {
         return detailed
       }
       return existing
-    } catch {
+    } catch (cause) {
+      if (seq !== nodeDetailSeq || currentDetailId.value !== logicalId) return null
+      let status = 0
+      let message = '网络连接失败，请检查网络后重试'
+      if (cause instanceof ApiError) {
+        status = cause.status
+        message = cause.status === 404
+          ? `未找到节点「${logicalId}」(404)`
+          : `获取节点详情失败 (${cause.status})`
+      } else if (cause instanceof Error && cause.message) {
+        message = cause.message
+      }
+      nodeDetailError.value = {
+        logicalId,
+        status,
+        message,
+        isStale: Boolean(existing),
+      }
       return existing
     } finally {
-      if (currentDetailId.value === logicalId) {
+      if (seq === nodeDetailSeq && currentDetailId.value === logicalId) {
         loadingDetail.value = false
       }
     }
@@ -461,6 +506,9 @@ export function useNodes() {
     healthFilter,
     searchQuery,
     selectedNode,
+    nodeDetailError,
+    isDetailStale,
+    detailErrorMessage,
     globalProbeKinds,
     fetchGlobalScheduleKinds,
     load,

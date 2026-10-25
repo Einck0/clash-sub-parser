@@ -205,6 +205,38 @@ func (r *revisionRepository) CreateActive(ctx context.Context, rev *domain.Confi
 	})
 }
 
+// CreateActiveWithSeed inserts, activates, and seeds default policy rules for an initial revision in one transaction.
+// If any step fails, the entire transaction (revision, snapshot, rules) rolls back cleanly.
+func (r *revisionRepository) CreateActiveWithSeed(ctx context.Context, rev *domain.ConfigurationRevision) error {
+	return WithTx(ctx, r.db, func(ctx context.Context, tx *sql.Tx) error {
+		var parent sql.NullString
+		if rev.ParentID != nil && *rev.ParentID != "" {
+			parent = sql.NullString{String: *rev.ParentID, Valid: true}
+		}
+		created := rev.CreatedAt
+		if created.IsZero() {
+			created = domain.NowUTC()
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO configuration_revisions (id, parent_id, content_digest, state, created_at) VALUES (?, ?, ?, 'draft', ?);`,
+			rev.ID, parent, rev.ContentDigest, created.Format(time.RFC3339)); err != nil {
+			return fmt.Errorf("failed to insert configuration revision: %w", err)
+		}
+		if err := CapturePolicyRevisionSnapshot(ctx, tx, rev.ID); err != nil {
+			return err
+		}
+		if err := tx.QueryRowContext(ctx, `SELECT content_digest FROM configuration_revisions WHERE id=?`, rev.ID).Scan(&rev.ContentDigest); err != nil {
+			return err
+		}
+		if err := setActiveRevision(ctx, tx, rev.ID); err != nil {
+			return err
+		}
+		if _, err := SeedDefaultPolicyRulesTx(ctx, tx, rev.ID, ""); err != nil {
+			return fmt.Errorf("failed to seed initial default policy rules: %w", err)
+		}
+		return nil
+	})
+}
+
 func (r *revisionRepository) SetActive(ctx context.Context, id string) error {
 	return WithTx(ctx, r.db, func(ctx context.Context, tx *sql.Tx) error {
 		return setActiveRevision(ctx, tx, id)

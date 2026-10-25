@@ -34,6 +34,10 @@ const {
   items,
   loading,
   loadingMore,
+  loadingDetail,
+  nodeDetailError,
+  isDetailStale,
+  detailErrorMessage,
   savingConnection,
   probingNodeId,
   probingNodeIds,
@@ -150,6 +154,7 @@ const loadingSourceHistory = ref(false)
 const sourceHistoryError = ref('')
 const currentHistoryTargetId = ref('')
 const deepLinkError = ref('')
+const lastDeepLinkId = ref('')
 const loadingDeepLink = ref(false)
 
 const selectedIds = ref<Set<string>>(new Set())
@@ -399,6 +404,7 @@ async function openNodeDetail(node: NormalizedNode) {
 async function openNodeByLogicalId(logicalId: string) {
   if (!logicalId) return
   deepLinkError.value = ''
+  lastDeepLinkId.value = logicalId
 
   const localMatch = items.value.find((n) => n.logicalId === logicalId)
   if (localMatch) {
@@ -409,14 +415,35 @@ async function openNodeByLogicalId(logicalId: string) {
   loadingDeepLink.value = true
   try {
     const detailed = await fetchNodeDetail(logicalId)
-    if (detailed) {
+    if (detailed && (!nodeDetailError.value || nodeDetailError.value.logicalId !== logicalId || !nodeDetailError.value.status)) {
       await openNodeDetail(detailed)
     } else {
-      deepLinkError.value = `未找到节点「${logicalId}」(404)`
+      const err = nodeDetailError.value
+      if (err && err.logicalId === logicalId) {
+        if (err.status === 404) {
+          deepLinkError.value = `未找到节点「${logicalId}」(404)`
+        } else if (err.status >= 500) {
+          deepLinkError.value = `获取节点详情失败 (${err.status})`
+        } else if (err.status === 0) {
+          deepLinkError.value = '网络连接失败，请检查网络后重试'
+        } else {
+          deepLinkError.value = err.message || `获取节点详情失败 (${err.status})`
+        }
+      } else {
+        deepLinkError.value = `未找到节点「${logicalId}」(404)`
+      }
     }
   } catch (err: any) {
-    const status = err?.status || (err instanceof ApiError ? err.status : 404)
-    deepLinkError.value = `未找到节点「${logicalId}」(${status})`
+    const status = err?.status || (err instanceof ApiError ? err.status : 0)
+    if (status === 404) {
+      deepLinkError.value = `未找到节点「${logicalId}」(404)`
+    } else if (status >= 500) {
+      deepLinkError.value = `获取节点详情失败 (${status})`
+    } else if (status === 0) {
+      deepLinkError.value = '网络连接失败，请检查网络后重试'
+    } else {
+      deepLinkError.value = err?.message || `获取节点详情失败 (${status})`
+    }
     if (status === 404 && selectedIds.value.has(logicalId)) {
       const next = new Set(selectedIds.value)
       next.delete(logicalId)
@@ -736,13 +763,25 @@ onUnmounted(() => {
         <ExclamationTriangleIcon class="w-5 h-5 shrink-0" />
         <span>{{ deepLinkError }}</span>
       </div>
-      <button
-        type="button"
-        class="btn btn-ghost btn-xs"
-        @click="deepLinkError = ''"
-      >
-        关闭
-      </button>
+      <div class="flex items-center gap-2">
+        <button
+          v-if="lastDeepLinkId && !deepLinkError.includes('(404)')"
+          type="button"
+          data-testid="node-deep-link-retry-btn"
+          class="btn btn-warning btn-xs"
+          :disabled="loadingDeepLink"
+          @click="openNodeByLogicalId(lastDeepLinkId)"
+        >
+          重试
+        </button>
+        <button
+          type="button"
+          class="btn btn-ghost btn-xs"
+          @click="deepLinkError = ''"
+        >
+          关闭
+        </button>
+      </div>
     </div>
 
     <!-- Error Alert / Degraded State Card -->
@@ -868,8 +907,12 @@ onUnmounted(() => {
       :probe-state="selectedNode ? getNodeProbeState(selectedNode) : 'idle'"
       :probe-feedback="probeFeedback"
       :saving-connection="savingConnection"
+      :loading-detail="loadingDetail"
+      :detail-stale="isDetailStale"
+      :detail-error-message="detailErrorMessage"
       @probe-node="handleProbeSelectedNode"
       @retry-source-history="selectedNode ? fetchSourceHistory(selectedNode.logicalId) : undefined"
+      @retry-detail="fetchNodeDetail"
       @save-connection="handleSaveConnectionPayload"
     />
 

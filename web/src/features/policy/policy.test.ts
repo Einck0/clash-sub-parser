@@ -800,4 +800,204 @@ describe('Policy server-side pagination, search race conditions, and topology de
     expect(policy.groups.value).toHaveLength(1)
     expect(policy.groups.value[0].name).toBe('New Result')
   })
+
+  describe('FR-RM5 Topology Completeness, Failure Isolation & Retry', () => {
+    it('only publishes full topology when all pages succeed; never falls back to current paginated page', async () => {
+      const mockGroupsPage1 = Array.from({ length: 100 }, (_, i) => ({
+        id: `grp-${i + 1}`,
+        name: `Group ${i + 1}`,
+        group_type: 'select' as const,
+        edges: [],
+      }))
+
+      vi.spyOn(api, 'get').mockImplementation(async (path: string, options?: any) => {
+        if (path === '/api/v1/policies/groups') {
+          const page = Number(options?.params?.page || 1)
+          if (page === 1) {
+            return { items: mockGroupsPage1, page: 1, page_size: 100, total: 150 }
+          }
+          if (page === 2) {
+            throw new ApiError(500, 'server_error', 'Page 2 database timeout')
+          }
+        }
+        return { items: [], total: 0 }
+      })
+
+      const policy = usePolicy()
+      policy.groups.value = [{ id: 'grp-page-item', name: 'Page Item', group_type: 'select', sources: [] }]
+
+      const res = await policy.loadAllTopologyGroups()
+      expect(policy.topologyStatus.value).toBe('error')
+      expect(policy.topologyError.value).toContain('Page 2 database timeout')
+      // CRITICAL: Must not fall back to groups.value!
+      expect(policy.allTopologyGroups.value).toEqual([])
+      expect(res).toEqual([])
+    })
+
+    it('preserves previously loaded full topology for display but marks isTopologyStale and recovers upon retry', async () => {
+      const mockGroups = Array.from({ length: 120 }, (_, i) => ({
+        id: `grp-${i + 1}`,
+        name: `Group ${i + 1}`,
+        group_type: 'select' as const,
+        edges: [],
+      }))
+
+      let failSecondCall = false
+      vi.spyOn(api, 'get').mockImplementation(async (path: string, options?: any) => {
+        if (path === '/api/v1/policies/groups') {
+          const page = Number(options?.params?.page || 1)
+          if (failSecondCall && page === 2) {
+            throw new ApiError(500, 'server_error', 'Transient network glitch')
+          }
+          if (page === 1) {
+            return { items: mockGroups.slice(0, 100), page: 1, page_size: 100, total: 120 }
+          }
+          if (page === 2) {
+            return { items: mockGroups.slice(100), page: 2, page_size: 100, total: 120 }
+          }
+        }
+        return { items: [], total: 0 }
+      })
+
+      const policy = usePolicy()
+
+      // First run succeeds completely
+      await policy.loadAllTopologyGroups()
+      expect(policy.topologyStatus.value).toBe('ready')
+      expect(policy.allTopologyGroups.value).toHaveLength(120)
+      expect(policy.isTopologyStale.value).toBe(false)
+
+      // Second run fails on page 2
+      failSecondCall = true
+      await policy.loadAllTopologyGroups(true)
+      expect(policy.topologyStatus.value).toBe('error')
+      expect(policy.isTopologyStale.value).toBe(true)
+      // Preserved for display!
+      expect(policy.allTopologyGroups.value).toHaveLength(120)
+
+      // Retry succeeds
+      failSecondCall = false
+      await policy.loadAllTopologyGroups(true)
+      expect(policy.topologyStatus.value).toBe('ready')
+      expect(policy.isTopologyStale.value).toBe(false)
+      expect(policy.allTopologyGroups.value).toHaveLength(120)
+    })
+
+    it('decouples list search and pagination from allTopologyGroups', async () => {
+      const mockAllGroups = Array.from({ length: 80 }, (_, i) => ({
+        id: `grp-${i + 1}`,
+        name: `Group ${i + 1}`,
+        group_type: 'select' as const,
+        edges: [],
+      }))
+
+      vi.spyOn(api, 'get').mockImplementation(async (path: string, options?: any) => {
+        if (path === '/api/v1/policies/groups') {
+          const search = options?.params?.search
+          if (search) {
+            return {
+              items: [{ id: 'grp-1', name: 'Group 1', group_type: 'select', edges: [] }],
+              page: 1,
+              page_size: 50,
+              total: 1,
+            }
+          }
+          return { items: mockAllGroups, page: 1, page_size: 100, total: 80 }
+        }
+        return { items: [], total: 0 }
+      })
+
+      const policy = usePolicy()
+      await policy.loadAllTopologyGroups()
+      expect(policy.allTopologyGroups.value).toHaveLength(80)
+
+      // User performs search on list view
+      await policy.loadGroups(1, 50, 'Group 1')
+      expect(policy.groups.value).toHaveLength(1)
+      expect(policy.groups.value[0].name).toBe('Group 1')
+
+      // allTopologyGroups semantics remain full (80 groups)
+      expect(policy.allTopologyGroups.value).toHaveLength(80)
+      expect(policy.topologyStatus.value).toBe('ready')
+    })
+
+    it('concurrency: slow outdated topology request does not overwrite newer successful result', async () => {
+      let resolveOld!: (val: any) => void
+      const oldPromise = new Promise((resolve) => {
+        resolveOld = resolve
+      })
+
+      const newGroups = [
+        { id: 'grp-new-1', name: 'Fresh Group 1', group_type: 'select' as const, edges: [] },
+      ]
+      const oldGroups = [
+        { id: 'grp-old-1', name: 'Stale Group 1', group_type: 'select' as const, edges: [] },
+      ]
+
+      let callCount = 0
+      vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
+        if (path === '/api/v1/policies/groups') {
+          callCount++
+          if (callCount === 1) {
+            return await oldPromise
+          }
+          return { items: newGroups, page: 1, page_size: 100, total: 1 }
+        }
+        return { items: [], total: 0 }
+      })
+
+      const policy = usePolicy()
+
+      // Start slow request 1
+      const p1 = policy.loadAllTopologyGroups(true)
+
+      // Start fast request 2
+      const p2 = policy.loadAllTopologyGroups(true)
+      await p2
+
+      expect(policy.topologyStatus.value).toBe('ready')
+      expect(policy.allTopologyGroups.value).toHaveLength(1)
+      expect(policy.allTopologyGroups.value[0].name).toBe('Fresh Group 1')
+
+      // Resolve old request 1
+      resolveOld({ items: oldGroups, page: 1, page_size: 100, total: 1 })
+      await p1
+
+      // Fresh group 1 is still the published topology!
+      expect(policy.topologyStatus.value).toBe('ready')
+      expect(policy.allTopologyGroups.value).toHaveLength(1)
+      expect(policy.allTopologyGroups.value[0].name).toBe('Fresh Group 1')
+    })
+
+    it('empty full topology: handles total=0 cleanly, caches ready state and forces refresh on reload()', async () => {
+      let fetchCount = 0
+      vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
+        if (path === '/api/v1/policies/groups') {
+          fetchCount++
+          return { items: [], page: 1, page_size: 100, total: 0 }
+        }
+        return { items: [], total: 0 }
+      })
+
+      const policy = usePolicy()
+      expect(policy.topologyStatus.value).toBe('idle')
+
+      // First load: 0 groups returned
+      const result = await policy.loadAllTopologyGroups()
+      expect(result).toEqual([])
+      expect(policy.allTopologyGroups.value).toEqual([])
+      expect(policy.topologyStatus.value).toBe('ready')
+      expect(policy.isTopologyStale.value).toBe(false)
+      expect(fetchCount).toBe(1)
+
+      // Second load without force: returns cached [] without network request
+      const cachedResult = await policy.loadAllTopologyGroups(false)
+      expect(cachedResult).toEqual([])
+      expect(fetchCount).toBe(1)
+
+      // Force load (e.g. reload()): re-queries network
+      await policy.loadAllTopologyGroups(true)
+      expect(fetchCount).toBe(2)
+    })
+  })
 })

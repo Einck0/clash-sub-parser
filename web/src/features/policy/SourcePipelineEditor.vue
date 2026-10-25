@@ -50,6 +50,7 @@ const props = withDefaults(
     availableNodes?: any[]
     groupId?: string
     mode?: 'group' | 'edges'
+    topologyStatus?: 'idle' | 'loading' | 'error' | 'ready'
   }>(),
   {
     pendingPattern: '',
@@ -59,6 +60,7 @@ const props = withDefaults(
     availableNodes: () => [],
     groupId: '',
     mode: 'group',
+    topologyStatus: 'idle',
   }
 )
 
@@ -271,7 +273,9 @@ const activeNodes = computed(() => {
 })
 
 const availableChildGroups = computed(() => {
-  const pool = candidateGroups.value.length > 0 ? candidateGroups.value : (props.allGroups || [])
+  const pool = (props.allGroups && props.allGroups.length > 0)
+    ? props.allGroups
+    : candidateGroups.value
   return pool.filter((g) => g.id !== props.groupId)
 })
 
@@ -908,13 +912,21 @@ onMounted(() => {
 
           <!-- 3. Group ref or unpack -->
           <div v-else-if="selectedSourceKind === 'group' || selectedSourceKind === 'group_nodes'" class="space-y-2">
+            <div v-if="topologyStatus === 'loading' || topologyStatus === 'idle'" class="text-xs text-info flex items-center gap-1.5 py-1">
+              <span class="loading loading-spinner loading-xs" />
+              <span>正在拉取完整策略组列表...</span>
+            </div>
+            <div v-else-if="topologyStatus === 'error'" class="text-xs text-error py-1" data-testid="topology-ref-error">
+              策略组拓扑未就绪，禁止选择或添加新组引用
+            </div>
             <div class="flex gap-2">
               <select
                 v-model="newEdgeTarget"
                 class="select select-sm flex-1 text-xs font-mono"
                 data-testid="edge-group-select"
+                :disabled="topologyStatus !== 'ready'"
               >
-                <option disabled value="">请选择目标策略组...</option>
+                <option disabled value="">{{ topologyStatus === 'error' ? '拓扑加载失败，无法选择' : (topologyStatus !== 'ready' ? '策略组拓扑未就绪，请等待...' : '请选择目标策略组...') }}</option>
                 <option
                   v-for="cg in availableChildGroups"
                   :key="cg.id"
@@ -927,7 +939,7 @@ onMounted(() => {
                 type="button"
                 class="btn btn-primary btn-sm gap-1 shrink-0"
                 data-testid="add-edge-btn"
-                :disabled="!newEdgeTarget.trim()"
+                :disabled="!newEdgeTarget.trim() || topologyStatus !== 'ready'"
                 @click="handleAddSourceItem"
               >
                 <PlusIcon class="w-4 h-4" />

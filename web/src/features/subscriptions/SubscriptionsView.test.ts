@@ -969,4 +969,160 @@ describe('Per-Row State, Concurrency & Layout Invariants', () => {
       mountEl.remove()
     }
   })
+
+  describe('FR-RM6 Subscription Delete Retry & Mutation vs Reload Isolation', () => {
+    const testSub: SubscriptionRecord = {
+      id: 'sub-to-delete',
+      name: 'Delete Target Subscription',
+      source_url_secret_ref: 'https://example.com/target',
+      enabled: true,
+      node_count: 5,
+      source_node_count: 5,
+      counts_scope: 'enabled_subscriptions',
+      refresh_policy: {
+        interval_seconds: 3600,
+        user_agent_policy: 'default',
+        timeout_seconds: 30,
+        max_response_bytes: 1048576,
+      },
+      revision: 'rev-del-1',
+      created_at: '2026-10-01T00:00:00Z',
+      updated_at: '2026-10-01T00:00:00Z',
+    }
+
+    it('retains confirmation modal and pending object on DELETE failure, unlocking button for retry', async () => {
+      vi.spyOn(api, 'get').mockResolvedValue([testSub])
+      vi.spyOn(api, 'delete').mockRejectedValueOnce(
+        new ApiError(500, 'server_error', 'Database write lock timeout')
+      )
+
+      const mountEl = document.createElement('div')
+      document.body.appendChild(mountEl)
+      const app = createApp({ render: () => h(SubscriptionsView) })
+      app.mount(mountEl)
+
+      try {
+        await nextTick()
+        await new Promise((r) => setTimeout(r, 20))
+        await nextTick()
+
+        // Open confirm delete modal
+        const deleteActionBtn = document.querySelector('[data-testid="sub-action-delete"]') as HTMLButtonElement
+        expect(deleteActionBtn).not.toBeNull()
+        deleteActionBtn.click()
+        await nextTick()
+
+        const modalMsg = document.querySelector('[data-testid="confirm-modal-message"]')
+        expect(modalMsg?.textContent).toContain('Delete Target Subscription')
+
+        const confirmBtn = document.querySelector('[data-testid="confirm-modal-confirm"]') as HTMLButtonElement
+        expect(confirmBtn).not.toBeNull()
+        confirmBtn.click()
+
+        // Wait for delete mutation to finish failing
+        await nextTick()
+        await new Promise((r) => setTimeout(r, 20))
+        await nextTick()
+
+        // 1. Error toast was pushed
+        expect(toastStore.toasts.length).toBeGreaterThan(0)
+        expect(toastStore.toasts.some((t) => t.tone === 'error' && t.message.includes('Database write lock timeout'))).toBe(true)
+
+        // 2. Modal REMAINS OPEN with pending object message intact
+        const dialogEl = document.querySelector('dialog') as HTMLDialogElement | null
+        expect(dialogEl).not.toBeNull()
+        expect(document.querySelector('[data-testid="confirm-modal-message"]')?.textContent).toContain('Delete Target Subscription')
+
+        // 3. Confirm button is unlocked (loading = false, disabled = false) so user can retry
+        expect(confirmBtn.disabled).toBe(false)
+        expect(confirmBtn.classList.contains('loading')).toBe(false)
+      } finally {
+        app.unmount()
+        mountEl.remove()
+      }
+    })
+
+    it('closes modal on DELETE success and separates subsequent reload failure from mutation', async () => {
+      let getCallCount = 0
+      vi.spyOn(api, 'get').mockImplementation(async () => {
+        getCallCount++
+        if (getCallCount === 1) {
+          return [testSub]
+        }
+        // Subsequent reload after delete fails
+        throw new ApiError(500, 'server_error', 'Failed to reload subscription list')
+      })
+      vi.spyOn(api, 'delete').mockResolvedValueOnce(undefined)
+
+      const mountEl = document.createElement('div')
+      document.body.appendChild(mountEl)
+      const app = createApp({ render: () => h(SubscriptionsView) })
+      app.mount(mountEl)
+
+      try {
+        await nextTick()
+        await new Promise((r) => setTimeout(r, 20))
+        await nextTick()
+
+        const deleteActionBtn = document.querySelector('[data-testid="sub-action-delete"]') as HTMLButtonElement
+        deleteActionBtn.click()
+        await nextTick()
+
+        const confirmBtn = document.querySelector('[data-testid="confirm-modal-confirm"]') as HTMLButtonElement
+        confirmBtn.click()
+
+        await nextTick()
+        await new Promise((r) => setTimeout(r, 20))
+        await nextTick()
+
+        // 1. Success toast was pushed for delete mutation
+        expect(toastStore.toasts.some((t) => t.tone === 'success' && t.message.includes('订阅源已删除'))).toBe(true)
+
+        // 2. Warning toast pushed for subsequent reload failure (not calling DELETE failed)
+        expect(toastStore.toasts.some((t) => t.tone === 'warning' && t.message.includes('刷新列表失败'))).toBe(true)
+
+        // 3. Modal is CLOSED and does NOT induce repeated DELETE
+        const modalMsg = document.querySelector('[data-testid="confirm-modal-message"]')
+        // Either message is empty or dialog is closed
+        expect(modalMsg?.textContent || '').not.toContain('Delete Target Subscription')
+      } finally {
+        app.unmount()
+        mountEl.remove()
+      }
+    })
+
+    it('useSubscriptions.remove removes deleted item immediately, adjusts total, and emits warning when reload fails', async () => {
+      let getCalls = 0
+      vi.spyOn(api, 'get').mockImplementation(async () => {
+        getCalls++
+        if (getCalls === 1) {
+          return { items: [testSub], total: 1 }
+        }
+        throw new ApiError(500, 'server_error', 'Database connection refused')
+      })
+      vi.spyOn(api, 'delete').mockResolvedValueOnce(undefined)
+
+      const hook = useSubscriptions()
+      const initialLoadOk = await hook.load()
+      expect(initialLoadOk).toBe(true)
+      expect(hook.items.value).toHaveLength(1)
+      expect(hook.total.value).toBe(1)
+      expect(hook.items.value[0].id).toBe('sub-to-delete')
+
+      // Perform remove
+      const res = await hook.remove(testSub)
+      expect(res.ok).toBe(true)
+
+      // 1. In-memory items and total are immediately adjusted to remove the deleted entry
+      expect(hook.items.value).toHaveLength(0)
+      expect(hook.total.value).toBe(0)
+
+      // 2. Load failure error is reflected in hook.error
+      expect(hook.error.value).toBe('Database connection refused')
+
+      // 3. Toasts: both success (for deletion) and warning (for reload failure) were published
+      expect(toastStore.toasts.some((t) => t.tone === 'success' && t.message.includes('订阅源已删除'))).toBe(true)
+      expect(toastStore.toasts.some((t) => t.tone === 'warning' && t.message.includes('订阅源已删除，但刷新列表失败: Database connection refused'))).toBe(true)
+    })
+  })
 })

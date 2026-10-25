@@ -171,7 +171,7 @@ func makeApplicationServices(ctx context.Context, db *sql.DB, opts appServiceOpt
 
 	policyService := policy.NewService(policyRepo, revisionRepo, nodeRepo, auditRepo, nodeFilterRepo)
 	revisionService := revision.NewService(revisionRepo, auditRepo, revision.WithPolicyRepository(policyRepo))
-	if _, err := policyService.EnsureActiveRevision(ctx); err != nil {
+	if _, err := policyService.EnsureActiveRevision(ctx, policy.WithDefaultRulesSeed()); err != nil {
 		return nil, fmt.Errorf("failed to ensure initial active configuration revision: %w", err)
 	}
 

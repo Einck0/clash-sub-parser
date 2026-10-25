@@ -38,6 +38,9 @@ interface Props {
   conflictError?: { currentRevision: number; message: string } | null
   cycleError?: { cyclePath: string[]; message: string } | null
   serverError?: string | null
+  topologyStatus?: 'idle' | 'loading' | 'error' | 'ready'
+  topologyError?: string
+  isTopologyStale?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -47,6 +50,9 @@ const props = withDefaults(defineProps<Props>(), {
   conflictError: null,
   cycleError: null,
   serverError: null,
+  topologyStatus: 'idle',
+  topologyError: '',
+  isTopologyStale: false,
 })
 
 const emit = defineEmits<{
@@ -62,6 +68,7 @@ const emit = defineEmits<{
   }): void
   (e: 'reload-group', id: string): void
   (e: 'clear-conflict'): void
+  (e: 'retry-topology'): void
 }>()
 
 // Engage mobile body scroll lock when sheet is open
@@ -99,6 +106,15 @@ watch(
   () => props.serverError,
   (s) => {
     if (s) draft.serverError.value = s
+  },
+  { immediate: true }
+)
+watch(
+  () => props.open,
+  (isOpen) => {
+    if (isOpen && (props.topologyStatus === 'idle' || props.topologyStatus === 'error')) {
+      emit('retry-topology')
+    }
   },
   { immediate: true }
 )
@@ -358,6 +374,38 @@ function handleDiscardSourceDraft() {
             ✕
           </button>
         </div>
+
+        <!-- Topology Loading / Idle / Error / Stale Banner -->
+        <div
+          v-if="topologyStatus === 'loading' || topologyStatus === 'idle'"
+          data-testid="sheet-topology-loading"
+          class="p-3 rounded-xl bg-info/10 border border-info/30 flex items-center gap-2 text-xs text-info"
+        >
+          <span class="loading loading-spinner loading-xs" />
+          <span>正在加载完整策略组拓扑，就绪前禁止保存来源以避免误写...</span>
+        </div>
+
+        <div
+          v-else-if="topologyStatus === 'error'"
+          data-testid="sheet-topology-error"
+          class="p-3 rounded-xl bg-warning/10 border border-warning/30 flex items-center justify-between gap-2 text-xs text-warning-content"
+        >
+          <div class="flex items-center gap-2 min-w-0">
+            <ExclamationTriangleIcon class="w-4 h-4 text-warning shrink-0" />
+            <span class="truncate">
+              {{ topologyError || '全量策略组拓扑加载失败' }}
+              {{ isTopologyStale ? '（当前显示为过期拓扑缓存，禁止保存）' : '（拓扑未就绪，禁止保存以避免丢失引用）' }}
+            </span>
+          </div>
+          <button
+            type="button"
+            data-testid="sheet-retry-topology-btn"
+            class="btn btn-warning btn-xs shrink-0"
+            @click="emit('retry-topology')"
+          >
+            重试
+          </button>
+        </div>
       </div>
 
       <!-- Main Body: Responsive side-by-side on wide screens (lg:), tabbed on mobile -->
@@ -386,6 +434,7 @@ function handleDiscardSourceDraft() {
               :available-nodes="availableNodes"
               :group-id="group?.id || ''"
               :mode="mode"
+              :topology-status="topologyStatus"
               @add-source="draft.addSource"
               @add-filter="draft.addFilterSource"
               @remove-source="draft.removeSource"
@@ -457,9 +506,10 @@ function handleDiscardSourceDraft() {
           <button
             type="submit"
             form="policy-editor-group-form"
+            data-testid="policy-sheet-save-btn"
             class="btn btn-primary btn-sm"
             :class="{ loading: saving }"
-            :disabled="saving || !draft.name.value.trim() || draft.hasInvalidFilterSources.value"
+            :disabled="saving || !draft.name.value.trim() || draft.hasInvalidFilterSources.value || topologyStatus !== 'ready'"
             @click.prevent="handleSave"
           >
             {{ mode === 'edges' ? uiText('保存来源', 'Save Sources') : (group ? uiText('保存策略组', 'Save Group') : uiText('创建策略组', 'Create Group')) }}

@@ -132,3 +132,16 @@ Run `pi_run_20261020_111741_708234` / change `002-policy` / work_package `defaul
 - [x] D25-05 图工具可用性如实报告，核对任务现场/回收专属预览、逐文件最终提交、QQ交付完成/未做，禁止生产部署。
 
 当前D25终态证据、失败整改链、当前业务SHA、云测/镜像/独审/视觉复验及隔离清理见 [dns-ui-completion-590576.md](dns-ui-completion-590576.md)。程序和生产DNS配置未上线/未写入。
+
+## RM25 — 整体Review整改（pi_run_20261025_165716_739681）
+
+当前实施契约见 [review-remediation-20261025.md](review-remediation-20261025.md)，不沿用此前勾选或旧run通过证据。
+
+- [ ] RM25-01 [P] A / FR-RM1：cmd/csp启动去掉规则数量恢复；policy bootstrap与sqlite初始revision/seed原子保护；新库/469自定义/0规则/草稿/失败回滚相关回归测试。
+- [ ] RM25-02 [P] B / FR-RM2：internal/probe/platform/iprisk.go严格分数/范围/结构校验，application/probe/runner.go防御一致性，隔离响应及观察持久化测试。
+- [ ] RM25-03 [P] C / FR-RM3/5/6：web/src/features/nodes、policy、subscriptions hooks/views/components/tests的错误区分、完整状态/重试/禁止不完整保存、删除失败保留确认与mutation/reload区分。
+- [ ] RM25-04 FR-RM4与条件建议：逐项确认暂缓理由、最小留存决策，不修改生产历史/加密/全局超时；记录最终结果。
+- [ ] RM25-05 主脑仅暂存本轮明确文件，开发提交push dev；协调既有CI，A/B/C施工对同SHA云测交付自测证据（禁止本机测试编译）。
+- [ ] RM25-06 独立reviewer：合并源码SHA、真实Actions jobs/digest/revision、R1/R2及前端失败/正常路径、既有dirty保护；失败按报告ID整改复验。
+- [ ] RM25-07 同SHA镜像隔离预览就绪（关闭调度、合成DB/回环端口/marker/健康与回收责任），review后critic真实交互+截图与故障夹具，不用旧DNS体验凭据。
+- [ ] RM25-08 准备者回收本轮预览、核实Git范围，门禁全过后最终提交、实时聚合及QQ通知；逐项说明R1..R6已做/未做与生产未部署。

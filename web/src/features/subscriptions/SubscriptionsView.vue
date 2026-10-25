@@ -95,9 +95,11 @@ async function handleConfirmDelete() {
   if (!pendingDeleteSubscription.value) return
   deleting.value = true
   try {
-    await remove(pendingDeleteSubscription.value)
-    confirmDeleteOpen.value = false
-    pendingDeleteSubscription.value = null
+    const res = await remove(pendingDeleteSubscription.value)
+    if (res.ok) {
+      confirmDeleteOpen.value = false
+      pendingDeleteSubscription.value = null
+    }
   } finally {
     deleting.value = false
   }

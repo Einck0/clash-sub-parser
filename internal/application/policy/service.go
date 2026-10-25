@@ -618,7 +618,7 @@ func (s *Service) CreatePolicyRule(ctx context.Context, cmd CreatePolicyRuleComm
 
 	revID := strings.TrimSpace(cmd.RevisionID)
 	if revID == "" {
-		active, err := s.ensureActiveRevisionLocked(ctx)
+		active, err := s.ensureActiveRevisionLocked(ctx, bootstrapOptions{})
 		if err != nil {
 			return nil, err
 		}
@@ -783,7 +783,7 @@ func (s *Service) BackfillRules(ctx context.Context, revisionID string) (int, er
 
 	revID := strings.TrimSpace(revisionID)
 	if revID == "" {
-		active, err := s.ensureActiveRevisionLocked(ctx)
+		active, err := s.ensureActiveRevisionLocked(ctx, bootstrapOptions{})
 		if err != nil {
 			return 0, err
 		}
@@ -1756,17 +1756,38 @@ func parseRuleExpr(expr string) (string, string) {
 	return "", ""
 }
 
+// BootstrapOption configures EnsureActiveRevision behavior.
+type BootstrapOption func(*bootstrapOptions)
+
+type bootstrapOptions struct {
+	seedDefaultRules bool
+}
+
+// WithDefaultRulesSeed enables atomic default policy rules seeding during initial revision bootstrap.
+func WithDefaultRulesSeed() BootstrapOption {
+	return func(o *bootstrapOptions) {
+		o.seedDefaultRules = true
+	}
+}
+
 // EnsureActiveRevision idempotently bootstraps an initial active configuration revision
 // when the database has no active revision and zero total revisions.
-func (s *Service) EnsureActiveRevision(ctx context.Context) (*domain.ConfigurationRevision, error) {
+func (s *Service) EnsureActiveRevision(ctx context.Context, opts ...BootstrapOption) (*domain.ConfigurationRevision, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	return s.ensureActiveRevisionLocked(ctx)
+	var cfg bootstrapOptions
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
+	}
+
+	return s.ensureActiveRevisionLocked(ctx, cfg)
 }
 
 // ensureActiveRevisionLocked shares the startup and rule-creation gate under s.mu.
-func (s *Service) ensureActiveRevisionLocked(ctx context.Context) (*domain.ConfigurationRevision, error) {
+func (s *Service) ensureActiveRevisionLocked(ctx context.Context, cfg bootstrapOptions) (*domain.ConfigurationRevision, error) {
 	if s.revisionRepo == nil {
 		return nil, domain.NewValidationError("missing_revision_id", "revision repository is not configured")
 	}
@@ -1791,10 +1812,10 @@ func (s *Service) ensureActiveRevisionLocked(ctx context.Context) (*domain.Confi
 		return nil, nil
 	}
 
-	return s.bootstrapActiveRevisionLocked(ctx)
+	return s.bootstrapActiveRevisionLocked(ctx, cfg)
 }
 
-func (s *Service) bootstrapActiveRevisionLocked(ctx context.Context) (*domain.ConfigurationRevision, error) {
+func (s *Service) bootstrapActiveRevisionLocked(ctx context.Context, cfg bootstrapOptions) (*domain.ConfigurationRevision, error) {
 	var groups []domain.NodeGroup
 	edgeMap := make(map[string][]domain.GroupEdge)
 	if s.policyRepo != nil {
@@ -1832,9 +1853,24 @@ func (s *Service) bootstrapActiveRevisionLocked(ctx context.Context) (*domain.Co
 		CreatedAt:     domain.NowUTC(),
 	}
 
-	if err := s.revisionRepo.CreateActive(ctx, &rev); err != nil {
-		return nil, fmt.Errorf("failed to create and activate initial revision: %w", err)
+	type initialActiveRevisionSeeder interface {
+		CreateActiveWithSeed(ctx context.Context, rev *domain.ConfigurationRevision) error
 	}
+
+	if cfg.seedDefaultRules {
+		seeder, ok := s.revisionRepo.(initialActiveRevisionSeeder)
+		if !ok {
+			return nil, fmt.Errorf("revision repository does not support atomic initial seeding")
+		}
+		if err := seeder.CreateActiveWithSeed(ctx, &rev); err != nil {
+			return nil, fmt.Errorf("failed to create, activate and seed initial revision: %w", err)
+		}
+	} else {
+		if err := s.revisionRepo.CreateActive(ctx, &rev); err != nil {
+			return nil, fmt.Errorf("failed to create and activate initial revision: %w", err)
+		}
+	}
+
 	rev.State = domain.RevisionStateActive
 	s.recordAudit(ctx, domain.ActorKindSystem, "", "revision.create", domain.AuditResultSuccess, fmt.Sprintf("id=%s, digest=%s, bootstrap=true", rev.ID, rev.ContentDigest))
 	return &rev, nil

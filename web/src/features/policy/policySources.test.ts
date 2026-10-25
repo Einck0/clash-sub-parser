@@ -1518,4 +1518,107 @@ describe('Feature-Level Policy Sources & Pipeline Rebuild', () => {
       container.remove()
     })
   })
+
+  // 21. FR-RM5: Topology Completeness & Guarding Group References/Save
+  describe('FR-RM5: Topology Error Handling in PolicyEditorSheet', () => {
+    it('disables save and displays error banner with retry when topologyStatus is error', async () => {
+      const container = document.createElement('div')
+      document.body.appendChild(container)
+
+      const group: PolicyGroup = {
+        id: 'grp-test',
+        name: 'Test Group',
+        group_type: 'select',
+        sources: [],
+      }
+
+      let retried = false
+      const app = createApp({
+        render() {
+          return h(PolicyEditorSheet, {
+            open: true,
+            group,
+            allGroups: [group],
+            topologyStatus: 'error',
+            topologyError: '全量策略组拓扑加载失败',
+            isTopologyStale: true,
+            onRetryTopology: () => {
+              retried = true
+            },
+          })
+        },
+      })
+      app.mount(container)
+      await nextTick()
+
+      // Error banner is visible
+      const errBanner = container.querySelector('[data-testid="sheet-topology-error"]')
+      expect(errBanner).not.toBeNull()
+      expect(errBanner?.textContent).toContain('全量策略组拓扑加载失败')
+
+      // Save button is disabled
+      const saveBtn = container.querySelector('[data-testid="policy-sheet-save-btn"]') as HTMLButtonElement
+      expect(saveBtn).not.toBeNull()
+      expect(saveBtn.disabled).toBe(true)
+
+      // Retry button emits retry-topology
+      const retryBtn = container.querySelector('[data-testid="sheet-retry-topology-btn"]') as HTMLButtonElement
+      expect(retryBtn).not.toBeNull()
+      retryBtn.click()
+      await nextTick()
+      expect(retried).toBe(true)
+
+      app.unmount()
+      container.remove()
+    })
+
+    it('disables save and group references when topologyStatus is idle, while preserving draft fields', async () => {
+      const container = document.createElement('div')
+      document.body.appendChild(container)
+
+      const group: PolicyGroup = {
+        id: 'grp-idle',
+        name: 'Draft Policy Group',
+        group_type: 'url-test',
+        sources: [],
+      }
+
+      let retried = false
+      const app = createApp({
+        render() {
+          return h(PolicyEditorSheet, {
+            open: true,
+            group,
+            allGroups: [],
+            topologyStatus: 'idle',
+            onRetryTopology: () => {
+              retried = true
+            },
+          })
+        },
+      })
+      app.mount(container)
+      await nextTick()
+
+      // Loading/idle banner is shown
+      const loadingBanner = container.querySelector('[data-testid="sheet-topology-loading"]')
+      expect(loadingBanner).not.toBeNull()
+      expect(loadingBanner?.textContent).toContain('正在加载完整策略组拓扑')
+
+      // Save button is disabled
+      const saveBtn = container.querySelector('[data-testid="policy-sheet-save-btn"]') as HTMLButtonElement
+      expect(saveBtn).not.toBeNull()
+      expect(saveBtn.disabled).toBe(true)
+
+      // Draft form values remain intact
+      const nameInput = container.querySelector('input[type="text"]') as HTMLInputElement
+      expect(nameInput?.value).toBe('Draft Policy Group')
+
+      // On open with idle, it auto-emits retry-topology to trigger background load
+      expect(retried).toBe(true)
+
+      app.unmount()
+      container.remove()
+    })
+  })
 })

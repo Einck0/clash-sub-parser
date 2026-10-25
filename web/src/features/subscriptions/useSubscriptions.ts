@@ -320,7 +320,7 @@ export function useSubscriptions() {
     }
   }
 
-  async function load() {
+  async function load(): Promise<boolean> {
     const thisSeq = ++loadSequence
     loading.value = true
     error.value = ''
@@ -328,12 +328,14 @@ export function useSubscriptions() {
       const result = await api.get<Page<SubscriptionRecord>>('/api/v1/subscriptions', {
         params: { page: page.value, page_size: pageSize },
       })
-      if (thisSeq !== loadSequence) return
+      if (thisSeq !== loadSequence) return false
       items.value = result?.items ?? []
       total.value = result?.total ?? items.value.length
+      return true
     } catch (cause) {
-      if (thisSeq !== loadSequence) return
+      if (thisSeq !== loadSequence) return false
       error.value = cause instanceof Error ? cause.message : '加载订阅源列表失败'
+      return false
     } finally {
       if (thisSeq === loadSequence) {
         loading.value = false
@@ -362,15 +364,32 @@ export function useSubscriptions() {
     }
   }
 
-  async function remove(subscription: SubscriptionRecord) {
+  async function remove(subscription: SubscriptionRecord): Promise<{ ok: boolean; error?: string }> {
     try {
       await api.delete(`/api/v1/subscriptions/${encodeURIComponent(subscription.id)}`)
-      toastStore.push({ message: '订阅源已删除', tone: 'success' })
-      clearRowError(subscription.id)
-      await load()
     } catch (cause) {
-      toastStore.push({ message: cause instanceof Error ? cause.message : '删除订阅源失败', tone: 'error' })
+      const msg = cause instanceof Error ? cause.message : '删除订阅源失败'
+      toastStore.push({ message: msg, tone: 'error' })
+      return { ok: false, error: msg }
     }
+
+    // Immediately remove successfully deleted ID and adjust total to eliminate old row
+    // and prevent repeated DELETE attempts even if subsequent reload fails
+    items.value = items.value.filter((s) => s.id !== subscription.id)
+    total.value = Math.max(0, total.value - 1)
+
+    toastStore.push({ message: '订阅源已删除', tone: 'success' })
+    clearRowError(subscription.id)
+
+    const reloadOk = await load()
+    if (!reloadOk && error.value) {
+      toastStore.push({
+        message: `订阅源已删除，但刷新列表失败: ${error.value}`,
+        tone: 'warning',
+      })
+    }
+
+    return { ok: true }
   }
 
   async function refresh(subscription: SubscriptionRecord) {

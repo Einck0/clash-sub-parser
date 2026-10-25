@@ -50,6 +50,9 @@ const {
   searchQuery,
   totalGroups,
   allTopologyGroups,
+  topologyStatus,
+  topologyError,
+  isTopologyStale,
   loadGroups,
   loadAllTopologyGroups,
   reload,
@@ -492,6 +495,31 @@ onUnmounted(() => {
       </div>
     </details>
 
+    <!-- Topology Error Alert Banner with In-Place Retry -->
+    <div
+      v-if="topologyStatus === 'error'"
+      data-testid="topology-error-banner"
+      class="alert alert-warning shadow-sm flex items-center justify-between"
+    >
+      <div class="flex items-center gap-2 min-w-0">
+        <ExclamationTriangleIcon class="w-5 h-5 text-warning shrink-0" />
+        <span class="text-xs">
+          {{ topologyError || '全量策略组拓扑加载失败' }}
+          {{ isTopologyStale ? '（当前显示为过期拓扑缓存，请重试以恢复组引用修改与保存）' : '（拓扑未就绪，禁止保存策略组来源）' }}
+        </span>
+      </div>
+      <button
+        type="button"
+        data-testid="topology-retry-btn"
+        class="btn btn-warning btn-xs shrink-0 gap-1"
+        :disabled="topologyStatus === 'loading'"
+        @click="loadAllTopologyGroups(true)"
+      >
+        <ArrowPathIcon class="w-3.5 h-3.5" :class="{ 'animate-spin': topologyStatus === 'loading' }" />
+        <span>重试</span>
+      </button>
+    </div>
+
     <!-- Policy Groups View -->
     <div class="space-y-4">
       <!-- Search & Pagination Controls Bar -->
@@ -565,7 +593,7 @@ onUnmounted(() => {
           v-for="(grp, idx) in groups"
           :key="grp.id"
           :group="grp"
-          :available-groups="allTopologyGroups.length > 0 ? allTopologyGroups : groups"
+          :available-groups="allTopologyGroups"
           :selected="selectedGroupId === grp.id"
           :can-move-up="idx > 0"
           :can-move-down="idx < groups.length - 1"
@@ -624,13 +652,17 @@ onUnmounted(() => {
     <PolicyEditorSheet
       :open="sheetOpen"
       :group="activeGroup"
-      :all-groups="allTopologyGroups.length > 0 ? allTopologyGroups : groups"
+      :all-groups="allTopologyGroups"
       :available-nodes="nodeItems"
       :mode="sheetMode"
       :saving="saving"
       :conflict-error="conflictData"
       :cycle-error="cycleData"
       :server-error="sheetServerError"
+      :topology-status="topologyStatus"
+      :topology-error="topologyError"
+      :is-topology-stale="isTopologyStale"
+      @retry-topology="loadAllTopologyGroups(true)"
       @close="handleSheetClose"
       @save-group="handleSaveGroup"
       @reload-group="handleReloadGroup"

@@ -799,3 +799,292 @@ func TestRunner_And_Service_NoticeExclusion(t *testing.T) {
 		t.Fatalf("expected probe service status TotalCount=2, got %d", status.TotalCount)
 	}
 }
+
+func intPtr(v int) *int {
+	return &v
+}
+
+func TestRunner_IPRisk_StrictScoringAndPersistenceConsistency(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name               string
+		scamalyticsHTML    string
+		dialErr            error
+		wantProbeVerdict   domain.ProbeVerdict
+		wantProbeRiskScore string
+		wantSummaryReason  string
+		wantRiskStatus     domain.IPRiskStatus
+		wantRiskScore      *int
+		wantRiskConfidence *int
+	}{
+		{
+			name:               "valid_intermediate_score_15",
+			scamalyticsHTML:    "<html>\nIP Fraud Risk API\n1\n2\n3\n\"score\": \"15\",\n\"risk\": \"low\"\n</html>",
+			wantProbeVerdict:   domain.VerdictAvailable,
+			wantProbeRiskScore: "15% low",
+			wantSummaryReason:  "scamalytics_scored",
+			wantRiskStatus:     domain.IPRiskStatusAvailable,
+			wantRiskScore:      intPtr(15),
+			wantRiskConfidence: intPtr(80),
+		},
+		{
+			name:               "valid_boundary_0",
+			scamalyticsHTML:    "<html>\nIP Fraud Risk API\n1\n2\n3\n\"score\": \"0\",\n\"risk\": \"very low\"\n</html>",
+			wantProbeVerdict:   domain.VerdictAvailable,
+			wantProbeRiskScore: "0% very low",
+			wantSummaryReason:  "scamalytics_scored",
+			wantRiskStatus:     domain.IPRiskStatusAvailable,
+			wantRiskScore:      intPtr(0),
+			wantRiskConfidence: intPtr(80),
+		},
+		{
+			name:               "valid_boundary_100",
+			scamalyticsHTML:    "<html>\nIP Fraud Risk API\n1\n2\n3\n\"score\": \"100\",\n\"risk\": \"very high\"\n</html>",
+			wantProbeVerdict:   domain.VerdictAvailable,
+			wantProbeRiskScore: "100% very high",
+			wantSummaryReason:  "scamalytics_scored",
+			wantRiskStatus:     domain.IPRiskStatusAvailable,
+			wantRiskScore:      intPtr(100),
+			wantRiskConfidence: intPtr(80),
+		},
+		{
+			name:               "negative_score_drift",
+			scamalyticsHTML:    "<html>\nIP Fraud Risk API\n1\n2\n3\n\"score\": \"-1\",\n\"risk\": \"low\"\n</html>",
+			wantProbeVerdict:   domain.VerdictUnknown,
+			wantProbeRiskScore: "",
+			wantSummaryReason:  "contract_drift",
+			wantRiskStatus:     domain.IPRiskStatusUnknown,
+			wantRiskScore:      nil,
+			wantRiskConfidence: nil,
+		},
+		{
+			name:               "out_of_bounds_101_drift",
+			scamalyticsHTML:    "<html>\nIP Fraud Risk API\n1\n2\n3\n\"score\": \"101\",\n\"risk\": \"high\"\n</html>",
+			wantProbeVerdict:   domain.VerdictUnknown,
+			wantProbeRiskScore: "",
+			wantSummaryReason:  "contract_drift",
+			wantRiskStatus:     domain.IPRiskStatusUnknown,
+			wantRiskScore:      nil,
+			wantRiskConfidence: nil,
+		},
+		{
+			name:               "decimal_score_drift",
+			scamalyticsHTML:    "<html>\nIP Fraud Risk API\n1\n2\n3\n\"score\": \"12.5\",\n\"risk\": \"low\"\n</html>",
+			wantProbeVerdict:   domain.VerdictUnknown,
+			wantProbeRiskScore: "",
+			wantSummaryReason:  "contract_drift",
+			wantRiskStatus:     domain.IPRiskStatusUnknown,
+			wantRiskScore:      nil,
+			wantRiskConfidence: nil,
+		},
+		{
+			name:               "empty_score_drift",
+			scamalyticsHTML:    "<html>\nIP Fraud Risk API\n1\n2\n3\n\"score\": \"\",\n\"risk\": \"low\"\n</html>",
+			wantProbeVerdict:   domain.VerdictUnknown,
+			wantProbeRiskScore: "",
+			wantSummaryReason:  "contract_drift",
+			wantRiskStatus:     domain.IPRiskStatusUnknown,
+			wantRiskScore:      nil,
+			wantRiskConfidence: nil,
+		},
+		{
+			name:               "text_score_drift",
+			scamalyticsHTML:    "<html>\nIP Fraud Risk API\n1\n2\n3\n\"score\": \"none\",\n\"risk\": \"low\"\n</html>",
+			wantProbeVerdict:   domain.VerdictUnknown,
+			wantProbeRiskScore: "",
+			wantSummaryReason:  "contract_drift",
+			wantRiskStatus:     domain.IPRiskStatusUnknown,
+			wantRiskScore:      nil,
+			wantRiskConfidence: nil,
+		},
+		{
+			name:               "suffix_garbage_percent_drift",
+			scamalyticsHTML:    "<html>\nIP Fraud Risk API\n1\n2\n3\n\"score\": \"12%\",\n\"risk\": \"low\"\n</html>",
+			wantProbeVerdict:   domain.VerdictUnknown,
+			wantProbeRiskScore: "",
+			wantSummaryReason:  "contract_drift",
+			wantRiskStatus:     domain.IPRiskStatusUnknown,
+			wantRiskScore:      nil,
+			wantRiskConfidence: nil,
+		},
+		{
+			name:               "suffix_garbage_alpha_drift",
+			scamalyticsHTML:    "<html>\nIP Fraud Risk API\n1\n2\n3\n\"score\": \"12abc\",\n\"risk\": \"low\"\n</html>",
+			wantProbeVerdict:   domain.VerdictUnknown,
+			wantProbeRiskScore: "",
+			wantSummaryReason:  "contract_drift",
+			wantRiskStatus:     domain.IPRiskStatusUnknown,
+			wantRiskScore:      nil,
+			wantRiskConfidence: nil,
+		},
+		{
+			name:               "missing_marker_drift",
+			scamalyticsHTML:    "<html><body>No marker here</body></html>",
+			wantProbeVerdict:   domain.VerdictUnknown,
+			wantProbeRiskScore: "",
+			wantSummaryReason:  "contract_drift",
+			wantRiskStatus:     domain.IPRiskStatusUnknown,
+			wantRiskScore:      nil,
+			wantRiskConfidence: nil,
+		},
+		{
+			name:               "dial_error_network_failure",
+			dialErr:            fmt.Errorf("dial tcp 1.2.3.4:8388: connect: connection refused"),
+			wantProbeVerdict:   domain.VerdictError,
+			wantProbeRiskScore: "",
+			wantSummaryReason:  "connection_refused",
+			wantRiskStatus:     domain.IPRiskStatusError,
+			wantRiskScore:      nil,
+			wantRiskConfidence: nil,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			db := newCleanSQLiteDB(t)
+			seedProviderSettings(t, db, "scamalytics", "v1")
+
+			nodeRepo := sqlite.NewNodeRepository(db)
+			obsRepo := sqlite.NewProbeObservationRepository(db)
+			runRepo := sqlite.NewProbeRunRepository(db)
+			riskObsRepo := sqlite.NewIPRiskObservationRepository(db)
+
+			sched, err := queue.NewScheduler(queue.Config{Concurrency: 10})
+			if err != nil {
+				t.Fatalf("failed to create scheduler: %v", err)
+			}
+			defer sched.Close()
+
+			now := domain.NowUTC()
+			nodeID := "0123456789abcdef0123456789abcdef"
+			node := domain.Node{
+				LogicalID:          nodeID,
+				Protocol:           domain.ProtocolSS,
+				DisplayName:        "IPRisk Test Node",
+				Server:             "1.2.3.4",
+				Port:               8388,
+				Credentials:        domain.InboundProtocolCredential{Password: "secret123", Method: "aes-256-gcm"},
+				Active:             true,
+				ConnectionRevision: 1,
+				CreatedAt:          now,
+				UpdatedAt:          now,
+			}
+			if err := nodeRepo.UpsertBatch(ctx, []domain.Node{node}); err != nil {
+				t.Fatal(err)
+			}
+
+			mockClient := &http.Client{
+				Transport: probeMockRoundTripper(func(req *http.Request) (*http.Response, error) {
+					if strings.Contains(req.URL.String(), "cloudflare.com/cdn-cgi/trace") {
+						return &http.Response{
+							StatusCode: http.StatusOK,
+							Body:       io.NopCloser(strings.NewReader("ip=198.51.100.1\nloc=HK\ncolo=HKG\n")),
+							Header:     make(http.Header),
+						}, nil
+					}
+					if strings.Contains(req.URL.String(), "scamalytics.com/ip/") {
+						return &http.Response{
+							StatusCode: http.StatusOK,
+							Body:       io.NopCloser(strings.NewReader(tc.scamalyticsHTML)),
+							Header:     make(http.Header),
+						}, nil
+					}
+					return &http.Response{
+						StatusCode: http.StatusNotFound,
+						Body:       io.NopCloser(strings.NewReader("")),
+						Header:     make(http.Header),
+					}, nil
+				}),
+			}
+
+			dialer := func(ctx context.Context, n domain.Node) (*http.Client, func() error, error) {
+				if tc.dialErr != nil {
+					return nil, nil, tc.dialErr
+				}
+				return mockClient, func() error { return nil }, nil
+			}
+
+			runner := probe.NewDefaultRunner(
+				nodeRepo,
+				obsRepo,
+				sched,
+				runRepo,
+				probe.WithIPRiskObservationRepository(riskObsRepo),
+				probe.WithNodeDialer(dialer),
+			)
+
+			runID := "run_" + domain.MustNewUUIDv7()
+			run := domain.ProbeRun{
+				ID:             runID,
+				IdempotencyKey: "key_" + runID,
+				ActorScope:     "admin",
+				State:          domain.ProbeRunStateQueued,
+				DeadlineAt:     now.Add(time.Hour),
+				CreatedAt:      now,
+				UpdatedAt:      now,
+			}
+			if err := runRepo.Create(ctx, &run); err != nil {
+				t.Fatal(err)
+			}
+
+			_ = runner.Run(ctx, &run, []string{nodeID}, []domain.ProbeKind{domain.ProbeKindIPRisk})
+
+			observations, err := obsRepo.ListByRun(ctx, runID)
+			if err != nil || len(observations) != 1 {
+				t.Fatalf("expected 1 probe observation, got %d (err: %v)", len(observations), err)
+			}
+			probeObs := observations[0]
+			if probeObs.Verdict != tc.wantProbeVerdict {
+				t.Errorf("ProbeObs.Verdict = %v, want %v", probeObs.Verdict, tc.wantProbeVerdict)
+			}
+			if probeObs.RiskScore != tc.wantProbeRiskScore {
+				t.Errorf("ProbeObs.RiskScore = %q, want %q", probeObs.RiskScore, tc.wantProbeRiskScore)
+			}
+			if !strings.Contains(probeObs.RedactedSummary, "reason="+tc.wantSummaryReason) {
+				t.Errorf("ProbeObs.RedactedSummary = %q, want reason=%s", probeObs.RedactedSummary, tc.wantSummaryReason)
+			}
+
+			// Verify IPRiskObservation persistence consistency
+			riskObsList, total, err := riskObsRepo.List(ctx, domain.IPRiskObservationFilter{NodeLogicalID: nodeID})
+			if err != nil || total != 1 || len(riskObsList) != 1 {
+				t.Fatalf("expected 1 ip risk observation, got %d (err: %v)", total, err)
+			}
+			riskObs := riskObsList[0]
+			if riskObs.Status != tc.wantRiskStatus {
+				t.Errorf("riskObs.Status = %v, want %v", riskObs.Status, tc.wantRiskStatus)
+			}
+
+			if tc.wantRiskScore == nil {
+				if riskObs.Score != nil {
+					t.Errorf("riskObs.Score = %v, want nil", *riskObs.Score)
+				}
+			} else {
+				if riskObs.Score == nil || *riskObs.Score != *tc.wantRiskScore {
+					t.Errorf("riskObs.Score = %v, want %v", riskObs.Score, *tc.wantRiskScore)
+				}
+			}
+
+			if tc.wantRiskConfidence == nil {
+				if riskObs.Confidence != nil {
+					t.Errorf("riskObs.Confidence = %v, want nil (must not forge 80 on anomaly/failure)", *riskObs.Confidence)
+				}
+			} else {
+				if riskObs.Confidence == nil || *riskObs.Confidence != *tc.wantRiskConfidence {
+					t.Errorf("riskObs.Confidence = %v, want %v", riskObs.Confidence, *tc.wantRiskConfidence)
+				}
+			}
+
+			// Invariant defense: available MUST have legal score; anomalies MUST NEVER have available+nil/80
+			if riskObs.Status == domain.IPRiskStatusAvailable {
+				if riskObs.Score == nil || *riskObs.Score < 0 || *riskObs.Score > 100 {
+					t.Errorf("INVARIANT VIOLATION: status is available but score is invalid: %v", riskObs.Score)
+				}
+			} else {
+				if riskObs.Confidence != nil {
+					t.Errorf("INVARIANT VIOLATION: non-available status has forged confidence: %v", *riskObs.Confidence)
+				}
+			}
+		})
+	}
+}

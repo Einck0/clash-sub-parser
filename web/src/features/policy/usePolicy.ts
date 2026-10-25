@@ -13,6 +13,8 @@ import type {
 } from './policyTypes'
 import { normalizeGroupSources } from './policyTypes'
 
+export type TopologyStatus = 'idle' | 'loading' | 'error' | 'ready'
+
 interface PaginatedGroups {
   items?: PolicyGroup[]
   groups?: PolicyGroup[]
@@ -63,10 +65,14 @@ export function usePolicy() {
   const searchQuery = ref('')
   const totalGroups = ref(0)
   const allTopologyGroups = ref<PolicyGroup[]>([])
+  const topologyStatus = ref<TopologyStatus>('idle')
+  const topologyError = ref('')
+  const isTopologyStale = ref(false)
 
   let validateSeq = 0
   let validateAbortController: AbortController | null = null
   let loadGroupsSeq = 0
+  let topologySeq = 0
 
   async function loadGroups(p = page.value, ps = pageSize.value, search?: string) {
     const seq = ++loadGroupsSeq
@@ -109,13 +115,12 @@ export function usePolicy() {
   }
 
   async function loadAllTopologyGroups(force = false): Promise<PolicyGroup[]> {
-    if (!force && allTopologyGroups.value.length > 0 && totalGroups.value > 0 && allTopologyGroups.value.length >= totalGroups.value) {
+    if (!force && topologyStatus.value === 'ready') {
       return allTopologyGroups.value
     }
-    if (!force && !searchQuery.value && page.value === 1 && totalGroups.value > 0 && groups.value.length >= totalGroups.value) {
-      allTopologyGroups.value = [...groups.value]
-      return allTopologyGroups.value
-    }
+    const seq = ++topologySeq
+    topologyStatus.value = 'loading'
+    topologyError.value = ''
     try {
       const all: PolicyGroup[] = []
       let p = 1
@@ -124,6 +129,8 @@ export function usePolicy() {
         const res = await api.get<PaginatedGroups>('/api/v1/policies/groups', {
           params: { page: p, page_size: ps },
         })
+        if (seq !== topologySeq) return allTopologyGroups.value
+
         const items = (res.items || res.groups || []).map((g) => ({
           ...g,
           sources: normalizeGroupSources(g),
@@ -134,11 +141,23 @@ export function usePolicy() {
         }
         p++
       }
+      if (seq !== topologySeq) return allTopologyGroups.value
+
       allTopologyGroups.value = all
+      topologyStatus.value = 'ready'
+      isTopologyStale.value = false
+      topologyError.value = ''
       return all
-    } catch {
-      allTopologyGroups.value = groups.value
-      return groups.value
+    } catch (err) {
+      if (seq !== topologySeq) return allTopologyGroups.value
+
+      const msg = err instanceof Error ? err.message : '加载完整拓扑失败'
+      topologyError.value = msg
+      topologyStatus.value = 'error'
+      if (allTopologyGroups.value.length > 0) {
+        isTopologyStale.value = true
+      }
+      return allTopologyGroups.value
     }
   }
 
@@ -320,7 +339,7 @@ export function usePolicy() {
     if (!await loadGroups(page.value, pageSize.value, searchQuery.value) || seq !== reloadSeq) return
     await loadGlobalFilter()
     if (error.value || seq !== reloadSeq) return
-    await loadAllTopologyGroups()
+    await loadAllTopologyGroups(true)
     if (seq !== reloadSeq) return
     await validateGraph()
   }
@@ -523,6 +542,9 @@ export function usePolicy() {
     searchQuery,
     totalGroups,
     allTopologyGroups,
+    topologyStatus,
+    topologyError,
+    isTopologyStale,
     loadGroups,
     loadAllTopologyGroups,
     reload,

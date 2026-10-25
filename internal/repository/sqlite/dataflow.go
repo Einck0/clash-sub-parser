@@ -39,7 +39,7 @@ func (r *subscriptionPayloadRepository) Save(ctx context.Context, p *domain.Subs
 	INSERT INTO subscription_payloads (
 		id, subscription_id, fetch_id, content_digest, body_blob,
 		http_status, headers_json, pinned, created_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);`
+	) VALUES (?, ?, ?, ?, X'', ?, ?, ?, ?);`
 
 	pinnedInt := 0
 	if p.Pinned {
@@ -51,7 +51,6 @@ func (r *subscriptionPayloadRepository) Save(ctx context.Context, p *domain.Subs
 		p.SubscriptionID,
 		p.FetchID,
 		p.ContentDigest,
-		p.BodyBlob,
 		p.HTTPStatus,
 		p.HeadersJSON,
 		pinnedInt,
@@ -65,7 +64,7 @@ func (r *subscriptionPayloadRepository) Save(ctx context.Context, p *domain.Subs
 
 func (r *subscriptionPayloadRepository) GetByID(ctx context.Context, id string) (*domain.SubscriptionPayload, error) {
 	const query = `
-	SELECT id, subscription_id, fetch_id, content_digest, body_blob, http_status, headers_json, pinned, created_at
+	SELECT id, subscription_id, fetch_id, content_digest, X'' AS body_blob, http_status, headers_json, pinned, created_at
 	FROM subscription_payloads WHERE id = ?;`
 
 	var p domain.SubscriptionPayload
@@ -90,6 +89,9 @@ func (r *subscriptionPayloadRepository) GetByID(ctx context.Context, id string) 
 		return nil, fmt.Errorf("failed to query payload %s: %w", id, err)
 	}
 
+	if p.BodyBlob == nil {
+		p.BodyBlob = []byte{}
+	}
 	p.Pinned = pinnedInt == 1
 	p.CreatedAt, _ = time.Parse(time.RFC3339, createdStr)
 	return &p, nil
@@ -97,7 +99,7 @@ func (r *subscriptionPayloadRepository) GetByID(ctx context.Context, id string) 
 
 func (r *subscriptionPayloadRepository) GetLatestBySubscription(ctx context.Context, subscriptionID string) (*domain.SubscriptionPayload, error) {
 	const query = `
-	SELECT id, subscription_id, fetch_id, content_digest, body_blob, http_status, headers_json, pinned, created_at
+	SELECT id, subscription_id, fetch_id, content_digest, X'' AS body_blob, http_status, headers_json, pinned, created_at
 	FROM subscription_payloads WHERE subscription_id = ? ORDER BY created_at DESC LIMIT 1;`
 
 	var p domain.SubscriptionPayload
@@ -122,6 +124,9 @@ func (r *subscriptionPayloadRepository) GetLatestBySubscription(ctx context.Cont
 		return nil, fmt.Errorf("failed to query latest payload for subscription %s: %w", subscriptionID, err)
 	}
 
+	if p.BodyBlob == nil {
+		p.BodyBlob = []byte{}
+	}
 	p.Pinned = pinnedInt == 1
 	p.CreatedAt, _ = time.Parse(time.RFC3339, createdStr)
 	return &p, nil
@@ -129,7 +134,7 @@ func (r *subscriptionPayloadRepository) GetLatestBySubscription(ctx context.Cont
 
 func (r *subscriptionPayloadRepository) GetByDigest(ctx context.Context, contentDigest string) (*domain.SubscriptionPayload, error) {
 	const query = `
-	SELECT id, subscription_id, fetch_id, content_digest, body_blob, http_status, headers_json, pinned, created_at
+	SELECT id, subscription_id, fetch_id, content_digest, X'' AS body_blob, http_status, headers_json, pinned, created_at
 	FROM subscription_payloads WHERE content_digest = ? ORDER BY created_at DESC LIMIT 1;`
 
 	var p domain.SubscriptionPayload
@@ -154,6 +159,9 @@ func (r *subscriptionPayloadRepository) GetByDigest(ctx context.Context, content
 		return nil, fmt.Errorf("failed to query payload by digest: %w", err)
 	}
 
+	if p.BodyBlob == nil {
+		p.BodyBlob = []byte{}
+	}
 	p.Pinned = pinnedInt == 1
 	p.CreatedAt, _ = time.Parse(time.RFC3339, createdStr)
 	return &p, nil
@@ -893,4 +901,3 @@ func (r *publicationPayloadRefRepository) ResolvePayloadIDsForNodes(ctx context.
 	}
 	return result, nil
 }
-

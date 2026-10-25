@@ -75,8 +75,79 @@ func TestDataflowRepositories(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to get payload by ID: %v", err)
 	}
-	if gotP.ContentDigest != "sha256:digest12345" || string(gotP.BodyBlob) != "raw subscription body bytes" {
-		t.Fatalf("payload content mismatch: %+v", gotP)
+	if gotP.ContentDigest != "sha256:digest12345" || len(gotP.BodyBlob) != 0 {
+		t.Fatalf("payload content mismatch: %+v (expected empty BodyBlob per FR-RAW-02, got len=%d)", gotP, len(gotP.BodyBlob))
+	}
+
+	// Direct DB check shows body_blob was saved as empty blob X''
+	var storedBlobLen int
+	if err := db.QueryRow("SELECT LENGTH(body_blob) FROM subscription_payloads WHERE id = ?;", payloadID).Scan(&storedBlobLen); err != nil {
+		t.Fatalf("failed to query stored body_blob length: %v", err)
+	}
+	if storedBlobLen != 0 {
+		t.Fatalf("expected stored body_blob length 0, got %d", storedBlobLen)
+	}
+
+	// Historical non-empty body injection test (FR-RAW-02):
+	// Even if database has historical non-empty body bytes, GetByID, GetLatestBySubscription,
+	// and GetByDigest must return empty body and never load historical bytes into memory.
+	histFetchID := "fetch_hist_" + domain.MustNewUUIDv7()
+	histFetch := domain.SubscriptionFetch{
+		ID:             histFetchID,
+		SubscriptionID: subID,
+		StartedAt:      now,
+		FinishedAt:     &now,
+		Outcome:        domain.FetchOutcomeSuccess,
+		ContentDigest:  "sha256:histdigest",
+	}
+	if err := fetchRepo.Create(ctx, &histFetch); err != nil {
+		t.Fatalf("failed to create hist fetch: %v", err)
+	}
+
+	histPayloadID := "payload_hist_" + domain.MustNewUUIDv7()
+	const insertHistSQL = `
+	INSERT INTO subscription_payloads (
+		id, subscription_id, fetch_id, content_digest, body_blob,
+		http_status, headers_json, pinned, created_at
+	) VALUES (?, ?, ?, ?, ?, 200, '{}', 0, ?);`
+	if _, err := db.Exec(insertHistSQL, histPayloadID, subID, histFetchID, "sha256:histdigest", []byte("historical raw subscription body"), now.Add(time.Second).Format(time.RFC3339)); err != nil {
+		t.Fatalf("failed to inject historical payload: %v", err)
+	}
+
+	// In SQLite table directly, length is > 0
+	var histRawLen int
+	if err := db.QueryRow("SELECT LENGTH(body_blob) FROM subscription_payloads WHERE id = ?;", histPayloadID).Scan(&histRawLen); err != nil {
+		t.Fatalf("failed to query hist raw len: %v", err)
+	}
+	if histRawLen == 0 {
+		t.Fatalf("expected injected historical body to have non-zero length in DB")
+	}
+
+	// GetByID returns empty BodyBlob
+	gotHistByID, err := payloadRepo.GetByID(ctx, histPayloadID)
+	if err != nil {
+		t.Fatalf("GetByID failed on historical payload: %v", err)
+	}
+	if len(gotHistByID.BodyBlob) != 0 {
+		t.Fatalf("expected GetByID to return empty BodyBlob, got len=%d", len(gotHistByID.BodyBlob))
+	}
+
+	// GetLatestBySubscription returns empty BodyBlob
+	gotHistLatest, err := payloadRepo.GetLatestBySubscription(ctx, subID)
+	if err != nil {
+		t.Fatalf("GetLatestBySubscription failed: %v", err)
+	}
+	if gotHistLatest.ID != histPayloadID || len(gotHistLatest.BodyBlob) != 0 {
+		t.Fatalf("expected latest payload to be histPayloadID with empty BodyBlob, got id=%s len=%d", gotHistLatest.ID, len(gotHistLatest.BodyBlob))
+	}
+
+	// GetByDigest returns empty BodyBlob
+	gotHistDigest, err := payloadRepo.GetByDigest(ctx, "sha256:histdigest")
+	if err != nil {
+		t.Fatalf("GetByDigest failed: %v", err)
+	}
+	if gotHistDigest.ID != histPayloadID || len(gotHistDigest.BodyBlob) != 0 {
+		t.Fatalf("expected GetByDigest to return empty BodyBlob, got len=%d", len(gotHistDigest.BodyBlob))
 	}
 
 	gotLatest, err := payloadRepo.GetLatestBySubscription(ctx, subID)

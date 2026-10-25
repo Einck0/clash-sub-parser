@@ -29,3 +29,10 @@
 - **符合度现状**: 详见 `docs/specification/conformance-matrix.md`；
 - **历史需求追溯**: 详见 `docs/specification/historical-requirement-register.md`；
 - **测试证据原则**: 本迁移计划不虚构新执行的测试，所有历史测试退出码与证据均标明出处与时效性。
+
+
+## 原始载荷整改增量设计（2026-10-25）
+
+冻结方案、模块边界、公共接口、决策依据及验证见 [payload-retirement-20261025.md](payload-retirement-20261025.md)。复用现有 schema/ID 与结构化节点事实，body_blob 固定空 BLOB；历史批量清除走独立离线维护 CLI，不在启动迁移自动执行。Inventory、SQLite、CLI 三模块独立并行，主脑汇聚云测与隔离证据。
+
+Constitution check：失败刷新资产保全、逻辑身份、凭据与领域分层均不变；无新增密文/中间件；活规范已同步。技术栈沿用 Go/SQLite；所有编译与测试在现有 dev Actions，宿主只能静态检查和运行云镜像。无未决业务需求，生产执行仍须新授权。

@@ -8,17 +8,21 @@ import (
 	"time"
 )
 
-// SubscriptionPayload represents raw un-parsed subscription body bytes and fetch metadata.
+// SubscriptionPayload represents subscription fetch metadata and payload digest.
+// Per FR-RAW-01 and the payload retirement design, upstream subscription response bodies
+// are retired from persistent storage to protect upstream content privacy.
+// Metadata, digests, and lineage references are preserved while BodyBlob is maintained
+// as a compatibility field populated with empty bytes.
 type SubscriptionPayload struct {
-	ID             string            `json:"id"`
-	SubscriptionID string            `json:"subscription_id"`
-	FetchID        string            `json:"fetch_id"`
-	ContentDigest  string            `json:"content_digest"`
-	BodyBlob       []byte            `json:"-"`
-	HTTPStatus     int               `json:"http_status"`
-	HeadersJSON    string            `json:"headers_json"`
-	Pinned         bool              `json:"pinned"`
-	CreatedAt      time.Time         `json:"created_at"`
+	ID             string    `json:"id"`
+	SubscriptionID string    `json:"subscription_id"`
+	FetchID        string    `json:"fetch_id"`
+	ContentDigest  string    `json:"content_digest"`
+	BodyBlob       []byte    `json:"-"` // Compatibility field; stored as empty BLOB, readers return empty bytes
+	HTTPStatus     int       `json:"http_status"`
+	HeadersJSON    string    `json:"headers_json"`
+	Pinned         bool      `json:"pinned"`
+	CreatedAt      time.Time `json:"created_at"`
 }
 
 // EntryKind specifies whether a subscription entry is an actionable proxy, an informational notice, or unknown.
@@ -34,31 +38,34 @@ func (k EntryKind) IsValid() bool {
 	return k == EntryKindProxy || k == EntryKindNotice || k == EntryKindUnknown
 }
 
-// SubscriptionEntry stores each raw parsed proxy or notice entry derived from a payload.
+// SubscriptionEntry stores each structured parsed proxy or notice entry derived from
+// in-memory parsing of a fetched subscription response.
+// ParsedConfigJSON holds whitelisted connection parameters (protocol, server, port, credentials)
+// rather than raw upstream snippets, preserving node connection facts without storing raw bodies.
 type SubscriptionEntry struct {
-	ID                    string          `json:"id"`
-	PayloadID             string          `json:"payload_id"`
-	SubscriptionID        string          `json:"subscription_id"`
-	Ordinal               int             `json:"ordinal"`
-	SourceKey             string          `json:"source_key"`
-	RawName               string          `json:"raw_name"`
-	Protocol              Protocol        `json:"protocol"`
-	Server                string          `json:"server"`
-	Port                  int             `json:"port"`
-	EntryKind             EntryKind       `json:"entry_kind"`
-	ClassificationReason  string          `json:"classification_reason"`
-	ClassificationVersion string          `json:"classification_version"`
-	SourceProvenanceJSON  string          `json:"source_provenance_json"`
-	UserKindOverride      *EntryKind      `json:"user_kind_override,omitempty"`
-	OverrideAnchor        string          `json:"override_anchor,omitempty"`
-	OverrideReason        string          `json:"override_reason,omitempty"`
-	OverrideAt            *time.Time      `json:"override_at,omitempty"`
-	ActorRef              string          `json:"actor_ref,omitempty"`
-	ParsedConfigJSON      string          `json:"parsed_config_json"`
-	ParserVersion         string          `json:"parser_version"`
-	WarningsJSON          string          `json:"warnings_json"`
-	NodeLogicalID         *string         `json:"node_logical_id,omitempty"`
-	CreatedAt             time.Time       `json:"created_at"`
+	ID                    string     `json:"id"`
+	PayloadID             string     `json:"payload_id"`
+	SubscriptionID        string     `json:"subscription_id"`
+	Ordinal               int        `json:"ordinal"`
+	SourceKey             string     `json:"source_key"`
+	RawName               string     `json:"raw_name"`
+	Protocol              Protocol   `json:"protocol"`
+	Server                string     `json:"server"`
+	Port                  int        `json:"port"`
+	EntryKind             EntryKind  `json:"entry_kind"`
+	ClassificationReason  string     `json:"classification_reason"`
+	ClassificationVersion string     `json:"classification_version"`
+	SourceProvenanceJSON  string     `json:"source_provenance_json"`
+	UserKindOverride      *EntryKind `json:"user_kind_override,omitempty"`
+	OverrideAnchor        string     `json:"override_anchor,omitempty"`
+	OverrideReason        string     `json:"override_reason,omitempty"`
+	OverrideAt            *time.Time `json:"override_at,omitempty"`
+	ActorRef              string     `json:"actor_ref,omitempty"`
+	ParsedConfigJSON      string     `json:"parsed_config_json"`
+	ParserVersion         string     `json:"parser_version"`
+	WarningsJSON          string     `json:"warnings_json"`
+	NodeLogicalID         *string    `json:"node_logical_id,omitempty"`
+	CreatedAt             time.Time  `json:"created_at"`
 }
 
 // EffectiveKind resolves the effective entry kind considering user overrides.
@@ -190,12 +197,12 @@ func ComputeConnectionFingerprint(server string, port int, creds InboundProtocol
 
 // NoticeClassifier evaluates whether a subscription entry is an informational notice pseudo-node.
 // It requires BOTH verified source rule AND exact combo match:
-// 1. Verified Source Gate: Only enabled for verified source contexts (such as Dogegg or verified rule_version).
-// 2. Exact Rule Match (ALL 4 conditions):
-//    a) server IN ('127.0.0.1', 'localhost', '0.0.0.0')
-//    b) port == 1
-//    c) uuid == '00000000-0000-4000-8000-000000000000'
-//    d) name matches known notice keywords (剩余流量, 套餐到期, 新域名, 公告, 通知)
+//  1. Verified Source Gate: Only enabled for verified source contexts (such as Dogegg or verified rule_version).
+//  2. Exact Rule Match (ALL 4 conditions):
+//     a) server IN ('127.0.0.1', 'localhost', '0.0.0.0')
+//     b) port == 1
+//     c) uuid == '00000000-0000-4000-8000-000000000000'
+//     d) name matches known notice keywords (剩余流量, 套餐到期, 新域名, 公告, 通知)
 func ClassifySubscriptionEntry(
 	isVerifiedSource bool,
 	server string,

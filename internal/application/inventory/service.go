@@ -591,7 +591,7 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 			sub.ID,
 			fetchID,
 			fetchResp.ContentDigest,
-			fetchResp.Body,
+			[]byte{},
 			httpStatus,
 			string(headersJSON),
 			nowStr,

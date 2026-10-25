@@ -625,6 +625,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return runRestoreGroupFilters(remaining[1:], stdout, stderr)
 		case "maintain-inventory":
 			return runMaintainInventory(remaining[1:], stdout, stderr)
+		case "retire-payload-bodies":
+			return runRetirePayloadBodies(remaining[1:], stdout, stderr)
 		default:
 			fmt.Fprintf(stderr, "unknown command: %s\n", remaining[0])
 			return 1

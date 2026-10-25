@@ -306,7 +306,11 @@ func TestRetirePayloadBodies_ConcurrencyAndLockRejection(t *testing.T) {
 	backupPath := createTestBackupFile(t, dbPath)
 
 	t.Run("lock file already exists", func(t *testing.T) {
-		lockFile := dbPath + ".maintenance.lock"
+		canonicalDBPath, _ := filepath.EvalSymlinks(dbPath)
+		if abs, err := filepath.Abs(canonicalDBPath); err == nil {
+			canonicalDBPath = abs
+		}
+		lockFile := canonicalDBPath + ".maintenance.lock"
 		if err := os.WriteFile(lockFile, []byte("99999\n"), 0600); err != nil {
 			t.Fatalf("failed to create lock file: %v", err)
 		}
@@ -356,7 +360,7 @@ func TestRetirePayloadBodies_ConcurrencyAndLockRejection(t *testing.T) {
 			checkConcurrentService: func(path string) (int, error) {
 				return 0, nil
 			},
-			checkOpenFiles: func(absPath string) (int, error) {
+			checkOpenFiles: func(canonicalPath string) (int, error) {
 				return 54321, errors.New("process PID 54321 has file open")
 			},
 		}
@@ -374,6 +378,74 @@ func TestRetirePayloadBodies_ConcurrencyAndLockRejection(t *testing.T) {
 		}
 		if !strings.Contains(stderr.String(), "target database file is opened by process") {
 			t.Errorf("expected open file error, got %q", stderr.String())
+		}
+	})
+}
+
+func TestRetirePayloadBodies_ForeignKeyCheckScan(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("detects foreign key violation on standard table", func(t *testing.T) {
+		dbPath := filepath.Join(t.TempDir(), "test-fk.db")
+		dbCfg := sqlite.DefaultConfig(dbPath)
+		db, err := sqlite.Open(dbCfg)
+		if err != nil {
+			t.Fatalf("open db: %v", err)
+		}
+		defer db.Close()
+
+		_, _ = db.ExecContext(ctx, "PRAGMA foreign_keys = OFF;")
+		_, err = db.ExecContext(ctx, `
+			CREATE TABLE parent (id INTEGER PRIMARY KEY);
+			CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parent(id));
+			INSERT INTO child (id, parent_id) VALUES (1, 999);
+		`)
+		if err != nil {
+			t.Fatalf("create fk tables: %v", err)
+		}
+		_, _ = db.ExecContext(ctx, "PRAGMA foreign_keys = ON;")
+
+		_, fk, err := verifySQLiteIntegrity(ctx, db)
+		if err == nil {
+			t.Fatalf("expected verifySQLiteIntegrity to fail on FK violation, but got nil error (fk: %s)", fk)
+		}
+		if !strings.Contains(fk, "1 violations") {
+			t.Errorf("expected 1 violations in fk report, got %s", fk)
+		}
+	})
+
+	t.Run("detects foreign key violation on WITHOUT ROWID table with null rowid", func(t *testing.T) {
+		dbPath := filepath.Join(t.TempDir(), "test-fk-norowid.db")
+		dbCfg := sqlite.DefaultConfig(dbPath)
+		db, err := sqlite.Open(dbCfg)
+		if err != nil {
+			t.Fatalf("open db: %v", err)
+		}
+		defer db.Close()
+
+		_, _ = db.ExecContext(ctx, "PRAGMA foreign_keys = OFF;")
+		_, err = db.ExecContext(ctx, `
+			CREATE TABLE p_table (id TEXT PRIMARY KEY);
+			CREATE TABLE c_table (
+				id TEXT PRIMARY KEY,
+				p_id TEXT REFERENCES p_table(id)
+			) WITHOUT ROWID;
+			INSERT INTO c_table (id, p_id) VALUES ('c1', 'missing_parent');
+		`)
+		if err != nil {
+			t.Fatalf("create norowid tables: %v", err)
+		}
+		_, _ = db.ExecContext(ctx, "PRAGMA foreign_keys = ON;")
+
+		_, fk, err := verifySQLiteIntegrity(ctx, db)
+		if err == nil {
+			t.Fatalf("expected verifySQLiteIntegrity to fail on WITHOUT ROWID FK violation, got nil error")
+		}
+		if !strings.Contains(fk, "1 violations") {
+			t.Errorf("expected 1 violations in fk report, got %s", fk)
+		}
+		if !strings.Contains(fk, "c_table") {
+			t.Errorf("expected c_table in fk violation details, got %s", fk)
 		}
 	})
 }
@@ -421,6 +493,9 @@ func TestRetirePayloadBodies_DryRun(t *testing.T) {
 	if rep.VacuumRequested {
 		t.Errorf("expected vacuum_requested = false")
 	}
+	if rep.BeforeFileBytes <= 0 || rep.AfterFileBytes <= 0 {
+		t.Errorf("expected positive before/after file bytes: before=%d, after=%d", rep.BeforeFileBytes, rep.AfterFileBytes)
+	}
 	if !strings.Contains(rep.NamespaceWarning, "namespace") {
 		t.Errorf("expected namespace warning in report, got %q", rep.NamespaceWarning)
 	}
@@ -440,7 +515,7 @@ func TestRetirePayloadBodies_Apply(t *testing.T) {
 		checkConcurrentService: func(path string) (int, error) {
 			return 0, nil
 		},
-		checkOpenFiles: func(absPath string) (int, error) {
+		checkOpenFiles: func(canonicalPath string) (int, error) {
 			return 0, nil
 		},
 	}
@@ -504,7 +579,7 @@ func TestRetirePayloadBodies_ApplyWithVacuum(t *testing.T) {
 		checkConcurrentService: func(path string) (int, error) {
 			return 0, nil
 		},
-		checkOpenFiles: func(absPath string) (int, error) {
+		checkOpenFiles: func(canonicalPath string) (int, error) {
 			return 0, nil
 		},
 		vacuumDB: func(ctx context.Context, db *sql.DB) error {
@@ -544,6 +619,9 @@ func TestRetirePayloadBodies_ApplyWithVacuum(t *testing.T) {
 	if rep.VacuumStatus != "SUCCESS" {
 		t.Errorf("expected vacuum_status SUCCESS, got %s", rep.VacuumStatus)
 	}
+	if rep.AfterVacuumFileBytes <= 0 {
+		t.Errorf("expected after_vacuum_file_bytes to be populated on successful vacuum, got %d", rep.AfterVacuumFileBytes)
+	}
 }
 
 func TestRetirePayloadBodies_ApplyWithVacuumFailure(t *testing.T) {
@@ -558,7 +636,7 @@ func TestRetirePayloadBodies_ApplyWithVacuumFailure(t *testing.T) {
 		checkConcurrentService: func(path string) (int, error) {
 			return 0, nil
 		},
-		checkOpenFiles: func(absPath string) (int, error) {
+		checkOpenFiles: func(canonicalPath string) (int, error) {
 			return 0, nil
 		},
 		vacuumDB: func(ctx context.Context, db *sql.DB) error {
@@ -599,9 +677,110 @@ func TestRetirePayloadBodies_ApplyWithVacuumFailure(t *testing.T) {
 	if !strings.Contains(rep.VacuumError, "simulated disk full during vacuum") {
 		t.Errorf("expected vacuum error recorded, got %q", rep.VacuumError)
 	}
+	if !strings.Contains(rep.Message, "logical cleanup committed successfully") {
+		t.Errorf("expected message to note logical cleanup committed successfully, got %q", rep.Message)
+	}
 	// Storage report from logical cleanup must still be included in the output
 	if rep.Storage == nil || rep.Storage.ClearedBodyCount != 3 {
 		t.Errorf("expected storage report intact in failed vacuum output, got: %+v", rep.Storage)
+	}
+}
+
+func TestRetirePayloadBodies_PostClearIntegrityFailure(t *testing.T) {
+	dbPath, db := setupTestPayloadDB(t)
+	_ = db.Close()
+	backupPath := createTestBackupFile(t, dbPath)
+
+	deps := &retirePayloadBodiesDeps{
+		clearPayloadBodies: func(ctx context.Context, db *sql.DB) (*sqlite.PayloadStorageReport, error) {
+			// Deliberately introduce an FK violation during clear
+			_, _ = db.ExecContext(ctx, "PRAGMA foreign_keys = OFF;")
+			_, _ = db.ExecContext(ctx, `
+				INSERT INTO subscription_entries (
+					id, payload_id, subscription_id, ordinal, source_key, raw_name, protocol, created_at
+				) VALUES ('bad_entry', 'non_existent_payload_id', 'non_existent_sub_id', 1, 'sk', 'rn', 'vmess', '2026-10-25T00:00:00Z');
+			`)
+			_, _ = db.ExecContext(ctx, "PRAGMA foreign_keys = ON;")
+			return mockClearReport(), nil
+		},
+		checkConcurrentService: func(path string) (int, error) {
+			return 0, nil
+		},
+		checkOpenFiles: func(canonicalPath string) (int, error) {
+			return 0, nil
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := runRetirePayloadBodiesWithDeps(context.Background(), []string{
+		"--db", dbPath,
+		"--apply",
+		"--offline",
+		"--backup-file", backupPath,
+	}, &stdout, &stderr, deps)
+
+	if code != 1 {
+		t.Fatalf("expected exit code 1 on post-clear integrity failure, got %d", code)
+	}
+	if !strings.Contains(stderr.String(), "logical cleanup was already committed successfully") {
+		t.Errorf("expected stderr to inform operator logical cleanup committed, got: %s", stderr.String())
+	}
+
+	var rep RetirePayloadBodiesReport
+	if err := json.Unmarshal(stdout.Bytes(), &rep); err != nil {
+		t.Fatalf("failed to parse stdout JSON: %v, raw output: %s", err, stdout.String())
+	}
+
+	if rep.Status != "FAILED" {
+		t.Errorf("expected status FAILED, got %s", rep.Status)
+	}
+	if !strings.Contains(rep.Message, "logical cleanup committed successfully") {
+		t.Errorf("expected report message to note logical cleanup committed, got %q", rep.Message)
+	}
+	if rep.Storage == nil || rep.Storage.ClearedBodyCount != 3 {
+		t.Errorf("expected storage report intact in failed integrity output, got: %+v", rep.Storage)
+	}
+}
+
+func TestRetirePayloadBodies_CanonicalLockPath(t *testing.T) {
+	dbPath, db := setupTestPayloadDB(t)
+	_ = db.Close()
+	backupPath := createTestBackupFile(t, dbPath)
+
+	symlinkPath := filepath.Join(t.TempDir(), "symlink-target.db")
+	if err := os.Symlink(dbPath, symlinkPath); err != nil {
+		t.Skipf("symlink creation not supported: %v", err)
+	}
+
+	canonicalDBPath, err := filepath.EvalSymlinks(symlinkPath)
+	if err != nil {
+		t.Fatalf("eval symlink: %v", err)
+	}
+	if abs, err := filepath.Abs(canonicalDBPath); err == nil {
+		canonicalDBPath = abs
+	}
+	expectedLockFile := canonicalDBPath + ".maintenance.lock"
+
+	// Pre-create the lock file at the canonical path
+	if err := os.WriteFile(expectedLockFile, []byte("88888\n"), 0600); err != nil {
+		t.Fatalf("write lock file: %v", err)
+	}
+	defer os.Remove(expectedLockFile)
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"retire-payload-bodies",
+		"--db", symlinkPath, // Pass symlink
+		"--apply",
+		"--offline",
+		"--backup-file", backupPath,
+	}, &stdout, &stderr)
+
+	if code != 1 {
+		t.Errorf("expected exit code 1 due to canonical lock, got %d", code)
+	}
+	if !strings.Contains(stderr.String(), "locked by another maintenance run") {
+		t.Errorf("expected lock rejection via canonical path, got %q", stderr.String())
 	}
 }
 
@@ -617,7 +796,7 @@ func TestRetirePayloadBodies_IdempotentApply(t *testing.T) {
 		checkConcurrentService: func(path string) (int, error) {
 			return 0, nil
 		},
-		checkOpenFiles: func(absPath string) (int, error) {
+		checkOpenFiles: func(canonicalPath string) (int, error) {
 			return 0, nil
 		},
 	}

@@ -1006,8 +1006,14 @@ describe('Per-Row State, Concurrency & Layout Invariants', () => {
         await new Promise((r) => setTimeout(r, 20))
         await nextTick()
 
+        // Open popover actions
+        const trigger = (mountEl.querySelector('[data-testid="subscription-actions-trigger"]') || document.body.querySelector('[data-testid="subscription-actions-trigger"]')) as HTMLButtonElement
+        expect(trigger).not.toBeNull()
+        trigger.click()
+        await nextTick()
+
         // Open confirm delete modal
-        const deleteActionBtn = document.querySelector('[data-testid="sub-action-delete"]') as HTMLButtonElement
+        const deleteActionBtn = (document.body.querySelector('[data-testid="sub-action-delete"]') || document.querySelector('[data-testid="sub-action-delete"]')) as HTMLButtonElement
         expect(deleteActionBtn).not.toBeNull()
         deleteActionBtn.click()
         await nextTick()
@@ -1064,7 +1070,14 @@ describe('Per-Row State, Concurrency & Layout Invariants', () => {
         await new Promise((r) => setTimeout(r, 20))
         await nextTick()
 
-        const deleteActionBtn = document.querySelector('[data-testid="sub-action-delete"]') as HTMLButtonElement
+        // Open popover actions
+        const trigger = (mountEl.querySelector('[data-testid="subscription-actions-trigger"]') || document.body.querySelector('[data-testid="subscription-actions-trigger"]')) as HTMLButtonElement
+        expect(trigger).not.toBeNull()
+        trigger.click()
+        await nextTick()
+
+        const deleteActionBtn = (document.body.querySelector('[data-testid="sub-action-delete"]') || document.querySelector('[data-testid="sub-action-delete"]')) as HTMLButtonElement
+        expect(deleteActionBtn).not.toBeNull()
         deleteActionBtn.click()
         await nextTick()
 

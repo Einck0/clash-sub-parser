@@ -283,13 +283,13 @@ describe('FR-RM3 Node Detail Error Differentiation & Stale Feedback', () => {
     app.mount(container)
     await nextTick()
 
-    const staleBanner = container.querySelector('[data-testid="node-detail-stale-banner"]')
+    const staleBanner = (document.body.querySelector('[data-testid="node-detail-stale-banner"]') || container.querySelector('[data-testid="node-detail-stale-banner"]')) as HTMLElement | null
     expect(staleBanner).not.toBeNull()
     expect(staleBanner?.textContent).toContain('获取节点详情失败 (500)')
 
-    const retryBtn = container.querySelector('[data-testid="node-detail-retry-btn"]') as HTMLButtonElement
+    const retryBtn = (document.body.querySelector('[data-testid="node-detail-retry-btn"]') || container.querySelector('[data-testid="node-detail-retry-btn"]')) as HTMLButtonElement | null
     expect(retryBtn).not.toBeNull()
-    retryBtn.click()
+    retryBtn?.click()
     await nextTick()
 
     expect(retriedId).toBe('node-test-1')

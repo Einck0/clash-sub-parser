@@ -60,7 +60,7 @@ const props = withDefaults(
     availableNodes: () => [],
     groupId: '',
     mode: 'group',
-    topologyStatus: 'idle',
+    topologyStatus: 'ready',
   }
 )
 
@@ -273,9 +273,9 @@ const activeNodes = computed(() => {
 })
 
 const availableChildGroups = computed(() => {
-  const pool = (props.allGroups && props.allGroups.length > 0)
-    ? props.allGroups
-    : candidateGroups.value
+  const pool = candidateGroups.value.length > 0
+    ? candidateGroups.value
+    : (props.allGroups || [])
   return pool.filter((g) => g.id !== props.groupId)
 })
 

@@ -50,7 +50,7 @@ const props = withDefaults(defineProps<Props>(), {
   conflictError: null,
   cycleError: null,
   serverError: null,
-  topologyStatus: 'idle',
+  topologyStatus: 'ready',
   topologyError: '',
   isTopologyStale: false,
 })

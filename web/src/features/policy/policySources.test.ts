@@ -1579,7 +1579,7 @@ describe('Feature-Level Policy Sources & Pipeline Rebuild', () => {
       const group: PolicyGroup = {
         id: 'grp-idle',
         name: 'Draft Policy Group',
-        group_type: 'url-test',
+        group_type: 'urltest',
         sources: [],
       }
 

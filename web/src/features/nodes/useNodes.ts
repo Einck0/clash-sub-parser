@@ -1,5 +1,5 @@
 import { computed, ref } from 'vue'
-import { api } from '../../api/client'
+import { api, ApiError } from '../../api/client'
 import type { NodeSourceHistoryData } from './sourceHistoryTypes'
 import {
   generateIdempotencyKey,

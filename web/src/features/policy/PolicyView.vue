@@ -95,6 +95,17 @@ function handleNextPage() {
   }
 }
 
+const retryingTopology = ref(false)
+
+async function handleRetryTopology() {
+  retryingTopology.value = true
+  try {
+    await loadAllTopologyGroups(true)
+  } finally {
+    retryingTopology.value = false
+  }
+}
+
 // Global Filter Modal State
 const globalFilterModalOpen = ref(false)
 const globalConditions = ref<FilterCondition[]>([])
@@ -497,7 +508,7 @@ onUnmounted(() => {
 
     <!-- Topology Error Alert Banner with In-Place Retry -->
     <div
-      v-if="topologyStatus === 'error'"
+      v-if="topologyStatus === 'error' || retryingTopology"
       data-testid="topology-error-banner"
       class="alert alert-warning shadow-sm flex items-center justify-between"
     >
@@ -512,11 +523,11 @@ onUnmounted(() => {
         type="button"
         data-testid="topology-retry-btn"
         class="btn btn-warning btn-xs shrink-0 gap-1"
-        :disabled="topologyStatus === 'loading'"
-        @click="loadAllTopologyGroups(true)"
+        :disabled="retryingTopology"
+        @click="handleRetryTopology"
       >
-        <ArrowPathIcon class="w-3.5 h-3.5" :class="{ 'animate-spin': topologyStatus === 'loading' }" />
-        <span>重试</span>
+        <ArrowPathIcon class="w-3.5 h-3.5" :class="{ 'animate-spin': retryingTopology }" />
+        <span>{{ retryingTopology ? '重试中...' : '重试' }}</span>
       </button>
     </div>
 

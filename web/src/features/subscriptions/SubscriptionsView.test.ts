@@ -3,8 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { setImmediate } from 'node:timers'
 import { createApp, h, nextTick } from 'vue'
 import SubscriptionsView from './SubscriptionsView.vue'
-import { api } from '../../api/client'
-import { toastStore } from '../../ui/toast'
+import { api, ApiError } from '../../api/client'
+import { toastStore, type Toast } from '../../ui/toast'
 import { setLocale } from '../../locales'
 import {
   formatRefreshTime,
@@ -1025,8 +1025,8 @@ describe('Per-Row State, Concurrency & Layout Invariants', () => {
         await nextTick()
 
         // 1. Error toast was pushed
-        expect(toastStore.toasts.length).toBeGreaterThan(0)
-        expect(toastStore.toasts.some((t) => t.tone === 'error' && t.message.includes('Database write lock timeout'))).toBe(true)
+        expect(toastStore.items.value.length).toBeGreaterThan(0)
+        expect(toastStore.items.value.some((t: Toast) => t.tone === 'error' && t.message.includes('Database write lock timeout'))).toBe(true)
 
         // 2. Modal REMAINS OPEN with pending object message intact
         const dialogEl = document.querySelector('dialog') as HTMLDialogElement | null
@@ -1076,10 +1076,10 @@ describe('Per-Row State, Concurrency & Layout Invariants', () => {
         await nextTick()
 
         // 1. Success toast was pushed for delete mutation
-        expect(toastStore.toasts.some((t) => t.tone === 'success' && t.message.includes('订阅源已删除'))).toBe(true)
+        expect(toastStore.items.value.some((t: Toast) => t.tone === 'success' && t.message.includes('订阅源已删除'))).toBe(true)
 
         // 2. Warning toast pushed for subsequent reload failure (not calling DELETE failed)
-        expect(toastStore.toasts.some((t) => t.tone === 'warning' && t.message.includes('刷新列表失败'))).toBe(true)
+        expect(toastStore.items.value.some((t: Toast) => t.tone === 'warning' && t.message.includes('刷新列表失败'))).toBe(true)
 
         // 3. Modal is CLOSED and does NOT induce repeated DELETE
         const modalMsg = document.querySelector('[data-testid="confirm-modal-message"]')
@@ -1121,8 +1121,8 @@ describe('Per-Row State, Concurrency & Layout Invariants', () => {
       expect(hook.error.value).toBe('Database connection refused')
 
       // 3. Toasts: both success (for deletion) and warning (for reload failure) were published
-      expect(toastStore.toasts.some((t) => t.tone === 'success' && t.message.includes('订阅源已删除'))).toBe(true)
-      expect(toastStore.toasts.some((t) => t.tone === 'warning' && t.message.includes('订阅源已删除，但刷新列表失败: Database connection refused'))).toBe(true)
+      expect(toastStore.items.value.some((t: Toast) => t.tone === 'success' && t.message.includes('订阅源已删除'))).toBe(true)
+      expect(toastStore.items.value.some((t: Toast) => t.tone === 'warning' && t.message.includes('订阅源已删除，但刷新列表失败: Database connection refused'))).toBe(true)
     })
   })
 })

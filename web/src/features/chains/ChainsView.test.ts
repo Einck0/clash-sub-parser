@@ -82,6 +82,18 @@ describe('ChainsView component', () => {
   }
 
   beforeEach(() => {
+    if (typeof HTMLDialogElement !== 'undefined') {
+      HTMLDialogElement.prototype.showModal = function (this: HTMLDialogElement) {
+        this.setAttribute('open', '')
+        Object.defineProperty(this, 'open', { value: true, writable: true, configurable: true })
+      }
+      HTMLDialogElement.prototype.close = function (this: HTMLDialogElement) {
+        this.removeAttribute('open')
+        Object.defineProperty(this, 'open', { value: false, writable: true, configurable: true })
+        this.dispatchEvent(new Event('close'))
+      }
+    }
+
     container = document.createElement('div')
     document.body.appendChild(container)
 

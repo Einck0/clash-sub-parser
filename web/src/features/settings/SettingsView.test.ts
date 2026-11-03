@@ -315,6 +315,7 @@ describe('SettingsView Component', () => {
     )
 
     mountSettings()
+    await router.isReady()
     await nextTick()
 
     const dnsCard = container.querySelector('[data-testid="settings-dns-card"]')
@@ -325,7 +326,11 @@ describe('SettingsView Component', () => {
     expect(jumpBtn).toBeTruthy()
     expect(jumpBtn.textContent).toContain('前往 DNS 配置')
 
+    const pushSpy = vi.spyOn(router, 'push')
     jumpBtn.click()
+    expect(pushSpy).toHaveBeenCalledWith('/dns')
+    await pushSpy.mock.results[0]?.value
+    await router.isReady()
     await nextTick()
     expect(window.location.hash).toContain('/dns')
   })

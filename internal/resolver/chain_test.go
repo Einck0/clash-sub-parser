@@ -2,7 +2,6 @@ package resolver_test
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"clash-sub-parser/internal/domain"

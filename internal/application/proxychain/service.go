@@ -75,7 +75,7 @@ func (s *Service) SetInputProvider(provider ResolveInputProvider) {
 	s.inputProvider = provider
 }
 
-func (s *Service) recordAudit(ctx context.Context, actorKind domain.ActorKind, requestID, action, result, summary string) {
+func (s *Service) recordAudit(ctx context.Context, actorKind domain.ActorKind, requestID, action string, result domain.AuditResult, summary string) {
 	if s.auditRepo == nil {
 		return
 	}

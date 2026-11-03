@@ -44,7 +44,7 @@ func (d *dummyNodeSourceRepo) ListByNodes(ctx context.Context, logicalIDs []stri
 	res := make(map[string][]domain.NodeSource, len(logicalIDs))
 	for _, id := range logicalIDs {
 		res[id] = []domain.NodeSource{
-			{SubscriptionID: "sub-1", LogicalID: id},
+			{SubscriptionID: "sub-1", NodeLogicalID: id},
 		}
 	}
 	return res, nil

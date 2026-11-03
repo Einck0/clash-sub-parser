@@ -336,9 +336,11 @@ func TestService_Update_Lifecycle(t *testing.T) {
 		testSSNode(n2ID, "Node 2", "1.1.1.2", 8388),
 		testSSNode(n3ID, "Node 3", "1.1.1.3", 8388),
 	}
+	g1ID := "018f0000-0000-7000-8000-000000000001"
+	g2ID := "018f0000-0000-7000-8000-000000000002"
 	groups := []domain.NodeGroup{
 		{
-			ID:        "g1",
+			ID:        g1ID,
 			Name:      "Group 1",
 			GroupType: domain.GroupTypeSelect,
 			Sources: []domain.MemberSource{
@@ -351,7 +353,7 @@ func TestService_Update_Lifecycle(t *testing.T) {
 			},
 		},
 		{
-			ID:        "g2",
+			ID:        g2ID,
 			Name:      "Group 2",
 			GroupType: domain.GroupTypeSelect,
 			Sources: []domain.MemberSource{
@@ -428,9 +430,9 @@ func TestService_Update_Lifecycle(t *testing.T) {
 	res, err := svc.Update(ctx, "b-1", proxychain.UpdateCommand{
 		Binding: domain.ProxyChainBinding{
 			TargetType: domain.ProxyChainTargetNodeGroup,
-			TargetID:   "g1",
+			TargetID:   g1ID,
 			DialerType: domain.ProxyChainDialerNodeGroup,
-			DialerID:   "g2",
+			DialerID:   g2ID,
 			Enabled:    true,
 			SortOrder:  20,
 			Note:       "updated note",

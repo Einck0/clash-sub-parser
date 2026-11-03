@@ -3,6 +3,7 @@ package proxychain_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"clash-sub-parser/internal/application/proxychain"

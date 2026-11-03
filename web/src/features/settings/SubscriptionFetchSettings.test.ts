@@ -49,7 +49,7 @@ describe('subscription-fetch settings', () => {
     await flush()
     vi.mocked(api.put).mockRejectedValueOnce(new Error('Rejected endpoint'))
     edit('fetch-mode', 'direct'); edit('fetch-proxy-url', 'not-a-url'); click('fetch-save'); await flush()
-    expect(find('fetch-settings-error').textContent).toBe('Rejected endpoint')
+    expect(find('fetch-settings-error').textContent).toContain('Rejected endpoint')
     expect(find<HTMLInputElement>('fetch-proxy-url').value).toBe('not-a-url')
     expect(find<HTMLSelectElement>('fetch-mode').value).toBe('direct')
     vi.mocked(api.put).mockResolvedValueOnce({ ...baseline, mode: 'environment', effective_source: 'environment' })

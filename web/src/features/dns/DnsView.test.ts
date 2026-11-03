@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp, nextTick } from 'vue'
+import { createRouter, createMemoryHistory, type Router } from 'vue-router'
 import yaml from 'js-yaml'
 import { api } from '../../api/client'
+import { setLocale } from '../../locales'
 import type { DnsSettings, ValidatedDns } from './dnsTypes'
 import DnsView from './DnsView.vue'
 
@@ -40,6 +42,19 @@ const base = (overrides?: Partial<DnsSettings>): DnsSettings => ({
 
 let mountEl: HTMLDivElement
 let app: ReturnType<typeof createApp>
+let router: Router
+
+function createTestRouter(): Router {
+  return createRouter({
+    history: createMemoryHistory(),
+    routes: [
+      { path: '/settings', component: { render: () => null } },
+      { path: '/dns', component: DnsView },
+      { path: '/chains', component: { render: () => null } },
+    ],
+  })
+}
+
 const flush = async () => {
   await Promise.resolve()
   await nextTick()
@@ -50,13 +65,18 @@ function mount() {
   mountEl = document.createElement('div')
   document.body.appendChild(mountEl)
   app = createApp(DnsView)
+  app.use(router)
   app.mount(mountEl)
 }
 
 let currentSettings: DnsSettings = base()
 
 describe('DNS settings page (DnsView)', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    setLocale('zh-CN')
+    router = createTestRouter()
+    await router.push('/dns')
+    await router.isReady()
     document.body.innerHTML = ''
     currentSettings = base()
     vi.spyOn(api, 'get').mockImplementation(async () => ({ ...currentSettings }))
@@ -85,6 +105,7 @@ describe('DNS settings page (DnsView)', () => {
     app?.unmount()
     mountEl?.remove()
     document.body.innerHTML = ''
+    setLocale('zh-CN')
     vi.restoreAllMocks()
   })
 

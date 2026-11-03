@@ -30,8 +30,22 @@ function isPlainObject(val: unknown): val is Record<string, unknown> {
   return typeof val === 'object' && val !== null && !Array.isArray(val)
 }
 
+function cloneValue<T>(val: T): T {
+  if (val === null || typeof val !== 'object') {
+    return val
+  }
+  if (Array.isArray(val)) {
+    return val.map(cloneValue) as unknown as T
+  }
+  const result: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(val as Record<string, unknown>)) {
+    result[k] = cloneValue(v)
+  }
+  return result as T
+}
+
 export function serializeDraftToYaml(draftObj: Record<string, unknown>, enabledVal: boolean): string {
-  const clone = structuredClone(draftObj)
+  const clone = cloneValue(draftObj)
   clone.enable = enabledVal
   return yaml.dump(clone, { indent: 2, lineWidth: -1, noRefs: true, sortKeys: false })
 }
@@ -175,7 +189,7 @@ export function useDnsDraft(): UseDnsDraftReturn {
       settings.value = settingsValue
       enabled.value = settingsValue.enabled
       raw.value = settingsValue.raw_yaml || serializeDraftToYaml(settingsValue.config || {}, settingsValue.enabled)
-      draft.value = structuredClone(settingsValue.config || {})
+      draft.value = cloneValue(settingsValue.config || {})
       fieldErrors.value = {}
       invalidMappingInputs.value = {}
       error.value = ''
@@ -480,7 +494,7 @@ export function useDnsDraft(): UseDnsDraftReturn {
         if (currentGen !== generation.value || currentDraftRev !== draftRevision.value) {
           return
         }
-        draft.value = structuredClone(parsed.config || {})
+        draft.value = cloneValue(parsed.config || {})
         raw.value = parsed.raw_yaml
         fieldErrors.value = {}
         invalidMappingInputs.value = {}
@@ -492,7 +506,7 @@ export function useDnsDraft(): UseDnsDraftReturn {
           return
         }
         raw.value = parsed.raw_yaml
-        draft.value = structuredClone(parsed.config || {})
+        draft.value = cloneValue(parsed.config || {})
         fieldErrors.value = {}
         invalidMappingInputs.value = {}
         draftRevision.value++

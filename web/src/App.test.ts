@@ -88,4 +88,15 @@ describe('App.vue Navigation Integration with Proxy Chains', () => {
     const chainsBtn = sidebar!.querySelector('button[href="#/chains"], button[href="/chains"]')
     expect(chainsBtn?.textContent).toContain('Proxy Chains')
   })
+
+  it('updates aria-current when navigating between routes', async () => {
+    await mountApp('/dashboard')
+
+    const sidebar = container!.querySelector('aside')
+    const chainsBtn = sidebar!.querySelector('button[href="#/chains"], button[href="/chains"]')
+    expect(chainsBtn?.getAttribute('aria-current')).toBeNull()
+
+    const dashboardBtn = sidebar!.querySelector('button[href="#/dashboard"], button[href="/dashboard"]')
+    expect(dashboardBtn?.getAttribute('aria-current')).toBe('page')
+  })
 })

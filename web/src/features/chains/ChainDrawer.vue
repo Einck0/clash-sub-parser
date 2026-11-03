@@ -164,10 +164,10 @@ async function handleSaveClick() {
     :title="drawerTitle"
     :description="drawerDesc"
     width-class="md:max-w-xl"
-    data-testid="chain-drawer"
+    @update:model-value="(val: boolean) => { if (!val) $emit('close') }"
     @close="$emit('close')"
   >
-    <div class="space-y-5">
+    <div class="space-y-5" data-testid="chain-drawer">
       <!-- 409 Conflict Banner -->
       <div
         v-if="conflictState"

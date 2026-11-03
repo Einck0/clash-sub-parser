@@ -91,6 +91,12 @@ describe('ChainsView component', () => {
       if (path === '/api/v1/proxy-chains/effects') return { ...mockEffects }
       return {}
     })
+
+    vi.spyOn(api, 'post').mockImplementation(async (path: string) => {
+      if (path === '/api/v1/proxy-chains/preview') return { ...mockEffects }
+      if (path === '/api/v1/proxy-chains') return { binding: mockConfig.bindings[0], version: 'config-ver-sha256-111' }
+      return {}
+    })
   })
 
   afterEach(() => {
@@ -177,6 +183,19 @@ describe('ChainsView component', () => {
     expect(newBtn).toBeTruthy()
 
     newBtn.click()
+    await nextTick()
+
+    const drawer = document.body.querySelector('[data-testid="chain-drawer"]')
+    expect(drawer).toBeTruthy()
+  })
+
+  it('opens drawer on edit button click and populates draft', async () => {
+    await mountView()
+
+    const editBtn = container.querySelector('[data-testid="chain-edit-btn-chain-binding-1"]') as HTMLButtonElement
+    expect(editBtn).toBeTruthy()
+
+    editBtn.click()
     await nextTick()
 
     const drawer = document.body.querySelector('[data-testid="chain-drawer"]')

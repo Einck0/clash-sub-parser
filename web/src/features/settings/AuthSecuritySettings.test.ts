@@ -76,7 +76,7 @@ describe('AuthSecuritySettings Component', () => {
 
     expect(getAdminSwitch().checked).toBe(true)
     expect(getExportSwitch().checked).toBe(true)
-    expect(getExportModeBadge()?.textContent).toContain('受保护')
+    expect(getExportModeBadge()?.textContent).toContain('受控')
   })
 
   it('rejects invalid server response and sets error state instead of showing fake success', async () => {

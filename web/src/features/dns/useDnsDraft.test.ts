@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import yaml from 'js-yaml'
 import { api } from '../../api/client'
+import { setLocale } from '../../locales'
 import { useDnsDraft, serializeDraftToYaml } from './useDnsDraft'
 import type { DnsSettings } from './dnsTypes'
 
@@ -43,6 +44,7 @@ describe('useDnsDraft', () => {
   let mockSettings: DnsSettings
 
   beforeEach(() => {
+    setLocale('zh-CN')
     mockSettings = createMockSettings()
     vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
       if (path === '/api/v1/settings/dns') {
@@ -80,6 +82,7 @@ describe('useDnsDraft', () => {
   })
 
   afterEach(() => {
+    setLocale('zh-CN')
     vi.restoreAllMocks()
   })
 

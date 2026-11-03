@@ -380,6 +380,7 @@ onUnmounted(() => {
             <button
               :href="href"
               type="button"
+              :aria-current="(isActive || isItemActive(item)) ? 'page' : undefined"
               @click="handleNavigation(item.id, item.path)"
               class="w-full flex items-center gap-3 rounded-lg text-sm font-medium transition-colors cursor-pointer"
               :class="[
@@ -596,6 +597,7 @@ onUnmounted(() => {
             <button
               :href="href"
               type="button"
+              :aria-current="(isActive || isItemActive(item)) ? 'page' : undefined"
               :data-testid="`dock-link-${item.id}`"
               @click="handleNavigation(item.id, item.path)"
               class="flex flex-col items-center justify-center py-1.5 px-1 rounded-xl text-[10px] sm:text-xs font-medium transition-all duration-150 touch-manipulation select-none active:scale-95 cursor-pointer"
@@ -664,6 +666,7 @@ onUnmounted(() => {
                   <button
                     :href="href"
                     type="button"
+                    :aria-current="(isActive || isItemActive(item)) ? 'page' : undefined"
                     :data-testid="`dock-link-${item.id}`"
                     @click="handleNavigation(item.id, item.path)"
                     class="flex items-center gap-2.5 p-2.5 rounded-xl text-xs font-medium transition-colors text-left w-full cursor-pointer"

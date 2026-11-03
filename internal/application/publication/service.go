@@ -44,6 +44,7 @@ type Service struct {
 	factsLoader    domain.ConsistentFactsLoader
 	dnsRepo        domain.DNSSettingsRepository
 	chainRepo      domain.ProxyChainRepository
+	chainSubRepo   domain.SubscriptionRepository
 	concurrencySem chan struct{}
 }
 
@@ -162,6 +163,13 @@ func WithProxyChainRepository(repo domain.ProxyChainRepository) Option {
 	}
 }
 
+// WithChainSubscriptionRepository sets the subscription repository used to validate chain targets.
+func WithChainSubscriptionRepository(repo domain.SubscriptionRepository) Option {
+	return func(s *Service) {
+		s.chainSubRepo = repo
+	}
+}
+
 // WithConcurrencyLimit sets the bounded concurrency for live artifact compilation.
 func WithConcurrencyLimit(limit int) Option {
 	return func(s *Service) {
@@ -199,6 +207,16 @@ func (s *Service) SetConsistentFactsLoader(loader domain.ConsistentFactsLoader) 
 // SetDNSSettingsRepository allows dynamic configuration of the DNS settings repository.
 func (s *Service) SetDNSSettingsRepository(repo domain.DNSSettingsRepository) {
 	s.dnsRepo = repo
+}
+
+// SetProxyChainRepository allows dynamic configuration of the proxy chain repository.
+func (s *Service) SetProxyChainRepository(repo domain.ProxyChainRepository) {
+	s.chainRepo = repo
+}
+
+// SetChainSubscriptionRepository allows dynamic configuration of the chain subscription repository.
+func (s *Service) SetChainSubscriptionRepository(repo domain.SubscriptionRepository) {
+	s.chainSubRepo = repo
 }
 
 // NewService constructs a new publication application service.
@@ -949,7 +967,6 @@ func (s *Service) assembleResolveInput(ctx context.Context, revisionID string, i
 	}
 
 	var chainBindings []domain.ProxyChainBinding
-	needsChainSources := false
 	if s.chainRepo != nil {
 		chainCfg, err := s.chainRepo.Get(ctx)
 		if err != nil {
@@ -959,25 +976,42 @@ func (s *Service) assembleResolveInput(ctx context.Context, revisionID string, i
 			chainBindings = chainCfg.Bindings
 			for _, b := range chainBindings {
 				if b.Enabled && b.TargetType == domain.ProxyChainTargetSubscription {
-					needsChainSources = true
-					break
+					if s.chainSubRepo == nil {
+						return nil, domain.NewInternalError("subscription_repository_unavailable", "subscription repository required for enabled subscription target validation")
+					}
+					sub, sErr := s.chainSubRepo.GetByID(ctx, b.TargetID)
+					if sErr != nil {
+						if errors.Is(sErr, context.Canceled) || errors.Is(sErr, context.DeadlineExceeded) {
+							return nil, sErr
+						}
+						if domErr, ok := domain.AsDomainError(sErr); ok && domErr.Category != domain.CategoryNotFound {
+							return nil, sErr
+						}
+						return nil, domain.NewValidationError("chain_reference_missing", fmt.Sprintf("target subscription %q not found", b.TargetID))
+					}
+					if sub == nil {
+						return nil, domain.NewValidationError("chain_reference_missing", fmt.Sprintf("target subscription %q not found", b.TargetID))
+					}
+					if !sub.Enabled {
+						return nil, domain.NewValidationError("chain_reference_missing", fmt.Sprintf("target subscription %q is disabled", b.TargetID))
+					}
 				}
 			}
 		}
 	}
 
 	needsSources, needsObservations := filterDependencies(globalFilter, groupFilters, groups)
-	if needsChainSources {
+	if s.chainRepo != nil && includeGraph {
 		needsSources = true
 	}
 	var nodeSources map[string][]domain.NodeSource
 	if needsSources && s.sourceRepo == nil {
-		return nil, domain.NewInternalError("node_sources_unavailable", "node sources required by configured filter are unavailable")
+		return nil, domain.NewInternalError("node_sources_unavailable", "node sources required by configured filter or proxy chain are unavailable")
 	}
 	if needsSources && s.sourceRepo != nil && len(nodeIDs) > 0 {
 		nodeSources, err = s.sourceRepo.ListByNodes(ctx, nodeIDs)
 		if err != nil {
-			return nil, domain.NewInternalError("node_sources_unavailable", "failed to read node sources for configured filter")
+			return nil, domain.NewInternalError("node_sources_unavailable", "failed to read node sources for configured filter or proxy chain")
 		}
 	}
 

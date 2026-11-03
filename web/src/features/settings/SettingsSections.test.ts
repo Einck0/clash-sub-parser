@@ -109,6 +109,6 @@ describe('SettingsSections Component', () => {
 
   it('has non-overflow responsive flex-wrap layout', () => {
     const { getNav } = mountSections('csp')
-    expect(getNav.className).toContain('flex-wrap')
+    expect(getNav().className).toContain('flex-wrap')
   })
 })

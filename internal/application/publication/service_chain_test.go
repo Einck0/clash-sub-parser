@@ -62,6 +62,59 @@ func (d *dummyNodeSourceRepo) DeleteBySubscriptionAndFetch(ctx context.Context, 
 	return nil
 }
 
+type dummySubscriptionRepo struct {
+	subs map[string]*domain.Subscription
+}
+
+func newDummySubscriptionRepo(subs []*domain.Subscription) *dummySubscriptionRepo {
+	m := &dummySubscriptionRepo{
+		subs: make(map[string]*domain.Subscription),
+	}
+	for _, s := range subs {
+		sCopy := *s
+		m.subs[s.ID] = &sCopy
+	}
+	return m
+}
+
+func (d *dummySubscriptionRepo) GetByID(ctx context.Context, id string) (*domain.Subscription, error) {
+	sub, ok := d.subs[id]
+	if !ok {
+		return nil, domain.NewNotFoundError("subscription_not_found", "subscription not found")
+	}
+	subCopy := *sub
+	return &subCopy, nil
+}
+
+func (d *dummySubscriptionRepo) GetPrimary(ctx context.Context) (*domain.Subscription, error) {
+	return nil, domain.NewNotFoundError("subscription_not_found", "no primary subscription")
+}
+
+func (d *dummySubscriptionRepo) List(ctx context.Context, filter domain.SubscriptionFilter) ([]domain.Subscription, int, error) {
+	res := make([]domain.Subscription, 0, len(d.subs))
+	for _, s := range d.subs {
+		res = append(res, *s)
+	}
+	return res, len(res), nil
+}
+
+func (d *dummySubscriptionRepo) Create(ctx context.Context, sub *domain.Subscription) error {
+	sCopy := *sub
+	d.subs[sub.ID] = &sCopy
+	return nil
+}
+
+func (d *dummySubscriptionRepo) Update(ctx context.Context, sub *domain.Subscription) error {
+	sCopy := *sub
+	d.subs[sub.ID] = &sCopy
+	return nil
+}
+
+func (d *dummySubscriptionRepo) Delete(ctx context.Context, id string) error {
+	delete(d.subs, id)
+	return nil
+}
+
 func TestPublication_WithProxyChainRepository_LoadsBindingsAndSources(t *testing.T) {
 	ctx := context.Background()
 
@@ -75,6 +128,9 @@ func TestPublication_WithProxyChainRepository_LoadsBindingsAndSources(t *testing
 		},
 	}
 	sourceRepo := &dummyNodeSourceRepo{}
+	subRepo := newDummySubscriptionRepo([]*domain.Subscription{
+		{ID: "sub-1", Name: "Sub 1", Enabled: true},
+	})
 	chainRepo := &dummyChainRepo{
 		config: &domain.ProxyChainConfig{
 			Bindings: []domain.ProxyChainBinding{
@@ -101,6 +157,7 @@ func TestPublication_WithProxyChainRepository_LoadsBindingsAndSources(t *testing
 		publication.WithNodeRepository(nodeRepo),
 		publication.WithNodeSourceRepository(sourceRepo),
 		publication.WithProxyChainRepository(chainRepo),
+		publication.WithChainSubscriptionRepository(subRepo),
 		publication.WithResolver(&mockResolver{}),
 	)
 
@@ -178,5 +235,226 @@ func TestPublication_ResolveTargetSnapshot_RejectsNonMihomoWithActiveChain(t *te
 	})
 	if err != nil {
 		t.Fatalf("unexpected Publish failure with disabled chain: %v", err)
+	}
+}
+
+func TestPublication_AssembleResolveInput_ValidatesTargetSubscription(t *testing.T) {
+	ctx := context.Background()
+
+	polRepo := &mockPolicyRepo{}
+	revRepo := &mockRevisionRepo{
+		active: &domain.ConfigurationRevision{ID: "rev-1", State: domain.RevisionStateActive},
+	}
+	nodeRepo := &mockNodeRepo{
+		nodes: []domain.Node{
+			{LogicalID: "node-1", DisplayName: "Node 1", Active: true},
+		},
+	}
+	sourceRepo := &dummyNodeSourceRepo{}
+
+	// 1. Missing subscription rejected with 422 chain_reference_missing
+	chainRepoMissing := &dummyChainRepo{
+		config: &domain.ProxyChainConfig{
+			Bindings: []domain.ProxyChainBinding{
+				{
+					ID:         "b-sub",
+					TargetType: domain.ProxyChainTargetSubscription,
+					TargetID:   "sub-missing",
+					DialerType: domain.ProxyChainDialerNode,
+					DialerID:   "node-2",
+					Enabled:    true,
+				},
+			},
+			Version: "v1",
+		},
+	}
+	subRepo := newDummySubscriptionRepo([]*domain.Subscription{
+		{ID: "sub-disabled", Name: "Sub Disabled", Enabled: false},
+	})
+	svcMissing := publication.NewService(
+		&mockPubRepo{},
+		&mockAuditRepo{},
+		publication.WithPolicyRepository(polRepo),
+		publication.WithRevisionRepository(revRepo),
+		publication.WithNodeRepository(nodeRepo),
+		publication.WithNodeSourceRepository(sourceRepo),
+		publication.WithProxyChainRepository(chainRepoMissing),
+		publication.WithChainSubscriptionRepository(subRepo),
+		publication.WithResolver(&mockResolver{}),
+	)
+	_, err := svcMissing.AssembleResolveInput(ctx, "")
+	if err == nil {
+		t.Fatal("expected AssembleResolveInput to reject missing target subscription")
+	}
+	domErr, ok := domain.AsDomainError(err)
+	if !ok || domErr.Code != "chain_reference_missing" {
+		t.Fatalf("expected chain_reference_missing, got: %v", err)
+	}
+
+	// 2. Disabled subscription rejected with 422 chain_reference_missing
+	chainRepoDisabled := &dummyChainRepo{
+		config: &domain.ProxyChainConfig{
+			Bindings: []domain.ProxyChainBinding{
+				{
+					ID:         "b-sub",
+					TargetType: domain.ProxyChainTargetSubscription,
+					TargetID:   "sub-disabled",
+					DialerType: domain.ProxyChainDialerNode,
+					DialerID:   "node-2",
+					Enabled:    true,
+				},
+			},
+			Version: "v1",
+		},
+	}
+	svcDisabled := publication.NewService(
+		&mockPubRepo{},
+		&mockAuditRepo{},
+		publication.WithPolicyRepository(polRepo),
+		publication.WithRevisionRepository(revRepo),
+		publication.WithNodeRepository(nodeRepo),
+		publication.WithNodeSourceRepository(sourceRepo),
+		publication.WithProxyChainRepository(chainRepoDisabled),
+		publication.WithChainSubscriptionRepository(subRepo),
+		publication.WithResolver(&mockResolver{}),
+	)
+	_, err = svcDisabled.AssembleResolveInput(ctx, "")
+	if err == nil {
+		t.Fatal("expected AssembleResolveInput to reject disabled target subscription")
+	}
+	domErr, ok = domain.AsDomainError(err)
+	if !ok || domErr.Code != "chain_reference_missing" {
+		t.Fatalf("expected chain_reference_missing, got: %v", err)
+	}
+
+	// 3. Disabled binding targeting missing or disabled subscription allowed
+	chainRepoDisabledBinding := &dummyChainRepo{
+		config: &domain.ProxyChainConfig{
+			Bindings: []domain.ProxyChainBinding{
+				{
+					ID:         "b-sub-missing-but-disabled",
+					TargetType: domain.ProxyChainTargetSubscription,
+					TargetID:   "sub-missing",
+					DialerType: domain.ProxyChainDialerNode,
+					DialerID:   "node-2",
+					Enabled:    false,
+				},
+				{
+					ID:         "b-sub-disabled-and-binding-disabled",
+					TargetType: domain.ProxyChainTargetSubscription,
+					TargetID:   "sub-disabled",
+					DialerType: domain.ProxyChainDialerNode,
+					DialerID:   "node-2",
+					Enabled:    false,
+				},
+			},
+			Version: "v1",
+		},
+	}
+	svcDisabledBinding := publication.NewService(
+		&mockPubRepo{},
+		&mockAuditRepo{},
+		publication.WithPolicyRepository(polRepo),
+		publication.WithRevisionRepository(revRepo),
+		publication.WithNodeRepository(nodeRepo),
+		publication.WithNodeSourceRepository(sourceRepo),
+		publication.WithProxyChainRepository(chainRepoDisabledBinding),
+		publication.WithChainSubscriptionRepository(subRepo),
+		publication.WithResolver(&mockResolver{}),
+	)
+	input, err := svcDisabledBinding.AssembleResolveInput(ctx, "")
+	if err != nil {
+		t.Fatalf("unexpected error for disabled bindings: %v", err)
+	}
+	if len(input.ChainBindings) != 2 {
+		t.Fatalf("expected 2 chain bindings, got %d", len(input.ChainBindings))
+	}
+
+	// 4. Missing chainSubRepo when enabled subscription binding exists fails with internal error
+	svcNoSubRepo := publication.NewService(
+		&mockPubRepo{},
+		&mockAuditRepo{},
+		publication.WithPolicyRepository(polRepo),
+		publication.WithRevisionRepository(revRepo),
+		publication.WithNodeRepository(nodeRepo),
+		publication.WithNodeSourceRepository(sourceRepo),
+		publication.WithProxyChainRepository(chainRepoMissing),
+		publication.WithResolver(&mockResolver{}),
+	)
+	_, err = svcNoSubRepo.AssembleResolveInput(ctx, "")
+	if err == nil {
+		t.Fatal("expected error when chainSubRepo is nil but enabled subscription binding exists")
+	}
+	domErr, ok = domain.AsDomainError(err)
+	if !ok || domErr.Code != "subscription_repository_unavailable" {
+		t.Fatalf("expected subscription_repository_unavailable, got: %v", err)
+	}
+}
+
+func TestPublication_AssembleResolveInput_LoadsNodeSourcesWhenChainRepoConfiguredEvenIfNoBindingsInDB(t *testing.T) {
+	ctx := context.Background()
+
+	polRepo := &mockPolicyRepo{}
+	revRepo := &mockRevisionRepo{
+		active: &domain.ConfigurationRevision{ID: "rev-1", State: domain.RevisionStateActive},
+	}
+	nodeRepo := &mockNodeRepo{
+		nodes: []domain.Node{
+			{LogicalID: "node-1", DisplayName: "Node 1", Active: true},
+		},
+	}
+	sourceRepo := &dummyNodeSourceRepo{}
+	// Empty chain repo in database (no bindings yet)
+	emptyChainRepo := &dummyChainRepo{
+		config: &domain.ProxyChainConfig{
+			Bindings: []domain.ProxyChainBinding{},
+			Version:  "v-empty",
+		},
+	}
+
+	svc := publication.NewService(
+		&mockPubRepo{},
+		&mockAuditRepo{},
+		publication.WithPolicyRepository(polRepo),
+		publication.WithRevisionRepository(revRepo),
+		publication.WithNodeRepository(nodeRepo),
+		publication.WithNodeSourceRepository(sourceRepo),
+		publication.WithProxyChainRepository(emptyChainRepo),
+		publication.WithResolver(&mockResolver{}),
+	)
+
+	// AssembleResolveInput with includeGraph=true loads NodeSources from sourceRepo
+	input, err := svc.AssembleResolveInput(ctx, "")
+	if err != nil {
+		t.Fatalf("AssembleResolveInput failed: %v", err)
+	}
+	if !sourceRepo.listByNodesCalled {
+		t.Fatal("expected NodeSources to be loaded when chainRepo is configured and includeGraph is true, even with 0 saved bindings")
+	}
+	if input.NodeSources == nil || len(input.NodeSources["node-1"]) == 0 {
+		t.Fatalf("expected populated NodeSources in resolve input: %v", input.NodeSources)
+	}
+
+	// Pure-node target export (includeGraph=false) does not require sourceRepo
+	sourceRepoNoCall := &dummyNodeSourceRepo{}
+	svcNoSource := publication.NewService(
+		&mockPubRepo{},
+		&mockAuditRepo{},
+		publication.WithPolicyRepository(polRepo),
+		publication.WithRevisionRepository(revRepo),
+		publication.WithNodeRepository(nodeRepo),
+		publication.WithNodeSourceRepository(sourceRepoNoCall),
+		publication.WithProxyChainRepository(emptyChainRepo),
+		publication.WithResolver(&mockResolver{}),
+	)
+	_, err = svcNoSource.Publish(ctx, publication.PublishCommand{
+		Target:    domain.TargetSingBox,
+		ActorKind: domain.ActorKindAdmin,
+	})
+	if err != nil {
+		t.Fatalf("unexpected Publish failure for pure-node target: %v", err)
+	}
+	if sourceRepoNoCall.listByNodesCalled {
+		t.Fatal("expected pure-node export (includeGraph=false) not to load NodeSources when no filter requires it")
 	}
 }

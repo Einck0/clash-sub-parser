@@ -204,6 +204,7 @@ func makeApplicationServices(ctx context.Context, db *sql.DB, opts appServiceOpt
 		publication.WithConsistentFactsLoader(factsLoader),
 		publication.WithDNSSettingsRepository(dnsRepo),
 		publication.WithProxyChainRepository(chainRepo),
+		publication.WithChainSubscriptionRepository(subRepo),
 	}
 	pubService := publication.NewService(
 		pubRepo,

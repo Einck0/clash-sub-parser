@@ -2,6 +2,7 @@ package proxychain
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -121,6 +122,34 @@ func mapSnapshotToEffects(version string, snap *resolver.ResolvedPolicySnapshot)
 	return res
 }
 
+func (s *Service) validateEnabledSubscriptionBindings(ctx context.Context, bindings []domain.ProxyChainBinding) error {
+	for _, b := range bindings {
+		if !b.Enabled || b.TargetType != domain.ProxyChainTargetSubscription {
+			continue
+		}
+		if s.subRepo == nil {
+			return domain.NewInternalError("subscription_repository_unavailable", "subscription repository required for enabled subscription target validation")
+		}
+		sub, err := s.subRepo.GetByID(ctx, b.TargetID)
+		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return err
+			}
+			if domErr, ok := domain.AsDomainError(err); ok && domErr.Category != domain.CategoryNotFound {
+				return err
+			}
+			return domain.NewValidationError("chain_reference_missing", fmt.Sprintf("target subscription %q not found", b.TargetID))
+		}
+		if sub == nil {
+			return domain.NewValidationError("chain_reference_missing", fmt.Sprintf("target subscription %q not found", b.TargetID))
+		}
+		if !sub.Enabled {
+			return domain.NewValidationError("chain_reference_missing", fmt.Sprintf("target subscription %q is disabled", b.TargetID))
+		}
+	}
+	return nil
+}
+
 // Get returns the current persisted proxy chain configuration.
 func (s *Service) Get(ctx context.Context) (*domain.ProxyChainConfig, error) {
 	return s.repo.Get(ctx)
@@ -224,6 +253,10 @@ func (s *Service) Effects(ctx context.Context) (*EffectsResult, error) {
 		return nil, err
 	}
 
+	if err := s.validateEnabledSubscriptionBindings(ctx, currentConfig.Bindings); err != nil {
+		return nil, err
+	}
+
 	baseInput, err := s.inputProvider(ctx)
 	if err != nil {
 		return nil, err
@@ -279,6 +312,10 @@ func (s *Service) Preview(ctx context.Context, cmd PreviewCommand) (*EffectsResu
 		candidateBindings = append(candidateBindings, candidate)
 	}
 
+	if err := s.validateEnabledSubscriptionBindings(ctx, candidateBindings); err != nil {
+		return nil, err
+	}
+
 	input := *baseInput
 	input.ChainBindings = candidateBindings
 
@@ -316,6 +353,10 @@ func (s *Service) Create(ctx context.Context, cmd CreateCommand) (*CreateResult,
 
 	candidateBindings := append([]domain.ProxyChainBinding(nil), currentConfig.Bindings...)
 	candidateBindings = append(candidateBindings, cmd.Binding)
+
+	if err := s.validateEnabledSubscriptionBindings(ctx, candidateBindings); err != nil {
+		return nil, err
+	}
 
 	// Validate candidate resolution before write
 	if s.inputProvider != nil {
@@ -390,6 +431,10 @@ func (s *Service) Update(ctx context.Context, id string, cmd UpdateCommand) (*Up
 	copy(candidateBindings, currentConfig.Bindings)
 	candidateBindings[existingIndex] = updatedBinding
 
+	if err := s.validateEnabledSubscriptionBindings(ctx, candidateBindings); err != nil {
+		return nil, err
+	}
+
 	// Validate candidate resolution before write
 	if s.inputProvider != nil {
 		baseInput, err := s.inputProvider(ctx)
@@ -448,6 +493,10 @@ func (s *Service) Delete(ctx context.Context, id string, cmd DeleteCommand) (*De
 		conflict := domain.NewConflictError("proxy_chain_conflict", fmt.Sprintf("chain binding revision mismatch: expected %d, got %d", cmd.ExpectedRevision, existing.Revision))
 		conflict.CurrentRevision = &existing.Revision
 		return nil, conflict
+	}
+
+	if err := s.validateEnabledSubscriptionBindings(ctx, candidateBindings); err != nil {
+		return nil, err
 	}
 
 	// Deleting a higher-priority binding which exposes an unsafe lower binding must fail 422

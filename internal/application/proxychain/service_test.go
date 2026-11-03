@@ -456,5 +456,371 @@ func TestService_Delete_UnsafeLowerExposureRejection(t *testing.T) {
 	}
 }
 
+// mockSubscriptionRepo implements domain.SubscriptionRepository in memory.
+type mockSubscriptionRepo struct {
+	subs map[string]*domain.Subscription
+}
+
+func newMockSubscriptionRepo(subs []*domain.Subscription) *mockSubscriptionRepo {
+	m := &mockSubscriptionRepo{
+		subs: make(map[string]*domain.Subscription),
+	}
+	for _, s := range subs {
+		sCopy := *s
+		m.subs[s.ID] = &sCopy
+	}
+	return m
+}
+
+func (m *mockSubscriptionRepo) GetByID(ctx context.Context, id string) (*domain.Subscription, error) {
+	sub, ok := m.subs[id]
+	if !ok {
+		return nil, domain.NewNotFoundError("subscription_not_found", "subscription not found")
+	}
+	subCopy := *sub
+	return &subCopy, nil
+}
+
+func (m *mockSubscriptionRepo) GetPrimary(ctx context.Context) (*domain.Subscription, error) {
+	return nil, domain.NewNotFoundError("subscription_not_found", "no primary subscription")
+}
+
+func (m *mockSubscriptionRepo) List(ctx context.Context, filter domain.SubscriptionFilter) ([]domain.Subscription, int, error) {
+	res := make([]domain.Subscription, 0, len(m.subs))
+	for _, s := range m.subs {
+		res = append(res, *s)
+	}
+	return res, len(res), nil
+}
+
+func (m *mockSubscriptionRepo) Create(ctx context.Context, sub *domain.Subscription) error {
+	sCopy := *sub
+	m.subs[sub.ID] = &sCopy
+	return nil
+}
+
+func (m *mockSubscriptionRepo) Update(ctx context.Context, sub *domain.Subscription) error {
+	sCopy := *sub
+	m.subs[sub.ID] = &sCopy
+	return nil
+}
+
+func (m *mockSubscriptionRepo) Delete(ctx context.Context, id string) error {
+	delete(m.subs, id)
+	return nil
+}
+
+var _ domain.SubscriptionRepository = (*mockSubscriptionRepo)(nil)
+
 // Ensure unused error imports don't trigger compile errors
 var _ = errors.New
+
+func TestService_SubscriptionTarget_MissingAndDisabledRejection(t *testing.T) {
+	ctx := context.Background()
+	repo := newMockProxyChainRepo([]domain.ProxyChainBinding{
+		{
+			ID:         "b-existing",
+			TargetType: domain.ProxyChainTargetNode,
+			TargetID:   "n1",
+			DialerType: domain.ProxyChainDialerNode,
+			DialerID:   "n2",
+			Enabled:    true,
+			SortOrder:  1,
+			Revision:   1,
+		},
+	})
+	subRepo := newMockSubscriptionRepo([]*domain.Subscription{
+		{ID: "sub-disabled", Name: "Disabled Sub", Enabled: false},
+	})
+	res := &mockResolver{}
+
+	svc := proxychain.NewService(repo, nil, nil, subRepo, proxychain.WithResolver(res))
+	svc.SetInputProvider(func(ctx context.Context) (*resolver.ResolveInput, error) {
+		return &resolver.ResolveInput{}, nil
+	})
+
+	// 1. Preview with missing subscription -> 422 chain_reference_missing
+	_, err := svc.Preview(ctx, proxychain.PreviewCommand{
+		Binding: domain.ProxyChainBinding{
+			TargetType: domain.ProxyChainTargetSubscription,
+			TargetID:   "sub-missing",
+			DialerType: domain.ProxyChainDialerNode,
+			DialerID:   "n2",
+			Enabled:    true,
+		},
+		ConfigVersion: repo.config.Version,
+	})
+	if err == nil {
+		t.Fatal("expected Preview to reject missing target subscription")
+	}
+	domErr, ok := domain.AsDomainError(err)
+	if !ok || domErr.Code != "chain_reference_missing" {
+		t.Fatalf("expected chain_reference_missing code, got: %v", err)
+	}
+
+	// 2. Preview with disabled subscription -> 422 chain_reference_missing
+	_, err = svc.Preview(ctx, proxychain.PreviewCommand{
+		Binding: domain.ProxyChainBinding{
+			TargetType: domain.ProxyChainTargetSubscription,
+			TargetID:   "sub-disabled",
+			DialerType: domain.ProxyChainDialerNode,
+			DialerID:   "n2",
+			Enabled:    true,
+		},
+		ConfigVersion: repo.config.Version,
+	})
+	if err == nil {
+		t.Fatal("expected Preview to reject disabled target subscription")
+	}
+	domErr, ok = domain.AsDomainError(err)
+	if !ok || domErr.Code != "chain_reference_missing" {
+		t.Fatalf("expected chain_reference_missing code, got: %v", err)
+	}
+
+	// 3. Create with missing subscription -> 422 chain_reference_missing
+	_, err = svc.Create(ctx, proxychain.CreateCommand{
+		Binding: domain.ProxyChainBinding{
+			TargetType: domain.ProxyChainTargetSubscription,
+			TargetID:   "sub-missing",
+			DialerType: domain.ProxyChainDialerNode,
+			DialerID:   "n2",
+			Enabled:    true,
+		},
+		ConfigVersion: repo.config.Version,
+	})
+	if err == nil {
+		t.Fatal("expected Create to reject missing target subscription")
+	}
+	domErr, ok = domain.AsDomainError(err)
+	if !ok || domErr.Code != "chain_reference_missing" {
+		t.Fatalf("expected chain_reference_missing code, got: %v", err)
+	}
+
+	// 4. Create with disabled subscription -> 422 chain_reference_missing
+	_, err = svc.Create(ctx, proxychain.CreateCommand{
+		Binding: domain.ProxyChainBinding{
+			TargetType: domain.ProxyChainTargetSubscription,
+			TargetID:   "sub-disabled",
+			DialerType: domain.ProxyChainDialerNode,
+			DialerID:   "n2",
+			Enabled:    true,
+		},
+		ConfigVersion: repo.config.Version,
+	})
+	if err == nil {
+		t.Fatal("expected Create to reject disabled target subscription")
+	}
+	domErr, ok = domain.AsDomainError(err)
+	if !ok || domErr.Code != "chain_reference_missing" {
+		t.Fatalf("expected chain_reference_missing code, got: %v", err)
+	}
+
+	// 5. Update with missing subscription -> 422 chain_reference_missing
+	_, err = svc.Update(ctx, "b-existing", proxychain.UpdateCommand{
+		Binding: domain.ProxyChainBinding{
+			TargetType: domain.ProxyChainTargetSubscription,
+			TargetID:   "sub-missing",
+			DialerType: domain.ProxyChainDialerNode,
+			DialerID:   "n2",
+			Enabled:    true,
+		},
+		ConfigVersion:    repo.config.Version,
+		ExpectedRevision: 1,
+	})
+	if err == nil {
+		t.Fatal("expected Update to reject missing target subscription")
+	}
+	domErr, ok = domain.AsDomainError(err)
+	if !ok || domErr.Code != "chain_reference_missing" {
+		t.Fatalf("expected chain_reference_missing code, got: %v", err)
+	}
+
+	// 6. Update with disabled subscription -> 422 chain_reference_missing
+	_, err = svc.Update(ctx, "b-existing", proxychain.UpdateCommand{
+		Binding: domain.ProxyChainBinding{
+			TargetType: domain.ProxyChainTargetSubscription,
+			TargetID:   "sub-disabled",
+			DialerType: domain.ProxyChainDialerNode,
+			DialerID:   "n2",
+			Enabled:    true,
+		},
+		ConfigVersion:    repo.config.Version,
+		ExpectedRevision: 1,
+	})
+	if err == nil {
+		t.Fatal("expected Update to reject disabled target subscription")
+	}
+	domErr, ok = domain.AsDomainError(err)
+	if !ok || domErr.Code != "chain_reference_missing" {
+		t.Fatalf("expected chain_reference_missing code, got: %v", err)
+	}
+}
+
+func TestService_SubscriptionTarget_DisabledBindingAllowed(t *testing.T) {
+	ctx := context.Background()
+	repo := newMockProxyChainRepo(nil)
+	subRepo := newMockSubscriptionRepo([]*domain.Subscription{
+		{ID: "sub-disabled", Name: "Disabled Sub", Enabled: false},
+	})
+	res := &mockResolver{}
+
+	svc := proxychain.NewService(repo, nil, nil, subRepo, proxychain.WithResolver(res))
+	svc.SetInputProvider(func(ctx context.Context) (*resolver.ResolveInput, error) {
+		return &resolver.ResolveInput{}, nil
+	})
+
+	// 1. Preview with disabled binding targeting missing subscription succeeds
+	_, err := svc.Preview(ctx, proxychain.PreviewCommand{
+		Binding: domain.ProxyChainBinding{
+			TargetType: domain.ProxyChainTargetSubscription,
+			TargetID:   "sub-missing",
+			DialerType: domain.ProxyChainDialerNode,
+			DialerID:   "n2",
+			Enabled:    false,
+		},
+		ConfigVersion: repo.config.Version,
+	})
+	if err != nil {
+		t.Fatalf("expected Preview to allow disabled binding with missing subscription: %v", err)
+	}
+
+	// 2. Preview with disabled binding targeting disabled subscription succeeds
+	_, err = svc.Preview(ctx, proxychain.PreviewCommand{
+		Binding: domain.ProxyChainBinding{
+			TargetType: domain.ProxyChainTargetSubscription,
+			TargetID:   "sub-disabled",
+			DialerType: domain.ProxyChainDialerNode,
+			DialerID:   "n2",
+			Enabled:    false,
+		},
+		ConfigVersion: repo.config.Version,
+	})
+	if err != nil {
+		t.Fatalf("expected Preview to allow disabled binding with disabled subscription: %v", err)
+	}
+
+	// 3. Create with disabled binding targeting missing subscription succeeds
+	created, err := svc.Create(ctx, proxychain.CreateCommand{
+		Binding: domain.ProxyChainBinding{
+			TargetType: domain.ProxyChainTargetSubscription,
+			TargetID:   "sub-missing",
+			DialerType: domain.ProxyChainDialerNode,
+			DialerID:   "n2",
+			Enabled:    false,
+		},
+		ConfigVersion: repo.config.Version,
+	})
+	if err != nil {
+		t.Fatalf("expected Create to allow disabled binding with missing subscription: %v", err)
+	}
+	if created.Binding.ID == "" || created.Binding.Revision != 1 {
+		t.Fatalf("unexpected created binding: %+v", created.Binding)
+	}
+
+	// 4. Update disabled binding targeting disabled subscription succeeds
+	updated, err := svc.Update(ctx, created.Binding.ID, proxychain.UpdateCommand{
+		Binding: domain.ProxyChainBinding{
+			TargetType: domain.ProxyChainTargetSubscription,
+			TargetID:   "sub-disabled",
+			DialerType: domain.ProxyChainDialerNode,
+			DialerID:   "n2",
+			Enabled:    false,
+		},
+		ConfigVersion:    repo.config.Version,
+		ExpectedRevision: 1,
+	})
+	if err != nil {
+		t.Fatalf("expected Update to allow disabled binding with disabled subscription: %v", err)
+	}
+	if updated.Binding.Revision != 2 {
+		t.Fatalf("expected revision 2, got %d", updated.Binding.Revision)
+	}
+}
+
+func TestService_SubscriptionTarget_FirstSubscriptionPreviewAccuracy(t *testing.T) {
+	ctx := context.Background()
+	// Repo has 0 bindings in DB initially
+	repo := newMockProxyChainRepo(nil)
+	subRepo := newMockSubscriptionRepo([]*domain.Subscription{
+		{ID: "sub-1", Name: "Sub 1", Enabled: true},
+	})
+
+	var receivedInput resolver.ResolveInput
+	res := &mockResolver{
+		resolveFn: func(ctx context.Context, input resolver.ResolveInput) (*resolver.ResolvedPolicySnapshot, error) {
+			receivedInput = input
+			// Verify that candidate binding is present and node sources are available
+			if len(input.ChainBindings) != 1 {
+				t.Fatalf("expected 1 candidate binding in resolver input, got %d", len(input.ChainBindings))
+			}
+			if input.NodeSources == nil || len(input.NodeSources["node-1"]) == 0 {
+				t.Fatalf("expected NodeSources to be provided for first subscription preview, got: %v", input.NodeSources)
+			}
+			return &resolver.ResolvedPolicySnapshot{
+				Nodes: []resolver.ResolvedNode{
+					{
+						LogicalID:      "node-1",
+						DisplayName:    "Node 1",
+						DialerProxy:    "Jump Node",
+						ChainBindingID: input.ChainBindings[0].ID,
+						ChainSource:    string(domain.ProxyChainTargetSubscription),
+					},
+				},
+				ChainEffects: []resolver.ChainEffect{
+					{
+						BindingID:   input.ChainBindings[0].ID,
+						TargetCount: 1,
+						ChainCount:  1,
+					},
+				},
+			}, nil
+		},
+	}
+
+	svc := proxychain.NewService(repo, nil, nil, subRepo, proxychain.WithResolver(res))
+
+	// Input provider simulates publication's AssembleResolveInput which now loads NodeSources
+	// when chainRepo is configured and includeGraph is true, even if 0 bindings are saved in DB.
+	svc.SetInputProvider(func(ctx context.Context) (*resolver.ResolveInput, error) {
+		return &resolver.ResolveInput{
+			RevisionID: "rev-1",
+			NodeSources: map[string][]domain.NodeSource{
+				"node-1": {{SubscriptionID: "sub-1", LogicalID: "node-1"}},
+			},
+		}, nil
+	})
+
+	// Preview first subscription binding
+	prev, err := svc.Preview(ctx, proxychain.PreviewCommand{
+		Binding: domain.ProxyChainBinding{
+			TargetType: domain.ProxyChainTargetSubscription,
+			TargetID:   "sub-1",
+			DialerType: domain.ProxyChainDialerNode,
+			DialerID:   "node-jump",
+			Enabled:    true,
+			SortOrder:  1,
+		},
+		ConfigVersion: repo.config.Version,
+	})
+	if err != nil {
+		t.Fatalf("Preview failed: %v", err)
+	}
+
+	if len(prev.Effects) != 1 || prev.Effects[0].ChainCount != 1 {
+		t.Fatalf("expected 1 chain effect with ChainCount 1, got: %v", prev.Effects)
+	}
+	if len(prev.Nodes) != 1 || prev.Nodes[0].DialerProxy != "Jump Node" {
+		t.Fatalf("expected affected node with DialerProxy, got: %v", prev.Nodes)
+	}
+	if prev.Nodes[0].ChainSource != string(domain.ProxyChainTargetSubscription) {
+		t.Fatalf("expected ChainSource to be subscription, got: %s", prev.Nodes[0].ChainSource)
+	}
+
+	// Verify repo was not modified (remains 0 bindings)
+	if len(repo.config.Bindings) != 0 {
+		t.Fatalf("expected repo bindings count to remain 0 after preview, got %d", len(repo.config.Bindings))
+	}
+	if receivedInput.ChainBindings[0].TargetID != "sub-1" {
+		t.Fatalf("expected resolver to receive candidate targetID sub-1, got: %s", receivedInput.ChainBindings[0].TargetID)
+	}
+}

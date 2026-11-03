@@ -211,6 +211,8 @@ func testSSNode(id, name, server string, port int) domain.Node {
 
 func TestService_Create_ValidationAndAudit(t *testing.T) {
 	ctx := context.Background()
+	n1ID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.1.1.1", 8388, nil)
+	n2ID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.1.1.2", 8388, nil)
 	repo := newMockProxyChainRepo(nil)
 	audit := &mockAuditRepo{}
 	subRepo := newMockSubscriptionRepo([]*domain.Subscription{
@@ -218,8 +220,6 @@ func TestService_Create_ValidationAndAudit(t *testing.T) {
 	})
 
 	svc := proxychain.NewService(repo, nil, nil, subRepo, proxychain.WithAuditRepository(audit))
-	n1ID := "n1"
-	n2ID := "n2"
 	nodes := []domain.Node{
 		testSSNode(n1ID, "Node 1", "1.1.1.1", 8388),
 		testSSNode(n2ID, "Node 2", "1.1.1.2", 8388),
@@ -239,9 +239,9 @@ func TestService_Create_ValidationAndAudit(t *testing.T) {
 		Binding: domain.ProxyChainBinding{
 			ID:         "client-specified-id",
 			TargetType: domain.ProxyChainTargetNode,
-			TargetID:   "n1",
+			TargetID:   n1ID,
 			DialerType: domain.ProxyChainDialerNode,
-			DialerID:   "n2",
+			DialerID:   n2ID,
 			Enabled:    true,
 		},
 	})
@@ -253,9 +253,9 @@ func TestService_Create_ValidationAndAudit(t *testing.T) {
 	_, err = svc.Create(ctx, proxychain.CreateCommand{
 		Binding: domain.ProxyChainBinding{
 			TargetType: "unknown-type",
-			TargetID:   "n1",
+			TargetID:   n1ID,
 			DialerType: domain.ProxyChainDialerNode,
-			DialerID:   "n2",
+			DialerID:   n2ID,
 			Enabled:    true,
 		},
 	})
@@ -267,9 +267,9 @@ func TestService_Create_ValidationAndAudit(t *testing.T) {
 	_, err = svc.Create(ctx, proxychain.CreateCommand{
 		Binding: domain.ProxyChainBinding{
 			TargetType: domain.ProxyChainTargetNode,
-			TargetID:   "n1",
+			TargetID:   n1ID,
 			DialerType: domain.ProxyChainDialerNode,
-			DialerID:   "n2",
+			DialerID:   n2ID,
 			Enabled:    true,
 		},
 		ConfigVersion: "wrong-version",
@@ -282,9 +282,9 @@ func TestService_Create_ValidationAndAudit(t *testing.T) {
 	created, err := svc.Create(ctx, proxychain.CreateCommand{
 		Binding: domain.ProxyChainBinding{
 			TargetType: domain.ProxyChainTargetNode,
-			TargetID:   "n1",
+			TargetID:   n1ID,
 			DialerType: domain.ProxyChainDialerNode,
-			DialerID:   "n2",
+			DialerID:   n2ID,
 			Enabled:    true,
 			SortOrder:  5,
 			Note:       "chain 1",
@@ -310,13 +310,16 @@ func TestService_Create_ValidationAndAudit(t *testing.T) {
 
 func TestService_Update_Lifecycle(t *testing.T) {
 	ctx := context.Background()
+	n1ID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.1.1.1", 8388, nil)
+	n2ID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.1.1.2", 8388, nil)
+	n3ID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.1.1.3", 8388, nil)
 	repo := newMockProxyChainRepo([]domain.ProxyChainBinding{
 		{
 			ID:         "b-1",
 			TargetType: domain.ProxyChainTargetNode,
-			TargetID:   "n1",
+			TargetID:   n1ID,
 			DialerType: domain.ProxyChainDialerNode,
-			DialerID:   "n2",
+			DialerID:   n2ID,
 			Enabled:    true,
 			SortOrder:  10,
 			Revision:   1,
@@ -328,9 +331,6 @@ func TestService_Update_Lifecycle(t *testing.T) {
 	})
 
 	svc := proxychain.NewService(repo, nil, nil, subRepo, proxychain.WithAuditRepository(audit))
-	n1ID := "n1"
-	n2ID := "n2"
-	n3ID := "n3"
 	nodes := []domain.Node{
 		testSSNode(n1ID, "Node 1", "1.1.1.1", 8388),
 		testSSNode(n2ID, "Node 2", "1.1.1.2", 8388),
@@ -383,9 +383,9 @@ func TestService_Update_Lifecycle(t *testing.T) {
 		Binding: domain.ProxyChainBinding{
 			ID:         "b-other",
 			TargetType: domain.ProxyChainTargetNode,
-			TargetID:   "n1",
+			TargetID:   n1ID,
 			DialerType: domain.ProxyChainDialerNode,
-			DialerID:   "n2",
+			DialerID:   n2ID,
 		},
 	})
 	if err == nil {
@@ -396,9 +396,9 @@ func TestService_Update_Lifecycle(t *testing.T) {
 	_, err = svc.Update(ctx, "b-missing", proxychain.UpdateCommand{
 		Binding: domain.ProxyChainBinding{
 			TargetType: domain.ProxyChainTargetNode,
-			TargetID:   "n1",
+			TargetID:   n1ID,
 			DialerType: domain.ProxyChainDialerNode,
-			DialerID:   "n2",
+			DialerID:   n2ID,
 		},
 		ConfigVersion: repo.config.Version,
 	})
@@ -414,9 +414,9 @@ func TestService_Update_Lifecycle(t *testing.T) {
 	_, err = svc.Update(ctx, "b-1", proxychain.UpdateCommand{
 		Binding: domain.ProxyChainBinding{
 			TargetType: domain.ProxyChainTargetNode,
-			TargetID:   "n1",
+			TargetID:   n1ID,
 			DialerType: domain.ProxyChainDialerNode,
-			DialerID:   "n2",
+			DialerID:   n2ID,
 			Enabled:    true,
 		},
 		ConfigVersion:    repo.config.Version,

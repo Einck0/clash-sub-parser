@@ -119,32 +119,41 @@ func TestApplicationServices_ProxyChain_RepairInvalidPersistedSubscription(t *te
 		t.Fatalf("insert policy rule failed: %v", err)
 	}
 
-	// 5. Construct subscriptions using UUIDv7
+	// 5. Construct subscriptions using UUIDv7.
+	// subAnchorID models shared stable assets with a successful fetch linking both node1 and node2.
+	// This ensures both nodes remain exportable and inventory stays non-empty across the entire
+	// lifecycle, isolating invalid binding repair from unrelated empty inventory errors.
 	sub1ID := domain.MustNewUUIDv7()
 	sub2ID := domain.MustNewUUIDv7()
+	subAnchorID := domain.MustNewUUIDv7()
 
 	_, err = db.ExecContext(ctx, `
 		INSERT INTO subscriptions (id, name, source_url_secret_ref, enabled, revision, created_at, updated_at)
 		VALUES (?, 'Sub 1', 'http://example.com/sub1', 1, 'rev1', ?, ?),
-		       (?, 'Sub 2', 'http://example.com/sub2', 1, 'rev1', ?, ?);
-	`, sub1ID, nowStr, nowStr, sub2ID, nowStr, nowStr)
+		       (?, 'Sub 2', 'http://example.com/sub2', 1, 'rev1', ?, ?),
+		       (?, 'Sub Anchor', 'http://example.com/anchor', 1, 'rev1', ?, ?);
+	`, sub1ID, nowStr, nowStr, sub2ID, nowStr, nowStr, subAnchorID, nowStr, nowStr)
 	if err != nil {
 		t.Fatalf("insert subscriptions failed: %v", err)
 	}
 
 	fetch1ID := domain.MustNewUUIDv7()
+	fetchAnchorID := domain.MustNewUUIDv7()
 	_, err = db.ExecContext(ctx, `
 		INSERT INTO subscription_fetches (id, subscription_id, started_at, outcome, content_digest, nodes_parsed, nodes_valid)
-		VALUES (?, ?, ?, 'success', 'hash-1', 1, 1);
-	`, fetch1ID, sub1ID, nowStr)
+		VALUES (?, ?, ?, 'success', 'hash-1', 1, 1),
+		       (?, ?, ?, 'success', 'hash-anchor', 2, 2);
+	`, fetch1ID, sub1ID, nowStr, fetchAnchorID, subAnchorID, nowStr)
 	if err != nil {
-		t.Fatalf("insert subscription_fetch for sub1 failed: %v", err)
+		t.Fatalf("insert subscription_fetches failed: %v", err)
 	}
 
 	_, err = db.ExecContext(ctx, `
 		INSERT INTO node_sources (node_logical_id, subscription_id, last_seen_fetch_id)
-		VALUES (?, ?, ?);
-	`, node1ID, sub1ID, fetch1ID)
+		VALUES (?, ?, ?),
+		       (?, ?, ?),
+		       (?, ?, ?);
+	`, node1ID, sub1ID, fetch1ID, node1ID, subAnchorID, fetchAnchorID, node2ID, subAnchorID, fetchAnchorID)
 	if err != nil {
 		t.Fatalf("insert node_sources failed: %v", err)
 	}

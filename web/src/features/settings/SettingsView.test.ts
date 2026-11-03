@@ -5,7 +5,6 @@ import SettingsView from './SettingsView.vue'
 import App from '../../App.vue'
 import { api } from '../../api/client'
 import { toastStore } from '../../ui/toast'
-import { ROUTE_STORAGE_KEY } from '../../navigation'
 import { setLocale } from '../../locales'
 import { router } from '../../router'
 import { i18n } from '../../locales'
@@ -36,8 +35,11 @@ describe('SettingsView Component', () => {
   })
 
   const settings = (admin = true, exportAuth = true, configured = true) => ({
-    admin_auth_enabled: admin, export_auth_enabled: exportAuth, token_configured: configured,
-    admin_mode: admin && configured ? 'protected' : 'open', export_mode: exportAuth ? 'protected' : 'open',
+    admin_auth_enabled: admin,
+    export_auth_enabled: exportAuth,
+    token_configured: configured,
+    admin_mode: admin && configured ? 'protected' : 'open',
+    export_mode: exportAuth ? 'protected' : 'open',
   })
 
   function mountSettings() {
@@ -46,6 +48,7 @@ describe('SettingsView Component', () => {
         return h(SettingsView)
       },
     })
+    app.use(router)
     app.mount(container)
 
     return {
@@ -58,11 +61,32 @@ describe('SettingsView Component', () => {
       getClearTokenBtn: () => container.querySelector('button[data-testid="clear-token-btn"]') as HTMLButtonElement,
       getRuntimeInfo: () => container.querySelector('[data-testid="runtime-info"]'),
       getConnectionResult: () => container.querySelector('[data-testid="connection-result"]'),
+      getSettingsSectionsNav: () => container.querySelector('[data-testid="settings-sections-nav"]'),
     }
   }
 
+  it('renders shared SettingsSections navigation with active="csp"', async () => {
+    vi.spyOn(api, 'get').mockResolvedValue(settings())
+
+    const { getSettingsSectionsNav } = mountSettings()
+    await nextTick()
+
+    const nav = getSettingsSectionsNav()
+    expect(nav).toBeTruthy()
+    const cspLink = container.querySelector('[data-testid="settings-section-csp"]')
+    const dnsLink = container.querySelector('[data-testid="settings-section-dns"]')
+    const chainsLink = container.querySelector('[data-testid="settings-section-chains"]')
+
+    expect(cspLink).toBeTruthy()
+    expect(dnsLink).toBeTruthy()
+    expect(chainsLink).toBeTruthy()
+    expect(cspLink?.getAttribute('aria-current')).toBe('page')
+  })
+
   it('probes auth mode on mount and renders Open Mode with gentle warning style', async () => {
-    vi.spyOn(api, 'get').mockImplementation(async path => path === '/api/v1/settings/auth' ? settings(false, true, false) : { mode: 'open', authenticated: true, subject: 'admin' })
+    vi.spyOn(api, 'get').mockImplementation(async (path) =>
+      path === '/api/v1/settings/auth' ? settings(false, true, false) : { mode: 'open', authenticated: true, subject: 'admin' }
+    )
 
     const { getAuthModeBadge } = mountSettings()
     await nextTick()
@@ -74,7 +98,9 @@ describe('SettingsView Component', () => {
   })
 
   it('probes auth mode on mount and renders Protected with green/success style', async () => {
-    vi.spyOn(api, 'get').mockImplementation(async path => path === '/api/v1/settings/auth' ? settings() : { mode: 'protected', authenticated: true, subject: 'admin' })
+    vi.spyOn(api, 'get').mockImplementation(async (path) =>
+      path === '/api/v1/settings/auth' ? settings() : { mode: 'protected', authenticated: true, subject: 'admin' }
+    )
 
     const { getAuthModeBadge } = mountSettings()
     await nextTick()
@@ -87,7 +113,9 @@ describe('SettingsView Component', () => {
 
   it('displays stored token masked by default and toggles visibility on click', async () => {
     localStorage.setItem('csp_token', 'my-super-secret-admin-token-12345')
-    vi.spyOn(api, 'get').mockImplementation(async path => path === '/api/v1/settings/auth' ? settings() : { mode: 'protected', authenticated: true, subject: 'admin' })
+    vi.spyOn(api, 'get').mockImplementation(async (path) =>
+      path === '/api/v1/settings/auth' ? settings() : { mode: 'protected', authenticated: true, subject: 'admin' }
+    )
 
     const { getStoredTokenDisplay, getToggleVisibilityBtn } = mountSettings()
     await nextTick()
@@ -113,7 +141,9 @@ describe('SettingsView Component', () => {
   })
 
   it('displays empty/unconfigured state when no token is stored in localStorage', async () => {
-    vi.spyOn(api, 'get').mockImplementation(async path => path === '/api/v1/settings/auth' ? settings(false, true, false) : { mode: 'open', authenticated: true, subject: 'admin' })
+    vi.spyOn(api, 'get').mockImplementation(async (path) =>
+      path === '/api/v1/settings/auth' ? settings(false, true, false) : { mode: 'open', authenticated: true, subject: 'admin' }
+    )
 
     const { getStoredTokenDisplay } = mountSettings()
     await nextTick()
@@ -124,7 +154,9 @@ describe('SettingsView Component', () => {
   })
 
   it('saves new token to localStorage, updates API client and pushes success toast', async () => {
-    vi.spyOn(api, 'get').mockImplementation(async path => path === '/api/v1/settings/auth' ? settings() : { mode: 'protected', authenticated: true, subject: 'admin' })
+    vi.spyOn(api, 'get').mockImplementation(async (path) =>
+      path === '/api/v1/settings/auth' ? settings() : { mode: 'protected', authenticated: true, subject: 'admin' }
+    )
     vi.spyOn(api, 'put').mockResolvedValue(settings())
     const setAuthTokenSpy = vi.fn()
     ;(api as any).setAuthToken = setAuthTokenSpy
@@ -146,7 +178,11 @@ describe('SettingsView Component', () => {
 
     expect(localStorage.getItem('csp_token')).toBe('newly-created-token-888')
     expect(setAuthTokenSpy).toHaveBeenCalledWith('newly-created-token-888')
-    expect(api.put).toHaveBeenCalledWith('/api/v1/settings/auth', expect.objectContaining({ token: 'newly-created-token-888', admin_auth_enabled: true, export_auth_enabled: true }))
+    expect(api.put).toHaveBeenCalledWith('/api/v1/settings/auth', expect.objectContaining({
+      token: 'newly-created-token-888',
+      admin_auth_enabled: true,
+      export_auth_enabled: true,
+    }))
     expect(toastStore.items.value.some((t) => t.tone === 'success')).toBe(true)
     expect(getStoredTokenDisplay()?.textContent).toContain('••••')
   })
@@ -156,7 +192,7 @@ describe('SettingsView Component', () => {
       if (path === '/api/v1/auth/status') {
         return { mode: 'protected', authenticated: true, subject: 'admin' }
       }
-      return {}
+      return settings()
     })
 
     const { getTestConnectionBtn, getConnectionResult } = mountSettings()
@@ -178,7 +214,7 @@ describe('SettingsView Component', () => {
       if (path === '/api/v1/auth/status') {
         throw new Error('Connection refused')
       }
-      return {}
+      return settings()
     })
 
     const { getTestConnectionBtn, getConnectionResult } = mountSettings()
@@ -194,9 +230,11 @@ describe('SettingsView Component', () => {
     expect(getConnectionResult()?.textContent?.toLowerCase()).toMatch(/error|failed|refused|失败/)
   })
 
-  it('clears stored token from localStorage, updates API client and pushes info toast', async () => {
+  it('clears stored token from localStorage, updates API client and pushes success toast', async () => {
     localStorage.setItem('csp_token', 'token-to-clear')
-    vi.spyOn(api, 'get').mockImplementation(async path => path === '/api/v1/settings/auth' ? settings() : { mode: 'open', authenticated: true, subject: 'admin' })
+    vi.spyOn(api, 'get').mockImplementation(async (path) =>
+      path === '/api/v1/settings/auth' ? settings() : { mode: 'open', authenticated: true, subject: 'admin' }
+    )
     vi.spyOn(api, 'put').mockResolvedValue(settings(true, true, false))
     const setAuthTokenSpy = vi.fn()
     ;(api as any).setAuthToken = setAuthTokenSpy
@@ -218,20 +256,25 @@ describe('SettingsView Component', () => {
     expect(toastStore.items.value.some((t) => t.tone === 'info' || t.tone === 'success')).toBe(true)
   })
 
-  it.each([[false, false], [false, true], [true, false], [true, true]])('reads and saves independent auth switches admin=%s export=%s', async (admin, exportAuth) => {
-    vi.spyOn(api, 'get').mockImplementation(async path => path === '/api/v1/settings/auth' ? settings(admin, exportAuth) : { mode: 'open', authenticated: true, subject: 'admin' })
-    const put = vi.spyOn(api, 'put').mockResolvedValue(settings(admin, exportAuth))
-    mountSettings()
-    await nextTick()
-    await new Promise(r => setTimeout(r, 10))
-    const adminSwitch = container.querySelector<HTMLInputElement>('[data-testid="admin-auth-switch"]')!
-    const exportSwitch = container.querySelector<HTMLInputElement>('[data-testid="export-auth-switch"]')!
-    expect(adminSwitch.checked).toBe(admin)
-    expect(exportSwitch.checked).toBe(exportAuth)
-    container.querySelector<HTMLButtonElement>('[data-testid="save-auth-switches-btn"]')!.click()
-    await nextTick()
-    expect(put).toHaveBeenCalledWith('/api/v1/settings/auth', { admin_auth_enabled: admin, export_auth_enabled: exportAuth })
-  })
+  it.each([[false, false], [false, true], [true, false], [true, true]])(
+    'reads and saves independent auth switches admin=%s export=%s',
+    async (admin, exportAuth) => {
+      vi.spyOn(api, 'get').mockImplementation(async (path) =>
+        path === '/api/v1/settings/auth' ? settings(admin, exportAuth) : { mode: 'open', authenticated: true, subject: 'admin' }
+      )
+      const put = vi.spyOn(api, 'put').mockResolvedValue(settings(admin, exportAuth))
+      mountSettings()
+      await nextTick()
+      await new Promise((r) => setTimeout(r, 10))
+      const adminSwitch = container.querySelector<HTMLInputElement>('[data-testid="admin-auth-switch"]')!
+      const exportSwitch = container.querySelector<HTMLInputElement>('[data-testid="export-auth-switch"]')!
+      expect(adminSwitch.checked).toBe(admin)
+      expect(exportSwitch.checked).toBe(exportAuth)
+      container.querySelector<HTMLButtonElement>('[data-testid="save-auth-switches-btn"]')!.click()
+      await nextTick()
+      expect(put).toHaveBeenCalledWith('/api/v1/settings/auth', { admin_auth_enabled: admin, export_auth_enabled: exportAuth })
+    }
+  )
 
   it('renders runtime environment info cards', async () => {
     vi.spyOn(api, 'get').mockResolvedValue({ mode: 'open', authenticated: true, subject: 'admin' })
@@ -247,7 +290,9 @@ describe('SettingsView Component', () => {
 
   it('displays single accurate token status badge without duplication in zh and en', async () => {
     localStorage.setItem('csp_token', 'token-active-123')
-    vi.spyOn(api, 'get').mockImplementation(async path => path === '/api/v1/settings/auth' ? settings() : { mode: 'protected', authenticated: true, subject: 'admin' })
+    vi.spyOn(api, 'get').mockImplementation(async (path) =>
+      path === '/api/v1/settings/auth' ? settings() : { mode: 'protected', authenticated: true, subject: 'admin' }
+    )
 
     mountSettings()
     await nextTick()
@@ -265,7 +310,9 @@ describe('SettingsView Component', () => {
   })
 
   it('renders DNS configuration jump card and button triggers navigation to /dns', async () => {
-    vi.spyOn(api, 'get').mockImplementation(async path => path === '/api/v1/settings/auth' ? settings() : { mode: 'open' })
+    vi.spyOn(api, 'get').mockImplementation(async (path) =>
+      path === '/api/v1/settings/auth' ? settings() : { mode: 'open' }
+    )
 
     mountSettings()
     await nextTick()
@@ -283,7 +330,7 @@ describe('SettingsView Component', () => {
     expect(window.location.hash).toContain('/dns')
   })
 
-  it('renders 4 category tabs and mobile select with access panel active by default', async () => {
+  it('renders 5 category tabs and mobile select with connection panel active by default', async () => {
     vi.spyOn(api, 'get').mockImplementation(async (path) =>
       path === '/api/v1/settings/auth' ? settings() : { mode: 'open' }
     )
@@ -291,24 +338,25 @@ describe('SettingsView Component', () => {
     mountSettings()
     await nextTick()
 
-    // 4 category tabs exist
-    expect(container.querySelector('[data-testid="settings-tab-access"]')).toBeTruthy()
+    // 5 category tabs exist
+    expect(container.querySelector('[data-testid="settings-tab-connection"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="settings-tab-probe"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="settings-tab-filter"]')).toBeTruthy()
+    expect(container.querySelector('[data-testid="settings-tab-security"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="settings-tab-display"]')).toBeTruthy()
 
-    // Mobile select exists with 4 options
+    // Mobile select exists with 5 options
     const mobileSelect = container.querySelector(
       '[data-testid="settings-category-select"]'
     ) as HTMLSelectElement
     expect(mobileSelect).toBeTruthy()
-    expect(mobileSelect.options).toHaveLength(4)
-    expect(mobileSelect.value).toBe('access')
+    expect(mobileSelect.options).toHaveLength(5)
+    expect(mobileSelect.value).toBe('connection')
 
-    // Default active panel is access
-    const panelAccess = container.querySelector('[data-testid="settings-panel-access"]') as HTMLElement
+    // Default active panel is connection
+    const panelConnection = container.querySelector('[data-testid="settings-panel-connection"]') as HTMLElement
     const panelProbe = container.querySelector('[data-testid="settings-panel-probe"]') as HTMLElement
-    expect(panelAccess.style.display).not.toBe('none')
+    expect(panelConnection.style.display).not.toBe('none')
     expect(panelProbe.style.display).toBe('none')
   })
 
@@ -326,9 +374,9 @@ describe('SettingsView Component', () => {
     probeTab.click()
     await nextTick()
 
-    const panelAccess = container.querySelector('[data-testid="settings-panel-access"]') as HTMLElement
+    const panelConnection = container.querySelector('[data-testid="settings-panel-connection"]') as HTMLElement
     const panelProbe = container.querySelector('[data-testid="settings-panel-probe"]') as HTMLElement
-    expect(panelAccess.style.display).toBe('none')
+    expect(panelConnection.style.display).toBe('none')
     expect(panelProbe.style.display).not.toBe('none')
 
     // Switch via mobile select to 'filter'
@@ -342,6 +390,17 @@ describe('SettingsView Component', () => {
     const panelFilter = container.querySelector('[data-testid="settings-panel-filter"]') as HTMLElement
     expect(panelProbe.style.display).toBe('none')
     expect(panelFilter.style.display).not.toBe('none')
+
+    // Switch via tab to 'security'
+    const securityTab = container.querySelector(
+      '[data-testid="settings-tab-security"]'
+    ) as HTMLButtonElement
+    securityTab.click()
+    await nextTick()
+
+    const panelSecurity = container.querySelector('[data-testid="settings-panel-security"]') as HTMLElement
+    expect(panelFilter.style.display).toBe('none')
+    expect(panelSecurity.style.display).not.toBe('none')
   })
 
   it('retains unsubmitted token draft across category switching without resetting', async () => {
@@ -350,6 +409,13 @@ describe('SettingsView Component', () => {
     )
 
     const { getTokenInput } = mountSettings()
+    await nextTick()
+
+    // Switch to security tab first
+    const securityTab = container.querySelector(
+      '[data-testid="settings-tab-security"]'
+    ) as HTMLButtonElement
+    securityTab.click()
     await nextTick()
 
     const tokenInput = getTokenInput()
@@ -364,11 +430,8 @@ describe('SettingsView Component', () => {
     displayTab.click()
     await nextTick()
 
-    // Switch category back to access
-    const accessTab = container.querySelector(
-      '[data-testid="settings-tab-access"]'
-    ) as HTMLButtonElement
-    accessTab.click()
+    // Switch category back to security
+    securityTab.click()
     await nextTick()
 
     // Draft input is completely preserved
@@ -465,8 +528,11 @@ describe('App.vue Integration: Settings View & Topbar Auth Badge', () => {
     vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
       if (path === '/healthz') return { status: 'healthy' }
       if (path === '/api/v1/settings/auth') return {
-        admin_auth_enabled: true, export_auth_enabled: true, token_configured: authMode !== 'open',
-        admin_mode: authMode === 'open' ? 'open' : 'protected', export_mode: 'protected',
+        admin_auth_enabled: true,
+        export_auth_enabled: true,
+        token_configured: authMode !== 'open',
+        admin_mode: authMode === 'open' ? 'open' : 'protected',
+        export_mode: 'protected',
       }
       if (path === '/api/v1/auth/status') {
         return {

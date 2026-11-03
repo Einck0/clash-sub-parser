@@ -73,13 +73,13 @@ export const DNS_LIST_KEYS = [
 
 export type DnsListKey = (typeof DNS_LIST_KEYS)[number]
 
-export const DNS_JSON_KEYS = [
+export const DNS_MAPPING_KEYS = [
   'nameserver-policy',
   'fallback-filter',
   'proxy-server-nameserver-policy',
 ] as const
 
-export type DnsJsonKey = (typeof DNS_JSON_KEYS)[number]
+export type DnsMappingKey = (typeof DNS_MAPPING_KEYS)[number]
 
 export const DNS_BASIC_SCALAR_KEYS = [
   'enhanced-mode',

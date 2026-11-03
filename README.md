@@ -183,6 +183,38 @@ npm run dev
 
 ---
 
+## Settings Workbenches: CSP, DNS & Proxy Chains (`/settings`, `/dns`, `/chains`)
+
+The unified settings domain is organized into three interconnected workbenches accessible from the top navigation bar:
+
+### 1. CSP General Settings (`/settings`)
+- **Public Base URL**: Configures the canonical public-facing base address used when generating client export URLs, with one-click browser origin suggestion.
+- **Subscription Update Routing**: Controls the outbound network path (`environment`, `direct`, or `proxy`) for fetching remote subscription feeds without restarting the daemon.
+- **Automated Probe Schedule & Timeout**: Global switch, default execution interval (60–604800s), active test kinds (`baseline`, `geo`, `streaming`, `ai`, `speed`, `ip_risk`), and per-node handshake timeout (1–30s).
+- **Global Node Filter**: Multi-condition filtering pipeline applied before policy group evaluation (e.g. latency, protocol, probe verdict).
+- **Access & Security**: Dynamic switching between Open Mode and Protected Mode, admin token configuration and masking, and connection testing.
+- **Display & Preferences**: 7 selectable UI themes, bilingual locale switching (zh-CN / en-US), and runtime packaging diagnostics.
+
+### 2. DNS Settings (`/dns`)
+- **Global DNS Resolution**: Visual builder and raw YAML editor modes with bidirectional synchronization, schema validation, and real-time preview.
+- **Resolvers & Mappings**: Configures upstream nameservers, fallback resolvers, fake-IP/real-IP routing, and custom domain-to-nameserver mapping rules.
+
+### 3. Proxy Chains (`/chains`)
+- **Upstream Dialer Bindings**: Chains an egress target (`subscription`, `node_group`, or `node`) through an upstream dialer proxy (`node_group` or `node`).
+- **Target Scope Hierarchy & Priority Rules**:
+  1. **Hierarchical Priority**: **Single Node (`node`, P1)** > **Node Group (`node_group`, P2)** > **Subscription (`subscription`, P3)**. A node-level binding always overrides a group- or subscription-level binding for that node.
+  2. **Same-Level Order**: Within the same scope level, bindings with a smaller `sort_order` take precedence.
+  3. **Deterministic Tie-Breaking**: When scope and `sort_order` match, the binding with the smaller lexicographical ID wins.
+- **Live Preview & Conflict Preservation**: 250ms debounced preview displays target count, winning chains, skipped overlaps/cycles, and overridden counts. Concurrent edit conflicts (`HTTP 409 Conflict`) strictly preserve all user draft values, offering reload or rebase without silent data loss.
+- **Resolved Node Dialer Ledger**: Comprehensive audit table detailing every active node's assigned dialer proxy and winning binding provenance (`node`, `node_group`, or `subscription`).
+
+### Client Format Capabilities & Invariants
+- **Exclusive Mihomo Support**: Proxy chains (compiled as `dialer-proxy` attributes on outbound nodes) are exclusively supported for **Mihomo (Clash Meta)** publications.
+- **Target Capability Validation (`HTTP 422`)**: Publication targets for Sing-box, Quantumult X, or Surge that contain nodes with active dialer proxies are strictly rejected by the compiler with **`HTTP 422 (unsupported_target_capability)`**; CSP will never silently omit detours or output malformed non-Mihomo configurations. Publications without active proxy chains continue to compile cleanly for all four client targets.
+- **PROCESS-NAME Routing Invariant**: Proxy chain bindings configure hop-by-hop transport dialers only. They strictly do not alter, overwrite, or bypass client-side `PROCESS-NAME` routing rules or policy classification trees.
+
+---
+
 ## Agent Operations & Automated Skills (skills/csp-ops)
 
 To enable external autonomous agents (e.g. Hermes Agent, Pi multi-agent clusters) and automation scripts to interact with, manage, and configure CSP 1.0 **without modifying source code or rebuilding containers**, CSP provides a dedicated agent skill package in [`skills/csp-ops/`](skills/csp-ops/SKILL.md).

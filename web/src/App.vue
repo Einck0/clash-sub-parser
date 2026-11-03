@@ -10,6 +10,7 @@ import {
   ShieldCheckIcon,
   ArrowDownTrayIcon,
   Cog6ToothIcon,
+  LinkIcon,
   SunIcon,
   MoonIcon,
   ArrowPathIcon,
@@ -67,7 +68,17 @@ interface NavItemDef {
   path: string
   labelKey: string
   defaultLabel: string
+  labelZh?: string
+  labelEn?: string
   icon: any
+}
+
+function navItemLabel(item: NavItemDef): string {
+  if (item.labelZh && item.labelEn) {
+    return uiText(item.labelZh, item.labelEn)
+  }
+  const translated = t(item.labelKey)
+  return translated !== item.labelKey ? translated : item.defaultLabel
 }
 
 // 8 Routes grouped logically for desktop sidebar
@@ -94,6 +105,7 @@ const navGroups: Array<{
     items: [
       { id: 'rules', path: '/rules', labelKey: 'nav.rules', defaultLabel: 'Rule Desk', icon: ShieldCheckIcon },
       { id: 'dns', path: '/dns', labelKey: 'nav.dns', defaultLabel: 'DNS', icon: GlobeAltIcon },
+      { id: 'chains', path: '/chains', labelKey: 'nav.chains', defaultLabel: 'Proxy Chains', labelZh: '链式代理', labelEn: 'Proxy Chains', icon: LinkIcon },
     ],
   },
   {
@@ -118,10 +130,11 @@ const mobilePrimaryItems: NavItemDef[] = [
   allNavItems.find((i) => i.id === 'subscriptions')!,
 ]
 
-// Mobile more items: Dashboard, DNS, Rules, Publications, Settings
+// Mobile more items: Dashboard, DNS, Chains, Rules, Publications, Settings
 const mobileMoreItems: NavItemDef[] = [
   allNavItems.find((i) => i.id === 'dashboard')!,
   allNavItems.find((i) => i.id === 'dns')!,
+  allNavItems.find((i) => i.id === 'chains')!,
   allNavItems.find((i) => i.id === 'rules')!,
   allNavItems.find((i) => i.id === 'publications')!,
   allNavItems.find((i) => i.id === 'settings')!,
@@ -149,7 +162,7 @@ const currentTitle = computed(() => {
   const rName = currentActiveId.value
   const matched = allNavItems.find((item) => item.id === rName)
   if (matched) {
-    return t(matched.labelKey)
+    return navItemLabel(matched)
   }
   return rName.replace('-', ' ')
 })
@@ -375,10 +388,10 @@ onUnmounted(() => {
                   : 'hover:bg-base-300/60 text-base-content/80',
                 isCollapsed ? 'justify-center px-2 py-2.5' : 'px-3.5 py-2.5',
               ]"
-              :title="isCollapsed ? t(item.labelKey) : undefined"
+              :title="isCollapsed ? navItemLabel(item) : undefined"
             >
               <component :is="item.icon" class="w-5 h-5 shrink-0" />
-              <span v-if="!isCollapsed" class="truncate">{{ t(item.labelKey) }}</span>
+              <span v-if="!isCollapsed" class="truncate">{{ navItemLabel(item) }}</span>
             </button>
           </RouterLink>
         </div>
@@ -589,7 +602,7 @@ onUnmounted(() => {
               :class="isActive || isItemActive(item) ? 'bg-primary/15 text-primary font-semibold shadow-sm' : 'text-base-content/70 hover:text-base-content hover:bg-base-300/40'"
             >
               <component :is="item.icon" class="w-4 h-4 sm:w-5 sm:h-5 mb-0.5 shrink-0" />
-              <span class="truncate max-w-full leading-tight text-center">{{ t(item.labelKey) }}</span>
+              <span class="truncate max-w-full leading-tight text-center">{{ navItemLabel(item) }}</span>
             </button>
           </RouterLink>
 
@@ -657,7 +670,7 @@ onUnmounted(() => {
                     :class="isActive || isItemActive(item) ? 'bg-primary text-primary-content shadow-sm font-semibold' : 'bg-base-100/60 hover:bg-base-100 text-base-content/80'"
                   >
                     <component :is="item.icon" class="w-4 h-4 shrink-0" />
-                    <span class="truncate">{{ t(item.labelKey) }}</span>
+                    <span class="truncate">{{ navItemLabel(item) }}</span>
                   </button>
                 </RouterLink>
               </div>

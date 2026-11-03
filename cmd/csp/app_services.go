@@ -11,6 +11,7 @@ import (
 	"clash-sub-parser/internal/application/iprisk"
 	"clash-sub-parser/internal/application/policy"
 	"clash-sub-parser/internal/application/probe"
+	"clash-sub-parser/internal/application/proxychain"
 	"clash-sub-parser/internal/application/publication"
 	"clash-sub-parser/internal/application/revision"
 	"clash-sub-parser/internal/application/subscription"
@@ -41,6 +42,7 @@ type applicationServices struct {
 	pubPayloadRefRepo domain.PublicationPayloadRefRepository
 	subLinkRepo       domain.SubscriptionLinkRepository
 	factsLoader       domain.ConsistentFactsLoader
+	chainRepo         domain.ProxyChainRepository
 
 	fetchClient           *fetch.Client
 	subscriptionScheduler *subscription.Scheduler
@@ -54,6 +56,7 @@ type applicationServices struct {
 	revisionService       *revision.Service
 	ipriskService         *iprisk.Service
 	pubService            *publication.Service
+	chainService          *proxychain.Service
 }
 
 type appServiceOptions struct {
@@ -86,6 +89,7 @@ func makeApplicationServices(ctx context.Context, db *sql.DB, opts appServiceOpt
 	subLinkRepo := sqlite.NewSubscriptionLinkRepository(db)
 	factsLoader := sqlite.NewConsistentFactsLoader(db)
 	dnsRepo := sqlite.NewDNSSettingsRepository(db)
+	chainRepo := sqlite.NewProxyChainRepository(db)
 
 	var fetchClient *fetch.Client
 	if opts.fetchClientOverride != nil {
@@ -199,12 +203,24 @@ func makeApplicationServices(ctx context.Context, db *sql.DB, opts appServiceOpt
 		publication.WithSubscriptionLinkRepository(subLinkRepo),
 		publication.WithConsistentFactsLoader(factsLoader),
 		publication.WithDNSSettingsRepository(dnsRepo),
+		publication.WithProxyChainRepository(chainRepo),
 	}
 	pubService := publication.NewService(
 		pubRepo,
 		auditRepo,
 		pubOpts...,
 	)
+
+	chainService := proxychain.NewService(
+		chainRepo,
+		nodeRepo,
+		policyRepo,
+		subRepo,
+		proxychain.WithAuditRepository(auditRepo),
+	)
+	chainService.SetInputProvider(func(ctx context.Context) (*resolver.ResolveInput, error) {
+		return pubService.AssembleResolveInput(ctx, "")
+	})
 
 	subscriptionScheduler := subscription.NewScheduler(subRepo, subService, nil)
 	if opts.startSubscriptions {
@@ -244,5 +260,7 @@ func makeApplicationServices(ctx context.Context, db *sql.DB, opts appServiceOpt
 		revisionService:       revisionService,
 		ipriskService:         ipriskService,
 		pubService:            pubService,
+		chainService:          chainService,
+		chainRepo:             chainRepo,
 	}, nil
 }

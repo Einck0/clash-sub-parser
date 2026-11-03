@@ -86,6 +86,18 @@ type canonicalRiskDecision struct {
 	EvaluatedAt      string            `json:"evaluated_at"`
 }
 
+type canonicalInputChainBinding struct {
+	ID         string                      `json:"id"`
+	TargetType domain.ProxyChainTargetType `json:"target_type"`
+	TargetID   string                      `json:"target_id"`
+	DialerType domain.ProxyChainDialerType `json:"dialer_type"`
+	DialerID   string                      `json:"dialer_id"`
+	Enabled    bool                        `json:"enabled"`
+	SortOrder  int                         `json:"sort_order"`
+	Note       string                      `json:"note"`
+	Revision   int64                       `json:"revision"`
+}
+
 type canonicalInputPayload struct {
 	RevisionID         string                   `json:"revision_id,omitempty"`
 	InventoryWatermark string                   `json:"inventory_watermark,omitempty"`
@@ -105,6 +117,7 @@ type canonicalInputPayload struct {
 	GroupFilters      map[string]domain.NodeFilterSpec `json:"group_filters,omitempty"`
 	NodeSources       map[string][]string              `json:"node_sources,omitempty"`
 	ObservationDigest string                           `json:"observation_digest,omitempty"`
+	ChainBindings     []canonicalInputChainBinding     `json:"chain_bindings,omitempty"`
 }
 
 func computeInputDigest(input ResolveInput) (string, error) {
@@ -271,6 +284,27 @@ func computeInputDigest(input ResolveInput) (string, error) {
 		obsDigest = hex.EncodeToString(h.Sum(nil))
 	}
 
+	var canonicalBindings []canonicalInputChainBinding
+	if len(input.ChainBindings) > 0 {
+		canonicalBindings = make([]canonicalInputChainBinding, len(input.ChainBindings))
+		for i, b := range input.ChainBindings {
+			canonicalBindings[i] = canonicalInputChainBinding{
+				ID:         b.ID,
+				TargetType: b.TargetType,
+				TargetID:   b.TargetID,
+				DialerType: b.DialerType,
+				DialerID:   b.DialerID,
+				Enabled:    b.Enabled,
+				SortOrder:  b.SortOrder,
+				Note:       b.Note,
+				Revision:   b.Revision,
+			}
+		}
+		sort.SliceStable(canonicalBindings, func(i, j int) bool {
+			return canonicalBindings[i].ID < canonicalBindings[j].ID
+		})
+	}
+
 	payload := canonicalInputPayload{
 		RevisionID:         input.RevisionID,
 		InventoryWatermark: input.InventoryWatermark,
@@ -288,6 +322,7 @@ func computeInputDigest(input ResolveInput) (string, error) {
 		GroupFilters:       groupFilters,
 		NodeSources:        canonicalSources,
 		ObservationDigest:  obsDigest,
+		ChainBindings:      canonicalBindings,
 	}
 
 	data, err := json.Marshal(payload)
@@ -328,6 +363,7 @@ type canonicalSnapshotPayload struct {
 	RiskPolicyRevision string                   `json:"risk_policy_revision,omitempty"`
 	RiskEvaluatedAt    string                   `json:"risk_evaluated_at,omitempty"`
 	RiskDecisionDigest string                   `json:"risk_decision_digest,omitempty"`
+	ChainEffects       []ChainEffect            `json:"chain_effects,omitempty"`
 }
 
 func computeSnapshotDigest(snap *ResolvedPolicySnapshot) (string, error) {
@@ -347,6 +383,15 @@ func computeSnapshotDigest(snap *ResolvedPolicySnapshot) (string, error) {
 			Sources:            canonicalizeSources(g.Sources),
 			Position:           g.Position,
 		}
+	}
+
+	var cEffects []ChainEffect
+	if len(snap.ChainEffects) > 0 {
+		cEffects = make([]ChainEffect, len(snap.ChainEffects))
+		copy(cEffects, snap.ChainEffects)
+		sort.SliceStable(cEffects, func(i, j int) bool {
+			return cEffects[i].BindingID < cEffects[j].BindingID
+		})
 	}
 
 	payload := canonicalSnapshotPayload{
@@ -369,6 +414,7 @@ func computeSnapshotDigest(snap *ResolvedPolicySnapshot) (string, error) {
 			return snap.RiskEvaluatedAt.UTC().Format(time.RFC3339Nano)
 		}(),
 		RiskDecisionDigest: snap.RiskDecisionDigest,
+		ChainEffects:       cEffects,
 	}
 
 	data, err := json.Marshal(payload)

@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
 import {
-  DNS_BASIC_FIELDS,
-  DNS_GROUPS,
+  DNS_COMMON_FIELDS,
+  DNS_ADVANCED_GROUPS,
   ALL_KNOWN_KEYS,
   getUnknownKeys,
   getBoolDisplayState,
@@ -35,13 +35,21 @@ describe('dnsFields configuration and helpers', () => {
     expect(ALL_KNOWN_KEYS.length).toBe(20)
   })
 
-  it('correctly partitions basic fields and 4 advanced groups', () => {
-    expect(DNS_BASIC_FIELDS.map((f) => f.key)).toEqual(['nameserver', 'enhanced-mode', 'ipv6'])
-    expect(DNS_GROUPS.map((g) => g.id)).toEqual([
-      'connection-bootstrap',
-      'fakeip-cache',
-      'fallback-policy',
-      'hosts',
+  it('correctly partitions common fields and 3 advanced groups without nesting basic essentials', () => {
+    expect(DNS_COMMON_FIELDS.map((f) => f.key)).toEqual([
+      'nameserver',
+      'fallback',
+      'default-nameserver',
+      'enhanced-mode',
+      'fake-ip-range',
+      'fake-ip-filter',
+      'ipv6',
+      'listen',
+    ])
+    expect(DNS_ADVANCED_GROUPS.map((g) => g.id)).toEqual([
+      'routing-policy',
+      'dedicated-servers',
+      'switches-hosts',
     ])
   })
 
@@ -64,20 +72,18 @@ describe('dnsFields configuration and helpers', () => {
     expect(getBoolDisplayState({ ipv6: 'unexpected-string' }, 'ipv6')).toBe('custom')
   })
 
-  it('accurately counts configured fields in a group', () => {
-    const bootstrapGroup = DNS_GROUPS.find((g) => g.id === 'connection-bootstrap')!
-    expect(countGroupConfigured({}, bootstrapGroup)).toBe(0)
+  it('accurately counts configured fields in an advanced group', () => {
+    const dedicatedGroup = DNS_ADVANCED_GROUPS.find((g) => g.id === 'dedicated-servers')!
+    expect(countGroupConfigured({}, dedicatedGroup)).toBe(0)
 
     const draft: Record<string, unknown> = {
-      'default-nameserver': ['114.114.114.114'],
-      listen: '0.0.0.0:1053',
-      'prefer-h3': true,
+      'proxy-server-nameserver': ['https://dns.alidns.com/dns-query'],
       'direct-nameserver': [], // empty list not counted
     }
-    expect(countGroupConfigured(draft, bootstrapGroup)).toBe(3)
+    expect(countGroupConfigured(draft, dedicatedGroup)).toBe(1)
   })
 
-  it('handles field configuration presence checks for various types', () => {
+  it('handles field configuration presence checks for various types including yaml-mapping', () => {
     expect(isFieldConfigured({ nameserver: ['1.1.1.1'] }, 'nameserver', 'list')).toBe(true)
     expect(isFieldConfigured({ nameserver: [] }, 'nameserver', 'list')).toBe(false)
     expect(isFieldConfigured({ listen: '0.0.0.0:1053' }, 'listen', 'scalar-text')).toBe(true)
@@ -86,7 +92,7 @@ describe('dnsFields configuration and helpers', () => {
     expect(isFieldConfigured({ 'cache-algorithm': '' }, 'cache-algorithm', 'scalar-select')).toBe(false)
     expect(isFieldConfigured({ ipv6: false }, 'ipv6', 'bool')).toBe(true)
     expect(isFieldConfigured({}, 'ipv6', 'bool')).toBe(false)
-    expect(isFieldConfigured({ 'nameserver-policy': { 'geosite:cn': '223.5.5.5' } }, 'nameserver-policy', 'json')).toBe(true)
-    expect(isFieldConfigured({ 'nameserver-policy': {} }, 'nameserver-policy', 'json')).toBe(false)
+    expect(isFieldConfigured({ 'nameserver-policy': { 'geosite:cn': '223.5.5.5' } }, 'nameserver-policy', 'yaml-mapping')).toBe(true)
+    expect(isFieldConfigured({ 'nameserver-policy': {} }, 'nameserver-policy', 'yaml-mapping')).toBe(false)
   })
 })

@@ -284,6 +284,8 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 		TokenHolder:           tokenHolder,
 		SettingsRepository:    appServices.settingsRepo,
 		DNSSettingsRepository: appServices.dnsRepo,
+		ProxyChainRepository:  appServices.chainRepo,
+		ProxyChainService:     appServices.chainService,
 		EnvironmentFetchProxy: fetchProxy,
 		SessionStore:          sessionStore,
 		SessionValidator: func(sessionID string) (*transporthttp.SessionInfo, bool) {

@@ -520,17 +520,19 @@ type mihomoHysteria2Proxy struct {
 	Down           string   `yaml:"down,omitempty"`
 	Obfs           string   `yaml:"obfs,omitempty"`
 	ObfsPassword   string   `yaml:"obfs-password,omitempty"`
+	DialerProxy    string   `yaml:"dialer-proxy,omitempty"`
 }
 
 type mihomoSSProxy struct {
-	Name       string         `yaml:"name"`
-	Type       string         `yaml:"type"`
-	Server     string         `yaml:"server"`
-	Port       int            `yaml:"port"`
-	Cipher     string         `yaml:"cipher"`
-	Password   string         `yaml:"password"`
-	Plugin     string         `yaml:"plugin,omitempty"`
-	PluginOpts map[string]any `yaml:"plugin-opts,omitempty"`
+	Name        string         `yaml:"name"`
+	Type        string         `yaml:"type"`
+	Server      string         `yaml:"server"`
+	Port        int            `yaml:"port"`
+	Cipher      string         `yaml:"cipher"`
+	Password    string         `yaml:"password"`
+	Plugin      string         `yaml:"plugin,omitempty"`
+	PluginOpts  map[string]any `yaml:"plugin-opts,omitempty"`
+	DialerProxy string         `yaml:"dialer-proxy,omitempty"`
 }
 
 type mihomoWSOpts struct {
@@ -563,6 +565,7 @@ type mihomoVMessProxy struct {
 	ClientFingerprint string          `yaml:"client-fingerprint,omitempty"`
 	WSOpts            *mihomoWSOpts   `yaml:"ws-opts,omitempty"`
 	GRPCOpts          *mihomoGRPCOpts `yaml:"grpc-opts,omitempty"`
+	DialerProxy       string          `yaml:"dialer-proxy,omitempty"`
 }
 
 type mihomoXHTTPOpts struct {
@@ -590,6 +593,7 @@ type mihomoVLESSProxy struct {
 	WSOpts            *mihomoWSOpts      `yaml:"ws-opts,omitempty"`
 	GRPCOpts          *mihomoGRPCOpts    `yaml:"grpc-opts,omitempty"`
 	XHTTPOpts         any                `yaml:"xhttp-opts,omitempty"`
+	DialerProxy       string             `yaml:"dialer-proxy,omitempty"`
 }
 
 type mihomoHTTPProxy struct {
@@ -603,6 +607,7 @@ type mihomoHTTPProxy struct {
 	SNI            string            `yaml:"sni,omitempty"`
 	SkipCertVerify bool              `yaml:"skip-cert-verify,omitempty"`
 	Headers        map[string]string `yaml:"headers,omitempty"`
+	DialerProxy    string            `yaml:"dialer-proxy,omitempty"`
 }
 
 type mihomoSocks5Proxy struct {
@@ -616,6 +621,7 @@ type mihomoSocks5Proxy struct {
 	SNI            string `yaml:"sni,omitempty"`
 	SkipCertVerify bool   `yaml:"skip-cert-verify,omitempty"`
 	UDP            bool   `yaml:"udp,omitempty"`
+	DialerProxy    string `yaml:"dialer-proxy,omitempty"`
 }
 
 type mihomoAnyTLSProxy struct {
@@ -634,6 +640,7 @@ type mihomoAnyTLSProxy struct {
 	IdleSessionTimeout       int            `yaml:"idle-session-timeout,omitempty"`
 	MinIdleSession           int            `yaml:"min-idle-session,omitempty"`
 	DisableReuse             bool           `yaml:"disable-reuse,omitempty"`
+	DialerProxy              string         `yaml:"dialer-proxy,omitempty"`
 }
 
 type mihomoTrojanProxy struct {
@@ -649,6 +656,7 @@ type mihomoTrojanProxy struct {
 	ClientFingerprint string          `yaml:"client-fingerprint,omitempty"`
 	WSOpts            *mihomoWSOpts   `yaml:"ws-opts,omitempty"`
 	GRPCOpts          *mihomoGRPCOpts `yaml:"grpc-opts,omitempty"`
+	DialerProxy       string          `yaml:"dialer-proxy,omitempty"`
 }
 
 type mihomoWireGuardProxy struct {
@@ -666,6 +674,7 @@ type mihomoWireGuardProxy struct {
 	DNS              []string `yaml:"dns,omitempty"`
 	RemoteDNSResolve bool     `yaml:"remote-dns-resolve,omitempty"`
 	UDP              bool     `yaml:"udp"`
+	DialerProxy      string   `yaml:"dialer-proxy,omitempty"`
 }
 
 type mihomoTUICProxy struct {
@@ -681,6 +690,7 @@ type mihomoTUICProxy struct {
 	SNI                  string   `yaml:"sni,omitempty"`
 	DisableSNI           bool     `yaml:"disable-sni,omitempty"`
 	SkipCertVerify       bool     `yaml:"skip-cert-verify,omitempty"`
+	DialerProxy          string   `yaml:"dialer-proxy,omitempty"`
 }
 
 func renderMihomo(snapshot *resolver.ResolvedPolicySnapshot) ([]byte, error) {
@@ -712,17 +722,19 @@ func renderMihomo(snapshot *resolver.ResolvedPolicySnapshot) ([]byte, error) {
 				Down:           transportValue(c, "down"),
 				Obfs:           transportValue(c, "obfs"),
 				ObfsPassword:   transportValue(c, "obfs-password", "obfs_password"),
+				DialerProxy:    node.DialerProxy,
 			}
 			proxies = append(proxies, p)
 		case domain.ProtocolSS:
 			p := mihomoSSProxy{
-				Name:     node.DisplayName,
-				Type:     "ss",
-				Server:   node.Server,
-				Port:     node.Port,
-				Cipher:   c.Method,
-				Password: c.Password,
-				Plugin:   transportValue(c, "plugin"),
+				Name:        node.DisplayName,
+				Type:        "ss",
+				Server:      node.Server,
+				Port:        node.Port,
+				Cipher:      c.Method,
+				Password:    c.Password,
+				Plugin:      transportValue(c, "plugin"),
+				DialerProxy: node.DialerProxy,
 			}
 			proxies = append(proxies, p)
 		case domain.ProtocolVMess:
@@ -744,6 +756,7 @@ func renderMihomo(snapshot *resolver.ResolvedPolicySnapshot) ([]byte, error) {
 				SkipCertVerify:    domain.HasInsecureTransport(c.Transport),
 				ALPN:              extractMihomoALPN(c),
 				ClientFingerprint: transportValue(c, "fp", "fingerprint", "client-fingerprint", "client_fingerprint"),
+				DialerProxy:       node.DialerProxy,
 			}
 			if p.Network == "ws" {
 				ws := &mihomoWSOpts{}
@@ -784,6 +797,7 @@ func renderMihomo(snapshot *resolver.ResolvedPolicySnapshot) ([]byte, error) {
 				Flow:              transportValue(c, "flow"),
 				ClientFingerprint: transportValue(c, "fp", "fingerprint", "client-fingerprint", "client_fingerprint"),
 				RealityOpts:       realityOpts,
+				DialerProxy:       node.DialerProxy,
 			}
 			if echJSON := transportValue(c, "ech-opts", "ech_opts"); echJSON != "" {
 				if echOpts, err := unmarshalJSONMap(echJSON); err == nil && len(echOpts) > 0 {
@@ -842,6 +856,7 @@ func renderMihomo(snapshot *resolver.ResolvedPolicySnapshot) ([]byte, error) {
 				SkipCertVerify:    domain.HasInsecureTransport(c.Transport),
 				ALPN:              extractMihomoALPN(c),
 				ClientFingerprint: transportValue(c, "fp", "fingerprint", "client-fingerprint", "client_fingerprint"),
+				DialerProxy:       node.DialerProxy,
 			}
 			if p.Network == "ws" {
 				ws := &mihomoWSOpts{}
@@ -891,6 +906,7 @@ func renderMihomo(snapshot *resolver.ResolvedPolicySnapshot) ([]byte, error) {
 				DNS:              dns,
 				RemoteDNSResolve: len(dns) > 0,
 				UDP:              true,
+				DialerProxy:      node.DialerProxy,
 			}
 			proxies = append(proxies, p)
 		case domain.ProtocolTUIC:
@@ -907,6 +923,7 @@ func renderMihomo(snapshot *resolver.ResolvedPolicySnapshot) ([]byte, error) {
 				SNI:                  transportValue(c, "sni", "servername", "serverName", "peer"),
 				DisableSNI:           c.DisableSNI || domain.HasTUICDisableSNI(c.Transport),
 				SkipCertVerify:       domain.HasInsecureTransport(c.Transport),
+				DialerProxy:          node.DialerProxy,
 			}
 			proxies = append(proxies, p)
 		case domain.ProtocolHTTP:
@@ -925,6 +942,7 @@ func renderMihomo(snapshot *resolver.ResolvedPolicySnapshot) ([]byte, error) {
 				SNI:            transportValue(c, "sni", "servername", "serverName", "peer"),
 				SkipCertVerify: domain.HasInsecureTransport(c.Transport),
 				Headers:        headers,
+				DialerProxy:    node.DialerProxy,
 			}
 			proxies = append(proxies, p)
 		case domain.ProtocolSocks5:
@@ -939,6 +957,7 @@ func renderMihomo(snapshot *resolver.ResolvedPolicySnapshot) ([]byte, error) {
 				SNI:            transportValue(c, "sni", "servername", "serverName", "peer"),
 				SkipCertVerify: domain.HasInsecureTransport(c.Transport),
 				UDP:            domain.IsTruthy(transportValue(c, "udp")),
+				DialerProxy:    node.DialerProxy,
 			}
 			proxies = append(proxies, p)
 		case domain.ProtocolAnyTLS:
@@ -968,6 +987,7 @@ func renderMihomo(snapshot *resolver.ResolvedPolicySnapshot) ([]byte, error) {
 				IdleSessionTimeout:       idleTimeout,
 				MinIdleSession:           minIdle,
 				DisableReuse:             domain.IsTruthy(transportValue(c, "disable-reuse", "disable_reuse")),
+				DialerProxy:              node.DialerProxy,
 			}
 			proxies = append(proxies, p)
 		}

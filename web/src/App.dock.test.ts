@@ -77,8 +77,8 @@ describe('App.vue Navigation Dock & Layout Adaptability', () => {
     const moreSheet = document.querySelector('[data-testid="mobile-more-sheet"]')
     expect(moreSheet).toBeTruthy()
 
-    // The other 5 routes are accessible in the More sheet
-    const secondaryRouteIds = ['dashboard', 'dns', 'rules', 'publications', 'settings']
+    // The other 6 routes are accessible in the More sheet
+    const secondaryRouteIds = ['dashboard', 'dns', 'chains', 'rules', 'publications', 'settings']
     for (const routeId of secondaryRouteIds) {
       const linkBtn = moreSheet!.querySelector(`[data-testid="dock-link-${routeId}"]`)
       expect(linkBtn, `More sheet must contain entry for ${routeId}`).toBeTruthy()
@@ -112,8 +112,8 @@ describe('App.vue Navigation Dock & Layout Adaptability', () => {
     const nav = sidebar!.querySelector('nav')
     expect(nav).toBeTruthy()
 
-    // All 8 routes must exist in desktop sidebar
-    const allRouteIds = ['dashboard', 'subscriptions', 'nodes', 'dns', 'policy', 'rules', 'publications', 'settings']
+    // All 9 routes must exist in desktop sidebar
+    const allRouteIds = ['dashboard', 'subscriptions', 'nodes', 'dns', 'chains', 'policy', 'rules', 'publications', 'settings']
     for (const routeId of allRouteIds) {
       const link = sidebar!.querySelector(`button[href="#/${routeId}"], button[href="/${routeId}"]`)
       expect(link, `Desktop sidebar must contain entry for ${routeId}`).toBeTruthy()

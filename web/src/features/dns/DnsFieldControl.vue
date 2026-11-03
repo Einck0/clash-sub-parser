@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
+import { XMarkIcon } from '@heroicons/vue/24/outline'
+import yaml from 'js-yaml'
 import { uiText } from '../../locales/redesign'
 import {
   type DnsFieldDef,
@@ -11,21 +13,24 @@ const props = withDefaults(
     field: DnsFieldDef
     draft: Record<string, unknown>
     fieldError?: string
-    invalidJsonInput?: string
+    invalidMappingInput?: string
     disabled?: boolean
   }>(),
   {
     fieldError: '',
-    invalidJsonInput: undefined,
+    invalidMappingInput: undefined,
     disabled: false,
   }
 )
 
 const emit = defineEmits<{
   (e: 'update-list', key: string, text: string): void
+  (e: 'add-list-item', key: string, item: string): void
+  (e: 'remove-list-item', key: string, index: number): void
+  (e: 'paste-list-items', key: string, text: string): void
   (e: 'update-scalar', key: string, val: string): void
   (e: 'update-bool', key: string, val: boolean): void
-  (e: 'update-json', key: string, text: string): void
+  (e: 'update-yaml', key: string, text: string): void
   (e: 'remove-key', key: string): void
 }>()
 
@@ -36,6 +41,36 @@ const isKeyConfigured = computed(() => {
 const boolDisplayState = computed(() => {
   return getBoolDisplayState(props.draft, props.field.key)
 })
+
+const listItems = computed<string[]>(() => {
+  const val = props.draft[props.field.key]
+  if (Array.isArray(val)) {
+    return val.map(String)
+  }
+  return []
+})
+
+const newItemInput = ref('')
+
+function onAddItem() {
+  const trimmed = newItemInput.value.trim()
+  if (!trimmed) return
+  emit('add-list-item', props.field.key, trimmed)
+  newItemInput.value = ''
+}
+
+function onRemoveItem(index: number) {
+  emit('remove-list-item', props.field.key, index)
+}
+
+function onNewInputPaste(e: ClipboardEvent) {
+  const pasted = e.clipboardData?.getData('text')
+  if (pasted && pasted.includes('\n')) {
+    e.preventDefault()
+    emit('paste-list-items', props.field.key, pasted)
+    newItemInput.value = ''
+  }
+}
 
 function getListText(key: string): string {
   const val = props.draft[key]
@@ -103,22 +138,26 @@ function onBoolSelectChange(e: Event) {
   }
 }
 
-function getJsonText(key: string): string {
-  if (props.invalidJsonInput !== undefined) {
-    return props.invalidJsonInput
+function getYamlText(key: string): string {
+  if (props.invalidMappingInput !== undefined) {
+    return props.invalidMappingInput
   }
   const val = props.draft[key]
   if (val === undefined || val === null) return ''
-  return JSON.stringify(val, null, 2)
+  try {
+    return yaml.dump(val, { indent: 2, lineWidth: -1, noRefs: true, sortKeys: false }).trimEnd()
+  } catch {
+    return ''
+  }
 }
 
-function onJsonInput(e: Event) {
+function onYamlInput(e: Event) {
   const target = e.target as HTMLTextAreaElement
   const val = target.value
   if (val.trim() === '') {
     emit('remove-key', props.field.key)
   } else {
-    emit('update-json', props.field.key, val)
+    emit('update-yaml', props.field.key, val)
   }
 }
 </script>
@@ -155,19 +194,19 @@ function onJsonInput(e: Event) {
             v-if="boolDisplayState === 'unspecified'"
             class="badge badge-sm badge-ghost opacity-60 text-[10px]"
           >
-            {{ uiText('未指定', 'Unspecified') }}
+            {{ uiText('未配置', 'Unspecified') }}
           </span>
           <span
             v-else-if="boolDisplayState === 'true'"
             class="badge badge-sm badge-success text-[10px]"
           >
-            {{ uiText('已启用', 'Enabled') }}
+            {{ uiText('已开启', 'Enabled') }}
           </span>
           <span
             v-else-if="boolDisplayState === 'false'"
             class="badge badge-sm badge-neutral text-[10px]"
           >
-            {{ uiText('已禁用', 'Disabled') }}
+            {{ uiText('已停用', 'Disabled') }}
           </span>
           <span
             v-else
@@ -202,19 +241,70 @@ function onJsonInput(e: Event) {
 
     <!-- Control Area -->
     <div class="space-y-1.5">
-      <!-- 1. List Multiline -->
+      <!-- 1. List: Individual Items Chips + Add/Paste Input + Multiline Batch Textarea -->
       <template v-if="field.type === 'list'">
-        <textarea
-          :id="`field-${field.key}`"
-          class="textarea textarea-sm min-h-24 font-mono text-xs w-full bg-base-100 border border-base-300 rounded-lg focus:border-primary"
-          :aria-label="field.key"
-          :data-testid="`dns-list-${field.key}`"
-          :placeholder="field.placeholder || uiText('每行一个条目', 'One entry per line')"
-          :value="getListText(field.key)"
-          :disabled="disabled"
-          @input="onListInput"
-          @change="onListInput"
-        />
+        <!-- Existing Items Chips with Single-click Remove -->
+        <div v-if="listItems.length > 0" class="flex flex-wrap gap-1.5 py-1">
+          <div
+            v-for="(item, idx) in listItems"
+            :key="idx"
+            class="badge badge-neutral gap-1.5 text-xs font-mono py-2.5 px-2.5 max-w-full"
+            :data-testid="`dns-list-item-${field.key}-${idx}`"
+          >
+            <span class="truncate max-w-[200px] sm:max-w-xs">{{ item }}</span>
+            <button
+              type="button"
+              class="btn btn-ghost btn-circle btn-xs -mr-1 p-0 h-4 w-4 min-h-0 text-error/80 hover:text-error"
+              :data-testid="`dns-list-remove-${field.key}-${idx}`"
+              :disabled="disabled"
+              :title="uiText('删除此项', 'Remove this entry')"
+              @click="onRemoveItem(idx)"
+            >
+              <XMarkIcon class="w-3 h-3" />
+            </button>
+          </div>
+        </div>
+
+        <!-- Add item or Paste multiline input -->
+        <div class="flex items-center gap-1.5">
+          <input
+            v-model="newItemInput"
+            type="text"
+            class="input input-sm font-mono text-xs flex-1 bg-base-100 border border-base-300 rounded-lg focus:border-primary"
+            :data-testid="`dns-list-new-${field.key}`"
+            :placeholder="uiText('输入单项或直接在此粘贴多行条目…', 'Enter entry or paste multiline entries here…')"
+            :disabled="disabled"
+            @keydown.enter.prevent="onAddItem"
+            @paste="onNewInputPaste"
+          />
+          <button
+            type="button"
+            class="btn btn-sm btn-ghost border border-base-300 text-xs shrink-0"
+            :data-testid="`dns-list-add-${field.key}`"
+            :disabled="disabled || !newItemInput.trim()"
+            @click="onAddItem"
+          >
+            {{ uiText('添加', 'Add') }}
+          </button>
+        </div>
+
+        <!-- Direct Multiline Textarea (Supports full multiline edit & direct paste) -->
+        <div class="pt-1">
+          <div class="flex items-center justify-between text-[11px] text-base-content/60 mb-0.5">
+            <span>{{ uiText('多行编辑 / 粘贴区 (每行一条)：', 'Multiline edit / paste area (one per line):') }}</span>
+          </div>
+          <textarea
+            :id="`field-${field.key}`"
+            class="textarea textarea-sm min-h-20 font-mono text-xs w-full bg-base-100 border border-base-300 rounded-lg focus:border-primary"
+            :aria-label="field.key"
+            :data-testid="`dns-list-${field.key}`"
+            :placeholder="field.placeholder || uiText('每行一个条目', 'One entry per line')"
+            :value="getListText(field.key)"
+            :disabled="disabled"
+            @input="onListInput"
+            @change="onListInput"
+          />
+        </div>
       </template>
 
       <!-- 2. Scalar Text -->
@@ -272,13 +362,13 @@ function onJsonInput(e: Event) {
           @change="onBoolSelectChange"
         >
           <option value="">
-            {{ uiText('未指定 (遵循内核缺省)', 'Unspecified (core default)') }}
+            {{ uiText('未配置 (内核缺省)', 'Unspecified (core default)') }}
           </option>
           <option value="true">
-            {{ uiText('true (开启)', 'true (enabled)') }}
+            {{ uiText('启用 (true)', 'Enabled (true)') }}
           </option>
           <option value="false">
-            {{ uiText('false (关闭)', 'false (disabled)') }}
+            {{ uiText('停用 (false)', 'Disabled (false)') }}
           </option>
           <option
             v-if="boolDisplayState === 'custom'"
@@ -307,10 +397,10 @@ function onJsonInput(e: Event) {
         </div>
       </template>
 
-      <!-- 5. JSON Mapping -->
-      <template v-else-if="field.type === 'json'">
+      <!-- 5. Natural YAML Mapping -->
+      <template v-else-if="field.type === 'yaml-mapping'">
         <div v-if="field.example" class="text-[10px] text-base-content/60">
-          <span class="font-medium">{{ uiText('格式示例 (必须为 JSON 对象)：', 'Example format (must be a JSON object):') }}</span>
+          <span class="font-medium">{{ uiText('格式示例 (自然 YAML 键值映射)：', 'Example format (natural YAML mapping):') }}</span>
           <pre class="bg-base-200/80 border border-base-300/60 p-1.5 rounded mt-0.5 font-mono overflow-x-auto text-[10px]">{{ field.example }}</pre>
         </div>
         <textarea
@@ -318,12 +408,13 @@ function onJsonInput(e: Event) {
           class="textarea textarea-sm min-h-24 font-mono text-xs w-full bg-base-100 border border-base-300 rounded-lg focus:border-primary"
           :class="{ 'textarea-error border-error': fieldError }"
           :aria-label="field.key"
-          :data-testid="`dns-json-${field.key}`"
-          :value="getJsonText(field.key)"
-          :placeholder="field.example || '{}'"
+          :data-testid="`dns-yaml-${field.key}`"
+          :value="getYamlText(field.key)"
+          :placeholder="field.example || 'key: value'"
           :disabled="disabled"
-          @input="onJsonInput"
-          @change="onJsonInput"
+          spellcheck="false"
+          @input="onYamlInput"
+          @change="onYamlInput"
         />
         <div v-if="fieldError" class="text-error text-xs font-medium flex items-center gap-1 mt-1" data-testid="field-error">
           <span>⚠ {{ fieldError }}</span>

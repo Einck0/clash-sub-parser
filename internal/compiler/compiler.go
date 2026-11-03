@@ -154,6 +154,9 @@ func validate(snapshot *resolver.ResolvedPolicySnapshot, target domain.CompilerT
 		if strings.TrimSpace(node.DisplayName) == "" {
 			return &CapabilityError{Target: target, Location: loc, Feature: string(node.Protocol), Reason: "node display name is required"}
 		}
+		if target != domain.TargetMihomo && strings.TrimSpace(node.DialerProxy) != "" {
+			return &CapabilityError{Target: target, Location: loc, Feature: "dialer-proxy", Reason: "dialer-proxy is only supported on mihomo target"}
+		}
 		nodeIDs[node.LogicalID] = true
 		nodeNames[node.DisplayName] = true
 	}
@@ -563,6 +566,14 @@ func ValidateTargetCapabilities(snapshot *resolver.ResolvedPolicySnapshot, targe
 				Target:  string(target),
 			})
 			continue
+		}
+		if target != domain.TargetMihomo && strings.TrimSpace(node.DialerProxy) != "" {
+			diags = append(diags, CapabilityDiagnostic{
+				NodeID:  node.LogicalID,
+				Code:    "unsupported_target_capability",
+				Message: fmt.Sprintf("target %s does not support dialer-proxy", target),
+				Target:  string(target),
+			})
 		}
 		if err := validateCredentialEnvelope(target, i, node); err != nil {
 			diags = append(diags, CapabilityDiagnostic{

@@ -483,9 +483,9 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       expect(sidebar?.textContent).toContain('CSP Control Plane')
       expect(sidebar?.textContent).toContain('v1.0 Clean-Slate')
 
-      // Desktop navigation items (8 items: dashboard, subscriptions, nodes, dns, policy, rules, publications, settings)
+      // Desktop navigation items (9 items: dashboard, subscriptions, nodes, dns, chains, policy, rules, publications, settings)
       const navButtons = sidebar?.querySelectorAll('nav button')
-      expect(navButtons?.length).toBe(8)
+      expect(navButtons?.length).toBe(9)
 
       // Mobile bottom nav remains hidden on desktop
       const mobileNav = root.querySelector('nav.md\\:hidden')

@@ -1,7 +1,8 @@
 import { computed, ref, watch, type ComputedRef, type Ref } from 'vue'
+import yaml from 'js-yaml'
 import { ApiError, api } from '../../api/client'
 import { uiText } from '../../locales/redesign'
-import { useUnsavedChanges, type UseUnsavedChangesReturn } from '../../composables/useUnsavedChanges'
+import { useUnsavedChanges } from '../../composables/useUnsavedChanges'
 import type { DnsSettings, ValidatedDns } from './dnsTypes'
 
 function deepEqual(a: unknown, b: unknown): boolean {
@@ -29,6 +30,12 @@ function isPlainObject(val: unknown): val is Record<string, unknown> {
   return typeof val === 'object' && val !== null && !Array.isArray(val)
 }
 
+export function serializeDraftToYaml(draftObj: Record<string, unknown>, enabledVal: boolean): string {
+  const clone = structuredClone(draftObj)
+  clone.enable = enabledVal
+  return yaml.dump(clone, { indent: 2, lineWidth: -1, noRefs: true, sortKeys: false })
+}
+
 export interface UseDnsDraftReturn {
   settings: Ref<DnsSettings | null>
   enabled: Ref<boolean>
@@ -41,10 +48,12 @@ export interface UseDnsDraftReturn {
   previewing: Ref<boolean>
   busy: ComputedRef<boolean>
   previewYaml: Ref<string>
+  previewDraftRevision: Ref<number>
+  isPreviewStale: ComputedRef<boolean>
   error: Ref<string>
   notice: Ref<string>
   fieldErrors: Ref<Record<string, string>>
-  invalidJsonInputs: Ref<Record<string, string>>
+  invalidMappingInputs: Ref<Record<string, string>>
   hasValidationErrors: ComputedRef<boolean>
   visualDirty: ComputedRef<boolean>
   dirty: ComputedRef<boolean>
@@ -52,10 +61,15 @@ export interface UseDnsDraftReturn {
   generation: Ref<number>
 
   apply: (settingsValue: DnsSettings) => void
+  getList: (key: string) => string[]
+  setList: (key: string, items: string[]) => void
+  addListItem: (key: string, item: string) => void
+  removeListItem: (key: string, index: number) => void
+  pasteListItems: (key: string, multilineText: string) => void
   getListText: (key: string) => string
   setListText: (key: string, text: string) => void
-  getJsonText: (key: string) => string
-  setJsonText: (key: string, rawVal: string) => boolean
+  getYamlMappingText: (key: string) => string
+  setYamlMappingText: (key: string, rawVal: string) => boolean
   getString: (key: string, fallback?: string) => string
   setString: (key: string, val: string) => void
   getBool: (key: string, fallback?: boolean) => boolean
@@ -86,37 +100,38 @@ export function useDnsDraft(): UseDnsDraftReturn {
   const busy = computed(() => loading.value || saving.value || validating.value || previewing.value)
 
   const previewYaml = ref('')
+  const previewDraftRevision = ref(-1)
   const error = ref('')
   const notice = ref('')
 
   const fieldErrors = ref<Record<string, string>>({})
-  const invalidJsonInputs = ref<Record<string, string>>({})
+  const invalidMappingInputs = ref<Record<string, string>>({})
   const hasValidationErrors = computed(() => Object.keys(fieldErrors.value).length > 0)
 
-  // Monotonic counters to invalidate stale async responses and race conditions
+  // Monotonic counters to invalidate stale async responses and track edits
   const draftRevision = ref(0)
   const generation = ref(0)
 
   let applying = false
 
-  function invalidatePreview() {
-    previewYaml.value = ''
-  }
+  const isPreviewStale = computed(() => {
+    return Boolean(previewYaml.value) && previewDraftRevision.value !== draftRevision.value
+  })
 
-  // enabled direct v-model mutations must bump draftRevision and invalidate preview
+  // Direct v-model changes to enabled bump draftRevision
   watch(
     enabled,
     () => {
       if (applying) return
       draftRevision.value++
-      invalidatePreview()
     },
     { flush: 'sync' }
   )
 
   const visualDirty = computed(() => {
     if (!settings.value) return false
-    if (hasValidationErrors.value) return true
+    if (hasValidationErrors.value || Object.keys(invalidMappingInputs.value).length > 0) return true
+    if (enabled.value !== settings.value.enabled) return true
     return !deepEqual(draft.value, settings.value.config || {})
   })
 
@@ -136,12 +151,13 @@ export function useDnsDraft(): UseDnsDraftReturn {
   )
 
   function cleanupFieldError(clearedKey?: string) {
+    if (clearedKey && fieldErrors.value[clearedKey]) {
+      delete fieldErrors.value[clearedKey]
+    }
     const remainingKeys = Object.keys(fieldErrors.value)
     if (remainingKeys.length === 0) {
       if (
-        error.value.includes('必须是有效 JSON') ||
-        error.value.includes('必须是 JSON') ||
-        error.value.includes('valid JSON') ||
+        error.value.includes('YAML') ||
         error.value.includes('请先修正字段格式错误') ||
         error.value.includes('correct field format errors')
       ) {
@@ -158,16 +174,67 @@ export function useDnsDraft(): UseDnsDraftReturn {
     try {
       settings.value = settingsValue
       enabled.value = settingsValue.enabled
-      raw.value = settingsValue.raw_yaml || JSON.stringify(settingsValue.config || {}, null, 2)
+      raw.value = settingsValue.raw_yaml || serializeDraftToYaml(settingsValue.config || {}, settingsValue.enabled)
       draft.value = structuredClone(settingsValue.config || {})
       fieldErrors.value = {}
-      invalidJsonInputs.value = {}
+      invalidMappingInputs.value = {}
       error.value = ''
-      invalidatePreview()
+      previewYaml.value = ''
+      previewDraftRevision.value = -1
       draftRevision.value++
     } finally {
       applying = false
     }
+  }
+
+  function getList(key: string): string[] {
+    const val = draft.value[key]
+    if (Array.isArray(val)) {
+      return val.map(String)
+    }
+    return []
+  }
+
+  function setList(key: string, items: string[]) {
+    draftRevision.value++
+    draft.value = { ...draft.value, [key]: items.map((s) => s.trim()).filter((s) => s.length > 0) }
+  }
+
+  function addListItem(key: string, item: string) {
+    const trimmed = item.trim()
+    if (!trimmed) return
+    draftRevision.value++
+    const existing = getList(key)
+    const newLines = trimmed
+      .split('\n')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0)
+    draft.value = { ...draft.value, [key]: [...existing, ...newLines] }
+  }
+
+  function removeListItem(key: string, index: number) {
+    const existing = getList(key)
+    if (index < 0 || index >= existing.length) return
+    draftRevision.value++
+    const next = existing.filter((_, i) => i !== index)
+    if (next.length === 0) {
+      const copy = { ...draft.value }
+      delete copy[key]
+      draft.value = copy
+    } else {
+      draft.value = { ...draft.value, [key]: next }
+    }
+  }
+
+  function pasteListItems(key: string, multilineText: string) {
+    const lines = multilineText
+      .split('\n')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0)
+    if (lines.length === 0) return
+    draftRevision.value++
+    const existing = getList(key)
+    draft.value = { ...draft.value, [key]: [...existing, ...lines] }
   }
 
   function getListText(key: string): string {
@@ -180,7 +247,6 @@ export function useDnsDraft(): UseDnsDraftReturn {
 
   function setListText(key: string, text: string) {
     draftRevision.value++
-    invalidatePreview()
     const trimmed = text.trim()
     if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
       try {
@@ -197,21 +263,34 @@ export function useDnsDraft(): UseDnsDraftReturn {
       .split('\n')
       .map((s) => s.trim())
       .filter((s) => s.length > 0)
-    draft.value = { ...draft.value, [key]: lines }
+    if (lines.length === 0) {
+      if (Object.prototype.hasOwnProperty.call(draft.value, key)) {
+        const copy = { ...draft.value }
+        delete copy[key]
+        draft.value = copy
+      }
+    } else {
+      draft.value = { ...draft.value, [key]: lines }
+    }
   }
 
-  function getJsonText(key: string): string {
-    if (invalidJsonInputs.value[key] !== undefined) {
-      return invalidJsonInputs.value[key]
+  function getYamlMappingText(key: string): string {
+    if (invalidMappingInputs.value[key] !== undefined) {
+      return invalidMappingInputs.value[key]
     }
     const val = draft.value[key]
     if (val === undefined || val === null) {
       return ''
     }
-    return JSON.stringify(val, null, 2)
+    try {
+      return yaml.dump(val, { indent: 2, lineWidth: -1, noRefs: true, sortKeys: false }).trimEnd()
+    } catch {
+      return ''
+    }
   }
 
-  function setJsonText(key: string, rawVal: string): boolean {
+  function setYamlMappingText(key: string, rawVal: string): boolean {
+    draftRevision.value++
     const trimmed = rawVal.trim()
     if (trimmed === '') {
       if (Object.prototype.hasOwnProperty.call(draft.value, key)) {
@@ -219,43 +298,39 @@ export function useDnsDraft(): UseDnsDraftReturn {
         delete next[key]
         draft.value = next
       }
-      delete invalidJsonInputs.value[key]
+      delete invalidMappingInputs.value[key]
       delete fieldErrors.value[key]
       cleanupFieldError(key)
-      draftRevision.value++
-      invalidatePreview()
       return true
     }
 
     try {
-      const parsed = JSON.parse(rawVal)
+      const parsed = yaml.load(rawVal)
       if (!isPlainObject(parsed)) {
-        invalidJsonInputs.value[key] = rawVal
+        invalidMappingInputs.value[key] = rawVal
         const errMsg = uiText(
-          `${key} 必须是有效 JSON 对象（键值映射）`,
-          `${key} must be a valid JSON object mapping`
+          `${key} 必须是有效 YAML 键值映射（非标量或列表）`,
+          `${key} must be a valid YAML mapping (not scalar or list)`
         )
         fieldErrors.value[key] = errMsg
         error.value = errMsg
-        draftRevision.value++
-        invalidatePreview()
         return false
       }
 
       draft.value = { ...draft.value, [key]: parsed }
-      delete invalidJsonInputs.value[key]
+      delete invalidMappingInputs.value[key]
       delete fieldErrors.value[key]
       cleanupFieldError(key)
-      draftRevision.value++
-      invalidatePreview()
       return true
-    } catch {
-      invalidJsonInputs.value[key] = rawVal
-      const errMsg = uiText(`${key} 必须是有效 JSON`, `${key} must be valid JSON`)
+    } catch (err: any) {
+      invalidMappingInputs.value[key] = rawVal
+      const reason = err?.message || ''
+      const errMsg = uiText(
+        `${key} YAML 格式无效${reason ? `: ${reason}` : ''}`,
+        `${key} invalid YAML${reason ? `: ${reason}` : ''}`
+      )
       fieldErrors.value[key] = errMsg
       error.value = errMsg
-      draftRevision.value++
-      invalidatePreview()
       return false
     }
   }
@@ -268,7 +343,6 @@ export function useDnsDraft(): UseDnsDraftReturn {
 
   function setString(key: string, val: string) {
     draftRevision.value++
-    invalidatePreview()
     const trimmed = typeof val === 'string' ? val.trim() : ''
     if (!trimmed) {
       if (Object.prototype.hasOwnProperty.call(draft.value, key)) {
@@ -290,7 +364,6 @@ export function useDnsDraft(): UseDnsDraftReturn {
 
   function setBool(key: string, val: boolean) {
     draftRevision.value++
-    invalidatePreview()
     draft.value = { ...draft.value, [key]: val }
   }
 
@@ -306,21 +379,19 @@ export function useDnsDraft(): UseDnsDraftReturn {
       draft.value = next
       changed = true
     }
-    if (invalidJsonInputs.value[key] !== undefined || fieldErrors.value[key] !== undefined) {
-      delete invalidJsonInputs.value[key]
+    if (invalidMappingInputs.value[key] !== undefined || fieldErrors.value[key] !== undefined) {
+      delete invalidMappingInputs.value[key]
       delete fieldErrors.value[key]
       cleanupFieldError(key)
       changed = true
     }
     if (changed) {
       draftRevision.value++
-      invalidatePreview()
     }
   }
 
   function onRawInput(val: string) {
     draftRevision.value++
-    invalidatePreview()
     raw.value = val
   }
 
@@ -365,7 +436,7 @@ export function useDnsDraft(): UseDnsDraftReturn {
     const currentGen = ++generation.value
     const currentDraftRev = draftRevision.value
     const capturedEnabled = enabled.value
-    const rawInput = mode.value === 'raw' ? raw.value : JSON.stringify(draft.value, null, 2)
+    const rawInput = mode.value === 'raw' ? raw.value : serializeDraftToYaml(draft.value, capturedEnabled)
 
     try {
       const validated = await api.post<ValidatedDns>('/api/v1/settings/dns/validate', {
@@ -377,11 +448,13 @@ export function useDnsDraft(): UseDnsDraftReturn {
         return
       }
       previewYaml.value = validated.raw_yaml
+      previewDraftRevision.value = currentDraftRev
     } catch (e: any) {
       if (currentGen !== generation.value || currentDraftRev !== draftRevision.value) {
         return
       }
       previewYaml.value = ''
+      previewDraftRevision.value = -1
       error.value = e instanceof Error ? e.message : uiText('生成 DNS 预览失败', 'Failed to generate DNS preview')
     } finally {
       previewing.value = false
@@ -404,28 +477,25 @@ export function useDnsDraft(): UseDnsDraftReturn {
     try {
       if (next === 'visual') {
         const parsed = await validate(raw.value, capturedEnabled)
-        // Guard against race conditions: user edited or another operation was triggered while validating
         if (currentGen !== generation.value || currentDraftRev !== draftRevision.value) {
           return
         }
         draft.value = structuredClone(parsed.config || {})
         raw.value = parsed.raw_yaml
         fieldErrors.value = {}
-        invalidJsonInputs.value = {}
+        invalidMappingInputs.value = {}
         draftRevision.value++
-        invalidatePreview()
       } else {
-        const parsed = await validate(JSON.stringify(draft.value, null, 2), capturedEnabled)
-        // Guard against race conditions: user edited or another operation was triggered while validating
+        const yamlInput = serializeDraftToYaml(draft.value, capturedEnabled)
+        const parsed = await validate(yamlInput, capturedEnabled)
         if (currentGen !== generation.value || currentDraftRev !== draftRevision.value) {
           return
         }
         raw.value = parsed.raw_yaml
         draft.value = structuredClone(parsed.config || {})
         fieldErrors.value = {}
-        invalidJsonInputs.value = {}
+        invalidMappingInputs.value = {}
         draftRevision.value++
-        invalidatePreview()
       }
       mode.value = next
     } catch (e: any) {
@@ -449,7 +519,7 @@ export function useDnsDraft(): UseDnsDraftReturn {
     const capturedRevision = settings.value.revision
 
     try {
-      const rawInput = mode.value === 'raw' ? raw.value : JSON.stringify(draft.value, null, 2)
+      const rawInput = mode.value === 'raw' ? raw.value : serializeDraftToYaml(draft.value, capturedEnabled)
       const validated = await validate(rawInput, capturedEnabled)
       if (currentGen !== generation.value || currentDraftRev !== draftRevision.value) {
         return
@@ -509,10 +579,12 @@ export function useDnsDraft(): UseDnsDraftReturn {
     previewing,
     busy,
     previewYaml,
+    previewDraftRevision,
+    isPreviewStale,
     error,
     notice,
     fieldErrors,
-    invalidJsonInputs,
+    invalidMappingInputs,
     hasValidationErrors,
     visualDirty,
     dirty,
@@ -520,10 +592,15 @@ export function useDnsDraft(): UseDnsDraftReturn {
     generation,
 
     apply,
+    getList,
+    setList,
+    addListItem,
+    removeListItem,
+    pasteListItems,
     getListText,
     setListText,
-    getJsonText,
-    setJsonText,
+    getYamlMappingText,
+    setYamlMappingText,
     getString,
     setString,
     getBool,

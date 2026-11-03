@@ -39,6 +39,12 @@ export const routes: RouteRecordRaw[] = [
     meta: { title: 'DNS', icon: 'GlobeAltIcon' },
   },
   {
+    path: '/chains',
+    name: 'chains',
+    component: () => import('../features/chains/ChainsView.vue'),
+    meta: { title: 'Proxy Chains', icon: 'LinkIcon' },
+  },
+  {
     path: '/policy',
     name: 'policy',
     component: () => import('../features/policy/PolicyView.vue'),
@@ -71,7 +77,7 @@ export const routes: RouteRecordRaw[] = [
       if (matchedTab === 'probes') {
         return '/nodes'
       }
-      if (['dashboard', 'subscriptions', 'nodes', 'dns', 'policy', 'rules', 'publications', 'settings'].includes(matchedTab)) {
+      if (['dashboard', 'subscriptions', 'nodes', 'dns', 'chains', 'policy', 'rules', 'publications', 'settings'].includes(matchedTab)) {
         return `/${matchedTab}`
       }
       return '/dashboard'

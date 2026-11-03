@@ -254,6 +254,16 @@ func (r *defaultResolver) Resolve(ctx context.Context, input ResolveInput) (*Res
 		GroupCounts:         groupFilterCounts,
 	}
 
+	// 7.5. Resolve proxy chains if present
+	var chainEffects []ChainEffect
+	if len(input.ChainBindings) > 0 {
+		var err error
+		snapshotNodes, chainEffects, err = ResolveChains(snapshotNodes, resolvedGroups, input.NodeSources, input.ChainBindings)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	// 8. Build initial snapshot object (without volatile timestamps in digest)
 	snap := &ResolvedPolicySnapshot{
 		InputDigest:        inputDigest,
@@ -272,6 +282,7 @@ func (r *defaultResolver) Resolve(ctx context.Context, input ResolveInput) (*Res
 		AdmittedNodeIDs:    finalAdmittedIDs,
 		ExcludedNodeIDs:    finalExcludedIDs,
 		FilterCounts:       filterCounts,
+		ChainEffects:       chainEffects,
 		ResolvedAt:         time.Now().UTC(),
 	}
 

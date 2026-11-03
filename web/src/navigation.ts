@@ -3,6 +3,7 @@ export const VALID_TABS = [
   'subscriptions',
   'nodes',
   'dns',
+  'chains',
   'policy',
   'rules',
   'publications',
@@ -19,6 +20,7 @@ export type MobilePrimaryTab = (typeof MOBILE_PRIMARY_TABS)[number]
 export const MOBILE_MORE_TABS = [
   'dashboard',
   'dns',
+  'chains',
   'rules',
   'publications',
   'settings',

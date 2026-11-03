@@ -43,6 +43,7 @@ type Service struct {
 	subLinkRepo    domain.SubscriptionLinkRepository
 	factsLoader    domain.ConsistentFactsLoader
 	dnsRepo        domain.DNSSettingsRepository
+	chainRepo      domain.ProxyChainRepository
 	concurrencySem chan struct{}
 }
 
@@ -151,6 +152,13 @@ func WithConsistentFactsLoader(loader domain.ConsistentFactsLoader) Option {
 func WithDNSSettingsRepository(repo domain.DNSSettingsRepository) Option {
 	return func(s *Service) {
 		s.dnsRepo = repo
+	}
+}
+
+// WithProxyChainRepository sets the proxy chain repository for snapshot resolution.
+func WithProxyChainRepository(repo domain.ProxyChainRepository) Option {
+	return func(s *Service) {
+		s.chainRepo = repo
 	}
 }
 
@@ -940,7 +948,28 @@ func (s *Service) assembleResolveInput(ctx context.Context, revisionID string, i
 		nodeIDs[i] = n.LogicalID
 	}
 
+	var chainBindings []domain.ProxyChainBinding
+	needsChainSources := false
+	if s.chainRepo != nil {
+		chainCfg, err := s.chainRepo.Get(ctx)
+		if err != nil {
+			return nil, domain.NewInternalError("proxy_chain_unavailable", fmt.Sprintf("failed to read proxy chain bindings: %v", err))
+		}
+		if chainCfg != nil {
+			chainBindings = chainCfg.Bindings
+			for _, b := range chainBindings {
+				if b.Enabled && b.TargetType == domain.ProxyChainTargetSubscription {
+					needsChainSources = true
+					break
+				}
+			}
+		}
+	}
+
 	needsSources, needsObservations := filterDependencies(globalFilter, groupFilters, groups)
+	if needsChainSources {
+		needsSources = true
+	}
 	var nodeSources map[string][]domain.NodeSource
 	if needsSources && s.sourceRepo == nil {
 		return nil, domain.NewInternalError("node_sources_unavailable", "node sources required by configured filter are unavailable")
@@ -990,6 +1019,7 @@ func (s *Service) assembleResolveInput(ctx context.Context, revisionID string, i
 		PolicyRules:        policyRules,
 		AdmissionRules:     admissionRules,
 		DNS:                dnsCfg,
+		ChainBindings:      chainBindings,
 		GlobalFilter:       globalFilter,
 		GroupFilters:       groupFilters,
 		NodeSources:        nodeSources,
@@ -1041,6 +1071,16 @@ func (s *Service) resolveTargetSnapshot(ctx context.Context, revisionID string, 
 	input, err := s.assembleResolveInput(ctx, revisionID, target == domain.TargetMihomo)
 	if err != nil {
 		return nil, err
+	}
+
+	// Active chain bindings with non-Mihomo target fail domain validation
+	// unsupported_target_capability before graph stripping.
+	if target != domain.TargetMihomo {
+		for _, b := range input.ChainBindings {
+			if b.Enabled {
+				return nil, domain.NewValidationError("unsupported_target_capability", fmt.Sprintf("proxy chains are only supported for target %s, but target is %s", domain.TargetMihomo, target))
+			}
+		}
 	}
 
 	// Pure-node formats do not consume a policy graph. Do not validate an

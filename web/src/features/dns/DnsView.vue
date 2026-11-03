@@ -7,10 +7,11 @@ import {
   XMarkIcon,
 } from '@heroicons/vue/24/outline'
 import { uiText } from '../../locales/redesign'
+import SettingsSections from '../settings/SettingsSections.vue'
 import { useDnsDraft } from './useDnsDraft'
 import {
-  DNS_BASIC_FIELDS,
-  DNS_GROUPS,
+  DNS_COMMON_FIELDS,
+  DNS_ADVANCED_GROUPS,
   getUnknownKeys,
 } from './dnsFields'
 import DnsFieldControl from './DnsFieldControl.vue'
@@ -27,14 +28,18 @@ const {
   previewing,
   busy,
   previewYaml,
+  isPreviewStale,
   error,
   notice,
   fieldErrors,
-  invalidJsonInputs,
+  invalidMappingInputs,
   hasValidationErrors,
   dirty,
+  addListItem,
+  removeListItem,
+  pasteListItems,
   setListText,
-  setJsonText,
+  setYamlMappingText,
   setString,
   setBool,
   removeKey,
@@ -96,6 +101,9 @@ onMounted(() => {
     data-testid="dns-view"
     :aria-label="uiText('客户端 DNS 配置', 'Client DNS Settings')"
   >
+    <!-- Top Shared Navigation: CSP / DNS / Chains -->
+    <SettingsSections active="dns" />
+
     <!-- DNS-local responsive toolbar: Accessible SR-only title, natural wrapping on mobile -->
     <div
       class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5 sm:gap-3 min-w-0 w-full"
@@ -153,7 +161,7 @@ onMounted(() => {
         data-testid="toolbar-actions"
       >
         <div class="flex items-center gap-1.5">
-          <!-- Dirty indicator badge (source-aware: default config vs saved) -->
+          <!-- Dirty indicator badge -->
           <span
             v-if="dirty"
             class="badge badge-sm badge-warning font-semibold text-[11px]"
@@ -224,84 +232,131 @@ onMounted(() => {
         <div class="card-body p-4 sm:p-6 space-y-6">
           <!-- Mode 1: Visual Editor -->
           <template v-if="mode === 'visual'">
-            <!-- Section 1: Basic Settings -->
-            <div class="space-y-3">
+            <!-- Section 1: 常用核心配置 (Core Settings - Upfront & Not Folded) -->
+            <div class="space-y-3" data-testid="dns-common-section">
               <div class="flex items-center justify-between pb-1.5 border-b border-base-300/60">
                 <div>
                   <h3 class="text-xs sm:text-sm font-bold uppercase tracking-wider text-base-content/90">
-                    {{ uiText('基础设置', 'Basic Settings') }}
+                    {{ uiText('常用核心设置', 'Core DNS Settings') }}
                   </h3>
                   <p class="text-[11px] text-base-content/60 mt-0.5">
-                    {{ uiText('主要 DNS 上游服务器、解析增强模式及 IPv6 解析；未设置项均遵循客户端内核缺省。', 'Primary upstream DNS servers, enhanced mode and IPv6 resolution; unset fields use client core defaults.') }}
+                    {{ uiText('主要上游、后备与引导解析器，Fake-IP 地址池与过滤列表；未配置项均遵循客户端内核缺省。', 'Primary, fallback, and bootstrap nameservers, Fake-IP pool and filters; unconfigured options use core defaults.') }}
                   </p>
                 </div>
               </div>
 
-              <!-- Primary nameserver takes full width for clear multiline visibility -->
+              <!-- Primary nameserver: full width for visibility -->
               <DnsFieldControl
-                :field="DNS_BASIC_FIELDS[0]"
+                :field="DNS_COMMON_FIELDS[0]"
                 :draft="draft"
-                :field-error="fieldErrors[DNS_BASIC_FIELDS[0].key]"
-                :invalid-json-input="invalidJsonInputs[DNS_BASIC_FIELDS[0].key]"
+                :field-error="fieldErrors[DNS_COMMON_FIELDS[0].key]"
+                :invalid-mapping-input="invalidMappingInputs[DNS_COMMON_FIELDS[0].key]"
                 :disabled="busy"
                 @update-list="setListText"
+                @add-list-item="addListItem"
+                @remove-list-item="removeListItem"
+                @paste-list-items="pasteListItems"
                 @update-scalar="setString"
                 @update-bool="setBool"
-                @update-json="setJsonText"
+                @update-yaml="setYamlMappingText"
                 @remove-key="removeKey"
               />
 
-              <!-- Enhanced mode and IPv6 side by side -->
-              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+              <!-- Fallback & Bootstrap side-by-side -->
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4">
                 <DnsFieldControl
-                  v-for="field in DNS_BASIC_FIELDS.slice(1)"
+                  v-for="field in DNS_COMMON_FIELDS.slice(1, 3)"
                   :key="field.key"
                   :field="field"
                   :draft="draft"
                   :field-error="fieldErrors[field.key]"
-                  :invalid-json-input="invalidJsonInputs[field.key]"
+                  :invalid-mapping-input="invalidMappingInputs[field.key]"
                   :disabled="busy"
                   @update-list="setListText"
+                  @add-list-item="addListItem"
+                  @remove-list-item="removeListItem"
+                  @paste-list-items="pasteListItems"
                   @update-scalar="setString"
                   @update-bool="setBool"
-                  @update-json="setJsonText"
+                  @update-yaml="setYamlMappingText"
                   @remove-key="removeKey"
                 />
               </div>
+
+              <!-- Enhanced mode, Fake-IP range, IPv6, Listen in 2-column grid -->
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+                <DnsFieldControl
+                  v-for="field in [DNS_COMMON_FIELDS[3], DNS_COMMON_FIELDS[4], DNS_COMMON_FIELDS[6], DNS_COMMON_FIELDS[7]]"
+                  :key="field.key"
+                  :field="field"
+                  :draft="draft"
+                  :field-error="fieldErrors[field.key]"
+                  :invalid-mapping-input="invalidMappingInputs[field.key]"
+                  :disabled="busy"
+                  @update-list="setListText"
+                  @add-list-item="addListItem"
+                  @remove-list-item="removeListItem"
+                  @paste-list-items="pasteListItems"
+                  @update-scalar="setString"
+                  @update-bool="setBool"
+                  @update-yaml="setYamlMappingText"
+                  @remove-key="removeKey"
+                />
+              </div>
+
+              <!-- Fake-IP filter list: full width -->
+              <DnsFieldControl
+                :field="DNS_COMMON_FIELDS[5]"
+                :draft="draft"
+                :field-error="fieldErrors[DNS_COMMON_FIELDS[5].key]"
+                :invalid-mapping-input="invalidMappingInputs[DNS_COMMON_FIELDS[5].key]"
+                :disabled="busy"
+                @update-list="setListText"
+                @add-list-item="addListItem"
+                @remove-list-item="removeListItem"
+                @paste-list-items="pasteListItems"
+                @update-scalar="setString"
+                @update-bool="setBool"
+                @update-yaml="setYamlMappingText"
+                @remove-key="removeKey"
+              />
             </div>
 
-            <!-- Section 2: Advanced Settings -->
-            <div class="space-y-3 pt-2">
+            <!-- Section 2: 高级与扩展配置 (Advanced Settings - YAML Mappings, Dedicated Servers, Switches) -->
+            <div class="space-y-3 pt-2" data-testid="dns-advanced-section">
               <div class="flex items-center justify-between pb-1.5 border-b border-base-300/60">
                 <div>
                   <h3 class="text-xs sm:text-sm font-bold uppercase tracking-wider text-base-content/90">
-                    {{ uiText('高级配置', 'Advanced Settings') }}
+                    {{ uiText('高级与扩展配置', 'Advanced & Policy Settings') }}
                   </h3>
                   <p class="text-[11px] text-base-content/60 mt-0.5">
-                    {{ uiText('按需配置引导服务器、Fake-IP 范围、回退策略及 Hosts 选项；未设置项遵循客户端缺省。', 'Configure bootstrap servers, Fake-IP range, fallback policy, and hosts options as needed; unset fields use client defaults.') }}
+                    {{ uiText('按需配置自然 YAML 解析策略映射、代理/直连专用解析服务器与客户端路由开关；未配置项遵循客户端缺省。', 'Configure natural YAML routing policies, dedicated nameservers, and routing flags as needed.') }}
                   </p>
                 </div>
               </div>
 
               <div class="space-y-3">
                 <DnsGroupCard
-                  v-for="group in DNS_GROUPS"
+                  v-for="group in DNS_ADVANCED_GROUPS"
                   :key="group.id"
                   :group="group"
                   :draft="draft"
                   :field-errors="fieldErrors"
-                  :invalid-json-inputs="invalidJsonInputs"
+                  :invalid-mapping-inputs="invalidMappingInputs"
                   :disabled="busy"
                   @update-list="setListText"
+                  @add-list-item="addListItem"
+                  @remove-list-item="removeListItem"
+                  @paste-list-items="pasteListItems"
                   @update-scalar="setString"
                   @update-bool="setBool"
-                  @update-json="setJsonText"
+                  @update-yaml="setYamlMappingText"
                   @remove-key="removeKey"
                 />
               </div>
             </div>
 
-            <!-- Section 3: Preserved Custom / Extension Keys -->
+            <!-- Section 3: 保全自定义/扩展字段 (Preserved Custom Keys) -->
             <div
               v-if="unknownKeys.length > 0"
               class="p-3 sm:p-4 rounded-xl bg-base-300/30 border border-base-300/70 text-xs space-y-2"
@@ -342,7 +397,7 @@ onMounted(() => {
                   {{ uiText('完整 YAML 配置草稿', 'Full YAML Configuration Draft') }}
                 </span>
                 <p class="text-[11px] text-base-content/60 mt-0.5">
-                  {{ uiText('注意：保存时由服务端重新规范化序列化，不保留原始注释；支持直接编辑全部标准与自定义字段。', 'Note: Re-normalized by server on save without retaining comments; supports all standard & custom fields.') }}
+                  {{ uiText('注意：保存时由服务端重新规范化序列化；支持直接编辑全部标准与自定义字段。', 'Note: Re-normalized by server on save; supports all standard & custom fields.') }}
                 </p>
               </div>
             </div>
@@ -366,12 +421,27 @@ onMounted(() => {
             data-testid="dns-preview-section"
           >
             <div class="flex items-center justify-between">
-              <div class="flex items-center gap-2">
-                <EyeIcon class="w-4 h-4 text-primary" />
+              <div class="flex flex-wrap items-center gap-2">
+                <EyeIcon class="w-4 h-4 text-primary shrink-0" />
                 <span class="text-xs font-bold text-base-content">
                   {{ uiText('当前草稿规范化 DNS 配置块预览', 'Current Draft Normalized DNS Block Preview') }}
                 </span>
-                <span class="badge badge-sm badge-primary text-[10px]">
+                <!-- Current vs Stale preview status badge -->
+                <span
+                  v-if="!isPreviewStale"
+                  class="badge badge-sm badge-success text-[10px]"
+                  data-testid="dns-preview-status-current"
+                >
+                  {{ uiText('当前草稿预览 (最新)', 'Current draft preview (latest)') }}
+                </span>
+                <span
+                  v-else
+                  class="badge badge-sm badge-warning text-[10px]"
+                  data-testid="dns-preview-status-stale"
+                >
+                  {{ uiText('草稿已变更 (预览已过时)', 'Draft changed (preview stale)') }}
+                </span>
+                <span class="badge badge-sm badge-neutral text-[10px]">
                   {{ uiText('只读 (未持久化)', 'Read-only (not saved)') }}
                 </span>
               </div>
@@ -388,7 +458,7 @@ onMounted(() => {
             </div>
 
             <p class="text-[11px] text-base-content/60">
-              {{ uiText('此预览为当前草稿的服务端规范化 DNS 配置块（无注释），反映保存后导出订阅中的 dns: 配置结构；并非 DNS 连通性测试或已发布的客户端配置。', 'Normalized DNS configuration block for current draft (without comments); reflects dns: block in exported subscription once saved; not a DNS connectivity test or published configuration.') }}
+              {{ uiText('此预览为当前草稿的服务端规范化 DNS 配置块；保存后导出订阅中的 dns: 配置结构与此一致；未保存到服务端，需点击保存生效。', 'Normalized DNS configuration block for current draft; reflects dns: block in exported subscription once saved; click Validate & Save to persist.') }}
             </p>
 
             <textarea

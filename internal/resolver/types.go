@@ -70,6 +70,9 @@ type ResolvedNode struct {
 	Active             bool                             `json:"active"`
 	ConnectionRevision int64                            `json:"connection_revision,omitempty"`
 	Position           int                              `json:"position"`
+	DialerProxy        string                           `json:"dialer_proxy,omitempty"`
+	ChainBindingID     string                           `json:"chain_binding_id,omitempty"`
+	ChainSource        string                           `json:"chain_source,omitempty"`
 }
 
 // ResolvedGroupMember represents an ordered reference inside a policy group.
@@ -86,15 +89,15 @@ type ResolvedGroup struct {
 	EffectiveEmptyPass  bool                  `json:"effective_empty_pass"`
 	InheritGlobalFilter bool                  `json:"inherit_global_filter"`
 	ID                  string                `json:"id"`
-	Name               string                `json:"name"`
-	GroupType          domain.GroupType      `json:"group_type"`
-	Members            []ResolvedGroupMember `json:"members"`
-	ChildGroupIDs      []string              `json:"child_group_ids"`
-	NodeLogicalIDs     []string              `json:"node_logical_ids"`
-	AllNodeLogicalIDs  []string              `json:"all_node_logical_ids"`
-	ExpandedNodeIDs    []string              `json:"expanded_node_ids,omitempty"`
-	Sources            []domain.MemberSource `json:"sources,omitempty"`
-	Position           int                   `json:"position"`
+	Name                string                `json:"name"`
+	GroupType           domain.GroupType      `json:"group_type"`
+	Members             []ResolvedGroupMember `json:"members"`
+	ChildGroupIDs       []string              `json:"child_group_ids"`
+	NodeLogicalIDs      []string              `json:"node_logical_ids"`
+	AllNodeLogicalIDs   []string              `json:"all_node_logical_ids"`
+	ExpandedNodeIDs     []string              `json:"expanded_node_ids,omitempty"`
+	Sources             []domain.MemberSource `json:"sources,omitempty"`
+	Position            int                   `json:"position"`
 }
 
 // UsesEmptyPass never treats PASS as a node or inherits permission from children.
@@ -136,7 +139,22 @@ type ResolvedPolicySnapshot struct {
 
 	FilterCounts *FilterLayerCounts `json:"filter_counts,omitempty"`
 
+	// Chain effects for resolved policy snapshot
+	ChainEffects []ChainEffect `json:"chain_effects,omitempty"`
+
 	ResolvedAt time.Time `json:"resolved_at"`
+}
+
+// ChainEffect records the resolved outcome of an active chain binding on nodes in the snapshot.
+type ChainEffect struct {
+	BindingID       string       `json:"binding_id"`
+	TargetCount     int          `json:"target_count"`
+	ChainCount      int          `json:"chain_count"`
+	SkipCount       int          `json:"skip_count"`
+	OverriddenCount int          `json:"overridden_count"`
+	ChainSamples    []string     `json:"chain_samples,omitempty"`
+	SkipSamples     []string     `json:"skip_samples,omitempty"`
+	Diagnostics     []Diagnostic `json:"diagnostics,omitempty"`
 }
 
 // ResolveInput encapsulates all raw inputs to be resolved into a ResolvedPolicySnapshot.
@@ -159,6 +177,9 @@ type ResolveInput struct {
 	RiskReviewAction   domain.RiskAction
 	RiskDecisions      []domain.RiskDecision
 	ExcludedNodeIDs    []string
+
+	// Proxy chain inputs
+	ChainBindings []domain.ProxyChainBinding
 
 	// Node filter inputs (two-level filtering)
 	GlobalFilter       *domain.NodeFilterSpec

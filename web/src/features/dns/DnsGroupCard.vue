@@ -13,13 +13,13 @@ const props = withDefaults(
     group: DnsGroupDef
     draft: Record<string, unknown>
     fieldErrors?: Record<string, string>
-    invalidJsonInputs?: Record<string, string>
+    invalidMappingInputs?: Record<string, string>
     disabled?: boolean
     defaultOpen?: boolean
   }>(),
   {
     fieldErrors: () => ({}),
-    invalidJsonInputs: () => ({}),
+    invalidMappingInputs: () => ({}),
     disabled: false,
     defaultOpen: false,
   }
@@ -27,9 +27,12 @@ const props = withDefaults(
 
 defineEmits<{
   (e: 'update-list', key: string, text: string): void
+  (e: 'add-list-item', key: string, item: string): void
+  (e: 'remove-list-item', key: string, index: number): void
+  (e: 'paste-list-items', key: string, text: string): void
   (e: 'update-scalar', key: string, val: string): void
   (e: 'update-bool', key: string, val: boolean): void
-  (e: 'update-json', key: string, text: string): void
+  (e: 'update-yaml', key: string, text: string): void
   (e: 'remove-key', key: string): void
 }>()
 
@@ -107,7 +110,7 @@ const hasErrorInGroup = computed(() => {
       </div>
     </button>
 
-    <!-- Disclosed Content (v-show ensures inputs & incomplete drafts remain mounted) -->
+    <!-- Disclosed Content -->
     <div
       v-show="isOpen"
       :id="`group-content-${group.id}`"
@@ -121,12 +124,15 @@ const hasErrorInGroup = computed(() => {
           :field="field"
           :draft="draft"
           :field-error="fieldErrors[field.key]"
-          :invalid-json-input="invalidJsonInputs[field.key]"
+          :invalid-mapping-input="invalidMappingInputs[field.key]"
           :disabled="disabled"
           @update-list="(k, t) => $emit('update-list', k, t)"
+          @add-list-item="(k, i) => $emit('add-list-item', k, i)"
+          @remove-list-item="(k, i) => $emit('remove-list-item', k, i)"
+          @paste-list-items="(k, t) => $emit('paste-list-items', k, t)"
           @update-scalar="(k, v) => $emit('update-scalar', k, v)"
           @update-bool="(k, b) => $emit('update-bool', k, b)"
-          @update-json="(k, t) => $emit('update-json', k, t)"
+          @update-yaml="(k, t) => $emit('update-yaml', k, t)"
           @remove-key="(k) => $emit('remove-key', k)"
         />
       </div>

@@ -13,6 +13,7 @@ import (
 	"clash-sub-parser/internal/application/iprisk"
 	"clash-sub-parser/internal/application/policy"
 	"clash-sub-parser/internal/application/probe"
+	"clash-sub-parser/internal/application/proxychain"
 	"clash-sub-parser/internal/application/publication"
 	"clash-sub-parser/internal/application/revision"
 	"clash-sub-parser/internal/application/subscription"
@@ -26,6 +27,8 @@ type RouterConfig struct {
 	TokenHolder                AdminTokenHolder
 	SettingsRepository         domain.SettingsRepository
 	DNSSettingsRepository      domain.DNSSettingsRepository
+	ProxyChainRepository       domain.ProxyChainRepository
+	ProxyChainService          *proxychain.Service
 	EnvironmentFetchProxy      string
 	ReadinessChecker           ReadinessCheckerFunc
 	PublicationTokenValidator  PublicationTokenValidatorFunc
@@ -52,6 +55,11 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	if cfg.PolicyService != nil && cfg.PublicationService != nil {
 		cfg.PolicyService.SetSnapshotProvider(cfg.PublicationService.ResolvePolicySnapshot)
 		cfg.PolicyService.SetInputProvider(cfg.PublicationService.AssembleResolveInput)
+	}
+	if cfg.ProxyChainService != nil && cfg.PublicationService != nil {
+		cfg.ProxyChainService.SetInputProvider(func(ctx context.Context) (*resolver.ResolveInput, error) {
+			return cfg.PublicationService.AssembleResolveInput(ctx, "")
+		})
 	}
 	if cfg.TokenHolder == nil {
 		cost := MinHashCost
@@ -157,6 +165,9 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		}
 		registerIPRiskRoutes(api, cfg)
 		registerSettingsRoutes(api, cfg)
+		if cfg.ProxyChainService != nil {
+			registerProxyChainRoutes(api, cfg.ProxyChainService)
+		}
 
 		api.NotFound(func(w http.ResponseWriter, r *http.Request) {
 			WriteError(w, r, http.StatusNotFound, "not_found", "API endpoint not found")

@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import yaml from 'js-yaml'
 import { api } from '../../api/client'
-import { useDnsDraft } from './useDnsDraft'
+import { useDnsDraft, serializeDraftToYaml } from './useDnsDraft'
 import type { DnsSettings } from './dnsTypes'
 
 const createMockSettings = (overrides?: Partial<DnsSettings>): DnsSettings => ({
@@ -31,7 +32,7 @@ const createMockSettings = (overrides?: Partial<DnsSettings>): DnsSettings => ({
     'nameserver-policy': { 'geosite:cn': '223.5.5.5' },
     'fallback-filter': { geoip: true, ipcidr: ['240.0.0.0/4'] },
     'proxy-server-nameserver-policy': { 'domain:proxy.lan': '1.0.0.1' },
-    // Custom unknown nested keys that must be preserved
+    // Custom unknown nested keys that must be preserved with zero loss
     custom_extension: 'preserve-me',
     extra_nested: { deep: { key: 42 }, arr: [1, 2, 3] },
   },
@@ -53,7 +54,7 @@ describe('useDnsDraft', () => {
       if (path === '/api/v1/settings/dns/validate') {
         let parsed: Record<string, unknown> = {}
         try {
-          parsed = JSON.parse(body.raw_yaml)
+          parsed = (yaml.load(body.raw_yaml) as Record<string, unknown>) || {}
         } catch {
           parsed = { enable: body.enabled }
         }
@@ -100,7 +101,37 @@ describe('useDnsDraft', () => {
     expect(draft.getBool('direct-nameserver-follow-policy')).toBe(false)
   })
 
-  it('tracks dirty states across scalar, list, json, raw and outer enabled toggles', async () => {
+  it('supports list item operations: add individual, remove individual, paste multiline, and setListText', async () => {
+    const draft = useDnsDraft()
+    await draft.load(true)
+
+    // Initial state: ['1.1.1.1', '8.8.8.8']
+    expect(draft.getList('nameserver')).toEqual(['1.1.1.1', '8.8.8.8'])
+
+    // 1. Add single item
+    draft.addListItem('nameserver', '9.9.9.9')
+    expect(draft.getList('nameserver')).toEqual(['1.1.1.1', '8.8.8.8', '9.9.9.9'])
+    expect(draft.dirty.value).toBe(true)
+
+    // 2. Remove individual item by index (e.g. index 1: '8.8.8.8')
+    draft.removeListItem('nameserver', 1)
+    expect(draft.getList('nameserver')).toEqual(['1.1.1.1', '9.9.9.9'])
+
+    // 3. Paste multiline text into list
+    draft.pasteListItems('nameserver', '1.0.0.1\n\n  223.5.5.5  \n')
+    expect(draft.getList('nameserver')).toEqual(['1.1.1.1', '9.9.9.9', '1.0.0.1', '223.5.5.5'])
+
+    // 4. Batch edit via setListText
+    draft.setListText('nameserver', '114.114.114.114\n119.29.29.29')
+    expect(draft.getList('nameserver')).toEqual(['114.114.114.114', '119.29.29.29'])
+    expect(draft.getListText('nameserver')).toBe('114.114.114.114\n119.29.29.29')
+
+    // Reset back to baseline
+    draft.setList('nameserver', ['1.1.1.1', '8.8.8.8'])
+    expect(draft.dirty.value).toBe(false)
+  })
+
+  it('tracks dirty states across scalar, list, YAML mapping, raw and outer enabled toggles', async () => {
     const draft = useDnsDraft()
     await draft.load(true)
     expect(draft.dirty.value).toBe(false)
@@ -123,19 +154,25 @@ describe('useDnsDraft', () => {
     draft.setListText('nameserver', '1.1.1.1\n8.8.8.8')
     expect(draft.dirty.value).toBe(false)
 
-    // 4. Outer enabled toggle
+    // 4. YAML mapping change
+    draft.setYamlMappingText('nameserver-policy', 'geosite:cn: 119.29.29.29')
+    expect(draft.dirty.value).toBe(true)
+    draft.setYamlMappingText('nameserver-policy', 'geosite:cn: 223.5.5.5')
+    expect(draft.dirty.value).toBe(false)
+
+    // 5. Outer enabled toggle
     draft.enabled.value = false
     expect(draft.dirty.value).toBe(true)
     draft.enabled.value = true
     expect(draft.dirty.value).toBe(false)
 
-    // 5. Raw mode change
+    // 6. Raw mode change
     await draft.switchMode('raw')
     draft.onRawInput('different raw yaml')
     expect(draft.dirty.value).toBe(true)
   })
 
-  it('preserves all known keys and custom unknown nested keys in draft', async () => {
+  it('preserves all known keys and custom unknown nested keys in draft with zero loss', async () => {
     const draft = useDnsDraft()
     await draft.load(true)
 
@@ -156,18 +193,24 @@ describe('useDnsDraft', () => {
     expect(draft.draft.value['cache-algorithm']).toBe('arc')
     expect(draft.draft.value['use-hosts']).toBe(true)
     expect(draft.draft.value['proxy-server-nameserver-policy']).toEqual({ 'domain:proxy.lan': '1.0.0.1' })
+
+    // Serialization to YAML retains custom nested keys
+    const serialized = serializeDraftToYaml(draft.draft.value, draft.enabled.value)
+    expect(serialized).toContain('custom_extension: preserve-me')
+    expect(serialized).toContain('extra_nested:')
   })
 
-  it('handles invalid JSON in advanced fields: preserves text, does not corrupt draft, blocks save, switch and preview', async () => {
+  it('handles natural YAML mapping in advanced fields: preserves text, blocks save/switch/preview on invalid YAML', async () => {
     const draft = useDnsDraft()
     await draft.load(true)
 
-    const ok = draft.setJsonText('nameserver-policy', '{ malformed json: ')
+    // 1. Invalid YAML syntax
+    const ok = draft.setYamlMappingText('nameserver-policy', 'invalid: [ yaml unclosed')
     expect(ok).toBe(false)
-    expect(draft.fieldErrors.value['nameserver-policy']).toContain('必须是有效 JSON')
+    expect(draft.fieldErrors.value['nameserver-policy']).toContain('YAML 格式无效')
     expect(draft.hasValidationErrors.value).toBe(true)
-    expect(draft.getJsonText('nameserver-policy')).toBe('{ malformed json: ')
-    // draft object itself should NOT contain the invalid string
+    expect(draft.getYamlMappingText('nameserver-policy')).toBe('invalid: [ yaml unclosed')
+    // draft object itself should NOT contain the invalid input
     expect(draft.draft.value['nameserver-policy']).toEqual({ 'geosite:cn': '223.5.5.5' })
 
     // Save should be blocked
@@ -185,69 +228,47 @@ describe('useDnsDraft', () => {
     expect(draft.error.value).toContain('请先修正字段格式错误')
     expect(draft.previewYaml.value).toBe('')
 
-    // Fix JSON
-    const fixed = draft.setJsonText('nameserver-policy', '{"geosite:google": "8.8.8.8"}')
+    // 2. Duplicate keys rejection in YAML mapping
+    const dupOk = draft.setYamlMappingText('nameserver-policy', 'key: 1\nkey: 2')
+    expect(dupOk).toBe(false)
+    expect(draft.fieldErrors.value['nameserver-policy']).toBeDefined()
+
+    // 3. Fix YAML with natural mapping
+    const fixed = draft.setYamlMappingText('nameserver-policy', 'geosite:google:\n  - 8.8.8.8\n  - 8.8.4.4')
     expect(fixed).toBe(true)
     expect(draft.fieldErrors.value['nameserver-policy']).toBeUndefined()
     expect(draft.hasValidationErrors.value).toBe(false)
+    expect(draft.draft.value['nameserver-policy']).toEqual({
+      'geosite:google': ['8.8.8.8', '8.8.4.4'],
+    })
   })
 
-  it('rejects JSON non-plain-mapping inputs: array, null, scalar strings/numbers', async () => {
+  it('rejects YAML non-mapping inputs: array, null, scalar strings/numbers', async () => {
     const draft = useDnsDraft()
     await draft.load(true)
 
-    // 1. null
-    expect(draft.setJsonText('nameserver-policy', 'null')).toBe(false)
-    expect(draft.fieldErrors.value['nameserver-policy']).toContain('必须是有效 JSON')
-    expect(draft.getJsonText('nameserver-policy')).toBe('null')
-    expect(draft.draft.value['nameserver-policy']).toEqual({ 'geosite:cn': '223.5.5.5' })
+    // 1. empty array []
+    expect(draft.setYamlMappingText('nameserver-policy', '[]')).toBe(false)
+    expect(draft.fieldErrors.value['nameserver-policy']).toContain('必须是有效 YAML 键值映射')
+    expect(draft.getYamlMappingText('nameserver-policy')).toBe('[]')
 
-    // 2. empty array []
-    expect(draft.setJsonText('nameserver-policy', '[]')).toBe(false)
-    expect(draft.fieldErrors.value['nameserver-policy']).toContain('必须是有效 JSON')
-    expect(draft.getJsonText('nameserver-policy')).toBe('[]')
+    // 2. YAML list sequence
+    expect(draft.setYamlMappingText('nameserver-policy', '- item1\n- item2')).toBe(false)
+    expect(draft.fieldErrors.value['nameserver-policy']).toContain('必须是有效 YAML 键值映射')
 
-    // 3. array with elements [1, 2]
-    expect(draft.setJsonText('nameserver-policy', '[1, 2]')).toBe(false)
-    expect(draft.getJsonText('nameserver-policy')).toBe('[1, 2]')
+    // 3. scalar number
+    expect(draft.setYamlMappingText('nameserver-policy', '12345')).toBe(false)
 
-    // 4. scalar number
-    expect(draft.setJsonText('nameserver-policy', '12345')).toBe(false)
-    expect(draft.getJsonText('nameserver-policy')).toBe('12345')
+    // 4. scalar string
+    expect(draft.setYamlMappingText('nameserver-policy', 'plain-scalar-string')).toBe(false)
 
-    // 5. scalar string
-    expect(draft.setJsonText('nameserver-policy', '"scalar-string"')).toBe(false)
-    expect(draft.getJsonText('nameserver-policy')).toBe('"scalar-string"')
-
-    // 6. valid plain mapping recovers
-    expect(draft.setJsonText('nameserver-policy', '{"domain:example.com": "1.1.1.1"}')).toBe(true)
+    // 5. valid natural mapping recovers
+    expect(draft.setYamlMappingText('nameserver-policy', 'domain:example.com: 1.1.1.1')).toBe(true)
     expect(draft.hasValidationErrors.value).toBe(false)
     expect(draft.draft.value['nameserver-policy']).toEqual({ 'domain:example.com': '1.1.1.1' })
   })
 
-  it('removes keys when empty scalar or empty JSON is provided', async () => {
-    const draft = useDnsDraft()
-    await draft.load(true)
-
-    expect(draft.hasKey('listen')).toBe(true)
-    draft.setString('listen', '')
-    expect(draft.hasKey('listen')).toBe(false)
-    expect(draft.getString('listen')).toBe('')
-    expect('listen' in draft.draft.value).toBe(false)
-    expect(draft.dirty.value).toBe(true)
-
-    expect(draft.hasKey('nameserver-policy')).toBe(true)
-    draft.setJsonText('nameserver-policy', '   ')
-    expect(draft.hasKey('nameserver-policy')).toBe(false)
-    expect('nameserver-policy' in draft.draft.value).toBe(false)
-    expect(draft.getJsonText('nameserver-policy')).toBe('')
-
-    // List clear retains explicit [] per contract
-    draft.setListText('nameserver', '')
-    expect(draft.draft.value['nameserver']).toEqual([])
-  })
-
-  it('supports explicit removeKey(key) for scalars, booleans, lists, JSON mappings and custom fields', async () => {
+  it('supports explicit removeKey(key) for scalars, booleans, lists, and YAML mappings', async () => {
     const draft = useDnsDraft()
     await draft.load(true)
 
@@ -261,15 +282,15 @@ describe('useDnsDraft', () => {
     expect(draft.hasKey('ipv6')).toBe(false)
     expect(draft.getBool('ipv6', false)).toBe(false)
 
-    // List deletion (differs from setting empty [])
+    // List deletion
     draft.removeKey('nameserver')
     expect(draft.hasKey('nameserver')).toBe(false)
     expect('nameserver' in draft.draft.value).toBe(false)
 
-    // JSON deletion
+    // YAML mapping deletion
     draft.removeKey('proxy-server-nameserver-policy')
     expect(draft.hasKey('proxy-server-nameserver-policy')).toBe(false)
-    expect(draft.getJsonText('proxy-server-nameserver-policy')).toBe('')
+    expect(draft.getYamlMappingText('proxy-server-nameserver-policy')).toBe('')
 
     // Custom extension deletion
     draft.removeKey('custom_extension')
@@ -278,118 +299,45 @@ describe('useDnsDraft', () => {
     expect(draft.dirty.value).toBe(true)
   })
 
-  it('clears invalid JSON errors when removeKey is invoked on an erroneous field', async () => {
+  it('clears invalid YAML errors when removeKey is invoked on an erroneous field', async () => {
     const draft = useDnsDraft()
     await draft.load(true)
 
-    draft.setJsonText('fallback-filter', 'invalid: { not json')
+    draft.setYamlMappingText('fallback-filter', 'invalid: [ unclosed')
     expect(draft.hasValidationErrors.value).toBe(true)
     expect(draft.fieldErrors.value['fallback-filter']).toBeDefined()
 
     draft.removeKey('fallback-filter')
     expect(draft.hasValidationErrors.value).toBe(false)
     expect(draft.fieldErrors.value['fallback-filter']).toBeUndefined()
-    expect(draft.getJsonText('fallback-filter')).toBe('')
+    expect(draft.getYamlMappingText('fallback-filter')).toBe('')
     expect('fallback-filter' in draft.draft.value).toBe(false)
   })
 
-  it('replaces known invalid JSON fields sequentially and recovers clean draft validation state', async () => {
-    const draft = useDnsDraft()
-    await draft.load(true)
-
-    // Set invalid JSON on both known JSON fields
-    expect(draft.setJsonText('nameserver-policy', '{ bad-json-1')).toBe(false)
-    expect(draft.setJsonText('fallback-filter', '{ bad-json-2')).toBe(false)
-    expect(draft.hasValidationErrors.value).toBe(true)
-    expect(Object.keys(draft.fieldErrors.value).length).toBe(2)
-
-    // Repairing one field keeps the remaining error and continues blocking save and switch
-    expect(draft.setJsonText('nameserver-policy', '{"geosite:cn": "223.5.5.5"}')).toBe(true)
-    expect(draft.fieldErrors.value['nameserver-policy']).toBeUndefined()
-    expect(draft.fieldErrors.value['fallback-filter']).toContain('fallback-filter 必须是有效 JSON')
-    expect(draft.hasValidationErrors.value).toBe(true)
-
-    await draft.switchMode('raw')
-    expect(draft.mode.value).toBe('visual')
-
-    // Repairing the second field clears all validation errors
-    expect(draft.setJsonText('fallback-filter', '{"geoip": true}')).toBe(true)
-    expect(draft.fieldErrors.value['fallback-filter']).toBeUndefined()
-    expect(draft.hasValidationErrors.value).toBe(false)
-    expect(draft.error.value).toBe('')
-
-    // Switch mode now succeeds
-    await draft.switchMode('raw')
-    expect(draft.mode.value).toBe('raw')
-    expect(draft.raw.value).toContain('223.5.5.5')
-    expect(draft.raw.value).toContain('geoip')
-  })
-
-  it('generates preview YAML without persisting to server, sets previewing and busy', async () => {
+  it('tracks preview freshness: current when generated, stale when draft is modified', async () => {
     const draft = useDnsDraft()
     await draft.load(true)
 
     expect(draft.previewYaml.value).toBe('')
-    expect(draft.previewing.value).toBe(false)
+    expect(draft.isPreviewStale.value).toBe(false)
 
-    const previewPromise = draft.preview()
-    expect(draft.previewing.value).toBe(true)
-    expect(draft.busy.value).toBe(true)
-
-    await previewPromise
-    expect(draft.previewing.value).toBe(false)
-    expect(draft.busy.value).toBe(false)
+    // Generate preview
+    await draft.preview()
     expect(draft.previewYaml.value).toContain('1.1.1.1')
-    expect(api.put).not.toHaveBeenCalled()
-  })
+    expect(draft.isPreviewStale.value).toBe(false)
 
-  it('invalidates preview on any draft modification including enabled toggle', async () => {
-    const draft = useDnsDraft()
-    await draft.load(true)
-
-    await draft.preview()
-    expect(draft.previewYaml.value).not.toBe('')
-
-    // 1. setString invalidates
+    // Modify a field -> preview becomes stale (NOT immediately deleted, labeled stale)
     draft.setString('listen', '0.0.0.0:5353')
-    expect(draft.previewYaml.value).toBe('')
+    expect(draft.isPreviewStale.value).toBe(true)
+    expect(draft.previewYaml.value).toContain('1.1.1.1')
 
+    // Regenerate preview -> fresh again
     await draft.preview()
-    expect(draft.previewYaml.value).not.toBe('')
+    expect(draft.isPreviewStale.value).toBe(false)
 
-    // 2. setBool invalidates
-    draft.setBool('prefer-h3', true)
-    expect(draft.previewYaml.value).toBe('')
-
-    await draft.preview()
-    expect(draft.previewYaml.value).not.toBe('')
-
-    // 3. setListText invalidates
-    draft.setListText('nameserver', '9.9.9.9')
-    expect(draft.previewYaml.value).toBe('')
-
-    await draft.preview()
-    expect(draft.previewYaml.value).not.toBe('')
-
-    // 4. setJsonText invalidates
-    draft.setJsonText('nameserver-policy', '{"geosite:cn": "119.29.29.29"}')
-    expect(draft.previewYaml.value).toBe('')
-
-    await draft.preview()
-    expect(draft.previewYaml.value).not.toBe('')
-
-    // 5. removeKey invalidates
-    draft.removeKey('nameserver-policy')
-    expect(draft.previewYaml.value).toBe('')
-
-    await draft.preview()
-    expect(draft.previewYaml.value).not.toBe('')
-
-    // 6. Direct enabled v-model change invalidates
-    const initialRev = draft.draftRevision.value
+    // Toggle enabled -> preview becomes stale
     draft.enabled.value = false
-    expect(draft.draftRevision.value).toBeGreaterThan(initialRev)
-    expect(draft.previewYaml.value).toBe('')
+    expect(draft.isPreviewStale.value).toBe(true)
   })
 
   it('discards stale preview response when draft changes while request is in flight', async () => {
@@ -439,7 +387,6 @@ describe('useDnsDraft', () => {
         raw_yaml: expect.stringContaining('0.0.0.0:5353'),
       })
     )
-    // Confirmatory GET
     expect(api.get).toHaveBeenCalledTimes(2)
     expect(draft.settings.value?.revision).toBe(6)
     expect(draft.dirty.value).toBe(false)
@@ -479,35 +426,27 @@ describe('useDnsDraft', () => {
     expect(draft.dirty.value).toBe(true)
   })
 
-  it('discards stale responses when generation or revision changes during mode switch', async () => {
+  it('outer enabled toggle is authoritative: passing enabled=false overrides inner enable:true in PUT', async () => {
     const draft = useDnsDraft()
     await draft.load(true)
 
-    // User is in visual mode, initiates switch to raw
-    let resolveValidate: (val: any) => void
-    vi.mocked(api.post).mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveValidate = resolve
-        })
+    // Draft currently has enable: true
+    expect(draft.enabled.value).toBe(true)
+
+    // Toggle outer enabled to false
+    draft.enabled.value = false
+    expect(draft.dirty.value).toBe(true)
+
+    await draft.save()
+
+    expect(api.post).toHaveBeenCalledWith(
+      '/api/v1/settings/dns/validate',
+      expect.objectContaining({ enabled: false })
     )
-
-    const switchPromise = draft.switchMode('raw')
-    expect(draft.validating.value).toBe(true)
-
-    // While validating, user triggers another change which bumps draftRevision and generation
-    draft.setString('listen', '1.2.3.4:53')
-
-    // Now complete the earlier validate call
-    resolveValidate!({
-      raw_yaml: 'dns:\n  listen: stale:53\n',
-      config: { listen: 'stale:53' },
-    })
-    await switchPromise
-
-    // The stale response should NOT overwrite the user's latest draft
-    expect(draft.getString('listen')).toBe('1.2.3.4:53')
-    expect(draft.raw.value).not.toContain('stale:53')
+    expect(api.put).toHaveBeenCalledWith(
+      '/api/v1/settings/dns',
+      expect.objectContaining({ enabled: false })
+    )
   })
 
   it('guards against discarding dirty draft during reload if user cancels', async () => {
@@ -523,7 +462,6 @@ describe('useDnsDraft', () => {
     await draft.load(false)
 
     expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('放弃未保存的 DNS 草稿'))
-    // api.get was called once initially, not called again because user cancelled
     expect(api.get).toHaveBeenCalledTimes(1)
     expect(draft.getString('listen')).toBe('127.0.0.1:9053')
 

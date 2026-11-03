@@ -18,6 +18,7 @@ import (
 	"clash-sub-parser/internal/application/revision"
 	"clash-sub-parser/internal/application/subscription"
 	"clash-sub-parser/internal/domain"
+	"clash-sub-parser/internal/resolver"
 	"clash-sub-parser/internal/webassets"
 )
 

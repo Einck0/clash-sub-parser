@@ -785,7 +785,7 @@ func TestService_SubscriptionTarget_FirstSubscriptionPreviewAccuracy(t *testing.
 		return &resolver.ResolveInput{
 			RevisionID: "rev-1",
 			NodeSources: map[string][]domain.NodeSource{
-				"node-1": {{SubscriptionID: "sub-1", LogicalID: "node-1"}},
+				"node-1": {{SubscriptionID: "sub-1", NodeLogicalID: "node-1"}},
 			},
 		}, nil
 	})

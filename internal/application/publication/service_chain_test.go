@@ -66,6 +66,17 @@ type dummySubscriptionRepo struct {
 	subs map[string]*domain.Subscription
 }
 
+type mockResolver struct {
+	resolveFn func(ctx context.Context, input resolver.ResolveInput) (*resolver.ResolvedPolicySnapshot, error)
+}
+
+func (m *mockResolver) Resolve(ctx context.Context, input resolver.ResolveInput) (*resolver.ResolvedPolicySnapshot, error) {
+	if m.resolveFn != nil {
+		return m.resolveFn(ctx, input)
+	}
+	return resolver.New().Resolve(ctx, input)
+}
+
 func newDummySubscriptionRepo(subs []*domain.Subscription) *dummySubscriptionRepo {
 	m := &dummySubscriptionRepo{
 		subs: make(map[string]*domain.Subscription),
@@ -118,13 +129,16 @@ func (d *dummySubscriptionRepo) Delete(ctx context.Context, id string) error {
 func TestPublication_WithProxyChainRepository_LoadsBindingsAndSources(t *testing.T) {
 	ctx := context.Background()
 
-	polRepo := &mockPolicyRepo{}
+	polRepo := newMockPolicyRepo()
 	revRepo := &mockRevisionRepo{
-		active: &domain.ConfigurationRevision{ID: "rev-1", State: domain.RevisionStateActive},
+		revisions: map[string]*domain.ConfigurationRevision{
+			"rev-1": {ID: "rev-1", State: domain.RevisionStateActive},
+		},
+		activeID: "rev-1",
 	}
 	nodeRepo := &mockNodeRepo{
-		nodes: []domain.Node{
-			{LogicalID: "node-1", DisplayName: "Node 1", Active: true},
+		nodes: map[string]*domain.Node{
+			"node-1": {LogicalID: "node-1", DisplayName: "Node 1", Active: true},
 		},
 	}
 	sourceRepo := &dummyNodeSourceRepo{}
@@ -150,7 +164,7 @@ func TestPublication_WithProxyChainRepository_LoadsBindingsAndSources(t *testing
 	}
 
 	svc := publication.NewService(
-		&mockPubRepo{},
+		newMockPublicationRepo(),
 		&mockAuditRepo{},
 		publication.WithPolicyRepository(polRepo),
 		publication.WithRevisionRepository(revRepo),
@@ -177,13 +191,16 @@ func TestPublication_WithProxyChainRepository_LoadsBindingsAndSources(t *testing
 func TestPublication_ResolveTargetSnapshot_RejectsNonMihomoWithActiveChain(t *testing.T) {
 	ctx := context.Background()
 
-	polRepo := &mockPolicyRepo{}
+	polRepo := newMockPolicyRepo()
 	revRepo := &mockRevisionRepo{
-		active: &domain.ConfigurationRevision{ID: "rev-1", State: domain.RevisionStateActive},
+		revisions: map[string]*domain.ConfigurationRevision{
+			"rev-1": {ID: "rev-1", State: domain.RevisionStateActive},
+		},
+		activeID: "rev-1",
 	}
 	nodeRepo := &mockNodeRepo{
-		nodes: []domain.Node{
-			{LogicalID: "node-1", DisplayName: "Node 1", Active: true},
+		nodes: map[string]*domain.Node{
+			"node-1": {LogicalID: "node-1", DisplayName: "Node 1", Active: true},
 		},
 	}
 	chainRepo := &dummyChainRepo{
@@ -205,7 +222,7 @@ func TestPublication_ResolveTargetSnapshot_RejectsNonMihomoWithActiveChain(t *te
 	}
 
 	svc := publication.NewService(
-		&mockPubRepo{},
+		newMockPublicationRepo(),
 		&mockAuditRepo{},
 		publication.WithPolicyRepository(polRepo),
 		publication.WithRevisionRepository(revRepo),
@@ -241,13 +258,16 @@ func TestPublication_ResolveTargetSnapshot_RejectsNonMihomoWithActiveChain(t *te
 func TestPublication_AssembleResolveInput_ValidatesTargetSubscription(t *testing.T) {
 	ctx := context.Background()
 
-	polRepo := &mockPolicyRepo{}
+	polRepo := newMockPolicyRepo()
 	revRepo := &mockRevisionRepo{
-		active: &domain.ConfigurationRevision{ID: "rev-1", State: domain.RevisionStateActive},
+		revisions: map[string]*domain.ConfigurationRevision{
+			"rev-1": {ID: "rev-1", State: domain.RevisionStateActive},
+		},
+		activeID: "rev-1",
 	}
 	nodeRepo := &mockNodeRepo{
-		nodes: []domain.Node{
-			{LogicalID: "node-1", DisplayName: "Node 1", Active: true},
+		nodes: map[string]*domain.Node{
+			"node-1": {LogicalID: "node-1", DisplayName: "Node 1", Active: true},
 		},
 	}
 	sourceRepo := &dummyNodeSourceRepo{}
@@ -272,7 +292,7 @@ func TestPublication_AssembleResolveInput_ValidatesTargetSubscription(t *testing
 		{ID: "sub-disabled", Name: "Sub Disabled", Enabled: false},
 	})
 	svcMissing := publication.NewService(
-		&mockPubRepo{},
+		newMockPublicationRepo(),
 		&mockAuditRepo{},
 		publication.WithPolicyRepository(polRepo),
 		publication.WithRevisionRepository(revRepo),
@@ -308,7 +328,7 @@ func TestPublication_AssembleResolveInput_ValidatesTargetSubscription(t *testing
 		},
 	}
 	svcDisabled := publication.NewService(
-		&mockPubRepo{},
+		newMockPublicationRepo(),
 		&mockAuditRepo{},
 		publication.WithPolicyRepository(polRepo),
 		publication.WithRevisionRepository(revRepo),
@@ -352,7 +372,7 @@ func TestPublication_AssembleResolveInput_ValidatesTargetSubscription(t *testing
 		},
 	}
 	svcDisabledBinding := publication.NewService(
-		&mockPubRepo{},
+		newMockPublicationRepo(),
 		&mockAuditRepo{},
 		publication.WithPolicyRepository(polRepo),
 		publication.WithRevisionRepository(revRepo),
@@ -372,7 +392,7 @@ func TestPublication_AssembleResolveInput_ValidatesTargetSubscription(t *testing
 
 	// 4. Missing chainSubRepo when enabled subscription binding exists fails with internal error
 	svcNoSubRepo := publication.NewService(
-		&mockPubRepo{},
+		newMockPublicationRepo(),
 		&mockAuditRepo{},
 		publication.WithPolicyRepository(polRepo),
 		publication.WithRevisionRepository(revRepo),
@@ -394,13 +414,16 @@ func TestPublication_AssembleResolveInput_ValidatesTargetSubscription(t *testing
 func TestPublication_AssembleResolveInput_LoadsNodeSourcesWhenChainRepoConfiguredEvenIfNoBindingsInDB(t *testing.T) {
 	ctx := context.Background()
 
-	polRepo := &mockPolicyRepo{}
+	polRepo := newMockPolicyRepo()
 	revRepo := &mockRevisionRepo{
-		active: &domain.ConfigurationRevision{ID: "rev-1", State: domain.RevisionStateActive},
+		revisions: map[string]*domain.ConfigurationRevision{
+			"rev-1": {ID: "rev-1", State: domain.RevisionStateActive},
+		},
+		activeID: "rev-1",
 	}
 	nodeRepo := &mockNodeRepo{
-		nodes: []domain.Node{
-			{LogicalID: "node-1", DisplayName: "Node 1", Active: true},
+		nodes: map[string]*domain.Node{
+			"node-1": {LogicalID: "node-1", DisplayName: "Node 1", Active: true},
 		},
 	}
 	sourceRepo := &dummyNodeSourceRepo{}
@@ -413,7 +436,7 @@ func TestPublication_AssembleResolveInput_LoadsNodeSourcesWhenChainRepoConfigure
 	}
 
 	svc := publication.NewService(
-		&mockPubRepo{},
+		newMockPublicationRepo(),
 		&mockAuditRepo{},
 		publication.WithPolicyRepository(polRepo),
 		publication.WithRevisionRepository(revRepo),
@@ -438,7 +461,7 @@ func TestPublication_AssembleResolveInput_LoadsNodeSourcesWhenChainRepoConfigure
 	// Pure-node target export (includeGraph=false) does not require sourceRepo
 	sourceRepoNoCall := &dummyNodeSourceRepo{}
 	svcNoSource := publication.NewService(
-		&mockPubRepo{},
+		newMockPublicationRepo(),
 		&mockAuditRepo{},
 		publication.WithPolicyRepository(polRepo),
 		publication.WithRevisionRepository(revRepo),

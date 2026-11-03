@@ -19,6 +19,7 @@ import (
 	"clash-sub-parser/internal/fetch"
 	"clash-sub-parser/internal/probe/queue"
 	"clash-sub-parser/internal/repository/sqlite"
+	"clash-sub-parser/internal/resolver"
 )
 
 type applicationServices struct {

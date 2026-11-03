@@ -974,29 +974,6 @@ func (s *Service) assembleResolveInput(ctx context.Context, revisionID string, i
 		}
 		if chainCfg != nil {
 			chainBindings = chainCfg.Bindings
-			for _, b := range chainBindings {
-				if b.Enabled && b.TargetType == domain.ProxyChainTargetSubscription {
-					if s.chainSubRepo == nil {
-						return nil, domain.NewInternalError("subscription_repository_unavailable", "subscription repository required for enabled subscription target validation")
-					}
-					sub, sErr := s.chainSubRepo.GetByID(ctx, b.TargetID)
-					if sErr != nil {
-						if errors.Is(sErr, context.Canceled) || errors.Is(sErr, context.DeadlineExceeded) {
-							return nil, sErr
-						}
-						if domErr, ok := domain.AsDomainError(sErr); ok && domErr.Category != domain.CategoryNotFound {
-							return nil, sErr
-						}
-						return nil, domain.NewValidationError("chain_reference_missing", fmt.Sprintf("target subscription %q not found", b.TargetID))
-					}
-					if sub == nil {
-						return nil, domain.NewValidationError("chain_reference_missing", fmt.Sprintf("target subscription %q not found", b.TargetID))
-					}
-					if !sub.Enabled {
-						return nil, domain.NewValidationError("chain_reference_missing", fmt.Sprintf("target subscription %q is disabled", b.TargetID))
-					}
-				}
-			}
 		}
 	}
 
@@ -1105,6 +1082,31 @@ func (s *Service) resolveTargetSnapshot(ctx context.Context, revisionID string, 
 	input, err := s.assembleResolveInput(ctx, revisionID, target == domain.TargetMihomo)
 	if err != nil {
 		return nil, err
+	}
+
+	// Validate enabled subscription bindings against current subscription repository
+	for _, b := range input.ChainBindings {
+		if b.Enabled && b.TargetType == domain.ProxyChainTargetSubscription {
+			if s.chainSubRepo == nil {
+				return nil, domain.NewInternalError("subscription_repository_unavailable", "subscription repository required for enabled subscription target validation")
+			}
+			sub, sErr := s.chainSubRepo.GetByID(ctx, b.TargetID)
+			if sErr != nil {
+				if errors.Is(sErr, context.Canceled) || errors.Is(sErr, context.DeadlineExceeded) {
+					return nil, sErr
+				}
+				if domErr, ok := domain.AsDomainError(sErr); ok && domErr.Category != domain.CategoryNotFound {
+					return nil, sErr
+				}
+				return nil, domain.NewValidationError("chain_reference_missing", fmt.Sprintf("target subscription %q not found", b.TargetID))
+			}
+			if sub == nil {
+				return nil, domain.NewValidationError("chain_reference_missing", fmt.Sprintf("target subscription %q not found", b.TargetID))
+			}
+			if !sub.Enabled {
+				return nil, domain.NewValidationError("chain_reference_missing", fmt.Sprintf("target subscription %q is disabled", b.TargetID))
+			}
+		}
 	}
 
 	// Active chain bindings with non-Mihomo target fail domain validation
@@ -1498,6 +1500,22 @@ func (s *Service) BuildCurrentArtifact(ctx context.Context, facts *domain.Consis
 		return nil, nil, domain.NewConflictError("no_active_revision", "cannot resolve policy without an active configuration revision")
 	}
 
+	// Active chain bindings validation:
+	// 1. Target subscriptions must be enabled in consistent facts.
+	// 2. Reject non-Mihomo before graph stripping if any enabled binding exists.
+	for _, b := range facts.ProxyChainBindings {
+		if b.Enabled {
+			if b.TargetType == domain.ProxyChainTargetSubscription {
+				if facts.EnabledSubscriptionIDs == nil || !facts.EnabledSubscriptionIDs[b.TargetID] {
+					return nil, nil, domain.NewValidationError("chain_reference_missing", fmt.Sprintf("target subscription %q not found or disabled", b.TargetID))
+				}
+			}
+			if target != domain.TargetMihomo {
+				return nil, nil, domain.NewValidationError("unsupported_target_capability", fmt.Sprintf("proxy chains are only supported for target %s, but target is %s", domain.TargetMihomo, target))
+			}
+		}
+	}
+
 	revID := facts.Revision.ID
 	input := resolver.ResolveInput{
 		RevisionID:         revID,
@@ -1523,6 +1541,7 @@ func (s *Service) BuildCurrentArtifact(ctx context.Context, facts *domain.Consis
 		input.PolicyRules = facts.PolicyRules
 		input.GroupFilters = facts.GroupFilters
 		input.DNS = dnsCfg
+		input.ChainBindings = facts.ProxyChainBindings
 	}
 
 	if facts.ActiveRiskPolicy != nil && facts.ActiveRiskPolicy.Active && len(facts.Nodes) > 0 && s.ipriskSvc != nil {

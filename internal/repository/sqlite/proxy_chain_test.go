@@ -146,8 +146,54 @@ func TestProxyChainRepository_ValidationFailures(t *testing.T) {
 
 	repo := sqlite.NewProxyChainRepository(db)
 
-	// Self-referencing node cycle
-	_, err := repo.Replace(ctx, "", []domain.ProxyChainBinding{
+	cfg, err := repo.Get(ctx)
+	if err != nil {
+		t.Fatalf("failed to get config: %v", err)
+	}
+
+	// 1. Blank expectedVersion rejected (missing / whitespace)
+	_, err = repo.Replace(ctx, "", []domain.ProxyChainBinding{
+		{
+			ID:         "b-valid",
+			TargetType: domain.ProxyChainTargetNode,
+			TargetID:   "node-A",
+			DialerType: domain.ProxyChainDialerNode,
+			DialerID:   "node-B",
+			Enabled:    true,
+			SortOrder:  1,
+			Revision:   1,
+		},
+	})
+	if err == nil {
+		t.Fatal("expected validation error for empty expectedVersion")
+	}
+	domErr, ok := domain.AsDomainError(err)
+	if !ok || domErr.Category != domain.CategoryValidation {
+		t.Fatalf("expected validation category for empty expectedVersion, got: %v", err)
+	}
+
+	_, err = repo.Replace(ctx, "   ", []domain.ProxyChainBinding{
+		{
+			ID:         "b-valid",
+			TargetType: domain.ProxyChainTargetNode,
+			TargetID:   "node-A",
+			DialerType: domain.ProxyChainDialerNode,
+			DialerID:   "node-B",
+			Enabled:    true,
+			SortOrder:  1,
+			Revision:   1,
+		},
+	})
+	if err == nil {
+		t.Fatal("expected validation error for whitespace expectedVersion")
+	}
+	domErr, ok = domain.AsDomainError(err)
+	if !ok || domErr.Category != domain.CategoryValidation {
+		t.Fatalf("expected validation category for whitespace expectedVersion, got: %v", err)
+	}
+
+	// 2. Self-referencing node cycle
+	_, err = repo.Replace(ctx, cfg.Version, []domain.ProxyChainBinding{
 		{
 			ID:         "cycle1",
 			TargetType: domain.ProxyChainTargetNode,
@@ -163,8 +209,8 @@ func TestProxyChainRepository_ValidationFailures(t *testing.T) {
 		t.Fatal("expected cycle validation failure for self-referencing node")
 	}
 
-	// Duplicate ID
-	_, err = repo.Replace(ctx, "", []domain.ProxyChainBinding{
+	// 3. Duplicate ID
+	_, err = repo.Replace(ctx, cfg.Version, []domain.ProxyChainBinding{
 		{
 			ID:         "dup-id",
 			TargetType: domain.ProxyChainTargetNode,

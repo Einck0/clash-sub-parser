@@ -37,12 +37,14 @@ func (l *consistentFactsLoader) LoadConsistentFacts(ctx context.Context, revisio
 	defer tx.Rollback()
 
 	facts := &ConsistentFacts{
-		AsOf:               asOf,
-		GroupSources:       make(map[string][]domain.MemberSource),
-		GroupEdges:         make(map[string][]domain.GroupEdge),
-		GroupFilters:       make(map[string]domain.NodeFilterSpec),
-		NodeSources:        make(map[string][]domain.NodeSource),
-		LatestObservations: make(map[string]map[domain.ProbeKind]domain.ProbeObservation),
+		AsOf:                   asOf,
+		GroupSources:           make(map[string][]domain.MemberSource),
+		GroupEdges:             make(map[string][]domain.GroupEdge),
+		GroupFilters:           make(map[string]domain.NodeFilterSpec),
+		NodeSources:            make(map[string][]domain.NodeSource),
+		LatestObservations:     make(map[string]map[domain.ProbeKind]domain.ProbeObservation),
+		ProxyChainBindings:     make([]domain.ProxyChainBinding, 0),
+		EnabledSubscriptionIDs: make(map[string]bool),
 	}
 
 	// 1. Revision
@@ -80,8 +82,29 @@ func (l *consistentFactsLoader) LoadConsistentFacts(ctx context.Context, revisio
 	}
 	facts.Nodes = nodes
 
+	// 5.5 Proxy Chain Bindings and Enabled Subscriptions
+	chainBindings, err := loadProxyChainBindings(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	facts.ProxyChainBindings = chainBindings
+
+	enabledSubIDs, err := loadEnabledSubscriptionIDs(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	facts.EnabledSubscriptionIDs = enabledSubIDs
+
 	// 6. Node Sources and Observations (inspected conditionally based on filter dependencies)
 	needsSources, needsObservations := inspectFilterDependencies(facts.GlobalFilter, facts.GroupFilters, facts.Groups)
+	if !needsSources {
+		for _, b := range facts.ProxyChainBindings {
+			if b.Enabled && b.TargetType == domain.ProxyChainTargetSubscription {
+				needsSources = true
+				break
+			}
+		}
+	}
 	if needsSources && len(nodeIDs) > 0 {
 		if err := loadNodeSources(ctx, tx, nodeIDs, facts.NodeSources); err != nil {
 			return nil, err
@@ -792,4 +815,65 @@ func inspectFilterDependencies(global *domain.NodeFilterSpec, groupFilters map[s
 		}
 	}
 	return sources, observations
+}
+
+func loadProxyChainBindings(ctx context.Context, tx *sql.Tx) ([]domain.ProxyChainBinding, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id, target_type, target_id, dialer_type, dialer_id, enabled, sort_order, note, revision
+		FROM proxy_chain_bindings
+		ORDER BY sort_order ASC, id ASC;
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load proxy chain bindings for consistent facts: %w", err)
+	}
+	defer rows.Close()
+
+	bindings := make([]domain.ProxyChainBinding, 0)
+	for rows.Next() {
+		var b domain.ProxyChainBinding
+		var enabledInt int
+		var targetType, dialerType string
+		if err := rows.Scan(
+			&b.ID,
+			&targetType,
+			&b.TargetID,
+			&dialerType,
+			&b.DialerID,
+			&enabledInt,
+			&b.SortOrder,
+			&b.Note,
+			&b.Revision,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan proxy chain binding: %w", err)
+		}
+		b.TargetType = domain.ProxyChainTargetType(targetType)
+		b.DialerType = domain.ProxyChainDialerType(dialerType)
+		b.Enabled = enabledInt == 1
+		bindings = append(bindings, b)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate proxy chain bindings: %w", err)
+	}
+	return bindings, nil
+}
+
+func loadEnabledSubscriptionIDs(ctx context.Context, tx *sql.Tx) (map[string]bool, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM subscriptions WHERE enabled = 1;`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load enabled subscriptions for consistent facts: %w", err)
+	}
+	defer rows.Close()
+
+	enabledIDs := make(map[string]bool)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("failed to scan enabled subscription id: %w", err)
+		}
+		enabledIDs[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate enabled subscriptions: %w", err)
+	}
+	return enabledIDs, nil
 }

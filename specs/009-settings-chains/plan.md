@@ -31,3 +31,11 @@ Git index/commit/push 由主脑串行，保护原224dirty（入口web/internal/c
 
 ## Decisions
 恢复历史三类目标/两类跳板与层级优先级，纠正旧名称作为身份及同级模糊覆盖。增加配置集合CAS用于防并发环，这个内部版本不成为用户需维护的实体。Mihomo链语义为本轮完整目标，其他格式真实拒绝避免假绿导出；无链原行为不变。可读性优先，不以压行或迎合旧测试引入兼容。
+
+## Recovery correction: live export, repair and mandatory versions
+首个全绿候选00a1dce仅证明现有测试通过，不能替代消费链审查。定点复核确认：输入装配对旧持久化订阅引用的前置校验会阻塞候选修复；API版本可省略；直接订阅走ConsistentFacts而未接入链。采纳这些实质问题，递归栈等无实际规模证据的优化延期。修复范围为以下两个不交叉模块，不引兼容双轨：
+
+1. 发布和事实模块负责 `internal/domain/facts.go`、`internal/repository/sqlite/consistent_facts*`、`internal/application/publication/*chain*`/`service.go`、`cmd/csp/chain_wiring_test.go` 及其必要模块内测试。`ConsistentFacts` 增加 `ProxyChainBindings []ProxyChainBinding` 和 `EnabledSubscriptionIDs map[string]bool`，在同一事务加载完整绑定及启用订阅身份；启用订阅目标需要来源时强制加载NodeSources。BuildCurrentArtifact将这些绑定传入唯一resolver，在图剥离前拒绝非Mihomo启用链；订阅引用验证使用同快照的启用ID集合，不在纯编译期间额外查库。输入装配只装配，不在候选替换前拒绝旧绑定；实际发布/resolve入口仍校验当前启用订阅引用。候选管理服务自己验证候选，故旧订阅删除/停用后能停用、改目标或删除该绑定，未修复的实际导出必须失败。所有direct/link/check入口均经同一BuildCurrentArtifact，旧immutable发布不改写。
+2. 链管理模块负责 `internal/application/proxychain/*`、`internal/transport/http/proxy_chains*`、`internal/repository/sqlite/proxy_chain*`：所有preview/create/update/delete必须非空config_version；update/delete必须正expected_revision。缺失/空/0/负数422，格式有效但过时409且零写入；DELETE仅合同JSON body，不保留query/EOF垫片。仓储Replace同样不可空版本绕过。同步更新被废弃默认值绑定的测试，不能生产兼容旧测试。已有事务CAS仍使用实际读版本防并发安全，API必填是额外用户冲突保障，不能把原代码夸大为一定能并发造环。
+
+关键复验场景：绑定有效订阅后停用/删除订阅→导出失败→通过API停用/改目标/删除成功；真实链保存后GET/clash/sub/mihomo及活链接输出同一dialer；开启链后三种非Mihomo明确422，停用后恢复；不带版本/修订号写请求不能改变集合。所有新测试仅云端运行。

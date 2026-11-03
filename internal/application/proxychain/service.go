@@ -274,11 +274,15 @@ func (s *Service) Effects(ctx context.Context) (*EffectsResult, error) {
 
 // Preview tests candidate binding effects without persisting changes.
 func (s *Service) Preview(ctx context.Context, cmd PreviewCommand) (*EffectsResult, error) {
+	if strings.TrimSpace(cmd.ConfigVersion) == "" {
+		return nil, domain.NewValidationError("invalid_chain_binding", "config_version must not be blank")
+	}
+
 	currentConfig, err := s.repo.Get(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if cmd.ConfigVersion != "" && cmd.ConfigVersion != currentConfig.Version {
+	if cmd.ConfigVersion != currentConfig.Version {
 		return nil, domain.NewConflictError("proxy_chain_conflict", fmt.Sprintf("proxy chain config version mismatch: expected %s, got %s", cmd.ConfigVersion, currentConfig.Version))
 	}
 
@@ -329,6 +333,9 @@ func (s *Service) Preview(ctx context.Context, cmd PreviewCommand) (*EffectsResu
 
 // Create inserts a new binding with optimistic version check and full candidate resolution.
 func (s *Service) Create(ctx context.Context, cmd CreateCommand) (*CreateResult, error) {
+	if strings.TrimSpace(cmd.ConfigVersion) == "" {
+		return nil, domain.NewValidationError("invalid_chain_binding", "config_version must not be blank")
+	}
 	if strings.TrimSpace(cmd.Binding.ID) != "" {
 		return nil, domain.NewValidationError("invalid_chain_binding", "new binding ID must be empty")
 	}
@@ -347,7 +354,7 @@ func (s *Service) Create(ctx context.Context, cmd CreateCommand) (*CreateResult,
 	if err != nil {
 		return nil, err
 	}
-	if cmd.ConfigVersion != "" && cmd.ConfigVersion != currentConfig.Version {
+	if cmd.ConfigVersion != currentConfig.Version {
 		return nil, domain.NewConflictError("proxy_chain_conflict", fmt.Sprintf("proxy chain config version mismatch: expected %s, got %s", cmd.ConfigVersion, currentConfig.Version))
 	}
 
@@ -389,6 +396,12 @@ func (s *Service) Update(ctx context.Context, id string, cmd UpdateCommand) (*Up
 	if strings.TrimSpace(id) == "" {
 		return nil, domain.NewValidationError("invalid_chain_binding", "binding ID must not be empty")
 	}
+	if strings.TrimSpace(cmd.ConfigVersion) == "" {
+		return nil, domain.NewValidationError("invalid_chain_binding", "config_version must not be blank")
+	}
+	if cmd.ExpectedRevision <= 0 {
+		return nil, domain.NewValidationError("invalid_chain_binding", "expected_revision must be greater than zero")
+	}
 	if cmd.Binding.ID != "" && cmd.Binding.ID != id {
 		return nil, domain.NewValidationError("invalid_chain_binding", "path ID and binding ID do not match")
 	}
@@ -401,7 +414,7 @@ func (s *Service) Update(ctx context.Context, id string, cmd UpdateCommand) (*Up
 	if err != nil {
 		return nil, err
 	}
-	if cmd.ConfigVersion != "" && cmd.ConfigVersion != currentConfig.Version {
+	if cmd.ConfigVersion != currentConfig.Version {
 		return nil, domain.NewConflictError("proxy_chain_conflict", fmt.Sprintf("proxy chain config version mismatch: expected %s, got %s", cmd.ConfigVersion, currentConfig.Version))
 	}
 
@@ -418,7 +431,7 @@ func (s *Service) Update(ctx context.Context, id string, cmd UpdateCommand) (*Up
 		return nil, domain.NewNotFoundError("chain_binding_not_found", fmt.Sprintf("chain binding %s not found", id))
 	}
 
-	if cmd.ExpectedRevision > 0 && existing.Revision != cmd.ExpectedRevision {
+	if existing.Revision != cmd.ExpectedRevision {
 		conflict := domain.NewConflictError("proxy_chain_conflict", fmt.Sprintf("chain binding revision mismatch: expected %d, got %d", cmd.ExpectedRevision, existing.Revision))
 		conflict.CurrentRevision = &existing.Revision
 		return nil, conflict
@@ -466,12 +479,18 @@ func (s *Service) Delete(ctx context.Context, id string, cmd DeleteCommand) (*De
 	if strings.TrimSpace(id) == "" {
 		return nil, domain.NewValidationError("invalid_chain_binding", "binding ID must not be empty")
 	}
+	if strings.TrimSpace(cmd.ConfigVersion) == "" {
+		return nil, domain.NewValidationError("invalid_chain_binding", "config_version must not be blank")
+	}
+	if cmd.ExpectedRevision <= 0 {
+		return nil, domain.NewValidationError("invalid_chain_binding", "expected_revision must be greater than zero")
+	}
 
 	currentConfig, err := s.repo.Get(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if cmd.ConfigVersion != "" && cmd.ConfigVersion != currentConfig.Version {
+	if cmd.ConfigVersion != currentConfig.Version {
 		return nil, domain.NewConflictError("proxy_chain_conflict", fmt.Sprintf("proxy chain config version mismatch: expected %s, got %s", cmd.ConfigVersion, currentConfig.Version))
 	}
 
@@ -489,7 +508,7 @@ func (s *Service) Delete(ctx context.Context, id string, cmd DeleteCommand) (*De
 		return nil, domain.NewNotFoundError("chain_binding_not_found", fmt.Sprintf("chain binding %s not found", id))
 	}
 
-	if cmd.ExpectedRevision > 0 && existing.Revision != cmd.ExpectedRevision {
+	if existing.Revision != cmd.ExpectedRevision {
 		conflict := domain.NewConflictError("proxy_chain_conflict", fmt.Sprintf("chain binding revision mismatch: expected %d, got %d", cmd.ExpectedRevision, existing.Revision))
 		conflict.CurrentRevision = &existing.Revision
 		return nil, conflict

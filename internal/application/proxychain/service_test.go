@@ -34,7 +34,10 @@ func (m *mockProxyChainRepo) Get(ctx context.Context) (*domain.ProxyChainConfig,
 }
 
 func (m *mockProxyChainRepo) Replace(ctx context.Context, expectedVersion string, bindings []domain.ProxyChainBinding) (*domain.ProxyChainConfig, error) {
-	if expectedVersion != "" && m.config.Version != expectedVersion {
+	if strings.TrimSpace(expectedVersion) == "" {
+		return nil, domain.NewValidationError("invalid_chain_binding", "expected config_version must not be blank")
+	}
+	if m.config.Version != expectedVersion {
 		return nil, domain.NewConflictError("proxy_chain_conflict", "version mismatch")
 	}
 	bCopy := append([]domain.ProxyChainBinding(nil), bindings...)
@@ -244,6 +247,7 @@ func TestService_Create_ValidationAndAudit(t *testing.T) {
 			DialerID:   n2ID,
 			Enabled:    true,
 		},
+		ConfigVersion: repo.config.Version,
 	})
 	if err == nil {
 		t.Fatal("expected validation error for client-specified ID")
@@ -258,6 +262,7 @@ func TestService_Create_ValidationAndAudit(t *testing.T) {
 			DialerID:   n2ID,
 			Enabled:    true,
 		},
+		ConfigVersion: repo.config.Version,
 	})
 	if err == nil {
 		t.Fatal("expected validation error for invalid target type")
@@ -387,6 +392,8 @@ func TestService_Update_Lifecycle(t *testing.T) {
 			DialerType: domain.ProxyChainDialerNode,
 			DialerID:   n2ID,
 		},
+		ConfigVersion:    repo.config.Version,
+		ExpectedRevision: 1,
 	})
 	if err == nil {
 		t.Fatal("expected validation error on ID mismatch")
@@ -400,7 +407,8 @@ func TestService_Update_Lifecycle(t *testing.T) {
 			DialerType: domain.ProxyChainDialerNode,
 			DialerID:   n2ID,
 		},
-		ConfigVersion: repo.config.Version,
+		ConfigVersion:    repo.config.Version,
+		ExpectedRevision: 1,
 	})
 	if err == nil {
 		t.Fatal("expected not found error")
@@ -902,4 +910,341 @@ func TestService_SubscriptionTarget_FirstSubscriptionPreviewAccuracy(t *testing.
 	if receivedInput.ChainBindings[0].TargetID != "sub-1" {
 		t.Fatalf("expected resolver to receive candidate targetID sub-1, got: %s", receivedInput.ChainBindings[0].TargetID)
 	}
+}
+
+func TestService_CASAndRevisionValidation(t *testing.T) {
+	ctx := context.Background()
+	initialBinding := domain.ProxyChainBinding{
+		ID:         "b-test-1",
+		TargetType: domain.ProxyChainTargetNode,
+		TargetID:   "n1",
+		DialerType: domain.ProxyChainDialerNode,
+		DialerID:   "n2",
+		Enabled:    true,
+		SortOrder:  1,
+		Revision:   3,
+	}
+	repo := newMockProxyChainRepo([]domain.ProxyChainBinding{initialBinding})
+	audit := &mockAuditRepo{}
+	svc := proxychain.NewService(repo, nil, nil, nil,
+		proxychain.WithResolver(&mockResolver{}),
+		proxychain.WithAuditRepository(audit),
+	)
+	svc.SetInputProvider(func(ctx context.Context) (*resolver.ResolveInput, error) {
+		return &resolver.ResolveInput{}, nil
+	})
+
+	validVersion := repo.config.Version
+
+	// 1. Preview checks
+	t.Run("Preview config_version validation", func(t *testing.T) {
+		sampleBinding := domain.ProxyChainBinding{
+			TargetType: domain.ProxyChainTargetNode,
+			TargetID:   "n1",
+			DialerType: domain.ProxyChainDialerNode,
+			DialerID:   "n2",
+			Enabled:    true,
+		}
+
+		// Empty config_version -> 422
+		_, err := svc.Preview(ctx, proxychain.PreviewCommand{
+			Binding:       sampleBinding,
+			ConfigVersion: "",
+		})
+		if err == nil {
+			t.Fatal("expected validation error for empty ConfigVersion")
+		}
+		domErr, ok := domain.AsDomainError(err)
+		if !ok || domErr.Category != domain.CategoryValidation {
+			t.Fatalf("expected CategoryValidation, got %v", err)
+		}
+
+		// Whitespace config_version -> 422
+		_, err = svc.Preview(ctx, proxychain.PreviewCommand{
+			Binding:       sampleBinding,
+			ConfigVersion: "   ",
+		})
+		if err == nil {
+			t.Fatal("expected validation error for whitespace ConfigVersion")
+		}
+		domErr, ok = domain.AsDomainError(err)
+		if !ok || domErr.Category != domain.CategoryValidation {
+			t.Fatalf("expected CategoryValidation, got %v", err)
+		}
+
+		// Stale config_version -> 409
+		_, err = svc.Preview(ctx, proxychain.PreviewCommand{
+			Binding:       sampleBinding,
+			ConfigVersion: "stale-version",
+		})
+		if err == nil {
+			t.Fatal("expected conflict error for stale ConfigVersion")
+		}
+		domErr, ok = domain.AsDomainError(err)
+		if !ok || domErr.Category != domain.CategoryConflict {
+			t.Fatalf("expected CategoryConflict, got %v", err)
+		}
+	})
+
+	// 2. Create checks
+	t.Run("Create config_version validation", func(t *testing.T) {
+		sampleBinding := domain.ProxyChainBinding{
+			TargetType: domain.ProxyChainTargetNode,
+			TargetID:   "n3",
+			DialerType: domain.ProxyChainDialerNode,
+			DialerID:   "n4",
+			Enabled:    true,
+		}
+
+		// Empty config_version -> 422
+		_, err := svc.Create(ctx, proxychain.CreateCommand{
+			Binding:       sampleBinding,
+			ConfigVersion: "",
+		})
+		if err == nil {
+			t.Fatal("expected validation error for empty ConfigVersion")
+		}
+		domErr, ok := domain.AsDomainError(err)
+		if !ok || domErr.Category != domain.CategoryValidation {
+			t.Fatalf("expected CategoryValidation, got %v", err)
+		}
+
+		// Whitespace config_version -> 422
+		_, err = svc.Create(ctx, proxychain.CreateCommand{
+			Binding:       sampleBinding,
+			ConfigVersion: "   ",
+		})
+		if err == nil {
+			t.Fatal("expected validation error for whitespace ConfigVersion")
+		}
+		domErr, ok = domain.AsDomainError(err)
+		if !ok || domErr.Category != domain.CategoryValidation {
+			t.Fatalf("expected CategoryValidation, got %v", err)
+		}
+
+		// Stale config_version -> 409
+		_, err = svc.Create(ctx, proxychain.CreateCommand{
+			Binding:       sampleBinding,
+			ConfigVersion: "stale-version",
+		})
+		if err == nil {
+			t.Fatal("expected conflict error for stale ConfigVersion")
+		}
+		domErr, ok = domain.AsDomainError(err)
+		if !ok || domErr.Category != domain.CategoryConflict {
+			t.Fatalf("expected CategoryConflict, got %v", err)
+		}
+	})
+
+	// 3. Update checks
+	t.Run("Update config_version and revision validation", func(t *testing.T) {
+		sampleBinding := domain.ProxyChainBinding{
+			ID:         "b-test-1",
+			TargetType: domain.ProxyChainTargetNode,
+			TargetID:   "n1",
+			DialerType: domain.ProxyChainDialerNode,
+			DialerID:   "n2",
+			Enabled:    true,
+		}
+
+		// Empty config_version -> 422
+		_, err := svc.Update(ctx, "b-test-1", proxychain.UpdateCommand{
+			Binding:          sampleBinding,
+			ConfigVersion:    "",
+			ExpectedRevision: 3,
+		})
+		if err == nil {
+			t.Fatal("expected validation error for empty ConfigVersion")
+		}
+		domErr, ok := domain.AsDomainError(err)
+		if !ok || domErr.Category != domain.CategoryValidation {
+			t.Fatalf("expected CategoryValidation, got %v", err)
+		}
+
+		// Whitespace config_version -> 422
+		_, err = svc.Update(ctx, "b-test-1", proxychain.UpdateCommand{
+			Binding:          sampleBinding,
+			ConfigVersion:    "   ",
+			ExpectedRevision: 3,
+		})
+		if err == nil {
+			t.Fatal("expected validation error for whitespace ConfigVersion")
+		}
+		domErr, ok = domain.AsDomainError(err)
+		if !ok || domErr.Category != domain.CategoryValidation {
+			t.Fatalf("expected CategoryValidation, got %v", err)
+		}
+
+		// Revision == 0 -> 422
+		_, err = svc.Update(ctx, "b-test-1", proxychain.UpdateCommand{
+			Binding:          sampleBinding,
+			ConfigVersion:    validVersion,
+			ExpectedRevision: 0,
+		})
+		if err == nil {
+			t.Fatal("expected validation error for zero ExpectedRevision")
+		}
+		domErr, ok = domain.AsDomainError(err)
+		if !ok || domErr.Category != domain.CategoryValidation {
+			t.Fatalf("expected CategoryValidation, got %v", err)
+		}
+
+		// Revision < 0 -> 422
+		_, err = svc.Update(ctx, "b-test-1", proxychain.UpdateCommand{
+			Binding:          sampleBinding,
+			ConfigVersion:    validVersion,
+			ExpectedRevision: -5,
+		})
+		if err == nil {
+			t.Fatal("expected validation error for negative ExpectedRevision")
+		}
+		domErr, ok = domain.AsDomainError(err)
+		if !ok || domErr.Category != domain.CategoryValidation {
+			t.Fatalf("expected CategoryValidation, got %v", err)
+		}
+
+		// Stale config_version -> 409
+		_, err = svc.Update(ctx, "b-test-1", proxychain.UpdateCommand{
+			Binding:          sampleBinding,
+			ConfigVersion:    "stale-version",
+			ExpectedRevision: 3,
+		})
+		if err == nil {
+			t.Fatal("expected conflict error for stale ConfigVersion")
+		}
+		domErr, ok = domain.AsDomainError(err)
+		if !ok || domErr.Category != domain.CategoryConflict {
+			t.Fatalf("expected CategoryConflict, got %v", err)
+		}
+
+		// Stale ExpectedRevision -> 409
+		_, err = svc.Update(ctx, "b-test-1", proxychain.UpdateCommand{
+			Binding:          sampleBinding,
+			ConfigVersion:    validVersion,
+			ExpectedRevision: 2,
+		})
+		if err == nil {
+			t.Fatal("expected conflict error for stale ExpectedRevision")
+		}
+		domErr, ok = domain.AsDomainError(err)
+		if !ok || domErr.Category != domain.CategoryConflict {
+			t.Fatalf("expected CategoryConflict, got %v", err)
+		}
+		if domErr.CurrentRevision == nil || *domErr.CurrentRevision != 3 {
+			t.Fatalf("expected CurrentRevision=3, got: %v", domErr.CurrentRevision)
+		}
+
+		// Matching version + matching revision succeeds and increments revision
+		upRes, err := svc.Update(ctx, "b-test-1", proxychain.UpdateCommand{
+			Binding:          sampleBinding,
+			ConfigVersion:    validVersion,
+			ExpectedRevision: 3,
+		})
+		if err != nil {
+			t.Fatalf("expected update to succeed, got %v", err)
+		}
+		if upRes.Binding.Revision != 4 {
+			t.Fatalf("expected row revision incremented to 4, got %d", upRes.Binding.Revision)
+		}
+		validVersion = upRes.Version
+	})
+
+	// 4. Delete checks
+	t.Run("Delete config_version and revision validation", func(t *testing.T) {
+		// Empty config_version -> 422
+		_, err := svc.Delete(ctx, "b-test-1", proxychain.DeleteCommand{
+			ConfigVersion:    "",
+			ExpectedRevision: 4,
+		})
+		if err == nil {
+			t.Fatal("expected validation error for empty ConfigVersion")
+		}
+		domErr, ok := domain.AsDomainError(err)
+		if !ok || domErr.Category != domain.CategoryValidation {
+			t.Fatalf("expected CategoryValidation, got %v", err)
+		}
+
+		// Whitespace config_version -> 422
+		_, err = svc.Delete(ctx, "b-test-1", proxychain.DeleteCommand{
+			ConfigVersion:    "   ",
+			ExpectedRevision: 4,
+		})
+		if err == nil {
+			t.Fatal("expected validation error for whitespace ConfigVersion")
+		}
+		domErr, ok = domain.AsDomainError(err)
+		if !ok || domErr.Category != domain.CategoryValidation {
+			t.Fatalf("expected CategoryValidation, got %v", err)
+		}
+
+		// Revision == 0 -> 422
+		_, err = svc.Delete(ctx, "b-test-1", proxychain.DeleteCommand{
+			ConfigVersion:    validVersion,
+			ExpectedRevision: 0,
+		})
+		if err == nil {
+			t.Fatal("expected validation error for zero ExpectedRevision")
+		}
+		domErr, ok = domain.AsDomainError(err)
+		if !ok || domErr.Category != domain.CategoryValidation {
+			t.Fatalf("expected CategoryValidation, got %v", err)
+		}
+
+		// Revision < 0 -> 422
+		_, err = svc.Delete(ctx, "b-test-1", proxychain.DeleteCommand{
+			ConfigVersion:    validVersion,
+			ExpectedRevision: -1,
+		})
+		if err == nil {
+			t.Fatal("expected validation error for negative ExpectedRevision")
+		}
+		domErr, ok = domain.AsDomainError(err)
+		if !ok || domErr.Category != domain.CategoryValidation {
+			t.Fatalf("expected CategoryValidation, got %v", err)
+		}
+
+		// Stale config_version -> 409
+		_, err = svc.Delete(ctx, "b-test-1", proxychain.DeleteCommand{
+			ConfigVersion:    "stale-version",
+			ExpectedRevision: 4,
+		})
+		if err == nil {
+			t.Fatal("expected conflict error for stale ConfigVersion")
+		}
+		domErr, ok = domain.AsDomainError(err)
+		if !ok || domErr.Category != domain.CategoryConflict {
+			t.Fatalf("expected CategoryConflict, got %v", err)
+		}
+
+		// Stale ExpectedRevision -> 409
+		_, err = svc.Delete(ctx, "b-test-1", proxychain.DeleteCommand{
+			ConfigVersion:    validVersion,
+			ExpectedRevision: 99,
+		})
+		if err == nil {
+			t.Fatal("expected conflict error for stale ExpectedRevision")
+		}
+		domErr, ok = domain.AsDomainError(err)
+		if !ok || domErr.Category != domain.CategoryConflict {
+			t.Fatalf("expected CategoryConflict, got %v", err)
+		}
+		if domErr.CurrentRevision == nil || *domErr.CurrentRevision != 4 {
+			t.Fatalf("expected CurrentRevision=4, got: %v", domErr.CurrentRevision)
+		}
+
+		// Matching version + matching revision succeeds
+		delRes, err := svc.Delete(ctx, "b-test-1", proxychain.DeleteCommand{
+			ConfigVersion:    validVersion,
+			ExpectedRevision: 4,
+		})
+		if err != nil {
+			t.Fatalf("expected delete to succeed, got %v", err)
+		}
+		if len(repo.config.Bindings) != 0 {
+			t.Fatalf("expected 0 bindings remaining, got %d", len(repo.config.Bindings))
+		}
+		if delRes.Version == "" {
+			t.Fatal("expected non-empty version after delete")
+		}
+	})
 }

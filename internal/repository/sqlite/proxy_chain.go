@@ -65,6 +65,10 @@ func (r *proxyChainRepository) Get(ctx context.Context) (*domain.ProxyChainConfi
 }
 
 func (r *proxyChainRepository) Replace(ctx context.Context, expectedVersion string, bindings []domain.ProxyChainBinding) (*domain.ProxyChainConfig, error) {
+	if strings.TrimSpace(expectedVersion) == "" {
+		return nil, domain.NewValidationError("invalid_chain_binding", "expected config_version must not be blank")
+	}
+
 	// Validate all candidate bindings before acquiring transaction
 	seenIDs := make(map[string]struct{}, len(bindings))
 	for _, b := range bindings {
@@ -122,7 +126,7 @@ func (r *proxyChainRepository) Replace(ctx context.Context, expectedVersion stri
 		rows.Close()
 
 		currentVersion := domain.ProxyChainConfigVersion(currentBindings)
-		if expectedVersion != "" && currentVersion != expectedVersion {
+		if currentVersion != expectedVersion {
 			return domain.NewConflictError("proxy_chain_conflict", fmt.Sprintf("proxy chain config version mismatch: expected %s, got %s", expectedVersion, currentVersion))
 		}
 

@@ -2,10 +2,7 @@ package http
 
 import (
 	"encoding/json"
-	"errors"
-	"io"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"clash-sub-parser/internal/application/proxychain"
@@ -115,6 +112,10 @@ func proxyChainsPreviewHandler(svc *proxychain.Service) http.HandlerFunc {
 			WriteError(w, r, http.StatusBadRequest, "bad_request", "invalid request body")
 			return
 		}
+		if strings.TrimSpace(req.ConfigVersion) == "" {
+			WriteError(w, r, http.StatusUnprocessableEntity, "invalid_chain_binding", "config_version is required")
+			return
+		}
 
 		res, err := svc.Preview(r.Context(), proxychain.PreviewCommand{
 			Binding:       req.Binding,
@@ -138,6 +139,10 @@ func proxyChainsCreateHandler(svc *proxychain.Service) http.HandlerFunc {
 		var req createProxyChainRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			WriteError(w, r, http.StatusBadRequest, "bad_request", "invalid request body")
+			return
+		}
+		if strings.TrimSpace(req.ConfigVersion) == "" {
+			WriteError(w, r, http.StatusUnprocessableEntity, "invalid_chain_binding", "config_version is required")
 			return
 		}
 
@@ -174,12 +179,16 @@ func proxyChainsUpdateHandler(svc *proxychain.Service) http.HandlerFunc {
 			return
 		}
 
+		if strings.TrimSpace(req.ConfigVersion) == "" {
+			WriteError(w, r, http.StatusUnprocessableEntity, "invalid_chain_binding", "config_version is required")
+			return
+		}
 		if req.ExpectedRevision == nil {
 			WriteError(w, r, http.StatusUnprocessableEntity, "invalid_chain_binding", "expected_revision is required")
 			return
 		}
-		if *req.ExpectedRevision < 0 {
-			WriteError(w, r, http.StatusUnprocessableEntity, "invalid_chain_binding", "expected_revision must be non-negative")
+		if *req.ExpectedRevision <= 0 {
+			WriteError(w, r, http.StatusUnprocessableEntity, "invalid_chain_binding", "expected_revision must be greater than zero")
 			return
 		}
 
@@ -210,35 +219,29 @@ func proxyChainsDeleteHandler(svc *proxychain.Service) http.HandlerFunc {
 			return
 		}
 
-		var configVersion string
-		var expectedRevision int64
-
 		r.Body = http.MaxBytesReader(w, r.Body, 128*1024)
 		var req deleteProxyChainRequest
-		err := json.NewDecoder(r.Body).Decode(&req)
-		if err == nil {
-			configVersion = req.ConfigVersion
-			if req.ExpectedRevision != nil {
-				expectedRevision = *req.ExpectedRevision
-			}
-		} else if !errors.Is(err, io.EOF) {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			WriteError(w, r, http.StatusBadRequest, "bad_request", "invalid request body")
 			return
 		}
 
-		// Fallback to query params if not provided in body
-		if configVersion == "" {
-			configVersion = r.URL.Query().Get("config_version")
+		if strings.TrimSpace(req.ConfigVersion) == "" {
+			WriteError(w, r, http.StatusUnprocessableEntity, "invalid_chain_binding", "config_version is required")
+			return
 		}
-		if expectedRevision == 0 && r.URL.Query().Get("expected_revision") != "" {
-			if parsed, pErr := strconv.ParseInt(r.URL.Query().Get("expected_revision"), 10, 64); pErr == nil {
-				expectedRevision = parsed
-			}
+		if req.ExpectedRevision == nil {
+			WriteError(w, r, http.StatusUnprocessableEntity, "invalid_chain_binding", "expected_revision is required")
+			return
+		}
+		if *req.ExpectedRevision <= 0 {
+			WriteError(w, r, http.StatusUnprocessableEntity, "invalid_chain_binding", "expected_revision must be greater than zero")
+			return
 		}
 
 		res, err := svc.Delete(r.Context(), id, proxychain.DeleteCommand{
-			ConfigVersion:    configVersion,
-			ExpectedRevision: expectedRevision,
+			ConfigVersion:    req.ConfigVersion,
+			ExpectedRevision: *req.ExpectedRevision,
 			ActorKind:        requestActorKind(r),
 			RequestID:        GetRequestID(r.Context()),
 		})

@@ -220,6 +220,12 @@ func TestConsistentFactsLoader_Comprehensive(t *testing.T) {
 	if len(factsMihomo.RiskObservations) != 1 || factsMihomo.RiskObservations[0].ID != obsID {
 		t.Fatalf("expected 1 risk observation with ID %s, got %+v", obsID, factsMihomo.RiskObservations)
 	}
+	if factsMihomo.ProxyChainBindings == nil {
+		t.Fatal("expected non-nil ProxyChainBindings in facts")
+	}
+	if factsMihomo.EnabledSubscriptionIDs == nil {
+		t.Fatal("expected non-nil EnabledSubscriptionIDs in facts")
+	}
 
 	// 10. Load ConsistentFacts for TargetSingBox (non-Mihomo does not load graph)
 	factsSingBox, err := loader.LoadConsistentFacts(ctx, revID, domain.TargetSingBox, now)
@@ -816,5 +822,125 @@ func TestConsistentFactsLoader_MidTransactionConcurrentWriteRepeatableRead(t *te
 	}
 	if factsFresh.ActiveRiskPolicy == nil || factsFresh.ActiveRiskPolicy.RevisionID != "rp-tx-v2" {
 		t.Fatalf("fresh loader expected rp-tx-v2, got %+v", factsFresh.ActiveRiskPolicy)
+	}
+}
+
+func TestConsistentFactsLoader_ProxyChainBindingsAndForcedSourcesWithoutFilter(t *testing.T) {
+	db, _ := setupTestDB(t)
+	loader := sqlite.NewConsistentFactsLoader(db)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	revID := "rev-chain-facts-1"
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO configuration_revisions (id, parent_id, content_digest, state, created_at)
+		VALUES (?, NULL, 'digest-1', 'active', ?);
+	`, revID, now.Format(time.RFC3339Nano))
+	if err != nil {
+		t.Fatalf("insert revision failed: %v", err)
+	}
+
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO admission_rules (id, revision_id, name, expression, action, position)
+		VALUES ('ar-chain-1', ?, 'Allow All', 'true', 'allow', 0);
+	`, revID)
+	if err != nil {
+		t.Fatalf("insert admission rule failed: %v", err)
+	}
+
+	subEnabled := domain.MustNewUUIDv7()
+	subDisabled := domain.MustNewUUIDv7()
+	nowStr := now.Format(time.RFC3339Nano)
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO subscriptions (id, name, source_url_secret_ref, enabled, revision, created_at, updated_at)
+		VALUES (?, 'Sub Enabled', 'http://example.com/1', 1, 'rev1', ?, ?),
+		       (?, 'Sub Disabled', 'http://example.com/2', 0, 'rev1', ?, ?);
+	`, subEnabled, nowStr, nowStr, subDisabled, nowStr, nowStr)
+	if err != nil {
+		t.Fatalf("insert subscriptions failed: %v", err)
+	}
+
+	fetchID := domain.MustNewUUIDv7()
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO subscription_fetches (id, subscription_id, started_at, outcome, content_digest, nodes_parsed, nodes_valid)
+		VALUES (?, ?, ?, 'success', 'hash-chain-1', 1, 1);
+	`, fetchID, subEnabled, nowStr)
+	if err != nil {
+		t.Fatalf("insert subscription_fetch failed: %v", err)
+	}
+
+	node1 := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.1.1.1", 8388, nil)
+	node2 := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.1.1.2", 8388, nil)
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO nodes (logical_id, protocol, display_name, server, port, config_json, active, created_at, updated_at, connection_revision)
+		VALUES (?, 'ss', 'Node 1', '1.1.1.1', 8388, '{"method":"aes-128-gcm","password":"p1"}', 1, ?, ?, 1),
+		       (?, 'ss', 'Node 2', '1.1.1.2', 8388, '{"method":"aes-128-gcm","password":"p2"}', 1, ?, ?, 1);
+	`, node1, nowStr, nowStr, node2, nowStr, nowStr)
+	if err != nil {
+		t.Fatalf("insert nodes failed: %v", err)
+	}
+
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO node_sources (node_logical_id, subscription_id, last_seen_fetch_id)
+		VALUES (?, ?, ?);
+	`, node1, subEnabled, fetchID)
+	if err != nil {
+		t.Fatalf("insert node_sources failed: %v", err)
+	}
+
+	// Insert enabled proxy chain binding targeting enabled subscription
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO proxy_chain_bindings (id, target_type, target_id, dialer_type, dialer_id, enabled, sort_order, note, revision, updated_at)
+		VALUES ('b-sub-1', 'subscription', ?, 'node', ?, 1, 0, 'sub chain', 1, ?);
+	`, subEnabled, node2, nowStr)
+	if err != nil {
+		t.Fatalf("insert proxy_chain_binding failed: %v", err)
+	}
+
+	// 1. Load facts when binding is enabled:
+	// Facts must include bindings, enabled subscription IDs, and force-load NodeSources without any filter
+	facts, err := loader.LoadConsistentFacts(ctx, revID, domain.TargetMihomo, now)
+	if err != nil {
+		t.Fatalf("LoadConsistentFacts failed: %v", err)
+	}
+
+	if len(facts.ProxyChainBindings) != 1 {
+		t.Fatalf("expected 1 ProxyChainBinding, got %d", len(facts.ProxyChainBindings))
+	}
+	b := facts.ProxyChainBindings[0]
+	if b.ID != "b-sub-1" || b.TargetType != domain.ProxyChainTargetSubscription || b.TargetID != subEnabled || !b.Enabled {
+		t.Fatalf("unexpected ProxyChainBinding in facts: %+v", b)
+	}
+
+	if !facts.EnabledSubscriptionIDs[subEnabled] {
+		t.Fatalf("expected EnabledSubscriptionIDs[%s] to be true", subEnabled)
+	}
+	if facts.EnabledSubscriptionIDs[subDisabled] {
+		t.Fatalf("expected EnabledSubscriptionIDs[%s] to be false", subDisabled)
+	}
+
+	// NodeSources MUST be loaded even though no global or group filters exist!
+	if len(facts.NodeSources) == 0 || len(facts.NodeSources[node1]) == 0 {
+		t.Fatalf("expected NodeSources to be force-loaded for enabled subscription target, got: %+v", facts.NodeSources)
+	}
+	if facts.NodeSources[node1][0].SubscriptionID != subEnabled {
+		t.Fatalf("expected NodeSources[%s] to reference %s, got: %+v", node1, subEnabled, facts.NodeSources[node1])
+	}
+
+	// 2. Disable the binding: NodeSources should no longer be force-loaded when no filters exist
+	_, err = db.ExecContext(ctx, `UPDATE proxy_chain_bindings SET enabled = 0 WHERE id = 'b-sub-1';`)
+	if err != nil {
+		t.Fatalf("update binding failed: %v", err)
+	}
+
+	factsDisabled, err := loader.LoadConsistentFacts(ctx, revID, domain.TargetMihomo, now)
+	if err != nil {
+		t.Fatalf("LoadConsistentFacts after disable failed: %v", err)
+	}
+	if len(factsDisabled.ProxyChainBindings) != 1 || factsDisabled.ProxyChainBindings[0].Enabled {
+		t.Fatalf("expected 1 disabled binding, got: %+v", factsDisabled.ProxyChainBindings)
+	}
+	if len(factsDisabled.NodeSources) != 0 {
+		t.Fatalf("expected no NodeSources loaded when chain binding is disabled and no filters exist, got: %+v", factsDisabled.NodeSources)
 	}
 }

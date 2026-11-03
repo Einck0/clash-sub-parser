@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -275,4 +276,337 @@ func TestProxyChainsHTTP_FullLifecycle(t *testing.T) {
 			t.Fatalf("expected 0 bindings after delete, got %d", len(getEnv.Data.Bindings))
 		}
 	})
+}
+
+func TestProxyChainsHTTP_CASAndValidationTable(t *testing.T) {
+	router, _ := setupTestChainRouter(t)
+
+	request := func(method, path, payload string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(method, path, bytes.NewBufferString(payload))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// Fetch initial version
+	getRec := request(http.MethodGet, "/api/v1/proxy-chains", "")
+	var getEnv struct {
+		Data struct {
+			Version string `json:"version"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal(getRec.Body.Bytes(), &getEnv)
+	initialVersion := getEnv.Data.Version
+
+	// Create a binding to test Update and Delete
+	validCreatePayload := fmt.Sprintf(`{"binding":{"target_type":"node","target_id":"node-1","dialer_type":"node","dialer_id":"node-2","enabled":true,"sort_order":1},"config_version":"%s"}`, initialVersion)
+	createRec := request(http.MethodPost, "/api/v1/proxy-chains", validCreatePayload)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("failed to setup binding: %s", createRec.Body.String())
+	}
+	var createEnv struct {
+		Data struct {
+			Binding domain.ProxyChainBinding `json:"binding"`
+			Version string                   `json:"version"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal(createRec.Body.Bytes(), &createEnv)
+	bindingID := createEnv.Data.Binding.ID
+	currentVersion := createEnv.Data.Version
+
+	type testCase struct {
+		name           string
+		method         string
+		path           string
+		payload        string
+		expectedStatus int
+	}
+
+	// 1. Table tests for Preview, Create, Update, Delete: bad JSON, missing/blank config_version, revisions, query bypass
+	tests := []testCase{
+		// Preview
+		{
+			name:           "preview bad JSON syntax returns 400",
+			method:         http.MethodPost,
+			path:           "/api/v1/proxy-chains/preview",
+			payload:        `{"binding": {invalid`,
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "preview empty body returns 400",
+			method:         http.MethodPost,
+			path:           "/api/v1/proxy-chains/preview",
+			payload:        "",
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "preview missing config_version returns 422",
+			method:         http.MethodPost,
+			path:           "/api/v1/proxy-chains/preview",
+			payload:        `{"binding":{"target_type":"node","target_id":"node-1","dialer_type":"node","dialer_id":"node-2","enabled":true}}`,
+			expectedStatus: http.StatusUnprocessableEntity,
+		},
+		{
+			name:           "preview empty config_version returns 422",
+			method:         http.MethodPost,
+			path:           "/api/v1/proxy-chains/preview",
+			payload:        `{"binding":{"target_type":"node","target_id":"node-1","dialer_type":"node","dialer_id":"node-2","enabled":true},"config_version":""}`,
+			expectedStatus: http.StatusUnprocessableEntity,
+		},
+		{
+			name:           "preview whitespace config_version returns 422",
+			method:         http.MethodPost,
+			path:           "/api/v1/proxy-chains/preview",
+			payload:        `{"binding":{"target_type":"node","target_id":"node-1","dialer_type":"node","dialer_id":"node-2","enabled":true},"config_version":"   "}`,
+			expectedStatus: http.StatusUnprocessableEntity,
+		},
+		{
+			name:           "preview query config_version with empty body does not bypass (400)",
+			method:         http.MethodPost,
+			path:           fmt.Sprintf("/api/v1/proxy-chains/preview?config_version=%s", currentVersion),
+			payload:        "",
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "preview stale config_version returns 409",
+			method:         http.MethodPost,
+			path:           "/api/v1/proxy-chains/preview",
+			payload:        `{"binding":{"target_type":"node","target_id":"node-1","dialer_type":"node","dialer_id":"node-2","enabled":true},"config_version":"stale-v"}`,
+			expectedStatus: http.StatusConflict,
+		},
+
+		// Create
+		{
+			name:           "create bad JSON syntax returns 400",
+			method:         http.MethodPost,
+			path:           "/api/v1/proxy-chains",
+			payload:        `{"binding": {bad`,
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "create empty body returns 400",
+			method:         http.MethodPost,
+			path:           "/api/v1/proxy-chains",
+			payload:        "",
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "create missing config_version returns 422",
+			method:         http.MethodPost,
+			path:           "/api/v1/proxy-chains",
+			payload:        `{"binding":{"target_type":"node","target_id":"node-1","dialer_type":"node","dialer_id":"node-2","enabled":true}}`,
+			expectedStatus: http.StatusUnprocessableEntity,
+		},
+		{
+			name:           "create empty config_version returns 422",
+			method:         http.MethodPost,
+			path:           "/api/v1/proxy-chains",
+			payload:        `{"binding":{"target_type":"node","target_id":"node-1","dialer_type":"node","dialer_id":"node-2","enabled":true},"config_version":""}`,
+			expectedStatus: http.StatusUnprocessableEntity,
+		},
+		{
+			name:           "create whitespace config_version returns 422",
+			method:         http.MethodPost,
+			path:           "/api/v1/proxy-chains",
+			payload:        `{"binding":{"target_type":"node","target_id":"node-1","dialer_type":"node","dialer_id":"node-2","enabled":true},"config_version":" \t "}`,
+			expectedStatus: http.StatusUnprocessableEntity,
+		},
+		{
+			name:           "create query config_version with empty body does not bypass (400)",
+			method:         http.MethodPost,
+			path:           fmt.Sprintf("/api/v1/proxy-chains?config_version=%s", currentVersion),
+			payload:        "",
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "create stale config_version returns 409",
+			method:         http.MethodPost,
+			path:           "/api/v1/proxy-chains",
+			payload:        `{"binding":{"target_type":"node","target_id":"node-1","dialer_type":"node","dialer_id":"node-2","enabled":true},"config_version":"stale-v"}`,
+			expectedStatus: http.StatusConflict,
+		},
+
+		// Update
+		{
+			name:           "update bad JSON syntax returns 400",
+			method:         http.MethodPut,
+			path:           "/api/v1/proxy-chains/" + bindingID,
+			payload:        `{"binding": {bad`,
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "update empty body returns 400",
+			method:         http.MethodPut,
+			path:           "/api/v1/proxy-chains/" + bindingID,
+			payload:        "",
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "update missing config_version returns 422",
+			method:         http.MethodPut,
+			path:           "/api/v1/proxy-chains/" + bindingID,
+			payload:        `{"binding":{"target_type":"node","target_id":"node-1","dialer_type":"node","dialer_id":"node-2","enabled":true},"expected_revision":1}`,
+			expectedStatus: http.StatusUnprocessableEntity,
+		},
+		{
+			name:           "update empty config_version returns 422",
+			method:         http.MethodPut,
+			path:           "/api/v1/proxy-chains/" + bindingID,
+			payload:        `{"binding":{"target_type":"node","target_id":"node-1","dialer_type":"node","dialer_id":"node-2","enabled":true},"config_version":"","expected_revision":1}`,
+			expectedStatus: http.StatusUnprocessableEntity,
+		},
+		{
+			name:           "update whitespace config_version returns 422",
+			method:         http.MethodPut,
+			path:           "/api/v1/proxy-chains/" + bindingID,
+			payload:        `{"binding":{"target_type":"node","target_id":"node-1","dialer_type":"node","dialer_id":"node-2","enabled":true},"config_version":"   ","expected_revision":1}`,
+			expectedStatus: http.StatusUnprocessableEntity,
+		},
+		{
+			name:           "update missing expected_revision returns 422",
+			method:         http.MethodPut,
+			path:           "/api/v1/proxy-chains/" + bindingID,
+			payload:        fmt.Sprintf(`{"binding":{"target_type":"node","target_id":"node-1","dialer_type":"node","dialer_id":"node-2","enabled":true},"config_version":"%s"}`, currentVersion),
+			expectedStatus: http.StatusUnprocessableEntity,
+		},
+		{
+			name:           "update expected_revision = 0 returns 422",
+			method:         http.MethodPut,
+			path:           "/api/v1/proxy-chains/" + bindingID,
+			payload:        fmt.Sprintf(`{"binding":{"target_type":"node","target_id":"node-1","dialer_type":"node","dialer_id":"node-2","enabled":true},"config_version":"%s","expected_revision":0}`, currentVersion),
+			expectedStatus: http.StatusUnprocessableEntity,
+		},
+		{
+			name:           "update expected_revision negative returns 422",
+			method:         http.MethodPut,
+			path:           "/api/v1/proxy-chains/" + bindingID,
+			payload:        fmt.Sprintf(`{"binding":{"target_type":"node","target_id":"node-1","dialer_type":"node","dialer_id":"node-2","enabled":true},"config_version":"%s","expected_revision":-1}`, currentVersion),
+			expectedStatus: http.StatusUnprocessableEntity,
+		},
+		{
+			name:           "update query params with empty body does not bypass (400)",
+			method:         http.MethodPut,
+			path:           fmt.Sprintf("/api/v1/proxy-chains/%s?config_version=%s&expected_revision=1", bindingID, currentVersion),
+			payload:        "",
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "update stale config_version returns 409",
+			method:         http.MethodPut,
+			path:           "/api/v1/proxy-chains/" + bindingID,
+			payload:        `{"binding":{"target_type":"node","target_id":"node-1","dialer_type":"node","dialer_id":"node-2","enabled":true},"config_version":"stale-v","expected_revision":1}`,
+			expectedStatus: http.StatusConflict,
+		},
+		{
+			name:           "update stale expected_revision returns 409",
+			method:         http.MethodPut,
+			path:           "/api/v1/proxy-chains/" + bindingID,
+			payload:        fmt.Sprintf(`{"binding":{"target_type":"node","target_id":"node-1","dialer_type":"node","dialer_id":"node-2","enabled":true},"config_version":"%s","expected_revision":99}`, currentVersion),
+			expectedStatus: http.StatusConflict,
+		},
+
+		// Delete
+		{
+			name:           "delete bad JSON syntax returns 400",
+			method:         http.MethodDelete,
+			path:           "/api/v1/proxy-chains/" + bindingID,
+			payload:        `{invalid json`,
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "delete empty body returns 400 (no EOF bypass)",
+			method:         http.MethodDelete,
+			path:           "/api/v1/proxy-chains/" + bindingID,
+			payload:        "",
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "delete query params alone with empty body does not bypass (400)",
+			method:         http.MethodDelete,
+			path:           fmt.Sprintf("/api/v1/proxy-chains/%s?config_version=%s&expected_revision=1", bindingID, currentVersion),
+			payload:        "",
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "delete empty JSON object returns 422",
+			method:         http.MethodDelete,
+			path:           "/api/v1/proxy-chains/" + bindingID,
+			payload:        `{}`,
+			expectedStatus: http.StatusUnprocessableEntity,
+		},
+		{
+			name:           "delete missing config_version returns 422",
+			method:         http.MethodDelete,
+			path:           "/api/v1/proxy-chains/" + bindingID,
+			payload:        `{"expected_revision":1}`,
+			expectedStatus: http.StatusUnprocessableEntity,
+		},
+		{
+			name:           "delete empty config_version returns 422",
+			method:         http.MethodDelete,
+			path:           "/api/v1/proxy-chains/" + bindingID,
+			payload:        `{"config_version":"","expected_revision":1}`,
+			expectedStatus: http.StatusUnprocessableEntity,
+		},
+		{
+			name:           "delete whitespace config_version returns 422",
+			method:         http.MethodDelete,
+			path:           "/api/v1/proxy-chains/" + bindingID,
+			payload:        `{"config_version":"   ","expected_revision":1}`,
+			expectedStatus: http.StatusUnprocessableEntity,
+		},
+		{
+			name:           "delete missing expected_revision returns 422",
+			method:         http.MethodDelete,
+			path:           "/api/v1/proxy-chains/" + bindingID,
+			payload:        fmt.Sprintf(`{"config_version":"%s"}`, currentVersion),
+			expectedStatus: http.StatusUnprocessableEntity,
+		},
+		{
+			name:           "delete expected_revision = 0 returns 422",
+			method:         http.MethodDelete,
+			path:           "/api/v1/proxy-chains/" + bindingID,
+			payload:        fmt.Sprintf(`{"config_version":"%s","expected_revision":0}`, currentVersion),
+			expectedStatus: http.StatusUnprocessableEntity,
+		},
+		{
+			name:           "delete expected_revision negative returns 422",
+			method:         http.MethodDelete,
+			path:           "/api/v1/proxy-chains/" + bindingID,
+			payload:        fmt.Sprintf(`{"config_version":"%s","expected_revision":-1}`, currentVersion),
+			expectedStatus: http.StatusUnprocessableEntity,
+		},
+		{
+			name:           "delete query param does not satisfy missing body field (422)",
+			method:         http.MethodDelete,
+			path:           fmt.Sprintf("/api/v1/proxy-chains/%s?expected_revision=1", bindingID),
+			payload:        fmt.Sprintf(`{"config_version":"%s"}`, currentVersion),
+			expectedStatus: http.StatusUnprocessableEntity,
+		},
+		{
+			name:           "delete stale config_version returns 409",
+			method:         http.MethodDelete,
+			path:           "/api/v1/proxy-chains/" + bindingID,
+			payload:        `{"config_version":"stale-v","expected_revision":1}`,
+			expectedStatus: http.StatusConflict,
+		},
+		{
+			name:           "delete stale expected_revision returns 409",
+			method:         http.MethodDelete,
+			path:           "/api/v1/proxy-chains/" + bindingID,
+			payload:        fmt.Sprintf(`{"config_version":"%s","expected_revision":99}`, currentVersion),
+			expectedStatus: http.StatusConflict,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := request(tc.method, tc.path, tc.payload)
+			if rec.Code != tc.expectedStatus {
+				t.Fatalf("expected status %d, got %d: %s", tc.expectedStatus, rec.Code, rec.Body.String())
+			}
+		})
+	}
 }

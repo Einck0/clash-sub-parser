@@ -126,6 +126,21 @@ func (d *dummySubscriptionRepo) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
+func testValidSSNode(id, name, server string, port int) *domain.Node {
+	return &domain.Node{
+		LogicalID:   id,
+		DisplayName: name,
+		Protocol:    domain.ProtocolSS,
+		Server:      server,
+		Port:        port,
+		Credentials: domain.InboundProtocolCredential{
+			Method:   "aes-256-gcm",
+			Password: "secret-password",
+		},
+		Active: true,
+	}
+}
+
 func TestPublication_WithProxyChainRepository_LoadsBindingsAndSources(t *testing.T) {
 	ctx := context.Background()
 
@@ -138,7 +153,7 @@ func TestPublication_WithProxyChainRepository_LoadsBindingsAndSources(t *testing
 	}
 	nodeRepo := &mockNodeRepo{
 		nodes: map[string]*domain.Node{
-			"node-1": {LogicalID: "node-1", DisplayName: "Node 1", Active: true},
+			"node-1": testValidSSNode("node-1", "Node 1", "1.1.1.1", 8388),
 		},
 	}
 	sourceRepo := &dummyNodeSourceRepo{}
@@ -200,7 +215,8 @@ func TestPublication_ResolveTargetSnapshot_RejectsNonMihomoWithActiveChain(t *te
 	}
 	nodeRepo := &mockNodeRepo{
 		nodes: map[string]*domain.Node{
-			"node-1": {LogicalID: "node-1", DisplayName: "Node 1", Active: true},
+			"node-1": testValidSSNode("node-1", "Node 1", "1.1.1.1", 8388),
+			"node-2": testValidSSNode("node-2", "Node 2", "1.1.1.2", 8388),
 		},
 	}
 	chainRepo := &dummyChainRepo{
@@ -267,7 +283,7 @@ func TestPublication_AssembleResolveInput_ValidatesTargetSubscription(t *testing
 	}
 	nodeRepo := &mockNodeRepo{
 		nodes: map[string]*domain.Node{
-			"node-1": {LogicalID: "node-1", DisplayName: "Node 1", Active: true},
+			"node-1": testValidSSNode("node-1", "Node 1", "1.1.1.1", 8388),
 		},
 	}
 	sourceRepo := &dummyNodeSourceRepo{}
@@ -423,7 +439,7 @@ func TestPublication_AssembleResolveInput_LoadsNodeSourcesWhenChainRepoConfigure
 	}
 	nodeRepo := &mockNodeRepo{
 		nodes: map[string]*domain.Node{
-			"node-1": {LogicalID: "node-1", DisplayName: "Node 1", Active: true},
+			"node-1": testValidSSNode("node-1", "Node 1", "1.1.1.1", 8388),
 		},
 	}
 	sourceRepo := &dummyNodeSourceRepo{}

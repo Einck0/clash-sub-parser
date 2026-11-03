@@ -51,8 +51,8 @@ func (r *controlledFakeRunner) Run(ctx context.Context, run *domain.ProbeRun, no
 	return nil
 }
 
-// TestFeatureConvergence_SchemaMigrationTo22 verifies all current migrations.
-func TestFeatureConvergence_SchemaMigrationTo22(t *testing.T) {
+// TestFeatureConvergence_SchemaMigrationTo27 verifies all current migrations through 27.
+func TestFeatureConvergence_SchemaMigrationTo27(t *testing.T) {
 	ctx := context.Background()
 	db, err := sqlite.Open(sqlite.Config{
 		Path:        fmt.Sprintf("file:migration_test_%d?mode=memory&cache=shared", time.Now().UnixNano()),
@@ -66,7 +66,7 @@ func TestFeatureConvergence_SchemaMigrationTo22(t *testing.T) {
 
 	runner := sqlite.NewMigrationRunner(db, migrations.FS)
 	if err := runner.Run(ctx); err != nil {
-		t.Fatalf("failed to run migrations 1..22: %v", err)
+		t.Fatalf("failed to run migrations 1..27: %v", err)
 	}
 
 	report, err := sqlite.CheckReadiness(ctx, db)
@@ -76,8 +76,8 @@ func TestFeatureConvergence_SchemaMigrationTo22(t *testing.T) {
 	if !report.Ready {
 		t.Fatalf("expected readiness report Ready=true, got report: %+v", report)
 	}
-	if report.SchemaVersion != 26 {
-		t.Fatalf("expected schema version 26 (sources, fetch settings, revision snapshots, prefix, subscription links, group position, primary subscription, inherit global filter, rule categories, and dns config), got %d", report.SchemaVersion)
+	if report.SchemaVersion != 27 {
+		t.Fatalf("expected schema version 27 (sources, fetch settings, revision snapshots, prefix, subscription links, group position, primary subscription, inherit global filter, rule categories, dns config, and proxy chain bindings), got %d", report.SchemaVersion)
 	}
 	if len(report.MissingTables) > 0 {
 		t.Fatalf("unexpected missing tables: %v", report.MissingTables)
@@ -86,8 +86,8 @@ func TestFeatureConvergence_SchemaMigrationTo22(t *testing.T) {
 		t.Fatalf("unexpected FK violations: %v", report.ForeignKeyViolations)
 	}
 
-	// Verify tables from migration 7 and 8 exist, plus subscription_links from migration 22 and dns_config from migration 26
-	for _, tbl := range []string{"probe_schedules", "probe_batches", "probe_batch_runs", "global_node_filters", "group_node_filters", "subscription_links", "dns_config"} {
+	// Verify tables from migration 7 and 8 exist, plus subscription_links from migration 22, dns_config from migration 26, and proxy_chain_bindings from migration 27
+	for _, tbl := range []string{"probe_schedules", "probe_batches", "probe_batch_runs", "global_node_filters", "group_node_filters", "subscription_links", "dns_config", "proxy_chain_bindings"} {
 		var name string
 		err := db.QueryRowContext(ctx, "SELECT name FROM sqlite_master WHERE type='table' AND name=?", tbl).Scan(&name)
 		if err != nil {
@@ -101,6 +101,9 @@ func TestFeatureConvergence_SchemaMigrationTo22(t *testing.T) {
 	if err := db.QueryRowContext(ctx, "SELECT name FROM sqlite_master WHERE type='index' AND name='uq_subscription_links_default_target'").Scan(&idxName); err != nil {
 		t.Fatalf("expected unique partial index uq_subscription_links_default_target from migration 22 to exist: %v", err)
 	}
+	if err := db.QueryRowContext(ctx, "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_proxy_chain_bindings_sort'").Scan(&idxName); err != nil {
+		t.Fatalf("expected index idx_proxy_chain_bindings_sort from migration 27 to exist: %v", err)
+	}
 
 	// Verify dns_config schema from migration 26
 	var dnsTableSQL string
@@ -111,6 +114,15 @@ func TestFeatureConvergence_SchemaMigrationTo22(t *testing.T) {
 		t.Fatalf("expected dns_config schema to enforce singleton and raw_yaml: %s", dnsTableSQL)
 	}
 
+	// Verify proxy_chain_bindings schema from migration 27
+	var chainTableSQL string
+	if err := db.QueryRowContext(ctx, "SELECT sql FROM sqlite_master WHERE type='table' AND name='proxy_chain_bindings'").Scan(&chainTableSQL); err != nil {
+		t.Fatalf("expected table proxy_chain_bindings to exist: %v", err)
+	}
+	if !strings.Contains(chainTableSQL, "target_type") || !strings.Contains(chainTableSQL, "dialer_type") || !strings.Contains(chainTableSQL, "sort_order") || !strings.Contains(chainTableSQL, "revision") {
+		t.Fatalf("expected proxy_chain_bindings schema to enforce target_type, dialer_type, sort_order, and revision: %s", chainTableSQL)
+	}
+
 	// Verify settings.public_base_url exists with default empty string from migration 22
 	var publicBaseURL string
 	if err := db.QueryRowContext(ctx, "SELECT public_base_url FROM settings WHERE id = 1").Scan(&publicBaseURL); err != nil {
@@ -118,6 +130,39 @@ func TestFeatureConvergence_SchemaMigrationTo22(t *testing.T) {
 	}
 	if publicBaseURL != "" {
 		t.Fatalf("expected settings.public_base_url default empty string, got %q", publicBaseURL)
+	}
+
+	// Verify proxy_chain_bindings starts empty and does not alter existing rules or schema data
+	var chainCount int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM proxy_chain_bindings").Scan(&chainCount); err != nil {
+		t.Fatalf("failed to query proxy_chain_bindings count: %v", err)
+	}
+	if chainCount != 0 {
+		t.Fatalf("expected empty proxy_chain_bindings table after migration, got %d", chainCount)
+	}
+
+	var ruleCategoryCount int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM rule_categories").Scan(&ruleCategoryCount); err != nil {
+		t.Fatalf("failed to query rule_categories count: %v", err)
+	}
+	if ruleCategoryCount != 14 {
+		t.Fatalf("expected 14 standard rule categories from migration 25 to remain unchanged, got %d", ruleCategoryCount)
+	}
+
+	var policyRuleCount int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM policy_rules").Scan(&policyRuleCount); err != nil {
+		t.Fatalf("failed to query policy_rules count: %v", err)
+	}
+	if policyRuleCount != 0 {
+		t.Fatalf("expected policy_rules count to remain unaffected (0 rows), got %d", policyRuleCount)
+	}
+
+	var settingsCount int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM settings").Scan(&settingsCount); err != nil {
+		t.Fatalf("failed to query settings count: %v", err)
+	}
+	if settingsCount != 1 {
+		t.Fatalf("expected singleton settings row to remain unchanged, got %d", settingsCount)
 	}
 }
 

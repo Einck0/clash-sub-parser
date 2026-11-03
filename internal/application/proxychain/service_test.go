@@ -194,14 +194,44 @@ func TestService_EffectsAndPreview(t *testing.T) {
 	}
 }
 
+func testSSNode(id, name, server string, port int) domain.Node {
+	return domain.Node{
+		LogicalID:   id,
+		DisplayName: name,
+		Protocol:    domain.ProtocolSS,
+		Server:      server,
+		Port:        port,
+		Credentials: domain.InboundProtocolCredential{
+			Method:   "aes-256-gcm",
+			Password: "secret-password",
+		},
+		Active: true,
+	}
+}
+
 func TestService_Create_ValidationAndAudit(t *testing.T) {
 	ctx := context.Background()
 	repo := newMockProxyChainRepo(nil)
 	audit := &mockAuditRepo{}
+	subRepo := newMockSubscriptionRepo([]*domain.Subscription{
+		{ID: "sub-1", Name: "Sub 1", Enabled: true},
+	})
 
-	svc := proxychain.NewService(repo, nil, nil, nil, proxychain.WithAuditRepository(audit))
+	svc := proxychain.NewService(repo, nil, nil, subRepo, proxychain.WithAuditRepository(audit))
+	n1ID := "n1"
+	n2ID := "n2"
+	nodes := []domain.Node{
+		testSSNode(n1ID, "Node 1", "1.1.1.1", 8388),
+		testSSNode(n2ID, "Node 2", "1.1.1.2", 8388),
+	}
 	svc.SetInputProvider(func(ctx context.Context) (*resolver.ResolveInput, error) {
-		return &resolver.ResolveInput{}, nil
+		return &resolver.ResolveInput{
+			Nodes: nodes,
+			NodeSources: map[string][]domain.NodeSource{
+				n1ID: {{SubscriptionID: "sub-1", NodeLogicalID: n1ID}},
+				n2ID: {{SubscriptionID: "sub-1", NodeLogicalID: n2ID}},
+			},
+		}, nil
 	})
 
 	// 1. Caller provides nonempty ID -> rejected (422)
@@ -293,10 +323,57 @@ func TestService_Update_Lifecycle(t *testing.T) {
 		},
 	})
 	audit := &mockAuditRepo{}
+	subRepo := newMockSubscriptionRepo([]*domain.Subscription{
+		{ID: "sub-1", Name: "Sub 1", Enabled: true},
+	})
 
-	svc := proxychain.NewService(repo, nil, nil, nil, proxychain.WithAuditRepository(audit))
+	svc := proxychain.NewService(repo, nil, nil, subRepo, proxychain.WithAuditRepository(audit))
+	n1ID := "n1"
+	n2ID := "n2"
+	n3ID := "n3"
+	nodes := []domain.Node{
+		testSSNode(n1ID, "Node 1", "1.1.1.1", 8388),
+		testSSNode(n2ID, "Node 2", "1.1.1.2", 8388),
+		testSSNode(n3ID, "Node 3", "1.1.1.3", 8388),
+	}
+	groups := []domain.NodeGroup{
+		{
+			ID:        "g1",
+			Name:      "Group 1",
+			GroupType: domain.GroupTypeSelect,
+			Sources: []domain.MemberSource{
+				{
+					Operation:     domain.OperationAdd,
+					Kind:          domain.SourceKindManualNode,
+					Position:      0,
+					NodeLogicalID: &n2ID,
+				},
+			},
+		},
+		{
+			ID:        "g2",
+			Name:      "Group 2",
+			GroupType: domain.GroupTypeSelect,
+			Sources: []domain.MemberSource{
+				{
+					Operation:     domain.OperationAdd,
+					Kind:          domain.SourceKindManualNode,
+					Position:      0,
+					NodeLogicalID: &n3ID,
+				},
+			},
+		},
+	}
 	svc.SetInputProvider(func(ctx context.Context) (*resolver.ResolveInput, error) {
-		return &resolver.ResolveInput{}, nil
+		return &resolver.ResolveInput{
+			Nodes:  nodes,
+			Groups: groups,
+			NodeSources: map[string][]domain.NodeSource{
+				n1ID: {{SubscriptionID: "sub-1", NodeLogicalID: n1ID}},
+				n2ID: {{SubscriptionID: "sub-1", NodeLogicalID: n2ID}},
+				n3ID: {{SubscriptionID: "sub-1", NodeLogicalID: n3ID}},
+			},
+		}, nil
 	})
 
 	// 1. Path ID mismatch -> 422

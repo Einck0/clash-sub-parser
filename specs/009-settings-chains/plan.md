@@ -27,7 +27,7 @@ F 链设置 UI：features/chains Vue components/composable/types 与导航/route
 接口冻结后 A/B/D/E 四包无交叉写并行，B可根据已冻结新增 types 编码、不要求 A 完成才能写。A负责 domain/proxy_chain.go（含repo port）、resolver/types/chain/digest/resolver与tests；B不能写这些，只读契约。B负责 migration/sqlite/app/http/router/cmd/publication 和相关测试。D负责 settings 和共享 SettingsSections；E负责 dns 目录并可静态引用冻结共享SettingsSections接口。C/F 下一波并行（分别 compiler 与 chains/router/App/nav），只读 A/B 已完成接口。根 locale 不并发写，新增文案局部 uiText；README 更新由最终集成包独占。
 
 ## Verification and release boundary
-Git index/commit/push 由主脑串行，保护原224dirty（入口web/internal/cmd/migrations无dirty）。每修订精确files开发提交推dev→现 CI 全 checks/runtime，promote skipped正确；本机不Go/node/Python项目test/type/build，也不本地Docker编译。可gofmt/静态diff。每模块新增行为测试交云端，不拿静态PASS当自测。最后独review读当前SHAjobs与artifact、风险核，拉同SHA云镜像 internalnet/合成DB/禁scheduler/loopback预览，Critic真实保存/readback/export/409/环路与desktop/mobilelightdark PNG。无生产部署、真实刷新/probe/改现银行规则、prelease推进或历史Release清理授权。
+Git index/commit/push 由主脑串行，保护原224dirty（入口web/internal/cmd/migrations无dirty）。每修订精确files开发提交推dev→现 CI 全 checks/runtime，promote skipped正确；本机不Go/node/Python项目test/type/build，也不本地Docker编译。可gofmt/静态diff。每模块新增行为测试交云端，不拿静态PASS当自测。最后独review读当前SHAjobs与artifact、风险核，拉同SHA云镜像 internalnet/合成DB/禁scheduler/loopback预览，Critic真实保存/readback/export/409/环路与desktop/mobilelightdark PNG。前次开发阶段没有生产部署或prelease推进授权；2026-11-04本次上线授权取代这一历史限制，见下方发布增量。仍不做真实刷新/probe、改现银行规则或历史Release清理。
 
 ## Decisions
 恢复历史三类目标/两类跳板与层级优先级，纠正旧名称作为身份及同级模糊覆盖。增加配置集合CAS用于防并发环，这个内部版本不成为用户需维护的实体。Mihomo链语义为本轮完整目标，其他格式真实拒绝避免假绿导出；无链原行为不变。可读性优先，不以压行或迎合旧测试引入兼容。
@@ -39,3 +39,23 @@ Git index/commit/push 由主脑串行，保护原224dirty（入口web/internal/c
 2. 链管理模块负责 `internal/application/proxychain/*`、`internal/transport/http/proxy_chains*`、`internal/repository/sqlite/proxy_chain*`：所有preview/create/update/delete必须非空config_version；update/delete必须正expected_revision。缺失/空/0/负数422，格式有效但过时409且零写入；DELETE仅合同JSON body，不保留query/EOF垫片。仓储Replace同样不可空版本绕过。同步更新被废弃默认值绑定的测试，不能生产兼容旧测试。已有事务CAS仍使用实际读版本防并发安全，API必填是额外用户冲突保障，不能把原代码夸大为一定能并发造环。
 
 关键复验场景：绑定有效订阅后停用/删除订阅→导出失败→通过API停用/改目标/删除成功；真实链保存后GET/clash/sub/mihomo及活链接输出同一dialer；开启链后三种非Mihomo明确422，停用后恢复；不带版本/修订号写请求不能改变集合。所有新测试仅云端运行。
+
+
+## Authorized production rollout (2026-11-04)
+用户原话：“CSP任务没有上线，继续推进，直到上线为止”。仅本Feature本次生产上线授权，包含既有prelease正式发布路径；不push main、不改其他服务/基础设施、不恢复旧Python数据。
+
+发布候选固定 `b9ace2987376cc969add6d74658108de0a521877`，与已验收 `47951bd` 仅两份规划文档不同；本轮已非force快进prelease并通过Actions `41748007354` 的checks/runtime/promote三个jobs，发布3资产与源码/二进制/镜像身份匹配。固定digest `sha256:2390ad0e4c5c9db1fcf3e32479afe30e8b4327bc90fac3d47d592aefc241c5a1`，binary `7b1ae0cafc187589788ad1db4a605856fd06a9563078abe31a2bc05fa4991352`。不声称与旧binary逐位相同；复用的是源代码级业务证据，本轮exactimage另经隔离空库52项增量及PNG审查。历史报告中旧run拼写错误不作为身份依据。
+
+生产owner为原Compose project `clash-sub-parser` / service `app` / `docker-compose.prod.yml` / env-file `/dev/null`，原卷 `csp-v1-data:/data`、回环端口17000/18080与env完整沿用，env与token仅私有文件。原版本afad381/digest6a626a8c…保留回滚。
+
+执行边界：先在线SQLite一致性备份及完整性/FK校验；准备者只读记录规则/设置/DNS/实体身份基线；工程独审通过后，exactimage独立合成预览由Critic检视；两门禁完成后停旧container，宿主SQLite backup API读取静默原库（包括可能存在的WAL）生成最新cutover备份并核验，绝不裸cp遗漏WAL。使用原env且显式digest、--no-build --pull never替换原app，只有已远端拉取并确权的镜像可消费。
+
+迁移27仅增加空链绑定表。原启动器自带孤儿清理，已知100节点中两条无来源且无manual_confirmed，只有在静默快照逐条证明符合现有清理条件、且所有关联业务行变化能归因时允许正常启动清理；不手动删库。其余订阅/来源/组/组来源/分类/规则/DNS/设置身份及顺序必须保全。异常变化立即保留新库现场并回滚，不能将所有计数变化统称正常。
+
+上线后只读核验：实际OCI revision/digest/binary、schema27健康与FK、API读取三个设置领域、候选和effects、直接订阅导出、现有公开HTTPS入口/静态资源与正常导航、PROCESS-NAME顺序和终端MATCH；不在真实配置造链/改DNS/故障注入，不手动刷新或探测。合法鉴权沿现设置（当前admin/export均关闭），不重置凭据。后台既有自动调度策略保留，动态日志/健康计数与静态配置分别判定。
+
+回滚：健康/数据核验失败先停新容器、完整保留失败数据库一致性快照和原sidecar，再在停写状态恢复最新cutover备份及原属主权限、去除已归档的旧WAL/SHM，切回原digest与env。不会直接覆盖唯一现场。上线成功后独立复核运行态及公开入口，再精确回收本轮预览及私有凭据，保留生产备份和原镜像。
+
+
+### Rollout result and review decisions
+已按固定b9ace29镜像切换生产并通过独立运行态、数据库/API及浏览器复核；静默备份有效、迁移27成功，切换至健康的观测窗口约22秒。已证明的两条孤儿清理及关联历史变化与启动器既有条件一致，其余资产/配置/规则保全。预览资源已回收。首轮生产review中HTML5路由与98=候选=导出的假设不成立：主脑原交接对此有误，采纳Hash路由与分层资格集合事实并由独立角色定点复核，不为错误验证脚本更改生产实现。现役Surge/QX协议能力422属升级前限制，未扩张为本次修复范围；Clash/Sing-box及三设置领域上线读取正常。完整操作凭据仅私有留存，不将临时令牌、容器环境或生产导出写入仓库。

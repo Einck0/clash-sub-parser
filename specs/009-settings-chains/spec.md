@@ -2,7 +2,7 @@
 
 **Branch**: dev（遵循既有云交付规则，不另建开发分支）
 **Created**: 2026-11-03
-**Status**: Implemented and verified; production deployment not authorized
+**Status**: Production deployed and verified (2026-11-04, b9ace29)
 **Input**: “现在把csp，dns，以及，链式代理的设置页面重做，其中链式代理之前重构直接丢了恢复一下”
 
 ## User Scenarios & Testing
@@ -39,7 +39,7 @@ DNS 页面优先显示启用、主/备/引导解析、解析模式与 Fake-IP；
 - **FR-005** MUST 复用实时策略组解析结果展开动态成员，应用优先级、重合跳过及完整环检；保存与导出使用同一算法。
 - **FR-006** MUST Mihomo 全协议适用 dialer-proxy，snapshot/input digest 反映绑定变动；不支持目标真实报错，无链时不回归。
 - **FR-007** MUST UI 有真实候选、预览计数/样本/原因、行级错误/忙态、删除确认与 409 草稿保护；空库和失效引用明确呈现。
-- **FR-008** MUST 不改变现有业务数据/PROCESS-NAME 规则；无生产部署、真实探测/刷新、历史数据自动恢复或旧 Python 双轨兼容。
+- **FR-008** MUST 不改变现有业务数据/PROCESS-NAME 规则；本次按明确授权受控部署生产；不做真实探测/刷新、历史数据自动恢复或旧 Python 双轨兼容。
 - **FR-009** MUST 代码可读、模块内聚、仅云端测试编译、同 SHA 镜像隔离验收、独立工程和 Critic 门禁。
 
 ## Key Entities
@@ -54,4 +54,4 @@ DNS 页面优先显示启用、主/备/引导解析、解析模式与 Fake-IP；
 - **SC-004** 无链数据默认迁移为空且不破坏已有配置；原规则与设置回归和全量云端必需 checks 成功，成品经独立审查及实际 PNG 检视。
 
 ## Assumptions
-CSP 指现有系统设置，不扩张为 Mihomo 运行控制器。链式代理历史输出为 Clash/Mihomo；本轮恢复该能力，对其他不具备该语义的编译器显式拒绝，后续增加支持另行设计。历史名称绑定不自动迁入当前数据库，不猜测旧节点身份。无实体手机或生产部署授权。
+CSP 指现有系统设置，不扩张为 Mihomo 运行控制器。链式代理历史输出为 Clash/Mihomo；本轮恢复该能力，对其他不具备该语义的编译器显式拒绝，后续增加支持另行设计。历史名称绑定不自动迁入当前数据库，不猜测旧节点身份。无实体手机授权；2026-11-04 用户明确授权本次 prelease 发布、生产备份、切换与上线核验，不构成永久自动部署权限。

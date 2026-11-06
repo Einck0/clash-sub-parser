@@ -83,29 +83,29 @@ type Scheduler struct {
 	cfg                    Config
 	explicitRunConcurrency bool
 	mu                     sync.Mutex
-	closed         bool
-	queues         map[string][]Task
-	runOrder       []string
-	runCursor      int
-	queued         int
-	activeByRun    map[string]int
-	activeNodes    map[string]activeRecord
-	probingNodes   map[string]int
-	probingTasks   map[int64]Task
-	nextExecID     int64
-	runCancels     map[string]map[int64]context.CancelFunc
-	cancelledRuns  map[string]bool
-	cancelSequence int64
-	changed        chan struct{}
-	activeCount    atomic.Int32
-	peakActive     atomic.Int32
-	peakQueued     atomic.Int32
-	taskCount      int
-	callbacks      int
-	dispatcherDone chan struct{}
-	workerWg       sync.WaitGroup
-	ctx            context.Context
-	cancel         context.CancelFunc
+	closed                 bool
+	queues                 map[string][]Task
+	runOrder               []string
+	runCursor              int
+	queued                 int
+	activeByRun            map[string]int
+	activeNodes            map[string]activeRecord
+	probingNodes           map[string]int
+	probingTasks           map[int64]Task
+	nextExecID             int64
+	runCancels             map[string]map[int64]context.CancelFunc
+	cancelledRuns          map[string]bool
+	cancelSequence         int64
+	changed                chan struct{}
+	activeCount            atomic.Int32
+	peakActive             atomic.Int32
+	peakQueued             atomic.Int32
+	taskCount              int
+	callbacks              int
+	dispatcherDone         chan struct{}
+	workerWg               sync.WaitGroup
+	ctx                    context.Context
+	cancel                 context.CancelFunc
 }
 
 func NewScheduler(cfg Config) (*Scheduler, error) {
@@ -140,16 +140,16 @@ func NewScheduler(cfg Config) (*Scheduler, error) {
 		cfg:                    cfg,
 		explicitRunConcurrency: explicitRunConcurrency,
 		queues:                 make(map[string][]Task),
-		activeByRun:    make(map[string]int),
-		activeNodes:    make(map[string]activeRecord),
-		probingNodes:   make(map[string]int),
-		probingTasks:   make(map[int64]Task),
-		runCancels:     make(map[string]map[int64]context.CancelFunc),
-		cancelledRuns:  make(map[string]bool),
-		changed:        make(chan struct{}),
-		dispatcherDone: make(chan struct{}),
-		ctx:            ctx,
-		cancel:         cancel,
+		activeByRun:            make(map[string]int),
+		activeNodes:            make(map[string]activeRecord),
+		probingNodes:           make(map[string]int),
+		probingTasks:           make(map[int64]Task),
+		runCancels:             make(map[string]map[int64]context.CancelFunc),
+		cancelledRuns:          make(map[string]bool),
+		changed:                make(chan struct{}),
+		dispatcherDone:         make(chan struct{}),
+		ctx:                    ctx,
+		cancel:                 cancel,
 	}
 	s.workerWg.Add(1)
 	go s.dispatch()
@@ -241,36 +241,45 @@ func (s *Scheduler) nextEligibleLocked() (Task, bool) {
 	if len(s.runOrder) == 0 {
 		return Task{}, false
 	}
-	// Priority pass: always dispatch EnqueueManualPreemptFront tasks at the front first.
-	for i, run := range s.runOrder {
-		q := s.queues[run]
-		if len(q) > 0 && q[0].Mode == EnqueueManualPreemptFront {
-			t := q[0]
-			s.queues[run] = q[1:]
-			s.queued--
-			if len(s.queues[run]) == 0 {
-				delete(s.queues, run)
-				s.runOrder = append(s.runOrder[:i], s.runOrder[i+1:]...)
-				if len(s.runOrder) > 0 {
-					s.runCursor %= len(s.runOrder)
-				} else {
-					s.runCursor = 0
-				}
-			}
-			s.signalLocked()
-			return t, true
-		}
-	}
 	competing := s.activeCompetingRunsLocked()
-	for n := 0; n < len(s.runOrder); n++ {
-		i := (s.runCursor + n) % len(s.runOrder)
-		run := s.runOrder[i]
-		q := s.queues[run]
+	limitForRun := func() int {
 		limit := s.cfg.RunConcurrency
 		if !s.explicitRunConcurrency && competing <= 1 {
 			limit = s.cfg.Concurrency
 		}
-		if len(q) > 0 && s.activeByRun[run] < limit {
+		return limit
+	}
+	// Manual work keeps priority, but only among eligible runs, and rotates
+	// across those runs just like ordinary dispatch.
+	for n := 0; n < len(s.runOrder); n++ {
+		i := (s.runCursor + n) % len(s.runOrder)
+		run := s.runOrder[i]
+		q := s.queues[run]
+		if len(q) == 0 || q[0].Mode != EnqueueManualPreemptFront || s.activeByRun[run] >= limitForRun() {
+			continue
+		}
+		t := q[0]
+		s.queues[run] = q[1:]
+		s.queued--
+		if len(s.queues[run]) == 0 {
+			delete(s.queues, run)
+			s.runOrder = append(s.runOrder[:i], s.runOrder[i+1:]...)
+			if len(s.runOrder) > 0 {
+				s.runCursor = i % len(s.runOrder)
+			} else {
+				s.runCursor = 0
+			}
+		} else {
+			s.runCursor = (i + 1) % len(s.runOrder)
+		}
+		s.signalLocked()
+		return t, true
+	}
+	for n := 0; n < len(s.runOrder); n++ {
+		i := (s.runCursor + n) % len(s.runOrder)
+		run := s.runOrder[i]
+		q := s.queues[run]
+		if len(q) > 0 && s.activeByRun[run] < limitForRun() {
 			t := q[0]
 			s.queues[run] = q[1:]
 			s.queued--

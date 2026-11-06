@@ -561,6 +561,16 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 			k := domain.ProbeKindBaseline
 			s := pool.sessionFor(n)
 			stage1WG.Add(1)
+			select {
+			case stage1Sem <- struct{}{}:
+			case <-runCtx.Done():
+				stage1WG.Done()
+				stage1SubmitErr = runCtx.Err()
+				break
+			}
+			if stage1SubmitErr != nil {
+				break
+			}
 
 			task := queue.Task{
 				ID:        domain.MustNewUUIDv7(),
@@ -570,12 +580,6 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 				Mode:      enqueueMode,
 				Context:   runCtx,
 				Execute: func(tCtx context.Context) error {
-					select {
-					case stage1Sem <- struct{}{}:
-						defer func() { <-stage1Sem }()
-					case <-tCtx.Done():
-						return tCtx.Err()
-					}
 					verdict, err := r.executeTaskWithVerdict(tCtx, run, n, k, s)
 					if err != nil {
 						recordTaskErr(n.LogicalID, err)
@@ -588,11 +592,13 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 					return err
 				},
 				OnComplete: func(_ error) {
+					<-stage1Sem
 					stage1WG.Done()
 				},
 			}
 
 			if err := r.scheduler.SubmitWithContext(runCtx, task); err != nil {
+				<-stage1Sem
 				stage1WG.Done()
 				stage1SubmitErr = err
 				break
@@ -677,6 +683,17 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 				k := kind
 				s := session
 				stage2WG.Add(1)
+				select {
+				case stage2Sem <- struct{}{}:
+				case <-runCtx.Done():
+					s.release(tasksPerNode - idx)
+					stage2WG.Done()
+					stage2SubmitErr = runCtx.Err()
+					break
+				}
+				if stage2SubmitErr != nil {
+					break
+				}
 
 				task := queue.Task{
 					ID:        domain.MustNewUUIDv7(),
@@ -686,12 +703,6 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 					Mode:      enqueueMode,
 					Context:   runCtx,
 					Execute: func(tCtx context.Context) error {
-						select {
-						case stage2Sem <- struct{}{}:
-							defer func() { <-stage2Sem }()
-						case <-tCtx.Done():
-							return tCtx.Err()
-						}
 						err := r.executeTask(tCtx, run, n, k, s)
 						if err != nil {
 							recordTaskErr(n.LogicalID, err)
@@ -699,12 +710,14 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 						return err
 					},
 					OnComplete: func(_ error) {
+						<-stage2Sem
 						s.release(1)
 						stage2WG.Done()
 					},
 				}
 
 				if err := r.scheduler.SubmitWithContext(runCtx, task); err != nil {
+					<-stage2Sem
 					s.release(tasksPerNode - idx)
 					stage2WG.Done()
 					stage2SubmitErr = err
@@ -764,6 +777,17 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 				k := kind
 				s := session
 				stage3WG.Add(1)
+				select {
+				case stage3Sem <- struct{}{}:
+				case <-runCtx.Done():
+					s.release(len(stage3Kinds) - idx)
+					stage3WG.Done()
+					stage3SubmitErr = runCtx.Err()
+					break
+				}
+				if stage3SubmitErr != nil {
+					break
+				}
 
 				task := queue.Task{
 					ID:        domain.MustNewUUIDv7(),
@@ -773,12 +797,6 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 					Mode:      enqueueMode,
 					Context:   runCtx,
 					Execute: func(tCtx context.Context) error {
-						select {
-						case stage3Sem <- struct{}{}:
-							defer func() { <-stage3Sem }()
-						case <-tCtx.Done():
-							return tCtx.Err()
-						}
 						err := r.executeTask(tCtx, run, n, k, s)
 						if err != nil {
 							recordTaskErr(n.LogicalID, err)
@@ -786,12 +804,14 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 						return err
 					},
 					OnComplete: func(_ error) {
+						<-stage3Sem
 						s.release(1)
 						stage3WG.Done()
 					},
 				}
 
 				if err := r.scheduler.SubmitWithContext(runCtx, task); err != nil {
+					<-stage3Sem
 					s.release(len(stage3Kinds) - idx)
 					stage3WG.Done()
 					stage3SubmitErr = err
@@ -1216,6 +1236,7 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 			oai    domain.PlatformCapability
 			claude domain.PlatformCapability
 			gem    domain.PlatformCapability
+			ag     domain.PlatformCapability
 		)
 		platformsMap = map[string]domain.PlatformCapability{}
 		if r.platformEnabled("openai") {
@@ -1230,6 +1251,10 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 			wg.Add(1)
 			go func() { defer wg.Done(); gem = platform.CheckGemini(ctx, client) }()
 		}
+		if r.platformEnabled("antigravity") {
+			wg.Add(1)
+			go func() { defer wg.Done(); ag = platform.CheckAntigravity(ctx, client) }()
+		}
 		wg.Wait()
 		latency = r.clock().Sub(reqStart).Milliseconds()
 		if r.platformEnabled("openai") {
@@ -1240,6 +1265,9 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 		}
 		if r.platformEnabled("gemini") {
 			platformsMap["gemini"] = gem
+		}
+		if r.platformEnabled("antigravity") {
+			platformsMap["antigravity"] = ag
 		}
 		result.ContractMatched = true
 		result.ContractVersion = prof.Contract

@@ -1272,3 +1272,15 @@ Publications、Dashboard、Policy Admission Rules、Subscriptions 和 Settings S
 - **[SC-PROB-02]** 错误分类准确率达到 100%，无未捕获的通用未知崩溃。
 - **[SC-PROB-03]** 单节点插队延迟小于 500ms（空闲协程状态下）。
 - **[SC-PROB-04]** 未来时间戳写入拦截率达到 100%。
+
+
+## 2026-11-06 resumed probe optimization (current scoped amendment)
+
+See [frozen optimization contract](probe-optimization-20261106.md) for evidence, scope, scenarios and precedence over obsolete strict-204 clauses.
+
+- **OPT-R1** Stage admission must occur before global worker assignment, remain bounded, cancel promptly and release permits exactly once.
+- **OPT-R2** Manual priority must honor dynamic per-run concurrency and fairness while preserving front priority and periodic deduplication.
+- **OPT-R3** Gemini classifications must reject unknown/conflicting region evidence and distinguish access denial from geographic/account eligibility; all reads are bounded.
+- **OPT-R4** Antigravity must be independent of Gemini, use only official anonymous entry, report reachable but authentication/product eligibility unverified as unknown, and never infer product availability from HTTP 200.
+- **OPT-R5** Default AI execution includes separate antigravity platform detail; explicit platform selections restrict network calls. Existing JSON evidence persistence/read-through is reused without schema migration.
+- **OPT-R6** Same-SHA dev cloud checks, runtime image revision/digest, isolated acceptance and independent review are mandatory. No local compilation/test or production deployment.

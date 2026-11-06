@@ -20,6 +20,49 @@ func stageRun(id string) *domain.ProbeRun {
 	return &domain.ProbeRun{ID: id, State: domain.ProbeRunStateQueued, DeadlineAt: time.Now().Add(time.Minute)}
 }
 
+func TestAIExplicitGeminiSelectionDoesNotRequestAntigravity(t *testing.T) {
+	runs, observations, nodes := newMemoryRuns(), newMemoryObservations(), newMemoryNodes()
+	nodes.items["node"] = domain.Node{LogicalID: "node", Protocol: domain.ProtocolSS, Active: true}
+	sched, err := queue.NewScheduler(queue.Config{Concurrency: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sched.Close()
+
+	var antigravityRequests atomic.Int32
+	runner := probe.NewDefaultRunner(nodes, observations, sched, runs,
+		probe.WithPlatforms([]string{"gemini"}),
+		probe.WithNodeDialer(func(context.Context, domain.Node) (*http.Client, func() error, error) {
+			return &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+				if req.URL.Host == "antigravity.google" {
+					antigravityRequests.Add(1)
+				}
+				return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`,2,1,200,"USA"`)), Request: req}, nil
+			})}, nil, nil
+		}),
+	)
+	run := stageRun("ai_gemini_only")
+	if err := runs.Create(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Run(context.Background(), run, []string{"node"}, []domain.ProbeKind{domain.ProbeKindAI}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := antigravityRequests.Load(); got != 0 {
+		t.Fatalf("explicit Gemini selection made %d Antigravity requests", got)
+	}
+	got, err := observations.ListByRun(context.Background(), run.ID)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("AI observation missing: %#v, err=%v", got, err)
+	}
+	if _, ok := got[0].Platforms["gemini"]; !ok {
+		t.Fatalf("Gemini result missing: %+v", got[0].Platforms)
+	}
+	if _, ok := got[0].Platforms["antigravity"]; ok {
+		t.Fatalf("unselected Antigravity result was persisted: %+v", got[0].Platforms)
+	}
+}
+
 func TestStageGateSpeedExplicitOptInExecutesAndEnforcesBudget(t *testing.T) {
 	t.Run("explicit_speed_kind_opts_in_and_succeeds", func(t *testing.T) {
 		runs, observations, nodes := newMemoryRuns(), newMemoryObservations(), newMemoryNodes()

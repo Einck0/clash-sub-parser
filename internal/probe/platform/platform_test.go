@@ -367,20 +367,24 @@ func TestCheckGemini(t *testing.T) {
 
 	// Available in USA
 	clientUSA := mockClient(func(req *http.Request) (*http.Response, error) {
-		return htmlResponse(200, `[null,2,1,200,"USA"]`)
+		resp, err := htmlResponse(200, `[null,2,1,200,"USA"]`)
+		resp.Request = req
+		return resp, err
 	})
 	cap := platform.CheckGemini(ctx, clientUSA)
-	if cap.Verdict != domain.VerdictAvailable || cap.SubTier != "unlocked" || cap.Region != "US" {
-		t.Fatalf("expected Unlocked(US), got: %+v", cap)
+	if cap.Verdict != domain.VerdictAvailable || cap.SubTier != "web_reachable" || cap.Region != "US" {
+		t.Fatalf("expected web reachable (US), got: %+v", cap)
 	}
 
-	// Blocked in CHN
+	// An unlisted country is not inferred unsupported.
 	clientCHN := mockClient(func(req *http.Request) (*http.Response, error) {
-		return htmlResponse(200, `[null,2,1,200,"CHN"]`)
+		resp, err := htmlResponse(200, `[null,2,1,200,"CHN"]`)
+		resp.Request = req
+		return resp, err
 	})
 	cap = platform.CheckGemini(ctx, clientCHN)
-	if cap.Verdict != domain.VerdictRestricted || cap.SubTier != "banned" {
-		t.Fatalf("expected Banned for CHN, got: %+v", cap)
+	if cap.Verdict != domain.VerdictUnknown || cap.Reason != "region_support_unverified" {
+		t.Fatalf("expected support to remain unverified for CHN, got: %+v", cap)
 	}
 }
 

@@ -29,3 +29,8 @@
 - **符合度现状**: 详见 `docs/specification/conformance-matrix.md`；
 - **历史需求追溯**: 详见 `docs/specification/historical-requirement-register.md`；
 - **测试证据原则**: 本迁移计划不虚构新执行的测试，所有历史测试退出码与证据均标明出处与时效性。
+
+
+## 2026-11-06 implementation amendment
+
+[Probe optimization contract](probe-optimization-20261106.md) freezes module boundaries, current baseline-v2 precedence, interfaces, failure handling, concurrency bounds, Antigravity evidence limitations, cloud validation and isolation responsibilities. Execution/queue and platform modules implement in parallel with disjoint write sets; execution module owns runner integration. Existing platform dictionary carries new result without new schema. No setup-plan regeneration is needed or authorized for this existing living feature.

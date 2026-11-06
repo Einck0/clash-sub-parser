@@ -170,6 +170,8 @@ func TestAIParallelSubRequestsWallClock(t *testing.T) {
 					body = "ip=203.0.113.1\nloc=US\n"
 				case strings.Contains(req.URL.Host, "gemini.google.com"):
 					body = `,2,1,200,"USA"`
+				case req.URL.Host == "antigravity.google":
+					body = `<html>Antigravity agentic coding platform</html>`
 				default:
 					body = "ok"
 				}
@@ -215,7 +217,7 @@ func TestAIParallelSubRequestsWallClock(t *testing.T) {
 		t.Fatalf("expected 1 observation, got %d", len(obs))
 	}
 	platforms := obs[0].Platforms
-	for _, p := range []string{"openai", "claude", "gemini"} {
+	for _, p := range []string{"openai", "claude", "gemini", "antigravity"} {
 		if _, ok := platforms[p]; !ok {
 			t.Fatalf("missing AI platform %s in platforms: %+v", p, platforms)
 		}

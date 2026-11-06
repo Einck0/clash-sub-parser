@@ -165,10 +165,10 @@ func TestCancelRunCompletesQueuedTasksExactlyOnce(t *testing.T) {
 }
 
 // TestSchedulerIdleWorkConservingAndMultiRunFairness proves both:
-// 1. Idle work-conserving: A single run on an idle scheduler uses the full global
-//    concurrency capacity (e.g. 10/10) instead of being halved by the fair-share limit.
-// 2. Multi-run fairness: When multiple runs compete for slots, each run is bounded
-//    by its fair share so no run starves competing runs.
+//  1. Idle work-conserving: A single run on an idle scheduler uses the full global
+//     concurrency capacity (e.g. 10/10) instead of being halved by the fair-share limit.
+//  2. Multi-run fairness: When multiple runs compete for slots, each run is bounded
+//     by its fair share so no run starves competing runs.
 func TestSchedulerIdleWorkConservingAndMultiRunFairness(t *testing.T) {
 	const globalConcurrency = 10
 	s, err := NewScheduler(Config{Concurrency: globalConcurrency, QueueSize: 64})
@@ -319,10 +319,10 @@ func TestSchedulerIdleWorkConservingAndMultiRunFairness(t *testing.T) {
 }
 
 // TestSchedulerLateArrivalConvergence verifies that:
-// 1. When an idle scheduler receives a bulk run, work-conserving allows it to reach full capacity (10 slots).
-// 2. When a competing run joins late, running tasks are NOT preempted (historical peak remains 10).
-// 3. As in-flight bulk tasks complete, freed slots are immediately awarded to the late-arriving run
-//    rather than continuing to admit queued bulk tasks, converging to fair share without starvation.
+//  1. When an idle scheduler receives a bulk run, work-conserving allows it to reach full capacity (10 slots).
+//  2. When a competing run joins late, running tasks are NOT preempted (historical peak remains 10).
+//  3. As in-flight bulk tasks complete, freed slots are immediately awarded to the late-arriving run
+//     rather than continuing to admit queued bulk tasks, converging to fair share without starvation.
 func TestSchedulerLateArrivalConvergence(t *testing.T) {
 	const globalConcurrency = 10
 	const fairShareLimit = (globalConcurrency + 1) / 2
@@ -541,8 +541,8 @@ func TestSchedulerQueuedEmptyButActiveCountsAsCompetingRun(t *testing.T) {
 	s.Wait()
 }
 
-// TestSchedulerExplicitRunConcurrencyRespected verifies that when RunConcurrency is explicitly
-// configured, a single run on an idle scheduler never exceeds that limit.
+// TestSchedulerExplicitRunConcurrencyRespected verifies explicit limits when multiple runs
+// compete; manual priority must not let one run bypass those limits.
 func TestSchedulerExplicitRunConcurrencyRespected(t *testing.T) {
 	const explicitLimit = 3
 	s, err := NewScheduler(Config{
@@ -555,27 +555,30 @@ func TestSchedulerExplicitRunConcurrencyRespected(t *testing.T) {
 	}
 	defer s.Close()
 
-	var active, peak atomic.Int32
+	var active [2]atomic.Int32
+	var peak [2]atomic.Int32
 	startedCount := make(chan struct{}, 8)
 	release := make(chan struct{})
 
 	for i := 0; i < 8; i++ {
 		nid := fmt.Sprintf("explicit-node-%d", i)
+		runIndex := i % 2
 		if err := s.Submit(Task{
-			RunID:     "single-explicit",
+			RunID:     fmt.Sprintf("run-%d", runIndex),
 			LogicalID: nid,
+			Mode:      EnqueueManualPreemptFront,
 			Kind:      domain.ProbeKindBaseline,
 			Execute: func(context.Context) error {
-				curr := active.Add(1)
+				curr := active[runIndex].Add(1)
 				for {
-					p := peak.Load()
-					if curr <= p || peak.CompareAndSwap(p, curr) {
+					p := peak[runIndex].Load()
+					if curr <= p || peak[runIndex].CompareAndSwap(p, curr) {
 						break
 					}
 				}
 				startedCount <- struct{}{}
 				<-release
-				active.Add(-1)
+				active[runIndex].Add(-1)
 				return nil
 			},
 		}); err != nil {
@@ -583,8 +586,9 @@ func TestSchedulerExplicitRunConcurrencyRespected(t *testing.T) {
 		}
 	}
 
-	// Wait for 3 tasks to start
-	for i := 0; i < explicitLimit; i++ {
+	// Both competing runs may start up to their configured limit, but no single
+	// run may exceed it even though every submitted task is manual priority.
+	for i := 0; i < explicitLimit*2; i++ {
 		select {
 		case <-startedCount:
 		case <-time.After(2 * time.Second):
@@ -594,8 +598,10 @@ func TestSchedulerExplicitRunConcurrencyRespected(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	if got := peak.Load(); got > explicitLimit {
-		t.Fatalf("explicit RunConcurrency violated: peak %d > %d", got, explicitLimit)
+	for run := range peak {
+		if got := peak[run].Load(); got > explicitLimit {
+			t.Fatalf("manual priority exceeded run-%d cap: peak %d > %d", run, got, explicitLimit)
+		}
 	}
 
 	close(release)

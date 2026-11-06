@@ -1362,14 +1362,14 @@ func TestProbeRunnerNodeSessionReuseAndCleanupLifecycle(t *testing.T) {
 		if dialCounts["node_pass"] != 1 || cleanCounts["node_pass"] != 1 {
 			t.Fatalf("node_pass dials=%d cleanups=%d, want 1 and 1", dialCounts["node_pass"], cleanCounts["node_pass"])
 		}
-		if reqCounts["node_pass"] != 13 {
-			t.Fatalf("node_pass requests=%d, want 13", reqCounts["node_pass"])
+		if reqCounts["node_pass"] != 14 {
+			t.Fatalf("node_pass requests=%d, want 14 including independent Antigravity request", reqCounts["node_pass"])
 		}
 		if dialCounts["node_drift"] != 1 || cleanCounts["node_drift"] != 1 {
 			t.Fatalf("node_drift dials=%d cleanups=%d, want 1 and 1", dialCounts["node_drift"], cleanCounts["node_drift"])
 		}
-		if reqCounts["node_drift"] != 13 {
-			t.Fatalf("node_drift requests=%d, want 13 (normalized baseline 200 enters stage 2)", reqCounts["node_drift"])
+		if reqCounts["node_drift"] != 14 {
+			t.Fatalf("node_drift requests=%d, want 14 including independent Antigravity request (normalized baseline 200 enters stage 2)", reqCounts["node_drift"])
 		}
 	})
 
@@ -1426,7 +1426,8 @@ func TestProbeRunnerNodeSessionReuseAndCleanupLifecycle(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// Non-baseline multiple kinds trigger single-stage path
+		// Non-baseline multiple kinds trigger single-stage path. AI performs an
+		// independent Antigravity request in addition to its existing requests.
 		kinds := []domain.ProbeKind{
 			domain.ProbeKindGeo,
 			domain.ProbeKindStreaming,
@@ -1436,8 +1437,8 @@ func TestProbeRunnerNodeSessionReuseAndCleanupLifecycle(t *testing.T) {
 		if err := runner.Run(context.Background(), run, []string{"node_single"}, kinds); err != nil {
 			t.Fatalf("Run failed: %v", err)
 		}
-		if dials.Load() != 1 || cleanups.Load() != 1 || requests.Load() != 12 {
-			t.Fatalf("expected dials=1 cleanups=1 requests=12, got dials=%d cleanups=%d requests=%d", dials.Load(), cleanups.Load(), requests.Load())
+		if dials.Load() != 1 || cleanups.Load() != 1 || requests.Load() != 13 {
+			t.Fatalf("expected dials=1 cleanups=1 requests=13 including independent Antigravity request, got dials=%d cleanups=%d requests=%d", dials.Load(), cleanups.Load(), requests.Load())
 		}
 	})
 

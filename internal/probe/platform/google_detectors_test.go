@@ -112,7 +112,7 @@ func TestGoogleDetectorFailureBoundaries(t *testing.T) {
 	}{
 		{"forbidden", 403, "", nil, domain.VerdictRestricted, "access_restricted"},
 		{"throttled", 429, "", nil, domain.VerdictUnknown, "rate_limited"},
-		{"transport", 0, "", errors.New("private transport detail"), domain.VerdictUnknown, "transport_error"},
+		{"transport", 0, "", errors.New("private transport detail"), domain.VerdictError, "transport_error"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			client := detectorClient(tc.status, tc.body, "", tc.err, nil)

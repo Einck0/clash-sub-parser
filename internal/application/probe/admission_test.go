@@ -31,6 +31,7 @@ func TestStageAdmissionDoesNotOccupySchedulerSlotsWhileWaiting(t *testing.T) {
 	firstMediaStarted := make(chan struct{})
 	unrelatedStarted := make(chan struct{})
 	releaseFirstMedia := make(chan struct{})
+	releaseUnrelated := make(chan struct{})
 	var firstRunMediaRequests atomic.Int32
 	runner := probe.NewDefaultRunner(nodes, observations, sched, runs,
 		probe.WithStageConcurrency(probe.StageConcurrency{Media: 1}),
@@ -49,6 +50,11 @@ func TestStageAdmissionDoesNotOccupySchedulerSlotsWhileWaiting(t *testing.T) {
 					}
 				case node.LogicalID == "unrelated":
 					close(unrelatedStarted)
+					select {
+					case <-releaseUnrelated:
+					case <-req.Context().Done():
+						return nil, req.Context().Err()
+					}
 				}
 				return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"country_code":"US"}`)), Request: req}, nil
 			})}, nil, nil
@@ -56,6 +62,7 @@ func TestStageAdmissionDoesNotOccupySchedulerSlotsWhileWaiting(t *testing.T) {
 	)
 
 	firstRun := stageRun("admission_blocked")
+	firstRun.IdempotencyKey = "admission_blocked_key"
 	if err := runs.Create(context.Background(), firstRun); err != nil {
 		t.Fatal(err)
 	}
@@ -72,6 +79,7 @@ func TestStageAdmissionDoesNotOccupySchedulerSlotsWhileWaiting(t *testing.T) {
 	// The first run has a single stage permit. Its next task is waiting for that
 	// permit, not submitted as a scheduler callback consuming another global slot.
 	otherRun := stageRun("admission_unrelated")
+	otherRun.IdempotencyKey = "admission_unrelated_key"
 	if err := runs.Create(context.Background(), otherRun); err != nil {
 		t.Fatal(err)
 	}
@@ -84,10 +92,17 @@ func TestStageAdmissionDoesNotOccupySchedulerSlotsWhileWaiting(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("unrelated run could not progress while the first run's stage was blocked")
 	}
+	if active := sched.ActiveCount(); active != 2 {
+		t.Fatalf("scheduler active tasks=%d while first stage and unrelated work are held, want exactly 2", active)
+	}
+	if queued := sched.QueuedCount(); queued != 0 {
+		t.Fatalf("scheduler queued tasks=%d while first stage permit is held, want no stage-waiting callbacks", queued)
+	}
 	if got := firstRunMediaRequests.Load(); got != 1 {
 		t.Fatalf("stage limit=1 admitted %d first-run media requests, want exactly one", got)
 	}
 
+	close(releaseUnrelated)
 	if err := <-otherRunDone; err != nil {
 		t.Fatalf("unrelated run: %v", err)
 	}

@@ -111,11 +111,20 @@ func TestConsistentFactsLoader_PrimarySubscriptionFallbackFields(t *testing.T) {
 	insertSource(nodeP4Notice, subPrimaryID, fetchP)
 	insertSource(nodeS1, subSecondaryID, fetchS)
 
-	// Notice entry for nodeP4Notice
+	// Notice payload and entry for nodeP4Notice
+	payloadP := "payload-p1"
 	_, err = db.ExecContext(ctx, `
-		INSERT INTO subscription_entries (id, subscription_id, node_logical_id, entry_kind, ordinal, created_at)
-		VALUES ('entry-notice', ?, ?, 'notice', 1, ?);
-	`, subPrimaryID, nodeP4Notice, now.Format(time.RFC3339))
+		INSERT INTO subscription_payloads (id, subscription_id, fetch_id, content_digest, body_blob, pinned, created_at)
+		VALUES (?, ?, ?, 'digest-notice', X'deadbeef', 1, ?);
+	`, payloadP, subPrimaryID, fetchP, now.Format(time.RFC3339Nano))
+	if err != nil {
+		t.Fatalf("insert notice payload failed: %v", err)
+	}
+
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO subscription_entries (id, payload_id, subscription_id, ordinal, source_key, raw_name, protocol, entry_kind, node_logical_id, created_at)
+		VALUES ('entry-notice', ?, ?, 1, 'key-notice', 'Notice Node', 'ss', 'notice', ?, ?);
+	`, payloadP, subPrimaryID, nodeP4Notice, now.Format(time.RFC3339))
 	if err != nil {
 		t.Fatalf("insert notice entry failed: %v", err)
 	}

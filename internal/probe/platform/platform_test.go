@@ -247,13 +247,13 @@ func TestCheckNetflix(t *testing.T) {
 		t.Fatalf("expected Banned from Title 403, got: %+v", cap)
 	}
 
-	// Scenario 7: All endpoints network error -> VerdictError / network_error
+	// Scenario 7: All endpoints network error -> VerdictError / transport_error
 	clientNetErr := mockClient(func(req *http.Request) (*http.Response, error) {
 		return nil, fmt.Errorf("connection refused")
 	})
 	cap = platform.CheckNetflix(ctx, clientNetErr)
-	if cap.Verdict != domain.VerdictError || cap.Reason != "network_error" {
-		t.Fatalf("expected network_error on all connection refused, got: %+v", cap)
+	if cap.Verdict != domain.VerdictError || cap.Reason != "transport_error" {
+		t.Fatalf("expected transport_error on all connection refused, got: %+v", cap)
 	}
 
 	// Scenario 8: Status mismatch -> VerdictError / status_mismatch

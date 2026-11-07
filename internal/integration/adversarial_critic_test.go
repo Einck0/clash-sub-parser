@@ -500,8 +500,8 @@ func TestAdversarial_Dimension5_ProviderContractDriftAndAntiFalsePositive(t *tes
 		ContractVersion: "unknown-v2",
 	}
 	evalDrift := profile.Evaluate(resDrift)
-	if evalDrift.Verdict != domain.VerdictUnknown || evalDrift.Reason != "contract_drift" {
-		t.Fatalf("contract drift must yield VerdictUnknown/contract_drift, got: %+v", evalDrift)
+	if evalDrift.Verdict != domain.VerdictError || evalDrift.Reason != "contract_drift" {
+		t.Fatalf("contract drift must yield VerdictError/contract_drift, got: %+v", evalDrift)
 	}
 
 	// Case 3: HTTP 200 without contract matching must NEVER be VerdictAvailable!
@@ -526,8 +526,8 @@ func TestAdversarial_Dimension5_ProviderContractDriftAndAntiFalsePositive(t *tes
 		StatusCode:          200,
 		ExitIdentityMissing: true,
 	})
-	if evalIPRiskMissing.Verdict != domain.VerdictUnknown || evalIPRiskMissing.Reason != "missing_exit_identity" {
-		t.Fatalf("IPRisk missing exit identity must be VerdictUnknown/missing_exit_identity, got: %+v", evalIPRiskMissing)
+	if evalIPRiskMissing.Verdict != domain.VerdictError || evalIPRiskMissing.Reason != "missing_exit_identity" {
+		t.Fatalf("IPRisk missing exit identity must be VerdictError/missing_exit_identity, got: %+v", evalIPRiskMissing)
 	}
 
 	// Case 5: Speed Probe Budget Overrun

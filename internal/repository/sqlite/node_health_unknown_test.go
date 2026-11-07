@@ -54,7 +54,7 @@ func TestNodeFilterPredicates_CanonicalUnknownParity(t *testing.T) {
 			Server:             "192.0.2.3",
 			Port:               8388,
 			Active:             true,
-			ConnectionRevision: rev2,
+			ConnectionRevision: rev1,
 			CreatedAt:          now,
 			UpdatedAt:          now,
 		},
@@ -84,6 +84,13 @@ func TestNodeFilterPredicates_CanonicalUnknownParity(t *testing.T) {
 
 	if err := nodeRepo.UpsertBatch(ctx, nodes); err != nil {
 		t.Fatalf("failed to upsert nodes: %v", err)
+	}
+
+	// Bump node-rev-mismatch connection_revision to rev2 by changing server via supported repository operation
+	nodes[2].Server = "192.0.2.33"
+	nodes[2].ConnectionRevision = rev2
+	if err := nodeRepo.UpsertBatch(ctx, []domain.Node{nodes[2]}); err != nil {
+		t.Fatalf("failed to bump node revision: %v", err)
 	}
 
 	// Create observations

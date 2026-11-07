@@ -39,11 +39,16 @@ Publication owner writes `internal/domain/facts.go`; `internal/repository/sqlite
 
 ## Tasks and analyze
 
-- [ ] CONT01 Complete inherited probe code/tests under actual current diff; focused static check only locally.
-- [ ] CONT02 Canonical unknown node health across domain/read model/filter/pool and tests.
-- [ ] CONT03 Exact UI states/unknown health/filter and researched evidence scope; tests.
-- [ ] CONT04 Main-only fallback facts/resolution/diagnostics + narrow positive/negative tests.
-- [ ] CONT05 Explicit-file dev commit+push, existing Actions same-SHA required checks/build, isolate prebuilt image (digest/revision/freshDB/loopback); executor evidence and independent reviewer.
-- [ ] CONT06 Applicable real UI critic after review; own resource cleanup; authoritative current aggregate query and task-only final commit/report. No production.
+- [x] CONT01 Complete inherited probe code/tests under actual current diff; focused static check only locally.
+- [x] CONT02 Canonical unknown node health across domain/read model/filter/pool and tests.
+- [x] CONT03 Exact UI states/unknown health/filter and researched evidence scope; tests.
+- [x] CONT04 Main-only fallback facts/resolution/diagnostics + narrow positive/negative tests.
+- [x] CONT05 Explicit-file dev commit+push, existing Actions same-SHA required checks/build, isolate prebuilt image (digest/revision/freshDB/loopback); executor evidence and independent reviewer.
+- [x] CONT06 Applicable real UI critic after review; own resource cleanup; authoritative current aggregate query and task-only final commit/report. No production.
 
 Spec Kit analyze: existing feature selected; rules map CONT01–06 with disjoint module ownership except explicitly sequenced pool tests (probe owner hands them off before health owner). Publication amendment linked from004 feature, no new project or destructive setup. Constitution asset/identity/clear domains intact. All scopes retain incomplete evidence honestly. Legacy probe-state `skipped` semantics applies to attempts, latest unknown applies to node health; no contradiction. Rule fallback is narrow whitelist, risk/security failures are excluded; no general exception fallback. Cloud only and independent evidence remain mandatory. No newly invented graph success (graphify absent127).
+
+
+## Closure
+
+Completed under successor run2293511 with unchanged implementationSHA; see [evidence, limitations and elapsed-time explanation](closure-2293511.md). Original run failure history remains. No production deployment.

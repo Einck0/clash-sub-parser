@@ -38,12 +38,12 @@ Deterministic scenarios cover stage limit 1 allowing unrelated work, cancellatio
 
 Contract, detailed scenarios and module boundaries: [probe-state-20261107.md](probe-state-20261107.md). Historical checked tasks above are not evidence for this round.
 
-- [ ] **STATE01** [P] Domain/execution owner: add valid abnormal/skipped and optional exit_region/region_source/evidence_scope in `internal/domain/enums.go`, `probe.go`; single group helper and roundtrip/filter tests. No DB migration.
-- [ ] **STATE02** [P] Same owner: implement selected-geo barrier and same-run comparison, explicit skipped/error/control semantics with preserved raw evidence in `internal/application/probe/runner.go`, profile classification in `internal/probe/profiles/`; cloud fixtures for cancellation, byte bounds, mixed outcomes, node/run isolation and region conflict.
-- [ ] **STATE03** [P] Platform owner: repair all known unknown branches within `internal/probe/platform/`, Gemini complete2MiB response and late/conflict marker tests, Antigravity network-entry available with honest scope, typed status/failure/control, region-source annotations and no CDN-target-as-exit inference.
-- [ ] **STATE04** [P] Read/UI owner: mirror new states, fields, aggregate, warning/skip/error labels and explanatory scope/region tooltip in `web/src/features/probes/`, nodes read helpers; exact policy verdict options; inventory read passthrough/latency mapping only as needed. Tests for list/detail/filter consistency without changing baseline health.
-- [ ] **STATE05** Master-coordinated task-only dev commit/push, same-SHA `.github/workflows/ci.yml` required jobs/build, digest+OCI revision and isolated fresh DB acceptance. No local build/tests, production or unrelated file staging. Record actual failures and fixes.
-- [ ] **STATE06** Independent reviewer verifies final code/CI/image and key risk promises; applicable isolated UI critic verifies warning and honest Antigravity scope; cleanup own previews. Refresh authoritative governance aggregate before final commit/report.
+- [x] **STATE01** [P] Domain/execution owner: add valid abnormal/skipped and optional exit_region/region_source/evidence_scope in `internal/domain/enums.go`, `probe.go`; single group helper and roundtrip/filter tests. No DB migration.
+- [x] **STATE02** [P] Same owner: implement selected-geo barrier and same-run comparison, explicit skipped/error/control semantics with preserved raw evidence in `internal/application/probe/runner.go`, profile classification in `internal/probe/profiles/`; cloud fixtures for cancellation, byte bounds, mixed outcomes, node/run isolation and region conflict.
+- [x] **STATE03** [P] Platform owner: repair all known unknown branches within `internal/probe/platform/`, Gemini complete2MiB response and late/conflict marker tests, Antigravity network-entry available with honest scope, typed status/failure/control, region-source annotations and no CDN-target-as-exit inference.
+- [x] **STATE04** [P] Read/UI owner: mirror new states, fields, aggregate, warning/skip/error labels and explanatory scope/region tooltip in `web/src/features/probes/`, nodes read helpers; exact policy verdict options; inventory read passthrough/latency mapping only as needed. Tests for list/detail/filter consistency without changing baseline health.
+- [x] **STATE05** Master-coordinated task-only dev commit/push, same-SHA `.github/workflows/ci.yml` required jobs/build, digest+OCI revision and isolated fresh DB acceptance. No local build/tests, production or unrelated file staging. Record actual failures and fixes.
+- [x] **STATE06** Independent reviewer verifies final code/CI/image and key risk promises; applicable isolated UI critic verifies warning and honest Antigravity scope; cleanup own previews. Refresh authoritative governance aggregate before final commit/report.
 
 Spec Kit analyze: all scoped requirements map STATE01–06; explicit current precedence over historical unknown default, no constitution change. Implementation authorization exists; module interfaces frozen. Graphify executable unavailable (127), no graph evidence claimed.
 
@@ -51,3 +51,8 @@ Spec Kit analyze: all scoped requirements map STATE01–06; explicit current pre
 ## Current continuation — 2026-11-07 run175745
 
 See [current continuation contract](continuation-175745.md) for latest precedence: untested node health is unknown, prior probe repair and official/prior-art research retained, and exhausted-rule primary-subscription fallback with explicit safety exclusions. Implementation and same-SHA cloud/review remain unverified until recorded evidence; old checked tasks do not certify this run. No production deployment.
+
+
+## Verified closure — run2293511
+
+STATE01–06 are complete for scoped behavior, not the historical backlog. CONT01–06 also completed; see [closure evidence and timeout accountability](closure-2293511.md). ImplementationSHA c9feebe, sameSHA cloud42380979556, image digest/OCI and isolated runtime verified, current executor and independent reviewer PASS, UI critic PASSED. Own preview/container/volume/token cleaned; no production deployment. Historical failed runs/CI retained; no graph update because command absent127. The previous pending wording describes pre-verification history, not current completion.

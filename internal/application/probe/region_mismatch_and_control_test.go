@@ -97,9 +97,13 @@ func TestSameRunGeoAndPlatformRegionMismatch(t *testing.T) {
 		}
 
 		// AI observation must be abnormal due to region mismatch
-		if aiObs.Verdict != domain.VerdictAbnormal || aiObs.Reason != "partial_or_abnormal" {
+		if aiObs.Verdict != domain.VerdictAbnormal || aiObs.Attempt == nil || aiObs.Attempt.Reason != "partial_or_abnormal" {
+			var gotReason string
+			if aiObs.Attempt != nil {
+				gotReason = aiObs.Attempt.Reason
+			}
 			t.Fatalf("AI observation want abnormal/partial_or_abnormal, got verdict=%s reason=%s summary=%s",
-				aiObs.Verdict, aiObs.Reason, aiObs.RedactedSummary)
+				aiObs.Verdict, gotReason, aiObs.RedactedSummary)
 		}
 		geminiCap, ok := aiObs.Platforms["gemini"]
 		if !ok {
@@ -190,9 +194,16 @@ func TestSameRunGeoAndPlatformRegionMismatch(t *testing.T) {
 				aiObs = &obsList[i]
 			}
 		}
-		if aiObs.Verdict != domain.VerdictAvailable || aiObs.Reason != "contract_matched" {
+		if aiObs == nil {
+			t.Fatalf("expected AI observation in obsList, got none")
+		}
+		if aiObs.Verdict != domain.VerdictAvailable || aiObs.Attempt == nil || aiObs.Attempt.Reason != "contract_matched" {
+			var gotReason string
+			if aiObs.Attempt != nil {
+				gotReason = aiObs.Attempt.Reason
+			}
 			t.Fatalf("AI observation want available/contract_matched, got verdict=%s reason=%s",
-				aiObs.Verdict, aiObs.Reason)
+				aiObs.Verdict, gotReason)
 		}
 		geminiCap := aiObs.Platforms["gemini"]
 		if geminiCap.Verdict != domain.VerdictAvailable || geminiCap.Region != "US" || geminiCap.ExitRegion != "US" {

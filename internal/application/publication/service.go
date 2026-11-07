@@ -431,6 +431,21 @@ func (s *Service) Preview(ctx context.Context, query PreviewQuery) (*PreviewResu
 				if payloadIDs == nil {
 					payloadIDs = []string{}
 				}
+				revID := strings.TrimSpace(query.RevisionID)
+				if revID == "" && snap.RevisionID != "" {
+					revID = strings.TrimSpace(snap.RevisionID)
+				}
+				manifest := domain.PublicationManifest{
+					NodeCount:             len(snap.Nodes),
+					ExcludedCount:         len(snap.ExcludedNodeIDs),
+					PayloadIDs:            payloadIDs,
+					ConfigurationRevision: revID,
+					RulesDigest:           snap.RiskDecisionDigest,
+					Included:              included,
+					Excluded:              make([]domain.ManifestExcludedNode, 0),
+					TargetEngineVersion:   "1.0.0",
+					MappingVersion:        "1.0.0",
+				}
 				return &PreviewResult{
 					SnapshotID:     snap.SnapshotDigest,
 					Target:         query.Target,
@@ -439,12 +454,9 @@ func (s *Service) Preview(ctx context.Context, query PreviewQuery) (*PreviewResu
 					Content:        artifact.Content,
 					ContentType:    artifact.ContentType,
 					Filename:       artifact.Filename,
-					Manifest: domain.PublicationManifest{
-						IncludedNodes: included,
-						PayloadIDs:    payloadIDs,
-					},
-					Diagnostics:  snap.Diagnostics,
-					FilterCounts: snap.FilterCounts,
+					Manifest:       manifest,
+					Diagnostics:    snap.Diagnostics,
+					FilterCounts:   snap.FilterCounts,
 				}, nil
 			} else {
 				var pfErr *PreflightError
@@ -473,7 +485,7 @@ func (s *Service) Preview(ctx context.Context, query PreviewQuery) (*PreviewResu
 		}
 	}
 
-	optInPrune := query.PruneUnavailableOptionalGroups || query.OmitUnavailableOptionalGroups
+	optInPrune = query.PruneUnavailableOptionalGroups || query.OmitUnavailableOptionalGroups
 	if optInPrune {
 		prunedSnap, _, err := compiler.PruneUnavailableOptionalGroups(snapshot)
 		if err != nil {

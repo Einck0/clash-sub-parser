@@ -27,7 +27,7 @@ WHERE s.enabled = 1
       FROM subscription_fetches sf
       WHERE sf.subscription_id = s.id
         AND sf.outcome IN ('success', 'partial')
-      ORDER BY sf.started_at DESC, sf.id DESC
+      ORDER BY sf.started_at DESC, sf.rowid DESC
       LIMIT 1
   )
 UNION

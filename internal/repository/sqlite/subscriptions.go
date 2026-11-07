@@ -252,7 +252,7 @@ func (r *subscriptionRepository) attachNodeCounts(ctx context.Context, subs []*d
 		      SELECT sf2.id FROM subscription_fetches sf2
 		      WHERE sf2.subscription_id = sf.subscription_id
 		        AND sf2.outcome IN ('success', 'partial')
-		      ORDER BY sf2.started_at DESC, sf2.id DESC
+		      ORDER BY sf2.started_at DESC, sf2.rowid DESC
 		      LIMIT 1
 		  )
 	)
@@ -317,7 +317,7 @@ func (r *subscriptionRepository) attachLatestFetches(ctx context.Context, subs [
 		SELECT subscription_id, finished_at, outcome,
 		       ROW_NUMBER() OVER (
 		           PARTITION BY subscription_id
-		           ORDER BY started_at DESC, id DESC
+		           ORDER BY started_at DESC, rowid DESC
 		       ) AS rn
 		FROM subscription_fetches
 		WHERE subscription_id IN (%s)
@@ -756,7 +756,7 @@ func (r *subscriptionFetchRepository) ListBySubscription(ctx context.Context, su
 	       content_digest, redacted_error, nodes_parsed, nodes_valid
 	FROM subscription_fetches
 	WHERE subscription_id = ?
-	ORDER BY started_at DESC
+	ORDER BY started_at DESC, rowid DESC
 	LIMIT ?;`
 
 	rows, err := r.db.QueryContext(ctx, query, subID, limit)

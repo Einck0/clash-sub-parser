@@ -661,12 +661,28 @@ func TestBuildCurrentArtifact_PreservesConfiguredDNS_And_ChainBindings(t *testin
 	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
 	svc := publication.NewService(nil, nil)
 
-	primaryNodeID := "node_primary_00000001"
+	primaryNodeID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.1.1.1", 8388, nil)
+	targetNodeID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.1.1.2", 8388, nil)
+
 	nPrimary := domain.Node{
 		LogicalID:   primaryNodeID,
 		Protocol:    domain.ProtocolSS,
 		DisplayName: "Primary Node",
 		Server:      "1.1.1.1",
+		Port:        8388,
+		Active:      true,
+		Credentials: domain.InboundProtocolCredential{
+			Method:   "aes-128-gcm",
+			Password: "pass",
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	nTarget := domain.Node{
+		LogicalID:   targetNodeID,
+		Protocol:    domain.ProtocolSS,
+		DisplayName: "Target Node",
+		Server:      "1.1.1.2",
 		Port:        8388,
 		Active:      true,
 		Credentials: domain.InboundProtocolCredential{
@@ -685,14 +701,14 @@ func TestBuildCurrentArtifact_PreservesConfiguredDNS_And_ChainBindings(t *testin
 			State:         domain.RevisionStateActive,
 			CreatedAt:     now,
 		},
-		Nodes: []domain.Node{nPrimary},
+		Nodes: []domain.Node{nPrimary, nTarget},
 		GlobalFilter: &domain.NodeFilterSpec{
 			Conditions: []domain.FilterCondition{
 				{Field: domain.FilterFieldDisplayName, Op: domain.FilterOpContains, Value: "NONEXISTENT"},
 			},
 		},
 		PrimarySubscriptionID: "sub-primary",
-		PrimaryNodeIDs:        []string{primaryNodeID},
+		PrimaryNodeIDs:        []string{primaryNodeID, targetNodeID},
 		DNSSettings: &domain.DNSSettings{
 			Enabled: true,
 			RawYAML: "enable: true\nnameserver:\n  - 8.8.8.8\n  - 1.1.1.1\n",
@@ -700,13 +716,15 @@ func TestBuildCurrentArtifact_PreservesConfiguredDNS_And_ChainBindings(t *testin
 		ProxyChainBindings: []domain.ProxyChainBinding{
 			{
 				ID:         "pcb-1",
-				TargetType: domain.ProxyChainTargetSubscription,
-				TargetID:   "sub-target",
-				DialerType: domain.ProxyChainDialerDirect,
+				TargetType: domain.ProxyChainTargetNode,
+				TargetID:   targetNodeID,
+				DialerType: domain.ProxyChainDialerNode,
+				DialerID:   primaryNodeID,
 				Enabled:    true,
+				SortOrder:  1,
+				Revision:   1,
 			},
 		},
-		EnabledSubscriptionIDs: map[string]bool{"sub-target": true},
 	}
 
 	ctx := context.Background()
@@ -723,8 +741,8 @@ func TestBuildCurrentArtifact_PreservesConfiguredDNS_And_ChainBindings(t *testin
 	if !strings.Contains(content, "主订阅兜底") {
 		t.Errorf("expected group '主订阅兜底' in fallback YAML")
 	}
-	if len(snap.Nodes) != 1 {
-		t.Errorf("expected 1 node in snapshot, got %d", len(snap.Nodes))
+	if len(snap.Nodes) != 2 {
+		t.Errorf("expected 2 nodes in snapshot, got %d", len(snap.Nodes))
 	}
 }
 

@@ -1043,8 +1043,8 @@ func TestAdminPreview_CapabilityBoundaries(t *testing.T) {
 			t.Fatalf("expected error code unsupported_target, got %s", errRespClash.Code)
 		}
 
-		// 2. Request preview for target "qx" (which does not support hysteria2) -> 422 unsupported_target_capability
-		reqQX := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "qx"}`))
+		// 2. Request preview for target "qx" with explicit strict mode (which does not support hysteria2) -> 422 unsupported_target_capability
+		reqQX := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "qx", "compat_mode": "strict"}`))
 		reqQX.Header.Set("Authorization", "Bearer "+testAdminToken)
 		reqQX.Header.Set("Content-Type", "application/json")
 		recQX := httptest.NewRecorder()
@@ -1062,6 +1062,24 @@ func TestAdminPreview_CapabilityBoundaries(t *testing.T) {
 		}
 		if !strings.Contains(errRespQX.Message, "hysteria2") || !strings.Contains(errRespQX.Message, "protocol is not supported") {
 			t.Fatalf("expected message to mention unsupported protocol, got %s", errRespQX.Message)
+		}
+
+		// In default compatible mode with no compatible nodes, target "qx" yields 422 no_compatible_nodes
+		reqQXDefault := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "qx"}`))
+		reqQXDefault.Header.Set("Authorization", "Bearer "+testAdminToken)
+		reqQXDefault.Header.Set("Content-Type", "application/json")
+		recQXDefault := httptest.NewRecorder()
+		router.ServeHTTP(recQXDefault, reqQXDefault)
+
+		if recQXDefault.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("expected 422 Unprocessable Entity for default qx preview, got %d. body: %s", recQXDefault.Code, recQXDefault.Body.String())
+		}
+		var errRespQXDefault transporthttp.ErrorResponse
+		if err := json.Unmarshal(recQXDefault.Body.Bytes(), &errRespQXDefault); err != nil {
+			t.Fatalf("failed to parse error response: %v", err)
+		}
+		if errRespQXDefault.Code != "no_compatible_nodes" {
+			t.Fatalf("expected error code no_compatible_nodes, got %s", errRespQXDefault.Code)
 		}
 
 		// 3. Same setup for targets "singbox" and "surge" (which both support hysteria2) -> 200 OK
@@ -2016,25 +2034,101 @@ func TestFourTargetEndToEndHTTP_WireGuardTUICAndNativeCapabilityProof(t *testing
 		}
 	}
 
-	// 2. Quantumult-X MUST reject WireGuard/TUIC with 422 unsupported_target_capability (never faking output)
-	for _, limitedTarget := range []string{"qx"} {
-		for _, endpoint := range []string{"/api/v1/publications/preflight", "/api/v1/publications/preview", "/api/v1/publications"} {
-			req := httptest.NewRequest(http.MethodPost, endpoint, strings.NewReader(fmt.Sprintf(`{"target": %q}`, limitedTarget)))
-			req.Header.Set("Authorization", "Bearer "+testAdminToken)
-			req.Header.Set("Content-Type", "application/json")
-			rec := httptest.NewRecorder()
-			router.ServeHTTP(rec, req)
-			if rec.Code != http.StatusUnprocessableEntity {
-				t.Fatalf("expected 422 for %s on %s with WG/TUIC, got %d: %s", limitedTarget, endpoint, rec.Code, rec.Body.String())
-			}
-			var errResp transporthttp.ErrorResponse
-			_ = json.Unmarshal(rec.Body.Bytes(), &errResp)
-			if errResp.Code != "unsupported_target_capability" {
-				t.Fatalf("expected unsupported_target_capability for %s on %s, got %s", limitedTarget, endpoint, errResp.Code)
-			}
-			if strings.Contains(rec.Body.String(), wgPrivKey) || strings.Contains(rec.Body.String(), tuicPass) {
-				t.Fatalf("error response leaked secret on %s %s: %s", limitedTarget, endpoint, rec.Body.String())
-			}
+	// 2. Quantumult-X in strict mode rejects WireGuard/TUIC; in default compatible mode it adapts the 1 compatible SS node and excludes WG/TUIC
+	{
+		// Explicit strict mode rejects with 422 unsupported_target_capability (never leaking secrets)
+		strictReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "qx", "compat_mode": "strict"}`))
+		strictReq.Header.Set("Authorization", "Bearer "+testAdminToken)
+		strictReq.Header.Set("Content-Type", "application/json")
+		strictRec := httptest.NewRecorder()
+		router.ServeHTTP(strictRec, strictReq)
+		if strictRec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("expected 422 for qx on preview with strict mode, got %d: %s", strictRec.Code, strictRec.Body.String())
+		}
+		var errResp transporthttp.ErrorResponse
+		_ = json.Unmarshal(strictRec.Body.Bytes(), &errResp)
+		if errResp.Code != "unsupported_target_capability" {
+			t.Fatalf("expected unsupported_target_capability for qx strict preview, got %s", errResp.Code)
+		}
+		if strings.Contains(strictRec.Body.String(), wgPrivKey) || strings.Contains(strictRec.Body.String(), tuicPass) {
+			t.Fatalf("strict error response leaked secret on qx preview: %s", strictRec.Body.String())
+		}
+
+		// Default compatible preview succeeds with 1 compatible node (SS) and 2 exclusions (WG, TUIC)
+		qxPrevReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "qx"}`))
+		qxPrevReq.Header.Set("Authorization", "Bearer "+testAdminToken)
+		qxPrevReq.Header.Set("Content-Type", "application/json")
+		qxPrevRec := httptest.NewRecorder()
+		router.ServeHTTP(qxPrevRec, qxPrevReq)
+		if qxPrevRec.Code != http.StatusOK {
+			t.Fatalf("expected 200 for qx compatible preview, got %d: %s", qxPrevRec.Code, qxPrevRec.Body.String())
+		}
+		var qxPrevResp struct {
+			Data struct {
+				SnapshotID    string `json:"snapshot_id"`
+				Content       string `json:"content"`
+				ContentDigest string `json:"content_digest"`
+				Manifest      struct {
+					NodeCount     int `json:"node_count"`
+					ExcludedCount int `json:"excluded_count"`
+					Included      []struct {
+						NodeID string `json:"node_id"`
+					} `json:"included"`
+					Excluded []struct {
+						NodeID string `json:"node_id"`
+						Code   string `json:"code"`
+						Reason string `json:"reason"`
+					} `json:"excluded"`
+				} `json:"manifest"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(qxPrevRec.Body.Bytes(), &qxPrevResp); err != nil {
+			t.Fatalf("unmarshal qx preview: %v", err)
+		}
+		if qxPrevResp.Data.Manifest.NodeCount != 1 {
+			t.Fatalf("expected 1 compatible node for qx, got %d", qxPrevResp.Data.Manifest.NodeCount)
+		}
+		if qxPrevResp.Data.Manifest.ExcludedCount != 2 {
+			t.Fatalf("expected 2 excluded nodes for qx, got %d", qxPrevResp.Data.Manifest.ExcludedCount)
+		}
+		if !strings.Contains(qxPrevResp.Data.Content, ssPass) || !strings.Contains(qxPrevResp.Data.Content, "tag=SS-Core-01") {
+			t.Fatalf("qx preview missing expected SS node content: %s", qxPrevResp.Data.Content)
+		}
+		if strings.Contains(qxPrevResp.Data.Content, wgPrivKey) || strings.Contains(qxPrevResp.Data.Content, tuicPass) {
+			t.Fatalf("qx preview leaked unsupported WG/TUIC secrets: %s", qxPrevResp.Data.Content)
+		}
+
+		// Publish QX compatible draft
+		qxPubReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications", strings.NewReader(fmt.Sprintf(`{"target": "qx", "snapshot_id": %q}`, qxPrevResp.Data.SnapshotID)))
+		qxPubReq.Header.Set("Authorization", "Bearer "+testAdminToken)
+		qxPubReq.Header.Set("Content-Type", "application/json")
+		qxPubRec := httptest.NewRecorder()
+		router.ServeHTTP(qxPubRec, qxPubReq)
+		if qxPubRec.Code != http.StatusCreated {
+			t.Fatalf("publish qx compatible draft failed with %d: %s", qxPubRec.Code, qxPubRec.Body.String())
+		}
+		var qxPubResp publicationCreateResponse
+		if err := json.Unmarshal(qxPubRec.Body.Bytes(), &qxPubResp); err != nil {
+			t.Fatalf("unmarshal qx publish response: %v", err)
+		}
+
+		// Download with valid token
+		qxDlReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/publish/v1/%s?token=%s", qxPubResp.Data.Publication.ID, qxPubResp.Data.RawToken), nil)
+		qxDlRec := httptest.NewRecorder()
+		router.ServeHTTP(qxDlRec, qxDlReq)
+		if qxDlRec.Code != http.StatusOK {
+			t.Fatalf("download qx failed with %d: %s", qxDlRec.Code, qxDlRec.Body.String())
+		}
+		if qxDlRec.Body.String() != qxPrevResp.Data.Content {
+			t.Fatalf("qx download content does not match preview content")
+		}
+
+		// Download with invalid token returns 401
+		badDlReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/publish/v1/%s?token=bad-token", qxPubResp.Data.Publication.ID), nil)
+		badDlRec := httptest.NewRecorder()
+		router.ServeHTTP(badDlRec, badDlReq)
+		if badDlRec.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401 for bad token download on qx, got %d", badDlRec.Code)
 		}
 	}
 
@@ -2567,4 +2661,3 @@ func TestPublication_MihomoPreviewAndPublish_OptInPruneEmptyOptionalGroup(t *tes
 
 	_ = pubSvc
 }
-

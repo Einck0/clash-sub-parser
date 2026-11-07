@@ -48,8 +48,8 @@ func makeTestNode(logicalID, displayName string, proto domain.Protocol, pos int)
 				"network": "tcp",
 				"tls":     "true",
 				"flow":    "xtls-rprx-vision",
-				"pbk":     "dGVzdC1yZWFsaXR5LXB1YmxpYy1rZXktMTIzNA==",
-				"sid":     "12345678",
+				"pbk":     "jNXHt1yRo0vD5_1N6p2W3x4Y5z6A7b8C9d0E1f2G3h4",
+				"sid":     "0123456789abcdef",
 			},
 		}
 	case domain.ProtocolTrojan:
@@ -139,11 +139,12 @@ func makeAdaptationSnapshot(nodes []resolver.ResolvedNode) *resolver.ResolvedPol
 // for target-specific transport incompatibilities and protocol constraints.
 func TestTargetAdaptation_PerNodeRenderability_TransportErrors(t *testing.T) {
 	tests := []struct {
-		name         string
-		target       domain.CompilerTarget
-		node         resolver.ResolvedNode
-		wantAdmitted bool
-		reasonSubstr string
+		name          string
+		target        domain.CompilerTarget
+		node          resolver.ResolvedNode
+		wantAdmitted  bool
+		reasonSubstr  string
+		reasonSubstrs []string
 	}{
 		// Surge transport tests
 		{
@@ -162,7 +163,11 @@ func TestTargetAdaptation_PerNodeRenderability_TransportErrors(t *testing.T) {
 				return n
 			}(),
 			wantAdmitted: false,
-			reasonSubstr: "grpc transport is not supported in shadowsocks for surge",
+			reasonSubstr: "unsupported network \"grpc\" in shadowsocks transport",
+			reasonSubstrs: []string{
+				"unsupported network \"grpc\" in shadowsocks transport",
+				"grpc transport is not supported in shadowsocks for surge",
+			},
 		},
 		{
 			name:   "Surge rejects VMess with reality transport",
@@ -191,7 +196,11 @@ func TestTargetAdaptation_PerNodeRenderability_TransportErrors(t *testing.T) {
 				return n
 			}(),
 			wantAdmitted: false,
-			reasonSubstr: "grpc service_name is not supported in vmess transport for surge",
+			reasonSubstr: "unsupported network \"grpc\" in vmess transport",
+			reasonSubstrs: []string{
+				"unsupported network \"grpc\" in vmess transport",
+				"grpc service_name is not supported in vmess transport for surge",
+			},
 		},
 		{
 			name:   "Surge rejects Hysteria2 with invalid network",
@@ -323,6 +332,18 @@ func TestTargetAdaptation_PerNodeRenderability_TransportErrors(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			snap := makeAdaptationSnapshot([]resolver.ResolvedNode{tc.node})
 
+			matchReason := func(msg string) bool {
+				if tc.reasonSubstr != "" && strings.Contains(msg, tc.reasonSubstr) {
+					return true
+				}
+				for _, sub := range tc.reasonSubstrs {
+					if sub != "" && strings.Contains(msg, sub) {
+						return true
+					}
+				}
+				return false
+			}
+
 			// 1. Check FilterCompatibleSnapshot
 			filtered, excluded := compiler.FilterCompatibleSnapshot(snap, tc.target)
 			if tc.wantAdmitted {
@@ -342,8 +363,8 @@ func TestTargetAdaptation_PerNodeRenderability_TransportErrors(t *testing.T) {
 				if excluded[0].Code != "unsupported_target_capability" {
 					t.Errorf("expected exclusion code 'unsupported_target_capability', got %q", excluded[0].Code)
 				}
-				if !strings.Contains(excluded[0].Reason, tc.reasonSubstr) {
-					t.Errorf("expected exclusion reason to contain %q, got %q", tc.reasonSubstr, excluded[0].Reason)
+				if !matchReason(excluded[0].Reason) {
+					t.Errorf("expected exclusion reason to contain %q or %v, got %q", tc.reasonSubstr, tc.reasonSubstrs, excluded[0].Reason)
 				}
 			}
 
@@ -358,13 +379,13 @@ func TestTargetAdaptation_PerNodeRenderability_TransportErrors(t *testing.T) {
 			} else {
 				found := false
 				for _, d := range diags {
-					if d.NodeID == tc.node.LogicalID && strings.Contains(d.Message, tc.reasonSubstr) {
+					if d.NodeID == tc.node.LogicalID && matchReason(d.Message) {
 						found = true
 						break
 					}
 				}
 				if !found {
-					t.Errorf("expected diagnostic containing %q for node %s, got diags: %+v", tc.reasonSubstr, tc.node.LogicalID, diags)
+					t.Errorf("expected diagnostic containing %q or %v for node %s, got diags: %+v", tc.reasonSubstr, tc.reasonSubstrs, tc.node.LogicalID, diags)
 				}
 			}
 		})

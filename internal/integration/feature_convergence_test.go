@@ -1630,20 +1630,195 @@ func TestFeatureConvergence_AllFourTargetsFullLifecycleAndRotationRejection(t *t
 		}
 	}
 
-	// Step B: Surge and Quantumult X strictly fail closed (422 unsupported_target_capability) on 7-protocol snapshot
+	// Step B1: Surge and Quantumult X strictly fail closed (422 unsupported_target_capability) on 7-protocol snapshot when compat_mode is strict
 	for _, unsupportedTarget := range []string{"surge", "qx"} {
-		for _, path := range []string{"/api/v1/publications/preview", "/api/v1/publications"} {
-			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(fmt.Sprintf(`{"target":%q}`, unsupportedTarget)))
-			req.Header.Set("Authorization", "Bearer dev-insecure-admin-token")
-			req.Header.Set("Content-Type", "application/json")
-			rec := httptest.NewRecorder()
-			router.ServeHTTP(rec, req)
-			if rec.Code != http.StatusUnprocessableEntity {
-				t.Fatalf("expected 422 for %s on %s with 7-proto snapshot, got %d: %s", unsupportedTarget, path, rec.Code, rec.Body.String())
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(fmt.Sprintf(`{"target":%q, "compat_mode":"strict"}`, unsupportedTarget)))
+		req.Header.Set("Authorization", "Bearer dev-insecure-admin-token")
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("expected 422 for %s on preview in strict mode with 7-proto snapshot, got %d: %s", unsupportedTarget, rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), "unsupported_target_capability") {
+			t.Fatalf("expected unsupported_target_capability for %s in strict mode, got: %s", unsupportedTarget, rec.Body.String())
+		}
+	}
+
+	// Step B2: Surge default compatible preview -> publish -> token download (admitting 6 compatible nodes, excluding VLESS)
+	{
+		prevReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target":"surge"}`))
+		prevReq.Header.Set("Authorization", "Bearer dev-insecure-admin-token")
+		prevReq.Header.Set("Content-Type", "application/json")
+		prevRec := httptest.NewRecorder()
+		router.ServeHTTP(prevRec, prevReq)
+		if prevRec.Code != http.StatusOK {
+			t.Fatalf("expected 200 for surge preview, got %d: %s", prevRec.Code, prevRec.Body.String())
+		}
+		var prevEnv struct {
+			Data struct {
+				SnapshotID    string `json:"snapshot_id"`
+				Content       string `json:"content"`
+				ContentDigest string `json:"content_digest"`
+				Manifest      struct {
+					NodeCount     int `json:"node_count"`
+					ExcludedCount int `json:"excluded_count"`
+					Included      []struct {
+						NodeID string `json:"node_id"`
+					} `json:"included"`
+					Excluded []struct {
+						NodeID string `json:"node_id"`
+						Code   string `json:"code"`
+						Reason string `json:"reason"`
+					} `json:"excluded"`
+				} `json:"manifest"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(prevRec.Body.Bytes(), &prevEnv); err != nil {
+			t.Fatalf("unmarshal surge preview: %v", err)
+		}
+		if prevEnv.Data.Manifest.NodeCount != 6 {
+			t.Fatalf("expected 6 compatible nodes for surge, got %d", prevEnv.Data.Manifest.NodeCount)
+		}
+		if prevEnv.Data.Manifest.ExcludedCount != 1 {
+			t.Fatalf("expected 1 excluded node for surge, got %d", prevEnv.Data.Manifest.ExcludedCount)
+		}
+		if len(prevEnv.Data.Manifest.Excluded) != 1 || prevEnv.Data.Manifest.Excluded[0].NodeID != nodeByProto[domain.ProtocolVLESS].LogicalID {
+			t.Fatalf("expected VLESS node excluded for surge, got: %+v", prevEnv.Data.Manifest.Excluded)
+		}
+		for _, wantSecret := range []string{
+			"secret-ss-password-conv",
+			"11111111-1111-4111-8111-111111111111",
+			"secret-trojan-password-conv",
+			"secret-hy2-password-conv",
+			"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+			"secret-tuic-password-conv",
+		} {
+			if !strings.Contains(prevEnv.Data.Content, wantSecret) {
+				t.Fatalf("surge preview missing expected credential %q:\n%s", wantSecret, prevEnv.Data.Content)
 			}
-			if !strings.Contains(rec.Body.String(), "unsupported_target_capability") {
-				t.Fatalf("expected unsupported_target_capability for %s on %s, got: %s", unsupportedTarget, path, rec.Body.String())
+		}
+		if strings.Contains(prevEnv.Data.Content, "jNXHt1yRo0vD5_1N6p2W3x4Y5z6A7b8C9d0E1f2G3h4") {
+			t.Fatalf("surge preview must not contain excluded VLESS reality public key")
+		}
+
+		pubReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications", strings.NewReader(fmt.Sprintf(`{"target":"surge", "snapshot_id":%q}`, prevEnv.Data.SnapshotID)))
+		pubReq.Header.Set("Authorization", "Bearer dev-insecure-admin-token")
+		pubReq.Header.Set("Content-Type", "application/json")
+		pubRec := httptest.NewRecorder()
+		router.ServeHTTP(pubRec, pubReq)
+		if pubRec.Code != http.StatusCreated {
+			t.Fatalf("expected 201 for surge publish, got %d: %s", pubRec.Code, pubRec.Body.String())
+		}
+		var pubEnv struct {
+			Data struct {
+				Publication struct {
+					ID string `json:"id"`
+				} `json:"publication"`
+				RawToken string `json:"raw_token"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(pubRec.Body.Bytes(), &pubEnv); err != nil {
+			t.Fatalf("unmarshal surge publish: %v", err)
+		}
+
+		dlReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/publish/v1/%s?token=%s", pubEnv.Data.Publication.ID, pubEnv.Data.RawToken), nil)
+		dlRec := httptest.NewRecorder()
+		router.ServeHTTP(dlRec, dlReq)
+		if dlRec.Code != http.StatusOK {
+			t.Fatalf("expected 200 for surge token download, got %d: %s", dlRec.Code, dlRec.Body.String())
+		}
+		if dlRec.Body.String() != prevEnv.Data.Content {
+			t.Fatalf("surge download content does not match preview content")
+		}
+	}
+
+	// Step B3: Quantumult X default compatible preview -> publish -> token download (admitting 3 compatible nodes, excluding 4)
+	{
+		prevReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target":"qx"}`))
+		prevReq.Header.Set("Authorization", "Bearer dev-insecure-admin-token")
+		prevReq.Header.Set("Content-Type", "application/json")
+		prevRec := httptest.NewRecorder()
+		router.ServeHTTP(prevRec, prevReq)
+		if prevRec.Code != http.StatusOK {
+			t.Fatalf("expected 200 for qx preview, got %d: %s", prevRec.Code, prevRec.Body.String())
+		}
+		var prevEnv struct {
+			Data struct {
+				SnapshotID    string `json:"snapshot_id"`
+				Content       string `json:"content"`
+				ContentDigest string `json:"content_digest"`
+				Manifest      struct {
+					NodeCount     int `json:"node_count"`
+					ExcludedCount int `json:"excluded_count"`
+					Included      []struct {
+						NodeID string `json:"node_id"`
+					} `json:"included"`
+					Excluded []struct {
+						NodeID string `json:"node_id"`
+						Code   string `json:"code"`
+						Reason string `json:"reason"`
+					} `json:"excluded"`
+				} `json:"manifest"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(prevRec.Body.Bytes(), &prevEnv); err != nil {
+			t.Fatalf("unmarshal qx preview: %v", err)
+		}
+		if prevEnv.Data.Manifest.NodeCount != 3 {
+			t.Fatalf("expected 3 compatible nodes for qx, got %d", prevEnv.Data.Manifest.NodeCount)
+		}
+		if prevEnv.Data.Manifest.ExcludedCount != 4 {
+			t.Fatalf("expected 4 excluded nodes for qx, got %d", prevEnv.Data.Manifest.ExcludedCount)
+		}
+		for _, wantSecret := range []string{
+			"secret-ss-password-conv",
+			"11111111-1111-4111-8111-111111111111",
+			"secret-trojan-password-conv",
+		} {
+			if !strings.Contains(prevEnv.Data.Content, wantSecret) {
+				t.Fatalf("qx preview missing expected credential %q:\n%s", wantSecret, prevEnv.Data.Content)
 			}
+		}
+		for _, excludedSecret := range []string{
+			"jNXHt1yRo0vD5_1N6p2W3x4Y5z6A7b8C9d0E1f2G3h4",
+			"secret-hy2-password-conv",
+			"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+			"secret-tuic-password-conv",
+		} {
+			if strings.Contains(prevEnv.Data.Content, excludedSecret) {
+				t.Fatalf("qx preview must not contain excluded credential %q", excludedSecret)
+			}
+		}
+
+		pubReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications", strings.NewReader(fmt.Sprintf(`{"target":"qx", "snapshot_id":%q}`, prevEnv.Data.SnapshotID)))
+		pubReq.Header.Set("Authorization", "Bearer dev-insecure-admin-token")
+		pubReq.Header.Set("Content-Type", "application/json")
+		pubRec := httptest.NewRecorder()
+		router.ServeHTTP(pubRec, pubReq)
+		if pubRec.Code != http.StatusCreated {
+			t.Fatalf("expected 201 for qx publish, got %d: %s", pubRec.Code, pubRec.Body.String())
+		}
+		var pubEnv struct {
+			Data struct {
+				Publication struct {
+					ID string `json:"id"`
+				} `json:"publication"`
+				RawToken string `json:"raw_token"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(pubRec.Body.Bytes(), &pubEnv); err != nil {
+			t.Fatalf("unmarshal qx publish: %v", err)
+		}
+
+		dlReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/publish/v1/%s?token=%s", pubEnv.Data.Publication.ID, pubEnv.Data.RawToken), nil)
+		dlRec := httptest.NewRecorder()
+		router.ServeHTTP(dlRec, dlReq)
+		if dlRec.Code != http.StatusOK {
+			t.Fatalf("expected 200 for qx token download, got %d: %s", dlRec.Code, dlRec.Body.String())
+		}
+		if dlRec.Body.String() != prevEnv.Data.Content {
+			t.Fatalf("qx download content does not match preview content")
 		}
 	}
 

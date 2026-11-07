@@ -318,29 +318,86 @@ func TestPublishSuccess(t *testing.T) {
 func TestPublishIncompatibleTargetHardFails(t *testing.T) {
 	svc, _, _ := setupService()
 	ctx := context.Background()
-	incompatibleSnap := buildIncompatibleSnapshot()
 
-	cmd := publication.PublishCommand{
-		Target:    domain.TargetSurge,
-		Snapshot:  incompatibleSnap,
-		ActorKind: domain.ActorKindAdmin,
-		RequestID: "req-fail-001",
-	}
+	t.Run("DefaultMixedSnapshotPublishesCompatibleNodes", func(t *testing.T) {
+		incompatibleSnap := buildIncompatibleSnapshot()
+		cmd := publication.PublishCommand{
+			Target:    domain.TargetSurge,
+			Snapshot:  incompatibleSnap,
+			ActorKind: domain.ActorKindAdmin,
+			RequestID: "req-mixed-001",
+		}
 
-	_, err := svc.Publish(ctx, cmd)
-	if err == nil {
-		t.Fatal("expected error for incompatible target, got nil")
-	}
-	var domErr *domain.DomainError
-	if !errors.As(err, &domErr) {
-		t.Fatalf("expected domain error, got %T: %v", err, err)
-	}
-	if domErr.Code != "unsupported_target_capability" {
-		t.Fatalf("expected code unsupported_target_capability, got %s", domErr.Code)
-	}
-	if domErr.Category != domain.CategoryValidation {
-		t.Fatalf("expected category validation, got %s", domErr.Category)
-	}
+		pubRes, err := svc.Publish(ctx, cmd)
+		if err != nil {
+			t.Fatalf("expected mixed snapshot to publish successfully in default compatible mode, got: %v", err)
+		}
+		if pubRes.Publication.State != domain.PublicationStateActive {
+			t.Fatalf("expected active publication, got %s", pubRes.Publication.State)
+		}
+		if pubRes.Publication.Manifest.NodeCount != 2 {
+			t.Fatalf("expected 2 admitted nodes in manifest, got %d", pubRes.Publication.Manifest.NodeCount)
+		}
+		if pubRes.Publication.Manifest.ExcludedCount != 1 {
+			t.Fatalf("expected 1 excluded node in manifest, got %d", pubRes.Publication.Manifest.ExcludedCount)
+		}
+		if len(pubRes.Publication.Manifest.Excluded) != 1 || pubRes.Publication.Manifest.Excluded[0].NodeID != "node-vless-01" {
+			t.Fatalf("expected node-vless-01 excluded, got %+v", pubRes.Publication.Manifest.Excluded)
+		}
+		contentStr := string(pubRes.Publication.Content)
+		if !strings.Contains(contentStr, "hk.example.com") || !strings.Contains(contentStr, "us.example.com") {
+			t.Fatalf("expected Surge content to contain compatible nodes, got: %s", contentStr)
+		}
+		if strings.Contains(contentStr, "vless.example.com") {
+			t.Fatalf("expected Surge content to omit incompatible VLESS node, got: %s", contentStr)
+		}
+	})
+
+	t.Run("AllIncompatibleNodesHardFails", func(t *testing.T) {
+		allIncompatSnap := &resolver.ResolvedPolicySnapshot{
+			RevisionID:      "rev-all-incompat",
+			SnapshotDigest:  "sha256:snap-all-incompat",
+			CompilerVersion: "1.0.0",
+			Nodes: []resolver.ResolvedNode{
+				{
+					LogicalID:   "node-vless-only",
+					DisplayName: "VLESS Only",
+					Protocol:    domain.ProtocolVLESS,
+					Server:      "vless.example.com",
+					Port:        443,
+					Credentials: domain.InboundProtocolCredential{
+						UUID: "b831381d-6324-4d53-ad4f-8cda48b30812",
+					},
+					Active:   true,
+					Position: 0,
+				},
+			},
+			NodeLogicalIDs: []string{"node-vless-only"},
+			ResolvedAt:     time.Now().UTC(),
+		}
+
+		cmd := publication.PublishCommand{
+			Target:    domain.TargetSurge,
+			Snapshot:  allIncompatSnap,
+			ActorKind: domain.ActorKindAdmin,
+			RequestID: "req-fail-001",
+		}
+
+		_, err := svc.Publish(ctx, cmd)
+		if err == nil {
+			t.Fatal("expected error for all-incompatible target, got nil")
+		}
+		var domErr *domain.DomainError
+		if !errors.As(err, &domErr) {
+			t.Fatalf("expected domain error, got %T: %v", err, err)
+		}
+		if domErr.Code != "no_compatible_nodes" {
+			t.Fatalf("expected code no_compatible_nodes, got %s", domErr.Code)
+		}
+		if domErr.Category != domain.CategoryValidation {
+			t.Fatalf("expected category validation, got %s", domErr.Category)
+		}
+	})
 }
 
 func TestPreviewIncompatibleTargetReturnsValidationDomainError(t *testing.T) {
@@ -348,25 +405,56 @@ func TestPreviewIncompatibleTargetReturnsValidationDomainError(t *testing.T) {
 	ctx := context.Background()
 	incompatibleSnap := buildIncompatibleSnapshot()
 
-	query := publication.PreviewQuery{
-		Target:   domain.TargetSurge,
-		Snapshot: incompatibleSnap,
-	}
+	t.Run("ExplicitStrictReturnsValidationDomainError", func(t *testing.T) {
+		query := publication.PreviewQuery{
+			Target:     domain.TargetSurge,
+			Snapshot:   incompatibleSnap,
+			CompatMode: "strict",
+		}
 
-	_, err := svc.Preview(ctx, query)
-	if err == nil {
-		t.Fatal("expected error for incompatible preview target, got nil")
-	}
-	var domErr *domain.DomainError
-	if !errors.As(err, &domErr) {
-		t.Fatalf("expected domain error, got %T: %v", err, err)
-	}
-	if domErr.Code != "unsupported_target_capability" {
-		t.Fatalf("expected code unsupported_target_capability, got %s", domErr.Code)
-	}
-	if domErr.Category != domain.CategoryValidation {
-		t.Fatalf("expected category validation, got %s", domErr.Category)
-	}
+		_, err := svc.Preview(ctx, query)
+		if err == nil {
+			t.Fatal("expected error for incompatible preview target in strict mode, got nil")
+		}
+		var domErr *domain.DomainError
+		if !errors.As(err, &domErr) {
+			t.Fatalf("expected domain error, got %T: %v", err, err)
+		}
+		if domErr.Code != "unsupported_target_capability" {
+			t.Fatalf("expected code unsupported_target_capability, got %s", domErr.Code)
+		}
+		if domErr.Category != domain.CategoryValidation {
+			t.Fatalf("expected category validation, got %s", domErr.Category)
+		}
+	})
+
+	t.Run("DefaultCompatibleRendersCompatibleNodesAndExcludesIncompatible", func(t *testing.T) {
+		query := publication.PreviewQuery{
+			Target:   domain.TargetSurge,
+			Snapshot: incompatibleSnap,
+		}
+
+		res, err := svc.Preview(ctx, query)
+		if err != nil {
+			t.Fatalf("expected default compatible preview to succeed, got: %v", err)
+		}
+		if res.Manifest.NodeCount != 2 {
+			t.Fatalf("expected 2 admitted nodes in manifest, got %d", res.Manifest.NodeCount)
+		}
+		if res.Manifest.ExcludedCount != 1 {
+			t.Fatalf("expected 1 excluded node in manifest, got %d", res.Manifest.ExcludedCount)
+		}
+		if len(res.Manifest.Excluded) != 1 || res.Manifest.Excluded[0].NodeID != "node-vless-01" {
+			t.Fatalf("expected node-vless-01 excluded, got %+v", res.Manifest.Excluded)
+		}
+		contentStr := string(res.Content)
+		if !strings.Contains(contentStr, "hk.example.com") || !strings.Contains(contentStr, "us.example.com") {
+			t.Fatalf("expected Surge content to contain compatible nodes, got: %s", contentStr)
+		}
+		if strings.Contains(contentStr, "vless.example.com") {
+			t.Fatalf("expected Surge content to omit incompatible VLESS node, got: %s", contentStr)
+		}
+	})
 }
 
 func TestPublishPreflightBlocksRiskAndDoesNotCreatePublication(t *testing.T) {

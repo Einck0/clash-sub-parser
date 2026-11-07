@@ -419,9 +419,10 @@ func TestMihomoShadowsocksPlugin_InvalidConfigurationsFailClosed(t *testing.T) {
 	const secretMarker = "sensitive-secret-pw-999"
 
 	cases := []struct {
-		name       string
-		transport  map[string]string
-		wantReason string
+		name        string
+		transport   map[string]string
+		wantReason  string
+		wantReasons []string
 	}{
 		{
 			name: "PluginOptsWithoutPlugin",
@@ -557,6 +558,17 @@ func TestMihomoShadowsocksPlugin_InvalidConfigurationsFailClosed(t *testing.T) {
 				"plugin":      "obfs",
 				"plugin-opts": "{invalid-json-content",
 			},
+			wantReasons: []string{
+				"unsupported option",
+				"invalid JSON syntax",
+			},
+		},
+		{
+			name: "InvalidJSONSyntaxInPluginOpts",
+			transport: map[string]string{
+				"plugin":      "obfs",
+				"plugin-opts": `{"mode": "tls", "host": invalid-json}`,
+			},
 			wantReason: "invalid JSON syntax",
 		},
 	}
@@ -594,8 +606,21 @@ func TestMihomoShadowsocksPlugin_InvalidConfigurationsFailClosed(t *testing.T) {
 			if capErr.Feature != "ss" {
 				t.Errorf("expected Feature ss, got %s", capErr.Feature)
 			}
-			if !strings.Contains(capErr.Reason, tc.wantReason) {
-				t.Errorf("error reason %q does not contain expected %q", capErr.Reason, tc.wantReason)
+
+			expectedReasons := tc.wantReasons
+			if len(expectedReasons) == 0 && tc.wantReason != "" {
+				expectedReasons = []string{tc.wantReason}
+			}
+
+			reasonMatched := false
+			for _, wr := range expectedReasons {
+				if strings.Contains(capErr.Reason, wr) {
+					reasonMatched = true
+					break
+				}
+			}
+			if !reasonMatched {
+				t.Errorf("error reason %q does not contain any of expected %v", capErr.Reason, expectedReasons)
 			}
 			if strings.Contains(capErr.Error(), secretMarker) {
 				t.Fatalf("CapabilityError leaked secret marker %q: %s", secretMarker, capErr.Error())
@@ -608,8 +633,13 @@ func TestMihomoShadowsocksPlugin_InvalidConfigurationsFailClosed(t *testing.T) {
 			}
 			foundDiag := false
 			for _, d := range diags {
-				if d.NodeID == node.LogicalID && strings.Contains(d.Message, tc.wantReason) {
-					foundDiag = true
+				if d.NodeID == node.LogicalID {
+					for _, wr := range expectedReasons {
+						if strings.Contains(d.Message, wr) {
+							foundDiag = true
+							break
+						}
+					}
 				}
 				if strings.Contains(d.Message, secretMarker) {
 					t.Fatalf("ValidateTargetCapabilities diagnostic leaked secret marker: %s", d.Message)

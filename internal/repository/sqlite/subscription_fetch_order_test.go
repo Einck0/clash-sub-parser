@@ -68,7 +68,7 @@ func TestSubscriptionFetchOrder_EqualStartedAt_RowIDTieBreaksNewest(t *testing.T
 	}
 	currentNode := domain.Node{
 		LogicalID:   "node-current-fixture",
-		Protocol:    domain.ProtocolShadowsocks,
+		Protocol:    domain.ProtocolSS,
 		DisplayName: "A WARP-current-fixture",
 		Server:      "198.51.100.11",
 		Port:        8388,
@@ -78,7 +78,7 @@ func TestSubscriptionFetchOrder_EqualStartedAt_RowIDTieBreaksNewest(t *testing.T
 	}
 	prunedNode := domain.Node{
 		LogicalID:   "node-pruned-fixture",
-		Protocol:    domain.ProtocolShadowsocks,
+		Protocol:    domain.ProtocolSS,
 		DisplayName: "A WARP-pruned-fixture",
 		Server:      "198.51.100.10",
 		Port:        8388,

@@ -502,7 +502,7 @@ func TestLiveSubscriptionClientEndpoint_TargetAdaptation_ExclusionsAndErrors(t *
 		t.Errorf("expected X-Export-Excluded-Count: 1, got %q", excl)
 	}
 	surgeBody := recSurge.Body.String()
-	if !strings.Contains(surgeBody, "Live Node 1") {
+	if !strings.Contains(surgeBody, "Admin Test Node = ss,") {
 		t.Errorf("expected live SS node in surge output: %s", surgeBody)
 	}
 	if strings.Contains(surgeBody, "Client VLESS Node") {
@@ -546,8 +546,8 @@ func TestLiveSubscriptionClientEndpoint_TargetAdaptation_ExclusionsAndErrors(t *
 	}
 	_, err = db.ExecContext(ctx, `
 		INSERT INTO proxy_chain_bindings (id, target_type, target_id, dialer_type, dialer_id, enabled, sort_order, revision, created_at, updated_at)
-		VALUES ('chain-client-test', 'subscription', 'sub-client-1', 'manual_node', 'node_0123456789abcdef', 1, 0, 1, ?, ?);
-	`, now.Format(time.RFC3339), now.Format(time.RFC3339))
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+	`, "chain-client-test", "subscription", "sub-client-1", "node", "node_0123456789abcdef", 1, 0, 1, now.Format(time.RFC3339), now.Format(time.RFC3339))
 	if err != nil {
 		t.Fatalf("failed to insert chain binding: %v", err)
 	}

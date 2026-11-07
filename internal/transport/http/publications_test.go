@@ -2373,9 +2373,9 @@ func TestPublication_MihomoPreviewTargetedIntegration_HTTP_Socks5_AnyTLS_Mihomo2
 		}
 	}
 
-	// 2. POST /api/v1/publications/preview target=singbox -> 422 with structured diagnostics
+	// 2. POST /api/v1/publications/preview target=singbox, compat_mode=strict -> 422 with structured diagnostics
 	{
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "singbox"}`))
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "singbox", "compat_mode": "strict"}`))
 		req.Header.Set("Authorization", "Bearer "+testAdminToken)
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
@@ -2406,9 +2406,9 @@ func TestPublication_MihomoPreviewTargetedIntegration_HTTP_Socks5_AnyTLS_Mihomo2
 		}
 	}
 
-	// 3. POST /api/v1/publications/preview target=surge -> 422 with structured diagnostics
+	// 3. POST /api/v1/publications/preview target=surge, compat_mode=strict -> 422 with structured diagnostics
 	{
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "surge"}`))
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "surge", "compat_mode": "strict"}`))
 		req.Header.Set("Authorization", "Bearer "+testAdminToken)
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
@@ -2426,9 +2426,9 @@ func TestPublication_MihomoPreviewTargetedIntegration_HTTP_Socks5_AnyTLS_Mihomo2
 		}
 	}
 
-	// 4. POST /api/v1/publications/preview target=qx -> 422 with structured diagnostics
+	// 4. POST /api/v1/publications/preview target=qx, compat_mode=strict -> 422 with structured diagnostics
 	{
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "qx"}`))
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "qx", "compat_mode": "strict"}`))
 		req.Header.Set("Authorization", "Bearer "+testAdminToken)
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
@@ -2443,6 +2443,32 @@ func TestPublication_MihomoPreviewTargetedIntegration_HTTP_Socks5_AnyTLS_Mihomo2
 		_ = json.Unmarshal(rec.Body.Bytes(), &errResp)
 		if errResp.Code != "unsupported_target_capability" {
 			t.Errorf("expected code=unsupported_target_capability, got %s", errResp.Code)
+		}
+	}
+
+	// 5. POST /api/v1/publications/preview target=singbox (default compatible mode):
+	// Mixed inventory (1 VMess supported, 3 unsupported) -> 200 OK with mixed 1 included, 3 excluded
+	{
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "singbox"}`))
+		req.Header.Set("Authorization", "Bearer "+testAdminToken)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 for singbox preview in default compatible mode, got %d: %s", rec.Code, rec.Body.String())
+		}
+		var prevResp struct {
+			Data struct {
+				Manifest domain.PublicationManifest `json:"manifest"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &prevResp); err != nil {
+			t.Fatalf("failed to decode singbox compatible preview response: %v", err)
+		}
+		if prevResp.Data.Manifest.NodeCount != 1 || prevResp.Data.Manifest.ExcludedCount != 3 {
+			t.Errorf("expected mixed1included3excluded (node_count=1, excluded_count=3), got node_count=%d, excluded_count=%d",
+				prevResp.Data.Manifest.NodeCount, prevResp.Data.Manifest.ExcludedCount)
 		}
 	}
 

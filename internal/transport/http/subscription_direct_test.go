@@ -504,8 +504,8 @@ func TestDirectSubscriptionEndpoints_TargetAdaptation_ExclusionsAndErrors(t *tes
 	}
 	_, err = db.Exec(`
 		INSERT INTO proxy_chain_bindings (id, target_type, target_id, dialer_type, dialer_id, enabled, sort_order, revision, created_at, updated_at)
-		VALUES ('chain-direct-test', 'subscription', 'sub-direct-1', 'manual_node', 'node_0123456789abcdef', 1, 0, 1, ?, ?);
-	`, now.Format(time.RFC3339), now.Format(time.RFC3339))
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+	`, "chain-direct-test", "subscription", "sub-direct-1", "node", "node_0123456789abcdef", 1, 0, 1, now.Format(time.RFC3339), now.Format(time.RFC3339))
 	if err != nil {
 		t.Fatalf("failed to insert chain binding: %v", err)
 	}

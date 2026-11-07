@@ -17,9 +17,9 @@ func TestBuildCurrentArtifact_Fallback_GlobalFilterEmptiesAll(t *testing.T) {
 	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
 	svc := publication.NewService(nil, nil)
 
-	primaryNodeID1 := "node_primary_00000001"
-	primaryNodeID2 := "node_primary_00000002"
-	secondaryNodeID := "node_secondary_00001"
+	primaryNodeID1 := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.1.1.1", 8388, nil)
+	primaryNodeID2 := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.1.1.2", 8388, nil)
+	secondaryNodeID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.1.1.3", 8388, nil)
 
 	nPrimary1 := domain.Node{
 		LogicalID:   primaryNodeID1,
@@ -224,7 +224,7 @@ func TestBuildCurrentArtifact_Fallback_AllRoutedGroupsEmpty(t *testing.T) {
 	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
 	svc := publication.NewService(nil, nil)
 
-	primaryNodeID := "node_primary_00000001"
+	primaryNodeID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.1.1.1", 8388, nil)
 	nPrimary := domain.Node{
 		LogicalID:   primaryNodeID,
 		Protocol:    domain.ProtocolSS,
@@ -304,7 +304,7 @@ func TestBuildCurrentArtifact_Fallback_NoEffectiveRulesOrGroups(t *testing.T) {
 	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
 	svc := publication.NewService(nil, nil)
 
-	primaryNodeID := "node_primary_00000001"
+	primaryNodeID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.1.1.1", 8388, nil)
 	nPrimary := domain.Node{
 		LogicalID:   primaryNodeID,
 		Protocol:    domain.ProtocolSS,
@@ -347,13 +347,91 @@ func TestBuildCurrentArtifact_Fallback_NoEffectiveRulesOrGroups(t *testing.T) {
 	if len(snap.Nodes) != 1 {
 		t.Errorf("expected 1 node in snapshot, got %d", len(snap.Nodes))
 	}
+
+	hasFallbackDiag := false
+	for _, d := range snap.Diagnostics {
+		if d.Code == "primary_subscription_fallback" {
+			hasFallbackDiag = true
+			if d.Severity != resolver.DiagnosticSeverityWarning {
+				t.Errorf("expected warning severity for fallback diagnostic, got: %s", d.Severity)
+			}
+			break
+		}
+	}
+	if !hasFallbackDiag {
+		t.Fatalf("expected primary_subscription_fallback diagnostic, got %+v", snap.Diagnostics)
+	}
+}
+
+func TestBuildCurrentArtifact_DirectReject_NotOverridden(t *testing.T) {
+	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
+	svc := publication.NewService(nil, nil)
+
+	primaryNodeID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.1.1.1", 8388, nil)
+	nPrimary := domain.Node{
+		LogicalID:   primaryNodeID,
+		Protocol:    domain.ProtocolSS,
+		DisplayName: "Primary Node",
+		Server:      "1.1.1.1",
+		Port:        8388,
+		Active:      true,
+		Credentials: domain.InboundProtocolCredential{
+			Method:   "aes-128-gcm",
+			Password: "pass",
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	ruleID := domain.MustNewUUIDv7()
+
+	facts := &domain.ConsistentFacts{
+		AsOf: now,
+		Revision: &domain.ConfigurationRevision{
+			ID:            "rev-direct",
+			ContentDigest: "digest-rev-dir",
+			State:         domain.RevisionStateActive,
+			CreatedAt:     now,
+		},
+		Nodes: []domain.Node{nPrimary},
+		PolicyRules: []domain.PolicyRule{
+			{
+				ID:            ruleID,
+				RevisionID:    "rev-direct",
+				BuiltinTarget: "DIRECT",
+				Expression:    "MATCH",
+				Position:      0,
+				Enabled:       true,
+			},
+		},
+		PrimarySubscriptionID: "sub-primary",
+		PrimaryNodeIDs:        []string{primaryNodeID},
+	}
+
+	ctx := context.Background()
+	artifact, snap, err := svc.BuildCurrentArtifact(ctx, facts, domain.TargetMihomo)
+	if err != nil {
+		t.Fatalf("expected direct rule compile to succeed without fallback, got error: %v", err)
+	}
+
+	if strings.Contains(string(artifact.Content), "主订阅兜底") {
+		t.Errorf("content should not contain '主订阅兜底'")
+	}
+	if !strings.Contains(string(artifact.Content), "DIRECT") {
+		t.Errorf("expected DIRECT in output, got: %s", string(artifact.Content))
+	}
+	for _, d := range snap.Diagnostics {
+		if d.Code == "primary_subscription_fallback" {
+			t.Fatal("primary_subscription_fallback diagnostic should not be present on explicit DIRECT rule")
+		}
+	}
 }
 
 func TestBuildCurrentArtifact_NormalHealthyRoutes_NoFallback(t *testing.T) {
 	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
 	svc := publication.NewService(nil, nil)
 
-	nodeID := "node_0000000000000001"
+	nodeID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.1.1.1", 8388, nil)
 	n := domain.Node{
 		LogicalID:   nodeID,
 		Protocol:    domain.ProtocolSS,
@@ -436,7 +514,7 @@ func TestBuildCurrentArtifact_PartialConfigurationError_NoFallback(t *testing.T)
 	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
 	svc := publication.NewService(nil, nil)
 
-	nodeID := "node_0000000000000001"
+	nodeID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.1.1.1", 8388, nil)
 	n := domain.Node{
 		LogicalID:   nodeID,
 		Protocol:    domain.ProtocolSS,
@@ -529,7 +607,7 @@ func TestBuildCurrentArtifact_FallbackUnavailable_WhenNoPrimaryOrDisabled(t *tes
 	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
 	svc := publication.NewService(nil, nil)
 
-	nodeID := "node_0000000000000001"
+	nodeID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.1.1.1", 8388, nil)
 	n := domain.Node{
 		LogicalID:   nodeID,
 		Protocol:    domain.ProtocolSS,
@@ -605,7 +683,7 @@ func TestBuildCurrentArtifact_FallbackUnavailable_WhenNoPrimaryOrDisabled(t *tes
 func TestBuildCurrentArtifact_NoFallbackBypass_OnIndependentRiskBlocker(t *testing.T) {
 	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
 
-	nodeID := "node_risky_000000001"
+	nodeID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.1.1.1", 8388, nil)
 	n := domain.Node{
 		LogicalID:   nodeID,
 		Protocol:    domain.ProtocolSS,
@@ -657,7 +735,83 @@ func TestBuildCurrentArtifact_NoFallbackBypass_OnIndependentRiskBlocker(t *testi
 	}
 }
 
-func TestBuildCurrentArtifact_PreservesConfiguredDNS_And_ChainBindings(t *testing.T) {
+func TestBuildCurrentArtifact_Fallback_PreservesConfiguredDNS(t *testing.T) {
+	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
+	svc := publication.NewService(nil, nil)
+
+	primaryNodeID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.1.1.1", 8388, nil)
+
+	nPrimary := domain.Node{
+		LogicalID:   primaryNodeID,
+		Protocol:    domain.ProtocolSS,
+		DisplayName: "Primary Node",
+		Server:      "1.1.1.1",
+		Port:        8388,
+		Active:      true,
+		Credentials: domain.InboundProtocolCredential{
+			Method:   "aes-128-gcm",
+			Password: "pass",
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	facts := &domain.ConsistentFacts{
+		AsOf: now,
+		Revision: &domain.ConfigurationRevision{
+			ID:            "rev-dns-fb",
+			ContentDigest: "digest-rev-dfb",
+			State:         domain.RevisionStateActive,
+			CreatedAt:     now,
+		},
+		Nodes: []domain.Node{nPrimary},
+		GlobalFilter: &domain.NodeFilterSpec{
+			Conditions: []domain.FilterCondition{
+				{Field: domain.FilterFieldDisplayName, Op: domain.FilterOpContains, Value: "NONEXISTENT"},
+			},
+		},
+		PrimarySubscriptionID: "sub-primary",
+		PrimaryNodeIDs:        []string{primaryNodeID},
+		DNSSettings: &domain.DNSSettings{
+			Enabled: true,
+			RawYAML: "enable: true\nnameserver:\n  - 8.8.8.8\n  - 1.1.1.1\n",
+		},
+	}
+
+	ctx := context.Background()
+	artifact, snap, err := svc.BuildCurrentArtifact(ctx, facts, domain.TargetMihomo)
+	if err != nil {
+		t.Fatalf("expected fallback with DNS to succeed, got error: %v", err)
+	}
+
+	// DNS must be rendered in YAML
+	content := string(artifact.Content)
+	if !strings.Contains(content, "8.8.8.8") || !strings.Contains(content, "1.1.1.1") {
+		t.Errorf("expected rendered DNS in fallback YAML, got: %s", content)
+	}
+	if !strings.Contains(content, "主订阅兜底") {
+		t.Errorf("expected group '主订阅兜底' in fallback YAML")
+	}
+	if len(snap.Nodes) != 1 {
+		t.Errorf("expected 1 node in snapshot, got %d", len(snap.Nodes))
+	}
+
+	hasFallbackDiag := false
+	for _, d := range snap.Diagnostics {
+		if d.Code == "primary_subscription_fallback" {
+			hasFallbackDiag = true
+			if d.Severity != resolver.DiagnosticSeverityWarning {
+				t.Errorf("expected warning severity for fallback diagnostic, got: %s", d.Severity)
+			}
+			break
+		}
+	}
+	if !hasFallbackDiag {
+		t.Fatalf("expected primary_subscription_fallback diagnostic, got %+v", snap.Diagnostics)
+	}
+}
+
+func TestBuildCurrentArtifact_ChainReferenceMissing_NeverFallback(t *testing.T) {
 	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
 	svc := publication.NewService(nil, nil)
 
@@ -696,12 +850,13 @@ func TestBuildCurrentArtifact_PreservesConfiguredDNS_And_ChainBindings(t *testin
 	facts := &domain.ConsistentFacts{
 		AsOf: now,
 		Revision: &domain.ConfigurationRevision{
-			ID:            "rev-dns-chain",
-			ContentDigest: "digest-rev-dc",
+			ID:            "rev-chain-missing",
+			ContentDigest: "digest-rev-cm",
 			State:         domain.RevisionStateActive,
 			CreatedAt:     now,
 		},
 		Nodes: []domain.Node{nPrimary, nTarget},
+		// Global filter excludes all nodes, so dialer node is not exportable
 		GlobalFilter: &domain.NodeFilterSpec{
 			Conditions: []domain.FilterCondition{
 				{Field: domain.FilterFieldDisplayName, Op: domain.FilterOpContains, Value: "NONEXISTENT"},
@@ -709,10 +864,6 @@ func TestBuildCurrentArtifact_PreservesConfiguredDNS_And_ChainBindings(t *testin
 		},
 		PrimarySubscriptionID: "sub-primary",
 		PrimaryNodeIDs:        []string{primaryNodeID, targetNodeID},
-		DNSSettings: &domain.DNSSettings{
-			Enabled: true,
-			RawYAML: "enable: true\nnameserver:\n  - 8.8.8.8\n  - 1.1.1.1\n",
-		},
 		ProxyChainBindings: []domain.ProxyChainBinding{
 			{
 				ID:         "pcb-1",
@@ -728,28 +879,137 @@ func TestBuildCurrentArtifact_PreservesConfiguredDNS_And_ChainBindings(t *testin
 	}
 
 	ctx := context.Background()
-	artifact, snap, err := svc.BuildCurrentArtifact(ctx, facts, domain.TargetMihomo)
-	if err != nil {
-		t.Fatalf("expected fallback with DNS & chains to succeed, got error: %v", err)
+	_, _, err := svc.BuildCurrentArtifact(ctx, facts, domain.TargetMihomo)
+	if err == nil {
+		t.Fatal("expected chain_reference_missing error, got nil")
+	}
+	if !strings.Contains(err.Error(), "chain_reference_missing") {
+		t.Errorf("expected error to contain 'chain_reference_missing', got: %v", err)
+	}
+}
+
+func TestBuildCurrentArtifact_NormalRoute_PreservesDNSAndChainBindings(t *testing.T) {
+	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
+	svc := publication.NewService(nil, nil)
+
+	dialerNodeID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.1.1.1", 8388, nil)
+	targetNodeID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.1.1.2", 8388, nil)
+
+	nDialer := domain.Node{
+		LogicalID:   dialerNodeID,
+		Protocol:    domain.ProtocolSS,
+		DisplayName: "Dialer Node",
+		Server:      "1.1.1.1",
+		Port:        8388,
+		Active:      true,
+		Credentials: domain.InboundProtocolCredential{
+			Method:   "aes-128-gcm",
+			Password: "pass-dialer",
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	nTarget := domain.Node{
+		LogicalID:   targetNodeID,
+		Protocol:    domain.ProtocolSS,
+		DisplayName: "Target Node",
+		Server:      "1.1.1.2",
+		Port:        8388,
+		Active:      true,
+		Credentials: domain.InboundProtocolCredential{
+			Method:   "aes-128-gcm",
+			Password: "pass-target",
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 
-	// DNS must be rendered in YAML
+	groupID := domain.MustNewUUIDv7()
+	ruleID := domain.MustNewUUIDv7()
+
+	facts := &domain.ConsistentFacts{
+		AsOf: now,
+		Revision: &domain.ConfigurationRevision{
+			ID:            "rev-dns-chain-normal",
+			ContentDigest: "digest-rev-dcn",
+			State:         domain.RevisionStateActive,
+			CreatedAt:     now,
+		},
+		Nodes: []domain.Node{nDialer, nTarget},
+		Groups: []domain.NodeGroup{
+			{
+				ID:        groupID,
+				Name:      "Chained Group",
+				GroupType: domain.GroupTypeSelect,
+				Sources: []domain.MemberSource{
+					{
+						ID:            "src-target",
+						GroupID:       groupID,
+						Operation:     domain.OperationAdd,
+						Kind:          domain.SourceKindManualNode,
+						Position:      0,
+						NodeLogicalID: &targetNodeID,
+					},
+				},
+			},
+		},
+		PolicyRules: []domain.PolicyRule{
+			{
+				ID:            ruleID,
+				RevisionID:    "rev-dns-chain-normal",
+				TargetGroupID: groupID,
+				Expression:    "MATCH",
+				Position:      0,
+				Enabled:       true,
+			},
+		},
+		PrimarySubscriptionID: "sub-primary",
+		PrimaryNodeIDs:        []string{dialerNodeID, targetNodeID},
+		DNSSettings: &domain.DNSSettings{
+			Enabled: true,
+			RawYAML: "enable: true\nnameserver:\n  - 8.8.8.8\n  - 1.1.1.1\n",
+		},
+		ProxyChainBindings: []domain.ProxyChainBinding{
+			{
+				ID:         "pcb-1",
+				TargetType: domain.ProxyChainTargetNode,
+				TargetID:   targetNodeID,
+				DialerType: domain.ProxyChainDialerNode,
+				DialerID:   dialerNodeID,
+				Enabled:    true,
+				SortOrder:  1,
+				Revision:   1,
+			},
+		},
+	}
+
+	ctx := context.Background()
+	artifact, snap, err := svc.BuildCurrentArtifact(ctx, facts, domain.TargetMihomo)
+	if err != nil {
+		t.Fatalf("expected normal route with DNS & chains to succeed, got error: %v", err)
+	}
+
 	content := string(artifact.Content)
 	if !strings.Contains(content, "8.8.8.8") || !strings.Contains(content, "1.1.1.1") {
-		t.Errorf("expected rendered DNS in fallback YAML, got: %s", content)
+		t.Errorf("expected rendered DNS in normal YAML, got: %s", content)
 	}
-	if !strings.Contains(content, "主订阅兜底") {
-		t.Errorf("expected group '主订阅兜底' in fallback YAML")
+	if !strings.Contains(content, "Chained Group") {
+		t.Errorf("expected group 'Chained Group' in normal YAML")
 	}
-	if len(snap.Nodes) != 2 {
-		t.Errorf("expected 2 nodes in snapshot, got %d", len(snap.Nodes))
+	if strings.Contains(content, "主订阅兜底") {
+		t.Errorf("normal export should not contain '主订阅兜底'")
+	}
+	for _, d := range snap.Diagnostics {
+		if d.Code == "primary_subscription_fallback" {
+			t.Fatal("primary_subscription_fallback diagnostic should not be present on normal route")
+		}
 	}
 }
 
 func TestGenerateLiveArtifact_And_CheckSubscriptionLink_Fallback(t *testing.T) {
 	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
 
-	primaryNodeID := "node_primary_00000001"
+	primaryNodeID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.1.1.1", 8388, nil)
 	nPrimary := domain.Node{
 		LogicalID:   primaryNodeID,
 		Protocol:    domain.ProtocolSS,
@@ -854,7 +1114,7 @@ func TestGenerateLiveArtifact_And_CheckSubscriptionLink_Fallback(t *testing.T) {
 func TestPreview_WithConsistentFactsLoader_Fallback(t *testing.T) {
 	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
 
-	primaryNodeID := "node_primary_00000001"
+	primaryNodeID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.1.1.1", 8388, nil)
 	nPrimary := domain.Node{
 		LogicalID:   primaryNodeID,
 		Protocol:    domain.ProtocolSS,

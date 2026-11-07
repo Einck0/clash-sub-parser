@@ -92,10 +92,7 @@ func CheckDisney(ctx context.Context, httpClient *http.Client) domain.PlatformCa
 
 	var assertionResp map[string]interface{}
 	if err := readJSONPooled(resp.Body, &assertionResp); err != nil {
-		cap.Verdict = domain.VerdictError
-		cap.Summary = "Error"
-		cap.Reason = "json_decode_failed"
-		return cap
+		return checkDisneyMainPage(ctx, httpClient, cap)
 	}
 
 	assertionToken, ok := assertionResp["assertion"].(string)
@@ -215,9 +212,9 @@ func CheckDisney(ctx context.Context, httpClient *http.Client) domain.PlatformCa
 func checkDisneyMainPage(ctx context.Context, httpClient *http.Client, cap domain.PlatformCapability) domain.PlatformCapability {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.disneyplus.com/", nil)
 	if err != nil {
-		cap.Verdict = domain.VerdictRestricted
-		cap.SubTier = "banned"
-		cap.Summary = "Inaccessible"
+		cap.Verdict = domain.VerdictError
+		cap.SubTier = ""
+		cap.Summary = "Error"
 		cap.Reason = "main_page_req_failed"
 		return cap
 	}
@@ -227,17 +224,41 @@ func checkDisneyMainPage(ctx context.Context, httpClient *http.Client, cap domai
 	if err != nil {
 		verdict, reason := responseReadFailure(err)
 		cap.Verdict = verdict
+		cap.SubTier = ""
 		cap.Summary = "Error"
 		cap.Reason = reason
 		return cap
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusForbidden {
+		cap.Verdict = domain.VerdictRestricted
+		cap.SubTier = "banned"
+		cap.Summary = "Banned"
+		cap.Reason = "main_page_403"
+		return cap
+	}
+	if resp.StatusCode == http.StatusTooManyRequests {
+		cap.Verdict = domain.VerdictRestricted
+		cap.SubTier = "banned"
+		cap.Summary = "Rate Limited"
+		cap.Reason = "rate_limited"
+		return cap
+	}
+	if resp.StatusCode >= 500 {
+		cap.Verdict = domain.VerdictError
+		cap.SubTier = ""
+		cap.Summary = "Detection failed"
+		cap.Reason = "unexpected_status"
+		return cap
+	}
+
 	buf := getPooledBuf()
 	defer putPooledBuf(buf)
 	if _, err := buf.ReadFrom(resp.Body); err != nil {
 		verdict, reason := responseReadFailure(err)
 		cap.Verdict = verdict
+		cap.SubTier = ""
 		cap.Summary = "Error"
 		cap.Reason = reason
 		return cap
@@ -256,9 +277,9 @@ func checkDisneyMainPage(ctx context.Context, httpClient *http.Client, cap domai
 		return cap
 	}
 
-	cap.Verdict = domain.VerdictRestricted
-	cap.SubTier = "banned"
-	cap.Summary = "Banned"
-	cap.Reason = "disney_inaccessible"
+	cap.Verdict = domain.VerdictError
+	cap.SubTier = ""
+	cap.Summary = "Detection failed"
+	cap.Reason = "disney_marker_missing"
 	return cap
 }

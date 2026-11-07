@@ -1133,7 +1133,7 @@ func TestProbeRunnerTruthfulContractsPerKind(t *testing.T) {
 			statusCode:  http.StatusOK,
 			body:        "<html><head><title>Netflix</title></head><body>Watch anywhere</body></html>",
 			wantVerdict: domain.VerdictError,
-			wantReason:  "contract_drift",
+			wantReason:  "detection_failed",
 		},
 		{
 			name:        "streaming_204_empty_never_available",
@@ -1141,7 +1141,7 @@ func TestProbeRunnerTruthfulContractsPerKind(t *testing.T) {
 			statusCode:  http.StatusNoContent,
 			body:        "",
 			wantVerdict: domain.VerdictError,
-			wantReason:  "contract_drift",
+			wantReason:  "detection_failed",
 		},
 		{
 			name:        "streaming_403_is_restricted",
@@ -1157,7 +1157,7 @@ func TestProbeRunnerTruthfulContractsPerKind(t *testing.T) {
 			statusCode:  http.StatusOK,
 			body:        "OK",
 			wantVerdict: domain.VerdictError,
-			wantReason:  "contract_drift",
+			wantReason:  "detection_failed",
 		},
 		{
 			name:        "ai_451_is_restricted",
@@ -1172,7 +1172,7 @@ func TestProbeRunnerTruthfulContractsPerKind(t *testing.T) {
 			kind:        domain.ProbeKindAI,
 			doErr:       errors.New("connection reset by peer"),
 			wantVerdict: domain.VerdictError,
-			wantReason:  "transport_error",
+			wantReason:  "detection_failed",
 		},
 		// IP Risk
 		{

@@ -1714,10 +1714,50 @@ func (s *Service) BuildCurrentArtifact(ctx context.Context, facts *domain.Consis
 	preflight := s.evaluatePreflightFromSnapshot(ctx, snapshot, target, facts.ActiveRiskPolicy, facts.RiskObservations, facts.AsOf)
 	diags := compiler.ValidateTargetCapabilities(snapshot, target)
 
+	hasEnabledPolicyRules := false
+	for _, r := range facts.PolicyRules {
+		if r.Enabled {
+			hasEnabledPolicyRules = true
+			break
+		}
+	}
+
+	// A built-in destination is an intentional route, not an empty user-group
+	// selection. Never replace configured DIRECT/REJECT behavior with fallback.
+	hasBuiltinRoutingRule := false
+	routedUserGroups := make(map[string]bool)
+	for _, r := range snapshot.Rules {
+		if r.TargetGroupID != "" {
+			routedUserGroups[r.TargetGroupID] = true
+			continue
+		}
+		switch strings.ToUpper(strings.TrimSpace(r.TargetGroupName)) {
+		case "DIRECT", "REJECT", "REJECT-DROP", "PASS", "COMPATIBLE":
+			hasBuiltinRoutingRule = true
+		}
+	}
+
+	usableRoutedCount := 0
+	emptyRoutedCount := 0
+	for _, g := range snapshot.Groups {
+		if routedUserGroups[g.ID] {
+			if len(g.AllNodeLogicalIDs) > 0 {
+				usableRoutedCount++
+			} else {
+				emptyRoutedCount++
+			}
+		}
+	}
+	hasPartialConfigError := (usableRoutedCount > 0 && emptyRoutedCount > 0)
+
+	absentRoutingMihomo := (target == domain.TargetMihomo) && (!hasEnabledPolicyRules || (!hasBuiltinRoutingRule && len(routedUserGroups) == 0))
+
 	// Check if normal compilation succeeds. Only the explicit empty-group
 	// compiler failure may proceed to fallback; other compile/content failures
 	// are meaningful errors and must be preserved verbatim.
-	if !hasFilteredNodesEmpty && len(diags) == 0 && preflight.Allowed {
+	// Absent routing for Mihomo (no enabled PolicyRules, or no effective routed or builtin routes)
+	// is defined as exhausted before normal successful return.
+	if !hasFilteredNodesEmpty && !absentRoutingMihomo && len(diags) == 0 && preflight.Allowed {
 		compileRes, err := compiler.Compile(ctx, snapshot, target)
 		if err != nil {
 			return nil, snapshot, err
@@ -1765,21 +1805,6 @@ func (s *Service) BuildCurrentArtifact(ctx context.Context, facts *domain.Consis
 		}
 	}
 
-	// A built-in destination is an intentional route, not an empty user-group
-	// selection. Never replace configured DIRECT/REJECT behavior with fallback.
-	hasBuiltinRoutingRule := false
-	routedUserGroups := make(map[string]bool)
-	for _, r := range snapshot.Rules {
-		if r.TargetGroupID != "" {
-			routedUserGroups[r.TargetGroupID] = true
-			continue
-		}
-		switch strings.ToUpper(strings.TrimSpace(r.TargetGroupName)) {
-		case "DIRECT", "REJECT", "REJECT-DROP", "PASS", "COMPATIBLE":
-			hasBuiltinRoutingRule = true
-		}
-	}
-
 	// Resolver failures normally return before this point, but successful
 	// resolution can still carry independent error diagnostics. Only known
 	// selection-exhaustion diagnostics are eligible to trigger fallback.
@@ -1794,22 +1819,10 @@ func (s *Service) BuildCurrentArtifact(ctx context.Context, facts *domain.Consis
 			hasIndependentResolverError = true
 		}
 	}
-	usableRoutedCount := 0
-	emptyRoutedCount := 0
-	for _, g := range snapshot.Groups {
-		if routedUserGroups[g.ID] {
-			if len(g.AllNodeLogicalIDs) > 0 {
-				usableRoutedCount++
-			} else {
-				emptyRoutedCount++
-			}
-		}
-	}
-	hasPartialConfigError := (usableRoutedCount > 0 && emptyRoutedCount > 0)
 
 	isExhaustion := hasFilteredNodesEmpty ||
 		(target == domain.TargetMihomo && len(routedUserGroups) > 0 && usableRoutedCount == 0) ||
-		(target == domain.TargetMihomo && len(routedUserGroups) == 0 && !hasBuiltinRoutingRule && (len(facts.Groups) == 0 || len(facts.PolicyRules) == 0)) ||
+		absentRoutingMihomo ||
 		(target != domain.TargetMihomo && len(snapshot.Nodes) == 0)
 
 	// If independent blockers exist or not an exhaustion condition, return original error directly

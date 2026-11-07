@@ -297,6 +297,15 @@ func TestCheckYoutube(t *testing.T) {
 	if cap.Verdict != domain.VerdictRestricted || cap.SubTier != "banned" {
 		t.Fatalf("expected Banned for unavailable, got: %+v", cap)
 	}
+
+	// Scenario 4: Positive markers missing -> executed detection error, NOT explicit ban
+	clientMissingMarkers := mockClient(func(req *http.Request) (*http.Response, error) {
+		return htmlResponse(200, `<html><body>Generic Page Without Markers</body></html>`)
+	})
+	cap = platform.CheckYoutube(ctx, clientMissingMarkers)
+	if cap.Verdict != domain.VerdictError || cap.SubTier != "" || cap.Reason != "positive_markers_missing" {
+		t.Fatalf("expected VerdictError/positive_markers_missing without banned tier, got: %+v", cap)
+	}
 }
 
 // 2.5 Disney, Claude, and Gemini Tests
@@ -346,6 +355,34 @@ func TestCheckDisney(t *testing.T) {
 	cap = platform.CheckDisney(ctx, clientBanned)
 	if cap.Verdict != domain.VerdictRestricted || cap.SubTier != "banned" {
 		t.Fatalf("expected Banned, got: %+v", cap)
+	}
+
+	// Scenario 4: Main page missing marker -> VerdictError (disney_marker_missing), no banned tier
+	clientMainPageMissing := mockClient(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Path {
+		case "/devices":
+			return jsonResponse(200, `{}`)
+		default:
+			return htmlResponse(200, `<html><body>Welcome to Disney+</body></html>`)
+		}
+	})
+	cap = platform.CheckDisney(ctx, clientMainPageMissing)
+	if cap.Verdict != domain.VerdictError || cap.SubTier != "" || cap.Reason != "disney_marker_missing" {
+		t.Fatalf("expected VerdictError/disney_marker_missing without banned tier, got: %+v", cap)
+	}
+
+	// Scenario 5: Main page matched region -> Unlocked
+	clientMainPageMatched := mockClient(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Path {
+		case "/devices":
+			return jsonResponse(200, `{}`)
+		default:
+			return htmlResponse(200, `<html><body>window.__ENV__ = {"region":"US"};</body></html>`)
+		}
+	})
+	cap = platform.CheckDisney(ctx, clientMainPageMatched)
+	if cap.Verdict != domain.VerdictAvailable || cap.SubTier != "unlocked" || cap.Region != "US" {
+		t.Fatalf("expected Unlocked(US) from main page, got: %+v", cap)
 	}
 }
 

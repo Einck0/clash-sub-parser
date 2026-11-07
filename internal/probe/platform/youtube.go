@@ -134,9 +134,9 @@ func CheckYoutube(ctx context.Context, httpClient *http.Client) domain.PlatformC
 			bytes.Contains(bodyLower, []byte(`"browseid":"spunlimited"`)))
 
 	if !unlocked {
-		cap.Verdict = domain.VerdictRestricted
-		cap.SubTier = "banned"
-		cap.Summary = "Not Unlocked"
+		cap.Verdict = domain.VerdictError
+		cap.SubTier = ""
+		cap.Summary = "Detection failed"
 		cap.Reason = "positive_markers_missing"
 		return cap
 	}

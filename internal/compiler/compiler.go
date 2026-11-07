@@ -161,6 +161,9 @@ func validate(snapshot *resolver.ResolvedPolicySnapshot, target domain.CompilerT
 		if target != domain.TargetMihomo && strings.TrimSpace(node.DialerProxy) != "" {
 			return &CapabilityError{Target: target, Location: loc, Feature: "dialer-proxy", Reason: "dialer-proxy is only supported on mihomo target"}
 		}
+		if target != domain.TargetMihomo && hasConfiguredPlugin(node.Credentials) {
+			return &CapabilityError{Target: target, Location: loc, Feature: "plugin", Reason: fmt.Sprintf("target %s does not support plugin or plugin-opts", target)}
+		}
 		trimmedName := strings.TrimSpace(node.DisplayName)
 		if nodeNames[trimmedName] {
 			return &CapabilityError{Target: target, Location: loc, Feature: node.DisplayName, Reason: fmt.Sprintf("duplicate node display name %q", node.DisplayName)}
@@ -667,6 +670,22 @@ func sanitizeCapabilityError(err *CapabilityError, creds domain.InboundProtocolC
 	return &copyErr
 }
 
+func hasConfiguredPlugin(creds domain.InboundProtocolCredential) bool {
+	if creds.Transport == nil {
+		return false
+	}
+	for k, v := range creds.Transport {
+		if strings.TrimSpace(v) == "" {
+			continue
+		}
+		kLower := strings.ToLower(strings.TrimSpace(k))
+		if kLower == "plugin" || kLower == "plugin-opts" || kLower == "plugin_opts" {
+			return true
+		}
+	}
+	return false
+}
+
 // checkNodeRenderability evaluates whether a single node can be rendered by the target.
 // It checks generic identifiers, protocol support, non-Mihomo dialer proxy, credential
 // completeness, and invokes the target's native single-node renderer or validator.
@@ -717,6 +736,15 @@ func checkNodeRenderability(target domain.CompilerTarget, index int, node resolv
 			Location: loc,
 			Feature:  "dialer-proxy",
 			Reason:   fmt.Sprintf("target %s does not support dialer-proxy", target),
+		}
+	}
+
+	if target != domain.TargetMihomo && hasConfiguredPlugin(node.Credentials) {
+		return &CapabilityError{
+			Target:   target,
+			Location: loc,
+			Feature:  "plugin",
+			Reason:   fmt.Sprintf("target %s does not support plugin or plugin-opts", target),
 		}
 	}
 

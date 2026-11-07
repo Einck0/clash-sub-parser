@@ -2,6 +2,7 @@ package compiler_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -896,5 +897,271 @@ func TestTargetAdaptation_SafeDiagnostics_NoCredentialsLeaked(t *testing.T) {
 				checkString("diagnostic.Message", d.Message)
 			}
 		})
+	}
+}
+
+// TestTargetAdaptation_SSPlugin_NonMihomoRejection tests that Shadowsocks nodes configured with
+// plugins or plugin options are rejected for non-Mihomo targets (Surge, SingBox, QuantumultX)
+// to prevent silent semantic loss, while plain Shadowsocks nodes are admitted.
+func TestTargetAdaptation_SSPlugin_NonMihomoRejection(t *testing.T) {
+	ctx := context.Background()
+
+	nonMihomoTargets := []domain.CompilerTarget{
+		domain.TargetSurge,
+		domain.TargetSingBox,
+		domain.TargetQuantumultX,
+	}
+
+	plainNode := makeTestNode("id-ss-plain", "SS-Plain", domain.ProtocolSS, 0)
+	pluginNode := makeTestNode("id-ss-plugin", "SS-Plugin", domain.ProtocolSS, 1)
+	pluginNode.Credentials.Transport = map[string]string{
+		"plugin":      "obfs",
+		"plugin-opts": "mode=tls;host=bing.com",
+	}
+
+	mixedSnap := makeAdaptationSnapshot([]resolver.ResolvedNode{plainNode, pluginNode})
+
+	for _, target := range nonMihomoTargets {
+		t.Run(fmt.Sprintf("%s mixed plainSS+pluginSS -> 1 include 1 exclude", target), func(t *testing.T) {
+			filtered, excluded := compiler.FilterCompatibleSnapshot(mixedSnap, target)
+
+			// 1 include: plain SS admitted
+			if len(filtered.Nodes) != 1 {
+				t.Fatalf("[%s] expected 1 admitted node, got %d", target, len(filtered.Nodes))
+			}
+			if filtered.Nodes[0].LogicalID != plainNode.LogicalID {
+				t.Errorf("[%s] expected admitted node %s, got %s", target, plainNode.LogicalID, filtered.Nodes[0].LogicalID)
+			}
+
+			// 1 exclude: plugin SS rejected
+			if len(excluded) != 1 {
+				t.Fatalf("[%s] expected 1 excluded node, got %d", target, len(excluded))
+			}
+			if excluded[0].NodeID != pluginNode.LogicalID {
+				t.Errorf("[%s] expected excluded node %s, got %s", target, pluginNode.LogicalID, excluded[0].NodeID)
+			}
+			if excluded[0].Code != "unsupported_target_capability" {
+				t.Errorf("[%s] expected exclusion code 'unsupported_target_capability', got %q", target, excluded[0].Code)
+			}
+			if !strings.Contains(excluded[0].Reason, "plugin") {
+				t.Errorf("[%s] expected exclusion reason to contain 'plugin', got %q", target, excluded[0].Reason)
+			}
+
+			// Strict detects: ValidateTargetCapabilities reports diagnostic for plugin SS, not plain SS
+			diags := compiler.ValidateTargetCapabilities(mixedSnap, target)
+			foundPluginDiag := false
+			for _, d := range diags {
+				if d.NodeID == pluginNode.LogicalID {
+					foundPluginDiag = true
+					if d.Code != "unsupported_target_capability" {
+						t.Errorf("[%s] expected diagnostic code 'unsupported_target_capability', got %q", target, d.Code)
+					}
+					if !strings.Contains(d.Message, "plugin") {
+						t.Errorf("[%s] expected diagnostic message to contain 'plugin', got %q", target, d.Message)
+					}
+				}
+				if d.NodeID == plainNode.LogicalID {
+					t.Errorf("[%s] unexpected diagnostic for plain SS node: %+v", target, d)
+				}
+			}
+			if !foundPluginDiag {
+				t.Errorf("[%s] ValidateTargetCapabilities did not report plugin diagnostic: %+v", target, diags)
+			}
+
+			// Strict detects: Compile fails closed on unfiltered mixed snapshot
+			_, err := compiler.Compile(ctx, mixedSnap, target)
+			if err == nil {
+				t.Fatalf("[%s] expected strict Compile to fail on snapshot containing plugin SS", target)
+			}
+			var capErr *compiler.CapabilityError
+			if !errors.As(err, &capErr) {
+				t.Errorf("[%s] expected *CapabilityError from Compile, got %T: %v", target, err, err)
+			} else if !strings.Contains(capErr.Reason, "plugin") {
+				t.Errorf("[%s] expected Compile error reason to contain 'plugin', got %q", target, capErr.Reason)
+			}
+		})
+	}
+
+	// All plugin nodes: none admitted
+	allPluginNode1 := makeTestNode("id-plugin-1", "Plugin-1", domain.ProtocolSS, 0)
+	allPluginNode1.Credentials.Transport = map[string]string{
+		"plugin":      "obfs",
+		"plugin-opts": "mode=tls;host=bing.com",
+	}
+	allPluginNode2 := makeTestNode("id-plugin-2", "Plugin-2", domain.ProtocolSS, 1)
+	allPluginNode2.Credentials.Transport = map[string]string{
+		"plugin":      "v2ray-plugin",
+		"plugin_opts": "mode=websocket;host=example.com",
+	}
+	allPluginSnap := makeAdaptationSnapshot([]resolver.ResolvedNode{allPluginNode1, allPluginNode2})
+
+	for _, target := range nonMihomoTargets {
+		t.Run(fmt.Sprintf("%s all plugin none admitted", target), func(t *testing.T) {
+			filtered, excluded := compiler.FilterCompatibleSnapshot(allPluginSnap, target)
+			if len(filtered.Nodes) != 0 {
+				t.Errorf("[%s] expected 0 admitted nodes, got %d", target, len(filtered.Nodes))
+			}
+			if len(excluded) != 2 {
+				t.Fatalf("[%s] expected 2 excluded nodes, got %d", target, len(excluded))
+			}
+			for i, exc := range excluded {
+				if exc.Code != "unsupported_target_capability" {
+					t.Errorf("[%s] exclusion %d code: got %s, want unsupported_target_capability", target, i, exc.Code)
+				}
+				if !strings.Contains(exc.Reason, "plugin") {
+					t.Errorf("[%s] exclusion %d reason: got %q, want 'plugin'", target, i, exc.Reason)
+				}
+			}
+
+			// Strict Compile fails closed
+			_, err := compiler.Compile(ctx, allPluginSnap, target)
+			if err == nil {
+				t.Errorf("[%s] expected Compile to fail on all-plugin snapshot", target)
+			}
+		})
+	}
+}
+
+// TestTargetAdaptation_SSPlugin_OptionAliasesAndFailClosed tests that both plugin-opts and
+// plugin_opts aliases are rejected, and non-empty options even without plugin fail closed.
+func TestTargetAdaptation_SSPlugin_OptionAliasesAndFailClosed(t *testing.T) {
+	ctx := context.Background()
+
+	cases := []struct {
+		name      string
+		transport map[string]string
+	}{
+		{
+			name: "plugin with plugin-opts hyphenated",
+			transport: map[string]string{
+				"plugin":      "obfs",
+				"plugin-opts": "mode=tls;host=bing.com",
+			},
+		},
+		{
+			name: "plugin with plugin_opts underscored",
+			transport: map[string]string{
+				"plugin":      "obfs",
+				"plugin_opts": "mode=http;host=example.com",
+			},
+		},
+		{
+			name: "plugin-opts only without plugin (fail closed)",
+			transport: map[string]string{
+				"plugin-opts": "mode=tls;host=bing.com",
+			},
+		},
+		{
+			name: "plugin_opts only without plugin (fail closed)",
+			transport: map[string]string{
+				"plugin_opts": "mode=http;host=example.com",
+			},
+		},
+		{
+			name: "plugin only without options (fail closed)",
+			transport: map[string]string{
+				"plugin": "v2ray-plugin",
+			},
+		},
+		{
+			name: "plugin-opts with secret password and host (safe reason check)",
+			transport: map[string]string{
+				"plugin":      "shadow-tls",
+				"plugin-opts": "password=super-secret-shadow-password-999;host=internal-hidden-host.corp",
+			},
+		},
+	}
+
+	targets := []domain.CompilerTarget{
+		domain.TargetSurge,
+		domain.TargetSingBox,
+		domain.TargetQuantumultX,
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			node := makeTestNode("id-test-ss", "SS-Test", domain.ProtocolSS, 0)
+			node.Credentials.Transport = tc.transport
+			snap := makeAdaptationSnapshot([]resolver.ResolvedNode{node})
+
+			for _, target := range targets {
+				filtered, excluded := compiler.FilterCompatibleSnapshot(snap, target)
+				if len(filtered.Nodes) != 0 {
+					t.Errorf("[%s on %s] expected 0 admitted nodes, got %d", tc.name, target, len(filtered.Nodes))
+				}
+				if len(excluded) != 1 {
+					t.Fatalf("[%s on %s] expected 1 excluded node, got %d", tc.name, target, len(excluded))
+				}
+				if excluded[0].Code != "unsupported_target_capability" {
+					t.Errorf("[%s on %s] expected code 'unsupported_target_capability', got %q", tc.name, target, excluded[0].Code)
+				}
+				if !strings.Contains(excluded[0].Reason, "plugin") {
+					t.Errorf("[%s on %s] expected reason to contain 'plugin', got %q", tc.name, target, excluded[0].Reason)
+				}
+
+				// Check no secrets or values leaked in exclusion reason
+				if strings.Contains(excluded[0].Reason, "super-secret-shadow-password-999") {
+					t.Errorf("[%s on %s] leaked password in reason: %q", tc.name, target, excluded[0].Reason)
+				}
+				if strings.Contains(excluded[0].Reason, "internal-hidden-host.corp") {
+					t.Errorf("[%s on %s] leaked host in reason: %q", tc.name, target, excluded[0].Reason)
+				}
+
+				diags := compiler.ValidateTargetCapabilities(snap, target)
+				if len(diags) == 0 {
+					t.Errorf("[%s on %s] expected capability diagnostic, got 0", tc.name, target)
+				}
+
+				_, err := compiler.Compile(ctx, snap, target)
+				if err == nil {
+					t.Errorf("[%s on %s] expected Compile to fail closed", tc.name, target)
+				}
+			}
+		})
+	}
+}
+
+// TestTargetAdaptation_SSPlugin_MihomoNativePreservation verifies that Mihomo retains legitimate
+// native plugin serialization and admits both plain and plugin Shadowsocks nodes.
+func TestTargetAdaptation_SSPlugin_MihomoNativePreservation(t *testing.T) {
+	ctx := context.Background()
+
+	plainNode := makeTestNode("id-mihomo-plain-ss", "Mihomo-Plain-SS", domain.ProtocolSS, 0)
+	pluginNode := makeTestNode("id-mihomo-plugin-ss", "Mihomo-Plugin-SS", domain.ProtocolSS, 1)
+	pluginNode.Credentials.Transport = map[string]string{
+		"plugin":      "obfs",
+		"plugin-opts": "mode=tls;host=bing.com",
+	}
+
+	snap := makeAdaptationSnapshot([]resolver.ResolvedNode{plainNode, pluginNode})
+
+	// 1. FilterCompatibleSnapshot admits both nodes on Mihomo
+	filtered, excluded := compiler.FilterCompatibleSnapshot(snap, domain.TargetMihomo)
+	if len(filtered.Nodes) != 2 {
+		t.Fatalf("expected 2 admitted nodes on Mihomo, got %d", len(filtered.Nodes))
+	}
+	if len(excluded) != 0 {
+		t.Fatalf("expected 0 excluded nodes on Mihomo, got %+v", excluded)
+	}
+
+	// 2. ValidateTargetCapabilities reports no plugin errors for legitimate plugin SS
+	diags := compiler.ValidateTargetCapabilities(snap, domain.TargetMihomo)
+	for _, d := range diags {
+		if strings.Contains(d.Message, "plugin") {
+			t.Errorf("unexpected plugin diagnostic on Mihomo: %+v", d)
+		}
+	}
+
+	// 3. Compile succeeds and outputs legitimate native plugin config
+	res, err := compiler.Compile(ctx, snap, domain.TargetMihomo)
+	if err != nil {
+		t.Fatalf("expected Mihomo compile to succeed with native plugin, got: %v", err)
+	}
+	content := string(res.Content)
+	if !strings.Contains(content, "plugin: obfs") {
+		t.Errorf("expected Mihomo YAML to contain 'plugin: obfs', got:\n%s", content)
+	}
+	if !strings.Contains(content, "plugin-opts:") {
+		t.Errorf("expected Mihomo YAML to contain 'plugin-opts:', got:\n%s", content)
 	}
 }

@@ -109,7 +109,7 @@ func buildNodeFilterPredicates(filter domain.NodeFilter, colPrefix string) ([]st
 			SELECT
 				CASE
 					WHEN NOT EXISTS (SELECT 1 FROM probe_observations WHERE node_logical_id = %[1]s)
-					THEN 'untested'
+					THEN 'unknown'
 
 					WHEN lb.verdict IN ('available', 'restricted')
 					     AND lb.connection_revision IS NOT NULL
@@ -125,7 +125,7 @@ func buildNodeFilterPredicates(filter domain.NodeFilter, colPrefix string) ([]st
 					     AND datetime(lb.observed_at) <= datetime(?)
 					THEN 'unhealthy'
 
-					ELSE 'untested'
+					ELSE 'unknown'
 				END
 			FROM (SELECT 1)
 			LEFT JOIN (

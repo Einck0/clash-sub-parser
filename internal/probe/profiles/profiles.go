@@ -85,18 +85,15 @@ func (p Profile) Validate() error {
 // uses upstream any-2xx; platform semantics remain stricter.
 func (p Profile) Evaluate(result Result) Evaluation {
 	if p.Kind == domain.ProbeKindIPRisk && result.ExitIdentityMissing {
-		return Evaluation{Verdict: domain.VerdictUnknown, Reason: "missing_exit_identity"}
+		return Evaluation{Verdict: domain.VerdictError, Reason: "missing_exit_identity"}
 	}
 	if (p.Kind != domain.ProbeKindBaseline && hasRestrictionMarker(result.Body)) || result.StatusCode == http.StatusUnauthorized || result.StatusCode == http.StatusForbidden ||
 		((p.Kind == domain.ProbeKindStreaming || p.Kind == domain.ProbeKindAI) && result.StatusCode == http.StatusUnavailableForLegalReasons) {
-		if p.Kind == domain.ProbeKindIPRisk {
-			return Evaluation{Verdict: domain.VerdictUnknown, Reason: "access_restricted"}
-		}
 		return Evaluation{Verdict: domain.VerdictRestricted, Reason: "access_restricted"}
 	}
 	if p.Kind == domain.ProbeKindSpeed {
 		if !result.OptIn {
-			return Evaluation{Verdict: domain.VerdictUnknown, Reason: "speed_opt_in_required"}
+			return Evaluation{Verdict: domain.VerdictSkipped, Reason: "speed_opt_in_required"}
 		}
 		bytesRead := result.BytesRead
 		if bytesRead == 0 {
@@ -109,25 +106,28 @@ func (p Profile) Evaluate(result Result) Evaluation {
 	if result.DNSError || result.NetworkError || result.DeadlineExceeded {
 		return Evaluation{Verdict: domain.VerdictError, Reason: "transport_error"}
 	}
+	if result.StatusCode == http.StatusTooManyRequests {
+		return Evaluation{Verdict: domain.VerdictRestricted, Reason: "rate_limited"}
+	}
 	if result.StatusCode < 200 || result.StatusCode >= 400 {
-		return Evaluation{Verdict: domain.VerdictUnknown, Reason: "unexpected_status"}
+		return Evaluation{Verdict: domain.VerdictError, Reason: "unexpected_status"}
 	}
 	if p.Kind == domain.ProbeKindBaseline && (result.StatusCode < 200 || result.StatusCode >= 300) {
-		return Evaluation{Verdict: domain.VerdictUnknown, Reason: "contract_drift"}
+		return Evaluation{Verdict: domain.VerdictError, Reason: "contract_drift"}
 	}
 	if p.Kind == domain.ProbeKindGeo {
 		if result.StatusCode != http.StatusOK {
-			return Evaluation{Verdict: domain.VerdictUnknown, Reason: "contract_drift"}
+			return Evaluation{Verdict: domain.VerdictError, Reason: "contract_drift"}
 		}
 		if _, err := identity.ExtractCandidate(result.Body); err != nil {
-			return Evaluation{Verdict: domain.VerdictUnknown, Reason: "contract_drift"}
+			return Evaluation{Verdict: domain.VerdictError, Reason: "contract_drift"}
 		}
 	}
 	if p.Kind == domain.ProbeKindStreaming || p.Kind == domain.ProbeKindAI {
-		return Evaluation{Verdict: domain.VerdictUnknown, Reason: "contract_drift"}
+		return Evaluation{Verdict: domain.VerdictError, Reason: "contract_drift"}
 	}
 	if p.Kind == domain.ProbeKindIPRisk {
-		return Evaluation{Verdict: domain.VerdictUnknown, Reason: "contract_drift"}
+		return Evaluation{Verdict: domain.VerdictError, Reason: "contract_drift"}
 	}
 	if p.Kind == domain.ProbeKindSpeed {
 		bytesRead := result.BytesRead
@@ -135,11 +135,11 @@ func (p Profile) Evaluate(result Result) Evaluation {
 			bytesRead = int64(len(result.Body))
 		}
 		if result.StatusCode != http.StatusOK || bytesRead < MinValidSpeedBytes {
-			return Evaluation{Verdict: domain.VerdictUnknown, Reason: "contract_drift"}
+			return Evaluation{Verdict: domain.VerdictError, Reason: "contract_drift"}
 		}
 	}
 	if !result.ContractMatched || result.ContractVersion != p.Contract {
-		return Evaluation{Verdict: domain.VerdictUnknown, Reason: "contract_drift"}
+		return Evaluation{Verdict: domain.VerdictError, Reason: "contract_drift"}
 	}
 	return Evaluation{Verdict: domain.VerdictAvailable, Reason: "contract_matched"}
 }

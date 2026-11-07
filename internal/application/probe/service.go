@@ -802,7 +802,7 @@ func (s *Service) GetPoolStatus(ctx context.Context) (*domain.ProbePoolStatus, e
 
 	obsRepo := s.resolveObservationsRepo()
 	if obsRepo == nil {
-		status.UntestedCount = status.TotalCount
+		status.UndeterminedCount = status.TotalCount
 		return status, nil
 	}
 
@@ -822,8 +822,8 @@ func (s *Service) GetPoolStatus(ctx context.Context) (*domain.ProbePoolStatus, e
 		case domain.HealthCategoryUnhealthy:
 			status.UnavailableCount++
 		default:
-			// Missing or invalid current-revision baseline evidence is untested.
-			status.UntestedCount++
+			// Missing or invalid current-revision baseline evidence is unknown; counted in UndeterminedCount, UntestedCount stays 0.
+			status.UndeterminedCount++
 		}
 	}
 

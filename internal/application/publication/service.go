@@ -407,6 +407,63 @@ func (s *Service) Preview(ctx context.Context, query PreviewQuery) (*PreviewResu
 		compatMode = "strict"
 	}
 
+	optInPrune := query.PruneUnavailableOptionalGroups || query.OmitUnavailableOptionalGroups
+
+	if query.Snapshot == nil && s.factsLoader != nil && !optInPrune {
+		facts, fErr := s.factsLoader.LoadConsistentFacts(ctx, query.RevisionID, query.Target, domain.NowUTC())
+		if fErr == nil {
+			artifact, snap, bErr := s.BuildCurrentArtifact(ctx, facts, query.Target)
+			if bErr == nil {
+				included := make([]domain.ManifestIncludedNode, len(snap.Nodes))
+				for i, n := range snap.Nodes {
+					included[i] = domain.ManifestIncludedNode{
+						NodeID:             n.LogicalID,
+						ConnectionRevision: n.ConnectionRevision,
+					}
+				}
+				var payloadIDs []string
+				if s.payloadRefRepo != nil && len(included) > 0 {
+					resolved, err := s.payloadRefRepo.ResolvePayloadIDsForNodes(ctx, included)
+					if err == nil && len(resolved) > 0 {
+						payloadIDs = resolved
+					}
+				}
+				if payloadIDs == nil {
+					payloadIDs = []string{}
+				}
+				return &PreviewResult{
+					SnapshotID:     snap.SnapshotDigest,
+					Target:         query.Target,
+					SnapshotDigest: snap.SnapshotDigest,
+					ContentDigest:  artifact.ContentDigest,
+					Content:        artifact.Content,
+					ContentType:    artifact.ContentType,
+					Filename:       artifact.Filename,
+					Manifest: domain.PublicationManifest{
+						IncludedNodes: included,
+						PayloadIDs:    payloadIDs,
+					},
+					Diagnostics:  snap.Diagnostics,
+					FilterCounts: snap.FilterCounts,
+				}, nil
+			} else {
+				var pfErr *PreflightError
+				if errors.As(bErr, &pfErr) {
+					return nil, bErr
+				}
+				var capErr *StrictCapabilityError
+				if errors.As(bErr, &capErr) && compatMode == "strict" {
+					return nil, bErr
+				}
+				if s.policyRepo == nil {
+					return nil, bErr
+				}
+			}
+		} else if s.policyRepo == nil {
+			return nil, fErr
+		}
+	}
+
 	snapshot := query.Snapshot
 	if snapshot == nil {
 		var err error
@@ -1490,6 +1547,16 @@ func generateSubscriptionToken() (string, string, error) {
 	return rawToken, hashToken(rawToken), nil
 }
 
+func deterministicFallbackUUID(salt string) string {
+	hash := sha256.Sum256([]byte("csp-primary-fallback:" + salt))
+	var raw [16]byte
+	copy(raw[:], hash[:16])
+	raw[6] = (raw[6] & 0x0f) | 0x70 // UUIDv7 version
+	raw[8] = (raw[8] & 0x3f) | 0x80 // RFC 4122 variant
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+		raw[0:4], raw[4:6], raw[6:8], raw[8:10], raw[10:16])
+}
+
 // BuildCurrentArtifact executes pure, deterministic, side-effect-free configuration compilation from consistent facts.
 // It performs in-memory policy resolution, preflight checks, and kernel schema validation without writing drafts or references.
 func (s *Service) BuildCurrentArtifact(ctx context.Context, facts *domain.ConsistentFacts, target domain.CompilerTarget) (*Artifact, *resolver.ResolvedPolicySnapshot, error) {
@@ -1624,43 +1691,294 @@ func (s *Service) BuildCurrentArtifact(ctx context.Context, facts *domain.Consis
 		}
 	}
 
+	hasFilteredNodesEmpty := false
 	for _, diagnostic := range snapshot.Diagnostics {
 		if diagnostic.Code == "filtered_nodes_empty" {
-			preflight := s.evaluatePreflightFromSnapshot(ctx, snapshot, target, facts.ActiveRiskPolicy, facts.RiskObservations, facts.AsOf)
-			return nil, snapshot, newPreflightError(preflight)
-		}
-	}
-
-	// Live subscriptions are strictly validated for kernel capabilities
-	diags := compiler.ValidateTargetCapabilities(snapshot, target)
-	if len(diags) > 0 {
-		msg := "target capability validation failed in strict mode"
-		if len(diags) > 0 {
-			msg = fmt.Sprintf("target capability validation failed in strict mode: %s", diags[0].Message)
-		}
-		return nil, snapshot, &StrictCapabilityError{
-			Code:        "unsupported_target_capability",
-			Message:     msg,
-			Diagnostics: diags,
+			hasFilteredNodesEmpty = true
+			break
 		}
 	}
 
 	preflight := s.evaluatePreflightFromSnapshot(ctx, snapshot, target, facts.ActiveRiskPolicy, facts.RiskObservations, facts.AsOf)
-	if !preflight.Allowed {
+	diags := compiler.ValidateTargetCapabilities(snapshot, target)
+
+	// Check if normal compilation succeeds. Only the explicit empty-group
+	// compiler failure may proceed to fallback; other compile/content failures
+	// are meaningful errors and must be preserved verbatim.
+	if !hasFilteredNodesEmpty && len(diags) == 0 && preflight.Allowed {
+		compileRes, err := compiler.Compile(ctx, snapshot, target)
+		if err != nil {
+			return nil, snapshot, err
+		} else {
+			if err := ValidatePublicationContent(compileRes.Content, target); err != nil {
+				return nil, snapshot, err
+			}
+			return &Artifact{
+				Target:         target,
+				Content:        compileRes.Content,
+				ContentType:    compileRes.ContentType,
+				Filename:       compileRes.Filename,
+				ContentDigest:  compileRes.ContentDigest,
+				SnapshotDigest: compileRes.SnapshotDigest,
+				UserInfo:       facts.PrimaryUserInfo,
+			}, snapshot, nil
+		}
+	}
+
+	// Normal export failed. Evaluate if eligible for primary subscription fallback.
+	// Fallback is strictly exhaustion-only:
+	// - No independent blockers (risk blocked/review/unknown, target capability mismatch, partial group error)
+	// - Eligible exhaustion: filtered_nodes_empty, or all routed groups empty, or no effective rules/groups
+	hasRiskBlocker := false
+	for _, d := range snapshot.Diagnostics {
+		if d.Code == "risk_blocked" || d.Code == "risk_review" || d.Code == "risk_unknown" {
+			hasRiskBlocker = true
+			break
+		}
+	}
+	if !hasRiskBlocker {
+		for _, pd := range preflight.Diagnostics {
+			if pd.Code == "risk_blocked" || pd.Code == "risk_review" || pd.Code == "risk_unknown" {
+				hasRiskBlocker = true
+				break
+			}
+		}
+	}
+
+	hasProtocolBlocker := false
+	for _, cd := range diags {
+		if cd.Code != "required_nonempty" && cd.Code != "empty_group" {
+			hasProtocolBlocker = true
+			break
+		}
+	}
+
+	// A built-in destination is an intentional route, not an empty user-group
+	// selection. Never replace configured DIRECT/REJECT behavior with fallback.
+	hasBuiltinRoutingRule := false
+	routedUserGroups := make(map[string]bool)
+	for _, r := range snapshot.Rules {
+		if r.TargetGroupID != "" {
+			routedUserGroups[r.TargetGroupID] = true
+			continue
+		}
+		switch strings.ToUpper(strings.TrimSpace(r.TargetGroupName)) {
+		case "DIRECT", "REJECT", "REJECT-DROP", "PASS", "COMPATIBLE":
+			hasBuiltinRoutingRule = true
+		}
+	}
+
+	// Resolver failures normally return before this point, but successful
+	// resolution can still carry independent error diagnostics. Only known
+	// selection-exhaustion diagnostics are eligible to trigger fallback.
+	hasIndependentResolverError := false
+	for _, diagnostic := range snapshot.Diagnostics {
+		if diagnostic.Severity != resolver.DiagnosticSeverityError {
+			continue
+		}
+		switch diagnostic.Code {
+		case "filtered_nodes_empty", "empty_routed_group":
+		default:
+			hasIndependentResolverError = true
+		}
+	}
+	usableRoutedCount := 0
+	emptyRoutedCount := 0
+	for _, g := range snapshot.Groups {
+		if routedUserGroups[g.ID] {
+			if len(g.AllNodeLogicalIDs) > 0 {
+				usableRoutedCount++
+			} else {
+				emptyRoutedCount++
+			}
+		}
+	}
+	hasPartialConfigError := (usableRoutedCount > 0 && emptyRoutedCount > 0)
+
+	isExhaustion := hasFilteredNodesEmpty ||
+		(target == domain.TargetMihomo && len(routedUserGroups) > 0 && usableRoutedCount == 0) ||
+		(target == domain.TargetMihomo && len(routedUserGroups) == 0 && !hasBuiltinRoutingRule && (len(facts.Groups) == 0 || len(facts.PolicyRules) == 0)) ||
+		(target != domain.TargetMihomo && len(snapshot.Nodes) == 0)
+
+	// If independent blockers exist or not an exhaustion condition, return original error directly
+	if hasRiskBlocker || hasProtocolBlocker || hasIndependentResolverError || hasPartialConfigError || hasBuiltinRoutingRule || !isExhaustion {
+		if len(diags) > 0 && (hasProtocolBlocker || hasPartialConfigError) {
+			msg := "target capability validation failed in strict mode"
+			if len(diags) > 0 {
+				msg = fmt.Sprintf("target capability validation failed in strict mode: %s", diags[0].Message)
+			}
+			return nil, snapshot, &StrictCapabilityError{
+				Code:        "unsupported_target_capability",
+				Message:     msg,
+				Diagnostics: diags,
+			}
+		}
 		return nil, snapshot, newPreflightError(preflight)
 	}
 
-	compileRes, err := compiler.Compile(ctx, snapshot, target)
-	if err != nil {
-		var capErr *compiler.CapabilityError
-		if errors.As(err, &capErr) {
-			return nil, snapshot, domain.NewValidationError("unsupported_target_capability", capErr.Error())
+	// Trigger primary subscription fallback
+	primaryAvailable := facts.PrimarySubscriptionID != "" && len(facts.PrimaryNodeIDs) > 0
+	if !primaryAvailable {
+		unavailableDiag := resolver.Diagnostic{
+			Severity: resolver.DiagnosticSeverityWarning,
+			Code:     "primary_subscription_fallback_unavailable",
+			Message:  "primary subscription fallback unavailable: primary subscription absent, disabled, or has no eligible nodes",
 		}
-		return nil, snapshot, err
+		snapshot.Diagnostics = append(snapshot.Diagnostics, unavailableDiag)
+		preflight.Diagnostics = append(preflight.Diagnostics, PreflightDiagnostic{
+			Severity: unavailableDiag.Severity,
+			Code:     unavailableDiag.Code,
+			Message:  unavailableDiag.Message,
+		})
+		return nil, snapshot, newPreflightError(preflight)
 	}
 
-	if err := ValidatePublicationContent(compileRes.Content, target); err != nil {
-		return nil, snapshot, err
+	primaryNodeIDSet := make(map[string]bool, len(facts.PrimaryNodeIDs))
+	for _, id := range facts.PrimaryNodeIDs {
+		primaryNodeIDSet[id] = true
+	}
+	var primaryNodes []domain.Node
+	for _, n := range facts.Nodes {
+		if primaryNodeIDSet[n.LogicalID] {
+			primaryNodes = append(primaryNodes, n)
+		}
+	}
+
+	if len(primaryNodes) == 0 {
+		unavailableDiag := resolver.Diagnostic{
+			Severity: resolver.DiagnosticSeverityWarning,
+			Code:     "primary_subscription_fallback_unavailable",
+			Message:  "primary subscription fallback unavailable: primary subscription absent, disabled, or has no eligible nodes",
+		}
+		snapshot.Diagnostics = append(snapshot.Diagnostics, unavailableDiag)
+		preflight.Diagnostics = append(preflight.Diagnostics, PreflightDiagnostic{
+			Severity: unavailableDiag.Severity,
+			Code:     unavailableDiag.Code,
+			Message:  unavailableDiag.Message,
+		})
+		return nil, snapshot, newPreflightError(preflight)
+	}
+
+	fallbackInput := resolver.ResolveInput{
+		RevisionID:         facts.Revision.ID,
+		InventoryWatermark: "v1",
+		CompilerVersion:    "1.0.0",
+		Nodes:              primaryNodes,
+		NodeSources:        facts.NodeSources,
+		LatestObservations: facts.LatestObservations,
+		AsOf:               facts.AsOf,
+	}
+
+	if target == domain.TargetMihomo {
+		fallbackGroupID := deterministicFallbackUUID("group")
+		fallbackRuleID := deterministicFallbackUUID("rule")
+
+		memberSources := make([]domain.MemberSource, len(primaryNodes))
+		for i, n := range primaryNodes {
+			nodeID := n.LogicalID
+			memberSources[i] = domain.MemberSource{
+				ID:            deterministicFallbackUUID(fmt.Sprintf("source-%d", i)),
+				GroupID:       fallbackGroupID,
+				Operation:     domain.OperationAdd,
+				Kind:          domain.SourceKindManualNode,
+				Position:      i,
+				NodeLogicalID: &nodeID,
+			}
+		}
+
+		fallbackGroup := domain.NodeGroup{
+			ID:        fallbackGroupID,
+			Name:      "主订阅兜底",
+			GroupType: domain.GroupTypeSelect,
+			Position:  0,
+			Sources:   memberSources,
+		}
+
+		fallbackRule := domain.PolicyRule{
+			ID:            fallbackRuleID,
+			RevisionID:    facts.Revision.ID,
+			TargetGroupID: fallbackGroupID,
+			Expression:    "MATCH",
+			Position:      0,
+			Enabled:       true,
+		}
+
+		fallbackInput.Groups = []domain.NodeGroup{fallbackGroup}
+		fallbackInput.PolicyRules = []domain.PolicyRule{fallbackRule}
+		fallbackInput.DNS = dnsCfg
+		fallbackInput.ChainBindings = facts.ProxyChainBindings
+	}
+
+	if facts.ActiveRiskPolicy != nil && facts.ActiveRiskPolicy.Active && len(primaryNodes) > 0 && s.ipriskSvc != nil {
+		nodeIDs := make([]string, len(primaryNodes))
+		for i, n := range primaryNodes {
+			nodeIDs[i] = n.LogicalID
+		}
+		riskObs := facts.RiskObservations
+		if riskObs == nil {
+			riskObs = []domain.IPRiskObservation{}
+		}
+		batchRes, bErr := s.ipriskSvc.EvaluateBatch(ctx, iprisk.EvaluateBatchInput{
+			NodeLogicalIDs:           nodeIDs,
+			Policy:                   &facts.ActiveRiskPolicy.RiskPolicy,
+			PolicyRevisionID:         facts.ActiveRiskPolicy.RevisionID,
+			EvaluatedAt:              facts.AsOf,
+			Observations:             riskObs,
+			DisableObservationLookup: true,
+		})
+		if bErr != nil {
+			return nil, nil, domain.NewInternalError("risk_evaluation_unavailable", "failed to evaluate active risk policy")
+		}
+		if batchRes != nil {
+			fallbackInput.RiskPolicyRevision = facts.ActiveRiskPolicy.RevisionID
+			fallbackInput.RiskDecisionDigest = batchRes.DecisionDigest
+			evalAt := batchRes.EvaluatedAt
+			fallbackInput.RiskEvaluatedAt = &evalAt
+			fallbackInput.RiskReviewAction = facts.ActiveRiskPolicy.EffectiveReviewAction()
+			fallbackInput.RiskDecisions = batchRes.Decisions
+		}
+	}
+
+	fallbackSnapshot, rErr := s.resolver.Resolve(ctx, fallbackInput)
+	if rErr != nil {
+		return nil, nil, rErr
+	}
+
+	fallbackSnapshot.Diagnostics = append(fallbackSnapshot.Diagnostics, resolver.Diagnostic{
+		Severity: resolver.DiagnosticSeverityWarning,
+		Code:     "primary_subscription_fallback",
+		Message:  "all policy rules or filters resulted in empty nodes; fell back to active primary subscription nodes",
+	})
+
+	fallbackDiags := compiler.ValidateTargetCapabilities(fallbackSnapshot, target)
+	if len(fallbackDiags) > 0 {
+		msg := "target capability validation failed in strict mode"
+		if len(fallbackDiags) > 0 {
+			msg = fmt.Sprintf("target capability validation failed in strict mode: %s", fallbackDiags[0].Message)
+		}
+		return nil, fallbackSnapshot, &StrictCapabilityError{
+			Code:        "unsupported_target_capability",
+			Message:     msg,
+			Diagnostics: fallbackDiags,
+		}
+	}
+
+	fallbackPreflight := s.evaluatePreflightFromSnapshot(ctx, fallbackSnapshot, target, facts.ActiveRiskPolicy, facts.RiskObservations, facts.AsOf)
+	if !fallbackPreflight.Allowed {
+		return nil, fallbackSnapshot, newPreflightError(fallbackPreflight)
+	}
+
+	compileRes, cErr := compiler.Compile(ctx, fallbackSnapshot, target)
+	if cErr != nil {
+		var capErr *compiler.CapabilityError
+		if errors.As(cErr, &capErr) {
+			return nil, fallbackSnapshot, domain.NewValidationError("unsupported_target_capability", capErr.Error())
+		}
+		return nil, fallbackSnapshot, cErr
+	}
+
+	if vErr := ValidatePublicationContent(compileRes.Content, target); vErr != nil {
+		return nil, fallbackSnapshot, vErr
 	}
 
 	return &Artifact{
@@ -1671,7 +1989,7 @@ func (s *Service) BuildCurrentArtifact(ctx context.Context, facts *domain.Consis
 		ContentDigest:  compileRes.ContentDigest,
 		SnapshotDigest: compileRes.SnapshotDigest,
 		UserInfo:       facts.PrimaryUserInfo,
-	}, snapshot, nil
+	}, fallbackSnapshot, nil
 }
 
 func (s *Service) evaluatePreflightFromSnapshot(ctx context.Context, snapshot *resolver.ResolvedPolicySnapshot, target domain.CompilerTarget, activePolicy *domain.RiskPolicyRevision, observations []domain.IPRiskObservation, asOf time.Time) PreflightResult {
@@ -1912,10 +2230,24 @@ func (s *Service) CheckSubscriptionLink(ctx context.Context, id string) (*CheckS
 
 	artifact, snapshot, err := s.BuildCurrentArtifact(ctx, facts, link.Target)
 	if err == nil {
+		var diags []PreflightDiagnostic
+		if snapshot != nil {
+			for _, d := range snapshot.Diagnostics {
+				if d.Severity == resolver.DiagnosticSeverityWarning || d.Severity == resolver.DiagnosticSeverityInfo {
+					diags = append(diags, PreflightDiagnostic{
+						Severity: d.Severity,
+						Code:     d.Code,
+						Message:  d.Message,
+						Target:   d.Target,
+					})
+				}
+			}
+		}
 		return &CheckSubscriptionLinkResult{
 			ID:            link.ID,
 			Target:        link.Target,
 			Allowed:       true,
+			Diagnostics:   diags,
 			AsOf:          facts.AsOf.Format(time.RFC3339Nano),
 			ContentDigest: artifact.ContentDigest,
 			NodeCount:     len(snapshot.Nodes),

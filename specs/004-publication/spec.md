@@ -160,3 +160,8 @@ CSP 的核心定位是**个人私有代理订阅解析与规则编排控制平�
 - **SC-MIN-06 (生产替换)**: 全部门禁通过后直接部署上线，公网域名 `https://sub.einck.top` 验证通过；
 - **SC-MIN-07 (策略组保序)**: 用户编排策略组顺序后，导出的配置中 `proxy-groups` 严格按该顺序排列，不再按字母无序散乱；
 - **SC-MIN-08 (主订阅流量透传)**: 设置主订阅后，拉取直链响应头包含主订阅的 `Subscription-Userinfo`，Clash Verge 等客户端可正确显示流量与到期时间。
+
+
+## Current continuation — 2026-11-07 run175745
+
+See [current continuation contract](../003-probe/continuation-175745.md) for latest precedence: untested node health is unknown, prior probe repair and official/prior-art research retained, and exhausted-rule primary-subscription fallback with explicit safety exclusions. Implementation and same-SHA cloud/review remain unverified until recorded evidence; old checked tasks do not certify this run. No production deployment.

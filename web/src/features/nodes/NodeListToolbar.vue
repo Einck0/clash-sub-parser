@@ -24,7 +24,8 @@ const props = defineProps<{
     probing: number
     healthy: number
     unhealthy: number
-    untested: number
+    unknown: number
+    untested?: number
   }
   isAllVisibleSelected: boolean
   selectedCount: number
@@ -130,7 +131,7 @@ const totalBadgeText = computed(() => {
             <option value="probing">检测中 ({{ healthCounts.probing }})</option>
             <option value="healthy">正常 ({{ healthCounts.healthy }})</option>
             <option value="unhealthy">异常 ({{ healthCounts.unhealthy }})</option>
-            <option value="untested">未测试 ({{ healthCounts.untested }})</option>
+            <option value="unknown">未知 ({{ healthCounts.unknown ?? healthCounts.untested ?? 0 }})</option>
           </select>
 
           <!-- Search Input -->
@@ -196,12 +197,12 @@ const totalBadgeText = computed(() => {
         </button>
         <button
           type="button"
-          data-testid="node-health-pill-untested"
+          data-testid="node-health-pill-unknown"
           class="btn btn-xs rounded-full"
-          :class="healthFilter === 'untested' ? 'btn-neutral' : 'btn-ghost bg-base-200/70'"
-          @click="$emit('update:healthFilter', 'untested')"
+          :class="healthFilter === 'unknown' || healthFilter === 'untested' ? 'btn-neutral' : 'btn-ghost bg-base-200/70'"
+          @click="$emit('update:healthFilter', 'unknown')"
         >
-          未测试 ({{ healthCounts.untested }})
+          未知 ({{ healthCounts.unknown ?? healthCounts.untested ?? 0 }})
         </button>
       </div>
     </div>

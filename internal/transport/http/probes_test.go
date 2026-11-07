@@ -1193,7 +1193,7 @@ func TestProbePoolAndScheduleTriggerEndpoints(t *testing.T) {
 	if err := json.NewDecoder(poolRec.Body).Decode(&poolResp); err != nil {
 		t.Fatal(err)
 	}
-	if poolResp.Data.TotalCount != 4 || poolResp.Data.AvailableCount != 1 || poolResp.Data.UnavailableCount != 1 || poolResp.Data.UntestedCount != 2 || poolResp.Data.QueueNodesCount != 0 {
+	if poolResp.Data.TotalCount != 4 || poolResp.Data.AvailableCount != 1 || poolResp.Data.UnavailableCount != 1 || poolResp.Data.UndeterminedCount != 2 || poolResp.Data.UntestedCount != 0 || poolResp.Data.QueueNodesCount != 0 {
 		t.Fatalf("unexpected initial pool status: %+v", poolResp.Data)
 	}
 

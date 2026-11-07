@@ -9,7 +9,7 @@ import (
 type BaselineHealth string
 
 const (
-	BaselineHealthy   BaselineHealth = "healthy"
+	BaselineHealthy BaselineHealth = "healthy"
 	// BaselineDegraded is retained for source compatibility; canonical health never emits it.
 	BaselineDegraded  BaselineHealth = "degraded"
 	BaselineUnhealthy BaselineHealth = "unhealthy"
@@ -38,20 +38,20 @@ func EvaluateBaselineHealth(obs *ProbeObservation, revision int64, now time.Time
 type NodeHealthCategory string
 
 const (
-	HealthCategoryHealthy      NodeHealthCategory = "healthy"
+	HealthCategoryHealthy NodeHealthCategory = "healthy"
 	// Retained for compatibility; canonical classification does not emit degraded.
-	HealthCategoryDegraded     NodeHealthCategory = "degraded"
-	HealthCategoryUnhealthy    NodeHealthCategory = "unhealthy"
-	// Retained for compatibility; missing or invalid current baseline is untested.
+	HealthCategoryDegraded  NodeHealthCategory = "degraded"
+	HealthCategoryUnhealthy NodeHealthCategory = "unhealthy"
+	// Retained for compatibility; missing or invalid current baseline is unknown.
 	HealthCategoryUndetermined NodeHealthCategory = "undetermined"
-	HealthCategoryUntested     NodeHealthCategory = "untested"
+	HealthCategoryUnknown      NodeHealthCategory = "unknown"
 )
 
 // ClassifyNodeHealth classifies only the current baseline observation; auxiliary observations do not establish health.
-// Missing or invalid baseline evidence is untested. Observation age does not expire a valid current-revision result.
+// Missing or invalid baseline evidence is unknown. Observation age does not expire a valid current-revision result.
 func ClassifyNodeHealth(observations map[ProbeKind]ProbeObservation, currentRevision int64, now time.Time, freshness time.Duration) NodeHealthCategory {
 	if len(observations) == 0 {
-		return HealthCategoryUntested
+		return HealthCategoryUnknown
 	}
 	var baselinePtr *ProbeObservation
 	if baselineObs, hasBaseline := observations[ProbeKindBaseline]; hasBaseline {
@@ -65,14 +65,14 @@ func ClassifyNodeHealth(observations map[ProbeKind]ProbeObservation, currentRevi
 	case BaselineUnhealthy:
 		return HealthCategoryUnhealthy
 	default:
-		return HealthCategoryUntested
+		return HealthCategoryUnknown
 	}
 }
 
 // ClassifyNodeHealthFromSlice evaluates the health category from a slice of observations.
 func ClassifyNodeHealthFromSlice(observations []ProbeObservation, currentRevision int64, now time.Time, freshness time.Duration) NodeHealthCategory {
 	if len(observations) == 0 {
-		return HealthCategoryUntested
+		return HealthCategoryUnknown
 	}
 	obsMap := make(map[ProbeKind]ProbeObservation, len(observations))
 	for _, obs := range observations {

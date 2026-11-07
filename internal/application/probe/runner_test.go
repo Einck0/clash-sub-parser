@@ -1027,7 +1027,7 @@ func TestServiceGetPoolStatusFiveMetrics(t *testing.T) {
 	if status.QueueNodesCount != 5 || status.ProbingCount != 2 || status.QueuedWaitingCount != 3 {
 		t.Fatalf("expected queue_nodes_count=5 (probing=2, queued=3), got %+v", status)
 	}
-	if status.TotalCount != 10 || status.AvailableCount != 4 || status.HealthyCount != 4 || status.DegradedCount != 0 || status.UnavailableCount != 2 || status.UndeterminedCount != 0 || status.UntestedCount != 4 {
+	if status.TotalCount != 10 || status.AvailableCount != 4 || status.HealthyCount != 4 || status.DegradedCount != 0 || status.UnavailableCount != 2 || status.UndeterminedCount != 4 || status.UntestedCount != 0 {
 		t.Fatalf("unexpected pool status metrics: %+v", status)
 	}
 	if !status.ValidateConservation() {
@@ -1103,27 +1103,27 @@ func TestProbeRunnerTruthfulContractsPerKind(t *testing.T) {
 			wantNotContains: "203.0.113.10",
 		},
 		{
-			name:        "geo_200_ok_text_rejected_as_unknown",
+			name:        "geo_200_ok_text_rejected_as_error",
 			kind:        domain.ProbeKindGeo,
 			statusCode:  http.StatusOK,
 			body:        "OK",
-			wantVerdict: domain.VerdictUnknown,
+			wantVerdict: domain.VerdictError,
 			wantReason:  "contract_drift",
 		},
 		{
-			name:        "geo_204_empty_rejected_as_unknown",
+			name:        "geo_204_empty_rejected_as_error",
 			kind:        domain.ProbeKindGeo,
 			statusCode:  http.StatusNoContent,
 			body:        "",
-			wantVerdict: domain.VerdictUnknown,
+			wantVerdict: domain.VerdictError,
 			wantReason:  "contract_drift",
 		},
 		{
-			name:        "geo_200_missing_country_rejected_as_unknown",
+			name:        "geo_200_missing_country_rejected_as_error",
 			kind:        domain.ProbeKindGeo,
 			statusCode:  http.StatusOK,
 			body:        `{"ip":"203.0.113.10"}`,
-			wantVerdict: domain.VerdictUnknown,
+			wantVerdict: domain.VerdictError,
 			wantReason:  "contract_drift",
 		},
 		// Streaming & AI
@@ -1132,7 +1132,7 @@ func TestProbeRunnerTruthfulContractsPerKind(t *testing.T) {
 			kind:        domain.ProbeKindStreaming,
 			statusCode:  http.StatusOK,
 			body:        "<html><head><title>Netflix</title></head><body>Watch anywhere</body></html>",
-			wantVerdict: domain.VerdictUnknown,
+			wantVerdict: domain.VerdictError,
 			wantReason:  "contract_drift",
 		},
 		{
@@ -1140,7 +1140,7 @@ func TestProbeRunnerTruthfulContractsPerKind(t *testing.T) {
 			kind:        domain.ProbeKindStreaming,
 			statusCode:  http.StatusNoContent,
 			body:        "",
-			wantVerdict: domain.VerdictUnknown,
+			wantVerdict: domain.VerdictError,
 			wantReason:  "contract_drift",
 		},
 		{
@@ -1156,7 +1156,7 @@ func TestProbeRunnerTruthfulContractsPerKind(t *testing.T) {
 			kind:        domain.ProbeKindAI,
 			statusCode:  http.StatusOK,
 			body:        "OK",
-			wantVerdict: domain.VerdictUnknown,
+			wantVerdict: domain.VerdictError,
 			wantReason:  "contract_drift",
 		},
 		{
@@ -1180,7 +1180,7 @@ func TestProbeRunnerTruthfulContractsPerKind(t *testing.T) {
 			kind:        domain.ProbeKindIPRisk,
 			statusCode:  http.StatusOK,
 			body:        "OK",
-			wantVerdict: domain.VerdictUnknown,
+			wantVerdict: domain.VerdictError,
 			wantReason:  "missing_exit_identity",
 		},
 		{
@@ -1188,7 +1188,7 @@ func TestProbeRunnerTruthfulContractsPerKind(t *testing.T) {
 			kind:        domain.ProbeKindIPRisk,
 			statusCode:  http.StatusNoContent,
 			body:        "",
-			wantVerdict: domain.VerdictUnknown,
+			wantVerdict: domain.VerdictError,
 			wantReason:  "missing_exit_identity",
 		},
 		{
@@ -1196,7 +1196,7 @@ func TestProbeRunnerTruthfulContractsPerKind(t *testing.T) {
 			kind:        domain.ProbeKindIPRisk,
 			statusCode:  http.StatusOK,
 			body:        "ip=203.0.113.10\nloc=SG\n",
-			wantVerdict: domain.VerdictUnknown,
+			wantVerdict: domain.VerdictError,
 			wantReason:  "contract_drift",
 		},
 		{
@@ -1204,7 +1204,7 @@ func TestProbeRunnerTruthfulContractsPerKind(t *testing.T) {
 			kind:        domain.ProbeKindIPRisk,
 			statusCode:  http.StatusForbidden,
 			body:        "Forbidden",
-			wantVerdict: domain.VerdictUnknown,
+			wantVerdict: domain.VerdictRestricted,
 			wantReason:  "access_restricted",
 		},
 	} {

@@ -360,11 +360,11 @@ func TestFilterConditionValidationMatrix(t *testing.T) {
 			wantError: false,
 		},
 		{
-			name: "health_status valid untested",
+			name: "health_status valid unknown",
 			condition: domain.FilterCondition{
 				Field: domain.FilterFieldHealthStatus,
 				Op:    domain.FilterOpEquals,
-				Value: "untested",
+				Value: "unknown",
 			},
 			wantError: false,
 		},
@@ -376,7 +376,7 @@ func TestFilterConditionValidationMatrix(t *testing.T) {
 				Value: "degraded",
 			},
 			wantError: true,
-			errSubstr: "health_status must be healthy, unhealthy, or untested",
+			errSubstr: "health_status must be healthy, unhealthy, or unknown",
 		},
 		{
 			name: "health_status invalid op contains",
@@ -825,21 +825,21 @@ func TestFilterConditionMatchingSemantics(t *testing.T) {
 			t.Fatal("healthy node should satisfy not_equals unhealthy")
 		}
 
-		// Empty observations => untested
-		condUntested := domain.FilterCondition{
+		// Empty observations => unknown
+		condUnknown := domain.FilterCondition{
 			Field: domain.FilterFieldHealthStatus,
 			Op:    domain.FilterOpEquals,
-			Value: "untested",
+			Value: "unknown",
 		}
 		emptyMap := map[domain.ProbeKind]domain.ProbeObservation{}
-		matchedUntested, _ := domain.MatchesCondition(condUntested, node, sources, emptyMap, asOf)
-		if !matchedUntested {
-			t.Fatal("empty observations should evaluate to untested")
+		matchedUnknown, _ := domain.MatchesCondition(condUnknown, node, sources, emptyMap, asOf)
+		if !matchedUnknown {
+			t.Fatal("empty observations should evaluate to unknown")
 		}
-		// Untested must NOT match healthy
-		matchedUntestedAsHealthy, _ := domain.MatchesCondition(condHealthy, node, sources, emptyMap, asOf)
-		if matchedUntestedAsHealthy {
-			t.Fatal("untested node must not match healthy")
+		// Unknown must NOT match healthy
+		matchedUnknownAsHealthy, _ := domain.MatchesCondition(condHealthy, node, sources, emptyMap, asOf)
+		if matchedUnknownAsHealthy {
+			t.Fatal("unknown node must not match healthy")
 		}
 
 		// Unhealthy verdict

@@ -1274,3 +1274,99 @@ func TestNodeSourceHistoryEndpoint(t *testing.T) {
 		}
 	}
 }
+
+func TestNodesHealthStatusValidationAndUnknownRoute(t *testing.T) {
+	db := newCleanSQLiteDB(t)
+	nodeRepo := sqlite.NewNodeRepository(db)
+	now := time.Now().UTC()
+
+	nodeID := "node-test-unknown-01"
+	err := nodeRepo.Create(context.Background(), &domain.Node{
+		LogicalID:          nodeID,
+		Protocol:           domain.ProtocolShadowsocks,
+		DisplayName:        "Node Test Unknown",
+		Server:             "198.51.100.1",
+		Port:               8388,
+		Active:             true,
+		ConnectionRevision: 1,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	})
+	if err != nil {
+		t.Fatalf("create node: %v", err)
+	}
+
+	router := setupNodesTestRouter(t, db)
+
+	// 1. Invalid health statuses (e.g. untested, degraded, invalid string) must return 400 Bad Request with invalid_health_status
+	for _, bad := range []string{"untested", "degraded", "undetermined", "foo", "healthy,untested", "unknown,degraded"} {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/nodes?health_status="+bad, nil)
+		req.Header.Set("Authorization", "Bearer "+testAdminToken)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 Bad Request for health_status=%s, got %d: %s", bad, rec.Code, rec.Body.String())
+		}
+		var errResp transporthttp.ErrorResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
+			t.Fatalf("failed to parse error JSON for %s: %v", bad, err)
+		}
+		if errResp.Code != "invalid_health_status" {
+			t.Errorf("expected error code 'invalid_health_status' for %s, got '%s'", bad, errResp.Code)
+		}
+	}
+
+	// 2. Valid health statuses (healthy, unhealthy, unknown, healthy,unknown) must not be rejected with 400
+	for _, good := range []string{"healthy", "unhealthy", "unknown", "healthy,unknown", "unknown,unhealthy"} {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/nodes?health_status="+good, nil)
+		req.Header.Set("Authorization", "Bearer "+testAdminToken)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK for health_status=%s, got %d: %s", good, rec.Code, rec.Body.String())
+		}
+	}
+
+	// 3. Untested node (without observations) must report health_status='unknown' and probe_missing=true
+	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/nodes?page=1&page_size=10", nil)
+	listReq.Header.Set("Authorization", "Bearer "+testAdminToken)
+	listRec := httptest.NewRecorder()
+	router.ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d: %s", listRec.Code, listRec.Body.String())
+	}
+	var listResp nodePaginatedResponse
+	if err := json.Unmarshal(listRec.Body.Bytes(), &listResp); err != nil {
+		t.Fatalf("unmarshal list response: %v", err)
+	}
+	if len(listResp.Data.Items) != 1 {
+		t.Fatalf("expected 1 node, got %d", len(listResp.Data.Items))
+	}
+	if listResp.Data.Items[0].HealthStatus != "unknown" {
+		t.Fatalf("expected list view health_status 'unknown', got '%s'", listResp.Data.Items[0].HealthStatus)
+	}
+	if !listResp.Data.Items[0].ProbeMissing {
+		t.Fatalf("expected list view probe_missing=true for node without observations")
+	}
+
+	// 4. Detail view also reports health_status='unknown'
+	detailReq := httptest.NewRequest(http.MethodGet, "/api/v1/nodes/"+nodeID, nil)
+	detailReq.Header.Set("Authorization", "Bearer "+testAdminToken)
+	detailRec := httptest.NewRecorder()
+	router.ServeHTTP(detailRec, detailReq)
+	if detailRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on GET detail, got %d: %s", detailRec.Code, detailRec.Body.String())
+	}
+	var detailResp nodeDetailResponse
+	if err := json.Unmarshal(detailRec.Body.Bytes(), &detailResp); err != nil {
+		t.Fatalf("unmarshal detail response: %v", err)
+	}
+	if detailResp.Data.Node.HealthStatus != "unknown" {
+		t.Fatalf("expected detail view health_status 'unknown', got '%s'", detailResp.Data.Node.HealthStatus)
+	}
+	if !detailResp.Data.Node.ProbeMissing {
+		t.Fatalf("expected detail view probe_missing=true for node without observations")
+	}
+}

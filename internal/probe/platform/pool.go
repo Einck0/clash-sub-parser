@@ -15,6 +15,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"clash-sub-parser/internal/domain"
 )
 
 var bodyBufPool = sync.Pool{
@@ -320,6 +322,14 @@ func (b *budgetBody) Close() error {
 }
 
 func responseReason(err error) string { return ResponseReason(err) }
+
+func responseReadFailure(err error) (domain.ProbeVerdict, string) {
+	reason := ResponseReason(err)
+	if reason == "cancelled" || reason == "budget_not_executed" {
+		return domain.VerdictSkipped, reason
+	}
+	return domain.VerdictError, reason
+}
 
 func readJSONPooled(r io.Reader, v any) error {
 	buf := getPooledBuf()

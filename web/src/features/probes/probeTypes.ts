@@ -10,9 +10,11 @@ export type ProbeRunState =
 
 export type ProbeVerdict =
   | 'available'
+  | 'abnormal'
   | 'restricted'
   | 'unknown'
   | 'error'
+  | 'skipped'
   | 'stale'
 
 export type PlatformSubTier =
@@ -24,6 +26,10 @@ export type PlatformSubTier =
   | 'unlocked'
   | 'soon'
 
+export type RegionSource = 'service' | 'cdn_trace' | 'cdn_target' | string
+
+export type EvidenceScope = 'network_entry' | 'web_region' | 'cdn_trace' | string
+
 export interface PlatformCapability {
   verdict: ProbeVerdict
   latency_ms?: number
@@ -34,6 +40,9 @@ export interface PlatformCapability {
   throughput?: number
   risk_score?: string
   reason?: string
+  exit_region?: string
+  region_source?: RegionSource
+  evidence_scope?: EvidenceScope
 }
 
 export interface PlatformBadge {
@@ -46,6 +55,9 @@ export interface PlatformBadge {
   tooltip?: string
   throughput?: number
   riskScore?: string
+  exitRegion?: string
+  regionSource?: string
+  evidenceScope?: string
 }
 
 export interface ProbeRun {
@@ -57,6 +69,30 @@ export interface ProbeRun {
   deadline_at: string
   created_at: string
   updated_at: string
+}
+
+export interface ProbeAttemptEvidence {
+  executed: boolean
+  category: string
+  reason: string
+  raw_verdict: ProbeVerdict
+  status?: number
+  body_bytes?: number
+  config_fingerprint?: string
+  config_revision?: string
+  profile?: string
+  contract?: string
+  contract_source?: string
+  legacy_contract?: string
+  engine?: string
+  source?: string
+  attempt_id?: string
+  reverification_of?: string
+  started_at?: string
+  finished_at?: string
+  budget_limit?: number
+  budget_used?: number
+  responses?: unknown
 }
 
 export interface ProbeObservation {
@@ -75,6 +111,7 @@ export interface ProbeObservation {
   throughput?: number
   risk_score?: string
   platforms?: Record<string, PlatformCapability>
+  attempt?: ProbeAttemptEvidence
 }
 
 export interface CreateProbeRunInput {
@@ -148,12 +185,16 @@ export function probeVerdictLabel(verdict: ProbeVerdict | string): string {
   switch (verdict) {
     case 'available':
       return '可用'
+    case 'abnormal':
+      return '异常'
     case 'restricted':
       return '降级/受限'
     case 'unknown':
       return '未知'
     case 'error':
-      return '不可达'
+      return '检测失败'
+    case 'skipped':
+      return '未执行'
     case 'stale':
       return '已过期'
     default:
@@ -182,10 +223,14 @@ export function probeVerdictTone(verdict: ProbeVerdict): 'success' | 'warning' |
   switch (verdict) {
     case 'available':
       return 'success'
+    case 'abnormal':
+      return 'warning'
     case 'restricted':
       return 'warning'
     case 'error':
       return 'error'
+    case 'skipped':
+      return 'info'
     case 'unknown':
       return 'info'
     case 'stale':
@@ -209,24 +254,68 @@ export function formatSpeed(kbPerSec?: number | null): string {
   return `${mb.toFixed(1)} MB/s`
 }
 
-/** Compute overall group verdict from platform dictionary */
+/** Compute overall group verdict from platform dictionary adhering to frozen domain precedence */
 export function computeGroupVerdict(
   platforms?: Record<string, PlatformCapability>
 ): ProbeVerdict {
-  if (!platforms) return 'unknown'
+  if (!platforms) return 'skipped'
   const values = Object.values(platforms)
-  if (values.length === 0) return 'unknown'
+  if (values.length === 0) return 'skipped'
 
-  if (values.some((p) => p.verdict === 'available')) {
-    return 'available'
+  const VALID_VERDICTS = new Set<string>([
+    'available',
+    'abnormal',
+    'restricted',
+    'unknown',
+    'error',
+    'skipped',
+    'stale',
+  ])
+
+  let hasAbnormal = false
+  let hasAvailable = false
+  let hasUnknownOrStale = false
+  let hasRestricted = false
+  let hasError = false
+  let skippedCount = 0
+
+  for (const p of values) {
+    const v = p?.verdict
+    if (!v || !VALID_VERDICTS.has(v)) {
+      hasUnknownOrStale = true
+      continue
+    }
+
+    switch (v) {
+      case 'abnormal':
+        hasAbnormal = true
+        break
+      case 'available':
+        hasAvailable = true
+        break
+      case 'unknown':
+      case 'stale':
+        hasUnknownOrStale = true
+        break
+      case 'restricted':
+        hasRestricted = true
+        break
+      case 'error':
+        hasError = true
+        break
+      case 'skipped':
+        skippedCount++
+        break
+    }
   }
-  if (values.every((p) => p.verdict === 'restricted')) {
-    return 'restricted'
-  }
-  if (values.every((p) => p.verdict === 'error')) {
-    return 'error'
-  }
-  return 'unknown'
+
+  if (hasAbnormal) return 'abnormal'
+  if (hasAvailable) return 'available'
+  if (hasUnknownOrStale) return 'unknown'
+  if (hasRestricted) return 'restricted'
+  if (hasError) return 'error'
+  if (skippedCount === values.length) return 'skipped'
+  return 'skipped'
 }
 
 /** Normalize raw platform dictionary from snake_case or camelCase */
@@ -237,7 +326,13 @@ export function normalizePlatforms(
   const result: Record<string, PlatformCapability> = {}
   for (const [k, v] of Object.entries(raw)) {
     if (!v || typeof v !== 'object') continue
-    const verdict = (v.verdict as ProbeVerdict) || 'unknown'
+    let verdict: ProbeVerdict = 'unknown'
+    if (v.verdict && typeof v.verdict === 'string') {
+      const normV = v.verdict.toLowerCase().trim() as ProbeVerdict
+      if (['available', 'abnormal', 'restricted', 'unknown', 'error', 'skipped', 'stale'].includes(normV)) {
+        verdict = normV
+      }
+    }
     const latency =
       typeof v.latency_ms === 'number'
         ? v.latency_ms
@@ -252,6 +347,30 @@ export function normalizePlatforms(
     const rawRegion = typeof v.region === 'string' ? v.region.trim() : undefined
     const region = rawRegion && rawRegion.toLowerCase() !== 'unknown' ? rawRegion : undefined
 
+    const rawExitRegion =
+      typeof v.exit_region === 'string'
+        ? v.exit_region.trim()
+        : typeof v.exitRegion === 'string'
+        ? v.exitRegion.trim()
+        : undefined
+    const exitRegion = rawExitRegion && rawExitRegion.toLowerCase() !== 'unknown' ? rawExitRegion : undefined
+
+    const rawRegionSource =
+      typeof v.region_source === 'string'
+        ? v.region_source.trim()
+        : typeof v.regionSource === 'string'
+        ? v.regionSource.trim()
+        : undefined
+    const regionSource = rawRegionSource || undefined
+
+    const rawEvidenceScope =
+      typeof v.evidence_scope === 'string'
+        ? v.evidence_scope.trim()
+        : typeof v.evidenceScope === 'string'
+        ? v.evidenceScope.trim()
+        : undefined
+    const evidenceScope = rawEvidenceScope || undefined
+
     result[k.toLowerCase()] = {
       verdict,
       latency_ms: latency,
@@ -262,9 +381,87 @@ export function normalizePlatforms(
       throughput,
       risk_score: riskScore,
       reason: v.reason,
+      exit_region: exitRegion,
+      region_source: regionSource,
+      evidence_scope: evidenceScope,
     }
   }
   return Object.keys(result).length > 0 ? result : undefined
+}
+
+export function buildPlatformTooltip(platform: string, cap: PlatformCapability): string {
+  const normPlat = platform.trim().toLowerCase()
+  const parts: string[] = []
+
+  // 1. Platform-specific headline or summary
+  if (normPlat === 'antigravity') {
+    parts.push('官网入口可达；个人账号所在国家/地区、年龄(18+)及模型资格未核验（依据官方 FAQ）')
+  } else if (normPlat === 'gemini') {
+    parts.push('网页端区域支持检测；个人账号登录、年龄及模型权限未核验')
+  } else if (normPlat === 'openai') {
+    if (cap.sub_tier === 'full') parts.push('OpenAI 网页 + App 双通')
+    else if (cap.sub_tier === 'web') parts.push('OpenAI 仅网页端可用')
+    else if (cap.sub_tier === 'app') parts.push('OpenAI 仅客户端可用')
+    else if (cap.sub_tier === 'banned') parts.push('OpenAI 封禁')
+  } else if (normPlat === 'netflix') {
+    if (cap.sub_tier === 'full') parts.push('Netflix 全量剧集解锁')
+    else if (cap.sub_tier === 'originals') parts.push('Netflix 仅自制剧')
+    else if (cap.sub_tier === 'banned') parts.push('Netflix 已封禁')
+  } else if (normPlat === 'disney') {
+    if (cap.sub_tier === 'unlocked') parts.push('Disney+ 已解锁')
+    else if (cap.sub_tier === 'soon') parts.push('Disney+ 尚未开放')
+    else if (cap.sub_tier === 'banned') parts.push('Disney+ 已封禁')
+  }
+
+  // 2. Reason label / summary
+  const reasonText = cap.reason ? formatObservationReasonLabel(cap.reason) : ''
+  if (reasonText && !parts.some((p) => p.includes(reasonText))) {
+    parts.push(reasonText)
+  }
+  if (cap.summary && cap.summary !== reasonText && !parts.some((p) => p.includes(cap.summary!))) {
+    parts.push(cap.summary)
+  }
+
+  // 3. Observed service country vs exit/geo reference
+  const srvRegion = cap.region && cap.region.toLowerCase() !== 'unknown' ? cap.region.toUpperCase() : undefined
+  const exitRegion =
+    cap.exit_region && cap.exit_region.toLowerCase() !== 'unknown' ? cap.exit_region.toUpperCase() : undefined
+
+  if (srvRegion && exitRegion) {
+    if (srvRegion !== exitRegion) {
+      parts.push(`服务观测地区: ${srvRegion}，出口参考地区: ${exitRegion}（地区存在差异，非物理路由绝对证明）`)
+    } else {
+      parts.push(`服务观测地区: ${srvRegion}，出口参考地区: ${exitRegion}`)
+    }
+  } else if (srvRegion) {
+    parts.push(`服务观测地区: ${srvRegion}`)
+  } else if (exitRegion) {
+    parts.push(`出口参考地区: ${exitRegion}`)
+  }
+
+  // 4. Region Source display
+  if (cap.region_source) {
+    const srcMap: Record<string, string> = {
+      service: '服务直测 (service)',
+      cdn_trace: 'CDN 追踪 (cdn_trace)',
+      cdn_target: 'CDN 目标节点 (cdn_target)',
+    }
+    const srcLabel = srcMap[cap.region_source] || cap.region_source
+    parts.push(`地区来源: ${srcLabel}`)
+  }
+
+  // 5. Evidence Scope display
+  if (cap.evidence_scope) {
+    const scopeMap: Record<string, string> = {
+      network_entry: '观测范围: 网站入口连通性 (network_entry)',
+      web_region: '观测范围: 网页端区域支持 (web_region)',
+      cdn_trace: '观测范围: CDN 节点出口 (cdn_trace)',
+    }
+    const scopeLabel = scopeMap[cap.evidence_scope] || `观测范围: ${cap.evidence_scope}`
+    parts.push(scopeLabel)
+  }
+
+  return parts.join(' · ')
 }
 
 /** Format platform status badge adhering to beck-8 and subcheck semantics */
@@ -278,26 +475,28 @@ export function formatPlatformBadge(platform: string, cap: PlatformCapability): 
 
   let label = ''
   let tone: 'success' | 'warning' | 'error' | 'info' = 'info'
-  let tooltip: string | undefined = cap.summary || cap.reason
+  const tooltip: string | undefined = buildPlatformTooltip(normPlat, cap) || undefined
 
   switch (normPlat) {
     case 'openai':
-      if (subTier === 'full') {
+      if (subTier === 'banned') {
+        label = region ? `GPT 封禁 (${region})` : 'GPT 封禁'
+        tone = 'error'
+      } else if (verdict === 'abnormal') {
+        label = region ? `GPT 异常 (${region})` : 'GPT 异常'
+        tone = 'warning'
+      } else if (verdict === 'skipped') {
+        label = 'GPT 未执行'
+        tone = 'info'
+      } else if (subTier === 'full') {
         label = region ? `GPT⁺ (${region})` : 'GPT⁺'
         tone = 'success'
-        tooltip = tooltip || 'OpenAI 网页 + App 双通'
       } else if (subTier === 'web') {
         label = region ? `GPT (${region})` : 'GPT'
         tone = 'warning'
-        tooltip = tooltip || 'OpenAI 仅网页端可用'
       } else if (subTier === 'app') {
         label = region ? `GPT App (${region})` : 'GPT App'
         tone = 'warning'
-        tooltip = tooltip || 'OpenAI 仅客户端可用'
-      } else if (subTier === 'banned') {
-        label = region ? `GPT 封禁 (${region})` : 'GPT 封禁'
-        tone = 'error'
-        tooltip = tooltip || 'OpenAI 封禁'
       } else if (verdict === 'available') {
         label = region ? `GPT⁺ (${region})` : 'GPT⁺'
         tone = 'success'
@@ -305,7 +504,7 @@ export function formatPlatformBadge(platform: string, cap: PlatformCapability): 
         label = region ? `GPT 受限 (${region})` : 'GPT 受限'
         tone = 'warning'
       } else if (verdict === 'error') {
-        label = 'GPT 异常'
+        label = region ? `GPT 失败 (${region})` : 'GPT 失败'
         tone = 'error'
       } else {
         label = region ? `GPT (${region})` : 'GPT'
@@ -314,18 +513,21 @@ export function formatPlatformBadge(platform: string, cap: PlatformCapability): 
       break
 
     case 'netflix':
-      if (subTier === 'full') {
+      if (subTier === 'banned') {
+        label = region ? `NF 封禁 (${region})` : 'NF 封禁'
+        tone = 'error'
+      } else if (verdict === 'abnormal') {
+        label = region ? `NF 异常 (${region})` : 'NF 异常'
+        tone = 'warning'
+      } else if (verdict === 'skipped') {
+        label = 'NF 未执行'
+        tone = 'info'
+      } else if (subTier === 'full') {
         label = region ? `NF (${region})` : 'NF'
         tone = 'success'
-        tooltip = tooltip || 'Netflix 全量剧集解锁'
       } else if (subTier === 'originals') {
         label = region ? `NF 仅自制 (${region})` : 'NF 仅自制'
         tone = 'warning'
-        tooltip = tooltip || 'Netflix 仅自制剧'
-      } else if (subTier === 'banned') {
-        label = region ? `NF 封禁 (${region})` : 'NF 封禁'
-        tone = 'error'
-        tooltip = tooltip || 'Netflix 已封禁'
       } else if (verdict === 'available') {
         label = region ? `NF (${region})` : 'NF'
         tone = 'success'
@@ -333,7 +535,7 @@ export function formatPlatformBadge(platform: string, cap: PlatformCapability): 
         label = region ? `NF 受限 (${region})` : 'NF 受限'
         tone = 'warning'
       } else if (verdict === 'error') {
-        label = 'NF 异常'
+        label = region ? `NF 失败 (${region})` : 'NF 失败'
         tone = 'error'
       } else {
         label = region ? `NF (${region})` : 'NF'
@@ -342,18 +544,21 @@ export function formatPlatformBadge(platform: string, cap: PlatformCapability): 
       break
 
     case 'disney':
-      if (subTier === 'unlocked') {
-        label = region ? `D+ (${region})` : 'D+'
-        tone = 'success'
-        tooltip = tooltip || 'Disney+ 已解锁'
-      } else if (subTier === 'soon') {
-        label = region ? `D+ 尚未开放 (${region})` : 'D+ 尚未开放'
-        tone = 'warning' // Must NOT be green!
-        tooltip = tooltip || 'Disney+ 尚未开放'
-      } else if (subTier === 'banned') {
+      if (subTier === 'banned') {
         label = region ? `D+ 封禁 (${region})` : 'D+ 封禁'
         tone = 'error'
-        tooltip = tooltip || 'Disney+ 已封禁'
+      } else if (verdict === 'abnormal') {
+        label = region ? `D+ 异常 (${region})` : 'D+ 异常'
+        tone = 'warning'
+      } else if (verdict === 'skipped') {
+        label = 'D+ 未执行'
+        tone = 'info'
+      } else if (subTier === 'unlocked') {
+        label = region ? `D+ (${region})` : 'D+'
+        tone = 'success'
+      } else if (subTier === 'soon') {
+        label = region ? `D+ 尚未开放 (${region})` : 'D+ 尚未开放'
+        tone = 'warning'
       } else if (verdict === 'available') {
         label = region ? `D+ (${region})` : 'D+'
         tone = 'success'
@@ -361,7 +566,7 @@ export function formatPlatformBadge(platform: string, cap: PlatformCapability): 
         label = region ? `D+ 受限 (${region})` : 'D+ 受限'
         tone = 'warning'
       } else if (verdict === 'error') {
-        label = 'D+ 异常'
+        label = region ? `D+ 失败 (${region})` : 'D+ 失败'
         tone = 'error'
       } else {
         label = region ? `D+ (${region})` : 'D+'
@@ -373,6 +578,12 @@ export function formatPlatformBadge(platform: string, cap: PlatformCapability): 
       if (subTier === 'banned') {
         label = region ? `YT 封禁 (${region})` : 'YT 封禁'
         tone = 'error'
+      } else if (verdict === 'abnormal') {
+        label = region ? `YT 异常 (${region})` : 'YT 异常'
+        tone = 'warning'
+      } else if (verdict === 'skipped') {
+        label = 'YT 未执行'
+        tone = 'info'
       } else if (verdict === 'available') {
         label = region ? `YT (${region})` : 'YT'
         tone = 'success'
@@ -380,7 +591,7 @@ export function formatPlatformBadge(platform: string, cap: PlatformCapability): 
         label = region ? `YT 受限 (${region})` : 'YT 受限'
         tone = 'warning'
       } else if (verdict === 'error') {
-        label = 'YT 异常'
+        label = region ? `YT 失败 (${region})` : 'YT 失败'
         tone = 'error'
       } else {
         label = region ? `YT (${region})` : 'YT'
@@ -392,6 +603,12 @@ export function formatPlatformBadge(platform: string, cap: PlatformCapability): 
       if (subTier === 'banned') {
         label = region ? `Claude 封禁 (${region})` : 'Claude 封禁'
         tone = 'error'
+      } else if (verdict === 'abnormal') {
+        label = region ? `Claude 异常 (${region})` : 'Claude 异常'
+        tone = 'warning'
+      } else if (verdict === 'skipped') {
+        label = 'Claude 未执行'
+        tone = 'info'
       } else if (verdict === 'available') {
         label = region ? `Claude (${region})` : 'Claude'
         tone = 'success'
@@ -399,7 +616,7 @@ export function formatPlatformBadge(platform: string, cap: PlatformCapability): 
         label = region ? `Claude 受限 (${region})` : 'Claude 受限'
         tone = 'warning'
       } else if (verdict === 'error') {
-        label = 'Claude 异常'
+        label = region ? `Claude 失败 (${region})` : 'Claude 失败'
         tone = 'error'
       } else {
         label = region ? `Claude (${region})` : 'Claude'
@@ -408,14 +625,23 @@ export function formatPlatformBadge(platform: string, cap: PlatformCapability): 
       break
 
     case 'gemini':
-      if (verdict === 'available') {
+      if (subTier === 'banned') {
+        label = region ? `Gemini 封禁 (${region})` : 'Gemini 封禁'
+        tone = 'error'
+      } else if (verdict === 'abnormal') {
+        label = region ? `Gemini 异常 (${region})` : 'Gemini 异常'
+        tone = 'warning'
+      } else if (verdict === 'skipped') {
+        label = 'Gemini 未执行'
+        tone = 'info'
+      } else if (verdict === 'available') {
         label = region ? `Gemini (${region})` : 'Gemini'
         tone = 'success'
       } else if (verdict === 'restricted') {
         label = region ? `Gemini 受限 (${region})` : 'Gemini 受限'
         tone = 'warning'
       } else if (verdict === 'error') {
-        label = 'Gemini 异常'
+        label = region ? `Gemini 失败 (${region})` : 'Gemini 失败'
         tone = 'error'
       } else {
         label = region ? `Gemini (${region})` : 'Gemini'
@@ -423,16 +649,50 @@ export function formatPlatformBadge(platform: string, cap: PlatformCapability): 
       }
       break
 
+    case 'antigravity':
+      if (subTier === 'banned') {
+        label = region ? `Antigravity 封禁 (${region})` : 'Antigravity 封禁'
+        tone = 'error'
+      } else if (verdict === 'abnormal') {
+        label = region ? `Antigravity 异常 (${region})` : 'Antigravity 异常'
+        tone = 'warning'
+      } else if (verdict === 'skipped') {
+        label = 'Antigravity 未执行'
+        tone = 'info'
+      } else if (verdict === 'available') {
+        label = region ? `Antigravity 入口可达 (${region})` : 'Antigravity 入口可达'
+        tone = 'success'
+      } else if (verdict === 'restricted') {
+        label = region ? `Antigravity 受限 (${region})` : 'Antigravity 受限'
+        tone = 'warning'
+      } else if (verdict === 'error') {
+        label = region ? `Antigravity 失败 (${region})` : 'Antigravity 失败'
+        tone = 'error'
+      } else {
+        label = region ? `Antigravity (${region})` : 'Antigravity'
+        tone = 'info'
+      }
+      break
+
     default: {
       const platName = platform.toUpperCase()
-      if (verdict === 'available') {
+      if (subTier === 'banned') {
+        label = region ? `${platName} 封禁 (${region})` : `${platName} 封禁`
+        tone = 'error'
+      } else if (verdict === 'abnormal') {
+        label = region ? `${platName} 异常 (${region})` : `${platName} 异常`
+        tone = 'warning'
+      } else if (verdict === 'skipped') {
+        label = `${platName} 未执行`
+        tone = 'info'
+      } else if (verdict === 'available') {
         label = region ? `${platName} (${region})` : platName
         tone = 'success'
       } else if (verdict === 'restricted') {
         label = region ? `${platName} 受限 (${region})` : `${platName} 受限`
         tone = 'warning'
       } else if (verdict === 'error') {
-        label = `${platName} 异常`
+        label = region ? `${platName} 失败 (${region})` : `${platName} 失败`
         tone = 'error'
       } else {
         label = region ? `${platName} (${region})` : platName
@@ -448,9 +708,16 @@ export function formatPlatformBadge(platform: string, cap: PlatformCapability): 
     tone = 'warning'
   }
 
-  // Double check: unknown and error must never be success/green
-  if ((verdict === 'unknown' || verdict === 'error') && tone === 'success') {
-    tone = 'error'
+  // Non-available states must never be success/green
+  if (
+    (verdict === 'unknown' ||
+      verdict === 'error' ||
+      verdict === 'abnormal' ||
+      verdict === 'restricted' ||
+      verdict === 'skipped') &&
+    tone === 'success'
+  ) {
+    tone = verdict === 'abnormal' || verdict === 'restricted' ? 'warning' : verdict === 'error' ? 'error' : 'info'
   }
 
   return {
@@ -535,7 +802,7 @@ export interface ProbePoolStatus {
   probing_count: number
   queued_waiting_count: number
   untested_count: number
-  undetermined_count?: number
+  undetermined_count: number
   total_count: number
   unavailable_count: number
   available_count: number
@@ -590,6 +857,20 @@ export interface ParsedSummary {
 
 const REASON_LABELS: Record<string, string> = {
   contract_matched: '协议握手与响应校验通过',
+  region_mismatch: '服务观测地区与出口参考地区不一致（地区异常）',
+  support_unverified: '地区支持状态待核验（未在已知官方支持列表确认）',
+  antigravity_entry_reachable: '官网入口可达（个人账号及模型资格未核验）',
+  not_executed: '未执行出站探测',
+  no_platforms_selected: '未选择探测平台',
+  evidence_inconclusive: '探测证据不足 / 结果未确定',
+  partial_or_abnormal: '存在部分或异常观测结果',
+  detection_failed: '探测执行失败',
+  rate_limited: '触发请求频度限制 (429)',
+  overflow: '响应体积超出探测安全上限',
+  cancelled: '探测任务已取消',
+  budget_not_executed: '超出运行预算未执行',
+  skipped: '跳过执行',
+  control_skip: '控制跳过',
   unsafe_tls_rejected: '安全策略拒绝：禁用跳过证书校验 (skip_cert_verify)',
   unsafe_option_rejected: '安全策略拒绝：包含不安全传输或协议选项',
   private_target_rejected: '安全策略拒绝：私有或保留目标地址',
@@ -631,6 +912,24 @@ export function isPolicyOrConfigBlockedReason(reason?: string): boolean {
 export function formatObservationReasonLabel(reason?: string): string {
   if (!reason) return ''
   return REASON_LABELS[reason] || reason
+}
+
+export function formatAttemptCategory(category?: string): string {
+  if (!category) return ''
+  const catMap: Record<string, string> = {
+    control_skip: '控制跳过',
+    budget_exceeded: '超出预算',
+    policy_rejected: '策略拒绝',
+    network_error: '网络故障',
+    protocol_error: '协议错误',
+    detection_failed: '检测失败',
+    contract_mismatch: '契约不符',
+  }
+  return catMap[category] || category
+}
+
+export function formatAttemptReason(reason?: string): string {
+  return formatObservationReasonLabel(reason)
 }
 
 export function parseRedactedSummary(summary: string): ParsedSummary {

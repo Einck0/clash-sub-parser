@@ -24,6 +24,17 @@ func CheckDisney(ctx context.Context, httpClient *http.Client) domain.PlatformCa
 	now := time.Now().UTC()
 	start := time.Now()
 
+	if httpClient == nil {
+		lat := int64(-1)
+		return domain.PlatformCapability{
+			Verdict:    domain.VerdictError,
+			LatencyMS:  &lat,
+			ObservedAt: &now,
+			Reason:     "transport_error",
+			Summary:    "Inconclusive",
+		}
+	}
+
 	const (
 		cookie    = "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange&latitude=0&longitude=0&platform=browser&subject_token=DISNEYASSERTION&subject_token_type=urn%3Abamtech%3Aparams%3Aoauth%3Atoken-type%3Adevice"
 		assertion = `{"deviceFamily":"browser","applicationRuntime":"chrome","deviceProfile":"windows","attributes":{}}`
@@ -56,9 +67,10 @@ func CheckDisney(ctx context.Context, httpClient *http.Client) domain.PlatformCa
 	lat := latency()
 	cap.LatencyMS = &lat
 	if err != nil {
-		cap.Verdict = domain.VerdictError
+		verdict, reason := responseReadFailure(err)
+		cap.Verdict = verdict
 		cap.Summary = "Error"
-		cap.Reason = "network_error"
+		cap.Reason = reason
 		return cap
 	}
 	defer resp.Body.Close()
@@ -68,6 +80,13 @@ func CheckDisney(ctx context.Context, httpClient *http.Client) domain.PlatformCa
 		cap.SubTier = "banned"
 		cap.Summary = "Banned"
 		cap.Reason = "devices_403"
+		return cap
+	}
+	if resp.StatusCode == http.StatusTooManyRequests {
+		cap.Verdict = domain.VerdictRestricted
+		cap.SubTier = "banned"
+		cap.Summary = "Rate Limited"
+		cap.Reason = "rate_limited"
 		return cap
 	}
 
@@ -159,6 +178,8 @@ func CheckDisney(ctx context.Context, httpClient *http.Client) domain.PlatformCa
 		cap.Verdict = domain.VerdictAvailable
 		cap.SubTier = "unlocked"
 		cap.Region = region
+		cap.RegionSource = "service"
+		cap.EvidenceScope = "web_region"
 		cap.Summary = "Unlocked (JP)"
 		cap.Reason = "jp_unlocked"
 		return cap
@@ -173,6 +194,8 @@ func CheckDisney(ctx context.Context, httpClient *http.Client) domain.PlatformCa
 		cap.Verdict = domain.VerdictAvailable
 		cap.SubTier = "unlocked"
 		cap.Region = region
+		cap.RegionSource = "service"
+		cap.EvidenceScope = "web_region"
 		cap.Summary = fmt.Sprintf("Unlocked (%s)", region)
 		cap.Reason = "supported_location"
 	} else {
@@ -180,6 +203,8 @@ func CheckDisney(ctx context.Context, httpClient *http.Client) domain.PlatformCa
 		cap.Verdict = domain.VerdictRestricted
 		cap.SubTier = "soon"
 		cap.Region = region
+		cap.RegionSource = "service"
+		cap.EvidenceScope = "web_region"
 		cap.Summary = fmt.Sprintf("Soon (%s)", region)
 		cap.Reason = "location_coming_soon"
 	}
@@ -200,9 +225,10 @@ func checkDisneyMainPage(ctx context.Context, httpClient *http.Client, cap domai
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		cap.Verdict = domain.VerdictError
+		verdict, reason := responseReadFailure(err)
+		cap.Verdict = verdict
 		cap.Summary = "Error"
-		cap.Reason = "main_page_dial_failed"
+		cap.Reason = reason
 		return cap
 	}
 	defer resp.Body.Close()
@@ -210,9 +236,10 @@ func checkDisneyMainPage(ctx context.Context, httpClient *http.Client, cap domai
 	buf := getPooledBuf()
 	defer putPooledBuf(buf)
 	if _, err := buf.ReadFrom(resp.Body); err != nil {
-		cap.Verdict = domain.VerdictError
+		verdict, reason := responseReadFailure(err)
+		cap.Verdict = verdict
 		cap.Summary = "Error"
-		cap.Reason = "main_page_read_failed"
+		cap.Reason = reason
 		return cap
 	}
 
@@ -222,6 +249,8 @@ func checkDisneyMainPage(ctx context.Context, httpClient *http.Client, cap domai
 		cap.Verdict = domain.VerdictAvailable
 		cap.SubTier = "unlocked"
 		cap.Region = region
+		cap.RegionSource = "service"
+		cap.EvidenceScope = "web_region"
 		cap.Summary = fmt.Sprintf("Unlocked (%s)", region)
 		cap.Reason = "main_page_region_matched"
 		return cap

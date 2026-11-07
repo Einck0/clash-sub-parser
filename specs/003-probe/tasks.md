@@ -33,3 +33,21 @@ Contract/scenarios: [probe-optimization-20261106.md](probe-optimization-20261106
 Initial source commit `c1a5f8f7409cad084735d9ed27f3984ea5c48050` failed cloud run `42187663184`: duplicate test idempotency key, pre-Antigravity request-count assertions, and transport fixture incorrectly expecting unknown. Test-only correction `b2e719f` repaired them without production compatibility code; failure history is preserved.
 
 Deterministic scenarios cover stage limit 1 allowing unrelated work, cancellation while waiting, failed submission drain, per-run manual caps and client reuse. No live-provider accuracy percentage or throughput improvement percentage is claimed. Antigravity result is network-entry evidence only, not account/product eligibility; no authenticated model-call experiment was authorized or performed. No frontend badge redesign, production rollout, or unrelated worktree cleanup. `graphify update .` exited 127 because graphify is not installed; no graph success is claimed. Spec Kit prerequisite/analyze used existing probe feature with explicit `SPECIFY_FEATURE_DIRECTORY=specs/003-probe`, no template regeneration. Master verified root `.exp.md` exists and was read; helper statements that no module-local experience file was found do not imply the root file is absent.
+
+## 5. Outcome repair — 2026-11-07 (current)
+
+Contract, detailed scenarios and module boundaries: [probe-state-20261107.md](probe-state-20261107.md). Historical checked tasks above are not evidence for this round.
+
+- [ ] **STATE01** [P] Domain/execution owner: add valid abnormal/skipped and optional exit_region/region_source/evidence_scope in `internal/domain/enums.go`, `probe.go`; single group helper and roundtrip/filter tests. No DB migration.
+- [ ] **STATE02** [P] Same owner: implement selected-geo barrier and same-run comparison, explicit skipped/error/control semantics with preserved raw evidence in `internal/application/probe/runner.go`, profile classification in `internal/probe/profiles/`; cloud fixtures for cancellation, byte bounds, mixed outcomes, node/run isolation and region conflict.
+- [ ] **STATE03** [P] Platform owner: repair all known unknown branches within `internal/probe/platform/`, Gemini complete2MiB response and late/conflict marker tests, Antigravity network-entry available with honest scope, typed status/failure/control, region-source annotations and no CDN-target-as-exit inference.
+- [ ] **STATE04** [P] Read/UI owner: mirror new states, fields, aggregate, warning/skip/error labels and explanatory scope/region tooltip in `web/src/features/probes/`, nodes read helpers; exact policy verdict options; inventory read passthrough/latency mapping only as needed. Tests for list/detail/filter consistency without changing baseline health.
+- [ ] **STATE05** Master-coordinated task-only dev commit/push, same-SHA `.github/workflows/ci.yml` required jobs/build, digest+OCI revision and isolated fresh DB acceptance. No local build/tests, production or unrelated file staging. Record actual failures and fixes.
+- [ ] **STATE06** Independent reviewer verifies final code/CI/image and key risk promises; applicable isolated UI critic verifies warning and honest Antigravity scope; cleanup own previews. Refresh authoritative governance aggregate before final commit/report.
+
+Spec Kit analyze: all scoped requirements map STATE01–06; explicit current precedence over historical unknown default, no constitution change. Implementation authorization exists; module interfaces frozen. Graphify executable unavailable (127), no graph evidence claimed.
+
+
+## Current continuation — 2026-11-07 run175745
+
+See [current continuation contract](continuation-175745.md) for latest precedence: untested node health is unknown, prior probe repair and official/prior-art research retained, and exhausted-rule primary-subscription fallback with explicit safety exclusions. Implementation and same-SHA cloud/review remain unverified until recorded evidence; old checked tasks do not certify this run. No production deployment.

@@ -58,17 +58,21 @@ type ProbeVerdict string
 
 const (
 	VerdictAvailable  ProbeVerdict = "available"
+	VerdictAbnormal   ProbeVerdict = "abnormal"
 	VerdictRestricted ProbeVerdict = "restricted"
 	VerdictUnknown    ProbeVerdict = "unknown"
 	VerdictError      ProbeVerdict = "error"
+	VerdictSkipped    ProbeVerdict = "skipped"
 	VerdictStale      ProbeVerdict = "stale"
 )
 
 var validVerdicts = map[ProbeVerdict]bool{
 	VerdictAvailable:  true,
+	VerdictAbnormal:   true,
 	VerdictRestricted: true,
 	VerdictUnknown:    true,
 	VerdictError:      true,
+	VerdictSkipped:    true,
 	VerdictStale:      true,
 }
 

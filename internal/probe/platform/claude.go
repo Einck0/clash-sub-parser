@@ -25,6 +25,17 @@ func CheckClaude(ctx context.Context, httpClient *http.Client) domain.PlatformCa
 	now := time.Now().UTC()
 	start := time.Now()
 
+	if httpClient == nil {
+		lat := int64(-1)
+		return domain.PlatformCapability{
+			Verdict:    domain.VerdictError,
+			LatencyMS:  &lat,
+			ObservedAt: &now,
+			Reason:     "transport_error",
+			Summary:    "Inconclusive",
+		}
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://claude.ai/cdn-cgi/trace", nil)
 	if err != nil {
 		lat := int64(-1)
@@ -46,9 +57,10 @@ func CheckClaude(ctx context.Context, httpClient *http.Client) domain.PlatformCa
 	}
 
 	if err != nil {
-		cap.Verdict = domain.VerdictError
+		verdict, reason := responseReadFailure(err)
+		cap.Verdict = verdict
 		cap.Summary = "Error"
-		cap.Reason = "network_error"
+		cap.Reason = reason
 		return cap
 	}
 	defer resp.Body.Close()
@@ -60,9 +72,16 @@ func CheckClaude(ctx context.Context, httpClient *http.Client) domain.PlatformCa
 		cap.Reason = "access_restricted"
 		return cap
 	}
+	if resp.StatusCode == http.StatusTooManyRequests {
+		cap.Verdict = domain.VerdictRestricted
+		cap.SubTier = "banned"
+		cap.Summary = "Rate Limited"
+		cap.Reason = "rate_limited"
+		return cap
+	}
 	if resp.StatusCode != http.StatusOK {
-		cap.Verdict = domain.VerdictUnknown
-		cap.Summary = "Inconclusive"
+		cap.Verdict = domain.VerdictError
+		cap.Summary = "Detection failed"
 		cap.Reason = "unexpected_status"
 		return cap
 	}
@@ -70,25 +89,29 @@ func CheckClaude(ctx context.Context, httpClient *http.Client) domain.PlatformCa
 	buf := getPooledBuf()
 	defer putPooledBuf(buf)
 	if _, err := buf.ReadFrom(resp.Body); err != nil {
-		cap.Verdict = domain.VerdictError
+		verdict, reason := responseReadFailure(err)
+		cap.Verdict = verdict
 		cap.Summary = "Error"
-		cap.Reason = "read_failed"
+		cap.Reason = reason
 		return cap
 	}
 
 	matches := claudeRe.FindSubmatch(buf.Bytes())
 	if len(matches) <= 1 {
-		cap.Verdict = domain.VerdictUnknown
-		cap.Summary = "Inaccessible"
+		cap.Verdict = domain.VerdictError
+		cap.Summary = "Detection failed"
 		cap.Reason = "trace_loc_missing"
 		return cap
 	}
 
 	region := strings.ToUpper(string(matches[1]))
+	cap.Region = region
+	cap.RegionSource = "cdn_trace"
+	cap.EvidenceScope = "cdn_trace"
+
 	if claudeBlockedRegions[region] {
 		cap.Verdict = domain.VerdictRestricted
 		cap.SubTier = "banned"
-		cap.Region = region
 		cap.Summary = fmt.Sprintf("Banned (%s)", region)
 		cap.Reason = "sanctioned_region"
 		return cap
@@ -96,7 +119,6 @@ func CheckClaude(ctx context.Context, httpClient *http.Client) domain.PlatformCa
 
 	cap.Verdict = domain.VerdictAvailable
 	cap.SubTier = "unlocked"
-	cap.Region = region
 	cap.Summary = fmt.Sprintf("Unlocked (%s)", region)
 	cap.Reason = "claude_available"
 	return cap

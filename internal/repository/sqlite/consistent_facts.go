@@ -45,6 +45,7 @@ func (l *consistentFactsLoader) LoadConsistentFacts(ctx context.Context, revisio
 		LatestObservations:     make(map[string]map[domain.ProbeKind]domain.ProbeObservation),
 		ProxyChainBindings:     make([]domain.ProxyChainBinding, 0),
 		EnabledSubscriptionIDs: make(map[string]bool),
+		PrimaryNodeIDs:         make([]string, 0),
 	}
 
 	// 1. Revision
@@ -95,13 +96,30 @@ func (l *consistentFactsLoader) LoadConsistentFacts(ctx context.Context, revisio
 	}
 	facts.EnabledSubscriptionIDs = enabledSubIDs
 
-	// 6. Node Sources and Observations (inspected conditionally based on filter dependencies)
+	// 5.6 Primary Subscription
+	var primarySubID sql.NullString
+	var primaryUserInfo sql.NullString
+	const primaryQuery = `SELECT id, userinfo FROM subscriptions WHERE is_primary = 1 AND enabled = 1 LIMIT 1;`
+	if err := tx.QueryRowContext(ctx, primaryQuery).Scan(&primarySubID, &primaryUserInfo); err == nil {
+		if primarySubID.Valid {
+			facts.PrimarySubscriptionID = primarySubID.String
+		}
+		if primaryUserInfo.Valid {
+			facts.PrimaryUserInfo = primaryUserInfo.String
+		}
+	}
+
+	// 6. Node Sources and Observations (inspected conditionally based on filter dependencies or primary selection)
 	needsSources, needsObservations := inspectFilterDependencies(facts.GlobalFilter, facts.GroupFilters, facts.Groups)
 	if !needsSources {
-		for _, b := range facts.ProxyChainBindings {
-			if b.Enabled && b.TargetType == domain.ProxyChainTargetSubscription {
-				needsSources = true
-				break
+		if facts.PrimarySubscriptionID != "" {
+			needsSources = true
+		} else {
+			for _, b := range facts.ProxyChainBindings {
+				if b.Enabled && b.TargetType == domain.ProxyChainTargetSubscription {
+					needsSources = true
+					break
+				}
 			}
 		}
 	}
@@ -116,16 +134,29 @@ func (l *consistentFactsLoader) LoadConsistentFacts(ctx context.Context, revisio
 		}
 	}
 
+	if facts.PrimarySubscriptionID != "" {
+		for _, node := range facts.Nodes {
+			for _, src := range facts.NodeSources[node.LogicalID] {
+				if src.SubscriptionID == facts.PrimarySubscriptionID {
+					facts.PrimaryNodeIDs = append(facts.PrimaryNodeIDs, node.LogicalID)
+					break
+				}
+			}
+		}
+	}
+
 	// 7. Active Risk Policy & Observations
 	if err := loadActiveRiskPolicyAndObservations(ctx, tx, nodeIDs, facts); err != nil {
 		return nil, err
 	}
 
-	// 8. Primary Subscription UserInfo
-	var primaryUserInfo sql.NullString
-	_ = tx.QueryRowContext(ctx, "SELECT userinfo FROM subscriptions WHERE is_primary = 1 AND enabled = 1 LIMIT 1;").Scan(&primaryUserInfo)
-	if primaryUserInfo.Valid {
-		facts.PrimaryUserInfo = primaryUserInfo.String
+	// 8. Primary Subscription UserInfo (fallback if not populated in 5.6)
+	if facts.PrimaryUserInfo == "" {
+		var primaryUserInfo sql.NullString
+		_ = tx.QueryRowContext(ctx, "SELECT userinfo FROM subscriptions WHERE is_primary = 1 AND enabled = 1 LIMIT 1;").Scan(&primaryUserInfo)
+		if primaryUserInfo.Valid {
+			facts.PrimaryUserInfo = primaryUserInfo.String
+		}
 	}
 
 	// 9. DNS Settings

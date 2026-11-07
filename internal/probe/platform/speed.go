@@ -62,6 +62,17 @@ func CheckSpeed(ctx context.Context, httpClient *http.Client, bytesCounter *uint
 	now := time.Now().UTC()
 	start := time.Now()
 
+	if httpClient == nil {
+		lat := int64(-1)
+		return domain.PlatformCapability{
+			Verdict:    domain.VerdictError,
+			LatencyMS:  &lat,
+			ObservedAt: &now,
+			Reason:     "transport_error",
+			Summary:    "Inconclusive",
+		}, errors.New("http client is nil")
+	}
+
 	if limitBytes == 0 {
 		limitBytes = uint64(DefaultDownloadMB) * 1024 * 1024
 	}
@@ -91,6 +102,7 @@ func CheckSpeed(ctx context.Context, httpClient *http.Client, bytesCounter *uint
 			LatencyMS:  &lat,
 			ObservedAt: &now,
 			Reason:     "request_build_failed",
+			Summary:    "Inconclusive",
 		}, err
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
@@ -106,20 +118,23 @@ func CheckSpeed(ctx context.Context, httpClient *http.Client, bytesCounter *uint
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		lat := time.Since(start).Milliseconds()
+		verdict, reason := responseReadFailure(err)
+		summary := "Inconclusive"
 		if errors.Is(err, context.DeadlineExceeded) || (speedCtx.Err() == context.DeadlineExceeded) {
-			return domain.PlatformCapability{
-				Verdict:    domain.VerdictUnknown,
-				LatencyMS:  &lat,
-				ObservedAt: &now,
-				Summary:    "speed request timed out waiting for response headers",
-				Reason:     "speed_request_timeout",
-			}, nil
+			verdict = domain.VerdictError
+			reason = "speed_request_timeout"
+			summary = "speed request timed out waiting for response headers"
+		} else if verdict == domain.VerdictSkipped {
+			summary = "Skipped"
+		} else {
+			summary = "Detection failed"
 		}
 		return domain.PlatformCapability{
-			Verdict:    domain.VerdictError,
+			Verdict:    verdict,
 			LatencyMS:  &lat,
 			ObservedAt: &now,
-			Reason:     "speed_request_failed",
+			Summary:    summary,
+			Reason:     reason,
 		}, err
 	}
 	defer resp.Body.Close()
@@ -127,17 +142,17 @@ func CheckSpeed(ctx context.Context, httpClient *http.Client, bytesCounter *uint
 	if resp.StatusCode == http.StatusTooManyRequests {
 		lat := time.Since(start).Milliseconds()
 		return domain.PlatformCapability{
-			Verdict:    domain.VerdictUnknown,
+			Verdict:    domain.VerdictRestricted,
 			LatencyMS:  &lat,
 			ObservedAt: &now,
 			Summary:    "HTTP 429 target_rate_limited",
 			Reason:     "target_rate_limited",
 		}, nil
 	}
-	if resp.StatusCode == http.StatusForbidden {
+	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnavailableForLegalReasons {
 		lat := time.Since(start).Milliseconds()
 		return domain.PlatformCapability{
-			Verdict:    domain.VerdictUnknown,
+			Verdict:    domain.VerdictRestricted,
 			LatencyMS:  &lat,
 			ObservedAt: &now,
 			Summary:    "HTTP 403 target_forbidden",
@@ -147,7 +162,7 @@ func CheckSpeed(ctx context.Context, httpClient *http.Client, bytesCounter *uint
 	if resp.StatusCode != http.StatusOK {
 		lat := time.Since(start).Milliseconds()
 		return domain.PlatformCapability{
-			Verdict:    domain.VerdictUnknown,
+			Verdict:    domain.VerdictError,
 			LatencyMS:  &lat,
 			ObservedAt: &now,
 			Summary:    fmt.Sprintf("HTTP %d", resp.StatusCode),
@@ -166,6 +181,7 @@ func CheckSpeed(ctx context.Context, httpClient *http.Client, bytesCounter *uint
 	discardBuf := make([]byte, 32*1024)
 	var appBytesRead int64
 	var timedOut bool
+	var controlErr error
 	for {
 		n, rErr := limitedReader.Read(discardBuf)
 		if n > 0 {
@@ -192,6 +208,14 @@ func CheckSpeed(ctx context.Context, httpClient *http.Client, bytesCounter *uint
 				break
 			}
 
+			// Check deliberate cancellation or run body budget
+			if errors.Is(rErr, ErrBodyBudget) ||
+				errors.Is(rErr, context.Canceled) ||
+				(ctx != nil && errors.Is(ctx.Err(), context.Canceled)) {
+				controlErr = rErr
+				break
+			}
+
 			// If bytes were read before read error, consider as partial measurement
 			if appBytesRead > 0 {
 				timedOut = true
@@ -200,11 +224,13 @@ func CheckSpeed(ctx context.Context, httpClient *http.Client, bytesCounter *uint
 
 			// Other read errors
 			lat := time.Since(start).Milliseconds()
+			verdict, reason := responseReadFailure(rErr)
 			return domain.PlatformCapability{
-				Verdict:    domain.VerdictError,
+				Verdict:    verdict,
 				LatencyMS:  &lat,
 				ObservedAt: &now,
-				Reason:     "download_read_error",
+				Summary:    "Detection failed",
+				Reason:     reason,
 			}, rErr
 		}
 	}
@@ -222,6 +248,18 @@ func CheckSpeed(ctx context.Context, httpClient *http.Client, bytesCounter *uint
 		actualBytes = appBytesRead
 	}
 
+	if controlErr != nil && actualBytes < 1024 {
+		lat := time.Since(start).Milliseconds()
+		verdict, reason := responseReadFailure(controlErr)
+		return domain.PlatformCapability{
+			Verdict:    verdict,
+			LatencyMS:  &lat,
+			ObservedAt: &now,
+			Summary:    "Skipped",
+			Reason:     reason,
+		}, controlErr
+	}
+
 	if actualBytes < 1024 {
 		lat := time.Since(start).Milliseconds()
 		reason := "contract_drift"
@@ -231,7 +269,7 @@ func CheckSpeed(ctx context.Context, httpClient *http.Client, bytesCounter *uint
 			summary = fmt.Sprintf("read %d bytes below minimum 1024 in %d ms (time limit reached)", actualBytes, duration)
 		}
 		return domain.PlatformCapability{
-			Verdict:    domain.VerdictUnknown,
+			Verdict:    domain.VerdictError,
 			LatencyMS:  &lat,
 			ObservedAt: &now,
 			Summary:    summary,

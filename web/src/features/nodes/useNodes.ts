@@ -166,8 +166,8 @@ export function useNodes() {
         params.search = searchQuery.value.trim()
       }
       if (healthFilter.value && healthFilter.value !== 'all' && healthFilter.value !== 'probing') {
-        if (healthFilter.value === 'unknown') {
-          params.health_status = 'undetermined,untested'
+        if (healthFilter.value === 'unknown' || healthFilter.value === 'untested' || healthFilter.value === 'undetermined') {
+          params.health_status = 'unknown'
         } else {
           params.health_status = healthFilter.value
         }

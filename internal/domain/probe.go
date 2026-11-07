@@ -72,15 +72,87 @@ func (r *ProbeRun) TransitionTo(target ProbeRunState) error {
 
 // PlatformCapability represents a fine-grained, evidence-based platform capability observation.
 type PlatformCapability struct {
-	Verdict    ProbeVerdict `json:"verdict"`
-	LatencyMS  *int64       `json:"latency_ms,omitempty"`
-	ObservedAt *time.Time   `json:"observed_at,omitempty"`
-	Summary    string       `json:"summary,omitempty"`
-	Region     string       `json:"region,omitempty"`
-	SubTier    string       `json:"sub_tier,omitempty"`
-	Throughput *float64     `json:"throughput,omitempty"`
-	RiskScore  string       `json:"risk_score,omitempty"`
-	Reason     string       `json:"reason,omitempty"`
+	Verdict       ProbeVerdict `json:"verdict"`
+	LatencyMS     *int64       `json:"latency_ms,omitempty"`
+	ObservedAt    *time.Time   `json:"observed_at,omitempty"`
+	Summary       string       `json:"summary,omitempty"`
+	Region        string       `json:"region,omitempty"`
+	SubTier       string       `json:"sub_tier,omitempty"`
+	Throughput    *float64     `json:"throughput,omitempty"`
+	RiskScore     string       `json:"risk_score,omitempty"`
+	Reason        string       `json:"reason,omitempty"`
+	ExitRegion    string       `json:"exit_region,omitempty"`
+	RegionSource  string       `json:"region_source,omitempty"`
+	EvidenceScope string       `json:"evidence_scope,omitempty"`
+}
+
+// AggregatePlatformVerdicts calculates the aggregated ProbeVerdict and reason string
+// for a collection of platform capabilities according to the frozen contract:
+// empty => skipped/no_platforms_selected
+// any abnormal => abnormal/partial_or_abnormal
+// any available => available/contract_matched (retain any-available selection contract)
+// otherwise:
+// any unknown or stale => unknown/evidence_inconclusive
+// any restricted => restricted/access_restricted
+// any error => error/detection_failed
+// all skipped => skipped/not_executed
+// missing or invalid verdict is unknown, not success.
+func AggregatePlatformVerdicts(platforms map[string]PlatformCapability) (ProbeVerdict, string) {
+	if len(platforms) == 0 {
+		return VerdictSkipped, "no_platforms_selected"
+	}
+
+	var (
+		hasAbnormal       bool
+		hasAvailable      bool
+		hasUnknownOrStale bool
+		hasRestricted     bool
+		hasError          bool
+		skippedCount      int
+	)
+
+	for _, p := range platforms {
+		v := p.Verdict
+		if !v.IsValid() || v == "" {
+			hasUnknownOrStale = true
+			continue
+		}
+
+		switch v {
+		case VerdictAbnormal:
+			hasAbnormal = true
+		case VerdictAvailable:
+			hasAvailable = true
+		case VerdictUnknown, VerdictStale:
+			hasUnknownOrStale = true
+		case VerdictRestricted:
+			hasRestricted = true
+		case VerdictError:
+			hasError = true
+		case VerdictSkipped:
+			skippedCount++
+		}
+	}
+
+	if hasAbnormal {
+		return VerdictAbnormal, "partial_or_abnormal"
+	}
+	if hasAvailable {
+		return VerdictAvailable, "contract_matched"
+	}
+	if hasUnknownOrStale {
+		return VerdictUnknown, "evidence_inconclusive"
+	}
+	if hasRestricted {
+		return VerdictRestricted, "access_restricted"
+	}
+	if hasError {
+		return VerdictError, "detection_failed"
+	}
+	if skippedCount == len(platforms) {
+		return VerdictSkipped, "not_executed"
+	}
+	return VerdictSkipped, "not_executed"
 }
 
 // ProbeAttemptEvidence records a safe, immutable stage attempt. Raw connection

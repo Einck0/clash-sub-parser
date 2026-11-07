@@ -19,6 +19,17 @@ func CheckOpenAI(ctx context.Context, httpClient *http.Client) domain.PlatformCa
 	now := time.Now().UTC()
 	start := time.Now()
 
+	if httpClient == nil {
+		lat := int64(-1)
+		return domain.PlatformCapability{
+			Verdict:    domain.VerdictError,
+			LatencyMS:  &lat,
+			ObservedAt: &now,
+			Reason:     "transport_error",
+			Summary:    "Inconclusive",
+		}
+	}
+
 	cookiesOK, cookiesRestricted, cookiesErr := checkCookies(ctx, httpClient)
 	clientOK, clientRestricted, clientErr := checkClient(ctx, httpClient)
 	latency := time.Since(start).Milliseconds()
@@ -47,8 +58,13 @@ func CheckOpenAI(ctx context.Context, httpClient *http.Client) domain.PlatformCa
 	} else {
 		// Both failed
 		if cookiesErr != nil && clientErr != nil {
-			cap.Verdict = domain.VerdictError
-			cap.Reason = "network_error"
+			errToClassify := cookiesErr
+			if clientErr != nil {
+				errToClassify = clientErr
+			}
+			verdict, reason := responseReadFailure(errToClassify)
+			cap.Verdict = verdict
+			cap.Reason = reason
 			cap.Summary = "Error"
 			return cap
 		}
@@ -58,8 +74,8 @@ func CheckOpenAI(ctx context.Context, httpClient *http.Client) domain.PlatformCa
 			cap.Summary = "Banned"
 			cap.Reason = "access_restricted"
 		} else {
-			cap.Verdict = domain.VerdictUnknown
-			cap.Summary = "Inconclusive"
+			cap.Verdict = domain.VerdictError
+			cap.Summary = "Detection failed"
 			cap.Reason = "contract_drift"
 		}
 		return cap
@@ -69,6 +85,8 @@ func CheckOpenAI(ctx context.Context, httpClient *http.Client) domain.PlatformCa
 	region := getOpenAIRegion(ctx, httpClient)
 	if region != "" {
 		cap.Region = region
+		cap.RegionSource = "cdn_trace"
+		cap.EvidenceScope = "cdn_trace"
 		cap.Summary = cap.Summary + " (" + region + ")"
 	}
 
@@ -114,7 +132,7 @@ func checkCookies(ctx context.Context, httpClient *http.Client) (bool, bool, err
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnavailableForLegalReasons {
+	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnavailableForLegalReasons || resp.StatusCode == http.StatusTooManyRequests {
 		return false, true, nil
 	}
 	if resp.StatusCode != http.StatusOK {
@@ -160,7 +178,7 @@ func checkClient(ctx context.Context, httpClient *http.Client) (bool, bool, erro
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnavailableForLegalReasons {
+	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnavailableForLegalReasons || resp.StatusCode == http.StatusTooManyRequests {
 		return false, true, nil
 	}
 	if resp.StatusCode != http.StatusOK {

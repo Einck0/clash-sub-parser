@@ -9,6 +9,8 @@ import {
   probeVerdictTone,
   probeBatchStateTone,
   formatLatency,
+  formatAttemptCategory,
+  formatAttemptReason,
   generateIdempotencyKey,
   parseRedactedSummary,
   intervalLabel,
@@ -40,15 +42,19 @@ describe('probes types and helpers', () => {
 
   it('maps probe verdicts and kinds to accurate badge tones and Chinese labels', () => {
     expect(probeVerdictTone('available')).toBe('success')
+    expect(probeVerdictTone('abnormal')).toBe('warning')
     expect(probeVerdictTone('restricted')).toBe('warning')
     expect(probeVerdictTone('unknown')).toBe('info')
     expect(probeVerdictTone('error')).toBe('error')
+    expect(probeVerdictTone('skipped')).toBe('info')
     expect(probeVerdictTone('stale')).toBe('neutral')
 
     expect(probeVerdictLabel('available')).toBe('可用')
+    expect(probeVerdictLabel('abnormal')).toBe('异常')
     expect(probeVerdictLabel('restricted')).toBe('降级/受限')
     expect(probeVerdictLabel('unknown')).toBe('未知')
-    expect(probeVerdictLabel('error')).toBe('不可达')
+    expect(probeVerdictLabel('error')).toBe('检测失败')
+    expect(probeVerdictLabel('skipped')).toBe('未执行')
     expect(probeVerdictLabel('stale')).toBe('已过期')
 
     expect(probeKindLabel('baseline')).toBe('基础连通性')
@@ -57,6 +63,17 @@ describe('probes types and helpers', () => {
     expect(probeKindLabel('ai')).toBe('AI 服务')
     expect(probeKindLabel('speed')).toBe('带宽测速')
     expect(probeKindLabel('ip_risk')).toBe('IP 风险')
+
+    expect(formatAttemptCategory('control_skip')).toBe('控制跳过')
+    expect(formatAttemptCategory('budget_exceeded')).toBe('超出预算')
+    expect(formatAttemptCategory('policy_rejected')).toBe('策略拒绝')
+    expect(formatAttemptCategory('network_error')).toBe('网络故障')
+    expect(formatAttemptCategory('custom_cat')).toBe('custom_cat')
+
+    expect(formatAttemptReason('contract_matched')).toBe('协议握手与响应校验通过')
+    expect(formatAttemptReason('region_mismatch')).toBe('服务观测地区与出口参考地区不一致（地区异常）')
+    expect(formatAttemptReason('detection_failed')).toBe('探测执行失败')
+    expect(formatAttemptReason('skipped')).toBe('跳过执行')
   })
 
   it('formats latency cleanly and parses machine redacted_summary into human-readable Chinese labels', () => {
@@ -439,24 +456,25 @@ describe('useProbes composable', () => {
     expect(poolStatus.value.queue_nodes_count).toBe(7)
   })
 
-  it('derives pool status locally using 3-state health and zero legacy degraded/undetermined counts', () => {
+  it('derives pool status locally using 3-state health with unknown nodes in undetermined_count and untested_count=0', () => {
     const { poolStatus, probeNodes } = useProbes()
     probeNodes.value = [
       { logicalId: 'n1', active: true, healthStatus: 'healthy', capabilities: { baseline: 'available' } } as any,
       { logicalId: 'n2', active: true, healthStatus: 'degraded' } as any, // legacy degraded maps to healthy
       { logicalId: 'n3', active: true, healthStatus: 'unhealthy' } as any,
-      { logicalId: 'n4', active: true, healthStatus: 'untested' } as any,
+      { logicalId: 'n4', active: true, healthStatus: 'untested' } as any, // unknown health
       { logicalId: 'n5', active: true, probeState: 'probing', healthStatus: 'healthy' } as any,
-      { logicalId: 'n6', active: true, probeState: 'queued', healthStatus: 'untested' } as any,
+      { logicalId: 'n6', active: true, probeState: 'queued', healthStatus: 'untested' } as any, // unknown health
     ]
 
     const status = poolStatus.value
     expect(status.healthy_count).toBe(3) // n1, n2, n5
     expect(status.available_count).toBe(3)
     expect(status.unavailable_count).toBe(1) // n3
-    expect(status.untested_count).toBe(2) // n4, n6
+    expect(status.untested_count).toBe(0) // canonical untested_count stays 0
+    expect(status.undetermined_count).toBe(2) // unknown nodes (n4, n6) count in undetermined_count
     expect(status.degraded_count).toBe(0) // legacy count 0
-    expect(status.undetermined_count).toBe(0) // legacy count 0
+    expect(status.total_count).toBe(6) // 3 + 0 + 1 + 2 + 0 = 6
     expect(status.probing_count).toBe(1) // n5
     expect(status.queued_waiting_count).toBe(1) // n6
   })

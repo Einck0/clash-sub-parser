@@ -253,9 +253,21 @@ describe('Subcheck Platform Capability Matrix & Fixture Tests', () => {
       ).toBe('error')
     })
 
-    it('returns unknown for mixed or empty states', () => {
-      expect(computeGroupVerdict({})).toBe('unknown')
-      expect(computeGroupVerdict(undefined)).toBe('unknown')
+    it('returns skipped for empty states, abnormal if any abnormal, and follows domain precedence', () => {
+      expect(computeGroupVerdict({})).toBe('skipped')
+      expect(computeGroupVerdict(undefined)).toBe('skipped')
+      expect(
+        computeGroupVerdict({
+          netflix: { verdict: 'skipped' },
+          disney: { verdict: 'skipped' },
+        })
+      ).toBe('skipped')
+      expect(
+        computeGroupVerdict({
+          netflix: { verdict: 'abnormal' },
+          disney: { verdict: 'available' },
+        })
+      ).toBe('abnormal')
       expect(
         computeGroupVerdict({
           netflix: { verdict: 'unknown' },
@@ -404,6 +416,46 @@ describe('Subcheck Platform Capability Matrix & Fixture Tests', () => {
       })
       expect(claudeRestricted.label).toBe('Claude 受限 (HK)')
       expect(claudeRestricted.tone).toBe('warning')
+    })
+
+    it('formats Antigravity with entry reachable label, both-country tooltip, and unverified credentials disclaimer', () => {
+      const available = formatPlatformBadge('antigravity', {
+        verdict: 'available',
+        region: 'US',
+      })
+      expect(available.label).toBe('Antigravity 入口可达 (US)')
+      expect(available.tone).toBe('success')
+      expect(available.tooltip).toContain('官网入口可达')
+      expect(available.tooltip).toContain('模型资格未核验')
+
+      const withExitDiff = formatPlatformBadge('antigravity', {
+        verdict: 'available',
+        region: 'US',
+        exit_region: 'JP',
+        region_source: 'cdn_trace',
+        evidence_scope: 'network_entry',
+      })
+      expect(withExitDiff.tooltip).toContain('服务观测地区: US，出口参考地区: JP（地区存在差异，非物理路由绝对证明）')
+      expect(withExitDiff.tooltip).toContain('地区来源: CDN 追踪 (cdn_trace)')
+      expect(withExitDiff.tooltip).toContain('观测范围: 网站入口连通性 (network_entry)')
+
+      const abnormal = formatPlatformBadge('antigravity', {
+        verdict: 'abnormal',
+      })
+      expect(abnormal.label).toBe('Antigravity 异常')
+      expect(abnormal.tone).toBe('warning')
+
+      const skipped = formatPlatformBadge('antigravity', {
+        verdict: 'skipped',
+      })
+      expect(skipped.label).toBe('Antigravity 未执行')
+      expect(skipped.tone).toBe('info')
+
+      const failed = formatPlatformBadge('antigravity', {
+        verdict: 'error',
+      })
+      expect(failed.label).toBe('Antigravity 失败')
+      expect(failed.tone).toBe('error')
     })
 
     it('ensures unknown, error, and stale are never green', () => {

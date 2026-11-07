@@ -1837,11 +1837,11 @@ func TestPoolStatus_BaselineIsolationAndSecurityRejections(t *testing.T) {
 	if pool.UnavailableCount != 5 {
 		t.Fatalf("expected unavailable_count=5 (1 connect_fail + 4 baseline rejection/build errors), got %d", pool.UnavailableCount)
 	}
-	if pool.UndeterminedCount != 0 {
-		t.Fatalf("expected undetermined_count=0, got %d", pool.UndeterminedCount)
+	if pool.UndeterminedCount != 1 {
+		t.Fatalf("expected undetermined_count=1 (only n-nonbase-err without baseline counted as unknown in undetermined_count), got %d", pool.UndeterminedCount)
 	}
-	if pool.UntestedCount != 1 {
-		t.Fatalf("expected untested_count=1 (only n-nonbase-err without baseline), got %d", pool.UntestedCount)
+	if pool.UntestedCount != 0 {
+		t.Fatalf("expected untested_count=0, got %d", pool.UntestedCount)
 	}
 	if !pool.ValidateConservation() {
 		t.Fatalf("pool conservation violated: %+v", pool)

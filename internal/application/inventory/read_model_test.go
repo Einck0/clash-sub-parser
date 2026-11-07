@@ -423,8 +423,8 @@ func TestInventoryService_ReadModelWithProbeObservationsAndSources(t *testing.T)
 	if vs.LatencyMS != nil {
 		t.Fatalf("expected nodeStale latency_ms=nil (non-baseline does not populate latency), got %v", vs.LatencyMS)
 	}
-	if vs.HealthStatus != "untested" || vs.ProbeMissing || vs.ProbeStale {
-		t.Fatalf("expected nodeStale health=untested missing=false stale=false (persists across natural time), got health=%s missing=%v stale=%v", vs.HealthStatus, vs.ProbeMissing, vs.ProbeStale)
+	if vs.HealthStatus != "unknown" || vs.ProbeMissing || vs.ProbeStale {
+		t.Fatalf("expected nodeStale health=unknown missing=false stale=false (persists across natural time), got health=%s missing=%v stale=%v", vs.HealthStatus, vs.ProbeMissing, vs.ProbeStale)
 	}
 	if vs.Capabilities["ai"].Stale {
 		t.Fatalf("expected nodeStale ai capability stale=false, got %+v", vs.Capabilities["ai"])
@@ -432,7 +432,7 @@ func TestInventoryService_ReadModelWithProbeObservationsAndSources(t *testing.T)
 
 	// Verify nodeMissing
 	vm := byID[nodeMissing]
-	if vm.LatencyMS != nil || vm.LastProbedAt != nil || vm.HealthStatus != "untested" || !vm.ProbeMissing || vm.ProbeStale {
+	if vm.LatencyMS != nil || vm.LastProbedAt != nil || vm.HealthStatus != "unknown" || !vm.ProbeMissing || vm.ProbeStale {
 		t.Fatalf("unexpected nodeMissing view: %+v", vm)
 	}
 
@@ -704,10 +704,10 @@ func TestInventoryService_BaselineEvidenceClassificationAndNonBaselineIsolation(
 		byID[v.LogicalID] = v
 	}
 
-	// Verify non-baseline error does not pollute overall health (must be untested, latency nil)
+	// Verify non-baseline error does not pollute overall health (must be unknown, latency nil)
 	vNonBase := byID["node_non_baseline_err"]
-	if vNonBase.HealthStatus != "untested" || vNonBase.LatencyMS != nil {
-		t.Fatalf("node_non_baseline_err: expected health=untested latency=nil, got health=%s latency=%v", vNonBase.HealthStatus, vNonBase.LatencyMS)
+	if vNonBase.HealthStatus != "unknown" || vNonBase.LatencyMS != nil {
+		t.Fatalf("node_non_baseline_err: expected health=unknown latency=nil, got health=%s latency=%v", vNonBase.HealthStatus, vNonBase.LatencyMS)
 	}
 
 	// Verify security rejections and build failures all evaluate to unhealthy

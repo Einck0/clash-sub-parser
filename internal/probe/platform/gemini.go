@@ -52,78 +52,78 @@ func CheckGemini(ctx context.Context, httpClient *http.Client) domain.PlatformCa
 		return domain.PlatformCapability{Verdict: verdict, LatencyMS: &latency, ObservedAt: &now, Reason: reason, Summary: summary}
 	}
 	if httpClient == nil {
-		return result(domain.VerdictUnknown, "transport_error", "Inconclusive")
+		return result(domain.VerdictError, "transport_error", "Inconclusive")
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://gemini.google.com/", nil)
 	if err != nil {
-		return result(domain.VerdictUnknown, "request_build_failed", "Inconclusive")
+		return result(domain.VerdictError, "request_build_failed", "Inconclusive")
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; CSP probe)")
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		reason := ResponseReason(err)
-		verdict := domain.VerdictError
-		if reason == "cancelled" || reason == "deadline_exceeded" || reason == "budget_not_executed" {
-			verdict = domain.VerdictUnknown
-		}
+		verdict, reason := responseReadFailure(err)
 		return result(verdict, reason, "Inconclusive")
 	}
 	defer resp.Body.Close()
 	if !validFinalOrigin(resp, "gemini.google.com") {
-		return result(domain.VerdictUnknown, "unexpected_redirect", "Inconclusive")
+		return result(domain.VerdictRestricted, "unexpected_redirect", "Access restricted")
 	}
 	if strings.Contains(strings.ToLower(resp.Request.URL.Path), "login") {
-		return result(domain.VerdictUnknown, "unexpected_redirect", "Inconclusive")
+		return result(domain.VerdictRestricted, "unexpected_redirect", "Access restricted")
 	}
 	switch resp.StatusCode {
 	case http.StatusForbidden, http.StatusUnavailableForLegalReasons:
 		return result(domain.VerdictRestricted, "access_restricted", "Access restricted")
 	case http.StatusTooManyRequests:
-		return result(domain.VerdictUnknown, "rate_limited", "Inconclusive")
+		return result(domain.VerdictRestricted, "rate_limited", "Access restricted")
 	case http.StatusOK:
 	default:
-		return result(domain.VerdictUnknown, "unexpected_status", "Inconclusive")
+		return result(domain.VerdictError, "unexpected_status", "Detection failed")
 	}
-	body, truncated, err := readBoundedBody(resp.Body, detectorBodyLimit)
+	body, truncated, err := readBoundedBody(resp.Body, geminiBodyLimit)
 	if err != nil {
 		verdict, reason := responseReadFailure(err)
 		return result(verdict, reason, "Inconclusive")
 	}
 	if truncated {
-		return result(domain.VerdictUnknown, "response_body_truncated", "Inconclusive")
+		return result(domain.VerdictError, "response_body_too_large", "Detection failed")
 	}
 	if hasGoogleAccessGate(body) {
-		return result(domain.VerdictUnknown, "challenge_or_login", "Inconclusive")
+		return result(domain.VerdictRestricted, "challenge_or_login", "Access restricted")
 	}
 	if !strings.Contains(string(body), geminiMarkerEvidence) {
-		return result(domain.VerdictUnknown, "gemini_marker_missing", "Inconclusive")
+		return result(domain.VerdictError, "gemini_marker_missing", "Detection failed")
 	}
 	matches := geminiRe.FindAllSubmatch(body, -1)
 	if len(matches) == 0 {
-		return result(domain.VerdictUnknown, "gemini_marker_missing", "Inconclusive")
+		return result(domain.VerdictError, "gemini_marker_missing", "Detection failed")
 	}
 	codes := make(map[string]bool)
 	for _, match := range matches {
 		code := string(match[1])
 		if alpha3ToAlpha2(code) == "" {
-			return result(domain.VerdictUnknown, "unknown_region_code", "Inconclusive")
+			return result(domain.VerdictError, "unknown_region_code", "Detection failed")
 		}
 		codes[code] = true
 	}
 	if len(codes) != 1 {
-		return result(domain.VerdictUnknown, "conflicting_region_markers", "Inconclusive")
+		return result(domain.VerdictError, "conflicting_region_markers", "Detection failed")
 	}
 	var code string
 	for code = range codes {
 	}
 	region := alpha3ToAlpha2(code)
 	if !geminiSupportedRegion[code] {
-		cap := result(domain.VerdictUnknown, "region_support_unverified", fmt.Sprintf("Gemini region support unverified (%s)", region))
+		cap := result(domain.VerdictAbnormal, "support_unverified", fmt.Sprintf("Gemini region support unverified (%s)", region))
 		cap.Region = region
+		cap.RegionSource = "service"
+		cap.EvidenceScope = "web_region"
 		return cap
 	}
 	cap := result(domain.VerdictAvailable, "gemini_web_reachable", fmt.Sprintf("Gemini web reachable (%s); account eligibility unverified", region))
 	cap.Region = region
+	cap.RegionSource = "service"
+	cap.EvidenceScope = "web_region"
 	cap.SubTier = "web_reachable"
 	return cap
 }

@@ -49,15 +49,15 @@ func TestClassifyNodeHealthAndConservation(t *testing.T) {
 	rev := int64(3)
 	freshness := time.Hour
 
-	// 1. Untested: 0 observations
-	if cat := domain.ClassifyNodeHealth(nil, rev, now, freshness); cat != domain.HealthCategoryUntested {
-		t.Fatalf("expected untested for nil map, got %s", cat)
+	// 1. Unknown: 0 observations
+	if cat := domain.ClassifyNodeHealth(nil, rev, now, freshness); cat != domain.HealthCategoryUnknown {
+		t.Fatalf("expected unknown for nil map, got %s", cat)
 	}
-	if cat := domain.ClassifyNodeHealth(map[domain.ProbeKind]domain.ProbeObservation{}, rev, now, freshness); cat != domain.HealthCategoryUntested {
-		t.Fatalf("expected untested for empty map, got %s", cat)
+	if cat := domain.ClassifyNodeHealth(map[domain.ProbeKind]domain.ProbeObservation{}, rev, now, freshness); cat != domain.HealthCategoryUnknown {
+		t.Fatalf("expected unknown for empty map, got %s", cat)
 	}
 
-	// 2. AI available, no baseline: MUST be undetermined (AI cannot fake healthy!)
+	// 2. AI available, no baseline: MUST be unknown (AI cannot fake healthy!)
 	aiObs := map[domain.ProbeKind]domain.ProbeObservation{
 		domain.ProbeKindAI: {
 			Kind:               domain.ProbeKindAI,
@@ -66,8 +66,8 @@ func TestClassifyNodeHealthAndConservation(t *testing.T) {
 			ConnectionRevision: &rev,
 		},
 	}
-	if cat := domain.ClassifyNodeHealth(aiObs, rev, now, freshness); cat != domain.HealthCategoryUntested {
-		t.Fatalf("expected untested for AI available without baseline, got %s", cat)
+	if cat := domain.ClassifyNodeHealth(aiObs, rev, now, freshness); cat != domain.HealthCategoryUnknown {
+		t.Fatalf("expected unknown for AI available without baseline, got %s", cat)
 	}
 
 	// 3. Healthy: fresh baseline, available, matching revision
@@ -125,7 +125,7 @@ func TestClassifyNodeHealthAndConservation(t *testing.T) {
 		t.Fatalf("expected healthy for old current-revision baseline, got %s", cat)
 	}
 
-	// 6. Future timestamp baseline: undetermined
+	// 6. Future timestamp baseline: unknown
 	futureObs := map[domain.ProbeKind]domain.ProbeObservation{
 		domain.ProbeKindBaseline: {
 			Kind:               domain.ProbeKindBaseline,
@@ -134,11 +134,11 @@ func TestClassifyNodeHealthAndConservation(t *testing.T) {
 			ConnectionRevision: &rev,
 		},
 	}
-	if cat := domain.ClassifyNodeHealth(futureObs, rev, now, freshness); cat != domain.HealthCategoryUntested {
-		t.Fatalf("expected untested for future baseline, got %s", cat)
+	if cat := domain.ClassifyNodeHealth(futureObs, rev, now, freshness); cat != domain.HealthCategoryUnknown {
+		t.Fatalf("expected unknown for future baseline, got %s", cat)
 	}
 
-	// 7. Revision mismatch: undetermined
+	// 7. Revision mismatch: unknown
 	oldRev := rev - 1
 	mismatchObs := map[domain.ProbeKind]domain.ProbeObservation{
 		domain.ProbeKindBaseline: {
@@ -148,8 +148,8 @@ func TestClassifyNodeHealthAndConservation(t *testing.T) {
 			ConnectionRevision: &oldRev,
 		},
 	}
-	if cat := domain.ClassifyNodeHealth(mismatchObs, rev, now, freshness); cat != domain.HealthCategoryUntested {
-		t.Fatalf("expected untested for revision mismatch, got %s", cat)
+	if cat := domain.ClassifyNodeHealth(mismatchObs, rev, now, freshness); cat != domain.HealthCategoryUnknown {
+		t.Fatalf("expected unknown for revision mismatch, got %s", cat)
 	}
 
 	// 8. Transport error: undetermined

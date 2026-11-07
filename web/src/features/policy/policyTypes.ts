@@ -280,9 +280,11 @@ export type ProbeKind = typeof SUPPORTED_PROBE_KINDS[number]
 
 export const SUPPORTED_PROBE_VERDICTS = [
   'available',
+  'abnormal',
   'restricted',
   'unknown',
   'error',
+  'skipped',
   'stale',
 ] as const
 
@@ -291,7 +293,7 @@ export type ProbeVerdict = typeof SUPPORTED_PROBE_VERDICTS[number]
 export const SUPPORTED_HEALTH_STATUSES = [
   'healthy',
   'unhealthy',
-  'untested',
+  'unknown',
 ] as const
 export type HealthStatus = typeof SUPPORTED_HEALTH_STATUSES[number]
 
@@ -491,6 +493,10 @@ export function validateConditionInput(cond: Partial<FilterCondition>): string |
       }
       if (!cond.value || !cond.value.trim()) {
         return '判定结果值不能为空'
+      }
+      const normProbeVerdict = cond.value.trim().toLowerCase()
+      if (!(SUPPORTED_PROBE_VERDICTS as readonly string[]).includes(normProbeVerdict)) {
+        return `不支持的探针判定结果"${cond.value.trim()}"（有效结果：${SUPPORTED_PROBE_VERDICTS.join(', ')}）`
       }
       if (cond.freshness_seconds !== undefined && (cond.freshness_seconds < 1 || cond.freshness_seconds > 604800)) {
         return '有效期必须在 1 秒到 604800 秒（7 天）之间'

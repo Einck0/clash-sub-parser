@@ -418,3 +418,47 @@ func TestLiveSubscriptionClientEndpoint_ContextCancellation(t *testing.T) {
 	// Should not panic, should return cleanly
 	router.ServeHTTP(rec, req)
 }
+
+func TestLiveSubscriptionClientEndpoint_PrimarySubscriptionFallback(t *testing.T) {
+	router, db, _, _ := setupLiveSubTestRouter(t)
+
+	link, rawToken := seedFullLiveSubscriptionData(t, db, domain.TargetMihomo)
+	basePath := "/subscribe/v1/" + link.ID + "?token=" + rawToken
+	ctx := context.Background()
+
+	// 1. Mark subscription as primary
+	_, err := db.ExecContext(ctx, `UPDATE subscriptions SET is_primary = 1 WHERE id = 'sub-client-1';`)
+	if err != nil {
+		t.Fatalf("failed to update primary subscription: %v", err)
+	}
+
+	// 2. Set global filter that excludes all nodes
+	_, err = db.ExecContext(ctx, `
+		UPDATE global_node_filters
+		SET filter_spec = '{"conditions":[{"field":"display_name","op":"contains","value":"NONEXISTENT"}]}'
+		WHERE id = 1;
+	`)
+	if err != nil {
+		t.Fatalf("failed to set global filter: %v", err)
+	}
+
+	// 3. Request should succeed with fallback (HTTP 200) and contain '主订阅兜底'
+	rec := doRequest(router, http.MethodGet, basePath, "", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on primary fallback, got %d body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "主订阅兜底") {
+		t.Errorf("expected Mihomo fallback body to contain '主订阅兜底', got: %s", rec.Body.String())
+	}
+
+	// 4. Disable primary subscription -> must fail with HTTP 422
+	_, err = db.ExecContext(ctx, `UPDATE subscriptions SET enabled = 0 WHERE id = 'sub-client-1';`)
+	if err != nil {
+		t.Fatalf("failed to disable primary subscription: %v", err)
+	}
+
+	recDisabled := doRequest(router, http.MethodGet, basePath, "", "")
+	if recDisabled.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 Unprocessable Entity when primary subscription disabled, got %d body: %s", recDisabled.Code, recDisabled.Body.String())
+	}
+}

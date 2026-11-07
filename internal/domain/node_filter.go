@@ -159,7 +159,7 @@ type FilterCondition struct {
 // Validate checks that the filter condition has valid fields, operators, values, and bounds.
 func validPlatformForKind(kind ProbeKind, platform string) bool {
 	platforms := map[ProbeKind]map[string]bool{
-		ProbeKindAI: {"openai": true, "claude": true, "gemini": true},
+		ProbeKindAI:        {"openai": true, "claude": true, "gemini": true},
 		ProbeKindStreaming: {"netflix": true, "disney": true, "youtube": true},
 	}
 	return platforms[kind][strings.ToLower(strings.TrimSpace(platform))]
@@ -250,8 +250,8 @@ func (c FilterCondition) Validate() error {
 		if c.Op != FilterOpEquals && c.Op != FilterOpNotEquals {
 			return NewValidationError("invalid_filter_op", "health_status only supports equals/not_equals")
 		}
-		if val != string(HealthCategoryHealthy) && val != string(HealthCategoryUnhealthy) && val != string(HealthCategoryUntested) {
-			return NewValidationError("invalid_filter_value", "health_status must be healthy, unhealthy, or untested")
+		if val != string(HealthCategoryHealthy) && val != string(HealthCategoryUnhealthy) && val != string(HealthCategoryUnknown) {
+			return NewValidationError("invalid_filter_value", "health_status must be healthy, unhealthy, or unknown")
 		}
 		if c.ProbeKind != nil || c.Platform != "" || c.FreshnessSeconds != nil {
 			return NewValidationError("invalid_filter_field", "health_status does not accept probe parameters")

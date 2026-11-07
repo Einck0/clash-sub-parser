@@ -10,6 +10,7 @@ import type { ProbeObservation, ProbeRun } from './probeTypes'
 import {
   formatLatency,
   formatObservationReasonLabel,
+  formatAttemptCategory,
   formatRelativeTime,
   formatPlatformBadge,
   formatSpeed,
@@ -201,7 +202,7 @@ function resolveObservationPlatforms(obs: ProbeObservation): PlatformBadge[] {
   const canonicalOrder =
     obs.kind === 'streaming'
       ? ['netflix', 'youtube', 'disney']
-      : ['openai', 'claude', 'gemini']
+      : ['openai', 'claude', 'gemini', 'antigravity']
   const allKeys = Object.keys(platforms)
   const sortedKeys = [
     ...canonicalOrder.filter((k) => allKeys.includes(k)),
@@ -451,6 +452,21 @@ function resolveObservationPlatforms(obs: ProbeObservation): PlatformBadge[] {
                 <span class="badge badge-sm badge-outline font-mono">
                   🛡️ 风险评分：{{ obs.risk_score }}
                 </span>
+              </div>
+
+              <!-- Attempt details breakdown if attempt evidence present -->
+              <div
+                v-if="obs.attempt"
+                data-testid="observation-attempt-box"
+                class="mt-2.5 p-2 rounded-lg bg-base-100/80 border border-base-300 text-xs space-y-1 font-mono"
+              >
+                <div class="flex items-center justify-between text-[11px]">
+                  <span class="opacity-75">执行状态：{{ obs.attempt.executed ? '已执行出站' : '未执行/跳过' }}</span>
+                  <span v-if="obs.attempt.category" class="badge badge-xs badge-ghost">{{ formatAttemptCategory(obs.attempt.category) }}</span>
+                </div>
+                <div v-if="obs.attempt.reason" class="text-[11px] text-base-content/80">
+                  原因: {{ formatObservationReasonLabel(obs.attempt.reason) }}
+                </div>
               </div>
             </div>
             <StatusBadge

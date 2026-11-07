@@ -48,15 +48,15 @@ func TestChallengeAndLoginAreRestricted(t *testing.T) {
 	}
 }
 
-func TestContractDriftIsUnknown(t *testing.T) {
+func TestContractDriftIsError(t *testing.T) {
 	profile := profiles.Streaming()
 	got := profile.Evaluate(profiles.Result{
 		StatusCode:      200,
 		ContractMatched: true,
 		ContractVersion: "streaming-v0",
 	})
-	if got.Verdict != domain.VerdictUnknown {
-		t.Fatalf("drift verdict = %s, want unknown", got.Verdict)
+	if got.Verdict != domain.VerdictError || got.Reason != "contract_drift" {
+		t.Fatalf("drift verdict = %s, want error", got.Verdict)
 	}
 }
 
@@ -101,7 +101,7 @@ func TestIPRiskProfileIsVersionedAndHasContract(t *testing.T) {
 	}
 }
 
-func TestIPRiskChallengeAndRestrictionProduceUnknown(t *testing.T) {
+func TestIPRiskChallengeAndRestrictionProduceRestricted(t *testing.T) {
 	profile := profiles.IPRisk()
 	for _, body := range []string{
 		"<html>Just a moment... cf-chl-turnstile</html>",
@@ -109,28 +109,28 @@ func TestIPRiskChallengeAndRestrictionProduceUnknown(t *testing.T) {
 		"<html>human verification challenge</html>",
 	} {
 		got := profile.Evaluate(profiles.Result{StatusCode: 200, Body: []byte(body)})
-		if got.Verdict != domain.VerdictUnknown {
-			t.Errorf("IPRisk challenge verdict = %s, want unknown", got.Verdict)
+		if got.Verdict != domain.VerdictRestricted || got.Reason != "access_restricted" {
+			t.Errorf("IPRisk challenge verdict = (%s, %s), want (restricted, access_restricted)", got.Verdict, got.Reason)
 		}
 	}
 
 	for _, code := range []int{401, 403} {
 		got := profile.Evaluate(profiles.Result{StatusCode: code})
-		if got.Verdict != domain.VerdictUnknown {
-			t.Errorf("IPRisk status %d verdict = %s, want unknown", code, got.Verdict)
+		if got.Verdict != domain.VerdictRestricted || got.Reason != "access_restricted" {
+			t.Errorf("IPRisk status %d verdict = (%s, %s), want (restricted, access_restricted)", code, got.Verdict, got.Reason)
 		}
 	}
 }
 
-func TestIPRiskContractDriftProducesUnknown(t *testing.T) {
+func TestIPRiskContractDriftProducesError(t *testing.T) {
 	profile := profiles.IPRisk()
 	got := profile.Evaluate(profiles.Result{
 		StatusCode:      200,
 		ContractMatched: true,
 		ContractVersion: "ip-risk-v0",
 	})
-	if got.Verdict != domain.VerdictUnknown {
-		t.Fatalf("IPRisk drift verdict = %s, want unknown", got.Verdict)
+	if got.Verdict != domain.VerdictError || got.Reason != "contract_drift" {
+		t.Fatalf("IPRisk drift verdict = %s, want error", got.Verdict)
 	}
 }
 
@@ -153,7 +153,7 @@ func TestIPRiskTimeoutAndTransportErrorProduceError(t *testing.T) {
 	}
 }
 
-func TestIPRiskMissingExitIdentityProducesUnknown(t *testing.T) {
+func TestIPRiskMissingExitIdentityProducesError(t *testing.T) {
 	profile := profiles.IPRisk()
 	got := profile.Evaluate(profiles.Result{
 		StatusCode:          200,
@@ -161,12 +161,12 @@ func TestIPRiskMissingExitIdentityProducesUnknown(t *testing.T) {
 		ContractVersion:     profile.Contract,
 		ExitIdentityMissing: true,
 	})
-	if got.Verdict != domain.VerdictUnknown {
-		t.Fatalf("IPRisk missing exit identity verdict = %s, want unknown", got.Verdict)
+	if got.Verdict != domain.VerdictError || got.Reason != "missing_exit_identity" {
+		t.Fatalf("IPRisk missing exit identity verdict = %s, want error", got.Verdict)
 	}
 }
 
-func TestIPRiskExitIdentityWithoutRiskProviderProducesUnknown(t *testing.T) {
+func TestIPRiskExitIdentityWithoutRiskProviderProducesError(t *testing.T) {
 	profile := profiles.IPRisk()
 	for _, tc := range []struct {
 		name            string
@@ -191,8 +191,8 @@ func TestIPRiskExitIdentityWithoutRiskProviderProducesUnknown(t *testing.T) {
 				ContractMatched: tc.contractMatched,
 				ContractVersion: profile.Contract,
 			})
-			if got.Verdict != domain.VerdictUnknown || got.Reason != "contract_drift" {
-				t.Fatalf("IPRisk verdict = %s (reason=%s), want unknown (reason=contract_drift)", got.Verdict, got.Reason)
+			if got.Verdict != domain.VerdictError || got.Reason != "contract_drift" {
+				t.Fatalf("IPRisk verdict = %s (reason=%s), want error (reason=contract_drift)", got.Verdict, got.Reason)
 			}
 		})
 	}
@@ -269,49 +269,49 @@ func TestGeoRequiresValidExitIPAndAlpha2Country(t *testing.T) {
 			name:       "204_empty_rejected",
 			statusCode: 204,
 			body:       "",
-			want:       domain.VerdictUnknown,
+			want:       domain.VerdictError,
 			wantReason: "contract_drift",
 		},
 		{
 			name:       "200_empty_rejected",
 			statusCode: 200,
 			body:       "",
-			want:       domain.VerdictUnknown,
+			want:       domain.VerdictError,
 			wantReason: "contract_drift",
 		},
 		{
 			name:       "200_ok_text_rejected",
 			statusCode: 200,
 			body:       "OK",
-			want:       domain.VerdictUnknown,
+			want:       domain.VerdictError,
 			wantReason: "contract_drift",
 		},
 		{
 			name:       "missing_ip_rejected",
 			statusCode: 200,
 			body:       `{"country_code":"US"}`,
-			want:       domain.VerdictUnknown,
+			want:       domain.VerdictError,
 			wantReason: "contract_drift",
 		},
 		{
 			name:       "invalid_ip_rejected",
 			statusCode: 200,
 			body:       `{"ip":"999.999.999.999","country_code":"US"}`,
-			want:       domain.VerdictUnknown,
+			want:       domain.VerdictError,
 			wantReason: "contract_drift",
 		},
 		{
 			name:       "invalid_country_code_length_rejected",
 			statusCode: 200,
 			body:       `{"ip":"203.0.113.10","country_code":"USA"}`,
-			want:       domain.VerdictUnknown,
+			want:       domain.VerdictError,
 			wantReason: "contract_drift",
 		},
 		{
 			name:       "non_alpha_country_code_rejected",
 			statusCode: 200,
 			body:       `{"ip":"203.0.113.10","country_code":"12"}`,
-			want:       domain.VerdictUnknown,
+			want:       domain.VerdictError,
 			wantReason: "contract_drift",
 		},
 	} {
@@ -349,8 +349,8 @@ func TestStreamingAndAINeverProduceAvailableWithoutVerifiedCapabilityContract(t 
 						ContractMatched: true,
 						ContractVersion: prof.Contract,
 					})
-					if got.Verdict != domain.VerdictUnknown || got.Reason != "contract_drift" {
-						t.Fatalf("%s status %d body %q = (%s, %s), want (unknown, contract_drift)", prof.Kind, status, body, got.Verdict, got.Reason)
+					if got.Verdict != domain.VerdictError || got.Reason != "contract_drift" {
+						t.Fatalf("%s status %d body %q = (%s, %s), want (error, contract_drift)", prof.Kind, status, body, got.Verdict, got.Reason)
 					}
 				}
 			}
@@ -368,10 +368,10 @@ func TestSpeedRejectsTinyPayloadsAndAcceptsValidPayload(t *testing.T) {
 		want       domain.ProbeVerdict
 		wantReason string
 	}{
-		{name: "204_empty", statusCode: 204, bytesRead: 0, want: domain.VerdictUnknown, wantReason: "contract_drift"},
-		{name: "200_empty", statusCode: 200, bytesRead: 0, want: domain.VerdictUnknown, wantReason: "contract_drift"},
-		{name: "200_tiny_2_bytes", statusCode: 200, bytesRead: 2, want: domain.VerdictUnknown, wantReason: "contract_drift"},
-		{name: "200_below_threshold_1023", statusCode: 200, bytesRead: profiles.MinValidSpeedBytes - 1, want: domain.VerdictUnknown, wantReason: "contract_drift"},
+		{name: "204_empty", statusCode: 204, bytesRead: 0, want: domain.VerdictError, wantReason: "contract_drift"},
+		{name: "200_empty", statusCode: 200, bytesRead: 0, want: domain.VerdictError, wantReason: "contract_drift"},
+		{name: "200_tiny_2_bytes", statusCode: 200, bytesRead: 2, want: domain.VerdictError, wantReason: "contract_drift"},
+		{name: "200_below_threshold_1023", statusCode: 200, bytesRead: profiles.MinValidSpeedBytes - 1, want: domain.VerdictError, wantReason: "contract_drift"},
 		{name: "200_exact_threshold_1024", statusCode: 200, bytesRead: profiles.MinValidSpeedBytes, want: domain.VerdictAvailable, wantReason: "contract_matched"},
 		{name: "200_valid_4096", statusCode: 200, bytesRead: 4096, want: domain.VerdictAvailable, wantReason: "contract_matched"},
 		{name: "200_over_request_budget", statusCode: 200, bytesRead: profile.SpeedBudget.MaxBytesPerRequest + 1, want: domain.VerdictError, wantReason: "speed_budget_exceeded"},

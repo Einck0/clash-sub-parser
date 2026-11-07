@@ -9,7 +9,7 @@ import {
   normalizePlatforms,
 } from '../probes/probeTypes'
 
-export type CapabilityStatus = 'available' | 'restricted' | 'unknown' | 'error' | 'stale' | 'missing'
+export type CapabilityStatus = 'available' | 'abnormal' | 'restricted' | 'unknown' | 'error' | 'skipped' | 'stale' | 'missing'
 
 export interface StructuredCapabilityStatus {
   verdict: CapabilityStatus
@@ -22,6 +22,9 @@ export interface StructuredCapabilityStatus {
   throughput?: number
   risk_score?: string
   reason?: string
+  exit_region?: string
+  region_source?: string
+  evidence_scope?: string
   platforms?: Record<string, PlatformCapability>
 }
 
@@ -235,6 +238,9 @@ export function extractCapabilityDetail(
           ? String((raw as any).riskScore)
           : undefined,
       reason: raw.reason,
+      exit_region: raw.exit_region ?? (raw as any).exitRegion,
+      region_source: raw.region_source ?? (raw as any).regionSource,
+      evidence_scope: raw.evidence_scope ?? (raw as any).evidenceScope,
       platforms: normalizePlatforms(raw.platforms),
     }
   }
@@ -580,6 +586,9 @@ export function normalizeNode(node: NodeRecord): NormalizedNode {
             ? String((v as any).riskScore)
             : undefined,
         reason: v.reason,
+        exit_region: v.exit_region ?? (v as any).exitRegion,
+        region_source: v.region_source ?? (v as any).regionSource,
+        evidence_scope: v.evidence_scope ?? (v as any).evidenceScope,
         platforms: normalizePlatforms(v.platforms),
       }
     } else {
@@ -653,9 +662,11 @@ export function normalizeNode(node: NodeRecord): NormalizedNode {
 
 const capabilityLabels: Record<CapabilityStatus, { label: string; tone: ToastTone }> = {
   available: { label: '可用', tone: 'success' },
+  abnormal: { label: '异常', tone: 'warning' },
   restricted: { label: '受限', tone: 'warning' },
   unknown: { label: '未知', tone: 'info' },
-  error: { label: '异常', tone: 'error' },
+  error: { label: '检测失败', tone: 'error' },
+  skipped: { label: '未执行', tone: 'info' },
   stale: { label: '已过期', tone: 'warning' },
   missing: { label: '未探测', tone: 'info' },
 }
@@ -699,7 +710,7 @@ export function resolveNodeProbeState(
 
 export function nodeUnderlyingHealthCategory(
   node: NodeRecord | NormalizedNode
-): 'healthy' | 'unhealthy' | 'untested' {
+): 'healthy' | 'unhealthy' | 'unknown' {
   const health = (node as NormalizedNode).healthStatus ?? (node as NodeRecord).health_status
   if (health === 'healthy' || health === 'degraded' || (health as string) === 'restricted') return 'healthy'
   if (health === 'unhealthy') return 'unhealthy'
@@ -722,8 +733,8 @@ export function nodeUnderlyingHealthCategory(
 
   // Node has observations (e.g. AI, streaming, geo), but NO baseline observation!
   // CRITICAL: NEVER fall back AI.available or auxiliary capability to healthy!
-  // Stale or auxiliary-only observations classify node health as untested.
-  return 'untested'
+  // Missing or invalid current baseline classifies canonical node health as unknown.
+  return 'unknown'
 }
 
 export function nodeHealthDiagnostic(node: NodeRecord | NormalizedNode): NodeHealthDiagnostic | null {
@@ -811,6 +822,22 @@ export function nodeHealthDiagnostic(node: NodeRecord | NormalizedNode): NodeHea
       isBlockedByPolicyOrConfig: false,
     }
   }
+  if (reason === 'region_mismatch') {
+    return {
+      code: 'region_mismatch',
+      shortLabel: '地区异常',
+      detail: '服务观测地区与出口参考地区不一致（非物理路由绝对证明）',
+      isBlockedByPolicyOrConfig: false,
+    }
+  }
+  if (reason === 'not_executed' || baseDetail?.verdict === 'skipped') {
+    return {
+      code: reason || 'skipped',
+      shortLabel: '未执行',
+      detail: '探测跳过或未执行出站检测，整体状态保持未知',
+      isBlockedByPolicyOrConfig: false,
+    }
+  }
   if (category === 'unhealthy') {
     return {
       code: reason || 'node_connect_failed',
@@ -846,7 +873,7 @@ export function nodeHealthBadge(
   if (category === 'healthy') return { label: '正常', tone: 'success' }
   if (category === 'unhealthy') return { label: '异常', tone: 'error' }
 
-  return { label: '未测试', tone: 'info' }
+  return { label: '未知', tone: 'info' }
 }
 
 export function nodeRiskBadge(node: NodeRecord | NormalizedNode): { label: string; tone: ToastTone } {
@@ -884,6 +911,7 @@ export function formatExpandedPlatformLabel(badge: PlatformBadge): string {
     youtube: 'YOUTUBE',
     claude: 'CLAUDE',
     gemini: 'GEMINI',
+    antigravity: 'ANTIGRAVITY',
   }
   const fullPlat = platMap[badge.platform.toLowerCase()] || badge.platform.toUpperCase()
   let expanded = badge.label
@@ -899,6 +927,8 @@ export function formatExpandedPlatformLabel(badge: PlatformBadge): string {
     expanded = expanded.replace(/^Claude\b/i, fullPlat)
   } else if (badge.platform.toLowerCase() === 'gemini') {
     expanded = expanded.replace(/^Gemini\b/i, fullPlat)
+  } else if (badge.platform.toLowerCase() === 'antigravity') {
+    expanded = expanded.replace(/^Antigravity\b/i, fullPlat)
   } else if (!expanded.toUpperCase().includes(fullPlat)) {
     expanded = `${fullPlat}: ${expanded}`
   }
@@ -916,7 +946,7 @@ export function getNodePlatformBadges(
   const canonicalOrder =
     kind === 'streaming'
       ? ['netflix', 'youtube', 'disney']
-      : ['openai', 'claude', 'gemini']
+      : ['openai', 'claude', 'gemini', 'antigravity']
 
   const allKeys = Object.keys(detail.platforms)
   const sortedKeys = [
@@ -961,8 +991,10 @@ export function resolveNodeLatencyMs(node: NodeRecord | NormalizedNode): number 
     health === 'unknown' ||
     health === 'missing' ||
     health === 'untested' ||
+    health === 'undetermined' ||
     category === 'unhealthy' ||
-    category === 'untested' ||
+    category === 'unknown' ||
+    (category as string) === 'untested' ||
     (category as string) === 'unprobed'
   ) {
     return null

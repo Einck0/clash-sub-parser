@@ -95,8 +95,8 @@ export function useProbes() {
       if (filters.healthStatus && filters.healthStatus !== 'all') {
         if (filters.healthStatus === 'available') {
           params.health_status = 'healthy,degraded'
-        } else if (filters.healthStatus === 'unprobed' || filters.healthStatus === 'untested') {
-          params.health_status = 'untested'
+        } else if (filters.healthStatus === 'unprobed' || filters.healthStatus === 'untested' || filters.healthStatus === 'unknown') {
+          params.health_status = 'unknown'
         } else if (['healthy', 'degraded', 'unhealthy', 'undetermined'].includes(filters.healthStatus)) {
           params.health_status = filters.healthStatus
         }
@@ -203,7 +203,7 @@ export function useProbes() {
     const queuedSet = new Set<string>(queuedNodeIds.value)
     let healthy = 0
     let unhealthy = 0
-    let untested = 0
+    let unknown = 0
 
     for (const node of nodes) {
       if (node.probeState === 'probing' || node.healthStatus === 'probing') {
@@ -214,7 +214,7 @@ export function useProbes() {
       const cat = nodeUnderlyingHealthCategory(node)
       if (cat === 'healthy') healthy += 1
       else if (cat === 'unhealthy') unhealthy += 1
-      else untested += 1
+      else unknown += 1
     }
 
     for (const id of probingSet) {
@@ -230,8 +230,8 @@ export function useProbes() {
       queue_nodes_count: probingCount + queuedWaitingCount,
       probing_count: probingCount,
       queued_waiting_count: queuedWaitingCount,
-      untested_count: untested,
-      undetermined_count: 0,
+      untested_count: 0,
+      undetermined_count: unknown,
       total_count: candidateTotal,
       inventory_total: total,
       candidate_total: candidateTotal,

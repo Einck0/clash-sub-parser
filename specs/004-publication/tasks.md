@@ -55,3 +55,8 @@
   - 跟踪 GitHub Actions 构建不可变镜像；
   - 生产 SQLite 数据库一致性热备；
   - 平滑更新生产 Compose 并现场验证 `https://sub.einck.top`。
+
+
+## Current continuation — 2026-11-07 run175745
+
+See [current continuation contract](../003-probe/continuation-175745.md) for latest precedence: untested node health is unknown, prior probe repair and official/prior-art research retained, and exhausted-rule primary-subscription fallback with explicit safety exclusions. Implementation and same-SHA cloud/review remain unverified until recorded evidence; old checked tasks do not certify this run. No production deployment.

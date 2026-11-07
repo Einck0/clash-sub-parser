@@ -337,7 +337,7 @@ func TestNodeRepository_ListAll_AndHealthPredicatesConservation(t *testing.T) {
 		})
 	}
 
-	// Remaining active nodes (035 .. 249) = 215 nodes have 0 observations -> untested!
+	// Remaining active nodes (035 .. 249) = 215 nodes have 0 observations -> unknown.
 
 	queryHealth := func(statuses ...string) int {
 		t.Helper()
@@ -364,7 +364,7 @@ func TestNodeRepository_ListAll_AndHealthPredicatesConservation(t *testing.T) {
 	degradedCount := queryHealth("degraded")
 	unhealthyCount := queryHealth("unhealthy")
 	undeterminedCount := queryHealth("undetermined")
-	untestedCount := queryHealth("untested")
+	unknownCount := queryHealth("unknown")
 
 	if healthyCount != 18 {
 		t.Fatalf("expected healthy=18, got %d", healthyCount)
@@ -378,15 +378,15 @@ func TestNodeRepository_ListAll_AndHealthPredicatesConservation(t *testing.T) {
 	if undeterminedCount != 0 {
 		t.Fatalf("expected undetermined=0, got %d", undeterminedCount)
 	}
-	if untestedCount != 224 {
-		t.Fatalf("expected untested=224, got %d", untestedCount)
+	if unknownCount != 224 {
+		t.Fatalf("expected unknown=224, got %d", unknownCount)
 	}
 
-	// Conservation check: sum of all 5 disjoint categories MUST equal total active nodes (250)
-	sum := healthyCount + degradedCount + unhealthyCount + undeterminedCount + untestedCount
+	// Conservation check: sum of all disjoint categories MUST equal total active nodes (250)
+	sum := healthyCount + degradedCount + unhealthyCount + undeterminedCount + unknownCount
 	if sum != totalActive {
-		t.Fatalf("conservation violated! healthy(%d) + degraded(%d) + unhealthy(%d) + undetermined(%d) + untested(%d) = %d != %d",
-			healthyCount, degradedCount, unhealthyCount, undeterminedCount, untestedCount, sum, totalActive)
+		t.Fatalf("conservation violated! healthy(%d) + degraded(%d) + unhealthy(%d) + undetermined(%d) + unknown(%d) = %d != %d",
+			healthyCount, degradedCount, unhealthyCount, undeterminedCount, unknownCount, sum, totalActive)
 	}
 
 	// Multi-value check: healthy + degraded = 18
@@ -395,9 +395,9 @@ func TestNodeRepository_ListAll_AndHealthPredicatesConservation(t *testing.T) {
 		t.Fatalf("expected multi healthy+degraded=18, got %d", multiCount)
 	}
 
-	// Multi-value check: undetermined + untested = 224
-	multiUndetUntested := queryHealth("undetermined", "untested")
-	if multiUndetUntested != 224 {
-		t.Fatalf("expected multi undetermined+untested=224, got %d", multiUndetUntested)
+	// Multi-value check: undetermined + unknown = 224
+	multiUndetUnknown := queryHealth("undetermined", "unknown")
+	if multiUndetUnknown != 224 {
+		t.Fatalf("expected multi undetermined+unknown=224, got %d", multiUndetUnknown)
 	}
 }

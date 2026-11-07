@@ -30,7 +30,15 @@
 - **历史需求追溯**: 详见 `docs/specification/historical-requirement-register.md`；
 - **测试证据原则**: 本迁移计划不虚构新执行的测试，所有历史测试退出码与证据均标明出处与时效性。
 
-
 ## 2026-11-06 implementation amendment
 
 [Probe optimization contract](probe-optimization-20261106.md) freezes module boundaries, current baseline-v2 precedence, interfaces, failure handling, concurrency bounds, Antigravity evidence limitations, cloud validation and isolation responsibilities. Execution/queue and platform modules implement in parallel with disjoint write sets; execution module owns runner integration. Existing platform dictionary carries new result without new schema. No setup-plan regeneration is needed or authorized for this existing living feature.
+
+## 2026-11-07 outcome repair amendment
+
+[Probe outcome repair contract](probe-state-20261107.md) supersedes earlier unknown/Antigravity clauses for new observations. Master freezes `abnormal`/`skipped`, single Go aggregate helper, optional evidence scope/source/exit-region fields, ordered selected geo phase, detector complete bounded Gemini2MiB read, honest anonymous Antigravity network-entry availability, UI warnings/filter roundtrip. Domain/execution, platform, and read/UI write sets are disjoint and launch concurrently against this contract; master owns cross-module coordination and dev commit/index. Existing baseline health/publish eligibility remains unchanged. Same-SHA cloud and isolated image acceptance precede independent review and applicable UI critic; no production deployment. Existing specs retained without destructive setup scripts.
+
+
+## Current continuation — 2026-11-07 run175745
+
+See [current continuation contract](continuation-175745.md) for latest precedence: untested node health is unknown, prior probe repair and official/prior-art research retained, and exhausted-rule primary-subscription fallback with explicit safety exclusions. Implementation and same-SHA cloud/review remain unverified until recorded evidence; old checked tasks do not certify this run. No production deployment.

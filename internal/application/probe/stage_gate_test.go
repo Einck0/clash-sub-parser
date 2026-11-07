@@ -154,8 +154,8 @@ func TestStageGateSpeedExplicitOptInExecutesAndEnforcesBudget(t *testing.T) {
 				if err != nil || len(got) != 1 {
 					t.Fatalf("speed observation missing: %#v, err=%v", got, err)
 				}
-				if got[0].Verdict != domain.VerdictUnknown || !strings.Contains(got[0].RedactedSummary, "reason=contract_drift") {
-					t.Fatalf("expected speed tiny payload verdict=unknown reason=contract_drift, got %#v", got[0])
+				if got[0].Verdict != domain.VerdictError || !strings.Contains(got[0].RedactedSummary, "reason=contract_drift") {
+					t.Fatalf("expected speed tiny payload verdict=error reason=contract_drift, got %#v", got[0])
 				}
 			})
 		}

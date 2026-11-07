@@ -5,6 +5,7 @@ import {
   SUPPORTED_PROTOCOLS,
   SUPPORTED_PROBE_KINDS,
   SUPPORTED_PROBE_VERDICTS,
+  SUPPORTED_HEALTH_STATUSES,
   SUPPORTED_PLATFORM_VERDICTS,
   SUPPORTED_AI_PLATFORMS,
   SUPPORTED_STREAMING_PLATFORMS,
@@ -365,9 +366,7 @@ function opLabel(op: FilterOp): string {
             :disabled="readOnly"
             @change="emitConditions"
           >
-            <option value="healthy">healthy</option>
-            <option value="unhealthy">unhealthy</option>
-            <option value="untested">untested</option>
+            <option v-for="h in SUPPORTED_HEALTH_STATUSES" :key="h" :value="h">{{ h }}</option>
           </select>
         </label>
 

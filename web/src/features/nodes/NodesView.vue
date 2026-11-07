@@ -310,7 +310,7 @@ const healthCounts = computed(() => {
   let probing = 0
   let healthy = 0
   let unhealthy = 0
-  let untested = 0
+  let unknown = 0
 
   for (const node of items.value) {
     const live = getNodeProbeState(node)
@@ -320,7 +320,7 @@ const healthCounts = computed(() => {
     const cat = nodeUnderlyingHealthCategory(node)
     if (cat === 'healthy') healthy += 1
     else if (cat === 'unhealthy') unhealthy += 1
-    else untested += 1
+    else unknown += 1
   }
 
   return {
@@ -328,7 +328,8 @@ const healthCounts = computed(() => {
     probing,
     healthy,
     unhealthy,
-    untested,
+    unknown,
+    untested: unknown,
   }
 })
 
@@ -343,8 +344,8 @@ const filteredItems = computed(() => {
     const cat = nodeUnderlyingHealthCategory(node)
     if (filter === 'healthy') return cat === 'healthy'
     if (filter === 'unhealthy') return cat === 'unhealthy'
-    if (filter === 'untested' || filter === 'unknown' || filter === 'undetermined')
-      return cat === 'untested'
+    if (filter === 'unknown' || filter === 'untested' || filter === 'undetermined')
+      return cat === 'unknown'
     if (filter === 'degraded') return cat === 'healthy'
     return true
   })

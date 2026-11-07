@@ -62,8 +62,17 @@ func TestCheckAlive(t *testing.T) {
 		return &http.Response{StatusCode: http.StatusInternalServerError, Body: io.NopCloser(bytes.NewReader(nil))}, nil
 	})
 	ok, res = platform.CheckAlive(ctx, client500, "")
-	if ok || res.Verdict != domain.VerdictRestricted {
-		t.Fatalf("expected restricted for 500, got ok=%v verdict=%v", ok, res.Verdict)
+	if ok || res.Verdict != domain.VerdictError || res.Reason != "unexpected_status" {
+		t.Fatalf("expected error/unexpected_status for 500, got ok=%v verdict=%v reason=%v", ok, res.Verdict, res.Reason)
+	}
+
+	// 403 access restricted
+	client403 := mockClient(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusForbidden, Body: io.NopCloser(bytes.NewReader(nil))}, nil
+	})
+	ok, res = platform.CheckAlive(ctx, client403, "")
+	if ok || res.Verdict != domain.VerdictRestricted || res.Reason != "access_restricted" {
+		t.Fatalf("expected restricted/access_restricted for 403, got ok=%v verdict=%v reason=%v", ok, res.Verdict, res.Reason)
 	}
 }
 
@@ -247,12 +256,12 @@ func TestCheckNetflix(t *testing.T) {
 		t.Fatalf("expected network_error on all connection refused, got: %+v", cap)
 	}
 
-	// Scenario 8: Status mismatch -> VerdictUnknown / status_mismatch
+	// Scenario 8: Status mismatch -> VerdictError / status_mismatch
 	clientMismatch := mockClient(func(req *http.Request) (*http.Response, error) {
 		return jsonResponse(404, "")
 	})
 	cap = platform.CheckNetflix(ctx, clientMismatch)
-	if cap.Verdict != domain.VerdictUnknown || cap.Reason != "status_mismatch" {
+	if cap.Verdict != domain.VerdictError || cap.Reason != "status_mismatch" {
 		t.Fatalf("expected status_mismatch on 404s, got: %+v", cap)
 	}
 }
@@ -376,15 +385,48 @@ func TestCheckGemini(t *testing.T) {
 		t.Fatalf("expected web reachable (US), got: %+v", cap)
 	}
 
-	// An unlisted country is not inferred unsupported.
+	// Mainland China (Workspace-only) -> abnormal / support_unverified (CN)
 	clientCHN := mockClient(func(req *http.Request) (*http.Response, error) {
 		resp, err := htmlResponse(200, `[null,2,1,200,"CHN"]`)
 		resp.Request = req
 		return resp, err
 	})
 	cap = platform.CheckGemini(ctx, clientCHN)
-	if cap.Verdict != domain.VerdictUnknown || cap.Reason != "region_support_unverified" {
+	if cap.Verdict != domain.VerdictAbnormal || cap.Reason != "support_unverified" || cap.Region != "CN" {
 		t.Fatalf("expected support to remain unverified for CHN, got: %+v", cap)
+	}
+
+	// Russia (not in supported table) -> abnormal / support_unverified (RU)
+	clientRUS := mockClient(func(req *http.Request) (*http.Response, error) {
+		resp, err := htmlResponse(200, `[null,2,1,200,"RUS"]`)
+		resp.Request = req
+		return resp, err
+	})
+	cap = platform.CheckGemini(ctx, clientRUS)
+	if cap.Verdict != domain.VerdictAbnormal || cap.Reason != "support_unverified" || cap.Region != "RU" {
+		t.Fatalf("expected support to remain unverified for RUS, got: %+v", cap)
+	}
+
+	// Missing marker -> error / gemini_marker_missing
+	clientMissing := mockClient(func(req *http.Request) (*http.Response, error) {
+		resp, err := htmlResponse(200, `<html><body>no marker</body></html>`)
+		resp.Request = req
+		return resp, err
+	})
+	cap = platform.CheckGemini(ctx, clientMissing)
+	if cap.Verdict != domain.VerdictError || cap.Reason != "gemini_marker_missing" {
+		t.Fatalf("expected error/gemini_marker_missing for missing marker, got: %+v", cap)
+	}
+
+	// Conflicting markers -> error / conflicting_region_markers
+	clientConflicting := mockClient(func(req *http.Request) (*http.Response, error) {
+		resp, err := htmlResponse(200, `[null,2,1,200,"USA"] [null,2,1,200,"CAN"]`)
+		resp.Request = req
+		return resp, err
+	})
+	cap = platform.CheckGemini(ctx, clientConflicting)
+	if cap.Verdict != domain.VerdictError || cap.Reason != "conflicting_region_markers" {
+		t.Fatalf("expected error/conflicting_region_markers for conflicting markers, got: %+v", cap)
 	}
 }
 
@@ -461,8 +503,8 @@ func TestCheckSpeed_HTTP429And403_TargetRestricted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
-	if cap429.Verdict != domain.VerdictUnknown || cap429.Reason != "target_rate_limited" {
-		t.Fatalf("expected VerdictUnknown/target_rate_limited, got %s/%s", cap429.Verdict, cap429.Reason)
+	if cap429.Verdict != domain.VerdictRestricted || cap429.Reason != "target_rate_limited" {
+		t.Fatalf("expected VerdictRestricted/target_rate_limited, got %s/%s", cap429.Verdict, cap429.Reason)
 	}
 
 	srv403 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -474,8 +516,8 @@ func TestCheckSpeed_HTTP429And403_TargetRestricted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
-	if cap403.Verdict != domain.VerdictUnknown || cap403.Reason != "target_forbidden" {
-		t.Fatalf("expected VerdictUnknown/target_forbidden, got %s/%s", cap403.Verdict, cap403.Reason)
+	if cap403.Verdict != domain.VerdictRestricted || cap403.Reason != "target_forbidden" {
+		t.Fatalf("expected VerdictRestricted/target_forbidden, got %s/%s", cap403.Verdict, cap403.Reason)
 	}
 }
 
@@ -509,6 +551,60 @@ func TestCheckSpeed_PartialBytesTimeout_MeasuresBudgetLimited(t *testing.T) {
 	}
 }
 
+func TestCheckSpeed_Timeout_ReturnsError(t *testing.T) {
+	ctx := context.Background()
+
+	srvHanging := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer srvHanging.Close()
+
+	cap, err := platform.CheckSpeed(ctx, srvHanging.Client(), nil, srvHanging.URL, 1024*1024, 50*time.Millisecond)
+	if err == nil {
+		t.Fatal("expected error on header timeout, got nil")
+	}
+	if cap.Verdict != domain.VerdictError || cap.Reason != "speed_request_timeout" {
+		t.Fatalf("expected VerdictError/speed_request_timeout on header timeout, got %s/%s", cap.Verdict, cap.Reason)
+	}
+}
+
+func TestCheckSpeed_CancellationAndBudgetSkipped(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(make([]byte, 2048))
+	}))
+	defer srv.Close()
+
+	cap, err := platform.CheckSpeed(ctx, srv.Client(), nil, srv.URL, 1024*1024, 2*time.Second)
+	if err == nil {
+		t.Fatal("expected error on cancelled context, got nil")
+	}
+	if cap.Verdict != domain.VerdictSkipped || cap.Reason != "cancelled" {
+		t.Fatalf("expected VerdictSkipped/cancelled on cancelled context, got %s/%s", cap.Verdict, cap.Reason)
+	}
+}
+
+func TestCheckSpeed_BelowMinimumBytes_ReturnsContractDriftError(t *testing.T) {
+	ctx := context.Background()
+
+	srvSmall := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(make([]byte, 500))
+	}))
+	defer srvSmall.Close()
+
+	cap, err := platform.CheckSpeed(ctx, srvSmall.Client(), nil, srvSmall.URL, 1024*1024, 2*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error on small response: %v", err)
+	}
+	if cap.Verdict != domain.VerdictError || cap.Reason != "contract_drift" {
+		t.Fatalf("expected VerdictError/contract_drift on small payload, got %s/%s", cap.Verdict, cap.Reason)
+	}
+}
+
 func TestCheckIPRisk(t *testing.T) {
 	ctx := context.Background()
 
@@ -529,6 +625,15 @@ func TestCheckIPRisk(t *testing.T) {
 	cap := platform.CheckIPRisk(ctx, clientScam, "1.2.3.4")
 	if cap.Verdict != domain.VerdictAvailable || cap.RiskScore != "12% low" {
 		t.Fatalf("expected '12%% low', got: %+v", cap)
+	}
+
+	// Missing exit IP
+	clientNoTrace := mockClient(func(req *http.Request) (*http.Response, error) {
+		return htmlResponse(200, "colo=SJC\n")
+	})
+	capNoIP := platform.CheckIPRisk(ctx, clientNoTrace, "")
+	if capNoIP.Verdict != domain.VerdictError || capNoIP.Reason != "missing_exit_identity" {
+		t.Fatalf("expected missing_exit_identity error, got: %+v", capNoIP)
 	}
 }
 
@@ -695,7 +800,7 @@ func TestCheckIPRisk_StrictScoringTable(t *testing.T) {
 			name:          "negative_score",
 			body:          "IP Fraud Risk API\n1\n2\n3\n\"score\": \"-1\",\n\"risk\": \"low\"\n6",
 			statusCode:    200,
-			wantVerdict:   domain.VerdictUnknown,
+			wantVerdict:   domain.VerdictError,
 			wantRiskScore: "",
 			wantSummary:   "Score Unavailable",
 			wantReason:    "contract_drift",
@@ -704,7 +809,7 @@ func TestCheckIPRisk_StrictScoringTable(t *testing.T) {
 			name:          "out_of_bounds_101",
 			body:          "IP Fraud Risk API\n1\n2\n3\n\"score\": \"101\",\n\"risk\": \"high\"\n6",
 			statusCode:    200,
-			wantVerdict:   domain.VerdictUnknown,
+			wantVerdict:   domain.VerdictError,
 			wantRiskScore: "",
 			wantSummary:   "Score Unavailable",
 			wantReason:    "contract_drift",
@@ -713,7 +818,7 @@ func TestCheckIPRisk_StrictScoringTable(t *testing.T) {
 			name:          "decimal_score",
 			body:          "IP Fraud Risk API\n1\n2\n3\n\"score\": \"12.5\",\n\"risk\": \"low\"\n6",
 			statusCode:    200,
-			wantVerdict:   domain.VerdictUnknown,
+			wantVerdict:   domain.VerdictError,
 			wantRiskScore: "",
 			wantSummary:   "Score Unavailable",
 			wantReason:    "contract_drift",
@@ -724,7 +829,7 @@ func TestCheckIPRisk_StrictScoringTable(t *testing.T) {
 			name:          "empty_score",
 			body:          "IP Fraud Risk API\n1\n2\n3\n\"score\": \"\",\n\"risk\": \"low\"\n6",
 			statusCode:    200,
-			wantVerdict:   domain.VerdictUnknown,
+			wantVerdict:   domain.VerdictError,
 			wantRiskScore: "",
 			wantSummary:   "Score Unavailable",
 			wantReason:    "contract_drift",
@@ -733,7 +838,7 @@ func TestCheckIPRisk_StrictScoringTable(t *testing.T) {
 			name:          "text_score",
 			body:          "IP Fraud Risk API\n1\n2\n3\n\"score\": \"none\",\n\"risk\": \"low\"\n6",
 			statusCode:    200,
-			wantVerdict:   domain.VerdictUnknown,
+			wantVerdict:   domain.VerdictError,
 			wantRiskScore: "",
 			wantSummary:   "Score Unavailable",
 			wantReason:    "contract_drift",
@@ -744,7 +849,7 @@ func TestCheckIPRisk_StrictScoringTable(t *testing.T) {
 			name:          "suffix_garbage_percent_in_json",
 			body:          "IP Fraud Risk API\n1\n2\n3\n\"score\": \"12%\",\n\"risk\": \"low\"\n6",
 			statusCode:    200,
-			wantVerdict:   domain.VerdictUnknown,
+			wantVerdict:   domain.VerdictError,
 			wantRiskScore: "",
 			wantSummary:   "Score Unavailable",
 			wantReason:    "contract_drift",
@@ -753,7 +858,7 @@ func TestCheckIPRisk_StrictScoringTable(t *testing.T) {
 			name:          "suffix_garbage_alpha",
 			body:          "IP Fraud Risk API\n1\n2\n3\n\"score\": \"12abc\",\n\"risk\": \"low\"\n6",
 			statusCode:    200,
-			wantVerdict:   domain.VerdictUnknown,
+			wantVerdict:   domain.VerdictError,
 			wantRiskScore: "",
 			wantSummary:   "Score Unavailable",
 			wantReason:    "contract_drift",
@@ -762,7 +867,7 @@ func TestCheckIPRisk_StrictScoringTable(t *testing.T) {
 			name:          "suffix_garbage_px",
 			body:          "IP Fraud Risk API\n1\n2\n3\n\"score\": \"12px\",\n\"risk\": \"low\"\n6",
 			statusCode:    200,
-			wantVerdict:   domain.VerdictUnknown,
+			wantVerdict:   domain.VerdictError,
 			wantRiskScore: "",
 			wantSummary:   "Score Unavailable",
 			wantReason:    "contract_drift",
@@ -773,7 +878,7 @@ func TestCheckIPRisk_StrictScoringTable(t *testing.T) {
 			name:          "missing_marker",
 			body:          "<html><body>Some other content without API marker</body></html>",
 			statusCode:    200,
-			wantVerdict:   domain.VerdictUnknown,
+			wantVerdict:   domain.VerdictError,
 			wantRiskScore: "",
 			wantSummary:   "Score Unavailable",
 			wantReason:    "contract_drift",
@@ -782,7 +887,7 @@ func TestCheckIPRisk_StrictScoringTable(t *testing.T) {
 			name:          "fewer_than_7_lines",
 			body:          "IP Fraud Risk API\nline 1\nline 2",
 			statusCode:    200,
-			wantVerdict:   domain.VerdictUnknown,
+			wantVerdict:   domain.VerdictError,
 			wantRiskScore: "",
 			wantSummary:   "Score Unavailable",
 			wantReason:    "contract_drift",
@@ -791,7 +896,7 @@ func TestCheckIPRisk_StrictScoringTable(t *testing.T) {
 			name:          "wrong_key_on_score_line",
 			body:          "IP Fraud Risk API\n1\n2\n3\n\"unrelated_key\": \"12\",\n\"risk\": \"low\"\n6",
 			statusCode:    200,
-			wantVerdict:   domain.VerdictUnknown,
+			wantVerdict:   domain.VerdictError,
 			wantRiskScore: "",
 			wantSummary:   "Score Unavailable",
 			wantReason:    "contract_drift",
@@ -800,7 +905,7 @@ func TestCheckIPRisk_StrictScoringTable(t *testing.T) {
 			name:          "malformed_score_line_no_colon",
 			body:          "IP Fraud Risk API\n1\n2\n3\nno_colon_here\n\"risk\": \"low\"\n6",
 			statusCode:    200,
-			wantVerdict:   domain.VerdictUnknown,
+			wantVerdict:   domain.VerdictError,
 			wantRiskScore: "",
 			wantSummary:   "Score Unavailable",
 			wantReason:    "contract_drift",
@@ -811,7 +916,7 @@ func TestCheckIPRisk_StrictScoringTable(t *testing.T) {
 			name:          "http_403_access_restricted",
 			body:          "Forbidden",
 			statusCode:    403,
-			wantVerdict:   domain.VerdictUnknown,
+			wantVerdict:   domain.VerdictRestricted,
 			wantRiskScore: "",
 			wantSummary:   "HTTP 403",
 			wantReason:    "access_restricted",
@@ -820,10 +925,10 @@ func TestCheckIPRisk_StrictScoringTable(t *testing.T) {
 			name:          "http_500_non_200",
 			body:          "Internal Server Error",
 			statusCode:    500,
-			wantVerdict:   domain.VerdictRestricted,
+			wantVerdict:   domain.VerdictError,
 			wantRiskScore: "",
 			wantSummary:   "HTTP 500",
-			wantReason:    "non_200_status",
+			wantReason:    "unexpected_status",
 		},
 	}
 

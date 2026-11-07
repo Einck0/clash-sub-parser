@@ -67,7 +67,7 @@ type NodeDetail struct {
 // ToNodeView returns the enriched NodeView for this NodeDetail, with a fallback if View was not pre-populated.
 func (d *NodeDetail) ToNodeView() NodeView {
 	if d == nil {
-		return NodeView{HealthStatus: "untested", ProbeState: "idle", ProbeMissing: true}
+		return NodeView{HealthStatus: "unknown", ProbeState: "idle", ProbeMissing: true}
 	}
 	v := d.View
 	if v.LogicalID == "" {
@@ -140,7 +140,7 @@ func ToNodeView(n domain.Node) NodeView {
 		ConnectionRevision: n.ConnectionRevision,
 		CreatedAt:          n.CreatedAt,
 		UpdatedAt:          n.UpdatedAt,
-		HealthStatus:       "untested",
+		HealthStatus:       "unknown",
 		ProbeState:         "idle",
 		ProbeMissing:       true,
 		ProbeStale:         false,
@@ -1431,7 +1431,7 @@ func (s *Service) enrichNodeViews(ctx context.Context, views []NodeView) {
 	nodeIDs := make([]string, 0, len(views))
 	for i := range views {
 		if views[i].HealthStatus == "" {
-			views[i].HealthStatus = "untested"
+			views[i].HealthStatus = "unknown"
 			views[i].ProbeMissing = true
 		}
 		if views[i].LogicalID != "" {
@@ -1501,7 +1501,7 @@ func applyProbeObservationsToView(v *NodeView, obsByKind map[domain.ProbeKind]do
 	if len(obsByKind) == 0 {
 		v.LatencyMS = nil
 		v.LastProbedAt = nil
-		v.HealthStatus = "untested"
+		v.HealthStatus = "unknown"
 		v.ProbeMissing = true
 		v.ProbeStale = false
 		v.Capabilities = nil
@@ -1570,8 +1570,8 @@ func applyProbeObservationsToView(v *NodeView, obsByKind map[domain.ProbeKind]do
 	}
 
 	v.HealthStatus = string(baseHealth)
-	if baseHealth == domain.BaselineUnknown {
-		v.HealthStatus = "untested"
+	if baseHealth == domain.BaselineUnknown || v.HealthStatus == "" {
+		v.HealthStatus = "unknown"
 	}
 	if baseLatencyValid && baselinePtr != nil && baselinePtr.LatencyMS > 0 {
 		lat := baselinePtr.LatencyMS

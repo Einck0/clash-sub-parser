@@ -150,11 +150,47 @@ func WithBodyBudget(b *platform.BodyBudget) DefaultRunnerOption {
 
 type runMeterKey struct{}
 type runMeter struct {
-	budget   *platform.BodyBudget
-	cancel   context.CancelFunc
-	mu       sync.Mutex
-	seen     map[string]bool
-	baseline map[string]domain.ProbeVerdict
+	budget     *platform.BodyBudget
+	cancel     context.CancelFunc
+	mu         sync.Mutex
+	seen       map[string]bool
+	baseline   map[string]domain.ProbeVerdict
+	geoCountry map[string]string
+}
+
+func (m *runMeter) setGeoCountry(nodeLogicalID, country string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.geoCountry == nil {
+		m.geoCountry = make(map[string]string)
+	}
+	m.geoCountry[nodeLogicalID] = strings.ToUpper(strings.TrimSpace(country))
+}
+
+func (m *runMeter) getGeoCountry(nodeLogicalID string) (string, bool) {
+	if m == nil {
+		return "", false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.geoCountry == nil {
+		return "", false
+	}
+	country, ok := m.geoCountry[nodeLogicalID]
+	return country, ok && country != ""
+}
+
+func isValidCountry(code string) bool {
+	code = strings.TrimSpace(code)
+	if len(code) != 2 {
+		return false
+	}
+	c0, c1 := code[0], code[1]
+	return ((c0 >= 'A' && c0 <= 'Z') || (c0 >= 'a' && c0 <= 'z')) &&
+		((c1 >= 'A' && c1 <= 'Z') || (c1 >= 'a' && c1 <= 'z'))
 }
 
 func nodeFingerprint(node domain.Node) string {
@@ -447,19 +483,28 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 	if bodyBudget == nil {
 		bodyBudget = platform.NewBodyBudget(r.budget.MaxTotalBytes)
 	}
-	runCtx = context.WithValue(runCtx, runMeterKey{}, &runMeter{budget: bodyBudget, cancel: cancel, seen: make(map[string]bool), baseline: make(map[string]domain.ProbeVerdict)})
+	runCtx = context.WithValue(runCtx, runMeterKey{}, &runMeter{
+		budget:     bodyBudget,
+		cancel:     cancel,
+		seen:       make(map[string]bool),
+		baseline:   make(map[string]domain.ProbeVerdict),
+		geoCountry: make(map[string]string),
+	})
 	defer r.recordNotExecuted(ctx, run, targetNodes, validKinds, runCtx, bodyBudget)
 
 	pool := newNodeSessionPool(runCtx)
 	defer pool.closeAll()
 
-	// Classify probe kinds into 3 pipeline stages:
+	// Classify probe kinds into pipeline stages:
 	// Stage 1 (Alive): Baseline
-	// Stage 2 (Media): Geo, Streaming, AI, IPRisk
+	// Stage 2:
+	//   Stage 2a (Geo): Geo (if selected, barrier completes before media/AI/IP-risk)
+	//   Stage 2b (Media/AI): Streaming, AI, IPRisk
 	// Stage 3 (Speed): Speed
 	var (
 		stage1Kinds []domain.ProbeKind
-		stage2Kinds []domain.ProbeKind
+		stage2Geo   bool
+		stage2Other []domain.ProbeKind
 		stage3Kinds []domain.ProbeKind
 	)
 	for _, k := range validKinds {
@@ -468,10 +513,17 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 			stage1Kinds = append(stage1Kinds, k)
 		case domain.ProbeKindSpeed:
 			stage3Kinds = append(stage3Kinds, k)
+		case domain.ProbeKindGeo:
+			stage2Geo = true
 		default:
-			stage2Kinds = append(stage2Kinds, k)
+			stage2Other = append(stage2Other, k)
 		}
 	}
+	stage2Count := 0
+	if stage2Geo {
+		stage2Count++
+	}
+	stage2Count += len(stage2Other)
 
 	var (
 		taskErrMu          sync.Mutex
@@ -650,14 +702,14 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 		eligibleNodes = targetNodes
 	}
 
-	if len(eligibleNodes) == 0 || (len(stage2Kinds) == 0 && len(stage3Kinds) == 0) {
+	if len(eligibleNodes) == 0 || (stage2Count == 0 && len(stage3Kinds) == 0) {
 		_ = run.TransitionTo(domain.ProbeRunStateSucceeded)
 		_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateSucceeded)
 		return nil
 	}
 
 	// Retain sessions for all tasks across subsequent stages (Stage 2 + Stage 3)
-	tasksPerNode := len(stage2Kinds) + len(stage3Kinds)
+	tasksPerNode := stage2Count + len(stage3Kinds)
 	for _, n := range eligibleNodes {
 		pool.sessionFor(n).retain(tasksPerNode)
 	}
@@ -665,33 +717,118 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 	// ---------------------------------------------------------
 	// Stage 2: Media / AI (Geo, Streaming, AI, IPRisk)
 	// ---------------------------------------------------------
-	if len(stage2Kinds) > 0 {
+	stage2Limit := r.stageConcurrency.Media
+	if stage2Limit <= 0 {
+		stage2Limit = DefaultStageConcurrency.Media
+	}
+
+	// Stage 2a: Geo barrier (completes before selected media/AI/IP-risk)
+	if stage2Geo {
 		var (
-			stage2WG        sync.WaitGroup
-			stage2SubmitErr error
+			stage2aWG        sync.WaitGroup
+			stage2aSubmitErr error
 		)
-		stage2Limit := r.stageConcurrency.Media
-		if stage2Limit <= 0 {
-			stage2Limit = DefaultStageConcurrency.Media
+		stage2aSem := make(chan struct{}, stage2Limit)
+
+		for _, node := range eligibleNodes {
+			n := node
+			k := domain.ProbeKindGeo
+			s := pool.sessionFor(n)
+			stage2aWG.Add(1)
+			select {
+			case stage2aSem <- struct{}{}:
+			case <-runCtx.Done():
+				s.release(tasksPerNode)
+				stage2aWG.Done()
+				stage2aSubmitErr = runCtx.Err()
+				break
+			}
+			if stage2aSubmitErr != nil {
+				break
+			}
+
+			task := queue.Task{
+				ID:        domain.MustNewUUIDv7(),
+				RunID:     run.ID,
+				LogicalID: n.LogicalID,
+				Kind:      k,
+				Mode:      enqueueMode,
+				Context:   runCtx,
+				Execute: func(tCtx context.Context) error {
+					err := r.executeTask(tCtx, run, n, k, s)
+					if err != nil {
+						recordTaskErr(n.LogicalID, err)
+					}
+					return err
+				},
+				OnComplete: func(_ error) {
+					<-stage2aSem
+					s.release(1)
+					stage2aWG.Done()
+				},
+			}
+
+			if err := r.scheduler.SubmitWithContext(runCtx, task); err != nil {
+				<-stage2aSem
+				s.release(tasksPerNode)
+				stage2aWG.Done()
+				stage2aSubmitErr = err
+				break
+			}
 		}
-		stage2Sem := make(chan struct{}, stage2Limit)
+		triggerNotify()
+
+		stage2aDone := make(chan struct{})
+		go func() {
+			stage2aWG.Wait()
+			close(stage2aDone)
+		}()
+
+		select {
+		case <-runCtx.Done():
+			return handleCancelOrDeadline(stage2aDone)
+		case <-stage2aDone:
+			if runCtx.Err() != nil {
+				return handleCancelOrDeadline(stage2aDone)
+			}
+			if stage2aSubmitErr != nil {
+				_ = run.TransitionTo(domain.ProbeRunStateFailed)
+				_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateFailed)
+				return stage2aSubmitErr
+			}
+			if fatalDial, fatalErr := checkFatalDial(); fatalDial {
+				_ = run.TransitionTo(domain.ProbeRunStateFailed)
+				_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateFailed)
+				return fatalErr
+			}
+		}
+	}
+
+	// Stage 2b: Other Stage 2 kinds (Streaming, AI, IPRisk)
+	if len(stage2Other) > 0 {
+		var (
+			stage2bWG        sync.WaitGroup
+			stage2bSubmitErr error
+		)
+		stage2bSem := make(chan struct{}, stage2Limit)
 
 		for _, node := range eligibleNodes {
 			session := pool.sessionFor(node)
-			for idx, kind := range stage2Kinds {
+			remainingForNode := len(stage2Other) + len(stage3Kinds)
+			for idx, kind := range stage2Other {
 				n := node
 				k := kind
 				s := session
-				stage2WG.Add(1)
+				stage2bWG.Add(1)
 				select {
-				case stage2Sem <- struct{}{}:
+				case stage2bSem <- struct{}{}:
 				case <-runCtx.Done():
-					s.release(tasksPerNode - idx)
-					stage2WG.Done()
-					stage2SubmitErr = runCtx.Err()
+					s.release(remainingForNode - idx)
+					stage2bWG.Done()
+					stage2bSubmitErr = runCtx.Err()
 					break
 				}
-				if stage2SubmitErr != nil {
+				if stage2bSubmitErr != nil {
 					break
 				}
 
@@ -710,43 +847,43 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 						return err
 					},
 					OnComplete: func(_ error) {
-						<-stage2Sem
+						<-stage2bSem
 						s.release(1)
-						stage2WG.Done()
+						stage2bWG.Done()
 					},
 				}
 
 				if err := r.scheduler.SubmitWithContext(runCtx, task); err != nil {
-					<-stage2Sem
-					s.release(tasksPerNode - idx)
-					stage2WG.Done()
-					stage2SubmitErr = err
+					<-stage2bSem
+					s.release(remainingForNode - idx)
+					stage2bWG.Done()
+					stage2bSubmitErr = err
 					break
 				}
 			}
-			if stage2SubmitErr != nil {
+			if stage2bSubmitErr != nil {
 				break
 			}
 		}
 		triggerNotify()
 
-		stage2Done := make(chan struct{})
+		stage2bDone := make(chan struct{})
 		go func() {
-			stage2WG.Wait()
-			close(stage2Done)
+			stage2bWG.Wait()
+			close(stage2bDone)
 		}()
 
 		select {
 		case <-runCtx.Done():
-			return handleCancelOrDeadline(stage2Done)
-		case <-stage2Done:
+			return handleCancelOrDeadline(stage2bDone)
+		case <-stage2bDone:
 			if runCtx.Err() != nil {
-				return handleCancelOrDeadline(stage2Done)
+				return handleCancelOrDeadline(stage2bDone)
 			}
-			if stage2SubmitErr != nil {
+			if stage2bSubmitErr != nil {
 				_ = run.TransitionTo(domain.ProbeRunStateFailed)
 				_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateFailed)
-				return stage2SubmitErr
+				return stage2bSubmitErr
 			}
 			if fatalDial, fatalErr := checkFatalDial(); fatalDial {
 				_ = run.TransitionTo(domain.ProbeRunStateFailed)
@@ -1026,36 +1163,6 @@ func isFatalDialError(err error) bool {
 	return errors.Is(err, ErrCredentialsUnavailable) || errors.Is(err, ErrProbeDialingNotConfigured) || errors.Is(err, ErrClientBuildFailed)
 }
 
-func aggregateGroupVerdict(platforms map[string]domain.PlatformCapability) (domain.ProbeVerdict, string) {
-	if len(platforms) == 0 {
-		return domain.VerdictUnknown, "contract_drift"
-	}
-	hasAvailable := false
-	allRestricted := true
-	allError := true
-	for _, p := range platforms {
-		if p.Verdict == domain.VerdictAvailable {
-			hasAvailable = true
-		}
-		if p.Verdict != domain.VerdictRestricted {
-			allRestricted = false
-		}
-		if p.Verdict != domain.VerdictError {
-			allError = false
-		}
-	}
-	if hasAvailable {
-		return domain.VerdictAvailable, "contract_matched"
-	}
-	if allRestricted {
-		return domain.VerdictRestricted, "access_restricted"
-	}
-	if allError {
-		return domain.VerdictError, "transport_error"
-	}
-	return domain.VerdictUnknown, "contract_drift"
-}
-
 func (r *DefaultRunner) recordNotExecuted(parent context.Context, run *domain.ProbeRun, nodes []domain.Node, kinds []domain.ProbeKind, runCtx context.Context, budget *platform.BodyBudget) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), 5*time.Second)
 	defer cancel()
@@ -1090,8 +1197,8 @@ func (r *DefaultRunner) recordNotExecuted(parent context.Context, run *domain.Pr
 			}
 			now := r.clock().UTC()
 			prof := profileForKind(kind)
-			obs := &domain.ProbeObservation{ID: domain.MustNewUUIDv7(), ProbeRunID: run.ID, NodeLogicalID: node.LogicalID, Kind: kind, Verdict: domain.VerdictUnknown, ObservedAt: now, RedactedSummary: "reason=" + reason,
-				Attempt: &domain.ProbeAttemptEvidence{Executed: false, Category: reason, Reason: reason, RawVerdict: domain.VerdictUnknown, ConfigFingerprint: nodeFingerprint(node), ConfigRevision: run.ConfigRevision, Profile: prof.Version, Contract: prof.Contract, Engine: mihomo.CoreVersion(), Source: "csp-runner", AttemptID: run.ID + "/" + node.LogicalID + "/" + string(kind), StartedAt: now, FinishedAt: now, BudgetLimit: limit, BudgetUsed: used}}
+			obs := &domain.ProbeObservation{ID: domain.MustNewUUIDv7(), ProbeRunID: run.ID, NodeLogicalID: node.LogicalID, Kind: kind, Verdict: domain.VerdictSkipped, ObservedAt: now, RedactedSummary: "reason=" + reason,
+				Attempt: &domain.ProbeAttemptEvidence{Executed: false, Category: reason, Reason: reason, RawVerdict: domain.VerdictSkipped, ConfigFingerprint: nodeFingerprint(node), ConfigRevision: run.ConfigRevision, Profile: prof.Version, Contract: prof.Contract, Engine: mihomo.CoreVersion(), Source: "csp-runner", AttemptID: run.ID + "/" + node.LogicalID + "/" + string(kind), StartedAt: now, FinishedAt: now, BudgetLimit: limit, BudgetUsed: used}}
 			obs.EvidenceDigest = domain.ComputeProbeEvidenceDigest(run.ID, node.LogicalID, prof.Version, obs.Verdict, 0, reason)
 			if node.ConnectionRevision > 0 {
 				rev := node.ConnectionRevision
@@ -1339,7 +1446,7 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 				result.ContractMatched = true
 				result.StatusCode = http.StatusOK
 			} else {
-				ipRiskCap.Verdict = domain.VerdictUnknown
+				ipRiskCap.Verdict = domain.VerdictError
 				ipRiskCap.Reason = "contract_drift"
 				ipRiskCap.Summary = "Score Unavailable"
 				ipRiskScore = ""
@@ -1466,18 +1573,37 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 		eval.Reason = ipRiskCap.Reason
 	} else {
 		eval = prof.Evaluate(result)
+		if kind == domain.ProbeKindGeo && eval.Verdict == domain.VerdictAvailable && geoCountry != "" {
+			meter.setGeoCountry(node.LogicalID, geoCountry)
+		}
 		if len(platformsMap) > 0 {
-			eval.Verdict, eval.Reason = aggregateGroupVerdict(platformsMap)
+			exitCountry, hasExit := meter.getGeoCountry(node.LogicalID)
+			for name, p := range platformsMap {
+				if hasExit && exitCountry != "" {
+					p.ExitRegion = exitCountry
+				}
+				if p.Verdict == domain.VerdictAvailable && (p.RegionSource == "service" || p.RegionSource == "cdn_trace") {
+					serviceCountry := strings.ToUpper(strings.TrimSpace(p.Region))
+					normExit := strings.ToUpper(strings.TrimSpace(exitCountry))
+					if isValidCountry(serviceCountry) && isValidCountry(normExit) {
+						if serviceCountry != normExit {
+							p.Verdict = domain.VerdictAbnormal
+							p.Reason = "region_mismatch"
+						}
+					}
+				}
+				platformsMap[name] = p
+			}
+			eval.Verdict, eval.Reason = domain.AggregatePlatformVerdicts(platformsMap)
 		}
 	}
 	if failureReason != "" {
 		eval.Reason = failureReason
 	}
 	if eval.Verdict == "" {
-		if result.NetworkError || result.DNSError || result.DeadlineExceeded || dialErr != nil || client == nil {
-			eval.Verdict = domain.VerdictError
-		} else {
-			eval.Verdict = domain.VerdictUnknown
+		eval.Verdict = domain.VerdictError
+		if eval.Reason == "" {
+			eval.Reason = "detection_failed"
 		}
 	}
 	rawVerdict := eval.Verdict
@@ -1486,14 +1612,86 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 			eval.Reason = reason
 		}
 	}
+	hasPositiveEvidence := false
+	for _, p := range platformsMap {
+		if p.Verdict == domain.VerdictAvailable || p.Verdict == domain.VerdictAbnormal {
+			hasPositiveEvidence = true
+			break
+		}
+	}
+	hasExecutedResponses := false
+	for _, resp := range responses {
+		if resp.Reason != "budget_not_executed" && resp.Reason != "not_scheduled" {
+			hasExecutedResponses = true
+			break
+		}
+	}
 	if errors.Is(responseErr, platform.ErrBodyBudget) {
-		eval.Verdict = domain.VerdictUnknown
-		eval.Reason = "budget_not_executed"
+		for name, p := range platformsMap {
+			if p.Verdict != domain.VerdictAvailable && p.Verdict != domain.VerdictAbnormal {
+				p.Verdict = domain.VerdictSkipped
+				p.Reason = "budget_not_executed"
+				platformsMap[name] = p
+			}
+		}
+		if len(platformsMap) > 0 {
+			if hasPositiveEvidence {
+				eval.Verdict, eval.Reason = domain.AggregatePlatformVerdicts(platformsMap)
+			} else {
+				eval.Verdict = domain.VerdictSkipped
+				eval.Reason = "budget_not_executed"
+			}
+		} else {
+			eval.Verdict = domain.VerdictSkipped
+			eval.Reason = "budget_not_executed"
+		}
 	} else if ctx.Err() != nil {
-		eval.Verdict = domain.VerdictUnknown
-		eval.Reason = "cancelled"
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			eval.Reason = "deadline_exceeded"
+			for name, p := range platformsMap {
+				if p.Verdict != domain.VerdictAvailable && p.Verdict != domain.VerdictAbnormal {
+					p.Verdict = domain.VerdictError
+					p.Reason = "deadline_exceeded"
+					platformsMap[name] = p
+				}
+			}
+			if len(platformsMap) > 0 {
+				if hasPositiveEvidence {
+					eval.Verdict, eval.Reason = domain.AggregatePlatformVerdicts(platformsMap)
+				} else if hasExecutedResponses {
+					eval.Verdict = domain.VerdictError
+					eval.Reason = "deadline_exceeded"
+				} else {
+					eval.Verdict = domain.VerdictSkipped
+					eval.Reason = "deadline_exceeded"
+				}
+			} else {
+				if hasExecutedResponses {
+					eval.Verdict = domain.VerdictError
+					eval.Reason = "deadline_exceeded"
+				} else {
+					eval.Verdict = domain.VerdictSkipped
+					eval.Reason = "deadline_exceeded"
+				}
+			}
+		} else {
+			for name, p := range platformsMap {
+				if p.Verdict != domain.VerdictAvailable && p.Verdict != domain.VerdictAbnormal {
+					p.Verdict = domain.VerdictSkipped
+					p.Reason = "cancelled"
+					platformsMap[name] = p
+				}
+			}
+			if len(platformsMap) > 0 {
+				if hasPositiveEvidence {
+					eval.Verdict, eval.Reason = domain.AggregatePlatformVerdicts(platformsMap)
+				} else {
+					eval.Verdict = domain.VerdictSkipped
+					eval.Reason = "cancelled"
+				}
+			} else {
+				eval.Verdict = domain.VerdictSkipped
+				eval.Reason = "cancelled"
+			}
 		}
 	}
 	now := r.clock().UTC()
@@ -1505,7 +1703,7 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 		category = eval.Reason
 	}
 	limit, used := meter.budget.Snapshot()
-	attempt := &domain.ProbeAttemptEvidence{Executed: len(responses) > 0 && responses[0].Reason != "budget_not_executed", Category: category, Reason: eval.Reason, RawVerdict: rawVerdict, Status: result.StatusCode, BodyBytes: bodyBytes, ConfigFingerprint: nodeFingerprint(node), ConfigRevision: run.ConfigRevision, Profile: prof.Version, Contract: prof.Contract, ContractSource: "csp-runner", Engine: mihomo.CoreVersion(), Source: "csp-runner", AttemptID: run.ID + "/" + node.LogicalID + "/" + string(kind), StartedAt: start.UTC(), FinishedAt: now, BudgetLimit: limit, BudgetUsed: used, Responses: responses}
+	attempt := &domain.ProbeAttemptEvidence{Executed: hasExecutedResponses, Category: category, Reason: eval.Reason, RawVerdict: rawVerdict, Status: result.StatusCode, BodyBytes: bodyBytes, ConfigFingerprint: nodeFingerprint(node), ConfigRevision: run.ConfigRevision, Profile: prof.Version, Contract: prof.Contract, ContractSource: "csp-runner", Engine: mihomo.CoreVersion(), Source: "csp-runner", AttemptID: run.ID + "/" + node.LogicalID + "/" + string(kind), StartedAt: start.UTC(), FinishedAt: now, BudgetLimit: limit, BudgetUsed: used, Responses: responses}
 	if kind == domain.ProbeKindBaseline {
 		attempt.ContractSource = profiles.BaselineSource
 		attempt.LegacyContract = profiles.LegacyBaselineContract
@@ -1538,11 +1736,41 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 				obsRegion = nf.Region
 			}
 		}
+		if obsRegion == "" {
+			if yt, ok := platformsMap["youtube"]; ok && yt.Region != "" {
+				obsRegion = yt.Region
+			} else if dis, ok := platformsMap["disney"]; ok && dis.Region != "" {
+				obsRegion = dis.Region
+			}
+		}
+		if obsSubTier == "" {
+			if yt, ok := platformsMap["youtube"]; ok && yt.SubTier != "" {
+				obsSubTier = yt.SubTier
+			} else if dis, ok := platformsMap["disney"]; ok && dis.SubTier != "" {
+				obsSubTier = dis.SubTier
+			}
+		}
 	} else if kind == domain.ProbeKindAI {
 		if oai, ok := platformsMap["openai"]; ok && oai.SubTier != "" {
 			obsSubTier = oai.SubTier
 			if oai.Region != "" {
 				obsRegion = oai.Region
+			}
+		}
+		if obsRegion == "" {
+			if gem, ok := platformsMap["gemini"]; ok && gem.Region != "" {
+				obsRegion = gem.Region
+			} else if cl, ok := platformsMap["claude"]; ok && cl.Region != "" {
+				obsRegion = cl.Region
+			}
+		}
+		if obsSubTier == "" {
+			if gem, ok := platformsMap["gemini"]; ok && gem.SubTier != "" {
+				obsSubTier = gem.SubTier
+			} else if ag, ok := platformsMap["antigravity"]; ok && ag.SubTier != "" {
+				obsSubTier = ag.SubTier
+			} else if cl, ok := platformsMap["claude"]; ok && cl.SubTier != "" {
+				obsSubTier = cl.SubTier
 			}
 		}
 	}

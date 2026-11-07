@@ -1284,3 +1284,20 @@ See [frozen optimization contract](probe-optimization-20261106.md) for evidence,
 - **OPT-R4** Antigravity must be independent of Gemini, use only official anonymous entry, report reachable but authentication/product eligibility unverified as unknown, and never infer product availability from HTTP 200.
 - **OPT-R5** Default AI execution includes separate antigravity platform detail; explicit platform selections restrict network calls. Existing JSON evidence persistence/read-through is reused without schema migration.
 - **OPT-R6** Same-SHA dev cloud checks, runtime image revision/digest, isolated acceptance and independent review are mandatory. No local compilation/test or production deployment.
+
+
+## 2026-11-07 explicit outcome semantics (current scoped precedence)
+
+The [outcome repair contract](probe-state-20261107.md) defines current behavior and scenarios; it supersedes OPT-R4’s reachable=>unknown and historical known-failure=>unknown clauses for newly generated observations, not historical records.
+
+- **STATE-R1** Known executed failures MUST produce explicit error/restricted with reason; not-executed/control outcomes MUST be skipped. Unknown is not a generic failure bucket. Preserve raw attempt evidence and historical rows.
+- **STATE-R2** A reachable platform with a service-observed country different from successful same-run exit geo MUST be abnormal (warning), not unavailable; retain both countries and source. CDN target location is not user exit. Missing geo does not invent conflict.
+- **STATE-R3** Gemini MUST inspect complete bounded responses through2MiB (plus overflow sentinel), accept valid late markers, reject malformed/conflicting/incomplete evidence and keep official support uncertainty distinct from denial.
+- **STATE-R4** Recognized official anonymous Antigravity entry MUST report positive network-entry availability, with explicit account/model eligibility unverified scope. Generic200 or login/challenge is not positive product evidence.
+- **STATE-R5** Exact verdict/region/source/scope must persist, roundtrip and display consistently in list/detail/filter; abnormal/skipped labels differ from unreachable and unknown. Baseline health/publish eligibility is unchanged.
+- **STATE-R6** Existing dev same-SHA cloud checks/build, isolated digest+revision acceptance and independent review apply; affected UI also receives real isolated experience validation. No local compilation/test, backfill or production deployment.
+
+
+## Current continuation — 2026-11-07 run175745
+
+See [current continuation contract](continuation-175745.md) for latest precedence: untested node health is unknown, prior probe repair and official/prior-art research retained, and exhausted-rule primary-subscription fallback with explicit safety exclusions. Implementation and same-SHA cloud/review remain unverified until recorded evidence; old checked tasks do not certify this run. No production deployment.

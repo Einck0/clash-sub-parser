@@ -151,11 +151,9 @@ func (h nodeHandler) list(w http.ResponseWriter, r *http.Request) {
 	}
 
 	validHealthStatuses := map[string]bool{
-		"healthy":      true,
-		"degraded":     true,
-		"unhealthy":    true,
-		"undetermined": true,
-		"untested":     true,
+		"healthy":   true,
+		"unhealthy": true,
+		"unknown":   true,
 	}
 	for _, value := range q["health_status"] {
 		for _, part := range strings.Split(value, ",") {

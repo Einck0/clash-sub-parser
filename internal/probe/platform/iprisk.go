@@ -68,6 +68,17 @@ func CheckIPRisk(ctx context.Context, httpClient *http.Client, ip string) domain
 	now := time.Now().UTC()
 	start := time.Now()
 
+	if httpClient == nil {
+		lat := int64(-1)
+		return domain.PlatformCapability{
+			Verdict:    domain.VerdictError,
+			LatencyMS:  &lat,
+			ObservedAt: &now,
+			Reason:     "transport_error",
+			Summary:    "Inconclusive",
+		}
+	}
+
 	cap := domain.PlatformCapability{
 		ObservedAt: &now,
 	}
@@ -78,19 +89,26 @@ func CheckIPRisk(ctx context.Context, httpClient *http.Client, ip string) domain
 		lat := time.Since(start).Milliseconds()
 		cap.LatencyMS = &lat
 		if exitErr != nil {
-			cap.Verdict = domain.VerdictError
+			verdict, reason := responseReadFailure(exitErr)
+			cap.Verdict = verdict
 			cap.Summary = "Error"
-			cap.Reason = "network_error"
+			cap.Reason = reason
 			return cap
 		}
 		if statusCode == http.StatusForbidden || statusCode == http.StatusUnauthorized {
-			cap.Verdict = domain.VerdictUnknown
+			cap.Verdict = domain.VerdictRestricted
 			cap.Reason = "access_restricted"
 			cap.Summary = "Access Restricted"
 			return cap
 		}
+		if statusCode == http.StatusTooManyRequests {
+			cap.Verdict = domain.VerdictRestricted
+			cap.Reason = "rate_limited"
+			cap.Summary = "Rate Limited"
+			return cap
+		}
 		if exitIP == "" {
-			cap.Verdict = domain.VerdictUnknown
+			cap.Verdict = domain.VerdictError
 			cap.Reason = "missing_exit_identity"
 			cap.Summary = "Unknown IP"
 			return cap
@@ -114,31 +132,40 @@ func CheckIPRisk(ctx context.Context, httpClient *http.Client, ip string) domain
 	cap.LatencyMS = &lat
 
 	if err != nil {
-		cap.Verdict = domain.VerdictError
+		verdict, reason := responseReadFailure(err)
+		cap.Verdict = verdict
 		cap.Summary = "Error"
-		cap.Reason = "network_error"
+		cap.Reason = reason
 		return cap
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
-		cap.Verdict = domain.VerdictUnknown
+		cap.Verdict = domain.VerdictRestricted
 		cap.Summary = fmt.Sprintf("HTTP %d", resp.StatusCode)
 		cap.Reason = "access_restricted"
 		return cap
 	}
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode == http.StatusTooManyRequests {
 		cap.Verdict = domain.VerdictRestricted
 		cap.Summary = fmt.Sprintf("HTTP %d", resp.StatusCode)
-		cap.Reason = "non_200_status"
+		cap.Reason = "rate_limited"
+		return cap
+	}
+	if resp.StatusCode != http.StatusOK {
+		cap.Verdict = domain.VerdictError
+		cap.Summary = fmt.Sprintf("HTTP %d", resp.StatusCode)
+		cap.Reason = "unexpected_status"
 		return cap
 	}
 
 	buf := getPooledBuf()
 	defer putPooledBuf(buf)
 	if _, err := buf.ReadFrom(resp.Body); err != nil {
-		cap.Verdict = domain.VerdictError
-		cap.Reason = "read_failed"
+		verdict, reason := responseReadFailure(err)
+		cap.Verdict = verdict
+		cap.Summary = "Error"
+		cap.Reason = reason
 		return cap
 	}
 
@@ -146,7 +173,7 @@ func CheckIPRisk(ctx context.Context, httpClient *http.Client, ip string) domain
 	marker := []byte("IP Fraud Risk API")
 	apiIndex := bytes.Index(body, marker)
 	if apiIndex == -1 {
-		cap.Verdict = domain.VerdictUnknown
+		cap.Verdict = domain.VerdictError
 		cap.Reason = "contract_drift"
 		cap.Summary = "Score Unavailable"
 		return cap
@@ -155,7 +182,7 @@ func CheckIPRisk(ctx context.Context, httpClient *http.Client, ip string) domain
 	contentAfterAPI := body[apiIndex+len(marker):]
 	lines := bytes.Split(contentAfterAPI, []byte("\n"))
 	if len(lines) < 7 {
-		cap.Verdict = domain.VerdictUnknown
+		cap.Verdict = domain.VerdictError
 		cap.Reason = "contract_drift"
 		cap.Summary = "Score Unavailable"
 		return cap
@@ -164,7 +191,7 @@ func CheckIPRisk(ctx context.Context, httpClient *http.Client, ip string) domain
 	scoreLine := bytes.TrimSpace(lines[4])
 	scoreParts := bytes.Split(scoreLine, []byte(":"))
 	if len(scoreParts) < 2 {
-		cap.Verdict = domain.VerdictUnknown
+		cap.Verdict = domain.VerdictError
 		cap.Reason = "contract_drift"
 		cap.Summary = "Score Unavailable"
 		return cap
@@ -172,7 +199,7 @@ func CheckIPRisk(ctx context.Context, httpClient *http.Client, ip string) domain
 
 	key := strings.ToLower(strings.Trim(string(bytes.TrimSpace(scoreParts[0])), `"`))
 	if key != "score" {
-		cap.Verdict = domain.VerdictUnknown
+		cap.Verdict = domain.VerdictError
 		cap.Reason = "contract_drift"
 		cap.Summary = "Score Unavailable"
 		return cap
@@ -182,7 +209,7 @@ func CheckIPRisk(ctx context.Context, httpClient *http.Client, ip string) domain
 	rawScore = strings.TrimSpace(rawScore)
 	scoreInt, ok := ParseScoreInt(rawScore)
 	if !ok {
-		cap.Verdict = domain.VerdictUnknown
+		cap.Verdict = domain.VerdictError
 		cap.Reason = "contract_drift"
 		cap.Summary = "Score Unavailable"
 		return cap

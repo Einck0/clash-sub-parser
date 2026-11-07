@@ -25,6 +25,8 @@ type ConsistentFacts struct {
 	DNSSettings            *DNSSettings
 	ProxyChainBindings     []ProxyChainBinding
 	EnabledSubscriptionIDs map[string]bool
+	PrimarySubscriptionID  string
+	PrimaryNodeIDs         []string
 }
 
 // ConsistentFactsLoader defines the persistence port for transactional loading of consistent domain facts.

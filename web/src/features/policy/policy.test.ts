@@ -151,15 +151,33 @@ describe('policy types and helpers', () => {
     expect(validateConditionInput({ field: 'probe_verdict', op: 'equals', value: 'available' })).toBe(
       '探针判定条件必须指定探针类型'
     )
+    for (const v of ['available', 'abnormal', 'restricted', 'unknown', 'error', 'skipped', 'stale'] as const) {
+      expect(
+        validateConditionInput({
+          field: 'probe_verdict',
+          op: 'equals',
+          value: v,
+          probe_kind: 'baseline',
+          freshness_seconds: 3600,
+        })
+      ).toBeNull()
+    }
+    expect(
+      validateConditionInput({
+        field: 'probe_verdict',
+        op: 'not_equals',
+        value: 'error',
+        probe_kind: 'baseline',
+      })
+    ).toBeNull()
     expect(
       validateConditionInput({
         field: 'probe_verdict',
         op: 'equals',
-        value: 'available',
+        value: 'invalid_verdict',
         probe_kind: 'baseline',
-        freshness_seconds: 3600,
       })
-    ).toBeNull()
+    ).toContain('不支持的探针判定结果')
 
     // probe_latency_ms
     expect(
@@ -200,7 +218,10 @@ describe('policy types and helpers', () => {
     )
     expect(validateConditionInput({ field: 'health_status', op: 'equals', value: 'healthy' })).toBeNull()
     expect(validateConditionInput({ field: 'health_status', op: 'not_equals', value: 'unhealthy' })).toBeNull()
-    expect(validateConditionInput({ field: 'health_status', op: 'equals', value: 'untested' })).toBeNull()
+    expect(validateConditionInput({ field: 'health_status', op: 'equals', value: 'unknown' })).toBeNull()
+    expect(validateConditionInput({ field: 'health_status', op: 'equals', value: 'untested' })).toContain(
+      '不支持的健康状态'
+    )
 
     // exit_region
     expect(validateConditionInput({ field: 'exit_region', op: 'contains', value: 'HK' })).toBe(

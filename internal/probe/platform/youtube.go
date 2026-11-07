@@ -25,6 +25,17 @@ func CheckYoutube(ctx context.Context, httpClient *http.Client) domain.PlatformC
 	now := time.Now().UTC()
 	start := time.Now()
 
+	if httpClient == nil {
+		lat := int64(-1)
+		return domain.PlatformCapability{
+			Verdict:    domain.VerdictError,
+			LatencyMS:  &lat,
+			ObservedAt: &now,
+			Reason:     "transport_error",
+			Summary:    "Inconclusive",
+		}
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.youtube.com/premium?hl=en", nil)
 	if err != nil {
 		lat := int64(-1)
@@ -54,19 +65,42 @@ func CheckYoutube(ctx context.Context, httpClient *http.Client) domain.PlatformC
 	}
 
 	if err != nil {
-		cap.Verdict = domain.VerdictError
+		verdict, reason := responseReadFailure(err)
+		cap.Verdict = verdict
 		cap.Summary = "Error"
-		cap.Reason = "network_error"
+		cap.Reason = reason
 		return cap
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusForbidden {
+		cap.Verdict = domain.VerdictRestricted
+		cap.SubTier = "banned"
+		cap.Summary = "Access Denied"
+		cap.Reason = "access_restricted"
+		return cap
+	}
+	if resp.StatusCode == http.StatusTooManyRequests {
+		cap.Verdict = domain.VerdictRestricted
+		cap.SubTier = "banned"
+		cap.Summary = "Rate Limited"
+		cap.Reason = "rate_limited"
+		return cap
+	}
+	if resp.StatusCode >= 500 {
+		cap.Verdict = domain.VerdictError
+		cap.Summary = "Detection failed"
+		cap.Reason = "unexpected_status"
+		return cap
+	}
+
 	buf := getPooledBuf()
 	defer putPooledBuf(buf)
 	if _, err := buf.ReadFrom(resp.Body); err != nil {
-		cap.Verdict = domain.VerdictError
+		verdict, reason := responseReadFailure(err)
+		cap.Verdict = verdict
 		cap.Summary = "Error"
-		cap.Reason = "read_failed"
+		cap.Reason = reason
 		return cap
 	}
 	body := buf.Bytes()
@@ -76,6 +110,8 @@ func CheckYoutube(ctx context.Context, httpClient *http.Client) domain.PlatformC
 		cap.Verdict = domain.VerdictRestricted
 		cap.SubTier = "banned"
 		cap.Region = "CN"
+		cap.RegionSource = "service"
+		cap.EvidenceScope = "web_region"
 		cap.Summary = "Redirected to CN"
 		cap.Reason = "redirected_to_cn"
 		return cap
@@ -112,6 +148,8 @@ func CheckYoutube(ctx context.Context, httpClient *http.Client) domain.PlatformC
 				cap.Verdict = domain.VerdictAvailable
 				cap.SubTier = "unlocked"
 				cap.Region = region
+				cap.RegionSource = "service"
+				cap.EvidenceScope = "web_region"
 				cap.Summary = fmt.Sprintf("Unlocked (%s)", region)
 				cap.Reason = "youtube_premium_unlocked"
 				return cap

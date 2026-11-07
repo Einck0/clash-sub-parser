@@ -21,6 +21,17 @@ func CheckNetflix(ctx context.Context, httpClient *http.Client) domain.PlatformC
 	now := time.Now().UTC()
 	start := time.Now()
 
+	if httpClient == nil {
+		lat := int64(-1)
+		return domain.PlatformCapability{
+			Verdict:    domain.VerdictError,
+			LatencyMS:  &lat,
+			ObservedAt: &now,
+			Reason:     "transport_error",
+			Summary:    "Inconclusive",
+		}
+	}
+
 	region, banned, cdnErr := checkNetflixCDN(ctx, httpClient)
 	latency := time.Since(start).Milliseconds()
 
@@ -39,6 +50,7 @@ func CheckNetflix(ctx context.Context, httpClient *http.Client) domain.PlatformC
 		cap.Verdict = domain.VerdictAvailable
 		cap.SubTier = "full"
 		cap.Region = region
+		cap.RegionSource = "cdn_target"
 		cap.Summary = fmt.Sprintf("Full (%s)", region)
 		cap.Reason = "fast_cdn_unlocked"
 		return cap
@@ -57,6 +69,12 @@ func CheckNetflix(ctx context.Context, httpClient *http.Client) domain.PlatformC
 		cap.Summary = "Banned"
 		cap.Reason = "title_403"
 
+	case nonOriginalStatus == http.StatusTooManyRequests || originalStatus == http.StatusTooManyRequests:
+		cap.Verdict = domain.VerdictRestricted
+		cap.SubTier = "banned"
+		cap.Summary = "Rate Limited"
+		cap.Reason = "rate_limited"
+
 	case nonOriginalStatus == 200 || nonOriginalStatus == 301:
 		cap.Verdict = domain.VerdictAvailable
 		cap.SubTier = "full"
@@ -64,6 +82,8 @@ func CheckNetflix(ctx context.Context, httpClient *http.Client) domain.PlatformC
 		reg := getNetflixRegion(ctx, httpClient)
 		if reg != "" {
 			cap.Region = reg
+			cap.RegionSource = "service"
+			cap.EvidenceScope = "web_region"
 			cap.Summary = fmt.Sprintf("Full (%s)", reg)
 		} else {
 			cap.Summary = "Full"
@@ -77,12 +97,17 @@ func CheckNetflix(ctx context.Context, httpClient *http.Client) domain.PlatformC
 
 	default:
 		if cdnErr != nil && nonOrigErr != nil && origErr != nil {
-			cap.Verdict = domain.VerdictError
+			errToClassify := cdnErr
+			if nonOrigErr != nil {
+				errToClassify = nonOrigErr
+			}
+			verdict, reason := responseReadFailure(errToClassify)
+			cap.Verdict = verdict
 			cap.Summary = "Error"
-			cap.Reason = "network_error"
+			cap.Reason = reason
 		} else {
-			cap.Verdict = domain.VerdictUnknown
-			cap.Summary = "Inconclusive"
+			cap.Verdict = domain.VerdictError
+			cap.Summary = "Detection failed"
 			cap.Reason = "status_mismatch"
 		}
 	}

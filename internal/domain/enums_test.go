@@ -53,9 +53,11 @@ func TestProtocolEnums(t *testing.T) {
 func TestProbeVerdictEnums(t *testing.T) {
 	validVerdicts := []domain.ProbeVerdict{
 		domain.VerdictAvailable,
+		domain.VerdictAbnormal,
 		domain.VerdictRestricted,
 		domain.VerdictUnknown,
 		domain.VerdictError,
+		domain.VerdictSkipped,
 		domain.VerdictStale,
 	}
 

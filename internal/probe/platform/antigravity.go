@@ -11,14 +11,7 @@ import (
 )
 
 const detectorBodyLimit int64 = 256 << 10
-
-func responseReadFailure(err error) (domain.ProbeVerdict, string) {
-	reason := ResponseReason(err)
-	if reason == "cancelled" || reason == "deadline_exceeded" || reason == "budget_not_executed" {
-		return domain.VerdictUnknown, reason
-	}
-	return domain.VerdictError, reason
-}
+const geminiBodyLimit int64 = 2 << 20
 
 func hasGoogleAccessGate(body []byte) bool {
 	text := strings.ToLower(string(body))
@@ -54,11 +47,11 @@ func CheckAntigravity(ctx context.Context, client *http.Client) domain.PlatformC
 		return domain.PlatformCapability{Verdict: verdict, Reason: reason, Summary: summary, SubTier: tier, LatencyMS: &latency, ObservedAt: &now}
 	}
 	if client == nil {
-		return finish(domain.VerdictUnknown, "transport_error", "Inconclusive", "")
+		return finish(domain.VerdictError, "transport_error", "Inconclusive", "")
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://antigravity.google/", nil)
 	if err != nil {
-		return finish(domain.VerdictUnknown, "request_build_failed", "Inconclusive", "")
+		return finish(domain.VerdictError, "request_build_failed", "Inconclusive", "")
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -67,16 +60,19 @@ func CheckAntigravity(ctx context.Context, client *http.Client) domain.PlatformC
 	}
 	defer resp.Body.Close()
 	if !validFinalOrigin(resp, "antigravity.google") {
-		return finish(domain.VerdictUnknown, "unexpected_redirect", "Inconclusive", "")
+		return finish(domain.VerdictRestricted, "unexpected_redirect", "Access restricted", "")
+	}
+	if resp.Request == nil || resp.Request.URL == nil || strings.Contains(strings.ToLower(resp.Request.URL.Path), "login") {
+		return finish(domain.VerdictRestricted, "unexpected_redirect", "Access restricted", "")
 	}
 	switch resp.StatusCode {
 	case http.StatusForbidden, http.StatusUnavailableForLegalReasons:
 		return finish(domain.VerdictRestricted, "access_restricted", "Access restricted", "")
 	case http.StatusTooManyRequests:
-		return finish(domain.VerdictUnknown, "rate_limited", "Inconclusive", "")
+		return finish(domain.VerdictRestricted, "rate_limited", "Access restricted", "")
 	case http.StatusOK:
 	default:
-		return finish(domain.VerdictUnknown, "unexpected_status", "Inconclusive", "")
+		return finish(domain.VerdictError, "unexpected_status", "Detection failed", "")
 	}
 	body, truncated, err := readBoundedBody(resp.Body, detectorBodyLimit)
 	if err != nil {
@@ -84,17 +80,16 @@ func CheckAntigravity(ctx context.Context, client *http.Client) domain.PlatformC
 		return finish(verdict, reason, "Inconclusive", "")
 	}
 	if truncated {
-		return finish(domain.VerdictUnknown, "response_body_truncated", "Inconclusive", "")
-	}
-	if resp.Request == nil || resp.Request.URL == nil || strings.Contains(strings.ToLower(resp.Request.URL.Path), "login") {
-		return finish(domain.VerdictUnknown, "unexpected_redirect", "Inconclusive", "")
+		return finish(domain.VerdictError, "response_body_truncated", "Detection failed", "")
 	}
 	if hasGoogleAccessGate(body) {
-		return finish(domain.VerdictUnknown, "challenge_or_login", "Inconclusive", "")
+		return finish(domain.VerdictRestricted, "challenge_or_login", "Access restricted", "")
 	}
 	text := strings.ToLower(string(body))
 	if !(strings.Contains(text, "antigravity") && (strings.Contains(text, "agentic") || strings.Contains(text, "coding"))) {
-		return finish(domain.VerdictUnknown, "product_marker_missing", "Inconclusive", "")
+		return finish(domain.VerdictError, "product_marker_missing", "Detection failed", "")
 	}
-	return finish(domain.VerdictUnknown, "antigravity_reachable_auth_unverified", "Antigravity product entry reachable; product/account eligibility unverified", "reachable")
+	cap := finish(domain.VerdictAvailable, "antigravity_entry_reachable", "Antigravity product entry reachable; product/account eligibility unverified", "reachable")
+	cap.EvidenceScope = "network_entry"
+	return cap
 }

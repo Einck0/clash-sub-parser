@@ -218,23 +218,26 @@ describe('node view helpers & plaintext WireGuard / TUIC connection handling', (
     expect(nodeCapabilityLabel(node, 'streaming')).toEqual({ label: '可用', tone: 'success' })
     expect(nodeCapabilityLabel(node, 'ai')).toEqual({ label: '受限', tone: 'warning' })
     expect(nodeCapabilityLabel(node, 'geo')).toEqual({ label: '未知', tone: 'info' })
+    expect(nodeCapabilityLabel({ logical_id: 'abn', display_name: 'abn', protocol: 'ss', active: true, capabilities: { ai: 'abnormal' } }, 'ai')).toEqual({ label: '异常', tone: 'warning' })
+    expect(nodeCapabilityLabel({ logical_id: 'skp', display_name: 'skp', protocol: 'ss', active: true, capabilities: { ai: 'skipped' } }, 'ai')).toEqual({ label: '未执行', tone: 'info' })
+    expect(nodeCapabilityLabel({ logical_id: 'err', display_name: 'err', protocol: 'ss', active: true, capabilities: { ai: 'error' } }, 'ai')).toEqual({ label: '检测失败', tone: 'error' })
 
     // Auxiliary-only capability records do not establish health
     expect(nodeHealthBadge({ logical_id: 'n1', protocol: 'ss', display_name: 'N1', active: true, capabilities: { streaming: 'available' } })).toEqual({
-      label: '未测试',
+      label: '未知',
       tone: 'info',
     })
     expect(nodeHealthBadge({ logical_id: 'n1-baseline', protocol: 'ss', display_name: 'N1', active: true, capabilities: { baseline: { verdict: 'available', latency_ms: 50 } } })).toEqual({
       label: '正常',
       tone: 'success',
     })
-    expect(nodeHealthBadge(node)).toEqual({ label: '未测试', tone: 'info' })
+    expect(nodeHealthBadge(node)).toEqual({ label: '未知', tone: 'info' })
     expect(nodeHealthBadge({ logical_id: 'n2', protocol: 'ss', display_name: 'N2', active: true, capabilities: { baseline: 'error' } })).toEqual({
       label: '异常',
       tone: 'error',
     })
     expect(nodeHealthBadge({ logical_id: 'n3', protocol: 'ss', display_name: 'N3', active: true })).toEqual({
-      label: '未测试',
+      label: '未知',
       tone: 'info',
     })
 
@@ -279,7 +282,7 @@ describe('node view helpers & plaintext WireGuard / TUIC connection handling', (
       latency_ms: 35,
     })
     expect(probingNode.probeState).toBe('probing')
-    expect(nodeHealthBadge(probingNode)).toEqual({ label: '未测试', tone: 'info' })
+    expect(nodeHealthBadge(probingNode)).toEqual({ label: '未知', tone: 'info' })
 
     const queuedNode = normalizeNode({
       logical_id: 'n-queued',
@@ -289,7 +292,7 @@ describe('node view helpers & plaintext WireGuard / TUIC connection handling', (
       probe_state: 'queued',
     })
     expect(queuedNode.probeState).toBe('queued')
-    expect(nodeHealthBadge(queuedNode)).toEqual({ label: '未测试', tone: 'info' })
+    expect(nodeHealthBadge(queuedNode)).toEqual({ label: '未知', tone: 'info' })
 
     // Health badge remains underlying canonical health
     expect(nodeHealthBadge(enrichedNode)).toEqual({
@@ -373,6 +376,40 @@ describe('node view helpers & plaintext WireGuard / TUIC connection handling', (
     expect(nodeHealthDiagnostic(timeoutNode)?.code).toBe('timeout')
     expect(nodeHealthDiagnostic(timeoutNode)?.shortLabel).toBe('探测超时')
 
+    // Region mismatch diagnostic
+    const mismatchNode = normalizeNode({
+      logical_id: 'n-mismatch',
+      protocol: 'ss',
+      display_name: 'Mismatch Node',
+      active: true,
+      health_status: 'unknown',
+      capabilities: {
+        baseline: {
+          verdict: 'abnormal',
+          summary: 'reason=region_mismatch',
+        },
+      },
+    })
+    expect(nodeHealthDiagnostic(mismatchNode)?.code).toBe('region_mismatch')
+    expect(nodeHealthDiagnostic(mismatchNode)?.shortLabel).toBe('地区异常')
+
+    // Skipped diagnostic
+    const skippedNode = normalizeNode({
+      logical_id: 'n-skipped',
+      protocol: 'ss',
+      display_name: 'Skipped Node',
+      active: true,
+      health_status: 'unknown',
+      capabilities: {
+        baseline: {
+          verdict: 'skipped',
+          summary: 'reason=not_executed',
+        },
+      },
+    })
+    expect(nodeHealthDiagnostic(skippedNode)?.code).toBe('not_executed')
+    expect(nodeHealthDiagnostic(skippedNode)?.shortLabel).toBe('未执行')
+
     // Stale baseline with available verdict retains 'healthy' status
     const staleBaselineNode = normalizeNode({
       logical_id: 'n-stale-baseline',
@@ -390,14 +427,14 @@ describe('node view helpers & plaintext WireGuard / TUIC connection handling', (
     expect(nodeUnderlyingHealthCategory(staleBaselineNode)).toBe('healthy')
     expect(nodeHealthBadge({ logical_id: 'legacy-degraded', protocol: 'ss', display_name: 'legacy', active: true, health_status: 'degraded' })).toEqual({ label: '正常', tone: 'success' })
     for (const status of ['unknown', 'undetermined', 'missing'] as const) {
-      expect(nodeUnderlyingHealthCategory({ logical_id: status, protocol: 'ss', display_name: status, active: true, health_status: status })).toBe('untested')
+      expect(nodeUnderlyingHealthCategory({ logical_id: status, protocol: 'ss', display_name: status, active: true, health_status: status })).toBe('unknown')
     }
     expect(nodeHealthBadge({ logical_id: 'queued-healthy', protocol: 'ss', display_name: 'queued', active: true, health_status: 'healthy', probe_state: 'queued' })).toEqual({ label: '正常', tone: 'success' })
     expect(nodeHealthBadge({ logical_id: 'transport-fail', protocol: 'ss', display_name: 'failed', active: true, health_status: 'unhealthy', capabilities: { baseline: { verdict: 'error', summary: 'reason=transport_error' } } })).toEqual({ label: '异常', tone: 'error' })
     expect(nodeHealthBadge(staleBaselineNode)).toEqual({ label: '正常', tone: 'success' })
     expect(nodeHealthDiagnostic(staleBaselineNode)).toBeNull()
 
-    // Auxiliary-only records remain untested and do not pollute baseline latency
+    // Auxiliary-only records remain unknown and do not pollute baseline latency
     const aiOnlyNode = normalizeNode({
       logical_id: 'n-ai-only',
       protocol: 'ss',
@@ -408,11 +445,11 @@ describe('node view helpers & plaintext WireGuard / TUIC connection handling', (
         ai: { verdict: 'available', latency_ms: 120, observed_at: '2026-09-26T10:00:00Z' },
       },
     })
-    expect(nodeUnderlyingHealthCategory(aiOnlyNode)).toBe('untested')
+    expect(nodeUnderlyingHealthCategory(aiOnlyNode)).toBe('unknown')
     expect(resolveNodeLatencyMs(aiOnlyNode)).toBeNull()
-    expect(nodeHealthBadge(aiOnlyNode)).toEqual({ label: '未测试', tone: 'info' })
+    expect(nodeHealthBadge(aiOnlyNode)).toEqual({ label: '未知', tone: 'info' })
 
-    // Zero observations: classified as untested
+    // Zero observations: classified as unknown
     const unprobedNode = normalizeNode({
       logical_id: 'n-unprobed',
       protocol: 'ss',
@@ -422,8 +459,8 @@ describe('node view helpers & plaintext WireGuard / TUIC connection handling', (
       probe_missing: true,
       capabilities: {},
     })
-    expect(nodeUnderlyingHealthCategory(unprobedNode)).toBe('untested')
-    expect(nodeHealthBadge(unprobedNode)).toEqual({ label: '未测试', tone: 'info' })
+    expect(nodeUnderlyingHealthCategory(unprobedNode)).toBe('unknown')
+    expect(nodeHealthBadge(unprobedNode)).toEqual({ label: '未知', tone: 'info' })
   })
 
   it('includes plaintext source_url_secret_ref in subscriptionPatchPayload and omits blank URL', () => {

@@ -103,3 +103,8 @@ func (s *Service) GenerateTargetArtifact(ctx context.Context, target domain.Comp
    - 核心筛选公式 `cheap = all - expensive - other` 严格保留，绝不破坏原有筛选契约；
 3. **单轨发布约束**：
    - 宿主机禁止重型编译；通过 Git 提交推送到 `dev` 分支，由官方 GitHub Actions 云端构建不可变容器镜像。
+
+
+## Current continuation — 2026-11-07 run175745
+
+See [current continuation contract](../003-probe/continuation-175745.md) for latest precedence: untested node health is unknown, prior probe repair and official/prior-art research retained, and exhausted-rule primary-subscription fallback with explicit safety exclusions. Implementation and same-SHA cloud/review remain unverified until recorded evidence; old checked tasks do not certify this run. No production deployment.

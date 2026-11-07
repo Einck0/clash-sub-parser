@@ -2,7 +2,6 @@ package probe_test
 
 import (
 	"context"
-	"errors"
 	"io"
 	"net/http"
 	"strings"

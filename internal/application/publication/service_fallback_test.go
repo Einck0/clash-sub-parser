@@ -625,6 +625,9 @@ func TestBuildCurrentArtifact_NoFallbackBypass_OnIndependentRiskBlocker(t *testi
 	ipriskSvc := iprisk.NewService(nil, nil)
 	svc := publication.NewService(nil, nil, publication.WithIPRiskService(ipriskSvc))
 
+	activeRiskPolicy := makeTestRiskPolicy("0191e4a0-0000-7000-8000-000000000001", domain.RiskActionBlock)
+	activeRiskPolicy.RiskPolicy.UnknownAction = domain.RiskActionBlock
+
 	facts := &domain.ConsistentFacts{
 		AsOf: now,
 		Revision: &domain.ConfigurationRevision{
@@ -641,14 +644,7 @@ func TestBuildCurrentArtifact_NoFallbackBypass_OnIndependentRiskBlocker(t *testi
 		},
 		PrimarySubscriptionID: "sub-primary",
 		PrimaryNodeIDs:        []string{nodeID},
-		ActiveRiskPolicy: &domain.RiskPolicyRevision{
-			RevisionID:    "rp-1",
-			Active:        true,
-			UnknownAction: domain.RiskActionBlock, // strict block
-			RiskPolicy: domain.RiskPolicy{
-				FusionMode: domain.RiskFusionSingleProvider,
-			},
-		},
+		ActiveRiskPolicy:      activeRiskPolicy,
 	}
 
 	ctx := context.Background()

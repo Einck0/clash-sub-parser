@@ -1281,19 +1281,21 @@ func TestNodesHealthStatusValidationAndUnknownRoute(t *testing.T) {
 	now := time.Now().UTC()
 
 	nodeID := "node-test-unknown-01"
-	err := nodeRepo.Create(context.Background(), &domain.Node{
-		LogicalID:          nodeID,
-		Protocol:           domain.ProtocolShadowsocks,
-		DisplayName:        "Node Test Unknown",
-		Server:             "198.51.100.1",
-		Port:               8388,
-		Active:             true,
-		ConnectionRevision: 1,
-		CreatedAt:          now,
-		UpdatedAt:          now,
+	err := nodeRepo.UpsertBatch(context.Background(), []domain.Node{
+		{
+			LogicalID:          nodeID,
+			Protocol:           domain.ProtocolSS,
+			DisplayName:        "Node Test Unknown",
+			Server:             "198.51.100.1",
+			Port:               8388,
+			Active:             true,
+			ConnectionRevision: 1,
+			CreatedAt:          now,
+			UpdatedAt:          now,
+		},
 	})
 	if err != nil {
-		t.Fatalf("create node: %v", err)
+		t.Fatalf("upsert node: %v", err)
 	}
 
 	router := setupNodesTestRouter(t, db)

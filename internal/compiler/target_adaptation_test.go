@@ -72,9 +72,12 @@ func makeTestNode(logicalID, displayName string, proto domain.Protocol, pos int)
 	case domain.ProtocolWireGuard:
 		node.Port = 51820
 		node.Credentials = domain.InboundProtocolCredential{
-			PrivateKey:   "c3VwZXItc2VjcmV0LXByaXZhdGUta2V5LTU2Nzg=",
-			PublicKey:    "cHVibGljLWtleS01Njc4OTA=",
+			PrivateKey:   "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+			PublicKey:    "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=",
+			PreSharedKey: "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC=",
 			LocalAddress: []string{"10.0.0.2/32"},
+			Reserved:     []uint8{1, 2, 3},
+			MTU:          1420,
 		}
 	case domain.ProtocolTUIC:
 		node.Credentials = domain.InboundProtocolCredential{
@@ -90,7 +93,7 @@ func makeTestNode(logicalID, displayName string, proto domain.Protocol, pos int)
 	return node
 }
 
-func makeSnapshotWithNodes(nodes []resolver.ResolvedNode) *resolver.ResolvedPolicySnapshot {
+func makeAdaptationSnapshot(nodes []resolver.ResolvedNode) *resolver.ResolvedPolicySnapshot {
 	nodeIDs := make([]string, len(nodes))
 	members := make([]resolver.ResolvedGroupMember, len(nodes))
 	for i, n := range nodes {
@@ -318,7 +321,7 @@ func TestTargetAdaptation_PerNodeRenderability_TransportErrors(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			snap := makeSnapshotWithNodes([]resolver.ResolvedNode{tc.node})
+			snap := makeAdaptationSnapshot([]resolver.ResolvedNode{tc.node})
 
 			// 1. Check FilterCompatibleSnapshot
 			filtered, excluded := compiler.FilterCompatibleSnapshot(snap, tc.target)
@@ -378,7 +381,7 @@ func TestTargetAdaptation_DuplicateNames_FirstRenderableWins(t *testing.T) {
 		node1 := makeTestNode("id-ss-1", "Proxy-Shared", domain.ProtocolSS, 0)
 		node2 := makeTestNode("id-ss-2", "Proxy-Shared", domain.ProtocolSS, 1)
 
-		snap := makeSnapshotWithNodes([]resolver.ResolvedNode{node1, node2})
+		snap := makeAdaptationSnapshot([]resolver.ResolvedNode{node1, node2})
 
 		// Compatible mode: node1 admitted, node2 excluded as duplicate
 		filtered, excluded := compiler.FilterCompatibleSnapshot(snap, domain.TargetSurge)
@@ -429,7 +432,7 @@ func TestTargetAdaptation_DuplicateNames_FirstRenderableWins(t *testing.T) {
 		// Node 3 is SS (renderable on Surge) with same name "HK-Node"
 		node3 := makeTestNode("id-ss-hk-3", "HK-Node", domain.ProtocolSS, 2)
 
-		snap := makeSnapshotWithNodes([]resolver.ResolvedNode{node1, node2, node3})
+		snap := makeAdaptationSnapshot([]resolver.ResolvedNode{node1, node2, node3})
 
 		filtered, excluded := compiler.FilterCompatibleSnapshot(snap, domain.TargetSurge)
 
@@ -471,7 +474,7 @@ func TestTargetAdaptation_DialerProxyRejection(t *testing.T) {
 	nodeWithDialer := makeTestNode("id-dialer-node", "Dialer-Node", domain.ProtocolSS, 0)
 	nodeWithDialer.DialerProxy = "parent-proxy-chain"
 
-	snap := makeSnapshotWithNodes([]resolver.ResolvedNode{nodeWithDialer})
+	snap := makeAdaptationSnapshot([]resolver.ResolvedNode{nodeWithDialer})
 
 	nonMihomoTargets := []domain.CompilerTarget{
 		domain.TargetSurge,
@@ -550,7 +553,7 @@ func TestTargetAdaptation_AllExclusions(t *testing.T) {
 	node2 := makeTestNode("id-vless-2", "VLESS-2", domain.ProtocolVLESS, 1)
 	node3 := makeTestNode("id-vless-3", "VLESS-3", domain.ProtocolVLESS, 2)
 
-	snap := makeSnapshotWithNodes([]resolver.ResolvedNode{node1, node2, node3})
+	snap := makeAdaptationSnapshot([]resolver.ResolvedNode{node1, node2, node3})
 
 	filtered, excluded := compiler.FilterCompatibleSnapshot(snap, domain.TargetSurge)
 
@@ -601,7 +604,7 @@ func TestTargetAdaptation_SnapshotImmutability(t *testing.T) {
 	node1 := makeTestNode("id-ss", "SS-Node", domain.ProtocolSS, 0)
 	node2 := makeTestNode("id-vless", "VLESS-Node", domain.ProtocolVLESS, 1)
 
-	snap := makeSnapshotWithNodes([]resolver.ResolvedNode{node1, node2})
+	snap := makeAdaptationSnapshot([]resolver.ResolvedNode{node1, node2})
 
 	// Record original addresses and values
 	origNodeCount := len(snap.Nodes)
@@ -731,7 +734,7 @@ func TestTargetAdaptation_CrossTargetMatrix(t *testing.T) {
 		makeTestNode("id-tuic", "Node-TUIC", domain.ProtocolTUIC, 6),
 	}
 
-	snap := makeSnapshotWithNodes(nodes)
+	snap := makeAdaptationSnapshot(nodes)
 
 	matrix := []struct {
 		target          domain.CompilerTarget
@@ -797,12 +800,15 @@ func TestTargetAdaptation_CrossTargetMatrix(t *testing.T) {
 }
 
 // TestTargetAdaptation_SafeDiagnostics_NoCredentialsLeaked verifies that error diagnostics
-// and exclusion reasons never reveal plaintext passwords, UUIDs, private keys, or credentials.
+// and exclusion reasons never reveal plaintext passwords, UUIDs, private keys, or credentials,
+// including short secrets and transport secrets.
 func TestTargetAdaptation_SafeDiagnostics_NoCredentialsLeaked(t *testing.T) {
 	secretPassword := "my-super-secret-password-xyz123"
 	secretUUID := "88888888-4444-4444-4444-121212121212"
-	secretPrivKey := "c3VwZXItc2VjcmV0LXByaXZhdGUta2V5LTEyMzQ="
-	secretPSK := "cHNrLXNlY3JldC12YWx1ZS05ODc2NQ=="
+	secretPrivKey := "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+	secretPSK := "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC="
+	secretShortPassword := "pwd"
+	secretTransportSecret := "transport-secret-value-777"
 
 	// Node 1: SS with secret password but invalid cipher
 	node1 := makeTestNode("id-secret-ss", "Secret-SS", domain.ProtocolSS, 0)
@@ -824,8 +830,16 @@ func TestTargetAdaptation_SafeDiagnostics_NoCredentialsLeaked(t *testing.T) {
 	node3.Credentials.PreSharedKey = secretPSK
 	node3.Credentials.LocalAddress = []string{"invalid-cidr"}
 
-	nodes := []resolver.ResolvedNode{node1, node2, node3}
-	snap := makeSnapshotWithNodes(nodes)
+	// Node 4: SS with short secret password and transport secret
+	node4 := makeTestNode("id-secret-short", "Secret-Short", domain.ProtocolSS, 3)
+	node4.Credentials.Password = secretShortPassword
+	node4.Credentials.Method = "unsupported-cipher-short"
+	node4.Credentials.Transport = map[string]string{
+		"obfs-password": secretTransportSecret,
+	}
+
+	nodes := []resolver.ResolvedNode{node1, node2, node3, node4}
+	snap := makeAdaptationSnapshot(nodes)
 
 	targets := compiler.Targets()
 	for _, target := range targets {
@@ -845,6 +859,12 @@ func TestTargetAdaptation_SafeDiagnostics_NoCredentialsLeaked(t *testing.T) {
 				}
 				if strings.Contains(s, secretPSK) {
 					t.Errorf("[%s on %s] leaked secretPSK in %q", contextInfo, target, s)
+				}
+				if strings.Contains(s, secretShortPassword) {
+					t.Errorf("[%s on %s] leaked secretShortPassword in %q", contextInfo, target, s)
+				}
+				if strings.Contains(s, secretTransportSecret) {
+					t.Errorf("[%s on %s] leaked secretTransportSecret in %q", contextInfo, target, s)
 				}
 			}
 

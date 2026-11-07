@@ -220,8 +220,9 @@ func TestMihomoShadowsocksPlugin_SupportedSerialization(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			nodeID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.2.3.4", 8388, tc.transport)
 			node := resolver.ResolvedNode{
-				LogicalID:   "node-ss-1",
+				LogicalID:   nodeID,
 				DisplayName: "SS-Node-1",
 				Protocol:    domain.ProtocolSS,
 				Server:      "1.2.3.4",
@@ -354,8 +355,9 @@ func TestMihomoShadowsocksPlugin_UnsupportedPluginsFailClosed(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			nodeID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.2.3.4", 8388, tc.transport)
 			node := resolver.ResolvedNode{
-				LogicalID:   "node-ss-unsupported",
+				LogicalID:   nodeID,
 				DisplayName: "SS-Unsupported-Node",
 				Protocol:    domain.ProtocolSS,
 				Server:      "1.2.3.4",
@@ -561,8 +563,9 @@ func TestMihomoShadowsocksPlugin_InvalidConfigurationsFailClosed(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			nodeID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.2.3.4", 8388, tc.transport)
 			node := resolver.ResolvedNode{
-				LogicalID:   "node-ss-fail",
+				LogicalID:   nodeID,
 				DisplayName: "SS-Fail-Node",
 				Protocol:    domain.ProtocolSS,
 				Server:      "1.2.3.4",
@@ -622,9 +625,12 @@ func TestMihomoShadowsocksPlugin_InvalidConfigurationsFailClosed(t *testing.T) {
 func TestMihomoShadowsocksPlugin_SourceSnapshotImmutability(t *testing.T) {
 	ctx := context.Background()
 
+	nodeID1 := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.2.3.4", 8388, map[string]string{"plugin": "obfs"})
+	nodeID2 := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.2.3.4", 8389, map[string]string{"plugin": "v2ray-plugin"})
+
 	originalSnap := makeSSPluginSnapshot(
 		resolver.ResolvedNode{
-			LogicalID:   "ss-node-1",
+			LogicalID:   nodeID1,
 			DisplayName: "SS-Obfs",
 			Protocol:    domain.ProtocolSS,
 			Server:      "1.2.3.4",
@@ -640,7 +646,7 @@ func TestMihomoShadowsocksPlugin_SourceSnapshotImmutability(t *testing.T) {
 			Active: true,
 		},
 		resolver.ResolvedNode{
-			LogicalID:   "ss-node-2",
+			LogicalID:   nodeID2,
 			DisplayName: "SS-V2Ray",
 			Protocol:    domain.ProtocolSS,
 			Server:      "1.2.3.4",

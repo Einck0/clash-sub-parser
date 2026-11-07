@@ -19,8 +19,9 @@ func TestPreview_TargetDefaultsAndModeValidation(t *testing.T) {
 	ctx := context.Background()
 	svc, _, _ := setupService()
 
+	validSSID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.1.1.1", 8388, nil)
 	validSS := resolver.ResolvedNode{
-		LogicalID:   "node-ss-1",
+		LogicalID:   validSSID,
 		Protocol:    domain.ProtocolSS,
 		DisplayName: "Valid SS",
 		Server:      "1.1.1.1",
@@ -91,8 +92,9 @@ func TestPreview_TargetDefaultsAndModeValidation(t *testing.T) {
 
 	t.Run("ExplicitStrict_RejectsIncompatibleOnNonMihomo", func(t *testing.T) {
 		// Mixed snapshot: SS + VLESS (unsupported on Surge / QX)
+		vlessNodeID := domain.ComputeNodeLogicalID(domain.ProtocolVLESS, "2.2.2.2", 443, nil)
 		vlessNode := resolver.ResolvedNode{
-			LogicalID:   "node-vless-1",
+			LogicalID:   vlessNodeID,
 			Protocol:    domain.ProtocolVLESS,
 			DisplayName: "VLESS Node",
 			Server:      "2.2.2.2",
@@ -132,8 +134,9 @@ func TestPreview_TargetDefaultsAndModeValidation(t *testing.T) {
 	})
 
 	t.Run("ExplicitCompatible_AcceptsMixedOnNonMihomo", func(t *testing.T) {
+		vlessNodeID := domain.ComputeNodeLogicalID(domain.ProtocolVLESS, "2.2.2.2", 443, nil)
 		vlessNode := resolver.ResolvedNode{
-			LogicalID:   "node-vless-1",
+			LogicalID:   vlessNodeID,
 			Protocol:    domain.ProtocolVLESS,
 			DisplayName: "VLESS Node",
 			Server:      "2.2.2.2",
@@ -233,7 +236,7 @@ func TestPreview_FactsPath_RealDraftPersistenceAndPublishLifecycle(t *testing.T)
 	}
 
 	// 3. Node & source
-	nodeID := "node_lifecycle_ss"
+	nodeID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.2.3.4", 8388, nil)
 	node := domain.Node{
 		LogicalID:          nodeID,
 		DisplayName:        "Lifecycle SS Node",
@@ -384,8 +387,9 @@ func TestBuildCurrentArtifact_NonMihomoCompatibleProjection(t *testing.T) {
 	ctx := context.Background()
 	svc := publication.NewService(nil, nil)
 
+	validSSID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.1.1.1", 8388, nil)
 	validSS := domain.Node{
-		LogicalID:          "node-ss-valid",
+		LogicalID:          validSSID,
 		DisplayName:        "Valid Shadowsocks",
 		Protocol:           domain.ProtocolSS,
 		Server:             "1.1.1.1",
@@ -395,8 +399,9 @@ func TestBuildCurrentArtifact_NonMihomoCompatibleProjection(t *testing.T) {
 		ConnectionRevision: 1,
 	}
 
+	vlessNodeID := domain.ComputeNodeLogicalID(domain.ProtocolVLESS, "2.2.2.2", 443, nil)
 	vlessNode := domain.Node{
-		LogicalID:          "node-vless-unsupported-on-surge",
+		LogicalID:          vlessNodeID,
 		DisplayName:        "VLESS Unsupported on Surge",
 		Protocol:           domain.ProtocolVLESS,
 		Server:             "2.2.2.2",
@@ -479,8 +484,9 @@ func TestBuildCurrentArtifact_AllExcludedNonemptyInput_ReturnsNoCompatibleNodes(
 	svc := publication.NewService(nil, nil)
 
 	// Only VLESS node (unsupported on Surge)
+	vlessNodeID := domain.ComputeNodeLogicalID(domain.ProtocolVLESS, "2.2.2.2", 443, nil)
 	vlessNode := domain.Node{
-		LogicalID:          "node-vless-only",
+		LogicalID:          vlessNodeID,
 		DisplayName:        "VLESS Only Node",
 		Protocol:           domain.ProtocolVLESS,
 		Server:             "2.2.2.2",
@@ -502,7 +508,7 @@ func TestBuildCurrentArtifact_AllExcludedNonemptyInput_ReturnsNoCompatibleNodes(
 		EnabledSubscriptionIDs: make(map[string]bool),
 		AsOf:                   time.Now().UTC(),
 		PrimarySubscriptionID:  "sub-primary",
-		PrimaryNodeIDs:         []string{"node-vless-only"},
+		PrimaryNodeIDs:         []string{vlessNodeID},
 	}
 
 	_, _, err := svc.BuildCurrentArtifact(ctx, facts, domain.TargetSurge)
@@ -519,8 +525,9 @@ func TestBuildCurrentArtifact_NonMihomoChains_FailClosed(t *testing.T) {
 	ctx := context.Background()
 	svc := publication.NewService(nil, nil)
 
+	validSSID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.1.1.1", 8388, nil)
 	validSS := domain.Node{
-		LogicalID:          "node-ss-chained",
+		LogicalID:          validSSID,
 		DisplayName:        "SS Chained",
 		Protocol:           domain.ProtocolSS,
 		Server:             "1.1.1.1",

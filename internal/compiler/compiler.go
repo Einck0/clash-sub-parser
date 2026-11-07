@@ -5,9 +5,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/netip"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -539,19 +541,117 @@ func copyStringSet(values map[string]bool) map[string]bool {
 	return result
 }
 
-func sanitizeReason(reason string, creds domain.InboundProtocolCredential) string {
-	secrets := []string{
-		creds.Password,
-		creds.UUID,
-		creds.PrivateKey,
-		creds.PreSharedKey,
-		creds.Secret,
-		creds.SharedSecret,
+func isSensitiveKey(kLower string) bool {
+	return strings.Contains(kLower, "password") ||
+		strings.Contains(kLower, "secret") ||
+		strings.Contains(kLower, "psk") ||
+		strings.Contains(kLower, "preshared") ||
+		strings.Contains(kLower, "token") ||
+		strings.Contains(kLower, "auth") ||
+		strings.Contains(kLower, "private") ||
+		kLower == "key" ||
+		kLower == "privkey" ||
+		kLower == "priv-key"
+}
+
+func extractPluginSecrets(raw string, addSecret func(string)) {
+	if strings.HasPrefix(raw, "{") {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(raw), &m); err == nil {
+			for k, val := range m {
+				kLower := strings.ToLower(strings.TrimSpace(k))
+				if isSensitiveKey(kLower) {
+					if strVal, ok := val.(string); ok {
+						addSecret(strVal)
+					}
+				}
+			}
+			return
+		}
 	}
+	for _, part := range strings.Split(raw, ";") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if k, v, found := strings.Cut(part, "="); found {
+			kLower := strings.ToLower(strings.TrimSpace(k))
+			if isSensitiveKey(kLower) {
+				addSecret(v)
+			}
+		}
+	}
+}
+
+func collectSecrets(creds domain.InboundProtocolCredential) []string {
+	var secrets []string
+	addSecret := func(s string) {
+		s = strings.TrimSpace(s)
+		if s != "" {
+			secrets = append(secrets, s)
+		}
+	}
+
+	addSecret(creds.Password)
+	addSecret(creds.UUID)
+	addSecret(creds.PrivateKey)
+	addSecret(creds.EffectivePreSharedKey())
+	addSecret(creds.PreSharedKey)
+	addSecret(creds.PresharedKey)
+
+	if creds.Transport != nil {
+		for k, v := range creds.Transport {
+			vTrim := strings.TrimSpace(v)
+			if vTrim == "" {
+				continue
+			}
+			kLower := strings.ToLower(strings.TrimSpace(k))
+			if isSensitiveKey(kLower) {
+				addSecret(vTrim)
+			}
+			if kLower == "plugin-opts" || kLower == "plugin_opts" {
+				extractPluginSecrets(vTrim, addSecret)
+			}
+		}
+	}
+
+	return secrets
+}
+
+func sanitizeReason(reason string, creds domain.InboundProtocolCredential) string {
+	if reason == "" {
+		return reason
+	}
+	secrets := collectSecrets(creds)
+	sort.Slice(secrets, func(i, j int) bool {
+		return len(secrets[i]) > len(secrets[j])
+	})
+
+	seen := make(map[string]bool, len(secrets))
 	for _, s := range secrets {
 		trimmed := strings.TrimSpace(s)
-		if len(trimmed) >= 4 && strings.Contains(reason, trimmed) {
-			reason = strings.ReplaceAll(reason, trimmed, "[REDACTED]")
+		if trimmed == "" || seen[trimmed] {
+			continue
+		}
+		seen[trimmed] = true
+
+		if len(trimmed) >= 4 {
+			if strings.Contains(reason, trimmed) {
+				reason = strings.ReplaceAll(reason, trimmed, "[REDACTED]")
+			}
+			lower := strings.ToLower(trimmed)
+			if lower != trimmed && strings.Contains(reason, lower) {
+				reason = strings.ReplaceAll(reason, lower, "[REDACTED]")
+			}
+		} else {
+			if reason == trimmed {
+				reason = "[REDACTED]"
+				continue
+			}
+			re := regexp.MustCompile(`(^|[^a-zA-Z0-9_])` + regexp.QuoteMeta(trimmed) + `($|[^a-zA-Z0-9_])`)
+			for strings.Contains(reason, trimmed) && re.MatchString(reason) {
+				reason = re.ReplaceAllString(reason, `${1}[REDACTED]${2}`)
+			}
 		}
 	}
 	return reason

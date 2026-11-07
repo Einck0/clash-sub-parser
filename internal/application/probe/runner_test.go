@@ -1284,6 +1284,7 @@ func TestProbeRunnerNodeSessionReuseAndCleanupLifecycle(t *testing.T) {
 			dialCounts  = make(map[string]int)
 			cleanCounts = make(map[string]int)
 			reqCounts   = make(map[string]int)
+			reqURLs     = make(map[string][]string)
 			closedByCtx = make(map[string]*atomic.Bool)
 		)
 
@@ -1309,6 +1310,7 @@ func TestProbeRunnerNodeSessionReuseAndCleanupLifecycle(t *testing.T) {
 						}
 						mu.Lock()
 						reqCounts[node.LogicalID]++
+						reqURLs[node.LogicalID] = append(reqURLs[node.LogicalID], req.URL.String())
 						mu.Unlock()
 
 						if node.LogicalID == "node_drift" && strings.Contains(req.URL.Path, "generate_204") {
@@ -1362,14 +1364,26 @@ func TestProbeRunnerNodeSessionReuseAndCleanupLifecycle(t *testing.T) {
 		if dialCounts["node_pass"] != 1 || cleanCounts["node_pass"] != 1 {
 			t.Fatalf("node_pass dials=%d cleanups=%d, want 1 and 1", dialCounts["node_pass"], cleanCounts["node_pass"])
 		}
-		if reqCounts["node_pass"] != 14 {
-			t.Fatalf("node_pass requests=%d, want 14 including independent Antigravity request", reqCounts["node_pass"])
+		if reqCounts["node_pass"] != 15 {
+			t.Fatalf("node_pass requests=%d, want 15 including independent Antigravity and Disney fallback requests", reqCounts["node_pass"])
 		}
 		if dialCounts["node_drift"] != 1 || cleanCounts["node_drift"] != 1 {
 			t.Fatalf("node_drift dials=%d cleanups=%d, want 1 and 1", dialCounts["node_drift"], cleanCounts["node_drift"])
 		}
-		if reqCounts["node_drift"] != 14 {
-			t.Fatalf("node_drift requests=%d, want 14 including independent Antigravity request (normalized baseline 200 enters stage 2)", reqCounts["node_drift"])
+		if reqCounts["node_drift"] != 15 {
+			t.Fatalf("node_drift requests=%d, want 15 including independent Antigravity and Disney fallback requests (normalized baseline 200 enters stage 2)", reqCounts["node_drift"])
+		}
+		for _, nodeID := range []string{"node_pass", "node_drift"} {
+			var hasDisneyFallback bool
+			for _, u := range reqURLs[nodeID] {
+				if strings.Contains(u, "disneyplus.com") {
+					hasDisneyFallback = true
+					break
+				}
+			}
+			if !hasDisneyFallback {
+				t.Fatalf("%s expected Disney homepage fallback request among urls: %v", nodeID, reqURLs[nodeID])
+			}
 		}
 	})
 
@@ -1387,6 +1401,8 @@ func TestProbeRunnerNodeSessionReuseAndCleanupLifecycle(t *testing.T) {
 
 		var dials, cleanups, requests atomic.Int32
 		var clientClosed atomic.Bool
+		var urlsMu sync.Mutex
+		var singleURLs []string
 		runner := probe.NewDefaultRunner(
 			nodesRepo,
 			obsRepo,
@@ -1403,6 +1419,9 @@ func TestProbeRunnerNodeSessionReuseAndCleanupLifecycle(t *testing.T) {
 							return nil, errors.New("client already closed before all node tasks completed")
 						}
 						requests.Add(1)
+						urlsMu.Lock()
+						singleURLs = append(singleURLs, req.URL.String())
+						urlsMu.Unlock()
 						return contractAwareMockHTTPClient().Transport.RoundTrip(req)
 					}),
 				}
@@ -1428,6 +1447,7 @@ func TestProbeRunnerNodeSessionReuseAndCleanupLifecycle(t *testing.T) {
 
 		// Non-baseline multiple kinds trigger single-stage path. AI performs an
 		// independent Antigravity request in addition to its existing requests.
+		// Disney triggers an intentional public-page fallback on malformed assertion.
 		kinds := []domain.ProbeKind{
 			domain.ProbeKindGeo,
 			domain.ProbeKindStreaming,
@@ -1437,8 +1457,20 @@ func TestProbeRunnerNodeSessionReuseAndCleanupLifecycle(t *testing.T) {
 		if err := runner.Run(context.Background(), run, []string{"node_single"}, kinds); err != nil {
 			t.Fatalf("Run failed: %v", err)
 		}
-		if dials.Load() != 1 || cleanups.Load() != 1 || requests.Load() != 13 {
-			t.Fatalf("expected dials=1 cleanups=1 requests=13 including independent Antigravity request, got dials=%d cleanups=%d requests=%d", dials.Load(), cleanups.Load(), requests.Load())
+		if dials.Load() != 1 || cleanups.Load() != 1 || requests.Load() != 14 {
+			t.Fatalf("expected dials=1 cleanups=1 requests=14 including independent Antigravity and Disney fallback requests, got dials=%d cleanups=%d requests=%d", dials.Load(), cleanups.Load(), requests.Load())
+		}
+		urlsMu.Lock()
+		var hasDisneyFallback bool
+		for _, u := range singleURLs {
+			if strings.Contains(u, "disneyplus.com") {
+				hasDisneyFallback = true
+				break
+			}
+		}
+		urlsMu.Unlock()
+		if !hasDisneyFallback {
+			t.Fatalf("expected Disney homepage fallback request among urls: %v", singleURLs)
 		}
 	})
 

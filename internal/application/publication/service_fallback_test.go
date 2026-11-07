@@ -510,6 +510,88 @@ func TestBuildCurrentArtifact_NormalHealthyRoutes_NoFallback(t *testing.T) {
 	}
 }
 
+func TestBuildCurrentArtifact_EffectiveRoutesWithZeroEnabledPolicyRule_NoFallback(t *testing.T) {
+	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
+	svc := publication.NewService(nil, nil)
+
+	nodeID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.1.1.1", 8388, nil)
+	n := domain.Node{
+		LogicalID:   nodeID,
+		Protocol:    domain.ProtocolSS,
+		DisplayName: "Healthy Node",
+		Server:      "1.1.1.1",
+		Port:        8388,
+		Active:      true,
+		Credentials: domain.InboundProtocolCredential{
+			Method:   "aes-128-gcm",
+			Password: "pass",
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	groupID := domain.MustNewUUIDv7()
+	ruleID := domain.MustNewUUIDv7()
+
+	facts := &domain.ConsistentFacts{
+		AsOf: now,
+		Revision: &domain.ConfigurationRevision{
+			ID:            "rev-zero-enabled",
+			ContentDigest: "digest-rev-ze",
+			State:         domain.RevisionStateActive,
+			CreatedAt:     now,
+		},
+		Nodes: []domain.Node{n},
+		Groups: []domain.NodeGroup{
+			{
+				ID:        groupID,
+				Name:      "Legacy Fixture Group",
+				GroupType: domain.GroupTypeSelect,
+				Sources: []domain.MemberSource{
+					{
+						ID:            "src-1",
+						GroupID:       groupID,
+						Operation:     domain.OperationAdd,
+						Kind:          domain.SourceKindManualNode,
+						Position:      0,
+						NodeLogicalID: &nodeID,
+					},
+				},
+			},
+		},
+		PolicyRules: []domain.PolicyRule{
+			{
+				ID:            ruleID,
+				RevisionID:    "rev-zero-enabled",
+				TargetGroupID: groupID,
+				Expression:    "MATCH",
+				Position:      0,
+				Enabled:       false,
+			},
+		},
+		PrimarySubscriptionID: "sub-primary",
+		PrimaryNodeIDs:        []string{nodeID},
+	}
+
+	ctx := context.Background()
+	artifact, snap, err := svc.BuildCurrentArtifact(ctx, facts, domain.TargetMihomo)
+	if err != nil {
+		t.Fatalf("expected normal build to succeed with effective routes even when Enabled is zero, got: %v", err)
+	}
+
+	for _, d := range snap.Diagnostics {
+		if d.Code == "primary_subscription_fallback" {
+			t.Fatal("primary_subscription_fallback diagnostic should not be present when effective routes exist")
+		}
+	}
+	if strings.Contains(string(artifact.Content), "主订阅兜底") {
+		t.Errorf("content should NOT contain '主订阅兜底' on normal export")
+	}
+	if !strings.Contains(string(artifact.Content), "Legacy Fixture Group") {
+		t.Errorf("content should contain 'Legacy Fixture Group'")
+	}
+}
+
 func TestBuildCurrentArtifact_PartialConfigurationError_NoFallback(t *testing.T) {
 	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
 	svc := publication.NewService(nil, nil)

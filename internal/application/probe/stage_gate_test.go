@@ -324,9 +324,9 @@ func TestStageGateBaselineAvailabilityControlsStreaming(t *testing.T) {
 		wantRequests int
 	}{
 		{name: "unavailable_503", status: http.StatusServiceUnavailable, body: "unavailable", wantRequests: 1},
-		{name: "http_200_ok_normalized_available", status: http.StatusOK, body: "ok", wantRequests: 7},
-		{name: "http_204_non_empty_normalized_available", status: http.StatusNoContent, body: "unexpected", wantRequests: 6},
-		{name: "available_204_empty", status: http.StatusNoContent, body: "", wantRequests: 6},
+		{name: "http_200_ok_normalized_available", status: http.StatusOK, body: "ok", wantRequests: 8},
+		{name: "http_204_non_empty_normalized_available", status: http.StatusNoContent, body: "unexpected", wantRequests: 7},
+		{name: "available_204_empty", status: http.StatusNoContent, body: "", wantRequests: 7},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			runs, observations, nodes := newMemoryRuns(), newMemoryObservations(), newMemoryNodes()
@@ -390,6 +390,17 @@ func TestStageGateBaselineAvailabilityControlsStreaming(t *testing.T) {
 					strings.Contains(urls[1], "youtube") || strings.Contains(urls[1], "disney")
 				if !isStreaming {
 					t.Fatalf("second-stage request not streaming: %q", urls[1])
+				}
+				// Disney malformed assertion now invokes public-page fallback, making an extra request to the Disney homepage.
+				var hasDisneyFallback bool
+				for _, u := range urls {
+					if strings.Contains(u, "disneyplus.com") {
+						hasDisneyFallback = true
+						break
+					}
+				}
+				if !hasDisneyFallback {
+					t.Fatalf("expected Disney homepage fallback request among urls: %v", urls)
 				}
 			}
 		})

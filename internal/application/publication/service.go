@@ -1714,14 +1714,6 @@ func (s *Service) BuildCurrentArtifact(ctx context.Context, facts *domain.Consis
 	preflight := s.evaluatePreflightFromSnapshot(ctx, snapshot, target, facts.ActiveRiskPolicy, facts.RiskObservations, facts.AsOf)
 	diags := compiler.ValidateTargetCapabilities(snapshot, target)
 
-	hasEnabledPolicyRules := false
-	for _, r := range facts.PolicyRules {
-		if r.Enabled {
-			hasEnabledPolicyRules = true
-			break
-		}
-	}
-
 	// A built-in destination is an intentional route, not an empty user-group
 	// selection. Never replace configured DIRECT/REJECT behavior with fallback.
 	hasBuiltinRoutingRule := false
@@ -1750,12 +1742,12 @@ func (s *Service) BuildCurrentArtifact(ctx context.Context, facts *domain.Consis
 	}
 	hasPartialConfigError := (usableRoutedCount > 0 && emptyRoutedCount > 0)
 
-	absentRoutingMihomo := (target == domain.TargetMihomo) && (!hasEnabledPolicyRules || (!hasBuiltinRoutingRule && len(routedUserGroups) == 0))
+	absentRoutingMihomo := (target == domain.TargetMihomo) && (!hasBuiltinRoutingRule && len(routedUserGroups) == 0)
 
 	// Check if normal compilation succeeds. Only the explicit empty-group
 	// compiler failure may proceed to fallback; other compile/content failures
 	// are meaningful errors and must be preserved verbatim.
-	// Absent routing for Mihomo (no enabled PolicyRules, or no effective routed or builtin routes)
+	// Absent routing for Mihomo (no effective routed or builtin routes)
 	// is defined as exhausted before normal successful return.
 	if !hasFilteredNodesEmpty && !absentRoutingMihomo && len(diags) == 0 && preflight.Allowed {
 		compileRes, err := compiler.Compile(ctx, snapshot, target)

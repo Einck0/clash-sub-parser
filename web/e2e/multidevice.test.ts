@@ -1067,19 +1067,19 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       sheetContainer.remove()
     })
 
-    it('classifies node with unknown baseline but available AI probe as untested, neither healthy nor unhealthy', async () => {
+    it('classifies node with unknown baseline but available AI probe as unknown, neither healthy nor unhealthy', async () => {
       const { nodeUnderlyingHealthCategory, nodeHealthBadge } = await import('../src/features/nodes/nodeView')
 
       const aiOnlyNode = largeNodesFixture.find((n) => n.logicalId === 'node-ai-only-70')!
       expect(aiOnlyNode).toBeDefined()
 
       const category = nodeUnderlyingHealthCategory(aiOnlyNode)
-      expect(category).toBe('untested')
+      expect(category).toBe('unknown')
       expect(category).not.toBe('healthy')
       expect(category).not.toBe('unhealthy')
 
       const badge = nodeHealthBadge(aiOnlyNode)
-      expect(badge.label).toBe('未测试')
+      expect(badge.label).toBe('未知')
       expect(badge.tone).toBe('info')
     })
   })

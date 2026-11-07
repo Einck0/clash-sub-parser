@@ -94,7 +94,7 @@ describe('global export filter settings', () => {
       'probe_verdict',
     ])
     expect([...conditions()[0]!.querySelectorAll<HTMLOptionElement>('select[aria-label="Probe kind"] option')].map((o) => o.value)).toEqual(['baseline', 'geo', 'streaming', 'ai', 'speed', 'ip_risk'])
-    expect([...conditions()[0]!.querySelectorAll<HTMLOptionElement>('select[aria-label="Value"] option')].map((o) => o.value)).toEqual(['available', 'restricted', 'unknown', 'error', 'stale'])
+    expect([...conditions()[0]!.querySelectorAll<HTMLOptionElement>('select[aria-label="Value"] option')].map((o) => o.value)).toEqual(['available', 'abnormal', 'restricted', 'unknown', 'error', 'skipped', 'stale'])
     expect(root.textContent).toContain('current connection revision')
     expect(root.textContent).toContain('latest valid check')
     expect(root.textContent).toContain('matches neither equals nor not_equals (neq)')

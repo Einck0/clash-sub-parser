@@ -321,6 +321,24 @@ func TestPublishIncompatibleTargetHardFails(t *testing.T) {
 
 	t.Run("DefaultMixedSnapshotPublishesCompatibleNodes", func(t *testing.T) {
 		incompatibleSnap := buildIncompatibleSnapshot()
+
+		prevRes, err := svc.Preview(ctx, publication.PreviewQuery{
+			Target:   domain.TargetSurge,
+			Snapshot: incompatibleSnap,
+		})
+		if err != nil {
+			t.Fatalf("expected mixed snapshot preview to succeed in default compatible mode, got: %v", err)
+		}
+		if prevRes.Manifest.NodeCount != 2 {
+			t.Fatalf("expected 2 admitted nodes in manifest, got %d", prevRes.Manifest.NodeCount)
+		}
+		if prevRes.Manifest.ExcludedCount != 1 {
+			t.Fatalf("expected 1 excluded node in manifest, got %d", prevRes.Manifest.ExcludedCount)
+		}
+		if len(prevRes.Manifest.Excluded) != 1 || prevRes.Manifest.Excluded[0].NodeID != "node-vless-01" {
+			t.Fatalf("expected node-vless-01 excluded, got %+v", prevRes.Manifest.Excluded)
+		}
+
 		cmd := publication.PublishCommand{
 			Target:    domain.TargetSurge,
 			Snapshot:  incompatibleSnap,
@@ -335,14 +353,11 @@ func TestPublishIncompatibleTargetHardFails(t *testing.T) {
 		if pubRes.Publication.State != domain.PublicationStateActive {
 			t.Fatalf("expected active publication, got %s", pubRes.Publication.State)
 		}
-		if pubRes.Publication.Manifest.NodeCount != 2 {
-			t.Fatalf("expected 2 admitted nodes in manifest, got %d", pubRes.Publication.Manifest.NodeCount)
+		if pubRes.ContentDigest == "" || pubRes.SnapshotDigest == "" {
+			t.Fatalf("expected non-empty content and snapshot digests, got content=%q snapshot=%q", pubRes.ContentDigest, pubRes.SnapshotDigest)
 		}
-		if pubRes.Publication.Manifest.ExcludedCount != 1 {
-			t.Fatalf("expected 1 excluded node in manifest, got %d", pubRes.Publication.Manifest.ExcludedCount)
-		}
-		if len(pubRes.Publication.Manifest.Excluded) != 1 || pubRes.Publication.Manifest.Excluded[0].NodeID != "node-vless-01" {
-			t.Fatalf("expected node-vless-01 excluded, got %+v", pubRes.Publication.Manifest.Excluded)
+		if pubRes.ContentDigest != prevRes.ContentDigest {
+			t.Fatalf("expected publication content digest %s to match preview %s", pubRes.ContentDigest, prevRes.ContentDigest)
 		}
 		contentStr := string(pubRes.Publication.Content)
 		if !strings.Contains(contentStr, "hk.example.com") || !strings.Contains(contentStr, "us.example.com") {

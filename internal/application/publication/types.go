@@ -148,6 +148,29 @@ type PreviewResult struct {
 	FilterCounts   *resolver.FilterLayerCounts `json:"filter_counts,omitempty"`
 }
 
+// exportMode defines execution mode for configuration export (strict validation vs compatible adaptation).
+type exportMode string
+
+const (
+	exportModeStrict     exportMode = "strict"
+	exportModeCompatible exportMode = "compatible"
+)
+
+// defaultExportMode returns strict mode for full-policy Mihomo exports,
+// and compatible mode for node-only target exports (Sing-box, Surge, Quantumult X).
+func defaultExportMode(target domain.CompilerTarget) exportMode {
+	if target == domain.TargetMihomo {
+		return exportModeStrict
+	}
+	return exportModeCompatible
+}
+
+// artifactPipelineConfig encapsulates target-aware compilation parameters for artifact generation.
+type artifactPipelineConfig struct {
+	mode                           exportMode
+	pruneUnavailableOptionalGroups bool
+}
+
 // RevokeCommand specifies a publication to revoke along with audit context.
 type RevokeCommand struct {
 	ID        string

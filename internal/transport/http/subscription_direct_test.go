@@ -111,6 +111,9 @@ func TestDirectSubscriptionEndpoints_OpenMode(t *testing.T) {
 		if etag := rec.Header().Get("ETag"); etag == "" {
 			t.Errorf("GET %s missing ETag header", path)
 		}
+		if excl := rec.Header().Get("X-Export-Excluded-Count"); excl == "" {
+			t.Errorf("GET %s missing X-Export-Excluded-Count header", path)
+		}
 		if rec.Body.Len() == 0 {
 			t.Errorf("GET %s returned empty body", path)
 		}
@@ -250,6 +253,9 @@ func TestDirectSubscriptionEndpoints_ConditionalCaching(t *testing.T) {
 	}
 	if rec304.Header().Get("ETag") != etag {
 		t.Errorf("304 ETag = %q, want %q", rec304.Header().Get("ETag"), etag)
+	}
+	if excl := rec304.Header().Get("X-Export-Excluded-Count"); excl == "" {
+		t.Errorf("304 missing X-Export-Excluded-Count header")
 	}
 
 	// 3. Request with mismatched If-None-Match -> 200 OK
@@ -424,5 +430,91 @@ func TestDirectSubscriptionEndpoints_PolicyGroupOrdering(t *testing.T) {
 
 	if posZZZ >= posAAA {
 		t.Errorf("expected ZZZ (position 1) to appear before AAA (position 10) in output, got posZZZ=%d, posAAA=%d", posZZZ, posAAA)
+	}
+}
+
+func TestDirectSubscriptionEndpoints_TargetAdaptation_ExclusionsAndErrors(t *testing.T) {
+	router, db, _ := setupDirectSubRouter(t, "", false, false)
+	now := time.Now().UTC()
+
+	// Add a VLESS node that is unsupported on Surge / Quantumult X
+	vlessID := "node_vless_unsupported_on_surge"
+	_, err := db.Exec(`
+		INSERT INTO nodes (logical_id, protocol, display_name, server, port, config_json, active, created_at, updated_at, connection_revision)
+		VALUES (?, 'vless', 'Direct VLESS Node', '2.2.2.2', 443, '{"uuid":"01944aa0-0000-7000-8000-000000000001"}', 1, ?, ?, 1);
+	`, vlessID, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
+	if err != nil {
+		t.Fatalf("failed to insert VLESS node: %v", err)
+	}
+	_, _ = db.Exec(`
+		INSERT INTO node_sources (node_logical_id, subscription_id, last_seen_fetch_id)
+		VALUES (?, 'sub-direct-1', 'fetch-direct-1');
+	`, vlessID)
+
+	// 1. GET /surge: should project compatible SS node and exclude VLESS
+	recSurge := doRequest(router, http.MethodGet, "/surge", "", "")
+	if recSurge.Code != http.StatusOK {
+		t.Fatalf("expected 200 for /surge with mixed inventory, got %d: %s", recSurge.Code, recSurge.Body.String())
+	}
+	if excl := recSurge.Header().Get("X-Export-Excluded-Count"); excl != "1" {
+		t.Errorf("expected X-Export-Excluded-Count: 1, got %q", excl)
+	}
+	surgeBody := recSurge.Body.String()
+	if !strings.Contains(surgeBody, "Direct SS Node") {
+		t.Errorf("expected surge output to contain SS node, got: %s", surgeBody)
+	}
+	if strings.Contains(surgeBody, "Direct VLESS Node") {
+		t.Errorf("expected surge output to exclude VLESS node, got: %s", surgeBody)
+	}
+	surgeEtag := recSurge.Header().Get("ETag")
+	if surgeEtag == "" {
+		t.Fatal("missing ETag in surge response")
+	}
+
+	// 2. 304 on /surge should also report X-Export-Excluded-Count: 1
+	req304 := httptest.NewRequest(http.MethodGet, "/surge", nil)
+	req304.Header.Set("If-None-Match", surgeEtag)
+	rec304 := httptest.NewRecorder()
+	router.ServeHTTP(rec304, req304)
+	if rec304.Code != http.StatusNotModified {
+		t.Fatalf("expected 304, got %d", rec304.Code)
+	}
+	if excl := rec304.Header().Get("X-Export-Excluded-Count"); excl != "1" {
+		t.Errorf("expected 304 X-Export-Excluded-Count: 1, got %q", excl)
+	}
+
+	// 3. All-excluded nonempty inventory: disable SS node, leaving only VLESS
+	_, err = db.Exec(`UPDATE nodes SET active = 0 WHERE logical_id = 'node_0123456789abcdef';`)
+	if err != nil {
+		t.Fatalf("failed to deactivate SS node: %v", err)
+	}
+
+	recAllExcluded := doRequest(router, http.MethodGet, "/surge", "", "")
+	if recAllExcluded.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 for all-excluded nodes on /surge, got %d: %s", recAllExcluded.Code, recAllExcluded.Body.String())
+	}
+	if !strings.Contains(recAllExcluded.Body.String(), "no_compatible_nodes") {
+		t.Fatalf("expected no_compatible_nodes in error response, got: %s", recAllExcluded.Body.String())
+	}
+
+	// 4. Active chain on non-Mihomo: restore SS node, add enabled proxy chain binding
+	_, err = db.Exec(`UPDATE nodes SET active = 1 WHERE logical_id = 'node_0123456789abcdef';`)
+	if err != nil {
+		t.Fatalf("failed to reactivate SS node: %v", err)
+	}
+	_, err = db.Exec(`
+		INSERT INTO proxy_chain_bindings (id, target_type, target_id, dialer_type, dialer_id, enabled, sort_order, revision, created_at, updated_at)
+		VALUES ('chain-direct-test', 'subscription', 'sub-direct-1', 'manual_node', 'node_0123456789abcdef', 1, 0, 1, ?, ?);
+	`, now.Format(time.RFC3339), now.Format(time.RFC3339))
+	if err != nil {
+		t.Fatalf("failed to insert chain binding: %v", err)
+	}
+
+	recChain := doRequest(router, http.MethodGet, "/surge", "", "")
+	if recChain.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 for active chain on /surge, got %d: %s", recChain.Code, recChain.Body.String())
+	}
+	if !strings.Contains(recChain.Body.String(), "unsupported_target_capability") {
+		t.Fatalf("expected unsupported_target_capability in error response, got: %s", recChain.Body.String())
 	}
 }

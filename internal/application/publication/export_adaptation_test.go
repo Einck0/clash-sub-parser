@@ -238,12 +238,15 @@ func TestPreview_FactsPath_RealDraftPersistenceAndPublishLifecycle(t *testing.T)
 	// 3. Node & source
 	nodeID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.2.3.4", 8388, nil)
 	node := domain.Node{
-		LogicalID:          nodeID,
-		DisplayName:        "Lifecycle SS Node",
-		Protocol:           domain.ProtocolSS,
-		Server:             "1.2.3.4",
-		Port:               8388,
-		ConfigJSON:         `{"method":"aes-128-gcm","password":"secretpassword"}`,
+		LogicalID:   nodeID,
+		DisplayName: "Lifecycle SS Node",
+		Protocol:    domain.ProtocolSS,
+		Server:      "1.2.3.4",
+		Port:        8388,
+		Credentials: domain.InboundProtocolCredential{
+			Method:   "aes-128-gcm",
+			Password: "secretpassword",
+		},
 		Active:             true,
 		ConnectionRevision: 1,
 		CreatedAt:          now,
@@ -252,10 +255,12 @@ func TestPreview_FactsPath_RealDraftPersistenceAndPublishLifecycle(t *testing.T)
 	if err := nodeRepo.UpsertBatch(ctx, []domain.Node{node}); err != nil {
 		t.Fatal(err)
 	}
-	_, _ = db.ExecContext(ctx, `
+	if _, err := db.ExecContext(ctx, `
 		INSERT INTO node_sources (node_logical_id, subscription_id, last_seen_fetch_id)
 		VALUES (?, ?, ?);
-	`, nodeID, subID, fetchID)
+	`, nodeID, subID, fetchID); err != nil {
+		t.Fatal(err)
+	}
 
 	// 4. Revision
 	revID := "rev-lifecycle-1"
@@ -389,32 +394,38 @@ func TestBuildCurrentArtifact_NonMihomoCompatibleProjection(t *testing.T) {
 
 	validSSID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.1.1.1", 8388, nil)
 	validSS := domain.Node{
-		LogicalID:          validSSID,
-		DisplayName:        "Valid Shadowsocks",
-		Protocol:           domain.ProtocolSS,
-		Server:             "1.1.1.1",
-		Port:               8388,
-		ConfigJSON:         `{"method":"aes-128-gcm","password":"secretpassword"}`,
+		LogicalID:   validSSID,
+		DisplayName: "Valid Shadowsocks",
+		Protocol:    domain.ProtocolSS,
+		Server:      "1.1.1.1",
+		Port:        8388,
+		Credentials: domain.InboundProtocolCredential{
+			Method:   "aes-128-gcm",
+			Password: "secretpassword",
+		},
 		Active:             true,
 		ConnectionRevision: 1,
 	}
 
 	vlessNodeID := domain.ComputeNodeLogicalID(domain.ProtocolVLESS, "2.2.2.2", 443, nil)
 	vlessNode := domain.Node{
-		LogicalID:          vlessNodeID,
-		DisplayName:        "VLESS Unsupported on Surge",
-		Protocol:           domain.ProtocolVLESS,
-		Server:             "2.2.2.2",
-		Port:               443,
-		ConfigJSON:         `{"uuid":"01944aa0-0000-7000-8000-000000000001"}`,
+		LogicalID:   vlessNodeID,
+		DisplayName: "VLESS Unsupported on Surge",
+		Protocol:    domain.ProtocolVLESS,
+		Server:      "2.2.2.2",
+		Port:        443,
+		Credentials: domain.InboundProtocolCredential{
+			UUID: "01944aa0-0000-7000-8000-000000000001",
+		},
 		Active:             true,
 		ConnectionRevision: 1,
 	}
 
 	rev := &domain.ConfigurationRevision{
-		ID:        "rev-compat-test",
-		State:     domain.RevisionStateActive,
-		CreatedAt: time.Now().UTC(),
+		ID:            "rev-compat-test",
+		ContentDigest: "sha256:rev-compat-digest",
+		State:         domain.RevisionStateActive,
+		CreatedAt:     time.Now().UTC(),
 	}
 
 	facts := &domain.ConsistentFacts{
@@ -486,20 +497,23 @@ func TestBuildCurrentArtifact_AllExcludedNonemptyInput_ReturnsNoCompatibleNodes(
 	// Only VLESS node (unsupported on Surge)
 	vlessNodeID := domain.ComputeNodeLogicalID(domain.ProtocolVLESS, "2.2.2.2", 443, nil)
 	vlessNode := domain.Node{
-		LogicalID:          vlessNodeID,
-		DisplayName:        "VLESS Only Node",
-		Protocol:           domain.ProtocolVLESS,
-		Server:             "2.2.2.2",
-		Port:               443,
-		ConfigJSON:         `{"uuid":"01944aa0-0000-7000-8000-000000000001"}`,
+		LogicalID:   vlessNodeID,
+		DisplayName: "VLESS Only Node",
+		Protocol:    domain.ProtocolVLESS,
+		Server:      "2.2.2.2",
+		Port:        443,
+		Credentials: domain.InboundProtocolCredential{
+			UUID: "01944aa0-0000-7000-8000-000000000001",
+		},
 		Active:             true,
 		ConnectionRevision: 1,
 	}
 
 	rev := &domain.ConfigurationRevision{
-		ID:        "rev-all-excluded",
-		State:     domain.RevisionStateActive,
-		CreatedAt: time.Now().UTC(),
+		ID:            "rev-all-excluded",
+		ContentDigest: "sha256:rev-all-excluded",
+		State:         domain.RevisionStateActive,
+		CreatedAt:     time.Now().UTC(),
 	}
 
 	facts := &domain.ConsistentFacts{
@@ -527,20 +541,24 @@ func TestBuildCurrentArtifact_NonMihomoChains_FailClosed(t *testing.T) {
 
 	validSSID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.1.1.1", 8388, nil)
 	validSS := domain.Node{
-		LogicalID:          validSSID,
-		DisplayName:        "SS Chained",
-		Protocol:           domain.ProtocolSS,
-		Server:             "1.1.1.1",
-		Port:               8388,
-		ConfigJSON:         `{"method":"aes-128-gcm","password":"secretpassword"}`,
+		LogicalID:   validSSID,
+		DisplayName: "SS Chained",
+		Protocol:    domain.ProtocolSS,
+		Server:      "1.1.1.1",
+		Port:        8388,
+		Credentials: domain.InboundProtocolCredential{
+			Method:   "aes-128-gcm",
+			Password: "secretpassword",
+		},
 		Active:             true,
 		ConnectionRevision: 1,
 	}
 
 	rev := &domain.ConfigurationRevision{
-		ID:        "rev-chain-fail",
-		State:     domain.RevisionStateActive,
-		CreatedAt: time.Now().UTC(),
+		ID:            "rev-chain-fail",
+		ContentDigest: "sha256:rev-chain-digest",
+		State:         domain.RevisionStateActive,
+		CreatedAt:     time.Now().UTC(),
 	}
 
 	// 1. Active chain binding in facts on non-Mihomo
@@ -805,7 +823,9 @@ func TestPreview_FactsPath_SelectionExhaustion_PrimaryFallbackMatchesLive(t *tes
 		Server:      "2.2.2.2",
 		Port:        443,
 		Active:      true,
-		ConfigJSON:  `{"uuid":"01944aa0-0000-7000-8000-000000000001"}`,
+		Credentials: domain.InboundProtocolCredential{
+			UUID: "01944aa0-0000-7000-8000-000000000001",
+		},
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
@@ -813,9 +833,10 @@ func TestPreview_FactsPath_SelectionExhaustion_PrimaryFallbackMatchesLive(t *tes
 	factsSurgeFallback := &domain.ConsistentFacts{
 		AsOf: now,
 		Revision: &domain.ConfigurationRevision{
-			ID:        "rev-fallback-surge",
-			State:     domain.RevisionStateActive,
-			CreatedAt: now,
+			ID:            "rev-fallback-surge",
+			ContentDigest: "sha256:rev-fallback-surge",
+			State:         domain.RevisionStateActive,
+			CreatedAt:     now,
 		},
 		Nodes: []domain.Node{nVlessPrimary},
 		GlobalFilter: &domain.NodeFilterSpec{
@@ -871,9 +892,10 @@ func TestPreview_FactsPath_SelectionExhaustion_PrimaryFallbackMatchesLive(t *tes
 	factsMixedNormal := &domain.ConsistentFacts{
 		AsOf: now,
 		Revision: &domain.ConfigurationRevision{
-			ID:        "rev-mixed-normal",
-			State:     domain.RevisionStateActive,
-			CreatedAt: now,
+			ID:            "rev-mixed-normal",
+			ContentDigest: "sha256:rev-mixed-normal",
+			State:         domain.RevisionStateActive,
+			CreatedAt:     now,
 		},
 		Nodes: []domain.Node{nPrimary1, nVlessPrimary},
 	}

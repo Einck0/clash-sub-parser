@@ -5,12 +5,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/netip"
 	"sort"
 	"strings"
 
 	"clash-sub-parser/internal/domain"
+	probesingbox "clash-sub-parser/internal/probe/singbox"
 	"clash-sub-parser/internal/resolver"
 )
 
@@ -157,7 +159,12 @@ func validate(snapshot *resolver.ResolvedPolicySnapshot, target domain.CompilerT
 		if target != domain.TargetMihomo && strings.TrimSpace(node.DialerProxy) != "" {
 			return &CapabilityError{Target: target, Location: loc, Feature: "dialer-proxy", Reason: "dialer-proxy is only supported on mihomo target"}
 		}
+		trimmedName := strings.TrimSpace(node.DisplayName)
+		if nodeNames[trimmedName] {
+			return &CapabilityError{Target: target, Location: loc, Feature: node.DisplayName, Reason: fmt.Sprintf("duplicate node display name %q", node.DisplayName)}
+		}
 		nodeIDs[node.LogicalID] = true
+		nodeNames[trimmedName] = true
 		nodeNames[node.DisplayName] = true
 	}
 
@@ -532,6 +539,172 @@ func copyStringSet(values map[string]bool) map[string]bool {
 	return result
 }
 
+func sanitizeReason(reason string, creds domain.InboundProtocolCredential) string {
+	secrets := []string{
+		creds.Password,
+		creds.UUID,
+		creds.PrivateKey,
+		creds.PreSharedKey,
+		creds.Secret,
+		creds.SharedSecret,
+	}
+	for _, s := range secrets {
+		trimmed := strings.TrimSpace(s)
+		if len(trimmed) >= 4 && strings.Contains(reason, trimmed) {
+			reason = strings.ReplaceAll(reason, trimmed, "[REDACTED]")
+		}
+	}
+	return reason
+}
+
+func sanitizeCapabilityError(err *CapabilityError, creds domain.InboundProtocolCredential) *CapabilityError {
+	if err == nil {
+		return nil
+	}
+	copyErr := *err
+	copyErr.Reason = sanitizeReason(copyErr.Reason, creds)
+	copyErr.Feature = sanitizeReason(copyErr.Feature, creds)
+	return &copyErr
+}
+
+// checkNodeRenderability evaluates whether a single node can be rendered by the target.
+// It checks generic identifiers, protocol support, non-Mihomo dialer proxy, credential
+// completeness, and invokes the target's native single-node renderer or validator.
+// If the node cannot be rendered, it returns a sanitized CapabilityError that never leaks secrets.
+func checkNodeRenderability(target domain.CompilerTarget, index int, node resolver.ResolvedNode) *CapabilityError {
+	loc := fmt.Sprintf("nodes[%d]", index)
+	feature := string(node.Protocol)
+
+	if strings.TrimSpace(node.LogicalID) == "" {
+		return &CapabilityError{
+			Target:   target,
+			Location: loc,
+			Feature:  feature,
+			Reason:   "node logical ID is required",
+		}
+	}
+	if strings.TrimSpace(node.DisplayName) == "" {
+		return &CapabilityError{
+			Target:   target,
+			Location: loc,
+			Feature:  feature,
+			Reason:   "node display name is required",
+		}
+	}
+
+	capability, ok := capabilityForTarget(target)
+	if !ok {
+		return &CapabilityError{
+			Target:   target,
+			Location: loc,
+			Feature:  feature,
+			Reason:   fmt.Sprintf("unknown compiler target: %s", target),
+		}
+	}
+
+	if !node.Protocol.IsValid() || !capability.Protocols[node.Protocol] {
+		return &CapabilityError{
+			Target:   target,
+			Location: loc,
+			Feature:  feature,
+			Reason:   fmt.Sprintf("target %s does not support protocol %s (protocol is not supported)", target, node.Protocol),
+		}
+	}
+
+	if target != domain.TargetMihomo && strings.TrimSpace(node.DialerProxy) != "" {
+		return &CapabilityError{
+			Target:   target,
+			Location: loc,
+			Feature:  "dialer-proxy",
+			Reason:   fmt.Sprintf("target %s does not support dialer-proxy", target),
+		}
+	}
+
+	if err := validateCredentialEnvelope(target, index, node); err != nil {
+		var capErr *CapabilityError
+		if errors.As(err, &capErr) {
+			return sanitizeCapabilityError(capErr, node.Credentials)
+		}
+		return &CapabilityError{
+			Target:   target,
+			Location: loc,
+			Feature:  feature,
+			Reason:   sanitizeReason(err.Error(), node.Credentials),
+		}
+	}
+
+	switch target {
+	case domain.TargetMihomo:
+		singleSnap := resolver.ResolvedPolicySnapshot{
+			Nodes: []resolver.ResolvedNode{node},
+		}
+		if err := validateMihomoCredentials(&singleSnap); err != nil {
+			var capErr *CapabilityError
+			if errors.As(err, &capErr) {
+				capErr.Location = loc
+				return sanitizeCapabilityError(capErr, node.Credentials)
+			}
+			return &CapabilityError{
+				Target:   target,
+				Location: loc,
+				Feature:  feature,
+				Reason:   sanitizeReason(err.Error(), node.Credentials),
+			}
+		}
+
+	case domain.TargetSingBox:
+		tag := strings.TrimSpace(node.DisplayName)
+		_, _, err := probesingbox.BuildExportNodeOption(tag, domain.Node{
+			LogicalID:   node.LogicalID,
+			DisplayName: tag,
+			Protocol:    node.Protocol,
+			Server:      node.Server,
+			Port:        node.Port,
+			Credentials: node.Credentials,
+		})
+		if err != nil {
+			return &CapabilityError{
+				Target:   target,
+				Location: loc,
+				Feature:  feature,
+				Reason:   sanitizeReason(err.Error(), node.Credentials),
+			}
+		}
+
+	case domain.TargetSurge:
+		_, err := renderSurgeProxyLine(index, node)
+		if err != nil {
+			var capErr *CapabilityError
+			if errors.As(err, &capErr) {
+				return sanitizeCapabilityError(capErr, node.Credentials)
+			}
+			return &CapabilityError{
+				Target:   target,
+				Location: loc,
+				Feature:  feature,
+				Reason:   sanitizeReason(err.Error(), node.Credentials),
+			}
+		}
+
+	case domain.TargetQuantumultX:
+		_, err := renderQuantumultXServerLine(index, node)
+		if err != nil {
+			var capErr *CapabilityError
+			if errors.As(err, &capErr) {
+				return sanitizeCapabilityError(capErr, node.Credentials)
+			}
+			return &CapabilityError{
+				Target:   target,
+				Location: loc,
+				Feature:  feature,
+				Reason:   sanitizeReason(err.Error(), node.Credentials),
+			}
+		}
+	}
+
+	return nil
+}
+
 // CapabilityDiagnostic describes a compiler capability diagnostic for an export target.
 type CapabilityDiagnostic struct {
 	NodeID  string `json:"node_id,omitempty"`
@@ -545,7 +718,7 @@ func ValidateTargetCapabilities(snapshot *resolver.ResolvedPolicySnapshot, targe
 	if snapshot == nil {
 		return nil
 	}
-	capability, ok := capabilityForTarget(target)
+	_, ok := capabilityForTarget(target)
 	if !ok {
 		return []CapabilityDiagnostic{{
 			Code:    "unsupported_target",
@@ -556,32 +729,29 @@ func ValidateTargetCapabilities(snapshot *resolver.ResolvedPolicySnapshot, targe
 
 	var diags []CapabilityDiagnostic
 
-	// Check each node
+	seenRenderableNames := make(map[string]bool)
+	// Check each node using canonical per-node renderability evaluation
 	for i, node := range snapshot.Nodes {
-		if !capability.Protocols[node.Protocol] {
+		if err := checkNodeRenderability(target, i, node); err != nil {
 			diags = append(diags, CapabilityDiagnostic{
 				NodeID:  node.LogicalID,
 				Code:    "unsupported_target_capability",
-				Message: fmt.Sprintf("target %s does not support protocol %s (protocol is not supported)", target, node.Protocol),
+				Message: err.Reason,
 				Target:  string(target),
 			})
 			continue
 		}
-		if target != domain.TargetMihomo && strings.TrimSpace(node.DialerProxy) != "" {
+
+		name := strings.TrimSpace(node.DisplayName)
+		if seenRenderableNames[name] {
 			diags = append(diags, CapabilityDiagnostic{
 				NodeID:  node.LogicalID,
 				Code:    "unsupported_target_capability",
-				Message: fmt.Sprintf("target %s does not support dialer-proxy", target),
+				Message: fmt.Sprintf("duplicate node display name %q", node.DisplayName),
 				Target:  string(target),
 			})
-		}
-		if err := validateCredentialEnvelope(target, i, node); err != nil {
-			diags = append(diags, CapabilityDiagnostic{
-				NodeID:  node.LogicalID,
-				Code:    "unsupported_target_capability",
-				Message: err.Error(),
-				Target:  string(target),
-			})
+		} else {
+			seenRenderableNames[name] = true
 		}
 	}
 
@@ -651,11 +821,13 @@ func ValidateTargetCapabilities(snapshot *resolver.ResolvedPolicySnapshot, targe
 }
 
 // FilterCompatibleSnapshot creates a new ResolvedPolicySnapshot with incompatible nodes excluded.
+// The original snapshot is never mutated. Projection preserves order, recomputes derived group
+// and snapshot node memberships, and applies deterministic duplicate name exclusion (first renderable wins).
 func FilterCompatibleSnapshot(snapshot *resolver.ResolvedPolicySnapshot, target domain.CompilerTarget) (*resolver.ResolvedPolicySnapshot, []domain.ManifestExcludedNode) {
 	if snapshot == nil {
 		return nil, nil
 	}
-	capability, ok := capabilityForTarget(target)
+	_, ok := capabilityForTarget(target)
 	if !ok {
 		return snapshot, nil
 	}
@@ -663,35 +835,53 @@ func FilterCompatibleSnapshot(snapshot *resolver.ResolvedPolicySnapshot, target 
 	var admittedNodes []resolver.ResolvedNode
 	var excludedNodes []domain.ManifestExcludedNode
 	admittedSet := make(map[string]bool)
+	admittedNameSet := make(map[string]bool)
+	seenRenderableNames := make(map[string]bool)
 
 	for i, node := range snapshot.Nodes {
-		var reason string
-		if !capability.Protocols[node.Protocol] {
-			reason = fmt.Sprintf("target %s does not support protocol %s", target, node.Protocol)
-		} else if err := validateCredentialEnvelope(target, i, node); err != nil {
-			reason = err.Error()
-		}
-
-		if reason != "" {
+		if err := checkNodeRenderability(target, i, node); err != nil {
 			excludedNodes = append(excludedNodes, domain.ManifestExcludedNode{
 				NodeID: node.LogicalID,
 				Code:   "unsupported_target_capability",
-				Reason: reason,
+				Reason: err.Reason,
 			})
-		} else {
-			admittedNodes = append(admittedNodes, node)
-			admittedSet[node.LogicalID] = true
-			admittedSet[node.DisplayName] = true
+			continue
+		}
+
+		name := strings.TrimSpace(node.DisplayName)
+		if seenRenderableNames[name] {
+			excludedNodes = append(excludedNodes, domain.ManifestExcludedNode{
+				NodeID: node.LogicalID,
+				Code:   "unsupported_target_capability",
+				Reason: fmt.Sprintf("duplicate node display name %q", node.DisplayName),
+			})
+			continue
+		}
+
+		seenRenderableNames[name] = true
+		copyNode := node
+		copyNode.Position = len(admittedNodes)
+		admittedNodes = append(admittedNodes, copyNode)
+		admittedSet[node.LogicalID] = true
+		admittedNameSet[node.DisplayName] = true
+		if name != node.DisplayName {
+			admittedNameSet[name] = true
 		}
 	}
 
-	// Build filtered groups
+	admittedLogicalIDs := make([]string, len(admittedNodes))
+	for i, node := range admittedNodes {
+		admittedLogicalIDs[i] = node.LogicalID
+	}
+
+	// Build filtered groups with deep-copied members and recomputed derived node identities
 	filteredGroups := make([]resolver.ResolvedGroup, len(snapshot.Groups))
 	for gi, group := range snapshot.Groups {
+		filteredGroup := group
 		var filteredMembers []resolver.ResolvedGroupMember
 		for _, member := range group.Members {
 			if member.Kind == resolver.MemberKindNode {
-				if admittedSet[member.TargetID] || admittedSet[member.DisplayName] {
+				if (member.TargetID != "" && admittedSet[member.TargetID]) || (member.TargetID == "" && admittedNameSet[member.DisplayName]) {
 					filteredMembers = append(filteredMembers, member)
 				}
 			} else {
@@ -699,13 +889,58 @@ func FilterCompatibleSnapshot(snapshot *resolver.ResolvedPolicySnapshot, target 
 				filteredMembers = append(filteredMembers, member)
 			}
 		}
-		filteredGroups[gi] = group
-		filteredGroups[gi].Members = filteredMembers
+		filteredGroup.Members = filteredMembers
+
+		if len(group.NodeLogicalIDs) > 0 {
+			var nodeIDs []string
+			for _, id := range group.NodeLogicalIDs {
+				if admittedSet[id] {
+					nodeIDs = append(nodeIDs, id)
+				}
+			}
+			filteredGroup.NodeLogicalIDs = nodeIDs
+		}
+		if len(group.AllNodeLogicalIDs) > 0 {
+			var allNodeIDs []string
+			for _, id := range group.AllNodeLogicalIDs {
+				if admittedSet[id] {
+					allNodeIDs = append(allNodeIDs, id)
+				}
+			}
+			filteredGroup.AllNodeLogicalIDs = allNodeIDs
+		}
+		if len(group.ExpandedNodeIDs) > 0 {
+			var expNodeIDs []string
+			for _, id := range group.ExpandedNodeIDs {
+				if admittedSet[id] {
+					expNodeIDs = append(expNodeIDs, id)
+				}
+			}
+			filteredGroup.ExpandedNodeIDs = expNodeIDs
+		}
+		if group.ChildGroupIDs != nil {
+			filteredGroup.ChildGroupIDs = append([]string(nil), group.ChildGroupIDs...)
+		}
+		if group.Sources != nil {
+			filteredGroup.Sources = append([]domain.MemberSource(nil), group.Sources...)
+		}
+
+		filteredGroups[gi] = filteredGroup
 	}
 
 	copySnap := *snapshot
 	copySnap.Nodes = admittedNodes
+	copySnap.NodeLogicalIDs = admittedLogicalIDs
 	copySnap.Groups = filteredGroups
+	if snapshot.Rules != nil {
+		copySnap.Rules = append([]resolver.ResolvedRule(nil), snapshot.Rules...)
+	}
+	if snapshot.Diagnostics != nil {
+		copySnap.Diagnostics = append([]resolver.Diagnostic(nil), snapshot.Diagnostics...)
+	}
+	if snapshot.ChainEffects != nil {
+		copySnap.ChainEffects = append([]resolver.ChainEffect(nil), snapshot.ChainEffects...)
+	}
 
 	return &copySnap, excludedNodes
 }

@@ -206,6 +206,9 @@ func TestLiveSubscriptionClientEndpoint_ConditionalRequestAndRevocation(t *testi
 	if etag == "" {
 		t.Fatal("missing ETag")
 	}
+	if excl := rec.Header().Get("X-Export-Excluded-Count"); excl == "" {
+		t.Fatal("missing X-Export-Excluded-Count header on 200 response")
+	}
 
 	// 2. Request with matching If-None-Match -> 304 Not Modified
 	req304 := httptest.NewRequest(http.MethodGet, basePath+"?token="+rawToken, nil)
@@ -215,6 +218,9 @@ func TestLiveSubscriptionClientEndpoint_ConditionalRequestAndRevocation(t *testi
 
 	if rec304.Code != http.StatusNotModified {
 		t.Fatalf("expected 304 Not Modified, got %d", rec304.Code)
+	}
+	if excl := rec304.Header().Get("X-Export-Excluded-Count"); excl == "" {
+		t.Fatalf("expected X-Export-Excluded-Count on 304, got %q", excl)
 	}
 	if cc := rec304.Header().Get("Cache-Control"); cc != "no-store" {
 		t.Fatalf("expected Cache-Control: no-store on 304, got %q", cc)
@@ -461,5 +467,96 @@ func TestLiveSubscriptionClientEndpoint_PrimarySubscriptionFallback(t *testing.T
 	recDisabled := doRequest(router, http.MethodGet, basePath, "", "")
 	if recDisabled.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("expected 422 Unprocessable Entity when primary subscription disabled, got %d body: %s", recDisabled.Code, recDisabled.Body.String())
+	}
+}
+
+func TestLiveSubscriptionClientEndpoint_TargetAdaptation_ExclusionsAndErrors(t *testing.T) {
+	router, db, _, _ := setupLiveSubTestRouter(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	// Seed client link for Surge
+	link, rawToken := seedFullLiveSubscriptionData(t, db, domain.TargetSurge)
+	basePath := "/subscribe/v1/" + link.ID
+
+	// Insert VLESS node (unsupported on Surge)
+	vlessID := "node_client_vless_unsupported"
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO nodes (logical_id, protocol, display_name, server, port, config_json, active, created_at, updated_at, connection_revision)
+		VALUES (?, 'vless', 'Client VLESS Node', '2.2.2.2', 443, '{"uuid":"01944aa0-0000-7000-8000-000000000001"}', 1, ?, ?, 1);
+	`, vlessID, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
+	if err != nil {
+		t.Fatalf("failed to insert VLESS node: %v", err)
+	}
+	_, _ = db.ExecContext(ctx, `
+		INSERT INTO node_sources (node_logical_id, subscription_id, last_seen_fetch_id)
+		VALUES (?, 'sub-client-1', 'fetch-client-1');
+	`, vlessID)
+
+	// 1. Live export should succeed, deliver SS node, exclude VLESS node, and set X-Export-Excluded-Count: 1
+	recSurge := doRequest(router, http.MethodGet, basePath+"?token="+rawToken, "", "")
+	if recSurge.Code != http.StatusOK {
+		t.Fatalf("expected 200 for Surge live link with mixed inventory, got %d: %s", recSurge.Code, recSurge.Body.String())
+	}
+	if excl := recSurge.Header().Get("X-Export-Excluded-Count"); excl != "1" {
+		t.Errorf("expected X-Export-Excluded-Count: 1, got %q", excl)
+	}
+	surgeBody := recSurge.Body.String()
+	if !strings.Contains(surgeBody, "Live Node 1") {
+		t.Errorf("expected live SS node in surge output: %s", surgeBody)
+	}
+	if strings.Contains(surgeBody, "Client VLESS Node") {
+		t.Errorf("expected VLESS node to be excluded from surge output: %s", surgeBody)
+	}
+	etag := recSurge.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("missing ETag in surge live response")
+	}
+
+	// 2. 304 response on live endpoint should report X-Export-Excluded-Count: 1
+	req304 := httptest.NewRequest(http.MethodGet, basePath+"?token="+rawToken, nil)
+	req304.Header.Set("If-None-Match", etag)
+	rec304 := httptest.NewRecorder()
+	router.ServeHTTP(rec304, req304)
+	if rec304.Code != http.StatusNotModified {
+		t.Fatalf("expected 304 Not Modified, got %d", rec304.Code)
+	}
+	if excl := rec304.Header().Get("X-Export-Excluded-Count"); excl != "1" {
+		t.Errorf("expected 304 X-Export-Excluded-Count: 1, got %q", excl)
+	}
+
+	// 3. All-excluded nonempty inventory: deactivate SS node, leaving only VLESS
+	_, err = db.ExecContext(ctx, `UPDATE nodes SET active = 0 WHERE logical_id = 'node_0123456789abcdef';`)
+	if err != nil {
+		t.Fatalf("failed to deactivate SS node: %v", err)
+	}
+
+	recAllExcluded := doRequest(router, http.MethodGet, basePath+"?token="+rawToken, "", "")
+	if recAllExcluded.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 for all-excluded nodes on live link, got %d: %s", recAllExcluded.Code, recAllExcluded.Body.String())
+	}
+	if !strings.Contains(recAllExcluded.Body.String(), "no_compatible_nodes") {
+		t.Fatalf("expected no_compatible_nodes in error response, got: %s", recAllExcluded.Body.String())
+	}
+
+	// 4. Active chain on non-Mihomo: restore SS node, add enabled proxy chain binding
+	_, err = db.ExecContext(ctx, `UPDATE nodes SET active = 1 WHERE logical_id = 'node_0123456789abcdef';`)
+	if err != nil {
+		t.Fatalf("failed to reactivate SS node: %v", err)
+	}
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO proxy_chain_bindings (id, target_type, target_id, dialer_type, dialer_id, enabled, sort_order, revision, created_at, updated_at)
+		VALUES ('chain-client-test', 'subscription', 'sub-client-1', 'manual_node', 'node_0123456789abcdef', 1, 0, 1, ?, ?);
+	`, now.Format(time.RFC3339), now.Format(time.RFC3339))
+	if err != nil {
+		t.Fatalf("failed to insert chain binding: %v", err)
+	}
+
+	recChain := doRequest(router, http.MethodGet, basePath+"?token="+rawToken, "", "")
+	if recChain.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 for active chain on Surge live link, got %d: %s", recChain.Code, recChain.Body.String())
+	}
+	if !strings.Contains(recChain.Body.String(), "unsupported_target_capability") {
+		t.Fatalf("expected unsupported_target_capability in error response, got: %s", recChain.Body.String())
 	}
 }

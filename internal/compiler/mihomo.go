@@ -298,6 +298,9 @@ func validateMihomoCredentials(snapshot *resolver.ResolvedPolicySnapshot) error 
 			if net != "" && net != "tcp" && net != "udp" {
 				return mihomoError(loc, "ss", fmt.Sprintf("unsupported network %q in ss transport", net))
 			}
+			if _, _, err := parseMihomoSSPlugin(loc, c); err != nil {
+				return err
+			}
 		case domain.ProtocolVMess:
 			net := strings.ToLower(transportValue(c, "network"))
 			if net != "" && net != "tcp" && net != "ws" && net != "grpc" {
@@ -421,6 +424,477 @@ func unmarshalJSONMap(s string) (map[string]any, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+func parsePluginBool(loc, plugin, key string, val any) (bool, error) {
+	switch v := val.(type) {
+	case bool:
+		return v, nil
+	case string:
+		lower := strings.ToLower(strings.TrimSpace(v))
+		switch lower {
+		case "true", "1", "yes":
+			return true, nil
+		case "false", "0", "no":
+			return false, nil
+		default:
+			return false, mihomoError(loc, "ss", fmt.Sprintf("invalid boolean value %q for option %q in %s plugin-opts", v, key, plugin))
+		}
+	case json.Number:
+		switch v.String() {
+		case "1":
+			return true, nil
+		case "0":
+			return false, nil
+		default:
+			return false, mihomoError(loc, "ss", fmt.Sprintf("invalid boolean number %s for option %q in %s plugin-opts", v.String(), key, plugin))
+		}
+	case int:
+		if v == 1 {
+			return true, nil
+		}
+		if v == 0 {
+			return false, nil
+		}
+		return false, mihomoError(loc, "ss", fmt.Sprintf("invalid boolean number %d for option %q in %s plugin-opts", v, key, plugin))
+	case float64:
+		if v == 1 {
+			return true, nil
+		}
+		if v == 0 {
+			return false, nil
+		}
+		return false, mihomoError(loc, "ss", fmt.Sprintf("invalid boolean number %v for option %q in %s plugin-opts", v, key, plugin))
+	default:
+		return false, mihomoError(loc, "ss", fmt.Sprintf("invalid boolean value type %T for option %q in %s plugin-opts", val, key, plugin))
+	}
+}
+
+func parsePluginInt(loc, plugin, key string, val any) (int, error) {
+	switch v := val.(type) {
+	case int:
+		return v, nil
+	case int64:
+		return int(v), nil
+	case float64:
+		if float64(int(v)) == v {
+			return int(v), nil
+		}
+		return 0, mihomoError(loc, "ss", fmt.Sprintf("invalid non-integer value %v for option %q in %s plugin-opts", v, key, plugin))
+	case json.Number:
+		n, err := v.Int64()
+		if err != nil {
+			return 0, mihomoError(loc, "ss", fmt.Sprintf("invalid integer value %s for option %q in %s plugin-opts", v.String(), key, plugin))
+		}
+		return int(n), nil
+	case string:
+		n, err := strconv.Atoi(strings.TrimSpace(v))
+		if err != nil {
+			return 0, mihomoError(loc, "ss", fmt.Sprintf("invalid integer string %q for option %q in %s plugin-opts", v, key, plugin))
+		}
+		return n, nil
+	default:
+		return 0, mihomoError(loc, "ss", fmt.Sprintf("invalid integer value type %T for option %q in %s plugin-opts", val, key, plugin))
+	}
+}
+
+func parsePluginString(loc, plugin, key string, val any) (string, error) {
+	switch v := val.(type) {
+	case string:
+		return strings.TrimSpace(v), nil
+	case json.Number:
+		return v.String(), nil
+	case int, int64, float64, bool:
+		return fmt.Sprintf("%v", v), nil
+	default:
+		return "", mihomoError(loc, "ss", fmt.Sprintf("invalid string value type %T for option %q in %s plugin-opts", val, key, plugin))
+	}
+}
+
+func parsePluginHeaders(loc, plugin string, val any) (map[string]string, error) {
+	switch v := val.(type) {
+	case map[string]string:
+		return v, nil
+	case map[string]any:
+		res := make(map[string]string, len(v))
+		for hk, hv := range v {
+			res[hk] = fmt.Sprintf("%v", hv)
+		}
+		return res, nil
+	case string:
+		trimmed := strings.TrimSpace(v)
+		if trimmed == "" {
+			return nil, nil
+		}
+		var parsed map[string]string
+		if err := json.Unmarshal([]byte(trimmed), &parsed); err != nil {
+			return nil, mihomoError(loc, "ss", fmt.Sprintf("invalid headers JSON in %s plugin-opts: %v", plugin, err))
+		}
+		return parsed, nil
+	default:
+		return nil, mihomoError(loc, "ss", fmt.Sprintf("invalid headers type %T in %s plugin-opts", val, plugin))
+	}
+}
+
+func parseMihomoSSPlugin(loc string, c domain.InboundProtocolCredential) (string, map[string]any, error) {
+	hasOpts1 := c.Transport != nil && strings.TrimSpace(c.Transport["plugin-opts"]) != ""
+	hasOpts2 := c.Transport != nil && strings.TrimSpace(c.Transport["plugin_opts"]) != ""
+	var rawOpts string
+	if hasOpts1 && hasOpts2 {
+		val1 := strings.TrimSpace(c.Transport["plugin-opts"])
+		val2 := strings.TrimSpace(c.Transport["plugin_opts"])
+		if val1 != val2 {
+			return "", nil, mihomoError(loc, "ss", "conflicting plugin-opts and plugin_opts in shadowsocks transport")
+		}
+		rawOpts = val1
+	} else if hasOpts1 {
+		rawOpts = strings.TrimSpace(c.Transport["plugin-opts"])
+	} else if hasOpts2 {
+		rawOpts = strings.TrimSpace(c.Transport["plugin_opts"])
+	}
+
+	rawPlugin := transportValue(c, "plugin")
+	trimmedPlugin := strings.TrimSpace(rawPlugin)
+	if trimmedPlugin == "" {
+		if rawOpts != "" {
+			return "", nil, mihomoError(loc, "ss", "plugin-opts configured without plugin in shadowsocks credentials")
+		}
+		return "", nil, nil
+	}
+
+	var canonicalPlugin string
+	switch strings.ToLower(trimmedPlugin) {
+	case "obfs", "simple-obfs":
+		canonicalPlugin = "obfs"
+	case "v2ray-plugin", "v2ray":
+		canonicalPlugin = "v2ray-plugin"
+	case "shadow-tls", "shadowtls":
+		canonicalPlugin = "shadow-tls"
+	case "restls":
+		canonicalPlugin = "restls"
+	default:
+		return "", nil, mihomoError(loc, "ss", fmt.Sprintf("unsupported shadowsocks plugin %q for mihomo", rawPlugin))
+	}
+
+	rawMap := make(map[string]any)
+	if rawOpts != "" {
+		trimmedOpts := strings.TrimSpace(rawOpts)
+		if strings.HasPrefix(trimmedOpts, "{") && strings.HasSuffix(trimmedOpts, "}") {
+			parsed, err := unmarshalJSONMap(trimmedOpts)
+			if err != nil {
+				return "", nil, mihomoError(loc, "ss", fmt.Sprintf("invalid JSON syntax in shadowsocks plugin-opts: %v", err))
+			}
+			rawMap = parsed
+		} else {
+			delimiter := ";"
+			if !strings.Contains(trimmedOpts, ";") && strings.Contains(trimmedOpts, "&") {
+				delimiter = "&"
+			}
+			tokens := strings.Split(trimmedOpts, delimiter)
+			for _, token := range tokens {
+				token = strings.TrimSpace(token)
+				if token == "" {
+					continue
+				}
+				if strings.Contains(token, "=") {
+					parts := strings.SplitN(token, "=", 2)
+					k := strings.TrimSpace(parts[0])
+					v := strings.TrimSpace(parts[1])
+					if k == "" {
+						return "", nil, mihomoError(loc, "ss", fmt.Sprintf("invalid empty key in shadowsocks plugin-opts entry %q", token))
+					}
+					if len(v) >= 2 && ((v[0] == '"' && v[len(v)-1] == '"') || (v[0] == '\'' && v[len(v)-1] == '\'')) {
+						v = v[1 : len(v)-1]
+					}
+					if (strings.HasPrefix(v, "{") && strings.HasSuffix(v, "}")) || (strings.HasPrefix(v, "[") && strings.HasSuffix(v, "]")) {
+						var parsedVal any
+						d := json.NewDecoder(strings.NewReader(v))
+						d.UseNumber()
+						if err := d.Decode(&parsedVal); err == nil {
+							rawMap[k] = parsedVal
+							continue
+						}
+					}
+					rawMap[k] = v
+				} else {
+					rawMap[token] = "true"
+				}
+			}
+		}
+	}
+
+	outOpts := make(map[string]any)
+	switch canonicalPlugin {
+	case "obfs":
+		var modeVal, hostVal any
+		var hasMode, hasHost bool
+		for k, v := range rawMap {
+			switch strings.ToLower(k) {
+			case "mode":
+				if hasMode && modeVal != v {
+					return "", nil, mihomoError(loc, "ss", "conflicting mode and obfs options in obfs plugin-opts")
+				}
+				modeVal = v
+				hasMode = true
+			case "obfs":
+				if hasMode && modeVal != v {
+					return "", nil, mihomoError(loc, "ss", "conflicting mode and obfs options in obfs plugin-opts")
+				}
+				modeVal = v
+				hasMode = true
+			case "host":
+				if hasHost && hostVal != v {
+					return "", nil, mihomoError(loc, "ss", "conflicting host and obfs-host options in obfs plugin-opts")
+				}
+				hostVal = v
+				hasHost = true
+			case "obfs-host", "obfs_host":
+				if hasHost && hostVal != v {
+					return "", nil, mihomoError(loc, "ss", "conflicting host and obfs-host options in obfs plugin-opts")
+				}
+				hostVal = v
+				hasHost = true
+			default:
+				return "", nil, mihomoError(loc, "ss", fmt.Sprintf("unsupported option %q for obfs plugin", k))
+			}
+		}
+
+		if !hasMode {
+			return "", nil, mihomoError(loc, "ss", "missing required mode in obfs plugin-opts")
+		}
+		modeStr, err := parsePluginString(loc, "obfs", "mode", modeVal)
+		if err != nil {
+			return "", nil, err
+		}
+		modeStr = strings.ToLower(modeStr)
+		if modeStr != "tls" && modeStr != "http" {
+			return "", nil, mihomoError(loc, "ss", fmt.Sprintf("unsupported obfs mode %q (must be tls or http)", modeStr))
+		}
+		outOpts["mode"] = modeStr
+
+		if hasHost {
+			hStr, err := parsePluginString(loc, "obfs", "host", hostVal)
+			if err != nil {
+				return "", nil, err
+			}
+			if hStr != "" {
+				outOpts["host"] = hStr
+			}
+		}
+
+	case "v2ray-plugin":
+		seenKeys := make(map[string]any)
+		for k, v := range rawMap {
+			canonKey := strings.ToLower(strings.ReplaceAll(k, "_", "-"))
+			if prevVal, exists := seenKeys[canonKey]; exists && prevVal != v {
+				return "", nil, mihomoError(loc, "ss", fmt.Sprintf("conflicting options for %q in v2ray-plugin plugin-opts", canonKey))
+			}
+			seenKeys[canonKey] = v
+			switch canonKey {
+			case "mode":
+				mStr, err := parsePluginString(loc, "v2ray-plugin", "mode", v)
+				if err != nil {
+					return "", nil, err
+				}
+				mStr = strings.ToLower(mStr)
+				if mStr != "websocket" {
+					return "", nil, mihomoError(loc, "ss", fmt.Sprintf("unsupported v2ray-plugin mode %q (only websocket is supported)", mStr))
+				}
+				outOpts["mode"] = mStr
+			case "host":
+				s, err := parsePluginString(loc, "v2ray-plugin", "host", v)
+				if err != nil {
+					return "", nil, err
+				}
+				if s != "" {
+					outOpts["host"] = s
+				}
+			case "path":
+				s, err := parsePluginString(loc, "v2ray-plugin", "path", v)
+				if err != nil {
+					return "", nil, err
+				}
+				if s != "" {
+					outOpts["path"] = s
+				}
+			case "tls":
+				b, err := parsePluginBool(loc, "v2ray-plugin", "tls", v)
+				if err != nil {
+					return "", nil, err
+				}
+				outOpts["tls"] = b
+			case "skip-cert-verify":
+				b, err := parsePluginBool(loc, "v2ray-plugin", "skip-cert-verify", v)
+				if err != nil {
+					return "", nil, err
+				}
+				outOpts["skip-cert-verify"] = b
+			case "fingerprint":
+				s, err := parsePluginString(loc, "v2ray-plugin", "fingerprint", v)
+				if err != nil {
+					return "", nil, err
+				}
+				if s != "" {
+					outOpts["fingerprint"] = s
+				}
+			case "mux":
+				b, err := parsePluginBool(loc, "v2ray-plugin", "mux", v)
+				if err != nil {
+					return "", nil, err
+				}
+				outOpts["mux"] = b
+			case "v2ray-http-upgrade":
+				b, err := parsePluginBool(loc, "v2ray-plugin", "v2ray-http-upgrade", v)
+				if err != nil {
+					return "", nil, err
+				}
+				outOpts["v2ray-http-upgrade"] = b
+			case "v2ray-http-upgrade-fast-open":
+				b, err := parsePluginBool(loc, "v2ray-plugin", "v2ray-http-upgrade-fast-open", v)
+				if err != nil {
+					return "", nil, err
+				}
+				outOpts["v2ray-http-upgrade-fast-open"] = b
+			case "headers":
+				h, err := parsePluginHeaders(loc, "v2ray-plugin", v)
+				if err != nil {
+					return "", nil, err
+				}
+				if len(h) > 0 {
+					outOpts["headers"] = h
+				}
+			default:
+				return "", nil, mihomoError(loc, "ss", fmt.Sprintf("unsupported option %q for v2ray-plugin", k))
+			}
+		}
+		if _, ok := seenKeys["mode"]; !ok {
+			return "", nil, mihomoError(loc, "ss", "missing required mode in v2ray-plugin plugin-opts")
+		}
+
+	case "shadow-tls":
+		seenKeys := make(map[string]any)
+		for k, v := range rawMap {
+			canonKey := strings.ToLower(strings.ReplaceAll(k, "_", "-"))
+			if prevVal, exists := seenKeys[canonKey]; exists && prevVal != v {
+				return "", nil, mihomoError(loc, "ss", fmt.Sprintf("conflicting options for %q in shadow-tls plugin-opts", canonKey))
+			}
+			seenKeys[canonKey] = v
+			switch canonKey {
+			case "host":
+				s, err := parsePluginString(loc, "shadow-tls", "host", v)
+				if err != nil {
+					return "", nil, err
+				}
+				if s == "" {
+					return "", nil, mihomoError(loc, "ss", "empty host in shadow-tls plugin-opts")
+				}
+				outOpts["host"] = s
+			case "password":
+				s, err := parsePluginString(loc, "shadow-tls", "password", v)
+				if err != nil {
+					return "", nil, err
+				}
+				if s == "" {
+					return "", nil, mihomoError(loc, "ss", "empty password in shadow-tls plugin-opts")
+				}
+				outOpts["password"] = s
+			case "version":
+				ver, err := parsePluginInt(loc, "shadow-tls", "version", v)
+				if err != nil {
+					return "", nil, err
+				}
+				if ver < 1 || ver > 3 {
+					return "", nil, mihomoError(loc, "ss", fmt.Sprintf("unsupported shadow-tls version %d (must be 1, 2, or 3)", ver))
+				}
+				outOpts["version"] = ver
+			case "fingerprint":
+				s, err := parsePluginString(loc, "shadow-tls", "fingerprint", v)
+				if err != nil {
+					return "", nil, err
+				}
+				if s != "" {
+					outOpts["fingerprint"] = s
+				}
+			case "skip-cert-verify":
+				b, err := parsePluginBool(loc, "shadow-tls", "skip-cert-verify", v)
+				if err != nil {
+					return "", nil, err
+				}
+				outOpts["skip-cert-verify"] = b
+			default:
+				return "", nil, mihomoError(loc, "ss", fmt.Sprintf("unsupported option %q for shadow-tls plugin", k))
+			}
+		}
+		if _, ok := seenKeys["host"]; !ok {
+			return "", nil, mihomoError(loc, "ss", "missing required host in shadow-tls plugin-opts")
+		}
+		if _, ok := seenKeys["password"]; !ok {
+			return "", nil, mihomoError(loc, "ss", "missing required password in shadow-tls plugin-opts")
+		}
+
+	case "restls":
+		seenKeys := make(map[string]any)
+		for k, v := range rawMap {
+			canonKey := strings.ToLower(strings.ReplaceAll(k, "_", "-"))
+			if prevVal, exists := seenKeys[canonKey]; exists && prevVal != v {
+				return "", nil, mihomoError(loc, "ss", fmt.Sprintf("conflicting options for %q in restls plugin-opts", canonKey))
+			}
+			seenKeys[canonKey] = v
+			switch canonKey {
+			case "host":
+				s, err := parsePluginString(loc, "restls", "host", v)
+				if err != nil {
+					return "", nil, err
+				}
+				if s == "" {
+					return "", nil, mihomoError(loc, "ss", "empty host in restls plugin-opts")
+				}
+				outOpts["host"] = s
+			case "password":
+				s, err := parsePluginString(loc, "restls", "password", v)
+				if err != nil {
+					return "", nil, err
+				}
+				if s == "" {
+					return "", nil, mihomoError(loc, "ss", "empty password in restls plugin-opts")
+				}
+				outOpts["password"] = s
+			case "version-hint":
+				s, err := parsePluginString(loc, "restls", "version-hint", v)
+				if err != nil {
+					return "", nil, err
+				}
+				if s == "" {
+					return "", nil, mihomoError(loc, "ss", "empty version-hint in restls plugin-opts")
+				}
+				outOpts["version-hint"] = s
+			case "restls-script":
+				s, err := parsePluginString(loc, "restls", "restls-script", v)
+				if err != nil {
+					return "", nil, err
+				}
+				if s != "" {
+					outOpts["restls-script"] = s
+				}
+			default:
+				return "", nil, mihomoError(loc, "ss", fmt.Sprintf("unsupported option %q for restls plugin", k))
+			}
+		}
+		if _, ok := seenKeys["host"]; !ok {
+			return "", nil, mihomoError(loc, "ss", "missing required host in restls plugin-opts")
+		}
+		if _, ok := seenKeys["password"]; !ok {
+			return "", nil, mihomoError(loc, "ss", "missing required password in restls plugin-opts")
+		}
+		if _, ok := seenKeys["version-hint"]; !ok {
+			return "", nil, mihomoError(loc, "ss", "missing required version-hint in restls plugin-opts")
+		}
+	}
+
+	if len(outOpts) == 0 {
+		return canonicalPlugin, nil, nil
+	}
+	return canonicalPlugin, outOpts, nil
 }
 
 func transportValue(c domain.InboundProtocolCredential, keys ...string) string {
@@ -726,6 +1200,10 @@ func renderMihomo(snapshot *resolver.ResolvedPolicySnapshot) ([]byte, error) {
 			}
 			proxies = append(proxies, p)
 		case domain.ProtocolSS:
+			pluginName, pluginOpts, err := parseMihomoSSPlugin(loc, c)
+			if err != nil {
+				return nil, err
+			}
 			p := mihomoSSProxy{
 				Name:        node.DisplayName,
 				Type:        "ss",
@@ -733,7 +1211,8 @@ func renderMihomo(snapshot *resolver.ResolvedPolicySnapshot) ([]byte, error) {
 				Port:        node.Port,
 				Cipher:      c.Method,
 				Password:    c.Password,
-				Plugin:      transportValue(c, "plugin"),
+				Plugin:      pluginName,
+				PluginOpts:  pluginOpts,
 				DialerProxy: node.DialerProxy,
 			}
 			proxies = append(proxies, p)

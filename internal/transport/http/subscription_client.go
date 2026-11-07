@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -150,6 +151,8 @@ func liveSubscriptionClientHandler(svc *publication.Service) http.HandlerFunc {
 			}
 			return
 		}
+
+		w.Header().Set("X-Export-Excluded-Count", strconv.Itoa(len(artifact.ExcludedNodes)))
 
 		// Conditional request evaluation: only checked after full authorization and artifact compilation
 		ifNoneMatch := strings.TrimSpace(r.Header.Get("If-None-Match"))

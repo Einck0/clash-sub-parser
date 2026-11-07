@@ -99,7 +99,6 @@ func (e *StrictCapabilityError) As(target any) bool {
 	return false
 }
 
-
 // PublishCommand contains the input parameters required to publish a new configuration bundle.
 type PublishCommand struct {
 	Target                         domain.CompilerTarget            `json:"target"`
@@ -158,14 +157,15 @@ type RevokeCommand struct {
 
 // Artifact holds the compiled bytes and metadata for an immutable publication.
 type Artifact struct {
-	PublicationID  string                `json:"publication_id"`
-	Target         domain.CompilerTarget `json:"target"`
-	Content        []byte                `json:"-"`
-	ContentType    string                `json:"content_type"`
-	Filename       string                `json:"filename"`
-	ContentDigest  string                `json:"content_digest"`
-	SnapshotDigest string                `json:"snapshot_digest"`
-	UserInfo       string                `json:"userinfo,omitempty"`
+	PublicationID  string                        `json:"publication_id"`
+	Target         domain.CompilerTarget         `json:"target"`
+	Content        []byte                        `json:"-"`
+	ContentType    string                        `json:"content_type"`
+	Filename       string                        `json:"filename"`
+	ContentDigest  string                        `json:"content_digest"`
+	SnapshotDigest string                        `json:"snapshot_digest"`
+	UserInfo       string                        `json:"userinfo,omitempty"`
+	ExcludedNodes  []domain.ManifestExcludedNode `json:"excluded_nodes"`
 }
 
 // PublicationDetail represents detailed publication state returned to management endpoints.

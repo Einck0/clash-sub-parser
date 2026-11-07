@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -120,6 +121,8 @@ func directSubscriptionHandler(svc *publication.Service, holder AdminTokenHolder
 		if artifact.UserInfo != "" {
 			w.Header().Set("Subscription-Userinfo", artifact.UserInfo)
 		}
+
+		w.Header().Set("X-Export-Excluded-Count", strconv.Itoa(len(artifact.ExcludedNodes)))
 
 		// 5. Conditional caching evaluation (ETag / If-None-Match)
 		ifNoneMatch := strings.TrimSpace(r.Header.Get("If-None-Match"))

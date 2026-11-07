@@ -1,0 +1,7 @@
+# Research and decisions
+
+Pinned external research: sinspired/subs-check-pro 68394cbe0a7f76a778d1d2fa4b611d4a6dd16045 uses Go output plus Sub-Store conversion with QuickJS; subs-check v1.13.3 bundles Node-based conversion. This is not evidence of native Surge/QX support. Sources: https://github.com/sinspired/subs-check-pro/tree/68394cbe0a7f76a778d1d2fa4b611d4a6dd16045/save and /substore; https://github.com/sinspired/subs-check . Both GPL; no copied source or new runtime.
+
+Decision: retain existing native target renderers and typed sing-box types. Compatible projection must consult actual node rendering, not only protocol whitelist. Keep full policy only for Mihomo; existing other formats already node-only, so introducing another profile selector is unnecessary. Explicit strict preview retained; default node-target adaptation fixes normal subscription use without user configuration burden. Chain support expansion deferred rather than risk detour loss. Source scouts have contradictory TUIC/SS cipher claims, so no capability removal or additions without separately verified evidence.
+
+Concrete source defects: BuildCurrentArtifact all-or-nothing target diagnostics; preview facts branch ignores mode and bypasses draft persistence; generic FilterCompatibleSnapshot misses line renderer failures; Mihomo plugin accepted keys omitted in map construction. No production calls were made and no end-user client import is claimed.

@@ -266,7 +266,7 @@ func TestSubscriptionRetention_ProtectionMatrix(t *testing.T) {
 	nowStr := domain.NowUTC().Format(time.RFC3339)
 	_, err := db.ExecContext(ctx, `
 		INSERT INTO publications (id, target, snapshot_digest, compiler_version, token_hash, state, created_at, content)
-		VALUES (?, 'clash', 'sha256:snap', '1.0.0', 'hash-pub-01', 'active', ?, X'deadbeef');
+		VALUES (?, 'mihomo', 'sha256:snap', '1.0.0', 'hash-pub-01', 'active', ?, X'deadbeef');
 	`, pubID, nowStr)
 	if err != nil {
 		t.Fatalf("failed to insert test publication: %v", err)
@@ -282,8 +282,8 @@ func TestSubscriptionRetention_ProtectionMatrix(t *testing.T) {
 	// Protection C: Connection version referencing entry-03 on P03
 	nodeID := "node-conn-01"
 	_, err = db.ExecContext(ctx, `
-		INSERT INTO nodes (logical_id, protocol, display_name, normalized_config_secret_ref, active, created_at, updated_at)
-		VALUES (?, 'ss', 'Conn Node', 'ref', 1, ?, ?);
+		INSERT INTO nodes (logical_id, protocol, display_name, server, port, config_json, active, created_at, updated_at, connection_revision)
+		VALUES (?, 'ss', 'Conn Node', '1.1.1.1', 8388, '{}', 1, ?, ?, 1);
 	`, nodeID, nowStr, nowStr)
 	if err != nil {
 		t.Fatalf("failed to insert node: %v", err)
@@ -300,8 +300,8 @@ func TestSubscriptionRetention_ProtectionMatrix(t *testing.T) {
 	// Protection D: Current node sources referencing fetch-04 (P04)
 	nodeSourceNodeID := "node-source-01"
 	_, err = db.ExecContext(ctx, `
-		INSERT INTO nodes (logical_id, protocol, display_name, normalized_config_secret_ref, active, created_at, updated_at)
-		VALUES (?, 'ss', 'Source Node', 'ref', 1, ?, ?);
+		INSERT INTO nodes (logical_id, protocol, display_name, server, port, config_json, active, created_at, updated_at, connection_revision)
+		VALUES (?, 'ss', 'Source Node', '1.1.1.1', 8388, '{}', 1, ?, ?, 1);
 	`, nodeSourceNodeID, nowStr, nowStr)
 	if err != nil {
 		t.Fatalf("failed to insert node: %v", err)
@@ -318,8 +318,8 @@ func TestSubscriptionRetention_ProtectionMatrix(t *testing.T) {
 	// Node has entry on P05, but no node_sources and no node_source_history
 	orphanNodeID := "node-orphan-01"
 	_, err = db.ExecContext(ctx, `
-		INSERT INTO nodes (logical_id, protocol, display_name, normalized_config_secret_ref, active, created_at, updated_at)
-		VALUES (?, 'ss', 'Orphan Node', 'ref', 1, ?, ?);
+		INSERT INTO nodes (logical_id, protocol, display_name, server, port, config_json, active, created_at, updated_at, connection_revision)
+		VALUES (?, 'ss', 'Orphan Node', '1.1.1.1', 8388, '{}', 1, ?, ?, 1);
 	`, orphanNodeID, nowStr, nowStr)
 	if err != nil {
 		t.Fatalf("failed to insert orphan node: %v", err)

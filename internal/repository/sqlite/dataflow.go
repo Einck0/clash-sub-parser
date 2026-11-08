@@ -100,7 +100,7 @@ func (r *subscriptionPayloadRepository) GetByID(ctx context.Context, id string) 
 func (r *subscriptionPayloadRepository) GetLatestBySubscription(ctx context.Context, subscriptionID string) (*domain.SubscriptionPayload, error) {
 	const query = `
 	SELECT id, subscription_id, fetch_id, content_digest, X'' AS body_blob, http_status, headers_json, pinned, created_at
-	FROM subscription_payloads WHERE subscription_id = ? ORDER BY created_at DESC LIMIT 1;`
+	FROM subscription_payloads WHERE subscription_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1;`
 
 	var p domain.SubscriptionPayload
 	var pinnedInt int
@@ -135,7 +135,7 @@ func (r *subscriptionPayloadRepository) GetLatestBySubscription(ctx context.Cont
 func (r *subscriptionPayloadRepository) GetByDigest(ctx context.Context, contentDigest string) (*domain.SubscriptionPayload, error) {
 	const query = `
 	SELECT id, subscription_id, fetch_id, content_digest, X'' AS body_blob, http_status, headers_json, pinned, created_at
-	FROM subscription_payloads WHERE content_digest = ? ORDER BY created_at DESC LIMIT 1;`
+	FROM subscription_payloads WHERE content_digest = ? ORDER BY created_at DESC, rowid DESC LIMIT 1;`
 
 	var p domain.SubscriptionPayload
 	var pinnedInt int
@@ -452,7 +452,7 @@ func (r *subscriptionEntryRepository) ListLatestBySubscription(ctx context.Conte
 	const payloadQuery = `
 	SELECT id FROM subscription_payloads
 	WHERE subscription_id = ?
-	ORDER BY created_at DESC LIMIT 1;`
+	ORDER BY created_at DESC, rowid DESC LIMIT 1;`
 
 	var payloadID string
 	err := r.db.QueryRowContext(ctx, payloadQuery, subscriptionID).Scan(&payloadID)
@@ -519,6 +519,7 @@ func (r *subscriptionEntryRepository) SetUserOverride(
 			overrideAt = domain.NowUTC()
 		}
 		atStr := overrideAt.Format(time.RFC3339)
+		canonAnchor := fmt.Sprintf("%s|%s|%d|%s", proto, server, port, rawName)
 
 		if userKindOverride != nil {
 			const upsertLedger = `
@@ -547,19 +548,25 @@ func (r *subscriptionEntryRepository) SetUserOverride(
 				override_reason = ?,
 				override_at = ?,
 				actor_ref = ?
-			WHERE id = ? OR (subscription_id = ? AND override_anchor != '' AND override_anchor = ?);`
+			WHERE id = ?
+			   OR (subscription_id = ? AND (
+			       (override_anchor != '' AND override_anchor = ?)
+			       OR (? != '' AND source_key = ?)
+			       OR (protocol || '|' || server || '|' || port || '|' || raw_name) = ?
+			   ));`
 
 			if _, err := tx.ExecContext(ctx, updateProj,
-				string(*userKindOverride), anchor, reason, atStr, actorRef, entryID, subID, anchor,
+				string(*userKindOverride), anchor, reason, atStr, actorRef,
+				entryID, subID, anchor, sourceKey, sourceKey, canonAnchor,
 			); err != nil {
 				return fmt.Errorf("failed to update entry projection: %w", err)
 			}
 		} else {
 			const deleteLedger = `
 			DELETE FROM subscription_entry_overrides
-			WHERE subscription_id = ? AND override_anchor = ?;`
+			WHERE subscription_id = ? AND (override_anchor = ? OR (? != '' AND override_anchor = ?));`
 
-			if _, err := tx.ExecContext(ctx, deleteLedger, subID, anchor); err != nil {
+			if _, err := tx.ExecContext(ctx, deleteLedger, subID, anchor, currentAnchor, currentAnchor); err != nil {
 				return fmt.Errorf("failed to delete override ledger: %w", err)
 			}
 
@@ -570,9 +577,16 @@ func (r *subscriptionEntryRepository) SetUserOverride(
 				override_reason = '',
 				override_at = NULL,
 				actor_ref = ''
-			WHERE id = ? OR (subscription_id = ? AND override_anchor != '' AND override_anchor = ?);`
+			WHERE id = ?
+			   OR (subscription_id = ? AND (
+			       (override_anchor != '' AND override_anchor = ?)
+			       OR (? != '' AND source_key = ?)
+			       OR (protocol || '|' || server || '|' || port || '|' || raw_name) = ?
+			   ));`
 
-			if _, err := tx.ExecContext(ctx, clearProj, entryID, subID, anchor); err != nil {
+			if _, err := tx.ExecContext(ctx, clearProj,
+				entryID, subID, anchor, sourceKey, sourceKey, canonAnchor,
+			); err != nil {
 				return fmt.Errorf("failed to clear entry projection: %w", err)
 			}
 		}
@@ -930,11 +944,11 @@ func (r *publicationPayloadRefRepository) ResolvePayloadIDsForNodes(ctx context.
 	SELECT COALESCE(
 		(SELECT e.payload_id FROM subscription_entries e
 		 WHERE e.node_logical_id = ? AND e.payload_id IS NOT NULL AND e.payload_id != ''
-		 ORDER BY e.created_at DESC LIMIT 1),
+		 ORDER BY e.created_at DESC, e.rowid DESC LIMIT 1),
 		(SELECT p.id FROM node_sources ns
 		 JOIN subscription_payloads p ON ns.subscription_id = p.subscription_id AND ns.last_seen_fetch_id = p.fetch_id
 		 WHERE ns.node_logical_id = ? AND p.id IS NOT NULL AND p.id != ''
-		 ORDER BY p.created_at DESC LIMIT 1)
+		 ORDER BY p.created_at DESC, p.rowid DESC LIMIT 1)
 	);`
 
 	for _, n := range nodes {

@@ -51,8 +51,8 @@ func (r *controlledFakeRunner) Run(ctx context.Context, run *domain.ProbeRun, no
 	return nil
 }
 
-// TestFeatureConvergence_SchemaMigrationTo27 verifies all current migrations through 27.
-func TestFeatureConvergence_SchemaMigrationTo27(t *testing.T) {
+// TestFeatureConvergence_SchemaMigrationTo28 verifies all current migrations through 28.
+func TestFeatureConvergence_SchemaMigrationTo28(t *testing.T) {
 	ctx := context.Background()
 	db, err := sqlite.Open(sqlite.Config{
 		Path:        fmt.Sprintf("file:migration_test_%d?mode=memory&cache=shared", time.Now().UnixNano()),
@@ -66,7 +66,7 @@ func TestFeatureConvergence_SchemaMigrationTo27(t *testing.T) {
 
 	runner := sqlite.NewMigrationRunner(db, migrations.FS)
 	if err := runner.Run(ctx); err != nil {
-		t.Fatalf("failed to run migrations 1..27: %v", err)
+		t.Fatalf("failed to run migrations 1..28: %v", err)
 	}
 
 	report, err := sqlite.CheckReadiness(ctx, db)
@@ -76,8 +76,8 @@ func TestFeatureConvergence_SchemaMigrationTo27(t *testing.T) {
 	if !report.Ready {
 		t.Fatalf("expected readiness report Ready=true, got report: %+v", report)
 	}
-	if report.SchemaVersion != 27 {
-		t.Fatalf("expected schema version 27 (sources, fetch settings, revision snapshots, prefix, subscription links, group position, primary subscription, inherit global filter, rule categories, dns config, and proxy chain bindings), got %d", report.SchemaVersion)
+	if report.SchemaVersion != 28 {
+		t.Fatalf("expected schema version 28 (sources, fetch settings, revision snapshots, prefix, subscription links, group position, primary subscription, inherit global filter, rule categories, dns config, proxy chain bindings, and subscription retention overrides), got %d", report.SchemaVersion)
 	}
 	if len(report.MissingTables) > 0 {
 		t.Fatalf("unexpected missing tables: %v", report.MissingTables)
@@ -86,8 +86,8 @@ func TestFeatureConvergence_SchemaMigrationTo27(t *testing.T) {
 		t.Fatalf("unexpected FK violations: %v", report.ForeignKeyViolations)
 	}
 
-	// Verify tables from migration 7 and 8 exist, plus subscription_links from migration 22, dns_config from migration 26, and proxy_chain_bindings from migration 27
-	for _, tbl := range []string{"probe_schedules", "probe_batches", "probe_batch_runs", "global_node_filters", "group_node_filters", "subscription_links", "dns_config", "proxy_chain_bindings"} {
+	// Verify tables from migration 7 and 8 exist, plus subscription_links from migration 22, dns_config from migration 26, proxy_chain_bindings from migration 27, and subscription_entry_overrides from migration 28
+	for _, tbl := range []string{"probe_schedules", "probe_batches", "probe_batch_runs", "global_node_filters", "group_node_filters", "subscription_links", "dns_config", "proxy_chain_bindings", "subscription_entry_overrides"} {
 		var name string
 		err := db.QueryRowContext(ctx, "SELECT name FROM sqlite_master WHERE type='table' AND name=?", tbl).Scan(&name)
 		if err != nil {
@@ -103,6 +103,17 @@ func TestFeatureConvergence_SchemaMigrationTo27(t *testing.T) {
 	}
 	if err := db.QueryRowContext(ctx, "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_proxy_chain_bindings_sort'").Scan(&idxName); err != nil {
 		t.Fatalf("expected index idx_proxy_chain_bindings_sort from migration 27 to exist: %v", err)
+	}
+	for _, idx := range []string{
+		"idx_sub_entry_overrides_sub",
+		"idx_sub_payloads_retention",
+		"idx_node_conn_ver_source_entry",
+		"idx_node_sources_last_seen_fetch",
+		"idx_sub_fetches_retention",
+	} {
+		if err := db.QueryRowContext(ctx, "SELECT name FROM sqlite_master WHERE type='index' AND name=?", idx).Scan(&idxName); err != nil {
+			t.Fatalf("expected index %q from migration 28 to exist: %v", idx, err)
+		}
 	}
 
 	// Verify dns_config schema from migration 26
@@ -123,6 +134,64 @@ func TestFeatureConvergence_SchemaMigrationTo27(t *testing.T) {
 		t.Fatalf("expected proxy_chain_bindings schema to enforce target_type, dialer_type, sort_order, and revision: %s", chainTableSQL)
 	}
 
+	// Verify subscription_entry_overrides ledger schema from migration 28
+	var overrideTableSQL string
+	if err := db.QueryRowContext(ctx, "SELECT sql FROM sqlite_master WHERE type='table' AND name='subscription_entry_overrides'").Scan(&overrideTableSQL); err != nil {
+		t.Fatalf("expected table subscription_entry_overrides to exist: %v", err)
+	}
+	for _, expectedCol := range []string{
+		"subscription_id",
+		"override_anchor",
+		"source_key",
+		"raw_name",
+		"user_kind_override",
+		"override_reason",
+		"override_at",
+		"actor_ref",
+		"PRIMARY KEY (subscription_id, override_anchor)",
+		"FOREIGN KEY (subscription_id) REFERENCES subscriptions(id) ON DELETE CASCADE",
+	} {
+		if !strings.Contains(overrideTableSQL, expectedCol) {
+			t.Fatalf("expected subscription_entry_overrides schema to contain %q: %s", expectedCol, overrideTableSQL)
+		}
+	}
+	if !strings.Contains(overrideTableSQL, "user_kind_override IN ('proxy', 'notice', 'unknown')") {
+		t.Fatalf("expected subscription_entry_overrides schema to enforce user_kind_override check constraint: %s", overrideTableSQL)
+	}
+
+	// Verify retention and partial index structures from migration 28
+	var idxPayloadsRetentionSQL string
+	if err := db.QueryRowContext(ctx, "SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_sub_payloads_retention'").Scan(&idxPayloadsRetentionSQL); err != nil {
+		t.Fatalf("expected index idx_sub_payloads_retention to exist: %v", err)
+	}
+	if !strings.Contains(idxPayloadsRetentionSQL, "subscription_payloads") || !strings.Contains(idxPayloadsRetentionSQL, "created_at DESC") {
+		t.Fatalf("expected idx_sub_payloads_retention structure on subscription_payloads(subscription_id, created_at DESC): %s", idxPayloadsRetentionSQL)
+	}
+
+	var idxFetchesRetentionSQL string
+	if err := db.QueryRowContext(ctx, "SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_sub_fetches_retention'").Scan(&idxFetchesRetentionSQL); err != nil {
+		t.Fatalf("expected index idx_sub_fetches_retention to exist: %v", err)
+	}
+	if !strings.Contains(idxFetchesRetentionSQL, "subscription_fetches") || !strings.Contains(idxFetchesRetentionSQL, "started_at DESC") {
+		t.Fatalf("expected idx_sub_fetches_retention structure on subscription_fetches(subscription_id, started_at DESC): %s", idxFetchesRetentionSQL)
+	}
+
+	var idxConnVerSQL string
+	if err := db.QueryRowContext(ctx, "SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_node_conn_ver_source_entry'").Scan(&idxConnVerSQL); err != nil {
+		t.Fatalf("expected index idx_node_conn_ver_source_entry to exist: %v", err)
+	}
+	if !strings.Contains(idxConnVerSQL, "WHERE source_entry_id IS NOT NULL") {
+		t.Fatalf("expected idx_node_conn_ver_source_entry partial index predicate 'WHERE source_entry_id IS NOT NULL': %s", idxConnVerSQL)
+	}
+
+	var idxNodeSourcesSQL string
+	if err := db.QueryRowContext(ctx, "SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_node_sources_last_seen_fetch'").Scan(&idxNodeSourcesSQL); err != nil {
+		t.Fatalf("expected index idx_node_sources_last_seen_fetch to exist: %v", err)
+	}
+	if !strings.Contains(idxNodeSourcesSQL, "WHERE last_seen_fetch_id != ''") {
+		t.Fatalf("expected idx_node_sources_last_seen_fetch partial index predicate 'WHERE last_seen_fetch_id != \'\'': %s", idxNodeSourcesSQL)
+	}
+
 	// Verify settings.public_base_url exists with default empty string from migration 22
 	var publicBaseURL string
 	if err := db.QueryRowContext(ctx, "SELECT public_base_url FROM settings WHERE id = 1").Scan(&publicBaseURL); err != nil {
@@ -139,6 +208,15 @@ func TestFeatureConvergence_SchemaMigrationTo27(t *testing.T) {
 	}
 	if chainCount != 0 {
 		t.Fatalf("expected empty proxy_chain_bindings table after migration, got %d", chainCount)
+	}
+
+	// Verify subscription_entry_overrides starts empty after migration on a fresh database
+	var overrideCount int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM subscription_entry_overrides").Scan(&overrideCount); err != nil {
+		t.Fatalf("failed to query subscription_entry_overrides count: %v", err)
+	}
+	if overrideCount != 0 {
+		t.Fatalf("expected empty subscription_entry_overrides table after migration, got %d", overrideCount)
 	}
 
 	var ruleCategoryCount int

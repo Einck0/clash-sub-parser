@@ -634,19 +634,18 @@ func TestRunner_And_Service_NoticeExclusion(t *testing.T) {
 	}
 	proxyKind := domain.EntryKindProxy
 	entry3 := domain.SubscriptionEntry{
-		ID:               "entry-3",
-		PayloadID:        payload.ID,
-		SubscriptionID:   sub.ID,
-		Ordinal:          2,
-		SourceKey:        "n3",
-		RawName:          "Manual Proxy",
-		Protocol:         domain.ProtocolVMess,
-		Server:           "127.0.0.1",
-		Port:             1,
-		EntryKind:        domain.EntryKindNotice,
-		UserKindOverride: &proxyKind,
-		NodeLogicalID:    &node3.LogicalID,
-		CreatedAt:        now,
+		ID:            "entry-3",
+		PayloadID:     payload.ID,
+		SubscriptionID: sub.ID,
+		Ordinal:       2,
+		SourceKey:     "n3",
+		RawName:       "Manual Proxy",
+		Protocol:      domain.ProtocolVMess,
+		Server:        "127.0.0.1",
+		Port:          1,
+		EntryKind:     domain.EntryKindNotice,
+		NodeLogicalID: &node3.LogicalID,
+		CreatedAt:     now,
 	}
 
 	// Node 4: Old inactive proxy (active = 0) with user_kind_override = 'proxy' (must NOT auto-activate)
@@ -661,19 +660,18 @@ func TestRunner_And_Service_NoticeExclusion(t *testing.T) {
 		UpdatedAt:   now,
 	}
 	entry4 := domain.SubscriptionEntry{
-		ID:               "entry-4",
-		PayloadID:        payload.ID,
-		SubscriptionID:   sub.ID,
-		Ordinal:          3,
-		SourceKey:        "p4",
-		RawName:          "Inactive Proxy",
-		Protocol:         domain.ProtocolSS,
-		Server:           "4.4.4.4",
-		Port:             8388,
-		EntryKind:        domain.EntryKindProxy,
-		UserKindOverride: &proxyKind,
-		NodeLogicalID:    &node4.LogicalID,
-		CreatedAt:        now,
+		ID:            "entry-4",
+		PayloadID:     payload.ID,
+		SubscriptionID: sub.ID,
+		Ordinal:       3,
+		SourceKey:     "p4",
+		RawName:       "Inactive Proxy",
+		Protocol:      domain.ProtocolSS,
+		Server:        "4.4.4.4",
+		Port:          8388,
+		EntryKind:     domain.EntryKindProxy,
+		NodeLogicalID: &node4.LogicalID,
+		CreatedAt:     now,
 	}
 
 	if err := nodeRepo.UpsertBatch(ctx, []domain.Node{node1, node2, node3, node4}); err != nil {
@@ -685,6 +683,12 @@ func TestRunner_And_Service_NoticeExclusion(t *testing.T) {
 		}
 	}
 	if err := entryRepo.SaveBatch(ctx, []domain.SubscriptionEntry{entry1, entry2, entry3, entry4}); err != nil {
+		t.Fatal(err)
+	}
+	if err := entryRepo.SetUserOverride(ctx, entry3.ID, &proxyKind, entry3.SourceKey, "manual proxy override", "test", now); err != nil {
+		t.Fatal(err)
+	}
+	if err := entryRepo.SetUserOverride(ctx, entry4.ID, &proxyKind, entry4.SourceKey, "manual proxy override", "test", now); err != nil {
 		t.Fatal(err)
 	}
 

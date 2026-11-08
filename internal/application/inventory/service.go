@@ -924,6 +924,9 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 			parsedConfigJSON := string(parsedConfigBytes)
 
 			var targetLogicalIDPtr *string
+			var currentRevision int64 = 1
+			needHeadUpdate := false
+			needVersionInsert := false
 
 			if effectiveKind == domain.EntryKindNotice || isFilteredOut {
 				// Notices or filtered-out nodes do NOT enter active proxy inventory!
@@ -950,8 +953,9 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 				scopedCandidateID := computeScopedLogicalID(sub.ID, candidateID)
 
 				var targetLogicalID string
-				var currentRevision int64 = 1
 				targetActive := 1
+				needVersionInsert = true
+				needHeadUpdate = true
 
 				// 1. Try to match an existing node already associated with this subscription
 				var matchedNode *existingNodeRow
@@ -1000,15 +1004,7 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 
 					if connEqual {
 						currentRevision = matchedNode.connectionRevision
-						if versionStmt != nil {
-							effJSONBytes, _ := json.Marshal(map[string]any{
-								"server":      node.Server,
-								"port":        node.Port,
-								"credentials": node.Credentials,
-							})
-							fp := domain.ComputeConnectionFingerprint(node.Server, node.Port, node.Credentials)
-							_, _ = versionStmt.ExecContext(ctx, targetLogicalID, currentRevision, string(effJSONBytes), fp, entryID, nowStr)
-						}
+						needHeadUpdate = false
 					} else {
 						// Connection parameters changed!
 						var otherOwnersCount int
@@ -1055,18 +1051,6 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 						} else {
 							targetLogicalID = matchedNode.logicalID
 							currentRevision = matchedNode.connectionRevision + 1
-						}
-
-						// Insert new version & update head
-						if versionStmt != nil && headStmt != nil {
-							effJSONBytes, _ := json.Marshal(map[string]any{
-								"server":      node.Server,
-								"port":        node.Port,
-								"credentials": node.Credentials,
-							})
-							fp := domain.ComputeConnectionFingerprint(node.Server, node.Port, node.Credentials)
-							_, _ = versionStmt.ExecContext(ctx, targetLogicalID, currentRevision, string(effJSONBytes), fp, entryID, nowStr)
-							_, _ = headStmt.ExecContext(ctx, targetLogicalID, currentRevision, nowStr)
 						}
 					}
 				} else {
@@ -1154,18 +1138,6 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 						}
 					} else {
 						return fmt.Errorf("failed to query node %s: %w", candidateID, checkErr)
-					}
-
-					// New node initial version & head
-					if versionStmt != nil && headStmt != nil {
-						effJSONBytes, _ := json.Marshal(map[string]any{
-							"server":      node.Server,
-							"port":        node.Port,
-							"credentials": node.Credentials,
-						})
-						fp := domain.ComputeConnectionFingerprint(node.Server, node.Port, node.Credentials)
-						_, _ = versionStmt.ExecContext(ctx, targetLogicalID, currentRevision, string(effJSONBytes), fp, entryID, nowStr)
-						_, _ = headStmt.ExecContext(ctx, targetLogicalID, currentRevision, nowStr)
 					}
 				}
 
@@ -1255,6 +1227,26 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 				)
 				if entryErr != nil {
 					return fmt.Errorf("failed to persist raw subscription entry: %w", entryErr)
+				}
+			}
+
+			if targetLogicalIDPtr != nil && needVersionInsert && versionStmt != nil {
+				effJSONBytes, mErr := json.Marshal(map[string]any{
+					"server":      node.Server,
+					"port":        node.Port,
+					"credentials": node.Credentials,
+				})
+				if mErr != nil {
+					return fmt.Errorf("failed to marshal credentials for node %s: %w", *targetLogicalIDPtr, mErr)
+				}
+				fp := domain.ComputeConnectionFingerprint(node.Server, node.Port, node.Credentials)
+				if _, vErr := versionStmt.ExecContext(ctx, *targetLogicalIDPtr, currentRevision, string(effJSONBytes), fp, entryID, nowStr); vErr != nil {
+					return fmt.Errorf("failed to upsert node connection version for node %s: %w", *targetLogicalIDPtr, vErr)
+				}
+			}
+			if targetLogicalIDPtr != nil && needHeadUpdate && headStmt != nil {
+				if _, hErr := headStmt.ExecContext(ctx, *targetLogicalIDPtr, currentRevision, nowStr); hErr != nil {
+					return fmt.Errorf("failed to update node connection head for node %s: %w", *targetLogicalIDPtr, hErr)
 				}
 			}
 		}
@@ -2030,7 +2022,10 @@ func (s *Service) OverrideEntryKind(ctx context.Context, entryID string, userKin
 		return nil, err
 	}
 
-	anchor := entry.SourceKey
+	anchor := entry.OverrideAnchor
+	if anchor == "" {
+		anchor = entry.SourceKey
+	}
 	if anchor == "" {
 		anchor = fmt.Sprintf("%s|%s|%d|%s", entry.Protocol, entry.Server, entry.Port, entry.RawName)
 	}

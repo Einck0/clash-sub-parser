@@ -108,8 +108,8 @@ func TestReconcile_RetentionWiring_WithoutConnectionProvenance_KeepsExactTwo(t *
 	fetcher := newMockFetcher()
 
 	subID := "sub-retention-notices"
-	url := "https://provider.example.com/notices-sub"
-	createTestSub(t, subRepo, subID, "Retention Notices Sub", url, true)
+	url := "https://provider.example.com/dogegg-notices-sub"
+	createTestSub(t, subRepo, subID, "Dogegg Retention Notices Sub", url, true)
 
 	svc := inventory.NewService(db, subRepo, fetchRepo, nodeRepo, sourceRepo, fetcher)
 
@@ -117,7 +117,7 @@ func TestReconcile_RetentionWiring_WithoutConnectionProvenance_KeepsExactTwo(t *
 	for i := 1; i <= 5; i++ {
 		noticeYAML := fmt.Sprintf(`
 proxies:
-  - name: "Notice Item %d"
+  - name: "通知 Item %d"
     type: ss
     server: 127.0.0.1
     port: 1
@@ -475,8 +475,8 @@ func TestReconcile_NoticePredicates_UseCurrentUsefulSnapshot(t *testing.T) {
 	fetcher := newMockFetcher()
 
 	subID := "sub-notice-useful"
-	url := "https://provider.example.com/notice-useful"
-	createTestSub(t, subRepo, subID, "Notice Useful Sub", url, true)
+	url := "https://provider.example.com/dogegg-notice-useful"
+	createTestSub(t, subRepo, subID, "Dogegg Notice Useful Sub", url, true)
 
 	svc := inventory.NewService(db, subRepo, fetchRepo, nodeRepo, sourceRepo, fetcher)
 

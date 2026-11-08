@@ -37,7 +37,8 @@ WHERE se1.node_logical_id IS NOT NULL
       (SELECT seo.user_kind_override
        FROM subscription_entry_overrides seo
        WHERE seo.subscription_id = se1.subscription_id
-         AND (seo.override_anchor = se1.override_anchor OR (se1.source_key != '' AND seo.override_anchor = se1.source_key))
+         AND ((se1.override_anchor != '' AND seo.override_anchor = se1.override_anchor) OR (se1.source_key != '' AND seo.override_anchor = se1.source_key))
+       ORDER BY seo.override_at DESC, seo.rowid DESC
        LIMIT 1),
       se1.entry_kind
   ) = 'notice'
@@ -49,7 +50,8 @@ WHERE se1.node_logical_id IS NOT NULL
             SELECT seo2.user_kind_override
             FROM subscription_entry_overrides seo2
             WHERE seo2.subscription_id = se2.subscription_id
-              AND (seo2.override_anchor = se2.override_anchor OR (se2.source_key != '' AND seo2.override_anchor = se2.source_key))
+              AND ((se2.override_anchor != '' AND seo2.override_anchor = se2.override_anchor) OR (se2.source_key != '' AND seo2.override_anchor = se2.source_key))
+            ORDER BY seo2.override_at DESC, seo2.rowid DESC
             LIMIT 1
         ) = 'proxy'
   )`
@@ -64,6 +66,7 @@ WHERE s.enabled = 1
       FROM subscription_fetches sf
       WHERE sf.subscription_id = s.id
         AND sf.outcome IN ('success', 'partial')
+        AND (sf.nodes_valid IS NULL OR sf.nodes_valid > 0)
       ORDER BY sf.started_at DESC, sf.rowid DESC
       LIMIT 1
   )

@@ -40,13 +40,19 @@ func retentionInsertTestFetch(t *testing.T, db *sql.DB, fetchID, subID string, s
 		t.Fatalf("invalid fetch outcome: %s", outcome)
 	}
 	nowStr := startedAt.Format(time.RFC3339)
+	parsedCount := 1
+	validCount := 1
+	if outcome == domain.FetchOutcomeFailed {
+		parsedCount = 0
+		validCount = 0
+	}
 	const q = `
 	INSERT INTO subscription_fetches (
 		id, subscription_id, started_at, finished_at, outcome,
 		content_digest, redacted_error, nodes_parsed, nodes_valid
-	) VALUES (?, ?, ?, ?, ?, 'sha256:digest', '', 1, 1);`
+	) VALUES (?, ?, ?, ?, ?, 'sha256:digest', '', ?, ?);`
 
-	if _, err := db.Exec(q, fetchID, subID, nowStr, nowStr, string(outcome)); err != nil {
+	if _, err := db.Exec(q, fetchID, subID, nowStr, nowStr, string(outcome), parsedCount, validCount); err != nil {
 		t.Fatalf("failed to insert test fetch: %v", err)
 	}
 }
@@ -75,19 +81,25 @@ func retentionInsertTestEntry(t *testing.T, db *sql.DB, entryID, payloadID, subI
 		t.Fatalf("invalid entry kind: %s", kind)
 	}
 	nowStr := domain.NowUTC().Format(time.RFC3339)
+
+	var nextOrdinal int
+	if err := db.QueryRow("SELECT COALESCE(MAX(ordinal) + 1, 0) FROM subscription_entries WHERE payload_id = ?;", payloadID).Scan(&nextOrdinal); err != nil {
+		nextOrdinal = 0
+	}
+
 	const q = `
 	INSERT INTO subscription_entries (
 		id, payload_id, subscription_id, ordinal, source_key, raw_name,
 		protocol, server, port, entry_kind, classification_reason,
 		classification_version, source_provenance_json,
 		parsed_config_json, parser_version, warnings_json, node_logical_id, created_at
-	) VALUES (?, ?, ?, 0, ?, ?, 'ss', '127.0.0.1', 8388, ?, 'test', 'v2-proven-combo', '{}', '{}', '1.0.0', '[]', ?, ?);`
+	) VALUES (?, ?, ?, ?, ?, ?, 'ss', '127.0.0.1', 8388, ?, 'test', 'v2-proven-combo', '{}', '{}', '1.0.0', '[]', ?, ?);`
 
 	var nodeVal any = nil
 	if nodeID != nil {
 		nodeVal = *nodeID
 	}
-	if _, err := db.Exec(q, entryID, payloadID, subID, sourceKey, rawName, string(kind), nodeVal, nowStr); err != nil {
+	if _, err := db.Exec(q, entryID, payloadID, subID, nextOrdinal, sourceKey, rawName, string(kind), nodeVal, nowStr); err != nil {
 		t.Fatalf("failed to insert test entry: %v", err)
 	}
 }
@@ -253,9 +265,9 @@ func TestSubscriptionRetention_ProtectionMatrix(t *testing.T) {
 	pubID := "pub-01"
 	nowStr := domain.NowUTC().Format(time.RFC3339)
 	_, err := db.ExecContext(ctx, `
-		INSERT INTO publications (id, token_hash, state, content_bytes, created_at, updated_at)
-		VALUES (?, 'hash-pub-01', 'active', X'deadbeef', ?, ?);
-	`, pubID, nowStr, nowStr)
+		INSERT INTO publications (id, target, snapshot_digest, compiler_version, token_hash, state, created_at, content)
+		VALUES (?, 'clash', 'sha256:snap', '1.0.0', 'hash-pub-01', 'active', ?, X'deadbeef');
+	`, pubID, nowStr)
 	if err != nil {
 		t.Fatalf("failed to insert test publication: %v", err)
 	}
@@ -478,10 +490,11 @@ func TestSubscriptionEntryOverride_DurableLedger_SetClearReappearance(t *testing
 		t.Fatalf("expected surviving override kind notice, got %v", survivingKind)
 	}
 
-	// Subtest C: Clear override removes durable intent
-	// Insert fresh entry with same anchor
+	// Subtest C: Clear override removes durable intent and clears all same-anchor projections
+	// Insert fresh entries with same anchor across payloads
 	retentionInsertTestPayload(t, db, "payload-ov-2", subID, "fetch-ov-1", now, false)
 	retentionInsertTestEntry(t, db, "entry-ov-2", "payload-ov-2", subID, "source-key-alpha", "Node Alpha", domain.EntryKindProxy, nil)
+	retentionInsertTestEntry(t, db, "entry-ov-3", "payload-ov-2", subID, "source-key-alpha", "Node Alpha", domain.EntryKindProxy, nil)
 	// Project the override
 	_ = entryRepo.SetUserOverride(ctx, "entry-ov-2", &noticeKind, "anchor-alpha", "remark", "admin", now)
 
@@ -491,13 +504,22 @@ func TestSubscriptionEntryOverride_DurableLedger_SetClearReappearance(t *testing
 		t.Fatalf("clear override failed: %v", err)
 	}
 
-	// Verify projection cleared
+	// Verify projection cleared on entry-ov-2
 	clearedEntry, err := entryRepo.GetByID(ctx, "entry-ov-2")
 	if err != nil {
 		t.Fatalf("GetByID failed: %v", err)
 	}
 	if clearedEntry.UserKindOverride != nil {
 		t.Fatalf("expected projection to be nil, got %v", clearedEntry.UserKindOverride)
+	}
+
+	// Verify projection also cleared on same-anchor entry-ov-3 to avoid resurrection
+	clearedEntry3, err := entryRepo.GetByID(ctx, "entry-ov-3")
+	if err != nil {
+		t.Fatalf("GetByID failed on entry-ov-3: %v", err)
+	}
+	if clearedEntry3.UserKindOverride != nil {
+		t.Fatalf("expected same-anchor projection to be nil, got %v", clearedEntry3.UserKindOverride)
 	}
 
 	// Verify ledger entry deleted
@@ -646,7 +668,15 @@ func TestSubscriptionRetention_ZeroNodePayloadDoesNotAgeOutUsableData(t *testing
 	baseTime := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
 
 	// 1. Initial usable payload with 2 valid nodes
-	retentionInsertTestFetch(t, db, "fetch-usable", subID, baseTime, domain.FetchOutcomeSuccess)
+	const insUsableFetch = `
+	INSERT INTO subscription_fetches (
+		id, subscription_id, started_at, finished_at, outcome,
+		content_digest, redacted_error, nodes_parsed, nodes_valid
+	) VALUES (?, ?, ?, ?, 'success', 'sha256:usable', '', 2, 2);`
+	baseTimeStr := baseTime.Format(time.RFC3339)
+	if _, err := db.ExecContext(ctx, insUsableFetch, "fetch-usable", subID, baseTimeStr, baseTimeStr); err != nil {
+		t.Fatalf("insert usable fetch failed: %v", err)
+	}
 	retentionInsertTestPayload(t, db, "payload-usable", subID, "fetch-usable", baseTime, false)
 	retentionInsertTestEntry(t, db, "entry-usable-1", "payload-usable", subID, "k1", "Node 1", domain.EntryKindProxy, nil)
 	retentionInsertTestEntry(t, db, "entry-usable-2", "payload-usable", subID, "k2", "Node 2", domain.EntryKindProxy, nil)

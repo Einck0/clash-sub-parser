@@ -1866,8 +1866,43 @@ func (s *Service) buildArtifactPipeline(ctx context.Context, facts *domain.Consi
 		absentRoutingMihomo ||
 		(target != domain.TargetMihomo && len(snapshot.Nodes) == 0)
 
+	// Risk policy is an independent publication safety gate. Preserve its concrete
+	// diagnostics and return it before strict empty-group capability errors.
+	if hasRiskBlocker {
+		for _, diagnostic := range snapshot.Diagnostics {
+			if diagnostic.Code != "risk_blocked" && diagnostic.Code != "risk_review" && diagnostic.Code != "risk_unknown" {
+				continue
+			}
+			found := false
+			for _, existing := range preflight.Diagnostics {
+				if existing.Code == diagnostic.Code && existing.Target == diagnostic.Target {
+					found = true
+					break
+				}
+			}
+			if !found {
+				preflight.Diagnostics = append(preflight.Diagnostics, PreflightDiagnostic{
+					Severity: diagnostic.Severity,
+					Code:     diagnostic.Code,
+					Message:  diagnostic.Message,
+					Target:   diagnostic.Target,
+				})
+			}
+		}
+		sort.SliceStable(preflight.Diagnostics, func(i, j int) bool {
+			isRiskI := preflight.Diagnostics[i].Code == "risk_blocked" || preflight.Diagnostics[i].Code == "risk_review" || preflight.Diagnostics[i].Code == "risk_unknown"
+			isRiskJ := preflight.Diagnostics[j].Code == "risk_blocked" || preflight.Diagnostics[j].Code == "risk_review" || preflight.Diagnostics[j].Code == "risk_unknown"
+			if isRiskI != isRiskJ {
+				return isRiskI
+			}
+			return false
+		})
+		preflight.Allowed = false
+		return nil, snapshot, newPreflightError(preflight)
+	}
+
 	// If independent blockers exist or not an eligible failure condition, return original error directly
-	if hasRiskBlocker || hasProtocolBlocker || hasIndependentResolverError || !isEligible {
+	if hasProtocolBlocker || hasIndependentResolverError || !isEligible {
 		if len(diags) > 0 && (hasProtocolBlocker || cfg.mode == exportModeStrict) {
 			msg := "target capability validation failed in strict mode"
 			if len(diags) > 0 {

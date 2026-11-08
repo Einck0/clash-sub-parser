@@ -189,7 +189,7 @@ func TestFeatureConvergence_SchemaMigrationTo28(t *testing.T) {
 		t.Fatalf("expected index idx_node_sources_last_seen_fetch to exist: %v", err)
 	}
 	if !strings.Contains(idxNodeSourcesSQL, "WHERE last_seen_fetch_id != ''") {
-		t.Fatalf("expected idx_node_sources_last_seen_fetch partial index predicate 'WHERE last_seen_fetch_id != \'\'': %s", idxNodeSourcesSQL)
+		t.Fatalf("expected idx_node_sources_last_seen_fetch partial index predicate 'WHERE last_seen_fetch_id != '': %s", idxNodeSourcesSQL)
 	}
 
 	// Verify settings.public_base_url exists with default empty string from migration 22

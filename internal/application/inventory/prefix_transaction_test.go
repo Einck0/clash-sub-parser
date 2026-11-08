@@ -89,11 +89,12 @@ func TestSharedPrefixStableAcrossImportSaveRefreshAndDelete(t *testing.T) {
 		t.Fatalf("shared node identity split: %v %v", list, err)
 	}
 	id, revision := list[0].LogicalID, list[0].ConnectionRevision
-	// Seed a valid existing connection head/version; prefix-only writes must preserve both.
-	if _, err := db.Exec(`INSERT INTO node_connection_versions(node_logical_id, connection_revision, effective_config_json, config_fingerprint, created_at) VALUES (?, ?, '{}', 'fixture-connection', ?)`, id, revision, now); err != nil {
+	// Production reconciliation now correctly creates connection head and version.
+	// Update existing fixture records instead of duplicate INSERT; prefix-only writes must preserve both.
+	if _, err := db.Exec(`UPDATE node_connection_versions SET effective_config_json = '{}', config_fingerprint = 'fixture-connection' WHERE node_logical_id = ? AND connection_revision = ?`, id, revision); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO node_connection_heads(logical_id, connection_revision, updated_at) VALUES (?, ?, ?)`, id, revision, now); err != nil {
+	if _, err := db.Exec(`UPDATE node_connection_heads SET updated_at = ? WHERE logical_id = ? AND connection_revision = ?`, now, id, revision); err != nil {
 		t.Fatal(err)
 	}
 	var versionCount int

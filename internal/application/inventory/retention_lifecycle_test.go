@@ -62,7 +62,7 @@ proxies:
 	// - Payload 1 (protected by node_connection_versions.source_entry_id provenance)
 	// - Payload 4 and Payload 5 (newest 2 success payloads)
 	var survivingPayloads []string
-	rows, err := db.QueryContext(ctx, "SELECT id FROM subscription_payloads WHERE subscription_id = ? ORDER BY created_at ASC;", subID)
+	rows, err := db.QueryContext(ctx, "SELECT id FROM subscription_payloads WHERE subscription_id = ? ORDER BY created_at ASC, rowid ASC;", subID)
 	if err != nil {
 		t.Fatalf("failed to query payloads: %v", err)
 	}
@@ -91,6 +91,16 @@ proxies:
 	`, subID).Scan(&connSourceEntryPayload)
 	if err != nil {
 		t.Fatalf("failed to query connection version source entry payload: %v", err)
+	}
+	var foundConnProvenance bool
+	for _, pID := range survivingPayloads {
+		if pID == connSourceEntryPayload {
+			foundConnProvenance = true
+			break
+		}
+	}
+	if !foundConnProvenance {
+		t.Fatalf("expected connection provenance payload %s to be retained among surviving payloads: %v", connSourceEntryPayload, survivingPayloads)
 	}
 	if survivingPayloads[0] != connSourceEntryPayload {
 		t.Fatalf("expected first surviving payload %s to match connection provenance payload %s", survivingPayloads[0], connSourceEntryPayload)
@@ -141,7 +151,7 @@ proxies:
 
 	// Without connection version pins, exactly newest 2 payloads remain
 	var survivingPayloads []string
-	rows, err := db.QueryContext(ctx, "SELECT id FROM subscription_payloads WHERE subscription_id = ? ORDER BY created_at ASC;", subID)
+	rows, err := db.QueryContext(ctx, "SELECT id FROM subscription_payloads WHERE subscription_id = ? ORDER BY created_at ASC, rowid ASC;", subID)
 	if err != nil {
 		t.Fatalf("failed to query payloads: %v", err)
 	}

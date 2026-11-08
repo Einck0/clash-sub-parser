@@ -66,7 +66,6 @@ WHERE s.enabled = 1
       FROM subscription_fetches sf
       WHERE sf.subscription_id = s.id
         AND sf.outcome IN ('success', 'partial')
-        AND (sf.nodes_valid IS NULL OR sf.nodes_valid > 0)
       ORDER BY sf.started_at DESC, sf.rowid DESC
       LIMIT 1
   )

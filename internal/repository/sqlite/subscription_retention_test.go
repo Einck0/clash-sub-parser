@@ -9,15 +9,16 @@ import (
 
 	"clash-sub-parser/internal/domain"
 	"clash-sub-parser/internal/repository/sqlite"
+	"clash-sub-parser/migrations"
 )
 
-func setupRetentionTestDB(t *testing.T) *sql.DB {
+func retentionSetupTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 	db, _ := setupTestDB(t)
 	return db
 }
 
-func createTestSubscription(t *testing.T, db *sql.DB, subID, name string) {
+func retentionCreateTestSubscription(t *testing.T, db *sql.DB, subID, name string) {
 	t.Helper()
 	now := domain.NowUTC().Format(time.RFC3339)
 	const q = `
@@ -33,7 +34,7 @@ func createTestSubscription(t *testing.T, db *sql.DB, subID, name string) {
 	}
 }
 
-func insertTestFetch(t *testing.T, db *sql.DB, fetchID, subID string, startedAt time.Time, outcome domain.FetchOutcome) {
+func retentionInsertTestFetch(t *testing.T, db *sql.DB, fetchID, subID string, startedAt time.Time, outcome domain.FetchOutcome) {
 	t.Helper()
 	if !outcome.IsValid() {
 		t.Fatalf("invalid fetch outcome: %s", outcome)
@@ -50,7 +51,7 @@ func insertTestFetch(t *testing.T, db *sql.DB, fetchID, subID string, startedAt 
 	}
 }
 
-func insertTestPayload(t *testing.T, db *sql.DB, payloadID, subID, fetchID string, createdAt time.Time, pinned bool) {
+func retentionInsertTestPayload(t *testing.T, db *sql.DB, payloadID, subID, fetchID string, createdAt time.Time, pinned bool) {
 	t.Helper()
 	nowStr := createdAt.Format(time.RFC3339)
 	pinnedInt := 0
@@ -68,7 +69,7 @@ func insertTestPayload(t *testing.T, db *sql.DB, payloadID, subID, fetchID strin
 	}
 }
 
-func insertTestEntry(t *testing.T, db *sql.DB, entryID, payloadID, subID, sourceKey, rawName string, kind domain.EntryKind, nodeID *string) {
+func retentionInsertTestEntry(t *testing.T, db *sql.DB, entryID, payloadID, subID, sourceKey, rawName string, kind domain.EntryKind, nodeID *string) {
 	t.Helper()
 	if !kind.IsValid() {
 		t.Fatalf("invalid entry kind: %s", kind)
@@ -91,7 +92,7 @@ func insertTestEntry(t *testing.T, db *sql.DB, entryID, payloadID, subID, source
 	}
 }
 
-func getLedgerOverride(t *testing.T, db *sql.DB, subID, anchor string) (domain.EntryKind, string, error) {
+func retentionGetLedgerOverride(t *testing.T, db *sql.DB, subID, anchor string) (domain.EntryKind, string, error) {
 	t.Helper()
 	var kind, reason string
 	err := db.QueryRow("SELECT user_kind_override, override_reason FROM subscription_entry_overrides WHERE subscription_id = ? AND override_anchor = ?;", subID, anchor).Scan(&kind, &reason)
@@ -104,10 +105,10 @@ func getLedgerOverride(t *testing.T, db *sql.DB, subID, anchor string) (domain.E
 // 1. Behavior Fixture: Retention Repeat and Bounded Legacy Drain (Max 20 per refresh)
 func TestSubscriptionRetention_RepeatAndBoundedDrain(t *testing.T) {
 	ctx := context.Background()
-	db := setupRetentionTestDB(t)
+	db := retentionSetupTestDB(t)
 
 	subID := "sub-retention-repeat"
-	createTestSubscription(t, db, subID, "Repeat Sub")
+	retentionCreateTestSubscription(t, db, subID, "Repeat Sub")
 
 	baseTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
@@ -116,9 +117,9 @@ func TestSubscriptionRetention_RepeatAndBoundedDrain(t *testing.T) {
 		tAt := baseTime.Add(time.Duration(i) * time.Hour)
 		fID := fmt.Sprintf("fetch-%02d", i)
 		pID := fmt.Sprintf("payload-%02d", i)
-		insertTestFetch(t, db, fID, subID, tAt, domain.FetchOutcomeSuccess)
-		insertTestPayload(t, db, pID, subID, fID, tAt, false)
-		insertTestEntry(t, db, fmt.Sprintf("entry-%02d", i), pID, subID, fmt.Sprintf("key-%02d", i), "Node", domain.EntryKindProxy, nil)
+		retentionInsertTestFetch(t, db, fID, subID, tAt, domain.FetchOutcomeSuccess)
+		retentionInsertTestPayload(t, db, pID, subID, fID, tAt, false)
+		retentionInsertTestEntry(t, db, fmt.Sprintf("entry-%02d", i), pID, subID, fmt.Sprintf("key-%02d", i), "Node", domain.EntryKindProxy, nil)
 	}
 
 	// First retention run: max 20 deletions
@@ -184,27 +185,27 @@ func TestSubscriptionRetention_RepeatAndBoundedDrain(t *testing.T) {
 // 2. Behavior Fixture: Failure and Zero-Node Refreshes Preserve Last Usable Inventory
 func TestSubscriptionRetention_FailureAndZeroNodePreserved(t *testing.T) {
 	ctx := context.Background()
-	db := setupRetentionTestDB(t)
+	db := retentionSetupTestDB(t)
 
 	subID := "sub-failure-preserve"
-	createTestSubscription(t, db, subID, "Failure Preserve Sub")
+	retentionCreateTestSubscription(t, db, subID, "Failure Preserve Sub")
 
 	t1 := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
 	t2 := time.Date(2026, 1, 1, 11, 0, 0, 0, time.UTC)
 	t3 := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 
 	// Two usable successful payloads
-	insertTestFetch(t, db, "fetch-succ-1", subID, t1, domain.FetchOutcomeSuccess)
-	insertTestPayload(t, db, "payload-succ-1", subID, "fetch-succ-1", t1, false)
-	insertTestEntry(t, db, "entry-succ-1", "payload-succ-1", subID, "key-1", "Node-1", domain.EntryKindProxy, nil)
+	retentionInsertTestFetch(t, db, "fetch-succ-1", subID, t1, domain.FetchOutcomeSuccess)
+	retentionInsertTestPayload(t, db, "payload-succ-1", subID, "fetch-succ-1", t1, false)
+	retentionInsertTestEntry(t, db, "entry-succ-1", "payload-succ-1", subID, "key-1", "Node-1", domain.EntryKindProxy, nil)
 
-	insertTestFetch(t, db, "fetch-succ-2", subID, t2, domain.FetchOutcomeSuccess)
-	insertTestPayload(t, db, "payload-succ-2", subID, "fetch-succ-2", t2, false)
-	insertTestEntry(t, db, "entry-succ-2", "payload-succ-2", subID, "key-2", "Node-2", domain.EntryKindProxy, nil)
+	retentionInsertTestFetch(t, db, "fetch-succ-2", subID, t2, domain.FetchOutcomeSuccess)
+	retentionInsertTestPayload(t, db, "payload-succ-2", subID, "fetch-succ-2", t2, false)
+	retentionInsertTestEntry(t, db, "entry-succ-2", "payload-succ-2", subID, "key-2", "Node-2", domain.EntryKindProxy, nil)
 
 	// One failed fetch with payload (e.g. HTTP error or zero-node)
-	insertTestFetch(t, db, "fetch-fail-3", subID, t3, domain.FetchOutcomeFailed)
-	insertTestPayload(t, db, "payload-fail-3", subID, "fetch-fail-3", t3, false)
+	retentionInsertTestFetch(t, db, "fetch-fail-3", subID, t3, domain.FetchOutcomeFailed)
+	retentionInsertTestPayload(t, db, "payload-fail-3", subID, "fetch-fail-3", t3, false)
 
 	// Run retention:
 	// - payload-fail-3 is protected because it is newest payload of ANY outcome
@@ -225,10 +226,10 @@ func TestSubscriptionRetention_FailureAndZeroNodePreserved(t *testing.T) {
 // Pins, Publication Refs, Connection-Version Source Entries, Node Source Fetches, Orphan Provenance
 func TestSubscriptionRetention_ProtectionMatrix(t *testing.T) {
 	ctx := context.Background()
-	db := setupRetentionTestDB(t)
+	db := retentionSetupTestDB(t)
 
 	subID := "sub-matrix"
-	createTestSubscription(t, db, subID, "Matrix Sub")
+	retentionCreateTestSubscription(t, db, subID, "Matrix Sub")
 
 	baseTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
@@ -237,9 +238,9 @@ func TestSubscriptionRetention_ProtectionMatrix(t *testing.T) {
 		tAt := baseTime.Add(time.Duration(i) * time.Hour)
 		fID := fmt.Sprintf("fetch-%02d", i)
 		pID := fmt.Sprintf("payload-%02d", i)
-		insertTestFetch(t, db, fID, subID, tAt, domain.FetchOutcomeSuccess)
-		insertTestPayload(t, db, pID, subID, fID, tAt, false)
-		insertTestEntry(t, db, fmt.Sprintf("entry-%02d", i), pID, subID, fmt.Sprintf("key-%02d", i), "Node", domain.EntryKindProxy, nil)
+		retentionInsertTestFetch(t, db, fID, subID, tAt, domain.FetchOutcomeSuccess)
+		retentionInsertTestPayload(t, db, pID, subID, fID, tAt, false)
+		retentionInsertTestEntry(t, db, fmt.Sprintf("entry-%02d", i), pID, subID, fmt.Sprintf("key-%02d", i), "Node", domain.EntryKindProxy, nil)
 	}
 
 	// Protection A: Pin P01 explicitly
@@ -372,10 +373,10 @@ func TestSubscriptionRetention_ProtectionMatrix(t *testing.T) {
 // 4. Behavior Fixture: Deterministic RowID Tie-Breaking on Equal Timestamps
 func TestSubscriptionRetention_DeterministicEqualTimestamps(t *testing.T) {
 	ctx := context.Background()
-	db := setupRetentionTestDB(t)
+	db := retentionSetupTestDB(t)
 
 	subID := "sub-tie-breaker"
-	createTestSubscription(t, db, subID, "Tie Breaker Sub")
+	retentionCreateTestSubscription(t, db, subID, "Tie Breaker Sub")
 
 	sameTime := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 
@@ -383,9 +384,9 @@ func TestSubscriptionRetention_DeterministicEqualTimestamps(t *testing.T) {
 	for i := 1; i <= 5; i++ {
 		fID := fmt.Sprintf("fetch-%d", i)
 		pID := fmt.Sprintf("payload-%d", i)
-		insertTestFetch(t, db, fID, subID, sameTime, domain.FetchOutcomeSuccess)
-		insertTestPayload(t, db, pID, subID, fID, sameTime, false)
-		insertTestEntry(t, db, fmt.Sprintf("entry-%d", i), pID, subID, fmt.Sprintf("key-%d", i), "Node", domain.EntryKindProxy, nil)
+		retentionInsertTestFetch(t, db, fID, subID, sameTime, domain.FetchOutcomeSuccess)
+		retentionInsertTestPayload(t, db, pID, subID, fID, sameTime, false)
+		retentionInsertTestEntry(t, db, fmt.Sprintf("entry-%d", i), pID, subID, fmt.Sprintf("key-%d", i), "Node", domain.EntryKindProxy, nil)
 	}
 
 	// Run retention: newest 2 by rowid DESC must be kept (payload-4 and payload-5)
@@ -420,15 +421,15 @@ func TestSubscriptionRetention_DeterministicEqualTimestamps(t *testing.T) {
 // 5. Behavior Fixture: Durable Override Ledger - Set, Clear, Absent Override, and Reappearance
 func TestSubscriptionEntryOverride_DurableLedger_SetClearReappearance(t *testing.T) {
 	ctx := context.Background()
-	db := setupRetentionTestDB(t)
+	db := retentionSetupTestDB(t)
 
 	subID := "sub-override-test"
-	createTestSubscription(t, db, subID, "Override Sub")
+	retentionCreateTestSubscription(t, db, subID, "Override Sub")
 
 	now := domain.NowUTC()
-	insertTestFetch(t, db, "fetch-ov-1", subID, now, domain.FetchOutcomeSuccess)
-	insertTestPayload(t, db, "payload-ov-1", subID, "fetch-ov-1", now, false)
-	insertTestEntry(t, db, "entry-ov-1", "payload-ov-1", subID, "source-key-alpha", "Node Alpha", domain.EntryKindProxy, nil)
+	retentionInsertTestFetch(t, db, "fetch-ov-1", subID, now, domain.FetchOutcomeSuccess)
+	retentionInsertTestPayload(t, db, "payload-ov-1", subID, "fetch-ov-1", now, false)
+	retentionInsertTestEntry(t, db, "entry-ov-1", "payload-ov-1", subID, "source-key-alpha", "Node Alpha", domain.EntryKindProxy, nil)
 
 	entryRepo := sqlite.NewSubscriptionEntryRepository(db)
 
@@ -449,9 +450,9 @@ func TestSubscriptionEntryOverride_DurableLedger_SetClearReappearance(t *testing
 	}
 
 	// Verify durable ledger in subscription_entry_overrides via direct SQL helper
-	ledgerKind, _, err := getLedgerOverride(t, db, subID, "anchor-alpha")
+	ledgerKind, _, err := retentionGetLedgerOverride(t, db, subID, "anchor-alpha")
 	if err != nil {
-		t.Fatalf("getLedgerOverride failed: %v", err)
+		t.Fatalf("retentionGetLedgerOverride failed: %v", err)
 	}
 	if ledgerKind != domain.EntryKindNotice {
 		t.Fatalf("expected ledger entry kind notice, got %v", ledgerKind)
@@ -469,7 +470,7 @@ func TestSubscriptionEntryOverride_DurableLedger_SetClearReappearance(t *testing
 	}
 
 	// Override in subscription_entry_overrides MUST STILL EXIST!
-	survivingKind, _, err := getLedgerOverride(t, db, subID, "anchor-alpha")
+	survivingKind, _, err := retentionGetLedgerOverride(t, db, subID, "anchor-alpha")
 	if err != nil {
 		t.Fatalf("durable override was destroyed by entry deletion! %v", err)
 	}
@@ -479,8 +480,8 @@ func TestSubscriptionEntryOverride_DurableLedger_SetClearReappearance(t *testing
 
 	// Subtest C: Clear override removes durable intent
 	// Insert fresh entry with same anchor
-	insertTestPayload(t, db, "payload-ov-2", subID, "fetch-ov-1", now, false)
-	insertTestEntry(t, db, "entry-ov-2", "payload-ov-2", subID, "source-key-alpha", "Node Alpha", domain.EntryKindProxy, nil)
+	retentionInsertTestPayload(t, db, "payload-ov-2", subID, "fetch-ov-1", now, false)
+	retentionInsertTestEntry(t, db, "entry-ov-2", "payload-ov-2", subID, "source-key-alpha", "Node Alpha", domain.EntryKindProxy, nil)
 	// Project the override
 	_ = entryRepo.SetUserOverride(ctx, "entry-ov-2", &noticeKind, "anchor-alpha", "remark", "admin", now)
 
@@ -500,7 +501,7 @@ func TestSubscriptionEntryOverride_DurableLedger_SetClearReappearance(t *testing
 	}
 
 	// Verify ledger entry deleted
-	_, _, err = getLedgerOverride(t, db, subID, "anchor-alpha")
+	_, _, err = retentionGetLedgerOverride(t, db, subID, "anchor-alpha")
 	if err == nil {
 		t.Fatalf("expected override to be deleted from ledger after clear, but it still exists!")
 	}
@@ -509,18 +510,18 @@ func TestSubscriptionEntryOverride_DurableLedger_SetClearReappearance(t *testing
 // 6. Behavior Fixture: Foreign Key Integrity and Rollback Safety
 func TestSubscriptionRetention_RollbackAndFKIntegrity(t *testing.T) {
 	ctx := context.Background()
-	db := setupRetentionTestDB(t)
+	db := retentionSetupTestDB(t)
 
 	subID := "sub-fk-test"
-	createTestSubscription(t, db, subID, "FK Sub")
+	retentionCreateTestSubscription(t, db, subID, "FK Sub")
 
 	now := domain.NowUTC()
 	for i := 1; i <= 5; i++ {
 		fID := fmt.Sprintf("fetch-fk-%d", i)
 		pID := fmt.Sprintf("payload-fk-%d", i)
-		insertTestFetch(t, db, fID, subID, now.Add(time.Duration(i)*time.Minute), domain.FetchOutcomeSuccess)
-		insertTestPayload(t, db, pID, subID, fID, now.Add(time.Duration(i)*time.Minute), false)
-		insertTestEntry(t, db, fmt.Sprintf("entry-fk-%d", i), pID, subID, fmt.Sprintf("key-%d", i), "Node", domain.EntryKindProxy, nil)
+		retentionInsertTestFetch(t, db, fID, subID, now.Add(time.Duration(i)*time.Minute), domain.FetchOutcomeSuccess)
+		retentionInsertTestPayload(t, db, pID, subID, fID, now.Add(time.Duration(i)*time.Minute), false)
+		retentionInsertTestEntry(t, db, fmt.Sprintf("entry-fk-%d", i), pID, subID, fmt.Sprintf("key-%d", i), "Node", domain.EntryKindProxy, nil)
 	}
 
 	// Run retention
@@ -561,21 +562,26 @@ func TestSubscriptionRetention_RollbackAndFKIntegrity(t *testing.T) {
 // 7. Behavior Fixture: Migration Backfill Clear Ranking (Does not resurrect cleared overrides)
 func TestSubscriptionRetention_MigrationBackfillClearRanking(t *testing.T) {
 	ctx := context.Background()
-	db := setupRetentionTestDB(t)
+	db, _ := setupEmptyTestDB(t)
+
+	runner := sqlite.NewMigrationRunner(db, migrations.FS)
+	if err := runner.RunUpTo(ctx, 27); err != nil {
+		t.Fatalf("failed to apply migrations up to 27: %v", err)
+	}
 
 	subID := "sub-backfill-test"
-	createTestSubscription(t, db, subID, "Backfill Test Sub")
+	retentionCreateTestSubscription(t, db, subID, "Backfill Test Sub")
 
 	t1 := "2026-01-01T10:00:00Z"
 	t2 := "2026-01-01T11:00:00Z"
 
 	// Case A: Older override 'notice', newer explicit CLEAR (user_kind_override NULL, override_anchor present)
 	// Must NOT resurrect the cleared override!
-	insertTestFetch(t, db, "fetch-bf-1", subID, time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC), domain.FetchOutcomeSuccess)
-	insertTestPayload(t, db, "payload-bf-1", subID, "fetch-bf-1", time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC), false)
+	retentionInsertTestFetch(t, db, "fetch-bf-1", subID, time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC), domain.FetchOutcomeSuccess)
+	retentionInsertTestPayload(t, db, "payload-bf-1", subID, "fetch-bf-1", time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC), false)
 
 	// Old entry with active override
-	_, err = db.ExecContext(ctx, `
+	_, err := db.ExecContext(ctx, `
 		INSERT INTO subscription_entries (
 			id, payload_id, subscription_id, ordinal, source_key, raw_name,
 			protocol, server, port, entry_kind, user_kind_override, override_anchor, override_at, created_at
@@ -607,56 +613,16 @@ func TestSubscriptionRetention_MigrationBackfillClearRanking(t *testing.T) {
 		t.Fatalf("failed to insert entry-bf-3: %v", err)
 	}
 
-	// Clear table to test migration backfill query directly
-	_, _ = db.ExecContext(ctx, "DELETE FROM subscription_entry_overrides;")
-
-	// Execute migration backfill query
-	backfillSQL := `
-	INSERT OR IGNORE INTO subscription_entry_overrides (
-		subscription_id, override_anchor, source_key, raw_name,
-		user_kind_override, override_reason, override_at, actor_ref
-	)
-	SELECT
-		subscription_id,
-		effective_anchor,
-		source_key,
-		raw_name,
-		user_kind_override,
-		override_reason,
-		COALESCE(NULLIF(override_at, ''), created_at) AS override_at,
-		actor_ref
-	FROM (
-		SELECT
-			subscription_id,
-			COALESCE(NULLIF(override_anchor, ''), NULLIF(source_key, ''), protocol || '|' || server || '|' || port || '|' || raw_name) AS effective_anchor,
-			source_key,
-			raw_name,
-			user_kind_override,
-			override_reason,
-			override_at,
-			created_at,
-			actor_ref,
-			ROW_NUMBER() OVER (
-				PARTITION BY subscription_id, COALESCE(NULLIF(override_anchor, ''), NULLIF(source_key, ''), protocol || '|' || server || '|' || port || '|' || raw_name)
-				ORDER BY COALESCE(NULLIF(override_at, ''), created_at) DESC, created_at DESC, rowid DESC
-			) AS rn
-		FROM subscription_entries
-		WHERE (user_kind_override IS NOT NULL AND user_kind_override != '')
-		   OR (override_at IS NOT NULL AND override_at != '')
-		   OR (override_anchor != '')
-	) ranked
-	WHERE ranked.rn = 1
-	  AND ranked.effective_anchor != ''
-	  AND ranked.user_kind_override IS NOT NULL
-	  AND ranked.user_kind_override != '';`
-
-	if _, err := db.ExecContext(ctx, backfillSQL); err != nil {
-		t.Fatalf("backfill query execution failed: %v", err)
+	// Run migration 28 via actual migration runner
+	if err := runner.RunUpTo(ctx, 28); err != nil {
+		t.Fatalf("failed to apply migration 28: %v", err)
 	}
 
 	// Verify anchor-alpha is NOT resurrected in subscription_entry_overrides
 	var alphaCount int
-	_ = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM subscription_entry_overrides WHERE subscription_id = ? AND override_anchor = 'anchor-alpha';", subID).Scan(&alphaCount)
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM subscription_entry_overrides WHERE subscription_id = ? AND override_anchor = 'anchor-alpha';", subID).Scan(&alphaCount); err != nil {
+		t.Fatalf("failed to query anchor-alpha count: %v", err)
+	}
 	if alphaCount != 0 {
 		t.Fatalf("cleared override anchor-alpha was resurrected by backfill! count=%d", alphaCount)
 	}
@@ -672,18 +638,18 @@ func TestSubscriptionRetention_MigrationBackfillClearRanking(t *testing.T) {
 // 8. Behavior Fixture: Successive Zero-Node Refreshes Do Not Age Out Usable Data
 func TestSubscriptionRetention_ZeroNodePayloadDoesNotAgeOutUsableData(t *testing.T) {
 	ctx := context.Background()
-	db := setupRetentionTestDB(t)
+	db := retentionSetupTestDB(t)
 
 	subID := "sub-zero-node-age"
-	createTestSubscription(t, db, subID, "Zero Node Sub")
+	retentionCreateTestSubscription(t, db, subID, "Zero Node Sub")
 
 	baseTime := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
 
 	// 1. Initial usable payload with 2 valid nodes
-	insertTestFetch(t, db, "fetch-usable", subID, baseTime, domain.FetchOutcomeSuccess)
-	insertTestPayload(t, db, "payload-usable", subID, "fetch-usable", baseTime, false)
-	insertTestEntry(t, db, "entry-usable-1", "payload-usable", subID, "k1", "Node 1", domain.EntryKindProxy, nil)
-	insertTestEntry(t, db, "entry-usable-2", "payload-usable", subID, "k2", "Node 2", domain.EntryKindProxy, nil)
+	retentionInsertTestFetch(t, db, "fetch-usable", subID, baseTime, domain.FetchOutcomeSuccess)
+	retentionInsertTestPayload(t, db, "payload-usable", subID, "fetch-usable", baseTime, false)
+	retentionInsertTestEntry(t, db, "entry-usable-1", "payload-usable", subID, "k1", "Node 1", domain.EntryKindProxy, nil)
+	retentionInsertTestEntry(t, db, "entry-usable-2", "payload-usable", subID, "k2", "Node 2", domain.EntryKindProxy, nil)
 
 	// 2. Three successive empty/zero-node fetches (nodes_valid = 0, no entries)
 	for i := 1; i <= 3; i++ {
@@ -700,7 +666,7 @@ func TestSubscriptionRetention_ZeroNodePayloadDoesNotAgeOutUsableData(t *testing
 		if _, err := db.ExecContext(ctx, insFetch, fID, subID, tStr, tStr); err != nil {
 			t.Fatalf("insert empty fetch failed: %v", err)
 		}
-		insertTestPayload(t, db, pID, subID, fID, tAt, false)
+		retentionInsertTestPayload(t, db, pID, subID, fID, tAt, false)
 	}
 
 	// Run retention

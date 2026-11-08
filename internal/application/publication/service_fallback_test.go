@@ -1830,7 +1830,7 @@ func TestBuildCurrentArtifact_Fallback_IndependentBlockers_FailClosed(t *testing
 							ID:            "src-cycle-1",
 							GroupID:       g1,
 							Operation:     domain.OperationAdd,
-							Kind:          domain.SourceKindGroup,
+							Kind:          domain.SourceKindGroupRef,
 							TargetGroupID: &g2,
 						},
 					},
@@ -1844,7 +1844,7 @@ func TestBuildCurrentArtifact_Fallback_IndependentBlockers_FailClosed(t *testing
 							ID:            "src-cycle-2",
 							GroupID:       g2,
 							Operation:     domain.OperationAdd,
-							Kind:          domain.SourceKindGroup,
+							Kind:          domain.SourceKindGroupRef,
 							TargetGroupID: &g1,
 						},
 					},
@@ -1922,7 +1922,11 @@ func TestBuildCurrentArtifact_Fallback_IndependentBlockers_FailClosed(t *testing
 	t.Run("PerNodeCapabilityError", func(t *testing.T) {
 		svc := publication.NewService(nil, nil)
 
-		nodeWithPluginID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.1.1.3", 8388, nil)
+		pluginTransport := map[string]string{
+			"plugin":      "v2ray-plugin",
+			"plugin-opts": "mode=websocket",
+		}
+		nodeWithPluginID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.1.1.3", 8388, pluginTransport)
 		nWithPlugin := domain.Node{
 			LogicalID:   nodeWithPluginID,
 			Protocol:    domain.ProtocolSS,
@@ -1931,10 +1935,9 @@ func TestBuildCurrentArtifact_Fallback_IndependentBlockers_FailClosed(t *testing
 			Port:        8388,
 			Active:      true,
 			Credentials: domain.InboundProtocolCredential{
-				Method:     "aes-128-gcm",
-				Password:   "pass",
-				Plugin:     "v2ray-plugin",
-				PluginOpts: map[string]string{"mode": "websocket"},
+				Method:    "aes-128-gcm",
+				Password:  "pass",
+				Transport: pluginTransport,
 			},
 			CreatedAt: now,
 			UpdatedAt: now,

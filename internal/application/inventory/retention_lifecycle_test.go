@@ -531,8 +531,8 @@ proxies:
 	if total != 1 || len(nodes) != 1 {
 		t.Fatalf("expected 1 active proxy node, got %d (nodes: %v)", total, nodes)
 	}
-	if nodes[0].Node.DisplayName != "Regular Proxy" {
-		t.Fatalf("expected Regular Proxy, got %s", nodes[0].Node.DisplayName)
+	if nodes[0].DisplayName != "Regular Proxy" {
+		t.Fatalf("expected Regular Proxy, got %s", nodes[0].DisplayName)
 	}
 
 	// Subtest: Explicit proxy override suppresses notice exclusion across current sources

@@ -20,13 +20,15 @@ import (
 
 // ReconcileResult summarizes the outcome of a subscription reconciliation.
 type ReconcileResult struct {
-	FetchID        string              `json:"fetch_id"`
-	SubscriptionID string              `json:"subscription_id"`
-	Outcome        domain.FetchOutcome `json:"outcome"`
-	ContentDigest  string              `json:"content_digest"`
-	RedactedError  string              `json:"redacted_error,omitempty"`
-	NodesParsed    int                 `json:"nodes_parsed"`
-	NodesValid     int                 `json:"nodes_valid"`
+	FetchID           string              `json:"fetch_id"`
+	SubscriptionID    string              `json:"subscription_id"`
+	Outcome           domain.FetchOutcome `json:"outcome"`
+	ContentDigest     string              `json:"content_digest"`
+	RedactedError     string              `json:"redacted_error,omitempty"`
+	NodesParsed       int                 `json:"nodes_parsed"`
+	NodesValid        int                 `json:"nodes_valid"`
+	DeletedPayloads   int64               `json:"deleted_payloads,omitempty"`
+	ProtectedPayloads int64               `json:"protected_payloads,omitempty"`
 }
 
 // Observations persist until revised or reprobed; no arbitrary wall-clock staleness deadline.
@@ -426,6 +428,7 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 				CreatedAt:       finishedAt,
 			})
 		}
+		_ = s.runRetentionCleanup(ctx, sub.ID)
 
 		return &ReconcileResult{
 			FetchID:        fetchID,
@@ -463,6 +466,7 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 				CreatedAt:       finishedAt,
 			})
 		}
+		_ = s.runRetentionCleanup(ctx, sub.ID)
 
 		return &ReconcileResult{
 			FetchID:        fetchID,
@@ -500,6 +504,7 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 				CreatedAt:       finishedAt,
 			})
 		}
+		_ = s.runRetentionCleanup(ctx, sub.ID)
 
 		return &ReconcileResult{
 			FetchID:        fetchID,
@@ -661,7 +666,7 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 		}
 		rows.Close()
 
-		// Load previous user overrides for this subscription
+		// Load previous user overrides for this subscription from durable ledger ONLY
 		type prevOverride struct {
 			kind   domain.EntryKind
 			anchor string
@@ -675,49 +680,57 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 
 		overrideRows, oErr := tx.QueryContext(ctx, `
 			SELECT source_key, raw_name, user_kind_override, override_anchor, override_reason, override_at, actor_ref
-			FROM subscription_entries
-			WHERE subscription_id = ? AND user_kind_override IS NOT NULL;
+			FROM subscription_entry_overrides
+			WHERE subscription_id = ?;
 		`, sub.ID)
-		if oErr == nil {
-			for overrideRows.Next() {
-				var sk, rn, uko, oa, or, ar string
-				var oAt sql.NullString
-				if scanErr := overrideRows.Scan(&sk, &rn, &uko, &oa, &or, &oAt, &ar); scanErr == nil {
-					k := domain.EntryKind(uko)
-					var t *time.Time
-					if oAt.Valid {
-						parsed, _ := time.Parse(time.RFC3339, oAt.String)
-						t = &parsed
-					}
-					po := prevOverride{
-						kind:   k,
-						anchor: oa,
-						reason: or,
-						at:     t,
-						actor:  ar,
-					}
-					if existing, ok := prevOverridesByAnchor[oa]; ok && existing.kind != k {
-						ambiguousAnchors[oa] = true
-					} else {
-						prevOverridesByAnchor[oa] = po
-					}
-					if sk != "" {
-						if existing, ok := prevOverridesByAnchor[sk]; ok && existing.kind != k {
-							ambiguousAnchors[sk] = true
-						} else {
-							prevOverridesByAnchor[sk] = po
-						}
-					}
-					if rn != "" {
-						if existing, ok := prevOverridesByName[rn]; ok && existing.kind != k {
-							ambiguousAnchors[rn] = true
-						} else {
-							prevOverridesByName[rn] = po
-						}
-					}
+		if oErr != nil {
+			return fmt.Errorf("failed to load user overrides from ledger: %w", oErr)
+		}
+		defer overrideRows.Close()
+
+		for overrideRows.Next() {
+			var sk, rn, uko, oa, or, ar string
+			var oAt sql.NullString
+			if scanErr := overrideRows.Scan(&sk, &rn, &uko, &oa, &or, &oAt, &ar); scanErr != nil {
+				return fmt.Errorf("failed to scan user override: %w", scanErr)
+			}
+			k := domain.EntryKind(uko)
+			var t *time.Time
+			if oAt.Valid {
+				parsed, err := time.Parse(time.RFC3339, oAt.String)
+				if err == nil {
+					t = &parsed
 				}
 			}
-			overrideRows.Close()
+			po := prevOverride{
+				kind:   k,
+				anchor: oa,
+				reason: or,
+				at:     t,
+				actor:  ar,
+			}
+			if existing, ok := prevOverridesByAnchor[oa]; ok && existing.kind != k {
+				ambiguousAnchors[oa] = true
+			} else {
+				prevOverridesByAnchor[oa] = po
+			}
+			if sk != "" {
+				if existing, ok := prevOverridesByAnchor[sk]; ok && existing.kind != k {
+					ambiguousAnchors[sk] = true
+				} else {
+					prevOverridesByAnchor[sk] = po
+				}
+			}
+			if rn != "" {
+				if existing, ok := prevOverridesByName[rn]; ok && existing.kind != k {
+					ambiguousAnchors[rn] = true
+				} else {
+					prevOverridesByName[rn] = po
+				}
+			}
+		}
+		if err := overrideRows.Err(); err != nil {
+			return fmt.Errorf("error reading user overrides: %w", err)
 		}
 
 		// Load field overrides from node_overrides table
@@ -1338,7 +1351,9 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 		return nil, fmt.Errorf("reconcile transaction failed: %w", err)
 	}
 
-	return &ReconcileResult{
+	cleanupRes := s.runRetentionCleanup(ctx, sub.ID)
+
+	result := &ReconcileResult{
 		FetchID:        fetchID,
 		SubscriptionID: sub.ID,
 		Outcome:        outcome,
@@ -1346,7 +1361,44 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 		RedactedError:  partialDiagnostic,
 		NodesParsed:    nodesParsed,
 		NodesValid:     nodesValid,
-	}, nil
+	}
+	if cleanupRes != nil {
+		result.DeletedPayloads = cleanupRes.DeletedPayloads
+		result.ProtectedPayloads = cleanupRes.ProtectedPayloads
+	}
+	return result, nil
+}
+
+func (s *Service) runRetentionCleanup(ctx context.Context, subID string) *sqlite.RetentionResult {
+	if s.db == nil {
+		return nil
+	}
+	res, err := sqlite.PruneSubscriptionRetention(ctx, s.db, subID, 20, nil)
+	if err != nil {
+		if s.auditRepo != nil {
+			_ = s.auditRepo.Record(ctx, &domain.AuditEvent{
+				ID:              domain.MustNewUUIDv7(),
+				ActorKind:       domain.ActorKindSystem,
+				Action:          "subscription.retention.failed",
+				RedactedSummary: domain.RedactSensitiveInfo(fmt.Sprintf("retention cleanup failed for subscription %s: %v", subID, err)),
+				Result:          domain.AuditResultFailure,
+				CreatedAt:       domain.NowUTC(),
+			})
+		}
+		return nil
+	}
+	if s.auditRepo != nil && (res.DeletedPayloads > 0 || res.DeletedFetches > 0) {
+		_ = s.auditRepo.Record(ctx, &domain.AuditEvent{
+			ID:        domain.MustNewUUIDv7(),
+			ActorKind: domain.ActorKindSystem,
+			Action:    "subscription.retention.prune",
+			RedactedSummary: fmt.Sprintf("subscription %s retention: deleted %d payloads (%d protected), deleted %d fetches (%d protected)",
+				subID, res.DeletedPayloads, res.ProtectedPayloads, res.DeletedFetches, res.ProtectedFetches),
+			Result:    domain.AuditResultSuccess,
+			CreatedAt: domain.NowUTC(),
+		})
+	}
+	return res
 }
 
 // GetNode returns a node by its logical identity.

@@ -292,7 +292,7 @@ func runServeWithDependencies(ctx context.Context, args []string, stdout, stderr
 			return sessionStore.Get(sessionID)
 		},
 		ReadinessChecker: func(c context.Context) (*sqlite.ReadinessReport, error) {
-			return sqlite.CheckReadiness(c, db)
+			return sqlite.CheckOperationalReadiness(c, db)
 		},
 		PublicationTokenValidator:  appServices.pubService.ValidateToken,
 		IsPublicationToken:         appServices.pubService.IsPublicationToken,

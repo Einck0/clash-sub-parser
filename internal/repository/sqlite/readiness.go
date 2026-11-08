@@ -45,13 +45,20 @@ func RequiredTables() []string {
 	}
 }
 
-// CheckReadiness validates that all required tables exist, migrations have executed, and no foreign key violations exist.
-func CheckReadiness(ctx context.Context, db *sql.DB) (*ReadinessReport, error) {
+// checkSchemaReadiness validates live connection reachability, table presence for all required
+// tables, and baseline schema migrations version >= 1. It shares schema discovery logic across
+// both operational and deep readiness checks without duplicating query algorithms.
+func checkSchemaReadiness(ctx context.Context, db *sql.DB) (*ReadinessReport, error) {
 	report := &ReadinessReport{
 		Ready:                false,
 		RequiredTables:       RequiredTables(),
 		MissingTables:        make([]string, 0),
 		ForeignKeyViolations: make([]ForeignKeyViolation, 0),
+	}
+
+	if db == nil {
+		report.Error = "database connection is nil"
+		return report, nil
 	}
 
 	// 1. Connection check
@@ -117,9 +124,32 @@ func CheckReadiness(ctx context.Context, db *sql.DB) (*ReadinessReport, error) {
 		return report, nil
 	}
 
-	// 5. Check foreign key consistency
+	report.Ready = true
+	return report, nil
+}
+
+// CheckOperationalReadiness validates that the database connection is live, all required tables
+// exist, and migrations have executed (version >= 1), without executing full foreign key table scans.
+// It is intended for operational probes such as /readyz where latency and row-scanning overhead must be bounded.
+func CheckOperationalReadiness(ctx context.Context, db *sql.DB) (*ReadinessReport, error) {
+	return checkSchemaReadiness(ctx, db)
+}
+
+// CheckReadiness validates that all required tables exist, migrations have executed, and no foreign key violations exist.
+// This is a deep integrity diagnostic intended for maintenance operations and diagnostic verification.
+func CheckReadiness(ctx context.Context, db *sql.DB) (*ReadinessReport, error) {
+	report, err := checkSchemaReadiness(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+	if !report.Ready {
+		return report, nil
+	}
+
+	// 5. Deep diagnostic: Check foreign key consistency across all rows
 	fkRows, err := db.QueryContext(ctx, "PRAGMA foreign_key_check;")
 	if err != nil {
+		report.Ready = false
 		report.Error = fmt.Sprintf("failed executing PRAGMA foreign_key_check: %v", err)
 		return report, nil
 	}
@@ -128,22 +158,24 @@ func CheckReadiness(ctx context.Context, db *sql.DB) (*ReadinessReport, error) {
 	for fkRows.Next() {
 		var v ForeignKeyViolation
 		if err := fkRows.Scan(&v.Table, &v.RowID, &v.TargetTable, &v.FkID); err != nil {
+			report.Ready = false
 			report.Error = fmt.Sprintf("failed scanning foreign key violation: %v", err)
 			return report, nil
 		}
 		report.ForeignKeyViolations = append(report.ForeignKeyViolations, v)
 	}
 	if err := fkRows.Err(); err != nil {
+		report.Ready = false
 		report.Error = fmt.Sprintf("error checking foreign key violations: %v", err)
 		return report, nil
 	}
 
 	if len(report.ForeignKeyViolations) > 0 {
+		report.Ready = false
 		report.Error = fmt.Sprintf("detected %d foreign key constraint violations", len(report.ForeignKeyViolations))
 		return report, nil
 	}
 
-	// Database is fully ready
 	report.Ready = true
 	return report, nil
 }

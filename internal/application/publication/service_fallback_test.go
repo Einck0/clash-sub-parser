@@ -592,7 +592,7 @@ func TestBuildCurrentArtifact_EffectiveRoutesWithZeroEnabledPolicyRule_NoFallbac
 	}
 }
 
-func TestBuildCurrentArtifact_PartialConfigurationError_NoFallback(t *testing.T) {
+func TestBuildCurrentArtifact_Fallback_PartialConfiguration_Recovers(t *testing.T) {
 	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
 	svc := publication.NewService(nil, nil)
 
@@ -673,15 +673,70 @@ func TestBuildCurrentArtifact_PartialConfigurationError_NoFallback(t *testing.T)
 	}
 
 	ctx := context.Background()
-	_, _, err := svc.BuildCurrentArtifact(ctx, facts, domain.TargetMihomo)
-	if err == nil {
-		t.Fatal("expected partial configuration error to fail, but it succeeded")
+
+	// 1. When primary is available, partial configuration error must recover through primary fallback
+	artifact, snap, err := svc.BuildCurrentArtifact(ctx, facts, domain.TargetMihomo)
+	if err != nil {
+		t.Fatalf("expected partial configuration error to recover via primary fallback, got error: %v", err)
 	}
 
-	// Must fail with preflight error or capability error regarding empty group, NOT fallback
-	errStr := err.Error()
-	if !strings.Contains(errStr, "empty") && !strings.Contains(errStr, "rejected") && !strings.Contains(errStr, "required_nonempty") {
-		t.Errorf("expected error mentioning empty group / rejected preflight, got: %v", err)
+	if !strings.Contains(string(artifact.Content), "主订阅兜底") {
+		t.Errorf("expected fallback content to contain '主订阅兜底', got: %s", string(artifact.Content))
+	}
+	if !strings.Contains(string(artifact.Content), "Usable Node") {
+		t.Errorf("expected fallback content to contain primary node, got: %s", string(artifact.Content))
+	}
+
+	hasFallbackDiag := false
+	hasEmptyGroupDiag := false
+	for _, d := range snap.Diagnostics {
+		if d.Code == "primary_subscription_fallback" {
+			hasFallbackDiag = true
+			if d.Severity != resolver.DiagnosticSeverityWarning {
+				t.Errorf("expected warning severity for fallback diagnostic, got: %s", d.Severity)
+			}
+			if strings.Contains(d.Message, "all policy rules or filters resulted in empty nodes") {
+				t.Errorf("inaccurate exhaustion wording in fallback diagnostic for partial configuration: %s", d.Message)
+			}
+			if !strings.Contains(d.Message, "empty policy group validation failed") {
+				t.Errorf("expected accurate empty group validation failure message, got: %s", d.Message)
+			}
+		}
+		if d.Code == "empty_routed_group" || d.Code == "required_nonempty" {
+			hasEmptyGroupDiag = true
+			if d.Severity != resolver.DiagnosticSeverityWarning {
+				t.Errorf("expected warning severity for preserved original empty group diagnostic, got: %s", d.Severity)
+			}
+		}
+	}
+	if !hasFallbackDiag {
+		t.Errorf("expected primary_subscription_fallback diagnostic in snapshot, got: %+v", snap.Diagnostics)
+	}
+	if !hasEmptyGroupDiag {
+		t.Errorf("expected safe preserved empty group diagnostic in snapshot, got: %+v", snap.Diagnostics)
+	}
+
+	// 2. When primary is unavailable, must fail closed
+	factsNoPrimary := *facts
+	factsNoPrimary.PrimarySubscriptionID = ""
+	factsNoPrimary.PrimaryNodeIDs = nil
+	_, snapFail, errFail := svc.BuildCurrentArtifact(ctx, &factsNoPrimary, domain.TargetMihomo)
+	if errFail == nil {
+		t.Fatal("expected failure when primary is unavailable, got nil")
+	}
+	errStr := errFail.Error()
+	if !strings.Contains(errStr, "empty") && !strings.Contains(errStr, "rejected") && !strings.Contains(errStr, "required_nonempty") && !strings.Contains(errStr, "primary_subscription_fallback_unavailable") {
+		t.Errorf("expected error mentioning empty group / fallback unavailable, got: %v", errFail)
+	}
+	hasUnavailable := false
+	for _, d := range snapFail.Diagnostics {
+		if d.Code == "primary_subscription_fallback_unavailable" {
+			hasUnavailable = true
+			break
+		}
+	}
+	if !hasUnavailable {
+		t.Errorf("expected primary_subscription_fallback_unavailable diagnostic when primary absent, got %+v", snapFail.Diagnostics)
 	}
 }
 
@@ -1256,4 +1311,658 @@ func TestPreview_WithConsistentFactsLoader_Fallback(t *testing.T) {
 	if !strings.Contains(string(prevRes.Content), "主订阅兜底") {
 		t.Errorf("expected Preview content to contain '主订阅兜底', got: %s", string(prevRes.Content))
 	}
+}
+
+func TestBuildCurrentArtifact_Fallback_PartialEmptyHongKong_Recovers(t *testing.T) {
+	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
+	svc := publication.NewService(nil, nil)
+
+	primaryNodeID1 := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.1.1.1", 8388, nil)
+	primaryNodeID2 := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.1.1.2", 8388, nil)
+
+	nPrimary1 := domain.Node{
+		LogicalID:   primaryNodeID1,
+		Protocol:    domain.ProtocolSS,
+		DisplayName: "HK Primary 1",
+		Server:      "1.1.1.1",
+		Port:        8388,
+		Active:      true,
+		Credentials: domain.InboundProtocolCredential{
+			Method:   "aes-128-gcm",
+			Password: "pass-primary-1",
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	nPrimary2 := domain.Node{
+		LogicalID:   primaryNodeID2,
+		Protocol:    domain.ProtocolSS,
+		DisplayName: "US Primary 2",
+		Server:      "1.1.1.2",
+		Port:        8388,
+		Active:      true,
+		Credentials: domain.InboundProtocolCredential{
+			Method:   "aes-128-gcm",
+			Password: "pass-primary-2",
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	groupUSID := domain.MustNewUUIDv7()
+	groupHKID := domain.MustNewUUIDv7()
+
+	ruleUSID := domain.MustNewUUIDv7()
+	ruleHKID := domain.MustNewUUIDv7()
+
+	facts := &domain.ConsistentFacts{
+		AsOf: now,
+		Revision: &domain.ConfigurationRevision{
+			ID:            "rev-hk-empty",
+			ContentDigest: "digest-rev-hk",
+			State:         domain.RevisionStateActive,
+			CreatedAt:     now,
+		},
+		Nodes: []domain.Node{nPrimary1, nPrimary2},
+		Groups: []domain.NodeGroup{
+			{
+				ID:        groupUSID,
+				Name:      "US Group",
+				GroupType: domain.GroupTypeSelect,
+				Sources: []domain.MemberSource{
+					{
+						ID:            "src-us",
+						GroupID:       groupUSID,
+						Operation:     domain.OperationAdd,
+						Kind:          domain.SourceKindManualNode,
+						Position:      0,
+						NodeLogicalID: &primaryNodeID2,
+					},
+				},
+			},
+			{
+				ID:        groupHKID,
+				Name:      "香港",
+				GroupType: domain.GroupTypeSelect,
+				Sources:   []domain.MemberSource{}, // 0 nodes in 香港 group
+			},
+		},
+		PolicyRules: []domain.PolicyRule{
+			{
+				ID:            ruleUSID,
+				RevisionID:    "rev-hk-empty",
+				TargetGroupID: groupUSID,
+				Expression:    "DOMAIN-SUFFIX,google.com",
+				Position:      0,
+				Enabled:       true,
+			},
+			{
+				ID:            ruleHKID,
+				RevisionID:    "rev-hk-empty",
+				TargetGroupID: groupHKID,
+				Expression:    "MATCH",
+				Position:      1,
+				Enabled:       true,
+			},
+		},
+		PrimarySubscriptionID: "sub-primary",
+		PrimaryNodeIDs:        []string{primaryNodeID1, primaryNodeID2},
+		PrimaryUserInfo:       "upload=10; download=20; total=100; expire=1900000000",
+	}
+
+	ctx := context.Background()
+	artifact, snap, err := svc.BuildCurrentArtifact(ctx, facts, domain.TargetMihomo)
+	if err != nil {
+		t.Fatalf("expected partial empty 香港 to recover via primary fallback, got error: %v", err)
+	}
+
+	// Verify fallback artifact content
+	var parsed struct {
+		Proxies []struct {
+			Name string `yaml:"name"`
+		} `yaml:"proxies"`
+		ProxyGroups []struct {
+			Name    string   `yaml:"name"`
+			Type    string   `yaml:"type"`
+			Proxies []string `yaml:"proxies"`
+		} `yaml:"proxy-groups"`
+		Rules []string `yaml:"rules"`
+	}
+	if err := yaml.Unmarshal(artifact.Content, &parsed); err != nil {
+		t.Fatalf("failed to parse fallback YAML: %v", err)
+	}
+
+	if len(parsed.Proxies) != 2 {
+		t.Fatalf("expected 2 proxies in fallback artifact, got %d", len(parsed.Proxies))
+	}
+	if len(parsed.ProxyGroups) != 1 || parsed.ProxyGroups[0].Name != "主订阅兜底" {
+		t.Fatalf("expected single proxy group '主订阅兜底', got %+v", parsed.ProxyGroups)
+	}
+	if len(parsed.Rules) != 1 || parsed.Rules[0] != "MATCH,主订阅兜底" {
+		t.Fatalf("expected rule 'MATCH,主订阅兜底', got %+v", parsed.Rules)
+	}
+
+	// Verify diagnostics: both primary_subscription_fallback and original safe cause
+	hasFallbackDiag := false
+	hasOriginalCauseDiag := false
+	for _, d := range snap.Diagnostics {
+		if d.Code == "primary_subscription_fallback" {
+			hasFallbackDiag = true
+			if d.Severity != resolver.DiagnosticSeverityWarning {
+				t.Errorf("expected warning severity for fallback, got: %s", d.Severity)
+			}
+			if strings.Contains(d.Message, "all policy rules or filters resulted in empty nodes") {
+				t.Errorf("inaccurate exhaustion wording in fallback diagnostic for partial empty group: %s", d.Message)
+			}
+			if !strings.Contains(d.Message, "empty policy group validation failed") {
+				t.Errorf("expected accurate empty group validation failure message, got: %s", d.Message)
+			}
+		}
+		if d.Code == "empty_routed_group" || d.Code == "required_nonempty" {
+			hasOriginalCauseDiag = true
+			if d.Severity != resolver.DiagnosticSeverityWarning {
+				t.Errorf("expected warning severity for safe original cause, got: %s", d.Severity)
+			}
+		}
+	}
+	if !hasFallbackDiag {
+		t.Errorf("expected primary_subscription_fallback diagnostic, got: %+v", snap.Diagnostics)
+	}
+	if !hasOriginalCauseDiag {
+		t.Errorf("expected safe original cause diagnostic for empty 香港, got: %+v", snap.Diagnostics)
+	}
+
+	// Verify UserInfo is preserved
+	if artifact.UserInfo != facts.PrimaryUserInfo {
+		t.Errorf("expected UserInfo %q, got %q", facts.PrimaryUserInfo, artifact.UserInfo)
+	}
+
+	// Verify input facts groups and rules are completely unmodified
+	if len(facts.Groups) != 2 || facts.Groups[1].Name != "香港" {
+		t.Errorf("facts groups were mutated: %+v", facts.Groups)
+	}
+	if len(facts.PolicyRules) != 2 {
+		t.Errorf("facts policy rules were mutated: %+v", facts.PolicyRules)
+	}
+}
+
+func TestBuildCurrentArtifact_Fallback_UnusedEmptyHongKong_Recovers(t *testing.T) {
+	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
+	svc := publication.NewService(nil, nil)
+
+	primaryNodeID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.1.1.1", 8388, nil)
+	nPrimary := domain.Node{
+		LogicalID:   primaryNodeID,
+		Protocol:    domain.ProtocolSS,
+		DisplayName: "HK Primary 1",
+		Server:      "1.1.1.1",
+		Port:        8388,
+		Active:      true,
+		Credentials: domain.InboundProtocolCredential{
+			Method:   "aes-128-gcm",
+			Password: "pass-primary-1",
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	groupUSID := domain.MustNewUUIDv7()
+	groupHKID := domain.MustNewUUIDv7()
+	ruleUSID := domain.MustNewUUIDv7()
+
+	facts := &domain.ConsistentFacts{
+		AsOf: now,
+		Revision: &domain.ConfigurationRevision{
+			ID:            "rev-unused-hk",
+			ContentDigest: "digest-rev-unused-hk",
+			State:         domain.RevisionStateActive,
+			CreatedAt:     now,
+		},
+		Nodes: []domain.Node{nPrimary},
+		Groups: []domain.NodeGroup{
+			{
+				ID:        groupUSID,
+				Name:      "US Group",
+				GroupType: domain.GroupTypeSelect,
+				Sources: []domain.MemberSource{
+					{
+						ID:            "src-us",
+						GroupID:       groupUSID,
+						Operation:     domain.OperationAdd,
+						Kind:          domain.SourceKindManualNode,
+						Position:      0,
+						NodeLogicalID: &primaryNodeID,
+					},
+				},
+			},
+			{
+				ID:        groupHKID,
+				Name:      "香港",
+				GroupType: domain.GroupTypeSelect,
+				Sources:   []domain.MemberSource{}, // unrouted empty group
+			},
+		},
+		PolicyRules: []domain.PolicyRule{
+			{
+				ID:            ruleUSID,
+				RevisionID:    "rev-unused-hk",
+				TargetGroupID: groupUSID,
+				Expression:    "MATCH",
+				Position:      0,
+				Enabled:       true,
+			},
+		},
+		PrimarySubscriptionID: "sub-primary",
+		PrimaryNodeIDs:        []string{primaryNodeID},
+	}
+
+	ctx := context.Background()
+	artifact, snap, err := svc.BuildCurrentArtifact(ctx, facts, domain.TargetMihomo)
+	if err != nil {
+		t.Fatalf("expected unused empty group to recover via primary fallback, got error: %v", err)
+	}
+
+	if !strings.Contains(string(artifact.Content), "主订阅兜底") {
+		t.Errorf("expected content to contain '主订阅兜底', got: %s", string(artifact.Content))
+	}
+	hasFallbackDiag := false
+	for _, d := range snap.Diagnostics {
+		if d.Code == "primary_subscription_fallback" {
+			hasFallbackDiag = true
+			if strings.Contains(d.Message, "all policy rules or filters resulted in empty nodes") {
+				t.Errorf("inaccurate exhaustion wording in fallback diagnostic for unused empty group: %s", d.Message)
+			}
+			if !strings.Contains(d.Message, "empty policy group validation failed") {
+				t.Errorf("expected accurate empty group validation failure message, got: %s", d.Message)
+			}
+			break
+		}
+	}
+	if !hasFallbackDiag {
+		t.Errorf("expected primary_subscription_fallback diagnostic, got: %+v", snap.Diagnostics)
+	}
+}
+
+func TestBuildCurrentArtifact_Fallback_BuiltinDirectRejectWithFailingGroup_Recovers(t *testing.T) {
+	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
+	svc := publication.NewService(nil, nil)
+
+	primaryNodeID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.1.1.1", 8388, nil)
+	nPrimary := domain.Node{
+		LogicalID:   primaryNodeID,
+		Protocol:    domain.ProtocolSS,
+		DisplayName: "Primary Node",
+		Server:      "1.1.1.1",
+		Port:        8388,
+		Active:      true,
+		Credentials: domain.InboundProtocolCredential{
+			Method:   "aes-128-gcm",
+			Password: "pass-primary",
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	groupHKID := domain.MustNewUUIDv7()
+
+	rule1ID := domain.MustNewUUIDv7()
+	rule2ID := domain.MustNewUUIDv7()
+	rule3ID := domain.MustNewUUIDv7()
+
+	facts := &domain.ConsistentFacts{
+		AsOf: now,
+		Revision: &domain.ConfigurationRevision{
+			ID:            "rev-builtin-mix",
+			ContentDigest: "digest-rev-bm",
+			State:         domain.RevisionStateActive,
+			CreatedAt:     now,
+		},
+		Nodes: []domain.Node{nPrimary},
+		Groups: []domain.NodeGroup{
+			{
+				ID:        groupHKID,
+				Name:      "香港",
+				GroupType: domain.GroupTypeSelect,
+				Sources:   []domain.MemberSource{}, // empty group causes export failure
+			},
+		},
+		PolicyRules: []domain.PolicyRule{
+			{
+				ID:            rule1ID,
+				RevisionID:    "rev-builtin-mix",
+				BuiltinTarget: "DIRECT",
+				Expression:    "GEOIP,CN",
+				Position:      0,
+				Enabled:       true,
+			},
+			{
+				ID:            rule2ID,
+				RevisionID:    "rev-builtin-mix",
+				BuiltinTarget: "REJECT",
+				Expression:    "DOMAIN-SUFFIX,ad.com",
+				Position:      1,
+				Enabled:       true,
+			},
+			{
+				ID:            rule3ID,
+				RevisionID:    "rev-builtin-mix",
+				TargetGroupID: groupHKID,
+				Expression:    "MATCH",
+				Position:      2,
+				Enabled:       true,
+			},
+		},
+		PrimarySubscriptionID: "sub-primary",
+		PrimaryNodeIDs:        []string{primaryNodeID},
+	}
+
+	ctx := context.Background()
+	artifact, snap, err := svc.BuildCurrentArtifact(ctx, facts, domain.TargetMihomo)
+	if err != nil {
+		t.Fatalf("expected fallback to succeed when builtin rules exist alongside failing group, got: %v", err)
+	}
+
+	if !strings.Contains(string(artifact.Content), "主订阅兜底") {
+		t.Errorf("expected fallback content to contain '主订阅兜底', got: %s", string(artifact.Content))
+	}
+	hasFallbackDiag := false
+	for _, d := range snap.Diagnostics {
+		if d.Code == "primary_subscription_fallback" {
+			hasFallbackDiag = true
+			if strings.Contains(d.Message, "all policy rules or filters resulted in empty nodes") {
+				t.Errorf("inaccurate exhaustion wording in fallback diagnostic for builtin + empty group: %s", d.Message)
+			}
+			if !strings.Contains(d.Message, "empty policy group validation failed") {
+				t.Errorf("expected accurate empty group validation failure message, got: %s", d.Message)
+			}
+			break
+		}
+	}
+	if !hasFallbackDiag {
+		t.Errorf("expected primary_subscription_fallback diagnostic, got: %+v", snap.Diagnostics)
+	}
+}
+
+func TestBuildCurrentArtifact_Fallback_PreviewConsistentWithLive_StrictMode(t *testing.T) {
+	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
+
+	primaryNodeID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.1.1.1", 8388, nil)
+	nPrimary := domain.Node{
+		LogicalID:   primaryNodeID,
+		Protocol:    domain.ProtocolSS,
+		DisplayName: "Primary Node",
+		Server:      "1.1.1.1",
+		Port:        8388,
+		Active:      true,
+		Credentials: domain.InboundProtocolCredential{
+			Method:   "aes-128-gcm",
+			Password: "pass-primary",
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	groupHKID := domain.MustNewUUIDv7()
+	ruleHKID := domain.MustNewUUIDv7()
+
+	facts := &domain.ConsistentFacts{
+		AsOf: now,
+		Revision: &domain.ConfigurationRevision{
+			ID:            "rev-preview-strict",
+			ContentDigest: "digest-rev-ps",
+			State:         domain.RevisionStateActive,
+			CreatedAt:     now,
+		},
+		Nodes: []domain.Node{nPrimary},
+		Groups: []domain.NodeGroup{
+			{
+				ID:        groupHKID,
+				Name:      "香港",
+				GroupType: domain.GroupTypeSelect,
+				Sources:   []domain.MemberSource{}, // empty group
+			},
+		},
+		PolicyRules: []domain.PolicyRule{
+			{
+				ID:            ruleHKID,
+				RevisionID:    "rev-preview-strict",
+				TargetGroupID: groupHKID,
+				Expression:    "MATCH",
+				Position:      0,
+				Enabled:       true,
+			},
+		},
+		PrimarySubscriptionID: "sub-primary",
+		PrimaryNodeIDs:        []string{primaryNodeID},
+	}
+
+	pubRepo := newMockPublicationRepo()
+	factsLoader := &memoryFactsLoader{facts: facts}
+	svc := publication.NewService(
+		pubRepo,
+		&dummyAuditRepo{},
+		publication.WithConsistentFactsLoader(factsLoader),
+	)
+
+	ctx := context.Background()
+
+	// 1. Live artifact succeeds via fallback
+	liveArt, liveSnap, err := svc.BuildCurrentArtifact(ctx, facts, domain.TargetMihomo)
+	if err != nil {
+		t.Fatalf("expected live BuildCurrentArtifact to succeed via fallback, got: %v", err)
+	}
+
+	// 2. Default/compatible preview succeeds via fallback and matches live
+	prevDefault, err := svc.Preview(ctx, publication.PreviewQuery{
+		Target:     domain.TargetMihomo,
+		RevisionID: "rev-preview-strict",
+	})
+	if err != nil {
+		t.Fatalf("expected default preview to succeed via fallback, got: %v", err)
+	}
+	if string(prevDefault.Content) != string(liveArt.Content) {
+		t.Fatalf("preview content does not match live content")
+	}
+
+	// 3. Strict mode preview also succeeds via fallback and matches live
+	prevStrict, err := svc.Preview(ctx, publication.PreviewQuery{
+		Target:     domain.TargetMihomo,
+		RevisionID: "rev-preview-strict",
+		CompatMode: "strict",
+	})
+	if err != nil {
+		t.Fatalf("expected strict preview to succeed via fallback, got: %v", err)
+	}
+	if string(prevStrict.Content) != string(liveArt.Content) {
+		t.Fatalf("strict preview content does not match live content")
+	}
+	if prevStrict.SnapshotDigest != liveSnap.SnapshotDigest {
+		t.Errorf("expected snapshot digest %q, got %q", liveSnap.SnapshotDigest, prevStrict.SnapshotDigest)
+	}
+	if !strings.HasPrefix(prevStrict.SnapshotID, "snapshot_") {
+		t.Errorf("expected persisted preview draft snapshot ID, got: %s", prevStrict.SnapshotID)
+	}
+}
+
+func TestBuildCurrentArtifact_Fallback_IndependentBlockers_FailClosed(t *testing.T) {
+	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
+
+	primaryNodeID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.1.1.1", 8388, nil)
+	nPrimary := domain.Node{
+		LogicalID:   primaryNodeID,
+		Protocol:    domain.ProtocolSS,
+		DisplayName: "Primary Node",
+		Server:      "1.1.1.1",
+		Port:        8388,
+		Active:      true,
+		Credentials: domain.InboundProtocolCredential{
+			Method:   "aes-128-gcm",
+			Password: "pass-primary",
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	ctx := context.Background()
+
+	// 1. Resolver Cycle -> Fail Closed
+	t.Run("ResolverCycle", func(t *testing.T) {
+		svc := publication.NewService(nil, nil)
+		g1 := domain.MustNewUUIDv7()
+		g2 := domain.MustNewUUIDv7()
+
+		factsCycle := &domain.ConsistentFacts{
+			AsOf: now,
+			Revision: &domain.ConfigurationRevision{
+				ID:            "rev-cycle",
+				ContentDigest: "digest-rev-cycle",
+				State:         domain.RevisionStateActive,
+				CreatedAt:     now,
+			},
+			Nodes: []domain.Node{nPrimary},
+			Groups: []domain.NodeGroup{
+				{
+					ID:        g1,
+					Name:      "Group 1",
+					GroupType: domain.GroupTypeSelect,
+					Sources: []domain.MemberSource{
+						{
+							ID:            "src-cycle-1",
+							GroupID:       g1,
+							Operation:     domain.OperationAdd,
+							Kind:          domain.SourceKindGroup,
+							TargetGroupID: &g2,
+						},
+					},
+				},
+				{
+					ID:        g2,
+					Name:      "Group 2",
+					GroupType: domain.GroupTypeSelect,
+					Sources: []domain.MemberSource{
+						{
+							ID:            "src-cycle-2",
+							GroupID:       g2,
+							Operation:     domain.OperationAdd,
+							Kind:          domain.SourceKindGroup,
+							TargetGroupID: &g1,
+						},
+					},
+				},
+			},
+			PolicyRules: []domain.PolicyRule{
+				{
+					ID:            domain.MustNewUUIDv7(),
+					RevisionID:    "rev-cycle",
+					TargetGroupID: g1,
+					Expression:    "MATCH",
+					Enabled:       true,
+				},
+			},
+			PrimarySubscriptionID: "sub-primary",
+			PrimaryNodeIDs:        []string{primaryNodeID},
+		}
+
+		_, _, err := svc.BuildCurrentArtifact(ctx, factsCycle, domain.TargetMihomo)
+		if err == nil {
+			t.Fatal("expected cycle error to fail closed without fallback, got nil")
+		}
+	})
+
+	// 2. Risk Blocked -> Fail Closed
+	t.Run("RiskBlocked", func(t *testing.T) {
+		ipriskSvc := iprisk.NewService(nil, nil)
+		svc := publication.NewService(nil, nil, publication.WithIPRiskService(ipriskSvc))
+
+		activeRiskPolicy := makeTestRiskPolicy("0191e4a0-0000-7000-8000-000000000002", domain.RiskActionBlock)
+		activeRiskPolicy.RiskPolicy.UnknownAction = domain.RiskActionBlock
+
+		groupEmptyID := domain.MustNewUUIDv7()
+		factsRisk := &domain.ConsistentFacts{
+			AsOf: now,
+			Revision: &domain.ConfigurationRevision{
+				ID:            "rev-risk-empty",
+				ContentDigest: "digest-rev-re",
+				State:         domain.RevisionStateActive,
+				CreatedAt:     now,
+			},
+			Nodes: []domain.Node{nPrimary},
+			Groups: []domain.NodeGroup{
+				{
+					ID:        groupEmptyID,
+					Name:      "香港",
+					GroupType: domain.GroupTypeSelect,
+					Sources:   []domain.MemberSource{}, // empty group
+				},
+			},
+			PolicyRules: []domain.PolicyRule{
+				{
+					ID:            domain.MustNewUUIDv7(),
+					RevisionID:    "rev-risk-empty",
+					TargetGroupID: groupEmptyID,
+					Expression:    "MATCH",
+					Enabled:       true,
+				},
+			},
+			PrimarySubscriptionID: "sub-primary",
+			PrimaryNodeIDs:        []string{primaryNodeID},
+			ActiveRiskPolicy:      activeRiskPolicy,
+		}
+
+		_, _, err := svc.BuildCurrentArtifact(ctx, factsRisk, domain.TargetMihomo)
+		if err == nil {
+			t.Fatal("expected risk blocker to fail closed without fallback, got nil")
+		}
+		if !strings.Contains(err.Error(), "risk") && !strings.Contains(err.Error(), "rejected") {
+			t.Errorf("expected risk rejection error, got: %v", err)
+		}
+	})
+
+	// 3. Per-node capability error (unsupported plugin on non-Mihomo) -> Fail Closed
+	t.Run("PerNodeCapabilityError", func(t *testing.T) {
+		svc := publication.NewService(nil, nil)
+
+		nodeWithPluginID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.1.1.3", 8388, nil)
+		nWithPlugin := domain.Node{
+			LogicalID:   nodeWithPluginID,
+			Protocol:    domain.ProtocolSS,
+			DisplayName: "SS with v2ray plugin",
+			Server:      "1.1.1.3",
+			Port:        8388,
+			Active:      true,
+			Credentials: domain.InboundProtocolCredential{
+				Method:     "aes-128-gcm",
+				Password:   "pass",
+				Plugin:     "v2ray-plugin",
+				PluginOpts: map[string]string{"mode": "websocket"},
+			},
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+
+		factsPlugin := &domain.ConsistentFacts{
+			AsOf: now,
+			Revision: &domain.ConfigurationRevision{
+				ID:            "rev-plugin",
+				ContentDigest: "digest-rev-plugin",
+				State:         domain.RevisionStateActive,
+				CreatedAt:     now,
+			},
+			Nodes: []domain.Node{nWithPlugin},
+			// Filter empties all nodes so selection exhaustion happens
+			GlobalFilter: &domain.NodeFilterSpec{
+				Conditions: []domain.FilterCondition{
+					{Field: domain.FilterFieldDisplayName, Op: domain.FilterOpContains, Value: "NONEXISTENT"},
+				},
+			},
+			PrimarySubscriptionID: "sub-primary",
+			PrimaryNodeIDs:        []string{nodeWithPluginID},
+		}
+
+		// Surge does not support plugins; when primary node itself has unrenderable plugin, strict mode fails closed
+		_, _, err := svc.BuildCurrentArtifact(ctx, factsPlugin, domain.TargetSurge)
+		if err == nil {
+			t.Fatal("expected unsupported plugin capability error on Surge, got nil")
+		}
+	})
 }

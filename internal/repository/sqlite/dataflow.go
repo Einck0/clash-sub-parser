@@ -187,47 +187,38 @@ func (r *subscriptionPayloadRepository) Pin(ctx context.Context, id string, pinn
 }
 
 func (r *subscriptionPayloadRepository) PruneUnreferenced(ctx context.Context, olderThan time.Time) (int64, error) {
-	cutoffStr := olderThan.Format(time.RFC3339)
-
 	// 1. Release expired preview drafts and failed previews so they don't permanently pin payloads:
 	//    - Failed previews (token_hash LIKE 'draft_failed:%') are immediately released
 	//    - Stale preview drafts older than 24 hours (or olderThan if olderThan is further in the past) are released
-	var pubTableExists int
-	_ = r.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='publications';").Scan(&pubTableExists)
-	if pubTableExists > 0 {
-		draftCutoff := time.Now().Add(-24 * time.Hour)
-		if olderThan.Before(draftCutoff) {
-			draftCutoff = olderThan
-		}
-		draftCutoffStr := draftCutoff.Format(time.RFC3339)
-		_, _ = r.db.ExecContext(ctx, `
-			DELETE FROM publication_payload_refs
-			WHERE publication_id IN (
-				SELECT id FROM publications
-				WHERE token_hash LIKE 'draft_failed:%'
-				   OR (state = 'draft' AND created_at < ?)
-			);`, draftCutoffStr)
-		_, _ = r.db.ExecContext(ctx, `
-			DELETE FROM publications
+	//    - Active/published publications are never released
+	draftCutoff := time.Now().Add(-24 * time.Hour)
+	if olderThan.Before(draftCutoff) {
+		draftCutoff = olderThan
+	}
+	draftCutoffStr := draftCutoff.Format(time.RFC3339)
+	if _, err := r.db.ExecContext(ctx, `
+		DELETE FROM publication_payload_refs
+		WHERE publication_id IN (
+			SELECT id FROM publications
 			WHERE token_hash LIKE 'draft_failed:%'
-			   OR (state = 'draft' AND created_at < ?);`, draftCutoffStr)
+			   OR (state = 'draft' AND created_at < ?)
+		);`, draftCutoffStr); err != nil {
+		return 0, fmt.Errorf("failed to release expired draft publication payload refs: %w", err)
+	}
+	if _, err := r.db.ExecContext(ctx, `
+		DELETE FROM publications
+		WHERE token_hash LIKE 'draft_failed:%'
+		   OR (state = 'draft' AND created_at < ?);`, draftCutoffStr); err != nil {
+		return 0, fmt.Errorf("failed to release expired draft publications: %w", err)
 	}
 
-	// 2. Only delete payloads that:
-	//    a) Are NOT pinned (pinned = 0)
-	//    b) Are created before olderThan
-	//    c) Are NOT referenced by publication_payload_refs
-	const query = `
-	DELETE FROM subscription_payloads
-	WHERE pinned = 0
-	  AND created_at < ?
-	  AND id NOT IN (SELECT payload_id FROM publication_payload_refs);`
-
-	res, err := r.db.ExecContext(ctx, query, cutoffStr)
+	// 2. Canonical safe retention algorithm protects newest 2 success payloads, newest any payload,
+	// pins, publication refs, connection-version source entries, and current node source fetches.
+	res, err := PruneSubscriptionRetention(ctx, r.db, "", 0, &olderThan)
 	if err != nil {
 		return 0, fmt.Errorf("failed to prune unreferenced payloads: %w", err)
 	}
-	return res.RowsAffected()
+	return res.DeletedPayloads, nil
 }
 
 // --- Subscription Entry Repository ---
@@ -495,33 +486,99 @@ func (r *subscriptionEntryRepository) SetUserOverride(
 	overrideAnchor, reason, actorRef string,
 	overrideAt time.Time,
 ) error {
-	var overrideVal sql.NullString
-	if userKindOverride != nil {
-		overrideVal = sql.NullString{String: string(*userKindOverride), Valid: true}
-	}
-	atStr := overrideAt.Format(time.RFC3339)
+	return WithTx(ctx, r.db, func(ctx context.Context, tx *sql.Tx) error {
+		var subID, sourceKey, rawName, currentAnchor, proto, server string
+		var port int
+		const lookupQuery = `
+		SELECT subscription_id, source_key, raw_name, override_anchor, protocol, server, port
+		FROM subscription_entries
+		WHERE id = ?;`
 
-	const query = `
-	UPDATE subscription_entries SET
-		user_kind_override = ?,
-		override_anchor = ?,
-		override_reason = ?,
-		override_at = ?,
-		actor_ref = ?
-	WHERE id = ?;`
+		err := tx.QueryRowContext(ctx, lookupQuery, entryID).Scan(
+			&subID, &sourceKey, &rawName, &currentAnchor, &proto, &server, &port,
+		)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return domain.NewNotFoundError("entry_not_found", fmt.Sprintf("entry %s not found", entryID))
+			}
+			return fmt.Errorf("failed to lookup entry %s: %w", entryID, err)
+		}
 
-	res, err := r.db.ExecContext(ctx, query, overrideVal, overrideAnchor, reason, atStr, actorRef, entryID)
-	if err != nil {
-		return fmt.Errorf("failed to update entry override: %w", err)
-	}
-	rows, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if rows == 0 {
-		return domain.NewNotFoundError("entry_not_found", fmt.Sprintf("entry %s not found", entryID))
-	}
-	return nil
+		anchor := overrideAnchor
+		if anchor == "" {
+			if currentAnchor != "" {
+				anchor = currentAnchor
+			} else if sourceKey != "" {
+				anchor = sourceKey
+			} else {
+				anchor = fmt.Sprintf("%s|%s|%d|%s", proto, server, port, rawName)
+			}
+		}
+
+		if overrideAt.IsZero() {
+			overrideAt = domain.NowUTC()
+		}
+		atStr := overrideAt.Format(time.RFC3339)
+
+		if userKindOverride != nil {
+			const upsertLedger = `
+			INSERT INTO subscription_entry_overrides (
+				subscription_id, override_anchor, source_key, raw_name,
+				user_kind_override, override_reason, override_at, actor_ref
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(subscription_id, override_anchor) DO UPDATE SET
+				source_key = excluded.source_key,
+				raw_name = excluded.raw_name,
+				user_kind_override = excluded.user_kind_override,
+				override_reason = excluded.override_reason,
+				override_at = excluded.override_at,
+				actor_ref = excluded.actor_ref;`
+
+			if _, err := tx.ExecContext(ctx, upsertLedger,
+				subID, anchor, sourceKey, rawName, string(*userKindOverride), reason, atStr, actorRef,
+			); err != nil {
+				return fmt.Errorf("failed to upsert override ledger: %w", err)
+			}
+
+			const updateProj = `
+			UPDATE subscription_entries SET
+				user_kind_override = ?,
+				override_anchor = ?,
+				override_reason = ?,
+				override_at = ?,
+				actor_ref = ?
+			WHERE id = ? OR (subscription_id = ? AND override_anchor != '' AND override_anchor = ?);`
+
+			if _, err := tx.ExecContext(ctx, updateProj,
+				string(*userKindOverride), anchor, reason, atStr, actorRef, entryID, subID, anchor,
+			); err != nil {
+				return fmt.Errorf("failed to update entry projection: %w", err)
+			}
+		} else {
+			const deleteLedger = `
+			DELETE FROM subscription_entry_overrides
+			WHERE subscription_id = ? AND override_anchor = ?;`
+
+			if _, err := tx.ExecContext(ctx, deleteLedger, subID, anchor); err != nil {
+				return fmt.Errorf("failed to delete override ledger: %w", err)
+			}
+
+			const clearProj = `
+			UPDATE subscription_entries SET
+				user_kind_override = NULL,
+				override_anchor = '',
+				override_reason = '',
+				override_at = NULL,
+				actor_ref = ''
+			WHERE id = ? OR (subscription_id = ? AND override_anchor != '' AND override_anchor = ?);`
+
+			if _, err := tx.ExecContext(ctx, clearProj, entryID, subID, anchor); err != nil {
+				return fmt.Errorf("failed to clear entry projection: %w", err)
+			}
+		}
+
+		return nil
+	})
 }
 
 // --- Node Connection Version & Heads Repository ---

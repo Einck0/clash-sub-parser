@@ -1,25 +1,30 @@
 # Tasks
 
-- [x] T001 Investigate native compiler, actual service paths and pinned subs-check reference; findings in spec.md/plan.md/research.md.
-- [x] T002 Freeze target projection/strict contracts, preserve chains/Mihomo policy; cross-artifact analysis below.
-- [x] T003 [P] [US1] Canonical per-node renderability/projection and behavior tests in internal/compiler/compiler.go and target_adaptation_test.go (FR001).
-- [x] T004 [P] [US1,US2] Shared facts artifact pipeline, persisted preview drafts, excluded-node diagnostics/count headers and service/HTTP tests (FR002-FR004).
-- [x] T005 [P] [US3] Native SS plugins with pinned-source validation and regression tests in mihomo.go/mihomo_plugin_test.go (FR005).
-- [x] T006 Exact-scope dev commits/pushes and same-SHA cloud checks/runtime passed; failures retained (FR006, SC001/SC003).
-- [x] T007 Same-SHA prebuilt fresh synthetic isolated backend acceptance, followed by owned-resource cleanup (SC002).
-- [x] T008 Independent source/cloud/image/runtime review PASS (SC003).
-- [x] T009 Record delivery/evidence; final aggregate PASS, no production rollout authorized. Terminal notification follows final status check.
+## Original export iteration (completed; historical)
+- [x] T001 Investigate native compiler, service paths and pinned subs-check reference.
+- [x] T002 Freeze target projection/strict contracts.
+- [x] T003 [P] [US1] Canonical per-node renderability/projection and behavior tests.
+- [x] T004 [P] [US1,US2] Shared facts artifact pipeline, persisted preview drafts, exclusion diagnostics/count headers and tests.
+- [x] T005 [P] [US3] Native SS plugins with pinned-source validation and tests.
+- [x] T006 Exact-scope dev pushes and same-SHA cloud checks/runtime passed.
+- [x] T007 Same-SHA synthetic isolated backend acceptance and cleanup.
+- [x] T008 Independent source/cloud/image/runtime review PASS.
+- [x] T009 Record delivery/evidence and terminal report.
 
-## Spec Kit analyze
-Explicit feature directory 010-export-adaptation; original pointer baseline preserved. FR001 -> T003; FR002-FR004 -> T004; FR005 -> T005; FR006 -> T006/T008. SC001 -> T003-T006, SC002 -> T007, SC003 -> T006/T008. No uncovered requirement or ambiguous deployment authorization. No UI changes, frozen backend Critic not applicable (not a claim Critic ran). Proprietary Surge/QX app-import testing unavailable; grammar fixtures and synthetic HTTP results do not imply native-app verification.
+Historical product a166cb5c8c9af575b5707fad5b708422e313996a, Actions42421228451 checks128549876691/runtime128550658273 SUCCESS, prelease128550837228 SKIPPED. Image sha256:77f26749f0502b2c6bfd2a1772d1fc9f2119962fc2fbff10dbf1b77fef426dfd, OCI same commit; binary7dc73bcaae496ebc08596889445b2d8009cb3ec423b6db209e32e0f6edaa22f5. Independent reviewer rep_rev_whole_task_c450bb42-fe8f-4316-8365-ac16eb62a7d9 PASS. Synthetic SS/pluginSS/VLESS: Mihomo3/0, sing-box2/1, Surge/QX1/2. Direct aliases, strict mode, preview/publish/immutable, live/check, all-excluded422, chain errors, auth/ETag/userinfo verified. Preview39974 and owned resources cleaned. Proprietary app import not verified.
 
-## Verified delivery (2026-11-08)
-Product commit a166cb5c8c9af575b5707fad5b708422e313996a, Actions42421228451: checks128549876691 SUCCESS, runtime128550658273 SUCCESS, prelease128550837228 SKIPPED as required on dev. Image sha256:77f26749f0502b2c6bfd2a1772d1fc9f2119962fc2fbff10dbf1b77fef426dfd, OCI revision matches commit; binary sha256:7dc73bcaae496ebc08596889445b2d8009cb3ec423b6db209e32e0f6edaa22f5. No host or local Docker project compilation/tests.
+Historical failures retained: b9912ed invented credential fields;31e57f6 omitted config declarations;5f9fc6e invented Node.ConfigJSON;e77ed1d obsolete tests/Reality key;b592c5d invented Publication.Manifest;c7d8f39 HTTP fixtures.5962faf cloud/runtime initially passed but master found silent plugin downgrade; fixed a166cb5 and reran. Original225dirty preserved. Separately authorized actual rollout and remaining empty 香港422/readiness cost are in release-20261108.md; original completion is not proof of current repairs.
 
-Synthetic plain SS + plugin SS + VLESS: Mihomo includes3/excludes0 preserving plugin/DNS/470 ordered rules with terminal MATCH; sing-box includes2/excludes1; Surge/QX include1/exclude2. Unrepresentable plugins are rejected, never silently plain SS. Verified aliases, strict rejection, default compatible preview real draft -> publish -> immutable bytes, live/check agreement, all-excluded422, chain rejection/non-downgrade, auth401/200, ETag304/count headers and primary userinfo. This is synthetic evidence, not production data or proprietary-app import.
+## Current continuation: run pi_run_20261108_111123_2774365
+- [x] T010 Inspect scoped fallback/storage/readiness source; reconcile latest repair authority and preserve baseline225dirty (FR007-FR011).
+- [x] T011 Freeze selection-only primary fallback, durable override ledger, reference-safe snapshot/fetch bounds and fast/deep readiness split in spec.md/plan.md; analyze coverage below.
+- [ ] T012 [P] [US4] Publication eligible-failure classification/recovery and regression tests in internal/application/publication/service.go and package tests (FR007).
+- [ ] T013 [P] [US5] Migration000028, durable override repository and reconcile projection, safe lifecycle pruning/wiring/predicates and behavior tests in inventory and SQLite files owned by moduleB (FR008-FR010).
+- [ ] T014 [P] [US6] Fast operational readiness separate from deep FK diagnosis; callback and tests (FR011).
+- [ ] T015 Audit merged models/SQL/imports/fixtures and protected worktree; exact-scope dev commit/push, existing same-SHA checks/runtime (SC001/SC003).
+- [ ] T016 Same-SHA prebuilt fresh synthetic backend acceptance: empty-group direct/live/preview fallback/safety, repeated refresh retention and real readiness; owned isolation cleanup (SC002/SC003).
+- [ ] T017 Independent reviewer checks source, cloud/image/runtime chain and invariants; evaluate findings and resolve genuine blockers (SC004).
+- [ ] T018 Record verified results/limitations, inspect live dispatch aggregate, commit documentation and send truthful terminal report. No production cleanup/VACUUM/deployment (SC004).
 
-Independent reviewer rep_rev_whole_task_c450bb42-fe8f-4316-8365-ac16eb62a7d9 PASS, no active failures. Detailed local private evidence is retained outside Git. Cleanup removed exact owned preview container/network/volume/relay and synthetic credentials,39974 refused; no production deployment.
-
-## Corrections and review decisions
-Cloud failure history b9912ed (invented credential fields),31e57f6 (omitted private config declarations),5f9fc6e (invented test Node.ConfigJSON),e77ed1d (stale strict tests/invalid Reality key),b592c5d (invented Publication.Manifest),c7d8f39 (HTTP fixtures) retained. These were construction/coordination defects, not cloud infrastructure faults. Format-only interim PASS reports are not delivery evidence; final cloud and real runtime evidence govern.
-5962faf initially cloud-green and synthetic suite passed, but master found SS plugin semantics silently lost on non-Mihomo. Accepted as blocking, fixed a166cb5, reran cloud and same-SHA runtime; prior broad success is superseded, not erased. Reviewer final PASS accepted based on source/cloud/runtime evidence. No stylistic rewrite or unsupported protocol expansion added.
+## Spec Kit analyze: current continuation
+Explicit feature010-export-adaptation, no reinitialization/overwrite scripts. Root constitution/AGENTS cloud rules preserved. FR001-FR006 -> historicalT003-T008 and current regressionT015-T017; FR007 -> T012/T016; FR008-FR010 -> T013/T015-T016; FR011 -> T014/T016; SC001 -> T015; SC002/SC003 -> T015-T016; SC004 -> T017-T018. US4-US6 mapped to disjoint parallel module owners; no uncovered requirement. Original no-schema/partial-empty-error text superseded explicitly in spec/plan, not silently inherited. Count limits have reference exceptions and physical reclamation separate from logical retention. No active unresolved design requirement; actual test/gate status remains pending, not PASS.

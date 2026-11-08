@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"clash-sub-parser/internal/platform"
+	"clash-sub-parser/internal/repository/sqlite"
 
 	_ "modernc.org/sqlite"
 )
@@ -275,6 +276,100 @@ func TestServeCLI(t *testing.T) {
 
 		if !healthzOK {
 			t.Fatalf("/healthz check failed with fetch-proxy configured. Stdout: %s, Stderr: %s", stdout.String(), stderr.String())
+		}
+
+		client.CloseIdleConnections()
+		cancel()
+		select {
+		case code := <-serveDone:
+			if code != 0 {
+				t.Fatalf("expected graceful exit code 0, got %d. Stderr: %s", code, stderr.String())
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("server shutdown timed out")
+		}
+	})
+
+	t.Run("serve operational readiness responds 200 on readyz even with foreign key violation", func(t *testing.T) {
+		corruptDBPath := filepath.Join(tempDir, "serve_corrupt_fk_test.db")
+
+		// Pre-initialize database and inject an orphaned row with FK disabled
+		initCfg := sqlite.Config{Path: corruptDBPath, ForeignKeys: true}
+		initDB, err := sqlite.OpenAndMigrate(context.Background(), initCfg)
+		if err != nil {
+			t.Fatalf("failed to initialize test database: %v", err)
+		}
+		if _, err := initDB.Exec("PRAGMA foreign_keys = OFF;"); err != nil {
+			t.Fatalf("failed disabling foreign keys: %v", err)
+		}
+		if _, err := initDB.Exec("INSERT INTO node_sources (node_logical_id, subscription_id, last_seen_fetch_id) VALUES ('phantom-node-serve', 'sub-x', 'fetch-x');"); err != nil {
+			t.Fatalf("failed inserting orphaned row: %v", err)
+		}
+		if _, err := initDB.Exec("PRAGMA foreign_keys = ON;"); err != nil {
+			t.Fatalf("failed re-enabling foreign keys: %v", err)
+		}
+
+		// Verify deep CheckReadiness reports false on this database
+		deepReport, err := sqlite.CheckReadiness(context.Background(), initDB)
+		if err != nil || deepReport.Ready {
+			t.Fatalf("expected deep CheckReadiness to fail on FK violation, got ready=%v, err=%v", deepReport.Ready, err)
+		}
+		_ = initDB.Close()
+
+		// Start server with the corrupt database
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("failed to find free port: %v", err)
+		}
+		addr := l.Addr().String()
+		_ = l.Close()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		var stdout, stderr bytes.Buffer
+		serveDone := make(chan int, 1)
+
+		go func() {
+			exitCode := runServeWithContext(ctx, []string{"-addr", addr, "-db", corruptDBPath}, &stdout, &stderr)
+			serveDone <- exitCode
+		}()
+
+		baseURL := fmt.Sprintf("http://%s", addr)
+		client := &http.Client{
+			Timeout: 2 * time.Second,
+			Transport: &http.Transport{
+				DisableKeepAlives: true,
+			},
+		}
+
+		var readyzOK bool
+		deadline := time.Now().Add(10 * time.Second)
+		for time.Now().Before(deadline) {
+			time.Sleep(50 * time.Millisecond)
+
+			resp, err := client.Get(baseURL + "/readyz")
+			if err != nil {
+				continue
+			}
+			if resp.StatusCode == http.StatusOK {
+				var body map[string]any
+				if err := json.NewDecoder(resp.Body).Decode(&body); err == nil {
+					data, ok := body["data"].(map[string]any)
+					if ok && data["ready"] == true {
+						readyzOK = true
+					}
+				}
+			}
+			_ = resp.Body.Close()
+
+			if readyzOK {
+				break
+			}
+		}
+
+		if !readyzOK {
+			t.Fatalf("/readyz check failed or timed out with operational readiness. Stdout: %s, Stderr: %s", stdout.String(), stderr.String())
 		}
 
 		client.CloseIdleConnections()

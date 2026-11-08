@@ -8,13 +8,50 @@ import (
 	"clash-sub-parser/internal/domain"
 )
 
+const currentUsefulPayloadsSubquery = `SELECT p.id
+FROM subscription_payloads p
+JOIN (
+    SELECT p2.id,
+           ROW_NUMBER() OVER (
+               PARTITION BY p2.subscription_id
+               ORDER BY p2.created_at DESC, p2.rowid DESC
+           ) AS rn
+    FROM subscription_payloads p2
+    LEFT JOIN subscription_fetches sf ON p2.fetch_id = sf.id
+    WHERE (sf.outcome IN ('success', 'partial') OR (sf.id IS NULL AND p2.http_status = 200))
+      AND (sf.nodes_valid IS NULL OR sf.nodes_valid > 0 OR EXISTS (SELECT 1 FROM subscription_entries se_check WHERE se_check.payload_id = p2.id))
+) ranked ON p.id = ranked.id AND ranked.rn = 1
+UNION
+SELECT p3.id
+FROM subscription_payloads p3
+WHERE p3.fetch_id IN (
+    SELECT DISTINCT ns.last_seen_fetch_id
+    FROM node_sources ns
+    WHERE ns.last_seen_fetch_id != ''
+)`
+
 const confirmedNoticeExclusionSubquery = `SELECT se1.node_logical_id FROM subscription_entries se1
 WHERE se1.node_logical_id IS NOT NULL
-  AND COALESCE(se1.user_kind_override, se1.entry_kind) = 'notice'
+  AND se1.payload_id IN (` + currentUsefulPayloadsSubquery + `)
+  AND COALESCE(
+      (SELECT seo.user_kind_override
+       FROM subscription_entry_overrides seo
+       WHERE seo.subscription_id = se1.subscription_id
+         AND (seo.override_anchor = se1.override_anchor OR (se1.source_key != '' AND seo.override_anchor = se1.source_key))
+       LIMIT 1),
+      se1.entry_kind
+  ) = 'notice'
   AND NOT EXISTS (
       SELECT 1 FROM subscription_entries se2
       WHERE se2.node_logical_id = se1.node_logical_id
-        AND se2.user_kind_override = 'proxy'
+        AND se2.payload_id IN (` + currentUsefulPayloadsSubquery + `)
+        AND (
+            SELECT seo2.user_kind_override
+            FROM subscription_entry_overrides seo2
+            WHERE seo2.subscription_id = se2.subscription_id
+              AND (seo2.override_anchor = se2.override_anchor OR (se2.source_key != '' AND seo2.override_anchor = se2.source_key))
+            LIMIT 1
+        ) = 'proxy'
   )`
 
 const enabledSubscriptionsInventorySubquery = `SELECT DISTINCT ns.node_logical_id

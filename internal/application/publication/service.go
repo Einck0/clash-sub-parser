@@ -1729,14 +1729,6 @@ func (s *Service) buildArtifactPipeline(ctx context.Context, facts *domain.Consi
 		}
 	}
 
-	if target == domain.TargetMihomo && cfg.mode == exportModeCompatible {
-		for _, g := range snapshot.Groups {
-			if !g.UsesEmptyPass() && len(g.Members) == 0 {
-				return nil, snapshot, domain.NewValidationError("empty_group_not_allowed", fmt.Sprintf("policy group %q has 0 members in compatible mode", g.Name))
-			}
-		}
-	}
-
 	hasFilteredNodesEmpty := false
 	for _, diagnostic := range snapshot.Diagnostics {
 		if diagnostic.Code == "filtered_nodes_empty" {
@@ -1749,7 +1741,7 @@ func (s *Service) buildArtifactPipeline(ctx context.Context, facts *domain.Consi
 	diags := compiler.ValidateTargetCapabilities(snapshot, target)
 
 	// A built-in destination is an intentional route, not an empty user-group
-	// selection. Never replace configured DIRECT/REJECT behavior with fallback.
+	// selection. A valid built-in policy compiles normally without fallback.
 	hasBuiltinRoutingRule := false
 	routedUserGroups := make(map[string]bool)
 	for _, r := range snapshot.Rules {
@@ -1763,26 +1755,11 @@ func (s *Service) buildArtifactPipeline(ctx context.Context, facts *domain.Consi
 		}
 	}
 
-	usableRoutedCount := 0
-	emptyRoutedCount := 0
-	for _, g := range snapshot.Groups {
-		if routedUserGroups[g.ID] {
-			if len(g.AllNodeLogicalIDs) > 0 {
-				usableRoutedCount++
-			} else {
-				emptyRoutedCount++
-			}
-		}
-	}
-	hasPartialConfigError := (usableRoutedCount > 0 && emptyRoutedCount > 0)
-
 	absentRoutingMihomo := (target == domain.TargetMihomo) && (!hasBuiltinRoutingRule && len(routedUserGroups) == 0)
 
-	// Check if normal compilation succeeds. Only the explicit empty-group
-	// compiler failure may proceed to fallback; other compile/content failures
-	// are meaningful errors and must be preserved verbatim.
-	// Absent routing for Mihomo (no effective routed or builtin routes)
-	// is defined as exhausted before normal successful return.
+	// Check if normal compilation succeeds. Only valid policies without empty-group
+	// or capability errors compile normally; absent routing for Mihomo (no effective
+	// routed or builtin routes) proceeds to fallback.
 	if !hasFilteredNodesEmpty && !absentRoutingMihomo && len(diags) == 0 && preflight.Allowed {
 		compileRes, err := compiler.Compile(ctx, snapshot, target)
 		if err != nil {
@@ -1810,10 +1787,15 @@ func (s *Service) buildArtifactPipeline(ctx context.Context, facts *domain.Consi
 		}, snapshot, nil
 	}
 
-	// Normal export failed. Evaluate if eligible for primary subscription fallback.
-	// Fallback is strictly exhaustion-only:
-	// - No independent blockers (risk blocked/review/unknown, target capability mismatch, partial group error)
-	// - Eligible exhaustion: filtered_nodes_empty, or all routed groups empty, or no effective rules/groups
+	// Normal export failed. Evaluate if eligible for primary subscription fallback (FR007).
+	// Eligible causes:
+	// - empty-group validation (required_nonempty, empty_routed_group, empty_group)
+	// - known selection exhaustion (filtered_nodes_empty, absent effective Mihomo routing, empty non-Mihomo candidate nodes)
+	// - partial empty groups alongside usable groups and normal builtin routes (DIRECT/REJECT)
+	// Independent blockers stay fail-closed:
+	// - risk blockers (risk_blocked, risk_review, risk_unknown)
+	// - per-node capability/plugin/credential errors
+	// - independent structural resolver errors
 	hasRiskBlocker := false
 	for _, d := range snapshot.Diagnostics {
 		if d.Code == "risk_blocked" || d.Code == "risk_review" || d.Code == "risk_unknown" {
@@ -1847,20 +1829,46 @@ func (s *Service) buildArtifactPipeline(ctx context.Context, facts *domain.Consi
 			continue
 		}
 		switch diagnostic.Code {
-		case "filtered_nodes_empty", "empty_routed_group":
+		case "filtered_nodes_empty", "empty_routed_group", "empty_group":
 		default:
 			hasIndependentResolverError = true
 		}
 	}
 
-	isExhaustion := hasFilteredNodesEmpty ||
-		(target == domain.TargetMihomo && len(routedUserGroups) > 0 && usableRoutedCount == 0) ||
+	hasEmptyGroupFailure := false
+	if target == domain.TargetMihomo {
+		for _, cd := range diags {
+			if cd.Code == "required_nonempty" || cd.Code == "empty_group" {
+				hasEmptyGroupFailure = true
+				break
+			}
+		}
+		if !hasEmptyGroupFailure {
+			for _, d := range snapshot.Diagnostics {
+				if d.Code == "empty_routed_group" || d.Code == "empty_group" {
+					hasEmptyGroupFailure = true
+					break
+				}
+			}
+		}
+		if !hasEmptyGroupFailure {
+			for _, g := range snapshot.Groups {
+				if !g.UsesEmptyPass() && len(g.Members) == 0 {
+					hasEmptyGroupFailure = true
+					break
+				}
+			}
+		}
+	}
+
+	isEligible := hasFilteredNodesEmpty ||
+		hasEmptyGroupFailure ||
 		absentRoutingMihomo ||
 		(target != domain.TargetMihomo && len(snapshot.Nodes) == 0)
 
-	// If independent blockers exist or not an exhaustion condition, return original error directly
-	if hasRiskBlocker || hasProtocolBlocker || hasIndependentResolverError || hasPartialConfigError || hasBuiltinRoutingRule || !isExhaustion {
-		if len(diags) > 0 && (hasProtocolBlocker || hasPartialConfigError || cfg.mode == exportModeStrict) {
+	// If independent blockers exist or not an eligible failure condition, return original error directly
+	if hasRiskBlocker || hasProtocolBlocker || hasIndependentResolverError || !isEligible {
+		if len(diags) > 0 && (hasProtocolBlocker || cfg.mode == exportModeStrict) {
 			msg := "target capability validation failed in strict mode"
 			if len(diags) > 0 {
 				msg = fmt.Sprintf("target capability validation failed in strict mode: %s", diags[0].Message)
@@ -1869,6 +1877,17 @@ func (s *Service) buildArtifactPipeline(ctx context.Context, facts *domain.Consi
 				Code:        "unsupported_target_capability",
 				Message:     msg,
 				Diagnostics: diags,
+			}
+		}
+		if len(preflight.Diagnostics) == 0 && len(diags) > 0 {
+			preflight.Allowed = false
+			for _, cd := range diags {
+				preflight.Diagnostics = append(preflight.Diagnostics, PreflightDiagnostic{
+					Severity: resolver.DiagnosticSeverityError,
+					Code:     cd.Code,
+					Message:  cd.Message,
+					Target:   cd.Target,
+				})
 			}
 		}
 		return nil, snapshot, newPreflightError(preflight)
@@ -1888,6 +1907,16 @@ func (s *Service) buildArtifactPipeline(ctx context.Context, facts *domain.Consi
 			Code:     unavailableDiag.Code,
 			Message:  unavailableDiag.Message,
 		})
+		if len(preflight.Diagnostics) == 1 && len(diags) > 0 {
+			for _, cd := range diags {
+				preflight.Diagnostics = append(preflight.Diagnostics, PreflightDiagnostic{
+					Severity: resolver.DiagnosticSeverityError,
+					Code:     cd.Code,
+					Message:  cd.Message,
+					Target:   cd.Target,
+				})
+			}
+		}
 		return nil, snapshot, newPreflightError(preflight)
 	}
 
@@ -1914,6 +1943,16 @@ func (s *Service) buildArtifactPipeline(ctx context.Context, facts *domain.Consi
 			Code:     unavailableDiag.Code,
 			Message:  unavailableDiag.Message,
 		})
+		if len(preflight.Diagnostics) == 1 && len(diags) > 0 {
+			for _, cd := range diags {
+				preflight.Diagnostics = append(preflight.Diagnostics, PreflightDiagnostic{
+					Severity: resolver.DiagnosticSeverityError,
+					Code:     cd.Code,
+					Message:  cd.Message,
+					Target:   cd.Target,
+				})
+			}
+		}
 		return nil, snapshot, newPreflightError(preflight)
 	}
 
@@ -2002,12 +2041,6 @@ func (s *Service) buildArtifactPipeline(ctx context.Context, facts *domain.Consi
 		return nil, nil, rErr
 	}
 
-	fallbackSnapshot.Diagnostics = append(fallbackSnapshot.Diagnostics, resolver.Diagnostic{
-		Severity: resolver.DiagnosticSeverityWarning,
-		Code:     "primary_subscription_fallback",
-		Message:  "all policy rules or filters resulted in empty nodes; fell back to active primary subscription nodes",
-	})
-
 	if target != domain.TargetMihomo && len(fallbackSnapshot.Nodes) > 0 {
 		if cfg.mode == exportModeCompatible {
 			compatSnap, fallbackExclusions := compiler.FilterCompatibleSnapshot(fallbackSnapshot, target)
@@ -2058,6 +2091,71 @@ func (s *Service) buildArtifactPipeline(ctx context.Context, facts *domain.Consi
 	if excludedNodes == nil {
 		excludedNodes = []domain.ManifestExcludedNode{}
 	}
+
+	// Preserve safe original cause diagnostics along with primary_subscription_fallback
+	var safeOriginalDiags []resolver.Diagnostic
+	seenDiag := make(map[string]bool)
+
+	for _, d := range snapshot.Diagnostics {
+		if d.Code == "filtered_nodes_empty" || d.Code == "empty_routed_group" || d.Code == "empty_group" {
+			key := d.Code + ":" + d.Target + ":" + d.Message
+			if !seenDiag[key] {
+				seenDiag[key] = true
+				safeOriginalDiags = append(safeOriginalDiags, resolver.Diagnostic{
+					Severity: resolver.DiagnosticSeverityWarning,
+					Code:     d.Code,
+					Message:  d.Message,
+					Target:   d.Target,
+					Reason:   d.Reason,
+				})
+			}
+		}
+	}
+
+	for _, cd := range diags {
+		if cd.Code == "required_nonempty" {
+			key := cd.Code + ":" + cd.Target + ":" + cd.Message
+			if !seenDiag[key] {
+				seenDiag[key] = true
+				safeOriginalDiags = append(safeOriginalDiags, resolver.Diagnostic{
+					Severity: resolver.DiagnosticSeverityWarning,
+					Code:     cd.Code,
+					Message:  cd.Message,
+					Target:   cd.Target,
+				})
+			}
+		}
+	}
+
+	if len(safeOriginalDiags) == 0 {
+		if absentRoutingMihomo {
+			safeOriginalDiags = append(safeOriginalDiags, resolver.Diagnostic{
+				Severity: resolver.DiagnosticSeverityWarning,
+				Code:     "absent_routing",
+				Message:  "no effective policy rules or proxy groups configured",
+			})
+		} else if hasEmptyGroupFailure {
+			safeOriginalDiags = append(safeOriginalDiags, resolver.Diagnostic{
+				Severity: resolver.DiagnosticSeverityWarning,
+				Code:     "empty_group",
+				Message:  "one or more policy groups are empty",
+			})
+		}
+	}
+
+	fallbackMessage := "all policy rules or filters resulted in empty nodes; fell back to active primary subscription nodes"
+	if absentRoutingMihomo {
+		fallbackMessage = "no effective policy rules or proxy groups configured; fell back to active primary subscription nodes"
+	} else if (hasEmptyGroupFailure || len(safeOriginalDiags) > 0) && len(snapshot.Nodes) > 0 && !hasFilteredNodesEmpty {
+		fallbackMessage = "empty policy group validation failed; fell back to active primary subscription nodes"
+	}
+
+	fallbackSnapshot.Diagnostics = append(fallbackSnapshot.Diagnostics, safeOriginalDiags...)
+	fallbackSnapshot.Diagnostics = append(fallbackSnapshot.Diagnostics, resolver.Diagnostic{
+		Severity: resolver.DiagnosticSeverityWarning,
+		Code:     "primary_subscription_fallback",
+		Message:  fallbackMessage,
+	})
 
 	return &Artifact{
 		Target:         target,

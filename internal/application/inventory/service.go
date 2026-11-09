@@ -407,6 +407,16 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 		return nil, err
 	}
 
+	// Successful refreshes do not change the editable subscription revision.
+	// Snapshot the last committed original's fetch ID before fetching as a second
+	// CAS token, so a slow candidate cannot replace a refresh committed meanwhile.
+	// Unlike timestamps, unique fetch IDs also distinguish same-tick refreshes.
+	const originalFetchIDSQL = `SELECT COALESCE((SELECT fetch_id FROM subscription_original_configs WHERE subscription_id = ?), '');`
+	var originalFetchID string
+	if err := s.db.QueryRowContext(ctx, originalFetchIDSQL, sub.ID).Scan(&originalFetchID); err != nil {
+		return nil, fmt.Errorf("failed to read original configuration state before fetch: %w", err)
+	}
+
 	startedAt := domain.NowUTC()
 	configuredProxy := s.defaultFetchProxy
 	var fetchErr error
@@ -602,6 +612,13 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 		}
 		if currentRev != sub.Revision || currentSourceURL != sub.SourceURLSecretRef {
 			return domain.NewConflictError("subscription_revision_conflict", "subscription was modified during fetch reconciliation")
+		}
+		var currentOriginalFetchID string
+		if err := tx.QueryRowContext(ctx, originalFetchIDSQL, sub.ID).Scan(&currentOriginalFetchID); err != nil {
+			return fmt.Errorf("failed to verify original configuration state before convergence: %w", err)
+		}
+		if currentOriginalFetchID != originalFetchID {
+			return domain.NewConflictError("subscription_refresh_conflict", "another subscription refresh committed during fetch reconciliation")
 		}
 
 		const insertFetchSQL = `

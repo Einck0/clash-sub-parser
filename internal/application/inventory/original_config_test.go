@@ -546,6 +546,126 @@ func TestInventoryService_ReconcileSubscription_RepeatedSuccessKeepsExactlyOneLa
 	}
 }
 
+// A fetch admitted earlier must not overwrite a later-started refresh that has
+// already committed, even through a separate Service sharing the database.
+func TestInventoryService_ReconcileSubscription_ConcurrentRefreshRetainsNewerCommit(t *testing.T) {
+	for _, seeded := range []bool{false, true} {
+		for _, separateService := range []bool{false, true} {
+			t.Run(fmt.Sprintf("seeded=%t/separate_service=%t", seeded, separateService), func(t *testing.T) {
+				db, subRepo, svc, fetcher := setupOriginalTestDB(t)
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				sub := createOrigSub(t, subRepo, "sub-refresh-race", "Refresh Race", "https://example.com/refresh-race")
+				oldBody := []byte("proxies:\n  - name: old-node\n    type: ss\n    server: 1.1.1.1\n    port: 8388\n    cipher: aes-128-gcm\n    password: p\n")
+				newBody := []byte("proxies:\n  - name: new-node\n    type: ss\n    server: 2.2.2.2\n    port: 8388\n    cipher: aes-128-gcm\n    password: p\n")
+				response := func(body []byte) *fetch.Response {
+					return &fetch.Response{StatusCode: 200, Body: body, ContentDigest: fmt.Sprintf("%x", sha256.Sum256(body))}
+				}
+				fetcher.setResponse(sub.SourceURLSecretRef, response(oldBody))
+				if seeded {
+					if _, err := svc.ReconcileSubscription(ctx, sub.ID); err != nil {
+						t.Fatalf("seed reconcile failed: %v", err)
+					}
+				}
+
+				newerSvc := svc
+				if separateService {
+					newerSvc = inventory.NewService(db, subRepo, sqlite.NewSubscriptionFetchRepository(db), sqlite.NewNodeRepository(db), sqlite.NewNodeSourceRepository(db), fetcher)
+				}
+				olderFetching := make(chan struct{})
+				releaseOlder := make(chan struct{})
+				var releaseOnce sync.Once
+				release := func() { releaseOnce.Do(func() { close(releaseOlder) }) }
+				defer release()
+				var callsMu sync.Mutex
+				calls := 0
+				fetcher.onFetch = func(string) {
+					callsMu.Lock()
+					calls++
+					first := calls == 1
+					callsMu.Unlock()
+					if first {
+						close(olderFetching)
+						select {
+						case <-releaseOlder:
+						case <-ctx.Done():
+						}
+					}
+				}
+				type attempt struct {
+					result *inventory.ReconcileResult
+					err    error
+				}
+				olderDone := make(chan attempt, 1)
+				workerExited := make(chan struct{})
+				go func() {
+					defer close(workerExited)
+					result, err := svc.ReconcileSubscription(ctx, sub.ID)
+					olderDone <- attempt{result, err}
+				}()
+				defer func() {
+					release()
+					cancel()
+					select {
+					case <-workerExited:
+					case <-time.After(5 * time.Second):
+						t.Error("older refresh worker did not exit during cleanup")
+					}
+				}()
+				select {
+				case <-olderFetching:
+				case <-ctx.Done():
+					t.Fatal("older refresh did not reach fetch")
+				}
+				fetcher.setResponse(sub.SourceURLSecretRef, response(newBody))
+				newer, err := newerSvc.ReconcileSubscription(ctx, sub.ID)
+				if err != nil || newer == nil || newer.Outcome != domain.FetchOutcomeSuccess {
+					t.Fatalf("newer refresh failed: result=%+v err=%v", newer, err)
+				}
+				// Deliver the older response only after the newer transaction committed.
+				fetcher.setResponse(sub.SourceURLSecretRef, response(oldBody))
+				release()
+				select {
+				case older := <-olderDone:
+					var domErr *domain.DomainError
+					if older.result != nil || !errors.As(older.err, &domErr) || domErr.Code != "subscription_refresh_conflict" {
+						t.Fatalf("expected stale refresh conflict without result, got %+v, %v", older.result, older.err)
+					}
+				case <-ctx.Done():
+					t.Fatal("older refresh did not finish")
+				}
+
+				orig, err := svc.GetOriginalConfig(ctx, sub.ID)
+				if err != nil || !bytes.Equal(orig.Body, newBody) || orig.FetchID != newer.FetchID {
+					t.Fatalf("newer original was not retained: original=%+v err=%v", orig, err)
+				}
+				current, err := subRepo.GetByID(ctx, sub.ID)
+				if err != nil || current.Revision != sub.Revision {
+					t.Fatalf("refresh changed editable revision: subscription=%+v err=%v", current, err)
+				}
+				expectedFacts := 1
+				if seeded {
+					expectedFacts++
+				}
+				for _, table := range []string{"subscription_fetches", "subscription_payloads", "subscription_original_configs"} {
+					want := expectedFacts
+					if table == "subscription_original_configs" {
+						want = 1
+					}
+					var count int
+					if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table+" WHERE subscription_id = ?", sub.ID).Scan(&count); err != nil || count != want {
+						t.Fatalf("stale refresh mutated %s: count=%d want=%d err=%v", table, count, want, err)
+					}
+				}
+				var nodeName, lastFetchID string
+				if err := db.QueryRowContext(ctx, `SELECT n.display_name, ns.last_seen_fetch_id FROM nodes n JOIN node_sources ns ON ns.node_logical_id = n.logical_id WHERE ns.subscription_id = ?`, sub.ID).Scan(&nodeName, &lastFetchID); err != nil || nodeName != "new-node" || lastFetchID != newer.FetchID {
+					t.Fatalf("newer inventory was not retained: name=%q fetch=%q err=%v", nodeName, lastFetchID, err)
+				}
+			})
+		}
+	}
+}
+
 // Rejected candidates record failed fetches while retaining prior inventory and original bytes.
 func TestInventoryService_ReconcileSubscription_OverCapAndNon2xxRetainOldAndUnchangedFactsCounts(t *testing.T) {
 	db, subRepo, svc, fetcher := setupOriginalTestDB(t)

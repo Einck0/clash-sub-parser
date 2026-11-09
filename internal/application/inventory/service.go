@@ -3,8 +3,10 @@ package inventory
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/netip"
 	"regexp"
@@ -196,6 +198,7 @@ type Service struct {
 	overrideRepo      domain.NodeOverrideRepository
 	pubPayloadRefRepo domain.PublicationPayloadRefRepository
 	sourceHistoryRepo domain.NodeSourceHistoryRepository
+	origConfigRepo    domain.SubscriptionOriginalConfigRepository
 	poolProvider      NodePoolStateProvider
 	defaultFetchProxy string
 	settingsRepo      domain.SettingsRepository
@@ -248,6 +251,13 @@ func WithNodeSourceHistoryRepository(repo domain.NodeSourceHistoryRepository) Op
 func WithPublicationPayloadRefRepository(repo domain.PublicationPayloadRefRepository) Option {
 	return func(s *Service) {
 		s.pubPayloadRefRepo = repo
+	}
+}
+
+// WithSubscriptionOriginalConfigRepository sets the raw original configuration repository.
+func WithSubscriptionOriginalConfigRepository(repo domain.SubscriptionOriginalConfigRepository) Option {
+	return func(s *Service) {
+		s.origConfigRepo = repo
 	}
 }
 
@@ -337,6 +347,7 @@ func NewService(
 		s.overrideRepo = sqlite.NewNodeOverrideRepository(db)
 		s.pubPayloadRefRepo = sqlite.NewPublicationPayloadRefRepository(db)
 		s.sourceHistoryRepo = sqlite.NewNodeSourceHistoryRepository(db)
+		s.origConfigRepo = sqlite.NewSubscriptionOriginalRepository(db)
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -367,6 +378,26 @@ func (s *Service) VersionRepository() domain.NodeConnectionVersionRepository {
 // OverrideRepository returns the override repository handle.
 func (s *Service) OverrideRepository() domain.NodeOverrideRepository {
 	return s.overrideRepo
+}
+
+// GetOriginalConfig retrieves the latest usable raw original configuration for a subscription.
+// It uses a dedicated direct SQLite lookup with subscription existence check,
+// without triggering fetches, background queries, or exposing raw source URLs.
+func (s *Service) GetOriginalConfig(ctx context.Context, subID string) (*domain.SubscriptionOriginalConfig, error) {
+	subID = strings.TrimSpace(subID)
+	if subID == "" {
+		return nil, domain.NewValidationError("missing_subscription_id", "subscription ID is required")
+	}
+	if s == nil {
+		return nil, domain.NewInternalError("inventory_unavailable", "inventory service not available")
+	}
+	if s.origConfigRepo != nil {
+		return s.origConfigRepo.GetBySubscriptionID(ctx, subID)
+	}
+	if s.db != nil {
+		return sqlite.GetOriginalConfigBySubscriptionID(ctx, s.db, subID)
+	}
+	return nil, domain.NewInternalError("inventory_unavailable", "inventory service repository not available")
 }
 
 // ReconcileSubscription executes the safe fetch, in-memory parse, and atomic transaction convergence.
@@ -400,6 +431,18 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 	var fetchResp *fetch.Response
 	if fetchErr == nil {
 		fetchResp, fetchErr = s.fetcher.Fetch(ctx, opts)
+	}
+	if fetchErr == nil {
+		switch {
+		case fetchResp == nil:
+			fetchErr = domain.NewInternalError("nil_fetch_response", "fetch response is nil")
+		case fetchResp.StatusCode != 0 && (fetchResp.StatusCode < 200 || fetchResp.StatusCode >= 300):
+			fetchErr = domain.NewValidationError("invalid_fetch_status", fmt.Sprintf("fetch returned non-2xx status code: %d", fetchResp.StatusCode))
+		case len(fetchResp.Body) == 0:
+			fetchErr = domain.NewValidationError("empty_subscription_content", "subscription content is empty")
+		case int64(len(fetchResp.Body)) > opts.MaxResponseBytes:
+			fetchErr = domain.NewValidationError("subscription_content_too_large", fmt.Sprintf("subscription content exceeds maximum size of %d bytes", opts.MaxResponseBytes))
+		}
 	}
 	if fetchErr != nil {
 		finishedAt := domain.NowUTC()
@@ -548,6 +591,19 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 	defer s.mu.Unlock()
 
 	err = sqlite.WithTx(ctx, s.db, func(ctx context.Context, tx *sql.Tx) error {
+		// CAS recheck: verify subscription revision and source URL against pre-fetch snapshot before any facts mutate
+		var currentRev, currentSourceURL string
+		casErr := tx.QueryRowContext(ctx, "SELECT revision, source_url_secret_ref FROM subscriptions WHERE id = ?;", sub.ID).Scan(&currentRev, &currentSourceURL)
+		if casErr != nil {
+			if errors.Is(casErr, sql.ErrNoRows) {
+				return domain.NewNotFoundError("subscription_not_found", "subscription not found")
+			}
+			return fmt.Errorf("failed to verify subscription state before convergence: %w", casErr)
+		}
+		if currentRev != sub.Revision || currentSourceURL != sub.SourceURLSecretRef {
+			return domain.NewConflictError("subscription_revision_conflict", "subscription was modified during fetch reconciliation")
+		}
+
 		const insertFetchSQL = `
 		INSERT INTO subscription_fetches (
 			id, subscription_id, started_at, finished_at, outcome,
@@ -604,6 +660,19 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 			if !strings.Contains(pErr.Error(), "no such table") {
 				return fmt.Errorf("failed to insert subscription payload: %w", pErr)
 			}
+		}
+
+		// Upsert raw original configuration candidate in the same transaction as facts convergence
+		origConfig := &domain.SubscriptionOriginalConfig{
+			SubscriptionID: sub.ID,
+			ContentDigest:  fmt.Sprintf("%x", sha256.Sum256(fetchResp.Body)),
+			Body:           fetchResp.Body,
+			FetchedAt:      startedAt,
+			ContentType:    fetchResp.ContentType,
+			FetchID:        fetchID,
+		}
+		if err := sqlite.UpsertOriginalConfigTx(ctx, tx, origConfig, sub.Revision); err != nil {
+			return err
 		}
 
 		type existingNodeRow struct {

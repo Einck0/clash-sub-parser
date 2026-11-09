@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -75,6 +76,7 @@ func registerSubscriptionRoutes(r chi.Router, service *subscription.Service, inv
 	r.Post("/subscriptions/{id}/refresh", h.refresh)
 	r.Get("/subscriptions/{id}/entries", h.listEntries)
 	r.Post("/subscriptions/{id}/entries/{entry_id}/override", h.overrideEntry)
+	r.Get("/subscriptions/{id}/original-config", h.getOriginalConfig)
 }
 
 func (h subscriptionHandler) listEntries(w http.ResponseWriter, r *http.Request) {
@@ -180,6 +182,38 @@ func (h subscriptionHandler) overrideEntry(w http.ResponseWriter, r *http.Reques
 	}
 
 	WriteSuccess(w, r, http.StatusOK, dto)
+}
+
+func (h subscriptionHandler) getOriginalConfig(w http.ResponseWriter, r *http.Request) {
+	subID := chi.URLParam(r, "id")
+	if strings.TrimSpace(subID) == "" {
+		WriteDomainError(w, r, domain.NewValidationError("missing_subscription_id", "subscription ID is required"))
+		return
+	}
+
+	if h.inventory == nil {
+		WriteDomainError(w, r, domain.NewInternalError("inventory_unavailable", "inventory service not available"))
+		return
+	}
+
+	original, err := h.inventory.GetOriginalConfig(r.Context(), subID)
+	if err != nil {
+		WriteDomainError(w, r, err)
+		return
+	}
+	if original == nil || len(original.Body) == 0 {
+		WriteDomainError(w, r, domain.NewNotFoundError("original_config_not_found", "subscription original configuration not found"))
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", `attachment; filename="subscription-original.conf"`)
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("Content-Length", strconv.Itoa(len(original.Body)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(original.Body)
 }
 
 func (h subscriptionHandler) list(w http.ResponseWriter, r *http.Request) {

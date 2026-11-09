@@ -55,7 +55,7 @@ func (r *subscriptionRepository) GetByID(ctx context.Context, id string) (*domai
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, domain.NewNotFoundError("subscription_not_found", fmt.Sprintf("subscription %s not found", id))
+			return nil, domain.NewNotFoundError("subscription_not_found", "subscription not found")
 		}
 		return nil, fmt.Errorf("failed to query subscription %s: %w", id, err)
 	}
@@ -231,16 +231,7 @@ func (r *subscriptionRepository) attachNodeCounts(ctx context.Context, subs []*d
 
 	noticeExclusion := ""
 	if entriesTableExists > 0 {
-		noticeExclusion = `AND ns.node_logical_id NOT IN (
-			SELECT se1.node_logical_id FROM subscription_entries se1
-			WHERE se1.node_logical_id IS NOT NULL
-			  AND COALESCE(se1.user_kind_override, se1.entry_kind) = 'notice'
-			  AND NOT EXISTS (
-			      SELECT 1 FROM subscription_entries se2
-			      WHERE se2.node_logical_id = se1.node_logical_id
-			        AND se2.user_kind_override = 'proxy'
-			  )
-		)`
+		noticeExclusion = fmt.Sprintf("AND ns.node_logical_id NOT IN (%s)", confirmedNoticeExclusionSubquery)
 	}
 
 	query := fmt.Sprintf(`
@@ -526,12 +517,18 @@ func (r *subscriptionRepository) Update(ctx context.Context, sub *domain.Subscri
 
 	updatedStr := domain.NowUTC().Format(time.RFC3339)
 	return WithTx(ctx, r.db, func(ctx context.Context, tx *sql.Tx) error {
-		var oldPrefix string
-		if err := tx.QueryRowContext(ctx, "SELECT prefix FROM subscriptions WHERE id = ?", sub.ID).Scan(&oldPrefix); err != nil {
+		var oldPrefix, oldSourceURL string
+		if err := tx.QueryRowContext(ctx, "SELECT prefix, source_url_secret_ref FROM subscriptions WHERE id = ?", sub.ID).Scan(&oldPrefix, &oldSourceURL); err != nil {
 			if err == sql.ErrNoRows {
-				return domain.NewNotFoundError("subscription_not_found", fmt.Sprintf("subscription %s not found", sub.ID))
+				return domain.NewNotFoundError("subscription_not_found", "subscription not found")
 			}
 			return err
+		}
+
+		if oldSourceURL != sub.SourceURLSecretRef {
+			if _, delErr := tx.ExecContext(ctx, "DELETE FROM subscription_original_configs WHERE subscription_id = ?;", sub.ID); delErr != nil {
+				return fmt.Errorf("failed to invalidate subscription original config: %w", delErr)
+			}
 		}
 
 		if sub.IsPrimary {
@@ -566,7 +563,7 @@ func (r *subscriptionRepository) Update(ctx context.Context, sub *domain.Subscri
 			return err
 		}
 		if affected == 0 {
-			return domain.NewNotFoundError("subscription_not_found", fmt.Sprintf("subscription %s not found", sub.ID))
+			return domain.NewNotFoundError("subscription_not_found", "subscription not found")
 		}
 
 		if oldPrefix != sub.Prefix {
@@ -586,7 +583,7 @@ func (r *subscriptionRepository) Delete(ctx context.Context, id string) error {
 		var subName, oldPrefix string
 		err := tx.QueryRowContext(ctx, "SELECT name, prefix FROM subscriptions WHERE id = ?;", id).Scan(&subName, &oldPrefix)
 		if err == sql.ErrNoRows {
-			return domain.NewNotFoundError("subscription_not_found", fmt.Sprintf("subscription %s not found", id))
+			return domain.NewNotFoundError("subscription_not_found", "subscription not found")
 		}
 		if err != nil {
 			return fmt.Errorf("failed to query subscription for deletion: %w", err)
@@ -684,7 +681,7 @@ func (r *subscriptionRepository) Delete(ctx context.Context, id string) error {
 			return err
 		}
 		if affected == 0 {
-			return domain.NewNotFoundError("subscription_not_found", fmt.Sprintf("subscription %s not found", id))
+			return domain.NewNotFoundError("subscription_not_found", "subscription not found")
 		}
 
 		if _, err := tx.ExecContext(ctx, "DELETE FROM node_sources WHERE subscription_id = ?;", id); err != nil {

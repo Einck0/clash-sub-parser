@@ -130,8 +130,8 @@ func WriteDomainError(w http.ResponseWriter, r *http.Request, err error) {
 	}
 
 	var capErr *compiler.CapabilityError
-	if errors.As(err, &capErr) {
-		WriteError(w, r, http.StatusUnprocessableEntity, "unsupported_target_capability", capErr.Error())
+	if errors.As(err, &capErr) && capErr != nil {
+		WriteError(w, r, http.StatusUnprocessableEntity, "unsupported_target_capability", sanitizeErrorMessage(capErr.Error()))
 		return
 	}
 

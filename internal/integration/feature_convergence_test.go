@@ -51,8 +51,8 @@ func (r *controlledFakeRunner) Run(ctx context.Context, run *domain.ProbeRun, no
 	return nil
 }
 
-// TestFeatureConvergence_SchemaMigrationTo28 verifies all current migrations through 28.
-func TestFeatureConvergence_SchemaMigrationTo28(t *testing.T) {
+// TestFeatureConvergence_SchemaMigrationTo29 verifies all current migrations through 29.
+func TestFeatureConvergence_SchemaMigrationTo29(t *testing.T) {
 	ctx := context.Background()
 	db, err := sqlite.Open(sqlite.Config{
 		Path:        fmt.Sprintf("file:migration_test_%d?mode=memory&cache=shared", time.Now().UnixNano()),
@@ -66,7 +66,7 @@ func TestFeatureConvergence_SchemaMigrationTo28(t *testing.T) {
 
 	runner := sqlite.NewMigrationRunner(db, migrations.FS)
 	if err := runner.Run(ctx); err != nil {
-		t.Fatalf("failed to run migrations 1..28: %v", err)
+		t.Fatalf("failed to run migrations 1..29: %v", err)
 	}
 
 	report, err := sqlite.CheckReadiness(ctx, db)
@@ -76,8 +76,8 @@ func TestFeatureConvergence_SchemaMigrationTo28(t *testing.T) {
 	if !report.Ready {
 		t.Fatalf("expected readiness report Ready=true, got report: %+v", report)
 	}
-	if report.SchemaVersion != 28 {
-		t.Fatalf("expected schema version 28 (sources, fetch settings, revision snapshots, prefix, subscription links, group position, primary subscription, inherit global filter, rule categories, dns config, proxy chain bindings, and subscription retention overrides), got %d", report.SchemaVersion)
+	if report.SchemaVersion != 29 {
+		t.Fatalf("expected schema version 29 (including latest original subscription configurations), got %d", report.SchemaVersion)
 	}
 	if len(report.MissingTables) > 0 {
 		t.Fatalf("unexpected missing tables: %v", report.MissingTables)
@@ -86,8 +86,9 @@ func TestFeatureConvergence_SchemaMigrationTo28(t *testing.T) {
 		t.Fatalf("unexpected FK violations: %v", report.ForeignKeyViolations)
 	}
 
-	// Verify tables from migration 7 and 8 exist, plus subscription_links from migration 22, dns_config from migration 26, proxy_chain_bindings from migration 27, and subscription_entry_overrides from migration 28
-	for _, tbl := range []string{"probe_schedules", "probe_batches", "probe_batch_runs", "global_node_filters", "group_node_filters", "subscription_links", "dns_config", "proxy_chain_bindings", "subscription_entry_overrides"} {
+	// Include the standalone latest-original store from migration 29 alongside
+	// existing probe, policy, publication, and durable override tables.
+	for _, tbl := range []string{"probe_schedules", "probe_batches", "probe_batch_runs", "global_node_filters", "group_node_filters", "subscription_links", "dns_config", "proxy_chain_bindings", "subscription_entry_overrides", "subscription_original_configs"} {
 		var name string
 		err := db.QueryRowContext(ctx, "SELECT name FROM sqlite_master WHERE type='table' AND name=?", tbl).Scan(&name)
 		if err != nil {

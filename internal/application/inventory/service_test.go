@@ -863,7 +863,9 @@ func TestReconcile_NodeViewProjection(t *testing.T) {
 	}
 }
 
-// 11. Concurrency test: verify concurrent reconciles and list queries pass under race detector.
+// 11. Concurrent reads remain safe while refreshes either commit atomically or
+// report the expected stale-refresh conflict. Deterministic stale-writer ordering
+// is covered by ConcurrentRefreshRetainsNewerCommit in original_config_test.go.
 func TestReconcile_ConcurrentAccess(t *testing.T) {
 	ctx := context.Background()
 	db, subRepo, fetchRepo, nodeRepo, sourceRepo := setupTestEnv(t)
@@ -889,38 +891,90 @@ func TestReconcile_ConcurrentAccess(t *testing.T) {
 
 	svc := inventory.NewService(db, subRepo, fetchRepo, nodeRepo, sourceRepo, fetcher)
 
+	type attempt struct {
+		subID  string
+		result *inventory.ReconcileResult
+		err    error
+	}
 	var wg sync.WaitGroup
-	errCh := make(chan error, 10)
+	attempts := make(chan attempt, 10)
+	readErrors := make(chan error, 5)
 
 	for i := 0; i < 5; i++ {
-		wg.Add(2)
-		go func() {
-			defer wg.Done()
-			if _, err := svc.ReconcileSubscription(ctx, sub1ID); err != nil {
-				errCh <- err
-			}
-		}()
-		go func() {
-			defer wg.Done()
-			if _, err := svc.ReconcileSubscription(ctx, sub2ID); err != nil {
-				errCh <- err
-			}
-		}()
+		for _, subID := range []string{sub1ID, sub2ID} {
+			wg.Add(1)
+			go func(id string) {
+				defer wg.Done()
+				result, err := svc.ReconcileSubscription(ctx, id)
+				attempts <- attempt{subID: id, result: result, err: err}
+			}(subID)
+		}
 	}
 
 	for i := 0; i < 5; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, _, _ = svc.ListNodes(ctx, domain.NodeFilter{ActiveOnly: true})
+			_, _, err := svc.ListNodes(ctx, domain.NodeFilter{ActiveOnly: true})
+			readErrors <- err
 		}()
 	}
 
 	wg.Wait()
-	close(errCh)
+	close(attempts)
+	close(readErrors)
 
-	for err := range errCh {
-		t.Errorf("concurrent reconcile error: %v", err)
+	committed := make(map[string]int)
+	for a := range attempts {
+		if a.err != nil {
+			domErr, ok := domain.AsDomainError(a.err)
+			if !ok || domErr.Category != domain.CategoryConflict || domErr.Code != "subscription_refresh_conflict" || a.result != nil {
+				t.Errorf("unexpected concurrent reconcile result: result=%+v err=%v", a.result, a.err)
+			}
+			continue
+		}
+		if a.result == nil || a.result.Outcome != domain.FetchOutcomeSuccess || a.result.SubscriptionID != a.subID {
+			t.Errorf("invalid successful reconcile result: %+v", a.result)
+			continue
+		}
+		committed[a.subID]++
+	}
+	for err := range readErrors {
+		if err != nil {
+			t.Errorf("concurrent list error: %v", err)
+		}
+	}
+
+	for _, subID := range []string{sub1ID, sub2ID} {
+		if committed[subID] < 1 {
+			t.Fatalf("no refresh committed for subscription %s", subID)
+		}
+		// Conflicting attempts must not leave fetch/payload facts behind.
+		for _, table := range []string{"subscription_fetches", "subscription_payloads", "subscription_original_configs"} {
+			want := committed[subID]
+			if table == "subscription_original_configs" {
+				want = 1
+			}
+			var count int
+			if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table+" WHERE subscription_id = ?", subID).Scan(&count); err != nil || count != want {
+				t.Errorf("unexpected %s facts: count=%d want=%d err=%v", table, count, want, err)
+			}
+		}
+		original, err := svc.GetOriginalConfig(ctx, subID)
+		if err != nil {
+			t.Fatalf("get original after concurrent refreshes: %v", err)
+		}
+		wantBody := clashYAMLSub1WithTwoNodes
+		if subID == sub2ID {
+			wantBody = clashYAMLSub2WithSharedAndUnique
+		}
+		if string(original.Body) != wantBody {
+			t.Error("concurrent refresh changed original bytes or subscription ownership")
+		}
+		var sourceCount, matchingFetchCount int
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(last_seen_fetch_id = ?), 0) FROM node_sources WHERE subscription_id = ?`, original.FetchID, subID).Scan(&sourceCount, &matchingFetchCount); err != nil || sourceCount != 2 || matchingFetchCount != 2 {
+			t.Errorf("inventory and original are not from the same commit: sources=%d matching=%d err=%v", sourceCount, matchingFetchCount, err)
+		}
 	}
 }
 
@@ -1268,4 +1322,3 @@ func TestReconcileSubscription_FilterRulesAndRenameRules(t *testing.T) {
 		t.Errorf("expected exactly 2 rows in nodes table after exclude filter, got %d", rawNodeCount3)
 	}
 }
-

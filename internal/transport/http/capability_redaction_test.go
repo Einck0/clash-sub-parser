@@ -64,8 +64,12 @@ func TestWriteDomainError_CapabilityError_RedactsSensitiveURLAndPassword(t *test
 		t.Fatalf("CRITICAL: message leaks secret query token: %s", errResp.Message)
 	}
 
-	// Verify standard redaction markers are present and non-sensitive structure is preserved
-	expectedRedactedURL := "https://admin:***@proxy.example.com/feed?token=***"
+	// The shared redactor masks all URL userinfo, including the username.
+	if strings.Contains(errResp.Message, "admin") {
+		t.Fatalf("message leaks URL username: %s", errResp.Message)
+	}
+	// Verify standard redaction markers and non-sensitive URL structure.
+	expectedRedactedURL := "https://***@proxy.example.com/feed?token=***"
 	if !strings.Contains(errResp.Message, expectedRedactedURL) {
 		t.Fatalf("expected message to contain redacted URL %q, got: %s", expectedRedactedURL, errResp.Message)
 	}

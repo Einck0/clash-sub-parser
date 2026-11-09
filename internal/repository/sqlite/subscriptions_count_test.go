@@ -83,9 +83,9 @@ func TestSubscriptionRepository_NodeCount_NoticeExclusionRegressions(t *testing.
 
 		// Insert node_source linked to latest good fetch
 		_, err = db.ExecContext(ctx, `
-			INSERT INTO node_sources (subscription_id, node_logical_id, source_key, last_seen_fetch_id)
-			VALUES (?, ?, ?, ?);
-		`, subID, n.logicalID, "key-"+n.logicalID, fetchID)
+			INSERT INTO node_sources (subscription_id, node_logical_id, last_seen_fetch_id)
+			VALUES (?, ?, ?);
+		`, subID, n.logicalID, fetchID)
 		if err != nil {
 			t.Fatalf("insert node_source for %s failed: %v", n.logicalID, err)
 		}
@@ -218,8 +218,8 @@ func TestSubscriptionRepository_NodeCount_StaleNoticeCurrentProxy(t *testing.T) 
 
 	// node_source links to latest fetch2
 	mustExec(`
-		INSERT INTO node_sources (subscription_id, node_logical_id, source_key, last_seen_fetch_id)
-		VALUES (?, ?, 'key-evolving', ?);
+		INSERT INTO node_sources (subscription_id, node_logical_id, last_seen_fetch_id)
+		VALUES (?, ?, ?);
 	`, subID, nodeID, fetch2)
 
 	// Old entry was notice

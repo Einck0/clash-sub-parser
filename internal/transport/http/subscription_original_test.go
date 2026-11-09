@@ -53,6 +53,11 @@ func setupOriginalConfigRouter(t *testing.T, subService *subscription.Service, i
 	t.Helper()
 
 	routerCfg := newTestRouterConfig(true)
+	// Management middleware recognizes export credentials independently of the
+	// publication-specific validator, matching the production router wiring.
+	routerCfg.IsPublicationToken = func(_ context.Context, token string) bool {
+		return token == testPublicationToken
+	}
 	if openAuth {
 		routerCfg.AdminToken = ""
 		routerCfg.TokenHolder = nil
@@ -123,24 +128,35 @@ func TestOriginalConfigEndpoint_AuthEnforcement(t *testing.T) {
 		}
 	})
 
-	t.Run("protected_mode_publication_export_token_rejected_403", func(t *testing.T) {
-		router := setupOriginalConfigRouter(t, subService, invService, false)
-		req := httptest.NewRequest(http.MethodGet, path, nil)
-		req.Header.Set("Authorization", "Bearer "+testPublicationToken)
-		rec := httptest.NewRecorder()
-		router.ServeHTTP(rec, req)
+	for _, mode := range []struct {
+		name string
+		open bool
+	}{
+		{name: "protected", open: false},
+		{name: "open", open: true},
+	} {
+		t.Run(mode.name+"_mode_publication_export_token_rejected_403", func(t *testing.T) {
+			router := setupOriginalConfigRouter(t, subService, invService, mode.open)
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			req.Header.Set("Authorization", "Bearer "+testPublicationToken)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
 
-		if rec.Code != http.StatusForbidden {
-			t.Fatalf("expected 403 Forbidden for publication export token, got %d", rec.Code)
-		}
-		var errResp testErrorResponse
-		if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
-			t.Fatalf("failed to decode json error response: %v", err)
-		}
-		if errResp.Code != "invalid_token_scope" {
-			t.Fatalf("expected code invalid_token_scope, got %q", errResp.Code)
-		}
-	})
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("expected 403 Forbidden for publication export token, got %d", rec.Code)
+			}
+			var errResp testErrorResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
+				t.Fatalf("failed to decode json error response: %v", err)
+			}
+			if errResp.Code != "invalid_token_scope" {
+				t.Fatalf("expected code invalid_token_scope, got %q", errResp.Code)
+			}
+			if bytes.Contains(rec.Body.Bytes(), []byte("proxies:")) {
+				t.Fatal("forbidden response leaked original configuration")
+			}
+		})
+	}
 
 	t.Run("protected_mode_valid_admin_bearer_allowed_200", func(t *testing.T) {
 		router := setupOriginalConfigRouter(t, subService, invService, false)

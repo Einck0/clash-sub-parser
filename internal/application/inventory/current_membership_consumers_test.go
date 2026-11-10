@@ -103,9 +103,12 @@ func TestCurrentMembershipSharedPartialConsumers(t *testing.T) {
 		check("facts T", membership[other], wantT)
 	}
 	assert("partial", []string{"A", "B", "C"}, []string{"A", "C"}, []string{"B"})
-	var stale string
-	if err := db.QueryRowContext(ctx, `SELECT ns.last_seen_fetch_id FROM node_sources ns JOIN nodes n ON n.logical_id=ns.node_logical_id WHERE ns.subscription_id=? AND n.display_name='B'`, s).Scan(&stale); err != nil || stale != first.FetchID {
-		t.Fatalf("historical B: %s %v", stale, err)
+	var current, historical int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM node_sources ns JOIN nodes n ON n.logical_id=ns.node_logical_id WHERE ns.subscription_id=? AND n.display_name='B'`, s).Scan(&current); err != nil || current != 0 {
+		t.Fatalf("B retained current membership: count=%d err=%v", current, err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM node_source_history h JOIN nodes n ON n.logical_id=h.node_logical_id WHERE h.subscription_id=? AND n.display_name='B' AND h.relation_state='verified' AND h.cause='refresh_removed'`, s).Scan(&historical); err != nil || historical == 0 {
+		t.Fatalf("B removal history missing: count=%d err=%v", historical, err)
 	}
 	if partial.FetchID == first.FetchID {
 		t.Fatal("partial fetch reused initial ID")

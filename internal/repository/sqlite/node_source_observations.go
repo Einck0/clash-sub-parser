@@ -120,7 +120,9 @@ func PreserveSubscriptionGenerationTx(ctx context.Context, tx *sql.Tx, subID str
 		SELECT 'observation:'||o.node_logical_id||':'||o.source_identity,o.node_logical_id,o.subscription_id,o.source_identity,s.name,
 		'unknown','unresolved',o.observed_at,o.observed_at,'retention_entry_observation','observation:'||o.source_identity,'{}',?
 		FROM node_source_observations o JOIN subscriptions s ON s.id=o.subscription_id
-		WHERE o.subscription_id=? AND NOT EXISTS(SELECT 1 FROM node_source_history h WHERE h.node_logical_id=o.node_logical_id AND h.source_identity=o.source_identity)
+		WHERE o.subscription_id=?
+		AND NOT EXISTS(SELECT 1 FROM node_sources ns WHERE ns.node_logical_id=o.node_logical_id AND ns.subscription_id=o.subscription_id)
+		AND NOT EXISTS(SELECT 1 FROM node_source_history h WHERE h.node_logical_id=o.node_logical_id AND h.source_identity=o.source_identity)
 		ON CONFLICT(node_logical_id,evidence_key) DO NOTHING`, now, subID)
 	if err != nil {
 		return err

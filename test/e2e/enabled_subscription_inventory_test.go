@@ -152,7 +152,7 @@ func TestEnabledSubscriptionInventoryE2E(t *testing.T) {
 	payloadA1 := "01a10000-0000-7000-a000-0000000000a1"
 	_, err := harness.DB.ExecContext(ctx, `
 		INSERT INTO subscription_payloads (id, subscription_id, fetch_id, content_digest, body_blob, http_status, headers_json, pinned, created_at)
-		VALUES (?, ?, ?, 'sha256:digest', X'00', 200, '{}', 0, ?);
+		VALUES (?, ?, ?, 'sha256:digest', X'', 200, '{}', 0, ?);
 	`, payloadA1, subA, fetchA1, nowStr)
 	if err != nil {
 		t.Fatalf("failed to insert payload: %v", err)

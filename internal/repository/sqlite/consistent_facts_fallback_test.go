@@ -115,7 +115,7 @@ func TestConsistentFactsLoader_PrimarySubscriptionFallbackFields(t *testing.T) {
 	payloadP := "payload-p1"
 	_, err = db.ExecContext(ctx, `
 		INSERT INTO subscription_payloads (id, subscription_id, fetch_id, content_digest, body_blob, pinned, created_at)
-		VALUES (?, ?, ?, 'digest-notice', X'deadbeef', 1, ?);
+		VALUES (?, ?, ?, 'digest-notice', X'', 1, ?);
 	`, payloadP, subPrimaryID, fetchP, now.Format(time.RFC3339Nano))
 	if err != nil {
 		t.Fatalf("insert notice payload failed: %v", err)

@@ -266,6 +266,10 @@ func TestConsistentFactsLoader_ConcurrentReads(t *testing.T) {
 		VALUES (?, 'ss', 'Concurrent Node', '1.1.1.1', 8388, '{"method":"aes-128-gcm","password":"p"}', 1, ?, ?, 1);
 	`, nodeID, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
 
+	if _, err := db.ExecContext(ctx, `INSERT INTO node_source_history(id,node_logical_id,source_identity,source_label,relation_state,cause,evidence_kind,evidence_key,created_at) VALUES ('manual-concurrent',?,'manual','manual','verified','manual_confirmed','fixture','manual-concurrent',?)`, nodeID, now); err != nil {
+		t.Fatal(err)
+	}
+
 	const goroutines = 10
 	var wg sync.WaitGroup
 	errCh := make(chan error, goroutines)

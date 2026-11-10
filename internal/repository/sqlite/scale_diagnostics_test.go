@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"clash-sub-parser/internal/domain"
+	"clash-sub-parser/migrations"
 )
 
 // TestScaleDiagnostics measures the real list predicate against synthetic retained
@@ -17,8 +18,19 @@ func TestScaleDiagnostics(t *testing.T) {
 	defer stop()
 	started := time.Now()
 	cfg := DefaultConfig(filepath.Join(t.TempDir(), "scale.db"))
-	db, err := OpenAndMigrate(ctx, cfg)
+	// Explicit offline preparation schema: historical generations remain, while
+	// migration 30 supplies the evidence tables required by the facts loader.
+	// It has no readiness seal or modern single-generation constraints.
+	db, err := Open(cfg)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := NewMigrationRunner(db, migrations.FS).RunUpTo(ctx, 29); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := NewMigrationRunner(db, migrations.FS).RunUpTo(ctx, 30); err != nil {
+		_ = db.Close()
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
@@ -261,11 +273,11 @@ func TestScaleDiagnostics(t *testing.T) {
 		t.Fatal(err)
 	}
 	started = time.Now()
-	db, err = OpenAndMigrate(ctx, cfg)
+	db, err = Open(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("stage=reopen_and_migrate elapsed=%s", time.Since(started))
+	t.Logf("stage=reopen_offline_prepared elapsed=%s", time.Since(started))
 	items, total, err := NewNodeRepository(db).List(ctx, domain.NodeFilter{
 		Scope: domain.NodeScopeEnabledSubscriptions, ActiveOnly: true, ExcludeNotices: true,
 		Pagination: domain.Pagination{Page: 10, PageSize: 100},

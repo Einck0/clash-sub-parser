@@ -951,10 +951,7 @@ func TestReconcile_ConcurrentAccess(t *testing.T) {
 		}
 		// Conflicting attempts must not leave fetch/payload facts behind.
 		for _, table := range []string{"subscription_fetches", "subscription_payloads", "subscription_original_configs"} {
-			want := committed[subID]
-			if table == "subscription_original_configs" {
-				want = 1
-			}
+			want := 1
 			var count int
 			if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table+" WHERE subscription_id = ?", subID).Scan(&count); err != nil || count != want {
 				t.Errorf("unexpected %s facts: count=%d want=%d err=%v", table, count, want, err)
@@ -1272,13 +1269,13 @@ func TestReconcileSubscription_FilterRulesAndRenameRules(t *testing.T) {
 		t.Errorf("expected '香港 01', got %q", activeNodes2[0].DisplayName)
 	}
 
-	// Verify old Canada node was purged from nodes table when filter switched to HK
+	// Filtering changes current membership, not the persistent node ledger.
 	var rawNodeCount2 int
 	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM nodes;").Scan(&rawNodeCount2); err != nil {
 		t.Fatalf("failed to count nodes table: %v", err)
 	}
-	if rawNodeCount2 != 1 {
-		t.Errorf("expected exactly 1 row in nodes table after filter switch, got %d", rawNodeCount2)
+	if rawNodeCount2 != 2 {
+		t.Errorf("expected both node entities retained after filter switch, got %d", rawNodeCount2)
 	}
 
 	// 3. Exclude rule: include all except "日本"

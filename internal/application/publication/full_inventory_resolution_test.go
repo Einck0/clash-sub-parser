@@ -171,14 +171,18 @@ func TestPublication_250Nodes_FullInventoryResolutionAndExportRegression(t *test
 	_ = nodeRepo.UpsertBatch(ctx, []domain.Node{noticeNode})
 	_, _ = db.ExecContext(ctx, `INSERT INTO node_sources (node_logical_id, subscription_id, last_seen_fetch_id) VALUES ('node-notice-tw', ?, ?);`, subID, fetchID)
 	payloadID := "payload-notice-01"
-	_, _ = db.ExecContext(ctx, `
+	if _, err := db.ExecContext(ctx, `
 		INSERT INTO subscription_payloads (id, subscription_id, fetch_id, content_digest, body_blob, pinned, created_at)
-		VALUES (?, ?, ?, 'digest-notice', X'deadbeef', 1, ?);
-	`, payloadID, subID, fetchID, nowStr)
-	_, _ = db.ExecContext(ctx, `
+		VALUES (?, ?, ?, 'digest-notice', X'', 1, ?);
+	`, payloadID, subID, fetchID, nowStr); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `
 		INSERT INTO subscription_entries (id, payload_id, subscription_id, ordinal, source_key, raw_name, protocol, server, port, entry_kind, classification_reason, node_logical_id, created_at)
 		VALUES ('entry-notice-01', ?, ?, 0, 'k-notice', 'TW-Taiwan-Notice-Traffic', 'ss', '198.51.100.252', 8388, 'notice', 'Notice pattern match', 'node-notice-tw', ?);
-	`, payloadID, subID, nowStr)
+	`, payloadID, subID, nowStr); err != nil {
+		t.Fatal(err)
+	}
 
 	_ = subRepo
 

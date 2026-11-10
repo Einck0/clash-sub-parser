@@ -1297,6 +1297,9 @@ func TestNodesHealthStatusValidationAndUnknownRoute(t *testing.T) {
 	if err != nil {
 		t.Fatalf("upsert node: %v", err)
 	}
+	if _, err := db.ExecContext(context.Background(), `INSERT INTO node_source_history(id,node_logical_id,source_identity,source_label,relation_state,cause,evidence_kind,evidence_key,created_at) VALUES ('manual-unknown-health',?,'manual','manual','verified','manual_confirmed','fixture','manual-unknown-health',?)`, nodeID, now); err != nil {
+		t.Fatal(err)
+	}
 
 	router := setupNodesTestRouter(t, db)
 

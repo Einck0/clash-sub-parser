@@ -63,16 +63,22 @@ func (r *subscriptionPayloadRepository) Save(ctx context.Context, p *domain.Subs
 }
 
 func (r *subscriptionPayloadRepository) GetByID(ctx context.Context, id string) (*domain.SubscriptionPayload, error) {
-	const query = `
-	SELECT id, subscription_id, fetch_id, content_digest, X'' AS body_blob, http_status, headers_json, pinned, created_at
-	FROM subscription_payloads WHERE id = ?
-	UNION ALL SELECT payload_id,COALESCE(subscription_id,''),fetch_id,content_digest,X'',http_status,'{}',pinned,original_created_at FROM subscription_payload_evidence WHERE payload_id=? AND NOT EXISTS(SELECT 1 FROM subscription_payloads WHERE id=?);`
+	query := `SELECT id, subscription_id, fetch_id, content_digest, X'' AS body_blob, http_status, headers_json, pinned, created_at FROM subscription_payloads WHERE id = ?`
+	args := []any{id}
+	var evidenceTable int
+	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='subscription_payload_evidence'`).Scan(&evidenceTable); err != nil {
+		return nil, err
+	}
+	if evidenceTable != 0 {
+		query += ` UNION ALL SELECT payload_id,COALESCE(subscription_id,''),fetch_id,content_digest,X'',http_status,'{}',pinned,original_created_at FROM subscription_payload_evidence WHERE payload_id=? AND NOT EXISTS(SELECT 1 FROM subscription_payloads WHERE id=?)`
+		args = append(args, id, id)
+	}
 
 	var p domain.SubscriptionPayload
 	var pinnedInt int
 	var createdStr string
 
-	err := r.db.QueryRowContext(ctx, query, id, id, id).Scan(
+	err := r.db.QueryRowContext(ctx, query, args...).Scan(
 		&p.ID,
 		&p.SubscriptionID,
 		&p.FetchID,
@@ -902,6 +908,10 @@ func (r *publicationPayloadRefRepository) AddRefs(ctx context.Context, publicati
 	VALUES (?, ?);`
 
 	return WithTx(ctx, r.db, func(ctx context.Context, tx *sql.Tx) error {
+		var evidenceTable int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='subscription_payload_evidence'`).Scan(&evidenceTable); err != nil {
+			return err
+		}
 		stmt, err := tx.PrepareContext(ctx, query)
 		if err != nil {
 			return fmt.Errorf("failed to prepare payload ref statement: %w", err)
@@ -912,9 +922,11 @@ func (r *publicationPayloadRefRepository) AddRefs(ctx context.Context, publicati
 			if strings.TrimSpace(pID) == "" {
 				continue
 			}
-			if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO subscription_payload_evidence (payload_id,subscription_id,source_identity,fetch_id,content_digest,original_created_at,captured_at,http_status,evidence_kind,quality,pinned)
-			SELECT id,subscription_id,'sub:'||subscription_id,fetch_id,content_digest,created_at,?,http_status,'publication','observed',pinned FROM subscription_payloads WHERE id=?`, time.Now().UTC().Format(time.RFC3339Nano), strings.TrimSpace(pID)); err != nil {
-				return err
+			if evidenceTable != 0 {
+				if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO subscription_payload_evidence (payload_id,subscription_id,source_identity,fetch_id,content_digest,original_created_at,captured_at,http_status,evidence_kind,quality,pinned)
+				SELECT id,subscription_id,'sub:'||subscription_id,fetch_id,content_digest,created_at,?,http_status,'publication','observed',pinned FROM subscription_payloads WHERE id=?`, time.Now().UTC().Format(time.RFC3339Nano), strings.TrimSpace(pID)); err != nil {
+					return err
+				}
 			}
 			if _, err := stmt.ExecContext(ctx, publicationID, strings.TrimSpace(pID)); err != nil {
 				return fmt.Errorf("failed to insert publication payload ref (%s -> %s): %w", publicationID, pID, err)

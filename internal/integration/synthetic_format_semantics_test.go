@@ -257,9 +257,12 @@ func TestSyntheticPartialFormatsDoNotPolluteCurrentMembership(t *testing.T) {
 				if n.DisplayName != "old" {
 					continue
 				}
-				var lastSeen string
-				if err := db.QueryRowContext(ctx, "SELECT last_seen_fetch_id FROM node_sources WHERE subscription_id = ? AND node_logical_id = ?", "primary", n.LogicalID).Scan(&lastSeen); err != nil || lastSeen != initial.FetchID {
-					t.Fatalf("old source history was deleted or falsely marked current: %v", err)
+				var current, history int
+				if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM node_sources WHERE subscription_id = ? AND node_logical_id = ?", "primary", n.LogicalID).Scan(&current); err != nil || current != 0 {
+					t.Fatalf("old source remains current: count=%d err=%v", current, err)
+				}
+				if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM node_source_history WHERE subscription_id = ? AND node_logical_id = ? AND relation_state='verified' AND cause='refresh_removed'", "primary", n.LogicalID).Scan(&history); err != nil || history == 0 {
+					t.Fatalf("old source removal history missing: count=%d err=%v", history, err)
 				}
 			}
 		})

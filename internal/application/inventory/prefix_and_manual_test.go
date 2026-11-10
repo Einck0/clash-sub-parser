@@ -138,6 +138,11 @@ func TestManualNodes_ProtectedFromSubscriptionDeletionAndInScope(t *testing.T) {
 		t.Fatalf("failed to insert manual node: %v", err)
 	}
 
+	// Explicit manual confirmation, not absence of subscription provenance, grants scope.
+	if _, err := db.ExecContext(ctx, `INSERT INTO node_source_history(id,node_logical_id,source_identity,source_label,relation_state,cause,evidence_kind,evidence_key,created_at) VALUES ('manual-fixture',?,'manual','manual','verified','manual_confirmed','fixture','manual-fixture',?)`, manualNodeID, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+
 	// 2. Ingest subscription with 1 node
 	subID := domain.MustNewUUIDv7()
 	url := "https://provider.example.com/sub"

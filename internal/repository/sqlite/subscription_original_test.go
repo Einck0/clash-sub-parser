@@ -400,18 +400,6 @@ func TestSubscriptionOriginalRepository_HistoryPruningIndependence(t *testing.T)
 		t.Fatalf("failed to insert test payload: %v", err)
 	}
 
-	// Two newer useful payloads make the old payload eligible for pruning.
-	for i := 0; i < 2; i++ {
-		newFetch, newPayload := fmt.Sprintf("fetch-new-%d", i), fmt.Sprintf("payload-new-%d", i)
-		newTime := time.Now().Add(time.Duration(-i) * time.Minute).UTC().Format(time.RFC3339)
-		if _, err := db.ExecContext(ctx, `INSERT INTO subscription_fetches (id, subscription_id, started_at, outcome, content_digest, nodes_parsed, nodes_valid) VALUES (?, ?, ?, 'success', 'new', 1, 1)`, newFetch, sub.ID, newTime); err != nil {
-			t.Fatalf("insert newer fetch: %v", err)
-		}
-		if _, err := db.ExecContext(ctx, `INSERT INTO subscription_payloads (id, subscription_id, fetch_id, content_digest, body_blob, http_status, headers_json, pinned, created_at) VALUES (?, ?, ?, 'new', X'', 200, '{}', 0, ?)`, newPayload, sub.ID, newFetch, newTime); err != nil {
-			t.Fatalf("insert newer payload: %v", err)
-		}
-	}
-
 	// Store original config pointing to fetchID
 	body := []byte("proxies:\n  - name: independent-copy\n")
 	if err := sqlite.WithTx(ctx, db, func(ctx context.Context, tx *sql.Tx) error {
@@ -427,7 +415,27 @@ func TestSubscriptionOriginalRepository_HistoryPruningIndependence(t *testing.T)
 		t.Fatalf("store original: %v", err)
 	}
 
-	// Run retention pruning and verify the old payload actually disappeared.
+	// Parsed generations are replaced atomically, not accumulated for a later
+	// retention pass. Replacing them must not delete the independent raw slot.
+	for i := 0; i < 2; i++ {
+		newFetch, newPayload := fmt.Sprintf("fetch-new-%d", i), fmt.Sprintf("payload-new-%d", i)
+		newTime := time.Now().Add(time.Duration(i) * time.Minute).UTC().Format(time.RFC3339)
+		if err := sqlite.WithTx(ctx, db, func(ctx context.Context, tx *sql.Tx) error {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO subscription_fetches (id, subscription_id, started_at, outcome, content_digest, nodes_parsed, nodes_valid) VALUES (?, ?, ?, 'success', 'new', 1, 1)`, newFetch, sub.ID, newTime); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `DELETE FROM subscription_payloads WHERE subscription_id=?`, sub.ID); err != nil {
+				return err
+			}
+			_, err := tx.ExecContext(ctx, `INSERT INTO subscription_payloads (id, subscription_id, fetch_id, content_digest, body_blob, http_status, headers_json, pinned, created_at) VALUES (?, ?, ?, 'new', X'', 200, '{}', 0, ?)`, newPayload, sub.ID, newFetch, newTime)
+			return err
+		}); err != nil {
+			t.Fatalf("replace parsed generation: %v", err)
+		}
+	}
+
+	// Fetch retention protects the raw slot's original fetch even after its
+	// parsed payload is gone; it cannot silently erase or duplicate the body.
 	olderThan := time.Now().Add(-1 * time.Hour)
 	if _, err := sqlite.PruneSubscriptionRetention(ctx, db, sub.ID, 50, &olderThan); err != nil {
 		t.Fatalf("prune: %v", err)
@@ -437,7 +445,14 @@ func TestSubscriptionOriginalRepository_HistoryPruningIndependence(t *testing.T)
 		t.Fatalf("old payload was not pruned: count=%d err=%v", count, err)
 	}
 
-	// Original config must remain intact even if referenced fetch/payload was affected
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM subscription_payloads WHERE subscription_id=?`, sub.ID).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("parsed storage is not single-generation: count=%d err=%v", count, err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM subscription_fetches WHERE id=?`, fetchID).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("raw fetch was pruned: count=%d err=%v", count, err)
+	}
+
+	// Original config must remain intact even if its parsed payload was replaced.
 	got, err := origRepo.GetBySubscriptionID(ctx, sub.ID)
 	if err != nil {
 		t.Fatalf("expected original config to survive retention pruning, got err: %v", err)

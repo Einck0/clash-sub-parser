@@ -41,6 +41,53 @@ func newCleanSQLiteDB(t *testing.T) *sql.DB {
 	return db
 }
 
+func attachFixtureOrigin(t *testing.T, ctx context.Context, db *sql.DB, nodeID string, revision int, entryID string) {
+	t.Helper()
+	result, err := db.ExecContext(ctx, `UPDATE node_connection_versions SET source_entry_id=? WHERE node_logical_id=? AND connection_revision=? AND source_entry_id IS NULL`, entryID, nodeID, revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count, err := result.RowsAffected(); err != nil || count != 1 {
+		t.Fatalf("attach fixture origin: affected %d rows, err=%v", count, err)
+	}
+}
+
+// Follow the production replacement order in a single transaction.
+func replaceFixtureGeneration(t *testing.T, ctx context.Context, db *sql.DB, subID string) {
+	t.Helper()
+	if err := sqlite.WithTx(ctx, db, func(ctx context.Context, tx *sql.Tx) error {
+		if err := sqlite.PreserveSubscriptionGenerationTx(ctx, tx, subID); err != nil {
+			return err
+		}
+		result, err := tx.ExecContext(ctx, `DELETE FROM subscription_payloads WHERE subscription_id=?`, subID)
+		if err != nil {
+			return err
+		}
+		count, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if count != 1 {
+			return fmt.Errorf("replace fixture generation: deleted %d payloads, want 1", count)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertRetiredPayloadEvidence(t *testing.T, ctx context.Context, db *sql.DB, payloadRepo domain.SubscriptionPayloadRepository, payloadID, entryID, digest string) {
+	t.Helper()
+	var count int
+	if err := db.QueryRowContext(ctx, `SELECT (SELECT COUNT(*) FROM subscription_payloads WHERE id=?) + (SELECT COUNT(*) FROM subscription_entries WHERE id=?)`, payloadID, entryID).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("retired payload/entry remain: count=%d err=%v", count, err)
+	}
+	old, err := payloadRepo.GetByID(ctx, payloadID)
+	if err != nil || old == nil || old.ID != payloadID || old.ContentDigest != digest || len(old.BodyBlob) != 0 {
+		t.Fatalf("retired payload evidence mismatch: payload=%+v err=%v", old, err)
+	}
+}
+
 func TestPublicationPayloadRefs_DeduplicationAndPruneProtection(t *testing.T) {
 	ctx := context.Background()
 	db := newCleanSQLiteDB(t)
@@ -50,7 +97,6 @@ func TestPublicationPayloadRefs_DeduplicationAndPruneProtection(t *testing.T) {
 	fetchRepo := sqlite.NewSubscriptionFetchRepository(db)
 	payloadRepo := sqlite.NewSubscriptionPayloadRepository(db)
 	entryRepo := sqlite.NewSubscriptionEntryRepository(db)
-	verRepo := sqlite.NewNodeConnectionVersionRepository(db)
 	nodeRepo := sqlite.NewNodeRepository(db)
 	pubRepo := sqlite.NewPublicationRepository(db)
 	pubRefRepo := sqlite.NewPublicationPayloadRefRepository(db)
@@ -171,27 +217,10 @@ func TestPublicationPayloadRefs_DeduplicationAndPruneProtection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Link node1 and node2 versions to entry1 and entry2
-	v1 := domain.NodeConnectionVersion{
-		NodeLogicalID:       nodeID1,
-		ConnectionRevision:  1,
-		EffectiveConfigJSON: `{"server":"1.1.1.1","port":8388}`,
-		ConfigFingerprint:   "fp1",
-		SourceEntryID:       &entryID1,
-		SchemaVersion:       1,
-		CreatedAt:           now,
+	// UpsertBatch already creates immutable versions; attach the known fixture origins.
+	for _, pair := range [][2]string{{nodeID1, entryID1}, {nodeID2, entryID2}} {
+		attachFixtureOrigin(t, ctx, db, pair[0], 1, pair[1])
 	}
-	v2 := domain.NodeConnectionVersion{
-		NodeLogicalID:       nodeID2,
-		ConnectionRevision:  1,
-		EffectiveConfigJSON: `{"server":"1.1.1.2","port":8388}`,
-		ConfigFingerprint:   "fp2",
-		SourceEntryID:       &entryID2,
-		SchemaVersion:       1,
-		CreatedAt:           now,
-	}
-	_ = verRepo.Save(ctx, &v1)
-	_ = verRepo.Save(ctx, &v2)
 
 	// Create policy and revision
 	rev := domain.ConfigurationRevision{
@@ -295,7 +324,6 @@ func TestPublicationPayloadRefs_SnapshotSourceVersion_UpdateSource_PrunePreserva
 	pubRefRepo := sqlite.NewPublicationPayloadRefRepository(db)
 	payloadRepo := sqlite.NewSubscriptionPayloadRepository(db)
 	entryRepo := sqlite.NewSubscriptionEntryRepository(db)
-	versionRepo := sqlite.NewNodeConnectionVersionRepository(db)
 	nodeRepo := sqlite.NewNodeRepository(db)
 	pubRepo := sqlite.NewPublicationRepository(db)
 	subRepo := sqlite.NewSubscriptionRepository(db)
@@ -388,17 +416,7 @@ func TestPublicationPayloadRefs_SnapshotSourceVersion_UpdateSource_PrunePreserva
 		t.Fatal(err)
 	}
 
-	v1 := domain.NodeConnectionVersion{
-		NodeLogicalID:       nodeID,
-		ConnectionRevision:  1,
-		EffectiveConfigJSON: `{"server":"1.1.1.1","port":8388}`,
-		ConfigFingerprint:   "sha256:fp1",
-		SourceEntryID:       &entry1ID,
-		CreatedAt:           now.Add(-2 * time.Hour),
-	}
-	if err := versionRepo.Save(ctx, &v1); err != nil {
-		t.Fatal(err)
-	}
+	attachFixtureOrigin(t, ctx, db, nodeID, 1, entry1ID)
 
 	// 3. Create Publication 1 with Revision 1 -> pins Payload 1
 	pub1ID := "pub-v1-" + domain.MustNewUUIDv7()
@@ -421,11 +439,7 @@ func TestPublicationPayloadRefs_SnapshotSourceVersion_UpdateSource_PrunePreserva
 	}
 
 	// Replace the old generation only after preserving its evidence.
-	if err := sqlite.WithTx(ctx, db, func(ctx context.Context, tx *sql.Tx) error {
-		return sqlite.ReplaceCurrentPayloadTx(ctx, tx, sub.ID)
-	}); err != nil {
-		t.Fatal(err)
-	}
+	replaceFixtureGeneration(t, ctx, db, sub.ID)
 
 	// 4. Update Source: Fetch 2 -> Payload 2 -> Entry 2 -> Node Version 2 (server changes to 2.2.2.2)
 	payload2ID := "payload-v2-" + domain.MustNewUUIDv7()
@@ -467,17 +481,8 @@ func TestPublicationPayloadRefs_SnapshotSourceVersion_UpdateSource_PrunePreserva
 		t.Fatal(err)
 	}
 
-	v2 := domain.NodeConnectionVersion{
-		NodeLogicalID:       nodeID,
-		ConnectionRevision:  2,
-		EffectiveConfigJSON: `{"server":"2.2.2.2","port":8388}`,
-		ConfigFingerprint:   "sha256:fp2",
-		SourceEntryID:       &entry2ID,
-		CreatedAt:           now.Add(-30 * time.Minute),
-	}
-	if err := versionRepo.Save(ctx, &v2); err != nil {
-		t.Fatal(err)
-	}
+	attachFixtureOrigin(t, ctx, db, nodeID, 2, entry2ID)
+	assertRetiredPayloadEvidence(t, ctx, db, payloadRepo, payload1ID, entry1ID, p1.ContentDigest)
 
 	// 5. Verify ResolvePayloadIDsForNodes for Old Publication (Revision 1) STILL resolves to Payload 1!
 	oldInc := []domain.ManifestIncludedNode{
@@ -608,18 +613,8 @@ func TestPublicationPayloadRefs_SameConnectionRefresh_PreservesImmutableProvenan
 		t.Fatal(err)
 	}
 
-	// Immutable Version 1 initially formed with source_entry_id = entry1ID
-	v1 := domain.NodeConnectionVersion{
-		NodeLogicalID:       nodeID,
-		ConnectionRevision:  1,
-		EffectiveConfigJSON: `{"server":"1.1.1.1","port":8388}`,
-		ConfigFingerprint:   "sha256:fpsame",
-		SourceEntryID:       &entry1ID,
-		CreatedAt:           now.Add(-2 * time.Hour),
-	}
-	if err := versionRepo.Save(ctx, &v1); err != nil {
-		t.Fatal(err)
-	}
+	// Attach the known original entry to the version created by UpsertBatch.
+	attachFixtureOrigin(t, ctx, db, nodeID, 1, entry1ID)
 
 	// Legacy node without source_entry_id (NULL legacy)
 	legacyNodeID := "node-legacy-null-1"
@@ -637,17 +632,7 @@ func TestPublicationPayloadRefs_SameConnectionRefresh_PreservesImmutableProvenan
 	if err := nodeRepo.UpsertBatch(ctx, []domain.Node{legacyNode}); err != nil {
 		t.Fatal(err)
 	}
-	vLegacy := domain.NodeConnectionVersion{
-		NodeLogicalID:       legacyNodeID,
-		ConnectionRevision:  1,
-		EffectiveConfigJSON: `{"server":"1.1.1.2","port":8388}`,
-		ConfigFingerprint:   "sha256:fplegacy",
-		SourceEntryID:       nil, // NULL legacy
-		CreatedAt:           now.Add(-2 * time.Hour),
-	}
-	if err := versionRepo.Save(ctx, &vLegacy); err != nil {
-		t.Fatal(err)
-	}
+	// UpsertBatch creates this version with unknown origin (NULL).
 
 	// Publication 1 references Version 1 -> pins Payload 1
 	pub1ID := "pub-same-" + domain.MustNewUUIDv7()
@@ -670,11 +655,7 @@ func TestPublicationPayloadRefs_SameConnectionRefresh_PreservesImmutableProvenan
 	}
 
 	// Detach the old generation before inserting the next, retaining origin evidence.
-	if err := sqlite.WithTx(ctx, db, func(ctx context.Context, tx *sql.Tx) error {
-		return sqlite.ReplaceCurrentPayloadTx(ctx, tx, sub.ID)
-	}); err != nil {
-		t.Fatal(err)
-	}
+	replaceFixtureGeneration(t, ctx, db, sub.ID)
 
 	// 2. Simulate same connection refresh (connEqual == true)
 	// New fetch 2 -> Payload 2 -> Entry 2
@@ -737,30 +718,26 @@ func TestPublicationPayloadRefs_SameConnectionRefresh_PreservesImmutableProvenan
 	}
 
 	// Try to upsert version 1 with entry2ID (simulating connEqual execution on same revision)
-	refreshV1 := domain.NodeConnectionVersion{
-		NodeLogicalID:       nodeID,
-		ConnectionRevision:  1,
-		EffectiveConfigJSON: `{"server":"1.1.1.1","port":8388}`,
-		ConfigFingerprint:   "sha256:fpsame",
-		SourceEntryID:       &entry2ID,
-		CreatedAt:           now.Add(-10 * time.Minute),
+	refreshV1, err := versionRepo.GetByRevision(ctx, nodeID, 1)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err := versionRepo.Save(ctx, &refreshV1); err != nil {
+	refreshV1.SourceEntryID = &entry2ID
+	if err := versionRepo.Save(ctx, refreshV1); err != nil {
 		t.Fatal(err)
 	}
 
 	// Try to upsert legacy version with legacyEntryID (simulating backfilling previously NULL version)
-	refreshVLegacy := domain.NodeConnectionVersion{
-		NodeLogicalID:       legacyNodeID,
-		ConnectionRevision:  1,
-		EffectiveConfigJSON: `{"server":"1.1.1.2","port":8388}`,
-		ConfigFingerprint:   "sha256:fplegacy",
-		SourceEntryID:       &legacyEntryID,
-		CreatedAt:           now.Add(-10 * time.Minute),
-	}
-	if err := versionRepo.Save(ctx, &refreshVLegacy); err != nil {
+	refreshVLegacy, err := versionRepo.GetByRevision(ctx, legacyNodeID, 1)
+	if err != nil {
 		t.Fatal(err)
 	}
+	refreshVLegacy.SourceEntryID = &legacyEntryID
+	if err := versionRepo.Save(ctx, refreshVLegacy); err != nil {
+		t.Fatal(err)
+	}
+
+	assertRetiredPayloadEvidence(t, ctx, db, payloadRepo, payload1ID, entry1ID, p1.ContentDigest)
 
 	// 3. Verify Immutable Provenance:
 	// - v1 must not adopt the new entry after its original entry was detached.
@@ -794,6 +771,10 @@ func TestPublicationPayloadRefs_SameConnectionRefresh_PreservesImmutableProvenan
 	}
 	if len(resolved) != 1 || resolved[0] != payload1ID {
 		t.Fatalf("expected old publication to resolve to payload1 (%s), got: %v", payload1ID, resolved)
+	}
+	refs, err := pubRefRepo.ListPayloadIDsByPublication(ctx, pub1ID)
+	if err != nil || len(refs) != 1 || refs[0] != payload1ID {
+		t.Fatalf("original publication ref changed: %v, err=%v", refs, err)
 	}
 
 	// Old origin survives as metadata, while the table has only the current generation.

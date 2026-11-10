@@ -91,6 +91,10 @@ func TestSubscriptionFetchOrder_EqualStartedAt_RowIDTieBreaksNewest(t *testing.T
 		t.Fatalf("UpsertBatch failed: %v", err)
 	}
 
+	if _, err := db.ExecContext(ctx, `INSERT INTO node_source_history(id,node_logical_id,source_identity,source_label,relation_state,cause,evidence_kind,evidence_key,created_at) VALUES ('manual-fixture',?,'manual','manual','verified','manual_confirmed','fixture','manual-fixture',?)`, manualNode.LogicalID, now); err != nil {
+		t.Fatal(err)
+	}
+
 	// Current node sources points to newerFetchID (rowid 2).
 	// Pruned node sources points to olderFetchID (rowid 1).
 	_, err := db.ExecContext(ctx, `

@@ -239,11 +239,22 @@ func (m *memoryNodes) List(_ context.Context, filter domain.NodeFilter) ([]domai
 	return res[offset:end], total, nil
 }
 
-func (m *memoryNodes) ListAll(ctx context.Context, filter domain.NodeFilter) ([]domain.Node, error) {
-	unpaginated := filter
-	unpaginated.Pagination.PageSize = 0
-	nodes, _, err := m.List(ctx, unpaginated)
-	return nodes, err
+func (m *memoryNodes) ListAll(_ context.Context, filter domain.NodeFilter) ([]domain.Node, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	ids := make(map[string]bool, len(filter.LogicalIDs))
+	for _, id := range filter.LogicalIDs {
+		ids[id] = true
+	}
+	var nodes []domain.Node
+	for _, node := range m.items {
+		if len(ids) > 0 && !ids[node.LogicalID] || filter.ActiveOnly && !node.Active {
+			continue
+		}
+		nodes = append(nodes, node)
+	}
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].LogicalID < nodes[j].LogicalID })
+	return nodes, nil
 }
 
 func (m *memoryNodes) ListReadModel(_ context.Context, filter domain.NodeFilter) ([]domain.NodeReadModel, int, error) {

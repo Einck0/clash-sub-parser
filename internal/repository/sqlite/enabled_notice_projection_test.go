@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"clash-sub-parser/internal/domain"
+	"clash-sub-parser/migrations"
 )
 
 // Frozen from 762d706, deliberately independent of the production payload and
@@ -174,11 +175,15 @@ func compareEnabledDiagnosticQueries(t *testing.T, ctx context.Context, db *sql.
 func TestEnabledNoticeProjectionEquivalence(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	db, err := OpenAndMigrate(ctx, DefaultConfig(filepath.Join(t.TempDir(), "projection.db")))
+	// Explicit unconverted legacy database: this diagnostic compares historical generations.
+	db, err := Open(DefaultConfig(filepath.Join(t.TempDir(), "projection.db")))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
+	if err := NewMigrationRunner(db, migrations.FS).RunUpTo(ctx, 29); err != nil {
+		t.Fatal(err)
+	}
 	stamp := "2026-01-01T00:00:00Z"
 	later := "2026-01-02T00:00:00Z"
 	exec := func(query string, args ...any) {

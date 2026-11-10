@@ -28,6 +28,9 @@ func TestManualAndPrunedInventoryPolicyExportAndPrefixImmutability(t *testing.T)
 	if err := h.NodeRepo.UpsertBatch(ctx, []domain.Node{manual}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := h.DB.ExecContext(ctx, `INSERT INTO node_source_history(id,node_logical_id,source_identity,source_label,relation_state,cause,evidence_kind,evidence_key,created_at) VALUES ('manual-fixture',?,'manual','manual','verified','manual_confirmed','fixture','manual-fixture',?)`, manual.LogicalID, now); err != nil {
+		t.Fatal(err)
+	}
 	url := "https://pruned.example/feed"
 	payload := func(name, server string) *fetch.Response {
 		return &fetch.Response{StatusCode: 200, ContentType: "text/yaml", ContentDigest: name, Body: []byte(fmt.Sprintf("proxies:\n  - name: %q\n    type: ss\n    server: %s\n    port: 8388\n    cipher: aes-128-gcm\n    password: synthetic-fixture\n", name, server))}

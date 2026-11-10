@@ -276,7 +276,10 @@ func ensureCompactionHeadsTx(ctx context.Context, tx *sql.Tx) error {
 	}
 	for _, n := range nodes {
 		creds, err := unmarshalNodeCredentials(n.config)
-		if err != nil || n.revision < 0 {
+		// nodes has required positive current revisions since migration 12.
+		// Historical version/observation zero remains valid; an invalid current
+		// row must be rejected, never renumbered and made spuriously fresh.
+		if err != nil || n.revision <= 0 {
 			return fmt.Errorf("maintenance_required: invalid current node configuration")
 		}
 		effective, err := json.Marshal(map[string]any{"server": n.server, "port": n.port, "credentials": creds})

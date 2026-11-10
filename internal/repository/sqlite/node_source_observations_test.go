@@ -17,12 +17,12 @@ func TestGenerationReplacementPreservesImmutableOriginsPinsAndUnknownObservation
 	now := time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC)
 	retentionInsertTestFetch(t, db, "observation-fetch", subID, now, domain.FetchOutcomeSuccess)
 	retentionInsertTestPayload(t, db, "observation-payload", subID, "observation-fetch", now, true)
-	if _, err := db.ExecContext(ctx, `INSERT INTO nodes(logical_id,protocol,display_name,server,port,config_json,active,created_at,updated_at,connection_revision)VALUES('observation-node','ss','Renamed','192.0.2.1',8388,'{}',1,?,?,0)`, now.Format(time.RFC3339), now.Format(time.RFC3339)); err != nil {
+	if _, err := db.ExecContext(ctx, `INSERT INTO nodes(logical_id,protocol,display_name,server,port,config_json,active,created_at,updated_at,connection_revision)VALUES('observation-node','ss','Renamed','192.0.2.1',8388,'{}',1,?,?,1)`, now.Format(time.RFC3339), now.Format(time.RFC3339)); err != nil {
 		t.Fatal(err)
 	}
 	nodeID := "observation-node"
 	retentionInsertTestEntry(t, db, "observation-entry", "observation-payload", subID, "synthetic-key", "Original Raw Name", domain.EntryKindProxy, &nodeID)
-	if _, err := db.ExecContext(ctx, `INSERT INTO node_connection_versions(node_logical_id,connection_revision,effective_config_json,config_fingerprint,source_entry_id,created_at)VALUES(?,0,'{}','synthetic','observation-entry',?)`, nodeID, now.Format(time.RFC3339)); err != nil {
+	if _, err := db.ExecContext(ctx, `INSERT INTO node_connection_versions(node_logical_id,connection_revision,effective_config_json,config_fingerprint,source_entry_id,created_at)VALUES(?,1,'{}','synthetic','observation-entry',?)`, nodeID, now.Format(time.RFC3339)); err != nil {
 		t.Fatal(err)
 	}
 	rev := &domain.ConfigurationRevision{ID: "frozen-facts-revision", State: domain.RevisionStateActive, ContentDigest: "synthetic", CreatedAt: now}
@@ -40,7 +40,7 @@ func TestGenerationReplacementPreservesImmutableOriginsPinsAndUnknownObservation
 	if err := sqlite.WithTx(ctx, db, func(ctx context.Context, tx *sql.Tx) error { return sqlite.ReplaceCurrentPayloadTx(ctx, tx, subID) }); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, `UPDATE nodes SET connection_revision=1 WHERE logical_id=?`, nodeID); err != nil {
+	if _, err := db.ExecContext(ctx, `UPDATE nodes SET connection_revision=2 WHERE logical_id=?`, nodeID); err != nil {
 		t.Fatal(err)
 	}
 	if len(facts.NodePayloadEvidence[nodeID]) != 1 || facts.NodePayloadEvidence[nodeID][0].PayloadID != "observation-payload" || facts.NodePayloadEvidence[nodeID][0].ContentDigest != "sha256:digest" {
@@ -51,7 +51,7 @@ func TestGenerationReplacementPreservesImmutableOriginsPinsAndUnknownObservation
 		t.Fatalf("old full generation retained: %d %v", count, err)
 	}
 	var origin, digest, rawName, state, cause string
-	if err := db.QueryRowContext(ctx, `SELECT p.origin_payload_id,e.content_digest FROM node_connection_provenance p JOIN subscription_payload_evidence e ON e.payload_id=p.origin_payload_id WHERE p.node_logical_id=? AND p.connection_revision=0`, nodeID).Scan(&origin, &digest); err != nil || origin != "observation-payload" || digest != "sha256:digest" {
+	if err := db.QueryRowContext(ctx, `SELECT p.origin_payload_id,e.content_digest FROM node_connection_provenance p JOIN subscription_payload_evidence e ON e.payload_id=p.origin_payload_id WHERE p.node_logical_id=? AND p.connection_revision=1`, nodeID).Scan(&origin, &digest); err != nil || origin != "observation-payload" || digest != "sha256:digest" {
 		t.Fatalf("immutable origin lost: %s %s %v", origin, digest, err)
 	}
 	if err := db.QueryRowContext(ctx, `SELECT raw_name FROM node_source_observations WHERE node_logical_id=?`, nodeID).Scan(&rawName); err != nil || rawName != "Original Raw Name" {

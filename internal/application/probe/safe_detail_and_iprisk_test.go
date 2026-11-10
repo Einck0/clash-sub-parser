@@ -634,18 +634,18 @@ func TestRunner_And_Service_NoticeExclusion(t *testing.T) {
 	}
 	proxyKind := domain.EntryKindProxy
 	entry3 := domain.SubscriptionEntry{
-		ID:            "entry-3",
-		PayloadID:     payload.ID,
+		ID:             "entry-3",
+		PayloadID:      payload.ID,
 		SubscriptionID: sub.ID,
-		Ordinal:       2,
-		SourceKey:     "n3",
-		RawName:       "Manual Proxy",
-		Protocol:      domain.ProtocolVMess,
-		Server:        "127.0.0.1",
-		Port:          1,
-		EntryKind:     domain.EntryKindNotice,
-		NodeLogicalID: &node3.LogicalID,
-		CreatedAt:     now,
+		Ordinal:        2,
+		SourceKey:      "n3",
+		RawName:        "Manual Proxy",
+		Protocol:       domain.ProtocolVMess,
+		Server:         "127.0.0.1",
+		Port:           1,
+		EntryKind:      domain.EntryKindNotice,
+		NodeLogicalID:  &node3.LogicalID,
+		CreatedAt:      now,
 	}
 
 	// Node 4: Old inactive proxy (active = 0) with user_kind_override = 'proxy' (must NOT auto-activate)
@@ -660,18 +660,18 @@ func TestRunner_And_Service_NoticeExclusion(t *testing.T) {
 		UpdatedAt:   now,
 	}
 	entry4 := domain.SubscriptionEntry{
-		ID:            "entry-4",
-		PayloadID:     payload.ID,
+		ID:             "entry-4",
+		PayloadID:      payload.ID,
 		SubscriptionID: sub.ID,
-		Ordinal:       3,
-		SourceKey:     "p4",
-		RawName:       "Inactive Proxy",
-		Protocol:      domain.ProtocolSS,
-		Server:        "4.4.4.4",
-		Port:          8388,
-		EntryKind:     domain.EntryKindProxy,
-		NodeLogicalID: &node4.LogicalID,
-		CreatedAt:     now,
+		Ordinal:        3,
+		SourceKey:      "p4",
+		RawName:        "Inactive Proxy",
+		Protocol:       domain.ProtocolSS,
+		Server:         "4.4.4.4",
+		Port:           8388,
+		EntryKind:      domain.EntryKindProxy,
+		NodeLogicalID:  &node4.LogicalID,
+		CreatedAt:      now,
 	}
 
 	if err := nodeRepo.UpsertBatch(ctx, []domain.Node{node1, node2, node3, node4}); err != nil {
@@ -988,6 +988,10 @@ func TestRunner_IPRisk_StrictScoringAndPersistenceConsistency(t *testing.T) {
 				UpdatedAt:          now,
 			}
 			if err := nodeRepo.UpsertBatch(ctx, []domain.Node{node}); err != nil {
+				t.Fatal(err)
+			}
+
+			if _, err := db.ExecContext(ctx, `INSERT INTO node_source_history(id,node_logical_id,source_identity,source_label,relation_state,cause,evidence_kind,evidence_key,created_at) VALUES ('manual-fixture',?,'manual','manual','verified','manual_confirmed','fixture','manual-fixture',?)`, nodeID, now); err != nil {
 				t.Fatal(err)
 			}
 

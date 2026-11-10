@@ -110,6 +110,13 @@ func TestConsistentFactsLoader_EvidenceDataSyncAndFiltering(t *testing.T) {
 		t.Fatalf("UpsertBatch nodes failed: %v", err)
 	}
 
+	// These fixtures represent positively confirmed manual nodes, not unknown orphans.
+	for _, node := range nodes {
+		if _, err := db.ExecContext(ctx, `INSERT INTO node_source_history(id,node_logical_id,source_identity,source_label,relation_state,cause,evidence_kind,evidence_key,created_at) VALUES (?,?,'manual','manual','verified','manual_confirmed','fixture',?,?)`, "manual-"+node.LogicalID, node.LogicalID, node.LogicalID, baseTime); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	// Bump node-wrong-rev connection_revision by changing server
 	nodes[2].Server = "198.51.100.33"
 	if err := nodeRepo.UpsertBatch(ctx, []domain.Node{nodes[2]}); err != nil {

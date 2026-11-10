@@ -227,9 +227,9 @@ func TestVerifySubscriptionCompactionDetectsProtectedTamperingAndMissingHead(t *
 	ctx := context.Background()
 	db, _ := setupTestDB(t)
 	now := "2026-11-10T00:00:00Z"
-	if _, err := db.ExecContext(ctx, `INSERT INTO nodes(logical_id,protocol,display_name,server,port,config_json,active,created_at,updated_at,connection_revision)VALUES('verify-node','ss','Node','192.0.2.1',8388,'{}',1,?,?,0);
-	INSERT INTO node_connection_versions(node_logical_id,connection_revision,effective_config_json,config_fingerprint,created_at)VALUES('verify-node',0,'{}','fp',?);
-	INSERT INTO node_connection_heads(logical_id,connection_revision,updated_at)VALUES('verify-node',0,?)`, now, now, now, now); err != nil {
+	if _, err := db.ExecContext(ctx, `INSERT INTO nodes(logical_id,protocol,display_name,server,port,config_json,active,created_at,updated_at,connection_revision)VALUES('verify-node','ss','Node','192.0.2.1',8388,'{}',1,?,?,1);
+	INSERT INTO node_connection_versions(node_logical_id,connection_revision,effective_config_json,config_fingerprint,created_at)VALUES('verify-node',1,'{}','fp',?);
+	INSERT INTO node_connection_heads(logical_id,connection_revision,updated_at)VALUES('verify-node',1,?)`, now, now, now, now); err != nil {
 		t.Fatal(err)
 	}
 	plan, err := sqlite.InspectSubscriptionCompaction(ctx, db)
@@ -282,9 +282,9 @@ func TestVerifyCompactionRejectsInconsistentCurrentState(t *testing.T) {
 			}
 			if tc.name == "source generation" {
 				// Create a protected source with no current-generation entry, then take a new baseline.
-				_, err = db.ExecContext(ctx, `INSERT INTO nodes(logical_id,protocol,display_name,server,port,config_json,active,created_at,updated_at,connection_revision) VALUES('n','ss','N','192.0.2.1',8388,'{}',1,'now','now',0);
-				INSERT INTO node_connection_versions(node_logical_id,connection_revision,effective_config_json,config_fingerprint,created_at) VALUES('n',0,'{}','fp','now');
-				INSERT INTO node_connection_heads(logical_id,connection_revision,updated_at) VALUES('n',0,'now');
+				_, err = db.ExecContext(ctx, `INSERT INTO nodes(logical_id,protocol,display_name,server,port,config_json,active,created_at,updated_at,connection_revision) VALUES('n','ss','N','192.0.2.1',8388,'{}',1,'now','now',1);
+				INSERT INTO node_connection_versions(node_logical_id,connection_revision,effective_config_json,config_fingerprint,created_at) VALUES('n',1,'{}','fp','now');
+				INSERT INTO node_connection_heads(logical_id,connection_revision,updated_at) VALUES('n',1,'now');
 				INSERT INTO node_sources(node_logical_id,subscription_id,last_seen_fetch_id) VALUES('n','a','fa');
 				INSERT INTO subscription_entries(id,payload_id,subscription_id,ordinal,source_key,raw_name,protocol,entry_kind,node_logical_id,created_at) VALUES('e','pa','a',0,'k','N','ss','proxy','n','now')`)
 				if err != nil {

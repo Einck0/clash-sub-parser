@@ -19,6 +19,27 @@ import (
 	"clash-sub-parser/migrations"
 )
 
+// Corruption fixtures intentionally remove the immutable-version trigger only in
+// a disposable test database. This simulates damaged storage, not a runtime bypass.
+func allowCorruptVersionFixture(t *testing.T, ctx context.Context, db *sql.DB) {
+	t.Helper()
+	if _, err := db.ExecContext(ctx, `DROP TRIGGER connection_version_configuration_immutable`); err != nil {
+		t.Fatalf("remove immutable trigger in corruption fixture: %v", err)
+	}
+}
+
+func corruptRecoveryFixture(t *testing.T, ctx context.Context, db *sql.DB, query string, args ...any) {
+	t.Helper()
+	result, err := db.ExecContext(ctx, query, args...)
+	if err != nil {
+		t.Fatalf("construct corrupt recovery fixture: %v", err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil || count == 0 {
+		t.Fatalf("corruption fixture affected no rows: count=%d err=%v", count, err)
+	}
+}
+
 func createTestManifestFile(t *testing.T, dir string, manifest inventory.RecoveryManifest) (string, string) {
 	t.Helper()
 	data, err := json.MarshalIndent(manifest, "", "  ")
@@ -360,10 +381,10 @@ func TestRecoverSourceHistory_RealFixtures_DryRunAndApply(t *testing.T) {
 			},
 		},
 		Summary: inventory.ManifestSummary{
-			TotalCoveredOrphans:                     4,
-			VerifiedNodes:                           4,
-			PrimaryVerifiedEdges:                    4,
-			SecondarySameCanonicalEdges:             1,
+			TotalCoveredOrphans:                      4,
+			VerifiedNodes:                            4,
+			PrimaryVerifiedEdges:                     4,
+			SecondarySameCanonicalEdges:              1,
 			DiscardedConflictingCredentialCandidates: 1,
 		},
 		Nodes: []inventory.ManifestNode{
@@ -522,6 +543,11 @@ func TestRecoverSourceHistory_RealFixtures_DryRunAndApply(t *testing.T) {
 		t.Fatalf("dry run must not write any records to node_source_history, found %d", histCount)
 	}
 
+	var leaseCount int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM node_connection_version_leases`).Scan(&leaseCount); err != nil || leaseCount != 0 {
+		t.Fatalf("dry-run created leases: count=%d err=%v", leaseCount, err)
+	}
+
 	// Step 2: Apply Recovery
 	applyRes, err := inventory.RecoverSourceHistory(ctx, db, inventory.RecoveryConfig{
 		ManifestPath:           manifestPath,
@@ -538,6 +564,12 @@ func TestRecoverSourceHistory_RealFixtures_DryRunAndApply(t *testing.T) {
 	}
 	if applyRes.DiscardedCandidates != 1 {
 		t.Errorf("expected 1 discarded candidate, got %d", applyRes.DiscardedCandidates)
+	}
+
+	// Temporary leases are not business assets, but the operation must release
+	// every owned lease rather than hiding a persistent operational change.
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM node_connection_version_leases`).Scan(&leaseCount); err != nil || leaseCount != 0 {
+		t.Fatalf("recovery leaked leases: count=%d err=%v", leaseCount, err)
 	}
 
 	// Check invariants
@@ -648,15 +680,10 @@ func TestRecoverSourceHistory_TamperedCredentialsRejected(t *testing.T) {
 
 	setupTargetDBWithFixtures(t, db)
 
-	// Exploit Test: Tamper with orphan1's UUID in target database while keeping protocol, server, port identical
-	_, err = db.ExecContext(ctx, `UPDATE nodes SET config_json = '{"uuid":"TAMPERED-UUID-EXPLOIT"}' WHERE logical_id = 'node-orphan-1';`)
-	if err != nil {
-		t.Fatalf("failed to tamper node: %v", err)
-	}
-	_, err = db.ExecContext(ctx, `UPDATE node_connection_versions SET effective_config_json = '{"credentials":{"uuid":"TAMPERED-UUID-EXPLOIT"}}' WHERE node_logical_id = 'node-orphan-1';`)
-	if err != nil {
-		t.Fatalf("failed to tamper connection versions: %v", err)
-	}
+	// Simulate corruption of both current and historical UUID with the endpoint unchanged.
+	allowCorruptVersionFixture(t, ctx, db)
+	corruptRecoveryFixture(t, ctx, db, `UPDATE nodes SET config_json = '{"uuid":"TAMPERED-UUID-EXPLOIT"}' WHERE logical_id = 'node-orphan-1';`)
+	corruptRecoveryFixture(t, ctx, db, `UPDATE node_connection_versions SET effective_config_json = '{"credentials":{"uuid":"TAMPERED-UUID-EXPLOIT"}}' WHERE node_logical_id = 'node-orphan-1';`)
 
 	manifest := inventory.RecoveryManifest{
 		SchemaVersion: "2.1.0",
@@ -695,8 +722,8 @@ func TestRecoverSourceHistory_TamperedCredentialsRejected(t *testing.T) {
 		TargetDBPath:           targetDBPath,
 		ArchiveDir:             tempDir,
 	})
-	if err == nil {
-		t.Fatalf("expected FAIL-CLOSED error when target node credentials differ from archive evidence, but dry run succeeded")
+	if err == nil || !strings.Contains(err.Error(), "configuration mismatch with historical archive evidence") {
+		t.Fatalf("expected credential mismatch on dry run, got %v", err)
 	}
 
 	// Apply MUST ALSO FAIL closed
@@ -707,15 +734,14 @@ func TestRecoverSourceHistory_TamperedCredentialsRejected(t *testing.T) {
 		TargetDBPath:           targetDBPath,
 		ArchiveDir:             tempDir,
 	})
-	if err == nil {
-		t.Fatalf("expected FAIL-CLOSED error on apply when target node credentials differ from archive evidence")
+	if err == nil || !strings.Contains(err.Error(), "configuration mismatch with historical archive evidence") {
+		t.Fatalf("expected credential mismatch on apply, got %v", err)
 	}
 
 	// Verify 0 rows written
 	var count int
-	_ = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM node_source_history;").Scan(&count)
-	if count != 0 {
-		t.Fatalf("fail-closed must write 0 rows to node_source_history, found %d", count)
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM node_source_history;").Scan(&count); err != nil || count != 0 {
+		t.Fatalf("fail-closed must write 0 rows to node_source_history, found %d, err=%v", count, err)
 	}
 }
 
@@ -938,17 +964,62 @@ func TestRecoverSourceHistory_HistoricalConnectionVersionMatch(t *testing.T) {
 
 	setupTargetDBWithFixtures(t, db)
 
-	// Simulate node whose current connection revision is 2 (modified credentials),
-	// but connection revision 1 in node_connection_versions matches the archive!
-	// 1. Insert revision 1 into node_connection_versions
-	rev1JSON := `{"credentials":{"uuid":"501e2af2-26f2-466c-9e91-a87c5a738ad8","transport":{"flow":"xtls-rprx-vision","sni":"itunes.apple.com","tls":"true"}}}`
-	_, _ = db.ExecContext(ctx, `INSERT INTO node_connection_versions (node_logical_id, connection_revision, effective_config_json, recorded_at) VALUES
-		('node-orphan-1', 1, ?, '2026-09-11 08:26:06');`, rev1JSON)
+	// The fixture creates revision 1 via the repository, with the archive's credentials.
+	const originalUUID = "501e2af2-26f2-466c-9e91-a87c5a738ad8"
+	const currentUUID = "NEW-REV-2-UUID"
+	nodeRepo := sqlite.NewNodeRepository(db)
+	node, err := nodeRepo.GetByLogicalID(ctx, "node-orphan-1")
+	if err != nil || node == nil {
+		t.Fatalf("get original node: %v", err)
+	}
+	if node.ConnectionRevision != 1 || node.Credentials.UUID != originalUUID || node.Credentials.Transport["flow"] != "xtls-rprx-vision" || node.Credentials.Transport["sni"] != "itunes.apple.com" || node.Credentials.Transport["tls"] != "true" {
+		t.Fatalf("original node does not match archive: %#v", node)
+	}
+	var originalVersion string
+	var head int64
+	if err := db.QueryRowContext(ctx, `SELECT v.effective_config_json, h.connection_revision FROM node_connection_versions v JOIN node_connection_heads h ON h.logical_id = v.node_logical_id WHERE v.node_logical_id = ? AND v.connection_revision = 1`, node.LogicalID).Scan(&originalVersion, &head); err != nil || head != 1 {
+		t.Fatalf("original version/head: head=%d err=%v", head, err)
+	}
+	var version1 struct {
+		Credentials domain.InboundProtocolCredential `json:"credentials"`
+	}
+	if err := json.Unmarshal([]byte(originalVersion), &version1); err != nil || version1.Credentials.UUID != originalUUID || version1.Credentials.Transport["flow"] != "xtls-rprx-vision" || version1.Credentials.Transport["sni"] != "itunes.apple.com" || version1.Credentials.Transport["tls"] != "true" {
+		t.Fatalf("original version does not match archive: %s err=%v", originalVersion, err)
+	}
 
-	// 2. Advance current node to revision 2 with different credentials
-	_, _ = db.ExecContext(ctx, `UPDATE nodes SET connection_revision = 2, config_json = '{"uuid":"NEW-REV-2-UUID"}' WHERE logical_id = 'node-orphan-1';`)
-	_, _ = db.ExecContext(ctx, `INSERT INTO node_connection_heads (logical_id, connection_revision, updated_at) VALUES
-		('node-orphan-1', 2, '2026-09-20 00:00:00');`)
+	// Use the supported update, which increments the revision and advances the head.
+	node.Credentials.UUID = currentUUID
+	if err := nodeRepo.Update(ctx, node); err != nil {
+		t.Fatalf("advance node revision: %v", err)
+	}
+	if node.ConnectionRevision != 2 {
+		t.Fatalf("updated node revision = %d, want 2", node.ConnectionRevision)
+	}
+	assertVersions := func() {
+		t.Helper()
+		current, err := nodeRepo.GetByLogicalID(ctx, node.LogicalID)
+		if err != nil || current == nil {
+			t.Fatalf("get current node: %v", err)
+		}
+		if current.ConnectionRevision != 2 || current.Credentials.UUID != currentUUID {
+			t.Fatalf("unexpected current node: %#v", current)
+		}
+		var rev1, rev2 string
+		var count int
+		if err := db.QueryRowContext(ctx, `SELECT h.connection_revision, (SELECT COUNT(*) FROM node_connection_versions WHERE node_logical_id = h.logical_id), v1.effective_config_json, v2.effective_config_json FROM node_connection_heads h JOIN node_connection_versions v1 ON v1.node_logical_id = h.logical_id AND v1.connection_revision = 1 JOIN node_connection_versions v2 ON v2.node_logical_id = h.logical_id AND v2.connection_revision = 2 WHERE h.logical_id = ?`, node.LogicalID).Scan(&head, &count, &rev1, &rev2); err != nil {
+			t.Fatalf("query versions and head: %v", err)
+		}
+		var version2 struct {
+			Credentials domain.InboundProtocolCredential `json:"credentials"`
+		}
+		if err := json.Unmarshal([]byte(rev2), &version2); err != nil {
+			t.Fatalf("decode revision 2: %v", err)
+		}
+		if head != 2 || count != 2 || rev1 != originalVersion || version2.Credentials.UUID != currentUUID {
+			t.Fatalf("incoherent versions: head=%d count=%d rev1=%s rev2=%s", head, count, rev1, rev2)
+		}
+	}
+	assertVersions()
 
 	manifest := inventory.RecoveryManifest{
 		SchemaVersion: "2.1.0",
@@ -993,6 +1064,45 @@ func TestRecoverSourceHistory_HistoricalConnectionVersionMatch(t *testing.T) {
 	if res.Status != "success" || res.InsertedRecords != 1 {
 		t.Fatalf("expected 1 record inserted via historical revision match, got %#v", res)
 	}
+	if !res.InvariantsVerified || !res.PostInvariants.BusinessAssetsUntouched || res.BaselineInvariants.AssetFingerprint == "" || res.BaselineInvariants.AssetFingerprint != res.PostInvariants.AssetFingerprint {
+		t.Fatalf("business assets changed during recovery: baseline=%#v post=%#v", res.BaselineInvariants, res.PostInvariants)
+	}
+	assertVersions()
+	var leases int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM node_connection_version_leases`).Scan(&leases); err != nil || leases != 0 {
+		t.Fatalf("recovery leaked leases: count=%d err=%v", leases, err)
+	}
+	var subscriptionID, sourceIdentity, sourceLabel, relationState, cause, evidenceKind, evidenceKey string
+	var revision sql.NullInt64
+	if err := db.QueryRowContext(ctx, `SELECT subscription_id, source_identity, source_label, connection_revision, relation_state, cause, evidence_kind, evidence_key FROM node_source_history WHERE node_logical_id = ?`, node.LogicalID).Scan(&subscriptionID, &sourceIdentity, &sourceLabel, &revision, &relationState, &cause, &evidenceKind, &evidenceKey); err != nil {
+		t.Fatalf("read recovered relationship: %v", err)
+	}
+	// Matching an available configuration verifies the source relationship, not
+	// the modern revision at the time of the legacy archive. Keep that unknown
+	// rather than manufacture a historical revision from credential equality.
+	if subscriptionID != "01a0b9af-c116-7204-b4a3-98a91733145d" || sourceIdentity != "legacy:src:1" || sourceLabel != "7li" || revision.Valid || relationState != "verified" || cause != "legacy_import" || evidenceKind != "legacy_cold_archive" || evidenceKey != "legacy_cold_archive:pk:100:link:1001" {
+		t.Fatalf("unexpected recovered relationship: sub=%s identity=%s label=%s revision=%v state=%s cause=%s kind=%s key=%s", subscriptionID, sourceIdentity, sourceLabel, revision, relationState, cause, evidenceKind, evidenceKey)
+	}
+
+	// In this disposable database, remove only the unreferenced historical
+	// version: mismatched current credentials must not be accepted as fallback.
+	deleted, err := db.ExecContext(ctx, `DELETE FROM node_connection_versions WHERE node_logical_id = ? AND connection_revision = 1`, node.LogicalID)
+	if err != nil {
+		t.Fatalf("remove historical version for negative contrast: %v", err)
+	}
+	if n, err := deleted.RowsAffected(); err != nil || n != 1 {
+		t.Fatalf("remove historical version: rows=%d err=%v", n, err)
+	}
+	_, err = inventory.RecoverSourceHistory(ctx, db, inventory.RecoveryConfig{
+		ManifestPath:           manifestPath,
+		ExpectedManifestSHA256: manifestHash,
+		DryRun:                 true,
+		TargetDBPath:           targetDBPath,
+		ArchiveDir:             tempDir,
+	})
+	if err == nil || !strings.Contains(err.Error(), "configuration mismatch with historical archive evidence") {
+		t.Fatalf("expected mismatch without historical version, got %v", err)
+	}
 }
 
 func TestRecoverSourceHistory_TamperedTransportOrWGKey(t *testing.T) {
@@ -1015,9 +1125,10 @@ func TestRecoverSourceHistory_TamperedTransportOrWGKey(t *testing.T) {
 
 	setupTargetDBWithFixtures(t, db)
 
-	// Case 1: Tamper SNI on orphan 1 (VLESS)
-	_, _ = db.ExecContext(ctx, `UPDATE nodes SET config_json = '{"uuid":"501e2af2-26f2-466c-9e91-a87c5a738ad8","transport":{"sni":"tampered.sni.com","tls":"true"}}' WHERE logical_id = 'node-orphan-1';`)
-	_, _ = db.ExecContext(ctx, `UPDATE node_connection_versions SET effective_config_json = '{"credentials":{"uuid":"501e2af2-26f2-466c-9e91-a87c5a738ad8","transport":{"sni":"tampered.sni.com","tls":"true"}}}' WHERE node_logical_id = 'node-orphan-1';`)
+	// Case 1: Simulate corruption of SNI on orphan 1 (VLESS).
+	allowCorruptVersionFixture(t, ctx, db)
+	corruptRecoveryFixture(t, ctx, db, `UPDATE nodes SET config_json = '{"uuid":"501e2af2-26f2-466c-9e91-a87c5a738ad8","transport":{"sni":"tampered.sni.com","tls":"true"}}' WHERE logical_id = 'node-orphan-1';`)
+	corruptRecoveryFixture(t, ctx, db, `UPDATE node_connection_versions SET effective_config_json = '{"credentials":{"uuid":"501e2af2-26f2-466c-9e91-a87c5a738ad8","transport":{"sni":"tampered.sni.com","tls":"true"}}}' WHERE node_logical_id = 'node-orphan-1';`)
 
 	manifest := inventory.RecoveryManifest{
 		SchemaVersion: "2.1.0",
@@ -1055,13 +1166,13 @@ func TestRecoverSourceHistory_TamperedTransportOrWGKey(t *testing.T) {
 		TargetDBPath:           targetDBPath,
 		ArchiveDir:             tempDir,
 	})
-	if err == nil {
-		t.Fatalf("expected fail-closed error when transport SNI differs from archive, got nil")
+	if err == nil || !strings.Contains(err.Error(), "configuration mismatch with historical archive evidence") {
+		t.Fatalf("expected SNI configuration mismatch, got %v", err)
 	}
 
-	// Case 2: Tamper WireGuard public key on orphan 3
-	_, _ = db.ExecContext(ctx, `UPDATE nodes SET config_json = '{"public_key":"TAMPERED-PUBKEY=","preshared_key":"psk333="}' WHERE logical_id = 'node-orphan-3';`)
-	_, _ = db.ExecContext(ctx, `UPDATE node_connection_versions SET effective_config_json = '{"credentials":{"public_key":"TAMPERED-PUBKEY=","preshared_key":"psk333="}}' WHERE node_logical_id = 'node-orphan-3';`)
+	// Case 2: Simulate corruption of the WireGuard public key on orphan 3.
+	corruptRecoveryFixture(t, ctx, db, `UPDATE nodes SET config_json = '{"public_key":"TAMPERED-PUBKEY=","preshared_key":"psk333="}' WHERE logical_id = 'node-orphan-3';`)
+	corruptRecoveryFixture(t, ctx, db, `UPDATE node_connection_versions SET effective_config_json = '{"credentials":{"public_key":"TAMPERED-PUBKEY=","preshared_key":"psk333="}}' WHERE node_logical_id = 'node-orphan-3';`)
 
 	manifestWG := inventory.RecoveryManifest{
 		SchemaVersion: "2.1.0",
@@ -1099,8 +1210,8 @@ func TestRecoverSourceHistory_TamperedTransportOrWGKey(t *testing.T) {
 		TargetDBPath:           targetDBPath,
 		ArchiveDir:             tempDir,
 	})
-	if err == nil {
-		t.Fatalf("expected fail-closed error when WireGuard public key differs from archive, got nil")
+	if err == nil || !strings.Contains(err.Error(), "configuration mismatch with historical archive evidence") {
+		t.Fatalf("expected WireGuard key configuration mismatch, got %v", err)
 	}
 }
 
@@ -1253,17 +1364,12 @@ func TestRecoverSourceHistory_TransportHeadersNegativeRejected(t *testing.T) {
 
 	setupTargetDBWithFixtures(t, db)
 
-	// Update node-orphan-1 in target DB to have a conflicting transport header
-	// Same server and port, same UUID, but different transport Host header
+	// Simulate corrupted current and historical credentials: same endpoint and
+	// UUID, but a conflicting transport Host header.
+	allowCorruptVersionFixture(t, ctx, db)
 	conflictingJSON := `{"credentials":{"uuid":"501e2af2-26f2-466c-9e91-a87c5a738ad8","transport":{"type":"ws","path":"/vless-ws","host":"conflicting-host.evil.com","tls":"true"}}}`
-	_, err = db.ExecContext(ctx, `UPDATE nodes SET config_json = ? WHERE logical_id = 'node-orphan-1';`, conflictingJSON)
-	if err != nil {
-		t.Fatalf("failed to update node config: %v", err)
-	}
-	_, err = db.ExecContext(ctx, `UPDATE node_connection_versions SET effective_config_json = ? WHERE node_logical_id = 'node-orphan-1';`, conflictingJSON)
-	if err != nil {
-		t.Fatalf("failed to update node connection versions: %v", err)
-	}
+	corruptRecoveryFixture(t, ctx, db, `UPDATE nodes SET config_json = ? WHERE logical_id = 'node-orphan-1';`, conflictingJSON)
+	corruptRecoveryFixture(t, ctx, db, `UPDATE node_connection_versions SET effective_config_json = ? WHERE node_logical_id = 'node-orphan-1';`, conflictingJSON)
 
 	manifest := inventory.RecoveryManifest{
 		SchemaVersion: "2.1.0",

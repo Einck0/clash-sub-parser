@@ -181,8 +181,9 @@ func computeAssetsFingerprint(ctx context.Context, q queryExecutor) (string, Inv
 	var rep InvariantsReport
 	headsMap := make(map[string]int64)
 
-	// 1. Query available tables excluding ledger and sqlite internals
-	tRows, err := q.QueryContext(ctx, "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name != 'node_source_history' AND name != 'schema_migrations' ORDER BY name ASC;")
+	// The recovery ledger and temporary operational leases are intentionally changed
+	// by this operation; all other application tables remain protected assets.
+	tRows, err := q.QueryContext(ctx, "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('node_source_history', 'schema_migrations', 'node_connection_version_leases') ORDER BY name ASC;")
 	if err != nil {
 		return "", rep, nil, fmt.Errorf("failed to query table list: %w", err)
 	}

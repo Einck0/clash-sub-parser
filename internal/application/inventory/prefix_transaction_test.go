@@ -89,11 +89,7 @@ func TestSharedPrefixStableAcrossImportSaveRefreshAndDelete(t *testing.T) {
 		t.Fatalf("shared node identity split: %v %v", list, err)
 	}
 	id, revision := list[0].LogicalID, list[0].ConnectionRevision
-	// Production reconciliation now correctly creates connection head and version.
-	// Update existing fixture records instead of duplicate INSERT; prefix-only writes must preserve both.
-	if _, err := db.Exec(`UPDATE node_connection_versions SET effective_config_json = '{}', config_fingerprint = 'fixture-connection' WHERE node_logical_id = ? AND connection_revision = ?`, id, revision); err != nil {
-		t.Fatal(err)
-	}
+	// Reconciliation creates an immutable version; use that real version as the baseline.
 	if _, err := db.Exec(`UPDATE node_connection_heads SET updated_at = ? WHERE logical_id = ? AND connection_revision = ?`, now, id, revision); err != nil {
 		t.Fatal(err)
 	}
@@ -218,6 +214,9 @@ func TestPrunedNodesAreNotManualButConfirmedRecoveryIs(t *testing.T) {
 	}
 	manual := domain.Node{LogicalID: "manual", Protocol: domain.ProtocolWireGuard, DisplayName: "Manual WARP", Server: "warp.example", Port: 2408, Active: true, CreatedAt: now, UpdatedAt: now}
 	if err := nodes.UpsertBatch(ctx, []domain.Node{manual}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO node_source_history(id,node_logical_id,source_identity,source_label,relation_state,cause,evidence_kind,evidence_key,created_at) VALUES ('manual-fixture',?,'manual','manual','verified','manual_confirmed','fixture','manual-fixture',?)`, manual.LogicalID, now); err != nil {
 		t.Fatal(err)
 	}
 	assertScope := func(wantPruned bool) {

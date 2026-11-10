@@ -51,8 +51,9 @@ func (r *controlledFakeRunner) Run(ctx context.Context, run *domain.ProbeRun, no
 	return nil
 }
 
-// TestFeatureConvergence_SchemaMigrationTo29 verifies all current migrations through 29.
-func TestFeatureConvergence_SchemaMigrationTo29(t *testing.T) {
+// TestFeatureConvergence_SchemaMigrationTo30 verifies all current preparation migrations.
+// Structural readiness is distinct from the offline compaction readiness seal.
+func TestFeatureConvergence_SchemaMigrationTo30(t *testing.T) {
 	ctx := context.Background()
 	db, err := sqlite.Open(sqlite.Config{
 		Path:        fmt.Sprintf("file:migration_test_%d?mode=memory&cache=shared", time.Now().UnixNano()),
@@ -66,7 +67,7 @@ func TestFeatureConvergence_SchemaMigrationTo29(t *testing.T) {
 
 	runner := sqlite.NewMigrationRunner(db, migrations.FS)
 	if err := runner.Run(ctx); err != nil {
-		t.Fatalf("failed to run migrations 1..29: %v", err)
+		t.Fatalf("failed to run migrations 1..30: %v", err)
 	}
 
 	report, err := sqlite.CheckReadiness(ctx, db)
@@ -76,8 +77,8 @@ func TestFeatureConvergence_SchemaMigrationTo29(t *testing.T) {
 	if !report.Ready {
 		t.Fatalf("expected readiness report Ready=true, got report: %+v", report)
 	}
-	if report.SchemaVersion != 29 {
-		t.Fatalf("expected schema version 29 (including latest original subscription configurations), got %d", report.SchemaVersion)
+	if report.SchemaVersion != 30 {
+		t.Fatalf("expected schema version 30 (including storage preparation), got %d", report.SchemaVersion)
 	}
 	if len(report.MissingTables) > 0 {
 		t.Fatalf("unexpected missing tables: %v", report.MissingTables)
@@ -88,7 +89,7 @@ func TestFeatureConvergence_SchemaMigrationTo29(t *testing.T) {
 
 	// Include the standalone latest-original store from migration 29 alongside
 	// existing probe, policy, publication, and durable override tables.
-	for _, tbl := range []string{"probe_schedules", "probe_batches", "probe_batch_runs", "global_node_filters", "group_node_filters", "subscription_links", "dns_config", "proxy_chain_bindings", "subscription_entry_overrides", "subscription_original_configs"} {
+	for _, tbl := range []string{"probe_schedules", "probe_batches", "probe_batch_runs", "global_node_filters", "group_node_filters", "subscription_links", "dns_config", "proxy_chain_bindings", "subscription_entry_overrides", "subscription_original_configs", "subscription_payload_evidence", "node_connection_provenance", "node_source_observations", "subscription_current_state", "node_connection_version_leases", "subscription_storage_readiness"} {
 		var name string
 		err := db.QueryRowContext(ctx, "SELECT name FROM sqlite_master WHERE type='table' AND name=?", tbl).Scan(&name)
 		if err != nil {

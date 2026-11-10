@@ -136,7 +136,7 @@ func TestNodeRepository_ListAll_AndHealthPredicatesConservation(t *testing.T) {
 	payloadID := "payload-notice-01"
 	_, err = db.ExecContext(ctx, `
 		INSERT INTO subscription_payloads (id, subscription_id, fetch_id, content_digest, body_blob, pinned, created_at)
-		VALUES (?, ?, ?, 'digest-notice', X'deadbeef', 1, ?);
+		VALUES (?, ?, ?, 'digest-notice', X'', 1, ?);
 	`, payloadID, enabledSubID, fetchID, nowStr)
 	if err != nil {
 		t.Fatalf("failed to insert notice payload: %v", err)

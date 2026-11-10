@@ -302,7 +302,7 @@ func TestNodeResetRepository_PublicationPreservation(t *testing.T) {
 
 	_, err = db.ExecContext(ctx, `
 		INSERT INTO subscription_payloads (id, subscription_id, fetch_id, content_digest, body_blob, pinned, created_at)
-		VALUES (?, ?, ?, 'digest123', X'deadbeef', 1, ?);
+		VALUES (?, ?, ?, 'digest123', X'', 1, ?);
 	`, payloadID, subID, fetchID, nowStr)
 	if err != nil {
 		t.Fatalf("insert payload: %v", err)
@@ -324,6 +324,11 @@ func TestNodeResetRepository_PublicationPreservation(t *testing.T) {
 		t.Fatalf("insert publication: %v", err)
 	}
 
+	// A pin captures immutable digest evidence; modern refs point to evidence,
+	// not directly to the current payload.
+	if err := NewSubscriptionPayloadRepository(db).Pin(ctx, payloadID, true); err != nil {
+		t.Fatalf("pin payload evidence: %v", err)
+	}
 	_, err = db.ExecContext(ctx, `
 		INSERT INTO publication_payload_refs (publication_id, payload_id)
 		VALUES (?, ?);
@@ -344,20 +349,23 @@ func TestNodeResetRepository_PublicationPreservation(t *testing.T) {
 
 	// Verify publication is kept
 	var pubCount int
-	_ = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM publications WHERE id = ?;", pubID).Scan(&pubCount)
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM publications WHERE id = ?;", pubID).Scan(&pubCount); err != nil {
+		t.Fatalf("query publication count: %v", err)
+	}
 	if pubCount != 1 {
 		t.Errorf("publication not preserved")
 	}
 
-	// Verify payload is kept and body bytes are stable
-	var payloadCount int
+	// Verify current metadata remains body-free and publication reference and
+	// pin preserve the original digest evidence.
+	var digest, evidenceDigest string
 	var bodyBlob []byte
-	err = db.QueryRowContext(ctx, "SELECT COUNT(*), body_blob FROM subscription_payloads WHERE id = ? GROUP BY body_blob;", payloadID).Scan(&payloadCount, &bodyBlob)
-	if err != nil || payloadCount != 1 {
-		t.Fatalf("published payload not preserved: count=%d, err=%v", payloadCount, err)
-	}
-	if len(bodyBlob) != 4 || bodyBlob[0] != 0xde || bodyBlob[1] != 0xad {
-		t.Errorf("payload body_blob altered: got %x", bodyBlob)
+	var pinned, refs int
+	err = db.QueryRowContext(ctx, `SELECT p.content_digest, p.body_blob, e.content_digest, e.pinned,
+		(SELECT COUNT(*) FROM publication_payload_refs r WHERE r.publication_id=? AND r.payload_id=e.payload_id)
+		FROM subscription_payloads p JOIN subscription_payload_evidence e ON e.payload_id=p.id WHERE p.id=?`, pubID, payloadID).Scan(&digest, &bodyBlob, &evidenceDigest, &pinned, &refs)
+	if err != nil || digest != "digest123" || len(bodyBlob) != 0 || evidenceDigest != "digest123" || pinned != 1 || refs != 1 {
+		t.Fatalf("payload/evidence not preserved: digest=%q body_len=%d evidence=%q pinned=%d refs=%d err=%v", digest, len(bodyBlob), evidenceDigest, pinned, refs, err)
 	}
 
 	// Verify publication content bytes are stable
@@ -523,4 +531,3 @@ func TestNodeResetRepository_PreflightFKViolation(t *testing.T) {
 		t.Errorf("expected FKViolations in report")
 	}
 }
-

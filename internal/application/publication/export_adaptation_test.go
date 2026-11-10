@@ -262,6 +262,15 @@ func TestPreview_FactsPath_RealDraftPersistenceAndPublishLifecycle(t *testing.T)
 		t.Fatal(err)
 	}
 
+	// Bind the known original payload to the version created by UpsertBatch.
+	entryID := "entry-lifecycle-1"
+	if _, err := db.ExecContext(ctx, `INSERT INTO subscription_entries (id,payload_id,subscription_id,ordinal,source_key,raw_name,protocol,server,port,entry_kind,classification_reason,node_logical_id,created_at) VALUES (?,?,?,0,'lifecycle','Lifecycle SS Node','ss','1.2.3.4',8388,'proxy','fixture',?,?)`, entryID, payloadID, subID, nodeID, now.Format(time.RFC3339)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE node_connection_versions SET source_entry_id=? WHERE node_logical_id=? AND connection_revision=1`, entryID, nodeID); err != nil {
+		t.Fatal(err)
+	}
+
 	// 4. Revision
 	revID := "rev-lifecycle-1"
 	rev := domain.ConfigurationRevision{
@@ -826,8 +835,8 @@ func TestPreview_FactsPath_SelectionExhaustion_PrimaryFallbackMatchesLive(t *tes
 		Credentials: domain.InboundProtocolCredential{
 			UUID: "01944aa0-0000-7000-8000-000000000001",
 		},
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 
 	factsSurgeFallback := &domain.ConsistentFacts{

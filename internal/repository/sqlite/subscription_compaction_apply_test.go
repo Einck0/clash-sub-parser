@@ -29,7 +29,7 @@ func preparedCompactionScratch(t *testing.T) (*sql.DB, *domain.SubscriptionStora
 	}
 	retentionInsertTestFetch(t, db, "failed-fetch", "compact-sub", now.Add(3*time.Hour), domain.FetchOutcomeFailed)
 	if _, err := db.ExecContext(ctx, `INSERT INTO subscription_original_configs(subscription_id,source_revision,content_digest,body_blob,fetch_id)VALUES('compact-sub','rev-1','sha256:digest',x'78','current-fetch');
-		INSERT INTO nodes(logical_id,protocol,display_name,server,port,config_json,active,created_at,updated_at,connection_revision)VALUES('zero-node','ss','Synthetic','192.0.2.1',8388,'{}',1,'2026-11-10T00:00:00Z','2026-11-10T00:00:00Z',0);`); err != nil {
+		INSERT INTO nodes(logical_id,protocol,display_name,server,port,config_json,active,created_at,updated_at,connection_revision)VALUES('zero-node','ss','Synthetic','192.0.2.1',8388,'{}',1,'2026-11-10T00:00:00Z','2026-11-10T00:00:00Z',1);`); err != nil {
 		t.Fatal(err)
 	}
 	if err := runner.Run(ctx); err != nil {
@@ -67,8 +67,8 @@ func TestOfflineCompactionPreparedScratchSingleGeneration(t *testing.T) {
 		t.Fatalf("applied/attempt conflated: %s %s %s", applied, attempt, status)
 	}
 	var revision int64
-	if err := db.QueryRowContext(ctx, `SELECT connection_revision FROM node_connection_heads WHERE logical_id='zero-node'`).Scan(&revision); err != nil || revision != 0 {
-		t.Fatalf("revision zero changed: %d %v", revision, err)
+	if err := db.QueryRowContext(ctx, `SELECT connection_revision FROM node_connection_heads WHERE logical_id='zero-node'`).Scan(&revision); err != nil || revision != 1 {
+		t.Fatalf("current revision changed: %d %v", revision, err)
 	}
 	if _, err := db.ExecContext(ctx, `INSERT INTO subscription_payloads(id,subscription_id,fetch_id,content_digest,body_blob,created_at)VALUES('second','compact-sub','current-fetch','digest',X'','2026-11-10T00:00:00Z')`); err == nil {
 		t.Fatal("single generation constraint missing")
@@ -76,7 +76,7 @@ func TestOfflineCompactionPreparedScratchSingleGeneration(t *testing.T) {
 }
 
 func TestOfflineCompactionRejectsUnprovedAndChangedInputsWithoutMutation(t *testing.T) {
-	for _, branch := range []string{"missing", "duplicate", "source_revision", "older_generation", "raw_mismatch", "changed_snapshot", "cancelled", "contradictory_head", "conflicting_applied", "conflicting_applied_revision", "half_applied"} {
+	for _, branch := range []string{"missing", "duplicate", "source_revision", "older_generation", "raw_mismatch", "changed_snapshot", "cancelled", "invalid_current_revision", "contradictory_head", "conflicting_applied", "conflicting_applied_revision", "half_applied"} {
 		t.Run(branch, func(t *testing.T) {
 			db, baseline, decisions := preparedCompactionScratch(t)
 			ctx := context.Background()
@@ -124,8 +124,22 @@ func TestOfflineCompactionRejectsUnprovedAndChangedInputsWithoutMutation(t *test
 				var cancel context.CancelFunc
 				ctx, cancel = context.WithCancel(ctx)
 				cancel()
+			case "invalid_current_revision":
+				// Simulate storage corruption, not a supported legacy node. Restore
+				// constraint enforcement before apply; it must reject without
+				// renumbering the node or changing any facts.
+				if _, err := db.Exec(`PRAGMA ignore_check_constraints=ON;
+					UPDATE nodes SET connection_revision=0 WHERE logical_id='zero-node';
+					PRAGMA ignore_check_constraints=OFF`); err != nil {
+					t.Fatal(err)
+				}
+				var err error
+				baseline, err = sqlite.InspectSubscriptionCompaction(ctx, db)
+				if err != nil {
+					t.Fatal(err)
+				}
 			case "contradictory_head":
-				if _, err := db.Exec(`INSERT INTO node_connection_versions(node_logical_id,connection_revision,effective_config_json,config_fingerprint,created_at)VALUES('zero-node',0,'{"server":"other","port":8388,"credentials":{}}','bad','2026-11-10T00:00:00Z')`); err != nil {
+				if _, err := db.Exec(`INSERT INTO node_connection_versions(node_logical_id,connection_revision,effective_config_json,config_fingerprint,created_at)VALUES('zero-node',1,'{"server":"other","port":8388,"credentials":{}}','bad','2026-11-10T00:00:00Z')`); err != nil {
 					t.Fatal(err)
 				}
 				var err error

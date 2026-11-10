@@ -7,6 +7,7 @@ import (
 
 	"clash-sub-parser/internal/domain"
 	"clash-sub-parser/internal/repository/sqlite"
+	"clash-sub-parser/migrations"
 )
 
 // TestSubscriptionRepository_NodeCount_NoticeExclusionRegressions verifies that
@@ -157,7 +158,12 @@ func TestSubscriptionRepository_NodeCount_NoticeExclusionRegressions(t *testing.
 // when an older payload had a notice entry, but the current useful payload has a proxy entry,
 // the node is correctly counted as a proxy.
 func TestSubscriptionRepository_NodeCount_StaleNoticeCurrentProxy(t *testing.T) {
-	db, _ := setupTestDB(t)
+	// Explicit unconverted legacy fixture: modern storage cannot contain an
+	// old notice generation alongside the current proxy generation.
+	db, _ := setupEmptyTestDB(t)
+	if err := sqlite.NewMigrationRunner(db, migrations.FS).RunUpTo(context.Background(), 29); err != nil {
+		t.Fatal(err)
+	}
 	subRepo := sqlite.NewSubscriptionRepository(db)
 	ctx := context.Background()
 

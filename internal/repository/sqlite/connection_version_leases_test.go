@@ -15,7 +15,7 @@ func TestConnectionVersionLeaseAtomicSnapshotAndExplicitRelease(t *testing.T) {
 	db, _ := setupTestDB(t)
 	now := time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC)
 	if _, err := db.ExecContext(ctx, `INSERT INTO nodes (logical_id,protocol,display_name,server,port,config_json,active,created_at,updated_at,connection_revision)
-		VALUES ('lease-node','ss','Synthetic','192.0.2.1',8388,'{}',1,?,?,0)`, now.Format(time.RFC3339), now.Format(time.RFC3339)); err != nil {
+		VALUES ('lease-node','ss','Synthetic','192.0.2.1',8388,'{}',1,?,?,1)`, now.Format(time.RFC3339), now.Format(time.RFC3339)); err != nil {
 		t.Fatal(err)
 	}
 	const oldConfig = `{"server":"192.0.2.1","port":8388,"credentials":{"password":"synthetic-old"}}`

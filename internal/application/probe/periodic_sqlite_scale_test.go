@@ -12,6 +12,7 @@ import (
 
 	"clash-sub-parser/internal/domain"
 	"clash-sub-parser/internal/repository/sqlite"
+	"clash-sub-parser/migrations"
 )
 
 // scalePageRecorder delegates COUNT and pagination to the real repository. It
@@ -44,8 +45,18 @@ func TestPeriodicCoordinator_SQLiteScale(t *testing.T) {
 	defer cancel()
 	started := time.Now()
 	cfg := sqlite.DefaultConfig(filepath.Join(t.TempDir(), "periodic-scale.db"))
-	db, err := sqlite.OpenAndMigrate(ctx, cfg)
+	// Offline preparation schema preserves the historical million-row fixture;
+	// migration 30 adds facts evidence tables without sealing modern constraints.
+	db, err := sqlite.Open(cfg)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlite.NewMigrationRunner(db, migrations.FS).RunUpTo(ctx, 29); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := sqlite.NewMigrationRunner(db, migrations.FS).RunUpTo(ctx, 30); err != nil {
+		_ = db.Close()
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
@@ -271,7 +282,7 @@ func TestPeriodicCoordinator_SQLiteScale(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Reopen the same WAL file and run actual startup recovery on a synthetic
+	// Reopen the same offline-prepared WAL file and run coordinator recovery on a synthetic
 	// abandoned batch/run; no production DB or crash simulation is involved.
 	old := now.Add(-time.Hour)
 	abandonedRun := &domain.ProbeRun{ID: "scale-abandoned-run", IdempotencyKey: "scale-abandoned", ActorScope: "synthetic", State: domain.ProbeRunStateRunning, DeadlineAt: old, CreatedAt: old, UpdatedAt: old}
@@ -286,7 +297,7 @@ func TestPeriodicCoordinator_SQLiteScale(t *testing.T) {
 		t.Fatal(err)
 	}
 	started = time.Now()
-	db, err = sqlite.OpenAndMigrate(ctx, cfg)
+	db, err = sqlite.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,7 +307,7 @@ func TestPeriodicCoordinator_SQLiteScale(t *testing.T) {
 	if err := recovered.Recover(ctx); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("stage=reopen_migrate_recover elapsed=%s", time.Since(started))
+	t.Logf("stage=reopen_offline_prepared_recover elapsed=%s", time.Since(started))
 	abandoned, err = schedules.GetBatchByID(ctx, abandoned.ID)
 	if err != nil || abandoned.State != domain.ProbeBatchStateExpired {
 		t.Fatalf("abandoned batch recovery: %+v error=%v", abandoned, err)

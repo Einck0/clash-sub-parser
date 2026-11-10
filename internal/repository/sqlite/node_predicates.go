@@ -51,6 +51,38 @@ WHERE se1.node_logical_id IS NOT NULL
         ) = 'proxy'
   )`
 
+// Enabled inventory classification must ignore disabled subscriptions on both
+// sides: neither a disabled notice nor a disabled explicit proxy may affect a
+// currently enabled shared node. Keep the unscoped query above for legacy asset
+// classification and disabled subscriptions' retained source counts.
+const enabledNoticeExclusionSubquery = `SELECT se1.node_logical_id FROM subscription_entries se1
+JOIN subscriptions notice_sub ON notice_sub.id = se1.subscription_id AND notice_sub.enabled = 1
+WHERE se1.node_logical_id IS NOT NULL
+  AND se1.payload_id IN (` + currentUsefulPayloadsSubquery + `)
+  AND COALESCE(
+      (SELECT seo.user_kind_override
+       FROM subscription_entry_overrides seo
+       WHERE seo.subscription_id = se1.subscription_id
+         AND ((se1.override_anchor != '' AND seo.override_anchor = se1.override_anchor) OR (se1.source_key != '' AND seo.override_anchor = se1.source_key))
+       ORDER BY seo.override_at DESC, seo.rowid DESC
+       LIMIT 1),
+      se1.entry_kind
+  ) = 'notice'
+  AND NOT EXISTS (
+      SELECT 1 FROM subscription_entries se2
+      JOIN subscriptions proxy_sub ON proxy_sub.id = se2.subscription_id AND proxy_sub.enabled = 1
+      WHERE se2.node_logical_id = se1.node_logical_id
+        AND se2.payload_id IN (` + currentUsefulPayloadsSubquery + `)
+        AND (
+            SELECT seo2.user_kind_override
+            FROM subscription_entry_overrides seo2
+            WHERE seo2.subscription_id = se2.subscription_id
+              AND ((se2.override_anchor != '' AND seo2.override_anchor = se2.override_anchor) OR (se2.source_key != '' AND seo2.override_anchor = se2.source_key))
+            ORDER BY seo2.override_at DESC, seo2.rowid DESC
+            LIMIT 1
+        ) = 'proxy'
+  )`
+
 // Aliases ns and s must identify the source and its subscription respectively.
 const currentEnabledSourcePredicate = `s.enabled = 1
   AND ns.last_seen_fetch_id != ''
@@ -89,7 +121,7 @@ func buildNodeFilterPredicates(filter domain.NodeFilter, colPrefix string) ([]st
 	// Scope E: current enabled subscription inventory
 	if filter.Scope == domain.NodeScopeEnabledSubscriptions {
 		where = append(where, fmt.Sprintf("%slogical_id IN (%s)", colPrefix, enabledSubscriptionsInventorySubquery))
-		where = append(where, fmt.Sprintf("%slogical_id NOT IN (%s)", colPrefix, confirmedNoticeExclusionSubquery))
+		where = append(where, fmt.Sprintf("%slogical_id NOT IN (%s)", colPrefix, enabledNoticeExclusionSubquery))
 	} else if filter.ExcludeNotices {
 		where = append(where, fmt.Sprintf("%slogical_id NOT IN (%s)", colPrefix, confirmedNoticeExclusionSubquery))
 	}

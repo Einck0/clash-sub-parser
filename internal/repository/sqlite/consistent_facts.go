@@ -507,7 +507,7 @@ func loadActiveNodes(ctx context.Context, tx *sql.Tx) ([]domain.Node, []string, 
 	LEFT JOIN node_connection_heads h ON n.logical_id = h.logical_id
 	LEFT JOIN node_connection_versions v ON h.logical_id = v.node_logical_id AND h.connection_revision = v.connection_revision
 	WHERE n.logical_id IN (` + enabledSubscriptionsInventorySubquery + `)
-	  AND n.logical_id NOT IN (` + confirmedNoticeExclusionSubquery + `)
+	  AND n.logical_id NOT IN (` + enabledNoticeExclusionSubquery + `)
 	  AND n.active = 1
 	ORDER BY n.created_at DESC, n.logical_id ASC;`
 

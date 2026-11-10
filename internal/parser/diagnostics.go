@@ -9,9 +9,11 @@ import (
 
 const maxDiagnostics = 32
 
-// Diagnostic identifies a rejected entry without retaining any subscription text.
+// Diagnostic identifies a rejected entry or empty document without retaining
+// any subscription text.
 // Format, Protocol, Reason and Field are parser-owned, finite vocabularies.
-// Entry is the one-based YAML element / whitespace-delimited URL ordinal.
+// Entry is the one-based YAML element / whitespace-delimited URL ordinal;
+// zero identifies a document-level diagnostic when there are no entries.
 type Diagnostic struct {
 	Format   string `json:"format"`
 	Entry    int    `json:"entry"`
@@ -56,6 +58,15 @@ func (r *ExtractResult) reject(format string, entry int, protocol string, err er
 	}
 }
 
+// emptySubscriptionResult describes an empty document without inventing a
+// rejected node. All values are parser-owned; no subscription text is retained.
+func emptySubscriptionResult(format, field string) ExtractResult {
+	return ExtractResult{
+		Diagnostics:  []Diagnostic{{Format: format, Entry: 0, Reason: "empty_subscription", Field: field}},
+		ReasonCounts: []ReasonCount{{Reason: "empty_subscription", Count: 1}},
+	}
+}
+
 func knownProtocol(raw string) string {
 	protocol, err := protocolFor(raw)
 	if err != nil {
@@ -67,7 +78,7 @@ func knownProtocol(raw string) string {
 // DiagnosticSummary is deterministic and bounded regardless of input size. It
 // deliberately serializes only diagnostics produced internally, never raw errors.
 func (r ExtractResult) DiagnosticSummary() string {
-	if r.Rejected == 0 {
+	if r.Rejected == 0 && len(r.Diagnostics) == 0 {
 		return ""
 	}
 	payload := struct {

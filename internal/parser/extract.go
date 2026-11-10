@@ -31,7 +31,7 @@ type ExtractResult struct {
 func ExtractWithCredentials(content []byte) (ExtractResult, error) {
 	trimmed := strings.TrimSpace(string(content))
 	if trimmed == "" {
-		return ExtractResult{}, domain.NewValidationError("empty_subscription", "subscription content is empty")
+		return emptySubscriptionResult("text", "document"), domain.NewValidationError("empty_subscription", "subscription content is empty")
 	}
 
 	if items, ok, err := extractYAML([]byte(trimmed)); ok {
@@ -94,6 +94,9 @@ func extractYAML(content []byte) (ExtractResult, bool, error) {
 	if proxies == nil || proxies.Kind != yaml.SequenceNode {
 		result.reject("yaml", 1, "", parseIssue("invalid_entry", "proxies"))
 	} else {
+		if len(proxies.Content) == 0 {
+			return emptySubscriptionResult("yaml", "proxies"), true, domain.NewValidationError("empty_subscription", "subscription proxy list is empty")
+		}
 		for i, entry := range proxies.Content {
 			var proxy map[string]any
 			if err := entry.Decode(&proxy); err != nil || proxy == nil {
@@ -239,6 +242,9 @@ func extractYAMLProxy(proxy map[string]any) (NormalizedNode, domain.InboundProto
 }
 
 func extractURLLines(content string) (ExtractResult, error) {
+	if strings.TrimSpace(content) == "" {
+		return emptySubscriptionResult("text", "document"), domain.NewValidationError("empty_subscription", "subscription content is empty")
+	}
 	result := ExtractResult{}
 	for i, line := range strings.Fields(content) {
 		node, creds, err := extractURL(line)

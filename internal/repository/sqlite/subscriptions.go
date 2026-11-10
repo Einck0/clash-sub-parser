@@ -231,7 +231,12 @@ func (r *subscriptionRepository) attachNodeCounts(ctx context.Context, subs []*d
 
 	noticeExclusion := ""
 	if entriesTableExists > 0 {
-		noticeExclusion = fmt.Sprintf("AND ns.node_logical_id NOT IN (%s)", confirmedNoticeExclusionSubquery)
+		// Enabled counts follow enabled inventory classification; disabled
+		// source counts retain the legacy classification for historical display.
+		noticeExclusion = fmt.Sprintf(`AND CASE WHEN s.enabled = 1
+			THEN ns.node_logical_id NOT IN (%s)
+			ELSE ns.node_logical_id NOT IN (%s)
+		END`, enabledNoticeExclusionSubquery, confirmedNoticeExclusionSubquery)
 	}
 
 	query := fmt.Sprintf(`

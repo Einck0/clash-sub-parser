@@ -2,6 +2,7 @@ package inventory_test
 
 import (
 	"context"
+	"encoding/base64"
 	"strings"
 	"testing"
 
@@ -66,5 +67,44 @@ func TestParseDiagnosticsPersistPartialAndTotalFailureWithoutSecrets(t *testing.
 	var lastFetch string
 	if err := db.QueryRowContext(ctx, "SELECT last_seen_fetch_id FROM node_sources WHERE subscription_id = ?", id).Scan(&lastFetch); err != nil || lastFetch != partial.FetchID {
 		t.Fatalf("failure changed source: %q %v", lastFetch, err)
+	}
+
+	for _, tc := range []struct{ name, body string }{
+		{"empty", ""},
+		{"whitespace", " \n\t"},
+		{"yaml", "proxies: [] # SECRET_EMPTY_SENTINEL"},
+		{"base64_whitespace", base64.StdEncoding.EncodeToString([]byte(" \n\t"))},
+		{"base64_yaml", base64.StdEncoding.EncodeToString([]byte("proxies: [] # SECRET_EMPTY_SENTINEL"))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fetcher.setResponse(url, &fetch.Response{StatusCode: 200, Body: []byte(tc.body), ContentDigest: "empty-" + tc.name})
+			empty, err := svc.ReconcileSubscription(ctx, id)
+			if err == nil || empty == nil || empty.Outcome != domain.FetchOutcomeFailed || empty.NodesParsed != 0 || empty.NodesValid != 0 {
+				t.Fatalf("empty result=%+v error=%v", empty, err)
+			}
+			var stored string
+			var parsed, valid int
+			if err := db.QueryRowContext(ctx, "SELECT redacted_error, nodes_parsed, nodes_valid FROM subscription_fetches WHERE id = ?", empty.FetchID).Scan(&stored, &parsed, &valid); err != nil {
+				t.Fatal(err)
+			}
+			if stored != empty.RedactedError || parsed != 0 || valid != 0 || !strings.Contains(stored, `"reason":"empty_subscription"`) || !strings.Contains(stored, `"rejected":0`) {
+				t.Fatalf("persisted empty diagnostic/count mismatch: %s %d/%d", stored, parsed, valid)
+			}
+			if strings.Contains(stored+err.Error(), "SECRET") || len(stored) > 8192 {
+				t.Fatal("unsafe/unbounded empty diagnostic")
+			}
+			original, err := svc.GetOriginalConfig(ctx, id)
+			if err != nil || string(original.Body) != string(body) {
+				t.Fatalf("empty failure replaced last successful original: %v", err)
+			}
+			var sourceCount int
+			if err := db.QueryRowContext(ctx, "SELECT COUNT(*), MIN(last_seen_fetch_id) FROM node_sources WHERE subscription_id = ?", id).Scan(&sourceCount, &lastFetch); err != nil || sourceCount != 1 || lastFetch != partial.FetchID {
+				t.Fatalf("empty failure changed source: count=%d fetch=%q error=%v", sourceCount, lastFetch, err)
+			}
+			active, total, err := svc.ListNodes(ctx, domain.NodeFilter{ActiveOnly: true})
+			if err != nil || total != 1 || len(active) != 1 || active[0].DisplayName != "Valid" {
+				t.Fatalf("empty failure changed active nodes: %+v total=%d error=%v", active, total, err)
+			}
+		})
 	}
 }

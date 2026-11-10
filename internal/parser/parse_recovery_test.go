@@ -77,6 +77,42 @@ func TestParseRecoveryAllFailureCountsAndBoundedDiagnostics(t *testing.T) {
 	}
 }
 
+func TestEmptySubscriptionDiagnostics(t *testing.T) {
+	for _, tc := range []struct {
+		name, input, format, field string
+	}{
+		{"empty", "", "text", "document"},
+		{"whitespace", " \n\t\r ", "text", "document"},
+		{"yaml", "proxies: [] # SECRET_SENTINEL", "yaml", "proxies"},
+		{"base64_whitespace", base64.StdEncoding.EncodeToString([]byte(" \n\t")), "base64_text", "document"},
+		{"base64_yaml", base64.StdEncoding.EncodeToString([]byte("proxies: [] # SECRET_SENTINEL")), "base64_yaml", "proxies"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := parser.ExtractWithCredentials([]byte(tc.input))
+			if err == nil || len(res.Items) != 0 || res.Rejected != 0 {
+				t.Fatalf("empty subscription: result=%+v error=%v", res, err)
+			}
+			wantDiagnostics := []parser.Diagnostic{{Format: tc.format, Entry: 0, Reason: "empty_subscription", Field: tc.field}}
+			wantCounts := []parser.ReasonCount{{Reason: "empty_subscription", Count: 1}}
+			if !reflect.DeepEqual(res.Diagnostics, wantDiagnostics) || !reflect.DeepEqual(res.ReasonCounts, wantCounts) {
+				t.Fatalf("missing document diagnostic: %+v", res)
+			}
+			wantSummary := `[stage:parse] {"rejected":0,"reason_counts":[{"reason":"empty_subscription","count":1}],"entries":[{"format":"` + tc.format + `","entry":0,"reason":"empty_subscription","field":"` + tc.field + `"}]}`
+			if res.DiagnosticSummary() != wantSummary || strings.Contains(err.Error(), "SECRET") {
+				t.Fatalf("unsafe or missing empty summary: %s error=%v", res.DiagnosticSummary(), err)
+			}
+			parsed, parseErr := parser.Parse([]byte(tc.input))
+			if parseErr == nil || len(parsed.Nodes) != 0 || parsed.Rejected != 0 || !reflect.DeepEqual(parsed.Diagnostics, wantDiagnostics) || !reflect.DeepEqual(parsed.ReasonCounts, wantCounts) {
+				t.Fatalf("Parse lost empty diagnostic: %+v error=%v", parsed, parseErr)
+			}
+		})
+	}
+	valid, err := parser.ExtractWithCredentials([]byte("http://192.0.2.1:8080"))
+	if err != nil || valid.DiagnosticSummary() != "" {
+		t.Fatalf("valid subscription gained failure diagnostic: %+v error=%v", valid, err)
+	}
+}
+
 func TestParseRecoveryLegacyShadowsocksAndPlugin(t *testing.T) {
 	for _, endpoint := range []string{"192.0.2.4:8388", "[2001:db8::4]:8388"} {
 		for _, encoding := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding} {

@@ -12,7 +12,7 @@ import (
 )
 
 func TestSubscriptionCompactionRefusesUnsupportedMutations(t *testing.T) {
-	for _, operation := range []string{"apply", "", "unknown"} {
+	for _, operation := range []string{"", "unknown"} {
 		t.Run(operation, func(t *testing.T) {
 			var out, stderr bytes.Buffer
 			if code := runSubscriptionCompaction([]string{operation, "--db", filepath.Join(t.TempDir(), "must-not-exist.db")}, &out, &stderr); code == 0 {
@@ -59,7 +59,7 @@ func TestSubscriptionCompactionPlanPreservesInputAndPrivateReport(t *testing.T) 
 	}
 	report, err := os.ReadFile(reportPath)
 	if err != nil || !bytes.Contains(report, []byte(`"apply_supported":false`)) {
-		t.Fatalf("plan must explicitly disclose unsupported apply: %v", err)
+		t.Fatalf("sealed input must explicitly disclose unsupported reapply: %v", err)
 	}
 	info, err := os.Stat(reportPath)
 	if err != nil || info.Mode().Perm() != 0600 {

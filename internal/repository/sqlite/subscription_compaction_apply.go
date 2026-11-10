@@ -14,7 +14,8 @@ import (
 // SubscriptionCompactionDecision is an explicit, snapshot-bound reconciliation
 // decision, never an instruction to select whichever row happens to be newest.
 // Empty PayloadID is allowed only for a subscription with no useful generation.
-// SourceRevision must match independently saved raw/current-state evidence.
+// SourceRevision is the snapshot cut fence. Existing saved raw/state must match;
+// legacy schema27 absence is allowed and never fabricated as historical proof.
 type SubscriptionCompactionDecision struct {
 	SubscriptionID string
 	SourceRevision string
@@ -27,12 +28,11 @@ type SubscriptionCompactionDecision struct {
 // independent immutable backup, exclusive access, capacity and drain BEFORE
 // opening it. It must never be called by startup or against a live database.
 //
-// This conservative first transformer rejects legacy sources whose applied
-// identity or per-source history is unproved. It does not guess those facts,
-// migrate schema, reclaim versions, VACUUM, switch files or approve deployment.
-// The returned inventory is not a consumer-closure or production safety seal.
+// Legacy reconciliation is bound to exact planned source/history projections.
+// It does not migrate schema, reclaim versions, VACUUM, switch files or approve
+// deployment. The returned inventory is not a consumer-closure safety seal.
 func FinalizeSubscriptionCompaction(ctx context.Context, db *sql.DB, baseline *domain.SubscriptionStoragePlan, decisions []SubscriptionCompactionDecision) (*domain.SubscriptionStoragePlan, error) {
-	if db == nil || baseline == nil || baseline.Version != 1 || baseline.SchemaVersion != 30 || baseline.SnapshotDigest == "" {
+	if db == nil || baseline == nil || baseline.Version != 1 || baseline.SchemaVersion != 30 || baseline.SnapshotDigest == "" || !baseline.ApplySupported {
 		return nil, fmt.Errorf("maintenance_required: prepared scratch baseline required")
 	}
 	var result *domain.SubscriptionStoragePlan
@@ -56,7 +56,7 @@ func FinalizeSubscriptionCompaction(ctx context.Context, db *sql.DB, baseline *d
 		if err != nil {
 			return err
 		}
-		if before.SchemaVersion != 30 || before.SnapshotDigest != baseline.SnapshotDigest || !reflect.DeepEqual(before.ProtectedDigests, baseline.ProtectedDigests) {
+		if before.SchemaVersion != 30 || !reflect.DeepEqual(before, baseline) {
 			return fmt.Errorf("maintenance_required: scratch snapshot changed after planning")
 		}
 		selected := make(map[string]SubscriptionCompactionDecision, len(decisions))
@@ -88,7 +88,7 @@ func FinalizeSubscriptionCompaction(ctx context.Context, db *sql.DB, baseline *d
 		if err := requireCompactionZeroTx(ctx, tx, `SELECT COUNT(*) FROM subscription_entries e WHERE NOT EXISTS(SELECT 1 FROM subscription_payloads p WHERE p.id=e.payload_id AND p.subscription_id=e.subscription_id)`, "cross-source input entry"); err != nil {
 			return err
 		}
-		if err := requireCompactionZeroTx(ctx, tx, `SELECT COUNT(*) FROM subscription_entries e WHERE e.node_logical_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM node_source_history h WHERE h.node_logical_id=e.node_logical_id AND h.source_identity='sub:'||e.subscription_id)`, "unreconciled per-source history"); err != nil {
+		if err := reconcileCompactionSourcesTx(ctx, tx, baseline); err != nil {
 			return err
 		}
 		if err := requireCompactionZeroTx(ctx, tx, `SELECT COUNT(*) FROM node_sources ns WHERE NOT EXISTS (SELECT 1 FROM subscription_entries e JOIN subscription_payloads p ON p.id=e.payload_id WHERE e.subscription_id=ns.subscription_id AND e.node_logical_id=ns.node_logical_id AND p.fetch_id=ns.last_seen_fetch_id)`, "unreconciled source membership"); err != nil {
@@ -109,8 +109,7 @@ func FinalizeSubscriptionCompaction(ctx context.Context, db *sql.DB, baseline *d
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO node_source_observations(node_logical_id,source_identity,subscription_id,raw_name,protocol,source_key,observed_at)
-			SELECT e.node_logical_id,'sub:'||e.subscription_id,e.subscription_id,e.raw_name,e.protocol,e.source_key,e.created_at FROM subscription_entries e
-			WHERE e.node_logical_id IS NOT NULL AND e.rowid=(SELECT e2.rowid FROM subscription_entries e2 WHERE e2.node_logical_id=e.node_logical_id AND e2.subscription_id=e.subscription_id ORDER BY e2.created_at DESC,e2.rowid DESC LIMIT 1)`); err != nil {
+			SELECT e.node_logical_id,'sub:'||e.subscription_id,e.subscription_id,e.raw_name,e.protocol,e.source_key,e.created_at FROM `+compactionLatestEntries+` e`); err != nil {
 			return err
 		}
 		if err := redirectPublicationEvidenceTx(ctx, tx); err != nil {
@@ -182,7 +181,7 @@ func FinalizeSubscriptionCompaction(ctx context.Context, db *sql.DB, baseline *d
 		if err != nil {
 			return err
 		}
-		if !reflect.DeepEqual(result.ProtectedDigests, baseline.ProtectedDigests) {
+		if !compactionProtectedMatch(result, baseline) {
 			return fmt.Errorf("maintenance_required: protected asset changed")
 		}
 		return nil
@@ -226,17 +225,9 @@ func validateCompactionDecisionTx(ctx context.Context, tx *sql.Tx, decision Subs
 	if err := tx.QueryRowContext(ctx, `SELECT p.fetch_id FROM subscription_payloads p JOIN subscription_fetches f ON f.id=p.fetch_id WHERE p.id=? AND p.subscription_id=? AND f.subscription_id=p.subscription_id AND f.outcome IN ('success','partial')`, decision.PayloadID, decision.SubscriptionID).Scan(&fetchID); err != nil {
 		return fmt.Errorf("maintenance_required: selected generation is not useful")
 	}
-	// Legacy timestamps alone cannot prove which source revision produced a
-	// payload. Require independently saved raw identity or explicit applied state.
-	var proof int
-	if err := tx.QueryRowContext(ctx, `SELECT
-		(SELECT COUNT(*) FROM subscription_original_configs c JOIN subscription_payloads p ON p.fetch_id=c.fetch_id AND p.subscription_id=c.subscription_id AND p.content_digest=c.content_digest WHERE c.subscription_id=? AND c.source_revision=? AND p.id=?) +
-		(SELECT COUNT(*) FROM subscription_current_state WHERE subscription_id=? AND source_revision=? AND applied_payload_id=? AND applied_fetch_id=?)`, decision.SubscriptionID, decision.SourceRevision, decision.PayloadID, decision.SubscriptionID, decision.SourceRevision, decision.PayloadID, fetchID).Scan(&proof); err != nil {
-		return err
-	}
-	if proof == 0 {
-		return fmt.Errorf("maintenance_required: selected generation source identity unproved")
-	}
+	// Legacy schema27 has no independent raw/state record. The source revision
+	// is a cut fence, not invented historical identity. Existing optional facts
+	// must still agree; absence is not a contradiction.
 	if err := requireCompactionZeroTx(ctx, tx, `SELECT COUNT(*) FROM subscription_original_configs c WHERE c.subscription_id=? AND (c.source_revision!=? OR c.fetch_id!=? OR NOT EXISTS(SELECT 1 FROM subscription_payloads p WHERE p.id=? AND p.content_digest=c.content_digest))`, "saved raw disagrees with selected generation", decision.SubscriptionID, decision.SourceRevision, fetchID, decision.PayloadID); err != nil {
 		return err
 	}
@@ -245,9 +236,9 @@ func validateCompactionDecisionTx(ctx context.Context, tx *sql.Tx, decision Subs
 	if err := requireCompactionZeroTx(ctx, tx, `SELECT COUNT(*) FROM subscription_fetches f JOIN subscription_fetches chosen ON chosen.id=? WHERE f.subscription_id=? AND f.outcome IN ('success','partial') AND (julianday(f.started_at)>julianday(chosen.started_at) OR (julianday(f.started_at)=julianday(chosen.started_at) AND f.rowid>chosen.rowid))`, "newer useful attempt supersedes selected generation", fetchID, decision.SubscriptionID); err != nil {
 		return err
 	}
-	// Preserve protected current relations exactly: a stale relation requires
-	// explicit provenance-aware reconciliation before this primitive can run.
-	return requireCompactionZeroTx(ctx, tx, `SELECT COUNT(*) FROM node_sources ns WHERE ns.subscription_id=? AND (ns.last_seen_fetch_id!=? OR NOT EXISTS(SELECT 1 FROM subscription_entries e WHERE e.payload_id=? AND e.subscription_id=ns.subscription_id AND e.node_logical_id=ns.node_logical_id))`, "current membership disagrees with selected generation", decision.SubscriptionID, fetchID, decision.PayloadID)
+	// Stale relations are reconciled against the plan's exact projection only
+	// after all decisions validate. Current relations must match selected entries.
+	return requireCompactionZeroTx(ctx, tx, `SELECT COUNT(*) FROM node_sources ns WHERE ns.subscription_id=? AND ns.last_seen_fetch_id=? AND NOT EXISTS(SELECT 1 FROM subscription_entries e WHERE e.payload_id=? AND e.subscription_id=ns.subscription_id AND e.node_logical_id=ns.node_logical_id)`, "current membership disagrees with selected generation", decision.SubscriptionID, fetchID, decision.PayloadID)
 }
 
 func ensureCompactionHeadsTx(ctx context.Context, tx *sql.Tx) error {

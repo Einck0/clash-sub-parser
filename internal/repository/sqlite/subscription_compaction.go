@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash"
 	"strings"
@@ -34,7 +35,7 @@ func inspectSubscriptionCompactionTx(ctx context.Context, tx *sql.Tx) (*domain.S
 	plan := &domain.SubscriptionStoragePlan{
 		Version: 1, Counts: make(map[string]int64), ProtectedDigests: make(map[string]string),
 		Subscriptions:   []domain.SubscriptionStorageStatus{},
-		Blockers:        []string{"offline_apply_not_implemented", "legacy_survivors_not_reconciled", "version_consumers_not_closed"},
+		Blockers:        []string{"unsupported_schema", "version_consumers_not_closed"},
 		VerifySupported: true,
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
@@ -122,6 +123,42 @@ func inspectSubscriptionCompactionTx(ctx context.Context, tx *sql.Tx) (*domain.S
 	rows.Close()
 	if err != nil {
 		return nil, err
+	}
+	if plan.SchemaVersion >= 27 && plan.SchemaVersion <= 30 {
+		selectionErr := selectCompactionGenerationsTx(ctx, tx, plan)
+		if selectionErr != nil && !errors.Is(selectionErr, errCompactionSelectionUnresolved) {
+			return nil, selectionErr
+		}
+		count, digest, err := digestCompactionSource(ctx, tx, "node_sources", compactionCurrentSources)
+		if err != nil {
+			return nil, err
+		}
+		plan.ReconciledSourcesCount, plan.ReconciledSourcesDigest = count, digest
+		count, digest, err = digestCompactionSource(ctx, tx, "node_source_history", compactionProjectedHistory)
+		if err != nil {
+			return nil, err
+		}
+		plan.ReconciledHistoryCount, plan.ReconciledHistoryDigest = count, digest
+		var sealed int
+		if present["subscription_storage_readiness"] {
+			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM subscription_storage_readiness`).Scan(&sealed); err != nil {
+				return nil, err
+			}
+		}
+		// Read-only inspection of already sealed runtime databases compares
+		// existing business content, not hypothetical legacy observation rows.
+		if sealed != 0 {
+			plan.ReconciledSourcesDigest, plan.ReconciledSourcesCount = plan.ProtectedDigests["node_sources"], plan.Counts["node_sources"]
+			plan.ReconciledHistoryDigest, plan.ReconciledHistoryCount = plan.ProtectedDigests["node_source_history"], plan.Counts["node_source_history"]
+		}
+		plan.ApplySupported = selectionErr == nil && sealed == 0
+		plan.Blockers = []string{"operator_offline_authorization_required", "version_consumers_not_closed"}
+		if selectionErr != nil {
+			plan.Blockers = append(plan.Blockers, "legacy_generation_or_membership_unresolved")
+		}
+		if sealed != 0 {
+			plan.Blockers = append(plan.Blockers, "already_sealed")
+		}
 	}
 	return plan, nil
 }
@@ -254,13 +291,25 @@ func VerifySubscriptionCompaction(ctx context.Context, db *sql.DB, baseline *dom
 		return nil, fkErr
 	}
 	for table, want := range baseline.ProtectedDigests {
+		wantCount := baseline.Counts[table]
+		if table == "node_sources" && baseline.ReconciledSourcesDigest != "" {
+			want, wantCount = baseline.ReconciledSourcesDigest, baseline.ReconciledSourcesCount
+		}
+		if table == "node_source_history" && baseline.ReconciledHistoryDigest != "" {
+			want, wantCount = baseline.ReconciledHistoryDigest, baseline.ReconciledHistoryCount
+		}
 		got, ok := current.ProtectedDigests[table]
-		if !ok || got != want || current.Counts[table] != baseline.Counts[table] {
+		if !ok || got != want || current.Counts[table] != wantCount {
 			report.Failures = append(report.Failures, "protected_table_changed:"+table)
 		}
 	}
 	for table := range current.ProtectedDigests {
 		if _, ok := baseline.ProtectedDigests[table]; !ok {
+			// Schema27/28 never had a raw slot. Migration29 creates an
+			// empty one, not invented historical raw content.
+			if table == "subscription_original_configs" && baseline.SchemaVersion < 29 && current.Counts[table] == 0 {
+				continue
+			}
 			report.Failures = append(report.Failures, "unexpected_protected_table:"+table)
 		}
 	}
@@ -320,7 +369,10 @@ func quoteCompactionIdentifier(name string) string {
 // Hash canonical ordered complete rows, retaining SQLite value types. No row
 // values are returned to the caller or included in error messages.
 func digestCompactionTable(ctx context.Context, tx *sql.Tx, name string) (int64, string, error) {
-	table := quoteCompactionIdentifier(name)
+	return digestCompactionSource(ctx, tx, name, quoteCompactionIdentifier(name))
+}
+
+func digestCompactionSource(ctx context.Context, tx *sql.Tx, name, table string) (int64, string, error) {
 	rows, err := tx.QueryContext(ctx, "SELECT * FROM "+table+" LIMIT 0")
 	if err != nil {
 		return 0, "", err

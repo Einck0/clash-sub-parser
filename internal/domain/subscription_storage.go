@@ -28,7 +28,8 @@ type PublicationEvidenceWriter interface {
 }
 
 // SubscriptionStoragePlan is a read-only inventory, not permission to migrate.
-// Blockers must be resolved before a separate, sealed offline apply can exist.
+// ApplySupported reports technical eligibility; a separate operator manifest,
+// offline backup/exclusivity checks and unresolved completion blockers remain.
 // It deliberately contains no upstream URLs, raw names or configuration bodies.
 type SubscriptionStoragePlan struct {
 	Version          int                         `json:"version"`
@@ -40,6 +41,12 @@ type SubscriptionStoragePlan struct {
 	Blockers         []string                    `json:"blockers"`
 	ApplySupported   bool                        `json:"apply_supported"`
 	VerifySupported  bool                        `json:"verify_supported"`
+	// Exact projections for partial-membership reconciliation and new unknown
+	// history observations. Existing history and all other business content stay exact.
+	ReconciledSourcesDigest string `json:"reconciled_sources_digest,omitempty"`
+	ReconciledSourcesCount  int64  `json:"reconciled_sources_count"`
+	ReconciledHistoryDigest string `json:"reconciled_history_digest,omitempty"`
+	ReconciledHistoryCount  int64  `json:"reconciled_history_count"`
 }
 
 // SubscriptionStorageVerification records a read-only check of a candidate
@@ -56,15 +63,17 @@ type SubscriptionStorageVerification struct {
 }
 
 // SubscriptionStorageStatus keeps attempts, saved raw and applied candidates
-// distinct. CandidateCount is not a survivor selection: legacy ambiguity needs
-// reconciliation with source membership and the source revision before apply.
+// distinct. SelectedPayloadID names the latest useful cut generation only when
+// unique; membership/source conflicts still prevent apply.
 type SubscriptionStorageStatus struct {
-	SubscriptionID string `json:"subscription_id"`
-	PayloadCount   int64  `json:"payload_count"`
-	EntryCount     int64  `json:"entry_count"`
-	CandidateCount int64  `json:"candidate_count"`
-	LastAttemptID  string `json:"last_attempt_fetch_id"`
-	RawFetchID     string `json:"raw_fetch_id"`
+	SubscriptionID    string `json:"subscription_id"`
+	PayloadCount      int64  `json:"payload_count"`
+	EntryCount        int64  `json:"entry_count"`
+	CandidateCount    int64  `json:"candidate_count"`
+	LastAttemptID     string `json:"last_attempt_fetch_id"`
+	RawFetchID        string `json:"raw_fetch_id"`
+	SourceRevision    string `json:"source_revision"`
+	SelectedPayloadID string `json:"selected_payload_id,omitempty"`
 }
 
 // ConnectionVersionLease identifies an actual consumer of a complete stored

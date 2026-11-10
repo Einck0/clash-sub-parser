@@ -76,7 +76,7 @@ func TestOfflineCompactionPreparedScratchSingleGeneration(t *testing.T) {
 }
 
 func TestOfflineCompactionRejectsUnprovedAndChangedInputsWithoutMutation(t *testing.T) {
-	for _, branch := range []string{"missing", "duplicate", "source_revision", "older_generation", "raw_mismatch", "changed_snapshot", "cancelled", "invalid_current_revision", "contradictory_head", "conflicting_applied", "conflicting_applied_revision", "half_applied"} {
+	for _, branch := range []string{"missing", "duplicate", "source_revision", "older_generation", "raw_mismatch", "changed_snapshot", "cancelled", "invalid_current_revision", "contradictory_head", "conflicting_applied", "conflicting_applied_revision", "half_applied", "changed_projection"} {
 		t.Run(branch, func(t *testing.T) {
 			db, baseline, decisions := preparedCompactionScratch(t)
 			ctx := context.Background()
@@ -116,6 +116,9 @@ func TestOfflineCompactionRejectsUnprovedAndChangedInputsWithoutMutation(t *test
 				if err != nil {
 					t.Fatal(err)
 				}
+			case "changed_projection":
+				// Snapshot hash alone must not bless attacker-supplied projections.
+				baseline.ReconciledSourcesDigest = "forged"
 			case "changed_snapshot":
 				if _, err := db.Exec(`UPDATE nodes SET display_name='changed'`); err != nil {
 					t.Fatal(err)

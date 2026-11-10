@@ -15,21 +15,21 @@ import (
 	"clash-sub-parser/internal/repository/sqlite"
 )
 
-// runSubscriptionCompaction exposes only read-only plan/verify until the sealed
-// scratch manifest, consumer closure and verified transformation are implemented.
-// In particular, neither apply nor verify may fall through to a write-capable
-// OpenAndMigrate or makeApplicationServices initialization.
+// Maintenance never initializes application services or falls through to the
+// write-capable startup migration path. Apply has its own offline safeguards.
 func runSubscriptionCompaction(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "compact-subscription-storage: explicit subcommand required; offline apply unavailable (maintenance_required)")
+		fmt.Fprintln(stderr, "compact-subscription-storage: explicit plan/apply/verify subcommand required (maintenance_required)")
 		return 2
 	}
 	switch args[0] {
 	case "plan":
+	case "apply":
+		return runSubscriptionCompactionApply(args[1:], stdout, stderr)
 	case "verify":
 		return runSubscriptionCompactionVerify(args[1:], stdout, stderr)
 	default:
-		fmt.Fprintln(stderr, "compact-subscription-storage: only read-only plan/verify are implemented; offline apply unavailable (maintenance_required)")
+		fmt.Fprintln(stderr, "compact-subscription-storage: unknown operation; use explicit plan/apply/verify (maintenance_required)")
 		return 2
 	}
 	fs := flag.NewFlagSet("compact-subscription-storage plan", flag.ContinueOnError)
@@ -96,7 +96,7 @@ func runSubscriptionCompaction(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "compaction plan: report close failed")
 		return 1
 	}
-	fmt.Fprintln(stdout, "Read-only inventory recorded. Apply is NOT supported; survivor selection and consumer closure remain blocked. No database was transformed.")
+	fmt.Fprintln(stdout, "Read-only inventory recorded. Apply eligibility and unresolved blockers are in the plan; separate offline operator authorization is required. No database was transformed.")
 	return 0
 }
 

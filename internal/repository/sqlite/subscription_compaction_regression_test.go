@@ -18,9 +18,26 @@ func TestOfflineCompactionLatestAttemptChronologicalOrder(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			db, _, decisions := preparedCompactionScratch(t)
-			if _, err := db.ExecContext(ctx, `UPDATE subscription_fetches SET started_at=?,outcome='partial' WHERE id='current-fetch';
-				UPDATE subscription_fetches SET started_at=? WHERE id='failed-fetch'`, tc.appliedAt, tc.failedAt); err != nil {
+			// Bind each statement separately: the SQLite driver starts anonymous
+			// parameter numbering again for each statement in a multi-statement Exec.
+			if _, err := db.ExecContext(ctx, `UPDATE subscription_fetches SET started_at=?,outcome='partial' WHERE id='current-fetch'`, tc.appliedAt); err != nil {
 				t.Fatal(err)
+			}
+			if _, err := db.ExecContext(ctx, `UPDATE subscription_fetches SET started_at=? WHERE id='failed-fetch'`, tc.failedAt); err != nil {
+				t.Fatal(err)
+			}
+			// Prove the counterexample exists BEFORE planning or deleting rows.
+			for _, expected := range []struct{ id, timestamp, outcome string }{
+				{"current-fetch", tc.appliedAt, "partial"},
+				{"failed-fetch", tc.failedAt, "failed"},
+			} {
+				var timestamp, outcome string
+				if err := db.QueryRowContext(ctx, `SELECT started_at,outcome FROM subscription_fetches WHERE id=?`, expected.id).Scan(&timestamp, &outcome); err != nil {
+					t.Fatal(err)
+				}
+				if timestamp != expected.timestamp || outcome != expected.outcome {
+					t.Fatalf("invalid input fixture %s: timestamp=%q outcome=%q, want timestamp=%q outcome=%q", expected.id, timestamp, outcome, expected.timestamp, expected.outcome)
+				}
 			}
 			baseline, err := sqlite.InspectSubscriptionCompaction(ctx, db)
 			if err != nil {
@@ -38,7 +55,7 @@ func TestOfflineCompactionLatestAttemptChronologicalOrder(t *testing.T) {
 				t.Fatal(err)
 			}
 			if applied != "current-fetch" || attempt != "failed-fetch" || status != "failed" || timestamp != tc.failedAt {
-				t.Fatalf("lost exact applied/attempt facts: %s %s %s %s", applied, attempt, status, timestamp)
+				t.Fatalf("lost exact applied/attempt facts: applied=%q attempt=%q status=%q timestamp=%q, want timestamp=%q", applied, attempt, status, timestamp, tc.failedAt)
 			}
 			verified, err := sqlite.VerifySubscriptionCompaction(ctx, db, baseline)
 			if err != nil || !verified.Verified {

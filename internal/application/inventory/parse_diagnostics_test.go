@@ -69,12 +69,15 @@ func TestParseDiagnosticsPersistPartialAndTotalFailureWithoutSecrets(t *testing.
 		t.Fatalf("failure changed source: %q %v", lastFetch, err)
 	}
 
-	for _, tc := range []struct{ name, body string }{
-		{"empty", ""},
-		{"whitespace", " \n\t"},
-		{"yaml", "proxies: [] # SECRET_EMPTY_SENTINEL"},
-		{"base64_whitespace", base64.StdEncoding.EncodeToString([]byte(" \n\t"))},
-		{"base64_yaml", base64.StdEncoding.EncodeToString([]byte("proxies: [] # SECRET_EMPTY_SENTINEL"))},
+	for _, tc := range []struct {
+		name, body string
+		want       []string
+	}{
+		{"empty", "", []string{"[validation/empty_subscription_content] subscription content is empty"}},
+		{"whitespace", " \n\t", []string{`"reason":"empty_subscription"`, `"rejected":0`, `"format":"text"`, `"field":"document"`}},
+		{"yaml", "proxies: [] # SECRET_EMPTY_SENTINEL", []string{`"reason":"empty_subscription"`, `"rejected":0`, `"format":"yaml"`, `"field":"proxies"`}},
+		{"base64_whitespace", base64.StdEncoding.EncodeToString([]byte(" \n\t")), []string{`"reason":"empty_subscription"`, `"rejected":0`, `"format":"base64_text"`, `"field":"document"`}},
+		{"base64_yaml", base64.StdEncoding.EncodeToString([]byte("proxies: [] # SECRET_EMPTY_SENTINEL")), []string{`"reason":"empty_subscription"`, `"rejected":0`, `"format":"base64_yaml"`, `"field":"proxies"`}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fetcher.setResponse(url, &fetch.Response{StatusCode: 200, Body: []byte(tc.body), ContentDigest: "empty-" + tc.name})
@@ -87,8 +90,13 @@ func TestParseDiagnosticsPersistPartialAndTotalFailureWithoutSecrets(t *testing.
 			if err := db.QueryRowContext(ctx, "SELECT redacted_error, nodes_parsed, nodes_valid FROM subscription_fetches WHERE id = ?", empty.FetchID).Scan(&stored, &parsed, &valid); err != nil {
 				t.Fatal(err)
 			}
-			if stored != empty.RedactedError || parsed != 0 || valid != 0 || !strings.Contains(stored, `"reason":"empty_subscription"`) || !strings.Contains(stored, `"rejected":0`) {
+			if stored != empty.RedactedError || parsed != 0 || valid != 0 {
 				t.Fatalf("persisted empty diagnostic/count mismatch: %s %d/%d", stored, parsed, valid)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(stored, want) {
+					t.Fatalf("persisted empty diagnostic %s missing %s", stored, want)
+				}
 			}
 			if strings.Contains(stored+err.Error(), "SECRET") || len(stored) > 8192 {
 				t.Fatal("unsafe/unbounded empty diagnostic")

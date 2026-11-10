@@ -63,7 +63,7 @@ func TestGenerationReplacementPreservesImmutableOriginsPinsAndUnknownObservation
 		t.Fatal(err)
 	}
 	node.Server = "192.0.2.3"
-	if err := nodeRepo.Update(ctx, node); err != nil {
+	if err := nodeRepo.UpsertBatch(ctx, []*domain.Node{node}); err != nil {
 		t.Fatal(err)
 	}
 	currentFacts, err := sqlite.NewConsistentFactsLoader(db).LoadConsistentFacts(ctx, rev.ID, domain.TargetSingBox, now)

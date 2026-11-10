@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -85,16 +86,58 @@ func TestParserSemanticsRecoveredNodesReachFactsPreviewAndProbe(t *testing.T) {
 			if pluginID == "" {
 				t.Fatal("plugin node missing from facts")
 			}
+			// Mihomo requires effective routing. With neither a route nor a
+			// primary subscription this fixture would fail preflight before
+			// reaching the compiler. Persist the real policy graph, as in the
+			// export facts matrix; do not bypass preflight or supply a snapshot.
+			policy := sqlite.NewPolicyRepository(db)
+			now := domain.NowUTC()
+			group := &domain.NodeGroup{ID: domain.MustNewUUIDv7(), Name: "Recovery Select", GroupType: domain.GroupTypeSelect, CreatedAt: now, UpdatedAt: now}
+			members := make([]domain.MemberSource, 0, len(facts.Nodes))
+			for _, node := range facts.Nodes {
+				nodeID := node.LogicalID
+				members = append(members, domain.MemberSource{Operation: domain.OperationAdd, Kind: domain.SourceKindManualNode, NodeLogicalID: &nodeID})
+			}
+			if _, err := policy.SaveGroupWithSources(ctx, group, 0, members); err != nil {
+				t.Fatalf("create recovery group: %v", err)
+			}
+			if err := policy.CreatePolicyRule(ctx, &domain.PolicyRule{ID: domain.MustNewUUIDv7(), RevisionID: rev.ID, TargetGroupID: group.ID, Expression: "MATCH", Enabled: true}); err != nil {
+				t.Fatalf("create recovery route: %v", err)
+			}
+			assertPreviewOK := func(operation string, err error) {
+				t.Helper()
+				if err == nil {
+					return
+				}
+				var preflight *publication.PreflightError
+				if errors.As(err, &preflight) {
+					t.Fatalf("%s: %v; preflight: %+v", operation, err, preflight.Result)
+				}
+				var capability *publication.StrictCapabilityError
+				if errors.As(err, &capability) {
+					t.Fatalf("%s: %v; capabilities: %+v", operation, err, capability.Diagnostics)
+				}
+				t.Fatalf("%s: %v", operation, err)
+			}
 			pub := publication.NewService(sqlite.NewPublicationRepository(db), nil, publication.WithConsistentFactsLoader(loader))
 			preview, err := pub.Preview(ctx, publication.PreviewQuery{Target: domain.TargetMihomo, RevisionID: rev.ID})
-			if err != nil || preview == nil || preview.Manifest.NodeCount != 2 {
-				t.Fatalf("Mihomo preview: %v", err)
+			assertPreviewOK("Mihomo preview", err)
+			if preview == nil || preview.Manifest.NodeCount != 2 {
+				t.Fatalf("Mihomo preview missing recovered nodes: %+v", preview)
 			}
 			var rendered struct {
 				Proxies []map[string]any `yaml:"proxies"`
+				Groups  []struct {
+					Name    string   `yaml:"name"`
+					Proxies []string `yaml:"proxies"`
+				} `yaml:"proxy-groups"`
+				Rules []string `yaml:"rules"`
 			}
 			if err := yaml.Unmarshal(preview.Content, &rendered); err != nil {
 				t.Fatal(err)
+			}
+			if len(rendered.Groups) != 1 || rendered.Groups[0].Name != group.Name || len(rendered.Groups[0].Proxies) != 2 || len(rendered.Rules) != 1 || rendered.Rules[0] != "MATCH,"+group.Name {
+				t.Fatalf("persisted recovery graph not rendered: groups=%+v rules=%v", rendered.Groups, rendered.Rules)
 			}
 			var found bool
 			for _, proxy := range rendered.Proxies {
@@ -111,7 +154,8 @@ func TestParserSemanticsRecoveredNodesReachFactsPreviewAndProbe(t *testing.T) {
 				t.Fatal("rendered SS missing")
 			}
 			compatible, err := pub.Preview(ctx, publication.PreviewQuery{Target: domain.TargetSingBox, RevisionID: rev.ID, CompatMode: "compatible"})
-			if err != nil || compatible.Manifest.NodeCount != 1 || compatible.Manifest.ExcludedCount != 1 || compatible.Manifest.Excluded[0].NodeID != pluginID {
+			assertPreviewOK("compatible sing-box preview", err)
+			if compatible == nil || compatible.Manifest.NodeCount != 1 || compatible.Manifest.ExcludedCount != 1 || compatible.Manifest.Excluded[0].NodeID != pluginID {
 				t.Fatalf("unsupported plugin must be excluded, not silently stripped: %v", err)
 			}
 			var singbox struct {

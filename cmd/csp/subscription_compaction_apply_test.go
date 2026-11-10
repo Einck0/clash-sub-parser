@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 
@@ -117,7 +120,49 @@ func (f compactionCLIFixture) args() []string {
 }
 
 func TestSubscriptionCompactionCLISchema27ThroughPhysicalOutput(t *testing.T) {
+	// The real guard must inspect every visible process, including root-owned
+	// runner services. An unprivileged Actions worker cannot do that. Re-exec
+	// only this already cloud-built test as root, with fresh root-owned fixtures;
+	// never stub the guard, skip this spine, or relax production permissions.
+	probe := filepath.Join(t.TempDir(), "process-inspection-probe")
+	if err := os.WriteFile(probe, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := checkOpenDatabaseFiles(probe); err != nil {
+		if !errors.Is(err, os.ErrPermission) || os.Geteuid() == 0 || os.Getenv("GITHUB_ACTIONS") != "true" {
+			t.Fatalf("real process inspection prerequisite unavailable: %v", err)
+		}
+		// Assert that real apply also fails closed under this runner's
+		// permissions before using a capable process for the success branch.
+		f := makeCompactionCLIFixture(t)
+		var out, stderr bytes.Buffer
+		if code := runSubscriptionCompaction(f.args(), &out, &stderr); code == 0 || out.Len() != 0 || !strings.Contains(stderr.String(), "process inspection permission denied") {
+			t.Fatalf("unprivileged apply must reject inspection failure: exit %d stdout=%s stderr=%s", code, out.String(), stderr.String())
+		}
+		for _, path := range []string{f.scratch, f.backup} {
+			raw, readErr := os.ReadFile(path)
+			if readErr != nil || !bytes.Equal(raw, f.original) {
+				t.Fatalf("permission refusal changed cut: %v", readErr)
+			}
+		}
+		if _, statErr := os.Lstat(f.output); !os.IsNotExist(statErr) {
+			t.Fatal("permission refusal produced output")
+		}
+		t.Logf("unprivileged cloud worker cannot inspect procfs: %v; re-executing this test with sudo", err)
+		executable, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command("sudo", "-n", "--", executable, "-test.run=^TestSubscriptionCompactionCLISchema27ThroughPhysicalOutput$", "-test.v")
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("privileged cloud spine failed: %v\n%s", err, output)
+		}
+		t.Logf("privileged cloud spine:\n%s", output)
+		return
+	}
 	f := makeCompactionCLIFixture(t)
+	assertCompactionRejectsRealOpenFile(t, f)
 	var out, stderr bytes.Buffer
 	if code := runSubscriptionCompaction(f.args(), &out, &stderr); code != 0 {
 		t.Fatalf("apply exit %d: %s", code, stderr.String())

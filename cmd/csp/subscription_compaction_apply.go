@@ -176,6 +176,12 @@ func applySubscriptionCompaction(ctx context.Context, dbPath, backupPath, planPa
 	}
 	for _, path := range []string{scratch, auth.Backup.Path} {
 		if pid, err := checkOpenDatabaseFiles(path); err != nil || pid > 0 {
+			// Preserve fail-closed behavior while separating an unavailable
+			// permission prerequisite from an actual open-file observation.
+			// Never copy raw procfs errors/paths to terminal output.
+			if errors.Is(err, os.ErrPermission) {
+				return fail("process inspection permission denied; full visible procfs access required")
+			}
 			return fail("visible process has cut open or process inspection failed")
 		}
 	}

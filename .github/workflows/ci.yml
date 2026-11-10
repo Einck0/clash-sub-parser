@@ -93,9 +93,10 @@ jobs:
           set +e
           go test -json -v -tags "with_quic with_wireguard" ./... > /tmp/go-test-output.json 2>&1
           TEST_EXIT=$?
-          set -e
-          python3 -B .github/scripts/annotate_go_test.py /tmp/go-test-output.json $TEST_EXIT
-          exit $TEST_EXIT
+          python3 -B .github/scripts/annotate_go_test.py /tmp/go-test-output.json $TEST_EXIT --diagnostic-test clash-sub-parser/internal/repository/sqlite::TestScaleDiagnostics
+          DIAGNOSTIC_EXIT=$?
+          if [ "$TEST_EXIT" -ne 0 ]; then exit "$TEST_EXIT"; fi
+          exit "$DIAGNOSTIC_EXIT"
 
       - name: Run real build-entry metadata regression (cloud only)
         run: python3 -B -m unittest discover -s tests/cloud-delivery -p 'test_build_metadata.py' -v
@@ -149,6 +150,15 @@ jobs:
             bin/csp-linux-amd64.sha256
           retention-days: 7
           if-no-files-found: error
+
+      - name: Upload Go test JSON diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-test-output-${{ github.sha }}
+          path: /tmp/go-test-output.json
+          retention-days: 7
+          if-no-files-found: warn
 
   publish-runtime:
     name: Build & Publish Runtime Container

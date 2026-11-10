@@ -135,6 +135,52 @@ class TestPythonAndShellSyntax(unittest.TestCase):
         self.assertEqual(res.returncode, 0, f"bash -n failed: {res.stderr}")
 
 
+class TestGoDiagnosticOutput(unittest.TestCase):
+    package = 'clash-sub-parser/internal/repository/sqlite'
+    test = 'TestScaleDiagnostics'
+
+    def invoke(self, events, exit_code=0, trailing=''):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'go.json'
+            path.write_text(''.join(json.dumps(event) + '\n' for event in events) + trailing)
+            return subprocess.run(
+                [sys.executable, '-B', os.path.join(SCRIPTS_DIR, 'annotate_go_test.py'),
+                 str(path), str(exit_code), '--diagnostic-test', f'{self.package}::{self.test}'],
+                capture_output=True, text=True)
+
+    def event(self, action, test=None, **fields):
+        return dict(Action=action, Package=self.package, Test=test or self.test, **fields)
+
+    def test_success_subtests_filter_and_safe_output(self):
+        events = [self.event('run'), self.event('output', Output='::error::not a command\n'),
+                  self.event('run', self.test + '/scale'),
+                  self.event('output', self.test + '/scale', Output='measurement=42\n'),
+                  self.event('pass', self.test + '/scale', Elapsed=0.2),
+                  self.event('pass', Elapsed=1.5),
+                  self.event('output', 'TestOther', Output='unrelated-marker')]
+        result = self.invoke(events)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('measurement=42', result.stdout)
+        self.assertIn('elapsed=1.5', result.stdout)
+        self.assertNotIn('unrelated-marker', result.stdout)
+        self.assertNotIn('\n::error::not a command', result.stdout)
+
+    def test_failure_skip_missing_truncated_and_annotations(self):
+        run = self.event('run')
+        for events, trailing in [([], ''), ([run, self.event('skip')], ''),
+                                 ([run], ''), ([run, self.event('pass')], '{')]:
+            with self.subTest(events=events, trailing=trailing):
+                self.assertNotEqual(self.invoke(events, trailing=trailing).returncode, 0)
+        result = self.invoke([run, self.event('output', Output='assertion failed\n'),
+                              self.event('fail', Elapsed=1.0)], exit_code=7)
+        self.assertEqual(result.returncode, 7)
+        self.assertIn('::error title=Go Test Failed', result.stdout)
+        self.assertIn('assertion failed', result.stdout)
+        self.assertNotEqual(self.invoke([run, self.event('run', self.test + '/x'),
+                                         self.event('skip', self.test + '/x'),
+                                         self.event('pass')]).returncode, 0)
+
+
 class TestSyntheticArchive(unittest.TestCase):
     def test_archive_is_explicit_synthetic_and_never_overwrites(self):
         import sqlite3
@@ -412,6 +458,13 @@ class TestWorkflowLogicAndSchema(unittest.TestCase):
         self.assertTrue(len(upload_steps) > 0, "upload-artifact step must exist")
         upload_with = upload_steps[0].get("with", {})
         self.assertEqual(upload_with.get("name"), "csp-linux-amd64")
+        diagnostic = next(s for s in upload_steps if s.get('name') == 'Upload Go test JSON diagnostics')
+        self.assertGreater(steps.index(diagnostic), steps.index(upload_steps[0]))
+        self.assertEqual(diagnostic['if'], 'always()')
+        self.assertEqual(diagnostic['with']['path'], '/tmp/go-test-output.json')
+        self.assertEqual(diagnostic['with']['retention-days'], 7)
+        self.assertIn('github.sha', diagnostic['with']['name'])
+        self.assertIn('--diagnostic-test clash-sub-parser/internal/repository/sqlite::TestScaleDiagnostics', step_runs)
 
     def test_publish_job_steps_and_no_continue_on_error(self):
         steps = self.wf["jobs"]["publish-runtime"].get("steps", [])

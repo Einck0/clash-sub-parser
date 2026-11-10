@@ -14,7 +14,8 @@ import (
 func TestScaleDiagnostics(t *testing.T) {
 	db := setupTestDB(t)
 	t.Cleanup(func() { _ = db.Close() })
-	ctx := context.Background()
+	ctx, stop := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer stop()
 	started := time.Now()
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	stamp := now.Format(time.RFC3339)
@@ -53,13 +54,13 @@ func TestScaleDiagnostics(t *testing.T) {
 		}
 	}
 	// Recursive INSERT produces bounded synthetic historical rows in one transaction.
-	if _, err := tx.ExecContext(ctx, `WITH RECURSIVE seq(n) AS (VALUES(0) UNION ALL SELECT n+1 FROM seq WHERE n<99999) INSERT INTO subscription_entries (id,payload_id,subscription_id,ordinal,source_key,raw_name,protocol,entry_kind,created_at) SELECT printf('history-%d',n),'old-p','scale',n,printf('old-%d',n),'old','ss','proxy',? FROM seq`, stamp); err != nil {
+	if _, err := tx.ExecContext(ctx, `WITH RECURSIVE seq(n) AS (VALUES(0) UNION ALL SELECT n+1 FROM seq WHERE n<999999) INSERT INTO subscription_entries (id,payload_id,subscription_id,ordinal,source_key,raw_name,protocol,entry_kind,created_at) SELECT printf('history-%d',n),'old-p','scale',n,printf('old-%d',n),'old','ss','proxy',? FROM seq`, stamp); err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("fixture_setup=%s nodes=%d historical_entries=%d", time.Since(started), len(nodes), 100000)
+	t.Logf("fixture_setup=%s nodes=%d historical_entries=%d", time.Since(started), len(nodes), 1000000)
 
 	rows, err := db.QueryContext(ctx, `EXPLAIN QUERY PLAN SELECT n.logical_id FROM nodes n WHERE n.logical_id IN (`+enabledSubscriptionsInventorySubquery+`) AND n.logical_id NOT IN (`+confirmedNoticeExclusionSubquery+`) AND n.active=1`)
 	if err != nil {
@@ -79,6 +80,33 @@ func TestScaleDiagnostics(t *testing.T) {
 		t.Fatal(err)
 	}
 	rows.Close()
+	subs := NewSubscriptionRepository(db)
+	for _, stage := range []string{"get", "list"} {
+		before := db.Stats()
+		started := time.Now()
+		readCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		var err error
+		if stage == "get" {
+			var sub *domain.Subscription
+			sub, err = subs.GetByID(readCtx, "scale")
+			if err == nil && (sub == nil || sub.ID != "scale") {
+				t.Fatal("unexpected subscription from get")
+			}
+		} else {
+			var items []domain.Subscription
+			var total int
+			items, total, err = subs.List(readCtx, domain.SubscriptionFilter{})
+			if err == nil && (total != 1 || len(items) != 1 || items[0].ID != "scale") {
+				t.Fatalf("unexpected subscription list: total=%d items=%v", total, items)
+			}
+		}
+		cancel()
+		after := db.Stats()
+		t.Logf("stage=%s elapsed=%s pool_waits=%d pool_wait_duration=%s error=%v", stage, time.Since(started), after.WaitCount-before.WaitCount, after.WaitDuration-before.WaitDuration, err)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	filter := domain.NodeFilter{Scope: domain.NodeScopeEnabledSubscriptions, ActiveOnly: true, ExcludeNotices: true}
 	for i := 0; i < 2; i++ {
 		before := db.Stats()

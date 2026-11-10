@@ -4,6 +4,7 @@ CI diagnostic utility: parse `go test -json` output and emit GitHub Actions ::er
 Runs with standard Python 3 and zero external dependencies.
 """
 
+import argparse
 import json
 import os
 import sys
@@ -78,7 +79,11 @@ def is_mere_parent_wrapper(
 def parse_and_annotate(
     json_path: str,
     exit_code: Optional[int] = None,
+    diagnostic_tests: Optional[List[str]] = None,
 ) -> int:
+    targets = [tuple(target.split("::", 1)) for target in (diagnostic_tests or [])]
+    states: Dict[Tuple[str, str], Dict[str, object]] = {}
+    malformed = False
     if not os.path.isfile(json_path):
         if exit_code is not None and exit_code != 0:
             title = "Go Test Execution Failed"
@@ -87,7 +92,7 @@ def parse_and_annotate(
             print(f"[FAIL] {title}: {msg}", file=sys.stderr)
         else:
             print(f"Info: {json_path} does not exist and exit code is 0.")
-        return 0
+        return 1 if targets else 0
 
     test_outputs: Dict[Tuple[str, str], List[str]] = {}
     package_outputs: Dict[str, List[str]] = {}
@@ -104,12 +109,26 @@ def parse_and_annotate(
                 event = json.loads(line)
             except json.JSONDecodeError:
                 unparsed_lines.append(line)
+                malformed = True
                 continue
 
             action = event.get("Action")
             pkg = event.get("Package", "")
             test = event.get("Test", "")
             output = event.get("Output", "")
+
+            if any(pkg == p and (test == t or test.startswith(t + "/")) for p, t in targets):
+                state = states.setdefault((pkg, test), {"run": False, "terminal": None})
+                label = json.dumps(f"{pkg}::{test}", ensure_ascii=True)
+                if action == "run":
+                    state["run"] = True
+                    print(f"[diagnostic] {label} run")
+                elif action == "output":
+                    # JSON string encoding keeps control characters and workflow commands inert.
+                    print(f"[diagnostic] {label} output {json.dumps(output, ensure_ascii=True)}")
+                elif action in ("pass", "fail", "skip"):
+                    state["terminal"] = action
+                    print(f"[diagnostic] {label} {action} elapsed={json.dumps(event.get('Elapsed', 'unknown'))}")
 
             if action == "output":
                 if test:
@@ -123,6 +142,19 @@ def parse_and_annotate(
                 elif pkg:
                     if pkg not in failed_packages:
                         failed_packages.append(pkg)
+
+    diagnostic_failed = malformed and bool(targets)
+    for target in targets:
+        state = states.get(target)
+        if not state or not state["run"] or state["terminal"] != "pass":
+            diagnostic_failed = True
+            print(f"[diagnostic] {json.dumps('::'.join(target))} missing, skipped, failed or incomplete", file=sys.stderr)
+    for (pkg, test), state in states.items():
+        if not state["run"] or state["terminal"] != "pass":
+            diagnostic_failed = True
+            print(f"[diagnostic] {json.dumps(f'{pkg}::{test}')} missing run or successful terminal state", file=sys.stderr)
+    if malformed and targets:
+        print("[diagnostic] malformed or truncated test output", file=sys.stderr)
 
     failures: List[Dict[str, str]] = []
 
@@ -167,7 +199,7 @@ def parse_and_annotate(
     # If no failures and exit_code is 0 (or not failing), report success and emit nothing
     if not failures:
         print("All Go tests completed successfully (no failures detected).")
-        return 0
+        return 1 if diagnostic_failed else 0
 
     total_failures = len(failures)
     selected_failures = failures[:MAX_FAILURES]
@@ -189,19 +221,20 @@ def parse_and_annotate(
         overflow_msg = f"{overflow_count} additional failure(s) omitted due to truncation limit."
         print(f"::warning::{escape_data(overflow_msg)}")
 
-    return 0
+    return 1 if diagnostic_failed else 0
 
 
 def main() -> None:
-    json_file = sys.argv[1] if len(sys.argv) > 1 else "/tmp/go-test-output.json"
-    exit_code: Optional[int] = None
-    if len(sys.argv) > 2:
-        try:
-            exit_code = int(sys.argv[2])
-        except ValueError:
-            pass
-
-    sys.exit(parse_and_annotate(json_file, exit_code))
+    parser = argparse.ArgumentParser()
+    parser.add_argument("json_file", nargs="?", default="/tmp/go-test-output.json")
+    parser.add_argument("exit_code", nargs="?", type=int)
+    parser.add_argument("--diagnostic-test", action="append", default=[], metavar="PACKAGE::TEST")
+    args = parser.parse_args()
+    for target in args.diagnostic_test:
+        if target.count("::") != 1 or not all(target.split("::")):
+            parser.error("--diagnostic-test requires PACKAGE::TEST")
+    result = parse_and_annotate(args.json_file, args.exit_code, args.diagnostic_test)
+    sys.exit(args.exit_code if args.exit_code else result)
 
 
 if __name__ == "__main__":

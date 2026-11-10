@@ -29,7 +29,7 @@ type SubscriptionCompactionDecision struct {
 // opening it. It must never be called by startup or against a live database.
 //
 // Legacy reconciliation is bound to exact planned source/history projections.
-// It does not migrate schema, reclaim versions, VACUUM, switch files or approve
+// It does not migrate schema, VACUUM, switch files or approve
 // deployment. The returned inventory is not a consumer-closure safety seal.
 func FinalizeSubscriptionCompaction(ctx context.Context, db *sql.DB, baseline *domain.SubscriptionStoragePlan, decisions []SubscriptionCompactionDecision) (*domain.SubscriptionStoragePlan, error) {
 	if db == nil || baseline == nil || baseline.Version != 1 || baseline.SchemaVersion != 30 || baseline.SnapshotDigest == "" || !baseline.ApplySupported {
@@ -151,6 +151,15 @@ func FinalizeSubscriptionCompaction(ctx context.Context, db *sql.DB, baseline *d
 			return err
 		}
 		if err := ensureCompactionHeadsTx(ctx, tx); err != nil {
+			return err
+		}
+		// Heads have now been validated against every current node and origin
+		// evidence was captured before detaching entries. Reclaim pre-existing
+		// full history here, including nodes never touched by a runtime update.
+		// Never interpret a lease (even expired/unknown) as permission to delete.
+		if _, err := tx.ExecContext(ctx, `DELETE FROM node_connection_versions AS v
+			WHERE NOT EXISTS(SELECT 1 FROM node_connection_heads h WHERE h.logical_id=v.node_logical_id AND h.connection_revision=v.connection_revision)
+			AND NOT EXISTS(SELECT 1 FROM node_connection_version_leases l WHERE l.node_logical_id=v.node_logical_id AND l.connection_revision=v.connection_revision)`); err != nil {
 			return err
 		}
 		if _, err := PruneFetchSummariesTx(ctx, tx, ""); err != nil {

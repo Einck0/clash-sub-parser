@@ -63,14 +63,16 @@ type SubscriptionStorageVerification struct {
 }
 
 // SubscriptionStorageStatus keeps attempts, saved raw and applied candidates
-// distinct. SelectedPayloadID names the latest useful cut generation only when
-// unique; membership/source conflicts still prevent apply.
+// distinct. LastAttemptID/Status freeze the pre-deletion diagnostic fact for
+// independent output verification. SelectedPayloadID names the latest useful
+// cut generation only when unique; membership/source conflicts still prevent apply.
 type SubscriptionStorageStatus struct {
 	SubscriptionID    string `json:"subscription_id"`
 	PayloadCount      int64  `json:"payload_count"`
 	EntryCount        int64  `json:"entry_count"`
 	CandidateCount    int64  `json:"candidate_count"`
 	LastAttemptID     string `json:"last_attempt_fetch_id"`
+	LastAttemptStatus string `json:"last_attempt_status"`
 	RawFetchID        string `json:"raw_fetch_id"`
 	SourceRevision    string `json:"source_revision"`
 	SelectedPayloadID string `json:"selected_payload_id,omitempty"`

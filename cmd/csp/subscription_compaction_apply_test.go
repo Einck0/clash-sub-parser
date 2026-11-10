@@ -67,15 +67,17 @@ func makeCompactionCLIFixture(t *testing.T) compactionCLIFixture {
 		db.Close()
 		t.Fatal(err)
 	}
-	// True schema27 input: no manually seeded raw/current-state, no heads or
-	// versions. A later failed attempt must not resurrect removed partial members.
+	// True schema27 input: no manually seeded raw/current-state or
+	// heads. A pre-existing unleased revision must be reclaimed, and a later
+	// fractional-second failure must not be lost behind a whole-second partial.
 	statements := []string{
 		`INSERT INTO subscriptions(id,name,source_url_secret_ref,enabled,prefix,refresh_interval_seconds,refresh_timeout_seconds,refresh_max_response_bytes,config_json,revision,is_primary,userinfo,created_at,updated_at)VALUES('sub','Synthetic','secret://synthetic',1,'',86400,30,10485760,'{}','revision-cut',0,'','2026-11-10T00:00:00Z','2026-11-10T00:00:00Z')`,
 		`INSERT INTO nodes(logical_id,protocol,display_name,server,port,config_json,active,created_at,updated_at,connection_revision)VALUES('a','ss','A','192.0.2.1',8388,'{}',1,'2026-11-10T00:00:00Z','2026-11-10T00:00:00Z',1),('b','ss','B','192.0.2.2',8388,'{}',0,'2026-11-10T00:00:00Z','2026-11-10T00:00:00Z',1)`,
-		`INSERT INTO subscription_fetches(id,subscription_id,started_at,outcome,nodes_parsed,nodes_valid)VALUES('old-fetch','sub','2026-11-10T00:00:00Z','success',2,2),('partial-fetch','sub','2026-11-10T01:00:00Z','partial',2,1),('failed-fetch','sub','2026-11-10T02:00:00Z','failed',0,0)`,
+		`INSERT INTO subscription_fetches(id,subscription_id,started_at,outcome,nodes_parsed,nodes_valid)VALUES('old-fetch','sub','2026-11-10T00:00:00Z','success',2,2),('partial-fetch','sub','2026-11-10T01:00:00Z','partial',2,1),('failed-fetch','sub','2026-11-10T01:00:00.500Z','failed',0,0)`,
 		`INSERT INTO subscription_payloads(id,subscription_id,fetch_id,content_digest,body_blob,pinned,created_at)VALUES('old','sub','old-fetch','old-digest',zeroblob(2097152),1,'2026-11-10T00:00:00Z'),('current','sub','partial-fetch','current-digest',X'','0','2026-11-10T01:00:00Z')`,
 		`INSERT INTO subscription_entries(id,payload_id,subscription_id,ordinal,source_key,raw_name,protocol,entry_kind,node_logical_id,created_at)VALUES('old-a','old','sub',0,'a','A','ss','proxy','a','2026-11-10T00:00:00Z'),('old-b','old','sub',1,'b','B','ss','proxy','b','2026-11-10T00:00:00Z'),('current-a','current','sub',0,'a','A','ss','proxy','a','2026-11-10T01:00:00Z')`,
 		`INSERT INTO node_sources VALUES('a','sub','partial-fetch'),('b','sub','old-fetch')`,
+		`INSERT INTO node_connection_versions(node_logical_id,connection_revision,effective_config_json,config_fingerprint,source_entry_id,created_at)VALUES('a',0,'{"server":"192.0.2.99","port":8388,"credentials":{}}','synthetic-old','old-a','2026-11-10T00:00:00Z')`,
 		`INSERT INTO publications(id,target,snapshot_digest,compiler_version,token_hash,state,created_at,content)VALUES('pub','mihomo','snapshot','1','synthetic-token','active','2026-11-10T00:00:00Z',X'00112233')`,
 		`INSERT INTO publication_payload_refs VALUES('pub','old')`,
 		`INSERT INTO node_overrides VALUES('a','display_name','"User A"','2026-11-10T00:00:00Z','2026-11-10T00:00:00Z')`,
@@ -203,6 +205,8 @@ func TestSubscriptionCompactionCLISchema27ThroughPhysicalOutput(t *testing.T) {
 		`SELECT COUNT(*) FROM node_source_history WHERE relation_state='unknown' AND cause='unresolved'`: 2,
 		`SELECT COUNT(*) FROM node_connection_heads`:                                                     2,
 		`SELECT COUNT(*) FROM node_connection_versions`:                                                  2,
+		`SELECT COUNT(*) FROM node_connection_provenance WHERE node_logical_id='a' AND connection_revision=0 AND origin_payload_id='old'`:                                      1,
+		`SELECT COUNT(*) FROM subscription_fetches WHERE id='failed-fetch' AND outcome='failed' AND started_at='2026-11-10T01:00:00.500Z'`:                                     1,
 		`SELECT COUNT(*) FROM subscription_current_state WHERE applied_fetch_id='partial-fetch' AND last_attempt_fetch_id='failed-fetch' AND last_attempt_status='failed'`:     1,
 		`SELECT COUNT(*) FROM publication_payload_refs r JOIN subscription_payload_evidence e ON e.payload_id=r.payload_id WHERE e.content_digest='old-digest' AND e.pinned=1`: 1,
 		`SELECT COUNT(*) FROM publications WHERE content=X'00112233' AND token_hash='synthetic-token'`:                                                                         1,

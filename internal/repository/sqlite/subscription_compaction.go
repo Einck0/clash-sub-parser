@@ -106,14 +106,15 @@ func inspectSubscriptionCompactionTx(ctx context.Context, tx *sql.Tx) (*domain.S
 		(SELECT COUNT(*) FROM subscription_payloads p WHERE p.subscription_id=s.id),
 		(SELECT COUNT(*) FROM subscription_entries e WHERE e.subscription_id=s.id),
 		(SELECT COUNT(*) FROM subscription_payloads p JOIN subscription_fetches f ON f.id=p.fetch_id WHERE p.subscription_id=s.id AND f.outcome IN ('success','partial')),
-		COALESCE((SELECT f.id FROM subscription_fetches f WHERE f.subscription_id=s.id ORDER BY f.started_at DESC,f.rowid DESC LIMIT 1),''), ` + rawExpr + ` FROM subscriptions s ORDER BY s.id`
+		COALESCE((SELECT f.id FROM subscription_fetches f WHERE f.subscription_id=s.id ORDER BY julianday(f.started_at) DESC,f.rowid DESC LIMIT 1),''),
+		COALESCE((SELECT f.outcome FROM subscription_fetches f WHERE f.subscription_id=s.id ORDER BY julianday(f.started_at) DESC,f.rowid DESC LIMIT 1),''), ` + rawExpr + ` FROM subscriptions s ORDER BY s.id`
 	rows, err = tx.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
 	for rows.Next() {
 		var status domain.SubscriptionStorageStatus
-		if err := rows.Scan(&status.SubscriptionID, &status.PayloadCount, &status.EntryCount, &status.CandidateCount, &status.LastAttemptID, &status.RawFetchID); err != nil {
+		if err := rows.Scan(&status.SubscriptionID, &status.PayloadCount, &status.EntryCount, &status.CandidateCount, &status.LastAttemptID, &status.LastAttemptStatus, &status.RawFetchID); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -313,13 +314,29 @@ func VerifySubscriptionCompaction(ctx context.Context, db *sql.DB, baseline *dom
 			report.Failures = append(report.Failures, "unexpected_protected_table:"+table)
 		}
 	}
+	// Compare against the pre-deletion plan, not just the surviving rows. A
+	// self-consistent candidate can still have lost the actual latest attempt.
+	for _, expected := range baseline.Subscriptions {
+		var attempts int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM subscription_current_state
+			WHERE subscription_id=? AND COALESCE(last_attempt_fetch_id,'')=? AND last_attempt_status=?`,
+			expected.SubscriptionID, expected.LastAttemptID, expected.LastAttemptStatus).Scan(&attempts); err != nil {
+			return nil, err
+		}
+		if attempts != 1 {
+			report.Failures = append(report.Failures, "last_attempt_changed:"+expected.SubscriptionID)
+		}
+	}
 	for name, q := range map[string]string{
 		"multiple_payloads_per_subscription": `SELECT COUNT(*) FROM (SELECT subscription_id FROM subscription_payloads GROUP BY subscription_id HAVING COUNT(*)>1)`,
 		"nonempty_payload_body":              `SELECT COUNT(*) FROM subscription_payloads WHERE length(body_blob)!=0`,
 		"orphan_subscription_entries":        `SELECT COUNT(*) FROM subscription_entries e WHERE NOT EXISTS(SELECT 1 FROM subscription_payloads p WHERE p.id=e.payload_id AND p.subscription_id=e.subscription_id)`,
 		"missing_node_head":                  `SELECT COUNT(*) FROM nodes n WHERE NOT EXISTS(SELECT 1 FROM node_connection_heads h JOIN node_connection_versions v ON v.node_logical_id=h.logical_id AND v.connection_revision=h.connection_revision WHERE h.logical_id=n.logical_id AND h.connection_revision=n.connection_revision)`,
-		"missing_publication_evidence":       `SELECT COUNT(*) FROM publication_payload_refs r WHERE NOT EXISTS(SELECT 1 FROM subscription_payload_evidence e WHERE e.payload_id=r.payload_id)`,
-		"dangling_version_source_entry":      `SELECT COUNT(*) FROM node_connection_versions v WHERE v.source_entry_id IS NOT NULL AND v.source_entry_id!='' AND NOT EXISTS(SELECT 1 FROM subscription_entries e WHERE e.id=v.source_entry_id)`,
+		"unleased_nonhead_version": `SELECT COUNT(*) FROM node_connection_versions v
+			WHERE NOT EXISTS(SELECT 1 FROM node_connection_heads h WHERE h.logical_id=v.node_logical_id AND h.connection_revision=v.connection_revision)
+			AND NOT EXISTS(SELECT 1 FROM node_connection_version_leases l WHERE l.node_logical_id=v.node_logical_id AND l.connection_revision=v.connection_revision)`,
+		"missing_publication_evidence":  `SELECT COUNT(*) FROM publication_payload_refs r WHERE NOT EXISTS(SELECT 1 FROM subscription_payload_evidence e WHERE e.payload_id=r.payload_id)`,
+		"dangling_version_source_entry": `SELECT COUNT(*) FROM node_connection_versions v WHERE v.source_entry_id IS NOT NULL AND v.source_entry_id!='' AND NOT EXISTS(SELECT 1 FROM subscription_entries e WHERE e.id=v.source_entry_id)`,
 		"invalid_applied_state": `SELECT COUNT(*) FROM subscription_current_state c LEFT JOIN subscriptions s ON s.id=c.subscription_id
 			WHERE s.id IS NULL OR (c.applied_payload_id IS NULL) != (c.applied_fetch_id IS NULL)
 			OR (c.applied_payload_id IS NOT NULL AND (c.source_revision != s.revision OR NOT EXISTS (

@@ -64,22 +64,34 @@ func extractYAML(content []byte) (ExtractResult, bool, error) {
 		return ExtractResult{}, false, nil
 	}
 	root := document.Content[0]
-	var proxies *yaml.Node
-	for i := 0; i+1 < len(root.Content); i += 2 {
-		if root.Content[i].Value == "proxies" {
-			if proxies != nil {
-				result := ExtractResult{}
-				result.reject("yaml", 1, "", parseIssue("invalid_document", "proxies"))
-				return result, true, domain.NewValidationError("no_supported_nodes", "subscription contains no supported nodes")
-			}
-			proxies = root.Content[i+1]
-		}
+	// Decode only the root field, letting yaml.v3 enforce duplicate-key and
+	// merge semantics without expanding all proxy entries together. Keeping a
+	// Node here preserves individual-entry isolation below.
+	var fields struct {
+		Proxies yaml.Node `yaml:"proxies"`
 	}
-	if proxies == nil {
+	if err := root.Decode(&fields); err != nil {
+		result := ExtractResult{}
+		result.reject("yaml", 1, "", parseIssue("invalid_document", "proxies"))
+		return result, true, domain.NewValidationError("no_supported_nodes", "subscription contains no supported nodes")
+	}
+	proxies := &fields.Proxies
+	if proxies.Kind == 0 {
 		return ExtractResult{}, false, nil
 	}
+	// A field decoded into yaml.Node retains its alias. Follow only this
+	// top-level reference, never recursively expand an untrusted graph.
+	seen := make(map[*yaml.Node]bool)
+	for proxies != nil && proxies.Kind == yaml.AliasNode {
+		if seen[proxies] {
+			proxies = nil
+			break
+		}
+		seen[proxies] = true
+		proxies = proxies.Alias
+	}
 	result := ExtractResult{}
-	if proxies.Kind != yaml.SequenceNode {
+	if proxies == nil || proxies.Kind != yaml.SequenceNode {
 		result.reject("yaml", 1, "", parseIssue("invalid_entry", "proxies"))
 	} else {
 		for i, entry := range proxies.Content {

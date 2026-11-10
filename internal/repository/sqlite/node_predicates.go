@@ -8,6 +8,9 @@ import (
 	"clash-sub-parser/internal/domain"
 )
 
+// Classification follows only the latest useful snapshot of each subscription.
+// Historical source references protect provenance/retention, not current notice
+// membership. Failed fetches leave the last useful snapshot in effect.
 const currentUsefulPayloadsSubquery = `SELECT p.id
 FROM subscription_payloads p
 JOIN (
@@ -20,15 +23,7 @@ JOIN (
     LEFT JOIN subscription_fetches sf ON p2.fetch_id = sf.id
     WHERE (sf.outcome IN ('success', 'partial') OR (sf.id IS NULL AND p2.http_status = 200))
       AND (sf.nodes_valid IS NULL OR sf.nodes_valid > 0 OR EXISTS (SELECT 1 FROM subscription_entries se_check WHERE se_check.payload_id = p2.id))
-) ranked ON p.id = ranked.id AND ranked.rn = 1
-UNION
-SELECT p3.id
-FROM subscription_payloads p3
-WHERE p3.fetch_id IN (
-    SELECT DISTINCT ns.last_seen_fetch_id
-    FROM node_sources ns
-    WHERE ns.last_seen_fetch_id != ''
-)`
+) ranked ON p.id = ranked.id AND ranked.rn = 1`
 
 const confirmedNoticeExclusionSubquery = `SELECT se1.node_logical_id FROM subscription_entries se1
 WHERE se1.node_logical_id IS NOT NULL

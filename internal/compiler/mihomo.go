@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/netip"
 	"net/url"
+	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -438,7 +440,7 @@ func parsePluginBool(loc, plugin, key string, val any) (bool, error) {
 		case "false", "0", "no":
 			return false, nil
 		default:
-			return false, mihomoError(loc, "ss", fmt.Sprintf("invalid boolean value %q for option %q in %s plugin-opts", v, key, plugin))
+			return false, mihomoError(loc, "ss", fmt.Sprintf("invalid boolean value for option %q in %s plugin-opts", key, plugin))
 		}
 	case json.Number:
 		switch v.String() {
@@ -447,7 +449,7 @@ func parsePluginBool(loc, plugin, key string, val any) (bool, error) {
 		case "0":
 			return false, nil
 		default:
-			return false, mihomoError(loc, "ss", fmt.Sprintf("invalid boolean number %s for option %q in %s plugin-opts", v.String(), key, plugin))
+			return false, mihomoError(loc, "ss", fmt.Sprintf("invalid boolean number for option %q in %s plugin-opts", key, plugin))
 		}
 	case int:
 		if v == 1 {
@@ -456,7 +458,7 @@ func parsePluginBool(loc, plugin, key string, val any) (bool, error) {
 		if v == 0 {
 			return false, nil
 		}
-		return false, mihomoError(loc, "ss", fmt.Sprintf("invalid boolean number %d for option %q in %s plugin-opts", v, key, plugin))
+		return false, mihomoError(loc, "ss", fmt.Sprintf("invalid boolean number for option %q in %s plugin-opts", key, plugin))
 	case float64:
 		if v == 1 {
 			return true, nil
@@ -464,9 +466,9 @@ func parsePluginBool(loc, plugin, key string, val any) (bool, error) {
 		if v == 0 {
 			return false, nil
 		}
-		return false, mihomoError(loc, "ss", fmt.Sprintf("invalid boolean number %v for option %q in %s plugin-opts", v, key, plugin))
+		return false, mihomoError(loc, "ss", fmt.Sprintf("invalid boolean number for option %q in %s plugin-opts", key, plugin))
 	default:
-		return false, mihomoError(loc, "ss", fmt.Sprintf("invalid boolean value type %T for option %q in %s plugin-opts", val, key, plugin))
+		return false, mihomoError(loc, "ss", fmt.Sprintf("invalid boolean value type for option %q in %s plugin-opts", key, plugin))
 	}
 }
 
@@ -480,21 +482,21 @@ func parsePluginInt(loc, plugin, key string, val any) (int, error) {
 		if float64(int(v)) == v {
 			return int(v), nil
 		}
-		return 0, mihomoError(loc, "ss", fmt.Sprintf("invalid non-integer value %v for option %q in %s plugin-opts", v, key, plugin))
+		return 0, mihomoError(loc, "ss", fmt.Sprintf("invalid non-integer value for option %q in %s plugin-opts", key, plugin))
 	case json.Number:
 		n, err := v.Int64()
 		if err != nil {
-			return 0, mihomoError(loc, "ss", fmt.Sprintf("invalid integer value %s for option %q in %s plugin-opts", v.String(), key, plugin))
+			return 0, mihomoError(loc, "ss", fmt.Sprintf("invalid integer value for option %q in %s plugin-opts", key, plugin))
 		}
 		return int(n), nil
 	case string:
 		n, err := strconv.Atoi(strings.TrimSpace(v))
 		if err != nil {
-			return 0, mihomoError(loc, "ss", fmt.Sprintf("invalid integer string %q for option %q in %s plugin-opts", v, key, plugin))
+			return 0, mihomoError(loc, "ss", fmt.Sprintf("invalid integer string for option %q in %s plugin-opts", key, plugin))
 		}
 		return n, nil
 	default:
-		return 0, mihomoError(loc, "ss", fmt.Sprintf("invalid integer value type %T for option %q in %s plugin-opts", val, key, plugin))
+		return 0, mihomoError(loc, "ss", fmt.Sprintf("invalid integer value type for option %q in %s plugin-opts", key, plugin))
 	}
 }
 
@@ -507,7 +509,7 @@ func parsePluginString(loc, plugin, key string, val any) (string, error) {
 	case int, int64, float64, bool:
 		return fmt.Sprintf("%v", v), nil
 	default:
-		return "", mihomoError(loc, "ss", fmt.Sprintf("invalid string value type %T for option %q in %s plugin-opts", val, key, plugin))
+		return "", mihomoError(loc, "ss", fmt.Sprintf("invalid string value type for option %q in %s plugin-opts", key, plugin))
 	}
 }
 
@@ -518,7 +520,13 @@ func parsePluginHeaders(loc, plugin string, val any) (map[string]string, error) 
 	case map[string]any:
 		res := make(map[string]string, len(v))
 		for hk, hv := range v {
-			res[hk] = fmt.Sprintf("%v", hv)
+			// Header values must stay strings; stringifying a nested object or
+			// array would silently change the requested plugin configuration.
+			s, ok := hv.(string)
+			if !ok {
+				return nil, mihomoError(loc, "ss", fmt.Sprintf("invalid headers value type in %s plugin-opts", plugin))
+			}
+			res[hk] = s
 		}
 		return res, nil
 	case string:
@@ -528,11 +536,11 @@ func parsePluginHeaders(loc, plugin string, val any) (map[string]string, error) 
 		}
 		var parsed map[string]string
 		if err := json.Unmarshal([]byte(trimmed), &parsed); err != nil {
-			return nil, mihomoError(loc, "ss", fmt.Sprintf("invalid headers JSON in %s plugin-opts: %v", plugin, err))
+			return nil, mihomoError(loc, "ss", fmt.Sprintf("invalid headers JSON in %s plugin-opts", plugin))
 		}
 		return parsed, nil
 	default:
-		return nil, mihomoError(loc, "ss", fmt.Sprintf("invalid headers type %T in %s plugin-opts", val, plugin))
+		return nil, mihomoError(loc, "ss", fmt.Sprintf("invalid headers type in %s plugin-opts", plugin))
 	}
 }
 
@@ -573,16 +581,21 @@ func parseMihomoSSPlugin(loc string, c domain.InboundProtocolCredential) (string
 	case "restls":
 		canonicalPlugin = "restls"
 	default:
-		return "", nil, mihomoError(loc, "ss", fmt.Sprintf("unsupported shadowsocks plugin %q for mihomo", rawPlugin))
+		return "", nil, mihomoError(loc, "ss", "unsupported shadowsocks plugin for mihomo")
 	}
 
 	rawMap := make(map[string]any)
 	if rawOpts != "" {
 		trimmedOpts := strings.TrimSpace(rawOpts)
-		if strings.HasPrefix(trimmedOpts, "{") && strings.HasSuffix(trimmedOpts, "}") {
+		if strings.HasPrefix(trimmedOpts, "{") || strings.HasPrefix(trimmedOpts, "[") {
+			// Validate the entire value, including trailing data, before decoding.
+			// Decoder errors and raw tokens can contain subscription secrets.
+			if !json.Valid([]byte(trimmedOpts)) {
+				return "", nil, mihomoError(loc, "ss", "invalid JSON syntax in shadowsocks plugin-opts")
+			}
 			parsed, err := unmarshalJSONMap(trimmedOpts)
-			if err != nil {
-				return "", nil, mihomoError(loc, "ss", fmt.Sprintf("invalid JSON syntax in shadowsocks plugin-opts: %v", err))
+			if err != nil || parsed == nil {
+				return "", nil, mihomoError(loc, "ss", "invalid JSON object in shadowsocks plugin-opts")
 			}
 			rawMap = parsed
 		} else {
@@ -601,61 +614,79 @@ func parseMihomoSSPlugin(loc string, c domain.InboundProtocolCredential) (string
 					k := strings.TrimSpace(parts[0])
 					v := strings.TrimSpace(parts[1])
 					if k == "" {
-						return "", nil, mihomoError(loc, "ss", fmt.Sprintf("invalid empty key in shadowsocks plugin-opts entry %q", token))
+						return "", nil, mihomoError(loc, "ss", "invalid empty key in shadowsocks plugin-opts entry")
 					}
 					if len(v) >= 2 && ((v[0] == '"' && v[len(v)-1] == '"') || (v[0] == '\'' && v[len(v)-1] == '\'')) {
 						v = v[1 : len(v)-1]
 					}
-					if (strings.HasPrefix(v, "{") && strings.HasSuffix(v, "}")) || (strings.HasPrefix(v, "[") && strings.HasSuffix(v, "]")) {
-						var parsedVal any
+					var value any = v
+					if strings.HasPrefix(v, "{") || strings.HasPrefix(v, "[") {
+						if !json.Valid([]byte(v)) {
+							return "", nil, mihomoError(loc, "ss", "invalid JSON syntax in shadowsocks plugin-opts value")
+						}
 						d := json.NewDecoder(strings.NewReader(v))
 						d.UseNumber()
-						if err := d.Decode(&parsedVal); err == nil {
-							rawMap[k] = parsedVal
-							continue
+						if err := d.Decode(&value); err != nil {
+							return "", nil, mihomoError(loc, "ss", "invalid JSON syntax in shadowsocks plugin-opts value")
 						}
 					}
-					rawMap[k] = v
+					if previous, exists := rawMap[k]; exists && !reflect.DeepEqual(previous, value) {
+						return "", nil, mihomoError(loc, "ss", "conflicting options in shadowsocks plugin-opts")
+					}
+					rawMap[k] = value
 				} else {
+					if previous, exists := rawMap[token]; exists && !reflect.DeepEqual(previous, "true") {
+						return "", nil, mihomoError(loc, "ss", "conflicting options in shadowsocks plugin-opts")
+					}
 					rawMap[token] = "true"
 				}
 			}
 		}
 	}
 
+	// Stable ordering makes the first failure deterministic even when several
+	// options are invalid. JSON options may contain maps and slices, so alias
+	// comparisons below must use deep equality rather than interface ==/!=.
+	keys := make([]string, 0, len(rawMap))
+	for key := range rawMap {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
 	outOpts := make(map[string]any)
 	switch canonicalPlugin {
 	case "obfs":
 		var modeVal, hostVal any
 		var hasMode, hasHost bool
-		for k, v := range rawMap {
+		for _, k := range keys {
+			v := rawMap[k]
 			switch strings.ToLower(k) {
 			case "mode":
-				if hasMode && modeVal != v {
+				if hasMode && !reflect.DeepEqual(modeVal, v) {
 					return "", nil, mihomoError(loc, "ss", "conflicting mode and obfs options in obfs plugin-opts")
 				}
 				modeVal = v
 				hasMode = true
 			case "obfs":
-				if hasMode && modeVal != v {
+				if hasMode && !reflect.DeepEqual(modeVal, v) {
 					return "", nil, mihomoError(loc, "ss", "conflicting mode and obfs options in obfs plugin-opts")
 				}
 				modeVal = v
 				hasMode = true
 			case "host":
-				if hasHost && hostVal != v {
+				if hasHost && !reflect.DeepEqual(hostVal, v) {
 					return "", nil, mihomoError(loc, "ss", "conflicting host and obfs-host options in obfs plugin-opts")
 				}
 				hostVal = v
 				hasHost = true
 			case "obfs-host", "obfs_host":
-				if hasHost && hostVal != v {
+				if hasHost && !reflect.DeepEqual(hostVal, v) {
 					return "", nil, mihomoError(loc, "ss", "conflicting host and obfs-host options in obfs plugin-opts")
 				}
 				hostVal = v
 				hasHost = true
 			default:
-				return "", nil, mihomoError(loc, "ss", fmt.Sprintf("unsupported option %q for obfs plugin", k))
+				return "", nil, mihomoError(loc, "ss", "unsupported option for obfs plugin")
 			}
 		}
 
@@ -668,7 +699,7 @@ func parseMihomoSSPlugin(loc string, c domain.InboundProtocolCredential) (string
 		}
 		modeStr = strings.ToLower(modeStr)
 		if modeStr != "tls" && modeStr != "http" {
-			return "", nil, mihomoError(loc, "ss", fmt.Sprintf("unsupported obfs mode %q (must be tls or http)", modeStr))
+			return "", nil, mihomoError(loc, "ss", "unsupported obfs mode (must be tls or http)")
 		}
 		outOpts["mode"] = modeStr
 
@@ -684,10 +715,11 @@ func parseMihomoSSPlugin(loc string, c domain.InboundProtocolCredential) (string
 
 	case "v2ray-plugin":
 		seenKeys := make(map[string]any)
-		for k, v := range rawMap {
+		for _, k := range keys {
+			v := rawMap[k]
 			canonKey := strings.ToLower(strings.ReplaceAll(k, "_", "-"))
-			if prevVal, exists := seenKeys[canonKey]; exists && prevVal != v {
-				return "", nil, mihomoError(loc, "ss", fmt.Sprintf("conflicting options for %q in v2ray-plugin plugin-opts", canonKey))
+			if prevVal, exists := seenKeys[canonKey]; exists && !reflect.DeepEqual(prevVal, v) {
+				return "", nil, mihomoError(loc, "ss", "conflicting options in v2ray-plugin plugin-opts")
 			}
 			seenKeys[canonKey] = v
 			switch canonKey {
@@ -698,7 +730,7 @@ func parseMihomoSSPlugin(loc string, c domain.InboundProtocolCredential) (string
 				}
 				mStr = strings.ToLower(mStr)
 				if mStr != "websocket" {
-					return "", nil, mihomoError(loc, "ss", fmt.Sprintf("unsupported v2ray-plugin mode %q (only websocket is supported)", mStr))
+					return "", nil, mihomoError(loc, "ss", "unsupported v2ray-plugin mode (only websocket is supported)")
 				}
 				outOpts["mode"] = mStr
 			case "host":
@@ -764,7 +796,7 @@ func parseMihomoSSPlugin(loc string, c domain.InboundProtocolCredential) (string
 					outOpts["headers"] = h
 				}
 			default:
-				return "", nil, mihomoError(loc, "ss", fmt.Sprintf("unsupported option %q for v2ray-plugin", k))
+				return "", nil, mihomoError(loc, "ss", "unsupported option for v2ray-plugin")
 			}
 		}
 		if _, ok := seenKeys["mode"]; !ok {
@@ -773,10 +805,11 @@ func parseMihomoSSPlugin(loc string, c domain.InboundProtocolCredential) (string
 
 	case "shadow-tls":
 		seenKeys := make(map[string]any)
-		for k, v := range rawMap {
+		for _, k := range keys {
+			v := rawMap[k]
 			canonKey := strings.ToLower(strings.ReplaceAll(k, "_", "-"))
-			if prevVal, exists := seenKeys[canonKey]; exists && prevVal != v {
-				return "", nil, mihomoError(loc, "ss", fmt.Sprintf("conflicting options for %q in shadow-tls plugin-opts", canonKey))
+			if prevVal, exists := seenKeys[canonKey]; exists && !reflect.DeepEqual(prevVal, v) {
+				return "", nil, mihomoError(loc, "ss", "conflicting options in shadow-tls plugin-opts")
 			}
 			seenKeys[canonKey] = v
 			switch canonKey {
@@ -804,7 +837,7 @@ func parseMihomoSSPlugin(loc string, c domain.InboundProtocolCredential) (string
 					return "", nil, err
 				}
 				if ver < 1 || ver > 3 {
-					return "", nil, mihomoError(loc, "ss", fmt.Sprintf("unsupported shadow-tls version %d (must be 1, 2, or 3)", ver))
+					return "", nil, mihomoError(loc, "ss", "unsupported shadow-tls version (must be 1, 2, or 3)")
 				}
 				outOpts["version"] = ver
 			case "fingerprint":
@@ -822,7 +855,7 @@ func parseMihomoSSPlugin(loc string, c domain.InboundProtocolCredential) (string
 				}
 				outOpts["skip-cert-verify"] = b
 			default:
-				return "", nil, mihomoError(loc, "ss", fmt.Sprintf("unsupported option %q for shadow-tls plugin", k))
+				return "", nil, mihomoError(loc, "ss", "unsupported option for shadow-tls plugin")
 			}
 		}
 		if _, ok := seenKeys["host"]; !ok {
@@ -834,10 +867,11 @@ func parseMihomoSSPlugin(loc string, c domain.InboundProtocolCredential) (string
 
 	case "restls":
 		seenKeys := make(map[string]any)
-		for k, v := range rawMap {
+		for _, k := range keys {
+			v := rawMap[k]
 			canonKey := strings.ToLower(strings.ReplaceAll(k, "_", "-"))
-			if prevVal, exists := seenKeys[canonKey]; exists && prevVal != v {
-				return "", nil, mihomoError(loc, "ss", fmt.Sprintf("conflicting options for %q in restls plugin-opts", canonKey))
+			if prevVal, exists := seenKeys[canonKey]; exists && !reflect.DeepEqual(prevVal, v) {
+				return "", nil, mihomoError(loc, "ss", "conflicting options in restls plugin-opts")
 			}
 			seenKeys[canonKey] = v
 			switch canonKey {
@@ -877,7 +911,7 @@ func parseMihomoSSPlugin(loc string, c domain.InboundProtocolCredential) (string
 					outOpts["restls-script"] = s
 				}
 			default:
-				return "", nil, mihomoError(loc, "ss", fmt.Sprintf("unsupported option %q for restls plugin", k))
+				return "", nil, mihomoError(loc, "ss", "unsupported option for restls plugin")
 			}
 		}
 		if _, ok := seenKeys["host"]; !ok {

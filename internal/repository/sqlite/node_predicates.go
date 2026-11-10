@@ -55,33 +55,32 @@ WHERE se1.node_logical_id IS NOT NULL
 // sides: neither a disabled notice nor a disabled explicit proxy may affect a
 // currently enabled shared node. Keep the unscoped query above for legacy asset
 // classification and disabled subscriptions' retained source counts.
-const enabledNoticeExclusionSubquery = `SELECT se1.node_logical_id FROM subscription_entries se1
-JOIN subscriptions notice_sub ON notice_sub.id = se1.subscription_id AND notice_sub.enabled = 1
-WHERE se1.node_logical_id IS NOT NULL
-  AND se1.payload_id IN (` + currentUsefulPayloadsSubquery + `)
-  AND COALESCE(
-      (SELECT seo.user_kind_override
-       FROM subscription_entry_overrides seo
-       WHERE seo.subscription_id = se1.subscription_id
-         AND ((se1.override_anchor != '' AND seo.override_anchor = se1.override_anchor) OR (se1.source_key != '' AND seo.override_anchor = se1.source_key))
-       ORDER BY seo.override_at DESC, seo.rowid DESC
-       LIMIT 1),
-      se1.entry_kind
-  ) = 'notice'
-  AND NOT EXISTS (
-      SELECT 1 FROM subscription_entries se2
-      JOIN subscriptions proxy_sub ON proxy_sub.id = se2.subscription_id AND proxy_sub.enabled = 1
-      WHERE se2.node_logical_id = se1.node_logical_id
-        AND se2.payload_id IN (` + currentUsefulPayloadsSubquery + `)
-        AND (
-            SELECT seo2.user_kind_override
-            FROM subscription_entry_overrides seo2
-            WHERE seo2.subscription_id = se2.subscription_id
-              AND ((se2.override_anchor != '' AND seo2.override_anchor = se2.override_anchor) OR (se2.source_key != '' AND seo2.override_anchor = se2.source_key))
-            ORDER BY seo2.override_at DESC, seo2.rowid DESC
-            LIMIT 1
-        ) = 'proxy'
-  )`
+// Materialize the current payload set before reading entries, then resolve each
+// current enabled entry's override once. CROSS JOIN keeps payloads as the outer
+// loop so the existing (payload_id, ordinal) index avoids scanning retained
+// history. A plain proxy entry is not an explicit proxy override: only the latter
+// rescues a shared node from another current entry's notice classification.
+const enabledNoticeExclusionSubquery = `WITH
+current_payloads AS MATERIALIZED (` + currentUsefulPayloadsSubquery + `),
+resolved_entries AS MATERIALIZED (
+    SELECT se.node_logical_id, se.entry_kind,
+           (SELECT seo.user_kind_override
+            FROM subscription_entry_overrides seo
+            WHERE seo.subscription_id = se.subscription_id
+              AND ((se.override_anchor != '' AND seo.override_anchor = se.override_anchor)
+                   OR (se.source_key != '' AND seo.override_anchor = se.source_key))
+            ORDER BY seo.override_at DESC, seo.rowid DESC
+            LIMIT 1) AS explicit_kind
+    FROM current_payloads cp
+    CROSS JOIN subscription_entries se ON se.payload_id = cp.id
+    JOIN subscriptions s ON s.id = se.subscription_id AND s.enabled = 1
+    WHERE se.node_logical_id IS NOT NULL
+)
+SELECT node_logical_id
+FROM resolved_entries
+GROUP BY node_logical_id
+HAVING MAX(CASE WHEN COALESCE(explicit_kind, entry_kind) = 'notice' THEN 1 ELSE 0 END) = 1
+   AND MAX(CASE WHEN explicit_kind = 'proxy' THEN 1 ELSE 0 END) = 0`
 
 // Aliases ns and s must identify the source and its subscription respectively.
 const currentEnabledSourcePredicate = `s.enabled = 1

@@ -121,24 +121,11 @@ func TestScaleDiagnostics(t *testing.T) {
 	}
 	t.Logf("fixture_setup=%s nodes=%d historical_entries=%d", time.Since(started), len(nodes), 1000000)
 
-	rows, err := db.QueryContext(ctx, `EXPLAIN QUERY PLAN SELECT n.logical_id FROM nodes n WHERE n.logical_id IN (`+enabledSubscriptionsInventorySubquery+`) AND n.logical_id NOT IN (`+confirmedNoticeExclusionSubquery+`) AND n.active=1`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for rows.Next() {
-		var id, parent, unused int
-		var detail string
-		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
-			rows.Close()
-			t.Fatal(err)
-		}
-		t.Logf("plan id=%d parent=%d %s", id, parent, detail)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		t.Fatal(err)
-	}
-	rows.Close()
+	filter := domain.NodeFilter{Scope: domain.NodeScopeEnabledSubscriptions, ActiveOnly: true, ExcludeNotices: true}
+	// Same database and exact projected results for the frozen 762d706 enabled
+	// predicate versus the materialized implementation. Log actual enabled COUNT
+	// and full paginated SELECT plans, not the unscoped legacy classifier's plan.
+	compareEnabledDiagnosticQueries(t, ctx, db, filter)
 	subs := NewSubscriptionRepository(db)
 	for _, stage := range []string{"get", "list"} {
 		before := db.Stats()
@@ -166,7 +153,6 @@ func TestScaleDiagnostics(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	filter := domain.NodeFilter{Scope: domain.NodeScopeEnabledSubscriptions, ActiveOnly: true, ExcludeNotices: true}
 	// List performs the production COUNT plus paginated SELECT on every page.
 	// Unique created_at values make the coordinator's default ordering definite.
 	var paginated []domain.Node

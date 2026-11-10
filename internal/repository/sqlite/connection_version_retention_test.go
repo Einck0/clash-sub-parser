@@ -62,7 +62,7 @@ func TestConnectionVersionRetentionHundredChangesAndOwnedRelease(t *testing.T) {
 		// Both native repository writers must enforce the same transactional
 		// boundary. Returning to A cannot reuse revision 1 or its probe evidence.
 		if i%2 == 0 {
-			if err := repo.Update(ctx, &node); err != nil {
+			if err := sqlite.UpdateNode(ctx, db, &node); err != nil {
 				t.Fatal(err)
 			}
 		} else if err := repo.UpsertBatch(ctx, []domain.Node{node}); err != nil {
@@ -164,7 +164,7 @@ func TestConnectionVersionRetentionSetHeadAndRollback(t *testing.T) {
 			}
 			versions := sqlite.NewNodeConnectionVersionRepository(db)
 			if failure == "none" {
-				// The explicit Save -> SetHead API must prune too, not only nodes.Update.
+				// The explicit Save -> SetHead API must prune too, not only UpdateNode.
 				if err := versions.Save(ctx, &domain.NodeConnectionVersion{NodeLogicalID: node.LogicalID, ConnectionRevision: 2, EffectiveConfigJSON: `{"server":"192.0.2.2","port":8388,"credentials":{}}`, ConfigFingerprint: "synthetic-new"}); err != nil {
 					t.Fatal(err)
 				}
@@ -188,7 +188,7 @@ func TestConnectionVersionRetentionSetHeadAndRollback(t *testing.T) {
 				t.Fatal(err)
 			}
 			node.Server = "192.0.2.2"
-			if err := repo.Update(ctx, &node); err == nil {
+			if err := sqlite.UpdateNode(ctx, db, &node); err == nil {
 				t.Fatal("retention failure silently committed node write")
 			}
 			current, err := repo.GetByLogicalID(ctx, node.LogicalID)

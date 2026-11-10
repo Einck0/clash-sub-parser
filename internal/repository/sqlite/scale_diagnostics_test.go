@@ -20,7 +20,8 @@ func TestScaleDiagnostics(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	stamp := now.Format(time.RFC3339)
 	for _, query := range []string{
-		`INSERT INTO subscriptions (id,name,source_url_secret_ref,enabled,revision,created_at,updated_at) VALUES ('scale','scale','synthetic',1,'1','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`,
+		`INSERT INTO configuration_revisions (id,content_digest,state,created_at) VALUES ('scale-rev','synthetic-scale','active','2026-01-01T00:00:00Z')`,
+		`INSERT INTO subscriptions (id,name,source_url_secret_ref,enabled,is_primary,revision,created_at,updated_at) VALUES ('scale','scale','synthetic',1,1,'1','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`,
 		`INSERT INTO subscription_fetches (id,subscription_id,started_at,outcome,nodes_valid) VALUES ('old','scale','2025-01-01T00:00:00Z','success',1000), ('current','scale','2026-01-01T00:00:00Z','success',1000)`,
 		`INSERT INTO subscription_payloads (id,subscription_id,fetch_id,content_digest,body_blob,pinned,created_at) VALUES ('old-p','scale','old','old',X'00',0,'2025-01-01T00:00:00Z'), ('current-p','scale','current','current',X'00',1,'2026-01-01T00:00:00Z')`,
 	} {
@@ -30,7 +31,7 @@ func TestScaleDiagnostics(t *testing.T) {
 	}
 	nodes := make([]domain.Node, 1000)
 	for i := range nodes {
-		nodes[i] = domain.Node{LogicalID: fmt.Sprintf("scale-%04d", i), Protocol: domain.ProtocolSS, DisplayName: fmt.Sprintf("node-%04d", i), Server: "192.0.2.1", Port: 8388, Active: true, ConnectionRevision: 1, CreatedAt: now, UpdatedAt: now}
+		nodes[i] = domain.Node{LogicalID: fmt.Sprintf("scale-%04d", i), Protocol: domain.ProtocolSS, DisplayName: fmt.Sprintf("node-%04d", i), Server: "192.0.2.1", Port: 10000 + i, Credentials: domain.InboundProtocolCredential{Method: "aes-128-gcm", Password: "synthetic"}, Active: true, ConnectionRevision: 1, CreatedAt: now, UpdatedAt: now}
 	}
 	repo := NewNodeRepository(db)
 	if err := repo.UpsertBatch(ctx, nodes); err != nil {
@@ -121,6 +122,36 @@ func TestScaleDiagnostics(t *testing.T) {
 		}
 		if len(got) != 999 {
 			t.Fatalf("expected 999 current proxy nodes, got %d", len(got))
+		}
+	}
+	// Exercise the actual publication facts consumer, not just an equivalent
+	// list predicate. A primary subscription forces source loading as well.
+	loader := NewConsistentFactsLoader(db)
+	for i := 0; i < 2; i++ {
+		before := db.Stats()
+		readStart := time.Now()
+		readCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		facts, err := loader.LoadConsistentFacts(readCtx, "scale-rev", domain.TargetSingBox, now)
+		cancel()
+		after := db.Stats()
+		t.Logf("facts_iteration=%d elapsed=%s pool_waits=%d pool_wait_duration=%s error=%v", i, time.Since(readStart), after.WaitCount-before.WaitCount, after.WaitDuration-before.WaitDuration, err)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if facts == nil || len(facts.Nodes) != 999 || len(facts.NodeSources) != 999 || len(facts.PrimaryNodeIDs) != 999 || facts.PrimarySubscriptionID != "scale" {
+			t.Fatal("facts must contain 999 current proxies and their primary sources")
+		}
+		for _, node := range facts.Nodes {
+			if node.LogicalID == nodes[0].LogicalID {
+				t.Fatal("confirmed notice leaked into publication facts")
+			}
+			src := facts.NodeSources[node.LogicalID]
+			if len(src) != 1 || src[0].SubscriptionID != "scale" || src[0].LastSeenFetchID != "current" {
+				t.Fatalf("unexpected facts source for %s: %+v", node.LogicalID, src)
+			}
+			if node.Credentials.Method != "aes-128-gcm" || node.Credentials.Password != "synthetic" {
+				t.Fatalf("facts credentials missing for %s", node.LogicalID)
+			}
 		}
 	}
 	cancelled, cancel := context.WithCancel(ctx)

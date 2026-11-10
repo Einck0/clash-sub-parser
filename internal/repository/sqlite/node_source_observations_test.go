@@ -25,6 +25,20 @@ func TestGenerationReplacementPreservesImmutableOriginsPinsAndUnknownObservation
 	if _, err := db.ExecContext(ctx, `INSERT INTO node_connection_versions(node_logical_id,connection_revision,effective_config_json,config_fingerprint,source_entry_id,created_at)VALUES(?,1,'{}','synthetic','observation-entry',?)`, nodeID, now.Format(time.RFC3339)); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO node_connection_heads(logical_id,connection_revision,updated_at)VALUES(?,1,?)`, nodeID, now.Format(time.RFC3339)); err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlite.NewNodeSourceRepository(db).Upsert(ctx, &domain.NodeSource{NodeLogicalID: nodeID, SubscriptionID: subID, LastSeenFetchID: "observation-fetch"}); err != nil {
+		t.Fatal(err)
+	}
+	// A separate legacy entry has no verified current source. It must retain
+	// only an unknown observation, never become a manual/current facts member.
+	const unknownID = "unknown-observation-node"
+	if _, err := db.ExecContext(ctx, `INSERT INTO nodes(logical_id,protocol,display_name,server,port,config_json,active,created_at,updated_at)VALUES(?,'ss','Unknown','192.0.2.2',8388,'{}',1,?,?)`, unknownID, now.Format(time.RFC3339), now.Format(time.RFC3339)); err != nil {
+		t.Fatal(err)
+	}
+	unknownNodeID := unknownID
+	retentionInsertTestEntry(t, db, "unknown-observation-entry", "observation-payload", subID, "unknown-key", "Unknown Raw Name", domain.EntryKindProxy, &unknownNodeID)
 	rev := &domain.ConfigurationRevision{ID: "frozen-facts-revision", State: domain.RevisionStateActive, ContentDigest: "synthetic", CreatedAt: now}
 	if err := sqlite.NewRevisionRepository(db).Create(ctx, rev); err != nil {
 		t.Fatal(err)
@@ -33,6 +47,9 @@ func TestGenerationReplacementPreservesImmutableOriginsPinsAndUnknownObservation
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(facts.Nodes) != 1 || facts.Nodes[0].LogicalID != nodeID || len(facts.NodePayloadEvidence[unknownID]) != 0 {
+		t.Fatalf("facts must admit only the current source member: nodes=%+v", facts.Nodes)
+	}
 	frozen := facts.NodePayloadEvidence[nodeID]
 	if len(frozen) != 1 || frozen[0].PayloadID != "observation-payload" || frozen[0].ContentDigest != "sha256:digest" {
 		t.Fatalf("facts did not capture original evidence: %+v", frozen)
@@ -40,8 +57,21 @@ func TestGenerationReplacementPreservesImmutableOriginsPinsAndUnknownObservation
 	if err := sqlite.WithTx(ctx, db, func(ctx context.Context, tx *sql.Tx) error { return sqlite.ReplaceCurrentPayloadTx(ctx, tx, subID) }); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, `UPDATE nodes SET connection_revision=2 WHERE logical_id=?`, nodeID); err != nil {
+	nodeRepo := sqlite.NewNodeRepository(db)
+	node, err := nodeRepo.GetByLogicalID(ctx, nodeID)
+	if err != nil {
 		t.Fatal(err)
+	}
+	node.Server = "192.0.2.3"
+	if err := nodeRepo.Update(ctx, node); err != nil {
+		t.Fatal(err)
+	}
+	currentFacts, err := sqlite.NewConsistentFactsLoader(db).LoadConsistentFacts(ctx, rev.ID, domain.TargetSingBox, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(currentFacts.Nodes) != 1 || currentFacts.Nodes[0].ConnectionRevision != 2 || currentFacts.Nodes[0].Server != node.Server || len(currentFacts.NodePayloadEvidence[nodeID]) != 0 {
+		t.Fatalf("new head must not inherit an old revision's origin: nodes=%+v evidence=%+v", currentFacts.Nodes, currentFacts.NodePayloadEvidence[nodeID])
 	}
 	if len(facts.NodePayloadEvidence[nodeID]) != 1 || facts.NodePayloadEvidence[nodeID][0].PayloadID != "observation-payload" || facts.NodePayloadEvidence[nodeID][0].ContentDigest != "sha256:digest" {
 		t.Fatalf("previous facts changed after refresh/head update: %+v", facts.NodePayloadEvidence[nodeID])
@@ -57,8 +87,11 @@ func TestGenerationReplacementPreservesImmutableOriginsPinsAndUnknownObservation
 	if err := db.QueryRowContext(ctx, `SELECT raw_name FROM node_source_observations WHERE node_logical_id=?`, nodeID).Scan(&rawName); err != nil || rawName != "Original Raw Name" {
 		t.Fatalf("historical matching raw name lost: %s %v", rawName, err)
 	}
-	if err := db.QueryRowContext(ctx, `SELECT relation_state,cause FROM node_source_history WHERE node_logical_id=?`, nodeID).Scan(&state, &cause); err != nil || state != "unknown" || cause != "unresolved" {
+	if err := db.QueryRowContext(ctx, `SELECT relation_state,cause FROM node_source_history WHERE node_logical_id=?`, unknownID).Scan(&state, &cause); err != nil || state != "unknown" || cause != "unresolved" {
 		t.Fatalf("entry observation must not invent validation/removal: %s %s %v", state, cause, err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM node_source_history WHERE node_logical_id=?`, nodeID).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("a current source must not gain synthetic unknown history: %d %v", count, err)
 	}
 	// Historical ID pin operations and metadata reads work without a payload shell.
 	payloads := sqlite.NewSubscriptionPayloadRepository(db)
@@ -70,7 +103,7 @@ func TestGenerationReplacementPreservesImmutableOriginsPinsAndUnknownObservation
 		t.Fatal(err)
 	}
 	var source sql.NullString
-	if err := db.QueryRowContext(ctx, `SELECT source_entry_id FROM node_connection_versions WHERE node_logical_id=?`, nodeID).Scan(&source); err != nil || source.Valid {
+	if err := db.QueryRowContext(ctx, `SELECT source_entry_id FROM node_connection_versions WHERE node_logical_id=? AND connection_revision=1`, nodeID).Scan(&source); err != nil || source.Valid {
 		t.Fatalf("old entry not detached: %v", err)
 	}
 }

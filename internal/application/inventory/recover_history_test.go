@@ -1076,16 +1076,18 @@ func TestRecoverSourceHistory_HistoricalConnectionVersionMatch(t *testing.T) {
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM node_connection_version_leases`).Scan(&leases); err != nil || leases != 0 {
 		t.Fatalf("recovery leaked leases: count=%d err=%v", leases, err)
 	}
-	var subscriptionID, sourceIdentity, sourceLabel, relationState, cause, evidenceKind, evidenceKey string
+	var subscriptionID sql.NullString
+	var sourceIdentity, sourceLabel, relationState, cause, evidenceKind, evidenceKey string
 	var revision sql.NullInt64
 	if err := db.QueryRowContext(ctx, `SELECT subscription_id, source_identity, source_label, connection_revision, relation_state, cause, evidence_kind, evidence_key FROM node_source_history WHERE node_logical_id = ?`, node.LogicalID).Scan(&subscriptionID, &sourceIdentity, &sourceLabel, &revision, &relationState, &cause, &evidenceKind, &evidenceKey); err != nil {
 		t.Fatalf("read recovered relationship: %v", err)
 	}
-	// Matching an available configuration verifies the source relationship, not
-	// the modern revision at the time of the legacy archive. Keep that unknown
-	// rather than manufacture a historical revision from credential equality.
-	if subscriptionID != "01a0b9af-c116-7204-b4a3-98a91733145d" || sourceIdentity != "legacy:src:1" || sourceLabel != "7li" || revision.Valid || relationState != "verified" || cause != "legacy_import" || evidenceKind != "legacy_cold_archive" || evidenceKey != "legacy_cold_archive:pk:100:link:1001" {
-		t.Fatalf("unexpected recovered relationship: sub=%s identity=%s label=%s revision=%v state=%s cause=%s kind=%s key=%s", subscriptionID, sourceIdentity, sourceLabel, revision, relationState, cause, evidenceKind, evidenceKey)
+	// Matching an available configuration verifies the legacy relationship, not
+	// the modern revision or subscription identity. The archive URL has a token
+	// absent from the modern fixture URL; equal display names are not proof of
+	// URL lineage, so both the subscription mapping and revision stay unknown.
+	if subscriptionID.Valid || sourceIdentity != "legacy:src:1" || sourceLabel != "7li" || revision.Valid || relationState != "verified" || cause != "legacy_import" || evidenceKind != "legacy_cold_archive" || evidenceKey != "legacy_cold_archive:pk:100:link:1001" {
+		t.Fatalf("unexpected recovered relationship: sub=%v identity=%s label=%s revision=%v state=%s cause=%s kind=%s key=%s", subscriptionID, sourceIdentity, sourceLabel, revision, relationState, cause, evidenceKind, evidenceKey)
 	}
 
 	// In this disposable database, remove only the unreferenced historical

@@ -89,7 +89,7 @@ func TestEnabledSubscriptionInventoryE2E(t *testing.T) {
 	// - node-a-only: only in subA, active=1
 	// - node-shared-ab: in subA and subB, active=1
 	// - node-inactive-a: in subA, active=0 (inactive proxy)
-	// - node-orphan: no source at all, active=1
+	// - node-orphan: no subscription source, active=1; explicitly confirmed manual below
 	// - node-b-only: only in subB (disabled), active=1
 	// - node-notice-a: in subA, confirmed notice (entry_kind='notice')
 	// - node-unknown-a: in subA, normal unknown proxy (not confirmed notice)
@@ -122,6 +122,25 @@ func TestEnabledSubscriptionInventoryE2E(t *testing.T) {
 		}
 	}
 
+	// No source is not positive manual evidence. Verify that the bare orphan is
+	// excluded before giving this synthetic manual fixture an explicit audit row.
+	unknownNodes, err := harness.NodeRepo.ListAll(ctx, domain.NodeFilter{Scope: domain.NodeScopeEnabledSubscriptions})
+	if err != nil {
+		t.Fatalf("read scope before manual confirmation: %v", err)
+	}
+	for _, node := range unknownNodes {
+		if node.LogicalID == "node-orphan" {
+			t.Fatal("an unknown orphan must not be admitted as a manual node")
+		}
+	}
+	if _, err := harness.DB.ExecContext(ctx, `
+		INSERT INTO node_source_history
+		(id, node_logical_id, source_identity, source_label, relation_state, cause, evidence_kind, evidence_key, created_at)
+		VALUES ('e2e-manual-orphan', 'node-orphan', 'manual:user', 'Manual', 'verified', 'manual_confirmed', 'fixture', 'e2e-manual-orphan', ?);
+	`, nowStr); err != nil {
+		t.Fatalf("confirm synthetic manual node: %v", err)
+	}
+
 	// 4. Setup node_sources:
 	for _, ns := range []struct {
 		nodeID  string
@@ -150,7 +169,7 @@ func TestEnabledSubscriptionInventoryE2E(t *testing.T) {
 
 	// 5. Setup subscription_entries for notice classification:
 	payloadA1 := "01a10000-0000-7000-a000-0000000000a1"
-	_, err := harness.DB.ExecContext(ctx, `
+	_, err = harness.DB.ExecContext(ctx, `
 		INSERT INTO subscription_payloads (id, subscription_id, fetch_id, content_digest, body_blob, http_status, headers_json, pinned, created_at)
 		VALUES (?, ?, ?, 'sha256:digest', X'', 200, '{}', 0, ?);
 	`, payloadA1, subA, fetchA1, nowStr)
@@ -319,7 +338,7 @@ func TestEnabledSubscriptionInventoryE2E(t *testing.T) {
 	// Test Case 5: Single Node GET and PATCH works for historical/orphan assets
 	// ==========================================
 	t.Run("GET and PATCH node detail works for orphan/historical node", func(t *testing.T) {
-		// GET node-orphan (which is not in Scope E)
+		// GET the confirmed manual node (no subscription source).
 		req, _ := http.NewRequest(http.MethodGet, harness.Server.URL+"/api/v1/nodes/node-orphan", nil)
 		req.Header.Set("Authorization", authHeader)
 		resp, err := http.DefaultClient.Do(req)
@@ -451,10 +470,34 @@ func TestEnabledSubscriptionInventoryE2E(t *testing.T) {
 				Revision string `json:"revision"`
 			} `json:"data"`
 		}
-		_ = json.NewDecoder(toggleResp.Body).Decode(&toggleView)
+		if err := json.NewDecoder(toggleResp.Body).Decode(&toggleView); err != nil {
+			t.Fatalf("decode disabled subscription revision: %v", err)
+		}
+		if toggleView.Data.Revision == "" {
+			t.Fatal("disabled subscription has no revision")
+		}
+		// Restore state even if a disabled-scope assertion fails, so the later
+		// pool test reports its own behavior rather than a cascading fixture error.
+		t.Cleanup(func() {
+			enableReq, err := http.NewRequest(http.MethodPatch, harness.Server.URL+"/api/v1/subscriptions/"+subA, strings.NewReader(`{"enabled": true}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			enableReq.Header.Set("Authorization", authHeader)
+			enableReq.Header.Set("If-Match", toggleView.Data.Revision)
+			enableReq.Header.Set("Content-Type", "application/json")
+			enableResp, err := http.DefaultClient.Do(enableReq)
+			if err != nil {
+				t.Fatalf("restore enabled subA: %v", err)
+			}
+			defer enableResp.Body.Close()
+			if enableResp.StatusCode != http.StatusOK {
+				t.Fatalf("restore enabled subA: status %d", enableResp.StatusCode)
+			}
+		})
 
 		// Verify Scope E now: subA is disabled, subB is disabled, subC has 0.
-		// Only subD is enabled with node-d-member!
+		// Only subD has a subscription member; the confirmed manual node remains.
 		req, _ := http.NewRequest(http.MethodGet, harness.Server.URL+"/api/v1/nodes", nil)
 		req.Header.Set("Authorization", authHeader)
 		resp, _ := http.DefaultClient.Do(req)
@@ -470,16 +513,10 @@ func TestEnabledSubscriptionInventoryE2E(t *testing.T) {
 		if bodyAfterDisable.Data.Total != 2 {
 			t.Fatalf("expected Scope E to contain node-d-member and node-orphan after disabling subA, got total %d", bodyAfterDisable.Data.Total)
 		}
+	})
 
-		// Re-enable subA:
-		enableReq, _ := http.NewRequest(http.MethodPatch, harness.Server.URL+"/api/v1/subscriptions/"+subA, strings.NewReader(`{"enabled": true}`))
-		enableReq.Header.Set("Authorization", authHeader)
-		enableReq.Header.Set("If-Match", toggleView.Data.Revision)
-		enableReq.Header.Set("Content-Type", "application/json")
-		enableResp, _ := http.DefaultClient.Do(enableReq)
-		enableResp.Body.Close()
-
-		// Verify Scope E restored back to 6!
+	t.Run("Scope E restored after re-enabling subA", func(t *testing.T) {
+		// The preceding subtest's cleanup re-enables subA even on failure.
 		req2, _ := http.NewRequest(http.MethodGet, harness.Server.URL+"/api/v1/nodes", nil)
 		req2.Header.Set("Authorization", authHeader)
 		resp2, _ := http.DefaultClient.Do(req2)

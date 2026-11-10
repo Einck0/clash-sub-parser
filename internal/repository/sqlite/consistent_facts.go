@@ -82,6 +82,10 @@ func (l *consistentFactsLoader) LoadConsistentFacts(ctx context.Context, revisio
 		return nil, err
 	}
 	facts.Nodes = nodes
+	facts.NodePayloadEvidence, err = loadNodePayloadEvidence(ctx, tx, nodes)
+	if err != nil {
+		return nil, err
+	}
 
 	// 5.5 Proxy Chain Bindings and Enabled Subscriptions
 	chainBindings, err := loadProxyChainBindings(ctx, tx)

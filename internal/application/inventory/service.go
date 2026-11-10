@@ -417,6 +417,10 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 		return nil, fmt.Errorf("failed to read original configuration state before fetch: %w", err)
 	}
 
+	attemptSequence, err := sqlite.BeginSubscriptionAttempt(ctx, s.db, sub.ID, sub.Revision)
+	if err != nil {
+		return nil, err
+	}
 	startedAt := domain.NowUTC()
 	configuredProxy := s.defaultFetchProxy
 	var fetchErr error
@@ -470,7 +474,9 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 			NodesParsed:    0,
 			NodesValid:     0,
 		}
-		_ = s.fetches.Create(ctx, &failedFetch)
+		if err := sqlite.RecordFailedSubscriptionAttempt(ctx, s.db, &failedFetch, sub.Revision, attemptSequence); err != nil {
+			return nil, fmt.Errorf("persist failed fetch: %w", err)
+		}
 		if s.auditRepo != nil {
 			_ = s.auditRepo.Record(ctx, &domain.AuditEvent{
 				ID:              domain.MustNewUUIDv7(),
@@ -508,7 +514,9 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 			NodesParsed:    extractResult.Rejected,
 			NodesValid:     0,
 		}
-		_ = s.fetches.Create(ctx, &failedFetch)
+		if err := sqlite.RecordFailedSubscriptionAttempt(ctx, s.db, &failedFetch, sub.Revision, attemptSequence); err != nil {
+			return nil, fmt.Errorf("persist failed parse: %w", err)
+		}
 		if s.auditRepo != nil {
 			_ = s.auditRepo.Record(ctx, &domain.AuditEvent{
 				ID:              domain.MustNewUUIDv7(),
@@ -547,7 +555,9 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 			NodesParsed:    extractResult.Rejected,
 			NodesValid:     0,
 		}
-		_ = s.fetches.Create(ctx, &failedFetch)
+		if err := sqlite.RecordFailedSubscriptionAttempt(ctx, s.db, &failedFetch, sub.Revision, attemptSequence); err != nil {
+			return nil, fmt.Errorf("persist empty parse: %w", err)
+		}
 		if s.auditRepo != nil {
 			_ = s.auditRepo.Record(ctx, &domain.AuditEvent{
 				ID:              domain.MustNewUUIDv7(),
@@ -614,6 +624,13 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 		if currentRev != sub.Revision || currentSourceURL != sub.SourceURLSecretRef {
 			return domain.NewConflictError("subscription_revision_conflict", "subscription was modified during fetch reconciliation")
 		}
+		var currentSequence int64
+		if err := tx.QueryRowContext(ctx, `SELECT attempt_sequence FROM subscription_current_state WHERE subscription_id=?`, sub.ID).Scan(&currentSequence); err != nil {
+			return err
+		}
+		if currentSequence != attemptSequence {
+			return domain.NewConflictError("subscription_refresh_conflict", "newer subscription attempt admitted")
+		}
 		var currentOriginalFetchID string
 		if err := tx.QueryRowContext(ctx, originalFetchIDSQL, sub.ID).Scan(&currentOriginalFetchID); err != nil {
 			return fmt.Errorf("failed to verify original configuration state before convergence: %w", err)
@@ -665,20 +682,7 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 			id, subscription_id, fetch_id, content_digest, body_blob,
 			http_status, headers_json, pinned, created_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?);`
-		if _, pErr := tx.ExecContext(ctx, insertPayloadSQL,
-			payloadID,
-			sub.ID,
-			fetchID,
-			fetchResp.ContentDigest,
-			[]byte{},
-			httpStatus,
-			string(headersJSON),
-			nowStr,
-		); pErr != nil {
-			if !strings.Contains(pErr.Error(), "no such table") {
-				return fmt.Errorf("failed to insert subscription payload: %w", pErr)
-			}
-		}
+		// Insert only after loading previous-generation identity inputs.
 
 		// Upsert raw original configuration candidate in the same transaction as facts convergence
 		origConfig := &domain.SubscriptionOriginalConfig{
@@ -714,14 +718,20 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 		WHERE ns.subscription_id = ?;`
 
 		var histTableExistsPre int
-		_ = tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='node_source_history';").Scan(&histTableExistsPre)
+		if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='node_source_history';").Scan(&histTableExistsPre); err != nil {
+			return err
+		}
+		if histTableExistsPre != 1 {
+			return fmt.Errorf("maintenance_required: source history missing")
+		}
 		var rows *sql.Rows
 		var qErr error
 		if histTableExistsPre > 0 {
 			selectExistingSQL = `
 			SELECT n.logical_id, n.protocol, COALESCE((SELECT se.raw_name FROM subscription_entries se
 			    WHERE se.node_logical_id = n.logical_id AND se.subscription_id = ?
-			    ORDER BY se.created_at DESC, se.rowid DESC LIMIT 1), n.display_name),
+			    ORDER BY se.created_at DESC, se.rowid DESC LIMIT 1),
+			    (SELECT o.raw_name FROM node_source_observations o WHERE o.node_logical_id=n.logical_id AND o.subscription_id=?), n.display_name),
 			    n.server, n.port, n.config_json, n.active, n.connection_revision
 			FROM nodes n
 			WHERE n.logical_id IN (
@@ -729,7 +739,7 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 				UNION
 				SELECT node_logical_id FROM node_source_history WHERE subscription_id = ?
 			);`
-			rows, qErr = tx.QueryContext(ctx, selectExistingSQL, sub.ID, sub.ID, sub.ID)
+			rows, qErr = tx.QueryContext(ctx, selectExistingSQL, sub.ID, sub.ID, sub.ID, sub.ID)
 		} else {
 			rows, qErr = tx.QueryContext(ctx, selectExistingSQL, sub.ID)
 		}
@@ -751,7 +761,17 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 			npKey := r.displayName + "|" + string(r.protocol)
 			existingByNameProto[npKey] = append(existingByNameProto[npKey], r)
 		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
 		rows.Close()
+		if err := sqlite.ReplaceCurrentPayloadTx(ctx, tx, sub.ID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, insertPayloadSQL, payloadID, sub.ID, fetchID, fetchResp.ContentDigest, []byte{}, httpStatus, string(headersJSON), nowStr); err != nil {
+			return fmt.Errorf("failed to insert current subscription payload: %w", err)
+		}
 
 		// Load previous user overrides for this subscription from durable ledger ONLY
 		type prevOverride struct {
@@ -887,16 +907,16 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 			config_fingerprint, source_entry_id, schema_version, created_at
 		) VALUES (?, ?, ?, ?, ?, 1, ?)
 		ON CONFLICT(node_logical_id, connection_revision) DO UPDATE SET
-			effective_config_json = excluded.effective_config_json,
-			config_fingerprint = excluded.config_fingerprint,
-			source_entry_id = COALESCE(node_connection_versions.source_entry_id, excluded.source_entry_id);`
+			source_entry_id = node_connection_versions.source_entry_id
+		WHERE node_connection_versions.config_fingerprint = excluded.config_fingerprint;`
 
 		var versionStmt *sql.Stmt
 		vStmt, vErr := tx.PrepareContext(ctx, upsertVersionSQL)
-		if vErr == nil {
-			versionStmt = vStmt
-			defer versionStmt.Close()
+		if vErr != nil {
+			return fmt.Errorf("prepare connection version: %w", vErr)
 		}
+		versionStmt = vStmt
+		defer versionStmt.Close()
 
 		const upsertHeadSQL = `
 		INSERT INTO node_connection_heads (logical_id, connection_revision, updated_at)
@@ -907,10 +927,11 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 
 		var headStmt *sql.Stmt
 		hStmt, hErr := tx.PrepareContext(ctx, upsertHeadSQL)
-		if hErr == nil {
-			headStmt = hStmt
-			defer headStmt.Close()
+		if hErr != nil {
+			return fmt.Errorf("prepare connection head: %w", hErr)
 		}
+		headStmt = hStmt
+		defer headStmt.Close()
 
 		const insertEntrySQL = `
 		INSERT INTO subscription_entries (
@@ -941,10 +962,11 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 
 		var entryStmt *sql.Stmt
 		eStmt, eErr := tx.PrepareContext(ctx, insertEntrySQL)
-		if eErr == nil {
-			entryStmt = eStmt
-			defer entryStmt.Close()
+		if eErr != nil {
+			return fmt.Errorf("prepare subscription entries: %w", eErr)
 		}
+		entryStmt = eStmt
+		defer entryStmt.Close()
 
 		isVerifiedSource := sub.ID == "01a0b9af-c116-7967-bc7f-197aa43a2e49" ||
 			strings.Contains(strings.ToLower(sub.Name), "dogegg") ||
@@ -1015,7 +1037,7 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 			needHeadUpdate := false
 			needVersionInsert := false
 
-			if effectiveKind == domain.EntryKindNotice || isFilteredOut {
+			if effectiveKind == domain.EntryKindNotice || isFilteredOut || conflict != "" {
 				// Notices or filtered-out nodes do NOT enter active proxy inventory!
 				var matchedNoticeNode *existingNodeRow
 				if node.LogicalID != "" {
@@ -1027,7 +1049,7 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 					m := existingByNameProto[npKey][0]
 					matchedNoticeNode = &m
 				}
-				if matchedNoticeNode != nil && !isFilteredOut {
+				if matchedNoticeNode != nil && !isFilteredOut && conflict == "" {
 					// Notice pseudo-node linked for provenance; do NOT mutate nodes.active (lifecycle separated from classification)
 					targetLogicalIDPtr = &matchedNoticeNode.logicalID
 				}
@@ -1109,7 +1131,9 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 
 							// Snapshot old shared association before unlinking
 							var histTableExists int
-							_ = tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='node_source_history';").Scan(&histTableExists)
+							if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='node_source_history';").Scan(&histTableExists); err != nil {
+								return err
+							}
 							if histTableExists > 0 {
 								histID := domain.MustNewUUIDv7()
 								evidenceKey := fmt.Sprintf("cow_unlinked:%s:%s", matchedNode.logicalID, sub.ID)
@@ -1127,7 +1151,7 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 								}
 							}
 
-							if outcome == domain.FetchOutcomeSuccess {
+							if outcome == domain.FetchOutcomeSuccess || outcome == domain.FetchOutcomePartial {
 								if _, err := tx.ExecContext(ctx, `
 								DELETE FROM node_sources
 								WHERE node_logical_id = ? AND subscription_id = ?;
@@ -1327,8 +1351,16 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 					return fmt.Errorf("failed to marshal credentials for node %s: %w", *targetLogicalIDPtr, mErr)
 				}
 				fp := domain.ComputeConnectionFingerprint(node.Server, node.Port, node.Credentials)
-				if _, vErr := versionStmt.ExecContext(ctx, *targetLogicalIDPtr, currentRevision, string(effJSONBytes), fp, entryID, nowStr); vErr != nil {
+				versionResult, vErr := versionStmt.ExecContext(ctx, *targetLogicalIDPtr, currentRevision, string(effJSONBytes), fp, entryID, nowStr)
+				if vErr != nil {
 					return fmt.Errorf("failed to upsert node connection version for node %s: %w", *targetLogicalIDPtr, vErr)
+				}
+				written, err := versionResult.RowsAffected()
+				if err != nil {
+					return err
+				}
+				if written != 1 {
+					return domain.NewConflictError("connection_version_conflict", "a connection revision cannot be rewritten")
 				}
 			}
 			if targetLogicalIDPtr != nil && needHeadUpdate && headStmt != nil {
@@ -1338,11 +1370,13 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 			}
 		}
 
-		// 4. Archive obsolete node sources and prune diff ONLY on full success
-		// Failed or partial refreshes preserve unseen old sources and history without pruning.
-		if outcome == domain.FetchOutcomeSuccess {
+		// Full and partial both apply exactly the accepted subset. Failed fetches
+		// never reach this transaction and preserve the most recently applied set.
+		if outcome == domain.FetchOutcomeSuccess || outcome == domain.FetchOutcomePartial {
 			var histTableExists int
-			_ = tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='node_source_history';").Scan(&histTableExists)
+			if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='node_source_history';").Scan(&histTableExists); err != nil {
+				return err
+			}
 			if histTableExists > 0 {
 				type pruneRow struct {
 					nodeID    string
@@ -1357,13 +1391,22 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 					LEFT JOIN subscription_fetches sf ON ns.last_seen_fetch_id = sf.id
 					WHERE ns.subscription_id = ? AND ns.last_seen_fetch_id != ?;
 				`, sub.ID, fetchID)
+				if qErr != nil {
+					return fmt.Errorf("read obsolete sources: %w", qErr)
+				}
 				if qErr == nil {
 					var toPrune []pruneRow
 					for rows.Next() {
 						var p pruneRow
-						if scanErr := rows.Scan(&p.nodeID, &p.fetchID, &p.rev, &p.startedAt); scanErr == nil {
-							toPrune = append(toPrune, p)
+						if scanErr := rows.Scan(&p.nodeID, &p.fetchID, &p.rev, &p.startedAt); scanErr != nil {
+							rows.Close()
+							return scanErr
 						}
+						toPrune = append(toPrune, p)
+					}
+					if err := rows.Err(); err != nil {
+						rows.Close()
+						return err
 					}
 					rows.Close()
 
@@ -1377,6 +1420,9 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 							ON CONFLICT(node_logical_id, evidence_key) DO UPDATE SET
 								last_observed_at = excluded.last_observed_at;
 						`)
+						if prepErr != nil {
+							return fmt.Errorf("prepare removal history: %w", prepErr)
+						}
 						if prepErr == nil {
 							defer histStmt.Close()
 							for _, p := range toPrune {
@@ -1390,7 +1436,7 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 								if _, execErr := histStmt.ExecContext(ctx,
 									histID, p.nodeID, sub.ID, "sub:"+sub.ID, sub.Name,
 									p.rev, string(domain.RelationStateVerified), string(domain.CauseRefreshRemoved),
-									firstObs, nowStr, "subscription_refresh_prune", evidenceKey,
+									firstObs, p.startedAt, "subscription_refresh_prune", evidenceKey,
 									evidenceJSON, nowStr,
 								); execErr != nil {
 									return fmt.Errorf("failed to insert history snapshot on refresh prune (node=%s): %w", p.nodeID, execErr)
@@ -1410,18 +1456,23 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 				return fmt.Errorf("failed to prune obsolete node sources for sub %s: %w", sub.ID, err)
 			}
 
-			// When filter rules are present, immediately purge any nodes previously from this
-			// subscription that were filtered out and have no other valid subscriptions.
-			if len(sub.Config.FilterRules) > 0 {
-				if _, err := sqlite.PurgeOrphanNodesForSubscription(ctx, tx, sub.ID); err != nil {
-					return fmt.Errorf("failed to purge orphan nodes: %w", err)
-				}
-			}
+			// Removing current membership never deletes permanent node assets.
 		}
 
 		affectedIDs := make([]string, 0, len(seenLogicalIDs))
 		for id := range seenLogicalIDs {
 			affectedIDs = append(affectedIDs, id)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO subscription_current_state
+			(subscription_id,source_revision,applied_payload_id,applied_fetch_id,last_attempt_fetch_id,last_attempt_status,applied_at)
+			VALUES (?,?,?,?,?,?,?) ON CONFLICT(subscription_id) DO UPDATE SET
+			source_revision=excluded.source_revision,applied_payload_id=excluded.applied_payload_id,
+			applied_fetch_id=excluded.applied_fetch_id,last_attempt_fetch_id=excluded.last_attempt_fetch_id,
+			last_attempt_status=excluded.last_attempt_status,applied_at=excluded.applied_at`, sub.ID, sub.Revision, payloadID, fetchID, fetchID, string(outcome), nowStr); err != nil {
+			return err
+		}
+		if _, err := sqlite.PruneFetchSummariesTx(ctx, tx, sub.ID); err != nil {
+			return err
 		}
 		return sqlite.RecomputeNodeDisplayNames(ctx, tx, affectedIDs, nil, nowStr)
 	})
@@ -1430,7 +1481,8 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 		return nil, fmt.Errorf("reconcile transaction failed: %w", err)
 	}
 
-	cleanupRes := s.runRetentionCleanup(ctx, sub.ID)
+	// Generation replacement and fetch trimming have already committed atomically.
+	cleanupRes := &sqlite.RetentionResult{ProtectedPayloads: 1}
 
 	result := &ReconcileResult{
 		FetchID:        fetchID,
@@ -1973,7 +2025,7 @@ func (s *Service) UpdateNodeConnection(ctx context.Context, cmd UpdateNodeConnec
 			effectiveJSON := string(effectiveJSONBytes)
 			fp := domain.ComputeConnectionFingerprint(updated.Server, updated.Port, updatedCreds)
 
-			_ = sqlite.WithTx(ctx, s.db, func(ctx context.Context, tx *sql.Tx) error {
+			if txErr := sqlite.WithTx(ctx, s.db, func(ctx context.Context, tx *sql.Tx) error {
 				if cmd.Patch.Server != nil {
 					sBytes, _ := json.Marshal(*cmd.Patch.Server)
 					_, _ = tx.ExecContext(ctx, `
@@ -1999,23 +2051,24 @@ func (s *Service) UpdateNodeConnection(ctx context.Context, cmd UpdateNodeConnec
 					`, logicalID, string(sniBytes), nowStr, nowStr)
 				}
 
-				_, _ = tx.ExecContext(ctx, `
-					INSERT INTO node_connection_versions (node_logical_id, connection_revision, effective_config_json, config_fingerprint, schema_version, created_at)
-					VALUES (?, ?, ?, ?, 1, ?)
-					ON CONFLICT(node_logical_id, connection_revision) DO UPDATE SET
-						effective_config_json = excluded.effective_config_json,
-						config_fingerprint = excluded.config_fingerprint;
-				`, logicalID, newRev, effectiveJSON, fp, nowStr)
+				if _, err := tx.ExecContext(ctx, `
+					INSERT OR IGNORE INTO node_connection_versions (node_logical_id, connection_revision, effective_config_json, config_fingerprint, schema_version, created_at)
+					VALUES (?, ?, ?, ?, 1, ?);
+				`, logicalID, newRev, effectiveJSON, fp, nowStr); err != nil {
+					return err
+				}
 
-				_, _ = tx.ExecContext(ctx, `
+				if _, err := tx.ExecContext(ctx, `
 					INSERT INTO node_connection_heads (logical_id, connection_revision, updated_at)
 					VALUES (?, ?, ?)
 					ON CONFLICT(logical_id) DO UPDATE SET
 						connection_revision = excluded.connection_revision,
 						updated_at = excluded.updated_at;
-				`, logicalID, newRev, nowStr)
+				`, logicalID, newRev, nowStr); err != nil {
+					return err
+				}
 
-				_, _ = tx.ExecContext(ctx, `
+				if _, err := tx.ExecContext(ctx, `
 					UPDATE nodes SET
 						display_name = ?,
 						server = ?,
@@ -2024,10 +2077,15 @@ func (s *Service) UpdateNodeConnection(ctx context.Context, cmd UpdateNodeConnec
 						updated_at = ?,
 						connection_revision = ?
 					WHERE logical_id = ?;
-				`, updated.DisplayName, updated.Server, updated.Port, configJSON, nowStr, newRev, logicalID)
+				`, updated.DisplayName, updated.Server, updated.Port, configJSON, nowStr, newRev, logicalID); err != nil {
+					return err
+				}
 
 				return nil
-			})
+			}); txErr != nil {
+				s.mu.Unlock()
+				return nil, txErr
+			}
 		} else {
 			updated.ConnectionRevision = node.ConnectionRevision + 1
 		}

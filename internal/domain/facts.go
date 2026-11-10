@@ -15,6 +15,7 @@ type ConsistentFacts struct {
 	PolicyRules            []PolicyRule
 	AdmissionRules         []AdmissionRule
 	Nodes                  []Node
+	NodePayloadEvidence    map[string][]PayloadEvidence
 	GlobalFilter           *NodeFilterSpec
 	GroupFilters           map[string]NodeFilterSpec
 	NodeSources            map[string][]NodeSource

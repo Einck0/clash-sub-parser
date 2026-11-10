@@ -167,6 +167,10 @@ func (r *MigrationRunner) Run(ctx context.Context) error {
 
 // RunUpTo scans, orders, and applies all unapplied migrations up to targetVersion inside isolated transactions.
 func (r *MigrationRunner) RunUpTo(ctx context.Context, targetVersion int) error {
+	var existingTables int
+	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'`).Scan(&existingTables); err != nil {
+		return err
+	}
 	if err := EnsureMigrationTable(ctx, r.db); err != nil {
 		return err
 	}
@@ -210,6 +214,8 @@ func (r *MigrationRunner) RunUpTo(ctx context.Context, targetVersion int) error 
 			return fmt.Errorf("migration run aborted at version %d (%s): %w", m.Version, m.Name, err)
 		}
 	}
-
+	if existingTables == 0 && targetVersion >= 30 {
+		return WithTx(ctx, r.db, InitializeEmptySubscriptionStorageTx)
+	}
 	return nil
 }

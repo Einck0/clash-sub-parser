@@ -36,9 +36,12 @@ func TestReconcile_PartialSharedConnectionChangePreservesOldAssociation(t *testi
 	if err := db.QueryRow("SELECT COUNT(*) FROM node_sources WHERE node_logical_id=?", oldID).Scan(&oldOwners); err != nil {
 		t.Fatal(err)
 	}
-	if oldOwners != 2 {
-		t.Fatalf("partial copy-on-write deleted old association: owners=%d", oldOwners)
+	// Only the other subscription remains an owner of the old connection.
+	// The old node itself is preserved, but A's partial applied subset uses new.
+	if oldOwners != 1 {
+		t.Fatalf("partial copy-on-write must retain other source only: owners=%d", oldOwners)
 	}
+	if _, err := nodes.GetByLogicalID(ctx, oldID); err != nil { t.Fatalf("old asset deleted: %v",err) }
 	if result.RedactedError == "" {
 		t.Fatal("partial reason missing")
 	}

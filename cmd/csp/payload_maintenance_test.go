@@ -28,7 +28,7 @@ func setupTestPayloadDB(t *testing.T) (string, *sql.DB) {
 	}
 
 	runner := sqlite.NewMigrationRunner(db, migrations.FS)
-	if err := runner.Run(context.Background()); err != nil {
+	if err := runner.RunUpTo(context.Background(), 29); err != nil {
 		_ = db.Close()
 		t.Fatalf("failed to run migrations: %v", err)
 	}

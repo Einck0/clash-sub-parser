@@ -2,16 +2,28 @@ package sqlite_test
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
 	"clash-sub-parser/internal/domain"
 	"clash-sub-parser/internal/repository/sqlite"
+	"clash-sub-parser/migrations"
 )
+
+func setupLegacyPayloadCleanupTestDB(t *testing.T) *sql.DB {
+	t.Helper()
+	db, _ := setupEmptyTestDB(t)
+	runner := sqlite.NewMigrationRunner(db, migrations.FS)
+	if err := runner.RunUpTo(context.Background(), 29); err != nil {
+		t.Fatalf("failed to run migrations up to 29: %v", err)
+	}
+	return db
+}
 
 func TestInspectPayloadStorage_DryRun(t *testing.T) {
 	ctx := context.Background()
-	db, _ := setupTestDB(t)
+	db := setupLegacyPayloadCleanupTestDB(t)
 
 	now := domain.NowUTC()
 	subID := "sub_inspect_" + domain.MustNewUUIDv7()
@@ -169,7 +181,7 @@ func TestInspectPayloadStorage_DryRun(t *testing.T) {
 
 func TestClearPayloadBodies_SuccessAndPreservation(t *testing.T) {
 	ctx := context.Background()
-	db, _ := setupTestDB(t)
+	db := setupLegacyPayloadCleanupTestDB(t)
 
 	now := domain.NowUTC()
 	subID := "sub_clear_" + domain.MustNewUUIDv7()
@@ -403,7 +415,7 @@ func TestClearPayloadBodies_SuccessAndPreservation(t *testing.T) {
 
 func TestClearPayloadBodies_Idempotence(t *testing.T) {
 	ctx := context.Background()
-	db, _ := setupTestDB(t)
+	db := setupLegacyPayloadCleanupTestDB(t)
 
 	now := domain.NowUTC()
 	subID := "sub_idem_" + domain.MustNewUUIDv7()
@@ -483,7 +495,7 @@ func TestInspectAndClear_FailClosedMissingTable(t *testing.T) {
 
 func TestClearPayloadBodies_RollbackOnFKViolation(t *testing.T) {
 	ctx := context.Background()
-	db, _ := setupTestDB(t)
+	db := setupLegacyPayloadCleanupTestDB(t)
 
 	now := domain.NowUTC()
 	subID := "sub_fk_" + domain.MustNewUUIDv7()
@@ -546,7 +558,7 @@ func TestClearPayloadBodies_RollbackOnFKViolation(t *testing.T) {
 
 func TestClearPayloadBodies_RollbackOnWithoutRowIDFKViolation(t *testing.T) {
 	ctx := context.Background()
-	db, _ := setupTestDB(t)
+	db := setupLegacyPayloadCleanupTestDB(t)
 
 	now := domain.NowUTC()
 	subID := "sub_worowid_" + domain.MustNewUUIDv7()

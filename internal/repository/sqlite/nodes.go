@@ -358,20 +358,26 @@ func (r *nodeRepository) UpsertBatch(ctx context.Context, nodes []domain.Node) e
 			var curServer string
 			var curPort int
 			var curConfig string
-			if qErr := tx.QueryRowContext(ctx, "SELECT connection_revision, server, port, config_json FROM nodes WHERE logical_id = ?;", node.LogicalID).Scan(&curRev, &curServer, &curPort, &curConfig); qErr == nil {
+			if qErr := tx.QueryRowContext(ctx, "SELECT connection_revision, server, port, config_json FROM nodes WHERE logical_id = ?;", node.LogicalID).Scan(&curRev, &curServer, &curPort, &curConfig); qErr != nil {
+				return qErr
+			} else {
 				effJSON := fmt.Sprintf(`{"server":%q,"port":%d,"credentials":%s}`, curServer, curPort, curConfig)
 				fp := domain.ComputeConnectionFingerprint(curServer, curPort, node.Credentials)
-				_, _ = tx.ExecContext(ctx, `
+				if _, err := tx.ExecContext(ctx, `
 					INSERT OR IGNORE INTO node_connection_versions (node_logical_id, connection_revision, effective_config_json, config_fingerprint, schema_version, created_at)
 					VALUES (?, ?, ?, ?, 1, ?);
-				`, node.LogicalID, curRev, effJSON, fp, updatedStr)
-				_, _ = tx.ExecContext(ctx, `
+				`, node.LogicalID, curRev, effJSON, fp, updatedStr); err != nil {
+					return err
+				}
+				if _, err := tx.ExecContext(ctx, `
 					INSERT INTO node_connection_heads (logical_id, connection_revision, updated_at)
 					VALUES (?, ?, ?)
 					ON CONFLICT(logical_id) DO UPDATE SET
 						connection_revision = excluded.connection_revision,
 						updated_at = excluded.updated_at;
-				`, node.LogicalID, curRev, updatedStr)
+				`, node.LogicalID, curRev, updatedStr); err != nil {
+					return err
+				}
 			}
 		}
 		return nil
@@ -405,39 +411,41 @@ func UpdateNode(ctx context.Context, db *sql.DB, node *domain.Node) error {
 			server IS NOT ? OR port IS NOT ? OR config_json IS NOT ? THEN 1 ELSE 0 END
 	WHERE logical_id = ? RETURNING connection_revision;`
 
-	err = db.QueryRowContext(ctx, query,
-		node.DisplayName,
-		node.Server,
-		node.Port,
-		configJSON,
-		updatedStr,
-		node.Server, node.Port, configJSON,
-		node.LogicalID,
-	).Scan(&node.ConnectionRevision)
-	if errors.Is(err, sql.ErrNoRows) {
-		return domain.NewNotFoundError("node_not_found", fmt.Sprintf("node %s not found", node.LogicalID))
-	}
-	if err != nil {
-		return fmt.Errorf("failed to update node %s: %w", node.LogicalID, err)
-	}
-	node.UpdatedAt = updatedAt.UTC()
+	return WithTx(ctx, db, func(ctx context.Context, tx *sql.Tx) error {
+		err = tx.QueryRowContext(ctx, query,
+			node.DisplayName,
+			node.Server,
+			node.Port,
+			configJSON,
+			updatedStr,
+			node.Server, node.Port, configJSON,
+			node.LogicalID,
+		).Scan(&node.ConnectionRevision)
+		if errors.Is(err, sql.ErrNoRows) {
+			return domain.NewNotFoundError("node_not_found", fmt.Sprintf("node %s not found", node.LogicalID))
+		}
+		if err != nil {
+			return fmt.Errorf("failed to update node %s: %w", node.LogicalID, err)
+		}
+		node.UpdatedAt = updatedAt.UTC()
 
-	// Maintain node_connection_versions and node_connection_heads
-	effJSON := fmt.Sprintf(`{"server":%q,"port":%d,"credentials":%s}`, node.Server, node.Port, configJSON)
-	fp := domain.ComputeConnectionFingerprint(node.Server, node.Port, node.Credentials)
-	_, _ = db.ExecContext(ctx, `
-		INSERT OR IGNORE INTO node_connection_versions (node_logical_id, connection_revision, effective_config_json, config_fingerprint, schema_version, created_at)
-		VALUES (?, ?, ?, ?, 1, ?);
-	`, node.LogicalID, node.ConnectionRevision, effJSON, fp, updatedStr)
-	_, _ = db.ExecContext(ctx, `
-		INSERT INTO node_connection_heads (logical_id, connection_revision, updated_at)
-		VALUES (?, ?, ?)
-		ON CONFLICT(logical_id) DO UPDATE SET
-			connection_revision = excluded.connection_revision,
-			updated_at = excluded.updated_at;
-	`, node.LogicalID, node.ConnectionRevision, updatedStr)
-
-	return nil
+		effJSON := fmt.Sprintf(`{"server":%q,"port":%d,"credentials":%s}`, node.Server, node.Port, configJSON)
+		fp := domain.ComputeConnectionFingerprint(node.Server, node.Port, node.Credentials)
+		if _, err := tx.ExecContext(ctx, `
+			INSERT OR IGNORE INTO node_connection_versions (node_logical_id, connection_revision, effective_config_json, config_fingerprint, schema_version, created_at)
+			VALUES (?, ?, ?, ?, 1, ?);
+		`, node.LogicalID, node.ConnectionRevision, effJSON, fp, updatedStr); err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO node_connection_heads (logical_id, connection_revision, updated_at)
+			VALUES (?, ?, ?)
+			ON CONFLICT(logical_id) DO UPDATE SET
+				connection_revision = excluded.connection_revision,
+				updated_at = excluded.updated_at;
+		`, node.LogicalID, node.ConnectionRevision, updatedStr)
+		return err
+	})
 }
 
 func (r *nodeRepository) DeactivateNodesNotIn(ctx context.Context, activeLogicalIDs []string) error {
@@ -822,4 +830,3 @@ func PurgeOrphanNodesDB(ctx context.Context, db *sql.DB) (int64, error) {
 	})
 	return count, err
 }
-

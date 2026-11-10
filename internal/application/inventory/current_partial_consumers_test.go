@@ -189,7 +189,9 @@ func TestCurrentBehavior_PartialRefreshInventoryFactsAndPreview(t *testing.T) {
 			if rowsErr != nil {
 				t.Fatal(rowsErr)
 			}
-			wantSources := map[string]string{ids["A"]: partial.FetchID, ids["B"]: initial.FetchID, ids["C"]: partial.FetchID}
+			// Superseded stale-association contract: partial now removes only this
+			// source's omitted membership while retaining B as a permanent asset.
+			wantSources := map[string]string{ids["A"]: partial.FetchID, ids["C"]: partial.FetchID}
 			if !reflect.DeepEqual(gotSources, wantSources) {
 				t.Fatalf("current partial source fetch IDs=%v want=%v", gotSources, wantSources)
 			}

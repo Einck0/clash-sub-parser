@@ -7,6 +7,7 @@ import (
 
 	"clash-sub-parser/internal/domain"
 	"clash-sub-parser/internal/repository/sqlite"
+	"clash-sub-parser/migrations"
 )
 
 func TestDataflowRepositories(t *testing.T) {
@@ -259,7 +260,10 @@ func TestDataflowRepositories(t *testing.T) {
 
 func TestSubscriptionPayloadRepository_HistoricalBodyNeverReturned(t *testing.T) {
 	ctx := context.Background()
-	db, _ := setupTestDB(t)
+	db, _ := setupEmptyTestDB(t)
+	if err := sqlite.NewMigrationRunner(db, migrations.FS).RunUpTo(ctx, 29); err != nil {
+		t.Fatal(err)
+	}
 
 	subRepo := sqlite.NewSubscriptionRepository(db)
 	fetchRepo := sqlite.NewSubscriptionFetchRepository(db)

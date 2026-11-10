@@ -232,9 +232,13 @@ func TestPublicationPayloadRefs_DeduplicationAndPruneProtection(t *testing.T) {
 		RevisionID:     rev.ID,
 		SnapshotDigest: "sha256:snap_test_digest",
 		Nodes: []resolver.ResolvedNode{
-			{LogicalID: nodeID1, DisplayName: "N1", Protocol: domain.ProtocolSS, Server: "1.1.1.1", Port: 8388, Credentials: domain.InboundProtocolCredential{Password: "p", Method: "aes-256-gcm"}, Active: true, ConnectionRevision: 1},
+			{LogicalID: nodeID1, DisplayName: "N1", Protocol: domain.ProtocolSS, Server: "1.1.1.1", Port: 8388, Credentials: domain.InboundProtocolCredential{Password: "p", Method: "aes-256-gcm"}, Active: true, ConnectionRevision: 1, PayloadEvidence: []domain.PayloadEvidence{{PayloadID: payloadID, SubscriptionID: subID, SourceIdentity: "sub:" + subID, FetchID: fetchID, ContentDigest: p.ContentDigest, OriginalCreatedAt: now.Format(time.RFC3339Nano), CapturedAt: now.Format(time.RFC3339Nano), HTTPStatus: 200, EvidenceKind: "payload_origin", Quality: "observed"}}},
 			{LogicalID: nodeID2, DisplayName: "N2", Protocol: domain.ProtocolSS, Server: "1.1.1.2", Port: 8388, Credentials: domain.InboundProtocolCredential{Password: "p", Method: "aes-256-gcm"}, Active: true, ConnectionRevision: 1},
 		},
+	}
+	// The already captured snapshot must not be retargeted when the live head changes.
+	if _, err := db.ExecContext(ctx, `UPDATE nodes SET connection_revision=2 WHERE logical_id=?`, nodeID1); err != nil {
+		t.Fatal(err)
 	}
 	prevRes, err := svc.Preview(ctx, publication.PreviewQuery{
 		Target:   domain.TargetMihomo,
@@ -245,6 +249,11 @@ func TestPublicationPayloadRefs_DeduplicationAndPruneProtection(t *testing.T) {
 	}
 	if len(prevRes.Manifest.PayloadIDs) != 1 || prevRes.Manifest.PayloadIDs[0] != payloadID {
 		t.Fatalf("expected manifest payload_ids to contain %s, got %v", payloadID, prevRes.Manifest.PayloadIDs)
+	}
+
+	var frozenDigest string
+	if err := db.QueryRowContext(ctx, `SELECT content_digest FROM subscription_payload_evidence WHERE payload_id=?`, payloadID).Scan(&frozenDigest); err != nil || frozenDigest != p.ContentDigest {
+		t.Fatalf("snapshot evidence changed after head update: %q, err=%v", frozenDigest, err)
 	}
 
 	// Verify publication_payload_refs row exists in DB
@@ -411,6 +420,13 @@ func TestPublicationPayloadRefs_SnapshotSourceVersion_UpdateSource_PrunePreserva
 		t.Fatal(err)
 	}
 
+	// Replace the old generation only after preserving its evidence.
+	if err := sqlite.WithTx(ctx, db, func(ctx context.Context, tx *sql.Tx) error {
+		return sqlite.ReplaceCurrentPayloadTx(ctx, tx, sub.ID)
+	}); err != nil {
+		t.Fatal(err)
+	}
+
 	// 4. Update Source: Fetch 2 -> Payload 2 -> Entry 2 -> Node Version 2 (server changes to 2.2.2.2)
 	payload2ID := "payload-v2-" + domain.MustNewUUIDv7()
 	p2 := domain.SubscriptionPayload{
@@ -487,15 +503,14 @@ func TestPublicationPayloadRefs_SnapshotSourceVersion_UpdateSource_PrunePreserva
 		t.Fatalf("expected new revision to resolve to payload2 (%s), got: %v", payload2ID, resolvedNew)
 	}
 
-	// 6. Execute PruneUnreferenced: Payload 1 MUST be preserved because Publication 1 still pins it!
-	pruned, err := payloadRepo.PruneUnreferenced(ctx, now)
-	if err != nil {
-		t.Fatalf("PruneUnreferenced failed: %v", err)
+	// The old publication keeps evidence, not a second full payload row.
+	var count int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM subscription_payloads WHERE subscription_id=?`, sub.ID).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("expected exactly one current payload, got %d: %v", count, err)
 	}
-	// Payload 1 is pinned by pub1 ref. Payload 2 is unpinned in publications, but let's check payload 1 is NOT pruned.
-	storedP1, err := payloadRepo.GetByID(ctx, payload1ID)
-	if err != nil || storedP1 == nil {
-		t.Fatalf("payload1 was unexpectedly pruned despite being pinned by old publication! (err: %v, pruned count: %d)", err, pruned)
+	var digest string
+	if err := db.QueryRowContext(ctx, `SELECT content_digest FROM subscription_payload_evidence WHERE payload_id=?`, payload1ID).Scan(&digest); err != nil || digest != p1.ContentDigest {
+		t.Fatalf("original publication evidence lost: digest=%q err=%v", digest, err)
 	}
 
 	// 7. Verify Publication 1's pinned refs still list Payload 1
@@ -654,6 +669,13 @@ func TestPublicationPayloadRefs_SameConnectionRefresh_PreservesImmutableProvenan
 		t.Fatal(err)
 	}
 
+	// Detach the old generation before inserting the next, retaining origin evidence.
+	if err := sqlite.WithTx(ctx, db, func(ctx context.Context, tx *sql.Tx) error {
+		return sqlite.ReplaceCurrentPayloadTx(ctx, tx, sub.ID)
+	}); err != nil {
+		t.Fatal(err)
+	}
+
 	// 2. Simulate same connection refresh (connEqual == true)
 	// New fetch 2 -> Payload 2 -> Entry 2
 	fetch2 := domain.SubscriptionFetch{
@@ -741,23 +763,26 @@ func TestPublicationPayloadRefs_SameConnectionRefresh_PreservesImmutableProvenan
 	}
 
 	// 3. Verify Immutable Provenance:
-	// - v1 MUST preserve entry1ID (did NOT mutate to entry2ID!)
+	// - v1 must not adopt the new entry after its original entry was detached.
 	loadedV1, err := versionRepo.GetByRevision(ctx, nodeID, 1)
 	if err != nil {
 		t.Fatalf("failed to load v1: %v", err)
 	}
-	if loadedV1.SourceEntryID == nil || *loadedV1.SourceEntryID != entry1ID {
-		t.Fatalf("immutable provenance VIOLATED: v1 source_entry_id was overwritten! got %v, want %s",
-			loadedV1.SourceEntryID, entry1ID)
+	if loadedV1.SourceEntryID != nil {
+		t.Fatalf("detached original source was replaced by a newer entry: %v", *loadedV1.SourceEntryID)
 	}
 
-	// - legacy vLegacy MUST be backfilled with legacyEntryID (NULL legacy was successfully explainable-backfilled)
+	// Unknown legacy provenance must not be invented from a later observation.
 	loadedVLegacy, err := versionRepo.GetByRevision(ctx, legacyNodeID, 1)
 	if err != nil {
 		t.Fatalf("failed to load legacy version: %v", err)
 	}
-	if loadedVLegacy.SourceEntryID == nil || *loadedVLegacy.SourceEntryID != legacyEntryID {
-		t.Fatalf("legacy backfill failed: expected %s, got %v", legacyEntryID, loadedVLegacy.SourceEntryID)
+	if loadedVLegacy.SourceEntryID != nil {
+		t.Fatalf("unknown legacy origin was replaced by later entry: %v", *loadedVLegacy.SourceEntryID)
+	}
+	legacyResolved, err := pubRefRepo.ResolvePayloadIDsForNodes(ctx, []domain.ManifestIncludedNode{{NodeID: legacyNodeID, ConnectionRevision: 1}})
+	if err != nil || len(legacyResolved) != 0 {
+		t.Fatalf("unknown legacy origin resolved to a current payload: %v, err=%v", legacyResolved, err)
 	}
 
 	// 4. Verify Publication 1 STILL resolves to Payload 1 (not Payload 2)
@@ -771,13 +796,13 @@ func TestPublicationPayloadRefs_SameConnectionRefresh_PreservesImmutableProvenan
 		t.Fatalf("expected old publication to resolve to payload1 (%s), got: %v", payload1ID, resolved)
 	}
 
-	// 5. PruneUnreferenced MUST NOT delete Payload 1
-	pruned, err := payloadRepo.PruneUnreferenced(ctx, now)
-	if err != nil {
-		t.Fatalf("PruneUnreferenced failed: %v", err)
+	// Old origin survives as metadata, while the table has only the current generation.
+	var count int
+	var digest string
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM subscription_payloads WHERE subscription_id=?`, sub.ID).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("expected one payload, got %d: %v", count, err)
 	}
-	storedP1, err := payloadRepo.GetByID(ctx, payload1ID)
-	if err != nil || storedP1 == nil {
-		t.Fatalf("payload1 was unexpectedly pruned! (err: %v, pruned count: %d)", err, pruned)
+	if err := db.QueryRowContext(ctx, `SELECT content_digest FROM subscription_payload_evidence WHERE payload_id=?`, payload1ID).Scan(&digest); err != nil || digest != p1.ContentDigest {
+		t.Fatalf("original digest lost: %q, err=%v", digest, err)
 	}
 }

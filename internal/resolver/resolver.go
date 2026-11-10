@@ -211,6 +211,7 @@ func (r *defaultResolver) Resolve(ctx context.Context, input ResolveInput) (*Res
 	for nid := range includedNodeIDs {
 		if node, ok := admissionRes.AdmittedNodeMap[nid]; ok {
 			snapshotNodes = append(snapshotNodes, ResolvedNode{
+				PayloadEvidence:    append([]domain.PayloadEvidence(nil), input.NodePayloadEvidence[node.LogicalID]...),
 				LogicalID:          node.LogicalID,
 				DisplayName:        node.DisplayName,
 				Protocol:           node.Protocol,

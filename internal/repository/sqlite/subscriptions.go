@@ -531,6 +531,18 @@ func (r *subscriptionRepository) Update(ctx context.Context, sub *domain.Subscri
 		}
 
 		if oldSourceURL != sub.SourceURLSecretRef {
+			if err := PreserveSubscriptionGenerationTx(ctx, tx, sub.ID); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `DELETE FROM node_sources WHERE subscription_id=?`, sub.ID); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE subscription_current_state SET applied_payload_id=NULL,applied_fetch_id=NULL,applied_at=NULL,source_revision=?,attempt_sequence=attempt_sequence+1 WHERE subscription_id=?`, sub.Revision, sub.ID); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `DELETE FROM subscription_payloads WHERE subscription_id=?`, sub.ID); err != nil {
+				return err
+			}
 			if _, delErr := tx.ExecContext(ctx, "DELETE FROM subscription_original_configs WHERE subscription_id = ?;", sub.ID); delErr != nil {
 				return fmt.Errorf("failed to invalidate subscription original config: %w", delErr)
 			}

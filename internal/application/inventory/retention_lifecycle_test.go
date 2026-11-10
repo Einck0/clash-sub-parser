@@ -73,46 +73,18 @@ proxies:
 		survivingPayloads = append(survivingPayloads, id)
 	}
 
-	// Qualify bound test: stable identical nodes retain the first snapshot as connection version provenance
-	// exception + newest 2 success snapshots (count unprotected latest 2 + connection exceptions = <=3 payloads total).
-	// Intermediate unprotected snapshots (2 and 3) must be pruned.
-	if len(survivingPayloads) > 3 || len(survivingPayloads) == 0 {
-		t.Fatalf("expected <= 3 payloads to survive for identical nodes (1 connection provenance + newest 2), found %d: %v", len(survivingPayloads), survivingPayloads)
-	}
-
-	// Prove connection source-entry provenance for the first snapshot:
-	var connSourceEntryPayload string
-	err = db.QueryRowContext(ctx, `
-		SELECT se.payload_id
-		FROM node_connection_versions ncv
-		JOIN subscription_entries se ON ncv.source_entry_id = se.id
-		WHERE se.subscription_id = ?
-		LIMIT 1;
-	`, subID).Scan(&connSourceEntryPayload)
-	if err != nil {
-		t.Fatalf("failed to query connection version source entry payload: %v", err)
-	}
-	var foundConnProvenance bool
-	for _, pID := range survivingPayloads {
-		if pID == connSourceEntryPayload {
-			foundConnProvenance = true
-			break
-		}
-	}
-	if !foundConnProvenance {
-		t.Fatalf("expected connection provenance payload %s to be retained among surviving payloads: %v", connSourceEntryPayload, survivingPayloads)
-	}
-	if survivingPayloads[0] != connSourceEntryPayload {
-		t.Fatalf("expected first surviving payload %s to match connection provenance payload %s", survivingPayloads[0], connSourceEntryPayload)
-	}
-
-	if len(survivingPayloads) != 3 {
-		t.Fatalf("expected 3 payloads to survive (1 connection provenance + 2 newest success), found %d: %v", len(survivingPayloads), survivingPayloads)
-	}
+	if err := rows.Err(); err != nil { t.Fatal(err) }
+	rows.Close()
+	if len(survivingPayloads) != 1 { t.Fatalf("strict applied generation bound: %v",survivingPayloads) }
+	// Original provenance survives as immutable metadata, not by retaining the
+	// entire first parsed generation or overwriting it with the newest ID.
+	var originID, digest string
+	if err:=db.QueryRowContext(ctx,`SELECT p.origin_payload_id,e.content_digest FROM node_connection_provenance p JOIN subscription_payload_evidence e ON e.payload_id=p.origin_payload_id WHERE e.subscription_id=? LIMIT 1`,subID).Scan(&originID,&digest);err!=nil{t.Fatal(err)}
+	if originID==survivingPayloads[0] || digest!="digest-wire-1" {t.Fatalf("original provenance changed: id=%s digest=%s",originID,digest)}
 }
 
 // 1b. Provenance Exception: Payloads without connection version provenance keep exactly newest 2
-func TestReconcile_RetentionWiring_WithoutConnectionProvenance_KeepsExactTwo(t *testing.T) {
+func TestReconcile_RetentionWiring_WithoutConnectionProvenance_KeepsExactOne(t *testing.T) {
 	ctx := context.Background()
 	db, subRepo, fetchRepo, nodeRepo, sourceRepo := setupTestEnv(t)
 	fetcher := newMockFetcher()
@@ -162,8 +134,8 @@ proxies:
 		survivingPayloads = append(survivingPayloads, id)
 	}
 
-	if len(survivingPayloads) != 2 {
-		t.Fatalf("expected exactly 2 payloads to survive without connection provenance, found %d: %v", len(survivingPayloads), survivingPayloads)
+	if len(survivingPayloads) != 1 {
+		t.Fatalf("expected exactly one applied payload without provenance exceptions, found %d: %v", len(survivingPayloads), survivingPayloads)
 	}
 }
 

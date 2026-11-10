@@ -186,8 +186,8 @@ proxies:
 	if err != nil {
 		t.Fatalf("failed to query repeated subscription_payloads: %v", err)
 	}
-	if totalPayloads != 2 {
-		t.Fatalf("expected 2 total payload records, got %d", totalPayloads)
+	if totalPayloads != 1 {
+		t.Fatalf("expected one applied payload after replacement, got %d", totalPayloads)
 	}
 	if nonemptyPayloads != 0 {
 		t.Fatalf("expected 0 nonempty payloads, got %d", nonemptyPayloads)

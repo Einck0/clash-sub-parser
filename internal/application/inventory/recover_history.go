@@ -55,20 +55,20 @@ type ManifestSummary struct {
 }
 
 type ManifestNode struct {
-	NodeLogicalID                  string               `json:"node_logical_id"`
-	Protocol                       string               `json:"protocol"`
-	Server                         string               `json:"server"`
-	Port                           int                  `json:"port"`
-	DisplayName                    string               `json:"display_name"`
-	ConnectionRevision             int64                `json:"connection_revision"`
-	ProvenanceOrigin               string               `json:"provenance_origin"`
-	NodeMatchType                  string               `json:"node_match_type"`
-	SourceIdentityConfidence       string               `json:"source_identity_confidence"`
-	Verdict                        string               `json:"verdict"`
-	PrimaryHistoricalSource        *ManifestSourceEdge  `json:"primary_historical_source"`
+	NodeLogicalID                 string               `json:"node_logical_id"`
+	Protocol                      string               `json:"protocol"`
+	Server                        string               `json:"server"`
+	Port                          int                  `json:"port"`
+	DisplayName                   string               `json:"display_name"`
+	ConnectionRevision            int64                `json:"connection_revision"`
+	ProvenanceOrigin              string               `json:"provenance_origin"`
+	NodeMatchType                 string               `json:"node_match_type"`
+	SourceIdentityConfidence      string               `json:"source_identity_confidence"`
+	Verdict                       string               `json:"verdict"`
+	PrimaryHistoricalSource       *ManifestSourceEdge  `json:"primary_historical_source"`
 	SecondarySameCanonicalSources []ManifestSourceEdge `json:"secondary_same_canonical_sources"`
-	DiscardedCollisionNotes        []ManifestSourceEdge `json:"discarded_collision_notes"`
-	Evidence                       []ManifestEvidence   `json:"evidence"`
+	DiscardedCollisionNotes       []ManifestSourceEdge `json:"discarded_collision_notes"`
+	Evidence                      []ManifestEvidence   `json:"evidence"`
 }
 
 type ManifestSourceEdge struct {
@@ -473,7 +473,27 @@ func resolveArchivePath(baseDir, rawPath string) string {
 }
 
 // RecoverSourceHistory executes the recovery procedure according to strict invariant and archive verification gates.
-func RecoverSourceHistory(ctx context.Context, db *sql.DB, cfg RecoveryConfig) (*RecoveryResult, error) {
+func RecoverSourceHistory(ctx context.Context, db *sql.DB, cfg RecoveryConfig) (result *RecoveryResult, resultErr error) {
+	consumerID := domain.MustNewUUIDv7()
+	var heldLeases []domain.ConnectionVersionLease
+	defer func() {
+		if len(heldLeases) == 0 {
+			return
+		}
+		releaseCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := sqlite.WithTx(releaseCtx, db, func(ctx context.Context, tx *sql.Tx) error {
+			for _, lease := range heldLeases {
+				if err := sqlite.ReleaseConnectionVersionLeaseTx(ctx, tx, lease); err != nil {
+					return err
+				}
+			}
+			return nil
+		}); err != nil {
+			resultErr = fmt.Errorf("recovery lease release failed (configuration remains protected): %w; previous error: %v", err, resultErr)
+		}
+	}()
+
 	manifestBytes, err := os.ReadFile(cfg.ManifestPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read manifest file: %w", err)
@@ -624,29 +644,29 @@ func RecoverSourceHistory(ctx context.Context, db *sql.DB, cfg RecoveryConfig) (
 	discardedCandidates := 0
 
 	type historyRowToInsert struct {
-		nodeLogicalID      string
-		subIDPtr           any
-		sourceIdentity     string
-		sourceLabel        string
-		connRev            any
-		relationState      string
-		cause              string
-		firstObs           any
-		lastObs            any
-		evidenceKind       string
-		evidenceKey        string
-		evidenceJSON       string
+		nodeLogicalID  string
+		subIDPtr       any
+		sourceIdentity string
+		sourceLabel    string
+		connRev        any
+		relationState  string
+		cause          string
+		firstObs       any
+		lastObs        any
+		evidenceKind   string
+		evidenceKey    string
+		evidenceJSON   string
 	}
 	var rowsToInsert []historyRowToInsert
 
 	for _, n := range manifest.Nodes {
 		var (
-			dbProto    string
-			dbServer   string
-			dbPort     int
-			dbConfig   string
-			dbActive   int
-			dbConnRev  int64
+			dbProto   string
+			dbServer  string
+			dbPort    int
+			dbConfig  string
+			dbActive  int
+			dbConnRev int64
 		)
 		err := db.QueryRowContext(ctx, `
 			SELECT n.protocol, n.server, n.port, n.config_json, n.active,
@@ -667,21 +687,19 @@ func RecoverSourceHistory(ctx context.Context, db *sql.DB, cfg RecoveryConfig) (
 
 		// Fetch historical versions from node_connection_versions if present
 		histVersions := make(map[int64]domain.InboundProtocolCredential)
-		vRows, vErr := db.QueryContext(ctx, "SELECT connection_revision, effective_config_json FROM node_connection_versions WHERE node_logical_id = ?;", n.NodeLogicalID)
-		if vErr == nil {
-			for vRows.Next() {
-				var rev int64
-				var effJSON string
-				if vRows.Scan(&rev, &effJSON) == nil {
-					var verObj struct {
-						Credentials domain.InboundProtocolCredential `json:"credentials"`
-					}
-					if err := json.Unmarshal([]byte(effJSON), &verObj); err == nil {
-						histVersions[rev] = verObj.Credentials
-					}
-				}
+		versions, leases, vErr := sqlite.SnapshotRecoveryVersions(ctx, db, n.NodeLogicalID, consumerID, cfg.DryRun)
+		if vErr != nil {
+			return nil, fmt.Errorf("historical_configuration_unavailable: %w", vErr)
+		}
+		heldLeases = append(heldLeases, leases...)
+		for _, version := range versions {
+			var obj struct {
+				Credentials domain.InboundProtocolCredential `json:"credentials"`
 			}
-			vRows.Close()
+			if err := json.Unmarshal([]byte(version.EffectiveConfigJSON), &obj); err != nil {
+				return nil, fmt.Errorf("invalid historical configuration")
+			}
+			histVersions[version.Revision] = obj.Credentials
 		}
 
 		var currCreds domain.InboundProtocolCredential

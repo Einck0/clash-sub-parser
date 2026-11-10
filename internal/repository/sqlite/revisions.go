@@ -391,6 +391,10 @@ func (r *publicationRepository) GetByTokenHash(ctx context.Context, tokenHash st
 }
 
 func (r *publicationRepository) Create(ctx context.Context, pub *domain.Publication) error {
+	return r.CreateWithEvidence(ctx, pub, nil)
+}
+
+func (r *publicationRepository) CreateWithEvidence(ctx context.Context, pub *domain.Publication, evidence []domain.PayloadEvidence) error {
 	if pub == nil {
 		return domain.NewValidationError("nil_publication", "publication cannot be nil")
 	}
@@ -445,6 +449,14 @@ func (r *publicationRepository) Create(ctx context.Context, pub *domain.Publicat
 		)
 		if err != nil {
 			return fmt.Errorf("failed to insert publication: %w", err)
+		}
+		for _, e := range evidence {
+			if err := savePayloadEvidenceTx(ctx, tx, e); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO publication_payload_refs (publication_id,payload_id) VALUES (?,?)`, pub.ID, e.PayloadID); err != nil {
+				return fmt.Errorf("persist frozen publication reference: %w", err)
+			}
 		}
 		return nil
 	})

@@ -43,8 +43,8 @@ func TestCurrentNoticeMembershipSharedPartialConsumers(t *testing.T) {
 		}
 		return result
 	}
-	initial := reconcile(s, su, a+b, "notice-initial-ab", domain.FetchOutcomeSuccess)
-	otherInitial := reconcile(other, tu, b, "notice-other-b", domain.FetchOutcomeSuccess)
+	reconcile(s, su, a+b, "notice-initial-ab", domain.FetchOutcomeSuccess)
+	reconcile(other, tu, b, "notice-other-b", domain.FetchOutcomeSuccess)
 	entries := sqlite.NewSubscriptionEntryRepository(db)
 	findB := func(id string) domain.SubscriptionEntry {
 		t.Helper()
@@ -203,16 +203,15 @@ func TestCurrentNoticeMembershipSharedPartialConsumers(t *testing.T) {
 		t.Fatal(err)
 	}
 	var staleFetch string
-	if err := db.QueryRowContext(ctx, "SELECT last_seen_fetch_id FROM node_sources WHERE subscription_id=? AND node_logical_id=?", s, *sb.NodeLogicalID).Scan(&staleFetch); err != nil || staleFetch != initial.FetchID {
-		t.Fatalf("historical B source changed: %s %v", staleFetch, err)
+	if err := db.QueryRowContext(ctx, "SELECT last_seen_fetch_id FROM node_sources WHERE subscription_id=? AND node_logical_id=?", s, *sb.NodeLogicalID).Scan(&staleFetch); err == nil {
+		t.Fatal("partial retained omitted current association")
 	}
-	retained, err := entries.GetByID(ctx, sb.ID)
-	if err != nil || retained == nil || retained.UserKindOverride == nil || *retained.UserKindOverride != domain.EntryKindNotice {
-		t.Fatalf("historical notice/entry lost: %+v %v", retained, err)
-	}
+	// The old parsed entry is no longer the durable intent consumer.
+	var kind string
+	if err := db.QueryRowContext(ctx,`SELECT user_kind_override FROM subscription_entry_overrides WHERE subscription_id=? AND raw_name='B'`,s).Scan(&kind);err!=nil || kind!="notice" {t.Fatalf("durable notice intent lost: %s %v",kind,err)}
 	var payloadCount int
-	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM subscription_payloads WHERE id=?", sb.PayloadID).Scan(&payloadCount); err != nil || payloadCount != 1 {
-		t.Fatalf("historical payload lost: count=%d error=%v", payloadCount, err)
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM subscription_payloads WHERE id=?", sb.PayloadID).Scan(&payloadCount); err != nil || payloadCount != 0 {
+		t.Fatalf("historical parsed payload retained: count=%d error=%v", payloadCount, err)
 	}
 	reconcile(s, su, bad, "notice-failed-s", domain.FetchOutcomeFailed)
 	reconcile(other, tu, bad, "notice-failed-t", domain.FetchOutcomeFailed)
@@ -243,8 +242,8 @@ func TestCurrentNoticeMembershipSharedPartialConsumers(t *testing.T) {
 	// current notice after its subscription's successful subset drops B.
 	reconcile(other, tu, c+bad, "notice-other-partial-c", domain.FetchOutcomePartial)
 	assert("stale explicit proxy cannot win", []string{"A", "C"}, []string{"A"}, []string{"C"})
-	if err := db.QueryRowContext(ctx, "SELECT last_seen_fetch_id FROM node_sources WHERE subscription_id=? AND node_logical_id=?", other, *tb.NodeLogicalID).Scan(&staleFetch); err != nil || staleFetch != otherInitial.FetchID {
-		t.Fatalf("historical proxy source changed: %s %v", staleFetch, err)
+	if err := db.QueryRowContext(ctx, "SELECT last_seen_fetch_id FROM node_sources WHERE subscription_id=? AND node_logical_id=?", other, *tb.NodeLogicalID).Scan(&staleFetch); err == nil {
+		t.Fatal("partial retained omitted proxy association")
 	}
 	ledger, err := nodes.ListAll(ctx, domain.NodeFilter{ActiveOnly: true})
 	if err != nil || len(ledger) != 3 {

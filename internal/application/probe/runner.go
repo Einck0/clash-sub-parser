@@ -399,12 +399,11 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 
 	var targetNodes []domain.Node
 	if len(nodeIDs) > 0 {
-		chunk, _, err := r.nodes.List(ctx, domain.NodeFilter{
+		chunk, err := r.nodes.ListAll(ctx, domain.NodeFilter{
 			Scope:          targetScope,
 			ActiveOnly:     true,
 			LogicalIDs:     nodeIDs,
 			ExcludeNotices: true,
-			Pagination:     domain.Pagination{Page: 1, PageSize: len(nodeIDs)},
 		})
 		if err != nil {
 			_ = run.TransitionTo(domain.ProbeRunStateFailed)
@@ -421,31 +420,15 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 			}
 		}
 	} else {
-		const fetchPageSize = 100
-		seen := make(map[string]struct{})
-		for fetchPage := 1; ; fetchPage++ {
-			chunk, total, err := r.nodes.List(ctx, domain.NodeFilter{
-				Scope:          targetScope,
-				ActiveOnly:     true,
-				ExcludeNotices: true,
-				Pagination:     domain.Pagination{Page: fetchPage, PageSize: fetchPageSize},
-			})
-			if err != nil {
-				_ = run.TransitionTo(domain.ProbeRunStateFailed)
-				_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateFailed)
-				return err
-			}
-			added := 0
-			for _, n := range chunk {
-				if _, exists := seen[n.LogicalID]; !exists {
-					seen[n.LogicalID] = struct{}{}
-					targetNodes = append(targetNodes, n)
-					added++
-				}
-			}
-			if len(targetNodes) >= total || len(chunk) == 0 || added == 0 {
-				break
-			}
+		// One statement snapshot: paging across separate statements can splice
+		// heads/membership from different refreshes. The tasks below capture full
+		// domain.Node values and do not reread historical configuration by revision.
+		var err error
+		targetNodes, err = r.nodes.ListAll(ctx, domain.NodeFilter{Scope: targetScope, ActiveOnly: true, ExcludeNotices: true})
+		if err != nil {
+			_ = run.TransitionTo(domain.ProbeRunStateFailed)
+			_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateFailed)
+			return err
 		}
 	}
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -114,319 +115,182 @@ func retentionGetLedgerOverride(t *testing.T, db *sql.DB, subID, anchor string) 
 	return domain.EntryKind(kind), reason, nil
 }
 
-// 1. Behavior Fixture: Retention Repeat and Bounded Legacy Drain (Max 20 per refresh)
-func TestSubscriptionRetention_RepeatAndBoundedDrain(t *testing.T) {
+// Legacy databases are never pruned implicitly; facts must survive the rejection.
+func TestSubscriptionRetention_LegacyRequiresMaintenance(t *testing.T) {
 	ctx := context.Background()
-	db := retentionSetupTestDB(t)
-
-	subID := "sub-retention-repeat"
-	retentionCreateTestSubscription(t, db, subID, "Repeat Sub")
-
-	baseTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-
-	// Create 25 successful fetches and payloads
-	for i := 1; i <= 25; i++ {
-		tAt := baseTime.Add(time.Duration(i) * time.Hour)
-		fID := fmt.Sprintf("fetch-%02d", i)
-		pID := fmt.Sprintf("payload-%02d", i)
-		retentionInsertTestFetch(t, db, fID, subID, tAt, domain.FetchOutcomeSuccess)
-		retentionInsertTestPayload(t, db, pID, subID, fID, tAt, false)
-		retentionInsertTestEntry(t, db, fmt.Sprintf("entry-%02d", i), pID, subID, fmt.Sprintf("key-%02d", i), "Node", domain.EntryKindProxy, nil)
+	db, _ := setupEmptyTestDB(t)
+	if err := sqlite.NewMigrationRunner(db, migrations.FS).RunUpTo(ctx, 29); err != nil {
+		t.Fatal(err)
 	}
-
-	// First retention run: max 20 deletions
-	res1, err := sqlite.PruneSubscriptionRetention(ctx, db, subID, 20, nil)
-	if err != nil {
-		t.Fatalf("first retention prune failed: %v", err)
+	sub := "legacy-retention"
+	retentionCreateTestSubscription(t, db, sub, "legacy")
+	now := domain.NowUTC()
+	for i := 0; i < 2; i++ {
+		f, p := fmt.Sprintf("legacy-f%d", i), fmt.Sprintf("legacy-p%d", i)
+		retentionInsertTestFetch(t, db, f, sub, now, domain.FetchOutcomeSuccess)
+		retentionInsertTestPayload(t, db, p, sub, f, now, i == 0)
+		retentionInsertTestEntry(t, db, fmt.Sprintf("legacy-e%d", i), p, sub, "key", "name", domain.EntryKindProxy, nil)
 	}
-	if res1.DeletedPayloads != 20 {
-		t.Fatalf("expected exactly 20 deleted payloads in batch, got %d", res1.DeletedPayloads)
+	if _, err := db.Exec(`INSERT INTO publications(id,target,snapshot_digest,compiler_version,token_hash,state,created_at,content) VALUES('legacy-pub','mihomo','digest','1','legacy-token','active',?,X'01'); INSERT INTO publication_payload_refs VALUES('legacy-pub','legacy-p0')`, now.Format(time.RFC3339)); err != nil {
+		t.Fatal(err)
 	}
-	if res1.ProtectedPayloads != 2 {
-		t.Fatalf("expected 2 protected payloads (newest 2 success), got %d", res1.ProtectedPayloads)
+	kind := domain.EntryKindNotice
+	if err := sqlite.NewSubscriptionEntryRepository(db).SetUserOverride(ctx, "legacy-e0", &kind, "anchor", "reason", "admin", now); err != nil {
+		t.Fatal(err)
 	}
-
-	// 5 payloads should remain in DB
-	var countAfter1 int
-	_ = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM subscription_payloads WHERE subscription_id = ?;", subID).Scan(&countAfter1)
-	if countAfter1 != 5 {
-		t.Fatalf("expected 5 payloads remaining after first batch, got %d", countAfter1)
+	_, err := sqlite.PruneSubscriptionRetention(ctx, db, sub, 20, nil)
+	if err == nil || !strings.Contains(err.Error(), "maintenance_required") {
+		t.Fatalf("expected maintenance_required, got %v", err)
 	}
-
-	// Second retention run: drains remaining 3 unprotected payloads, preserving newest 2
-	res2, err := sqlite.PruneSubscriptionRetention(ctx, db, subID, 20, nil)
-	if err != nil {
-		t.Fatalf("second retention prune failed: %v", err)
-	}
-	if res2.DeletedPayloads != 3 {
-		t.Fatalf("expected 3 deleted payloads in second batch, got %d", res2.DeletedPayloads)
-	}
-	if res2.ProtectedPayloads != 2 {
-		t.Fatalf("expected 2 protected payloads, got %d", res2.ProtectedPayloads)
-	}
-
-	// Third retention run: idempotent, 0 deleted, 2 protected
-	res3, err := sqlite.PruneSubscriptionRetention(ctx, db, subID, 20, nil)
-	if err != nil {
-		t.Fatalf("third retention prune failed: %v", err)
-	}
-	if res3.DeletedPayloads != 0 {
-		t.Fatalf("expected 0 deleted payloads on idempotent run, got %d", res3.DeletedPayloads)
-	}
-	if res3.ProtectedPayloads != 2 {
-		t.Fatalf("expected 2 protected payloads, got %d", res3.ProtectedPayloads)
-	}
-
-	// Verify exact surviving payloads are payload-24 and payload-25 (newest two)
-	var survivingIDs []string
-	rows, err := db.QueryContext(ctx, "SELECT id FROM subscription_payloads WHERE subscription_id = ? ORDER BY created_at ASC;", subID)
-	if err != nil {
-		t.Fatalf("query failed: %v", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id string
-		_ = rows.Scan(&id)
-		survivingIDs = append(survivingIDs, id)
-	}
-	if len(survivingIDs) != 2 || survivingIDs[0] != "payload-24" || survivingIDs[1] != "payload-25" {
-		t.Fatalf("expected payload-24 and payload-25 to survive, got %v", survivingIDs)
-	}
-}
-
-// 2. Behavior Fixture: Failure and Zero-Node Refreshes Preserve Last Usable Inventory
-func TestSubscriptionRetention_FailureAndZeroNodePreserved(t *testing.T) {
-	ctx := context.Background()
-	db := retentionSetupTestDB(t)
-
-	subID := "sub-failure-preserve"
-	retentionCreateTestSubscription(t, db, subID, "Failure Preserve Sub")
-
-	t1 := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
-	t2 := time.Date(2026, 1, 1, 11, 0, 0, 0, time.UTC)
-	t3 := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
-
-	// Two usable successful payloads
-	retentionInsertTestFetch(t, db, "fetch-succ-1", subID, t1, domain.FetchOutcomeSuccess)
-	retentionInsertTestPayload(t, db, "payload-succ-1", subID, "fetch-succ-1", t1, false)
-	retentionInsertTestEntry(t, db, "entry-succ-1", "payload-succ-1", subID, "key-1", "Node-1", domain.EntryKindProxy, nil)
-
-	retentionInsertTestFetch(t, db, "fetch-succ-2", subID, t2, domain.FetchOutcomeSuccess)
-	retentionInsertTestPayload(t, db, "payload-succ-2", subID, "fetch-succ-2", t2, false)
-	retentionInsertTestEntry(t, db, "entry-succ-2", "payload-succ-2", subID, "key-2", "Node-2", domain.EntryKindProxy, nil)
-
-	// One failed fetch with payload (e.g. HTTP error or zero-node)
-	retentionInsertTestFetch(t, db, "fetch-fail-3", subID, t3, domain.FetchOutcomeFailed)
-	retentionInsertTestPayload(t, db, "payload-fail-3", subID, "fetch-fail-3", t3, false)
-
-	// Run retention:
-	// - payload-fail-3 is protected because it is newest payload of ANY outcome
-	// - payload-succ-2 and payload-succ-1 are protected because they are the newest TWO success payloads
-	res, err := sqlite.PruneSubscriptionRetention(ctx, db, subID, 20, nil)
-	if err != nil {
-		t.Fatalf("retention prune failed: %v", err)
-	}
-	if res.DeletedPayloads != 0 {
-		t.Fatalf("expected 0 payloads deleted, got %d", res.DeletedPayloads)
-	}
-	if res.ProtectedPayloads != 3 {
-		t.Fatalf("expected 3 protected payloads, got %d", res.ProtectedPayloads)
-	}
-}
-
-// 3. Behavior Fixture: Comprehensive Protection Matrix
-// Pins, Publication Refs, Connection-Version Source Entries, Node Source Fetches, Orphan Provenance
-func TestSubscriptionRetention_ProtectionMatrix(t *testing.T) {
-	ctx := context.Background()
-	db := retentionSetupTestDB(t)
-
-	subID := "sub-matrix"
-	retentionCreateTestSubscription(t, db, subID, "Matrix Sub")
-
-	baseTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-
-	// Create 10 payloads (P01..P10)
-	for i := 1; i <= 10; i++ {
-		tAt := baseTime.Add(time.Duration(i) * time.Hour)
-		fID := fmt.Sprintf("fetch-%02d", i)
-		pID := fmt.Sprintf("payload-%02d", i)
-		retentionInsertTestFetch(t, db, fID, subID, tAt, domain.FetchOutcomeSuccess)
-		retentionInsertTestPayload(t, db, pID, subID, fID, tAt, false)
-		retentionInsertTestEntry(t, db, fmt.Sprintf("entry-%02d", i), pID, subID, fmt.Sprintf("key-%02d", i), "Node", domain.EntryKindProxy, nil)
-	}
-
-	// Protection A: Pin P01 explicitly
-	payloadRepo := sqlite.NewSubscriptionPayloadRepository(db)
-	if err := payloadRepo.Pin(ctx, "payload-01", true); err != nil {
-		t.Fatalf("failed to pin payload-01: %v", err)
-	}
-
-	// Protection B: Publication ref on P02
-	pubID := "pub-01"
-	nowStr := domain.NowUTC().Format(time.RFC3339)
-	_, err := db.ExecContext(ctx, `
-		INSERT INTO publications (id, target, snapshot_digest, compiler_version, token_hash, state, created_at, content)
-		VALUES (?, 'mihomo', 'sha256:snap', '1.0.0', 'hash-pub-01', 'active', ?, X'deadbeef');
-	`, pubID, nowStr)
-	if err != nil {
-		t.Fatalf("failed to insert test publication: %v", err)
-	}
-	_, err = db.ExecContext(ctx, `
-		INSERT INTO publication_payload_refs (publication_id, payload_id)
-		VALUES (?, 'payload-02');
-	`, pubID)
-	if err != nil {
-		t.Fatalf("failed to insert publication payload ref: %v", err)
-	}
-
-	// Protection C: Connection version referencing entry-03 on P03
-	nodeID := "node-conn-01"
-	_, err = db.ExecContext(ctx, `
-		INSERT INTO nodes (logical_id, protocol, display_name, server, port, config_json, active, created_at, updated_at, connection_revision)
-		VALUES (?, 'ss', 'Conn Node', '1.1.1.1', 8388, '{}', 1, ?, ?, 1);
-	`, nodeID, nowStr, nowStr)
-	if err != nil {
-		t.Fatalf("failed to insert node: %v", err)
-	}
-	_, err = db.ExecContext(ctx, `
-		INSERT INTO node_connection_versions (
-			node_logical_id, connection_revision, effective_config_json, config_fingerprint, source_entry_id, schema_version, created_at
-		) VALUES (?, 1, '{}', 'sha256:fp', 'entry-03', 1, ?);
-	`, nodeID, nowStr)
-	if err != nil {
-		t.Fatalf("failed to insert connection version: %v", err)
-	}
-
-	// Protection D: Current node sources referencing fetch-04 (P04)
-	nodeSourceNodeID := "node-source-01"
-	_, err = db.ExecContext(ctx, `
-		INSERT INTO nodes (logical_id, protocol, display_name, server, port, config_json, active, created_at, updated_at, connection_revision)
-		VALUES (?, 'ss', 'Source Node', '1.1.1.1', 8388, '{}', 1, ?, ?, 1);
-	`, nodeSourceNodeID, nowStr, nowStr)
-	if err != nil {
-		t.Fatalf("failed to insert node: %v", err)
-	}
-	_, err = db.ExecContext(ctx, `
-		INSERT INTO node_sources (node_logical_id, subscription_id, last_seen_fetch_id)
-		VALUES (?, ?, 'fetch-04');
-	`, nodeSourceNodeID, subID)
-	if err != nil {
-		t.Fatalf("failed to insert node source: %v", err)
-	}
-
-	// Protection E: Orphan node provenance protection on P05
-	// Node has entry on P05, but no node_sources and no node_source_history
-	orphanNodeID := "node-orphan-01"
-	_, err = db.ExecContext(ctx, `
-		INSERT INTO nodes (logical_id, protocol, display_name, server, port, config_json, active, created_at, updated_at, connection_revision)
-		VALUES (?, 'ss', 'Orphan Node', '1.1.1.1', 8388, '{}', 1, ?, ?, 1);
-	`, orphanNodeID, nowStr, nowStr)
-	if err != nil {
-		t.Fatalf("failed to insert orphan node: %v", err)
-	}
-	_, err = db.ExecContext(ctx, `
-		UPDATE subscription_entries SET node_logical_id = ? WHERE id = 'entry-05';
-	`, orphanNodeID)
-	if err != nil {
-		t.Fatalf("failed to associate entry-05 with orphan node: %v", err)
-	}
-
-	// Run retention:
-	// P01: protected by Pin
-	// P02: protected by Publication ref
-	// P03: protected by Connection version source entry
-	// P04: protected by Current node sources fetch
-	// P05: protected by Orphan node provenance
-	// P09, P10: protected by Newest 2 success payloads
-	// Candidates to delete: P06, P07, P08 (3 payloads)
-	res, err := sqlite.PruneSubscriptionRetention(ctx, db, subID, 20, nil)
-	if err != nil {
-		t.Fatalf("prune failed: %v", err)
-	}
-	if res.DeletedPayloads != 3 {
-		t.Fatalf("expected 3 deleted payloads (P06, P07, P08), got %d", res.DeletedPayloads)
-	}
-	if res.ProtectedPayloads != 7 {
-		t.Fatalf("expected 7 protected payloads, got %d", res.ProtectedPayloads)
-	}
-
-	// Verify exact surviving payload IDs
-	var surviving []string
-	rows, err := db.QueryContext(ctx, "SELECT id FROM subscription_payloads WHERE subscription_id = ? ORDER BY id ASC;", subID)
-	if err != nil {
-		t.Fatalf("query failed: %v", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id string
-		_ = rows.Scan(&id)
-		surviving = append(surviving, id)
-	}
-
-	expectedSurviving := map[string]bool{
-		"payload-01": true,
-		"payload-02": true,
-		"payload-03": true,
-		"payload-04": true,
-		"payload-05": true,
-		"payload-09": true,
-		"payload-10": true,
-	}
-	if len(surviving) != len(expectedSurviving) {
-		t.Fatalf("expected %d surviving payloads, got %d: %v", len(expectedSurviving), len(surviving), surviving)
-	}
-	for _, id := range surviving {
-		if !expectedSurviving[id] {
-			t.Fatalf("unexpected surviving payload: %s", id)
+	for q, want := range map[string]int{
+		`SELECT count(*) FROM subscription_payloads WHERE subscription_id='legacy-retention'`:                                                                                                  2,
+		`SELECT count(*) FROM subscription_entries WHERE subscription_id='legacy-retention'`:                                                                                                   2,
+		`SELECT count(*) FROM subscription_fetches WHERE subscription_id='legacy-retention'`:                                                                                                   2,
+		`SELECT count(*) FROM subscription_payloads WHERE id='legacy-p0' AND pinned=1`:                                                                                                         1,
+		`SELECT count(*) FROM publication_payload_refs WHERE publication_id='legacy-pub' AND payload_id='legacy-p0'`:                                                                           1,
+		`SELECT count(*) FROM subscription_entry_overrides WHERE subscription_id='legacy-retention' AND override_anchor='anchor' AND user_kind_override='notice' AND override_reason='reason'`: 1,
+	} {
+		var got int
+		if err := db.QueryRow(q).Scan(&got); err != nil || got != want {
+			t.Fatalf("%s: got %d want %d: %v", q, got, want, err)
 		}
 	}
 }
 
-// 4. Behavior Fixture: Deterministic RowID Tie-Breaking on Equal Timestamps
-func TestSubscriptionRetention_DeterministicEqualTimestamps(t *testing.T) {
-	ctx := context.Background()
+func retentionSealedDB(t *testing.T) *sql.DB {
+	t.Helper()
 	db := retentionSetupTestDB(t)
-
-	subID := "sub-tie-breaker"
-	retentionCreateTestSubscription(t, db, subID, "Tie Breaker Sub")
-
-	sameTime := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
-
-	// Create 5 payloads with IDENTICAL created_at
-	for i := 1; i <= 5; i++ {
-		fID := fmt.Sprintf("fetch-%d", i)
-		pID := fmt.Sprintf("payload-%d", i)
-		retentionInsertTestFetch(t, db, fID, subID, sameTime, domain.FetchOutcomeSuccess)
-		retentionInsertTestPayload(t, db, pID, subID, fID, sameTime, false)
-		retentionInsertTestEntry(t, db, fmt.Sprintf("entry-%d", i), pID, subID, fmt.Sprintf("key-%d", i), "Node", domain.EntryKindProxy, nil)
+	if err := sqlite.CheckSubscriptionStorageReady(context.Background(), db); err != nil {
+		t.Fatal(err)
 	}
+	return db
+}
 
-	// Run retention: newest 2 by rowid DESC must be kept (payload-4 and payload-5)
-	res, err := sqlite.PruneSubscriptionRetention(ctx, db, subID, 20, nil)
+func TestSubscriptionRetention_OnePayloadIncludingPin(t *testing.T) {
+	db := retentionSealedDB(t)
+	sub := "single-sub"
+	now := domain.NowUTC()
+	retentionCreateTestSubscription(t, db, sub, "single")
+	retentionInsertTestFetch(t, db, "single-f1", sub, now, domain.FetchOutcomeSuccess)
+	retentionInsertTestFetch(t, db, "single-f2", sub, now, domain.FetchOutcomeSuccess)
+	retentionInsertTestPayload(t, db, "single-p1", sub, "single-f1", now, true)
+	_, err := db.Exec(`INSERT INTO subscription_payloads(id,subscription_id,fetch_id,content_digest,body_blob,http_status,headers_json,pinned,created_at) VALUES('single-p2',?,'single-f2','digest',X'',200,'{}',1,?)`, sub, now.Format(time.RFC3339))
+	if err == nil {
+		t.Fatal("second payload accepted despite pin")
+	}
+	if _, err := db.Exec(`UPDATE subscription_payloads SET body_blob=X'616263' WHERE id='single-p1'`); err == nil {
+		t.Fatal("payload body accepted")
+	}
+	var count, bytes int
+	if err := db.QueryRow(`SELECT count(*),sum(length(body_blob)) FROM subscription_payloads WHERE subscription_id=?`, sub).Scan(&count, &bytes); err != nil || count != 1 || bytes != 0 {
+		t.Fatalf("payloads=%d body bytes=%d err=%v", count, bytes, err)
+	}
+}
+
+func TestSubscriptionRetention_FetchUnionAndDiagnostics(t *testing.T) {
+	ctx := context.Background()
+	db := retentionSealedDB(t)
+	sub := "fetch-union"
+	now := domain.NowUTC()
+	retentionCreateTestSubscription(t, db, sub, "union")
+	for _, f := range []string{"applied", "raw", "attempt"} {
+		retentionInsertTestFetch(t, db, f, sub, now, domain.FetchOutcomeSuccess)
+	}
+	retentionInsertTestPayload(t, db, "current", sub, "applied", now, false)
+	retentionInsertTestEntry(t, db, "current-entry", "current", sub, "key", "name", domain.EntryKindProxy, nil)
+	if _, err := db.Exec(`INSERT INTO subscription_original_configs(subscription_id,source_revision,content_digest,body_blob,fetch_id) VALUES(?,'rev-1','digest',X'61','raw'); INSERT INTO subscription_current_state(subscription_id,source_revision,applied_payload_id,applied_fetch_id,last_attempt_fetch_id,last_attempt_status) VALUES(?,'rev-1','current','applied','attempt','failed')`, sub, sub); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 12; i++ {
+		id := fmt.Sprintf("failed-%02d", i)
+		retentionInsertTestFetch(t, db, id, sub, now.Add(time.Duration(i)*time.Minute), domain.FetchOutcomeFailed)
+		if _, err := db.Exec(`UPDATE subscription_fetches SET redacted_error='synthetic diagnostic' WHERE id=?`, id); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`UPDATE subscription_current_state SET last_attempt_fetch_id=?,last_attempt_status='failed' WHERE subscription_id=?`, id, sub); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := sqlite.PruneSubscriptionRetention(ctx, db, sub, 20, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var count int
+	var diagnostic string
+	if err := db.QueryRow(`SELECT count(*) FROM subscription_fetches WHERE subscription_id=?`, sub).Scan(&count); err != nil || count != 3 {
+		t.Fatalf("fetch count=%d err=%v", count, err)
+	}
+	if err := db.QueryRow(`SELECT redacted_error FROM subscription_fetches WHERE id='failed-11'`).Scan(&diagnostic); err != nil || diagnostic != "synthetic diagnostic" {
+		t.Fatalf("diagnostic=%q err=%v", diagnostic, err)
+	}
+	for _, id := range []string{"applied", "raw", "failed-11"} {
+		var n int
+		if err := db.QueryRow(`SELECT count(*) FROM subscription_fetches WHERE id=?`, id).Scan(&n); err != nil || n != 1 {
+			t.Fatalf("lost fetch %s: %v", id, err)
+		}
+	}
+	var entries int
+	if err := db.QueryRow(`SELECT count(*) FROM subscription_entries WHERE id='current-entry'`).Scan(&entries); err != nil || entries != 1 {
+		t.Fatalf("lost current entry: %v", err)
+	}
+}
+
+func TestSubscriptionRetention_ReplacementAtomicAndEvidence(t *testing.T) {
+	ctx := context.Background()
+	db := retentionSealedDB(t)
+	sub := "atomic-sub"
+	now := domain.NowUTC()
+	retentionCreateTestSubscription(t, db, sub, "atomic")
+	retentionInsertTestFetch(t, db, "atomic-f1", sub, now, domain.FetchOutcomeSuccess)
+	retentionInsertTestFetch(t, db, "atomic-f2", sub, now, domain.FetchOutcomeSuccess)
+	retentionInsertTestPayload(t, db, "atomic-p1", sub, "atomic-f1", now, true)
+	retentionInsertTestEntry(t, db, "atomic-e1", "atomic-p1", sub, "key", "name", domain.EntryKindProxy, nil)
+	replace := func(fail bool) error {
+		return sqlite.WithTx(ctx, db, func(ctx context.Context, tx *sql.Tx) error {
+			if err := sqlite.ReplaceCurrentPayloadTx(ctx, tx, sub); err != nil {
+				return err
+			}
+			_, err := tx.ExecContext(ctx, `INSERT INTO subscription_payloads(id,subscription_id,fetch_id,content_digest,body_blob,http_status,headers_json,pinned,created_at) VALUES('atomic-p2',?,?, 'new-digest',X'',200,'{}',0,?)`, sub, "atomic-f2", now.Format(time.RFC3339))
+			if err != nil {
+				return err
+			}
+			if fail {
+				_, err = tx.ExecContext(ctx, `INSERT INTO subscription_entries(id,payload_id,subscription_id,ordinal,source_key,raw_name,protocol,server,port,entry_kind,created_at) VALUES('bad','missing',?,0,'k','n','ss','host',1,'proxy',?)`, sub, now.Format(time.RFC3339))
+				return err
+			}
+			return nil
+		})
+	}
+	if err := replace(true); err == nil {
+		t.Fatal("invalid entry should roll back replacement")
+	}
+	var n int
+	if err := db.QueryRow(`SELECT count(*) FROM subscription_payloads p JOIN subscription_entries e ON e.payload_id=p.id WHERE p.id='atomic-p1' AND e.id='atomic-e1' AND p.pinned=1`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("old generation not restored: %d %v", n, err)
+	}
+	if err := db.QueryRow(`SELECT count(*) FROM subscription_payload_evidence WHERE payload_id='atomic-p1'`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("rolled-back evidence persisted: %d %v", n, err)
+	}
+	if err := replace(false); err != nil {
+		t.Fatal(err)
+	}
+	var digest string
+	var pinned int
+	if err := db.QueryRow(`SELECT content_digest,pinned FROM subscription_payload_evidence WHERE payload_id='atomic-p1'`).Scan(&digest, &pinned); err != nil || digest != "sha256:digest" || pinned != 1 {
+		t.Fatalf("evidence digest=%s pin=%d err=%v", digest, pinned, err)
+	}
+	if err := db.QueryRow(`SELECT count(*) FROM subscription_payloads WHERE id='atomic-p1'`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("old payload retained: %d %v", n, err)
+	}
+	rows, err := db.Query(`PRAGMA foreign_key_check`)
 	if err != nil {
-		t.Fatalf("retention prune failed: %v", err)
-	}
-	if res.DeletedPayloads != 3 {
-		t.Fatalf("expected 3 deleted payloads, got %d", res.DeletedPayloads)
-	}
-	if res.ProtectedPayloads != 2 {
-		t.Fatalf("expected 2 protected payloads, got %d", res.ProtectedPayloads)
-	}
-
-	// Verify payload-4 and payload-5 survived
-	var surviving []string
-	rows, err := db.QueryContext(ctx, "SELECT id FROM subscription_payloads WHERE subscription_id = ? ORDER BY id ASC;", subID)
-	if err != nil {
-		t.Fatalf("query failed: %v", err)
+		t.Fatal(err)
 	}
 	defer rows.Close()
-	for rows.Next() {
-		var id string
-		_ = rows.Scan(&id)
-		surviving = append(surviving, id)
+	if rows.Next() {
+		t.Fatal("foreign key violation")
 	}
-	if len(surviving) != 2 || surviving[0] != "payload-4" || surviving[1] != "payload-5" {
-		t.Fatalf("expected payload-4 and payload-5 to survive deterministically, got %v", surviving)
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -529,58 +393,6 @@ func TestSubscriptionEntryOverride_DurableLedger_SetClearReappearance(t *testing
 	}
 }
 
-// 6. Behavior Fixture: Foreign Key Integrity and Rollback Safety
-func TestSubscriptionRetention_RollbackAndFKIntegrity(t *testing.T) {
-	ctx := context.Background()
-	db := retentionSetupTestDB(t)
-
-	subID := "sub-fk-test"
-	retentionCreateTestSubscription(t, db, subID, "FK Sub")
-
-	now := domain.NowUTC()
-	for i := 1; i <= 5; i++ {
-		fID := fmt.Sprintf("fetch-fk-%d", i)
-		pID := fmt.Sprintf("payload-fk-%d", i)
-		retentionInsertTestFetch(t, db, fID, subID, now.Add(time.Duration(i)*time.Minute), domain.FetchOutcomeSuccess)
-		retentionInsertTestPayload(t, db, pID, subID, fID, now.Add(time.Duration(i)*time.Minute), false)
-		retentionInsertTestEntry(t, db, fmt.Sprintf("entry-fk-%d", i), pID, subID, fmt.Sprintf("key-%d", i), "Node", domain.EntryKindProxy, nil)
-	}
-
-	// Run retention
-	res, err := sqlite.PruneSubscriptionRetention(ctx, db, subID, 20, nil)
-	if err != nil {
-		t.Fatalf("retention failed: %v", err)
-	}
-	if res.DeletedPayloads != 3 {
-		t.Fatalf("expected 3 deleted, got %d", res.DeletedPayloads)
-	}
-
-	// Check foreign key integrity
-	var fkViolations []string
-	fkRows, err := db.QueryContext(ctx, "PRAGMA foreign_key_check;")
-	if err != nil {
-		t.Fatalf("foreign_key_check failed: %v", err)
-	}
-	defer fkRows.Close()
-	for fkRows.Next() {
-		var table, parent string
-		var rowid int64
-		var fkid int
-		_ = fkRows.Scan(&table, &rowid, &parent, &fkid)
-		fkViolations = append(fkViolations, fmt.Sprintf("table=%s rowid=%d parent=%s", table, rowid, parent))
-	}
-	if len(fkViolations) > 0 {
-		t.Fatalf("foreign key violations found after retention: %v", fkViolations)
-	}
-
-	// Verify no orphan entries remain
-	var orphanEntries int
-	_ = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM subscription_entries WHERE payload_id NOT IN (SELECT id FROM subscription_payloads);").Scan(&orphanEntries)
-	if orphanEntries != 0 {
-		t.Fatalf("expected 0 orphan subscription_entries, found %d", orphanEntries)
-	}
-}
-
 // 7. Behavior Fixture: Migration Backfill Clear Ranking (Does not resurrect cleared overrides)
 func TestSubscriptionRetention_MigrationBackfillClearRanking(t *testing.T) {
 	ctx := context.Background()
@@ -654,61 +466,5 @@ func TestSubscriptionRetention_MigrationBackfillClearRanking(t *testing.T) {
 	err = db.QueryRowContext(ctx, "SELECT user_kind_override FROM subscription_entry_overrides WHERE subscription_id = ? AND override_anchor = 'anchor-beta';", subID).Scan(&betaKind)
 	if err != nil || betaKind != "notice" {
 		t.Fatalf("active override anchor-beta was not backfilled: %v, kind=%s", err, betaKind)
-	}
-}
-
-// 8. Behavior Fixture: Successive Zero-Node Refreshes Do Not Age Out Usable Data
-func TestSubscriptionRetention_ZeroNodePayloadDoesNotAgeOutUsableData(t *testing.T) {
-	ctx := context.Background()
-	db := retentionSetupTestDB(t)
-
-	subID := "sub-zero-node-age"
-	retentionCreateTestSubscription(t, db, subID, "Zero Node Sub")
-
-	baseTime := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
-
-	// 1. Initial usable payload with 2 valid nodes
-	const insUsableFetch = `
-	INSERT INTO subscription_fetches (
-		id, subscription_id, started_at, finished_at, outcome,
-		content_digest, redacted_error, nodes_parsed, nodes_valid
-	) VALUES (?, ?, ?, ?, 'success', 'sha256:usable', '', 2, 2);`
-	baseTimeStr := baseTime.Format(time.RFC3339)
-	if _, err := db.ExecContext(ctx, insUsableFetch, "fetch-usable", subID, baseTimeStr, baseTimeStr); err != nil {
-		t.Fatalf("insert usable fetch failed: %v", err)
-	}
-	retentionInsertTestPayload(t, db, "payload-usable", subID, "fetch-usable", baseTime, false)
-	retentionInsertTestEntry(t, db, "entry-usable-1", "payload-usable", subID, "k1", "Node 1", domain.EntryKindProxy, nil)
-	retentionInsertTestEntry(t, db, "entry-usable-2", "payload-usable", subID, "k2", "Node 2", domain.EntryKindProxy, nil)
-
-	// 2. Three successive empty/zero-node fetches (nodes_valid = 0, no entries)
-	for i := 1; i <= 3; i++ {
-		tAt := baseTime.Add(time.Duration(i) * time.Hour)
-		fID := fmt.Sprintf("fetch-empty-%d", i)
-		pID := fmt.Sprintf("payload-empty-%d", i)
-		// Insert fetch with nodes_valid = 0
-		const insFetch = `
-		INSERT INTO subscription_fetches (
-			id, subscription_id, started_at, finished_at, outcome,
-			content_digest, redacted_error, nodes_parsed, nodes_valid
-		) VALUES (?, ?, ?, ?, 'success', 'sha256:empty', '', 0, 0);`
-		tStr := tAt.Format(time.RFC3339)
-		if _, err := db.ExecContext(ctx, insFetch, fID, subID, tStr, tStr); err != nil {
-			t.Fatalf("insert empty fetch failed: %v", err)
-		}
-		retentionInsertTestPayload(t, db, pID, subID, fID, tAt, false)
-	}
-
-	// Run retention
-	res, err := sqlite.PruneSubscriptionRetention(ctx, db, subID, 20, nil)
-	if err != nil {
-		t.Fatalf("retention failed: %v", err)
-	}
-
-	// The usable payload MUST survive because empty payloads do not count towards the 2 useful success payloads!
-	var usableSurvives int
-	_ = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM subscription_payloads WHERE id = 'payload-usable';").Scan(&usableSurvives)
-	if usableSurvives != 1 {
-		t.Fatalf("usable payload was aged out by successive empty payloads! deleted=%d, protected=%d", res.DeletedPayloads, res.ProtectedPayloads)
 	}
 }

@@ -105,10 +105,6 @@ WHERE n.active = 1
   AND NOT EXISTS (SELECT 1 FROM node_sources ns WHERE ns.node_logical_id = n.logical_id)
   AND (
     EXISTS (SELECT 1 FROM node_source_history h WHERE h.node_logical_id = n.logical_id AND h.cause = 'manual_confirmed')
-    OR (
-      NOT EXISTS (SELECT 1 FROM subscription_entries se WHERE se.node_logical_id = n.logical_id)
-      AND NOT EXISTS (SELECT 1 FROM node_source_history h WHERE h.node_logical_id = n.logical_id)
-    )
   )`
 
 // buildNodeFilterPredicates constructs standard WHERE clauses and arguments for node queries.

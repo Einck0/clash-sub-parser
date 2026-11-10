@@ -76,6 +76,7 @@ func GetOriginalConfigBySubscriptionID(ctx context.Context, db *sql.DB, subscrip
 	}
 
 	return &domain.SubscriptionOriginalConfig{
+		SourceRevision: sourceRev.String,
 		SubscriptionID: origSubID.String,
 		ContentDigest:  contentDigest.String,
 		Body:           bodyBlob,

@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 	"net/url"
+	"os"
+	"strings"
 
 	_ "modernc.org/sqlite"
 
@@ -93,6 +95,12 @@ func OpenReadOnly(path string) (*sql.DB, error) {
 
 // OpenAndMigrate opens the database and runs all pending embedded migrations.
 func OpenAndMigrate(ctx context.Context, cfg Config) (*sql.DB, error) {
+	// Do not Open (whose DSN enables WAL) before inspecting legacy files.
+	// Even EnsureMigrationTable/28 index backfill is a prohibited startup write.
+	_, err := preflightSubscriptionStorage(ctx, cfg.Path)
+	if err != nil {
+		return nil, err
+	}
 	db, err := Open(cfg)
 	if err != nil {
 		return nil, err
@@ -105,6 +113,55 @@ func OpenAndMigrate(ctx context.Context, cfg Config) (*sql.DB, error) {
 	}
 
 	return db, nil
+}
+
+func preflightSubscriptionStorage(ctx context.Context, path string) (bool, error) {
+	if isMemoryPath(path) {
+		return true, nil
+	}
+	// Non-memory URI paths cannot bypass the filesystem identity inspection.
+	if strings.HasPrefix(path, "file:") {
+		return false, fmt.Errorf("maintenance_required: startup requires a plain database path")
+	}
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		if err := ensureNoSidecarsForMissingDatabase(path); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !info.Mode().IsRegular() {
+		return false, fmt.Errorf("maintenance_required: database must be a regular file")
+	}
+	if info.Size() == 0 {
+		if err := ensureNoSidecarsForMissingDatabase(path); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	db, err := OpenReadOnly(path)
+	if err != nil {
+		return false, fmt.Errorf("maintenance_required: cannot inspect existing database read-only")
+	}
+	defer db.Close()
+	if err := CheckSubscriptionStorageReady(ctx, db); err != nil {
+		return false, err
+	}
+	return false, nil
+}
+
+func ensureNoSidecarsForMissingDatabase(path string) error {
+	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
+		if _, err := os.Lstat(path + suffix); err == nil {
+			return fmt.Errorf("maintenance_required: orphan database sidecar exists")
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
 }
 
 // WithTx executes the supplied function within a database transaction.

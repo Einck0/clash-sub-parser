@@ -9,6 +9,7 @@ import (
 // response body received from an upstream subscription endpoint before transformations.
 type SubscriptionOriginalConfig struct {
 	SubscriptionID string    `json:"subscription_id"`
+	SourceRevision string    `json:"-"`
 	ContentDigest  string    `json:"content_digest"`
 	Body           []byte    `json:"-"`
 	FetchedAt      time.Time `json:"fetched_at"`

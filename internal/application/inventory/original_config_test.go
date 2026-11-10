@@ -643,15 +643,10 @@ func TestInventoryService_ReconcileSubscription_ConcurrentRefreshRetainsNewerCom
 				if err != nil || current.Revision != sub.Revision {
 					t.Fatalf("refresh changed editable revision: subscription=%+v err=%v", current, err)
 				}
-				expectedFacts := 1
-				if seeded {
-					expectedFacts++
-				}
+				// Seeded or not, only the newer applied generation/raw/attempt
+				// survives. The rejected older request must not add a second one.
 				for _, table := range []string{"subscription_fetches", "subscription_payloads", "subscription_original_configs"} {
-					want := expectedFacts
-					if table == "subscription_original_configs" {
-						want = 1
-					}
+					want := 1
 					var count int
 					if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table+" WHERE subscription_id = ?", sub.ID).Scan(&count); err != nil || count != want {
 						t.Fatalf("stale refresh mutated %s: count=%d want=%d err=%v", table, count, want, err)
@@ -704,6 +699,16 @@ func TestInventoryService_ReconcileSubscription_OverCapAndNon2xxRetainOldAndUnch
 	}
 
 	baseFetches, baseNodes, basePayloads := getCounts()
+	assertLatestFailedAttempt := func(result *inventory.ReconcileResult) {
+		t.Helper()
+		var applied, latest, status string
+		if err := db.QueryRowContext(ctx, `SELECT applied_fetch_id,last_attempt_fetch_id,last_attempt_status FROM subscription_current_state WHERE subscription_id=?`, sub.ID).Scan(&applied, &latest, &status); err != nil {
+			t.Fatal(err)
+		}
+		if result == nil || applied != resInit.FetchID || latest != result.FetchID || status != "failed" {
+			t.Fatalf("failed attempt must replace only latest diagnostic, preserving applied fetch")
+		}
+	}
 
 	// 1. Candidate exceeds the configured response budget.
 	prefix := "proxies:\n  - name: overcap-node\n    type: ss\n    server: 6.6.6.6\n    port: 8388\n    cipher: aes-128-gcm\n    password: p\n# padding: "
@@ -729,6 +734,7 @@ func TestInventoryService_ReconcileSubscription_OverCapAndNon2xxRetainOldAndUnch
 		t.Fatalf("expected CategoryValidation subscription_content_too_large, got: %v", err)
 	}
 
+	assertLatestFailedAttempt(resOver)
 	fetchesAfterOver, nodesAfterOver, payloadsAfterOver := getCounts()
 	if fetchesAfterOver != baseFetches+1 || nodesAfterOver != baseNodes || payloadsAfterOver != basePayloads {
 		t.Fatalf("counts mutated on overcap failure: fetches %d->%d, nodes %d->%d, payloads %d->%d",
@@ -762,8 +768,10 @@ func TestInventoryService_ReconcileSubscription_OverCapAndNon2xxRetainOldAndUnch
 		t.Fatalf("expected CategoryValidation invalid_fetch_status, got: %v", err)
 	}
 
+	// Fetch summaries retain applied/raw plus the latest attempt, not every failure.
+	assertLatestFailedAttempt(resNon2xx)
 	fetchesAfterNon2xx, nodesAfterNon2xx, payloadsAfterNon2xx := getCounts()
-	if fetchesAfterNon2xx != baseFetches+2 || nodesAfterNon2xx != baseNodes || payloadsAfterNon2xx != basePayloads {
+	if fetchesAfterNon2xx != baseFetches+1 || nodesAfterNon2xx != baseNodes || payloadsAfterNon2xx != basePayloads {
 		t.Fatalf("counts mutated on non-2xx failure: fetches %d->%d, nodes %d->%d, payloads %d->%d",
 			baseFetches, fetchesAfterNon2xx, baseNodes, nodesAfterNon2xx, basePayloads, payloadsAfterNon2xx)
 	}
@@ -795,8 +803,9 @@ func TestInventoryService_ReconcileSubscription_OverCapAndNon2xxRetainOldAndUnch
 		t.Fatalf("expected CategoryValidation empty_subscription_content, got: %v", err)
 	}
 
+	assertLatestFailedAttempt(resEmpty)
 	fetchesAfterEmpty, nodesAfterEmpty, payloadsAfterEmpty := getCounts()
-	if fetchesAfterEmpty != baseFetches+3 || nodesAfterEmpty != baseNodes || payloadsAfterEmpty != basePayloads {
+	if fetchesAfterEmpty != baseFetches+1 || nodesAfterEmpty != baseNodes || payloadsAfterEmpty != basePayloads {
 		t.Fatalf("counts mutated on empty body failure: fetches %d->%d, nodes %d->%d, payloads %d->%d",
 			baseFetches, fetchesAfterEmpty, baseNodes, nodesAfterEmpty, basePayloads, payloadsAfterEmpty)
 	}
@@ -815,8 +824,9 @@ func TestInventoryService_ReconcileSubscription_OverCapAndNon2xxRetainOldAndUnch
 		t.Fatalf("expected CategoryInternal nil_fetch_response, got: %v", err)
 	}
 
+	assertLatestFailedAttempt(resNil)
 	fetchesAfterNil, nodesAfterNil, payloadsAfterNil := getCounts()
-	if fetchesAfterNil != baseFetches+4 || nodesAfterNil != baseNodes || payloadsAfterNil != basePayloads {
+	if fetchesAfterNil != baseFetches+1 || nodesAfterNil != baseNodes || payloadsAfterNil != basePayloads {
 		t.Fatalf("counts mutated on nil response failure: fetches %d->%d, nodes %d->%d, payloads %d->%d",
 			baseFetches, fetchesAfterNil, baseNodes, nodesAfterNil, basePayloads, payloadsAfterNil)
 	}

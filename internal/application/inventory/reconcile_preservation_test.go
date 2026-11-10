@@ -1426,16 +1426,16 @@ proxies:
 		t.Fatalf("expected FetchOutcomePartial, got %s", res2.Outcome)
 	}
 
-	// Invariant 1: Existing node_sources are NOT deleted, and new node is added -> total 3 sources!
+	// Current contract: partial membership contains only the accepted new node.
 	var sourcesAfterPartial int
 	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM node_sources WHERE subscription_id = ?;", subID).Scan(&sourcesAfterPartial); err != nil {
 		t.Fatalf("failed to query node_sources after partial: %v", err)
 	}
-	if sourcesAfterPartial != 3 {
-		t.Fatalf("expected 3 node_sources after partial fetch (Alpha, Beta, Gamma retained), got %d", sourcesAfterPartial)
+	if sourcesAfterPartial != 1 {
+		t.Fatalf("expected only Gamma current after partial, got %d", sourcesAfterPartial)
 	}
 
-	// Invariant 2: node_source_history must NOT have any refresh prune records!
+	// Removed membership has real current removal evidence, not entity deletion.
 	var pruneHistoryCount int
 	if err := db.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM node_source_history
@@ -1443,8 +1443,8 @@ proxies:
 	`, subID).Scan(&pruneHistoryCount); err != nil {
 		t.Fatalf("failed to query node_source_history: %v", err)
 	}
-	if pruneHistoryCount != 0 {
-		t.Fatalf("expected 0 prune history records on partial refresh, got %d", pruneHistoryCount)
+	if pruneHistoryCount != 2 {
+		t.Fatalf("expected two actual removal history records, got %d", pruneHistoryCount)
 	}
 
 	// Invariant 3: All 3 nodes exist in nodes table and active == true

@@ -73,6 +73,7 @@ type ResolvedNode struct {
 	DialerProxy        string                           `json:"dialer_proxy,omitempty"`
 	ChainBindingID     string                           `json:"chain_binding_id,omitempty"`
 	ChainSource        string                           `json:"chain_source,omitempty"`
+	PayloadEvidence    []domain.PayloadEvidence         `json:"-"`
 }
 
 // ResolvedGroupMember represents an ordered reference inside a policy group.
@@ -159,16 +160,17 @@ type ChainEffect struct {
 
 // ResolveInput encapsulates all raw inputs to be resolved into a ResolvedPolicySnapshot.
 type ResolveInput struct {
-	RevisionID         string
-	InventoryWatermark string
-	CompilerVersion    string
-	Nodes              []domain.Node
-	Groups             []domain.NodeGroup
-	GroupSources       map[string][]domain.MemberSource
-	Edges              map[string][]domain.GroupEdge
-	PolicyRules        []domain.PolicyRule
-	AdmissionRules     []domain.AdmissionRule
-	DNS                DNSConfig
+	RevisionID          string
+	InventoryWatermark  string
+	CompilerVersion     string
+	Nodes               []domain.Node
+	NodePayloadEvidence map[string][]domain.PayloadEvidence
+	Groups              []domain.NodeGroup
+	GroupSources        map[string][]domain.MemberSource
+	Edges               map[string][]domain.GroupEdge
+	PolicyRules         []domain.PolicyRule
+	AdmissionRules      []domain.AdmissionRule
+	DNS                 DNSConfig
 
 	// Optional risk inputs
 	RiskPolicyRevision string

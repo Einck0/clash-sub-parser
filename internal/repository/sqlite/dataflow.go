@@ -65,13 +65,14 @@ func (r *subscriptionPayloadRepository) Save(ctx context.Context, p *domain.Subs
 func (r *subscriptionPayloadRepository) GetByID(ctx context.Context, id string) (*domain.SubscriptionPayload, error) {
 	const query = `
 	SELECT id, subscription_id, fetch_id, content_digest, X'' AS body_blob, http_status, headers_json, pinned, created_at
-	FROM subscription_payloads WHERE id = ?;`
+	FROM subscription_payloads WHERE id = ?
+	UNION ALL SELECT payload_id,COALESCE(subscription_id,''),fetch_id,content_digest,X'',http_status,'{}',pinned,original_created_at FROM subscription_payload_evidence WHERE payload_id=? AND NOT EXISTS(SELECT 1 FROM subscription_payloads WHERE id=?);`
 
 	var p domain.SubscriptionPayload
 	var pinnedInt int
 	var createdStr string
 
-	err := r.db.QueryRowContext(ctx, query, id).Scan(
+	err := r.db.QueryRowContext(ctx, query, id, id, id).Scan(
 		&p.ID,
 		&p.SubscriptionID,
 		&p.FetchID,
@@ -172,21 +173,31 @@ func (r *subscriptionPayloadRepository) Pin(ctx context.Context, id string, pinn
 	if pinned {
 		pinnedInt = 1
 	}
-	res, err := r.db.ExecContext(ctx, "UPDATE subscription_payloads SET pinned = ? WHERE id = ?;", pinnedInt, id)
-	if err != nil {
-		return fmt.Errorf("failed to pin payload %s: %w", id, err)
-	}
-	rows, err := res.RowsAffected()
-	if err != nil {
+	return WithTx(ctx, r.db, func(ctx context.Context, tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO subscription_payload_evidence (payload_id,subscription_id,source_identity,fetch_id,content_digest,original_created_at,captured_at,http_status,evidence_kind,quality,pinned)
+		SELECT id,subscription_id,'sub:'||subscription_id,fetch_id,content_digest,created_at,?,http_status,'pin','observed',pinned FROM subscription_payloads WHERE id=?`, time.Now().UTC().Format(time.RFC3339Nano), id); err != nil {
+			return err
+		}
+		res, err := tx.ExecContext(ctx, `UPDATE subscription_payload_evidence SET pinned=? WHERE payload_id=?`, pinnedInt, id)
+		if err != nil {
+			return err
+		}
+		count, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if count == 0 {
+			return domain.NewNotFoundError("payload_not_found", "payload evidence not found")
+		}
+		_, err = tx.ExecContext(ctx, `UPDATE subscription_payloads SET pinned=? WHERE id=?`, pinnedInt, id)
 		return err
-	}
-	if rows == 0 {
-		return domain.NewNotFoundError("payload_not_found", fmt.Sprintf("payload %s not found", id))
-	}
-	return nil
+	})
 }
 
 func (r *subscriptionPayloadRepository) PruneUnreferenced(ctx context.Context, olderThan time.Time) (int64, error) {
+	if err := CheckSubscriptionStorageReady(ctx, r.db); err != nil {
+		return 0, err
+	}
 	// 1. Release expired preview drafts and failed previews so they don't permanently pin payloads:
 	//    - Failed previews (token_hash LIKE 'draft_failed:%') are immediately released
 	//    - Stale preview drafts older than 24 hours (or olderThan if olderThan is further in the past) are released
@@ -622,16 +633,16 @@ func (r *nodeConnectionVersionRepository) Save(ctx context.Context, v *domain.No
 		config_fingerprint, source_entry_id, schema_version, created_at
 	) VALUES (?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(node_logical_id, connection_revision) DO UPDATE SET
-		effective_config_json = excluded.effective_config_json,
-		config_fingerprint = excluded.config_fingerprint,
-		source_entry_id = COALESCE(node_connection_versions.source_entry_id, excluded.source_entry_id);`
+		source_entry_id = node_connection_versions.source_entry_id
+	WHERE node_connection_versions.effective_config_json = excluded.effective_config_json
+	  AND node_connection_versions.config_fingerprint = excluded.config_fingerprint;`
 
 	var sourceEntryIDVal sql.NullString
 	if v.SourceEntryID != nil && *v.SourceEntryID != "" {
 		sourceEntryIDVal = sql.NullString{String: *v.SourceEntryID, Valid: true}
 	}
 
-	_, err := r.db.ExecContext(ctx, query,
+	result, err := r.db.ExecContext(ctx, query,
 		v.NodeLogicalID,
 		v.ConnectionRevision,
 		v.EffectiveConfigJSON,
@@ -642,6 +653,13 @@ func (r *nodeConnectionVersionRepository) Save(ctx context.Context, v *domain.No
 	)
 	if err != nil {
 		return fmt.Errorf("failed to save node connection version: %w", err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count != 1 {
+		return domain.NewConflictError("connection_version_conflict", "a connection revision cannot be rewritten")
 	}
 	return nil
 }
@@ -894,6 +912,10 @@ func (r *publicationPayloadRefRepository) AddRefs(ctx context.Context, publicati
 			if strings.TrimSpace(pID) == "" {
 				continue
 			}
+			if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO subscription_payload_evidence (payload_id,subscription_id,source_identity,fetch_id,content_digest,original_created_at,captured_at,http_status,evidence_kind,quality,pinned)
+			SELECT id,subscription_id,'sub:'||subscription_id,fetch_id,content_digest,created_at,?,http_status,'publication','observed',pinned FROM subscription_payloads WHERE id=?`, time.Now().UTC().Format(time.RFC3339Nano), strings.TrimSpace(pID)); err != nil {
+				return err
+			}
 			if _, err := stmt.ExecContext(ctx, publicationID, strings.TrimSpace(pID)); err != nil {
 				return fmt.Errorf("failed to insert publication payload ref (%s -> %s): %w", publicationID, pID, err)
 			}
@@ -940,27 +962,31 @@ func (r *publicationPayloadRefRepository) ResolvePayloadIDsForNodes(ctx context.
 	JOIN subscription_entries e ON v.source_entry_id = e.id
 	WHERE v.node_logical_id = ? AND v.connection_revision = ? AND e.payload_id IS NOT NULL AND e.payload_id != '';`
 
-	const queryLegacy = `
-	SELECT COALESCE(
-		(SELECT e.payload_id FROM subscription_entries e
-		 WHERE e.node_logical_id = ? AND e.payload_id IS NOT NULL AND e.payload_id != ''
-		 ORDER BY e.created_at DESC, e.rowid DESC LIMIT 1),
-		(SELECT p.id FROM node_sources ns
-		 JOIN subscription_payloads p ON ns.subscription_id = p.subscription_id AND ns.last_seen_fetch_id = p.fetch_id
-		 WHERE ns.node_logical_id = ? AND p.id IS NOT NULL AND p.id != ''
-		 ORDER BY p.created_at DESC, p.rowid DESC LIMIT 1)
-	);`
-
 	for _, n := range nodes {
 		var payloadID sql.NullString
-		if n.ConnectionRevision > 0 {
-			err := r.db.QueryRowContext(ctx, queryVersioned, n.NodeID, n.ConnectionRevision).Scan(&payloadID)
-			if err != nil && errors.Is(err, sql.ErrNoRows) {
-				// Fallback to legacy only if version has no source_entry_id yet (e.g. migration 15 initial legacy seed)
-				_ = r.db.QueryRowContext(ctx, queryLegacy, n.NodeID, n.NodeID).Scan(&payloadID)
+		rows, err := r.db.QueryContext(ctx, `SELECT origin_payload_id FROM node_connection_provenance WHERE node_logical_id=? AND connection_revision=? ORDER BY origin_payload_id`, n.NodeID, n.ConnectionRevision)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return nil, err
 			}
-		} else {
-			_ = r.db.QueryRowContext(ctx, queryLegacy, n.NodeID, n.NodeID).Scan(&payloadID)
+			if !payloadMap[id] {
+				payloadMap[id] = true
+				result = append(result, id)
+			}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+		err = r.db.QueryRowContext(ctx, queryVersioned, n.NodeID, n.ConnectionRevision).Scan(&payloadID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
 		}
 		if payloadID.Valid && strings.TrimSpace(payloadID.String) != "" {
 			pid := strings.TrimSpace(payloadID.String)

@@ -589,12 +589,6 @@ func (s *Service) persistPreviewArtifact(ctx context.Context, revID string, arti
 		State:           domain.PublicationStateDraft,
 		CreatedAt:       now,
 	}
-	if s.pubRepo != nil {
-		if err := s.pubRepo.Create(ctx, &draftPub); err != nil {
-			return nil, fmt.Errorf("failed to persist preview draft: %w", err)
-		}
-	}
-
 	var included []domain.ManifestIncludedNode
 	if snapshot != nil {
 		included = make([]domain.ManifestIncludedNode, len(snapshot.Nodes))
@@ -608,18 +602,30 @@ func (s *Service) persistPreviewArtifact(ctx context.Context, revID string, arti
 		included = []domain.ManifestIncludedNode{}
 	}
 
-	var payloadIDs []string
-	if s.payloadRefRepo != nil && len(included) > 0 {
-		resolved, err := s.payloadRefRepo.ResolvePayloadIDsForNodes(ctx, included)
-		if err == nil && len(resolved) > 0 {
-			payloadIDs = resolved
+	payloadIDs := []string{}
+	evidence := []domain.PayloadEvidence{}
+	seenEvidence := make(map[string]bool)
+	if snapshot != nil {
+		for _, node := range snapshot.Nodes {
+			for _, e := range node.PayloadEvidence {
+				if !seenEvidence[e.PayloadID] {
+					seenEvidence[e.PayloadID] = true
+					payloadIDs = append(payloadIDs, e.PayloadID)
+					evidence = append(evidence, e)
+				}
+			}
 		}
 	}
-	if payloadIDs == nil {
-		payloadIDs = []string{}
-	}
-	if s.payloadRefRepo != nil && len(payloadIDs) > 0 {
-		_ = s.payloadRefRepo.AddRefs(ctx, snapshotID, payloadIDs)
+	if s.pubRepo != nil {
+		if writer, ok := s.pubRepo.(domain.PublicationEvidenceWriter); ok {
+			if err := writer.CreateWithEvidence(ctx, &draftPub, evidence); err != nil {
+				return nil, fmt.Errorf("persist draft and frozen evidence: %w", err)
+			}
+		} else if len(evidence) > 0 {
+			return nil, fmt.Errorf("publication repository lacks atomic evidence persistence")
+		} else if err := s.pubRepo.Create(ctx, &draftPub); err != nil {
+			return nil, fmt.Errorf("persist preview draft: %w", err)
+		}
 	}
 
 	excludedNodes := artifact.ExcludedNodes
@@ -1581,15 +1587,16 @@ func (s *Service) buildArtifactPipeline(ctx context.Context, facts *domain.Consi
 
 	revID := facts.Revision.ID
 	input := resolver.ResolveInput{
-		RevisionID:         revID,
-		InventoryWatermark: "v1",
-		CompilerVersion:    "1.0.0",
-		Nodes:              facts.Nodes,
-		AdmissionRules:     facts.AdmissionRules,
-		GlobalFilter:       facts.GlobalFilter,
-		NodeSources:        facts.NodeSources,
-		LatestObservations: facts.LatestObservations,
-		AsOf:               facts.AsOf,
+		RevisionID:          revID,
+		InventoryWatermark:  "v1",
+		CompilerVersion:     "1.0.0",
+		NodePayloadEvidence: facts.NodePayloadEvidence,
+		Nodes:               facts.Nodes,
+		AdmissionRules:      facts.AdmissionRules,
+		GlobalFilter:        facts.GlobalFilter,
+		NodeSources:         facts.NodeSources,
+		LatestObservations:  facts.LatestObservations,
+		AsOf:                facts.AsOf,
 	}
 
 	dnsCfg, err := dnsConfigFromSettings(facts.DNSSettings)
@@ -1992,13 +1999,14 @@ func (s *Service) buildArtifactPipeline(ctx context.Context, facts *domain.Consi
 	}
 
 	fallbackInput := resolver.ResolveInput{
-		RevisionID:         facts.Revision.ID,
-		InventoryWatermark: "v1",
-		CompilerVersion:    "1.0.0",
-		Nodes:              primaryNodes,
-		NodeSources:        facts.NodeSources,
-		LatestObservations: facts.LatestObservations,
-		AsOf:               facts.AsOf,
+		RevisionID:          facts.Revision.ID,
+		InventoryWatermark:  "v1",
+		CompilerVersion:     "1.0.0",
+		NodePayloadEvidence: facts.NodePayloadEvidence,
+		Nodes:               primaryNodes,
+		NodeSources:         facts.NodeSources,
+		LatestObservations:  facts.LatestObservations,
+		AsOf:                facts.AsOf,
 	}
 
 	if target == domain.TargetMihomo {

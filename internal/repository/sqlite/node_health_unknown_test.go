@@ -9,7 +9,7 @@ import (
 )
 
 func TestNodeFilterPredicates_CanonicalUnknownParity(t *testing.T) {
-	db := setupTestDB(t)
+	db := setupNodeProjectionDB(t)
 	nodeRepo := NewNodeRepository(db)
 	obsRepo := NewProbeObservationRepository(db)
 	ctx := context.Background()
@@ -135,6 +135,9 @@ func TestNodeFilterPredicates_CanonicalUnknownParity(t *testing.T) {
 		},
 	}
 
+	if err := NewProbeRunRepository(db).Create(ctx, &domain.ProbeRun{ID: "run-1", IdempotencyKey: "run-1", State: domain.ProbeRunStateSucceeded, DeadlineAt: now}); err != nil {
+		t.Fatalf("create parent probe run: %v", err)
+	}
 	for _, obs := range observations {
 		if err := obsRepo.Create(ctx, obs); err != nil {
 			t.Fatalf("failed to create observation %s: %v", obs.ID, err)

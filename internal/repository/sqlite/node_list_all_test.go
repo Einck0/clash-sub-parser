@@ -10,7 +10,7 @@ import (
 )
 
 func TestNodeRepository_ListAll_AndHealthPredicatesConservation(t *testing.T) {
-	db := setupTestDB(t)
+	db := setupNodeProjectionDB(t)
 	nodeRepo := NewNodeRepository(db)
 	obsRepo := NewProbeObservationRepository(db)
 	ctx := context.Background()
@@ -224,10 +224,20 @@ func TestNodeRepository_ListAll_AndHealthPredicatesConservation(t *testing.T) {
 	rev1 := int64(1)
 	revOld := int64(0)
 
+	if err := NewProbeRunRepository(db).Create(ctx, &domain.ProbeRun{ID: "run-001", IdempotencyKey: "run-001", State: domain.ProbeRunStateSucceeded, DeadlineAt: now}); err != nil {
+		t.Fatalf("create parent probe run: %v", err)
+	}
+	createObservation := func(obs *domain.ProbeObservation) {
+		t.Helper()
+		if err := obsRepo.Create(ctx, obs); err != nil {
+			t.Fatalf("create observation %s: %v", obs.ID, err)
+		}
+	}
+
 	// 10 healthy nodes (node-active-000 .. node-active-009)
 	for i := 0; i < 10; i++ {
 		id := fmt.Sprintf("node-active-%03d", i)
-		_ = obsRepo.Create(ctx, &domain.ProbeObservation{
+		createObservation(&domain.ProbeObservation{
 			ID:                 fmt.Sprintf("obs-h-%03d", i),
 			ProbeRunID:         "run-001",
 			NodeLogicalID:      id,
@@ -242,7 +252,7 @@ func TestNodeRepository_ListAll_AndHealthPredicatesConservation(t *testing.T) {
 	// 5 degraded nodes (node-active-010 .. node-active-014)
 	for i := 10; i < 15; i++ {
 		id := fmt.Sprintf("node-active-%03d", i)
-		_ = obsRepo.Create(ctx, &domain.ProbeObservation{
+		createObservation(&domain.ProbeObservation{
 			ID:                 fmt.Sprintf("obs-d-%03d", i),
 			ProbeRunID:         "run-001",
 			NodeLogicalID:      id,
@@ -257,7 +267,7 @@ func TestNodeRepository_ListAll_AndHealthPredicatesConservation(t *testing.T) {
 	// 5 unhealthy nodes (node-active-015 .. node-active-019)
 	for i := 15; i < 20; i++ {
 		id := fmt.Sprintf("node-active-%03d", i)
-		_ = obsRepo.Create(ctx, &domain.ProbeObservation{
+		createObservation(&domain.ProbeObservation{
 			ID:                 fmt.Sprintf("obs-u-%03d", i),
 			ProbeRunID:         "run-001",
 			NodeLogicalID:      id,
@@ -273,7 +283,7 @@ func TestNodeRepository_ListAll_AndHealthPredicatesConservation(t *testing.T) {
 	// - 3 with AI only (node-active-020 .. 022)
 	for i := 20; i <= 22; i++ {
 		id := fmt.Sprintf("node-active-%03d", i)
-		_ = obsRepo.Create(ctx, &domain.ProbeObservation{
+		createObservation(&domain.ProbeObservation{
 			ID:                 fmt.Sprintf("obs-ai-%03d", i),
 			ProbeRunID:         "run-001",
 			NodeLogicalID:      id,
@@ -286,7 +296,7 @@ func TestNodeRepository_ListAll_AndHealthPredicatesConservation(t *testing.T) {
 	// - 3 stale baseline > 1h (node-active-023 .. 025)
 	for i := 23; i <= 25; i++ {
 		id := fmt.Sprintf("node-active-%03d", i)
-		_ = obsRepo.Create(ctx, &domain.ProbeObservation{
+		createObservation(&domain.ProbeObservation{
 			ID:                 fmt.Sprintf("obs-stale-%03d", i),
 			ProbeRunID:         "run-001",
 			NodeLogicalID:      id,
@@ -299,7 +309,7 @@ func TestNodeRepository_ListAll_AndHealthPredicatesConservation(t *testing.T) {
 	// - 3 future dated baseline (node-active-026 .. 028)
 	for i := 26; i <= 28; i++ {
 		id := fmt.Sprintf("node-active-%03d", i)
-		_ = obsRepo.Create(ctx, &domain.ProbeObservation{
+		createObservation(&domain.ProbeObservation{
 			ID:                 fmt.Sprintf("obs-fut-%03d", i),
 			ProbeRunID:         "run-001",
 			NodeLogicalID:      id,
@@ -312,7 +322,7 @@ func TestNodeRepository_ListAll_AndHealthPredicatesConservation(t *testing.T) {
 	// - 3 old connection revision (node-active-029 .. 031)
 	for i := 29; i <= 31; i++ {
 		id := fmt.Sprintf("node-active-%03d", i)
-		_ = obsRepo.Create(ctx, &domain.ProbeObservation{
+		createObservation(&domain.ProbeObservation{
 			ID:                 fmt.Sprintf("obs-revold-%03d", i),
 			ProbeRunID:         "run-001",
 			NodeLogicalID:      id,
@@ -325,7 +335,7 @@ func TestNodeRepository_ListAll_AndHealthPredicatesConservation(t *testing.T) {
 	// - 3 security / config rejection error (node-active-032 .. 034)
 	for i := 32; i <= 34; i++ {
 		id := fmt.Sprintf("node-active-%03d", i)
-		_ = obsRepo.Create(ctx, &domain.ProbeObservation{
+		createObservation(&domain.ProbeObservation{
 			ID:                 fmt.Sprintf("obs-rej-%03d", i),
 			ProbeRunID:         "run-001",
 			NodeLogicalID:      id,

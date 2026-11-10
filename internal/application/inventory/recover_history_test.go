@@ -989,8 +989,12 @@ func TestRecoverSourceHistory_HistoricalConnectionVersionMatch(t *testing.T) {
 
 	// Use the supported update, which increments the revision and advances the head.
 	node.Credentials.UUID = currentUUID
-	if err := nodeRepo.Update(ctx, node); err != nil {
+	if err := nodeRepo.UpsertBatch(ctx, []domain.Node{*node}); err != nil {
 		t.Fatalf("advance node revision: %v", err)
+	}
+	node, err = nodeRepo.GetByLogicalID(ctx, node.LogicalID)
+	if err != nil || node == nil {
+		t.Fatalf("get updated node: %v", err)
 	}
 	if node.ConnectionRevision != 2 {
 		t.Fatalf("updated node revision = %d, want 2", node.ConnectionRevision)

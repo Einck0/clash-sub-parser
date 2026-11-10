@@ -171,5 +171,5 @@ func ReleaseConnectionVersionLeaseTx(ctx context.Context, tx *sql.Tx, lease doma
 	if count != 1 {
 		return errors.New("connection version lease release owner conflict or already released")
 	}
-	return nil
+	return PruneConnectionVersionsTx(ctx, tx, lease.NodeID)
 }

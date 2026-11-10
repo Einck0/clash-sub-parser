@@ -987,6 +987,17 @@ func TestRecoverSourceHistory_HistoricalConnectionVersionMatch(t *testing.T) {
 		t.Fatalf("original version does not match archive: %s err=%v", originalVersion, err)
 	}
 
+	// This test needs an available historical configuration. An explicit owner
+	// holds it across head advancement; runtime retention must not promise an
+	// indefinite secret archive for revisions with no consumer.
+	now := time.Now().UTC()
+	archiveLease := domain.ConnectionVersionLease{ConsumerKind: "archive_fixture", ConsumerID: "historical-match", NodeID: node.LogicalID, Revision: 1, Owner: "fixture", FencingToken: "fixture-token", HeartbeatAt: now, ExpiresAt: now.Add(time.Hour)}
+	if err := sqlite.WithTx(ctx, db, func(ctx context.Context, tx *sql.Tx) error {
+		_, err := sqlite.AcquireConnectionVersionLeaseTx(ctx, tx, archiveLease)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
 	// Use the supported update, which increments the revision and advances the head.
 	node.Credentials.UUID = currentUUID
 	if err := nodeRepo.UpsertBatch(ctx, []domain.Node{*node}); err != nil {
@@ -1073,7 +1084,7 @@ func TestRecoverSourceHistory_HistoricalConnectionVersionMatch(t *testing.T) {
 	}
 	assertVersions()
 	var leases int
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM node_connection_version_leases`).Scan(&leases); err != nil || leases != 0 {
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM node_connection_version_leases WHERE consumer_kind='recover_history'`).Scan(&leases); err != nil || leases != 0 {
 		t.Fatalf("recovery leaked leases: count=%d err=%v", leases, err)
 	}
 	var subscriptionID sql.NullString
@@ -1090,14 +1101,16 @@ func TestRecoverSourceHistory_HistoricalConnectionVersionMatch(t *testing.T) {
 		t.Fatalf("unexpected recovered relationship: sub=%v identity=%s label=%s revision=%v state=%s cause=%s kind=%s key=%s", subscriptionID, sourceIdentity, sourceLabel, revision, relationState, cause, evidenceKind, evidenceKey)
 	}
 
-	// In this disposable database, remove only the unreferenced historical
-	// version: mismatched current credentials must not be accepted as fallback.
-	deleted, err := db.ExecContext(ctx, `DELETE FROM node_connection_versions WHERE node_logical_id = ? AND connection_revision = 1`, node.LogicalID)
-	if err != nil {
-		t.Fatalf("remove historical version for negative contrast: %v", err)
+	// Release the fixture owner: runtime prunes the now-unleased historical
+	// version. Mismatched current credentials must not be accepted as fallback.
+	if err := sqlite.WithTx(ctx, db, func(ctx context.Context, tx *sql.Tx) error {
+		return sqlite.ReleaseConnectionVersionLeaseTx(ctx, tx, archiveLease)
+	}); err != nil {
+		t.Fatal(err)
 	}
-	if n, err := deleted.RowsAffected(); err != nil || n != 1 {
-		t.Fatalf("remove historical version: rows=%d err=%v", n, err)
+	var remaining int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM node_connection_versions WHERE node_logical_id=? AND connection_revision=1`, node.LogicalID).Scan(&remaining); err != nil || remaining != 0 {
+		t.Fatalf("released history still available: count=%d err=%v", remaining, err)
 	}
 	_, err = inventory.RecoverSourceHistory(ctx, db, inventory.RecoveryConfig{
 		ManifestPath:           manifestPath,

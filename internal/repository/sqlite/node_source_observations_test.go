@@ -103,8 +103,24 @@ func TestGenerationReplacementPreservesImmutableOriginsPinsAndUnknownObservation
 		t.Fatal(err)
 	}
 	var source sql.NullString
-	if err := db.QueryRowContext(ctx, `SELECT source_entry_id FROM node_connection_versions WHERE node_logical_id=? AND connection_revision=1`, nodeID).Scan(&source); err != nil || source.Valid {
-		t.Fatalf("old entry not detached: %v", err)
+	if err := db.QueryRowContext(ctx, `SELECT source_entry_id FROM node_connection_versions WHERE node_logical_id=? AND connection_revision=1`, nodeID).Scan(&source); err != sql.ErrNoRows {
+		t.Fatalf("unleased old full configuration retained: %v", err)
+	}
+	// Publication may finish from previously captured complete facts after a
+	// refresh prunes the version. It must persist those original bytes/origins,
+	// not reload current credentials or require the full historical secret row.
+	pub := &domain.Publication{ID: "frozen-after-prune", RevisionID: rev.ID, Target: domain.TargetSingBox, Content: []byte("synthetic frozen artifact"), ContentDigest: "synthetic", TokenHash: "draft:frozen-after-prune", State: domain.PublicationStateDraft, CreatedAt: now}
+	pubRepo := sqlite.NewPublicationRepository(db)
+	if err := pubRepo.(domain.PublicationEvidenceWriter).CreateWithEvidence(ctx, pub, frozen); err != nil {
+		t.Fatalf("publication from frozen evidence after prune: %v", err)
+	}
+	var content string
+	if err := db.QueryRowContext(ctx, `SELECT content FROM publications WHERE id=?`, pub.ID).Scan(&content); err != nil || content != string(pub.Content) {
+		t.Fatalf("frozen artifact changed: %q %v", content, err)
+	}
+	refs, err := sqlite.NewPublicationPayloadRefRepository(db).ListPayloadIDsByPublication(ctx, pub.ID)
+	if err != nil || len(refs) != 1 || refs[0] != "observation-payload" {
+		t.Fatalf("frozen publication origin changed: %v %v", refs, err)
 	}
 }
 

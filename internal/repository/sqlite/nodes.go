@@ -378,6 +378,9 @@ func (r *nodeRepository) UpsertBatch(ctx context.Context, nodes []domain.Node) e
 				`, node.LogicalID, curRev, updatedStr); err != nil {
 					return err
 				}
+				if err := PruneConnectionVersionsTx(ctx, tx, node.LogicalID); err != nil {
+					return err
+				}
 			}
 		}
 		return nil
@@ -444,7 +447,10 @@ func UpdateNode(ctx context.Context, db *sql.DB, node *domain.Node) error {
 				connection_revision = excluded.connection_revision,
 				updated_at = excluded.updated_at;
 		`, node.LogicalID, node.ConnectionRevision, updatedStr)
-		return err
+		if err != nil {
+			return err
+		}
+		return PruneConnectionVersionsTx(ctx, tx, node.LogicalID)
 	})
 }
 

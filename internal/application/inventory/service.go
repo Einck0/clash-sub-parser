@@ -1368,6 +1368,11 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 					return fmt.Errorf("failed to update node connection head for node %s: %w", *targetLogicalIDPtr, hErr)
 				}
 			}
+			if targetLogicalIDPtr != nil && needVersionInsert {
+				if err := sqlite.PruneConnectionVersionsTx(ctx, tx, *targetLogicalIDPtr); err != nil {
+					return err
+				}
+			}
 		}
 
 		// Full and partial both apply exactly the accepted subset. Failed fetches
@@ -2081,7 +2086,7 @@ func (s *Service) UpdateNodeConnection(ctx context.Context, cmd UpdateNodeConnec
 					return err
 				}
 
-				return nil
+				return sqlite.PruneConnectionVersionsTx(ctx, tx, logicalID)
 			}); txErr != nil {
 				s.mu.Unlock()
 				return nil, txErr

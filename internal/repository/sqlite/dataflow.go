@@ -789,11 +789,12 @@ func (r *nodeConnectionVersionRepository) SetHead(ctx context.Context, nodeLogic
 		connection_revision = excluded.connection_revision,
 		updated_at = excluded.updated_at;`
 
-	_, err := r.db.ExecContext(ctx, query, nodeLogicalID, revision, updatedAt.Format(time.RFC3339))
-	if err != nil {
-		return fmt.Errorf("failed to set node head: %w", err)
-	}
-	return nil
+	return WithTx(ctx, r.db, func(ctx context.Context, tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, query, nodeLogicalID, revision, updatedAt.Format(time.RFC3339)); err != nil {
+			return fmt.Errorf("failed to set node head: %w", err)
+		}
+		return PruneConnectionVersionsTx(ctx, tx, nodeLogicalID)
+	})
 }
 
 // --- Node Overrides Repository ---

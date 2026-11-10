@@ -495,7 +495,7 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 	if extractErr != nil {
 		finishedAt := domain.NowUTC()
 		fetchID := domain.MustNewUUIDv7()
-		redactedErr := "[stage:parse reason_code:parse_failed] " + domain.RedactSensitiveInfo(extractErr.Error())
+		redactedErr := "[stage:parse reason_code:parse_failed] " + extractResult.DiagnosticSummary()
 
 		failedFetch := domain.SubscriptionFetch{
 			ID:             fetchID,
@@ -505,7 +505,7 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 			Outcome:        domain.FetchOutcomeFailed,
 			ContentDigest:  fetchResp.ContentDigest,
 			RedactedError:  redactedErr,
-			NodesParsed:    0,
+			NodesParsed:    extractResult.Rejected,
 			NodesValid:     0,
 		}
 		_ = s.fetches.Create(ctx, &failedFetch)
@@ -527,6 +527,7 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 			Outcome:        domain.FetchOutcomeFailed,
 			ContentDigest:  fetchResp.ContentDigest,
 			RedactedError:  redactedErr,
+			NodesParsed:    extractResult.Rejected,
 		}, fmt.Errorf("failed to parse subscription %s content: %w", sub.ID, extractErr)
 	}
 
@@ -590,7 +591,7 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 	partialDiagnostic := ""
 	if extractResult.Rejected > 0 {
 		outcome = domain.FetchOutcomePartial
-		partialDiagnostic = fmt.Sprintf("[stage:parse reason_code:partial_subscription] rejected %d entries", extractResult.Rejected)
+		partialDiagnostic = "[stage:parse reason_code:partial_subscription] " + extractResult.DiagnosticSummary()
 	}
 
 	fetchID := domain.MustNewUUIDv7()

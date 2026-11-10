@@ -56,10 +56,8 @@ WHERE se1.node_logical_id IS NOT NULL
         ) = 'proxy'
   )`
 
-const enabledSubscriptionsInventorySubquery = `SELECT DISTINCT ns.node_logical_id
-FROM node_sources ns
-JOIN subscriptions s ON ns.subscription_id = s.id
-WHERE s.enabled = 1
+// Aliases ns and s must identify the source and its subscription respectively.
+const currentEnabledSourcePredicate = `s.enabled = 1
   AND ns.last_seen_fetch_id != ''
   AND ns.last_seen_fetch_id = (
       SELECT sf.id
@@ -68,7 +66,12 @@ WHERE s.enabled = 1
         AND sf.outcome IN ('success', 'partial')
       ORDER BY sf.started_at DESC, sf.rowid DESC
       LIMIT 1
-  )
+  )`
+
+const enabledSubscriptionsInventorySubquery = `SELECT DISTINCT ns.node_logical_id
+FROM node_sources ns
+JOIN subscriptions s ON ns.subscription_id = s.id
+WHERE ` + currentEnabledSourcePredicate + `
 UNION
 SELECT n.logical_id
 FROM nodes n
@@ -124,7 +127,11 @@ func buildNodeFilterPredicates(filter domain.NodeFilter, colPrefix string) ([]st
 	}
 
 	if filter.SubscriptionID != "" {
-		where = append(where, fmt.Sprintf("%slogical_id IN (SELECT ns_sub.node_logical_id FROM node_sources ns_sub WHERE ns_sub.subscription_id = ?)", colPrefix))
+		if filter.Scope == domain.NodeScopeEnabledSubscriptions {
+			where = append(where, fmt.Sprintf("%slogical_id IN (SELECT ns.node_logical_id FROM node_sources ns JOIN subscriptions s ON s.id = ns.subscription_id WHERE ns.subscription_id = ? AND %s)", colPrefix, currentEnabledSourcePredicate))
+		} else {
+			where = append(where, fmt.Sprintf("%slogical_id IN (SELECT ns_sub.node_logical_id FROM node_sources ns_sub WHERE ns_sub.subscription_id = ?)", colPrefix))
+		}
 		args = append(args, filter.SubscriptionID)
 	}
 

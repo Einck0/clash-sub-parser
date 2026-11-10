@@ -66,10 +66,26 @@ func NodeToMapping(node domain.Node) (map[string]any, error) {
 		m["type"] = "ss"
 		m["cipher"] = c.Method
 		m["password"] = c.Password
-		if plugin := transportValue(c, "plugin"); plugin != "" {
+		plugin := transportValue(c, "plugin")
+		opts := transportValue(c, "plugin-opts")
+		aliasOpts := transportValue(c, "plugin_opts")
+		if opts != "" && aliasOpts != "" && opts != aliasOpts {
+			return nil, fmt.Errorf("%w: conflicting shadowsocks plugin options", domain.ErrClientBuildFailed)
+		}
+		if opts == "" {
+			opts = aliasOpts
+		}
+		if plugin == "" && opts != "" {
+			return nil, fmt.Errorf("%w: shadowsocks plugin options without plugin", domain.ErrClientBuildFailed)
+		}
+		if plugin != "" {
 			m["plugin"] = plugin
-			if pluginOpts := transportValue(c, "plugin-opts", "plugin_opts"); pluginOpts != "" {
-				m["plugin-opts"] = parsePluginOpts(pluginOpts)
+			if opts != "" {
+				parsed, err := parsePluginOpts(opts)
+				if err != nil {
+					return nil, fmt.Errorf("%w: invalid shadowsocks plugin options", domain.ErrClientBuildFailed)
+				}
+				m["plugin-opts"] = parsed
 			}
 		}
 
@@ -505,7 +521,15 @@ func splitWireGuardAddresses(addrs []string) (string, string) {
 	return ipv4, ipv6
 }
 
-func parsePluginOpts(opts string) map[string]any {
+func parsePluginOpts(opts string) (map[string]any, error) {
+	opts = strings.TrimSpace(opts)
+	if strings.HasPrefix(opts, "{") || strings.HasPrefix(opts, "[") {
+		var res map[string]any
+		if err := json.Unmarshal([]byte(opts), &res); err != nil || res == nil {
+			return nil, fmt.Errorf("invalid plugin options JSON object")
+		}
+		return res, nil
+	}
 	res := map[string]any{}
 	for _, part := range strings.Split(opts, ";") {
 		part = strings.TrimSpace(part)
@@ -527,5 +551,5 @@ func parsePluginOpts(opts string) map[string]any {
 			res[part] = true
 		}
 	}
-	return res
+	return res, nil
 }

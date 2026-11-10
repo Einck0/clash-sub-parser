@@ -1,8 +1,9 @@
 package parser
 
 import (
+	"encoding/base64"
 	"encoding/json"
-	"fmt"
+	"net"
 	"net/netip"
 	"net/url"
 	"strconv"
@@ -20,8 +21,10 @@ type ParsedNodeWithCredentials struct {
 
 // ExtractResult reports parsed nodes with extracted credentials, and counts of rejected entries.
 type ExtractResult struct {
-	Items    []ParsedNodeWithCredentials
-	Rejected int
+	Items        []ParsedNodeWithCredentials
+	Rejected     int
+	Diagnostics  []Diagnostic
+	ReasonCounts []ReasonCount
 }
 
 // ExtractWithCredentials parses subscription content, extracting both normalized representation and in-memory credentials.
@@ -35,33 +38,66 @@ func ExtractWithCredentials(content []byte) (ExtractResult, error) {
 		return items, err
 	}
 	if decoded, ok := decodeBase64(trimmed); ok {
-		return extractURLLines(decoded)
+		if result, isYAML, err := extractYAML([]byte(decoded)); isYAML {
+			result.wrapped()
+			return result, err
+		}
+		result, err := extractURLLines(decoded)
+		result.wrapped()
+		return result, err
 	}
 	return extractURLLines(trimmed)
 }
 
 func extractYAML(content []byte) (ExtractResult, bool, error) {
-	var document struct {
-		Proxies []map[string]any `yaml:"proxies"`
-	}
-	if err := yaml.Unmarshal(content, &document); err != nil || document.Proxies == nil {
+	var document yaml.Node
+	if err := yaml.Unmarshal(content, &document); err != nil {
+		// Syntax errors cannot safely be recovered by splitting YAML text.
+		if strings.HasPrefix(strings.TrimSpace(string(content)), "proxies:") {
+			result := ExtractResult{}
+			result.reject("yaml", 1, "", parseIssue("invalid_document", "document"))
+			return result, true, domain.NewValidationError("no_supported_nodes", "subscription contains no supported nodes")
+		}
 		return ExtractResult{}, false, nil
 	}
-
-	result := ExtractResult{Items: make([]ParsedNodeWithCredentials, 0, len(document.Proxies))}
-	for _, proxy := range document.Proxies {
-		node, creds, err := extractYAMLProxy(proxy)
-		if err != nil {
-			result.Rejected++
-			continue
+	if len(document.Content) != 1 || document.Content[0].Kind != yaml.MappingNode {
+		return ExtractResult{}, false, nil
+	}
+	root := document.Content[0]
+	var proxies *yaml.Node
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value == "proxies" {
+			if proxies != nil {
+				result := ExtractResult{}
+				result.reject("yaml", 1, "", parseIssue("invalid_document", "proxies"))
+				return result, true, domain.NewValidationError("no_supported_nodes", "subscription contains no supported nodes")
+			}
+			proxies = root.Content[i+1]
 		}
-		result.Items = append(result.Items, ParsedNodeWithCredentials{
-			Normalized:  node,
-			Credentials: creds,
-		})
+	}
+	if proxies == nil {
+		return ExtractResult{}, false, nil
+	}
+	result := ExtractResult{}
+	if proxies.Kind != yaml.SequenceNode {
+		result.reject("yaml", 1, "", parseIssue("invalid_entry", "proxies"))
+	} else {
+		for i, entry := range proxies.Content {
+			var proxy map[string]any
+			if err := entry.Decode(&proxy); err != nil || proxy == nil {
+				result.reject("yaml", i+1, "", parseIssue("invalid_entry", "entry"))
+				continue
+			}
+			node, creds, err := extractYAMLProxy(proxy)
+			if err != nil {
+				result.reject("yaml", i+1, knownProtocol(value(proxy, "type")), err)
+				continue
+			}
+			result.Items = append(result.Items, ParsedNodeWithCredentials{Normalized: node, Credentials: creds})
+		}
 	}
 	if len(result.Items) == 0 {
-		return ExtractResult{}, true, domain.NewValidationError("no_supported_nodes", "subscription contains no supported nodes")
+		return result, true, domain.NewValidationError("no_supported_nodes", "subscription contains no supported nodes")
 	}
 	return result, true, nil
 }
@@ -81,6 +117,20 @@ func extractYAMLProxy(proxy map[string]any) (NormalizedNode, domain.InboundProto
 		return NormalizedNode{}, domain.InboundProtocolCredential{}, err
 	}
 	transport := yamlTransport(proxy, protocol)
+	if protocol == domain.ProtocolSS {
+		for _, key := range []string{"plugin-opts", "plugin_opts"} {
+			if raw, present := proxy[key]; present && raw != nil {
+				if _, ok := raw.(string); !ok {
+					if _, ok := raw.(map[string]any); !ok {
+						return NormalizedNode{}, domain.InboundProtocolCredential{}, parseIssue("invalid_field", "plugin_opts")
+					}
+				}
+				if opts, ok := raw.(map[string]any); ok && len(opts) > 0 && transport[key] == "" {
+					return NormalizedNode{}, domain.InboundProtocolCredential{}, parseIssue("invalid_field", "plugin_opts")
+				}
+			}
+		}
+	}
 
 	psk := value(proxy, "pre-shared-key", "pre_shared_key", "preshared-key", "preshared_key", "psk")
 	pubKey := value(proxy, "public-key", "public_key", "peer-public-key", "peer_public_key")
@@ -119,6 +169,10 @@ func extractYAMLProxy(proxy map[string]any) (NormalizedNode, domain.InboundProto
 		Transport:    transport,
 	}
 
+	if protocol == domain.ProtocolVMess {
+		creds.Method = value(proxy, "cipher", "scy")
+	}
+
 	if protocol == domain.ProtocolHTTP {
 		if headers, ok := proxy["headers"].(map[string]any); ok {
 			if hBytes, err := json.Marshal(headers); err == nil {
@@ -136,20 +190,20 @@ func extractYAMLProxy(proxy map[string]any) (NormalizedNode, domain.InboundProto
 			value(proxy, "ipv6"),
 		)
 		if addrErr != nil {
-			return NormalizedNode{}, domain.InboundProtocolCredential{}, addrErr
+			return NormalizedNode{}, domain.InboundProtocolCredential{}, parseIssue("invalid_field", "local_address")
 		}
 		creds.LocalAddress = localAddrs
 
 		reserved, resErr := parseWireGuardReserved(rawReserved)
 		if resErr != nil {
-			return NormalizedNode{}, domain.InboundProtocolCredential{}, resErr
+			return NormalizedNode{}, domain.InboundProtocolCredential{}, parseIssue("invalid_field", "reserved")
 		}
 		creds.Reserved = reserved
 
 		if mtuStr := value(proxy, "mtu"); mtuStr != "" {
 			mtuVal, mtuErr := strconv.Atoi(mtuStr)
 			if mtuErr != nil || mtuVal <= 0 || mtuVal > 65535 {
-				return NormalizedNode{}, domain.InboundProtocolCredential{}, fmt.Errorf("invalid WireGuard mtu %q", mtuStr)
+				return NormalizedNode{}, domain.InboundProtocolCredential{}, parseIssue("invalid_field", "mtu")
 			}
 			creds.MTU = mtuVal
 		}
@@ -174,10 +228,11 @@ func extractYAMLProxy(proxy map[string]any) (NormalizedNode, domain.InboundProto
 
 func extractURLLines(content string) (ExtractResult, error) {
 	result := ExtractResult{}
-	for _, line := range strings.Fields(content) {
+	for i, line := range strings.Fields(content) {
 		node, creds, err := extractURL(line)
 		if err != nil {
-			result.Rejected++
+			scheme, _, _ := strings.Cut(line, ":")
+			result.reject("url", i+1, knownProtocol(scheme), err)
 			continue
 		}
 		result.Items = append(result.Items, ParsedNodeWithCredentials{
@@ -186,22 +241,50 @@ func extractURLLines(content string) (ExtractResult, error) {
 		})
 	}
 	if len(result.Items) == 0 {
-		return ExtractResult{}, domain.NewValidationError("no_supported_nodes", "subscription contains no supported nodes")
+		return result, domain.NewValidationError("no_supported_nodes", "subscription contains no supported nodes")
 	}
 	return result, nil
 }
 
 func extractURL(raw string) (NormalizedNode, domain.InboundProtocolCredential, error) {
+	// Legacy SS encodes the whole authority, unlike SIP002 userinfo.
+	if strings.HasPrefix(strings.ToLower(raw), "ss://") {
+		body, fragment, hasFragment := strings.Cut(raw[len("ss://"):], "#")
+		authority, query, hasQuery := strings.Cut(body, "?")
+		if !strings.Contains(authority, "@") {
+			if decoded, ok := decodeBase64(authority); ok {
+				at := strings.LastIndex(decoded, "@")
+				if at < 0 {
+					return NormalizedNode{}, domain.InboundProtocolCredential{}, parseIssue("invalid_payload", "authority")
+				}
+				user, address := decoded[:at], decoded[at+1:]
+				if _, _, err := net.SplitHostPort(address); err != nil {
+					return NormalizedNode{}, domain.InboundProtocolCredential{}, parseIssue("invalid_endpoint", "endpoint")
+				}
+				raw = "ss://" + base64.RawURLEncoding.EncodeToString([]byte(user)) + "@" + address
+				if hasQuery {
+					raw += "?" + query
+				}
+				if hasFragment {
+					raw += "#" + fragment
+				}
+			}
+		}
+	}
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme == "" {
-		return NormalizedNode{}, domain.InboundProtocolCredential{}, fmt.Errorf("invalid subscription URL")
+		return NormalizedNode{}, domain.InboundProtocolCredential{}, parseIssue("invalid_url", "url")
 	}
 	protocol, err := protocolFor(u.Scheme)
 	if err != nil {
 		return NormalizedNode{}, domain.InboundProtocolCredential{}, err
 	}
 	if protocol == domain.ProtocolVMess {
-		return extractVMess(raw)
+		prefix := u.Scheme + "://"
+		if !strings.HasPrefix(raw, prefix) {
+			return NormalizedNode{}, domain.InboundProtocolCredential{}, parseIssue("invalid_payload", "payload")
+		}
+		return extractVMess(raw[len(prefix):])
 	}
 	server, port, err := endpoint(u.Hostname(), u.Port())
 	if err != nil {
@@ -224,15 +307,20 @@ func extractURL(raw string) (NormalizedNode, domain.InboundProtocolCredential, e
 	switch protocol {
 	case domain.ProtocolSS:
 		creds.Username = ""
+		if plugin := query.Get("plugin"); plugin != "" {
+			name, opts, _ := strings.Cut(plugin, ";")
+			transport["plugin"] = name
+			copyIfPresent(transport, "plugin-opts", opts)
+		}
 		if u.User != nil {
-			if decoded, ok := decodeBase64(u.User.Username()); ok {
+			if _, plain := u.User.Password(); plain {
+				creds.Method = u.User.Username()
+			} else if decoded, ok := decodeBase64(u.User.Username()); ok {
 				parts := strings.SplitN(decoded, ":", 2)
 				if len(parts) == 2 {
 					creds.Method = parts[0]
 					creds.Password = parts[1]
 				}
-			} else if creds.Password != "" {
-				creds.Method = u.User.Username()
 			}
 		}
 	case domain.ProtocolVLESS:
@@ -277,21 +365,21 @@ func extractURL(raw string) (NormalizedNode, domain.InboundProtocolCredential, e
 			query["ipv6"],
 		)
 		if addrErr != nil {
-			return NormalizedNode{}, domain.InboundProtocolCredential{}, addrErr
+			return NormalizedNode{}, domain.InboundProtocolCredential{}, parseIssue("invalid_field", "local_address")
 		}
 		creds.LocalAddress = localAddrs
 
 		if rawRes := firstQuery(query, "reserved"); rawRes != "" {
 			reserved, resErr := parseWireGuardReserved(rawRes)
 			if resErr != nil {
-				return NormalizedNode{}, domain.InboundProtocolCredential{}, resErr
+				return NormalizedNode{}, domain.InboundProtocolCredential{}, parseIssue("invalid_field", "reserved")
 			}
 			creds.Reserved = reserved
 		}
 		if mtuStr := firstQuery(query, "mtu"); mtuStr != "" {
 			mtuVal, mtuErr := strconv.Atoi(mtuStr)
 			if mtuErr != nil || mtuVal <= 0 || mtuVal > 65535 {
-				return NormalizedNode{}, domain.InboundProtocolCredential{}, fmt.Errorf("invalid WireGuard mtu %q", mtuStr)
+				return NormalizedNode{}, domain.InboundProtocolCredential{}, parseIssue("invalid_field", "mtu")
 			}
 			creds.MTU = mtuVal
 		}
@@ -344,14 +432,13 @@ func extractURL(raw string) (NormalizedNode, domain.InboundProtocolCredential, e
 }
 
 func extractVMess(raw string) (NormalizedNode, domain.InboundProtocolCredential, error) {
-	encoded := strings.TrimPrefix(raw, "vmess://")
-	decoded, ok := decodeBase64(encoded)
+	decoded, ok := decodeBase64(raw)
 	if !ok {
-		return NormalizedNode{}, domain.InboundProtocolCredential{}, fmt.Errorf("invalid VMess payload")
+		return NormalizedNode{}, domain.InboundProtocolCredential{}, parseIssue("invalid_payload", "payload")
 	}
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(decoded), &payload); err != nil {
-		return NormalizedNode{}, domain.InboundProtocolCredential{}, fmt.Errorf("invalid VMess payload")
+		return NormalizedNode{}, domain.InboundProtocolCredential{}, parseIssue("invalid_payload", "payload")
 	}
 	server, port, err := endpoint(value(payload, "add", "server"), value(payload, "port"))
 	if err != nil {
@@ -376,10 +463,14 @@ func extractVMess(raw string) (NormalizedNode, domain.InboundProtocolCredential,
 		}
 	}
 
-	method := value(payload, "scy", "security")
+	method := value(payload, "scy", "cipher")
 	if method == "" {
-		method = "auto"
+		security := value(payload, "security")
+		if !strings.EqualFold(security, "tls") && !strings.EqualFold(security, "reality") {
+			method = security
+		}
 	}
+	method = defaultValue(method, "auto")
 
 	creds := domain.InboundProtocolCredential{
 		UUID:      uuid,
@@ -399,53 +490,44 @@ func extractVMess(raw string) (NormalizedNode, domain.InboundProtocolCredential,
 func validateCredentials(proto domain.Protocol, creds domain.InboundProtocolCredential) error {
 	switch proto {
 	case domain.ProtocolSS:
-		if strings.TrimSpace(creds.Password) == "" {
-			return fmt.Errorf("missing Shadowsocks password")
+		if strings.TrimSpace(creds.Method) == "" {
+			return parseIssue("missing_credential", "cipher")
 		}
-	case domain.ProtocolVMess:
+		if strings.TrimSpace(creds.Password) == "" {
+			return parseIssue("missing_credential", "password")
+		}
+	case domain.ProtocolVMess, domain.ProtocolVLESS:
 		if strings.TrimSpace(creds.UUID) == "" {
-			return fmt.Errorf("missing VMess UUID")
+			return parseIssue("missing_credential", "uuid")
 		}
-	case domain.ProtocolVLESS:
-		if strings.TrimSpace(creds.UUID) == "" {
-			return fmt.Errorf("missing VLESS UUID")
-		}
-	case domain.ProtocolTrojan:
+	case domain.ProtocolTrojan, domain.ProtocolHysteria2, domain.ProtocolAnyTLS:
 		if strings.TrimSpace(creds.Password) == "" {
-			return fmt.Errorf("missing Trojan password")
-		}
-	case domain.ProtocolHysteria2:
-		if strings.TrimSpace(creds.Password) == "" {
-			return fmt.Errorf("missing Hysteria2 password")
+			return parseIssue("missing_credential", "password")
 		}
 	case domain.ProtocolWireGuard:
 		if strings.TrimSpace(creds.PrivateKey) == "" {
-			return fmt.Errorf("missing WireGuard private key")
+			return parseIssue("missing_credential", "private_key")
 		}
 		if strings.TrimSpace(creds.PublicKey) == "" {
-			return fmt.Errorf("missing WireGuard public key")
+			return parseIssue("missing_credential", "public_key")
 		}
 		if len(creds.LocalAddress) == 0 {
-			return fmt.Errorf("missing WireGuard local address")
+			return parseIssue("missing_credential", "local_address")
 		}
 		for _, addr := range creds.LocalAddress {
 			if _, err := netip.ParsePrefix(strings.TrimSpace(addr)); err != nil {
-				return fmt.Errorf("invalid WireGuard local address CIDR %q: %w", addr, err)
+				return parseIssue("invalid_field", "local_address")
 			}
 		}
 	case domain.ProtocolTUIC:
 		if strings.TrimSpace(creds.UUID) == "" {
-			return fmt.Errorf("missing TUIC UUID")
+			return parseIssue("missing_credential", "uuid")
 		}
 		if strings.TrimSpace(creds.Password) == "" {
-			return fmt.Errorf("missing TUIC password")
-		}
-	case domain.ProtocolAnyTLS:
-		if strings.TrimSpace(creds.Password) == "" {
-			return fmt.Errorf("missing AnyTLS password")
+			return parseIssue("missing_credential", "password")
 		}
 	case domain.ProtocolHTTP, domain.ProtocolSocks5:
-		// HTTP and SOCKS5 do not require credentials (can be anonymous/open proxies)
+		// HTTP and SOCKS5 may be unauthenticated.
 	}
 	return nil
 }

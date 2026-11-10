@@ -578,7 +578,9 @@ func loadNodeSources(ctx context.Context, tx *sql.Tx, nodeIDs []string, nodeSour
 			placeholders[j] = "?"
 			args[j] = id
 		}
-		q := fmt.Sprintf(`SELECT node_logical_id, subscription_id, last_seen_fetch_id FROM node_sources WHERE node_logical_id IN (%s);`, strings.Join(placeholders, ","))
+		q := fmt.Sprintf(`SELECT ns.node_logical_id, ns.subscription_id, ns.last_seen_fetch_id
+FROM node_sources ns JOIN subscriptions s ON s.id = ns.subscription_id
+WHERE ns.node_logical_id IN (%s) AND %s;`, strings.Join(placeholders, ","), currentEnabledSourcePredicate)
 		sRows, err := tx.QueryContext(ctx, q, args...)
 		if err != nil {
 			return fmt.Errorf("failed to query node sources: %w", err)

@@ -25,25 +25,26 @@ type NormalizedNode struct {
 
 // Result reports parsed nodes and malformed or unsupported input entries that were skipped.
 type Result struct {
-	Nodes    []NormalizedNode
-	Rejected int
+	Nodes        []NormalizedNode
+	Rejected     int
+	Diagnostics  []Diagnostic
+	ReasonCounts []ReasonCount
 }
 
 // Parse accepts a Clash or Mihomo YAML proxy list, a Base64 subscription, or URL lines.
 // It delegates to ExtractWithCredentials and returns normalized nodes with full credentials.
 func Parse(content []byte) (Result, error) {
 	extracted, err := ExtractWithCredentials(content)
-	if err != nil {
-		return Result{}, err
-	}
 	nodes := make([]NormalizedNode, 0, len(extracted.Items))
 	for _, item := range extracted.Items {
 		nodes = append(nodes, item.Normalized)
 	}
 	return Result{
-		Nodes:    nodes,
-		Rejected: extracted.Rejected,
-	}, nil
+		Nodes:        nodes,
+		Rejected:     extracted.Rejected,
+		Diagnostics:  extracted.Diagnostics,
+		ReasonCounts: extracted.ReasonCounts,
+	}, err
 }
 
 func yamlTransport(proxy map[string]any, protocol domain.Protocol) map[string]string {
@@ -138,6 +139,19 @@ func yamlTransport(proxy map[string]any, protocol domain.Protocol) map[string]st
 		copyIfPresent(transport, "obfs", value(proxy, "obfs"))
 		copyIfPresent(transport, "obfs-password", value(proxy, "obfs-password", "obfs_password"))
 		copyIfPresent(transport, "server_ports", value(proxy, "ports", "server_ports", "hy2_ports", "mport"))
+	}
+
+	if protocol == domain.ProtocolSS {
+		copyIfPresent(transport, "plugin", value(proxy, "plugin"))
+		for _, key := range []string{"plugin-opts", "plugin_opts"} {
+			if opts, ok := proxy[key].(map[string]any); ok {
+				if encoded, err := json.Marshal(opts); err == nil {
+					transport[key] = string(encoded)
+				}
+			} else {
+				copyIfPresent(transport, key, value(proxy, key))
+			}
+		}
 	}
 
 	if protocol == domain.ProtocolSocks5 {
@@ -292,7 +306,7 @@ func endpoint(server, rawPort string) (string, int, error) {
 	server = strings.Trim(strings.TrimSpace(server), "[]")
 	port, err := strconv.Atoi(strings.TrimSpace(rawPort))
 	if server == "" || err != nil || port < 1 || port > 65535 {
-		return "", 0, fmt.Errorf("invalid node endpoint")
+		return "", 0, parseIssue("invalid_endpoint", "endpoint")
 	}
 	return server, port, nil
 }
@@ -320,7 +334,7 @@ func protocolFor(raw string) (domain.Protocol, error) {
 	case "anytls":
 		return domain.ProtocolAnyTLS, nil
 	default:
-		return "", fmt.Errorf("unsupported node protocol")
+		return "", parseIssue("unsupported_protocol", "protocol")
 	}
 }
 

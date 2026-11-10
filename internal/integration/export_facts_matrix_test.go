@@ -2,6 +2,7 @@ package integration_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -86,15 +87,47 @@ func TestExportFactsMatrixAndImmutablePublication(t *testing.T) {
 	if err := revs.SetActive(ctx, rev.ID); err != nil {
 		t.Fatal(err)
 	}
+	// Mihomo consumes the routing graph, unlike the other pure-node targets.
+	// With no effective route it attempts primary-subscription fallback, but this
+	// fixture deliberately has no primary subscription. Persist a real group and
+	// MATCH rule so the matrix exercises normal compilation from database facts.
+	policy := sqlite.NewPolicyRepository(db)
+	group := &domain.NodeGroup{ID: domain.MustNewUUIDv7(), Name: "Matrix Select", GroupType: domain.GroupTypeSelect, CreatedAt: now, UpdatedAt: now}
+	members := make([]domain.MemberSource, 0, len(all))
+	for _, n := range all {
+		nodeID := n.LogicalID
+		members = append(members, domain.MemberSource{Operation: domain.OperationAdd, Kind: domain.SourceKindManualNode, NodeLogicalID: &nodeID})
+	}
+	if _, err := policy.SaveGroupWithSources(ctx, group, 0, members); err != nil {
+		t.Fatalf("create matrix group: %v", err)
+	}
+	if err := policy.CreatePolicyRule(ctx, &domain.PolicyRule{ID: domain.MustNewUUIDv7(), RevisionID: rev.ID, TargetGroupID: group.ID, Expression: "MATCH", Enabled: true}); err != nil {
+		t.Fatalf("create matrix route: %v", err)
+	}
 	pubs := sqlite.NewPublicationRepository(db)
-	svc := publication.NewService(pubs, nil, publication.WithPolicyRepository(sqlite.NewPolicyRepository(db)), publication.WithRevisionRepository(revs), publication.WithNodeRepository(nodes), publication.WithPayloadRefRepository(sqlite.NewPublicationPayloadRefRepository(db)), publication.WithConsistentFactsLoader(sqlite.NewConsistentFactsLoader(db)))
+	svc := publication.NewService(pubs, nil, publication.WithPolicyRepository(policy), publication.WithRevisionRepository(revs), publication.WithNodeRepository(nodes), publication.WithPayloadRefRepository(sqlite.NewPublicationPayloadRefRepository(db)), publication.WithConsistentFactsLoader(sqlite.NewConsistentFactsLoader(db)))
+	assertPublicationOK := func(t *testing.T, operation string, err error) {
+		t.Helper()
+		if err == nil {
+			return
+		}
+		var preflight *publication.PreflightError
+		if errors.As(err, &preflight) {
+			t.Fatalf("%s: %v; preflight: %+v", operation, err, preflight.Result)
+		}
+		var capability *publication.StrictCapabilityError
+		if errors.As(err, &capability) {
+			t.Fatalf("%s: %v; capabilities: %+v", operation, err, capability.Diagnostics)
+		}
+		t.Fatalf("%s: %v", operation, err)
+	}
 	cases := []struct {
 		target   domain.CompilerTarget
 		count    int
 		excluded []domain.Protocol
 		contains []string
 	}{
-		{domain.TargetMihomo, 7, nil, []string{"198.51.100.16", "matrix-ss", "/matrix"}},
+		{domain.TargetMihomo, 7, nil, []string{"198.51.100.16", "matrix-ss", "/matrix", "MATCH,Matrix Select"}},
 		{domain.TargetSingBox, 7, nil, []string{"198.51.100.16", "matrix-ss", "/matrix"}},
 		{domain.TargetSurge, 6, []domain.Protocol{domain.ProtocolVLESS}, []string{"matrix-ss", "198.51.100.16"}},
 		{domain.TargetQuantumultX, 3, []domain.Protocol{domain.ProtocolVLESS, domain.ProtocolHysteria2, domain.ProtocolWireGuard, domain.ProtocolTUIC}, []string{"matrix-ss", "/matrix"}},
@@ -104,9 +137,7 @@ func TestExportFactsMatrixAndImmutablePublication(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(string(tc.target), func(t *testing.T) {
 			res, err := svc.Preview(ctx, publication.PreviewQuery{Target: tc.target, RevisionID: rev.ID, CompatMode: "compatible"})
-			if err != nil {
-				t.Fatalf("preview: %v", err)
-			}
+			assertPublicationOK(t, "preview", err)
 			if res.Manifest.NodeCount != tc.count || res.Manifest.ExcludedCount != len(tc.excluded) {
 				t.Fatalf("manifest: %+v", res.Manifest)
 			}
@@ -141,9 +172,7 @@ func TestExportFactsMatrixAndImmutablePublication(t *testing.T) {
 		t.Fatal("missing sing-box draft")
 	}
 	published, err := svc.Publish(ctx, publication.PublishCommand{Target: domain.TargetSingBox, SnapshotID: draft, ActorKind: domain.ActorKindAdmin, RequestID: "matrix-publish"})
-	if err != nil {
-		t.Fatalf("publish: %v", err)
-	}
+	assertPublicationOK(t, "publish", err)
 	reconcile(strings.Replace(fixture, "matrix-ss", "matrix-ss-updated", 1), "sha256:matrix-2")
 	artifact, err := svc.ResolveAndServeAuthorized(ctx, published.Publication.ID, func(string) bool { return true })
 	if err != nil {
@@ -153,9 +182,7 @@ func TestExportFactsMatrixAndImmutablePublication(t *testing.T) {
 		t.Error("published bytes changed after refresh")
 	}
 	refreshed, err := svc.Preview(ctx, publication.PreviewQuery{Target: domain.TargetSingBox, RevisionID: rev.ID, CompatMode: "compatible"})
-	if err != nil {
-		t.Fatalf("refreshed preview: %v", err)
-	}
+	assertPublicationOK(t, "refreshed preview", err)
 	if !strings.Contains(string(refreshed.Content), "matrix-ss-updated") {
 		t.Error("refreshed facts absent from preview")
 	}

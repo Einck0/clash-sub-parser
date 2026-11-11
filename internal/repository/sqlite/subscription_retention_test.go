@@ -447,6 +447,25 @@ func TestSubscriptionRetention_MigrationBackfillClearRanking(t *testing.T) {
 		t.Fatalf("failed to insert entry-bf-3: %v", err)
 	}
 
+	// Case C: Ordinary history without override evidence must not create intent.
+	retentionInsertTestEntry(t, db, "entry-bf-plain", "payload-bf-1", subID, "key-plain", "Plain", domain.EntryKindProxy, nil)
+
+	// Case D: Equal timestamps must still honor the later rowid's explicit clear.
+	// Case E: A clear with only override_at evidence must suppress the source-key fallback.
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO subscription_entries (
+			id, payload_id, subscription_id, ordinal, source_key, raw_name,
+			protocol, server, port, entry_kind, user_kind_override, override_anchor, override_at, created_at
+		) VALUES
+			('entry-bf-tie-old', 'payload-bf-1', ?, 4, 'key-tie', 'Tie', 'ss', '1.1.1.3', 8388, 'proxy', 'notice', 'anchor-tie', ?, ?),
+			('entry-bf-tie-clear', 'payload-bf-1', ?, 5, 'key-tie', 'Tie', 'ss', '1.1.1.3', 8388, 'proxy', NULL, 'anchor-tie', ?, ?),
+			('entry-bf-source-old', 'payload-bf-1', ?, 6, 'key-source', 'Source', 'ss', '1.1.1.4', 8388, 'proxy', 'notice', '', ?, ?),
+			('entry-bf-source-clear', 'payload-bf-1', ?, 7, 'key-source', 'Source', 'ss', '1.1.1.4', 8388, 'proxy', NULL, '', ?, ?);
+	`, subID, t1, t1, subID, t1, t1, subID, t1, t1, subID, t2, t2)
+	if err != nil {
+		t.Fatalf("failed to insert tie-break and timestamp-only clear evidence: %v", err)
+	}
+
 	// Run migration 28 via actual migration runner
 	if err := runner.RunUpTo(ctx, 28); err != nil {
 		t.Fatalf("failed to apply migration 28: %v", err)
@@ -466,5 +485,71 @@ func TestSubscriptionRetention_MigrationBackfillClearRanking(t *testing.T) {
 	err = db.QueryRowContext(ctx, "SELECT user_kind_override FROM subscription_entry_overrides WHERE subscription_id = ? AND override_anchor = 'anchor-beta';", subID).Scan(&betaKind)
 	if err != nil || betaKind != "notice" {
 		t.Fatalf("active override anchor-beta was not backfilled: %v, kind=%s", err, betaKind)
+	}
+
+	// Beta is the only surviving intent: no ordinary history, tied clear or
+	// timestamp-only clear may introduce or resurrect another ledger record.
+	var ledgerCount int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM subscription_entry_overrides WHERE subscription_id = ?", subID).Scan(&ledgerCount); err != nil || ledgerCount != 1 {
+		t.Fatalf("expected only anchor-beta in backfilled ledger, count=%d err=%v", ledgerCount, err)
+	}
+}
+
+func TestSubscriptionRetention_MigrationBackfillSequentialScanPlan(t *testing.T) {
+	ctx := context.Background()
+	db, _ := setupEmptyTestDB(t)
+	runner := sqlite.NewMigrationRunner(db, migrations.FS)
+	if err := runner.RunUpTo(ctx, 28); err != nil {
+		t.Fatalf("failed to prepare migration 28 schema: %v", err)
+	}
+
+	// Explain the actual embedded INSERT, not a rewritten SELECT that could
+	// drift from the migration. The ledger must exist for EXPLAIN to resolve it.
+	migration, err := migrations.FS.ReadFile("000028_subscription_retention.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const insertStart = "INSERT OR IGNORE INTO subscription_entry_overrides ("
+	_, backfill, found := strings.Cut(string(migration), insertStart)
+	if !found {
+		t.Fatal("migration 28 backfill INSERT not found")
+	}
+	backfill, _, found = strings.Cut(backfill, ";")
+	if !found {
+		t.Fatal("migration 28 backfill INSERT terminator not found")
+	}
+
+	// Keep the problematic historical index present: dropping it would hide
+	// the regression rather than prove the migration chooses a table scan.
+	var indexCount int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_schema WHERE type='index' AND name='idx_sub_entries_source_key'`).Scan(&indexCount); err != nil || indexCount != 1 {
+		t.Fatalf("source-key index missing: count=%d err=%v", indexCount, err)
+	}
+	rows, err := db.QueryContext(ctx, "EXPLAIN QUERY PLAN "+insertStart+backfill)
+	if err != nil {
+		t.Fatalf("failed to explain migration 28 backfill: %v", err)
+	}
+	defer rows.Close()
+	sequentialScan := false
+	var plan []string
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan = append(plan, detail)
+		if strings.Contains(detail, "subscription_entries") {
+			if !strings.Contains(detail, "SCAN subscription_entries") || strings.Contains(detail, "USING") {
+				t.Fatalf("backfill must scan history sequentially, not via a non-covering index: %s", detail)
+			}
+			sequentialScan = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !sequentialScan {
+		t.Fatalf("backfill table scan missing from plan: %v", plan)
 	}
 }

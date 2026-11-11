@@ -56,7 +56,7 @@ FROM (
             PARTITION BY subscription_id, COALESCE(NULLIF(override_anchor, ''), NULLIF(source_key, ''), protocol || '|' || server || '|' || port || '|' || raw_name)
             ORDER BY COALESCE(NULLIF(override_at, ''), created_at) DESC, created_at DESC, rowid DESC
         ) AS rn
-    FROM subscription_entries
+    FROM subscription_entries NOT INDEXED
     WHERE (user_kind_override IS NOT NULL AND user_kind_override != '')
        OR (override_at IS NOT NULL AND override_at != '')
        OR (override_anchor != '')

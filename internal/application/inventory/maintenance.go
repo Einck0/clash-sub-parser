@@ -436,15 +436,13 @@ func (o *MaintenanceOrchestrator) executeRefresh(ctx context.Context, cfg Mainte
 			summary.TotalNodesValid += res.NodesValid
 			summary.TotalNotices += srcRes.NoticesCount
 
-			if res.NodesValid == 0 {
-				srcRes.Status = "failed"
-				srcRes.SafeError = "extracted 0 valid nodes from source"
+			// The reconciliation outcome describes what was actually applied;
+			// a zero filtered count is not itself a reconciliation failure.
+			srcRes.Status = string(res.Outcome)
+			if res.Outcome == domain.FetchOutcomeFailed {
+				srcRes.SafeError = res.RedactedError
 				summary.FailedSources++
-			} else if res.Outcome == domain.FetchOutcomePartial {
-				srcRes.Status = "partial"
-				summary.SuccessfulSources++
 			} else {
-				srcRes.Status = "success"
 				summary.SuccessfulSources++
 			}
 		}

@@ -2,6 +2,7 @@ package probe
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -880,7 +881,98 @@ func (t *testObsRepo) Create(_ context.Context, obs *domain.ProbeObservation) er
 	return nil
 }
 
-func TestPeriodicCoordinator_LargeInventoryPagination(t *testing.T) {
+type snapshotRefreshNodeRepo struct {
+	*memoryNodeRepo
+	listCalls     int
+	snapshotCalls int
+	filter        domain.NodeFilter
+	snapshotErr   error
+}
+
+func (r *snapshotRefreshNodeRepo) List(ctx context.Context, filter domain.NodeFilter) ([]domain.Node, int, error) {
+	r.listCalls++
+	return r.memoryNodeRepo.List(ctx, filter)
+}
+
+func (r *snapshotRefreshNodeRepo) ListAll(ctx context.Context, filter domain.NodeFilter) ([]domain.Node, error) {
+	r.snapshotCalls++
+	r.filter = filter
+	if r.snapshotErr != nil {
+		return nil, r.snapshotErr
+	}
+	nodes, err := r.memoryNodeRepo.ListAll(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	// Simulate a refresh after capture: the current inventory has lost its first
+	// node, but the coordinator must dispatch from the captured snapshot.
+	r.mu.Lock()
+	r.nodes = append([]domain.Node(nil), r.nodes[1:]...)
+	r.mu.Unlock()
+	return nodes, nil
+}
+
+func TestPeriodicCoordinator_CandidateSnapshotSurvivesRefresh(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	nodes := make([]domain.Node, 201)
+	for i := range nodes {
+		nodes[i] = domain.Node{LogicalID: fmt.Sprintf("node-%03d", i), Active: true}
+	}
+	repo := &snapshotRefreshNodeRepo{memoryNodeRepo: &memoryNodeRepo{nodes: nodes}}
+	schedules := newMemoryScheduleRepo(domain.ProbeSchedule{Generation: 1, Kinds: []domain.ProbeKind{domain.ProbeKindBaseline}})
+	runner := &mockRunner{}
+	coord := NewPeriodicCoordinator(schedules, repo, &memoryRuns{items: make(map[string]domain.ProbeRun)}, runner,
+		WithCoordinatorClock(func() time.Time { return now }), WithCoordinatorMaxTasks(50))
+
+	if err := coord.TriggerImmediate(context.Background()); err != nil {
+		t.Fatalf("TriggerImmediate: %v", err)
+	}
+	if repo.snapshotCalls != 1 || repo.listCalls != 0 {
+		t.Fatalf("inventory reads: snapshots=%d pages=%d", repo.snapshotCalls, repo.listCalls)
+	}
+	if repo.filter.Scope != domain.NodeScopeEnabledSubscriptions || !repo.filter.ActiveOnly || !repo.filter.ExcludeNotices || repo.filter.Pagination != (domain.Pagination{}) {
+		t.Fatalf("unexpected candidate filter: %+v", repo.filter)
+	}
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	seen := make(map[string]int)
+	for _, ids := range runner.executedNodeIDs {
+		for _, id := range ids {
+			seen[id]++
+		}
+	}
+	if len(seen) != len(nodes) {
+		t.Fatalf("dispatched %d distinct nodes, want %d", len(seen), len(nodes))
+	}
+	for _, node := range nodes {
+		if seen[node.LogicalID] != 1 {
+			t.Fatalf("node %s dispatched %d times", node.LogicalID, seen[node.LogicalID])
+		}
+	}
+}
+
+func TestPeriodicCoordinator_CandidateSnapshotErrorFailsBatch(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	readErr := errors.New("synthetic snapshot failure")
+	repo := &snapshotRefreshNodeRepo{memoryNodeRepo: &memoryNodeRepo{}, snapshotErr: readErr}
+	schedules := newMemoryScheduleRepo(domain.ProbeSchedule{Generation: 1})
+	runner := &mockRunner{}
+	coord := NewPeriodicCoordinator(schedules, repo, &memoryRuns{items: make(map[string]domain.ProbeRun)}, runner,
+		WithCoordinatorClock(func() time.Time { return now }))
+
+	if err := coord.TriggerImmediate(context.Background()); !errors.Is(err, readErr) {
+		t.Fatalf("TriggerImmediate error=%v, want snapshot error", err)
+	}
+	batches, _, err := schedules.ListBatches(context.Background(), 1, 10)
+	if err != nil || len(batches) != 1 || batches[0].State != domain.ProbeBatchStateFailed || batches[0].RedactedError != "failed to list active nodes" || batches[0].Owner != "" {
+		t.Fatalf("failed batch or lease state: %+v, error=%v", batches, err)
+	}
+	if len(runner.executedRuns) != 0 || repo.snapshotCalls != 1 || repo.listCalls != 0 {
+		t.Fatalf("unexpected dispatch or reads: runs=%d snapshots=%d pages=%d", len(runner.executedRuns), repo.snapshotCalls, repo.listCalls)
+	}
+}
+
+func TestPeriodicCoordinator_LargeInventory(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Second)
 	sched := domain.ProbeSchedule{
@@ -896,7 +988,7 @@ func TestPeriodicCoordinator_LargeInventoryPagination(t *testing.T) {
 	runRepo := &memoryRuns{items: make(map[string]domain.ProbeRun)}
 	runner := &mockRunner{}
 
-	// Setup 250 active nodes (which exceeds single page size of 100)
+	// Setup 250 active nodes (which exceeds the repository page size of 100)
 	nodes := make([]domain.Node, 250)
 	for i := 0; i < 250; i++ {
 		nodes[i] = domain.Node{

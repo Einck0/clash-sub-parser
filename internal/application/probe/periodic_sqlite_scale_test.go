@@ -15,26 +15,25 @@ import (
 	"clash-sub-parser/migrations"
 )
 
-// scalePageRecorder delegates COUNT and pagination to the real repository. It
-// records what TriggerWindow actually consumed, rather than an equivalent SQL.
-type scalePageRecorder struct {
+// scaleSnapshotRecorder records the inventory actually consumed by TriggerWindow.
+type scaleSnapshotRecorder struct {
 	domain.NodeRepository
-	db    *sql.DB
-	t     *testing.T
-	pages [][]string
+	db        *sql.DB
+	t         *testing.T
+	snapshots [][]string
 }
 
-func (r *scalePageRecorder) List(ctx context.Context, filter domain.NodeFilter) ([]domain.Node, int, error) {
+func (r *scaleSnapshotRecorder) ListAll(ctx context.Context, filter domain.NodeFilter) ([]domain.Node, error) {
 	before, started := r.db.Stats(), time.Now()
-	nodes, total, err := r.NodeRepository.List(ctx, filter)
+	nodes, err := r.NodeRepository.ListAll(ctx, filter)
 	after := r.db.Stats()
-	r.t.Logf("stage=coordinator_list_count_page page=%d elapsed=%s total=%d rows=%d pool_waits_shared=%d pool_wait_duration_shared=%s error=%v", filter.Pagination.Page, time.Since(started), total, len(nodes), after.WaitCount-before.WaitCount, after.WaitDuration-before.WaitDuration, err)
+	r.t.Logf("stage=coordinator_list_all elapsed=%s rows=%d pool_waits_shared=%d pool_wait_duration_shared=%s error=%v", time.Since(started), len(nodes), after.WaitCount-before.WaitCount, after.WaitDuration-before.WaitDuration, err)
 	ids := make([]string, len(nodes))
 	for i, node := range nodes {
 		ids[i] = node.LogicalID
 	}
-	r.pages = append(r.pages, ids)
-	return nodes, total, err
+	r.snapshots = append(r.snapshots, ids)
+	return nodes, err
 }
 
 // TestPeriodicCoordinator_SQLiteScale uses only synthetic data and a fake probe
@@ -81,7 +80,7 @@ func TestPeriodicCoordinator_SQLiteScale(t *testing.T) {
 	if err := schedules.Update(ctx, &sched); err != nil {
 		t.Fatal(err)
 	}
-	recorder := &scalePageRecorder{NodeRepository: nodes, db: db, t: t}
+	recorder := &scaleSnapshotRecorder{NodeRepository: nodes, db: db, t: t}
 	var dispatched []string
 	runner := &mockRunner{runFn: func(ctx context.Context, run *domain.ProbeRun, ids []string, kinds []domain.ProbeKind) error {
 		if len(kinds) != 1 || kinds[0] != domain.ProbeKindBaseline {
@@ -206,21 +205,13 @@ func TestPeriodicCoordinator_SQLiteScale(t *testing.T) {
 		t.FailNow()
 	}
 
-	// Coordinator pagination defaults to created_at DESC, then sorts selected
-	// candidates by logical ID before dispatch. Both boundaries are exact.
-	var inventory []string
-	if len(recorder.pages) != 10 {
-		t.Fatalf("coordinator pages=%d want=10", len(recorder.pages))
+	// One full inventory snapshot is sorted by logical ID before dispatch.
+	if len(recorder.snapshots) != 1 {
+		t.Fatalf("coordinator snapshots=%d want=1", len(recorder.snapshots))
 	}
-	for page, ids := range recorder.pages {
-		want := 100
-		if page == 9 {
-			want = 98
-		}
-		if len(ids) != want {
-			t.Fatalf("page=%d rows=%d want=%d", page+1, len(ids), want)
-		}
-		inventory = append(inventory, ids...)
+	inventory := recorder.snapshots[0]
+	if len(inventory) != 998 {
+		t.Fatalf("inventory=%d want=998", len(inventory))
 	}
 	if len(dispatched) != 998 {
 		t.Fatalf("dispatched=%d want=998", len(dispatched))

@@ -948,6 +948,42 @@ func TestCheckIPRisk_StrictScoringTable(t *testing.T) {
 			wantReason:    "contract_drift",
 		},
 
+		{
+			name:          "quoted_score_colon_garbage",
+			body:          "IP Fraud Risk API\n1\n2\n3\n\"score\": \"12\": \"garbage\",\n\"risk\": \"low\"\n6",
+			statusCode:    200,
+			wantVerdict:   domain.VerdictError,
+			wantRiskScore: "",
+			wantSummary:   "Score Unavailable",
+			wantReason:    "contract_drift",
+		},
+		{
+			name:          "unquoted_score_colon_garbage",
+			body:          "IP Fraud Risk API\n1\n2\n3\n\"score\": 12: garbage,\n\"risk\": \"low\"\n6",
+			statusCode:    200,
+			wantVerdict:   domain.VerdictError,
+			wantRiskScore: "",
+			wantSummary:   "Score Unavailable",
+			wantReason:    "contract_drift",
+		},
+		{
+			name:          "duplicated_score_delimiter",
+			body:          "IP Fraud Risk API\n1\n2\n3\n\"score\": \"12\",,\n\"risk\": \"low\"\n6",
+			statusCode:    200,
+			wantVerdict:   domain.VerdictError,
+			wantRiskScore: "",
+			wantSummary:   "Score Unavailable",
+			wantReason:    "contract_drift",
+		},
+		{
+			name:          "malformed_score_quoting",
+			body:          "IP Fraud Risk API\n1\n2\n3\n\"score\": \"\"12\"\",\n\"risk\": \"low\"\n6",
+			statusCode:    200,
+			wantVerdict:   domain.VerdictError,
+			wantRiskScore: "",
+			wantSummary:   "Score Unavailable",
+			wantReason:    "contract_drift",
+		},
 		// HTTP status variants
 		{
 			name:          "http_403_access_restricted",

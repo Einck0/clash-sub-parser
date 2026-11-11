@@ -251,6 +251,15 @@ func TestMaintenanceOrchestrator_Refresh_Hermetic(t *testing.T) {
 	if report.Refresh.TotalNodesValid != 3 {
 		t.Errorf("expected 3 total valid nodes, got %d", report.Refresh.TotalNodesValid)
 	}
+	statuses := make(map[string]string)
+	for _, source := range report.Refresh.Sources {
+		statuses[source.SubscriptionID] = source.Status
+	}
+	for i, want := range []string{"success", "partial", "failed", "failed"} {
+		if statuses[enabledIDs[i]] != want {
+			t.Errorf("source %d status = %q, want %q", i, statuses[enabledIDs[i]], want)
+		}
+	}
 
 	// Verify report file existence and permissions
 	if fi, err := os.Stat(reportDir); err != nil || fi.Mode().Perm() != 0700 {
@@ -268,6 +277,63 @@ func TestMaintenanceOrchestrator_Refresh_Hermetic(t *testing.T) {
 	reportStr := string(reportBytes)
 	if strings.Contains(reportStr, "tok1") || strings.Contains(reportStr, "tok2") {
 		t.Errorf("report file leaked raw token parameters")
+	}
+}
+
+func TestMaintenanceRefreshMatchesAppliedOutcomeWithZeroFilteredNodes(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		extra       string
+		wantOutcome domain.FetchOutcome
+		wantParsed  int
+	}{
+		{"success", "", domain.FetchOutcomeSuccess, 1},
+		{"partial", "  - invalid\n", domain.FetchOutcomePartial, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			db := setupIsolatedWorkflowDB(t)
+			defer db.Close()
+			subs := sqlite.NewSubscriptionRepository(db)
+			id := domain.MustNewUUIDv7()
+			url := "https://maintenance-filter.invalid/feed"
+			sub := createTestSub(t, subs, id, "Filtered", url, true)
+			sub.Config.FilterRules = []domain.FilterRule{{Type: "include", Pattern: "not-matched"}}
+			if err := subs.Update(ctx, sub); err != nil {
+				t.Fatal(err)
+			}
+			fetcher := newMockWorkflowFetcher()
+			fetcher.setResponse(url, &fetch.Response{
+				StatusCode:    200,
+				Body:          []byte("proxies:\n  - {name: Valid, type: ss, server: 192.0.2.33, port: 8388, cipher: aes-128-gcm, password: test}\n" + tc.extra),
+				ContentDigest: "filtered",
+			})
+			orchestrator, _, _, _ := setupTestMaintenanceOrchestrator(t, db, nil, fetcher)
+			report, err := orchestrator.Run(ctx, inventory.MaintenanceConfig{
+				TargetDBPath: ":memory:", Operation: inventory.OperationRefresh, ReportDir: t.TempDir(),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if report.Refresh == nil || len(report.Refresh.Sources) != 1 {
+				t.Fatalf("unexpected refresh summary: %+v", report.Refresh)
+			}
+			source := report.Refresh.Sources[0]
+			var appliedFetch, attemptedFetch, storedOutcome string
+			if err := db.QueryRowContext(ctx, `SELECT applied_fetch_id, last_attempt_fetch_id, last_attempt_status
+				FROM subscription_current_state WHERE subscription_id = ?`, id).Scan(&appliedFetch, &attemptedFetch, &storedOutcome); err != nil {
+				t.Fatal(err)
+			}
+			if appliedFetch == "" || appliedFetch != attemptedFetch || storedOutcome != string(tc.wantOutcome) {
+				t.Fatalf("unexpected applied state: applied=%q attempted=%q outcome=%q", appliedFetch, attemptedFetch, storedOutcome)
+			}
+			if source.Status != storedOutcome || source.NodesParsed != tc.wantParsed || source.NodesValid != 0 || source.SafeError != "" {
+				t.Fatalf("report disagrees with applied outcome: %+v; stored=%q", source, storedOutcome)
+			}
+			if report.Status != "PASS" || report.Refresh.SuccessfulSources != 1 || report.Refresh.FailedSources != 0 {
+				t.Fatalf("unexpected aggregate status: %+v", report)
+			}
+		})
 	}
 }
 

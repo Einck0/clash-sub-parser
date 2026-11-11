@@ -642,36 +642,25 @@ func (c *PeriodicCoordinator) executeBatch(parentCtx context.Context, batch *dom
 		}
 	}
 
-	// 4. Query active inventory with pagination to retrieve full inventory
-	var allActiveNodes []domain.Node
-	fetchPage := 1
-	const fetchPageSize = 100
-	for {
-		chunk, total, err := c.nodes.List(batchCtx, domain.NodeFilter{
-			Scope:          domain.NodeScopeEnabledSubscriptions,
-			ActiveOnly:     true,
-			ExcludeNotices: true,
-			Pagination:     domain.Pagination{Page: fetchPage, PageSize: fetchPageSize},
-		})
-		if err != nil {
-			select {
-			case <-leaseLost:
-				return domain.NewConflictError("lease_lost", "batch lease lost to another instance")
-			default:
-			}
-			batch.RedactedError = "failed to list active nodes"
-			_ = batch.TransitionTo(domain.ProbeBatchStateFailed)
-			if c.schedules != nil {
-				_ = c.schedules.UpdateBatch(context.Background(), batch)
-				_ = c.schedules.ReleaseLease(context.Background(), batch.ID, c.ownerID)
-			}
-			return err
+	// 4. Read candidates in one snapshot so concurrent refreshes cannot shift page offsets.
+	allActiveNodes, err := c.nodes.ListAll(batchCtx, domain.NodeFilter{
+		Scope:          domain.NodeScopeEnabledSubscriptions,
+		ActiveOnly:     true,
+		ExcludeNotices: true,
+	})
+	if err != nil {
+		select {
+		case <-leaseLost:
+			return domain.NewConflictError("lease_lost", "batch lease lost to another instance")
+		default:
 		}
-		allActiveNodes = append(allActiveNodes, chunk...)
-		if len(allActiveNodes) >= total || len(chunk) == 0 {
-			break
+		batch.RedactedError = "failed to list active nodes"
+		_ = batch.TransitionTo(domain.ProbeBatchStateFailed)
+		if c.schedules != nil {
+			_ = c.schedules.UpdateBatch(context.Background(), batch)
+			_ = c.schedules.ReleaseLease(context.Background(), batch.ID, c.ownerID)
 		}
-		fetchPage++
+		return err
 	}
 
 	// Deterministic ordering by LogicalID

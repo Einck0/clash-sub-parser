@@ -3,6 +3,7 @@ package platform
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -189,15 +190,15 @@ func CheckIPRisk(ctx context.Context, httpClient *http.Client, ip string) domain
 	}
 
 	scoreLine := bytes.TrimSpace(lines[4])
-	scoreParts := bytes.Split(scoreLine, []byte(":"))
-	if len(scoreParts) < 2 {
+	separatorIndex := bytes.IndexByte(scoreLine, ':')
+	if separatorIndex < 0 {
 		cap.Verdict = domain.VerdictError
 		cap.Reason = "contract_drift"
 		cap.Summary = "Score Unavailable"
 		return cap
 	}
 
-	key := strings.ToLower(strings.Trim(string(bytes.TrimSpace(scoreParts[0])), `"`))
+	key := strings.ToLower(strings.Trim(string(bytes.TrimSpace(scoreLine[:separatorIndex])), `"`))
 	if key != "score" {
 		cap.Verdict = domain.VerdictError
 		cap.Reason = "contract_drift"
@@ -205,8 +206,21 @@ func CheckIPRisk(ctx context.Context, httpClient *http.Client, ip string) domain
 		return cap
 	}
 
-	rawScore := strings.Trim(string(bytes.TrimSpace(scoreParts[1])), `",`)
-	rawScore = strings.TrimSpace(rawScore)
+	rawValue := bytes.TrimSpace(scoreLine[separatorIndex+1:])
+	if len(rawValue) > 0 && rawValue[len(rawValue)-1] == ',' {
+		rawValue = bytes.TrimSpace(rawValue[:len(rawValue)-1])
+	}
+
+	rawScore := string(rawValue)
+	if len(rawValue) > 0 && rawValue[0] == '"' {
+		if err := json.Unmarshal(rawValue, &rawScore); err != nil {
+			cap.Verdict = domain.VerdictError
+			cap.Reason = "contract_drift"
+			cap.Summary = "Score Unavailable"
+			return cap
+		}
+	}
+
 	scoreInt, ok := ParseScoreInt(rawScore)
 	if !ok {
 		cap.Verdict = domain.VerdictError

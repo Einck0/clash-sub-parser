@@ -241,8 +241,8 @@ func TestPeriodicCoordinator_SQLiteScale(t *testing.T) {
 	if err != nil || updated.NextDueAt == nil || !updated.NextDueAt.Equal(now.Add(time.Minute)) {
 		t.Fatalf("schedule did not advance one sweep: %+v error=%v", updated, err)
 	}
-	if err := coord.TriggerWindow(); err != nil || len(dispatched) != 998 || len(recorder.pages) != 10 {
-		t.Fatalf("not-due window dispatched again: error=%v nodes=%d pages=%d", err, len(dispatched), len(recorder.pages))
+	if err := coord.TriggerWindow(); err != nil || len(dispatched) != 998 || len(recorder.snapshots) != 1 {
+		t.Fatalf("not-due window dispatched again: error=%v nodes=%d snapshots=%d", err, len(dispatched), len(recorder.snapshots))
 	}
 
 	// Cancellation while queued must release the waiter without poisoning the

@@ -2306,24 +2306,46 @@ func (s *Service) GetNodeSourceHistory(ctx context.Context, logicalID string) (*
 		}
 	}
 
-	// 4. Map history items and evaluate source_deleted
-	existingSubs := make(map[string]bool)
-	if s.subscriptions != nil {
-		const pageSize = 100
-		for page := 1; ; page++ {
-			subs, total, subErr := s.subscriptions.List(ctx, domain.SubscriptionFilter{
-				Pagination: domain.Pagination{Page: page, PageSize: pageSize},
-			})
-			if subErr != nil {
-				return nil, fmt.Errorf("failed to list subscriptions for node source history: %w", subErr)
-			}
-			for _, sub := range subs {
-				existingSubs[sub.ID] = true
-			}
-			if page*pageSize >= total || len(subs) == 0 {
-				break
-			}
+	// 4. Resolve all referenced subscriptions in one SQLite statement. A single
+	// statement observes one snapshot even when subscriptions change concurrently.
+	subIDs := make(map[string]struct{}, len(historyRecords))
+	for _, rec := range historyRecords {
+		if rec.SubscriptionID != nil && *rec.SubscriptionID != "" {
+			subIDs[*rec.SubscriptionID] = struct{}{}
 		}
+	}
+	existingSubs := make(map[string]bool, len(subIDs))
+	if len(subIDs) > 0 {
+		if s.db == nil {
+			return nil, fmt.Errorf("failed to query subscriptions for node source history: database unavailable")
+		}
+		ids := make([]string, 0, len(subIDs))
+		for id := range subIDs {
+			ids = append(ids, id)
+		}
+		idsJSON, err := json.Marshal(ids)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode subscriptions for node source history: %w", err)
+		}
+		rows, err := s.db.QueryContext(ctx, `
+			SELECT s.id FROM subscriptions s
+			WHERE s.id IN (SELECT value FROM json_each(?));`, string(idsJSON))
+		if err != nil {
+			return nil, fmt.Errorf("failed to query subscriptions for node source history: %w", err)
+		}
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("failed to scan subscription for node source history: %w", err)
+			}
+			existingSubs[id] = true
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("failed to iterate subscriptions for node source history: %w", err)
+		}
+		rows.Close()
 	}
 
 	historyViews := make([]NodeSourceHistoryItemView, 0, len(historyRecords))

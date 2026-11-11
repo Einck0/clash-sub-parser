@@ -103,13 +103,33 @@ func SnapshotRecoveryVersions(ctx context.Context, db *sql.DB, nodeID, consumerI
 		return nil, nil, err
 	}
 	defer tx.Rollback()
-	// Reserve the write transaction before discovering revisions; a GC writer
-	// cannot remove a discovered version between discovery and acquisition.
-	if !dryRun {
-		if _, err := tx.ExecContext(ctx, `UPDATE subscription_storage_readiness SET consumers_closed=consumers_closed WHERE singleton=1`); err != nil {
-			return nil, nil, err
-		}
+	if err := ReserveRecoverySnapshotTx(ctx, tx, dryRun); err != nil {
+		return nil, nil, err
 	}
+	snapshots, leases, err := SnapshotRecoveryVersionsTx(ctx, tx, nodeID, consumerID, dryRun)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, nil, err
+	}
+	return snapshots, leases, nil
+}
+
+// ReserveRecoverySnapshotTx must precede the first read of the current node.
+// A writer cannot advance its head or prune versions until capture commits.
+// Dry-run takes no write lock but all reads still share one read transaction.
+func ReserveRecoverySnapshotTx(ctx context.Context, tx *sql.Tx, dryRun bool) error {
+	if !dryRun {
+		_, err := tx.ExecContext(ctx, `UPDATE subscription_storage_readiness SET consumers_closed=consumers_closed WHERE singleton=1`)
+		return err
+	}
+	return nil
+}
+
+// SnapshotRecoveryVersionsTx captures versions in the caller's already-reserved
+// transaction. The caller must commit before using the snapshots or leases.
+func SnapshotRecoveryVersionsTx(ctx context.Context, tx *sql.Tx, nodeID, consumerID string, dryRun bool) ([]domain.LeasedConnectionVersion, []domain.ConnectionVersionLease, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT connection_revision,effective_config_json FROM node_connection_versions WHERE node_logical_id=? ORDER BY connection_revision`, nodeID)
 	if err != nil {
 		return nil, nil, err
@@ -141,9 +161,6 @@ func SnapshotRecoveryVersions(ctx context.Context, db *sql.DB, nodeID, consumerI
 			snapshots[i] = *captured
 			leases = append(leases, lease)
 		}
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, nil, err
 	}
 	return snapshots, leases, nil
 }

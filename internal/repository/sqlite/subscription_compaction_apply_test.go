@@ -46,7 +46,7 @@ func preparedCompactionScratch(t *testing.T) (*sql.DB, *domain.SubscriptionStora
 func TestOfflineCompactionPreparedScratchSingleGeneration(t *testing.T) {
 	ctx := context.Background()
 	db, baseline, decisions := preparedCompactionScratch(t)
-	result, err := sqlite.FinalizeSubscriptionCompaction(ctx, db, baseline, decisions)
+	result, err := sqlite.FinalizeSubscriptionCompaction(ctx, db, baseline, decisions, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestOfflineCompactionPreparedScratchSingleGeneration(t *testing.T) {
 		t.Fatal("protected assets changed")
 	}
 	verification, err := sqlite.VerifySubscriptionCompaction(ctx, db, baseline)
-	if err != nil || !verification.Verified || verification.ConsumerClosureSealed {
+	if err != nil || !verification.Verified || !verification.ConsumerClosureSealed {
 		t.Fatalf("verification=%+v err=%v", verification, err)
 	}
 	var applied, attempt, status string
@@ -97,7 +97,7 @@ func TestOfflineCompactionMembershipRevalidatedAfterReconciliation(t *testing.T)
 			if err != nil || !baseline.ApplySupported {
 				t.Fatalf("expected valid pre-reconciliation evidence: plan=%+v err=%v", baseline, err)
 			}
-			result, err := sqlite.FinalizeSubscriptionCompaction(ctx, db, baseline, decisions)
+			result, err := sqlite.FinalizeSubscriptionCompaction(ctx, db, baseline, decisions, true)
 			if branch == "evidence removed during reconciliation" {
 				if err == nil || !strings.Contains(err.Error(), "unreconciled source membership") {
 					t.Fatalf("post-reconciliation missing evidence was not rejected by membership check: %v", err)
@@ -199,7 +199,7 @@ func TestOfflineCompactionRejectsUnprovedAndChangedInputsWithoutMutation(t *test
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := sqlite.FinalizeSubscriptionCompaction(ctx, db, baseline, decisions); err == nil {
+			if _, err := sqlite.FinalizeSubscriptionCompaction(ctx, db, baseline, decisions, true); err == nil {
 				t.Fatal("unsafe decision reported success")
 			}
 			after, err := sqlite.InspectSubscriptionCompaction(context.Background(), db)

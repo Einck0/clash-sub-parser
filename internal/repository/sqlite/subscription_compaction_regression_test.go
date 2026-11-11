@@ -2,6 +2,7 @@ package sqlite_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"clash-sub-parser/internal/repository/sqlite"
@@ -46,7 +47,7 @@ func TestOfflineCompactionLatestAttemptChronologicalOrder(t *testing.T) {
 			if len(baseline.Subscriptions) != 1 || baseline.Subscriptions[0].LastAttemptID != "failed-fetch" || baseline.Subscriptions[0].LastAttemptStatus != "failed" {
 				t.Fatalf("plan lost latest attempt: %+v", baseline.Subscriptions)
 			}
-			if _, err := sqlite.FinalizeSubscriptionCompaction(ctx, db, baseline, decisions); err != nil {
+			if _, err := sqlite.FinalizeSubscriptionCompaction(ctx, db, baseline, decisions, true); err != nil {
 				t.Fatal(err)
 			}
 			var applied, attempt, status, timestamp string
@@ -70,7 +71,7 @@ func TestVerifyCompactionUsesOriginalLastAttemptNotOnlySurvivors(t *testing.T) {
 		t.Run(branch, func(t *testing.T) {
 			ctx := context.Background()
 			db, baseline, decisions := preparedCompactionScratch(t)
-			if _, err := sqlite.FinalizeSubscriptionCompaction(ctx, db, baseline, decisions); err != nil {
+			if _, err := sqlite.FinalizeSubscriptionCompaction(ctx, db, baseline, decisions, true); err != nil {
 				t.Fatal(err)
 			}
 			mutation := map[string]string{
@@ -92,13 +93,13 @@ func TestVerifyCompactionUsesOriginalLastAttemptNotOnlySurvivors(t *testing.T) {
 	}
 }
 
-func TestOfflineCompactionReclaimsUntouchedHistoryAndPreservesOrigin(t *testing.T) {
-	for _, branch := range []string{"reclaim", "unknown expired lease", "delete failure"} {
+func TestOfflineCompactionHistoricalVersionsClosureAndRollback(t *testing.T) {
+	for _, branch := range []string{"unconfirmed closure", "closed", "unknown expired lease", "delete trigger"} {
 		t.Run(branch, func(t *testing.T) {
 			ctx := context.Background()
 			db, _, decisions := preparedCompactionScratch(t)
-			// Revision zero is valid historical data; current node revision is
-			// still 1. This node will never receive a runtime update in this test.
+			// Revision zero must remain when closure is unconfirmed and can be
+			// reclaimed only after explicit confirmation, with no active lease.
 			if _, err := db.ExecContext(ctx, `INSERT INTO node_connection_versions(node_logical_id,connection_revision,effective_config_json,config_fingerprint,source_entry_id,created_at)
 				VALUES('zero-node',0,'{"server":"192.0.2.99","port":8388,"credentials":{}}','synthetic-old','old-entry','2026-11-10T00:00:00Z')`); err != nil {
 				t.Fatal(err)
@@ -108,7 +109,7 @@ func TestOfflineCompactionReclaimsUntouchedHistoryAndPreservesOrigin(t *testing.
 					t.Fatal(err)
 				}
 			}
-			if branch == "delete failure" {
+			if branch == "delete trigger" {
 				if _, err := db.ExecContext(ctx, `CREATE TRIGGER fail_offline_version_delete BEFORE DELETE ON node_connection_versions BEGIN SELECT RAISE(ABORT,'synthetic failure'); END`); err != nil {
 					t.Fatal(err)
 				}
@@ -117,39 +118,56 @@ func TestOfflineCompactionReclaimsUntouchedHistoryAndPreservesOrigin(t *testing.
 			if err != nil {
 				t.Fatal(err)
 			}
-			result, err := sqlite.FinalizeSubscriptionCompaction(ctx, db, baseline, decisions)
-			if branch != "reclaim" {
-				if err == nil {
-					t.Fatal("unresolved lease or failed deletion must refuse conversion")
+			_, err = sqlite.FinalizeSubscriptionCompaction(ctx, db, baseline, decisions, branch != "unconfirmed closure")
+			if branch == "closed" {
+				if err != nil {
+					t.Fatal(err)
 				}
-				after, inspectErr := sqlite.InspectSubscriptionCompaction(ctx, db)
-				if inspectErr != nil || after.SnapshotDigest != baseline.SnapshotDigest {
-					t.Fatalf("refused conversion changed scratch/lease: %v", inspectErr)
+				var count int
+				if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM node_connection_versions WHERE node_logical_id='zero-node' AND connection_revision=0`).Scan(&count); err != nil || count != 0 {
+					t.Fatalf("confirmed closure did not reclaim old version: count=%d err=%v", count, err)
+				}
+				verified, err := sqlite.VerifySubscriptionCompaction(ctx, db, baseline)
+				if err != nil || !verified.Verified || !verified.ConsumerClosureSealed {
+					t.Fatalf("confirmed closure verification=%+v err=%v", verified, err)
 				}
 				return
 			}
-			if err != nil {
-				t.Fatal(err)
+			if err == nil {
+				t.Fatal("unsafe conversion reported success")
 			}
-			if result.Counts["node_connection_versions"] != 1 || result.Counts["node_connection_heads"] != 1 || result.Counts["nodes"] != 1 {
-				t.Fatalf("untouched full history remains: %+v", result.Counts)
+			after, inspectErr := sqlite.InspectSubscriptionCompaction(ctx, db)
+			if inspectErr != nil || after.SnapshotDigest != baseline.SnapshotDigest {
+				t.Fatalf("refused conversion changed scratch/lease: %v", inspectErr)
 			}
-			var origin, digest string
-			if err := db.QueryRowContext(ctx, `SELECT p.origin_payload_id,e.content_digest FROM node_connection_provenance p JOIN subscription_payload_evidence e ON e.payload_id=p.origin_payload_id WHERE p.node_logical_id='zero-node' AND p.connection_revision=0`).Scan(&origin, &digest); err != nil || origin != "old" || digest != "sha256:digest" {
-				t.Fatalf("retired version origin lost: %s %s %v", origin, digest, err)
-			}
-			verified, err := sqlite.VerifySubscriptionCompaction(ctx, db, baseline)
-			if err != nil || !verified.Verified {
-				t.Fatalf("verification=%+v err=%v", verified, err)
+			var config, entry string
+			if err := db.QueryRowContext(ctx, `SELECT effective_config_json,source_entry_id FROM node_connection_versions WHERE node_logical_id='zero-node' AND connection_revision=0`).Scan(&config, &entry); err != nil || config != `{"server":"192.0.2.99","port":8388,"credentials":{}}` || entry != "old-entry" {
+				t.Fatalf("refused conversion lost historical version: config=%q entry=%q err=%v", config, entry, err)
 			}
 		})
+	}
+}
+
+func TestOfflineCompactionPropagatesLeaseQueryError(t *testing.T) {
+	ctx := context.Background()
+	db, baseline, decisions := preparedCompactionScratch(t)
+	if _, err := db.ExecContext(ctx, `DROP TABLE node_connection_version_leases`); err != nil {
+		t.Fatal(err)
+	}
+	_, err := sqlite.FinalizeSubscriptionCompaction(ctx, db, baseline, decisions, true)
+	if err == nil || !strings.Contains(err.Error(), "node_connection_version_leases") {
+		t.Fatalf("lease SQL error was hidden: %v", err)
+	}
+	var payloads int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM subscription_payloads`).Scan(&payloads); err != nil || payloads != 3 {
+		t.Fatalf("failed SQL check changed scratch: payloads=%d err=%v", payloads, err)
 	}
 }
 
 func TestVerifyCompactionRejectsUnleasedHistoryButAllowsLease(t *testing.T) {
 	ctx := context.Background()
 	db, baseline, decisions := preparedCompactionScratch(t)
-	if _, err := sqlite.FinalizeSubscriptionCompaction(ctx, db, baseline, decisions); err != nil {
+	if _, err := sqlite.FinalizeSubscriptionCompaction(ctx, db, baseline, decisions, true); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(ctx, `INSERT INTO node_connection_versions(node_logical_id,connection_revision,effective_config_json,config_fingerprint,created_at) VALUES('zero-node',0,'{}','synthetic-old','2026-11-10T00:00:00Z')`); err != nil {

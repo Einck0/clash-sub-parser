@@ -193,6 +193,134 @@ func TestStorageStartupFreshReadyAndForgedIndexRejected(t *testing.T) {
 	}
 }
 
+func TestStorageStartupUnclosedCandidatePreservesHistory(t *testing.T) {
+	ctx := context.Background()
+	cfg := sqlite.DefaultConfig(filepath.Join(t.TempDir(), "candidate.db"))
+	cfg.WALMode = false
+	db, err := sqlite.OpenAndMigrate(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var closed int
+	if err := db.QueryRowContext(ctx, `SELECT consumers_closed FROM subscription_storage_readiness WHERE singleton=1`).Scan(&closed); err != nil || closed != 1 {
+		t.Fatalf("fresh storage closure=%d err=%v", closed, err)
+	}
+	baseline, err := sqlite.InspectSubscriptionCompaction(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE subscription_storage_readiness SET consumers_closed=0 WHERE singleton=1`); err != nil {
+		t.Fatal(err)
+	}
+	report, err := sqlite.VerifySubscriptionCompaction(ctx, db, baseline)
+	if err != nil || report.Verified || report.ConsumerClosureSealed {
+		t.Fatalf("unclosed candidate verified: %+v err=%v", report, err)
+	}
+	requireCompactionFailure(t, report.Verified, report.Failures, "version_consumers_not_closed")
+	repo := sqlite.NewNodeRepository(db)
+	node := domain.Node{LogicalID: "reopened-node", Protocol: domain.ProtocolSS, DisplayName: "Synthetic", Server: "192.0.2.1", Port: 8388, Active: true}
+	if err := repo.UpsertBatch(ctx, []domain.Node{node}); err != nil {
+		t.Fatal(err)
+	}
+	node.Server = "192.0.2.2"
+	if err := repo.UpsertBatch(ctx, []domain.Node{node}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err = sqlite.OpenAndMigrate(ctx, cfg)
+	if err != nil {
+		t.Fatalf("sealed unclosed database must start: %v", err)
+	}
+	defer db.Close()
+	if err := db.QueryRowContext(ctx, `SELECT consumers_closed FROM subscription_storage_readiness WHERE singleton=1`).Scan(&closed); err != nil || closed != 0 {
+		t.Fatalf("startup changed closure: %d %v", closed, err)
+	}
+	repo = sqlite.NewNodeRepository(db)
+	node.Server = "192.0.2.3"
+	if err := repo.UpsertBatch(ctx, []domain.Node{node}); err != nil {
+		t.Fatalf("refresh with unclosed consumers: %v", err)
+	}
+	versions := sqlite.NewNodeConnectionVersionRepository(db)
+	for revision := int64(1); revision <= 3; revision++ {
+		if _, err := versions.GetByRevision(ctx, node.LogicalID, revision); err != nil {
+			t.Fatalf("unclosed GC removed revision %d: %v", revision, err)
+		}
+	}
+	if err := sqlite.WithTx(ctx, db, func(ctx context.Context, tx *sql.Tx) error {
+		return sqlite.PruneConnectionVersionsTx(ctx, tx, node.LogicalID)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := versions.GetByRevision(ctx, node.LogicalID, 1); err != nil {
+		t.Fatalf("explicit GC removed unclosed history: %v", err)
+	}
+	// Fixture-only closure: actual operation requires an offline drain and an
+	// independently validated consumer contract, not this SQL assignment.
+	sealTestVersionConsumers(t, db)
+	now := time.Now().UTC()
+	lease := domain.ConnectionVersionLease{ConsumerKind: "fixture", ConsumerID: "fixture", NodeID: node.LogicalID, Revision: 1, Owner: "fixture", FencingToken: "fixture", HeartbeatAt: now, ExpiresAt: now.Add(time.Hour)}
+	if err := sqlite.WithTx(ctx, db, func(ctx context.Context, tx *sql.Tx) error {
+		_, err := sqlite.AcquireConnectionVersionLeaseTx(ctx, tx, lease)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlite.WithTx(ctx, db, func(ctx context.Context, tx *sql.Tx) error {
+		return sqlite.PruneConnectionVersionsTx(ctx, tx, node.LogicalID)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := versions.GetByRevision(ctx, node.LogicalID, 2); err == nil {
+		t.Fatal("closed GC retained unleased revision")
+	}
+	for _, revision := range []int64{1, 3} {
+		if _, err := versions.GetByRevision(ctx, node.LogicalID, revision); err != nil {
+			t.Fatalf("closed GC lost leased revision or head %d: %v", revision, err)
+		}
+	}
+	if err := sqlite.WithTx(ctx, db, func(ctx context.Context, tx *sql.Tx) error {
+		return sqlite.ReleaseConnectionVersionLeaseTx(ctx, tx, lease)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := versions.GetByRevision(ctx, node.LogicalID, 1); err == nil {
+		t.Fatal("released old version not reclaimed")
+	}
+}
+
+func TestStorageStartupRejectsInvalidClosure(t *testing.T) {
+	for _, branch := range []string{"invalid value", "missing column", "unsealed"} {
+		t.Run(branch, func(t *testing.T) {
+			ctx := context.Background()
+			cfg := sqlite.DefaultConfig(filepath.Join(t.TempDir(), "candidate.db"))
+			cfg.WALMode = false
+			db, err := sqlite.OpenAndMigrate(ctx, cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mutation := map[string]string{
+				"invalid value":  `PRAGMA ignore_check_constraints=ON; UPDATE subscription_storage_readiness SET consumers_closed=2`,
+				"missing column": `ALTER TABLE subscription_storage_readiness RENAME COLUMN consumers_closed TO broken_closure`,
+				"unsealed":       `DELETE FROM subscription_storage_readiness`,
+			}[branch]
+			if _, err := db.ExecContext(ctx, mutation); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if opened, err := sqlite.OpenAndMigrate(ctx, cfg); err == nil {
+				opened.Close()
+				t.Fatal("invalid closure or unsealed storage started")
+			} else if !strings.Contains(err.Error(), "maintenance_required") {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
 func TestStoragePreparationDoesNotAutomaticallySealLegacy(t *testing.T) {
 	ctx := context.Background()
 	db, _ := setupEmptyTestDB(t)
@@ -237,8 +365,8 @@ func TestVerifySubscriptionCompactionDetectsProtectedTamperingAndMissingHead(t *
 		t.Fatal(err)
 	}
 	okReport, err := sqlite.VerifySubscriptionCompaction(ctx, db, plan)
-	if err != nil || !okReport.Verified || okReport.ConsumerClosureSealed {
-		t.Fatalf("expected verified candidate with unsealed consumer closure: %+v err=%v", okReport, err)
+	if err != nil || !okReport.Verified || !okReport.ConsumerClosureSealed {
+		t.Fatalf("expected verified candidate with sealed consumer closure: %+v err=%v", okReport, err)
 	}
 	if _, err := db.ExecContext(ctx, `UPDATE nodes SET display_name='Changed' WHERE logical_id='verify-node'`); err != nil {
 		t.Fatal(err)
@@ -277,7 +405,7 @@ func TestVerifyCompactionRejectsInconsistentCurrentState(t *testing.T) {
 				t.Fatal(err)
 			}
 			valid, err := sqlite.VerifySubscriptionCompaction(ctx, db, plan)
-			if err != nil || !valid.Verified || valid.ConsumerClosureSealed {
+			if err != nil || !valid.Verified || !valid.ConsumerClosureSealed {
 				t.Fatalf("valid candidate: %+v %v", valid, err)
 			}
 			if tc.name == "source generation" {

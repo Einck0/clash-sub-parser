@@ -29,9 +29,13 @@ type SubscriptionCompactionDecision struct {
 // opening it. It must never be called by startup or against a live database.
 //
 // Legacy reconciliation is bound to exact planned source/history projections.
-// It does not migrate schema, VACUUM, switch files or approve
-// deployment. The returned inventory is not a consumer-closure safety seal.
-func FinalizeSubscriptionCompaction(ctx context.Context, db *sql.DB, baseline *domain.SubscriptionStoragePlan, decisions []SubscriptionCompactionDecision) (*domain.SubscriptionStoragePlan, error) {
+// It does not migrate schema, VACUUM, switch files or approve deployment.
+// consumersClosed is the caller's explicit assertion that the independently
+// validated consumer contract applies to this cut; drain alone is insufficient.
+func FinalizeSubscriptionCompaction(ctx context.Context, db *sql.DB, baseline *domain.SubscriptionStoragePlan, decisions []SubscriptionCompactionDecision, consumersClosed bool) (*domain.SubscriptionStoragePlan, error) {
+	if !consumersClosed {
+		return nil, fmt.Errorf("maintenance_required: version consumer closure not confirmed")
+	}
 	if db == nil || baseline == nil || baseline.Version != 1 || baseline.SchemaVersion != 30 || baseline.SnapshotDigest == "" || !baseline.ApplySupported {
 		return nil, fmt.Errorf("maintenance_required: prepared scratch baseline required")
 	}
@@ -43,13 +47,22 @@ func FinalizeSubscriptionCompaction(ctx context.Context, db *sql.DB, baseline *d
 			return err
 		}
 		var fk, seals, leases int
-		if err := tx.QueryRowContext(ctx, `PRAGMA foreign_keys`).Scan(&fk); err != nil || fk != 1 {
+		if err := tx.QueryRowContext(ctx, `PRAGMA foreign_keys`).Scan(&fk); err != nil {
+			return fmt.Errorf("check compaction foreign keys: %w", err)
+		}
+		if fk != 1 {
 			return fmt.Errorf("maintenance_required: foreign key enforcement required")
 		}
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM subscription_storage_readiness`).Scan(&seals); err != nil || seals != 0 {
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM subscription_storage_readiness`).Scan(&seals); err != nil {
+			return fmt.Errorf("check compaction storage readiness: %w", err)
+		}
+		if seals != 0 {
 			return fmt.Errorf("maintenance_required: scratch must be prepared and unsealed")
 		}
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM node_connection_version_leases`).Scan(&leases); err != nil || leases != 0 {
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM node_connection_version_leases`).Scan(&leases); err != nil {
+			return fmt.Errorf("check compaction version leases: %w", err)
+		}
+		if leases != 0 {
 			return fmt.Errorf("maintenance_required: unresolved version consumers")
 		}
 		before, err := inspectSubscriptionCompactionTx(ctx, tx)
@@ -158,14 +171,16 @@ func FinalizeSubscriptionCompaction(ctx context.Context, db *sql.DB, baseline *d
 		if err := ensureCompactionHeadsTx(ctx, tx); err != nil {
 			return err
 		}
-		// Heads have now been validated against every current node and origin
-		// evidence was captured before detaching entries. Reclaim pre-existing
-		// full history here, including nodes never touched by a runtime update.
-		// Never interpret a lease (even expired/unknown) as permission to delete.
+		// Record the explicit cut-specific closure before deleting revisions;
+		// both the seal and deletion roll back on any subsequent failure.
+		if _, err := tx.ExecContext(ctx, `INSERT INTO subscription_storage_readiness(singleton,contract_version,consumers_closed,sealed_at)VALUES(1,1,1,?)`, now); err != nil {
+			return err
+		}
+		// Reclaim only non-head, unleased versions.
 		if _, err := tx.ExecContext(ctx, `DELETE FROM node_connection_versions AS v
 			WHERE NOT EXISTS(SELECT 1 FROM node_connection_heads h WHERE h.logical_id=v.node_logical_id AND h.connection_revision=v.connection_revision)
 			AND NOT EXISTS(SELECT 1 FROM node_connection_version_leases l WHERE l.node_logical_id=v.node_logical_id AND l.connection_revision=v.connection_revision)`); err != nil {
-			return err
+			return fmt.Errorf("prune compaction connection versions: %w", err)
 		}
 		if _, err := PruneFetchSummariesTx(ctx, tx, ""); err != nil {
 			return err
@@ -178,14 +193,14 @@ func FinalizeSubscriptionCompaction(ctx context.Context, db *sql.DB, baseline *d
 				return err
 			}
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO subscription_storage_readiness(singleton,contract_version,consumers_closed,sealed_at)VALUES(1,1,0,?)`, now); err != nil {
-			return err
-		}
 		if err := checkSubscriptionStorageReadyTx(ctx, tx); err != nil {
 			return err
 		}
 		var integrity string
-		if err := tx.QueryRowContext(ctx, `PRAGMA integrity_check(1)`).Scan(&integrity); err != nil || integrity != "ok" {
+		if err := tx.QueryRowContext(ctx, `PRAGMA integrity_check(1)`).Scan(&integrity); err != nil {
+			return fmt.Errorf("check compaction integrity: %w", err)
+		}
+		if integrity != "ok" {
 			return fmt.Errorf("maintenance_required: scratch integrity failed")
 		}
 		if err := requireCompactionZeroTx(ctx, tx, `SELECT COUNT(*) FROM pragma_foreign_key_check`, "scratch foreign key violation"); err != nil {
@@ -237,7 +252,10 @@ func validateCompactionDecisionTx(ctx context.Context, tx *sql.Tx, decision Subs
 	}
 	var fetchID string
 	if err := tx.QueryRowContext(ctx, `SELECT p.fetch_id FROM subscription_payloads p JOIN subscription_fetches f ON f.id=p.fetch_id WHERE p.id=? AND p.subscription_id=? AND f.subscription_id=p.subscription_id AND f.outcome IN ('success','partial')`, decision.PayloadID, decision.SubscriptionID).Scan(&fetchID); err != nil {
-		return fmt.Errorf("maintenance_required: selected generation is not useful")
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("maintenance_required: selected generation is not useful")
+		}
+		return fmt.Errorf("read selected compaction generation: %w", err)
 	}
 	// Legacy schema27 has no independent raw/state record. The source revision
 	// is a cut fence, not invented historical identity. Existing optional facts

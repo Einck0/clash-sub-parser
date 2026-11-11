@@ -23,6 +23,8 @@ import (
 // cut, not a pathname-based guess. Dev/inode identities must be collected after
 // preparing the independent files. The tool cannot prove cross-namespace drain:
 // the operator must stop all external writers/consumers before granting it.
+// Consumer closure is a separate operator assertion backed by independent
+// validation; a flag or manifest cannot itself prove the consumer contract.
 // It never stops a service, creates a backup, or switches the active database.
 type CompactionAuthorization struct {
 	Version          int                    `json:"version"`
@@ -34,6 +36,7 @@ type CompactionAuthorization struct {
 	BackupSHA256     string                 `json:"backup_sha256"`
 	Offline          bool                   `json:"offline"`
 	ConsumersDrained bool                   `json:"consumers_drained"`
+	ConsumersClosed  bool                   `json:"consumers_closed"`
 }
 type CompactionFileIdentity struct {
 	Path   string `json:"path"`
@@ -45,7 +48,7 @@ func runSubscriptionCompactionApply(args []string, stdout, stderr io.Writer) int
 	fs := flag.NewFlagSet("compact-subscription-storage apply", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var dbPath, backupPath, planPath, outputPath, authPath string
-	var offline, drained bool
+	var offline, drained, closed bool
 	var timeout time.Duration
 	fs.StringVar(&dbPath, "db", "", "explicit authorized scratch database")
 	fs.StringVar(&backupPath, "backup", "", "independent read-only sealed backup")
@@ -54,6 +57,7 @@ func runSubscriptionCompactionApply(args []string, stdout, stderr io.Writer) int
 	fs.StringVar(&authPath, "authorization", "", "private cut-specific authorization manifest")
 	fs.BoolVar(&offline, "offline", false, "assert all services accessing this cut are stopped")
 	fs.BoolVar(&drained, "consumers-drained", false, "assert all external version consumers are drained")
+	fs.BoolVar(&closed, "consumers-closed", false, "assert the independently validated version consumer contract applies to this cut")
 	fs.DurationVar(&timeout, "timeout", 30*time.Minute, "bounded operation duration (maximum 2h)")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -61,8 +65,8 @@ func runSubscriptionCompactionApply(args []string, stdout, stderr io.Writer) int
 		}
 		return 2
 	}
-	if dbPath == "" || backupPath == "" || planPath == "" || outputPath == "" || authPath == "" || !offline || !drained || fs.NArg() != 0 || timeout <= 0 || timeout > 2*time.Hour {
-		fmt.Fprintln(stderr, "compaction apply: maintenance_required: explicit scratch/backup/plan/output/authorization, --offline and --consumers-drained required")
+	if dbPath == "" || backupPath == "" || planPath == "" || outputPath == "" || authPath == "" || !offline || !drained || !closed || fs.NArg() != 0 || timeout <= 0 || timeout > 2*time.Hour {
+		fmt.Fprintln(stderr, "compaction apply: maintenance_required: explicit scratch/backup/plan/output/authorization, --offline, --consumers-drained and --consumers-closed required")
 		return 2
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -92,7 +96,7 @@ func applySubscriptionCompaction(ctx context.Context, dbPath, backupPath, planPa
 	fail := func(reason string) (*compactionApplyReceipt, error) { return nil, errors.New(reason) }
 	var auth CompactionAuthorization
 	authRaw, err := readCompactionPrivateFile(authPath)
-	if err != nil || json.Unmarshal(authRaw, &auth) != nil || auth.Version != 1 || !auth.Offline || !auth.ConsumersDrained {
+	if err != nil || json.Unmarshal(authRaw, &auth) != nil || auth.Version != 1 || !auth.Offline || !auth.ConsumersDrained || !auth.ConsumersClosed {
 		return fail("invalid private operator authorization")
 	}
 	planRaw, err := readCompactionPrivateFile(planPath)
@@ -237,7 +241,7 @@ func applySubscriptionCompaction(ctx context.Context, dbPath, backupPath, planPa
 	if err != nil {
 		return fail("scratch preparation rejected; backup untouched")
 	}
-	if _, err := sqlite.FinalizeSubscriptionCompaction(ctx, db, prepared, decisions); err != nil {
+	if _, err := sqlite.FinalizeSubscriptionCompaction(ctx, db, prepared, decisions, auth.ConsumersClosed); err != nil {
 		return fail("scratch transformation rejected; backup untouched")
 	}
 	verification, err := sqlite.VerifySubscriptionCompaction(ctx, db, &baseline)

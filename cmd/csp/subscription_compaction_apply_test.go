@@ -113,12 +113,12 @@ func makeCompactionCLIFixture(t *testing.T) compactionCLIFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.auth = CompactionAuthorization{Version: 1, Scratch: compactionCLIIdentity(t, f.scratch), Backup: compactionCLIIdentity(t, f.backup), Active: compactionCLIIdentity(t, f.active), Output: f.output, PlanSHA256: compactionBytesHash(raw), BackupSHA256: compactionBytesHash(f.original), Offline: true, ConsumersDrained: true}
+	f.auth = CompactionAuthorization{Version: 1, Scratch: compactionCLIIdentity(t, f.scratch), Backup: compactionCLIIdentity(t, f.backup), Active: compactionCLIIdentity(t, f.active), Output: f.output, PlanSHA256: compactionBytesHash(raw), BackupSHA256: compactionBytesHash(f.original), Offline: true, ConsumersDrained: true, ConsumersClosed: true}
 	compactionCLIWriteJSON(t, f.authorization, f.auth)
 	return f
 }
 func (f compactionCLIFixture) args() []string {
-	return []string{"apply", "--db", f.scratch, "--backup", f.backup, "--plan", f.plan, "--output", f.output, "--authorization", f.authorization, "--offline", "--consumers-drained"}
+	return []string{"apply", "--db", f.scratch, "--backup", f.backup, "--plan", f.plan, "--output", f.output, "--authorization", f.authorization, "--offline", "--consumers-drained", "--consumers-closed"}
 }
 
 func TestSubscriptionCompactionCLISchema27ThroughPhysicalOutput(t *testing.T) {
@@ -173,7 +173,7 @@ func TestSubscriptionCompactionCLISchema27ThroughPhysicalOutput(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &receipt); err != nil {
 		t.Fatal(err)
 	}
-	if receipt.Status != "VERIFIED_OFFLINE_OUTPUT" || receipt.Verification == nil || !receipt.Verification.Verified || receipt.Verification.ConsumerClosureSealed || receipt.OutputBytes >= receipt.BeforeBytes {
+	if receipt.Status != "VERIFIED_OFFLINE_OUTPUT" || receipt.Verification == nil || !receipt.Verification.Verified || !receipt.Verification.ConsumerClosureSealed || receipt.OutputBytes >= receipt.BeforeBytes {
 		t.Fatalf("invalid receipt: %+v", receipt)
 	}
 	for _, path := range []string{f.backup, f.active} {
@@ -220,16 +220,22 @@ func TestSubscriptionCompactionCLISchema27ThroughPhysicalOutput(t *testing.T) {
 }
 
 func TestSubscriptionCompactionCLIRejectsUnsafeInputsBeforeMutation(t *testing.T) {
-	for _, branch := range []string{"authorization", "missing_offline", "missing_drain", "backup_writable", "backup_changed", "changed_snapshot", "existing_output", "scratch_alias", "hardlink", "symlink", "wrong_inode", "sidecar", "unknown_membership", "plan_tampered"} {
+	for _, branch := range []string{"authorization", "authorization_drain", "authorization_closure", "missing_offline", "missing_drain", "missing_closure", "backup_writable", "backup_changed", "changed_snapshot", "existing_output", "scratch_alias", "hardlink", "symlink", "wrong_inode", "sidecar", "unknown_membership", "plan_tampered"} {
 		t.Run(branch, func(t *testing.T) {
 			f := makeCompactionCLIFixture(t)
 			args := f.args()
 			switch branch {
 			case "authorization":
 				f.auth.Offline = false
+			case "authorization_drain":
+				f.auth.ConsumersDrained = false
+			case "authorization_closure":
+				f.auth.ConsumersClosed = false
 			case "missing_offline":
-				args = args[:len(args)-2]
+				args = append(args[:len(args)-3], args[len(args)-2:]...)
 			case "missing_drain":
+				args = append(args[:len(args)-2], args[len(args)-1:]...)
+			case "missing_closure":
 				args = args[:len(args)-1]
 			case "backup_writable":
 				if err := os.Chmod(f.backup, 0600); err != nil {

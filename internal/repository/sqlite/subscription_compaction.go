@@ -200,6 +200,8 @@ func inspectSubscriptionCompactionTx(ctx context.Context, tx *sql.Tx) (_ *domain
 
 // InitializeEmptySubscriptionStorageTx is for brand new databases only. It
 // cannot silently convert a legacy database that already contains business rows.
+// The current consumer contract is assumed for a newly created database only;
+// its real consumer interleavings must be verified by the required cloud tests.
 func InitializeEmptySubscriptionStorageTx(ctx context.Context, tx *sql.Tx) error {
 	for _, table := range []string{"subscriptions", "nodes", "subscription_payloads", "publications"} {
 		var count int
@@ -221,7 +223,7 @@ func InitializeEmptySubscriptionStorageTx(ctx context.Context, tx *sql.Tx) error
 			return err
 		}
 	}
-	_, err := tx.ExecContext(ctx, `INSERT INTO subscription_storage_readiness (singleton,contract_version,consumers_closed,sealed_at) VALUES (1,1,0,?)`, time.Now().UTC().Format(time.RFC3339Nano))
+	_, err := tx.ExecContext(ctx, `INSERT INTO subscription_storage_readiness (singleton,contract_version,consumers_closed,sealed_at) VALUES (1,1,1,?)`, time.Now().UTC().Format(time.RFC3339Nano))
 	return err
 }
 
@@ -305,6 +307,9 @@ func VerifySubscriptionCompaction(ctx context.Context, db *sql.DB, baseline *dom
 			return nil, err
 		}
 		report.ConsumerClosureSealed = closed == 1
+		if !report.ConsumerClosureSealed {
+			report.Failures = append(report.Failures, "version_consumers_not_closed")
+		}
 	}
 	var integrity string
 	if err := tx.QueryRowContext(ctx, `PRAGMA integrity_check(1)`).Scan(&integrity); err != nil {

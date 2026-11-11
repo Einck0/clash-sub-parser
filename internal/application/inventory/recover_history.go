@@ -661,38 +661,44 @@ func RecoverSourceHistory(ctx context.Context, db *sql.DB, cfg RecoveryConfig) (
 	var rowsToInsert []historyRowToInsert
 
 	for _, n := range manifest.Nodes {
-		var (
-			dbProto   string
-			dbServer  string
-			dbPort    int
-			dbConfig  string
-			dbActive  int
-			dbConnRev int64
-		)
-		err := db.QueryRowContext(ctx, `
-			SELECT n.protocol, n.server, n.port, n.config_json, n.active,
-			       COALESCE(h.connection_revision, n.connection_revision, 1)
-			FROM nodes n
-			LEFT JOIN node_connection_heads h ON n.logical_id = h.logical_id
-			WHERE n.logical_id = ?;`, n.NodeLogicalID).Scan(&dbProto, &dbServer, &dbPort, &dbConfig, &dbActive, &dbConnRev)
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("manifest node %s does not exist in target database (fail-closed)", n.NodeLogicalID)
-		}
+		// The current node and available versions must come from the same
+		// transaction; lease writes reserve the writer before the first read.
+		captureTx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: cfg.DryRun})
 		if err != nil {
-			return nil, fmt.Errorf("failed to query node %s in database: %w", n.NodeLogicalID, err)
+			return nil, fmt.Errorf("begin recovery snapshot: %w", err)
 		}
+		var current *domain.Node
+		var versions []domain.LeasedConnectionVersion
+		var leases []domain.ConnectionVersionLease
+		captureErr := func() error {
+			defer captureTx.Rollback()
+			if err := sqlite.ReserveRecoverySnapshotTx(ctx, captureTx, cfg.DryRun); err != nil {
+				return err
+			}
+			var err error
+			current, err = sqlite.GetNodeByLogicalIDTx(ctx, captureTx, n.NodeLogicalID)
+			if err != nil {
+				if de, ok := domain.AsDomainError(err); ok && de.Code == "node_not_found" {
+					return fmt.Errorf("manifest node %s does not exist in target database (fail-closed)", n.NodeLogicalID)
+				}
+				return fmt.Errorf("failed to query node %s in database: %w", n.NodeLogicalID, err)
+			}
+			versions, leases, err = sqlite.SnapshotRecoveryVersionsTx(ctx, captureTx, n.NodeLogicalID, consumerID, cfg.DryRun)
+			if err != nil {
+				return fmt.Errorf("historical_configuration_unavailable: %w", err)
+			}
+			return captureTx.Commit()
+		}()
+		if captureErr != nil {
+			return nil, fmt.Errorf("capture recovery snapshot: %w", captureErr)
+		}
+		heldLeases = append(heldLeases, leases...)
 
-		if !strings.EqualFold(dbProto, n.Protocol) || !strings.EqualFold(dbServer, n.Server) || dbPort != n.Port {
+		if !strings.EqualFold(string(current.Protocol), n.Protocol) || !strings.EqualFold(current.Server, n.Server) || current.Port != n.Port {
 			return nil, fmt.Errorf("node %s endpoint mismatch between manifest and database (fail-closed)", n.NodeLogicalID)
 		}
 
-		// Fetch historical versions from node_connection_versions if present
 		histVersions := make(map[int64]domain.InboundProtocolCredential)
-		versions, leases, vErr := sqlite.SnapshotRecoveryVersions(ctx, db, n.NodeLogicalID, consumerID, cfg.DryRun)
-		if vErr != nil {
-			return nil, fmt.Errorf("historical_configuration_unavailable: %w", vErr)
-		}
-		heldLeases = append(heldLeases, leases...)
 		for _, version := range versions {
 			var obj struct {
 				Credentials domain.InboundProtocolCredential `json:"credentials"`
@@ -703,8 +709,7 @@ func RecoverSourceHistory(ctx context.Context, db *sql.DB, cfg RecoveryConfig) (
 			histVersions[version.Revision] = obj.Credentials
 		}
 
-		var currCreds domain.InboundProtocolCredential
-		_ = json.Unmarshal([]byte(dbConfig), &currCreds)
+		currCreds := current.Credentials
 
 		if n.ProvenanceOrigin == "legacy_cold_archive" {
 			coldPath := resolveArchivePath(cfg.ArchiveDir, manifest.Metadata.ColdArchive.Path)

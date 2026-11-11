@@ -45,6 +45,18 @@ func unmarshalNodeCredentials(configJSON string) (domain.InboundProtocolCredenti
 }
 
 func (r *nodeRepository) GetByLogicalID(ctx context.Context, logicalID string) (*domain.Node, error) {
+	return getNodeByLogicalID(ctx, r.db, logicalID)
+}
+
+// GetNodeByLogicalIDTx reads the node through the caller's transaction, using
+// the same head and credential semantics as NodeRepository.GetByLogicalID.
+func GetNodeByLogicalIDTx(ctx context.Context, tx *sql.Tx, logicalID string) (*domain.Node, error) {
+	return getNodeByLogicalID(ctx, tx, logicalID)
+}
+
+func getNodeByLogicalID(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, logicalID string) (*domain.Node, error) {
 	const query = `
 	SELECT n.logical_id, n.protocol, n.display_name,
 	       COALESCE(json_extract(v.effective_config_json, '$.server'), n.server),
@@ -62,7 +74,7 @@ func (r *nodeRepository) GetByLogicalID(ctx context.Context, logicalID string) (
 	var activeInt int
 	var createdStr, updatedStr string
 
-	err := r.db.QueryRowContext(ctx, query, logicalID).Scan(
+	err := q.QueryRowContext(ctx, query, logicalID).Scan(
 		&node.LogicalID,
 		&node.Protocol,
 		&node.DisplayName,

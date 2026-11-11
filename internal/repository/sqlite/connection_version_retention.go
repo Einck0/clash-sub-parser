@@ -8,12 +8,14 @@ import (
 )
 
 // PruneConnectionVersionsTx bounds full configurations to the head and explicitly
-// leased revisions. Call it in the SAME transaction as head advancement or owner
-// release. Expiry is diagnostic only: even an unknown, expired owner protects its
-// version. Lightweight origin evidence outlives full historical credentials.
+// leased revisions only after all version consumers are known to be closed. Call
+// it in the SAME transaction as head advancement or owner release. Expiry is
+// diagnostic only: even an unknown, expired owner protects its version.
+// Lightweight origin evidence outlives full historical credentials.
 //
-// Legacy/unsealed databases are deliberately left unchanged. Their offline
-// conversion must establish heads and origin evidence before runtime retention.
+// Legacy/unsealed databases and databases without a consumer-closure seal are
+// deliberately left unchanged. A storage seal alone does not prove that old
+// consumers have registered leases.
 func PruneConnectionVersionsTx(ctx context.Context, tx *sql.Tx, nodeID string) error {
 	if tx == nil || nodeID == "" {
 		return fmt.Errorf("connection version retention requires transaction and node")
@@ -25,11 +27,17 @@ func PruneConnectionVersionsTx(ctx context.Context, tx *sql.Tx, nodeID string) e
 	if present == 0 {
 		return nil
 	}
-	var sealed int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM subscription_storage_readiness WHERE singleton=1 AND contract_version=1`).Scan(&sealed); err != nil {
-		return err
+	var contractVersion, closed int
+	if err := tx.QueryRowContext(ctx, `SELECT contract_version,consumers_closed FROM subscription_storage_readiness WHERE singleton=1`).Scan(&contractVersion, &closed); err != nil {
+		if err == sql.ErrNoRows {
+			return nil
+		}
+		return fmt.Errorf("inspect version consumer closure: %w", err)
 	}
-	if sealed == 0 {
+	if closed != 0 && closed != 1 {
+		return fmt.Errorf("invalid version consumer closure value")
+	}
+	if contractVersion != 1 || closed == 0 {
 		return nil
 	}
 	var foreignKeys int

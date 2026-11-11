@@ -944,6 +944,55 @@ func TestRecoverSourceHistory_Schema15_DryRunReadOnlyNoDDL(t *testing.T) {
 	}
 }
 
+func TestRecoverSourceHistory_SnapshotUsesHeadWithSingleConnection(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	dir := t.TempDir()
+	coldPath, coldHash := createColdArchiveFixture(t, dir)
+	target := filepath.Join(dir, "target.db")
+	db, err := sqlite.Open(sqlite.Config{Path: target, ForeignKeys: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	if err := sqlite.NewMigrationRunner(db, migrations.FS).Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	setupTargetDBWithFixtures(t, db)
+	// Legacy columns can differ from the effective head. Recovery must use the
+	// same current node that NodeRepository returns, not the stale columns.
+	if _, err := db.ExecContext(ctx, `UPDATE nodes SET server='stale.example.com', config_json='{}' WHERE logical_id='node-orphan-1'`); err != nil {
+		t.Fatal(err)
+	}
+	manifest := inventory.RecoveryManifest{
+		SchemaVersion: "2.1.0",
+		Metadata:      inventory.ManifestMetadata{RunID: "head-snapshot", ColdArchive: inventory.ManifestArchive{Path: coldPath, SHA256: coldHash}},
+		Nodes: []inventory.ManifestNode{{
+			NodeLogicalID: "node-orphan-1", Protocol: "vless", Server: "orphan1.example.com", Port: 8443,
+			ProvenanceOrigin:        "legacy_cold_archive",
+			PrimaryHistoricalSource: &inventory.ManifestSourceEdge{RelationshipKind: "primary_imported_source", LegacyNodePK: 100, LegacyLinkPK: 1001, LegacySourceID: 1, HistoricalSourceName: "7li", RelationState: "verified"},
+		}},
+	}
+	manifestPath, manifestHash := createTestManifestFile(t, dir, manifest)
+	for _, dryRun := range []bool{true, false} {
+		res, err := inventory.RecoverSourceHistory(ctx, db, inventory.RecoveryConfig{
+			ManifestPath: manifestPath, ExpectedManifestSHA256: manifestHash,
+			DryRun: dryRun, TargetDBPath: target, ArchiveDir: dir,
+		})
+		if err != nil {
+			t.Fatalf("dryRun=%v: recovery failed: %v", dryRun, err)
+		}
+		if !dryRun && (res.Status != "success" || res.InsertedRecords != 1 || res.BaselineInvariants.AssetFingerprint != res.PostInvariants.AssetFingerprint) {
+			t.Fatalf("apply did not preserve invariants and insert history: %#v", res)
+		}
+	}
+	var leases int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM node_connection_version_leases WHERE consumer_kind='recover_history'`).Scan(&leases); err != nil || leases != 0 {
+		t.Fatalf("recovery leaked leases: count=%d err=%v", leases, err)
+	}
+}
+
 func TestRecoverSourceHistory_HistoricalConnectionVersionMatch(t *testing.T) {
 	ctx := context.Background()
 	tempDir := t.TempDir()

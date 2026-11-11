@@ -102,3 +102,99 @@ func TestConnectionVersionLeaseUnavailableNeverFallsBackToHead(t *testing.T) {
 		t.Fatalf("failed acquisition left a lease: count=%d err=%v", count, err)
 	}
 }
+
+func TestRecoverySnapshotReservationSerializesWithVersionGC(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	db, path := setupTempFileDB(t)
+	other, err := sqlite.Open(sqlite.Config{Path: path, BusyTimeout: 5 * time.Second, ForeignKeys: true, WALMode: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = other.Close() })
+	sealTestVersionConsumers(t, db)
+	if err := sqlite.WithTx(ctx, db, func(ctx context.Context, tx *sql.Tx) error {
+		return sqlite.PrepareConnectionVersionLeasesTx(ctx, tx)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	repo := sqlite.NewNodeRepository(db)
+	node := domain.Node{LogicalID: "recovery-reservation-node", Protocol: domain.ProtocolSS, DisplayName: "Synthetic", Server: "192.0.2.1", Port: 8388, Active: true}
+	if err := repo.UpsertBatch(ctx, []domain.Node{node}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reserve writes before any current-node read. The other connection's update
+	// and retention pass is allowed to proceed only once this transaction commits.
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if err := sqlite.ReserveRecoverySnapshotTx(ctx, tx, false); err != nil {
+		t.Fatal(err)
+	}
+	current, err := sqlite.GetNodeByLogicalIDTx(ctx, tx, node.LogicalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Server != "192.0.2.1" || current.ConnectionRevision != 1 {
+		t.Fatalf("unexpected current node before snapshot: %+v", current)
+	}
+	reserved := make(chan struct{})
+	writerStarted := make(chan struct{})
+	writerDone := make(chan error, 1)
+	go func() {
+		close(reserved)
+		<-writerStarted
+		node.Server = "192.0.2.2"
+		writerDone <- sqlite.NewNodeRepository(other).UpsertBatch(ctx, []domain.Node{node})
+	}()
+	<-reserved
+	close(writerStarted)
+	snapshots, leases, err := sqlite.SnapshotRecoveryVersionsTx(ctx, tx, node.LogicalID, "recovery-reservation-owner", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshots) != 1 || snapshots[0].Revision != 1 || len(leases) != 1 {
+		t.Fatalf("reserved transaction captured unexpected versions/leases: %+v %+v", snapshots, leases)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-writerDone; err != nil {
+		t.Fatalf("concurrent node update and GC: %v", err)
+	}
+	versions := sqlite.NewNodeConnectionVersionRepository(db)
+	old, err := versions.GetByRevision(ctx, node.LogicalID, 1)
+	if err != nil || old.EffectiveConfigJSON != snapshots[0].EffectiveConfigJSON {
+		t.Fatalf("leased version was collected after concurrent update: %+v %v", old, err)
+	}
+	if err := sqlite.WithTx(ctx, db, func(ctx context.Context, tx *sql.Tx) error {
+		return sqlite.ReleaseConnectionVersionLeaseTx(ctx, tx, leases[0])
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := versions.GetByRevision(ctx, node.LogicalID, 1); err == nil {
+		t.Fatal("released non-head version was not collected")
+	}
+
+	// Opposite ordering: advance the head and run GC first; neither a snapshot
+	// nor any fallback may pretend the removed revision is still available.
+	node.LogicalID = "recovery-gc-first-node"
+	node.Server = "192.0.2.1"
+	if err := repo.UpsertBatch(ctx, []domain.Node{node}); err != nil {
+		t.Fatal(err)
+	}
+	node.Server = "192.0.2.2"
+	if err := repo.UpsertBatch(ctx, []domain.Node{node}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := versions.GetByRevision(ctx, node.LogicalID, 1); err == nil {
+		t.Fatal("GC-first ordering retained an unavailable historical version")
+	}
+	latest, _, err := sqlite.SnapshotRecoveryVersions(ctx, db, node.LogicalID, "recovery-gc-first-owner", false)
+	if err != nil || len(latest) != 1 || latest[0].Revision != 2 {
+		t.Fatalf("GC-first snapshot fabricated/omitted a revision: %+v err=%v", latest, err)
+	}
+}

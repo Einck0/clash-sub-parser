@@ -14,6 +14,7 @@ import (
 func TestConnectionVersionRetentionHundredChangesAndOwnedRelease(t *testing.T) {
 	ctx := context.Background()
 	db, _ := setupTestDB(t)
+	sealTestVersionConsumers(t, db)
 	repo := sqlite.NewNodeRepository(db)
 	versions := sqlite.NewNodeConnectionVersionRepository(db)
 	node := domain.Node{LogicalID: "bounded-node", Protocol: domain.ProtocolSS, DisplayName: "Synthetic", Server: "192.0.2.1", Port: 8388, Active: true, Credentials: domain.InboundProtocolCredential{Password: "synthetic-A"}}
@@ -108,6 +109,7 @@ func TestConnectionVersionRetentionHundredChangesAndOwnedRelease(t *testing.T) {
 func TestConnectionVersionRetentionRecoverySnapshotAcrossAdvance(t *testing.T) {
 	ctx := context.Background()
 	db, _ := setupTestDB(t)
+	sealTestVersionConsumers(t, db)
 	repo := sqlite.NewNodeRepository(db)
 	node := domain.Node{LogicalID: "snapshot-node", Protocol: domain.ProtocolSS, DisplayName: "Synthetic", Server: "192.0.2.1", Port: 8388, Active: true}
 	if err := repo.UpsertBatch(ctx, []domain.Node{node}); err != nil {
@@ -149,6 +151,7 @@ func TestConnectionVersionRetentionSetHeadAndRollback(t *testing.T) {
 		t.Run(failure, func(t *testing.T) {
 			ctx := context.Background()
 			db, _ := setupTestDB(t)
+			sealTestVersionConsumers(t, db)
 			repo := sqlite.NewNodeRepository(db)
 			node := domain.Node{LogicalID: "head-node", Protocol: domain.ProtocolSS, DisplayName: "Synthetic", Server: "192.0.2.1", Port: 8388, Active: true}
 			if err := repo.UpsertBatch(ctx, []domain.Node{node}); err != nil {

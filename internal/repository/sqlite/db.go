@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"strings"
@@ -149,6 +150,17 @@ func preflightSubscriptionStorage(ctx context.Context, path string) (bool, error
 	defer db.Close()
 	if err := CheckSubscriptionStorageReady(ctx, db); err != nil {
 		return false, err
+	}
+	var closed int
+	if err := db.QueryRowContext(ctx, `SELECT consumers_closed FROM subscription_storage_readiness WHERE singleton=1`).Scan(&closed); err != nil {
+		return false, fmt.Errorf("maintenance_required: cannot inspect version consumer closure: %w", err)
+	}
+	switch closed {
+	case 0:
+		slog.Warn("maintenance required: version consumers are not closed; historical connection version GC is disabled")
+	case 1:
+	default:
+		return false, fmt.Errorf("maintenance_required: invalid version consumer closure value")
 	}
 	return false, nil
 }

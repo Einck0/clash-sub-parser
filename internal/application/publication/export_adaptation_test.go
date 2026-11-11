@@ -175,7 +175,7 @@ func TestPreview_TargetDefaultsAndModeValidation(t *testing.T) {
 	})
 }
 
-func TestPreview_FactsPath_RealDraftPersistenceAndPublishLifecycle(t *testing.T) {
+func TestPreview_FactsPath_RealDraftPersistenceAndPublishAfterVersionGC(t *testing.T) {
 	ctx := context.Background()
 	db := newCleanSQLiteDB(t)
 
@@ -341,8 +341,84 @@ func TestPreview_FactsPath_RealDraftPersistenceAndPublishLifecycle(t *testing.T)
 	if prevRes.Manifest.ExcludedCount != 0 {
 		t.Fatalf("expected 0 excluded nodes, got: %d", prevRes.Manifest.ExcludedCount)
 	}
+	if prevRes.Manifest.Included[0].ConnectionRevision != 1 || len(prevRes.Manifest.PayloadIDs) != 1 || prevRes.Manifest.PayloadIDs[0] != payloadID {
+		t.Fatalf("preview did not freeze revision 1 and its origin: %+v", prevRes.Manifest)
+	}
+	if !strings.Contains(string(prevRes.Content), node.Server) {
+		t.Fatal("preview content did not contain the original connection")
+	}
 
-	// 6. Real Publish using the persisted draft SnapshotID
+	assertFrozenOrigin := func(stage string) {
+		t.Helper()
+		refs, err := pubRefRepo.ListPayloadIDsByPublication(ctx, prevRes.SnapshotID)
+		if err != nil || len(refs) != 1 || refs[0] != payloadID {
+			t.Fatalf("%s: frozen payload refs changed: %v (err: %v)", stage, refs, err)
+		}
+		var source, originFetch, digest string
+		err = db.QueryRowContext(ctx, `SELECT e.source_identity,e.fetch_id,e.content_digest
+			FROM publication_payload_refs r JOIN subscription_payload_evidence e ON e.payload_id=r.payload_id
+			WHERE r.publication_id=? AND r.payload_id=?`, prevRes.SnapshotID, payloadID).Scan(&source, &originFetch, &digest)
+		if err != nil || source != "sub:"+subID || originFetch != fetchID || digest != p.ContentDigest {
+			t.Fatalf("%s: frozen origin changed: source=%q fetch=%q digest=%q err=%v", stage, source, originFetch, digest, err)
+		}
+	}
+	assertFrozenOrigin("after preview")
+
+	// Advance the current subscription generation and head before publishing the
+	// draft. Fresh SQLite storage has consumer closure sealed, so the unleased
+	// old full connection version is reclaimed by UpsertBatch.
+	fetch2 := fetch
+	fetch2.ID = "fetch_" + domain.MustNewUUIDv7()
+	fetch2.ContentDigest = "sha256:sub_payload_lifecycle_v2"
+	if err := fetchRepo.Create(ctx, &fetch2); err != nil {
+		t.Fatal(err)
+	}
+	replaceFixtureGeneration(t, ctx, db, subID)
+	p2 := p
+	p2.ID = "payload_" + domain.MustNewUUIDv7()
+	p2.FetchID = fetch2.ID
+	p2.ContentDigest = fetch2.ContentDigest
+	p2.BodyBlob = []byte("proxies: [new generation]")
+	if err := payloadRepo.Save(ctx, &p2); err != nil {
+		t.Fatal(err)
+	}
+	entry2ID := "entry-lifecycle-2"
+	if _, err := db.ExecContext(ctx, `INSERT INTO subscription_entries (id,payload_id,subscription_id,ordinal,source_key,raw_name,protocol,server,port,entry_kind,classification_reason,node_logical_id,created_at) VALUES (?,?,?,0,'lifecycle','Lifecycle SS Node','ss','1.2.3.5',8388,'proxy','fixture',?,?)`, entry2ID, p2.ID, subID, nodeID, now.Format(time.RFC3339)); err != nil {
+		t.Fatal(err)
+	}
+	node.Server = "1.2.3.5"
+	node.Credentials.Password = "new-synthetic-password"
+	if err := nodeRepo.UpsertBatch(ctx, []domain.Node{node}); err != nil {
+		t.Fatal(err)
+	}
+	attachFixtureOrigin(t, ctx, db, nodeID, 2, entry2ID)
+	if _, err := db.ExecContext(ctx, `UPDATE node_sources SET last_seen_fetch_id=? WHERE node_logical_id=? AND subscription_id=?`, fetch2.ID, nodeID, subID); err != nil {
+		t.Fatal(err)
+	}
+	versions := sqlite.NewNodeConnectionVersionRepository(db)
+	head, err := versions.GetHead(ctx, nodeID)
+	if err != nil || head.ConnectionRevision != 2 {
+		t.Fatalf("expected advanced head revision 2: %+v err=%v", head, err)
+	}
+	var oldVersionCount int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM node_connection_versions WHERE node_logical_id=? AND connection_revision=1`, nodeID).Scan(&oldVersionCount); err != nil || oldVersionCount != 0 {
+		t.Fatalf("old connection version was not reclaimed: count=%d err=%v", oldVersionCount, err)
+	}
+	assertRetiredPayloadEvidence(t, ctx, db, payloadRepo, payloadID, entryID, p.ContentDigest)
+	assertFrozenOrigin("after refresh and GC")
+
+	newPreview, err := svc.Preview(ctx, publication.PreviewQuery{Target: domain.TargetSingBox, RevisionID: revID})
+	if err != nil {
+		t.Fatalf("preview of refreshed head failed: %v", err)
+	}
+	if !strings.Contains(string(newPreview.Content), node.Server) || string(newPreview.Content) == string(prevRes.Content) {
+		t.Fatal("refreshed preview did not use the new connection")
+	}
+	if len(newPreview.Manifest.Included) != 1 || newPreview.Manifest.Included[0].ConnectionRevision != 2 || len(newPreview.Manifest.PayloadIDs) != 1 || newPreview.Manifest.PayloadIDs[0] != p2.ID {
+		t.Fatalf("refreshed preview did not use new revision and origin: %+v", newPreview.Manifest)
+	}
+
+	// 6. Real Publish using the original persisted draft SnapshotID
 	pubRes, err := svc.Publish(ctx, publication.PublishCommand{
 		Target:     domain.TargetSingBox,
 		SnapshotID: prevRes.SnapshotID,
@@ -358,6 +434,7 @@ func TestPreview_FactsPath_RealDraftPersistenceAndPublishLifecycle(t *testing.T)
 	if pubRes.ContentDigest != prevRes.ContentDigest {
 		t.Fatalf("published content digest %q != preview content digest %q", pubRes.ContentDigest, prevRes.ContentDigest)
 	}
+	assertFrozenOrigin("after publish")
 
 	// 7. Download and verify byte equality
 	artifact, err := svc.ResolveAndServeAuthorized(ctx, pubRes.Publication.ID, func(tokenHash string) bool { return true })

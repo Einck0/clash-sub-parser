@@ -804,8 +804,11 @@ func RecoverSourceHistory(ctx context.Context, db *sql.DB, cfg RecoveryConfig) (
 				&arcSourceID, &arcFetchedAt,
 				&arcSrcID, &arcSrcName, &arcSrcURL,
 			)
-			if rowErr != nil {
+			if rowErr == sql.ErrNoRows {
 				return nil, fmt.Errorf("node %s: archive source link chain not found for pk=%d link_pk=%d (fail-closed)", n.NodeLogicalID, ps.LegacyNodePK, ps.LegacyLinkPK)
+			}
+			if rowErr != nil {
+				return nil, fmt.Errorf("node %s: query archive source link chain: %w", n.NodeLogicalID, rowErr)
 			}
 
 			if arcSrcID != ps.LegacySourceID {
@@ -905,8 +908,11 @@ func RecoverSourceHistory(ctx context.Context, db *sql.DB, cfg RecoveryConfig) (
 					&sArcSourceID, &sArcFetchedAt,
 					&sArcSrcID, &sArcSrcName, &sArcSrcURL,
 				)
-				if sRowErr != nil {
+				if sRowErr == sql.ErrNoRows {
 					return nil, fmt.Errorf("node %s: secondary archive link chain not found for pk=%d link_pk=%d (fail-closed)", n.NodeLogicalID, ss.LegacyNodePK, ss.LegacyLinkPK)
+				}
+				if sRowErr != nil {
+					return nil, fmt.Errorf("node %s: query secondary archive link chain: %w", n.NodeLogicalID, sRowErr)
 				}
 
 				sArcCreds, sErr := extractArchiveCredentials(sArcProto, sArcPayload)

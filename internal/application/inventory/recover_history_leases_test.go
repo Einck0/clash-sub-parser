@@ -19,7 +19,7 @@ import (
 )
 
 func TestRecoverySnapshotLeaseLifecycle(t *testing.T) {
-	for _, scenario := range []string{"success", "duplicate", "failure", "cancel", "concurrent-update", "missing-head-version", "missing-head"} {
+	for _, scenario := range []string{"success", "duplicate", "failure", "cancel", "missing-primary-link", "missing-secondary-link", "archive-query-error", "concurrent-update", "missing-head-version", "missing-head"} {
 		t.Run(scenario, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
@@ -84,6 +84,16 @@ func TestRecoverySnapshotLeaseLifecycle(t *testing.T) {
 				archive.Close()
 				t.Fatal(err)
 			}
+			if scenario == "missing-primary-link" {
+				if _, err := archive.Exec(`DELETE FROM node_source_links`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if scenario == "archive-query-error" {
+				if _, err := archive.Exec(`DROP TABLE sources`); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if err := archive.Close(); err != nil {
 				t.Fatal(err)
 			}
@@ -94,6 +104,9 @@ func TestRecoverySnapshotLeaseLifecycle(t *testing.T) {
 			}
 			if scenario == "failure" {
 				entry.Server = "192.0.2.99"
+			}
+			if scenario == "missing-secondary-link" {
+				entry.SecondarySameCanonicalSources = []ManifestSourceEdge{{LegacyNodePK: 1, LegacyLinkPK: 2, LegacySourceID: 1, RelationState: "verified"}}
 			}
 			manifest := RecoveryManifest{Metadata: ManifestMetadata{ColdArchive: ManifestArchive{Path: archivePath}}, Nodes: []ManifestNode{entry}}
 			if scenario == "duplicate" {
@@ -151,6 +164,18 @@ func TestRecoverySnapshotLeaseLifecycle(t *testing.T) {
 			case "cancel":
 				if !errors.Is(err, context.Canceled) {
 					t.Fatalf("expected cancellation, got %v", err)
+				}
+			case "missing-primary-link":
+				if err == nil || !strings.Contains(err.Error(), "archive source link chain not found") {
+					t.Fatalf("missing primary link must fail closed, got %v", err)
+				}
+			case "missing-secondary-link":
+				if err == nil || !strings.Contains(err.Error(), "secondary archive link chain not found") {
+					t.Fatalf("missing secondary link must fail closed, got %v", err)
+				}
+			case "archive-query-error":
+				if err == nil || !strings.Contains(err.Error(), "query archive source link chain") || !strings.Contains(err.Error(), "no such table") {
+					t.Fatalf("archive query failure must retain its cause, got %v", err)
 				}
 			case "concurrent-update":
 				if err == nil || !strings.Contains(err.Error(), "INVARIANT BREACH") {

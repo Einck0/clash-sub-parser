@@ -28,9 +28,13 @@ func TestProbeRunnerCapturedNodeSurvivesConcurrentVersionGC(t *testing.T) {
 	if err := sqlite.NewMigrationRunner(db, migrations.FS).Run(ctx); err != nil {
 		t.Fatal(err)
 	}
-	// This isolated fixture represents a cut whose consumers have been closed.
-	if _, err := db.ExecContext(ctx, `INSERT INTO subscription_storage_readiness(singleton,contract_version,consumers_closed,sealed_at) VALUES(1,1,1,?)`, time.Now().UTC().Format(time.RFC3339)); err != nil {
+	// Fresh-database initialization seals readiness as part of the migrations.
+	var contractVersion, consumersClosed int
+	if err := db.QueryRowContext(ctx, `SELECT contract_version, consumers_closed FROM subscription_storage_readiness WHERE singleton=1`).Scan(&contractVersion, &consumersClosed); err != nil {
 		t.Fatal(err)
+	}
+	if contractVersion != 1 || consumersClosed != 1 {
+		t.Fatalf("fresh database readiness: contract_version=%d consumers_closed=%d", contractVersion, consumersClosed)
 	}
 	writerDB, err := sqlite.Open(cfg)
 	if err != nil {

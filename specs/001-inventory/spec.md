@@ -60,13 +60,13 @@ schema: speckit-native
 - **WHEN** 订阅 B 拉取返回内容为空或解析后得到 0 个有效节点
 - **THEN** 系统记录解析警告审计日志，现有节点资产与关联保持不变，不执行级联清空
 
-#### Requirement: 订阅刷新数据修剪与重试策略 [FR-INV-07] [NEEDS CLARIFICATION] <a id="req-inv-prune-retry"></a>
-在订阅成功抓取后，系统 SHALL 对未在新快照中出现的来源执行修剪。关于完全成功（Success）与部分成功（Partial）场景下新节点缺失时的来源修剪与隐藏作用域保护策略，系统 SHALL 依据用户在 Q5 中的决策分别落实。
+#### Requirement: 订阅刷新数据修剪与重试策略 [FR-INV-07] <a id="req-inv-prune-retry"></a>
+成功或部分成功并提交的刷新 MUST 将该订阅的当前来源成员替换为本次成功更新的集合，修剪该订阅中未出现的来源关联；不得因此删除独立节点资产或影响其他订阅。部分解析失败应尽可能解析其余节点，并保留可诊断的失败原因。完全失败仍保全上次已应用集合。管理员过滤后全空的语义与 FR-INV-02 存在待决冲突，见本规范末尾说明。
 
 ##### Scenario: 抓取部分成功时的修剪边界 <a id="scenario-inv-partial-prune"></a>
 - **GIVEN** 某个订阅在刷新过程中部分节点解析失败
 - **WHEN** 解析器成功提取了部分新节点
-- **THEN** 系统根据既定策略执行来源修剪或保守保留历史关联，并记录审计差异
+- **THEN** 系统原子应用本次成功更新的成员集合，移除该订阅缺席成员的来源关联，记录可诊断的部分失败原因，且不删除独立节点资产
 
 ---
 
@@ -206,9 +206,9 @@ schema: speckit-native
 - **WHEN** 调用者以有效筛选条件请求某一页节点
 - **THEN** 返回项数不超过 `page_size`，`total` 表示同一筛选集合总数，且客户端无需下载完整台账
 
-#### Requirement: 不可变发布快照与已发布 payload 保护 [HR-072] <a id="req-inv-hr-072"></a>
+#### Requirement: 不可变发布快照与发布证据保护 [HR-072] <a id="req-inv-hr-072"></a>
 
-系统 SHALL 严格保护既有不可变发布快照（`publications`）与发布所引用的原始载荷（`publication_payload_refs`）。在重置过程中，系统 MUST 保留已被 `publication_payload_refs` 引用的 `subscription_payloads` 记录及其原始内容；对于这些已发布载荷下的 `subscription_entries`，系统 MUST 将其关联的 `node_logical_id` 脱钩设置为 NULL，确保不持有指向已删除节点的悬挂外键。对于未被任何发布引用的旧原始载荷与条目，系统 MUST 予以物理删除。
+系统 MUST 保护不可变发布内容与可追溯的轻量发布证据，同时遵循每订阅至多一个当前代 payload 的目标；发布引用不得成为保留历史完整 payload 或原文的例外。节点重置不得产生悬挂外键或破坏发布证据；具体引用迁移及原始身份约束见 [010 FR008](../010-export-adaptation/spec.md)。以下旧场景关于保留历史 payload 行的表述已被此目标取代，保留作历史追溯。
 
 ##### Scenario: 存在已发布载荷时保留载荷内容并解绑节点外键 <a id="scenario-inv-hr-072-1"></a>
 - **GIVEN** 订阅源与节点资产处于有效配置状态
@@ -610,7 +610,7 @@ The system SHALL preserve subscription scope, active-only constraints, notice ex
 
 #### Requirement: 订阅刷新非破坏性原子合并与来源保护 [HR-162] <a id="req-inv-hr-162"></a>
 
-系统 SHALL 将订阅拉取与刷新操作定义为默认非破坏性合并（Non-destructive Merge）语义。当订阅发生网络超时、HTTP 状态码错误、解析失败、提取结果为空、局部条目拒绝（partial/rejected）或新一轮拉取暂时缺失部分节点时，系统 MUST 保留既有已归属于该来源的活跃节点与关联策略边，严禁将其自动下线（active 设为 0）或级联删除。系统 MUST 将订阅状态准确标记为失败或陈旧（stale），但 MUST NOT 宣称该来源名下的物理节点连接失效。系统 MUST 禁止仅依靠“节点数量骤降阈值”来拦截失活，而 MUST 在刷新控制流中全场景提供完整的既有节点状态保留。
+系统 MUST 在网络、HTTP 或整体解析失败时保全上次已应用的来源成员和独立节点资产；不得把来源刷新失败等同于物理连接失效。成功或部分成功刷新按 FR-INV-07 替换当前订阅成员，不保留本次缺席的旧来源关联，但仍保护独立节点、其他订阅及其策略资产。提取为空与管理员过滤全空的区分见本规范末尾待决说明，不以节点数量骤降阈值代替实际结果语义。
 
 ##### Scenario: 外部订阅网络或 HTTP 请求失败时全量保留节点 <a id="scenario-inv-hr-162-1"></a>
 - **GIVEN** 订阅源与节点资产处于有效配置状态
@@ -622,10 +622,10 @@ The system SHALL preserve subscription scope, active-only constraints, notice ex
 - **WHEN** 远程服务器返回无法解析的空文本、乱码或格式错误导致提取器返回错误
 - **THEN** 系统记录错误摘要并完成审计，该订阅下已有的所有节点保持原有 active=1 状态与连接信息不变，不执行下线或删除
 
-##### Scenario: 局部节点拒绝时合并有效项并保留其余节点 <a id="scenario-inv-hr-162-3"></a>
+##### Scenario: 局部节点拒绝时应用成功集合 <a id="scenario-inv-hr-162-3"></a>
 - **GIVEN** 订阅源与节点资产处于有效配置状态
 - **WHEN** 远程订阅内容部分解析成功（outcome 为 partial），且有若干历史节点在当前提取清单中未出现
-- **THEN** 系统原子写入/更新有效的新节点与匹配节点，新一轮中暂时缺失的既有节点保持 active=1 且策略边完好，不被删除或失活
+- **THEN** 系统原子写入/更新本次成功节点并移除本订阅缺席成员的来源关联，不删除独立节点资产或影响其他来源，同时记录部分失败原因
 
 #### Requirement: 废除全局孤儿失活与严格来源作用域隔离 [HR-163] <a id="req-inv-hr-163"></a>
 
@@ -965,12 +965,12 @@ The system SHALL preserve subscription scope, active-only constraints, notice ex
 
 #### Requirement: 上游原始负载（Payload）权威事实持久化 [HR-247] <a id="req-inv-hr-247"></a>
 
-系统 SHALL 在每次订阅抓取成功后，在 `subscription_payloads` 表中持久化保存完整的未经修改的上游原始响应体（BLOB 格式，支持 gzip 压缩存储），并记录内容哈希、HTTP 状态码以及关键协商响应头（ETag、Last-Modified、Content-Type、Profile-Update-Interval）。系统 MUST 排除响应头中的敏感 Cookie 或 Authorization 信息。该原始响应仅供内部安全回放与审计对账，严禁对外网管理 API 暴露明文凭据。
+每订阅 MUST 至多保留一份最新成功或部分成功并提交的未经修改上游原文，独立于解析结果；失败刷新保留上一份。`subscription_payloads` 只保留当前已应用代及其条目，其 body_blob 为空，不以发布引用保留历史完整 payload 为例外。原文的读取权限和生命周期见 [010 原文契约](../010-export-adaptation/original-config-20261110.md)，不得将含凭据原文暴露给公开导出接口或普通 DTO。
 
 ##### Scenario: 抓取成功完整保存原始负载 <a id="scenario-inv-hr-247-1"></a>
 - **GIVEN** 订阅源与节点资产处于有效配置状态
 - **WHEN** 订阅服务成功抓取到上游下发的响应内容
-- **THEN** 系统在单个事务中插入 `subscription_fetches` 与对应的 `subscription_payloads`，记录正确的 content_digest 与 body BLOB
+- **THEN** 系统在同一事务中提交抓取和当前代解析事实，并替换该订阅独立存储的唯一原文；payload 的 body_blob 不存原文
 
 ##### Scenario: 抓取异常保留存量资产 <a id="scenario-inv-hr-247-2"></a>
 - **GIVEN** 订阅源与节点资产处于有效配置状态
@@ -1102,6 +1102,8 @@ The system SHALL preserve subscription scope, active-only constraints, notice ex
 - **[SC-INV-04]** 启用作用域下未启用订阅专有节点的导出泄漏率为 0。
 
 
-## 原始载荷整改（2026-10-25 当前有效补充）
+## 后续用户意图与契约边界（2026-11-11）
 
-用户明确无需保存订阅响应原文，保留每次所属节点的已解析信息与主订阅信息。停止新增原文持久化，历史原文经显式离线维护清除，节点凭据、来源、分类纠偏、订阅配置及历史发布保持可用。完整需求 FR-RAW-01..06、场景与成功条件见 [payload-retirement-20261025.md](payload-retirement-20261025.md)。旧 R4 的保留期待定不再是当前阻断。本轮不包含生产部署或生产数据清理。
+按用户原话顺序：“部分成功只保留更新成功节点，另外如果部分解析失败不是应该找出原吗，可以用来兜底但是要尽可能解析所有节点”；随后“每次拉的配置只保留最新的一份”，并明确“节点一直存不是让每一个配置的节点都存有些拉的配置更新了节点也更新了，就不要还存几百份”；再提出“subscription_payloads 是不是也可以精简，现在去做吧，将数据库精简”。当前原文单槽和 payload 当前代目标分别见 [010 原文契约](../010-export-adaptation/original-config-20261110.md) 与 [010 FR008](../010-export-adaptation/spec.md)。这取代 2026-10-25 不保存原文的要求；[当时方案](payload-retirement-20261025.md)保留为历史记录，不代表当前契约或本次验证。
+
+**待决冲突：** FR-INV-02 对零有效节点泛化要求保全，010 FR008 则要求管理员过滤全部解析项时应用空成员集合。提取阶段零项与过滤后零项并非同一事实：前者表示没有成功提取项；后者至少有一项成功提取，但全部未通过过滤，可能同时存在解析拒绝项。所读用户原话“部分成功只保留更新成功节点”未明确覆盖过滤后零项，不能仅据此认定 FR008 的过滤全空语义已获用户批准。仍须决定后者应应用空成员还是保留上次已应用成员，以及部分解析失败且成功提取项均被过滤时是否采取相同处理；本修订不改变该边界。当前实现静态路径区分提取空与过滤空；这不是测试通过或业务决策的证明。

@@ -473,10 +473,18 @@ func resolveArchivePath(baseDir, rawPath string) string {
 	return rawPath
 }
 
+// recoverySnapshotObserverKey allows a per-call synchronization observer in package tests.
+type recoverySnapshotObserverKey struct{}
+
 // RecoverSourceHistory executes the recovery procedure according to strict invariant and archive verification gates.
 func RecoverSourceHistory(ctx context.Context, db *sql.DB, cfg RecoveryConfig) (result *RecoveryResult, resultErr error) {
 	consumerID := domain.MustNewUUIDv7()
+	type leaseKey struct {
+		nodeID   string
+		revision int64
+	}
 	var heldLeases []domain.ConnectionVersionLease
+	heldLeaseKeys := make(map[leaseKey]bool)
 	defer func() {
 		if len(heldLeases) == 0 {
 			return
@@ -687,12 +695,48 @@ func RecoverSourceHistory(ctx context.Context, db *sql.DB, cfg RecoveryConfig) (
 			if err != nil {
 				return fmt.Errorf("historical_configuration_unavailable: %w", err)
 			}
+			var head int64
+			headErr := captureTx.QueryRowContext(ctx, `SELECT connection_revision FROM node_connection_heads WHERE logical_id=?`, n.NodeLogicalID).Scan(&head)
+			if headErr != nil && headErr != sql.ErrNoRows {
+				return headErr
+			}
+			if headErr == sql.ErrNoRows && !cfg.DryRun {
+				var consumersClosed int
+				closureErr := captureTx.QueryRowContext(ctx, `SELECT consumers_closed FROM subscription_storage_readiness WHERE singleton=1`).Scan(&consumersClosed)
+				if closureErr != nil && closureErr != sql.ErrNoRows {
+					return closureErr
+				}
+				if consumersClosed == 1 {
+					return fmt.Errorf("historical_configuration_unavailable: current head is missing for node %s", n.NodeLogicalID)
+				}
+			}
+			if headErr == nil {
+				headCaptured := false
+				for _, version := range versions {
+					if version.Revision == head {
+						headCaptured = true
+						break
+					}
+				}
+				if !headCaptured {
+					return fmt.Errorf("historical_configuration_unavailable: current head revision %d is missing for node %s", head, n.NodeLogicalID)
+				}
+			}
 			return captureTx.Commit()
 		}()
 		if captureErr != nil {
 			return nil, fmt.Errorf("capture recovery snapshot: %w", captureErr)
 		}
-		heldLeases = append(heldLeases, leases...)
+		for _, lease := range leases {
+			key := leaseKey{lease.NodeID, lease.Revision}
+			if !heldLeaseKeys[key] {
+				heldLeases = append(heldLeases, lease)
+				heldLeaseKeys[key] = true
+			}
+		}
+		if observe, ok := ctx.Value(recoverySnapshotObserverKey{}).(func()); ok {
+			observe()
+		}
 
 		if !strings.EqualFold(string(current.Protocol), n.Protocol) || !strings.EqualFold(current.Server, n.Server) || current.Port != n.Port {
 			return nil, fmt.Errorf("node %s endpoint mismatch between manifest and database (fail-closed)", n.NodeLogicalID)

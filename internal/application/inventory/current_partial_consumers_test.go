@@ -15,9 +15,8 @@ import (
 	"clash-sub-parser/internal/repository/sqlite"
 )
 
-// This characterizes CURRENT behavior, not an approved Q5 product decision:
-// after full A/B then partial A/C, B's old source is retained, but B is outside
-// enabled inventory and exports unless another enabled subscription supplies B.
+// A partial refresh replaces the subscription's membership with its accepted
+// subset. Shared and explicitly confirmed manual nodes remain available.
 func TestCurrentBehavior_PartialRefreshInventoryFactsAndPreview(t *testing.T) {
 	const nodeA = "  - {name: A, type: ss, server: 192.0.2.11, port: 8388, cipher: aes-128-gcm, password: synthetic-a}\n"
 	const nodeB = "  - {name: B, type: ss, server: 192.0.2.12, port: 8388, cipher: aes-128-gcm, password: synthetic-b}\n"
@@ -55,6 +54,26 @@ func TestCurrentBehavior_PartialRefreshInventoryFactsAndPreview(t *testing.T) {
 				t.Fatalf("initial names missing: %v", ids)
 			}
 
+			now := time.Now().UTC()
+			manual := domain.Node{
+				LogicalID:   "manual-partial-consumer",
+				Protocol:    domain.ProtocolSS,
+				DisplayName: "Manual",
+				Server:      "192.0.2.14",
+				Port:        8388,
+				Credentials: domain.InboundProtocolCredential{Method: "aes-128-gcm", Password: "synthetic-manual"},
+				Active:      true,
+				CreatedAt:   now,
+				UpdatedAt:   now,
+			}
+			if err := nodes.UpsertBatch(ctx, []domain.Node{manual}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.ExecContext(ctx, `INSERT INTO node_source_history(id,node_logical_id,source_identity,source_label,relation_state,cause,evidence_kind,evidence_key,created_at) VALUES ('manual-partial-fixture',?,'manual','manual','verified','manual_confirmed','fixture','manual-partial-fixture',?)`, manual.LogicalID, now); err != nil {
+				t.Fatal(err)
+			}
+			ids["Manual"] = manual.LogicalID
+
 			var otherID, otherFetchID string
 			if sharedB {
 				otherID = domain.MustNewUUIDv7()
@@ -83,7 +102,7 @@ func TestCurrentBehavior_PartialRefreshInventoryFactsAndPreview(t *testing.T) {
 				t.Helper()
 				wantIDs := make([]string, 0, len(wantNames))
 				wantServers := make([]string, 0, len(wantNames))
-				servers := map[string]string{"A": "192.0.2.11", "B": "192.0.2.12", "C": "192.0.2.13"}
+				servers := map[string]string{"A": "192.0.2.11", "B": "192.0.2.12", "C": "192.0.2.13", "Manual": "192.0.2.14"}
 				for _, name := range wantNames {
 					wantIDs = append(wantIDs, ids[name])
 					wantServers = append(wantServers, servers[name])
@@ -151,7 +170,7 @@ func TestCurrentBehavior_PartialRefreshInventoryFactsAndPreview(t *testing.T) {
 				}
 				t.Logf("stage=%s enabled_inventory=%d facts=%d preview=%d rendered=%v", stage, len(inventoryIDs), len(factIDs), preview.Manifest.NodeCount, gotServers)
 			}
-			assertConsumers("full", []string{"A", "B"})
+			assertConsumers("full", []string{"A", "B", "Manual"})
 
 			fetcher.setResponse(url, &fetch.Response{StatusCode: 200, Body: []byte("proxies:\n" + nodeA + nodeC + rejected), ContentDigest: "synthetic-partial-ac"})
 			partial, err := svc.ReconcileSubscription(ctx, id)
@@ -159,8 +178,8 @@ func TestCurrentBehavior_PartialRefreshInventoryFactsAndPreview(t *testing.T) {
 				t.Fatalf("partial A/C/rejected: result=%+v error=%v", partial, err)
 			}
 			ledger, err := nodes.ListAll(ctx, domain.NodeFilter{ActiveOnly: true})
-			if err != nil || len(ledger) != 3 {
-				t.Fatalf("current active ledger should retain A/B/C: count=%d error=%v", len(ledger), err)
+			if err != nil || len(ledger) != 4 {
+				t.Fatalf("current active ledger should retain A/B/C and manual: count=%d error=%v", len(ledger), err)
 			}
 			for _, n := range ledger {
 				if oldID := ids[n.DisplayName]; oldID != "" && oldID != n.LogicalID {
@@ -195,7 +214,7 @@ func TestCurrentBehavior_PartialRefreshInventoryFactsAndPreview(t *testing.T) {
 			if !reflect.DeepEqual(gotSources, wantSources) {
 				t.Fatalf("current partial source fetch IDs=%v want=%v", gotSources, wantSources)
 			}
-			wantNames := []string{"A", "C"}
+			wantNames := []string{"A", "C", "Manual"}
 			if sharedB {
 				var sharedFetch string
 				if err := db.QueryRowContext(ctx, "SELECT last_seen_fetch_id FROM node_sources WHERE node_logical_id = ? AND subscription_id = ?", ids["B"], otherID).Scan(&sharedFetch); err != nil || sharedFetch != otherFetchID {
@@ -208,7 +227,7 @@ func TestCurrentBehavior_PartialRefreshInventoryFactsAndPreview(t *testing.T) {
 				if _, err := db.ExecContext(ctx, "UPDATE subscriptions SET enabled = 0 WHERE id = ?", otherID); err != nil {
 					t.Fatal(err)
 				}
-				assertConsumers("shared subscription disabled", []string{"A", "C"})
+				assertConsumers("shared subscription disabled", []string{"A", "C", "Manual"})
 			}
 		})
 	}

@@ -2265,23 +2265,30 @@ func (s *Service) GetNodeSourceHistory(ctx context.Context, logicalID string) (*
 			WHERE ns.node_logical_id = ?
 			ORDER BY ns.subscription_id ASC;
 		`, logicalID)
-		if qErr == nil {
-			for rows.Next() {
-				var (
-					subID   string
-					subName string
-					enabled int
-				)
-				if scanErr := rows.Scan(&subID, &subName, &enabled); scanErr == nil {
-					currentSources = append(currentSources, CurrentSourceView{
-						SubscriptionID: subID,
-						Name:           subName,
-						Enabled:        enabled == 1,
-					})
-				}
-			}
-			rows.Close()
+		if qErr != nil {
+			return nil, fmt.Errorf("failed to query current node sources: %w", qErr)
 		}
+		for rows.Next() {
+			var (
+				subID   string
+				subName string
+				enabled int
+			)
+			if err := rows.Scan(&subID, &subName, &enabled); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("failed to scan current node source: %w", err)
+			}
+			currentSources = append(currentSources, CurrentSourceView{
+				SubscriptionID: subID,
+				Name:           subName,
+				Enabled:        enabled == 1,
+			})
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("failed to iterate current node sources: %w", err)
+		}
+		rows.Close()
 	}
 
 	// 3. Query history ledger
@@ -2302,12 +2309,19 @@ func (s *Service) GetNodeSourceHistory(ctx context.Context, logicalID string) (*
 	// 4. Map history items and evaluate source_deleted
 	existingSubs := make(map[string]bool)
 	if s.subscriptions != nil {
-		allSubs, _, subErr := s.subscriptions.List(ctx, domain.SubscriptionFilter{
-			Pagination: domain.Pagination{Page: 1, PageSize: 1000},
-		})
-		if subErr == nil {
-			for _, sub := range allSubs {
+		const pageSize = 100
+		for page := 1; ; page++ {
+			subs, total, subErr := s.subscriptions.List(ctx, domain.SubscriptionFilter{
+				Pagination: domain.Pagination{Page: page, PageSize: pageSize},
+			})
+			if subErr != nil {
+				return nil, fmt.Errorf("failed to list subscriptions for node source history: %w", subErr)
+			}
+			for _, sub := range subs {
 				existingSubs[sub.ID] = true
+			}
+			if page*pageSize >= total || len(subs) == 0 {
+				break
 			}
 		}
 	}

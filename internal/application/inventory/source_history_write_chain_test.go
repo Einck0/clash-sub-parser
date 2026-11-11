@@ -2,7 +2,9 @@ package inventory_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"clash-sub-parser/internal/application/inventory"
@@ -11,6 +13,124 @@ import (
 	"clash-sub-parser/internal/fetch"
 	"clash-sub-parser/internal/repository/sqlite"
 )
+
+type failingHistorySubscriptionList struct {
+	domain.SubscriptionRepository
+	err      error
+	failPage int
+}
+
+func (r failingHistorySubscriptionList) List(ctx context.Context, filter domain.SubscriptionFilter) ([]domain.Subscription, int, error) {
+	if r.failPage == 0 || filter.Pagination.Page == r.failPage {
+		return nil, 0, r.err
+	}
+	return r.SubscriptionRepository.List(ctx, filter)
+}
+
+func TestSourceHistoryReadErrorsAreReturned(t *testing.T) {
+	for _, failure := range []string{"current_query", "current_scan", "subscription_list"} {
+		t.Run(failure, func(t *testing.T) {
+			ctx := context.Background()
+			db, subs, fetches, nodes, sources := setupTestEnv(t)
+			fetcher := newMockFetcher()
+			id, url := domain.MustNewUUIDv7(), "https://source-history.invalid/feed"
+			createTestSub(t, subs, id, "History", url, true)
+			fetcher.setResponse(url, &fetch.Response{StatusCode: 200, Body: []byte(clashYAMLSharedNode), ContentDigest: "history"})
+			svc := inventory.NewService(db, subs, fetches, nodes, sources, fetcher)
+			if _, err := svc.ReconcileSubscription(ctx, id); err != nil {
+				t.Fatal(err)
+			}
+			active, _, err := svc.ListNodes(ctx, domain.NodeFilter{ActiveOnly: true})
+			if err != nil || len(active) != 1 {
+				t.Fatalf("expected one active node: %v", err)
+			}
+
+			var want string
+			var expectedErr error
+			switch failure {
+			case "current_query":
+				if _, err := db.ExecContext(ctx, "DROP TABLE node_sources"); err != nil {
+					t.Fatal(err)
+				}
+				want = "failed to query current node sources"
+			case "current_scan":
+				if _, err := db.ExecContext(ctx, "UPDATE subscriptions SET enabled='invalid' WHERE id=?", id); err != nil {
+					t.Fatal(err)
+				}
+				want = "failed to scan current node source"
+			case "subscription_list":
+				expectedErr = errors.New("subscription list unavailable")
+				svc = inventory.NewService(db, failingHistorySubscriptionList{SubscriptionRepository: subs, err: expectedErr}, fetches, nodes, sources, fetcher)
+				want = "failed to list subscriptions for node source history"
+			}
+			result, err := svc.GetNodeSourceHistory(ctx, active[0].LogicalID)
+			if result != nil || err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("result=%+v error=%v; expected %s", result, err, want)
+			}
+			if expectedErr != nil && !errors.Is(err, expectedErr) {
+				t.Fatalf("subscription list error was not preserved: %v", err)
+			}
+		})
+	}
+}
+
+func TestSourceHistorySubscriptionPagination(t *testing.T) {
+	ctx := context.Background()
+	db, subs, fetches, nodes, sources := setupTestEnv(t)
+	fetcher := newMockFetcher()
+	id, url := domain.MustNewUUIDv7(), "https://source-history.invalid/feed"
+	createTestSub(t, subs, id, "History", url, true)
+	fetcher.setResponse(url, &fetch.Response{StatusCode: 200, Body: []byte(clashYAMLSharedNode), ContentDigest: "history"})
+	svc := inventory.NewService(db, subs, fetches, nodes, sources, fetcher)
+	if _, err := svc.ReconcileSubscription(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	active, _, err := svc.ListNodes(ctx, domain.NodeFilter{ActiveOnly: true})
+	if err != nil || len(active) != 1 {
+		t.Fatalf("expected one active node, got %d: %v", len(active), err)
+	}
+	history := domain.NodeSourceHistory{
+		ID: domain.MustNewUUIDv7(), NodeLogicalID: active[0].LogicalID,
+		SubscriptionID: &id, SourceIdentity: "pagination:source", SourceLabel: "History",
+		RelationState: domain.RelationStateVerified, Cause: domain.CauseRefreshRemoved,
+		EvidenceKind: "refresh_snapshot", EvidenceKey: "pagination:history", EvidenceJSON: "{}",
+		CreatedAt: domain.NowUTC(),
+	}
+	if err := sqlite.NewNodeSourceHistoryRepository(db).InsertBatch(ctx, []domain.NodeSourceHistory{history}); err != nil {
+		t.Fatal(err)
+	}
+	// Ensure the historical source sorts after every other subscription.
+	if _, err := db.ExecContext(ctx, "UPDATE subscriptions SET created_at = ? WHERE id = ?", "2000-01-01T00:00:00Z", id); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 100; i++ {
+		createTestSub(t, subs, domain.MustNewUUIDv7(), fmt.Sprintf("Other %d", i), fmt.Sprintf("https://source-history.invalid/%d", i), true)
+	}
+	firstPage, total, err := subs.List(ctx, domain.SubscriptionFilter{Pagination: domain.Pagination{Page: 1, PageSize: 100}})
+	if err != nil || total != 101 || len(firstPage) != 100 {
+		t.Fatalf("expected 101 subscriptions and a full first page, total=%d page=%d err=%v", total, len(firstPage), err)
+	}
+	for _, sub := range firstPage {
+		if sub.ID == id {
+			t.Fatal("historical subscription unexpectedly on first page")
+		}
+	}
+	resp, err := svc.GetNodeSourceHistory(ctx, active[0].LogicalID)
+	if err != nil || len(resp.History) != 1 {
+		t.Fatalf("expected one history item, response=%+v err=%v", resp, err)
+	}
+	if resp.History[0].SourceDeleted || resp.History[0].SourceUnmapped {
+		t.Fatalf("existing source on second page misclassified: %+v", resp.History[0])
+	}
+
+	expectedErr := errors.New("second page unavailable")
+	failingSubs := failingHistorySubscriptionList{SubscriptionRepository: subs, err: expectedErr, failPage: 2}
+	failingSvc := inventory.NewService(db, failingSubs, fetches, nodes, sources, fetcher)
+	result, err := failingSvc.GetNodeSourceHistory(ctx, active[0].LogicalID)
+	if result != nil || !errors.Is(err, expectedErr) || !strings.Contains(err.Error(), "failed to list subscriptions for node source history") {
+		t.Fatalf("expected wrapped second-page error, result=%+v err=%v", result, err)
+	}
+}
 
 func TestSourceHistoryWriteChain_RefreshPruning(t *testing.T) {
 	ctx := context.Background()

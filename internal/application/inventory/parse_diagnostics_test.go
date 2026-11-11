@@ -14,6 +14,45 @@ import (
 	"clash-sub-parser/internal/repository/sqlite"
 )
 
+func TestParseDiagnosticsWriteFailureIsReturned(t *testing.T) {
+	for _, tc := range []struct {
+		name, outcome, body, want string
+	}{
+		{"fetch", "failed", "", "persist failed fetch"},
+		{"parse", "failed", "proxies:\n - invalid\n", "persist failed parse"},
+		{"partial", "partial", "proxies:\n - {name: Valid, type: ss, server: 192.0.2.33, port: 8388, cipher: aes-128-gcm, password: test}\n - invalid\n", "reconcile transaction failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			db, subs, fetches, nodes, sources := setupTestEnv(t)
+			fetcher := newMockFetcher()
+			id, url := domain.MustNewUUIDv7(), "https://diagnostic-failure.invalid/feed"
+			createTestSub(t, subs, id, "Diagnostics", url, true)
+			fetcher.setResponse(url, &fetch.Response{StatusCode: 200, Body: []byte(tc.body), ContentDigest: "test"})
+			_, err := db.ExecContext(ctx, `CREATE TRIGGER reject_diagnostic BEFORE INSERT ON subscription_fetches
+				WHEN NEW.outcome = '`+tc.outcome+`' BEGIN SELECT RAISE(ABORT, 'diagnostic write rejected'); END`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			svc := inventory.NewService(db, subs, fetches, nodes, sources, fetcher)
+			result, err := svc.ReconcileSubscription(ctx, id)
+			if result != nil || err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "diagnostic write rejected") {
+				t.Fatalf("result=%+v error=%v; expected %s", result, err, tc.want)
+			}
+			var fetchCount, nodeCount int
+			if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM subscription_fetches WHERE subscription_id=?", id).Scan(&fetchCount); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM node_sources WHERE subscription_id=?", id).Scan(&nodeCount); err != nil {
+				t.Fatal(err)
+			}
+			if fetchCount != 0 || nodeCount != 0 {
+				t.Fatalf("failed transaction persisted fetches=%d sources=%d", fetchCount, nodeCount)
+			}
+		})
+	}
+}
+
 func TestParseDiagnosticsPersistPartialAndTotalFailureWithoutSecrets(t *testing.T) {
 	ctx := context.Background()
 	db, subs, fetches, nodes, sources := setupTestEnv(t)

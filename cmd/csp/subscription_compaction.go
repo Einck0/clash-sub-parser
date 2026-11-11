@@ -13,6 +13,8 @@ import (
 
 	"clash-sub-parser/internal/domain"
 	"clash-sub-parser/internal/repository/sqlite"
+
+	sqlitedriver "modernc.org/sqlite"
 )
 
 // Maintenance never initializes application services or falls through to the
@@ -79,9 +81,7 @@ func runSubscriptionCompaction(args []string, stdout, stderr io.Writer) int {
 	defer cancel()
 	plan, err := sqlite.InspectSubscriptionCompaction(ctx, db)
 	if err != nil {
-		// Full database/driver errors may include untrusted input. No details or
-		// raw configuration are copied to terminal output.
-		fmt.Fprintln(stderr, "compaction plan: inspection failed; no data transformed and no valid plan emitted")
+		writeCompactionInspectionFailure(stderr, err)
 		return 1
 	}
 	if err := json.NewEncoder(report).Encode(plan); err != nil {
@@ -98,6 +98,23 @@ func runSubscriptionCompaction(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintln(stdout, "Read-only inventory recorded. Apply eligibility and unresolved blockers are in the plan; separate offline operator authorization is required. No database was transformed.")
 	return 0
+}
+
+// Only fixed categories, an inspector-owned phase and a numeric SQLite code
+// cross this boundary. Never format err (even a wrapped driver's message).
+func writeCompactionInspectionFailure(stderr io.Writer, err error) {
+	category, code := "unknown", 0
+	var driverErr *sqlitedriver.Error
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		category = "deadline"
+	case errors.Is(err, context.Canceled):
+		category = "cancelled"
+	case errors.As(err, &driverErr):
+		category, code = "sqlite", driverErr.Code()
+	}
+	fmt.Fprintf(stderr, "compaction plan: inspection failed; no data transformed and no valid plan emitted (stage=%s category=%s sqlite_code=%d)\n",
+		sqlite.SubscriptionCompactionInspectionStage(err), category, code)
 }
 
 func runSubscriptionCompactionVerify(args []string, stdout, stderr io.Writer) int {

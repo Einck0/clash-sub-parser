@@ -15,23 +15,49 @@ import (
 	"clash-sub-parser/internal/domain"
 )
 
+// compactionInspectionError exposes only a trusted, fixed phase. The original
+// error remains available to errors.Is/As, but is never interpolated in output.
+type compactionInspectionError struct {
+	stage string
+	cause error
+}
+
+func (e *compactionInspectionError) Error() string { return "compaction inspection failed: " + e.stage }
+func (e *compactionInspectionError) Unwrap() error { return e.cause }
+
+// SubscriptionCompactionInspectionStage returns a phase assigned by the
+// inspector, never a table name or an untrusted error's string or Stage method.
+func SubscriptionCompactionInspectionStage(err error) string {
+	var inspection *compactionInspectionError
+	if errors.As(err, &inspection) {
+		return inspection.stage
+	}
+	return "unknown"
+}
+
 // InspectSubscriptionCompaction runs on one read snapshot. It never invokes a
 // migration runner, enables WAL, creates tables, selects/deletes survivors or
 // marks a database ready. Use OpenReadOnly for file-backed callers. Full-table
 // hashing is intentionally an explicit offline operation, not a health check.
 func InspectSubscriptionCompaction(ctx context.Context, db *sql.DB) (*domain.SubscriptionStoragePlan, error) {
 	if db == nil {
-		return nil, fmt.Errorf("compaction plan: database unavailable")
+		return nil, &compactionInspectionError{"begin_snapshot", errors.New("database unavailable")}
 	}
 	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return nil, err
+		return nil, &compactionInspectionError{"begin_snapshot", err}
 	}
 	defer tx.Rollback()
 	return inspectSubscriptionCompactionTx(ctx, tx)
 }
 
-func inspectSubscriptionCompactionTx(ctx context.Context, tx *sql.Tx) (*domain.SubscriptionStoragePlan, error) {
+func inspectSubscriptionCompactionTx(ctx context.Context, tx *sql.Tx) (_ *domain.SubscriptionStoragePlan, err error) {
+	stage := "list_tables"
+	defer func() {
+		if err != nil {
+			err = &compactionInspectionError{stage, err}
+		}
+	}()
 	plan := &domain.SubscriptionStoragePlan{
 		Version: 1, Counts: make(map[string]int64), ProtectedDigests: make(map[string]string),
 		Subscriptions:   []domain.SubscriptionStorageStatus{},
@@ -59,6 +85,7 @@ func inspectSubscriptionCompactionTx(ctx context.Context, tx *sql.Tx) (*domain.S
 	present := make(map[string]bool, len(tables))
 	whole := sha256.New()
 	// A sealed plan must bind schema definitions as well as row content.
+	stage = "fingerprint_schema"
 	_, schemaDigest, err := digestCompactionTable(ctx, tx, "sqlite_schema")
 	if err != nil {
 		return nil, fmt.Errorf("compaction plan: fingerprint schema: %w", err)
@@ -66,6 +93,7 @@ func inspectSubscriptionCompactionTx(ctx context.Context, tx *sql.Tx) (*domain.S
 	if err := writeCompactionDigest(whole, schemaDigest); err != nil {
 		return nil, err
 	}
+	stage = "fingerprint_tables"
 	for _, name := range tables {
 		present[name] = true
 		count, digest, err := digestCompactionTable(ctx, tx, name)
@@ -88,6 +116,7 @@ func inspectSubscriptionCompactionTx(ctx context.Context, tx *sql.Tx) (*domain.S
 		}
 	}
 	plan.SnapshotDigest = hex.EncodeToString(whole.Sum(nil))
+	stage = "validate_schema"
 	if present["schema_migrations"] {
 		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(version),0) FROM schema_migrations`).Scan(&plan.SchemaVersion); err != nil {
 			return nil, err
@@ -102,6 +131,7 @@ func inspectSubscriptionCompactionTx(ctx context.Context, tx *sql.Tx) (*domain.S
 	if present["subscription_original_configs"] {
 		rawExpr = `COALESCE((SELECT c.fetch_id FROM subscription_original_configs c WHERE c.subscription_id=s.id),'')`
 	}
+	stage = "subscription_inventory"
 	query := `SELECT s.id,
 		(SELECT COUNT(*) FROM subscription_payloads p WHERE p.subscription_id=s.id),
 		(SELECT COUNT(*) FROM subscription_entries e WHERE e.subscription_id=s.id),
@@ -126,20 +156,24 @@ func inspectSubscriptionCompactionTx(ctx context.Context, tx *sql.Tx) (*domain.S
 		return nil, err
 	}
 	if plan.SchemaVersion >= 27 && plan.SchemaVersion <= 30 {
+		stage = "generation_selection"
 		selectionErr := selectCompactionGenerationsTx(ctx, tx, plan)
 		if selectionErr != nil && !errors.Is(selectionErr, errCompactionSelectionUnresolved) {
 			return nil, selectionErr
 		}
+		stage = "reconcile_sources"
 		count, digest, err := digestCompactionSource(ctx, tx, "node_sources", compactionCurrentSources)
 		if err != nil {
 			return nil, err
 		}
 		plan.ReconciledSourcesCount, plan.ReconciledSourcesDigest = count, digest
+		stage = "reconcile_history"
 		count, digest, err = digestCompactionSource(ctx, tx, "node_source_history", compactionProjectedHistory)
 		if err != nil {
 			return nil, err
 		}
 		plan.ReconciledHistoryCount, plan.ReconciledHistoryDigest = count, digest
+		stage = "readiness"
 		var sealed int
 		if present["subscription_storage_readiness"] {
 			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM subscription_storage_readiness`).Scan(&sealed); err != nil {
@@ -402,6 +436,18 @@ func digestCompactionSource(ctx context.Context, tx *sql.Tx, name, table string)
 	quoted := make([]string, len(columns))
 	for i, col := range columns {
 		quoted[i] = quoteCompactionIdentifier(col) + " COLLATE BINARY"
+	}
+	// A non-NULL BINARY unique prefix already fixes the complete canonical
+	// ordering. Truncating only a proven prefix lets SQLite stream wide rows
+	// from its index instead of sorting their entire historical config bodies.
+	if table == quoteCompactionIdentifier(name) {
+		prefix, err := compactionUniqueOrderPrefix(ctx, tx, name, columns)
+		if err != nil {
+			return 0, "", err
+		}
+		if prefix > 0 {
+			quoted = quoted[:prefix]
+		}
 	}
 	rows, err = tx.QueryContext(ctx, "SELECT * FROM "+table+" ORDER BY "+strings.Join(quoted, ","))
 	if err != nil {

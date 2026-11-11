@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -72,6 +73,49 @@ func TestOfflineCompactionPreparedScratchSingleGeneration(t *testing.T) {
 	}
 	if _, err := db.ExecContext(ctx, `INSERT INTO subscription_payloads(id,subscription_id,fetch_id,content_digest,body_blob,created_at)VALUES('second','compact-sub','current-fetch','digest',X'','2026-11-10T00:00:00Z')`); err == nil {
 		t.Fatal("single generation constraint missing")
+	}
+}
+
+func TestOfflineCompactionMembershipRevalidatedAfterReconciliation(t *testing.T) {
+	for _, branch := range []string{"valid current membership", "evidence removed during reconciliation"} {
+		t.Run(branch, func(t *testing.T) {
+			ctx := context.Background()
+			db, _, decisions := preparedCompactionScratch(t)
+			if _, err := db.Exec(`UPDATE subscription_entries SET node_logical_id='zero-node' WHERE id='current-entry';
+				INSERT INTO node_sources(node_logical_id,subscription_id,last_seen_fetch_id) VALUES('zero-node','compact-sub','current-fetch')`); err != nil {
+				t.Fatal(err)
+			}
+			if branch == "evidence removed during reconciliation" {
+				// Planning and input validation see valid membership. Only the
+				// finalizer's post-reconciliation proof can catch this change.
+				if _, err := db.Exec(`CREATE TRIGGER remove_compaction_membership AFTER INSERT ON node_source_history
+					BEGIN UPDATE subscription_entries SET node_logical_id=NULL WHERE id='current-entry'; END`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			baseline, err := sqlite.InspectSubscriptionCompaction(ctx, db)
+			if err != nil || !baseline.ApplySupported {
+				t.Fatalf("expected valid pre-reconciliation evidence: plan=%+v err=%v", baseline, err)
+			}
+			result, err := sqlite.FinalizeSubscriptionCompaction(ctx, db, baseline, decisions)
+			if branch == "evidence removed during reconciliation" {
+				if err == nil || !strings.Contains(err.Error(), "unreconciled source membership") {
+					t.Fatalf("post-reconciliation missing evidence was not rejected by membership check: %v", err)
+				}
+				after, inspectErr := sqlite.InspectSubscriptionCompaction(ctx, db)
+				if inspectErr != nil || !reflect.DeepEqual(after, baseline) {
+					t.Fatalf("membership refusal did not fully roll back: %v", inspectErr)
+				}
+				return
+			}
+			if err != nil || result.Counts["node_sources"] != 1 {
+				t.Fatalf("valid current membership lost: result=%+v err=%v", result, err)
+			}
+			verification, err := sqlite.VerifySubscriptionCompaction(ctx, db, baseline)
+			if err != nil || !verification.Verified {
+				t.Fatalf("valid membership conversion verification=%+v err=%v", verification, err)
+			}
+		})
 	}
 }
 

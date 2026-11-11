@@ -20,9 +20,13 @@ const compactionCurrentSources = `(SELECT ns.* FROM node_sources ns WHERE ns.las
 
 // Rank once rather than running a correlated scan for every historical entry
 // in a multi-million-row schema27 database.
-const compactionLatestEntries = `(SELECT * FROM (SELECT e.*,ROW_NUMBER() OVER (
- PARTITION BY e.node_logical_id,e.subscription_id ORDER BY julianday(e.created_at) DESC,e.rowid DESC
- ) AS compaction_rank FROM subscription_entries e WHERE e.node_logical_id IS NOT NULL) WHERE compaction_rank=1)`
+// Sort only the winner's identity and ordering fields, not historical config
+// blobs. Join complete rows after ranking, preserving the exact tie-break rule.
+const compactionLatestEntries = `(SELECT e.* FROM subscription_entries e JOIN (
+ SELECT entry_rowid FROM (SELECT rowid AS entry_rowid,ROW_NUMBER() OVER (
+ PARTITION BY node_logical_id,subscription_id ORDER BY julianday(created_at) DESC,rowid DESC
+ ) AS compaction_rank FROM subscription_entries WHERE node_logical_id IS NOT NULL)
+ WHERE compaction_rank=1) winners ON e.rowid=winners.entry_rowid)`
 const compactionHistoryAdditions = `SELECT 'observation:'||e.node_logical_id||':sub:'||e.subscription_id AS id,
  e.node_logical_id,e.subscription_id,'sub:'||e.subscription_id AS source_identity,s.name AS source_label,
  NULL AS connection_revision,'unknown' AS relation_state,'unresolved' AS cause,
@@ -33,7 +37,42 @@ const compactionHistoryAdditions = `SELECT 'observation:'||e.node_logical_id||':
  WHERE NOT EXISTS(SELECT 1 FROM node_source_history h WHERE h.node_logical_id=e.node_logical_id AND h.source_identity='sub:'||e.subscription_id)`
 const compactionProjectedHistory = `(SELECT * FROM node_source_history UNION ALL ` + compactionHistoryAdditions + `)`
 
+// CROSS JOIN alone is insufficient: SQLite can still choose a subscription or
+// node index and scan years of entries per source. This schema15 unique index
+// (unchanged through schema30) bounds the inner lookup to one payload's entries.
+const compactionSourceMembership = `SELECT 1 FROM subscription_payloads p
+ CROSS JOIN subscription_entries e INDEXED BY sqlite_autoindex_subscription_entries_2 ON e.payload_id=p.id
+ WHERE p.subscription_id=ns.subscription_id AND p.fetch_id=ns.last_seen_fetch_id
+ AND e.subscription_id=ns.subscription_id AND e.node_logical_id=ns.node_logical_id`
+
+func checkCompactionMembershipIndex(ctx context.Context, tx *sql.Tx) error {
+	var valid int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_index_list('subscription_entries')
+ WHERE name='sqlite_autoindex_subscription_entries_2' AND "unique"=1 AND partial=0`).Scan(&valid); err != nil {
+		return err
+	}
+	if valid != 1 {
+		return errors.New("compaction membership index unavailable")
+	}
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_index_xinfo('sqlite_autoindex_subscription_entries_2')
+ WHERE "key"=1 AND cid>=0 AND "desc"=0 AND coll='BINARY'
+ AND ((seqno=0 AND name='payload_id') OR (seqno=1 AND name='ordinal'))`).Scan(&valid); err != nil {
+		return err
+	}
+	var keys int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_index_xinfo('sqlite_autoindex_subscription_entries_2') WHERE "key"=1`).Scan(&keys); err != nil {
+		return err
+	}
+	if valid != 2 || keys != 2 {
+		return errors.New("compaction membership index unsupported")
+	}
+	return nil
+}
+
 func selectCompactionGenerationsTx(ctx context.Context, tx *sql.Tx, plan *domain.SubscriptionStoragePlan) error {
+	if err := checkCompactionMembershipIndex(ctx, tx); err != nil {
+		return err
+	}
 	var invalidTime int
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM subscription_fetches WHERE julianday(started_at) IS NULL`).Scan(&invalidTime); err != nil {
 		return err
@@ -73,7 +112,7 @@ func selectCompactionGenerationsTx(ctx context.Context, tx *sql.Tx, plan *domain
 	var unexplained int
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM node_sources ns WHERE
  NOT EXISTS(SELECT 1 FROM subscription_fetches f WHERE f.id=ns.last_seen_fetch_id AND f.subscription_id=ns.subscription_id AND f.outcome IN ('success','partial'))
- OR NOT EXISTS(SELECT 1 FROM subscription_entries e JOIN subscription_payloads p ON p.id=e.payload_id WHERE e.subscription_id=ns.subscription_id AND e.node_logical_id=ns.node_logical_id AND p.fetch_id=ns.last_seen_fetch_id)
+ OR NOT EXISTS(`+compactionSourceMembership+`)
  OR NOT EXISTS(SELECT 1 FROM subscription_fetches f WHERE f.id=`+compactionLatestUseful+`)`).Scan(&unexplained); err != nil {
 		return err
 	}

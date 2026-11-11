@@ -91,7 +91,12 @@ func FinalizeSubscriptionCompaction(ctx context.Context, db *sql.DB, baseline *d
 		if err := reconcileCompactionSourcesTx(ctx, tx, baseline); err != nil {
 			return err
 		}
-		if err := requireCompactionZeroTx(ctx, tx, `SELECT COUNT(*) FROM node_sources ns WHERE NOT EXISTS (SELECT 1 FROM subscription_entries e JOIN subscription_payloads p ON p.id=e.payload_id WHERE e.subscription_id=ns.subscription_id AND e.node_logical_id=ns.node_logical_id AND p.fetch_id=ns.last_seen_fetch_id)`, "unreconciled source membership"); err != nil {
+		// Use the same bounded payload-range proof as planning. Recheck the
+		// index contract after reconciliation and fail closed on missing evidence.
+		if err := checkCompactionMembershipIndex(ctx, tx); err != nil {
+			return err
+		}
+		if err := requireCompactionZeroTx(ctx, tx, `SELECT COUNT(*) FROM node_sources ns WHERE NOT EXISTS (`+compactionSourceMembership+`)`, "unreconciled source membership"); err != nil {
 			return err
 		}
 		now := time.Now().UTC().Format(time.RFC3339Nano)

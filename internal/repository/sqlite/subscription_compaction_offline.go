@@ -22,10 +22,12 @@ const compactionCurrentSources = `(SELECT ns.* FROM node_sources ns WHERE ns.las
 // in a multi-million-row schema27 database.
 // Sort only the winner's identity and ordering fields, not historical config
 // blobs. Join complete rows after ranking, preserving the exact tie-break rule.
+// Intentionally scan the narrow rank input sequentially: the noncovering node
+// index otherwise causes random lookups into wide historical rows.
 const compactionLatestEntries = `(SELECT e.* FROM subscription_entries e JOIN (
  SELECT entry_rowid FROM (SELECT rowid AS entry_rowid,ROW_NUMBER() OVER (
  PARTITION BY node_logical_id,subscription_id ORDER BY julianday(created_at) DESC,rowid DESC
- ) AS compaction_rank FROM subscription_entries WHERE node_logical_id IS NOT NULL)
+ ) AS compaction_rank FROM subscription_entries NOT INDEXED WHERE node_logical_id IS NOT NULL)
  WHERE compaction_rank=1) winners ON e.rowid=winners.entry_rowid)`
 const compactionHistoryAdditions = `SELECT 'observation:'||e.node_logical_id||':sub:'||e.subscription_id AS id,
  e.node_logical_id,e.subscription_id,'sub:'||e.subscription_id AS source_identity,s.name AS source_label,

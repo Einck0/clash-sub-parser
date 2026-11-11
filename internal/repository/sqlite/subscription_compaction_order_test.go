@@ -167,14 +167,16 @@ func TestCompactionNarrowRankingPreservesWinnersAndProjections(t *testing.T) {
 	db := compactionOrderDB(t)
 	if _, err := db.Exec(`CREATE TABLE subscriptions(id TEXT PRIMARY KEY,name TEXT);
  CREATE TABLE subscription_entries(id TEXT PRIMARY KEY,node_logical_id TEXT,subscription_id TEXT,created_at TEXT,raw_name TEXT,protocol TEXT,source_key TEXT,config BLOB);
+ CREATE INDEX idx_sub_entries_node ON subscription_entries(node_logical_id);
  CREATE TABLE node_source_history(id TEXT,node_logical_id TEXT,subscription_id TEXT,source_identity TEXT,source_label TEXT,connection_revision INTEGER,relation_state TEXT,cause TEXT,first_observed_at TEXT,last_observed_at TEXT,evidence_kind TEXT,evidence_key TEXT,evidence_json TEXT,created_at TEXT);
  INSERT INTO subscriptions VALUES('s','Synthetic'),('other','Other');
  INSERT INTO subscription_entries VALUES
- ('first','n','s','2026-11-10T02:00:00Z','First','ss','k',x'00'),
- ('fraction','n','s','2026-11-10T02:00:00.500Z','Fraction','ss','k',x'01'),
- ('tie','n','s','2026-11-10T03:00:00.500+01:00','Tie','ss','k',x'02'),
+ ('first','n','s','2026-11-10T02:00:00Z','First','ss','k',zeroblob(65536)),
+ ('other-first','n','other','2026-11-09T00:00:00Z','Other first','ss','o',zeroblob(65537)),
+ ('fraction','n','s','2026-11-10T02:00:00.500Z','Fraction','ss','k',zeroblob(65538)),
+ ('other-sub','n','other','2026-11-10T00:00:00Z','Other','ss','o',zeroblob(65539)),
+ ('tie','n','s','2026-11-10T03:00:00.500+01:00','Tie','ss','k',zeroblob(65540)),
  ('invalid','n','s','invalid','Invalid','ss','k',x'03'),
- ('other-sub','n','other','2026-11-10T00:00:00Z','Other','ss','o',x'04'),
  ('null-first','invalid-only','s','invalid','Null first','ss','i',x'05'),
  ('null-tie','invalid-only','s','also-invalid','Null tie','ss','i',x'06'),
  ('excluded',NULL,'s','2027-01-01T00:00:00Z','No node','ss','x',x'07');
@@ -186,6 +188,39 @@ func TestCompactionNarrowRankingPreservesWinnersAndProjections(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
+	// Explain the actual constant's isolated rank input, not a second query
+	// that could silently diverge from the production access-path directive.
+	_, rankTail, ok := strings.Cut(compactionLatestEntries, " SELECT entry_rowid FROM (")
+	if !ok {
+		t.Fatal("rank input not found")
+	}
+	rankSQL, _, ok := strings.Cut(rankTail, ")\n WHERE compaction_rank=1)")
+	if !ok {
+		t.Fatal("rank input boundary not found")
+	}
+	planRows, err := tx.Query(`EXPLAIN QUERY PLAN ` + rankSQL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scannedEntries := false
+	for planRows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := planRows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(detail, "idx_sub_entries_node") {
+			t.Fatalf("narrow rank must not use noncovering node index: %s", detail)
+		}
+		if strings.Contains(detail, "SCAN subscription_entries") {
+			scannedEntries = true
+		}
+	}
+	planErr := planRows.Err()
+	planRows.Close()
+	if planErr != nil || !scannedEntries {
+		t.Fatalf("sequential rank scan missing: scan=%v err=%v", scannedEntries, planErr)
+	}
 	rows, err := tx.Query(`SELECT id FROM ` + compactionLatestEntries + ` ORDER BY id`)
 	if err != nil {
 		t.Fatal(err)
@@ -216,6 +251,10 @@ func TestCompactionNarrowRankingPreservesWinnersAndProjections(t *testing.T) {
 		if err != nil || count != wantCount || got != want {
 			t.Fatalf("projection changed count=%d/%d digest=%s/%s err=%v", count, wantCount, got, want, err)
 		}
+	}
+	var additions, duplicateHistory int
+	if err := tx.QueryRow(`SELECT COUNT(*),COALESCE(SUM(node_logical_id='n' AND subscription_id='other'),0) FROM (`+compactionHistoryAdditions+`)`).Scan(&additions, &duplicateHistory); err != nil || additions != 2 || duplicateHistory != 0 {
+		t.Fatalf("existing history was not suppressed: additions=%d duplicates=%d err=%v", additions, duplicateHistory, err)
 	}
 	if _, err := tx.Exec(`DELETE FROM subscription_entries`); err != nil {
 		t.Fatal(err)

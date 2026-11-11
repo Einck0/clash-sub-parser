@@ -66,6 +66,22 @@ describe('AuthSecuritySettings Component', () => {
     }
   }
 
+  it('shows the database plaintext warning in both supported languages', async () => {
+    mountAuthSettings()
+    await nextTick()
+
+    const warning = container.querySelector('[data-testid="node-credentials-warning"]')
+    expect(warning?.getAttribute('role')).toBe('note')
+    expect(warning?.classList.contains('alert-warning')).toBe(true)
+    expect(warning?.textContent).toContain('节点连接凭据以明文存储在数据库中')
+    expect(warning?.textContent).toContain('请妥善保护数据库文件')
+
+    setLocale('en-US')
+    await nextTick()
+    expect(warning?.textContent).toContain('Node connection credentials are stored in plaintext in the database')
+    expect(warning?.textContent).toContain('Protect the database file')
+  })
+
   it('loads auth settings and renders independent switches', async () => {
     vi.spyOn(api, 'get').mockResolvedValue(settingsResponse(true, true, true))
     const { auth, getAdminSwitch, getExportSwitch, getExportModeBadge } = mountAuthSettings()

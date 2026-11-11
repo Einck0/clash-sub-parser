@@ -3,12 +3,15 @@ package inventory_test
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"clash-sub-parser/internal/application/inventory"
+	"clash-sub-parser/internal/application/subscription"
 	"clash-sub-parser/internal/domain"
 	"clash-sub-parser/internal/fetch"
+	"clash-sub-parser/internal/repository/sqlite"
 )
 
 func TestParseDiagnosticsPersistPartialAndTotalFailureWithoutSecrets(t *testing.T) {
@@ -22,9 +25,23 @@ func TestParseDiagnosticsPersistPartialAndTotalFailureWithoutSecrets(t *testing.
 	bad := " - SECRET_SCALAR_SENTINEL\n - {type: SECRET_PROTOCOL_SENTINEL, name: SECRET_NAME_SENTINEL}\n - {type: wireguard, server: 192.0.2.1, port: 51820, private-key: SECRET_KEY_SENTINEL, public-key: pub, ip: SECRET_IP_SENTINEL}\n"
 	body := []byte("proxies:\n" + valid + bad)
 	fetcher.setResponse(url, &fetch.Response{StatusCode: 200, Body: body, ContentDigest: "partial-diagnostics"})
-	partial, err := svc.ReconcileSubscription(ctx, id)
-	if err != nil || partial == nil || partial.Outcome != domain.FetchOutcomePartial || partial.NodesParsed != 4 || partial.NodesValid != 1 {
+	// Exercise the same summary that the subscription refresh HTTP handler serializes.
+	refresh := subscription.NewService(subs, sqlite.NewAuditRepository(db), subscription.WithReconciler(svc))
+	partial, err := refresh.Refresh(ctx, id, "diagnostics-test", domain.ActorKindAdmin)
+	if err != nil || partial == nil || partial.Outcome != string(domain.FetchOutcomePartial) || partial.NodesParsed != 4 || partial.NodesValid != 1 {
 		t.Fatalf("partial result=%+v error=%v", partial, err)
+	}
+	serialized, err := json.Marshal(partial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`\"reason\":\"invalid_entry\",\"count\":1`, `\"reason\":\"unsupported_protocol\",\"count\":1`, `\"reason\":\"invalid_field\",\"count\":1`} {
+		if !strings.Contains(string(serialized), want) {
+			t.Errorf("serialized refresh summary missing reason count %s", want)
+		}
+	}
+	if strings.Contains(string(serialized), "SECRET") || strings.Contains(string(serialized), url) || strings.Contains(string(serialized), "192.0.2") {
+		t.Fatal("serialized refresh summary leaked subscription data")
 	}
 	checkStored := func(fetchID, diagnostic string, parsed, valid int) {
 		t.Helper()

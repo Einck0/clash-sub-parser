@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import {
   ShieldCheckIcon,
+  ExclamationTriangleIcon,
   KeyIcon,
   EyeIcon,
   EyeSlashIcon,
@@ -21,6 +22,11 @@ const auth = props.auth ?? useAuthSettings()
 
 <template>
   <div class="space-y-6" data-testid="auth-security-settings">
+    <div role="note" class="alert alert-warning" data-testid="node-credentials-warning">
+      <ExclamationTriangleIcon class="w-5 h-5 shrink-0" aria-hidden="true" />
+      <span>{{ t('settings.nodeCredentialsWarning') }}</span>
+    </div>
+
     <!-- 1. Server Protection Policy Switches -->
     <section class="card bg-base-200/80 backdrop-blur-xl shadow-sm border border-white/10" data-testid="auth-switches">
       <div class="card-body p-5 sm:p-6 space-y-4">

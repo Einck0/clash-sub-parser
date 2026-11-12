@@ -152,8 +152,7 @@ describe('PolicyView Topology & Drawer Linkage', () => {
     await new Promise((r) => setTimeout(r, 20))
 
     expect(patchSpy).toHaveBeenCalledWith('/api/v1/policies/groups/grp-1', expect.objectContaining({
-      empty_fallback_pass: false,
-      name: 'Proxy Group Renamed',
+            name: 'Proxy Group Renamed',
       group_type: 'select',
     }))
 

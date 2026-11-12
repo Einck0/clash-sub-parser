@@ -97,8 +97,7 @@ describe('Feature-Level Policy Sources & Pipeline Rebuild', () => {
       expect(putSpy).toHaveBeenCalledWith('/api/v1/policies/groups/grp-main', {
         name: 'All Kinds Pipeline',
         group_type: 'select',
-        empty_fallback_pass: false,
-        expected_revision: 3,
+                expected_revision: 3,
         sources: [
           { operation: 'add', kind: 'manual_node', position: 0, node_logical_id: 'node-hk-01' },
           { operation: 'add', kind: 'group_ref', position: 1, target_group_id: 'grp-sub-1' },

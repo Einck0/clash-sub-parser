@@ -701,6 +701,10 @@
 - **预计预算/耗时**: `120ms / 400 B`
 - **当前执行状态**: `NOT_EXECUTED`
 
+#### Current PASS coverage override (2026-11-13; COV-ACT-052/COV-ACT-054)
+
+下列原生产覆盖条目/地址/状态仅作历史留存，不授权当前访问或变更生产。新建组不得要求逐组启用 PASS，COV-ACT-054 的逐组开关步骤已被全局设置流程替代；当前执行 [GP-A01–GP-A03](../010-export-adaptation/global-empty-pass-20261113.md) 在同 SHA 预构建镜像、独立端口和合成数据库中进行：读取全局默认值，关闭→保存→重读→开启→保存→重读，核对既有/新组与实际导出均受全局值控制、组编辑器无独立开关，并验证失败读写状态。相关旧组 API 字段仅作兼容，非有效许可。所有当前结果仍未验收；以下旧执行记录不改写。
+
 #### [COV-ACT-052] Create New Policy Group [POST /api/v1/policies/groups]
 - **所属页面/视口**: `Policy Tree - Groups`
 - **关联规格/条款**: `FR-POL-01, FR-POL-08`

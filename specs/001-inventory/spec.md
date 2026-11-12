@@ -375,7 +375,11 @@ executor SHALL 在有界private caches与无外网环境完成Python golden/stag
 - **WHEN** rules、nodes、filters、sources 或 observations 读取失败
 - **THEN** 返回明确不完整/错误诊断，不把失败当作空数组或校验成功
 
-#### Requirement: 默认严格与显式空组 PASS [HR-084] <a id="req-inv-hr-084"></a>
+#### Current override for HR-084–HR-086 (2026-11-13)
+
+本节以下原文保留为历史规格；默认值、逐组许可及空组过滤守卫的现行契约以 [010 US4/FR007](../010-export-adaptation/spec.md) 和 [GP-A01–GP-A12 验收矩阵](../010-export-adaptation/global-empty-pass-20261113.md) 为准。全局 `global_node_filters.empty_fallback_pass` 默认开启，统一覆盖既有/新建组的旧 flag，不在每组提供开关；全局更新 omission 保留已存值，显式 false 关闭。父组/derived projection 不通过继承子 flag 获取许可，而各自在相同全局值下计算是否有效为空；非空/内置目标不被替换。合法被路由的 Mihomo 空组以正常 native PASS 继续后续规则，软筛选后为空不单独否定该有效 PASS；无有效 PASS/路由时仍保留空组/过滤诊断。禁止主订阅、原文、全量节点或 DIRECT 替代失败导出。非 Mihomo 保持实际节点准入且不造 PASS 代理；循环/悬挂、风险、链路、能力、鉴权、仓储等独立失败不豁免。历史 publication bytes 不改，实际节点数不造假。以下旧分组默认 false、未勾选/父组未许可场景不得继续作为当前验收；HR-085 的真实内核后续规则证明与无隐藏直连要求继续有效。本注仅作规格修订，不构成行为验收。
+
+#### Historical requirement: 默认严格与显式空组 PASS [HR-084] <a id="req-inv-hr-084"></a>
 
 系统 SHALL 增加 `empty_fallback_pass` 布尔配置，SQLite 历史行和创建默认 false；domain、repository、Create/Get/List/Update API、UI 与 resolver/compiler/publication MUST 一致保真，PATCH omission 保持旧值而显式 false 关闭。系统 MUST 仅为该 flag=true 且静态解析为空的配置组允许 PASS；未勾选空组继续 required_nonempty，直接被规则引用的未许可空组返回 error/empty_routed_group，未直接引用的普通空组保持既有 empty_group warning 与编译安全策略。
 

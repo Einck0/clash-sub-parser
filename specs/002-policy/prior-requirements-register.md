@@ -123,6 +123,10 @@ schema: speckit-native
 
 ### 3. 图解析、安全兜底与历史兼容
 
+#### Current applicability note for FR-POL-05 (2026-11-13)
+
+以下为原文无删减的历史登记，不是当前空组控制契约；“逐组启用/未启用输出 REJECT/客户端基础流量不断网”不可替代当前验收。按 [010 US4/FR007](../010-export-adaptation/spec.md) 与 [GP 验收矩阵](../010-export-adaptation/global-empty-pass-20261113.md)：全局默认开启，空组正常 native PASS 是继续后续规则而非连通性承诺；全局关闭仍按正常空组错误处理，不另造 REJECT、DIRECT 或主订阅回退产物。非空及独立风险/能力/结构/系统错误边界保留。旧条目和证据保持原状。
+
 #### Requirement: 空策略组 PASS 兜底与防越权隔离 [FR-POL-05] <a id="req-pol-empty-fallback"></a>
 当策略组由于动态筛选无匹配、上游订阅离线等原因导致成员解析为 0 时，系统 SHALL 提供受控的兜底机制。启用 `empty_fallback_pass` 时输出 `proxies: [PASS]` 与 `empty-fallback: PASS`，未启用时输出 `REJECT`。
 

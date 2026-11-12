@@ -2117,6 +2117,8 @@ ALTER TABLE settings ADD COLUMN export_auth_enabled INTEGER NOT NULL DEFAULT 1;
 
 ### Plan Contract DOC-0182 <a id="plan-doc-0182"></a>
 
+> **2026-11-13 适用性纠正（不改以下原始引文/摘要）：** 下列 `still-applicable-plan` 是原登记状态，不再表示默认 false、逐组 UI/许可、父组未配置或所有 filter-empty 均阻断条款仍有效。现行 [010 US4/FR007](../010-export-adaptation/spec.md) 与 [GP 验收矩阵](../010-export-adaptation/global-empty-pass-20261113.md) 覆盖这些冲突：全局默认开启、对既有/新组统一生效，合法 Mihomo 空组正常 native PASS，非空不变，不另造订阅回退；全局关恢复普通空组校验。配置/effective 分离、真实内核后续规则验证、无隐藏直连/伪节点、不可改历史发布及独立循环/悬挂/风险/能力/链路/仓储错误边界继续有效。父组/投影各自依据全局值计算空状态，不继承子 flag。该登记原文和旧轮次结果留存，不构成本轮验收或执行授权。
+
 - **Source**: `openspec/changes/csp-fresh-inventory-full-validation/design.md:23`
 - **Source Digest**: `0a1e3dad4ec43b55e1fdeec4b4d5a06a3f590cf646dcec7b0e228b9fec1822c6`
 - **Classification**: `still-applicable-plan`

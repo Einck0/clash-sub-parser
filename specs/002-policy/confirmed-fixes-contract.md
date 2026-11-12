@@ -1,5 +1,7 @@
 # Capability Contract: Confirmed Fixes Subset (pkg_confirmed_fixes)
 
+> **Current interpretation override (2026-11-13):** This run-bound 2026-10-11 contract is preserved below as historical evidence, not a new implementation authorization. Its per-group/explicit-PASS wording and blanket Mihomo filter-empty prohibition are superseded ONLY for valid normal empty-group PASS by [010 spec US4/FR007](../010-export-adaptation/spec.md) and [matrix GP-A01–GP-A12](../010-export-adaptation/global-empty-pass-20261113.md). The switch is default-on global settings; legacy per-group fields are not authoritative. A valid routed empty Mihomo PASS group continues later rules even when normal soft filtering empties it; this does not admit excluded nodes or waive an independent risk/security error. Global off restores ordinary empty-group failures. Non-Mihomo actual-node filter-empty/no-compatible-node errors, structural/chain/capability/auth/storage errors and prohibition on synthetic PASS proxies remain. Never replace a failed export with primary/raw/all-node/DIRECT output. Historical test cases 5–6 must now be interpreted with explicit global state, target and independent blockers, not copied as blanket denial of valid global PASS. Historical results and unrelated inventory clauses are not rewritten or certified by this note; no local tests/builds are authorized.
+
 - **Feature Directory**: `specs/002-policy/`
 - **Work Package**: `pkg_confirmed_fixes`
 - **Status**: `READY` (Ready for Implementation & Self-Test)

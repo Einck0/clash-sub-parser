@@ -1,5 +1,10 @@
 # API & Integration Contracts: Policy Capability (Unified Member Source Operations)
 
+## Current empty-group PASS interpretation (2026-11-13; supersedes per-group control)
+User's latest quotation and current acceptance are recorded in [010 global PASS](../010-export-adaptation/global-empty-pass-20261113.md), governed by `010-export-adaptation/spec.md` US4/FR007. Empty-group PASS is one **default-enabled global setting**, not a per-group option. Existing group response/update/draft examples below retain `empty_fallback_pass` as a legacy compatibility field; they do NOT grant independent per-group control and a false group value must not disable global true (nor true override global false). Validation, draft preview, resolution and exports consume the saved global value. The effective switch is `global_node_filters.empty_fallback_pass` through the existing global-filter settings API/UI. Omitted global update preserves an explicit false; load/save failures stay errors. Do not add group toggles or conflate `inherit_global_filter` with empty PASS.
+
+Normal Mihomo empty groups use native PASS to continue later rules; nonempty groups and valid normal exports are unchanged. Non-Mihomo retains native actual-node admission without synthetic PASS proxies. No primary/raw/all-node/DIRECT replacement is permitted. Independent structural/risk/capability/chain/auth/revision/storage errors remain blocking. The older run/status and examples below are retained for historical/interface compatibility, not current PASS acceptance. Source has been inspected only; cloud/runtime/UI verification is not completed by this note.
+
 > **治理状态**: `READY` (Sequential Add/Remove Pipeline Confirmed)  
 > **关联工件**: `specs/002-policy/data-model.md`, `specs/002-policy/research.md`  
 > **运行态绑定**: `run_id`: `pi_run_20261011_190715_2256208`, `change`: `002-policy`

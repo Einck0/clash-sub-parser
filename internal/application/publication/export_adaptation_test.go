@@ -13,6 +13,7 @@ import (
 	"clash-sub-parser/internal/domain"
 	"clash-sub-parser/internal/repository/sqlite"
 	"clash-sub-parser/internal/resolver"
+	"gopkg.in/yaml.v3"
 )
 
 func TestPreview_TargetDefaultsAndModeValidation(t *testing.T) {

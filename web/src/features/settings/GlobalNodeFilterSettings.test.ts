@@ -114,6 +114,8 @@ describe('global export filter settings', () => {
     mount(); await flush()
     const toggle = find('global-empty-pass') as HTMLInputElement
     expect(toggle.checked).toBe(true)
+    expect(root.textContent).toContain('空策略组使用 PASS')
+    expect(root.textContent).toContain('对所有策略组生效；非空组不受影响。')
     toggle.click(); await flush()
     button('filter-save').click(); await flush()
     expect(saved).toBe(false)

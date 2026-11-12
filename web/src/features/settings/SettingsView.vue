@@ -21,7 +21,7 @@ const activeCategory = ref<SettingsCategory>('connection')
 const categories: { id: SettingsCategory; labelZh: string; labelEn: string }[] = [
   { id: 'connection', labelZh: '连接与订阅', labelEn: 'Connection & Subscription' },
   { id: 'probe', labelZh: '节点检测', labelEn: 'Node Detection' },
-  { id: 'filter', labelZh: '全局筛选', labelEn: 'Global Filter' },
+  { id: 'filter', labelZh: '全局筛选与空组 PASS', labelEn: 'Global Filter & Empty Group PASS' },
   { id: 'security', labelZh: '访问安全', labelEn: 'Access & Security' },
   { id: 'display', labelZh: '外观与偏好', labelEn: 'Display & Preferences' },
 ]

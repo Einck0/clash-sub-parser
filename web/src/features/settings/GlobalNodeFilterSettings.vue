@@ -29,8 +29,8 @@ const filterInvalid = ref(false)
 
 useUnsavedChanges(dirty, () =>
   uiText(
-    '全局筛选条件有未保存的草稿修改，离开将丢失这些修改。确定要离开吗？',
-    'Global filter conditions have unsaved changes. Are you sure you want to leave?'
+    '全局筛选或空组 PASS 设置有未保存的修改，离开将丢失这些修改。确定要离开吗？',
+    'Global filter or empty group PASS settings have unsaved changes. Are you sure you want to leave?'
   )
 )
 
@@ -158,7 +158,7 @@ onMounted(refresh)
       <template v-if="loaded">
         <label class="flex items-start gap-3 cursor-pointer">
           <input v-model="emptyFallbackPass" type="checkbox" class="checkbox checkbox-primary checkbox-sm" data-testid="global-empty-pass" @change="edited" />
-          <span><span class="font-semibold block">{{ uiText("空策略组使用 PASS", "Use PASS for empty groups") }}</span><span class="text-xs opacity-70">{{ uiText("对所有策略组生效；非空组不受影响。", "Applies to all policy groups; non-empty groups are unchanged.") }}</span></span>
+          <span><span class="font-semibold block">{{ uiText("空策略组使用 PASS", "Use PASS for empty groups") }}</span><span class="text-xs opacity-70">{{ uiText("对所有策略组生效；非空组不受影响。空组使用 PASS 继续匹配后续规则，并非直连。", "Applies to all policy groups; non-empty groups are unchanged. PASS continues matching later rules, rather than connecting directly.") }}</span></span>
         </label>
         <StructuredFilterEditor
           v-model="conditions"

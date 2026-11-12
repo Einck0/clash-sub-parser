@@ -4,15 +4,12 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"regexp"
 	"strings"
 	"time"
 
 	"clash-sub-parser/internal/domain"
 	"github.com/biter777/countries"
 )
-
-var geminiRe = regexp.MustCompile(`,2,1,200,"([A-Z]{3})"`)
 
 // Snapshot of ISO alpha-3 entries directly mapped from the official supported
 // countries table (retrieved 2026-11-06). Mainland China is excluded because
@@ -91,20 +88,29 @@ func CheckGemini(ctx context.Context, httpClient *http.Client) domain.PlatformCa
 	if hasGoogleAccessGate(body) {
 		return result(domain.VerdictRestricted, "challenge_or_login", "Access restricted")
 	}
-	if !strings.Contains(string(body), geminiMarkerEvidence) {
-		return result(domain.VerdictError, "gemini_marker_missing", "Detection failed")
-	}
-	matches := geminiRe.FindAllSubmatch(body, -1)
-	if len(matches) == 0 {
-		return result(domain.VerdictError, "gemini_marker_missing", "Detection failed")
-	}
+	text := string(body)
 	codes := make(map[string]bool)
-	for _, match := range matches {
-		code := string(match[1])
+	for offset := 0; offset < len(text); {
+		index := strings.Index(text[offset:], geminiMarkerEvidence)
+		if index < 0 {
+			break
+		}
+		start := offset + index + len(geminiMarkerEvidence)
+		if len(text)-start < 4 || text[start] < 'A' || text[start] > 'Z' ||
+			text[start+1] < 'A' || text[start+1] > 'Z' ||
+			text[start+2] < 'A' || text[start+2] > 'Z' || text[start+3] != '"' {
+			return result(domain.VerdictError, "gemini_marker_malformed", "Detection failed")
+		}
+		codes[text[start:start+3]] = true
+		offset = start
+	}
+	if len(codes) == 0 {
+		return result(domain.VerdictError, "gemini_marker_missing", "Detection failed")
+	}
+	for code := range codes {
 		if alpha3ToAlpha2(code) == "" {
 			return result(domain.VerdictError, "unknown_region_code", "Detection failed")
 		}
-		codes[code] = true
 	}
 	if len(codes) != 1 {
 		return result(domain.VerdictError, "conflicting_region_markers", "Detection failed")

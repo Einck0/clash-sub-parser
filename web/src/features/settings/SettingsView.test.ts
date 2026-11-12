@@ -346,7 +346,9 @@ describe('SettingsView Component', () => {
     // 5 category tabs exist
     expect(container.querySelector('[data-testid="settings-tab-connection"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="settings-tab-probe"]')).toBeTruthy()
-    expect(container.querySelector('[data-testid="settings-tab-filter"]')).toBeTruthy()
+    const filterTab = container.querySelector('[data-testid="settings-tab-filter"]')
+    expect(filterTab).toBeTruthy()
+    expect(filterTab?.textContent).toContain('全局筛选与空组 PASS')
     expect(container.querySelector('[data-testid="settings-tab-security"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="settings-tab-display"]')).toBeTruthy()
 

@@ -58,6 +58,13 @@ func TestCheckGeminiClassifiesOnlyVerifiedSupportEvidence(t *testing.T) {
 		{"unknown code", `,2,1,200,"ZZZ"`, domain.VerdictError, "unknown_region_code"},
 		{"not in supported table", `,2,1,200,"RUS"`, domain.VerdictAbnormal, "support_unverified"},
 		{"missing", `<html>other</html>`, domain.VerdictError, "gemini_marker_missing"},
+		{"valid and malformed short code", `,2,1,200,"USA" ,2,1,200,"ZZ"`, domain.VerdictAvailable, "gemini_web_reachable"},
+		{"valid and lowercase code", `,2,1,200,"USA" ,2,1,200,"usa"`, domain.VerdictAvailable, "gemini_web_reachable"},
+		{"valid and unclosed marker", `,2,1,200,"USA" ,2,1,200,"`, domain.VerdictAvailable, "gemini_web_reachable"},
+		{"unclosed three-letter marker only", `,2,1,200,"USA`, domain.VerdictError, "gemini_marker_missing"},
+		{"valid and unclosed three-letter marker", `,2,1,200,"USA" ,2,1,200,"CAN`, domain.VerdictAvailable, "gemini_web_reachable"},
+		{"observed null-prefixed format", `[null,2,1,200,"USA"]`, domain.VerdictAvailable, "gemini_web_reachable"},
+		{"duplicate region", `,2,1,200,"USA" ,2,1,200,"USA"`, domain.VerdictAvailable, "gemini_web_reachable"},
 		{"ambiguous", `,2,1,200,"USA" ,2,1,200,"CAN"`, domain.VerdictError, "conflicting_region_markers"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

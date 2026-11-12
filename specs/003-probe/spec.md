@@ -1274,14 +1274,14 @@ Publications、Dashboard、Policy Admission Rules、Subscriptions 和 Settings S
 - **[SC-PROB-04]** 未来时间戳写入拦截率达到 100%。
 
 
-## 2026-11-06 resumed probe optimization (current scoped amendment)
+## 2026-11-06 resumed probe optimization (scoped amendment; Antigravity outcome superseded below)
 
 See [frozen optimization contract](probe-optimization-20261106.md) for evidence, scope, scenarios and precedence over obsolete strict-204 clauses.
 
 - **OPT-R1** Stage admission must occur before global worker assignment, remain bounded, cancel promptly and release permits exactly once.
 - **OPT-R2** Manual priority must honor dynamic per-run concurrency and fairness while preserving front priority and periodic deduplication.
 - **OPT-R3** Gemini classifications must reject unknown/conflicting region evidence and distinguish access denial from geographic/account eligibility; all reads are bounded.
-- **OPT-R4** Antigravity must be independent of Gemini, use only official anonymous entry, report reachable but authentication/product eligibility unverified as unknown, and never infer product availability from HTTP 200.
+- **OPT-R4 (historical outcome; superseded by STATE-R4 below)** Antigravity must be independent of Gemini, use only official anonymous entry, report reachable but authentication/product eligibility unverified as unknown, and never infer product availability from HTTP 200. Preserve this historical clause; current anonymous-entry verdict follows STATE-R4, not this superseded unknown outcome.
 - **OPT-R5** Default AI execution includes separate antigravity platform detail; explicit platform selections restrict network calls. Existing JSON evidence persistence/read-through is reused without schema migration.
 - **OPT-R6** Same-SHA dev cloud checks, runtime image revision/digest, isolated acceptance and independent review are mandatory. No local compilation/test or production deployment.
 
@@ -1293,7 +1293,7 @@ The [outcome repair contract](probe-state-20261107.md) defines current behavior 
 - **STATE-R1** Known executed failures MUST produce explicit error/restricted with reason; not-executed/control outcomes MUST be skipped. Unknown is not a generic failure bucket. Preserve raw attempt evidence and historical rows.
 - **STATE-R2** A reachable platform with a service-observed country different from successful same-run exit geo MUST be abnormal (warning), not unavailable; retain both countries and source. CDN target location is not user exit. Missing geo does not invent conflict.
 - **STATE-R3** Gemini MUST inspect complete bounded responses through2MiB (plus overflow sentinel), accept valid late markers, reject malformed/conflicting/incomplete evidence and keep official support uncertainty distinct from denial.
-- **STATE-R4** Recognized official anonymous Antigravity entry MUST report positive network-entry availability, with explicit account/model eligibility unverified scope. Generic200 or login/challenge is not positive product evidence.
+- **STATE-R4** Recognized official anonymous Antigravity entry MUST report positive network-entry availability, with explicit account/model eligibility unverified scope. Generic200 or login/challenge is not positive product evidence. This is an authored evidence-scope decision, not a located user quotation selecting `available`; see [source attribution and consumer clarification](antigravity-semantics-20261113.md). Positive tuple: available / reachable / network_entry / antigravity_entry_reachable. All consumers MUST limit positive wording to entry reachability; nonpositive results without positive reachability evidence MUST NOT assert “官网入口可达”. Account/model eligibility remains unverified for every verdict; no historical-row relabelling or aggregate/health-policy change.
 - **STATE-R5** Exact verdict/region/source/scope must persist, roundtrip and display consistently in list/detail/filter; abnormal/skipped labels differ from unreachable and unknown. Baseline health/publish eligibility is unchanged.
 - **STATE-R6** Existing dev same-SHA cloud checks/build, isolated digest+revision acceptance and independent review apply; affected UI also receives real isolated experience validation. No local compilation/test, backfill or production deployment.
 

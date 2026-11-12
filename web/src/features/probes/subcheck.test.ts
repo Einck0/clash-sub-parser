@@ -418,44 +418,79 @@ describe('Subcheck Platform Capability Matrix & Fixture Tests', () => {
       expect(claudeRestricted.tone).toBe('warning')
     })
 
-    it('formats Antigravity with entry reachable label, both-country tooltip, and unverified credentials disclaimer', () => {
-      const available = formatPlatformBadge('antigravity', {
+    it('shows Antigravity entry reachability only for the complete positive evidence tuple', () => {
+      const reachable = formatPlatformBadge('antigravity', {
         verdict: 'available',
-        region: 'US',
-      })
-      expect(available.label).toBe('Antigravity 入口可达 (US)')
-      expect(available.tone).toBe('success')
-      expect(available.tooltip).toContain('官网入口可达')
-      expect(available.tooltip).toContain('模型资格未核验')
-
-      const withExitDiff = formatPlatformBadge('antigravity', {
-        verdict: 'available',
+        sub_tier: 'reachable',
+        evidence_scope: 'network_entry',
+        reason: 'antigravity_entry_reachable',
         region: 'US',
         exit_region: 'JP',
         region_source: 'cdn_trace',
-        evidence_scope: 'network_entry',
       })
-      expect(withExitDiff.tooltip).toContain('服务观测地区: US，出口参考地区: JP（地区存在差异，非物理路由绝对证明）')
-      expect(withExitDiff.tooltip).toContain('地区来源: CDN 追踪 (cdn_trace)')
-      expect(withExitDiff.tooltip).toContain('观测范围: 网站入口连通性 (network_entry)')
+      expect(reachable.label).toBe('Antigravity 入口可达 (US)')
+      expect(reachable.tone).toBe('success')
+      expect(reachable.tooltip).toContain('官网入口可达')
+      expect(reachable.tooltip).toContain('个人账号所在国家/地区、年龄(18+)及模型资格未核验')
+      expect(reachable.tooltip).toContain('服务观测地区: US，出口参考地区: JP（地区存在差异，非物理路由绝对证明）')
+      expect(reachable.tooltip).toContain('地区来源: CDN 追踪 (cdn_trace)')
+      expect(reachable.tooltip).toContain('观测范围: 网站入口连通性 (network_entry)')
 
-      const abnormal = formatPlatformBadge('antigravity', {
-        verdict: 'abnormal',
-      })
+      const abnormal = formatPlatformBadge('antigravity', { verdict: 'abnormal' })
       expect(abnormal.label).toBe('Antigravity 异常')
       expect(abnormal.tone).toBe('warning')
 
-      const skipped = formatPlatformBadge('antigravity', {
-        verdict: 'skipped',
-      })
+      const skipped = formatPlatformBadge('antigravity', { verdict: 'skipped' })
       expect(skipped.label).toBe('Antigravity 未执行')
       expect(skipped.tone).toBe('info')
 
-      const failed = formatPlatformBadge('antigravity', {
-        verdict: 'error',
-      })
+      const failed = formatPlatformBadge('antigravity', { verdict: 'error' })
       expect(failed.label).toBe('Antigravity 失败')
       expect(failed.tone).toBe('error')
+
+      const incompletePositiveEvidence: PlatformCapability[] = [
+        { verdict: 'available', sub_tier: 'reachable' },
+        { verdict: 'available', evidence_scope: 'network_entry' },
+        {
+          verdict: 'available',
+          sub_tier: 'reachable',
+          evidence_scope: 'network_entry',
+        },
+      ]
+      for (const capability of incompletePositiveEvidence) {
+        const badge = formatPlatformBadge('antigravity', capability)
+        expect(badge.tooltip).toContain('检测范围：官网入口连通性')
+        expect(badge.tooltip).not.toContain('官网入口可达')
+        expect(badge.tooltip).toContain('未核验')
+      }
+
+      const nonpositive = [
+        { verdict: 'unknown', reason: 'antigravity_status_unknown' },
+        { verdict: 'error', reason: 'antigravity_probe_error' },
+        { verdict: 'restricted', reason: 'antigravity_entry_restricted' },
+        { verdict: 'skipped', reason: 'antigravity_probe_skipped' },
+      ] as const
+      for (const { verdict, reason } of nonpositive) {
+        const badge = formatPlatformBadge('antigravity', {
+          verdict,
+          reason,
+          summary: `历史摘要：${reason}`,
+        })
+        expect(badge.tooltip).toContain('检测范围：官网入口连通性')
+        expect(badge.tooltip).toContain(reason)
+        expect(badge.tooltip).toContain(`历史摘要：${reason}`)
+        expect(badge.tooltip).toContain('未核验')
+        expect(badge.tooltip).not.toContain('官网入口可达')
+      }
+
+      const historical = formatPlatformBadge('antigravity', {
+        verdict: 'unknown',
+        reason: 'antigravity_entry_reachable',
+        summary: '历史记录：官网入口可达；模型资格未核验',
+      })
+      expect(historical.tooltip).toContain('官网入口可达（个人账号及模型资格未核验）')
+      expect(historical.tooltip).toContain('历史记录：官网入口可达；模型资格未核验')
+      expect(historical.tooltip).toContain('检测范围：官网入口连通性')
     })
 
     it('ensures unknown, error, and stale are never green', () => {

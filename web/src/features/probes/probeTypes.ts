@@ -25,6 +25,7 @@ export type PlatformSubTier =
   | 'banned'
   | 'unlocked'
   | 'soon'
+  | 'reachable'
 
 export type RegionSource = 'service' | 'cdn_trace' | 'cdn_target' | string
 
@@ -395,7 +396,10 @@ export function buildPlatformTooltip(platform: string, cap: PlatformCapability):
 
   // 1. Platform-specific headline or summary
   if (normPlat === 'antigravity') {
-    parts.push('官网入口可达；个人账号所在国家/地区、年龄(18+)及模型资格未核验（依据官方 FAQ）')
+    const entryReachable = cap.verdict === 'available' && cap.sub_tier === 'reachable' &&
+      cap.evidence_scope === 'network_entry' && cap.reason === 'antigravity_entry_reachable'
+    const scope = entryReachable ? '官网入口可达' : '检测范围：官网入口连通性'
+    parts.push(`${scope}；个人账号所在国家/地区、年龄(18+)及模型资格未核验（依据官方 FAQ）`)
   } else if (normPlat === 'gemini') {
     parts.push('网页端区域支持检测；个人账号登录、年龄及模型权限未核验')
   } else if (normPlat === 'openai') {

@@ -756,55 +756,51 @@ describe('NodesView real API detail, plaintext PATCH edit, and failure draft pre
     mountEl.remove()
   })
 
-  it('automatically loads subsequent pages when health filter starves viewport and hasMore is true', async () => {
+  it('filters the full inventory before paginating health-filtered nodes', async () => {
     const { default: NodesView } = await import('./NodesView.vue')
     const { createApp, h, nextTick } = await import('vue')
 
-    // Page 1: 10 healthy nodes (total = 40)
-    const page1Nodes: NodeRecord[] = Array.from({ length: 10 }, (_, i) => ({
-      logical_id: `node-healthy-${i}`,
-      protocol: 'vmess',
-      display_name: `Healthy Node ${i}`,
-      active: true,
-      health_status: 'healthy' as const,
-      latency_ms: 50,
-      last_probed_at: new Date().toISOString(),
-    }))
-
-    // Page 2: 1 unhealthy node + 9 healthy nodes (total = 40)
-    const page2Nodes: NodeRecord[] = [
-      {
-        logical_id: 'node-unhealthy-99',
+    const inventory: NodeRecord[] = [
+      ...Array.from({ length: 150 }, (_, i) => ({
+        logical_id: `node-healthy-${i}`,
         protocol: 'vmess',
-        display_name: 'Unhealthy Node 99',
+        display_name: `Healthy Node ${i}`,
+        active: true,
+        health_status: 'healthy' as const,
+        latency_ms: 50,
+        last_probed_at: new Date().toISOString(),
+      })),
+      {
+        logical_id: 'node-unhealthy-150',
+        protocol: 'vmess',
+        display_name: 'Unhealthy Node 150',
         active: true,
         health_status: 'unhealthy' as const,
         latency_ms: 0,
         last_probed_at: new Date().toISOString(),
       },
-      ...Array.from({ length: 9 }, (_, i) => ({
-        logical_id: `node-healthy-p2-${i}`,
-        protocol: 'vmess',
-        display_name: `Healthy Node P2 ${i}`,
-        active: true,
-        health_status: 'healthy' as const,
-        latency_ms: 60,
-        last_probed_at: new Date().toISOString(),
-      })),
     ]
 
-    const pageCalls: number[] = []
+    const nodeRequests: Array<{ page: number; page_size: number; health_status?: string }> = []
     vi.spyOn(api, 'get').mockImplementation(async (path: string, options?: any) => {
       if (path === '/api/v1/nodes') {
-        const page = Number(options?.params?.page || 1)
-        pageCalls.push(page)
-        if (page === 1) {
-          return { items: page1Nodes, total: 40, page: 1, page_size: 10 }
+        const params = options?.params || {}
+        const page = Number(params.page || 1)
+        const pageSize = Number(params.page_size || 100)
+        const healthStatus = params.health_status as string | undefined
+        nodeRequests.push({ page, page_size: pageSize, health_status: healthStatus })
+
+        // Model the API contract: apply filters to the complete inventory, then paginate.
+        const filtered = healthStatus
+          ? inventory.filter((node) => node.health_status === healthStatus)
+          : inventory
+        const start = (page - 1) * pageSize
+        return {
+          items: filtered.slice(start, start + pageSize),
+          total: filtered.length,
+          page,
+          page_size: pageSize,
         }
-        if (page === 2) {
-          return { items: page2Nodes, total: 40, page: 2, page_size: 10 }
-        }
-        return { items: [], total: 40, page, page_size: 10 }
       }
       if (path === '/api/v1/probes/pool') {
         return {
@@ -812,10 +808,10 @@ describe('NodesView real API detail, plaintext PATCH edit, and failure draft pre
           probing_count: 0,
           queued_waiting_count: 0,
           untested_count: 0,
-          total_count: 40,
+          total_count: inventory.length,
           unavailable_count: 1,
-          available_count: 39,
-          healthy_count: 39,
+          available_count: 150,
+          healthy_count: 150,
           degraded_count: 0,
           probing_node_ids: [],
           queued_node_ids: [],
@@ -836,12 +832,12 @@ describe('NodesView real API detail, plaintext PATCH edit, and failure draft pre
     await nextTick()
     await new Promise((r) => setTimeout(r, 40))
 
-    // Initially page 1 is loaded
-    expect(pageCalls).toContain(1)
+    const initialRequestCount = nodeRequests.length
+    expect(nodeRequests[0]).toEqual({ page: 1, page_size: 100, health_status: undefined })
+    expect(mountEl.textContent).not.toContain('Unhealthy Node 150')
 
-    // Switch health filter to "unhealthy"
-    const unhealthyPill = Array.from(mountEl.querySelectorAll('button')).find((b) =>
-      b.textContent?.includes('异常')
+    const unhealthyPill = Array.from(mountEl.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('异常')
     )
     expect(unhealthyPill).toBeDefined()
     unhealthyPill?.click()
@@ -849,11 +845,10 @@ describe('NodesView real API detail, plaintext PATCH edit, and failure draft pre
     await nextTick()
     await new Promise((r) => setTimeout(r, 60))
 
-    // Because page 1 had 0 unhealthy nodes and hasMore was true, auto-pagination must trigger page 2
-    expect(pageCalls).toContain(2)
-
-    // The unhealthy node from page 2 should now be visible in DOM
-    expect(mountEl.textContent).toContain('Unhealthy Node 99')
+    const filteredRequests = nodeRequests.slice(initialRequestCount)
+    expect(filteredRequests).toEqual([{ page: 1, page_size: 100, health_status: 'unhealthy' }])
+    expect(mountEl.textContent).toContain('Unhealthy Node 150')
+    expect(mountEl.textContent).not.toContain('Healthy Node 0')
 
     app.unmount()
     mountEl.remove()

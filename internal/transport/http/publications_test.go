@@ -2477,7 +2477,7 @@ func TestPublication_MihomoPreviewTargetedIntegration_HTTP_Socks5_AnyTLS_Mihomo2
 
 func TestPublication_MihomoPreviewAndPublish_OptInPruneEmptyOptionalGroup(t *testing.T) {
 	db := newCleanSQLiteDB(t)
-	router, pubSvc := setupPublicationTestRouter(t, db)
+	router, pubSvc := setupPublicationTestRouter(t, db, publication.WithNodeFilterRepository(sqlite.NewNodeFilterRepository(db)))
 	ctx := context.Background()
 
 	nodeRepo := sqlite.NewNodeRepository(db)

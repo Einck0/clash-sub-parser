@@ -426,7 +426,7 @@ func TestLiveSubscriptionClientEndpoint_ContextCancellation(t *testing.T) {
 	router.ServeHTTP(rec, req)
 }
 
-func TestLiveSubscriptionClientEndpoint_PrimarySubscriptionFallback(t *testing.T) {
+func TestLiveSubscriptionClientEndpoint_GlobalEmptyGroupPassUsesNormalExport(t *testing.T) {
 	router, db, _, _ := setupLiveSubTestRouter(t)
 
 	link, rawToken := seedFullLiveSubscriptionData(t, db, domain.TargetMihomo)
@@ -439,8 +439,8 @@ func TestLiveSubscriptionClientEndpoint_PrimarySubscriptionFallback(t *testing.T
 		t.Fatalf("failed to update primary subscription: %v", err)
 	}
 
-	// 2. Set global filter that excludes all nodes
-	_, err = db.ExecContext(ctx, `
+	// 2. Set global filter that excludes the fixture node.
+	filterResult, err := db.ExecContext(ctx, `
 		UPDATE global_node_filters
 		SET filter_spec = '{"conditions":[{"field":"display_name","op":"contains","value":"NONEXISTENT"}]}'
 		WHERE id = 1;
@@ -448,25 +448,82 @@ func TestLiveSubscriptionClientEndpoint_PrimarySubscriptionFallback(t *testing.T
 	if err != nil {
 		t.Fatalf("failed to set global filter: %v", err)
 	}
+	if affected, err := filterResult.RowsAffected(); err != nil || affected != 1 {
+		t.Fatalf("expected global filter update to affect its row, affected=%d err=%v", affected, err)
+	}
 
-	// 3. Request should succeed with fallback (HTTP 200) and contain '主订阅兜底'
+	var fixtureNodeName string
+	if err := db.QueryRowContext(ctx, `SELECT display_name FROM nodes WHERE logical_id = ?`, "node_0123456789abcdef").Scan(&fixtureNodeName); err != nil {
+		t.Fatalf("failed to read seeded fixture node: %v", err)
+	}
+	if fixtureNodeName != "Live Node 1" {
+		t.Fatalf("unexpected seeded fixture node name: %q", fixtureNodeName)
+	}
+
+	// The global empty-group PASS setting defaults to enabled. Export must keep
+	// the normal rendered config (including the now-empty Proxy group), not
+	// substitute the original subscription or another fallback body.
 	rec := doRequest(router, http.MethodGet, basePath, "", "")
 	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200 OK on primary fallback, got %d body: %s", rec.Code, rec.Body.String())
+		t.Fatalf("expected 200 OK with global empty-group PASS enabled, got %d body: %s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "主订阅兜底") {
-		t.Errorf("expected Mihomo fallback body to contain '主订阅兜底', got: %s", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), "proxies: []") {
+		t.Errorf("expected normal Mihomo config with empty top-level proxies, got: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "- empty-fallback: PASS") || !strings.Contains(rec.Body.String(), "- PASS") || !strings.Contains(rec.Body.String(), "name: Proxy") {
+		t.Errorf("expected empty group to contain PASS in normal Mihomo config, got: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "MATCH,Proxy") {
+		t.Errorf("expected normal rule to target the empty Proxy group, got: %s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "主订阅兜底") || strings.Contains(rec.Body.String(), fixtureNodeName) {
+		t.Errorf("empty-group PASS must not substitute fallback or include the filtered fixture node %q: %s", fixtureNodeName, rec.Body.String())
 	}
 
-	// 4. Disable primary subscription -> must fail with HTTP 422
+	// Explicitly disabling global empty-group PASS preserves strict rejection.
+	strictResult, err := db.ExecContext(ctx, `UPDATE global_node_filters SET empty_fallback_pass = 0 WHERE id = 1;`)
+	if err != nil {
+		t.Fatalf("failed to disable global empty-group PASS: %v", err)
+	}
+	if affected, err := strictResult.RowsAffected(); err != nil || affected != 1 {
+		t.Fatalf("expected strict-off update to affect the global filter row, affected=%d err=%v", affected, err)
+	}
+	var strictOff bool
+	var filterSpec string
+	if err := db.QueryRowContext(ctx, `SELECT empty_fallback_pass, filter_spec FROM global_node_filters WHERE id = 1`).Scan(&strictOff, &filterSpec); err != nil {
+		t.Fatalf("failed to verify strict-off setting and retained filter: %v", err)
+	}
+	if strictOff || !strings.Contains(filterSpec, "NONEXISTENT") {
+		t.Fatalf("expected strict-off to retain the excluding filter, pass=%t filter=%q", strictOff, filterSpec)
+	}
+	recStrict := doRequest(router, http.MethodGet, basePath, "", "")
+	if recStrict.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 with global empty-group PASS disabled, got %d body: %s", recStrict.Code, recStrict.Body.String())
+	}
+
+	// Restore PASS for the independent disabled-subscription check: it must not
+	// turn a disabled subscription into a successful fallback response.
+	_, err = db.ExecContext(ctx, `UPDATE global_node_filters SET empty_fallback_pass = 1 WHERE id = 1;`)
+	if err != nil {
+		t.Fatalf("failed to restore global empty-group PASS: %v", err)
+	}
+
+	// 4. Disable primary subscription. The observed client export remains a
+	// normal PASS config with no filtered node or subscription fallback.
 	_, err = db.ExecContext(ctx, `UPDATE subscriptions SET enabled = 0 WHERE id = 'sub-client-1';`)
 	if err != nil {
 		t.Fatalf("failed to disable primary subscription: %v", err)
 	}
 
 	recDisabled := doRequest(router, http.MethodGet, basePath, "", "")
-	if recDisabled.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("expected 422 Unprocessable Entity when primary subscription disabled, got %d body: %s", recDisabled.Code, recDisabled.Body.String())
+	if recDisabled.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK when primary subscription is disabled, got %d body: %s", recDisabled.Code, recDisabled.Body.String())
+	}
+	if !strings.Contains(recDisabled.Body.String(), "proxies: []") || !strings.Contains(recDisabled.Body.String(), "- empty-fallback: PASS") || !strings.Contains(recDisabled.Body.String(), "- PASS") {
+		t.Errorf("expected disabled subscription to return normal empty PASS config, got: %s", recDisabled.Body.String())
+	}
+	if strings.Contains(recDisabled.Body.String(), fixtureNodeName) || strings.Contains(recDisabled.Body.String(), "主订阅兜底") {
+		t.Errorf("disabled subscription response must not contain filtered node %q or fallback content: %s", fixtureNodeName, recDisabled.Body.String())
 	}
 }
 

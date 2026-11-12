@@ -357,11 +357,31 @@ func TestExportFilterGlobalExhaustWithRoutedEmptyPassAllowsMihomoWithPass(t *tes
 		if !strings.Contains(string(prev.Content), "empty-fallback: PASS") {
 			t.Fatalf("expected empty-fallback: PASS in mihomo content: %s", prev.Content)
 		}
-		if !strings.Contains(string(prev.Content), "- PASS") {
-			t.Fatalf("expected proxy group proxies list to contain PASS: %s", prev.Content)
+		var content struct {
+			Proxies     []map[string]any `yaml:"proxies"`
+			ProxyGroups []struct {
+				Proxies []string `yaml:"proxies"`
+			} `yaml:"proxy-groups"`
+			Rules []string `yaml:"rules"`
 		}
-		if strings.Contains(string(prev.Content), "server:") {
-			t.Fatalf("expected no proxy servers compiled when all nodes filtered out: %s", prev.Content)
+		if err := yaml.Unmarshal(prev.Content, &content); err != nil {
+			t.Fatalf("decode mihomo preview YAML: %v", err)
+		}
+		if len(content.Proxies) != 0 {
+			t.Fatalf("expected no top-level proxy servers when all nodes are filtered out, got %+v", content.Proxies)
+		}
+		passInGroup := false
+		for _, group := range content.ProxyGroups {
+			if containsString(group.Proxies, "PASS") {
+				passInGroup = true
+				break
+			}
+		}
+		if !passInGroup {
+			t.Fatalf("expected PASS in a proxy group's proxies list: %+v", content.ProxyGroups)
+		}
+		if !containsString(content.Rules, "MATCH,PROXY") {
+			t.Fatalf("expected rule evaluation to continue through the PROXY group: %+v", content.Rules)
 		}
 
 		pub, err := svc.Publish(ctx, publication.PublishCommand{Target: domain.TargetMihomo})
@@ -403,13 +423,18 @@ func TestExportFilterMixedRoutedGroupsApplyEmptyPassIndependently(t *testing.T) 
 	}}
 	svc, _ := exportFilterFixture(t, true, filter, nil, nil, func(policy *mockPolicyRepo) {
 		groupID := "01944aa0-0000-7000-8000-000000000006"
+		for i := range policy.policyRules["01944aa0-0000-7000-8000-000000000001"] {
+			if policy.policyRules["01944aa0-0000-7000-8000-000000000001"][i].Expression == "MATCH" {
+				policy.policyRules["01944aa0-0000-7000-8000-000000000001"][i].Position = 1
+			}
+		}
 		if err := policy.CreateGroup(ctx, &domain.NodeGroup{ID: groupID, Name: "USABLE", GroupType: domain.GroupTypeSelect, InheritGlobalFilter: true}); err != nil {
 			t.Fatal(err)
 		}
 		if err := policy.SetEdgesForGroup(ctx, groupID, []domain.GroupEdge{{ID: "01944aa0-0000-7000-8000-000000000007", ParentGroupID: groupID, NodeLogicalID: ptr(usNodeID)}}); err != nil {
 			t.Fatal(err)
 		}
-		if err := policy.CreatePolicyRule(ctx, &domain.PolicyRule{ID: "01944aa0-0000-7000-8000-000000000008", RevisionID: "01944aa0-0000-7000-8000-000000000001", TargetGroupID: groupID, Expression: "DOMAIN-SUFFIX,example.org", Position: -1}); err != nil {
+		if err := policy.CreatePolicyRule(ctx, &domain.PolicyRule{ID: "01944aa0-0000-7000-8000-000000000008", RevisionID: "01944aa0-0000-7000-8000-000000000001", TargetGroupID: groupID, Expression: "DOMAIN-SUFFIX,example.org", Position: 0}); err != nil {
 			t.Fatal(err)
 		}
 	})

@@ -12,6 +12,7 @@ import (
 
 	"clash-sub-parser/internal/application/inventory"
 	"clash-sub-parser/internal/domain"
+	"clash-sub-parser/internal/repository/sqlite"
 )
 
 func TestEnabledSubscriptionInventoryE2E(t *testing.T) {
@@ -568,10 +569,10 @@ func TestEnabledSubscriptionInventoryE2E(t *testing.T) {
 
 	// ==========================================
 	// Test Case 9: Zero enabled / all disabled:
-	// E=0, pool=0, publication preview in compatible mode returns empty_group_not_allowed error,
+	// E=0, pool=0, publication preview keeps the inventory empty while emitting the global PASS group,
 	// and prior published bytes remain immutable.
 	// ==========================================
-	t.Run("Zero enabled and orphan inventory: E=0, pool=0, publication preview error, immutable old published bytes", func(t *testing.T) {
+	t.Run("Zero enabled and orphan inventory: E=0, pool=0, global PASS preview, immutable old published bytes", func(t *testing.T) {
 		// 1. Setup policy group and revision while subA is enabled
 		revID, _ := domain.NewUUIDv7()
 		_ = harness.RevisionRepo.Create(ctx, &domain.ConfigurationRevision{
@@ -715,31 +716,82 @@ func TestEnabledSubscriptionInventoryE2E(t *testing.T) {
 				poolBody.Data.InventoryTotal, poolBody.Data.CandidateTotal, poolBody.Data.TotalCount)
 		}
 
-		// 6. Verify new preview in compatible mode fails with business error empty_group_not_allowed
-		// Explicitly disable global empty fallback pass to verify strict rejection behavior with 0 candidates.
-		_, _ = harness.DB.ExecContext(ctx, "INSERT INTO global_node_filters (id, filter_spec, updated_at, empty_fallback_pass) VALUES (1, '{}', datetime('now'), 0) ON CONFLICT(id) DO UPDATE SET empty_fallback_pass = 0;")
-
-		errPrevReq, _ := http.NewRequest(http.MethodPost, harness.Server.URL+"/api/v1/publications/preview", strings.NewReader(`{"target": "mihomo", "compat_mode": "compatible"}`))
-		errPrevReq.Header.Set("Authorization", authHeader)
-		errPrevReq.Header.Set("Content-Type", "application/json")
-		errPrevResp, err := http.DefaultClient.Do(errPrevReq)
+		// 6. With the global empty fallback PASS default, preview preserves the empty inventory
+		// and emits PASS rather than adding fallback/orphan nodes.
+		prevReqEmpty, _ := http.NewRequest(http.MethodPost, harness.Server.URL+"/api/v1/publications/preview", strings.NewReader(`{"target": "mihomo", "compat_mode": "compatible"}`))
+		prevReqEmpty.Header.Set("Authorization", authHeader)
+		prevReqEmpty.Header.Set("Content-Type", "application/json")
+		prevRespEmpty, err := http.DefaultClient.Do(prevReqEmpty)
 		if err != nil {
 			t.Fatal(err)
 		}
-		errBodyBytes, _ := io.ReadAll(errPrevResp.Body)
-		errPrevResp.Body.Close()
-		if errPrevResp.StatusCode != http.StatusUnprocessableEntity {
-			t.Fatalf("expected 422 for compatible preview with 0 candidates, got %d. body=%s", errPrevResp.StatusCode, string(errBodyBytes))
+		previewBytes, _ := io.ReadAll(prevRespEmpty.Body)
+		prevRespEmpty.Body.Close()
+		if prevRespEmpty.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200 for compatible preview with global empty fallback PASS, got %d. body=%s", prevRespEmpty.StatusCode, string(previewBytes))
 		}
-		var errPrevBody struct {
-			Code string `json:"code"`
+		var previewBody struct {
+			Data struct {
+				Content string `json:"content"`
+			} `json:"data"`
 		}
-		_ = json.Unmarshal(errBodyBytes, &errPrevBody)
-		if errPrevBody.Code != "empty_group_not_allowed" {
-			t.Fatalf("expected error code empty_group_not_allowed, got %s", errPrevBody.Code)
+		if err := json.Unmarshal(previewBytes, &previewBody); err != nil {
+			t.Fatalf("decode preview response: %v; body=%s", err, string(previewBytes))
+		}
+		if !strings.Contains(previewBody.Data.Content, "proxies: []") {
+			t.Errorf("expected preview to keep proxy inventory empty, got content=%s", previewBody.Data.Content)
+		}
+		if !strings.Contains(previewBody.Data.Content, "empty-fallback: PASS") || !strings.Contains(previewBody.Data.Content, "- PASS") {
+			t.Errorf("expected preview to emit the global empty fallback PASS group, got content=%s", previewBody.Data.Content)
+		}
+		if !strings.Contains(previewBody.Data.Content, "- MATCH,TEST-GROUP") {
+			t.Errorf("expected rules to continue matching the configured group after PASS, got content=%s", previewBody.Data.Content)
+		}
+		if strings.Contains(previewBody.Data.Content, "node-a-only") || strings.Contains(previewBody.Data.Content, "node-orphan") {
+			t.Errorf("preview unexpectedly contains disabled or orphan nodes: %s", previewBody.Data.Content)
 		}
 
-		// 7. Verify previously published bytes remain strictly immutable
+		// 7. Explicitly disable global empty-group PASS and verify strict preview rejection.
+		// The harness router and publication service both use this same database.
+		filterRepo := sqlite.NewNodeFilterRepository(harness.DB)
+		globalFilter, err := filterRepo.GetGlobalFilter(ctx)
+		if err != nil {
+			t.Fatalf("get global node filter before strict preview: %v", err)
+		}
+		strictEmptyPass := false
+		globalFilter.EmptyFallbackPass = &strictEmptyPass
+		if err := filterRepo.SetGlobalFilter(ctx, globalFilter); err != nil {
+			t.Fatalf("disable global empty-group PASS: %v", err)
+		}
+		strictReq, err := http.NewRequest(http.MethodPost, harness.Server.URL+"/api/v1/publications/preview", strings.NewReader(`{"target": "mihomo", "compat_mode": "compatible"}`))
+		if err != nil {
+			t.Fatalf("create strict preview request: %v", err)
+		}
+		strictReq.Header.Set("Authorization", authHeader)
+		strictReq.Header.Set("Content-Type", "application/json")
+		strictResp, err := http.DefaultClient.Do(strictReq)
+		if err != nil {
+			t.Fatalf("execute strict preview request: %v", err)
+		}
+		strictBytes, err := io.ReadAll(strictResp.Body)
+		strictResp.Body.Close()
+		if err != nil {
+			t.Fatalf("read strict preview response: %v", err)
+		}
+		if strictResp.StatusCode != http.StatusUnprocessableEntity {
+			t.Fatalf("expected 422 for compatible preview with global empty-group PASS disabled, got %d: %s", strictResp.StatusCode, string(strictBytes))
+		}
+		var strictBody struct {
+			Code string `json:"code"`
+		}
+		if err := json.Unmarshal(strictBytes, &strictBody); err != nil {
+			t.Fatalf("decode strict preview error: %v; body=%s", err, string(strictBytes))
+		}
+		if strictBody.Code != "empty_group_not_allowed" {
+			t.Fatalf("expected empty_group_not_allowed for strict preview, got %q; body=%s", strictBody.Code, string(strictBytes))
+		}
+
+		// 8. Verify previously published bytes remain strictly immutable
 		exportReq2, _ := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/publish/v1/%s?token=%s", harness.Server.URL, pubID, rawToken), nil)
 		exportResp2, err := http.DefaultClient.Do(exportReq2)
 		if err != nil {
@@ -752,7 +804,15 @@ func TestEnabledSubscriptionInventoryE2E(t *testing.T) {
 		}
 
 		// Clean up: re-enable subA and subD, and restore default empty fallback pass
-		_, _ = harness.DB.ExecContext(ctx, "UPDATE global_node_filters SET empty_fallback_pass = 1 WHERE id = 1;")
+		globalFilter, err = filterRepo.GetGlobalFilter(ctx)
+		if err != nil {
+			t.Fatalf("get global node filter before restoring empty-group PASS: %v", err)
+		}
+		defaultEmptyPass := true
+		globalFilter.EmptyFallbackPass = &defaultEmptyPass
+		if err := filterRepo.SetGlobalFilter(ctx, globalFilter); err != nil {
+			t.Fatalf("restore global empty-group PASS: %v", err)
+		}
 		toggleSub(subA, true)
 		toggleSub(subD, true)
 	})

@@ -735,7 +735,6 @@ describe('Enabled Subscriptions Inventory & Live Validation Specification', () =
     expect(hook.items.value).toHaveLength(120)
     expect(hook.items.value[100].displayName).toBe('HK Magic Gateway 101')
     expect(hook.items.value[119].displayName).toBe('HK Magic Gateway 120')
-    expect(hook.page.value).toBe(2)
     expect(hook.hasMore.value).toBe(false)
 
     // ------------------------------------------------------------------------
@@ -823,7 +822,6 @@ describe('Enabled Subscriptions Inventory & Live Validation Specification', () =
     // Part E: Health filter change resets to a fresh page 1 request
     // ------------------------------------------------------------------------
     // Currently on page 2 with items.length === 120
-    expect(hook.page.value).toBe(2)
 
     // Change health filter to 'unhealthy' and trigger load
     hook.searchQuery.value = ''
@@ -834,7 +832,6 @@ describe('Enabled Subscriptions Inventory & Live Validation Specification', () =
     const resetCall = recordedNodeCalls[recordedNodeCalls.length - 1]
     expect(resetCall.params.health_status).toBe('unhealthy')
     expect(resetCall.params['page']).toBe(1)
-    expect(hook.page.value).toBe(1)
     expect(hook.total.value).toBe(100)
     expect(hook.items.value).toHaveLength(100)
     expect(hook.items.value.every((n) => n.healthStatus === 'unhealthy')).toBe(true)

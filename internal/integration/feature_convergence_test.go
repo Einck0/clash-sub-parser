@@ -846,6 +846,14 @@ func TestFeatureConvergence_FullStack(t *testing.T) {
 	// 7. Empty Routed Group Blocking Verification
 	// Add a rule pointing to an empty group -> Preflight blocks publication
 	// -------------------------------------------------------------------------
+	strictEmptyPass := false
+	if _, err := policyService.SetGlobalNodeFilter(ctx, policy.SetGlobalNodeFilterCommand{
+		EmptyFallbackPass: &strictEmptyPass,
+		ActorKind:         domain.ActorKindAdmin,
+	}); err != nil {
+		t.Fatalf("set strict global filter empty pass failed: %v", err)
+	}
+
 	emptyGrpID := domain.MustNewUUIDv7()
 	emptyGrpReq := map[string]any{
 		"id":         emptyGrpID,
@@ -928,6 +936,14 @@ func TestFeatureConvergence_FullStack(t *testing.T) {
 	resp, body = doReq(http.MethodPost, "/api/v1/publications", sbPubReq)
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("expected 201 for node-only singbox publication despite empty_routed_group, got %d: %s", resp.StatusCode, string(body))
+	}
+
+	defaultEmptyPass := true
+	if _, err := policyService.SetGlobalNodeFilter(ctx, policy.SetGlobalNodeFilterCommand{
+		EmptyFallbackPass: &defaultEmptyPass,
+		ActorKind:         domain.ActorKindAdmin,
+	}); err != nil {
+		t.Fatalf("restore default global filter empty pass failed: %v", err)
 	}
 
 	// -------------------------------------------------------------------------

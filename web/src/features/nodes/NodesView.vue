@@ -333,23 +333,8 @@ const healthCounts = computed(() => {
   }
 })
 
-const filteredItems = computed(() => {
-  const filter = healthFilter.value
-  if (filter === 'all') return items.value
-  return items.value.filter((node) => {
-    if (filter === 'probing') {
-      const live = getNodeProbeState(node)
-      return live === 'probing' || live === 'queued'
-    }
-    const cat = nodeUnderlyingHealthCategory(node)
-    if (filter === 'healthy') return cat === 'healthy'
-    if (filter === 'unhealthy') return cat === 'unhealthy'
-    if (filter === 'unknown' || filter === 'untested' || filter === 'undetermined')
-      return cat === 'unknown'
-    if (filter === 'degraded') return cat === 'healthy'
-    return true
-  })
-})
+// The API applies all active filters before counting and paginating.
+const filteredItems = computed(() => items.value)
 
 async function handleProbeSelectedNode(node: NormalizedNode) {
   probeFeedback.value = `已将节点「${node.displayName}」插队至节点池最前面优先检测...`
@@ -483,6 +468,7 @@ function handleProtocolFilterChange(proto: string) {
 
 function handleHealthFilterChange(health: string) {
   healthFilter.value = health as HealthFilterType
+  load()
   syncUrlFromState()
 }
 
@@ -644,6 +630,7 @@ if (route) {
       }
       if (safeHealth !== healthFilter.value) {
         healthFilter.value = safeHealth
+        needReload = true
       }
       if (needReload) {
         load()

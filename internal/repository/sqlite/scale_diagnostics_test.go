@@ -19,8 +19,9 @@ func TestScaleDiagnostics(t *testing.T) {
 	started := time.Now()
 	cfg := DefaultConfig(filepath.Join(t.TempDir(), "scale.db"))
 	// Explicit offline preparation schema: historical generations remain, while
-	// migration 30 supplies the evidence tables required by the facts loader.
-	// It has no readiness seal or modern single-generation constraints.
+	// migration 31 supplies the facts evidence tables and default-enabled global
+	// PASS setting required by the facts loader. It has no readiness seal or modern
+	// single-generation constraints.
 	db, err := Open(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -29,7 +30,7 @@ func TestScaleDiagnostics(t *testing.T) {
 		_ = db.Close()
 		t.Fatal(err)
 	}
-	if err := NewMigrationRunner(db, migrations.FS).RunUpTo(ctx, 30); err != nil {
+	if err := NewMigrationRunner(db, migrations.FS).RunUpTo(ctx, 31); err != nil {
 		_ = db.Close()
 		t.Fatal(err)
 	}

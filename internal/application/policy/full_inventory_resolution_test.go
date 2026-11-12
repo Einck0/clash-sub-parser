@@ -206,7 +206,9 @@ func TestPolicyValidation_250Nodes_FullInventoryResolutionWithoutTruncation(t *t
 
 	// 7. Global Node Filter Verification:
 	// If a global node filter excludes all Canada nodes, Canada group should become empty and validation should catch it!
+	strictEmptyPass := false
 	_, err = svc.SetGlobalNodeFilter(ctx, policy.SetGlobalNodeFilterCommand{
+		EmptyFallbackPass: &strictEmptyPass,
 		Spec: domain.NodeFilterSpec{
 			Conditions: []domain.FilterCondition{
 				{Field: "display_name", Op: "not_contains", Value: "Canada"},

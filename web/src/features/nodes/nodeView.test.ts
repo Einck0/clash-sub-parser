@@ -1347,6 +1347,7 @@ describe('NodesView real API detail, plaintext PATCH edit, and failure draft pre
     const { default: NodesView } = await import('./NodesView.vue')
 
     const postCalls: Array<{ path: string; body: any }> = []
+    const nodeRequests: Array<Record<string, any>> = []
 
     const mockNodes: NodeRecord[] = [
       {
@@ -1367,9 +1368,14 @@ describe('NodesView real API detail, plaintext PATCH edit, and failure draft pre
       },
     ]
 
-    vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
+    vi.spyOn(api, 'get').mockImplementation(async (path: string, options?: any) => {
       if (path === '/api/v1/nodes') {
-        return { items: mockNodes, total: 2, page: 1, page_size: 100 }
+        const params = options?.params || {}
+        nodeRequests.push(params)
+        const filteredNodes = params.health_status
+          ? mockNodes.filter((node) => node.health_status === params.health_status)
+          : mockNodes
+        return { items: filteredNodes, total: filteredNodes.length, page: 1, page_size: 100 }
       }
       if (path === '/api/v1/probes/pool') {
         return { probing_node_ids: [], queued_node_ids: [], total_count: 2 }
@@ -1407,7 +1413,10 @@ describe('NodesView real API detail, plaintext PATCH edit, and failure draft pre
       const healthSelect = mountEl.querySelector('[data-testid="node-health-filter"]') as HTMLSelectElement
       healthSelect.value = 'healthy'
       healthSelect.dispatchEvent(new Event('change'))
-      await nextTick()
+      await vi.waitFor(() => {
+        expect(nodeRequests.some((params) => params.health_status === 'healthy')).toBe(true)
+      })
+      await new Promise((r) => setTimeout(r, 20))
 
       // 3. Selection of unhealthy node is RETAINED even though it's hidden
       expect(selectedBadge?.textContent).toContain('1')

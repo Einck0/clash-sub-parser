@@ -127,11 +127,11 @@ const totalBadgeText = computed(() => {
             class="select select-xs sm:select-sm text-xs"
             @change="$emit('update:healthFilter', ($event.target as HTMLSelectElement).value)"
           >
-            <option value="all">全部 ({{ healthCounts.all }})</option>
-            <option value="probing">检测中 ({{ healthCounts.probing }})</option>
-            <option value="healthy">正常 ({{ healthCounts.healthy }})</option>
-            <option value="unhealthy">异常 ({{ healthCounts.unhealthy }})</option>
-            <option value="unknown">未知 ({{ healthCounts.unknown ?? healthCounts.untested ?? 0 }})</option>
+            <option value="all">全部</option>
+            <option value="probing">检测中</option>
+            <option value="healthy">正常</option>
+            <option value="unhealthy">异常</option>
+            <option value="unknown">未知</option>
           </select>
 
           <!-- Search Input -->
@@ -162,7 +162,7 @@ const totalBadgeText = computed(() => {
           :class="healthFilter === 'all' ? 'btn-primary' : 'btn-ghost bg-base-200/70'"
           @click="$emit('update:healthFilter', 'all')"
         >
-          全部 ({{ healthCounts.all }})
+          全部
         </button>
         <button
           type="button"
@@ -175,7 +175,7 @@ const totalBadgeText = computed(() => {
             class="w-1.5 h-1.5 rounded-full bg-current"
             :class="{ 'animate-ping': healthCounts.probing > 0 }"
           />
-          <span>检测中 ({{ healthCounts.probing }})</span>
+          <span>检测中</span>
         </button>
         <button
           type="button"
@@ -184,7 +184,7 @@ const totalBadgeText = computed(() => {
           :class="healthFilter === 'healthy' ? 'btn-success' : 'btn-ghost bg-base-200/70'"
           @click="$emit('update:healthFilter', 'healthy')"
         >
-          正常 ({{ healthCounts.healthy }})
+          正常
         </button>
         <button
           type="button"
@@ -193,7 +193,7 @@ const totalBadgeText = computed(() => {
           :class="healthFilter === 'unhealthy' ? 'btn-error' : 'btn-ghost bg-base-200/70'"
           @click="$emit('update:healthFilter', 'unhealthy')"
         >
-          异常 ({{ healthCounts.unhealthy }})
+          异常
         </button>
         <button
           type="button"
@@ -202,7 +202,7 @@ const totalBadgeText = computed(() => {
           :class="healthFilter === 'unknown' || healthFilter === 'untested' ? 'btn-neutral' : 'btn-ghost bg-base-200/70'"
           @click="$emit('update:healthFilter', 'unknown')"
         >
-          未知 ({{ healthCounts.unknown ?? healthCounts.untested ?? 0 }})
+          未知
         </button>
       </div>
     </div>

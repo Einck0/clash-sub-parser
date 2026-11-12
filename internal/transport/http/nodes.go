@@ -11,18 +11,20 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"clash-sub-parser/internal/application/inventory"
+	"clash-sub-parser/internal/application/probe"
 	"clash-sub-parser/internal/domain"
 )
 
 type nodeHandler struct {
-	service *inventory.Service
+	service      *inventory.Service
+	probeService *probe.Service
 }
 
-func registerNodeRoutes(r chi.Router, service *inventory.Service) {
+func registerNodeRoutes(r chi.Router, service *inventory.Service, probeService *probe.Service) {
 	if service == nil {
 		return
 	}
-	h := nodeHandler{service: service}
+	h := nodeHandler{service: service, probeService: probeService}
 	r.Get("/nodes", h.list)
 	r.Get("/nodes/{logical_id}", h.get)
 	r.Get("/nodes/{logical_id}/source-history", h.getSourceHistory)
@@ -165,6 +167,27 @@ func (h nodeHandler) list(w http.ResponseWriter, r *http.Request) {
 				}
 				filter.HealthStatuses = append(filter.HealthStatuses, part)
 			}
+		}
+	}
+
+	if state := q.Get("probe_state"); state != "" {
+		if state != "active" {
+			WriteError(w, r, http.StatusBadRequest, "invalid_probe_state", "probe_state must be active")
+			return
+		}
+		if h.probeService == nil {
+			WriteError(w, r, http.StatusServiceUnavailable, "probe_unavailable", "probe service unavailable")
+			return
+		}
+		status, err := h.probeService.GetPoolStatus(r.Context())
+		if err != nil {
+			WriteDomainError(w, r, err)
+			return
+		}
+		filter.LogicalIDs = append(status.ProbingNodeIDs, status.QueuedNodeIDs...)
+		if len(filter.LogicalIDs) == 0 {
+			WritePaginated(w, r, []inventory.NodeView{}, page, pageSize, 0)
+			return
 		}
 	}
 

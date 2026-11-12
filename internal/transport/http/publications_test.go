@@ -2542,6 +2542,12 @@ func TestPublication_MihomoPreviewAndPublish_OptInPruneEmptyOptionalGroup(t *tes
 		Position:      0,
 	})
 
+	// Explicitly set global EmptyFallbackPass false so unpruned empty optional group rejects under strict mode.
+	strictEmptyPass := false
+	if err := sqlite.NewNodeFilterRepository(db).SetGlobalFilter(ctx, &domain.GlobalNodeFilter{EmptyFallbackPass: &strictEmptyPass}); err != nil {
+		t.Fatalf("failed to set strict global filter empty pass: %v", err)
+	}
+
 	// Capture initial DB state to verify DB is never modified
 	var initialGroupCount, initialEdgeCount, initialRuleCount int
 	_ = db.QueryRow("SELECT count(*) FROM node_groups").Scan(&initialGroupCount)

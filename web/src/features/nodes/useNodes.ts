@@ -165,9 +165,13 @@ export function useNodes() {
       if (searchQuery.value.trim()) {
         params.search = searchQuery.value.trim()
       }
-      if (healthFilter.value && healthFilter.value !== 'all' && healthFilter.value !== 'probing') {
+      if (healthFilter.value === 'probing') {
+        params.probe_state = 'active'
+      } else if (healthFilter.value && healthFilter.value !== 'all') {
         if (healthFilter.value === 'unknown' || healthFilter.value === 'untested' || healthFilter.value === 'undetermined') {
           params.health_status = 'unknown'
+        } else if (healthFilter.value === 'degraded') {
+          params.health_status = 'healthy'
         } else {
           params.health_status = healthFilter.value
         }

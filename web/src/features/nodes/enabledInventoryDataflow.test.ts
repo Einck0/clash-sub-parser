@@ -38,6 +38,13 @@ describe('Enabled Subscriptions Inventory & Live Validation Specification', () =
   let app: ReturnType<typeof createApp> | null = null
 
   beforeEach(() => {
+    if (typeof globalThis.ResizeObserver === 'undefined') {
+      globalThis.ResizeObserver = class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      } as any
+    }
     container = document.createElement('div')
     document.body.appendChild(container)
     localStorage.clear()
@@ -598,5 +605,321 @@ describe('Enabled Subscriptions Inventory & Live Validation Specification', () =
     // 2. 401 triggers onUnauthorizedCallback and rejects
     vi.spyOn(api, 'patch').mockRejectedValueOnce(new ApiError(401, 'unauthorized', 'Unauthorized session'))
     await expect(hook.toggle(hook.items.value[0])).rejects.toThrow('Unauthorized session')
+  })
+
+  // --------------------------------------------------------------------------
+  // Scenario 9: Server filtering before pagination for node ledger
+  // Fixture API page size 100 where matching nodes occur only after initial 100 unfiltered nodes
+  // --------------------------------------------------------------------------
+  it('Scenario 9: server filtering before pagination with matching nodes occurring only after initial 100 unfiltered nodes', async () => {
+    // 250 total nodes in universe:
+    // 1. Initial 100 unfiltered nodes: none match search 'HK', protocol 'trojan', or health 'healthy'
+    const initial100Nodes: NodeRecord[] = Array.from({ length: 100 }, (_, i) => ({
+      logical_id: `node-unfiltered-${i + 1}`,
+      display_name: `US Server ${i + 1}`,
+      protocol: 'vmess',
+      active: true,
+      health_status: 'unhealthy' as const,
+      connection: { server: `us-${i + 1}.example.com`, port: 443 },
+      capabilities: {},
+    }))
+
+    // 2. 120 matching nodes: located strictly after initial 100 unfiltered nodes
+    // All match search 'HK', protocol 'trojan', and health 'healthy'
+    const matching120Nodes: NodeRecord[] = Array.from({ length: 120 }, (_, i) => ({
+      logical_id: `node-match-hk-${i + 1}`,
+      display_name: `HK Magic Gateway ${i + 1}`,
+      protocol: 'trojan',
+      active: true,
+      health_status: 'healthy' as const,
+      connection: { server: `hk-${i + 1}.example.com`, port: 443 },
+      capabilities: {},
+    }))
+
+    // 3. 30 subsequent other nodes: protocol 'ss', health 'unknown'
+    const other30Nodes: NodeRecord[] = Array.from({ length: 30 }, (_, i) => ({
+      logical_id: `node-other-${i + 1}`,
+      display_name: `JP Relay ${i + 1}`,
+      protocol: 'ss',
+      active: true,
+      health_status: 'unknown' as const,
+      connection: { server: `jp-${i + 1}.example.com`, port: 8388 },
+      capabilities: {},
+    }))
+
+    const allUniverseNodes: NodeRecord[] = [
+      ...initial100Nodes,
+      ...matching120Nodes,
+      ...other30Nodes,
+    ]
+
+    const recordedNodeCalls: Array<{ path: string; params: Record<string, any> }> = []
+
+    vi.spyOn(api, 'get').mockImplementation(async (path: string, options?: any) => {
+      if (path === '/api/v1/nodes') {
+        const params = (options?.params || {}) as Record<string, any>
+        recordedNodeCalls.push({ path, params: { ...params } })
+
+        // Server-side filtering before pagination:
+        let filtered = allUniverseNodes
+        if (params.search && String(params.search).trim()) {
+          const q = String(params.search).trim().toLowerCase()
+          filtered = filtered.filter((n) => n.display_name.toLowerCase().includes(q))
+        }
+        if (params.protocol && params.protocol !== 'all') {
+          filtered = filtered.filter((n) => n.protocol === params.protocol)
+        }
+        if (params.health_status && params.health_status !== 'all' && params.health_status !== 'probing') {
+          filtered = filtered.filter((n) => n.health_status === params.health_status)
+        }
+
+        const page = Number(params.page || 1)
+        const pageSize = Number(params.page_size || 100)
+        const start = (page - 1) * pageSize
+        const items = filtered.slice(start, start + pageSize)
+
+        return {
+          items,
+          page,
+          page_size: pageSize,
+          total: filtered.length,
+        }
+      }
+      if (path === '/api/v1/probes/pool') {
+        return {
+          queue_nodes_count: 0,
+          probing_count: 0,
+          queued_waiting_count: 0,
+          untested_count: 0,
+          total_count: 250,
+          available_count: 120,
+          unavailable_count: 100,
+          healthy_count: 120,
+          degraded_count: 0,
+          probing_node_ids: [],
+          queued_node_ids: [],
+          updated_at: new Date().toISOString(),
+        } satisfies ProbePoolStatus
+      }
+      return {}
+    })
+
+    const hook = useNodes()
+
+    // ------------------------------------------------------------------------
+    // Part A: Search filtering before pagination + second page
+    // ------------------------------------------------------------------------
+    hook.searchQuery.value = 'HK'
+    await hook.load()
+
+    const searchCall1 = recordedNodeCalls[recordedNodeCalls.length - 1]
+    expect(searchCall1.params.scope).toBe('enabled_subscriptions')
+    expect(searchCall1.params.search).toBe('HK')
+    expect(searchCall1.params.page).toBe(1)
+    expect(searchCall1.params.page_size).toBe(100)
+
+    // Filtered total from server is 120, NOT 0 (which would happen if client-side filtered only page 1)
+    expect(hook.total.value).toBe(120)
+    expect(hook.items.value).toHaveLength(100)
+    expect(hook.items.value[0].displayName).toBe('HK Magic Gateway 1')
+    expect(hook.items.value[99].displayName).toBe('HK Magic Gateway 100')
+    expect(hook.hasMore.value).toBe(true)
+
+    // Second page request for search
+    await hook.loadMore()
+    const searchCall2 = recordedNodeCalls[recordedNodeCalls.length - 1]
+    expect(searchCall2.params.search).toBe('HK')
+    expect(searchCall2.params.page).toBe(2)
+    expect(searchCall2.params.page_size).toBe(100)
+    expect(hook.items.value).toHaveLength(120)
+    expect(hook.items.value[100].displayName).toBe('HK Magic Gateway 101')
+    expect(hook.items.value[119].displayName).toBe('HK Magic Gateway 120')
+    expect(hook.page.value).toBe(2)
+    expect(hook.hasMore.value).toBe(false)
+
+    // ------------------------------------------------------------------------
+    // Part B: Protocol filtering before pagination + second page
+    // ------------------------------------------------------------------------
+    hook.searchQuery.value = ''
+    hook.protocolFilter.value = 'trojan'
+    await hook.load()
+
+    const protoCall1 = recordedNodeCalls[recordedNodeCalls.length - 1]
+    expect(protoCall1.params.protocol).toBe('trojan')
+    expect(protoCall1.params.page).toBe(1)
+    expect(protoCall1.params.page_size).toBe(100)
+    expect(protoCall1.params.search).toBeUndefined()
+
+    expect(hook.total.value).toBe(120)
+    expect(hook.items.value).toHaveLength(100)
+    expect(hook.items.value.every((n) => n.protocol === 'trojan')).toBe(true)
+    expect(hook.hasMore.value).toBe(true)
+
+    await hook.loadMore()
+    const protoCall2 = recordedNodeCalls[recordedNodeCalls.length - 1]
+    expect(protoCall2.params.protocol).toBe('trojan')
+    expect(protoCall2.params.page).toBe(2)
+    expect(hook.items.value).toHaveLength(120)
+    expect(hook.hasMore.value).toBe(false)
+
+    // ------------------------------------------------------------------------
+    // Part C: Health status filtering before pagination + second page
+    // ------------------------------------------------------------------------
+    hook.protocolFilter.value = 'all'
+    hook.healthFilter.value = 'healthy'
+    await hook.load()
+
+    const healthCall1 = recordedNodeCalls[recordedNodeCalls.length - 1]
+    expect(healthCall1.params.health_status).toBe('healthy')
+    expect(healthCall1.params.page).toBe(1)
+    expect(healthCall1.params.page_size).toBe(100)
+
+    expect(hook.total.value).toBe(120)
+    expect(hook.items.value).toHaveLength(100)
+    expect(hook.items.value.every((n) => n.healthStatus === 'healthy')).toBe(true)
+    expect(hook.hasMore.value).toBe(true)
+
+    await hook.loadMore()
+    const healthCall2 = recordedNodeCalls[recordedNodeCalls.length - 1]
+    expect(healthCall2.params.health_status).toBe('healthy')
+    expect(healthCall2.params.page).toBe(2)
+    expect(hook.items.value).toHaveLength(120)
+    expect(hook.hasMore.value).toBe(false)
+
+    // ------------------------------------------------------------------------
+    // Part D: Combined criteria (search + protocol + health)
+    // ------------------------------------------------------------------------
+    hook.searchQuery.value = 'HK'
+    hook.protocolFilter.value = 'trojan'
+    hook.healthFilter.value = 'healthy'
+    await hook.load()
+
+    const combinedCall1 = recordedNodeCalls[recordedNodeCalls.length - 1]
+    expect(combinedCall1.params.search).toBe('HK')
+    expect(combinedCall1.params.protocol).toBe('trojan')
+    expect(combinedCall1.params.health_status).toBe('healthy')
+    expect(combinedCall1.params.page).toBe(1)
+    expect(combinedCall1.params.page_size).toBe(100)
+    expect(combinedCall1.params.scope).toBe('enabled_subscriptions')
+
+    expect(hook.total.value).toBe(120)
+    expect(hook.items.value).toHaveLength(100)
+    expect(hook.items.value.every((n) =>
+      n.displayName.includes('HK') && n.protocol === 'trojan' && n.healthStatus === 'healthy'
+    )).toBe(true)
+    expect(hook.hasMore.value).toBe(true)
+
+    await hook.loadMore()
+    const combinedCall2 = recordedNodeCalls[recordedNodeCalls.length - 1]
+    expect(combinedCall2.params.search).toBe('HK')
+    expect(combinedCall2.params.protocol).toBe('trojan')
+    expect(combinedCall2.params.health_status).toBe('healthy')
+    expect(combinedCall2.params.page).toBe(2)
+    expect(hook.items.value).toHaveLength(120)
+    expect(hook.hasMore.value).toBe(false)
+
+    // ------------------------------------------------------------------------
+    // Part E: Health filter change resets to a fresh page 1 request
+    // ------------------------------------------------------------------------
+    // Currently on page 2 with items.length === 120
+    expect(hook.page.value).toBe(2)
+
+    // Change health filter to 'unhealthy' and trigger load
+    hook.searchQuery.value = ''
+    hook.protocolFilter.value = 'all'
+    hook.healthFilter.value = 'unhealthy'
+    await hook.load()
+
+    const resetCall = recordedNodeCalls[recordedNodeCalls.length - 1]
+    expect(resetCall.params.health_status).toBe('unhealthy')
+    expect(resetCall.params.page).toBe(1)
+    expect(hook.page.value).toBe(1)
+    expect(hook.total.value).toBe(100)
+    expect(hook.items.value).toHaveLength(100)
+    expect(hook.items.value.every((n) => n.healthStatus === 'unhealthy')).toBe(true)
+  })
+
+  // --------------------------------------------------------------------------
+  // Scenario 10: NodesView health filter change triggers fresh page 1 request
+  // Component specification: UI health change dispatches fresh page 1 request
+  // --------------------------------------------------------------------------
+  it('Scenario 10: NodesView triggers fresh page 1 request with server params on health change', async () => {
+    const recordedNodeParams: Array<Record<string, any>> = []
+
+    vi.spyOn(api, 'get').mockImplementation(async (path: string, options?: any) => {
+      if (path === '/api/v1/nodes') {
+        const params = (options?.params || {}) as Record<string, any>
+        recordedNodeParams.push({ ...params })
+        return {
+          items: [
+            {
+              logical_id: 'node-hk-1',
+              display_name: 'HK Edge 1',
+              protocol: 'trojan',
+              active: true,
+              health_status: 'healthy',
+            },
+          ],
+          page: Number(params.page || 1),
+          page_size: 100,
+          total: 1,
+        }
+      }
+      if (path === '/api/v1/probes/pool') {
+        return {
+          queue_nodes_count: 0,
+          probing_count: 0,
+          queued_waiting_count: 0,
+          untested_count: 0,
+          total_count: 1,
+          available_count: 1,
+          unavailable_count: 0,
+          healthy_count: 1,
+          degraded_count: 0,
+          probing_node_ids: [],
+          queued_node_ids: [],
+          updated_at: new Date().toISOString(),
+        } satisfies ProbePoolStatus
+      }
+      return {}
+    })
+
+    app = createApp({
+      render() {
+        return h(NodesView)
+      },
+    })
+    app.mount(container)
+    await nextTick()
+    await new Promise((r) => setTimeout(r, 40))
+
+    // Initial mount requests page 1
+    expect(recordedNodeParams.length).toBeGreaterThanOrEqual(1)
+    expect(recordedNodeParams[0].page).toBe(1)
+    expect(recordedNodeParams[0].scope).toBe('enabled_subscriptions')
+
+    // Find and trigger health filter change via UI (select or health pill)
+    const healthSelect = container.querySelector('[data-testid="node-health-filter"]') as HTMLSelectElement | null
+    if (healthSelect) {
+      healthSelect.value = 'healthy'
+      healthSelect.dispatchEvent(new Event('change'))
+    } else {
+      const healthyPill = Array.from(container.querySelectorAll('button')).find((b) =>
+        b.getAttribute('data-testid') === 'node-health-pill-healthy' ||
+        b.textContent?.includes('正常')
+      )
+      healthyPill?.click()
+    }
+
+    await nextTick()
+    await new Promise((r) => setTimeout(r, 40))
+
+    // Assert that a fresh request was made for page 1 with health_status === 'healthy'
+    const matchingRequest = recordedNodeParams.find(
+      (p) => p.health_status === 'healthy' && p.page === 1
+    )
+    expect(matchingRequest).toBeDefined()
+    expect(matchingRequest?.page).toBe(1)
+    expect(matchingRequest?.health_status).toBe('healthy')
   })
 })

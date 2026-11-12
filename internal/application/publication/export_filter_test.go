@@ -9,6 +9,8 @@ import (
 
 	"clash-sub-parser/internal/application/publication"
 	"clash-sub-parser/internal/domain"
+	"clash-sub-parser/internal/resolver"
+	"gopkg.in/yaml.v3"
 )
 
 // Embed the existing ports so the test overrides only the read path under test.
@@ -58,7 +60,7 @@ func probeFilter() domain.NodeFilterSpec {
 	}}}
 }
 
-func exportFilterFixture(t *testing.T, withGroup bool, filter *filterReadRepo, observations domain.ProbeObservationRepository, sources domain.NodeSourceRepository) (*publication.Service, *mockPublicationRepo) {
+func exportFilterFixture(t *testing.T, withGroup bool, filter *filterReadRepo, observations domain.ProbeObservationRepository, sources domain.NodeSourceRepository, configure ...func(*mockPolicyRepo)) (*publication.Service, *mockPublicationRepo) {
 	t.Helper()
 	ctx := context.Background()
 	revision := newMockRevisionRepo()
@@ -95,6 +97,9 @@ func exportFilterFixture(t *testing.T, withGroup bool, filter *filterReadRepo, o
 				g.Sources[i].FilterSpec = &spec
 			}
 		}
+	}
+	for _, configurePolicy := range configure {
+		configurePolicy(policy)
 	}
 	pubs := newMockPublicationRepo()
 	nodes := setupSampleNodeSource()
@@ -320,4 +325,271 @@ func TestExportFilterEmptyRoutedGroupAndGroupAND(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestExportFilterGlobalExhaustWithRoutedEmptyPassAllowsMihomoWithPass(t *testing.T) {
+	ctx := context.Background()
+
+	globalFilter := domain.NodeFilterSpec{
+		Conditions: []domain.FilterCondition{{
+			Field: domain.FilterFieldDisplayName,
+			Op:    domain.FilterOpContains,
+			Value: "__guaranteed_absent_display_name__",
+		}},
+	}
+
+	t.Run("default empty pass allows mihomo with PASS and denies pure nodes", func(t *testing.T) {
+		filter := &filterReadRepo{global: globalFilter}
+		svc, pubs := exportFilterFixture(t, true, filter, nil, nil)
+
+		pre, err := svc.Preflight(ctx, publication.PreflightCommand{Target: domain.TargetMihomo})
+		if err != nil || pre == nil || !pre.Allowed {
+			t.Fatalf("expected mihomo preflight allowed with routed empty PASS: %+v, %v", pre, err)
+		}
+
+		prev, err := svc.Preview(ctx, publication.PreviewQuery{Target: domain.TargetMihomo})
+		if err != nil {
+			t.Fatalf("expected mihomo preview allowed: %v", err)
+		}
+		if prev.FilterCounts == nil || prev.FilterCounts.AdmittedTotal <= 0 || prev.FilterCounts.GlobalFilteredTotal != 0 {
+			t.Fatalf("expected admitted nodes and zero globally filtered nodes: %+v", prev.FilterCounts)
+		}
+		if !strings.Contains(string(prev.Content), "empty-fallback: PASS") {
+			t.Fatalf("expected empty-fallback: PASS in mihomo content: %s", prev.Content)
+		}
+		if !strings.Contains(string(prev.Content), "- PASS") {
+			t.Fatalf("expected proxy group proxies list to contain PASS: %s", prev.Content)
+		}
+		if strings.Contains(string(prev.Content), "server:") {
+			t.Fatalf("expected no proxy servers compiled when all nodes filtered out: %s", prev.Content)
+		}
+
+		pub, err := svc.Publish(ctx, publication.PublishCommand{Target: domain.TargetMihomo})
+		if err != nil || pub == nil || pub.ContentDigest == "" {
+			t.Fatalf("expected mihomo publish allowed: %v, %+v", err, pub)
+		}
+
+		for _, target := range exportTargets {
+			if target == domain.TargetMihomo {
+				continue
+			}
+			assertDeniedNewExport(t, svc, pubs, target, "filtered_nodes_empty")
+		}
+	})
+
+	t.Run("strict off rejects mihomo on global exhaust", func(t *testing.T) {
+		strict := false
+		filter := &filterReadRepo{global: globalFilter, emptyFallbackPass: &strict}
+		svc, pubs := exportFilterFixture(t, true, filter, nil, nil)
+		assertDeniedNewExport(t, svc, pubs, domain.TargetMihomo, "filtered_nodes_empty")
+	})
+
+	t.Run("independent errors stay errors even with empty pass enabled", func(t *testing.T) {
+		filter := &filterReadRepo{
+			global:    globalFilter,
+			globalErr: errors.New("global_filter_unavailable"),
+		}
+		svc, pubs := exportFilterFixture(t, true, filter, nil, nil)
+		assertDeniedNewExport(t, svc, pubs, domain.TargetMihomo, "global_filter_unavailable")
+	})
+}
+
+func TestExportFilterMixedRoutedGroupsApplyEmptyPassIndependently(t *testing.T) {
+	ctx := context.Background()
+	filter := &filterReadRepo{groups: map[string]domain.NodeFilterSpec{
+		"01944aa0-0000-7000-8000-000000000002": {Conditions: []domain.FilterCondition{{
+			Field: domain.FilterFieldDisplayName, Op: domain.FilterOpContains, Value: "Tokyo",
+		}}},
+	}}
+	svc, _ := exportFilterFixture(t, true, filter, nil, nil, func(policy *mockPolicyRepo) {
+		groupID := "01944aa0-0000-7000-8000-000000000006"
+		if err := policy.CreateGroup(ctx, &domain.NodeGroup{ID: groupID, Name: "USABLE", GroupType: domain.GroupTypeSelect, InheritGlobalFilter: true}); err != nil {
+			t.Fatal(err)
+		}
+		if err := policy.SetEdgesForGroup(ctx, groupID, []domain.GroupEdge{{ID: "01944aa0-0000-7000-8000-000000000007", ParentGroupID: groupID, NodeLogicalID: ptr(usNodeID)}}); err != nil {
+			t.Fatal(err)
+		}
+		if err := policy.CreatePolicyRule(ctx, &domain.PolicyRule{ID: "01944aa0-0000-7000-8000-000000000008", RevisionID: "01944aa0-0000-7000-8000-000000000001", TargetGroupID: groupID, Expression: "DOMAIN-SUFFIX,example.org", Position: -1}); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	pre, err := svc.Preflight(ctx, publication.PreflightCommand{Target: domain.TargetMihomo})
+	if err != nil || pre == nil || !pre.Allowed {
+		t.Fatalf("expected Mihomo preflight allowed: %+v, %v", pre, err)
+	}
+	preview, err := svc.Preview(ctx, publication.PreviewQuery{Target: domain.TargetMihomo})
+	if err != nil {
+		t.Fatalf("expected preview to succeed: %v", err)
+	}
+	var content struct {
+		ProxyGroups []struct {
+			Name    string   `yaml:"name"`
+			Proxies []string `yaml:"proxies"`
+		} `yaml:"proxy-groups"`
+	}
+	if err := yaml.Unmarshal(preview.Content, &content); err != nil {
+		t.Fatalf("decode preview YAML: %v", err)
+	}
+	groups := map[string][]string{}
+	for _, group := range content.ProxyGroups {
+		groups[group.Name] = group.Proxies
+	}
+	if len(groups["PROXY"]) != 1 || groups["PROXY"][0] != "PASS" {
+		t.Fatalf("expected PROXY to contain only PASS, got %+v", groups["PROXY"])
+	}
+	if !containsString(groups["USABLE"], "United States 01") || containsString(groups["USABLE"], "PASS") {
+		t.Fatalf("expected USABLE to contain its retained node and no PASS, got %+v", groups["USABLE"])
+	}
+	if preview.FilterCounts == nil {
+		t.Fatal("expected filter counts")
+	}
+	counts := preview.FilterCounts.GroupCounts
+	original, originalOK := counts["01944aa0-0000-7000-8000-000000000002"]
+	second, secondOK := counts["01944aa0-0000-7000-8000-000000000006"]
+	if !originalOK || !secondOK || original.Candidate == 0 || original.Kept != 0 || second.Kept == 0 || preview.FilterCounts.AdmittedTotal == 0 {
+		t.Fatalf("expected isolated group filtering and global nodes retained; counts=%+v", preview.FilterCounts)
+	}
+	if _, err := svc.Publish(ctx, publication.PublishCommand{Target: domain.TargetMihomo}); err != nil {
+		t.Fatalf("expected publish to succeed: %v", err)
+	}
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func TestExportFilterPostResolutionErrorNotMaskedByEmptyPass(t *testing.T) {
+	ctx := context.Background()
+	svc, pubs, _ := setupService()
+	snapshot := &resolver.ResolvedPolicySnapshot{
+		SnapshotDigest:  "sha256:test-post-resolution-error",
+		CompilerVersion: "1.0.0",
+		Groups: []resolver.ResolvedGroup{{
+			ID: "empty-pass-group", Name: "EMPTY", GroupType: domain.GroupTypeSelect,
+			EmptyFallbackPass: true, EffectiveEmptyPass: true, AllNodeLogicalIDs: []string{},
+		}},
+		Rules:       []resolver.ResolvedRule{{ID: "empty-rule", TargetGroupID: "empty-pass-group", TargetGroupName: "EMPTY", Expression: "MATCH", IsTerminal: true}},
+		Diagnostics: []resolver.Diagnostic{{Severity: resolver.DiagnosticSeverityError, Code: "risk_blocked", Message: "risk policy blocked publication"}},
+	}
+	pubs.mu.RLock()
+	before := len(pubs.publications)
+	pubs.mu.RUnlock()
+	pre, err := svc.Preflight(ctx, publication.PreflightCommand{Target: domain.TargetMihomo, Snapshot: snapshot})
+	if err != nil || pre == nil || pre.Allowed || !hasDiagnosticCode(pre.Diagnostics, "risk_blocked") {
+		t.Fatalf("expected risk_blocked to deny preflight: %+v, %v", pre, err)
+	}
+	for _, run := range []struct {
+		name string
+		call func() error
+	}{
+		{"preview", func() error {
+			_, err := svc.Preview(ctx, publication.PreviewQuery{Target: domain.TargetMihomo, Snapshot: snapshot})
+			return err
+		}},
+		{"publish", func() error {
+			_, err := svc.Publish(ctx, publication.PublishCommand{Target: domain.TargetMihomo, Snapshot: snapshot})
+			return err
+		}},
+	} {
+		t.Run(run.name, func(t *testing.T) {
+			err := run.call()
+			var preflightErr *publication.PreflightError
+			if !errors.As(err, &preflightErr) || !hasDiagnosticCode(preflightErr.Result.Diagnostics, "risk_blocked") {
+				t.Fatalf("expected PreflightError carrying risk_blocked, got %v", err)
+			}
+		})
+	}
+	pubs.mu.RLock()
+	after := len(pubs.publications)
+	pubs.mu.RUnlock()
+	if after != before {
+		t.Fatalf("expected denied publication not to persist; before=%d after=%d", before, after)
+	}
+}
+
+func hasDiagnosticCode(diagnostics []publication.PreflightDiagnostic, code string) bool {
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Code == code {
+			return true
+		}
+	}
+	return false
+}
+
+func TestExportFilterGroupExhaustWithRoutedEmptyPassAllowsMihomoWithPass(t *testing.T) {
+	ctx := context.Background()
+
+	tokyoGroupFilter := map[string]domain.NodeFilterSpec{
+		"01944aa0-0000-7000-8000-000000000002": {
+			Conditions: []domain.FilterCondition{{
+				Field: domain.FilterFieldDisplayName,
+				Op:    domain.FilterOpContains,
+				Value: "Tokyo",
+			}},
+		},
+	}
+
+	t.Run("default empty pass allows mihomo with PASS in group", func(t *testing.T) {
+		filter := &filterReadRepo{groups: tokyoGroupFilter}
+		svc, pubs := exportFilterFixture(t, true, filter, nil, nil)
+
+		pre, err := svc.Preflight(ctx, publication.PreflightCommand{Target: domain.TargetMihomo})
+		if err != nil || pre == nil || !pre.Allowed {
+			t.Fatalf("expected mihomo preflight allowed with routed empty PASS: %+v, %v", pre, err)
+		}
+
+		prev, err := svc.Preview(ctx, publication.PreviewQuery{Target: domain.TargetMihomo})
+		if err != nil {
+			t.Fatalf("expected mihomo preview allowed: %v", err)
+		}
+		if prev.FilterCounts == nil || prev.FilterCounts.AdmittedTotal <= 0 || prev.FilterCounts.GlobalFilteredTotal != prev.FilterCounts.AdmittedTotal {
+			t.Fatalf("expected group filter to exhaust sourced nodes while preserving globally admitted nodes: %+v", prev.FilterCounts)
+		}
+		groupCount, ok := prev.FilterCounts.GroupCounts["01944aa0-0000-7000-8000-000000000002"]
+		if !ok || groupCount.Candidate != prev.FilterCounts.AdmittedTotal || groupCount.Kept != 0 || groupCount.Excluded != groupCount.Candidate {
+			t.Fatalf("expected group filter to exclude its complete routed source set: %+v, counts=%+v", groupCount, prev.FilterCounts)
+		}
+		if !strings.Contains(string(prev.Content), "empty-fallback: PASS") {
+			t.Fatalf("expected empty-fallback: PASS in mihomo content: %s", prev.Content)
+		}
+		if !strings.Contains(string(prev.Content), "- PASS") {
+			t.Fatalf("expected proxy group proxies list to contain PASS: %s", prev.Content)
+		}
+		if !strings.Contains(string(prev.Content), "Hong Kong 01") || !strings.Contains(string(prev.Content), "United States 01") {
+			t.Fatalf("expected normal nodes preserved in proxies list: %s", prev.Content)
+		}
+
+		pub, err := svc.Publish(ctx, publication.PublishCommand{Target: domain.TargetMihomo})
+		if err != nil || pub == nil || pub.ContentDigest == "" {
+			t.Fatalf("expected mihomo publish allowed: %v, %+v", err, pub)
+		}
+
+		for _, target := range exportTargets {
+			if target != domain.TargetMihomo {
+				assertPureNodeExportAllowed(t, svc, target)
+			}
+		}
+	})
+
+	t.Run("strict off rejects mihomo on group exhaust", func(t *testing.T) {
+		strict := false
+		filter := &filterReadRepo{groups: tokyoGroupFilter, emptyFallbackPass: &strict}
+		svc, pubs := exportFilterFixture(t, true, filter, nil, nil)
+		assertDeniedNewExport(t, svc, pubs, domain.TargetMihomo, "filtered_nodes_empty")
+	})
+
+	t.Run("independent errors stay errors even with empty pass enabled", func(t *testing.T) {
+		filter := &filterReadRepo{
+			groups:   tokyoGroupFilter,
+			groupErr: errors.New("group_sources_unavailable"),
+		}
+		svc, pubs := exportFilterFixture(t, true, filter, nil, nil)
+		assertDeniedNewExport(t, svc, pubs, domain.TargetMihomo, "group_sources_unavailable")
+	})
 }

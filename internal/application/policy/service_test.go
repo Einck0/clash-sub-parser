@@ -1382,6 +1382,16 @@ func TestPolicyService_ValidateGraph_DirectlyRoutedEmptyGroupAndUnroutedWarning(
 	}
 
 	// 3. ValidateGraph
+	strictEmptyPass := false
+	_, err = svc.SetGlobalNodeFilter(ctx, policy.SetGlobalNodeFilterCommand{
+		EmptyFallbackPass: &strictEmptyPass,
+		RequestID:         "req-disable-pass",
+		ActorKind:         domain.ActorKindAdmin,
+	})
+	if err != nil {
+		t.Fatalf("failed to set strict empty fallback pass: %v", err)
+	}
+
 	res, err := svc.ValidateGraph(ctx)
 	if err != nil {
 		t.Fatalf("ValidateGraph returned unexpected error: %v", err)
@@ -1475,6 +1485,16 @@ func TestPolicyService_ValidateGraph_ExactRuleDeletion_VerificationCycle(t *test
 	}
 
 	// 2. ValidateGraph before deletion: must fail due to empty_routed_group
+	strictEmptyPass := false
+	_, err = svc.SetGlobalNodeFilter(ctx, policy.SetGlobalNodeFilterCommand{
+		EmptyFallbackPass: &strictEmptyPass,
+		RequestID:         "req-disable-pass-predelete",
+		ActorKind:         domain.ActorKindAdmin,
+	})
+	if err != nil {
+		t.Fatalf("failed to set strict empty fallback pass: %v", err)
+	}
+
 	preRes, err := svc.ValidateGraph(ctx)
 	if err != nil {
 		t.Fatalf("pre-delete ValidateGraph error: %v", err)

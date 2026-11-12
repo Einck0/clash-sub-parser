@@ -716,6 +716,9 @@ func TestEnabledSubscriptionInventoryE2E(t *testing.T) {
 		}
 
 		// 6. Verify new preview in compatible mode fails with business error empty_group_not_allowed
+		// Explicitly disable global empty fallback pass to verify strict rejection behavior with 0 candidates.
+		_, _ = harness.DB.ExecContext(ctx, "INSERT INTO global_node_filters (id, filter_spec, updated_at, empty_fallback_pass) VALUES (1, '{}', datetime('now'), 0) ON CONFLICT(id) DO UPDATE SET empty_fallback_pass = 0;")
+
 		errPrevReq, _ := http.NewRequest(http.MethodPost, harness.Server.URL+"/api/v1/publications/preview", strings.NewReader(`{"target": "mihomo", "compat_mode": "compatible"}`))
 		errPrevReq.Header.Set("Authorization", authHeader)
 		errPrevReq.Header.Set("Content-Type", "application/json")
@@ -748,7 +751,8 @@ func TestEnabledSubscriptionInventoryE2E(t *testing.T) {
 			t.Fatalf("published bytes changed after disabling subscriptions: expected %s, got %s", string(origBytes), string(afterBytes))
 		}
 
-		// Clean up: re-enable subA and subD
+		// Clean up: re-enable subA and subD, and restore default empty fallback pass
+		_, _ = harness.DB.ExecContext(ctx, "UPDATE global_node_filters SET empty_fallback_pass = 1 WHERE id = 1;")
 		toggleSub(subA, true)
 		toggleSub(subD, true)
 	})

@@ -149,7 +149,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 			registerSubscriptionRoutes(api, cfg.SubscriptionService, cfg.InventoryService)
 		}
 		if cfg.InventoryService != nil {
-			registerNodeRoutes(api, cfg.InventoryService)
+			registerNodeRoutes(api, cfg.InventoryService, cfg.ProbeService)
 		}
 		if cfg.ProbeService != nil {
 			registerProbeRoutes(api, cfg.ProbeService, cfg.ProbeRunRepository, cfg.ProbeObservationRepository, cfg.AuditRepository)

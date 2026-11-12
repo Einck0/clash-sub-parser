@@ -1136,6 +1136,22 @@ func (s *Service) resolveSnapshot(ctx context.Context, revisionID string) (*reso
 	return s.resolveTargetSnapshot(ctx, revisionID, domain.TargetMihomo)
 }
 
+// A routed, resolved PASS group is a normal Mihomo policy even if filters leave
+// no nodes. Other formats do not consume policy groups.
+func hasRoutedEmptyPass(snapshot *resolver.ResolvedPolicySnapshot, target domain.CompilerTarget) bool {
+	if target != domain.TargetMihomo {
+		return false
+	}
+	for _, rule := range snapshot.Rules {
+		for _, group := range snapshot.Groups {
+			if rule.TargetGroupID == group.ID && group.UsesEmptyPass() {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (s *Service) resolveTargetSnapshot(ctx context.Context, revisionID string, target domain.CompilerTarget) (*resolver.ResolvedPolicySnapshot, error) {
 	input, err := s.assembleResolveInput(ctx, revisionID, target == domain.TargetMihomo)
 	if err != nil {
@@ -1193,7 +1209,7 @@ func (s *Service) resolveTargetSnapshot(ctx context.Context, revisionID string, 
 	}
 	counts := snapshot.FilterCounts
 	if counts != nil && counts.AdmittedTotal > 0 {
-		globallyEmpty := input.GlobalFilter != nil && !input.GlobalFilter.IsEmpty() && counts.GlobalFilteredTotal == 0
+		globallyEmpty := input.GlobalFilter != nil && !input.GlobalFilter.IsEmpty() && counts.GlobalFilteredTotal == 0 && !hasRoutedEmptyPass(snapshot, target)
 		groupEmpty := false
 		if !globallyEmpty && counts.GroupFilteredTotal == 0 {
 			for _, group := range input.Groups {
@@ -1672,7 +1688,7 @@ func (s *Service) buildArtifactPipeline(ctx context.Context, facts *domain.Consi
 
 	counts := snapshot.FilterCounts
 	if counts != nil && counts.AdmittedTotal > 0 {
-		globallyEmpty := input.GlobalFilter != nil && !input.GlobalFilter.IsEmpty() && counts.GlobalFilteredTotal == 0
+		globallyEmpty := input.GlobalFilter != nil && !input.GlobalFilter.IsEmpty() && counts.GlobalFilteredTotal == 0 && !hasRoutedEmptyPass(snapshot, target)
 		groupEmpty := false
 		if !globallyEmpty && counts.GroupFilteredTotal == 0 && target == domain.TargetMihomo {
 			for _, group := range input.Groups {
@@ -1705,7 +1721,7 @@ func (s *Service) buildArtifactPipeline(ctx context.Context, facts *domain.Consi
 		}
 	}
 
-	if len(snapshot.Nodes) == 0 {
+	if len(snapshot.Nodes) == 0 && !hasRoutedEmptyPass(snapshot, target) {
 		hasEmptyDiag := false
 		for _, d := range snapshot.Diagnostics {
 			if d.Code == "filtered_nodes_empty" {

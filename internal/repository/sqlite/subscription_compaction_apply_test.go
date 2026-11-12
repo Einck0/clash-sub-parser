@@ -33,7 +33,7 @@ func preparedCompactionScratch(t *testing.T) (*sql.DB, *domain.SubscriptionStora
 		INSERT INTO nodes(logical_id,protocol,display_name,server,port,config_json,active,created_at,updated_at,connection_revision)VALUES('zero-node','ss','Synthetic','192.0.2.1',8388,'{}',1,'2026-11-10T00:00:00Z','2026-11-10T00:00:00Z',1);`); err != nil {
 		t.Fatal(err)
 	}
-	if err := runner.Run(ctx); err != nil {
+	if err := runner.RunUpTo(ctx, 30); err != nil {
 		t.Fatal(err)
 	}
 	plan, err := sqlite.InspectSubscriptionCompaction(ctx, db)

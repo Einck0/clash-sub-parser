@@ -45,7 +45,7 @@ func TestPeriodicCoordinator_SQLiteScale(t *testing.T) {
 	started := time.Now()
 	cfg := sqlite.DefaultConfig(filepath.Join(t.TempDir(), "periodic-scale.db"))
 	// Offline preparation schema preserves the historical million-row fixture;
-	// migration 30 adds facts evidence tables without sealing modern constraints.
+	// migration 31 adds facts evidence tables and the default-enabled global PASS setting.
 	db, err := sqlite.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -54,7 +54,7 @@ func TestPeriodicCoordinator_SQLiteScale(t *testing.T) {
 		_ = db.Close()
 		t.Fatal(err)
 	}
-	if err := sqlite.NewMigrationRunner(db, migrations.FS).RunUpTo(ctx, 30); err != nil {
+	if err := sqlite.NewMigrationRunner(db, migrations.FS).RunUpTo(ctx, 31); err != nil {
 		_ = db.Close()
 		t.Fatal(err)
 	}

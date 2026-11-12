@@ -16,6 +16,7 @@ import (
 type filterReadRepo struct {
 	domain.NodeFilterRepository
 	global              domain.NodeFilterSpec
+	emptyFallbackPass   *bool
 	groups              map[string]domain.NodeFilterSpec
 	globalErr, groupErr error
 }
@@ -24,7 +25,7 @@ func (r *filterReadRepo) GetGlobalFilter(context.Context) (*domain.GlobalNodeFil
 	if r.globalErr != nil {
 		return nil, r.globalErr
 	}
-	return &domain.GlobalNodeFilter{Spec: r.global}, nil
+	return &domain.GlobalNodeFilter{Spec: r.global, EmptyFallbackPass: r.emptyFallbackPass}, nil
 }
 func (r *filterReadRepo) ListGroupFilters(context.Context) (map[string]domain.NodeFilterSpec, error) {
 	return r.groups, r.groupErr
@@ -273,7 +274,8 @@ func assertPureNodeExportAllowed(t *testing.T, svc *publication.Service, target 
 }
 
 func TestExportFilterGroupOnlyZeroBlocksMihomoNotPureNodes(t *testing.T) {
-	filter := &filterReadRepo{groups: map[string]domain.NodeFilterSpec{
+	strict := false
+	filter := &filterReadRepo{emptyFallbackPass: &strict, groups: map[string]domain.NodeFilterSpec{
 		"01944aa0-0000-7000-8000-000000000002": probeFilter(),
 	}}
 	svc, pubs := exportFilterFixture(t, true, filter, &observationReadRepo{latest: map[string]map[domain.ProbeKind]domain.ProbeObservation{}}, nil)
@@ -287,7 +289,8 @@ func TestExportFilterGroupOnlyZeroBlocksMihomoNotPureNodes(t *testing.T) {
 }
 
 func TestExportFilterEmptyRoutedGroupAndGroupAND(t *testing.T) {
-	filter := &filterReadRepo{global: probeFilter(), groups: map[string]domain.NodeFilterSpec{
+	strict := false
+	filter := &filterReadRepo{global: probeFilter(), emptyFallbackPass: &strict, groups: map[string]domain.NodeFilterSpec{
 		"01944aa0-0000-7000-8000-000000000002": {Conditions: []domain.FilterCondition{{Field: domain.FilterFieldDisplayName, Op: domain.FilterOpContains, Value: "United States"}}},
 	}}
 	rev := int64(1)

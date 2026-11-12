@@ -250,7 +250,7 @@ func CheckSubscriptionStorageReady(ctx context.Context, db *sql.DB) error {
 
 func checkSubscriptionStorageReadyTx(ctx context.Context, tx *sql.Tx) error {
 	var schemaVersion int
-	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(version),0) FROM schema_migrations`).Scan(&schemaVersion); err != nil || schemaVersion != 30 {
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(version),0) FROM schema_migrations`).Scan(&schemaVersion); err != nil || (schemaVersion != 30 && schemaVersion != 31) {
 		return fmt.Errorf("maintenance_required: unsupported storage schema")
 	}
 	var version int

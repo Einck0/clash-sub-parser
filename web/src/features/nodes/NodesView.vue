@@ -862,7 +862,7 @@ onUnmounted(() => {
         <div v-if="loadingMore || isAutoPaginating" class="flex justify-center py-2">
           <span class="loading loading-spinner loading-sm text-primary" />
         </div>
-        <div v-else-if="hasMore && consecutiveAutoPages >= MAX_AUTO_PAGE_STEPS" class="py-2">
+        <div v-else-if="hasMore" class="py-2">
           <button
             type="button"
             class="btn btn-xs btn-outline btn-primary"

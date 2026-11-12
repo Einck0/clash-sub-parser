@@ -1683,7 +1683,14 @@ func (s *Service) buildArtifactPipeline(ctx context.Context, facts *domain.Consi
 						break
 					}
 				}
-				if count := counts.GroupCounts[group.ID]; hasFilter && count.Candidate > 0 && count.Excluded > 0 {
+				resolvedPass := false
+				for _, resolved := range snapshot.Groups {
+					if resolved.ID == group.ID && resolved.UsesEmptyPass() {
+						resolvedPass = true
+						break
+					}
+				}
+				if count := counts.GroupCounts[group.ID]; hasFilter && count.Candidate > 0 && count.Excluded > 0 && !resolvedPass {
 					groupEmpty = true
 					break
 				}

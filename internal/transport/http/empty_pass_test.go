@@ -116,14 +116,14 @@ func TestEmptyPassHTTPRoundtripPublicationAndSharedValidation(t *testing.T) {
 			t.Fatalf("frozen content mismatch: %v", err)
 		}
 	}
-	// One unchecked live-like group remains blocked; don't blanket enable it.
-	rec = request(http.MethodPatch, "/api/v1/policies/groups/"+id, `{"empty_fallback_pass":false}`)
+	// The global setting overrides the legacy per-group value.
+	rec = request(http.MethodPut, "/api/v1/policies/global-node-filter", `{"spec":{"conditions":[]},"empty_fallback_pass":false}`)
 	if rec.Code != 200 {
 		t.Fatal(rec.Body)
 	}
 	check = request(http.MethodPost, "/api/v1/policies/validate", "")
 	if !strings.Contains(check.Body.String(), "empty_routed_group") {
-		t.Fatal("unchecked empty route no longer blocked")
+		t.Fatal("globally disabled empty route no longer blocked")
 	}
 	// Evidence-dependent filtering uses the very same publication input provider.
 	kind := domain.ProbeKindBaseline
@@ -133,5 +133,89 @@ func TestEmptyPassHTTPRoundtripPublicationAndSharedValidation(t *testing.T) {
 	check = request(http.MethodPost, "/api/v1/policies/validate", "")
 	if !strings.Contains(check.Body.String(), "filtered_nodes_empty") {
 		t.Fatalf("validation omitted publication filter guard: %s", check.Body)
+	}
+}
+
+func TestGlobalEmptyPassHTTPPersistsAndControlsAllGroups(t *testing.T) {
+	db := newCleanSQLiteDB(t)
+	ctx := context.Background()
+	seedSamplePolicyData(t, db)
+	repo := sqlite.NewPolicyRepository(db)
+	rev := sqlite.NewRevisionRepository(db)
+	nodes := sqlite.NewNodeRepository(db)
+	filters := sqlite.NewNodeFilterRepository(db)
+	pol := policy.NewService(repo, rev, nodes, sqlite.NewAuditRepository(db), filters)
+	pub := publication.NewService(sqlite.NewPublicationRepository(db), nil, publication.WithPolicyRepository(repo), publication.WithRevisionRepository(rev), publication.WithNodeRepository(nodes), publication.WithNodeFilterRepository(filters), publication.WithNodeSourceRepository(sqlite.NewNodeSourceRepository(db)), publication.WithProbeObservationRepository(sqlite.NewProbeObservationRepository(db)), publication.WithConsistentFactsLoader(sqlite.NewConsistentFactsLoader(db)))
+	cfg := newTestRouterConfig(true)
+	cfg.PolicyService = pol
+	cfg.PublicationService = pub
+	router := transporthttp.NewRouter(cfg)
+	req := func(method, path, body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, path, strings.NewReader(body))
+		r.Header.Set("Authorization", "Bearer "+testAdminToken)
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, r)
+		return w
+	}
+	endpoint := "/api/v1/policies/global-node-filter"
+	if got := req("GET", endpoint, ""); got.Code != 200 || !strings.Contains(got.Body.String(), `"empty_fallback_pass":true`) {
+		t.Fatalf("default: %d %s", got.Code, got.Body)
+	}
+	old := domain.NodeGroup{ID: domain.MustNewUUIDv7(), Name: "old-empty", GroupType: domain.GroupTypeSelect, EmptyFallbackPass: false}
+	if err := repo.CreateGroup(ctx, &old); err != nil {
+		t.Fatal(err)
+	}
+	created := req("POST", "/api/v1/policies/groups", `{"name":"new-empty","group_type":"select","empty_fallback_pass":true}`)
+	if created.Code != 201 {
+		t.Fatal(created.Body)
+	}
+	var g groupDetailResponse
+	if err := json.Unmarshal(created.Body.Bytes(), &g); err != nil {
+		t.Fatal(err)
+	}
+	active, err := rev.GetActive(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(want bool) {
+		snap, err := pub.ResolvePolicySnapshot(ctx, active.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen := 0
+		for _, item := range snap.Groups {
+			if item.ID == old.ID || item.ID == g.Data.ID {
+				seen++
+				if item.UsesEmptyPass() != want {
+					t.Fatalf("group %s pass=%v want %v", item.Name, item.UsesEmptyPass(), want)
+				}
+			}
+		}
+		if seen != 2 {
+			t.Fatalf("got %d matching groups", seen)
+		}
+	}
+	check(true)
+	if w := req("PUT", endpoint, `{"spec":{"conditions":[]},"empty_fallback_pass":false}`); w.Code != 200 {
+		t.Fatal(w.Body)
+	}
+	if w := req("GET", endpoint, ""); !strings.Contains(w.Body.String(), `"empty_fallback_pass":false`) {
+		t.Fatal(w.Body)
+	}
+	check(false)
+	if w := req("PUT", endpoint, `{"spec":{"conditions":[]}}`); !strings.Contains(w.Body.String(), `"empty_fallback_pass":false`) {
+		t.Fatal(w.Body)
+	}
+	if w := req("PUT", endpoint, `{"spec":{"conditions":[]},"empty_fallback_pass":true}`); w.Code != 200 {
+		t.Fatal(w.Body)
+	}
+	check(true)
+	facts, err := sqlite.NewConsistentFactsLoader(db).LoadConsistentFacts(ctx, active.ID, domain.TargetMihomo, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if facts.GlobalEmptyFallbackPass == nil || !*facts.GlobalEmptyFallbackPass {
+		t.Fatal("transactional export facts lost global setting")
 	}
 }

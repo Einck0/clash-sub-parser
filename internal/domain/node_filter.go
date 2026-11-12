@@ -346,8 +346,9 @@ func (s *NodeFilterSpec) NormalizeForSave() {
 
 // GlobalNodeFilter represents the singleton global filter configuration.
 type GlobalNodeFilter struct {
-	Spec      NodeFilterSpec `json:"spec"`
-	UpdatedAt time.Time      `json:"updated_at"`
+	EmptyFallbackPass *bool          `json:"empty_fallback_pass,omitempty"`
+	Spec              NodeFilterSpec `json:"spec"`
+	UpdatedAt         time.Time      `json:"updated_at"`
 }
 
 // GroupNodeFilter represents the per-group node filter binding.

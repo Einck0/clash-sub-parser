@@ -125,7 +125,6 @@ function getPreviewPayload(): GroupDraftPreviewPayload {
     expected_revision: draft.expectedRevision.value,
     name: draft.name.value.trim(),
     group_type: draft.groupType.value,
-    empty_fallback_pass: draft.emptyFallbackPass.value,
     inherit_global_filter: draft.inheritGlobalFilter.value,
     sources: draft.sources.value.map((s, idx) => ({ ...s, position: idx })),
     target: 'mihomo',
@@ -424,7 +423,6 @@ function handleDiscardSourceDraft() {
               v-model:name="draft.name.value"
               v-model:group-type="draft.groupType.value"
               v-model:position="draft.position.value"
-              v-model:empty-fallback-pass="draft.emptyFallbackPass.value"
               v-model:inherit-global-filter="draft.inheritGlobalFilter.value"
               v-model:pending-pattern="draft.pendingRegexPattern.value"
               :sources="draft.sources.value"

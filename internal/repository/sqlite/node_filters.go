@@ -22,18 +22,21 @@ func NewNodeFilterRepository(db *sql.DB) domain.NodeFilterRepository {
 
 func (r *nodeFilterRepository) GetGlobalFilter(ctx context.Context) (*domain.GlobalNodeFilter, error) {
 	const query = `
-	SELECT filter_spec, updated_at
+	SELECT filter_spec, updated_at, empty_fallback_pass
 	FROM global_node_filters
 	WHERE id = 1;`
 
 	var specJSON, updatedAtStr string
-	err := r.db.QueryRowContext(ctx, query).Scan(&specJSON, &updatedAtStr)
+	var emptyPass bool
+	err := r.db.QueryRowContext(ctx, query).Scan(&specJSON, &updatedAtStr, &emptyPass)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			// Return default empty filter if row not present
+			emptyPass := true
 			return &domain.GlobalNodeFilter{
-				Spec:      domain.NodeFilterSpec{Conditions: []domain.FilterCondition{}},
-				UpdatedAt: domain.NowUTC(),
+				EmptyFallbackPass: &emptyPass,
+				Spec:              domain.NodeFilterSpec{Conditions: []domain.FilterCondition{}},
+				UpdatedAt:         domain.NowUTC(),
 			}, nil
 		}
 		return nil, fmt.Errorf("failed to query global node filter: %w", err)
@@ -55,8 +58,9 @@ func (r *nodeFilterRepository) GetGlobalFilter(ctx context.Context) (*domain.Glo
 	}
 
 	return &domain.GlobalNodeFilter{
-		Spec:      spec,
-		UpdatedAt: updatedAt,
+		EmptyFallbackPass: &emptyPass,
+		Spec:              spec,
+		UpdatedAt:         updatedAt,
 	}, nil
 }
 
@@ -80,13 +84,14 @@ func (r *nodeFilterRepository) SetGlobalFilter(ctx context.Context, filter *doma
 	}
 
 	const query = `
-	INSERT INTO global_node_filters (id, filter_spec, updated_at)
-	VALUES (1, ?, ?)
+	INSERT INTO global_node_filters (id, filter_spec, updated_at, empty_fallback_pass)
+	VALUES (1, ?, ?, COALESCE(?, 1))
 	ON CONFLICT(id) DO UPDATE SET
+		empty_fallback_pass = COALESCE(?, global_node_filters.empty_fallback_pass),
 		filter_spec = excluded.filter_spec,
 		updated_at = excluded.updated_at;`
 
-	_, err = r.db.ExecContext(ctx, query, string(specJSON), now.Format(time.RFC3339))
+	_, err = r.db.ExecContext(ctx, query, string(specJSON), now.Format(time.RFC3339), filter.EmptyFallbackPass, filter.EmptyFallbackPass)
 	if err != nil {
 		return fmt.Errorf("failed to upsert global node filter: %w", err)
 	}

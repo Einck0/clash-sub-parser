@@ -209,7 +209,6 @@ async function handleSaveGroup(data: {
         name: data.name,
         group_type: data.type,
         position: data.position,
-        empty_fallback_pass: data.emptyFallbackPass,
         inherit_global_filter: data.inheritGlobalFilter,
         expected_revision: data.expectedRevision ?? activeGroup.value.revision,
         sources: data.sources,
@@ -221,7 +220,6 @@ async function handleSaveGroup(data: {
         name: data.name,
         group_type: data.type,
         position: data.position,
-        empty_fallback_pass: data.emptyFallbackPass,
         inherit_global_filter: data.inheritGlobalFilter,
         sources: data.sources,
       })

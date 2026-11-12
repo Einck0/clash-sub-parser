@@ -1252,12 +1252,16 @@ func (s *Service) PreviewGroup(ctx context.Context, cmd PreviewGroupCommand) (*G
 			}
 		}
 
+		emptyPass := true
 		var globalFilter *domain.NodeFilterSpec
 		var groupFilters map[string]domain.NodeFilterSpec
 		if s.nodeFilterRepo != nil {
 			gf, err := s.nodeFilterRepo.GetGlobalFilter(ctx)
 			if err != nil {
 				return nil, fmt.Errorf("failed to get global filter: %w", err)
+			}
+			if gf != nil && gf.EmptyFallbackPass != nil {
+				emptyPass = *gf.EmptyFallbackPass
 			}
 			if gf != nil && !gf.Spec.IsEmpty() {
 				globalFilter = &gf.Spec
@@ -1294,16 +1298,17 @@ func (s *Service) PreviewGroup(ctx context.Context, cmd PreviewGroupCommand) (*G
 		}
 
 		resInput = resolver.ResolveInput{
-			RevisionID:         activeRevID,
-			InventoryWatermark: "preview-ram",
-			CompilerVersion:    "1.0.0",
-			Nodes:              nodes,
-			Groups:             simulatedGroups,
-			GroupSources:       allSources,
-			PolicyRules:        polRules,
-			AdmissionRules:     admRules,
-			GlobalFilter:       globalFilter,
-			GroupFilters:       groupFilters,
+			GlobalEmptyFallbackPass: &emptyPass,
+			RevisionID:              activeRevID,
+			InventoryWatermark:      "preview-ram",
+			CompilerVersion:         "1.0.0",
+			Nodes:                   nodes,
+			Groups:                  simulatedGroups,
+			GroupSources:            allSources,
+			PolicyRules:             polRules,
+			AdmissionRules:          admRules,
+			GlobalFilter:            globalFilter,
+			GroupFilters:            groupFilters,
 			DNS: resolver.DNSConfig{
 				Enabled:     true,
 				Nameservers: []string{"1.1.1.1", "8.8.8.8"},
@@ -1517,12 +1522,16 @@ func (s *Service) ValidateGraph(ctx context.Context) (*ValidationResult, error) 
 	}
 
 	// 3. Fetch global & group filters
+	emptyPass := true
 	var globalFilter *domain.NodeFilterSpec
 	var groupFilters map[string]domain.NodeFilterSpec
 	if s.nodeFilterRepo != nil {
 		gf, err := s.nodeFilterRepo.GetGlobalFilter(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("validation incomplete: global filter: %w", err)
+		}
+		if gf != nil && gf.EmptyFallbackPass != nil {
+			emptyPass = *gf.EmptyFallbackPass
 		}
 		if gf != nil && !gf.Spec.IsEmpty() {
 			globalFilter = &gf.Spec
@@ -1544,17 +1553,18 @@ func (s *Service) ValidateGraph(ctx context.Context) (*ValidationResult, error) 
 	}
 
 	resInput := resolver.ResolveInput{
-		RevisionID:         activeRevID,
-		InventoryWatermark: "v1",
-		CompilerVersion:    "1.0.0",
-		Nodes:              nodes,
-		Groups:             groups,
-		GroupSources:       allSources,
-		Edges:              edgeMap,
-		PolicyRules:        polRules,
-		AdmissionRules:     admRules,
-		GlobalFilter:       globalFilter,
-		GroupFilters:       groupFilters,
+		GlobalEmptyFallbackPass: &emptyPass,
+		RevisionID:              activeRevID,
+		InventoryWatermark:      "v1",
+		CompilerVersion:         "1.0.0",
+		Nodes:                   nodes,
+		Groups:                  groups,
+		GroupSources:            allSources,
+		Edges:                   edgeMap,
+		PolicyRules:             polRules,
+		AdmissionRules:          admRules,
+		GlobalFilter:            globalFilter,
+		GroupFilters:            groupFilters,
 		DNS: resolver.DNSConfig{
 			Enabled:     true,
 			Nameservers: []string{"1.1.1.1", "8.8.8.8"},
@@ -2055,8 +2065,9 @@ func (s *Service) SetGlobalNodeFilter(ctx context.Context, cmd SetGlobalNodeFilt
 	}
 
 	filter := &domain.GlobalNodeFilter{
-		Spec:      cmd.Spec,
-		UpdatedAt: domain.NowUTC(),
+		EmptyFallbackPass: cmd.EmptyFallbackPass,
+		Spec:              cmd.Spec,
+		UpdatedAt:         domain.NowUTC(),
 	}
 
 	if s.nodeFilterRepo != nil {
@@ -2064,6 +2075,11 @@ func (s *Service) SetGlobalNodeFilter(ctx context.Context, cmd SetGlobalNodeFilt
 			s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy.global_filter.update", domain.AuditResultFailure, fmt.Sprintf("persistence failed: %v", err))
 			return nil, err
 		}
+		loaded, err := s.nodeFilterRepo.GetGlobalFilter(ctx)
+		if err != nil {
+			return nil, err
+		}
+		filter = loaded
 	}
 
 	s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy.global_filter.update", domain.AuditResultSuccess, fmt.Sprintf("conditions_count=%d", len(cmd.Spec.Conditions)))

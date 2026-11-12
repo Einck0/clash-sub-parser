@@ -89,3 +89,43 @@ func TestResolverNonemptyFlagAndDerivedProjection(t *testing.T) {
 		t.Fatal("fixture did not create derived projection")
 	}
 }
+
+func TestGlobalEmptyPassOverridesAllLegacyGroupFlags(t *testing.T) {
+	oldID, newID, fullID := domain.MustNewUUIDv7(), domain.MustNewUUIDv7(), domain.MustNewUUIDv7()
+	n := domain.Node{LogicalID: testNodeLogicalID("global-pass-node"), DisplayName: "HK", Protocol: domain.ProtocolTrojan, Active: true}
+	input := resolver.ResolveInput{
+		Nodes: []domain.Node{n},
+		Groups: []domain.NodeGroup{
+			{ID: oldID, Name: "old", GroupType: domain.GroupTypeSelect, EmptyFallbackPass: false},
+			{ID: newID, Name: "new", GroupType: domain.GroupTypeSelect, EmptyFallbackPass: true},
+			{ID: fullID, Name: "full", GroupType: domain.GroupTypeSelect},
+		},
+		Edges: map[string][]domain.GroupEdge{fullID: {{ParentGroupID: fullID, NodeLogicalID: &n.LogicalID}}},
+	}
+	r := sourceFixtureResolver{}
+	on := true
+	input.GlobalEmptyFallbackPass = &on
+	a, err := r.Resolve(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, g := range a.Groups {
+		if g.UsesEmptyPass() != (g.ID != fullID) {
+			t.Fatalf("on: group %s got pass=%v", g.Name, g.UsesEmptyPass())
+		}
+	}
+	off := false
+	input.GlobalEmptyFallbackPass = &off
+	b, err := r.Resolve(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, g := range b.Groups {
+		if g.UsesEmptyPass() {
+			t.Fatalf("off: group %s uses PASS", g.Name)
+		}
+	}
+	if a.InputDigest == b.InputDigest || a.SnapshotDigest == b.SnapshotDigest {
+		t.Fatal("global switch must change digests")
+	}
+}

@@ -54,8 +54,9 @@ type previewGroupRequest struct {
 }
 
 type setGlobalFilterRequest struct {
-	Spec       *domain.NodeFilterSpec   `json:"spec,omitempty"`
-	Conditions []domain.FilterCondition `json:"conditions,omitempty"`
+	EmptyFallbackPass *bool                    `json:"empty_fallback_pass,omitempty"`
+	Spec              *domain.NodeFilterSpec   `json:"spec,omitempty"`
+	Conditions        []domain.FilterCondition `json:"conditions,omitempty"`
 }
 
 type setGroupEdgesRequest struct {
@@ -222,9 +223,10 @@ func (h policyHandler) setGlobalFilter(w http.ResponseWriter, r *http.Request) {
 	}
 
 	filter, err := h.service.SetGlobalNodeFilter(r.Context(), policy.SetGlobalNodeFilterCommand{
-		Spec:      spec,
-		RequestID: GetRequestID(r.Context()),
-		ActorKind: requestActorKind(r),
+		EmptyFallbackPass: req.EmptyFallbackPass,
+		Spec:              spec,
+		RequestID:         GetRequestID(r.Context()),
+		ActorKind:         requestActorKind(r),
 	})
 	if err != nil {
 		WriteDomainError(w, r, err)

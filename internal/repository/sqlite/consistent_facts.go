@@ -75,6 +75,14 @@ func (l *consistentFactsLoader) LoadConsistentFacts(ctx context.Context, revisio
 		return nil, err
 	}
 	facts.GlobalFilter = gf
+	var emptyPass bool
+	err = tx.QueryRowContext(ctx, `SELECT empty_fallback_pass FROM global_node_filters WHERE id = 1`).Scan(&emptyPass)
+	if errors.Is(err, sql.ErrNoRows) {
+		emptyPass = true
+	} else if err != nil {
+		return nil, fmt.Errorf("failed to read global empty PASS setting: %w", err)
+	}
+	facts.GlobalEmptyFallbackPass = &emptyPass
 
 	// 5. Active Nodes
 	nodes, nodeIDs, err := loadActiveNodes(ctx, tx)

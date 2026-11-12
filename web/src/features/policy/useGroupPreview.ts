@@ -51,9 +51,6 @@ export function useGroupPreview() {
         })),
         target: payload.target || 'mihomo',
       }
-      if (payload.empty_fallback_pass !== undefined) {
-        body.empty_fallback_pass = payload.empty_fallback_pass
-      }
       if (payload.inherit_global_filter !== undefined) {
         body.inherit_global_filter = payload.inherit_global_filter
       }

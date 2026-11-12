@@ -1001,12 +1001,16 @@ func (s *Service) assembleResolveInput(ctx context.Context, revisionID string, i
 		return nil, fmt.Errorf("failed to list active nodes: %w", err)
 	}
 
+	emptyPass := true
 	var globalFilter *domain.NodeFilterSpec
 	var groupFilters map[string]domain.NodeFilterSpec
 	if s.nodeFilterRepo != nil {
 		gf, err := s.nodeFilterRepo.GetGlobalFilter(ctx)
 		if err != nil {
 			return nil, domain.NewInternalError("global_filter_unavailable", "failed to read global node filter")
+		}
+		if gf != nil && gf.EmptyFallbackPass != nil {
+			emptyPass = *gf.EmptyFallbackPass
 		}
 		if gf != nil && !gf.Spec.IsEmpty() {
 			globalFilter = &gf.Spec
@@ -1073,22 +1077,23 @@ func (s *Service) assembleResolveInput(ctx context.Context, revisionID string, i
 	}
 
 	input := resolver.ResolveInput{
-		RevisionID:         revID,
-		InventoryWatermark: "v1",
-		CompilerVersion:    "1.0.0",
-		Nodes:              nodes,
-		Groups:             groups,
-		GroupSources:       groupSources,
-		Edges:              edgeMap,
-		PolicyRules:        policyRules,
-		AdmissionRules:     admissionRules,
-		DNS:                dnsCfg,
-		ChainBindings:      chainBindings,
-		GlobalFilter:       globalFilter,
-		GroupFilters:       groupFilters,
-		NodeSources:        nodeSources,
-		LatestObservations: latestObs,
-		AsOf:               domain.NowUTC(),
+		GlobalEmptyFallbackPass: &emptyPass,
+		RevisionID:              revID,
+		InventoryWatermark:      "v1",
+		CompilerVersion:         "1.0.0",
+		Nodes:                   nodes,
+		Groups:                  groups,
+		GroupSources:            groupSources,
+		Edges:                   edgeMap,
+		PolicyRules:             policyRules,
+		AdmissionRules:          admissionRules,
+		DNS:                     dnsCfg,
+		ChainBindings:           chainBindings,
+		GlobalFilter:            globalFilter,
+		GroupFilters:            groupFilters,
+		NodeSources:             nodeSources,
+		LatestObservations:      latestObs,
+		AsOf:                    domain.NowUTC(),
 	}
 
 	if s.ipriskSvc != nil {
@@ -1199,7 +1204,14 @@ func (s *Service) resolveTargetSnapshot(ctx context.Context, revisionID string, 
 						break
 					}
 				}
-				if count := counts.GroupCounts[group.ID]; hasFilter && count.Candidate > 0 && count.Excluded > 0 {
+				resolvedPass := false
+				for _, resolved := range snapshot.Groups {
+					if resolved.ID == group.ID && resolved.UsesEmptyPass() {
+						resolvedPass = true
+						break
+					}
+				}
+				if count := counts.GroupCounts[group.ID]; hasFilter && count.Candidate > 0 && count.Excluded > 0 && !resolvedPass {
 					groupEmpty = true
 					break
 				}
@@ -1587,16 +1599,17 @@ func (s *Service) buildArtifactPipeline(ctx context.Context, facts *domain.Consi
 
 	revID := facts.Revision.ID
 	input := resolver.ResolveInput{
-		RevisionID:          revID,
-		InventoryWatermark:  "v1",
-		CompilerVersion:     "1.0.0",
-		NodePayloadEvidence: facts.NodePayloadEvidence,
-		Nodes:               facts.Nodes,
-		AdmissionRules:      facts.AdmissionRules,
-		GlobalFilter:        facts.GlobalFilter,
-		NodeSources:         facts.NodeSources,
-		LatestObservations:  facts.LatestObservations,
-		AsOf:                facts.AsOf,
+		GlobalEmptyFallbackPass: facts.GlobalEmptyFallbackPass,
+		RevisionID:              revID,
+		InventoryWatermark:      "v1",
+		CompilerVersion:         "1.0.0",
+		NodePayloadEvidence:     facts.NodePayloadEvidence,
+		Nodes:                   facts.Nodes,
+		AdmissionRules:          facts.AdmissionRules,
+		GlobalFilter:            facts.GlobalFilter,
+		NodeSources:             facts.NodeSources,
+		LatestObservations:      facts.LatestObservations,
+		AsOf:                    facts.AsOf,
 	}
 
 	dnsCfg, err := dnsConfigFromSettings(facts.DNSSettings)

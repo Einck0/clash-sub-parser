@@ -310,7 +310,7 @@ describe('PolicyView Topology & Drawer Linkage', () => {
     expect(rulesLink?.getAttribute('href')).toBe('#/rules')
   })
 
-  it('editor keeps explicit PASS and archived regex/not_regex through edit and save', async () => {
+  it('editor has no PASS toggle and preserves archived regex/not_regex through edit and save', async () => {
     const expression = '去掉x(?:[0-5](?:\\\\.[0-9]+)?)(?![\\\\d.])|Eeox|einck'
     vi.spyOn(api, 'get').mockImplementation(async (path) => {
       if (path.endsWith('/groups')) return { items: [{ ...mockGroups[0], empty_fallback_pass: true, node_filter: { conditions: [{ field: 'display_name', op: 'not_regex', value: expression }] } }], total: 1 }
@@ -323,9 +323,7 @@ describe('PolicyView Topology & Drawer Linkage', () => {
     ;(container.querySelector('[data-testid="group-card"] .cursor-pointer') as HTMLElement).click()
     await nextTick()
     const dialog = container.querySelector('[role="dialog"]')!
-    const checkbox = dialog.querySelector('[data-testid="empty-fallback-pass"]') as HTMLInputElement
-    expect(checkbox.checked).toBe(true)
-    expect(dialog.textContent).toContain('不是直连')
+    expect(dialog.querySelector('[data-testid="empty-fallback-pass"]')).toBeNull()
     ;(dialog.querySelector('[data-testid="group-card"] .cursor-pointer') as HTMLElement | null)?.click()
     const op = Array.from(dialog.querySelectorAll('select')).find((s) => s.value === 'not_regex')!
     expect(op).toBeDefined()
@@ -334,10 +332,11 @@ describe('PolicyView Topology & Drawer Linkage', () => {
     dialog.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
     await nextTick()
     await new Promise((r) => setTimeout(r, 20))
-    expect(patch).toHaveBeenCalledWith('/api/v1/policies/groups/grp-1', expect.objectContaining({ empty_fallback_pass: true, sources: [
+    expect(patch).toHaveBeenCalledWith('/api/v1/policies/groups/grp-1', expect.objectContaining({ sources: [
       { operation: 'add', kind: 'manual_node', position: 0, node_logical_id: 'node-hk-01' },
       { operation: 'add', kind: 'filter', position: 1, filter_spec: { conditions: [{ field: 'display_name', op: 'not_regex', value: expression }] } },
     ] }))
+    expect(patch.mock.calls[0][1]).not.toHaveProperty('empty_fallback_pass')
     expect(patch.mock.calls[0][1]).not.toHaveProperty('node_filter')
     expect(patch.mock.calls[0][1]).not.toHaveProperty('edges')
   })

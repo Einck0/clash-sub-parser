@@ -160,17 +160,18 @@ type ChainEffect struct {
 
 // ResolveInput encapsulates all raw inputs to be resolved into a ResolvedPolicySnapshot.
 type ResolveInput struct {
-	RevisionID          string
-	InventoryWatermark  string
-	CompilerVersion     string
-	Nodes               []domain.Node
-	NodePayloadEvidence map[string][]domain.PayloadEvidence
-	Groups              []domain.NodeGroup
-	GroupSources        map[string][]domain.MemberSource
-	Edges               map[string][]domain.GroupEdge
-	PolicyRules         []domain.PolicyRule
-	AdmissionRules      []domain.AdmissionRule
-	DNS                 DNSConfig
+	GlobalEmptyFallbackPass *bool
+	RevisionID              string
+	InventoryWatermark      string
+	CompilerVersion         string
+	Nodes                   []domain.Node
+	NodePayloadEvidence     map[string][]domain.PayloadEvidence
+	Groups                  []domain.NodeGroup
+	GroupSources            map[string][]domain.MemberSource
+	Edges                   map[string][]domain.GroupEdge
+	PolicyRules             []domain.PolicyRule
+	AdmissionRules          []domain.AdmissionRule
+	DNS                     DNSConfig
 
 	// Optional risk inputs
 	RiskPolicyRevision string

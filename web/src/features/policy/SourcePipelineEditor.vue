@@ -40,7 +40,6 @@ const props = withDefaults(
     name: string
     groupType: GroupType
     position: number
-    emptyFallbackPass: boolean
     inheritGlobalFilter: boolean
     pendingPattern?: string
     sources: MemberSource[]
@@ -68,7 +67,6 @@ const emit = defineEmits<{
   (e: 'update:name', val: string): void
   (e: 'update:groupType', val: GroupType): void
   (e: 'update:position', val: number): void
-  (e: 'update:emptyFallbackPass', val: boolean): void
   (e: 'update:inheritGlobalFilter', val: boolean): void
   (e: 'update:pendingPattern', val: string): void
   (e: 'add-source', source: MemberSource): void
@@ -653,26 +651,6 @@ onMounted(() => {
       </summary>
 
       <div class="p-3.5 pt-2 space-y-4 border-t border-base-300/60">
-        <!-- Advanced Candidate Scope Setting: Empty fallback pass -->
-        <div class="p-2.5 rounded-lg bg-base-100 border border-base-300 text-xs space-y-1">
-          <span class="font-semibold block text-xs">高级回退策略</span>
-          <label class="flex items-start gap-3 cursor-pointer">
-            <input
-              :checked="emptyFallbackPass"
-              type="checkbox"
-              class="checkbox checkbox-primary checkbox-sm mt-0.5"
-              data-testid="empty-fallback-pass"
-              @change="emit('update:emptyFallbackPass', ($event.target as HTMLInputElement).checked)"
-            />
-            <span class="min-w-0 text-sm">
-              <span class="font-semibold block text-xs">{{ t('policy.emptyFallbackPass') }}</span>
-              <span class="text-[11px] opacity-70 leading-snug block mt-0.5">
-                {{ t('policy.emptyFallbackPassHelp') }}
-              </span>
-            </span>
-          </label>
-        </div>
-
         <!-- Stage Add Members -->
         <div data-testid="stage-add-members" class="p-3.5 rounded-xl bg-base-200/80 border border-base-300 space-y-3">
           <div class="flex items-center justify-between">

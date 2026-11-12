@@ -166,7 +166,7 @@ export function usePolicy() {
     groupTypeLegacy?: GroupType,
     edgesLegacy: GroupEdge[] = [],
     nodeFilterLegacy?: NodeFilterSpec | null,
-    emptyFallbackPassLegacy = false
+    _emptyFallbackPassLegacy = false
   ): Promise<PolicyGroup> {
     saving.value = true
     validationStale.value = true
@@ -174,19 +174,16 @@ export function usePolicy() {
     try {
       let name = ''
       let groupType: GroupType = 'select'
-      let emptyFallbackPass = false
       let inheritGlobalFilter = true
       let sources: MemberSource[] = []
 
       if (typeof dataOrName === 'string') {
         name = dataOrName.trim()
         groupType = groupTypeLegacy || 'select'
-        emptyFallbackPass = emptyFallbackPassLegacy
         sources = normalizeGroupSources({ edges: edgesLegacy, node_filter: nodeFilterLegacy })
       } else {
         name = dataOrName.name.trim()
         groupType = dataOrName.group_type
-        emptyFallbackPass = Boolean(dataOrName.empty_fallback_pass)
         if (dataOrName.inherit_global_filter !== undefined) {
           inheritGlobalFilter = Boolean(dataOrName.inherit_global_filter)
         }
@@ -200,7 +197,6 @@ export function usePolicy() {
       const payload: Record<string, unknown> = {
         name,
         group_type: groupType,
-        empty_fallback_pass: emptyFallbackPass,
         inherit_global_filter: inheritGlobalFilter,
       }
       if (typeof dataOrName === 'object' && dataOrName !== null && dataOrName.position !== undefined) {
@@ -228,7 +224,7 @@ export function usePolicy() {
     dataOrName?: UpdateGroupInput | string,
     groupTypeLegacy?: GroupType,
     nodeFilterLegacy?: NodeFilterSpec | null,
-    emptyFallbackPassLegacy?: boolean
+    _emptyFallbackPassLegacy?: boolean
   ): Promise<PolicyGroup> {
     saving.value = true
     validationStale.value = true
@@ -239,7 +235,6 @@ export function usePolicy() {
         if (dataOrName.name !== undefined) payload.name = dataOrName.name.trim()
         if (dataOrName.group_type !== undefined) payload.group_type = dataOrName.group_type
         if (dataOrName.position !== undefined) payload.position = dataOrName.position
-        if (dataOrName.empty_fallback_pass !== undefined) payload.empty_fallback_pass = dataOrName.empty_fallback_pass
         if (dataOrName.inherit_global_filter !== undefined) payload.inherit_global_filter = dataOrName.inherit_global_filter
         if (dataOrName.expected_revision !== undefined) payload.expected_revision = dataOrName.expected_revision
         if (Array.isArray(dataOrName.sources)) {
@@ -251,7 +246,6 @@ export function usePolicy() {
         if (typeof dataOrName === 'string') payload.name = dataOrName.trim()
         if (groupTypeLegacy !== undefined) payload.group_type = groupTypeLegacy
         if (nodeFilterLegacy !== undefined) payload.node_filter = nodeFilterLegacy
-        if (emptyFallbackPassLegacy !== undefined) payload.empty_fallback_pass = emptyFallbackPassLegacy
       }
 
       let updated: PolicyGroup
@@ -442,12 +436,12 @@ export function usePolicy() {
     }
   }
 
-  async function updateGlobalFilter(spec: NodeFilterSpec): Promise<GlobalNodeFilter> {
+  async function updateGlobalFilter(spec: NodeFilterSpec, emptyFallbackPass?: boolean): Promise<GlobalNodeFilter> {
     validationStale.value = true
     savingGlobalFilter.value = true
     error.value = ''
     try {
-      const res = await api.put<GlobalNodeFilter>('/api/v1/policies/global-node-filter', { spec })
+      const res = await api.put<GlobalNodeFilter>('/api/v1/policies/global-node-filter', { spec, ...(emptyFallbackPass === undefined ? {} : { empty_fallback_pass: emptyFallbackPass }) })
       globalFilter.value = res
       return res
     } catch (err) {
@@ -472,9 +466,6 @@ export function usePolicy() {
         position: s.position !== undefined ? s.position : idx,
       })),
       target: payload.target || 'mihomo',
-    }
-    if (payload.empty_fallback_pass !== undefined) {
-      body.empty_fallback_pass = payload.empty_fallback_pass
     }
     if (payload.inherit_global_filter !== undefined) {
       body.inherit_global_filter = payload.inherit_global_filter

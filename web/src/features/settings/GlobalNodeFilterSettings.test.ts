@@ -72,11 +72,11 @@ describe('global export filter settings', () => {
     expect(api.put).toHaveBeenCalledWith(endpoint, { spec: { conditions: [
       { ...baseline.spec.conditions[0], op: 'not_equals' },
       { field: 'protocol', op: 'equals', value: 'vless' },
-    ] } })
+    ] }, empty_fallback_pass: true })
     expect(root.textContent).not.toContain('未保存的修改')
     button('filter-clear').click(); await flush()
     button('filter-save').click(); await flush()
-    expect(api.put).toHaveBeenLastCalledWith(endpoint, { spec: { conditions: [] } })
+    expect(api.put).toHaveBeenLastCalledWith(endpoint, { spec: { conditions: [] }, empty_fallback_pass: true })
     expect(find('filter-empty')).not.toBeNull()
   })
 
@@ -107,6 +107,24 @@ describe('global export filter settings', () => {
     expect(root.textContent).not.toContain('Unsaved changes')
   })
 
+  it('saves the global empty-group switch and reloads its persisted state', async () => {
+    let saved = true
+    vi.mocked(api.get).mockImplementation(async (path: string) => path === endpoint ? { ...structuredClone(baseline), empty_fallback_pass: saved } : {})
+    vi.mocked(api.put).mockImplementation(async (_path, payload: any) => { saved = payload.empty_fallback_pass; return { ...payload, updated_at: 'now' } })
+    mount(); await flush()
+    const toggle = find('global-empty-pass') as HTMLInputElement
+    expect(toggle.checked).toBe(true)
+    toggle.click(); await flush()
+    button('filter-save').click(); await flush()
+    expect(saved).toBe(false)
+    button('filter-refresh').click(); await flush()
+    expect((find('global-empty-pass') as HTMLInputElement).checked).toBe(false)
+    ;(find('global-empty-pass') as HTMLInputElement).click(); await flush()
+    button('filter-save').click(); await flush()
+    button('filter-refresh').click(); await flush()
+    expect((find('global-empty-pass') as HTMLInputElement).checked).toBe(true)
+  })
+
   it('rejects invalid kind, verdict and missing values without PUT', async () => {
     mount(); await flush()
     input(conditions()[0]!.querySelector('select[aria-label="探针类型"]')!, 'invalid'); button('filter-save').click(); await flush()
@@ -129,7 +147,7 @@ describe('global export filter settings', () => {
     button('filter-save').click(); await flush()
     expect(api.put).toHaveBeenLastCalledWith(endpoint, { spec: { conditions: [
       { field: 'probe_latency_ms', op: 'lte', value: '125', probe_kind: 'baseline', freshness_seconds: 3600 },
-    ] } })
+    ] }, empty_fallback_pass: true })
     input(field(), 'source_subscription_ids'); await flush()
     input(value(), 'not-a-uuid'); await flush()
     button('filter-save').click(); await flush()
@@ -138,13 +156,13 @@ describe('global export filter settings', () => {
     button('filter-save').click(); await flush()
     expect(api.put).toHaveBeenLastCalledWith(endpoint, { spec: { conditions: [
       { field: 'source_subscription_ids', op: 'contains', value: '019520c3-8268-7000-8000-000000000001' },
-    ] } })
+    ] }, empty_fallback_pass: true })
     input(field(), 'display_name'); await flush()
     input(value(), '节点A'); await flush()
     button('filter-save').click(); await flush()
     expect(api.put).toHaveBeenLastCalledWith(endpoint, { spec: { conditions: [
       { field: 'display_name', op: 'contains', value: '节点A' },
-    ] } })
+    ] }, empty_fallback_pass: true })
     input(value(), '中'.repeat(100)); await flush()
     button('filter-save').click(); await flush()
     expect(find('filter-validation-error')?.textContent).toContain('255 字节')

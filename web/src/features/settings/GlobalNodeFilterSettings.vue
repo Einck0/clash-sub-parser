@@ -21,6 +21,7 @@ const {
   loadGlobalFilter, updateGlobalFilter,
 } = usePolicy()
 const conditions = ref<FilterCondition[]>([])
+const emptyFallbackPass = ref(true)
 const loaded = ref(false)
 const dirty = ref(false)
 const validationError = ref('')
@@ -98,6 +99,7 @@ async function refresh() {
   await loadGlobalFilter()
   if (requestError.value) return // Never interpret a failed read as an empty filter.
   conditions.value = (globalFilter.value?.spec?.conditions ?? []).map((condition) => ({ ...condition }))
+  emptyFallbackPass.value = globalFilter.value?.empty_fallback_pass ?? true
   loaded.value = true
   dirty.value = false
   validationError.value = ''
@@ -122,7 +124,7 @@ async function save() {
     return
   }
   try {
-    await updateGlobalFilter({ conditions: conditions.value.map((condition) => ({ ...condition })) })
+    await updateGlobalFilter({ conditions: conditions.value.map((condition) => ({ ...condition })) }, emptyFallbackPass.value)
     dirty.value = false
   } catch {
     // usePolicy exposes the server error; keep the edited conditions intact.
@@ -154,6 +156,10 @@ onMounted(refresh)
       <p v-if="validationError" role="alert" class="text-error text-sm" data-testid="filter-validation-error">{{ validationError }}</p>
       <p v-if="loadingGlobalFilter" role="status">{{ t('settings.filterLoading') }}</p>
       <template v-if="loaded">
+        <label class="flex items-start gap-3 cursor-pointer">
+          <input v-model="emptyFallbackPass" type="checkbox" class="checkbox checkbox-primary checkbox-sm" data-testid="global-empty-pass" @change="edited" />
+          <span><span class="font-semibold block">{{ uiText("空策略组使用 PASS", "Use PASS for empty groups") }}</span><span class="text-xs opacity-70">{{ uiText("对所有策略组生效；非空组不受影响。", "Applies to all policy groups; non-empty groups are unchanged.") }}</span></span>
+        </label>
         <StructuredFilterEditor
           v-model="conditions"
           :max-conditions="32"

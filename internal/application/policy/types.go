@@ -20,14 +20,14 @@ type CreateGroupCommand struct {
 	EmptyFallbackPass   bool                   `json:"empty_fallback_pass"`
 	InheritGlobalFilter *bool                  `json:"inherit_global_filter,omitempty"`
 	ID                  string                 `json:"id,omitempty"`
-	Name              string                 `json:"name"`
-	GroupType         domain.GroupType       `json:"group_type"`
-	Position          *int                   `json:"position,omitempty"`
-	Sources           []domain.MemberSource  `json:"sources,omitempty"`
-	Edges             []EdgeInput            `json:"edges,omitempty"`
-	NodeFilter        *domain.NodeFilterSpec `json:"node_filter,omitempty"`
-	RequestID         string                 `json:"request_id,omitempty"`
-	ActorKind         domain.ActorKind       `json:"actor_kind,omitempty"`
+	Name                string                 `json:"name"`
+	GroupType           domain.GroupType       `json:"group_type"`
+	Position            *int                   `json:"position,omitempty"`
+	Sources             []domain.MemberSource  `json:"sources,omitempty"`
+	Edges               []EdgeInput            `json:"edges,omitempty"`
+	NodeFilter          *domain.NodeFilterSpec `json:"node_filter,omitempty"`
+	RequestID           string                 `json:"request_id,omitempty"`
+	ActorKind           domain.ActorKind       `json:"actor_kind,omitempty"`
 }
 
 // UpdateGroupCommand defines parameters for updating a node group.
@@ -35,16 +35,16 @@ type UpdateGroupCommand struct {
 	EmptyFallbackPass   *bool                  `json:"empty_fallback_pass,omitempty"`
 	InheritGlobalFilter *bool                  `json:"inherit_global_filter,omitempty"`
 	ID                  string                 `json:"id"`
-	Name              *string                `json:"name,omitempty"`
-	GroupType         *domain.GroupType      `json:"group_type,omitempty"`
-	Position          *int                   `json:"position,omitempty"`
-	ExpectedRevision  *int64                 `json:"expected_revision,omitempty"`
-	Sources           *[]domain.MemberSource `json:"sources,omitempty"`
-	Edges             *[]EdgeInput           `json:"edges,omitempty"`
-	NodeFilter        *domain.NodeFilterSpec `json:"node_filter,omitempty"`
-	ClearNodeFilter   bool                   `json:"clear_node_filter,omitempty"`
-	RequestID         string                 `json:"request_id,omitempty"`
-	ActorKind         domain.ActorKind       `json:"actor_kind,omitempty"`
+	Name                *string                `json:"name,omitempty"`
+	GroupType           *domain.GroupType      `json:"group_type,omitempty"`
+	Position            *int                   `json:"position,omitempty"`
+	ExpectedRevision    *int64                 `json:"expected_revision,omitempty"`
+	Sources             *[]domain.MemberSource `json:"sources,omitempty"`
+	Edges               *[]EdgeInput           `json:"edges,omitempty"`
+	NodeFilter          *domain.NodeFilterSpec `json:"node_filter,omitempty"`
+	ClearNodeFilter     bool                   `json:"clear_node_filter,omitempty"`
+	RequestID           string                 `json:"request_id,omitempty"`
+	ActorKind           domain.ActorKind       `json:"actor_kind,omitempty"`
 }
 
 // DeleteGroupCommand defines parameters for deleting a node group.
@@ -56,9 +56,10 @@ type DeleteGroupCommand struct {
 
 // SetGlobalNodeFilterCommand defines parameters for updating the global node filter.
 type SetGlobalNodeFilterCommand struct {
-	Spec      domain.NodeFilterSpec `json:"spec"`
-	RequestID string                `json:"request_id,omitempty"`
-	ActorKind domain.ActorKind      `json:"actor_kind,omitempty"`
+	EmptyFallbackPass *bool                 `json:"empty_fallback_pass,omitempty"`
+	Spec              domain.NodeFilterSpec `json:"spec"`
+	RequestID         string                `json:"request_id,omitempty"`
+	ActorKind         domain.ActorKind      `json:"actor_kind,omitempty"`
 }
 
 // SetGroupEdgesCommand defines parameters for setting all edges of a group.
@@ -83,15 +84,15 @@ type GroupView struct {
 	EmptyFallbackPass   bool                   `json:"empty_fallback_pass"`
 	InheritGlobalFilter bool                   `json:"inherit_global_filter"`
 	ID                  string                 `json:"id"`
-	Name              string                 `json:"name"`
-	GroupType         domain.GroupType       `json:"group_type"`
-	Position          int                    `json:"position"`
-	Revision          int64                  `json:"revision"`
-	Sources           []domain.MemberSource  `json:"sources"`
-	Edges             []GroupEdgeView        `json:"edges"`
-	NodeFilter        *domain.NodeFilterSpec `json:"node_filter,omitempty"`
-	CreatedAt         time.Time              `json:"created_at"`
-	UpdatedAt         time.Time              `json:"updated_at"`
+	Name                string                 `json:"name"`
+	GroupType           domain.GroupType       `json:"group_type"`
+	Position            int                    `json:"position"`
+	Revision            int64                  `json:"revision"`
+	Sources             []domain.MemberSource  `json:"sources"`
+	Edges               []GroupEdgeView        `json:"edges"`
+	NodeFilter          *domain.NodeFilterSpec `json:"node_filter,omitempty"`
+	CreatedAt           time.Time              `json:"created_at"`
+	UpdatedAt           time.Time              `json:"updated_at"`
 }
 
 // GroupPreviewResult represents resolved preview data for a policy group.
@@ -115,9 +116,9 @@ type PreviewGroupCommand struct {
 	EmptyFallbackPass   *bool                  `json:"empty_fallback_pass,omitempty"`
 	InheritGlobalFilter *bool                  `json:"inherit_global_filter,omitempty"`
 	Sources             []domain.MemberSource  `json:"sources"`
-	Target            *domain.CompilerTarget `json:"target,omitempty"`
-	RequestID         string                 `json:"request_id,omitempty"`
-	ActorKind         domain.ActorKind       `json:"actor_kind,omitempty"`
+	Target              *domain.CompilerTarget `json:"target,omitempty"`
+	RequestID           string                 `json:"request_id,omitempty"`
+	ActorKind           domain.ActorKind       `json:"actor_kind,omitempty"`
 }
 
 // GroupPreviewMember represents a member in the preview result without exposing secrets.

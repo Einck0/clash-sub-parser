@@ -76,6 +76,9 @@ func (r *defaultResolver) Resolve(ctx context.Context, input ResolveInput) (*Res
 	// Sources are the sole graph input. Legacy edges/filters never resurrect an empty pipeline.
 	input.Groups = append([]domain.NodeGroup(nil), input.Groups...)
 	for i := range input.Groups {
+		if input.GlobalEmptyFallbackPass != nil {
+			input.Groups[i].EmptyFallbackPass = *input.GlobalEmptyFallbackPass
+		}
 		if input.GroupSources != nil {
 			input.Groups[i].Sources = input.GroupSources[input.Groups[i].ID]
 		}

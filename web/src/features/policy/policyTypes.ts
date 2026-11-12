@@ -373,6 +373,7 @@ export interface NodeFilterSpec {
 }
 
 export interface GlobalNodeFilter {
+  empty_fallback_pass?: boolean
   spec: NodeFilterSpec
   updated_at: string
 }

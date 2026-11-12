@@ -537,7 +537,7 @@ func TestExportFilterGroupExhaustWithRoutedEmptyPassAllowsMihomoWithPass(t *test
 
 	t.Run("default empty pass allows mihomo with PASS in group", func(t *testing.T) {
 		filter := &filterReadRepo{groups: tokyoGroupFilter}
-		svc, pubs := exportFilterFixture(t, true, filter, nil, nil)
+		svc, _ := exportFilterFixture(t, true, filter, nil, nil)
 
 		pre, err := svc.Preflight(ctx, publication.PreflightCommand{Target: domain.TargetMihomo})
 		if err != nil || pre == nil || !pre.Allowed {

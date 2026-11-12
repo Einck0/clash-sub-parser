@@ -691,6 +691,7 @@ describe('Enabled Subscriptions Inventory & Live Validation Specification', () =
           probing_count: 0,
           queued_waiting_count: 0,
           untested_count: 0,
+          undetermined_count: 0,
           total_count: 250,
           available_count: 120,
           unavailable_count: 100,
@@ -715,7 +716,7 @@ describe('Enabled Subscriptions Inventory & Live Validation Specification', () =
     const searchCall1 = recordedNodeCalls[recordedNodeCalls.length - 1]
     expect(searchCall1.params.scope).toBe('enabled_subscriptions')
     expect(searchCall1.params.search).toBe('HK')
-    expect(searchCall1.params.page).toBe(1)
+    expect(searchCall1.params['page']).toBe(1)
     expect(searchCall1.params.page_size).toBe(100)
 
     // Filtered total from server is 120, NOT 0 (which would happen if client-side filtered only page 1)
@@ -729,7 +730,7 @@ describe('Enabled Subscriptions Inventory & Live Validation Specification', () =
     await hook.loadMore()
     const searchCall2 = recordedNodeCalls[recordedNodeCalls.length - 1]
     expect(searchCall2.params.search).toBe('HK')
-    expect(searchCall2.params.page).toBe(2)
+    expect(searchCall2.params['page']).toBe(2)
     expect(searchCall2.params.page_size).toBe(100)
     expect(hook.items.value).toHaveLength(120)
     expect(hook.items.value[100].displayName).toBe('HK Magic Gateway 101')
@@ -746,7 +747,7 @@ describe('Enabled Subscriptions Inventory & Live Validation Specification', () =
 
     const protoCall1 = recordedNodeCalls[recordedNodeCalls.length - 1]
     expect(protoCall1.params.protocol).toBe('trojan')
-    expect(protoCall1.params.page).toBe(1)
+    expect(protoCall1.params['page']).toBe(1)
     expect(protoCall1.params.page_size).toBe(100)
     expect(protoCall1.params.search).toBeUndefined()
 
@@ -758,7 +759,7 @@ describe('Enabled Subscriptions Inventory & Live Validation Specification', () =
     await hook.loadMore()
     const protoCall2 = recordedNodeCalls[recordedNodeCalls.length - 1]
     expect(protoCall2.params.protocol).toBe('trojan')
-    expect(protoCall2.params.page).toBe(2)
+    expect(protoCall2.params['page']).toBe(2)
     expect(hook.items.value).toHaveLength(120)
     expect(hook.hasMore.value).toBe(false)
 
@@ -771,7 +772,7 @@ describe('Enabled Subscriptions Inventory & Live Validation Specification', () =
 
     const healthCall1 = recordedNodeCalls[recordedNodeCalls.length - 1]
     expect(healthCall1.params.health_status).toBe('healthy')
-    expect(healthCall1.params.page).toBe(1)
+    expect(healthCall1.params['page']).toBe(1)
     expect(healthCall1.params.page_size).toBe(100)
 
     expect(hook.total.value).toBe(120)
@@ -782,7 +783,7 @@ describe('Enabled Subscriptions Inventory & Live Validation Specification', () =
     await hook.loadMore()
     const healthCall2 = recordedNodeCalls[recordedNodeCalls.length - 1]
     expect(healthCall2.params.health_status).toBe('healthy')
-    expect(healthCall2.params.page).toBe(2)
+    expect(healthCall2.params['page']).toBe(2)
     expect(hook.items.value).toHaveLength(120)
     expect(hook.hasMore.value).toBe(false)
 
@@ -798,7 +799,7 @@ describe('Enabled Subscriptions Inventory & Live Validation Specification', () =
     expect(combinedCall1.params.search).toBe('HK')
     expect(combinedCall1.params.protocol).toBe('trojan')
     expect(combinedCall1.params.health_status).toBe('healthy')
-    expect(combinedCall1.params.page).toBe(1)
+    expect(combinedCall1.params['page']).toBe(1)
     expect(combinedCall1.params.page_size).toBe(100)
     expect(combinedCall1.params.scope).toBe('enabled_subscriptions')
 
@@ -814,7 +815,7 @@ describe('Enabled Subscriptions Inventory & Live Validation Specification', () =
     expect(combinedCall2.params.search).toBe('HK')
     expect(combinedCall2.params.protocol).toBe('trojan')
     expect(combinedCall2.params.health_status).toBe('healthy')
-    expect(combinedCall2.params.page).toBe(2)
+    expect(combinedCall2.params['page']).toBe(2)
     expect(hook.items.value).toHaveLength(120)
     expect(hook.hasMore.value).toBe(false)
 
@@ -832,7 +833,7 @@ describe('Enabled Subscriptions Inventory & Live Validation Specification', () =
 
     const resetCall = recordedNodeCalls[recordedNodeCalls.length - 1]
     expect(resetCall.params.health_status).toBe('unhealthy')
-    expect(resetCall.params.page).toBe(1)
+    expect(resetCall.params['page']).toBe(1)
     expect(hook.page.value).toBe(1)
     expect(hook.total.value).toBe(100)
     expect(hook.items.value).toHaveLength(100)
@@ -871,6 +872,7 @@ describe('Enabled Subscriptions Inventory & Live Validation Specification', () =
           probing_count: 0,
           queued_waiting_count: 0,
           untested_count: 0,
+          undetermined_count: 0,
           total_count: 1,
           available_count: 1,
           unavailable_count: 0,

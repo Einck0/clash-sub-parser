@@ -81,9 +81,10 @@ func TestBuildCurrentArtifact_Fallback_GlobalFilterEmptiesAll(t *testing.T) {
 		Nodes: []domain.Node{nPrimary1, nPrimary2, nSecondary},
 		Groups: []domain.NodeGroup{
 			{
-				ID:        groupID,
-				Name:      "Normal Group",
-				GroupType: domain.GroupTypeSelect,
+				ID:                  groupID,
+				Name:                "Normal Group",
+				GroupType:           domain.GroupTypeSelect,
+				InheritGlobalFilter: true,
 				Sources: []domain.MemberSource{
 					{
 						ID:            "src-1",
@@ -233,15 +234,16 @@ func TestBuildCurrentArtifact_EmptyRoutedGroup_UsesGlobalPASS(t *testing.T) {
 			State:         domain.RevisionStateActive,
 			CreatedAt:     now,
 		},
-		Nodes:                  []domain.Node{nPrimary},
+		Nodes:                   []domain.Node{nPrimary},
 		GlobalEmptyFallbackPass: boolPtr(true),
 		// Group has no member sources -> 0 candidates -> empty routed group
 		Groups: []domain.NodeGroup{
 			{
-				ID:        groupID,
-				Name:      "Empty Routed Group",
-				GroupType: domain.GroupTypeSelect,
-				Sources:   []domain.MemberSource{},
+				ID:                  groupID,
+				Name:                "Empty Routed Group",
+				GroupType:           domain.GroupTypeSelect,
+				InheritGlobalFilter: true,
+				Sources:             []domain.MemberSource{},
 			},
 		},
 		PolicyRules: []domain.PolicyRule{
@@ -267,14 +269,19 @@ func TestBuildCurrentArtifact_EmptyRoutedGroup_UsesGlobalPASS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected globally enabled empty-group PASS to compile, got error: %v", err)
 	}
-	if len(snap.Nodes) != 0 {
-		t.Fatalf("empty group should not introduce primary nodes, got %d", len(snap.Nodes))
+	if len(snap.Groups) != 1 || len(snap.Groups[0].NodeLogicalIDs) != 0 {
+		t.Fatalf("expected the configured group to remain empty, got %+v", snap.Groups)
 	}
 	var parsed struct {
-		ProxyGroups []struct { Name string `yaml:"name"`; Proxies []string `yaml:"proxies"` } `yaml:"proxy-groups"`
+		ProxyGroups []struct {
+			Name    string   `yaml:"name"`
+			Proxies []string `yaml:"proxies"`
+		} `yaml:"proxy-groups"`
 		Rules []string `yaml:"rules"`
 	}
-	if err := yaml.Unmarshal(artifact.Content, &parsed); err != nil { t.Fatal(err) }
+	if err := yaml.Unmarshal(artifact.Content, &parsed); err != nil {
+		t.Fatal(err)
+	}
 	if len(parsed.ProxyGroups) != 1 || parsed.ProxyGroups[0].Name != "Empty Routed Group" || len(parsed.ProxyGroups[0].Proxies) != 1 || parsed.ProxyGroups[0].Proxies[0] != "PASS" {
 		t.Fatalf("expected configured empty group to contain only PASS, got %+v", parsed.ProxyGroups)
 	}
@@ -832,6 +839,26 @@ func TestBuildCurrentArtifact_GlobalEmptyPASS_PreservesConfiguredDNS(t *testing.
 			CreatedAt:     now,
 		},
 		Nodes: []domain.Node{nPrimary},
+		Groups: []domain.NodeGroup{{
+			ID:                  "dns-group",
+			Name:                "DNS Route",
+			GroupType:           domain.GroupTypeSelect,
+			InheritGlobalFilter: true,
+			Sources: []domain.MemberSource{{
+				ID:            "dns-route-node",
+				GroupID:       "dns-group",
+				Operation:     domain.OperationAdd,
+				Kind:          domain.SourceKindManualNode,
+				NodeLogicalID: &primaryNodeID,
+			}},
+		}},
+		PolicyRules: []domain.PolicyRule{{
+			ID:            "dns-rule",
+			RevisionID:    "rev-dns-fb",
+			TargetGroupID: "dns-group",
+			Expression:    "MATCH",
+			Enabled:       true,
+		}},
 		GlobalFilter: &domain.NodeFilterSpec{
 			Conditions: []domain.FilterCondition{
 				{Field: domain.FilterFieldDisplayName, Op: domain.FilterOpContains, Value: "NONEXISTENT"},
@@ -1246,7 +1273,8 @@ func TestBuildCurrentArtifact_PartialEmptyHongKong_UsesGlobalPASS(t *testing.T) 
 			State:         domain.RevisionStateActive,
 			CreatedAt:     now,
 		},
-		Nodes: []domain.Node{nPrimary1, nPrimary2},
+		Nodes:                   []domain.Node{nPrimary1, nPrimary2},
+		GlobalEmptyFallbackPass: boolPtr(true),
 		Groups: []domain.NodeGroup{
 			{
 				ID:        groupUSID,
@@ -1264,10 +1292,11 @@ func TestBuildCurrentArtifact_PartialEmptyHongKong_UsesGlobalPASS(t *testing.T) 
 				},
 			},
 			{
-				ID:        groupHKID,
-				Name:      "香港",
-				GroupType: domain.GroupTypeSelect,
-				Sources:   []domain.MemberSource{}, // 0 nodes in 香港 group
+				ID:                  groupHKID,
+				Name:                "香港",
+				GroupType:           domain.GroupTypeSelect,
+				InheritGlobalFilter: true,
+				Sources:             []domain.MemberSource{}, // 0 nodes in 香港 group
 			},
 		},
 		PolicyRules: []domain.PolicyRule{
@@ -1288,9 +1317,9 @@ func TestBuildCurrentArtifact_PartialEmptyHongKong_UsesGlobalPASS(t *testing.T) 
 				Enabled:       true,
 			},
 		},
-		PrimarySubscriptionID:   "sub-primary",
-		PrimaryNodeIDs:          []string{primaryNodeID1, primaryNodeID2},
-		PrimaryUserInfo:         "upload=10; download=20; total=100; expire=1900000000",
+		PrimarySubscriptionID: "sub-primary",
+		PrimaryNodeIDs:        []string{primaryNodeID1, primaryNodeID2},
+		PrimaryUserInfo:       "upload=10; download=20; total=100; expire=1900000000",
 	}
 
 	ctx := context.Background()
@@ -1357,7 +1386,7 @@ func TestBuildCurrentArtifact_PartialEmptyHongKong_UsesGlobalPASS(t *testing.T) 
 	}
 }
 
-func TestBuildCurrentArtifact_UnusedEmptyHongKong_DoesNotInventFallback(t *testing.T) {
+func TestBuildCurrentArtifact_UnusedEmptyHongKong_DoesNotBlockConfiguredRoutes(t *testing.T) {
 	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
 	svc := publication.NewService(nil, nil)
 
@@ -1430,20 +1459,19 @@ func TestBuildCurrentArtifact_UnusedEmptyHongKong_DoesNotInventFallback(t *testi
 
 	ctx := context.Background()
 	artifact, snap, err := svc.BuildCurrentArtifact(ctx, facts, domain.TargetMihomo)
-	if err == nil {
-		t.Fatal("expected unused invalid empty group to fail validation")
+	if err != nil {
+		t.Fatalf("unused empty group must not block the configured route: %v", err)
 	}
-	if artifact != nil && strings.Contains(string(artifact.Content), "主订阅兜底") {
+	if len(snap.Nodes) != 1 || snap.Nodes[0].LogicalID != primaryNodeID {
+		t.Fatalf("expected the configured US route node, got %+v", snap.Nodes)
+	}
+	if strings.Contains(string(artifact.Content), "主订阅兜底") {
 		t.Errorf("must not fabricate fallback group")
 	}
-	hasFallbackDiag := false
 	for _, d := range snap.Diagnostics {
 		if d.Code == "primary_subscription_fallback" {
-			hasFallbackDiag = true
+			t.Errorf("primary-subscription fallback diagnostic must not be emitted")
 		}
-	}
-	if hasFallbackDiag {
-		t.Errorf("primary-subscription fallback diagnostic must not be emitted")
 	}
 }
 

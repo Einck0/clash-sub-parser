@@ -683,7 +683,7 @@ func TestCompilerMatrix_Preserved(t *testing.T) {
 	}
 }
 
-func TestPreview_FactsPath_SelectionExhaustion_PrimaryFallbackMatchesLive(t *testing.T) {
+func TestPreview_FactsPath_SelectionExhaustion_GlobalPASSMatchesLiveAndPureNodesFailClosed(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)
 
@@ -749,9 +749,10 @@ func TestPreview_FactsPath_SelectionExhaustion_PrimaryFallbackMatchesLive(t *tes
 		Nodes: []domain.Node{nPrimary1, nPrimary2, nSecondary},
 		Groups: []domain.NodeGroup{
 			{
-				ID:        groupID,
-				Name:      "Normal Group",
-				GroupType: domain.GroupTypeSelect,
+				ID:                  groupID,
+				Name:                "Normal Group",
+				GroupType:           domain.GroupTypeSelect,
+				InheritGlobalFilter: true,
 				Sources: []domain.MemberSource{
 					{
 						ID:            "src-1",
@@ -764,6 +765,7 @@ func TestPreview_FactsPath_SelectionExhaustion_PrimaryFallbackMatchesLive(t *tes
 				},
 			},
 		},
+		GlobalEmptyFallbackPass: boolPtr(true),
 		PolicyRules: []domain.PolicyRule{
 			{
 				ID:            ruleID,
@@ -824,8 +826,25 @@ func TestPreview_FactsPath_SelectionExhaustion_PrimaryFallbackMatchesLive(t *tes
 	if prevMihomo.SnapshotDigest != liveMihomo.SnapshotDigest {
 		t.Fatalf("Preview snapshot digest %q != live digest %q", prevMihomo.SnapshotDigest, liveMihomo.SnapshotDigest)
 	}
-	if prevMihomo.Manifest.NodeCount != 2 {
-		t.Fatalf("expected 2 primary nodes in preview manifest, got %d", prevMihomo.Manifest.NodeCount)
+	if prevMihomo.Manifest.NodeCount != 0 {
+		t.Fatalf("expected no nodes after global filter, got %d", prevMihomo.Manifest.NodeCount)
+	}
+	var mihomoConfig struct {
+		Proxies     []map[string]any `yaml:"proxies"`
+		ProxyGroups []struct {
+			Name    string   `yaml:"name"`
+			Proxies []string `yaml:"proxies"`
+		} `yaml:"proxy-groups"`
+		Rules []string `yaml:"rules"`
+	}
+	if err := yaml.Unmarshal(prevMihomo.Content, &mihomoConfig); err != nil {
+		t.Fatalf("decode Mihomo preview: %v", err)
+	}
+	if len(mihomoConfig.Proxies) != 0 || len(mihomoConfig.ProxyGroups) != 1 || mihomoConfig.ProxyGroups[0].Name != "Normal Group" || !containsString(mihomoConfig.ProxyGroups[0].Proxies, "PASS") {
+		t.Fatalf("expected configured route with PASS and no nodes, got %+v", mihomoConfig)
+	}
+	if len(mihomoConfig.Rules) != 1 || mihomoConfig.Rules[0] != "MATCH,Normal Group" {
+		t.Fatalf("expected original route rule to remain, got %+v", mihomoConfig.Rules)
 	}
 	if prevMihomo.Manifest.RulesDigest != liveSnapMihomo.RiskDecisionDigest {
 		t.Fatalf("expected rules digest %q, got %q", liveSnapMihomo.RiskDecisionDigest, prevMihomo.Manifest.RulesDigest)
@@ -843,36 +862,17 @@ func TestPreview_FactsPath_SelectionExhaustion_PrimaryFallbackMatchesLive(t *tes
 		t.Fatal("persisted draft content mismatch")
 	}
 
-	// 2. SingBox: Live artifact and Preview default must have identical bytes
-	liveSB, liveSnapSB, err := svc.BuildCurrentArtifact(ctx, facts, domain.TargetSingBox)
-	if err != nil {
-		t.Fatalf("BuildCurrentArtifact for SingBox failed: %v", err)
+	// 2. SingBox cannot represent the configured empty selection and must fail closed.
+	if _, _, err := svc.BuildCurrentArtifact(ctx, facts, domain.TargetSingBox); err == nil {
+		t.Fatal("expected SingBox live export to fail closed for globally filtered empty selection")
 	}
 
-	prevSB, err := svc.Preview(ctx, publication.PreviewQuery{
+	if _, err := svc.Preview(ctx, publication.PreviewQuery{
 		Target:     domain.TargetSingBox,
 		RevisionID: "rev-fallback-regress",
-	})
-	if err != nil {
-		t.Fatalf("Preview for SingBox failed: %v", err)
+	}); err == nil {
+		t.Fatal("expected SingBox preview to fail closed for globally filtered empty selection")
 	}
-
-	if string(prevSB.Content) != string(liveSB.Content) {
-		t.Fatalf("Preview default and live content mismatch for SingBox fallback:\nPreview:\n%s\nLive:\n%s", string(prevSB.Content), string(liveSB.Content))
-	}
-	if prevSB.ContentDigest != liveSB.ContentDigest {
-		t.Fatalf("Preview SingBox content digest %q != live digest %q", prevSB.ContentDigest, liveSB.ContentDigest)
-	}
-	if prevSB.SnapshotDigest != liveSB.SnapshotDigest {
-		t.Fatalf("Preview SingBox snapshot digest %q != live digest %q", prevSB.SnapshotDigest, liveSB.SnapshotDigest)
-	}
-	if prevSB.Manifest.NodeCount != 2 {
-		t.Fatalf("expected 2 primary nodes in SingBox preview manifest, got %d", prevSB.Manifest.NodeCount)
-	}
-	if prevSB.Manifest.RulesDigest != liveSnapSB.RiskDecisionDigest {
-		t.Fatalf("expected rules digest %q, got %q", liveSnapSB.RiskDecisionDigest, prevSB.Manifest.RulesDigest)
-	}
-
 	// 3. Explicit strict mode on fallback:
 	// 3a. Mihomo explicit strict succeeds and matches live
 	prevStrictMihomo, err := svc.Preview(ctx, publication.PreviewQuery{
@@ -887,20 +887,7 @@ func TestPreview_FactsPath_SelectionExhaustion_PrimaryFallbackMatchesLive(t *tes
 		t.Fatal("Preview explicit strict content does not match live for Mihomo")
 	}
 
-	// 3b. SingBox explicit strict succeeds and matches live
-	prevStrictSB, err := svc.Preview(ctx, publication.PreviewQuery{
-		Target:     domain.TargetSingBox,
-		RevisionID: "rev-fallback-regress",
-		CompatMode: "strict",
-	})
-	if err != nil {
-		t.Fatalf("Preview explicit strict for SingBox failed: %v", err)
-	}
-	if string(prevStrictSB.Content) != string(liveSB.Content) {
-		t.Fatal("Preview explicit strict content does not match live for SingBox")
-	}
-
-	// 3c. Explicit strict mode on fallback with incompatible primary node on Surge
+	// 3c. A filtered-out VLESS primary node is not resurrected for strict Surge preview.
 	vlessPrimaryID := domain.ComputeNodeLogicalID(domain.ProtocolVLESS, "2.2.2.2", 443, nil)
 	nVlessPrimary := domain.Node{
 		LogicalID:   vlessPrimaryID,
@@ -943,34 +930,12 @@ func TestPreview_FactsPath_SelectionExhaustion_PrimaryFallbackMatchesLive(t *tes
 		publication.WithConsistentFactsLoader(&memoryFactsLoader{facts: factsSurgeFallback}),
 	)
 
-	_, err = svcSurge.Preview(ctx, publication.PreviewQuery{
+	if _, err := svcSurge.Preview(ctx, publication.PreviewQuery{
 		Target:     domain.TargetSurge,
 		RevisionID: "rev-fallback-surge",
 		CompatMode: "strict",
-	})
-	if err == nil {
-		t.Fatal("expected explicit strict preview on Surge to fail closed for VLESS primary node")
-	}
-	var strictErrSurge *publication.StrictCapabilityError
-	if !errors.As(err, &strictErrSurge) {
-		t.Fatalf("expected *StrictCapabilityError, got %T: %v", err, err)
-	}
-	if !strings.HasPrefix(strictErrSurge.SnapshotID, "snapshot_") {
-		t.Fatalf("expected valid draft snapshot ID on strict capability error, got: %s", strictErrSurge.SnapshotID)
-	}
-	// Verify failed draft persisted in pubRepo
-	failedDraftSurge, err := pubRepo.GetByID(ctx, strictErrSurge.SnapshotID)
-	if err != nil {
-		t.Fatalf("failed to retrieve failed draft from repo: %v", err)
-	}
-	if failedDraftSurge.State != domain.PublicationStateDraft {
-		t.Fatalf("expected draft state, got: %s", failedDraftSurge.State)
-	}
-	if len(failedDraftSurge.Content) != 0 {
-		t.Fatalf("expected empty content for failed draft, got %d bytes", len(failedDraftSurge.Content))
-	}
-	if failedDraftSurge.TokenHash != "draft_failed:"+strictErrSurge.SnapshotID {
-		t.Fatalf("unexpected token hash on failed draft: %s", failedDraftSurge.TokenHash)
+	}); err == nil {
+		t.Fatal("expected strict Surge preview to fail closed rather than resurrect filtered primary nodes")
 	}
 
 	// 3d. Explicit strict mode on normal inventory with incompatible node (no fallback):

@@ -206,7 +206,6 @@ function handleHeaderClick() {
           >
             全池直通
           </span>
-          <span v-if="group.empty_fallback_pass" class="badge badge-xs badge-outline" :title="t('policy.emptyFallbackPassHelp')">{{ t('policy.emptyFallbackPass') }}</span>
           <span
             v-if="conditionCount > 0"
             class="badge badge-xs badge-primary font-mono"

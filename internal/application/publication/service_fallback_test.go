@@ -9,9 +9,10 @@ import (
 	"clash-sub-parser/internal/application/iprisk"
 	"clash-sub-parser/internal/application/publication"
 	"clash-sub-parser/internal/domain"
-	"clash-sub-parser/internal/resolver"
 	"gopkg.in/yaml.v3"
 )
+
+func boolPtr(value bool) *bool { return &value }
 
 func TestBuildCurrentArtifact_Fallback_GlobalFilterEmptiesAll(t *testing.T) {
 	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
@@ -105,7 +106,9 @@ func TestBuildCurrentArtifact_Fallback_GlobalFilterEmptiesAll(t *testing.T) {
 				Enabled:       true,
 			},
 		},
-		// Global filter excludes all nodes
+		// Global filtering removes every node, while the global empty-group PASS
+		// setting preserves the routed group without inventing subscription nodes.
+		GlobalEmptyFallbackPass: boolPtr(true),
 		GlobalFilter: &domain.NodeFilterSpec{
 			Conditions: []domain.FilterCondition{
 				{
@@ -125,26 +128,20 @@ func TestBuildCurrentArtifact_Fallback_GlobalFilterEmptiesAll(t *testing.T) {
 		PrimaryUserInfo:       expectedUserInfo,
 	}
 
-	// 1. TargetMihomo fallback
+	// Mihomo retains the configured route with a PASS-only empty group; it must
+	// not resurrect any raw primary-subscription nodes.
 	ctx := context.Background()
 	artifactMihomo, snapMihomo, err := svc.BuildCurrentArtifact(ctx, facts, domain.TargetMihomo)
 	if err != nil {
-		t.Fatalf("expected Mihomo fallback to succeed, got error: %v", err)
+		t.Fatalf("expected globally enabled empty-group PASS export to succeed, got error: %v", err)
 	}
-
-	// Check diagnostic
-	hasFallbackDiag := false
+	if len(snapMihomo.Nodes) != 0 {
+		t.Fatalf("expected all nodes to remain excluded by the global filter, got %d", len(snapMihomo.Nodes))
+	}
 	for _, d := range snapMihomo.Diagnostics {
 		if d.Code == "primary_subscription_fallback" {
-			hasFallbackDiag = true
-			if d.Severity != resolver.DiagnosticSeverityWarning {
-				t.Errorf("expected warning severity for fallback diagnostic, got: %s", d.Severity)
-			}
-			break
+			t.Fatal("primary-subscription fallback diagnostic must not be emitted")
 		}
-	}
-	if !hasFallbackDiag {
-		t.Fatalf("expected primary_subscription_fallback diagnostic in snapshot, got: %+v", snapMihomo.Diagnostics)
 	}
 
 	// Check Mihomo content structure
@@ -163,29 +160,18 @@ func TestBuildCurrentArtifact_Fallback_GlobalFilterEmptiesAll(t *testing.T) {
 		t.Fatalf("failed to unmarshal fallback mihomo YAML: %v", err)
 	}
 
-	// Must contain primary nodes only (nPrimary1 and nPrimary2), not nSecondary
-	if len(parsed.Proxies) != 2 {
-		t.Fatalf("expected 2 proxies in fallback output, got %d", len(parsed.Proxies))
+	// No fabricated proxies/group: retain the actual configured route and PASS.
+	if len(parsed.Proxies) != 0 {
+		t.Fatalf("expected no proxies after global filter exclusion, got %+v", parsed.Proxies)
 	}
-	if parsed.Proxies[0].Name != nPrimary1.DisplayName || parsed.Proxies[1].Name != nPrimary2.DisplayName {
-		t.Errorf("proxies mismatch, got %+v", parsed.Proxies)
+	if len(parsed.ProxyGroups) != 1 || parsed.ProxyGroups[0].Name != "Normal Group" {
+		t.Fatalf("expected the configured Normal Group only, got %+v", parsed.ProxyGroups)
 	}
-
-	// Must have minimal select group named "主订阅兜底"
-	if len(parsed.ProxyGroups) != 1 {
-		t.Fatalf("expected 1 fallback proxy group, got %d", len(parsed.ProxyGroups))
+	if len(parsed.ProxyGroups[0].Proxies) != 1 || parsed.ProxyGroups[0].Proxies[0] != "PASS" {
+		t.Errorf("expected configured empty group to route to PASS, got %+v", parsed.ProxyGroups[0].Proxies)
 	}
-	fbGroup := parsed.ProxyGroups[0]
-	if fbGroup.Name != "主订阅兜底" || fbGroup.Type != "select" {
-		t.Errorf("expected select group '主订阅兜底', got name=%q type=%q", fbGroup.Name, fbGroup.Type)
-	}
-	if len(fbGroup.Proxies) != 2 || fbGroup.Proxies[0] != nPrimary1.DisplayName || fbGroup.Proxies[1] != nPrimary2.DisplayName {
-		t.Errorf("fallback group proxies mismatch: %+v", fbGroup.Proxies)
-	}
-
-	// Rule must match to 主订阅兜底
-	if len(parsed.Rules) != 1 || parsed.Rules[0] != "MATCH,主订阅兜底" {
-		t.Errorf("expected rule ['MATCH,主订阅兜底'], got %+v", parsed.Rules)
+	if len(parsed.Rules) != 1 || parsed.Rules[0] != "MATCH,Normal Group" {
+		t.Errorf("expected original configured route, got %+v", parsed.Rules)
 	}
 
 	// UserInfo forwarded
@@ -205,22 +191,18 @@ func TestBuildCurrentArtifact_Fallback_GlobalFilterEmptiesAll(t *testing.T) {
 		t.Errorf("expected deterministic snapshot digest, got %q vs %q", artifactMihomo.SnapshotDigest, artifactMihomo2.SnapshotDigest)
 	}
 
-	// 2. TargetSingBox fallback
-	artifactSingBox, snapSingBox, err := svc.BuildCurrentArtifact(ctx, facts, domain.TargetSingBox)
-	if err != nil {
-		t.Fatalf("expected SingBox fallback to succeed, got error: %v", err)
+	// Non-Mihomo targets cannot represent this configured policy; they must fail
+	// closed rather than bypassing filters with raw primary subscription nodes.
+	_, _, err = svc.BuildCurrentArtifact(ctx, facts, domain.TargetSingBox)
+	if err == nil {
+		t.Fatal("expected non-Mihomo export to fail instead of bypassing the global filter")
 	}
-	if len(snapSingBox.Nodes) != 2 {
-		t.Errorf("expected 2 primary nodes for SingBox fallback, got %d", len(snapSingBox.Nodes))
-	}
-	if !strings.Contains(string(artifactSingBox.Content), nPrimary1.DisplayName) ||
-		!strings.Contains(string(artifactSingBox.Content), nPrimary2.DisplayName) ||
-		strings.Contains(string(artifactSingBox.Content), nSecondary.DisplayName) {
-		t.Errorf("SingBox content should contain primary nodes only, got: %s", string(artifactSingBox.Content))
+	if strings.Contains(err.Error(), "primary_subscription_fallback") {
+		t.Fatalf("unexpected legacy fallback error: %v", err)
 	}
 }
 
-func TestBuildCurrentArtifact_Fallback_AllRoutedGroupsEmpty(t *testing.T) {
+func TestBuildCurrentArtifact_EmptyRoutedGroup_UsesGlobalPASS(t *testing.T) {
 	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
 	svc := publication.NewService(nil, nil)
 
@@ -251,7 +233,8 @@ func TestBuildCurrentArtifact_Fallback_AllRoutedGroupsEmpty(t *testing.T) {
 			State:         domain.RevisionStateActive,
 			CreatedAt:     now,
 		},
-		Nodes: []domain.Node{nPrimary},
+		Nodes:                  []domain.Node{nPrimary},
+		GlobalEmptyFallbackPass: boolPtr(true),
 		// Group has no member sources -> 0 candidates -> empty routed group
 		Groups: []domain.NodeGroup{
 			{
@@ -282,25 +265,25 @@ func TestBuildCurrentArtifact_Fallback_AllRoutedGroupsEmpty(t *testing.T) {
 	ctx := context.Background()
 	artifact, snap, err := svc.BuildCurrentArtifact(ctx, facts, domain.TargetMihomo)
 	if err != nil {
-		t.Fatalf("expected fallback on all routed groups empty, got error: %v", err)
+		t.Fatalf("expected globally enabled empty-group PASS to compile, got error: %v", err)
 	}
-
-	hasFallbackDiag := false
-	for _, d := range snap.Diagnostics {
-		if d.Code == "primary_subscription_fallback" {
-			hasFallbackDiag = true
-			break
-		}
+	if len(snap.Nodes) != 0 {
+		t.Fatalf("empty group should not introduce primary nodes, got %d", len(snap.Nodes))
 	}
-	if !hasFallbackDiag {
-		t.Fatalf("expected primary_subscription_fallback diagnostic, got %+v", snap.Diagnostics)
+	var parsed struct {
+		ProxyGroups []struct { Name string `yaml:"name"`; Proxies []string `yaml:"proxies"` } `yaml:"proxy-groups"`
+		Rules []string `yaml:"rules"`
 	}
-	if !strings.Contains(string(artifact.Content), "主订阅兜底") {
-		t.Errorf("expected content to contain '主订阅兜底', got: %s", string(artifact.Content))
+	if err := yaml.Unmarshal(artifact.Content, &parsed); err != nil { t.Fatal(err) }
+	if len(parsed.ProxyGroups) != 1 || parsed.ProxyGroups[0].Name != "Empty Routed Group" || len(parsed.ProxyGroups[0].Proxies) != 1 || parsed.ProxyGroups[0].Proxies[0] != "PASS" {
+		t.Fatalf("expected configured empty group to contain only PASS, got %+v", parsed.ProxyGroups)
+	}
+	if len(parsed.Rules) != 1 || parsed.Rules[0] != "MATCH,Empty Routed Group" {
+		t.Fatalf("expected configured rule to remain unchanged, got %+v", parsed.Rules)
 	}
 }
 
-func TestBuildCurrentArtifact_Fallback_NoEffectiveRulesOrGroups(t *testing.T) {
+func TestBuildCurrentArtifact_NoRouting_DoesNotInventGroups(t *testing.T) {
 	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
 	svc := publication.NewService(nil, nil)
 
@@ -337,29 +320,12 @@ func TestBuildCurrentArtifact_Fallback_NoEffectiveRulesOrGroups(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	artifact, snap, err := svc.BuildCurrentArtifact(ctx, facts, domain.TargetMihomo)
-	if err != nil {
-		t.Fatalf("expected fallback when no rules/groups in active revision, got error: %v", err)
+	artifact, _, err := svc.BuildCurrentArtifact(ctx, facts, domain.TargetMihomo)
+	if err == nil {
+		t.Fatal("expected missing routing to fail instead of inventing a group")
 	}
-	if !strings.Contains(string(artifact.Content), "主订阅兜底") {
-		t.Errorf("expected content to contain '主订阅兜底', got: %s", string(artifact.Content))
-	}
-	if len(snap.Nodes) != 1 {
-		t.Errorf("expected 1 node in snapshot, got %d", len(snap.Nodes))
-	}
-
-	hasFallbackDiag := false
-	for _, d := range snap.Diagnostics {
-		if d.Code == "primary_subscription_fallback" {
-			hasFallbackDiag = true
-			if d.Severity != resolver.DiagnosticSeverityWarning {
-				t.Errorf("expected warning severity for fallback diagnostic, got: %s", d.Severity)
-			}
-			break
-		}
-	}
-	if !hasFallbackDiag {
-		t.Fatalf("expected primary_subscription_fallback diagnostic, got %+v", snap.Diagnostics)
+	if artifact != nil && strings.Contains(string(artifact.Content), "主订阅兜底") {
+		t.Fatalf("missing routing must not produce a fabricated fallback group")
 	}
 }
 
@@ -592,7 +558,7 @@ func TestBuildCurrentArtifact_EffectiveRoutesWithZeroEnabledPolicyRule_NoFallbac
 	}
 }
 
-func TestBuildCurrentArtifact_Fallback_PartialConfiguration_Recovers(t *testing.T) {
+func TestBuildCurrentArtifact_PartialConfiguration_DoesNotBypassEmptyGroup(t *testing.T) {
 	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
 	svc := publication.NewService(nil, nil)
 
@@ -674,17 +640,13 @@ func TestBuildCurrentArtifact_Fallback_PartialConfiguration_Recovers(t *testing.
 
 	ctx := context.Background()
 
-	// 1. When primary is available, partial configuration error must recover through primary fallback
+	// A usable group does not authorize bypassing the separately routed empty group.
 	artifact, snap, err := svc.BuildCurrentArtifact(ctx, facts, domain.TargetMihomo)
-	if err != nil {
-		t.Fatalf("expected partial configuration error to recover via primary fallback, got error: %v", err)
+	if err == nil {
+		t.Fatal("expected partial empty-group policy to fail without globally enabled PASS")
 	}
-
-	if !strings.Contains(string(artifact.Content), "主订阅兜底") {
-		t.Errorf("expected fallback content to contain '主订阅兜底', got: %s", string(artifact.Content))
-	}
-	if !strings.Contains(string(artifact.Content), "Usable Node") {
-		t.Errorf("expected fallback content to contain primary node, got: %s", string(artifact.Content))
+	if artifact != nil && strings.Contains(string(artifact.Content), "主订阅兜底") {
+		t.Fatal("partial configuration must not produce a fabricated primary group")
 	}
 
 	hasFallbackDiag := false
@@ -692,55 +654,29 @@ func TestBuildCurrentArtifact_Fallback_PartialConfiguration_Recovers(t *testing.
 	for _, d := range snap.Diagnostics {
 		if d.Code == "primary_subscription_fallback" {
 			hasFallbackDiag = true
-			if d.Severity != resolver.DiagnosticSeverityWarning {
-				t.Errorf("expected warning severity for fallback diagnostic, got: %s", d.Severity)
-			}
-			if strings.Contains(d.Message, "all policy rules or filters resulted in empty nodes") {
-				t.Errorf("inaccurate exhaustion wording in fallback diagnostic for partial configuration: %s", d.Message)
-			}
-			if !strings.Contains(d.Message, "empty policy group validation failed") {
-				t.Errorf("expected accurate empty group validation failure message, got: %s", d.Message)
-			}
 		}
 		if d.Code == "empty_routed_group" || d.Code == "required_nonempty" {
 			hasEmptyGroupDiag = true
-			if d.Severity != resolver.DiagnosticSeverityWarning {
-				t.Errorf("expected warning severity for preserved original empty group diagnostic, got: %s", d.Severity)
-			}
 		}
 	}
-	if !hasFallbackDiag {
-		t.Errorf("expected primary_subscription_fallback diagnostic in snapshot, got: %+v", snap.Diagnostics)
+	if hasFallbackDiag {
+		t.Fatal("primary-subscription fallback diagnostic must not be emitted")
 	}
 	if !hasEmptyGroupDiag {
-		t.Errorf("expected safe preserved empty group diagnostic in snapshot, got: %+v", snap.Diagnostics)
+		t.Errorf("expected original empty-group diagnostic, got: %+v", snap.Diagnostics)
 	}
 
-	// 2. When primary is unavailable, must fail closed
+	// Removing primary metadata must not alter the fail-closed behavior.
 	factsNoPrimary := *facts
 	factsNoPrimary.PrimarySubscriptionID = ""
 	factsNoPrimary.PrimaryNodeIDs = nil
-	_, snapFail, errFail := svc.BuildCurrentArtifact(ctx, &factsNoPrimary, domain.TargetMihomo)
+	_, _, errFail := svc.BuildCurrentArtifact(ctx, &factsNoPrimary, domain.TargetMihomo)
 	if errFail == nil {
-		t.Fatal("expected failure when primary is unavailable, got nil")
-	}
-	errStr := errFail.Error()
-	if !strings.Contains(errStr, "empty") && !strings.Contains(errStr, "rejected") && !strings.Contains(errStr, "required_nonempty") && !strings.Contains(errStr, "primary_subscription_fallback_unavailable") {
-		t.Errorf("expected error mentioning empty group / fallback unavailable, got: %v", errFail)
-	}
-	hasUnavailable := false
-	for _, d := range snapFail.Diagnostics {
-		if d.Code == "primary_subscription_fallback_unavailable" {
-			hasUnavailable = true
-			break
-		}
-	}
-	if !hasUnavailable {
-		t.Errorf("expected primary_subscription_fallback_unavailable diagnostic when primary absent, got %+v", snapFail.Diagnostics)
+		t.Fatal("expected failure when configured empty group has no PASS, regardless of primary metadata")
 	}
 }
 
-func TestBuildCurrentArtifact_FallbackUnavailable_WhenNoPrimaryOrDisabled(t *testing.T) {
+func TestBuildCurrentArtifact_GlobalFilterDisabledPASS_FailsClosed(t *testing.T) {
 	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
 	svc := publication.NewService(nil, nil)
 
@@ -770,50 +706,44 @@ func TestBuildCurrentArtifact_FallbackUnavailable_WhenNoPrimaryOrDisabled(t *tes
 				CreatedAt:     now,
 			},
 			Nodes: []domain.Node{n},
+			Groups: []domain.NodeGroup{{
+				ID:        "group-disabled-pass",
+				Name:      "Filtered Group",
+				GroupType: domain.GroupTypeSelect,
+				Sources:   []domain.MemberSource{},
+			}},
+			PolicyRules: []domain.PolicyRule{{
+				ID:            "rule-disabled-pass",
+				RevisionID:    "rev-no-pri",
+				TargetGroupID: "group-disabled-pass",
+				Expression:    "MATCH",
+				Enabled:       true,
+			}},
 			GlobalFilter: &domain.NodeFilterSpec{
 				Conditions: []domain.FilterCondition{
 					{Field: domain.FilterFieldDisplayName, Op: domain.FilterOpContains, Value: "NONEXISTENT"},
 				},
 			},
-			PrimarySubscriptionID: primaryID,
-			PrimaryNodeIDs:        primaryNodeIDs,
+			PrimarySubscriptionID:   primaryID,
+			PrimaryNodeIDs:          primaryNodeIDs,
+			GlobalEmptyFallbackPass: boolPtr(false),
 		}
 	}
 
 	ctx := context.Background()
 
-	// Scenario 1: Primary ID empty
-	facts1 := makeFacts("", nil)
-	_, snap1, err1 := svc.BuildCurrentArtifact(ctx, facts1, domain.TargetSingBox)
-	if err1 == nil {
-		t.Fatal("expected error when primary absent, got nil")
-	}
-	hasUnavailable1 := false
-	for _, d := range snap1.Diagnostics {
-		if d.Code == "primary_subscription_fallback_unavailable" {
-			hasUnavailable1 = true
-			break
+	// Primary metadata cannot bypass a globally filtered empty selection.
+	for _, facts := range []*domain.ConsistentFacts{
+		makeFacts("", nil),
+		makeFacts("sub-primary", []string{nodeID}),
+	} {
+		artifact, _, err := svc.BuildCurrentArtifact(ctx, facts, domain.TargetMihomo)
+		if err == nil {
+			t.Fatal("expected non-Mihomo export to fail for an empty filtered selection")
 		}
-	}
-	if !hasUnavailable1 {
-		t.Errorf("expected primary_subscription_fallback_unavailable diagnostic when primary absent, got %+v", snap1.Diagnostics)
-	}
-
-	// Scenario 2: Primary Node IDs empty
-	facts2 := makeFacts("sub-primary", []string{})
-	_, snap2, err2 := svc.BuildCurrentArtifact(ctx, facts2, domain.TargetSingBox)
-	if err2 == nil {
-		t.Fatal("expected error when primary nodes empty, got nil")
-	}
-	hasUnavailable2 := false
-	for _, d := range snap2.Diagnostics {
-		if d.Code == "primary_subscription_fallback_unavailable" {
-			hasUnavailable2 = true
-			break
+		if artifact != nil && strings.Contains(string(artifact.Content), "主订阅兜底") {
+			t.Fatal("disabled global PASS must not synthesize fallback content")
 		}
-	}
-	if !hasUnavailable2 {
-		t.Errorf("expected primary_subscription_fallback_unavailable diagnostic when primary nodes empty, got %+v", snap2.Diagnostics)
 	}
 }
 
@@ -872,7 +802,7 @@ func TestBuildCurrentArtifact_NoFallbackBypass_OnIndependentRiskBlocker(t *testi
 	}
 }
 
-func TestBuildCurrentArtifact_Fallback_PreservesConfiguredDNS(t *testing.T) {
+func TestBuildCurrentArtifact_GlobalEmptyPASS_PreservesConfiguredDNS(t *testing.T) {
 	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
 	svc := publication.NewService(nil, nil)
 
@@ -907,8 +837,9 @@ func TestBuildCurrentArtifact_Fallback_PreservesConfiguredDNS(t *testing.T) {
 				{Field: domain.FilterFieldDisplayName, Op: domain.FilterOpContains, Value: "NONEXISTENT"},
 			},
 		},
-		PrimarySubscriptionID: "sub-primary",
-		PrimaryNodeIDs:        []string{primaryNodeID},
+		GlobalEmptyFallbackPass: boolPtr(true),
+		PrimarySubscriptionID:   "sub-primary",
+		PrimaryNodeIDs:          []string{primaryNodeID},
 		DNSSettings: &domain.DNSSettings{
 			Enabled: true,
 			RawYAML: "enable: true\nnameserver:\n  - 8.8.8.8\n  - 1.1.1.1\n",
@@ -918,33 +849,17 @@ func TestBuildCurrentArtifact_Fallback_PreservesConfiguredDNS(t *testing.T) {
 	ctx := context.Background()
 	artifact, snap, err := svc.BuildCurrentArtifact(ctx, facts, domain.TargetMihomo)
 	if err != nil {
-		t.Fatalf("expected fallback with DNS to succeed, got error: %v", err)
+		t.Fatalf("expected empty-group PASS with configured DNS to succeed, got error: %v", err)
 	}
-
-	// DNS must be rendered in YAML
 	content := string(artifact.Content)
 	if !strings.Contains(content, "8.8.8.8") || !strings.Contains(content, "1.1.1.1") {
-		t.Errorf("expected rendered DNS in fallback YAML, got: %s", content)
+		t.Errorf("expected configured DNS to remain in YAML, got: %s", content)
 	}
-	if !strings.Contains(content, "主订阅兜底") {
-		t.Errorf("expected group '主订阅兜底' in fallback YAML")
+	if strings.Contains(content, "主订阅兜底") {
+		t.Errorf("empty-group PASS must not fabricate a primary group")
 	}
-	if len(snap.Nodes) != 1 {
-		t.Errorf("expected 1 node in snapshot, got %d", len(snap.Nodes))
-	}
-
-	hasFallbackDiag := false
-	for _, d := range snap.Diagnostics {
-		if d.Code == "primary_subscription_fallback" {
-			hasFallbackDiag = true
-			if d.Severity != resolver.DiagnosticSeverityWarning {
-				t.Errorf("expected warning severity for fallback diagnostic, got: %s", d.Severity)
-			}
-			break
-		}
-	}
-	if !hasFallbackDiag {
-		t.Fatalf("expected primary_subscription_fallback diagnostic, got %+v", snap.Diagnostics)
+	if len(snap.Nodes) != 0 {
+		t.Errorf("expected global filter to exclude every node, got %d", len(snap.Nodes))
 	}
 }
 
@@ -1143,7 +1058,7 @@ func TestBuildCurrentArtifact_NormalRoute_PreservesDNSAndChainBindings(t *testin
 	}
 }
 
-func TestGenerateLiveArtifact_And_CheckSubscriptionLink_Fallback(t *testing.T) {
+func TestGenerateLiveArtifact_And_CheckSubscriptionLink_FilteredEmptyFailsClosed(t *testing.T) {
 	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
 
 	primaryNodeID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.1.1.1", 8388, nil)
@@ -1207,16 +1122,10 @@ func TestGenerateLiveArtifact_And_CheckSubscriptionLink_Fallback(t *testing.T) {
 
 	ctx := context.Background()
 
-	// 1. GenerateLiveArtifact with correct token -> returns fallback artifact
-	artifact, err := svc.GenerateLiveArtifact(ctx, linkID, rawToken)
-	if err != nil {
-		t.Fatalf("GenerateLiveArtifact failed: %v", err)
-	}
-	if !strings.Contains(string(artifact.Content), "主订阅兜底") {
-		t.Errorf("expected fallback content in live artifact, got: %s", string(artifact.Content))
-	}
-	if artifact.UserInfo != facts.PrimaryUserInfo {
-		t.Errorf("expected UserInfo %q, got %q", facts.PrimaryUserInfo, artifact.UserInfo)
+	// A valid token does not permit live publication to bypass the configured filter.
+	_, err := svc.GenerateLiveArtifact(ctx, linkID, rawToken)
+	if err == nil {
+		t.Fatal("expected filtered-empty live artifact to fail without configured PASS route")
 	}
 
 	// 2. GenerateLiveArtifact with invalid token -> fails 401 BEFORE facts or fallback
@@ -1230,25 +1139,15 @@ func TestGenerateLiveArtifact_And_CheckSubscriptionLink_Fallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CheckSubscriptionLink failed: %v", err)
 	}
-	if !checkRes.Allowed {
-		t.Errorf("expected CheckSubscriptionLink to be Allowed=true on fallback")
+	if checkRes.Allowed {
+		t.Errorf("expected CheckSubscriptionLink to reject filtered-empty export")
 	}
-	if checkRes.NodeCount != 1 {
-		t.Errorf("expected NodeCount=1, got %d", checkRes.NodeCount)
-	}
-	hasDiag := false
-	for _, d := range checkRes.Diagnostics {
-		if d.Code == "primary_subscription_fallback" {
-			hasDiag = true
-			break
-		}
-	}
-	if !hasDiag {
-		t.Errorf("expected primary_subscription_fallback in CheckSubscriptionLink diagnostics, got: %+v", checkRes.Diagnostics)
+	if checkRes.NodeCount != 0 {
+		t.Errorf("expected NodeCount=0 after filter, got %d", checkRes.NodeCount)
 	}
 }
 
-func TestPreview_WithConsistentFactsLoader_Fallback(t *testing.T) {
+func TestPreview_WithConsistentFactsLoader_FilteredEmptyFailsClosed(t *testing.T) {
 	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
 
 	primaryNodeID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.1.1.1", 8388, nil)
@@ -1291,29 +1190,13 @@ func TestPreview_WithConsistentFactsLoader_Fallback(t *testing.T) {
 	)
 
 	ctx := context.Background()
-	prevRes, err := svc.Preview(ctx, publication.PreviewQuery{
-		Target: domain.TargetMihomo,
-	})
-	if err != nil {
-		t.Fatalf("expected Preview to succeed via fallback, got error: %v", err)
-	}
-
-	hasFallbackDiag := false
-	for _, d := range prevRes.Diagnostics {
-		if d.Code == "primary_subscription_fallback" {
-			hasFallbackDiag = true
-			break
-		}
-	}
-	if !hasFallbackDiag {
-		t.Errorf("expected primary_subscription_fallback in Preview diagnostics, got: %+v", prevRes.Diagnostics)
-	}
-	if !strings.Contains(string(prevRes.Content), "主订阅兜底") {
-		t.Errorf("expected Preview content to contain '主订阅兜底', got: %s", string(prevRes.Content))
+	_, err := svc.Preview(ctx, publication.PreviewQuery{Target: domain.TargetMihomo})
+	if err == nil {
+		t.Fatal("expected Preview to fail for a globally filtered empty selection with no configured route")
 	}
 }
 
-func TestBuildCurrentArtifact_Fallback_PartialEmptyHongKong_Recovers(t *testing.T) {
+func TestBuildCurrentArtifact_PartialEmptyHongKong_UsesGlobalPASS(t *testing.T) {
 	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
 	svc := publication.NewService(nil, nil)
 
@@ -1363,7 +1246,8 @@ func TestBuildCurrentArtifact_Fallback_PartialEmptyHongKong_Recovers(t *testing.
 			State:         domain.RevisionStateActive,
 			CreatedAt:     now,
 		},
-		Nodes: []domain.Node{nPrimary1, nPrimary2},
+		Nodes:                   []domain.Node{nPrimary1, nPrimary2},
+		GlobalEmptyFallbackPass: boolPtr(true),
 		Groups: []domain.NodeGroup{
 			{
 				ID:        groupUSID,
@@ -1405,18 +1289,19 @@ func TestBuildCurrentArtifact_Fallback_PartialEmptyHongKong_Recovers(t *testing.
 				Enabled:       true,
 			},
 		},
-		PrimarySubscriptionID: "sub-primary",
-		PrimaryNodeIDs:        []string{primaryNodeID1, primaryNodeID2},
-		PrimaryUserInfo:       "upload=10; download=20; total=100; expire=1900000000",
+		GlobalEmptyFallbackPass: boolPtr(true),
+		PrimarySubscriptionID:   "sub-primary",
+		PrimaryNodeIDs:          []string{primaryNodeID1, primaryNodeID2},
+		PrimaryUserInfo:         "upload=10; download=20; total=100; expire=1900000000",
 	}
 
 	ctx := context.Background()
 	artifact, snap, err := svc.BuildCurrentArtifact(ctx, facts, domain.TargetMihomo)
 	if err != nil {
-		t.Fatalf("expected partial empty 香港 to recover via primary fallback, got error: %v", err)
+		t.Fatalf("expected globally enabled empty-group PASS to compile, got error: %v", err)
 	}
 
-	// Verify fallback artifact content
+	// Verify configured nodes and routes remain; no primary fallback is synthesized.
 	var parsed struct {
 		Proxies []struct {
 			Name string `yaml:"name"`
@@ -1433,13 +1318,13 @@ func TestBuildCurrentArtifact_Fallback_PartialEmptyHongKong_Recovers(t *testing.
 	}
 
 	if len(parsed.Proxies) != 2 {
-		t.Fatalf("expected 2 proxies in fallback artifact, got %d", len(parsed.Proxies))
+		t.Fatalf("expected only the two configured nodes, got %d", len(parsed.Proxies))
 	}
-	if len(parsed.ProxyGroups) != 1 || parsed.ProxyGroups[0].Name != "主订阅兜底" {
-		t.Fatalf("expected single proxy group '主订阅兜底', got %+v", parsed.ProxyGroups)
+	if len(parsed.ProxyGroups) != 2 || parsed.ProxyGroups[0].Name == "主订阅兜底" || parsed.ProxyGroups[1].Name == "主订阅兜底" {
+		t.Fatalf("expected configured groups and no fabricated fallback group, got %+v", parsed.ProxyGroups)
 	}
-	if len(parsed.Rules) != 1 || parsed.Rules[0] != "MATCH,主订阅兜底" {
-		t.Fatalf("expected rule 'MATCH,主订阅兜底', got %+v", parsed.Rules)
+	if len(parsed.Rules) != 2 || parsed.Rules[1] != "MATCH,香港" {
+		t.Fatalf("expected original configured rule to remain, got %+v", parsed.Rules)
 	}
 
 	// Verify diagnostics: both primary_subscription_fallback and original safe cause
@@ -1448,28 +1333,16 @@ func TestBuildCurrentArtifact_Fallback_PartialEmptyHongKong_Recovers(t *testing.
 	for _, d := range snap.Diagnostics {
 		if d.Code == "primary_subscription_fallback" {
 			hasFallbackDiag = true
-			if d.Severity != resolver.DiagnosticSeverityWarning {
-				t.Errorf("expected warning severity for fallback, got: %s", d.Severity)
-			}
-			if strings.Contains(d.Message, "all policy rules or filters resulted in empty nodes") {
-				t.Errorf("inaccurate exhaustion wording in fallback diagnostic for partial empty group: %s", d.Message)
-			}
-			if !strings.Contains(d.Message, "empty policy group validation failed") {
-				t.Errorf("expected accurate empty group validation failure message, got: %s", d.Message)
-			}
 		}
 		if d.Code == "empty_routed_group" || d.Code == "required_nonempty" {
 			hasOriginalCauseDiag = true
-			if d.Severity != resolver.DiagnosticSeverityWarning {
-				t.Errorf("expected warning severity for safe original cause, got: %s", d.Severity)
-			}
 		}
 	}
-	if !hasFallbackDiag {
-		t.Errorf("expected primary_subscription_fallback diagnostic, got: %+v", snap.Diagnostics)
+	if hasFallbackDiag {
+		t.Errorf("primary-subscription fallback diagnostic must not be emitted")
 	}
-	if !hasOriginalCauseDiag {
-		t.Errorf("expected safe original cause diagnostic for empty 香港, got: %+v", snap.Diagnostics)
+	if hasOriginalCauseDiag {
+		t.Errorf("globally enabled PASS should resolve the empty group without an error diagnostic: %+v", snap.Diagnostics)
 	}
 
 	// Verify UserInfo is preserved
@@ -1486,7 +1359,7 @@ func TestBuildCurrentArtifact_Fallback_PartialEmptyHongKong_Recovers(t *testing.
 	}
 }
 
-func TestBuildCurrentArtifact_Fallback_UnusedEmptyHongKong_Recovers(t *testing.T) {
+func TestBuildCurrentArtifact_UnusedEmptyHongKong_DoesNotInventFallback(t *testing.T) {
 	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
 	svc := publication.NewService(nil, nil)
 
@@ -1518,7 +1391,8 @@ func TestBuildCurrentArtifact_Fallback_UnusedEmptyHongKong_Recovers(t *testing.T
 			State:         domain.RevisionStateActive,
 			CreatedAt:     now,
 		},
-		Nodes: []domain.Node{nPrimary},
+		Nodes:                   []domain.Node{nPrimary},
+		GlobalEmptyFallbackPass: boolPtr(true),
 		Groups: []domain.NodeGroup{
 			{
 				ID:        groupUSID,
@@ -1558,32 +1432,24 @@ func TestBuildCurrentArtifact_Fallback_UnusedEmptyHongKong_Recovers(t *testing.T
 
 	ctx := context.Background()
 	artifact, snap, err := svc.BuildCurrentArtifact(ctx, facts, domain.TargetMihomo)
-	if err != nil {
-		t.Fatalf("expected unused empty group to recover via primary fallback, got error: %v", err)
+	if err == nil {
+		t.Fatal("expected unused invalid empty group to fail validation")
 	}
-
-	if !strings.Contains(string(artifact.Content), "主订阅兜底") {
-		t.Errorf("expected content to contain '主订阅兜底', got: %s", string(artifact.Content))
+	if artifact != nil && strings.Contains(string(artifact.Content), "主订阅兜底") {
+		t.Errorf("must not fabricate fallback group")
 	}
 	hasFallbackDiag := false
 	for _, d := range snap.Diagnostics {
 		if d.Code == "primary_subscription_fallback" {
 			hasFallbackDiag = true
-			if strings.Contains(d.Message, "all policy rules or filters resulted in empty nodes") {
-				t.Errorf("inaccurate exhaustion wording in fallback diagnostic for unused empty group: %s", d.Message)
-			}
-			if !strings.Contains(d.Message, "empty policy group validation failed") {
-				t.Errorf("expected accurate empty group validation failure message, got: %s", d.Message)
-			}
-			break
 		}
 	}
-	if !hasFallbackDiag {
-		t.Errorf("expected primary_subscription_fallback diagnostic, got: %+v", snap.Diagnostics)
+	if hasFallbackDiag {
+		t.Errorf("primary-subscription fallback diagnostic must not be emitted")
 	}
 }
 
-func TestBuildCurrentArtifact_Fallback_BuiltinDirectRejectWithFailingGroup_Recovers(t *testing.T) {
+func TestBuildCurrentArtifact_BuiltinRoutesWithEmptyGroup_UsesGlobalPASS(t *testing.T) {
 	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
 	svc := publication.NewService(nil, nil)
 
@@ -1617,15 +1483,17 @@ func TestBuildCurrentArtifact_Fallback_BuiltinDirectRejectWithFailingGroup_Recov
 			State:         domain.RevisionStateActive,
 			CreatedAt:     now,
 		},
-		Nodes: []domain.Node{nPrimary},
+		Nodes:                   []domain.Node{nPrimary},
+		GlobalEmptyFallbackPass: boolPtr(true),
 		Groups: []domain.NodeGroup{
 			{
 				ID:        groupHKID,
 				Name:      "香港",
 				GroupType: domain.GroupTypeSelect,
-				Sources:   []domain.MemberSource{}, // empty group causes export failure
+				Sources:   []domain.MemberSource{},
 			},
 		},
+
 		PolicyRules: []domain.PolicyRule{
 			{
 				ID:            rule1ID,
@@ -1659,31 +1527,24 @@ func TestBuildCurrentArtifact_Fallback_BuiltinDirectRejectWithFailingGroup_Recov
 	ctx := context.Background()
 	artifact, snap, err := svc.BuildCurrentArtifact(ctx, facts, domain.TargetMihomo)
 	if err != nil {
-		t.Fatalf("expected fallback to succeed when builtin rules exist alongside failing group, got: %v", err)
+		t.Fatalf("expected builtin routes and globally enabled PASS group to compile, got: %v", err)
 	}
 
-	if !strings.Contains(string(artifact.Content), "主订阅兜底") {
-		t.Errorf("expected fallback content to contain '主订阅兜底', got: %s", string(artifact.Content))
+	if strings.Contains(string(artifact.Content), "主订阅兜底") {
+		t.Errorf("configured builtin routes must not synthesize a primary group")
 	}
 	hasFallbackDiag := false
 	for _, d := range snap.Diagnostics {
 		if d.Code == "primary_subscription_fallback" {
 			hasFallbackDiag = true
-			if strings.Contains(d.Message, "all policy rules or filters resulted in empty nodes") {
-				t.Errorf("inaccurate exhaustion wording in fallback diagnostic for builtin + empty group: %s", d.Message)
-			}
-			if !strings.Contains(d.Message, "empty policy group validation failed") {
-				t.Errorf("expected accurate empty group validation failure message, got: %s", d.Message)
-			}
-			break
 		}
 	}
-	if !hasFallbackDiag {
-		t.Errorf("expected primary_subscription_fallback diagnostic, got: %+v", snap.Diagnostics)
+	if hasFallbackDiag {
+		t.Errorf("primary-subscription fallback diagnostic must not be emitted")
 	}
 }
 
-func TestBuildCurrentArtifact_Fallback_PreviewConsistentWithLive_StrictMode(t *testing.T) {
+func TestBuildCurrentArtifact_EmptyPASS_PreviewConsistentWithLive_StrictMode(t *testing.T) {
 	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
 
 	primaryNodeID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.1.1.1", 8388, nil)
@@ -1713,15 +1574,17 @@ func TestBuildCurrentArtifact_Fallback_PreviewConsistentWithLive_StrictMode(t *t
 			State:         domain.RevisionStateActive,
 			CreatedAt:     now,
 		},
-		Nodes: []domain.Node{nPrimary},
+		Nodes:                   []domain.Node{nPrimary},
+		GlobalEmptyFallbackPass: boolPtr(true),
 		Groups: []domain.NodeGroup{
 			{
 				ID:        groupHKID,
 				Name:      "香港",
 				GroupType: domain.GroupTypeSelect,
-				Sources:   []domain.MemberSource{}, // empty group
+				Sources:   []domain.MemberSource{},
 			},
 		},
+
 		PolicyRules: []domain.PolicyRule{
 			{
 				ID:            ruleHKID,
@@ -1746,32 +1609,32 @@ func TestBuildCurrentArtifact_Fallback_PreviewConsistentWithLive_StrictMode(t *t
 
 	ctx := context.Background()
 
-	// 1. Live artifact succeeds via fallback
+	// Live and both preview modes should compile the configured PASS route identically.
 	liveArt, liveSnap, err := svc.BuildCurrentArtifact(ctx, facts, domain.TargetMihomo)
 	if err != nil {
-		t.Fatalf("expected live BuildCurrentArtifact to succeed via fallback, got: %v", err)
+		t.Fatalf("expected live BuildCurrentArtifact to succeed with configured PASS, got: %v", err)
 	}
 
-	// 2. Default/compatible preview succeeds via fallback and matches live
+	// Default/compatible preview matches live
 	prevDefault, err := svc.Preview(ctx, publication.PreviewQuery{
 		Target:     domain.TargetMihomo,
 		RevisionID: "rev-preview-strict",
 	})
 	if err != nil {
-		t.Fatalf("expected default preview to succeed via fallback, got: %v", err)
+		t.Fatalf("expected default preview to succeed, got: %v", err)
 	}
 	if string(prevDefault.Content) != string(liveArt.Content) {
 		t.Fatalf("preview content does not match live content")
 	}
 
-	// 3. Strict mode preview also succeeds via fallback and matches live
+	// Strict mode preview also matches live
 	prevStrict, err := svc.Preview(ctx, publication.PreviewQuery{
 		Target:     domain.TargetMihomo,
 		RevisionID: "rev-preview-strict",
 		CompatMode: "strict",
 	})
 	if err != nil {
-		t.Fatalf("expected strict preview to succeed via fallback, got: %v", err)
+		t.Fatalf("expected strict preview to succeed, got: %v", err)
 	}
 	if string(prevStrict.Content) != string(liveArt.Content) {
 		t.Fatalf("strict preview content does not match live content")

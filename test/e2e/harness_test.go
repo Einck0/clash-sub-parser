@@ -182,6 +182,7 @@ func setupTestHarness(t *testing.T) *TestHarness {
 		auditRepo,
 		publication.WithNodeRepository(nodeRepo),
 		publication.WithPolicyRepository(policyRepo),
+		publication.WithNodeFilterRepository(nodeFilterRepo),
 		publication.WithRevisionRepository(revisionRepo),
 		publication.WithIPRiskService(ipriskService),
 		publication.WithRiskPolicyRepository(riskPolicyRepo),

@@ -1571,16 +1571,6 @@ func generateSubscriptionToken() (string, string, error) {
 	return rawToken, hashToken(rawToken), nil
 }
 
-func deterministicFallbackUUID(salt string) string {
-	hash := sha256.Sum256([]byte("csp-primary-fallback:" + salt))
-	var raw [16]byte
-	copy(raw[:], hash[:16])
-	raw[6] = (raw[6] & 0x0f) | 0x70 // UUIDv7 version
-	raw[8] = (raw[8] & 0x3f) | 0x80 // RFC 4122 variant
-	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
-		raw[0:4], raw[4:6], raw[6:8], raw[8:10], raw[10:16])
-}
-
 // BuildCurrentArtifact executes pure, deterministic, side-effect-free configuration compilation from consistent facts.
 // It performs in-memory policy resolution, preflight checks, and kernel schema validation without writing drafts or references.
 func (s *Service) BuildCurrentArtifact(ctx context.Context, facts *domain.ConsistentFacts, target domain.CompilerTarget) (*Artifact, *resolver.ResolvedPolicySnapshot, error) {
@@ -1784,7 +1774,7 @@ func (s *Service) buildArtifactPipeline(ctx context.Context, facts *domain.Consi
 	diags := compiler.ValidateTargetCapabilities(snapshot, target)
 
 	// A built-in destination is an intentional route, not an empty user-group
-	// selection. A valid built-in policy compiles normally without fallback.
+	// selection. A valid built-in policy compiles normally.
 	hasBuiltinRoutingRule := false
 	routedUserGroups := make(map[string]bool)
 	for _, r := range snapshot.Rules {
@@ -1802,7 +1792,7 @@ func (s *Service) buildArtifactPipeline(ctx context.Context, facts *domain.Consi
 
 	// Check if normal compilation succeeds. Only valid policies without empty-group
 	// or capability errors compile normally; absent routing for Mihomo (no effective
-	// routed or builtin routes) proceeds to fallback.
+	// routed or builtin routes) is reported as an error.
 	if !hasFilteredNodesEmpty && !absentRoutingMihomo && len(diags) == 0 && preflight.Allowed {
 		compileRes, err := compiler.Compile(ctx, snapshot, target)
 		if err != nil {
@@ -1830,422 +1820,49 @@ func (s *Service) buildArtifactPipeline(ctx context.Context, facts *domain.Consi
 		}, snapshot, nil
 	}
 
-	// Normal export failed. Evaluate if eligible for primary subscription fallback (FR007).
-	// Eligible causes:
-	// - empty-group validation (required_nonempty, empty_routed_group, empty_group)
-	// - known selection exhaustion (filtered_nodes_empty, absent effective Mihomo routing, empty non-Mihomo candidate nodes)
-	// - partial empty groups alongside usable groups and normal builtin routes (DIRECT/REJECT)
-	// Independent blockers stay fail-closed:
-	// - risk blockers (risk_blocked, risk_review, risk_unknown)
-	// - per-node capability/plugin/credential errors
-	// - independent structural resolver errors
+	// A failed normal export must not be replaced with an invented subscription.
+	// Preserve risk and resolver diagnostics, and report capability errors directly.
 	hasRiskBlocker := false
-	for _, d := range snapshot.Diagnostics {
-		if d.Code == "risk_blocked" || d.Code == "risk_review" || d.Code == "risk_unknown" {
+	for _, diagnostic := range preflight.Diagnostics {
+		if diagnostic.Code == "risk_blocked" || diagnostic.Code == "risk_review" || diagnostic.Code == "risk_unknown" {
 			hasRiskBlocker = true
 			break
 		}
 	}
-	if !hasRiskBlocker {
-		for _, pd := range preflight.Diagnostics {
-			if pd.Code == "risk_blocked" || pd.Code == "risk_review" || pd.Code == "risk_unknown" {
-				hasRiskBlocker = true
-				break
-			}
-		}
-	}
-
 	hasProtocolBlocker := false
-	for _, cd := range diags {
-		if cd.Code != "required_nonempty" && cd.Code != "empty_group" {
+	for _, diagnostic := range diags {
+		if diagnostic.Code != "required_nonempty" && diagnostic.Code != "empty_group" {
 			hasProtocolBlocker = true
 			break
 		}
 	}
-
-	// Resolver failures normally return before this point, but successful
-	// resolution can still carry independent error diagnostics. Only known
-	// selection-exhaustion diagnostics are eligible to trigger fallback.
-	hasIndependentResolverError := false
-	for _, diagnostic := range snapshot.Diagnostics {
-		if diagnostic.Severity != resolver.DiagnosticSeverityError {
-			continue
-		}
-		switch diagnostic.Code {
-		case "filtered_nodes_empty", "empty_routed_group", "empty_group":
-		default:
-			hasIndependentResolverError = true
-		}
-	}
-
-	hasEmptyGroupFailure := false
-	if target == domain.TargetMihomo {
-		for _, cd := range diags {
-			if cd.Code == "required_nonempty" || cd.Code == "empty_group" {
-				hasEmptyGroupFailure = true
-				break
-			}
-		}
-		if !hasEmptyGroupFailure {
-			for _, d := range snapshot.Diagnostics {
-				if d.Code == "empty_routed_group" || d.Code == "empty_group" {
-					hasEmptyGroupFailure = true
-					break
-				}
-			}
-		}
-		if !hasEmptyGroupFailure {
-			for _, g := range snapshot.Groups {
-				if !g.UsesEmptyPass() && len(g.Members) == 0 {
-					hasEmptyGroupFailure = true
-					break
-				}
-			}
-		}
-	}
-
-	isEligible := hasFilteredNodesEmpty ||
-		hasEmptyGroupFailure ||
-		absentRoutingMihomo ||
-		(target != domain.TargetMihomo && len(snapshot.Nodes) == 0)
-
-	// Risk policy is an independent publication safety gate. Preserve its concrete
-	// diagnostics and return it before strict empty-group capability errors.
-	if hasRiskBlocker {
-		for _, diagnostic := range snapshot.Diagnostics {
-			if diagnostic.Code != "risk_blocked" && diagnostic.Code != "risk_review" && diagnostic.Code != "risk_unknown" {
-				continue
-			}
-			found := false
-			for _, existing := range preflight.Diagnostics {
-				if existing.Code == diagnostic.Code && existing.Target == diagnostic.Target {
-					found = true
-					break
-				}
-			}
-			if !found {
-				preflight.Diagnostics = append(preflight.Diagnostics, PreflightDiagnostic{
-					Severity: diagnostic.Severity,
-					Code:     diagnostic.Code,
-					Message:  diagnostic.Message,
-					Target:   diagnostic.Target,
-				})
-			}
-		}
-		sort.SliceStable(preflight.Diagnostics, func(i, j int) bool {
-			isRiskI := preflight.Diagnostics[i].Code == "risk_blocked" || preflight.Diagnostics[i].Code == "risk_review" || preflight.Diagnostics[i].Code == "risk_unknown"
-			isRiskJ := preflight.Diagnostics[j].Code == "risk_blocked" || preflight.Diagnostics[j].Code == "risk_review" || preflight.Diagnostics[j].Code == "risk_unknown"
-			if isRiskI != isRiskJ {
-				return isRiskI
-			}
-			return false
-		})
-		preflight.Allowed = false
-		return nil, snapshot, newPreflightError(preflight)
-	}
-
-	// If independent blockers exist or not an eligible failure condition, return original error directly
-	if hasProtocolBlocker || hasIndependentResolverError || !isEligible {
-		if len(diags) > 0 && (hasProtocolBlocker || cfg.mode == exportModeStrict) {
-			msg := "target capability validation failed in strict mode"
-			if len(diags) > 0 {
-				msg = fmt.Sprintf("target capability validation failed in strict mode: %s", diags[0].Message)
-			}
-			return nil, snapshot, &StrictCapabilityError{
-				Code:        "unsupported_target_capability",
-				Message:     msg,
-				Diagnostics: diags,
-			}
-		}
-		if len(preflight.Diagnostics) == 0 && len(diags) > 0 {
-			preflight.Allowed = false
-			for _, cd := range diags {
-				preflight.Diagnostics = append(preflight.Diagnostics, PreflightDiagnostic{
-					Severity: resolver.DiagnosticSeverityError,
-					Code:     cd.Code,
-					Message:  cd.Message,
-					Target:   cd.Target,
-				})
-			}
-		}
-		return nil, snapshot, newPreflightError(preflight)
-	}
-
-	// Trigger primary subscription fallback
-	primaryAvailable := facts.PrimarySubscriptionID != "" && len(facts.PrimaryNodeIDs) > 0
-	if !primaryAvailable {
-		unavailableDiag := resolver.Diagnostic{
-			Severity: resolver.DiagnosticSeverityWarning,
-			Code:     "primary_subscription_fallback_unavailable",
-			Message:  "primary subscription fallback unavailable: primary subscription absent, disabled, or has no eligible nodes",
-		}
-		snapshot.Diagnostics = append(snapshot.Diagnostics, unavailableDiag)
-		preflight.Diagnostics = append(preflight.Diagnostics, PreflightDiagnostic{
-			Severity: unavailableDiag.Severity,
-			Code:     unavailableDiag.Code,
-			Message:  unavailableDiag.Message,
-		})
-		if len(preflight.Diagnostics) == 1 && len(diags) > 0 {
-			for _, cd := range diags {
-				preflight.Diagnostics = append(preflight.Diagnostics, PreflightDiagnostic{
-					Severity: resolver.DiagnosticSeverityError,
-					Code:     cd.Code,
-					Message:  cd.Message,
-					Target:   cd.Target,
-				})
-			}
-		}
-		return nil, snapshot, newPreflightError(preflight)
-	}
-
-	primaryNodeIDSet := make(map[string]bool, len(facts.PrimaryNodeIDs))
-	for _, id := range facts.PrimaryNodeIDs {
-		primaryNodeIDSet[id] = true
-	}
-	var primaryNodes []domain.Node
-	for _, n := range facts.Nodes {
-		if primaryNodeIDSet[n.LogicalID] {
-			primaryNodes = append(primaryNodes, n)
-		}
-	}
-
-	if len(primaryNodes) == 0 {
-		unavailableDiag := resolver.Diagnostic{
-			Severity: resolver.DiagnosticSeverityWarning,
-			Code:     "primary_subscription_fallback_unavailable",
-			Message:  "primary subscription fallback unavailable: primary subscription absent, disabled, or has no eligible nodes",
-		}
-		snapshot.Diagnostics = append(snapshot.Diagnostics, unavailableDiag)
-		preflight.Diagnostics = append(preflight.Diagnostics, PreflightDiagnostic{
-			Severity: unavailableDiag.Severity,
-			Code:     unavailableDiag.Code,
-			Message:  unavailableDiag.Message,
-		})
-		if len(preflight.Diagnostics) == 1 && len(diags) > 0 {
-			for _, cd := range diags {
-				preflight.Diagnostics = append(preflight.Diagnostics, PreflightDiagnostic{
-					Severity: resolver.DiagnosticSeverityError,
-					Code:     cd.Code,
-					Message:  cd.Message,
-					Target:   cd.Target,
-				})
-			}
-		}
-		return nil, snapshot, newPreflightError(preflight)
-	}
-
-	fallbackInput := resolver.ResolveInput{
-		RevisionID:          facts.Revision.ID,
-		InventoryWatermark:  "v1",
-		CompilerVersion:     "1.0.0",
-		NodePayloadEvidence: facts.NodePayloadEvidence,
-		Nodes:               primaryNodes,
-		NodeSources:         facts.NodeSources,
-		LatestObservations:  facts.LatestObservations,
-		AsOf:                facts.AsOf,
-	}
-
-	if target == domain.TargetMihomo {
-		fallbackGroupID := deterministicFallbackUUID("group")
-		fallbackRuleID := deterministicFallbackUUID("rule")
-
-		memberSources := make([]domain.MemberSource, len(primaryNodes))
-		for i, n := range primaryNodes {
-			nodeID := n.LogicalID
-			memberSources[i] = domain.MemberSource{
-				ID:            deterministicFallbackUUID(fmt.Sprintf("source-%d", i)),
-				GroupID:       fallbackGroupID,
-				Operation:     domain.OperationAdd,
-				Kind:          domain.SourceKindManualNode,
-				Position:      i,
-				NodeLogicalID: &nodeID,
-			}
-		}
-
-		fallbackGroup := domain.NodeGroup{
-			ID:        fallbackGroupID,
-			Name:      "主订阅兜底",
-			GroupType: domain.GroupTypeSelect,
-			Position:  0,
-			Sources:   memberSources,
-		}
-
-		fallbackRule := domain.PolicyRule{
-			ID:            fallbackRuleID,
-			RevisionID:    facts.Revision.ID,
-			TargetGroupID: fallbackGroupID,
-			Expression:    "MATCH",
-			Position:      0,
-			Enabled:       true,
-		}
-
-		fallbackInput.Groups = []domain.NodeGroup{fallbackGroup}
-		fallbackInput.PolicyRules = []domain.PolicyRule{fallbackRule}
-		fallbackInput.DNS = dnsCfg
-		fallbackInput.ChainBindings = facts.ProxyChainBindings
-	}
-
-	if facts.ActiveRiskPolicy != nil && facts.ActiveRiskPolicy.Active && len(primaryNodes) > 0 && s.ipriskSvc != nil {
-		nodeIDs := make([]string, len(primaryNodes))
-		for i, n := range primaryNodes {
-			nodeIDs[i] = n.LogicalID
-		}
-		riskObs := facts.RiskObservations
-		if riskObs == nil {
-			riskObs = []domain.IPRiskObservation{}
-		}
-		batchRes, bErr := s.ipriskSvc.EvaluateBatch(ctx, iprisk.EvaluateBatchInput{
-			NodeLogicalIDs:           nodeIDs,
-			Policy:                   &facts.ActiveRiskPolicy.RiskPolicy,
-			PolicyRevisionID:         facts.ActiveRiskPolicy.RevisionID,
-			EvaluatedAt:              facts.AsOf,
-			Observations:             riskObs,
-			DisableObservationLookup: true,
-		})
-		if bErr != nil {
-			return nil, nil, domain.NewInternalError("risk_evaluation_unavailable", "failed to evaluate active risk policy")
-		}
-		if batchRes != nil {
-			fallbackInput.RiskPolicyRevision = facts.ActiveRiskPolicy.RevisionID
-			fallbackInput.RiskDecisionDigest = batchRes.DecisionDigest
-			evalAt := batchRes.EvaluatedAt
-			fallbackInput.RiskEvaluatedAt = &evalAt
-			fallbackInput.RiskReviewAction = facts.ActiveRiskPolicy.EffectiveReviewAction()
-			fallbackInput.RiskDecisions = batchRes.Decisions
-		}
-	}
-
-	fallbackSnapshot, rErr := s.resolver.Resolve(ctx, fallbackInput)
-	if rErr != nil {
-		return nil, nil, rErr
-	}
-
-	if target != domain.TargetMihomo && len(fallbackSnapshot.Nodes) > 0 {
-		if cfg.mode == exportModeCompatible {
-			compatSnap, fallbackExclusions := compiler.FilterCompatibleSnapshot(fallbackSnapshot, target)
-			if len(compatSnap.Nodes) == 0 {
-				return nil, fallbackSnapshot, domain.NewValidationError("no_compatible_nodes", fmt.Sprintf("target %s has no compatible nodes in fallback", target))
-			}
-			fallbackSnapshot = compatSnap
-			nodeIDs := make([]string, len(fallbackSnapshot.Nodes))
-			for i, n := range fallbackSnapshot.Nodes {
-				nodeIDs[i] = n.LogicalID
-			}
-			fallbackSnapshot.NodeLogicalIDs = nodeIDs
-			excludedNodes = fallbackExclusions
-		}
-	}
-
-	fallbackDiags := compiler.ValidateTargetCapabilities(fallbackSnapshot, target)
-	if len(fallbackDiags) > 0 {
-		msg := "target capability validation failed in strict mode"
-		if len(fallbackDiags) > 0 {
-			msg = fmt.Sprintf("target capability validation failed in strict mode: %s", fallbackDiags[0].Message)
-		}
-		return nil, fallbackSnapshot, &StrictCapabilityError{
+	if !hasRiskBlocker && len(diags) > 0 && (hasProtocolBlocker || cfg.mode == exportModeStrict) {
+		return nil, snapshot, &StrictCapabilityError{
 			Code:        "unsupported_target_capability",
-			Message:     msg,
-			Diagnostics: fallbackDiags,
+			Message:     fmt.Sprintf("target capability validation failed in strict mode: %s", diags[0].Message),
+			Diagnostics: diags,
 		}
 	}
-
-	fallbackPreflight := s.evaluatePreflightFromSnapshot(ctx, fallbackSnapshot, target, facts.ActiveRiskPolicy, facts.RiskObservations, facts.AsOf)
-	if !fallbackPreflight.Allowed {
-		return nil, fallbackSnapshot, newPreflightError(fallbackPreflight)
-	}
-
-	compileRes, cErr := compiler.Compile(ctx, fallbackSnapshot, target)
-	if cErr != nil {
-		var capErr *compiler.CapabilityError
-		if errors.As(cErr, &capErr) {
-			return nil, fallbackSnapshot, domain.NewValidationError("unsupported_target_capability", capErr.Error())
-		}
-		return nil, fallbackSnapshot, cErr
-	}
-
-	if vErr := ValidatePublicationContent(compileRes.Content, target); vErr != nil {
-		return nil, fallbackSnapshot, vErr
-	}
-
-	if excludedNodes == nil {
-		excludedNodes = []domain.ManifestExcludedNode{}
-	}
-
-	// Preserve safe original cause diagnostics along with primary_subscription_fallback
-	var safeOriginalDiags []resolver.Diagnostic
-	seenDiag := make(map[string]bool)
-
-	for _, d := range snapshot.Diagnostics {
-		if d.Code == "filtered_nodes_empty" || d.Code == "empty_routed_group" || d.Code == "empty_group" {
-			key := d.Code + ":" + d.Target + ":" + d.Message
-			if !seenDiag[key] {
-				seenDiag[key] = true
-				safeOriginalDiags = append(safeOriginalDiags, resolver.Diagnostic{
-					Severity: resolver.DiagnosticSeverityWarning,
-					Code:     d.Code,
-					Message:  d.Message,
-					Target:   d.Target,
-					Reason:   d.Reason,
-				})
-			}
-		}
-	}
-
-	for _, cd := range diags {
-		if cd.Code == "required_nonempty" {
-			key := cd.Code + ":" + cd.Target + ":" + cd.Message
-			if !seenDiag[key] {
-				seenDiag[key] = true
-				safeOriginalDiags = append(safeOriginalDiags, resolver.Diagnostic{
-					Severity: resolver.DiagnosticSeverityWarning,
-					Code:     cd.Code,
-					Message:  cd.Message,
-					Target:   cd.Target,
-				})
-			}
-		}
-	}
-
-	if len(safeOriginalDiags) == 0 {
-		if absentRoutingMihomo {
-			safeOriginalDiags = append(safeOriginalDiags, resolver.Diagnostic{
-				Severity: resolver.DiagnosticSeverityWarning,
-				Code:     "absent_routing",
-				Message:  "no effective policy rules or proxy groups configured",
-			})
-		} else if hasEmptyGroupFailure {
-			safeOriginalDiags = append(safeOriginalDiags, resolver.Diagnostic{
-				Severity: resolver.DiagnosticSeverityWarning,
-				Code:     "empty_group",
-				Message:  "one or more policy groups are empty",
+	if len(diags) > 0 && preflight.Allowed {
+		preflight.Allowed = false
+		for _, diagnostic := range diags {
+			preflight.Diagnostics = append(preflight.Diagnostics, PreflightDiagnostic{
+				Severity: resolver.DiagnosticSeverityError,
+				Code:     diagnostic.Code,
+				Message:  diagnostic.Message,
+				Target:   diagnostic.Target,
 			})
 		}
 	}
-
-	fallbackMessage := "all policy rules or filters resulted in empty nodes; fell back to active primary subscription nodes"
-	if absentRoutingMihomo {
-		fallbackMessage = "no effective policy rules or proxy groups configured; fell back to active primary subscription nodes"
-	} else if (hasEmptyGroupFailure || len(safeOriginalDiags) > 0) && len(snapshot.Nodes) > 0 && !hasFilteredNodesEmpty {
-		fallbackMessage = "empty policy group validation failed; fell back to active primary subscription nodes"
+	if absentRoutingMihomo && preflight.Allowed {
+		preflight.Allowed = false
+		preflight.Diagnostics = append(preflight.Diagnostics, PreflightDiagnostic{
+			Severity: resolver.DiagnosticSeverityError,
+			Code:     "no_effective_routing",
+			Message:  "no effective policy rules or proxy groups configured",
+		})
 	}
-
-	fallbackSnapshot.Diagnostics = append(fallbackSnapshot.Diagnostics, safeOriginalDiags...)
-	fallbackSnapshot.Diagnostics = append(fallbackSnapshot.Diagnostics, resolver.Diagnostic{
-		Severity: resolver.DiagnosticSeverityWarning,
-		Code:     "primary_subscription_fallback",
-		Message:  fallbackMessage,
-	})
-
-	return &Artifact{
-		Target:         target,
-		Content:        compileRes.Content,
-		ContentType:    compileRes.ContentType,
-		Filename:       compileRes.Filename,
-		ContentDigest:  compileRes.ContentDigest,
-		SnapshotDigest: compileRes.SnapshotDigest,
-		UserInfo:       facts.PrimaryUserInfo,
-		ExcludedNodes:  excludedNodes,
-	}, fallbackSnapshot, nil
+	return nil, snapshot, newPreflightError(preflight)
 }
 
 func (s *Service) evaluatePreflightFromSnapshot(ctx context.Context, snapshot *resolver.ResolvedPolicySnapshot, target domain.CompilerTarget, activePolicy *domain.RiskPolicyRevision, observations []domain.IPRiskObservation, asOf time.Time) PreflightResult {

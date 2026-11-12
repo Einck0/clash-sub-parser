@@ -456,7 +456,8 @@ func TestLiveSubscriptionClientEndpoint_GlobalEmptyGroupPassUsesNormalExport(t *
 	if err := db.QueryRowContext(ctx, `SELECT display_name FROM nodes WHERE logical_id = ?`, "node_0123456789abcdef").Scan(&fixtureNodeName); err != nil {
 		t.Fatalf("failed to read seeded fixture node: %v", err)
 	}
-	if fixtureNodeName != "Live Node 1" {
+	// setupLiveSubTestRouter already seeds this ID; INSERT OR IGNORE keeps its display name.
+	if fixtureNodeName != "Admin Test Node" {
 		t.Fatalf("unexpected seeded fixture node name: %q", fixtureNodeName)
 	}
 

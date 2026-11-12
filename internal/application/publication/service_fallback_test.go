@@ -814,6 +814,7 @@ func TestBuildCurrentArtifact_GlobalEmptyPASS_PreservesConfiguredDNS(t *testing.
 	svc := publication.NewService(nil, nil)
 
 	primaryNodeID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.1.1.1", 8388, nil)
+	groupID := domain.MustNewUUIDv7()
 
 	nPrimary := domain.Node{
 		LogicalID:   primaryNodeID,
@@ -840,22 +841,22 @@ func TestBuildCurrentArtifact_GlobalEmptyPASS_PreservesConfiguredDNS(t *testing.
 		},
 		Nodes: []domain.Node{nPrimary},
 		Groups: []domain.NodeGroup{{
-			ID:                  "dns-group",
+			ID:                  groupID,
 			Name:                "DNS Route",
 			GroupType:           domain.GroupTypeSelect,
 			InheritGlobalFilter: true,
 			Sources: []domain.MemberSource{{
 				ID:            "dns-route-node",
-				GroupID:       "dns-group",
+				GroupID:       groupID,
 				Operation:     domain.OperationAdd,
 				Kind:          domain.SourceKindManualNode,
 				NodeLogicalID: &primaryNodeID,
 			}},
 		}},
 		PolicyRules: []domain.PolicyRule{{
-			ID:            "dns-rule",
+			ID:            domain.MustNewUUIDv7(),
 			RevisionID:    "rev-dns-fb",
-			TargetGroupID: "dns-group",
+			TargetGroupID: groupID,
 			Expression:    "MATCH",
 			Enabled:       true,
 		}},

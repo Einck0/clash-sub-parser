@@ -1246,8 +1246,7 @@ func TestBuildCurrentArtifact_PartialEmptyHongKong_UsesGlobalPASS(t *testing.T) 
 			State:         domain.RevisionStateActive,
 			CreatedAt:     now,
 		},
-		Nodes:                   []domain.Node{nPrimary1, nPrimary2},
-		GlobalEmptyFallbackPass: boolPtr(true),
+		Nodes: []domain.Node{nPrimary1, nPrimary2},
 		Groups: []domain.NodeGroup{
 			{
 				ID:        groupUSID,
@@ -1289,7 +1288,6 @@ func TestBuildCurrentArtifact_PartialEmptyHongKong_UsesGlobalPASS(t *testing.T) 
 				Enabled:       true,
 			},
 		},
-		GlobalEmptyFallbackPass: boolPtr(true),
 		PrimarySubscriptionID:   "sub-primary",
 		PrimaryNodeIDs:          []string{primaryNodeID1, primaryNodeID2},
 		PrimaryUserInfo:         "upload=10; download=20; total=100; expire=1900000000",

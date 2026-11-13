@@ -269,6 +269,17 @@ describe('policy types and helpers', () => {
         platform: 'openai',
       })
     ).toBeNull()
+    for (const value of ['abnormal', 'skipped'] as const) {
+      expect(
+        validateConditionInput({
+          field: 'platform_verdict',
+          op: 'equals',
+          probe_kind: 'ai',
+          value,
+          platform: 'antigravity',
+        })
+      ).toBeNull()
+    }
     expect(
       validateConditionInput({
         field: 'platform_verdict',

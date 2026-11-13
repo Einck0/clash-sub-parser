@@ -475,6 +475,51 @@ func TestFilterConditionValidationMatrix(t *testing.T) {
 			wantError: false,
 		},
 		{
+			name: "platform_verdict valid ai antigravity",
+			condition: domain.FilterCondition{
+				Field:     domain.FilterFieldPlatformVerdict,
+				Op:        domain.FilterOpEquals,
+				Value:     "available",
+				ProbeKind: probeKindPtr(domain.ProbeKindAI),
+				Platform:  "antigravity",
+			},
+			wantError: false,
+		},
+		{
+			name: "platform_verdict valid abnormal",
+			condition: domain.FilterCondition{
+				Field:     domain.FilterFieldPlatformVerdict,
+				Op:        domain.FilterOpEquals,
+				Value:     "abnormal",
+				ProbeKind: probeKindPtr(domain.ProbeKindAI),
+				Platform:  "gemini",
+			},
+			wantError: false,
+		},
+		{
+			name: "platform_verdict valid skipped",
+			condition: domain.FilterCondition{
+				Field:     domain.FilterFieldPlatformVerdict,
+				Op:        domain.FilterOpEquals,
+				Value:     "skipped",
+				ProbeKind: probeKindPtr(domain.ProbeKindAI),
+				Platform:  "gemini",
+			},
+			wantError: false,
+		},
+		{
+			name: "platform_verdict invalid platform",
+			condition: domain.FilterCondition{
+				Field:     domain.FilterFieldPlatformVerdict,
+				Op:        domain.FilterOpEquals,
+				Value:     "available",
+				ProbeKind: probeKindPtr(domain.ProbeKindAI),
+				Platform:  "not-a-platform",
+			},
+			wantError: true,
+			errSubstr: "unsupported platform for probe kind",
+		},
+		{
 			name: "platform_verdict invalid platform for streaming",
 			condition: domain.FilterCondition{
 				Field:     domain.FilterFieldPlatformVerdict,
@@ -508,7 +553,7 @@ func TestFilterConditionValidationMatrix(t *testing.T) {
 				Platform:  "disney",
 			},
 			wantError: true,
-			errSubstr: "platform_verdict must be available, restricted, unknown, or error",
+			errSubstr: "platform_verdict must be",
 		},
 
 		// Unknown field
@@ -997,6 +1042,58 @@ func TestFilterConditionMatchingSemantics(t *testing.T) {
 			t.Fatal("nil ProbeKind on platform verdict must return false")
 		}
 	})
+}
+
+func TestPlatformVerdictMatchingUsesExactCurrentEvidence(t *testing.T) {
+	now := domain.NowUTC()
+	revision := int64(3)
+	node := domain.Node{LogicalID: "node-platform-filter", ConnectionRevision: revision}
+	kind := domain.ProbeKindAI
+
+	for _, verdict := range []domain.ProbeVerdict{domain.VerdictAbnormal, domain.VerdictSkipped} {
+		t.Run(string(verdict), func(t *testing.T) {
+			obs := domain.ProbeObservation{
+				Kind:               kind,
+				ConnectionRevision: &revision,
+				ObservedAt:         now.Add(-time.Minute),
+				Platforms: map[string]domain.PlatformCapability{
+					"antigravity": {Verdict: verdict},
+				},
+			}
+			observations := map[domain.ProbeKind]domain.ProbeObservation{kind: obs}
+			condition := func(op domain.FilterOp, value string) domain.FilterCondition {
+				return domain.FilterCondition{
+					Field: domain.FilterFieldPlatformVerdict,
+					Op:    op, Value: value, ProbeKind: probeKindPtr(kind), Platform: "antigravity",
+				}
+			}
+
+			for _, tc := range []struct {
+				name string
+				cond domain.FilterCondition
+				want bool
+			}{
+				{name: "equals exact verdict", cond: condition(domain.FilterOpEquals, string(verdict)), want: true},
+				{name: "not_equals different verdict", cond: condition(domain.FilterOpNotEquals, "available"), want: true},
+				{name: "equals different verdict", cond: condition(domain.FilterOpEquals, "available"), want: false},
+				{name: "not_equals exact verdict", cond: condition(domain.FilterOpNotEquals, string(verdict)), want: false},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					got, reason := domain.MatchesCondition(tc.cond, node, nil, observations, now)
+					if got != tc.want {
+						t.Fatalf("MatchesCondition() = %t, want %t (reason: %s)", got, tc.want, reason)
+					}
+				})
+			}
+
+			for _, op := range []domain.FilterOp{domain.FilterOpEquals, domain.FilterOpNotEquals} {
+				got, _ := domain.MatchesCondition(condition(op, string(verdict)), node, nil, nil, now)
+				if got {
+					t.Errorf("missing platform evidence must fail closed for %s", op)
+				}
+			}
+		})
+	}
 }
 
 func TestNodeFilterSpecJSONRoundtripAndAPIExample(t *testing.T) {

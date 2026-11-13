@@ -159,7 +159,7 @@ type FilterCondition struct {
 // Validate checks that the filter condition has valid fields, operators, values, and bounds.
 func validPlatformForKind(kind ProbeKind, platform string) bool {
 	platforms := map[ProbeKind]map[string]bool{
-		ProbeKindAI:        {"openai": true, "claude": true, "gemini": true},
+		ProbeKindAI:        {"openai": true, "claude": true, "gemini": true, "antigravity": true},
 		ProbeKindStreaming: {"netflix": true, "disney": true, "youtube": true},
 	}
 	return platforms[kind][strings.ToLower(strings.TrimSpace(platform))]
@@ -272,8 +272,8 @@ func (c FilterCondition) Validate() error {
 		if c.Op != FilterOpEquals && c.Op != FilterOpNotEquals {
 			return NewValidationError("invalid_filter_op", "platform_verdict only supports equals/not_equals")
 		}
-		if val != "available" && val != "restricted" && val != "unknown" && val != "error" {
-			return NewValidationError("invalid_filter_value", "platform_verdict must be available, restricted, unknown, or error")
+		if val != "available" && val != "restricted" && val != "unknown" && val != "error" && val != "abnormal" && val != "skipped" {
+			return NewValidationError("invalid_filter_value", "platform_verdict must be available, restricted, unknown, error, abnormal, or skipped")
 		}
 		if c.ProbeKind == nil || (*c.ProbeKind != ProbeKindAI && *c.ProbeKind != ProbeKindStreaming) {
 			return NewValidationError("invalid_probe_kind", "platform_verdict requires ai or streaming probe_kind")

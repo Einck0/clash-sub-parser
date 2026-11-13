@@ -302,6 +302,8 @@ export const SUPPORTED_PLATFORM_VERDICTS = [
   'restricted',
   'unknown',
   'error',
+  'abnormal',
+  'skipped',
 ] as const
 export type PlatformVerdict = typeof SUPPORTED_PLATFORM_VERDICTS[number]
 
@@ -309,6 +311,7 @@ export const SUPPORTED_AI_PLATFORMS = [
   'openai',
   'claude',
   'gemini',
+  'antigravity',
 ] as const
 export type AiPlatform = typeof SUPPORTED_AI_PLATFORMS[number]
 

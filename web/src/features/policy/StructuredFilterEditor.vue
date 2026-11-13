@@ -427,10 +427,7 @@ function opLabel(op: FilterOp): string {
               :disabled="readOnly"
               @change="emitConditions"
             >
-              <option value="available">available</option>
-              <option value="restricted">restricted</option>
-              <option value="unknown">unknown</option>
-              <option value="error">error</option>
+              <option v-for="verdict in SUPPORTED_PLATFORM_VERDICTS" :key="verdict" :value="verdict">{{ verdict }}</option>
             </select>
           </label>
         </template>

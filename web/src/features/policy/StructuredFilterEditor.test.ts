@@ -94,6 +94,31 @@ describe('StructuredFilterEditor real-locale i18n label verification', () => {
     expect(root.innerHTML).not.toContain('settings.filter')
   })
 
+  it('offers antigravity AI platform and abnormal/skipped verdicts in the editor', async () => {
+    const conditions: FilterCondition[] = [
+      { field: 'platform_verdict', op: 'equals', value: 'abnormal', probe_kind: 'ai', platform: 'antigravity' },
+      { field: 'platform_verdict', op: 'equals', value: 'skipped', probe_kind: 'ai', platform: 'antigravity' },
+    ]
+    mountEditor({ modelValue: conditions })
+    await flush()
+
+    const rows = root.querySelectorAll<HTMLElement>('[data-testid="filter-condition"]')
+    expect(rows).toHaveLength(2)
+
+    for (const [index, verdict] of ['abnormal', 'skipped'].entries()) {
+      const row = rows[index]!
+      const selects = Array.from(row.querySelectorAll<HTMLSelectElement>('select'))
+      const platformSelect = selects.find((select) => Array.from(select.options).some((option) => option.value === 'antigravity'))
+      const verdictSelect = row.querySelector<HTMLSelectElement>('[data-testid="condition-value"]')
+
+      expect(platformSelect).toBeDefined()
+      expect(Array.from(platformSelect!.options).map((option) => option.value)).toContain('antigravity')
+      expect(platformSelect!.value).toBe('antigravity')
+      expect(Array.from(verdictSelect!.options).map((option) => option.value)).toContain(verdict)
+      expect(verdictSelect!.value).toBe(verdict)
+    }
+  })
+
   it('does not render probe freshness input or obsolete freshness text under probe_verdict and probe_latency_ms', async () => {
     setLocale('zh-CN')
     const conditions: FilterCondition[] = [

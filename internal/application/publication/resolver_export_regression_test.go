@@ -658,7 +658,7 @@ func TestStrictPreflightDiagnostics_RequiredNonemptyAndMixedCapabilities(t *test
 			DisplayName:        "HK VLESS Node",
 			Server:             "198.51.100.61",
 			Port:               443,
-			Credentials:        domain.InboundProtocolCredential{UUID: "11111111-2222-3333-4444-555555555555"},
+			Credentials:        domain.InboundProtocolCredential{UUID: "11111111-2222-3333-4444-555555555555", Transport: map[string]string{"network": "kcp"}},
 			Active:             true,
 			ConnectionRevision: 1,
 			CreatedAt:          now,
@@ -786,7 +786,7 @@ func TestStrictPreflightDiagnostics_RequiredNonemptyAndMixedCapabilities(t *test
 			t.Fatal("preflight should fail for empty routed Tokyo group")
 		}
 		if len(preflight.Diagnostics) < 2 {
-			t.Fatalf("expected Tokyo empty-route and unsupported VLESS diagnostics together, got: %+v", preflight.Diagnostics)
+			t.Fatalf("expected Tokyo empty-route and unsupported VLESS transport diagnostics together, got: %+v", preflight.Diagnostics)
 		}
 		foundTokyoEmptyDiag := false
 		foundCapabilityDiag := false
@@ -816,8 +816,15 @@ func TestStrictPreflightDiagnostics_RequiredNonemptyAndMixedCapabilities(t *test
 		}
 	})
 
-	// Subtest 2: Strict capability failure on non-Mihomo target (Surge rejects VLESS in strict mode)
+	// Subtest 2: Strict capability failure on non-Mihomo target. The global
+	// filter is cleared so the pure-node Surge snapshot contains the VLESS node;
+	// Surge intentionally strips policy groups/rules.
 	t.Run("strict_capability_diagnostic_surge_rejects_vless", func(t *testing.T) {
+		if err := filterRepo.SetGlobalFilter(ctx, &domain.GlobalNodeFilter{
+			Spec: domain.NodeFilterSpec{}, EmptyFallbackPass: &globalEmptyPass, UpdatedAt: now,
+		}); err != nil {
+			t.Fatalf("clear global filter for Surge capability case: %v", err)
+		}
 		_, err := svc.Preview(ctx, publication.PreviewQuery{
 			Target:     domain.TargetSurge,
 			RevisionID: rev.ID,

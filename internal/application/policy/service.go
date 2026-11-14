@@ -23,7 +23,7 @@ type Service struct {
 	auditRepo        domain.AuditRepository
 	nodeFilterRepo   domain.NodeFilterRepository
 	snapshotProvider func(context.Context, string) (*resolver.ResolvedPolicySnapshot, error)
-	inputProvider    func(context.Context, string) (*resolver.ResolveInput, error)
+	inputProvider    func(context.Context, string, *domain.NodeGroup) (*resolver.ResolveInput, error)
 	mu               sync.Mutex
 }
 
@@ -53,7 +53,7 @@ func (s *Service) SetSnapshotProvider(provider func(context.Context, string) (*r
 }
 
 // SetInputProvider shares publication's raw input assembly for accurate draft preview.
-func (s *Service) SetInputProvider(provider func(context.Context, string) (*resolver.ResolveInput, error)) {
+func (s *Service) SetInputProvider(provider func(context.Context, string, *domain.NodeGroup) (*resolver.ResolveInput, error)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.inputProvider = provider
@@ -1193,7 +1193,7 @@ func (s *Service) PreviewGroup(ctx context.Context, cmd PreviewGroupCommand) (*G
 
 	var resInput resolver.ResolveInput
 	if s.inputProvider != nil {
-		baseInput, err := s.inputProvider(ctx, activeRevID)
+		baseInput, err := s.inputProvider(ctx, activeRevID, &previewGroup)
 		if err != nil {
 			return nil, err
 		}
@@ -1201,29 +1201,6 @@ func (s *Service) PreviewGroup(ctx context.Context, cmd PreviewGroupCommand) (*G
 			return nil, domain.NewInternalError("preview_input_unavailable", "publication input is unavailable")
 		}
 		resInput = *baseInput
-		simGroups := make([]domain.NodeGroup, len(baseInput.Groups))
-		copy(simGroups, baseInput.Groups)
-		simSources := make(map[string][]domain.MemberSource, len(baseInput.GroupSources)+1)
-		for k, v := range baseInput.GroupSources {
-			simSources[k] = v
-		}
-		foundGroup := false
-		for i := range simGroups {
-			if simGroups[i].ID == groupID {
-				simGroups[i] = previewGroup
-				foundGroup = true
-				break
-			}
-		}
-		if !foundGroup {
-			simGroups = append(simGroups, previewGroup)
-		}
-		simSources[groupID] = sources
-		for i := range simGroups {
-			simGroups[i].Sources = simSources[simGroups[i].ID]
-		}
-		resInput.Groups = simGroups
-		resInput.GroupSources = simSources
 	} else {
 		var polRules []domain.PolicyRule
 		var admRules []domain.AdmissionRule
@@ -1287,11 +1264,13 @@ func (s *Service) PreviewGroup(ctx context.Context, cmd PreviewGroupCommand) (*G
 				}
 			}
 		}
-		for _, src := range sources {
-			if src.FilterSpec != nil {
-				for _, c := range src.FilterSpec.Conditions {
-					if c.Field == domain.FilterFieldSourceSubscriptions || c.Field == domain.FilterFieldProbeVerdict || c.Field == domain.FilterFieldProbeLatencyMS || c.Field == domain.FilterFieldHealthStatus || c.Field == domain.FilterFieldExitRegion || c.Field == domain.FilterFieldPlatformVerdict {
-						return nil, domain.NewInternalError("preview_incomplete", "publication input provider required for evidence filters")
+		for _, group := range simulatedGroups {
+			for _, src := range group.Sources {
+				if src.FilterSpec != nil {
+					for _, c := range src.FilterSpec.Conditions {
+						if c.Field == domain.FilterFieldSourceSubscriptions || c.Field == domain.FilterFieldProbeVerdict || c.Field == domain.FilterFieldProbeLatencyMS || c.Field == domain.FilterFieldHealthStatus || c.Field == domain.FilterFieldExitRegion || c.Field == domain.FilterFieldPlatformVerdict {
+							return nil, domain.NewInternalError("preview_incomplete", "publication input provider required for evidence filters")
+						}
 					}
 				}
 			}
@@ -1580,7 +1559,7 @@ func (s *Service) ValidateGraph(ctx context.Context) (*ValidationResult, error) 
 			return nil, fmt.Errorf("validation incomplete: %w", snapErr)
 		}
 	} else if s.inputProvider != nil {
-		input, err := s.inputProvider(ctx, activeRevID)
+		input, err := s.inputProvider(ctx, activeRevID, nil)
 		if err != nil {
 			return nil, fmt.Errorf("validation incomplete: %w", err)
 		}

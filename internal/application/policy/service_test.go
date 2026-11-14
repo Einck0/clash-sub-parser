@@ -1704,7 +1704,7 @@ func TestPolicyService_PreviewGroup_InputProvider_ConsistentFacts_And_Errors(t *
 
 	// 1. Error propagation: if inputProvider returns an error, PreviewGroup must return the error, not fallback.
 	expectedErr := fmt.Errorf("database connection pool exhausted")
-	svc.SetInputProvider(func(ctx context.Context, revID string) (*resolver.ResolveInput, error) {
+	svc.SetInputProvider(func(ctx context.Context, revID string, draft *domain.NodeGroup) (*resolver.ResolveInput, error) {
 		return nil, expectedErr
 	})
 
@@ -1733,8 +1733,11 @@ func TestPolicyService_PreviewGroup_InputProvider_ConsistentFacts_And_Errors(t *
 			Nameservers: []string{"1.1.1.1"},
 		},
 	}
-	svc.SetInputProvider(func(ctx context.Context, revID string) (*resolver.ResolveInput, error) {
-		return &mockInput, nil
+	svc.SetInputProvider(func(ctx context.Context, revID string, draft *domain.NodeGroup) (*resolver.ResolveInput, error) {
+		input := mockInput
+		input.Groups = []domain.NodeGroup{*draft}
+		input.GroupSources = map[string][]domain.MemberSource{draft.ID: draft.Sources}
+		return &input, nil
 	})
 
 	resp, err := svc.PreviewGroup(ctx, policy.PreviewGroupCommand{
@@ -1810,7 +1813,7 @@ func TestPolicyService_ValidateGraph_WithInputProvider(t *testing.T) {
 	// Set inputProvider that returns error
 	svc.SetSnapshotProvider(nil)
 	expectedErr := fmt.Errorf("underlying storage unavailable")
-	svc.SetInputProvider(func(ctx context.Context, revID string) (*resolver.ResolveInput, error) {
+	svc.SetInputProvider(func(ctx context.Context, revID string, draft *domain.NodeGroup) (*resolver.ResolveInput, error) {
 		return nil, expectedErr
 	})
 

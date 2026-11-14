@@ -913,10 +913,15 @@ func (s *Service) ResolvePolicySnapshot(ctx context.Context, revisionID string) 
 
 // AssembleResolveInput compiles all necessary domain inputs (nodes, group sources, filters, risk decisions) into a resolver.ResolveInput.
 func (s *Service) AssembleResolveInput(ctx context.Context, revisionID string) (*resolver.ResolveInput, error) {
-	return s.assembleResolveInput(ctx, revisionID, true)
+	return s.assembleResolveInput(ctx, revisionID, true, nil)
 }
 
-func (s *Service) assembleResolveInput(ctx context.Context, revisionID string, includeGraph bool) (*resolver.ResolveInput, error) {
+// AssembleResolveInputForPreview includes the draft when collecting input dependencies.
+func (s *Service) AssembleResolveInputForPreview(ctx context.Context, revisionID string, draft *domain.NodeGroup) (*resolver.ResolveInput, error) {
+	return s.assembleResolveInput(ctx, revisionID, true, draft)
+}
+
+func (s *Service) assembleResolveInput(ctx context.Context, revisionID string, includeGraph bool, draft *domain.NodeGroup) (*resolver.ResolveInput, error) {
 	if s.policyRepo == nil || s.revisionRepo == nil || s.nodeRepo == nil || s.resolver == nil {
 		return nil, domain.NewInternalError("missing_dependencies", "policy, revision, or node repository not configured")
 	}
@@ -966,6 +971,21 @@ func (s *Service) assembleResolveInput(ctx context.Context, revisionID string, i
 			if err != nil {
 				return nil, err
 			}
+		}
+	}
+
+	if draft != nil {
+		groups = append([]domain.NodeGroup(nil), groups...)
+		found := false
+		for i := range groups {
+			if groups[i].ID == draft.ID {
+				groups[i] = *draft
+				found = true
+				break
+			}
+		}
+		if !found {
+			groups = append(groups, *draft)
 		}
 	}
 
@@ -1153,7 +1173,7 @@ func hasRoutedEmptyPass(snapshot *resolver.ResolvedPolicySnapshot, target domain
 }
 
 func (s *Service) resolveTargetSnapshot(ctx context.Context, revisionID string, target domain.CompilerTarget) (*resolver.ResolvedPolicySnapshot, error) {
-	input, err := s.assembleResolveInput(ctx, revisionID, target == domain.TargetMihomo)
+	input, err := s.assembleResolveInput(ctx, revisionID, target == domain.TargetMihomo, nil)
 	if err != nil {
 		return nil, err
 	}

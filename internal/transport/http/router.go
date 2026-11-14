@@ -55,7 +55,7 @@ type RouterConfig struct {
 func NewRouter(cfg RouterConfig) http.Handler {
 	if cfg.PolicyService != nil && cfg.PublicationService != nil {
 		cfg.PolicyService.SetSnapshotProvider(cfg.PublicationService.ResolvePolicySnapshot)
-		cfg.PolicyService.SetInputProvider(cfg.PublicationService.AssembleResolveInput)
+		cfg.PolicyService.SetInputProvider(cfg.PublicationService.AssembleResolveInputForPreview)
 	}
 	if cfg.ProxyChainService != nil && cfg.PublicationService != nil {
 		cfg.ProxyChainService.SetInputProvider(func(ctx context.Context) (*resolver.ResolveInput, error) {

@@ -980,8 +980,10 @@ func TestPolicyHandler_PreviewGroup_Fields(t *testing.T) {
 	n2 := domain.Node{LogicalID: "node-us-02", DisplayName: "US 02", Protocol: domain.ProtocolHysteria2, Active: true}
 	patHK := "HK.*"
 
-	policySvc.SetInputProvider(func(ctx context.Context, revID string) (*resolver.ResolveInput, error) {
+	policySvc.SetInputProvider(func(ctx context.Context, revID string, draft *domain.NodeGroup) (*resolver.ResolveInput, error) {
 		return &resolver.ResolveInput{
+			Groups:             []domain.NodeGroup{*draft},
+			GroupSources:       map[string][]domain.MemberSource{draft.ID: draft.Sources},
 			RevisionID:         "rev-preview-test",
 			InventoryWatermark: "wm-1",
 			CompilerVersion:    "1.0.0",
@@ -1058,8 +1060,10 @@ func TestPolicyHandler_PreviewGroup_Pipeline_AddRemoveReentrantExclusion(t *test
 	n2 := domain.Node{LogicalID: "0192e100-0000-7000-9100-000000000002", DisplayName: "London Synthetic Beta", Protocol: domain.ProtocolVLESS, Active: true}
 	n3 := domain.Node{LogicalID: "0192e100-0000-7000-9100-000000000003", DisplayName: "Singapore Synthetic Gamma", Protocol: domain.ProtocolTrojan, Active: true}
 
-	policySvc.SetInputProvider(func(ctx context.Context, revID string) (*resolver.ResolveInput, error) {
+	policySvc.SetInputProvider(func(ctx context.Context, revID string, draft *domain.NodeGroup) (*resolver.ResolveInput, error) {
 		return &resolver.ResolveInput{
+			Groups:             []domain.NodeGroup{*draft},
+			GroupSources:       map[string][]domain.MemberSource{draft.ID: draft.Sources},
 			RevisionID:         "rev-preview-pipeline",
 			InventoryWatermark: "wm-1",
 			CompilerVersion:    "1.0.0",

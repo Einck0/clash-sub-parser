@@ -139,7 +139,7 @@ func NodeToMapping(node domain.Node) (map[string]any, error) {
 	case domain.ProtocolVLESS:
 		m["type"] = "vless"
 		m["uuid"] = strings.TrimSpace(c.UUID)
-		net := strings.ToLower(transportValue(c, "network"))
+		net := domain.NormalizeTransportNetwork(node.Protocol, transportValue(c, "network"))
 		if net == "" {
 			net = "tcp"
 		}

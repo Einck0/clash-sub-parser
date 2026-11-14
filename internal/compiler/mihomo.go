@@ -309,7 +309,7 @@ func validateMihomoCredentials(snapshot *resolver.ResolvedPolicySnapshot) error 
 				return mihomoError(loc, "vmess", fmt.Sprintf("unsupported network %q in vmess transport", net))
 			}
 		case domain.ProtocolVLESS:
-			net := strings.ToLower(transportValue(c, "network"))
+			net := domain.NormalizeTransportNetwork(node.Protocol, transportValue(c, "network"))
 			if net != "" && net != "tcp" && net != "ws" && net != "grpc" && net != "xhttp" {
 				return mihomoError(loc, "vless", fmt.Sprintf("unsupported network %q in vless transport", net))
 			}
@@ -1302,7 +1302,7 @@ func renderMihomo(snapshot *resolver.ResolvedPolicySnapshot) ([]byte, error) {
 				Server:            node.Server,
 				Port:              node.Port,
 				UUID:              strings.TrimSpace(c.UUID),
-				Network:           strings.ToLower(transportValue(c, "network")),
+				Network:           domain.NormalizeTransportNetwork(node.Protocol, transportValue(c, "network")),
 				TLS:               domain.IsTruthy(transportValue(c, "tls")) || realityOpts != nil,
 				Servername:        transportValue(c, "sni", "servername", "serverName", "peer"),
 				SkipCertVerify:    domain.HasInsecureTransport(c.Transport),

@@ -678,6 +678,18 @@ func (s *Service) persistPreviewArtifact(ctx context.Context, revID string, arti
 	}, nil
 }
 
+func strictDiagnosticSummary(diags []compiler.CapabilityDiagnostic) (string, string) {
+	for _, d := range diags {
+		if d.Code != "required_nonempty" && d.Code != "empty_group" {
+			return "unsupported_target_capability", fmt.Sprintf("target capability validation failed in strict mode: %s", d.Message)
+		}
+	}
+	if len(diags) > 0 {
+		return "required_nonempty", fmt.Sprintf("group nonempty validation failed: %s", diags[0].Message)
+	}
+	return "unsupported_target_capability", "target capability validation failed in strict mode"
+}
+
 func (s *Service) persistFailedDraft(ctx context.Context, revID string, target domain.CompilerTarget, snapshot *resolver.ResolvedPolicySnapshot, diags []compiler.CapabilityDiagnostic) *StrictCapabilityError {
 	draftID := "snapshot_" + domain.MustNewUUIDv7()
 	now := domain.NowUTC()
@@ -707,11 +719,7 @@ func (s *Service) persistFailedDraft(ctx context.Context, revID string, target d
 		_ = s.pubRepo.Create(ctx, &draftPub)
 	}
 
-	code := "unsupported_target_capability"
-	msg := "target capability validation failed in strict mode"
-	if len(diags) > 0 {
-		msg = fmt.Sprintf("target capability validation failed in strict mode: %s", diags[0].Message)
-	}
+	code, msg := strictDiagnosticSummary(diags)
 	return &StrictCapabilityError{
 		Code:        code,
 		Message:     msg,
@@ -1229,9 +1237,9 @@ func (s *Service) resolveTargetSnapshot(ctx context.Context, revisionID string, 
 	}
 	counts := snapshot.FilterCounts
 	if counts != nil && counts.AdmittedTotal > 0 {
-		globallyEmpty := input.GlobalFilter != nil && !input.GlobalFilter.IsEmpty() && counts.GlobalFilteredTotal == 0 && !hasRoutedEmptyPass(snapshot, target)
+		noFinalExportNodes := input.GlobalFilter != nil && !input.GlobalFilter.IsEmpty() && counts.GlobalFilteredTotal == 0 && len(snapshot.Nodes) == 0 && !hasRoutedEmptyPass(snapshot, target)
 		groupEmpty := false
-		if !globallyEmpty && counts.GroupFilteredTotal == 0 {
+		if !noFinalExportNodes && counts.GroupFilteredTotal == 0 {
 			for _, group := range input.Groups {
 				hasFilter := false
 				for _, source := range group.Sources {
@@ -1253,7 +1261,7 @@ func (s *Service) resolveTargetSnapshot(ctx context.Context, revisionID string, 
 				}
 			}
 		}
-		if globallyEmpty || groupEmpty {
+		if noFinalExportNodes || groupEmpty {
 			snapshot.Diagnostics = append(snapshot.Diagnostics, resolver.Diagnostic{
 				Severity: resolver.DiagnosticSeverityError,
 				Code:     "filtered_nodes_empty",
@@ -1698,9 +1706,9 @@ func (s *Service) buildArtifactPipeline(ctx context.Context, facts *domain.Consi
 
 	counts := snapshot.FilterCounts
 	if counts != nil && counts.AdmittedTotal > 0 {
-		globallyEmpty := input.GlobalFilter != nil && !input.GlobalFilter.IsEmpty() && counts.GlobalFilteredTotal == 0 && !hasRoutedEmptyPass(snapshot, target)
+		noFinalExportNodes := input.GlobalFilter != nil && !input.GlobalFilter.IsEmpty() && counts.GlobalFilteredTotal == 0 && len(snapshot.Nodes) == 0 && !hasRoutedEmptyPass(snapshot, target)
 		groupEmpty := false
-		if !globallyEmpty && counts.GroupFilteredTotal == 0 && target == domain.TargetMihomo {
+		if !noFinalExportNodes && counts.GroupFilteredTotal == 0 && target == domain.TargetMihomo {
 			for _, group := range input.Groups {
 				hasFilter := false
 				for _, source := range group.Sources {
@@ -1722,7 +1730,7 @@ func (s *Service) buildArtifactPipeline(ctx context.Context, facts *domain.Consi
 				}
 			}
 		}
-		if globallyEmpty || groupEmpty {
+		if noFinalExportNodes || groupEmpty {
 			snapshot.Diagnostics = append(snapshot.Diagnostics, resolver.Diagnostic{
 				Severity: resolver.DiagnosticSeverityError,
 				Code:     "filtered_nodes_empty",
@@ -1857,9 +1865,10 @@ func (s *Service) buildArtifactPipeline(ctx context.Context, facts *domain.Consi
 		}
 	}
 	if !hasRiskBlocker && len(diags) > 0 && (hasProtocolBlocker || cfg.mode == exportModeStrict) {
+		code, message := strictDiagnosticSummary(diags)
 		return nil, snapshot, &StrictCapabilityError{
-			Code:        "unsupported_target_capability",
-			Message:     fmt.Sprintf("target capability validation failed in strict mode: %s", diags[0].Message),
+			Code:        code,
+			Message:     message,
 			Diagnostics: diags,
 		}
 	}

@@ -30,6 +30,11 @@ func TestPolicyPreview_UnsavedPlatformFilterUsesDraftEvidenceDependencies(t *tes
 		t.Fatalf("create synthetic subscription: %v", err)
 	}
 
+	fetchID := "preview-fetch"
+	if _, err := db.ExecContext(ctx, `INSERT INTO subscription_fetches (id, subscription_id, started_at, finished_at, outcome) VALUES (?, ?, ?, ?, 'success')`, fetchID, sub.ID, now.Format(time.RFC3339), now.Format(time.RFC3339)); err != nil {
+		t.Fatalf("insert successful synthetic fetch: %v", err)
+	}
+
 	// The precise acceptance boundary is seven enabled candidates with valid,
 	// connection-current evidence: exactly one has antigravity=abnormal.
 	const nodesTableInsert = `INSERT INTO nodes (logical_id, protocol, display_name, server, port, config_json, active, created_at, updated_at, connection_revision)
@@ -42,7 +47,7 @@ VALUES (?, 'ss', ?, '198.51.100.1', 8388, '{}', 1, ?, ?, 1)`
 		if _, err := db.ExecContext(ctx, nodesTableInsert, id, name, now.Format(time.RFC3339), now.Format(time.RFC3339)); err != nil {
 			t.Fatalf("insert synthetic node %s: %v", id, err)
 		}
-		if _, err := db.ExecContext(ctx, `INSERT INTO node_sources (node_logical_id, subscription_id) VALUES (?, ?)`, id, sub.ID); err != nil {
+		if _, err := db.ExecContext(ctx, `INSERT INTO node_sources (node_logical_id, subscription_id, last_seen_fetch_id) VALUES (?, ?, ?)`, id, sub.ID, fetchID); err != nil {
 			t.Fatalf("associate synthetic node %s: %v", id, err)
 		}
 		nodeIDs = append(nodeIDs, id)
@@ -74,7 +79,7 @@ VALUES (?, 'ss', ?, '198.51.100.1', 8388, '{}', 1, ?, ?, 1)`
 	if _, err := db.ExecContext(ctx, `INSERT INTO nodes (logical_id, protocol, display_name, server, port, config_json, active, created_at, updated_at, connection_revision) VALUES ('preview-inactive', 'ss', 'Synthetic inactive', '198.51.100.2', 8388, '{}', 0, ?, ?, 1)`, now.Format(time.RFC3339), now.Format(time.RFC3339)); err != nil {
 		t.Fatalf("insert inactive candidate: %v", err)
 	}
-	if _, err := db.ExecContext(ctx, `INSERT INTO node_sources (node_logical_id, subscription_id) VALUES (?, ?)`, "preview-inactive", sub.ID); err != nil {
+	if _, err := db.ExecContext(ctx, `INSERT INTO node_sources (node_logical_id, subscription_id, last_seen_fetch_id) VALUES (?, ?, ?)`, "preview-inactive", sub.ID, fetchID); err != nil {
 		t.Fatalf("associate inactive candidate: %v", err)
 	}
 

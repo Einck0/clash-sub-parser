@@ -49,7 +49,7 @@ func (r *draftObservationBatchRepo) ListLatestByNodes(_ context.Context, ids []s
 func draftFilterService(t *testing.T, policy *mockPolicyRepo, sources domain.NodeSourceRepository, observations domain.ProbeObservationRepository) *publication.Service {
 	t.Helper()
 	ctx := context.Background()
-	revisions := &mockRevisionRepo{}
+	revisions := newMockRevisionRepo()
 	if err := revisions.CreateActive(ctx, &domain.ConfigurationRevision{ID: "rev-draft-dependencies", ContentDigest: "sha256:draft-dependencies"}); err != nil {
 		t.Fatal(err)
 	}

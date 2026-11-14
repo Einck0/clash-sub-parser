@@ -904,17 +904,21 @@ func TestPolicyScale_IsolatedAPI_250Nodes150Groups(t *testing.T) {
 	// SCENARIO I: Fail-Closed on filtered_nodes_empty
 	// -------------------------------------------------------------
 	t.Run("fail_closed_on_filtered_nodes_empty", func(t *testing.T) {
-		// Set a global filter that matches NOTHING
+		// This regression tests global-filter rejection, so its groups must inherit it.
+		if _, err := db.ExecContext(ctx, `UPDATE node_groups SET inherit_global_filter = 1 WHERE id = ?`, rootGroupID); err != nil {
+			t.Fatalf("enable global filter inheritance for root group fixture: %v", err)
+		}
+		globalEmptyPass := false
+		// Set a global filter that matches NOTHING and does not allow empty fallback.
 		emptyCond := domain.FilterCondition{
 			Field: domain.FilterFieldDisplayName,
 			Op:    domain.FilterOpContains,
 			Value: "NON_EXISTENT_MAGIC_VALUE_99999",
 		}
 		err := nodeFilterRepo.SetGlobalFilter(ctx, &domain.GlobalNodeFilter{
-			Spec: domain.NodeFilterSpec{
-				Conditions: []domain.FilterCondition{emptyCond},
-			},
-			UpdatedAt: time.Now().UTC(),
+			Spec:              domain.NodeFilterSpec{Conditions: []domain.FilterCondition{emptyCond}},
+			EmptyFallbackPass: &globalEmptyPass,
+			UpdatedAt:         time.Now().UTC(),
 		})
 		if err != nil {
 			t.Fatalf("set global filter failed: %v", err)

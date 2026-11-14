@@ -66,6 +66,9 @@ func TestPublicationFilterDiagnosticsOverHTTP(t *testing.T) {
 			t.Run(name, func(t *testing.T) {
 				db := newCleanSQLiteDB(t)
 				seedSamplePolicyData(t, db)
+				if _, err := db.Exec("UPDATE node_groups SET inherit_global_filter = 1"); err != nil {
+					t.Fatal(err)
+				}
 				if !withRoute {
 					if _, err := db.Exec("DELETE FROM policy_rules"); err != nil {
 						t.Fatal(err)
@@ -77,9 +80,13 @@ func TestPublicationFilterDiagnosticsOverHTTP(t *testing.T) {
 
 				// A configured condition eliminates the seeded node; both raw and JSON previews
 				// must report the same admission rejection as preflight and publish.
-				filter := &domain.GlobalNodeFilter{Spec: domain.NodeFilterSpec{Conditions: []domain.FilterCondition{{
-					Field: domain.FilterFieldDisplayName, Op: domain.FilterOpContains, Value: "never-matches-tokyo",
-				}}}}
+				falseVal := false
+				filter := &domain.GlobalNodeFilter{
+					Spec: domain.NodeFilterSpec{Conditions: []domain.FilterCondition{{
+						Field: domain.FilterFieldDisplayName, Op: domain.FilterOpContains, Value: "never-matches-tokyo",
+					}}},
+					EmptyFallbackPass: &falseVal,
+				}
 				if err := filterRepo.SetGlobalFilter(ctx, filter); err != nil {
 					t.Fatal(err)
 				}

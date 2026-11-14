@@ -1239,7 +1239,7 @@ func (s *Service) resolveTargetSnapshot(ctx context.Context, revisionID string, 
 	if counts != nil && counts.AdmittedTotal > 0 {
 		noFinalExportNodes := input.GlobalFilter != nil && !input.GlobalFilter.IsEmpty() && counts.GlobalFilteredTotal == 0 && len(snapshot.Nodes) == 0 && !hasRoutedEmptyPass(snapshot, target)
 		groupEmpty := false
-		if !noFinalExportNodes && counts.GroupFilteredTotal == 0 {
+		if target == domain.TargetMihomo && !noFinalExportNodes && counts.GroupFilteredTotal == 0 {
 			for _, group := range input.Groups {
 				hasFilter := false
 				for _, source := range group.Sources {

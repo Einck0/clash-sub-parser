@@ -126,8 +126,17 @@ func TestEmptyPassHTTPRoundtripPublicationAndSharedValidation(t *testing.T) {
 		t.Fatal("globally disabled empty route no longer blocked")
 	}
 	// Evidence-dependent filtering uses the very same publication input provider.
+	// Update seeded ProxyGroup to inherit global filter so that global exclusion applies to it.
+	if _, err := db.ExecContext(ctx, "UPDATE node_groups SET inherit_global_filter = 1 WHERE name = 'ProxyGroup'"); err != nil {
+		t.Fatal(err)
+	}
 	kind := domain.ProbeKindBaseline
-	if err := filters.SetGlobalFilter(ctx, &domain.GlobalNodeFilter{Spec: domain.NodeFilterSpec{Conditions: []domain.FilterCondition{{Field: domain.FilterFieldProbeVerdict, Op: domain.FilterOpEquals, Value: "available", ProbeKind: &kind}}}, UpdatedAt: time.Now()}); err != nil {
+	globalEmptyPassFalse := false
+	if err := filters.SetGlobalFilter(ctx, &domain.GlobalNodeFilter{
+		Spec:              domain.NodeFilterSpec{Conditions: []domain.FilterCondition{{Field: domain.FilterFieldProbeVerdict, Op: domain.FilterOpEquals, Value: "available", ProbeKind: &kind}}},
+		EmptyFallbackPass: &globalEmptyPassFalse,
+		UpdatedAt:         time.Now(),
+	}); err != nil {
 		t.Fatal(err)
 	}
 	check = request(http.MethodPost, "/api/v1/policies/validate", "")

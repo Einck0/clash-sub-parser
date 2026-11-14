@@ -655,7 +655,7 @@ func TestStrictPreflightDiagnostics_RequiredNonemptyAndMixedCapabilities(t *test
 		{
 			LogicalID:          vlessID,
 			Protocol:           domain.ProtocolVLESS,
-			DisplayName:        "VLESS Node",
+			DisplayName:        "HK VLESS Node",
 			Server:             "198.51.100.61",
 			Port:               443,
 			Credentials:        domain.InboundProtocolCredential{UUID: "11111111-2222-3333-4444-555555555555"},
@@ -702,7 +702,7 @@ func TestStrictPreflightDiagnostics_RequiredNonemptyAndMixedCapabilities(t *test
 		ID:                  emptyGroupID,
 		Name:                "Tokyo Group",
 		GroupType:           domain.GroupTypeSelect,
-		InheritGlobalFilter: false,
+		InheritGlobalFilter: true,
 		EmptyFallbackPass:   false,
 		CreatedAt:           now,
 		UpdatedAt:           now,
@@ -717,7 +717,8 @@ func TestStrictPreflightDiagnostics_RequiredNonemptyAndMixedCapabilities(t *test
 		t.Fatalf("create empty group: %v", err)
 	}
 
-	// Route the empty group with MATCH rule
+	// Route the empty Tokyo group with MATCH rule. A separate non-inheriting HK
+	// group has a real member, but must not make Tokyo's empty route valid.
 	if err := policyRepo.CreatePolicyRule(ctx, &domain.PolicyRule{
 		ID:            domain.MustNewUUIDv7(),
 		RevisionID:    rev.ID,
@@ -726,6 +727,20 @@ func TestStrictPreflightDiagnostics_RequiredNonemptyAndMixedCapabilities(t *test
 		Enabled:       true,
 	}); err != nil {
 		t.Fatalf("create MATCH rule for empty group: %v", err)
+	}
+	hkGroupID := domain.MustNewUUIDv7()
+	patHK := "(?i)hk"
+	if _, err := policyRepo.SaveGroupWithSources(ctx, &domain.NodeGroup{
+		ID: hkGroupID, Name: "HK Group", GroupType: domain.GroupTypeSelect,
+		InheritGlobalFilter: false, EmptyFallbackPass: false, CreatedAt: now, UpdatedAt: now,
+	}, 0, []domain.MemberSource{{Operation: domain.OperationAdd, Kind: domain.SourceKindRegex, Pattern: &patHK}}); err != nil {
+		t.Fatalf("create non-inheriting HK group: %v", err)
+	}
+	if err := policyRepo.CreatePolicyRule(ctx, &domain.PolicyRule{
+		ID: domain.MustNewUUIDv7(), RevisionID: rev.ID, TargetGroupID: hkGroupID,
+		Expression: "MATCH", Enabled: true,
+	}); err != nil {
+		t.Fatalf("create HK MATCH rule: %v", err)
 	}
 
 	factsLoader := sqlite.NewConsistentFactsLoader(db)
@@ -746,6 +761,16 @@ func TestStrictPreflightDiagnostics_RequiredNonemptyAndMixedCapabilities(t *test
 		publication.WithNodeSourceRepository(sourceRepo),
 		publication.WithConsistentFactsLoader(factsLoader),
 	)
+	globalEmptyPass := false
+	if err := filterRepo.SetGlobalFilter(ctx, &domain.GlobalNodeFilter{
+		Spec: domain.NodeFilterSpec{Conditions: []domain.FilterCondition{{
+			Field: domain.FilterFieldDisplayName, Op: domain.FilterOpContains, Value: "no-node-matches-this-filter",
+		}}},
+		EmptyFallbackPass: &globalEmptyPass,
+		UpdatedAt:         now,
+	}); err != nil {
+		t.Fatalf("set empty global filter for independent empty-route regression: %v", err)
+	}
 
 	// Subtest 1: Pure required_nonempty / empty_routed_group on Mihomo target
 	t.Run("pure_empty_routed_group_preflight_diagnostic", func(t *testing.T) {
@@ -758,6 +783,22 @@ func TestStrictPreflightDiagnostics_RequiredNonemptyAndMixedCapabilities(t *test
 		}
 		if preflight.Allowed {
 			t.Fatal("preflight should fail for empty routed Tokyo group")
+		}
+		if len(preflight.Diagnostics) < 2 {
+			t.Fatalf("expected Tokyo empty-route and unsupported VLESS diagnostics together, got: %+v", preflight.Diagnostics)
+		}
+		foundTokyoEmptyDiag := false
+		foundCapabilityDiag := false
+		for _, d := range preflight.Diagnostics {
+			if d.Code == "empty_routed_group" && d.Target == emptyGroupID {
+				foundTokyoEmptyDiag = true
+			}
+			if d.Code == "unsupported_target_capability" {
+				foundCapabilityDiag = true
+			}
+		}
+		if !foundTokyoEmptyDiag || !foundCapabilityDiag {
+			t.Fatalf("expected both Tokyo empty-route and capability diagnostics, got: %+v", preflight.Diagnostics)
 		}
 		foundEmptyDiag := false
 		for _, d := range preflight.Diagnostics {

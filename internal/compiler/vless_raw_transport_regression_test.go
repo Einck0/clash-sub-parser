@@ -95,10 +95,11 @@ func TestCompileMihomo_VLESSStoredRawUsesTCPWithoutMutatingIdentityOrCredentials
 
 func TestCompileMihomo_UnknownVLESSTransportRemainsUnsupported(t *testing.T) {
 	snapshot := &resolver.ResolvedPolicySnapshot{Nodes: []resolver.ResolvedNode{{
-		LogicalID: "synthetic-vless-unknown-transport",
-		Protocol:  domain.ProtocolVLESS,
-		Server:    "vless.synthetic.invalid",
-		Port:      443,
+		LogicalID:   "synthetic-vless-unknown-transport",
+		Protocol:    domain.ProtocolVLESS,
+		DisplayName: "Unknown transport fixture",
+		Server:      "vless.synthetic.invalid",
+		Port:        443,
 		Credentials: domain.InboundProtocolCredential{
 			UUID:      "11111111-2222-4333-8444-555555555555",
 			Transport: map[string]string{"network": "unrecognized-transport"},

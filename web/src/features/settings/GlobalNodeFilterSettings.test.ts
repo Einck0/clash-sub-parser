@@ -85,6 +85,8 @@ describe('global export filter settings', () => {
     const field = conditions()[0]!.querySelector('select[aria-label="Field"]') as HTMLSelectElement
     expect([...field.options].map((o) => o.value)).toEqual([
       'health_status',
+      'ip_risk_band',
+      'ip_risk_score',
       'exit_region',
       'platform_verdict',
       'display_name',

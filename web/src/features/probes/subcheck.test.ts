@@ -203,7 +203,7 @@ export const subcheckFixtureNodes: Record<string, NodeRecord> = {
     active: true,
     capabilities: {
       ip_risk: {
-        verdict: 'restricted',
+        verdict: 'available',
         risk_score: '35',
       },
     },
@@ -528,6 +528,15 @@ describe('Subcheck Platform Capability Matrix & Fixture Tests', () => {
   })
 
   describe('Node normalization with subcheck platforms dictionary', () => {
+    it('keeps a restricted risk check unknown even when it carries a numeric score', () => {
+      const node: NodeRecord = {
+        ...subcheckFixtureNodes.ipRiskMedium,
+        capabilities: { ip_risk: { verdict: 'restricted', risk_score: '35' } },
+      }
+      expect(nodeRiskBadge(node)).toEqual({ label: '风险未知', tone: 'info' })
+      expect(nodeRiskBadge(normalizeNode(node))).toEqual({ label: '风险未知', tone: 'info' })
+    })
+
     it('extracts platform badges, throughput, and risk scores into NormalizedNode', () => {
       const normAiFull = normalizeNode(subcheckFixtureNodes.aiFull)
       const aiBadges = getNodePlatformBadges(normAiFull, 'ai')

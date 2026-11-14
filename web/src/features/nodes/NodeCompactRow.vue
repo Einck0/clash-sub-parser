@@ -90,7 +90,7 @@ const hasPlatformDetails = computed(() => {
       </div>
 
       <!-- Col 2: Protocol Connection, Targets & Geo -->
-      <div class="flex flex-wrap md:flex-nowrap items-center gap-1.5 text-[11px] font-mono opacity-80 min-w-0 md:w-1/5 shrink-0">
+      <div class="flex flex-wrap items-center gap-1.5 text-[11px] font-mono opacity-80 min-w-0 md:w-1/5 shrink-0 [&>span]:max-w-full [&>span]:min-w-0">
         <span class="hidden md:inline-flex badge badge-outline font-mono text-xs uppercase shrink-0">{{ node.protocol }}</span>
         <span
           v-if="geoRegion"
@@ -100,18 +100,25 @@ const hasPlatformDetails = computed(() => {
         >
           {{ geoRegion }}
         </span>
-        <span class="badge badge-xs badge-ghost truncate">
+        <span
+          class="badge badge-xs badge-ghost block truncate"
+          :title="`兼容: ${protocolSupportedTargets(node.protocol).join('/')}`"
+        >
           兼容: {{ protocolSupportedTargets(node.protocol).join('/') }}
         </span>
         <span
           v-if="node.connection.server && node.connection.port"
-          class="badge badge-xs badge-ghost truncate"
+          class="badge badge-xs badge-ghost block truncate"
           :title="`${node.connection.server}:${node.connection.port}`"
         >
           {{ node.connection.server }}:{{ node.connection.port }}
         </span>
         <template v-if="node.protocol.toLowerCase() === 'wireguard'">
-          <span v-if="node.connection.localAddress.length" class="badge badge-xs badge-info badge-outline truncate">
+          <span
+            v-if="node.connection.localAddress.length"
+            class="badge badge-xs badge-info badge-outline block truncate"
+            :title="node.connection.localAddress.join(', ')"
+          >
             {{ node.connection.localAddress.join(', ') }}
           </span>
           <span v-if="node.connection.mtu" class="badge badge-xs badge-ghost">
@@ -119,10 +126,18 @@ const hasPlatformDetails = computed(() => {
           </span>
         </template>
         <template v-else-if="node.protocol.toLowerCase() === 'tuic'">
-          <span v-if="node.connection.congestionControl" class="badge badge-xs badge-info badge-outline">
+          <span
+            v-if="node.connection.congestionControl"
+            class="badge badge-xs badge-info badge-outline block truncate"
+            :title="node.connection.congestionControl"
+          >
             {{ node.connection.congestionControl }}
           </span>
-          <span v-if="node.connection.udpRelayMode" class="badge badge-xs badge-ghost">
+          <span
+            v-if="node.connection.udpRelayMode"
+            class="badge badge-xs badge-ghost block truncate"
+            :title="node.connection.udpRelayMode"
+          >
             {{ node.connection.udpRelayMode }}
           </span>
         </template>

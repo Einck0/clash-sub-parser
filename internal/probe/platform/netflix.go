@@ -136,7 +136,11 @@ func checkNetflixCDN(ctx context.Context, httpClient *http.Client) (region strin
 		return "", true, nil
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", false, fmt.Errorf("unexpected fast.com status: %d", resp.StatusCode)
+		// A completed HTTP response is not a transport failure. Like an empty
+		// target list, it supplies no CDN evidence; title checks determine the
+		// result, or report status_mismatch when they are also inconclusive.
+		// Reserve err for actual request/read/decode failures and interruption.
+		return "", false, nil
 	}
 
 	var data struct {

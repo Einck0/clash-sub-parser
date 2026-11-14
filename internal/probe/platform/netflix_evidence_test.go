@@ -53,6 +53,53 @@ func TestCheckNetflixEmptyCDNPreservesFallbackEvidence(t *testing.T) {
 	}
 }
 
+func TestCheckNetflixSeparatesHTTPResponsesFromFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		cdnStatus  int
+		cdnErr     error
+		cdnBodyErr error
+		titleErr   error
+		verdict    domain.ProbeVerdict
+		reason     string
+	}{
+		{"all404", 404, nil, nil, nil, domain.VerdictError, "status_mismatch"},
+		{"cdn503_titles404", 503, nil, nil, nil, domain.VerdictError, "status_mismatch"},
+		{"cdn_empty_titles404", 200, nil, nil, nil, domain.VerdictError, "status_mismatch"},
+		{"cdn_network_titles404", 0, io.ErrClosedPipe, nil, nil, domain.VerdictError, "transport_error"},
+		{"cdn_read_titles404", 200, nil, io.ErrUnexpectedEOF, nil, domain.VerdictError, "transport_error"},
+		{"cdn_cancel_titles404", 0, context.Canceled, nil, nil, domain.VerdictSkipped, "cancelled"},
+		{"cdn_deadline_titles404", 0, context.DeadlineExceeded, nil, nil, domain.VerdictError, "deadline_exceeded"},
+		{"cdn_budget_titles404", 200, nil, platform.ErrBodyBudget, nil, domain.VerdictSkipped, "budget_not_executed"},
+		{"cdn404_titles_cancel", 404, nil, nil, context.Canceled, domain.VerdictSkipped, "cancelled"},
+		{"cdn503_titles_budget", 503, nil, nil, platform.ErrBodyBudget, domain.VerdictSkipped, "budget_not_executed"},
+		{"cdn404_titles_deadline", 404, nil, nil, context.DeadlineExceeded, domain.VerdictError, "deadline_exceeded"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := mockClient(func(req *http.Request) (*http.Response, error) {
+				if req.URL.Host == "api.fast.com" {
+					if tc.cdnErr != nil {
+						return nil, tc.cdnErr
+					}
+					resp, err := htmlResponse(tc.cdnStatus, `{"targets":[]}`)
+					if tc.cdnBodyErr != nil {
+						resp.Body = failingBody{err: tc.cdnBodyErr}
+					}
+					return resp, err
+				}
+				if tc.titleErr != nil {
+					return nil, tc.titleErr
+				}
+				return htmlResponse(http.StatusNotFound, "")
+			})
+			cap := platform.CheckNetflix(context.Background(), client)
+			if cap.Verdict != tc.verdict || cap.Reason != tc.reason {
+				t.Fatalf("capability=%+v want %s/%s", cap, tc.verdict, tc.reason)
+			}
+		})
+	}
+}
+
 func TestCheckNetflixDoesNotUnlockOnUnreadableTitleResponse(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

@@ -36,6 +36,24 @@ func (r *scaleSnapshotRecorder) ListAll(ctx context.Context, filter domain.NodeF
 	return nodes, err
 }
 
+type scalePolicyRecorder struct {
+	domain.SubscriptionRepository
+	t     *testing.T
+	reads int
+}
+
+func (r *scalePolicyRecorder) List(ctx context.Context, filter domain.SubscriptionFilter) ([]domain.Subscription, int, error) {
+	return nil, 0, errors.New("coordinator must not load subscription display metadata")
+}
+
+func (r *scalePolicyRecorder) ListProbePolicies(ctx context.Context) ([]domain.Subscription, error) {
+	r.reads++
+	started := time.Now()
+	subs, err := r.SubscriptionRepository.(domain.ProbePolicySubscriptionReader).ListProbePolicies(ctx)
+	r.t.Logf("stage=coordinator_probe_policies elapsed=%s rows=%d error=%v", time.Since(started), len(subs), err)
+	return subs, err
+}
+
 // TestPeriodicCoordinator_SQLiteScale uses only synthetic data and a fake probe
 // runner. Deadlines bound resource use; elapsed times are diagnostics, not SLAs.
 // No coordinator background loop or network access is needed for TriggerWindow.
@@ -91,12 +109,13 @@ func TestPeriodicCoordinator_SQLiteScale(t *testing.T) {
 		// state contract, but never dials any synthetic node.
 		return runs.UpdateState(ctx, run.ID, domain.ProbeRunStateSucceeded)
 	}}
+	policyRecorder := &scalePolicyRecorder{SubscriptionRepository: subs, t: t}
 	coord := NewPeriodicCoordinator(schedules, recorder, runs, runner,
 		WithCoordinatorClock(func() time.Time { return now }),
 		WithCoordinatorOwner("synthetic-scale"),
 		WithCoordinatorMaxTasks(100), WithCoordinatorSweepQuota(1000),
 		WithCoordinatorObservations(sqlite.NewProbeObservationRepository(db)),
-		WithCoordinatorSubscriptions(subs),
+		WithCoordinatorSubscriptions(policyRecorder),
 		WithCoordinatorNodeSources(sqlite.NewNodeSourceRepository(db)),
 		WithCoordinatorSourceHistory(sqlite.NewNodeSourceHistoryRepository(db)),
 	)
@@ -205,6 +224,9 @@ func TestPeriodicCoordinator_SQLiteScale(t *testing.T) {
 		t.FailNow()
 	}
 
+	if policyRecorder.reads != 1 {
+		t.Fatalf("probe policy snapshots=%d want=1", policyRecorder.reads)
+	}
 	// One full inventory snapshot is sorted by logical ID before dispatch.
 	if len(recorder.snapshots) != 1 {
 		t.Fatalf("coordinator snapshots=%d want=1", len(recorder.snapshots))

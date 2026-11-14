@@ -213,5 +213,75 @@ func buildNodeFilterPredicates(filter domain.NodeFilter, colPrefix string) ([]st
 		}
 	}
 
+	if len(filter.IPRiskBands) > 0 || filter.IPRiskScoreMax != nil {
+		now := domain.NowUTC()
+		if filter.Now != nil && !filter.Now.IsZero() {
+			now = filter.Now.UTC()
+		}
+		scoreSQL := currentIPRiskScoreSQL(colPrefix)
+		args = append(args, now.Format(time.RFC3339Nano))
+		clauses := make([]string, 0, 2)
+		if len(filter.IPRiskBands) > 0 {
+			placeholders := make([]string, len(filter.IPRiskBands))
+			for i, band := range filter.IPRiskBands {
+				placeholders[i] = "?"
+				args = append(args, band)
+			}
+			clauses = append(clauses, "CASE WHEN score IS NULL THEN 'unknown' WHEN score < 25 THEN 'low' WHEN score < 65 THEN 'medium' ELSE 'high' END IN ("+strings.Join(placeholders, ",")+")")
+		}
+		if filter.IPRiskScoreMax != nil {
+			clauses = append(clauses, "score <= ?")
+			args = append(args, *filter.IPRiskScoreMax)
+		}
+		// The observation is read once even when both score and band are used.
+		where = append(where, "EXISTS (WITH risk_score AS MATERIALIZED (SELECT "+scoreSQL+" AS score) SELECT 1 FROM risk_score WHERE "+strings.Join(clauses, " AND ")+")")
+	}
+
 	return where, args
+}
+
+// currentIPRiskScoreSQL mirrors domain.ParseIPRiskScore and the revision-bound
+// evidence contract. Validate JSON and the complete numeric token BEFORE CAST:
+// SQLite would otherwise turn malformed strings into low-risk zero scores.
+func currentIPRiskScoreSQL(colPrefix string) string {
+	// strings.TrimSpace's Unicode whitespace set. The suffix after '%' follows
+	// the provider parser's byte-based whitespace check (ASCII whitespace).
+	const whitespace = "\t\n\v\f\r \u0085\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000"
+	return `(
+		WITH latest_risk AS MATERIALIZED (
+			SELECT node_logical_id, verdict, connection_revision, observed_at, evidence_data
+			FROM probe_observations po
+			WHERE po.node_logical_id = ` + colPrefix + `logical_id AND po.kind = 'ip_risk'
+			ORDER BY observed_at DESC, id DESC LIMIT 1
+		), raw_risk AS (
+			SELECT *, CASE WHEN json_valid(evidence_data) THEN
+				CASE WHEN json_type(evidence_data, '$.risk_score') = 'text'
+				THEN trim(json_extract(evidence_data, '$.risk_score'), '` + whitespace + `') END END AS raw
+			FROM latest_risk
+		), score_token AS (
+			SELECT *, CASE WHEN instr(raw, '%') = 0 THEN raw
+				ELSE trim(substr(raw, 1, instr(raw, '%') - 1), '` + whitespace + `') END AS num
+			FROM raw_risk
+		)
+		SELECT CASE WHEN verdict = 'available'
+			AND connection_revision > 0
+			AND connection_revision = (
+				SELECT COALESCE(h.connection_revision, n.connection_revision)
+				FROM nodes n LEFT JOIN node_connection_heads h ON h.logical_id = n.logical_id
+				WHERE n.logical_id = score_token.node_logical_id
+			)
+			AND julianday(observed_at) != julianday('0001-01-01T00:00:00Z')
+			AND julianday(observed_at) <= julianday(?)
+			AND (instr(raw, char(0)) = 0 OR
+				(instr(raw, '%') > 0 AND instr(raw, char(0)) > instr(raw, '%') + 1))
+			AND length(CAST(raw AS BLOB)) - length(CAST(replace(raw, '%', '') AS BLOB)) <= 1
+			AND (instr(raw, '%') = 0 OR substr(raw, instr(raw, '%') + 1) = ''
+				OR substr(raw, instr(raw, '%') + 1, 1) IN (' ', char(9), char(10), char(11), char(12), char(13)))
+			AND length(num) BETWEEN 1 AND 3
+			AND num NOT GLOB '*[^0-9]*'
+			AND (length(num) = 1 OR substr(num, 1, 1) != '0')
+			AND CAST(num AS INTEGER) BETWEEN 0 AND 100
+			THEN CAST(num AS INTEGER) END
+		FROM score_token
+	)`
 }

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -108,6 +109,12 @@ func CheckIPRisk(ctx context.Context, httpClient *http.Client, ip string) domain
 			cap.Summary = "Rate Limited"
 			return cap
 		}
+		if statusCode != http.StatusOK {
+			cap.Verdict = domain.VerdictError
+			cap.Reason = "unexpected_status"
+			cap.Summary = fmt.Sprintf("HTTP %d", statusCode)
+			return cap
+		}
 		if exitIP == "" {
 			cap.Verdict = domain.VerdictError
 			cap.Reason = "missing_exit_identity"
@@ -116,6 +123,19 @@ func CheckIPRisk(ctx context.Context, httpClient *http.Client, ip string) domain
 		}
 		ip = exitIP
 	}
+
+	// Both a supplied identity and the trace body are external input. Only an
+	// IP literal may become part of the score URL, never a path or query.
+	parsedIP := net.ParseIP(strings.TrimSpace(ip))
+	if parsedIP == nil {
+		lat := time.Since(start).Milliseconds()
+		cap.LatencyMS = &lat
+		cap.Verdict = domain.VerdictError
+		cap.Reason = "invalid_exit_identity"
+		cap.Summary = "Invalid IP"
+		return cap
+	}
+	ip = parsedIP.String()
 
 	targetURL := fmt.Sprintf("https://scamalytics.com/ip/%s", ip)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
@@ -263,7 +283,9 @@ func resolveExitIP(ctx context.Context, httpClient *http.Client) (string, int, e
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
+	// Error pages are not exit-identity evidence, even when they contain ip=.
+	// Return the status before reading so a failed error body cannot mask it.
+	if resp.StatusCode != http.StatusOK {
 		return "", resp.StatusCode, nil
 	}
 

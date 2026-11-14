@@ -57,6 +57,8 @@ type NodeFilter struct {
 	RiskStatuses        []IPRiskStatus `json:"risk_statuses,omitempty"`
 	RiskPolicyRevisions []string       `json:"risk_policy_revisions,omitempty"`
 	HealthStatuses      []string       `json:"health_statuses,omitempty"`
+	IPRiskBands         []string       `json:"ip_risk_bands,omitempty"`
+	IPRiskScoreMax      *int           `json:"ip_risk_score_max,omitempty"`
 	Now                 *time.Time     `json:"-"`
 }
 

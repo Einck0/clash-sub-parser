@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -96,11 +97,14 @@ func CheckNetflix(ctx context.Context, httpClient *http.Client) domain.PlatformC
 		cap.Reason = "title_originals_only"
 
 	default:
-		if cdnErr != nil && nonOrigErr != nil && origErr != nil {
-			errToClassify := cdnErr
-			if nonOrigErr != nil {
-				errToClassify = nonOrigErr
-			}
+		// A completed CDN lookup without a region is inconclusive, not a
+		// successful check. Preserve errors from the title fallback even when
+		// another request completed; definitive title evidence wins above.
+		errToClassify := errors.Join(nonOrigErr, origErr)
+		if errToClassify == nil {
+			errToClassify = cdnErr
+		}
+		if errToClassify != nil {
 			verdict, reason := responseReadFailure(errToClassify)
 			cap.Verdict = verdict
 			cap.Summary = "Error"
@@ -167,13 +171,14 @@ func checkNetflixTitle(ctx context.Context, httpClient *http.Client, titleID str
 	if resp.StatusCode == http.StatusOK {
 		buf := getPooledBuf()
 		defer putPooledBuf(buf)
-		if _, err := buf.ReadFrom(io.LimitReader(resp.Body, 4096)); err == nil {
-			bodyLower := bytes.ToLower(buf.Bytes())
-			if bytes.Contains(bodyLower, []byte("<title>netflix</title>")) ||
-				bytes.Contains(bodyLower, []byte("watch anywhere")) ||
-				bytes.Contains(bodyLower, []byte("netflix - watch tv shows online")) {
-				return http.StatusNotFound, nil
-			}
+		if _, err := buf.ReadFrom(io.LimitReader(resp.Body, 4096)); err != nil {
+			return 0, err
+		}
+		bodyLower := bytes.ToLower(buf.Bytes())
+		if bytes.Contains(bodyLower, []byte("<title>netflix</title>")) ||
+			bytes.Contains(bodyLower, []byte("watch anywhere")) ||
+			bytes.Contains(bodyLower, []byte("netflix - watch tv shows online")) {
+			return http.StatusNotFound, nil
 		}
 	}
 

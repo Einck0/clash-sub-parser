@@ -24,6 +24,7 @@ import {
   type NormalizedNode,
 } from './nodeView'
 import { useNodes, type HealthFilterType } from './useNodes'
+import { IP_RISK_BANDS } from '../policy/policyTypes'
 import { t } from '../../locales'
 import { uiText } from '../../locales/redesign'
 
@@ -48,6 +49,8 @@ const {
   initialLoaded,
   protocolFilter,
   healthFilter,
+  riskBandFilter,
+  riskScoreMax,
   searchQuery,
   selectedNode,
   load,
@@ -108,6 +111,14 @@ function parseQueryHealth(queryHealth: unknown): HealthFilterType {
   return 'all'
 }
 
+function parseQueryRiskBand(value: unknown): string {
+  return typeof value === 'string' && (IP_RISK_BANDS as readonly string[]).includes(value) ? value : 'all'
+}
+
+function parseQueryRiskScore(value: unknown): string {
+  return typeof value === 'string' && /^(0|[1-9]\d?|100)$/.test(value) ? value : ''
+}
+
 function parseQuerySearch(querySearch: unknown): string {
   if (typeof querySearch === 'string') {
     return querySearch.trim()
@@ -128,6 +139,8 @@ function syncUrlFromState() {
   if (healthFilter.value && healthFilter.value !== 'all') {
     query.health = healthFilter.value
   }
+  if (riskBandFilter.value !== 'all') query.ip_risk_band = riskBandFilter.value
+  if (riskScoreMax.value !== '') query.ip_risk_score_max = riskScoreMax.value
   if (drawerOpen.value && selectedNode.value?.logicalId) {
     query.node = selectedNode.value.logicalId
   }
@@ -229,6 +242,8 @@ function pruneInvalidSelectedIds() {
     items.value.length > 0 &&
     healthFilter.value === 'all' &&
     protocolFilter.value === 'all' &&
+    riskBandFilter.value === 'all' &&
+    riskScoreMax.value === '' &&
     !searchQuery.value.trim()
   ) {
     const validIds = new Set(items.value.map((n) => n.logicalId))
@@ -472,6 +487,32 @@ function handleHealthFilterChange(health: string) {
   syncUrlFromState()
 }
 
+function handleRiskBandChange(band: string) {
+  riskBandFilter.value = parseQueryRiskBand(band)
+  load()
+  syncUrlFromState()
+}
+
+function handleRiskScoreChange(score: string) {
+  if (score !== '' && parseQueryRiskScore(score) === '') {
+    toastStore.push({ tone: 'error', message: '风险分数上限必须为 0 到 100 的整数' })
+    return
+  }
+  riskScoreMax.value = score
+  load()
+  syncUrlFromState()
+}
+
+function resetFilters() {
+  protocolFilter.value = 'all'
+  healthFilter.value = 'all'
+  riskBandFilter.value = 'all'
+  riskScoreMax.value = ''
+  searchQuery.value = ''
+  load()
+  syncUrlFromState()
+}
+
 function handleSearchQueryChange(query: string) {
   searchQuery.value = query
 }
@@ -613,8 +654,8 @@ if (route) {
   )
 
   watch(
-    () => [route.query?.q, route.query?.protocol, route.query?.health],
-    ([newQ, newProto, newHealth]) => {
+    () => [route.query?.q, route.query?.protocol, route.query?.health, route.query?.ip_risk_band, route.query?.ip_risk_score_max],
+    ([newQ, newProto, newHealth, newRiskBand, newRiskScore]) => {
       const safeQ = parseQuerySearch(newQ)
       const safeProto = parseQueryProtocol(newProto)
       const safeHealth = parseQueryHealth(newHealth)
@@ -630,6 +671,13 @@ if (route) {
       }
       if (safeHealth !== healthFilter.value) {
         healthFilter.value = safeHealth
+        needReload = true
+      }
+      const safeBand = parseQueryRiskBand(newRiskBand)
+      const safeScore = parseQueryRiskScore(newRiskScore)
+      if (safeBand !== riskBandFilter.value || safeScore !== riskScoreMax.value) {
+        riskBandFilter.value = safeBand
+        riskScoreMax.value = safeScore
         needReload = true
       }
       if (needReload) {
@@ -670,6 +718,8 @@ onMounted(async () => {
     if (initQ) searchQuery.value = initQ
     if (initProto !== 'all') protocolFilter.value = initProto
     if (initHealth !== 'all') healthFilter.value = initHealth
+    riskBandFilter.value = parseQueryRiskBand(route.query.ip_risk_band)
+    riskScoreMax.value = parseQueryRiskScore(route.query.ip_risk_score_max)
   }
 
   void fetchGlobalScheduleKinds()
@@ -723,6 +773,11 @@ onUnmounted(() => {
       :loading="loading"
       :protocol-filter="protocolFilter"
       :health-filter="healthFilter"
+      :risk-band-filter="riskBandFilter"
+      :risk-score-max="riskScoreMax"
+      @update:risk-band-filter="handleRiskBandChange"
+      @update:risk-score-max="handleRiskScoreChange"
+      @reset-filters="resetFilters"
       :search-query="searchQuery"
       :health-counts="healthCounts"
       :is-all-visible-selected="isAllVisibleSelected"

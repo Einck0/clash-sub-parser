@@ -64,6 +64,8 @@ export function useNodes() {
   const total = ref(0)
   const protocolFilter = ref<string>('all')
   const healthFilter = ref<HealthFilterType>('all')
+  const riskBandFilter = ref('all')
+  const riskScoreMax = ref('')
   const searchQuery = ref<string>('')
   const selectedNode = ref<NormalizedNode | null>(null)
   const requestGeneration = ref(0)
@@ -162,6 +164,8 @@ export function useNodes() {
       if (protocolFilter.value && protocolFilter.value !== 'all') {
         params.protocol = protocolFilter.value
       }
+      if (riskBandFilter.value !== 'all') params.ip_risk_band = riskBandFilter.value
+      if (riskScoreMax.value !== '') params.ip_risk_score_max = riskScoreMax.value
       if (searchQuery.value.trim()) {
         params.search = searchQuery.value.trim()
       }
@@ -508,6 +512,8 @@ export function useNodes() {
     initialLoaded,
     protocolFilter,
     healthFilter,
+    riskBandFilter,
+    riskScoreMax,
     searchQuery,
     selectedNode,
     nodeDetailError,

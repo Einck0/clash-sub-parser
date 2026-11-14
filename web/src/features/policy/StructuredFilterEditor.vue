@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import {
+  IP_RISK_BANDS,
+  IP_RISK_BAND_LABELS,
   SUPPORTED_FILTER_FIELDS,
   SUPPORTED_PROTOCOLS,
   SUPPORTED_PROBE_KINDS,
@@ -132,6 +134,8 @@ const availableFilterFields = computed(() => {
   }
   const defaultFields: FilterField[] = [
     'health_status',
+    'ip_risk_band',
+    'ip_risk_score',
     'exit_region',
     'platform_verdict',
     'display_name',
@@ -200,6 +204,11 @@ function onInlineRowFieldChange(cond: FilterCondition) {
 
   if (cond.field === 'health_status') {
     cond.value = 'healthy'
+  } else if (cond.field === 'ip_risk_band') {
+    cond.value = 'low'
+  } else if (cond.field === 'ip_risk_score') {
+    cond.op = 'lte'
+    cond.value = '24'
   } else if (cond.field === 'exit_region') {
     cond.value = 'HK'
   } else if (cond.field === 'platform_verdict') {
@@ -229,6 +238,10 @@ function addDirectCondition() {
   if (first === 'health_status') {
     defaultVal = 'healthy'
     activeConditions.value.push({ field: 'health_status', op: 'equals', value: defaultVal })
+  } else if (first === 'ip_risk_band') {
+    activeConditions.value.push({ field: first, op: 'equals', value: 'low' })
+  } else if (first === 'ip_risk_score') {
+    activeConditions.value.push({ field: first, op: 'lte', value: '24' })
   } else if (first === 'exit_region') {
     defaultVal = 'HK'
     activeConditions.value.push({ field: 'exit_region', op: 'equals', value: defaultVal })
@@ -299,6 +312,10 @@ function opLabel(op: FilterOp): string {
       {{ t('settings.filterAnd') }}
     </p>
 
+    <p v-if="activeConditions.some(c => c.field.startsWith('ip_risk_'))" class="text-xs text-base-content/70">
+      风险以当前连接的有效探针分数为准，未知不等于高风险；分数上限不匹配未知。不等于某等级会包含未知。风险筛选不额外要求节点健康。
+    </p>
+
     <!-- Conditions List (Direct Inline Editing) -->
     <div
       v-for="(condition, index) in activeConditions"
@@ -318,7 +335,7 @@ function opLabel(op: FilterOp): string {
             @change="onInlineRowFieldChange(condition)"
           >
             <option v-for="item in getRowAvailableFields(condition.field)" :key="item.field" :value="item.field">
-              {{ t(`settings.filterField_${item.field}`) || item.label }}
+              {{ item.field.startsWith('ip_risk_') ? item.label : (t(`settings.filterField_${item.field}`) || item.label) }}
             </option>
           </select>
         </label>
@@ -431,6 +448,17 @@ function opLabel(op: FilterOp): string {
             </select>
           </label>
         </template>
+
+        <label v-else-if="condition.field === 'ip_risk_band'" class="flex flex-col gap-1 text-xs font-medium">
+          <span>风险等级</span>
+          <select v-model="condition.value" data-testid="condition-value" class="select select-sm" aria-label="风险等级" :disabled="readOnly" @change="emitConditions">
+            <option v-for="band in IP_RISK_BANDS" :key="band" :value="band">{{ IP_RISK_BAND_LABELS[band] }}</option>
+          </select>
+        </label>
+        <label v-else-if="condition.field === 'ip_risk_score'" class="flex flex-col gap-1 text-xs font-medium">
+          <span>风险分数上限</span>
+          <input v-model="condition.value" type="text" inputmode="numeric" placeholder="0–100" data-testid="condition-value" class="input input-sm" aria-label="风险分数上限" :disabled="readOnly" @input="emitConditions" />
+        </label>
 
         <!-- Protocol -->
         <label v-else-if="condition.field === 'protocol'" class="flex flex-col gap-1 text-xs font-medium">

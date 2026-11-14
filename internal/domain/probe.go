@@ -240,11 +240,15 @@ func (o *ProbeObservation) SyncEvidenceData() {
 			o.Region = ed.Region
 			o.SubTier = ed.SubTier
 			o.Throughput = ed.Throughput
-			o.RiskScore = ed.RiskScore
 			o.Platforms = ed.Platforms
 			o.SafeDetail = ed.SafeDetail
 			o.Attempt = ed.Attempt
 		}
+	}
+	if o.EvidenceData != "" {
+		// Keep persisted risk evidence authoritative and independent of unrelated
+		// field decoding failures. Other fields retain the all-or-nothing decode.
+		o.RiskScore = riskScoreFromEvidence(o.EvidenceData)
 	}
 }
 

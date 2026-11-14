@@ -1191,22 +1191,32 @@ func (c *PeriodicCoordinator) resolveNodePolicies(ctx context.Context, nodes []d
 	}
 
 	subMap := make(map[string]*domain.Subscription)
-	subPage := 1
-	const subPageSize = 100
-	for {
-		subs, total, err := c.subscriptions.List(ctx, domain.SubscriptionFilter{
-			Pagination: domain.Pagination{Page: subPage, PageSize: subPageSize},
-		})
+	if reader, ok := c.subscriptions.(domain.ProbePolicySubscriptionReader); ok {
+		subs, err := reader.ListProbePolicies(ctx)
 		if err != nil {
-			return nil, fmt.Errorf("failed to list subscriptions: %w", err)
+			return nil, fmt.Errorf("failed to list probe policies: %w", err)
 		}
 		for i := range subs {
 			subMap[subs[i].ID] = &subs[i]
 		}
-		if len(subMap) >= total || len(subs) == 0 {
-			break
+	} else {
+		// Non-SQL repositories retain the existing port; SQLite supplies the
+		// policy-only snapshot above instead of attaching presentation counts.
+		const subPageSize = 100
+		for subPage := 1; ; subPage++ {
+			subs, total, err := c.subscriptions.List(ctx, domain.SubscriptionFilter{
+				Pagination: domain.Pagination{Page: subPage, PageSize: subPageSize},
+			})
+			if err != nil {
+				return nil, fmt.Errorf("failed to list subscriptions: %w", err)
+			}
+			for i := range subs {
+				subMap[subs[i].ID] = &subs[i]
+			}
+			if len(subMap) >= total || len(subs) == 0 {
+				break
+			}
 		}
-		subPage++
 	}
 
 	for _, n := range nodes {

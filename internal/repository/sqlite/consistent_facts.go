@@ -840,7 +840,7 @@ func inspectFilterDependencies(global *domain.NodeFilterSpec, groupFilters map[s
 			switch condition.Field {
 			case domain.FilterFieldSourceSubscriptions:
 				sources = true
-			case domain.FilterFieldProbeVerdict, domain.FilterFieldProbeLatencyMS, domain.FilterFieldHealthStatus, domain.FilterFieldExitRegion, domain.FilterFieldPlatformVerdict:
+			case domain.FilterFieldProbeVerdict, domain.FilterFieldProbeLatencyMS, domain.FilterFieldHealthStatus, domain.FilterFieldExitRegion, domain.FilterFieldPlatformVerdict, domain.FilterFieldIPRiskScore, domain.FilterFieldIPRiskBand:
 				observations = true
 			}
 		}

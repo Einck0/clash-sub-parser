@@ -322,7 +322,18 @@ export const SUPPORTED_STREAMING_PLATFORMS = [
 ] as const
 export type StreamingPlatform = typeof SUPPORTED_STREAMING_PLATFORMS[number]
 
+export const IP_RISK_BANDS = ['low', 'medium', 'high', 'unknown'] as const
+export type IPRiskBand = typeof IP_RISK_BANDS[number]
+export const IP_RISK_BAND_LABELS: Record<IPRiskBand, string> = {
+  low: '低风险 (0–24)',
+  medium: '中风险 (25–64)',
+  high: '高风险 (65–100)',
+  unknown: '未知（无有效风险分数）',
+}
+
 export type FilterField =
+  | 'ip_risk_band'
+  | 'ip_risk_score'
   | 'health_status'
   | 'exit_region'
   | 'platform_verdict'
@@ -352,6 +363,7 @@ export interface FilterCondition {
 
 export function filterFieldOperators(field: FilterField): FilterOp[] {
   switch (field) {
+    case 'ip_risk_band':
     case 'health_status':
     case 'exit_region':
     case 'platform_verdict':
@@ -364,6 +376,7 @@ export function filterFieldOperators(field: FilterField): FilterOp[] {
       return ['contains', 'not_contains']
     case 'probe_verdict':
       return ['equals', 'not_equals']
+    case 'ip_risk_score':
     case 'probe_latency_ms':
       return ['lte']
     default:
@@ -383,6 +396,8 @@ export interface GlobalNodeFilter {
 
 export const SUPPORTED_FILTER_FIELDS: Array<{ field: FilterField; label: string }> = [
   { field: 'health_status', label: '节点可用性 (健康状态)' },
+  { field: 'ip_risk_band', label: 'IP 风险等级' },
+  { field: 'ip_risk_score', label: 'IP 风险分数上限 (0–100)' },
   { field: 'exit_region', label: '出口地区 (国家/地区代码)' },
   { field: 'platform_verdict', label: '服务解锁 (平台判定)' },
   { field: 'display_name', label: '显示名称' },
@@ -397,6 +412,21 @@ export function validateConditionInput(cond: Partial<FilterCondition>): string |
   if (!cond.op) return '必须选择运算符'
 
   switch (cond.field) {
+    case 'ip_risk_band':
+    case 'ip_risk_score': {
+      if (cond.probe_kind || cond.platform || cond.freshness_seconds !== undefined) {
+        return 'IP 风险条件不接受探针类型、平台或有效期'
+      }
+      const value = String(cond.value ?? '').trim()
+      if (cond.field === 'ip_risk_band') {
+        if (!['equals', 'not_equals'].includes(cond.op)) return '风险等级仅支持等于或不等于'
+        if (!(IP_RISK_BANDS as readonly string[]).includes(value)) return '请选择有效风险等级'
+      } else {
+        if (cond.op !== 'lte') return '风险分数仅支持小于等于'
+        if (!/^(0|[1-9]\d?|100)$/.test(value)) return '风险分数上限必须为 0 到 100 的整数'
+      }
+      break
+    }
     case 'health_status': {
       if (cond.op !== 'equals' && cond.op !== 'not_equals') {
         return '节点可用性仅支持"等于"或"不等于"运算符'

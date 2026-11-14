@@ -1252,14 +1252,14 @@ func (s *Service) PreviewGroup(ctx context.Context, cmd PreviewGroupCommand) (*G
 		// Standalone services cannot silently validate evidence-dependent filters.
 		for _, spec := range groupFilters {
 			for _, c := range spec.Conditions {
-				if c.Field == domain.FilterFieldSourceSubscriptions || c.Field == domain.FilterFieldProbeVerdict || c.Field == domain.FilterFieldProbeLatencyMS || c.Field == domain.FilterFieldHealthStatus || c.Field == domain.FilterFieldExitRegion || c.Field == domain.FilterFieldPlatformVerdict {
+				if c.Field == domain.FilterFieldSourceSubscriptions || c.Field == domain.FilterFieldProbeVerdict || c.Field == domain.FilterFieldProbeLatencyMS || c.Field == domain.FilterFieldHealthStatus || c.Field == domain.FilterFieldExitRegion || c.Field == domain.FilterFieldPlatformVerdict || c.Field == domain.FilterFieldIPRiskScore || c.Field == domain.FilterFieldIPRiskBand {
 					return nil, domain.NewInternalError("preview_incomplete", "publication input provider required for evidence filters")
 				}
 			}
 		}
 		if globalFilter != nil {
 			for _, c := range globalFilter.Conditions {
-				if c.Field == domain.FilterFieldSourceSubscriptions || c.Field == domain.FilterFieldProbeVerdict || c.Field == domain.FilterFieldProbeLatencyMS || c.Field == domain.FilterFieldHealthStatus || c.Field == domain.FilterFieldExitRegion || c.Field == domain.FilterFieldPlatformVerdict {
+				if c.Field == domain.FilterFieldSourceSubscriptions || c.Field == domain.FilterFieldProbeVerdict || c.Field == domain.FilterFieldProbeLatencyMS || c.Field == domain.FilterFieldHealthStatus || c.Field == domain.FilterFieldExitRegion || c.Field == domain.FilterFieldPlatformVerdict || c.Field == domain.FilterFieldIPRiskScore || c.Field == domain.FilterFieldIPRiskBand {
 					return nil, domain.NewInternalError("preview_incomplete", "publication input provider required for evidence filters")
 				}
 			}
@@ -1268,7 +1268,7 @@ func (s *Service) PreviewGroup(ctx context.Context, cmd PreviewGroupCommand) (*G
 			for _, src := range group.Sources {
 				if src.FilterSpec != nil {
 					for _, c := range src.FilterSpec.Conditions {
-						if c.Field == domain.FilterFieldSourceSubscriptions || c.Field == domain.FilterFieldProbeVerdict || c.Field == domain.FilterFieldProbeLatencyMS || c.Field == domain.FilterFieldHealthStatus || c.Field == domain.FilterFieldExitRegion || c.Field == domain.FilterFieldPlatformVerdict {
+						if c.Field == domain.FilterFieldSourceSubscriptions || c.Field == domain.FilterFieldProbeVerdict || c.Field == domain.FilterFieldProbeLatencyMS || c.Field == domain.FilterFieldHealthStatus || c.Field == domain.FilterFieldExitRegion || c.Field == domain.FilterFieldPlatformVerdict || c.Field == domain.FilterFieldIPRiskScore || c.Field == domain.FilterFieldIPRiskBand {
 							return nil, domain.NewInternalError("preview_incomplete", "publication input provider required for evidence filters")
 						}
 					}
@@ -1572,14 +1572,14 @@ func (s *Service) ValidateGraph(ctx context.Context) (*ValidationResult, error) 
 		// Standalone services cannot silently validate evidence-dependent filters.
 		for _, spec := range groupFilters {
 			for _, c := range spec.Conditions {
-				if c.Field == domain.FilterFieldSourceSubscriptions || c.Field == domain.FilterFieldProbeVerdict || c.Field == domain.FilterFieldProbeLatencyMS || c.Field == domain.FilterFieldHealthStatus || c.Field == domain.FilterFieldExitRegion || c.Field == domain.FilterFieldPlatformVerdict {
+				if c.Field == domain.FilterFieldSourceSubscriptions || c.Field == domain.FilterFieldProbeVerdict || c.Field == domain.FilterFieldProbeLatencyMS || c.Field == domain.FilterFieldHealthStatus || c.Field == domain.FilterFieldExitRegion || c.Field == domain.FilterFieldPlatformVerdict || c.Field == domain.FilterFieldIPRiskScore || c.Field == domain.FilterFieldIPRiskBand {
 					return nil, domain.NewInternalError("validation_incomplete", "publication snapshot provider required for evidence filters")
 				}
 			}
 		}
 		if globalFilter != nil {
 			for _, c := range globalFilter.Conditions {
-				if c.Field == domain.FilterFieldSourceSubscriptions || c.Field == domain.FilterFieldProbeVerdict || c.Field == domain.FilterFieldProbeLatencyMS || c.Field == domain.FilterFieldHealthStatus || c.Field == domain.FilterFieldExitRegion || c.Field == domain.FilterFieldPlatformVerdict {
+				if c.Field == domain.FilterFieldSourceSubscriptions || c.Field == domain.FilterFieldProbeVerdict || c.Field == domain.FilterFieldProbeLatencyMS || c.Field == domain.FilterFieldHealthStatus || c.Field == domain.FilterFieldExitRegion || c.Field == domain.FilterFieldPlatformVerdict || c.Field == domain.FilterFieldIPRiskScore || c.Field == domain.FilterFieldIPRiskBand {
 					return nil, domain.NewInternalError("validation_incomplete", "publication snapshot provider required for evidence filters")
 				}
 			}

@@ -62,6 +62,22 @@ describe('node view helpers & plaintext WireGuard / TUIC connection handling', (
     expect(protocolSupportedTargets('trojan')).toEqual(['mihomo', 'singbox', 'surge', 'qx'])
   })
 
+  it('shows risk score bands without turning failed checks or stale scores into risk', () => {
+    const base: NodeRecord = { logical_id: 'risk', protocol: 'ss', display_name: 'Risk', active: true }
+    for (const [score, label] of [['0', '低风险 (0)'], ['24% low', '低风险 (24)'], ['25', '中风险 (25)'], ['64', '中风险 (64)'], ['65', '高风险 (65)'], ['100', '高风险 (100)']]) {
+      expect(nodeRiskBadge({ ...base, capabilities: { ip_risk: { verdict: 'available', risk_score: score } } }).label).toBe(label)
+    }
+    for (const cap of [
+      { verdict: 'error' as const, risk_score: '65' },
+      { verdict: 'available' as const, risk_score: '0', stale: true },
+      { verdict: 'available' as const, risk_score: '101' },
+      { verdict: 'available' as const, risk_score: '15%garbage' },
+      { verdict: 'available' as const, risk_score: '01' },
+    ]) {
+      expect(nodeRiskBadge({ ...base, capabilities: { ip_risk: cap } })).toEqual({ label: '风险未知', tone: 'info' })
+    }
+  })
+
   it('normalizes empty node connection cleanly without fabricated defaults', () => {
     const node = normalizeNode({
       logical_id: 'node-1',
@@ -241,14 +257,15 @@ describe('node view helpers & plaintext WireGuard / TUIC connection handling', (
       tone: 'info',
     })
 
-    expect(nodeRiskBadge(node)).toEqual({ label: '低风险', tone: 'success' })
+    // Policy admission summaries are separate from current probe risk evidence.
+    expect(nodeRiskBadge(node)).toEqual({ label: '风险未知', tone: 'info' })
     expect(nodeRiskBadge({ logical_id: 'n4', protocol: 'ss', display_name: 'N4', active: true, ip_risk_summary: { risk_band: 'medium' } })).toEqual({
-      label: '中风险',
-      tone: 'warning',
+      label: '风险未知',
+      tone: 'info',
     })
     expect(nodeRiskBadge({ logical_id: 'n5', protocol: 'ss', display_name: 'N5', active: true, ip_risk_summary: { risk_band: 'high' } })).toEqual({
-      label: '高风险',
-      tone: 'error',
+      label: '风险未知',
+      tone: 'info',
     })
 
     const enrichedNode = normalizeNode({
@@ -1254,7 +1271,7 @@ describe('NodesView real API detail, plaintext PATCH edit, and failure draft pre
     mountEl.remove()
   })
 
-  it('restores URL q, protocol, health, and node params with safe defaults on invalid input, and resets page on query change', async () => {
+  it('restores URL search, risk, protocol, health and node filters and resets them together', async () => {
     const { createApp, h, nextTick } = await import('vue')
     const { createRouter, createMemoryHistory } = await import('vue-router')
     const { default: NodesView } = await import('./NodesView.vue')
@@ -1288,7 +1305,7 @@ describe('NodesView real API detail, plaintext PATCH edit, and failure draft pre
       routes: [{ path: '/nodes', component: NodesView }],
     })
 
-    await router.push('/nodes?q=Tokyo&protocol=hysteria2&health=healthy&node=node-hy2-1')
+    await router.push('/nodes?q=Tokyo&protocol=hysteria2&health=healthy&ip_risk_band=low&ip_risk_score_max=0&node=node-hy2-1')
     await router.isReady()
 
     const mountEl = document.createElement('div')
@@ -1322,12 +1339,36 @@ describe('NodesView real API detail, plaintext PATCH edit, and failure draft pre
       expect(drawer).not.toBeNull()
       expect(drawer?.textContent).toContain('Tokyo Hy2 Safe')
 
-      // Safe fallback when invalid protocol and invalid health are pushed
-      await router.push('/nodes?protocol=bogus_protocol&health=invalid_health')
+      const riskBand = mountEl.querySelector('[data-testid="node-risk-band-filter"]') as HTMLSelectElement
+      const riskScore = mountEl.querySelector('[data-testid="node-risk-score-max"]') as HTMLInputElement
+      expect(riskBand.value).toBe('low')
+      expect(riskScore.value).toBe('0')
+      expect(vi.mocked(api.get).mock.calls.some(([path, options]) => path === '/api/v1/nodes' && options?.params?.ip_risk_score_max === '0')).toBe(true)
+
+      riskBand.value = 'high'
+      riskBand.dispatchEvent(new Event('change', { bubbles: true }))
+      await nextTick()
+      await new Promise((r) => setTimeout(r, 30))
+      expect(router.currentRoute.value.query.ip_risk_band).toBe('high')
+      expect(router.currentRoute.value.query.ip_risk_score_max).toBe('0')
+
+      ;(mountEl.querySelector('[data-testid="node-reset-filters"]') as HTMLButtonElement).click()
+      await nextTick()
+      await new Promise((r) => setTimeout(r, 30))
+      expect(riskBand.value).toBe('all')
+      expect(riskScore.value).toBe('')
+      expect(searchInput.value).toBe('')
+      expect(router.currentRoute.value.query.ip_risk_band).toBeUndefined()
+      expect(router.currentRoute.value.query.ip_risk_score_max).toBeUndefined()
+
+      // Safe fallback when invalid protocol, health and risk are pushed.
+      await router.push('/nodes?protocol=bogus_protocol&health=invalid_health&ip_risk_band=critical&ip_risk_score_max=101')
       await nextTick()
       await new Promise((r) => setTimeout(r, 30))
 
       expect(healthSelect.value).toBe('all')
+      expect(riskBand.value).toBe('all')
+      expect(riskScore.value).toBe('')
     } finally {
       app.unmount()
       mountEl.remove()

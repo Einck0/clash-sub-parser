@@ -116,6 +116,29 @@ func (h nodeHandler) list(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	for _, value := range q["ip_risk_band"] {
+		for _, part := range strings.Split(value, ",") {
+			band := strings.TrimSpace(part)
+			if !domain.IsValidIPRiskBand(band) {
+				WriteError(w, r, http.StatusBadRequest, "invalid_ip_risk_band", "ip_risk_band must be low, medium, high, or unknown")
+				return
+			}
+			filter.IPRiskBands = append(filter.IPRiskBands, band)
+		}
+	}
+	if values, present := q["ip_risk_score_max"]; present {
+		if len(values) != 1 {
+			WriteError(w, r, http.StatusBadRequest, "invalid_ip_risk_score_max", "ip_risk_score_max must be a single integer between 0 and 100")
+			return
+		}
+		score, ok := domain.ParseIPRiskScoreInt(values[0])
+		if !ok {
+			WriteError(w, r, http.StatusBadRequest, "invalid_ip_risk_score_max", "ip_risk_score_max must be an integer between 0 and 100")
+			return
+		}
+		filter.IPRiskScoreMax = &score
+	}
+
 	for _, value := range q["risk_decision"] {
 		for _, part := range strings.Split(value, ",") {
 			if part = strings.TrimSpace(part); part != "" {

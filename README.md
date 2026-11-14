@@ -177,9 +177,10 @@ npm run dev
 ## Core Workbenches & Features
 
 - **Unified Nodes Workbench (`/nodes`)**: Centralized inventory and probe operations. Replaces the legacy separate probe engine view (`/probes` permanently redirects to `/nodes`). Supports desktop compact table and mobile card views, multi-page explicit selection, selective manual probing, full fleet probe confirmations, and non-blocking drawer run inspection and cancellation.
-- **Global Probe Settings (`/settings`)**: Unified management for automated probe scheduling toggle, default interval (60–604800s), active probe kinds (`baseline`, `ai`, `streaming`), and per-node probe timeout (1–30s). Disabling automated scheduling leaves manual probing fully functional.
+- **Global Probe Settings (`/settings`)**: Unified management for automated probe scheduling toggle, default interval (60–604800s), active probe kinds (`baseline`, `ai`, `streaming`), and per-node probe timeout (1–30s). Timeout is read once when each run starts; edits apply to subsequent runs. Disabling automated scheduling leaves manual probing fully functional.
 - **Per-Subscription Probe Policy (`/subscriptions`)**: Each subscription source independently configures its probe policy (`inherit`, `custom` interval, or `disabled`). Shared nodes across multiple sources dynamically evaluate the shortest valid interval under global coordination.
 - **Structured Policy Filter Pipeline (`/policy`)**: Deterministic policy group member composition organized as Candidate Scope (global filter inheritance toggle) &rarr; Ordered Add Sources &rarr; Ordered Remove Filters &rarr; Live Verification. Live preview accurately reports evaluated candidates, active node count, and structured exclusion reasons (`regex removed`, `filter removed`).
+- **IP probe risk filters**: The nodes workbench and policy groups can filter current valid IP probe risk by low (0–24), medium (25–64), high (65–100), or unknown, and by a score ceiling (including 0). Unknown does not match a score ceiling. This probe-risk filter is independent of the existing policy `risk_band` and risk-admission rules.
 
 ---
 

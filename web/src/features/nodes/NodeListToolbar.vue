@@ -7,6 +7,7 @@ import {
 } from '@heroicons/vue/24/outline'
 import PageToolbar from '../../ui/PageToolbar.vue'
 import { SUPPORTED_NODE_PROTOCOLS } from './nodeView'
+import { IP_RISK_BANDS, IP_RISK_BAND_LABELS } from '../policy/policyTypes'
 import { t } from '../../locales'
 import { uiText } from '../../locales/redesign'
 
@@ -18,6 +19,8 @@ const props = defineProps<{
   loading: boolean
   protocolFilter: string
   healthFilter: string
+  riskBandFilter?: string
+  riskScoreMax?: string
   searchQuery: string
   healthCounts: {
     all: number
@@ -35,6 +38,9 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'update:protocolFilter', proto: string): void
   (e: 'update:healthFilter', health: string): void
+  (e: 'update:riskBandFilter', band: string): void
+  (e: 'update:riskScoreMax', score: string): void
+  (e: 'reset-filters'): void
   (e: 'update:searchQuery', query: string): void
   (e: 'refresh'): void
   (e: 'search-submit'): void
@@ -145,6 +151,22 @@ const totalBadgeText = computed(() => {
             @keydown.enter="$emit('search-submit')"
           />
         </div>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-2 text-xs" data-testid="node-risk-filters">
+        <label class="flex items-center gap-2">
+          <span>IP 风险</span>
+          <select :value="riskBandFilter || 'all'" data-testid="node-risk-band-filter" aria-label="IP 风险等级" class="select select-xs sm:select-sm" @change="$emit('update:riskBandFilter', ($event.target as HTMLSelectElement).value)">
+            <option value="all">全部风险等级</option>
+            <option v-for="band in IP_RISK_BANDS" :key="band" :value="band">{{ IP_RISK_BAND_LABELS[band] }}</option>
+          </select>
+        </label>
+        <label class="flex items-center gap-2">
+          <span>分数上限</span>
+          <input :value="riskScoreMax" type="number" min="0" max="100" step="1" placeholder="不限" class="input input-xs sm:input-sm w-24" data-testid="node-risk-score-max" aria-label="风险分数上限" @change="$emit('update:riskScoreMax', ($event.target as HTMLInputElement).value)" />
+        </label>
+        <button type="button" class="btn btn-ghost btn-xs" data-testid="node-reset-filters" @click="$emit('reset-filters')">重置筛选</button>
+        <span class="text-base-content/60">未知表示当前无有效风险分数；分数上限不匹配未知。</span>
       </div>
 
       <!-- Health Status Quick Filter Capsules -->

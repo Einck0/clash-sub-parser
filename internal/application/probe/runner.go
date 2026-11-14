@@ -105,7 +105,7 @@ func WithRunBudget(budget RunBudget) DefaultRunnerOption {
 	}
 }
 
-// WithSettingsRepository configures an optional settings repository for dynamic timeout.
+// WithSettingsRepository loads the current timeout once at the start of each run.
 func WithSettingsRepository(repo domain.SettingsRepository) DefaultRunnerOption {
 	return func(r *DefaultRunner) {
 		r.settingsRepo = repo
@@ -150,15 +150,17 @@ func WithBodyBudget(b *platform.BodyBudget) DefaultRunnerOption {
 
 type runMeterKey struct{}
 type runMeter struct {
-	budget     *platform.BodyBudget
-	cancel     context.CancelFunc
-	mu         sync.Mutex
-	seen       map[string]bool
-	baseline   map[string]domain.ProbeVerdict
-	geoCountry map[string]string
+	taskTimeout time.Duration
+	budget      *platform.BodyBudget
+	cancel      context.CancelFunc
+	mu          sync.Mutex
+	seen        map[string]bool
+	baseline    map[string]domain.ProbeVerdict
+	geoCountry  map[string]string
+	geoIP       map[string]string // same-run, in-memory only; never persisted
 }
 
-func (m *runMeter) setGeoCountry(nodeLogicalID, country string) {
+func (m *runMeter) setGeoIdentity(nodeLogicalID, country, ip string) {
 	if m == nil {
 		return
 	}
@@ -168,6 +170,16 @@ func (m *runMeter) setGeoCountry(nodeLogicalID, country string) {
 		m.geoCountry = make(map[string]string)
 	}
 	m.geoCountry[nodeLogicalID] = strings.ToUpper(strings.TrimSpace(country))
+	if m.geoIP == nil {
+		m.geoIP = make(map[string]string)
+	}
+	m.geoIP[nodeLogicalID] = ip
+}
+
+func (m *runMeter) getGeoIP(nodeLogicalID string) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.geoIP[nodeLogicalID]
 }
 
 func (m *runMeter) getGeoCountry(nodeLogicalID string) (string, bool) {
@@ -358,7 +370,7 @@ func probeURLForKind(kind domain.ProbeKind) string {
 }
 
 // Run executes all node probing tasks for a ProbeRun.
-func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs []string, kinds []domain.ProbeKind) error {
+func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs []string, kinds []domain.ProbeKind) (runErr error) {
 	if run == nil {
 		return domain.NewValidationError("nil_run", "probe run is nil")
 	}
@@ -466,14 +478,38 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 	if bodyBudget == nil {
 		bodyBudget = platform.NewBodyBudget(r.budget.MaxTotalBytes)
 	}
+	// Freeze timeout with the run allocation: one settings read, not one per task.
+	taskTimeout := r.budget.TaskTimeout
+	if r.settingsRepo != nil {
+		if settings, err := r.settingsRepo.Get(runCtx); err == nil && settings.ProbeTimeoutSeconds > 0 {
+			taskTimeout = time.Duration(settings.ProbeTimeoutSeconds) * time.Second
+		}
+	}
 	runCtx = context.WithValue(runCtx, runMeterKey{}, &runMeter{
-		budget:     bodyBudget,
-		cancel:     cancel,
-		seen:       make(map[string]bool),
-		baseline:   make(map[string]domain.ProbeVerdict),
-		geoCountry: make(map[string]string),
+		taskTimeout: taskTimeout,
+		budget:      bodyBudget,
+		cancel:      cancel,
+		seen:        make(map[string]bool),
+		baseline:    make(map[string]domain.ProbeVerdict),
+		geoCountry:  make(map[string]string),
 	})
-	defer r.recordNotExecuted(ctx, run, targetNodes, validKinds, runCtx, bodyBudget)
+	defer func() {
+		runErr = errors.Join(runErr, r.recordNotExecuted(ctx, run, targetNodes, validKinds, runCtx, bodyBudget))
+		if run.IsTerminal() {
+			return
+		}
+		state := domain.ProbeRunStateSucceeded
+		if runErr != nil {
+			state = domain.ProbeRunStateFailed
+		}
+		persistCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer stop()
+		if err := r.runs.UpdateState(persistCtx, run.ID, state); err != nil {
+			runErr = errors.Join(runErr, err)
+			return
+		}
+		runErr = errors.Join(runErr, run.TransitionTo(state))
+	}()
 
 	pool := newNodeSessionPool(runCtx)
 	defer pool.closeAll()
@@ -511,6 +547,7 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 	var (
 		taskErrMu          sync.Mutex
 		taskFatalErr       error
+		taskOperationalErr error
 		hasSystemicDialErr bool
 		fatalDialNodes     = make(map[string]struct{})
 	)
@@ -528,13 +565,20 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 		}
 		if isFatalDialError(err) {
 			fatalDialNodes[nodeLogicalID] = struct{}{}
+		} else if taskOperationalErr == nil {
+			// Probe verdicts are evidence; errors returned here mean that the
+			// runner could not execute or persist that evidence reliably.
+			taskOperationalErr = err
 		}
 		taskErrMu.Unlock()
 	}
 
-	checkFatalDial := func() (bool, error) {
+	checkTaskFailure := func() (bool, error) {
 		taskErrMu.Lock()
 		defer taskErrMu.Unlock()
+		if taskOperationalErr != nil {
+			return true, taskOperationalErr
+		}
 		if hasSystemicDialErr || (len(targetNodes) > 0 && len(fatalDialNodes) == len(targetNodes)) {
 			return true, taskFatalErr
 		}
@@ -655,14 +699,10 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 				return handleCancelOrDeadline(stage1Done)
 			}
 			if stage1SubmitErr != nil {
-				_ = run.TransitionTo(domain.ProbeRunStateFailed)
-				_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateFailed)
 				return stage1SubmitErr
 			}
-			if fatalDial, fatalErr := checkFatalDial(); fatalDial {
-				_ = run.TransitionTo(domain.ProbeRunStateFailed)
-				_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateFailed)
-				return fatalErr
+			if failed, taskErr := checkTaskFailure(); failed {
+				return taskErr
 			}
 		}
 	}
@@ -686,8 +726,6 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 	}
 
 	if len(eligibleNodes) == 0 || (stage2Count == 0 && len(stage3Kinds) == 0) {
-		_ = run.TransitionTo(domain.ProbeRunStateSucceeded)
-		_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateSucceeded)
 		return nil
 	}
 
@@ -775,14 +813,10 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 				return handleCancelOrDeadline(stage2aDone)
 			}
 			if stage2aSubmitErr != nil {
-				_ = run.TransitionTo(domain.ProbeRunStateFailed)
-				_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateFailed)
 				return stage2aSubmitErr
 			}
-			if fatalDial, fatalErr := checkFatalDial(); fatalDial {
-				_ = run.TransitionTo(domain.ProbeRunStateFailed)
-				_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateFailed)
-				return fatalErr
+			if failed, taskErr := checkTaskFailure(); failed {
+				return taskErr
 			}
 		}
 	}
@@ -864,14 +898,10 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 				return handleCancelOrDeadline(stage2bDone)
 			}
 			if stage2bSubmitErr != nil {
-				_ = run.TransitionTo(domain.ProbeRunStateFailed)
-				_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateFailed)
 				return stage2bSubmitErr
 			}
-			if fatalDial, fatalErr := checkFatalDial(); fatalDial {
-				_ = run.TransitionTo(domain.ProbeRunStateFailed)
-				_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateFailed)
-				return fatalErr
+			if failed, taskErr := checkTaskFailure(); failed {
+				return taskErr
 			}
 		}
 	}
@@ -958,20 +988,14 @@ func (r *DefaultRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs [
 				return handleCancelOrDeadline(stage3Done)
 			}
 			if stage3SubmitErr != nil {
-				_ = run.TransitionTo(domain.ProbeRunStateFailed)
-				_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateFailed)
 				return stage3SubmitErr
 			}
-			if fatalDial, fatalErr := checkFatalDial(); fatalDial {
-				_ = run.TransitionTo(domain.ProbeRunStateFailed)
-				_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateFailed)
-				return fatalErr
+			if failed, taskErr := checkTaskFailure(); failed {
+				return taskErr
 			}
 		}
 	}
 
-	_ = run.TransitionTo(domain.ProbeRunStateSucceeded)
-	_ = r.runs.UpdateState(ctx, run.ID, domain.ProbeRunStateSucceeded)
 	return nil
 }
 
@@ -1146,7 +1170,7 @@ func isFatalDialError(err error) bool {
 	return errors.Is(err, ErrCredentialsUnavailable) || errors.Is(err, ErrProbeDialingNotConfigured) || errors.Is(err, ErrClientBuildFailed)
 }
 
-func (r *DefaultRunner) recordNotExecuted(parent context.Context, run *domain.ProbeRun, nodes []domain.Node, kinds []domain.ProbeKind, runCtx context.Context, budget *platform.BodyBudget) {
+func (r *DefaultRunner) recordNotExecuted(parent context.Context, run *domain.ProbeRun, nodes []domain.Node, kinds []domain.ProbeKind, runCtx context.Context, budget *platform.BodyBudget) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), 5*time.Second)
 	defer cancel()
 	meter, _ := runCtx.Value(runMeterKey{}).(*runMeter)
@@ -1188,9 +1212,12 @@ func (r *DefaultRunner) recordNotExecuted(parent context.Context, run *domain.Pr
 				obs.ConnectionRevision = &rev
 			}
 			obs.SyncEvidenceData()
-			_ = r.observations.Create(ctx, obs)
+			if err := r.observations.Create(ctx, obs); err != nil {
+				return fmt.Errorf("persist unexecuted probe evidence: %w", err)
+			}
 		}
 	}
+	return nil
 }
 
 func (r *DefaultRunner) executeTask(ctx context.Context, run *domain.ProbeRun, node domain.Node, kind domain.ProbeKind, session *nodeSession) error {
@@ -1217,10 +1244,8 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 	}
 	start := r.clock()
 	timeout := r.budget.TaskTimeout
-	if r.settingsRepo != nil {
-		if s, err := r.settingsRepo.Get(ctx); err == nil && s.ProbeTimeoutSeconds > 0 {
-			timeout = time.Duration(s.ProbeTimeoutSeconds) * time.Second
-		}
+	if meter, ok := ctx.Value(runMeterKey{}).(*runMeter); ok {
+		timeout = meter.taskTimeout
 	}
 	if timeout <= 0 {
 		timeout = 5 * time.Second
@@ -1239,6 +1264,7 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 		result          profiles.Result
 		latency         int64
 		geoCountry      string
+		geoIP           string
 		failureReason   string
 		platformsMap    map[string]domain.PlatformCapability
 		speedCap        domain.PlatformCapability
@@ -1274,6 +1300,10 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 		meter = &runMeter{budget: platform.NewBodyBudget(r.budget.MaxTotalBytes)}
 	}
 	if client != nil {
+		// The run's frozen task deadline owns timeout policy. A shared client's
+		// construction-time timeout must not silently cap later settings edits.
+		client = cloneClient(client)
+		client.Timeout = timeout
 		client = platform.BudgetClient(client, ctx, meter.budget, recorder, meter.cancel)
 	}
 
@@ -1418,7 +1448,10 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 		}
 	} else if kind == domain.ProbeKindIPRisk {
 		reqStart := r.clock()
-		ipRiskCap = platform.CheckIPRisk(ctx, client, "")
+		// Geo, when explicitly selected, has already completed for this node.
+		// Reuse its validated identity only within this run/session; IP-risk-only
+		// runs still resolve their own exit identity before scoring.
+		ipRiskCap = platform.CheckIPRisk(ctx, client, meter.getGeoIP(node.LogicalID))
 		latency = r.clock().Sub(reqStart).Milliseconds()
 		if latency <= 0 && ipRiskCap.LatencyMS != nil {
 			latency = *ipRiskCap.LatencyMS
@@ -1514,6 +1547,7 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 							if cand, err := identity.ExtractCandidate(body); err == nil {
 								result.ContractMatched = true
 								geoCountry = cand.NormalizedCountryCode()
+								geoIP = cand.NormalizedIP()
 							}
 						}
 					case domain.ProbeKindIPRisk:
@@ -1557,9 +1591,9 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 	} else {
 		eval = prof.Evaluate(result)
 		if kind == domain.ProbeKindGeo && eval.Verdict == domain.VerdictAvailable && geoCountry != "" {
-			meter.setGeoCountry(node.LogicalID, geoCountry)
+			meter.setGeoIdentity(node.LogicalID, geoCountry, geoIP)
 		}
-		if len(platformsMap) > 0 {
+		if kind == domain.ProbeKindAI || kind == domain.ProbeKindStreaming {
 			exitCountry, hasExit := meter.getGeoCountry(node.LogicalID)
 			for name, p := range platformsMap {
 				if hasExit && exitCountry != "" {
@@ -1595,13 +1629,6 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 			eval.Reason = reason
 		}
 	}
-	hasPositiveEvidence := false
-	for _, p := range platformsMap {
-		if p.Verdict == domain.VerdictAvailable || p.Verdict == domain.VerdictAbnormal {
-			hasPositiveEvidence = true
-			break
-		}
-	}
 	hasExecutedResponses := false
 	for _, resp := range responses {
 		if resp.Reason != "budget_not_executed" && resp.Reason != "not_scheduled" {
@@ -1609,72 +1636,24 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 			break
 		}
 	}
-	if errors.Is(responseErr, platform.ErrBodyBudget) {
-		for name, p := range platformsMap {
-			if p.Verdict != domain.VerdictAvailable && p.Verdict != domain.VerdictAbnormal {
-				p.Verdict = domain.VerdictSkipped
-				p.Reason = "budget_not_executed"
-				platformsMap[name] = p
-			}
-		}
-		if len(platformsMap) > 0 {
-			if hasPositiveEvidence {
-				eval.Verdict, eval.Reason = domain.AggregatePlatformVerdicts(platformsMap)
-			} else {
-				eval.Verdict = domain.VerdictSkipped
-				eval.Reason = "budget_not_executed"
-			}
-		} else {
-			eval.Verdict = domain.VerdictSkipped
-			eval.Reason = "budget_not_executed"
-		}
+	if platformsMap != nil {
+		// Each detector classifies its own request interruption. A sibling's
+		// budget/cancel/timeout must not erase completed restriction or error
+		// evidence, just as it must not erase a completed positive verdict.
+		eval.Verdict, eval.Reason = domain.AggregatePlatformVerdicts(platformsMap)
+	} else if errors.Is(responseErr, platform.ErrBodyBudget) {
+		eval.Verdict = domain.VerdictSkipped
+		eval.Reason = "budget_not_executed"
 	} else if ctx.Err() != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			for name, p := range platformsMap {
-				if p.Verdict != domain.VerdictAvailable && p.Verdict != domain.VerdictAbnormal {
-					p.Verdict = domain.VerdictError
-					p.Reason = "deadline_exceeded"
-					platformsMap[name] = p
-				}
+			eval.Verdict = domain.VerdictSkipped
+			if hasExecutedResponses {
+				eval.Verdict = domain.VerdictError
 			}
-			if len(platformsMap) > 0 {
-				if hasPositiveEvidence {
-					eval.Verdict, eval.Reason = domain.AggregatePlatformVerdicts(platformsMap)
-				} else if hasExecutedResponses {
-					eval.Verdict = domain.VerdictError
-					eval.Reason = "deadline_exceeded"
-				} else {
-					eval.Verdict = domain.VerdictSkipped
-					eval.Reason = "deadline_exceeded"
-				}
-			} else {
-				if hasExecutedResponses {
-					eval.Verdict = domain.VerdictError
-					eval.Reason = "deadline_exceeded"
-				} else {
-					eval.Verdict = domain.VerdictSkipped
-					eval.Reason = "deadline_exceeded"
-				}
-			}
+			eval.Reason = "deadline_exceeded"
 		} else {
-			for name, p := range platformsMap {
-				if p.Verdict != domain.VerdictAvailable && p.Verdict != domain.VerdictAbnormal {
-					p.Verdict = domain.VerdictSkipped
-					p.Reason = "cancelled"
-					platformsMap[name] = p
-				}
-			}
-			if len(platformsMap) > 0 {
-				if hasPositiveEvidence {
-					eval.Verdict, eval.Reason = domain.AggregatePlatformVerdicts(platformsMap)
-				} else {
-					eval.Verdict = domain.VerdictSkipped
-					eval.Reason = "cancelled"
-				}
-			} else {
-				eval.Verdict = domain.VerdictSkipped
-				eval.Reason = "cancelled"
-			}
+			eval.Verdict = domain.VerdictSkipped
+			eval.Reason = "cancelled"
 		}
 	}
 	now := r.clock().UTC()
@@ -1811,12 +1790,18 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 	obs.SyncEvidenceData()
 	persistCtx, persistCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer persistCancel()
+	if meter.seen != nil {
+		meter.mu.Lock()
+		// The check executed even if persistence fails. Do not replace lost
+		// evidence with a fabricated not-executed observation during cleanup.
+		meter.seen[node.LogicalID+"/"+string(kind)] = true
+		meter.mu.Unlock()
+	}
 	if createErr := r.observations.Create(persistCtx, obs); createErr != nil {
-		return eval.Verdict, createErr
+		return eval.Verdict, fmt.Errorf("persist probe evidence: %w", createErr)
 	}
 	if meter.seen != nil {
 		meter.mu.Lock()
-		meter.seen[node.LogicalID+"/"+string(kind)] = true
 		if kind == domain.ProbeKindBaseline && meter.baseline != nil && (attempt.Executed || failureReason != "" && !errors.Is(responseErr, platform.ErrBodyBudget)) {
 			meter.baseline[node.LogicalID] = eval.Verdict
 		}
@@ -1858,7 +1843,9 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 			RedactedSummary:       obs.RedactedSummary,
 			ProbeObservationID:    &obs.ID,
 		}
-		_ = r.riskObs.Create(persistCtx, ipRiskObs)
+		if err := r.riskObs.Create(persistCtx, ipRiskObs); err != nil {
+			return eval.Verdict, fmt.Errorf("persist normalized risk evidence: %w", err)
+		}
 	}
 	if dialErr != nil && isFatalDialError(dialErr) {
 		return eval.Verdict, dialErr

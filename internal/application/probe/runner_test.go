@@ -1195,12 +1195,12 @@ func TestProbeRunnerTruthfulContractsPerKind(t *testing.T) {
 			wantReason:  "missing_exit_identity",
 		},
 		{
-			name:        "ip_risk_204_empty_is_missing_exit_identity",
+			name:        "ip_risk_204_trace_is_unexpected_status",
 			kind:        domain.ProbeKindIPRisk,
 			statusCode:  http.StatusNoContent,
 			body:        "",
 			wantVerdict: domain.VerdictError,
-			wantReason:  "missing_exit_identity",
+			wantReason:  "unexpected_status",
 		},
 		{
 			name:        "ip_risk_200_trace_identity_without_risk_provider_is_contract_drift",

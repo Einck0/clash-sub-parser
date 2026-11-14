@@ -94,6 +94,29 @@ describe('StructuredFilterEditor real-locale i18n label verification', () => {
     expect(root.innerHTML).not.toContain('settings.filter')
   })
 
+  it('edits, emits and clears risk conditions with string score values for persistence', async () => {
+    let emitted: FilterCondition[] = []
+    mountEditor({
+      modelValue: [{ field: 'ip_risk_band', op: 'equals', value: 'unknown' }],
+      'onUpdate:modelValue': (value: FilterCondition[]) => { emitted = value },
+    })
+    await flush()
+    const field = root.querySelector<HTMLSelectElement>('[data-testid="condition-field"]')!
+    expect(Array.from(field.options).map(o => o.value)).toContain('ip_risk_score')
+    expect(root.querySelector<HTMLSelectElement>('[data-testid="condition-value"]')!.value).toBe('unknown')
+    field.value = 'ip_risk_score'
+    field.dispatchEvent(new Event('change', { bubbles: true }))
+    await flush()
+    const score = root.querySelector<HTMLInputElement>('[data-testid="condition-value"]')!
+    score.value = '0'
+    score.dispatchEvent(new Event('input', { bubbles: true }))
+    await flush()
+    expect(emitted).toEqual([{ field: 'ip_risk_score', op: 'lte', value: '0' }])
+    root.querySelector<HTMLButtonElement>('[data-testid="filter-clear"]')!.click()
+    await flush()
+    expect(emitted).toEqual([])
+  })
+
   it('offers antigravity AI platform and abnormal/skipped verdicts in the editor', async () => {
     const conditions: FilterCondition[] = [
       { field: 'platform_verdict', op: 'equals', value: 'abnormal', probe_kind: 'ai', platform: 'antigravity' },

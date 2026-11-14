@@ -878,29 +878,22 @@ export function nodeHealthBadge(
 
 export function nodeRiskBadge(node: NodeRecord | NormalizedNode): { label: string; tone: ToastTone } {
   const capDetail = extractCapabilityDetail(node, 'ip_risk')
-  if (capDetail && capDetail.risk_score !== undefined && capDetail.risk_score !== '') {
-    const score = capDetail.risk_score
-    const num = Number(score)
-    if (!Number.isNaN(num)) {
+  // The API marks old revisions/future observations stale. Risk is a score,
+  // not a check verdict or the separate export policy's admission decision.
+  if (capDetail?.verdict === 'available' && !capDetail.stale) {
+    const raw = capDetail.risk_score?.trim() ?? ''
+    const parts = raw.split('%')
+    const score = parts[0]?.trim() ?? ''
+    const label = parts[1] ?? ''
+    const validSuffix = parts.length === 1 || (parts.length === 2 && (label === '' || /^[\t\n\v\f\r ]/.test(label)))
+    if (validSuffix && /^(0|[1-9]\d?|100)$/.test(score)) {
+      const num = Number(score)
       if (num < 25) return { label: `低风险 (${score})`, tone: 'success' }
       if (num < 65) return { label: `中风险 (${score})`, tone: 'warning' }
       return { label: `高风险 (${score})`, tone: 'error' }
     }
-    return { label: `风险: ${score}`, tone: 'info' }
   }
-
-  const summary = (node as NormalizedNode).ipRiskSummary ?? (node as NodeRecord).ip_risk_summary
-  const band = summary?.risk_band
-  if (band === 'low') return { label: '低风险', tone: 'success' }
-  if (band === 'medium') return { label: '中风险', tone: 'warning' }
-  if (band === 'high' || band === 'critical') return { label: '高风险', tone: 'error' }
-
-  const capRisk = extractCapabilityVerdict(node.capabilities?.ip_risk)
-  if (capRisk === 'available') return { label: '低风险', tone: 'success' }
-  if (capRisk === 'restricted' || capRisk === 'stale') return { label: '中风险', tone: 'warning' }
-  if (capRisk === 'error') return { label: '高风险', tone: 'error' }
-
-  return { label: '未探测', tone: 'info' }
+  return { label: '风险未知', tone: 'info' }
 }
 
 export function formatExpandedPlatformLabel(badge: PlatformBadge): string {

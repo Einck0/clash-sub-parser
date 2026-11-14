@@ -84,6 +84,8 @@ const (
 	FilterFieldProbeVerdict        FilterField = "probe_verdict"
 	FilterFieldProbeLatencyMS      FilterField = "probe_latency_ms"
 	FilterFieldHealthStatus        FilterField = "health_status"
+	FilterFieldIPRiskScore         FilterField = "ip_risk_score"
+	FilterFieldIPRiskBand          FilterField = "ip_risk_band"
 	FilterFieldExitRegion          FilterField = "exit_region"
 	FilterFieldPlatformVerdict     FilterField = "platform_verdict"
 )
@@ -95,6 +97,8 @@ var validFilterFields = map[FilterField]bool{
 	FilterFieldProbeVerdict:        true,
 	FilterFieldProbeLatencyMS:      true,
 	FilterFieldHealthStatus:        true,
+	FilterFieldIPRiskScore:         true,
+	FilterFieldIPRiskBand:          true,
 	FilterFieldExitRegion:          true,
 	FilterFieldPlatformVerdict:     true,
 }
@@ -255,6 +259,26 @@ func (c FilterCondition) Validate() error {
 		}
 		if c.ProbeKind != nil || c.Platform != "" || c.FreshnessSeconds != nil {
 			return NewValidationError("invalid_filter_field", "health_status does not accept probe parameters")
+		}
+
+	case FilterFieldIPRiskScore, FilterFieldIPRiskBand:
+		if c.ProbeKind != nil || c.Platform != "" || c.FreshnessSeconds != nil {
+			return NewValidationError("invalid_filter_field", "IP risk filters do not accept probe parameters")
+		}
+		if c.Field == FilterFieldIPRiskScore {
+			if c.Op != FilterOpLTE {
+				return NewValidationError("invalid_filter_op", "ip_risk_score only supports lte")
+			}
+			if _, ok := ParseIPRiskScoreInt(val); !ok {
+				return NewValidationError("invalid_filter_value", "ip_risk_score must be an integer between 0 and 100")
+			}
+		} else {
+			if c.Op != FilterOpEquals && c.Op != FilterOpNotEquals {
+				return NewValidationError("invalid_filter_op", "ip_risk_band only supports equals/not_equals")
+			}
+			if !IsValidIPRiskBand(val) {
+				return NewValidationError("invalid_filter_value", "ip_risk_band must be low, medium, high, or unknown")
+			}
 		}
 
 	case FilterFieldExitRegion:
@@ -422,6 +446,17 @@ func MatchesCondition(c FilterCondition, node Node, sources []NodeSource, latest
 	case FilterFieldHealthStatus:
 		category := ClassifyNodeHealth(latestObs, node.ConnectionRevision, asOf, 0)
 		return compareFilterValue(string(category), strings.ToLower(strings.TrimSpace(c.Value)), op)
+
+	case FilterFieldIPRiskScore, FilterFieldIPRiskBand:
+		score, known := CurrentIPRiskScore(node, latestObs, asOf)
+		if field == FilterFieldIPRiskBand {
+			return compareFilterValue(IPRiskScoreBand(score, known), strings.TrimSpace(c.Value), op)
+		}
+		threshold, valid := ParseIPRiskScoreInt(c.Value)
+		if !known || !valid || score > threshold {
+			return false, "no current IP risk score within threshold"
+		}
+		return true, ""
 
 	case FilterFieldExitRegion:
 		obs, ok := latestObs[ProbeKindGeo]

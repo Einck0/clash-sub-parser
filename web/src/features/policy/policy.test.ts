@@ -67,6 +67,21 @@ describe('Feature A reload and PCRE contract', () => {
 })
 
 describe('policy types and helpers', () => {
+  it('validates risk fields without conflating unknown with a score', () => {
+    for (const value of ['low', 'medium', 'high', 'unknown']) {
+      expect(validateConditionInput({ field: 'ip_risk_band', op: 'equals', value })).toBeNull()
+      expect(validateConditionInput({ field: 'ip_risk_band', op: 'not_equals', value })).toBeNull()
+    }
+    for (const value of ['0', '24', '65', '100']) {
+      expect(validateConditionInput({ field: 'ip_risk_score', op: 'lte', value })).toBeNull()
+    }
+    for (const value of ['', '-1', '101', '2.5', '01', '20%', 'unknown']) {
+      expect(validateConditionInput({ field: 'ip_risk_score', op: 'lte', value })).not.toBeNull()
+    }
+    expect(validateConditionInput({ field: 'ip_risk_band', op: 'equals', value: 'critical' })).not.toBeNull()
+    expect(validateConditionInput({ field: 'ip_risk_score', op: 'lte', value: '24', probe_kind: 'baseline' })).not.toBeNull()
+  })
+
   it('formats group types into readable Chinese labels', () => {
     expect(groupTypeLabel('select')).toBe('手动选择 (select)')
     expect(groupTypeLabel('urltest')).toBe('自动测速 (url-test)')

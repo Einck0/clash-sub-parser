@@ -67,6 +67,32 @@ describe('Enabled Subscriptions Inventory & Live Validation Specification', () =
     vi.restoreAllMocks()
   })
 
+  it('keeps risk filters on server pagination and removes them when reset', async () => {
+    const calls: Record<string, unknown>[] = []
+    vi.spyOn(api, 'get').mockImplementation(async (path: string, options?: any) => {
+      if (path === '/api/v1/nodes') {
+        calls.push({ ...options.params })
+        return { items: [], page: options.params.page, page_size: 100, total: 101 }
+      }
+      return { probing_node_ids: [], queued_node_ids: [] }
+    })
+    const nodes = useNodes()
+    nodes.riskBandFilter.value = 'low'
+    nodes.riskScoreMax.value = '0'
+    nodes.searchQuery.value = 'HK'
+    nodes.protocolFilter.value = 'vless'
+    await nodes.load()
+    await nodes.loadMore()
+    expect(calls).toHaveLength(2)
+    expect(calls[1]).toMatchObject({ page: 2, ip_risk_band: 'low', ip_risk_score_max: '0', search: 'HK', protocol: 'vless' })
+    nodes.riskBandFilter.value = 'all'
+    nodes.riskScoreMax.value = ''
+    await nodes.load()
+    expect(calls[2].page).toBe(1)
+    expect(calls[2]).not.toHaveProperty('ip_risk_band')
+    expect(calls[2]).not.toHaveProperty('ip_risk_score_max')
+  })
+
   // --------------------------------------------------------------------------
   // Scenario 1: E contains inactive node but candidate is excluded from probe pool
   // --------------------------------------------------------------------------

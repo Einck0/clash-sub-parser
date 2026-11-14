@@ -57,7 +57,7 @@ VALUES (?, 'ss', ?, '198.51.100.1', 8388, '{}', 1, ?, ?, 1)`
 		}
 		obs := &domain.ProbeObservation{
 			ID: fmt.Sprintf("preview-observation-%02d", i), ProbeRunID: runID,
-			NodeLogicalID: id, Kind: domain.ProbeKindAntigravity, Verdict: verdict,
+			NodeLogicalID: id, Kind: domain.ProbeKindAI, Verdict: verdict,
 			EvidenceDigest: fmt.Sprintf("fixture-%02d", i), ObservedAt: now,
 			ConnectionRevision: int64Ptr(1),
 			Platforms: map[string]domain.PlatformCapability{
@@ -113,7 +113,7 @@ VALUES (?, 'ss', ?, '198.51.100.1', 8388, '{}', 1, ?, ?, 1)`
 		}
 	}
 
-	kind := domain.ProbeKindAntigravity
+	kind := domain.ProbeKindAI
 	condition := domain.FilterCondition{
 		Field: domain.FilterFieldPlatformVerdict, Op: domain.FilterOpEquals,
 		Value: string(domain.VerdictAbnormal), ProbeKind: &kind, Platform: "antigravity",
@@ -200,7 +200,7 @@ VALUES (?, 'ss', ?, '198.51.100.1', 8388, '{}', 1, ?, ?, 1)`
 		return returnPreview
 	}
 	platformSource := func(op domain.FilterOp, value string) domain.MemberSource {
-		kind := domain.ProbeKindAntigravity
+		kind := domain.ProbeKindAI
 		c := domain.FilterCondition{
 			Field: domain.FilterFieldPlatformVerdict, ProbeKind: &kind, Platform: "antigravity",
 			Op: op, Value: value,

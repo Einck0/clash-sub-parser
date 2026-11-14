@@ -904,9 +904,10 @@ func TestPolicyScale_IsolatedAPI_250Nodes150Groups(t *testing.T) {
 	// SCENARIO I: Fail-Closed on filtered_nodes_empty
 	// -------------------------------------------------------------
 	t.Run("fail_closed_on_filtered_nodes_empty", func(t *testing.T) {
-		// This regression tests global-filter rejection, so its groups must inherit it.
-		if _, err := db.ExecContext(ctx, `UPDATE node_groups SET inherit_global_filter = 1 WHERE id = ?`, rootGroupID); err != nil {
-			t.Fatalf("enable global filter inheritance for root group fixture: %v", err)
+		// This regression tests the final pool being empty, so every seeded group
+		// must inherit the global filter for this isolated subtest.
+		if _, err := db.ExecContext(ctx, `UPDATE node_groups SET inherit_global_filter = 1`); err != nil {
+			t.Fatalf("enable global filter inheritance for fixture groups: %v", err)
 		}
 		globalEmptyPass := false
 		// Set a global filter that matches NOTHING and does not allow empty fallback.

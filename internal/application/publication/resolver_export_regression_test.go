@@ -717,16 +717,17 @@ func TestStrictPreflightDiagnostics_RequiredNonemptyAndMixedCapabilities(t *test
 		t.Fatalf("create empty group: %v", err)
 	}
 
-	// Route the empty Tokyo group with MATCH rule. A separate non-inheriting HK
-	// group has a real member, but must not make Tokyo's empty route valid.
+	// Route Tokyo with a valid non-terminal rule; the non-inheriting HK group
+	// owns the unique terminal MATCH rule.
 	if err := policyRepo.CreatePolicyRule(ctx, &domain.PolicyRule{
 		ID:            domain.MustNewUUIDv7(),
 		RevisionID:    rev.ID,
 		TargetGroupID: emptyGroupID,
-		Expression:    "MATCH",
+		Expression:    "DOMAIN-SUFFIX,example.test",
+		Position:      0,
 		Enabled:       true,
 	}); err != nil {
-		t.Fatalf("create MATCH rule for empty group: %v", err)
+		t.Fatalf("create Tokyo route rule: %v", err)
 	}
 	hkGroupID := domain.MustNewUUIDv7()
 	patHK := "(?i)hk"
@@ -738,7 +739,7 @@ func TestStrictPreflightDiagnostics_RequiredNonemptyAndMixedCapabilities(t *test
 	}
 	if err := policyRepo.CreatePolicyRule(ctx, &domain.PolicyRule{
 		ID: domain.MustNewUUIDv7(), RevisionID: rev.ID, TargetGroupID: hkGroupID,
-		Expression: "MATCH", Enabled: true,
+		Expression: "MATCH", Position: 1, Enabled: true,
 	}); err != nil {
 		t.Fatalf("create HK MATCH rule: %v", err)
 	}

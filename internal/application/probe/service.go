@@ -186,9 +186,9 @@ func (s *Service) Create(ctx context.Context, cmd CreateRunCommand) (*domain.Pro
 		}
 	}
 
-	// Speed is a deliberate single-node operation. An empty selection normally
-	// means the whole inventory to the runner, which is unsafe for paid traffic.
-	if err := s.validateSpeedTarget(ctx, cmd.NodeLogicalIDs, cmd.Kinds); err != nil {
+	// A speed-only request is the manual single-node action. Keep legacy mixed
+	// probes unchanged, but never let an empty manual selection expand to a fleet.
+	if err := s.validateManualSpeedTarget(ctx, cmd.NodeLogicalIDs, cmd.Kinds); err != nil {
 		return nil, err
 	}
 
@@ -220,17 +220,16 @@ func (s *Service) Create(ctx context.Context, cmd CreateRunCommand) (*domain.Pro
 	return &run, nil
 }
 
-func (s *Service) validateSpeedTarget(ctx context.Context, nodeIDs []string, kinds []domain.ProbeKind) error {
-	speedCount := 0
-	for _, kind := range kinds {
-		if kind == domain.ProbeKindSpeed {
-			speedCount++
-		}
-	}
-	if speedCount == 0 {
+func (s *Service) validateManualSpeedTarget(ctx context.Context, nodeIDs []string, kinds []domain.ProbeKind) error {
+	if len(kinds) == 0 {
 		return nil
 	}
-	if speedCount != 1 || len(kinds) != 1 || len(nodeIDs) != 1 || strings.TrimSpace(nodeIDs[0]) == "" || nodeIDs[0] != strings.TrimSpace(nodeIDs[0]) {
+	for _, kind := range kinds {
+		if kind != domain.ProbeKindSpeed {
+			return nil // Generic/mixed probes retain their existing target semantics.
+		}
+	}
+	if len(kinds) != 1 || len(nodeIDs) != 1 || strings.TrimSpace(nodeIDs[0]) == "" || nodeIDs[0] != strings.TrimSpace(nodeIDs[0]) {
 		return domain.NewValidationError("invalid_speed_target", "speed testing requires exactly one explicit node and kinds [speed]")
 	}
 	nodes := s.resolveNodesRepo()

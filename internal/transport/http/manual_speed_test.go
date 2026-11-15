@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -20,6 +21,77 @@ import (
 	transporthttp "clash-sub-parser/internal/transport/http"
 	"clash-sub-parser/migrations"
 )
+
+// Compatibility tests stop at the runner boundary: no dialer or real traffic.
+type capturedProbeRequest struct {
+	nodeIDs []string
+	kinds   []domain.ProbeKind
+}
+
+type capturingProbeRunner struct {
+	requests chan capturedProbeRequest
+}
+
+func (r capturingProbeRunner) Run(_ context.Context, _ *domain.ProbeRun, nodeIDs []string, kinds []domain.ProbeKind) error {
+	r.requests <- capturedProbeRequest{nodeIDs: nodeIDs, kinds: kinds}
+	return nil
+}
+
+func TestMixedSpeedHTTPRequestsPreserveLegacyTargets(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		payload string
+		nodeIDs []string
+		kinds   []domain.ProbeKind
+	}{
+		{
+			name:    "single mixed formerly rejected",
+			payload: `{"node_logical_ids":["manual-speed-node"],"kinds":["speed","baseline"]}`,
+			nodeIDs: []string{"manual-speed-node"}, kinds: []domain.ProbeKind{domain.ProbeKindSpeed, domain.ProbeKindBaseline},
+		},
+		{
+			name:    "omitted targets retain fleet semantics",
+			payload: `{"kinds":["baseline","speed"]}`,
+			kinds:   []domain.ProbeKind{domain.ProbeKindBaseline, domain.ProbeKindSpeed},
+		},
+		{
+			name:    "empty targets retain fleet semantics",
+			payload: `{"node_logical_ids":[],"kinds":["baseline","speed"]}`,
+			nodeIDs: []string{}, kinds: []domain.ProbeKind{domain.ProbeKindBaseline, domain.ProbeKindSpeed},
+		},
+		{
+			name:    "multiple mixed targets",
+			payload: `{"node_logical_ids":["one","two"],"kinds":["baseline","speed"]}`,
+			nodeIDs: []string{"one", "two"}, kinds: []domain.ProbeKind{domain.ProbeKindBaseline, domain.ProbeKindSpeed},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runs := &probeRunMemory{data: map[string]domain.ProbeRun{}}
+			runner := capturingProbeRunner{requests: make(chan capturedProbeRequest, 1)}
+			service := probe.NewService(runs, probe.WithRunner(runner))
+			router := transporthttp.NewRouter(transporthttp.RouterConfig{
+				AdminToken: probeTestAdminToken, ProbeService: service,
+				ProbeRunRepository: runs, ProbeObservationRepository: &observationMemory{},
+			})
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/probes/runs", strings.NewReader(tc.payload))
+			req.Header.Set("Authorization", "Bearer "+probeTestAdminToken)
+			req.Header.Set("Idempotency-Key", "mixed")
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			if rec.Code != http.StatusCreated {
+				t.Fatalf("mixed request rejected: status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			select {
+			case got := <-runner.requests:
+				if !reflect.DeepEqual(got.nodeIDs, tc.nodeIDs) || !reflect.DeepEqual(got.kinds, tc.kinds) {
+					t.Fatalf("mixed request rewritten: got=%+v want targets=%v kinds=%v", got, tc.nodeIDs, tc.kinds)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("mixed request never reached controlled runner")
+			}
+		})
+	}
+}
 
 type speedRoundTripper func(*http.Request) (*http.Response, error)
 
@@ -89,7 +161,6 @@ func TestManualSpeedPersistsIntoNodeStatus(t *testing.T) {
 		`{"kinds":["speed"]}`,
 		`{"node_logical_ids":[],"kinds":["speed"]}`,
 		`{"node_logical_ids":["manual-speed-node","other"],"kinds":["speed"]}`,
-		`{"node_logical_ids":["manual-speed-node"],"kinds":["speed","baseline"]}`,
 		`{"node_logical_ids":["manual-speed-node"],"kinds":["speed","speed"]}`,
 		`{"node_logical_ids":["missing"],"kinds":["speed"]}`,
 		`{"node_logical_ids":[" "],"kinds":["speed"]}`,

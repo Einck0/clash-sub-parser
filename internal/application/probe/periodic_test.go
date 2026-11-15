@@ -263,6 +263,41 @@ func (m *mockRunner) Run(ctx context.Context, run *domain.ProbeRun, nodeIDs []st
 	return nil
 }
 
+func TestPeriodicCoordinator_PreservesBaselineAndSpeedSchedule(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	schedules := newMemoryScheduleRepo(domain.ProbeSchedule{
+		Enabled: true, IntervalSeconds: 300, NextDueAt: &now, Generation: 1,
+		Kinds: []domain.ProbeKind{domain.ProbeKindBaseline, domain.ProbeKindSpeed}, UpdatedAt: now,
+	})
+	nodes := &memoryNodeRepo{nodes: []domain.Node{
+		{LogicalID: "one", Active: true}, {LogicalID: "two", Active: true},
+	}}
+	runs := &memoryRuns{items: map[string]domain.ProbeRun{}}
+	var scheduledNodes atomic.Int32
+	// Stop at the runner boundary; a periodic speed task must remain allowed
+	// without making this compatibility regression perform any network traffic.
+	runner := &mockRunner{runFn: func(_ context.Context, _ *domain.ProbeRun, nodeIDs []string, kinds []domain.ProbeKind) error {
+		if len(kinds) != 2 || kinds[0] != domain.ProbeKindBaseline || kinds[1] != domain.ProbeKindSpeed {
+			return fmt.Errorf("scheduled mixed kinds changed: %v", kinds)
+		}
+		scheduledNodes.Add(int32(len(nodeIDs)))
+		return nil
+	}}
+	coord := NewPeriodicCoordinator(schedules, nodes, runs, runner,
+		WithCoordinatorClock(func() time.Time { return now }),
+	)
+	if err := coord.TriggerWindow(); err != nil {
+		t.Fatal(err)
+	}
+	batches, _, err := schedules.ListBatches(context.Background(), 1, 10)
+	if err != nil || len(batches) != 1 {
+		t.Fatalf("missing schedule batch: %+v err=%v", batches, err)
+	}
+	if batches[0].State != domain.ProbeBatchStateSucceeded || scheduledNodes.Load() != 2 {
+		t.Fatalf("mixed schedule did not dispatch both nodes: batch=%+v nodes=%d", batches[0], scheduledNodes.Load())
+	}
+}
+
 func TestPeriodicCoordinator_TriggerWindow_ShardingAndCounts(t *testing.T) {
 	ctx := context.Background()
 

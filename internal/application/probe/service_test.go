@@ -99,6 +99,86 @@ func (m *memoryRuns) PruneHistory(_ context.Context, _ int) error {
 	return nil
 }
 
+// Create itself must protect manual speed callers, not only the HTTP handler.
+func TestServiceCreateManualSpeedRequiresSingleEligibleTarget(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		nodeIDs []string
+		kinds   []domain.ProbeKind
+	}{
+		{name: "omitted", kinds: []domain.ProbeKind{domain.ProbeKindSpeed}},
+		{name: "empty", nodeIDs: []string{}, kinds: []domain.ProbeKind{domain.ProbeKindSpeed}},
+		{name: "multiple", nodeIDs: []string{"active", "other"}, kinds: []domain.ProbeKind{domain.ProbeKindSpeed}},
+		{name: "blank", nodeIDs: []string{" "}, kinds: []domain.ProbeKind{domain.ProbeKindSpeed}},
+		{name: "padded", nodeIDs: []string{" active "}, kinds: []domain.ProbeKind{domain.ProbeKindSpeed}},
+		{name: "missing", nodeIDs: []string{"missing"}, kinds: []domain.ProbeKind{domain.ProbeKindSpeed}},
+		{name: "inactive", nodeIDs: []string{"inactive"}, kinds: []domain.ProbeKind{domain.ProbeKindSpeed}},
+		{name: "duplicate speed", nodeIDs: []string{"active"}, kinds: []domain.ProbeKind{domain.ProbeKindSpeed, domain.ProbeKindSpeed}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &memoryRuns{items: map[string]domain.ProbeRun{}}
+			nodes := &memoryNodeRepo{nodes: []domain.Node{{LogicalID: "active", Active: true}, {LogicalID: "inactive", Active: false}}}
+			svc := NewService(repo, WithNodeRepository(nodes))
+			_, err := svc.Create(context.Background(), CreateRunCommand{
+				IdempotencyKey: "manual", NodeLogicalIDs: tc.nodeIDs, Kinds: tc.kinds,
+			})
+			var validation *domain.DomainError
+			if !errors.As(err, &validation) || validation.Code != "invalid_speed_target" {
+				t.Fatalf("expected invalid_speed_target, got %v", err)
+			}
+			if len(repo.items) != 0 || len(svc.active) != 0 {
+				t.Fatal("rejected manual speed created a run or controller")
+			}
+		})
+	}
+
+	repo := &memoryRuns{items: map[string]domain.ProbeRun{}}
+	svc := NewService(repo, WithNodeRepository(&memoryNodeRepo{nodes: []domain.Node{{LogicalID: "active", Active: true}}}))
+	run, err := svc.Create(context.Background(), CreateRunCommand{
+		IdempotencyKey: "manual", NodeLogicalIDs: []string{"active"}, Kinds: []domain.ProbeKind{domain.ProbeKindSpeed},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Cancel(context.Background(), run.ID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestServiceCreatePreservesGenericMixedProbes(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		nodeIDs []string
+		kinds   []domain.ProbeKind
+	}{
+		{name: "maintenance six kinds", nodeIDs: []string{"one", "two"}, kinds: []domain.ProbeKind{
+			domain.ProbeKindBaseline, domain.ProbeKindStreaming, domain.ProbeKindAI,
+			domain.ProbeKindIPRisk, domain.ProbeKindGeo, domain.ProbeKindSpeed,
+		}},
+		{name: "ledger mixed single", nodeIDs: []string{"one"}, kinds: []domain.ProbeKind{domain.ProbeKindSpeed, domain.ProbeKindBaseline}},
+		{name: "mixed fleet", kinds: []domain.ProbeKind{domain.ProbeKindBaseline, domain.ProbeKindSpeed}},
+		{name: "implicit defaults"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &memoryRuns{items: map[string]domain.ProbeRun{}}
+			// Generic Create never required a node repository or runner.
+			svc := NewService(repo)
+			run, err := svc.Create(context.Background(), CreateRunCommand{
+				IdempotencyKey: "generic", NodeLogicalIDs: tc.nodeIDs, Kinds: tc.kinds,
+			})
+			if err != nil {
+				t.Fatalf("legacy mixed/default Create rejected: %v", err)
+			}
+			if len(repo.items) != 1 || run.State != domain.ProbeRunStateQueued {
+				t.Fatalf("generic run not created: %+v", run)
+			}
+			if err := svc.Cancel(context.Background(), run.ID); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestServiceCreateIsIdempotentWithinTTL(t *testing.T) {
 	repo := &memoryRuns{items: map[string]domain.ProbeRun{}}
 	svc := NewService(repo)

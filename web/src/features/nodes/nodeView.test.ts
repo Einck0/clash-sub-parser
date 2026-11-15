@@ -1004,7 +1004,7 @@ describe('NodesView real API detail, plaintext PATCH edit, and failure draft pre
     await nextTick()
 
     // Confirm modal should be open
-    const modalConfirmBtn = document.body.querySelector('[data-testid="confirm-modal-confirm"]') as HTMLButtonElement
+    const modalConfirmBtn = document.querySelector('[data-testid="confirm-probe-all-modal"] [data-testid="confirm-modal-confirm"]') as HTMLButtonElement
     expect(modalConfirmBtn).not.toBeNull()
     modalConfirmBtn.click()
     await nextTick()

@@ -5,7 +5,7 @@ import { formatSpeed } from '../probes/probeTypes'
 import { uiText } from '../../locales/redesign'
 
 const props = defineProps<{ node: NormalizedNode; busy?: boolean; failed?: boolean }>()
-const speed = computed(() => props.node.capabilityDetails.speed)
+const speed = computed(() => props.node.capabilityDetails?.speed)
 const current = computed(() => !props.busy && !props.failed && speed.value?.verdict === 'available' && !speed.value.stale && typeof speed.value.throughput === 'number' && Number.isFinite(speed.value.throughput) && speed.value.throughput > 0)
 const label = computed(() => {
   if (props.busy) return uiText('正在测速…', 'Measuring speed…')

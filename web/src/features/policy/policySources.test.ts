@@ -250,7 +250,7 @@ describe('Feature-Level Policy Sources & Pipeline Rebuild', () => {
       expect(container.querySelector('input')?.value).toBe('Draft Preserved Group')
       expect(container.textContent).toContain('未知节点')
       expect(container.textContent).not.toContain('node-hk-01')
-      expect(container.textContent).toContain('v5')
+      expect(container.textContent).toContain('版本 5')
 
       app.unmount()
     })

@@ -222,18 +222,9 @@ describe('Clean Minimal Client Subscriptions Specification (Zero-Overengineering
     }
   })
 
-  it('PublicationsView download button catches 422 compiler error and notifies via error toast', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
-      ok: false,
-      status: 422,
-      headers: new Headers(),
-      text: async () => JSON.stringify({
-        error: {
-          code: 'unsupported_capability',
-          message: 'sing-box does not support wireguard protocol',
-        },
-      }),
-    } as any)
+  it('PublicationsView disables downloads without a verified preview and never fetches a live export', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    const anchorClickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
 
     app = createApp({ render: () => h(PublicationsView) })
     app.mount(container)
@@ -244,14 +235,15 @@ describe('Clean Minimal Client Subscriptions Specification (Zero-Overengineering
       '[data-testid-target="download-client-subscription-singbox"]'
     ) as HTMLButtonElement
     expect(downloadBtn).not.toBeNull()
+    expect(downloadBtn.disabled).toBe(true)
+    expect(container.querySelector('[data-testid="preview-actions"]')).toBeNull()
 
     downloadBtn.click()
     await nextTick()
-    await new Promise((r) => setTimeout(r, 20))
 
-    expect(toastStore.items.value.some((t) => t.tone === 'error')).toBe(true)
-    const errToast = toastStore.items.value.find((t) => t.tone === 'error')
-    expect(errToast?.message).toContain('sing-box does not support wireguard protocol')
+    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(anchorClickSpy).not.toHaveBeenCalled()
+    expect(toastStore.items.value).toHaveLength(0)
   })
 
   it('Zero backend CRUD calls: completely eliminates /api/v1/subscription-links', async () => {

@@ -156,7 +156,7 @@ function syncUrlFromState() {
   }
 
   if (hasDiff) {
-    router.replace({ query }).catch(() => {})
+    void Promise.resolve(router.replace({ query })).catch(() => {})
   }
 }
 

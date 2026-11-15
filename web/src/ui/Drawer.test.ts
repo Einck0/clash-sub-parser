@@ -8,8 +8,17 @@ import { resetBodyScrollLockForTesting } from '../composables/useBodyScrollLock'
 describe('Drawer and DrawerCard Components', () => {
   let container: HTMLDivElement
   let app: ReturnType<typeof createApp> | null = null
+  const hasNativeInert = 'inert' in HTMLElement.prototype
 
   beforeEach(() => {
+    // jsdom 25 lacks inert reflection; Vue must remove the attribute when it is false.
+    if (!hasNativeInert) {
+      Object.defineProperty(HTMLElement.prototype, 'inert', {
+        configurable: true,
+        get(this: HTMLElement) { return this.hasAttribute('inert') },
+        set(this: HTMLElement, value: boolean) { this.toggleAttribute('inert', Boolean(value)) },
+      })
+    }
     resetBodyScrollLockForTesting()
     document.body.style.overflow = ''
     container = document.createElement('div')
@@ -26,6 +35,7 @@ describe('Drawer and DrawerCard Components', () => {
     resetBodyScrollLockForTesting()
     document.body.style.overflow = ''
     vi.restoreAllMocks()
+    if (!hasNativeInert) Reflect.deleteProperty(HTMLElement.prototype, 'inert')
   })
 
   it('renders Drawer when open and provides scrollable content structure with safe-area support', async () => {
@@ -253,10 +263,14 @@ describe('Drawer and DrawerCard Components', () => {
     await nextTick()
     await nextTick()
 
-    const close = document.querySelector<HTMLButtonElement>('button[aria-label="Close drawer"]')!
-    const last = document.querySelector<HTMLButtonElement>('#keyboard-last')!
-    // jsdom has no layout; only these controls represent visible rendered buttons.
-    for (const element of [close, last]) {
+    const panel = document.querySelector<HTMLElement>('[data-drawer-panel]')!
+    const close = panel.querySelector<HTMLButtonElement>('button[aria-label="Close drawer"]')!
+    const last = panel.querySelector<HTMLButtonElement>('#keyboard-last')!
+    expect(panel.closest('[inert]')).toBeNull()
+    expect(Array.from(panel.querySelectorAll('button')).filter((button) => !button.disabled && !button.hidden))
+      .toEqual([close, last])
+    // jsdom has no layout; give every button geometry so disabled/hidden filtering is exercised too.
+    for (const element of panel.querySelectorAll('button')) {
       vi.spyOn(element, 'getClientRects').mockReturnValue([{} as DOMRect] as unknown as DOMRectList)
     }
     expect(document.activeElement).toBe(close)

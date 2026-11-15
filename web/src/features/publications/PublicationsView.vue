@@ -11,6 +11,7 @@ import PageToolbar from '../../ui/PageToolbar.vue'
 import { toastStore } from '../../ui/toast'
 import { t } from '../../locales'
 import { uiText } from '../../locales/redesign'
+import { displayText } from '../../utils/displayNames'
 import {
   COMPILER_TARGETS,
   type CompilerTarget,
@@ -119,23 +120,23 @@ function handleDirectDownload(target: CompilerTarget) {
         </div>
       </div>
       <div class="flex flex-wrap items-center gap-3 text-xs font-mono" data-testid="preview-context">
-        <span>target={{ selectedTarget }}</span>
-        <span v-if="preview?.snapshot_id">snapshot={{ preview.snapshot_id.slice(0, 18) }}…</span>
-        <span v-if="preview?.manifest">excluded={{ preview.manifest.excluded_count }}</span>
+        <span>{{ uiText('目标客户端', 'Client') }}：{{ targetLabel(selectedTarget) }}</span>
+        <span v-if="preview?.snapshot_id">{{ uiText('冻结快照已就绪', 'Frozen snapshot ready') }}</span>
+        <span v-if="preview?.manifest">{{ uiText('已排除', 'Excluded') }} {{ preview.manifest.excluded_count }}</span>
       </div>
       <div v-if="error" class="alert alert-error text-sm" data-testid="preview-error">
         <div>
-          <p class="font-semibold">{{ errorDetail instanceof Error ? errorDetail.message : error }}</p>
+          <p class="font-semibold">{{ displayText(errorDetail instanceof Error ? errorDetail.message : error) }}</p>
           <ul v-if="preflightDiagnostics.length" class="mt-2 list-disc pl-5 text-xs">
-            <li v-for="(diagnostic, index) in preflightDiagnostics" :key="`${diagnostic.code}-${index}`">{{ diagnostic.target ? `${diagnostic.target}: ` : '' }}{{ diagnostic.code || 'diagnostic' }} — {{ diagnostic.message }}</li>
+            <li v-for="(diagnostic, index) in preflightDiagnostics" :key="`${diagnostic.code}-${index}`">{{ diagnostic.target ? `${targetLabel(diagnostic.target as CompilerTarget)}: ` : '' }}{{ displayText(diagnostic.message) }}</li>
           </ul>
         </div>
       </div>
       <div v-if="preview?.manifest?.excluded?.length" class="rounded-xl border border-warning/40 bg-warning/10 p-3 text-sm" data-testid="preview-exclusions">
         <p class="font-semibold">{{ uiText(`已跳过 ${preview.manifest.excluded_count} 个节点`, `${preview.manifest.excluded_count} node(s) excluded`) }}</p>
         <ul class="mt-2 space-y-1 text-xs">
-          <li v-for="item in preview.manifest.excluded" :key="`${item.node_id}-${item.code}`" class="font-mono">
-            {{ item.node_id }} · {{ item.code || 'excluded' }} · {{ item.reason || 'no reason supplied' }} · target={{ preview.target }}
+          <li v-for="(item, index) in preview.manifest.excluded" :key="`${item.node_id}-${item.code}`">
+            {{ uiText('已排除节点', 'Excluded node') }} {{ index + 1 }} · {{ displayText(item.reason) || uiText('未提供排除原因', 'No reason supplied') }} · {{ targetLabel(preview.target) }}
           </li>
         </ul>
       </div>
@@ -181,7 +182,7 @@ function handleDirectDownload(target: CompilerTarget) {
           </div>
           <div class="flex flex-wrap items-center gap-2 text-xs font-mono text-base-content/60">
             <span>target={{ item.target }}</span>
-            <span v-if="preview?.target === item.target">snapshot={{ preview.snapshot_id?.slice(0, 18) }}…</span>
+            <span v-if="preview?.target === item.target">{{ uiText('使用当前冻结快照', 'Using current frozen snapshot') }}</span>
             <span v-else>{{ uiText('尚未生成当前目标预览', 'No preview for the current target') }}</span>
           </div>
           <p class="text-[11px] text-base-content/50 font-mono">

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
+import { displayName } from '../../utils/displayNames'
 import {
   IP_RISK_BANDS,
   IP_RISK_BAND_LABELS,
@@ -65,12 +66,14 @@ interface SubscriptionSummary {
 const subscriptions = ref<SubscriptionSummary[]>([])
 const loadingSubscriptions = ref(false)
 const subscriptionsError = ref('')
+const subscriptionsLoaded = ref(false)
 
 async function fetchSubscriptions() {
   loadingSubscriptions.value = true
   subscriptionsError.value = ''
   try {
     const allSubs: SubscriptionSummary[] = []
+    let fetchedCount = 0
     let page = 1
     const pageSize = 100
     while (true) {
@@ -81,13 +84,12 @@ async function fetchSubscriptions() {
         params: { page, page_size: pageSize },
       })
       if (res && Array.isArray(res.items)) {
+        fetchedCount += res.items.length
         res.items.forEach((s) => {
-          allSubs.push({
-            id: s.id,
-            name: s.name?.trim() || (s as any).title?.trim() || s.id,
-          })
+          const name = displayName(s.name?.trim() || s.title?.trim(), '未命名订阅', s.id)
+          if (s.id) allSubs.push({ id: s.id, name })
         })
-        if (res.items.length === 0 || allSubs.length >= (res.total || 0) || res.items.length < pageSize) {
+        if (res.items.length === 0 || (typeof res.total === 'number' && fetchedCount >= res.total) || res.items.length < pageSize) {
           break
         }
         page++
@@ -96,6 +98,7 @@ async function fetchSubscriptions() {
       }
     }
     subscriptions.value = allSubs
+    subscriptionsLoaded.value = true
   } catch (err: any) {
     subscriptionsError.value = '加载订阅失败: ' + (err?.message || '网络异常')
   } finally {
@@ -104,16 +107,24 @@ async function fetchSubscriptions() {
 }
 
 function ensureSubscriptions() {
-  if (subscriptions.value.length === 0 && !loadingSubscriptions.value && !subscriptionsError.value) {
-    fetchSubscriptions()
+  if (!subscriptionsLoaded.value && !loadingSubscriptions.value && !subscriptionsError.value) {
+    void fetchSubscriptions()
   }
 }
 
-onMounted(() => {
-  if (activeConditions.value.some((c) => c.field === 'source_subscription_ids')) {
-    ensureSubscriptions()
-  }
-})
+function retrySubscriptions() {
+  void fetchSubscriptions()
+}
+
+function savedSubscriptionLabel(id: string): string {
+  return subscriptions.value.find((subscription) => subscription.id === id)?.name
+    || '已保存的订阅（当前不可用）'
+}
+
+watch(
+  () => activeConditions.value.some((condition) => condition.field === 'source_subscription_ids'),
+  (needsSubscriptions) => { if (needsSubscriptions) ensureSubscriptions() }
+)
 
 // Sync props -> activeConditions
 watch(
@@ -507,18 +518,38 @@ function opLabel(op: FilterOp): string {
           />
         </label>
 
-        <!-- Source Subscription IDs -->
+        <!-- Source Subscription: persist the ID, but only show the business name -->
         <label v-else-if="condition.field === 'source_subscription_ids'" class="flex flex-col gap-1 text-xs font-medium">
           <span>{{ t('settings.filterValue') }}</span>
-          <input
+          <select
             v-model="condition.value"
             data-testid="condition-value"
-            class="input input-sm font-mono max-w-full"
+            class="select select-sm max-w-full"
             :aria-label="t('settings.filterValue')"
-            placeholder="订阅 UUIDv7..."
-            :disabled="readOnly"
-            @input="emitConditions"
-          />
+            :disabled="readOnly || loadingSubscriptions"
+            @change="emitConditions"
+          >
+            <option value="" disabled>
+              {{ loadingSubscriptions ? '加载订阅中...' : '请选择订阅' }}
+            </option>
+            <option
+              v-if="condition.value && !subscriptions.some((subscription) => subscription.id === condition.value)"
+              :value="condition.value"
+              disabled
+            >
+              {{ savedSubscriptionLabel(condition.value) }}
+            </option>
+            <option v-for="subscription in subscriptions" :key="subscription.id" :value="subscription.id">
+              {{ subscription.name }}
+            </option>
+          </select>
+          <span v-if="subscriptionsError" class="flex items-center justify-between gap-2 text-[11px] text-error" data-testid="subscription-filter-error">
+            <span>{{ subscriptionsError }}</span>
+            <button type="button" class="btn btn-ghost btn-xs" :disabled="loadingSubscriptions" @click="retrySubscriptions">重试</button>
+          </span>
+          <span v-else-if="!loadingSubscriptions && subscriptions.length === 0" class="text-[11px] text-base-content/60">
+            暂无可选订阅
+          </span>
         </label>
 
         <!-- Display Name (Default) -->

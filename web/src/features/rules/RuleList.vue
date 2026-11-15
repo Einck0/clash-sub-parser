@@ -21,6 +21,7 @@ import {
 } from './rulesTypes'
 import { t } from '../../locales'
 import { uiText } from '../../locales/redesign'
+import { displayName } from '../../utils/displayNames'
 
 const props = defineProps<{
   categories: RuleCategory[]
@@ -43,6 +44,10 @@ const emit = defineEmits<{
   'move-category': [categoryId: string, direction: 'up' | 'down']
   'clear-search': []
 }>()
+
+function groupName(id: string): string {
+  return displayName(props.groupNameMap.get(id), uiText('未知策略组（引用已失效）', 'Unavailable policy group'), id)
+}
 
 function getCategoryName(categoryId?: string, categoryName?: string): string {
   if (categoryId) {
@@ -191,7 +196,7 @@ function hasTerminalRule(list: PolicyRuleView[]): boolean {
                   <div v-else-if="rule.target_group_id" class="flex items-center gap-1.5">
                     <span class="badge badge-info badge-sm font-medium gap-1 max-w-[150px] truncate whitespace-nowrap h-auto py-0.5 px-2 shrink-0">
                       <CpuChipIcon class="w-3.5 h-3.5 shrink-0" />
-                      <span class="truncate">{{ groupNameMap.get(rule.target_group_id) || rule.target_group_id }}</span>
+                      <span class="truncate">{{ groupName(rule.target_group_id) }}</span>
                     </span>
                   </div>
                   <span v-else class="badge badge-ghost badge-sm text-xs opacity-60">-</span>
@@ -259,7 +264,7 @@ function hasTerminalRule(list: PolicyRuleView[]): boolean {
                   class="badge badge-info badge-sm font-medium gap-1 max-w-[130px] truncate whitespace-nowrap h-auto py-0.5 px-2 shrink-0"
                 >
                   <CpuChipIcon class="w-3 h-3 shrink-0" />
-                  <span class="truncate">{{ groupNameMap.get(rule.target_group_id) || rule.target_group_id }}</span>
+                  <span class="truncate">{{ groupName(rule.target_group_id) }}</span>
                 </span>
               </div>
               <input
@@ -460,7 +465,7 @@ function hasTerminalRule(list: PolicyRuleView[]): boolean {
                       <div v-else-if="rule.target_group_id" class="flex items-center gap-1.5">
                         <span class="badge badge-info badge-sm font-medium gap-1 max-w-[160px] truncate whitespace-nowrap h-auto py-0.5 px-2 shrink-0">
                           <CpuChipIcon class="w-3.5 h-3.5 shrink-0" />
-                          <span class="truncate">{{ groupNameMap.get(rule.target_group_id) || rule.target_group_id }}</span>
+                          <span class="truncate">{{ groupName(rule.target_group_id) }}</span>
                         </span>
                       </div>
                       <span v-else class="badge badge-ghost badge-sm text-xs opacity-60">-</span>
@@ -549,7 +554,7 @@ function hasTerminalRule(list: PolicyRuleView[]): boolean {
                       class="badge badge-info badge-sm font-medium gap-1 max-w-[130px] truncate whitespace-nowrap h-auto py-0.5 px-2 shrink-0"
                     >
                       <CpuChipIcon class="w-3 h-3 shrink-0" />
-                      <span class="truncate">{{ groupNameMap.get(rule.target_group_id) || rule.target_group_id }}</span>
+                      <span class="truncate">{{ groupName(rule.target_group_id) }}</span>
                     </span>
                   </div>
                   <input
@@ -705,7 +710,7 @@ function hasTerminalRule(list: PolicyRuleView[]): boolean {
                     <div v-else-if="rule.target_group_id" class="flex items-center gap-1.5">
                       <span class="badge badge-info badge-sm font-medium gap-1 max-w-[160px] truncate whitespace-nowrap h-auto py-0.5 px-2 shrink-0">
                         <CpuChipIcon class="w-3.5 h-3.5 shrink-0" />
-                        <span class="truncate">{{ groupNameMap.get(rule.target_group_id) || rule.target_group_id }}</span>
+                        <span class="truncate">{{ groupName(rule.target_group_id) }}</span>
                       </span>
                     </div>
                   </td>

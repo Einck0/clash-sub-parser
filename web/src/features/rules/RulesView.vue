@@ -23,6 +23,7 @@ import RuleCategoryModal from './RuleCategoryModal.vue'
 import ConfirmModal from '../../ui/ConfirmModal.vue'
 import { toastStore } from '../../ui/toast'
 import { t } from '../../locales'
+import { displayText } from '../../utils/displayNames'
 
 const {
   categories,
@@ -296,7 +297,7 @@ function handleClearSearch() {
             {{ validationResult.valid ? t('rules.topologyValid') : t('rules.topologyInvalid') }}
           </h4>
           <p class="text-xs opacity-80 mt-0.5">
-            {{ validationResult.valid ? t('rules.topologyValidDesc') : (validationResult.errors?.join(', ') || t('rules.topologyInvalid')) }}
+            {{ validationResult.valid ? t('rules.topologyValidDesc') : displayText(validationResult.errors?.join(', ') || t('rules.topologyInvalid')) }}
           </p>
         </div>
       </div>
@@ -317,7 +318,7 @@ function handleClearSearch() {
     >
       <div class="flex items-center gap-2">
         <ExclamationTriangleIcon class="w-5 h-5 text-error shrink-0" />
-        <span class="text-xs">{{ error }}</span>
+        <span class="text-xs">{{ displayText(error) }}</span>
       </div>
       <button type="button" class="btn btn-xs btn-outline" @click="loadData">
         {{ t('common.retry') || 'Retry' }}

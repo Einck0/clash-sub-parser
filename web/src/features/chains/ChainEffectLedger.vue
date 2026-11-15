@@ -7,15 +7,18 @@ import {
   GlobeAltIcon,
 } from '@heroicons/vue/24/outline'
 import { uiText } from '../../locales/redesign'
-import type { EffectNode } from './types'
+import type { EffectNode, OptionsResult } from './types'
+import { displayName, displayText } from '../../utils/displayNames'
 
 const props = withDefaults(
   defineProps<{
     nodes: EffectNode[]
+    options?: OptionsResult
     loading?: boolean
     error?: string | null
   }>(),
   {
+    options: () => ({ nodes: [], groups: [], subscriptions: [] }),
     loading: false,
     error: null,
   }
@@ -50,6 +53,14 @@ const filteredNodes = computed(() => {
     return true
   })
 })
+
+function dialerName(id?: string): string {
+  if (!id) return ''
+  const option = [...props.options.nodes, ...props.options.groups].find((item) => item.id === id)
+  // The backend can also return an already-resolved proxy business name.
+  if (!option && displayText(id) !== id) return uiText('已配置跳板', 'Dialer configured')
+  return displayName(option?.name || id, uiText('已配置跳板', 'Dialer configured'), option ? id : undefined)
+}
 
 function getSourceBadgeLabel(source?: string): string {
   switch (source) {
@@ -113,7 +124,7 @@ function getSourceBadgeLabel(source?: string): string {
         <input
           v-model="searchQuery"
           type="search"
-          :placeholder="uiText('搜索节点名称、ID 或跳板...', 'Search node name, ID, dialer...')"
+          :placeholder="uiText('搜索节点名称或跳板...', 'Search node name or dialer...')"
           class="input input-bordered input-sm w-full pl-9"
           data-testid="ledger-search-input"
         />
@@ -155,7 +166,7 @@ function getSourceBadgeLabel(source?: string): string {
 
     <!-- Error State -->
     <div v-else-if="error" class="alert alert-error shadow-sm rounded-xl p-3 text-xs">
-      <span>{{ error }}</span>
+      <span>{{ displayText(error) }}</span>
     </div>
 
     <!-- Table -->
@@ -163,10 +174,10 @@ function getSourceBadgeLabel(source?: string): string {
       <table class="table table-sm table-zebra w-full text-xs">
         <thead class="bg-base-200/50 text-base-content/70">
           <tr>
-            <th>{{ uiText('节点名称 / ID', 'Node Name / ID') }}</th>
+            <th>{{ uiText('节点名称', 'Node Name') }}</th>
             <th>{{ uiText('最终前置跳板代理 (dialer-proxy)', 'Assigned Dialer Proxy') }}</th>
             <th>{{ uiText('生效来源', 'Winning Source') }}</th>
-            <th>{{ uiText('生效绑定 ID', 'Binding ID') }}</th>
+            <th>{{ uiText('绑定状态', 'Binding Status') }}</th>
           </tr>
         </thead>
         <tbody>
@@ -176,8 +187,7 @@ function getSourceBadgeLabel(source?: string): string {
             :data-testid="`ledger-node-row-${node.logical_id}`"
           >
             <td>
-              <div class="font-semibold text-base-content">{{ node.display_name }}</div>
-              <div class="text-[10px] text-base-content/50 font-mono">{{ node.logical_id }}</div>
+              <div class="font-semibold text-base-content">{{ displayName(node.display_name, uiText('未命名节点', 'Unnamed node'), node.logical_id) }}</div>
             </td>
 
             <td>
@@ -186,7 +196,7 @@ function getSourceBadgeLabel(source?: string): string {
                 class="badge badge-primary badge-sm font-semibold gap-1"
               >
                 <LinkIcon class="w-3 h-3" />
-                <span>{{ node.dialer_proxy }}</span>
+                <span>{{ dialerName(node.dialer_proxy) }}</span>
               </span>
               <span v-else class="badge badge-ghost badge-sm text-base-content/50">
                 {{ uiText('直连 (Direct)', 'Direct') }}
@@ -210,7 +220,7 @@ function getSourceBadgeLabel(source?: string): string {
 
             <td>
               <span v-if="node.chain_binding_id" class="font-mono text-[11px] text-base-content/70">
-                {{ node.chain_binding_id }}
+                {{ uiText('已配置', 'Configured') }}
               </span>
               <span v-else class="text-base-content/40">—</span>
             </td>

@@ -65,22 +65,18 @@ describe('SettingsView Component', () => {
     }
   }
 
-  it('renders shared SettingsSections navigation with active="csp"', async () => {
+  it('keeps global settings separate from DNS and proxy chain routes', async () => {
     vi.spyOn(api, 'get').mockResolvedValue(settings())
 
     const { getSettingsSectionsNav } = mountSettings()
     await nextTick()
 
     const nav = getSettingsSectionsNav()
-    expect(nav).toBeTruthy()
-    const cspLink = container.querySelector('[data-testid="settings-section-csp"]')
-    const dnsLink = container.querySelector('[data-testid="settings-section-dns"]')
-    const chainsLink = container.querySelector('[data-testid="settings-section-chains"]')
-
-    expect(cspLink).toBeTruthy()
-    expect(dnsLink).toBeTruthy()
-    expect(chainsLink).toBeTruthy()
-    expect(cspLink?.getAttribute('aria-current')).toBe('page')
+    expect(nav).toBeNull()
+    expect(container.querySelector('[data-testid="settings-section-dns"]')).toBeNull()
+    expect(container.querySelector('[data-testid="settings-section-chains"]')).toBeNull()
+    expect(router.resolve('/dns').matched.length).toBeGreaterThan(0)
+    expect(router.resolve('/chains').matched.length).toBeGreaterThan(0)
   })
 
   it('probes auth mode on mount and renders Open Mode with gentle warning style', async () => {

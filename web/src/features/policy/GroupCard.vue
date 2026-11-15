@@ -20,17 +20,20 @@ import {
 import StatusBadge from '../../ui/StatusBadge.vue'
 import { uiText } from '../../locales/redesign'
 import { t } from '../../locales'
+import { displayName } from '../../utils/displayNames'
 
 const props = withDefaults(
   defineProps<{
     group: PolicyGroup
     availableGroups?: PolicyGroup[]
+    availableNodes?: Array<{ logicalId?: string; logical_id?: string; displayName?: string; display_name?: string }>
     selected?: boolean
     canMoveUp?: boolean
     canMoveDown?: boolean
   }>(),
   {
     availableGroups: () => [],
+    availableNodes: () => [],
     selected: false,
     canMoveUp: false,
     canMoveDown: false,
@@ -105,6 +108,15 @@ const membershipMode = computed(() => {
   }
 })
 
+function nodeName(id?: string): string {
+  const node = props.availableNodes.find((n) => (n.logicalId || n.logical_id) === id)
+  return displayName(node?.displayName || node?.display_name, '未知节点（来源不可用）', id)
+}
+
+function groupName(id?: string): string {
+  return displayName(props.availableGroups.find((g) => g.id === id)?.name, '未知策略组（引用已失效）', id)
+}
+
 function handleHeaderClick() {
   emit('select', props.group)
   expanded.value = !expanded.value
@@ -136,10 +148,7 @@ function handleHeaderClick() {
             <CpuChipIcon class="w-5 h-5" />
           </div>
           <div class="min-w-0 flex-1">
-            <h3 class="font-bold text-sm sm:text-base truncate">{{ group.name }}</h3>
-            <p class="mt-0.5 font-mono text-[11px] opacity-60 truncate">
-              ID: {{ group.id }}
-            </p>
+            <h3 class="font-bold text-sm sm:text-base truncate">{{ displayName(group.name, '未命名策略组', group.id) }}</h3>
           </div>
         </div>
 
@@ -292,13 +301,13 @@ function handleHeaderClick() {
                 {{ sourceKindLabel(item.source.kind) }}
               </span>
               <span v-if="item.source.kind === 'manual_node'" class="text-primary truncate">
-                节点: {{ item.source.node_logical_id }}
+                节点: {{ nodeName(item.source.node_logical_id) }}
               </span>
               <span v-else-if="item.source.kind === 'group_ref'" class="text-secondary truncate">
-                组引用: {{ item.source.target_group_id }}
+                组引用: {{ groupName(item.source.target_group_id) }}
               </span>
               <span v-else-if="item.source.kind === 'group_nodes'" class="text-secondary truncate">
-                展开子组: {{ item.source.target_group_id }}
+                展开子组: {{ groupName(item.source.target_group_id) }}
               </span>
               <span v-else-if="item.source.kind === 'regex'" class="text-accent truncate">
                 正则: /{{ item.source.pattern }}/

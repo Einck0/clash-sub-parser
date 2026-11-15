@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { displayName, displayText } from '../../utils/displayNames'
 import {
   XMarkIcon,
   ClockIcon,
@@ -87,8 +88,7 @@ function resolveObsNode(obs: ProbeObservation): NormalizedNode | null {
 
 function resolveObsNodeTitle(obs: ProbeObservation): string {
   const resolved = resolveObsNode(obs)
-  if (resolved) return resolved.displayName
-  return obs.node_logical_id
+  return displayName(resolved?.displayName, '未知节点（来源不可用）', obs.node_logical_id)
 }
 
 function resolveObsNodeEndpoint(obs: ProbeObservation): string {
@@ -118,7 +118,7 @@ function formatHumanSummary(obs: ProbeObservation): {
   if (!isMachineKeyValue) {
     return {
       statusBadge: '',
-      explanation: raw,
+      explanation: displayText(raw),
     }
   }
 
@@ -138,7 +138,7 @@ function formatHumanSummary(obs: ProbeObservation): {
   }
   return {
     statusBadge,
-    explanation: parts.join(' · '),
+    explanation: displayText(parts.join(' · ')),
   }
 }
 
@@ -284,7 +284,7 @@ function resolveObservationPlatforms(obs: ProbeObservation): PlatformBadge[] {
           </div>
 
           <h2 id="sheet-title" class="mt-1 text-lg sm:text-xl font-bold truncate">
-            {{ node ? node.displayName : t('probes.evidenceTitle') }}
+            {{ node ? displayName(node.displayName, '未命名节点', node.logicalId) : t('probes.evidenceTitle') }}
           </h2>
 
           <div v-if="node" class="mt-1 flex flex-wrap items-center gap-2 text-xs opacity-75 font-mono">
@@ -357,7 +357,7 @@ function resolveObservationPlatforms(obs: ProbeObservation): PlatformBadge[] {
           "
         >
           <span class="font-semibold">{{ currentNodeDiagnostic.shortLabel }}：</span>
-          <span>{{ currentNodeDiagnostic.detail }}</span>
+          <span>{{ displayText(currentNodeDiagnostic.detail) }}</span>
         </div>
 
         <div v-if="loading" class="space-y-3">
@@ -427,7 +427,7 @@ function resolveObservationPlatforms(obs: ProbeObservation): PlatformBadge[] {
                   <StatusBadge
                     :label="badge.label"
                     :tone="badge.tone"
-                    :title="badge.tooltip"
+                    :title="displayText(badge.tooltip)"
                   />
                 </div>
               </div>
@@ -465,7 +465,7 @@ function resolveObservationPlatforms(obs: ProbeObservation): PlatformBadge[] {
                   <span v-if="obs.attempt.category" class="badge badge-xs badge-ghost">{{ formatAttemptCategory(obs.attempt.category) }}</span>
                 </div>
                 <div v-if="obs.attempt.reason" class="text-[11px] text-base-content/80">
-                  原因: {{ formatObservationReasonLabel(obs.attempt.reason) }}
+                  原因: {{ displayText(formatObservationReasonLabel(obs.attempt.reason)) }}
                 </div>
               </div>
             </div>

@@ -8,6 +8,7 @@ import {
 } from '@heroicons/vue/24/outline'
 import Drawer from '../../ui/Drawer.vue'
 import { uiText } from '../../locales/redesign'
+import { displayName, displayText } from '../../utils/displayNames'
 import type { UseChainDraftReturn } from './useChainDraft'
 import type { OptionsResult, OptionItem } from './types'
 
@@ -181,7 +182,7 @@ async function handleSaveClick() {
               {{ uiText('并发修改冲突 (409 Conflict)', 'Concurrent Conflict (409)') }}
             </h4>
             <p class="text-xs text-base-content/80 mt-1 leading-relaxed">
-              {{ conflictState.message }}
+              {{ displayText(conflictState.message) }}
             </p>
             <p class="text-xs text-base-content/60 mt-1">
               {{
@@ -220,7 +221,7 @@ async function handleSaveClick() {
         data-testid="chain-save-error"
       >
         <ExclamationTriangleIcon class="w-4 h-4 shrink-0" />
-        <span class="flex-1 font-medium">{{ saveError }}</span>
+        <span class="flex-1 font-medium">{{ displayText(saveError) }}</span>
       </div>
 
       <!-- Priority Information Card -->
@@ -297,14 +298,14 @@ async function handleSaveClick() {
                 {{ uiText('-- 请选择出口目标 --', '-- Select Target --') }}
               </option>
               <option v-if="isTargetMissing" :value="draft.target_id" disabled>
-                [{{ uiText('已失效引用', 'Missing Ref') }}: {{ draft.target_id }}]
+                {{ uiText('目标已失效，请重新选择', 'Target unavailable; select again') }}
               </option>
               <option
                 v-for="opt in targetOptions"
                 :key="opt.id"
                 :value="opt.id"
               >
-                {{ opt.name }} ({{ opt.id }})
+                {{ displayName(opt.name, uiText('未命名目标', 'Unnamed target'), opt.id) }}
               </option>
             </select>
           </div>
@@ -345,14 +346,14 @@ async function handleSaveClick() {
                 {{ uiText('-- 请选择跳板实体 --', '-- Select Dialer --') }}
               </option>
               <option v-if="isDialerMissing" :value="draft.dialer_id" disabled>
-                [{{ uiText('已失效引用', 'Missing Ref') }}: {{ draft.dialer_id }}]
+                {{ uiText('跳板已失效，请重新选择', 'Dialer unavailable; select again') }}
               </option>
               <option
                 v-for="opt in dialerOptions"
                 :key="opt.id"
                 :value="opt.id"
               >
-                {{ opt.name }} ({{ opt.id }})
+                {{ displayName(opt.name, uiText('未命名跳板', 'Unnamed dialer'), opt.id) }}
               </option>
             </select>
           </div>
@@ -444,7 +445,7 @@ async function handleSaveClick() {
           data-testid="chain-preview-error"
         >
           <ExclamationTriangleIcon class="w-4 h-4 shrink-0 text-warning mt-0.5" />
-          <span class="break-words font-medium leading-relaxed">{{ previewError }}</span>
+          <span class="break-words font-medium leading-relaxed">{{ displayText(previewError) }}</span>
         </div>
 
         <!-- Preview Effects Stats -->
@@ -485,7 +486,7 @@ async function handleSaveClick() {
                   :key="s"
                   class="badge badge-success badge-sm badge-outline"
                 >
-                  {{ s }}
+                  {{ displayText(s) }}
                 </span>
               </div>
             </div>
@@ -501,7 +502,7 @@ async function handleSaveClick() {
                   :key="s"
                   class="badge badge-warning badge-sm badge-outline"
                 >
-                  {{ s }}
+                  {{ displayText(s) }}
                 </span>
               </div>
             </div>
@@ -514,7 +515,7 @@ async function handleSaveClick() {
                 class="text-[11px] text-warning flex items-center gap-1.5"
               >
                 <span>•</span>
-                <span>{{ d.message }}</span>
+                <span>{{ displayText(d.message) }}</span>
               </div>
             </div>
           </div>

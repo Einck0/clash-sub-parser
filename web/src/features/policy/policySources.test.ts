@@ -248,7 +248,8 @@ describe('Feature-Level Policy Sources & Pipeline Rebuild', () => {
 
       // Draft sources and edited name are preserved
       expect(container.querySelector('input')?.value).toBe('Draft Preserved Group')
-      expect(container.textContent).toContain('node-hk-01')
+      expect(container.textContent).toContain('未知节点')
+      expect(container.textContent).not.toContain('node-hk-01')
       expect(container.textContent).toContain('v5')
 
       app.unmount()
@@ -549,7 +550,9 @@ describe('Feature-Level Policy Sources & Pipeline Rebuild', () => {
       await nextTick()
 
       expect(container.textContent).toContain('检测到拓扑成环 (422 Unprocessable Entity)')
-      expect(container.textContent).toContain('grp-cycle-1 → grp-cycle-2 → grp-cycle-1')
+      expect(container.textContent).toContain('Cycle Group A → 未知策略组 → Cycle Group A')
+      expect(container.textContent).not.toContain('grp-cycle-1')
+      expect(container.textContent).not.toContain('grp-cycle-2')
 
       app.unmount()
     })
@@ -768,7 +771,7 @@ describe('Feature-Level Policy Sources & Pipeline Rebuild', () => {
 
   // 11. Readonly Snapshot Preview Tab
   describe('Readonly Snapshot Preview Tab', () => {
-    it('fetches draft preview via POST /api/v1/policies/groups/preview and renders digests, members, and draft label', async () => {
+    it('fetches draft preview and renders business members without internal keys or digests', async () => {
       let draftPostPayload: any = null
       vi.spyOn(api, 'post').mockImplementation(async (path: string, body?: any) => {
         if (path === '/api/v1/policies/groups/preview') {
@@ -828,13 +831,14 @@ describe('Feature-Level Policy Sources & Pipeline Rebuild', () => {
       expect(draftPostPayload.sources).toHaveLength(1)
       expect(draftPostPayload.sources[0].node_logical_id).toBe('node-hk-01')
 
-      // Verification of rendered draft label, digests, resolved members, and diagnostics
+      // Transport keys remain in the request, not in user-facing preview content.
       expect(container.textContent).toContain('草稿预览 (Draft Preview)')
-      expect(container.textContent).toContain('选择集指纹')
-      expect(container.textContent).toContain('内容指纹')
-      expect(container.textContent).toContain('selection-hash-09876543')
-      expect(container.textContent).toContain('content-hash-abcdef123')
-      expect(container.textContent).toContain('node-hk-01')
+      expect(container.textContent).not.toContain('选择集指纹')
+      expect(container.textContent).not.toContain('内容指纹')
+      expect(container.textContent).not.toContain('selection-hash-09876543')
+      expect(container.textContent).not.toContain('content-hash-abcdef123')
+      expect(container.textContent).not.toContain('node-hk-01')
+      expect(container.textContent).toContain('未命名节点')
       expect(container.textContent).toContain('警告：当前节点即将过期')
 
       app.unmount()

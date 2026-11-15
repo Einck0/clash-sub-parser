@@ -697,7 +697,7 @@ describe('Node Source Attribution & History Specification', () => {
       expect(requestedAllAssets).toBe(false)
       const errAlert = mountEl.querySelector('[data-testid="node-deep-link-error"]')
       expect(errAlert).not.toBeNull()
-      expect(errAlert?.textContent).toContain('未找到节点「non-existent-999」(404)')
+      expect(errAlert?.textContent).toContain('未找到该节点（可能已移除），请刷新台账 (404)')
 
       // Total still untouched
       const totalBadge = mountEl.querySelector('[data-testid="nodes-total-badge"]')

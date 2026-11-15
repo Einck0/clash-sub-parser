@@ -14,6 +14,7 @@ import type { PolicyGroupSummary } from './useRules'
 import { t } from '../../locales'
 import { uiText } from '../../locales/redesign'
 import { useUnsavedChanges } from '../../composables/useUnsavedChanges'
+import { displayName } from '../../utils/displayNames'
 
 const props = defineProps<{
   modelValue: boolean
@@ -322,7 +323,7 @@ function handleSubmit() {
               :key="g.id"
               :value="g.id"
             >
-              {{ g.name }} ({{ g.group_type || 'group' }})
+              {{ displayName(g.name, '未命名策略组', g.id) }} ({{ g.group_type || 'group' }})
             </option>
           </select>
         </div>

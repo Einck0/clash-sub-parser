@@ -7,6 +7,8 @@ import {
   ExclamationTriangleIcon,
 } from '@heroicons/vue/24/outline'
 import StatusBadge from '../../ui/StatusBadge.vue'
+import NodeSpeedResult from './NodeSpeedResult.vue'
+import { displayText } from '../../utils/displayNames'
 import {
   formatExpandedPlatformLabel,
   formatNodeLatency,
@@ -30,12 +32,16 @@ const props = defineProps<{
   node: NormalizedNode
   selected: boolean
   probeState: 'probing' | 'queued' | 'idle'
+  speedBusy?: boolean
+  speedFailed?: boolean
+  speedDisabled?: boolean
 }>()
 
 defineEmits<{
   (e: 'toggle-select', logicalId: string): void
   (e: 'open-detail', node: NormalizedNode): void
   (e: 'probe-node', node: NormalizedNode): void
+  (e: 'speed-node', node: NormalizedNode): void
 }>()
 
 const detailsExpanded = ref(false)
@@ -47,10 +53,10 @@ const geoRegion = computed(() => getNodeGeoRegion(props.node))
 
 const streamingBadges = computed(() => getNodePlatformBadges(props.node, 'streaming'))
 const aiBadges = computed(() => getNodePlatformBadges(props.node, 'ai'))
-const speedBadge = computed(() => getNodeSpeedBadge(props.node))
+const speedBadge = computed(() => props.speedBusy || props.speedFailed ? null : getNodeSpeedBadge(props.node))
 
 const hasPlatformDetails = computed(() => {
-  return streamingBadges.value.length > 0 || aiBadges.value.length > 0 || speedBadge.value !== null
+  return true
 })
 </script>
 
@@ -78,7 +84,6 @@ const hasPlatformDetails = computed(() => {
         </div>
         <div class="min-w-0 flex-1">
           <h3 class="truncate font-semibold text-sm">{{ node.displayName }}</h3>
-          <p class="truncate font-mono text-[11px] opacity-60">{{ node.logicalId }}</p>
         </div>
         <!-- Mobile-only status badge next to name -->
         <div class="flex md:hidden items-center gap-1.5 shrink-0">
@@ -111,10 +116,10 @@ const hasPlatformDetails = computed(() => {
           v-for="message in nodeTargetDiagnostics(node)"
           :key="message"
           data-testid="node-target-diagnostic"
-          class="badge badge-xs badge-warning badge-outline h-auto whitespace-normal break-words"
-          :title="message"
+          class="badge badge-xs badge-warning badge-outline h-auto min-w-0 max-w-full whitespace-normal break-words [overflow-wrap:anywhere]"
+          :title="displayText(message)"
         >
-          {{ message }}
+          {{ displayText(message) }}
         </span>
         <span
           v-if="node.connection.server && node.connection.port"
@@ -184,7 +189,7 @@ const hasPlatformDetails = computed(() => {
           data-testid="node-card-diagnostic-badge"
           class="badge badge-sm md:badge-xs gap-1 text-[11px] h-auto py-0.5 whitespace-normal"
           :class="diagnostic.isBlockedByPolicyOrConfig ? 'badge-warning badge-outline' : 'badge-ghost opacity-80'"
-          :title="diagnostic.detail"
+          :title="displayText(diagnostic.detail)"
         >
           {{ diagnostic.shortLabel }}
         </span>
@@ -195,7 +200,10 @@ const hasPlatformDetails = computed(() => {
           type="button"
           data-testid="node-platform-details-toggle"
           class="btn btn-ghost btn-xs text-[11px] gap-1 px-1.5 text-base-content/70 hover:text-base-content"
-          :title="detailsExpanded ? uiText('收起流媒体与AI能力', 'Collapse Platform Details') : uiText('展开流媒体与AI能力', 'Expand Platform Details')"
+          :class="{ 'btn-active text-primary': detailsExpanded }"
+          :aria-expanded="detailsExpanded"
+          :aria-controls="`node-platform-details-${node.logicalId}`"
+          :title="detailsExpanded ? uiText('收起流媒体与AI能力详情', 'Collapse platform capability details') : uiText('展开流媒体与AI能力详情', 'Expand platform capability details')"
           @click.stop="detailsExpanded = !detailsExpanded"
         >
           <span>{{ detailsExpanded ? uiText('收起能力', 'Collapse') : uiText('平台能力', 'Platforms') }}</span>
@@ -234,7 +242,15 @@ const hasPlatformDetails = computed(() => {
             :tone="node.active ? 'success' : 'warning'"
           />
         </div>
-        <div class="flex items-center gap-1.5 ml-auto md:ml-0">
+        <div class="flex flex-wrap items-center gap-1.5 ml-auto md:ml-0">
+          <NodeSpeedResult :node="node" :busy="speedBusy" :failed="speedFailed" />
+          <button
+            type="button"
+            data-testid="node-card-speed-btn"
+            class="btn btn-outline btn-primary btn-xs"
+            :disabled="speedDisabled || !node.active"
+            @click.stop="$emit('speed-node', node)"
+          >{{ speedBusy ? '测速中…' : '手动测速' }}</button>
           <button
             type="button"
             data-testid="node-card-probe-btn"
@@ -263,43 +279,58 @@ const hasPlatformDetails = computed(() => {
     <!-- Inline Expanded Platform & Speed Details Accordion -->
     <div
       v-if="detailsExpanded"
+      :id="`node-platform-details-${node.logicalId}`"
       data-testid="node-platform-details-expanded"
-      class="mt-2.5 pt-2.5 border-t border-base-300/80 flex flex-wrap items-center gap-1.5 text-xs"
+      class="mt-2.5 pt-2.5 border-t border-base-300/80 space-y-2 text-xs"
       @click.stop
     >
-      <StatusBadge
-        v-if="speedBadge"
-        :label="speedBadge.label"
-        :tone="speedBadge.tone"
-      />
-      <template v-if="streamingBadges.length > 0">
-        <StatusBadge
-          v-for="badge in streamingBadges"
-          :key="`streaming-${badge.platform}`"
-          :label="formatExpandedPlatformLabel(badge)"
-          :tone="badge.tone"
-          :title="badge.tooltip"
-        />
-      </template>
-      <StatusBadge
-        v-else
-        :label="`${t('nodes.streaming')}: ${nodeCapabilityLabel(node, 'streaming').label}`"
-        :tone="nodeCapabilityLabel(node, 'streaming').tone"
-      />
-      <template v-if="aiBadges.length > 0">
-        <StatusBadge
-          v-for="badge in aiBadges"
-          :key="`ai-${badge.platform}`"
-          :label="formatExpandedPlatformLabel(badge)"
-          :tone="badge.tone"
-          :title="badge.tooltip"
-        />
-      </template>
-      <StatusBadge
-        v-else
-        :label="`${t('nodes.ai')}: ${nodeCapabilityLabel(node, 'ai').label}`"
-        :tone="nodeCapabilityLabel(node, 'ai').tone"
-      />
+      <p class="text-[11px] text-base-content/60">
+        {{ uiText('平台能力详情（按最近一次有效检测结果）', 'Platform capability details from the latest valid check') }}
+      </p>
+      <div class="flex flex-wrap items-start gap-2">
+        <div class="rounded-lg bg-base-100 border border-base-300 px-2 py-1.5 space-y-1">
+          <p class="font-semibold text-[11px]">{{ t('nodes.streaming') }}</p>
+          <div class="flex flex-wrap items-center gap-1.5">
+            <template v-if="streamingBadges.length > 0">
+              <StatusBadge
+                v-for="badge in streamingBadges"
+                :key="`streaming-${badge.platform}`"
+                :label="formatExpandedPlatformLabel(badge)"
+                :tone="badge.tone"
+                :title="badge.tooltip"
+              />
+            </template>
+            <StatusBadge
+              v-else
+              :label="nodeCapabilityLabel(node, 'streaming').label"
+              :tone="nodeCapabilityLabel(node, 'streaming').tone"
+            />
+          </div>
+        </div>
+        <div class="rounded-lg bg-base-100 border border-base-300 px-2 py-1.5 space-y-1">
+          <p class="font-semibold text-[11px]">{{ t('nodes.ai') }}</p>
+          <div class="flex flex-wrap items-center gap-1.5">
+            <template v-if="aiBadges.length > 0">
+              <StatusBadge
+                v-for="badge in aiBadges"
+                :key="`ai-${badge.platform}`"
+                :label="formatExpandedPlatformLabel(badge)"
+                :tone="badge.tone"
+                :title="badge.tooltip"
+              />
+            </template>
+            <StatusBadge
+              v-else
+              :label="nodeCapabilityLabel(node, 'ai').label"
+              :tone="nodeCapabilityLabel(node, 'ai').tone"
+            />
+          </div>
+        </div>
+        <div v-if="speedBadge" class="rounded-lg bg-base-100 border border-base-300 px-2 py-1.5 space-y-1">
+          <p class="font-semibold text-[11px]">{{ uiText('测速', 'Speed') }}</p>
+          <StatusBadge :label="speedBadge.label" :tone="speedBadge.tone" />
+        </div>
+      </div>
     </div>
   </article>
 </template>

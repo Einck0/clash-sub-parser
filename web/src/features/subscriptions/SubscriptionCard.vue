@@ -13,6 +13,7 @@ import {
 } from '@heroicons/vue/24/outline'
 import Popover from '../../ui/Popover.vue'
 import { t, currentLocale } from '../../locales'
+import { displayText } from '../../utils/displayNames'
 import {
   formatRefreshTime,
   formatFullDateTime,
@@ -64,7 +65,7 @@ const parsedUserinfo = computed(() => parseUserInfo(props.subscription.userinfo)
               主订阅
             </span>
           </div>
-          <p class="mt-1 truncate font-mono text-xs opacity-60 break-all">{{ subscription.source_url_secret_ref }}</p>
+          <p class="mt-1 truncate text-xs opacity-60 break-all">订阅来源已配置</p>
         </div>
 
         <div class="flex flex-wrap items-center gap-1.5 min-w-0 max-w-full">
@@ -207,7 +208,7 @@ const parsedUserinfo = computed(() => parseUserInfo(props.subscription.userinfo)
       >
         <div class="flex items-start gap-2 min-w-0 flex-1">
           <ExclamationCircleIcon class="h-4 w-4 shrink-0" />
-          <span class="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{{ rowError }}</span>
+          <span class="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{{ displayText(rowError) }}</span>
         </div>
         <button
           type="button"

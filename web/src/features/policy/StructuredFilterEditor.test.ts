@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { api } from '../../api/client'
 import { createApp, h, nextTick } from 'vue'
 import StructuredFilterEditor from './StructuredFilterEditor.vue'
 import { setLocale, t } from '../../locales'
@@ -33,6 +34,42 @@ describe('StructuredFilterEditor real-locale i18n label verification', () => {
     app = undefined
     root.remove()
     setLocale('zh-CN')
+    vi.restoreAllMocks()
+  })
+
+  it('loads subscription names for asynchronously supplied conditions and persists only the selected ID', async () => {
+    const { ref } = await import('vue')
+    const rows = ref<FilterCondition[]>([])
+    const first = '019520c3-8268-7000-8000-000000000001'
+    const second = '019520c3-8268-7000-8000-000000000002'
+    const get = vi.spyOn(api, 'get').mockResolvedValue({ items: [{ id: first, name: '香港订阅' }, { id: second, name: '日本订阅' }], total: 2 })
+    const update = vi.fn()
+    app = createApp({ render: () => h(StructuredFilterEditor, { modelValue: rows.value, 'onUpdate:modelValue': update }) })
+    app.mount(root)
+    await flush()
+    rows.value = [{ field: 'source_subscription_ids', op: 'contains', value: first }]
+    await flush(); await flush()
+    expect(get).toHaveBeenCalledWith('/api/v1/subscriptions', { params: { page: 1, page_size: 100 } })
+    const select = root.querySelector<HTMLSelectElement>('[data-testid="condition-value"]')!
+    expect(select.tagName).toBe('SELECT')
+    expect(select.textContent).toContain('香港订阅')
+    expect(select.textContent).not.toContain(first)
+    select.value = second
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+    await flush()
+    expect(update).toHaveBeenLastCalledWith([{ field: 'source_subscription_ids', op: 'contains', value: second }])
+  })
+
+  it('retains unavailable saved subscription values without exposing IDs and offers a load retry', async () => {
+    const get = vi.spyOn(api, 'get').mockRejectedValueOnce(new Error('offline')).mockResolvedValue({ items: [], total: 0 })
+    mountEditor({ modelValue: [{ field: 'source_subscription_ids', op: 'not_contains', value: 'sub_private' }] })
+    await flush(); await flush()
+    expect(root.textContent).not.toContain('sub_private')
+    expect(root.textContent).toContain('已保存的订阅')
+    root.querySelector<HTMLButtonElement>('[data-testid="subscription-filter-error"] button')!.click()
+    await flush(); await flush()
+    expect(get).toHaveBeenCalledTimes(2)
+    expect(root.querySelector('[data-testid="subscription-filter-error"]')).toBeNull()
   })
 
   it('renders Chinese localized labels for health_status, exit_region, and platform_verdict without raw keys', async () => {

@@ -1,4 +1,5 @@
 import type { ToastTone } from '../../ui/toast'
+import { displayName } from '../../utils/displayNames'
 import type { CompilerTarget } from '../publications/publicationTypes'
 import {
   type PlatformCapability,
@@ -666,7 +667,7 @@ export function normalizeNode(node: NodeRecord): NormalizedNode {
   return {
     logicalId,
     protocol: node.protocol,
-    displayName: rawDisplayName.trim() || logicalId,
+    displayName: displayName(rawDisplayName, '未命名节点', logicalId),
     active: node.active,
     connectionRevision: node.connection_revision ?? (node as any).connectionRevision,
     createdAt: node.created_at,
@@ -981,7 +982,7 @@ export function getNodeSpeedBadge(
 ): { label: string; tone: ToastTone } | null {
   const speedDetail = extractCapabilityDetail(node, 'speed')
   if (!speedDetail) return null
-  if (typeof speedDetail.throughput === 'number' && speedDetail.throughput > 0) {
+  if (speedDetail.verdict === 'available' && !speedDetail.stale && typeof speedDetail.throughput === 'number' && Number.isFinite(speedDetail.throughput) && speedDetail.throughput > 0) {
     return {
       label: `🚀 ${formatSpeed(speedDetail.throughput)}`,
       tone: 'info',

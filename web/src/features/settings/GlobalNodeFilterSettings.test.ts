@@ -32,7 +32,7 @@ describe('global export filter settings', () => {
     setLocale('zh-CN')
     root = document.createElement('div')
     document.body.append(root)
-    vi.spyOn(api, 'get').mockImplementation(async (path: string) => path === endpoint ? structuredClone(baseline) : {})
+    vi.spyOn(api, 'get').mockImplementation(async (path: string) => path === endpoint ? structuredClone(baseline) : path === '/api/v1/subscriptions' ? { items: [{ id: '019520c3-8268-7000-8000-000000000001', name: '我的订阅' }], total: 1 } : {})
     vi.spyOn(api, 'put').mockImplementation(async (_path, payload: any) => ({ ...payload, updated_at: 'now' }))
   })
   afterEach(() => { app?.unmount(); app = undefined; root.remove(); setLocale('zh-CN'); vi.restoreAllMocks() })
@@ -152,11 +152,11 @@ describe('global export filter settings', () => {
     expect(api.put).toHaveBeenLastCalledWith(endpoint, { spec: { conditions: [
       { field: 'probe_latency_ms', op: 'lte', value: '125', probe_kind: 'baseline', freshness_seconds: 3600 },
     ] }, empty_fallback_pass: true })
-    input(field(), 'source_subscription_ids'); await flush()
-    input(value(), 'not-a-uuid'); await flush()
-    button('filter-save').click(); await flush()
-    expect(find('filter-validation-error')?.textContent).toContain('UUIDv7')
-    input(value(), '019520c3-8268-7000-8000-000000000001'); await flush()
+    input(field(), 'source_subscription_ids'); await flush(); await flush()
+    const subscription = conditions()[0]!.querySelector<HTMLSelectElement>('select[aria-label="值"]')!
+    expect(subscription.textContent).toContain('我的订阅')
+    expect(subscription.textContent).not.toContain('019520c3')
+    input(subscription, '019520c3-8268-7000-8000-000000000001'); await flush()
     button('filter-save').click(); await flush()
     expect(api.put).toHaveBeenLastCalledWith(endpoint, { spec: { conditions: [
       { field: 'source_subscription_ids', op: 'contains', value: '019520c3-8268-7000-8000-000000000001' },

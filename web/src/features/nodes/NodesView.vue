@@ -27,6 +27,7 @@ import { useNodes, type HealthFilterType } from './useNodes'
 import { IP_RISK_BANDS, IP_RISK_BAND_LABELS } from '../policy/policyTypes'
 import { t } from '../../locales'
 import { uiText } from '../../locales/redesign'
+import { displayText } from '../../utils/displayNames'
 
 const GAP = 8
 const ESTIMATED_ROW_HEIGHT = 56
@@ -41,6 +42,8 @@ const {
   detailErrorMessage,
   savingConnection,
   probingNodeId,
+  speedingNodeId,
+  measureNodeSpeed,
   probingNodeIds,
   queuedNodeIds,
   error,
@@ -162,6 +165,25 @@ function syncUrlFromState() {
 
 const drawerOpen = ref(false)
 const probeFeedback = ref('')
+const speedTarget = ref<NormalizedNode | null>(null)
+const speedFeedback = ref('')
+const speedFailedIds = ref<Set<string>>(new Set())
+
+function requestSpeed(node: NormalizedNode) {
+  if (speedingNodeId.value || !node.active) return
+  speedTarget.value = node
+}
+
+async function confirmSpeed() {
+  const node = speedTarget.value
+  if (!node || speedingNodeId.value) return
+  speedTarget.value = null
+  speedFailedIds.value = new Set([...speedFailedIds.value].filter((id) => id !== node.logicalId))
+  speedFeedback.value = `正在对「${node.displayName}」进行单次带宽测速…`
+  const result = await measureNodeSpeed(node.logicalId)
+  if (!result.ok) speedFailedIds.value = new Set([...speedFailedIds.value, node.logicalId])
+  speedFeedback.value = result.ok ? `「${node.displayName}」测速结果已保存并刷新。` : (result.error || '本次测速失败，请重试。')
+}
 const sourceHistory = ref<NodeSourceHistoryData | null>(null)
 const loadingSourceHistory = ref(false)
 const sourceHistoryError = ref('')
@@ -459,28 +481,28 @@ async function openNodeByLogicalId(logicalId: string) {
       const err = nodeDetailError.value
       if (err && err.logicalId === logicalId) {
         if (err.status === 404) {
-          deepLinkError.value = `未找到节点「${logicalId}」(404)`
+          deepLinkError.value = '未找到该节点（可能已移除），请刷新台账 (404)'
         } else if (err.status >= 500) {
           deepLinkError.value = `获取节点详情失败 (${err.status})`
         } else if (err.status === 0) {
           deepLinkError.value = '网络连接失败，请检查网络后重试'
         } else {
-          deepLinkError.value = err.message || `获取节点详情失败 (${err.status})`
+          deepLinkError.value = displayText(err.message) || `获取节点详情失败 (${err.status})`
         }
       } else {
-        deepLinkError.value = `未找到节点「${logicalId}」(404)`
+        deepLinkError.value = '未找到该节点（可能已移除），请刷新台账 (404)'
       }
     }
   } catch (err: any) {
     const status = err?.status || (err instanceof ApiError ? err.status : 0)
     if (status === 404) {
-      deepLinkError.value = `未找到节点「${logicalId}」(404)`
+      deepLinkError.value = '未找到该节点（可能已移除），请刷新台账 (404)'
     } else if (status >= 500) {
       deepLinkError.value = `获取节点详情失败 (${status})`
     } else if (status === 0) {
       deepLinkError.value = '网络连接失败，请检查网络后重试'
     } else {
-      deepLinkError.value = err?.message || `获取节点详情失败 (${status})`
+      deepLinkError.value = displayText(err?.message) || `获取节点详情失败 (${status})`
     }
     if (status === 404 && selectedIds.value.has(logicalId)) {
       const next = new Set(selectedIds.value)
@@ -924,6 +946,10 @@ onUnmounted(() => {
               :node="node"
               :selected="selectedIds.has(node.logicalId)"
               :probe-state="getNodeProbeState(node)"
+              :speed-busy="speedingNodeId === node.logicalId"
+              :speed-disabled="Boolean(speedingNodeId)"
+              :speed-failed="speedFailedIds.has(node.logicalId)"
+              @speed-node="requestSpeed"
               @toggle-select="toggleSelectNode"
               @open-detail="openNodeDetail"
               @probe-node="handleProbeSelectedNode"
@@ -992,6 +1018,11 @@ onUnmounted(() => {
       :source-history-error="sourceHistoryError"
       :probe-state="selectedNode ? getNodeProbeState(selectedNode) : 'idle'"
       :probe-feedback="probeFeedback"
+      :speed-busy="speedingNodeId === selectedNode?.logicalId"
+      :speed-disabled="Boolean(speedingNodeId)"
+      :speed-failed="Boolean(selectedNode && speedFailedIds.has(selectedNode.logicalId))"
+      :speed-feedback="speedFeedback"
+      @speed-node="requestSpeed"
       :saving-connection="savingConnection"
       :loading-detail="loadingDetail"
       :detail-stale="isDetailStale"
@@ -1000,6 +1031,19 @@ onUnmounted(() => {
       @retry-source-history="selectedNode ? fetchSourceHistory(selectedNode.logicalId) : undefined"
       @retry-detail="fetchNodeDetail"
       @save-connection="handleSaveConnectionPayload"
+    />
+
+    <p v-if="speedFeedback" data-testid="node-speed-feedback" class="text-sm break-words [overflow-wrap:anywhere]" role="status">{{ speedFeedback }}</p>
+    <ConfirmModal
+      :model-value="Boolean(speedTarget)"
+      :title="uiText('确认单节点带宽测速', 'Confirm single-node speed measurement')"
+      :message="`仅对「${speedTarget?.displayName || ''}」测速一次，将产生真实流量（应用响应体上限 5 MiB，测速请求最长 10 秒；不代表网卡计费上限）。结果保存到节点状态，不创建自动测速计划。`"
+      :confirm-text="uiText('开始测速', 'Measure speed')"
+      tone="warning"
+      data-testid="confirm-node-speed-modal"
+      @confirm="confirmSpeed"
+      @cancel="speedTarget = null"
+      @update:model-value="!$event && (speedTarget = null)"
     />
 
     <!-- Full Fleet Probe Confirmation Modal -->

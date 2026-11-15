@@ -20,6 +20,7 @@ import { useBodyScrollLock } from '../../composables/useBodyScrollLock'
 import { useUnsavedChanges } from '../../composables/useUnsavedChanges'
 import { uiText } from '../../locales/redesign'
 import { t } from '../../locales'
+import { displayName, displayText } from '../../utils/displayNames'
 
 interface Props {
   open: boolean
@@ -267,7 +268,7 @@ function handleDiscardSourceDraft() {
               {{ mode === 'edges' ? uiText('管理策略组来源', 'Manage Group Sources') : (group ? uiText('编辑策略组', 'Edit Policy Group') : uiText('创建策略组', 'Create Policy Group')) }}
             </h2>
             <p v-if="group" class="text-[11px] font-mono opacity-60 truncate">
-              ID: {{ group.id }} · v{{ draft.expectedRevision.value }}
+              版本 {{ draft.expectedRevision.value }}
             </p>
           </div>
         </div>
@@ -318,7 +319,7 @@ function handleDiscardSourceDraft() {
             <ExclamationTriangleIcon class="w-5 h-5 shrink-0 mt-0.5" />
             <div>
               <h4 class="font-bold">版本冲突 (409 Conflict)</h4>
-              <p class="opacity-90 mt-0.5">{{ draft.conflictError.value.message }}</p>
+              <p class="opacity-90 mt-0.5">{{ displayText(draft.conflictError.value.message) }}</p>
             </div>
           </div>
           <div class="flex items-center gap-2 shrink-0">
@@ -348,9 +349,9 @@ function handleDiscardSourceDraft() {
           <ExclamationTriangleIcon class="w-5 h-5 shrink-0 mt-0.5" />
           <div class="min-w-0">
             <h4 class="font-bold">检测到拓扑成环 (422 Unprocessable Entity)</h4>
-            <p class="opacity-90 mt-0.5">{{ draft.cycleError.value.message }}</p>
+            <p class="opacity-90 mt-0.5">{{ displayText(draft.cycleError.value.message) }}</p>
             <p v-if="draft.cycleError.value.cyclePath && draft.cycleError.value.cyclePath.length > 0" class="font-mono mt-1 text-[11px] font-semibold bg-base-100/70 p-1.5 rounded">
-              {{ draft.cycleError.value.cyclePath.join(' → ') }}
+              {{ draft.cycleError.value.cyclePath.map((id) => displayName(allGroups.find((g) => g.id === id)?.name, '未知策略组', id)).join(' → ') }}
             </p>
           </div>
         </div>
@@ -363,7 +364,7 @@ function handleDiscardSourceDraft() {
         >
           <div class="flex items-center gap-2 min-w-0">
             <ExclamationTriangleIcon class="w-4 h-4 shrink-0" />
-            <span class="truncate">{{ draft.serverError.value }}</span>
+            <span class="truncate">{{ displayText(draft.serverError.value) }}</span>
           </div>
           <button
             type="button"

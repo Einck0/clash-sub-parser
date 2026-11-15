@@ -683,9 +683,8 @@ describe('NodesView real API detail, plaintext PATCH edit, and failure draft pre
     expect(drawer?.querySelector('[data-testid="node-reconcile-overwrite-notice"]')?.textContent).toContain(
       'Reconcile'
     )
-    expect(drawer?.querySelector('[data-testid="node-provenance-sources"]')?.textContent).toContain(
-      'sub-upstream-tokyo'
-    )
+    expect(drawer?.querySelector('[data-testid="node-provenance-sources"]')?.textContent).not.toContain('sub-upstream-tokyo')
+    expect(drawer?.querySelector('[data-testid="node-provenance-sources"]')?.textContent).toContain('来源订阅')
 
     const wgAddrInput = drawer?.querySelector('[data-testid="wg-local-address-input"]') as HTMLInputElement | null
     const wgMtuInput = drawer?.querySelector('[data-testid="wg-mtu-input"]') as HTMLInputElement | null

@@ -283,8 +283,11 @@ describe('CSP Dataflow Publications & Snapshot Publishing Specification', () => 
     expect(post).toHaveBeenCalledWith('/api/v1/publications/preview', { target: 'mihomo' })
     expect(container.querySelector('[data-testid="compat-mode-select"]')).toBeNull()
     expect(container.textContent).not.toContain('compatible / strict')
-    expect(container.querySelector('[data-testid="preview-exclusions"]')?.textContent).toContain('node-bad')
-    expect(container.querySelector('[data-testid="preview-exclusions"]')?.textContent).toContain('unsupported_target_capability')
+    expect(container.querySelector('[data-testid="preview-exclusions"]')?.textContent).toContain('已排除节点 1')
+    expect(container.querySelector('[data-testid="preview-exclusions"]')?.textContent).toContain('unsupported by Mihomo')
+    expect(container.textContent).not.toContain('node-bad')
+    expect(container.textContent).not.toContain('snap-preview-1')
+    expect(container.textContent).not.toContain('snap-digest')
     expect(container.querySelector('[data-testid="publish-preview-btn"]')).not.toBeNull()
     post.mockRejectedValue(new ApiError(422, 'unsupported_target_capability', 'Target projection rejected', undefined, {
       diagnostics: [{ code: 'unsupported_target_capability', target: 'mihomo', message: 'incompatible node' }],

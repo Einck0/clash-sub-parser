@@ -1,4 +1,5 @@
 import { uiText } from '../../locales/redesign'
+import { displayName } from '../../utils/displayNames'
 
 export type ProxyChainTargetType = 'subscription' | 'node_group' | 'node'
 export type ProxyChainDialerType = 'node' | 'node_group'
@@ -91,9 +92,9 @@ export function getTargetDisplayName(
 
   const found = list.find((item) => item.id === id)
   if (found) {
-    return { name: found.name, isMissing: false }
+    return { name: displayName(found.name, uiText('未命名目标', 'Unnamed target'), id), isMissing: false }
   }
-  return { name: id, isMissing: true }
+  return { name: uiText('目标已失效，请重新选择', 'Target unavailable; select again'), isMissing: true }
 }
 
 export function getDialerDisplayName(
@@ -113,9 +114,9 @@ export function getDialerDisplayName(
 
   const found = list.find((item) => item.id === id)
   if (found) {
-    return { name: found.name, isMissing: false }
+    return { name: displayName(found.name, uiText('未命名跳板', 'Unnamed dialer'), id), isMissing: false }
   }
-  return { name: id, isMissing: true }
+  return { name: uiText('跳板已失效，请重新选择', 'Dialer unavailable; select again'), isMissing: true }
 }
 
 export function getTargetTypeLabel(type: ProxyChainTargetType): string {

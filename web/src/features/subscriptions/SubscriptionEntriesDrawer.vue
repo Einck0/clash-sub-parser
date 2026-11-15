@@ -11,6 +11,7 @@ import DrawerCard from '../../ui/DrawerCard.vue'
 import ErrorStateCard from '../../ui/ErrorStateCard.vue'
 import EmptyState from '../../ui/EmptyState.vue'
 import { t, currentLocale } from '../../locales'
+import { displayName, displayText } from '../../utils/displayNames'
 import {
   useSubscriptionEntries,
   formatFullDateTime,
@@ -73,6 +74,10 @@ async function handleOverride(
   await setOverride(props.subscription.id, entry.entry_id, newKind)
 }
 
+function entryKindLabel(kind: string): string {
+  return ({ proxy: '节点', notice: '公告', unknown: '未知', format_error: '格式错误' } as Record<string, string>)[kind] || '未知'
+}
+
 function handleRefresh() {
   if (props.subscription?.id) {
     void loadEntries(props.subscription.id)
@@ -83,7 +88,7 @@ function handleRefresh() {
 <template>
   <DrawerCard
     :model-value="modelValue"
-    :title="subscription ? `${subscription.name} · ${t('subscriptions.entriesTitle')}` : t('subscriptions.entriesTitle')"
+    :title="subscription ? `${displayName(subscription.name, '未命名订阅', subscription.id)} · ${t('subscriptions.entriesTitle')}` : t('subscriptions.entriesTitle')"
     :description="t('subscriptions.entriesSubtitle')"
     width-class="max-w-3xl"
     @update:model-value="emit('update:modelValue', $event)"
@@ -132,7 +137,7 @@ function handleRefresh() {
       <!-- Error State -->
       <ErrorStateCard
         v-else-if="error"
-        :error="error"
+        :error="displayText(error)"
         :retrying="loading"
         @retry="handleRefresh"
       />
@@ -153,10 +158,10 @@ function handleRefresh() {
           class="rounded-xl border border-warning/40 p-3 space-y-2"
         >
           <h3 class="font-semibold text-warning">格式错误 · 仅展示，不参与订阅 ({{ formatErrors.length }})</h3>
-          <p class="text-xs opacity-70">以下为最近一次获取的脱敏诊断，fetch 标识用于追溯来源；解析失败时保留的上次有效节点仍单独展示</p>
+          <p class="text-xs opacity-70">以下为最近一次获取的格式诊断；解析失败时保留的上次有效节点仍单独展示。</p>
           <div v-for="entry in formatErrors" :key="entry.entry_id" class="text-xs break-words">
-            <p class="font-mono">{{ entry.name }}</p>
-            <p>{{ entry.classification_reason }}</p>
+            <p class="font-mono">{{ displayName(entry.name, '未命名来源条目', entry.entry_id) }}</p>
+            <p>{{ displayText(entry.classification_reason) }}</p>
           </div>
         </section>
         <!-- Announcements / Notices Section (Preserved, distinct from proxy nodes) -->
@@ -186,7 +191,7 @@ function handleRefresh() {
                 <div class="space-y-0.5 min-w-0 flex-1">
                   <div class="flex items-center gap-1.5 flex-wrap">
                     <span class="badge badge-xs font-mono badge-neutral">#{{ notice.ordinal }}</span>
-                    <strong class="text-base-content text-xs break-all">{{ notice.name }}</strong>
+                    <strong class="text-base-content text-xs break-all">{{ displayName(notice.name, '未命名公告', notice.entry_id) }}</strong>
                     <span class="badge badge-xs badge-info badge-outline font-mono">
                       {{ t('subscriptions.kindNotice') }}
                     </span>
@@ -194,11 +199,11 @@ function handleRefresh() {
                       v-if="notice.user_kind_override"
                       class="badge badge-xs badge-primary font-mono"
                     >
-                      手动覆盖: {{ notice.user_kind_override }}
+                      手动覆盖: {{ entryKindLabel(notice.user_kind_override) }}
                     </span>
                   </div>
                   <p v-if="notice.classification_reason" class="text-[11px] opacity-75">
-                    判定原因: {{ notice.classification_reason }}
+                    判定原因: {{ displayText(notice.classification_reason) }}
                   </p>
                 </div>
 
@@ -258,7 +263,7 @@ function handleRefresh() {
                 class="p-2 rounded bg-error/15 border border-error/30 text-error text-xs flex items-center gap-1.5"
               >
                 <ExclamationTriangleIcon class="w-4 h-4 shrink-0" />
-                <span>{{ t('subscriptions.conflictWarning') }}: {{ notice.conflict }}</span>
+                <span>{{ t('subscriptions.conflictWarning') }}: {{ displayText(notice.conflict) }}</span>
               </div>
             </article>
           </div>
@@ -282,7 +287,7 @@ function handleRefresh() {
                   <div class="flex flex-wrap items-center gap-1.5">
                     <span class="badge badge-xs font-mono badge-neutral">#{{ entry.ordinal }}</span>
                     <strong class="text-base-content text-sm break-all font-semibold">
-                      {{ entry.name }}
+                      {{ displayName(entry.name, '未命名来源条目', entry.entry_id) }}
                     </strong>
                     <!-- Effective Kind Badge -->
                     <span
@@ -294,35 +299,29 @@ function handleRefresh() {
                       }"
                       data-testid="entry-effective-kind"
                     >
-                      生效: {{ entry.effective_kind }}
+                      生效: {{ entryKindLabel(entry.effective_kind) }}
                     </span>
                     <span class="badge badge-xs badge-ghost font-mono opacity-70">
-                      原始: {{ entry.entry_kind }}
+                      原始: {{ entryKindLabel(entry.entry_kind) }}
                     </span>
                     <span
                       v-if="entry.user_kind_override"
                       class="badge badge-xs badge-primary font-mono"
                     >
-                      覆盖为: {{ entry.user_kind_override }}
+                      覆盖为: {{ entryKindLabel(entry.user_kind_override) }}
                     </span>
                   </div>
 
                   <p v-if="entry.classification_reason" class="text-xs opacity-75 leading-relaxed">
-                    判定原因: {{ entry.classification_reason }}
+                    判定原因: {{ displayText(entry.classification_reason) }}
                   </p>
 
                   <div class="flex flex-wrap items-center gap-3 text-[11px] opacity-60 font-mono">
-                    <span v-if="entry.payload_id">
-                      Payload ID: {{ entry.payload_id }}
-                    </span>
-                    <span v-if="entry.node_logical_id">
-                      逻辑 ID: {{ entry.node_logical_id }}
-                    </span>
                     <span v-if="entry.override_at">
                       覆盖时间: {{ formatFullDateTime(entry.override_at, currentLocale) }}
                     </span>
                     <span v-if="entry.override_reason">
-                      理由: {{ entry.override_reason }}
+                      理由: {{ displayText(entry.override_reason) }}
                     </span>
                   </div>
                 </div>
@@ -383,7 +382,7 @@ function handleRefresh() {
                 class="p-2 rounded bg-error/15 border border-error/30 text-error text-xs flex items-center gap-1.5"
               >
                 <ExclamationTriangleIcon class="w-4 h-4 shrink-0" />
-                <span>{{ t('subscriptions.conflictWarning') }}: {{ entry.conflict }}</span>
+                <span>{{ t('subscriptions.conflictWarning') }}: {{ displayText(entry.conflict) }}</span>
               </div>
             </article>
           </div>

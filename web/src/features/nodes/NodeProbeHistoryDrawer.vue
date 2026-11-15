@@ -17,6 +17,7 @@ import { probeStateLabel, probeStateTone } from '../probes/probeTypes'
 import { api } from '../../api/client'
 import { toastStore } from '../../ui/toast'
 import { t } from '../../locales'
+import { displayText } from '../../utils/displayNames'
 
 const props = defineProps<{
   modelValue: boolean
@@ -194,7 +195,7 @@ watch(
         >
           <div class="flex items-center justify-between gap-2">
             <div class="flex items-center gap-2">
-              <span class="font-mono font-semibold">{{ batch.id }}</span>
+              <span class="font-semibold">巡检批次 · {{ new Date(batch.window_at).toLocaleString() }}</span>
               <StatusBadge
                 :label="batch.state"
                 :tone="batch.state === 'running' ? 'info' : batch.state === 'succeeded' ? 'success' : batch.state === 'failed' ? 'error' : undefined"
@@ -219,7 +220,7 @@ watch(
           </div>
 
           <div v-if="batch.redacted_error" class="text-[11px] text-error font-mono">
-            {{ batch.redacted_error }}
+            {{ displayText(batch.redacted_error) }}
           </div>
         </article>
       </div>

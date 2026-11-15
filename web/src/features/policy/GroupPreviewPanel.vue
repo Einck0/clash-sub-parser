@@ -12,6 +12,7 @@ import type {
 } from './policyTypes'
 import { sourceKindLabel } from './policyTypes'
 import { uiText } from '../../locales/redesign'
+import { displayName, displayText } from '../../utils/displayNames'
 
 const props = withDefaults(
   defineProps<{
@@ -61,6 +62,9 @@ const excludedCount = computed(() => {
 const resolvedMembers = computed(() => {
   return props.snapshot?.members || []
 })
+
+const directNodeCount = computed(() => resolvedMembers.value.filter((m) => m.kind === 'node' || m.kind === 'manual_node').length)
+const groupReferenceCount = computed(() => resolvedMembers.value.filter((m) => m.kind === 'group' || m.kind === 'group_ref').length)
 
 const exclusionBreakdown = computed(() => {
   if (!props.snapshot || !props.snapshot.excluded_count) return []
@@ -130,7 +134,7 @@ const exclusionBreakdown = computed(() => {
     >
       <div class="flex items-center gap-2 min-w-0">
         <ExclamationTriangleIcon class="w-4 h-4 shrink-0" />
-        <span class="truncate">{{ error }}</span>
+        <span class="truncate">{{ displayText(error) }}</span>
       </div>
       <button
         type="button"
@@ -189,7 +193,7 @@ const exclusionBreakdown = computed(() => {
             v-if="snapshot && snapshot.node_count !== undefined"
             class="text-[10px] opacity-60 block mt-0.5 font-mono"
           >
-            {{ snapshot.node_count }} 节点
+            递归可达节点 {{ snapshot.node_count }}
           </span>
         </div>
 
@@ -206,6 +210,12 @@ const exclusionBreakdown = computed(() => {
           </div>
         </div>
       </div>
+      <p v-if="snapshot" data-testid="member-composition" class="text-xs leading-relaxed">
+        直接节点 {{ directNodeCount }} · 子组引用 {{ groupReferenceCount }} · 递归可达节点 {{ snapshot.node_count ?? '未知' }}
+      </p>
+      <p v-if="snapshot && directNodeCount === 0 && groupReferenceCount > 0" data-testid="group-reference-explanation" class="text-xs text-base-content/75 leading-relaxed">
+        当前没有直接节点，但仍保留子组入口；可用节点请查看递归可达数量。排除子组展开节点不会移除这些入口。
+      </p>
     </div>
 
     <!-- Exclusion Breakdown Section -->
@@ -222,7 +232,7 @@ const exclusionBreakdown = computed(() => {
           :key="idx"
           class="text-xs p-1.5 rounded bg-base-100 border border-base-300/80 font-mono"
         >
-          {{ reason }}
+          {{ displayText(reason) }}
         </div>
       </div>
       <div v-else class="text-xs opacity-75 italic">
@@ -245,7 +255,7 @@ const exclusionBreakdown = computed(() => {
         <span>空来源项 (Empty Sources)：当前策略组未配置任何成员来源项。请在编排配置页添加来源项。</span>
       </div>
       <div
-        v-else-if="snapshot && snapshot.node_count === 0"
+        v-else-if="snapshot && snapshot.node_count === 0 && groupReferenceCount === 0"
         role="alert"
         class="alert alert-info text-xs p-3"
       >
@@ -266,14 +276,8 @@ const exclusionBreakdown = computed(() => {
         <InformationCircleIcon v-else class="w-4 h-4 shrink-0 mt-0.5" />
         <div class="min-w-0">
           <p class="font-semibold">
-            {{ typeof diag === 'string' ? diag : diag.message }}
+            {{ displayText(typeof diag === 'string' ? diag : diag.message) }}
           </p>
-          <span
-            v-if="typeof diag === 'object' && diag.code"
-            class="font-mono text-[10px] opacity-75"
-          >
-            {{ diag.code }}
-          </span>
         </div>
       </div>
     </div>
@@ -313,37 +317,13 @@ const exclusionBreakdown = computed(() => {
               {{ sourceKindLabel(member.kind) }}
             </span>
             <span class="truncate font-sans font-medium">
-              {{ member.display_name || member.node_logical_id || member.group_id || member.builtin_name || '-' }}
+              {{ member.builtin_name || displayName(member.display_name, (member.kind === 'group' || member.kind === 'group_ref') ? '未知策略组（引用已失效）' : '未命名节点', member.node_logical_id || member.group_id) }}
             </span>
           </div>
 
-          <span
-            v-if="member.node_logical_id"
-            class="text-[11px] opacity-60 font-mono shrink-0 truncate max-w-[120px]"
-          >
-            {{ member.node_logical_id }}
-          </span>
         </div>
       </div>
     </div>
 
-    <!-- Digests Information (Selection Digest & Content Digest) -->
-    <div
-      v-if="snapshot?.selection_digest"
-      class="p-3 rounded-xl bg-base-200/40 border border-base-300/80 space-y-1 text-[11px] font-mono"
-    >
-      <div class="flex items-center justify-between gap-2">
-        <span class="opacity-70 font-sans">{{ uiText('选择集指纹', 'Selection Digest') }}:</span>
-        <span class="font-bold truncate text-primary max-w-[200px]" :title="snapshot.selection_digest">
-          {{ snapshot.selection_digest }}
-        </span>
-      </div>
-      <div v-if="snapshot.content_digest" class="flex items-center justify-between gap-2">
-        <span class="opacity-70 font-sans">{{ uiText('内容指纹', 'Content Digest') }}:</span>
-        <span class="font-bold truncate text-secondary max-w-[200px]" :title="snapshot.content_digest">
-          {{ snapshot.content_digest }}
-        </span>
-      </div>
-    </div>
   </div>
 </template>

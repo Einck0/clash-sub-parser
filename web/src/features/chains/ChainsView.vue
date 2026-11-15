@@ -18,6 +18,7 @@ import { useChains } from './useChains'
 import { useChainDraft } from './useChainDraft'
 import ChainDrawer from './ChainDrawer.vue'
 import ChainEffectLedger from './ChainEffectLedger.vue'
+import { displayText } from '../../utils/displayNames'
 import {
   getTargetDisplayName,
   getDialerDisplayName,
@@ -116,7 +117,7 @@ onMounted(() => {
       v-if="chains.error.value"
       class="alert alert-error shadow-sm rounded-2xl p-4 text-xs flex items-center justify-between"
     >
-      <span>{{ chains.error.value }}</span>
+      <span>{{ displayText(chains.error.value) }}</span>
       <button
         type="button"
         class="btn btn-xs btn-outline"
@@ -144,16 +145,12 @@ onMounted(() => {
           </p>
         </div>
 
-        <div v-if="chains.configVersion.value" class="text-xs text-base-content/50 font-mono">
-          <span>{{ uiText('配置版本', 'Config Version') }}: </span>
-          <span class="font-semibold">{{ chains.configVersion.value.slice(0, 10) }}...</span>
-        </div>
       </div>
 
       <!-- Bindings Table or State -->
       <SectionState
         :loading="chains.loading.value"
-        :error="chains.error.value"
+        :error="displayText(chains.error.value)"
         :empty="chains.bindings.value.length === 0"
         :empty-title="uiText('暂无链式代理绑定', 'No Proxy Chain Bindings')"
         :empty-description="uiText('点击上方“新建绑定”按钮为出口目标配置跳板代理。', 'Click New Binding above to configure upstream dialers.')"
@@ -215,7 +212,6 @@ onMounted(() => {
                         {{ uiText('引用失效', 'Missing Ref') }}
                       </span>
                     </div>
-                    <div class="text-[10px] text-base-content/50 font-mono">{{ b.target_id }}</div>
                   </div>
                 </td>
 
@@ -241,7 +237,6 @@ onMounted(() => {
                         {{ uiText('引用失效', 'Missing Ref') }}
                       </span>
                     </div>
-                    <div class="text-[10px] text-base-content/50 font-mono">{{ b.dialer_id }}</div>
                   </div>
                 </td>
 
@@ -271,7 +266,7 @@ onMounted(() => {
                     v-if="chains.rowError.value[b.id]"
                     class="text-[10px] text-error font-medium mt-0.5"
                   >
-                    {{ chains.rowError.value[b.id] }}
+                    {{ displayText(chains.rowError.value[b.id]) }}
                   </div>
                 </td>
 
@@ -313,6 +308,7 @@ onMounted(() => {
     <!-- Section 2: Chain Effect Ledger (Per-Node Dialer Table) -->
     <ChainEffectLedger
       :nodes="chains.nodes.value"
+      :options="chains.options.value"
       :loading="chains.effectsLoading.value"
       :error="chains.effectsError.value"
     />
@@ -354,13 +350,13 @@ onMounted(() => {
           <div>
             <span class="text-base-content/50">{{ uiText('目标', 'Target') }}: </span>
             <span class="font-semibold text-base-content">
-              {{ chains.bindingToDelete.value.target_type }} / {{ chains.bindingToDelete.value.target_id }}
+              {{ getTargetDisplayName(chains.bindingToDelete.value.target_type, chains.bindingToDelete.value.target_id, chains.options.value).name }}
             </span>
           </div>
           <div>
             <span class="text-base-content/50">{{ uiText('跳板', 'Dialer') }}: </span>
             <span class="font-semibold text-base-content">
-              {{ chains.bindingToDelete.value.dialer_type }} / {{ chains.bindingToDelete.value.dialer_id }}
+              {{ getDialerDisplayName(chains.bindingToDelete.value.dialer_type, chains.bindingToDelete.value.dialer_id, chains.options.value).name }}
             </span>
           </div>
         </div>

@@ -8,6 +8,8 @@ import {
 } from '@heroicons/vue/24/outline'
 import DrawerCard from '../../ui/DrawerCard.vue'
 import StatusBadge from '../../ui/StatusBadge.vue'
+import NodeSpeedResult from './NodeSpeedResult.vue'
+import { displayName, displayText } from '../../utils/displayNames'
 import NodeSourceHistoryPanel from './NodeSourceHistoryPanel.vue'
 import type { NodeSourceHistoryData } from './sourceHistoryTypes'
 import { formatRelativeTime } from '../probes/probeTypes'
@@ -39,11 +41,16 @@ const props = defineProps<{
   loadingDetail?: boolean
   detailStale?: boolean
   detailErrorMessage?: string
+  speedBusy?: boolean
+  speedDisabled?: boolean
+  speedFailed?: boolean
+  speedFeedback?: string
 }>()
 
 const emit = defineEmits<{
   (e: 'update:modelValue', value: boolean): void
   (e: 'probe-node', node: NormalizedNode): void
+  (e: 'speed-node', node: NormalizedNode): void
   (e: 'retry-source-history'): void
   (e: 'retry-detail', logicalId: string): void
   (
@@ -56,6 +63,7 @@ const emit = defineEmits<{
   ): void
 }>()
 
+const speedBadge = computed(() => props.node && !props.speedBusy && !props.speedFailed ? getNodeSpeedBadge(props.node) : null)
 const previewTarget = ref<'mihomo' | 'singbox'>('mihomo')
 const connectionError = ref('')
 const connectionSaved = ref(false)
@@ -189,7 +197,7 @@ function handleClose() {
     :description="t('nodes.connectionProfile')"
     @update:model-value="emit('update:modelValue', $event)"
   >
-    <div v-if="node" data-testid="node-detail-drawer" class="space-y-4 text-xs">
+    <div v-if="node" data-testid="node-detail-drawer" class="space-y-4 text-xs min-w-0 [overflow-wrap:anywhere]">
       <!-- Stale / Detail Error Alert Banner with In-Place Retry -->
       <div
         v-if="detailStale"
@@ -222,7 +230,7 @@ function handleClose() {
         <div class="flex flex-wrap items-center justify-between gap-2">
           <div class="flex items-center gap-1.5 font-semibold">
             <BoltIcon class="w-4 h-4 text-primary shrink-0" />
-            <span>实时测速与解锁状态</span>
+            <span>节点检测与带宽状态</span>
             <span v-if="node.lastProbedAt" class="text-[11px] font-normal opacity-65">
               · 最后测速: {{ formatRelativeTime(node.lastProbedAt) }}
             </span>
@@ -242,7 +250,12 @@ function handleClose() {
           </button>
         </div>
 
-        <div class="flex flex-wrap items-center gap-1.5">
+        <div class="flex flex-wrap items-center gap-2">
+          <NodeSpeedResult :node="node" :busy="speedBusy" :failed="speedFailed" />
+          <button type="button" data-testid="node-drawer-speed-btn" class="btn btn-outline btn-primary btn-xs" :disabled="speedDisabled || !node.active || detailStale" @click="emit('speed-node', node)">
+            {{ speedBusy ? '测速中…' : '手动测速' }}
+          </button>
+          <p v-if="speedFeedback" class="w-full break-words [overflow-wrap:anywhere]" role="status">{{ speedFeedback }}</p>
           <StatusBadge
             v-if="probeState !== 'idle'"
             data-testid="node-drawer-probe-state-badge"
@@ -260,11 +273,7 @@ function handleClose() {
             :label="`响应延迟: ${formatNodeLatency(node)}`"
             :tone="nodeLatencyTone(node)"
           />
-          <StatusBadge
-            v-if="getNodeSpeedBadge(node)"
-            :label="getNodeSpeedBadge(node)!.label"
-            :tone="getNodeSpeedBadge(node)!.tone"
-          />
+          <StatusBadge v-if="speedBadge" :label="speedBadge.label" :tone="speedBadge.tone" />
           <template v-if="getNodePlatformBadges(node, 'streaming').length > 0">
             <StatusBadge
               v-for="badge in getNodePlatformBadges(node, 'streaming')"
@@ -311,7 +320,7 @@ function handleClose() {
           "
         >
           <span class="font-semibold">{{ nodeHealthDiagnostic(node)?.shortLabel }}：</span>
-          <span>{{ nodeHealthDiagnostic(node)?.detail }}</span>
+          <span class="break-words [overflow-wrap:anywhere]">{{ displayText(nodeHealthDiagnostic(node)?.detail) }}</span>
         </div>
 
         <p v-if="probeFeedback" data-testid="node-probe-feedback" class="text-[11px] text-primary font-medium">
@@ -324,14 +333,14 @@ function handleClose() {
         v-if="
           getNodePlatformBadges(node, 'streaming').length > 0 ||
           getNodePlatformBadges(node, 'ai').length > 0 ||
-          getNodeSpeedBadge(node)
+          speedBadge
         "
         class="p-3 rounded-xl bg-base-200 border border-base-300 space-y-2"
       >
         <div class="flex items-center justify-between">
           <span class="font-semibold text-xs text-primary">{{ t('nodes.platformMatrix') }}</span>
-          <span v-if="getNodeSpeedBadge(node)" class="font-mono text-[11px] opacity-75">
-            {{ getNodeSpeedBadge(node)!.label }}
+          <span v-if="speedBadge" class="font-mono text-[11px] opacity-75">
+            {{ speedBadge.label }}
           </span>
         </div>
         <div class="grid grid-cols-2 gap-2 text-[11px]">
@@ -366,7 +375,7 @@ function handleClose() {
             <ArrowPathIcon class="w-4 h-4 shrink-0 text-primary" />
             <span>订阅溯源与自动同步 (Reconcile)</span>
           </span>
-          <span class="font-mono text-[11px] opacity-75">逻辑 ID: {{ node.logicalId }}</span>
+
         </p>
         <p class="opacity-80 leading-relaxed">
           直接编辑明文连接参数将原地更新当前节点；后续上游订阅源触发自动同步 (Reconcile) 时将从订阅源刷新节点配置。
@@ -376,7 +385,7 @@ function handleClose() {
           data-testid="node-provenance-sources"
           class="font-mono text-[11px] opacity-80"
         >
-          来源订阅: {{ node.sources.map((s) => s.subscription_id).join(', ') }}
+          来源订阅: {{ sourceHistory?.current_sources?.map((source) => displayName(source.name, '未知订阅', source.subscription_id)).join('、') || '来源信息暂不可用，请查看下方来源历史' }}
         </p>
       </div>
 

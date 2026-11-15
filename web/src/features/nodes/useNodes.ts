@@ -56,6 +56,7 @@ export function useNodes() {
   const loadingDetail = ref(false)
   const savingConnection = ref(false)
   const probingNodeId = ref<string | null>(null)
+  const speedingNodeId = ref<string | null>(null)
   const probingNodeIds = ref<Set<string>>(new Set())
   const queuedNodeIds = ref<Set<string>>(new Set())
   const error = ref('')
@@ -261,7 +262,7 @@ export function useNodes() {
       if (cause instanceof ApiError) {
         status = cause.status
         message = cause.status === 404
-          ? `未找到节点「${logicalId}」(404)`
+          ? '未找到该节点（可能已移除），请刷新台账 (404)'
           : `获取节点详情失败 (${cause.status})`
       } else if (cause instanceof Error && cause.message) {
         message = cause.message
@@ -366,6 +367,55 @@ export function useNodes() {
       ) {
         selectedNode.value = { ...selectedNode.value, probeState: 'idle' }
       }
+    }
+  }
+
+  // A separate explicit action: never inherits schedule kinds or expands to the fleet.
+  async function measureNodeSpeed(logicalId: string): Promise<{ ok: boolean; error?: string }> {
+    if (speedingNodeId.value) return { ok: false, error: '已有测速正在执行，请等待完成。' }
+    if (!logicalId || logicalId.trim() !== logicalId) return { ok: false, error: '请选择有效节点。' }
+    speedingNodeId.value = logicalId
+    const previousObservedAt = items.value.find((node) => node.logicalId === logicalId)?.capabilityDetails.speed?.observed_at
+      ?? (selectedNode.value?.logicalId === logicalId ? selectedNode.value.capabilityDetails.speed?.observed_at : undefined)
+    try {
+      const created = await api.post<CreateProbeRunResponse>('/api/v1/probes/runs', {
+        manual_speed: true,
+        node_logical_ids: [logicalId],
+        kinds: ['speed'],
+      }, { headers: { 'Idempotency-Key': generateIdempotencyKey() } })
+      if (!created?.run_id) return { ok: false, error: '未能创建测速任务，请重试。' }
+      let state = created.state
+      for (let attempt = 0; attempt < 60 && !['succeeded', 'failed', 'cancelled', 'expired'].includes(state); attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 1000))
+        const run = await api.get<ProbeRun>(`/api/v1/probes/runs/${encodeURIComponent(created.run_id)}`)
+        state = run.state
+      }
+      // Detail refresh updates both the selected drawer and the matching ledger item.
+      const response = await api.get<NodeDetailResponse | NodeRecord>(`/api/v1/nodes/${encodeURIComponent(logicalId)}`)
+      const raw = extractNodeRecord(response)
+      const refreshed = raw ? normalizeNode(raw) : null
+      if (refreshed) {
+        const index = items.value.findIndex((node) => node.logicalId === logicalId)
+        if (index >= 0) items.value[index] = refreshed
+        if (selectedNode.value?.logicalId === logicalId) selectedNode.value = refreshed
+      }
+      if (!['succeeded', 'failed', 'cancelled', 'expired'].includes(state)) {
+        return { ok: false, error: '测速仍在执行，暂未获得本次结果；稍后刷新节点状态查看。' }
+      }
+      if (state !== 'succeeded') return { ok: false, error: '本次测速未完成，历史结果不代表本次成功；请重试。' }
+      const speed = refreshed?.capabilityDetails.speed
+      if (!speed || !speed.observed_at || !Number.isFinite(Date.parse(speed.observed_at)) || speed.observed_at === previousObservedAt) {
+        return { ok: false, error: '任务已结束，但本次测速结果未能刷新；请刷新节点详情后重试。' }
+      }
+      if (speed.stale || speed.verdict !== 'available' || !Number.isFinite(speed.throughput) || (speed.throughput ?? 0) <= 0) {
+        return { ok: false, error: speed.stale ? '本次结果已失效（节点连接可能已变更），请重新测速。' : '本次测速未获得可用吞吐结果，请查看节点测速状态后重试。' }
+      }
+      return { ok: true }
+    } catch {
+      // A failed create/poll must never promote an old successful observation.
+      return { ok: false, error: '本次测速请求或结果刷新失败，历史结果不代表本次成功；请重试。' }
+    } finally {
+      speedingNodeId.value = null
     }
   }
 
@@ -504,6 +554,8 @@ export function useNodes() {
     loadingDetail,
     savingConnection,
     probingNodeId,
+    speedingNodeId,
+    measureNodeSpeed,
     probingNodeIds,
     queuedNodeIds,
     error,

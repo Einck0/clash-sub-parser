@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { displayName } from '../../utils/displayNames'
 import {
   ClockIcon,
   ExclamationTriangleIcon,
@@ -130,10 +131,7 @@ const isEntirelyEmpty = computed(() => {
               class="p-2.5 rounded-lg bg-base-100 border border-base-300 flex flex-wrap items-center justify-between gap-2"
             >
               <div class="min-w-0 flex-1">
-                <div class="font-medium truncate">{{ src.name }}</div>
-                <div class="font-mono text-[10px] opacity-60 truncate">
-                  订阅 ID: {{ src.subscription_id }}
-                </div>
+                <div class="font-medium truncate">{{ displayName(src.name, '未知订阅', src.subscription_id) }}</div>
               </div>
               <div class="shrink-0">
                 <StatusBadge
@@ -178,7 +176,7 @@ const isEntirelyEmpty = computed(() => {
             >
               <div class="flex flex-wrap items-center justify-between gap-1.5">
                 <div class="flex items-center gap-1.5 min-w-0">
-                  <span class="font-semibold truncate">{{ item.source_label }}</span>
+                  <span class="font-semibold truncate">{{ displayName(item.source_label, '未知历史来源', item.subscription_id) }}</span>
                   <span
                     v-if="item.source_deleted"
                     data-testid="source-deleted-badge"
@@ -192,12 +190,6 @@ const isEntirelyEmpty = computed(() => {
                     class="badge badge-xs badge-ghost border-warning/40 text-warning font-medium"
                   >
                     未关联当前订阅
-                  </span>
-                  <span
-                    v-else-if="item.subscription_id"
-                    class="badge badge-xs badge-ghost font-mono opacity-70 truncate max-w-[140px]"
-                  >
-                    {{ item.subscription_id }}
                   </span>
                 </div>
                 <StatusBadge
@@ -263,7 +255,7 @@ const isEntirelyEmpty = computed(() => {
             >
               <div class="flex flex-wrap items-center justify-between gap-1.5">
                 <div class="flex items-center gap-1.5 min-w-0">
-                  <span class="font-semibold truncate">{{ item.source_label }}</span>
+                  <span class="font-semibold truncate">{{ displayName(item.source_label, '未知历史来源', item.subscription_id) }}</span>
                   <span
                     v-if="item.source_deleted"
                     data-testid="source-deleted-badge"
@@ -277,12 +269,6 @@ const isEntirelyEmpty = computed(() => {
                     class="badge badge-xs badge-ghost border-warning/40 text-warning font-medium"
                   >
                     未关联当前订阅
-                  </span>
-                  <span
-                    v-else-if="item.subscription_id"
-                    class="badge badge-xs badge-ghost font-mono opacity-70 truncate max-w-[140px]"
-                  >
-                    {{ item.subscription_id }}
                   </span>
                 </div>
                 <StatusBadge

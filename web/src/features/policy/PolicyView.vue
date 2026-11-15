@@ -31,6 +31,7 @@ import PageToolbar from '../../ui/PageToolbar.vue'
 import { useNodes } from '../nodes/useNodes'
 import { uiText } from '../../locales/redesign'
 import { t } from '../../locales'
+import { displayText } from '../../utils/displayNames'
 
 const {
   groups,
@@ -344,7 +345,7 @@ onUnmounted(() => {
     <!-- Error Alert / Degraded State Card -->
     <ErrorStateCard
       v-if="error"
-      :error="error"
+      :error="displayText(error)"
       :retrying="loading"
       @retry="reload"
     />
@@ -445,13 +446,13 @@ onUnmounted(() => {
                     {{ iss.type }}
                   </span>
                   <span v-if="iss.target_group_name" class="badge badge-neutral badge-xs">
-                    {{ iss.target_group_name }}
+                    {{ displayText(iss.target_group_name) }}
                   </span>
-                  <span class="opacity-90">{{ iss.message }}</span>
+                  <span class="opacity-90">{{ displayText(iss.message) }}</span>
                 </div>
               </div>
               <ul v-else class="mt-1 text-xs list-disc list-inside space-y-0.5 font-mono">
-                <li v-for="(err, idx) in validationResult.errors" :key="idx">{{ err }}</li>
+                <li v-for="(err, idx) in validationResult.errors" :key="idx">{{ displayText(err) }}</li>
               </ul>
             </div>
           </div>
@@ -603,6 +604,7 @@ onUnmounted(() => {
           :key="grp.id"
           :group="grp"
           :available-groups="allTopologyGroups"
+          :available-nodes="nodeItems"
           :selected="selectedGroupId === grp.id"
           :can-move-up="idx > 0"
           :can-move-down="idx < groups.length - 1"
@@ -631,7 +633,7 @@ onUnmounted(() => {
         </div>
 
         <p v-if="globalConditionError" role="alert" class="text-error text-xs" data-testid="filter-request-error">
-          {{ globalConditionError }}
+          {{ displayText(globalConditionError) }}
         </p>
 
         <StructuredFilterEditor

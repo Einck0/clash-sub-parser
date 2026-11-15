@@ -4,7 +4,6 @@ import PageToolbar from '../../ui/PageToolbar.vue'
 import { useUnsavedChanges } from '../../composables/useUnsavedChanges'
 import { t } from '../../locales'
 import { uiText } from '../../locales/redesign'
-import SettingsSections from './SettingsSections.vue'
 import PublicBaseUrlSettings from './PublicBaseUrlSettings.vue'
 import SubscriptionFetchSettings from './SubscriptionFetchSettings.vue'
 import ProbeScheduleSettings from './ProbeScheduleSettings.vue'
@@ -93,9 +92,6 @@ onMounted(() => {
         </div>
       </template>
     </PageToolbar>
-
-    <!-- Top Shared Navigation: CSP / DNS / Chains -->
-    <SettingsSections active="csp" />
 
     <!-- Category Switcher: Mobile Select & Desktop Tabs -->
     <div class="sm:hidden w-full">

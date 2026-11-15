@@ -162,7 +162,8 @@ describe('ChainsView component', () => {
 
     const row2 = container.querySelector('[data-testid="chain-row-chain-binding-2"]')
     expect(row2).toBeTruthy()
-    expect(row2?.textContent).toContain('node-isolated-99')
+    expect(row2?.textContent).not.toContain('node-isolated-99')
+    expect(row2?.textContent).toContain('目标已失效')
     // Missing reference indicator must be shown for node-isolated-99
     expect(row2?.textContent).toContain('引用失效')
     expect(row2?.textContent).toContain('P1') // node priority
@@ -184,7 +185,10 @@ describe('ChainsView component', () => {
     // Node JP 1 is chained
     const nodeRow = container.querySelector('[data-testid="ledger-node-row-node-jp-1"]')
     expect(nodeRow).toBeTruthy()
-    expect(nodeRow?.textContent).toContain('group-upstream')
+    expect(nodeRow?.textContent).toContain('Global Upstream Group')
+    expect(nodeRow?.textContent).not.toContain('group-upstream')
+    expect(nodeRow?.textContent).not.toContain('chain-binding-1')
+    expect(nodeRow?.textContent).not.toContain('node-jp-1')
     expect(nodeRow?.textContent).toContain('订阅绑定')
   })
 
@@ -212,6 +216,21 @@ describe('ChainsView component', () => {
 
     const drawer = document.body.querySelector('[data-testid="chain-drawer"]')
     expect(drawer).toBeTruthy()
+  })
+
+  it('keeps dropdown values stable while hiding identifiers, including missing options', async () => {
+    await mountView()
+    container.querySelector<HTMLButtonElement>('[data-testid="chain-edit-btn-chain-binding-2"]')!.click()
+    await nextTick()
+    const drawer = document.body.querySelector('[data-testid="chain-drawer"]')!
+    const target = drawer.querySelector<HTMLSelectElement>('[data-testid="chain-target-id"]')!
+    const dialer = drawer.querySelector<HTMLSelectElement>('[data-testid="chain-dialer-id"]')!
+    expect(target.value).toBe('node-isolated-99')
+    expect(dialer.value).toBe('node-hk-1')
+    expect(drawer.textContent).toContain('Hong Kong Node 1')
+    expect(drawer.textContent).toContain('目标已失效')
+    expect(drawer.textContent).not.toContain('node-isolated-99')
+    expect(drawer.textContent).not.toContain('node-hk-1')
   })
 
   it('opens delete confirmation modal on delete action and handles 422 errors safely', async () => {

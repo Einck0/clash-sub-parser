@@ -34,6 +34,7 @@ import StructuredFilterEditor from './StructuredFilterEditor.vue'
 import { api } from '../../api/client'
 import { uiText } from '../../locales/redesign'
 import { t } from '../../locales'
+import { displayName } from '../../utils/displayNames'
 
 const props = withDefaults(
   defineProps<{
@@ -121,7 +122,7 @@ function registerKnownNode(n: { logicalId: string; displayName: string; active?:
   if (n.logicalId) {
     knownNodes.value.set(n.logicalId, {
       logicalId: n.logicalId,
-      displayName: n.displayName || n.logicalId,
+      displayName: displayName(n.displayName, '未命名节点', n.logicalId),
       active: n.active !== false,
       protocol: n.protocol,
     })
@@ -152,7 +153,7 @@ async function fetchCandidateNodes(p = 1, search = nodeSearchQuery.value) {
     if (result && Array.isArray(result.items)) {
       const mapped = result.items.map((n) => ({
         logicalId: n.logical_id,
-        displayName: n.display_name?.trim() || n.logical_id,
+        displayName: displayName(n.display_name, '未命名节点', n.logical_id),
         protocol: n.protocol,
         active: n.active !== false,
       }))
@@ -233,7 +234,7 @@ watch(
     if (avail && avail.length > 0) {
       avail.forEach((n) => {
         const id = ('logicalId' in n ? n.logicalId : undefined) || ('logical_id' in n ? n.logical_id : undefined) || ''
-        const name = ('displayName' in n ? n.displayName : undefined) || ('display_name' in n ? n.display_name : undefined) || id
+        const name = displayName(('displayName' in n ? n.displayName : undefined) || ('display_name' in n ? n.display_name : undefined), '未命名节点', id)
         if (id) {
           registerKnownNode({ logicalId: id, displayName: name, active: n.active !== false, protocol: n.protocol })
         }
@@ -280,17 +281,17 @@ const availableChildGroups = computed(() => {
 function getGroupName(id?: string): string {
   if (!id) return ''
   const g = availableChildGroups.value.find((x) => x.id === id) || (props.allGroups || []).find((x) => x.id === id)
-  return g ? `${g.name} (${groupTypeLabel(g.group_type)})` : id
+  return g ? `${displayName(g.name, '未命名策略组', id)} (${groupTypeLabel(g.group_type)})` : '未知策略组（引用已失效）'
 }
 
 function getNodeDisplayName(logicalId?: string): string {
   if (!logicalId) return ''
   const known = knownNodes.value.get(logicalId)
   if (known) {
-    return `${known.displayName} (${logicalId})`
+    return displayName(known.displayName, '未命名节点', logicalId)
   }
   const n = activeNodes.value.find((x) => x.logicalId === logicalId)
-  return n ? `${n.displayName} (${logicalId})` : logicalId
+  return displayName(n?.displayName, '未知节点（来源不可用）', logicalId)
 }
 
 // Regex presets
@@ -390,8 +391,8 @@ async function selectAllFilteredNodes() {
 
       if (res && Array.isArray(res.items)) {
         res.items.forEach((n) => {
-          registerKnownNode({ logicalId: n.logical_id, displayName: n.display_name?.trim() || n.logical_id, active: n.active !== false, protocol: n.protocol })
-          allNodes.push({ logicalId: n.logical_id, displayName: n.display_name?.trim() || n.logical_id })
+          registerKnownNode({ logicalId: n.logical_id, displayName: displayName(n.display_name, '未命名节点', n.logical_id), active: n.active !== false, protocol: n.protocol })
+          allNodes.push({ logicalId: n.logical_id, displayName: displayName(n.display_name, '未命名节点', n.logical_id) })
         })
         if (res.items.length === 0 || allNodes.length >= (res.total || 0) || res.items.length < ps) {
           break
@@ -637,6 +638,12 @@ onMounted(() => {
       </div>
     </div>
 
+    <div data-testid="source-pipeline-semantics" class="text-xs leading-relaxed text-base-content/75 space-y-1">
+      <p>来源按从上到下的顺序执行：加入会合并匹配结果，排除只移除前面已经加入的成员，后续仍可重新加入。请先加入候选，再排除不需要的节点。</p>
+      <p>多个「加入筛选」取并集，不会逐步缩小范围；若需同时满足多个条件，请放在同一个筛选项中（条件取交集）。</p>
+      <p>「展开子组」加入或排除该子组展开后的直接节点；排除展开节点不会删除已保留的子组引用，也不会修改子组内部。要移除子组入口，请排除「策略组引用」。</p>
+    </div>
+
     <!-- 3. Advanced Pipeline Details (Closed by default) -->
     <details
       data-testid="advanced-pipeline-details"
@@ -799,7 +806,7 @@ onMounted(() => {
                   :key="node.logicalId"
                   :value="node.logicalId"
                 >
-                  {{ node.displayName }} ({{ node.logicalId }}) {{ node.protocol ? `[${node.protocol}]` : '' }}
+                  {{ displayName(node.displayName, '未命名节点', node.logicalId) }} {{ node.protocol ? `[${node.protocol}]` : '' }}
                 </option>
               </select>
 
@@ -910,7 +917,7 @@ onMounted(() => {
                   :key="cg.id"
                   :value="cg.id"
                 >
-                  {{ cg.name }} ({{ groupTypeLabel(cg.group_type) }})
+                  {{ displayName(cg.name, '未命名策略组', cg.id) }} ({{ groupTypeLabel(cg.group_type) }})
                 </option>
               </select>
               <button

@@ -116,6 +116,7 @@ export interface ProbeObservation {
 }
 
 export interface CreateProbeRunInput {
+  manual_speed?: boolean
   kinds?: ProbeKind[]
   node_logical_ids?: string[]
   config_revision?: string

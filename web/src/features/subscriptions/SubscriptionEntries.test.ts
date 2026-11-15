@@ -65,7 +65,8 @@ describe('Subscription Source Entries & Classification Override Flow', () => {
     await new Promise((resolve) => setTimeout(resolve, 20))
     const section = document.body.querySelector('[data-testid="subscription-format-errors"]')
     expect(section?.textContent).toContain('仅展示，不参与订阅')
-    expect(section?.textContent).toContain('fetch-1')
+    expect(section?.textContent).toContain('missing_field: port')
+    expect(section?.textContent).not.toContain('fetch-1')
     expect(section?.querySelector('button')).toBeNull()
   })
 
@@ -171,7 +172,7 @@ describe('Subscription Source Entries & Classification Override Flow', () => {
     const entryItems = document.body.querySelectorAll('[data-testid="subscription-entry-item"]')
     expect(entryItems.length).toBe(1)
     expect(entryItems[0].textContent).toContain('Localhost SOCKS5 127.0.0.1:1080')
-    expect(entryItems[0].textContent).toContain('生效: proxy')
+    expect(entryItems[0].textContent).toContain('生效: 节点')
   })
 
   it('allows correcting unknown entries to proxy with immediate inline override without nested confirmation modals', async () => {
@@ -228,7 +229,7 @@ describe('Subscription Source Entries & Classification Override Flow', () => {
     )
 
     const effectiveBadge = document.body.querySelector('[data-testid="entry-effective-kind"]')
-    expect(effectiveBadge?.textContent).toContain('生效: proxy')
+    expect(effectiveBadge?.textContent).toContain('生效: 节点')
   })
 
   it('resets kind override to null when user selects auto, restoring server default effective kind', async () => {
@@ -317,7 +318,10 @@ describe('Subscription Source Entries & Classification Override Flow', () => {
 
     const conflictCard = document.body.querySelector('[data-testid="entry-conflict-warning"]')
     expect(conflictCard).not.toBeNull()
-    expect(conflictCard?.textContent).toContain('逻辑 ID 与订阅源 sub-upstream-2 发生冲突')
+    expect(conflictCard?.textContent).toContain('与订阅源 订阅（标识已省略） 发生冲突')
+    expect(conflictCard?.textContent).not.toContain('sub-upstream-2')
+    expect(document.body.textContent).not.toContain('payload-conflicted-1')
+    expect(document.body.textContent).not.toContain('entry-conflicted-1')
   })
 
   it('opens SubscriptionEntriesDrawer when clicking view entries from SubscriptionsView card', async () => {

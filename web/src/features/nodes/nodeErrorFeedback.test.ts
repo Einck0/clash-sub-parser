@@ -72,7 +72,7 @@ describe('FR-RM3 Node Detail Error Differentiation & Stale Feedback', () => {
       status: 404,
       isStale: false,
     })
-    expect(nodes.nodeDetailError.value?.message).toContain('未找到节点「node-missing」(404)')
+    expect(nodes.nodeDetailError.value?.message).toContain('未找到该节点（可能已移除），请刷新台账 (404)')
 
     // 2. 500 Server Error
     vi.spyOn(api, 'get').mockRejectedValueOnce(

@@ -18,8 +18,8 @@ export function displayName(name: string | null | undefined, fallback: string, i
 }
 
 /** Redact only recognizable object-key tokens, preserving the diagnostic and its recovery advice. */
-export function displayText(text: string | null | undefined): string {
-  return (text || '')
+export function displayText(text: unknown): string {
+  return (text === null || text === undefined ? '' : String(text))
     .replace(objectToken, (_token, kind: string) => `${objectLabels[kind.toLowerCase()] || '内部标识'}（标识已省略）`)
     .replace(legacyObjectToken, (_token, kind: string) => `${objectLabels[kind] || '内部标识'}（标识已省略）`)
     .replace(uuidToken, '内部标识（已省略）')

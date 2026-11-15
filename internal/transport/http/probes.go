@@ -27,6 +27,7 @@ type createProbeRunRequest struct {
 	Deadline       *time.Time         `json:"deadline"`
 	NodeLogicalIDs []string           `json:"node_logical_ids"`
 	Kinds          []domain.ProbeKind `json:"kinds"`
+	ManualSpeed    bool               `json:"manual_speed"`
 }
 
 func registerProbeRoutes(r chi.Router, service *probe.Service, runs domain.ProbeRunRepository, observations domain.ProbeObservationRepository, audit domain.AuditRepository) {
@@ -73,7 +74,7 @@ func (h probeHandler) create(w http.ResponseWriter, r *http.Request) {
 	alreadyExists := existingErr == nil
 	run, err := h.service.Create(r.Context(), probe.CreateRunCommand{
 		ActorScope: actor, IdempotencyKey: key, ConfigRevision: body.ConfigRevision,
-		Deadline: deadline, NodeLogicalIDs: body.NodeLogicalIDs, Kinds: body.Kinds,
+		Deadline: deadline, NodeLogicalIDs: body.NodeLogicalIDs, Kinds: body.Kinds, ManualSpeed: body.ManualSpeed,
 	})
 	if err != nil {
 		WriteDomainError(w, r, err)

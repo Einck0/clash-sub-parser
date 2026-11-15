@@ -3,6 +3,7 @@ package probe
 import (
 	"context"
 	"errors"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -113,6 +114,8 @@ func TestServiceCreateManualSpeedRequiresSingleEligibleTarget(t *testing.T) {
 		{name: "padded", nodeIDs: []string{" active "}, kinds: []domain.ProbeKind{domain.ProbeKindSpeed}},
 		{name: "missing", nodeIDs: []string{"missing"}, kinds: []domain.ProbeKind{domain.ProbeKindSpeed}},
 		{name: "inactive", nodeIDs: []string{"inactive"}, kinds: []domain.ProbeKind{domain.ProbeKindSpeed}},
+		{name: "mixed kinds", nodeIDs: []string{"active"}, kinds: []domain.ProbeKind{domain.ProbeKindSpeed, domain.ProbeKindBaseline}},
+		{name: "missing kinds", nodeIDs: []string{"active"}},
 		{name: "duplicate speed", nodeIDs: []string{"active"}, kinds: []domain.ProbeKind{domain.ProbeKindSpeed, domain.ProbeKindSpeed}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -120,7 +123,7 @@ func TestServiceCreateManualSpeedRequiresSingleEligibleTarget(t *testing.T) {
 			nodes := &memoryNodeRepo{nodes: []domain.Node{{LogicalID: "active", Active: true}, {LogicalID: "inactive", Active: false}}}
 			svc := NewService(repo, WithNodeRepository(nodes))
 			_, err := svc.Create(context.Background(), CreateRunCommand{
-				IdempotencyKey: "manual", NodeLogicalIDs: tc.nodeIDs, Kinds: tc.kinds,
+				IdempotencyKey: "manual", NodeLogicalIDs: tc.nodeIDs, Kinds: tc.kinds, ManualSpeed: true,
 			})
 			var validation *domain.DomainError
 			if !errors.As(err, &validation) || validation.Code != "invalid_speed_target" {
@@ -135,13 +138,55 @@ func TestServiceCreateManualSpeedRequiresSingleEligibleTarget(t *testing.T) {
 	repo := &memoryRuns{items: map[string]domain.ProbeRun{}}
 	svc := NewService(repo, WithNodeRepository(&memoryNodeRepo{nodes: []domain.Node{{LogicalID: "active", Active: true}}}))
 	run, err := svc.Create(context.Background(), CreateRunCommand{
-		IdempotencyKey: "manual", NodeLogicalIDs: []string{"active"}, Kinds: []domain.ProbeKind{domain.ProbeKindSpeed},
+		IdempotencyKey: "manual", NodeLogicalIDs: []string{"active"}, Kinds: []domain.ProbeKind{domain.ProbeKindSpeed}, ManualSpeed: true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := svc.Cancel(context.Background(), run.ID); err != nil {
 		t.Fatal(err)
+	}
+}
+
+type capturingServiceRunner struct {
+	nodeIDs []string
+	kinds   []domain.ProbeKind
+}
+
+func (r *capturingServiceRunner) Run(_ context.Context, _ *domain.ProbeRun, nodeIDs []string, kinds []domain.ProbeKind) error {
+	r.nodeIDs = append([]string(nil), nodeIDs...)
+	r.kinds = append([]domain.ProbeKind(nil), kinds...)
+	return nil
+}
+
+func TestServiceCreatePreservesLegacySpeedOnlyFleetRequests(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		nodeIDs []string
+		kinds   []domain.ProbeKind
+	}{
+		{name: "multiple explicit nodes", nodeIDs: []string{"one", "two"}, kinds: []domain.ProbeKind{domain.ProbeKindSpeed}},
+		{name: "implicit fleet", kinds: []domain.ProbeKind{domain.ProbeKindSpeed}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &memoryRuns{items: map[string]domain.ProbeRun{}}
+			runner := &capturingServiceRunner{}
+			svc := NewService(repo, WithRunner(runner))
+			run, err := svc.Create(context.Background(), CreateRunCommand{
+				IdempotencyKey: "legacy-speed-" + tc.name,
+				NodeLogicalIDs: tc.nodeIDs,
+				Kinds:          tc.kinds,
+			})
+			if err != nil {
+				t.Fatalf("legacy speed-only Create rejected: %v", err)
+			}
+			if err := svc.TriggerRun(context.Background(), run.ID, tc.nodeIDs, tc.kinds, nil); err != nil {
+				t.Fatalf("legacy speed-only TriggerRun rejected: %v", err)
+			}
+			if !reflect.DeepEqual(runner.nodeIDs, tc.nodeIDs) || !reflect.DeepEqual(runner.kinds, tc.kinds) {
+				t.Fatalf("legacy request rewritten: got nodeIDs=%v kinds=%v, want nodeIDs=%v kinds=%v", runner.nodeIDs, runner.kinds, tc.nodeIDs, tc.kinds)
+			}
+		})
 	}
 }
 

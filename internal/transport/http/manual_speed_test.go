@@ -37,6 +37,50 @@ func (r capturingProbeRunner) Run(_ context.Context, _ *domain.ProbeRun, nodeIDs
 	return nil
 }
 
+func TestLegacySpeedOnlyHTTPRequestsPreserveFleetSemantics(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		payload string
+		nodeIDs []string
+	}{
+		{
+			name:    "multiple explicit nodes",
+			payload: `{"node_logical_ids":["one","two"],"kinds":["speed"]}`,
+			nodeIDs: []string{"one", "two"},
+		},
+		{
+			name:    "implicit fleet",
+			payload: `{"kinds":["speed"]}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runs := &probeRunMemory{data: map[string]domain.ProbeRun{}}
+			runner := capturingProbeRunner{requests: make(chan capturedProbeRequest, 1)}
+			service := probe.NewService(runs, probe.WithRunner(runner))
+			router := transporthttp.NewRouter(transporthttp.RouterConfig{
+				AdminToken: probeTestAdminToken, ProbeService: service,
+				ProbeRunRepository: runs, ProbeObservationRepository: &observationMemory{},
+			})
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/probes/runs", strings.NewReader(tc.payload))
+			req.Header.Set("Authorization", "Bearer "+probeTestAdminToken)
+			req.Header.Set("Idempotency-Key", "legacy-speed-"+tc.name)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			if rec.Code != http.StatusCreated {
+				t.Fatalf("legacy speed-only request rejected: status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			select {
+			case got := <-runner.requests:
+				if !reflect.DeepEqual(got.nodeIDs, tc.nodeIDs) || !reflect.DeepEqual(got.kinds, []domain.ProbeKind{domain.ProbeKindSpeed}) {
+					t.Fatalf("legacy request rewritten: got=%+v want targets=%v kinds=[speed]", got, tc.nodeIDs)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("legacy speed-only request never reached controlled runner")
+			}
+		})
+	}
+}
+
 func TestMixedSpeedHTTPRequestsPreserveLegacyTargets(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -158,19 +202,19 @@ func TestManualSpeedPersistsIntoNodeStatus(t *testing.T) {
 		return resp.Data.RunID
 	}
 	for _, payload := range []string{
-		`{"kinds":["speed"]}`,
-		`{"node_logical_ids":[],"kinds":["speed"]}`,
-		`{"node_logical_ids":["manual-speed-node","other"],"kinds":["speed"]}`,
-		`{"node_logical_ids":["manual-speed-node"],"kinds":["speed","speed"]}`,
-		`{"node_logical_ids":["missing"],"kinds":["speed"]}`,
-		`{"node_logical_ids":[" "],"kinds":["speed"]}`,
+		`{"manual_speed":true,"kinds":["speed"]}`,
+		`{"manual_speed":true,"node_logical_ids":[],"kinds":["speed"]}`,
+		`{"manual_speed":true,"node_logical_ids":["manual-speed-node","other"],"kinds":["speed"]}`,
+		`{"manual_speed":true,"node_logical_ids":["manual-speed-node"],"kinds":["speed","speed"]}`,
+		`{"manual_speed":true,"node_logical_ids":["missing"],"kinds":["speed"]}`,
+		`{"manual_speed":true,"node_logical_ids":[" "],"kinds":["speed"]}`,
 	} {
 		create(domain.MustNewUUIDv7(), payload, http.StatusUnprocessableEntity)
 	}
 	if _, total, err := runs.List(ctx, nil, 1, 10); err != nil || total != 0 || requests.Load() != 0 {
 		t.Fatalf("rejected request created work: total=%d requests=%d err=%v", total, requests.Load(), err)
 	}
-	payload := `{"node_logical_ids":["manual-speed-node"],"kinds":["speed"]}`
+	payload := `{"manual_speed":true,"node_logical_ids":["manual-speed-node"],"kinds":["speed"]}`
 	node.Active = false
 	if err := nodes.UpsertBatch(ctx, []domain.Node{node}); err != nil {
 		t.Fatal(err)

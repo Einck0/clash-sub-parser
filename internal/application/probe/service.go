@@ -44,6 +44,7 @@ type CreateRunCommand struct {
 	Deadline       time.Time
 	NodeLogicalIDs []string
 	Kinds          []domain.ProbeKind
+	ManualSpeed    bool
 }
 
 type runController struct {
@@ -186,10 +187,12 @@ func (s *Service) Create(ctx context.Context, cmd CreateRunCommand) (*domain.Pro
 		}
 	}
 
-	// A speed-only request is the manual single-node action. Keep legacy mixed
-	// probes unchanged, but never let an empty manual selection expand to a fleet.
-	if err := s.validateManualSpeedTarget(ctx, cmd.NodeLogicalIDs, cmd.Kinds); err != nil {
-		return nil, err
+	// Only explicit manual-speed requests use the bounded single-node validation.
+	// Legacy speed-only callers retain their historical fleet semantics.
+	if cmd.ManualSpeed {
+		if err := s.validateManualSpeedTarget(ctx, cmd.NodeLogicalIDs, cmd.Kinds); err != nil {
+			return nil, err
+		}
 	}
 
 	runID := domain.MustNewUUIDv7()
@@ -221,15 +224,7 @@ func (s *Service) Create(ctx context.Context, cmd CreateRunCommand) (*domain.Pro
 }
 
 func (s *Service) validateManualSpeedTarget(ctx context.Context, nodeIDs []string, kinds []domain.ProbeKind) error {
-	if len(kinds) == 0 {
-		return nil
-	}
-	for _, kind := range kinds {
-		if kind != domain.ProbeKindSpeed {
-			return nil // Generic/mixed probes retain their existing target semantics.
-		}
-	}
-	if len(kinds) != 1 || len(nodeIDs) != 1 || strings.TrimSpace(nodeIDs[0]) == "" || nodeIDs[0] != strings.TrimSpace(nodeIDs[0]) {
+	if len(kinds) != 1 || kinds[0] != domain.ProbeKindSpeed || len(nodeIDs) != 1 || strings.TrimSpace(nodeIDs[0]) == "" || nodeIDs[0] != strings.TrimSpace(nodeIDs[0]) {
 		return domain.NewValidationError("invalid_speed_target", "speed testing requires exactly one explicit node and kinds [speed]")
 	}
 	nodes := s.resolveNodesRepo()

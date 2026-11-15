@@ -29,6 +29,11 @@ func TestGlobalEmptyPassStartupUpgradesSealedSchema30(t *testing.T) {
 		_ = db.Close()
 		t.Fatalf("schema 30 fixture is not sealed and ready: %v", err)
 	}
+	version, err := sqlite.NewMigrationRunner(db, migrations.FS).LatestVersion(ctx)
+	if err != nil || version != 30 {
+		_ = db.Close()
+		t.Fatalf("fixture schema version = %d, want 30: %v", version, err)
+	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("close schema 30 fixture: %v", err)
 	}
@@ -45,6 +50,10 @@ func TestGlobalEmptyPassStartupUpgradesSealedSchema30(t *testing.T) {
 		if version != wantVersion {
 			t.Fatalf("schema version = %d, want %d", version, wantVersion)
 		}
+		var publications int
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(manifest_json) FROM publications`).Scan(&publications); err != nil {
+			t.Fatalf("schema 32 publication manifest column missing: %v", err)
+		}
 		filter, err := sqlite.NewNodeFilterRepository(db).GetGlobalFilter(ctx)
 		if err != nil {
 			t.Fatalf("read default global node filter: %v", err)
@@ -58,16 +67,16 @@ func TestGlobalEmptyPassStartupUpgradesSealedSchema30(t *testing.T) {
 	if err != nil {
 		t.Fatalf("startup upgrade from sealed schema 30: %v", err)
 	}
-	assertStartupSchemaAndDefault(upgraded, 31)
+	assertStartupSchemaAndDefault(upgraded, 32)
 	if err := upgraded.Close(); err != nil {
 		t.Fatalf("close upgraded database: %v", err)
 	}
 
 	reopened, err := sqlite.OpenAndMigrate(ctx, cfg)
 	if err != nil {
-		t.Fatalf("startup reopen at schema 31: %v", err)
+		t.Fatalf("startup reopen at schema 32: %v", err)
 	}
-	assertStartupSchemaAndDefault(reopened, 31)
+	assertStartupSchemaAndDefault(reopened, 32)
 	if err := reopened.Close(); err != nil {
 		t.Fatalf("close reopened database: %v", err)
 	}

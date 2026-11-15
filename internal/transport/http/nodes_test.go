@@ -282,9 +282,10 @@ func Test10000NodesServerSidePaginationAndBoundaryContracts(t *testing.T) {
 			t.Fatalf("expected 200 OK, got %d: %s", rec.Code, rec.Body.String())
 		}
 
-		// Check payload size is small (never a full 10,000 dump)
+		// Allow up to 2 KiB per row for target-scoped compatibility diagnostics,
+		// while the exact item count below still rejects a full 10,000-node dump.
 		bodyBytes := rec.Body.Bytes()
-		if len(bodyBytes) > 50*1024 {
+		if len(bodyBytes) > 50*2*1024 {
 			t.Fatalf("response payload too large (%d bytes), full ledger dump suspected", len(bodyBytes))
 		}
 

@@ -481,7 +481,7 @@ func TestBuildCurrentArtifact_NonMihomoCompatibleProjection(t *testing.T) {
 	// Verify safe exclusion warning in diagnostics
 	hasWarning := false
 	for _, d := range snapSurge.Diagnostics {
-		if d.Severity == resolver.DiagnosticSeverityWarning && d.Target == vlessNode.LogicalID {
+		if d.Severity == resolver.DiagnosticSeverityWarning && d.Code == "unsupported_target_capability" && d.Target == string(domain.TargetSurge) && strings.Contains(d.Message, vlessNode.LogicalID) {
 			hasWarning = true
 			break
 		}

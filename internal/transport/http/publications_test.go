@@ -1414,15 +1414,27 @@ func TestAdminPublish_CapabilityBoundaries(t *testing.T) {
 	publishRec := httptest.NewRecorder()
 	router.ServeHTTP(publishRec, publishReq)
 
-	if publishRec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("expected 422 Unprocessable Entity for publish capability error, got %d. body: %s", publishRec.Code, publishRec.Body.String())
+	if publishRec.Code != http.StatusConflict {
+		t.Fatalf("expected 409 for rejected publish preflight, got %d. body: %s", publishRec.Code, publishRec.Body.String())
 	}
-	var errResp transporthttp.ErrorResponse
+	var errResp struct {
+		Code        string                            `json:"code"`
+		Diagnostics []publication.PreflightDiagnostic `json:"diagnostics"`
+	}
 	if err := json.Unmarshal(publishRec.Body.Bytes(), &errResp); err != nil {
 		t.Fatalf("failed to parse error response: %v", err)
 	}
-	if errResp.Code != "no_compatible_nodes" {
-		t.Fatalf("expected code no_compatible_nodes, got %s", errResp.Code)
+	if errResp.Code != "publication_preflight_rejected" {
+		t.Fatalf("expected publication_preflight_rejected, got %s", errResp.Code)
+	}
+	found := false
+	for _, diagnostic := range errResp.Diagnostics {
+		if diagnostic.Code == "no_compatible_nodes" && diagnostic.Severity == resolver.DiagnosticSeverityError {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("all-unavailable export lost its blocking diagnostic: %+v", errResp.Diagnostics)
 	}
 }
 

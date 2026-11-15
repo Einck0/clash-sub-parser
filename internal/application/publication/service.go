@@ -346,6 +346,10 @@ func (s *Service) Publish(ctx context.Context, cmd PublishCommand) (*PublishResu
 			OmitUnavailableOptionalGroups:  cmd.OmitUnavailableOptionalGroups,
 		})
 		if err != nil {
+			var preflightErr *PreflightError
+			if errors.As(err, &preflightErr) {
+				s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "publication.create", domain.AuditResultFailure, preflightSummary(snapshot, preflightErr.Result))
+			}
 			return nil, err
 		}
 		snapshotID = prevRes.SnapshotID
@@ -1707,6 +1711,14 @@ func (s *Service) buildArtifactPipeline(ctx context.Context, facts *domain.Consi
 
 	snapshot, excludedNodes, err := projectExportSnapshot(snapshot, target)
 	if err != nil {
+		if de, ok := domain.AsDomainError(err); ok && de.Code == "filtered_nodes_empty" {
+			preflight := s.evaluatePreflightFromSnapshot(ctx, snapshot, target, facts.ActiveRiskPolicy, facts.RiskObservations, facts.AsOf)
+			for _, diagnostic := range preflight.Diagnostics {
+				if diagnostic.Code == "risk_blocked" || diagnostic.Code == "risk_review" || diagnostic.Code == "risk_unknown" {
+					return nil, snapshot, newPreflightError(preflight)
+				}
+			}
+		}
 		return nil, snapshot, err
 	}
 	if cfg.pruneUnavailableOptionalGroups && target == domain.TargetMihomo {

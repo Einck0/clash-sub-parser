@@ -2163,6 +2163,21 @@ func (s *Service) ListLatestEntries(ctx context.Context, subscriptionID string) 
 	if s.fetches == nil {
 		return entries, nil
 	}
+	if s.db != nil {
+		// 已接纳的最新尝试由状态表确定，不根据混合精度的历史时间文本倒推
+		var fetchID sql.NullString
+		err := s.db.QueryRowContext(ctx, `SELECT last_attempt_fetch_id FROM subscription_current_state WHERE subscription_id=?`, subscriptionID).Scan(&fetchID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+		if err == nil && fetchID.Valid && fetchID.String != "" {
+			latest, err := s.fetches.GetByID(ctx, fetchID.String)
+			if err != nil {
+				return nil, err
+			}
+			return append(entries, parseErrorEntries(*latest)...), nil
+		}
+	}
 	fetches, err := s.fetches.ListBySubscription(ctx, subscriptionID, 1)
 	if err != nil {
 		return nil, err

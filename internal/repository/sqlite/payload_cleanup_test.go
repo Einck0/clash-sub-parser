@@ -112,17 +112,10 @@ func TestInspectPayloadStorage_DryRun(t *testing.T) {
 		t.Fatalf("failed to insert node: %v", err)
 	}
 
-	pubRepo := sqlite.NewPublicationRepository(db)
 	pubID := "pub_ins_" + domain.MustNewUUIDv7()
-	if err := pubRepo.Create(ctx, &domain.Publication{
-		ID:              pubID,
-		Target:          domain.TargetMihomo,
-		SnapshotDigest:  "sha256:pubsnap",
-		CompilerVersion: "1.0.0",
-		TokenHash:       "token_ins_" + domain.MustNewUUIDv7(),
-		State:           domain.PublicationStateActive,
-		CreatedAt:       now,
-	}); err != nil {
+	// Insert the actual schema-29 shape; the current repository requires manifest_json from schema 32.
+	if _, err := db.ExecContext(ctx, `INSERT INTO publications(id,target,snapshot_digest,compiler_version,token_hash,state,created_at) VALUES(?,?,?,?,?,?,?)`,
+		pubID, domain.TargetMihomo, "sha256:pubsnap", "1.0.0", "token_ins_"+domain.MustNewUUIDv7(), domain.PublicationStateActive, now.Format(time.RFC3339)); err != nil {
 		t.Fatalf("failed to create pub: %v", err)
 	}
 
@@ -287,17 +280,10 @@ func TestClearPayloadBodies_SuccessAndPreservation(t *testing.T) {
 		t.Fatalf("failed to save connection version: %v", err)
 	}
 
-	pubRepo := sqlite.NewPublicationRepository(db)
 	pubID := "pub_clear_" + domain.MustNewUUIDv7()
-	if err := pubRepo.Create(ctx, &domain.Publication{
-		ID:              pubID,
-		Target:          domain.TargetMihomo,
-		SnapshotDigest:  "sha256:pubclearsnap",
-		CompilerVersion: "1.0.0",
-		TokenHash:       "token_clear_" + domain.MustNewUUIDv7(),
-		State:           domain.PublicationStateActive,
-		CreatedAt:       now,
-	}); err != nil {
+	// Keep this legacy cleanup fixture on schema 29 rather than adding current columns.
+	if _, err := db.ExecContext(ctx, `INSERT INTO publications(id,target,snapshot_digest,compiler_version,token_hash,state,created_at) VALUES(?,?,?,?,?,?,?)`,
+		pubID, domain.TargetMihomo, "sha256:pubclearsnap", "1.0.0", "token_clear_"+domain.MustNewUUIDv7(), domain.PublicationStateActive, now.Format(time.RFC3339)); err != nil {
 		t.Fatalf("failed to create publication: %v", err)
 	}
 

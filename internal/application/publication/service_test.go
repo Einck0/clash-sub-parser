@@ -1343,7 +1343,7 @@ func TestAllFourTargets_PlaintextLifecycle(t *testing.T) {
 	}
 }
 
-func TestZeroNodeEmptySnapshot_ValidAcrossAllFourTargets(t *testing.T) {
+func TestZeroNodeEmptySnapshotWithoutRoutedPassRejectedAcrossAllFourTargets(t *testing.T) {
 	ctx := context.Background()
 	svc, _, _ := setupService()
 	emptySnap := &resolver.ResolvedPolicySnapshot{
@@ -1361,21 +1361,21 @@ func TestZeroNodeEmptySnapshot_ValidAcrossAllFourTargets(t *testing.T) {
 		domain.TargetQuantumultX,
 	} {
 		preRes, err := svc.Preflight(ctx, publication.PreflightCommand{Target: target, Snapshot: emptySnap})
-		if err != nil || !preRes.Allowed {
-			t.Fatalf("expected 0-node empty snapshot preflight to succeed for %s, got allowed=%v err=%v", target, preRes != nil && preRes.Allowed, err)
+		if err != nil || preRes == nil || preRes.Allowed || len(preRes.Diagnostics) == 0 || preRes.Diagnostics[0].Code != "filtered_nodes_empty" {
+			t.Fatalf("expected empty snapshot preflight rejection for %s, got result=%+v err=%v", target, preRes, err)
 		}
-		prevRes, err := svc.Preview(ctx, publication.PreviewQuery{Target: target, Snapshot: emptySnap})
-		if err != nil || len(prevRes.Content) == 0 {
-			t.Fatalf("expected 0-node empty snapshot preview to succeed for %s, got err=%v", target, err)
+		_, err = svc.Preview(ctx, publication.PreviewQuery{Target: target, Snapshot: emptySnap})
+		if de, ok := domain.AsDomainError(err); !ok || de.Code != "filtered_nodes_empty" {
+			t.Fatalf("expected empty snapshot preview rejection for %s, got err=%v", target, err)
 		}
-		pubRes, err := svc.Publish(ctx, publication.PublishCommand{
+		_, err = svc.Publish(ctx, publication.PublishCommand{
 			Target:    target,
 			Snapshot:  emptySnap,
 			ActorKind: domain.ActorKindAdmin,
 			RequestID: "req-empty-" + string(target),
 		})
-		if err != nil || pubRes.ContentDigest != prevRes.ContentDigest {
-			t.Fatalf("expected 0-node empty snapshot publish to succeed for %s, got err=%v", target, err)
+		if de, ok := domain.AsDomainError(err); !ok || de.Code != "filtered_nodes_empty" {
+			t.Fatalf("expected empty snapshot publish rejection for %s, got err=%v", target, err)
 		}
 	}
 }

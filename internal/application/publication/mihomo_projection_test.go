@@ -21,13 +21,15 @@ func incompatibleMihomoFacts() *domain.ConsistentFacts {
 	bad := good
 	bad.LogicalID, bad.DisplayName, bad.Server = badID, "Legacy", "192.0.2.2"
 	bad.Credentials.Transport = map[string]string{"skip_cert_verify": "true"}
+	const mainID = "019a8320-0000-7000-8000-000000000001"
+	const fallbackID = "019a8320-0000-7000-8000-000000000002"
 	groups := []domain.NodeGroup{
-		{ID: "main", Name: "Main", GroupType: domain.GroupTypeSelect, InheritGlobalFilter: true},
-		{ID: "fallback", Name: "Fallback", GroupType: domain.GroupTypeSelect, InheritGlobalFilter: true},
+		{ID: mainID, Name: "Main", GroupType: domain.GroupTypeSelect, InheritGlobalFilter: true},
+		{ID: fallbackID, Name: "Fallback", GroupType: domain.GroupTypeSelect, InheritGlobalFilter: true},
 	}
 	sources := map[string][]domain.MemberSource{
-		"main":     {{ID: "good-source", GroupID: "main", Operation: domain.OperationAdd, Kind: domain.SourceKindManualNode, NodeLogicalID: &goodID}},
-		"fallback": {{ID: "legacy-source", GroupID: "fallback", Operation: domain.OperationAdd, Kind: domain.SourceKindManualNode, NodeLogicalID: &badID}},
+		mainID:     {{ID: "good-source", GroupID: mainID, Operation: domain.OperationAdd, Kind: domain.SourceKindManualNode, NodeLogicalID: &goodID}},
+		fallbackID: {{ID: "legacy-source", GroupID: fallbackID, Operation: domain.OperationAdd, Kind: domain.SourceKindManualNode, NodeLogicalID: &badID}},
 	}
 	for i := range groups {
 		groups[i].Sources = sources[groups[i].ID]
@@ -38,8 +40,8 @@ func incompatibleMihomoFacts() *domain.ConsistentFacts {
 		Nodes: []domain.Node{good, bad}, Groups: groups, GroupSources: sources,
 		GlobalEmptyFallbackPass: &pass,
 		PolicyRules: []domain.PolicyRule{
-			{ID: "specific", RevisionID: "rev-projection", TargetGroupID: "fallback", Expression: "DOMAIN,fixture.invalid", Enabled: true},
-			{ID: "terminal", RevisionID: "rev-projection", TargetGroupID: "main", Expression: "MATCH", Position: 1, Enabled: true},
+			{ID: "specific", RevisionID: "rev-projection", TargetGroupID: fallbackID, Expression: "DOMAIN,fixture.invalid", Enabled: true},
+			{ID: "terminal", RevisionID: "rev-projection", TargetGroupID: mainID, Expression: "MATCH", Position: 1, Enabled: true},
 		},
 	}
 }

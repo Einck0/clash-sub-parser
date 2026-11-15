@@ -150,7 +150,7 @@ func TestTargetProjectionEmptyPassIsLocalPermission(t *testing.T) {
 }
 
 func TestTargetProjectionPreservesResolverGlobalPass(t *testing.T) {
-	bad := incompatibleMihomoSS(domain.MustNewUUIDv7())
+	bad := incompatibleMihomoSS(domain.ComputeNodeLogicalID(domain.ProtocolSS, "192.0.2.1", 8388, nil))
 	groupID := domain.MustNewUUIDv7()
 	on := true
 	snap, err := resolver.New().Resolve(context.Background(), resolver.ResolveInput{

@@ -58,7 +58,7 @@ func TestParserPluginBoundaryFactsAndHTTPPreview(t *testing.T) {
 			// a scalar so they reach the compiler rather than breaking the fixture.
 			body, err := json.Marshal(map[string]any{"proxies": []map[string]any{
 				{"name": "Plugin", "type": "ss", "server": "192.0.2.61", "port": 8388, "cipher": "aes-128-gcm", "password": "SYNTHETIC_PASSWORD_SENTINEL", "plugin": tc.plugin, "plugin-opts": tc.opts},
-				{"name": "Plain", "type": "ss", "server": "192.0.2.62", "port": 8388, "cipher": "aes-128-gcm", "password": "SYNTHETIC_PASSWORD_SENTINEL"},
+				{"name": "Plain", "type": "ss", "server": "192.0.2.62", "port": 8388, "cipher": "aes-128-gcm", "password": "PLAIN_EXPORT_PASSWORD"},
 			}})
 			if err != nil {
 				t.Fatal(err)

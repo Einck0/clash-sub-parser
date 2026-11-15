@@ -787,8 +787,8 @@ func TestEnabledSubscriptionInventoryE2E(t *testing.T) {
 		if err := json.Unmarshal(strictBytes, &strictBody); err != nil {
 			t.Fatalf("decode strict preview error: %v; body=%s", err, string(strictBytes))
 		}
-		if strictBody.Code != "empty_group_not_allowed" {
-			t.Fatalf("expected empty_group_not_allowed for strict preview, got %q; body=%s", strictBody.Code, string(strictBytes))
+		if strictBody.Code != "filtered_nodes_empty" {
+			t.Fatalf("expected filtered_nodes_empty without any nodes or routed PASS, got %q; body=%s", strictBody.Code, string(strictBytes))
 		}
 
 		// 8. Verify previously published bytes remain strictly immutable

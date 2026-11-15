@@ -165,8 +165,10 @@ func TestExportFactsMatrixAndImmutablePublication(t *testing.T) {
 			}
 		})
 	}
-	if _, err := svc.Preview(ctx, publication.PreviewQuery{Target: domain.TargetSurge, RevisionID: rev.ID}); err == nil {
-		t.Error("strict Surge preview accepted VLESS")
+	surge, err := svc.Preview(ctx, publication.PreviewQuery{Target: domain.TargetSurge, RevisionID: rev.ID})
+	assertPublicationOK(t, "automatic Surge projection", err)
+	if surge.Manifest.NodeCount != 6 || surge.Manifest.ExcludedCount != 1 || surge.Manifest.Excluded[0].NodeID != ids[domain.ProtocolVLESS] {
+		t.Fatalf("Surge must exclude only the incompatible VLESS node: %+v", surge.Manifest)
 	}
 	if draft == "" {
 		t.Fatal("missing sing-box draft")

@@ -78,7 +78,7 @@ func TestInventoryFormatErrorsAreAuditableDisplayOnlyEntries(t *testing.T) {
 	id, url := domain.MustNewUUIDv7(), "https://format.invalid/feed"
 	createTestSub(t, subs, id, "Format errors", url, true)
 	svc := inventory.NewService(db, subs, fetches, nodes, sources, fetcher)
-	for _, tc := range []struct {
+	for i, tc := range []struct {
 		body, reason string
 		outcome      domain.FetchOutcome
 	}{
@@ -91,6 +91,11 @@ func TestInventoryFormatErrorsAreAuditableDisplayOnlyEntries(t *testing.T) {
 		if result == nil || result.Outcome != tc.outcome || !strings.Contains(result.RedactedError, "reason_code:"+tc.reason) || (reconcileErr != nil) != (tc.outcome == domain.FetchOutcomeFailed) {
 			t.Fatalf("wrong persisted scenario: result=%+v err=%v", result, reconcileErr)
 		}
+		// Mixed precision makes the older whole-second timestamp sort after later fractions as text.
+		startedAt := []string{"2026-11-15T00:00:00Z", "2026-11-15T00:00:00.500Z", "2026-11-15T00:00:00.750Z"}[i]
+		if _, err := db.ExecContext(ctx, `UPDATE subscription_fetches SET started_at=? WHERE id=?`, startedAt, result.FetchID); err != nil {
+			t.Fatal(err)
+		}
 		entries, err := svc.ListLatestEntries(ctx, id)
 		if err != nil {
 			t.Fatal(err)
@@ -101,12 +106,22 @@ func TestInventoryFormatErrorsAreAuditableDisplayOnlyEntries(t *testing.T) {
 				continue
 			}
 			errors++
-			if entry.NodeLogicalID != nil || entry.SubscriptionID != id || !strings.Contains(entry.ClassificationReason, result.FetchID) {
+			if entry.NodeLogicalID != nil || entry.SubscriptionID != id || !strings.Contains(entry.ClassificationReason, result.FetchID) || entry.ParsedConfigJSON != "" || entry.Server != "" || entry.Port != 0 {
 				t.Fatalf("error lost display-only provenance: %+v", entry)
 			}
+			var provenance struct {
+				Format string `json:"format"`
+				Reason string `json:"reason"`
+				Field  string `json:"field"`
+			}
+			if err := json.Unmarshal([]byte(entry.SourceProvenanceJSON), &provenance); err != nil || provenance.Format == "" || provenance.Reason == "" || provenance.Field == "" {
+				t.Fatalf("missing structured safe provenance: %+v err=%v", provenance, err)
+			}
 			encoded, _ := json.Marshal(entry)
-			if strings.Contains(string(encoded), "SECRET") {
-				t.Fatal("format diagnosis leaked source text")
+			for _, private := range []string{"SECRET", "192.0.2.2", url} {
+				if strings.Contains(string(encoded), private) {
+					t.Fatal("format diagnosis leaked source text")
+				}
 			}
 			proxy := domain.EntryKindProxy
 			if _, err := svc.OverrideEntryKind(ctx, entry.ID, &proxy, "", "test"); err == nil {

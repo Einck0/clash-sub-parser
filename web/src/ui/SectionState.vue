@@ -36,7 +36,7 @@ defineEmits<{
 
     <!-- Error State -->
     <div v-else-if="error" class="alert alert-error shadow-sm p-4 rounded-xl flex items-center justify-between" data-testid="section-error">
-      <slot name="error" :error="error">
+      <slot name="error" :error="displayText(error)">
         <div class="flex items-center gap-3">
           <ExclamationCircleIcon class="w-5 h-5 shrink-0" />
           <span class="text-xs sm:text-sm font-medium">{{ displayText(error) }}</span>

@@ -5,6 +5,7 @@ import { api } from '../../api/client'
 import { toastStore } from '../../ui/toast'
 import { t } from '../../locales'
 import { uiText } from '../../locales/redesign'
+import { displayText } from '../../utils/displayNames'
 
 const publicBaseUrl = ref('')
 const loading = ref(false)
@@ -20,7 +21,7 @@ async function fetchPublicBaseUrl() {
       publicBaseUrl.value = res.public_base_url
     }
   } catch (err: any) {
-    errorMessage.value = err?.message || uiText('获取公网访问基准地址失败', 'Failed to fetch public base URL')
+    errorMessage.value = displayText(err?.message || uiText('获取公网访问基准地址失败', 'Failed to fetch public base URL'))
   } finally {
     loading.value = false
   }
@@ -45,7 +46,7 @@ async function savePublicBaseUrl() {
       tone: 'success',
     })
   } catch (err: any) {
-    errorMessage.value = err?.message || uiText('保存失败', 'Save failed')
+    errorMessage.value = displayText(err?.message || uiText('保存失败', 'Save failed'))
     toastStore.push({ message: errorMessage.value, tone: 'error' })
   } finally {
     saving.value = false

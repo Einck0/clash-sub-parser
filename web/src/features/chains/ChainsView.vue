@@ -310,7 +310,7 @@ onMounted(() => {
       :nodes="chains.nodes.value"
       :options="chains.options.value"
       :loading="chains.effectsLoading.value"
-      :error="chains.effectsError.value"
+      :error="displayText(chains.effectsError.value)"
     />
 
     <!-- Create / Edit Drawer -->
@@ -370,7 +370,7 @@ onMounted(() => {
           <ExclamationTriangleIcon class="w-4 h-4 shrink-0 text-error mt-0.5" />
           <div class="space-y-1">
             <span class="font-bold">{{ uiText('无法删除该绑定：', 'Cannot delete binding:') }}</span>
-            <p class="leading-relaxed">{{ chains.deleteError.value }}</p>
+            <p class="leading-relaxed">{{ displayText(chains.deleteError.value) }}</p>
             <p class="text-[11px] text-base-content/60 mt-1">
               {{
                 uiText(

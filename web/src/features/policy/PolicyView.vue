@@ -124,7 +124,7 @@ async function saveGlobalFilter() {
     await reload()
     globalFilterModalOpen.value = false
   } catch (err: any) {
-    globalConditionError.value = err?.message || '保存全局筛选失败'
+    globalConditionError.value = displayText(err?.message || '保存全局筛选失败')
   }
 }
 
@@ -233,15 +233,15 @@ async function handleSaveGroup(data: {
       const rev = (err.details as any)?.current_revision ?? (err as any).current_revision ?? ((activeGroup.value?.revision || 1) + 1)
       conflictData.value = {
         currentRevision: rev,
-        message: err.message || '策略组版本冲突，服务端已更新。',
+        message: displayText(err.message || '策略组版本冲突，服务端已更新。'),
       }
     } else if (err?.status === 422 && ((err.details as any)?.cycle_path || err?.code === 'cycle_detected')) {
       cycleData.value = {
         cyclePath: (err.details as any)?.cycle_path ?? err.cycle_path ?? [],
-        message: err.message || '检测到循环依赖环路',
+        message: displayText(err.message || '检测到循环依赖环路'),
       }
     } else {
-      sheetServerError.value = err instanceof Error ? err.message : '保存策略组失败'
+      sheetServerError.value = displayText(err instanceof Error ? err.message : '保存策略组失败')
     }
   }
 }
@@ -364,7 +364,7 @@ onUnmounted(() => {
           <div class="min-w-0">
             <span class="font-bold">{{ t('policy.validationIncomplete') }}</span>
             <p class="opacity-80 mt-0.5 truncate">
-              {{ validationError || uiText('校验服务请求失败 (网络/服务异常)，非策略无效，请点击右侧重试', 'Validation request failed (network/service error), draft is not invalid. Please retry.') }}
+              {{ displayText(validationError) || uiText('校验服务请求失败 (网络/服务异常)，非策略无效，请点击右侧重试', 'Validation request failed (network/service error), draft is not invalid. Please retry.') }}
             </p>
           </div>
         </div>
@@ -514,7 +514,7 @@ onUnmounted(() => {
       <div class="flex items-center gap-2 min-w-0">
         <ExclamationTriangleIcon class="w-5 h-5 text-warning shrink-0" />
         <span class="text-xs">
-          {{ topologyError || '全量策略组拓扑加载失败' }}
+          {{ displayText(topologyError) || '全量策略组拓扑加载失败' }}
           {{ isTopologyStale ? '（当前显示为过期拓扑缓存，请重试以恢复组引用修改与保存）' : '（拓扑未就绪，禁止保存策略组来源）' }}
         </span>
       </div>

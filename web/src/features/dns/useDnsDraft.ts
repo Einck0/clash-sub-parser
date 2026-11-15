@@ -4,6 +4,7 @@ import { ApiError, api } from '../../api/client'
 import { uiText } from '../../locales/redesign'
 import { useUnsavedChanges } from '../../composables/useUnsavedChanges'
 import type { DnsSettings, ValidatedDns } from './dnsTypes'
+import { displayText } from '../../utils/displayNames'
 
 function deepEqual(a: unknown, b: unknown): boolean {
   if (a === b) return true
@@ -338,7 +339,7 @@ export function useDnsDraft(): UseDnsDraftReturn {
       return true
     } catch (err: any) {
       invalidMappingInputs.value[key] = rawVal
-      const reason = err?.message || ''
+      const reason = displayText(err?.message || '')
       const errMsg = uiText(
         `${key} YAML 格式无效${reason ? `: ${reason}` : ''}`,
         `${key} invalid YAML${reason ? `: ${reason}` : ''}`
@@ -420,7 +421,7 @@ export function useDnsDraft(): UseDnsDraftReturn {
       if (currentGen !== generation.value) return
       apply(fetched)
     } catch (e: any) {
-      error.value = e instanceof Error ? e.message : uiText('读取 DNS 设置失败', 'Failed to read DNS settings')
+      error.value = displayText(e instanceof Error ? e.message : uiText('读取 DNS 设置失败', 'Failed to read DNS settings'))
     } finally {
       loading.value = false
     }
@@ -469,7 +470,7 @@ export function useDnsDraft(): UseDnsDraftReturn {
       }
       previewYaml.value = ''
       previewDraftRevision.value = -1
-      error.value = e instanceof Error ? e.message : uiText('生成 DNS 预览失败', 'Failed to generate DNS preview')
+      error.value = displayText(e instanceof Error ? e.message : uiText('生成 DNS 预览失败', 'Failed to generate DNS preview'))
     } finally {
       previewing.value = false
     }
@@ -513,7 +514,7 @@ export function useDnsDraft(): UseDnsDraftReturn {
       }
       mode.value = next
     } catch (e: any) {
-      error.value = e instanceof Error ? e.message : uiText('DNS 配置校验失败', 'DNS configuration validation failed')
+      error.value = displayText(e instanceof Error ? e.message : uiText('DNS 配置校验失败', 'DNS configuration validation failed'))
     }
   }
 
@@ -570,11 +571,12 @@ export function useDnsDraft(): UseDnsDraftReturn {
         (e instanceof ApiError && e.status === 422) ||
         (e?.name === 'ApiError' && e?.status === 422)
       ) {
-        error.value =
+        error.value = displayText(
           e?.message ||
           uiText('DNS 配置校验失败（422 参数错误），草稿已保留。', 'DNS configuration validation failed (422 error); draft preserved.')
+        )
       } else {
-        error.value = e instanceof Error ? e.message : uiText('保存 DNS 设置失败', 'Failed to save DNS settings')
+        error.value = displayText(e instanceof Error ? e.message : uiText('保存 DNS 设置失败', 'Failed to save DNS settings'))
       }
     } finally {
       saving.value = false

@@ -13,6 +13,7 @@ import {
 import { t } from '../../locales'
 import { uiText } from '../../locales/redesign'
 import { useUnsavedChanges } from '../../composables/useUnsavedChanges'
+import { displayText } from '../../utils/displayNames'
 
 const kinds = ['baseline', 'geo', 'streaming', 'ai', 'speed', 'ip_risk'] as const
 const verdicts = ['available', 'restricted', 'unknown', 'error', 'stale'] as const
@@ -152,8 +153,8 @@ onMounted(refresh)
         说明：全局软筛选在直接导出与预览时即时生效；WARP 或专用免检线路等策略组可关闭「继承全局筛选」以软豁免并使用全部候选节点(不应用全局筛选)。当前凭据版本门槛、节点停用、来源订阅禁用与显式风险排除始终保留生效，不可绕过。
       </p>
       <p v-if="dirty" class="text-warning text-xs">{{ t('settings.filterUnsaved') }}</p>
-      <p v-if="requestError" role="alert" class="text-error text-sm" data-testid="filter-request-error">{{ requestError }}</p>
-      <p v-if="validationError" role="alert" class="text-error text-sm" data-testid="filter-validation-error">{{ validationError }}</p>
+      <p v-if="requestError" role="alert" class="text-error text-sm" data-testid="filter-request-error">{{ displayText(requestError) }}</p>
+      <p v-if="validationError" role="alert" class="text-error text-sm" data-testid="filter-validation-error">{{ displayText(validationError) }}</p>
       <p v-if="loadingGlobalFilter" role="status">{{ t('settings.filterLoading') }}</p>
       <template v-if="loaded">
         <label class="flex items-start gap-3 cursor-pointer">

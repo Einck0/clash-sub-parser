@@ -1,5 +1,6 @@
 import { ref, computed } from 'vue'
 import { api } from '../../api/client'
+import { displayText } from '../../utils/displayNames'
 import {
   type RuleCategory,
   type PolicyRuleView,
@@ -148,7 +149,7 @@ export function useRules() {
       const res = await api.get<RuleCategory[]>('/api/v1/policies/categories')
       categories.value = Array.isArray(res) ? res : []
     } catch (err: unknown) {
-      error.value = err instanceof Error ? err.message : 'Failed to fetch rule categories'
+      error.value = displayText(err instanceof Error ? err.message : 'Failed to fetch rule categories')
       throw err
     }
   }
@@ -198,7 +199,7 @@ export function useRules() {
       }
     } catch (err: unknown) {
       // Retain existing rules on refresh error
-      error.value = err instanceof Error ? err.message : 'Failed to fetch rules'
+      error.value = displayText(err instanceof Error ? err.message : 'Failed to fetch rules')
       throw err
     }
   }

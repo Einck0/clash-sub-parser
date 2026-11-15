@@ -4,6 +4,7 @@ import { PlusIcon, TrashIcon } from '@heroicons/vue/24/outline'
 import DrawerCard from '../../ui/DrawerCard.vue'
 import { t } from '../../locales'
 import { uiText } from '../../locales/redesign'
+import { displayText } from '../../utils/displayNames'
 import { useUnsavedChanges } from '../../composables/useUnsavedChanges'
 import {
   defaultPolicy,
@@ -310,7 +311,7 @@ function handleSubmit() {
       class="p-3 rounded-xl bg-error/10 border border-error/30 text-error text-xs font-medium"
       data-testid="subscription-drawer-error"
     >
-      {{ generalError }}
+      {{ displayText(generalError) }}
     </div>
 
     <!-- Progressive Disclosure Tabs -->

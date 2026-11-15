@@ -3,6 +3,7 @@ import { api } from '../../api/client'
 import { toastStore } from '../../ui/toast'
 import { generateUUID } from '../../utils/uuid'
 import { t } from '../../locales'
+import { displayText } from '../../utils/displayNames'
 
 export { generateUUID }
 
@@ -305,7 +306,7 @@ export function useSubscriptions() {
       await load()
       return true
     } catch (cause) {
-      const msg = cause instanceof Error ? cause.message : '设置主订阅失败'
+      const msg = displayText(cause instanceof Error ? cause.message : '设置主订阅失败')
       setRowError(subscription.id, msg)
       toastStore.push({
         message: msg,
@@ -334,7 +335,7 @@ export function useSubscriptions() {
       return true
     } catch (cause) {
       if (thisSeq !== loadSequence) return false
-      error.value = cause instanceof Error ? cause.message : '加载订阅源列表失败'
+      error.value = displayText(cause instanceof Error ? cause.message : '加载订阅源列表失败')
       return false
     } finally {
       if (thisSeq === loadSequence) {
@@ -357,7 +358,7 @@ export function useSubscriptions() {
       }
       await load()
     } catch (cause) {
-      toastStore.push({ message: cause instanceof Error ? cause.message : '保存订阅源失败', tone: 'error' })
+      toastStore.push({ message: displayText(cause instanceof Error ? cause.message : '保存订阅源失败'), tone: 'error' })
       throw cause
     } finally {
       saving.value = false
@@ -368,7 +369,7 @@ export function useSubscriptions() {
     try {
       await api.delete(`/api/v1/subscriptions/${encodeURIComponent(subscription.id)}`)
     } catch (cause) {
-      const msg = cause instanceof Error ? cause.message : '删除订阅源失败'
+      const msg = displayText(cause instanceof Error ? cause.message : '删除订阅源失败')
       toastStore.push({ message: msg, tone: 'error' })
       return { ok: false, error: msg }
     }
@@ -403,7 +404,7 @@ export function useSubscriptions() {
       toastStore.push({ message: t('subscriptions.refreshCompleted'), tone: 'success' })
       await load()
     } catch (cause) {
-      const msg = cause instanceof Error ? cause.message : t('subscriptions.refreshFailed')
+      const msg = displayText(cause instanceof Error ? cause.message : t('subscriptions.refreshFailed'))
       setRowError(subscription.id, msg)
       toastStore.push({ message: msg, tone: 'error' })
       await load().catch(() => {})
@@ -433,7 +434,7 @@ export function useSubscriptions() {
       await load()
       return true
     } catch (cause) {
-      const msg = cause instanceof Error ? cause.message : '切换订阅状态失败'
+      const msg = displayText(cause instanceof Error ? cause.message : '切换订阅状态失败')
       setRowError(subscription.id, msg)
       toastStore.push({
         message: msg,
@@ -486,7 +487,7 @@ export function useSubscriptionEntries() {
       entries.value = res?.items ?? []
       total.value = res?.total ?? entries.value.length
     } catch (cause) {
-      error.value = cause instanceof Error ? cause.message : '加载来源条目失败'
+      error.value = displayText(cause instanceof Error ? cause.message : '加载来源条目失败')
       entries.value = []
       total.value = 0
     } finally {
@@ -520,7 +521,7 @@ export function useSubscriptionEntries() {
       return updated
     } catch (cause) {
       toastStore.push({
-        message: cause instanceof Error ? cause.message : '更新分类覆盖失败',
+        message: displayText(cause instanceof Error ? cause.message : '更新分类覆盖失败'),
         tone: 'error',
       })
       throw cause

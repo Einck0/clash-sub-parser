@@ -1,6 +1,7 @@
 import { ref } from 'vue'
 import { api, ApiError } from '../../api/client'
 import { toastStore } from '../../ui/toast'
+import { displayText } from '../../utils/displayNames'
 import { uiText } from '../../locales/redesign'
 import type {
   ProxyChainBinding,
@@ -48,9 +49,9 @@ export function useChains() {
       configVersion.value = res.version || ''
     } catch (err: any) {
       if (err instanceof ApiError) {
-        error.value = err.message
+        error.value = displayText(err.message)
       } else {
-        error.value = err?.message || 'Failed to load proxy chain bindings'
+        error.value = displayText(err?.message || 'Failed to load proxy chain bindings')
       }
     } finally {
       loading.value = false
@@ -82,9 +83,9 @@ export function useChains() {
       nodes.value = res.nodes || []
     } catch (err: any) {
       if (err instanceof ApiError) {
-        effectsError.value = err.message
+        effectsError.value = displayText(err.message)
       } else {
-        effectsError.value = err?.message || 'Failed to load resolved chain effects'
+        effectsError.value = displayText(err?.message || 'Failed to load resolved chain effects')
       }
     } finally {
       effectsLoading.value = false
@@ -146,7 +147,7 @@ export function useChains() {
       void loadEffects()
     } catch (err: any) {
       // Revert / do not fake success!
-      const msg = err?.message || 'Failed to toggle chain status'
+      const msg = displayText(err?.message || 'Failed to toggle chain status')
       rowError.value[binding.id] = msg
       toastStore.push({
         tone: 'error',
@@ -206,7 +207,7 @@ export function useChains() {
       return true
     } catch (err: any) {
       // Preserve error for user inspection (e.g. 422 chain_cycle)
-      deleteError.value = err?.message || 'Failed to delete chain binding'
+      deleteError.value = displayText(err?.message || 'Failed to delete chain binding')
       return false
     } finally {
       deleteLoading.value = false

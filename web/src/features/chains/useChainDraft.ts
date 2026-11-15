@@ -1,6 +1,7 @@
 import { ref, computed } from 'vue'
 import { api, ApiError } from '../../api/client'
 import { uiText } from '../../locales/redesign'
+import { displayText } from '../../utils/displayNames'
 import type {
   ProxyChainBinding,
   ProxyChainTargetType,
@@ -131,9 +132,9 @@ export function useChainDraft(options: UseChainDraftOptions) {
             'Config version changed (409 Conflict), preview is stale, please refresh or retry'
           )
         } else if (err instanceof ApiError) {
-          previewError.value = err.message
+          previewError.value = displayText(err.message)
         } else {
-          previewError.value = err?.message || 'Preview failed'
+          previewError.value = displayText(err?.message || 'Preview failed')
         }
       }
     } finally {
@@ -355,17 +356,18 @@ export function useChainDraft(options: UseChainDraftOptions) {
       if (err?.status === 409 || err?.code === 'conflict') {
         // Keep draft exactly as is; show conflict banner
         conflictState.value = {
-          message:
+          message: displayText(
             err?.message ||
             uiText(
               '检测到并发修改冲突 (409 Conflict)，配置已被其他人修改。',
               'Concurrent modification conflict (409 Conflict). Configuration was updated by another process.'
-            ),
+            )
+          ),
         }
       } else if (err instanceof ApiError) {
-        saveError.value = err.message
+        saveError.value = displayText(err.message)
       } else {
-        saveError.value = err?.message || 'Save failed'
+        saveError.value = displayText(err?.message || 'Save failed')
       }
       return false
     } finally {

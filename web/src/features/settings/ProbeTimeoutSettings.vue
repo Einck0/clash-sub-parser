@@ -3,6 +3,7 @@ import { onMounted, ref } from 'vue'
 import { ClockIcon } from '@heroicons/vue/24/outline'
 import { api } from '../../api/client'
 import { toastStore } from '../../ui/toast'
+import { displayText } from '../../utils/displayNames'
 
 const probeTimeoutSeconds = ref(5)
 const loading = ref(false)
@@ -18,7 +19,7 @@ async function fetchProbeTimeout() {
       probeTimeoutSeconds.value = res.probe_timeout_seconds
     }
   } catch (err: any) {
-    errorMessage.value = err?.message || '获取探针超时设置失败'
+    errorMessage.value = displayText(err?.message || '获取探针超时设置失败')
   } finally {
     loading.value = false
   }
@@ -41,7 +42,7 @@ async function saveProbeTimeout() {
     }
     toastStore.push({ message: '探针探测超时已保存', tone: 'success' })
   } catch (err: any) {
-    errorMessage.value = err?.message || '保存失败'
+    errorMessage.value = displayText(err?.message || '保存失败')
     toastStore.push({ message: errorMessage.value, tone: 'error' })
   } finally {
     saving.value = false

@@ -1,4 +1,5 @@
 import { ref, type Ref } from 'vue'
+import { displayText } from '../utils/displayNames'
 
 export type ToastTone = 'info' | 'success' | 'warning' | 'error'
 
@@ -39,6 +40,8 @@ export function createToastStore(options: ToastStoreOptions = {}): ToastStore {
   const push = (input: ToastInput) => {
     const toast: Toast = {
       ...input,
+      message: displayText(input.message),
+      title: input.title ? displayText(input.title) : input.title,
       id: makeId(),
       tone: input.tone ?? 'info',
       duration: input.duration ?? 5000,

@@ -1,6 +1,7 @@
 import { ref } from 'vue'
 import { api, ApiError } from '../../api/client'
 import { clearPublicationCapabilities } from '../publications/usePublications'
+import { displayText } from '../../utils/displayNames'
 
 export type AuthState = 'probing' | 'open' | 'unauthenticated' | 'authenticated' | 'error'
 
@@ -49,7 +50,7 @@ export function useAuth() {
       }
     } catch (err: any) {
       state.value = 'error'
-      errorMessage.value = err?.message || '无法连接控制面认证服务'
+      errorMessage.value = displayText(err?.message || '无法连接控制面认证服务')
     }
   }
 
@@ -85,7 +86,7 @@ export function useAuth() {
       if (err instanceof ApiError && err.status === 401) {
         errorMessage.value = '令牌无效或已过期，请检查后重试'
       } else {
-        errorMessage.value = err?.message || '登录请求失败'
+        errorMessage.value = displayText(err?.message || '登录请求失败')
       }
       return false
     }

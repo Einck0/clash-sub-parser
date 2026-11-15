@@ -437,7 +437,7 @@ async function fetchSourceHistory(logicalId: string) {
       } else if (err?.status === 401 || (err instanceof ApiError && err.status === 401)) {
         sourceHistoryError.value = '鉴权失败，无法获取来源历史'
       } else {
-        sourceHistoryError.value = err instanceof Error ? err.message : '获取来源历史失败'
+        sourceHistoryError.value = displayText(err instanceof Error ? err.message : '获取来源历史失败')
       }
     }
   } finally {

@@ -12,6 +12,7 @@ import type {
   ValidationResult,
 } from './policyTypes'
 import { normalizeGroupSources } from './policyTypes'
+import { displayText } from '../../utils/displayNames'
 
 export type TopologyStatus = 'idle' | 'loading' | 'error' | 'ready'
 
@@ -104,7 +105,7 @@ export function usePolicy() {
       return true
     } catch (err) {
       if (seq === loadGroupsSeq) {
-        error.value = err instanceof Error ? err.message : '加载策略组失败'
+        error.value = displayText(err instanceof Error ? err.message : '加载策略组失败')
       }
       return false
     } finally {
@@ -151,7 +152,7 @@ export function usePolicy() {
     } catch (err) {
       if (seq !== topologySeq) return allTopologyGroups.value
 
-      const msg = err instanceof Error ? err.message : '加载完整拓扑失败'
+      const msg = displayText(err instanceof Error ? err.message : '加载完整拓扑失败')
       topologyError.value = msg
       topologyStatus.value = 'error'
       if (allTopologyGroups.value.length > 0) {
@@ -211,7 +212,7 @@ export function usePolicy() {
       await reload()
       return normalized
     } catch (err) {
-      const msg = err instanceof Error ? err.message : '创建策略组失败'
+      const msg = displayText(err instanceof Error ? err.message : '创建策略组失败')
       error.value = msg
       throw err
     } finally {
@@ -279,7 +280,7 @@ export function usePolicy() {
       await reload()
       return normalized
     } catch (err) {
-      error.value = err instanceof Error ? err.message : '更新策略组失败'
+      error.value = displayText(err instanceof Error ? err.message : '更新策略组失败')
       throw err
     } finally {
       saving.value = false
@@ -296,7 +297,7 @@ export function usePolicy() {
       allTopologyGroups.value = allTopologyGroups.value.filter((g) => g.id !== id)
       await reload()
     } catch (err) {
-      error.value = err instanceof Error ? err.message : '删除策略组失败'
+      error.value = displayText(err instanceof Error ? err.message : '删除策略组失败')
       throw err
     } finally {
       saving.value = false
@@ -315,7 +316,7 @@ export function usePolicy() {
       if (topoGrp) topoGrp.edges = edges
       await reload()
     } catch (err) {
-      error.value = err instanceof Error ? err.message : '保存策略组来源失败'
+      error.value = displayText(err instanceof Error ? err.message : '保存策略组来源失败')
       throw err
     } finally {
       saving.value = false
@@ -404,7 +405,7 @@ export function usePolicy() {
         return validationResult.value || { valid: false, errors: [] }
       }
 
-      const msg = err instanceof Error ? err.message : '校验未完成'
+      const msg = displayText(err instanceof Error ? err.message : '校验未完成')
       validationError.value = msg
       validationState.value = 'incomplete'
       const fallback: ValidationResult = { valid: false, errors: [msg] }
@@ -429,7 +430,7 @@ export function usePolicy() {
         globalFilter.value = null
         return null
       }
-      error.value = err instanceof Error ? err.message : '加载全局节点筛选失败'
+      error.value = displayText(err instanceof Error ? err.message : '加载全局节点筛选失败')
       return null
     } finally {
       loadingGlobalFilter.value = false
@@ -445,7 +446,7 @@ export function usePolicy() {
       globalFilter.value = res
       return res
     } catch (err) {
-      const msg = err instanceof Error ? err.message : '更新全局节点筛选失败'
+      const msg = displayText(err instanceof Error ? err.message : '更新全局节点筛选失败')
       error.value = msg
       throw err
     } finally {
@@ -506,7 +507,7 @@ export function usePolicy() {
       await loadGroups()
       return true
     } catch (err) {
-      error.value = err instanceof Error ? err.message : '调整策略组顺序失败'
+      error.value = displayText(err instanceof Error ? err.message : '调整策略组顺序失败')
       return false
     } finally {
       saving.value = false

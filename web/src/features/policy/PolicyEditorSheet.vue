@@ -393,7 +393,7 @@ function handleDiscardSourceDraft() {
           <div class="flex items-center gap-2 min-w-0">
             <ExclamationTriangleIcon class="w-4 h-4 text-warning shrink-0" />
             <span class="truncate">
-              {{ topologyError || '全量策略组拓扑加载失败' }}
+              {{ displayText(topologyError) || '全量策略组拓扑加载失败' }}
               {{ isTopologyStale ? '（当前显示为过期拓扑缓存，禁止保存）' : '（拓扑未就绪，禁止保存以避免丢失引用）' }}
             </span>
           </div>

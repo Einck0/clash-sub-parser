@@ -5,6 +5,7 @@ import { api } from '../../api/client'
 import { toastStore } from '../../ui/toast'
 import { t } from '../../locales'
 import type { ProbeKind, ProbeSchedule } from '../probes/probeTypes'
+import { displayText } from '../../utils/displayNames'
 
 const ALL_KINDS: readonly { id: ProbeKind; labelKey: string }[] = [
   { id: 'baseline', labelKey: 'settings.probeKindBaseline' },
@@ -54,7 +55,7 @@ async function fetchSchedule() {
       lastUpdated.value = res.updated_at || ''
     }
   } catch (err: any) {
-    errorMessage.value = err?.message || '获取探针巡检配置失败'
+    errorMessage.value = displayText(err?.message || '获取探针巡检配置失败')
   } finally {
     loading.value = false
   }
@@ -95,7 +96,7 @@ async function saveSchedule() {
     }
     toastStore.push({ message: t('settings.probeScheduleSaved'), tone: 'success' })
   } catch (err: any) {
-    errorMessage.value = err?.message || t('settings.probeScheduleSaveFailed')
+    errorMessage.value = displayText(err?.message || t('settings.probeScheduleSaveFailed'))
     toastStore.push({ message: errorMessage.value, tone: 'error' })
   } finally {
     saving.value = false

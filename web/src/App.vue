@@ -34,6 +34,7 @@ import {
 } from './navigation'
 import { currentLocale, toggleLocale, t } from './locales'
 import { uiText } from './locales/redesign'
+import { displayText } from './utils/displayNames'
 import { router as fallbackRouter } from './router'
 
 const injectedRouter = useRouter()
@@ -271,10 +272,10 @@ const checkHealth = async () => {
   } catch (err) {
     healthStatus.value = 'unhealthy'
     if (err instanceof ApiError) {
-      healthDetails.value = `${err.code}: ${err.message}`
+      healthDetails.value = displayText(`${err.code}: ${err.message}`)
       requestId.value = err.requestId || ''
     } else {
-      healthDetails.value = String(err)
+      healthDetails.value = displayText(String(err))
     }
   }
 }

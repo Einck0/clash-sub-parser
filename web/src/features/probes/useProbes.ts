@@ -1,5 +1,6 @@
 import { computed, ref } from 'vue'
 import { api } from '../../api/client'
+import { displayText } from '../../utils/displayNames'
 import { normalizeNode, nodeUnderlyingHealthCategory, type NodeRecord, type NormalizedNode } from '../nodes/nodeView'
 import {
   generateIdempotencyKey,
@@ -361,7 +362,7 @@ export function useProbes() {
       ])
       return poolStatus.value
     } catch (err) {
-      error.value = err instanceof Error ? err.message : '刷新状态并触发按需检测失败'
+      error.value = displayText(err instanceof Error ? err.message : '刷新状态并触发按需检测失败')
       return null
     } finally {
       triggeringSchedule.value = false
@@ -429,7 +430,7 @@ export function useProbes() {
         nodeObservations.value = fallback
         return fallback
       }
-      error.value = err instanceof Error ? err.message : '加载节点测速历史失败'
+      error.value = displayText(err instanceof Error ? err.message : '加载节点测速历史失败')
       nodeObservations.value = []
       return []
     } finally {
@@ -445,7 +446,7 @@ export function useProbes() {
       schedule.value = res
       return res
     } catch (err) {
-      error.value = err instanceof Error ? err.message : '加载探针周期计划失败'
+      error.value = displayText(err instanceof Error ? err.message : '加载探针周期计划失败')
       return null
     } finally {
       loadingSchedule.value = false
@@ -464,7 +465,7 @@ export function useProbes() {
       schedule.value = updated
       return updated
     } catch (err) {
-      const msg = err instanceof Error ? err.message : '更新探针周期计划失败'
+      const msg = displayText(err instanceof Error ? err.message : '更新探针周期计划失败')
       error.value = msg
       throw err
     } finally {
@@ -483,7 +484,7 @@ export function useProbes() {
       totalBatches.value = res.total || 0
       return res
     } catch (err) {
-      error.value = err instanceof Error ? err.message : '加载探针执行批次失败'
+      error.value = displayText(err instanceof Error ? err.message : '加载探针执行批次失败')
       return null
     } finally {
       loadingBatches.value = false
@@ -494,7 +495,7 @@ export function useProbes() {
     try {
       return await api.get<ProbeBatch>(`/api/v1/probes/batches/${batchId}`)
     } catch (err) {
-      const msg = err instanceof Error ? err.message : '获取探针批次详情失败'
+      const msg = displayText(err instanceof Error ? err.message : '获取探针批次详情失败')
       error.value = msg
       throw err
     }
@@ -511,7 +512,7 @@ export function useProbes() {
       }
       return res
     } catch (err) {
-      const msg = err instanceof Error ? err.message : '取消探针批次失败'
+      const msg = displayText(err instanceof Error ? err.message : '取消探针批次失败')
       error.value = msg
       throw err
     } finally {
@@ -531,7 +532,7 @@ export function useProbes() {
       runs.value = res.items || []
       totalRuns.value = res.total || 0
     } catch (err) {
-      error.value = err instanceof Error ? err.message : '加载探针执行记录失败'
+      error.value = displayText(err instanceof Error ? err.message : '加载探针执行记录失败')
     } finally {
       loadingRuns.value = false
     }
@@ -606,7 +607,7 @@ export function useProbes() {
             : n
         )
       }
-      const msg = err instanceof Error ? err.message : '发起探针任务失败'
+      const msg = displayText(err instanceof Error ? err.message : '发起探针任务失败')
       error.value = msg
       throw err
     } finally {
@@ -640,7 +641,7 @@ export function useProbes() {
         activeRun.value.state = 'cancelled'
       }
     } catch (err) {
-      error.value = err instanceof Error ? err.message : '取消探针任务失败'
+      error.value = displayText(err instanceof Error ? err.message : '取消探针任务失败')
       throw err
     } finally {
       cancelling.value = false
@@ -656,7 +657,7 @@ export function useProbes() {
       })
       observations.value = res.items || []
     } catch (err) {
-      error.value = err instanceof Error ? err.message : '加载探测观测证据失败'
+      error.value = displayText(err instanceof Error ? err.message : '加载探测观测证据失败')
     } finally {
       loadingObservations.value = false
     }

@@ -62,7 +62,7 @@ async function handlePublish() {
     await publish(selectedTarget.value, preview.value.snapshot_id)
     toastStore.push({ message: uiText('已按当前预览创建发布', 'Publication created from the current preview'), tone: 'success' })
   } catch (err: any) {
-    toastStore.push({ message: err?.message || uiText('发布失败', 'Publication failed'), tone: 'error' })
+    toastStore.push({ message: displayText(err?.message || uiText('发布失败', 'Publication failed')), tone: 'error' })
   }
 }
 

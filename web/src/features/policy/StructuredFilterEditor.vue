@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { displayName } from '../../utils/displayNames'
+import { displayName, displayText } from '../../utils/displayNames'
 import {
   IP_RISK_BANDS,
   IP_RISK_BAND_LABELS,
@@ -100,7 +100,7 @@ async function fetchSubscriptions() {
     subscriptions.value = allSubs
     subscriptionsLoaded.value = true
   } catch (err: any) {
-    subscriptionsError.value = '加载订阅失败: ' + (err?.message || '网络异常')
+    subscriptionsError.value = displayText('加载订阅失败: ' + (err?.message || '网络异常'))
   } finally {
     loadingSubscriptions.value = false
   }

@@ -1,4 +1,5 @@
 import { computed, ref } from 'vue'
+import { displayText } from '../../utils/displayNames'
 import { api, ApiError } from '../../api/client'
 import type { NodeSourceHistoryData } from './sourceHistoryTypes'
 import {
@@ -193,7 +194,7 @@ export function useNodes() {
       initialLoaded.value = true
     } catch (cause) {
       if (generation === requestGeneration.value) {
-        error.value = cause instanceof Error ? cause.message : '加载节点列表失败'
+        error.value = displayText(cause instanceof Error ? cause.message : '加载节点列表失败')
       }
     } finally {
       if (generation === requestGeneration.value) {
@@ -265,7 +266,7 @@ export function useNodes() {
           ? '未找到该节点（可能已移除），请刷新台账 (404)'
           : `获取节点详情失败 (${cause.status})`
       } else if (cause instanceof Error && cause.message) {
-        message = cause.message
+        message = displayText(cause.message)
       }
       nodeDetailError.value = {
         logicalId,
@@ -348,7 +349,7 @@ export function useNodes() {
       await fetchNodeDetail(logicalId)
       return { ok: true, runId: res?.run_id }
     } catch (cause) {
-      const msg = cause instanceof Error ? cause.message : '发起节点测速失败'
+      const msg = displayText(cause instanceof Error ? cause.message : '发起节点测速失败')
       return { ok: false, error: msg }
     } finally {
       probingNodeId.value = null
@@ -455,7 +456,7 @@ export function useNodes() {
       await syncPoolStatus()
       return { ok: true, runId: res?.run_id }
     } catch (cause) {
-      const msg = cause instanceof Error ? cause.message : '批量发起节点测速失败'
+      const msg = displayText(cause instanceof Error ? cause.message : '批量发起节点测速失败')
       return { ok: false, error: msg }
     }
   }
@@ -540,7 +541,7 @@ export function useNodes() {
       }
       return { ok: true, node: updatedNode }
     } catch (cause) {
-      const msg = cause instanceof Error ? cause.message : '保存节点连接参数失败'
+      const msg = displayText(cause instanceof Error ? cause.message : '保存节点连接参数失败')
       return { ok: false, error: msg }
     } finally {
       savingConnection.value = false

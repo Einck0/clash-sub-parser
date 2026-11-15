@@ -1,4 +1,5 @@
 import { computed, ref, watch } from 'vue'
+import { displayText } from '../../utils/displayNames'
 import { api, ApiError } from '../../api/client'
 import {
   DEFAULT_COMPILER_TARGET,
@@ -438,7 +439,7 @@ export function usePublications(initialTarget?: CompilerTarget) {
       if (request === previewRequest && selectedTarget.value === target && session === publicationSession.value) {
         preview.value = null
         errorDetail.value = err instanceof Error ? err : new Error(String(err))
-        error.value = err instanceof Error ? err.message : '获取配置预览失败'
+        error.value = displayText(err instanceof Error ? err.message : '获取配置预览失败')
         if (err instanceof ApiError) {
           const details = err.details as any
           const diags = details?.diagnostics || details?.error?.details?.diagnostics || (Array.isArray(details) ? details : undefined)
@@ -476,7 +477,7 @@ export function usePublications(initialTarget?: CompilerTarget) {
         `当前快照目标 (${preview.value.target}) 与请求发布目标 (${target}) 不匹配，请重新生成预览`
       )
       errorDetail.value = mismatchErr
-      error.value = mismatchErr.message
+      error.value = displayText(mismatchErr.message)
       publishing.value = false
       throw mismatchErr
     }
@@ -528,7 +529,7 @@ export function usePublications(initialTarget?: CompilerTarget) {
     } catch (err) {
       if (session === publicationSession.value && request === publishRequests.get(target) && selectedTarget.value === target) {
         errorDetail.value = err instanceof Error ? err : new Error(String(err))
-        const msg = err instanceof Error ? err.message : '创建订阅发布失败'
+        const msg = displayText(err instanceof Error ? err.message : '创建订阅发布失败')
         error.value = msg
         if (err instanceof ApiError) {
           const details = err.details as any
@@ -574,7 +575,7 @@ export function usePublications(initialTarget?: CompilerTarget) {
     } catch (err) {
       if (session === publicationSession.value) {
         errorDetail.value = err instanceof Error ? err : new Error(String(err))
-        error.value = err instanceof Error ? err.message : '获取发布详情失败'
+        error.value = displayText(err instanceof Error ? err.message : '获取发布详情失败')
       }
       return null
     }
@@ -593,7 +594,7 @@ export function usePublications(initialTarget?: CompilerTarget) {
         clearStoredPublication(activePublication.value.target)
       }
     } catch (err) {
-      error.value = err instanceof Error ? err.message : '撤销订阅发布失败'
+      error.value = displayText(err instanceof Error ? err.message : '撤销订阅发布失败')
       throw err
     } finally {
       revoking.value = false

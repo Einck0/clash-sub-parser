@@ -11,6 +11,7 @@ import {
 } from '@heroicons/vue/24/outline'
 import { useAuth } from './useAuth'
 import { t } from '../../locales'
+import { displayText } from '../../utils/displayNames'
 
 const { login, clearStoredToken, errorMessage } = useAuth()
 
@@ -70,7 +71,7 @@ function handleReset() {
       role="alert"
     >
       <ExclamationCircleIcon class="w-4 h-4 shrink-0 text-error-content" />
-      <span class="font-medium text-error-content">{{ errorMessage }}</span>
+      <span class="font-medium text-error-content">{{ displayText(errorMessage) }}</span>
     </div>
 
     <!-- Login Form -->

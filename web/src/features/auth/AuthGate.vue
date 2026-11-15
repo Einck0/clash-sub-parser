@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import {
   LockClosedIcon,
   KeyIcon,
@@ -19,6 +19,7 @@ const token = ref('')
 const showPassword = ref(false)
 const isSubmitting = ref(false)
 const inputRef = ref<HTMLInputElement>()
+const safeErrorMessage = computed(() => displayText(errorMessage.value))
 
 onMounted(async () => {
   await nextTick()
@@ -65,13 +66,13 @@ function handleReset() {
 
     <!-- Error Alert -->
     <div
-      v-if="errorMessage"
+      v-if="safeErrorMessage"
       class="alert alert-error text-xs py-3 px-3.5 rounded-lg flex items-center gap-2 border border-error/30 shadow-sm"
       data-testid="auth-gate-error"
       role="alert"
     >
       <ExclamationCircleIcon class="w-4 h-4 shrink-0 text-error-content" />
-      <span class="font-medium text-error-content">{{ displayText(errorMessage) }}</span>
+      <span class="font-medium text-error-content">{{ safeErrorMessage }}</span>
     </div>
 
     <!-- Login Form -->

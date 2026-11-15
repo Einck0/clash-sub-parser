@@ -25,7 +25,12 @@ describe('target-scoped node compatibility', () => {
     expect(nodeTargetDiagnostics(node)).toEqual(['mihomo: missing_credential: password'])
 
     const redacted = normalizeNode({
-      ...node,
+      logical_id: node.logicalId,
+      display_name: node.displayName,
+      protocol: node.protocol,
+      active: node.active,
+      server: node.server,
+      port: node.port,
       target_compatibility: {
         mihomo: { status: 'format_error', diagnostics: [{ code: 'format_error', message: 'node_private run_private batch_private 8ef0ce60-c175-4265-8fa1-1a1bc5658bf0 sha256:abcdef0123456789abcdef0123456789' }] },
       },

@@ -11,6 +11,7 @@ import {
 } from '@heroicons/vue/24/outline'
 import { t } from '../../locales'
 import { uiText } from '../../locales/redesign'
+import { displayText } from '../../utils/displayNames'
 import { useAuthSettings, type UseAuthSettingsReturn } from './useAuthSettings'
 
 const props = defineProps<{
@@ -46,7 +47,7 @@ const auth = props.auth ?? useAuthSettings()
         </div>
 
         <div v-if="auth.settingsError.value" role="alert" class="alert alert-error text-xs flex items-center justify-between">
-          <span>{{ auth.settingsError.value }}</span>
+          <span>{{ displayText(auth.settingsError.value) }}</span>
           <button type="button" class="btn btn-xs btn-ghost" @click="auth.probeAuthMode">
             {{ t('common.retry') }}
           </button>
@@ -252,7 +253,7 @@ const auth = props.auth ?? useAuthSettings()
             'alert-error': auth.connectionStatus.value === 'error',
           }"
         >
-          <span>{{ auth.connectionMessage.value }}</span>
+          <span>{{ displayText(auth.connectionMessage.value) }}</span>
         </div>
       </div>
     </section>

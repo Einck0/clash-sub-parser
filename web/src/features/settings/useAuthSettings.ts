@@ -1,5 +1,6 @@
 import { computed, ref, type ComputedRef, type Ref } from 'vue'
 import { api } from '../../api/client'
+import { displayText } from '../../utils/displayNames'
 import { toastStore } from '../../ui/toast'
 import { t } from '../../locales'
 import type { AuthStatus } from '../auth/useAuth'
@@ -98,8 +99,8 @@ export function useAuthSettings(): UseAuthSettingsReturn {
       if (currentSession !== authProbeSession) return
       authSettings.value = null
       authMode.value = 'error'
-      settingsError.value = err?.message || t('topbar.authProbeErrorDesc')
-      authModeError.value = settingsError.value
+      settingsError.value = displayText(err?.message || t('topbar.authProbeErrorDesc'))
+      authModeError.value = displayText(settingsError.value)
     }
   }
 
@@ -218,7 +219,7 @@ export function useAuthSettings(): UseAuthSettingsReturn {
       if (currentSession !== authProbeSession) return
       connectionStatus.value = 'error'
       connectionMessage.value = t('settings.connectionFailedMsg', {
-        error: err?.message || t('common.error'),
+        error: displayText(err?.message || t('common.error')),
       })
       toastStore.push({ message: t('settings.connectionFailedToast'), tone: 'error' })
     } finally {

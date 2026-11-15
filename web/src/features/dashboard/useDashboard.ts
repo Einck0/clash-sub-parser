@@ -1,5 +1,6 @@
 import { ref } from 'vue'
 import { api } from '../../api/client'
+import { displayText } from '../../utils/displayNames'
 import type { DashboardMetrics, HealthStatus, MetricItem } from './dashboardTypes'
 
 export function useDashboard() {
@@ -50,7 +51,7 @@ export function useDashboard() {
     // Either promise rejected, or returned value lacked a valid total
     const errorMsg =
       res.status === 'rejected'
-        ? res.reason?.message || 'Request failed'
+        ? displayText(res.reason?.message || 'Request failed')
         : 'Invalid response format'
 
     if (isRefresh && current.value !== null) {

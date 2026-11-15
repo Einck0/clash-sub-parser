@@ -121,7 +121,7 @@ describe('ErrorStateCard UI Component', () => {
     const { container } = mountComponent({ error })
 
     expect(container.textContent).toContain('节点（标识已省略）')
-    expect(container.textContent).toContain('失败')
+    expect(container.textContent).toContain('failed')
     expect(container.textContent).not.toContain('node_private')
     expect(container.textContent).not.toContain('batch_private')
     expect(container.textContent).not.toContain('8ef0ce60-c175-4265-8fa1-1a1bc5658bf0')

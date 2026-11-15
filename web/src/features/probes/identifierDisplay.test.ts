@@ -25,7 +25,7 @@ it('shows unknown observation nodes and meaningful evidence without exposing run
       id: 'obs_private', probe_run_id: run.id, node_logical_id: 'node_private', kind: 'baseline', verdict: 'available',
       evidence_digest: 'sha256:private_digest', latency_ms: 42, observed_at: run.created_at,
       redacted_summary: '节点 node_private 已连接，sha256:private_digest',
-    }] }),
+    }], loading: false }),
   ]) })
   app.mount(host)
   await nextTick()

@@ -128,7 +128,7 @@ describe('ErrorStateCard UI Component', () => {
     expect(container.textContent).not.toContain('sha256:abcdef0123456789abcdef0123456789')
   })
 
-
+  it('triggers auth recovery for an unauthorized error', async () => {
     const error = new ApiError(401, 'unauthorized', 'Token expired')
     const { container, emitted } = mountComponent({ error })
 

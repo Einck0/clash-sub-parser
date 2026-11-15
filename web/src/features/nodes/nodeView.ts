@@ -1,5 +1,5 @@
 import type { ToastTone } from '../../ui/toast'
-import { displayName } from '../../utils/displayNames'
+import { displayName, displayText } from '../../utils/displayNames'
 import type { CompilerTarget } from '../publications/publicationTypes'
 import {
   type PlatformCapability,
@@ -200,7 +200,7 @@ export function nodeSupportedTargets(node: NormalizedNode): readonly CompilerTar
 export function nodeTargetDiagnostics(node: NormalizedNode): string[] {
   return Object.entries(node.targetCompatibility ?? {})
     .filter(([, capability]) => capability.status !== 'compatible')
-    .map(([target, capability]) => `${target}: ${capability.diagnostics?.map((d) => d.message).join('; ') || '不兼容'}`)
+    .map(([target, capability]) => `${target}: ${displayText(capability.diagnostics?.map((d) => d.message).join('; ') || '不兼容')}`)
 }
 
 export interface NodeHealthDiagnostic {
@@ -427,7 +427,7 @@ export function renderNodePreview(
 ): string {
   const capability = node.targetCompatibility?.[target]
   if (node.targetCompatibility && capability?.status !== 'compatible') {
-    return `不参与 ${target} 导出: ${capability?.diagnostics?.map((d) => d.message).join('; ') || (capability ? '目标不兼容' : '后端未提供该目标兼容状态')}`
+    return `不参与 ${target} 导出: ${displayText(capability?.diagnostics?.map((d) => d.message).join('; ') || (capability ? '目标不兼容' : '后端未提供该目标兼容状态'))}`
   }
   const proto = node.protocol.trim().toLowerCase()
   const conn = node.connection

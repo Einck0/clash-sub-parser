@@ -207,7 +207,7 @@ function handleClose() {
         <div class="flex items-center gap-2 min-w-0">
           <ExclamationTriangleIcon class="w-4 h-4 text-warning shrink-0" />
           <span class="truncate">
-            {{ detailErrorMessage || '最新节点详情未能成功刷新，当前展示列表缓存数据' }}
+            {{ displayText(detailErrorMessage || '最新节点详情未能成功刷新，当前展示列表缓存数据') }}
           </span>
         </div>
         <button
@@ -255,7 +255,7 @@ function handleClose() {
           <button type="button" data-testid="node-drawer-speed-btn" class="btn btn-outline btn-primary btn-xs" :disabled="speedDisabled || !node.active || detailStale" @click="emit('speed-node', node)">
             {{ speedBusy ? '测速中…' : '手动测速' }}
           </button>
-          <p v-if="speedFeedback" class="w-full break-words [overflow-wrap:anywhere]" role="status">{{ speedFeedback }}</p>
+          <p v-if="speedFeedback" class="w-full break-words [overflow-wrap:anywhere]" role="status">{{ displayText(speedFeedback) }}</p>
           <StatusBadge
             v-if="probeState !== 'idle'"
             data-testid="node-drawer-probe-state-badge"
@@ -324,7 +324,7 @@ function handleClose() {
         </div>
 
         <p v-if="probeFeedback" data-testid="node-probe-feedback" class="text-[11px] text-primary font-medium">
-          {{ probeFeedback }}
+          {{ displayText(probeFeedback) }}
         </p>
       </div>
 
@@ -691,7 +691,7 @@ function handleClose() {
             data-testid="node-connection-error"
             class="text-error font-medium"
           >
-            {{ connectionError }}
+            {{ displayText(connectionError) }}
           </span>
           <span
             v-else-if="connectionSaved"

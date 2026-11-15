@@ -23,6 +23,20 @@ describe('target-scoped node compatibility', () => {
     })
     expect(nodeSupportedTargets(node)).toEqual([])
     expect(nodeTargetDiagnostics(node)).toEqual(['mihomo: missing_credential: password'])
+
+    const redacted = normalizeNode({
+      ...node,
+      target_compatibility: {
+        mihomo: { status: 'format_error', diagnostics: [{ code: 'format_error', message: 'node_private run_private batch_private 8ef0ce60-c175-4265-8fa1-1a1bc5658bf0 sha256:abcdef0123456789abcdef0123456789' }] },
+      },
+    })
+    const diagnostic = nodeTargetDiagnostics(redacted)[0]
+    expect(diagnostic).toContain('标识已省略')
+    expect(diagnostic).not.toContain('node_private')
+    expect(diagnostic).not.toContain('run_private')
+    expect(diagnostic).not.toContain('batch_private')
+    expect(diagnostic).not.toContain('8ef0ce60-c175-4265-8fa1-1a1bc5658bf0')
+    expect(diagnostic).not.toContain('sha256:abcdef0123456789abcdef0123456789')
     expect(renderNodePreview(node, 'mihomo')).toContain('不参与 mihomo 导出')
     expect(renderNodePreview(node, 'mihomo')).not.toContain('proxies:')
   })

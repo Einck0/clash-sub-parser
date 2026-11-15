@@ -4,6 +4,7 @@ import { ArrowDownTrayIcon, ArrowPathIcon } from '@heroicons/vue/24/outline'
 import { api } from '../../api/client'
 import { t } from '../../locales'
 import { uiText } from '../../locales/redesign'
+import { displayText } from '../../utils/displayNames'
 import { toastStore } from '../../ui/toast'
 
 type Mode = 'environment' | 'direct' | 'proxy'
@@ -47,7 +48,7 @@ async function load() {
   try {
     apply(await api.get<FetchSettings>('/api/v1/settings/subscription-fetch'))
   } catch (err: any) {
-    error.value = err?.message || t('settings.fetchLoadFailed')
+    error.value = displayText(err?.message || t('settings.fetchLoadFailed'))
   } finally {
     loading.value = false
   }
@@ -68,7 +69,7 @@ async function save(reset = false) {
     apply(await api.put<FetchSettings>('/api/v1/settings/subscription-fetch', payload))
     toastStore.push({ message: t('settings.fetchSaved'), tone: 'success' })
   } catch (err: any) {
-    error.value = err?.message || t('settings.fetchSaveFailed')
+    error.value = displayText(err?.message || t('settings.fetchSaveFailed'))
   } finally {
     saving.value = false
   }
@@ -99,7 +100,7 @@ onMounted(load)
       </p>
 
       <div v-if="error" role="alert" class="alert alert-error text-xs flex items-center justify-between break-words" data-testid="fetch-settings-error">
-        <span>{{ error }}</span>
+        <span>{{ displayText(error) }}</span>
         <button type="button" class="btn btn-xs btn-ghost gap-1" @click="load">
           <ArrowPathIcon class="w-3.5 h-3.5" />
           <span>{{ t('common.refresh') }}</span>

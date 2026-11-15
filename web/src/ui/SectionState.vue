@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ExclamationCircleIcon } from '@heroicons/vue/24/outline'
+import { displayText } from '../utils/displayNames'
 
 withDefaults(
   defineProps<{
@@ -38,7 +39,7 @@ defineEmits<{
       <slot name="error" :error="error">
         <div class="flex items-center gap-3">
           <ExclamationCircleIcon class="w-5 h-5 shrink-0" />
-          <span class="text-xs sm:text-sm font-medium">{{ error }}</span>
+          <span class="text-xs sm:text-sm font-medium">{{ displayText(error) }}</span>
         </div>
         <button
           type="button"

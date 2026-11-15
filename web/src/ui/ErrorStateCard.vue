@@ -8,6 +8,7 @@ import {
   ArrowPathIcon,
   KeyIcon,
 } from '@heroicons/vue/24/outline'
+import { displayText } from '../utils/displayNames'
 import { t } from '../locales'
 
 export interface ErrorStateCardProps {
@@ -162,12 +163,15 @@ const parsedError = computed<ParsedErrorInfo>(() => {
     }
   }
 
+  const safeMessage = displayText(message)
+  const safeCode = displayText(code)
+
   return {
     status,
-    code,
-    message,
-    friendlyTitle,
-    friendlyDesc,
+    code: safeCode || code,
+    message: safeMessage,
+    friendlyTitle: displayText(friendlyTitle),
+    friendlyDesc: displayText(friendlyDesc),
     isAuth,
     isForbidden,
     isConflict,

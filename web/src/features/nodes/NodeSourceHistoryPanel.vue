@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { displayName } from '../../utils/displayNames'
+import { displayName, displayText } from '../../utils/displayNames'
 import {
   ClockIcon,
   ExclamationTriangleIcon,
@@ -86,7 +86,7 @@ const isEntirelyEmpty = computed(() => {
       data-testid="source-history-error"
       class="p-3 rounded-lg bg-error/10 border border-error/30 text-error flex items-center justify-between gap-2"
     >
-      <span class="truncate flex-1">{{ error }}</span>
+      <span class="truncate flex-1">{{ displayText(error) }}</span>
       <button
         type="button"
         class="btn btn-ghost btn-xs text-error shrink-0"

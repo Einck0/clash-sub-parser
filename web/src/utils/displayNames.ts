@@ -1,10 +1,10 @@
 // DTO identifiers stay in keys/request values. Names and diagnostic prose are separate boundaries.
-const objectToken = /\b(node|group|sub|subscription|payload|binding|snapshot|run|batch|obs|probe|chain|policy|rule|entry|fetch|parse)_[a-z0-9_-]+\b/gi
-const legacyObjectToken = /\b(node|group|sub|payload|binding|snapshot|run|batch|obs|probe|entry|fetch)-[a-z0-9]+(?:-[a-z0-9]+)*\b/g
+const objectToken = /\b(node|group|grp|sub|subscription|src|source|payload|binding|snapshot|run|batch|obs|probe|chain|policy|rule|entry|fetch|parse)_[a-z0-9_-]+\b/gi
+const legacyObjectToken = /\b(node|group|grp|sub|src|payload|binding|snapshot|run|batch|obs|probe|entry|fetch)-[a-z0-9]+(?:-[a-z0-9]+)*\b/g
 const uuidToken = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi
 const fingerprintToken = /\b(?:sha256:[a-z0-9_-]+|[0-9a-f]{32,})\b/gi
 const objectLabels: Record<string, string> = {
-  node: '节点', group: '策略组', sub: '订阅', subscription: '订阅', payload: '订阅内容',
+  node: '节点', group: '策略组', grp: '策略组', sub: '订阅', subscription: '订阅', src: '来源', source: '来源', payload: '订阅内容',
   binding: '绑定', snapshot: '快照', run: '检测任务', batch: '巡检批次', obs: '检测记录',
   probe: '检测记录', chain: '链式代理', policy: '策略', rule: '规则', entry: '订阅条目', fetch: '获取记录', parse: '解析记录',
 }

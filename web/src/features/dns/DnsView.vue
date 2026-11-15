@@ -6,6 +6,7 @@ import {
   InformationCircleIcon,
   XMarkIcon,
 } from '@heroicons/vue/24/outline'
+import { displayText } from '../../utils/displayNames'
 import { uiText } from '../../locales/redesign'
 import SettingsSections from '../settings/SettingsSections.vue'
 import { useDnsDraft } from './useDnsDraft'
@@ -212,7 +213,7 @@ onMounted(() => {
     </div>
 
     <div v-if="error" role="alert" data-testid="dns-error" class="alert alert-error shadow-xs py-2 px-3">
-      <span class="text-xs font-medium flex-1">{{ error }}</span>
+      <span class="text-xs font-medium flex-1">{{ displayText(error) }}</span>
       <button
         class="btn btn-sm btn-ghost border-current/30 text-xs"
         :disabled="busy"

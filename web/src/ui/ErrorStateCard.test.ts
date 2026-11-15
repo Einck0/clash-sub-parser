@@ -116,7 +116,19 @@ describe('ErrorStateCard UI Component', () => {
     expect(container.textContent).toContain('HTTP 401')
   })
 
-  it('triggers auth-recovery event and hash navigation when clicked', async () => {
+  it('redacts internal identifiers from technical error details while preserving the reason', async () => {
+    const error = new ApiError(500, 'run_private', 'node_private failed in batch_private run_private 8ef0ce60-c175-4265-8fa1-1a1bc5658bf0 sha256:abcdef0123456789abcdef0123456789')
+    const { container } = mountComponent({ error })
+
+    expect(container.textContent).toContain('节点（标识已省略）')
+    expect(container.textContent).toContain('失败')
+    expect(container.textContent).not.toContain('node_private')
+    expect(container.textContent).not.toContain('batch_private')
+    expect(container.textContent).not.toContain('8ef0ce60-c175-4265-8fa1-1a1bc5658bf0')
+    expect(container.textContent).not.toContain('sha256:abcdef0123456789abcdef0123456789')
+  })
+
+
     const error = new ApiError(401, 'unauthorized', 'Token expired')
     const { container, emitted } = mountComponent({ error })
 

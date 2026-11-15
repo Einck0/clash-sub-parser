@@ -58,7 +58,7 @@ async function loadHistory() {
       batches.value = Array.isArray(batchesRes.value?.items) ? batchesRes.value.items : []
     }
   } catch (err: any) {
-    error.value = err?.message || '加载探测记录失败'
+    error.value = displayText(err?.message || '加载探测记录失败')
   } finally {
     loading.value = false
   }
@@ -90,7 +90,7 @@ async function cancelRun(runId: string) {
       found.state = 'cancelled'
     }
   } catch (err: any) {
-    toastStore.push({ message: err?.message || '取消任务失败', tone: 'error' })
+    toastStore.push({ message: displayText(err?.message || '取消任务失败'), tone: 'error' })
   }
 }
 
@@ -103,7 +103,7 @@ async function cancelBatch(batchId: string) {
       found.state = 'cancelled'
     }
   } catch (err: any) {
-    toastStore.push({ message: err?.message || '取消批次失败', tone: 'error' })
+    toastStore.push({ message: displayText(err?.message || '取消批次失败'), tone: 'error' })
   }
 }
 
@@ -162,7 +162,7 @@ watch(
 
     <!-- Error Alert -->
     <div v-if="error" class="alert alert-error text-xs mb-4">
-      <span>{{ error }}</span>
+      <span>{{ displayText(error) }}</span>
     </div>
 
     <!-- Runs Tab -->

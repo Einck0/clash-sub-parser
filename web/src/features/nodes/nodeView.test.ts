@@ -1037,7 +1037,10 @@ describe('NodesView real API detail, plaintext PATCH edit, and failure draft pre
     await nextTick()
     await new Promise((r) => setTimeout(r, 20))
 
-    expect(document.body.textContent).toContain('batch-active-101')
+    // Batch identifiers are stable API keys, not user-facing labels.
+    expect(document.body.textContent).toContain('巡检批次 ·')
+    expect(document.body.textContent).toContain('总节点: 10')
+    expect(document.body.textContent).not.toContain('batch-active-101')
     const cancelBatchBtn = document.body.querySelector('[data-testid="cancel-batch-btn"]') as HTMLButtonElement
     expect(cancelBatchBtn).not.toBeNull()
     cancelBatchBtn.click()

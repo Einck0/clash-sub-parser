@@ -32,9 +32,16 @@ const (
 	EntryKindProxy   EntryKind = "proxy"
 	EntryKindNotice  EntryKind = "notice"
 	EntryKindUnknown EntryKind = "unknown"
+	// EntryKindFormatError 仅用于展示解析诊断，不允许作为人工分类覆盖值
+	EntryKindFormatError EntryKind = "format_error"
 )
 
 func (k EntryKind) IsValid() bool {
+	return k.IsOverrideValid() || k == EntryKindFormatError
+}
+
+// IsOverrideValid 不允许把只读解析错误作为人工分类值
+func (k EntryKind) IsOverrideValid() bool {
 	return k == EntryKindProxy || k == EntryKindNotice || k == EntryKindUnknown
 }
 
@@ -70,7 +77,10 @@ type SubscriptionEntry struct {
 
 // EffectiveKind resolves the effective entry kind considering user overrides.
 func (e *SubscriptionEntry) EffectiveKind() EntryKind {
-	if e.UserKindOverride != nil && e.UserKindOverride.IsValid() {
+	if e.EntryKind == EntryKindFormatError {
+		return EntryKindFormatError
+	}
+	if e.UserKindOverride != nil && e.UserKindOverride.IsOverrideValid() {
 		return *e.UserKindOverride
 	}
 	return e.EntryKind
@@ -78,6 +88,7 @@ func (e *SubscriptionEntry) EffectiveKind() EntryKind {
 
 // PublicationManifest represents the comprehensive manifest of a publication snapshot draft.
 type PublicationManifest struct {
+	Target                CompilerTarget         `json:"target"`
 	NodeCount             int                    `json:"node_count"`
 	ExcludedCount         int                    `json:"excluded_count"`
 	PayloadIDs            []string               `json:"payload_ids"`

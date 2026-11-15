@@ -99,22 +99,20 @@ func TestEmptyPassHTTPRoundtripPublicationAndSharedValidation(t *testing.T) {
 	if before != after {
 		t.Fatal("snapshot assembly wrote DB")
 	}
-	for _, mode := range []string{"strict", "compatible"} {
-		preview, err := pub.Preview(ctx, publication.PreviewQuery{Target: domain.TargetMihomo, CompatMode: mode})
-		if err != nil {
-			t.Fatalf("%s preview: %v", mode, err)
-		}
-		if !strings.Contains(string(preview.Content), "empty-fallback: PASS") {
-			t.Fatal("publication lost PASS")
-		}
-		published, err := pub.Publish(ctx, publication.PublishCommand{Target: domain.TargetMihomo, SnapshotID: preview.SnapshotID})
-		if err != nil {
-			t.Fatal(err)
-		}
-		frozen, err := pub.ResolveAndServe(ctx, published.Publication.ID, published.RawToken)
-		if err != nil || !bytes.Equal(frozen.Content, preview.Content) {
-			t.Fatalf("frozen content mismatch: %v", err)
-		}
+	preview, err := pub.Preview(ctx, publication.PreviewQuery{Target: domain.TargetMihomo})
+	if err != nil {
+		t.Fatalf("preview: %v", err)
+	}
+	if !strings.Contains(string(preview.Content), "empty-fallback: PASS") {
+		t.Fatal("publication lost PASS")
+	}
+	published, err := pub.Publish(ctx, publication.PublishCommand{Target: domain.TargetMihomo, SnapshotID: preview.SnapshotID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	frozen, err := pub.ResolveAndServe(ctx, published.Publication.ID, published.RawToken)
+	if err != nil || !bytes.Equal(frozen.Content, preview.Content) {
+		t.Fatalf("frozen content mismatch: %v", err)
 	}
 	// The global setting overrides the legacy per-group value.
 	rec = request(http.MethodPut, "/api/v1/policies/global-node-filter", `{"spec":{"conditions":[]},"empty_fallback_pass":false}`)

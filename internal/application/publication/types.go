@@ -50,6 +50,7 @@ type PreflightDiagnostic struct {
 // PreflightResult contains the diagnostics evaluated before publication creation.
 type PreflightResult struct {
 	Allowed        bool                  `json:"allowed"`
+	Target         domain.CompilerTarget `json:"target"`
 	Diagnostics    []PreflightDiagnostic `json:"diagnostics,omitempty"`
 	PolicyRevision string                `json:"policy_revision,omitempty"`
 	SnapshotDigest string                `json:"snapshot_digest,omitempty"`
@@ -79,19 +80,19 @@ func (e *PreflightError) Unwrap() error {
 	return domain.NewConflictError("publication_preflight_rejected", "publication preflight rejected")
 }
 
-// StrictCapabilityError represents failure in strict mode with full diagnostics and a draft snapshot ID.
-type StrictCapabilityError struct {
+// CapabilityValidationError 表示自动目标投影后剩余拓扑仍不可用，附带完整诊断和已冻结草稿快照
+type CapabilityValidationError struct {
 	Code        string                          `json:"code"`
 	Message     string                          `json:"message"`
 	Diagnostics []compiler.CapabilityDiagnostic `json:"diagnostics"`
 	SnapshotID  string                          `json:"snapshot_id,omitempty"`
 }
 
-func (e *StrictCapabilityError) Error() string {
+func (e *CapabilityValidationError) Error() string {
 	return e.Message
 }
 
-func (e *StrictCapabilityError) As(target any) bool {
+func (e *CapabilityValidationError) As(target any) bool {
 	if de, ok := target.(**domain.DomainError); ok {
 		*de = domain.NewValidationError(e.Code, e.Message)
 		return true
@@ -128,7 +129,6 @@ type PublishResult struct {
 type PreviewQuery struct {
 	Target                         domain.CompilerTarget            `json:"target"`
 	RevisionID                     string                           `json:"revision_id,omitempty"`
-	CompatMode                     string                           `json:"compat_mode,omitempty"`
 	PruneUnavailableOptionalGroups bool                             `json:"prune_unavailable_optional_groups,omitempty"`
 	OmitUnavailableOptionalGroups  bool                             `json:"omit_unavailable_optional_groups,omitempty"`
 	Snapshot                       *resolver.ResolvedPolicySnapshot `json:"-"`
@@ -148,26 +148,8 @@ type PreviewResult struct {
 	FilterCounts   *resolver.FilterLayerCounts `json:"filter_counts,omitempty"`
 }
 
-// exportMode defines execution mode for configuration export (strict validation vs compatible adaptation).
-type exportMode string
-
-const (
-	exportModeStrict     exportMode = "strict"
-	exportModeCompatible exportMode = "compatible"
-)
-
-// defaultExportMode returns strict mode for full-policy Mihomo exports,
-// and compatible mode for node-only target exports (Sing-box, Surge, Quantumult X).
-func defaultExportMode(target domain.CompilerTarget) exportMode {
-	if target == domain.TargetMihomo {
-		return exportModeStrict
-	}
-	return exportModeCompatible
-}
-
 // artifactPipelineConfig encapsulates target-aware compilation parameters for artifact generation.
 type artifactPipelineConfig struct {
-	mode                           exportMode
 	pruneUnavailableOptionalGroups bool
 }
 
@@ -189,6 +171,7 @@ type Artifact struct {
 	SnapshotDigest string                        `json:"snapshot_digest"`
 	UserInfo       string                        `json:"userinfo,omitempty"`
 	ExcludedNodes  []domain.ManifestExcludedNode `json:"excluded_nodes"`
+	Manifest       *domain.PublicationManifest   `json:"manifest,omitempty"`
 }
 
 // PublicationDetail represents detailed publication state returned to management endpoints.

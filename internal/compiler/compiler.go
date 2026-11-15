@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"clash-sub-parser/internal/domain"
+	"clash-sub-parser/internal/parser"
 	probesingbox "clash-sub-parser/internal/probe/singbox"
 	"clash-sub-parser/internal/resolver"
 )
@@ -85,19 +86,13 @@ func CapabilityMatrix() map[domain.CompilerTarget]Capability {
 	return copyMatrix
 }
 
-// CompileOptions specifies optional compilation arguments.
-type CompileOptions struct{}
-
-// CompileOption applies an option to CompileOptions.
-type CompileOption func(*CompileOptions)
-
 // CompileMihomo renders a deterministic Mihomo YAML subscription from a resolved snapshot.
 func CompileMihomo(ctx context.Context, snapshot *resolver.ResolvedPolicySnapshot) (Result, error) {
 	return Compile(ctx, snapshot, domain.TargetMihomo)
 }
 
 // Compile validates target capabilities before rendering a deterministic result.
-func Compile(ctx context.Context, snapshot *resolver.ResolvedPolicySnapshot, target domain.CompilerTarget, opts ...CompileOption) (Result, error) {
+func Compile(ctx context.Context, snapshot *resolver.ResolvedPolicySnapshot, target domain.CompilerTarget) (Result, error) {
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
@@ -112,12 +107,6 @@ func Compile(ctx context.Context, snapshot *resolver.ResolvedPolicySnapshot, tar
 		return Result{}, err
 	}
 
-	var options CompileOptions
-	for _, opt := range opts {
-		if opt != nil {
-			opt(&options)
-		}
-	}
 	for i, node := range snapshot.Nodes {
 		if err := validateCredentialEnvelope(target, i, node); err != nil {
 			return Result{}, err
@@ -145,6 +134,16 @@ func isBuiltInPolicyTarget(name string) bool {
 }
 
 func validate(snapshot *resolver.ResolvedPolicySnapshot, target domain.CompilerTarget, capability Capability) error {
+	for _, diagnostic := range snapshot.Diagnostics {
+		if diagnostic.Code == "invalid_group_topology" && diagnostic.Severity == resolver.DiagnosticSeverityError {
+			return &CapabilityError{Target: target, Location: "groups", Feature: "member", Reason: diagnostic.Message}
+		}
+	}
+	if target == domain.TargetMihomo {
+		if diagnostics := chainTopologyDiagnostics(snapshot); len(diagnostics) > 0 {
+			return &CapabilityError{Target: target, Location: "nodes", Feature: "dialer-proxy", Reason: diagnostics[0].Message}
+		}
+	}
 	nodeIDs := make(map[string]bool, len(snapshot.Nodes))
 	nodeNames := make(map[string]bool, len(snapshot.Nodes))
 	for i, node := range snapshot.Nodes {
@@ -730,7 +729,7 @@ func checkNodeRenderability(target domain.CompilerTarget, index int, node resolv
 		}
 	}
 
-	if target != domain.TargetMihomo && strings.TrimSpace(node.DialerProxy) != "" {
+	if target != domain.TargetMihomo && (strings.TrimSpace(node.DialerProxy) != "" || strings.TrimSpace(node.ChainBindingID) != "") {
 		return &CapabilityError{
 			Target:   target,
 			Location: loc,
@@ -856,10 +855,21 @@ func ValidateTargetCapabilities(snapshot *resolver.ResolvedPolicySnapshot, targe
 	}
 
 	var diags []CapabilityDiagnostic
+	for _, diagnostic := range snapshot.Diagnostics {
+		if diagnostic.Code == "invalid_group_topology" && diagnostic.Severity == resolver.DiagnosticSeverityError {
+			diags = append(diags, CapabilityDiagnostic{Code: diagnostic.Code, Message: diagnostic.Message, Target: string(target)})
+		}
+	}
 
 	seenRenderableNames := make(map[string]bool)
 	// Check each node using canonical per-node renderability evaluation
 	for i, node := range snapshot.Nodes {
+		if err := validateResolvedNodeFormat(node); err != nil {
+			diags = append(diags, CapabilityDiagnostic{
+				NodeID: node.LogicalID, Code: "format_error", Message: err.Error(), Target: string(target),
+			})
+			continue
+		}
 		if err := checkNodeRenderability(target, i, node); err != nil {
 			diags = append(diags, CapabilityDiagnostic{
 				NodeID:  node.LogicalID,
@@ -885,6 +895,7 @@ func ValidateTargetCapabilities(snapshot *resolver.ResolvedPolicySnapshot, targe
 
 	// Target-specific group and rule topology validation (Mihomo only)
 	if target == domain.TargetMihomo {
+		diags = append(diags, chainTopologyDiagnostics(snapshot)...)
 		groupNameSet := make(map[string]bool, len(snapshot.Groups)*2)
 		for _, g := range snapshot.Groups {
 			if g.Name != "" {
@@ -897,16 +908,7 @@ func ValidateTargetCapabilities(snapshot *resolver.ResolvedPolicySnapshot, targe
 
 		// 1. Check each rendered proxy group: must be non-empty (required_nonempty)
 		for _, g := range snapshot.Groups {
-			hasProxies := len(g.AllNodeLogicalIDs) > 0
-			if !hasProxies {
-				for _, m := range g.Members {
-					if m.Kind == resolver.MemberKindBuiltin {
-						hasProxies = true
-						break
-					}
-				}
-			}
-			if !g.UsesEmptyPass() && (len(g.Members) == 0 || (g.EmptyFallbackPass && !hasProxies)) {
+			if !groupHasExportDestination(snapshot, g) {
 				diags = append(diags, CapabilityDiagnostic{
 					Code:    "required_nonempty",
 					Message: fmt.Sprintf("proxy group %q has no proxies (required_nonempty)", g.Name),
@@ -948,9 +950,7 @@ func ValidateTargetCapabilities(snapshot *resolver.ResolvedPolicySnapshot, targe
 	return diags
 }
 
-// FilterCompatibleSnapshot creates a new ResolvedPolicySnapshot with incompatible nodes excluded.
-// The original snapshot is never mutated. Projection preserves order, recomputes derived group
-// and snapshot node memberships, and applies deterministic duplicate name exclusion (first renderable wins).
+// FilterCompatibleSnapshot 按目标排除不可渲染节点，保留原快照和严格拓扑校验
 func FilterCompatibleSnapshot(snapshot *resolver.ResolvedPolicySnapshot, target domain.CompilerTarget) (*resolver.ResolvedPolicySnapshot, []domain.ManifestExcludedNode) {
 	if snapshot == nil {
 		return nil, nil
@@ -964,9 +964,16 @@ func FilterCompatibleSnapshot(snapshot *resolver.ResolvedPolicySnapshot, target 
 	var excludedNodes []domain.ManifestExcludedNode
 	admittedSet := make(map[string]bool)
 	admittedNameSet := make(map[string]bool)
-	seenRenderableNames := make(map[string]bool)
+	excludedSet := make(map[string]bool)
+	excludedNameSet := make(map[string]bool)
 
 	for i, node := range snapshot.Nodes {
+		if err := validateResolvedNodeFormat(node); err != nil {
+			excludedNodes = append(excludedNodes, domain.ManifestExcludedNode{
+				NodeID: node.LogicalID, Code: "format_error", Reason: err.Error(),
+			})
+			continue
+		}
 		if err := checkNodeRenderability(target, i, node); err != nil {
 			excludedNodes = append(excludedNodes, domain.ManifestExcludedNode{
 				NodeID: node.LogicalID,
@@ -977,16 +984,6 @@ func FilterCompatibleSnapshot(snapshot *resolver.ResolvedPolicySnapshot, target 
 		}
 
 		name := strings.TrimSpace(node.DisplayName)
-		if seenRenderableNames[name] {
-			excludedNodes = append(excludedNodes, domain.ManifestExcludedNode{
-				NodeID: node.LogicalID,
-				Code:   "unsupported_target_capability",
-				Reason: fmt.Sprintf("duplicate node display name %q", node.DisplayName),
-			})
-			continue
-		}
-
-		seenRenderableNames[name] = true
 		copyNode := node
 		copyNode.Position = len(admittedNodes)
 		admittedNodes = append(admittedNodes, copyNode)
@@ -997,58 +994,47 @@ func FilterCompatibleSnapshot(snapshot *resolver.ResolvedPolicySnapshot, target 
 		}
 	}
 
+	// 入口被排除后继续移除依赖它的节点，不能把原代理链改为直接连接
+	if target == domain.TargetMihomo {
+		admittedNodes, excludedNodes = filterChainDependencies(snapshot, admittedNodes, excludedNodes)
+		admittedSet = make(map[string]bool, len(admittedNodes))
+		admittedNameSet = make(map[string]bool, len(admittedNodes))
+		for i := range admittedNodes {
+			admittedNodes[i].Position = i
+			admittedSet[admittedNodes[i].LogicalID] = true
+			admittedNameSet[strings.TrimSpace(admittedNodes[i].DisplayName)] = true
+		}
+	}
+
 	admittedLogicalIDs := make([]string, len(admittedNodes))
 	for i, node := range admittedNodes {
 		admittedLogicalIDs[i] = node.LogicalID
 	}
 
-	// Build filtered groups with deep-copied members and recomputed derived node identities
-	filteredGroups := make([]resolver.ResolvedGroup, len(snapshot.Groups))
-	for gi, group := range snapshot.Groups {
+	for _, node := range snapshot.Nodes {
+		if !admittedSet[node.LogicalID] {
+			excludedSet[node.LogicalID] = true
+			excludedNameSet[strings.TrimSpace(node.DisplayName)] = true
+		}
+	}
+
+	// 先按已解析 ID 固定成员类型，再移除节点，避免同名分组影响 PASS 重算
+	boundGroups, bindingDiagnostics := bindProjectionGroupMembers(snapshot, target)
+	filteredGroups := make([]resolver.ResolvedGroup, len(boundGroups))
+	for gi, group := range boundGroups {
 		filteredGroup := group
 		var filteredMembers []resolver.ResolvedGroupMember
 		for _, member := range group.Members {
-			if member.Kind == resolver.MemberKindNode {
-				if (member.TargetID != "" && admittedSet[member.TargetID]) || (member.TargetID == "" && admittedNameSet[member.DisplayName]) {
-					filteredMembers = append(filteredMembers, member)
+			name := strings.TrimSpace(member.DisplayName)
+			if member.Kind == resolver.MemberKindNode || member.Kind == "" {
+				if (member.TargetID != "" && excludedSet[member.TargetID]) || (member.TargetID == "" && excludedNameSet[name] && !admittedNameSet[name]) {
+					continue
 				}
-			} else {
-				// Keep group or built-in target references
-				filteredMembers = append(filteredMembers, member)
 			}
+			filteredMembers = append(filteredMembers, member)
 		}
 		filteredGroup.Members = filteredMembers
 
-		if len(group.NodeLogicalIDs) > 0 {
-			var nodeIDs []string
-			for _, id := range group.NodeLogicalIDs {
-				if admittedSet[id] {
-					nodeIDs = append(nodeIDs, id)
-				}
-			}
-			filteredGroup.NodeLogicalIDs = nodeIDs
-		}
-		if len(group.AllNodeLogicalIDs) > 0 {
-			var allNodeIDs []string
-			for _, id := range group.AllNodeLogicalIDs {
-				if admittedSet[id] {
-					allNodeIDs = append(allNodeIDs, id)
-				}
-			}
-			filteredGroup.AllNodeLogicalIDs = allNodeIDs
-		}
-		if len(group.ExpandedNodeIDs) > 0 {
-			var expNodeIDs []string
-			for _, id := range group.ExpandedNodeIDs {
-				if admittedSet[id] {
-					expNodeIDs = append(expNodeIDs, id)
-				}
-			}
-			filteredGroup.ExpandedNodeIDs = expNodeIDs
-		}
-		if group.ChildGroupIDs != nil {
-			filteredGroup.ChildGroupIDs = append([]string(nil), group.ChildGroupIDs...)
-		}
 		if group.Sources != nil {
 			filteredGroup.Sources = append([]domain.MemberSource(nil), group.Sources...)
 		}
@@ -1069,8 +1055,34 @@ func FilterCompatibleSnapshot(snapshot *resolver.ResolvedPolicySnapshot, target 
 	if snapshot.ChainEffects != nil {
 		copySnap.ChainEffects = append([]resolver.ChainEffect(nil), snapshot.ChainEffects...)
 	}
+	copySnap.Diagnostics = append(copySnap.Diagnostics, bindingDiagnostics...)
+	if target == domain.TargetMihomo {
+		for _, diagnostic := range chainTopologyDiagnostics(snapshot) {
+			copySnap.Diagnostics = append(copySnap.Diagnostics, resolver.Diagnostic{
+				Severity: resolver.DiagnosticSeverityError, Code: diagnostic.Code, Message: diagnostic.Message, Target: string(target),
+			})
+		}
+	}
+	refreshProjectedGroups(&copySnap)
+	refreshProjectionSummaries(snapshot, &copySnap, excludedNodes, target)
+	if digest, err := resolver.ComputeSnapshotDigest(&copySnap); err == nil {
+		copySnap.SnapshotDigest = digest
+	} else {
+		copySnap.SnapshotDigest = ""
+		copySnap.Diagnostics = append(copySnap.Diagnostics, resolver.Diagnostic{
+			Severity: resolver.DiagnosticSeverityError, Code: "snapshot_digest_failed",
+			Message: "could not compute target projection digest", Target: string(target),
+		})
+	}
 
 	return &copySnap, excludedNodes
+}
+
+func validateResolvedNodeFormat(node resolver.ResolvedNode) error {
+	return parser.ValidateNodeFormat(domain.Node{
+		LogicalID: node.LogicalID, DisplayName: node.DisplayName, Protocol: node.Protocol,
+		Server: node.Server, Port: node.Port, Credentials: node.Credentials,
+	})
 }
 
 // SortedCapabilities exposes target names without leaking the backing map.

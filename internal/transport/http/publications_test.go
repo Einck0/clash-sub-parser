@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -285,6 +286,51 @@ func TestPublicationClientExportAuthModes(t *testing.T) {
 	}
 	if rec := request("/p/nonexistent", ""); rec.Code != http.StatusNotFound {
 		t.Fatalf("unknown publication in open mode: %d", rec.Code)
+	}
+}
+
+func TestPublicationClientHandlerMapsFrozenArtifactFailures(t *testing.T) {
+	db := newCleanSQLiteDB(t)
+	router, svc := setupPublicationTestRouter(t, db)
+	seedSamplePolicyData(t, db)
+
+	published, err := svc.Publish(context.Background(), publication.PublishCommand{Target: domain.TargetSingBox, ActorKind: domain.ActorKindAdmin, RequestID: "integrity-handler"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE publications SET content = ? WHERE id = ?`, []byte("corrupted frozen content"), published.Publication.ID); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/publish/v1/%s?token=%s", published.Publication.ID, published.RawToken), nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("corrupt frozen content status %d: %s", rec.Code, rec.Body.String())
+	}
+	var corrupt struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &corrupt); err != nil || corrupt.Code != "publication_content_integrity_failed" {
+		t.Fatalf("unexpected corrupt artifact response: %s", rec.Body.String())
+	}
+
+	rawToken := "legacy-unavailable-token"
+	hash := sha256.Sum256([]byte(rawToken))
+	legacyID := "legacy-unavailable-publication"
+	if _, err := db.Exec(`INSERT INTO publications (id, target, snapshot_digest, compiler_version, token_hash, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`, legacyID, domain.TargetSingBox, "legacy-snapshot", "1.0.0", hex.EncodeToString(hash[:]), domain.PublicationStateActive, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	legacyReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/publish/v1/%s?token=%s", legacyID, rawToken), nil)
+	legacyRec := httptest.NewRecorder()
+	router.ServeHTTP(legacyRec, legacyReq)
+	if legacyRec.Code != http.StatusConflict {
+		t.Fatalf("unavailable frozen content status %d: %s", legacyRec.Code, legacyRec.Body.String())
+	}
+	var unavailable struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(legacyRec.Body.Bytes(), &unavailable); err != nil || unavailable.Code != "publication_artifact_unavailable" {
+		t.Fatalf("unexpected unavailable artifact response: %s", legacyRec.Body.String())
 	}
 }
 
@@ -974,7 +1020,7 @@ func TestExistingPublicationImmutableToSubsequentObservationsHTTP(t *testing.T) 
 }
 
 func TestAdminPreview_CapabilityBoundaries(t *testing.T) {
-	// Subcase 1: Target Clash cannot render Hysteria2 node protocol -> 422 unsupported_target_capability
+	// Subcase 1: Reject the legacy target and fail QX when filtering leaves no compatible nodes
 	t.Run("Hysteria2ProtocolNotSupportedByClash", func(t *testing.T) {
 		db := newCleanSQLiteDB(t)
 		router, _ := setupPublicationTestRouter(t, db)
@@ -1043,28 +1089,7 @@ func TestAdminPreview_CapabilityBoundaries(t *testing.T) {
 			t.Fatalf("expected error code unsupported_target, got %s", errRespClash.Code)
 		}
 
-		// 2. Request preview for target "qx" with explicit strict mode (which does not support hysteria2) -> 422 unsupported_target_capability
-		reqQX := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "qx", "compat_mode": "strict"}`))
-		reqQX.Header.Set("Authorization", "Bearer "+testAdminToken)
-		reqQX.Header.Set("Content-Type", "application/json")
-		recQX := httptest.NewRecorder()
-		router.ServeHTTP(recQX, reqQX)
-
-		if recQX.Code != http.StatusUnprocessableEntity {
-			t.Fatalf("expected 422 Unprocessable Entity, got %d. body: %s", recQX.Code, recQX.Body.String())
-		}
-		var errRespQX transporthttp.ErrorResponse
-		if err := json.Unmarshal(recQX.Body.Bytes(), &errRespQX); err != nil {
-			t.Fatalf("failed to parse error response: %v", err)
-		}
-		if errRespQX.Code != "unsupported_target_capability" {
-			t.Fatalf("expected error code unsupported_target_capability, got %s", errRespQX.Code)
-		}
-		if !strings.Contains(errRespQX.Message, "hysteria2") || !strings.Contains(errRespQX.Message, "protocol is not supported") {
-			t.Fatalf("expected message to mention unsupported protocol, got %s", errRespQX.Message)
-		}
-
-		// In default compatible mode with no compatible nodes, target "qx" yields 422 no_compatible_nodes
+		// 2. Automatic filtering leaves no QX-compatible nodes and returns 422 no_compatible_nodes
 		reqQXDefault := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "qx"}`))
 		reqQXDefault.Header.Set("Authorization", "Bearer "+testAdminToken)
 		reqQXDefault.Header.Set("Content-Type", "application/json")
@@ -1396,8 +1421,8 @@ func TestAdminPublish_CapabilityBoundaries(t *testing.T) {
 	if err := json.Unmarshal(publishRec.Body.Bytes(), &errResp); err != nil {
 		t.Fatalf("failed to parse error response: %v", err)
 	}
-	if errResp.Code != "unsupported_target_capability" {
-		t.Fatalf("expected code unsupported_target_capability, got %s", errResp.Code)
+	if errResp.Code != "no_compatible_nodes" {
+		t.Fatalf("expected code no_compatible_nodes, got %s", errResp.Code)
 	}
 }
 
@@ -1731,6 +1756,22 @@ func TestPublication_MihomoHysteria2EndToEndWithOfficialCLI(t *testing.T) {
 		if rec.Body.String() != previewContent {
 			t.Fatal("downloaded content does not match preview content")
 		}
+		if rec.Header().Get("X-Export-Excluded-Count") != "0" {
+			t.Fatalf("frozen export lost exclusion count: %s", rec.Header().Get("X-Export-Excluded-Count"))
+		}
+		manifestBytes, err := base64.RawURLEncoding.DecodeString(rec.Header().Get("X-Export-Manifest"))
+		if err != nil {
+			t.Fatalf("decode frozen manifest header: %v", err)
+		}
+		var publicManifest struct {
+			Target        string `json:"target"`
+			IncludedCount int    `json:"included_count"`
+			ExcludedCount int    `json:"excluded_count"`
+			Truncated     bool   `json:"truncated"`
+		}
+		if err := json.Unmarshal(manifestBytes, &publicManifest); err != nil || publicManifest.Target != "mihomo" || publicManifest.IncludedCount == 0 || publicManifest.ExcludedCount != 0 || publicManifest.Truncated {
+			t.Fatalf("unexpected frozen public manifest: %+v, err=%v", publicManifest, err)
+		}
 
 		// 7. Validate with official Mihomo CLI if present on host
 		mihomoBin := findMihomoBinary()
@@ -2034,34 +2075,16 @@ func TestFourTargetEndToEndHTTP_WireGuardTUICAndNativeCapabilityProof(t *testing
 		}
 	}
 
-	// 2. Quantumult-X in strict mode rejects WireGuard/TUIC; in default compatible mode it adapts the 1 compatible SS node and excludes WG/TUIC
+	// 2. Quantumult-X automatically excludes WG/TUIC and exports the compatible SS node
 	{
-		// Explicit strict mode rejects with 422 unsupported_target_capability (never leaking secrets)
-		strictReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "qx", "compat_mode": "strict"}`))
-		strictReq.Header.Set("Authorization", "Bearer "+testAdminToken)
-		strictReq.Header.Set("Content-Type", "application/json")
-		strictRec := httptest.NewRecorder()
-		router.ServeHTTP(strictRec, strictReq)
-		if strictRec.Code != http.StatusUnprocessableEntity {
-			t.Fatalf("expected 422 for qx on preview with strict mode, got %d: %s", strictRec.Code, strictRec.Body.String())
-		}
-		var errResp transporthttp.ErrorResponse
-		_ = json.Unmarshal(strictRec.Body.Bytes(), &errResp)
-		if errResp.Code != "unsupported_target_capability" {
-			t.Fatalf("expected unsupported_target_capability for qx strict preview, got %s", errResp.Code)
-		}
-		if strings.Contains(strictRec.Body.String(), wgPrivKey) || strings.Contains(strictRec.Body.String(), tuicPass) {
-			t.Fatalf("strict error response leaked secret on qx preview: %s", strictRec.Body.String())
-		}
-
-		// Default compatible preview succeeds with 1 compatible node (SS) and 2 exclusions (WG, TUIC)
+		// Preview succeeds with one included node and two exclusions without leaking excluded secrets
 		qxPrevReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "qx"}`))
 		qxPrevReq.Header.Set("Authorization", "Bearer "+testAdminToken)
 		qxPrevReq.Header.Set("Content-Type", "application/json")
 		qxPrevRec := httptest.NewRecorder()
 		router.ServeHTTP(qxPrevRec, qxPrevReq)
 		if qxPrevRec.Code != http.StatusOK {
-			t.Fatalf("expected 200 for qx compatible preview, got %d: %s", qxPrevRec.Code, qxPrevRec.Body.String())
+			t.Fatalf("expected 200 for automatically filtered qx preview, got %d: %s", qxPrevRec.Code, qxPrevRec.Body.String())
 		}
 		var qxPrevResp struct {
 			Data struct {
@@ -2098,14 +2121,14 @@ func TestFourTargetEndToEndHTTP_WireGuardTUICAndNativeCapabilityProof(t *testing
 			t.Fatalf("qx preview leaked unsupported WG/TUIC secrets: %s", qxPrevResp.Data.Content)
 		}
 
-		// Publish QX compatible draft
+		// Publish the automatically filtered QX draft
 		qxPubReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications", strings.NewReader(fmt.Sprintf(`{"target": "qx", "snapshot_id": %q}`, qxPrevResp.Data.SnapshotID)))
 		qxPubReq.Header.Set("Authorization", "Bearer "+testAdminToken)
 		qxPubReq.Header.Set("Content-Type", "application/json")
 		qxPubRec := httptest.NewRecorder()
 		router.ServeHTTP(qxPubRec, qxPubReq)
 		if qxPubRec.Code != http.StatusCreated {
-			t.Fatalf("publish qx compatible draft failed with %d: %s", qxPubRec.Code, qxPubRec.Body.String())
+			t.Fatalf("publish filtered qx draft failed with %d: %s", qxPubRec.Code, qxPubRec.Body.String())
 		}
 		var qxPubResp publicationCreateResponse
 		if err := json.Unmarshal(qxPubRec.Body.Bytes(), &qxPubResp); err != nil {
@@ -2373,102 +2396,50 @@ func TestPublication_MihomoPreviewTargetedIntegration_HTTP_Socks5_AnyTLS_Mihomo2
 		}
 	}
 
-	// 2. POST /api/v1/publications/preview target=singbox, compat_mode=strict -> 422 with structured diagnostics
-	{
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "singbox", "compat_mode": "strict"}`))
-		req.Header.Set("Authorization", "Bearer "+testAdminToken)
-		req.Header.Set("Content-Type", "application/json")
-		rec := httptest.NewRecorder()
-		router.ServeHTTP(rec, req)
-
-		if rec.Code != http.StatusUnprocessableEntity {
-			t.Fatalf("expected 422 for singbox preview, got %d: %s", rec.Code, rec.Body.String())
-		}
-		var errResp struct {
-			Code    string `json:"code"`
-			Message string `json:"message"`
-			Details struct {
-				Diagnostics []compiler.CapabilityDiagnostic `json:"diagnostics"`
-				SnapshotID  string                          `json:"snapshot_id"`
-			} `json:"details"`
-		}
-		if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
-			t.Fatalf("failed to parse 422 error response: %v", err)
-		}
-		if errResp.Code != "unsupported_target_capability" {
-			t.Errorf("expected code=unsupported_target_capability, got %s", errResp.Code)
-		}
-		if len(errResp.Details.Diagnostics) == 0 {
-			t.Errorf("expected non-empty diagnostics in details")
-		}
-		if errResp.Details.SnapshotID == "" {
-			t.Errorf("expected draft snapshot_id preserved on failure")
-		}
-	}
-
-	// 3. POST /api/v1/publications/preview target=surge, compat_mode=strict -> 422 with structured diagnostics
-	{
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "surge", "compat_mode": "strict"}`))
-		req.Header.Set("Authorization", "Bearer "+testAdminToken)
-		req.Header.Set("Content-Type", "application/json")
-		rec := httptest.NewRecorder()
-		router.ServeHTTP(rec, req)
-
-		if rec.Code != http.StatusUnprocessableEntity {
-			t.Fatalf("expected 422 for surge preview, got %d: %s", rec.Code, rec.Body.String())
-		}
-		var errResp struct {
-			Code string `json:"code"`
-		}
-		_ = json.Unmarshal(rec.Body.Bytes(), &errResp)
-		if errResp.Code != "unsupported_target_capability" {
-			t.Errorf("expected code=unsupported_target_capability, got %s", errResp.Code)
-		}
-	}
-
-	// 4. POST /api/v1/publications/preview target=qx, compat_mode=strict -> 422 with structured diagnostics
-	{
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "qx", "compat_mode": "strict"}`))
-		req.Header.Set("Authorization", "Bearer "+testAdminToken)
-		req.Header.Set("Content-Type", "application/json")
-		rec := httptest.NewRecorder()
-		router.ServeHTTP(rec, req)
-
-		if rec.Code != http.StatusUnprocessableEntity {
-			t.Fatalf("expected 422 for qx preview, got %d: %s", rec.Code, rec.Body.String())
-		}
-		var errResp struct {
-			Code string `json:"code"`
-		}
-		_ = json.Unmarshal(rec.Body.Bytes(), &errResp)
-		if errResp.Code != "unsupported_target_capability" {
-			t.Errorf("expected code=unsupported_target_capability, got %s", errResp.Code)
-		}
-	}
-
-	// 5. POST /api/v1/publications/preview target=singbox (default compatible mode):
-	// Mixed inventory (1 VMess supported, 3 unsupported) -> 200 OK with mixed 1 included, 3 excluded
-	{
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "singbox"}`))
+	// 2. Each pure-node target keeps VMess and automatically excludes HTTP, SOCKS5 and AnyTLS
+	for _, target := range []string{"singbox", "surge", "qx"} {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(fmt.Sprintf(`{"target": %q}`, target)))
 		req.Header.Set("Authorization", "Bearer "+testAdminToken)
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, req)
 
 		if rec.Code != http.StatusOK {
-			t.Fatalf("expected 200 for singbox preview in default compatible mode, got %d: %s", rec.Code, rec.Body.String())
+			t.Fatalf("expected 200 for automatically filtered %s preview, got %d: %s", target, rec.Code, rec.Body.String())
 		}
 		var prevResp struct {
 			Data struct {
+				Content  string                     `json:"content"`
 				Manifest domain.PublicationManifest `json:"manifest"`
 			} `json:"data"`
 		}
 		if err := json.Unmarshal(rec.Body.Bytes(), &prevResp); err != nil {
-			t.Fatalf("failed to decode singbox compatible preview response: %v", err)
+			t.Fatalf("failed to decode %s preview response: %v", target, err)
 		}
-		if prevResp.Data.Manifest.NodeCount != 1 || prevResp.Data.Manifest.ExcludedCount != 3 {
-			t.Errorf("expected mixed1included3excluded (node_count=1, excluded_count=3), got node_count=%d, excluded_count=%d",
-				prevResp.Data.Manifest.NodeCount, prevResp.Data.Manifest.ExcludedCount)
+		manifest := prevResp.Data.Manifest
+		if manifest.NodeCount != 1 || manifest.ExcludedCount != 3 {
+			t.Fatalf("expected one included and three excluded nodes for %s, got %+v", target, manifest)
+		}
+		if len(manifest.Included) != 1 || manifest.Included[0].NodeID != vmessID {
+			t.Errorf("expected VMess as the only included node for %s, got %+v", target, manifest.Included)
+		}
+		excludedIDs := make(map[string]bool)
+		for _, excluded := range manifest.Excluded {
+			excludedIDs[excluded.NodeID] = true
+			if excluded.Code != "unsupported_target_capability" || excluded.Reason == "" {
+				t.Errorf("expected target-specific exclusion reason for %s, got %+v", target, excluded)
+			}
+		}
+		if len(excludedIDs) != 3 || !excludedIDs[httpID] || !excludedIDs[socksID] || !excludedIDs[anytlsID] {
+			t.Errorf("unexpected %s exclusions: %+v", target, manifest.Excluded)
+		}
+		if !strings.Contains(prevResp.Data.Content, "VMess-Node") {
+			t.Errorf("expected VMess node in %s content, got %s", target, prevResp.Data.Content)
+		}
+		for _, secret := range []string{"pass-http-secret", "pass-socks-secret", "pass-anytls-secret"} {
+			if strings.Contains(prevResp.Data.Content, secret) {
+				t.Errorf("%s output contains excluded node credentials", target)
+			}
 		}
 	}
 
@@ -2542,10 +2513,10 @@ func TestPublication_MihomoPreviewAndPublish_OptInPruneEmptyOptionalGroup(t *tes
 		Position:      0,
 	})
 
-	// Explicitly set global EmptyFallbackPass false so unpruned empty optional group rejects under strict mode.
-	strictEmptyPass := false
-	if err := sqlite.NewNodeFilterRepository(db).SetGlobalFilter(ctx, &domain.GlobalNodeFilter{EmptyFallbackPass: &strictEmptyPass}); err != nil {
-		t.Fatalf("failed to set strict global filter empty pass: %v", err)
+	// Without global PASS fallback, an unpruned empty optional group remains invalid
+	emptyPass := false
+	if err := sqlite.NewNodeFilterRepository(db).SetGlobalFilter(ctx, &domain.GlobalNodeFilter{EmptyFallbackPass: &emptyPass}); err != nil {
+		t.Fatalf("failed to disable global filter empty pass: %v", err)
 	}
 
 	// Capture initial DB state to verify DB is never modified
@@ -2554,23 +2525,23 @@ func TestPublication_MihomoPreviewAndPublish_OptInPruneEmptyOptionalGroup(t *tes
 	_ = db.QueryRow("SELECT count(*) FROM group_edges").Scan(&initialEdgeCount)
 	_ = db.QueryRow("SELECT count(*) FROM policy_rules").Scan(&initialRuleCount)
 
-	// 1. Compatible preview WITHOUT opt-in flag returns 422 empty_group_not_allowed
+	// 1. Preview WITHOUT pruning returns 422 required_nonempty
 	{
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "mihomo", "compat_mode": "compatible"}`))
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target": "mihomo"}`))
 		req.Header.Set("Authorization", "Bearer "+testAdminToken)
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, req)
 
 		if rec.Code != http.StatusUnprocessableEntity {
-			t.Fatalf("expected 422 for compatible preview with empty WARP group, got %d: %s", rec.Code, rec.Body.String())
+			t.Fatalf("expected 422 for preview with empty WARP group, got %d: %s", rec.Code, rec.Body.String())
 		}
 		var errResp struct {
 			Code string `json:"code"`
 		}
 		_ = json.Unmarshal(rec.Body.Bytes(), &errResp)
-		if errResp.Code != "empty_group_not_allowed" {
-			t.Errorf("expected empty_group_not_allowed code, got %s", errResp.Code)
+		if errResp.Code != "required_nonempty" {
+			t.Errorf("expected required_nonempty code, got %s", errResp.Code)
 		}
 	}
 

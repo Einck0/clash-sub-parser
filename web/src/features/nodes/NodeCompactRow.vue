@@ -18,7 +18,8 @@ import {
   nodeHealthDiagnostic,
   nodeLatencyTone,
   nodeRiskBadge,
-  protocolSupportedTargets,
+  nodeSupportedTargets,
+  nodeTargetDiagnostics,
   resolveNodeLatencyMs,
   type NormalizedNode,
 } from './nodeView'
@@ -102,9 +103,18 @@ const hasPlatformDetails = computed(() => {
         </span>
         <span
           class="badge badge-xs badge-ghost block truncate"
-          :title="`兼容: ${protocolSupportedTargets(node.protocol).join('/')}`"
+          :title="`兼容: ${nodeSupportedTargets(node).join('/') || '无'}`"
         >
-          兼容: {{ protocolSupportedTargets(node.protocol).join('/') }}
+          兼容: {{ nodeSupportedTargets(node).join('/') || '无' }}
+        </span>
+        <span
+          v-for="message in nodeTargetDiagnostics(node)"
+          :key="message"
+          data-testid="node-target-diagnostic"
+          class="badge badge-xs badge-warning badge-outline h-auto whitespace-normal break-words"
+          :title="message"
+        >
+          {{ message }}
         </span>
         <span
           v-if="node.connection.server && node.connection.port"

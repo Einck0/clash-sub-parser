@@ -289,12 +289,13 @@ func TestMihomoCompiler_ProxyChain_AllTenProtocols_PresentAndOmitted(t *testing.
 	t.Run("present for all 10 protocols when DialerProxy is populated", func(t *testing.T) {
 		nodes := allTenProtocolNodesFixture()
 		expectedDialers := make(map[string]string, len(nodes))
+		upstream := makeTestNode("upstream", "upstream", domain.ProtocolSS, len(nodes))
 		for i := range nodes {
-			dp := fmt.Sprintf("springboard-%s", nodes[i].DisplayName)
+			dp := upstream.DisplayName
 			nodes[i].DialerProxy = dp
 			expectedDialers[nodes[i].DisplayName] = dp
 		}
-		snap := makeSnapshotWithNodes(nodes)
+		snap := makeSnapshotWithNodes(append(nodes, upstream))
 
 		res, err := compiler.CompileMihomo(ctx, snap)
 		if err != nil {
@@ -307,12 +308,15 @@ func TestMihomoCompiler_ProxyChain_AllTenProtocols_PresentAndOmitted(t *testing.
 		if err := yaml.Unmarshal(res.Content, &raw); err != nil {
 			t.Fatalf("failed to unmarshal Mihomo YAML: %v", err)
 		}
-		if len(raw.Proxies) != 10 {
-			t.Fatalf("expected 10 proxies, got %d", len(raw.Proxies))
+		if len(raw.Proxies) != 11 {
+			t.Fatalf("expected 10 chained proxies plus upstream, got %d", len(raw.Proxies))
 		}
 
 		for i, p := range raw.Proxies {
 			name, _ := p["name"].(string)
+			if name == "upstream" {
+				continue
+			}
 			wantDialer, ok := expectedDialers[name]
 			if !ok {
 				t.Errorf("proxy[%d] has unexpected name %q", i, name)
@@ -332,12 +336,12 @@ func TestMihomoCompiler_ProxyChain_AllTenProtocols_PresentAndOmitted(t *testing.
 		// Only even indices have DialerProxy set
 		for i := range nodes {
 			if i%2 == 0 {
-				nodes[i].DialerProxy = fmt.Sprintf("chain-target-%d", i)
+				nodes[i].DialerProxy = "upstream"
 			} else {
 				nodes[i].DialerProxy = ""
 			}
 		}
-		snap := makeSnapshotWithNodes(nodes)
+		snap := makeSnapshotWithNodes(append(nodes, makeTestNode("upstream", "upstream", domain.ProtocolSS, len(nodes))))
 
 		res, err := compiler.CompileMihomo(ctx, snap)
 		if err != nil {
@@ -350,15 +354,18 @@ func TestMihomoCompiler_ProxyChain_AllTenProtocols_PresentAndOmitted(t *testing.
 		if err := yaml.Unmarshal(res.Content, &raw); err != nil {
 			t.Fatalf("failed to unmarshal Mihomo YAML: %v", err)
 		}
-		if len(raw.Proxies) != 10 {
-			t.Fatalf("expected 10 proxies, got %d", len(raw.Proxies))
+		if len(raw.Proxies) != 11 {
+			t.Fatalf("expected 10 mixed proxies plus upstream, got %d", len(raw.Proxies))
 		}
 
 		for i, p := range raw.Proxies {
 			name, _ := p["name"].(string)
 			gotDialer, exists := p["dialer-proxy"]
+			if name == "upstream" {
+				continue
+			}
 			if i%2 == 0 {
-				want := fmt.Sprintf("chain-target-%d", i)
+				want := "upstream"
 				if !exists {
 					t.Errorf("proxy[%d] (%s) should have dialer-proxy %q, but key is missing", i, name, want)
 				} else if gotDialer != want {

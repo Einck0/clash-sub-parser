@@ -109,45 +109,47 @@ func (d *NodeDetail) ToNodeView() NodeView {
 
 // NodeView is the management API view of a Node including plaintext server, port, protocol credentials, probe status, and sources.
 type NodeView struct {
-	LogicalID          string                            `json:"logical_id"`
-	Protocol           domain.Protocol                   `json:"protocol"`
-	DisplayName        string                            `json:"display_name"`
-	Server             string                            `json:"server,omitempty"`
-	Port               int                               `json:"port,omitempty"`
-	Credentials        *domain.InboundProtocolCredential `json:"credentials,omitempty"`
-	Active             bool                              `json:"active"`
-	ConnectionRevision int64                             `json:"connection_revision,omitempty"`
-	CreatedAt          time.Time                         `json:"created_at"`
-	UpdatedAt          time.Time                         `json:"updated_at"`
-	IPRiskSummary      *domain.IPRiskSummary             `json:"ip_risk_summary,omitempty"`
-	LatencyMS          *int64                            `json:"latency_ms,omitempty"`
-	LastProbedAt       *time.Time                        `json:"last_probed_at,omitempty"`
-	HealthStatus       string                            `json:"health_status"`
-	ProbeState         string                            `json:"probe_state"`
-	ProbeMissing       bool                              `json:"probe_missing"`
-	ProbeStale         bool                              `json:"probe_stale"`
-	Capabilities       map[string]NodeCapabilityView     `json:"capabilities,omitempty"`
-	Sources            []domain.NodeSource               `json:"sources,omitempty"`
+	LogicalID           string                                        `json:"logical_id"`
+	Protocol            domain.Protocol                               `json:"protocol"`
+	DisplayName         string                                        `json:"display_name"`
+	Server              string                                        `json:"server,omitempty"`
+	Port                int                                           `json:"port,omitempty"`
+	Credentials         *domain.InboundProtocolCredential             `json:"credentials,omitempty"`
+	Active              bool                                          `json:"active"`
+	ConnectionRevision  int64                                         `json:"connection_revision,omitempty"`
+	CreatedAt           time.Time                                     `json:"created_at"`
+	UpdatedAt           time.Time                                     `json:"updated_at"`
+	IPRiskSummary       *domain.IPRiskSummary                         `json:"ip_risk_summary,omitempty"`
+	LatencyMS           *int64                                        `json:"latency_ms,omitempty"`
+	LastProbedAt        *time.Time                                    `json:"last_probed_at,omitempty"`
+	HealthStatus        string                                        `json:"health_status"`
+	ProbeState          string                                        `json:"probe_state"`
+	ProbeMissing        bool                                          `json:"probe_missing"`
+	ProbeStale          bool                                          `json:"probe_stale"`
+	Capabilities        map[string]NodeCapabilityView                 `json:"capabilities,omitempty"`
+	Sources             []domain.NodeSource                           `json:"sources,omitempty"`
+	TargetCompatibility map[domain.CompilerTarget]TargetCompatibility `json:"target_compatibility"`
 }
 
 // ToNodeView converts a domain.Node to a NodeView.
 func ToNodeView(n domain.Node) NodeView {
 	creds := n.Credentials
 	return NodeView{
-		LogicalID:          n.LogicalID,
-		Protocol:           n.Protocol,
-		DisplayName:        n.DisplayName,
-		Server:             n.Server,
-		Port:               n.Port,
-		Credentials:        &creds,
-		Active:             n.Active,
-		ConnectionRevision: n.ConnectionRevision,
-		CreatedAt:          n.CreatedAt,
-		UpdatedAt:          n.UpdatedAt,
-		HealthStatus:       "unknown",
-		ProbeState:         "idle",
-		ProbeMissing:       true,
-		ProbeStale:         false,
+		LogicalID:           n.LogicalID,
+		Protocol:            n.Protocol,
+		DisplayName:         n.DisplayName,
+		Server:              n.Server,
+		Port:                n.Port,
+		Credentials:         &creds,
+		Active:              n.Active,
+		ConnectionRevision:  n.ConnectionRevision,
+		CreatedAt:           n.CreatedAt,
+		UpdatedAt:           n.UpdatedAt,
+		HealthStatus:        "unknown",
+		ProbeState:          "idle",
+		ProbeMissing:        true,
+		ProbeStale:          false,
+		TargetCompatibility: nodeTargetCompatibility(n),
 	}
 }
 
@@ -542,7 +544,10 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 	if len(extractResult.Items) == 0 {
 		finishedAt := domain.NowUTC()
 		fetchID := domain.MustNewUUIDv7()
-		redactedErr := "[stage:parse reason_code:empty_subscription] extracted 0 valid nodes from subscription content"
+		if len(extractResult.Diagnostics) == 0 {
+			extractResult.Diagnostics = []parser.Diagnostic{{Format: "subscription", Entry: 0, Reason: "empty_subscription", Field: "document"}}
+		}
+		redactedErr := "[stage:parse reason_code:empty_subscription] " + extractResult.DiagnosticSummary()
 
 		failedFetch := domain.SubscriptionFetch{
 			ID:             fetchID,
@@ -1019,7 +1024,7 @@ func (s *Service) ReconcileSubscription(ctx context.Context, subID string) (*Rec
 			}
 
 			effectiveKind := kind
-			if userKindOverride != nil && userKindOverride.IsValid() {
+			if userKindOverride != nil && userKindOverride.IsOverrideValid() {
 				effectiveKind = *userKindOverride
 			}
 
@@ -2143,20 +2148,39 @@ func applyFieldOverride(node *domain.Node, fieldPath, valJSON string) {
 	}
 }
 
-// ListLatestEntries returns entries from the latest successful payload for a subscription.
+// ListLatestEntries 展示已保存条目和最近一次获取的脱敏解析错误
 func (s *Service) ListLatestEntries(ctx context.Context, subscriptionID string) ([]domain.SubscriptionEntry, error) {
+	var entries []domain.SubscriptionEntry
+	var err error
 	if s.entryRepo != nil {
-		return s.entryRepo.ListLatestBySubscription(ctx, subscriptionID)
+		entries, err = s.entryRepo.ListLatestBySubscription(ctx, subscriptionID)
+	} else if s.db != nil {
+		entries, err = sqlite.NewSubscriptionEntryRepository(s.db).ListLatestBySubscription(ctx, subscriptionID)
 	}
-	if s.db != nil {
-		repo := sqlite.NewSubscriptionEntryRepository(s.db)
-		return repo.ListLatestBySubscription(ctx, subscriptionID)
+	if err != nil {
+		return nil, err
 	}
-	return nil, nil
+	if s.fetches == nil {
+		return entries, nil
+	}
+	fetches, err := s.fetches.ListBySubscription(ctx, subscriptionID, 1)
+	if err != nil {
+		return nil, err
+	}
+	if len(fetches) > 0 {
+		entries = append(entries, parseErrorEntries(fetches[0])...)
+	}
+	return entries, nil
 }
 
 // OverrideEntryKind sets or clears a user kind override on an entry.
 func (s *Service) OverrideEntryKind(ctx context.Context, entryID string, userKindOverride *domain.EntryKind, reason, actorRef string) (*domain.SubscriptionEntry, error) {
+	if strings.HasPrefix(entryID, "parse_") {
+		return nil, domain.NewValidationError("format_error_readonly", "parse errors are display-only and cannot be reclassified as proxy nodes")
+	}
+	if userKindOverride != nil && !userKindOverride.IsOverrideValid() {
+		return nil, domain.NewValidationError("invalid_entry_kind", "entry override must be proxy, notice or unknown")
+	}
 	var repo domain.SubscriptionEntryRepository
 	if s.entryRepo != nil {
 		repo = s.entryRepo
@@ -2170,6 +2194,9 @@ func (s *Service) OverrideEntryKind(ctx context.Context, entryID string, userKin
 	entry, err := repo.GetByID(ctx, entryID)
 	if err != nil {
 		return nil, err
+	}
+	if entry.EntryKind == domain.EntryKindFormatError {
+		return nil, domain.NewValidationError("format_error_readonly", "parse errors are display-only and cannot be reclassified as proxy nodes")
 	}
 
 	anchor := entry.OverrideAnchor

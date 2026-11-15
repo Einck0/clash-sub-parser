@@ -1519,16 +1519,7 @@ func renderMihomo(snapshot *resolver.ResolvedPolicySnapshot) ([]byte, error) {
 
 	for i, group := range snapshot.Groups {
 		loc := fmt.Sprintf("groups[%d]", i)
-		hasProxies := len(group.AllNodeLogicalIDs) > 0
-		if !hasProxies {
-			for _, m := range group.Members {
-				if m.Kind == resolver.MemberKindBuiltin {
-					hasProxies = true
-					break
-				}
-			}
-		}
-		if !group.UsesEmptyPass() && (len(group.Members) == 0 || (group.EmptyFallbackPass && !hasProxies)) {
+		if !groupHasExportDestination(snapshot, group) {
 			return nil, mihomoError(loc, group.Name, fmt.Sprintf("proxy group %q has no proxies (required_nonempty)", group.Name))
 		}
 		members := make([]string, 0, len(group.Members))

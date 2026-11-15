@@ -193,6 +193,16 @@ func pruneOnePass(snapshot *resolver.ResolvedPolicySnapshot) (*resolver.Resolved
 	newSnap := *snapshot
 	newSnap.Groups = keptGroups
 	newSnap.Diagnostics = append(append([]resolver.Diagnostic(nil), snapshot.Diagnostics...), diagnostics...)
+	refreshProjectedGroups(&newSnap)
+	if digest, err := resolver.ComputeSnapshotDigest(&newSnap); err == nil {
+		newSnap.SnapshotDigest = digest
+	} else {
+		newSnap.SnapshotDigest = ""
+		newSnap.Diagnostics = append(newSnap.Diagnostics, resolver.Diagnostic{
+			Severity: resolver.DiagnosticSeverityError, Code: "snapshot_digest_failed",
+			Message: "could not compute pruned snapshot digest",
+		})
+	}
 
 	return &newSnap, diagnostics, true
 }

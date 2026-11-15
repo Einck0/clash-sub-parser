@@ -70,7 +70,7 @@ describe('Drawer and DrawerCard Components', () => {
     expect(aside.classList.contains('overflow-hidden')).toBe(true)
     expect(aside.className).toContain('adaptive-surface-sheet')
 
-    const title = document.querySelector('#drawer-title') as HTMLElement
+    const title = document.getElementById(aside.getAttribute('aria-labelledby')!) as HTMLElement
     expect(title).toBeTruthy()
     expect(title.classList.contains('break-words')).toBe(true)
 
@@ -113,7 +113,8 @@ describe('Drawer and DrawerCard Components', () => {
 
     expect(document.querySelector('#card-slot')).toBeTruthy()
     expect(document.querySelector('#card-footer')).toBeTruthy()
-    expect(document.querySelector('#drawer-title')?.textContent?.trim()).toBe('Drawer Card Config')
+    const panel = document.querySelector('aside[role="dialog"]')!
+    expect(document.getElementById(panel.getAttribute('aria-labelledby')!)?.textContent?.trim()).toBe('Drawer Card Config')
   })
 
   it('closes on Escape key press when open', async () => {
@@ -230,6 +231,97 @@ describe('Drawer and DrawerCard Components', () => {
     expect(document.body.style.overflow).toBe('')
   })
 
+  it('focuses on open, loops Tab within visible controls, and leaves native dialogs in control', async () => {
+    const trigger = document.createElement('button')
+    document.body.appendChild(trigger)
+    trigger.focus()
+    const propsState = reactive({ modelValue: false, title: 'Keyboard drawer' })
+    app = createApp({
+      render: () => h(Drawer, {
+        ...propsState,
+        'onUpdate:modelValue': (value: boolean) => { propsState.modelValue = value },
+      }, {
+        default: () => [
+          h('button', { disabled: true }, 'Disabled'),
+          h('button', { hidden: true }, 'Hidden'),
+        ],
+        footer: () => h('button', { id: 'keyboard-last' }, 'Save'),
+      }),
+    })
+    app.mount(container)
+    propsState.modelValue = true
+    await nextTick()
+    await nextTick()
+
+    const close = document.querySelector<HTMLButtonElement>('button[aria-label="Close drawer"]')!
+    const last = document.querySelector<HTMLButtonElement>('#keyboard-last')!
+    // jsdom has no layout; only these controls represent visible rendered buttons.
+    for (const element of [close, last]) {
+      vi.spyOn(element, 'getClientRects').mockReturnValue([{} as DOMRect] as unknown as DOMRectList)
+    }
+    expect(document.activeElement).toBe(close)
+    const tab = (shiftKey = false) => {
+      const event = new KeyboardEvent('keydown', { key: 'Tab', shiftKey, bubbles: true, cancelable: true })
+      document.activeElement!.dispatchEvent(event)
+      return event
+    }
+    expect(tab(true).defaultPrevented).toBe(true)
+    expect(document.activeElement).toBe(last)
+    expect(tab().defaultPrevented).toBe(true)
+    expect(document.activeElement).toBe(close)
+
+    const dialog = document.createElement('dialog')
+    dialog.setAttribute('open', '')
+    document.body.appendChild(dialog)
+    expect(tab(true).defaultPrevented).toBe(false)
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    expect(propsState.modelValue).toBe(true)
+    dialog.remove()
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await nextTick()
+    await nextTick()
+    expect(propsState.modelValue).toBe(false)
+    expect(document.activeElement).toBe(trigger)
+  })
+
+  it('uses unique labels and only the last opened drawer owns focus and Escape', async () => {
+    const state = reactive({ first: false, second: true })
+    app = createApp({
+      render: () => [
+        h(Drawer, { modelValue: state.first, title: 'First', description: 'First description',
+          'onUpdate:modelValue': (value: boolean) => { state.first = value } }),
+        h(Drawer, { modelValue: state.second, title: 'Second', description: 'Second description',
+          'onUpdate:modelValue': (value: boolean) => { state.second = value } }),
+      ],
+    })
+    app.mount(container)
+    await nextTick()
+    await nextTick()
+    const second = document.querySelector<HTMLElement>('[data-drawer-panel]')!
+    const secondClose = second.querySelector<HTMLButtonElement>('button')!
+    expect(document.activeElement).toBe(secondClose)
+    // First is mounted earlier, but opening it now must put it above Second.
+    state.first = true
+    await nextTick()
+    await nextTick()
+    const panels = Array.from(document.querySelectorAll<HTMLElement>('[data-drawer-panel]'))
+    const first = panels.find((panel) => document.getElementById(panel.getAttribute('aria-labelledby')!)?.textContent?.trim() === 'First')!
+    for (const attribute of ['aria-labelledby', 'aria-describedby']) {
+      const ids = panels.map((panel) => panel.getAttribute(attribute)!)
+      expect(new Set(ids).size).toBe(2)
+      expect(ids.every((id) => document.getElementById(id))).toBe(true)
+    }
+    expect(document.activeElement).toBe(first.querySelector('button'))
+    expect(second.hasAttribute('inert')).toBe(true)
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true }))
+    await nextTick()
+    await nextTick()
+    expect(state.first).toBe(false)
+    expect(state.second).toBe(true)
+    expect(document.activeElement).toBe(secondClose)
+  })
+
   it('restores focus to previous active element upon close', async () => {
     const triggerBtn = document.createElement('button')
     triggerBtn.id = 'trigger-btn'
@@ -256,8 +348,11 @@ describe('Drawer and DrawerCard Components', () => {
     app.mount(container)
     await nextTick()
 
+    expect(document.activeElement).toBe(document.querySelector('button[aria-label="Close drawer"]'))
+
     // Close the drawer
     propsState.modelValue = false
+    await nextTick()
     await nextTick()
 
     expect(document.activeElement).toBe(triggerBtn)

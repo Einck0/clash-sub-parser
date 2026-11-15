@@ -137,6 +137,11 @@ export interface IPRiskSummaryRecord {
   reason_code?: string
 }
 
+export interface TargetCompatibility {
+  status: 'compatible' | 'incompatible' | 'format_error'
+  diagnostics?: { node_id?: string; target?: string; code: string; message: string }[]
+}
+
 export interface NodeRecord {
   logical_id: string
   protocol: string
@@ -158,6 +163,7 @@ export interface NodeRecord {
   connection?: NodeConnectionInput
   credentials?: NodeCredentialsInput
   sources?: NodeSourceRecord[]
+  target_compatibility?: Partial<Record<CompilerTarget, TargetCompatibility>>
 }
 
 export interface NormalizedNode {
@@ -179,6 +185,21 @@ export interface NormalizedNode {
   ipRiskSummary?: IPRiskSummaryRecord
   connection: NodeConnectionProfile
   sources?: NodeSourceRecord[]
+  targetCompatibility?: Partial<Record<CompilerTarget, TargetCompatibility>>
+}
+
+export function nodeSupportedTargets(node: NormalizedNode): readonly CompilerTarget[] {
+  if (node.targetCompatibility) {
+    return (Object.keys(node.targetCompatibility) as CompilerTarget[])
+      .filter((target) => node.targetCompatibility?.[target]?.status === 'compatible')
+  }
+  return protocolSupportedTargets(node.protocol)
+}
+
+export function nodeTargetDiagnostics(node: NormalizedNode): string[] {
+  return Object.entries(node.targetCompatibility ?? {})
+    .filter(([, capability]) => capability.status !== 'compatible')
+    .map(([target, capability]) => `${target}: ${capability.diagnostics?.map((d) => d.message).join('; ') || '不兼容'}`)
 }
 
 export interface NodeHealthDiagnostic {
@@ -403,6 +424,10 @@ export function renderNodePreview(
   node: NormalizedNode,
   target: 'mihomo' | 'singbox' = 'mihomo'
 ): string {
+  const capability = node.targetCompatibility?.[target]
+  if (node.targetCompatibility && capability?.status !== 'compatible') {
+    return `不参与 ${target} 导出: ${capability?.diagnostics?.map((d) => d.message).join('; ') || (capability ? '目标不兼容' : '后端未提供该目标兼容状态')}`
+  }
   const proto = node.protocol.trim().toLowerCase()
   const conn = node.connection
 
@@ -657,6 +682,7 @@ export function normalizeNode(node: NodeRecord): NormalizedNode {
     ipRiskSummary: node.ip_risk_summary ?? (node as any).ipRiskSummary,
     connection: sanitizeNodeConnection(normalizedInput),
     sources: node.sources,
+    targetCompatibility: node.target_compatibility,
   }
 }
 

@@ -88,8 +88,6 @@ export const COMPILER_TARGETS: TargetMetadata[] = [
   },
 ]
 
-export type CompatMode = 'strict' | 'compatible'
-
 export interface Diagnostic {
   code?: string
   target?: string

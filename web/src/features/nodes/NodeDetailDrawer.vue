@@ -20,7 +20,8 @@ import {
   nodeHealthDiagnostic,
   nodeLatencyTone,
   nodeRiskBadge,
-  protocolSupportedTargets,
+  nodeSupportedTargets,
+  nodeTargetDiagnostics,
   renderNodePreview,
   type NormalizedNode,
 } from './nodeView'
@@ -399,7 +400,7 @@ function handleClose() {
         </div>
         <div class="flex flex-wrap items-center gap-1.5 font-mono">
           <span
-            v-for="target in protocolSupportedTargets(node.protocol)"
+            v-for="target in nodeSupportedTargets(node)"
             :key="target"
             class="badge badge-xs badge-success badge-outline uppercase"
           >
@@ -727,6 +728,12 @@ function handleClose() {
             </button>
           </div>
         </div>
+        <p
+          v-for="message in nodeTargetDiagnostics(node)"
+          :key="message"
+          data-testid="node-detail-target-diagnostic"
+          class="text-warning text-xs break-words"
+        >{{ message }}</p>
         <pre
           data-testid="node-config-preview"
           class="p-3 rounded-xl bg-base-300/50 border border-base-300 font-mono text-xs overflow-x-auto leading-relaxed"

@@ -113,7 +113,7 @@ func TestParserSemanticsRecoveredNodesReachFactsPreviewAndProbe(t *testing.T) {
 				if errors.As(err, &preflight) {
 					t.Fatalf("%s: %v; preflight: %+v", operation, err, preflight.Result)
 				}
-				var capability *publication.StrictCapabilityError
+				var capability *publication.CapabilityValidationError
 				if errors.As(err, &capability) {
 					t.Fatalf("%s: %v; capabilities: %+v", operation, err, capability.Diagnostics)
 				}
@@ -153,7 +153,7 @@ func TestParserSemanticsRecoveredNodesReachFactsPreviewAndProbe(t *testing.T) {
 			if !found {
 				t.Fatal("rendered SS missing")
 			}
-			compatible, err := pub.Preview(ctx, publication.PreviewQuery{Target: domain.TargetSingBox, RevisionID: rev.ID, CompatMode: "compatible"})
+			compatible, err := pub.Preview(ctx, publication.PreviewQuery{Target: domain.TargetSingBox, RevisionID: rev.ID})
 			assertPreviewOK("compatible sing-box preview", err)
 			if compatible == nil || compatible.Manifest.NodeCount != 1 || compatible.Manifest.ExcludedCount != 1 || compatible.Manifest.Excluded[0].NodeID != pluginID {
 				t.Fatalf("unsupported plugin must be excluded, not silently stripped: %v", err)

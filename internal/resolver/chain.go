@@ -410,6 +410,8 @@ func ResolveChains(
 	for i, n := range updatedNodes {
 		if winner, ok := winningAssignments[n.LogicalID]; ok {
 			updatedNodes[i].DialerProxy = winner.dialerDisplayName
+			updatedNodes[i].DialerType = winner.binding.DialerType
+			updatedNodes[i].DialerID = winner.binding.DialerID
 			updatedNodes[i].ChainBindingID = winner.binding.ID
 			updatedNodes[i].ChainSource = string(winner.binding.TargetType)
 		}

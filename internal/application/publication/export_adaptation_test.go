@@ -2,7 +2,6 @@ package publication_test
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -16,7 +15,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func TestPreview_TargetDefaultsAndModeValidation(t *testing.T) {
+func TestPreview_TargetDefaultsAndAutomaticProjection(t *testing.T) {
 	ctx := context.Background()
 	svc, _, _ := setupService()
 
@@ -56,7 +55,7 @@ func TestPreview_TargetDefaultsAndModeValidation(t *testing.T) {
 		},
 	}
 
-	t.Run("DefaultModesPerTarget", func(t *testing.T) {
+	t.Run("AutomaticProjectionPerTarget", func(t *testing.T) {
 		for _, target := range []domain.CompilerTarget{domain.TargetMihomo, domain.TargetSingBox, domain.TargetSurge, domain.TargetQuantumultX} {
 			res, err := svc.Preview(ctx, publication.PreviewQuery{
 				Target:   target,
@@ -74,25 +73,7 @@ func TestPreview_TargetDefaultsAndModeValidation(t *testing.T) {
 		}
 	})
 
-	t.Run("RejectInvalidMode", func(t *testing.T) {
-		for _, badMode := range []string{"invalid", "fuzzy", "lenient", "UNKNOWN", "strict_v2"} {
-			_, err := svc.Preview(ctx, publication.PreviewQuery{
-				Target:     domain.TargetSingBox,
-				Snapshot:   snap,
-				CompatMode: badMode,
-			})
-			if err == nil {
-				t.Fatalf("expected invalid mode %q to be rejected, got nil error", badMode)
-			}
-			de, ok := domain.AsDomainError(err)
-			if !ok || de.Code != "invalid_mode" {
-				t.Fatalf("expected invalid_mode error for mode %q, got: %v", badMode, err)
-			}
-		}
-	})
-
-	t.Run("ExplicitStrict_RejectsIncompatibleOnNonMihomo", func(t *testing.T) {
-		// Mixed snapshot: SS + VLESS (unsupported on Surge / QX)
+	t.Run("AutomaticallyAcceptsMixedOnNonMihomo", func(t *testing.T) {
 		vlessNodeID := domain.ComputeNodeLogicalID(domain.ProtocolVLESS, "2.2.2.2", 443, nil)
 		vlessNode := resolver.ResolvedNode{
 			LogicalID:   vlessNodeID,
@@ -113,53 +94,10 @@ func TestPreview_TargetDefaultsAndModeValidation(t *testing.T) {
 			NodeLogicalIDs:  []string{validSS.LogicalID, vlessNode.LogicalID},
 		}
 
-		// Surge explicit strict should reject with StrictCapabilityError
-		_, err := svc.Preview(ctx, publication.PreviewQuery{
-			Target:     domain.TargetSurge,
-			Snapshot:   mixedSnap,
-			CompatMode: "strict",
-		})
-		if err == nil {
-			t.Fatal("expected Surge explicit strict to fail for VLESS, but got nil")
-		}
-		var strictErr *publication.StrictCapabilityError
-		if !errors.As(err, &strictErr) {
-			t.Fatalf("expected *publication.StrictCapabilityError, got %T: %v", err, err)
-		}
-		if !strings.Contains(strictErr.Error(), "target capability validation failed in strict mode") {
-			t.Fatalf("expected strict capability failure message, got: %v", strictErr)
-		}
-		if !strings.HasPrefix(strictErr.SnapshotID, "snapshot_") {
-			t.Fatalf("expected valid draft snapshot ID on strict capability error, got: %s", strictErr.SnapshotID)
-		}
-	})
-
-	t.Run("ExplicitCompatible_AcceptsMixedOnNonMihomo", func(t *testing.T) {
-		vlessNodeID := domain.ComputeNodeLogicalID(domain.ProtocolVLESS, "2.2.2.2", 443, nil)
-		vlessNode := resolver.ResolvedNode{
-			LogicalID:   vlessNodeID,
-			Protocol:    domain.ProtocolVLESS,
-			DisplayName: "VLESS Node",
-			Server:      "2.2.2.2",
-			Port:        443,
-			Credentials: domain.InboundProtocolCredential{
-				UUID: "01944aa0-0000-7000-8000-000000000001",
-			},
-			Active: true,
-		}
-		mixedSnap := &resolver.ResolvedPolicySnapshot{
-			RevisionID:      "rev-mixed",
-			SnapshotDigest:  "sha256:snap-mixed",
-			CompilerVersion: "1.0.0",
-			Nodes:           []resolver.ResolvedNode{validSS, vlessNode},
-			NodeLogicalIDs:  []string{validSS.LogicalID, vlessNode.LogicalID},
-		}
-
-		// Surge default and explicit compatible should succeed and exclude VLESS
+		// Surge automatically excludes VLESS and exports the remaining SS node
 		res, err := svc.Preview(ctx, publication.PreviewQuery{
-			Target:     domain.TargetSurge,
-			Snapshot:   mixedSnap,
-			CompatMode: "compatible",
+			Target:   domain.TargetSurge,
+			Snapshot: mixedSnap,
 		})
 		if err != nil {
 			t.Fatalf("expected compatible Surge preview to succeed, got: %v", err)
@@ -874,21 +812,7 @@ func TestPreview_FactsPath_SelectionExhaustion_GlobalPASSMatchesLiveAndPureNodes
 	}); err == nil {
 		t.Fatal("expected SingBox preview to fail closed for globally filtered empty selection")
 	}
-	// 3. Explicit strict mode on fallback:
-	// 3a. Mihomo explicit strict succeeds and matches live
-	prevStrictMihomo, err := svc.Preview(ctx, publication.PreviewQuery{
-		Target:     domain.TargetMihomo,
-		RevisionID: "rev-fallback-regress",
-		CompatMode: "strict",
-	})
-	if err != nil {
-		t.Fatalf("Preview explicit strict for Mihomo failed: %v", err)
-	}
-	if string(prevStrictMihomo.Content) != string(liveMihomo.Content) {
-		t.Fatal("Preview explicit strict content does not match live for Mihomo")
-	}
-
-	// 3c. A filtered-out VLESS primary node is not resurrected for strict Surge preview.
+	// A filtered-out VLESS primary node is not resurrected for Surge preview.
 	vlessPrimaryID := domain.ComputeNodeLogicalID(domain.ProtocolVLESS, "2.2.2.2", 443, nil)
 	nVlessPrimary := domain.Node{
 		LogicalID:   vlessPrimaryID,
@@ -934,13 +858,11 @@ func TestPreview_FactsPath_SelectionExhaustion_GlobalPASSMatchesLiveAndPureNodes
 	if _, err := svcSurge.Preview(ctx, publication.PreviewQuery{
 		Target:     domain.TargetSurge,
 		RevisionID: "rev-fallback-surge",
-		CompatMode: "strict",
 	}); err == nil {
-		t.Fatal("expected strict Surge preview to fail closed rather than resurrect filtered primary nodes")
+		t.Fatal("expected Surge preview to fail closed rather than resurrect filtered primary nodes")
 	}
 
-	// 3d. Explicit strict mode on normal inventory with incompatible node (no fallback):
-	// Surge explicit strict rejects mixed inventory with VLESS, compatible accepts and excludes VLESS
+	// Mixed inventory uses the single automatic projection path and excludes VLESS
 	factsMixedNormal := &domain.ConsistentFacts{
 		AsOf: now,
 		Revision: &domain.ConfigurationRevision{
@@ -957,24 +879,6 @@ func TestPreview_FactsPath_SelectionExhaustion_GlobalPASSMatchesLiveAndPureNodes
 		publication.WithConsistentFactsLoader(&memoryFactsLoader{facts: factsMixedNormal}),
 	)
 
-	// Explicit strict on mixed inventory
-	_, err = svcMixed.Preview(ctx, publication.PreviewQuery{
-		Target:     domain.TargetSurge,
-		RevisionID: "rev-mixed-normal",
-		CompatMode: "strict",
-	})
-	if err == nil {
-		t.Fatal("expected Surge explicit strict to fail for mixed inventory with VLESS")
-	}
-	var strictErrMixed *publication.StrictCapabilityError
-	if !errors.As(err, &strictErrMixed) {
-		t.Fatalf("expected *StrictCapabilityError for mixed inventory, got: %v", err)
-	}
-	if !strings.HasPrefix(strictErrMixed.SnapshotID, "snapshot_") {
-		t.Fatalf("expected valid draft ID, got: %s", strictErrMixed.SnapshotID)
-	}
-
-	// Default/compatible on mixed inventory succeeds and excludes VLESS
 	prevCompatSurge, err := svcMixed.Preview(ctx, publication.PreviewQuery{
 		Target:     domain.TargetSurge,
 		RevisionID: "rev-mixed-normal",

@@ -1,6 +1,7 @@
 package http
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +19,84 @@ type publicationAdminHandler struct {
 	audit   domain.AuditRepository
 }
 
+func truncateSafe(value string, limit int) (string, bool) {
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value, false
+	}
+	return string(runes[:limit]) + "…", true
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func setSafeManifestHeaders(w http.ResponseWriter, manifest *domain.PublicationManifest) {
+	if manifest == nil {
+		return
+	}
+	const maxExcludedItems = 64
+	const maxHeaderBytes = 4096
+
+	truncated := len(manifest.Excluded) > maxExcludedItems
+	excluded := make([]domain.ManifestExcludedNode, 0, minInt(len(manifest.Excluded), maxExcludedItems))
+	for _, item := range manifest.Excluded {
+		if len(excluded) >= maxExcludedItems {
+			break
+		}
+		reason := domain.RedactSensitiveInfo(item.Reason)
+		for _, marker := range []string{"http://", "https://", "server=", "server:", "url=", "url:", "password=", "password:", "token=", "token:", "secret=", "secret:"} {
+			reason = strings.ReplaceAll(reason, marker, "[redacted]")
+		}
+		nodeID, nodeTrunc := truncateSafe(domain.RedactSensitiveInfo(item.NodeID), 128)
+		code, codeTrunc := truncateSafe(item.Code, 80)
+		safeReason, reasonTrunc := truncateSafe(reason, 240)
+		if nodeTrunc || codeTrunc || reasonTrunc {
+			truncated = true
+		}
+		excluded = append(excluded, domain.ManifestExcludedNode{
+			NodeID: nodeID,
+			Code:   code,
+			Reason: safeReason,
+		})
+	}
+
+	buildPayload := func(items []domain.ManifestExcludedNode, isTrunc bool) []byte {
+		payload := struct {
+			Target        domain.CompilerTarget         `json:"target"`
+			IncludedCount int                           `json:"included_count"`
+			ExcludedCount int                           `json:"excluded_count"`
+			Truncated     bool                          `json:"truncated,omitempty"`
+			Excluded      []domain.ManifestExcludedNode `json:"excluded"`
+		}{
+			Target:        manifest.Target,
+			IncludedCount: manifest.NodeCount,
+			ExcludedCount: manifest.ExcludedCount,
+			Truncated:     isTrunc,
+			Excluded:      items,
+		}
+		b, _ := json.Marshal(payload)
+		return b
+	}
+
+	encoded := buildPayload(excluded, truncated)
+	encodedHeader := base64.RawURLEncoding.EncodeToString(encoded)
+	for len(encodedHeader) > maxHeaderBytes && len(excluded) > 0 {
+		truncated = true
+		excluded = excluded[:len(excluded)-1]
+		encoded = buildPayload(excluded, true)
+		encodedHeader = base64.RawURLEncoding.EncodeToString(encoded)
+	}
+	if len(encodedHeader) > maxHeaderBytes {
+		encoded = buildPayload([]domain.ManifestExcludedNode{}, true)
+		encodedHeader = base64.RawURLEncoding.EncodeToString(encoded)
+	}
+	w.Header().Set("X-Export-Manifest", encodedHeader)
+}
+
 type createPublicationRequest struct {
 	Target                         string `json:"target"`
 	SnapshotID                     string `json:"snapshot_id"`
@@ -29,7 +108,6 @@ type createPublicationRequest struct {
 type previewPublicationRequest struct {
 	Target                         string `json:"target"`
 	RevisionID                     string `json:"revision_id,omitempty"`
-	CompatMode                     string `json:"compat_mode,omitempty"`
 	PruneUnavailableOptionalGroups bool   `json:"prune_unavailable_optional_groups,omitempty"`
 	OmitUnavailableOptionalGroups  bool   `json:"omit_unavailable_optional_groups,omitempty"`
 }
@@ -68,6 +146,11 @@ func publicationClientHandler(svc *publication.Service, holder AdminTokenHolder)
 			case errors.Is(err, publication.ErrUnsupportedTarget):
 				WriteError(w, r, http.StatusUnprocessableEntity, "unsupported_target", "Unsupported compiler target")
 			default:
+				var de *domain.DomainError
+				if errors.As(err, &de) && (de.Code == "publication_content_integrity_failed" || de.Code == "publication_artifact_unavailable") {
+					WriteError(w, r, http.StatusConflict, de.Code, "Frozen publication artifact is unavailable")
+					return
+				}
 				WriteError(w, r, http.StatusInternalServerError, "internal_error", "Failed to resolve publication")
 			}
 			return
@@ -79,6 +162,8 @@ func publicationClientHandler(svc *publication.Service, holder AdminTokenHolder)
 		w.Header().Set("ETag", fmt.Sprintf("%q", artifact.ContentDigest))
 		w.Header().Set("X-Content-Digest", artifact.ContentDigest)
 		w.Header().Set("X-Snapshot-Digest", artifact.SnapshotDigest)
+		w.Header().Set("X-Export-Excluded-Count", fmt.Sprint(len(artifact.ExcludedNodes)))
+		setSafeManifestHeaders(w, artifact.Manifest)
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(artifact.Content)
 	}
@@ -191,26 +276,25 @@ func (h publicationAdminHandler) preview(w http.ResponseWriter, r *http.Request)
 	query := publication.PreviewQuery{
 		Target:                         target,
 		RevisionID:                     strings.TrimSpace(body.RevisionID),
-		CompatMode:                     strings.TrimSpace(body.CompatMode),
 		PruneUnavailableOptionalGroups: body.PruneUnavailableOptionalGroups,
 		OmitUnavailableOptionalGroups:  body.OmitUnavailableOptionalGroups,
 	}
 
 	res, err := h.service.Preview(r.Context(), query)
 	if err != nil {
-		var strictErr *publication.StrictCapabilityError
-		if errors.As(err, &strictErr) {
+		var capabilityErr *publication.CapabilityValidationError
+		if errors.As(err, &capabilityErr) {
 			w.Header().Set("Cache-Control", "no-store")
 			resp := map[string]any{
-				"code":       strictErr.Code,
-				"message":    strictErr.Message,
+				"code":       capabilityErr.Code,
+				"message":    capabilityErr.Message,
 				"request_id": GetRequestID(r.Context()),
 				"details": map[string]any{
-					"diagnostics": strictErr.Diagnostics,
+					"diagnostics": capabilityErr.Diagnostics,
 				},
 			}
-			if strictErr.SnapshotID != "" {
-				resp["details"].(map[string]any)["snapshot_id"] = strictErr.SnapshotID
+			if capabilityErr.SnapshotID != "" {
+				resp["details"].(map[string]any)["snapshot_id"] = capabilityErr.SnapshotID
 			}
 			WriteJSON(w, http.StatusUnprocessableEntity, resp)
 			return
@@ -224,11 +308,13 @@ func (h publicationAdminHandler) preview(w http.ResponseWriter, r *http.Request)
 
 	w.Header().Set("Cache-Control", "no-store")
 	if r.URL.Query().Get("format") == "raw" {
+		setSafeManifestHeaders(w, &res.Manifest)
 		w.Header().Set("Content-Type", res.ContentType)
 		w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=%q", res.Filename))
 		w.Header().Set("ETag", fmt.Sprintf("%q", res.ContentDigest))
 		w.Header().Set("X-Content-Digest", res.ContentDigest)
 		w.Header().Set("X-Snapshot-Digest", res.SnapshotDigest)
+		w.Header().Set("X-Export-Excluded-Count", fmt.Sprint(res.Manifest.ExcludedCount))
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(res.Content)
 		return

@@ -366,6 +366,11 @@ type canonicalSnapshotPayload struct {
 	ChainEffects       []ChainEffect            `json:"chain_effects,omitempty"`
 }
 
+// ComputeSnapshotDigest 复用解析快照的摘要规则，供目标投影更新摘要
+func ComputeSnapshotDigest(snap *ResolvedPolicySnapshot) (string, error) {
+	return computeSnapshotDigest(snap)
+}
+
 func computeSnapshotDigest(snap *ResolvedPolicySnapshot) (string, error) {
 	cGroups := make([]canonicalSnapshotGroup, len(snap.Groups))
 	for i, g := range snap.Groups {

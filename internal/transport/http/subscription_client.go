@@ -123,13 +123,17 @@ func liveSubscriptionClientHandler(svc *publication.Service) http.HandlerFunc {
 					WriteError(w, r, http.StatusUnprocessableEntity, "preflight_rejected", "Subscription generation blocked by preflight checks")
 					return
 				}
-				var capErr *publication.StrictCapabilityError
-				if errors.As(err, &capErr) {
-					WriteError(w, r, http.StatusUnprocessableEntity, capErr.Code, capErr.Message)
+				var capabilityErr *publication.CapabilityValidationError
+				if errors.As(err, &capabilityErr) {
+					WriteError(w, r, http.StatusUnprocessableEntity, capabilityErr.Code, capabilityErr.Message)
 					return
 				}
 				var de *domain.DomainError
 				if errors.As(err, &de) {
+					if de.Code == "publication_content_integrity_failed" || de.Code == "publication_artifact_unavailable" {
+						WriteError(w, r, http.StatusConflict, de.Code, "Frozen publication artifact is unavailable")
+						return
+					}
 					status := http.StatusUnprocessableEntity
 					switch de.Category {
 					case domain.CategoryNotFound:
@@ -153,6 +157,7 @@ func liveSubscriptionClientHandler(svc *publication.Service) http.HandlerFunc {
 		}
 
 		w.Header().Set("X-Export-Excluded-Count", strconv.Itoa(len(artifact.ExcludedNodes)))
+		setSafeManifestHeaders(w, artifact.Manifest)
 
 		// Conditional request evaluation: only checked after full authorization and artifact compilation
 		ifNoneMatch := strings.TrimSpace(r.Header.Get("If-None-Match"))

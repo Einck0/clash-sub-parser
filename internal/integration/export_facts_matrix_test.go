@@ -115,7 +115,7 @@ func TestExportFactsMatrixAndImmutablePublication(t *testing.T) {
 		if errors.As(err, &preflight) {
 			t.Fatalf("%s: %v; preflight: %+v", operation, err, preflight.Result)
 		}
-		var capability *publication.StrictCapabilityError
+		var capability *publication.CapabilityValidationError
 		if errors.As(err, &capability) {
 			t.Fatalf("%s: %v; capabilities: %+v", operation, err, capability.Diagnostics)
 		}
@@ -136,7 +136,7 @@ func TestExportFactsMatrixAndImmutablePublication(t *testing.T) {
 	var initial []byte
 	for _, tc := range cases {
 		t.Run(string(tc.target), func(t *testing.T) {
-			res, err := svc.Preview(ctx, publication.PreviewQuery{Target: tc.target, RevisionID: rev.ID, CompatMode: "compatible"})
+			res, err := svc.Preview(ctx, publication.PreviewQuery{Target: tc.target, RevisionID: rev.ID})
 			assertPublicationOK(t, "preview", err)
 			if res.Manifest.NodeCount != tc.count || res.Manifest.ExcludedCount != len(tc.excluded) {
 				t.Fatalf("manifest: %+v", res.Manifest)
@@ -165,7 +165,7 @@ func TestExportFactsMatrixAndImmutablePublication(t *testing.T) {
 			}
 		})
 	}
-	if _, err := svc.Preview(ctx, publication.PreviewQuery{Target: domain.TargetSurge, RevisionID: rev.ID, CompatMode: "strict"}); err == nil {
+	if _, err := svc.Preview(ctx, publication.PreviewQuery{Target: domain.TargetSurge, RevisionID: rev.ID}); err == nil {
 		t.Error("strict Surge preview accepted VLESS")
 	}
 	if draft == "" {
@@ -181,7 +181,7 @@ func TestExportFactsMatrixAndImmutablePublication(t *testing.T) {
 	if string(artifact.Content) != string(initial) {
 		t.Error("published bytes changed after refresh")
 	}
-	refreshed, err := svc.Preview(ctx, publication.PreviewQuery{Target: domain.TargetSingBox, RevisionID: rev.ID, CompatMode: "compatible"})
+	refreshed, err := svc.Preview(ctx, publication.PreviewQuery{Target: domain.TargetSingBox, RevisionID: rev.ID})
 	assertPublicationOK(t, "refreshed preview", err)
 	if !strings.Contains(string(refreshed.Content), "matrix-ss-updated") {
 		t.Error("refreshed facts absent from preview")

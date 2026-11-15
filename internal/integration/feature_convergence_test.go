@@ -1726,22 +1726,7 @@ func TestFeatureConvergence_AllFourTargetsFullLifecycleAndRotationRejection(t *t
 		}
 	}
 
-	// Step B1: Surge and Quantumult X strictly fail closed (422 unsupported_target_capability) on 7-protocol snapshot when compat_mode is strict
-	for _, unsupportedTarget := range []string{"surge", "qx"} {
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(fmt.Sprintf(`{"target":%q, "compat_mode":"strict"}`, unsupportedTarget)))
-		req.Header.Set("Authorization", "Bearer dev-insecure-admin-token")
-		req.Header.Set("Content-Type", "application/json")
-		rec := httptest.NewRecorder()
-		router.ServeHTTP(rec, req)
-		if rec.Code != http.StatusUnprocessableEntity {
-			t.Fatalf("expected 422 for %s on preview in strict mode with 7-proto snapshot, got %d: %s", unsupportedTarget, rec.Code, rec.Body.String())
-		}
-		if !strings.Contains(rec.Body.String(), "unsupported_target_capability") {
-			t.Fatalf("expected unsupported_target_capability for %s in strict mode, got: %s", unsupportedTarget, rec.Body.String())
-		}
-	}
-
-	// Step B2: Surge default compatible preview -> publish -> token download (admitting 6 compatible nodes, excluding VLESS)
+	// Step B1: Surge automatically filtered preview -> publish -> token download (admitting 6 nodes, excluding VLESS)
 	{
 		prevReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target":"surge"}`))
 		prevReq.Header.Set("Authorization", "Bearer dev-insecure-admin-token")
@@ -1829,7 +1814,7 @@ func TestFeatureConvergence_AllFourTargetsFullLifecycleAndRotationRejection(t *t
 		}
 	}
 
-	// Step B3: Quantumult X default compatible preview -> publish -> token download (admitting 3 compatible nodes, excluding 4)
+	// Step B2: Quantumult X automatically filtered preview -> publish -> token download (admitting 3 nodes, excluding 4)
 	{
 		prevReq := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(`{"target":"qx"}`))
 		prevReq.Header.Set("Authorization", "Bearer dev-insecure-admin-token")

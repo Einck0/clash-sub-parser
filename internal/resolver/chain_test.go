@@ -100,6 +100,9 @@ func TestResolveChains_SyntheticSubscriptionAndSpringboardGroup_OverlapSkippedAn
 	if foundB.DialerProxy != "Springboard Group" {
 		t.Errorf("expected Node B DialerProxy 'Springboard Group', got %q", foundB.DialerProxy)
 	}
+	if foundB.DialerType != domain.ProxyChainDialerNodeGroup || foundB.DialerID != springboardGroupID {
+		t.Errorf("resolved chain lost stable dialer identity: %+v", foundB)
+	}
 	if foundB.ChainBindingID != "bind-sub" {
 		t.Errorf("expected Node B ChainBindingID 'bind-sub', got %q", foundB.ChainBindingID)
 	}

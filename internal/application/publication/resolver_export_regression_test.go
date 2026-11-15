@@ -279,7 +279,7 @@ func TestPublicationResolverUsesGlobalPoolOnlyForInheritingGroups(t *testing.T) 
 			if inherit {
 				// Inheriting group: candidates are filtered by global filter (which only has US available).
 				// Case-insensitive regex (?i)hk matches 0 nodes in the US-only global pool.
-				// Since the group is routed and empty, strict preflight and preview must reject with empty routing diagnostic.
+				// Since the group is routed and empty, preflight and preview must reject with empty routing diagnostic.
 				preflight, err := svc.Preflight(ctx, publication.PreflightCommand{
 					Target:     domain.TargetMihomo,
 					RevisionID: revision.ID,
@@ -304,14 +304,13 @@ func TestPublicationResolverUsesGlobalPoolOnlyForInheritingGroups(t *testing.T) 
 				_, prevErr := svc.Preview(ctx, publication.PreviewQuery{
 					Target:     domain.TargetMihomo,
 					RevisionID: revision.ID,
-					CompatMode: "strict",
 				})
 				if prevErr == nil {
-					t.Fatal("strict preview should fail for empty routed inheriting group")
+					t.Fatal("preview should fail for empty routed inheriting group")
 				}
-				var strictErr *publication.StrictCapabilityError
-				if !errors.As(prevErr, &strictErr) || strictErr.Code != "required_nonempty" {
-					t.Fatalf("expected strict required_nonempty, got %T: %v", prevErr, prevErr)
+				var topologyErr *publication.CapabilityValidationError
+				if !errors.As(prevErr, &topologyErr) || topologyErr.Code != "required_nonempty" {
+					t.Fatalf("expected required_nonempty, got %T: %v", prevErr, prevErr)
 				}
 				return
 			}
@@ -327,10 +326,9 @@ func TestPublicationResolverUsesGlobalPoolOnlyForInheritingGroups(t *testing.T) 
 			prevRes, err := svc.Preview(ctx, publication.PreviewQuery{
 				Target:     domain.TargetMihomo,
 				RevisionID: revision.ID,
-				CompatMode: "strict",
 			})
 			if err != nil {
-				t.Fatalf("strict preview failed for independent group: %v", err)
+				t.Fatalf("preview failed for independent group: %v", err)
 			}
 			if prevRes.Manifest.NodeCount != 3 {
 				t.Fatalf("expected snapshot global union node_count=3, got %d (manifest: %+v)", prevRes.Manifest.NodeCount, prevRes.Manifest)
@@ -392,7 +390,6 @@ func TestPublicationResolverUsesGlobalPoolOnlyForInheritingGroups(t *testing.T) 
 			zeroPreview, err := svc.Preview(ctx, publication.PreviewQuery{
 				Target:     domain.TargetMihomo,
 				RevisionID: revision.ID,
-				CompatMode: "strict",
 			})
 			if err != nil {
 				t.Fatalf("preview under zero global matches failed: %v", err)
@@ -413,7 +410,7 @@ func TestPublicationResolverUsesGlobalPoolOnlyForInheritingGroups(t *testing.T) 
 				t.Fatalf("global filter accounting changed: %+v", zeroPreview.FilterCounts)
 			}
 			for _, target := range []domain.CompilerTarget{domain.TargetSingBox, domain.TargetSurge} {
-				if _, err := svc.Preview(ctx, publication.PreviewQuery{Target: target, RevisionID: revision.ID, CompatMode: "strict"}); err == nil {
+				if _, err := svc.Preview(ctx, publication.PreviewQuery{Target: target, RevisionID: revision.ID}); err == nil {
 					t.Errorf("node-only target %s must not use non-inheriting Mihomo group", target)
 				}
 			}
@@ -643,7 +640,7 @@ func TestPolicyGroupPreviewRespectsInheritGlobalFilterWithUnavailableNodes(t *te
 	})
 }
 
-func TestStrictPreflightDiagnostics_RequiredNonemptyAndMixedCapabilities(t *testing.T) {
+func TestPreflightDiagnostics_RequiredNonemptyAndTargetExclusions(t *testing.T) {
 	ctx := context.Background()
 	db := newCleanSQLiteDB(t)
 	now := domain.NowUTC()
@@ -764,13 +761,11 @@ func TestStrictPreflightDiagnostics_RequiredNonemptyAndMixedCapabilities(t *test
 	)
 	globalEmptyPass := false
 	if err := filterRepo.SetGlobalFilter(ctx, &domain.GlobalNodeFilter{
-		Spec: domain.NodeFilterSpec{Conditions: []domain.FilterCondition{{
-			Field: domain.FilterFieldDisplayName, Op: domain.FilterOpContains, Value: "no-node-matches-this-filter",
-		}}},
+		Spec:              domain.NodeFilterSpec{},
 		EmptyFallbackPass: &globalEmptyPass,
 		UpdatedAt:         now,
 	}); err != nil {
-		t.Fatalf("set empty global filter for independent empty-route regression: %v", err)
+		t.Fatalf("set global filter for mixed-node empty-route regression: %v", err)
 	}
 
 	// Subtest 1: Pure required_nonempty / empty_routed_group on Mihomo target
@@ -796,6 +791,9 @@ func TestStrictPreflightDiagnostics_RequiredNonemptyAndMixedCapabilities(t *test
 			}
 			if d.Code == "unsupported_target_capability" {
 				foundCapabilityDiag = true
+				if d.Severity != resolver.DiagnosticSeverityWarning || d.Target != string(domain.TargetMihomo) {
+					t.Errorf("expected target-scoped exclusion warning, got %+v", d)
+				}
 			}
 		}
 		if !foundTokyoEmptyDiag || !foundCapabilityDiag {
@@ -816,36 +814,23 @@ func TestStrictPreflightDiagnostics_RequiredNonemptyAndMixedCapabilities(t *test
 		}
 	})
 
-	// Subtest 2: Strict capability failure on non-Mihomo target. The global
-	// filter is cleared so the pure-node Surge snapshot contains the VLESS node;
-	// Surge intentionally strips policy groups/rules.
-	t.Run("strict_capability_diagnostic_surge_rejects_vless", func(t *testing.T) {
-		if err := filterRepo.SetGlobalFilter(ctx, &domain.GlobalNodeFilter{
-			Spec: domain.NodeFilterSpec{}, EmptyFallbackPass: &globalEmptyPass, UpdatedAt: now,
-		}); err != nil {
-			t.Fatalf("clear global filter for Surge capability case: %v", err)
-		}
-		_, err := svc.Preview(ctx, publication.PreviewQuery{
+	// Surge ignores policy topology and exports the compatible SS node after excluding VLESS
+	t.Run("surge_filters_vless_keeps_shadowsocks", func(t *testing.T) {
+		preview, err := svc.Preview(ctx, publication.PreviewQuery{
 			Target:     domain.TargetSurge,
 			RevisionID: rev.ID,
-			CompatMode: "strict",
 		})
-		if err == nil {
-			t.Fatal("expected strict Surge preview to fail on VLESS node, got nil")
+		if err != nil {
+			t.Fatalf("expected mixed Surge preview to succeed after filtering: %v", err)
 		}
-		var strictCapErr *publication.StrictCapabilityError
-		if !errors.As(err, &strictCapErr) {
-			t.Fatalf("expected *publication.StrictCapabilityError, got %T: %v", err, err)
+		if preview.Manifest.NodeCount != 1 || preview.Manifest.ExcludedCount != 1 {
+			t.Fatalf("expected one included and one excluded node, got %+v", preview.Manifest)
 		}
-		foundVLESSDiag := false
-		for _, cd := range strictCapErr.Diagnostics {
-			if cd.Code == "unsupported_target_capability" && cd.NodeID == vlessID {
-				foundVLESSDiag = true
-				break
-			}
+		if len(preview.Manifest.Excluded) != 1 || preview.Manifest.Excluded[0].NodeID != vlessID || preview.Manifest.Excluded[0].Code != "unsupported_target_capability" {
+			t.Fatalf("expected target-scoped VLESS exclusion, got %+v", preview.Manifest.Excluded)
 		}
-		if !foundVLESSDiag {
-			t.Fatalf("expected unsupported_target_capability for node %s, got: %+v", vlessID, strictCapErr.Diagnostics)
+		if !strings.Contains(string(preview.Content), "Shadowsocks Node") || strings.Contains(string(preview.Content), "HK VLESS Node") {
+			t.Fatalf("expected only Shadowsocks content, got %s", preview.Content)
 		}
 	})
 
@@ -856,7 +841,8 @@ func TestStrictPreflightDiagnostics_RequiredNonemptyAndMixedCapabilities(t *test
 			SnapshotDigest:  "sha256:test-snap",
 			CompilerVersion: "1.0.0",
 			Nodes: []resolver.ResolvedNode{
-				{LogicalID: vlessID, Protocol: domain.ProtocolVLESS, DisplayName: "VLESS", Active: true},
+				{LogicalID: vlessID, Protocol: domain.ProtocolVLESS, DisplayName: "VLESS", Server: "198.51.100.61", Port: 443,
+					Credentials: domain.InboundProtocolCredential{UUID: "11111111-2222-3333-4444-555555555555"}, Active: true},
 			},
 			Groups: []resolver.ResolvedGroup{
 				{
@@ -895,10 +881,19 @@ func TestStrictPreflightDiagnostics_RequiredNonemptyAndMixedCapabilities(t *test
 		if !foundRequiredNonempty || !foundCap {
 			t.Errorf("expected both required_nonempty and unsupported_target_capability in mihomoDiags: %+v", mihomoDiags)
 		}
-		_, mixedErr := svc.Preview(ctx, publication.PreviewQuery{Target: domain.TargetMihomo, RevisionID: rev.ID, Snapshot: snap, CompatMode: "strict"})
-		var mixedStrict *publication.StrictCapabilityError
-		if !errors.As(mixedErr, &mixedStrict) || mixedStrict.Code != "unsupported_target_capability" || len(mixedStrict.Diagnostics) < 2 {
-			t.Fatalf("expected mixed strict capability wrapper preserving diagnostics, got: %v", mixedErr)
+		// The unsupported node is filtered first; the remaining valid VLESS node cannot fill an unrelated empty group
+		projected, excluded := compiler.FilterCompatibleSnapshot(snap, domain.TargetMihomo)
+		if len(projected.Nodes) != 1 || projected.Nodes[0].LogicalID != vlessID || len(excluded) != 1 || excluded[0].NodeID != "synthetic-bad-network" {
+			t.Fatalf("unexpected mixed-node projection: nodes=%+v excluded=%+v", projected.Nodes, excluded)
+		}
+		remainingDiags := compiler.ValidateTargetCapabilities(projected, domain.TargetMihomo)
+		if len(remainingDiags) != 1 || remainingDiags[0].Code != "required_nonempty" {
+			t.Fatalf("expected only remaining empty-group topology error, got %+v", remainingDiags)
+		}
+		_, mixedErr := svc.Preview(ctx, publication.PreviewQuery{Target: domain.TargetMihomo, RevisionID: rev.ID, Snapshot: snap})
+		var topologyErr *publication.CapabilityValidationError
+		if !errors.As(mixedErr, &topologyErr) || topologyErr.Code != "required_nonempty" || len(topologyErr.Diagnostics) != 1 {
+			t.Fatalf("expected required_nonempty after filtering the unsupported node, got: %v", mixedErr)
 		}
 
 		// Surge flags unsupported_target_capability for VLESS
@@ -917,7 +912,7 @@ func TestStrictPreflightDiagnostics_RequiredNonemptyAndMixedCapabilities(t *test
 
 // TestGlobalFilterTrueEmpty_BothGlobalAndGroupsEmpty verifies that when a global filter
 // matches 0 nodes AND all policy groups are also empty (true empty inventory),
-// strict Preflight and Preview correctly detect and reject with filtered_nodes_empty.
+// Preflight and Preview correctly detect and reject with filtered_nodes_empty.
 func TestGlobalFilterTrueEmpty_BothGlobalAndGroupsEmpty(t *testing.T) {
 	ctx := context.Background()
 	db := newCleanSQLiteDB(t)
@@ -1049,16 +1044,15 @@ func TestGlobalFilterTrueEmpty_BothGlobalAndGroupsEmpty(t *testing.T) {
 	_, prevErr := svc.Preview(ctx, publication.PreviewQuery{
 		Target:     domain.TargetMihomo,
 		RevisionID: rev.ID,
-		CompatMode: "strict",
 	})
 	if prevErr == nil {
-		t.Fatal("strict preview should fail when global and all groups are truly empty")
+		t.Fatal("preview should fail when global and all groups are truly empty")
 	}
 }
 
 // TestNonMihomoPureNodeExportBoundary verifies that non-Mihomo targets (Sing-box, Surge)
 // operate on pure node candidate pools (ignoring proxy-group routing structures)
-// and properly validate capabilities in strict mode vs compatible mode.
+// and automatically exclude unsupported nodes without affecting other targets.
 func TestNonMihomoPureNodeExportBoundary(t *testing.T) {
 	ctx := context.Background()
 	db := newCleanSQLiteDB(t)
@@ -1128,25 +1122,6 @@ func TestNonMihomoPureNodeExportBoundary(t *testing.T) {
 		publication.WithNodeSourceRepository(sourceRepo),
 		publication.WithConsistentFactsLoader(factsLoader),
 	)
-
-	// Surge in strict mode rejects VLESS
-	t.Run("surge_strict_rejects_vless_pure_node", func(t *testing.T) {
-		_, err := svc.Preview(ctx, publication.PreviewQuery{
-			Target:     domain.TargetSurge,
-			RevisionID: rev.ID,
-			CompatMode: "strict",
-		})
-		if err == nil {
-			t.Fatal("expected strict Surge preview to fail on VLESS node")
-		}
-		var strictCapErr *publication.StrictCapabilityError
-		if !errors.As(err, &strictCapErr) {
-			t.Fatalf("expected *publication.StrictCapabilityError, got %T: %v", err, err)
-		}
-		if strictCapErr.Code != "unsupported_target_capability" {
-			t.Errorf("expected code unsupported_target_capability, got %s", strictCapErr.Code)
-		}
-	})
 
 	t.Run("vless_raw_preview_direct_and_live_mihomo_export", func(t *testing.T) {
 		ctx := context.Background()
@@ -1231,9 +1206,9 @@ func TestNonMihomoPureNodeExportBoundary(t *testing.T) {
 			publication.WithConsistentFactsLoader(sqlite.NewConsistentFactsLoader(db)),
 		)
 
-		prevRes, err := rawSvc.Preview(ctx, publication.PreviewQuery{Target: domain.TargetMihomo, RevisionID: rev.ID, CompatMode: "strict"})
+		prevRes, err := rawSvc.Preview(ctx, publication.PreviewQuery{Target: domain.TargetMihomo, RevisionID: rev.ID})
 		if err != nil {
-			t.Fatalf("strict Mihomo preview rejected VLESS raw in non-inheriting HK group: %v", err)
+			t.Fatalf("Mihomo preview rejected VLESS raw in non-inheriting HK group: %v", err)
 		}
 		directArt, err := rawSvc.GenerateTargetArtifact(ctx, domain.TargetMihomo)
 		if err != nil {
@@ -1263,28 +1238,27 @@ func TestNonMihomoPureNodeExportBoundary(t *testing.T) {
 		}
 	})
 
-	// Surge in compatible mode filters out VLESS and exports Shadowsocks
-	t.Run("surge_compatible_filters_vless_exports_shadowsocks", func(t *testing.T) {
+	// Surge automatically filters out VLESS and exports Shadowsocks
+	t.Run("surge_filters_vless_exports_shadowsocks", func(t *testing.T) {
 		prevRes, err := svc.Preview(ctx, publication.PreviewQuery{
 			Target:     domain.TargetSurge,
 			RevisionID: rev.ID,
-			CompatMode: "compatible",
 		})
 		if err != nil {
-			t.Fatalf("compatible Surge preview failed: %v", err)
+			t.Fatalf("automatically filtered Surge preview failed: %v", err)
 		}
 		if prevRes.Manifest.NodeCount != 1 {
-			t.Fatalf("expected 1 node in compatible Surge manifest, got %d", prevRes.Manifest.NodeCount)
+			t.Fatalf("expected 1 node in Surge manifest, got %d", prevRes.Manifest.NodeCount)
 		}
 		if prevRes.Manifest.ExcludedCount != 1 {
-			t.Fatalf("expected 1 excluded node in compatible Surge manifest, got %d", prevRes.Manifest.ExcludedCount)
+			t.Fatalf("expected 1 excluded node in Surge manifest, got %d", prevRes.Manifest.ExcludedCount)
 		}
 		content := string(prevRes.Content)
 		if !strings.Contains(content, "Shadowsocks Universal") {
-			t.Errorf("compatible Surge export missing Shadowsocks node: %s", content)
+			t.Errorf("Surge export missing Shadowsocks node: %s", content)
 		}
 		if strings.Contains(content, "VLESS Strict Candidate") {
-			t.Errorf("compatible Surge export should NOT contain VLESS node: %s", content)
+			t.Errorf("Surge export should NOT contain VLESS node: %s", content)
 		}
 	})
 
@@ -1293,10 +1267,9 @@ func TestNonMihomoPureNodeExportBoundary(t *testing.T) {
 		prevRes, err := svc.Preview(ctx, publication.PreviewQuery{
 			Target:     domain.TargetSingBox,
 			RevisionID: rev.ID,
-			CompatMode: "strict",
 		})
 		if err != nil {
-			t.Fatalf("strict Sing-box preview failed: %v", err)
+			t.Fatalf("Sing-box preview failed: %v", err)
 		}
 		if prevRes.Manifest.NodeCount != 2 {
 			t.Fatalf("expected 2 nodes in Sing-box manifest, got %d", prevRes.Manifest.NodeCount)
@@ -1308,10 +1281,8 @@ func TestNonMihomoPureNodeExportBoundary(t *testing.T) {
 	})
 }
 
-// TestLegacyPublicationRecompileFallback verifies the fallback path in ResolveAndServeAuthorized
-// for legacy publication records that were persisted without Content (Content = nil or empty).
-// The service must recompile the snapshot on-the-fly using the publication's RevisionID.
-func TestLegacyPublicationRecompileFallback(t *testing.T) {
+// Legacy publications without frozen bytes cannot be reconstructed from mutable inventory.
+func TestLegacyPublicationWithoutFrozenContentFailsClosed(t *testing.T) {
 	ctx := context.Background()
 	db := newCleanSQLiteDB(t)
 	now := domain.NowUTC()
@@ -1377,7 +1348,7 @@ func TestLegacyPublicationRecompileFallback(t *testing.T) {
 		ContentDigest:   "sha256:legacy-content-digest",
 		ContentType:     "application/json",
 		Filename:        "sing-box.json",
-		Content:         nil, // Empty content triggers on-the-fly recompile fallback
+		Content:         nil, // Legacy record has no frozen artifact
 		CompilerVersion: "1.0.0",
 		TokenHash:       "",
 		State:           domain.PublicationStateActive,
@@ -1388,15 +1359,10 @@ func TestLegacyPublicationRecompileFallback(t *testing.T) {
 	}
 
 	served, err := svc.ResolveAndServeAuthorized(ctx, legacyPubID, func(pubTokenHash string) bool {
-		return true // isolate the recompile fallback from token generation
+		return true // Isolate artifact verification from token generation
 	})
-	if err != nil {
-		t.Fatalf("ResolveAndServeAuthorized failed on legacy publication fallback: %v", err)
-	}
-	if served == nil || len(served.Content) == 0 {
-		t.Fatal("expected recompiled content from legacy publication fallback, got empty")
-	}
-	if !strings.Contains(string(served.Content), "Legacy Recompile Node") {
-		t.Errorf("served legacy recompile content missing node: %s", string(served.Content))
+	domainErr, ok := domain.AsDomainError(err)
+	if !ok || domainErr.Code != "publication_artifact_unavailable" || served != nil {
+		t.Fatalf("legacy publication must reject rather than change its frozen digest: artifact=%+v err=%v", served, err)
 	}
 }

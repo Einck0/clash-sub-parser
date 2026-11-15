@@ -682,7 +682,6 @@ func (o *MaintenanceOrchestrator) executePreview(ctx context.Context, cfg Mainte
 
 	prev, err := o.pubService.Preview(ctx, publication.PreviewQuery{
 		Target:                         domain.TargetMihomo,
-		CompatMode:                     "strict",
 		PruneUnavailableOptionalGroups: cfg.OmitUnavailableOptionalGroups,
 		OmitUnavailableOptionalGroups:  cfg.OmitUnavailableOptionalGroups,
 	})

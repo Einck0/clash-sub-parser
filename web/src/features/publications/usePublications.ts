@@ -6,7 +6,6 @@ import {
   isValidCompilerTarget,
   targetLabel,
   type CompilerTarget,
-  type CompatMode,
   type Diagnostic,
   type PreviewResult,
   type PublicationDetail,
@@ -273,7 +272,6 @@ export function usePublications(initialTarget?: CompilerTarget) {
       : getStoredTarget()
 
   const selectedTarget = ref<CompilerTarget>(resolvedInitial)
-  const compatMode = ref<CompatMode>('strict')
   const preview = ref<PreviewResult | null>(null)
   const activePublication = ref<PublicationDetail | null>(getStoredPublication(resolvedInitial))
   watch(publicationSession, () => {
@@ -407,13 +405,6 @@ export function usePublications(initialTarget?: CompilerTarget) {
     generalLinkError.value = ''
   }, { flush: 'sync' })
 
-  watch(compatMode, () => {
-    preview.value = null
-    error.value = ''
-    errorDetail.value = null
-    preflightDiagnostics.value = []
-  })
-
   const isNoActiveRevision = computed(() => {
     const err = errorDetail.value
     if (err && err instanceof ApiError) {
@@ -424,24 +415,16 @@ export function usePublications(initialTarget?: CompilerTarget) {
 
   async function fetchPreview(
     target: CompilerTarget,
-    revisionId?: string,
-    mode?: CompatMode
+    revisionId?: string
   ): Promise<PreviewResult | null> {
     const request = ++previewRequest
     const session = publicationSession.value
-    const effectiveMode = mode ?? compatMode.value ?? 'strict'
-    if (mode && compatMode.value !== mode) {
-      compatMode.value = mode
-    }
     loadingPreview.value = true
     error.value = ''
     errorDetail.value = null
     preflightDiagnostics.value = []
     try {
-      const payload: Record<string, string> = {
-        target,
-        compat_mode: effectiveMode,
-      }
+      const payload: Record<string, string> = { target }
       if (revisionId) payload.revision_id = revisionId
       const res = await api.post<PreviewResult>('/api/v1/publications/preview', payload)
       if (request === previewRequest && selectedTarget.value === target && session === publicationSession.value) {
@@ -524,6 +507,18 @@ export function usePublications(initialTarget?: CompilerTarget) {
       }
       if (!res.id || !res.export_url || new URL(res.export_url, 'http://localhost').pathname !== `/publish/v1/${encodeURIComponent(res.id)}`) {
         throw new Error('Publication response does not contain a valid ID and export URL')
+      }
+      const responseUrl = new URL(res.export_url, 'http://localhost')
+      if (rawRes?.raw_token === 'active' || responseUrl.searchParams.get('token') === 'active') {
+        const previous = getStoredPublication(resolvedTarget)
+        const previousUrl = previous?.export_url ? new URL(previous.export_url, 'http://localhost') : null
+        const previousToken = previousUrl?.searchParams.get('token')
+        res.export_url = previous?.id === res.id
+          && previous.target === resolvedTarget
+          && previousUrl?.pathname === responseUrl.pathname
+          && previousToken && previousToken !== 'active'
+          ? previous.export_url
+          : responseUrl.pathname
       }
       if (request === publishRequests.get(target)) {
         setStoredPublication(res)
@@ -661,7 +656,7 @@ export function usePublications(initialTarget?: CompilerTarget) {
     url.search = ''
     url.hash = ''
     if (protectedExport) {
-      if (!token) return ''
+      if (!token || token === 'active') return ''
       url.searchParams.set('token', token)
     }
     return url.toString()
@@ -881,7 +876,6 @@ export function usePublications(initialTarget?: CompilerTarget) {
 
   return {
     selectedTarget,
-    compatMode,
     preview,
     activePublication,
     loadingPreview,

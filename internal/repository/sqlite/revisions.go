@@ -327,6 +327,7 @@ const selectPublicationColumnsSQL = `
 		content_type,
 		filename,
 		content,
+		manifest_json,
 		compiler_version,
 		token_hash,
 		state,
@@ -339,6 +340,7 @@ func scanPublicationRow(row *sql.Row, notFoundMsg string) (*domain.Publication, 
 	var targetStr, stateStr, createdStr string
 	var revokedStr sql.NullString
 	var content []byte
+	var manifestJSON string
 
 	err := row.Scan(
 		&pub.ID,
@@ -349,6 +351,7 @@ func scanPublicationRow(row *sql.Row, notFoundMsg string) (*domain.Publication, 
 		&pub.ContentType,
 		&pub.Filename,
 		&content,
+		&manifestJSON,
 		&pub.CompilerVersion,
 		&pub.TokenHash,
 		&stateStr,
@@ -360,6 +363,12 @@ func scanPublicationRow(row *sql.Row, notFoundMsg string) (*domain.Publication, 
 			return nil, domain.NewNotFoundError("publication_not_found", notFoundMsg)
 		}
 		return nil, fmt.Errorf("failed to query publication: %w", err)
+	}
+
+	if manifestJSON != "" {
+		if err := json.Unmarshal([]byte(manifestJSON), &pub.Manifest); err != nil {
+			return nil, fmt.Errorf("failed to decode publication manifest: %w", err)
+		}
 	}
 
 	pub.Target = domain.CompilerTarget(targetStr)
@@ -409,12 +418,13 @@ func (r *publicationRepository) CreateWithEvidence(ctx context.Context, pub *dom
 		content_type,
 		filename,
 		content,
+		manifest_json,
 		compiler_version,
 		token_hash,
 		state,
 		created_at,
 		revoked_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
 
 	createdStr := pub.CreatedAt.Format(time.RFC3339)
 	if pub.CreatedAt.IsZero() {
@@ -431,6 +441,16 @@ func (r *publicationRepository) CreateWithEvidence(ctx context.Context, pub *dom
 		content = []byte{}
 	}
 
+	// 只保存结构化清单，不从节点连接配置或编译内容复制敏感字段
+	manifestJSON := ""
+	if pub.Manifest != nil {
+		encoded, err := json.Marshal(pub.Manifest)
+		if err != nil {
+			return fmt.Errorf("failed to encode publication manifest: %w", err)
+		}
+		manifestJSON = string(encoded)
+	}
+
 	return WithTx(ctx, r.db, func(ctx context.Context, tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, query,
 			pub.ID,
@@ -441,6 +461,7 @@ func (r *publicationRepository) CreateWithEvidence(ctx context.Context, pub *dom
 			pub.ContentType,
 			pub.Filename,
 			content,
+			manifestJSON,
 			pub.CompilerVersion,
 			pub.TokenHash,
 			string(pub.State),

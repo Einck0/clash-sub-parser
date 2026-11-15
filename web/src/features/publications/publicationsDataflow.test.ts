@@ -75,11 +75,11 @@ describe('CSP Dataflow Publications & Snapshot Publishing Specification', () => 
     expect(errorCard?.textContent).toContain('HTTP 422')
   })
 
-  it('Point 7: captures all diagnostics when strict preview fails with 422 in usePublications', async () => {
-    const strictError = new ApiError(
+  it('Point 7: captures all diagnostics when automatic target filtering fails in usePublications', async () => {
+    const filteringError = new ApiError(
       422,
       'unsupported_target_capability',
-      'Strict preview rejected due to incompatible capabilities',
+      'Target filtering left no usable nodes',
       undefined,
       {
         diagnostics: [
@@ -100,10 +100,10 @@ describe('CSP Dataflow Publications & Snapshot Publishing Specification', () => 
       }
     )
 
-    vi.spyOn(api, 'post').mockRejectedValue(strictError)
+    vi.spyOn(api, 'post').mockRejectedValue(filteringError)
 
     const pub = usePublications('singbox')
-    await pub.fetchPreview('singbox', undefined, 'strict')
+    await pub.fetchPreview('singbox')
 
     expect(pub.preflightDiagnostics.value).toHaveLength(2)
     expect(pub.preflightDiagnostics.value[0].code).toBe('unsupported_target_capability')
@@ -111,7 +111,7 @@ describe('CSP Dataflow Publications & Snapshot Publishing Specification', () => 
     expect(pub.preflightDiagnostics.value[0].node_id).toBe('node-us-xhttp')
   })
 
-  it('Point 8: retains excluded nodes and reasons transparently in compatible preview mode in usePublications', async () => {
+  it('Point 8: retains excluded nodes and reasons transparently in automatic target filtering', async () => {
     const compatPreview: PreviewResult = {
       snapshot_id: 'snap-compat-888',
       snapshot_digest: 'sha256:compat-snap',
@@ -142,7 +142,7 @@ describe('CSP Dataflow Publications & Snapshot Publishing Specification', () => 
     vi.spyOn(api, 'post').mockResolvedValue(compatPreview)
 
     const pub = usePublications('surge')
-    await pub.fetchPreview('surge', undefined, 'compatible')
+    await pub.fetchPreview('surge')
 
     expect(pub.preview.value?.manifest?.excluded).toHaveLength(2)
     expect(pub.preview.value?.manifest?.excluded?.[0].node_id).toBe('node-vless-sg')
@@ -173,6 +173,34 @@ describe('CSP Dataflow Publications & Snapshot Publishing Specification', () => 
       target: 'mihomo',
       snapshot_id: 'snap-exact-id-777',
     })
+  })
+
+  it('keeps the original frozen token when publishing an already active snapshot', async () => {
+    vi.spyOn(api, 'post')
+      .mockResolvedValueOnce({
+        publication: { id: 'snapshot-existing', target: 'mihomo' },
+        export_url: '/publish/v1/snapshot-existing?token=synthetic-original-token',
+      })
+      .mockResolvedValueOnce({
+        publication: { id: 'snapshot-existing', target: 'mihomo' },
+        raw_token: 'active', export_url: '/publish/v1/snapshot-existing?token=active',
+      })
+      .mockResolvedValueOnce({
+        publication: { id: 'snapshot-unknown', target: 'mihomo' },
+        raw_token: 'active', export_url: '/publish/v1/snapshot-unknown?token=active',
+      })
+    const pub = usePublications('mihomo')
+    await pub.publish('mihomo', 'snapshot-existing')
+    await pub.publish('mihomo', 'snapshot-existing')
+    expect(new URL(pub.getFullExportUrl()).searchParams.get('token')).toBe('synthetic-original-token')
+    await pub.publish('mihomo', 'snapshot-unknown')
+    expect(pub.getFullExportUrl()).toBe('')
+    expect(pub.activePublication.value?.export_url).not.toContain('token=active')
+    sessionStorage.setItem('csp_publication_active_mihomo', JSON.stringify({
+      id: 'snapshot-legacy', target: 'mihomo', export_url: '/publish/v1/snapshot-legacy?token=active',
+    }))
+    const restored = usePublications('mihomo')
+    expect(restored.getFullExportUrl()).toBe('')
   })
 
   it('Point 10: clears old snapshot when target changes and rejects mismatched snapshot', async () => {
@@ -227,6 +255,73 @@ describe('CSP Dataflow Publications & Snapshot Publishing Specification', () => 
 
     expect(pub.error.value).toContain('Session expired')
     expect((pub.errorDetail.value as ApiError)?.status).toBe(401)
+  })
+
+  it('renders automatic preview exclusions and prevents publish/download after preview failure', async () => {
+    const previewResult: PreviewResult = {
+      snapshot_id: 'snap-preview-1',
+      target: 'mihomo',
+      snapshot_digest: 'snap-digest',
+      content_digest: 'content-digest',
+      content: 'proxies: []',
+      content_type: 'application/x-yaml',
+      filename: 'mihomo.yaml',
+      manifest: {
+        node_count: 1,
+        excluded_count: 1,
+        excluded: [{ node_id: 'node-bad', code: 'unsupported_target_capability', reason: 'unsupported by Mihomo' }],
+      },
+    }
+    const post = vi.spyOn(api, 'post').mockResolvedValue(previewResult)
+    vi.spyOn(api, 'get').mockResolvedValue([])
+    app = createApp({ render: () => h(PublicationsView) })
+    app.mount(container)
+    await nextTick()
+
+    container.querySelector('[data-testid="preview-client-subscription-mihomo"]')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(post).toHaveBeenCalledWith('/api/v1/publications/preview', { target: 'mihomo' })
+    expect(container.querySelector('[data-testid="compat-mode-select"]')).toBeNull()
+    expect(container.textContent).not.toContain('compatible / strict')
+    expect(container.querySelector('[data-testid="preview-exclusions"]')?.textContent).toContain('node-bad')
+    expect(container.querySelector('[data-testid="preview-exclusions"]')?.textContent).toContain('unsupported_target_capability')
+    expect(container.querySelector('[data-testid="publish-preview-btn"]')).not.toBeNull()
+    post.mockRejectedValue(new ApiError(422, 'unsupported_target_capability', 'Target projection rejected', undefined, {
+      diagnostics: [{ code: 'unsupported_target_capability', target: 'mihomo', message: 'incompatible node' }],
+    }))
+    container.querySelector('[data-testid="preview-client-subscription-mihomo"]')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(container.querySelector('[data-testid="preview-error"]')?.textContent).toContain('incompatible node')
+    expect(container.querySelector('[data-testid="preview-actions"]')).toBeNull()
+  })
+
+  it('shows the frozen publication link separately from the live subscription link', async () => {
+    vi.spyOn(api, 'post').mockImplementation(async (path: string) => {
+      if (path === '/api/v1/publications/preview') {
+        return {
+          snapshot_id: 'snapshot-frozen', target: 'mihomo', snapshot_digest: 'snapshot-digest',
+          content_digest: 'content-digest', content: 'proxies: []', content_type: 'application/x-yaml',
+          filename: 'mihomo.yaml', manifest: { node_count: 1, excluded_count: 0 },
+        }
+      }
+      return {
+        publication: { id: 'snapshot-frozen', target: 'mihomo', snapshot_digest: 'snapshot-digest' },
+        export_url: '/publish/v1/snapshot-frozen?token=synthetic-export-token',
+      }
+    })
+    app = createApp({ render: () => h(PublicationsView) })
+    app.mount(container)
+    await nextTick()
+    container.querySelector('[data-testid="preview-client-subscription-mihomo"]')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    container.querySelector('[data-testid="publish-preview-btn"]')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    const frozenUrl = container.querySelector<HTMLInputElement>('[data-testid="frozen-publication-url"]')?.value || ''
+    expect(new URL(frozenUrl).pathname).toBe('/publish/v1/snapshot-frozen')
+    expect(new URL(frozenUrl).searchParams.get('token')).toBe('synthetic-export-token')
+    const liveUrl = container.querySelector<HTMLInputElement>('[data-testid="direct-url-input-mihomo"]')?.value || ''
+    expect(new URL(liveUrl).pathname).toBe('/clash')
+    expect(container.querySelector('[data-testid="copy-frozen-publication-btn"]')).not.toBeNull()
   })
 
   it('Point 12: renders responsively at mobile (375x667) and desktop without layout overflow', async () => {

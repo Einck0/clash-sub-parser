@@ -24,7 +24,7 @@ import {
   type NormalizedNode,
 } from './nodeView'
 import { useNodes, type HealthFilterType } from './useNodes'
-import { IP_RISK_BANDS } from '../policy/policyTypes'
+import { IP_RISK_BANDS, IP_RISK_BAND_LABELS } from '../policy/policyTypes'
 import { t } from '../../locales'
 import { uiText } from '../../locales/redesign'
 
@@ -53,7 +53,7 @@ const {
   riskScoreMax,
   searchQuery,
   selectedNode,
-  load,
+  load: loadNodes,
   loadMore,
   syncPoolStatus,
   fetchNodeDetail,
@@ -350,6 +350,43 @@ const healthCounts = computed(() => {
 
 // The API applies all active filters before counting and paginating.
 const filteredItems = computed(() => items.value)
+
+const appliedSearchQuery = ref('')
+
+function load() {
+  appliedSearchQuery.value = searchQuery.value.trim()
+  return loadNodes()
+}
+
+const activeFilterSummary = computed(() => {
+  const conditions: string[] = []
+  if (protocolFilter.value !== 'all') {
+    conditions.push(`${uiText('协议', 'Protocol')}: ${protocolFilter.value.toUpperCase()}`)
+  }
+  if (healthFilter.value !== 'all') {
+    const labels: Record<string, string> = {
+      probing: uiText('检测中', 'Probing'),
+      healthy: uiText('正常', 'Healthy'),
+      degraded: uiText('降级', 'Degraded'),
+      unhealthy: uiText('异常', 'Unhealthy'),
+      undetermined: uiText('未知', 'Unknown'),
+      untested: uiText('未知', 'Unknown'),
+      unknown: uiText('未知', 'Unknown'),
+    }
+    conditions.push(`${uiText('状态', 'Health')}: ${labels[healthFilter.value] || healthFilter.value}`)
+  }
+  if (riskBandFilter.value !== 'all') {
+    const band = riskBandFilter.value as keyof typeof IP_RISK_BAND_LABELS
+    conditions.push(`${uiText('IP 风险', 'IP risk')}: ${IP_RISK_BAND_LABELS[band] || band}`)
+  }
+  if (riskScoreMax.value !== '') {
+    conditions.push(`${uiText('风险分数上限', 'Maximum risk score')}: ${riskScoreMax.value}`)
+  }
+  if (appliedSearchQuery.value) {
+    conditions.push(`${uiText('搜索', 'Search')}: ${appliedSearchQuery.value}`)
+  }
+  return conditions.join(' · ')
+})
 
 async function handleProbeSelectedNode(node: NormalizedNode) {
   probeFeedback.value = `已将节点「${node.displayName}」插队至节点池最前面优先检测...`
@@ -918,12 +955,18 @@ onUnmounted(() => {
       </div>
 
       <!-- Empty State & Starvation Guard if filtered count is 0 -->
-      <div v-if="!filteredItems.length && !loading">
+      <div v-if="!filteredItems.length && !loading && initialLoaded && !error" aria-live="polite">
         <EmptyState
           :icon="EyeIcon"
-          :title="items.length === 0 ? t('nodes.emptyTitle') : '没有匹配筛选状态的节点'"
-          :description="items.length === 0 ? t('nodes.emptyDesc') : '请尝试切换节点状态筛选或协议筛选条件。'"
-        />
+          :title="activeFilterSummary ? uiText('没有匹配当前条件的节点', 'No nodes match the current filters') : t('nodes.emptyTitle')"
+          :description="activeFilterSummary ? uiText('尝试调整条件，或重置筛选查看节点。', 'Adjust the conditions or reset filters to view nodes.') : t('nodes.emptyDesc')"
+          :action-label="activeFilterSummary ? uiText('重置筛选', 'Reset filters') : ''"
+          @action="resetFilters"
+        >
+          <p v-if="activeFilterSummary" data-testid="node-empty-filter-summary" class="mt-3 max-w-lg text-xs text-base-content/70 break-words [overflow-wrap:anywhere]">
+            {{ activeFilterSummary }}
+          </p>
+        </EmptyState>
         <div
           v-if="hasMore && !loadingMore && !isAutoPaginating && consecutiveAutoPages >= MAX_AUTO_PAGE_STEPS"
           class="text-center py-3"

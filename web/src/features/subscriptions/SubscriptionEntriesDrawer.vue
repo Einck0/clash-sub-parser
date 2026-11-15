@@ -60,6 +60,10 @@ const unknownEntries = computed(() =>
   entries.value.filter((e) => e.effective_kind === 'unknown')
 )
 
+const formatErrors = computed(() =>
+  entries.value.filter((e) => e.effective_kind === 'format_error')
+)
+
 async function handleOverride(
   entry: SubscriptionEntryDTO,
   newKind: EntryKind | null
@@ -143,6 +147,18 @@ function handleRefresh() {
 
       <!-- Content Area -->
       <div v-else class="space-y-4">
+        <section
+          v-if="formatErrors.length > 0"
+          data-testid="subscription-format-errors"
+          class="rounded-xl border border-warning/40 p-3 space-y-2"
+        >
+          <h3 class="font-semibold text-warning">格式错误 · 仅展示，不参与订阅 ({{ formatErrors.length }})</h3>
+          <p class="text-xs opacity-70">以下为最近一次获取的脱敏诊断，fetch 标识用于追溯来源；解析失败时保留的上次有效节点仍单独展示</p>
+          <div v-for="entry in formatErrors" :key="entry.entry_id" class="text-xs break-words">
+            <p class="font-mono">{{ entry.name }}</p>
+            <p>{{ entry.classification_reason }}</p>
+          </div>
+        </section>
         <!-- Announcements / Notices Section (Preserved, distinct from proxy nodes) -->
         <section
           v-if="notices.length > 0"

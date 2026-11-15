@@ -182,7 +182,7 @@ describe('usePublications composable', () => {
     const { preview, loadingPreview, fetchPreview, selectedTarget } = usePublications()
     await fetchPreview('mihomo')
 
-    expect(postSpy).toHaveBeenCalledWith('/api/v1/publications/preview', { target: 'mihomo', compat_mode: 'strict' })
+    expect(postSpy).toHaveBeenCalledWith('/api/v1/publications/preview', { target: 'mihomo' })
     expect(loadingPreview.value).toBe(false)
     expect(selectedTarget.value).toBe('mihomo')
     expect(preview.value).toEqual(mockPreview)

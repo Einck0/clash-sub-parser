@@ -202,11 +202,12 @@ const parsedUserinfo = computed(() => parseUserInfo(props.subscription.userinfo)
       <div
         v-if="rowError"
         data-testid="sub-row-error"
-        class="alert alert-error py-1.5 px-3 text-xs flex items-center justify-between gap-2 rounded-xl"
+        role="status"
+        class="alert alert-error py-1.5 px-3 text-xs flex items-start justify-between gap-2 rounded-xl"
       >
-        <div class="flex items-center gap-2 min-w-0">
+        <div class="flex items-start gap-2 min-w-0 flex-1">
           <ExclamationCircleIcon class="h-4 w-4 shrink-0" />
-          <span class="truncate">{{ rowError }}</span>
+          <span class="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{{ rowError }}</span>
         </div>
         <button
           type="button"

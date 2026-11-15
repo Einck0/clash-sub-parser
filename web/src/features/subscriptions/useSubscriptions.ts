@@ -32,7 +32,7 @@ export interface SubscriptionConfig {
   probe_policy?: SubscriptionProbePolicy
 }
 
-export type EntryKind = 'proxy' | 'notice' | 'unknown'
+export type EntryKind = 'proxy' | 'notice' | 'unknown' | 'format_error'
 
 export interface SubscriptionEntryDTO {
   entry_id: string

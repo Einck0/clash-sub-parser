@@ -13,8 +13,10 @@ import (
 	"time"
 
 	"clash-sub-parser/internal/application/publication"
+	"clash-sub-parser/internal/compiler"
 	"clash-sub-parser/internal/domain"
 	"clash-sub-parser/internal/resolver"
+	"gopkg.in/yaml.v3"
 )
 
 // mockPublicationRepo implements domain.PublicationRepository in-memory for testing.
@@ -274,8 +276,9 @@ func TestPublishSuccess(t *testing.T) {
 	if result.Publication.State != domain.PublicationStateActive {
 		t.Fatalf("expected state active, got %s", result.Publication.State)
 	}
-	if result.Publication.SnapshotDigest != snap.SnapshotDigest {
-		t.Fatalf("expected snapshot digest %s, got %s", snap.SnapshotDigest, result.Publication.SnapshotDigest)
+	projected, _ := compiler.FilterCompatibleSnapshot(snap, domain.TargetSingBox)
+	if result.Publication.SnapshotDigest != projected.SnapshotDigest {
+		t.Fatalf("expected target projection digest %s, got %s", projected.SnapshotDigest, result.Publication.SnapshotDigest)
 	}
 	if !strings.HasPrefix(result.RawToken, "pub_") {
 		t.Fatalf("expected raw token to start with pub_, got %s", result.RawToken)
@@ -315,11 +318,11 @@ func TestPublishSuccess(t *testing.T) {
 	}
 }
 
-func TestPublishIncompatibleTargetHardFails(t *testing.T) {
+func TestPublishIncompatibleTargetFiltersNodes(t *testing.T) {
 	svc, _, _ := setupService()
 	ctx := context.Background()
 
-	t.Run("DefaultMixedSnapshotPublishesCompatibleNodes", func(t *testing.T) {
+	t.Run("MixedSnapshotPublishesCompatibleNodes", func(t *testing.T) {
 		incompatibleSnap := buildIncompatibleSnapshot()
 
 		prevRes, err := svc.Preview(ctx, publication.PreviewQuery{
@@ -327,7 +330,7 @@ func TestPublishIncompatibleTargetHardFails(t *testing.T) {
 			Snapshot: incompatibleSnap,
 		})
 		if err != nil {
-			t.Fatalf("expected mixed snapshot preview to succeed in default compatible mode, got: %v", err)
+			t.Fatalf("expected mixed snapshot preview to succeed after target filtering, got: %v", err)
 		}
 		if prevRes.Manifest.NodeCount != 2 {
 			t.Fatalf("expected 2 admitted nodes in manifest, got %d", prevRes.Manifest.NodeCount)
@@ -348,7 +351,7 @@ func TestPublishIncompatibleTargetHardFails(t *testing.T) {
 
 		pubRes, err := svc.Publish(ctx, cmd)
 		if err != nil {
-			t.Fatalf("expected mixed snapshot to publish successfully in default compatible mode, got: %v", err)
+			t.Fatalf("expected mixed snapshot to publish successfully after target filtering, got: %v", err)
 		}
 		if pubRes.Publication.State != domain.PublicationStateActive {
 			t.Fatalf("expected active publication, got %s", pubRes.Publication.State)
@@ -415,35 +418,12 @@ func TestPublishIncompatibleTargetHardFails(t *testing.T) {
 	})
 }
 
-func TestPreviewIncompatibleTargetReturnsValidationDomainError(t *testing.T) {
+func TestPreviewIncompatibleTargetFiltersNodes(t *testing.T) {
 	svc, _, _ := setupService()
 	ctx := context.Background()
 	incompatibleSnap := buildIncompatibleSnapshot()
 
-	t.Run("ExplicitStrictReturnsValidationDomainError", func(t *testing.T) {
-		query := publication.PreviewQuery{
-			Target:     domain.TargetSurge,
-			Snapshot:   incompatibleSnap,
-			CompatMode: "strict",
-		}
-
-		_, err := svc.Preview(ctx, query)
-		if err == nil {
-			t.Fatal("expected error for incompatible preview target in strict mode, got nil")
-		}
-		var domErr *domain.DomainError
-		if !errors.As(err, &domErr) {
-			t.Fatalf("expected domain error, got %T: %v", err, err)
-		}
-		if domErr.Code != "unsupported_target_capability" {
-			t.Fatalf("expected code unsupported_target_capability, got %s", domErr.Code)
-		}
-		if domErr.Category != domain.CategoryValidation {
-			t.Fatalf("expected category validation, got %s", domErr.Category)
-		}
-	})
-
-	t.Run("DefaultCompatibleRendersCompatibleNodesAndExcludesIncompatible", func(t *testing.T) {
+	t.Run("RendersCompatibleNodesAndExcludesIncompatible", func(t *testing.T) {
 		query := publication.PreviewQuery{
 			Target:   domain.TargetSurge,
 			Snapshot: incompatibleSnap,
@@ -451,7 +431,7 @@ func TestPreviewIncompatibleTargetReturnsValidationDomainError(t *testing.T) {
 
 		res, err := svc.Preview(ctx, query)
 		if err != nil {
-			t.Fatalf("expected default compatible preview to succeed, got: %v", err)
+			t.Fatalf("expected automatically filtered preview to succeed, got: %v", err)
 		}
 		if res.Manifest.NodeCount != 2 {
 			t.Fatalf("expected 2 admitted nodes in manifest, got %d", res.Manifest.NodeCount)
@@ -470,6 +450,68 @@ func TestPreviewIncompatibleTargetReturnsValidationDomainError(t *testing.T) {
 			t.Fatalf("expected Surge content to omit incompatible VLESS node, got: %s", contentStr)
 		}
 	})
+}
+
+func TestPreviewMihomo_TargetFilteringPreservesGroupFallback(t *testing.T) {
+	for _, allowPass := range []bool{false, true} {
+		t.Run(fmt.Sprintf("empty_fallback_pass_%t", allowPass), func(t *testing.T) {
+			svc, _, _ := setupService()
+			snapshot := buildSampleSnapshot()
+			badNode := &snapshot.Nodes[1]
+			badNode.Credentials.Transport = map[string]string{"skip_cert_verify": "true"}
+			snapshot.Groups = append(snapshot.Groups, resolver.ResolvedGroup{
+				ID: "group-filtered", Name: "FilteredGroup", GroupType: domain.GroupTypeSelect,
+				EmptyFallbackPass: allowPass,
+				Members: []resolver.ResolvedGroupMember{{
+					Kind: resolver.MemberKindNode, TargetID: badNode.LogicalID, DisplayName: badNode.DisplayName,
+				}},
+				NodeLogicalIDs: []string{badNode.LogicalID}, AllNodeLogicalIDs: []string{badNode.LogicalID},
+			})
+			ctx := context.Background()
+			preflight, err := svc.Preflight(ctx, publication.PreflightCommand{Target: domain.TargetMihomo, Snapshot: snapshot})
+			if err != nil || preflight == nil || preflight.Allowed != allowPass {
+				t.Fatalf("unexpected preflight for PASS=%t: result=%+v err=%v", allowPass, preflight, err)
+			}
+			preview, err := svc.Preview(ctx, publication.PreviewQuery{Target: domain.TargetMihomo, Snapshot: snapshot})
+			if !allowPass {
+				var topologyErr *publication.CapabilityValidationError
+				if !errors.As(err, &topologyErr) || topologyErr.Code != "required_nonempty" {
+					t.Fatalf("expected required_nonempty after filtering without PASS, got %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("expected PASS fallback to survive target filtering: %v", err)
+			}
+			if preview.Manifest.NodeCount != 1 || preview.Manifest.ExcludedCount != 1 || len(preview.Manifest.Excluded) != 1 || preview.Manifest.Excluded[0].NodeID != badNode.LogicalID {
+				t.Fatalf("unexpected target-filtered manifest: %+v", preview.Manifest)
+			}
+			var config struct {
+				Proxies []struct {
+					Name string `yaml:"name"`
+				} `yaml:"proxies"`
+				Groups []struct {
+					Name    string   `yaml:"name"`
+					Proxies []string `yaml:"proxies"`
+				} `yaml:"proxy-groups"`
+			}
+			if err := yaml.Unmarshal(preview.Content, &config); err != nil {
+				t.Fatalf("decode Mihomo preview: %v", err)
+			}
+			if len(config.Proxies) != 1 || config.Proxies[0].Name != snapshot.Nodes[0].DisplayName || len(config.Groups) != 2 {
+				t.Fatalf("unexpected remaining nodes or groups: %+v", config)
+			}
+			if len(config.Groups[0].Proxies) != 1 || config.Groups[0].Proxies[0] != snapshot.Nodes[0].DisplayName {
+				t.Fatalf("expected original group to retain its compatible member, got %+v", config.Groups[0])
+			}
+			if config.Groups[1].Name != "FilteredGroup" || len(config.Groups[1].Proxies) != 1 || config.Groups[1].Proxies[0] != "PASS" {
+				t.Fatalf("expected filtered group to retain PASS fallback, got %+v", config.Groups[1])
+			}
+			if len(snapshot.Nodes) != 2 || len(snapshot.Groups[0].Members) != 2 || len(snapshot.Groups[1].Members) != 1 {
+				t.Fatal("target projection mutated source nodes or group membership")
+			}
+		})
+	}
 }
 
 func TestPublishPreflightBlocksRiskAndDoesNotCreatePublication(t *testing.T) {
@@ -1389,33 +1431,19 @@ func TestPublication_PureNodeTargets_IgnoreEmptyGroups_AcrossAllActions(t *testi
 				t.Fatalf("expected preflight Allowed=true for %s, got allowed=%v err=%v", target, preRes != nil && preRes.Allowed, err)
 			}
 
-			// 2. Preview - strict mode
-			prevStrict, err := svc.Preview(ctx, publication.PreviewQuery{
-				Target:     target,
-				Snapshot:   snap,
-				CompatMode: "strict",
+			// 2. Preview
+			preview, err := svc.Preview(ctx, publication.PreviewQuery{
+				Target:   target,
+				Snapshot: snap,
 			})
 			if err != nil {
-				t.Fatalf("expected strict preview to succeed for %s, got: %v", target, err)
+				t.Fatalf("expected preview to succeed for %s, got: %v", target, err)
 			}
-			if len(prevStrict.Content) == 0 {
-				t.Fatalf("strict preview content empty for %s", target)
-			}
-
-			// 3. Preview - compatible mode
-			prevCompat, err := svc.Preview(ctx, publication.PreviewQuery{
-				Target:     target,
-				Snapshot:   snap,
-				CompatMode: "compatible",
-			})
-			if err != nil {
-				t.Fatalf("expected compatible preview to succeed for %s, got: %v", target, err)
-			}
-			if len(prevCompat.Content) == 0 {
-				t.Fatalf("compatible preview content empty for %s", target)
+			if len(preview.Content) == 0 || preview.Manifest.NodeCount != 1 {
+				t.Fatalf("expected preview with one node for %s, got manifest=%+v content=%s", target, preview.Manifest, preview.Content)
 			}
 
-			// 4. Publish
+			// 3. Publish
 			pubRes, err := svc.Publish(ctx, publication.PublishCommand{
 				Target:    target,
 				Snapshot:  snap,
@@ -1429,7 +1457,7 @@ func TestPublication_PureNodeTargets_IgnoreEmptyGroups_AcrossAllActions(t *testi
 				t.Fatalf("expected target %s, got %s", target, pubRes.Publication.Target)
 			}
 
-			// 5. Serve (ResolveAndServe)
+			// 4. Serve (ResolveAndServe)
 			art, err := svc.ResolveAndServe(ctx, pubRes.Publication.ID, pubRes.RawToken)
 			if err != nil {
 				t.Fatalf("expected serve to succeed for %s, got: %v", target, err)
@@ -1614,30 +1642,17 @@ func TestPublication_Mihomo_RetainsEmptyGroupValidation(t *testing.T) {
 		t.Fatalf("expected Mihomo preflight to be rejected for empty group, got allowed=%v err=%v", preRes != nil && preRes.Allowed, preErr)
 	}
 
-	// 2. Mihomo Preview (strict mode) must fail
-	_, errPrevStrict := svc.Preview(ctx, publication.PreviewQuery{
-		Target:     domain.TargetMihomo,
-		Snapshot:   snapEmptyGroup,
-		CompatMode: "strict",
+	// 2. Automatic node filtering must not allow a required group without PASS to remain empty
+	_, errPreview := svc.Preview(ctx, publication.PreviewQuery{
+		Target:   domain.TargetMihomo,
+		Snapshot: snapEmptyGroup,
 	})
-	if errPrevStrict == nil {
-		t.Fatal("expected Mihomo strict preview to fail for empty group, but succeeded")
+	var emptyGroupErr *publication.CapabilityValidationError
+	if !errors.As(errPreview, &emptyGroupErr) || emptyGroupErr.Code != "required_nonempty" {
+		t.Fatalf("expected required_nonempty error, got: %v", errPreview)
 	}
 
-	// 3. Mihomo Preview (compatible mode) must fail with empty_group_not_allowed
-	_, errPrevCompat := svc.Preview(ctx, publication.PreviewQuery{
-		Target:     domain.TargetMihomo,
-		Snapshot:   snapEmptyGroup,
-		CompatMode: "compatible",
-	})
-	if errPrevCompat == nil {
-		t.Fatal("expected Mihomo compatible preview to fail with empty_group_not_allowed, but succeeded")
-	}
-	if !strings.Contains(errPrevCompat.Error(), "empty_group_not_allowed") {
-		t.Fatalf("expected empty_group_not_allowed error, got: %v", errPrevCompat)
-	}
-
-	// 4. Mihomo Publish must fail
+	// 3. Mihomo Publish must fail
 	_, errPub := svc.Publish(ctx, publication.PublishCommand{
 		Target:    domain.TargetMihomo,
 		Snapshot:  snapEmptyGroup,
@@ -1648,7 +1663,7 @@ func TestPublication_Mihomo_RetainsEmptyGroupValidation(t *testing.T) {
 		t.Fatal("expected Mihomo publish to fail for empty group, but succeeded")
 	}
 
-	// 5. ValidatePublicationContent must reject empty group in Mihomo YAML
+	// 4. ValidatePublicationContent must reject empty group in Mihomo YAML
 	const badMihomoYAML = `
 proxies:
   - name: "Node-1"

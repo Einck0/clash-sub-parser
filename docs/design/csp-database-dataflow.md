@@ -559,12 +559,14 @@ ALTER TABLE risk_policy_revisions ADD COLUMN rules_digest TEXT NOT NULL DEFAULT 
 ```
 
 #### (3) 发布预览与快照 API: `POST /api/v1/publications/preview`
+
+按目标自动排除不兼容节点，兼容节点继续导出，并在 manifest 中记录排除数量和原因。不提供兼容模式选择；全部不可用或剩余拓扑不满足要求时返回错误，既有 PASS 兜底语义保留。
+
 ```json
 // Request Body
 {
   "target": "mihomo", // "mihomo" | "singbox" | "surge" | "qx"
-  "revision_id": "rev_01",
-  "compat_mode": "strict" // "strict" (默认) | "compatible"
+  "revision_id": "rev_01"
 }
 
 // Response Body (200 OK)

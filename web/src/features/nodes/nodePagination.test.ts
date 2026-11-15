@@ -192,6 +192,87 @@ describe('NodesView manual pagination', () => {
     expect(container.querySelector('[data-testid="manual-load-more-btn"]')).toBeNull()
   })
 
+  it('distinguishes empty inventory from zero matches and resets all filters in place', async () => {
+    const requests: Record<string, unknown>[] = []
+    vi.spyOn(api, 'get').mockImplementation(async (path: string, options?: any) => {
+      if (path === '/api/v1/nodes') {
+        requests.push({ ...options?.params })
+        return nodesPage([], 1, 0)
+      }
+      if (path === '/api/v1/probes/pool') return { probing_node_ids: [], queued_node_ids: [] }
+      if (path === '/api/v1/probes/schedule') return { kinds: [] }
+      return {}
+    })
+
+    mountView()
+    await settleView()
+    const emptyState = () => container.querySelector('[data-testid="empty-state"]')!
+    expect(emptyState().textContent).not.toContain('没有匹配当前条件的节点')
+    expect(emptyState().querySelector('button')).toBeNull()
+
+    const search = container.querySelector<HTMLInputElement>('[data-testid="node-search-input"]')!
+    expect(search.closest('label')?.textContent).toContain('搜索节点')
+    search.value = 'fixture missing'
+    search.dispatchEvent(new Event('input', { bubbles: true }))
+    await nextTick()
+    expect(emptyState().textContent).not.toContain('没有匹配当前条件的节点')
+    expect(requests).toHaveLength(1)
+    search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    await settleView()
+
+    const protocolButton = Array.from(container.querySelectorAll<HTMLButtonElement>('[data-testid="node-protocol-filter"] button'))
+      .find((button) => button.textContent?.trim().toUpperCase() === 'SS')!
+    protocolButton.click()
+    await settleView()
+    expect(protocolButton.getAttribute('aria-pressed')).toBe('true')
+
+    const healthButton = container.querySelector<HTMLButtonElement>('[data-testid="node-health-pill-healthy"]')!
+    healthButton.click()
+    await settleView()
+    expect(healthButton.getAttribute('aria-pressed')).toBe('true')
+
+    const risk = container.querySelector<HTMLSelectElement>('[data-testid="node-risk-band-filter"]')!
+    risk.value = 'low'
+    risk.dispatchEvent(new Event('change', { bubbles: true }))
+    await settleView()
+    const score = container.querySelector<HTMLInputElement>('[data-testid="node-risk-score-max"]')!
+    score.value = '20'
+    score.dispatchEvent(new Event('change', { bubbles: true }))
+    await settleView()
+
+    expect(emptyState().textContent).toContain('没有匹配当前条件的节点')
+    const summary = container.querySelector('[data-testid="node-empty-filter-summary"]')?.textContent
+    expect(summary).toContain('fixture missing')
+    expect(summary).toContain('SS')
+    expect(summary).toContain('正常')
+    expect(summary).toContain('20')
+    expect(requests.at(-1)).toMatchObject({ protocol: 'ss', health_status: 'healthy', ip_risk_band: 'low', ip_risk_score_max: '20', search: 'fixture missing' })
+
+    emptyState().querySelector<HTMLButtonElement>('button')!.click()
+    await settleView()
+    expect(search.value).toBe('')
+    expect(risk.value).toBe('all')
+    expect(score.value).toBe('')
+    expect(emptyState().textContent).not.toContain('没有匹配当前条件的节点')
+    expect(requests.at(-1)).toMatchObject({ page: 1, scope: 'enabled_subscriptions' })
+    for (const key of ['protocol', 'health_status', 'ip_risk_band', 'ip_risk_score_max', 'search']) {
+      expect(requests.at(-1)).not.toHaveProperty(key)
+    }
+  })
+
+  it('does not report empty inventory when the initial request fails', async () => {
+    vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
+      if (path === '/api/v1/nodes') throw new Error('Fixture list unavailable')
+      if (path === '/api/v1/probes/pool') return { probing_node_ids: [], queued_node_ids: [] }
+      if (path === '/api/v1/probes/schedule') return { kinds: [] }
+      return {}
+    })
+    mountView()
+    await settleView()
+    expect(container.querySelector('[data-testid="error-state-card"]')?.textContent).toContain('Fixture list unavailable')
+    expect(container.querySelector('[data-testid="empty-state"]')).toBeNull()
+  })
+
   it('hides the load-more control when the total fits in the first page', async () => {
     vi.spyOn(api, 'get').mockImplementation(async (path: string, options?: any) => {
       if (path === '/api/v1/nodes') {

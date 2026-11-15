@@ -1571,7 +1571,7 @@ func TestBuildCurrentArtifact_BuiltinRoutesWithEmptyGroup_UsesGlobalPASS(t *test
 	}
 }
 
-func TestBuildCurrentArtifact_EmptyPASS_PreviewConsistentWithLive_StrictMode(t *testing.T) {
+func TestBuildCurrentArtifact_EmptyPASS_PreviewConsistentWithLive(t *testing.T) {
 	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
 
 	primaryNodeID := domain.ComputeNodeLogicalID(domain.ProtocolSS, "1.1.1.1", 8388, nil)
@@ -1636,41 +1636,39 @@ func TestBuildCurrentArtifact_EmptyPASS_PreviewConsistentWithLive_StrictMode(t *
 
 	ctx := context.Background()
 
-	// Live and both preview modes should compile the configured PASS route identically.
+	// Live and preview should compile the configured PASS route identically.
 	liveArt, liveSnap, err := svc.BuildCurrentArtifact(ctx, facts, domain.TargetMihomo)
 	if err != nil {
 		t.Fatalf("expected live BuildCurrentArtifact to succeed with configured PASS, got: %v", err)
 	}
 
-	// Default/compatible preview matches live
-	prevDefault, err := svc.Preview(ctx, publication.PreviewQuery{
+	preview, err := svc.Preview(ctx, publication.PreviewQuery{
 		Target:     domain.TargetMihomo,
 		RevisionID: "rev-preview-strict",
 	})
 	if err != nil {
-		t.Fatalf("expected default preview to succeed, got: %v", err)
+		t.Fatalf("expected preview to succeed, got: %v", err)
 	}
-	if string(prevDefault.Content) != string(liveArt.Content) {
+	if string(preview.Content) != string(liveArt.Content) {
 		t.Fatalf("preview content does not match live content")
 	}
-
-	// Strict mode preview also matches live
-	prevStrict, err := svc.Preview(ctx, publication.PreviewQuery{
-		Target:     domain.TargetMihomo,
-		RevisionID: "rev-preview-strict",
-		CompatMode: "strict",
-	})
-	if err != nil {
-		t.Fatalf("expected strict preview to succeed, got: %v", err)
+	var config struct {
+		Groups []struct {
+			Name    string   `yaml:"name"`
+			Proxies []string `yaml:"proxies"`
+		} `yaml:"proxy-groups"`
 	}
-	if string(prevStrict.Content) != string(liveArt.Content) {
-		t.Fatalf("strict preview content does not match live content")
+	if err := yaml.Unmarshal(preview.Content, &config); err != nil {
+		t.Fatalf("decode preview YAML: %v", err)
 	}
-	if prevStrict.SnapshotDigest != liveSnap.SnapshotDigest {
-		t.Errorf("expected snapshot digest %q, got %q", liveSnap.SnapshotDigest, prevStrict.SnapshotDigest)
+	if len(config.Groups) != 1 || config.Groups[0].Name != "香港" || len(config.Groups[0].Proxies) != 1 || config.Groups[0].Proxies[0] != "PASS" {
+		t.Fatalf("expected global PASS fallback on the configured group, got %+v", config.Groups)
 	}
-	if !strings.HasPrefix(prevStrict.SnapshotID, "snapshot_") {
-		t.Errorf("expected persisted preview draft snapshot ID, got: %s", prevStrict.SnapshotID)
+	if preview.SnapshotDigest != liveSnap.SnapshotDigest {
+		t.Errorf("expected snapshot digest %q, got %q", liveSnap.SnapshotDigest, preview.SnapshotDigest)
+	}
+	if !strings.HasPrefix(preview.SnapshotID, "snapshot_") {
+		t.Errorf("expected persisted preview draft snapshot ID, got: %s", preview.SnapshotID)
 	}
 }
 
@@ -1852,7 +1850,7 @@ func TestBuildCurrentArtifact_Fallback_IndependentBlockers_FailClosed(t *testing
 			PrimaryNodeIDs:        []string{nodeWithPluginID},
 		}
 
-		// Surge does not support plugins; when primary node itself has unrenderable plugin, strict mode fails closed
+		// An unsupported primary plugin must not restore nodes removed by the configured filter
 		_, _, err := svc.BuildCurrentArtifact(ctx, factsPlugin, domain.TargetSurge)
 		if err == nil {
 			t.Fatal("expected unsupported plugin capability error on Surge, got nil")

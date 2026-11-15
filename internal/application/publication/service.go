@@ -251,6 +251,23 @@ func NewService(pubRepo domain.PublicationRepository, auditRepo domain.AuditRepo
 	return s
 }
 
+func manifestForArtifact(target domain.CompilerTarget, snapshot *resolver.ResolvedPolicySnapshot, excluded []domain.ManifestExcludedNode) *domain.PublicationManifest {
+	manifest := &domain.PublicationManifest{Target: target, Excluded: append([]domain.ManifestExcludedNode(nil), excluded...)}
+	manifest.ExcludedCount = len(manifest.Excluded)
+	if snapshot == nil {
+		return manifest
+	}
+	manifest.NodeCount = len(snapshot.Nodes)
+	manifest.ConfigurationRevision = snapshot.RevisionID
+	manifest.RulesDigest = snapshot.RiskDecisionDigest
+	manifest.Included = make([]domain.ManifestIncludedNode, 0, len(snapshot.Nodes))
+	for _, node := range snapshot.Nodes {
+		manifest.Included = append(manifest.Included, domain.ManifestIncludedNode{NodeID: node.LogicalID, ConnectionRevision: node.ConnectionRevision})
+	}
+	manifest.ExcludedCount = len(manifest.Excluded)
+	return manifest
+}
+
 // Preflight evaluates whether a resolved snapshot can be published safely, returning actionable diagnostics.
 func (s *Service) Preflight(ctx context.Context, cmd PreflightCommand) (*PreflightResult, error) {
 	if !isValidTarget(cmd.Target) {
@@ -266,6 +283,19 @@ func (s *Service) Preflight(ctx context.Context, cmd PreflightCommand) (*Preflig
 		}
 	}
 
+	// 目标不兼容节点在进入校验前就投影排除，剩余节点和拓扑仍须严格可用
+	projected, _, projectionErr := projectExportSnapshot(snapshot, cmd.Target)
+	if projectionErr != nil {
+		domainErr, ok := domain.AsDomainError(projectionErr)
+		if !ok {
+			return nil, projectionErr
+		}
+		diagnostics := projectionWarnings(projected)
+		diagnostics = append(diagnostics, PreflightDiagnostic{Severity: resolver.DiagnosticSeverityError, Code: domainErr.Code, Message: domainErr.Message, Target: string(cmd.Target)})
+		return &PreflightResult{Allowed: false, Target: cmd.Target, Diagnostics: diagnostics, SnapshotDigest: projected.SnapshotDigest}, nil
+	}
+	snapshot = projected
+
 	optInPrune := cmd.PruneUnavailableOptionalGroups || cmd.OmitUnavailableOptionalGroups
 	if optInPrune {
 		prunedSnap, _, err := compiler.PruneUnavailableOptionalGroups(snapshot)
@@ -276,6 +306,7 @@ func (s *Service) Preflight(ctx context.Context, cmd PreflightCommand) (*Preflig
 	}
 
 	preflight := s.evaluatePreflight(ctx, snapshot, cmd.Target)
+	preflight.Target = cmd.Target
 	if preflight.Allowed {
 		if _, err := compiler.Compile(ctx, snapshot, cmd.Target); err != nil {
 			var capErr *compiler.CapabilityError
@@ -285,6 +316,7 @@ func (s *Service) Preflight(ctx context.Context, cmd PreflightCommand) (*Preflig
 			return nil, err
 		}
 	}
+	preflight.Diagnostics = append(preflight.Diagnostics, projectionWarnings(snapshot)...)
 	return &preflight, nil
 }
 
@@ -305,13 +337,7 @@ func (s *Service) Publish(ctx context.Context, cmd PublishCommand) (*PublishResu
 			}
 		}
 
-		preflight := s.evaluatePreflight(ctx, snapshot, cmd.Target)
-		if !preflight.Allowed {
-			err := newPreflightError(preflight)
-			s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "publication.create", domain.AuditResultFailure, preflightSummary(snapshot, preflight))
-			return nil, err
-		}
-
+		// 预览负责目标投影和严格拓扑校验，发布沿用同一份冻结结果
 		prevRes, err := s.Preview(ctx, PreviewQuery{
 			Target:                         cmd.Target,
 			RevisionID:                     cmd.RevisionID,
@@ -402,18 +428,6 @@ func (s *Service) Preview(ctx context.Context, query PreviewQuery) (*PreviewResu
 		return nil, domain.NewValidationError("unsupported_target", fmt.Sprintf("unsupported compiler target: %s", query.Target))
 	}
 
-	rawMode := strings.TrimSpace(query.CompatMode)
-	var mode exportMode
-	if rawMode == "" {
-		mode = defaultExportMode(query.Target)
-	} else {
-		norm := strings.ToLower(rawMode)
-		if norm != "strict" && norm != "compatible" {
-			return nil, domain.NewValidationError("invalid_mode", fmt.Sprintf("invalid preview mode %q; must be 'strict' or 'compatible'", rawMode))
-		}
-		mode = exportMode(norm)
-	}
-
 	optInPrune := query.PruneUnavailableOptionalGroups || query.OmitUnavailableOptionalGroups
 
 	if query.Snapshot != nil {
@@ -422,7 +436,7 @@ func (s *Service) Preview(ctx context.Context, query PreviewQuery) (*PreviewResu
 		if revID == "" && snapshot.RevisionID != "" {
 			revID = strings.TrimSpace(snapshot.RevisionID)
 		}
-		return s.compileSnapshotPreview(ctx, query.Target, revID, snapshot, mode, optInPrune)
+		return s.compileSnapshotPreview(ctx, query.Target, revID, snapshot, optInPrune)
 	}
 
 	if s.factsLoader != nil {
@@ -436,14 +450,13 @@ func (s *Service) Preview(ctx context.Context, query PreviewQuery) (*PreviewResu
 		revID := facts.Revision.ID
 
 		pipelineCfg := artifactPipelineConfig{
-			mode:                           mode,
 			pruneUnavailableOptionalGroups: optInPrune,
 		}
 		artifact, snapshot, err := s.buildArtifactPipeline(ctx, facts, query.Target, pipelineCfg)
 		if err != nil {
-			var strictErr *StrictCapabilityError
-			if errors.As(err, &strictErr) {
-				return nil, s.persistFailedDraft(ctx, revID, query.Target, snapshot, strictErr.Diagnostics)
+			var capabilityErr *CapabilityValidationError
+			if errors.As(err, &capabilityErr) {
+				return nil, s.persistFailedDraft(ctx, revID, query.Target, snapshot, capabilityErr.Diagnostics)
 			}
 			return nil, err
 		}
@@ -459,21 +472,23 @@ func (s *Service) Preview(ctx context.Context, query PreviewQuery) (*PreviewResu
 		if revID == "" && snapshot.RevisionID != "" {
 			revID = strings.TrimSpace(snapshot.RevisionID)
 		}
-		return s.compileSnapshotPreview(ctx, query.Target, revID, snapshot, mode, optInPrune)
+		return s.compileSnapshotPreview(ctx, query.Target, revID, snapshot, optInPrune)
 	}
 
 	return nil, domain.NewInternalError("missing_loader", "consistent facts loader not configured")
 }
 
-func (s *Service) compileSnapshotPreview(ctx context.Context, target domain.CompilerTarget, revID string, snapshot *resolver.ResolvedPolicySnapshot, mode exportMode, optInPrune bool) (*PreviewResult, error) {
-	if target != domain.TargetMihomo {
-		for _, node := range snapshot.Nodes {
-			if strings.TrimSpace(node.DialerProxy) != "" || strings.TrimSpace(node.ChainBindingID) != "" {
-				return nil, domain.NewValidationError("unsupported_target_capability", fmt.Sprintf("proxy chains are only supported for target %s, but target is %s", domain.TargetMihomo, target))
-			}
+func (s *Service) compileSnapshotPreview(ctx context.Context, target domain.CompilerTarget, revID string, snapshot *resolver.ResolvedPolicySnapshot, optInPrune bool) (*PreviewResult, error) {
+	for _, diagnostic := range snapshot.Diagnostics {
+		if diagnostic.Code == "filtered_nodes_empty" {
+			return nil, newPreflightError(s.evaluatePreflight(ctx, snapshot, target))
 		}
 	}
 
+	snapshot, excludedNodes, err := projectExportSnapshot(snapshot, target)
+	if err != nil {
+		return nil, err
+	}
 	if optInPrune && target == domain.TargetMihomo {
 		prunedSnap, _, err := compiler.PruneUnavailableOptionalGroups(snapshot)
 		if err != nil {
@@ -481,49 +496,8 @@ func (s *Service) compileSnapshotPreview(ctx context.Context, target domain.Comp
 		}
 		snapshot = prunedSnap
 	}
-
-	for _, diagnostic := range snapshot.Diagnostics {
-		if diagnostic.Code == "filtered_nodes_empty" {
-			return nil, newPreflightError(s.evaluatePreflight(ctx, snapshot, target))
-		}
-	}
-
-	var excludedNodes []domain.ManifestExcludedNode
-	if mode == exportModeStrict {
-		diags := compiler.ValidateTargetCapabilities(snapshot, target)
-		if len(diags) > 0 {
-			return nil, s.persistFailedDraft(ctx, revID, target, snapshot, diags)
-		}
-	} else {
-		if target != domain.TargetMihomo && len(snapshot.Nodes) > 0 {
-			compatSnap, exclusions := compiler.FilterCompatibleSnapshot(snapshot, target)
-			excludedNodes = exclusions
-			if len(compatSnap.Nodes) == 0 {
-				return nil, domain.NewValidationError("no_compatible_nodes", fmt.Sprintf("target %s has no compatible nodes among %d candidate nodes", target, len(snapshot.Nodes)))
-			}
-			snapshot = compatSnap
-			nodeIDs := make([]string, len(snapshot.Nodes))
-			for i, n := range snapshot.Nodes {
-				nodeIDs[i] = n.LogicalID
-			}
-			snapshot.NodeLogicalIDs = nodeIDs
-			for _, ex := range excludedNodes {
-				snapshot.Diagnostics = append(snapshot.Diagnostics, resolver.Diagnostic{
-					Severity: resolver.DiagnosticSeverityWarning,
-					Code:     ex.Code,
-					Message:  fmt.Sprintf("node %s excluded: %s", ex.NodeID, ex.Reason),
-					Target:   ex.NodeID,
-					Reason:   ex.Reason,
-				})
-			}
-		}
-		if target == domain.TargetMihomo {
-			for _, g := range snapshot.Groups {
-				if !g.UsesEmptyPass() && len(g.Members) == 0 {
-					return nil, domain.NewValidationError("empty_group_not_allowed", fmt.Sprintf("policy group %q has 0 members in compatible mode", g.Name))
-				}
-			}
-		}
+	if diags := compiler.ValidateTargetCapabilities(snapshot, target); len(diags) > 0 {
+		return nil, s.persistFailedDraft(ctx, revID, target, snapshot, diags)
 	}
 
 	preflight := s.evaluatePreflight(ctx, snapshot, target)
@@ -555,6 +529,7 @@ func (s *Service) compileSnapshotPreview(ctx context.Context, target domain.Comp
 		ContentDigest:  compileRes.ContentDigest,
 		SnapshotDigest: compileRes.SnapshotDigest,
 		ExcludedNodes:  excludedNodes,
+		Manifest:       manifestForArtifact(target, snapshot, excludedNodes),
 	}
 
 	return s.persistPreviewArtifact(ctx, revID, artifact, snapshot)
@@ -616,18 +591,6 @@ func (s *Service) persistPreviewArtifact(ctx context.Context, revID string, arti
 			}
 		}
 	}
-	if s.pubRepo != nil {
-		if writer, ok := s.pubRepo.(domain.PublicationEvidenceWriter); ok {
-			if err := writer.CreateWithEvidence(ctx, &draftPub, evidence); err != nil {
-				return nil, fmt.Errorf("persist draft and frozen evidence: %w", err)
-			}
-		} else if len(evidence) > 0 {
-			return nil, fmt.Errorf("publication repository lacks atomic evidence persistence")
-		} else if err := s.pubRepo.Create(ctx, &draftPub); err != nil {
-			return nil, fmt.Errorf("persist preview draft: %w", err)
-		}
-	}
-
 	excludedNodes := artifact.ExcludedNodes
 	if excludedNodes == nil {
 		excludedNodes = []domain.ManifestExcludedNode{}
@@ -645,6 +608,7 @@ func (s *Service) persistPreviewArtifact(ctx context.Context, revID string, arti
 	}
 
 	manifest := domain.PublicationManifest{
+		Target:                artifact.Target,
 		NodeCount:             nodeCount,
 		ExcludedCount:         len(excludedNodes),
 		PayloadIDs:            payloadIDs,
@@ -654,6 +618,18 @@ func (s *Service) persistPreviewArtifact(ctx context.Context, revID string, arti
 		Excluded:              excludedNodes,
 		TargetEngineVersion:   "1.0.0",
 		MappingVersion:        "1.0.0",
+	}
+	draftPub.Manifest = &manifest
+	if s.pubRepo != nil {
+		if writer, ok := s.pubRepo.(domain.PublicationEvidenceWriter); ok {
+			if err := writer.CreateWithEvidence(ctx, &draftPub, evidence); err != nil {
+				return nil, fmt.Errorf("persist draft and frozen evidence: %w", err)
+			}
+		} else if len(evidence) > 0 {
+			return nil, fmt.Errorf("publication repository lacks atomic evidence persistence")
+		} else if err := s.pubRepo.Create(ctx, &draftPub); err != nil {
+			return nil, fmt.Errorf("persist preview draft: %w", err)
+		}
 	}
 
 	if len(included) > 0 && len(payloadIDs) == 0 {
@@ -678,19 +654,24 @@ func (s *Service) persistPreviewArtifact(ctx context.Context, revID string, arti
 	}, nil
 }
 
-func strictDiagnosticSummary(diags []compiler.CapabilityDiagnostic) (string, string) {
+func capabilityDiagnosticSummary(diags []compiler.CapabilityDiagnostic) (string, string) {
+	for _, d := range diags {
+		if d.Code == "format_error" || d.Code == "invalid_chain_topology" || d.Code == "invalid_group_topology" {
+			return d.Code, d.Message
+		}
+	}
 	for _, d := range diags {
 		if d.Code != "required_nonempty" && d.Code != "empty_group" {
-			return "unsupported_target_capability", fmt.Sprintf("target capability validation failed in strict mode: %s", d.Message)
+			return "unsupported_target_capability", fmt.Sprintf("target capability validation failed: %s", d.Message)
 		}
 	}
 	if len(diags) > 0 {
 		return "required_nonempty", fmt.Sprintf("group nonempty validation failed: %s", diags[0].Message)
 	}
-	return "unsupported_target_capability", "target capability validation failed in strict mode"
+	return "unsupported_target_capability", "target capability validation failed"
 }
 
-func (s *Service) persistFailedDraft(ctx context.Context, revID string, target domain.CompilerTarget, snapshot *resolver.ResolvedPolicySnapshot, diags []compiler.CapabilityDiagnostic) *StrictCapabilityError {
+func (s *Service) persistFailedDraft(ctx context.Context, revID string, target domain.CompilerTarget, snapshot *resolver.ResolvedPolicySnapshot, diags []compiler.CapabilityDiagnostic) *CapabilityValidationError {
 	draftID := "snapshot_" + domain.MustNewUUIDv7()
 	now := domain.NowUTC()
 	compilerVer := "1.0.0"
@@ -719,8 +700,8 @@ func (s *Service) persistFailedDraft(ctx context.Context, revID string, target d
 		_ = s.pubRepo.Create(ctx, &draftPub)
 	}
 
-	code, msg := strictDiagnosticSummary(diags)
-	return &StrictCapabilityError{
+	code, msg := capabilityDiagnosticSummary(diags)
+	return &CapabilityValidationError{
 		Code:        code,
 		Message:     msg,
 		Diagnostics: diags,
@@ -783,7 +764,7 @@ func (s *Service) ResolveAndServe(ctx context.Context, publicationID, token stri
 }
 
 // ResolveAndServeAuthorized checks publication existence/revocation before applying
-// the caller's auth policy; the same immutable artifact path serves every mode.
+// the caller's auth policy; the same immutable artifact path serves every target.
 func (s *Service) ResolveAndServeAuthorized(ctx context.Context, publicationID string, authorized func(pubTokenHash string) bool) (*Artifact, error) {
 	if strings.TrimSpace(publicationID) == "" {
 		return nil, ErrNotFound
@@ -822,36 +803,15 @@ func (s *Service) ResolveAndServeAuthorized(ctx context.Context, publicationID s
 				Filename:       pub.Filename,
 				ContentDigest:  pub.ContentDigest,
 				SnapshotDigest: pub.SnapshotDigest,
-				ExcludedNodes:  []domain.ManifestExcludedNode{},
+				ExcludedNodes:  publicationExclusions(pub),
+				Manifest:       pub.Manifest,
 			}, nil
 		}
+		return nil, domain.NewConflictError("publication_content_integrity_failed", "persisted publication content does not match its frozen digest")
 	}
 
-	// 5. Fallback for legacy publications without persisted Content: recompile by RevisionID
-	snapshot, err := s.resolveTargetSnapshot(ctx, pub.RevisionID, pub.Target)
-	if err != nil {
-		return nil, err
-	}
-
-	res, compileErr := compiler.Compile(ctx, snapshot, pub.Target)
-	if compileErr != nil {
-		var capErr *compiler.CapabilityError
-		if errors.As(compileErr, &capErr) {
-			return nil, domain.NewValidationError("unsupported_target_capability", capErr.Error())
-		}
-		return nil, compileErr
-	}
-
-	return &Artifact{
-		PublicationID:  pub.ID,
-		Target:         pub.Target,
-		Content:        res.Content,
-		ContentType:    res.ContentType,
-		Filename:       res.Filename,
-		ContentDigest:  res.ContentDigest,
-		SnapshotDigest: res.SnapshotDigest,
-		ExcludedNodes:  []domain.ManifestExcludedNode{},
-	}, nil
+	// 旧记录没有冻结内容，当前库存和编译器不能证明可以恢复原制品
+	return nil, domain.NewConflictError("publication_artifact_unavailable", "publication has no frozen content; create a new preview and publication")
 }
 
 // IsPublicationToken checks whether a token belongs to an active publication or active subscription link.
@@ -1211,11 +1171,10 @@ func (s *Service) resolveTargetSnapshot(ctx context.Context, revisionID string, 
 		}
 	}
 
-	// Active chain bindings with non-Mihomo target fail domain validation
-	// unsupported_target_capability before graph stripping.
+	// 已启用的整条代理链仍按既有结构约束校验，不能在节点格式导出时静默丢失链路
 	if target != domain.TargetMihomo {
-		for _, b := range input.ChainBindings {
-			if b.Enabled {
+		for _, binding := range input.ChainBindings {
+			if binding.Enabled {
 				return nil, domain.NewValidationError("unsupported_target_capability", fmt.Sprintf("proxy chains are only supported for target %s, but target is %s", domain.TargetMihomo, target))
 			}
 		}
@@ -1602,9 +1561,7 @@ func generateSubscriptionToken() (string, string, error) {
 // BuildCurrentArtifact executes pure, deterministic, side-effect-free configuration compilation from consistent facts.
 // It performs in-memory policy resolution, preflight checks, and kernel schema validation without writing drafts or references.
 func (s *Service) BuildCurrentArtifact(ctx context.Context, facts *domain.ConsistentFacts, target domain.CompilerTarget) (*Artifact, *resolver.ResolvedPolicySnapshot, error) {
-	return s.buildArtifactPipeline(ctx, facts, target, artifactPipelineConfig{
-		mode: defaultExportMode(target),
-	})
+	return s.buildArtifactPipeline(ctx, facts, target, artifactPipelineConfig{})
 }
 
 func (s *Service) buildArtifactPipeline(ctx context.Context, facts *domain.ConsistentFacts, target domain.CompilerTarget, cfg artifactPipelineConfig) (*Artifact, *resolver.ResolvedPolicySnapshot, error) {
@@ -1696,14 +1653,6 @@ func (s *Service) buildArtifactPipeline(ctx context.Context, facts *domain.Consi
 		return nil, nil, err
 	}
 
-	if cfg.pruneUnavailableOptionalGroups && target == domain.TargetMihomo {
-		prunedSnap, _, pErr := compiler.PruneUnavailableOptionalGroups(snapshot)
-		if pErr != nil {
-			return nil, snapshot, pErr
-		}
-		snapshot = prunedSnap
-	}
-
 	counts := snapshot.FilterCounts
 	if counts != nil && counts.AdmittedTotal > 0 {
 		noFinalExportNodes := input.GlobalFilter != nil && !input.GlobalFilter.IsEmpty() && counts.GlobalFilteredTotal == 0 && len(snapshot.Nodes) == 0 && !hasRoutedEmptyPass(snapshot, target)
@@ -1756,38 +1705,16 @@ func (s *Service) buildArtifactPipeline(ctx context.Context, facts *domain.Consi
 		}
 	}
 
-	if target != domain.TargetMihomo {
-		for _, node := range snapshot.Nodes {
-			if strings.TrimSpace(node.DialerProxy) != "" || strings.TrimSpace(node.ChainBindingID) != "" {
-				return nil, snapshot, domain.NewValidationError("unsupported_target_capability", fmt.Sprintf("proxy chains are only supported for target %s, but target is %s", domain.TargetMihomo, target))
-			}
-		}
+	snapshot, excludedNodes, err := projectExportSnapshot(snapshot, target)
+	if err != nil {
+		return nil, snapshot, err
 	}
-
-	var excludedNodes []domain.ManifestExcludedNode
-	if cfg.mode == exportModeCompatible && target != domain.TargetMihomo {
-		if len(snapshot.Nodes) > 0 {
-			compatSnap, exclusions := compiler.FilterCompatibleSnapshot(snapshot, target)
-			excludedNodes = exclusions
-			if len(compatSnap.Nodes) == 0 {
-				return nil, snapshot, domain.NewValidationError("no_compatible_nodes", fmt.Sprintf("target %s has no compatible nodes among %d candidate nodes", target, len(snapshot.Nodes)))
-			}
-			snapshot = compatSnap
-			nodeIDs := make([]string, len(snapshot.Nodes))
-			for i, n := range snapshot.Nodes {
-				nodeIDs[i] = n.LogicalID
-			}
-			snapshot.NodeLogicalIDs = nodeIDs
-			for _, ex := range excludedNodes {
-				snapshot.Diagnostics = append(snapshot.Diagnostics, resolver.Diagnostic{
-					Severity: resolver.DiagnosticSeverityWarning,
-					Code:     ex.Code,
-					Message:  fmt.Sprintf("node %s excluded: %s", ex.NodeID, ex.Reason),
-					Target:   ex.NodeID,
-					Reason:   ex.Reason,
-				})
-			}
+	if cfg.pruneUnavailableOptionalGroups && target == domain.TargetMihomo {
+		prunedSnap, _, pErr := compiler.PruneUnavailableOptionalGroups(snapshot)
+		if pErr != nil {
+			return nil, snapshot, pErr
 		}
+		snapshot = prunedSnap
 	}
 
 	hasFilteredNodesEmpty := false
@@ -1845,6 +1772,7 @@ func (s *Service) buildArtifactPipeline(ctx context.Context, facts *domain.Consi
 			SnapshotDigest: compileRes.SnapshotDigest,
 			UserInfo:       facts.PrimaryUserInfo,
 			ExcludedNodes:  excludedNodes,
+			Manifest:       manifestForArtifact(target, snapshot, excludedNodes),
 		}, snapshot, nil
 	}
 
@@ -1857,16 +1785,9 @@ func (s *Service) buildArtifactPipeline(ctx context.Context, facts *domain.Consi
 			break
 		}
 	}
-	hasProtocolBlocker := false
-	for _, diagnostic := range diags {
-		if diagnostic.Code != "required_nonempty" && diagnostic.Code != "empty_group" {
-			hasProtocolBlocker = true
-			break
-		}
-	}
-	if !hasRiskBlocker && len(diags) > 0 && (hasProtocolBlocker || cfg.mode == exportModeStrict) {
-		code, message := strictDiagnosticSummary(diags)
-		return nil, snapshot, &StrictCapabilityError{
+	if !hasRiskBlocker && len(diags) > 0 {
+		code, message := capabilityDiagnosticSummary(diags)
+		return nil, snapshot, &CapabilityValidationError{
 			Code:        code,
 			Message:     message,
 			Diagnostics: diags,
@@ -2174,7 +2095,7 @@ func (s *Service) CheckSubscriptionLink(ctx context.Context, id string) (*CheckS
 		}, nil
 	}
 
-	var capErr *StrictCapabilityError
+	var capErr *CapabilityValidationError
 	if errors.As(err, &capErr) {
 		var diags []PreflightDiagnostic
 		for _, cd := range capErr.Diagnostics {

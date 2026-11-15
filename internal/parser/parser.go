@@ -281,6 +281,7 @@ func newNormalizedNode(protocol domain.Protocol, name, server string, port int, 
 		normTransport[key] = trimmed
 	}
 	logicalID := domain.ComputeConnectionLogicalID(protocol, server, port, normTransport, creds)
+	name = strings.TrimSpace(name)
 	if name == "" {
 		name = net.JoinHostPort(server, strconv.Itoa(port))
 	}

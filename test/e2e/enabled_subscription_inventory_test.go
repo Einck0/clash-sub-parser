@@ -718,7 +718,7 @@ func TestEnabledSubscriptionInventoryE2E(t *testing.T) {
 
 		// 6. With the global empty fallback PASS default, preview preserves the empty inventory
 		// and emits PASS rather than adding fallback/orphan nodes.
-		prevReqEmpty, _ := http.NewRequest(http.MethodPost, harness.Server.URL+"/api/v1/publications/preview", strings.NewReader(`{"target": "mihomo", "compat_mode": "compatible"}`))
+		prevReqEmpty, _ := http.NewRequest(http.MethodPost, harness.Server.URL+"/api/v1/publications/preview", strings.NewReader(`{"target": "mihomo"}`))
 		prevReqEmpty.Header.Set("Authorization", authHeader)
 		prevReqEmpty.Header.Set("Content-Type", "application/json")
 		prevRespEmpty, err := http.DefaultClient.Do(prevReqEmpty)
@@ -763,7 +763,7 @@ func TestEnabledSubscriptionInventoryE2E(t *testing.T) {
 		if err := filterRepo.SetGlobalFilter(ctx, globalFilter); err != nil {
 			t.Fatalf("disable global empty-group PASS: %v", err)
 		}
-		strictReq, err := http.NewRequest(http.MethodPost, harness.Server.URL+"/api/v1/publications/preview", strings.NewReader(`{"target": "mihomo", "compat_mode": "compatible"}`))
+		strictReq, err := http.NewRequest(http.MethodPost, harness.Server.URL+"/api/v1/publications/preview", strings.NewReader(`{"target": "mihomo"}`))
 		if err != nil {
 			t.Fatalf("create strict preview request: %v", err)
 		}

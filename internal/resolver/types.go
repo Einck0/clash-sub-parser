@@ -71,6 +71,8 @@ type ResolvedNode struct {
 	ConnectionRevision int64                            `json:"connection_revision,omitempty"`
 	Position           int                              `json:"position"`
 	DialerProxy        string                           `json:"dialer_proxy,omitempty"`
+	DialerType         domain.ProxyChainDialerType      `json:"dialer_type,omitempty"`
+	DialerID           string                           `json:"dialer_id,omitempty"`
 	ChainBindingID     string                           `json:"chain_binding_id,omitempty"`
 	ChainSource        string                           `json:"chain_source,omitempty"`
 	PayloadEvidence    []domain.PayloadEvidence         `json:"-"`

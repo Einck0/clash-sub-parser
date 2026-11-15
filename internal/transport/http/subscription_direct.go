@@ -98,6 +98,10 @@ func directSubscriptionHandler(svc *publication.Service, holder AdminTokenHolder
 			default:
 				var de *domain.DomainError
 				if errors.As(err, &de) {
+					if de.Code == "publication_content_integrity_failed" || de.Code == "publication_artifact_unavailable" {
+						WriteError(w, r, http.StatusConflict, de.Code, "Frozen publication artifact is unavailable")
+						return
+					}
 					status := http.StatusInternalServerError
 					switch de.Category {
 					case domain.CategoryNotFound:
@@ -123,6 +127,7 @@ func directSubscriptionHandler(svc *publication.Service, holder AdminTokenHolder
 		}
 
 		w.Header().Set("X-Export-Excluded-Count", strconv.Itoa(len(artifact.ExcludedNodes)))
+		setSafeManifestHeaders(w, artifact.Manifest)
 
 		// 5. Conditional caching evaluation (ETag / If-None-Match)
 		ifNoneMatch := strings.TrimSpace(r.Header.Get("If-None-Match"))

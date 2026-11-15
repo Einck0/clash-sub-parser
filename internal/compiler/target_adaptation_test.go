@@ -393,34 +393,22 @@ func TestTargetAdaptation_PerNodeRenderability_TransportErrors(t *testing.T) {
 	}
 }
 
-// TestTargetAdaptation_DuplicateNames_FirstRenderableWins tests that duplicate node display names
-// are handled deterministically: the first renderable node wins, subsequent duplicates are excluded,
-// and unrenderable nodes do not claim names.
-func TestTargetAdaptation_DuplicateNames_FirstRenderableWins(t *testing.T) {
+// Compatibility filtering must not hide duplicate-name topology errors.
+func TestTargetAdaptation_DuplicateNamesRemainStrict(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("two renderable nodes with same name: first wins, second excluded", func(t *testing.T) {
+	t.Run("two renderable nodes with same name remain a strict error", func(t *testing.T) {
 		node1 := makeTestNode("id-ss-1", "Proxy-Shared", domain.ProtocolSS, 0)
 		node2 := makeTestNode("id-ss-2", "Proxy-Shared", domain.ProtocolSS, 1)
 
 		snap := makeAdaptationSnapshot([]resolver.ResolvedNode{node1, node2})
 
-		// Compatible mode: node1 admitted, node2 excluded as duplicate
 		filtered, excluded := compiler.FilterCompatibleSnapshot(snap, domain.TargetSurge)
-		if len(filtered.Nodes) != 1 {
-			t.Fatalf("expected exactly 1 admitted node, got %d", len(filtered.Nodes))
+		if len(filtered.Nodes) != 2 || len(excluded) != 0 {
+			t.Fatalf("duplicate names must not become capability exclusions: nodes=%+v excluded=%+v", filtered.Nodes, excluded)
 		}
-		if filtered.Nodes[0].LogicalID != "id-ss-1" {
-			t.Errorf("expected first node to win, got %s", filtered.Nodes[0].LogicalID)
-		}
-		if len(excluded) != 1 {
-			t.Fatalf("expected exactly 1 excluded node, got %d", len(excluded))
-		}
-		if excluded[0].NodeID != "id-ss-2" {
-			t.Errorf("expected second node to be excluded, got %s", excluded[0].NodeID)
-		}
-		if !strings.Contains(excluded[0].Reason, "duplicate node display name") {
-			t.Errorf("expected duplicate name reason, got %q", excluded[0].Reason)
+		if _, err := compiler.Compile(ctx, filtered, domain.TargetSurge); err == nil || !strings.Contains(err.Error(), "duplicate node display name") {
+			t.Fatalf("projected duplicates did not fail closed: %v", err)
 		}
 
 		// ValidateTargetCapabilities reports duplicate
@@ -446,7 +434,7 @@ func TestTargetAdaptation_DuplicateNames_FirstRenderableWins(t *testing.T) {
 		}
 	})
 
-	t.Run("unrenderable node first: does not claim name, subsequent renderable node wins", func(t *testing.T) {
+	t.Run("unsupported node is excluded but renderable duplicates remain", func(t *testing.T) {
 		// Node 1 is VLESS (unrenderable on Surge) with name "HK-Node"
 		node1 := makeTestNode("id-vless-hk", "HK-Node", domain.ProtocolVLESS, 0)
 		// Node 2 is SS (renderable on Surge) with same name "HK-Node"
@@ -458,16 +446,11 @@ func TestTargetAdaptation_DuplicateNames_FirstRenderableWins(t *testing.T) {
 
 		filtered, excluded := compiler.FilterCompatibleSnapshot(snap, domain.TargetSurge)
 
-		// Node 2 should be the sole admitted node!
-		if len(filtered.Nodes) != 1 {
-			t.Fatalf("expected 1 admitted node, got %d", len(filtered.Nodes))
+		if len(filtered.Nodes) != 2 || filtered.Nodes[0].LogicalID != "id-ss-hk" || filtered.Nodes[1].LogicalID != "id-ss-hk-3" {
+			t.Fatalf("renderable duplicates must retain order: %+v", filtered.Nodes)
 		}
-		if filtered.Nodes[0].LogicalID != "id-ss-hk" {
-			t.Errorf("expected node2 (id-ss-hk) to win, got %s", filtered.Nodes[0].LogicalID)
-		}
-
-		if len(excluded) != 2 {
-			t.Fatalf("expected 2 excluded nodes, got %d", len(excluded))
+		if len(excluded) != 1 {
+			t.Fatalf("expected only the protocol exclusion, got %+v", excluded)
 		}
 
 		// First excluded: node1 because of protocol (not duplicate)
@@ -478,18 +461,13 @@ func TestTargetAdaptation_DuplicateNames_FirstRenderableWins(t *testing.T) {
 			t.Errorf("expected protocol reason for node1, got %q", excluded[0].Reason)
 		}
 
-		// Second excluded: node3 because it's a duplicate of node2
-		if excluded[1].NodeID != "id-ss-hk-3" {
-			t.Errorf("expected second excluded to be id-ss-hk-3, got %s", excluded[1].NodeID)
-		}
-		if !strings.Contains(excluded[1].Reason, "duplicate node display name") {
-			t.Errorf("expected duplicate name reason for node3, got %q", excluded[1].Reason)
+		if _, err := compiler.Compile(ctx, filtered, domain.TargetSurge); err == nil {
+			t.Fatal("remaining duplicate topology must still fail")
 		}
 	})
 }
 
-// TestTargetAdaptation_DialerProxyRejection tests that non-Mihomo dialer proxy nodes are rejected
-// while Mihomo preserves dialer proxy nodes without error.
+// Pure-node targets reject chains; Mihomo projection also excludes missing dependencies.
 func TestTargetAdaptation_DialerProxyRejection(t *testing.T) {
 	ctx := context.Background()
 
@@ -539,31 +517,23 @@ func TestTargetAdaptation_DialerProxyRejection(t *testing.T) {
 		})
 	}
 
-	t.Run("Mihomo accepts non-empty DialerProxy", func(t *testing.T) {
+	t.Run("Mihomo missing dialer remains a strict topology failure", func(t *testing.T) {
 		filtered, excluded := compiler.FilterCompatibleSnapshot(snap, domain.TargetMihomo)
-		if len(filtered.Nodes) != 1 {
-			t.Fatalf("expected 1 admitted node on Mihomo, got %d", len(filtered.Nodes))
+		if len(filtered.Nodes) != 1 || len(excluded) != 0 {
+			t.Fatalf("missing reference must not masquerade as capability exclusion: nodes=%+v excluded=%+v", filtered.Nodes, excluded)
 		}
-		if len(excluded) != 0 {
-			t.Fatalf("expected 0 excluded nodes on Mihomo, got %+v", excluded)
-		}
-		if filtered.Nodes[0].DialerProxy != "parent-proxy-chain" {
-			t.Errorf("expected DialerProxy preserved on Mihomo, got %q", filtered.Nodes[0].DialerProxy)
-		}
-
-		diags := compiler.ValidateTargetCapabilities(snap, domain.TargetMihomo)
-		for _, d := range diags {
-			if strings.Contains(d.Message, "dialer-proxy") {
-				t.Errorf("unexpected dialer-proxy diagnostic on Mihomo: %+v", d)
+		for _, candidate := range []*resolver.ResolvedPolicySnapshot{snap, filtered} {
+			diags := compiler.ValidateTargetCapabilities(candidate, domain.TargetMihomo)
+			found := false
+			for _, d := range diags {
+				found = found || d.Code == "invalid_chain_topology"
 			}
-		}
-
-		res, err := compiler.Compile(ctx, snap, domain.TargetMihomo)
-		if err != nil {
-			t.Fatalf("expected Mihomo Compile to succeed with DialerProxy, got %v", err)
-		}
-		if !strings.Contains(string(res.Content), "dialer-proxy: parent-proxy-chain") {
-			t.Errorf("expected dialer-proxy in rendered Mihomo output, got:\n%s", string(res.Content))
+			if !found {
+				t.Fatalf("missing topology diagnostic: %+v", diags)
+			}
+			if _, err := compiler.Compile(ctx, candidate, domain.TargetMihomo); err == nil {
+				t.Fatal("missing dialer compiled successfully")
+			}
 		}
 	})
 }

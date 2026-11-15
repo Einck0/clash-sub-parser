@@ -87,6 +87,7 @@ const totalBadgeText = computed(() => {
           class="btn btn-ghost btn-sm btn-square touch-manipulation"
           type="button"
           :title="t('common.refresh')"
+          :aria-label="t('common.refresh')"
           @click="$emit('refresh')"
         >
           <ArrowPathIcon class="h-4 w-4" :class="{ 'animate-spin': loading }" />
@@ -102,12 +103,13 @@ const totalBadgeText = computed(() => {
           data-testid="node-protocol-filter"
           class="flex flex-wrap items-center gap-1.5 text-xs"
           role="group"
-          aria-label="协议筛选"
+          :aria-label="uiText('协议筛选', 'Filter by protocol')"
         >
           <button
             type="button"
             class="btn btn-xs rounded-lg font-mono"
             :class="protocolFilter === 'all' ? 'btn-primary' : 'btn-ghost bg-base-200/70'"
+            :aria-pressed="protocolFilter === 'all'"
             @click="$emit('update:protocolFilter', 'all')"
           >
             {{ t('nodes.protocolAll') }}
@@ -118,6 +120,7 @@ const totalBadgeText = computed(() => {
             type="button"
             class="btn btn-xs rounded-lg font-mono uppercase"
             :class="protocolFilter === proto ? 'btn-primary' : 'btn-ghost bg-base-200/70'"
+            :aria-pressed="protocolFilter === proto"
             @click="$emit('update:protocolFilter', proto)"
           >
             {{ proto.toUpperCase() }}
@@ -129,7 +132,7 @@ const totalBadgeText = computed(() => {
           <select
             :value="healthFilter"
             data-testid="node-health-filter"
-            aria-label="按节点状态筛选"
+            :aria-label="uiText('按节点状态筛选', 'Filter by node health')"
             class="select select-xs sm:select-sm text-xs"
             @change="$emit('update:healthFilter', ($event.target as HTMLSelectElement).value)"
           >
@@ -141,15 +144,18 @@ const totalBadgeText = computed(() => {
           </select>
 
           <!-- Search Input -->
-          <input
-            :value="searchQuery"
-            data-testid="node-search-input"
-            type="search"
-            :placeholder="t('nodes.searchPlaceholder')"
-            class="input input-xs sm:input-sm w-full sm:w-60 font-mono text-xs"
-            @input="$emit('update:searchQuery', ($event.target as HTMLInputElement).value)"
-            @keydown.enter="$emit('search-submit')"
-          />
+          <label class="w-full sm:w-60">
+            <span class="sr-only">{{ uiText('搜索节点', 'Search nodes') }}</span>
+            <input
+              :value="searchQuery"
+              data-testid="node-search-input"
+              type="search"
+              :placeholder="t('nodes.searchPlaceholder')"
+              class="input input-xs sm:input-sm w-full font-mono text-xs"
+              @input="$emit('update:searchQuery', ($event.target as HTMLInputElement).value)"
+              @keydown.enter="$emit('search-submit')"
+            />
+          </label>
         </div>
       </div>
 
@@ -174,7 +180,7 @@ const totalBadgeText = computed(() => {
         data-testid="node-health-pills"
         class="flex flex-wrap items-center gap-1.5 text-xs"
         role="group"
-        aria-label="节点状态筛选"
+        :aria-label="uiText('节点状态筛选', 'Filter by node health')"
       >
         <span class="opacity-60 mr-1 font-medium">{{ uiText('节点状态：', 'Health:') }}</span>
         <button
@@ -182,6 +188,7 @@ const totalBadgeText = computed(() => {
           data-testid="node-health-pill-all"
           class="btn btn-xs rounded-full"
           :class="healthFilter === 'all' ? 'btn-primary' : 'btn-ghost bg-base-200/70'"
+          :aria-pressed="healthFilter === 'all'"
           @click="$emit('update:healthFilter', 'all')"
         >
           全部
@@ -191,6 +198,7 @@ const totalBadgeText = computed(() => {
           data-testid="node-health-pill-probing"
           class="btn btn-xs rounded-full gap-1"
           :class="healthFilter === 'probing' ? 'btn-info' : 'btn-ghost bg-base-200/70'"
+          :aria-pressed="healthFilter === 'probing'"
           @click="$emit('update:healthFilter', 'probing')"
         >
           <span
@@ -204,6 +212,7 @@ const totalBadgeText = computed(() => {
           data-testid="node-health-pill-healthy"
           class="btn btn-xs rounded-full"
           :class="healthFilter === 'healthy' ? 'btn-success' : 'btn-ghost bg-base-200/70'"
+          :aria-pressed="healthFilter === 'healthy'"
           @click="$emit('update:healthFilter', 'healthy')"
         >
           正常
@@ -213,6 +222,7 @@ const totalBadgeText = computed(() => {
           data-testid="node-health-pill-unhealthy"
           class="btn btn-xs rounded-full"
           :class="healthFilter === 'unhealthy' ? 'btn-error' : 'btn-ghost bg-base-200/70'"
+          :aria-pressed="healthFilter === 'unhealthy'"
           @click="$emit('update:healthFilter', 'unhealthy')"
         >
           异常
@@ -222,6 +232,7 @@ const totalBadgeText = computed(() => {
           data-testid="node-health-pill-unknown"
           class="btn btn-xs rounded-full"
           :class="healthFilter === 'unknown' || healthFilter === 'untested' ? 'btn-neutral' : 'btn-ghost bg-base-200/70'"
+          :aria-pressed="healthFilter === 'unknown' || healthFilter === 'untested'"
           @click="$emit('update:healthFilter', 'unknown')"
         >
           未知

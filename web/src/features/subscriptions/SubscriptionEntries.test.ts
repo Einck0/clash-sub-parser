@@ -51,6 +51,24 @@ describe('Subscription Source Entries & Classification Override Flow', () => {
     last_refresh_outcome: 'success',
   }
 
+  it('shows format errors separately without a classification override action', async () => {
+    vi.spyOn(api, 'get').mockResolvedValueOnce({
+      items: [{
+        entry_id: 'parse_fetch-1_0', subscription_id: sampleSub.id, payload_id: '',
+        ordinal: 2, name: 'yaml · entry 2', entry_kind: 'format_error',
+        effective_kind: 'format_error', classification_reason: 'missing_field: port (fetch fetch-1)',
+      }], total: 1,
+    })
+    app = createApp({ render: () => h(SubscriptionEntriesDrawer, { modelValue: true, subscription: sampleSub }) })
+    app.mount(container)
+    await nextTick()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    const section = document.body.querySelector('[data-testid="subscription-format-errors"]')
+    expect(section?.textContent).toContain('仅展示，不参与订阅')
+    expect(section?.textContent).toContain('fetch-1')
+    expect(section?.querySelector('button')).toBeNull()
+  })
+
   it('preserves all 3 notice entries with identical node parameters as 3 metadata items (not deduped into 1)', async () => {
     const noticeEntries: SubscriptionEntryDTO[] = [
       {

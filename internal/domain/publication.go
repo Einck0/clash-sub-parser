@@ -8,19 +8,21 @@ import (
 // Publication represents a published configuration bundle export.
 // It is immutable once compiled, but can be revoked by an administrator.
 type Publication struct {
-	ID              string           `json:"id"`
-	RevisionID      string           `json:"revision_id,omitempty"`
-	Target          CompilerTarget   `json:"target"`
-	SnapshotDigest  string           `json:"snapshot_digest"`
-	ContentDigest   string           `json:"content_digest,omitempty"`
-	ContentType     string           `json:"content_type,omitempty"`
-	Filename        string           `json:"filename,omitempty"`
-	Content         []byte           `json:"-"`
-	CompilerVersion string           `json:"compiler_version"`
-	TokenHash       string           `json:"-"`
-	State           PublicationState `json:"state"`
-	CreatedAt       time.Time        `json:"created_at"`
-	RevokedAt       *time.Time       `json:"revoked_at,omitempty"`
+	ID             string         `json:"id"`
+	RevisionID     string         `json:"revision_id,omitempty"`
+	Target         CompilerTarget `json:"target"`
+	SnapshotDigest string         `json:"snapshot_digest"`
+	ContentDigest  string         `json:"content_digest,omitempty"`
+	ContentType    string         `json:"content_type,omitempty"`
+	Filename       string         `json:"filename,omitempty"`
+	Content        []byte         `json:"-"`
+	// Manifest 与编译内容一起冻结，历史发布未记录时为空
+	Manifest        *PublicationManifest `json:"manifest,omitempty"`
+	CompilerVersion string               `json:"compiler_version"`
+	TokenHash       string               `json:"-"`
+	State           PublicationState     `json:"state"`
+	CreatedAt       time.Time            `json:"created_at"`
+	RevokedAt       *time.Time           `json:"revoked_at,omitempty"`
 }
 
 // IsActive returns whether the publication is active and serving requests.

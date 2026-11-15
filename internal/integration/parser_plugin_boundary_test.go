@@ -106,7 +106,7 @@ func TestParserPluginBoundaryFactsAndHTTPPreview(t *testing.T) {
 			router := transporthttp.NewRouter(transporthttp.RouterConfig{AdminToken: token, PublicationService: pub})
 			preview := func(target, mode string) *httptest.ResponseRecorder {
 				t.Helper()
-				req := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(fmt.Sprintf(`{"target":%q,"revision_id":%q,"compat_mode":%q}`, target, rev.ID, mode)))
+				req := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(fmt.Sprintf(`{"target":%q,"revision_id":%q}`, target, rev.ID, mode)))
 				req.Header.Set("Authorization", "Bearer "+token)
 				req.Header.Set("Content-Type", "application/json")
 				rec := httptest.NewRecorder()
@@ -118,7 +118,7 @@ func TestParserPluginBoundaryFactsAndHTTPPreview(t *testing.T) {
 				if strict.Code != http.StatusOK {
 					t.Fatalf("valid plugin rejected: %d %s", strict.Code, strict.Body.String())
 				}
-				res, err := pub.Preview(ctx, publication.PreviewQuery{Target: domain.TargetMihomo, RevisionID: rev.ID, CompatMode: "compatible"})
+				res, err := pub.Preview(ctx, publication.PreviewQuery{Target: domain.TargetMihomo, RevisionID: rev.ID})
 				if err != nil || res.Manifest.NodeCount != 2 {
 					t.Fatalf("valid compatible preview: %v", err)
 				}
@@ -165,7 +165,7 @@ func TestParserPluginBoundaryFactsAndHTTPPreview(t *testing.T) {
 			if rec := preview("singbox", "strict"); rec.Code != http.StatusUnprocessableEntity {
 				t.Fatalf("sing-box strict accepted plugin: %d", rec.Code)
 			}
-			compatible, err := pub.Preview(ctx, publication.PreviewQuery{Target: domain.TargetSingBox, RevisionID: rev.ID, CompatMode: "compatible"})
+			compatible, err := pub.Preview(ctx, publication.PreviewQuery{Target: domain.TargetSingBox, RevisionID: rev.ID})
 			if err != nil || compatible.Manifest.NodeCount != 1 || compatible.Manifest.ExcludedCount != 1 || compatible.Manifest.Excluded[0].NodeID != pluginID {
 				t.Fatalf("compatible target must exclude plugin node explicitly: %v", err)
 			}

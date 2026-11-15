@@ -3,6 +3,8 @@ package http_test
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -558,6 +560,33 @@ func TestLiveSubscriptionClientEndpoint_TargetAdaptation_ExclusionsAndErrors(t *
 	}
 	if excl := recSurge.Header().Get("X-Export-Excluded-Count"); excl != "1" {
 		t.Errorf("expected X-Export-Excluded-Count: 1, got %q", excl)
+	}
+	if manifestHeader := recSurge.Header().Get("X-Export-Manifest"); manifestHeader == "" {
+		t.Fatal("expected X-Export-Manifest header on live export")
+	} else {
+		rawManifest, decErr := base64.RawURLEncoding.DecodeString(manifestHeader)
+		if decErr != nil {
+			t.Fatalf("decode live manifest header: %v", decErr)
+		}
+		var carrier struct {
+			Target        string `json:"target"`
+			IncludedCount int    `json:"included_count"`
+			ExcludedCount int    `json:"excluded_count"`
+			Excluded      []struct {
+				NodeID string `json:"node_id"`
+				Code   string `json:"code"`
+				Reason string `json:"reason"`
+			} `json:"excluded"`
+		}
+		if err := json.Unmarshal(rawManifest, &carrier); err != nil {
+			t.Fatalf("unmarshal live manifest header: %v", err)
+		}
+		if carrier.Target != "surge" || carrier.ExcludedCount != 1 || len(carrier.Excluded) != 1 || carrier.Excluded[0].NodeID != vlessID {
+			t.Fatalf("unexpected live manifest carrier: %+v", carrier)
+		}
+		if strings.Contains(manifestHeader, rawToken) {
+			t.Fatal("live manifest header leaked export token")
+		}
 	}
 	surgeBody := recSurge.Body.String()
 	if !strings.Contains(surgeBody, "Admin Test Node = ss,") {

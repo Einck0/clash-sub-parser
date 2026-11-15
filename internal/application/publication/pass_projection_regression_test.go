@@ -25,7 +25,7 @@ func TestProjectedPassSemanticsAcrossPublicationEntrypoints(t *testing.T) {
 				facts.Groups[1].EmptyFallbackPass = true
 			case "builtin-pass":
 				pass := "PASS"
-				facts.GroupSources["fallback"] = append(facts.GroupSources["fallback"], domain.MemberSource{ID: "pass-source", GroupID: "fallback", Kind: domain.SourceKindBuiltin, Operation: domain.OperationAdd, BuiltinName: &pass, Position: 1})
+				facts.GroupSources["fallback"] = append(facts.GroupSources["fallback"], domain.MemberSource{ID: "pass-source", GroupID: "fallback", Kind: domain.SourceKindTypedBuiltin, Operation: domain.OperationAdd, BuiltinName: &pass, Position: 1})
 				facts.Groups[1].Sources = facts.GroupSources["fallback"]
 			case "all-unavailable":
 				on := true

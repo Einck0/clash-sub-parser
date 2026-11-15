@@ -104,19 +104,19 @@ func TestParserPluginBoundaryFactsAndHTTPPreview(t *testing.T) {
 			pub := publication.NewService(sqlite.NewPublicationRepository(db), nil, publication.WithConsistentFactsLoader(loader))
 			const token = "plugin-boundary-admin"
 			router := transporthttp.NewRouter(transporthttp.RouterConfig{AdminToken: token, PublicationService: pub})
-			preview := func(target, mode string) *httptest.ResponseRecorder {
+			preview := func(target string) *httptest.ResponseRecorder {
 				t.Helper()
-				req := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(fmt.Sprintf(`{"target":%q,"revision_id":%q}`, target, rev.ID, mode)))
+				req := httptest.NewRequest(http.MethodPost, "/api/v1/publications/preview", strings.NewReader(fmt.Sprintf(`{"target":%q,"revision_id":%q}`, target, rev.ID)))
 				req.Header.Set("Authorization", "Bearer "+token)
 				req.Header.Set("Content-Type", "application/json")
 				rec := httptest.NewRecorder()
 				router.ServeHTTP(rec, req)
 				return rec
 			}
-			strict := preview("mihomo", "strict")
+			mihomo := preview("mihomo")
 			if tc.valid {
-				if strict.Code != http.StatusOK {
-					t.Fatalf("valid plugin rejected: %d %s", strict.Code, strict.Body.String())
+				if mihomo.Code != http.StatusOK {
+					t.Fatalf("valid plugin rejected: %d %s", mihomo.Code, mihomo.Body.String())
 				}
 				res, err := pub.Preview(ctx, publication.PreviewQuery{Target: domain.TargetMihomo, RevisionID: rev.ID})
 				if err != nil || res.Manifest.NodeCount != 2 {
@@ -147,23 +147,21 @@ func TestParserPluginBoundaryFactsAndHTTPPreview(t *testing.T) {
 					t.Fatal("valid plugin node omitted")
 				}
 			} else {
-				if strict.Code != http.StatusUnprocessableEntity || !strings.Contains(strict.Body.String(), "unsupported_target_capability") {
-					t.Fatalf("invalid plugin did not fail closed: %d %s", strict.Code, strict.Body.String())
+				if mihomo.Code != http.StatusOK {
+					t.Fatalf("invalid plugin should be excluded while plain node remains: %d %s", mihomo.Code, mihomo.Body.String())
 				}
-				if !strings.Contains(strict.Body.String(), pluginID) {
-					t.Fatal("strict failure missing affected node")
-				}
-				if strings.Contains(strict.Body.String(), secret) || strings.Contains(strict.Body.String(), "SYNTHETIC_PASSWORD_SENTINEL") {
+				if strings.Contains(mihomo.Body.String(), secret) || strings.Contains(mihomo.Body.String(), "SYNTHETIC_PASSWORD_SENTINEL") {
 					t.Fatal("HTTP capability error leaked private plugin input")
 				}
-				if rec := preview("mihomo", "compatible"); rec.Code == http.StatusOK || rec.Code == http.StatusInternalServerError {
-					t.Fatalf("invalid plugin must neither panic nor become plain SS: %d %s", rec.Code, rec.Body.String())
+				result, err := pub.Preview(ctx, publication.PreviewQuery{Target: domain.TargetMihomo, RevisionID: rev.ID})
+				if err != nil || result.Manifest.NodeCount != 1 || result.Manifest.ExcludedCount != 1 || result.Manifest.Excluded[0].NodeID != pluginID {
+					t.Fatalf("mihomo should exclude invalid plugin node: %v", err)
 				}
 			}
-			// Targets without SS plugin support must reject strictly or exclude
-			// the whole node compatibly, never emit it as plain Shadowsocks.
-			if rec := preview("singbox", "strict"); rec.Code != http.StatusUnprocessableEntity {
-				t.Fatalf("sing-box strict accepted plugin: %d", rec.Code)
+			// Targets without SS plugin support independently exclude the node,
+			// never emit it as plain Shadowsocks.
+			if rec := preview("singbox"); rec.Code != http.StatusOK {
+				t.Fatalf("sing-box automatic projection failed: %d %s", rec.Code, rec.Body.String())
 			}
 			compatible, err := pub.Preview(ctx, publication.PreviewQuery{Target: domain.TargetSingBox, RevisionID: rev.ID})
 			if err != nil || compatible.Manifest.NodeCount != 1 || compatible.Manifest.ExcludedCount != 1 || compatible.Manifest.Excluded[0].NodeID != pluginID {

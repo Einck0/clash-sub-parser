@@ -186,6 +186,12 @@ func (s *Service) Create(ctx context.Context, cmd CreateRunCommand) (*domain.Pro
 		}
 	}
 
+	// Speed is a deliberate single-node operation. An empty selection normally
+	// means the whole inventory to the runner, which is unsafe for paid traffic.
+	if err := s.validateSpeedTarget(ctx, cmd.NodeLogicalIDs, cmd.Kinds); err != nil {
+		return nil, err
+	}
+
 	runID := domain.MustNewUUIDv7()
 	run := domain.ProbeRun{
 		ID:             runID,
@@ -212,6 +218,39 @@ func (s *Service) Create(ctx context.Context, cmd CreateRunCommand) (*domain.Pro
 	s.mu.Unlock()
 
 	return &run, nil
+}
+
+func (s *Service) validateSpeedTarget(ctx context.Context, nodeIDs []string, kinds []domain.ProbeKind) error {
+	speedCount := 0
+	for _, kind := range kinds {
+		if kind == domain.ProbeKindSpeed {
+			speedCount++
+		}
+	}
+	if speedCount == 0 {
+		return nil
+	}
+	if speedCount != 1 || len(kinds) != 1 || len(nodeIDs) != 1 || strings.TrimSpace(nodeIDs[0]) == "" || nodeIDs[0] != strings.TrimSpace(nodeIDs[0]) {
+		return domain.NewValidationError("invalid_speed_target", "speed testing requires exactly one explicit node and kinds [speed]")
+	}
+	nodes := s.resolveNodesRepo()
+	if nodes == nil {
+		return domain.NewValidationError("speed_unavailable", "speed testing requires a node repository")
+	}
+	scope := domain.NodeScopeEnabledSubscriptions
+	s.mu.RLock()
+	if runner, ok := s.runner.(*DefaultRunner); ok && runner.scope != "" {
+		scope = runner.scope
+	}
+	s.mu.RUnlock()
+	targets, err := nodes.ListAll(ctx, domain.NodeFilter{Scope: scope, ActiveOnly: true, LogicalIDs: nodeIDs, ExcludeNotices: true})
+	if err != nil {
+		return err
+	}
+	if len(targets) != 1 || targets[0].LogicalID != nodeIDs[0] {
+		return domain.NewValidationError("invalid_speed_target", "speed testing requires an active eligible node")
+	}
+	return nil
 }
 
 // Get returns the probe run by ID.

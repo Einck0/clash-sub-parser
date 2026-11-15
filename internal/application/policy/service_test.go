@@ -1770,6 +1770,111 @@ func TestPolicyService_PreviewGroup_InputProvider_ConsistentFacts_And_Errors(t *
 	}
 }
 
+// Removing an unpacked child's nodes affects direct node members, not group
+// references. A broad child may remove every direct node without emptying the
+// parent's recursively reachable destinations.
+func TestPolicyService_PreviewGroup_RemoveGroupNodesPreservesReferences(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		cheapRegex  string
+		wantDirect  int
+		wantRemoved int
+	}{
+		{name: "broad cheap group", cheapRegex: ".*", wantDirect: 0, wantRemoved: 2},
+		{name: "narrow cheap group", cheapRegex: "HK", wantDirect: 1, wantRemoved: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := setupTestDB(t)
+			svc, _ := setupTestService(t, db)
+			ctx := context.Background()
+			cheapSources := []domain.MemberSource{{
+				Operation: domain.OperationAdd, Kind: domain.SourceKindRegex, Pattern: &tc.cheapRegex,
+			}}
+			if tc.wantDirect == 0 {
+				// A second ADD is a union; it does not narrow the preceding
+				// match-all source (the reported saved-configuration shape).
+				cheapSources = append(cheapSources, domain.MemberSource{
+					Operation: domain.OperationAdd, Kind: domain.SourceKindFilter, Position: 1,
+					FilterSpec: &domain.NodeFilterSpec{Conditions: []domain.FilterCondition{
+						{Field: domain.FilterFieldDisplayName, Op: domain.FilterOpRegex, Value: "x1$"},
+					}},
+				})
+			}
+			cheap, err := svc.CreateGroup(ctx, policy.CreateGroupCommand{
+				Name: "Cheap", GroupType: domain.GroupTypeSelect, Sources: cheapSources,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			all := ".*"
+			region, err := svc.CreateGroup(ctx, policy.CreateGroupCommand{
+				Name: "Region", GroupType: domain.GroupTypeSelect,
+				Sources: []domain.MemberSource{{
+					Operation: domain.OperationAdd, Kind: domain.SourceKindRegex, Pattern: &all,
+				}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			nodes := []domain.Node{
+				{LogicalID: "node-hk-cheap", DisplayName: "HK x1", Protocol: domain.ProtocolHysteria2, Active: true},
+				{LogicalID: "node-jp-premium", DisplayName: "JP x5", Protocol: domain.ProtocolHysteria2, Active: true},
+			}
+			svc.SetInputProvider(func(ctx context.Context, revID string, draft *domain.NodeGroup) (*resolver.ResolveInput, error) {
+				return &resolver.ResolveInput{
+					RevisionID: "rev-preview-group-removal", InventoryWatermark: "wm-1", CompilerVersion: "1.0.0",
+					Nodes: nodes,
+					Groups: []domain.NodeGroup{
+						{ID: cheap.ID, Name: cheap.Name, GroupType: cheap.GroupType, InheritGlobalFilter: true, Sources: cheap.Sources},
+						{ID: region.ID, Name: region.Name, GroupType: region.GroupType, InheritGlobalFilter: true, Sources: region.Sources},
+						*draft,
+					},
+				}, nil
+			})
+			resp, err := svc.PreviewGroup(ctx, policy.PreviewGroupCommand{
+				Name: stringPtr("Select nodes"),
+				Sources: []domain.MemberSource{
+					{Operation: domain.OperationAdd, Kind: domain.SourceKindGroupRef, TargetGroupID: &cheap.ID},
+					{Operation: domain.OperationAdd, Kind: domain.SourceKindGroupRef, TargetGroupID: &region.ID},
+					{Operation: domain.OperationAdd, Kind: domain.SourceKindFilter, FilterSpec: &domain.NodeFilterSpec{
+						Conditions: []domain.FilterCondition{{Field: domain.FilterFieldDisplayName, Op: domain.FilterOpNotRegex, Value: "notice"}},
+					}},
+					{Operation: domain.OperationRemove, Kind: domain.SourceKindGroupNodes, TargetGroupID: &cheap.ID},
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var direct, refs int
+			for _, member := range resp.Members {
+				switch member.Kind {
+				case resolver.MemberKindNode:
+					direct++
+					if member.NodeLogicalID == nil || *member.NodeLogicalID != nodes[1].LogicalID {
+						t.Fatalf("unexpected surviving direct member: %+v", member)
+					}
+				case resolver.MemberKindGroup:
+					refs++
+				}
+			}
+			if direct != tc.wantDirect || refs != 2 || resp.MemberCount != refs+direct {
+				t.Fatalf("unexpected members: direct=%d refs=%d count=%d", direct, refs, resp.MemberCount)
+			}
+			if resp.NodeCount != 2 || resp.CandidateCount != 2 || resp.ExcludedCount != 0 {
+				t.Fatalf("references must keep both destinations reachable: %+v", resp)
+			}
+			if resp.ExclusionSummary["group membership removed"] != tc.wantRemoved {
+				t.Fatalf("expected %d direct removals, got %+v", tc.wantRemoved, resp.ExclusionSummary)
+			}
+			for _, diag := range resp.Diagnostics {
+				if diag.Code == "empty_group" || diag.Code == "empty_routed_group" {
+					t.Fatalf("reachable child references must not be diagnosed as empty: %+v", diag)
+				}
+			}
+		})
+	}
+}
+
 func TestPolicyService_PreviewGroup_Standalone_EvidenceFilterContract(t *testing.T) {
 	db := setupTestDB(t)
 	svc, _ := setupTestService(t, db)

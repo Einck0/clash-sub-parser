@@ -1680,7 +1680,7 @@ func (r *DefaultRunner) executeTaskWithVerdict(ctx context.Context, run *domain.
 			summary = fmt.Sprintf("%s %s", summary, speedCap.Summary)
 		}
 		if speedThroughput != nil {
-			summary = fmt.Sprintf("%s throughput_kbps=%.1f", summary, *speedThroughput)
+			summary = fmt.Sprintf("%s throughput_kib_per_second=%.1f", summary, *speedThroughput)
 		}
 	}
 	if kind == domain.ProbeKindIPRisk && ipRiskCap.Summary != "" {

@@ -13,84 +13,147 @@ import (
 
 var openaiRe = regexp.MustCompile(`loc=([A-Z]{2})`)
 
-// CheckOpenAI inspects ChatGPT/OpenAI unlock state via dual-track detection (web cookies + iOS app).
-// Returns a domain.PlatformCapability.
+type openAIEndpointResult struct {
+	responded bool
+	verdict   domain.ProbeVerdict
+	reason    string
+}
+
+// CheckOpenAI checks whether the anonymous web-compliance and iOS gateway
+// endpoints respond through the supplied node transport. Neither endpoint has
+// a verified positive contract for ChatGPT, API, account, model, or Codex
+// capability, so an ordinary response is deliberately inconclusive.
 func CheckOpenAI(ctx context.Context, httpClient *http.Client) domain.PlatformCapability {
 	now := time.Now().UTC()
 	start := time.Now()
-
-	if httpClient == nil {
-		lat := int64(-1)
-		return domain.PlatformCapability{
-			Verdict:    domain.VerdictError,
-			LatencyMS:  &lat,
-			ObservedAt: &now,
-			Reason:     "transport_error",
-			Summary:    "Inconclusive",
-		}
-	}
-
-	cookiesOK, cookiesRestricted, cookiesErr := checkCookies(ctx, httpClient)
-	clientOK, clientRestricted, clientErr := checkClient(ctx, httpClient)
-	latency := time.Since(start).Milliseconds()
-
 	cap := domain.PlatformCapability{
-		LatencyMS:  &latency,
-		ObservedAt: &now,
+		Verdict:       domain.VerdictUnknown,
+		ObservedAt:    &now,
+		EvidenceScope: "network_entry",
+	}
+	if httpClient == nil {
+		latency := int64(-1)
+		cap.Verdict, cap.LatencyMS = domain.VerdictError, &latency
+		cap.Reason, cap.Summary = "transport_error", "OpenAI endpoints were not checked"
+		return cap
 	}
 
-	if cookiesOK && clientOK {
-		cap.Verdict = domain.VerdictAvailable
-		cap.SubTier = "full"
-		cap.Summary = "Full (GPT⁺)"
-		cap.Reason = "cookies_and_client_passed"
-	} else if cookiesOK && !clientOK {
-		cap.Verdict = domain.VerdictAvailable
-		cap.SubTier = "web"
-		cap.Summary = "Web (GPT)"
-		cap.Reason = "cookies_passed_client_failed"
-	} else if !cookiesOK && clientOK {
-		// App-only path: must be reported as "app", not forced to "web"
-		cap.Verdict = domain.VerdictAvailable
-		cap.SubTier = "app"
-		cap.Summary = "App (ChatGPT)"
-		cap.Reason = "client_passed_cookies_failed"
-	} else {
-		// Both failed
-		if cookiesErr != nil && clientErr != nil {
-			errToClassify := cookiesErr
-			if clientErr != nil {
-				errToClassify = clientErr
+	web := checkOpenAIEndpoint(ctx, httpClient, "https://api.openai.com/compliance/cookie_requirements", false)
+	app := checkOpenAIEndpoint(ctx, httpClient, "https://ios.chat.openai.com", true)
+	latency := time.Since(start).Milliseconds()
+	cap.LatencyMS = &latency
+
+	// Explicit endpoint access restrictions are evidence about that endpoint
+	// only. Rate limiting must never be described as an account ban.
+	if web.reason == "rate_limited" || app.reason == "rate_limited" {
+		cap.Verdict, cap.Reason = domain.VerdictRestricted, "rate_limited"
+		cap.Summary = appendOpenAITrackDetails("OpenAI endpoint rate limited; capability not verified", web, app)
+		return cap
+	}
+	if web.reason == "access_restricted" || app.reason == "access_restricted" {
+		cap.Verdict, cap.Reason = domain.VerdictRestricted, "access_restricted"
+		cap.Summary = appendOpenAITrackDetails("OpenAI endpoint access restricted; account and API capability not verified", web, app)
+		return cap
+	}
+
+	responded := web.responded || app.responded
+	if !responded {
+		// Keep the most informative real failure. A skipped request must not
+		// conceal a transport failure from its peer, or vice versa.
+		for _, result := range []openAIEndpointResult{web, app} {
+			if result.reason != "" && result.verdict != domain.VerdictSkipped {
+				cap.Verdict, cap.Reason, cap.Summary = result.verdict, result.reason, "OpenAI endpoint check failed"
+				break
 			}
-			verdict, reason := responseReadFailure(errToClassify)
-			cap.Verdict = verdict
-			cap.Reason = reason
-			cap.Summary = "Error"
-			return cap
 		}
-		if cookiesRestricted || clientRestricted {
-			cap.Verdict = domain.VerdictRestricted
-			cap.SubTier = "banned"
-			cap.Summary = "Banned"
-			cap.Reason = "access_restricted"
-		} else {
-			cap.Verdict = domain.VerdictError
-			cap.Summary = "Detection failed"
-			cap.Reason = "contract_drift"
+		if cap.Reason == "" {
+			cap.Verdict, cap.Reason, cap.Summary = domain.VerdictSkipped, firstOpenAIReason(web, app), "OpenAI endpoint checks were not executed"
 		}
 		return cap
 	}
 
-	// Try extracting trace country code
-	region := getOpenAIRegion(ctx, httpClient)
-	if region != "" {
+	cap.Verdict = domain.VerdictUnknown
+	cap.Reason = "endpoint_reachable_capability_unverified"
+	cap.Summary = appendOpenAITrackDetails("OpenAI network endpoint responded; ChatGPT, API, account, model, and Codex capability not verified", web, app)
+
+	// CDN trace is auxiliary geographic evidence. It does not alter the
+	// capability verdict or replace the scope of the endpoint checks.
+	if region := getOpenAIRegion(ctx, httpClient); region != "" {
 		cap.Region = region
 		cap.RegionSource = "cdn_trace"
-		cap.EvidenceScope = "cdn_trace"
-		cap.Summary = cap.Summary + " (" + region + ")"
+	}
+	return cap
+}
+
+func appendOpenAITrackDetails(summary string, web, app openAIEndpointResult) string {
+	var details []string
+	if web.reason != "" && web.reason != "endpoint_reachable_capability_unverified" {
+		details = append(details, "web_entry="+web.reason)
+	}
+	if app.reason != "" && app.reason != "endpoint_reachable_capability_unverified" {
+		details = append(details, "ios_gateway="+app.reason)
+	}
+	if len(details) == 0 {
+		return summary
+	}
+	return summary + " (" + strings.Join(details, "; ") + ")"
+}
+
+func firstOpenAIReason(results ...openAIEndpointResult) string {
+	for _, result := range results {
+		if result.reason != "" {
+			return result.reason
+		}
+	}
+	return "budget_not_executed"
+}
+
+func checkOpenAIEndpoint(ctx context.Context, httpClient *http.Client, endpoint string, mobile bool) openAIEndpointResult {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		verdict, reason := responseReadFailure(err)
+		return openAIEndpointResult{verdict: verdict, reason: reason}
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
+	if mobile {
+		req.Header.Set("User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/16G29 ChatGPT/3.0")
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Requested-With", "com.openai.chatgpt")
+		req.Header.Set("Referer", "https://chat.openai.com/")
+		req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+		req.Header.Set("Origin", "https://chat.openai.com")
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+		req.Header.Set("sec-ch-ua-mobile", "?1")
 	}
 
-	return cap
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		verdict, reason := responseReadFailure(err)
+		return openAIEndpointResult{verdict: verdict, reason: reason}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return openAIEndpointResult{responded: true, verdict: domain.VerdictRestricted, reason: "rate_limited"}
+	}
+	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnavailableForLegalReasons {
+		return openAIEndpointResult{responded: true, verdict: domain.VerdictRestricted, reason: "access_restricted"}
+	}
+	if resp.StatusCode >= 500 {
+		return openAIEndpointResult{verdict: domain.VerdictError, reason: "upstream_error"}
+	}
+
+	buf := getPooledBuf()
+	defer putPooledBuf(buf)
+	if _, err := buf.ReadFrom(resp.Body); err != nil {
+		verdict, reason := responseReadFailure(err)
+		return openAIEndpointResult{verdict: verdict, reason: reason}
+	}
+	bodyLower := bytes.ToLower(buf.Bytes())
+	if bytes.Contains(bodyLower, []byte("unsupported_country")) {
+		return openAIEndpointResult{responded: true, verdict: domain.VerdictRestricted, reason: "access_restricted"}
+	}
+	return openAIEndpointResult{responded: true, verdict: domain.VerdictUnknown, reason: "endpoint_reachable_capability_unverified"}
 }
 
 func getOpenAIRegion(ctx context.Context, httpClient *http.Client) string {
@@ -105,6 +168,9 @@ func getOpenAIRegion(ctx context.Context, httpClient *http.Client) string {
 		return ""
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
 
 	buf := getPooledBuf()
 	defer putPooledBuf(buf)
@@ -117,90 +183,4 @@ func getOpenAIRegion(ctx context.Context, httpClient *http.Client) string {
 		return strings.ToUpper(string(matches[1]))
 	}
 	return ""
-}
-
-func checkCookies(ctx context.Context, httpClient *http.Client) (bool, bool, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.openai.com/compliance/cookie_requirements", nil)
-	if err != nil {
-		return false, false, err
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return false, false, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnavailableForLegalReasons || resp.StatusCode == http.StatusTooManyRequests {
-		return false, true, nil
-	}
-	if resp.StatusCode != http.StatusOK {
-		return false, false, nil
-	}
-
-	buf := getPooledBuf()
-	defer putPooledBuf(buf)
-	if _, err := buf.ReadFrom(resp.Body); err != nil {
-		return false, false, err
-	}
-	body := buf.Bytes()
-	bodyLower := bytes.ToLower(body)
-
-	if bytes.Contains(bodyLower, []byte("unsupported_country")) {
-		return false, true, nil
-	}
-	if len(body) == 0 || bytes.Equal(bodyLower, []byte("ok")) || bytes.Contains(bodyLower, []byte("<html>")) {
-		return false, false, nil
-	}
-
-	return true, false, nil
-}
-
-func checkClient(ctx context.Context, httpClient *http.Client) (bool, bool, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://ios.chat.openai.com", nil)
-	if err != nil {
-		return false, false, err
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6_0 like Mac OS X) AppleWebKit/537.36 (KHTML, like Gecko) Mobile/16G29 ChatGPT/3.0")
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Requested-With", "com.openai.chatgpt")
-	req.Header.Set("Referer", "https://chat.openai.com/")
-	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
-	req.Header.Set("Origin", "https://chat.openai.com")
-	req.Header.Set("Sec-Fetch-Site", "same-origin")
-	req.Header.Set("sec-ch-ua-mobile", "?1")
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return false, false, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnavailableForLegalReasons || resp.StatusCode == http.StatusTooManyRequests {
-		return false, true, nil
-	}
-	if resp.StatusCode != http.StatusOK {
-		return false, false, nil
-	}
-
-	buf := getPooledBuf()
-	defer putPooledBuf(buf)
-	if _, err := buf.ReadFrom(resp.Body); err != nil {
-		return false, false, err
-	}
-	bodyLower := bytes.ToLower(buf.Bytes())
-
-	if bytes.Contains(bodyLower, []byte("unsupported_country")) ||
-		bytes.Contains(bodyLower, []byte("vpn")) ||
-		bytes.Contains(bodyLower, []byte("disallowed isp")) ||
-		bytes.Contains(bodyLower, []byte("sorry, you have been blocked")) {
-		return false, true, nil
-	}
-	if len(bodyLower) == 0 || bytes.Equal(bodyLower, []byte("ok")) || bytes.Contains(bodyLower, []byte("<html>")) {
-		return false, false, nil
-	}
-
-	return true, false, nil
 }

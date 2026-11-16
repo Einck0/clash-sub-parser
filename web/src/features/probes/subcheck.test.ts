@@ -278,54 +278,41 @@ describe('Subcheck Platform Capability Matrix & Fixture Tests', () => {
   })
 
   describe('Platform Badge Formatting & Tones', () => {
-    it('formats OpenAI sub-tiers accurately', () => {
-      // Full: GPT⁺ web + app dual pass
-      const full = formatPlatformBadge('openai', {
+    it('keeps OpenAI endpoint evidence separate from unverified capability and legacy tiers', () => {
+      const current = formatPlatformBadge('openai', {
+        verdict: 'unknown',
+        reason: 'endpoint_reachable_capability_unverified',
+        evidence_scope: 'network_entry',
+      })
+      expect(current.label).toContain('入口响应')
+      expect(current.tone).not.toBe('success')
+      expect(current.tooltip).toContain('Codex')
+      expect(current.tooltip).toContain('API')
+
+      const legacy = formatPlatformBadge('openai', {
         verdict: 'available',
         sub_tier: 'full',
         region: 'US',
       })
-      expect(full.label).toBe('GPT⁺ (US)')
-      expect(full.tone).toBe('success')
+      expect(legacy.label).toContain('旧版入口记录')
+      expect(legacy.label).not.toContain('GPT⁺')
+      expect(legacy.tone).not.toBe('success')
+      expect(legacy.tooltip).toContain('历史记录')
 
-      // Web: GPT web pass only (not green!)
-      const web = formatPlatformBadge('openai', {
+      const rateLimited = formatPlatformBadge('openai', {
         verdict: 'restricted',
-        sub_tier: 'web',
-        region: 'US',
-      })
-      expect(web.label).toBe('GPT (US)')
-      expect(web.tone).toBe('warning')
-      expect(web.tone).not.toBe('success')
-
-      // App: GPT app pass only (not green!)
-      const app = formatPlatformBadge('openai', {
-        verdict: 'restricted',
-        sub_tier: 'app',
-        region: 'US',
-      })
-      expect(app.label).toBe('GPT App (US)')
-      expect(app.tone).toBe('warning')
-      expect(app.tone).not.toBe('success')
-
-      // Banned: error
-      const banned = formatPlatformBadge('openai', {
-        verdict: 'error',
+        reason: 'rate_limited',
         sub_tier: 'banned',
-        region: 'US',
       })
-      expect(banned.label).toContain('GPT 封禁')
-      expect(banned.tone).toBe('error')
+      expect(rateLimited.label).toBe('OpenAI 入口限流')
+      expect(rateLimited.label).not.toContain('封禁')
 
-      // Missing region: no dummy value
-      const noReg = formatPlatformBadge('openai', {
-        verdict: 'available',
+      const staleLegacy = formatPlatformBadge('openai', {
+        verdict: 'stale',
         sub_tier: 'full',
-        region: '',
       })
-      expect(noReg.label).toBe('GPT⁺')
-      expect(noReg.label).not.toContain('?')
-      expect(noReg.label).not.toContain('unknown')
+      expect(staleLegacy.label).toBe('OpenAI 结果过期 · 已过期')
+      expect(staleLegacy.tone).toBe('warning')
     })
 
     it('formats Netflix sub-tiers accurately', () => {
@@ -506,7 +493,7 @@ describe('Subcheck Platform Capability Matrix & Fixture Tests', () => {
         region: 'US',
       })
       expect(stale.tone).not.toBe('success')
-      expect(stale.label).toContain('已过期')
+      expect(stale.label).toBe('OpenAI 结果过期 · 已过期')
     })
 
     it('never displays dummy region values for missing or unknown regions', () => {
@@ -515,7 +502,7 @@ describe('Subcheck Platform Capability Matrix & Fixture Tests', () => {
         sub_tier: 'full',
         region: 'unknown',
       })
-      expect(missing.label).toBe('GPT⁺')
+      expect(missing.label).toBe('旧版入口记录（能力未核验）')
       expect(missing.label).not.toContain('unknown')
 
       const ws = formatPlatformBadge('netflix', {
@@ -541,8 +528,8 @@ describe('Subcheck Platform Capability Matrix & Fixture Tests', () => {
       const normAiFull = normalizeNode(subcheckFixtureNodes.aiFull)
       const aiBadges = getNodePlatformBadges(normAiFull, 'ai')
       expect(aiBadges.length).toBe(2)
-      expect(aiBadges[0].label).toBe('GPT⁺ (US)')
-      expect(aiBadges[0].tone).toBe('success')
+      expect(aiBadges[0].label).toBe('旧版入口记录（能力未核验）')
+      expect(aiBadges[0].tone).not.toBe('success')
       expect(aiBadges[1].label).toBe('Claude (US)')
 
       const normStreamingFull = normalizeNode(subcheckFixtureNodes.streamingFull)
@@ -604,7 +591,7 @@ describe('Subcheck Platform Capability Matrix & Fixture Tests', () => {
         await new Promise((r) => setTimeout(r, 40))
 
         const text = mountEl.textContent || ''
-        expect(text).toContain('GPT⁺ (US)')
+        expect(text).toContain('旧版入口记录（能力未核验）')
         expect(text).toContain('NF 仅自制 (HK)')
         expect(text).toContain('D+ 尚未开放 (HK)')
         expect(text).toContain('5.1 MB/s')
@@ -618,7 +605,7 @@ describe('Subcheck Platform Capability Matrix & Fixture Tests', () => {
 
         const drawer = mountEl.querySelector('[data-testid="node-detail-drawer"]') || document.body.querySelector('[data-testid="node-detail-drawer"]')
         expect(drawer).not.toBeNull()
-        expect(drawer?.textContent).toContain('GPT⁺ (US)')
+        expect(drawer?.textContent).toContain('旧版入口记录（能力未核验）')
         expect(drawer?.textContent).toContain('Claude (US)')
       } finally {
         app.unmount()
@@ -668,7 +655,7 @@ describe('Subcheck Platform Capability Matrix & Fixture Tests', () => {
         expect(text).toContain('NF (HK)')
         expect(text).toContain('YT (SG)')
         expect(text).toContain('D+ (HK)')
-        expect(text).toContain('GPT (US)')
+        expect(text).toContain('旧版入口记录（能力未核验）')
       } finally {
         app.unmount()
         mountEl.remove()
@@ -731,7 +718,7 @@ describe('Subcheck Platform Capability Matrix & Fixture Tests', () => {
       await nextTick()
 
       const text = mountEl.textContent || ''
-      expect(text).toContain('GPT⁺ (US)')
+      expect(text).toContain('旧版入口记录（能力未核验）')
       expect(text).toContain('Claude (US)')
       expect(text).toContain('8.0 MB/s')
 

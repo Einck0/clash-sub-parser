@@ -404,10 +404,11 @@ export function buildPlatformTooltip(platform: string, cap: PlatformCapability):
   } else if (normPlat === 'gemini') {
     parts.push('网页端区域支持检测；个人账号登录、年龄及模型权限未核验')
   } else if (normPlat === 'openai') {
-    if (cap.sub_tier === 'full') parts.push('OpenAI 网页 + App 双通')
-    else if (cap.sub_tier === 'web') parts.push('OpenAI 仅网页端可用')
-    else if (cap.sub_tier === 'app') parts.push('OpenAI 仅客户端可用')
-    else if (cap.sub_tier === 'banned') parts.push('OpenAI 封禁')
+    parts.push('当前探针仅观测匿名网页合规入口与 iOS 网关响应；API 调用、Codex、账号及模型资格未检测/未核验')
+    if (cap.sub_tier === 'full' || cap.sub_tier === 'web' || cap.sub_tier === 'app') {
+      parts.push('旧版入口分级仅作历史记录，不代表 ChatGPT/API/Codex 能力')
+    }
+    if (cap.sub_tier === 'banned') parts.push('旧版封禁标签不代表账号封禁')
   } else if (normPlat === 'netflix') {
     if (cap.sub_tier === 'full') parts.push('Netflix 全量剧集解锁')
     else if (cap.sub_tier === 'originals') parts.push('Netflix 仅自制剧')
@@ -484,35 +485,29 @@ export function formatPlatformBadge(platform: string, cap: PlatformCapability): 
 
   switch (normPlat) {
     case 'openai':
-      if (subTier === 'banned') {
-        label = region ? `GPT 封禁 (${region})` : 'GPT 封禁'
-        tone = 'error'
-      } else if (verdict === 'abnormal') {
-        label = region ? `GPT 异常 (${region})` : 'GPT 异常'
+      if (isStale) {
+        label = 'OpenAI 结果过期'
         tone = 'warning'
       } else if (verdict === 'skipped') {
-        label = 'GPT 未执行'
+        label = 'OpenAI 未执行'
         tone = 'info'
-      } else if (subTier === 'full') {
-        label = region ? `GPT⁺ (${region})` : 'GPT⁺'
-        tone = 'success'
-      } else if (subTier === 'web') {
-        label = region ? `GPT (${region})` : 'GPT'
+      } else if (verdict === 'abnormal') {
+        label = 'OpenAI 异常'
         tone = 'warning'
-      } else if (subTier === 'app') {
-        label = region ? `GPT App (${region})` : 'GPT App'
-        tone = 'warning'
-      } else if (verdict === 'available') {
-        label = region ? `GPT⁺ (${region})` : 'GPT⁺'
-        tone = 'success'
       } else if (verdict === 'restricted') {
-        label = region ? `GPT 受限 (${region})` : 'GPT 受限'
+        label = cap.reason === 'rate_limited' ? 'OpenAI 入口限流' : 'OpenAI 入口受限'
         tone = 'warning'
       } else if (verdict === 'error') {
-        label = region ? `GPT 失败 (${region})` : 'GPT 失败'
+        label = 'OpenAI 检测失败'
         tone = 'error'
+      } else if (verdict === 'available') {
+        label = '旧版入口记录（能力未核验）'
+        tone = 'info'
+      } else if (verdict === 'unknown' && cap.reason === 'endpoint_reachable_capability_unverified') {
+        label = 'OpenAI 入口响应（能力未核验）'
+        tone = 'info'
       } else {
-        label = region ? `GPT (${region})` : 'GPT'
+        label = 'OpenAI 能力未核验'
         tone = 'info'
       }
       break
@@ -897,6 +892,7 @@ const REASON_LABELS: Record<string, string> = {
   speed_budget_exceeded: '超出单次测速流量上限',
   unexpected_status: '探测响应状态码不符合预期',
   contract_drift: '探测响应内容不符合契约',
+  endpoint_reachable_capability_unverified: '入口有响应，但服务能力未核验',
 }
 
 const POLICY_OR_CONFIG_BLOCKED_REASONS = new Set<string>([

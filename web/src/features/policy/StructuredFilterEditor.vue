@@ -458,6 +458,9 @@ function opLabel(op: FilterOp): string {
               <option v-for="verdict in SUPPORTED_PLATFORM_VERDICTS" :key="verdict" :value="verdict">{{ verdict }}</option>
             </select>
           </label>
+          <p v-if="condition.probe_kind === 'ai' && condition.platform === 'openai'" class="text-xs opacity-70 sm:col-span-3">
+            OpenAI 结果仅指旧版/当前匿名入口证据范围；不代表 API、Codex、账号或模型资格。当前入口响应为未核验，不匹配 available。
+          </p>
         </template>
 
         <label v-else-if="condition.field === 'ip_risk_band'" class="flex flex-col gap-1 text-xs font-medium">

@@ -1016,7 +1016,9 @@ Publications、Dashboard、Policy Admission Rules、Subscriptions 和 Settings S
 - **WHEN** 测速节点高速下载文件且累计传输达到预设的 5MB 上限
 - **THEN** 读取器主动终止网络连接并按传输字节数与毫秒耗时计算 Mbps 带宽，不再继续下载
 
-#### Requirement: OpenAI 双轨分级与地区识别 [HR-256] <a id="req-prob-hr-256"></a>
+#### Historical requirement (superseded for capability verdicts): OpenAI 双轨分级与地区识别 [HR-256] <a id="req-prob-hr-256"></a>
+
+> 历史来源保留：下述双轨与地区采样曾被规定为 Full/Web/App 能力分级。此映射与 HR-179 的可验证能力契约要求冲突；现由 HR-299 明确取代其能力判定和徽标语义，旧 `full`/`web`/`app` 数据只作历史入口分级，不回写、不作为当前能力证明。
 
 系统探针对 OpenAI / ChatGPT 的可用性探测 SHALL 采用双轨机制：轨 1 请求 Web 端 `https://api.openai.com/compliance/cookie_requirements`（判断响应是否排除 `unsupported_country`）；轨 2 携带移动端请求头请求 `https://ios.chat.openai.com`（判断响应是否排除 `unsupported_country` 及 `vpn` 封禁信号）。
 - 双轨全部通过时，系统判定为全平台可用（`Full = true`，标记为 `GPT⁺`）；
@@ -1033,6 +1035,22 @@ Publications、Dashboard、Policy Admission Rules、Subscriptions 和 Settings S
 - **GIVEN** 探测引擎与待测节点就绪
 - **WHEN** 节点的轨 1 正常通过，但轨 2 返回 vpn 拦截关键字
 - **THEN** 探测结果输出 `openai` 为 `Web` 可用，标记为 `GPT` 降级可用
+
+#### Requirement: OpenAI anonymous endpoint evidence is not product capability [HR-299] <a id="req-prob-hr-299"></a>
+
+OpenAI探针 SHALL 保留 `platforms.openai` 字段并通过被测节点 transport 请求现有匿名网页合规入口和 iOS 网关，但不得将入口响应推断为 ChatGPT 网页会话、OpenAI API、账号/模型资格或 Codex 能力。没有可追溯、已验证的正面业务契约时，任何普通 HTTP 响应（包括空/任意 JSON、普通 HTML、登录页、401、204、302）MUST NOT 导致 `available`；响应但能力未核验时使用 `unknown` 与 `endpoint_reachable_capability_unverified`。429 使用 `restricted/rate_limited`，不得标记为封禁；403/451/明确地域限制只说明入口受限，不推断账号封禁。DNS/TLS/超时/读取错误/5xx保留真实失败或跳过原因。一轨响应不覆盖另一轨的失败证据，也不得产生“仅 Web/App 可用”结论。CDN trace 仅补充 `region_source=cdn_trace`，不得覆盖 `evidence_scope=network_entry` 或提升能力 verdict。
+
+前端 SHALL 优先按 verdict 与 freshness 展示；历史 `full`/`web`/`app`/`banned` 子级 SHALL 以中性历史入口记录呈现，不得盖过 error/restricted/skipped/stale 或显示 GPT⁺、账号/API/Codex 可用。OpenAI 入口及筛选说明 MUST 明确 API、Codex、账号和模型资格未检测/未核验。AI profile 版本变更 SHALL 使新旧语义可追溯；历史观察保持原值。
+
+##### Scenario: 正常入口响应不证明能力
+- **GIVEN** OpenAI匿名网页合规入口或 iOS 网关返回任意普通响应
+- **WHEN** 没有已验证的正面业务能力契约
+- **THEN** OpenAI verdict MUST 为 `unknown`，不得显示成功等级，且明确能力未核验
+
+##### Scenario: 429 与历史子级不产生封禁或成功徽标
+- **GIVEN** 当前观察为 HTTP 429，或读取到历史 `full`/`web`/`app` 数据
+- **WHEN** 前端展示 OpenAI 观察
+- **THEN** 429 显示入口限流而非封禁；历史子级显示中性历史记录，不得显示成功能力
 
 #### Requirement: Netflix 细粒度解锁分级与封禁识别 [HR-257] <a id="req-prob-hr-257"></a>
 
@@ -1137,12 +1155,12 @@ Publications、Dashboard、Policy Admission Rules、Subscriptions 和 Settings S
 
 #### Requirement: 前端 WebUI 实时状态与平台徽标展示 [HR-263] <a id="req-prob-hr-263"></a>
 
-前端工作台 SHALL 更新探针运行卡片与节点台账列表，以语义化的彩色徽章（Badge）和平台图标展示真实检测结果（如 `GPT⁺ (US)`、`NF (HK)`、`YT (SG)`、`Claude (JP)` 等），对封禁、不可用及未测速状态给予明确视觉区分，杜绝假未检测或虚假占位。
+前端工作台 SHALL 更新探针运行卡片与节点台账列表，以语义化的彩色徽章（Badge）和平台图标展示真实检测结果（如 Netflix `NF (HK)`、YouTube `YT (SG)`、Claude `Claude (JP)` 等），对封禁、不可用及未测速状态给予明确视觉区分，杜绝假未检测或虚假占位。OpenAI 的入口响应和历史分级 SHALL 按 HR-299 的中性文案展示，不能显示 GPT⁺ 成功状态。
 
-##### Scenario: 前端如实展示 GPT 满血徽标与地区 <a id="scenario-prob-hr-263-1"></a>
-- **GIVEN** 探测引擎与待测节点就绪
-- **WHEN** 节点的 `openai` 能力返回 `Full` 且国家为 `US`
-- **THEN** 前端在节点卡片上渲染绿色的 `GPT⁺ (US)` 标签
+##### Scenario: OpenAI 入口响应不展示为能力成功 <a id="scenario-prob-hr-263-1"></a>
+- **GIVEN** 探测引擎与待测节点就绪，OpenAI 匿名入口返回响应但没有已验证的能力契约
+- **WHEN** 前端展示该节点的 `openai` 观测
+- **THEN** 节点卡片显示“OpenAI 入口响应（能力未核验）”等中性状态，不显示绿色 GPT⁺ 或地区能力承诺
 
 ### Explicitly Pending Historical Stubs
 

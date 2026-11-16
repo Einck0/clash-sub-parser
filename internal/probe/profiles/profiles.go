@@ -19,7 +19,7 @@ const (
 	LegacyBaselineContract = "csp-baseline-v1:204+empty"
 	GeoVersion             = "geo-v1"
 	StreamingVersion       = "streaming-v1"
-	AIVersion              = "ai-v1"
+	AIVersion              = "ai-v2-openai-entry-scope"
 	SpeedVersion           = "speed-v1"
 	IPRiskVersion          = "ip-risk-v1"
 )

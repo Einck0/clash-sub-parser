@@ -29,6 +29,16 @@ func TestProbeObservationOpenAIEvidenceDataSQLiteRoundTrip(t *testing.T) {
 		t.Fatalf("create probe run: %v", err)
 	}
 
+	// probe_observations.node_logical_id is a required foreign key; seed the
+	// referenced node so this test exercises evidence persistence/round-trip
+	// rather than failing on an unrelated missing fixture row.
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO nodes (logical_id, protocol, display_name, server, port, config_json, active, created_at, updated_at, connection_revision)
+		VALUES (?, 'ss', 'OpenAI evidence fixture', '192.0.2.1', 8388, '{}', 1, ?, ?, 1);`,
+		"node-openai-evidence-roundtrip", now.Format(time.RFC3339), now.Format(time.RFC3339)); err != nil {
+		t.Fatalf("create probe observation node: %v", err)
+	}
+
 	observedAt := now.Add(-time.Minute)
 	latency := int64(125)
 	observation := &domain.ProbeObservation{

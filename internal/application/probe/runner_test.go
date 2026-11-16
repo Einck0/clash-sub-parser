@@ -1167,8 +1167,8 @@ func TestProbeRunnerTruthfulContractsPerKind(t *testing.T) {
 			kind:        domain.ProbeKindAI,
 			statusCode:  http.StatusOK,
 			body:        "OK",
-			wantVerdict: domain.VerdictError,
-			wantReason:  "detection_failed",
+			wantVerdict: domain.VerdictUnknown,
+			wantReason:  "evidence_inconclusive",
 		},
 		{
 			name:        "ai_451_is_restricted",
@@ -1375,14 +1375,16 @@ func TestProbeRunnerNodeSessionReuseAndCleanupLifecycle(t *testing.T) {
 		if dialCounts["node_pass"] != 1 || cleanCounts["node_pass"] != 1 {
 			t.Fatalf("node_pass dials=%d cleanups=%d, want 1 and 1", dialCounts["node_pass"], cleanCounts["node_pass"])
 		}
-		if reqCounts["node_pass"] != 15 {
-			t.Fatalf("node_pass requests=%d, want 15 including independent Antigravity and Disney fallback requests", reqCounts["node_pass"])
+		// OpenAI checks its two capability-unverified endpoints and makes an
+		// auxiliary CDN trace request; that trace does not change the verdict.
+		if reqCounts["node_pass"] != 16 {
+			t.Fatalf("node_pass requests=%d, want 16 including OpenAI endpoint+trace, Antigravity, and Disney fallback requests", reqCounts["node_pass"])
 		}
 		if dialCounts["node_drift"] != 1 || cleanCounts["node_drift"] != 1 {
 			t.Fatalf("node_drift dials=%d cleanups=%d, want 1 and 1", dialCounts["node_drift"], cleanCounts["node_drift"])
 		}
-		if reqCounts["node_drift"] != 15 {
-			t.Fatalf("node_drift requests=%d, want 15 including independent Antigravity and Disney fallback requests (normalized baseline 200 enters stage 2)", reqCounts["node_drift"])
+		if reqCounts["node_drift"] != 16 {
+			t.Fatalf("node_drift requests=%d, want 16 including OpenAI endpoint+trace, Antigravity, and Disney fallback requests (normalized baseline 200 enters stage 2)", reqCounts["node_drift"])
 		}
 		for _, nodeID := range []string{"node_pass", "node_drift"} {
 			var hasDisneyFallback bool
@@ -1456,8 +1458,8 @@ func TestProbeRunnerNodeSessionReuseAndCleanupLifecycle(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// Non-baseline multiple kinds trigger single-stage path. AI performs an
-		// independent Antigravity request in addition to its existing requests.
+		// Non-baseline multiple kinds trigger single-stage path. AI checks both
+		// OpenAI endpoints, an auxiliary CDN trace, and independent Antigravity.
 		// Disney triggers an intentional public-page fallback on malformed assertion.
 		kinds := []domain.ProbeKind{
 			domain.ProbeKindGeo,
@@ -1468,8 +1470,8 @@ func TestProbeRunnerNodeSessionReuseAndCleanupLifecycle(t *testing.T) {
 		if err := runner.Run(context.Background(), run, []string{"node_single"}, kinds); err != nil {
 			t.Fatalf("Run failed: %v", err)
 		}
-		if dials.Load() != 1 || cleanups.Load() != 1 || requests.Load() != 14 {
-			t.Fatalf("expected dials=1 cleanups=1 requests=14 including independent Antigravity and Disney fallback requests, got dials=%d cleanups=%d requests=%d", dials.Load(), cleanups.Load(), requests.Load())
+		if dials.Load() != 1 || cleanups.Load() != 1 || requests.Load() != 15 {
+			t.Fatalf("expected dials=1 cleanups=1 requests=15 including OpenAI endpoint+trace, Antigravity, and Disney fallback requests, got dials=%d cleanups=%d requests=%d", dials.Load(), cleanups.Load(), requests.Load())
 		}
 		urlsMu.Lock()
 		var hasDisneyFallback bool

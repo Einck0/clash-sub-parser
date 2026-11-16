@@ -655,7 +655,8 @@ describe('Subcheck Platform Capability Matrix & Fixture Tests', () => {
         expect(text).toContain('NF (HK)')
         expect(text).toContain('YT (SG)')
         expect(text).toContain('D+ (HK)')
-        expect(text).toContain('旧版入口记录（能力未核验）')
+        expect(text).toContain('OpenAI 入口受限')
+        expect(text).toContain('Claude 受限 (HK)')
       } finally {
         app.unmount()
         mountEl.remove()

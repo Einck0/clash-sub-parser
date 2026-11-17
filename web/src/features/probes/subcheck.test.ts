@@ -306,8 +306,8 @@ describe('Subcheck Platform Capability Matrix & Fixture Tests', () => {
       })
       expect(current.label).toContain('入口响应')
       expect(current.tone).not.toBe('success')
-      expect(current.tooltip).toContain('Codex')
-      expect(current.tooltip).toContain('API')
+      expect(current.tooltip).toContain('Codex 能力及 App 能力未核验')
+      expect(current.tooltip).toContain('API 鉴权、API 调用和模型推理未检测')
 
       const legacy = formatPlatformBadge('openai', {
         verdict: 'available',
@@ -356,7 +356,8 @@ describe('Subcheck Platform Capability Matrix & Fixture Tests', () => {
       })
       expect(current.label).toBe('OpenAI 预检通过')
       expect(current.tone).toBe('success')
-      expect(current.tooltip).toContain('账号登录、付费模型、API 推理与 App 能力未核验')
+      expect(current.tooltip).toContain('账号登录、付费模型、Codex 能力及 App 能力未核验')
+      expect(current.tooltip).toContain('API 鉴权、API 调用和模型推理未检测')
       expect(current.tooltip).toContain('合规入口: 已确认')
       expect(current.tooltip).toContain('网页入口: 已确认 · HTTP 200')
 

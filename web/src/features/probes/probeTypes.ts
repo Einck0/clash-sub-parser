@@ -440,7 +440,7 @@ export function buildPlatformTooltip(platform: string, cap: PlatformCapability):
   } else if (normPlat === 'gemini') {
     parts.push('网页端区域支持检测；个人账号登录、年龄及模型权限未核验')
   } else if (normPlat === 'openai') {
-    parts.push('匿名公开入口预检；账号登录、付费模型、API 推理与 App 能力未核验')
+    parts.push('匿名公开入口预检；账号登录、付费模型、Codex 能力及 App 能力未核验；API 鉴权、API 调用和模型推理未检测')
     if (cap.sub_tier === 'full' || cap.sub_tier === 'web' || cap.sub_tier === 'app') {
       parts.push('旧版入口分级仅作历史记录，不代表 ChatGPT/API/Codex 能力')
     }

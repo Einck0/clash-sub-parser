@@ -166,10 +166,11 @@ func hasRestrictionMarker(body []byte) bool {
 func hasLoginGate(body []byte) bool {
 	tokenizer := html.NewTokenizer(bytes.NewReader(body))
 	for {
-		if tokenizer.Next() == html.ErrorToken {
+		tokenType := tokenizer.Next()
+		if tokenType == html.ErrorToken {
 			return false
 		}
-		if tokenizer.TokenType() != html.StartTagToken {
+		if tokenType != html.StartTagToken {
 			continue
 		}
 		name, hasAttr := tokenizer.TagName()

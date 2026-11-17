@@ -328,6 +328,10 @@ export function computeGroupVerdict(
   return 'skipped'
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
 /** Normalize raw platform dictionary from snake_case or camelCase */
 export function normalizePlatforms(
   raw?: Record<string, any>
@@ -380,33 +384,28 @@ export function normalizePlatforms(
         ? v.evidenceScope.trim()
         : undefined
     const evidenceScope = rawEvidenceScope || undefined
-    const rawChecks = v.checks && typeof v.checks === 'object' && !Array.isArray(v.checks) ? v.checks : undefined
-    const checks: Record<string, PlatformCheck> | undefined = rawChecks
-      ? Object.fromEntries(
-          Object.entries(rawChecks).flatMap(([checkName, rawCheck]) => {
-            if (!rawCheck || typeof rawCheck !== 'object' || Array.isArray(rawCheck)) return []
-            const rawVerdict = typeof rawCheck.verdict === 'string' ? rawCheck.verdict.toLowerCase().trim() : ''
-            const validVerdicts: ProbeVerdict[] = [
-              'available', 'abnormal', 'restricted', 'unknown', 'error', 'skipped', 'stale',
-            ]
-            const checkVerdict = validVerdicts.includes(rawVerdict as ProbeVerdict)
-              ? (rawVerdict as ProbeVerdict)
-              : 'unknown'
-            const rawCheckStatus = rawCheck.status_code ?? rawCheck.statusCode
-            const rawCheckScope = rawCheck.evidence_scope ?? rawCheck.evidenceScope
-            return [
-              [
-                checkName,
-                {
-                  verdict: checkVerdict,
-                  reason: typeof rawCheck.reason === 'string' ? rawCheck.reason : undefined,
-                  status_code: typeof rawCheckStatus === 'number' ? rawCheckStatus : undefined,
-                  evidence_scope: typeof rawCheckScope === 'string' ? rawCheckScope.trim() || undefined : undefined,
-                },
-              ],
-            ]
-          })
-        )
+    const rawChecks = isRecord(v.checks) ? v.checks : undefined
+    const validCheckVerdicts: ProbeVerdict[] = [
+      'available', 'abnormal', 'restricted', 'unknown', 'error', 'skipped', 'stale',
+    ]
+    const checks = rawChecks
+      ? Object.entries(rawChecks).reduce<Record<string, PlatformCheck>>((normalized, [checkName, rawCheck]) => {
+          if (!isRecord(rawCheck)) return normalized
+          const check = rawCheck
+
+          const rawVerdict = typeof check.verdict === 'string' ? check.verdict.toLowerCase().trim() : ''
+          const verdict = validCheckVerdicts.find((candidate) => candidate === rawVerdict) ?? 'unknown'
+          const statusCode = check.status_code ?? check.statusCode
+          const evidenceScope = check.evidence_scope ?? check.evidenceScope
+
+          normalized[checkName] = {
+            verdict,
+            reason: typeof check.reason === 'string' ? check.reason : undefined,
+            status_code: typeof statusCode === 'number' ? statusCode : undefined,
+            evidence_scope: typeof evidenceScope === 'string' ? evidenceScope.trim() || undefined : undefined,
+          }
+          return normalized
+        }, {})
       : undefined
 
     result[k.toLowerCase()] = {

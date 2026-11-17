@@ -11,7 +11,7 @@ import (
 // Removal subtracts recursively reachable child nodes from direct members only;
 // it does not mutate either group reference or make removal a permanent veto.
 func TestGroupNodesRemovalPreservesReferencesAndOrder(t *testing.T) {
-	a, b, c := "node-a", "node-b", "node-c"
+	a, b, c := "node_aaaaaaaaaaaaaaaa", "node_bbbbbbbbbbbbbbbb", "node_cccccccccccccccc"
 	cheap, nested, hongkong, parent := domain.MustNewUUIDv7(), domain.MustNewUUIDv7(), domain.MustNewUUIDv7(), domain.MustNewUUIDv7()
 	nodes := []domain.Node{
 		{LogicalID: a, DisplayName: "A", Protocol: "ss", Active: true},

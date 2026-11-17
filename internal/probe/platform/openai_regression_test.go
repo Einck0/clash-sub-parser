@@ -47,7 +47,7 @@ func TestCheckOpenAIRequiresBothPublicPreflightContracts(t *testing.T) {
 		reason string
 	}{
 		{"both pass", `{"cookie_consent_required":false}`, 200, validWeb, goodHeader, domain.VerdictUnknown, domain.VerdictAvailable, "anonymous_preflight_passed"},
-		{"compliance contract drift with valid web", `{}`, 200, validWeb, goodHeader, domain.VerdictError, "partial_preflight_error"},
+		{"compliance contract drift with valid web", `{}`, 200, validWeb, goodHeader, domain.VerdictUnknown, domain.VerdictError, "partial_preflight_error"},
 		{"web contract drift with valid compliance", `{"cookie_consent_required":true}`, 200, "<html><title>ChatGPT</title></html>", goodHeader, domain.VerdictUnknown, domain.VerdictError, "partial_preflight_error"},
 		{"challenge with valid compliance", `{"cookie_consent_required":true}`, 403, "<title>Just a moment</title>cf-chl-", goodHeader, domain.VerdictUnknown, domain.VerdictUnknown, "partial_preflight"},
 		{"generic 403 with valid compliance", `{"cookie_consent_required":true}`, 403, "forbidden", goodHeader, domain.VerdictUnknown, domain.VerdictUnknown, "partial_preflight"},

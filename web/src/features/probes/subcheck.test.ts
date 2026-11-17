@@ -365,7 +365,7 @@ describe('Subcheck Platform Capability Matrix & Fixture Tests', () => {
         expect(badge.tone).not.toBe('success')
         expect(badge.label).not.toContain('GPT⁺')
       }
-      expect(formatPlatformBadge('openai', { verdict: 'available', sub_tier: 'full }).label)
+      expect(formatPlatformBadge('openai', { verdict: 'available', sub_tier: 'full' }).label)
         .toBe('旧版探测结果，需重新检测')
     })
 

@@ -300,6 +300,23 @@ func mockHTTPClient(statusCode int, body string, err error) *http.Client {
 	}
 }
 
+// mockOpenAIPartialPreflightClient models valid compliance evidence alongside a
+// generic web-entry denial. The result is unknown, never product success.
+func mockOpenAIPartialPreflightClient() *http.Client {
+	return &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		status, body := http.StatusOK, "OK"
+		switch {
+		case req.URL.Host == "api.openai.com" && req.URL.Path == "/compliance/cookie_requirements":
+			body = `{"cookie_consent_required":false}`
+		case req.URL.Host == "chatgpt.com" && req.URL.Path == "/":
+			status, body = http.StatusForbidden, "Forbidden"
+		case req.URL.Host == "chat.openai.com" && req.URL.Path == "/cdn-cgi/trace":
+			body = "loc=US\n"
+		}
+		return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: req}, nil
+	})}
+}
+
 func contractAwareMockHTTPClient() *http.Client {
 	return &http.Client{
 		Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
@@ -1060,6 +1077,7 @@ func TestProbeRunnerTruthfulContractsPerKind(t *testing.T) {
 		wantReason      string
 		wantContains    string
 		wantNotContains string
+		clientFactory   func() *http.Client
 	}{
 		// Baseline
 		{
@@ -1163,12 +1181,13 @@ func TestProbeRunnerTruthfulContractsPerKind(t *testing.T) {
 			wantReason:  "access_restricted",
 		},
 		{
-			name:        "ai_200_ok_never_available",
-			kind:        domain.ProbeKindAI,
-			statusCode:  http.StatusOK,
-			body:        "OK",
-			wantVerdict: domain.VerdictUnknown,
-			wantReason:  "evidence_inconclusive",
+			name:          "ai_valid_compliance_with_generic_web_denial_never_available",
+			kind:          domain.ProbeKindAI,
+			statusCode:    http.StatusOK,
+			body:          "OK",
+			clientFactory: mockOpenAIPartialPreflightClient,
+			wantVerdict:   domain.VerdictUnknown,
+			wantReason:    "evidence_inconclusive",
 		},
 		{
 			name:        "ai_451_is_restricted",
@@ -1237,6 +1256,9 @@ func TestProbeRunnerTruthfulContractsPerKind(t *testing.T) {
 				sched,
 				runsRepo,
 				probe.WithNodeDialer(func(ctx context.Context, node domain.Node) (*http.Client, func() error, error) {
+					if tc.clientFactory != nil {
+						return tc.clientFactory(), nil, nil
+					}
 					return mockHTTPClient(tc.statusCode, tc.body, tc.doErr), nil, nil
 				}),
 			)
@@ -1262,6 +1284,15 @@ func TestProbeRunnerTruthfulContractsPerKind(t *testing.T) {
 			}
 			if obs[0].Verdict != tc.wantVerdict {
 				t.Fatalf("verdict = %s, want %s (summary=%s)", obs[0].Verdict, tc.wantVerdict, obs[0].RedactedSummary)
+			}
+			if tc.clientFactory != nil {
+				openAI, ok := obs[0].Platforms["openai"]
+				if !ok || openAI.Verdict != domain.VerdictUnknown || openAI.Reason != "partial_preflight" {
+					t.Fatalf("partial OpenAI entry evidence must remain unknown, got %+v", openAI)
+				}
+				if openAI.Checks["cookie_requirements"].Verdict != domain.VerdictAvailable || openAI.Checks["chatgpt_web"].Verdict != domain.VerdictUnknown {
+					t.Fatalf("OpenAI fixture did not route through compliance pass + inconclusive web entry: %+v", openAI.Checks)
+				}
 			}
 			if !strings.Contains(obs[0].RedactedSummary, "reason="+tc.wantReason) {
 				t.Fatalf("summary = %q, want reason=%s", obs[0].RedactedSummary, tc.wantReason)
@@ -1375,16 +1406,16 @@ func TestProbeRunnerNodeSessionReuseAndCleanupLifecycle(t *testing.T) {
 		if dialCounts["node_pass"] != 1 || cleanCounts["node_pass"] != 1 {
 			t.Fatalf("node_pass dials=%d cleanups=%d, want 1 and 1", dialCounts["node_pass"], cleanCounts["node_pass"])
 		}
-		// OpenAI checks its two capability-unverified endpoints and makes an
-		// auxiliary CDN trace request; that trace does not change the verdict.
-		if reqCounts["node_pass"] != 16 {
-			t.Fatalf("node_pass requests=%d, want 16 including OpenAI endpoint+trace, Antigravity, and Disney fallback requests", reqCounts["node_pass"])
+		// OpenAI probes the two required preflight endpoints plus the legacy iOS
+		// diagnostic and auxiliary CDN trace; neither optional request changes the verdict.
+		if reqCounts["node_pass"] != 17 {
+			t.Fatalf("node_pass requests=%d, want 17 including OpenAI preflight+diagnostic+trace, Antigravity, and Disney fallback requests", reqCounts["node_pass"])
 		}
 		if dialCounts["node_drift"] != 1 || cleanCounts["node_drift"] != 1 {
 			t.Fatalf("node_drift dials=%d cleanups=%d, want 1 and 1", dialCounts["node_drift"], cleanCounts["node_drift"])
 		}
-		if reqCounts["node_drift"] != 16 {
-			t.Fatalf("node_drift requests=%d, want 16 including OpenAI endpoint+trace, Antigravity, and Disney fallback requests (normalized baseline 200 enters stage 2)", reqCounts["node_drift"])
+		if reqCounts["node_drift"] != 17 {
+			t.Fatalf("node_drift requests=%d, want 17 including OpenAI preflight+diagnostic+trace, Antigravity, and Disney fallback requests (normalized baseline 200 enters stage 2)", reqCounts["node_drift"])
 		}
 		for _, nodeID := range []string{"node_pass", "node_drift"} {
 			var hasDisneyFallback bool
@@ -1459,8 +1490,9 @@ func TestProbeRunnerNodeSessionReuseAndCleanupLifecycle(t *testing.T) {
 		}
 
 		// Non-baseline multiple kinds trigger single-stage path. AI checks both
-		// OpenAI endpoints, an auxiliary CDN trace, and independent Antigravity.
-		// Disney triggers an intentional public-page fallback on malformed assertion.
+		// required OpenAI preflight endpoints, the legacy iOS diagnostic, an
+		// auxiliary CDN trace, and independent Antigravity. Disney triggers an
+		// intentional public-page fallback on malformed assertion.
 		kinds := []domain.ProbeKind{
 			domain.ProbeKindGeo,
 			domain.ProbeKindStreaming,
@@ -1470,8 +1502,8 @@ func TestProbeRunnerNodeSessionReuseAndCleanupLifecycle(t *testing.T) {
 		if err := runner.Run(context.Background(), run, []string{"node_single"}, kinds); err != nil {
 			t.Fatalf("Run failed: %v", err)
 		}
-		if dials.Load() != 1 || cleanups.Load() != 1 || requests.Load() != 15 {
-			t.Fatalf("expected dials=1 cleanups=1 requests=15 including OpenAI endpoint+trace, Antigravity, and Disney fallback requests, got dials=%d cleanups=%d requests=%d", dials.Load(), cleanups.Load(), requests.Load())
+		if dials.Load() != 1 || cleanups.Load() != 1 || requests.Load() != 16 {
+			t.Fatalf("expected dials=1 cleanups=1 requests=16 including OpenAI preflight+diagnostic+trace, Antigravity, and Disney fallback requests, got dials=%d cleanups=%d requests=%d", dials.Load(), cleanups.Load(), requests.Load())
 		}
 		urlsMu.Lock()
 		var hasDisneyFallback bool

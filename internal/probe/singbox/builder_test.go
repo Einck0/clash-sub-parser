@@ -256,6 +256,89 @@ func TestSingboxBuilder_RealityParametersValidation(t *testing.T) {
 	})
 }
 
+func TestBuildOptionsRejectsUnsupportedV2RayTransports(t *testing.T) {
+	const unknownTransport = "unsupported-wrapper?token=transport-secret"
+	cases := []struct {
+		name      string
+		network   string
+		transport map[string]string
+	}{
+		{name: "network_quic", network: "quic"},
+		{name: "transport_network_quic", network: "tcp", transport: map[string]string{"network": "quic"}},
+		{name: "transport_type_quic", network: "ws", transport: map[string]string{"type": "quic", "network": "ws"}},
+		{name: "network_unknown", network: unknownTransport},
+		{name: "transport_network_unknown", network: "tcp", transport: map[string]string{"network": unknownTransport}},
+		{name: "transport_type_unknown", network: "ws", transport: map[string]string{"type": unknownTransport, "network": "ws"}},
+	}
+	for _, protocol := range []domain.Protocol{domain.ProtocolVMess, domain.ProtocolVLESS, domain.ProtocolTrojan} {
+		for _, tc := range cases {
+			t.Run(string(protocol)+"/"+tc.name, func(t *testing.T) {
+				cfg := testNode(protocol)
+				cfg.Method = "auto"
+				cfg.Network = tc.network
+				cfg.Transport = tc.transport
+				options, tag, err := singbox.BuildOptions(cfg)
+				de, ok := domain.AsDomainError(err)
+				if !ok || de.Code != "unsupported_transport" || de.Category != domain.CategoryValidation {
+					t.Fatalf("expected unsupported_transport validation error, got %v", err)
+				}
+				if tag != "" || len(options.Outbounds) != 0 || len(options.Endpoints) != 0 {
+					t.Fatal("unsupported transport returned usable runtime options")
+				}
+				for _, secret := range []string{cfg.Password, cfg.UUID, "transport-secret"} {
+					if strings.Contains(err.Error(), secret) {
+						t.Fatal("transport diagnostic exposed a credential")
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestBuildOptionsPreservesPlainV2RayL4Networks(t *testing.T) {
+	cases := []struct {
+		network string
+		wantL4  string
+	}{
+		{network: "", wantL4: "tcp"},
+		{network: "tcp", wantL4: "tcp"},
+		{network: "udp", wantL4: "udp"},
+		{network: "tcp,udp", wantL4: "tcp\nudp"},
+		{network: "tcp/udp", wantL4: "tcp\nudp"},
+		{network: "all", wantL4: "tcp\nudp"},
+		{network: "both", wantL4: "tcp\nudp"},
+	}
+	for _, protocol := range []domain.Protocol{domain.ProtocolVMess, domain.ProtocolVLESS, domain.ProtocolTrojan} {
+		for _, tc := range cases {
+			t.Run(string(protocol)+"/"+tc.network, func(t *testing.T) {
+				cfg := testNode(protocol)
+				cfg.Method = "auto"
+				cfg.Network = tc.network
+				cfg.Transport = nil
+				options, _, err := singbox.BuildOptions(cfg)
+				if err != nil {
+					t.Fatalf("BuildOptions failed: %v", err)
+				}
+				var transport *option.V2RayTransportOptions
+				var network option.NetworkList
+				switch out := options.Outbounds[0].Options.(type) {
+				case *option.VMessOutboundOptions:
+					transport, network = out.Transport, out.Network
+				case *option.VLESSOutboundOptions:
+					transport, network = out.Transport, out.Network
+				case *option.TrojanOutboundOptions:
+					transport, network = out.Transport, out.Network
+				default:
+					t.Fatalf("unexpected outbound options %T", out)
+				}
+				if transport != nil || string(network) != tc.wantL4 {
+					t.Fatalf("plain L4 network changed: transport=%+v network=%q, want %q", transport, network, tc.wantL4)
+				}
+			})
+		}
+	}
+}
+
 // Task 3.3: TestSingboxLibrary_ActualFeatureSupport
 func TestSingboxLibrary_ActualFeatureSupport(t *testing.T) {
 	// 1. Test xhttp: Sing-box core library does NOT support xhttp transport, returns truthful diagnostic

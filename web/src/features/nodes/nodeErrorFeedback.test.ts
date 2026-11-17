@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createApp, h, nextTick, ref } from 'vue'
+import { setImmediate } from 'node:timers'
+import { createApp, h, nextTick, reactive, ref } from 'vue'
 import { api, ApiError } from '../../api/client'
 import { setLocale } from '../../locales'
 import { toastStore } from '../../ui/toast'
@@ -13,8 +14,10 @@ vi.mock('../../locales/redesign', () => ({
   uiText: (zh: string, _en: string) => zh,
 }))
 
+const testRoute = reactive<{ query: Record<string, string> }>({ query: {} })
+
 vi.mock('vue-router', () => ({
-  useRoute: () => ({ query: {} }),
+  useRoute: () => testRoute,
   useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
 }))
 
@@ -42,6 +45,7 @@ describe('FR-RM3 Node Detail Error Differentiation & Stale Feedback', () => {
     sessionStorage.clear()
     toastStore.clear()
     setLocale('zh-CN')
+    testRoute.query = {}
     vi.restoreAllMocks()
   })
 
@@ -207,6 +211,93 @@ describe('FR-RM3 Node Detail Error Differentiation & Stale Feedback', () => {
     expect(nodes.selectedNode.value?.logicalId).toBe('node-b')
     expect(nodes.nodeDetailError.value).toBeNull()
     expect(nodes.isDetailStale.value).toBe(false)
+  })
+
+  it('invalidates a pending detail request when a deep link is cleared', async () => {
+    let resolveDetail!: (value: unknown) => void
+    const pendingDetail = new Promise((resolve) => { resolveDetail = resolve })
+    vi.spyOn(api, 'get').mockReturnValue(pendingDetail as any)
+    const nodes = useNodes()
+
+    const request = nodes.fetchNodeDetail('node-cleared')
+    nodes.invalidateNodeDetail()
+    resolveDetail({ node: { logical_id: 'node-cleared', display_name: 'Late Node', protocol: 'ss', active: true } })
+
+    expect(await request).toBeNull()
+    expect(nodes.selectedNode.value).toBeNull()
+    expect(nodes.nodeDetailError.value).toBeNull()
+    expect(nodes.loadingDetail.value).toBe(false)
+  })
+
+  it.each([
+    { completion: 'failure', cachedTarget: false },
+    { completion: 'success', cachedTarget: false },
+    { completion: 'failure', cachedTarget: true },
+  ])('ignores late deep-link $completion after selecting a newer node (cached=$cachedTarget)', async ({ completion, cachedTarget }) => {
+    let resolveOld!: (value: unknown) => void
+    let rejectOld!: (reason: Error) => void
+    const oldRequest = new Promise((resolve, reject) => {
+      resolveOld = resolve
+      rejectOld = reject
+    })
+    const newerNode: NodeRecord = {
+      logical_id: 'node-newer', display_name: 'Newer Node', protocol: 'ss', active: true,
+    }
+    const get = vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
+      if (path === '/api/v1/nodes') {
+        return { items: cachedTarget ? [newerNode] : [], total: cachedTarget ? 1 : 0, page: 1, page_size: 100 }
+      }
+      if (path === '/api/v1/nodes/node-older') return oldRequest
+      if (path === '/api/v1/nodes/node-newer') return { node: newerNode }
+      return {}
+    })
+    app = createApp({ render: () => h(NodesView) })
+    app.mount(container)
+    await vi.waitFor(() => expect(container.querySelector('[data-testid="nodes-total-badge"]')?.textContent).toContain(cachedTarget ? '1' : '0'))
+    testRoute.query = { node: 'node-older' }
+    await vi.waitFor(() => expect(get).toHaveBeenCalledWith('/api/v1/nodes/node-older'))
+    testRoute.query = { node: 'node-newer' }
+    await vi.waitFor(() => expect(document.body.querySelector('[data-testid="node-detail-drawer"]')?.textContent).toContain('Newer Node'))
+
+    if (completion === 'failure') rejectOld(new ApiError(500, 'server_error', 'Late older request failed'))
+    else resolveOld({ node: { ...newerNode, logical_id: 'node-older', display_name: 'Older Node' } })
+    await oldRequest.catch(() => undefined)
+    await new Promise<void>((done) => { setImmediate(done) })
+    await nextTick()
+
+    expect(container.querySelector('[data-testid="node-deep-link-error"]')).toBeNull()
+    expect(document.body.querySelector('[data-testid="node-detail-drawer"]')?.textContent).toContain('Newer Node')
+    expect(document.body.querySelector('[data-testid="node-detail-drawer"]')?.textContent).not.toContain('Older Node')
+  })
+
+  it.each(['success', 'failure'])('does not reopen a cleared deep link after late %s', async (completion) => {
+    let resolveOld!: (value: unknown) => void
+    let rejectOld!: (reason: Error) => void
+    const oldRequest = new Promise((resolve, reject) => {
+      resolveOld = resolve
+      rejectOld = reject
+    })
+    const get = vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
+      if (path === '/api/v1/nodes') return { items: [], total: 0, page: 1, page_size: 100 }
+      if (path === '/api/v1/nodes/node-cleared') return oldRequest
+      return {}
+    })
+    app = createApp({ render: () => h(NodesView) })
+    app.mount(container)
+    await vi.waitFor(() => expect(container.querySelector('[data-testid="nodes-total-badge"]')?.textContent).toContain('0'))
+    testRoute.query = { node: 'node-cleared' }
+    await vi.waitFor(() => expect(get).toHaveBeenCalledWith('/api/v1/nodes/node-cleared'))
+    testRoute.query = {}
+    await nextTick()
+
+    if (completion === 'failure') rejectOld(new ApiError(500, 'server_error', 'Late cleared request failed'))
+    else resolveOld({ node: { logical_id: 'node-cleared', display_name: 'Cleared Node', protocol: 'ss', active: true } })
+    await oldRequest.catch(() => undefined)
+    await new Promise<void>((done) => { setImmediate(done) })
+    await nextTick()
+
+    expect(container.querySelector('[data-testid="node-deep-link-error"]')).toBeNull()
+    expect(document.body.querySelector('[data-testid="node-detail-drawer"]')).toBeNull()
   })
 
   it('prevents unhandled promise rejection in probeSingleNode when refresh fails', async () => {

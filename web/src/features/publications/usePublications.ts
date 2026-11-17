@@ -763,23 +763,32 @@ export function usePublications(initialTarget?: CompilerTarget) {
       })
 
       if (!res.ok) {
+        let errorCode = 'download_compiler_error'
         let errorMsg = `HTTP ${res.status}`
+        let requestId = res.headers.get('X-Request-ID') || undefined
         try {
           const text = await res.text()
           if (text) {
             try {
               const json = JSON.parse(text)
-              const errObj = json.error && typeof json.error === 'object' ? json.error : json
-              errorMsg = errObj.message || json.message || text
+              if (json && typeof json === 'object') {
+                const errObj = json.error && typeof json.error === 'object' ? json.error : json
+                if (typeof errObj.code === 'string' && errObj.code) errorCode = errObj.code
+                else if (typeof json.code === 'string' && json.code) errorCode = json.code
+                if (typeof errObj.message === 'string' && errObj.message) errorMsg = errObj.message
+                else if (typeof json.message === 'string' && json.message) errorMsg = json.message
+                if (typeof json.request_id === 'string' && json.request_id) requestId = json.request_id
+                else if (typeof errObj.request_id === 'string' && errObj.request_id) requestId = errObj.request_id
+              }
             } catch {
               errorMsg = text.length > 200 ? text.slice(0, 200) : text
             }
           }
         } catch {
-          // fallback
+          // Preserve the HTTP failure even if its body cannot be read.
         }
         errorMsg = redactSensitive(errorMsg)
-        throw new ApiError(res.status, 'download_compiler_error', errorMsg)
+        throw new ApiError(res.status, errorCode, errorMsg, requestId)
       }
 
       const blob = await res.blob()

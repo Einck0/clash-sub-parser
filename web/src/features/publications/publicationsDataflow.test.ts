@@ -289,13 +289,24 @@ describe('CSP Dataflow Publications & Snapshot Publishing Specification', () => 
     expect(container.textContent).not.toContain('snap-preview-1')
     expect(container.textContent).not.toContain('snap-digest')
     expect(container.querySelector('[data-testid="publish-preview-btn"]')).not.toBeNull()
-    post.mockRejectedValue(new ApiError(422, 'unsupported_target_capability', 'Target projection rejected', undefined, {
+    expect(container.querySelector('[data-testid="preview-error-request-id"]')).toBeNull()
+    post.mockRejectedValue(new ApiError(422, 'unsupported_target_capability', 'Target projection rejected', 'preview-request-422', {
       diagnostics: [{ code: 'unsupported_target_capability', target: 'mihomo', message: 'incompatible node' }],
     }))
     container.querySelector('[data-testid="preview-client-subscription-mihomo"]')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await new Promise((resolve) => setTimeout(resolve, 20))
     expect(container.querySelector('[data-testid="preview-error"]')?.textContent).toContain('incompatible node')
+    expect(container.querySelector('[data-testid="preview-error-request-id"]')?.textContent).toContain('请求 ID：preview-request-422')
+    setLocale('en-US')
+    await nextTick()
+    expect(container.querySelector('[data-testid="preview-error-request-id"]')?.textContent).toContain('Request ID：preview-request-422')
     expect(container.querySelector('[data-testid="preview-actions"]')).toBeNull()
+
+    post.mockResolvedValue(previewResult)
+    container.querySelector('[data-testid="preview-client-subscription-mihomo"]')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(container.querySelector('[data-testid="preview-error-request-id"]')).toBeNull()
+    expect(container.querySelector('[data-testid="preview-actions"]')).not.toBeNull()
   })
 
   it('shows the frozen publication link separately from the live subscription link', async () => {

@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -303,6 +305,67 @@ func TestPolicyRuleLifecycle_CustomRules_RestartPreservesCustom(t *testing.T) {
 	}
 }
 
+func TestPolicyRuleLifecycle_CountBoundaryRestartPreservesConfiguration(t *testing.T) {
+	for _, ruleCount := range []int{1, 470, 471} {
+		t.Run(fmt.Sprintf("rules_%d", ruleCount), func(t *testing.T) {
+			_, db := setupTestLifecycleDB(t)
+			t.Cleanup(func() { _ = db.Close() })
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+			services, err := makeApplicationServices(ctx, db, appServiceOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			active, err := services.revisionRepo.GetActive(ctx)
+			if err != nil || active == nil {
+				t.Fatalf("fresh bootstrap has no active revision: rev=%+v err=%v", active, err)
+			}
+
+			// Stored user configuration deliberately differs in count, order and enabled state.
+			err = sqlite.WithTx(ctx, db, func(ctx context.Context, tx *sql.Tx) error {
+				if _, err := tx.ExecContext(ctx, "DELETE FROM policy_rules WHERE revision_id = ?", active.ID); err != nil {
+					return err
+				}
+				for i := 0; i < ruleCount; i++ {
+					if _, err := tx.ExecContext(ctx, `INSERT INTO policy_rules
+						(id, revision_id, name, builtin_target, expression, position, enabled)
+						VALUES (?, ?, ?, 'DIRECT', ?, ?, ?)`, domain.MustNewUUIDv7(), active.ID,
+						fmt.Sprintf("custom-%d", i), fmt.Sprintf("DOMAIN,custom-%d.example", i), ruleCount-i, i%2); err != nil {
+						return err
+					}
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			before, err := services.policyRepo.ListPolicyRules(ctx, active.ID)
+			if err != nil || len(before) != ruleCount {
+				t.Fatalf("invalid stored fixture: count=%d err=%v", len(before), err)
+			}
+
+			restarted, err := makeApplicationServices(ctx, db, appServiceOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			afterActive, err := restarted.revisionRepo.GetActive(ctx)
+			if err != nil || afterActive == nil || afterActive.ID != active.ID {
+				t.Fatalf("active revision changed: got=%+v err=%v", afterActive, err)
+			}
+			if total := countAllRevisions(t, db); total != 1 {
+				t.Fatalf("restart created a revision: total=%d", total)
+			}
+			after, err := restarted.policyRepo.ListPolicyRules(ctx, active.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(before, after) {
+				t.Fatalf("restart changed stored rule IDs, content, order or enabled state (before=%d after=%d)", len(before), len(after))
+			}
+		})
+	}
+}
+
 // TestPolicyRuleLifecycle_ExistingDraftWithoutActive_DoesNotAutoBootstrap verifies that
 // if the DB already has draft revisions but no active revision, startup does not auto-activate
 // or seed rules into the draft.
@@ -348,9 +411,10 @@ func TestPolicyRuleLifecycle_BootstrapFailure_AtomicRollback(t *testing.T) {
 	_, db := setupTestLifecycleDB(t)
 	ctx := context.Background()
 
-	// Inject a failure trigger on policy_rules insert
+	// Fail only after some rules have been inserted, so rollback must remove partial seed data too.
 	_, err := db.ExecContext(ctx, `
 		CREATE TRIGGER fail_seed_insert BEFORE INSERT ON policy_rules
+		WHEN (SELECT COUNT(*) FROM policy_rules WHERE revision_id = NEW.revision_id) >= 10
 		BEGIN
 			SELECT RAISE(ABORT, 'forced seed failure for rollback test');
 		END;
@@ -372,12 +436,12 @@ func TestPolicyRuleLifecycle_BootstrapFailure_AtomicRollback(t *testing.T) {
 
 	var rulesCount int
 	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM policy_rules;").Scan(&rulesCount); err != nil || rulesCount != 0 {
-		t.Fatalf("failed bootstrap left rules: count=%d (err: %v)", rulesCount, rulesCount)
+		t.Fatalf("failed bootstrap left rules: count=%d (err: %v)", rulesCount, err)
 	}
 
 	var snapshotsCount int
 	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM policy_revision_snapshots;").Scan(&snapshotsCount); err != nil || snapshotsCount != 0 {
-		t.Fatalf("failed bootstrap left snapshots: count=%d (err: %v)", snapshotsCount, snapshotsCount)
+		t.Fatalf("failed bootstrap left snapshots: count=%d (err: %v)", snapshotsCount, err)
 	}
 
 	// Drop trigger and retry startup: must succeed cleanly

@@ -499,7 +499,7 @@ func buildHTTPOutbound(config NodeConfig, tag string) option.Outbound {
 }
 
 func buildV2RayTransport(config NodeConfig, tlsEnabled bool) (*option.V2RayTransportOptions, error) {
-	transportType := determineTransportType(config)
+	transportType := networkName(config)
 	var headers badoption.HTTPHeader
 	if len(config.Headers) > 0 {
 		headers = make(badoption.HTTPHeader, len(config.Headers))
@@ -520,6 +520,8 @@ func buildV2RayTransport(config NodeConfig, tlsEnabled bool) (*option.V2RayTrans
 	}
 
 	switch transportType {
+	case "", "tcp", "udp", "tcp,udp", "tcp/udp", "all", "both":
+		return nil, nil
 	case "xhttp":
 		return nil, domain.NewValidationError(
 			"unsupported_transport",
@@ -571,6 +573,9 @@ func buildV2RayTransport(config NodeConfig, tlsEnabled bool) (*option.V2RayTrans
 			},
 		}, nil
 	default:
-		return nil, nil
+		return nil, domain.NewValidationError(
+			"unsupported_transport",
+			"transport is not supported by sing-box adapter",
+		)
 	}
 }

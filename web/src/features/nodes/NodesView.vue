@@ -60,6 +60,7 @@ const {
   loadMore,
   syncPoolStatus,
   fetchNodeDetail,
+  invalidateNodeDetail,
   fetchNodeSourceHistory,
   fetchGlobalScheduleKinds,
   probeSingleNode,
@@ -191,6 +192,15 @@ const currentHistoryTargetId = ref('')
 const deepLinkError = ref('')
 const lastDeepLinkId = ref('')
 const loadingDeepLink = ref(false)
+let deepLinkSeq = 0
+
+function invalidateDeepLink() {
+  deepLinkSeq++
+  invalidateNodeDetail()
+  loadingDeepLink.value = false
+  deepLinkError.value = ''
+  lastDeepLinkId.value = ''
+}
 
 const selectedIds = ref<Set<string>>(new Set())
 const confirmProbeAllOpen = ref(false)
@@ -448,6 +458,7 @@ async function fetchSourceHistory(logicalId: string) {
 }
 
 async function openNodeDetail(node: NormalizedNode) {
+  invalidateDeepLink()
   selectedNode.value = node
   probeFeedback.value = ''
   drawerOpen.value = true
@@ -463,6 +474,7 @@ async function openNodeDetail(node: NormalizedNode) {
 
 async function openNodeByLogicalId(logicalId: string) {
   if (!logicalId) return
+  const seq = ++deepLinkSeq
   deepLinkError.value = ''
   lastDeepLinkId.value = logicalId
 
@@ -475,6 +487,7 @@ async function openNodeByLogicalId(logicalId: string) {
   loadingDeepLink.value = true
   try {
     const detailed = await fetchNodeDetail(logicalId)
+    if (seq !== deepLinkSeq) return
     if (detailed && (!nodeDetailError.value || nodeDetailError.value.logicalId !== logicalId || !nodeDetailError.value.status)) {
       await openNodeDetail(detailed)
     } else {
@@ -494,6 +507,7 @@ async function openNodeByLogicalId(logicalId: string) {
       }
     }
   } catch (err: any) {
+    if (seq !== deepLinkSeq) return
     const status = err?.status || (err instanceof ApiError ? err.status : 0)
     if (status === 404) {
       deepLinkError.value = '未找到该节点（可能已移除），请刷新台账 (404)'
@@ -510,7 +524,9 @@ async function openNodeByLogicalId(logicalId: string) {
       selectedIds.value = next
     }
   } finally {
-    loadingDeepLink.value = false
+    if (seq === deepLinkSeq) {
+      loadingDeepLink.value = false
+    }
   }
 }
 
@@ -700,6 +716,7 @@ if (route) {
     async (newNodeId) => {
       const targetId = newNodeId?.trim()
       if (!targetId) {
+        invalidateDeepLink()
         if (drawerOpen.value) {
           drawerOpen.value = false
         }
@@ -805,6 +822,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  invalidateDeepLink()
   if (poolPollTimer) {
     clearInterval(poolPollTimer)
     poolPollTimer = null

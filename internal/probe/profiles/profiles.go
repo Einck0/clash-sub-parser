@@ -4,8 +4,11 @@ package profiles
 import (
 	"bytes"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
+
+	"golang.org/x/net/html"
 
 	"clash-sub-parser/internal/domain"
 	"clash-sub-parser/internal/probe/identity"
@@ -149,14 +152,46 @@ func hasRestrictionMarker(body []byte) bool {
 	markers := [][]byte{
 		[]byte("cf-chl"), []byte("turnstile"), []byte("challenge"),
 		[]byte("captcha"), []byte("human verification"), []byte("verify you are human"),
-		[]byte("/login"), []byte("sign in"), []byte("log in"),
 	}
 	for _, marker := range markers {
 		if bytes.Contains(lower, marker) {
 			return true
 		}
 	}
-	return false
+	return hasLoginGate(lower)
+}
+
+// hasLoginGate requires a login endpoint on a form, not a navigation link or
+// generic sign-in copy. Those strings commonly appear on otherwise public pages.
+func hasLoginGate(body []byte) bool {
+	tokenizer := html.NewTokenizer(bytes.NewReader(body))
+	for {
+		if tokenizer.Next() == html.ErrorToken {
+			return false
+		}
+		if tokenizer.TokenType() != html.StartTagToken {
+			continue
+		}
+		name, hasAttr := tokenizer.TagName()
+		if !bytes.Equal(name, []byte("form")) {
+			continue
+		}
+		for hasAttr {
+			key, value, moreAttr := tokenizer.TagAttr()
+			if bytes.Equal(key, []byte("action")) && isLoginEndpoint(string(value)) {
+				return true
+			}
+			hasAttr = moreAttr
+		}
+	}
+}
+
+func isLoginEndpoint(action string) bool {
+	target, err := url.Parse(action)
+	if err != nil {
+		return false
+	}
+	return target.Path == "/login" || strings.HasPrefix(target.Path, "/login/")
 }
 
 const defaultMaxAge = 15 * time.Minute

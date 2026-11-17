@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp, h, nextTick } from 'vue'
 import PublicationsView from './PublicationsView.vue'
 import { usePublications, getDirectSubscriptionUrl, getTargetFilename } from './usePublications'
-import { api } from '../../api/client'
+import { api, ApiError } from '../../api/client'
 import { toastStore } from '../../ui/toast'
 import { setLocale } from '../../locales'
 
@@ -201,6 +201,47 @@ describe('Clean Minimal Client Subscriptions Specification (Zero-Overengineering
 
     // Essential contract: anchor must NEVER be created or clicked for 422 compiler error
     expect(appendSpy).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    {
+      name: 'flat envelope',
+      payload: { code: 'unsupported_target_capability', message: 'Unsupported transport', request_id: 'flat-request' },
+      code: 'unsupported_target_capability', requestId: 'flat-request', message: 'Unsupported transport',
+    },
+    {
+      name: 'nested envelope',
+      payload: { error: { code: 'required_nonempty', message: 'Empty group', request_id: 'nested-request' } },
+      code: 'required_nonempty', requestId: 'nested-request', message: 'Empty group',
+    },
+    {
+      name: 'malformed message uses HTTP fallback',
+      payload: { code: 'format_error', message: { token: 'do-not-render-object' } },
+      code: 'format_error', requestId: 'header-request', message: 'HTTP 422',
+    },
+    {
+      name: 'null envelope uses HTTP fallback',
+      payload: null,
+      code: 'download_compiler_error', requestId: 'header-request', message: 'HTTP 422',
+    },
+  ])('preserves direct download error identity: $name', async ({ payload, code, requestId, message }) => {
+    const pub = usePublications()
+    const appendSpy = vi.spyOn(document.body, 'appendChild')
+    const blob = vi.fn()
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 422,
+      headers: new Headers({ 'X-Request-ID': 'header-request' }),
+      text: async () => JSON.stringify(payload),
+      blob,
+    } as any)
+
+    const err = await pub.downloadDirectConfig('surge').catch(error => error)
+    expect(err).toBeInstanceOf(ApiError)
+    expect(err).toMatchObject({ status: 422, code, requestId, message })
+    expect(pub.downloadingTargets.value.surge).toBe(false)
+    expect(appendSpy).not.toHaveBeenCalled()
+    expect(blob).not.toHaveBeenCalled()
   })
 
   it('Redacts sensitive tokens from compiler download error messages without leaking secret', async () => {

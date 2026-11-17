@@ -13,6 +13,7 @@ import (
 	"unicode"
 
 	"clash-sub-parser/internal/domain"
+	"clash-sub-parser/internal/probe/profiles"
 )
 
 // ParseScoreInt strictly parses a raw integer score string.
@@ -194,9 +195,16 @@ func CheckIPRisk(ctx context.Context, httpClient *http.Client, ip string) domain
 	marker := []byte("IP Fraud Risk API")
 	apiIndex := bytes.Index(body, marker)
 	if apiIndex == -1 {
-		cap.Verdict = domain.VerdictError
-		cap.Reason = "contract_drift"
+		// Without score evidence, reuse the profile's restriction classification
+		// rather than mislabeling a challenge/login page as schema drift. Do not
+		// scan a successfully scored page for generic navigation links (login).
+		eval := profiles.IPRisk().Evaluate(profiles.Result{StatusCode: resp.StatusCode, Body: body})
+		cap.Verdict = eval.Verdict
+		cap.Reason = eval.Reason
 		cap.Summary = "Score Unavailable"
+		if cap.Verdict == domain.VerdictRestricted {
+			cap.Summary = "Access Restricted"
+		}
 		return cap
 	}
 
@@ -218,8 +226,10 @@ func CheckIPRisk(ctx context.Context, httpClient *http.Client, ip string) domain
 		return cap
 	}
 
-	key := strings.ToLower(strings.Trim(string(bytes.TrimSpace(scoreLine[:separatorIndex])), `"`))
-	if key != "score" {
+	// The field name is JSON too: trimming quote characters would accept
+	// unquoted, unmatched or duplicated quotes as valid provider evidence.
+	var key string
+	if err := json.Unmarshal(bytes.TrimSpace(scoreLine[:separatorIndex]), &key); err != nil || strings.ToLower(key) != "score" {
 		cap.Verdict = domain.VerdictError
 		cap.Reason = "contract_drift"
 		cap.Summary = "Score Unavailable"

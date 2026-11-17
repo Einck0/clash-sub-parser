@@ -87,7 +87,9 @@ func TestPeriodicCoordinator_SQLiteScale(t *testing.T) {
 	}
 	t.Logf("stage=open_and_migrate elapsed=%s", time.Since(started))
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	fixtureResources := observeScaleProcessResources(t, "fixture_setup")
 	seedPeriodicScale(t, ctx, db, now)
+	fixtureResources()
 
 	nodes := sqlite.NewNodeRepository(db)
 	subs := sqlite.NewSubscriptionRepository(db)
@@ -149,7 +151,9 @@ func TestPeriodicCoordinator_SQLiteScale(t *testing.T) {
 			readCtx, stop := context.WithTimeout(windowCtx, 90*time.Second)
 			defer stop()
 			stats, began := db.Stats(), time.Now()
+			resources := observeScaleProcessResources(t, name)
 			err := work(readCtx)
+			resources()
 			after := db.Stats()
 			t.Logf("stage=%s elapsed_including_barrier_contention=%s pool_waits_shared=%d pool_wait_duration_shared=%s error=%v", name, time.Since(began), after.WaitCount-stats.WaitCount, after.WaitDuration-stats.WaitDuration, err)
 			results <- stageResult{name, err}
@@ -205,10 +209,12 @@ func TestPeriodicCoordinator_SQLiteScale(t *testing.T) {
 		}
 		return nil
 	})
+	consumerResources := observeScaleProcessResources(t, "concurrent_consumers")
 	close(start)
 	queueErr := waitScalePoolWaits(windowCtx, db, before.WaitCount+4)
 	_ = gate.Close() // Always release before waiting for workers, including error paths.
 	wg.Wait()
+	consumerResources()
 	close(results)
 	if queueErr != nil {
 		t.Errorf("synchronized pool entry: %v", queueErr)
@@ -263,9 +269,34 @@ func TestPeriodicCoordinator_SQLiteScale(t *testing.T) {
 	if err != nil || updated.NextDueAt == nil || !updated.NextDueAt.Equal(now.Add(time.Minute)) {
 		t.Fatalf("schedule did not advance one sweep: %+v error=%v", updated, err)
 	}
-	if err := coord.TriggerWindow(); err != nil || len(dispatched) != 998 || len(recorder.snapshots) != 1 {
-		t.Fatalf("not-due window dispatched again: error=%v nodes=%d snapshots=%d", err, len(dispatched), len(recorder.snapshots))
+	// Exercise several not-yet-due ticks without wall-clock sleeps. The clock
+	// stays in this minute, so none may reload inventory or dispatch more work.
+	idleResources := observeScaleProcessResources(t, "not_due_windows")
+	for i := 0; i < 10; i++ {
+		if err := coord.TriggerWindow(); err != nil || len(dispatched) != 998 || len(recorder.snapshots) != 1 {
+			t.Fatalf("not-due window dispatched again: error=%v nodes=%d snapshots=%d", err, len(dispatched), len(recorder.snapshots))
+		}
 	}
+	idleResources()
+
+	// Advance the existing injectable clock through two more one-minute due
+	// windows. Reuse the million-row fixture and real coordinator/SQLite ports,
+	// but keep the runner synthetic: no live nodes, sleeps, or new load harness.
+	dueResources := observeScaleProcessResources(t, "repeated_due_windows")
+	for window := 2; window <= 3; window++ {
+		now = now.Add(time.Minute)
+		if err := coord.TriggerWindow(); err != nil {
+			t.Fatalf("due window %d: %v", window, err)
+		}
+		if len(dispatched) != window*998 || len(recorder.snapshots) != window || policyRecorder.reads != window {
+			t.Fatalf("due window %d: dispatched=%d inventory_reads=%d policy_reads=%d", window, len(dispatched), len(recorder.snapshots), policyRecorder.reads)
+		}
+		batch, err := schedules.GetBatchByWindow(ctx, 1, now)
+		if err != nil || batch == nil || batch.State != domain.ProbeBatchStateSucceeded || batch.Counts.CompletedRuns != 10 || batch.Counts.TotalNodes != 998 {
+			t.Fatalf("due window %d did not finish: batch=%+v error=%v", window, batch, err)
+		}
+	}
+	dueResources()
 
 	// Cancellation while queued must release the waiter without poisoning the
 	// single-connection pool. This does not claim interruption of running SQL.
@@ -279,6 +310,7 @@ func TestPeriodicCoordinator_SQLiteScale(t *testing.T) {
 	cancelResult := make(chan error, 1)
 	before = db.Stats()
 	started = time.Now()
+	cancelResources := observeScaleProcessResources(t, "cancel_queued_list")
 	go func() {
 		_, _, err := nodes.List(cancelCtx, domain.NodeFilter{Scope: domain.NodeScopeEnabledSubscriptions})
 		cancelResult <- err
@@ -287,6 +319,7 @@ func TestPeriodicCoordinator_SQLiteScale(t *testing.T) {
 	stopRead()
 	cancelErr := <-cancelResult
 	_ = gate.Close()
+	cancelResources()
 	t.Logf("stage=cancel_queued_list elapsed=%s error=%v", time.Since(started), cancelErr)
 	if queueErr != nil || !errors.Is(cancelErr, context.Canceled) {
 		t.Fatalf("queued cancellation: queue=%v read=%v", queueErr, cancelErr)
@@ -310,6 +343,7 @@ func TestPeriodicCoordinator_SQLiteScale(t *testing.T) {
 		t.Fatal(err)
 	}
 	started = time.Now()
+	recoveryResources := observeScaleProcessResources(t, "reopen_offline_prepared_recover")
 	db, err = sqlite.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -320,6 +354,7 @@ func TestPeriodicCoordinator_SQLiteScale(t *testing.T) {
 	if err := recovered.Recover(ctx); err != nil {
 		t.Fatal(err)
 	}
+	recoveryResources()
 	t.Logf("stage=reopen_offline_prepared_recover elapsed=%s", time.Since(started))
 	abandoned, err = schedules.GetBatchByID(ctx, abandoned.ID)
 	if err != nil || abandoned.State != domain.ProbeBatchStateExpired {

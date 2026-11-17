@@ -45,6 +45,11 @@ func TestChallengeAndLoginAreRestricted(t *testing.T) {
 				t.Errorf("%s body %q verdict = %s, want restricted", profile.Kind, body, got.Verdict)
 			}
 		}
+
+		got := profile.Evaluate(profiles.Result{StatusCode: 200, Body: []byte(`<nav><a href="/login">Sign in</a></nav><main>Provider temporarily changed</main>`)})
+		if got.Verdict == domain.VerdictRestricted {
+			t.Errorf("%s ordinary login navigation was classified restricted", profile.Kind)
+		}
 	}
 }
 
@@ -111,6 +116,24 @@ func TestIPRiskChallengeAndRestrictionProduceRestricted(t *testing.T) {
 		got := profile.Evaluate(profiles.Result{StatusCode: 200, Body: []byte(body)})
 		if got.Verdict != domain.VerdictRestricted || got.Reason != "access_restricted" {
 			t.Errorf("IPRisk challenge verdict = (%s, %s), want (restricted, access_restricted)", got.Verdict, got.Reason)
+		}
+	}
+
+	navigation := profile.Evaluate(profiles.Result{StatusCode: 200, Body: []byte(`<nav><a href="/login">Sign in</a></nav><main>Provider temporarily changed</main>`)})
+	if navigation.Verdict != domain.VerdictError || navigation.Reason != "contract_drift" {
+		t.Fatalf("ordinary login navigation = (%s, %s), want (error, contract_drift)", navigation.Verdict, navigation.Reason)
+	}
+
+	for _, body := range []string{
+		`<form action="/search" data-return="/login">Search</form>`,
+		`<form data-login="/login" action="/search">Search</form>`,
+		`<!-- example: <form action="/login">Sign in</form> --><main>Provider temporarily changed</main>`,
+		`<script>const example = '<form action="/login">Sign in</form>';</script><main>Provider temporarily changed</main>`,
+		`<div data-example='<form action="/login">Sign in</form>'></div><main>Provider temporarily changed</main>`,
+	} {
+		got := profile.Evaluate(profiles.Result{StatusCode: 200, Body: []byte(body)})
+		if got.Verdict != domain.VerdictError || got.Reason != "contract_drift" {
+			t.Errorf("ordinary search form %q = (%s, %s), want (error, contract_drift)", body, got.Verdict, got.Reason)
 		}
 	}
 

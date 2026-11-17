@@ -8,6 +8,7 @@ import {
 } from '@heroicons/vue/24/outline'
 import ModalDialog from '../../ui/ModalDialog.vue'
 import PageToolbar from '../../ui/PageToolbar.vue'
+import { ApiError } from '../../api/client'
 import { toastStore } from '../../ui/toast'
 import { t } from '../../locales'
 import { uiText } from '../../locales/redesign'
@@ -127,6 +128,9 @@ function handleDirectDownload(target: CompilerTarget) {
       <div v-if="error" class="alert alert-error text-sm" data-testid="preview-error">
         <div>
           <p class="font-semibold">{{ displayText(errorDetail instanceof Error ? errorDetail.message : error) }}</p>
+          <p v-if="errorDetail instanceof ApiError && errorDetail.requestId" class="mt-1 break-all font-mono text-xs" data-testid="preview-error-request-id">
+            {{ uiText('请求 ID', 'Request ID') }}：{{ errorDetail.requestId }}
+          </p>
           <ul v-if="preflightDiagnostics.length" class="mt-2 list-disc pl-5 text-xs">
             <li v-for="(diagnostic, index) in preflightDiagnostics" :key="`${diagnostic.code}-${index}`">{{ diagnostic.target ? `${targetLabel(diagnostic.target as CompilerTarget)}: ` : '' }}{{ displayText(diagnostic.message) }}</li>
           </ul>

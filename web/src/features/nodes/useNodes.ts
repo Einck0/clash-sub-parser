@@ -230,6 +230,12 @@ export function useNodes() {
     return undefined
   }
 
+  function invalidateNodeDetail() {
+    nodeDetailSeq++
+    currentDetailId.value = ''
+    loadingDetail.value = false
+  }
+
   async function fetchNodeDetail(logicalId: string): Promise<NormalizedNode | null> {
     const seq = ++nodeDetailSeq
     const existing = items.value.find((n) => n.logicalId === logicalId) ?? null
@@ -578,6 +584,7 @@ export function useNodes() {
     loadMore,
     syncPoolStatus,
     fetchNodeDetail,
+    invalidateNodeDetail,
     fetchNodeSourceHistory,
     probeSingleNode,
     probeNodesBatch,

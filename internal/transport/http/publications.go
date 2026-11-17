@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"clash-sub-parser/internal/application/publication"
+	"clash-sub-parser/internal/compiler"
 	"clash-sub-parser/internal/domain"
 )
 
@@ -284,13 +285,20 @@ func (h publicationAdminHandler) preview(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		var capabilityErr *publication.CapabilityValidationError
 		if errors.As(err, &capabilityErr) {
+			// Capability diagnostics can contain user-controlled node/group names.
+			// Redact a response copy, retaining the original draft and diagnostics.
+			diagnostics := make([]compiler.CapabilityDiagnostic, len(capabilityErr.Diagnostics))
+			for i, diagnostic := range capabilityErr.Diagnostics {
+				diagnostic.Message = sanitizeErrorMessage(diagnostic.Message)
+				diagnostics[i] = diagnostic
+			}
 			w.Header().Set("Cache-Control", "no-store")
 			resp := map[string]any{
 				"code":       capabilityErr.Code,
-				"message":    capabilityErr.Message,
+				"message":    sanitizeErrorMessage(capabilityErr.Message),
 				"request_id": GetRequestID(r.Context()),
 				"details": map[string]any{
-					"diagnostics": capabilityErr.Diagnostics,
+					"diagnostics": diagnostics,
 				},
 			}
 			if capabilityErr.SnapshotID != "" {

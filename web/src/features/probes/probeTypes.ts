@@ -29,7 +29,14 @@ export type PlatformSubTier =
 
 export type RegionSource = 'service' | 'cdn_trace' | 'cdn_target' | string
 
-export type EvidenceScope = 'network_entry' | 'web_region' | 'cdn_trace' | string
+export type EvidenceScope = 'network_entry' | 'web_region' | 'cdn_trace' | 'anonymous_preflight' | string
+
+export interface PlatformCheck {
+  verdict: ProbeVerdict
+  reason?: string
+  status_code?: number
+  evidence_scope?: EvidenceScope
+}
 
 export interface PlatformCapability {
   verdict: ProbeVerdict
@@ -44,6 +51,7 @@ export interface PlatformCapability {
   exit_region?: string
   region_source?: RegionSource
   evidence_scope?: EvidenceScope
+  checks?: Record<string, PlatformCheck>
 }
 
 export interface PlatformBadge {
@@ -372,6 +380,34 @@ export function normalizePlatforms(
         ? v.evidenceScope.trim()
         : undefined
     const evidenceScope = rawEvidenceScope || undefined
+    const rawChecks = v.checks && typeof v.checks === 'object' && !Array.isArray(v.checks) ? v.checks : undefined
+    const checks: Record<string, PlatformCheck> | undefined = rawChecks
+      ? Object.fromEntries(
+          Object.entries(rawChecks).flatMap(([checkName, rawCheck]) => {
+            if (!rawCheck || typeof rawCheck !== 'object' || Array.isArray(rawCheck)) return []
+            const rawVerdict = typeof rawCheck.verdict === 'string' ? rawCheck.verdict.toLowerCase().trim() : ''
+            const validVerdicts: ProbeVerdict[] = [
+              'available', 'abnormal', 'restricted', 'unknown', 'error', 'skipped', 'stale',
+            ]
+            const checkVerdict = validVerdicts.includes(rawVerdict as ProbeVerdict)
+              ? (rawVerdict as ProbeVerdict)
+              : 'unknown'
+            const rawCheckStatus = rawCheck.status_code ?? rawCheck.statusCode
+            const rawCheckScope = rawCheck.evidence_scope ?? rawCheck.evidenceScope
+            return [
+              [
+                checkName,
+                {
+                  verdict: checkVerdict,
+                  reason: typeof rawCheck.reason === 'string' ? rawCheck.reason : undefined,
+                  status_code: typeof rawCheckStatus === 'number' ? rawCheckStatus : undefined,
+                  evidence_scope: typeof rawCheckScope === 'string' ? rawCheckScope.trim() || undefined : undefined,
+                },
+              ],
+            ]
+          })
+        )
+      : undefined
 
     result[k.toLowerCase()] = {
       verdict,
@@ -386,6 +422,7 @@ export function normalizePlatforms(
       exit_region: exitRegion,
       region_source: regionSource,
       evidence_scope: evidenceScope,
+      checks,
     }
   }
   return Object.keys(result).length > 0 ? result : undefined
@@ -404,11 +441,31 @@ export function buildPlatformTooltip(platform: string, cap: PlatformCapability):
   } else if (normPlat === 'gemini') {
     parts.push('网页端区域支持检测；个人账号登录、年龄及模型权限未核验')
   } else if (normPlat === 'openai') {
-    parts.push('当前探针仅观测匿名网页合规入口与 iOS 网关响应；API 调用、Codex、账号及模型资格未检测/未核验')
+    parts.push('匿名公开入口预检；账号登录、付费模型、API 推理与 App 能力未核验')
     if (cap.sub_tier === 'full' || cap.sub_tier === 'web' || cap.sub_tier === 'app') {
       parts.push('旧版入口分级仅作历史记录，不代表 ChatGPT/API/Codex 能力')
     }
     if (cap.sub_tier === 'banned') parts.push('旧版封禁标签不代表账号封禁')
+    for (const [name, check] of Object.entries(cap.checks ?? {})) {
+      const checkName = name === 'cookie_requirements' ? '合规入口' : name === 'chatgpt_web' ? '网页入口' : name
+      const checkVerdict =
+        check.verdict === 'available'
+          ? '已确认'
+          : check.verdict === 'restricted'
+            ? '明确受限'
+            : check.verdict === 'error'
+              ? '检测错误'
+              : check.verdict === 'abnormal'
+                ? '证据冲突'
+                : check.verdict === 'skipped'
+                  ? '未执行'
+                  : '待确认'
+      const checkParts = [`${checkName}: ${checkVerdict}`]
+      if (check.status_code !== undefined) checkParts.push(`HTTP ${check.status_code}`)
+      if (check.reason) checkParts.push(formatObservationReasonLabel(check.reason))
+      if (check.evidence_scope) checkParts.push(`范围 ${check.evidence_scope}`)
+      parts.push(checkParts.join(' · '))
+    }
   } else if (normPlat === 'netflix') {
     if (cap.sub_tier === 'full') parts.push('Netflix 全量剧集解锁')
     else if (cap.sub_tier === 'originals') parts.push('Netflix 仅自制剧')
@@ -492,16 +549,25 @@ export function formatPlatformBadge(platform: string, cap: PlatformCapability): 
         label = 'OpenAI 未执行'
         tone = 'info'
       } else if (verdict === 'abnormal') {
-        label = 'OpenAI 异常'
+        label = 'OpenAI 预检证据冲突'
         tone = 'warning'
+      } else if (verdict === 'restricted' && cap.reason === 'rate_limited') {
+        label = 'OpenAI 入口限流'
+        tone = 'info'
       } else if (verdict === 'restricted') {
-        label = cap.reason === 'rate_limited' ? 'OpenAI 入口限流' : 'OpenAI 入口受限'
+        label = 'OpenAI 入口受限'
         tone = 'warning'
       } else if (verdict === 'error') {
         label = 'OpenAI 检测失败'
         tone = 'error'
+      } else if (verdict === 'available' && cap.evidence_scope === 'anonymous_preflight') {
+        label = 'OpenAI 预检通过'
+        tone = 'success'
       } else if (verdict === 'available') {
-        label = '旧版入口记录（能力未核验）'
+        label = '旧版探测结果，需重新检测'
+        tone = 'info'
+      } else if (verdict === 'unknown' && cap.reason === 'partial_preflight') {
+        label = 'OpenAI 预检部分证据'
         tone = 'info'
       } else if (verdict === 'unknown' && cap.reason === 'endpoint_reachable_capability_unverified') {
         label = 'OpenAI 入口响应（能力未核验）'

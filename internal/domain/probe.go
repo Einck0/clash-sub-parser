@@ -70,20 +70,29 @@ func (r *ProbeRun) TransitionTo(target ProbeRunState) error {
 	return nil
 }
 
+// PlatformCheck records bounded, non-sensitive evidence for one probe entry point.
+type PlatformCheck struct {
+	Verdict       ProbeVerdict `json:"verdict"`
+	Reason        string       `json:"reason,omitempty"`
+	StatusCode    *int         `json:"status_code,omitempty"`
+	EvidenceScope string       `json:"evidence_scope,omitempty"`
+}
+
 // PlatformCapability represents a fine-grained, evidence-based platform capability observation.
 type PlatformCapability struct {
-	Verdict       ProbeVerdict `json:"verdict"`
-	LatencyMS     *int64       `json:"latency_ms,omitempty"`
-	ObservedAt    *time.Time   `json:"observed_at,omitempty"`
-	Summary       string       `json:"summary,omitempty"`
-	Region        string       `json:"region,omitempty"`
-	SubTier       string       `json:"sub_tier,omitempty"`
-	Throughput    *float64     `json:"throughput,omitempty"`
-	RiskScore     string       `json:"risk_score,omitempty"`
-	Reason        string       `json:"reason,omitempty"`
-	ExitRegion    string       `json:"exit_region,omitempty"`
-	RegionSource  string       `json:"region_source,omitempty"`
-	EvidenceScope string       `json:"evidence_scope,omitempty"`
+	Verdict       ProbeVerdict             `json:"verdict"`
+	LatencyMS     *int64                   `json:"latency_ms,omitempty"`
+	ObservedAt    *time.Time               `json:"observed_at,omitempty"`
+	Summary       string                   `json:"summary,omitempty"`
+	Region        string                   `json:"region,omitempty"`
+	SubTier       string                   `json:"sub_tier,omitempty"`
+	Throughput    *float64                 `json:"throughput,omitempty"`
+	RiskScore     string                   `json:"risk_score,omitempty"`
+	Reason        string                   `json:"reason,omitempty"`
+	ExitRegion    string                   `json:"exit_region,omitempty"`
+	RegionSource  string                   `json:"region_source,omitempty"`
+	EvidenceScope string                   `json:"evidence_scope,omitempty"`
+	Checks        map[string]PlatformCheck `json:"checks,omitempty"`
 }
 
 // AggregatePlatformVerdicts calculates the aggregated ProbeVerdict and reason string

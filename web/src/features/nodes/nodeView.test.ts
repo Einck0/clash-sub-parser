@@ -1714,7 +1714,7 @@ describe('NodesView real API detail, plaintext PATCH edit, and failure draft pre
       expect(expandedEl?.textContent).toContain('NETFLIX')
       // Legacy OpenAI `available` observations are retained as endpoint history,
       // not represented as verified service capability.
-      expect(expandedEl?.textContent).toContain('旧版入口记录（能力未核验）')
+      expect(expandedEl?.textContent).toContain('旧版探测结果，需重新检测')
       expect(expandedEl?.textContent).toContain('MB/s')
 
       // 6. getNodeGeoRegion unit checks: does NOT guess country from name

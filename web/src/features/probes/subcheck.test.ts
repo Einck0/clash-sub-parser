@@ -278,6 +278,26 @@ describe('Subcheck Platform Capability Matrix & Fixture Tests', () => {
   })
 
   describe('Platform Badge Formatting & Tones', () => {
+    it('normalizes optional anonymous preflight checks without promoting missing/invalid checks', () => {
+      const normalized = normalizePlatforms({
+        OPENAI: {
+          verdict: 'available',
+          evidence_scope: 'anonymous_preflight',
+          checks: {
+            cookie_requirements: { verdict: 'available', status_code: 200, evidence_scope: 'anonymous_preflight' },
+            chatgpt_web: { verdict: 'nonsense', statusCode: 403, reason: 'challenge' },
+            ignored: null,
+          },
+        },
+      })
+      expect(normalized?.openai.checks?.cookie_requirements).toEqual({
+        verdict: 'available', reason: undefined, status_code: 200, evidence_scope: 'anonymous_preflight',
+      })
+      expect(normalized?.openai.checks?.chatgpt_web).toEqual({
+        verdict: 'unknown', reason: 'challenge', status_code: 403, evidence_scope: undefined,
+      })
+      expect(normalized?.openai.checks?.ignored).toBeUndefined()
+    })
     it('keeps OpenAI endpoint evidence separate from unverified capability and legacy tiers', () => {
       const current = formatPlatformBadge('openai', {
         verdict: 'unknown',
@@ -294,7 +314,7 @@ describe('Subcheck Platform Capability Matrix & Fixture Tests', () => {
         sub_tier: 'full',
         region: 'US',
       })
-      expect(legacy.label).toContain('旧版入口记录')
+      expect(legacy.label).toContain('旧版探测结果，需重新检测')
       expect(legacy.label).not.toContain('GPT⁺')
       expect(legacy.tone).not.toBe('success')
       expect(legacy.tooltip).toContain('历史记录')
@@ -313,6 +333,40 @@ describe('Subcheck Platform Capability Matrix & Fixture Tests', () => {
       })
       expect(staleLegacy.label).toBe('OpenAI 结果过期 · 已过期')
       expect(staleLegacy.tone).toBe('warning')
+    })
+
+    it('shows success only for anonymous preflight and preserves per-check evidence', () => {
+      const current = formatPlatformBadge('openai', {
+        verdict: 'available',
+        evidence_scope: 'anonymous_preflight',
+        sub_tier: 'full',
+        checks: {
+          cookie_requirements: {
+            verdict: 'available',
+            status_code: 200,
+            evidence_scope: 'anonymous_preflight',
+          },
+          chatgpt_web: {
+            verdict: 'available',
+            reason: 'public_web_entry_matched',
+            status_code: 200,
+            evidence_scope: 'anonymous_preflight',
+          },
+        },
+      })
+      expect(current.label).toBe('OpenAI 预检通过')
+      expect(current.tone).toBe('success')
+      expect(current.tooltip).toContain('账号登录、付费模型、API 推理与 App 能力未核验')
+      expect(current.tooltip).toContain('合规入口: 已确认')
+      expect(current.tooltip).toContain('网页入口: 已确认 · HTTP 200')
+
+      for (const verdict of ['unknown', 'error', 'abnormal', 'restricted', 'stale'] as const) {
+        const badge = formatPlatformBadge('openai', { verdict, sub_tier: 'full' })
+        expect(badge.tone).not.toBe('success')
+        expect(badge.label).not.toContain('GPT⁺')
+      }
+      expect(formatPlatformBadge('openai', { verdict: 'available', sub_tier: 'full }).label)
+        .toBe('旧版探测结果，需重新检测')
     })
 
     it('formats Netflix sub-tiers accurately', () => {
@@ -502,7 +556,7 @@ describe('Subcheck Platform Capability Matrix & Fixture Tests', () => {
         sub_tier: 'full',
         region: 'unknown',
       })
-      expect(missing.label).toBe('旧版入口记录（能力未核验）')
+      expect(missing.label).toBe('旧版探测结果，需重新检测')
       expect(missing.label).not.toContain('unknown')
 
       const ws = formatPlatformBadge('netflix', {
@@ -528,7 +582,7 @@ describe('Subcheck Platform Capability Matrix & Fixture Tests', () => {
       const normAiFull = normalizeNode(subcheckFixtureNodes.aiFull)
       const aiBadges = getNodePlatformBadges(normAiFull, 'ai')
       expect(aiBadges.length).toBe(2)
-      expect(aiBadges[0].label).toBe('旧版入口记录（能力未核验）')
+      expect(aiBadges[0].label).toBe('旧版探测结果，需重新检测')
       expect(aiBadges[0].tone).not.toBe('success')
       expect(aiBadges[1].label).toBe('Claude (US)')
 
@@ -591,7 +645,7 @@ describe('Subcheck Platform Capability Matrix & Fixture Tests', () => {
         await new Promise((r) => setTimeout(r, 40))
 
         const text = mountEl.textContent || ''
-        expect(text).toContain('旧版入口记录（能力未核验）')
+        expect(text).toContain('旧版探测结果，需重新检测')
         expect(text).toContain('NF 仅自制 (HK)')
         expect(text).toContain('D+ 尚未开放 (HK)')
         expect(text).toContain('5.1 MB/s')
@@ -605,7 +659,7 @@ describe('Subcheck Platform Capability Matrix & Fixture Tests', () => {
 
         const drawer = mountEl.querySelector('[data-testid="node-detail-drawer"]') || document.body.querySelector('[data-testid="node-detail-drawer"]')
         expect(drawer).not.toBeNull()
-        expect(drawer?.textContent).toContain('旧版入口记录（能力未核验）')
+        expect(drawer?.textContent).toContain('旧版探测结果，需重新检测')
         expect(drawer?.textContent).toContain('Claude (US)')
       } finally {
         app.unmount()
@@ -719,7 +773,7 @@ describe('Subcheck Platform Capability Matrix & Fixture Tests', () => {
       await nextTick()
 
       const text = mountEl.textContent || ''
-      expect(text).toContain('旧版入口记录（能力未核验）')
+      expect(text).toContain('旧版探测结果，需重新检测')
       expect(text).toContain('Claude (US)')
       expect(text).toContain('8.0 MB/s')
 

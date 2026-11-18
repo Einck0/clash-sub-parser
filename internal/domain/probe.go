@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"time"
 )
 
@@ -202,6 +203,21 @@ type ObservationEvidenceData struct {
 	SafeDetail *SafeDetail                   `json:"safe_detail,omitempty"`
 }
 
+// DecodeObservationEvidence returns structured fields only when the entire stored
+// document decodes. A partial result must never certify a speed measurement.
+func DecodeObservationEvidence(raw []byte) (ObservationEvidenceData, bool) {
+	var evidence ObservationEvidenceData
+	if err := json.Unmarshal(raw, &evidence); err != nil {
+		return ObservationEvidenceData{}, false
+	}
+	return evidence, true
+}
+
+// ValidSpeedThroughput reports whether a measurement is displayable in KiB/s.
+func ValidSpeedThroughput(speed *float64) bool {
+	return speed != nil && *speed > 0 && !math.IsInf(*speed, 0)
+}
+
 // ProbeObservation represents an immutable observation made during a probe execution.
 type ProbeObservation struct {
 	Attempt         *ProbeAttemptEvidence `json:"attempt,omitempty"`
@@ -244,8 +260,7 @@ func (o *ProbeObservation) SyncEvidenceData() {
 			o.EvidenceData = string(b)
 		}
 	} else if o.EvidenceData != "" && o.Region == "" && o.SubTier == "" && o.Throughput == nil && o.RiskScore == "" && len(o.Platforms) == 0 && o.SafeDetail == nil && o.Attempt == nil {
-		var ed ObservationEvidenceData
-		if err := json.Unmarshal([]byte(o.EvidenceData), &ed); err == nil {
+		if ed, ok := DecodeObservationEvidence([]byte(o.EvidenceData)); ok {
 			o.Region = ed.Region
 			o.SubTier = ed.SubTier
 			o.Throughput = ed.Throughput

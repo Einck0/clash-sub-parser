@@ -1273,7 +1273,7 @@ describe('NodesView real API detail, plaintext PATCH edit, and failure draft pre
     mountEl.remove()
   })
 
-  it('restores URL search, risk, protocol, health and node filters and resets them together', async () => {
+  it('restores URL search, risk, speed, protocol, health and node filters and resets them together', async () => {
     const { createApp, h, nextTick } = await import('vue')
     const { createRouter, createMemoryHistory } = await import('vue-router')
     const { default: NodesView } = await import('./NodesView.vue')
@@ -1307,7 +1307,8 @@ describe('NodesView real API detail, plaintext PATCH edit, and failure draft pre
       routes: [{ path: '/nodes', component: NodesView }],
     })
 
-    await router.push('/nodes?q=Tokyo&protocol=hysteria2&health=healthy&ip_risk_band=low&ip_risk_score_max=0&node=node-hy2-1')
+    const post = vi.spyOn(api, 'post').mockRejectedValue(new Error('Filtering must not start a probe'))
+    await router.push('/nodes?q=Tokyo&protocol=hysteria2&health=healthy&ip_risk_band=low&ip_risk_score_max=0&speed_min_kib_s=12.5&node=node-hy2-1')
     await router.isReady()
 
     const mountEl = document.createElement('div')
@@ -1345,7 +1346,19 @@ describe('NodesView real API detail, plaintext PATCH edit, and failure draft pre
       const riskScore = mountEl.querySelector('[data-testid="node-risk-score-max"]') as HTMLInputElement
       expect(riskBand.value).toBe('low')
       expect(riskScore.value).toBe('0')
-      expect(vi.mocked(api.get).mock.calls.some(([path, options]) => path === '/api/v1/nodes' && options?.params?.ip_risk_score_max === '0')).toBe(true)
+      const speed = mountEl.querySelector<HTMLInputElement>('[data-testid="node-speed-min"]')!
+      const listCalls = () => vi.mocked(api.get).mock.calls.filter(([path]) => path === '/api/v1/nodes')
+      expect(speed.value).toBe('12.5')
+      expect(listCalls()[0]?.[1]?.params).toMatchObject({ speed_min_kib_s: '12.5', ip_risk_score_max: '0', page: 1 })
+
+      await router.push({ query: { ...router.currentRoute.value.query, speed_min_kib_s: '75' } })
+      await nextTick()
+      expect(speed.value).toBe('75')
+      expect(listCalls().at(-1)?.[1]?.params).toMatchObject({ speed_min_kib_s: '75', page: 1 })
+      speed.value = '0'
+      speed.dispatchEvent(new Event('change', { bubbles: true }))
+      await vi.waitFor(() => expect(router.currentRoute.value.query.speed_min_kib_s).toBe('0'))
+      expect(listCalls().at(-1)?.[1]?.params).toMatchObject({ speed_min_kib_s: '0', page: 1 })
 
       riskBand.value = 'high'
       riskBand.dispatchEvent(new Event('change', { bubbles: true }))
@@ -1362,6 +1375,10 @@ describe('NodesView real API detail, plaintext PATCH edit, and failure draft pre
       expect(searchInput.value).toBe('')
       expect(router.currentRoute.value.query.ip_risk_band).toBeUndefined()
       expect(router.currentRoute.value.query.ip_risk_score_max).toBeUndefined()
+      expect(speed.value).toBe('')
+      expect(router.currentRoute.value.query.speed_min_kib_s).toBeUndefined()
+      expect(listCalls().at(-1)?.[1]?.params).not.toHaveProperty('speed_min_kib_s')
+      expect(post).not.toHaveBeenCalled()
 
       // Safe fallback when invalid protocol, health and risk are pushed.
       await router.push('/nodes?protocol=bogus_protocol&health=invalid_health&ip_risk_band=critical&ip_risk_score_max=101')

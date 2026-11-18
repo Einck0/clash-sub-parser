@@ -1559,7 +1559,7 @@ func (s *Service) GetNodeDetailWithRisk(ctx context.Context, logicalID string, p
 		return nil, err
 	}
 	views := []NodeView{ToNodeViewFromReadModel(*rm)}
-	s.enrichNodeViews(ctx, views)
+	_ = s.enrichNodeViews(ctx, views, time.Time{})
 	view := views[0]
 
 	sources := view.Sources
@@ -1608,18 +1608,40 @@ func (s *Service) ListNodes(ctx context.Context, filter domain.NodeFilter) ([]do
 
 // ListNodesReadModel queries the node projection with server-side risk filtering and returns NodeViews.
 func (s *Service) ListNodesReadModel(ctx context.Context, filter domain.NodeFilter) ([]NodeView, int, error) {
+	var asOf time.Time
+	if filter.SpeedMinKiBS != nil {
+		if filter.Now != nil && !filter.Now.IsZero() {
+			asOf = *filter.Now
+		} else {
+			asOf = s.now()
+		}
+		filter.Now = &asOf
+	}
 	models, total, err := s.nodes.ListReadModel(ctx, filter)
 	if err != nil {
 		return nil, 0, err
 	}
 	views := ToNodeViewsFromReadModels(models)
-	s.enrichNodeViews(ctx, views)
+	err = s.enrichNodeViews(ctx, views, asOf)
+	if min := filter.SpeedMinKiBS; min != nil {
+		if err != nil {
+			return nil, 0, domain.NewInternalError("speed_evidence_unavailable", "Unable to read speed evidence; refresh the node list")
+		}
+		// A concurrent observation may supersede a match between pagination
+		// and the batch read. Never serve a non-matching row or a partial page.
+		for _, v := range views {
+			speed := v.Capabilities["speed"]
+			if speed.Verdict != domain.VerdictAvailable || speed.Stale || !domain.ValidSpeedThroughput(speed.Throughput) || *speed.Throughput < *min {
+				return nil, 0, domain.NewConflictError("speed_evidence_changed", "Speed evidence changed; refresh the node list")
+			}
+		}
+	}
 	return views, total, nil
 }
 
-func (s *Service) enrichNodeViews(ctx context.Context, views []NodeView) {
+func (s *Service) enrichNodeViews(ctx context.Context, views []NodeView, asOf time.Time) error {
 	if len(views) == 0 {
-		return
+		return nil
 	}
 	nodeIDs := make([]string, 0, len(views))
 	for i := range views {
@@ -1632,7 +1654,7 @@ func (s *Service) enrichNodeViews(ctx context.Context, views []NodeView) {
 		}
 	}
 	if len(nodeIDs) == 0 {
-		return
+		return nil
 	}
 
 	if s.sources != nil {
@@ -1647,11 +1669,16 @@ func (s *Service) enrichNodeViews(ctx context.Context, views []NodeView) {
 		}
 	}
 
+	var obsErr error
 	if s.probeObsRepo != nil {
-		if latestByNode, err := s.probeObsRepo.ListLatestByNodes(ctx, nodeIDs, nil); err == nil {
-			now := s.now()
+		latestByNode, err := s.probeObsRepo.ListLatestByNodes(ctx, nodeIDs, nil)
+		obsErr = err
+		if err == nil {
+			if asOf.IsZero() {
+				asOf = s.now()
+			}
 			for i := range views {
-				applyProbeObservationsToView(&views[i], latestByNode[views[i].LogicalID], now)
+				applyProbeObservationsToView(&views[i], latestByNode[views[i].LogicalID], asOf)
 			}
 		}
 	}
@@ -1672,6 +1699,7 @@ func (s *Service) enrichNodeViews(ctx context.Context, views []NodeView) {
 			}
 		}
 	}
+	return obsErr
 }
 
 func verdictToHealthStatus(verdict domain.ProbeVerdict) string {

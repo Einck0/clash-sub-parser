@@ -23,7 +23,7 @@ import {
   resolveNodeProbeState,
   type NormalizedNode,
 } from './nodeView'
-import { useNodes, type HealthFilterType } from './useNodes'
+import { parseSpeedMinimum, useNodes, type HealthFilterType } from './useNodes'
 import { IP_RISK_BANDS, IP_RISK_BAND_LABELS } from '../policy/policyTypes'
 import { t } from '../../locales'
 import { uiText } from '../../locales/redesign'
@@ -54,6 +54,7 @@ const {
   healthFilter,
   riskBandFilter,
   riskScoreMax,
+  speedMinKiBS,
   searchQuery,
   selectedNode,
   load: loadNodes,
@@ -145,6 +146,7 @@ function syncUrlFromState() {
   }
   if (riskBandFilter.value !== 'all') query.ip_risk_band = riskBandFilter.value
   if (riskScoreMax.value !== '') query.ip_risk_score_max = riskScoreMax.value
+  if (speedMinKiBS.value !== '') query.speed_min_kib_s = speedMinKiBS.value
   if (drawerOpen.value && selectedNode.value?.logicalId) {
     query.node = selectedNode.value.logicalId
   }
@@ -182,6 +184,7 @@ async function confirmSpeed() {
   speedFailedIds.value = new Set([...speedFailedIds.value].filter((id) => id !== node.logicalId))
   speedFeedback.value = `正在对「${node.displayName}」进行单次带宽测速…`
   const result = await measureNodeSpeed(node.logicalId)
+  if (speedMinKiBS.value !== '') await load()
   if (!result.ok) speedFailedIds.value = new Set([...speedFailedIds.value, node.logicalId])
   speedFeedback.value = result.ok ? `「${node.displayName}」测速结果已保存并刷新。` : (result.error || '本次测速失败，请重试。')
 }
@@ -276,6 +279,7 @@ function pruneInvalidSelectedIds() {
     protocolFilter.value === 'all' &&
     riskBandFilter.value === 'all' &&
     riskScoreMax.value === '' &&
+    speedMinKiBS.value === '' &&
     !searchQuery.value.trim()
   ) {
     const validIds = new Set(items.value.map((n) => n.logicalId))
@@ -414,6 +418,9 @@ const activeFilterSummary = computed(() => {
   if (riskScoreMax.value !== '') {
     conditions.push(`${uiText('风险分数上限', 'Maximum risk score')}: ${riskScoreMax.value}`)
   }
+  if (speedMinKiBS.value !== '') {
+    conditions.push(`${uiText('最低测速', 'Minimum speed')}: ${speedMinKiBS.value} KiB/s`)
+  }
   if (appliedSearchQuery.value) {
     conditions.push(`${uiText('搜索', 'Search')}: ${appliedSearchQuery.value}`)
   }
@@ -547,6 +554,7 @@ async function handleSaveConnectionPayload({
   }
   if (res.node) {
     onSuccess(res.node)
+    if (speedMinKiBS.value !== '') await load()
   }
 }
 
@@ -578,11 +586,18 @@ function handleRiskScoreChange(score: string) {
   syncUrlFromState()
 }
 
+function handleSpeedMinChange(speed: string) {
+  speedMinKiBS.value = speed
+  load()
+  syncUrlFromState()
+}
+
 function resetFilters() {
   protocolFilter.value = 'all'
   healthFilter.value = 'all'
   riskBandFilter.value = 'all'
   riskScoreMax.value = ''
+  speedMinKiBS.value = ''
   searchQuery.value = ''
   load()
   syncUrlFromState()
@@ -730,8 +745,8 @@ if (route) {
   )
 
   watch(
-    () => [route.query?.q, route.query?.protocol, route.query?.health, route.query?.ip_risk_band, route.query?.ip_risk_score_max],
-    ([newQ, newProto, newHealth, newRiskBand, newRiskScore]) => {
+    () => [route.query?.q, route.query?.protocol, route.query?.health, route.query?.ip_risk_band, route.query?.ip_risk_score_max, route.query?.speed_min_kib_s],
+    ([newQ, newProto, newHealth, newRiskBand, newRiskScore, newSpeed]) => {
       const safeQ = parseQuerySearch(newQ)
       const safeProto = parseQueryProtocol(newProto)
       const safeHealth = parseQueryHealth(newHealth)
@@ -754,6 +769,11 @@ if (route) {
       if (safeBand !== riskBandFilter.value || safeScore !== riskScoreMax.value) {
         riskBandFilter.value = safeBand
         riskScoreMax.value = safeScore
+        needReload = true
+      }
+      const safeSpeed = parseSpeedMinimum(newSpeed)
+      if (safeSpeed !== speedMinKiBS.value) {
+        speedMinKiBS.value = safeSpeed
         needReload = true
       }
       if (needReload) {
@@ -796,6 +816,7 @@ onMounted(async () => {
     if (initHealth !== 'all') healthFilter.value = initHealth
     riskBandFilter.value = parseQueryRiskBand(route.query.ip_risk_band)
     riskScoreMax.value = parseQueryRiskScore(route.query.ip_risk_score_max)
+    speedMinKiBS.value = parseSpeedMinimum(route.query.speed_min_kib_s)
   }
 
   void fetchGlobalScheduleKinds()
@@ -852,6 +873,8 @@ onUnmounted(() => {
       :health-filter="healthFilter"
       :risk-band-filter="riskBandFilter"
       :risk-score-max="riskScoreMax"
+      :speed-min="speedMinKiBS"
+      @update:speed-min="handleSpeedMinChange"
       @update:risk-band-filter="handleRiskBandChange"
       @update:risk-score-max="handleRiskScoreChange"
       @reset-filters="resetFilters"

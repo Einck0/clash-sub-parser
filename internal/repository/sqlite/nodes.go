@@ -107,21 +107,15 @@ func getNodeByLogicalID(ctx context.Context, q interface {
 
 func (r *nodeRepository) List(ctx context.Context, filter domain.NodeFilter) ([]domain.Node, int, error) {
 	whereClauses, args := buildNodeFilterPredicates(filter, "n.")
-	countWhereClauses, countArgs := buildNodeFilterPredicates(filter, "")
 
 	whereSQL := ""
 	if len(whereClauses) > 0 {
 		whereSQL = "WHERE " + strings.Join(whereClauses, " AND ")
 	}
 
-	countWhereSQL := ""
-	if len(countWhereClauses) > 0 {
-		countWhereSQL = "WHERE " + strings.Join(countWhereClauses, " AND ")
-	}
-
-	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM nodes %s;", countWhereSQL)
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM nodes n %s;", whereSQL)
 	var total int
-	if err := r.db.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total); err != nil {
+	if err := r.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("failed to count nodes: %w", err)
 	}
 

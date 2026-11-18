@@ -765,7 +765,12 @@ func (r *nodeRepository) listReadModelFast(ctx context.Context, filter domain.No
 		}
 		orderBy = fmt.Sprintf("display_name %s, logical_id ASC", order)
 	}
-	query := fmt.Sprintf("SELECT logical_id, protocol, display_name, server, port, config_json, active, created_at, updated_at, connection_revision FROM nodes%s ORDER BY %s LIMIT ? OFFSET ?;", whereSQL, orderBy)
+	revision := "nodes.connection_revision"
+	if filter.SpeedMinKiBS != nil {
+		// SetHead can select a connection version independently of the base row.
+		revision = "COALESCE((SELECT h.connection_revision FROM node_connection_heads h WHERE h.logical_id = nodes.logical_id), nodes.connection_revision)"
+	}
+	query := fmt.Sprintf("SELECT logical_id, protocol, display_name, server, port, config_json, active, created_at, updated_at, %s FROM nodes%s ORDER BY %s LIMIT ? OFFSET ?;", revision, whereSQL, orderBy)
 	rows, err := r.db.QueryContext(ctx, query, append(args, pageSize, offset)...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to query nodes: %w", err)

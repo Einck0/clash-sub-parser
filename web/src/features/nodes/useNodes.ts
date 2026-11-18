@@ -50,6 +50,17 @@ export type HealthFilterType =
   | 'untested'
   | 'unknown'
 
+// Match the API's unsigned decimal grammar; hex, Infinity and non-strings
+// (including repeated URL parameters) must not become applied thresholds.
+export function parseSpeedMinimum(value: unknown): string {
+  if (typeof value !== 'string') return ''
+  const decimal = /^([0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$/.exec(value)
+  if (!decimal) return ''
+  const speed = Number(value)
+  if (speed === 0 && /[1-9]/.test(decimal[1])) return ''
+  return Number.isFinite(speed) ? String(speed) : ''
+}
+
 export function useNodes() {
   const items = ref<NormalizedNode[]>([])
   const loading = ref(false)
@@ -68,6 +79,7 @@ export function useNodes() {
   const healthFilter = ref<HealthFilterType>('all')
   const riskBandFilter = ref('all')
   const riskScoreMax = ref('')
+  const speedMinKiBS = ref('')
   const searchQuery = ref<string>('')
   const selectedNode = ref<NormalizedNode | null>(null)
   const requestGeneration = ref(0)
@@ -168,6 +180,7 @@ export function useNodes() {
       }
       if (riskBandFilter.value !== 'all') params.ip_risk_band = riskBandFilter.value
       if (riskScoreMax.value !== '') params.ip_risk_score_max = riskScoreMax.value
+      if (speedMinKiBS.value !== '') params.speed_min_kib_s = speedMinKiBS.value
       if (searchQuery.value.trim()) {
         params.search = searchQuery.value.trim()
       }
@@ -573,6 +586,7 @@ export function useNodes() {
     healthFilter,
     riskBandFilter,
     riskScoreMax,
+    speedMinKiBS,
     searchQuery,
     selectedNode,
     nodeDetailError,

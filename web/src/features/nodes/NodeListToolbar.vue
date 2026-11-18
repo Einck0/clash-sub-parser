@@ -10,6 +10,8 @@ import { SUPPORTED_NODE_PROTOCOLS } from './nodeView'
 import { IP_RISK_BANDS, IP_RISK_BAND_LABELS } from '../policy/policyTypes'
 import { t } from '../../locales'
 import { uiText } from '../../locales/redesign'
+import { toastStore } from '../../ui/toast'
+import { parseSpeedMinimum } from './useNodes'
 
 const props = defineProps<{
   total: number
@@ -21,6 +23,7 @@ const props = defineProps<{
   healthFilter: string
   riskBandFilter?: string
   riskScoreMax?: string
+  speedMin?: string
   searchQuery: string
   healthCounts: {
     all: number
@@ -40,6 +43,7 @@ const emit = defineEmits<{
   (e: 'update:healthFilter', health: string): void
   (e: 'update:riskBandFilter', band: string): void
   (e: 'update:riskScoreMax', score: string): void
+  (e: 'update:speedMin', speed: string): void
   (e: 'reset-filters'): void
   (e: 'update:searchQuery', query: string): void
   (e: 'refresh'): void
@@ -51,6 +55,18 @@ const emit = defineEmits<{
   (e: 'probe-all'): void
   (e: 'open-history'): void
 }>()
+
+function changeSpeedMinimum(event: Event) {
+  const input = event.target as HTMLInputElement
+  const speed = parseSpeedMinimum(input.value)
+  if (input.validity.badInput || (input.value !== '' && speed === '')) {
+    input.value = props.speedMin ?? ''
+    toastStore.push({ tone: 'error', message: uiText('请输入大于或等于 0 的有限测速值。', 'Enter a finite speed of zero or more.') })
+    return
+  }
+  input.value = speed
+  emit('update:speedMin', speed)
+}
 
 const totalBadgeText = computed(() => {
   if (!props.initialLoaded && props.loading) {
@@ -171,6 +187,15 @@ const totalBadgeText = computed(() => {
           <span>分数上限</span>
           <input :value="riskScoreMax" type="number" min="0" max="100" step="1" placeholder="不限" class="input input-xs sm:input-sm w-24" data-testid="node-risk-score-max" aria-label="风险分数上限" @change="$emit('update:riskScoreMax', ($event.target as HTMLInputElement).value)" />
         </label>
+        <label class="flex items-center gap-2">
+          <span>{{ uiText('最低测速 (KiB/s)', 'Minimum speed (KiB/s)') }}</span>
+          <input
+            :value="speedMin" type="number" min="0" step="any" :placeholder="uiText('不限', 'Any')"
+            class="input input-xs sm:input-sm w-28" data-testid="node-speed-min" aria-describedby="node-speed-filter-help"
+            @change="changeSpeedMinimum"
+          />
+        </label>
+        <span id="node-speed-filter-help" class="text-base-content/60">{{ uiText('留空不限。设置下限只筛选当前连接已保存的最新测速；失败、失效或未测速的节点不匹配，不会发起测速。', 'Leave blank for any speed. A minimum uses only the latest saved speed for this connection; failed, stale or untested nodes do not match. No test is started.') }}</span>
         <button type="button" class="btn btn-ghost btn-xs" data-testid="node-reset-filters" @click="$emit('reset-filters')">重置筛选</button>
         <span class="text-base-content/60">未知表示当前无有效风险分数；分数上限不匹配未知。</span>
       </div>

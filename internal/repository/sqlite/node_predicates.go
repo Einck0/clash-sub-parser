@@ -237,7 +237,38 @@ func buildNodeFilterPredicates(filter domain.NodeFilter, colPrefix string) ([]st
 		where = append(where, "EXISTS (WITH risk_score AS MATERIALIZED (SELECT "+scoreSQL+" AS score) SELECT 1 FROM risk_score WHERE "+strings.Join(clauses, " AND ")+")")
 	}
 
+	if filter.SpeedMinKiBS != nil {
+		now := domain.NowUTC()
+		if filter.Now != nil && !filter.Now.IsZero() {
+			now = filter.Now.UTC()
+		}
+		where = append(where, currentSpeedSQL(colPrefix)+" >= ?")
+		args = append(args, now.Format(time.RFC3339Nano), *filter.SpeedMinKiBS)
+	}
+
 	return where, args
+}
+
+// currentSpeedSQL chooses the latest observation before validating it, so an
+// unsuccessful measurement cannot fall back to an earlier success.
+func currentSpeedSQL(colPrefix string) string {
+	return `(
+		WITH latest_speed AS MATERIALIZED (
+			SELECT node_logical_id, verdict, connection_revision, observed_at, evidence_data
+			FROM probe_observations po
+			WHERE po.node_logical_id = ` + colPrefix + `logical_id AND po.kind = 'speed'
+			ORDER BY observed_at DESC, id DESC LIMIT 1
+		)
+		SELECT CASE WHEN verdict = 'available'
+			AND connection_revision > 0
+			AND connection_revision = (
+				SELECT COALESCE(h.connection_revision, n.connection_revision)
+				FROM nodes n LEFT JOIN node_connection_heads h ON h.logical_id = n.logical_id
+				WHERE n.logical_id = latest_speed.node_logical_id
+			)
+			THEN csp_speed_kib_s(CAST(evidence_data AS BLOB), CAST(observed_at AS TEXT), ?) END
+		FROM latest_speed
+	)`
 }
 
 // currentIPRiskScoreSQL mirrors domain.ParseIPRiskScore and the revision-bound

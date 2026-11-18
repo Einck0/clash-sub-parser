@@ -5,6 +5,7 @@ import { api } from '../../api/client'
 import { setLocale } from '../../locales'
 import { toastStore } from '../../ui/toast'
 import NodesView from './NodesView.vue'
+import { parseSpeedMinimum, useNodes } from './useNodes'
 import type { NodeRecord } from './nodeView'
 
 vi.mock('../../locales/redesign', () => ({
@@ -68,6 +69,15 @@ async function settleView() {
   await new Promise((resolve) => setTimeout(resolve, 0))
   await nextTick()
 }
+
+describe('speed minimum parsing', () => {
+  it.each([
+    ['1e-400', ''], ['1e-324', ''], [`0.${'0'.repeat(324)}1`, ''],
+    ['0.00E-400', '0'], ['5e-324', '5e-324'], ['1.3e1', '13'],
+  ])('parses %s without silently rounding a positive minimum to zero', (input, expected) => {
+    expect(parseSpeedMinimum(input)).toBe(expected)
+  })
+})
 
 describe('NodesView manual pagination', () => {
   let container: HTMLDivElement
@@ -239,6 +249,17 @@ describe('NodesView manual pagination', () => {
     score.value = '20'
     score.dispatchEvent(new Event('change', { bubbles: true }))
     await settleView()
+    const speed = container.querySelector<HTMLInputElement>('[data-testid="node-speed-min"]')!
+    speed.value = '12.5'
+    speed.dispatchEvent(new Event('change', { bubbles: true }))
+    await settleView()
+    expect(requests.at(-1)).toMatchObject({ speed_min_kib_s: '12.5', page: 1 })
+    const appliedRequests = requests.length
+    speed.value = '1e-400'
+    speed.dispatchEvent(new Event('change', { bubbles: true }))
+    await settleView()
+    expect(speed.value).toBe('12.5')
+    expect(requests).toHaveLength(appliedRequests)
 
     expect(emptyState().textContent).toContain('没有匹配当前条件的节点')
     const summary = container.querySelector('[data-testid="node-empty-filter-summary"]')?.textContent
@@ -246,6 +267,7 @@ describe('NodesView manual pagination', () => {
     expect(summary).toContain('SS')
     expect(summary).toContain('正常')
     expect(summary).toContain('20')
+    expect(summary).toContain('12.5 KiB/s')
     expect(requests.at(-1)).toMatchObject({ protocol: 'ss', health_status: 'healthy', ip_risk_band: 'low', ip_risk_score_max: '20', search: 'fixture missing' })
 
     emptyState().querySelector<HTMLButtonElement>('button')!.click()
@@ -253,11 +275,41 @@ describe('NodesView manual pagination', () => {
     expect(search.value).toBe('')
     expect(risk.value).toBe('all')
     expect(score.value).toBe('')
+    expect(speed.value).toBe('')
     expect(emptyState().textContent).not.toContain('没有匹配当前条件的节点')
     expect(requests.at(-1)).toMatchObject({ page: 1, scope: 'enabled_subscriptions' })
-    for (const key of ['protocol', 'health_status', 'ip_risk_band', 'ip_risk_score_max', 'search']) {
+    for (const key of ['protocol', 'health_status', 'ip_risk_band', 'ip_risk_score_max', 'speed_min_kib_s', 'search']) {
       expect(requests.at(-1)).not.toHaveProperty(key)
     }
+  })
+
+  it('keeps a cleared filter on page one when an older speed-filtered page two arrives', async () => {
+    const oldPage = deferred<ReturnType<typeof nodesPage>>()
+    const calls: Array<Record<string, unknown>> = []
+    vi.spyOn(api, 'get').mockImplementation(async (path: string, options?: any) => {
+      if (path === '/api/v1/nodes') {
+        const params = options?.params ?? {}
+        calls.push(params)
+        if (params.page === 2) return oldPage.promise
+        return params.speed_min_kib_s === '10' ? nodesPage(pageOneNodes, 1, 102) : nodesPage(pageTwoNodes, 1, 2)
+      }
+      if (path === '/api/v1/probes/pool') return { probing_node_ids: [], queued_node_ids: [] }
+      return {}
+    })
+    const state = useNodes()
+    state.speedMinKiBS.value = '10'
+    await state.load()
+    const loadingOldPage = state.loadMore()
+    expect(calls.at(-1)).toMatchObject({ speed_min_kib_s: '10', page: 2 })
+    state.speedMinKiBS.value = ''
+    await state.load()
+    expect(calls.at(-1)).toMatchObject({ page: 1 })
+    expect(calls.at(-1)).not.toHaveProperty('speed_min_kib_s')
+    oldPage.resolve(nodesPage(pageTwoNodes, 2, 102))
+    await loadingOldPage
+    expect(state.hasMore.value).toBe(false)
+    expect(state.total.value).toBe(2)
+    expect(state.items.value.map((node) => node.logicalId)).toEqual(['fixture-node-101', 'fixture-node-102'])
   })
 
   it('does not report empty inventory when the initial request fails', async () => {

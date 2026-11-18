@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -14,6 +16,8 @@ import (
 	"clash-sub-parser/internal/application/probe"
 	"clash-sub-parser/internal/domain"
 )
+
+var speedThresholdPattern = regexp.MustCompile(`^([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][+-]?[0-9]+)?$`)
 
 type nodeHandler struct {
 	service      *inventory.Service
@@ -137,6 +141,22 @@ func (h nodeHandler) list(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		filter.IPRiskScoreMax = &score
+	}
+
+	if values, present := q["speed_min_kib_s"]; present {
+		if len(values) != 1 {
+			WriteError(w, r, http.StatusBadRequest, "invalid_speed_min_kib_s", "speed_min_kib_s must be a single finite non-negative number")
+			return
+		}
+		decimal := speedThresholdPattern.FindStringSubmatch(values[0])
+		speed, err := strconv.ParseFloat(values[0], 64)
+		// ParseFloat can round a nonzero significand to zero without an error.
+		if decimal == nil || err != nil || math.IsNaN(speed) || math.IsInf(speed, 0) || speed < 0 ||
+			(speed == 0 && strings.ContainsAny(decimal[1], "123456789")) {
+			WriteError(w, r, http.StatusBadRequest, "invalid_speed_min_kib_s", "speed_min_kib_s must be a single finite non-negative number")
+			return
+		}
+		filter.SpeedMinKiBS = &speed
 	}
 
 	for _, value := range q["risk_decision"] {

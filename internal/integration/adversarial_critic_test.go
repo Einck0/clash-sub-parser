@@ -652,7 +652,7 @@ func TestAdversarial_Dimension7_PublishRevokeConcurrencyRace(t *testing.T) {
 		Nodes:           []domain.Node{raceNode},
 		Groups:          []domain.NodeGroup{{ID: groupID, Name: "PROXY", GroupType: domain.GroupTypeSelect}},
 		Edges:           map[string][]domain.GroupEdge{groupID: {{ID: domain.MustNewUUIDv7(), ParentGroupID: groupID, NodeLogicalID: &nodeID}}},
-		PolicyRules:     []domain.PolicyRule{{ID: "rule-race", TargetGroupID: groupID, Expression: "MATCH", Position: 0}},
+		PolicyRules:     []domain.PolicyRule{{ID: "rule-race", TargetGroupID: groupID, Expression: "MATCH", Position: 0, Enabled: true}},
 	})
 	if err != nil {
 		t.Fatalf("resolve policy: %v", err)

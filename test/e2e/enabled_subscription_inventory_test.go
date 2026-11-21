@@ -600,6 +600,7 @@ func TestEnabledSubscriptionInventoryE2E(t *testing.T) {
 			TargetGroupID: groupID,
 			Expression:    "MATCH",
 			Position:      0,
+			Enabled:       true,
 		})
 
 		// 2. Preview and Publish while subA is enabled

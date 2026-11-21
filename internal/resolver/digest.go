@@ -67,6 +67,7 @@ type canonicalInputEdge struct {
 
 type canonicalInputRule struct {
 	TargetGroupID string `json:"target_group_id"`
+	BuiltinTarget string `json:"builtin_target"`
 	Expression    string `json:"expression"`
 	Position      int    `json:"position"`
 }
@@ -179,6 +180,7 @@ func computeInputDigest(input ResolveInput) (string, error) {
 	for i, r := range input.PolicyRules {
 		rules[i] = canonicalInputRule{
 			TargetGroupID: r.TargetGroupID,
+			BuiltinTarget: r.BuiltinTarget,
 			Expression:    r.Expression,
 			Position:      r.Position,
 		}

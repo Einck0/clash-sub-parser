@@ -55,8 +55,8 @@ func TestDeterministicResolver_IdenticalInputProducesExactSameDigest(t *testing.
 			},
 		},
 		PolicyRules: []domain.PolicyRule{
-			{ID: "r1", TargetGroupID: parentID, Expression: "DOMAIN-SUFFIX,google.com", Position: 0},
-			{ID: "r2", TargetGroupID: parentID, Expression: "MATCH", Position: 1},
+			{ID: "r1", TargetGroupID: parentID, Expression: "DOMAIN-SUFFIX,google.com", Position: 0, Enabled: true},
+			{ID: "r2", TargetGroupID: parentID, Expression: "MATCH", Position: 1, Enabled: true},
 		},
 		DNS: resolver.DNSConfig{
 			Enabled:     true,
@@ -120,9 +120,9 @@ func TestDeterministicResolver_ShuffledInputProducesIdenticalSnapshotAndDigest(t
 	}
 
 	rules := []domain.PolicyRule{
-		{ID: "r1", TargetGroupID: parentID, Expression: "DOMAIN-SUFFIX,google.com", Position: 0},
-		{ID: "r2", TargetGroupID: childID, Expression: "GEOIP,CN", Position: 1},
-		{ID: "r3", TargetGroupID: parentID, Expression: "MATCH", Position: 2},
+		{ID: "r1", TargetGroupID: parentID, Expression: "DOMAIN-SUFFIX,google.com", Position: 0, Enabled: true},
+		{ID: "r2", TargetGroupID: childID, Expression: "GEOIP,CN", Position: 1, Enabled: true},
+		{ID: "r3", TargetGroupID: parentID, Expression: "MATCH", Position: 2, Enabled: true},
 	}
 
 	inputOriginal := resolver.ResolveInput{
@@ -312,8 +312,8 @@ func TestDeterministicResolver_RejectsMultipleMatchRules(t *testing.T) {
 			{ID: gA, Name: "Group A", GroupType: domain.GroupTypeSelect},
 		},
 		PolicyRules: []domain.PolicyRule{
-			{ID: "r1", TargetGroupID: gA, Expression: "MATCH", Position: 0},
-			{ID: "r2", TargetGroupID: gA, Expression: "FINAL", Position: 1},
+			{ID: "r1", TargetGroupID: gA, Expression: "MATCH", Position: 0, Enabled: true},
+			{ID: "r2", TargetGroupID: gA, Expression: "FINAL", Position: 1, Enabled: true},
 		},
 	}
 
@@ -342,9 +342,9 @@ func TestDeterministicResolver_MatchRulePlacedTerminal(t *testing.T) {
 			gID: {{ID: "e1", ParentGroupID: gID, NodeLogicalID: &nodeID, Position: 0}},
 		},
 		PolicyRules: []domain.PolicyRule{
-			{ID: "r-match", TargetGroupID: gID, Expression: "MATCH", Position: 0},
-			{ID: "r-domain", TargetGroupID: gID, Expression: "DOMAIN-SUFFIX,example.com", Position: 1},
-			{ID: "r-ip", TargetGroupID: gID, Expression: "IP-CIDR,192.168.1.0/24", Position: 2},
+			{ID: "r-match", TargetGroupID: gID, Expression: "MATCH", Position: 0, Enabled: true},
+			{ID: "r-domain", TargetGroupID: gID, Expression: "DOMAIN-SUFFIX,example.com", Position: 1, Enabled: true},
+			{ID: "r-ip", TargetGroupID: gID, Expression: "IP-CIDR,192.168.1.0/24", Position: 2, Enabled: true},
 		},
 	}
 
@@ -522,7 +522,7 @@ func TestDeterministicResolver_WARPGroup_LegacyAdmissionIgnored_RiskAndInactiveS
 			{ID: "adm2", Name: "legacy-quarantine-warp", Expression: "name contains 'WARP'", Action: domain.RuleActionQuarantine, Position: 1},
 		},
 		PolicyRules: []domain.PolicyRule{
-			{ID: "r1", TargetGroupID: proxyGroupID, Expression: "MATCH", Position: 0},
+			{ID: "r1", TargetGroupID: proxyGroupID, Expression: "MATCH", Position: 0, Enabled: true},
 		},
 		DNS: resolver.DNSConfig{Enabled: true, Nameservers: []string{"1.1.1.1"}},
 	}
@@ -888,8 +888,8 @@ func TestDeterministicResolver_ConcurrentResolutionsAreIdentical(t *testing.T) {
 			},
 		},
 		PolicyRules: []domain.PolicyRule{
-			{ID: "r1", TargetGroupID: parentID, Expression: "DOMAIN,example.com", Position: 0},
-			{ID: "r2", TargetGroupID: parentID, Expression: "MATCH", Position: 1},
+			{ID: "r1", TargetGroupID: parentID, Expression: "DOMAIN,example.com", Position: 0, Enabled: true},
+			{ID: "r2", TargetGroupID: parentID, Expression: "MATCH", Position: 1, Enabled: true},
 		},
 		DNS: resolver.DNSConfig{
 			Enabled:     true,
@@ -955,7 +955,7 @@ func TestResolver_TwoLevelFiltering_GlobalAndGroup(t *testing.T) {
 			},
 		},
 		PolicyRules: []domain.PolicyRule{
-			{ID: "r1", TargetGroupID: parentID, Expression: "MATCH", Position: 0},
+			{ID: "r1", TargetGroupID: parentID, Expression: "MATCH", Position: 0, Enabled: true},
 		},
 		GlobalFilter: &domain.NodeFilterSpec{
 			Conditions: []domain.FilterCondition{
@@ -1030,7 +1030,7 @@ func TestResolver_DynamicGroup_MatchesFromGlobalPool(t *testing.T) {
 		// No edges for gid!
 		Edges: map[string][]domain.GroupEdge{},
 		PolicyRules: []domain.PolicyRule{
-			{ID: "r1", TargetGroupID: gid, Expression: "MATCH", Position: 0},
+			{ID: "r1", TargetGroupID: gid, Expression: "MATCH", Position: 0, Enabled: true},
 		},
 		GroupFilters: map[string]domain.NodeFilterSpec{
 			gid: {
@@ -1089,7 +1089,7 @@ func TestResolver_NestedGroupProjection_RestrictsChildNodes(t *testing.T) {
 			},
 		},
 		PolicyRules: []domain.PolicyRule{
-			{ID: "r1", TargetGroupID: parentID, Expression: "MATCH", Position: 0},
+			{ID: "r1", TargetGroupID: parentID, Expression: "MATCH", Position: 0, Enabled: true},
 		},
 		GroupFilters: map[string]domain.NodeFilterSpec{
 			parentID: {
@@ -1163,7 +1163,7 @@ func TestResolver_EmptyRoutedGroup_FailClosedDiagnostic(t *testing.T) {
 			},
 		},
 		PolicyRules: []domain.PolicyRule{
-			{ID: "r1", TargetGroupID: parentID, Expression: "MATCH", Position: 0},
+			{ID: "r1", TargetGroupID: parentID, Expression: "MATCH", Position: 0, Enabled: true},
 		},
 		// Filter excludes n1, making Proxy completely empty
 		GroupFilters: map[string]domain.NodeFilterSpec{
@@ -1213,7 +1213,7 @@ func TestResolver_DirectlyRoutedEmptyGroup_EmitsErrorRegardlessOfFilter(t *testi
 		},
 		Edges: map[string][]domain.GroupEdge{},
 		PolicyRules: []domain.PolicyRule{
-			{ID: "r1", TargetGroupID: parentID, Expression: "MATCH", Position: 0},
+			{ID: "r1", TargetGroupID: parentID, Expression: "MATCH", Position: 0, Enabled: true},
 		},
 		// No filters defined anywhere!
 		DNS: resolver.DNSConfig{Enabled: true, Nameservers: []string{"1.1.1.1"}},
@@ -1271,7 +1271,7 @@ func TestResolver_ProbeFailClosed_MissingExpiredMismatchNotEquals(t *testing.T) 
 			Edges: map[string][]domain.GroupEdge{
 				gid: {{ID: "e1", ParentGroupID: gid, NodeLogicalID: &nID, Position: 0}},
 			},
-			PolicyRules: []domain.PolicyRule{{ID: "r1", TargetGroupID: gid, Expression: "MATCH", Position: 0}},
+			PolicyRules: []domain.PolicyRule{{ID: "r1", TargetGroupID: gid, Expression: "MATCH", Position: 0, Enabled: true}},
 			DNS:         resolver.DNSConfig{Enabled: true, Nameservers: []string{"1.1.1.1"}},
 			AsOf:        now,
 		}
@@ -1518,8 +1518,8 @@ func TestResolver_MultiParentNestedGroupProjection(t *testing.T) {
 			},
 		},
 		PolicyRules: []domain.PolicyRule{
-			{ID: "r1", TargetGroupID: parent1ID, Expression: "DOMAIN-SUFFIX,google.com", Position: 0},
-			{ID: "r2", TargetGroupID: parent2ID, Expression: "MATCH", Position: 1},
+			{ID: "r1", TargetGroupID: parent1ID, Expression: "DOMAIN-SUFFIX,google.com", Position: 0, Enabled: true},
+			{ID: "r2", TargetGroupID: parent2ID, Expression: "MATCH", Position: 1, Enabled: true},
 		},
 		GroupFilters: map[string]domain.NodeFilterSpec{
 			parent1ID: {
@@ -1596,7 +1596,7 @@ func TestResolver_FreshnessBoundaryDigestChange(t *testing.T) {
 			Edges: map[string][]domain.GroupEdge{
 				gid: {{ID: "e1", ParentGroupID: gid, NodeLogicalID: &nID, Position: 0}},
 			},
-			PolicyRules: []domain.PolicyRule{{ID: "r1", TargetGroupID: gid, Expression: "MATCH", Position: 0}},
+			PolicyRules: []domain.PolicyRule{{ID: "r1", TargetGroupID: gid, Expression: "MATCH", Position: 0, Enabled: true}},
 			DNS:         resolver.DNSConfig{Enabled: true, Nameservers: []string{"1.1.1.1"}},
 			LatestObservations: map[string]map[domain.ProbeKind]domain.ProbeObservation{
 				nID: {
@@ -1668,8 +1668,8 @@ func TestResolver_InheritGlobalFilter_False_WARP_IncludesNodeInProxies(t *testin
 			warpGroupID:  {{ID: "e2", ParentGroupID: warpGroupID, NodeLogicalID: &nWARP.LogicalID, Position: 0}},
 		},
 		PolicyRules: []domain.PolicyRule{
-			{ID: "r1", TargetGroupID: proxyGroupID, Expression: "MATCH", Position: 0},
-			{ID: "r2", TargetGroupID: warpGroupID, Expression: "DOMAIN-SUFFIX,warp.dev", Position: 1},
+			{ID: "r1", TargetGroupID: proxyGroupID, Expression: "MATCH", Position: 0, Enabled: true},
+			{ID: "r2", TargetGroupID: warpGroupID, Expression: "DOMAIN-SUFFIX,warp.dev", Position: 1, Enabled: true},
 		},
 		GlobalFilter: &domain.NodeFilterSpec{
 			Conditions: []domain.FilterCondition{
@@ -1805,7 +1805,7 @@ func TestResolver_InheritedFilterGroupRef_PreservesChildNodesAndDerivedEmptyFall
 			},
 		},
 		PolicyRules: []domain.PolicyRule{
-			{ID: "r1", TargetGroupID: parentGroupID, Expression: "MATCH", Position: 0},
+			{ID: "r1", TargetGroupID: parentGroupID, Expression: "MATCH", Position: 0, Enabled: true},
 		},
 		GlobalFilter: &domain.NodeFilterSpec{
 			Conditions: []domain.FilterCondition{

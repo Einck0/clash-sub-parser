@@ -607,6 +607,7 @@ func TestPublication_BuildCurrentArtifact_DirectGeneration_EmitsDialerAndRejects
 				TargetGroupID: groupID,
 				Expression:    "MATCH",
 				Position:      0,
+				Enabled:       true,
 			},
 		},
 		ProxyChainBindings: []domain.ProxyChainBinding{
@@ -734,6 +735,7 @@ func TestPublication_BuildCurrentArtifact_NoOrDisabledChains_PureExportsUnchange
 				TargetGroupID: groupID,
 				Expression:    "MATCH",
 				Position:      0,
+				Enabled:       true,
 			},
 		},
 		ProxyChainBindings: []domain.ProxyChainBinding{
@@ -841,6 +843,7 @@ func TestPublication_BuildCurrentArtifact_ValidatesEnabledSubscriptionIDs(t *tes
 					TargetGroupID: groupID,
 					Expression:    "MATCH",
 					Position:      0,
+					Enabled:       true,
 				},
 			},
 			NodeSources: map[string][]domain.NodeSource{

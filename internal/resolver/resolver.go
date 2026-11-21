@@ -73,6 +73,10 @@ func (r *defaultResolver) Resolve(ctx context.Context, input ResolveInput) (*Res
 	}
 	input.CompilerVersion = compilerVer
 
+	// Only enabled rules participate in topology, routed-group diagnostics,
+	// resolved output and the effective input digest. Keep persisted input intact.
+	input.PolicyRules = domain.EnabledPolicyRules(input.PolicyRules)
+
 	// Sources are the sole graph input. Legacy edges/filters never resurrect an empty pipeline.
 	input.Groups = append([]domain.NodeGroup(nil), input.Groups...)
 	for i := range input.Groups {

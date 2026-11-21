@@ -652,7 +652,7 @@ func (s *Service) CreatePolicyRule(ctx context.Context, cmd CreatePolicyRuleComm
 		Enabled:       enabled,
 	}
 
-	combinedRules := append(existingRules, newRule)
+	combinedRules := domain.EnabledPolicyRules(append(existingRules, newRule))
 
 	validationRules := combinedRules
 	hasCategories := false
@@ -1451,6 +1451,9 @@ func (s *Service) ValidateGraph(ctx context.Context) (*ValidationResult, error) 
 			return nil, fmt.Errorf("validation incomplete: admission rules: %w", err)
 		}
 	}
+
+	// Diagnostics and topology describe effective routing, not disabled drafts.
+	polRules = domain.EnabledPolicyRules(polRules)
 
 	var issues []ValidationIssue
 	var errorsList []string

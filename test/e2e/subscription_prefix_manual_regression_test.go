@@ -57,7 +57,7 @@ func TestManualAndPrunedInventoryPolicyExportAndPrefixImmutability(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.PolicyRepo.CreatePolicyRule(ctx, &domain.PolicyRule{ID: domain.MustNewUUIDv7(), RevisionID: rev.ID, TargetGroupID: group.ID, Expression: "MATCH"}); err != nil {
+	if err := h.PolicyRepo.CreatePolicyRule(ctx, &domain.PolicyRule{ID: domain.MustNewUUIDv7(), RevisionID: rev.ID, TargetGroupID: group.ID, Expression: "MATCH", Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
 	preview, err := h.PublicationService.Preview(ctx, publication.PreviewQuery{Target: domain.TargetMihomo})

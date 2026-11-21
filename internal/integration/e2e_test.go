@@ -207,7 +207,7 @@ func TestControlPlaneEndToEndFixture(t *testing.T) {
 		Nodes:           nodes,
 		Groups:          []domain.NodeGroup{{ID: groupID, Name: "Integration Select", GroupType: domain.GroupTypeSelect, Sources: []domain.MemberSource{{Operation: domain.OperationAdd, Kind: domain.SourceKindManualNode, NodeLogicalID: &groupEdgeNodeID}}}},
 		Edges:           map[string][]domain.GroupEdge{groupID: {{ID: domain.MustNewUUIDv7(), ParentGroupID: groupID, NodeLogicalID: &groupEdgeNodeID}}},
-		PolicyRules:     []domain.PolicyRule{{ID: "integration-rule", TargetGroupID: groupID, Expression: "MATCH", Position: 0}},
+		PolicyRules:     []domain.PolicyRule{{ID: "integration-rule", TargetGroupID: groupID, Expression: "MATCH", Position: 0, Enabled: true}},
 	})
 	if err != nil {
 		t.Fatalf("resolve policy: %v", err)
@@ -544,7 +544,7 @@ func TestControlPlaneEndToEndWithIPRiskFakeProvider(t *testing.T) {
 		Nodes:              nodes,
 		Groups:             []domain.NodeGroup{{ID: groupID, Name: "All Nodes", GroupType: domain.GroupTypeSelect, Sources: []domain.MemberSource{{Operation: domain.OperationAdd, Kind: domain.SourceKindManualNode, NodeLogicalID: &groupEdgeClean}, {Operation: domain.OperationAdd, Kind: domain.SourceKindManualNode, NodeLogicalID: &groupEdgeTor, Position: 1}}}},
 		Edges:              map[string][]domain.GroupEdge{groupID: {{ID: domain.MustNewUUIDv7(), ParentGroupID: groupID, NodeLogicalID: &groupEdgeClean}, {ID: domain.MustNewUUIDv7(), ParentGroupID: groupID, NodeLogicalID: &groupEdgeTor}}},
-		PolicyRules:        []domain.PolicyRule{{ID: "rule-match-all", TargetGroupID: groupID, Expression: "MATCH", Position: 0}},
+		PolicyRules:        []domain.PolicyRule{{ID: "rule-match-all", TargetGroupID: groupID, Expression: "MATCH", Position: 0, Enabled: true}},
 		RiskPolicyRevision: policyRev.RevisionID,
 		RiskDecisionDigest: batchRes.DecisionDigest,
 		RiskDecisions:      batchRes.Decisions,
@@ -613,7 +613,7 @@ func TestControlPlaneEndToEndWithIPRiskFakeProvider(t *testing.T) {
 		Nodes:              []domain.Node{cleanNode},
 		Groups:             []domain.NodeGroup{{ID: groupID, Name: "Clean Nodes", GroupType: domain.GroupTypeSelect}},
 		Edges:              map[string][]domain.GroupEdge{groupID: {{ID: domain.MustNewUUIDv7(), ParentGroupID: groupID, NodeLogicalID: &groupEdgeClean}}},
-		PolicyRules:        []domain.PolicyRule{{ID: "rule-match-clean", TargetGroupID: groupID, Expression: "MATCH", Position: 0}},
+		PolicyRules:        []domain.PolicyRule{{ID: "rule-match-clean", TargetGroupID: groupID, Expression: "MATCH", Position: 0, Enabled: true}},
 		RiskPolicyRevision: policyRev.RevisionID,
 		RiskDecisionDigest: batchRes.DecisionDigest,
 		RiskDecisions:      []domain.RiskDecision{batchRes.DecisionMap[cleanNode.LogicalID]},

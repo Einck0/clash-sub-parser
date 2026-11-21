@@ -174,6 +174,7 @@ func seedSamplePolicyData(t *testing.T, db *sql.DB) (string, string) {
 	// 4. Insert Policy Rule
 	ruleID, _ := domain.NewUUIDv7()
 	err = policyRepo.CreatePolicyRule(ctx, &domain.PolicyRule{
+		Enabled:       true,
 		ID:            ruleID,
 		RevisionID:    revID,
 		TargetGroupID: groupID,
@@ -1244,6 +1245,7 @@ func TestAdminPreview_CapabilityBoundaries(t *testing.T) {
 			TargetGroupID: groupID,
 			Expression:    "GEOSITE,category-ads-all",
 			Position:      0,
+			Enabled:       true,
 		})
 		if err != nil {
 			t.Fatalf("failed to insert rule: %v", err)
@@ -1676,6 +1678,7 @@ func TestPublication_MihomoHysteria2EndToEndWithOfficialCLI(t *testing.T) {
 		TargetGroupID: groupID,
 		Expression:    "MATCH",
 		Position:      0,
+		Enabled:       true,
 	})
 
 	// 4. Preview Mihomo via POST /api/v1/publications/preview -> 200 OK
@@ -2029,6 +2032,7 @@ func TestFourTargetEndToEndHTTP_WireGuardTUICAndNativeCapabilityProof(t *testing
 		{ID: domain.MustNewUUIDv7(), ParentGroupID: groupID, NodeLogicalID: &ssID, Position: 2},
 	})
 	_ = policyRepo.CreatePolicyRule(ctx, &domain.PolicyRule{
+		Enabled:       true,
 		ID:            domain.MustNewUUIDv7(),
 		RevisionID:    revID,
 		TargetGroupID: groupID,
@@ -2339,6 +2343,7 @@ func TestPublication_MihomoPreviewTargetedIntegration_HTTP_Socks5_AnyTLS_Mihomo2
 		TargetGroupID: groupID,
 		Expression:    "MATCH",
 		Position:      0,
+		Enabled:       true,
 	})
 
 	// 1. POST /api/v1/publications/preview target=mihomo -> 200 OK
@@ -2523,6 +2528,7 @@ func TestPublication_MihomoPreviewAndPublish_OptInPruneEmptyOptionalGroup(t *tes
 		TargetGroupID: parentGroupID,
 		Expression:    "MATCH",
 		Position:      0,
+		Enabled:       true,
 	})
 
 	// Without global PASS fallback, an unpruned empty optional group remains invalid

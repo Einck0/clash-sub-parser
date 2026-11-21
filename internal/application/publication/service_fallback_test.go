@@ -2,6 +2,7 @@ package publication_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -483,7 +484,7 @@ func TestBuildCurrentArtifact_NormalHealthyRoutes_NoFallback(t *testing.T) {
 	}
 }
 
-func TestBuildCurrentArtifact_EffectiveRoutesWithZeroEnabledPolicyRule_NoFallback(t *testing.T) {
+func TestBuildCurrentArtifact_DisabledOnlyRule_NoEffectiveRouting(t *testing.T) {
 	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
 	svc := publication.NewService(nil, nil)
 
@@ -548,20 +549,28 @@ func TestBuildCurrentArtifact_EffectiveRoutesWithZeroEnabledPolicyRule_NoFallbac
 
 	ctx := context.Background()
 	artifact, snap, err := svc.BuildCurrentArtifact(ctx, facts, domain.TargetMihomo)
-	if err != nil {
-		t.Fatalf("expected normal build to succeed with effective routes even when Enabled is zero, got: %v", err)
+	var preflight *publication.PreflightError
+	if !errors.As(err, &preflight) || artifact != nil {
+		t.Fatalf("disabled-only routing must not export or invent fallback: artifact=%+v, err=%v", artifact, err)
+	}
+	found := false
+	for _, d := range preflight.Result.Diagnostics {
+		found = found || d.Code == "no_effective_routing"
+	}
+	if !found || snap == nil || len(snap.Rules) != 0 {
+		t.Fatalf("expected empty effective rules and no_effective_routing: snapshot=%+v, preflight=%+v", snap, preflight)
+	}
+	if facts.PolicyRules[0].Enabled {
+		t.Fatal("resolution mutated stored disabled state")
 	}
 
-	for _, d := range snap.Diagnostics {
-		if d.Code == "primary_subscription_fallback" {
-			t.Fatal("primary_subscription_fallback diagnostic should not be present when effective routes exist")
-		}
+	facts.PolicyRules[0].Enabled = true
+	artifact, snap, err = svc.BuildCurrentArtifact(ctx, facts, domain.TargetMihomo)
+	if err != nil || artifact == nil || len(snap.Rules) != 1 {
+		t.Fatalf("re-enabled routing did not recover: %v", err)
 	}
-	if strings.Contains(string(artifact.Content), "主订阅兜底") {
-		t.Errorf("content should NOT contain '主订阅兜底' on normal export")
-	}
-	if !strings.Contains(string(artifact.Content), "Legacy Fixture Group") {
-		t.Errorf("content should contain 'Legacy Fixture Group'")
+	if !strings.Contains(string(artifact.Content), "MATCH,Legacy Fixture Group") || strings.Contains(string(artifact.Content), "主订阅兜底") {
+		t.Fatalf("re-enabled export did not retain its real route: %s", artifact.Content)
 	}
 }
 

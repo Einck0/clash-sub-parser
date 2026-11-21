@@ -77,7 +77,7 @@ func TestEmptyPassHTTPRoundtripPublicationAndSharedValidation(t *testing.T) {
 	if _, err := db.ExecContext(ctx, `UPDATE policy_rules SET position=1 WHERE revision_id=?`, active.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.CreatePolicyRule(ctx, &domain.PolicyRule{ID: domain.MustNewUUIDv7(), RevisionID: active.ID, TargetGroupID: id, Expression: "DOMAIN,fixture.invalid", Position: 0}); err != nil {
+	if err := repo.CreatePolicyRule(ctx, &domain.PolicyRule{ID: domain.MustNewUUIDv7(), RevisionID: active.ID, TargetGroupID: id, Expression: "DOMAIN,fixture.invalid", Position: 0, Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
 	check := request(http.MethodPost, "/api/v1/policies/validate", "")

@@ -9,7 +9,7 @@ import (
 
 func TestResolverExplicitPassNoInheritanceAndDigest(t *testing.T) {
 	child, parent := domain.MustNewUUIDv7(), domain.MustNewUUIDv7()
-	input := resolver.ResolveInput{Groups: []domain.NodeGroup{{ID: child, Name: "child", GroupType: domain.GroupTypeSelect, EmptyFallbackPass: true}, {ID: parent, Name: "parent", GroupType: domain.GroupTypeFallback}}, Edges: map[string][]domain.GroupEdge{parent: {{ParentGroupID: parent, ChildGroupID: &child}}}, PolicyRules: []domain.PolicyRule{{TargetGroupID: parent, Expression: "MATCH"}}}
+	input := resolver.ResolveInput{Groups: []domain.NodeGroup{{ID: child, Name: "child", GroupType: domain.GroupTypeSelect, EmptyFallbackPass: true}, {ID: parent, Name: "parent", GroupType: domain.GroupTypeFallback}}, Edges: map[string][]domain.GroupEdge{parent: {{ParentGroupID: parent, ChildGroupID: &child}}}, PolicyRules: []domain.PolicyRule{{TargetGroupID: parent, Expression: "MATCH", Enabled: true}}}
 	r := sourceFixtureResolver{}
 	snap, err := r.Resolve(context.Background(), input)
 	if err != nil {

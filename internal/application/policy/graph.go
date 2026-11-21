@@ -19,15 +19,16 @@ func ValidatePolicyGraph(
 	policyRules []domain.PolicyRule,
 	admissionRules []domain.AdmissionRule,
 ) error {
-	if err := domain.ValidatePolicyTopology(groups, edges, policyRules, true); err != nil {
+	if err := domain.ValidatePolicyTopology(groups, edges, domain.EnabledPolicyRules(policyRules), true); err != nil {
 		return err
 	}
 	return ValidateAdmissionRules(admissionRules)
 }
 
-// ValidatePolicyRules verifies rule ordering, target group references, and termination rules.
+// ValidatePolicyRules verifies effective rule ordering, target references and termination rules.
+// Single-record editing constraints are validated before this aggregate check.
 func ValidatePolicyRules(rules []domain.PolicyRule, groupSet map[string]bool) error {
-	return domain.ValidatePolicyRules(rules, groupSet, true)
+	return domain.ValidatePolicyRules(domain.EnabledPolicyRules(rules), groupSet, true)
 }
 
 // ValidateAdmissionRules checks field constraints on admission rules.

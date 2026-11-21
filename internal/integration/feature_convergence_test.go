@@ -1200,6 +1200,7 @@ func TestFeatureConvergence_NativeMihomoExportCleanSlate(t *testing.T) {
 		TargetGroupID: groupID,
 		Expression:    "MATCH",
 		Position:      0,
+		Enabled:       true,
 	})
 
 	pubService := publication.NewService(
@@ -1678,6 +1679,7 @@ func TestFeatureConvergence_AllFourTargetsFullLifecycleAndRotationRejection(t *t
 			TargetGroupID: gSelectID,
 			Expression:    expr,
 			Position:      i,
+			Enabled:       true,
 		})
 	}
 
@@ -2074,6 +2076,7 @@ func TestFeatureConvergence_AllFourTargetsFullLifecycleAndRotationRejection(t *t
 		TargetGroupID: gSubsetID,
 		Expression:    "DOMAIN-SUFFIX,example.com",
 		Position:      0,
+		Enabled:       true,
 	})
 	_ = policyRepo.CreatePolicyRule(ctx, &domain.PolicyRule{
 		ID:            domain.MustNewUUIDv7(),
@@ -2081,6 +2084,7 @@ func TestFeatureConvergence_AllFourTargetsFullLifecycleAndRotationRejection(t *t
 		TargetGroupID: gSubsetID,
 		Expression:    "MATCH",
 		Position:      1,
+		Enabled:       true,
 	})
 	_ = revRepo.SetActive(ctx, rev3ID)
 

@@ -60,6 +60,7 @@ func setupMinimalPubService(t *testing.T, extraOpts ...publication.Option) *publ
 		TargetGroupID: gID,
 		Expression:    "MATCH",
 		Position:      0,
+		Enabled:       true,
 	})
 
 	opts := []publication.Option{
@@ -179,6 +180,7 @@ func TestPublication_BuildCurrentArtifact_DNS(t *testing.T) {
 				TargetGroupID: grpID,
 				Expression:    "MATCH",
 				Position:      0,
+				Enabled:       true,
 			},
 		},
 		DNSSettings: &domain.DNSSettings{

@@ -1086,6 +1086,7 @@ func TestMihomoPublishAndPreview_PlaintextPersistenceAndRestartRecovery(t *testi
 		TargetGroupID: groupID,
 		Expression:    "MATCH",
 		Position:      0,
+		Enabled:       true,
 	})
 
 	svc := publication.NewService(
@@ -1290,6 +1291,7 @@ func TestAllFourTargets_PlaintextLifecycle(t *testing.T) {
 				TargetGroupID: groupID,
 				Expression:    "MATCH",
 				Position:      0,
+				Enabled:       true,
 			})
 
 			svc := publication.NewService(

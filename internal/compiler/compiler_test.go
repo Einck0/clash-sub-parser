@@ -286,7 +286,7 @@ func TestCompiler_DerivedProjectedGroupsAcrossAllTargets(t *testing.T) {
 			},
 		},
 		PolicyRules: []domain.PolicyRule{
-			{ID: "r1", TargetGroupID: parentID, Expression: "MATCH", Position: 0},
+			{ID: "r1", TargetGroupID: parentID, Expression: "MATCH", Position: 0, Enabled: true},
 		},
 		GroupFilters: map[string]domain.NodeFilterSpec{
 			parentID: {

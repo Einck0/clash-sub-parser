@@ -187,6 +187,7 @@ func TestBuildCurrentArtifact_HermeticAndDeterministic(t *testing.T) {
 				TargetGroupID: groupID,
 				Expression:    "MATCH",
 				Position:      0,
+				Enabled:       true,
 			},
 		},
 	}

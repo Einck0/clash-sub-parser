@@ -79,7 +79,7 @@ func exportFilterFixture(t *testing.T, withGroup bool, filter *filterReadRepo, o
 		}); err != nil {
 			t.Fatal(err)
 		}
-		if err := policy.CreatePolicyRule(ctx, &domain.PolicyRule{ID: "01944aa0-0000-7000-8000-000000000005", RevisionID: "01944aa0-0000-7000-8000-000000000001", TargetGroupID: groupID, Expression: "MATCH"}); err != nil {
+		if err := policy.CreatePolicyRule(ctx, &domain.PolicyRule{ID: "01944aa0-0000-7000-8000-000000000005", RevisionID: "01944aa0-0000-7000-8000-000000000001", TargetGroupID: groupID, Expression: "MATCH", Enabled: true}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -434,7 +434,7 @@ func TestExportFilterMixedRoutedGroupsApplyEmptyPassIndependently(t *testing.T) 
 		if err := policy.SetEdgesForGroup(ctx, groupID, []domain.GroupEdge{{ID: "01944aa0-0000-7000-8000-000000000007", ParentGroupID: groupID, NodeLogicalID: ptr(usNodeID)}}); err != nil {
 			t.Fatal(err)
 		}
-		if err := policy.CreatePolicyRule(ctx, &domain.PolicyRule{ID: "01944aa0-0000-7000-8000-000000000008", RevisionID: "01944aa0-0000-7000-8000-000000000001", TargetGroupID: groupID, Expression: "DOMAIN-SUFFIX,example.org", Position: 0}); err != nil {
+		if err := policy.CreatePolicyRule(ctx, &domain.PolicyRule{ID: "01944aa0-0000-7000-8000-000000000008", RevisionID: "01944aa0-0000-7000-8000-000000000001", TargetGroupID: groupID, Expression: "DOMAIN-SUFFIX,example.org", Position: 0, Enabled: true}); err != nil {
 			t.Fatal(err)
 		}
 	})

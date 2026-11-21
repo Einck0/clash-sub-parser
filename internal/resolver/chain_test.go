@@ -627,7 +627,7 @@ func TestResolver_ChainsAffectInputDigestAndSnapshotDigest(t *testing.T) {
 			},
 		},
 		PolicyRules: []domain.PolicyRule{
-			{ID: "r1", TargetGroupID: parentID, Expression: "MATCH", Position: 0},
+			{ID: "r1", TargetGroupID: parentID, Expression: "MATCH", Position: 0, Enabled: true},
 		},
 		DNS: resolver.DNSConfig{
 			Enabled:     true,

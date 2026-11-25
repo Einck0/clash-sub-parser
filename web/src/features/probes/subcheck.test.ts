@@ -474,7 +474,9 @@ describe('Subcheck Platform Capability Matrix & Fixture Tests', () => {
       expect(reachable.tone).toBe('success')
       expect(reachable.tooltip).toContain('官网入口可达')
       expect(reachable.tooltip).toContain('个人账号所在国家/地区、年龄(18+)及模型资格未核验')
-      expect(reachable.tooltip).toContain('服务观测地区: US，出口参考地区: JP（地区存在差异，非物理路由绝对证明）')
+      expect(reachable.tooltip).toContain('服务观测地区: US')
+      expect(reachable.tooltip).toContain('出口参考地区: JP')
+      expect(reachable.tooltip).toContain('地区存在差异，非物理路由绝对证明')
       expect(reachable.tooltip).toContain('地区来源: CDN 追踪 (cdn_trace)')
       expect(reachable.tooltip).toContain('观测范围: 网站入口连通性 (network_entry)')
 
@@ -619,18 +621,18 @@ describe('Subcheck Platform Capability Matrix & Fixture Tests', () => {
         subcheckFixtureNodes.speedMb,
       ]
 
-      vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
-        if (path.includes('/api/v1/nodes/node-ai-full')) {
+      const get = vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
+        if (path === '/api/v1/nodes/node-ai-full') {
           return subcheckFixtureNodes.aiFull
         }
-        if (path.includes('/api/v1/nodes')) {
+        if (path === '/api/v1/nodes/node-ai-full/source-history') {
+          return { attribution_status: 'unknown', current_sources: [], history: [] }
+        }
+        if (path === '/api/v1/nodes') {
           return { items: mockNodes, total: mockNodes.length, page: 1, page_size: 50 }
         }
-        if (path.includes('/api/v1/subscriptions')) {
-          return { items: [], total: 0 }
-        }
-        if (path.includes('/api/v1/probes/pool/status')) {
-          return { queue_nodes_count: 0, probing_count: 0, probing_node_ids: [], queued_node_ids: [] }
+        if (path === '/api/v1/probes/pool') {
+          return { probing_node_ids: [], queued_node_ids: [] }
         }
         return {}
       })
@@ -645,23 +647,42 @@ describe('Subcheck Platform Capability Matrix & Fixture Tests', () => {
         await nextTick()
         await new Promise((r) => setTimeout(r, 40))
 
-        const text = mountEl.textContent || ''
-        expect(text).toContain('旧版探测结果，需重新检测')
-        expect(text).toContain('NF 仅自制 (HK)')
-        expect(text).toContain('D+ 尚未开放 (HK)')
-        expect(text).toContain('5.1 MB/s')
-
-        // Click first card to inspect
-        const card = mountEl.querySelector('[data-testid="node-card"]') as HTMLElement
-        expect(card).not.toBeNull()
-        card.click()
+        const cards = mountEl.querySelectorAll<HTMLElement>('[data-testid="node-card"]')
+        expect(cards).toHaveLength(3)
+        for (const card of [cards[0]!, cards[1]!]) {
+          expect(card.querySelector('[data-testid="node-platform-details-expanded"]')).toBeNull()
+          const toggle = card.querySelector<HTMLButtonElement>('[data-testid="node-platform-details-toggle"]')!
+          expect(toggle.getAttribute('aria-expanded')).toBe('false')
+          toggle.click()
+        }
         await nextTick()
-        await new Promise((r) => setTimeout(r, 40))
+        const aiDetails = cards[0]!.querySelector<HTMLElement>('[data-testid="node-platform-details-expanded"]')!
+        const streamingDetails = cards[1]!.querySelector<HTMLElement>('[data-testid="node-platform-details-expanded"]')!
+        expect(cards[0]!.querySelector('[data-testid="node-platform-details-toggle"]')?.getAttribute('aria-expanded')).toBe('true')
+        expect(aiDetails.textContent).toContain('旧版探测结果，需重新检测')
+        expect(aiDetails.textContent).toContain('CLAUDE (US)')
+        const legacyBadge = Array.from(aiDetails.querySelectorAll<HTMLElement>('[title]'))
+          .find((element) => element.textContent?.includes('旧版探测结果，需重新检测'))
+        expect(legacyBadge?.classList.contains('badge-success')).toBe(false)
+        expect(legacyBadge?.title).toContain('匿名公开入口预检')
+        expect(streamingDetails.textContent).toContain('NETFLIX 仅自制 (HK)')
+        expect(streamingDetails.textContent).toContain('D+ 尚未开放 (HK)')
+        expect(cards[2]!.querySelector('[data-testid="node-speed-result"]')?.textContent).toContain('5.1 MB/s')
 
-        const drawer = mountEl.querySelector('[data-testid="node-detail-drawer"]') || document.body.querySelector('[data-testid="node-detail-drawer"]')
-        expect(drawer).not.toBeNull()
-        expect(drawer?.textContent).toContain('旧版探测结果，需重新检测')
-        expect(drawer?.textContent).toContain('Claude (US)')
+        // The explicit inspect button, not the non-interactive card surface, opens details.
+        cards[0]!.querySelector<HTMLButtonElement>('[data-testid="node-inspect-btn"]')!.click()
+        await vi.waitFor(() => {
+          expect(document.body.querySelector('[data-testid="node-detail-drawer"]')?.textContent).toContain('旧版探测结果，需重新检测')
+        })
+        expect(get).toHaveBeenCalledWith('/api/v1/nodes/node-ai-full')
+        const drawer = document.body.querySelector('[data-testid="node-detail-drawer"]')!
+        expect(drawer.textContent).toContain('旧版探测结果，需重新检测')
+        expect(drawer.textContent).toContain('Claude (US)')
+
+        cards[0]!.querySelector<HTMLButtonElement>('[data-testid="node-platform-details-toggle"]')!.click()
+        await nextTick()
+        expect(cards[0]!.querySelector('[data-testid="node-platform-details-expanded"]')).toBeNull()
+        expect(cards[0]!.querySelector('[data-testid="node-platform-details-toggle"]')?.getAttribute('aria-expanded')).toBe('false')
       } finally {
         app.unmount()
         mountEl.remove()
@@ -706,12 +727,24 @@ describe('Subcheck Platform Capability Matrix & Fixture Tests', () => {
         await nextTick()
         await new Promise((r) => setTimeout(r, 60))
 
-        const text = mountEl.textContent || ''
-        expect(text).toContain('NF (HK)')
-        expect(text).toContain('YT (SG)')
-        expect(text).toContain('D+ (HK)')
-        expect(text).toContain('OpenAI 入口受限')
-        expect(text).toContain('Claude 受限 (HK)')
+        const cards = mountEl.querySelectorAll<HTMLElement>('[data-testid="node-card"]')
+        expect(cards).toHaveLength(2)
+        for (const card of cards) {
+          card.querySelector<HTMLButtonElement>('[data-testid="node-platform-details-toggle"]')!.click()
+        }
+        await nextTick()
+        const streamingDetails = cards[0]!.querySelector('[data-testid="node-platform-details-expanded"]')!
+        const aiDetails = cards[1]!.querySelector('[data-testid="node-platform-details-expanded"]')!
+        expect(streamingDetails.textContent).toContain('NETFLIX (HK)')
+        expect(streamingDetails.textContent).toContain('YOUTUBE (SG)')
+        expect(streamingDetails.textContent).toContain('D+ (HK)')
+        expect(aiDetails.textContent).toContain('OpenAI 入口受限')
+        expect(aiDetails.textContent).toContain('CLAUDE 受限 (HK)')
+        const netflixBadge = Array.from(streamingDetails.querySelectorAll<HTMLElement>('[title]'))
+          .find((element) => element.textContent?.trim() === 'NETFLIX (HK)')
+        expect(netflixBadge).toBeDefined()
+        expect(netflixBadge?.classList.contains('badge-success')).toBe(true)
+        expect(netflixBadge?.title).toContain('Netflix 全量剧集解锁')
       } finally {
         app.unmount()
         mountEl.remove()

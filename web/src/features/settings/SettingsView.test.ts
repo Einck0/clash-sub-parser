@@ -560,7 +560,7 @@ describe('App.vue Integration: Settings View & Topbar Auth Badge', () => {
 
     return {
       getHeaderAuthBadge: () => container.querySelector('[data-testid="header-auth-badge"]') as HTMLElement,
-      getSidebarButtons: () => Array.from(container.querySelectorAll('aside nav button')),
+      getSidebarLinks: () => Array.from(container.querySelectorAll<HTMLAnchorElement>('aside nav a')),
       getMainContent: () => container.querySelector('main'),
     }
   }
@@ -601,15 +601,15 @@ describe('App.vue Integration: Settings View & Topbar Auth Badge', () => {
   })
 
   it('switches to Settings view when clicking Settings in navigation, replacing Phase 6.1 card', async () => {
-    const { getSidebarButtons, getMainContent } = mountAppWithMocks('open')
+    const { getSidebarLinks, getMainContent } = mountAppWithMocks('open')
     await nextTick()
     await new Promise((r) => setTimeout(r, 20))
 
-    const buttons = getSidebarButtons()
-    const settingsBtn = buttons.find((b): b is HTMLButtonElement => b instanceof HTMLButtonElement && (b.textContent?.includes('全局配置') === true || b.textContent?.includes('Settings') === true))
-    expect(settingsBtn).toBeTruthy()
+    const settingsLink = getSidebarLinks().find((link) => link.getAttribute('href') === '#/settings')
+    expect(settingsLink).toBeTruthy()
+    expect(settingsLink?.textContent).toMatch(/全局配置|Settings/)
 
-    settingsBtn?.click()
+    settingsLink?.click()
     await nextTick()
     await new Promise((r) => setTimeout(r, 25))
 

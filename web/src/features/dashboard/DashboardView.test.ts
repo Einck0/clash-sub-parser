@@ -207,6 +207,7 @@ describe('DashboardView Component', () => {
     app = createApp({ render: () => h(DashboardView) })
     app.mount(container)
     await nextTick()
+    await nextTick()
     const refresh = container.querySelector('[data-testid="refresh-all-btn"]') as HTMLButtonElement
     expect(refresh.disabled).toBe(true)
     expect(refresh.getAttribute('aria-busy')).toBe('true')
@@ -230,6 +231,7 @@ describe('DashboardView Component', () => {
       : Promise.resolve({ total: 4 }))
     app = createApp({ render: () => h(DashboardView) })
     app.mount(container)
+    await nextTick()
     await nextTick()
     const refresh = container.querySelector('[data-testid="refresh-all-btn"]') as HTMLButtonElement
     expect(container.querySelector('[data-testid="metric-value-nodes"]')?.textContent?.trim()).toBe('4')

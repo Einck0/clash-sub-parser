@@ -1,13 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useDashboard } from './useDashboard'
 import { api } from '../../api/client'
+import { getLocale, setLocale, type Locale } from '../../locales'
 
 describe('useDashboard composable', () => {
+  let previousLocale: Locale
+
   beforeEach(() => {
+    previousLocale = getLocale()
+    setLocale('en-US')
     vi.restoreAllMocks()
   })
 
   afterEach(() => {
+    setLocale(previousLocale)
     vi.restoreAllMocks()
   })
 
@@ -223,7 +229,7 @@ describe('useDashboard composable', () => {
     const dashboard = useDashboard()
     await dashboard.loadStats()
     expect(dashboard.metrics.value.nodes).toMatchObject({ value: null, status: 'error', isStale: false })
-    expect(dashboard.metrics.value.nodes.error).toContain('total')
+    expect(dashboard.metrics.value.nodes.error).toBe('Invalid response total')
   })
 
   it('keeps active-subset failures independent of the node total and preserves its stale count', async () => {

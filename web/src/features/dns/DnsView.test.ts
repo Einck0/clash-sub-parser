@@ -520,14 +520,15 @@ describe('DNS settings page (DnsView)', () => {
     expect(api.get).toHaveBeenCalledTimes(1)
   })
 
-  it('uses PageToolbar with accessible sr-only heading, tab semantics, and accessible raw editor', async () => {
+  it('provides a named DNS region, tab semantics, and an accessible raw editor', async () => {
     mount()
     await flush()
 
     const toolbar = mountEl.querySelector('[data-testid="page-toolbar"]')
     expect(toolbar).not.toBeNull()
-    const srTitle = toolbar?.querySelector('h1.sr-only')
-    expect(srTitle?.textContent).toBe('客户端 DNS 配置')
+    const region = mountEl.querySelector('section[data-testid="dns-view"]')
+    expect(region?.getAttribute('aria-label')).toBe('客户端 DNS 配置')
+    expect(region?.contains(toolbar)).toBe(true)
 
     // Tab semantics
     const visualTab = mountEl.querySelector('[data-testid="dns-visual-tab"]') as HTMLButtonElement

@@ -77,13 +77,20 @@ describe('node ledger probe run ownership', () => {
     expect(nodes.probingNodeIds.value.has('node-a')).toBe(true)
     expect(nodes.poolError.value).toContain('暂时无法同步')
     const pool = deferred<{ probing_node_ids: string[]; queued_node_ids: string[] }>()
-    get.mockReturnValueOnce(pool.promise)
+    const poolRequested = deferred<void>()
+    get.mockImplementationOnce(() => {
+      poolRequested.resolve()
+      return pool.promise
+    })
     const first = nodes.syncPoolStatus()
     const second = nodes.syncPoolStatus()
     expect(first).toBe(second)
+    await poolRequested.promise
     expect(get).toHaveBeenCalledTimes(3)
+    expect(get).toHaveBeenLastCalledWith('/api/v1/probes/pool')
     pool.resolve({ probing_node_ids: ['node-a'], queued_node_ids: [] })
     await Promise.all([first, second])
+    expect(get).toHaveBeenCalledTimes(3)
     expect(nodes.poolError.value).toBe('')
     get.mockResolvedValueOnce({})
     await nodes.syncPoolStatus()

@@ -341,9 +341,15 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       expect(mobileNav?.classList.contains('fixed')).toBe(true)
       expect(['fixed', 'bottom-0', 'bottom-3', 'bottom-4'].some(cls => mobileNav?.classList.contains(cls))).toBe(true)
 
-      // Bottom nav must contain core destination buttons
-      const buttons = mobileNav?.querySelectorAll('button')
-      expect(buttons?.length).toBeGreaterThanOrEqual(4)
+      // Three real route links and the More dialog trigger form the four dock targets.
+      const links = mobileNav?.querySelectorAll('a[href]')
+      expect(links?.length).toBe(3)
+      expect(Array.from(links || []).map(link => link.getAttribute('href'))).toEqual([
+        '#/nodes', '#/policy', '#/subscriptions',
+      ])
+      const more = mobileNav?.querySelector('[data-testid="dock-link-more"]')
+      expect(more?.getAttribute('aria-haspopup')).toBe('dialog')
+      expect(more?.getAttribute('aria-expanded')).toBe('false')
 
       // Main container or main content has bottom inset to prevent bottom nav overlay
       const mainEl = root.querySelector('main')
@@ -367,7 +373,7 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       // Health probe indicator
       const healthBadge = root.querySelector('header .header-health-indicator')
       expect(healthBadge).not.toBeNull()
-      expect(healthBadge?.textContent?.toLowerCase()).toContain('healthy')
+      expect(healthBadge?.textContent?.toLowerCase()).toContain('service online')
 
       // Zero console exceptions
       expect(uncaughtErrors).toHaveLength(0)
@@ -442,27 +448,50 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       setupApiMocks()
       const root = await mountApp()
 
-      const mobileNav = root.querySelector('nav.md\\:hidden')
-      const navButtons = mobileNav?.querySelectorAll('button') || []
-      expect(navButtons.length).toBeGreaterThan(0)
-
-      // Click "Subscriptions" button on mobile nav
-      const subBtn = Array.from(navButtons).find((b) => b.textContent?.includes('Subscriptions'))
-      expect(subBtn).toBeDefined()
-      await drainAsyncEvents()
-      subBtn?.click()
-      const subTitle = await waitForView('#subscriptions-title', root, 'subscriptions')
+      const mobileNav = root.querySelector('[data-testid="mobile-dock"]')!
+      const subLink = mobileNav.querySelector<HTMLAnchorElement>('[data-testid="dock-link-subscriptions"]')!
+      expect(subLink?.getAttribute('href')).toBe('#/subscriptions')
+      subLink.click()
+      const subTitle = await waitForView('[data-testid="subscriptions-view"] h2[data-testid="toolbar-title"]', root, 'subscriptions')
       expect(subTitle?.textContent).toContain('Subscriptions')
+      expect(subLink.getAttribute('aria-current')).toBe('page')
       expect(['#subscriptions', '#/subscriptions']).toContain(window.location.hash)
 
-      // Click "Node Ledger" button on mobile nav
-      const nodeBtn = Array.from(mobileNav?.querySelectorAll('button') || []).find((b) => b.textContent?.includes('Node Ledger'))
-      expect(nodeBtn).toBeDefined()
-      await drainAsyncEvents()
-      nodeBtn?.click()
-      const nodeTitle = await waitForView('#nodes-title', root, 'nodes')
-      expect(nodeTitle?.textContent).toContain('Node Management & Probing')
+      const nodeLink = mobileNav.querySelector<HTMLAnchorElement>('[data-testid="dock-link-nodes"]')!
+      expect(nodeLink?.getAttribute('href')).toBe('#/nodes')
+      nodeLink.click()
+      const nodeTitle = await waitForView('h2#nodes-title', root, 'nodes')
+      expect(nodeTitle?.textContent).toBe('Node management and probing')
+      expect(nodeLink.getAttribute('aria-current')).toBe('page')
+      expect(subLink.hasAttribute('aria-current')).toBe(false)
       expect(['#nodes', '#/nodes']).toContain(window.location.hash)
+
+      // More is a real teleported dialog; closing it returns focus to its trigger.
+      const more = mobileNav.querySelector<HTMLButtonElement>('[data-testid="dock-link-more"]')!
+      more.focus()
+      more.click()
+      await drainAsyncEvents()
+      const sheet = document.querySelector<HTMLElement>('[data-testid="mobile-more-sheet"]')!
+      expect(sheet).not.toBeNull()
+      const dialog = sheet.closest('[role="dialog"]')!
+      expect(dialog.getAttribute('aria-modal')).toBe('true')
+      expect(dialog.contains(document.activeElement)).toBe(true)
+      expect(more.getAttribute('aria-expanded')).toBe('true')
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+      await drainAsyncEvents()
+      expect(document.querySelector('[data-testid="mobile-more-sheet"]')).toBeNull()
+      expect(more.getAttribute('aria-expanded')).toBe('false')
+      expect(document.activeElement).toBe(more)
+
+      more.click()
+      await drainAsyncEvents()
+      const publicationLink = document.querySelector<HTMLAnchorElement>('[data-testid="mobile-more-sheet"] [data-testid="dock-link-publications"]')!
+      expect(publicationLink?.getAttribute('href')).toBe('#/publications')
+      publicationLink.click()
+      const publicationTitle = await waitForView('[data-testid="client-subscriptions-page"] h2[data-testid="toolbar-title"]', root, 'publications')
+      expect(publicationTitle?.textContent).toBe('Client Subscriptions')
+      expect(document.querySelector('[data-testid="mobile-more-sheet"]')).toBeNull()
+      expect(window.localStorage.getItem(ROUTE_STORAGE_KEY)).toBe('publications')
 
       // Zero console exceptions
       expect(uncaughtErrors).toHaveLength(0)
@@ -484,8 +513,12 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       expect(sidebar?.textContent).toContain('v1.0 Clean-Slate')
 
       // Desktop navigation items (9 items: dashboard, subscriptions, nodes, dns, chains, policy, rules, publications, settings)
-      const navButtons = sidebar?.querySelectorAll('nav button')
-      expect(navButtons?.length).toBe(9)
+      const navLinks = sidebar?.querySelectorAll('nav a[href]')
+      expect(navLinks?.length).toBe(9)
+      expect(Array.from(navLinks || []).map(link => link.getAttribute('href'))).toEqual(
+        expect.arrayContaining(VALID_TABS.map(tab => `#/${tab}`))
+      )
+      expect(sidebar?.querySelector('a[aria-current="page"]')?.getAttribute('href')).toBe('#/dashboard')
 
       // Mobile bottom nav remains hidden on desktop
       const mobileNav = root.querySelector('nav.md\\:hidden')
@@ -500,26 +533,25 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       setupApiMocks()
       const root = await mountApp()
 
-      const tabsToTest: { tab: NavTab; label: string; viewSelector: string; expectedText: string }[] = [
-        { tab: 'subscriptions', label: 'Subscriptions', viewSelector: '#subscriptions-title', expectedText: 'Subscriptions' },
-        { tab: 'nodes', label: 'Node Ledger', viewSelector: '#nodes-title', expectedText: 'Node Management & Probing' },
-        { tab: 'rules', label: 'Rule Desk', viewSelector: '#rules-title', expectedText: 'Rules' },
-        { tab: 'policy', label: 'Policy Tree', viewSelector: '#policy-title', expectedText: 'Policy Groups' },
-        { tab: 'publications', label: 'Client Subscriptions', viewSelector: '#publications-title', expectedText: 'Client Subscriptions' },
-        { tab: 'dashboard', label: 'Dashboard', viewSelector: '[data-testid="health-telemetry-card"]', expectedText: 'Clash Sub Parser Zashboard Foundation' },
+      const tabsToTest: { tab: NavTab; viewSelector: string; expectedText: string }[] = [
+        { tab: 'subscriptions', viewSelector: '[data-testid="subscriptions-view"] h2[data-testid="toolbar-title"]', expectedText: 'Subscriptions' },
+        { tab: 'nodes', viewSelector: 'h2#nodes-title', expectedText: 'Node management and probing' },
+        { tab: 'rules', viewSelector: 'h2#rules-title', expectedText: 'Routing Rule Desk' },
+        { tab: 'policy', viewSelector: 'h2#policy-title', expectedText: 'Policy Groups' },
+        { tab: 'publications', viewSelector: '[data-testid="client-subscriptions-page"] h2[data-testid="toolbar-title"]', expectedText: 'Client Subscriptions' },
+        { tab: 'dashboard', viewSelector: 'main h2[data-testid="toolbar-title"]', expectedText: 'CSP Control Plane' },
       ]
 
       for (const t of tabsToTest) {
-        const sidebar = root.querySelector('aside')
-        const button = Array.from(sidebar?.querySelectorAll('button') || []).find((b) =>
-          b.textContent?.trim().includes(t.label)
-        )
-        expect(button).toBeDefined()
-        await drainAsyncEvents()
-        button?.click()
-        await waitForView(t.viewSelector, root, t.tab)
+        const sidebar = root.querySelector('aside')!
+        const link = sidebar.querySelector<HTMLAnchorElement>(`nav a[href="#/${t.tab}"]`)!
+        expect(link).not.toBeNull()
+        link.click()
+        const heading = await waitForView(t.viewSelector, root, t.tab)
 
-        expect(root.textContent).toContain(t.expectedText)
+        expect(heading?.textContent?.trim()).toBe(t.expectedText)
+        expect(link.getAttribute('aria-current')).toBe('page')
+        expect(root.querySelector('main')?.textContent?.trim()).not.toBe('')
         expect([`#${t.tab}`, `#/${t.tab}`]).toContain(window.location.hash)
         expect(window.localStorage.getItem(ROUTE_STORAGE_KEY)).toBe(t.tab)
       }
@@ -592,7 +624,9 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       setupApiMocks()
       const root = await mountApp()
 
-      expect(root.querySelector('#nodes-title')?.textContent).toContain('Node Management & Probing')
+      expect(root.querySelector('h2#nodes-title')?.textContent).toBe('Node management and probing')
+      expect(router.currentRoute.value.name).toBe('nodes')
+      expect(root.querySelector('[data-testid="dock-link-nodes"]')?.getAttribute('aria-current')).toBe('page')
       expect(uncaughtErrors).toHaveLength(0)
     })
 
@@ -607,14 +641,16 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       // Simulate browser URL hash navigation to #publications
       window.location.hash = '#publications'
       window.dispatchEvent(new HashChangeEvent('hashchange'))
-      const pubTitle = await waitForView('#publications-title', root)
-      expect(pubTitle?.textContent).toContain('Client Subscriptions')
+      const pubTitle = await waitForView('[data-testid="client-subscriptions-page"] h2[data-testid="toolbar-title"]', root, 'publications')
+      expect(pubTitle?.textContent).toBe('Client Subscriptions')
+      expect(window.localStorage.getItem(ROUTE_STORAGE_KEY)).toBe('publications')
 
       // Simulate browser Back button to #subscriptions
       window.location.hash = '#subscriptions'
       window.dispatchEvent(new HashChangeEvent('hashchange'))
-      const subTitle = await waitForView('#subscriptions-title', root)
-      expect(subTitle?.textContent).toContain('Subscriptions')
+      const subTitle = await waitForView('[data-testid="subscriptions-view"] h2[data-testid="toolbar-title"]', root, 'subscriptions')
+      expect(subTitle?.textContent).toBe('Subscriptions')
+      expect(window.localStorage.getItem(ROUTE_STORAGE_KEY)).toBe('subscriptions')
       expect(uncaughtErrors).toHaveLength(0)
     })
 
@@ -887,7 +923,7 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       }
     })
 
-    it('verifies 1280x800 Desktop Viewport: aside is sticky top-0 h-screen overflow-y-auto and remains accessible on scroll', async () => {
+    it('verifies 1280x800 Desktop Viewport: aside uses sticky dynamic viewport height and remains accessible on scroll', async () => {
       setViewport(1280, 800)
       setupApiMocks()
       const root = await mountApp()
@@ -896,7 +932,7 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       expect(aside).not.toBeNull()
       expect(aside?.className).toContain('sticky')
       expect(aside?.className).toContain('top-0')
-      expect(aside?.className).toContain('h-screen')
+      expect(aside?.classList.contains('h-dvh')).toBe(true)
       expect(aside?.className).toContain('overflow-y-auto')
 
       const parent = aside?.parentElement
@@ -933,11 +969,17 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       setupApiMocks()
       const root = await mountApp()
 
-      const mobileNav = root.querySelector('nav.md\\:hidden')
-      const buttons = mobileNav?.querySelectorAll('button') || []
-      expect(buttons.length).toBeGreaterThanOrEqual(4)
-      for (const btn of buttons) {
-        expect(btn.classList.contains('rounded-lg') || btn.classList.contains('btn') || btn.className.includes('p')).toBe(true)
+      const mobileNav = root.querySelector('[data-testid="mobile-dock"]')!
+      const targets = mobileNav.querySelectorAll<HTMLElement>('a[href], button')
+      expect(targets).toHaveLength(4)
+      for (const target of targets) {
+        expect(target.textContent?.trim()).not.toBe('')
+        expect(target.tabIndex).toBe(0)
+        expect(target.classList.contains('touch-manipulation')).toBe(true)
+        expect(target.classList.contains('py-1.5')).toBe(true)
+        expect(target.classList.contains('rounded-xl')).toBe(true)
+        target.focus()
+        expect(document.activeElement).toBe(target)
       }
       expect(uncaughtErrors).toHaveLength(0)
     })
@@ -1001,70 +1043,122 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
 
     it('searches for 250th node and preserves selection in PolicyEditorSheet', async () => {
       const { default: PolicyEditorSheet } = await import('../src/features/policy/PolicyEditorSheet.vue')
-      const { createApp, h, nextTick } = await import('vue')
+      const { h } = await import('vue')
 
-      vi.spyOn(api, 'get').mockImplementation(async (path: string, options?: any) => {
+      const getSpy = vi.spyOn(api, 'get').mockImplementation(async (path: string, options?: any) => {
+        const p = Number(options?.params?.page || 1)
+        const ps = Number(options?.params?.page_size || 50)
+        const start = (p - 1) * ps
         if (path === '/api/v1/nodes') {
           const search = (options?.params?.search || '').toLowerCase()
-          const p = Number(options?.params?.page || 1)
-          const ps = Number(options?.params?.page_size || 50)
-          let filtered = largeNodesFixture
-          if (search) {
-            filtered = filtered.filter((n) =>
-              n.displayName.toLowerCase().includes(search) || n.logicalId.toLowerCase().includes(search)
-            )
-          }
-          const start = (p - 1) * ps
-          const slice = filtered.slice(start, start + ps)
-          return { items: slice, total: filtered.length, page: p, page_size: ps }
+          const filtered = largeNodesFixture.filter((n) =>
+            !search || n.displayName.toLowerCase().includes(search) || n.logicalId.toLowerCase().includes(search)
+          )
+          return { items: filtered.slice(start, start + ps), total: filtered.length, page: p, page_size: ps }
+        }
+        if (path === '/api/v1/policies/groups') {
+          return { items: largeGroupsFixture.slice(start, start + ps), total: largeGroupsFixture.length, page: p, page_size: ps }
         }
         return { items: [], total: 0 }
+      })
+      vi.spyOn(api, 'post').mockResolvedValue({
+        selection_digest: 'fixture-selection', members: [], node_count: 0, diagnostics: [],
       })
 
       const sheetContainer = document.createElement('div')
       document.body.appendChild(sheetContainer)
-
       const group = {
         id: 'grp-test',
         name: 'Test Group',
         group_type: 'select' as const,
         edges: [],
       }
-
       const sheetApp = createApp({
         render() {
           return h(PolicyEditorSheet, {
             open: true,
             group,
-            allGroups: largeGroupsFixture.slice(0, 10),
+            allGroups: largeGroupsFixture,
             mode: 'edges',
           })
         },
       })
       sheetApp.mount(sheetContainer)
-      await nextTick()
-      await new Promise((r) => setTimeout(r, 20))
+      try {
+        await drainAsyncEvents()
+        // Drawer content is teleported to body, not rendered inside the mount container.
+        const sheet = document.querySelector<HTMLElement>('[data-testid="policy-editor-sheet"]')!
+        expect(sheet).not.toBeNull()
+        expect(sheet.closest('[role="dialog"]')?.getAttribute('aria-modal')).toBe('true')
+        const details = sheet.querySelector<HTMLDetailsElement>('[data-testid="advanced-pipeline-details"]')!
+        details.querySelector('summary')!.click()
+        expect(details.open).toBe(true)
+        const nodeRadio = sheet.querySelector<HTMLInputElement>('input[type="radio"][value="node"]')!
+        expect(nodeRadio).not.toBeNull()
+        nodeRadio.click()
+        await drainAsyncEvents()
 
-      // Switch to node edge type
-      const nodeRadio = sheetContainer.querySelector('input[type="radio"][value="node"]') as HTMLInputElement
-      expect(nodeRadio).not.toBeNull()
-      nodeRadio.click()
-      await nextTick()
+        const select = sheet.querySelector<HTMLSelectElement>('[data-testid="edge-node-select"]')!
+        expect(select).not.toBeNull()
+        expect(select.disabled).toBe(false)
+        expect(select.options).toHaveLength(51)
+        expect(select.querySelector('option[value="node-target-250"]')).toBeNull()
+        expect(getSpy).toHaveBeenCalledWith('/api/v1/nodes', { params: {
+          page: 1, page_size: 50, scope: 'enabled_subscriptions', active_only: 'true',
+        } })
+        expect(getSpy).toHaveBeenCalledWith('/api/v1/policies/groups', { params: { page: 2, page_size: 100 } })
 
-      const searchInput = sheetContainer.querySelector('input[data-testid="candidate-node-search-input"]') as HTMLInputElement
-      expect(searchInput).not.toBeNull()
-      searchInput.value = '250'
-      searchInput.dispatchEvent(new Event('input'))
+        // Reach the last page through real controls before searching or selecting node 250.
+        for (let page = 2; page <= 5; page++) {
+          const next = sheet.querySelector<HTMLButtonElement>('[data-testid="candidate-next-page"]')!
+          expect(next.disabled).toBe(false)
+          next.click()
+          await drainAsyncEvents()
+          expect(getSpy).toHaveBeenCalledWith('/api/v1/nodes', { params: {
+            page, page_size: 50, scope: 'enabled_subscriptions', active_only: 'true',
+          } })
+          expect(select.disabled).toBe(false)
+        }
+        expect(sheet.querySelector<HTMLButtonElement>('[data-testid="candidate-next-page"]')?.disabled).toBe(true)
+        const target = select.querySelector('option[value="node-target-250"]')!
+        expect(target?.textContent).toContain('Taiwan Special Node 250')
+        select.value = 'node-target-250'
+        select.dispatchEvent(new Event('change', { bubbles: true }))
+        await nextTick()
+        expect(select.value).toBe('node-target-250')
 
-      await new Promise((r) => setTimeout(r, 350))
-      await nextTick()
+        const searchInput = sheet.querySelector<HTMLInputElement>('[data-testid="candidate-node-search-input"]')!
+        searchInput.value = 'Batch Node'
+        searchInput.dispatchEvent(new Event('input', { bubbles: true }))
+        await vi.waitFor(async () => {
+          await nextTick()
+          expect(getSpy).toHaveBeenCalledWith('/api/v1/nodes', { params: {
+            page: 1, page_size: 50, scope: 'enabled_subscriptions', active_only: 'true', search: 'Batch Node',
+          } })
+          expect(select.disabled).toBe(false)
+          expect(select.value).toBe('node-target-250')
+          expect(select.selectedOptions[0]?.textContent).toContain('Taiwan Special Node 250')
+          expect(select.selectedOptions[0]?.textContent).toContain('跨页锁定已保留')
+        }, { timeout: 1500 })
 
-      const node250Option = sheetContainer.querySelector('option[value="node-target-250"]')
-      expect(node250Option).not.toBeNull()
-      expect(node250Option?.textContent).toContain('Taiwan Special Node 250')
-
-      sheetApp.unmount()
-      sheetContainer.remove()
+        searchInput.value = '250'
+        searchInput.dispatchEvent(new Event('input', { bubbles: true }))
+        await vi.waitFor(async () => {
+          await nextTick()
+          expect(getSpy).toHaveBeenCalledWith('/api/v1/nodes', { params: {
+            page: 1, page_size: 50, scope: 'enabled_subscriptions', active_only: 'true', search: '250',
+          } })
+          expect(select.disabled).toBe(false)
+          expect(select.options).toHaveLength(2)
+          expect(select.value).toBe('node-target-250')
+          expect(select.selectedOptions[0]?.textContent).toContain('Taiwan Special Node 250')
+        }, { timeout: 1500 })
+        expect(uncaughtErrors).toHaveLength(0)
+      } finally {
+        sheetApp.unmount()
+        sheetContainer.remove()
+      }
+      expect(document.querySelector('[data-testid="policy-editor-sheet"]')).toBeNull()
     })
 
     it('classifies node with unknown baseline but available AI probe as unknown, neither healthy nor unhealthy', async () => {
@@ -1079,7 +1173,7 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       expect(category).not.toBe('unhealthy')
 
       const badge = nodeHealthBadge(aiOnlyNode)
-      expect(badge.label).toBe('未知')
+      expect(badge.label).toBe('Unknown')
       expect(badge.tone).toBe('info')
     })
   })

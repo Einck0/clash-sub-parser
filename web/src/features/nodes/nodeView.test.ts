@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { describe, expect, it, vi, beforeEach, onTestFinished } from 'vitest'
 import {
   SUPPORTED_NODE_PROTOCOLS,
   normalizeNode,
@@ -662,6 +662,10 @@ describe('NodesView real API detail, plaintext PATCH edit, and failure draft pre
         return h(NodesView)
       },
     })
+    onTestFinished(() => {
+      app.unmount()
+      mountEl.remove()
+    })
     app.mount(mountEl)
     await nextTick()
     await new Promise((r) => setTimeout(r, 30))
@@ -756,20 +760,23 @@ describe('NodesView real API detail, plaintext PATCH edit, and failure draft pre
       tuicSniInput.value = 'mutated-sni.kr.example.com'
       tuicSniInput.dispatchEvent(new Event('input'))
     }
-    saveBtn?.click()
-    await nextTick()
-    await new Promise((r) => setTimeout(r, 30))
-
-    expect(drawer?.querySelector('[data-testid="node-connection-error"]')?.textContent).toContain(
-      'invalid_sni'
+    expect(saveBtn?.isConnected).toBe(false)
+    const tuicSaveBtn = drawer!.querySelector<HTMLButtonElement>('[data-testid="node-save-connection-btn"]')!
+    expect(tuicSaveBtn.isConnected).toBe(true)
+    expect(tuicSaveBtn.disabled).toBe(false)
+    tuicSaveBtn.click()
+    await vi.waitFor(() => {
+      expect(patchSpy).toHaveBeenCalledTimes(2)
+      expect(drawer?.querySelector('[data-testid="node-connection-error"]')?.textContent).toContain('invalid_sni')
+    })
+    expect(patchSpy).toHaveBeenLastCalledWith(
+      '/api/v1/nodes/node-tuic-1/connection',
+      expect.objectContaining({ sni: 'mutated-sni.kr.example.com' })
     )
     expect(drawer?.querySelector('[data-testid="node-connection-saved"]')).toBeNull()
     expect(tuicSniInput?.value).toBe('mutated-sni.kr.example.com')
     expect(previewEl?.textContent).toContain('tuic.kr.example.com')
     expect(previewEl?.textContent).not.toContain('mutated-sni.kr.example.com')
-
-    app.unmount()
-    mountEl.remove()
   })
 
   it('filters the full inventory before paginating health-filtered nodes', async () => {
@@ -1275,7 +1282,7 @@ describe('NodesView real API detail, plaintext PATCH edit, and failure draft pre
 
   it('restores URL search, risk, speed, protocol, health and node filters and resets them together', async () => {
     const { createApp, h, nextTick } = await import('vue')
-    const { createRouter, createMemoryHistory } = await import('vue-router')
+    const { createRouter, createMemoryHistory, RouterView } = await import('vue-router')
     const { default: NodesView } = await import('./NodesView.vue')
 
     const mockNodes: NodeRecord[] = [
@@ -1299,6 +1306,9 @@ describe('NodesView real API detail, plaintext PATCH edit, and failure draft pre
       if (path === '/api/v1/nodes/node-hy2-1') {
         return { node: mockNodes[0], sources: [] }
       }
+      if (path === '/api/v1/nodes/node-hy2-1/source-history') {
+        return { attribution_status: 'unknown', current_sources: [], history: [] }
+      }
       return {}
     })
 
@@ -1313,11 +1323,7 @@ describe('NodesView real API detail, plaintext PATCH edit, and failure draft pre
 
     const mountEl = document.createElement('div')
     document.body.appendChild(mountEl)
-    const app = createApp({
-      render() {
-        return h(NodesView)
-      },
-    })
+    const app = createApp({ render: () => h(RouterView) })
     try {
       app.use(router)
       app.mount(mountEl)
@@ -1338,9 +1344,13 @@ describe('NodesView real API detail, plaintext PATCH edit, and failure draft pre
       expect(healthSelect.value).toBe('healthy')
 
       // Deep link drawer should be open for node-hy2-1
-      const drawer = mountEl.querySelector('[data-testid="node-detail-drawer"]') || document.body.querySelector('[data-testid="node-detail-drawer"]')
+      const drawer = document.body.querySelector('[data-testid="node-detail-drawer"]')
       expect(drawer).not.toBeNull()
-      expect(drawer?.textContent).toContain('Tokyo Hy2 Safe')
+      const panel = drawer!.closest('[data-drawer-panel]')!
+      const title = document.getElementById(panel.getAttribute('aria-labelledby')!)
+      expect(title?.textContent).toContain('Tokyo Hy2 Safe')
+      expect(drawer!.querySelector<HTMLInputElement>('[data-testid="node-display-name-input"]')?.value).toBe('Tokyo Hy2 Safe')
+      expect(router.currentRoute.value.query.node).toBe('node-hy2-1')
 
       const riskBand = mountEl.querySelector('[data-testid="node-risk-band-filter"]') as HTMLSelectElement
       const riskScore = mountEl.querySelector('[data-testid="node-risk-score-max"]') as HTMLInputElement

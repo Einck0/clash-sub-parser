@@ -18,6 +18,7 @@ import (
 	"clash-sub-parser/internal/repository/sqlite"
 	"clash-sub-parser/internal/resolver"
 	transporthttp "clash-sub-parser/internal/transport/http"
+	"github.com/sagernet/sing/common/json/badoption"
 	"gopkg.in/yaml.v3"
 )
 
@@ -261,10 +262,10 @@ func assertTLSReadbackExport(t *testing.T, node domain.Node, expectedSNI map[dom
 				Outbounds []struct {
 					Tag string `json:"tag"`
 					TLS struct {
-						ServerName string   `json:"server_name"`
-						ALPN       []string `json:"alpn"`
-						Insecure   bool     `json:"insecure"`
-						DisableSNI bool     `json:"disable_sni"`
+						ServerName string                     `json:"server_name"`
+						ALPN       badoption.Listable[string] `json:"alpn"`
+						Insecure   bool                       `json:"insecure"`
+						DisableSNI bool                       `json:"disable_sni"`
 					} `json:"tls"`
 				} `json:"outbounds"`
 			}
@@ -275,7 +276,7 @@ func assertTLSReadbackExport(t *testing.T, node domain.Node, expectedSNI map[dom
 			for _, outbound := range config.Outbounds {
 				if outbound.Tag == node.DisplayName {
 					found = true
-					gotSNI, gotALPN = outbound.TLS.ServerName, outbound.TLS.ALPN
+					gotSNI, gotALPN = outbound.TLS.ServerName, []string(outbound.TLS.ALPN)
 					insecure, disableSNI = outbound.TLS.Insecure, outbound.TLS.DisableSNI
 				}
 			}
